@@ -75,7 +75,7 @@ func TestGoGitClient_RebaseOnRemote(t *testing.T) {
 	})
 	clone := func(name string, files map[string]string) string {
 		work := filepath.Join(t.TempDir(), name)
-		require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, ""))
+		require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, scm.GitAuth{}))
 		writeFiles(t, work, files)
 		require.NoError(t, c.CommitAll(ctx, work, "promote "+name, "kardinal", "k@example.com"))
 		return work
@@ -88,13 +88,13 @@ func TestGoGitClient_RebaseOnRemote(t *testing.T) {
 	})
 	conflicting := clone("a2", map[string]string{"environments/a/kustomization.yaml": "a: 3\n"})
 
-	require.NoError(t, c.Push(ctx, first, "origin", "main", "", false))
-	require.ErrorIs(t, c.Push(ctx, second, "origin", "main", "", false), scm.ErrNonFastForward)
+	require.NoError(t, c.Push(ctx, first, "origin", "main", scm.GitAuth{}, false))
+	require.ErrorIs(t, c.Push(ctx, second, "origin", "main", scm.GitAuth{}, false), scm.ErrNonFastForward)
 
-	changed, err := c.RebaseOnRemote(ctx, second, "origin", "main", "")
+	changed, err := c.RebaseOnRemote(ctx, second, "origin", "main", scm.GitAuth{})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"environments/b/kustomization.yaml", "environments/b/new/extra.yaml", "environments/b/old.yaml"}, changed)
-	require.NoError(t, c.Push(ctx, second, "origin", "main", "", false))
+	require.NoError(t, c.Push(ctx, second, "origin", "main", scm.GitAuth{}, false))
 
 	files, commits := remoteFiles(t, remote, "main")
 	assert.Equal(t, map[string]string{
@@ -113,10 +113,10 @@ func TestGoGitClient_RebaseOnRemote(t *testing.T) {
 	assert.Equal(t, "promote b", hc.Message)
 	assert.Equal(t, "kardinal", hc.Author.Name)
 
-	_, err = c.RebaseOnRemote(ctx, conflicting, "origin", "main", "")
+	_, err = c.RebaseOnRemote(ctx, conflicting, "origin", "main", scm.GitAuth{})
 	require.ErrorIs(t, err, scm.ErrRebaseConflict)
 	assert.Contains(t, err.Error(), "environments/a/kustomization.yaml")
-	require.ErrorIs(t, c.Push(ctx, conflicting, "origin", "main", "", false), scm.ErrNonFastForward,
+	require.ErrorIs(t, c.Push(ctx, conflicting, "origin", "main", scm.GitAuth{}, false), scm.ErrNonFastForward,
 		"the refused commit is left as it was")
 }
 
@@ -130,13 +130,13 @@ func TestGoGitClient_RebaseOnRemote_NotMoved(t *testing.T) {
 	c := scm.NewGoGitClient()
 	remote := seedBareRemote(t, map[string]string{"environments/a/kustomization.yaml": "a: 1\n"})
 	work := filepath.Join(t.TempDir(), "w")
-	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, ""))
+	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, scm.GitAuth{}))
 	writeFiles(t, work, map[string]string{"environments/a/kustomization.yaml": "a: 2\n"})
 	require.NoError(t, c.CommitAll(ctx, work, "promote a", "kardinal", "k@example.com"))
 	before, err := c.HeadCommit(ctx, work)
 	require.NoError(t, err)
 
-	_, err = c.RebaseOnRemote(ctx, work, "origin", "main", "")
+	_, err = c.RebaseOnRemote(ctx, work, "origin", "main", scm.GitAuth{})
 	require.ErrorIs(t, err, scm.ErrBranchNotMoved)
 	after, err := c.HeadCommit(ctx, work)
 	require.NoError(t, err)
@@ -144,13 +144,13 @@ func TestGoGitClient_RebaseOnRemote_NotMoved(t *testing.T) {
 
 	// Another writer moves the branch: a rebase, then not moved again.
 	other := filepath.Join(t.TempDir(), "o")
-	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", other, ""))
+	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", other, scm.GitAuth{}))
 	writeFiles(t, other, map[string]string{"README.md": "x\n"})
 	require.NoError(t, c.CommitAll(ctx, other, "other", "o", "o@example.com"))
-	require.NoError(t, c.Push(ctx, other, "origin", "main", "", false))
-	_, err = c.RebaseOnRemote(ctx, work, "origin", "main", "")
+	require.NoError(t, c.Push(ctx, other, "origin", "main", scm.GitAuth{}, false))
+	_, err = c.RebaseOnRemote(ctx, work, "origin", "main", scm.GitAuth{})
 	require.NoError(t, err)
-	_, err = c.RebaseOnRemote(ctx, work, "origin", "main", "")
+	_, err = c.RebaseOnRemote(ctx, work, "origin", "main", scm.GitAuth{})
 	require.ErrorIs(t, err, scm.ErrBranchNotMoved, "rebased onto the head already")
 }
 
@@ -172,7 +172,7 @@ func TestGoGitClient_ConcurrentWritersLoseNothing(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			work := filepath.Join(t.TempDir(), fmt.Sprint(i))
-			if errs[i] = c.Clone(ctx, "file://"+remote, "main", work, ""); errs[i] != nil {
+			if errs[i] = c.Clone(ctx, "file://"+remote, "main", work, scm.GitAuth{}); errs[i] != nil {
 				return
 			}
 			p := filepath.Join(work, fmt.Sprintf("environments/p%d/kustomization.yaml", i))
@@ -183,7 +183,7 @@ func TestGoGitClient_ConcurrentWritersLoseNothing(t *testing.T) {
 				return
 			}
 			for attempt := 0; attempt < 50; attempt++ {
-				err := c.Push(ctx, work, "origin", "main", "", false)
+				err := c.Push(ctx, work, "origin", "main", scm.GitAuth{}, false)
 				if err == nil {
 					return
 				}
@@ -191,7 +191,7 @@ func TestGoGitClient_ConcurrentWritersLoseNothing(t *testing.T) {
 					errs[i] = err
 					return
 				}
-				if _, err := c.RebaseOnRemote(ctx, work, "origin", "main", ""); err != nil {
+				if _, err := c.RebaseOnRemote(ctx, work, "origin", "main", scm.GitAuth{}); err != nil {
 					errs[i] = err
 					return
 				}
@@ -224,7 +224,7 @@ func TestGoGitClient_RebaseOnRemote_BaseMissing(t *testing.T) {
 	c := scm.NewGoGitClient()
 	remote := seedBareRemote(t, map[string]string{"README.md": "r\n"})
 	work := filepath.Join(t.TempDir(), "w")
-	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, ""))
+	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, scm.GitAuth{}))
 	// HEAD made on a commit the clone does not have.
 	repo, err := gogit.PlainOpen(work)
 	require.NoError(t, err)
@@ -240,7 +240,7 @@ func TestGoGitClient_RebaseOnRemote_BaseMissing(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(head.Name(), h)))
 
-	_, err = c.RebaseOnRemote(ctx, work, "origin", "main", "")
+	_, err = c.RebaseOnRemote(ctx, work, "origin", "main", scm.GitAuth{})
 	require.ErrorIs(t, err, scm.ErrRebaseBaseMissing)
 	assert.Contains(t, err.Error(), "1111111111111111111111111111111111111111")
 }
@@ -256,16 +256,16 @@ func TestGoGitClient_RebaseOnRemote_BaseFetched(t *testing.T) {
 	remote := seedBareRemote(t, map[string]string{"README.md": "r\n", "envs/a.yaml": "a: 1\n"})
 	push := func(name string, files map[string]string) string {
 		w := filepath.Join(t.TempDir(), name)
-		require.NoError(t, c.Clone(ctx, "file://"+remote, "main", w, ""))
+		require.NoError(t, c.Clone(ctx, "file://"+remote, "main", w, scm.GitAuth{}))
 		writeFiles(t, w, files)
 		require.NoError(t, c.CommitAll(ctx, w, "write "+name, "other", "o@example.com"))
-		require.NoError(t, c.Push(ctx, w, "origin", "main", "", false))
+		require.NoError(t, c.Push(ctx, w, "origin", "main", scm.GitAuth{}, false))
 		h, err := c.HeadCommit(ctx, w)
 		require.NoError(t, err)
 		return h
 	}
 	work := filepath.Join(t.TempDir(), "w")
-	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, ""))
+	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, scm.GitAuth{}))
 	earlier := push("x", map[string]string{"envs/x.yaml": "x\n"})
 	push("y", map[string]string{"envs/y.yaml": "y\n"})
 
@@ -296,10 +296,10 @@ func TestGoGitClient_RebaseOnRemote_BaseFetched(t *testing.T) {
 	_, err = repo.CommitObject(plumbing.NewHash(earlier))
 	require.ErrorIs(t, err, plumbing.ErrObjectNotFound, "the clone lacks the base")
 
-	changed, err := c.RebaseOnRemote(ctx, work, "origin", "main", "")
+	changed, err := c.RebaseOnRemote(ctx, work, "origin", "main", scm.GitAuth{})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"envs/a.yaml"}, changed)
-	require.NoError(t, c.Push(ctx, work, "origin", "main", "", false))
+	require.NoError(t, c.Push(ctx, work, "origin", "main", scm.GitAuth{}, false))
 	files, _ := remoteFiles(t, remote, "main")
 	assert.Equal(t, map[string]string{"README.md": "r\n", "envs/a.yaml": "a: 2\n", "envs/x.yaml": "x\n", "envs/y.yaml": "y\n"}, files)
 }

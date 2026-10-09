@@ -32,12 +32,12 @@ type countingGit struct {
 	clones, pushes atomic.Int32
 }
 
-func (g *countingGit) Clone(ctx context.Context, a, b, c, d string) error {
+func (g *countingGit) Clone(ctx context.Context, a, b, c string, d scm.GitAuth) error {
 	g.clones.Add(1)
 	return g.mockGit.Clone(ctx, a, b, c, d)
 }
 
-func (g *countingGit) Push(ctx context.Context, a, b, c, d string, f bool) error {
+func (g *countingGit) Push(ctx context.Context, a, b, c string, d scm.GitAuth, f bool) error {
 	g.pushes.Add(1)
 	return g.mockGit.Push(ctx, a, b, c, d, f)
 }
@@ -108,7 +108,7 @@ const cloneBarrier = 100 * time.Millisecond
 // cloneBarrier passes: steps that clone together all hold a checkout of the
 // same head before any pushes, so without turns all but one push is refused
 // every time, not only when the scheduler happens to interleave them.
-func (g *remoteGit) Clone(ctx context.Context, _, _, dir, _ string) error {
+func (g *remoteGit) Clone(ctx context.Context, _, _, dir string, _ scm.GitAuth) error {
 	g.mu.Lock()
 	g.cloned[dir] = g.head
 	g.clones++
@@ -128,7 +128,7 @@ func (g *remoteGit) Clone(ctx context.Context, _, _, dir, _ string) error {
 	return nil
 }
 
-func (g *remoteGit) Push(_ context.Context, dir, _, _, _ string, _ bool) error {
+func (g *remoteGit) Push(_ context.Context, dir, _, _ string, _ scm.GitAuth, _ bool) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.inFlight--

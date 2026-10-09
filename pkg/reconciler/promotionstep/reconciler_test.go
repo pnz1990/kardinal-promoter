@@ -129,10 +129,10 @@ type mockGit struct {
 	cloneErr error
 }
 
-func (m *mockGit) Clone(_ context.Context, _, _, _, _ string) error        { return m.cloneErr }
-func (m *mockGit) CloneAt(_ context.Context, _, _, _, _ string) error      { return nil }
-func (m *mockGit) CommitAll(_ context.Context, _, _, _, _ string) error    { return nil }
-func (m *mockGit) Push(_ context.Context, _, _, _, _ string, _ bool) error { return nil }
+func (m *mockGit) Clone(_ context.Context, _, _, _ string, _ scm.GitAuth) error        { return m.cloneErr }
+func (m *mockGit) CloneAt(_ context.Context, _, _, _ string, _ scm.GitAuth) error      { return nil }
+func (m *mockGit) CommitAll(_ context.Context, _, _, _, _ string) error                { return nil }
+func (m *mockGit) Push(_ context.Context, _, _, _ string, _ scm.GitAuth, _ bool) error { return nil }
 
 // ---------- helpers ----------
 

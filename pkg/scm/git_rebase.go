@@ -67,7 +67,7 @@ type Rebaser interface {
 	// with the same message and author and the same file changes. It
 	// returns the paths the local commit changes. With ErrRebaseConflict it
 	// changes nothing.
-	RebaseOnRemote(ctx context.Context, dir, remote, branch, token string) ([]string, error)
+	RebaseOnRemote(ctx context.Context, dir, remote, branch string, auth GitAuth) ([]string, error)
 }
 
 var _ Rebaser = (*GoGitClient)(nil)
@@ -78,7 +78,7 @@ var _ Rebaser = (*GoGitClient)(nil)
 // rebase without a merge: it refuses (ErrRebaseConflict) when the remote
 // commits since the clone touched any of those paths. Nothing is lost:
 // neither the other writer's files nor this commit's.
-func (c *GoGitClient) RebaseOnRemote(ctx context.Context, dir, remote, branch, token string) ([]string, error) {
+func (c *GoGitClient) RebaseOnRemote(ctx context.Context, dir, remote, branch string, auth GitAuth) ([]string, error) {
 	repo, err := gogit.PlainOpen(dir)
 	if err != nil {
 		return nil, fmt.Errorf("open repo at %s: %w", dir, err)
@@ -102,16 +102,23 @@ func (c *GoGitClient) RebaseOnRemote(ctx context.Context, dir, remote, branch, t
 	if urls := rem.Config().URLs; len(urls) > 0 {
 		remoteURL = urls[0]
 	}
+	am, err := authMethod(remoteURL, auth)
+	if err != nil {
+		return nil, fmt.Errorf("git fetch %s %s: %w", remote, branch, err)
+	}
+	proxyOpts, release := sshScope(ctx, am)
+	defer release()
 	tracking := plumbing.NewRemoteReferenceName(remote, branch)
 	spec := config.RefSpec("+" + plumbing.NewBranchReferenceName(branch).String() + ":" + tracking.String())
 	fetch := func(depth int) error {
 		err := repo.FetchContext(ctx, &gogit.FetchOptions{
-			RemoteName: remote,
-			RefSpecs:   []config.RefSpec{spec},
-			Depth:      depth,
-			Auth:       httpAuth(remoteURL, token),
-			Force:      true,
-			Tags:       gogit.NoTags,
+			RemoteName:   remote,
+			RefSpecs:     []config.RefSpec{spec},
+			Depth:        depth,
+			Auth:         am,
+			Force:        true,
+			Tags:         gogit.NoTags,
+			ProxyOptions: proxyOpts,
 		})
 		if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
 			return fmt.Errorf("git fetch %s %s: %s", remote, branch, gitErrorText(err))

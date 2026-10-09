@@ -20,6 +20,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -39,7 +41,7 @@ type pushRecorder struct {
 	pushes   []string // "<branch> force=<force>" of every Push call
 }
 
-func (g *pushRecorder) Push(_ context.Context, _, _, branch, _ string, force bool) error {
+func (g *pushRecorder) Push(_ context.Context, _, _, branch string, _ scm.GitAuth, force bool) error {
 	g.pushes = append(g.pushes, fmt.Sprintf("%s force=%t", branch, force))
 	if len(g.pushErrs) == 0 {
 		return nil

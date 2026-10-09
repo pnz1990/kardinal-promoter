@@ -100,7 +100,7 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 		force = false
 	}
 
-	err := state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Token, force)
+	err := state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Auth(), force)
 	rebases := 0
 	if !force && errors.Is(err, scm.ErrNonFastForward) {
 		var restart string
@@ -201,7 +201,7 @@ func rebaseAndPush(ctx context.Context, state *parentsteps.StepState, branch str
 		if err := ctx.Err(); err != nil {
 			return n, "", false, fmt.Errorf("push %s: %w", branch, err)
 		}
-		if _, err := rb.RebaseOnRemote(ctx, state.WorkDir, "origin", branch, state.Git.Token); err != nil {
+		if _, err := rb.RebaseOnRemote(ctx, state.WorkDir, "origin", branch, state.Git.Auth()); err != nil {
 			if errors.Is(err, scm.ErrBranchNotMoved) {
 				// Not contention: the push is refused for another reason.
 				// A plain error, retried a bounded number of times.
@@ -219,7 +219,7 @@ func rebaseAndPush(ctx context.Context, state *parentsteps.StepState, branch str
 			}
 			return n, "", false, fmt.Errorf("rebase onto %s: %w", branch, err)
 		}
-		err := state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Token, false)
+		err := state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Auth(), false)
 		if err == nil {
 			return n + 1, "", false, nil
 		}
