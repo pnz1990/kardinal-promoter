@@ -754,6 +754,26 @@ These are not gaps, but the translator has to work around them.
   True (`refreshGraphConditions`). Basing the PolicyGate `bundleSettled` check on the steps'
   terminal state would remove the last dependency on Graph `Ready`.
 
+- **Environment holds (#1528) use the G1 pattern.** `kardinal rollback --hold` writes
+  `Pipeline.spec.holds[]` (environment, rollback Bundle, reason). `graph.Build` reads it, and
+  the held environment's PromotionStep node gets
+  `spec.bundleName: resolvableWhen(bundleHeld && bundle.metadata.name == "<rollback>")`
+  (`pkg/graph/builder.go` `heldCond`). Every other Bundle's step in that environment is
+  data-pending: not applied, not pruned. Its downstream environments wait on it. A hold change
+  is a Pipeline spec change, so the bundle reconciler rebuilds every active Bundle's Graph in
+  place (`ensurePipelineSpecCurrent`, `pipelineSpecHashFor`). The hold is never evaluated
+  outside a CRD write. Three reconcilers read the field. The PromotionStep reconciler holds
+  steps created before the hold (`holdIfEnvironmentHeld`, as for pause), and its only write is
+  the step's message. The Bundle reconciler does not supersede the hold's Bundle. The
+  PolicyGate reconciler, which already owns gate status, passes the hold Bundle's gate instances
+  with an `EXEMPT` reason in `status.reason`, audits the flip, and emits a Warning Event.
+  Constraints: the exemption is decided per gate instance from the Pipeline and Bundle in etcd,
+  with no in-memory state. A kro Graph `readyWhen` could not express it, because the gate's
+  readiness is the PolicyGate reconciler's `status.ready` (G3). A Bundle cannot exempt itself:
+  the hold has to name it, and writing a hold needs `update` on the Pipeline. What would break
+  this: a kro change to data-pending classification (see above) would let held-out steps be
+  applied. `TestBuilder_HeldEnvironment` evaluates the emitted expression.
+
 ---
 
 ## kro upgrade checklist

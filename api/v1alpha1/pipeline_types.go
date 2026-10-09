@@ -41,6 +41,17 @@ type PipelineSpec struct {
 	// +optional
 	Paused bool `json:"paused,omitempty"`
 
+	// Holds pin environments to a rollback (kardinal rollback --hold): while
+	// an environment has a hold, no Bundle but the hold's own promotes into
+	// it, the hold's Bundle is never superseded, and the hold's Bundle passes
+	// the PolicyGates on its way, each pass recorded (GateExempted). kardinal
+	// release-hold removes it. At most one hold per environment.
+	// +listType=map
+	// +listMapKey=environment
+	// +kubebuilder:validation:MaxItems=100
+	// +optional
+	Holds []EnvironmentHold `json:"holds,omitempty"`
+
 	// HistoryLimit is the number of completed Bundle promotions to retain.
 	// When unset or zero, defaults to 50. Terminal Bundles (Verified, Failed, Superseded)
 	// beyond this limit are deleted oldest-first on each new Bundle creation.
@@ -569,6 +580,32 @@ type DeliveryConfig struct {
 	// +kubebuilder:validation:Enum=none;argoRollouts;flagger
 	// +optional
 	Delegate string `json:"delegate,omitempty"`
+}
+
+// EnvironmentHold pins one environment of a Pipeline to a rollback Bundle.
+type EnvironmentHold struct {
+	// Environment is the held environment.
+	// +kubebuilder:validation:MinLength=1
+	Environment string `json:"environment"`
+
+	// Bundle is the rollback Bundle the environment is held on: the only
+	// Bundle that promotes into it while the hold lasts.
+	// +kubebuilder:validation:MinLength=1
+	Bundle string `json:"bundle"`
+
+	// Reason says why the environment is held. It is shown wherever the hold
+	// or a gate it exempts is.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	Reason string `json:"reason"`
+
+	// CreatedBy is who held the environment.
+	// +optional
+	CreatedBy string `json:"createdBy,omitempty"`
+
+	// CreatedAt is when.
+	// +optional
+	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
 }
 
 // PipelinePolicyGateRef is a reference to a PolicyGate that must pass before

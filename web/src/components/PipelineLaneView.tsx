@@ -17,7 +17,7 @@
 // Adapted from Kargo's horizontal stage cards pattern.
 // Each card represents a PromotionStep DAG node.
 import { useState, type CSSProperties } from 'react'
-import type { GraphEdge, GraphNode } from '../types'
+import type { EnvironmentHold, GraphEdge, GraphNode } from '../types'
 import { HealthChip, kardinalStateToHealth } from './HealthChip'
 import { PipelineActionDialog, type PipelineActionKind } from './PipelineActionDialog'
 import { canPromote, canRollback } from '../pipelineActions'
@@ -40,6 +40,8 @@ interface Props {
   namespace?: string
   /** Called after a promote or rollback request succeeds, so the parent can refresh. */
   onActionDone?: () => void
+  /** Held environments (spec.holds, #1528) by name: shown as a Held badge with a release action. */
+  holds?: Record<string, EnvironmentHold>
   loading?: boolean
 }
 
@@ -79,6 +81,7 @@ export function PipelineLaneView({
   pipelineName,
   namespace = 'default',
   onActionDone,
+  holds = {},
   loading,
 }: Props) {
   const [pending, setPending] = useState<{ kind: PipelineActionKind; environment: string } | null>(null)
@@ -110,7 +113,9 @@ export function PipelineLaneView({
         const isSelected = selectedNode?.id === node.id
         const accent = stageAccentColor(node.state)
         const showPromote = !!pipelineName && canPromote(node, nodes, edges)
-        const showRollback = !!pipelineName && canRollback(node)
+        const hold = holds[node.environment]
+        // A held environment is already on a rollback: release it first.
+        const showRollback = !!pipelineName && canRollback(node) && !hold
         const showPRLink = node.prURL && node.state === 'WaitingForMerge'
         const cardClass = [
           'stage-card',
@@ -229,8 +234,17 @@ export function PipelineLaneView({
                 </div>
               )}
 
+              {/* Held on a rollback (#1528): who, why, and the release action */}
+              {hold && (
+                <div className="stage-card__hold"
+                  title={`Held on ${hold.bundle} by ${hold.createdBy || 'unknown'}: ${hold.reason}`}>
+                  <span className="stage-card__hold-badge">Held</span>
+                  <span className="stage-card__hold-reason">{hold.reason}</span>
+                </div>
+              )}
+
               {/* Action buttons row */}
-              {(showPromote || showRollback) && (
+              {(showPromote || showRollback || (hold && !!pipelineName)) && (
                 <div style={{ display: 'flex', gap: '0.25rem', marginTop: '0.1rem' }}>
                   {showPromote && (
                     <button
@@ -252,6 +266,17 @@ export function PipelineLaneView({
                       style={{ ...ACTION_BUTTON, color: 'var(--color-error)' }}
                     >
                       <span aria-hidden="true">↩</span> Roll back
+                    </button>
+                  )}
+                  {hold && pipelineName && (
+                    <button
+                      type="button"
+                      title={`Release the hold on ${node.environment}`}
+                      aria-label={`Release the hold on ${node.environment}`}
+                      onClick={e => { e.stopPropagation(); setResult(null); setPending({ kind: 'release-hold', environment: node.environment }) }}
+                      style={{ ...ACTION_BUTTON, color: 'var(--color-warning)' }}
+                    >
+                      Release hold
                     </button>
                   )}
                 </div>

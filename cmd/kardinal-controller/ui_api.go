@@ -91,6 +91,34 @@ type uiEnvironmentNode struct {
 	DependsOn []string `json:"dependsOn,omitempty"`
 	// Approval is "auto" or "pr-review" — shown as a badge on the node.
 	Approval string `json:"approval,omitempty"`
+	// Hold is the environment's hold (spec.holds, kardinal rollback --hold),
+	// nil when it is not held.
+	Hold *uiHoldResponse `json:"hold,omitempty"`
+}
+
+// uiHoldResponse is a Pipeline environment hold (spec.holds).
+type uiHoldResponse struct {
+	// Bundle is the rollback Bundle the environment is held on.
+	Bundle string `json:"bundle"`
+	// Reason says why.
+	Reason string `json:"reason"`
+	// CreatedBy is who held the environment.
+	CreatedBy string `json:"createdBy,omitempty"`
+	// CreatedAt is when, RFC 3339.
+	CreatedAt string `json:"createdAt,omitempty"`
+}
+
+// holdResponse is the UI shape of the hold of env in p, or nil.
+func holdResponse(p *v1alpha1.Pipeline, env string) *uiHoldResponse {
+	h := lifecycle.HoldOf(p, env)
+	if h == nil {
+		return nil
+	}
+	out := &uiHoldResponse{Bundle: h.Bundle, Reason: h.Reason, CreatedBy: h.CreatedBy}
+	if h.CreatedAt != nil {
+		out.CreatedAt = h.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	return out
 }
 
 // uiBundleResponse is the JSON shape for a Bundle in the UI API.
@@ -256,6 +284,7 @@ func (s *uiAPIServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/ui/gates/", s.handleGatesSubpath)
 	mux.HandleFunc("/api/v1/ui/promote", s.handlePromote)
 	mux.HandleFunc("/api/v1/ui/rollback", s.handleRollback)
+	mux.HandleFunc("/api/v1/ui/release-hold", s.handleReleaseHold)
 	mux.HandleFunc("/api/v1/ui/pause", s.handlePause)
 	mux.HandleFunc("/api/v1/ui/resume", s.handleResume)
 	mux.HandleFunc("/api/v1/ui/validate-cel", s.handleValidateCEL)
@@ -390,6 +419,7 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 					Name:      env.Name,
 					DependsOn: env.DependsOn,
 					Approval:  env.Approval,
+					Hold:      holdResponse(&p, env.Name),
 				}
 				topo = append(topo, node)
 			}

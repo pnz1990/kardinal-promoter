@@ -20,6 +20,7 @@ import type { GraphEdge, GraphNode } from '../types'
 const api = vi.hoisted(() => ({
   promote: vi.fn(),
   rollback: vi.fn(),
+  releaseHold: vi.fn(),
 }))
 vi.mock('../api/client', () => ({ api }))
 
@@ -184,5 +185,64 @@ describe('PipelineLaneView — promote and roll back (C10b-web-08)', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Roll back test' }))
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('Could not roll back test: API error 404: pipeline not found')
     expect(onActionDone).not.toHaveBeenCalled()
+  })
+})
+
+// #1528: roll back and hold, and release the hold.
+describe('PipelineLaneView — rollback hold (#1528)', () => {
+  beforeEach(() => {
+    api.rollback.mockReset()
+    api.releaseHold.mockReset()
+  })
+
+  it('holds the environment with a reason, and refuses a hold without one', async () => {
+    const user = userEvent.setup()
+    api.rollback.mockResolvedValue({ bundle: 'app-rollback-abc123', message: 'ok', held: true })
+    const { nodes, edges } = lane({ test: 'Verified', uat: 'Verified', prod: 'Verified' })
+    render(<PipelineLaneView nodes={nodes} edges={edges} pipelineName="app" namespace="team-a" />)
+
+    await user.click(screen.getByRole('button', { name: 'Roll back prod' }))
+    const dialog = screen.getByRole('dialog', { name: 'Roll back prod?' })
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Hold prod on this rollback' }))
+    expect(within(dialog).getByText(/Gates that\s+would block the rollback pass as EXEMPT/)).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Roll back and hold prod' }))
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('Say why prod is held')
+    expect(api.rollback).not.toHaveBeenCalled()
+
+    await user.type(within(dialog).getByLabelText('Reason (required)'), '  INC-42: leaks connections ')
+    await user.click(within(dialog).getByRole('button', { name: 'Roll back and hold prod' }))
+    expect(api.rollback).toHaveBeenCalledWith('app', 'prod', 'team-a', undefined, 'INC-42: leaks connections')
+    expect(await screen.findByRole('status')).toHaveTextContent('Rollback started: bundle app-rollback-abc123; prod is held on it')
+  })
+
+  it('a plain rollback sends no hold', async () => {
+    const user = userEvent.setup()
+    api.rollback.mockResolvedValue({ bundle: 'app-rb', message: 'ok' })
+    const { nodes, edges } = lane({ test: 'Verified', uat: 'Verified', prod: 'Verified' })
+    render(<PipelineLaneView nodes={nodes} edges={edges} pipelineName="app" namespace="team-a" />)
+    await user.click(screen.getByRole('button', { name: 'Roll back prod' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Roll back prod' }))
+    expect(api.rollback).toHaveBeenCalledWith('app', 'prod', 'team-a')
+  })
+
+  it('shows a held environment with its reason and releases it on confirm', async () => {
+    const user = userEvent.setup()
+    api.releaseHold.mockResolvedValue({ message: 'ok' })
+    const onActionDone = vi.fn()
+    const { nodes, edges } = lane({ test: 'Verified', uat: 'Verified', prod: 'Verified' })
+    render(<PipelineLaneView nodes={nodes} edges={edges} pipelineName="app" namespace="team-a" onActionDone={onActionDone}
+      holds={{ prod: { bundle: 'app-rollback-abc123', reason: 'INC-42', createdBy: 'alice' } }} />)
+
+    expect(screen.getByText('Held')).toBeInTheDocument()
+    expect(screen.getByTitle('Held on app-rollback-abc123 by alice: INC-42')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Roll back prod' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Release the hold on prod' }))
+    const dialog = screen.getByRole('dialog', { name: 'Release the hold on prod?' })
+    expect(api.releaseHold).not.toHaveBeenCalled()
+    await user.click(within(dialog).getByRole('button', { name: 'Release hold' }))
+    expect(api.releaseHold).toHaveBeenCalledWith('app', 'prod', 'team-a')
+    expect(await screen.findByRole('status')).toHaveTextContent('Hold on prod released')
+    expect(onActionDone).toHaveBeenCalledOnce()
   })
 })

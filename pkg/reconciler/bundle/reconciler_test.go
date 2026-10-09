@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 )
@@ -2479,4 +2480,48 @@ func TestBundleReconciler_DeletedBeforeStatusWrite(t *testing.T) {
 			assert.Empty(t, recorder.Events, "no Event on a deleted Bundle")
 		})
 	}
+}
+
+// TestBundleReconciler_HeldRollbackIsNotSuperseded (#1528): the Bundle an
+// environment is held on (spec.holds) is not superseded by a newer Promoting
+// Bundle while the hold lasts, and is once the hold is released.
+func TestBundleReconciler_HeldRollbackIsNotSuperseded(t *testing.T) {
+	s := newScheme()
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "prod"}},
+			Holds:        []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "nginx-demo-rollback-abc123", Reason: "INC-42"}},
+		},
+	}
+	held := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-rollback-abc123", Namespace: "default",
+			CreationTimestamp: metav1.Time{Time: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+			Labels:            map[string]string{"kardinal.io/rollback": "true"}},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	newer := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-new", Namespace: "default",
+			CreationTimestamp: metav1.Time{Time: time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC)}},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	c := indexedBuilder(s).WithObjects(pipeline, held, newer).WithStatusSubresource(held, newer).Build()
+	r := &bundle.Reconciler{Client: c}
+	ctx := context.Background()
+	key := types.NamespacedName{Name: held.Name, Namespace: "default"}
+
+	_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	require.NoError(t, err)
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(ctx, key, &got))
+	assert.NotEqual(t, "Superseded", got.Status.Phase, "the held rollback is never superseded")
+
+	_, err = lifecycle.ReleaseHold(ctx, c, "default", "nginx-demo", "prod")
+	require.NoError(t, err)
+	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	require.NoError(t, err)
+	require.NoError(t, c.Get(ctx, key, &got))
+	assert.Equal(t, "Superseded", got.Status.Phase, "released, it is superseded like any Bundle")
 }

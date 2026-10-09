@@ -625,6 +625,14 @@ func (r *Reconciler) hasNewerSibling(ctx context.Context, b *kardinalv1alpha1.Bu
 // or Available may itself wait for the slot, so it does not count.
 func (r *Reconciler) newerSiblings(ctx context.Context, b *kardinalv1alpha1.Bundle,
 	countVerified bool) (newer, replaced bool, err error) {
+	// The Bundle an environment is held on (spec.holds, kardinal rollback
+	// --hold) is never superseded: the hold pins the environment to it until
+	// it is released.
+	var p kardinalv1alpha1.Pipeline
+	if getErr := r.Get(ctx, client.ObjectKey{Namespace: b.Namespace, Name: b.Spec.Pipeline}, &p); getErr == nil &&
+		lifecycle.HoldNaming(&p, b.Name) != nil {
+		return false, false, nil
+	}
 	siblings, err := r.pipelineBundleList(ctx, b.Namespace, b.Spec.Pipeline)
 	if err != nil {
 		return false, false, fmt.Errorf("list bundles for supersession check: %w", err)

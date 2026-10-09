@@ -105,3 +105,77 @@ func TestPause_FreezeGateHoldsStep(t *testing.T) {
 		})
 	}
 }
+
+// TestHold_EnvironmentHeldOnAnotherBundle (#1528): while the Pipeline holds
+// the step's environment on another Bundle's rollback, a Pending step does
+// not start and a Promoting step does not run its next git step, with a
+// message naming the hold and how to release it; the hold's own Bundle runs;
+// releasing the hold lets the held step continue.
+func TestHold_EnvironmentHeldOnAnotherBundle(t *testing.T) {
+	hold := v1alpha1.EnvironmentHold{Environment: "test", Bundle: "rb-1", Reason: "INC-42", CreatedBy: "alice"}
+	tests := []struct {
+		name      string
+		state     string
+		bundle    string
+		holdEnv   string
+		wantState string
+		wantHeld  bool
+	}{
+		{name: "pending step of another bundle does not start", state: "", bundle: "bundle-1", holdEnv: "test", wantState: "", wantHeld: true},
+		{name: "promoting step of another bundle does not run its next git step", state: "Promoting", bundle: "bundle-1",
+			holdEnv: "test", wantState: "Promoting", wantHeld: true},
+		{name: "the hold's own bundle runs", state: "", bundle: "rb-1", holdEnv: "test", wantState: "Promoting"},
+		{name: "a hold of another environment does not hold", state: "", bundle: "bundle-1", holdEnv: "prod", wantState: "Promoting"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			p := makePipeline("nginx-demo")
+			h := hold
+			h.Environment = tc.holdEnv
+			p.Spec.Holds = []v1alpha1.EnvironmentHold{h}
+			step := makeStep("step-test", "nginx-demo", tc.bundle, "test")
+			if tc.state == "Promoting" {
+				asPromoting(step, makePipeline("nginx-demo"))
+			}
+			step.Status.State = tc.state
+			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+				WithObjects(step, p, makeBundle(tc.bundle, "nginx-demo")).Build()
+			r := &promotionstep.Reconciler{
+				Client: c, SCM: &mockSCM{}, GitClient: &mockGit{},
+				WorkDirFn: func(_, _ string) string { return t.TempDir() },
+			}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-test", Namespace: "default"}}
+			key := req.NamespacedName
+			msg := lifecycle.HeldMessage("nginx-demo", &hold)
+
+			res, err := r.Reconcile(ctx, req)
+			require.NoError(t, err)
+			var got v1alpha1.PromotionStep
+			require.NoError(t, c.Get(ctx, key, &got))
+			assert.Equal(t, tc.wantState, got.Status.State)
+			if !tc.wantHeld {
+				assert.NotEqual(t, msg, got.Status.Message)
+				return
+			}
+			assert.Equal(t, msg, got.Status.Message)
+			assert.Contains(t, got.Status.Message, "kardinal release-hold nginx-demo --env test")
+			assert.Positive(t, res.RequeueAfter, "a held step is requeued as a fallback to the Pipeline watch")
+			assert.Empty(t, got.Status.Outputs, "no git step ran")
+
+			rv := got.ResourceVersion
+			_, err = r.Reconcile(ctx, req)
+			require.NoError(t, err)
+			require.NoError(t, c.Get(ctx, key, &got))
+			assert.Equal(t, rv, got.ResourceVersion, "a held step is not rewritten")
+
+			_, err = lifecycle.ReleaseHold(ctx, c, "default", "nginx-demo", "test")
+			require.NoError(t, err)
+			_, err = r.Reconcile(ctx, req)
+			require.NoError(t, err)
+			require.NoError(t, c.Get(ctx, key, &got))
+			assert.NotEqual(t, tc.wantState, got.Status.State, "after release the step advances")
+		})
+	}
+}

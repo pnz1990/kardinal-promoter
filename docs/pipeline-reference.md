@@ -160,6 +160,27 @@ When `true`, no PromotionStep of the Pipeline leaves `Pending`, and a step in `P
 
 Default: `false`.
 
+### spec.holds
+
+Environments pinned to a rollback, written by `kardinal rollback --hold` and removed by
+`kardinal release-hold` (or the UI). Each entry has `environment`, `bundle` (the rollback
+Bundle), `reason` (required, up to 1024 characters), `createdBy` and `createdAt`. An
+environment has at most one hold. While it lasts, only `bundle` promotes into the environment,
+`bundle` is never superseded, and its PolicyGates pass with an `EXEMPT` reason, each pass
+audited. See [Roll back and hold](rollback.md#roll-back-and-hold).
+
+```yaml
+spec:
+  holds:
+  - environment: prod
+    bundle: my-app-rollback-3f9a1c
+    reason: "INC-4521: v1.29.0 leaks connections"
+    createdBy: alice
+    createdAt: "2026-10-09T08:12:00Z"
+```
+
+Default: none.
+
 ### spec.maxConcurrentPromotions
 
 Maximum number of this Pipeline's Bundles in the `Promoting` phase at once. A Bundle over the cap stays `Available` with the `Ready` condition reason `WaitingForSlot`, and starts when a promoting Bundle becomes Verified, Failed or Superseded. `0` means no cap.

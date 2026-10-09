@@ -68,6 +68,18 @@ export interface EnvironmentNode {
   name: string
   dependsOn?: string[]
   approval?: string
+  /** The environment's hold (spec.holds, kardinal rollback --hold), if held. */
+  hold?: EnvironmentHold
+}
+
+/** A Pipeline environment pinned to a rollback Bundle until it is released (#1528). */
+export interface EnvironmentHold {
+  /** The rollback Bundle the environment is held on. */
+  bundle: string
+  reason: string
+  createdBy?: string
+  /** RFC 3339. */
+  createdAt?: string
 }
 
 export interface Bundle {

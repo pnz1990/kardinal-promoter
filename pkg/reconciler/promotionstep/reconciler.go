@@ -28,6 +28,7 @@ import (
 
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -36,6 +37,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	builderutil "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -599,6 +601,9 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	if held, res, holdErr := r.holdIfPaused(ctx, log, ps); held {
 		return res, holdErr
 	}
+	if held, res, holdErr := r.holdIfEnvironmentHeld(ctx, log, ps, pipeline); held {
+		return res, holdErr
+	}
 	if held, res, holdErr := r.holdForSlot(ctx, log, ps); held {
 		return res, holdErr
 	}
@@ -701,6 +706,9 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
 	}
 	if held, res, holdErr := r.holdIfPaused(ctx, log, ps); held {
+		return res, holdErr
+	}
+	if held, res, holdErr := r.holdIfEnvironmentHeld(ctx, log, ps, pipeline); held {
 		return res, holdErr
 	}
 	bundle, err := r.loadBundle(ctx, ps)
@@ -1848,7 +1856,44 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&v1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.policyGateMapper)).
 		Watches(&v1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.bundleMapper),
 			builderutil.WithPredicates(bundleWakesSteps)).
+		// A hold added or released (spec.holds) takes effect on the held
+		// environment's steps at once (holdIfEnvironmentHeld).
+		Watches(&v1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.pipelineHoldMapper),
+			builderutil.WithPredicates(holdsChanged)).
 		Complete(tracing.WrapReconciler("promotionstep", r))
+}
+
+// holdsChanged passes Pipeline updates that change spec.holds.
+var holdsChanged = predicate.Funcs{
+	CreateFunc:  func(event.CreateEvent) bool { return false },
+	DeleteFunc:  func(event.DeleteEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		o, ok1 := e.ObjectOld.(*v1alpha1.Pipeline)
+		n, ok2 := e.ObjectNew.(*v1alpha1.Pipeline)
+		return ok1 && ok2 && !equality.Semantic.DeepEqual(o.Spec.Holds, n.Spec.Holds)
+	},
+}
+
+// pipelineHoldMapper wakes the unfinished steps of a Pipeline whose holds
+// changed.
+func (r *Reconciler) pipelineHoldMapper(ctx context.Context, obj client.Object) []reconcile.Request {
+	var stepList v1alpha1.PromotionStepList
+	if err := r.List(ctx, &stepList, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range stepList.Items {
+		s := &stepList.Items[i]
+		if s.Spec.PipelineName != obj.GetName() {
+			continue
+		}
+		switch s.Status.State {
+		case StatePending, "Pending", StatePromoting:
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(s)})
+		}
+	}
+	return reqs
 }
 
 // isSuperseded passes Bundle events of superseded Bundles.

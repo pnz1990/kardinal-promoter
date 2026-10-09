@@ -167,20 +167,38 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requester := uiRequester(r.Context())
-	plan, err := lifecycle.PlanRollback(r.Context(), s.client, lifecycle.RollbackRequest{
+	rollbackReq := lifecycle.RollbackRequest{
 		Namespace:   ns,
 		Pipeline:    req.Pipeline,
 		Environment: req.Environment,
 		ToBundle:    req.ToBundle,
 		Actor:       requester,
 		Now:         time.Now(),
-	})
-	if err != nil {
-		s.writeLifecycleError(w, "rollback", err)
+	}
+	if !req.Hold && req.HoldReason != "" {
+		http.Error(w, "holdReason is the reason of a hold: set hold", http.StatusBadRequest)
 		return
 	}
-	if err := s.client.Create(r.Context(), plan.Bundle); err != nil {
-		s.writeLifecycleError(w, "create rollback bundle", err)
+	var plan *lifecycle.RollbackPlan
+	var err error
+	if req.Hold {
+		if strings.TrimSpace(req.HoldReason) == "" {
+			http.Error(w, "a hold needs a holdReason", http.StatusBadRequest)
+			return
+		}
+		plan, _, err = lifecycle.RollbackAndHold(r.Context(), s.client,
+			lifecycle.HoldRequest{RollbackRequest: rollbackReq, HoldReason: req.HoldReason})
+	} else {
+		plan, err = lifecycle.PlanRollback(r.Context(), s.client, rollbackReq)
+		if err == nil {
+			if createErr := s.client.Create(r.Context(), plan.Bundle); createErr != nil {
+				s.writeLifecycleError(w, "create rollback bundle", createErr)
+				return
+			}
+		}
+	}
+	if err != nil {
+		s.writeLifecycleError(w, "rollback", err)
 		return
 	}
 
@@ -190,16 +208,55 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 		Str("env", req.Environment).
 		Str("rollbackOf", plan.Target.Name).
 		Str("rollbackFrom", plan.CurrentName).
+		Bool("hold", req.Hold).
 		Str("requestedBy", requester).
 		Msg("ui: rollback triggered")
 
+	msg := "rollback started — rolling " + req.Environment + " back to " + plan.Target.Name
+	if req.Hold {
+		msg += "; " + req.Environment + " is held on " + plan.Bundle.Name + " until the hold is released"
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(uiRollbackResponse{
 		Bundle:     plan.Bundle.Name,
 		RollbackOf: plan.Target.Name,
-		Message:    "rollback started — rolling " + req.Environment + " back to " + plan.Target.Name,
+		Message:    msg,
+		Held:       req.Hold,
 	})
+}
+
+// handleReleaseHold handles POST /api/v1/ui/release-hold: it removes the hold
+// of an environment (lifecycle.ReleaseHold). UI equivalent of
+// `kardinal release-hold`. 404 when the environment is not held.
+func (s *uiAPIServer) handleReleaseHold(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req uiReleaseHoldRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Pipeline == "" || req.Environment == "" {
+		http.Error(w, "pipeline and environment are required", http.StatusBadRequest)
+		return
+	}
+	ns := req.Namespace
+	if ns == "" {
+		ns = "default"
+	}
+	h, err := lifecycle.ReleaseHold(r.Context(), s.client, ns, req.Pipeline, req.Environment)
+	if err != nil {
+		s.writeLifecycleError(w, "release hold", err)
+		return
+	}
+	s.log.Info().Str("pipeline", req.Pipeline).Str("env", req.Environment).Str("bundle", h.Bundle).
+		Str("requestedBy", uiRequester(r.Context())).Msg("ui: hold released")
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(uiMessageResponse{
+		Message: "released the hold of " + req.Environment + " (rollback " + h.Bundle + ")"})
 }
 
 // handlePause handles POST /api/v1/ui/pause. It sets spec.paused

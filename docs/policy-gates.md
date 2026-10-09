@@ -614,3 +614,14 @@ kardinal override my-app --stage prod --gate no-weekend-deploy \
 - `kubectl get policygate <instance> -o yaml` shows every entry in `spec.overrides[]`, active or expired, while the Bundle exists.
 - `kardinal explain` shows the `OVERRIDDEN by ...` reason in the gate's REASON column while the override is active.
 - The PR evidence body has no separate badge. A PR opened while the override is active lists the gate in its Policy Gate Compliance table with Result `Pass` and the `OVERRIDDEN by ...` reason. The body is written when the PR is opened and is not updated afterwards, so an override recorded after that, or one that expired before it, does not appear there. An `auto` environment opens no PR.
+
+### Rollback hold exemption
+
+A rollback created with `kardinal rollback --hold` passes every gate that would block it,
+for as long as the hold lasts. A gate it passes this way has the `status.reason`
+`EXEMPT: rollback <bundle> holds <env> (by <user>: <reason>); without the hold: <the gate's own result>`.
+The flip is a `GateEvaluated` AuditEvent, and the gate gets a `GateExempted` Warning Event, so
+`kardinal explain`, `kardinal audit` and `kubectl get events` all show it. Only the Bundle named
+by the Pipeline's `spec.holds` is exempt, and only if it is a rollback Bundle of that Pipeline.
+`kardinal release-hold` ends the exemption, and the gates are evaluated again at once. See
+[Roll back and hold](rollback.md#roll-back-and-hold).

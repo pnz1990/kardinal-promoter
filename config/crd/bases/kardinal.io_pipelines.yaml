@@ -645,6 +645,51 @@ spec:
                   beyond this limit are deleted oldest-first on each new Bundle creation.
                 minimum: 1
                 type: integer
+              holds:
+                description: |-
+                  Holds pin environments to a rollback (kardinal rollback --hold): while
+                  an environment has a hold, no Bundle but the hold's own promotes into
+                  it, the hold's Bundle is never superseded, and the hold's Bundle passes
+                  the PolicyGates on its way, each pass recorded (GateExempted). kardinal
+                  release-hold removes it. At most one hold per environment.
+                items:
+                  description: EnvironmentHold pins one environment of a Pipeline
+                    to a rollback Bundle.
+                  properties:
+                    bundle:
+                      description: |-
+                        Bundle is the rollback Bundle the environment is held on: the only
+                        Bundle that promotes into it while the hold lasts.
+                      minLength: 1
+                      type: string
+                    createdAt:
+                      description: CreatedAt is when.
+                      format: date-time
+                      type: string
+                    createdBy:
+                      description: CreatedBy is who held the environment.
+                      type: string
+                    environment:
+                      description: Environment is the held environment.
+                      minLength: 1
+                      type: string
+                    reason:
+                      description: |-
+                        Reason says why the environment is held. It is shown wherever the hold
+                        or a gate it exempts is.
+                      maxLength: 1024
+                      minLength: 1
+                      type: string
+                  required:
+                  - bundle
+                  - environment
+                  - reason
+                  type: object
+                maxItems: 100
+                type: array
+                x-kubernetes-list-map-keys:
+                - environment
+                x-kubernetes-list-type: map
               maxConcurrentPromotions:
                 default: 0
                 description: |-
