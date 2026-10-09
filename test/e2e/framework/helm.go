@@ -181,6 +181,19 @@ func (e *Env) TryInstallChart(t *testing.T, name, ns string, values Values, wait
 	return r, out, err
 }
 
+// HelmTemplate runs helm template of the checkout's chart as release name in
+// ns, with BaseChartValues merged with values, and returns helm's output and
+// error. helm template does not contact the cluster.
+func (e *Env) HelmTemplate(t *testing.T, name, ns string, values Values) (string, error) {
+	t.Helper()
+	all := MergeValues(BaseChartValues(t), values)
+	out, err := e.helm("template", name, chartDir(t), "-n", ns, "-f", valuesFile(t, all))
+	if err != nil {
+		t.Logf("$ helm template %s -n %s\n%s", name, ns, out)
+	}
+	return out, err
+}
+
 // InstallChart is TryInstallChart with wait that fails the test when helm
 // fails.
 func (e *Env) InstallChart(t *testing.T, name, ns string, values Values) *Release {

@@ -1155,6 +1155,62 @@ func TestChart_SCMCredentials(t *testing.T) {
 	assert.Contains(t, out, "github.secretRef.namespace ("+framework.ControllerNamespace+") must be empty or the release namespace")
 }
 
+// TestChart_MissingSecret checks that an install whose Secret is missing, or
+// lacks its key, fails at once with a message naming the value, the Secret
+// and the namespace, instead of `helm install --wait` timing out on a Pod in
+// CreateContainerConfigError (#1581). `helm template` has no cluster and
+// renders the same values.
+//
+// Covers CHART-SECRETS-01.
+func TestChart_MissingSecret(t *testing.T) {
+	t.Parallel()
+	namespaceScoped(t)
+	e := framework.New(t)
+	ns := e.Namespace(t)
+	secret(t, e, ns, "wrong-key", "password", "x")
+
+	cases := []struct {
+		name   string
+		values framework.Values
+		want   string
+	}{
+		{"github.secretRef missing",
+			framework.Values{"github": framework.Values{"secretRef": framework.Values{"name": "no-such-token"}}},
+			`github.secretRef.name: Secret "no-such-token" does not exist in namespace ` + ns},
+		{"github.secretRef without its key",
+			framework.Values{"github": framework.Values{"secretRef": framework.Values{"name": "wrong-key"}}},
+			`github.secretRef: Secret ` + ns + `/wrong-key has no key "token"`},
+		{"webhook.secretRef missing",
+			framework.Values{"webhook": framework.Values{"secretRef": framework.Values{"name": "no-such-hook"}}},
+			`webhook.secretRef.name: Secret "no-such-hook" does not exist in namespace ` + ns},
+		{"bundleAPI.tokenSecretRef missing",
+			framework.Values{"bundleAPI": framework.Values{"tokenSecretRef": framework.Values{"name": "no-such-bundle-token"}}},
+			`bundleAPI.tokenSecretRef.name: Secret "no-such-bundle-token" does not exist in namespace ` + ns},
+		{"ui.auth.tokenSecretRef missing",
+			framework.Values{"ui": framework.Values{"auth": framework.Values{"tokenSecretRef": framework.Values{"name": "no-such-ui-token"}}}},
+			`ui.auth.tokenSecretRef.name: Secret "no-such-ui-token" does not exist in namespace ` + ns},
+	}
+	for _, c := range cases {
+		values := nsValues(ns, c.values)
+		start := time.Now()
+		_, out, err := e.TryInstallChart(t, releaseName(ns), ns, values, true)
+		require.Error(t, err, c.name)
+		assert.Contains(t, out, c.want, c.name)
+		assert.Less(t, time.Since(start), time.Minute, "%s: the install fails before --wait waits", c.name)
+		_, serr := e.Helm(t, "status", releaseName(ns), "-n", ns)
+		assert.Error(t, serr, "%s: no release is created", c.name)
+
+		// Without a cluster the check is skipped: GitOps tools that run
+		// helm template render the chart.
+		_, err = e.HelmTemplate(t, releaseName(ns), ns, values)
+		assert.NoError(t, err, "%s: helm template renders", c.name)
+	}
+
+	// With the Secret and its key, the same release installs.
+	r := e.InstallChart(t, releaseName(ns), ns, nsValues(ns, nil))
+	runningPod(t, r)
+}
+
 // TestChart_WebhookSecret checks webhook.secretRef: the git server's signed
 // merge event marks the PR merged, a wrong signature is refused, and without
 // the value the webhook refuses everything.

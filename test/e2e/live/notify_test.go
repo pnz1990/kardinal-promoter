@@ -596,8 +596,8 @@ func TestNotify_GiveUp(t *testing.T) {
 }
 
 // TestNotify_NewHookNoBackfill checks a hook created after events exist: it
-// delivers only the newest one and records the older one as processed, then
-// delivers the events that come later.
+// delivers none of them and records both as processed (#1581), then delivers
+// the events that come later.
 //
 // Covers NOTIF-NEW-01.
 func TestNotify_NewHookNoBackfill(t *testing.T) {
@@ -613,22 +613,24 @@ func TestNotify_NewHookNoBackfill(t *testing.T) {
 	newest, g2 := holdBundle(t, a, "other")
 	require.True(t, blockedAt(g2).After(blockedAt(g1)), "the second gate blocked later")
 
+	// Both blocks are at least a second older than the hook.
+	framework.Eventually(t, 10*time.Second, "a later second than the second block", func(context.Context) (bool, string) {
+		return time.Now().After(blockedAt(g2).Add(time.Second)), blockedAt(g2).String()
+	})
 	newHook(t, e, a.ns, "new", rcv.URL(a.ns, "hook"), "", "", v1alpha1.NotificationEventPolicyGateBlocked)
-	recs := waitRecords(t, rcv, a.ns, 1, time.Minute)
-	keepRecords(t, rcv, a.ns, 1, 15*time.Second)
-	p, _ := decode(t, recs[0])
-	assert.Equal(t, newest, p.Bundle, "only the newest existing event")
+	waitHook(t, e, a.ns, "new", "the existing events recorded", func(s v1alpha1.NotificationHookStatus) bool {
+		return len(s.ProcessedEventKeys) == 2
+	})
+	keepRecords(t, rcv, a.ns, 0, 15*time.Second)
 	h := getHook(t, e, a.ns, "new")
 	assert.ElementsMatch(t, []string{gateKey(g1), gateKey(g2)}, h.Status.ProcessedEventKeys)
-	assert.Equal(t, gateKey(g2), h.Status.LastEventKey)
 
 	later, _ := holdBundle(t, a, pipelineName)
-	recs = waitRecords(t, rcv, a.ns, 2, time.Minute)
-	keepRecords(t, rcv, a.ns, 2, 10*time.Second)
-	p, _ = decode(t, recs[1])
+	recs := waitRecords(t, rcv, a.ns, 1, time.Minute)
+	keepRecords(t, rcv, a.ns, 1, 10*time.Second)
+	p, _ := decode(t, recs[0])
 	assert.Equal(t, later, p.Bundle, "a later event is delivered")
-	for _, r := range recs {
-		p, _ := decode(t, r)
-		assert.NotEqual(t, oldest, p.Bundle, "the older event is never sent")
+	for _, b := range []string{oldest, newest} {
+		assert.NotEqual(t, b, p.Bundle, "an event from before the hook is never sent")
 	}
 }

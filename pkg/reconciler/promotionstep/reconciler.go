@@ -2462,9 +2462,14 @@ func (r *Reconciler) collectGateResults(ctx context.Context, log zerolog.Logger,
 			Result:        "Fail",
 			Reason:        g.Status.Reason,
 		}
-		// Prefer the template's name over the generated instance name.
+		// Prefer the template's name and namespace over the generated
+		// instance's: an org gate's instance lives in the Pipeline namespace,
+		// but a reviewer looks for the template (#1581).
 		if tmpl := g.Labels["kardinal.io/gate-name"]; tmpl != "" {
 			gr.GateName = tmpl
+		}
+		if tmplNS := g.Labels[graph.LabelGateTemplateNamespace]; tmplNS != "" {
+			gr.GateNamespace = tmplNS
 		}
 		if g.Status.Ready {
 			gr.Result = "Pass"
