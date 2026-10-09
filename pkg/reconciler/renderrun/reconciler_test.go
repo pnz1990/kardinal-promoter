@@ -26,6 +26,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/renderrun"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/renderjob"
+	stepsimpl "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
 
 func scheme(t *testing.T) *runtime.Scheme {
@@ -306,8 +307,10 @@ func TestRenderRun_ResultTrust(t *testing.T) {
 		"another branch": {func(r *v1alpha1.RenderRunResult) { r.Branch = "main" }, `branch "main" is not "env/prod"`},
 		"short commit":   {func(r *v1alpha1.RenderRunResult) { r.CommitSHA = "c0ffee" }, `commitSHA "c0ffee" is not a commit id`},
 		"short dry":      {func(r *v1alpha1.RenderRunResult) { r.DryCommit = "d00d" }, `dryCommit "d00d" is not a commit id`},
-		"unchanged with a commit": {func(r *v1alpha1.RenderRunResult) { r.NoChanges = true },
-			"an unchanged render reports a pushed commit"},
+		"unchanged with a branch": {func(r *v1alpha1.RenderRunResult) { r.NoChanges = true },
+			"an unchanged render reports a pushed branch"},
+		"unchanged without the head": {func(r *v1alpha1.RenderRunResult) { r.NoChanges, r.Branch, r.CommitSHA = true, "", "" },
+			`commitSHA "" (the rendered branch's head) is not a commit id`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e, job := start(t)
@@ -326,7 +329,7 @@ func TestRenderRun_ResultTrust(t *testing.T) {
 		e.reconcile(t, "rr")
 		e.reconcile(t, "rr")
 		res := good
-		res.Branch = "kardinal/web-v2/prod"
+		res.Branch = stepsimpl.PRBranch(r.Namespace, "web-v2", "prod")
 		e.finishJob(t, e.job(t, "rr"), true, corev1.ContainerStateTerminated{Message: string(renderjob.Message(renderjob.Result{RenderRunResult: res}))})
 		_, got := e.reconcile(t, "rr")
 		assert.Equal(t, "Succeeded", got.Status.Phase, got.Status.Message)
@@ -427,4 +430,60 @@ func TestRenderRun_OnlyTheNewestLostResultIsUnconfirmed(t *testing.T) {
 	require.NoError(t, e.c.Create(ctx, third))
 	_, got := e.reconcile(t, "rr3")
 	assert.Equal(t, []string{"web-v3"}, got.Status.UnconfirmedBundles)
+}
+
+// TestRenderRun_RetiredBundlesKeepTheirMarkers: a retired Bundle's Graph
+// was deleted with its RenderRuns (#1492), so the marker digests of its
+// renders come from its status.retiredSteps: a render after the retirement
+// still knows them (newest first, with the RenderRuns that remain), and a
+// retired step of another environment or Pipeline does not count.
+func TestRenderRun_RetiredBundlesKeepTheirMarkers(t *testing.T) {
+	at := func(m int) *metav1.Time {
+		v := metav1.NewTime(time.Date(2026, 10, 9, 10, m, 0, 0, time.UTC))
+		return &v
+	}
+	retired := func(name, pipeline string, steps ...v1alpha1.RetiredStep) *v1alpha1.Bundle {
+		b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team"},
+			Spec: v1alpha1.BundleSpec{Pipeline: pipeline, Type: "image"}}
+		b.Status.RetiredAt, b.Status.RetiredSteps = at(59), steps
+		return b
+	}
+	d := func(c string) string { return strings.Repeat(c, 64) }
+	old := retired("web-v1", "web", v1alpha1.RetiredStep{Name: "s1", Environment: "prod", State: "Verified", VerifiedAt: at(1), MarkerDigest: d("1")},
+		v1alpha1.RetiredStep{Name: "s1t", Environment: "test", State: "Verified", VerifiedAt: at(1), MarkerDigest: d("9")})
+	newer := retired("web-v2", "web", v1alpha1.RetiredStep{Name: "s2", Environment: "prod", State: "Verified", VerifiedAt: at(5), MarkerDigest: d("2")})
+	other := retired("api-v1", "api", v1alpha1.RetiredStep{Name: "s3", Environment: "prod", State: "Verified", VerifiedAt: at(6), MarkerDigest: d("3")})
+	notRetired := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "web-v3", Namespace: "team"}, Spec: v1alpha1.BundleSpec{Pipeline: "web", Type: "image"},
+		Status: v1alpha1.BundleStatus{RetiredSteps: []v1alpha1.RetiredStep{{Name: "s4", Environment: "prod", MarkerDigest: d("4")}}}}
+
+	rr := run("rr")
+	rr.Spec.BundleName = "web-v9"
+	e := newEnv(t, rr, old, newer, other, notRetired)
+	_, got := e.reconcile(t, "rr")
+	assert.Equal(t, []string{d("2"), d("1")}, got.Status.KnownMarkerDigests)
+}
+
+// TestRenderRun_RetiredLostRenderUnconfirmed: when the newest render of the
+// environment is a retired Bundle's Failed step (its RenderRun deleted with
+// the Graph), that Bundle is unconfirmed, as a Failed RenderRun would be; a
+// later accepted render confirms the branch again.
+func TestRenderRun_RetiredLostRenderUnconfirmed(t *testing.T) {
+	at := func(m int) metav1.Time { return metav1.NewTime(time.Date(2026, 10, 9, 10, m, 0, 0, time.UTC)) }
+	bundle := func(name string, rs v1alpha1.RetiredStep) *v1alpha1.Bundle {
+		retiredAt := at(59)
+		b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team"}, Spec: v1alpha1.BundleSpec{Pipeline: "web", Type: "image"}}
+		b.Status.RetiredAt, b.Status.RetiredSteps = &retiredAt, []v1alpha1.RetiredStep{rs}
+		return b
+	}
+	verified := at(1)
+	ok := bundle("web-v1", v1alpha1.RetiredStep{Name: "s1", Environment: "prod", State: "Verified", CreatedAt: at(0), VerifiedAt: &verified,
+		MarkerDigest: strings.Repeat("1", 64)})
+	lost := bundle("web-v2", v1alpha1.RetiredStep{Name: "s2", Environment: "prod", State: "Failed", CreatedAt: at(5)})
+	older := bundle("web-v0", v1alpha1.RetiredStep{Name: "s0", Environment: "prod", State: "Failed", CreatedAt: at(-5)})
+	rr := run("rr")
+	rr.Spec.BundleName = "web-v3"
+	e := newEnv(t, rr, ok, lost, older)
+	_, got := e.reconcile(t, "rr")
+	assert.Equal(t, []string{"web-v2"}, got.Status.UnconfirmedBundles)
+	assert.Equal(t, []string{strings.Repeat("1", 64)}, got.Status.KnownMarkerDigests)
 }

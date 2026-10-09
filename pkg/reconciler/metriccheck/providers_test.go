@@ -19,6 +19,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
@@ -413,14 +417,14 @@ func TestWebProvider(t *testing.T) {
 	})
 }
 
-// TestDefaultBackends_RefuseLoopback: every provider's default client goes
-// through the egress guard, so a MetricCheck URL cannot reach the
-// controller's own loopback API (or link-local credential endpoints).
-func TestDefaultBackends_RefuseLoopback(t *testing.T) {
+// defaultBackendSpecs returns a MetricCheck spec per default backend that
+// points at a loopback test server, and the Secret reader they use.
+func defaultBackendSpecs(t *testing.T) (map[string]*kardinalv1alpha1.MetricCheckSpec, func(context.Context, kardinalv1alpha1.SecretKeyRef) (string, error)) {
+	t.Helper()
 	srv, _ := serve(t, 200, `{}`)
 	keys := secrets(map[string]string{"s/k": "v"})
 	ref := kardinalv1alpha1.SecretKeyRef{Name: "s", Key: "k"}
-	specs := map[string]*kardinalv1alpha1.MetricCheckSpec{
+	return map[string]*kardinalv1alpha1.MetricCheckSpec{
 		"prometheus": {Provider: "prometheus", PrometheusURL: srv.URL, Query: "up"},
 		"datadog": {Provider: "datadog", Query: "q", Datadog: &kardinalv1alpha1.DatadogProviderSpec{
 			Address: srv.URL, APIKeySecretRef: ref, ApplicationKeySecretRef: ref}},
@@ -429,7 +433,14 @@ func TestDefaultBackends_RefuseLoopback(t *testing.T) {
 		"newrelic": {Provider: "newrelic", Query: "q", NewRelic: &kardinalv1alpha1.NewRelicProviderSpec{
 			AccountID: 1, Address: srv.URL, APIKeySecretRef: ref}},
 		"web": {Provider: "web", Web: &kardinalv1alpha1.WebProviderSpec{URL: srv.URL, JSONPath: "{.a}"}},
-	}
+	}, keys
+}
+
+// TestDefaultBackends_RefuseLoopback: every provider's default client goes
+// through the egress guard, so a MetricCheck URL cannot reach the
+// controller's own loopback API (or link-local credential endpoints).
+func TestDefaultBackends_RefuseLoopback(t *testing.T) {
+	specs, keys := defaultBackendSpecs(t)
 	backends := metriccheck.DefaultBackends(false)
 	require.Len(t, backends, len(specs))
 	for name, spec := range specs {
@@ -437,6 +448,41 @@ func TestDefaultBackends_RefuseLoopback(t *testing.T) {
 			_, err := backends[name].Evaluate(context.Background(), metriccheck.Query{Spec: spec, Secret: keys, Now: queryNow})
 			require.Error(t, err)
 			assert.True(t, errors.Is(err, egress.ErrBlockedAddress), "%s: %v", name, err)
+		})
+	}
+}
+
+// TestDefaultBackends_Traced: every provider's default client records an
+// OpenTelemetry client span per request, layered over the egress guard: the
+// span names the API host, and the request is still refused (#1499 follow-up).
+// No trace context is sent to the metrics API.
+func TestDefaultBackends_Traced(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec), sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() { otel.SetTracerProvider(prev); _ = tp.Shutdown(context.Background()) })
+
+	specs, keys := defaultBackendSpecs(t)
+	backends := metriccheck.DefaultBackends(false)
+	require.Len(t, backends, len(specs))
+	for name, spec := range specs {
+		t.Run(name, func(t *testing.T) {
+			rec.Reset()
+			_, err := backends[name].Evaluate(context.Background(), metriccheck.Query{Spec: spec, Secret: keys, Now: queryNow})
+			require.True(t, errors.Is(err, egress.ErrBlockedAddress), "the egress guard still applies: %v", err)
+			var hosts []string
+			for _, s := range rec.Ended() {
+				if s.SpanKind() != trace.SpanKindClient {
+					continue
+				}
+				for _, a := range s.Attributes() {
+					if a.Key == "server.address" {
+						hosts = append(hosts, a.Value.AsString())
+					}
+				}
+			}
+			assert.Contains(t, hosts, "127.0.0.1", "a client span per request (spans: %d)", len(rec.Ended()))
 		})
 	}
 }

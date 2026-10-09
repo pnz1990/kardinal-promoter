@@ -78,7 +78,16 @@ func (s *gitCloneStep) Execute(ctx context.Context, state *parentsteps.StepState
 			errors.New(msg)
 	}
 
-	result := parentsteps.StepResult{Status: parentsteps.StepSuccess, Message: "cloned " + repoURL}
+	result := parentsteps.StepResult{Status: parentsteps.StepSuccess, Message: "cloned " + repoURL,
+		Outputs: map[string]string{}}
+	// The base commit the promotion is built on (status.outputs.baseSHA):
+	// while its PR waits for the merge, the reconciler rebuilds the PR
+	// branch when the base branch moves past it.
+	if hr, ok := state.GitClient.(scm.HeadCommitReader); ok {
+		if sha, err := hr.HeadCommit(ctx, state.WorkDir); err == nil && sha != "" {
+			result.Outputs[OutputBaseSHA] = sha
+		}
+	}
 
 	if ref := state.Bundle.ConfigRef; deploysConfig(state.Bundle.Type) && ref != nil && ref.CommitSHA != "" {
 		srcURL := ref.GitRepo
@@ -102,11 +111,15 @@ func (s *gitCloneStep) Execute(ctx context.Context, state *parentsteps.StepState
 				errors.New(msg)
 		}
 		result.Message += fmt.Sprintf("; config source %s@%s", scm.RedactURL(srcURL), ref.CommitSHA)
-		result.Outputs = map[string]string{"configSourceDir": srcDir}
+		result.Outputs["configSourceDir"] = srcDir
 	}
 
 	return result, nil
 }
+
+// OutputBaseSHA is the git-clone output (status.outputs.baseSHA) naming the
+// base branch commit the promotion was built on.
+const OutputBaseSHA = "baseSHA"
 
 // deploysConfig reports whether a Bundle of bundleType deploys its configRef
 // commit: config Bundles do, and mixed Bundles do before their images.

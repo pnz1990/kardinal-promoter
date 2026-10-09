@@ -20,6 +20,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/renderjob"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
+	stepsimpl "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
 
 // remote is a bare repository with a kustomize overlay on main.
@@ -105,9 +106,10 @@ func TestRun(t *testing.T) {
 	pr.KnownMarkerDigests = []string{res.MarkerDigest}
 	res3, err := renderjob.Run(ctx, pr, t.TempDir(), "", git)
 	require.NoError(t, err)
-	assert.Equal(t, "kardinal/web-v3/prod", res3.Branch, "pr-review pushes to the promotion branch")
+	prBranch := stepsimpl.PRBranch("team", "web-v3", "prod")
+	assert.Equal(t, prBranch, res3.Branch, "pr-review pushes to the promotion branch")
 	dir := filepath.Join(t.TempDir(), "check")
-	require.NoError(t, git.Clone(ctx, url, "kardinal/web-v3/prod", dir, ""))
+	require.NoError(t, git.Clone(ctx, url, prBranch, dir, ""))
 	b, err := os.ReadFile(filepath.Join(dir, "web-prod_deployment-web.yaml"))
 	require.NoError(t, err)
 	assert.Contains(t, string(b), "ghcr.io/org/web:3.0.0")

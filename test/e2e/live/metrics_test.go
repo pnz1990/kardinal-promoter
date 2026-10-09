@@ -619,7 +619,12 @@ func TestObs_ControllerMetrics(t *testing.T) {
 		assert.True(t, after.Has("controller_runtime_active_workers", l), "%s active workers", c)
 		want := 1.0
 		if c == "metriccheck" {
-			want = 4
+			// maxConcurrentReconciles in pkg/reconciler/metriccheck: 16 since
+			// #1479 (docs/changelog.md), more than the 12 default query slots
+			// so templates, suspended checks and checks waiting for a slot are
+			// served while the slots are busy. The query slots
+			// (--metriccheck-*-slots) are a separate limit.
+			want = 16
 		}
 		assert.Equal(t, want, after.Sum("controller_runtime_max_concurrent_reconciles", l), "%s max concurrent reconciles", c)
 		q := map[string]string{"name": c}

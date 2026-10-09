@@ -210,15 +210,15 @@ func (c *GoGitClient) ReachableFrom(_ context.Context, dir, commit, branch strin
 	return ok, nil
 }
 
-// RemoteHeadReader is implemented by git clients that can read the head of
-// a branch on the remote without cloning it (git ls-remote).
-type RemoteHeadReader interface {
+// BranchHeadReader is implemented by git clients that can read the head of
+// one branch on the remote without cloning it (git ls-remote).
+type BranchHeadReader interface {
 	// RemoteBranchHead returns the commit branch points at on url, or ""
 	// when the branch does not exist.
 	RemoteBranchHead(ctx context.Context, url, branch, token string) (string, error)
 }
 
-// RemoteBranchHead implements RemoteHeadReader.
+// RemoteBranchHead implements BranchHeadReader.
 func (c *GoGitClient) RemoteBranchHead(ctx context.Context, url, branch, token string) (string, error) {
 	rem := gogit.NewRemote(memory.NewStorage(), &config.RemoteConfig{Name: "origin", URLs: []string{url}})
 	refs, err := rem.ListContext(ctx, &gogit.ListOptions{Auth: httpAuth(url, token)})

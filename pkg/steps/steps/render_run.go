@@ -100,7 +100,7 @@ func (s *renderStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		}
 	}
 	{
-		if rh, ok := state.GitClient.(scm.RemoteHeadReader); ok {
+		if rh, ok := state.GitClient.(scm.BranchHeadReader); ok {
 			head, err := rh.RemoteBranchHead(ctx, state.Git.URL, branch, state.Git.Token)
 			if err != nil {
 				msg := "check the rendered commit: " + scm.RedactText(err.Error())

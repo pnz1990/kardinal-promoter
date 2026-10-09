@@ -78,10 +78,10 @@ func (r *Reconciler) renderedBranchConflict(ctx context.Context, p *kardinalv1al
 	return strings.Join(found, "; ") + "; set render.branch to a branch of its own", nil
 }
 
-// pipelinesSharingRepo enqueues the other Pipelines of obj's repository
-// that render to a branch, so a conflict clears when the older Pipeline
+// renderingPipelinesSharingRepo enqueues the other Pipelines of obj's
+// repository that render to a branch, so a conflict clears when the older Pipeline
 // changes or goes.
-func (r *Reconciler) pipelinesSharingRepo(ctx context.Context, obj client.Object) []ctrl.Request {
+func (r *Reconciler) renderingPipelinesSharingRepo(ctx context.Context, obj client.Object) []ctrl.Request {
 	p, ok := obj.(*kardinalv1alpha1.Pipeline)
 	if !ok {
 		return nil

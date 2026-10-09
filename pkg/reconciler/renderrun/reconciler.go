@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/renderjob"
 	stepsimpl "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
@@ -252,25 +253,85 @@ func (r *Reconciler) earlierRenders(ctx context.Context, run *v1alpha1.RenderRun
 			done = append(done, o)
 		}
 	}
-	sort.Slice(done, func(i, j int) bool { return done[j].Status.FinishedAt.Before(done[i].Status.FinishedAt) })
+	// Every earlier render, newest first: the RenderRuns that remain, and
+	// the steps of retired Bundles, whose Graph was deleted with its
+	// RenderRuns (status.retiredSteps keeps a render's marker digest).
+	var renders []earlierRender
+	for _, o := range done {
+		rd := earlierRender{at: o.Status.FinishedAt.Time, bundle: o.Spec.BundleName,
+			failed: o.Status.Phase == v1alpha1.RenderRunFailed}
+		if res := o.Status.Result; !rd.failed && res != nil {
+			rd.digest = res.MarkerDigest
+		}
+		renders = append(renders, rd)
+	}
+	retired, err := r.retiredRenders(ctx, run)
+	if err != nil {
+		return nil, nil, err
+	}
+	renders = append(renders, retired...)
+	sort.SliceStable(renders, func(i, j int) bool { return renders[j].at.Before(renders[i].at) })
 	seen := map[string]bool{}
 	confirmed := false
-	for _, o := range done {
-		if o.Status.Phase == v1alpha1.RenderRunFailed {
-			// Only the newest: a push of an older lost render was
-			// overwritten by the newer one, or is not on the branch's head.
+	for _, rd := range renders {
+		if rd.failed {
+			// Only the newest failed render after the last accepted one:
+			// its Job may have pushed before its result was lost; an older
+			// one's push was overwritten by the newer, or is not the head.
 			if !confirmed && len(unconfirmed) == 0 {
-				unconfirmed = append(unconfirmed, o.Spec.BundleName)
+				unconfirmed = append(unconfirmed, rd.bundle)
 			}
 			continue
 		}
 		confirmed = true
-		if res := o.Status.Result; res != nil && res.MarkerDigest != "" && !seen[res.MarkerDigest] && len(known) < knownDigests {
-			seen[res.MarkerDigest] = true
-			known = append(known, res.MarkerDigest)
+		if rd.digest != "" && !seen[rd.digest] && len(known) < knownDigests {
+			seen[rd.digest] = true
+			known = append(known, rd.digest)
 		}
 	}
 	return known, unconfirmed, nil
+}
+
+// earlierRender is one earlier render of an environment.
+type earlierRender struct {
+	at     time.Time
+	digest string // the marker digest of a render kardinal accepted
+	bundle string
+	failed bool // the render failed: its result may have been lost
+}
+
+// retiredRenders returns the renders of the environment that the
+// Pipeline's retired Bundles keep in status.retiredSteps: a step with a
+// marker digest got past its render; a Failed one without may have lost its
+// render's result.
+func (r *Reconciler) retiredRenders(ctx context.Context, run *v1alpha1.RenderRun) ([]earlierRender, error) {
+	var bundles v1alpha1.BundleList
+	if err := r.List(ctx, &bundles, client.InNamespace(run.Namespace)); err != nil {
+		return nil, fmt.Errorf("list bundles: %w", err)
+	}
+	var out []earlierRender
+	for i := range bundles.Items {
+		b := &bundles.Items[i]
+		if b.Spec.Pipeline != run.Spec.PipelineName || b.Name == run.Spec.BundleName || !lifecycle.Retired(b) {
+			continue
+		}
+		for _, rs := range b.Status.RetiredSteps {
+			if rs.Environment != run.Spec.Environment {
+				continue
+			}
+			switch {
+			case rs.MarkerDigest != "":
+				at := rs.CreatedAt.Time
+				if rs.VerifiedAt != nil {
+					at = rs.VerifiedAt.Time
+				}
+				out = append(out, earlierRender{at: at, digest: rs.MarkerDigest, bundle: b.Name})
+			case rs.State == "Failed":
+				out = append(out, earlierRender{at: rs.CreatedAt.Time, bundle: b.Name, failed: true})
+			}
+		}
+	}
+	return out, nil
 }
 
 func (r *Reconciler) job(ctx context.Context, run *v1alpha1.RenderRun) (*batchv1.Job, bool, error) {
@@ -642,8 +703,13 @@ func validResult(run *v1alpha1.RenderRun, res *v1alpha1.RenderRunResult) string 
 		return fmt.Sprintf("dryCommit %q is not a commit id", res.DryCommit)
 	}
 	if res.NoChanges {
-		if res.CommitSHA != "" || res.Branch != "" {
-			return "an unchanged render reports a pushed commit"
+		// Nothing pushed: the commit is the rendered branch's head, which the
+		// step checks on the remote.
+		if res.Branch != "" {
+			return "an unchanged render reports a pushed branch"
+		}
+		if !sha1RE.MatchString(res.CommitSHA) {
+			return fmt.Sprintf("commitSHA %q (the rendered branch's head) is not a commit id", res.CommitSHA)
 		}
 		return ""
 	}
@@ -652,7 +718,7 @@ func validResult(run *v1alpha1.RenderRun, res *v1alpha1.RenderRunResult) string 
 	}
 	want := run.Spec.Git.RenderedBranch
 	if run.Spec.Git.PullRequest {
-		want = stepsimpl.PRBranch(run.Spec.BundleName, run.Spec.Environment)
+		want = stepsimpl.PRBranch(run.Namespace, run.Spec.BundleName, run.Spec.Environment)
 	}
 	if res.Branch != want {
 		return fmt.Sprintf("branch %q is not %q", res.Branch, want)

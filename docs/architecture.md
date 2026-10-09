@@ -108,7 +108,7 @@ Built-in step implementations:
 | `argocd-set-image` | Patches the Argo CD Application's image override directly, with no Git commit (`update.strategy: argocd`) |
 | `config-merge` | Copies the environment directory of the Bundle's `configRef` commit over the environment directory (config and mixed Bundles). Files deleted in the config commit are not deleted |
 | `git-commit` | Commits the working tree changes. When nothing changed it records that, and the later steps skip the push and the PR |
-| `git-push` | A sequence with `open-pr` (`pr-review` when the step started): force-pushes `kardinal/<bundle>/<env>`, so a re-run after a restart replaces the earlier push. Otherwise (`auto`): pushes the base branch; if it moved, the sequence restarts from a fresh clone (at most 3 times) |
+| `git-push` | A sequence with `open-pr` (`pr-review` when the step started): force-pushes `kardinal/<namespace hash>/<bundle>/<env>`, so a re-run after a restart replaces the earlier push. Otherwise (`auto`): pushes the base branch; if it moved, replays the promotion's files onto the new head and pushes again (up to 6 times, no wait), then restarts the sequence from a fresh clone (at most 3 times per reconcile), then retries the step with jittered backoff. While a PR waits for its merge, a moved base branch rebuilds the PR branch on the new head |
 | `open-pr` | Opens a pull request via the SCM provider with promotion evidence |
 | `wait-for-merge` | Polls `PRStatus` until the PR is merged or closed |
 | `health-check` | Queries Kubernetes Deployment readiness or ArgoCD/Flux/Rollouts/Flagger sync status |

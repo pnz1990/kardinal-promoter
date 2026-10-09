@@ -147,6 +147,7 @@ type BundleIntent struct {
 }
 
 // BundleStatus defines the observed state of a Bundle.
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.retiredAt) || has(self.retiredAt)",message="status.retiredAt cannot be removed: a retired Bundle stays retired"
 type BundleStatus struct {
 	// Phase is the bundle promotion phase.
 	// +kubebuilder:validation:Enum=Available;Promoting;Verified;Failed;Superseded
@@ -189,6 +190,72 @@ type BundleStatus struct {
 	// otherwise.
 	// +optional
 	PolicyGatesHash string `json:"policyGatesHash,omitempty"`
+
+	// RetiredSteps records the PromotionSteps of a Bundle whose Graph was
+	// retired (condition GraphRetired=True). Deleting a finished Bundle's
+	// Graph deletes the PromotionSteps, PolicyGate instances and PRStatuses
+	// it created, so kro does not hold every finished Graph in memory
+	// (#1492). Rollback, promote, history, metrics, the CLI and the UI read
+	// these records where they read the steps of a Bundle that is still
+	// promoting.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=1000
+	RetiredSteps []RetiredStep `json:"retiredSteps,omitempty"`
+
+	// RetiredAt is when the Bundle's Graph was retired: set in the same
+	// write as RetiredSteps, and never cleared. A Bundle with RetiredAt is
+	// final; the GraphRetired condition only shows the retirement's progress.
+	// +optional
+	RetiredAt *metav1.Time `json:"retiredAt,omitempty"`
+}
+
+// RetiredStep is what a retired Bundle keeps of one of its PromotionSteps.
+type RetiredStep struct {
+	// Name is the PromotionStep's name.
+	Name string `json:"name"`
+
+	// Environment is the PromotionStep's spec.environment.
+	Environment string `json:"environment"`
+
+	// StepType is the PromotionStep's spec.stepType.
+	// +optional
+	StepType string `json:"stepType,omitempty"`
+
+	// State is the PromotionStep's final status.state.
+	// +optional
+	State string `json:"state,omitempty"`
+
+	// Message is the PromotionStep's final status.message, cut to 512 bytes.
+	// +optional
+	// +kubebuilder:validation:MaxLength=512
+	Message string `json:"message,omitempty"`
+
+	// PRURL is the PromotionStep's status.prURL.
+	// +optional
+	// +kubebuilder:validation:MaxLength=2048
+	PRURL string `json:"prURL,omitempty"`
+
+	// CreatedAt is the PromotionStep's creationTimestamp.
+	CreatedAt metav1.Time `json:"createdAt"`
+
+	// VerifiedAt is when the PromotionStep became Verified.
+	// +optional
+	VerifiedAt *metav1.Time `json:"verifiedAt,omitempty"`
+
+	// HealthCheckExpiry is the PromotionStep's status.healthCheckExpiry: set
+	// once its change merged and the health check started.
+	// +optional
+	HealthCheckExpiry *metav1.Time `json:"healthCheckExpiry,omitempty"`
+
+	// MarkerDigest is the marker digest of the step's render (layout:
+	// branch): status.outputs.markerDigest. Later renders of the
+	// environment accept it as kardinal's after the RenderRun that wrote it
+	// was deleted with the Graph.
+	// +optional
+	// +kubebuilder:validation:MaxLength=64
+	MarkerDigest string `json:"markerDigest,omitempty"`
 }
 
 // BundleMetrics holds deployment efficiency metrics for a single Bundle (K-05).

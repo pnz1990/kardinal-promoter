@@ -251,8 +251,11 @@ compares the branch with it:
 - the marker itself is anchored: the RenderRun passes the render Job the marker digests of the
   environment's last 50 successful renders (`status.knownMarkerDigests`), and a marker that is not
   one of them is drift, so a push that edits a file and rewrites the marker to match is caught
-  too. An environment whose earlier RenderRuns are gone (their Bundles were deleted) has none, and
-  its branch's marker is used as it is.
+  too. A finished Bundle's RenderRuns are deleted with its Graph when the Graph is retired
+  ([Graph retirement](concepts.md#graph-retirement)); its steps keep their render's
+  marker digest in the Bundle's `status.retiredSteps`, which later renders read too. An
+  environment whose earlier Bundles are all gone (deleted, or pruned by `spec.historyLimit`) has
+  none, and its branch's marker is used as it is.
 
 What happens on drift:
 

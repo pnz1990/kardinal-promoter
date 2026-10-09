@@ -114,6 +114,10 @@
         "watchNamespace": {
           "type": "string"
         },
+        "namespaceShard": {
+          "type": "string",
+          "pattern": "^$|^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+        },
         "policyNamespaces": {
           "type": "array",
           "items": {
@@ -344,6 +348,24 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "retire": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "superseded": {
+              "type": "string",
+              "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+            },
+            "failed": {
+              "type": "string",
+              "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+            },
+            "verified": {
+              "type": "string",
+              "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+            }
           }
         }
       }
