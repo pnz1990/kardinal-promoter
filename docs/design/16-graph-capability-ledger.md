@@ -65,8 +65,7 @@ Rules:
 | [G11](#g11-collections-are-all-or-nothing) | A `forEach` collection is all-or-nothing on pending data and on apply errors, and every growth relabels every item | Medium | pacing by choosing the list; label-only events ignored | None filed |
 | [G12](#g12-delete-and-prune-orphan-the-pods-of-a-job) | kro deletes and prunes without a propagation policy, so a Job node orphans its Pods, and a deleted Job runs again | Medium | **Planned in #1493 (not on main)**: hooks use a `HookRun` CRD that owns its Job (#1443) | None filed |
 | [G13](#g13-the-graph-controller-cannot-be-sharded) | kro's Graph controller is one leader with one queue | Medium | kardinal shards only its own controllers, by namespace (`--namespace-shard`, `pkg/shard`, #1462) | None filed |
-| [G14](#g14-a-node-with-one-pending-field-is-wholly-unresolved) | One pending field leaves the whole node Unresolved, so live fields cannot sit next to gating fields | Medium | **Planned in #1518 (not on main)**: mirror `patch` nodes with a literal target name | None filed |
-| [G15](#g15-kro-holds-every-graph-in-memory-and-a-graph-cannot-be-retired-without-its-children) | kro holds every live Graph in memory (3 to 6 MB each, whatever its size), and a Graph cannot be deleted without deleting its children | High at scale | `pkg/reconciler/bundle/retire.go` records the steps in `Bundle.status.retiredSteps`, then deletes the Graph | None filed (drafts: Graph suspend, kro#1445 comment) |
+| [G14](#g14-a-node-with-one-pending-field-is-wholly-unresolved) | One pending field leaves the whole node Unresolved, so live fields cannot sit next to gating fields | Medium | Mirror `patch` nodes with a literal target name | None filed |
 
 Smaller constraints that shape the translator are in [Notes](#notes-constraints-we-design-around).
 
@@ -475,7 +474,7 @@ The detailed tracker is `docs/design/11-graph-purity-tech-debt.md`.
 | Health adapters (HealthChecking to Verified) | `pkg/health/adapter.go` via PromotionStep reconciler | A Graph cannot write PromotionStep status, and `readyWhen` does not gate dependents (G1, G3) | None needed: stays in the reconciler by design (#1283) |
 | MetricCheck query slots (`Limiter`, #1479) | `pkg/reconciler/metriccheck/limiter.go` | Rations outbound queries to user-chosen endpoints (per namespace and cluster-wide, FIFO, wake-ups through a channel source). Process-local: it holds no promotion state, every result is written to MetricCheck status, and a restart only makes the checks ask again. Approved as an exception to the in-memory-state rule (coordinator, as the owner's delegate, 2026-10-09) | None needed: concurrency control of side effects, not promotion logic |
 | Remote-cluster health (`health.kubeconfigSecretRef`, #1458) | `pkg/health/remote.go` (`RemoteClusters`), `healthDetector` in `pkg/reconciler/promotionstep` | kro reads only the cluster it runs in: a ref node cannot point at another cluster, and the remote-cluster KREPs (KREP-012/013, kro#1060, kro#591) are RGD only and rotten or frozen. The translator leaves out the health ref node of such an environment (a ref to an object that is not in this cluster would hold the Graph) | A per-node kubeconfig reference for ref nodes, with the same rules (inline credentials only, https servers only, namespace-local Secret). No ask yet: hub-side Argo CD and Flux cover most users. The process-local client cache (`RemoteClusters`, LRU 128, TTL 1h) is approved as an exception to the in-memory-state rule (coordinator, as the owner's delegate, 2026-10-09): it holds no promotion state, every decision is written to the PromotionStep status, and a restart only rebuilds the clients |
-| Gate results as SCM commit statuses while a PR waits for merge (#1452; **Planned in #1518 (not on main)**) | PromotionStep reconciler posts `kardinal/gates`; the gate results reach the step through a mirror `patch` node (G14). Neither is on main | Side effect on an external system | Out of scope for kro |
+| Gate results as SCM commit statuses while a PR waits for merge (#1452) | PromotionStep reconciler posts `kardinal/gates`; the gate results reach the step through a mirror `patch` node (G14) | Side effect on an external system | Out of scope for kro |
 | Holding an existing PromotionStep: pause (freeze gate) and the required-gate re-check before the step starts (#1300, #1313) | `holdIfPaused` and `checkRequiredGates` in `pkg/reconciler/promotionstep` | No primitive to hold an existing node without pruning it. `readyWhen` does not hold dependents in a standalone Graph; an Unresolved node leaves the existing object as it is; `includeWhen: false` prunes it; a ref to a missing object holds the whole Graph | A Graph-level "hold" on a node that keeps its object and blocks its dependents, or `GateReadiness` for standalone Graphs |
 
 **Upstream work: time.**
@@ -712,7 +711,7 @@ after the step exists, the step's template is frozen. `TolerateDataPending`, whi
 pending field and applies the rest, is set only for the RGD adapter's status node
 (`compiler/compiler.go:304`, `compiler/program.go:100-104`).
 
-**kardinal workaround. Planned in #1518 (not on main).** A `patch` node per environment whose target is the step's literal
+**kardinal workaround.** A `patch` node per environment whose target is the step's literal
 name (not `${step.metadata.name}`, which is Unresolved with the step) writes the live data
 onto the step. A patch whose target does not exist yet is a soft not-ready, and a patch may
 target an object a template node of the same Graph owns; the two field managers coexist.

@@ -518,6 +518,11 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `spec` | object |  | PromotionStepSpec defines the desired state of a PromotionStep. PromotionStep objects are created by the Graph controller — not by users. |
 | `spec.bundleName` | string | yes | BundleName is the Bundle being promoted. |
 | `spec.environment` | string | yes | Environment is the environment this step promotes into. |
+| `spec.live` | object |  | Live is written by the promotion Graph with a patch node, not by the step's template: the current results of the gates of the step's environment, which keep changing after the step started. While the step's PR waits for its merge, the reconciler mirrors them to the PR's head commit as the kardinal/gates commit status. Do not set it. |
+| `spec.live.gates` | []object |  | Gates are the gate instances of the step's environment for its Bundle, with their current result. |
+| `spec.live.gates[].name` | string | yes | Name is the gate instance name. |
+| `spec.live.gates[].ready` | boolean | yes | Ready is the instance's status.ready. |
+| `spec.live.gates[].reason` | string |  | Reason is the instance's status.reason. |
 | `spec.pipelineName` | string | yes | PipelineName is the Pipeline this step belongs to. |
 | `spec.prStatusRef` | string |  | PRStatusRef is the name of the companion PRStatus CRD in the same namespace. Set by the Graph controller from the PRStatus Watch node's metadata.name CEL reference. The PromotionStep reconciler reads the PRStatus CRD instead of polling GitHub directly, eliminating the PS-4 / SCM-2 external API call on the reconcile hot path. |
 | `spec.region` | string |  | Region was set on the per-region PromotionSteps of a Pipeline environment with two or more spec.regions. The Graph builder no longer sets it; the reconciler fails a step that still has one (created by a Graph built before the upgrade) with "regions is not supported". Deprecated: declare one environment per region (prod-us, prod-eu) and use wave. |

@@ -164,6 +164,15 @@ type Reconciler struct {
 	// remotes caches the remote reads of PR branch refreshes (remoteCache).
 	remotes remoteCache
 
+	// GatesStatusDisabled is --gates-commit-status=false: no kardinal/gates
+	// commit status is posted on PRs (#1452).
+	GatesStatusDisabled bool
+
+	// GatesStatusContext is --gates-status-context, the commit status
+	// context the gate results are posted under; empty is
+	// scm.GatesStatusContext ("kardinal/gates").
+	GatesStatusContext string
+
 	// HealthDetector selects the health adapter for health checking.
 	// If nil, the health-check step stub (always-success) is used.
 	HealthDetector *health.AutoDetector
@@ -910,6 +919,8 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		if prURL := state.Outputs["prURL"]; prURL != "" {
 			// The open-pr step (or similar) has opened a PR and is waiting for merge.
 			// Transition to WaitingForMerge so the PRStatusReconciler can take over.
+			// The commit pushed to the PR branch gets the kardinal/gates status.
+			r.recordPRHead(ps, ps.Status.Outputs)
 			if _, err := r.transitionClosing(ctx, base, ps, StateWaitingForMerge,
 				withLabelsError(result.Message, state.Outputs), "", closed); err != nil {
 				return ctrl.Result{}, err
@@ -1258,6 +1269,7 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 			Str("prStatusRef", prStatusName).
 			Int("prNumber", prs.Spec.PRNumber).
 			Msg("PRStatus reports merged — advancing to HealthChecking")
+		r.noteMergedWhileBlocked(ps)
 		if prs.Status.MergeCommitSHA != "" {
 			// The revision the health check must find deployed (E2E-01).
 			if ps.Status.Outputs == nil {
@@ -1325,6 +1337,16 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		if wrote {
 			return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
 		}
+	}
+
+	// Mirror the gates to the open PR as the kardinal/gates commit status
+	// (#1452), so a gate that turns false while the PR waits shows on the PR
+	// and, with branch protection requiring it, blocks the merge.
+	if !prstatus.IsClosed(&prs.Status) {
+		if err := r.syncGatesStatus(ctx, ps, prs.Spec.Repo, prs.Spec.PRNumber); err != nil {
+			log.Warn().Err(err).Msg("failed to post the kardinal/gates commit status (non-fatal), retrying later")
+		}
+		base = ps.DeepCopy()
 	}
 
 	// Closed but still in the grace window: the PRStatus reconciler keeps

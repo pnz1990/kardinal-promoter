@@ -264,6 +264,23 @@
             "minLength": 1
           },
           "description": "--scm-allowed-repositories: host/repository globs the controller's SCM token may act on."
+        },
+        "gatesCommitStatus": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "--gates-commit-status: post the gate results as a commit status on pr-review PRs."
+            },
+            "context": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "pattern": "^[^\\s,]+$",
+              "description": "--gates-status-context: the reserved commit status name branch protection requires."
+            }
+          }
         }
       }
     },

@@ -66,6 +66,11 @@ type GraphNode struct {
 	// with ${...} is evaluated.
 	Def map[string]interface{} `json:"def,omitempty"`
 
+	// Patch contributes fields to an object kro does not create from this
+	// node (kro "patch" node): {apiVersion, kind, metadata: {name}, spec...}.
+	// kro applies only those fields, under a field manager of its own.
+	Patch map[string]interface{} `json:"patch,omitempty"`
+
 	// Ref identifies an existing object or collection:
 	//
 	//	{apiVersion, kind, metadata: {name | selector, namespace}}

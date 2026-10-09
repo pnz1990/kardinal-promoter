@@ -57,6 +57,33 @@ type PromotionStepSpec struct {
 	// use wave.
 	// +optional
 	Region string `json:"region,omitempty"`
+
+	// Live is written by the promotion Graph with a patch node, not by the
+	// step's template: the current results of the gates of the step's
+	// environment, which keep changing after the step started. While the
+	// step's PR waits for its merge, the reconciler mirrors them to the PR's
+	// head commit as the kardinal/gates commit status. Do not set it.
+	// +optional
+	Live *PromotionStepLive `json:"live,omitempty"`
+}
+
+// PromotionStepLive holds what the Graph mirrors onto a started step.
+type PromotionStepLive struct {
+	// Gates are the gate instances of the step's environment for its Bundle,
+	// with their current result.
+	// +optional
+	Gates []LiveGate `json:"gates,omitempty"`
+}
+
+// LiveGate is one gate instance's current result.
+type LiveGate struct {
+	// Name is the gate instance name.
+	Name string `json:"name"`
+	// Ready is the instance's status.ready.
+	Ready bool `json:"ready"`
+	// Reason is the instance's status.reason.
+	// +optional
+	Reason string `json:"reason,omitempty"`
 }
 
 // StepExecutionState is the execution state of a single step within a PromotionStep.

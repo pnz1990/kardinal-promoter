@@ -70,6 +70,36 @@ spec:
                 description: Environment is the environment this step promotes into.
                 minLength: 1
                 type: string
+              live:
+                description: |-
+                  Live is written by the promotion Graph with a patch node, not by the
+                  step's template: the current results of the gates of the step's
+                  environment, which keep changing after the step started. While the
+                  step's PR waits for its merge, the reconciler mirrors them to the PR's
+                  head commit as the kardinal/gates commit status. Do not set it.
+                properties:
+                  gates:
+                    description: |-
+                      Gates are the gate instances of the step's environment for its Bundle,
+                      with their current result.
+                    items:
+                      description: LiveGate is one gate instance's current result.
+                      properties:
+                        name:
+                          description: Name is the gate instance name.
+                          type: string
+                        ready:
+                          description: Ready is the instance's status.ready.
+                          type: boolean
+                        reason:
+                          description: Reason is the instance's status.reason.
+                          type: string
+                      required:
+                      - name
+                      - ready
+                      type: object
+                    type: array
+                type: object
               pipelineName:
                 description: PipelineName is the Pipeline this step belongs to.
                 minLength: 1
