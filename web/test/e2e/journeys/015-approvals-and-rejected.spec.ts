@@ -1,7 +1,7 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 //
-// Journey 014: an approval gate shows its quorum (one pip per approval
+// Journey 015: an approval gate shows its quorum (one pip per approval
 // needed), who approved and whether it counted, and the CLI command to
 // approve; a rejected Bundle says who rejected it and why. WCAG 2.1 AA holds
 // with both on screen.
@@ -9,7 +9,7 @@
 import { test, expect } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 
-test.describe('Journey 014 — Approvals and rejected Bundles', () => {
+test.describe('Journey 015 — Approvals and rejected Bundles', () => {
   test('an approval gate shows its quorum and decisions', async ({ page }) => {
     await page.goto('/')
     await page.locator('aside').getByText('payments-service').first().click()
