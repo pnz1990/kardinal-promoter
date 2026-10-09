@@ -375,7 +375,7 @@ provider applies:
 |---|---|---|---|---|---|---|
 | `titleTemplate`, `bodyTemplate` | Yes | Yes | Yes | Yes | Yes | Yes |
 | `labels` | Yes | Yes | Yes | No (no PR labels) | Yes (PR tags) | No (no PR labels) |
-| `reviewers` | Usernames | Usernames | Usernames | Account IDs or `{UUID}`s | Identity IDs | User slugs |
+| `reviewers` | Usernames | Usernames | Usernames | Account IDs or `{UUID}`s | Identity IDs | Usernames |
 | `teamReviewers` | Team slugs (organisation repos) | No | Team names (organisation repos) | No | Group identity IDs | No |
 | `assignees` | Usernames | Usernames | Usernames | No (no PR assignees) | No (no PR assignees) | No (no PR assignees) |
 | `merge.auto` | Auto-merge (GraphQL `enablePullRequestAutoMerge` / `disablePullRequestAutoMerge`) | Auto-merge (`auto_merge`, or `merge_when_pipeline_succeeds` before GitLab 17.11; cancelled with `cancel_merge_when_pipeline_succeeds`) | Scheduled merge (`merge_when_checks_succeed`; cancelled with `DELETE .../merge`) | No (no auto-merge API) | Auto-complete (cleared to turn it off) | Auto-merge (`POST .../merge` with `autoMerge: true`, 8.15 and later, enabled in the repository's auto-merge settings; `DELETE .../auto-merge` cancels it) |

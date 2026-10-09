@@ -413,13 +413,17 @@ func TestParseWebhookEvent_RefusesEmptySecret(t *testing.T) {
 			"X-Hub-Signature", hubSignature},
 		{"azuredevops", `{"eventType":"git.pullrequest.merged","resource":{"pullRequestId":7,"status":"completed","repository":{"name":"repo","project":{"name":"proj"},"remoteUrl":"https://dev.azure.com/org/proj/_git/repo"}}}`,
 			"X-AzureDevOps-Token", plainToken},
+		{"bitbucket-datacenter", `{"eventKey":"pr:merged","pullRequest":{"id":7,"state":"MERGED","toRef":{"repository":{"slug":"r","project":{"key":"P"}}}}}`,
+			"X-Hub-Signature", hubSignature},
 	}
 	constructors := []struct {
 		name string
 		new  func(providerType, webhookSecret string) (scm.SCMProvider, error)
 	}{
-		{"NewProvider", func(typ, s string) (scm.SCMProvider, error) { return scm.NewProvider(typ, "t", "", s) }},
-		{"NewDynamicProvider", func(typ, s string) (scm.SCMProvider, error) { return scm.NewDynamicProvider(typ, "t", "", s) }},
+		{"NewProvider", func(typ, s string) (scm.SCMProvider, error) { return scm.NewProvider(typ, "t", apiURLFor(typ), s) }},
+		{"NewDynamicProvider", func(typ, s string) (scm.SCMProvider, error) {
+			return scm.NewDynamicProvider(typ, "t", apiURLFor(typ), s)
+		}},
 	}
 	for _, tc := range tests {
 		for _, c := range constructors {
@@ -895,4 +899,13 @@ func TestRenderPRBody_EscapesTableCells(t *testing.T) {
 		}
 	}
 	assert.NotContains(t, body, "Source Diff")
+}
+
+// apiURLFor is the --scm-api-url a provider type needs to be built:
+// Bitbucket Data Center has no public default.
+func apiURLFor(providerType string) string {
+	if providerType == "bitbucket-datacenter" {
+		return "https://git.example.com"
+	}
+	return ""
 }

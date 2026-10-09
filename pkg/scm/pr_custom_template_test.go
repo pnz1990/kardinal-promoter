@@ -334,6 +334,7 @@ func TestCheckPRSupport(t *testing.T) {
 		{"bitbucket-datacenter", auto("squash", "m"), ""},
 		{"bitbucket-datacenter", &v1alpha1.PRConfig{Labels: []string{"a"}}, "pr.labels is not supported by the bitbucket-datacenter SCM provider"},
 		{"bitbucket-datacenter", &v1alpha1.PRConfig{TeamReviewers: []string{"t"}}, "pr.teamReviewers is not supported"},
+		{"bitbucket-datacenter", &v1alpha1.PRConfig{Assignees: []string{"a"}}, "pr.assignees is not supported by the bitbucket-datacenter SCM provider"},
 	}
 	for _, c := range checks {
 		err := scm.CheckPRSupport(c.cfg, scm.SupportOf(providers[c.provider]))
