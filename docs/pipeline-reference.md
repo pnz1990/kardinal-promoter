@@ -82,6 +82,18 @@ spec:
       promotionTemplate:                # Deprecated, not supported: the API server rejects it
         name: <string>
       waitForMergeTimeout: <duration>   # pr-review only: fail the step and close the PR after this (default: wait forever)
+      pr:                               # pr-review only: the PR (see PR Evidence, Customising the PR)
+        titleTemplate: <template>       #   PR title (default: [kardinal] Promote <bundle> to <env>)
+        bodyTemplate: <template>        #   PR body; the evidence sections are template functions
+        labels: [<template>, ...]       #   Labels added to the kardinal labels
+        reviewers: [<template>, ...]    #   Users asked to review
+        teamReviewers: [<template>, ...] #  Teams asked to review
+        assignees: [<template>, ...]    #   Users assigned, e.g. "{{ .Bundle.Author }}"
+        merge:
+          auto: <bool>                  #   Enable the SCM's auto-merge on the PR (default: false)
+          allowImmediate: <bool>        #   Merge at once when nothing is pending; skips review (default: false)
+          method: <string>              #   "merge" (default), "squash" or "rebase"; needs auto
+          commitMessageTemplate: <template> # Merge commit message; needs auto
       stepTimeoutSeconds: <int>         # Per built-in step timeout in seconds, minimum 1 (default: none)
 
   paused: <bool>                        # Hold every promotion of the Pipeline (default: false)
@@ -133,7 +145,7 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `update.helm.valuesFile` | No | `values.yaml` | `helm` only. Values file to patch, relative to the environment `path`. |
 | `update.helm.chartVersionFile` | No | `Chart.yaml` | `helm` only, for `chart` Bundles (from a [Helm Subscription](subscription.md#promoting-a-chart-version)). File the chart version is written to, relative to the environment `path`. A chart Bundle fails at build in an environment whose strategy is not `helm`. |
 | `update.helm.chartVersionPath` | No | `.dependencies[name=<chart>].version` | `helm` only. [YAML path](#yaml-paths) of the chart version in `chartVersionFile` (`.helmCharts[name=podinfo].version`, `.spec.chart.spec.version`, `.spec.source.targetRevision`). The default is the umbrella chart's dependency named after the Bundle's chart; the step fails when there is none. |
-| `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. The step list is fixed when an environment's step starts: an edit applies to steps that start after it, so an environment already promoting finishes with the approval it started with and uses the new one from the next Bundle. A step that started as `auto` still pushes straight to the target branch after an edit to `pr-review`. The Bundle in flight still finishes: its Graph turns Ready once its steps are Verified and its gates pass, whether or not they opened a PR. |
+| `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for its merge: by a person, or by the SCM with `pr.merge.auto`. The step list is fixed when an environment's step starts: an edit applies to steps that start after it, so an environment already promoting finishes with the approval it started with and uses the new one from the next Bundle. A step that started as `auto` still pushes straight to the target branch after an edit to `pr-review`. The Bundle in flight still finishes: its Graph turns Ready once its steps are Verified and its gates pass, whether or not they opened a PR. |
 | `health.type` | No | `resource` | Health verification adapter: `resource`, `argocd`, `flux`, `argoRollouts` or `flagger`. `delivery.delegate`, when set, takes precedence. There is no auto-detection. The step is Verified only when the adapter sees the promoted revision (commit or Bundle images) healthy. See [Health Adapters](health-adapters.md). |
 | `health.resource`, `health.argocd`, `health.flux`, `health.argoRollouts`, `health.flagger` | No | see [Health Check Defaults](#health-check-defaults) | Name and namespace of the object the adapter checks. `health.resource.kind` must be `Deployment`. Without `health.resource.namespace`, the `resource` check looks in the namespace named after the environment (environment `prod` checks namespace `prod`), not the Pipeline's namespace. |
 | `health.timeout` | No | `10m` | Maximum time from the start of health checking to the first healthy check, and from the moment a `bake` window stops to the next healthy check. When it expires, it counts as a health failure and applies `onHealthFailure`. It does not cut a running `bake` window short. |
@@ -145,6 +157,9 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `steps` | No | (none) | **Deprecated, not supported.** kardinal has no custom step engine: the controller always runs the sequence it infers from the Bundle type, `update.strategy`, `approval` and `layout`. The API server rejects a Pipeline that sets `steps` (an empty list is accepted). See [Promotion Steps](#promotion-steps). |
 | `promotionTemplate` | No | (none) | **Deprecated, not supported.** The `PromotionTemplate` CRD was removed. The API server rejects a Pipeline that sets `promotionTemplate`. |
 | `waitForMergeTimeout` | No | (none) | `pr-review` only. How long the step may wait for its PR to merge, as a Go duration (`24h`, `72h`). When it expires, the step is marked `Failed` and the controller closes the PR and deletes its head branch (`kardinal/<namespace hash>/<bundle>/<env>`), so a late merge cannot deliver the change: GitHub's API merges a closed PR whose branch is still there. Unset or `0` waits forever. |
+| `pr.titleTemplate`, `pr.bodyTemplate` | No | the default title and body | `pr-review` only. Go templates over the Bundle and the environment that replace the PR title and body; a custom body keeps the evidence sections with the `evidence`, `provenanceTable`, `gatesTable`, `upstreamTable` and `rollbackNotice` functions. See [Customising the PR](pr-evidence.md#customising-the-pr). |
+| `pr.labels`, `pr.reviewers`, `pr.teamReviewers`, `pr.assignees` | No | (none) | `pr-review` only. Up to 20 templates each; every line a template renders is one label, reviewer, team or assignee. Which providers apply which list: [PR controls](scm-providers.md#pr-controls). |
+| `pr.merge.auto` | No | `false` | `pr-review` only. Enable the SCM's auto-merge on the PR after it is opened: the SCM merges it once the required checks and reviews pass. kardinal turns it off while the Pipeline is paused or a gate is closed. A PR with nothing pending is left for a merge by hand unless `pr.merge.allowImmediate` is `true`, which merges it at once and skips review. `pr.merge.method` (`merge`, `squash` or `rebase`), `pr.merge.commitMessageTemplate` and `pr.merge.allowImmediate` need `auto`; the API server rejects them without it. See [Auto-merge while the step waits](pr-evidence.md#auto-merge-while-the-step-waits). |
 | `stepTimeoutSeconds` | No | (none) | Maximum seconds one built-in step (`git-clone`, `kustomize-set-image`, `open-pr`, ...) may run. The step is cancelled and the error is handled like any other step error: a retryable error is retried with backoff, then the PromotionStep is marked `Failed`. Minimum 1. Unset means no per-step timeout. |
 | `bake.minutes` | No | (none) | Contiguous-healthy soak window in minutes (K-01). When set, the step must observe healthy deployment status *continuously* for this many minutes before transitioning to Verified. A check that is not healthy stops the window; it starts again at the next healthy check, and `health.timeout` bounds the wait for it. A Waiting check (the workload is changing, such as a canary paused at a step) is not an alarm under either policy. |
 | `bake.policy` | No | `reset-on-alarm` | What to do when a check is unhealthy during the bake window. `reset-on-alarm`: stop the window, increment `status.bakeResets`, stay in HealthChecking. `fail-on-alarm`: immediately apply `onHealthFailure` policy. A release that keeps flapping between healthy and unhealthy fails under `reset-on-alarm` when no full window completes by the first window's start + `bake.minutes` + `health.timeout` (see [Timings and failures](health-adapters.md#timings-and-failures)); `fail-on-alarm` fails it on the first unhealthy check. |
@@ -433,11 +448,14 @@ force-pushes the base branch, so no writer's commit is lost:
   - when they changed none of the PR's paths (the environment's `path`, and a Helm `valuesFile`
     outside it), the PR still merges cleanly: only `status.outputs.baseSHA` moves, nothing is
     pushed;
-  - when they changed one of its paths, or the PR's base is not among the last 500 (a
-    force-push), or reading them takes longer than 30 seconds, it reruns the promotion's steps on a fresh clone of the new head and
+  - when they changed one of its paths, or the whole branch was read and the PR's base is not
+    in it (a force-push), it reruns the promotion's steps on a fresh clone of the new head and
     force-pushes the PR branch, so the PR is one commit on the current base
-    (`status.outputs.prBranchRebuilds` counts it; when the history could not be read, the
-    step message says the PR branch was rebuilt to be safe);
+    (`status.outputs.prBranchRebuilds` counts it; after a force-push the step message says so);
+  - when the history cannot be read (an error, a read longer than 30 seconds, or a PR base
+    further back than the last 500 commits), nothing is decided: the PR branch is kept as it
+    is, the step message says why, and the next check reads again. Rebuilding on uncertainty
+    would churn the PR and can dismiss its reviews (#1584);
   - when the PR branch has a commit kardinal did not push (its head is not
     `status.outputs.pushedSHA`), it is never rebuilt, and the step message says so.
 
