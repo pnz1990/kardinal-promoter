@@ -214,3 +214,33 @@ func TestGoGitClient_ConcurrentWritersLoseNothing(t *testing.T) {
 	assert.Len(t, got, 10, "every writer's change is on the branch: %v", files)
 	assert.Equal(t, 11, commits)
 }
+
+// TestGoGitClient_RebaseOnRemote_BaseMissing (#1606): a HEAD whose parent is
+// not in the clone is refused with ErrRebaseBaseMissing, naming both
+// commits, so git-push redoes the change from a fresh clone instead of
+// failing the same way on every retry in this work directory.
+func TestGoGitClient_RebaseOnRemote_BaseMissing(t *testing.T) {
+	ctx := context.Background()
+	c := scm.NewGoGitClient()
+	remote := seedBareRemote(t, map[string]string{"README.md": "r\n"})
+	work := filepath.Join(t.TempDir(), "w")
+	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, ""))
+	// HEAD made on a commit the clone does not have.
+	repo, err := gogit.PlainOpen(work)
+	require.NoError(t, err)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	cur, err := repo.CommitObject(head.Hash())
+	require.NoError(t, err)
+	orphan := &object.Commit{Author: cur.Author, Committer: cur.Committer, Message: "promote", TreeHash: cur.TreeHash,
+		ParentHashes: []plumbing.Hash{plumbing.NewHash("1111111111111111111111111111111111111111")}}
+	obj := repo.Storer.NewEncodedObject()
+	require.NoError(t, orphan.Encode(obj))
+	h, err := repo.Storer.SetEncodedObject(obj)
+	require.NoError(t, err)
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(head.Name(), h)))
+
+	_, err = c.RebaseOnRemote(ctx, work, "origin", "main", "")
+	require.ErrorIs(t, err, scm.ErrRebaseBaseMissing)
+	assert.Contains(t, err.Error(), "1111111111111111111111111111111111111111")
+}

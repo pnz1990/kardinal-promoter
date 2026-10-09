@@ -178,6 +178,11 @@ func rebaseAndPush(ctx context.Context, state *parentsteps.StepState, branch str
 				return n, fmt.Sprintf("base branch %s moved and changed the files this promotion writes (%v); "+
 					"redoing the change from a fresh clone", branch, err), nil
 			}
+			if errors.Is(err, scm.ErrRebaseBaseMissing) {
+				// Retrying in this work directory fails the same way (#1606).
+				return n, fmt.Sprintf("base branch %s moved, and the clone lacks the commit to rebase from (%v); "+
+					"redoing the change from a fresh clone", branch, err), nil
+			}
 			return n, "", fmt.Errorf("rebase onto %s: %w", branch, err)
 		}
 		err := state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Token, false)

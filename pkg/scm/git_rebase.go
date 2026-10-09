@@ -44,6 +44,13 @@ var ErrRebaseConflict = errors.New("the remote branch changed the same files")
 // contention would never end.
 var ErrBranchNotMoved = errors.New("the remote branch did not move")
 
+// ErrRebaseBaseMissing is returned by RebaseOnRemote when the commit HEAD was
+// made on is not in the local clone (#1606): the clone is shallow, and seen
+// under many writers on one branch. The commit cannot be replayed without
+// its base, and the same work directory fails the same way on every retry,
+// so the caller redoes its change from a fresh clone.
+var ErrRebaseBaseMissing = errors.New("the commit HEAD was made on is not in the clone")
+
 // Rebaser is implemented by git clients that can move a local commit onto
 // the remote branch's new head. git-push uses it when another writer (another
 // Pipeline, or another environment) pushed first.
@@ -81,6 +88,9 @@ func (c *GoGitClient) RebaseOnRemote(ctx context.Context, dir, remote, branch, t
 		return nil, fmt.Errorf("rebase: HEAD %s has %d parents, want 1", local.Hash, local.NumParents())
 	}
 	base, err := local.Parent(0)
+	if errors.Is(err, plumbing.ErrObjectNotFound) {
+		return nil, fmt.Errorf("rebase: commit %s, parent of HEAD %s: %w", local.ParentHashes[0], local.Hash, ErrRebaseBaseMissing)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("rebase: read the commit HEAD was made on: %w", err)
 	}

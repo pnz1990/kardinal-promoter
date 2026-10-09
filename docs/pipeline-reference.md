@@ -416,8 +416,9 @@ force-pushes the base branch, so no writer's commit is lost:
   other file the new head's. It pushes again, up to 6 times, without waiting in between. The
   step message then reads
   `pushed main after rebasing onto N newer commit(s) of other writers`. When the new commits
-  changed one of the same files, or the branch keeps moving, the whole step sequence runs
-  again from a fresh clone (at most 3 times in one reconcile), so the update is computed on
+  changed one of the same files, the branch keeps moving, or the shallow clone lacks the
+  commit the promotion was made on (seen with many writers on one branch), the whole step
+  sequence runs again from a fresh clone (at most 3 times in one reconcile), so the update is computed on
   the other writer's version. After that the step is retried with jittered backoff (at most
   2 minutes), counted in `status.contendedRetries` with no limit and not in
   `status.retryCount`, so contention slows a promotion down but does not fail it.
