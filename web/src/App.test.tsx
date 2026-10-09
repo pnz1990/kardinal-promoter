@@ -572,3 +572,23 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
     expect(screen.getByText('1 blocked')).toBeInTheDocument()
   })
 })
+
+describe('App keyboard access', () => {
+  it('starts with a skip link that moves focus to the main content', async () => {
+    render(<App />)
+    await flush()
+    const skip = screen.getByRole('link', { name: 'Skip to main content' })
+    const focusable = document.querySelectorAll<HTMLElement>('a[href], button, input, [tabindex="0"]')
+    expect(focusable[0]).toBe(skip)
+    fireEvent.click(skip)
+    expect(document.getElementById('main-content')).toHaveFocus()
+  })
+
+  it('labels the shown Bundle with its type', async () => {
+    h.state.bundles = { app: [bundle('b-new', 'Promoting', 1, { type: 'config' }), bundle('b-old', 'Superseded', 2)] }
+    render(<App />)
+    await flush()
+    // The Bundle card and its timeline chip.
+    expect(screen.getAllByRole('img', { name: 'config Bundle' }).length).toBe(2)
+  })
+})
