@@ -5,6 +5,11 @@
 # KARDINAL_E2E_BUILD=host (hack/e2e/components/kardinal.sh): hosts where the
 # repo Dockerfile can't download Go modules still get the image the release
 # ships. Keep the runtime stages in step with the repo Dockerfile.
+#
+# RUNTIME is the final stage's base: a -race build (KARDINAL_E2E_RACE=1) is
+# linked against glibc, so it runs on a glibc image instead of alpine.
+
+ARG RUNTIME=alpine:3.24
 
 FROM alpine:3.24 AS runtime-files
 
@@ -19,7 +24,7 @@ RUN apk add --no-cache ca-certificates curl && \
     tar -xzf /tmp/kustomize.tar.gz -C /out kustomize && \
     adduser -D -u 65532 nonroot
 
-FROM alpine:3.24
+FROM ${RUNTIME}
 
 COPY --from=runtime-files /etc/ssl/certs/ /etc/ssl/certs/
 COPY --from=runtime-files /etc/passwd /etc/group /etc/

@@ -57,6 +57,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
@@ -637,11 +638,11 @@ func digestLabelChars(digest string) string {
 // or git poll (C04-gates-36). Polling is driven by RequeueAfter; a spec edit or
 // an annotation change polls at once.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.Subscription{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		// Several workers, so one slow source (each poll is bounded by
 		// watchTimeout) does not delay every other Subscription. The
 		// workqueue never hands one Subscription to two workers at once.
-		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrentPolls}).
-		Complete(tracing.WrapReconciler("subscription", r))
+		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrentPolls})
+	return shard.Active().Complete(b, tracing.WrapReconciler("subscription", r), &kardinalv1alpha1.SubscriptionList{})
 }

@@ -60,9 +60,12 @@ func timeList(n, envs int) time.Duration {
 
 // TestPipelineListResponse_Linear (#1519 QA): the pipeline list scales
 // linearly with the environments. Resolving the ordering per environment made
-// it cubic (55 ms at 100 environments, about 10 s at 500). Doubling the
-// environments must not more than about double the time; the bound is loose
-// (4x, against 8x for cubic) so -race and a busy host do not flake it.
+// it cubic (55 ms at 100 environments, about 10 s at 500). Eight times the
+// environments (125 to 1000) must take at most about 24x the time: linear is
+// 8x, quadratic 64x, cubic 512x. The bound is 3x linear so -race and a busy CI
+// host do not flake it, and its slack (10% of the bound) grows with the
+// measurement instead of a fixed number of milliseconds that is too much at
+// one speed and too little at another.
 func TestPipelineListResponse_Linear(t *testing.T) {
 	ps, bs, ss, gs := fleet(1, 3)
 	got := pipelineListResponse(ps, bs, ss, gs, time.Now(), nil)
@@ -72,14 +75,16 @@ func TestPipelineListResponse_Linear(t *testing.T) {
 
 	best := func(envs int) time.Duration {
 		d := time.Duration(1<<63 - 1)
-		for range 3 {
+		for range 5 {
 			d = min(d, timeList(20, envs))
 		}
 		return d
 	}
-	small, large := best(250), best(500)
-	t.Logf("20 pipelines: 250 envs %s, 500 envs %s", small, large)
-	assert.Less(t, large, 4*small+5*time.Millisecond, "doubling the environments must not grow the time much more than 2x")
+	small, large := best(125), best(1000)
+	bound := 24 * small
+	bound += bound / 10
+	t.Logf("20 pipelines: 125 envs %s, 1000 envs %s (%.1fx, bound %s)", small, large, float64(large)/float64(small), bound)
+	assert.Less(t, large, bound, "8x the environments must take about 8x the time, not 64x (quadratic)")
 }
 
 // BenchmarkPipelineListResponse is the pipeline list at 200 Pipelines of 500

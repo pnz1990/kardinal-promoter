@@ -4,6 +4,8 @@
 package v1alpha1
 
 import (
+	"time"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -40,6 +42,21 @@ type PipelineSpec struct {
 	// +kubebuilder:default=false
 	// +optional
 	Paused bool `json:"paused,omitempty"`
+
+	// Holds pin environments to a rollback (kardinal rollback --hold): while
+	// an environment has a hold, no Bundle but the hold's own promotes into
+	// it, the hold's Bundle is never superseded or garbage-collected, and,
+	// when the controller can verify it restores artifacts Verified in the
+	// environment, it passes that environment's PolicyGates, each pass
+	// recorded (GateExempted). kardinal release-hold removes it, and so does
+	// the controller at expiresAt. At most one hold per environment. Changing
+	// spec.holds needs update on the virtual subresource pipelines/hold
+	// (chart: <release>-hold-writes ValidatingAdmissionPolicy).
+	// +listType=map
+	// +listMapKey=environment
+	// +kubebuilder:validation:MaxItems=100
+	// +optional
+	Holds []EnvironmentHold `json:"holds,omitempty"`
 
 	// HistoryLimit is the number of completed Bundle promotions to retain.
 	// When unset or zero, defaults to 50. Terminal Bundles (Verified, Failed, Superseded)
@@ -516,11 +533,15 @@ type YAMLUpdate struct {
 	// +kubebuilder:validation:MaxLength=512
 	File string `json:"file"`
 
-	// Path is the key path of the scalar to set: keys separated by ".", with
-	// "[N]" to index a list, for example "image.tag" or
-	// "spec.template.spec.containers[0].image". Missing mapping keys are
-	// created; list elements are not. A key that contains "." is not supported.
-	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_-]+(\[[0-9]+\])*(\.[A-Za-z0-9_-]+(\[[0-9]+\])*)*$`
+	// Path is the key path of the scalar to set, in the grammar
+	// chartVersionPath uses too: keys separated by "." (a leading "." is
+	// optional), "[N]" to index a list and "[field=value]" for the list
+	// element whose field has that value, for example "image.tag",
+	// "spec.template.spec.containers[0].image" or
+	// "spec.template.spec.containers[name=app].image". A digits-only key
+	// indexes a list when it reaches one. Missing mapping keys are created;
+	// list elements are not. A key that contains "." is not supported.
+	// +kubebuilder:validation:Pattern=`^\.?[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*(\.[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*)*$`
 	// +kubebuilder:validation:MaxLength=512
 	Path string `json:"path"`
 
@@ -559,15 +580,18 @@ type HelmUpdateConfig struct {
 	// +optional
 	ChartVersionFile string `json:"chartVersionFile,omitempty"`
 
-	// ChartVersionPath is the YAML dot-path of the chart version in
-	// chartVersionFile. A numeric segment indexes a list, and "[field=value]"
-	// selects the list element whose field has that value. Defaults to
+	// ChartVersionPath is the YAML path of the chart version in
+	// chartVersionFile, in the grammar of update.yaml.updates[].path: keys
+	// separated by ".", "[N]" (or a digits-only key) to index a list, and
+	// "[field=value]" for the list element whose field has that value. Defaults to
 	// ".dependencies[name=<chart>].version": the umbrella chart's dependency
 	// named after the Bundle's chart (an error when there is none). For
 	// example ".spec.source.targetRevision" (Argo CD Application),
 	// ".spec.chart.spec.version" (Flux HelmRelease) or
 	// ".helmCharts[name=podinfo].version" (kustomize).
 	// +optional
+	// +kubebuilder:validation:Pattern=`^\.?[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*(\.[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*)*$`
+	// +kubebuilder:validation:MaxLength=512
 	ChartVersionPath string `json:"chartVersionPath,omitempty"`
 }
 
@@ -744,6 +768,51 @@ type DeliveryConfig struct {
 	Delegate string `json:"delegate,omitempty"`
 }
 
+// Expired reports whether the hold's expiresAt has passed at now. An expired
+// hold counts as absent; the Pipeline reconciler removes it from spec.holds.
+func (h *EnvironmentHold) Expired(now time.Time) bool {
+	return h != nil && h.ExpiresAt != nil && !now.Before(h.ExpiresAt.Time)
+}
+
+// EnvironmentHold pins one environment of a Pipeline to a rollback Bundle.
+type EnvironmentHold struct {
+	// Environment is the held environment.
+	// +kubebuilder:validation:MinLength=1
+	Environment string `json:"environment"`
+
+	// Bundle is the rollback Bundle the environment is held on: the only
+	// Bundle that promotes into it while the hold lasts.
+	// +kubebuilder:validation:MinLength=1
+	Bundle string `json:"bundle"`
+
+	// Reason says why the environment is held. It is shown wherever the hold
+	// or a gate it exempts is.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	Reason string `json:"reason"`
+
+	// CreatedBy is who held the environment: the Kubernetes user name of the
+	// request that added the hold (the admission policy refuses another
+	// value), or, for a hold added through the UI, the UI user the
+	// controller authenticated.
+	// +optional
+	CreatedBy string `json:"createdBy,omitempty"`
+
+	// CreatedAt is when.
+	// +optional
+	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
+
+	// ExpiresAt, when set, is when the controller removes the hold.
+	// +optional
+	ExpiresAt *metav1.Time `json:"expiresAt,omitempty"`
+
+	// Artifacts is the digest of the rollback Bundle's artifacts (type,
+	// images, configRef) when the hold was made (lifecycle.ArtifactDigest).
+	// The gate exemption applies only while the Bundle still has them.
+	// +optional
+	Artifacts string `json:"artifacts,omitempty"`
+}
+
 // PipelinePolicyGateRef is a reference to a PolicyGate that must pass before
 // any promotion in this pipeline can proceed.
 type PipelinePolicyGateRef struct {
@@ -769,6 +838,14 @@ type PipelineStatus struct {
 	// Conditions holds status conditions.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ObservedHolds is spec.holds as the Pipeline reconciler last recorded
+	// it: the HoldCreated and HoldReleased AuditEvents are written from the
+	// difference, whichever client changed spec.holds.
+	// +listType=map
+	// +listMapKey=environment
+	// +optional
+	ObservedHolds []EnvironmentHold `json:"observedHolds,omitempty"`
 
 	// DeploymentMetrics holds aggregate DORA-style metrics computed from the
 	// last 30 Verified Bundles for this Pipeline. Written by PipelineReconciler.
