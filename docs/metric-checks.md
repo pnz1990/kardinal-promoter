@@ -49,6 +49,8 @@ spec:
   MetricCheck that has waited longest among the namespaces under their cap, which is woken at once.
   A MetricCheck that waits longer than its interval shows `WaitingForSlot` and keeps its last
   result, which goes stale as usual. A namespace with slow endpoints delays only its own checks.
+  The MetricCheck controller runs `global` + 4 workers (at least 16), so raising `global` raises
+  the queries that run at once and leaves workers for checks that do not query.
 - The slots bound the throughput. The cluster runs at most `global / query time` queries a
   second, so it keeps up with at most `global × interval / query time` MetricChecks: with the
   defaults, 0.5-second queries and a 60-second interval, 12 × 60 / 0.5 = 1,440. One namespace

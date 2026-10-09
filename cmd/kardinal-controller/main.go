@@ -242,7 +242,8 @@ func main() {
 	// outbound MetricCheck queries (metriccheckrecon.Limiter).
 	var metricGlobalSlots, metricNamespaceSlots int
 	flag.IntVar(&metricGlobalSlots, "metriccheck-global-slots", metriccheckrecon.DefaultGlobalSlots,
-		"Most MetricCheck queries running at once in the cluster (at least 1). The rest wait, first come, first served.")
+		"Most MetricCheck queries running at once in the cluster (at least 1). The rest wait, first come, first served. "+
+			"The MetricCheck controller runs this many workers plus 4, at least 16.")
 	flag.IntVar(&metricNamespaceSlots, "metriccheck-namespace-slots", metriccheckrecon.DefaultNamespaceSlots,
 		"Most MetricCheck queries of one namespace running at once (at least 1).")
 
