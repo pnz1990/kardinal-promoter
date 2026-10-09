@@ -140,3 +140,110 @@ func (c *GoGitClient) BranchHistory(ctx context.Context, url, branch, token stri
 }
 
 var _ RemoteHeadReader = (*GoGitClient)(nil)
+
+// BranchGraphReader is implemented by git clients that can read the commit
+// graph near a branch head. The health adapters use it to tell whether a
+// commit Argo CD or Flux synced contains the promoted one (#1575).
+type BranchGraphReader interface {
+	// BranchGraph fetches branch at depth maxCommits and returns the head
+	// it fetched and every fetched commit with its parents. A parent that
+	// is not a key was not fetched (the shallow boundary).
+	BranchGraph(ctx context.Context, url, branch, token string, maxCommits int) (head string, parents map[string][]string, err error)
+}
+
+// BranchGraph is BranchGraphReader.BranchGraph: a shallow clone of branch
+// in memory, and every commit object it fetched.
+func (c *GoGitClient) BranchGraph(ctx context.Context, url, branch, token string, maxCommits int) (string, map[string][]string, error) {
+	repo, err := gogit.CloneContext(ctx, memory.NewStorage(), nil, &gogit.CloneOptions{
+		URL: url, Auth: httpAuth(url, token), ReferenceName: plumbing.NewBranchReferenceName(branch),
+		SingleBranch: true, Depth: maxCommits, NoCheckout: true, Tags: gogit.NoTags,
+	})
+	if err != nil {
+		return "", nil, fmt.Errorf("git fetch %s %s: %s", RedactURL(url), branch, gitErrorText(err))
+	}
+	head, err := repo.Head()
+	if err != nil {
+		return "", nil, fmt.Errorf("read %s head: %w", branch, err)
+	}
+	iter, err := repo.CommitObjects()
+	if err != nil {
+		return "", nil, fmt.Errorf("list commits of %s: %w", branch, err)
+	}
+	parents := map[string][]string{}
+	err = iter.ForEach(func(cm *object.Commit) error {
+		ps := make([]string, 0, len(cm.ParentHashes))
+		for _, p := range cm.ParentHashes {
+			ps = append(ps, p.String())
+		}
+		parents[cm.Hash.String()] = ps
+		return nil
+	})
+	if err != nil {
+		return "", nil, fmt.Errorf("read commits of %s: %w", branch, err)
+	}
+	return head.Hash().String(), parents, nil
+}
+
+// Ancestry is what a BranchGraph says about whether one commit contains
+// another.
+type Ancestry int
+
+const (
+	// AncestryUnknown: the graph does not reach far enough (rev is not in
+	// it, or the walk from rev hit the shallow boundary before want).
+	AncestryUnknown Ancestry = iota
+	// AncestryContains: want is rev or one of its ancestors.
+	AncestryContains
+	// AncestryNotContains: the whole history of rev is in the graph and
+	// want is not in it.
+	AncestryNotContains
+)
+
+// Contains reports whether rev contains want in parents (a BranchGraph):
+// whether want is rev or an ancestor of it, through every parent (a merge
+// contains both sides). rev and want may be abbreviated (a prefix of at
+// least 7 characters, as Argo CD and Flux print them).
+func Contains(parents map[string][]string, rev, want string) Ancestry {
+	full := func(sha string) string {
+		if _, ok := parents[sha]; ok || len(sha) < 7 {
+			return sha
+		}
+		for k := range parents {
+			if len(k) > len(sha) && k[:len(sha)] == sha {
+				return k
+			}
+		}
+		return sha
+	}
+	rev, want = full(rev), full(want)
+	if _, ok := parents[rev]; !ok {
+		return AncestryUnknown
+	}
+	seen := map[string]bool{rev: true}
+	queue := []string{rev}
+	complete := true
+	for len(queue) > 0 {
+		c := queue[0]
+		queue = queue[1:]
+		if c == want {
+			return AncestryContains
+		}
+		ps, ok := parents[c]
+		if !ok {
+			complete = false // the shallow boundary: its history was not fetched
+			continue
+		}
+		for _, p := range ps {
+			if !seen[p] {
+				seen[p] = true
+				queue = append(queue, p)
+			}
+		}
+	}
+	if complete {
+		return AncestryNotContains
+	}
+	return AncestryUnknown
+}
+
+var _ BranchGraphReader = (*GoGitClient)(nil)

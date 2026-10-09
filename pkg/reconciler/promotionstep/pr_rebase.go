@@ -18,7 +18,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
@@ -87,26 +86,34 @@ func (r *Reconciler) changedSince(ctx context.Context, rh scm.RemoteHeadReader, 
 // revisionContains is health.CheckOptions.RevisionContains for a step whose
 // promoted commit is want (#1575). Argo CD and Flux sync the branch head,
 // which on a branch many environments push to is often a later commit than
-// the step's own. Nil when the git client cannot read remote history or
+// the step's own. Nil when the git client cannot read the commit graph or
 // there is no promoted commit. The Secret is read only when a check asks.
+//
+// This is a network read in the health path (ledger G8): it goes through the
+// shared remote cache (one ls-remote per repository per remoteHeadsTTL, one
+// graph read per head and depth, shared by concurrent checks) and is bounded
+// by historyTimeout.
 func (r *Reconciler) revisionContains(ctx context.Context, log zerolog.Logger, pipeline *v1alpha1.Pipeline,
 	want string) func(context.Context, string) (bool, error) {
 	rh, ok := r.GitClient.(scm.RemoteHeadReader)
-	if !ok || want == "" || pipeline == nil {
+	gr, gok := r.GitClient.(scm.BranchGraphReader)
+	if !ok || !gok || want == "" || pipeline == nil {
 		return nil
 	}
 	return func(ctx context.Context, rev string) (bool, error) {
 		cred := r.resolveGitCredential(ctx, log, pipeline)
-		return r.descends(ctx, rh, pipeline.Spec.Git.URL, baseBranch(pipeline), cred.token, rev, want)
+		return r.descends(ctx, rh, gr, pipeline.Spec.Git.URL, baseBranch(pipeline), cred.token, rev, want)
 	}
 }
 
-// descends reports whether rev contains want: both are in the first-parent
-// history of branch, read through the shared remote cache (one ls-remote per
-// repository per remoteHeadsTTL, one history per head), and rev is want or
-// newer. A revision that is not on the branch (another branch, a
-// force-push) does not count.
-func (r *Reconciler) descends(ctx context.Context, rh scm.RemoteHeadReader, url, branch, token, rev, want string) (bool, error) {
+// descends reports whether rev contains want: want is rev or an ancestor of
+// it in the commit graph of branch (scm.Contains, through every parent, so
+// a merge commit contains both sides), read near the branch head at
+// historyDepth commits and then deepHistoryDepth. rev must be in that graph:
+// a revision that is not on the branch (another branch, a force-push) does
+// not count, and neither does a want the graph does not reach.
+func (r *Reconciler) descends(ctx context.Context, rh scm.RemoteHeadReader, gr scm.BranchGraphReader,
+	url, branch, token, rev, want string) (bool, error) {
 	hctx, cancel := context.WithTimeout(ctx, historyTimeout)
 	defer cancel()
 	heads, err := r.remotes.remoteHeads(hctx, rh, url, token, r.now())
@@ -118,23 +125,17 @@ func (r *Reconciler) descends(ctx context.Context, rh scm.RemoteHeadReader, url,
 		return false, nil
 	}
 	for _, depth := range []int{historyDepth, deepHistoryDepth} {
-		history, err := r.remotes.branchHistory(hctx, rh, url, branch, head, token, depth)
+		g, err := r.remotes.branchGraph(hctx, gr, url, branch, head, token, depth)
 		if err != nil {
 			return false, fmt.Errorf("read the history of %s: %w", branch, err)
 		}
-		iRev, iWant := -1, -1
-		for i, c := range history {
-			if iRev < 0 && health.SameRevision(c.SHA, rev) {
-				iRev = i
-			}
-			if iWant < 0 && health.SameRevision(c.SHA, want) {
-				iWant = i
-			}
+		switch scm.Contains(g.parents, rev, want) {
+		case scm.AncestryContains:
+			return true, nil
+		case scm.AncestryNotContains:
+			return false, nil
 		}
-		if iRev >= 0 && iWant >= 0 {
-			return iRev <= iWant, nil // newest first: rev is want or later
-		}
-		if len(history) < depth {
+		if len(g.parents) < depth {
 			return false, nil // the whole branch was read
 		}
 	}

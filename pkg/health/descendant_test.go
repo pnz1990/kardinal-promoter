@@ -153,4 +153,14 @@ func TestFluxAdapter_AppliedDescendant(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, res.Healthy, res.Reason)
 	assert.Contains(t, res.Reason, "lastAppliedRevision 13012b285355 contains 77fe8dd636ee")
+
+	// A history that cannot be read waits, and says why (#1575 QA: as Argo CD).
+	res, err = adapter.Check(context.Background(), health.CheckOptions{
+		Flux:             health.FluxConfig{Name: "fleet-env-008", Namespace: "flux-system"},
+		ExpectedRevision: promoted,
+		RevisionContains: func(context.Context, string) (bool, error) { return false, errors.New("ls-remote: timeout") },
+	})
+	require.NoError(t, err)
+	assert.False(t, res.Healthy, res.Reason)
+	assert.Contains(t, res.Reason, "waiting for 77fe8dd636ee (could not read whether 13012b285355 contains it: ls-remote: timeout)")
 }

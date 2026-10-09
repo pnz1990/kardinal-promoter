@@ -22,6 +22,8 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/scale"
 )
 
 // waveEnvs is how many environments TestHealth_ArgoCDWaveOnSharedBranch runs
@@ -114,4 +116,47 @@ func TestHealth_ArgoCDWaveOnSharedBranch(t *testing.T) {
 	assert.Positive(t, descendant, "some Applications synced a later head that contains the step's commit")
 	e.WaitBundlePhase(t, ns, bundle, "Verified", 2*time.Minute)
 	t.Logf("%d environments Verified in %s; %d through a later synced revision", n, time.Since(start).Round(time.Second), descendant)
+}
+
+// TestHealth_ArgoImagesFallback keeps the images fallback live (#1575 QA): a
+// synced revision the branch history says does not contain the promoted
+// commit. test's commit is pushed while Argo CD's auto-sync is off; then the
+// branch is force-pushed to a rewrite of it, a sibling commit with the same
+// kustomization, as a squash-and-force-push would leave it. Argo CD syncs the
+// rewrite, whose history (complete: the repo is small) does not contain
+// test's commit, so only the Application running the Bundle image passes
+// the step, and the message says so.
+//
+// Covers HEALTH-ARGO-IMAGES-01.
+func TestHealth_ArgoImagesFallback(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	b, ok := e.Git.(gitserver.Brancher)
+	if !ok {
+		t.Fatalf("%s git server cannot create branches", e.Git.Kind())
+	}
+	require.NoError(t, b.CreateBranch(ctx, a.repo, "rewrite", a.repo.Branch))
+	a.apply(t, a.pipeline(nil))
+	e.SetArgoAutoSync(t, a.argoApp("test"), false)
+
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	ps := e.WaitStep(t, a.ns, pipelineName, bundle, "test", promoteTimeout, "test's commit",
+		func(ps *v1alpha1.PromotionStep) (bool, string) {
+			return ps.Status.State == "HealthChecking" && ps.Status.Outputs["commitSHA"] != "", framework.DescribeStep(ps)
+		})
+	own := ps.Status.Outputs["commitSHA"]
+	path := fixtures.Path("test") + "/kustomization.yaml"
+	sibling, err := gitserver.CommitFiles(ctx, e.Git, a.repo, "rewrite", "", "the same change, rewritten",
+		map[string][]byte{path: []byte(e.ReadFile(t, a.repo, own, path)), "notes/rewritten.txt": []byte("x\n")})
+	require.NoError(t, err)
+	scale.ForcePush(t, e, a.repo, sibling)
+
+	e.SetArgoAutoSync(t, a.argoApp("test"), true)
+	ps = e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	assert.Equal(t, fmt.Sprintf("%s (synced revision %s is not %s, but the Application runs the Bundle images)",
+		argoVerified, short(sibling), short(own)), ps.Status.Message)
+	assert.Equal(t, sibling, e.ArgoField(t, a.argoApp("test"), "status", "sync", "revision"))
+	assert.Equal(t, imageV2, e.DeploymentImage(t, a.ns, fixtures.Workload("test")))
 }

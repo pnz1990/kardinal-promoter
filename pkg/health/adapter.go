@@ -992,14 +992,20 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 		case !verifiable:
 			reason += fmt.Sprintf(" (revision not verified: lastAppliedRevision %q is not a git commit)", applied)
 		case !SameRevision(rev, want):
-			waiting := progressing(fmt.Sprintf("%s, lastAppliedRevision=%s, waiting for %s", state, shortRev(rev), shortRev(want)))
 			// The applied revision is a later commit of the branch that
-			// contains ours (#1575): Flux applied the promoted change.
+			// contains ours (#1575): Flux applied the promoted change. A
+			// history that cannot be read is said, as for Argo CD.
+			note := ""
 			if opts.RevisionContains != nil {
-				if ok, err := opts.RevisionContains(ctx, rev); err == nil && ok {
+				ok, err := opts.RevisionContains(ctx, rev)
+				if err == nil && ok {
 					return healthy(fmt.Sprintf("%s (lastAppliedRevision %s contains %s)", reason, shortRev(rev), shortRev(want))), nil
 				}
+				if err != nil {
+					note = fmt.Sprintf(" (could not read whether %s contains it: %v)", shortRev(rev), err)
+				}
 			}
+			waiting := progressing(fmt.Sprintf("%s, lastAppliedRevision=%s, waiting for %s%s", state, shortRev(rev), shortRev(want), note))
 			// Another commit on the shared branch (another environment's
 			// push) can supersede ours before Flux fetches it. Accept that
 			// revision only when the Kustomization's Deployments
@@ -1012,8 +1018,8 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 			if all, _ := w.worst(nil); !all.Healthy {
 				return waiting, nil
 			}
-			return healthy(fmt.Sprintf("%s (not %s, but the Kustomization's Deployments run the Bundle images)",
-				reason, shortRev(want))), nil
+			return healthy(fmt.Sprintf("%s (not %s, but the Kustomization's Deployments run the Bundle images)%s",
+				reason, shortRev(want), note)), nil
 		}
 	}
 	return healthy(reason), nil
