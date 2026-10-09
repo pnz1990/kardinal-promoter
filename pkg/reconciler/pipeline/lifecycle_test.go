@@ -543,3 +543,25 @@ func TestPipelineLifecycle_CompactUnsupported(t *testing.T) {
 		})
 	}
 }
+
+// TestPipelineLifecycle_RetiredBundleKeepsPhaseAndMetrics checks that a
+// Pipeline whose Verified Bundle was retired (#1492), so only the Bundle's
+// status.retiredSteps are left, stays Ready and keeps its deployment
+// metrics.
+func TestPipelineLifecycle_RetiredBundleKeepsPhaseAndMetrics(t *testing.T) {
+	now := time.Now().UTC()
+	b := makeVerifiedBundle("app-v1", "default", "app", now.Add(-2*time.Hour))
+	b.Status.Conditions = []metav1.Condition{{Type: lifecycle.ConditionGraphRetired, Status: metav1.ConditionTrue,
+		Reason: "Retired", LastTransitionTime: metav1.NewTime(now)}}
+	b.Status.RetiredAt = &metav1.Time{Time: now}
+	for _, env := range []string{"test", "prod"} {
+		b.Status.RetiredSteps = append(b.Status.RetiredSteps,
+			lifecycle.RetiredStepOf(makeVerifiedStep("app-v1", "app", env, "default", now.Add(-time.Hour))))
+	}
+	got, err := reconcilePipeline(t, newClientWithIndex(newPipelineScheme(),
+		makePipelineWithEnvs("app", "default", "test", "prod"), b), "app")
+	require.NoError(t, err)
+	assert.Equal(t, "Ready", got.Status.Phase)
+	require.NotNil(t, got.Status.DeploymentMetrics)
+	assert.Equal(t, 1, got.Status.DeploymentMetrics.RolloutsLast30Days)
+}

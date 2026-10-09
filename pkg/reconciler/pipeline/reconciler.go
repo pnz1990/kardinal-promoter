@@ -208,8 +208,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	desiredConflict := pathConflict(&p, pipelines.Items)
 
-	desiredPhase := DerivePhase(p.Name, bundleList.Items, stepList.Items)
-	desiredMetrics := ComputeDeploymentMetrics(&p, bundleList.Items, stepList.Items, time.Now().UTC())
+	// Retired Bundles (#1492) keep their steps in status.retiredSteps.
+	steps := lifecycle.AddRetiredSteps(stepList.Items, bundleList.Items,
+		map[string]string{lifecycle.LabelPipeline: p.Name})
+	desiredPhase := DerivePhase(p.Name, bundleList.Items, steps)
+	desiredMetrics := ComputeDeploymentMetrics(&p, bundleList.Items, steps, time.Now().UTC())
 
 	// Idempotency: only patch if something changed.
 	condMatch := conditionMatches(p.Status.Conditions, desired)
