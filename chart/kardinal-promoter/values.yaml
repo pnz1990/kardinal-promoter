@@ -146,13 +146,20 @@ service:
   # and /api/v1/bundles
   webhookPort: 8083
 
+# -- Controller resources. The controller caches every Pipeline, Bundle,
+# PromotionStep, PRStatus and PolicyGate it watches, so its memory grows with
+# Pipelines times the Bundle history. Measured peaks (scale suite, #1553):
+# 166 MiB for 200 Pipelines with a Bundle each, 409 MiB for 2 Bundles a second
+# over 40 Pipelines with leader kills; 55-70 MiB with no Pipelines. The
+# defaults give the larger load 2.5x headroom; see "Sizing the controller" in
+# docs/installation.md.
 resources:
   limits:
     cpu: 500m
-    memory: 128Mi
+    memory: 1Gi
   requests:
     cpu: 10m
-    memory: 64Mi
+    memory: 256Mi
 
 # -- Node selector for the controller Pod
 nodeSelector: {}
