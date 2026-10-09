@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -230,6 +232,7 @@ func TestComputeDeploymentMetrics_ComputedAtIsSet(t *testing.T) {
 func newPipelineScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	_ = kardinalv1alpha1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
 	return s
 }
 

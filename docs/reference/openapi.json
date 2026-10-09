@@ -206,7 +206,7 @@
             "type": "string"
           },
           "commitSHA": {
-            "description": "CommitSHA is the application source commit that produced this Bundle.",
+            "description": "CommitSHA is the application source commit that produced this Bundle: 4 to 64 hex characters, or an image digest (a Subscription records the digest it found).",
             "type": "string"
           },
           "rollbackOf": {
@@ -255,7 +255,7 @@
         "description": "ConfigRef identifies a GitOps repository commit.",
         "properties": {
           "commitSHA": {
-            "description": "CommitSHA is the exact commit SHA for this config snapshot.",
+            "description": "CommitSHA is the exact commit SHA for this config snapshot: 4 to 64 hex characters.",
             "type": "string"
           },
           "gitRepo": {
@@ -362,6 +362,16 @@
           "name": {
             "description": "Name is the environment name (e.g. \"test\", \"uat\", \"prod\").",
             "type": "string"
+          },
+          "upstreams": {
+            "description": "Upstreams are the environments this one waits for as the controller resolves them (dependsOn, waves, or the previous entry), sorted; empty for a root. Absent when the Pipeline's ordering is invalid.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -546,7 +556,7 @@
         "description": "ImageRef identifies a container image by repository, tag, and/or digest.",
         "properties": {
           "digest": {
-            "description": "Digest is the image digest (sha256:...).",
+            "description": "Digest is the image digest (sha256:...), in the OCI digest grammar.",
             "type": "string"
           },
           "repository": {
@@ -554,7 +564,7 @@
             "type": "string"
           },
           "tag": {
-            "description": "Tag is the image tag.",
+            "description": "Tag is the image tag, in the OCI distribution grammar: up to 128 characters of [A-Za-z0-9_.-], not starting with \".\" or \"-\".",
             "type": "string"
           }
         },
@@ -584,10 +594,32 @@
           "activeBundleName": {
             "type": "string"
           },
+          "activeBundleVersion": {
+            "description": "ActiveBundleVersion is what the active Bundle ships (scm.BundleVersion: the image tag, or \"config <sha>\"), for the fleet board.",
+            "type": "string"
+          },
           "blockerCount": {
             "description": "Operations table columns: derived from active Bundle + steps + gates. BlockerCount is the number of the active bundle's PolicyGates with ready=false in environments it has reached (every upstream Verified) but not started; see blockingGateCount.",
             "format": "int32",
             "type": "integer"
+          },
+          "deployed": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/uiDeployed"
+            },
+            "description": "Deployed is, per environment, the Bundle whose change the environment runs: the newest PromotionStep there that landed its change (lifecycle.DeployedBundle, as kardinal status reports). Environments that never received one are absent.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "deploymentMetrics": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PipelineDeploymentMetrics"
+              }
+            ],
+            "description": "DeploymentMetrics is the Pipeline's status.deploymentMetrics, written by the PipelineReconciler (DORA throughput and stability for the last environment). Nil until a Bundle is Verified there."
           },
           "environmentCount": {
             "format": "int32",
@@ -665,6 +697,81 @@
         "required": [
           "pipeline"
         ],
+        "type": "object"
+      },
+      "PipelineDeploymentMetrics": {
+        "additionalProperties": false,
+        "description": "PipelineDeploymentMetrics holds aggregate promotion efficiency metrics for a Pipeline. Computed by PipelineReconciler from the last 30 Verified Bundles for this pipeline. Displayed by `kardinal metrics` and the UI pipeline detail view.",
+        "properties": {
+          "autoRollbackRateMillis": {
+            "description": "AutoRollbackRateMillis is the fraction of sampled Bundles that are rollbacks (spec.provenance.rollbackOf is set), manual (`kardinal rollback`, the UI) or automatic, expressed as integer thousandths (e.g. 83 = 8.3%). Stored as integer to avoid floating-point in CRD YAML.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "changeFailureRateMillis": {
+            "description": "ChangeFailureRateMillis is failedDeployments / deployments as integer thousandths (DORA change failure rate; 250 = 25%).",
+            "format": "int32",
+            "type": "integer"
+          },
+          "computedAt": {
+            "description": "ComputedAt is when these metrics were last written by the PipelineReconciler.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deployments": {
+            "description": "Deployments is the number of deployments the change failure rate and time to restore are computed over: the last 30 Bundles whose change reached a final environment (one nothing depends on; its health check started), whatever the outcome, once per Bundle. Not deployments: a no-op promotion (outputs.noChanges), the steps a supersession cancelled (a RollingBack, AbortedByAlarm or already Failed step of a superseded Bundle still counts), and rollback Bundles (they count only as restores).",
+            "format": "int32",
+            "type": "integer"
+          },
+          "failedDeployments": {
+            "description": "FailedDeployments is how many of those deployments failed: a PromotionStep in a final environment ended Failed, AbortedByAlarm or RollingBack after its health check started, a rollback Bundle later rolled a final environment back from it (annotation kardinal.io/rollback-from), or the Bundle was rejected after it was deployed.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "meanTimeToRestoreMinutes": {
+            "description": "MeanTimeToRestoreMinutes is the mean, in whole minutes, from each failed deployment reaching a final environment to the first later Bundle Verified in every final environment it targets, in every region (DORA time to restore). Failures not restored yet are not counted.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "operatorInterventionRateMillis": {
+            "description": "OperatorInterventionRateMillis is the fraction of sampled Bundles that had at least one PolicyGate override applied, expressed as integer thousandths.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "p50CommitToProdMinutes": {
+            "description": "P50CommitToProdMinutes is the median time (minutes) from Bundle creation to the final environment reaching Verified, over the sample window.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "p90CommitToProdMinutes": {
+            "description": "P90CommitToProdMinutes is the 90th-percentile time (minutes) from Bundle creation to the final environment reaching Verified, over the sample window.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "restoredFailures": {
+            "description": "RestoredFailures is the number of failed deployments in meanTimeToRestoreMinutes.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "rolloutsLast30Days": {
+            "description": "RolloutsLast30Days is the number of successful (Verified) promotions to the final pipeline environment in the last 30 calendar days.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "sampleSize": {
+            "description": "SampleSize is the number of Bundles included in this computation.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "staleProdDays": {
+            "description": "StaleProdDays is the number of days since the last successful promotion to the final pipeline environment. 0 means a promotion completed today. Until a Bundle is Verified there, deploymentMetrics is not set at all.",
+            "format": "int32",
+            "type": "integer"
+          }
+        },
         "type": "object"
       },
       "PolicyGate": {
@@ -1088,6 +1195,40 @@
           "mergedPREvents",
           "status",
           "webhookConfigured"
+        ],
+        "type": "object"
+      },
+      "uiDeployed": {
+        "additionalProperties": false,
+        "description": "uiDeployed is what one environment runs, for the fleet board.",
+        "properties": {
+          "bundle": {
+            "type": "string"
+          },
+          "configFrom": {
+            "description": "ConfigFrom, under an image Bundle, is the last Bundle that deployed a config commit there, and ConfigVersion that commit (\"config abc1234\"). ImagesFrom, under a config Bundle, is the last Bundle that deployed images, and ImagesVersion their tags. Image and config Bundles do not supersede each other, so the environment runs both, as kardinal status reports.",
+            "type": "string"
+          },
+          "configVersion": {
+            "type": "string"
+          },
+          "imagesFrom": {
+            "type": "string"
+          },
+          "imagesVersion": {
+            "type": "string"
+          },
+          "verifiedAt": {
+            "description": "VerifiedAt is the RFC 3339 time its step in the environment was Verified (the latest region); empty while it is still health checking.",
+            "type": "string"
+          },
+          "version": {
+            "description": "Version is scm.BundleVersion of that Bundle; empty when the Bundle is gone.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bundle"
         ],
         "type": "object"
       }

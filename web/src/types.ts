@@ -40,6 +40,48 @@ export interface Pipeline {
   lastMergedAt?: string
   /** #525: static pipeline topology from spec — shown even when no Bundle is promoting. */
   environmentTopology?: EnvironmentNode[]
+  /** What the active Bundle ships: its image tag, or "config <sha>" (fleet board). */
+  activeBundleVersion?: string
+  /** Per environment, the Bundle it runs (fleet board). Absent: never deployed. */
+  deployed?: Record<string, DeployedRelease>
+  /** Pipeline.status.deploymentMetrics, computed by the controller (DORA). */
+  deploymentMetrics?: DeploymentMetrics
+}
+
+/** What one environment runs: the newest PromotionStep there that landed its change. */
+export interface DeployedRelease {
+  bundle: string
+  /** Image tag(s) or "config <sha>"; empty when the Bundle is gone. */
+  version?: string
+  /** RFC 3339; absent while the change is still being health checked. */
+  verifiedAt?: string
+  /** Under an image Bundle: the last Bundle that deployed a config commit here,
+   *  and that commit ("config abc1234"). Image and config Bundles do not
+   *  supersede each other, so the environment runs both (#1353). */
+  configFrom?: string
+  configVersion?: string
+  /** Under a config Bundle: the last Bundle that deployed images here, and their tags. */
+  imagesFrom?: string
+  imagesVersion?: string
+}
+
+/** Pipeline.status.deploymentMetrics: DORA metrics for the last environment. */
+export interface DeploymentMetrics {
+  rolloutsLast30Days?: number
+  p50CommitToProdMinutes?: number
+  p90CommitToProdMinutes?: number
+  autoRollbackRateMillis?: number
+  operatorInterventionRateMillis?: number
+  staleProdDays?: number
+  sampleSize?: number
+  /** Deployments the stability pair is computed over (last 30). */
+  deployments?: number
+  failedDeployments?: number
+  /** failedDeployments / deployments, thousandths. */
+  changeFailureRateMillis?: number
+  meanTimeToRestoreMinutes?: number
+  restoredFailures?: number
+  computedAt?: string
 }
 
 /** #525: one environment in the static Pipeline spec topology. */
@@ -47,6 +89,9 @@ export interface EnvironmentNode {
   name: string
   dependsOn?: string[]
   approval?: string
+  /** The environments it waits for as the controller resolves them (dependsOn,
+   *  waves, or the previous entry). Absent for a root, or when the ordering is invalid. */
+  upstreams?: string[]
 }
 
 export interface Bundle {
