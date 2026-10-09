@@ -281,7 +281,8 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 	}
 
 	// Populate artifact-specific fields.
-	if sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeImage && sub.Spec.Image != nil {
+	switch {
+	case sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeImage && sub.Spec.Image != nil:
 		bundle.Spec.Images = []kardinalv1alpha1.ImageRef{
 			{
 				// The watcher accepts an explicit scheme
@@ -295,7 +296,7 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 		bundle.Spec.Provenance = &kardinalv1alpha1.BundleProvenance{
 			CommitSHA: result.Digest,
 		}
-	} else if sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeGit && sub.Spec.Git != nil {
+	case sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeGit && sub.Spec.Git != nil:
 		bundle.Spec.ConfigRef = &kardinalv1alpha1.ConfigRef{
 			GitRepo:   sub.Spec.Git.RepoURL,
 			CommitSHA: result.Digest,
@@ -303,7 +304,7 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 		bundle.Spec.Provenance = &kardinalv1alpha1.BundleProvenance{
 			CommitSHA: result.Digest,
 		}
-	} else if sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeHelm && sub.Spec.Helm != nil {
+	case sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeHelm && sub.Spec.Helm != nil:
 		bundle.Spec.Chart = &kardinalv1alpha1.ChartRef{
 			RepoURL: sub.Spec.Helm.RepoURL,
 			Name:    sub.Spec.Helm.Chart,

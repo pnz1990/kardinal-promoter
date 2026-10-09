@@ -415,10 +415,11 @@ rejected with `400`, so a misspelt key fails the request instead of being ignore
 | Field | Required | Description |
 |---|---|---|
 | `pipeline` | Yes | Pipeline name (a valid Kubernetes name, at most 63 characters) |
-| `type` | No | `image` (default), `config` or `mixed` |
+| `type` | No | `image` (default), `config`, `mixed` or `chart` |
 | `namespace` | No | Target namespace. Defaults to `--watch-namespace`, or `default` |
 | `images` | For `image` and `mixed` | At least one image |
 | `configRef` | For `config` and `mixed` | `gitRepo` and `commitSHA` (`commitSHA` is required) |
+| `chart` | For `chart` | `name` and `version` (required), `repoURL`, `digest`; promoted with `update.strategy: helm` (see [Promoting a chart version](subscription.md#promoting-a-chart-version)) |
 | `provenance` | No | `commitSHA`, `ciRunURL` (empty or an absolute `http(s)` URL, see [Provenance](#provenance)), `author`, `timestamp` (set to now if empty) |
 | `intent` | No | `targetEnvironment`, `skipEnvironments` |
 

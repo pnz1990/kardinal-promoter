@@ -189,7 +189,13 @@ func (w *HelmWatcher) watchIndex(ctx context.Context, filters *compiledFilters) 
 		return "", "", fmt.Errorf("authentication required for %s (HTTP %d); set secretRef to a Secret with keys username and password",
 			u.Redacted(), resp.StatusCode)
 	case resp.StatusCode == http.StatusNotFound:
-		return "", "", fmt.Errorf("not found: %s (HTTP 404); is repoURL a Helm repository?", u.Redacted())
+		// Some servers (Gitea, Forgejo, GitHub) answer 404 for a private
+		// repository without credentials.
+		if basic {
+			return "", "", fmt.Errorf("not found: %s (HTTP 404); check repoURL", u.Redacted())
+		}
+		return "", "", fmt.Errorf("not found: %s (HTTP 404); check repoURL, and set secretRef if the repository is private",
+			u.Redacted())
 	default:
 		return "", "", fmt.Errorf("unexpected HTTP %d from %s", resp.StatusCode, u.Redacted())
 	}

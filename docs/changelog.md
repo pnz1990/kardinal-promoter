@@ -8,6 +8,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Private Subscription sources** — `spec.image.secretRef`, `spec.git.secretRef` and `spec.helm.secretRef` read credentials from a Secret in the Subscription's namespace: a `dockerconfigjson` or username/password Secret for registries (the Bearer token flow of Docker Hub, GHCR, Harbor, Quay and distribution, Basic auth for ECR and Artifactory, identity tokens for ACR; ECR, GCR and ACR through token Secrets that a generator refreshes), a token for Git over HTTPS, and an SSH key with a required `known_hosts` for `ssh://` and `user@host:path` repoURLs (#1454)
+- **Helm chart Subscriptions** — `type: helm` watches an HTTP chart repository's `index.yaml` or an OCI chart and creates `chart` Bundles (`spec.chart`). `update.strategy: helm` promotes them: `helm-set-image` writes the version at `update.helm.chartVersionPath` in `update.helm.chartVersionFile` (default `Chart.yaml`, `.dependencies.0.version`); any other strategy fails the Bundle at build (#1454)
+- **Tag filters** — `semverConstraint`, `excludeTagFilter`, `allowTags`, `ignoreTags`, `strategy` (`Auto`, `SemVer`, `Lexical`, `NewestBuild`) and `discoveryLimit` on image and Helm Subscriptions; `status.lastSeenTag` (#1454)
+- **`pathGlob`** — a Git Subscription with `spec.git.pathGlob` creates Bundles only for commits that change matching files, reading back at most `discoveryLimit` commits; it was rejected before (#1454)
+- **Subscription webhooks** — `POST /webhook/subscriptions/<namespace>/<name>/<provider>` on the webhook port makes a Subscription poll at once, for Docker Hub, GHCR, Harbor, Quay, Artifactory and generic senders, authenticated per Subscription (`spec.webhook.secretRef`), rate-limited and idempotent; the `kardinal.io/refresh` annotation does the same by hand (#1455)
+
+### Changed
+
+- A Subscription on a registry or repository that needs credentials now says `set secretRef` instead of "only public repositories are supported"
+
 ### Docs
 
 - **Comparison** — resurveyed Kargo v1.12.1 and GitOps Promoter v0.42.1 (2026-10-03). The matrix corrects cells that had gone stale, such as GitOps Promoter's CLI, PR body and Flux support, and Kargo's gates, steps and engines. It adds rows for pause, supersession, `explain`/`policy simulate` and audit trails, plus sections on what changed in 2026 and where Kargo or GitOps Promoter is ahead. The home table, the rollback page and the Kargo migration guide match it

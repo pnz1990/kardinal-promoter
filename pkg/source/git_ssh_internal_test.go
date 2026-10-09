@@ -129,8 +129,11 @@ func TestGitWatcher_SSH(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
+	// The controller has no ~/.ssh/known_hosts: neither may the test.
+	t.Setenv("SSH_KNOWN_HOSTS", filepath.Join(t.TempDir(), "absent"))
+	t.Setenv("HOME", t.TempDir())
 	orig := sshAddrCheck
-	sshAddrCheck = func(host string) (netip.Addr, error) { return netip.ParseAddr(host) }
+	sshAddrCheck = netip.ParseAddr
 	t.Cleanup(func() { sshAddrCheck = orig })
 
 	root := t.TempDir()
@@ -172,6 +175,8 @@ func TestGitWatcher_SSH(t *testing.T) {
 		{name: "bad key", creds: Credentials{SSHPrivateKey: []byte("junk"), SSHKnownHosts: known}, wantErr: "not a valid unencrypted private key"},
 		{name: "unknown host", creds: Credentials{SSHPrivateKey: keyPEM, SSHKnownHosts: otherHost}, wantErr: "is not in known_hosts"},
 		{name: "host key mismatch", creds: Credentials{SSHPrivateKey: keyPEM, SSHKnownHosts: wrongKnown}, wantErr: "does not match known_hosts"},
+		{name: "known_hosts does not parse", creds: Credentials{SSHPrivateKey: keyPEM, SSHKnownHosts: []byte("host ssh-ed25519 !!\n")},
+			wantErr: "the credentials Secret's known_hosts does not parse: knownhosts: known_hosts:1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

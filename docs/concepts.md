@@ -294,7 +294,7 @@ When `health.type` is omitted the adapter is `resource`, or the `delivery.delega
 
 A Subscription watches external sources and auto-creates Bundles. This is an alternative to the CI webhook for teams that want fully passive promotion triggers.
 
-**Image Subscription** (watches a public OCI repository for new images):
+**Image Subscription** (watches an OCI repository for new images):
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -328,8 +328,10 @@ spec:
 
 The first poll records the current digest or commit as a baseline. After that, each new
 image or commit creates a Bundle of the matching type (`image` or `config`) in the
-Subscription's own namespace. Only public repositories are supported. See
-[Subscription](subscription.md) for tag selection rules and limits.
+Subscription's own namespace. A `helm` Subscription watches a chart repository and creates
+`chart` Bundles. Private sources read credentials from a Secret (`secretRef`), and registry
+and SCM [webhooks](subscription-webhooks.md) make a Subscription poll at once. See
+[Subscription](subscription.md) for tag filters, `pathGlob` and limits.
 
 ## Rendered Manifests
 

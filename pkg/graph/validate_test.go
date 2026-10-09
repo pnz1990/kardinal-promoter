@@ -656,3 +656,56 @@ func TestBuild_RejectsArgoCDForConfigAndMixed(t *testing.T) {
 		})
 	}
 }
+
+// TestBuild_ChartBundleNeedsHelm: a chart Bundle builds when every
+// environment it promotes uses update.strategy helm (the step that writes the
+// chart version), fails at build naming the first one that does not, and
+// needs chart.name and chart.version.
+func TestBuild_ChartBundleNeedsHelm(t *testing.T) {
+	pipeline := func(strategies ...string) *kardinalv1alpha1.Pipeline {
+		p := makeLinearPipeline("app", "test", "staging", "prod")
+		for i, s := range strategies {
+			p.Spec.Environments[i].Update = kardinalv1alpha1.UpdateConfig{Strategy: s}
+		}
+		return p
+	}
+	chart := &kardinalv1alpha1.ChartRef{Name: "podinfo", Version: "6.15.0"}
+	bundle := func(c *kardinalv1alpha1.ChartRef, target string) *kardinalv1alpha1.Bundle {
+		b := makeBundle("app-x7k2m", "app")
+		b.Spec.Type, b.Spec.Images, b.Spec.Chart = "chart", nil, c
+		if target != "" {
+			b.Spec.Intent = &kardinalv1alpha1.BundleIntent{TargetEnvironment: target}
+		}
+		return b
+	}
+	tests := []struct {
+		name     string
+		pipeline *kardinalv1alpha1.Pipeline
+		bundle   *kardinalv1alpha1.Bundle
+		wantErr  string
+	}{
+		{name: "helm everywhere", pipeline: pipeline("helm", "helm", "helm"), bundle: bundle(chart, "")},
+		{name: "kustomize in prod", pipeline: pipeline("helm", "helm", ""), bundle: bundle(chart, ""),
+			wantErr: `build: environment "prod" uses update.strategy kustomize, which cannot promote a chart Bundle`},
+		{name: "argocd in staging", pipeline: pipeline("helm", "argocd", "helm"), bundle: bundle(chart, ""),
+			wantErr: `build: environment "staging" uses update.strategy argocd, which cannot promote a chart Bundle`},
+		{name: "stops before the kustomize environment", pipeline: pipeline("helm", "helm", ""), bundle: bundle(chart, "staging")},
+		{name: "no chart", pipeline: pipeline("helm", "helm", "helm"), bundle: bundle(nil, ""),
+			wantErr: `type "chart" requires chart.name and chart.version`},
+		{name: "no version", pipeline: pipeline("helm", "helm", "helm"), bundle: bundle(&kardinalv1alpha1.ChartRef{Name: "podinfo"}, ""),
+			wantErr: `type "chart" requires chart.name and chart.version`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			g, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: tc.pipeline, Bundle: tc.bundle})
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				require.NotNil(t, g)
+				return
+			}
+			require.Error(t, err)
+			assert.ErrorIs(t, err, graph.ErrInvalid)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}

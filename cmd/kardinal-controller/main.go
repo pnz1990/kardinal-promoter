@@ -506,6 +506,9 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/webhook/scm", webhookSrv.Handler())
 	mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
+	// Registry and SCM webhooks that make a Subscription poll at once. Each
+	// Subscription opts in with spec.webhook and its own token.
+	mux.HandleFunc(subscriptionWebhookPrefix, newSubscriptionWebhook(mgr.GetClient(), logger).Handler())
 	// Bundle API endpoint — only mounted if a token is configured.
 	if bundleAPIToken != "" {
 		// Default to the watched namespace; in namespace-scoped mode it is

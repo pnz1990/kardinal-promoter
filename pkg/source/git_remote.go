@@ -62,23 +62,10 @@ var scpLikeURL = regexp.MustCompile(`^[A-Za-z0-9._~-]+@[A-Za-z0-9.-]+:[^/]`)
 
 // isSSHURL reports whether raw is an SSH remote: ssh:// or user@host:path.
 func isSSHURL(raw string) bool {
-	if u, ok := cutScheme(raw); ok {
-		return u == "ssh"
+	if strings.Contains(raw, "://") {
+		return strings.HasPrefix(raw, "ssh://")
 	}
 	return scpLikeURL.MatchString(raw)
-}
-
-// cutScheme returns raw's URL scheme when it has one.
-func cutScheme(raw string) (string, bool) {
-	for i, c := range raw {
-		if c == ':' {
-			return raw[:i], len(raw) > i+2 && raw[i+1:i+3] == "//"
-		}
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.') {
-			return "", false
-		}
-	}
-	return "", false
 }
 
 // uploadPackSession opens a git-upload-pack session for w's remote with w's
@@ -157,7 +144,7 @@ func (w *GitWatcher) sshAuth(ep *transport.Endpoint) (transport.AuthMethod, erro
 	} else {
 		ep.Host = ip.String()
 	}
-	return &sshKeyAuth{PublicKeys: keys, check: func(_ string, remote net.Addr, key ssh.PublicKey) error {
+	keys.HostKeyCallback = func(_ string, remote net.Addr, key ssh.PublicKey) error {
 		// Checked against the host name of repoURL, not the address dialled.
 		if err := check(hostPort, remote, key); err != nil {
 			var keyErr *knownhosts.KeyError
@@ -167,23 +154,22 @@ func (w *GitWatcher) sshAuth(ep *transport.Endpoint) (transport.AuthMethod, erro
 			return fmt.Errorf("host key of %s does not match known_hosts: %w", hostPort, err)
 		}
 		return nil
-	}}, nil
+	}
+	return &sshKeyAuth{PublicKeys: keys}, nil
 }
 
-// sshKeyAuth is go-git's public key auth with a fixed host key check and a
-// connection timeout.
+// sshKeyAuth is go-git's public key auth, whose HostKeyCallback checks the
+// Secret's known_hosts (never ~/.ssh/known_hosts), with a connection timeout.
 type sshKeyAuth struct {
 	*gitssh.PublicKeys
-	check ssh.HostKeyCallback
 }
 
-// ClientConfig returns the SSH client config with the known_hosts check.
+// ClientConfig returns the SSH client config with the connection timeout.
 func (a *sshKeyAuth) ClientConfig() (*ssh.ClientConfig, error) {
 	cfg, err := a.PublicKeys.ClientConfig()
 	if err != nil {
 		return nil, err
 	}
-	cfg.HostKeyCallback = a.check
 	cfg.Timeout = sshTimeout
 	return cfg, nil
 }

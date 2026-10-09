@@ -57,9 +57,9 @@ func makeImageSub(name, ns, pipeline, registry string) *kardinalv1alpha1.Subscri
 			Type:     kardinalv1alpha1.SubscriptionTypeImage,
 			Pipeline: pipeline,
 			Image: &kardinalv1alpha1.ImageSubscriptionSpec{
-				Registry:  registry,
+				Registry:     registry,
 				TagSelection: kardinalv1alpha1.TagSelection{TagFilter: "^sha-"},
-				Interval:  "5m",
+				Interval:     "5m",
 			},
 		},
 	}
@@ -210,9 +210,11 @@ func TestSubscriptionReconciler_WatcherError(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sub).WithStatusSubresource(sub).Build()
 
 	r := &subscription.Reconciler{
-		Client:    c,
-		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) { return &errWatcher{}, nil },
-		NowFn:     func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
+		Client: c,
+		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
+			return &errWatcher{}, nil
+		},
+		NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}}
 
@@ -718,9 +720,11 @@ func TestSubscriptionReconciler_DeletedBeforeStatusWrite(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).
 				WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).Build()
 			r := &subscription.Reconciler{
-				Client:    c,
-				WatcherFn: func(*kardinalv1alpha1.Subscription, source.Credentials) (source.Watcher, error) { return tt.watcher, nil },
-				NowFn:     func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
+				Client: c,
+				WatcherFn: func(*kardinalv1alpha1.Subscription, source.Credentials) (source.Watcher, error) {
+					return tt.watcher, nil
+				},
+				NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
 			}
 			var logs bytes.Buffer
 			res, err := r.Reconcile(objectgonetest.Context(&logs), ctrl.Request{

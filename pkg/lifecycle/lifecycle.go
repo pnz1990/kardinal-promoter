@@ -147,15 +147,16 @@ func createdAt(b *v1alpha1.Bundle) (time.Time, bool) {
 }
 
 // HasArtifacts reports whether the Bundle carries something to deploy: at
-// least one image, or a config commit.
+// least one image, a config commit, or a chart version.
 func HasArtifacts(b *v1alpha1.Bundle) bool {
-	return len(b.Spec.Images) > 0 || (b.Spec.ConfigRef != nil && b.Spec.ConfigRef.CommitSHA != "")
+	return len(b.Spec.Images) > 0 || (b.Spec.ConfigRef != nil && b.Spec.ConfigRef.CommitSHA != "") ||
+		(b.Spec.Chart != nil && b.Spec.Chart.Version != "")
 }
 
 // SameArtifacts reports whether two Bundles deploy the same images and config
 // commit, ignoring image order.
 func SameArtifacts(a, b *v1alpha1.Bundle) bool {
-	return slices.Equal(imageKeys(a), imageKeys(b)) && configKey(a) == configKey(b)
+	return slices.Equal(imageKeys(a), imageKeys(b)) && configKey(a) == configKey(b) && chartKey(a) == chartKey(b)
 }
 
 func imageKeys(b *v1alpha1.Bundle) []string {
@@ -179,7 +180,15 @@ func configKey(b *v1alpha1.Bundle) string {
 	return b.Spec.ConfigRef.GitRepo + "@" + b.Spec.ConfigRef.CommitSHA
 }
 
-// copyArtifacts deep-copies the images and config ref of src into dst.
+// chartKey identifies a chart Bundle's chart version.
+func chartKey(b *v1alpha1.Bundle) string {
+	if b.Spec.Chart == nil {
+		return ""
+	}
+	return b.Spec.Chart.RepoURL + "/" + b.Spec.Chart.Name + ":" + b.Spec.Chart.Version + "@" + b.Spec.Chart.Digest
+}
+
+// copyArtifacts deep-copies the images, config ref and chart of src into dst.
 func copyArtifacts(dst *v1alpha1.BundleSpec, src *v1alpha1.Bundle) {
 	dst.Type = src.Spec.Type
 	if len(src.Spec.Images) > 0 {
@@ -188,6 +197,10 @@ func copyArtifacts(dst *v1alpha1.BundleSpec, src *v1alpha1.Bundle) {
 	if src.Spec.ConfigRef != nil {
 		ref := *src.Spec.ConfigRef
 		dst.ConfigRef = &ref
+	}
+	if src.Spec.Chart != nil {
+		chart := *src.Spec.Chart
+		dst.Chart = &chart
 	}
 }
 
