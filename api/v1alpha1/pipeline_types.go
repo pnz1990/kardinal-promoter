@@ -74,6 +74,13 @@ type PipelineSpec struct {
 	// +optional
 	PolicyNamespaces []string `json:"policyNamespaces,omitempty"`
 
+	// ImageVerification requires the signatures of the Bundle's images (and
+	// of a config Bundle's commit) to verify before the Bundle is promoted
+	// into its first environments. Selected images must be pinned by digest.
+	// See docs/image-verification.md.
+	// +optional
+	ImageVerification *ImageVerificationPolicy `json:"imageVerification,omitempty"`
+
 	// MaxConcurrentPromotions caps the number of Bundles in Promoting phase for this
 	// pipeline at any given time. When 0 or unset (default), there is no cap and all
 	// Available Bundles are promoted concurrently. When set to a positive value, Bundles

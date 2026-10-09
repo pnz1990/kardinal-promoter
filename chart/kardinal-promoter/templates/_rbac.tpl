@@ -54,6 +54,7 @@ rules exist for. A new client call needs a row there and a rule here.
     - scheduleclocks
     - notificationhooks
     - hookruns
+    - imageverifications
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["kardinal.io"]
   resources:
@@ -68,6 +69,7 @@ rules exist for. A new client call needs a row there and a rule here.
     - scheduleclocks/status
     - notificationhooks/status
     - hookruns/status
+    - imageverifications/status
   verbs: ["get", "update", "patch"]
 # Pipeline hooks (docs/hooks.md): the HookRun reconciler creates each hook's
 # Job, owned by the HookRun, and deletes one that ran past its timeout. The
