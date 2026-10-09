@@ -1,23 +1,21 @@
 # kardinal-promoter Demo Environment
 
-This directory contains everything needed to create a **complete, working demo environment** for kardinal-promoter — three clusters, one main pipeline plus optional Flux, Argo Rollouts and Flagger pipelines. The controller is built from your checkout, so the demo always runs the code you have.
+This directory creates a **working demo environment** for kardinal-promoter on one kind cluster, with one Pipeline and the org PolicyGates. The controller is built from your checkout, so the demo always runs the code you have.
+
+Flux, Argo Rollouts and Flagger have their own examples, each covered by a live e2e test: [examples/flux-demo](../examples/flux-demo), [examples/argo-rollouts-demo](../examples/argo-rollouts-demo) and [examples/flagger-demo](../examples/flagger-demo).
 
 CI does not run the demo. The live e2e suites validate kardinal: see [Validation](#validation).
 
 ## What You Get
 
 ```
-kind-kardinal-control   ← kardinal controller + kro + ArgoCD
-kind-kardinal-dev       ← test + uat environments (kardinal-test-app)
-kind-kardinal-prod      ← prod environment
+kind-kardinal-demo   ← kardinal controller + kro + Argo CD
+                       Argo CD syncs kardinal-test-app's test, uat and prod
+                       environments into namespaces kardinal-test-app-{test,uat,prod}
 ```
 
-> **Current limitation:** promotions do not yet reach the dev and prod clusters.
-> Argo CD runs on the control cluster and syncs all three environments of
-> `kardinal-test-app` into namespaces `kardinal-test-app-{test,uat,prod}` there.
-> The copies setup.sh deploys directly to the dev and prod clusters are static,
-> and the Flux, Argo Rollouts and Flagger fixtures on the dev cluster are not
-> visible to the controller.
+For several clusters, see [Multi-Cluster](../docs/multi-cluster.md) and
+[examples/multi-cluster-fleet](../examples/multi-cluster-fleet).
 
 **Pipeline `kardinal-test-app`**
 ```
@@ -57,7 +55,9 @@ go build -o /usr/local/bin/kardinal ./cmd/kardinal/
 # Docker Desktop — must be running
 open -a Docker
 
-# GitHub PAT with repo write access (needed for GitOps push)
+# GitHub PAT with write access to your fork of pnz1990/kardinal-demo
+# (kardinal pushes there). Point git.url in demo/manifests/pipeline-simple and
+# repoURL in demo/manifests/argocd at your fork.
 export GITHUB_TOKEN=ghp_your_token_here
 ```
 
@@ -103,7 +103,8 @@ IMAGE=ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89ce
 # Promote a new image
 kardinal create bundle kardinal-test-app --image "$IMAGE"
 
-# Watch: test verifies in ~60s, uat in ~90s, then prod PR opens
+# Watch: test and uat verify within a few minutes. The prod PR opens once
+# uat has soaked 30 minutes (require-uat-soak), on a weekday in business hours.
 kardinal get pipelines --watch
 
 # See the promotion evidence
@@ -149,6 +150,9 @@ kardinal resume kardinal-test-app
 
 ### Scenario D: Rollback
 
+A rollback needs an earlier Verified Bundle in the environment: promote twice
+(two prod PR merges) first.
+
 ```bash
 # After a bad deploy to prod, rollback
 kardinal rollback kardinal-test-app --env prod
@@ -191,12 +195,6 @@ CI runs them in `.github/workflows/e2e-live.yml`.
 
 ---
 
-## EKS Prod Cluster (Removed)
-
-The `--eks` option and the Terraform behind it were removed; the demo runs on kind only. If you created the `kardinal-e2e-prod` EKS cluster with `setup.sh --eks` or `make eks-up`, destroy it from a checkout that still has `terraform/eks-e2e/` (`cd terraform/eks-e2e && terraform destroy`). A cluster from the older `demo/terraform/` directory is destroyed the same way from a checkout that has that directory.
-
----
-
 ## Keeping the Demo Current
 
 **When you add a new feature:**
@@ -218,16 +216,13 @@ the CRD schemas and the `kardinal` commands in this README against the CLI.
 demo/
 ├── README.md                    # this file
 ├── scripts/
-│   ├── setup.sh                 # create all clusters + install everything
-│   └── teardown.sh              # destroy all clusters
+│   ├── setup.sh                 # create the cluster + install everything
+│   └── teardown.sh              # delete the cluster
 └── manifests/
     ├── policy-gates/
     │   └── org-gates.yaml       # 4 PolicyGates covering all gate types
     ├── pipeline-simple/
     │   └── pipeline.yaml        # kardinal-test-app (test→uat→prod)
-    ├── argocd/
-    │   └── applications.yaml    # ArgoCD Applications for all envs
-    ├── flux/                    # Flux pipeline + Kustomizations
-    ├── rollouts/                # Argo Rollouts pipeline + Rollout
-    └── flagger/                 # Flagger pipeline + Canary
+    └── argocd/
+        └── applications.yaml    # Argo CD Applications for all envs
 ```

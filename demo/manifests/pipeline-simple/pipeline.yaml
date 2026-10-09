@@ -1,12 +1,14 @@
 # demo/manifests/pipeline-simple/pipeline.yaml
 #
-# Pipeline 1: kardinal-test-app (simple, single-cluster)
+# The demo Pipeline: kardinal-test-app. Argo CD syncs each environment into
+# namespace kardinal-test-app-<env> of the demo cluster.
 #
 # Topology:
-#   test (auto, kind-kardinal-dev)
-#    └→ uat (auto, kind-kardinal-dev)
-#        └→ prod (PR review, kind-kardinal-prod)
-#               ↑ guarded by: no-weekend-deploys, require-uat-soak, no-bot-deploys
+#   test (auto)
+#    └→ uat (auto)
+#        └→ prod (PR review)
+#               ↑ guarded by the org gates: no-weekend-deploys, business-hours-only,
+#                 require-uat-soak (30m in uat), no-bot-deploys
 #
 # Features exercised:
 #   ✓ Auto-promote (test, uat)
