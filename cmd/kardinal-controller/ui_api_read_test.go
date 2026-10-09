@@ -433,6 +433,27 @@ func TestUIAPI_Pipelines_CurrentBundleIsNewestNotSuperseded(t *testing.T) {
 			wantActive: "app-2",
 		},
 		{
+			// QA #1489: a Rejected bundle whose change is live stays current.
+			name: "a newer Rejected bundle whose change is live is current",
+			objs: []client.Object{
+				bundle("app-1", "Verified", at(0), env("pa", "Verified")),
+				rejectedUIBundle(bundle("app-2", "Rejected", at(1), env("pa", "Verified"))),
+				uiStep("default", "app-2-pa", "app-2", "pa", "Verified"),
+			},
+			wantActive: "app-2",
+			wantStates: map[string]string{"pa": "Verified"},
+		},
+		{
+			name: "a newer Rejected bundle that never went live is skipped",
+			objs: []client.Object{
+				bundle("app-1", "Verified", at(0), env("pa", "Verified")),
+				rejectedUIBundle(bundle("app-2", "Rejected", at(1), env("pa", "WaitingForMerge"))),
+				uiStep("default", "app-2-pa", "app-2", "pa", "WaitingForMerge"),
+			},
+			wantActive: "app-1",
+			wantStates: map[string]string{"pa": "Verified"},
+		},
+		{
 			name: "same creationTimestamp: the name breaks the tie, as in the web",
 			objs: []client.Object{
 				bundle("app-b", "Failed", at(0)),
@@ -869,4 +890,69 @@ func TestUIAPI_RetiredBundle(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	assert.Contains(t, rec.Body.String(), "app-v1-prod")
 	assert.Contains(t, rec.Body.String(), "app-v1-test")
+}
+
+func rejectedUIBundle(b *v1alpha1.Bundle) *v1alpha1.Bundle {
+	b.Spec.Rejected = &v1alpha1.BundleRejection{By: "alice", Reason: "CVE"}
+	return b
+}
+
+// TestUIAPI_Bundles_RejectedLiveEnvironments (QA #1489): the bundle list
+// names, for a Rejected bundle, the environments where its change is live
+// (its step there is HealthChecking or Verified), which the UI turns into the
+// roll-back hint; other bundles have none.
+//
+// Covers BUNDLE-REJECT-07.
+func TestUIAPI_Bundles_RejectedLiveEnvironments(t *testing.T) {
+	step := func(name, bundle, env, state string) *v1alpha1.PromotionStep {
+		s := uiStep("default", name, bundle, env, state)
+		s.Labels["kardinal.io/pipeline"] = "app"
+		return s
+	}
+	bad := rejectedUIBundle(&v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-2", Namespace: "default", CreationTimestamp: metav1.NewTime(time.Now())},
+		Spec:       v1alpha1.BundleSpec{Pipeline: "app"},
+		Status:     v1alpha1.BundleStatus{Phase: "Rejected"},
+	})
+	good := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-1", Namespace: "default", CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour))},
+		Spec:       v1alpha1.BundleSpec{Pipeline: "app"},
+		Status:     v1alpha1.BundleStatus{Phase: "Verified"},
+	}
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(good, bad,
+		step("app-1-prod", "app-1", "prod", "Verified"),
+		step("app-2-test", "app-2", "test", "Verified"),
+		step("app-2-uat", "app-2", "uat", "Failed"),
+		step("app-2-prod", "app-2", "prod", "HealthChecking"),
+	).Build()
+	rec := uiReadGet(t, c, "/api/v1/ui/pipelines/app/bundles")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var resp []uiBundleResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Len(t, resp, 2)
+	assert.Equal(t, "app-2", resp[0].Name)
+	assert.Equal(t, []string{"prod", "test"}, resp[0].RejectedLiveEnvironments)
+	assert.Empty(t, resp[1].RejectedLiveEnvironments)
+}
+
+// TestUIAPI_Bundles_RejectedLiveRetired (QA #1489, #1492): a Bundle rejected
+// after its Graph was retired has no PromotionSteps any more; its
+// status.retiredSteps still say where its change is live.
+func TestUIAPI_Bundles_RejectedLiveRetired(t *testing.T) {
+	at := metav1.NewTime(time.Now().Add(-time.Hour).Truncate(time.Second))
+	bad := rejectedUIBundle(&v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-2", Namespace: "default", CreationTimestamp: metav1.NewTime(time.Now())},
+		Spec:       v1alpha1.BundleSpec{Pipeline: "app"},
+		Status: v1alpha1.BundleStatus{Phase: "Rejected", RetiredAt: &at, RetiredSteps: []v1alpha1.RetiredStep{
+			{Name: "app-2-test", Environment: "test", State: "Verified", CreatedAt: at, VerifiedAt: &at},
+			{Name: "app-2-prod", Environment: "prod", State: "Verified", CreatedAt: at, VerifiedAt: &at},
+		}},
+	})
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(bad).Build()
+	rec := uiReadGet(t, c, "/api/v1/ui/pipelines/app/bundles")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var resp []uiBundleResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+	assert.Equal(t, []string{"prod", "test"}, resp[0].RejectedLiveEnvironments)
 }

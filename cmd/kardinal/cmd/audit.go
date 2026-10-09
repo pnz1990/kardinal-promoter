@@ -54,8 +54,9 @@ Rollbacks counts the rollback Bundles created in the window, from kardinal
 rollback, the UI, a RollbackPolicy or onHealthFailure=rollback, and how many
 of them succeeded: wrote RollbackSucceeded in the window in the environment
 they roll back.
-The success rate is succeeded / (succeeded + failed + superseded) among the
-promotions that finished inside the window. A rollback Bundle that reaches
+The success rate is succeeded / (succeeded + failed + superseded + rejected)
+among the promotions that finished inside the window; rejected (PromotionRejected,
+kardinal reject) is printed only when there are any. A rollback Bundle that reaches
 Verified in an environment writes PromotionSucceeded, counted as a succeeded
 promotion, and RollbackSucceeded, counted only as a succeeded rollback.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -148,11 +149,11 @@ func auditSummaryFn(out io.Writer, client sigs_client.Client, ns, pipeline, sinc
 	startTimes := make(map[promotionKey]time.Time)
 
 	var (
-		started, succeeded, failed, superseded int
-		totalDuration                          time.Duration
-		durationCount                          int
-		gateTotal, gateBlocked                 int
-		pipelines                              = make(map[string]bool)
+		started, succeeded, failed, superseded, rejected int
+		totalDuration                                    time.Duration
+		durationCount                                    int
+		gateTotal, gateBlocked                           int
+		pipelines                                        = make(map[string]bool)
 		// rollbackOK is the rollback Bundles that succeeded.
 		rollbackOK = make(map[bundleKey]bool)
 	)
@@ -179,6 +180,9 @@ func auditSummaryFn(out io.Writer, client sigs_client.Client, ns, pipeline, sinc
 			delete(startTimes, key)
 		case "PromotionSuperseded":
 			superseded++
+			delete(startTimes, key)
+		case "PromotionRejected":
+			rejected++
 			delete(startTimes, key)
 		case "GateEvaluated":
 			gateTotal++
@@ -224,11 +228,15 @@ func auditSummaryFn(out io.Writer, client sigs_client.Client, ns, pipeline, sinc
 	// Rate over promotions that finished in the window, so one that started
 	// before the window cannot push it over 100%.
 	successRate := float64(0)
-	if completed := succeeded + failed + superseded; completed > 0 {
+	if completed := succeeded + failed + superseded + rejected; completed > 0 {
 		successRate = float64(succeeded) / float64(completed) * 100
 	}
-	_, _ = fmt.Fprintf(out, "Promotions:   %d started, %d succeeded, %d failed, %d superseded\n",
-		started, succeeded, failed, superseded)
+	rejectedNote := ""
+	if rejected > 0 {
+		rejectedNote = fmt.Sprintf(", %d rejected", rejected)
+	}
+	_, _ = fmt.Fprintf(out, "Promotions:   %d started, %d succeeded, %d failed, %d superseded%s\n",
+		started, succeeded, failed, superseded, rejectedNote)
 	_, _ = fmt.Fprintf(out, "Success rate: %.1f%%\n", successRate)
 	if durationCount > 0 {
 		avgDur := totalDuration / time.Duration(durationCount)

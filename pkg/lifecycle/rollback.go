@@ -51,6 +51,14 @@ type RollbackRequest struct {
 	Automatic bool
 }
 
+// Rejected reports whether b was rejected (kardinal reject, #1451): its
+// spec.rejected is set, or its phase is Rejected. A rejected Bundle is never
+// promoted again, so rollback and promote never pick it, also when it was
+// Verified somewhere before it was rejected.
+func Rejected(b *v1alpha1.Bundle) bool {
+	return b.Spec.Rejected != nil || b.Status.Phase == "Rejected"
+}
+
 // RollbackPlan is the result of PlanRollback.
 type RollbackPlan struct {
 	// Current is the Bundle deployed in the environment now. Nil when it is
@@ -71,6 +79,11 @@ type RollbackPlan struct {
 //   - The environment must exist in the pipeline.
 //   - Automatic: the deployed Bundle must not itself be a rollback (label
 //     kardinal.io/rollback=true).
+//   - A rejected Bundle (Rejected), or any Bundle that carries an image or
+//     config commit of a rejected one (RejectedArtifacts), is never the
+//     target, and never the source of an image or config commit the rollback
+//     restores; ToBundle naming one is refused with ErrInvalid. Rolling back from a rejected Bundle that
+//     reached the environment is what rollback is for.
 //   - With ToBundle: the Bundle must exist, belong to the pipeline, carry
 //     artifacts, differ from what is deployed now, and have been Verified in
 //     the environment (every one of its PromotionSteps there is Verified).
@@ -158,10 +171,14 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 	if rbErr != nil {
 		return nil, fmt.Errorf("rollback: %w", rbErr)
 	}
+	rejected, rejErr := LoadRejectedArtifacts(ctx, c, req.Namespace, req.Pipeline)
+	if rejErr != nil {
+		return nil, fmt.Errorf("rollback: %w", rejErr)
+	}
 	src := &restoreSources{
 		c: c, ns: req.Namespace, pipeline: req.Pipeline, env: req.Environment,
 		verified: h.verifiedNewestFirst(), deployed: plan.CurrentName, rolledBack: rolledBack,
-		cache: map[string]*v1alpha1.Bundle{},
+		rejected: rejected, cache: map[string]*v1alpha1.Bundle{},
 	}
 	var restored *v1alpha1.Bundle
 
@@ -177,6 +194,12 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 		case target.Spec.Pipeline != req.Pipeline:
 			return nil, fmt.Errorf("rollback: bundle %s belongs to pipeline %q, not %s: %w",
 				target.Name, target.Spec.Pipeline, req.Pipeline, ErrInvalid)
+		case Rejected(target):
+			return nil, fmt.Errorf("rollback: bundle %s was rejected, so it is never promoted again; pick another Bundle: %w",
+				target.Name, ErrInvalid)
+		case rejectedArtifact(rejected, target) != "":
+			return nil, fmt.Errorf("rollback: bundle %s deploys an artifact of the rejected bundle %s, so it is never promoted again; pick another Bundle: %w",
+				target.Name, rejectedArtifact(rejected, target), ErrInvalid)
 		case !HasArtifacts(target):
 			return nil, fmt.Errorf("rollback: bundle %s has no images or config commit to restore: %w",
 				target.Name, ErrInvalid)
@@ -221,7 +244,7 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 				}
 				return nil, fmt.Errorf("rollback: get bundle %s: %w", name, getErr)
 			}
-			if cand.Spec.Pipeline != req.Pipeline || !HasArtifacts(cand) {
+			if cand.Spec.Pipeline != req.Pipeline || !HasArtifacts(cand) || rejectedArtifact(rejected, cand) != "" {
 				continue
 			}
 			if plan.Current != nil && SameArtifacts(cand, plan.Current) {
@@ -288,7 +311,18 @@ type restoreSources struct {
 	verified          []string
 	deployed          string
 	rolledBack        map[string]bool
+	rejected          *RejectedArtifacts
 	cache             map[string]*v1alpha1.Bundle
+}
+
+// rejectedArtifact names the rejected Bundle whose artifact b carries, or ""
+// (RejectedArtifacts.Carries).
+func rejectedArtifact(r *RejectedArtifacts, b *v1alpha1.Bundle) string {
+	name, ok := r.Carries(b)
+	if !ok {
+		return ""
+	}
+	return name
 }
 
 // asMixed returns a copy of b of type mixed, so that a rollback to it deploys
@@ -554,7 +588,8 @@ func shortCommit(sha string) string {
 }
 
 // newest returns the newest history Bundle that match accepts, or nil.
-// Bundles pruned by historyLimit and Bundles of another pipeline are skipped.
+// Bundles pruned by historyLimit, rejected Bundles and Bundles of another
+// pipeline are skipped.
 func (s *restoreSources) newest(ctx context.Context, match func(*v1alpha1.Bundle) bool) (*v1alpha1.Bundle, error) {
 	for _, name := range s.verified {
 		if name == s.deployed || s.rolledBack[name] {
@@ -572,7 +607,7 @@ func (s *restoreSources) newest(ctx context.Context, match func(*v1alpha1.Bundle
 			}
 			s.cache[name] = b
 		}
-		if b != nil && b.Spec.Pipeline == s.pipeline && match(b) {
+		if b != nil && b.Spec.Pipeline == s.pipeline && rejectedArtifact(s.rejected, b) == "" && match(b) {
 			return b, nil
 		}
 	}

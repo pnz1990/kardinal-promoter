@@ -79,6 +79,7 @@ A gate's STATE is the one the UI shows, the first that applies:
                 and the environment has no step yet, or the gate holds
                 the environment's Pending step
     Superseded  the Bundle was superseded; the gate is not evaluated again
+    Rejected    the Bundle was rejected (kardinal reject); not evaluated again
     Pending     not evaluated yet
     Waiting     evaluated not ready, not holding the Bundle: the Bundle has
                 not reached the environment, or it failed (it can retry)
@@ -304,6 +305,11 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	}
 	if _, err := fmt.Fprint(w, output); err != nil {
 		return fmt.Errorf("write explain output: %w", err)
+	}
+	for _, h := range rejectedLiveHints(pipeline, current, bundles.Items, steps.Items, envFilter) {
+		if _, err := fmt.Fprintln(w, h); err != nil {
+			return fmt.Errorf("write explain hint: %w", err)
+		}
 	}
 	if err := writeExplainDeployed(w, pipeline, envNames, envFilter, current, steps.Items, bundleByName); err != nil {
 		return err
