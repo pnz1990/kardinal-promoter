@@ -13,6 +13,8 @@ import (
 
 	authv1 "k8s.io/api/authentication/v1"
 	authzv1 "k8s.io/api/authorization/v1"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/accesslog"
 )
 
 // DefaultCacheTTL is how long TokenReview and SubjectAccessReview results are
@@ -101,6 +103,8 @@ func (c *cachedTokenReviewer) Review(ctx context.Context, token string) (*authv1
 	if err != nil {
 		return nil, err
 	}
+	// A review the API server answered, not the cache: a login.
+	accesslog.FromContext(ctx).Login = true
 	c.cache.put(key, *st.DeepCopy())
 	return st, nil
 }
