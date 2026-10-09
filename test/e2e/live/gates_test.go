@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
@@ -993,8 +994,10 @@ func gateAudit(ctx context.Context, e *framework.Env, ns, bundle, env, gate stri
 	}); err != nil {
 		return nil, err
 	}
+	// spec.timestamp has one-second resolution; a gate can flip twice in a
+	// second under load (#1484).
 	sort.Slice(list.Items, func(i, j int) bool {
-		return list.Items[i].Spec.Timestamp.Before(&list.Items[j].Spec.Timestamp)
+		return lifecycle.CompareAuditEvents(&list.Items[i], &list.Items[j]) < 0
 	})
 	return list.Items, nil
 }
