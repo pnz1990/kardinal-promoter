@@ -636,8 +636,12 @@ func (a *ArgoCDAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSta
 	state := fmt.Sprintf("health=%s, sync=%s, opPhase=%s", healthStatus, syncStatus, opPhase)
 
 	target := argoCDRevision(app, syncStatus, opPhase, opts)
-	if !target.deployed && syncStatus == "Synced" {
-		target = argoCDDescendant(ctx, app, opts, target)
+	// The branch history is the stronger evidence for a later synced
+	// revision: it does not need Pods, and it beats the images fallback.
+	if syncStatus == "Synced" && (!target.deployed || target.byImages) {
+		if d := argoCDDescendant(ctx, app, opts, target); (d.deployed && !d.byImages) || !target.deployed {
+			target = d
+		}
 	}
 	if !target.deployed || target.unverified {
 		state += ", " + target.note
@@ -703,6 +707,9 @@ type argoCDTarget struct {
 	// Healthy passes the change, but Degraded health and a failed operation
 	// can be the previous version's, so they do not count (B67).
 	unverified bool
+	// byImages: deployed was accepted on a later synced revision because the
+	// Application runs the Bundle images, not from the revision itself.
+	byImages bool
 	// note is for the status message: why the change is not deployed yet,
 	// or how it was verified.
 	note string
@@ -770,6 +777,7 @@ func argoCDRevision(app *unstructured.Unstructured, syncStatus, opPhase string, 
 	// superseded one, so it waits for Synced or history as above.
 	if ok, note := argoCDImages(app, opts.ExpectedImages); ok && note == "" && len(opts.ExpectedImages) > 0 && !t.operated {
 		t.deployed = true
+		t.byImages = true
 		t.operated = len(syncRevs) > 0 && hasRevision(opRevs, syncRevs...)
 		t.note = fmt.Sprintf("(synced revision %s is not %s, but the Application runs the Bundle images)",
 			shortRev(current), shortRev(want))

@@ -6,6 +6,7 @@ package health_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -77,6 +78,51 @@ func TestArgoCDAdapter_SyncedDescendant(t *testing.T) {
 			if tc.contains != nil {
 				assert.Equal(t, []string{later}, asked, "the synced revision is the one asked about")
 			}
+		})
+	}
+}
+
+// TestArgoCDAdapter_DescendantBeforeImages (#1575): when the Application also
+// runs the Bundle images, the branch history decides first, and the images
+// fallback still passes when the history says no or cannot be read.
+func TestArgoCDAdapter_DescendantBeforeImages(t *testing.T) {
+	app := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+		"metadata": map[string]interface{}{"name": "shared", "namespace": "argocd"},
+		"status": map[string]interface{}{
+			"health":         map[string]interface{}{"status": "Healthy"},
+			"sync":           map[string]interface{}{"status": "Synced", "revision": later},
+			"operationState": map[string]interface{}{"phase": "Succeeded", "syncResult": map[string]interface{}{"revision": later}},
+			"summary":        map[string]interface{}{"images": []interface{}{"ghcr.io/pnz1990/kardinal-test-app:main"}},
+		},
+	}}
+	app.SetGroupVersionKind(schema.GroupVersionKind{Group: "argoproj.io", Version: "v1alpha1", Kind: "Application"})
+	adapter := health.NewArgoCDAdapter(dynfake.NewSimpleDynamicClient(runtime.NewScheme(), app))
+	images := "(synced revision 13012b285355 is not 77fe8dd636ee, but the Application runs the Bundle images)"
+	tests := []struct {
+		name     string
+		contains func(context.Context, string) (bool, error)
+		reason   string
+	}{
+		{name: "the history says it contains it", reason: "(synced revision 13012b285355 contains 77fe8dd636ee)",
+			contains: func(context.Context, string) (bool, error) { return true, nil }},
+		{name: "the history says no: the images decide", reason: images,
+			contains: func(context.Context, string) (bool, error) { return false, nil }},
+		{name: "the history cannot be read: the images decide", reason: images,
+			contains: func(context.Context, string) (bool, error) { return false, errors.New("timeout") }},
+		{name: "no history reader", reason: images},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := adapter.Check(context.Background(), health.CheckOptions{
+				ArgoCD:           health.ArgoCDConfig{Name: "shared", Namespace: "argocd"},
+				ExpectedRevision: promoted,
+				ExpectedImages:   []health.ImageExpectation{{Repository: "ghcr.io/pnz1990/kardinal-test-app", Tag: "main"}},
+				RevisionContains: tc.contains,
+			})
+			require.NoError(t, err)
+			assert.True(t, res.Healthy, res.Reason)
+			assert.True(t, strings.HasSuffix(res.Reason, tc.reason), res.Reason)
 		})
 	}
 }
