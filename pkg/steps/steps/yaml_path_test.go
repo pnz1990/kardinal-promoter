@@ -27,6 +27,7 @@ func TestParseYAMLPath(t *testing.T) {
 		".dependencies[name=podinfo].version":           "dependencies[name=podinfo].version",
 		".dependencies.0.version":                       "dependencies.0.version",
 		"matrix[1][2]":                                  "matrix[1][2]",
+		"a[123456789]":                                  "a[123456789]",
 		"images[name=ghcr.io/org/app:v1@sha].tag":       "images[name=ghcr.io/org/app:v1@sha].tag",
 		"a_b-c.0d": "a_b-c.0d",
 	}
@@ -36,7 +37,7 @@ func TestParseYAMLPath(t *testing.T) {
 		assert.Equal(t, want, pathString(segs, len(segs)), in)
 	}
 	for _, bad := range []string{"", ".", "a..b", "a.", "[0]", "a[", "a[]", "a[-1]", "a[01]", "a[x]", "a[=v]",
-		"a[f=]", "a[f=v w]", "a b", "a.b[0]c", "a/b", "a[f=v]x", "a.*"} {
+		"a[f=]", "a[f=v w]", "a b", "a.b[0]c", "a/b", "a[f=v]x", "a.*", "a[1234567890]"} {
 		_, err := parseYAMLPath(bad)
 		assert.Error(t, err, "%q must be refused", bad)
 	}
@@ -58,6 +59,9 @@ func TestSetYAMLPath_Grammar(t *testing.T) {
 		{path: "containers[5].image", wantErr: "has 2 elements, no [5]"},
 		{path: "containers.app.image", wantErr: "is a list; pick an element"},
 		{path: "missing[0].image", wantErr: "missing does not exist"},
+		// A digits key over a missing value is a list index too: no
+		// {"0": ...} mapping is created where a list was meant (QA #1546).
+		{path: "missing.0.image", wantErr: "missing does not exist"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
@@ -95,9 +99,33 @@ func TestYAMLPathCRDPatterns(t *testing.T) {
 		"image.tag", ".image.tag", "a[0]", "a[10][2].b", "a[name=app].image", ".dependencies[name=podinfo].version",
 		".dependencies.0.version", "images[name=ghcr.io/org/app:v1@sha].tag", "a_b-c.0d",
 		"", ".", "a..b", "a.", "[0]", "a[", "a[]", "a[-1]", "a[01]", "a[x]", "a[=v]", "a[f=]", "a[f=v w]",
-		"a b", "a.b[0]c", "a/b", "a[f=v]x", "a.*", "a[f=v=w]", "a[f=v]]",
+		"a b", "a.b[0]c", "a/b", "a[f=v]x", "a.*", "a[f=v=w]", "a[f=v]]", "a[123456789]", "a[1234567890]",
 	} {
 		_, err := parseYAMLPath(p)
 		assert.Equal(t, err == nil, re.MatchString(p), "%q: parser ok=%v, CRD pattern ok=%v", p, err == nil, re.MatchString(p))
+	}
+}
+
+// TestSetYAMLPath_DigitsOverMissingOrNullList (QA #1546): a chart version
+// path ".dependencies.0.version" over a Chart.yaml whose dependencies are
+// missing or null fails with "does not exist" and leaves the file a valid
+// chart, instead of writing dependencies: {"0": {version: ...}}.
+func TestSetYAMLPath_DigitsOverMissingOrNullList(t *testing.T) {
+	for name, src := range map[string]string{
+		"missing dependencies": "apiVersion: v2\nname: umbrella\nversion: 1.0.0\n",
+		"null dependencies":    "apiVersion: v2\nname: umbrella\nversion: 1.0.0\ndependencies:\n",
+		"null dependencies ~":  "apiVersion: v2\nname: umbrella\nversion: 1.0.0\ndependencies: ~\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			doc, err := parseYAMLMapping([]byte(src))
+			require.NoError(t, err)
+			err = setYAMLPath(doc.root(), ".dependencies.0.version", "2.0.0")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "dependencies does not exist")
+			out, err := doc.encode()
+			require.NoError(t, err)
+			assert.NotContains(t, string(out), "\"0\"", "no mapping key 0 written")
+			assert.NotContains(t, string(out), "2.0.0")
+		})
 	}
 }

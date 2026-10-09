@@ -451,11 +451,13 @@ with one grammar:
   `app.kubernetes.io/version`) cannot be addressed.
 - `[N]` after a key picks a list element by position: `spec.template.spec.containers[0].image`.
   A digits-only key does the same when it reaches a list (`.dependencies.0.version`); in a
-  mapping it is a key.
+  mapping it is a key. An index has at most 9 digits.
 - `[field=value]` picks the list element (a mapping) whose `field` has that value:
   `spec.template.spec.containers[name=app].image`, `.dependencies[name=podinfo].version`. The
   value is letters, digits and `_ - . / : @`.
-- The element a list step names must exist; the step fails for good otherwise.
+- The element a list step names must exist, and so must the list: a missing or null value before
+  `[N]`, `[field=value]` or a digits-only key fails the step for good instead of being created
+  as a mapping.
 
 The API server checks the grammar: a Pipeline with a path outside it is refused.
 

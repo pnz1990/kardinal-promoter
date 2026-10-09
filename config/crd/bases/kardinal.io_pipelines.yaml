@@ -522,7 +522,7 @@ spec:
                                 ".spec.chart.spec.version" (Flux HelmRelease) or
                                 ".helmCharts[name=podinfo].version" (kustomize).
                               maxLength: 512
-                              pattern: ^\.?[A-Za-z0-9_-]+(\[(0|[1-9][0-9]*|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*(\.[A-Za-z0-9_-]+(\[(0|[1-9][0-9]*|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*)*$
+                              pattern: ^\.?[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*(\.[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*)*$
                               type: string
                             imagePathTemplate:
                               description: |-
@@ -590,7 +590,7 @@ spec:
                                       indexes a list when it reaches one. Missing mapping keys are created;
                                       list elements are not. A key that contains "." is not supported.
                                     maxLength: 512
-                                    pattern: ^\.?[A-Za-z0-9_-]+(\[(0|[1-9][0-9]*|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*(\.[A-Za-z0-9_-]+(\[(0|[1-9][0-9]*|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*)*$
+                                    pattern: ^\.?[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*(\.[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*)*$
                                     type: string
                                   value:
                                     description: |-

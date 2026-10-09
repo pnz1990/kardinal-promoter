@@ -18,7 +18,7 @@ import (
 //	path     = ["."] segment *("." segment)
 //	segment  = key *("[" (index | selector) "]")
 //	key      = 1*(ALPHA / DIGIT / "_" / "-")
-//	index    = 1*DIGIT                      ; a list element by position
+//	index    = 1*9DIGIT                     ; a list element by position, no leading 0
 //	selector = key "=" value                ; the list element whose field key is value
 //	value    = 1*(ALPHA / DIGIT / "_" / "-" / "." / "/" / ":" / "@")
 //
@@ -26,7 +26,9 @@ import (
 // "spec.template.spec.containers[name=app].image" or
 // ".dependencies[name=podinfo].version". A key that is all digits is a
 // mapping key in a mapping and a list index in a list, so ".dependencies.0.version"
-// and ".dependencies[0].version" are the same path. The CRD patterns of both
+// and ".dependencies[0].version" are the same path; a missing or null value
+// before one is not created (it is an error), so a digits key never turns a
+// missing list into a mapping. The CRD patterns of both
 // fields accept exactly this grammar.
 
 // yamlPathSeg is one step of a parsed path: a mapping key, a list index, or
@@ -88,7 +90,7 @@ func parseYAMLPath(path string) ([]yamlPathSeg, error) {
 				segs = append(segs, yamlPathSeg{index: -1, matchField: field, matchValue: value})
 			} else {
 				n, err := strconv.Atoi(inner)
-				if err != nil || n < 0 || inner != strconv.Itoa(n) {
+				if err != nil || n < 0 || inner != strconv.Itoa(n) || len(inner) > 9 {
 					return nil, invalid(fmt.Sprintf("bad index [%s]", inner))
 				}
 				segs = append(segs, yamlPathSeg{index: n})
@@ -178,9 +180,14 @@ func setYAMLPath(root *yaml.Node, path string, value string) error {
 				setMapScalar(node, g.key, value)
 				return nil
 			}
-			listNext := segs[i+1].key == "" || (next != nil && next.Kind == yaml.SequenceNode)
+			// The next step indexes a list ([N], [f=v], or a digits-only key):
+			// a missing or null value is not created as a mapping, which
+			// would write {"0": ...} where a list was meant.
+			_, digits := asIndex(segs[i+1])
+			listNext := digits || (next != nil && next.Kind == yaml.SequenceNode)
+			isNull := next != nil && next.Kind == yaml.ScalarNode && next.Tag == "!!null"
 			switch {
-			case next == nil && listNext:
+			case (next == nil || isNull) && listNext:
 				return fmt.Errorf("%s: %s does not exist", path, pathString(segs, i+1))
 			case next == nil:
 				next = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
