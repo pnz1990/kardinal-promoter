@@ -270,8 +270,11 @@ func TestHealth_LabelSelectorStall(t *testing.T) {
 
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Failed", promoteTimeout)
-	assert.Equal(t, fmt.Sprintf("health alarm via resource (onHealthFailure=none): Deployment %s/%s rollout failed: ProgressDeadlineExceeded: %s",
-		a.ns, extra, stalled), ps.Status.Message)
+	// The stalled pod cannot be scheduled; the reason names that too (#1365).
+	assert.True(t, strings.HasPrefix(ps.Status.Message, fmt.Sprintf(
+		"health alarm via resource (onHealthFailure=none): Deployment %s/%s rollout failed: ProgressDeadlineExceeded: %s; new pod %s-",
+		a.ns, extra, stalled, extra)), ps.Status.Message)
+	assert.Contains(t, ps.Status.Message, " is not scheduled: Unschedulable: ")
 	assert.Equal(t, 1, ps.Status.ConsecutiveHealthFailures, "a terminal result fails on the first failed check")
 	require.NotNil(t, ps.Status.LastHealthCheckAt)
 	require.NotNil(t, ps.Status.HealthCheckExpiry)
@@ -531,7 +534,7 @@ func TestHealth_TimeoutNamesPodFailure(t *testing.T) {
 	assert.Contains(t, waiting.Status.Message, fmt.Sprintf("Deployment %s/%s rolling out: ", a.ns, fixtures.Workload("test")))
 	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Failed", 2*time.Minute)
 	assert.True(t, strings.HasPrefix(ps.Status.Message,
-		"health alarm via resource (onHealthFailure=none): health check timeout after 40s; last result: Deployment "), ps.Status.Message)
+		"health alarm via resource (onHealthFailure=none): health check timeout after 40s; last result: waiting for resource: Deployment "), ps.Status.Message)
 	assert.Regexp(t, newPodPullFailure, ps.Status.Message)
 	assert.NotContains(t, ps.Status.Message, "ProgressDeadlineExceeded", "the timeout, not the progress deadline, ended the wait")
 	e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
