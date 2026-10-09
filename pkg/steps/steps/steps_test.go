@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -472,63 +471,25 @@ func TestDefaultSequenceForBundle_KustomizeDefault(t *testing.T) {
 	assert.Contains(t, seq, "kustomize-set-image", "default must use kustomize-set-image")
 }
 
-// TestDefaultSequenceForBundle_BranchLayout verifies that layout:branch inserts kustomize-build.
+// TestDefaultSequenceForBundle_BranchLayout: layout: branch renders after
+// the image update, before git-commit, and a config Bundle runs no
+// config-merge (its configRef commit is the DRY commit rendered).
 func TestDefaultSequenceForBundle_BranchLayout(t *testing.T) {
-	seq := parentsteps.DefaultSequenceForBundle("auto", "image", "kustomize", "branch")
-	assert.Contains(t, seq, "kustomize-set-image", "branch layout must include kustomize-set-image")
-	assert.Contains(t, seq, "kustomize-build", "branch layout must include kustomize-build")
-	// kustomize-build must come after kustomize-set-image
-	setIdx, buildIdx := -1, -1
-	for i, s := range seq {
-		if s == "kustomize-set-image" {
-			setIdx = i
-		}
-		if s == "kustomize-build" {
-			buildIdx = i
-		}
-	}
-	assert.Greater(t, buildIdx, setIdx, "kustomize-build must come after kustomize-set-image")
+	assert.Equal(t, []string{"git-clone", "kustomize-set-image", "render-manifests", "git-commit", "git-push", "health-check"},
+		parentsteps.DefaultSequenceForBundle("auto", "image", "kustomize", "branch"))
+	assert.Equal(t, []string{"git-clone", "helm-set-image", "render-manifests", "git-commit", "git-push",
+		"open-pr", "wait-for-merge", "health-check"},
+		parentsteps.DefaultSequenceForBundle("pr-review", "image", "helm", "branch"))
+	assert.Equal(t, []string{"git-clone", "render-manifests", "git-commit", "git-push", "health-check"},
+		parentsteps.DefaultSequenceForBundle("auto", "config", "", "branch"))
+	assert.Equal(t, []string{"git-clone", "kustomize-set-image", "render-manifests", "git-commit", "git-push", "health-check"},
+		parentsteps.DefaultSequenceForBundle("auto", "mixed", "", "branch"))
 }
 
-// TestDefaultSequenceForBundle_BranchLayoutPRReview verifies pr-review with layout:branch.
-func TestDefaultSequenceForBundle_BranchLayoutPRReview(t *testing.T) {
-	seq := parentsteps.DefaultSequenceForBundle("pr-review", "image", "", "branch")
-	assert.Contains(t, seq, "kustomize-build")
-	assert.Contains(t, seq, "open-pr")
-	assert.Contains(t, seq, "wait-for-merge")
-}
-
-// TestKustomizeBuild_NotInPath verifies that kustomize-build returns a helpful error
-// when kustomize is not in PATH.
-func TestKustomizeBuild_NotInPath(t *testing.T) {
-	// This test only runs when kustomize is NOT in PATH.
-	if _, err := exec.LookPath("kustomize"); err == nil {
-		t.Skip("kustomize is in PATH — skipping not-in-path test")
-	}
-	dir := t.TempDir()
-	envDir := filepath.Join(dir, "environments", "prod")
-	require.NoError(t, os.MkdirAll(envDir, 0o755))
-
-	state := &parentsteps.StepState{
-		WorkDir:     dir,
-		Environment: v1alpha1.EnvironmentSpec{Name: "prod"},
-		Bundle:      v1alpha1.BundleSpec{Type: "image"},
-		Outputs:     map[string]string{},
-	}
-
-	step, err := parentsteps.Lookup("kustomize-build")
+// TestRenderManifests_Registered: the render step is registered.
+func TestRenderManifests_Registered(t *testing.T) {
+	_, err := parentsteps.Lookup("render-manifests")
 	require.NoError(t, err)
-
-	result, execErr := step.Execute(context.Background(), state)
-	assert.Equal(t, parentsteps.StepFailed, result.Status)
-	assert.NotNil(t, execErr)
-	assert.Contains(t, result.Message, "kustomize")
-}
-
-// TestKustomizeBuild_Registered verifies the kustomize-build step is registered.
-func TestKustomizeBuild_Registered(t *testing.T) {
-	_, err := parentsteps.Lookup("kustomize-build")
-	require.NoError(t, err, "kustomize-build must be registered in the step registry")
 }
 
 func TestOpenPRStep_AppliesLabels(t *testing.T) {

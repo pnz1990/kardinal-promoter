@@ -323,11 +323,15 @@ func manifestFiles(docs [][]byte) ([]renderedFile, error) {
 		if m.Kind == "" || m.Metadata.Name == "" {
 			return nil, parentsteps.Permanent(errors.New("rendered object has no kind or metadata.name"))
 		}
+		dir := ""
+		if m.Metadata.Namespace != "" {
+			dir = fileSafe(m.Metadata.Namespace)
+		}
 		name := fileSafe(strings.ToLower(m.Kind)) + "-" + fileSafe(m.Metadata.Name)
-		if group := strings.Split(m.APIVersion, "/"); len(group) == 2 && used[dirJoin(m.Metadata.Namespace, name+".yaml")] > 0 {
+		if group := strings.Split(m.APIVersion, "/"); len(group) == 2 && used[dirJoin(dir, name+".yaml")] > 0 {
 			name += "." + fileSafe(group[0])
 		}
-		p := dirJoin(fileSafe(m.Metadata.Namespace), name+".yaml")
+		p := dirJoin(dir, name+".yaml")
 		if used[p] > 0 {
 			return nil, parentsteps.Permanent(fmt.Errorf("two rendered objects map to %s", p))
 		}

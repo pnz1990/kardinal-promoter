@@ -504,7 +504,7 @@ func TestMetric_OrgGateUsesOrgMetrics(t *testing.T) {
 // builtinSteps are the built-in promotion step names (pkg/steps/defaults.go).
 var builtinSteps = []string{
 	"argocd-set-image", "config-merge", "git-clone", "git-commit", "git-push", "health-check",
-	"helm-set-image", "kustomize-build", "kustomize-set-image", "open-pr", "wait-for-merge",
+	"helm-set-image", "kustomize-set-image", "open-pr", "render-manifests", "wait-for-merge",
 }
 
 // controllers are the controllers docs/guides/monitoring.md lists as

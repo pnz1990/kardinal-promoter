@@ -158,10 +158,6 @@ func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
 		// #1321: distributed mode was removed, so a shard is rejected.
 		{name: "shard", wantMsg: `environment "test": shard is not supported: distributed mode was removed`,
 			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Shard = "eu" }}, //nolint:staticcheck // SA1019: tests the rejection
-		{name: "pipeline layout branch", wantMsg: "spec.git.layout: branch is not implemented",
-			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Git.Layout = "branch" }},
-		{name: "environment layout branch", wantMsg: `environment "test": layout: branch is not implemented`,
-			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Layout = "branch" }},
 		{name: "autoRollback", wantMsg: "autoRollback is not implemented",
 			mutate: func(p *kardinalv1alpha1.Pipeline) {
 				p.Spec.Environments[0].AutoRollback = &kardinalv1alpha1.AutoRollbackSpec{}

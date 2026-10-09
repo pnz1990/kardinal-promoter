@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
@@ -40,18 +41,15 @@ func init() {
 // ConfigRef.CommitSHA into parentsteps.ConfigSourceDir(WorkDir) and sets
 // Outputs["configSourceDir"] for config-merge.
 //
-// layout: branch is rejected here, before anything is cloned (C05-steps-10).
+// With layout: branch it checks out two trees instead (cloneRendered): the
+// rendered branch (Git.Branch) into WorkDir, which is what git-commit
+// commits, and the DRY source into parentsteps.DrySourceDir(WorkDir).
 type gitCloneStep struct{}
-
-// layoutBranchNotImplemented is the failure message for layout: branch.
-const layoutBranchNotImplemented = "layout: branch is not implemented: kardinal does not write rendered " +
-	"manifests to an env/<name> branch yet, so this promotion would change nothing; " +
-	"use layout: directory (see docs/rendered-manifests.md)"
 
 // layoutBranch reports whether the Pipeline or the environment asks for
 // layout: branch.
 func layoutBranch(state *parentsteps.StepState) bool {
-	return state.Environment.Layout == "branch" || state.Pipeline.Git.Layout == "branch"
+	return v1alpha1.RendersToBranch(state.Pipeline, state.Environment)
 }
 
 func (s *gitCloneStep) Name() string { return "git-clone" }
@@ -64,8 +62,7 @@ func (s *gitCloneStep) Execute(ctx context.Context, state *parentsteps.StepState
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: "WorkDir not set"}, nil
 	}
 	if layoutBranch(state) {
-		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: layoutBranchNotImplemented},
-			parentsteps.Permanent(errors.New(layoutBranchNotImplemented))
+		return cloneRendered(ctx, state)
 	}
 
 	repoURL := scm.RedactURL(state.Git.URL)

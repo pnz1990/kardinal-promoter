@@ -196,6 +196,11 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 		errs = append(errs, err.Error())
 	}
 
+	renderedErr := graph.ValidateRenderedBranches(&pipeline)
+	if renderedErr != nil {
+		errs = append(errs, renderedErr.Error())
+	}
+
 	// Dependency: no circular deps (uses the graph builder's topoSort).
 	if len(pipeline.Spec.Environments) > 0 && !hasUnnamedEnv(pipeline) {
 		b := graph.NewBuilder()
@@ -209,6 +214,12 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 			buildable.Spec.Environments[i].Steps = nil             //nolint:staticcheck // SA1019: clear the deprecated field reported above
 			buildable.Spec.Environments[i].PromotionTemplate = nil //nolint:staticcheck // SA1019: clear the deprecated field reported above
 			buildable.Spec.Environments[i].Regions = nil           //nolint:staticcheck // SA1019: cleared because it is reported above
+			if renderedErr != nil {
+				buildable.Spec.Environments[i].Layout = "directory" // reported above
+			}
+		}
+		if renderedErr != nil {
+			buildable.Spec.Git.Layout = "directory"
 		}
 		if _, err := b.Build(graph.BuildInput{Pipeline: buildable, Bundle: buildableBundle(dummyBundle)}); err != nil {
 			errs = append(errs, err.Error())

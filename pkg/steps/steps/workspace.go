@@ -109,9 +109,33 @@ func openCheckout(state *parentsteps.StepState) (*os.Root, error) {
 	if state.WorkDir == "" {
 		return nil, fmt.Errorf("WorkDir not set")
 	}
-	root, err := os.OpenRoot(state.WorkDir)
+	dir := state.WorkDir
+	if layoutBranch(state) {
+		// The update steps edit the DRY source, which is rendered and never
+		// committed; WorkDir holds the rendered branch.
+		dir = parentsteps.DrySourceDir(state.WorkDir)
+	}
+	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return nil, fmt.Errorf("open work dir: %w", err)
 	}
 	return root, nil
+}
+
+// confinedRealPath resolves symlinks in root/rel and returns the real path,
+// failing when it is outside the real root.
+func confinedRealPath(root, rel string) (string, error) {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve work dir: %w", err)
+	}
+	real, err := filepath.EvalSymlinks(filepath.Join(realRoot, rel))
+	if err != nil {
+		return "", fmt.Errorf("resolve environment path %s: %w", filepath.ToSlash(rel), err)
+	}
+	r, err := filepath.Rel(realRoot, real)
+	if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+		return "", parentsteps.Permanent(fmt.Errorf("environment path %s resolves outside the repository", filepath.ToSlash(rel)))
+	}
+	return real, nil
 }

@@ -285,3 +285,15 @@ func ParseWebhookRequest(p SCMProvider, payload []byte, h http.Header) (WebhookE
 	}
 	return p.ParseWebhookEvent(payload, signature)
 }
+
+// SameRepo reports whether a and b name the same repository: the same
+// origin (SameOrigin) and the same owner/name path, ignoring a ".git"
+// suffix and letter case of the path.
+func SameRepo(a, b string) bool {
+	if !SameOrigin(a, b) {
+		return false
+	}
+	ra, errA := RepoFromURL(a)
+	rb, errB := RepoFromURL(b)
+	return errA == nil && errB == nil && strings.EqualFold(ra, rb)
+}

@@ -51,17 +51,15 @@ func (s *gitCommitStep) Execute(ctx context.Context, state *parentsteps.StepStat
 	message := fmt.Sprintf("[kardinal] Promote %s to %s\n\nBundle: %s\nPipeline: %s",
 		state.BundleName, state.Environment.Name,
 		state.BundleName, state.PipelineName)
-
-	authorName := state.Git.AuthorName
-	if authorName == "" {
-		authorName = "kardinal-promoter"
-	}
-	authorEmail := state.Git.AuthorEmail
-	if authorEmail == "" {
-		authorEmail = "kardinal@kardinal.io"
+	// A rendered commit records what it was rendered from, so the rendered
+	// branch's history says which DRY commit ran, and a rollback can render
+	// the same one again.
+	if dry := state.Outputs[outputDryCommit]; dry != "" && layoutBranch(state) {
+		message += fmt.Sprintf("\n\n%s: %s\n%s: %s\n%s: %s", trailerDryCommit, dry,
+			trailerDryPath, state.Environment.Path, trailerBundle, state.BundleName)
 	}
 
-	err := state.GitClient.CommitAll(ctx, state.WorkDir, message, authorName, authorEmail)
+	err := state.GitClient.CommitAll(ctx, state.WorkDir, message, authorName(state), authorEmail(state))
 	if errors.Is(err, scm.ErrNothingToCommit) {
 		return parentsteps.StepResult{
 			Status:  parentsteps.StepSuccess,
@@ -78,4 +76,20 @@ func (s *gitCommitStep) Execute(ctx context.Context, state *parentsteps.StepStat
 		Message: "committed changes",
 		Outputs: map[string]string{outputNoChanges: "false"},
 	}, nil
+}
+
+// authorName is the commit author name, kardinal-promoter by default.
+func authorName(state *parentsteps.StepState) string {
+	if state.Git.AuthorName != "" {
+		return state.Git.AuthorName
+	}
+	return "kardinal-promoter"
+}
+
+// authorEmail is the commit author email, kardinal@kardinal.io by default.
+func authorEmail(state *parentsteps.StepState) string {
+	if state.Git.AuthorEmail != "" {
+		return state.Git.AuthorEmail
+	}
+	return "kardinal@kardinal.io"
 }

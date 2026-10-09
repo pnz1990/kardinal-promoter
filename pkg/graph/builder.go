@@ -84,6 +84,9 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	if err := validateInput(input.Pipeline, input.Bundle); err != nil {
 		return nil, err
 	}
+	if err := ValidateRenderedBranches(input.Pipeline); err != nil {
+		return nil, fmt.Errorf("build: %w", err)
+	}
 
 	// Step 1: resolve environment ordering
 	orderedEnvs, deps, err := resolveOrdering(input.Pipeline)

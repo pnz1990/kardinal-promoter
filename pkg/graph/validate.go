@@ -295,6 +295,42 @@ func ValidateUpdateStrategy(p *kardinalv1alpha1.Pipeline) error {
 	return nil
 }
 
+// ValidateRenderedBranches checks the layout: branch environments: the
+// rendered branch must be a valid branch name, differ from spec.git.branch
+// (the render would overwrite the DRY source) and from every other
+// environment's rendered branch (two environments would overwrite each
+// other), and update.strategy argocd does not render. The Pipeline
+// reconciler sets Ready=False/ValidationFailed, "kardinal validate" reports
+// it, and Build fails the Bundle.
+func ValidateRenderedBranches(p *kardinalv1alpha1.Pipeline) error {
+	source := p.Spec.Git.Branch
+	if source == "" {
+		source = "main"
+	}
+	owner := map[string]string{}
+	for _, e := range p.Spec.Environments {
+		if !kardinalv1alpha1.RendersToBranch(p.Spec, e) {
+			continue
+		}
+		b := e.RenderedBranch()
+		switch {
+		case e.Update.Strategy == "argocd":
+			return fmt.Errorf("environment %q: layout: branch renders manifests into git, which update.strategy "+
+				"argocd does not use; use kustomize or helm", e.Name)
+		case b == source:
+			return fmt.Errorf("environment %q: the rendered branch %q is spec.git.branch, the DRY source; "+
+				"set render.branch to another branch", e.Name, b)
+		case strings.Contains(b, "..") || strings.HasSuffix(b, "/") || strings.HasSuffix(b, ".lock") ||
+			strings.Contains(b, "//") || strings.HasSuffix(b, "."):
+			return fmt.Errorf("environment %q: %q is not a valid branch name", e.Name, b)
+		case owner[b] != "":
+			return fmt.Errorf("environments %q and %q both render to branch %q; set render.branch", owner[b], e.Name, b)
+		}
+		owner[b] = e.Name
+	}
+	return nil
+}
+
 // validateBundleStrategy fails a config or mixed Bundle when an environment it
 // promotes uses update.strategy argocd (#1281). argocd only sets the image in
 // the Argo CD Application, so the Bundle's Git config change would be

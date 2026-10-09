@@ -592,7 +592,7 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 		return ctrl.Result{}, fmt.Errorf("load bundle: %w", err)
 	}
 
-	seq := stepSequence(env, bundle)
+	seq := stepSequence(pipeline, env, bundle)
 	log.Info().
 		Str("env", ps.Spec.Environment).
 		Str("approval", approvalMode).
@@ -658,7 +658,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		// by hand or it started before status.steps existed. Record the list
 		// and run it from the next reconcile: the finalizer sync at the end of
 		// this one then adds kardinal.io/close-pr before open-pr can run.
-		ps.Status.Steps = initStepStatuses(stepSequence(env, bundle))
+		ps.Status.Steps = initStepStatuses(stepSequence(pipeline, env, bundle))
 		if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 			if apierrors.IsNotFound(err) {
 				return ctrl.Result{}, nil
@@ -690,8 +690,9 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		Outputs:      cloneMap(ps.Status.Outputs),
 		Git: steps.GitConfig{
 			URL:         pipeline.Spec.Git.URL,
-			Branch:      baseBranch(pipeline),
-			Token:       cred.token,
+			Branch:       targetBranch(pipeline, env),
+			SourceBranch: sourceBranch(pipeline, env),
+			Token:        cred.token,
 			AuthorName:  "kardinal-promoter",
 			AuthorEmail: "kardinal@kardinal.io",
 		},
@@ -910,7 +911,8 @@ func (r *Reconciler) recordPushedCommit(ctx context.Context, log zerolog.Logger,
 	if opensPR(ps) {
 		return
 	}
-	if pushed := ps.Status.Outputs["branch"]; pushed == "" || pushed != baseBranch(pipeline) {
+	env := findEnv(pipeline, ps.Spec.Environment)
+	if pushed := ps.Status.Outputs["branch"]; pushed == "" || pushed != targetBranch(pipeline, env) {
 		return
 	}
 	hr, ok := r.GitClient.(scm.HeadCommitReader)
@@ -1830,7 +1832,7 @@ func (r *Reconciler) cleanWorkDir(log zerolog.Logger, ps *v1alpha1.PromotionStep
 		return
 	}
 	dir := r.workDir(ps)
-	for _, d := range []string{dir, steps.ConfigSourceDir(dir)} {
+	for _, d := range []string{dir, steps.ConfigSourceDir(dir), steps.DrySourceDir(dir)} {
 		if err := os.RemoveAll(d); err != nil {
 			log.Warn().Err(err).Str("workDir", d).Msg("cleanWorkDir: failed to remove working directory")
 		} else {
@@ -1922,8 +1924,8 @@ func initStepStatuses(seq []string) []v1alpha1.StepStatus {
 
 // stepSequence is the step list a step of env runs for bundle, recorded in
 // status.steps when the step starts.
-func stepSequence(env v1alpha1.EnvironmentSpec, bundle *v1alpha1.Bundle) []string {
-	return steps.DefaultSequenceForBundle(env.Approval, bundle.Spec.Type, env.Update.Strategy, env.Layout)
+func stepSequence(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, bundle *v1alpha1.Bundle) []string {
+	return steps.DefaultSequenceForBundle(env.Approval, bundle.Spec.Type, env.Update.Strategy, effectiveLayout(pipeline, env))
 }
 
 // recordedSequence returns the step names in status.steps: the sequence

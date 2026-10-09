@@ -19,3 +19,30 @@ func baseBranch(pipeline *v1alpha1.Pipeline) string {
 	}
 	return pipeline.Spec.Git.Branch
 }
+
+// targetBranch is the branch a promotion of env commits to, pushes to and
+// opens its PR against: the environment's rendered branch for layout:
+// branch, otherwise the base branch.
+func targetBranch(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec) string {
+	if v1alpha1.RendersToBranch(pipeline.Spec, env) {
+		return env.RenderedBranch()
+	}
+	return baseBranch(pipeline)
+}
+
+// sourceBranch is the DRY source branch of a layout: branch environment, or
+// "" for layout: directory.
+func sourceBranch(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec) string {
+	if v1alpha1.RendersToBranch(pipeline.Spec, env) {
+		return baseBranch(pipeline)
+	}
+	return ""
+}
+
+// effectiveLayout is "branch" when the environment or spec.git asks for it.
+func effectiveLayout(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec) string {
+	if v1alpha1.RendersToBranch(pipeline.Spec, env) {
+		return "branch"
+	}
+	return "directory"
+}
