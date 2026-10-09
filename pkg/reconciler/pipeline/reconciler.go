@@ -30,6 +30,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
@@ -213,6 +214,14 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.List(ctx, &bundleList, client.InNamespace(p.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list bundles of pipeline %s: %w", p.Name, err)
 	}
+	// Pipelines that share a repository and branch must write separate paths
+	// (PathConflict). Reads Pipelines, writes only this Pipeline's status.
+	var pipelines kardinalv1alpha1.PipelineList
+	if err := r.List(ctx, &pipelines); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list pipelines: %w", err)
+	}
+	desiredConflict := pathConflict(&p, pipelines.Items)
+
 	desiredPhase := DerivePhase(p.Name, bundleList.Items, stepList.Items)
 	desiredMetrics := ComputeDeploymentMetrics(&p, bundleList.Items, stepList.Items, time.Now().UTC())
 
@@ -224,11 +233,15 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if desiredPaused != nil {
 		pausedMatch = conditionMatches(p.Status.Conditions, *desiredPaused)
 	}
+	conflictMatch := meta.FindStatusCondition(p.Status.Conditions, conditionPathConflict) == nil
+	if desiredConflict != nil {
+		conflictMatch = conditionMatches(p.Status.Conditions, *desiredConflict)
+	}
 	secretMatch := meta.FindStatusCondition(p.Status.Conditions, conditionSecretReferenceable) == nil
 	if desiredSecret != nil {
 		secretMatch = conditionMatches(p.Status.Conditions, *desiredSecret)
 	}
-	if condMatch && phaseMatch && metricsMatch && pausedMatch && secretMatch {
+	if condMatch && phaseMatch && metricsMatch && pausedMatch && conflictMatch && secretMatch {
 		log.Debug().
 			Str("reason", desired.Reason).
 			Str("phase", desiredPhase).
@@ -244,6 +257,12 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		meta.SetStatusCondition(&p.Status.Conditions, *desiredPaused)
 	} else {
 		meta.RemoveStatusCondition(&p.Status.Conditions, conditionPaused)
+	}
+	if desiredConflict != nil {
+		meta.SetStatusCondition(&p.Status.Conditions, *desiredConflict)
+		log.Warn().Msg(desiredConflict.Message)
+	} else {
+		meta.RemoveStatusCondition(&p.Status.Conditions, conditionPathConflict)
 	}
 	if desiredSecret != nil {
 		if meta.FindStatusCondition(p.Status.Conditions, conditionSecretReferenceable) == nil {
@@ -553,8 +572,11 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("index PromotionStep by spec.pipelineName: %w", err)
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.Pipeline{}).
+		// A Pipeline on the same repository and branch changed: re-check
+		// PathConflict on the others.
+		Watches(&kardinalv1alpha1.Pipeline{}, r.pipelinePeers()).
 		// Deleting the freeze gate by hand while the pipeline is paused, or
 		// removing a user gate that has its name, re-enqueues the Pipeline.
 		Watches(&kardinalv1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(pipelineForFreezeGate)).
@@ -576,8 +598,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 					},
 				}}
 			}),
-		).
-		Complete(tracing.WrapReconciler("pipeline", r))
+		)
+	return shard.Active().Complete(b, tracing.WrapReconciler("pipeline", r), &kardinalv1alpha1.PipelineList{})
 }
 
 // deploymentMetricsEqual returns true when a and b represent the same metrics.

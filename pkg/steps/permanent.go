@@ -23,6 +23,13 @@ func Permanent(err error) error {
 	return &permanentError{err: err}
 }
 
+// ErrContended marks a step that lost a race for a shared resource too
+// often in one reconcile: the base branch kept moving while git-push
+// rebased and the sequence restarted. It is transient: the PromotionStep
+// reconciler requeues the step with backoff and jitter (RequeueAfter),
+// it does not wait inside the reconcile.
+var ErrContended = errors.New("contended")
+
 type permanentError struct{ err error }
 
 func (e *permanentError) Error() string { return e.err.Error() }

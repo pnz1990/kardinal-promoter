@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"slices"
 	"strconv"
@@ -54,6 +55,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 
 	// Import built-in steps to trigger init() registration.
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	_ "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
@@ -151,6 +153,9 @@ type Reconciler struct {
 
 	// GitClient is the Git operations client.
 	GitClient scm.GitClient
+
+	// remotes caches the remote reads of PR branch refreshes (remoteCache).
+	remotes remoteCache
 
 	// HealthDetector selects the health adapter for health checking.
 	// If nil, the health-check step stub (always-success) is used.
@@ -599,6 +604,16 @@ func retryDelay(n int) time.Duration {
 	return d
 }
 
+// contendedDelay jitters the backoff of a step that lost to other writers of
+// its branch, so writers that collided do not come back in lockstep: half the
+// delay plus up to the whole of it again, at most retryMaxDelay.
+func contendedDelay(d time.Duration) time.Duration {
+	if d <= 0 {
+		return d
+	}
+	return min(d/2+time.Duration(rand.Int64N(int64(d))), retryMaxDelay)
+}
+
 // handlePending initializes the step sequence and transitions to Promoting.
 // Before transitioning, it re-checks every PolicyGate in spec.requiredGates
 // (checkRequiredGates): each must exist, be ready, and have been evaluated at
@@ -771,32 +786,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	// The git token from Pipeline spec.git.secretRef. A git step that fails
 	// without one says why (B48).
 	cred := r.resolveGitCredential(ctx, log, pipeline)
-
-	state := &steps.StepState{
-		Pipeline:     pipeline.Spec,
-		PipelineName: ps.Spec.PipelineName,
-		Namespace:    ps.Namespace,
-		Environment:  env,
-		Bundle:       bundle.Spec,
-		BundleName:   ps.Spec.BundleName,
-		WorkDir:      workDir,
-		Outputs:      cloneMap(ps.Status.Outputs),
-		Git: steps.GitConfig{
-			URL:         pipeline.Spec.Git.URL,
-			Branch:      baseBranch(pipeline),
-			Token:       cred.token,
-			AuthorName:  "kardinal-promoter",
-			AuthorEmail: "kardinal@kardinal.io",
-		},
-		SCM:                  r.SCM,
-		GitClient:            r.GitClient,
-		K8sClient:            r.Client,
-		StepTimeoutSeconds:   env.StepTimeoutSeconds,
-		GateResults:          r.collectGateResults(ctx, log, ps),
-		UpstreamEnvironments: upstreamEnvironments(bundle, ps.Spec.Environment),
-		Sequence:             seq,
-	}
-	r.setRollbackState(ctx, log, state, bundle)
+	state := r.stepState(ctx, log, ps, pipeline, env, bundle, seq, workDir, cred)
 
 	prevIdx := ps.Status.CurrentStepIndex
 	nextIdx, result, execErr := eng.ExecuteFrom(ctx, state, prevIdx)
@@ -807,7 +797,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	ps.Status.CurrentStepIndex = nextIdx
 	if nextIdx > prevIdx {
 		// Progress resets the retry budget.
-		ps.Status.RetryCount, ps.Status.GitCredentialRetries = 0, 0
+		ps.Status.RetryCount, ps.Status.GitCredentialRetries, ps.Status.ContendedRetries = 0, 0, 0
 	}
 	if prURL := state.Outputs["prURL"]; prURL != "" {
 		ps.Status.PRURL = prURL
@@ -884,6 +874,38 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	}
 }
 
+// stepState is the state the step engine runs seq with for ps.
+func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
+	pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, bundle *v1alpha1.Bundle, seq []string,
+	workDir string, cred gitCredential) *steps.StepState {
+	state := &steps.StepState{
+		Pipeline:     pipeline.Spec,
+		PipelineName: ps.Spec.PipelineName,
+		Environment:  env,
+		Bundle:       bundle.Spec,
+		BundleName:   ps.Spec.BundleName,
+		Namespace:    ps.Namespace,
+		WorkDir:      workDir,
+		Outputs:      cloneMap(ps.Status.Outputs),
+		Git: steps.GitConfig{
+			URL:         pipeline.Spec.Git.URL,
+			Branch:      baseBranch(pipeline),
+			Token:       cred.token,
+			AuthorName:  "kardinal-promoter",
+			AuthorEmail: "kardinal@kardinal.io",
+		},
+		SCM:                  r.SCM,
+		GitClient:            r.GitClient,
+		K8sClient:            r.Client,
+		StepTimeoutSeconds:   env.StepTimeoutSeconds,
+		GateResults:          r.collectGateResults(ctx, log, ps),
+		UpstreamEnvironments: upstreamEnvironments(bundle, ps.Spec.Environment),
+		Sequence:             seq,
+	}
+	r.setRollbackState(ctx, log, state, bundle)
+	return state
+}
+
 // prOpenedAt is when the promotion PR was opened: when the open-pr step
 // completed, else when wait-for-merge started. ok is false when the step
 // statuses record neither.
@@ -943,17 +965,27 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		emitCredential = markGitCredentialMissing(ps, cred.reason, note)
 		waitForSecret = cred.waitsForSecret()
 	}
-	if retryable && (waitForSecret || ps.Status.RetryCount < maxStepRetries) {
+	contended := retryable && errors.Is(execErr, steps.ErrContended)
+	if retryable && (waitForSecret || contended || ps.Status.RetryCount < maxStepRetries) {
 		var count string
-		if waitForSecret {
+		switch {
+		case waitForSecret:
 			ps.Status.GitCredentialRetries++
 			count = fmt.Sprintf("%d, no limit while git has no credentials", ps.Status.GitCredentialRetries)
-		} else {
+		case contended:
+			// Losing to other writers is not the step's fault: it backs off
+			// with no limit and does not use up retryCount.
+			ps.Status.ContendedRetries++
+			count = fmt.Sprintf("%d, no limit while other writers keep moving the branch", ps.Status.ContendedRetries)
+		default:
 			ps.Status.RetryCount++
 			count = fmt.Sprintf("%d/%d", ps.Status.RetryCount, maxStepRetries)
 		}
-		// Both kinds of retry back off together.
-		delay := retryDelay(ps.Status.RetryCount + ps.Status.GitCredentialRetries)
+		// Every kind of retry backs off together.
+		delay := retryDelay(ps.Status.RetryCount + ps.Status.GitCredentialRetries + ps.Status.ContendedRetries)
+		if contended {
+			delay = contendedDelay(delay)
+		}
 		next := metav1.NewTime(r.now().Add(delay))
 		ps.Status.NextRetryAt = &next
 		ps.Status.Message = fmt.Sprintf("retrying in %s (%s) after error: %v", delay, count, execErr)
@@ -1184,6 +1216,19 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		ps.Status.WaitForMergeExpiry = nil
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed,
 			fmt.Sprintf("PR #%d cannot be polled: %s", prs.Spec.PRNumber, prs.Status.PollError))
+	}
+
+	// An open PR follows its base branch: when the base moved, the PR
+	// branch is rebuilt on the new head (refreshPRBranch). Not while the
+	// Pipeline is paused: that holds every git write.
+	if prs.Status.Open && !pipeline.Spec.Paused {
+		wrote, err := r.refreshPRBranch(ctx, log, base, ps, pipeline, env)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if wrote {
+			return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
+		}
 	}
 
 	// Closed but still in the grace window: the PRStatus reconciler keeps
@@ -1870,7 +1915,7 @@ func bakeDeadlineMessage(ps *v1alpha1.PromotionStep, env v1alpha1.EnvironmentSpe
 //     gate, so a Pending step starts as soon as its gates are re-evaluated
 //     (checkRequiredGates).
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PromotionStep{}, builderutil.WithPredicates(
 			predicate.Or(predicate.GenerationChangedPredicate{},
 				eventfilter.LabelChangedExceptKro, predicate.AnnotationChangedPredicate{}),
@@ -1882,8 +1927,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// A hold added or released (spec.holds) takes effect on the held
 		// environment's steps at once (holdIfEnvironmentHeld).
 		Watches(&v1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.pipelineHoldMapper),
-			builderutil.WithPredicates(holdsChanged)).
-		Complete(tracing.WrapReconciler("promotionstep", r))
+			builderutil.WithPredicates(holdsChanged))
+	return shard.Active().Complete(b, tracing.WrapReconciler("promotionstep", r), &v1alpha1.PromotionStepList{})
 }
 
 // holdsChanged passes Pipeline updates that change spec.holds.

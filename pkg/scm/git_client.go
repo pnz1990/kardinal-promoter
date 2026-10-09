@@ -194,7 +194,7 @@ func (c *GoGitClient) CommitAll(ctx context.Context, dir, message, authorName, a
 // Push pushes HEAD to the remote branch using token-based HTTPS authentication.
 // With force=false it returns ErrNonFastForward when the remote branch has
 // commits that HEAD does not contain. force=true overwrites the remote branch;
-// callers use it only for branches kardinal owns (kardinal/<bundle>/<env>).
+// callers use it only for branches kardinal owns (kardinal/...).
 func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch, token string, force bool) (err error) {
 	ctx, span := tracing.Start(ctx, "git push", attribute.String("server.address", tracing.HostOf(remote)),
 		attribute.String("kardinal.git.branch", branch), attribute.Bool("kardinal.git.force", force))
@@ -223,13 +223,15 @@ func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch, token strin
 	auth := httpAuth(remoteURL, token)
 	target := plumbing.NewBranchReferenceName(branch)
 
+	var checked plumbing.Hash
 	if !force {
 		// go-git's own fast-forward check walks history and fails with
 		// "object not found" in a shallow clone, so check the remote tip here.
-		if remoteHash, found, lerr := remoteBranchHash(ctx, rem, auth, target); lerr == nil && found &&
-			remoteHash != head.Hash() && !isAncestor(repo, remoteHash, head.Hash()) {
+		remoteHash, found, lerr := remoteBranchHash(ctx, rem, auth, target)
+		if lerr == nil && found && remoteHash != head.Hash() && !isAncestor(repo, remoteHash, head.Hash()) {
 			return fmt.Errorf("git push %s %s: %w", remote, branch, ErrNonFastForward)
 		}
+		checked = remoteHash
 	}
 
 	refSpec := head.Hash().String() + ":" + target.String()
@@ -247,12 +249,38 @@ func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch, token strin
 		if errors.Is(err, gogit.NoErrAlreadyUpToDate) {
 			return nil
 		}
-		if errors.Is(err, gogit.ErrNonFastForwardUpdate) || strings.Contains(err.Error(), "non-fast-forward") {
+		if errors.Is(err, gogit.ErrNonFastForwardUpdate) || isConcurrentUpdate(err.Error()) {
 			return fmt.Errorf("git push %s %s: %w", remote, branch, ErrNonFastForward)
+		}
+		// Another writer moved the branch between the check above and the
+		// push: go-git then walks from a remote head it does not have.
+		if !force && errors.Is(err, plumbing.ErrObjectNotFound) {
+			if now, found, lerr := remoteBranchHash(ctx, rem, auth, target); lerr == nil && found && now != checked {
+				return fmt.Errorf("git push %s %s: %w", remote, branch, ErrNonFastForward)
+			}
 		}
 		return fmt.Errorf("git push %s %s: %s", remote, branch, gitErrorText(err))
 	}
 	return nil
+}
+
+// concurrentUpdateReasons are the ref update failures a server reports when
+// another writer moved the branch while this push was in flight: the push
+// lost a race and can be retried on the new head, like a non-fast-forward.
+var concurrentUpdateReasons = []string{
+	"non-fast-forward", "fetch first", "failed to update ref", "failed to lock",
+	"cannot lock ref", "stale info", "reference already exists", "incorrect old value",
+}
+
+// isConcurrentUpdate reports whether a push error is a lost race on the ref.
+func isConcurrentUpdate(msg string) bool {
+	msg = strings.ToLower(msg)
+	for _, r := range concurrentUpdateReasons {
+		if strings.Contains(msg, r) {
+			return true
+		}
+	}
+	return false
 }
 
 // repoName names the repository repo, opened at dir, in an error: its origin
