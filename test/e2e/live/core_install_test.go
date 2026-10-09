@@ -43,7 +43,7 @@ var crdGVR = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version:
 var (
 	primaryKinds   = []string{"Pipeline", "Bundle", "PolicyGate", "PromotionStep"}
 	secondaryKinds = []string{"Subscription", "NotificationHook", "MetricCheck", "ChangeWindow",
-		"ScheduleClock", "RollbackPolicy", "AuditEvent", "PRStatus"}
+		"ScheduleClock", "RollbackPolicy", "AuditEvent", "PRStatus", "HookRun"}
 )
 
 // TestCore_KroInstalled checks the kro hack/install-kro.sh installs
@@ -324,9 +324,9 @@ func TestCore_CRDsInstalled(t *testing.T) {
 	checkCRDs(t, e, files, primaryKinds)
 }
 
-// TestCore_SecondaryCRDsServed checks the eight secondary kardinal CRDs
+// TestCore_SecondaryCRDsServed checks the nine secondary kardinal CRDs
 // (Subscription, NotificationHook, MetricCheck, ChangeWindow, ScheduleClock,
-// RollbackPolicy, AuditEvent, PRStatus) the same way: config/crd/bases has
+// RollbackPolicy, AuditEvent, PRStatus, HookRun) the same way: config/crd/bases has
 // each, a server-side apply accepts it, the installed CRD is the file, and the
 // API serves the resource (discovery, kubectl get with the printer columns, a
 // list).
