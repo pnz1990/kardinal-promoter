@@ -342,13 +342,14 @@ func TestNotify_Authorization(t *testing.T) {
 	e := framework.New(t)
 	rcv := framework.NewReceiver(t)
 	a := holdApp(t, e, e.Namespace(t), pipelineName)
-	holdBundle(t, a, pipelineName)
 	token := "T0E2E/B0E2E/" + a.ns
 	ev := v1alpha1.NotificationEventPolicyGateBlocked
 
+	// The hooks exist before the event: a new hook sends nothing older.
 	newHook(t, e, a.ns, "bearer", rcv.URL(a.ns+"-bearer", "kardinal-events"), "Bearer ${ALERT_TOKEN}", "", ev)
 	newHook(t, e, a.ns, "slack", rcv.URL(a.ns+"-slack", "services/"+token), "", "", ev)
 	newHook(t, e, a.ns, "refused", "http://127.0.0.1:8082/services/"+token, "", "", ev)
+	holdBundle(t, a, pipelineName)
 
 	bearer := waitRecords(t, rcv, a.ns+"-bearer", 1, time.Minute)[0]
 	assert.Equal(t, "Bearer ${ALERT_TOKEN}", bearer.Header("Authorization"), "sent verbatim")
@@ -417,10 +418,9 @@ func TestNotify_Egress(t *testing.T) {
 	e := framework.New(t)
 	rcv := framework.NewReceiver(t)
 	a := holdApp(t, e, e.Namespace(t), pipelineName)
-	_, gate := holdBundle(t, a, pipelineName)
-	key := gateKey(gate)
 	ev := v1alpha1.NotificationEventPolicyGateBlocked
 
+	// The hooks exist before the event: a new hook sends nothing older.
 	// 169.254.1.1 is link-local but not a metadata endpoint: the test must not
 	// reach a real one if the guard were missing.
 	refused := map[string][2]string{
@@ -435,6 +435,8 @@ func TestNotify_Egress(t *testing.T) {
 	rcv.Fail(t, a.ns+"-redirect", http.StatusFound, 0, rcv.URL(a.ns+"-target", "hook"))
 	newHook(t, e, a.ns, "redirect", rcv.URL(a.ns+"-redirect", "hook"), "", "", ev)
 	newHook(t, e, a.ns, "allowed", rcv.URL(a.ns, "hook"), "", "", ev)
+	_, gate := holdBundle(t, a, pipelineName)
+	key := gateKey(gate)
 
 	attempt1 := fmt.Sprintf("delivery of %s failed (attempt 1 of 10): ", key)
 	for name, c := range refused {
@@ -470,10 +472,11 @@ func TestNotify_RetryBackoff(t *testing.T) {
 	e := framework.New(t)
 	rcv := framework.NewReceiver(t)
 	a := holdApp(t, e, e.Namespace(t), pipelineName)
+	rcv.Fail(t, a.ns, http.StatusServiceUnavailable, 0, "")
+	// The hook exists before the event: a new hook sends nothing older.
+	newHook(t, e, a.ns, "retry", rcv.URL(a.ns, "hook"), "", "", v1alpha1.NotificationEventPolicyGateBlocked)
 	bundle, gate := holdBundle(t, a, pipelineName)
 	key := gateKey(gate)
-	rcv.Fail(t, a.ns, http.StatusServiceUnavailable, 0, "")
-	newHook(t, e, a.ns, "retry", rcv.URL(a.ns, "hook"), "", "", v1alpha1.NotificationEventPolicyGateBlocked)
 
 	// attempt waits for delivery n, changing the Bundle on every poll: each
 	// change reconciles the hook, and none may POST before nextRetryAt.
@@ -551,10 +554,11 @@ func TestNotify_GiveUp(t *testing.T) {
 	e := framework.New(t)
 	rcv := framework.NewReceiver(t)
 	a := holdApp(t, e, e.Namespace(t), pipelineName, "other")
+	rcv.Fail(t, a.ns, http.StatusServiceUnavailable, 0, "")
+	// The hook exists before the event: a new hook sends nothing older.
+	newHook(t, e, a.ns, "giveup", rcv.URL(a.ns, "hook"), "", "", v1alpha1.NotificationEventPolicyGateBlocked)
 	_, gate := holdBundle(t, a, pipelineName)
 	key := gateKey(gate)
-	rcv.Fail(t, a.ns, http.StatusServiceUnavailable, 0, "")
-	newHook(t, e, a.ns, "giveup", rcv.URL(a.ns, "hook"), "", "", v1alpha1.NotificationEventPolicyGateBlocked)
 	waitRecords(t, rcv, a.ns, 1, time.Minute)
 	h := waitHook(t, e, a.ns, "giveup", "the first failure recorded", func(s v1alpha1.NotificationHookStatus) bool { return s.FailedAttempts == 1 })
 
@@ -598,8 +602,8 @@ func TestNotify_GiveUp(t *testing.T) {
 }
 
 // TestNotify_NewHookNoBackfill checks a hook created after events exist: it
-// delivers only the newest one and records the older one as processed, then
-// delivers the events that come later.
+// delivers none of them and records both as processed (#1581), then delivers
+// the events that come later.
 //
 // Covers NOTIF-NEW-01.
 func TestNotify_NewHookNoBackfill(t *testing.T) {
@@ -615,22 +619,24 @@ func TestNotify_NewHookNoBackfill(t *testing.T) {
 	newest, g2 := holdBundle(t, a, "other")
 	require.True(t, blockedAt(g2).After(blockedAt(g1)), "the second gate blocked later")
 
+	// Both blocks are at least a second older than the hook.
+	framework.Eventually(t, 10*time.Second, "a later second than the second block", func(context.Context) (bool, string) {
+		return time.Now().After(blockedAt(g2).Add(time.Second)), blockedAt(g2).String()
+	})
 	newHook(t, e, a.ns, "new", rcv.URL(a.ns, "hook"), "", "", v1alpha1.NotificationEventPolicyGateBlocked)
-	recs := waitRecords(t, rcv, a.ns, 1, time.Minute)
-	keepRecords(t, rcv, a.ns, 1, 15*time.Second)
-	p, _ := decode(t, recs[0])
-	assert.Equal(t, newest, p.Bundle, "only the newest existing event")
+	waitHook(t, e, a.ns, "new", "the existing events recorded", func(s v1alpha1.NotificationHookStatus) bool {
+		return len(s.ProcessedEventKeys) == 2
+	})
+	keepRecords(t, rcv, a.ns, 0, 15*time.Second)
 	h := getHook(t, e, a.ns, "new")
 	assert.ElementsMatch(t, []string{gateKey(g1), gateKey(g2)}, h.Status.ProcessedEventKeys)
-	assert.Equal(t, gateKey(g2), h.Status.LastEventKey)
 
 	later, _ := holdBundle(t, a, pipelineName)
-	recs = waitRecords(t, rcv, a.ns, 2, time.Minute)
-	keepRecords(t, rcv, a.ns, 2, 10*time.Second)
-	p, _ = decode(t, recs[1])
+	recs := waitRecords(t, rcv, a.ns, 1, time.Minute)
+	keepRecords(t, rcv, a.ns, 1, 10*time.Second)
+	p, _ := decode(t, recs[0])
 	assert.Equal(t, later, p.Bundle, "a later event is delivered")
-	for _, r := range recs {
-		p, _ := decode(t, r)
-		assert.NotEqual(t, oldest, p.Bundle, "the older event is never sent")
+	for _, b := range []string{oldest, newest} {
+		assert.NotEqual(t, b, p.Bundle, "an event from before the hook is never sent")
 	}
 }

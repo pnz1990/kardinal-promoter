@@ -1156,6 +1156,30 @@ spec:
                     - github
                     - gitlab
                     type: string
+                  providerRef:
+                    description: |-
+                      ProviderRef names the ScmProvider (in the Pipeline's namespace) or the
+                      ClusterScmProvider the Pipeline opens its PRs on and reads their state
+                      from. Unset uses the controller's --scm-provider. Git clone and push
+                      still use secretRef.
+                    properties:
+                      kind:
+                        default: ScmProvider
+                        description: |-
+                          Kind is ScmProvider (in the Pipeline's namespace, the default) or
+                          ClusterScmProvider.
+                        enum:
+                        - ScmProvider
+                        - ClusterScmProvider
+                        type: string
+                      name:
+                        description: Name is the provider's name.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
                   secretRef:
                     description: SecretRef references a Kubernetes Secret containing
                       the SCM token.

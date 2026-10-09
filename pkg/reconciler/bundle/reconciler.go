@@ -59,6 +59,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
@@ -125,6 +126,10 @@ const indexPipeline = "spec.pipeline"
 // elsewhere (a missing Pipeline, a full maxConcurrentPromotions slot, a failing
 // Graph sync). The watches in SetupWithManager usually act sooner.
 const requeueSlow = 30 * time.Second
+
+// providerRefRetry is how soon a Bundle whose Pipeline's providerRef cannot be
+// used yet is translated again.
+const providerRefRetry = 15 * time.Second
 
 // BundleTranslator is the interface the BundleReconciler uses to translate a
 // Bundle+Pipeline into a kro Graph. Abstracted as an interface for testability.
@@ -1133,9 +1138,10 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		return r.markInvalid(ctx, log, b, &pipeline, err)
 	}
 	if err != nil {
-		// An API or RBAC error (timeout, conflict, missing permission). Stay
-		// Available and retry with backoff; the condition shows the error. A
-		// Bundle deleted meanwhile needs no retry.
+		// An API or RBAC error (timeout, conflict, missing permission), or a
+		// spec.git.providerRef that cannot be used yet. Stay Available and
+		// retry; the condition shows the error. A Bundle deleted meanwhile
+		// needs no retry.
 		patch := statusPatch(b.DeepCopy())
 		if setBundleCondition(b, condReady, metav1.ConditionFalse, "TranslationError",
 			fmt.Sprintf("graph creation failed, retrying: %v", err)) {
@@ -1149,6 +1155,13 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 			}
 			r.event(b, corev1.EventTypeWarning, "TranslationError",
 				fmt.Sprintf("graph creation failed for pipeline %s, retrying: %v", b.Spec.Pipeline, err))
+		}
+		if scm.IsProviderRefError(err) {
+			// ScmProviders are not watched from here: look again at a fixed
+			// interval instead of the error backoff, which grows to minutes,
+			// so a provider created later is picked up soon.
+			log.Warn().Err(err).Msg("the Pipeline's SCM provider cannot be used yet; retrying")
+			return ctrl.Result{RequeueAfter: providerRefRetry}, nil
 		}
 		log.Error().Err(err).Msg("failed to translate bundle to graph")
 		return ctrl.Result{}, fmt.Errorf("translate bundle %s: %w", b.Name, err)

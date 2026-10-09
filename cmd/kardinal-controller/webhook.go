@@ -23,12 +23,15 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
+	"golang.org/x/time/rate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/lru"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -61,6 +64,12 @@ type webhookServer struct {
 	// request (merge request) events, the only ones the handler acts on.
 	eventsTotal         atomic.Int64
 	mergedPREventsTotal atomic.Int64
+
+	// limiters are the per-endpoint token buckets of ProviderHandler, for
+	// providers that exist, least recently used out past
+	// maxWebhookLimiters.
+	limitersMu sync.Mutex
+	limiters   *lru.Cache
 }
 
 // newWebhookServerWithConfig constructs a webhookServer and records whether a webhook
@@ -76,84 +85,203 @@ func newWebhookServerWithConfig(scmProvider scm.SCMProvider, k8s client.Client, 
 	}
 }
 
-// Handler returns an http.HandlerFunc that handles SCM webhook events.
-// Mount at POST /webhook/scm.
+// webhookScope says which PRStatuses a webhook endpoint may mark: the
+// controller's endpoint those without spec.scmProvider, a provider's
+// endpoint those of that provider (and, for a ScmProvider, in its
+// namespace).
+type webhookScope struct {
+	provider  *v1alpha1.ScmProviderIdentity
+	namespace string
+}
+
+// matches reports whether prs belongs to the scope.
+func (sc webhookScope) matches(prs *v1alpha1.PRStatus) bool {
+	got := prs.Spec.ScmProvider
+	if sc.provider == nil {
+		return got == nil
+	}
+	if got == nil || got.Kind != sc.provider.Kind || got.Name != sc.provider.Name || got.UID != sc.provider.UID {
+		return false
+	}
+	return sc.namespace == "" || prs.Namespace == sc.namespace
+}
+
+// Handler returns an http.HandlerFunc that handles SCM webhook events of the
+// controller's --scm-provider. Mount at POST /webhook/scm.
 func (s *webhookServer) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Fail closed: without a shared secret no request can be authenticated,
-		// so every event is rejected. main.go logs once at startup that SCM
-		// webhooks are disabled.
-		if !s.webhookConfigured {
-			http.Error(w, "webhook secret not configured", http.StatusUnauthorized)
-			return
-		}
-
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
-		if err != nil {
-			var tooLarge *http.MaxBytesError
-			if errors.As(err, &tooLarge) {
-				// Reject instead of truncating: a truncated body fails the HMAC
-				// check and would be misreported as a bad signature.
-				http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
-				return
-			}
-			s.log.Error().Err(err).Msg("failed to read webhook body")
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-
-		// Each provider signs with its own header and names the event in its
-		// own header (or the payload); the provider validates and reads them.
-		event, err := scm.ParseWebhookRequest(s.scm, body, r.Header)
-		if err != nil {
-			// The header's name, never its value: GitLab and Azure DevOps send
-			// the secret itself.
-			header := scm.WebhookSignatureHeader(r.Header)
-			if header == "" {
-				header = "none"
-			}
-			s.log.Warn().Err(err).Str("signatureHeader", header).Str("remoteAddr", r.RemoteAddr).
-				Msg("webhook signature invalid or parse error")
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		s.eventsTotal.Add(1)
-
-		s.log.Info().
-			Str("event_type", event.EventType).
-			Str("action", event.Action).
-			Bool("merged", event.Merged).
-			Int("pr", event.PRNumber).
-			Str("repo", event.RepoFullName).
-			Msg("webhook received")
-
-		// Only act on merged pull_request events.
-		if event.EventType != "pull_request" || event.Action != "closed" || !event.Merged {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-		defer cancel()
-
-		// Graph-purity: the webhook only writes PRStatus CRD status.
-		// Business logic (advancing PromotionStep to HealthChecking) lives in the
-		// PromotionStep reconciler, which watches PRStatus. This eliminates WH-1.
-		if err := s.markPRStatusMerged(ctx, event); err != nil {
-			s.log.Error().Err(err).Msg("failed to mark PRStatus as merged")
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		s.mergedPREventsTotal.Add(1)
-
-		w.WriteHeader(http.StatusNoContent)
+		client := func(context.Context) (scm.SCMProvider, error) { return s.scm, nil }
+		s.handle(w, r, s.scm, client, s.webhookConfigured, webhookScope{})
 	}
+}
+
+// Provider webhook endpoint limits: each endpoint of an existing provider
+// takes providerWebhookRate deliveries a second, bursts of
+// providerWebhookBurst, before it answers 429, so a flood at one endpoint
+// costs neither Secret reads nor SCM calls. A delivery for a provider that
+// does not exist costs one read of the manager's cache and gets no bucket,
+// so made-up names cannot push out the buckets of real endpoints.
+const (
+	providerWebhookRate  = 10
+	providerWebhookBurst = 20
+)
+
+// maxWebhookLimiters bounds the buckets (least recently used out); a
+// variable so a test can lower it.
+var maxWebhookLimiters = 4096
+
+// ProviderHandler returns the webhook endpoint of each ScmProvider
+// (POST /webhook/scm/namespaces/{namespace}/{name}) and ClusterScmProvider
+// (POST /webhook/scm/cluster/{name}): a delivery is checked with that
+// provider's webhook secret and marks only the PRStatuses of PRs opened on
+// it. Before the signature is checked it reads only the provider (cached)
+// and its webhook Secret (Registry.WebhookSecret, cached found or not); the
+// token and the SCM are used only for a signed merge event.
+func (s *webhookServer) ProviderHandler(registry *scm.Registry) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ns, name := r.PathValue("namespace"), r.PathValue("name")
+		kind := v1alpha1.KindScmProvider
+		if ns == "" {
+			kind = v1alpha1.KindClusterScmProvider
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		// The same answer for a provider that does not exist, one without a
+		// webhook secret and one whose Secret cannot be used, so the
+		// endpoint does not tell which providers exist.
+		refuse := func(err error) {
+			s.log.Warn().Err(err).Str("kind", kind).Str("namespace", ns).Str("name", name).Msg("webhook for an SCM provider that cannot be used")
+			http.Error(w, "webhook secret not configured", http.StatusUnauthorized)
+		}
+		spec, err := scm.GetProvider(ctx, s.client, ns, kind, name)
+		if err != nil {
+			refuse(err)
+			return
+		}
+		if !s.allowDelivery(spec.Identity.UID) {
+			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			return
+		}
+		secret, err := registry.WebhookSecret(ctx, spec)
+		if err != nil {
+			refuse(err)
+			return
+		}
+		parser, err := scm.NewProvider(spec.Spec.Type, "", spec.Spec.APIURL, secret)
+		if err != nil {
+			refuse(err)
+			return
+		}
+		client := func(ctx context.Context) (scm.SCMProvider, error) {
+			res, err := registry.ForSpec(ctx, spec)
+			return res.Provider, err
+		}
+		id := spec.Identity
+		s.handle(w, r, parser, client, true, webhookScope{provider: &id, namespace: ns})
+	}
+}
+
+// allowDelivery takes a token from the bucket of the provider uid.
+func (s *webhookServer) allowDelivery(uid string) bool {
+	s.limitersMu.Lock()
+	defer s.limitersMu.Unlock()
+	if s.limiters == nil {
+		s.limiters = lru.New(maxWebhookLimiters)
+	}
+	var l *rate.Limiter
+	if v, ok := s.limiters.Get(uid); ok {
+		l = v.(*rate.Limiter)
+	} else {
+		l = rate.NewLimiter(providerWebhookRate, providerWebhookBurst)
+		s.limiters.Add(uid, l)
+	}
+	return l.Allow()
+}
+
+// handle validates and acts on one webhook delivery: parser checks the
+// signature and reads the event; client returns the provider (with its
+// token) that confirms a merge with the SCM.
+func (s *webhookServer) handle(w http.ResponseWriter, r *http.Request, parser scm.SCMProvider,
+	client func(context.Context) (scm.SCMProvider, error), configured bool, scope webhookScope) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Fail closed: without a shared secret no request can be authenticated,
+	// so every event is rejected. main.go logs once at startup that SCM
+	// webhooks are disabled.
+	if !configured {
+		http.Error(w, "webhook secret not configured", http.StatusUnauthorized)
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			// Reject instead of truncating: a truncated body fails the HMAC
+			// check and would be misreported as a bad signature.
+			http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		s.log.Error().Err(err).Msg("failed to read webhook body")
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	// Each provider signs with its own header and names the event in its
+	// own header (or the payload); the provider validates and reads them.
+	event, err := scm.ParseWebhookRequest(parser, body, r.Header)
+	if err != nil {
+		// The header's name, never its value: GitLab and Azure DevOps send
+		// the secret itself.
+		header := scm.WebhookSignatureHeader(r.Header)
+		if header == "" {
+			header = "none"
+		}
+		s.log.Warn().Err(err).Str("signatureHeader", header).Str("remoteAddr", r.RemoteAddr).
+			Msg("webhook signature invalid or parse error")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	s.eventsTotal.Add(1)
+
+	s.log.Info().
+		Str("event_type", event.EventType).
+		Str("action", event.Action).
+		Bool("merged", event.Merged).
+		Int("pr", event.PRNumber).
+		Str("repo", event.RepoFullName).
+		Msg("webhook received")
+
+	// Only act on merged pull_request events.
+	if event.EventType != "pull_request" || event.Action != "closed" || !event.Merged {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	// Graph-purity: the webhook only writes PRStatus CRD status.
+	// Business logic (advancing PromotionStep to HealthChecking) lives in the
+	// PromotionStep reconciler, which watches PRStatus. This eliminates WH-1.
+	p, err := client(ctx)
+	if err != nil {
+		s.log.Error().Err(err).Msg("SCM provider of the webhook endpoint cannot be used")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if err := s.markPRStatusMerged(ctx, p, scope, event); err != nil {
+		s.log.Error().Err(err).Msg("failed to mark PRStatus as merged")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	s.mergedPREventsTotal.Add(1)
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // webhookHealthResponse is the body of GET /webhook/scm/health.
@@ -201,7 +329,7 @@ func (s *webhookServer) HealthHandler() http.HandlerFunc {
 //
 // This is the pure version of the old reconcileMergedPR — the webhook now only
 // writes to its own CRD (PRStatus) and does not touch PromotionStep status.
-func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.WebhookEvent) error {
+func (s *webhookServer) markPRStatusMerged(ctx context.Context, p scm.SCMProvider, scope webhookScope, event scm.WebhookEvent) error {
 	if event.PRNumber <= 0 || event.RepoFullName == "" {
 		s.log.Warn().Int("pr", event.PRNumber).Str("repo", event.RepoFullName).
 			Msg("merged webhook event has no PR number or repo; ignoring")
@@ -209,7 +337,11 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.Webhoo
 	}
 
 	var prsList v1alpha1.PRStatusList
-	if err := s.client.List(ctx, &prsList); err != nil {
+	var opts []client.ListOption
+	if scope.namespace != "" {
+		opts = append(opts, client.InNamespace(scope.namespace))
+	}
+	if err := s.client.List(ctx, &prsList, opts...); err != nil {
 		return fmt.Errorf("list prstatuses: %w", err)
 	}
 
@@ -220,7 +352,7 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.Webhoo
 		// Match by PR number and repo. Both are required: a PRStatus without a PR
 		// number or repo is a placeholder whose PR is not open yet, and an event
 		// without them cannot be scoped to one PR.
-		if prs.Spec.PRNumber != event.PRNumber {
+		if prs.Spec.PRNumber != event.PRNumber || !scope.matches(prs) {
 			continue
 		}
 		if prs.Spec.Repo == "" || !strings.EqualFold(prs.Spec.Repo, event.RepoFullName) {
@@ -235,7 +367,7 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.Webhoo
 	}
 	// An event that names no tracked PR, or only PRs already marked, costs no
 	// SCM API call.
-	if len(toMark) == 0 || !s.mergeConfirmed(ctx, toMark[0]) {
+	if len(toMark) == 0 || !s.mergeConfirmed(ctx, p, toMark[0]) {
 		return nil
 	}
 
@@ -293,10 +425,10 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.Webhoo
 // SCM retry the delivery or disable the webhook. The call gets
 // mergeConfirmTimeout, under GitHub's delivery timeout, so a slow SCM API
 // does not make the delivery fail.
-func (s *webhookServer) mergeConfirmed(ctx context.Context, prs *v1alpha1.PRStatus) bool {
+func (s *webhookServer) mergeConfirmed(ctx context.Context, p scm.SCMProvider, prs *v1alpha1.PRStatus) bool {
 	ctx, cancel := context.WithTimeout(ctx, mergeConfirmTimeout)
 	defer cancel()
-	merged, open, err := s.scm.GetPRStatus(ctx, prs.Spec.Repo, prs.Spec.PRNumber)
+	merged, open, err := p.GetPRStatus(ctx, prs.Spec.Repo, prs.Spec.PRNumber)
 	if err == nil && merged {
 		return true
 	}

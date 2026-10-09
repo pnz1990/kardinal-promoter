@@ -32,7 +32,7 @@ All state lives in Kubernetes CRDs. There is no external database.
 
 - **Graph-native pipelines.** Even linear pipelines run as kro Graphs. Fan-out and fan-in (`dependsOn`, `wave`) are native, and a Bundle can skip environments (`intent.skipEnvironments`).
 - **Policy gates as DAG nodes.** CEL-powered gates are visible in the UI and debuggable via `kardinal explain`. A team Pipeline cannot remove or weaken org-level gates; `kardinal override` force-passes one for a limited time and records the reason.
-- **Pluggable integrations.** SCM providers (GitHub, GitLab, Forgejo, Gitea, Bitbucket Cloud, Azure DevOps; one per controller, chosen with `--scm-provider`), manifest update strategies (Kustomize, Helm, Argo CD), health adapters (Argo CD, Flux, Deployment), and delivery delegation (Argo Rollouts, Flagger) are Go interfaces. Adding a provider is one interface implementation.
+- **Pluggable integrations.** SCM providers (GitHub, GitLab, Forgejo, Gitea, Bitbucket Cloud, Azure DevOps; the controller's `--scm-provider` plus any number of ScmProviders and ClusterScmProviders), manifest update strategies (Kustomize, Helm, Argo CD), health adapters (Argo CD, Flux, Deployment), and delivery delegation (Argo Rollouts, Flagger) are Go interfaces. Adding a provider is one interface implementation.
 - **PR-native approval.** Promotion PRs contain artifact provenance, upstream verification, and policy gate compliance. Human approval for production is merging the PR.
 - **Multi-cluster.** Run kardinal in the Argo CD or Flux hub; health checks read the Application or Kustomization in the hub. `health.cluster` kubeconfig Secrets are not supported.
 
