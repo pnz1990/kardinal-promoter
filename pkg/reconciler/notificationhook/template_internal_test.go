@@ -4,6 +4,7 @@
 package notificationhook
 
 import (
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -140,10 +141,8 @@ func TestRenderTemplate_TruncatesData(t *testing.T) {
 // TestRenderTemplate_CountedBuiltins: the comparison, logic and indexing
 // builtins still work, and every call counts against maxFuncCalls.
 func TestRenderTemplate_CountedBuiltins(t *testing.T) {
-	// The count, not the 20 ms deadline, must stop the long bodies, also
-	// under -race; not parallel, so nothing else sees the raised deadline.
-	renderDeadline = 10 * time.Second
-	t.Cleanup(func() { renderDeadline = maxRenderTime })
+	// The count, not the deadline, must stop the long bodies (TestMain
+	// raises the deadline for every test but the ones about it).
 	data := &TemplateData{Event: "Bundle.Failed", Environment: "prod", Message: "abc"}
 	tests := []struct{ body, want, err string }{
 		{body: `{{if eq .Environment "prod"}}P{{end}}`, want: "P"},
@@ -209,6 +208,7 @@ func TestFuncBudget_Stopped(t *testing.T) {
 // 50 ms and leaves no goroutine behind: Execute runs on the caller's
 // goroutine and the timer is stopped.
 func TestRenderTemplate_WorstCaseTime(t *testing.T) {
+	useProductionDeadline(t)
 	data := &TemplateData{Message: strings.Repeat("<m>", 60<<10)}
 	big := "(print" + strings.Repeat(" .Message", 15) + ")"
 	bodies := map[string]string{
@@ -269,6 +269,7 @@ func TestRenderTemplate_RefusesNonScalarArguments(t *testing.T) {
 // real timer sets the stopped flag, so the next call or write ends the
 // render with errRenderTime. That error is retryable: not errTemplate.
 func TestRenderTemplate_DeadlineStopsARender(t *testing.T) {
+	useProductionDeadline(t)
 	for name, body := range map[string]string{
 		"next call":  `{{slow}}{{print "x"}}`,
 		"next write": `{{slow}}after`,
@@ -286,4 +287,21 @@ func TestRenderTemplate_DeadlineStopsARender(t *testing.T) {
 			assert.Less(t, time.Since(start), 100*time.Millisecond)
 		})
 	}
+}
+
+// TestMain gives renders a generous deadline: under -race and a loaded CI
+// machine a legitimate render can pass 20 ms, and a test that expects a
+// result must not fail on the clock. The tests about the deadline itself
+// use the production value (useProductionDeadline). No test in the package
+// runs in parallel with those.
+func TestMain(m *testing.M) {
+	renderDeadline = 10 * time.Second
+	os.Exit(m.Run())
+}
+
+// useProductionDeadline sets the 20 ms production deadline for one test.
+func useProductionDeadline(t *testing.T) {
+	t.Helper()
+	renderDeadline = maxRenderTime
+	t.Cleanup(func() { renderDeadline = 10 * time.Second })
 }
