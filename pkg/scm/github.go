@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
@@ -312,6 +313,9 @@ func (g *GitHubProvider) do(ctx context.Context, method, path string, body, resu
 		call.circuitOpen(g.circuits, owner)
 		return fmt.Errorf("github scm: %w", err)
 	}
+	// When the call started: a failure of a call that started before the
+	// circuit opened is not counted (CircuitBreaker.RecordFailureFrom).
+	started := time.Now()
 
 	var bodyReader io.Reader
 	if body != nil {
@@ -338,7 +342,7 @@ func (g *GitHubProvider) do(ctx context.Context, method, path string, body, resu
 	defer call.done(resp, err, g.circuits, owner)
 	if err != nil {
 		// Network error — record as failure with no retry-after hint.
-		g.circuits.Record(owner, nil, err)
+		g.circuits.Record(owner, started, nil, err)
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -346,11 +350,11 @@ func (g *GitHubProvider) do(ctx context.Context, method, path string, body, resu
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
 		apiErr := newAPIError("GitHub", method, path, resp, raw)
-		g.circuits.RecordAPIError(owner, resp, apiErr)
+		g.circuits.RecordAPIError(owner, started, resp, apiErr)
 		return apiErr
 	}
 
-	g.circuits.Record(owner, resp, nil)
+	g.circuits.Record(owner, started, resp, nil)
 	if result != nil {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
 			return fmt.Errorf("decode response: %w", err)
