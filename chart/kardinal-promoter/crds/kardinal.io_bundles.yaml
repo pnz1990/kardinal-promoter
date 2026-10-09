@@ -62,6 +62,37 @@ spec:
               CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest
               supported) lets an update through when spec is unchanged.
             properties:
+              chart:
+                description: |-
+                  Chart is the Helm chart version a "chart" Bundle promotes. The
+                  helm-set-image step writes chart.version at update.helm.chartVersionPath.
+                properties:
+                  digest:
+                    description: |-
+                      Digest is the chart package digest (index.yaml digest, or the OCI
+                      manifest digest).
+                    type: string
+                  name:
+                    description: |-
+                      Name is the chart name: letters, digits, ".", "_" and "-", starting
+                      and ending with a letter or digit. It is joined into the chart's
+                      index and OCI paths, so a "/", "]" or other path character would
+                      point the version lookup elsewhere.
+                    maxLength: 250
+                    minLength: 1
+                    pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
+                    type: string
+                  repoURL:
+                    description: RepoURL is the chart repository (https://... or oci://...).
+                    type: string
+                  version:
+                    description: Version is the chart version.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                - version
+                type: object
               configRef:
                 description: |-
                   ConfigRef points to the GitOps repository commit this Bundle represents
@@ -162,10 +193,13 @@ spec:
                   Supersession rule (BU-4): each bundle type supersedes only bundles of the same type.
                   An image bundle does NOT supersede a config bundle and vice versa.
                   This allows image and config promotions to coexist independently in the same pipeline.
+                  A chart Bundle promotes a Helm chart version (spec.chart) with
+                  update.strategy helm.
                 enum:
                 - image
                 - config
                 - mixed
+                - chart
                 type: string
             required:
             - pipeline

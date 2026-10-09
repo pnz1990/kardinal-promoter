@@ -51,14 +51,20 @@ func DirectUpstreams(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alph
 // part of the bundle's promotion or the Pipeline ordering is invalid.
 func UpstreamsVerified(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
 	envName string, steps []kardinalv1alpha1.PromotionStep) bool {
+	return upstreamsVerified(pipeline, bundle, envName, len(steps), func(i int) *kardinalv1alpha1.PromotionStep { return &steps[i] })
+}
+
+// upstreamsVerified is UpstreamsVerified over n steps, the i-th at(i).
+func upstreamsVerified(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
+	envName string, n int, at func(int) *kardinalv1alpha1.PromotionStep) bool {
 	ups, err := DirectUpstreams(pipeline, bundle, envName)
 	if err != nil {
 		return false
 	}
 	for _, up := range ups {
 		verified := 0
-		for i := range steps {
-			s := &steps[i]
+		for i := range n {
+			s := at(i)
 			if s.Spec.BundleName != bundle.Name || s.Spec.Environment != up {
 				continue
 			}
@@ -94,6 +100,18 @@ func UpstreamsVerified(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1al
 // bundle; only the bundle's own count.
 func GateHolds(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
 	gate *kardinalv1alpha1.PolicyGate, steps []kardinalv1alpha1.PromotionStep) bool {
+	return gateHolds(pipeline, bundle, gate, len(steps), func(i int) *kardinalv1alpha1.PromotionStep { return &steps[i] })
+}
+
+// GateHoldsSteps is GateHolds over step pointers, for callers that index many
+// steps and must not copy them (the UI pipeline list).
+func GateHoldsSteps(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
+	gate *kardinalv1alpha1.PolicyGate, steps []*kardinalv1alpha1.PromotionStep) bool {
+	return gateHolds(pipeline, bundle, gate, len(steps), func(i int) *kardinalv1alpha1.PromotionStep { return steps[i] })
+}
+
+func gateHolds(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
+	gate *kardinalv1alpha1.PolicyGate, n int, at func(int) *kardinalv1alpha1.PromotionStep) bool {
 	env := gate.Labels["kardinal.io/environment"]
 	if gate.Status.Ready || env == "" || gate.Labels["kardinal.io/bundle"] != bundle.Name {
 		return false
@@ -102,8 +120,8 @@ func GateHolds(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bun
 		return false
 	}
 	stepped := false
-	for i := range steps {
-		s := &steps[i]
+	for i := range n {
+		s := at(i)
 		if s.Spec.BundleName != bundle.Name || s.Spec.Environment != env {
 			continue
 		}
@@ -113,7 +131,7 @@ func GateHolds(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bun
 			return true
 		}
 	}
-	return !stepped && UpstreamsVerified(pipeline, bundle, env, steps)
+	return !stepped && upstreamsVerified(pipeline, bundle, env, n, at)
 }
 
 // The states GateState gives a PolicyGate instance.
