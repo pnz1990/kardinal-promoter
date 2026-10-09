@@ -37,6 +37,11 @@ type DynamicProvider struct {
 	providerType  string
 	apiURL        string
 	webhookSecret string
+
+	// circuits is handed to every inner provider, so a token rotation keeps
+	// the circuit state: an outage or an exhausted quota stays respected
+	// (#1274).
+	circuits *CircuitRegistry
 }
 
 // NewDynamicProvider creates a DynamicProvider initialised with the given token.
@@ -46,6 +51,7 @@ func NewDynamicProvider(providerType, token, apiURL, webhookSecret string) (*Dyn
 		providerType:  providerType,
 		apiURL:        apiURL,
 		webhookSecret: webhookSecret,
+		circuits:      NewCircuitRegistry(),
 	}
 	if err := d.reload(token); err != nil {
 		return nil, fmt.Errorf("initialising dynamic SCM provider: %w", err)
@@ -55,7 +61,8 @@ func NewDynamicProvider(providerType, token, apiURL, webhookSecret string) (*Dyn
 
 // Reload constructs a new inner SCMProvider with the given token and atomically
 // replaces the current provider. Subsequent calls to SCMProvider methods will
-// use the new credentials. Reload is safe to call from multiple goroutines;
+// use the new credentials. The circuit breakers are kept: the new provider
+// uses the same CircuitRegistry. Reload is safe to call from multiple goroutines;
 // only one new provider is created per call.
 //
 // Reload is a no-op if token is empty or only whitespace.
@@ -67,7 +74,7 @@ func (d *DynamicProvider) Reload(token string) error {
 }
 
 func (d *DynamicProvider) reload(token string) error {
-	p, err := NewProvider(d.providerType, token, d.apiURL, d.webhookSecret)
+	p, err := newProvider(d.providerType, token, d.apiURL, d.webhookSecret, d.circuits)
 	if err != nil {
 		return fmt.Errorf("creating SCM provider during reload: %w", err)
 	}

@@ -25,7 +25,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
@@ -51,8 +50,10 @@ type BitbucketProvider struct {
 	// Empty refuses every event (ErrNoWebhookSecret).
 	WebhookSecret string
 
-	// circuit guards all outbound Bitbucket API calls.
-	circuit *CircuitBreaker
+	// circuits guards all outbound API calls: one circuit per repository
+	// owner and one for the token's rate limit (CircuitRegistry). A
+	// DynamicProvider shares its registry with every provider it builds.
+	circuits *CircuitRegistry
 
 	client *http.Client
 }
@@ -67,7 +68,7 @@ func NewBitbucketProvider(token, apiURL, webhookSecret string) *BitbucketProvide
 		Token:         token,
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
-		circuit:       NewCircuitBreaker(),
+		circuits:      NewCircuitRegistry(),
 		client:        &http.Client{Timeout: providerHTTPTimeout, Transport: tracing.Transport(nil, false)},
 	}
 }
@@ -317,7 +318,8 @@ func (b *BitbucketProvider) AddLabelsToPR(_ context.Context, _ string, _ int, _ 
 
 // do executes an authenticated Bitbucket API request using Bearer token auth.
 func (b *BitbucketProvider) do(ctx context.Context, method, path string, body, result interface{}) error {
-	if err := b.circuit.Allow(); err != nil {
+	owner := ownerFromPath(path, "/2.0/repositories/")
+	if err := b.circuits.Allow(owner); err != nil {
 		return fmt.Errorf("bitbucket scm: %w", err)
 	}
 
@@ -341,18 +343,18 @@ func (b *BitbucketProvider) do(ctx context.Context, method, path string, body, r
 
 	resp, err := b.client.Do(req)
 	if err != nil {
-		b.circuit.RecordFailure(time.Time{})
+		b.circuits.Record(owner, nil, err)
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		b.circuit.RecordResponse(resp)
+		b.circuits.Record(owner, resp, nil)
 		return newAPIError("bitbucket", method, path, resp, raw)
 	}
 
-	b.circuit.RecordSuccess()
+	b.circuits.Record(owner, resp, nil)
 	if result != nil {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
 			return fmt.Errorf("decode response: %w", err)

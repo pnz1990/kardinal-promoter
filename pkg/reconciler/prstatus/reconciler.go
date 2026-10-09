@@ -51,7 +51,9 @@
 //     first poll that saw it closed, which records that time in
 //     status.closedAt. A reopen clears closedAt. Once the window has passed
 //     the reconciler sets status.closedFinal, then comments on the PR once,
-//     and stops polling; only then does the PromotionStep fail (#1306).
+//     and stops polling; only then does the PromotionStep fail (#1306). A PR
+//     kardinal closed itself (AnnotationClosedByKardinal) gets no comment
+//     here: the close already said why (#1351).
 //   - status.observedGeneration records the spec the status describes. A
 //     PromotionStep recreated after its PR was closed opens a new PR and
 //     points the spec at it; the reconciler then clears the old PR's status
@@ -67,6 +69,7 @@ package prstatus
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -107,6 +110,13 @@ const (
 	// polled, from status.closedAt, before it is final-closed. A reopen within
 	// the window keeps the promotion going.
 	ClosedGracePeriod = 5 * time.Minute
+	// AnnotationClosedByKardinal is set on a PRStatus by the PromotionStep
+	// reconciler when it closed the PR itself and commented why (the cancel
+	// path: superseded, failed, timed out, deleted). Its value is the PR
+	// number. The end of the grace window then posts no "stopped tracking"
+	// comment on that PR (#1351). It is metadata, not status: the step
+	// reconciler writes no status but its own.
+	AnnotationClosedByKardinal = "kardinal.io/closed-by-kardinal"
 )
 
 // IsClosed reports whether the PR is closed without merging: the reconciler
@@ -284,8 +294,14 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if becameFinal {
 		// Only after closedFinal is saved: a final-closed PRStatus is never
 		// polled again, so a failed save cannot post the comment twice. A
-		// failed comment (or a crash before it) is not retried.
-		r.commentStoppedTracking(ctx, log, &prs)
+		// failed comment (or a crash before it) is not retried. A PR that
+		// kardinal closed itself already says why (#1351).
+		if ClosedByKardinal(&prs) {
+			log.Info().Int("pr", prs.Spec.PRNumber).
+				Msg("PR was closed by kardinal, which commented why; no stopped-tracking comment")
+		} else {
+			r.commentStoppedTracking(ctx, log, &prs)
+		}
 	}
 
 	switch {
@@ -342,6 +358,15 @@ func closedState(s *v1alpha1.PRStatusStatus, merged, open bool, now metav1.Time)
 	}
 }
 
+// ClosedByKardinal reports whether the PromotionStep reconciler closed the
+// PR the PRStatus spec names: AnnotationClosedByKardinal holds its number.
+// An annotation for another PR (the PRStatus was pointed at a new PR since,
+// B72) does not count.
+func ClosedByKardinal(prs *v1alpha1.PRStatus) bool {
+	v, ok := prs.Annotations[AnnotationClosedByKardinal]
+	return ok && prs.Spec.PRNumber > 0 && v == strconv.Itoa(prs.Spec.PRNumber)
+}
+
 // commentStoppedTracking tells the PR's readers that kardinal no longer
 // tracks it. It runs once, after status.closedFinal is saved. The comment is
 // best-effort: a failure is logged and not retried.
@@ -350,8 +375,8 @@ func (r *Reconciler) commentStoppedTracking(ctx context.Context, log zerolog.Log
 	if env == "" {
 		env = "the target environment"
 	}
-	// The reconciler cannot tell who closed the PR (a person, or kardinal
-	// when the step was superseded or timed out), so the text holds for both.
+	// Only for a PR kardinal did not close: the cancel path comments on the
+	// PRs it closes and marks them (ClosedByKardinal).
 	body := fmt.Sprintf("kardinal stopped tracking this PR: it has been closed without merging for %s. "+
 		"Merging it would change environment %s without a PromotionStep tracking it. "+
 		"To promote again, create a new Bundle.", ClosedGracePeriod, env)

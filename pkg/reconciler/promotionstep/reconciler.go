@@ -138,6 +138,13 @@ type Reconciler struct {
 	// SCM is the SCM provider for PR operations.
 	SCM scm.SCMProvider
 
+	// AllowedRepositories is --scm-allowed-repositories: a step of a Pipeline
+	// that would need the shared SCM token for a spec.git.url it does not
+	// allow fails before git-clone (repositoryNotAllowed, #1332). The SCM
+	// provider is wrapped with the same list (RepositoryAllowlist.Guard), so
+	// every SCM call is checked too. Nil allows every repository.
+	AllowedRepositories *scm.RepositoryAllowlist
+
 	// GitClient is the Git operations client.
 	GitClient scm.GitClient
 
@@ -439,6 +446,19 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 // Forgejo and Gitea (handleDeleted, B79). The status read, the close and the
 // delete can fail; the comment is best-effort.
 func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep, reason string, keepBranch bool) error {
+	err := r.closeStepPRWithSCM(ctx, ps, reason, keepBranch)
+	if errors.Is(err, scm.ErrRepositoryNotAllowed) {
+		// The shared token may not act on this repository (#1332): kardinal
+		// opened nothing there with it, and retrying cannot change that.
+		zerolog.Ctx(ctx).Warn().Err(err).Str("step", ps.Name).
+			Msg("left the PR and branch of the step alone: the repository is not allowed")
+		return nil
+	}
+	return err
+}
+
+// closeStepPRWithSCM is closeStepPR without the allowlist handling.
+func (r *Reconciler) closeStepPRWithSCM(ctx context.Context, ps *v1alpha1.PromotionStep, reason string, keepBranch bool) error {
 	repo, num := "", 0
 	if ps.Spec.PRStatusRef != "" {
 		var prs v1alpha1.PRStatus
@@ -496,12 +516,45 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 		return fmt.Errorf("close PR #%d: %w", num, err)
 	}
 	log.Info().Int("pr", num).Str("step", ps.Name).Msg("closed PR of cancelled step")
+	r.markPRStatusClosedByKardinal(ctx, ps, num)
 	body := fmt.Sprintf("kardinal closed this PR: %s. Merging it would change environment %s "+
 		"without a PromotionStep tracking it.", reason, ps.Spec.Environment)
 	if err := r.SCM.CommentOnPR(ctx, repo, num, body); err != nil {
 		log.Warn().Err(err).Int("pr", num).Msg("could not comment on the closed PR (non-fatal)")
 	}
 	return r.closedPRBranch(ctx, ps, repo, num, keepBranch)
+}
+
+// markPRStatusClosedByKardinal records on the step's PRStatus that kardinal
+// closed PR num itself (prstatus.AnnotationClosedByKardinal), so the PRStatus
+// reconciler does not comment "stopped tracking" on it when the grace window
+// ends: the close comment already says why (#1351). It writes metadata only,
+// never the PRStatus status, and only when the PRStatus spec names PR num.
+// Best-effort: a failure costs a second comment, so it is logged.
+func (r *Reconciler) markPRStatusClosedByKardinal(ctx context.Context, ps *v1alpha1.PromotionStep, num int) {
+	if ps.Spec.PRStatusRef == "" {
+		return
+	}
+	log := zerolog.Ctx(ctx)
+	var prs v1alpha1.PRStatus
+	if err := r.Get(ctx, types.NamespacedName{Name: ps.Spec.PRStatusRef, Namespace: ps.Namespace}, &prs); err != nil {
+		if !apierrors.IsNotFound(err) {
+			log.Warn().Err(err).Int("pr", num).Msg("could not read the PRStatus to mark the PR closed by kardinal (non-fatal)")
+		}
+		return
+	}
+	want := strconv.Itoa(num)
+	if prs.Spec.PRNumber != num || prs.Annotations[prstatus.AnnotationClosedByKardinal] == want {
+		return
+	}
+	patch := client.MergeFrom(prs.DeepCopy())
+	if prs.Annotations == nil {
+		prs.Annotations = map[string]string{}
+	}
+	prs.Annotations[prstatus.AnnotationClosedByKardinal] = want
+	if err := r.Patch(ctx, &prs, patch); err != nil && !apierrors.IsNotFound(err) {
+		log.Warn().Err(err).Int("pr", num).Msg("could not mark the PRStatus closed by kardinal (non-fatal)")
+	}
 }
 
 // withLabelsError appends the error of open-pr's failed attempt to label the
@@ -541,7 +594,15 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	if held, res, holdErr := r.holdIfPaused(ctx, log, ps); held {
 		return res, holdErr
 	}
+	if held, res, holdErr := r.holdForSlot(ctx, log, ps); held {
+		return res, holdErr
+	}
 	if msg := unsupportedConfig(pipeline, findEnv(pipeline, ps.Spec.Environment), ps); msg != "" {
+		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
+	}
+	if msg, err := r.repositoryNotAllowed(ctx, pipeline); err != nil {
+		return ctrl.Result{}, err
+	} else if msg != "" {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
 
@@ -643,6 +704,11 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	}
 	env := findEnv(pipeline, ps.Spec.Environment)
 	if msg := unsupportedConfig(pipeline, env, ps); msg != "" {
+		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
+	}
+	if msg, err := r.repositoryNotAllowed(ctx, pipeline); err != nil {
+		return ctrl.Result{}, err
+	} else if msg != "" {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
 	// Run the step list recorded when the step left Pending, never one rebuilt
@@ -1143,6 +1209,11 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	}
 	env := findEnv(pipeline, ps.Spec.Environment)
 	if msg := unsupportedConfig(pipeline, env, ps); msg != "" {
+		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
+	}
+	if msg, err := r.repositoryNotAllowed(ctx, pipeline); err != nil {
+		return ctrl.Result{}, err
+	} else if msg != "" {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
 
@@ -1756,7 +1827,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&v1alpha1.PRStatus{}, handler.EnqueueRequestsFromMapFunc(r.prStatusMapper)).
 		Watches(&v1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.policyGateMapper)).
 		Watches(&v1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.bundleMapper),
-			builderutil.WithPredicates(predicate.NewPredicateFuncs(isSuperseded))).
+			builderutil.WithPredicates(bundleWakesSteps)).
 		Complete(tracing.WrapReconciler("promotionstep", r))
 }
 
@@ -1767,7 +1838,8 @@ func isSuperseded(obj client.Object) bool {
 }
 
 // bundleMapper wakes the unfinished PromotionSteps of a superseded Bundle so
-// the supersession guard closes their PRs at once. Without it a step in
+// the supersession guard closes their PRs at once, and the steps of a Bundle
+// whose maxConcurrentPromotions hold was set or lifted (holdForSlot). Without it a step in
 // WaitingForMerge saw the new phase only at its next poll
 // (requeueWaitForMerge), and the superseded PR stayed open, and mergeable,
 // until then.

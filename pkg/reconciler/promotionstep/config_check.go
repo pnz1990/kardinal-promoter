@@ -4,11 +4,13 @@
 package promotionstep
 
 import (
+	"context"
 	"fmt"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // unsupportedConfig returns a message when the Pipeline asks for something the
@@ -43,4 +45,24 @@ func unsupportedConfig(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec
 		return fmt.Sprintf("health.resource.kind %q is not supported: only Deployment is checked", res.Kind)
 	}
 	return ""
+}
+
+// repositoryNotAllowed returns why the step must not run because its
+// Pipeline would have the controller's shared SCM token act on a repository
+// --scm-allowed-repositories does not allow (#1332), or "". The Pipeline's
+// own git.secretRef exempts it only when that Secret exists and no
+// environment opens a PR (scm.RepositoryAllowlist.CheckPipeline). The
+// Pipeline reconciler reports the same as Ready=False/RepositoryNotAllowed.
+func (r *Reconciler) repositoryNotAllowed(ctx context.Context, pipeline *v1alpha1.Pipeline) (string, error) {
+	if r.AllowedRepositories.Allows(pipeline.Spec.Git.URL) {
+		return "", nil
+	}
+	own, err := scm.PipelineSecretExists(ctx, r.Client, pipeline)
+	if err != nil {
+		return "", err
+	}
+	if err := r.AllowedRepositories.CheckPipeline(pipeline, own); err != nil {
+		return err.Error(), nil
+	}
+	return "", nil
 }
