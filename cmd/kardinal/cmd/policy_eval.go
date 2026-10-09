@@ -22,7 +22,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -31,7 +30,6 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -193,43 +191,20 @@ func gatesForEnv(pipe *v1alpha1.Pipeline, bundle *v1alpha1.Bundle,
 	}
 
 	var gates []v1alpha1.PolicyGate
+	// The Graph targets env, so every other environment in it is on env's
+	// upstream path.
 	var upstreams []string
-	for _, n := range res.Graph.Spec.Nodes {
-		kind, _ := n.Template["kind"].(string)
-		switch kind {
-		case "PromotionStep":
-			// Only the labels: the step spec holds ${...} references.
-			var step struct {
-				Metadata metav1.ObjectMeta `json:"metadata"`
-			}
-			if err := fromTemplate(n.Template, &step); err != nil {
-				return nil, nil, fmt.Errorf("graph node %s: %w", n.ID, err)
-			}
-			if e := step.Metadata.Labels["kardinal.io/environment"]; e != env && !containsString(upstreams, e) {
-				upstreams = append(upstreams, e)
-			}
-		case "PolicyGate":
-			var g v1alpha1.PolicyGate
-			if err := fromTemplate(n.Template, &g); err != nil {
-				return nil, nil, fmt.Errorf("graph node %s: %w", n.ID, err)
-			}
-			if g.Labels["kardinal.io/environment"] == env {
-				gates = append(gates, g)
-			}
+	for _, e := range res.Environments {
+		if e != env {
+			upstreams = append(upstreams, e)
+		}
+	}
+	for _, g := range res.GateInstances {
+		if g.Labels["kardinal.io/environment"] == env {
+			gates = append(gates, g)
 		}
 	}
 	return gates, upstreams, nil
-}
-
-func fromTemplate(tmpl map[string]interface{}, obj interface{}) error {
-	raw, err := json.Marshal(tmpl)
-	if err != nil {
-		return fmt.Errorf("marshal template: %w", err)
-	}
-	if err := json.Unmarshal(raw, obj); err != nil {
-		return fmt.Errorf("decode template: %w", err)
-	}
-	return nil
 }
 
 func containsString(list []string, s string) bool {

@@ -172,7 +172,7 @@ func TestSanitize(t *testing.T) {
 	tests := map[string]string{
 		`git clone https://x-access-token:SECRET@github.com/org/repo.git: authentication required`: `git clone https://github.com/…: authentication required`,
 		`Post "https://hooks.slack.com/services/T0/B0/TOKEN?x=1": dial tcp: refused`:               `Post "https://hooks.slack.com/…": dial tcp: refused`,
-		`GET https://api.github.com/repos/o/r/pulls/7: 404`:                                         `GET https://api.github.com/…: 404`,
+		`GET https://api.github.com/repos/o/r/pulls/7: 404`:                                        `GET https://api.github.com/…: 404`,
 		`no url here`:                         `no url here`,
 		`root http://forgejo:3000/ ok`:        `root http://forgejo:3000 ok`,
 		`ssh://git@git.example.com:22/r.git.`: `ssh://git.example.com:22/….`,
