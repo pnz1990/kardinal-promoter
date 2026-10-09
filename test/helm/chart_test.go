@@ -517,12 +517,14 @@ func TestHelmTemplateUserRoles(t *testing.T) {
 	}
 	assert.Equal(t, map[string]interface{}{"kardinal.io/aggregate-to-admin": "true", "app.kubernetes.io/instance": "kardinal-promoter"},
 		dig(admin, "aggregationRule", "clusterRoleSelectors").([]interface{})[0].(map[string]interface{})["matchLabels"])
-	assert.Equal(t, "true", dig(viewer, "metadata", "labels", "rbac.authorization.k8s.io/aggregate-to-view"))
-	assert.Equal(t, "true", dig(promoter, "metadata", "labels", "rbac.authorization.k8s.io/aggregate-to-edit"))
-	assert.Equal(t, "true", dig(roles["admin-extra"], "metadata", "labels", "rbac.authorization.k8s.io/aggregate-to-admin"))
+	// Aggregation into view/edit/admin is opt-in: with it, everyone bound to
+	// edit can both promote and approve.
+	agg := userRoles(renderChart(t, "kardinal-promoter", "--set", "rbac.userRoles.aggregateToDefaultRoles=true"), "kardinal-promoter")
+	assert.Equal(t, "true", dig(agg["viewer"], "metadata", "labels", "rbac.authorization.k8s.io/aggregate-to-view"))
+	assert.Equal(t, "true", dig(agg["promoter"], "metadata", "labels", "rbac.authorization.k8s.io/aggregate-to-edit"))
+	assert.Equal(t, "true", dig(agg["admin-extra"], "metadata", "labels", "rbac.authorization.k8s.io/aggregate-to-admin"))
 
-	noAgg := userRoles(renderChart(t, "kardinal-promoter", "--set", "rbac.userRoles.aggregateToDefaultRoles=false"), "kardinal-promoter")
-	for name, r := range noAgg {
+	for name, r := range roles { // the default
 		labels, _ := dig(r, "metadata", "labels").(map[string]interface{})
 		for k := range labels {
 			assert.NotContains(t, k, "rbac.authorization.k8s.io/aggregate-to-", "%s", name)

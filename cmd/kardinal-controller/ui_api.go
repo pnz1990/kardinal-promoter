@@ -41,8 +41,11 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 )
 
-// maxGateOverrideMinutes bounds a UI gate override to one day.
-const maxGateOverrideMinutes = 24 * 60
+// maxGateOverrideMinutes bounds a UI gate override (--gate-override-max-minutes,
+// chart gateOverrides.maxMinutes; one day by default). The chart's
+// scoped-writes admission policy applies the same bound to callers limited to
+// policygates/override.
+var maxGateOverrideMinutes = 24 * 60
 
 // uiPipelineResponse is the JSON shape for a Pipeline in the UI API.
 type uiPipelineResponse struct {

@@ -79,6 +79,9 @@ args=(
   --set github.secretRef.name=git-token
   --set "scm.provider=${KARDINAL_E2E_SCM_PROVIDER:?git server component must run first}"
   --set "scm.apiURL=${KARDINAL_E2E_SCM_API:-}"
+  # Off by default; TestUI_UserRoles checks the opt-in (a binding to the
+  # built-in view role grants the viewer rules). test/helm covers the default.
+  --set rbac.userRoles.aggregateToDefaultRoles=true
 )
 if "${KUBECTL[@]}" -n "$KARDINAL_NS" get secret scm-webhook >/dev/null 2>&1; then
   args+=(--set webhook.secretRef.name=scm-webhook)

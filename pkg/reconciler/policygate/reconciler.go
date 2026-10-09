@@ -1261,6 +1261,10 @@ func parseRecheckInterval(s string) time.Duration {
 	return d
 }
 
+// overrideClockSkew is how far in the future an override's createdAt may be
+// (clock differences between the writer and the controller).
+const overrideClockSkew = 5 * time.Minute
+
 // findActiveOverride returns the first non-expired override matching the given
 // environment name (K-09). An override with Stage="" matches any environment.
 // Returns nil if no active override is found.
@@ -1269,6 +1273,12 @@ func findActiveOverride(overrides []kardinalv1alpha1.PolicyGateOverride, envName
 		o := &overrides[i]
 		if o.ExpiresAt.Time.IsZero() || now.After(o.ExpiresAt.Time) {
 			continue // expired or zero
+		}
+		// createdAt is written by whoever made the override; one dated in the
+		// future would stretch the admission policy's bound on expiresAt -
+		// createdAt, so it does not count until then.
+		if o.CreatedAt != nil && o.CreatedAt.After(now.Add(overrideClockSkew)) {
+			continue
 		}
 		if o.Stage == "" || o.Stage == envName {
 			return o

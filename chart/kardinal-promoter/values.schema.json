@@ -303,6 +303,13 @@
         }
       }
     },
+    "gateOverrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxMinutes": {"type": "integer", "minimum": 1, "maximum": 10080}
+      }
+    },
     "tokenReview": {
       "type": "object",
       "additionalProperties": false,

@@ -211,6 +211,10 @@ func main() {
 			"every UI caller acts as the controller. Without it that combination stops the controller. "+
 			"Chart value: ui.auth.allowStaticTokenWithTokenReview.")
 
+	flag.IntVar(&maxGateOverrideMinutes, "gate-override-max-minutes", maxGateOverrideMinutes,
+		"Longest gate override the UI API accepts, in minutes. Chart value: gateOverrides.maxMinutes, which also "+
+			"bounds overrides written with kubectl by callers limited to policygates/override (admission policy).")
+
 	var tlsCertFile string
 	flag.StringVar(&tlsCertFile, "tls-cert-file", os.Getenv("KARDINAL_TLS_CERT_FILE"),
 		"Path to the TLS certificate file (PEM). When set together with --tls-key-file, "+
@@ -582,7 +586,8 @@ func main() {
 		logger.Warn().Msg("SCM webhooks disabled: no --webhook-secret set, /webhook/scm rejects every event; merges are detected by PR status polling")
 	}
 	bundleAPIToken := bundleToken
-	review := reviewOptions{audiences: splitCSV(tokenReviewAudiences), acceptAPIServer: tokenReviewAcceptAPIServer}
+	review := reviewOptions{audiences: splitCSV(tokenReviewAudiences), acceptAPIServer: tokenReviewAcceptAPIServer,
+		apiServerAudiences: uiauth.APIServerAudiences(uiauth.ServiceAccountTokenPath), shared: &sharedReviewers{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/webhook/scm", webhookSrv.Handler())
 	mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())

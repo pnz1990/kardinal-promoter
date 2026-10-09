@@ -147,6 +147,9 @@ kardinal version
 | `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`). With neither this nor `ui.auth.tokenReview` set, the UI API serves only local clients (`kubectl port-forward`) |
 | `ui.auth.tokenReview` | `false` | `--ui-tokenreview-auth`: validate UI tokens with TokenReview; adds the RBAC it needs |
 | `ui.auth.allowStaticTokenWithTokenReview` | `false` | Install with both a static UI token and `ui.auth.tokenReview` (the static token wins); refused otherwise |
+| `gateOverrides.maxMinutes` | `1440` | `--gate-override-max-minutes`: longest gate override the UI accepts; the scoped-writes admission policy applies it to `kubectl` overrides by callers limited to `policygates/override` |
+| `rbac.userRoles.aggregateToDefaultRoles` | `false` | Aggregate the user roles into `view`, `edit` and `admin` (then everyone bound to `edit` can promote and approve) |
+| `rbac.userRoles.directWrites` | `false` | Grant the promoter and approver `update` for `kardinal pause` / `kardinal override` from a kubeconfig, limited by the admission policy |
 | `tokenReview.audiences` | `["kardinal-promoter"]` | `--tokenreview-audiences`: token audiences the UI API and Bundle API accept (`kubectl create token <sa> --audience kardinal-promoter`) |
 | `tokenReview.acceptAPIServerAudience` | `false` | `--tokenreview-accept-apiserver-audience`: also accept kubeconfig and default ServiceAccount tokens |
 | `ui.corsAllowedOrigins` | `[]` | `--cors-allowed-origins` |

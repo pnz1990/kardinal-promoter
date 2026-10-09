@@ -8,6 +8,7 @@ ValidatingAdmissionPolicy (the chart's kubeVersion).
 */}}
 {{- $fullname := include "kardinal-promoter.fullname" . }}
 {{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kardinal-promoter.serviceAccountName" .) }}
+{{- $maxOverride := int .Values.gateOverrides.maxMinutes }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -25,9 +26,19 @@ spec:
   # The virtual subresources of user-roles.yaml: <resource>/pause (pipelines)
   # or <resource>/override (policygates) lets a caller make one change;
   # <resource>/edit lets it change anything its RBAC update allows. A caller
-  # with the first and not the second may change only that field
-  # (rbac.userRoles.directWrites grants such callers update). Callers with
-  # neither are not limited here: their RBAC decides.
+  # with the first and not the second (rbac.userRoles.directWrites grants
+  # such callers update) is limited:
+  #   - metadata stays as it was, except what the API server sets
+  #     (managedFields, resourceVersion, generation): no labels,
+  #     annotations, finalizers or ownerReferences (an ownerReference to a
+  #     deleted object would have the garbage collector delete it);
+  #   - of the spec, only spec.paused (pipelines) or spec.overrides
+  #     (policygates) changes;
+  #   - spec.overrides is append-only, and each new entry names the caller
+  #     in createdBy and expires at most gateOverrides.maxMinutes after its
+  #     createdAt (the PolicyGate reconciler ignores an override whose
+  #     createdAt is in the future).
+  # Callers with neither subresource are not limited here: their RBAC decides.
   variables:
     - name: field
       expression: "request.resource.resource == 'pipelines' ? 'paused' : 'overrides'"
@@ -45,25 +56,55 @@ spec:
         !variables.exempt &&
         variables.check.subresource(request.resource.resource == 'pipelines' ? 'pause' : 'override').check('update').allowed() &&
         !variables.check.subresource('edit').check('update').allowed()
-    - name: labels
-      expression: "has(object.metadata.labels) ? object.metadata.labels : {}"
-    - name: oldLabels
-      expression: "has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}"
-    - name: annotations
-      expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
-    - name: oldAnnotations
-      expression: "has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}"
+    - name: serverSet
+      expression: "['managedFields', 'resourceVersion', 'generation']"
+    - name: oldOverrides
+      expression: "has(oldObject.spec.overrides) ? oldObject.spec.overrides : []"
+    - name: newOverrides
+      expression: "has(object.spec.overrides) ? object.spec.overrides : []"
   validations:
     - expression: >-
         !variables.limited ||
+        (object.metadata.all(k, k in variables.serverSet ||
+           (k in oldObject.metadata && object.metadata[k] == oldObject.metadata[k])) &&
+         oldObject.metadata.all(k, k in variables.serverSet || k in object.metadata))
+      messageExpression: >-
+        'you may not change the metadata (labels, annotations, finalizers, ownerReferences) of this ' +
+        request.resource.resource + ': you have ' + request.resource.resource + '/' +
+        (request.resource.resource == 'pipelines' ? 'pause' : 'override') + ' but not ' +
+        request.resource.resource + '/edit'
+      reason: Forbidden
+    - expression: >-
+        !variables.limited ||
         (object.spec.all(k, k == variables.field || (k in oldObject.spec && object.spec[k] == oldObject.spec[k])) &&
-         oldObject.spec.all(k, k == variables.field || k in object.spec) &&
-         variables.labels == variables.oldLabels && variables.annotations == variables.oldAnnotations)
+         oldObject.spec.all(k, k == variables.field || k in object.spec))
       messageExpression: >-
         'you may change only spec.' + variables.field + ' of this ' + request.resource.resource +
         ' (you have ' + request.resource.resource + '/' +
         (request.resource.resource == 'pipelines' ? 'pause' : 'override') + ' but not ' +
         request.resource.resource + '/edit)'
+      reason: Forbidden
+    - expression: >-
+        !variables.limited || request.resource.resource != 'policygates' ||
+        (size(variables.newOverrides) >= size(variables.oldOverrides) &&
+         variables.oldOverrides.all(o, o in variables.newOverrides))
+      message: spec.overrides is append-only for you; existing entries may not be changed or removed
+      reason: Forbidden
+    - expression: >-
+        !variables.limited || request.resource.resource != 'policygates' ||
+        variables.newOverrides.all(o, o in variables.oldOverrides ||
+          (has(o.createdBy) && o.createdBy == request.userInfo.username))
+      messageExpression: >-
+        'every new spec.overrides entry must have createdBy "' + request.userInfo.username + '"'
+      reason: Forbidden
+    - expression: >-
+        !variables.limited || request.resource.resource != 'policygates' ||
+        variables.newOverrides.all(o, o in variables.oldOverrides ||
+          (has(o.createdAt) && has(o.expiresAt) &&
+           timestamp(o.expiresAt) > timestamp(o.createdAt) &&
+           timestamp(o.expiresAt) - timestamp(o.createdAt) <= duration('{{ $maxOverride }}m')))
+      message: >-
+        every new spec.overrides entry needs createdAt and an expiresAt at most {{ $maxOverride }} minutes later
       reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1

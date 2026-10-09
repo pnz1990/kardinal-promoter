@@ -75,6 +75,7 @@ spec:
             {{- if .Values.bundleAPI.tokenReview }}
             - --bundle-api-tokenreview-auth=true
             {{- end }}
+            - --gate-override-max-minutes={{ int .Values.gateOverrides.maxMinutes }}
             {{- if or .Values.ui.auth.tokenReview .Values.bundleAPI.tokenReview }}
             {{- if and (not .Values.tokenReview.audiences) (not .Values.tokenReview.acceptAPIServerAudience) }}
             {{- fail "tokenReview.audiences is empty: set an audience (kardinal-promoter) or tokenReview.acceptAPIServerAudience=true" }}

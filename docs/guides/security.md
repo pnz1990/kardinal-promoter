@@ -600,7 +600,9 @@ For every `/api/v1/ui/*` request the controller:
    tokens are for the API server's audience and are refused unless you opt in with
    `tokenReview.acceptAPIServerAudience=true` (`--tokenreview-accept-apiserver-audience`).
    Opt in only if you trust kardinal and every hop to it with tokens that also work against
-   the API server.
+   the API server. Putting the API server's own audience in `tokenReview.audiences` is
+   refused at startup (the controller reads it from its own ServiceAccount token), so the
+   opt-in stays explicit.
 2. Checks every object the request reads with a `SubjectAccessReview` for that user, and every
    write either on the object or, for pause, resume and gate approval, on its
    [action subresource](#user-roles). A denied check gets `403` naming the verb, resource and
@@ -609,10 +611,11 @@ For every `/api/v1/ui/*` request the controller:
    clients cannot be built, the controller does not start.
 4. Caches review results for 30 seconds per token and per action. A revoked token or a
    removed RoleBinding keeps working through the UI for up to 30 seconds.
-5. Limits the TokenReviews one client address causes to 60 a minute, before it sends them.
-   A cached token does not count, so only a client sending new tokens (guessing) reaches the
-   limit; it gets `429` with `Retry-After: 60`. Behind an Ingress or a mesh sidecar every
-   client has the proxy's address and shares the budget.
+5. Limits the TokenReviews it sends before sending them: 60 a minute per client address
+   and 600 a minute in all, shared by the UI API and the Bundle API. A cached token does not
+   count, so only a client sending new tokens (guessing) reaches the limit; it gets `429`
+   with `Retry-After: 60`. Behind an Ingress or a mesh sidecar every client has the proxy's
+   address and shares the per-address budget.
 
 When the chart enables this mode, it also grants the controller `create` on
 `tokenreviews` and `subjectaccessreviews`. Setting a shared UI token as well is refused: the
@@ -666,11 +669,15 @@ API and the Bundle API, and they work the same for `kubectl` and the `kardinal` 
 | `<fullname>-admin` | every verb on every kardinal kind, `update` on `pipelines/pause`, `pipelines/edit`, `policygates/override` and `policygates/edit`; aggregates the three above | Pipeline owners |
 
 `<fullname>` is the release's full name: `kardinal-promoter` for the default release, so
-`kardinal-promoter-viewer` and so on. With `rbac.userRoles.aggregateToDefaultRoles` (default
-`true`) the roles also aggregate into Kubernetes' built-in roles: the viewer into `view`, the
-promoter and approver into `edit`, and the admin rules into `admin`. A namespace RoleBinding to
-`view`, `edit` or `admin` then grants the matching kardinal access. Set it to `false` to grant
-kardinal access only through the four roles.
+`kardinal-promoter-viewer` and so on. Bind these roles explicitly; that is the only way to
+grant kardinal access by default.
+
+To opt in to the built-in roles, set `rbac.userRoles.aggregateToDefaultRoles=true`. The roles
+then also aggregate into Kubernetes' built-in roles: the viewer into `view`, the promoter and
+approver into `edit`, and the admin rules into `admin`. A namespace RoleBinding to `view`,
+`edit` or `admin` then grants the matching kardinal access. Opt in knowingly: everyone bound to
+`edit` in a namespace can then both promote and approve gates there, so promoter and approver
+are no longer kept apart.
 
 ```bash
 # Team A's CI may create Bundles in team-a only; its release managers approve gates there.
@@ -695,15 +702,28 @@ a caller who holds `pipelines/pause` but not `pipelines/edit` may change only `s
 of a Pipeline, and one who holds `policygates/override` but not `policygates/edit` only
 `spec.overrides` of a PolicyGate; neither may change labels or annotations. The policy checks
 with the API server's authorizer, so it applies to any binding, not only the chart's roles.
-A caller with neither subresource is not limited by it: their RBAC decides.
+A caller with neither subresource is not limited by it: their RBAC decides. For these
+callers the policy also keeps all of the metadata as it was, except what the API server sets
+(managedFields, resourceVersion, generation): no labels, annotations, finalizers or
+ownerReferences (an ownerReference to a deleted object would have the garbage collector
+delete the gate). It makes `spec.overrides` append-only, requires `createdBy` to be the
+caller on each new entry, and requires an `expiresAt` at most `gateOverrides.maxMinutes`
+(default 1440, the same bound the UI applies) after its `createdAt`. The PolicyGate
+reconciler ignores an override whose `createdAt` is more than 5 minutes in the future.
+
+`directWrites` weakens two guarantees. First, separation of duties: the narrow roles become
+direct write access, held back only by this policy. Second, the audit trail: such a write is
+the user's own, and kardinal records no `requested-by` for it. Its `createdBy` is self-declared
+and checked only by the policy. Prefer the UI API for pause and approval, and enable
+`directWrites` only where people need the CLI.
 
 What this separates, and what it does not:
 
 - The approver role cannot create Bundles and the promoter role cannot override gates, so a
   CI token bound only to the promoter role cannot approve its own promotion.
-- Nothing stops one person from holding both roles, or `edit`/`admin`, which include them
-  (with `aggregateToDefaultRoles`). Separation of duties holds only if your bindings keep the
-  roles apart; review who is bound to both.
+- Nothing stops one person from holding both roles, or `edit`/`admin` when
+  `aggregateToDefaultRoles` is on, which include them. Separation of duties holds only if your
+  bindings keep the roles apart; review who is bound to both.
 - An override records who made it; it is not a second person's sign-off on the change.
 
 ### Signing in from the browser

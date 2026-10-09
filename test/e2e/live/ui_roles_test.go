@@ -238,7 +238,9 @@ func TestUI_UserRoles(t *testing.T) {
 // the promoter role plus update on Pipelines may change spec.paused and
 // nothing else; one with the approver role plus update on PolicyGates may
 // add spec.overrides entries and not change the expression; one that also
-// holds pipelines/edit may change the rest.
+// holds pipelines/edit may change the rest. A limited caller may not touch
+// metadata (an ownerReference would have the garbage collector delete the
+// gate), edit existing overrides, override in another name, or past the cap.
 //
 // Covers RBAC-SCOPED-WRITES-01.
 func TestUI_ScopedWritesAdmission(t *testing.T) {
@@ -351,7 +353,29 @@ func TestUI_ScopedWritesAdmission(t *testing.T) {
 			Reason: "e2e scoped write", CreatedBy: gater.username(),
 			ExpiresAt: metav1.NewTime(time.Now().Add(5 * time.Minute)), CreatedAt: ptr.To(metav1.Now())})
 	}), "gater adds an override")
-	err := updateGate(func(g *v1alpha1.PolicyGate) { g.Spec.Expression = "true" })
-	require.Error(t, err, "gater may not change the expression")
-	assert.Contains(t, err.Error(), "you may change only spec.overrides")
+	refused := []struct {
+		name, msg string
+		change    func(*v1alpha1.PolicyGate)
+	}{
+		{"change the expression", "you may change only spec.overrides", func(g *v1alpha1.PolicyGate) { g.Spec.Expression = "true" }},
+		{"add an ownerReference (garbage collection)", "you may not change the metadata", func(g *v1alpha1.PolicyGate) {
+			g.OwnerReferences = []metav1.OwnerReference{{APIVersion: "v1", Kind: "ConfigMap", Name: "gone", UID: "0000-dead"}}
+		}},
+		{"edit an existing override", "append-only", func(g *v1alpha1.PolicyGate) {
+			g.Spec.Overrides[0].ExpiresAt = metav1.NewTime(time.Now().Add(48 * time.Hour))
+		}},
+		{"override in someone else's name", "createdBy", func(g *v1alpha1.PolicyGate) {
+			g.Spec.Overrides = append(g.Spec.Overrides, v1alpha1.PolicyGateOverride{Reason: "r", CreatedBy: "someone-else",
+				ExpiresAt: metav1.NewTime(time.Now().Add(time.Minute)), CreatedAt: ptr.To(metav1.Now())})
+		}},
+		{"override past the cap", "at most 1440 minutes", func(g *v1alpha1.PolicyGate) {
+			g.Spec.Overrides = append(g.Spec.Overrides, v1alpha1.PolicyGateOverride{Reason: "r", CreatedBy: gater.username(),
+				ExpiresAt: metav1.NewTime(time.Now().Add(25 * time.Hour)), CreatedAt: ptr.To(metav1.Now())})
+		}},
+	}
+	for _, r := range refused {
+		err := updateGate(r.change)
+		require.Error(t, err, "gater may not %s", r.name)
+		assert.Contains(t, err.Error(), r.msg, r.name)
+	}
 }

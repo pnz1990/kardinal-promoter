@@ -19,6 +19,10 @@ import (
 // as one guessing tokens, reaches the limit.
 const DefaultReviewsPerClientPerMinute = 60
 
+// DefaultReviewsPerMinute bounds the TokenReviews all clients together can
+// cause, so many addresses (or one behind many) cannot flood the API server.
+const DefaultReviewsPerMinute = 600
+
 // ErrRateLimited is returned by a rate-limited reviewer when the client has
 // used its reviews for the current minute. Middleware answers 429.
 var ErrRateLimited = errors.New("uiauth: too many token reviews from this client address")
@@ -41,19 +45,21 @@ func withClientAddr(ctx context.Context, remoteAddr string) context.Context {
 type rateLimitedReviewer struct {
 	inner     TokenReviewer
 	perMinute int
+	total     int
 	now       func() time.Time
 
 	mu      sync.Mutex
 	counts  map[string]int
+	all     int
 	resetAt time.Time
 }
 
 // NewRateLimitedTokenReviewer limits the reviews inner performs to perMinute
-// per client address. Wrap it in NewCachedTokenReviewer so cached tokens do
-// not count. Behind an Ingress or a mesh sidecar every client has the proxy's
-// address and shares one budget.
-func NewRateLimitedTokenReviewer(inner TokenReviewer, perMinute int) TokenReviewer {
-	return &rateLimitedReviewer{inner: inner, perMinute: perMinute, now: time.Now, counts: map[string]int{}}
+// per client address and total per minute for all clients. Wrap it in
+// NewCachedTokenReviewer so cached tokens do not count. Behind an Ingress or
+// a mesh sidecar every client has the proxy's address and shares one budget.
+func NewRateLimitedTokenReviewer(inner TokenReviewer, perMinute, total int) TokenReviewer {
+	return &rateLimitedReviewer{inner: inner, perMinute: perMinute, total: total, now: time.Now, counts: map[string]int{}}
 }
 
 func (r *rateLimitedReviewer) Review(ctx context.Context, token string) (*authv1.TokenReviewStatus, error) {
@@ -70,8 +76,13 @@ func (r *rateLimitedReviewer) allow(addr string) bool {
 	now := r.now()
 	if !now.Before(r.resetAt) {
 		r.counts = map[string]int{}
+		r.all = 0
 		r.resetAt = now.Add(time.Minute)
 	}
+	if r.counts[addr] >= r.perMinute || (r.total > 0 && r.all >= r.total) {
+		return false
+	}
 	r.counts[addr]++
-	return r.counts[addr] <= r.perMinute
+	r.all++
+	return true
 }

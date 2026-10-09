@@ -201,6 +201,14 @@ bundleAPI:
   # The static token, when set, still works as a single-tenant admin token.
   tokenReview: false
 
+# -- Gate overrides (approvals) made through kardinal.
+gateOverrides:
+  # -- Longest override, in minutes (--gate-override-max-minutes). The UI
+  # refuses a longer one, and the scoped-writes admission policy refuses a
+  # longer one written with kubectl by a caller limited to
+  # policygates/override.
+  maxMinutes: 1440
+
 # -- TokenReview settings shared by ui.auth.tokenReview and
 # bundleAPI.tokenReview.
 tokenReview:
@@ -262,12 +270,15 @@ rbac:
     # with RoleBindings. See docs/guides/security.md#user-roles.
     enabled: true
     # -- Also aggregate them into the built-in view (viewer), edit (promoter,
-    # approver) and admin ClusterRoles.
-    aggregateToDefaultRoles: true
+    # approver) and admin ClusterRoles. Off by default: with it, everyone
+    # bound to edit can both promote and approve gates in that namespace.
+    aggregateToDefaultRoles: false
     # -- Also grant the promoter update on Pipelines and the approver update
     # on PolicyGates, so kardinal pause and kardinal override work from their
     # kubeconfigs. An admission policy limits those writes to spec.paused and
-    # spec.overrides. Off: they act through the UI API only.
+    # spec.overrides. Off: they act through the UI API only. On weakens the
+    # audit trail: those writes are the user's own, with no requested-by
+    # record from kardinal, and createdBy is checked only by the policy.
     directWrites: false
 
 # -- kro Graph integration.

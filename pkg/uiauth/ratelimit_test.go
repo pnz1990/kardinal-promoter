@@ -32,7 +32,7 @@ func (c *guessReviewer) Review(_ context.Context, token string) (*authv1.TokenRe
 func TestRateLimitedReviewer(t *testing.T) {
 	inner := &guessReviewer{}
 	now := time.Unix(1_000_000, 0)
-	limited := NewRateLimitedTokenReviewer(inner, 3).(*rateLimitedReviewer)
+	limited := NewRateLimitedTokenReviewer(inner, 3, 100).(*rateLimitedReviewer)
 	limited.now = func() time.Time { return now }
 	h := MiddlewareFor(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -66,4 +66,24 @@ func TestRateLimitedReviewer(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		assert.Equal(t, http.StatusUnauthorized, do("10.0.0.1:2000", fmt.Sprintf("next-%d", i)), "the budget is back the next minute")
 	}
+}
+
+// TestRateLimitedReviewer_GlobalCap: past the total for all clients, every
+// address gets 429 until the next minute, however many addresses there are.
+func TestRateLimitedReviewer_GlobalCap(t *testing.T) {
+	inner := &guessReviewer{}
+	now := time.Unix(2_000_000, 0)
+	limited := NewRateLimitedTokenReviewer(inner, 10, 5).(*rateLimitedReviewer)
+	limited.now = func() time.Time { return now }
+	ctx := func(addr string) context.Context { return withClientAddr(context.Background(), addr) }
+	for i := 0; i < 5; i++ {
+		_, err := limited.Review(ctx(fmt.Sprintf("10.0.1.%d:1", i)), "t")
+		require.NoError(t, err)
+	}
+	_, err := limited.Review(ctx("10.0.9.9:1"), "t")
+	assert.ErrorIs(t, err, ErrRateLimited, "a new address is refused once the total is used")
+	assert.Equal(t, int32(5), inner.n.Load())
+	now = now.Add(time.Minute)
+	_, err = limited.Review(ctx("10.0.9.9:1"), "t")
+	assert.NoError(t, err)
 }

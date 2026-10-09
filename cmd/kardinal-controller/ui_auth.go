@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/rs/zerolog"
 	"k8s.io/client-go/rest"
@@ -42,6 +43,21 @@ type uiAuthConfig struct {
 type reviewOptions struct {
 	audiences       []string
 	acceptAPIServer bool
+	// apiServerAudiences are the API server's own token audiences (from the
+	// controller's ServiceAccount token); none of them may be in audiences.
+	apiServerAudiences []string
+	// shared, when set, makes every newReviewers call return the same
+	// reviewers, so the UI API and the Bundle API share one cache and one
+	// rate limit.
+	shared *sharedReviewers
+}
+
+// sharedReviewers builds the review clients once.
+type sharedReviewers struct {
+	once   sync.Once
+	tokens uiauth.TokenReviewer
+	access uiauth.AccessReviewer
+	err    error
 }
 
 // uiAuthFlags are the UI API auth flags.
@@ -83,6 +99,17 @@ func buildUIAuth(cfg *rest.Config, f uiAuthFlags) (uiAuthConfig, error) {
 // the UI API and the Bundle API authenticate and authorize callers with.
 // TokenReviews that miss the cache are limited per client address.
 func newReviewers(cfg *rest.Config, opts reviewOptions) (uiauth.TokenReviewer, uiauth.AccessReviewer, error) {
+	if s := opts.shared; s != nil {
+		s.once.Do(func() {
+			o := opts
+			o.shared = nil
+			s.tokens, s.access, s.err = newReviewers(cfg, o)
+		})
+		return s.tokens, s.access, s.err
+	}
+	if err := uiauth.CheckAudiences(opts.audiences, opts.apiServerAudiences); err != nil {
+		return nil, nil, err
+	}
 	tokens, err := uiauth.NewKubeTokenReviewer(cfg, opts.audiences, opts.acceptAPIServer)
 	if err != nil {
 		return nil, nil, fmt.Errorf("token reviewer: %w", err)
@@ -91,7 +118,7 @@ func newReviewers(cfg *rest.Config, opts reviewOptions) (uiauth.TokenReviewer, u
 	if err != nil {
 		return nil, nil, fmt.Errorf("access reviewer: %w", err)
 	}
-	limited := uiauth.NewRateLimitedTokenReviewer(tokens, uiauth.DefaultReviewsPerClientPerMinute)
+	limited := uiauth.NewRateLimitedTokenReviewer(tokens, uiauth.DefaultReviewsPerClientPerMinute, uiauth.DefaultReviewsPerMinute)
 	return uiauth.NewCachedTokenReviewer(limited, uiauth.DefaultCacheTTL),
 		uiauth.NewCachedAccessReviewer(access, uiauth.DefaultCacheTTL), nil
 }
