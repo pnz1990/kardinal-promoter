@@ -365,6 +365,49 @@ func TestPipelineReconciler_ArgoCDPRReviewInvalid(t *testing.T) {
 	}
 }
 
+// TestPipelineReconciler_PRTemplateInvalid: a pr template that does not
+// parse or render sets the Pipeline Ready=False/ValidationFailed with the
+// environment and field (#1453); a valid one stays Valid, and reconciling
+// again changes nothing.
+func TestPipelineReconciler_PRTemplateInvalid(t *testing.T) {
+	tests := []struct {
+		name       string
+		pr         *kardinalv1alpha1.PRConfig
+		wantStatus metav1.ConditionStatus
+		wantReason string
+		wantMsg    string
+	}{
+		{name: "parse error", pr: &kardinalv1alpha1.PRConfig{TitleTemplate: "{{ .Bundle.Name "},
+			wantStatus: metav1.ConditionFalse, wantReason: "ValidationFailed", wantMsg: `environment "prod": pr.titleTemplate:`},
+		{name: "unknown field", pr: &kardinalv1alpha1.PRConfig{Labels: []string{"{{ .Bundle.Nope }}"}},
+			wantStatus: metav1.ConditionFalse, wantReason: "ValidationFailed", wantMsg: `environment "prod": pr.labels[0]:`},
+		{name: "valid", pr: &kardinalv1alpha1.PRConfig{TitleTemplate: "deploy {{ .Bundle.Version }}", Reviewers: []string{"alice"}},
+			wantStatus: metav1.ConditionTrue, wantReason: "Valid"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test"},
+				{Name: "prod", DependsOn: []string{"test"}, Approval: "pr-review", PR: tc.pr},
+			})
+			c := newClientWithIndex(newScheme(), p)
+			key := types.NamespacedName{Name: "app", Namespace: "default"}
+			r := &pipeline.Reconciler{Client: c}
+			for i := 0; i < 2; i++ {
+				_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+				require.NoError(t, err)
+				var got kardinalv1alpha1.Pipeline
+				require.NoError(t, c.Get(context.Background(), key, &got))
+				cond := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+				require.NotNil(t, cond)
+				assert.Equal(t, tc.wantStatus, cond.Status)
+				assert.Equal(t, tc.wantReason, cond.Reason)
+				assert.Contains(t, cond.Message, tc.wantMsg)
+			}
+		})
+	}
+}
+
 // TestPipelineReconciler_Idempotent verifies that if a Pipeline already has the
 // correct Valid condition, reconcile is a no-op and keeps lastTransitionTime.
 func TestPipelineReconciler_Idempotent(t *testing.T) {

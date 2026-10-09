@@ -202,11 +202,13 @@ spec:
                   resource: limits.memory
                   divisor: "1"
             {{- with include "kardinal-promoter.githubSecretName" . }}
+            {{- if not $.Values.github.app.enabled }}
             - name: GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ . }}
                   key: {{ include "kardinal-promoter.githubSecretKey" $ }}
+            {{- end }}
             # The controller watches this Secret and reloads the SCM provider
             # when the token changes (no restart).
             - name: KARDINAL_SCM_TOKEN_SECRET_NAME

@@ -240,6 +240,7 @@ choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 | `leaderElectionFlowSchema.priorityLevel` | `leader-election` | Priority level for the Lease requests |
 | `github.secretRef.name` | `""` | Existing Secret (release namespace) holding the SCM token. Recommended |
 | `github.secretRef.key` | `token` | Key in the Secret |
+| `github.app.enabled` | `false` | The `github.secretRef.name` Secret holds GitHub App credentials (`githubAppID`, `githubAppInstallationID`, `githubAppPrivateKey`) instead of a token; see [GitHub App](scm-providers.md#github-app). Needs `github.secretRef.name` |
 | `github.token` | `""` | Token value. The chart stores it in Secret `<fullname>-github-token` (`kardinal-promoter-github-token` for release `kardinal-promoter`); the value stays in the Helm release history. Setting both this and `secretRef.name` fails |
 | `scm.provider` | `""` | `--scm-provider`: `github` (default), `gitlab`, `forgejo`, `gitea`, `bitbucket`, `azuredevops` |
 | `scm.apiURL` | `""` | `--scm-api-url` for self-hosted SCM instances |

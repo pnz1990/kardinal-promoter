@@ -261,6 +261,16 @@
               "type": "string"
             }
           }
+        },
+        "app": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "The github.secretRef Secret holds githubAppID, githubAppInstallationID and githubAppPrivateKey instead of a token."
+            }
+          }
         }
       }
     },
