@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // maxObjectNameLength is the longest valid Kubernetes object name.
@@ -60,7 +61,10 @@ func writeGateAuditEvent(
 	}
 
 	action := "GateEvaluated"
-	suffix := fmt.Sprintf("-gate-%s-%d", strings.ToLower(outcome), at.Unix())
+	// Milliseconds: a gate can flip more than once in a second, and with
+	// seconds the second flip to the same outcome had the first one's name
+	// and was dropped as AlreadyExists (#1484).
+	suffix := fmt.Sprintf("-gate-%s-%d", strings.ToLower(outcome), at.UnixMilli())
 	base := gate.Name
 	if limit := maxObjectNameLength - len(suffix); len(base) > limit {
 		base = base[:limit]
@@ -98,6 +102,10 @@ func writeGateAuditEvent(
 			Message:      reason,
 		},
 	}
+
+	// spec.timestamp is stored with one-second resolution; the annotation
+	// orders records within a second (lifecycle.CompareAuditEvents).
+	lifecycle.StampCreatedAt(ae, at.Time)
 
 	// AlreadyExists is the same transition written by an earlier attempt.
 	err := c.Create(ctx, ae)
