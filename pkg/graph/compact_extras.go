@@ -201,8 +201,9 @@ func compactHookNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alp
 		// phase succeeded, and, as the node shape gates the HookRun nodes
 		// (stepConds): a pre hook while the Bundle is not Superseded,
 		// Rejected or waiting for a slot, the environment not held on another
-		// Bundle, every upstream Verified and every gate (the pause freeze
-		// gate included) ready, and the image verified for a root step,
+		// Bundle, every upstream Verified and every gate ready, and the
+		// image verified for a root step (a pause is not in the Graph: the
+		// HookRun reconciler waits while the Pipeline is paused),
 		// whether or not the step already exists; a post hook once the step
 		// entered Verifying and the Bundle is not Superseded.
 		admit[field] = fmt.Sprintf(`${%[1]s.%[2]s.filter(h, h.name in %[3]shookRuns || `+

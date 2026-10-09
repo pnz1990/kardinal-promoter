@@ -626,12 +626,12 @@ func TestStep_HooksInCompactGraph(t *testing.T) {
 	}
 }
 
-// TestStep_CompactPauseHoldsNextPreHook: with the compact Graph shape, a
-// pre hook is created only while the node shape's HookRun node would
-// resolve, also once the environment's step exists (QA #1602). prod's step
-// and its first pre hook exist when the Pipeline is paused; the first hook
-// finishes, but the second is not created while the pause's freeze gate
-// holds prod. After resume it runs and prod is Verified.
+// TestStep_CompactPauseHoldsNextPreHook: with the compact Graph shape,
+// prod's step and its first pre hook exist when the Pipeline is paused
+// (QA #1602). The first hook finishes, and the second does not run while
+// the Pipeline is paused: a pause does not rebuild the Graph, so the
+// HookRun reconciler holds it in Pending, as the PromotionStep reconciler
+// holds steps. After resume it runs and prod is Verified.
 //
 // Covers HOOK-COMPACT-03.
 func TestStep_CompactPauseHoldsNextPreHook(t *testing.T) {
@@ -656,12 +656,20 @@ func TestStep_CompactPauseHoldsNextPreHook(t *testing.T) {
 	require.True(t, ok, "prod's step exists")
 	e.MustKardinal(t, a.ns, "pause", pipelineName)
 	waitHookRun(t, e, a.ns, migrate, v1alpha1.HookRunSucceeded)
-	framework.Consistently(t, 30*time.Second, "no second pre hook while paused", func(ctx context.Context) (bool, string) {
-		_, exists, err := hookRun(ctx, e, a.ns, seed)
+	framework.Consistently(t, 30*time.Second, "the second pre hook not started while paused", func(ctx context.Context) (bool, string) {
+		hr, exists, err := hookRun(ctx, e, a.ns, seed)
 		if err != nil {
 			return false, err.Error()
 		}
-		return !exists, fmt.Sprintf("seed exists=%v", exists)
+		if !exists {
+			return true, "seed not created yet"
+		}
+		pods, err := hookPods(ctx, e, a.ns, seed)
+		if err != nil {
+			return false, err.Error()
+		}
+		return hr.Status.StartedAt == nil && hr.Status.JobUID == "" && len(pods) == 0,
+			fmt.Sprintf("seed phase=%q message=%q pods=%d", hr.Status.Phase, hr.Status.Message, len(pods))
 	})
 	a.fileHas(t, "prod", fixtures.V1, "prod in git while paused")
 

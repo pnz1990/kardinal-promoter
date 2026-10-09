@@ -40,6 +40,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
@@ -69,6 +70,9 @@ const (
 	// requeueSibling is the poll while another run of the same hook slot
 	// finishes.
 	requeueSibling = 10 * time.Second
+
+	// requeuePaused is the poll while the Pipeline is paused.
+	requeuePaused = 30 * time.Second
 )
 
 // Reconciler runs HookRun Jobs.
@@ -381,6 +385,20 @@ func (r *Reconciler) start(ctx context.Context, log zerolog.Logger, base, hr *v1
 		r.finish(hr, v1alpha1.HookRunFailed, err.Error())
 		log.Warn().Err(err).Msg("hook rejected")
 		return ctrl.Result{}, r.patch(ctx, base, hr)
+	}
+	// A paused Pipeline starts no hook (kardinal pause: nothing new starts,
+	// in flight holds at the next safe point). The pause is the freeze
+	// PolicyGate, read as the PromotionStep reconciler reads it; it is not in
+	// the Graph, which a pause does not rebuild. Waiting before the start
+	// keeps the timeout from running down during the pause.
+	paused, err := lifecycle.IsPaused(ctx, r.Client, hr.Namespace, hr.Spec.PipelineName)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("hookrun %s: %w", hr.Name, err)
+	}
+	if paused {
+		hr.Status.Phase = v1alpha1.HookRunPending
+		hr.Status.Message = "not started: " + lifecycle.PausedMessage(hr.Spec.PipelineName)
+		return ctrl.Result{RequeueAfter: requeuePaused}, r.patch(ctx, base, hr)
 	}
 	if !controllerutil.ContainsFinalizer(hr, Finalizer) {
 		before := hr.DeepCopy()

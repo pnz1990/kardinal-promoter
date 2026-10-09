@@ -115,6 +115,9 @@ Pending ──pre hooks succeeded──▶ Promoting ─▶ (WaitingForMerge) �
   is `Skipped`, and the step gets the condition `HooksSkipped` naming it. The next Bundle runs it.
 - **Nothing is left running.** Deleting the Bundle deletes its Graph, its HookRuns (once their
   Jobs ended), their Jobs and Pods (garbage collection through the owner references).
+- **A paused Pipeline starts no hook.** After `kardinal pause`, a HookRun that has not started
+  waits in `Pending` ("not started: pipeline ... is paused"), and its timeout does not count
+  until `kardinal resume`. A hook that is already running finishes.
 - **A superseded Bundle starts no hooks.** A hook that is already running finishes; the
   superseded Bundle's step does not start, and the new Bundle runs its own hooks.
 
@@ -167,7 +170,7 @@ namespaces (the chart grants it) and caches only Jobs labelled `kardinal.io/hook
 In a [compact Graph](pipeline-reference.md#large-pipelines) (above `--graph-compact-above`
 environments) the HookRuns are items of one collection, created under the conditions the node
 shape's HookRun nodes resolve under. A pre hook is created once the previous one succeeded, its
-environment's upstreams are Verified, its gates are ready (the pause freeze gate too), the
+environment's upstreams are Verified, its gates are ready, the
 environment is not held for another Bundle, the Bundle is not Superseded, Rejected or waiting for a
 `maxConcurrentPromotions` slot, and, for a root environment, the image is verified. All of this
 holds even after the environment's PromotionStep exists. A post hook is created once the step

@@ -26,6 +26,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/hookrun"
 )
 
@@ -392,4 +393,28 @@ func TestHookRun_DeletedIsNoop(t *testing.T) {
 	assert.False(t, exists)
 	h2 := newHarness(t)
 	h2.reconcile() // a HookRun that is gone: no error
+}
+
+// TestHookRun_WaitsWhilePaused: a HookRun of a paused Pipeline (its freeze
+// gate exists) does not start: no deadline, no Job, Pending with the pause
+// message, and the reconcile is idempotent. Once resumed it starts with the
+// full timeout ahead.
+func TestHookRun_WaitsWhilePaused(t *testing.T) {
+	freeze := lifecycle.DesiredFreezeGate(&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: ns}})
+	h := newHarness(t, newHookRun(jobJSON("")), freeze)
+	for range 2 {
+		h.reconcile()
+		hr := h.hookRun()
+		assert.Equal(t, v1alpha1.HookRunPending, hr.Status.Phase)
+		assert.Contains(t, hr.Status.Message, "pipeline app is paused")
+		assert.Nil(t, hr.Status.Deadline, "the timeout does not run while paused")
+		assert.Empty(t, hr.Status.SpecHash)
+		_, exists := h.job()
+		assert.False(t, exists)
+	}
+	require.NoError(t, h.c.Delete(context.Background(), freeze))
+	h.now = h.now.Add(time.Hour)
+	h.run()
+	assert.Equal(t, h.now.Add(10*time.Minute), h.hookRun().Status.Deadline.UTC())
+	assert.Equal(t, 1, h.creates)
 }
