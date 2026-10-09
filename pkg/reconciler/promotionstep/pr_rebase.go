@@ -5,11 +5,13 @@ package promotionstep
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
@@ -41,14 +43,30 @@ const (
 	deepHistoryDepth = 500
 )
 
+// historyTimeout bounds the history reads of one check. A read that takes
+// longer (a slow or huge remote) counts as history not found: the PR branch
+// is rebuilt, which is always safe, instead of holding the reconcile.
+var historyTimeout = 30 * time.Second
+
+// hintHistoryUnknown is added to the message of a rebuild done without
+// knowing which paths the base branch changed.
+const hintHistoryUnknown = "the base branch history since the PR was built could not be read (force-pushed, " +
+	"or the read timed out), so the PR branch was rebuilt to be safe"
+
 // changedSince returns the paths the base branch changed between since and
 // head, reading historyDepth commits and then, if since is not among them
 // and the branch had more, deepHistoryDepth. found is false when since is
-// not in the deeper history either.
+// not in the deeper history either, or when the reads take longer than
+// historyTimeout.
 func (r *Reconciler) changedSince(ctx context.Context, rh scm.RemoteHeadReader, url, branch, head, since, token string) ([]string, bool, error) {
+	hctx, cancel := context.WithTimeout(ctx, historyTimeout)
+	defer cancel()
 	for _, depth := range []int{historyDepth, deepHistoryDepth} {
-		history, err := r.remotes.branchHistory(ctx, rh, url, branch, head, token, depth)
+		history, err := r.remotes.branchHistory(hctx, rh, url, branch, head, token, depth)
 		if err != nil {
+			if ctx.Err() == nil && errors.Is(hctx.Err(), context.DeadlineExceeded) {
+				return nil, false, nil // too slow: history not found
+			}
 			return nil, false, err
 		}
 		if changed, found := scm.PathsChangedSince(history, since); found {
@@ -124,6 +142,7 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 		return true, r.Status().Patch(ctx, ps, client.MergeFrom(base))
 	}
 	changed, found, herr := r.changedSince(ctx, rh, url, branch, head, built, cred.token)
+	unknown := herr != nil || !found
 	switch {
 	case herr != nil:
 		log.Debug().Err(herr).Msg("could not read the base branch history; rebuilding the PR branch")
@@ -173,6 +192,8 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 	if outputs["noChanges"] == "true" {
 		note = fmt.Sprintf("base branch %s moved from %s to %s and already has this change; the PR branch is unchanged",
 			branch, short(built), short(head))
+	} else if unknown {
+		note += "; " + hintHistoryUnknown
 	}
 	ps.Status.Message = withLabelsError(fmt.Sprintf("PR #%s is open, waiting for merge (%s)", pr, note), outputs)
 	if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {

@@ -376,9 +376,10 @@ force-pushes the base branch, so no writer's commit is lost:
     outside it), the PR still merges cleanly: only `status.outputs.baseSHA` moves, nothing is
     pushed;
   - when they changed one of its paths, or the PR's base is not among the last 500 (a
-    force-push), it reruns the promotion's steps on a fresh clone of the new head and
+    force-push), or reading them takes longer than 30 seconds, it reruns the promotion's steps on a fresh clone of the new head and
     force-pushes the PR branch, so the PR is one commit on the current base
-    (`status.outputs.prBranchRebuilds` counts it);
+    (`status.outputs.prBranchRebuilds` counts it; when the history could not be read, the
+    step message says the PR branch was rebuilt to be safe);
   - when the PR branch has a commit kardinal did not push (its head is not
     `status.outputs.pushedSHA`), it is never rebuilt, and the step message says so.
 

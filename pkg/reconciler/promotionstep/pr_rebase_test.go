@@ -211,6 +211,8 @@ func TestWaitingForMerge_RebuildsPRBranchOnMovedBase(t *testing.T) {
 	assert.Equal(t, "rewritten\n", pr.file(t, "README.md"))
 	assert.Equal(t, forced, st.outputs["baseSHA"])
 	assert.Equal(t, "2", st.outputs["prBranchRebuilds"])
+	assert.Contains(t, st.message, "the base branch history since the PR was built could not be read (force-pushed, "+
+		"or the read timed out), so the PR branch was rebuilt to be safe", "the rebuild names why")
 
 	// Someone pushes to the PR branch; then main moves under the PR's path.
 	human := remote.commitOn(branch, map[string]string{"environments/prod/fix.yaml": "by hand\n"}, false)
@@ -235,4 +237,58 @@ func TestWaitingForMerge_RebuildsPRBranchOnMovedBase(t *testing.T) {
 type promotionstepState struct {
 	outputs map[string]string
 	message string
+}
+
+// slowHistory is a git client whose branch history reads never answer before
+// their context ends.
+type slowHistory struct {
+	*scm.GoGitClient
+	calls int
+}
+
+func (s *slowHistory) BranchHistory(ctx context.Context, _, _, _ string, _ int) ([]scm.CommitPaths, error) {
+	s.calls++
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestWaitingForMerge_HistoryTimeoutRebuilds (#1504 QA): a base branch
+// history read that takes longer than its timeout counts as history not
+// found. The reconcile does not wait for it: the PR branch is rebuilt on the
+// moved base, which is always safe, and the message says why.
+func TestWaitingForMerge_HistoryTimeoutRebuilds(t *testing.T) {
+	defer promotionstep.SetHistoryTimeout(50 * time.Millisecond)()
+	remote := newGitRemote(t)
+	pl, b := makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo")
+	pl.Spec.Git.URL = remote.url()
+	pl.Spec.Environments[1].Path = "environments/prod"
+	b.Spec.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/test/app", Tag: "1.2.3"}}
+	step := builtStep(t, pl, b, "prod")
+	step.Status.State = "Promoting"
+	c := newClient(t, step, pl, b, openPRStatus(step.Spec.PRStatusRef, "", 0))
+	m := &mockSCM{open: true, prURL: "https://github.com/test/repo/pull/5", prNumber: 5}
+	git := &slowHistory{GoGitClient: scm.NewGoGitClient()}
+	now := time.Now()
+	r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: git,
+		NowFn:     func() time.Time { return now },
+		WorkDirFn: func(_, _ string) string { return filepath.Join(t.TempDir(), "w") }}
+	reconcileStep(t, r, step.Name)
+	reconcileStep(t, r, step.Name)
+	got := getStep(t, c, step.Name)
+	require.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
+	branch := got.Status.Outputs["branch"]
+
+	// A commit at another path: with the history readable this would not
+	// rebuild; with a read that times out it does.
+	moved := remote.commit(map[string]string{"notes/ci.txt": "note\n"}, false)
+	now = now.Add(31 * time.Second)
+	start := time.Now()
+	reconcileStep(t, r, step.Name)
+	assert.Less(t, time.Since(start), 20*time.Second, "the reconcile does not wait for the slow read")
+	got = getStep(t, c, step.Name)
+	require.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
+	assert.Positive(t, git.calls, "the history was asked for")
+	assert.Equal(t, []plumbing.Hash{plumbing.NewHash(moved)}, remote.head(branch).Parents, "rebuilt on the new head")
+	assert.Equal(t, "1", got.Status.Outputs["prBranchRebuilds"])
+	assert.Contains(t, got.Status.Message, "could not be read (force-pushed, or the read timed out), so the PR branch was rebuilt to be safe")
 }
