@@ -18,6 +18,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - A PolicyGate instance that allows after blocking has `Ready` reason `Unblocked` instead of `Allowed`, for the whole allowed episode; one that allows on its first evaluation still reads `Allowed`
+- **kro tuning for large promotions** — `hack/install-kro.sh` now installs kro with 8 Graph workers (`config.graphConcurrentReconciles`, kro's default is 1) and client QPS 300 / burst 500 (`KRO_GRAPH_CONCURRENT_RECONCILES`, `KRO_CLIENT_QPS`, `KRO_CLIENT_BURST` override them). With one worker, one 150-environment promotion delayed every other Graph in the cluster by up to about 30 seconds. Re-run the script to apply it to an existing kro, or set the same Helm values if you install kro another way. See [Install kro](https://pnz1990.github.io/kardinal-promoter/installation/#install-kro)
+- **Graph size limit** — a Bundle whose Graph would be over about 1.2 MB fails (`InvalidSpec` reason `GraphBuildFailed`) with a message naming the size, instead of a Graph the API server refuses to store (etcd keeps at most 1.5 MiB per object). The size grows with the PolicyGates per environment: 100 environments with 3 gates each make a Graph of about 0.6 MB, with 5 gates about 0.85 MB, and with 10 gates about 1.5 MB, which is refused
+- **`time` is a reserved environment name** — kro#1434 (KREP-025, `time.now()`, not merged yet) proposes reserving `time` as a Graph node ID, so the Pipeline CRD now rejects an environment named `time`, like `bundle`, before a kro upgrade could break such a Pipeline. Rename one before upgrading (see [Upgrade](https://pnz1990.github.io/kardinal-promoter/installation/#upgrade))
 
 ### Deprecated
 
