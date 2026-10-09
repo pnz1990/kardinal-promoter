@@ -615,6 +615,9 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		// ReadyWhen intentionally omitted — ref: is read-only.
 	}
 	nodes = append(nodes, bundleWatchNode)
+	if anyNeedsApprovals(gatesByEnv) {
+		nodes = append(nodes, approvalsRefNode(bundle)) // approval gates (approvals.go)
+	}
 
 	gates := newGateCollections(pipelineName, bundle.Name)
 	var prItems []interface{}

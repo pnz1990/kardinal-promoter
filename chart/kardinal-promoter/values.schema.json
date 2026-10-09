@@ -413,6 +413,17 @@
       },
       "description": "Deprecated, no effect."
     },
+    "admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "controllerUsernames": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1, "pattern": "^[^*]+$"},
+          "description": "Exact usernames, besides this release's controller ServiceAccount, that run a kardinal controller."
+        }
+      }
+    },
     "tracing": {
       "type": "object",
       "additionalProperties": false,

@@ -49,6 +49,8 @@ AuditEvents are written by the controller at key points:
   PromotionRejected    — kardinal reject cancelled an in-flight promotion
   GateEvaluated        — PolicyGate changed readiness state
   GateOverridden       — An override was recorded on a gate (verified author)
+  ApprovalRecorded     — An approval gate saw a kardinal approve decision
+  ApprovalRevoked      — An approval gate saw that decision's Approval deleted
   RollbackStarted      — onHealthFailure=rollback triggered a rollback Bundle
   RollbackSucceeded    — A rollback Bundle's step reached Verified (written
                          besides PromotionSucceeded, once per step)
