@@ -1284,6 +1284,8 @@ func TestChartGateStatusHeartbeat(t *testing.T) {
 // TestChartControllerWorkers: controller.workers sets the workers of each
 // controller; unset keeps the controller defaults (no flag); the schema
 // refuses 0 and unknown controllers.
+//
+// Covers PERF-WORKERS-01.
 func TestChartControllerWorkers(t *testing.T) {
 	c := controllerContainer(t, render(t, "kardinal-promoter"))
 	for _, f := range []string{"promotionstep-workers", "prstatus-workers", "policygate-workers", "bundle-workers", "pipeline-workers"} {

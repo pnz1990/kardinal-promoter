@@ -155,6 +155,7 @@ kardinal version
 | `controller.watchNamespace` | `""` | Namespace-scoped mode (`--watch-namespace`). Must equal the release namespace |
 | `controller.policyNamespaces` | `[]` | Namespaces with org-level PolicyGates (`--policy-namespaces`; default `platform-policies`) |
 | `controller.gateStatusHeartbeat` | `""` | Longest a PolicyGate's status goes unwritten while its result does not change (`--gate-status-heartbeat`; default `10m`; `0s` writes on every evaluation). See [Policy gates](policy-gates.md#re-evaluation) |
+| `controller.workers.promotionStep` / `.prStatus` / `.policyGate` / `.bundle` / `.pipeline` | unset (16 / 8 / 8 / 4 / 4) | How many objects of a kind are reconciled at once (`--promotionstep-workers`, ...). One object is never reconciled twice at once. See [Controller concurrency](#controller-concurrency) |
 | `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers. Paths inside the container: mount the certificate Secret with `controller.extraVolumes` / `extraVolumeMounts`. Set both or neither: the chart refuses one alone, and a path that is not in a mounted `secret`, `projected` or `csi` volume (for certificates that come another way, set `KARDINAL_TLS_CERT_FILE` and `KARDINAL_TLS_KEY_FILE` with `controller.extraEnv`) |
 | `controller.extraArgs` / `extraEnv` / `extraVolumes` / `extraVolumeMounts` | `[]` | Extra controller args, env vars, volumes and mounts |
 | `rbac.argocdApplicationsWrite` | `false` | Grant `patch` on Argo CD Applications (the `argocd` update strategy) |
@@ -526,6 +527,40 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 - **Rolling back to v0.8.1** was not tested.
 
 ---
+
+## Controller concurrency
+
+Each controller reconciles several objects at once. A PromotionStep holds its worker through
+every git and SCM round trip, so one worker made the steps of every Pipeline in the cluster wait
+for each other: one slow repository or git host slowed every promotion. The defaults below
+were measured with the scale suite (200 Pipelines x 3 automatic environments, one Bundle each,
+started together; controller built with `-race`, 4 CPU, 2 replicas):
+
+| Workers | Step created to Verified p50 / p99 | Bundle end to end p50 / p99 | All settled | Peak work queue |
+|---|---|---|---|---|
+| 1 each (before) | 53 s / 65 s | 225 s / 281 s | 281 s | bundle 200, pipeline 198, promotionstep 138 |
+| defaults | 1 s / 2 s | 57 s / 177 s | 184 s | bundle 197, pipeline 82 |
+| defaults, 16 for Bundles | 1 s / 2 s | 66 s / 182 s | 201 s | bundle 185 |
+
+With 1.5 s of latency on every git round trip and 2 Bundles a second over 40 Pipelines for 10
+minutes, one worker brought 180 steps to `Verified` (step p99 67 s, PromotionStep queue 84);
+the defaults brought 597 (step p99 20 s, queue 22). The controller's memory was the same with
+one worker and with the defaults (peak resident about 700 MiB in that run with the race
+detector, which inflates it), so the workers add no memory of note.
+
+| Value | Flag | Default | Why |
+|---|---|---|---|
+| `controller.workers.promotionStep` | `--promotionstep-workers` | `16` | git clone, commit, push, PR and health checks: almost all waiting on the network |
+| `controller.workers.prStatus` | `--prstatus-workers` | `8` | one SCM call per poll |
+| `controller.workers.policyGate` | `--policygate-workers` | `8` | CEL evaluation and a status write; the compiled programs are shared |
+| `controller.workers.bundle` | `--bundle-workers` | `4` | Graph creation; more workers did not help, kro processes the Graphs (see the last row above) |
+| `controller.workers.pipeline` | `--pipeline-workers` | `4` | status and history |
+
+One object is never reconciled by two workers at once: the work queue serializes it. Bundles
+of one Pipeline with `maxConcurrentPromotions` count the free slots under a per-Pipeline lock,
+so more workers never promote past the cap. Raise `promotionStep` for many Pipelines on slow
+git hosts. Each step that runs at once holds one shallow clone of its repository in the
+controller's memory and its working directory on disk.
 
 ## Graceful shutdown
 

@@ -37,6 +37,8 @@ func (s *slowTranslator) Translate(_ context.Context, _ *kardinalv1alpha1.Pipeli
 // write run under the Pipeline's lock, so no more than
 // maxConcurrentPromotions Bundles promote; Bundles of other Pipelines are
 // not held by that lock. Run with -race.
+//
+// Covers PERF-WORKERS-01.
 func TestReconciler_WorkersKeepTheSlotCap(t *testing.T) {
 	// A newer Bundle supersedes the older ones of its type, so the
 	// Bundles that compete for the one slot have different types.

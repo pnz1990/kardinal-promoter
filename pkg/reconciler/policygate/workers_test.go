@@ -25,6 +25,8 @@ import (
 // --policygate-workers above 1, evaluates many gates at once, sharing its
 // CEL program cache, and writes each gate's own result and one audit
 // record per gate. Run with -race.
+//
+// Covers PERF-WORKERS-01.
 func TestReconciler_GatesEvaluateSideBySide(t *testing.T) {
 	const n = 24
 	tue := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)

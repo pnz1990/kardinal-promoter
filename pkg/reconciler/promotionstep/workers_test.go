@@ -57,6 +57,8 @@ func (m *lockedSCM) CommentOnPR(ctx context.Context, repo string, n int, body st
 // each through git and open-pr to WaitingForMerge with its own PR, and a
 // reconcile run again on each opens no second PR. Run with -race: it fails
 // on any state the reconciler shares between reconciles of different steps.
+//
+// Covers PERF-WORKERS-01.
 func TestReconciler_StepsRunSideBySide(t *testing.T) {
 	const pipelines = 12
 	var objs []client.Object
