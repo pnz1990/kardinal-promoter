@@ -433,6 +433,18 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.lastEvaluatedAt` | string (date-time) |  | LastEvaluatedAt is when the gate's result was last written. The controller re-evaluates more often, but writes the status only when the result or reason changes, when a PromotionStep that has not started needs a newer result, after a spec change, and otherwise at least every 10 minutes. |
+| `status.pendingAuditEvents` | []object |  | PendingAuditEvents are AuditEvents for this gate's transitions that are not yet written (the audit outbox, #1552). Each entry is stored in the same status patch as its transition and removed once the AuditEvent exists, so an API error or a controller restart between the two cannot lose the record. Normally empty. |
+| `status.pendingAuditEvents[].createdAt` | string |  | CreatedAt is the transition time in RFC 3339 with nanoseconds, written to the AuditEvent's kardinal.io/created-at annotation: spec.timestamp has one-second resolution. |
+| `status.pendingAuditEvents[].labels` | map[string]string |  | Labels are the AuditEvent's labels. |
+| `status.pendingAuditEvents[].name` | string | yes | Name is the AuditEvent's name. |
+| `status.pendingAuditEvents[].spec` | object | yes | Spec is the AuditEvent's spec, timestamp included: the record carries the time of the transition, not the time it was written. |
+| `status.pendingAuditEvents[].spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated". HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`. |
+| `status.pendingAuditEvents[].spec.bundleName` | string | yes | BundleName is the name of the Bundle being promoted. |
+| `status.pendingAuditEvents[].spec.environment` | string | yes | Environment is the environment name where the event occurred. |
+| `status.pendingAuditEvents[].spec.message` | string |  | Message is a human-readable description of the event. |
+| `status.pendingAuditEvents[].spec.outcome` | string | yes | Outcome describes the result of the action. Valid values: "Success", "Failure", "Pending". One of: `Success`, `Failure`, `Pending`. |
+| `status.pendingAuditEvents[].spec.pipelineName` | string | yes | PipelineName is the name of the Pipeline the Bundle is promoting through. |
+| `status.pendingAuditEvents[].spec.timestamp` | string (date-time) | yes | Timestamp is when the event occurred (RFC 3339 format). |
 | `status.ready` | boolean | yes | Ready indicates whether the gate is currently allowing promotion. The kro Graph gates downstream nodes on status.ready == true. Default: `false`. |
 | `status.reason` | string |  | Reason explains the current ready state in human-readable form. |
 
@@ -474,6 +486,18 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.message` | string |  | Message provides human-readable detail about the current state. |
 | `status.nextRetryAt` | string (date-time) |  | NextRetryAt is when a step that failed with a retryable error runs again, or when a superseded step whose PR close failed retries the close (condition SupersededCloseFailed). A reconcile before then waits for it, so the retry backoff holds however often the step is reconciled (a gate re-evaluation, a PRStatus change, a controller restart). Cleared when the step runs again. |
 | `status.outputs` | map[string]string |  | Outputs accumulates key/value results from completed steps in the sequence (e.g. prURL from the open-pr step). |
+| `status.pendingAuditEvents` | []object |  | PendingAuditEvents are AuditEvents for this step's transitions that are not yet written (the audit outbox, #1552). Each entry is stored in the same status patch as its transition and removed once the AuditEvent exists, so an API error or a controller restart between the two cannot lose the record. Normally empty. |
+| `status.pendingAuditEvents[].createdAt` | string |  | CreatedAt is the transition time in RFC 3339 with nanoseconds, written to the AuditEvent's kardinal.io/created-at annotation: spec.timestamp has one-second resolution. |
+| `status.pendingAuditEvents[].labels` | map[string]string |  | Labels are the AuditEvent's labels. |
+| `status.pendingAuditEvents[].name` | string | yes | Name is the AuditEvent's name. |
+| `status.pendingAuditEvents[].spec` | object | yes | Spec is the AuditEvent's spec, timestamp included: the record carries the time of the transition, not the time it was written. |
+| `status.pendingAuditEvents[].spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated". HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`. |
+| `status.pendingAuditEvents[].spec.bundleName` | string | yes | BundleName is the name of the Bundle being promoted. |
+| `status.pendingAuditEvents[].spec.environment` | string | yes | Environment is the environment name where the event occurred. |
+| `status.pendingAuditEvents[].spec.message` | string |  | Message is a human-readable description of the event. |
+| `status.pendingAuditEvents[].spec.outcome` | string | yes | Outcome describes the result of the action. Valid values: "Success", "Failure", "Pending". One of: `Success`, `Failure`, `Pending`. |
+| `status.pendingAuditEvents[].spec.pipelineName` | string | yes | PipelineName is the name of the Pipeline the Bundle is promoting through. |
+| `status.pendingAuditEvents[].spec.timestamp` | string (date-time) | yes | Timestamp is when the event occurred (RFC 3339 format). |
 | `status.prURL` | string |  | PRURL is the GitHub pull request URL opened for this promotion. Set when the step enters WaitingForMerge state. |
 | `status.retryCount` | integer |  | RetryCount is the number of consecutive step-engine errors retried in the current state. Reset when a step makes progress. When it reaches the retry limit the PromotionStep fails. Retries counted in gitCredentialRetries are not counted here. |
 | `status.state` | string |  | State is the step execution state. The Graph controller uses readyWhen expressions of the form ${step.status.state == "Verified"} to advance the promotion DAG. One of: `Pending`, `Promoting`, `WaitingForMerge`, `HealthChecking`, `Verified`, `Failed`, `AbortedByAlarm`, `RollingBack`. |

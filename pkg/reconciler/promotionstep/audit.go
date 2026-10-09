@@ -17,16 +17,17 @@ package promotionstep
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/rs/zerolog"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
 )
 
 // AuditAction describes what happened at a promotion lifecycle transition.
@@ -48,82 +49,71 @@ const (
 	AuditOutcomePending = "Pending"
 )
 
-// writeAuditEvent creates an immutable AuditEvent CRD recording a promotion
-// lifecycle transition. Errors are logged and never returned: audit logging
-// must not block promotion.
+// auditKind labels the audit outbox metrics of PromotionStep records.
+const auditKind = "PromotionStep"
+
+// auditEntry is the outbox entry recording action on ps at at, and false
+// when ps lacks the pipeline or bundle label, so no useful record can be
+// written.
 //
 // The AuditEvent name is {ps.Name}-{action}, with no timestamp: one event per
 // step and action is intended, so a re-run reconcile that repeats the
 // transition hits AlreadyExists and writes nothing new.
-func writeAuditEvent(
-	ctx context.Context,
-	c client.Client,
-	ps *v1alpha1.PromotionStep,
-	action, outcome, message string,
-) {
-	if c == nil || ps == nil {
-		return
+func auditEntry(ps *v1alpha1.PromotionStep, action, outcome, message string, at time.Time) (v1alpha1.PendingAuditEvent, bool) {
+	if ps == nil {
+		return v1alpha1.PendingAuditEvent{}, false
 	}
-
-	// Extract pipeline and bundle from PromotionStep labels.
 	labels := ps.GetLabels()
 	pipelineName := labels["kardinal.io/pipeline"]
 	bundleName := labels["kardinal.io/bundle"]
 	envName := labels["kardinal.io/environment"]
 	if pipelineName == "" || bundleName == "" {
-		// Missing labels — can't produce a useful audit event.
-		return
+		return v1alpha1.PendingAuditEvent{}, false
 	}
+	name := sanitizeK8sName(fmt.Sprintf("%s-%s", ps.Name, slugifyAction(action)))
+	return audit.Entry(name, map[string]string{
+		"kardinal.io/pipeline":    pipelineName,
+		"kardinal.io/bundle":      bundleName,
+		"kardinal.io/environment": envName,
+		"kardinal.io/action":      action,
+	}, v1alpha1.AuditEventSpec{
+		BundleName:   bundleName,
+		PipelineName: pipelineName,
+		Environment:  envName,
+		Action:       action,
+		Outcome:      outcome,
+		Message:      message,
+	}, metav1.NewTime(at)), true
+}
 
-	now := metav1.Now()
-
-	// AuditEvent name: {ps.Name}-{action} (truncated to 253 chars).
-	// Lowercase and sanitize for Kubernetes name compliance.
-	rawName := fmt.Sprintf("%s-%s", ps.Name, slugifyAction(action))
-	name := sanitizeK8sName(rawName)
-
-	ae := &v1alpha1.AuditEvent{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: ps.Namespace,
-			Labels: map[string]string{
-				"kardinal.io/pipeline":    pipelineName,
-				"kardinal.io/bundle":      bundleName,
-				"kardinal.io/environment": envName,
-				"kardinal.io/action":      action,
-			},
-		},
-		Spec: v1alpha1.AuditEventSpec{
-			Timestamp:    now,
-			BundleName:   bundleName,
-			PipelineName: pipelineName,
-			Environment:  envName,
-			Action:       action,
-			Outcome:      outcome,
-			Message:      message,
-		},
+// flushAudit creates the AuditEvents in ps's outbox
+// (status.pendingAuditEvents) and removes the written entries from its
+// status. It returns an error when an entry is still unwritten, so the
+// reconcile is retried; the entry stays in status until a create succeeds
+// (#1552). The status patch carries ps's resourceVersion, so it cannot drop
+// an entry a newer reconcile stored.
+func (r *Reconciler) flushAudit(ctx context.Context, ps *v1alpha1.PromotionStep) error {
+	if len(ps.Status.PendingAuditEvents) == 0 {
+		return nil
 	}
-
-	// spec.timestamp is stored with one-second resolution; the annotation
-	// orders records within a second (lifecycle.CompareAuditEvents).
-	lifecycle.StampCreatedAt(ae, now.Time)
-
-	// Idempotent: if the event already exists (re-reconcile), ignore the conflict.
-	err := c.Create(ctx, ae)
-	switch {
-	case client.IgnoreAlreadyExists(err) == nil:
-	case apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause):
-		// The namespace is being deleted: it refuses new objects, and its
-		// deletion removes the step and its records next.
-		zerolog.Ctx(ctx).Debug().Err(err).
-			Str("auditEvent", name).Str("action", action).
-			Msg("namespace is being deleted — AuditEvent not written")
-	default:
-		// RBAC or quota failures must be visible, but never block promotion.
-		zerolog.Ctx(ctx).Error().Err(err).
-			Str("auditEvent", name).Str("action", action).
-			Msg("failed to write AuditEvent")
+	remaining, ferr := audit.Flush(ctx, r.Client, auditKind, ps.Namespace, ps.Status.PendingAuditEvents)
+	if len(remaining) != len(ps.Status.PendingAuditEvents) {
+		prev := ps.Status.PendingAuditEvents
+		patch := client.MergeFromWithOptions(ps.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		ps.Status.PendingAuditEvents = remaining
+		if err := r.Status().Patch(ctx, ps, patch); err != nil && !apierrors.IsNotFound(err) {
+			// The entries are still in status: the next flush finds their
+			// AuditEvents by name (AlreadyExists).
+			ps.Status.PendingAuditEvents = prev
+			return errors.Join(ferr, fmt.Errorf("remove written AuditEvents from the outbox: %w", err))
+		}
 	}
+	if ferr != nil {
+		zerolog.Ctx(ctx).Error().Err(ferr).Int("pending", len(remaining)).
+			Msg("failed to write AuditEvent; kept in status.pendingAuditEvents to retry")
+		return ferr
+	}
+	return nil
 }
 
 // slugifyAction converts an action string to a DNS-label-safe slug.

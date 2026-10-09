@@ -78,3 +78,34 @@ type AuditEventList struct {
 func init() {
 	SchemeBuilder.Register(&AuditEvent{}, &AuditEventList{})
 }
+
+// MaxPendingAuditEvents bounds status.pendingAuditEvents, the audit outbox
+// of a PromotionStep or PolicyGate.
+const MaxPendingAuditEvents = 32
+
+// PendingAuditEvent is an AuditEvent that a reconciler has decided to write
+// but has not yet seen created. The reconciler stores it in its own status in
+// the same patch as the transition it records. It creates the AuditEvent on
+// that reconcile or a later one, then removes the entry. The name is fixed
+// when the entry is stored, so a retried create that the API server already
+// applied returns AlreadyExists, which counts as written (#1552).
+type PendingAuditEvent struct {
+	// Name is the AuditEvent's name.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+
+	// Labels are the AuditEvent's labels.
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// Spec is the AuditEvent's spec, timestamp included: the record carries
+	// the time of the transition, not the time it was written.
+	Spec AuditEventSpec `json:"spec"`
+
+	// CreatedAt is the transition time in RFC 3339 with nanoseconds, written
+	// to the AuditEvent's kardinal.io/created-at annotation: spec.timestamp
+	// has one-second resolution.
+	// +optional
+	CreatedAt string `json:"createdAt,omitempty"`
+}

@@ -365,6 +365,31 @@ spec is set at creation and never mutated. Kubernetes RBAC controls who can dele
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
 | `RollbackSucceeded` | A PromotionStep of a rollback Bundle (from `kardinal rollback`, the UI, a RollbackPolicy or `onHealthFailure: rollback`) reached Verified; written besides `PromotionSucceeded`, one record per step |
 
+### Audit outbox
+
+A transition and its AuditEvent are two API writes, so an etcd timeout, a lost
+leader or a crash between them used to lose the record. Now the PromotionStep
+and PolicyGate reconcilers record the AuditEvent in their own
+`status.pendingAuditEvents` in the same status patch as the transition. They then
+create it and remove the entry. An entry whose create fails stays in status, and
+the object is reconciled again every 5 seconds until the create succeeds. Each
+entry's name is fixed when it is stored, so a create that had already succeeded
+returns `AlreadyExists` and counts as written: there is one record per
+transition, never two. The record carries the time of the transition, not the
+time it was written.
+
+A failed write never blocks a promotion or a gate evaluation. The outbox holds at
+most 32 entries. When it is full, the oldest entry is dropped and counted in
+`kardinal_audit_events_dropped_total`. A record the API server rejects as invalid
+is dropped too. `kardinal_audit_write_failures_total` counts the creates being
+retried ([Monitoring](monitoring.md#kardinal-metrics)). To see records not yet
+written:
+
+```bash
+kubectl get promotionsteps,policygates -A -o json \
+  | jq -r '.items[] | select(.status.pendingAuditEvents) | "\(.metadata.namespace)/\(.metadata.name): \(.status.pendingAuditEvents | length)"'
+```
+
 ### Fields on every event
 
 | Field | Description |

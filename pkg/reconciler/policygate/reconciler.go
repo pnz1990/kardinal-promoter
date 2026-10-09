@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
@@ -148,10 +149,40 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return res, err
 }
 
+// auditRetryDelay is how soon a reconcile whose audit outbox still holds
+// unwritten records runs again.
+const auditRetryDelay = 5 * time.Second
+
+// retryAudit is res, requeued within auditRetryDelay when the outbox could
+// not be flushed (auditErr) or still holds records.
+func retryAudit(res ctrl.Result, auditErr error, pending int) ctrl.Result {
+	if auditErr == nil && pending == 0 {
+		return res
+	}
+	if res.RequeueAfter == 0 || res.RequeueAfter > auditRetryDelay {
+		res.RequeueAfter = auditRetryDelay
+	}
+	return res
+}
+
+// auditPending wakes the reconciler when a status patch stores audit
+// records in the outbox: a create that failed in the reconcile that stored
+// them is retried by the next one (#1552).
+var auditPending = predicate.Funcs{
+	CreateFunc:  func(event.CreateEvent) bool { return false },
+	DeleteFunc:  func(event.DeleteEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		o, okOld := e.ObjectOld.(*kardinalv1alpha1.PolicyGate)
+		n, okNew := e.ObjectNew.(*kardinalv1alpha1.PolicyGate)
+		return okOld && okNew && audit.Pending(o.Status.PendingAuditEvents, n.Status.PendingAuditEvents)
+	},
+}
+
 // policyGatesResource is the resource objectgone matches a NotFound against.
 var policyGatesResource = kardinalv1alpha1.GroupVersion.WithResource("policygates").GroupResource()
 
-func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
 	log := zerolog.Ctx(ctx).With().
 		Str("gate", req.Name).
 		Str("namespace", req.Namespace).
@@ -173,6 +204,17 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			validation.LabelValueMaxLength)
 		return ctrl.Result{}, nil
 	}
+
+	// Audit records an earlier reconcile stored but could not write go
+	// first (#1552). A failure does not block evaluation: the records stay
+	// in status and the reconcile is requeued to retry them, also for a gate
+	// whose Bundle has settled.
+	auditErr := r.flushAudit(ctx, &gate)
+	defer func() {
+		if err == nil {
+			res = retryAudit(res, auditErr, len(gate.Status.PendingAuditEvents))
+		}
+	}()
 
 	// Template PolicyGates (no bundle label) are platform/team-defined gate specs.
 	// They are not evaluated for a specific bundle, but we validate their CEL
@@ -989,17 +1031,23 @@ func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.Pol
 		}
 	}
 	meta.SetStatusCondition(&gate.Status.Conditions, cond)
-	if err := r.Status().Patch(ctx, gate, patch); err != nil {
-		return fmt.Errorf("status patch: %w", err)
-	}
 	// Audit the first evaluation and every ready flip, not every recheck.
+	// The record goes in the status outbox with the flip (#1552).
 	if ready != prevReady || isFirstEval {
 		outcome := "Success"
 		if !ready {
 			outcome = "Failure"
 		}
-		writeGateAuditEvent(ctx, r.Client, gate, outcome, reason, now)
+		if e, ok := gateAuditEntry(gate, outcome, reason, now); ok {
+			gate.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, gate.Status.PendingAuditEvents, e)
+		}
 	}
+	if err := r.Status().Patch(ctx, gate, patch); err != nil {
+		return fmt.Errorf("status patch: %w", err)
+	}
+	// A failed create only delays the record: the patch that stored it
+	// wakes the reconciler (auditPending), which writes it first.
+	_ = r.flushAudit(ctx, gate)
 	// Emit Kubernetes Event on gate state change OR on first evaluation that blocks.
 	// First block: isFirstEval && !ready (gate immediately blocks on creation).
 	// State flip: ready != prevReady (gate transitions between allowed/blocked).
@@ -1216,7 +1264,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	b := ctrl.NewControllerManagedBy(mgr).
-		For(&kardinalv1alpha1.PolicyGate{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
+		For(&kardinalv1alpha1.PolicyGate{}, builder.WithPredicates(
+			predicate.Or(eventfilter.SpecOrAnnotationChanged, auditPending))).
 		// Watch MetricCheck objects: when a MetricCheck's result or value changes,
 		// the gates that read its namespace as metrics.* are re-evaluated
 		// immediately.
