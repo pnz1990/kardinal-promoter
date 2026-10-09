@@ -144,7 +144,7 @@ environment. The controller records each hold's state in the Pipeline's `status.
 | State | Meaning |
 |---|---|
 | `Active` | The rollback Bundle exists; the hold is in effect |
-| `BundleMissing` | The Bundle does not exist, but the hold is less than 2 minutes old (from `createdAt`, or from when the controller first found the Bundle missing if `createdAt` is not set). The hold is still in effect: the Bundle may be about to be created |
+| `BundleMissing` | The Bundle does not exist, but the hold is less than 2 minutes old (the controller flag `--hold-bundle-grace`; set it with `controller.extraArgs`) (from `createdAt`, or from when the controller first found the Bundle missing if `createdAt` is not set). The hold is still in effect: the Bundle may be about to be created |
 | `Orphaned` | The Bundle has not existed for longer than that. The hold is **not in effect**: other Bundles promote into the environment again |
 
 The controller does not remove an orphaned hold: it stays in `spec.holds`, and

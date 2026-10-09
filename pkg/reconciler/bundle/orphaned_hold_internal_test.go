@@ -16,7 +16,7 @@ import (
 // Graph without a spec change, so it changes the hash and the Pipeline watch
 // passes it; with no orphaned hold the hash is the spec's as before.
 //
-// Covers RB-HOLD-03.
+// Covers RB-HOLD-04.
 func TestPipelineSpecHash_OrphanedHolds(t *testing.T) {
 	p := &kardinalv1alpha1.Pipeline{Spec: kardinalv1alpha1.PipelineSpec{
 		Holds: []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rollback-1", Reason: "r"}}}}

@@ -21,7 +21,7 @@ import (
 // the hold's own Bundle resolves it as usual. Other environments are not
 // affected, and the Graph stays valid for kro.
 //
-// Covers RB-HOLD-03.
+// Covers RB-HOLD-04.
 func TestBuilder_HeldEnvironment(t *testing.T) {
 	p := makeLinearPipeline("app", "test", "uat", "prod")
 	p.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rollback-abc123", Reason: "INC-42"}}

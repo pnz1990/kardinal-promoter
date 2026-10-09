@@ -236,7 +236,7 @@ func holdBundle(name string) *kardinalv1alpha1.Bundle {
 // spec.holds, and is Active again once the Bundle exists. Release-hold still
 // removes it.
 //
-// Covers RB-HOLD-03.
+// Covers RB-HOLD-04.
 func TestPipelineHolds_Orphaned(t *testing.T) {
 	t0 := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
 	now := t0
@@ -314,7 +314,7 @@ func TestPipelineHolds_Orphaned(t *testing.T) {
 // (written by hand) gets the grace from when the controller first found its
 // Bundle missing.
 //
-// Covers RB-HOLD-03.
+// Covers RB-HOLD-04.
 func TestPipelineHolds_OrphanedWithoutCreatedAt(t *testing.T) {
 	t0 := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
 	now := t0
@@ -336,4 +336,29 @@ func TestPipelineHolds_OrphanedWithoutCreatedAt(t *testing.T) {
 		assert.Equal(t, step.want, got.Status.HoldStates[0].State, "at %s", step.at)
 		assert.Equal(t, t0, got.Status.HoldStates[0].BundleMissingSince.UTC(), "the first time it was found missing")
 	}
+}
+
+// TestPipelineHolds_GraceFlag: --hold-bundle-grace sets the grace.
+//
+// Covers RB-HOLD-04.
+func TestPipelineHolds_GraceFlag(t *testing.T) {
+	t0 := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	at := metav1.NewTime(t0)
+	p := makePipelineWithEnvs("app", "default", "test", "prod")
+	p.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rollback-x", Reason: "r", CreatedAt: &at}}
+	c := newClientWithIndex(newPipelineScheme(), p)
+	now := t0.Add(29 * time.Second)
+	r := &pipeline.Reconciler{Client: c, Now: func() time.Time { return now }, HoldBundleGrace: 30 * time.Second}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "app", Namespace: "default"}}
+	state := func() string {
+		_, err := r.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+		var got kardinalv1alpha1.Pipeline
+		require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+		require.Len(t, got.Status.HoldStates, 1)
+		return got.Status.HoldStates[0].State
+	}
+	assert.Equal(t, kardinalv1alpha1.HoldStateBundleMissing, state())
+	now = t0.Add(30 * time.Second)
+	assert.Equal(t, kardinalv1alpha1.HoldStateOrphaned, state())
 }

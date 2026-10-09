@@ -655,7 +655,7 @@ func TestExplain_ShowsHold(t *testing.T) {
 // TestExplain_ShowsOrphanedHold (#1629): a hold whose rollback Bundle does
 // not exist is shown as not in effect.
 //
-// Covers RB-HOLD-03.
+// Covers RB-HOLD-04.
 func TestExplain_ShowsOrphanedHold(t *testing.T) {
 	created := policyTestNow.Add(-time.Hour)
 	p := policyPipeline("demo", "test", "prod")

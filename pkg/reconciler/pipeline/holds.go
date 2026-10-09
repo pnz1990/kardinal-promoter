@@ -27,15 +27,22 @@ const (
 	AuditActionHoldReleased = "HoldReleased"
 )
 
-// holdBundleGrace is how long a hold may name a Bundle that does not exist
-// before it is Orphaned (#1629): kardinal rollback --hold writes the hold
-// first and creates the Bundle right after, and the cache may lag the
+// DefaultHoldBundleGrace is how long a hold may name a Bundle that does not
+// exist before it is Orphaned (#1629): kardinal rollback --hold writes the
+// hold first and creates the Bundle right after, and the cache may lag the
 // create.
-const holdBundleGrace = 2 * time.Minute
+const DefaultHoldBundleGrace = 2 * time.Minute
+
+func (r *Reconciler) holdBundleGrace() time.Duration {
+	if r.HoldBundleGrace > 0 {
+		return r.HoldBundleGrace
+	}
+	return DefaultHoldBundleGrace
+}
 
 // holdStates returns status.holdStates for p's holds, and how long until
 // the next BundleMissing hold turns Orphaned (0: none). A hold is Orphaned
-// when its Bundle does not exist and holdBundleGrace has passed since the
+// when its Bundle does not exist and the grace (--hold-bundle-grace) has passed since the
 // hold's createdAt, or, without createdAt, since the controller first found
 // the Bundle missing. A Bundle that exists again makes it Active again. The
 // controller never edits spec.holds for it: the hold stays visible until it
@@ -48,6 +55,7 @@ func (r *Reconciler) holdStates(ctx context.Context, p *kardinalv1alpha1.Pipelin
 	}
 	var states []kardinalv1alpha1.EnvironmentHoldState
 	var next time.Duration
+	grace := r.holdBundleGrace()
 	for i := range p.Spec.Holds {
 		h := &p.Spec.Holds[i]
 		st := kardinalv1alpha1.EnvironmentHoldState{Environment: h.Environment, Bundle: h.Bundle, State: kardinalv1alpha1.HoldStateActive}
@@ -65,10 +73,10 @@ func (r *Reconciler) holdStates(ctx context.Context, p *kardinalv1alpha1.Pipelin
 			if h.CreatedAt != nil {
 				from = h.CreatedAt.Time
 			}
-			if wait := from.Add(holdBundleGrace).Sub(now); wait > 0 {
+			if wait := from.Add(grace).Sub(now); wait > 0 {
 				st.State = kardinalv1alpha1.HoldStateBundleMissing
 				st.Message = fmt.Sprintf("rollback Bundle %s does not exist yet; the hold is not in effect from %s on unless it is created",
-					h.Bundle, from.Add(holdBundleGrace).UTC().Format(time.RFC3339))
+					h.Bundle, from.Add(grace).UTC().Format(time.RFC3339))
 				if next == 0 || wait < next {
 					next = wait
 				}

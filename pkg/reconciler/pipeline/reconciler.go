@@ -123,6 +123,11 @@ type Reconciler struct {
 	// Now is the clock of hold expiry (spec.holds[].expiresAt). Nil is
 	// time.Now.
 	Now func() time.Time
+
+	// HoldBundleGrace is how long a hold may name a Bundle that does not
+	// exist before it is Orphaned (--hold-bundle-grace). 0 is
+	// DefaultHoldBundleGrace.
+	HoldBundleGrace time.Duration
 }
 
 // Reconcile is called whenever a Pipeline, one of its PromotionSteps, the
