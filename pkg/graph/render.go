@@ -85,7 +85,27 @@ func toTemplateValue(v interface{}) (interface{}, error) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, err
 	}
-	return literalStrings(out), nil
+	return literalStrings(dropNulls(out)), nil
+}
+
+// dropNulls removes null map values: a zero time or empty pointer the API
+// server would refuse as a typed field's value.
+func dropNulls(v interface{}) interface{} {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		for k, e := range t {
+			if e == nil {
+				delete(t, k)
+				continue
+			}
+			t[k] = dropNulls(e)
+		}
+	case []interface{}:
+		for i, e := range t {
+			t[i] = dropNulls(e)
+		}
+	}
+	return v
 }
 
 // buildRenderRunNode builds the RenderRun node of a layout: branch
@@ -97,7 +117,11 @@ func buildRenderRunNode(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1a
 		return fmt.Sprintf(`%s.exists(s, s.metadata.name == %s && %s)`, refStepsNodeID, strconv.Quote(stepK8sName), cond)
 	}
 	when := `bundle.status.phase != "Superseded" && ` + stepRef(`s.?status.?renderRequestedAt.hasValue()`)
-	bundleSpec, err := toTemplateValue(bundle.Spec)
+	rb := kardinalv1alpha1.RenderRunBundle{Type: bundle.Spec.Type, Images: bundle.Spec.Images, ConfigRef: bundle.Spec.ConfigRef}
+	if p := bundle.Spec.Provenance; p != nil {
+		rb.RollbackOf = p.RollbackOf
+	}
+	bundleSpec, err := toTemplateValue(rb)
 	if err != nil {
 		return GraphNode{}, fmt.Errorf("build: environment %q: bundle: %w", env.Name, err)
 	}

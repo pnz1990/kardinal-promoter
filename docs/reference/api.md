@@ -470,24 +470,15 @@ RenderRun is one render of a layout: branch environment for one Bundle: a Kubern
 |---|---|---|---|
 | `spec` | object |  | RenderRunSpec is one render of a layout: branch environment for one Bundle. The kro Graph of the Bundle writes it from the Pipeline and the Bundle; the RenderRun reconciler runs it as a Job. |
 | `spec.bundle` | object | yes | Bundle is what is promoted: the images to set, the config commit to render (a config or mixed Bundle) and the Bundle a rollback restores. |
-| `spec.bundle.configRef` | object |  | ConfigRef points to the GitOps repository commit this Bundle represents when the bundle type is "config" or "mixed". |
+| `spec.bundle.configRef` | object |  | ConfigRef is the config commit to render (a config or mixed Bundle, or an image Bundle that pins its DRY commit). |
 | `spec.bundle.configRef.commitSHA` | string |  | CommitSHA is the exact commit SHA for this config snapshot. |
 | `spec.bundle.configRef.gitRepo` | string |  | GitRepo is the GitOps repository URL. |
-| `spec.bundle.images` | []object |  | Images lists the container images included in this Bundle. |
+| `spec.bundle.images` | []object |  | Images are the images to set in the DRY checkout. |
 | `spec.bundle.images[].digest` | string |  | Digest is the image digest (sha256:...). |
 | `spec.bundle.images[].repository` | string | yes | Repository is the image repository (e.g. "ghcr.io/nginx/nginx"). |
 | `spec.bundle.images[].tag` | string |  | Tag is the image tag. |
-| `spec.bundle.intent` | object |  | Intent declares optional targeting and skip overrides for this Bundle. |
-| `spec.bundle.intent.skipEnvironments` | []string |  | SkipEnvironments lists environment names to exclude from this promotion, subject to the PolicyGate SkipPermission check. |
-| `spec.bundle.intent.targetEnvironment` | string |  | TargetEnvironment restricts this Bundle to promoting only up to and including this environment. Empty means promote through all environments. |
-| `spec.bundle.pipeline` | string | yes | Pipeline is the name of the Pipeline this Bundle targets. |
-| `spec.bundle.provenance` | object |  | Provenance carries build metadata for audit and rollback. |
-| `spec.bundle.provenance.author` | string |  | Author is the committer or triggering actor for this build. |
-| `spec.bundle.provenance.ciRunURL` | string |  | CIRunURL is the URL of the CI run that built this Bundle. |
-| `spec.bundle.provenance.commitSHA` | string |  | CommitSHA is the application source commit that produced this Bundle. |
-| `spec.bundle.provenance.rollbackOf` | string |  | RollbackOf is the name of the Bundle this Bundle rolls back (if any). |
-| `spec.bundle.provenance.timestamp` | string (date-time) |  | Timestamp is when the bundle was built. |
-| `spec.bundle.type` | string | yes | Type classifies the bundle content. Supersession rule (BU-4): each bundle type supersedes only bundles of the same type. An image bundle does NOT supersede a config bundle and vice versa. This allows image and config promotions to coexist independently in the same pipeline. One of: `image`, `config`, `mixed`. |
+| `spec.bundle.rollbackOf` | string |  | RollbackOf is the Bundle a rollback restores: its render's DRY commit is rendered again. |
+| `spec.bundle.type` | string |  | Type is the Bundle type: image, config or mixed. |
 | `spec.bundleName` | string | yes | BundleName is the Bundle being promoted. |
 | `spec.environment` | string | yes | Environment is the environment rendered. |
 | `spec.git` | object | yes | Git is where the DRY source is read and the render is written. |

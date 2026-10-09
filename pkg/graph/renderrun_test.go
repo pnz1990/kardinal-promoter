@@ -32,6 +32,7 @@ func TestBuilder_RenderRunNode(t *testing.T) {
 	b := makeBundle("app-v1", "app")
 	b.Spec.Images[0].Tag = "1.2.3"
 	b.Spec.Provenance = &kardinalv1alpha1.BundleProvenance{Author: "ci ${USER}"}
+	b.Spec.Images[0].Repository = "ghcr.io/org/${weird}"
 	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: renderPipeline(), Bundle: b})
 	require.NoError(t, err)
 	g := res.Graph
@@ -57,9 +58,11 @@ func TestBuilder_RenderRunNode(t *testing.T) {
 	assert.Contains(t, git["pullRequest"], `renderPullRequest`, "the step's recorded list decides where to push")
 	assert.Equal(t, "environments/prod", spec["path"])
 	bundle := spec["bundle"].(map[string]interface{})
-	assert.Equal(t, "1.2.3", bundle["images"].([]interface{})[0].(map[string]interface{})["tag"])
-	author := bundle["provenance"].(map[string]interface{})["author"].(string)
-	assert.True(t, strings.HasPrefix(author, `${"`), "a ${ in the Bundle is a literal, not CEL: %s", author)
+	img := bundle["images"].([]interface{})[0].(map[string]interface{})
+	assert.Equal(t, "1.2.3", img["tag"])
+	assert.True(t, strings.HasPrefix(img["repository"].(string), `${"`), "a ${ in the Bundle is a literal, not CEL: %s", img["repository"])
+	assert.NotContains(t, bundle, "provenance", "only what a render needs: no provenance, no zero timestamps")
+	assert.NotContains(t, bundle, "intent")
 	assert.Equal(t, "fail", spec["render"].(map[string]interface{})["onDrift"])
 
 	live := hookNode(t, g, "live0prod")
@@ -86,6 +89,17 @@ func TestBuilder_RenderAndHooksShareTheMirror(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, count, "one refSteps")
+}
+
+// TestBuilder_RenderRunRollback: a rollback's RenderRun names the Bundle it
+// restores.
+func TestBuilder_RenderRunRollback(t *testing.T) {
+	b := makeBundle("app-rb", "app")
+	b.Spec.Provenance = &kardinalv1alpha1.BundleProvenance{RollbackOf: "app-v1"}
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: renderPipeline(), Bundle: b})
+	require.NoError(t, err)
+	spec := hookNode(t, res.Graph, "render0prod").Template["spec"].(map[string]interface{})
+	assert.Equal(t, "app-v1", spec["bundle"].(map[string]interface{})["rollbackOf"])
 }
 
 // TestRenderRunName is a valid Job name, unique per Pipeline, Bundle and

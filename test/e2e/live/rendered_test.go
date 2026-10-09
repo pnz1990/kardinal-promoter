@@ -16,9 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -202,8 +200,8 @@ func assertRenderJobSandboxed(t *testing.T, e *framework.Env, rr *v1alpha1.Rende
 	require.NotNil(t, rr.Status.Result)
 	assert.Len(t, rr.Status.Result.CommitSHA, 40)
 	assert.Len(t, rr.Status.Result.MarkerDigest, 64)
-	var job batchv1.Job
-	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: rr.Namespace, Name: rr.Status.JobName}, &job))
+	job, err := e.Kube.BatchV1().Jobs(rr.Namespace).Get(ctx, rr.Status.JobName, metav1.GetOptions{})
+	require.NoError(t, err)
 	pod := job.Spec.Template.Spec
 	assert.Equal(t, "kardinal-render", pod.ServiceAccountName)
 	require.NotNil(t, pod.AutomountServiceAccountToken)
@@ -212,12 +210,12 @@ func assertRenderJobSandboxed(t *testing.T, e *framework.Env, rr *v1alpha1.Rende
 	assert.True(t, *c.SecurityContext.ReadOnlyRootFilesystem)
 	assert.Equal(t, []corev1.Capability{"ALL"}, c.SecurityContext.Capabilities.Drop)
 	assert.NotEmpty(t, c.Resources.Limits.Memory().String())
-	var sa corev1.ServiceAccount
-	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: rr.Namespace, Name: "kardinal-render"}, &sa))
+	sa, err := e.Kube.CoreV1().ServiceAccounts(rr.Namespace).Get(ctx, "kardinal-render", metav1.GetOptions{})
+	require.NoError(t, err)
 	require.NotNil(t, sa.AutomountServiceAccountToken)
 	assert.False(t, *sa.AutomountServiceAccountToken)
-	var bindings rbacv1.RoleBindingList
-	require.NoError(t, e.Client.List(ctx, &bindings, client.InNamespace(rr.Namespace)))
+	bindings, err := e.Kube.RbacV1().RoleBindings(rr.Namespace).List(ctx, metav1.ListOptions{})
+	require.NoError(t, err)
 	for _, b := range bindings.Items {
 		for _, s := range b.Subjects {
 			assert.False(t, s.Kind == "ServiceAccount" && s.Name == "kardinal-render", "RoleBinding %s binds kardinal-render", b.Name)

@@ -43,6 +43,24 @@ type RenderRunGit struct {
 	PullRequest bool `json:"pullRequest,omitempty"`
 }
 
+// RenderRunBundle is the part of a Bundle a render needs.
+type RenderRunBundle struct {
+	// Type is the Bundle type: image, config or mixed.
+	// +optional
+	Type string `json:"type,omitempty"`
+	// Images are the images to set in the DRY checkout.
+	// +optional
+	Images []ImageRef `json:"images,omitempty"`
+	// ConfigRef is the config commit to render (a config or mixed Bundle,
+	// or an image Bundle that pins its DRY commit).
+	// +optional
+	ConfigRef *ConfigRef `json:"configRef,omitempty"`
+	// RollbackOf is the Bundle a rollback restores: its render's DRY commit
+	// is rendered again.
+	// +optional
+	RollbackOf string `json:"rollbackOf,omitempty"`
+}
+
 // RenderRunSpec is one render of a layout: branch environment for one
 // Bundle. The kro Graph of the Bundle writes it from the Pipeline and the
 // Bundle; the RenderRun reconciler runs it as a Job.
@@ -69,7 +87,7 @@ type RenderRunSpec struct {
 
 	// Bundle is what is promoted: the images to set, the config commit to
 	// render (a config or mixed Bundle) and the Bundle a rollback restores.
-	Bundle BundleSpec `json:"bundle"`
+	Bundle RenderRunBundle `json:"bundle"`
 
 	// Update is the environment's update configuration: how the images are
 	// set in the DRY checkout before it is rendered.

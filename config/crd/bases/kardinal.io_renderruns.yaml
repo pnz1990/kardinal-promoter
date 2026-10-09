@@ -73,8 +73,8 @@ spec:
                 properties:
                   configRef:
                     description: |-
-                      ConfigRef points to the GitOps repository commit this Bundle represents
-                      when the bundle type is "config" or "mixed".
+                      ConfigRef is the config commit to render (a config or mixed Bundle,
+                      or an image Bundle that pins its DRY commit).
                     properties:
                       commitSHA:
                         description: CommitSHA is the exact commit SHA for this config
@@ -85,8 +85,7 @@ spec:
                         type: string
                     type: object
                   images:
-                    description: Images lists the container images included in this
-                      Bundle.
+                    description: Images are the images to set in the DRY checkout.
                     items:
                       description: ImageRef identifies a container image by repository,
                         tag, and/or digest.
@@ -105,72 +104,15 @@ spec:
                       - repository
                       type: object
                     type: array
-                  intent:
-                    description: Intent declares optional targeting and skip overrides
-                      for this Bundle.
-                    properties:
-                      skipEnvironments:
-                        description: |-
-                          SkipEnvironments lists environment names to exclude from this promotion,
-                          subject to the PolicyGate SkipPermission check.
-                        items:
-                          type: string
-                        type: array
-                      targetEnvironment:
-                        description: |-
-                          TargetEnvironment restricts this Bundle to promoting only up to and
-                          including this environment. Empty means promote through all environments.
-                        type: string
-                    type: object
-                  pipeline:
-                    description: Pipeline is the name of the Pipeline this Bundle
-                      targets.
-                    minLength: 1
-                    type: string
-                  provenance:
-                    description: Provenance carries build metadata for audit and rollback.
-                    properties:
-                      author:
-                        description: Author is the committer or triggering actor for
-                          this build.
-                        type: string
-                      ciRunURL:
-                        description: CIRunURL is the URL of the CI run that built
-                          this Bundle.
-                        type: string
-                      commitSHA:
-                        description: CommitSHA is the application source commit that
-                          produced this Bundle.
-                        type: string
-                      rollbackOf:
-                        description: RollbackOf is the name of the Bundle this Bundle
-                          rolls back (if any).
-                        type: string
-                      timestamp:
-                        description: Timestamp is when the bundle was built.
-                        format: date-time
-                        type: string
-                    type: object
-                  type:
+                  rollbackOf:
                     description: |-
-                      Type classifies the bundle content.
-                      Supersession rule (BU-4): each bundle type supersedes only bundles of the same type.
-                      An image bundle does NOT supersede a config bundle and vice versa.
-                      This allows image and config promotions to coexist independently in the same pipeline.
-                    enum:
-                    - image
-                    - config
-                    - mixed
+                      RollbackOf is the Bundle a rollback restores: its render's DRY commit
+                      is rendered again.
                     type: string
-                required:
-                - pipeline
-                - type
+                  type:
+                    description: 'Type is the Bundle type: image, config or mixed.'
+                    type: string
                 type: object
-                x-kubernetes-validations:
-                - message: 'spec.configRef is used only by config and mixed Bundles:
-                    an image Bundle deploys only its images; set type config or mixed,
-                    or remove configRef'
-                  rule: '!(self.type == ''image'' && has(self.configRef))'
               bundleName:
                 description: BundleName is the Bundle being promoted.
                 minLength: 1

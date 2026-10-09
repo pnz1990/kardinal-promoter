@@ -42,7 +42,7 @@ func run(name string) *v1alpha1.RenderRun {
 		Spec: v1alpha1.RenderRunSpec{PipelineName: "web", BundleName: "web-v2", Environment: "prod", Path: "environments/prod",
 			Git: v1alpha1.RenderRunGit{URL: "https://git.example.com/org/repo.git", SecretName: "git-creds",
 				SourceBranch: "main", RenderedBranch: "env/prod"},
-			Bundle: v1alpha1.BundleSpec{Type: "image", Pipeline: "web", Images: []v1alpha1.ImageRef{{Repository: "r/web", Tag: "2"}}}},
+			Bundle: v1alpha1.RenderRunBundle{Type: "image", Images: []v1alpha1.ImageRef{{Repository: "r/web", Tag: "2"}}}},
 	}
 }
 

@@ -71,9 +71,14 @@ type Result struct {
 
 // ConfigFromRun is the Config of RenderRun run.
 func ConfigFromRun(run *v1alpha1.RenderRun, known []string, authorName, authorEmail string) Config {
+	b := run.Spec.Bundle
+	bundle := v1alpha1.BundleSpec{Type: b.Type, Images: b.Images, ConfigRef: b.ConfigRef}
+	if b.RollbackOf != "" {
+		bundle.Provenance = &v1alpha1.BundleProvenance{RollbackOf: b.RollbackOf}
+	}
 	return Config{
 		Namespace: run.Namespace, Pipeline: run.Spec.PipelineName, Environment: run.Spec.Environment,
-		Path: run.Spec.Path, BundleName: run.Spec.BundleName, Bundle: run.Spec.Bundle, Git: run.Spec.Git,
+		Path: run.Spec.Path, BundleName: run.Spec.BundleName, Bundle: bundle, Git: run.Spec.Git,
 		Update: run.Spec.Update, Render: run.Spec.Render, AuthorName: authorName, AuthorEmail: authorEmail,
 		KnownMarkerDigests: known,
 	}
