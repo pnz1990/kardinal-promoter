@@ -48,6 +48,8 @@ type pagedClient struct {
 	client.WithWatch
 	calls, maxLimit, expireAfter int
 	deletes                      []string
+	// selectors are the namespace and label selector of each list call.
+	selectors []string
 }
 
 func newPaged(t *testing.T, objs ...client.Object) *pagedClient {
@@ -65,6 +67,11 @@ func (c *pagedClient) List(ctx context.Context, list client.ObjectList, opts ...
 	}
 	c.calls++
 	c.maxLimit = max(c.maxLimit, int(lo.Limit))
+	sel := ""
+	if lo.LabelSelector != nil {
+		sel = lo.LabelSelector.String()
+	}
+	c.selectors = append(c.selectors, lo.Namespace+"|"+sel)
 	var all v1alpha1.AuditEventList
 	inner := []client.ListOption{}
 	if lo.Namespace != "" {
@@ -244,4 +251,44 @@ func TestPruner_DeleteErrors(t *testing.T) {
 // TestPruner_LeaderOnly: retention runs on the leader only.
 func TestPruner_LeaderOnly(t *testing.T) {
 	assert.True(t, (&auditretention.Pruner{}).NeedLeaderElection())
+}
+
+// TestPruner_CreationTimestampBeforeAnnotation: the count cap orders by
+// metadata.creationTimestamp first; kardinal.io/created-at only orders records
+// of the same second. A record whose annotation claims a later time than a
+// record created a second after it is still the older one (QA #1523).
+//
+// Covers AUDIT-RETENTION-02.
+func TestPruner_CreationTimestampBeforeAnnotation(t *testing.T) {
+	older := event("a", "web", "older", now)
+	lifecycle.StampCreatedAt(older, now.Add(5*time.Second)) // claims later than newer
+	newer := event("a", "web", "newer", now.Add(time.Second))
+	lifecycle.StampCreatedAt(newer, now)
+	c := newPaged(t, older, newer)
+	p := &auditretention.Pruner{Client: c, MaxPerPipeline: 1, Now: func() time.Time { return now.Add(time.Hour) }}
+	n, err := p.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	assert.Equal(t, []string{"a/newer"}, names(t, c), "creationTimestamp wins over the annotation")
+}
+
+// TestPruner_PerPipelineSelector: the count cap lists one Pipeline's records
+// with its namespace and its kardinal.io/pipeline label, not every record
+// again (QA #1523).
+//
+// Covers AUDIT-RETENTION-02.
+func TestPruner_PerPipelineSelector(t *testing.T) {
+	var objs []client.Object
+	for i := 0; i < 3; i++ {
+		objs = append(objs, event("a", "web", fmt.Sprintf("web-%d", i), now.Add(time.Duration(i)*time.Second)))
+	}
+	objs = append(objs, event("a", "api", "api-0", now), event("b", "db", "db-0", now))
+	c := newPaged(t, objs...)
+	p := &auditretention.Pruner{Client: c, MaxPerPipeline: 1, Now: func() time.Time { return now.Add(time.Hour) }}
+	_, err := p.Run(context.Background())
+	require.NoError(t, err)
+	require.Len(t, c.selectors, 2, "one stream of every record, then one list for the Pipeline past the cap")
+	assert.Equal(t, "|", c.selectors[0], "the first pass lists every namespace without a selector")
+	assert.Equal(t, "a|kardinal.io/pipeline=web", c.selectors[1])
+	assert.Equal(t, []string{"a/api-0", "a/web-2", "b/db-0"}, names(t, c))
 }

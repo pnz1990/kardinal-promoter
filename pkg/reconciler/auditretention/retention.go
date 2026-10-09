@@ -206,13 +206,11 @@ func (p *Pruner) Run(ctx context.Context) (int, error) {
 	return r.deleted, nil
 }
 
-// tooOld reports whether rec is past MaxAge. A record that claims a time in
-// the future is never too old.
+// tooOld reports whether rec is past MaxAge (by metadata.creationTimestamp,
+// which the API server sets, so a record created in the future cannot be
+// before the cutoff either).
 func (r *run) tooOld(rec record) bool {
-	if r.p.MaxAge <= 0 || rec.created.After(r.now) {
-		return false
-	}
-	return rec.created.Before(r.now.Add(-r.p.MaxAge))
+	return r.p.MaxAge > 0 && rec.created.Before(r.now.Add(-r.p.MaxAge))
 }
 
 func (r *run) capped() bool { return r.deleted >= maxDeletesPerRun }

@@ -117,7 +117,7 @@ func main() {
 		"Delete AuditEvents past their retention (--audit-retention-max-age, --audit-retention-max-per-pipeline). "+
 			"Off by default: every record is kept until you opt in.")
 	flag.DurationVar(&auditMaxAge, "audit-retention-max-age", auditretention.DefaultMaxAge,
-		"Delete AuditEvents whose spec.timestamp is older than this. 0 keeps records of any age.")
+		"Delete AuditEvents created (metadata.creationTimestamp) longer ago than this. 0 keeps records of any age.")
 	flag.IntVar(&auditMaxPerPipeline, "audit-retention-max-per-pipeline", auditretention.DefaultMaxPerPipeline,
 		"Keep at most this many newest AuditEvents per Pipeline. 0 keeps any number.")
 	flag.DurationVar(&auditRetentionInterval, "audit-retention-interval", auditretention.DefaultInterval,
