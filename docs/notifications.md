@@ -254,10 +254,12 @@ Limits, so a template cannot run away with the controller:
   than that.
 - Function arguments may only be strings, numbers or bools. A struct (such as `.` itself),
   a list or a map is refused before it is formatted: `{{ print . }}` is an error.
-- A render makes at most 2,000 function calls, builtins included, and stops after 20 ms:
-  text/template cannot be cancelled, so the next call or write after the deadline fails
-  and the render ends there. Running out of time is not the template's fault (a busy
-  controller), so that event is retried with backoff like a failed delivery.
+- A render makes at most 2,000 function calls, builtins included. Together with the byte
+  budgets and the argument rule, that is what bounds a template. A 500 ms wall-clock
+  deadline is only a backstop: text/template cannot be cancelled, so the next call or
+  write after it fails and the render ends there. Running out of time is not the
+  template's fault (a busy or CPU-throttled controller), so that event is retried with
+  backoff like a failed delivery.
 - Every field the template sees is cut to 4 KiB (on a character boundary), so a long
   `Message` cannot feed a large render.
 - A field that does not exist is an error.
