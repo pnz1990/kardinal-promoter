@@ -111,3 +111,33 @@ func TestRenderRunName(t *testing.T) {
 	long := graph.RenderRunName(strings.Repeat("p", 60), strings.Repeat("b", 60), "prod")
 	assert.LessOrEqual(t, len(long), 63)
 }
+
+// TestCompact_RefusesRendersAndHooks: the compact shape builds no RenderRun,
+// HookRun or live mirror nodes, so a Pipeline with layout: branch or hooks
+// is refused in it (naming the feature) and reported by CompactUnsupported;
+// the node shape builds both.
+func TestCompact_RefusesRendersAndHooks(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		pipeline *kardinalv1alpha1.Pipeline
+		feature  string
+	}{
+		{name: "layout branch", pipeline: renderPipeline(), feature: "rendered manifests (layout: branch)"},
+		{name: "hooks", pipeline: hookPipeline(), feature: "hooks (environments[].hooks)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, []string{tc.feature}, graph.CompactUnsupported(graph.BuildInput{Pipeline: tc.pipeline}))
+			build := func(shape string) error {
+				p := tc.pipeline.DeepCopy()
+				p.Annotations = map[string]string{graph.AnnotationGraphShape: shape}
+				_, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-v1", "app")})
+				return err
+			}
+			require.NoError(t, build(graph.GraphShapeNodes))
+			err := build(graph.GraphShapeCompact)
+			require.ErrorIs(t, err, graph.ErrInvalid)
+			assert.Contains(t, err.Error(), "does not support "+tc.feature)
+		})
+	}
+	assert.Empty(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: makeLinearPipeline("app", "test", "prod")}))
+}

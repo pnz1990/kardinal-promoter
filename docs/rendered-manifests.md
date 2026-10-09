@@ -106,6 +106,11 @@ commit would render different manifests, every promotion would commit a change, 
 would not restore what ran. Set `render.allowNondeterministic: true` to allow them. `env` and
 `expandenv` are not available, as in Helm.
 
+A `chart` Bundle (a chart version from a [Helm Subscription](subscription.md#promoting-a-chart-version))
+cannot promote a `layout: branch` environment yet: the Bundle fails at build. Pipelines that
+render always use the node Graph shape: the compact shape (`kardinal.io/graph-shape: compact`,
+or more environments than `--graph-compact-above`) refuses `layout: branch`.
+
 ## What a promotion does
 
 Rendering never runs in the controller. The controller's step waits for the environment's

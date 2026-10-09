@@ -23,6 +23,7 @@ import { HealthChip } from './HealthChip'
 import { api } from '../api/client'
 import EventsPanel, { type StepEvent } from './EventsPanel'
 import CopyButton from './CopyButton'
+import { stepTimeline } from '../stepTimeline'
 import { PipelineActionDialog, type PipelineActionKind } from './PipelineActionDialog'
 import { formatElapsedSince } from '../timeFormat'
 import { isHttpURL } from '../prLink'
@@ -249,6 +250,8 @@ function stepNote(s: StepStatus, shown: StepStatus['state'], promotion: Promotio
  */
 function StepProgress({ step }: { step: PromotionStep }) {
   const list = step.steps ?? []
+  const bars = stepTimeline(list)
+  const hasBars = bars.some(b => b !== null)
   return (
     <div style={{ marginBottom: '0.75rem' }}>
       <h4 style={{ fontSize: '0.8rem', color: 'var(--color-text)', marginBottom: '0.5rem' }}>
@@ -306,6 +309,28 @@ function StepProgress({ step }: { step: PromotionStep }) {
                     overflowWrap: 'anywhere',
                   }}>
                     {note}
+                  </span>
+                )}
+                {hasBars && (
+                  // Waterfall: where this step sits in the promotion's time span.
+                  <span
+                    aria-hidden="true"
+                    data-testid="step-bar-track"
+                    style={{ flexBasis: '100%', height: '3px', marginLeft: '20px', background: 'var(--color-border-muted)', borderRadius: '2px', position: 'relative' }}
+                  >
+                    {bars[i] && (
+                      <span
+                        data-testid="step-bar"
+                        data-offset={bars[i]!.offset.toFixed(1)}
+                        data-width={bars[i]!.width.toFixed(1)}
+                        style={{
+                          position: 'absolute', top: 0, bottom: 0, borderRadius: '2px',
+                          left: `${bars[i]!.offset}%`, width: `${bars[i]!.width}%`,
+                          background: view.color,
+                          opacity: shown === 'Completed' ? 0.75 : 1,
+                        }}
+                      />
+                    )}
                   </span>
                 )}
               </li>

@@ -166,16 +166,19 @@ Kargo Warehouses poll container registries. kardinal's equivalent is the `Subscr
 ```bash
 # For each Warehouse, create a Subscription:
 kubectl get warehouse my-app -n kargo-demo -o yaml
-# Translate repoURL → spec.image.registry
-# Translate semverConstraint → spec.image.tagFilter (Go regex)
+# Translate repoURL → spec.image.registry (image), spec.git.repoURL, or spec.helm.repoURL + chart
+# Translate semverConstraint → spec.image.semverConstraint (same syntax)
+# Translate allowTags / ignoreTags / discoveryLimit as they are; allowTagsRegexes → tagFilter
+# Translate imageSelectionStrategy → spec.image.strategy (SemVer, Lexical, NewestBuild; Digest is a
+#   tagFilter matching one tag)
+# Translate includePaths → spec.git.pathGlob
+# Registry and repository credentials → spec.<type>.secretRef (a Secret in the Subscription's namespace)
 ```
 
-When every tag matching `tagFilter` is a semantic version, the highest version is
-selected (Kargo `SemVer`). A filter that matches exactly one tag tracks that tag's
-digest (Kargo `Digest`). Other tag sets are ordered by image build time (Kargo
-`NewestBuild`), limited to 50 matching tags. Subscriptions only poll public
-repositories; Warehouses that use registry credentials should create Bundles from CI
-instead. See [Subscription](../subscription.md).
+A Warehouse with several subscriptions becomes one Subscription per source. Kargo's
+webhook receivers map to `spec.webhook` and
+[`/webhook/subscriptions/...`](../subscription-webhooks.md). See
+[Subscription](../subscription.md).
 
 ### Step 3: Remove Kargo `Promotion` objects (if any)
 

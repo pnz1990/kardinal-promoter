@@ -154,6 +154,7 @@ kardinal version
 | `metricsBindAddress` / `healthProbeBindAddress` | `:8080` / `:8081` | `--metrics-bind-address` / `--health-probe-bind-address` (the container ports) |
 | `controller.watchNamespace` | `""` | Namespace-scoped mode (`--watch-namespace`). Must equal the release namespace |
 | `controller.policyNamespaces` | `[]` | Namespaces with org-level PolicyGates (`--policy-namespaces`; default `platform-policies`) |
+| `graph.compactAbove` | `null` | Environment count above which a Bundle's Graph uses the compact shape (`--graph-compact-above`; default `100`; `0` makes every Graph compact). See [Large Pipelines](pipeline-reference.md#large-pipelines) |
 | `controller.gateStatusHeartbeat` | `""` | Longest a PolicyGate's status goes unwritten while its result does not change (`--gate-status-heartbeat`; default `10m`; `0s` writes on every evaluation). See [Policy gates](policy-gates.md#re-evaluation) |
 | `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers. Paths inside the container: mount the certificate Secret with `controller.extraVolumes` / `extraVolumeMounts`. Set both or neither: the chart refuses one alone, and a path that is not in a mounted `secret`, `projected` or `csi` volume (for certificates that come another way, set `KARDINAL_TLS_CERT_FILE` and `KARDINAL_TLS_KEY_FILE` with `controller.extraEnv`) |
 | `controller.extraArgs` / `extraEnv` / `extraVolumes` / `extraVolumeMounts` | `[]` | Extra controller args, env vars, volumes and mounts |
@@ -242,6 +243,27 @@ release name other than `kardinal-promoter`, the Service is named
     `ui.allowedHosts` (`--ui-allowed-hosts`) as well as setting an auth mode. See
     [Host names (DNS rebinding)](guides/security.md#host-names-dns-rebinding).
 
+### What the UI shows
+
+- **Fleet board** (the start page, and the kardinal logo from anywhere). Each Pipeline is a
+  line of stations, one per environment in promotion order; environments promoted in parallel
+  are stacked. A station shows the version the environment runs and when it was Verified.
+  That is the newest promotion there whose change landed, the Bundle `kardinal status` reports
+  as deployed. Image and config Bundles do not replace each other, so a station also shows, under
+  `+`, what the environment runs from another Bundle: the config commit of the last config Bundle
+  under an image Bundle, or the image tags of the last image Bundle under a config Bundle, as
+  `kardinal status` does. A lit rail marks the active Bundle's version on its way into an environment:
+  amber and moving while it promotes, waits for its PR or is health checked; amber and still
+  while a PolicyGate holds it; red where it failed. A station opens its Pipeline. The board
+  follows the sidebar's health filter.
+- **Pipeline view.** The lane, the promotion graph, policy gates with their CEL expressions,
+  the Bundle history and comparison, and pause, resume, promote, roll back and create bundle.
+- **Step timings.** Selecting an environment step lists the steps of that promotion
+  (`git-clone` … `health-check`) with their durations, and a bar for each that shows where it
+  ran in the promotion's time. A slow health check or push stands out at once.
+- **Dark and light themes.** The UI follows the operating system's setting until you pick one
+  with the ☀ / ☾ button next to the refresh indicator; the choice is kept in the browser.
+
 ### With TLS (production)
 
 If you configure TLS via `--tls-cert-file` / `--tls-key-file` (or the Helm values
@@ -287,6 +309,13 @@ Graph and its namespace then never finish deleting. After you downgrade, remove 
 from every step that holds it with the command under [Uninstall](#uninstall). The older
 controller does not close the PR of a deleted step, so close by hand the PRs of the steps you
 delete after the downgrade.
+
+A controller older than this release does not know the compact Graph shape (Pipelines with more
+than 100 environments, or the `kardinal.io/graph-shape: compact` annotation; see
+[Large Pipelines](pipeline-reference.md#large-pipelines)). When it rebuilds the Graph of a
+Bundle in flight (on any change to the Pipeline's spec, or a deleted Graph) it builds the node
+shape, and kro then deletes every PromotionStep the compact Graph created: the Bundle promotes
+again from its first environment. Before you downgrade, let the Bundles of those Pipelines finish, or delete them.
 
 ### Upgrading from v0.8.1
 

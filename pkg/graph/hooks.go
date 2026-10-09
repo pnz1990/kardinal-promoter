@@ -398,3 +398,25 @@ func stepAdvanced(stepK8sName, phase string) string {
 	}
 	return fmt.Sprintf(`${%s.exists(s, s.metadata.name == %s && %s)}`, refStepsNodeID, strconv.Quote(stepK8sName), states)
 }
+
+// The compact shape does not build HookRun nodes or the live mirror patch: a
+// hook waits on its PromotionStep node, which the compact shape folds into
+// the PromotionSteps collection. A Pipeline with hooks is built in the node
+// shape, or refused (compactUnsupported).
+func init() {
+	RegisterCompactUnsupported(hooksUsed)
+}
+
+// hooksUsed returns the feature name when an environment of the Pipeline has
+// hooks.
+func hooksUsed(in BuildInput) string {
+	if in.Pipeline == nil {
+		return ""
+	}
+	for _, e := range in.Pipeline.Spec.Environments {
+		if len(e.Hooks) > 0 {
+			return "hooks (environments[].hooks)"
+		}
+	}
+	return ""
+}

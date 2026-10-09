@@ -463,14 +463,12 @@ The detailed tracker is `docs/design/11-graph-purity-tech-debt.md`.
 | Soak time (`bundle.upstreamSoakMinutes`) | Bundle reconciler writes `status.environments[].soakMinutes` and requeues every minute while Promoting; PolicyGate reconciler takes the minimum over the gated environment's direct upstreams | Same as above; also a cross-node read | KREP-025, reading `uat.status` from the gate node |
 | PolicyGate CEL (`bundle.*`, `schedule.*`, `metrics.*`, `upstream.*`) | `pkg/reconciler/policygate` | Time and explainability. A Graph can already read every data source a gate uses (selector refs from KREP-003 decorators, reshaped by a `def` node), and `changewindow.isAllowed/isBlocked` are sugar for a map index. What it cannot do: time-derived fields (metric staleness, active ChangeWindows), and recording why a gate blocked (`status.reason`, `lastEvaluatedAt`, the audit that `kardinal explain` shows) | A clock in CEL (KREP-025). Explainability needs no kro change: the PolicyGate CR plus its reconciler, which writes `status.ready`, is the intended shape (an owned node) |
 | Git and SCM steps (clone, kustomize, push, open PR, merge detection) | `pkg/steps`, `pkg/scm`, PRStatus reconciler | Side effects on external systems; kro only applies Kubernetes objects | Out of scope for kro. The PromotionStep CR is the Graph-native boundary |
-<<<<<<< HEAD
 | Rendered manifests (`layout: branch`, #1447): clone the DRY source and the rendered branch, set the images, render, commit, push | A `RenderRun` owned node per environment (`pkg/graph/render.go`); the RenderRun reconciler runs it as a sandboxed Job (`kardinal-render`, `pkg/renderjob`), never in the controller; the Graph mirrors its status onto the step (`spec.live.renders`, G14) | A render needs the DRY checkout and the rendered-branch checkout in one place, and they cannot cross Graph nodes (CRD fields), so the whole render is one Job. Running untrusted kustomize and Helm input needs a process boundary with its own limits and no controller credentials, which a reconcile cannot give. The RenderRun reconciler reads earlier RenderRuns of the environment for the marker digests the Job must accept (its own kind, recorded in its status) | None: a Job owned by a run CRD is the shape (as HookRun); kro's raw Job nodes are not usable (G12) |
-=======
+| Artifact discovery: registry, Git and Helm polling with credentials, tag filters, `pathGlob`, and the registry/SCM webhook receiver (#1454, #1455) | Subscription reconciler (`pkg/reconciler/subscription`, `pkg/source`), `/webhook/subscriptions/...` in `cmd/kardinal-controller` | External I/O before any Graph exists: a Graph is per Bundle and the Subscription creates the Bundle; a `ref` node reads only Kubernetes objects, and kro CEL has no I/O. The reconciler is an owned node (writes only Subscription status, creates Bundles, which enter the Graph flow); the receiver writes only the `kardinal.io/refresh` annotation, like the SCM webhook writes only PRStatus | None needed. The Bundle CR is the Graph-native boundary |
 | Outbound notifications (NotificationHook webhooks: json, Slack, Teams, templated bodies) and the controller egress allowlist | `pkg/reconciler/notificationhook`, `pkg/egress` | An HTTP POST to an external system is a side effect, and a delivery record must survive restarts; kro only applies Kubernetes objects. The hook is not a Graph node: it reads the status that Bundle, PolicyGate and PromotionStep reconcilers already write (phase, `Ready` condition and its `Unblocked` reason, `prURL`, state) and writes only its own status (`processedEventKeys`, conditions). The allowlist is controller configuration, not promotion logic | None needed. A Graph-level event sink would still need a delivery controller; no ask |
->>>>>>> origin/main
 | Health adapters (HealthChecking to Verified) | `pkg/health/adapter.go` via PromotionStep reconciler | A Graph cannot write PromotionStep status, and `readyWhen` does not gate dependents (G1, G3) | None needed: stays in the reconciler by design (#1283) |
 | MetricCheck query slots (`Limiter`, #1479) | `pkg/reconciler/metriccheck/limiter.go` | Rations outbound queries to user-chosen endpoints (per namespace and cluster-wide, FIFO, wake-ups through a channel source). Process-local: it holds no promotion state, every result is written to MetricCheck status, and a restart only makes the checks ask again. Approved as an exception to the in-memory-state rule (coordinator, as the owner's delegate, 2026-10-09) | None needed: concurrency control of side effects, not promotion logic |
-| Remote-cluster health (`health.cluster`, #1458, planned for v0.10.0) | PromotionStep reconciler health adapter, with a client built from a kubeconfig Secret in the Pipeline namespace | kro reads only its own cluster; no Graph primitive reads another cluster (see "multi-cluster" below) | None asked: the adapter already runs in the reconciler (G3) |
+| Remote-cluster health (`health.kubeconfigSecretRef`, #1458) | `pkg/health/remote.go` (`RemoteClusters`), `healthDetector` in `pkg/reconciler/promotionstep` | kro reads only the cluster it runs in: a ref node cannot point at another cluster, and the remote-cluster KREPs (KREP-012/013, kro#1060, kro#591) are RGD only and rotten or frozen. The translator leaves out the health ref node of such an environment (a ref to an object that is not in this cluster would hold the Graph) | A per-node kubeconfig reference for ref nodes, with the same rules (inline credentials only, https servers only, namespace-local Secret). No ask yet: hub-side Argo CD and Flux cover most users. The process-local client cache (`RemoteClusters`, LRU 128, TTL 1h) is approved as an exception to the in-memory-state rule (coordinator, as the owner's delegate, 2026-10-09): it holds no promotion state, every decision is written to the PromotionStep status, and a restart only rebuilds the clients |
 | Gate results as SCM commit statuses while a PR waits for merge (#1452, planned for v0.10.0) | PromotionStep reconciler posts `kardinal/gates`; the gate results reach the step through a mirror `patch` node (G14) | Side effect on an external system | Out of scope for kro |
 | Holding an existing PromotionStep: pause (freeze gate) and the required-gate re-check before the step starts (#1300, #1313) | `holdIfPaused` and `checkRequiredGates` in `pkg/reconciler/promotionstep` | No primitive to hold an existing node without pruning it. `readyWhen` does not hold dependents in a standalone Graph; an Unresolved node leaves the existing object as it is; `includeWhen: false` prunes it; a ref to a missing object holds the whole Graph | A Graph-level "hold" on a node that keeps its object and blocks its dependents, or `GateReadiness` for standalone Graphs |
 
@@ -497,7 +495,7 @@ The detailed tracker is `docs/design/11-graph-purity-tech-debt.md`.
 [KREP-013](https://github.com/kubernetes-sigs/kro/pull/1223),
 [kro#1060](https://github.com/kubernetes-sigs/kro/issues/1060) and
 [kro#591](https://github.com/kubernetes-sigs/kro/issues/591) are RGD only and rotten or frozen:
-None. kardinal checks remote workloads through hub-side Argo CD and Flux objects, so no ask.
+None. kardinal checks remote workloads through hub-side Argo CD and Flux objects, or reads the remote cluster itself from the PromotionStep reconciler with a kubeconfig Secret (`health.kubeconfigSecretRef`, see the G8 table), so no ask.
 
 **Upstream work: hold and suspend.**
 
@@ -544,6 +542,12 @@ took 4 to 29 s to react to a change, against about 0.1 s when idle; with 8 worke
 PolicyGate reconciler writes a gate's status only when its result changes, a step needs a fresh
 result, or every `--gate-status-heartbeat` (10m), instead of on every evaluation.
 
+The compact shape (G10) also costs CEL on every walk: `PromotionWave` checks, for each environment,
+`e.upstreams.all(u, u in verified)` and `e.gates.all(g, g in readyGates)` over lists, so a walk is
+O(environments × (upstreams + gates) × environments) list lookups; a 50-way fan-in into one of
+300 environments is about 15,000 comparisons for that entry. kro's CEL cost limit is off by default
+(`--cel-cost-limit=0`); a cluster that sets one must allow for it.
+
 **Upstream work.** None filed. [kro#1324](https://github.com/kubernetes-sigs/kro/issues/1324)
 (30 s watch-sync block per reconcile) is related: it also stalls every Graph behind one.
 
@@ -589,8 +593,14 @@ bytes (collections count one entry per item). Over it, the Bundle fails with `Gr
 and a message that names the size and the fix (a new Bundle or a Pipeline edit retries). Gate
 instances and PRStatuses are `forEach`
 collections over a `def` node (`pkg/graph/gates.go`): 150 environments with 3 gates each went from
-646,536 to 471,305 bytes of spec. A compact shape that keeps the promotion DAG as data in a `def`
-node is planned for Pipelines with more than about 200 environments.
+646,536 to 471,305 bytes of spec. Above 100 environments (`--graph-compact-above`, or the
+Pipeline annotation `kardinal.io/graph-shape`) the Graph is compact (`pkg/graph/compact.go`): the
+promotion DAG is data in a `def` node, the PromotionSteps are one collection admitted by a `def`
+over the steps read back through a selector `ref` (the G11 pacing pattern), and there are no
+health ref nodes. The Graph has 9 to 12 nodes whatever the environment count. Measured on kind: 300
+environments (30 waves of 10, a gate each) promoted end to end in 8 minutes, with the applied
+Graph at 472,213 bytes; estimated 0.9 MB with 3 gates each. Graphs also may not create more than
+4,500 objects (kro's inventory holds 5,000). The Pipeline CRD allows 500 environments (#1473).
 
 **Upstream work.** None filed. Optional ask: keep the inventory out of the Graph object (an
 ApplySet-style parent or a child object), so the spec alone bounds the size.
@@ -621,6 +631,10 @@ to admit from a selector `ref` that reads the collection's own objects back (no 
 cycle), and items already admitted stay in the list, so pacing never prunes. Verified on kind
 with `maxConcurrent` and `maxUnavailable`. kardinal's reconcilers must ignore label-only updates
 on the objects they own, or they reconcile every item on each growth.
+
+In the compact shape (G10) the PromotionSteps are one collection too, so the blast radius is the
+whole Bundle: one gate instance or step item that kro cannot apply, or that stays soft not-ready,
+holds every environment, not only its own.
 
 For apply errors, the builder keeps the blast radius to what must wait anyway: steps reference
 the PolicyGates collection (a gated step waits on its gates), so one gate instance that cannot be

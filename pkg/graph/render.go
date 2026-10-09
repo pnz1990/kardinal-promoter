@@ -199,3 +199,26 @@ func liveRendersExpr(env string) string {
 		`"phase": r.?status.?phase.orValue("Pending"), "message": r.?status.?message.orValue(""), `+
 		`"result": %s})}`, refRenderRunsNodeID, strconv.Quote(env), result)
 }
+
+// The compact shape does not build RenderRun nodes or the live mirror patch:
+// a layout: branch environment's RenderRun waits on its PromotionStep node
+// (status.renderRequestedAt), which the compact shape folds into the
+// PromotionSteps collection. A Pipeline that renders is built in the node
+// shape, or refused (compactUnsupported).
+func init() {
+	RegisterCompactUnsupported(renderedBranchesUsed)
+}
+
+// renderedBranchesUsed returns the feature name when an environment of the
+// Pipeline uses layout: branch.
+func renderedBranchesUsed(in BuildInput) string {
+	if in.Pipeline == nil {
+		return ""
+	}
+	for _, e := range in.Pipeline.Spec.Environments {
+		if kardinalv1alpha1.RendersToBranch(in.Pipeline.Spec, e) {
+			return "rendered manifests (layout: branch)"
+		}
+	}
+	return ""
+}

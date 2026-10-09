@@ -16,9 +16,9 @@ const ShardNotSupported = "shard is not supported: distributed mode was removed;
 	"environment and the controller reconciles it (see docs/distributed-mode.md)"
 
 // HealthClusterNotSupported is the reason a Pipeline environment may not set
-// health.cluster: kardinal checks health only in the cluster it runs in.
-const HealthClusterNotSupported = "health.cluster is not supported: kardinal checks health only in the " +
-	"cluster it runs in; for a workload in another cluster, check its Argo CD Application or Flux " +
+// the deprecated health.cluster string: health.kubeconfigSecretRef replaced it.
+const HealthClusterNotSupported = "health.cluster is not supported: to check a workload in another " +
+	"cluster set health.kubeconfigSecretRef to a kubeconfig Secret, or check its Argo CD Application or Flux " +
 	"Kustomization in this cluster (health.type: argocd or flux, see docs/health-adapters.md#remote-clusters)"
 
 // RegionsNotSupported is the reason Build rejects two or more

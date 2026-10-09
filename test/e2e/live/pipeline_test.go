@@ -165,8 +165,8 @@ func TestPipeline_NotImplemented(t *testing.T) {
 		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
 			env.Health.Cluster = "remote" //nolint:staticcheck // SA1019: set to check it is refused
 		},
-		ready: `environment "test": health.cluster is not supported: kardinal checks health only in the cluster it runs in`,
-		step:  "health.cluster is not supported: kardinal checks health only in the cluster it runs in;",
+		ready: `environment "test": health.cluster is not supported: to check a workload in another cluster set health.kubeconfigSecretRef`,
+		step:  "health.cluster is not supported: to check a workload in another cluster set health.kubeconfigSecretRef to a kubeconfig Secret",
 	}, {
 		name: "regions",
 		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
