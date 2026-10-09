@@ -183,14 +183,21 @@ only up to 1.5 MiB. Two Graph shapes keep it in bounds:
   graph -o yaml` shows each environment's PromotionStep as a node.
 - **compact** (above 100 environments): the promotion order is data in the Graph, and one node
   creates every PromotionStep the order allows (upstream environments Verified, gates ready, the
-  Bundle not superseded). A step that exists is never removed by the Graph. The Graph has about a
-  dozen nodes whatever the number of environments, and no health ref nodes (health is checked by
-  the PromotionStep as in the nodes shape).
+  Bundle not superseded or rejected). A step that exists is not removed when a gate later closes or
+  the Bundle is superseded. The Graph has about a dozen nodes whatever the number of environments,
+  and no health ref nodes (health is checked by the PromotionStep as in the nodes shape).
 
 Both shapes promote the same way: the same PromotionSteps, PolicyGate instances and PRStatuses,
 with the same names. Choose one for a Pipeline with the annotation `kardinal.io/graph-shape:
 compact` or `nodes`; the controller's `--graph-compact-above` (chart `graph.compactAbove`) moves
-the threshold.
+the threshold. A Bundle keeps the shape its Graph was created with: a later Pipeline edit, a changed
+annotation or threshold applies to new Bundles only, because switching the shape of a Graph in
+flight would delete its PromotionSteps.
+
+In the compact shape every PromotionStep comes from one collection, so a PolicyGate instance or a
+PromotionStep that kro cannot apply holds every environment of the Bundle, not only its own (the
+Bundle's `GatesCreated` condition names a gate that cannot be created). A feature the compact shape
+does not carry yet fails the Bundle with `GraphBuildFailed` naming the feature.
 
 The Graph's size grows with environments and PolicyGates. Measured: 300 environments with one gate
 each, fully promoted, 0.47 MB; 300 with three gates each about 0.9 MB. A Bundle whose Graph would be

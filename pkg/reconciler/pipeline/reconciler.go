@@ -357,6 +357,13 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline, ownSecret bool) meta
 		}
 	}
 
+	// The Graph shape annotation must name a shape; a Bundle of this Pipeline
+	// would fail with GraphBuildFailed otherwise.
+	if v, ok := p.Annotations[graph.AnnotationGraphShape]; ok && v != graph.GraphShapeCompact && v != graph.GraphShapeNodes {
+		return invalid(fmt.Sprintf("annotation %s=%q: use %q or %q, or remove it",
+			graph.AnnotationGraphShape, v, graph.GraphShapeCompact, graph.GraphShapeNodes))
+	}
+
 	// Check for duplicate environment names
 	seen := make(map[string]struct{}, len(p.Spec.Environments))
 	for _, env := range p.Spec.Environments {

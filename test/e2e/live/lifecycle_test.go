@@ -102,7 +102,13 @@ func TestGraph_NamespaceDeletionFinishes(t *testing.T) {
 	assert.Contains(t, stepFinalizers(t, e, a.ns, b, "prod"), closePRFinalizer, "the step with the open PR")
 	graph := a.bundle(t, b).Status.GraphRef
 	require.NotEmpty(t, graph, "the Bundle has a Graph")
-	require.NotEmpty(t, readerBindings(t, e, a.ns), "the Graph reads argocd through a reader binding")
+	// A compact Graph (the controller run with graph.compactAbove=0) has no
+	// health ref, so no reader binding: the namespace deletion is checked
+	// either way.
+	compact := bundleGraph(t, e, a.ns, b).GetLabels()["kardinal.io/graph-shape"] == "compact"
+	if !compact {
+		require.NotEmpty(t, readerBindings(t, e, a.ns), "the Graph reads argocd through a reader binding")
+	}
 
 	// Runs before the namespace cleanup e.Namespace registered: on failure it
 	// lets a stuck namespace go.

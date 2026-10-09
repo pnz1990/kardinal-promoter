@@ -49,9 +49,27 @@ const (
 	iterStep = "Step"
 )
 
+// LabelBundleUID is the label of a compact Graph's PromotionSteps that holds
+// the Bundle's UID; the Graph reads back only the steps that carry it.
+const LabelBundleUID = "kardinal.io/bundle-uid"
+
+// LabelGraphShape is the label on a Graph that records its shape, so a
+// re-translation keeps it (BuildInput.Shape).
+const LabelGraphShape = "kardinal.io/graph-shape"
+
 // compactShape reports whether the Graph for pipeline, promoting envs
-// environments, uses the compact shape.
-func (b *Builder) compactShape(pipeline *kardinalv1alpha1.Pipeline, envs int) (bool, error) {
+// environments, uses the compact shape. pinned, the shape of the Bundle's
+// existing Graph, wins over the threshold and the annotation.
+func (b *Builder) compactShape(pipeline *kardinalv1alpha1.Pipeline, envs int, pinned string) (bool, error) {
+	switch pinned {
+	case GraphShapeCompact:
+		return true, nil
+	case GraphShapeNodes:
+		return false, nil
+	case "":
+	default:
+		return false, fmt.Errorf("build: unknown Graph shape %q", pinned)
+	}
 	switch v := pipeline.Annotations[AnnotationGraphShape]; v {
 	case GraphShapeCompact:
 		return true, nil
@@ -63,6 +81,32 @@ func (b *Builder) compactShape(pipeline *kardinalv1alpha1.Pipeline, envs int) (b
 		return false, fmt.Errorf("build: Pipeline annotation %s=%q: use %q, %q or remove it",
 			AnnotationGraphShape, v, GraphShapeCompact, GraphShapeNodes)
 	}
+}
+
+// compactUnsupported holds a check per feature the compact shape does not
+// carry yet. Each returns the feature's name when the Pipeline uses it, and
+// "" otherwise. A feature that adds Graph nodes in the node shape (hooks,
+// analyses, per-promotion MetricChecks, mirror patches) adds its check here
+// until it has a compact implementation, so a compact Graph never silently
+// drops it: the Bundle fails with GraphBuildFailed instead.
+var compactUnsupported []func(*kardinalv1alpha1.Pipeline) string
+
+// checkCompactSupport refuses a compact Graph for a Pipeline that uses a
+// feature the compact shape does not carry yet (compactUnsupported).
+func checkCompactSupport(p *kardinalv1alpha1.Pipeline) error {
+	var features []string
+	for _, check := range compactUnsupported {
+		if f := check(p); f != "" {
+			features = append(features, f)
+		}
+	}
+	if len(features) == 0 {
+		return nil
+	}
+	return fmt.Errorf("build: this Bundle's Graph is compact (more environments than --graph-compact-above, or the %s "+
+		"annotation), and the compact shape does not support %s yet; use the node shape for this Pipeline (fewer "+
+		"environments, or the annotation %s: %s) or remove the feature",
+		AnnotationGraphShape, strings.Join(features, ", "), AnnotationGraphShape, GraphShapeNodes)
 }
 
 // compactStep is one environment of the compact shape's promotion DAG.
@@ -134,9 +178,14 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 				"kind":       "PromotionStep",
 				"metadata": map[string]interface{}{
 					"namespace": bundle.Namespace,
+					// Only the steps this Graph made count: the Bundle's UID
+					// is in their labels, so a PromotionStep someone else
+					// labelled cannot admit or verify an environment.
 					"selector": map[string]interface{}{"matchLabels": map[string]interface{}{
 						"kardinal.io/pipeline": pipeline.Name,
 						"kardinal.io/bundle":   bundle.Name,
+						LabelBundleUID:         string(bundle.UID),
+						"kro.run/node-id":      NodePromotionSteps,
 					}},
 				},
 			},
@@ -146,9 +195,10 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 			"verified": fmt.Sprintf(`${%s.filter(s, s.?status.?state.orValue("") == "Verified").map(s, s.metadata.labels["kardinal.io/environment"])}`,
 				NodeStepsObserved),
 			"readyGates": "${" + readyGates + "}",
-			// A Superseded Bundle starts no new environment (E2E-R20); the
-			// steps it has keep running or stay as history.
-			"hold": `${bundle.?status.?phase.orValue("") == "Superseded"}`,
+			// A Superseded or Rejected Bundle starts no new environment
+			// (E2E-R20, #1451); the steps it has keep running or stay as
+			// history.
+			"hold": `${bundle.?status.?phase.orValue("") in ["Superseded", "Rejected"]}`,
 		}},
 		{ID: NodePromotionWave, Def: map[string]interface{}{"steps": wave}},
 		{
@@ -163,6 +213,7 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 						"kardinal.io/pipeline":    pipeline.Name,
 						"kardinal.io/bundle":      bundle.Name,
 						"kardinal.io/environment": step("environment"),
+						LabelBundleUID:            string(bundle.UID),
 					},
 				},
 				"spec": map[string]interface{}{

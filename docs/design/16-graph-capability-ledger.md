@@ -526,6 +526,12 @@ took 4 to 29 s to react to a change, against about 0.1 s when idle; with 8 worke
 PolicyGate reconciler writes a gate's status only when its result changes, a step needs a fresh
 result, or every `--gate-status-heartbeat` (10m), instead of on every evaluation.
 
+The compact shape (G10) also costs CEL on every walk: `PromotionWave` checks, for each environment,
+`e.upstreams.all(u, u in verified)` and `e.gates.all(g, g in readyGates)` over lists, so a walk is
+O(environments × (upstreams + gates) × environments) list lookups; a 50-way fan-in into one of
+300 environments is about 15,000 comparisons for that entry. kro's CEL cost limit is off by default
+(`--cel-cost-limit=0`); a cluster that sets one must allow for it.
+
 **Upstream work.** None filed. [kro#1324](https://github.com/kubernetes-sigs/kro/issues/1324)
 (30 s watch-sync block per reconcile) is related: it also stalls every Graph behind one.
 
@@ -601,6 +607,10 @@ to admit from a selector `ref` that reads the collection's own objects back (no 
 cycle), and items already admitted stay in the list, so pacing never prunes. Verified on kind
 with `maxConcurrent` and `maxUnavailable`. kardinal's reconcilers must ignore label-only updates
 on the objects they own, or they reconcile every item on each growth.
+
+In the compact shape (G10) the PromotionSteps are one collection too, so the blast radius is the
+whole Bundle: one gate instance or step item that kro cannot apply, or that stays soft not-ready,
+holds every environment, not only its own.
 
 For apply errors, the builder keeps the blast radius to what must wait anyway: steps reference
 the PolicyGates collection (a gated step waits on its gates), so one gate instance that cannot be

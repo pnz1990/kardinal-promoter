@@ -70,6 +70,15 @@ func TestPipelineLifecycle_ReadyCondition(t *testing.T) {
 			name:       "dependsOn cycle",
 			objs:       []client.Object{cyclic},
 			wantStatus: metav1.ConditionFalse, wantReason: "ValidationFailed", wantMsg: "circular dependency",
+		}, {
+			name: "unknown graph-shape annotation",
+			objs: []client.Object{func() client.Object {
+				p := makePipelineWithEnvs("app", "default", "test", "prod")
+				p.Annotations = map[string]string{"kardinal.io/graph-shape": "flat"}
+				return p
+			}()},
+			wantStatus: metav1.ConditionFalse, wantReason: "ValidationFailed",
+			wantMsg: `annotation kardinal.io/graph-shape="flat": use "compact" or "nodes", or remove it`,
 		},
 	}
 	for _, tc := range tests {

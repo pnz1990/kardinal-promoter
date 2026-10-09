@@ -25,6 +25,13 @@ type BuildInput struct {
 	// PolicyGates contains all gates from all policy namespaces + pipeline namespace.
 	PolicyGates []kardinalv1alpha1.PolicyGate
 
+	// Shape, when set (GraphShapeNodes or GraphShapeCompact), is the shape of
+	// the Bundle's existing Graph, which a re-translation keeps: switching
+	// the shape of a Graph in flight would make kro prune the PromotionSteps
+	// of the old shape's nodes. Empty chooses the shape (Builder.CompactAbove,
+	// the Pipeline's AnnotationGraphShape).
+	Shape string
+
 	// PolicyNamespaces are the controller's org policy namespaces (not the
 	// Pipeline's spec.policyNamespaces). Only skip-permission gates in these
 	// namespaces can permit skipping an org-gated environment. Empty means
@@ -139,9 +146,14 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	}
 
 	// Step 5 & 6: build nodes and wire edges
-	compact, err := b.compactShape(input.Pipeline, len(filteredEnvs))
+	compact, err := b.compactShape(input.Pipeline, len(filteredEnvs), input.Shape)
 	if err != nil {
 		return nil, err
+	}
+	if compact {
+		if err := checkCompactSupport(input.Pipeline); err != nil {
+			return nil, err
+		}
 	}
 	nodes, instances, upstreams, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates, compact)
 	if err != nil {
@@ -153,6 +165,10 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 
 	// Step 7: assemble Graph
 	g := assembleGraph(input.Pipeline, input.Bundle, nodes, b.serviceAccountName())
+	g.Labels[LabelGraphShape] = GraphShapeNodes
+	if compact {
+		g.Labels[LabelGraphShape] = GraphShapeCompact
+	}
 
 	return &BuildResult{
 		Graph:         g,

@@ -176,7 +176,15 @@ func TestCompact_Shape(t *testing.T) {
 	}
 	require.NotNil(t, prod, "prod is admitted")
 	assert.Equal(t, objName(prodNode), objName(prod))
-	assert.Equal(t, objLabels(prodNode), objLabels(prod))
+	compactLabels := objLabels(prod)
+	assert.Contains(t, compactLabels, graph.LabelBundleUID, "a compact step carries its Bundle's UID")
+	delete(compactLabels, graph.LabelBundleUID)
+	assert.Equal(t, objLabels(prodNode), compactLabels)
+	sel := nodeByID(res.Graph.Spec.Nodes)[graph.NodeStepsObserved].Ref["metadata"].(map[string]interface{})["selector"]
+	assert.Equal(t, map[string]interface{}{"matchLabels": map[string]interface{}{
+		"kardinal.io/pipeline": "app", "kardinal.io/bundle": "app-x7k2m", graph.LabelBundleUID: "",
+		"kro.run/node-id": graph.NodePromotionSteps,
+	}}, sel, "the Graph reads back only the steps it made")
 	spec := prod["spec"].(map[string]interface{})
 	nodeSpec := prodNode["spec"].(map[string]interface{})
 	assert.Equal(t, nodeSpec["pipelineName"], spec["pipelineName"])
@@ -241,6 +249,10 @@ func TestCompact_Admission(t *testing.T) {
 	envs, done = sim.wave()
 	assert.Equal(t, []string{"eu", "test", "us"}, envs, "a Superseded Bundle starts nothing new")
 	assert.False(t, done)
+
+	sim.phase = "Rejected"
+	envs, _ = sim.wave()
+	assert.Equal(t, []string{"eu", "test", "us"}, envs, "a Rejected Bundle starts nothing new")
 
 	sim.phase = "Promoting"
 	assert.Equal(t, []string{"eu", "prod", "test", "us"}, sim.advance())

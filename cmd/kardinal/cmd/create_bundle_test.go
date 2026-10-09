@@ -446,3 +446,23 @@ func TestCreateBundle_DryRun_ListsEnvironmentsAndGates(t *testing.T) {
 		"  • uat (gates: team-soak)\n"+
 		"  • prod (gates: no-weekend-deploys)\n", buf.String())
 }
+
+
+// TestCreateBundle_DryRun_CompactShape: the dry run uses the controller's
+// compact threshold given with --graph-compact-above (default 100) and says
+// when the Graph would be compact.
+func TestCreateBundle_DryRun_CompactShape(t *testing.T) {
+	c := policyClient(t, policyPipeline("demo", "test", "uat", "prod"))
+	for _, tc := range []struct {
+		above *int
+		want  string
+	}{
+		{want: "Promotion graph: 6 node(s)\n"},
+		{above: func() *int { v := 0; return &v }(), want: "Promotion graph: 9 node(s), compact shape\n"},
+	} {
+		var buf bytes.Buffer
+		require.NoError(t, createBundleDryRun(&buf, c, "default", "demo",
+			createBundleOptions{Images: []string{"ghcr.io/org/app:sha-abc1234"}, Type: "image", CompactAbove: tc.above}))
+		assert.Contains(t, buf.String(), tc.want)
+	}
+}

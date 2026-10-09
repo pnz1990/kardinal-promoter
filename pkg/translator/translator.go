@@ -10,7 +10,9 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -103,11 +105,16 @@ func (t *Translator) Translate(ctx context.Context,
 	// Build, identity.Ensure and graphClient.Create prefix their own errors
 	// ("build: ", "graph identity: ", "graph.Create "), so they are wrapped
 	// with the Translate context only.
+	shape, err := t.existingShape(ctx, pipeline, bundle)
+	if err != nil {
+		return "", fmt.Errorf("translator.Translate: %w", err)
+	}
 	result, err := t.builder.Build(graph.BuildInput{
 		Pipeline:         pipeline,
 		Bundle:           bundle,
 		PolicyGates:      gates,
 		PolicyNamespaces: t.policyNS,
+		Shape:            shape,
 	})
 	if err != nil {
 		return "", &BuildError{Err: fmt.Errorf("translator.Translate: %w", err), Gates: gates}
@@ -181,6 +188,30 @@ func (t *Translator) Translate(ctx context.Context,
 		Msg("translation complete: graph applied")
 
 	return result.Graph.Name, nil
+}
+
+// existingShape returns the shape of the Bundle's Graph when it exists, so a
+// re-translation keeps it: the label the builder sets, or the node shape for
+// a Graph built before the compact shape existed. It returns "" when the
+// Bundle has no Graph yet. Switching the shape of a Graph in flight would
+// make kro prune every PromotionStep the old shape's nodes created.
+func (t *Translator) existingShape(ctx context.Context, pipeline *kardinalv1alpha1.Pipeline,
+	bundle *kardinalv1alpha1.Bundle) (string, error) {
+	g, err := t.graphClient.Get(ctx, pipeline.Namespace, graph.GraphNameFrom(pipeline.Name, bundle.Name))
+	if apierrors.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read the Bundle's Graph shape: %w", err)
+	}
+	if !metav1.IsControlledBy(g, bundle) {
+		// Another owner's Graph: Create refuses it (ErrGraphOwnedByOther).
+		return "", nil
+	}
+	if shape := g.Labels[graph.LabelGraphShape]; shape != "" {
+		return shape, nil
+	}
+	return graph.GraphShapeNodes, nil
 }
 
 // servedKind reports whether the cluster serves apiVersion/kind. Without a
