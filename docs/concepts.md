@@ -4,6 +4,8 @@
 
 A Bundle is an immutable, versioned snapshot of what to deploy. It contains container image references (tag and digest), optionally a Helm chart version or Git commit SHA, and build provenance (who built it, what commit, which CI run).
 
+The API server enforces the immutability: an update that changes `spec.type`, `spec.pipeline`, `spec.images`, `spec.chart`, `spec.configRef`, `spec.provenance` or `spec.intent` is refused (`spec.<field> is immutable: create a new Bundle`), because gates and verifications were evaluated against the artifact, and an intent edit would take effect only at a later re-translation. Labels and annotations stay editable. To promote a different artifact, or to another target, create a new Bundle; it supersedes the older one.
+
 Bundles are created by your CI pipeline after building and pushing an image. All creation paths produce the same CRD in etcd:
 
 ```bash
@@ -162,6 +164,9 @@ spec:
     skipEnvironments: [staging]  # skip staging (if an org gate applies to staging, a skip-permission gate in an org policy namespace must allow it; see Skip permissions)
 ```
 
+The intent is set when the Bundle is created and cannot be changed afterwards. To change the
+target, create a new Bundle (or use `kardinal promote`, which creates one).
+
 ## Pipeline
 
 A Pipeline defines the promotion path for one application: which Git repo contains the manifests, which environments exist, and what order they promote in.
@@ -232,7 +237,7 @@ A PromotionStep represents one environment promotion for one Bundle. You do not 
 Each PromotionStep tracks:
 - Which environment it targets
 - Which Bundle it promotes
-- The current state (Pending, Promoting, WaitingForMerge, HealthChecking, Verified, Failed, AbortedByAlarm, RollingBack)
+- The current state (Pending, Promoting, WaitingForMerge, HealthChecking, Verifying, Verified, Failed, AbortedByAlarm, RollingBack). Verifying: the health check passed and the environment's [post-deploy hooks](hooks.md) run
 - The PR URL (for pr-review environments)
 - Per-step progress and timing (`status.steps`), the current message and conditions, and bake and retry counters. Promotion evidence (provenance, gate results, upstream verification) goes into the PR body.
 

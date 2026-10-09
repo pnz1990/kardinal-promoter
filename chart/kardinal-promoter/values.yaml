@@ -274,8 +274,9 @@ rbac:
   # (update.strategy: argocd).
   argocdApplicationsWrite: false
   # -- Deprecated, no effect, removed in v0.10. The integration-test step was
-  # removed, so the chart no longer grants batch Jobs access. Kept so existing
-  # --set rbac.integrationTestJobs=... keeps passing the values schema.
+  # removed; the Job access the chart grants is for hooks (hooks.serviceAccounts),
+  # whatever this says. Kept so existing --set rbac.integrationTestJobs=...
+  # keeps passing the values schema.
   integrationTestJobs: false
 
 # -- kro Graph integration.
@@ -326,6 +327,25 @@ graph:
     # -- A Verified Bundle still deployed in an environment
     # (--graph-retire-verified-after, default 1h).
     verified: ""
+
+# -- Pipeline pre- and post-deploy hooks (spec.environments[].hooks,
+# docs/hooks.md). The controller runs each hook as a Job in the Pipeline
+# namespace.
+hooks:
+  # -- ServiceAccount names a hook's Job Pod may run as (--hook-service-accounts),
+  # in the Pipeline namespace. A hook whose Pod names another one fails
+  # without running. Anyone who can edit a Pipeline can run a Pod as one of
+  # these, so list only ServiceAccounts with the rights a hook needs. The
+  # Graph ServiceAccount (graph.serviceAccountName) is never allowed.
+  serviceAccounts:
+    - default
+  # -- Pod Security Standard a hook's Pod must meet (--hook-pod-security-level):
+  # baseline (no privileged containers, host namespaces, hostPath volumes,
+  # added capabilities beyond the baseline set...), restricted (also non-root,
+  # no privilege escalation, seccomp RuntimeDefault, all capabilities
+  # dropped), or privileged (no Pod checks). Below privileged, nodeName and
+  # hostPort are refused too. A hook that breaks it fails without running.
+  podSecurityLevel: baseline
 
 # -- Deprecated, no effect. The CRD schemas validate the kardinal fields. The
 # chart always ships the identity ValidatingAdmissionPolicies

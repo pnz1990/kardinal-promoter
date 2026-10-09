@@ -400,6 +400,9 @@ func TestCompact_SameObjectKinds(t *testing.T) {
 	skip.Labels["kardinal.io/type"] = "skip-permission"
 	gates = append(gates, skip)
 	policyNamespaces := []string{"platform-policies"}
+	// Hooks and analyses are not in the fixture: the compact shape refuses
+	// them (compactUnsupported, TestCompact_RefusesHooks and
+	// TestCompact_RefusesVerification).
 
 	kinds := func(g *graph.Graph) map[string]bool {
 		out := map[string]bool{}
@@ -440,6 +443,7 @@ func TestCompact_SameObjectKinds(t *testing.T) {
 				pp.Annotations = map[string]string{graph.AnnotationGraphShape: shape}
 				return graph.NewBuilder().Build(graph.BuildInput{
 					Pipeline: pp, Bundle: b, PolicyGates: gates, PolicyNamespaces: policyNamespaces, MetricChecks: checks,
+					Analyses: analysisInput(smokeTemplate("AnalysisTemplate", "smoke", "1")),
 				})
 			}
 			nodes, err := build(graph.GraphShapeNodes)
@@ -479,6 +483,31 @@ func gateNames(gs []kardinalv1alpha1.PolicyGate) []string {
 		out[i] = gs[i].Name
 	}
 	return out
+}
+
+// TestCompact_RefusesHooks: a compact Graph is refused for a Pipeline with
+// hooks, naming the feature, and the Pipeline reconciler's Pipeline-only
+// check reports it.
+func TestCompact_RefusesHooks(t *testing.T) {
+	p := hookPipeline()
+	p.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeCompact}
+	_, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-v1", "app")})
+	require.ErrorIs(t, err, graph.ErrInvalid)
+	assert.Contains(t, err.Error(), "does not support pre- and post-deploy hooks (spec.environments[].hooks) yet")
+	assert.Contains(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: p}), "pre- and post-deploy hooks (spec.environments[].hooks)")
+	assert.Empty(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: makeLinearPipeline("app", "test")}))
+}
+
+// TestCompact_RefusesVerification: a compact Graph is refused for a
+// Pipeline with spec.verification, naming the feature, and the Pipeline
+// reconciler's Pipeline-only check reports it.
+func TestCompact_RefusesVerification(t *testing.T) {
+	p := analysisPipeline(kardinalv1alpha1.AnalysisTemplateRef{Name: "smoke"})
+	p.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeCompact}
+	_, err := buildAnalysis(t, p, analysisInput(smokeTemplate("AnalysisTemplate", "smoke", "1")))
+	require.ErrorIs(t, err, graph.ErrInvalid)
+	assert.Contains(t, err.Error(), "does not support Argo Rollouts analysis (spec.environments[].verification) yet")
+	assert.Contains(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: p}), "Argo Rollouts analysis (spec.environments[].verification)")
 }
 
 func mapKeys[V any](m map[string]V) []string {

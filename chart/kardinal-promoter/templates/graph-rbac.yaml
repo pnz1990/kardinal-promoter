@@ -17,14 +17,20 @@ metadata:
   labels:
     {{- include "kardinal-promoter.labels" . | nindent 4 }}
 rules:
-  # Graph templates (metricchecks: per-promotion MetricCheck instances).
+  # Graph templates (metricchecks: per-promotion MetricCheck instances);
+  # promotionsteps also takes the hook mirror patch.
   - apiGroups: ["kardinal.io"]
-    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks"]
+    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "hookruns"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Graph refs.
   - apiGroups: ["kardinal.io"]
     resources: ["bundles"]
     verbs: ["get", "list", "watch"]
+  # Argo Rollouts analysis (spec.verification): AnalysisRun templates, and
+  # the refAnalysisRuns read-back.
+  - apiGroups: ["argoproj.io"]
+    resources: ["analysisruns"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -61,13 +67,13 @@ metadata:
     rbac.kro.run/aggregate-to-controller: "true"
 rules:
   - apiGroups: ["kardinal.io"]
-    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "bundles"]
+    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "bundles", "hookruns"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["argoproj.io"]
-    resources: ["applications", "rollouts"]
+    resources: ["applications", "rollouts", "analysisruns"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["kustomize.toolkit.fluxcd.io"]
     resources: ["kustomizations"]
