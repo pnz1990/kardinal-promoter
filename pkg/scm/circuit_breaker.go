@@ -160,6 +160,23 @@ func (cb *CircuitBreaker) RecordSuccess() {
 	cb.probeStarted = time.Time{}
 }
 
+// cancelProbe gives back the half-open probe slot of a call that Allow
+// admitted but that was not made, or whose outcome says nothing about this
+// circuit (CircuitRegistry), so the next caller may probe at once.
+func (cb *CircuitBreaker) cancelProbe() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.probeStarted = time.Time{}
+}
+
+// pristine reports whether the breaker holds no state: closed, no failures
+// counted and no probe running. Dropping it loses nothing (CircuitRegistry).
+func (cb *CircuitBreaker) pristine() bool {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	return cb.state == CircuitClosed && cb.consecutiveFails == 0 && cb.probeStarted.IsZero()
+}
+
 // RecordResponse records the outcome of an HTTP call that returned resp.
 // Rate limits and server errors (see IsTransientResponse) count as failures;
 // any other response, including a 4xx, counts as success because retrying

@@ -17,11 +17,16 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -170,4 +175,56 @@ func TestFormatSubscriptionTable_noLastChecked(t *testing.T) {
 	assert.Regexp(t, `(?m)^bare +git +pipe +Unknown +- +- +\S+$`, out)
 	// Phase should show "Unknown" when empty
 	assert.Contains(t, out, "Unknown")
+}
+
+// TestGetSubscriptionsFn lists the Subscriptions of the namespace, or of
+// every namespace with -A, keeps the one named when a name is given, and
+// writes table, json or yaml (#1289).
+func TestGetSubscriptionsFn(t *testing.T) {
+	sub := func(name, ns string) *v1alpha1.Subscription {
+		s := makeTestSubscription(name, ns, "app", v1alpha1.SubscriptionTypeImage, "Watching", "")
+		return &s
+	}
+	objs := []sigs_client.Object{sub("web", "default"), sub("api", "default"), sub("db", "team-b")}
+	tests := []struct {
+		name    string
+		args    []string
+		all     bool
+		output  string
+		want    []string
+		notWant []string
+	}{
+		{name: "namespace", want: []string{"web", "api"}, notWant: []string{"db", "NAMESPACE"}},
+		{name: "by name", args: []string{"web"}, want: []string{"web"}, notWant: []string{"api", "db"}},
+		{name: "unknown name", args: []string{"nope"}, want: []string{"NAME"}, notWant: []string{"web", "api"}},
+		{name: "all namespaces", all: true, want: []string{"NAMESPACE", "web", "api", "db", "team-b"}},
+		{name: "json", args: []string{"api"}, output: "json", want: []string{`"name": "api"`}, notWant: []string{"web"}},
+		{name: "yaml", args: []string{"db"}, all: true, output: "yaml", want: []string{"name: db", "namespace: team-b"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			globalOutput = tc.output
+			t.Cleanup(func() { globalOutput = "" })
+			c := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithObjects(objs...).Build()
+			var buf bytes.Buffer
+			require.NoError(t, getSubscriptionsFn(&buf, c, "default", tc.args, tc.all))
+			for _, s := range tc.want {
+				assert.Contains(t, buf.String(), s)
+			}
+			for _, s := range tc.notWant {
+				assert.NotContains(t, buf.String(), s)
+			}
+		})
+	}
+
+	t.Run("list error", func(t *testing.T) {
+		c := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithInterceptorFuncs(interceptor.Funcs{
+			List: func(context.Context, sigs_client.WithWatch, sigs_client.ObjectList, ...sigs_client.ListOption) error {
+				return errors.New("boom")
+			},
+		}).Build()
+		err := getSubscriptionsFn(&bytes.Buffer{}, c, "default", nil, false)
+		require.Error(t, err)
+		assert.Equal(t, "list subscriptions: boom", err.Error())
+	})
 }

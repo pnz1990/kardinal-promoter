@@ -127,7 +127,7 @@ type SecretRef struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.autoRollback)",message="environments[].autoRollback is not implemented; remove it (automatic rollback is configured with onHealthFailure, see docs/rollback.md)"
 // +kubebuilder:validation:XValidation:rule="!has(self.steps) || size(self.steps) == 0",message="environments[].steps is not supported: kardinal has no custom step engine and every environment runs the default step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)"
 // +kubebuilder:validation:XValidation:rule="!has(self.promotionTemplate)",message="environments[].promotionTemplate is not supported: the PromotionTemplate CRD was removed and every environment runs the default step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)"
-// +kubebuilder:validation:XValidation:rule="!(self.name in ['api-version','kind','metadata','namespace','spec','status','graph','graphengine','kro','each','item','items','object','self','this','context','true','false','null','in','as','break','const','continue','else','for','function','if','import','let','loop','package','return','var','void','while','bundle','time'])",message="reserved environment name: the name becomes a kro Graph node ID; bundle, time, kro reserved IDs (spec, status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed"
+// +kubebuilder:validation:XValidation:rule="!(self.name in ['api-version','kind','metadata','namespace','spec','status','graph','graphengine','kro','each','item','items','object','self','this','context','true','false','null','in','as','break','const','continue','else','for','function','if','import','let','loop','package','return','var','void','while','bundle','time'])",message="reserved environment name: the name becomes a kro Graph node ID; bundle, time, kro reserved IDs (spec, status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed; rename the environment"
 // +kubebuilder:validation:XValidation:rule="!has(self.pr) || (has(self.approval) && self.approval == 'pr-review')",message="environments[].pr configures the promotion pull request and needs approval: pr-review"
 type EnvironmentSpec struct {
 	// Name is the environment identifier (e.g. "test", "uat", "prod").
@@ -420,6 +420,17 @@ type BakeConfig struct {
 	// +kubebuilder:default=reset-on-alarm
 	// +optional
 	Policy string `json:"policy,omitempty"`
+
+	// MaxDuration bounds the time from the first bake window's start
+	// (status.bakeFirstStartedAt) to a complete window. A step that has not
+	// completed one full window by then applies onHealthFailure when its
+	// window stops, also on a Waiting check, so a release that keeps
+	// flapping under reset-on-alarm ends. Go duration format (e.g. "36h").
+	// Default: minutes + health.timeout. A value shorter than minutes counts
+	// as minutes.
+	// +kubebuilder:validation:Pattern=`^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
+	// +optional
+	MaxDuration string `json:"maxDuration,omitempty"`
 }
 
 // WebhookConfig is the shape of the deprecated spec.environments[].steps[].webhook

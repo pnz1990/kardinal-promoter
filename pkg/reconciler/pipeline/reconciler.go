@@ -32,6 +32,10 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
+// secretRecheckInterval is how often a Pipeline refused for a missing
+// git.secretRef Secret is checked again: the reconciler watches no Secrets.
+const secretRecheckInterval = time.Minute
+
 // Ready condition reasons.
 const (
 	reasonValid            = "Valid"
@@ -56,6 +60,11 @@ const (
 // and status.phase.
 type Reconciler struct {
 	client.Client
+
+	// AllowedRepositories is --scm-allowed-repositories: a Pipeline that
+	// would need the shared SCM token for a spec.git.url it does not allow is
+	// Ready=False/RepositoryNotAllowed (#1332). Nil allows every repository.
+	AllowedRepositories *scm.RepositoryAllowlist
 }
 
 // Reconcile is called whenever a Pipeline, one of its PromotionSteps, the
@@ -102,7 +111,20 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		log.Warn().Str("reason", desiredPaused.Reason).Msg(desiredPaused.Message)
 	}
 
-	desired := r.validate(&p)
+	// ownSecret is read only when the allowlist would refuse the URL (#1332).
+	ownSecret := false
+	if !r.AllowedRepositories.Allows(p.Spec.Git.URL) {
+		if ownSecret, err = scm.PipelineSecretExists(ctx, r.Client, &p); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	desired := r.validate(&p, ownSecret)
+	// Nothing watches Secrets: a git.secretRef Secret created later is seen
+	// by this periodic re-check.
+	var result ctrl.Result
+	if desired.Reason == scm.ReasonRepositoryNotAllowed && p.Spec.Git.SecretRef != nil && !ownSecret {
+		result.RequeueAfter = secretRecheckInterval
+	}
 
 	// Derive status.phase from Bundle phases and PromotionStep states.
 	// This is a Watch-node pattern: we read Bundle and PromotionStep CRD status
@@ -140,7 +162,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			Str("reason", desired.Reason).
 			Str("phase", desiredPhase).
 			Msg("pipeline status already correct, skipping")
-		return ctrl.Result{}, nil
+		return result, nil
 	}
 
 	patch := client.MergeFrom(p.DeepCopy())
@@ -164,7 +186,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		Int("environments", len(p.Spec.Environments)).
 		Msg("pipeline status updated")
 
-	return ctrl.Result{}, nil
+	return result, nil
 }
 
 // convergeFreezeGate creates the freeze gate of a paused pipeline and deletes
@@ -327,7 +349,7 @@ func DerivePhase(pipelineName string, bundles []kardinalv1alpha1.Bundle, steps [
 // True/Valid, False/ValidationFailed with the first problem found, or
 // False/NotImplemented listing the reserved fields that are set but not
 // implemented (the same list "kardinal validate" reports).
-func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline) metav1.Condition {
+func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline, ownSecret bool) metav1.Condition {
 	invalid := func(msg string) metav1.Condition {
 		return metav1.Condition{
 			Type: "Ready", Status: metav1.ConditionFalse, Reason: reasonValidationFailed,
@@ -366,6 +388,17 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline) metav1.Condition {
 	// deputy), so it is a validation error, not an unimplemented field.
 	if err := graph.ValidateSecretRef(p); err != nil {
 		return invalid(err.Error())
+	}
+	// The Pipeline would have the controller's shared SCM token act on a
+	// spec.git.url --scm-allowed-repositories does not allow (#1332): it has
+	// no git.secretRef Secret that exists (ownSecret), or an environment
+	// whose PR that token opens. The PromotionStep reconciler refuses the
+	// step with the same error, and the SCM provider refuses the calls.
+	if err := r.AllowedRepositories.CheckPipeline(p, ownSecret); err != nil {
+		return metav1.Condition{
+			Type: "Ready", Status: metav1.ConditionFalse, Reason: scm.ReasonRepositoryNotAllowed,
+			Message: scm.NotAllowedMessage(err), ObservedGeneration: p.Generation,
+		}
 	}
 	// argocd + pr-review is refused by the CRD at apply time; a Pipeline
 	// stored before that rule is caught here (#1281).

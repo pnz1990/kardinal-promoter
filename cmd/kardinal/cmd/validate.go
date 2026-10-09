@@ -33,6 +33,7 @@ import (
 
 func newValidateCmd() *cobra.Command {
 	var file string
+	var allowedRepos []string
 
 	cmd := &cobra.Command{
 		Use:   "validate",
@@ -51,7 +52,11 @@ Checks:
     Deployment). The controller reports the same fields as
     Ready=False/NotImplemented on the Pipeline. With metadata.namespace set,
     a git.secretRef in another namespace is an error too (the controller
-    reports it as Ready=False/ValidationFailed). spec.policyGates is an
+    reports it as Ready=False/ValidationFailed). With
+    --allowed-repositories (the controller's scm.allowedRepositories), a
+    Pipeline must point spec.git.url at one of them unless it never needs
+    the controller's SCM token: a git.secretRef and no pr-review
+    environment (the controller reports Ready=False/RepositoryNotAllowed). spec.policyGates is an
     error (the API server rejects it); spec.git.provider is a warning (the
     controller ignores it).
   - PolicyGate: spec.expression set and compiles with the controller's
@@ -66,17 +71,24 @@ Exit codes:
   0 — file is valid
   1 — validation failed (actionable errors printed)`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runValidate(cmd, file)
+			return runValidate(cmd, file, allowedRepos)
 		},
 	}
 
 	cmd.Flags().StringVarP(&file, "file", "f", "", "Path to Pipeline or PolicyGate YAML file (required)")
 	_ = cmd.MarkFlagRequired("file")
+	cmd.Flags().StringSliceVar(&allowedRepos, "allowed-repositories", nil,
+		"The controller's scm.allowedRepositories (comma-separated host/repository globs): report a "+
+			"Pipeline that would need the controller's SCM token for a spec.git.url that is not one of them")
 
 	return cmd
 }
 
-func runValidate(cmd *cobra.Command, file string) error {
+func runValidate(cmd *cobra.Command, file string, allowedRepos []string) error {
+	allowed, err := scm.ParseRepositoryAllowlist(allowedRepos)
+	if err != nil {
+		return fmt.Errorf("--allowed-repositories: %w", err)
+	}
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return fmt.Errorf("cannot read %s: %w", file, err)
@@ -116,7 +128,7 @@ func runValidate(cmd *cobra.Command, file string) error {
 		ours := meta.APIVersion == "" || group == kardinalv1alpha1.GroupVersion.Group
 		switch {
 		case ours && meta.Kind == "Pipeline":
-			err = validatePipeline(out, file, raw)
+			err = validatePipeline(out, file, raw, allowed)
 		case ours && meta.Kind == "PolicyGate":
 			err = validatePolicyGate(out, file, raw)
 		default:
@@ -143,7 +155,7 @@ func runValidate(cmd *cobra.Command, file string) error {
 	return nil
 }
 
-func validatePipeline(out io.Writer, file string, data []byte) error {
+func validatePipeline(out io.Writer, file string, data []byte, allowed *scm.RepositoryAllowlist) error {
 	var pipeline kardinalv1alpha1.Pipeline
 	if err := yaml.Unmarshal(data, &pipeline); err != nil {
 		return fmt.Errorf("%s: YAML parse error: %w", file, err)
@@ -156,9 +168,16 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 		errs = append(errs, "spec.environments must contain at least one environment")
 	}
 
+	reserved := false
 	for _, env := range pipeline.Spec.Environments {
 		if env.Name == "" {
 			errs = append(errs, "each environment must have a non-empty name")
+		}
+		// The API server refuses it with this message (#1358); the Graph build
+		// below would report it again, naming validate's own Bundle.
+		if graph.ReservedEnvironmentName(env.Name) {
+			errs = append(errs, fmt.Sprintf("environment %q: %s", env.Name, graph.ReservedEnvironmentMessage))
+			reserved = true
 		}
 	}
 
@@ -199,6 +218,14 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 	if err := scm.ValidatePipelinePR(&pipeline); err != nil {
 		errs = append(errs, err.Error())
 	}
+	// #1332: the controller's shared token may act only on the allowed
+	// repositories (Ready=False/RepositoryNotAllowed). Offline, a
+	// git.secretRef is taken to name a Secret that exists; the controller
+	// checks that it does.
+	ref := pipeline.Spec.Git.SecretRef
+	if err := allowed.CheckPipeline(&pipeline, ref != nil && ref.Name != ""); err != nil {
+		errs = append(errs, scm.NotAllowedMessage(err))
+	}
 
 	// Dependency: no circular deps (uses the graph builder's topoSort).
 	if len(pipeline.Spec.Environments) > 0 && !hasUnnamedEnv(pipeline) {
@@ -214,7 +241,16 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 			buildable.Spec.Environments[i].PromotionTemplate = nil //nolint:staticcheck // SA1019: clear the deprecated field reported above
 			buildable.Spec.Environments[i].Regions = nil           //nolint:staticcheck // SA1019: cleared because it is reported above
 		}
-		if _, err := b.Build(graph.BuildInput{Pipeline: buildable, Bundle: buildableBundle(dummyBundle)}); err != nil {
+		// A reserved name fails Build on its node ID, already reported above;
+		// the ordering checks (unknown dependsOn, cycles) still run.
+		check := func() error {
+			_, err := b.Build(graph.BuildInput{Pipeline: buildable, Bundle: buildableBundle(dummyBundle)})
+			return err
+		}
+		if reserved {
+			check = func() error { return graph.ValidateOrdering(buildable) }
+		}
+		if err := check(); err != nil {
 			errs = append(errs, err.Error())
 		}
 	}
@@ -259,8 +295,9 @@ func validatePolicyGate(out io.Writer, file string, data []byte) error {
 	}
 	if !policyGateNameAllowed(&gate) {
 		errs = append(errs, fmt.Sprintf("metadata.name %q has %d characters: PolicyGate names are at most %d "+
-			"characters, because the name is copied into the kardinal.io/gate-template label of every gate instance",
-			gate.Name, len(gate.Name), maxPolicyGateNameLength))
+			"characters, because the name is copied into the kardinal.io/gate-template label of every gate instance; "+
+			"use a name of at most %d characters",
+			gate.Name, len(gate.Name), maxPolicyGateNameLength, maxPolicyGateNameLength))
 	}
 
 	// Warnings do not fail validation.

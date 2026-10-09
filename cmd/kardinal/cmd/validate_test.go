@@ -230,6 +230,39 @@ func TestValidate_Documents(t *testing.T) {
 				"spec:\n  git:\n    url: https://github.com/o/r\n    provider: gitlab\n  environments:\n  - name: test\n",
 			wantOut: []string{"✓ f.yaml is valid", "  ! warning: spec.git.provider is deprecated and ignored"},
 		},
+		// #1358: a reserved environment name is reported the way the API
+		// server reports it, without the Bundle validate builds internally.
+		{
+			name:    "environment named bundle",
+			content: strings.Replace(validPipelineDoc, "- name: prod", "- name: bundle", 1),
+			wantOut: []string{"✗ f.yaml is invalid:\n  - environment \"bundle\": reserved environment name: the name " +
+				"becomes a kro Graph node ID; bundle, time, kro reserved IDs (spec, status, metadata, graph, self, each, item, ...) " +
+				"and CEL keywords are not allowed; rename the environment\n"},
+			wantErr: true,
+		},
+		{
+			name:    "environment named spec",
+			content: strings.Replace(validPipelineDoc, "- name: prod", "- name: spec", 1),
+			wantOut: []string{"✗ f.yaml is invalid:\n  - environment \"spec\": reserved environment name: "},
+			wantErr: true,
+		},
+		{
+			// The ordering checks still run next to a reserved name.
+			name: "environment named bundle in a cycle",
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: Pipeline\nmetadata:\n  name: web\nspec:\n  git:\n" +
+				"    url: https://github.com/o/r\n  environments:\n  - name: bundle\n    dependsOn: [prod]\n" +
+				"  - name: prod\n    dependsOn: [bundle]\n",
+			wantOut: []string{`  - environment "bundle": reserved environment name: `,
+				"  - build: circular dependency in pipeline environments: bundle → prod → bundle (cycle!)"},
+			wantErr: true,
+		},
+		{
+			name: "PolicyGate name over 63 characters says what to do",
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: " + strings.Repeat("g", 64) +
+				"\nspec:\n  expression: \"true\"\n",
+			wantOut: []string{"; use a name of at most 63 characters\n"},
+			wantErr: true,
+		},
 		{
 			name:    "steps are reported once",
 			content: validPipelineDoc + "    steps:\n    - uses: git-clone\n",
@@ -251,6 +284,46 @@ func TestValidate_Documents(t *testing.T) {
 				assert.Contains(t, out, s)
 			}
 			assert.NotContains(t, out, "build: environment", "a problem is reported once")
+			assert.NotContains(t, out, "validate-dummy", "validate's internal Bundle is never named")
+			assert.NotContains(t, out, "build: PromotionStep", "a reserved name is reported once")
+		})
+	}
+}
+
+// TestValidate_AllowedRepositories covers #1332: with --allowed-repositories
+// (the controller's scm.allowedRepositories), a Pipeline without
+// git.secretRef whose spec.git.url is not allowed is invalid, with the
+// message of the controller's Ready=False/RepositoryNotAllowed.
+func TestValidate_AllowedRepositories(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		content string
+		wantOut string
+		wantErr bool
+	}{
+		{name: "not allowed", args: []string{"--allowed-repositories", "github.com/acme/*"}, content: validPipelineDoc,
+			wantOut: `spec.git.url "https://github.com/o/r" is not in the controller's allowed repositories (github.com/acme/*)`,
+			wantErr: true},
+		{name: "allowed", args: []string{"--allowed-repositories", "github.com/acme/*,github.com/o/*"}, content: validPipelineDoc,
+			wantOut: "✓ f.yaml is valid"},
+		{name: "own secretRef", args: []string{"--allowed-repositories", "github.com/acme/*"},
+			content: secretRefDoc("", "team-a"), wantOut: "✓ f.yaml is valid"},
+		{name: "flag not set", content: validPipelineDoc, wantOut: "✓ f.yaml is valid"},
+		{name: "bad pattern", args: []string{"--allowed-repositories", "github.com/[x"}, content: validPipelineDoc,
+			wantOut: "", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			require.NoError(t, os.WriteFile("f.yaml", []byte(tc.content), 0o600))
+			out, err := executeRoot(t, append([]string{"validate", "-f", "f.yaml"}, tc.args...)...)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Contains(t, out, tc.wantOut)
 		})
 	}
 }
