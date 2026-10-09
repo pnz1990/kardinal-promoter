@@ -14,6 +14,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
 
 func TestTagIn(t *testing.T) {
@@ -199,6 +200,18 @@ func TestCheckSLO(t *testing.T) {
 	assert.Contains(t, checkSLO(testState(nil, nil), o).Violations[0], "nothing to measure")
 }
 
+// TestPushEfficiency (#1578): refused pushes above the ratio fail the run,
+// none or a few do not, and a shared controller only reports.
+//
+// Covers SCALE-INV-PUSH-01.
+func TestPushEfficiency(t *testing.T) {
+	assert.Empty(t, pushEfficiency(150, 0, 0.5, false))
+	assert.Empty(t, pushEfficiency(150, 75, 0.5, false))
+	assert.Len(t, pushEfficiency(318, 4023, 0.5, false), 1, "the O(N²) wave of #1578")
+	assert.Len(t, pushEfficiency(0, 2, 0.5, false), 1, "refusals with nothing landed")
+	assert.Empty(t, pushEfficiency(318, 4023, 0.5, true), "shared controller: reported only")
+}
+
 // TestRetiredSteps: the steps of a retired Graph come back from the Bundle's
 // status.retiredSteps, so the phase and audit checks still see them, and a
 // step that still exists is not counted twice.
@@ -263,4 +276,18 @@ func TestCheckOutcome(t *testing.T) {
 	assert.Len(t, checkOutcome(ok, Options{Outcome: OutcomeAllVerified}).Violations, 1, "a1 is Superseded")
 	assert.Len(t, checkOutcome(newestFailed, Options{Outcome: OutcomeAny}).Violations, 1, "any needs a reason")
 	assert.Empty(t, checkOutcome(newestFailed, Options{Outcome: OutcomeAny, OutcomeWhy: "the test fails a Bundle"}).Violations)
+}
+
+// TestCountsFromZero (#1578 QA): a counter series that appears during the
+// window counts from zero, not from its first sample; one that existed at
+// the start counts from its value then; a reset series counts its end value.
+func TestCountsFromZero(t *testing.T) {
+	s := func(pod, result, v string) framework.PromSample {
+		return framework.PromSample{Metric: map[string]string{"__name__": "x", "pod": pod, "result": result}, Value: v}
+	}
+	end := []framework.PromSample{s("a", "ok", "151"), s("a", "non_fast_forward", "3"), s("b", "ok", "40"), s("c", "ok", "5")}
+	start := []framework.PromSample{s("b", "ok", "30"), s("c", "ok", "9")}
+	got := countsFromZero(end, start, "result")
+	assert.InDelta(t, 151+10+5, got["ok"], 0, "a new series from 0, an old one from its start, a reset one its end")
+	assert.InDelta(t, 3, got["non_fast_forward"], 0, "early refusals are not hidden")
 }
