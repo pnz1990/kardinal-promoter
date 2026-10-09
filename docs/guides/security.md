@@ -160,7 +160,7 @@ The namespace is kardinal's tenancy unit. There is no Project CRD, and none is p
   writes for a user is checked with a `SubjectAccessReview` (see
   [UI API Access Control](#ui-api-access-control)).
 
-#### Known limit: the shared SCM token
+#### The shared SCM token and `scm.allowedRepositories`
 
 Git clone and push use the Pipeline's `git.secretRef` token. The controller uses its own SCM
 token (`github.token` or `github.secretRef`, the controller Pod's `GITHUB_TOKEN`) to open, label,
@@ -168,15 +168,55 @@ comment on and close PRs. When it closes a PR that was not merged, it also delet
 branch, `kardinal/<namespace hash>/<bundle>/<env>`, with that token, so the closed PR cannot be merged later. It
 deletes that branch too when a step that pushed it ends before it opens a PR. It deletes only
 branches under `kardinal/`. So the controller token needs write access to repository contents,
-not only to pull requests. And anyone who can create a Pipeline, in any namespace, can have PRs
-opened, and `kardinal/` branches deleted, in any repository that token can write to. Restricting the repositories is tracked in
-[#1332](https://github.com/pnz1990/kardinal-promoter/issues/1332) (`scm.allowedRepositories`).
-Until then:
+not only to pull requests.
+
+Without a limit, anyone who can create a Pipeline, in any namespace, can have PRs opened, and
+`kardinal/` branches deleted, in any repository that token can write to. Set
+`scm.allowedRepositories` (the controller flag `--scm-allowed-repositories`) to the repositories
+the controller's token may act on:
+
+```yaml
+scm:
+  allowedRepositories:
+    - github.com/acme/gitops          # one repository
+    - github.com/acme-platform/*      # every repository of an owner
+    - gitlab.example.com/platform/**  # everything under a group, subgroups included
+    - dev.azure.com/acme/platform/*   # Azure DevOps: organization/project/repository
+```
+
+Each entry is `host/repository`: the SCM host, and the repository as the SCM API names it,
+`owner/repo` (GitHub, Forgejo, Gitea, Bitbucket), the full project path (GitLab), or
+`organization/project/repository` on `dev.azure.com` (Azure DevOps, also for
+`<org>.visualstudio.com` and SSH remotes). Matching ignores case, and a scheme, user, port or
+`.git` in the entry (an IPv6 host may keep its brackets). `*` matches one path segment, and an
+entry ending in `/**` matches every repository below it. A `spec.git.url` that does not parse to
+a host and a repository never matches, and neither does a repository with a segment other than
+letters, digits, `.`, `_` and `-` (only Azure DevOps project and repository names may hold single spaces), so
+a percent escape, backslash, `?`, `#` or control character cannot smuggle in another path. The
+PRStatus CRD refuses such a `spec.repo` too.
+
+The list is enforced on every SCM API call the controller's token makes: opening, labelling,
+commenting on, polling and closing PRs, reading reviews and merge commits, and deleting
+branches. A call for any other repository is refused before it is sent, whatever code path
+makes it (a superseded step cleaning up its branch, a PRStatus poll, a webhook confirmation). A
+refused PRStatus poll is recorded in `status.pollError`. On top of that, a Pipeline that would
+need the controller's token for a repository that is not allowed is `Ready=False` with reason
+`RepositoryNotAllowed`, and its PromotionSteps fail before `git-clone` with the same message, so
+nothing is cloned, pushed or opened. That is every Pipeline whose `spec.git.url` is not allowed,
+except one that never uses the controller's token: its `git.secretRef` names a Secret that
+exists in its namespace (git clone and push use that token) and no environment uses
+`approval: pr-review` (whose PR the controller's token opens). A Pipeline refused because its
+Secret is missing is checked again every minute. `kardinal validate --allowed-repositories
+<list>` reports the same before you apply the file (offline it takes the Secret to exist). When
+the value is empty, every repository is allowed, as before, and the controller logs a warning at
+startup.
+
+Also:
 
 1. Scope the controller's SCM token to the GitOps repositories kardinal manages, for example a
    fine-grained PAT limited to those repositories.
 2. Give each team its own `git.secretRef` token in its namespace, scoped to that team's
-   repositories.
+   repositories, so a team's clones and pushes are limited by its own token.
 3. Grant `create` on `pipelines.kardinal.io` only to people you trust with the controller
    token's reach.
 
