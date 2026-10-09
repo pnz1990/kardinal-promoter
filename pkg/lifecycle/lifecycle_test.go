@@ -87,6 +87,21 @@ func phase(b *v1alpha1.Bundle, p string) *v1alpha1.Bundle {
 	return b
 }
 
+// digest pins b's image to d.
+func digest(b *v1alpha1.Bundle, d string) *v1alpha1.Bundle {
+	b.Spec.Images[0].Digest = d
+	return b
+}
+
+// rejected marks b rejected (kardinal reject).
+func rejected(b *v1alpha1.Bundle) *v1alpha1.Bundle {
+	b.Spec.Rejected = &v1alpha1.BundleRejection{By: "alice", Reason: "bad"}
+	if b.Status.Phase == "" {
+		b.Status.Phase = "Rejected"
+	}
+	return b
+}
+
 func named(s *v1alpha1.PromotionStep, name string) *v1alpha1.PromotionStep {
 	s.Name = name
 	return s
@@ -174,6 +189,7 @@ func TestCurrentBundle(t *testing.T) {
 	tests := []struct {
 		name    string
 		bundles []v1alpha1.Bundle
+		steps   []v1alpha1.PromotionStep
 		want    string
 	}{
 		{name: "no bundles", want: ""},
@@ -183,12 +199,29 @@ func TestCurrentBundle(t *testing.T) {
 			bundles: []v1alpha1.Bundle{b("b2", 2, ""), b("b1", 1, "Verified")}, want: "b2"},
 		{name: "a newer Superseded bundle is skipped",
 			bundles: []v1alpha1.Bundle{b("b1", 1, "Verified"), b("b2", 2, "Superseded")}, want: "b1"},
+		{name: "a newer Rejected bundle is skipped",
+			bundles: []v1alpha1.Bundle{b("b1", 1, "Verified"), *rejected(bundle("b2", "app", "", 2))}, want: "b1"},
+		{name: "a bundle with spec.rejected is skipped before its phase says so",
+			bundles: []v1alpha1.Bundle{b("b1", 1, "Verified"), *rejected(phase(bundle("b2", "app", "", 2), "Promoting"))}, want: "b1"},
 		{name: "every bundle Superseded: the newest",
 			bundles: []v1alpha1.Bundle{b("b2", 2, "Superseded"), b("b1", 1, "Superseded")}, want: "b2"},
+		// QA #1489: a Rejected bundle whose change is live is not hidden.
+		{name: "a newer Rejected bundle whose change is live is current",
+			bundles: []v1alpha1.Bundle{b("b1", 1, "Verified"), *rejected(bundle("b2", "app", "", 2))},
+			steps:   []v1alpha1.PromotionStep{*step("b2", "app", "prod", "Verified", 3)}, want: "b2"},
+		{name: "health-checking counts as live",
+			bundles: []v1alpha1.Bundle{b("b1", 1, "Verified"), *rejected(bundle("b2", "app", "", 2))},
+			steps:   []v1alpha1.PromotionStep{*step("b2", "app", "prod", "HealthChecking", 3)}, want: "b2"},
+		{name: "a rejected bundle whose step is still waiting for its merge is skipped",
+			bundles: []v1alpha1.Bundle{b("b1", 1, "Verified"), *rejected(bundle("b2", "app", "", 2))},
+			steps:   []v1alpha1.PromotionStep{*step("b2", "app", "prod", "WaitingForMerge", 3)}, want: "b1"},
+		{name: "a newer bundle replaces the live rejected change",
+			bundles: []v1alpha1.Bundle{*rejected(bundle("b2", "app", "", 2)), b("b3", 3, "Promoting")},
+			steps:   []v1alpha1.PromotionStep{*step("b2", "app", "prod", "Verified", 3)}, want: "b3"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := lifecycle.CurrentBundle(tc.bundles)
+			got := lifecycle.CurrentBundle(tc.bundles, tc.steps)
 			if tc.want == "" {
 				assert.Nil(t, got)
 				return

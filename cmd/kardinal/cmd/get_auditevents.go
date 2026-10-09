@@ -46,6 +46,7 @@ AuditEvents are written by the controller at key points:
   PromotionSucceeded   — Health check passed; step reached Verified
   PromotionFailed      — Step reached Failed state
   PromotionSuperseded  — Newer Bundle superseded an in-flight promotion
+  PromotionRejected    — kardinal reject cancelled an in-flight promotion
   GateEvaluated        — PolicyGate changed readiness state
   RollbackStarted      — onHealthFailure=rollback triggered a rollback Bundle
   RollbackSucceeded    — A rollback Bundle's step reached Verified (written

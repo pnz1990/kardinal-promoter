@@ -1,0 +1,47 @@
+{{/*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+
+Identity admission policies (docs/guides/security.md, Verified identity).
+Records that name a person must name the person who wrote them: the API server
+admits them only when the name equals request.userInfo.username. They are not
+optional: without them anyone with write access could record someone else's
+name. Kubernetes 1.30+ serves admissionregistration.k8s.io/v1
+ValidatingAdmissionPolicy (the chart's kubeVersion).
+*/}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-bundle-rejection
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["bundles"]
+  validations:
+    # kardinal reject (spec.rejected) records the rejecting user. A new
+    # rejection must name the requester; an existing one is immutable (CRD
+    # transition rule), so only its first write is checked.
+    - expression: >-
+        !has(object.spec.rejected) ||
+        (oldObject != null && has(oldObject.spec.rejected)) ||
+        object.spec.rejected.by == request.userInfo.username
+      messageExpression: >-
+        'spec.rejected.by must be your own username "' + request.userInfo.username +
+        '", not "' + object.spec.rejected.by + '"; kardinal reject sets it for you'
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-bundle-rejection
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kardinal-promoter.fullname" . }}-bundle-rejection
+  validationActions: ["Deny"]

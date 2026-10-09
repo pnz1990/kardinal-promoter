@@ -73,7 +73,7 @@ spec:
                 description: |-
                   Action is a short verb describing what happened.
                   Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed",
-                                "PromotionSuperseded", "RollbackStarted", "RollbackSucceeded",
+                                "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
                                 "HealthCheckFailed", "GateBlocked", "GateEvaluated", "HoldCreated", "HoldReleased".
                   HealthCheckFailed and GateBlocked are accepted but never written: a
                   failed health check records PromotionFailed (RollbackStarted when
@@ -84,6 +84,7 @@ spec:
                 - PromotionSucceeded
                 - PromotionFailed
                 - PromotionSuperseded
+                - PromotionRejected
                 - RollbackStarted
                 - RollbackSucceeded
                 - HealthCheckFailed
