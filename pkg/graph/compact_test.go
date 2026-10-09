@@ -387,13 +387,15 @@ func TestCompact_SameObjectKinds(t *testing.T) {
 	gates := []kardinalv1alpha1.PolicyGate{
 		makePolicyGate("no-weekend", "platform-policies", "prod", "!schedule.isWeekend"),
 		makePolicyGate("soak", "app-ns", "uat-eu", "upstream.test.soakMinutes >= 30"),
+		// An org gate on the skipped canary: skipping it needs a
+		// SkipPermission gate, so the Graph gets SkipPermissionGates.
+		makePolicyGate("canary-freeze", "platform-policies", "canary", "!schedule.isWeekend"),
 	}
-	b := makeBundle("app-x7k2m", "app")
-	b.Spec.Intent = &kardinalv1alpha1.BundleIntent{SkipEnvironments: []string{"canary"}}
 	skip := makePolicyGate("allow-skip-canary", "platform-policies", "canary", "true")
 	skip.Spec.SkipPermission = true
 	skip.Labels["kardinal.io/type"] = "skip-permission"
 	gates = append(gates, skip)
+	policyNamespaces := []string{"platform-policies"}
 
 	kinds := func(g *graph.Graph) map[string]bool {
 		out := map[string]bool{}
@@ -404,24 +406,57 @@ func TestCompact_SameObjectKinds(t *testing.T) {
 		}
 		return out
 	}
-	build := func(shape string) (*graph.BuildResult, error) {
-		pp := p.DeepCopy()
-		pp.Annotations = map[string]string{graph.AnnotationGraphShape: shape}
-		return graph.NewBuilder().Build(graph.BuildInput{Pipeline: pp, Bundle: b, PolicyGates: gates})
+	hasNode := func(g *graph.Graph, prefix string) bool {
+		for _, n := range g.Spec.Nodes {
+			if strings.HasPrefix(n.ID, prefix) {
+				return true
+			}
+		}
+		return false
 	}
-	nodes, err := build(graph.GraphShapeNodes)
-	require.NoError(t, err)
-	for _, k := range []string{"PromotionStep", "PolicyGate", "PRStatus"} {
-		require.True(t, kinds(nodes.Graph)[k], "the fixture exercises %s", k)
+
+	bundles := map[string]func(b *kardinalv1alpha1.Bundle){
+		"image": func(*kardinalv1alpha1.Bundle) {},
+		"config": func(b *kardinalv1alpha1.Bundle) {
+			b.Spec.Type, b.Spec.Images = "config", nil
+			b.Spec.ConfigRef = &kardinalv1alpha1.ConfigRef{GitRepo: "https://github.com/org/config", CommitSHA: "abc123"}
+		},
+		"mixed": func(b *kardinalv1alpha1.Bundle) {
+			b.Spec.Type = "mixed"
+			b.Spec.ConfigRef = &kardinalv1alpha1.ConfigRef{GitRepo: "https://github.com/org/config", CommitSHA: "abc123"}
+		},
 	}
-	compact, err := build(graph.GraphShapeCompact)
-	if err != nil {
-		require.ErrorIs(t, err, graph.ErrInvalid, "the compact shape either builds or refuses with ErrInvalid")
-		return
+	for typ, mutate := range bundles {
+		t.Run(typ, func(t *testing.T) {
+			b := makeBundle("app-x7k2m", "app")
+			mutate(b)
+			b.Spec.Intent = &kardinalv1alpha1.BundleIntent{SkipEnvironments: []string{"canary"}}
+			build := func(shape string) (*graph.BuildResult, error) {
+				pp := p.DeepCopy()
+				pp.Annotations = map[string]string{graph.AnnotationGraphShape: shape}
+				return graph.NewBuilder().Build(graph.BuildInput{
+					Pipeline: pp, Bundle: b, PolicyGates: gates, PolicyNamespaces: policyNamespaces,
+				})
+			}
+			nodes, err := build(graph.GraphShapeNodes)
+			require.NoError(t, err)
+			for _, k := range []string{"PromotionStep", "PolicyGate", "PRStatus"} {
+				require.True(t, kinds(nodes.Graph)[k], "the fixture exercises %s", k)
+			}
+			require.True(t, hasNode(nodes.Graph, graph.NodeSkipPermissionGates),
+				"the fixture exercises %s", graph.NodeSkipPermissionGates)
+			compact, err := build(graph.GraphShapeCompact)
+			if err != nil {
+				require.ErrorIs(t, err, graph.ErrInvalid, "the compact shape either builds or refuses with ErrInvalid")
+				return
+			}
+			assert.Equal(t, kinds(nodes.Graph), kinds(compact.Graph), "the compact Graph creates the same object kinds")
+			assert.Equal(t, nodes.Environments, compact.Environments)
+			assert.ElementsMatch(t, gateNames(nodes.GateInstances), gateNames(compact.GateInstances), "the same gate instances")
+			assert.Contains(t, strings.Join(gateNames(compact.GateInstances), ","), "allow-skip-canary",
+				"the compact Graph carries the SkipPermission gate instance")
+		})
 	}
-	assert.Equal(t, kinds(nodes.Graph), kinds(compact.Graph), "the compact Graph creates the same object kinds")
-	assert.Equal(t, nodes.Environments, compact.Environments)
-	assert.ElementsMatch(t, gateNames(nodes.GateInstances), gateNames(compact.GateInstances), "the same gate instances")
 }
 
 func gateNames(gs []kardinalv1alpha1.PolicyGate) []string {

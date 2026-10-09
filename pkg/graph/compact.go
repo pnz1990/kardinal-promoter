@@ -105,6 +105,10 @@ func (b *Builder) compactShape(pipeline *kardinalv1alpha1.Pipeline, envs int, pi
 // check here until it has a compact implementation, so a compact Graph never
 // silently drops it: the Bundle fails with GraphBuildFailed instead.
 // TestCompact_SameObjectKinds fails for a feature that does neither.
+//
+// A check must handle a partial BuildInput: Bundle and PolicyGates may be
+// nil (the Pipeline reconciler calls CompactUnsupported with the Pipeline
+// alone, before any Bundle exists).
 var compactUnsupported []func(BuildInput) string
 
 // RegisterCompactUnsupported adds check to compactUnsupported and returns a
