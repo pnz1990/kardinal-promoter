@@ -37,6 +37,13 @@ import (
 // update.
 var ErrRebaseConflict = errors.New("the remote branch changed the same files")
 
+// ErrBranchNotMoved is returned by RebaseOnRemote when the remote branch is
+// still at the commit HEAD was made on: a push refused as non-fast-forward
+// was not refused because another writer moved the branch (a stale lock
+// file, a read-only repository or a full disk on the server), so retrying as
+// contention would never end.
+var ErrBranchNotMoved = errors.New("the remote branch did not move")
+
 // Rebaser is implemented by git clients that can move a local commit onto
 // the remote branch's new head. git-push uses it when another writer (another
 // Pipeline, or another environment) pushed first.
@@ -106,6 +113,9 @@ func (c *GoGitClient) RebaseOnRemote(ctx context.Context, dir, remote, branch, t
 	upstream, err := repo.CommitObject(trackRef.Hash())
 	if err != nil {
 		return nil, fmt.Errorf("rebase: read the remote head: %w", err)
+	}
+	if upstream.Hash == base.Hash {
+		return nil, fmt.Errorf("rebase onto %s at %s: %w", branch, upstream.Hash, ErrBranchNotMoved)
 	}
 
 	baseTree, err := base.Tree()

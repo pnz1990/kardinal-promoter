@@ -120,6 +120,40 @@ func TestGoGitClient_RebaseOnRemote(t *testing.T) {
 		"the refused commit is left as it was")
 }
 
+// TestGoGitClient_RebaseOnRemote_NotMoved (#1504 QA): when the remote branch
+// is still at the commit the change was made on, there is nothing to rebase
+// onto: RebaseOnRemote says ErrBranchNotMoved and leaves the commit as it is,
+// so a push refused for another reason is not taken for contention. After
+// a rebase, the commit's new parent is the reference.
+func TestGoGitClient_RebaseOnRemote_NotMoved(t *testing.T) {
+	ctx := context.Background()
+	c := scm.NewGoGitClient()
+	remote := seedBareRemote(t, map[string]string{"environments/a/kustomization.yaml": "a: 1\n"})
+	work := filepath.Join(t.TempDir(), "w")
+	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, ""))
+	writeFiles(t, work, map[string]string{"environments/a/kustomization.yaml": "a: 2\n"})
+	require.NoError(t, c.CommitAll(ctx, work, "promote a", "kardinal", "k@example.com"))
+	before, err := c.HeadCommit(ctx, work)
+	require.NoError(t, err)
+
+	_, err = c.RebaseOnRemote(ctx, work, "origin", "main", "")
+	require.ErrorIs(t, err, scm.ErrBranchNotMoved)
+	after, err := c.HeadCommit(ctx, work)
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "the commit is left as it was")
+
+	// Another writer moves the branch: a rebase, then not moved again.
+	other := filepath.Join(t.TempDir(), "o")
+	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", other, ""))
+	writeFiles(t, other, map[string]string{"README.md": "x\n"})
+	require.NoError(t, c.CommitAll(ctx, other, "other", "o", "o@example.com"))
+	require.NoError(t, c.Push(ctx, other, "origin", "main", "", false))
+	_, err = c.RebaseOnRemote(ctx, work, "origin", "main", "")
+	require.NoError(t, err)
+	_, err = c.RebaseOnRemote(ctx, work, "origin", "main", "")
+	require.ErrorIs(t, err, scm.ErrBranchNotMoved, "rebased onto the head already")
+}
+
 // TestGoGitClient_ConcurrentWritersLoseNothing: ten writers, each changing
 // its own path, push to one branch at once and rebase until their push
 // lands. Every change is on the branch and history is linear.

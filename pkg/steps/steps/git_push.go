@@ -168,6 +168,12 @@ func rebaseAndPush(ctx context.Context, state *parentsteps.StepState, branch str
 			return n, "", fmt.Errorf("push %s: %w", branch, err)
 		}
 		if _, err := rb.RebaseOnRemote(ctx, state.WorkDir, "origin", branch, state.Git.Token); err != nil {
+			if errors.Is(err, scm.ErrBranchNotMoved) {
+				// Not contention: the push is refused for another reason.
+				// A plain error, retried a bounded number of times.
+				return n, "", fmt.Errorf("push %s was refused as non-fast-forward, but the remote branch did not move "+
+					"(a lock file, a read-only repository or a full disk on the git server?): %w", branch, err)
+			}
 			if errors.Is(err, scm.ErrRebaseConflict) {
 				return n, fmt.Sprintf("base branch %s moved and changed the files this promotion writes (%v); "+
 					"redoing the change from a fresh clone", branch, err), nil

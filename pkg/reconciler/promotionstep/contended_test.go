@@ -80,3 +80,76 @@ func TestStepRetry_ContendedBranchIsTransient(t *testing.T) {
 		})
 	}
 }
+
+// stuckGit refuses every push as non-fast-forward while the remote branch
+// never moves: RebaseOnRemote finds it at the commit the change was made on.
+// A stale lock file, a read-only repository or a full disk look like this.
+type stuckGit struct {
+	contendedGit
+	rebases int
+}
+
+func (m *stuckGit) RebaseOnRemote(context.Context, string, string, string, string) ([]string, error) {
+	m.rebases++
+	return nil, fmt.Errorf("rebase onto main at abc: %w", scm.ErrBranchNotMoved)
+}
+
+// TestStepRetry_RefusedPushOnUnmovedBranchFails (#1504 QA): a push refused as
+// non-fast-forward while the branch never moved is not contention. It is a
+// plain error on the bounded retry path: status.retryCount counts it,
+// status.contendedRetries does not, and the step is Failed after 5 retries.
+func TestStepRetry_RefusedPushOnUnmovedBranchFails(t *testing.T) {
+	ps := asPromoting(labelled(makeStep("step", "p", "b1", "test")), makePipeline("p"))
+	c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
+	git := &stuckGit{}
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{open: true}, GitClient: git,
+		Recorder:  events.NewFakeRecorder(100),
+		NowFn:     func() time.Time { return now },
+		WorkDirFn: func(_, _ string) string { return filepath.Join(t.TempDir(), "w") }}
+	for i := 1; i <= 6; i++ {
+		_, err := r.Reconcile(context.Background(), reqFor("step"))
+		require.NoError(t, err)
+		got := getStep(t, c, "step")
+		assert.Zero(t, got.Status.ContendedRetries, "reconcile %d: not contention", i)
+		if i <= 5 {
+			require.Equal(t, "Promoting", got.Status.State, "reconcile %d: %s", i, got.Status.Message)
+			assert.Equal(t, i, got.Status.RetryCount)
+			assert.Contains(t, got.Status.Message, "the remote branch did not move")
+			require.NotNil(t, got.Status.NextRetryAt)
+			now = got.Status.NextRetryAt.Add(time.Second)
+			continue
+		}
+		assert.Equal(t, "Failed", got.Status.State, got.Status.Message)
+		assert.Contains(t, got.Status.Message, "gave up after 5 retries")
+	}
+	assert.Equal(t, 6, git.rebases, "one rebase attempt per reconcile, then the plain error")
+}
+
+// TestStepRetry_ContendedPastTheRetryLimit (#1504 QA): a contended push
+// retries even when status.retryCount is already at the limit from earlier
+// errors in the same step (no progress resets it). It fails if handleStepError
+// stops letting contention through ahead of the retry limit.
+func TestStepRetry_ContendedPastTheRetryLimit(t *testing.T) {
+	ps := asPromoting(labelled(makeStep("step", "p", "b1", "test")), makePipeline("p"))
+	c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{open: true}, GitClient: &contendedGit{},
+		Recorder:  events.NewFakeRecorder(100),
+		NowFn:     func() time.Time { return now },
+		WorkDirFn: func(_, _ string) string { return filepath.Join(t.TempDir(), "w") }}
+	_, err := r.Reconcile(context.Background(), reqFor("step")) // reaches git-push: progress
+	require.NoError(t, err)
+	got := getStep(t, c, "step")
+	require.Equal(t, "Promoting", got.Status.State)
+	// Earlier errors in this step used up every retry.
+	got.Status.RetryCount = 5
+	require.NoError(t, c.Status().Update(context.Background(), &got))
+	now = got.Status.NextRetryAt.Add(time.Second)
+	_, err = r.Reconcile(context.Background(), reqFor("step"))
+	require.NoError(t, err)
+	got = getStep(t, c, "step")
+	assert.Equal(t, "Promoting", got.Status.State, "contention is let through ahead of the retry limit: %s", got.Status.Message)
+	assert.Equal(t, 5, got.Status.RetryCount)
+	assert.Equal(t, 2, got.Status.ContendedRetries)
+}
