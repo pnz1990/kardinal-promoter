@@ -400,7 +400,9 @@ func TestForgejo_CircuitBreakerHonorsRateLimit(t *testing.T) {
 	}
 	open := regexp.MustCompile(`SCM circuit open until (\S+)`)
 	l := e.WaitControllerLog(t, since, 90*time.Second, "a poll refused by the open circuit", func(l framework.LogLine) bool {
-		return framework.LogMessage("GetPRStatus failed, will retry", "namespace", ns)(l) && open.MatchString(l.Str("error"))
+		// No call is made while the circuit is open: the poll waits for it
+		// (#1476, #1522) instead of failing.
+		return framework.LogMessage("SCM circuit open, PR status poll waits", "namespace", ns)(l) && open.MatchString(l.Str("error"))
 	})
 	until, err := time.Parse(time.RFC3339, open.FindStringSubmatch(l.Str("error"))[1])
 	require.NoError(t, err)
@@ -453,7 +455,9 @@ func TestForgejo_CircuitBreakerSurvivesTokenRotation(t *testing.T) {
 	}
 	open := regexp.MustCompile(`SCM circuit open until (\S+)`)
 	l := e.WaitControllerLog(t, since, 90*time.Second, "a poll refused by the open circuit", func(l framework.LogLine) bool {
-		return framework.LogMessage("GetPRStatus failed, will retry", "namespace", ns)(l) && open.MatchString(l.Str("error"))
+		// No call is made while the circuit is open: the poll waits for it
+		// (#1476, #1522) instead of failing.
+		return framework.LogMessage("SCM circuit open, PR status poll waits", "namespace", ns)(l) && open.MatchString(l.Str("error"))
 	})
 	until, err := time.Parse(time.RFC3339, open.FindStringSubmatch(l.Str("error"))[1])
 	require.NoError(t, err)
