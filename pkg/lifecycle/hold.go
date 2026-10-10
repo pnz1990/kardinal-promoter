@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 // An environment hold (Pipeline spec.holds, #1528) pins an environment to a
@@ -52,6 +53,22 @@ var HoldNow = time.Now
 // HoldOf returns the hold of env in p, or nil. A hold whose expiresAt has
 // passed counts as absent, also before the Pipeline reconciler removes it.
 func HoldOf(p *v1alpha1.Pipeline, env string) *v1alpha1.EnvironmentHold {
+	if h := exactHold(p, env); h != nil {
+		return h
+	}
+	// A fleet target is held by its own hold, or by its fleet's (kardinal
+	// rollback --env <fleet> --hold): the whole fleet stays on the rollback.
+	if p != nil && len(p.Spec.Holds) > 0 && graph.HasFleets(p) {
+		if fleet := graph.FleetOf(p, env); fleet != "" {
+			return exactHold(p, fleet)
+		}
+	}
+	return nil
+}
+
+// exactHold is the unexpired hold of p whose environment is env, without the
+// fleet fallback of HoldOf.
+func exactHold(p *v1alpha1.Pipeline, env string) *v1alpha1.EnvironmentHold {
 	if p == nil {
 		return nil
 	}
@@ -382,8 +399,12 @@ func ReleaseHold(ctx context.Context, c client.Client, ns, pipeline, env string)
 			}
 			return fmt.Errorf("get pipeline %s/%s: %w", ns, pipeline, err)
 		}
-		h := HoldOf(&p, env)
+		h := exactHold(&p, env)
 		if h == nil {
+			if fh := HoldOf(&p, env); fh != nil {
+				return fmt.Errorf("environment %s of pipeline %s is held through its fleet %s; release the fleet with --env %s: %w",
+					env, pipeline, fh.Environment, fh.Environment, ErrNotFound)
+			}
 			return fmt.Errorf("environment %s of pipeline %s is not held: %w", env, pipeline, ErrNotFound)
 		}
 		cp := *h

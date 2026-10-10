@@ -663,6 +663,33 @@ func (h *hookTranslator) Translate(_ context.Context, _ *kardinalv1alpha1.Pipeli
 	return "app-" + b.Name, nil
 }
 
+// TestRetire_KeepsEarlierRecords (D1): records written to
+// status.retiredSteps before the retirement (a fleet target removed while
+// the Bundle promoted, whose step kro pruned) are kept when the retirement
+// writes the records of the steps that are left.
+//
+// Covers FLEET-07.
+func TestRetire_KeepsEarlierRecords(t *testing.T) {
+	t0 := time.Now().UTC().Add(-2 * time.Hour)
+	v1 := lcBundle("app-v1", "image", "Superseded", t0)
+	v1.Status.GraphRef = "app-app-v1"
+	v1.Status.RetiredSteps = []kardinalv1alpha1.RetiredStep{{Name: "s-prod-us", Environment: "prod-us", State: "WaitingForMerge"}}
+	live := lcStep("app-v1", "test", "s-test", "Verified")
+	c := lcClient(lcPipeline("app", lcEnvs("test", "prod")...), v1, live,
+		lcBundle("app-v2", "image", "Promoting", t0.Add(time.Minute)))
+	r := &bundle.Reconciler{Client: c, GraphChecker: &deletingChecker{exists: true}, Retire: testRetire}
+	lcRetire(t, r, "app-v1")
+	backdateRetire(t, c, "app-v1", 11*time.Minute)
+	lcRetire(t, r, "app-v1")
+	got := lcGet(t, c, "app-v1")
+	require.True(t, lifecycle.Retired(&got))
+	var names []string
+	for _, rs := range got.Status.RetiredSteps {
+		names = append(names, rs.Name)
+	}
+	assert.Equal(t, []string{"s-prod-us", "s-test"}, names, "the earlier record is kept with the live step's")
+}
+
 // TestRetire_WaitsForAuditOutboxes (#1552 QA): retiring deletes a Bundle's
 // PromotionSteps and gate instances with its Graph, so a step or a gate whose
 // status.pendingAuditEvents still holds records keeps the Graph until they

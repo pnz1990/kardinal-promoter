@@ -62,9 +62,17 @@ func helmEnv(name, path, values string) kardinalv1alpha1.EnvironmentSpec {
 // overlapping paths conflict; a Helm valuesFile that leaves its environment
 // path is a written path of its own (one inside it is not); the ssh and
 // https URLs of one repository are one repository; a Pipeline of the same
-// namespace is named, those of other namespaces are only counted.
+// namespace is named, those of other namespaces are only counted. A fleet
+// writes each target's path (D1).
+//
+// Covers FLEET-06.
 func TestPathConflict_Cases(t *testing.T) {
 	const https, ssh = "https://github.com/org/gitops", "git@github.com:org/gitops.git"
+	fleet := func(path string, targets ...kardinalv1alpha1.FleetTarget) kardinalv1alpha1.EnvironmentSpec {
+		e := ev("prod", path)
+		e.Fleet = &kardinalv1alpha1.FleetSpec{Targets: targets}
+		return e
+	}
 	tests := []struct {
 		name   string
 		p      kardinalv1alpha1.Pipeline
@@ -95,6 +103,16 @@ func TestPathConflict_Cases(t *testing.T) {
 			},
 			want: []string{"environment prod (apps/prod) and 2 other Pipeline(s) in other namespaces"},
 			not:  []string{"secret", "b/", "c/", "ops"}},
+		// D1: a fleet writes its targets' paths, each its own directory.
+		{name: "fleet targets under the fleet path", p: pl("a", "api", https, ev("test", "apps/test"),
+			fleet("apps/prod", kardinalv1alpha1.FleetTarget{Name: "eu"}, kardinalv1alpha1.FleetTarget{Name: "us"}))},
+		{name: "fleet target path outside the fleet", p: pl("a", "api", https, ev("test", "apps/test"),
+			fleet("apps/prod", kardinalv1alpha1.FleetTarget{Name: "eu", Path: "apps/test/eu"})),
+			want: []string{"environments test (apps/test) and prod-eu (apps/test/eu) of this Pipeline"}},
+		{name: "fleet target and another Pipeline", p: pl("a", "api", https,
+			fleet("apps/prod", kardinalv1alpha1.FleetTarget{Name: "eu", Path: "clusters/eu"})),
+			others: []kardinalv1alpha1.Pipeline{pl("a", "web", https, ev("prod", "clusters/eu"))},
+			want:   []string{"environment prod-eu (clusters/eu) and Pipeline web environment prod (clusters/eu)"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

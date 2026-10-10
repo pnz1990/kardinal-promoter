@@ -636,9 +636,41 @@ collection grew (sizes 91, 95, 99), and kro routed 45,814 PromotionStep events o
 
 **kardinal workaround.** Pacing is done by choosing the list: a `def` node computes the items
 to admit from a selector `ref` that reads the collection's own objects back (no CEL edge, so no
-cycle), and items already admitted stay in the list, so pacing never prunes. Verified on kind
+cycle). Every item whose object the `ref` lists stays in the list, so pacing never prunes an
+observed item: pacing (rank, `maxConcurrent`, `maxUnavailable`) only limits new admissions
+(`TestFleet_PacingNeverPrunesAnObservedStep`, including stale observed states). The window that
+remains is between kro creating an item and the `ref` listing it. During that window the item is
+in the list only because of the current pacing. If the pacing changes before the `ref` sees the
+item (a lower-ranked target's gate turns ready, or a failure reaches `maxUnavailable`), kro
+deletes it. No CEL input can tell such an item from one that was never created: the
+collection's own objects are not in scope upstream of it. The window is one `ref` resync, and
+it is harmless. The step template carries `spec.admitted:
+${PromotionState.started.exists(s_, s_ == Step.environment)}`, which is false until
+`StepsObserved` lists the step. The PromotionStep reconciler does no work in Pending while
+`admitted` is false (`TestFleet_PendingWaitsForAdmission`), so a step pruned in the window has
+not cloned, pushed, opened a PR or run a hook. A pre hook of a target is admitted only once its step is in `started` (`TestFleet_PreHooksArePaced`), so no Graph-created HookRun exists for a pruned step either. An `auto` target therefore cannot push to the
+base branch past `maxConcurrent` or `maxUnavailable`, and no PR or `kardinal/` branch of the
+pruned step is left waiting for the target to be admitted again. Pending holds no PR (`holdsPR`), so its finalizer
+closes, reopens and reverts nothing. When the step is admitted again, kro creates it afresh with
+nothing to reuse. Once `admitted` is true, the step is in `started` and pacing never drops it
+(`TestFleet_AdmittedOnceObserved`). The cost is one more apply per step of a Pipeline with fleets. Verified on kind
 with `maxConcurrent` and `maxUnavailable`. kardinal's reconcilers must ignore label-only updates
 on the objects they own, or they reconcile every item on each growth.
+
+Fleets (#1457) ship on this pattern, in the compact shape (`pkg/graph/compact.go`). Each DAG entry
+carries `fleet`, `index`, `maxConcurrent` and `maxUnavailable`. `PromotionState` adds
+`startedFleets`, `verifiedFleets` and `failedFleets`, read from the `kardinal.io/fleet` label of
+the observed steps. `PromotionEligible` holds the ready entries without a step, and
+`PromotionWave` admits the started entries plus each fleet's eligible entries ranked below its
+free places, while fewer than `maxUnavailable` of its targets have Failed. A target removed from
+the list leaves the wave; kro prunes its step, whose finalizer closes the PR. The PromotionStep
+reconciler ignores kro's label-only updates (`eventfilter.LabelChangedExceptKro`). Selector
+membership (Argo CD Applications, ClusterProfiles) is not a Graph collection `ref`: that would need
+reader RBAC on the Applications' namespace, which #1283 removes from the Graph identity. The
+Pipeline reconciler lists the selected objects and writes only its own `status.fleets`. The
+translator builds the Graph from that field, and the Bundle reconciler updates a Bundle's Graph in
+place when it changes (`pipelineSpecHashFor`). Membership changes are seen within a minute,
+because nothing watches Applications, whose CRD may not be installed.
 
 In the compact shape (G10) the PromotionSteps are one collection too, so the blast radius is the
 whole Bundle: one gate instance or step item that kro cannot apply, or that stays soft not-ready,

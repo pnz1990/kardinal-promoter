@@ -755,6 +755,22 @@ func TestPolicyList(t *testing.T) {
 	assert.ErrorContains(t, policyListFn(&missing, c, "default", "nope", nil), `pipeline "nope" not found`)
 }
 
+// TestPolicyList_Fleet (#1565 QA): kardinal policy list --pipeline shows the
+// gates that apply to a fleet environment and to one of its targets only.
+func TestPolicyList_Fleet(t *testing.T) {
+	p := policyPipeline("web", "test", "prod")
+	p.Spec.Environments[1].Fleet = &v1alpha1.FleetSpec{Targets: []v1alpha1.FleetTarget{{Name: "eu"}, {Name: "us"}}}
+	c := policyClient(t, p,
+		policyGate("fleet-gate", "default", "prod", "true"),
+		policyGate("eu-only", "default", "prod-eu", "true"),
+		policyGate("unattached", "default", "staging", "true"))
+	var out bytes.Buffer
+	require.NoError(t, policyListFn(&out, c, "default", "web", nil))
+	assert.Contains(t, out.String(), "fleet-gate")
+	assert.Contains(t, out.String(), "eu-only", "a gate of one target")
+	assert.NotContains(t, out.String(), "unattached")
+}
+
 // TestPolicyList_LastEvaluated: LAST-EVALUATED is the newest evaluation of a
 // template's instances, matched by the labels the Graph builder sets (name,
 // scope and template namespace; the instance lives in the Pipeline's

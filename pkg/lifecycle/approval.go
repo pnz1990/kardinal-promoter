@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 
@@ -18,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 // AnnotationRecordedVia on an Approval says which kardinal client wrote it
@@ -108,7 +108,7 @@ func RecordApproval(ctx context.Context, c client.Client, req ApprovalRequest) (
 	if err := c.Get(ctx, types.NamespacedName{Namespace: req.Namespace, Name: b.Spec.Pipeline}, &p); err != nil {
 		return "", nil, fmt.Errorf("get pipeline %s of bundle %s: %w", b.Spec.Pipeline, req.Bundle, err)
 	}
-	if !slices.ContainsFunc(p.Spec.Environments, func(e v1alpha1.EnvironmentSpec) bool { return e.Name == req.Environment }) {
+	if !graph.HasEnvironment(&p, req.Environment) { // a fleet target included
 		return "", nil, fmt.Errorf("pipeline %s has no environment %q: %w", p.Name, req.Environment, ErrInvalid)
 	}
 	if !req.Revoke && Halted(&b) {

@@ -225,6 +225,19 @@
   color: var(--station-note, var(--color-text-muted));
 }
 
+/* A fleet environment (D1): its targets as one bar. */
+.fleet-station__bar {
+  display: flex;
+  height: 4px;
+  margin: 0.25rem 0 0.15rem;
+  background: var(--color-surface-2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.fleet-station__bar > [data-part='verified'] { background: var(--color-success); }
+.fleet-station__bar > [data-part='inflight'] { background: var(--color-warning); }
+.fleet-station__bar > [data-part='failed'] { background: var(--color-error); }
+
 .fleet-station[data-state='settled'] { --station-accent: var(--color-success); }
 .fleet-station[data-state='arriving'] { --station-accent: var(--color-warning); --station-note: var(--color-warning); }
 .fleet-station[data-state='held'] { --station-accent: var(--color-warning); --station-note: var(--color-warning); }
