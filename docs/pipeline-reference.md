@@ -283,7 +283,9 @@ Pipeline `Ready=False` while its new Bundles would get a compact Graph. Per-prom
 once its upstream environments are Verified, as the nodes shape does. One difference in pruning: if
 an upstream leaves Verified before the environment's step starts, the compact shape deletes that
 environment's instances (they leave the collection, so kro prunes them) and creates them again once
-the upstreams are Verified; once the step has started, its instances are kept.
+the upstreams are Verified; once the step has started, its instances are kept. Approval gates
+(`spec.approval`, or an expression that reads `approvals.*`) are carried too: their instances come
+from the `ApprovalGates` collection, and an environment is admitted only once they are ready.
 [Hooks](hooks.md) (`spec.environments[].hooks`), [analysis](analysis.md)
 (`spec.environments[].verification`) and [image verification](image-verification.md)
 (`spec.imageVerification`) are not carried yet: both the Bundle and the Pipeline condition report

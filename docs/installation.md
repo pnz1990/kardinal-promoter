@@ -217,6 +217,31 @@ its container limit, which the chart passes in from the downward API, so the gar
 works harder before the kernel would OOMKill it; set `GOMEMLIMIT` in `controller.extraEnv` to
 choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 
+#### Memory profiles
+
+To see what holds the controller's memory, turn on Go's pprof profiles with
+`--pprof-address` (chart value `pprofAddress`). They are off by default. A port alone binds to
+127.0.0.1 inside the Pod, so only a port-forward reaches it, and the chart adds no Service or
+container port for it. The profiles show heap contents (object values, possibly tokens) and
+stacks, so do not bind it to every interface (`0.0.0.0:6060`) where untrusted clients can connect.
+The endpoint has no authentication or authorization: anyone who reaches the address can read
+every profile. `/debug/pprof/cmdline` also returns the process's command line, so pass secrets
+in environment variables, as the chart does for the SCM, UI and Bundle API tokens, never in
+flags (`controller.extraArgs`). Only an empty `pprofAddress` turns it off.
+
+```bash
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 --reset-then-reuse-values --set pprofAddress=:6060
+kubectl -n kardinal-system port-forward deploy/kardinal-promoter 6060:6060
+go tool pprof -sample_index=inuse_space http://localhost:6060/debug/pprof/heap
+# Compare two snapshots: what grew between them.
+curl -s localhost:6060/debug/pprof/heap > before.pb.gz   # ... later:
+curl -s localhost:6060/debug/pprof/heap > after.pb.gz
+go tool pprof -top -base before.pb.gz after.pb.gz
+```
+
+`kubectl port-forward deploy/...` picks one Pod; with two replicas, forward the leader's Pod
+(the holder of the `kardinal-promoter-leader` Lease), which is the one reconciling.
+
 ## Helm values reference
 
 ### kardinal-promoter controller
@@ -260,6 +285,7 @@ choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 | `service.webhookPort` | `8083` | Webhook (`/webhook/scm`) and Bundle API port (container and Service) |
 | `service.metricsPort` / `.healthPort` | `8080` / `8081` | Metrics and health probe Service ports |
 | `metricsBindAddress` / `healthProbeBindAddress` | `:8080` / `:8081` | `--metrics-bind-address` / `--health-probe-bind-address` (the container ports) |
+| `pprofAddress` | `""` | `--pprof-address`: serve Go pprof profiles. Off by default; a port alone (`:6060`) binds to 127.0.0.1. See [Memory profiles](#memory-profiles) |
 | `controller.watchNamespace` | `""` | Namespace-scoped mode (`--watch-namespace`). Must equal the release namespace |
 | `controller.policyNamespaces` | `[]` | Namespaces with org-level PolicyGates (`--policy-namespaces`; default `platform-policies`) |
 | `graph.compactAbove` | `null` | Environment count above which a Bundle's Graph uses the compact shape (`--graph-compact-above`; default `100`; `0` makes every Graph compact). See [Large Pipelines](pipeline-reference.md#large-pipelines) |

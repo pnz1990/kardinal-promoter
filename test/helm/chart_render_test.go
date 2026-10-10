@@ -1514,3 +1514,20 @@ func TestChartFleetNamespaces(t *testing.T) {
 	out, err := helmTemplate(t, "kardinal-promoter", "--set", "fleets.applicationNamespaces={}")
 	assert.Error(t, err, "applicationNamespaces must not be empty:\n%s", out)
 }
+
+// TestChartPprofAddress: pprofAddress unset passes no --pprof-address, so
+// the controller serves no profiles; set, it passes the value through, and
+// still opens no container port for it (#1647).
+//
+// Covers INST-PPROF-01.
+func TestChartPprofAddress(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	_, set := argValues(c)["pprof-address"]
+	assert.False(t, set, "no --pprof-address unless pprofAddress is set")
+
+	c = controllerContainer(t, render(t, "kardinal-promoter", "--set", "pprofAddress=:6060"))
+	assert.Equal(t, ":6060", argValues(c)["pprof-address"])
+	for _, p := range c.Ports {
+		assert.NotEqual(t, int32(6060), p.ContainerPort, "pprof gets no container port")
+	}
+}

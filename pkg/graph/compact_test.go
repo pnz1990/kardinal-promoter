@@ -402,6 +402,11 @@ func TestCompact_SameObjectKinds(t *testing.T) {
 		// MetricCheck instance for prod.
 		makePolicyGate("error-budget", "app-ns", "prod", `metrics["error-rate"].result == "Pass"`),
 	}
+	// An approval gate (#1510): its instance comes from the ApprovalGates
+	// collection and reads the Bundle's Approvals ref.
+	approval := makePolicyGate("two-approvers", "platform-policies", "prod", "true")
+	approval.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 2}
+	gates = append(gates, approval)
 	checks := []kardinalv1alpha1.MetricCheck{metricTemplate("error-rate", "up")}
 	skip := makePolicyGate("allow-skip-canary", "platform-policies", "canary", "true")
 	skip.Spec.SkipPermission = true
@@ -625,4 +630,56 @@ func TestCompact_HeldEnvironment(t *testing.T) {
 		envs, _ := sim.wave()
 		assert.Equal(t, want, envs, bundle)
 	}
+}
+
+// TestCompact_ApprovalGates checks approval gates (#1510) in the compact
+// shape: the Graph has the Approvals ref and the ApprovalGates collection,
+// every expression reads only nodes it has, the gate instance names match the
+// node shape's, and an environment whose approval gate is not ready is not
+// admitted while the others advance.
+func TestCompact_ApprovalGates(t *testing.T) {
+	p := compactPipeline(
+		kardinalv1alpha1.EnvironmentSpec{Name: "test"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod", DependsOn: []string{"test"}},
+	)
+	approval := makePolicyGate("two-approvers", "platform-policies", "prod", "true")
+	approval.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 2}
+	reads := makePolicyGate("one-ok", "platform-policies", "test", `approvals.count >= 1`)
+	gates := []kardinalv1alpha1.PolicyGate{approval, reads}
+	b := makeBundle("app-x7k2m", "app")
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: b, PolicyGates: gates})
+	require.NoError(t, err, "the compact shape carries approval gates")
+	assertKroValid(t, res.Graph)
+	nodes := nodeByID(res.Graph.Spec.Nodes)
+	require.Contains(t, nodes, graph.ApprovalsNodeID)
+	require.Contains(t, nodes, graph.NodeApprovalGates)
+	assert.Contains(t, nodes[graph.NodePromotionState].Def["readyGates"], graph.NodeApprovalGates,
+		"admission reads the approval gates' readiness")
+
+	np := p.DeepCopy()
+	np.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeNodes}
+	nodesRes, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: np, Bundle: b, PolicyGates: gates})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, gateNames(nodesRes.GateInstances), gateNames(res.GateInstances), "the same gate instances")
+
+	sim := newCompactSim(t, res.Graph)
+	var testGate, prodGate string
+	for _, g := range res.GateInstances {
+		switch g.Labels["kardinal.io/environment"] {
+		case "test":
+			testGate = g.Name
+		case "prod":
+			prodGate = g.Name
+		}
+	}
+	require.NotEmpty(t, testGate)
+	require.NotEmpty(t, prodGate)
+	envs, _ := sim.wave()
+	assert.Empty(t, envs, "test waits for its approvals gate")
+	sim.gatesReady[testGate] = true
+	assert.Equal(t, []string{"test"}, sim.advance())
+	sim.steps["test"] = "Verified"
+	assert.Equal(t, []string{"test"}, sim.advance(), "prod waits for two approvers")
+	sim.gatesReady[prodGate] = true
+	assert.Equal(t, []string{"prod", "test"}, sim.advance())
 }
