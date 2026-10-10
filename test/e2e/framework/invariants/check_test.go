@@ -137,40 +137,70 @@ func TestNotEmpty(t *testing.T) {
 	assert.False(t, r.Checks[0].Pass)
 }
 
+// TestLeaks: the metrics-no-leak bounds.
+//
+// Covers SCALE-INV-LEAK-01.
 func TestLeaks(t *testing.T) {
 	t0 := time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)
 	t1 := t0.Add(30 * time.Minute)
 	pod := func(from, to time.Time, rss0, rss1, g0, g1 float64) PodSeries {
-		return PodSeries{Pod: "p", From: from, To: to, RSSStartMiB: rss0, RSSEndMiB: rss1, RSSMaxMiB: math.Max(rss0, rss1),
+		return PodSeries{Pod: "p", From: from, To: to, WarmAt: from, RSSStartMiB: rss0, RSSWarmMiB: rss0, RSSEndMiB: rss1, RSSMaxMiB: math.Max(rss0, rss1),
 			GoroutinesStart: g0, GoroutinesEnd: g1, GoroutinesMax: math.Max(g0, g1)}
 	}
+	// warmRace is a -race leader measured from a warm baseline (#1613's soak:
+	// sys 340 -> 345 MiB, heap 210 MiB warm and 62 MiB after the GC, RSS
+	// 1379 -> 1632 MiB of race shadow memory).
+	warmRace := func(sys1, heapGC float64) PodSeries {
+		p := pod(t0, t1, 1379, 1632, 515, 504)
+		p.RSSStartMiB, p.WarmAt = 154, t0.Add(20*time.Minute)
+		p.SysWarmMiB, p.SysEndMiB, p.HeapWarmMiB, p.HeapAfterGCMiB = 340, sys1, 210, heapGC
+		return p
+	}
 	cases := []struct {
-		name   string
-		pods   []PodSeries
-		shared bool
-		race   bool
-		want   int
+		name               string
+		pods               []PodSeries
+		shared, race, warm bool
+		want               int
 	}{
-		{"flat", []PodSeries{pod(t0, t1, 300, 500, 300, 320)}, false, false, 0},
-		{"race: steady growth measured over the full profile", []PodSeries{pod(t0, t1, 165, 380, 300, 320)}, false, true, 0},
-		{"race: growth past 2.5x + 500 MiB", []PodSeries{pod(t0, t1, 300, 1300, 300, 320)}, false, true, 1},
-		{"RSS more than doubled plus 200 MiB", []PodSeries{pod(t0, t1, 300, 900, 300, 320)}, false, false, 1},
-		{"goroutines grew", []PodSeries{pod(t0, t1, 300, 300, 300, 500)}, false, false, 1},
-		{"shared controller: growth only reported", []PodSeries{pod(t0, t1, 300, 900, 300, 500)}, true, false, 0},
-		{"a Pod that started late is not compared", []PodSeries{pod(t0.Add(10*time.Minute), t1, 100, 900, 40, 400)}, false, false, 0},
-		{"near the limit", []PodSeries{pod(t0, t1, 300, 3800, 300, 300)}, true, false, 1},
-		{"no series", nil, false, false, 1},
+		{"flat", []PodSeries{pod(t0, t1, 300, 500, 300, 320)}, false, false, false, 0},
+		{"race: steady growth measured over the full profile", []PodSeries{pod(t0, t1, 165, 380, 300, 320)}, false, true, false, 0},
+		{"race, no warm baseline: growth past 2.5x + 500 MiB", []PodSeries{pod(t0, t1, 300, 1300, 300, 320)}, false, true, false, 1},
+		{"race, warm: RSS of race shadow memory is not bounded", []PodSeries{warmRace(345, 62)}, false, true, true, 0},
+		{"race, warm: Go runtime memory grew over 25%", []PodSeries{warmRace(430, 62)}, false, true, true, 1},
+		{"race, warm: heap after the GC not below the warm heap", []PodSeries{warmRace(345, 215)}, false, true, true, 1},
+		{"race, warm: no GC seen after the load", []PodSeries{warmRace(345, 0)}, false, true, true, 1},
+		{"no race, warm: RSS measured from the warm sample", []PodSeries{func() PodSeries {
+			p := pod(t0, t1, 300, 700, 300, 320)
+			p.RSSStartMiB = 60 // cold start: 700 > 2x60+200, but not 2x300+200
+			return p
+		}()}, false, false, true, 0},
+		{"no race, warm: RSS more than doubled plus 200 MiB from warm", []PodSeries{pod(t0, t1, 300, 900, 300, 320)}, false, false, true, 1},
+		{"RSS more than doubled plus 200 MiB", []PodSeries{pod(t0, t1, 300, 900, 300, 320)}, false, false, false, 1},
+		{"goroutines grew", []PodSeries{pod(t0, t1, 300, 300, 300, 500)}, false, false, false, 1},
+		{"shared controller: growth only reported", []PodSeries{pod(t0, t1, 300, 900, 300, 500)}, true, false, false, 0},
+		{"a Pod that started late is not compared", []PodSeries{pod(t0.Add(10*time.Minute), t1, 100, 900, 40, 400)}, false, false, false, 0},
+		{"near the limit", []PodSeries{pod(t0, t1, 300, 3800, 300, 300)}, true, false, false, 1},
+		{"near the limit, race and warm too", []PodSeries{func() PodSeries { p := warmRace(345, 62); p.RSSMaxMiB = 3800; return p }()}, false, true, true, 1},
+		{"no series", nil, false, false, false, 1},
 		{"a standby that took over the lead", []PodSeries{func() PodSeries {
 			p := pod(t0, t1, 100, 300, 43, 325)
 			p.LeaderEnd = true
 			return p
-		}()}, false, false, 0},
+		}()}, false, false, false, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Len(t, leaks(tc.pods, t0, t1, 4096, tc.shared, tc.race), tc.want)
+			assert.Len(t, leaks(tc.pods, t0, t1, 4096, tc.shared, tc.race, tc.warm), tc.want)
 		})
 	}
+}
+
+func TestParseMetrics(t *testing.T) {
+	text := "# HELP go_memstats_heap_inuse_bytes x\ngo_memstats_heap_inuse_bytes 6.5011712e+07\ngo_memstats_last_gc_time_seconds 1.7915e+09\ngo_gc_duration_seconds{quantile=\"0\"} 1e-05\n"
+	v := parseMetrics(text, "go_memstats_last_gc_time_seconds", "go_memstats_heap_inuse_bytes", "missing")
+	assert.InDelta(t, 1.7915e9, v[0], 1)
+	assert.InDelta(t, 65011712, v[1], 1)
+	assert.True(t, math.IsNaN(v[2]))
 }
 
 func TestCheckSLO(t *testing.T) {

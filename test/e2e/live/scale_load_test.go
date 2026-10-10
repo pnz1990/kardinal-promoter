@@ -78,8 +78,11 @@ func TestScale_LoadSustained(t *testing.T) {
 	r := scale.Begin(t)
 	names := r.Fleet.Pipelines(t, "steady", r.P.SustainedPipelines, scale.Chain(r.P.PipelineEnvs))
 	r.Note("pipelines", len(names))
-	r.Note("sustained", r.Fleet.Sustained(context.Background(), t, names, r.P.SustainedRate, r.P.SustainedFor))
-	r.Finish()
+	s := r.Fleet.Sustained(context.Background(), t, names, r.P.SustainedRate, r.P.SustainedFor)
+	r.Note("sustained", s)
+	// The memory checks measure from the steady state: once every Pipeline
+	// keeps HistoryLimit Bundles (the soak profile; zero otherwise).
+	r.Finish(func(o *invariants.Options) { o.WarmAt = s.WarmAt })
 	assertNewestVerified(t, r)
 }
 
