@@ -67,6 +67,9 @@ func TestGitPushStep_RebasesOntoMovedBranch(t *testing.T) {
 		{name: "same files: fresh clone", approval: "auto", pushErrs: []error{nonFF},
 			rebaseErrs: []error{fmt.Errorf("%w: environments/prod/kustomization.yaml", scm.ErrRebaseConflict)},
 			wantStatus: parentsteps.StepRestart, wantPushes: 1, wantRebases: 1, wantMsg: "redoing the change from a fresh clone"},
+		{name: "base commit missing: fresh clone (#1606)", approval: "auto", pushErrs: []error{nonFF},
+			rebaseErrs: []error{fmt.Errorf("rebase: commit abc: %w", scm.ErrRebaseBaseMissing)},
+			wantStatus: parentsteps.StepRestart, wantPushes: 1, wantRebases: 1, wantMsg: "lacks the commit to rebase from"},
 		{name: "keeps moving: fresh clone", approval: "auto", pushErrs: many,
 			wantStatus: parentsteps.StepRestart, wantPushes: steps.MaxRebaseAttempts + 1, wantRebases: steps.MaxRebaseAttempts,
 			wantMsg: "kept moving"},
@@ -98,6 +101,52 @@ func TestGitPushStep_RebasesOntoMovedBranch(t *testing.T) {
 				assert.Empty(t, res.Outputs["rebases"])
 			}
 			assert.False(t, git.pushForce && tc.approval == "auto", "the base branch is never force-pushed")
+		})
+	}
+}
+
+// TestGitPushStep_BaseMissingRestartsBounded (#1606): every fresh clone asked
+// for because the clone lacked the rebase base is counted in
+// status.outputs.baseMissingRestarts, which the step reads back from the
+// state, so the count survives a requeue or a controller restart. Past
+// MaxBaseMissingRestarts the step fails permanently with the reason, instead
+// of retrying for ever as contention.
+func TestGitPushStep_BaseMissingRestartsBounded(t *testing.T) {
+	nonFF := fmt.Errorf("push: %w", scm.ErrNonFastForward)
+	missing := fmt.Errorf("rebase: commit abc: %w", scm.ErrRebaseBaseMissing)
+	for _, tc := range []struct {
+		name       string
+		before     string
+		wantStatus parentsteps.StepStatus
+		wantCount  string
+	}{
+		{name: "first", wantStatus: parentsteps.StepRestart, wantCount: "1"},
+		{name: "counted from status", before: "3", wantStatus: parentsteps.StepRestart, wantCount: "4"},
+		{name: "last allowed", before: fmt.Sprint(steps.MaxBaseMissingRestarts - 1), wantStatus: parentsteps.StepRestart,
+			wantCount: fmt.Sprint(steps.MaxBaseMissingRestarts)},
+		{name: "bound reached: fails", before: fmt.Sprint(steps.MaxBaseMissingRestarts), wantStatus: parentsteps.StepFailed,
+			wantCount: fmt.Sprint(steps.MaxBaseMissingRestarts + 1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			git := &rebasingGitClient{mockGitClient: mockGitClient{pushErrs: []error{nonFF}}, rebaseErrs: []error{missing}}
+			state := makeState(t, &git.mockGitClient, nil)
+			state.GitClient = git
+			state.Sequence = parentsteps.DefaultSequenceForBundle("auto", "image", "", "")
+			state.Environment.Approval = "auto"
+			if tc.before != "" {
+				state.Outputs[steps.OutputBaseMissingRestarts] = tc.before
+			}
+			res, err := runStep(t, "git-push", state)
+			assert.Equal(t, tc.wantStatus, res.Status, res.Message)
+			assert.Equal(t, tc.wantCount, res.Outputs[steps.OutputBaseMissingRestarts])
+			if tc.wantStatus == parentsteps.StepFailed {
+				require.ErrorIs(t, err, parentsteps.ErrPermanent, "not retried as contention")
+				assert.Contains(t, res.Message, "fresh clones lacked the commit to rebase from")
+				assert.Contains(t, res.Message, "force-pushed")
+				return
+			}
+			require.NoError(t, err)
+			assert.Contains(t, res.Message, "lacks the commit to rebase from")
 		})
 	}
 }
