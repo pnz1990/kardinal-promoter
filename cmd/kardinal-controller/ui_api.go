@@ -1115,8 +1115,7 @@ func (s *uiAPIServer) handleBundleSteps(w http.ResponseWriter, r *http.Request, 
 
 	// Build a bake target index: pipelineName+envName → bake minutes.
 	// Populated lazily from the first step's Pipeline reference (#501).
-	bakeTarget := make(map[string]int) // key: "pipelineName/envName"
-	pipelinesLoaded := make(map[string]bool)
+	pipelines := make(map[string]*v1alpha1.Pipeline) // key: "namespace/pipelineName"; nil when not found
 
 	result := make([]uiStepResponse, 0)
 	for _, ps := range list.Items {
@@ -1125,19 +1124,22 @@ func (s *uiAPIServer) handleBundleSteps(w http.ResponseWriter, r *http.Request, 
 		}
 		// Load bake target minutes from Pipeline spec (once per pipeline) (#501).
 		plKey := ps.Namespace + "/" + ps.Spec.PipelineName
-		if !pipelinesLoaded[plKey] {
-			pipelinesLoaded[plKey] = true
-			var pl v1alpha1.Pipeline
+		pl, loaded := pipelines[plKey]
+		if !loaded {
+			var got v1alpha1.Pipeline
 			if err := s.client.Get(r.Context(),
-				client.ObjectKey{Name: ps.Spec.PipelineName, Namespace: ps.Namespace}, &pl); err == nil {
-				for _, env := range pl.Spec.Environments {
-					if env.Bake != nil {
-						bakeTarget[ps.Spec.PipelineName+"/"+env.Name] = env.Bake.Minutes
-					}
-				}
+				client.ObjectKey{Name: ps.Spec.PipelineName, Namespace: ps.Namespace}, &got); err == nil {
+				pl = &got
+			}
+			pipelines[plKey] = pl
+		}
+		bakeMinutes := 0
+		if pl != nil {
+			// A fleet target bakes as its fleet does.
+			if env, ok := graphpkg.EnvironmentSpecFor(pl, ps.Spec.Environment); ok && env.Bake != nil {
+				bakeMinutes = env.Bake.Minutes
 			}
 		}
-		bakeMinutes := bakeTarget[ps.Spec.PipelineName+"/"+ps.Spec.Environment]
 		result = append(result, uiStepResponse{
 			Name:               ps.Name,
 			Namespace:          ps.Namespace,

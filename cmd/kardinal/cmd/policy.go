@@ -126,8 +126,8 @@ func policyListFn(w io.Writer, c sigs_client.Client, ns, pipelineFilter string, 
 		return fmt.Errorf("collect policy gates: %w", err)
 	}
 	attached := map[string]bool{}
-	for _, env := range pipe.Spec.Environments {
-		instances, _, err := gatesForEnv(pipe, simulatedBundle(pipe, time.Time{}), templates, policyNS, env.Name)
+	for _, env := range pipelineEnvNames(pipe) { // fleet targets included: their gates are instances of the target
+		instances, _, err := gatesForEnv(pipe, simulatedBundle(pipe, time.Time{}), templates, policyNS, env)
 		if err != nil {
 			return err
 		}

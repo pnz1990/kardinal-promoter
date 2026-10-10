@@ -644,7 +644,9 @@ it is harmless. The step template carries `spec.admitted:
 ${PromotionState.started.exists(s_, s_ == Step.environment)}`, which is false until
 `StepsObserved` lists the step. The PromotionStep reconciler does no work in Pending while
 `admitted` is false (`TestFleet_PendingWaitsForAdmission`), so a step pruned in the window has
-not cloned, pushed, opened a PR or run a hook. Pending holds no PR (`holdsPR`), so its finalizer
+not cloned, pushed, opened a PR or run a hook. An `auto` target therefore cannot push to the
+base branch past `maxConcurrent` or `maxUnavailable`, and no PR or `kardinal/` branch of the
+pruned step is left waiting for the target to be admitted again. Pending holds no PR (`holdsPR`), so its finalizer
 closes, reopens and reverts nothing. When the step is admitted again, kro creates it afresh with
 nothing to reuse. Once `admitted` is true, the step is in `started` and pacing never drops it
 (`TestFleet_AdmittedOnceObserved`). The cost is one more apply per fleet step. Verified on kind
