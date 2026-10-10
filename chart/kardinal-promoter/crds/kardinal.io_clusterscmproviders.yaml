@@ -155,8 +155,9 @@ spec:
                 type: object
               type:
                 description: |-
-                  Type is the SCM: github, gitlab, forgejo, gitea, bitbucket or
-                  azuredevops (the --scm-provider values).
+                  Type is the SCM: github, gitlab, forgejo, gitea, bitbucket,
+                  azuredevops or bitbucket-datacenter (the --scm-provider values). A
+                  bitbucket-datacenter provider needs apiURL, the server's base URL.
                 enum:
                 - github
                 - gitlab
@@ -164,6 +165,7 @@ spec:
                 - gitea
                 - bitbucket
                 - azuredevops
+                - bitbucket-datacenter
                 type: string
               webhookSecretRef:
                 description: |-

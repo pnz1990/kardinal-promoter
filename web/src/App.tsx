@@ -47,6 +47,7 @@ import { useTheme } from './ThemeContext'
 import { useUrlState } from './useUrlState'
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
 import { resolveShownBundle } from './bundleSelection'
+import { environmentUpstreams, terminalEnvironments } from './fleetModel'
 import { KeyboardShortcutsPanel } from './components/KeyboardShortcutsPanel'
 
 import type { Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep, PolicyGate } from './types'
@@ -400,26 +401,14 @@ export function App() {
       state: 'NotStarted',
       message: env.approval === 'pr-review' ? 'Manual approval required' : undefined,
     }))
-    // Build edges: if dependsOn is set, draw edges from each dependency; otherwise
-    // draw sequential edges (previous → current) for environments without dependsOn.
+    // Edges: the controller-resolved upstreams (dependsOn, waves, or the
+    // previous entry), as the fleet board draws them (#1580).
     const edges: { from: string; to: string }[] = []
-    for (let i = 0; i < topo.length; i++) {
-      const env = topo[i]
-      if (env.dependsOn && env.dependsOn.length > 0) {
-        for (const dep of env.dependsOn) {
-          edges.push({ from: dep, to: env.name })
-        }
-      } else if (i > 0) {
-        // No explicit dependsOn: assume sequential after the previous environment
-        // that also has no explicit dependsOn. Matches default Pipeline ordering.
-        const prev = topo[i - 1]
-        if (!prev.dependsOn || prev.dependsOn.length === 0) {
-          edges.push({ from: prev.name, to: env.name })
-        }
-      }
+    for (const [env, ups] of environmentUpstreams(topo, activePipeline?.topologyResolved)) {
+      for (const up of ups) edges.push({ from: up, to: env })
     }
     return { nodes, edges }
-  }, [activePipeline?.environmentTopology])
+  }, [activePipeline?.environmentTopology, activePipeline?.topologyResolved])
 
   // Use the bundle graph when available; fall back to static topology (#525).
   const displayGraph = graph ?? staticGraph
@@ -778,7 +767,7 @@ export function App() {
               {/* #504: Release efficiency metrics bar — inline metrics for the pipeline. */}
               <ReleaseMetricsBar
                 bundles={bundles}
-                finalEnvironment={activePipeline?.environmentTopology?.at(-1)?.name}
+                finalEnvironments={terminalEnvironments(activePipeline?.environmentTopology, activePipeline?.topologyResolved)}
                 deploymentMetrics={activePipeline?.deploymentMetrics}
               />
 

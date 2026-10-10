@@ -128,11 +128,24 @@ var (
 			Help: "AuditEvents deleted by retention (older than the max age, or past the max count per Pipeline).",
 		},
 	)
+
+	// NotificationsDroppedTotal counts events a NotificationHook gave up on
+	// without delivering: "template" when the body cannot be rendered for
+	// the event (retrying renders the same body), "attempts" after the last
+	// failed delivery attempt. One series per hook that dropped something.
+	NotificationsDroppedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kardinal_notifications_dropped_total",
+			Help: "Events a NotificationHook gave up on without delivering, by hook and reason (template, attempts).",
+		},
+		[]string{"hook_namespace", "hook", "reason"},
+	)
 )
 
 func init() {
 	ctrlmetrics.Registry.MustRegister(
 		AuditEventsPrunedTotal,
+		NotificationsDroppedTotal,
 		BundlesTotal,
 		StepsTotal,
 		GateEvaluationsTotal,

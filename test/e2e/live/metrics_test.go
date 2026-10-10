@@ -617,15 +617,11 @@ func TestObs_ControllerMetrics(t *testing.T) {
 		assert.GreaterOrEqual(t, delta("controller_runtime_reconcile_time_seconds_count", l), 1.0, "%s reconcile time", c)
 		assert.True(t, after.Has("controller_runtime_reconcile_errors_total", l), "%s reconcile errors", c)
 		assert.True(t, after.Has("controller_runtime_active_workers", l), "%s active workers", c)
-		want := 1.0
-		if c == "metriccheck" {
-			// maxConcurrentReconciles in pkg/reconciler/metriccheck: 16 since
-			// #1479 (docs/changelog.md), more than the 12 default query slots
-			// so templates, suspended checks and checks waiting for a slot are
-			// served while the slots are busy. The query slots
-			// (--metriccheck-*-slots) are a separate limit.
-			want = 16
-		}
+		// The default worker counts (cmd/kardinal-controller/workers.go,
+		// #1554; chart controller.workers unset): reconciles run in parallel.
+		// MetricCheck runs its global query slots plus 4, at least 16 (#1563;
+		// the query slots, --metriccheck-*-slots, are a separate limit).
+		want := map[string]float64{"bundle": 4, "promotionstep": 16, "policygate": 8, "metriccheck": 16}[c]
 		assert.Equal(t, want, after.Sum("controller_runtime_max_concurrent_reconciles", l), "%s max concurrent reconciles", c)
 		q := map[string]string{"name": c}
 		assert.GreaterOrEqual(t, delta("workqueue_adds_total", q), 1.0, "%s queue adds", c)
