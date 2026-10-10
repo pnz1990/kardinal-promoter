@@ -98,6 +98,12 @@ func (r *Run) Finish(edit ...func(*invariants.Options)) *invariants.Report {
 	return invariants.Check(r.T, r.E, o)
 }
 
+// AllVerified expects every Bundle of the test to end Verified
+// (invariants.OutcomeAllVerified): one Bundle per Pipeline, or Bundles
+// promoted one after the other. The default expects the newest Bundle of
+// each Pipeline Verified and the others Verified or Superseded.
+func AllVerified(o *invariants.Options) { o.Outcome = invariants.OutcomeAllVerified }
+
 // Allow adds benign error-log patterns for the faults a test injects.
 func Allow(patterns ...string) func(*invariants.Options) {
 	return func(o *invariants.Options) {

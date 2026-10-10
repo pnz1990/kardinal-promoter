@@ -101,7 +101,9 @@ they interpolate where the provider allows it.
 and nothing else: an AnalysisRun counts only when its name is one this build of the Graph
 rendered (a list rebuilt at every translation), kro applied it (label `kro.run/node-id`) and it
 belongs to this Bundle (label `kardinal.io/bundle-uid` equal to the Bundle's UID). So an
-AnalysisRun someone creates with matching `kardinal.io/*` labels is ignored. That does not make
+AnalysisRun someone creates with matching `kardinal.io/*` labels is ignored, and the chart's
+`<release>-graph-objects` admission policy refuses creating one labelled `kardinal.io/bundle`
+except as kro or the controller ([Verified identity](guides/security.md#verified-identity)). That does not make
 the verdict tamper-proof: Argo Rollouts aggregates `create` and `patch` on `analysisruns` into
 the built-in `edit` and `admin` ClusterRoles, and its controller trusts `status`. Anyone who can
 write AnalysisRuns in the Pipeline namespace (namespace editors, by default) can patch the real
@@ -161,13 +163,14 @@ hash of its spec, so an edit picked up mid-flight starts a new run instead of ch
 progress. The step then waits for the new run (the newest run of the template) and says so in its
 message; the timeout keeps counting from when the step entered `Verifying`, it does not restart.
 
+In a [compact Graph](pipeline-reference.md#large-pipelines) the AnalysisRuns are items of one
+collection. Each is created once its step entered `Verifying` while the Bundle is not Superseded,
+and kept from then on; `spec.terminate` is set the same way. Each AnalysisRun counts against the
+Graph's size limits. One that kro cannot create holds only its environment, and the Bundle's
+`RunsCreated` condition names it.
+
 ## What it cannot do
 
-- Verification needs the node Graph shape. A Pipeline whose Bundles get a
-  [compact Graph](pipeline-reference.md#large-pipelines) (more than `--graph-compact-above`
-  environments, default 100, or the annotation `kardinal.io/graph-shape: compact`) is
-  `Ready=False`, and its Bundles fail with `GraphBuildFailed` naming the analysis instead of
-  promoting unverified.
 - The AnalysisRuns run in the Pipeline's namespace on the cluster kardinal runs in. The Argo
   Rollouts controller must watch that namespace (not run with `--namespaced` elsewhere).
 - An AnalysisRun deleted by hand is created again by the Graph and runs again.

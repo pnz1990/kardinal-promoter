@@ -221,7 +221,12 @@ func TestForgejo_ClusterScmProvider(t *testing.T) {
 		func(s *v1alpha1.PromotionStep) (bool, string) {
 			return s.Status.State == "Failed", fmt.Sprintf("state=%q message=%q", s.Status.State, s.Status.Message)
 		})
-	assert.Contains(t, got.Status.Message, "deleted and created again")
+	// The step may poll in the gap between the delete and the create ("is
+	// not found") or after it ("deleted and created again"): either way the
+	// provider it started with is gone, and it fails rather than polling
+	// through the new one.
+	assert.Contains(t, got.Status.Message, "the SCM provider the step started with is gone")
+	assert.Regexp(t, `deleted and created again|is not found`, got.Status.Message)
 	var p v1alpha1.ClusterScmProvider
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Name: name}, &p))
 	assert.NotEqual(t, oldUID, string(p.UID))
