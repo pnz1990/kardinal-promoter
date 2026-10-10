@@ -321,6 +321,35 @@ func TestLifecycle_AbortedAndRollingBackFailBundle(t *testing.T) {
 	}
 }
 
+// #1603: a step that did not push because a newer Bundle already pushed to
+// its environment ends Superseded, and so does its Bundle, also when the newer
+// Bundle is of another type (a mixed one over an image one). It is not a
+// failure.
+func TestLifecycle_SupersededStepSupersedesBundle(t *testing.T) {
+	step := lcStep("app-v1", "test", "s-test", "Superseded")
+	step.Status.Message = "newer bundle app-v2 already pushed to test; this promotion is superseded and does not push"
+	c := lcClient(lcPipeline("app", lcEnvs("test", "prod")...),
+		lcBundle("app-v1", "image", "Promoting", time.Now().UTC()), step)
+	lcReconcile(t, &bundle.Reconciler{Client: c}, "app-v1")
+
+	got := lcGet(t, c, "app-v1")
+	assert.Equal(t, "Superseded", got.Status.Phase)
+	assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "Failed"), "not a failure")
+	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+	require.NotNil(t, ready)
+	assert.Equal(t, "Superseded", ready.Reason)
+	assert.Contains(t, ready.Message, "environment test: newer bundle app-v2 already pushed")
+}
+
+// A failure wins over a Superseded step: the Bundle is Failed.
+func TestLifecycle_FailedStepWinsOverSupersededStep(t *testing.T) {
+	c := lcClient(lcPipeline("app", lcEnvs("test", "prod")...),
+		lcBundle("app-v1", "image", "Promoting", time.Now().UTC()),
+		lcStep("app-v1", "test", "s-test", "Superseded"), lcStep("app-v1", "prod", "s-prod", "Failed"))
+	lcReconcile(t, &bundle.Reconciler{Client: c}, "app-v1")
+	assert.Equal(t, "Failed", lcGet(t, c, "app-v1").Status.Phase)
+}
+
 // C02-bundle-05: a Failed Bundle recovers when its step is retried.
 func TestLifecycle_FailedBundleRecoversWhenStepRetried(t *testing.T) {
 	b := lcBundle("app-v1", "image", "Promoting", time.Now().UTC())

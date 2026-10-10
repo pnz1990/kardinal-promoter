@@ -369,7 +369,7 @@ func (e *Env) ArgoAppSpec(t *testing.T, name string, spec map[string]interface{}
 	e.DeleteOnCleanup(t, app, prune)
 }
 
-// PushTree clones repo's default branch on the test runner, lets change edit
+// PushTree clones repo's branch on the test runner, lets change edit
 // the checkout in dir, and commits and pushes the result as a developer
 // would. Use it for content the git server's API cannot write, such as
 // symlinks. It returns the new commit SHA.
@@ -378,10 +378,21 @@ func (e *Env) PushTree(t *testing.T, repo gitserver.Repo, message string, change
 	return e.PushBranch(t, repo, "", message, change)
 }
 
-// PushBranch is PushTree on branch (the default branch when empty), for
+// PushBranch is PushTree on branch (repo's branch when empty), for
 // example a PR branch someone pushes to by hand.
 func (e *Env) PushBranch(t *testing.T, repo gitserver.Repo, branch, message string, change func(dir string)) string {
 	t.Helper()
+	if branch == "" {
+		// The repo's branch, not the server's default branch: on GitHub
+		// the repo is a branch of a shared repo whose default branch is
+		// not the test's.
+		branch = repo.Branch
+	}
+	// The shared GitHub repo: only the test's own branches and the PR
+	// branches kardinal opened for its namespace.
+	if e.Git.Kind() == "github" && !gitserver.GitHubPushAllowed(repo, branch) {
+		t.Fatalf("refusing to push %s to the shared GitHub repo: not a branch of this test", branch)
+	}
 	remote, token, err := gitserver.PushRemote(e.Git, repo)
 	if err != nil {
 		t.Fatalf("push remote: %v", err)
@@ -418,10 +429,13 @@ func (e *Env) PushBranch(t *testing.T, repo gitserver.Repo, branch, message stri
 }
 
 // BranchContains reports whether commit sha is head or an ancestor of the
-// head of branch (the default branch when empty), from a full clone on the
-// test runner.
+// head of branch (repo's branch when empty), from a full clone on the test
+// runner.
 func (e *Env) BranchContains(t *testing.T, repo gitserver.Repo, branch, sha string) bool {
 	t.Helper()
+	if branch == "" {
+		branch = repo.Branch
+	}
 	remote, token, err := gitserver.PushRemote(e.Git, repo)
 	if err != nil {
 		t.Fatalf("push remote: %v", err)

@@ -89,6 +89,10 @@ const (
 	// created a rollback Bundle (K-03). The step takes no further action; the
 	// rollback Bundle's own step carries the promotion on.
 	StateRollingBack = "RollingBack"
+	// StateSuperseded — terminal, not a failure: the step did not push
+	// because a newer Bundle of the same kind had already pushed to its
+	// environment (#1603). Nothing counts it as a failed promotion.
+	StateSuperseded = "Superseded"
 
 	// requeueWaitForMerge is how often to requeue while waiting for a PR merge.
 	requeueWaitForMerge = 30 * time.Second
@@ -406,7 +410,7 @@ func (r *Reconciler) reconcileState(ctx context.Context, log zerolog.Logger, ps 
 		return r.handleHealthChecking(ctx, log, ps)
 	case StateVerifying:
 		return r.handleVerifying(ctx, log, ps)
-	case StateVerified, StateFailed:
+	case StateVerified, StateFailed, StateSuperseded:
 		// Terminal states — clean up workdir if present (ST-7/ST-8 short-term mitigation).
 		r.cleanWorkDir(log, ps)
 		return ctrl.Result{}, nil
@@ -1080,6 +1084,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		return ctrl.Result{}, fmt.Errorf("scm provider: %w", err)
 	}
 	state := r.stepState(ctx, log, ps, pipeline, env, bundle, seq, workDir, cred, provider)
+	state.BeforePush = r.pushGuard(ps, base, state)
 
 	prevIdx := ps.Status.CurrentStepIndex
 	// An auto promotion pushing to its base branch waits for the branch's
@@ -1141,6 +1146,29 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		clearSCMWait(ps, r.now())
 	}
 
+	// The push intent write (pushGuard) found the step gone, or changed since
+	// this reconcile read it: nothing was pushed. The next reconcile reads
+	// the step again. Only that write's errors: a NotFound or Conflict of
+	// any other step (an Argo CD Application patch) is a step error.
+	intentErr := errors.Is(execErr, errPushIntent)
+	if intentErr && apierrors.IsNotFound(execErr) {
+		return ctrl.Result{}, nil
+	}
+	if errors.Is(execErr, steps.ErrNewerPushed) {
+		// Not a failure: a newer Bundle already deployed to this environment.
+		msg := execErr.Error()
+		if i := strings.LastIndex(msg, "newer bundle "); i >= 0 {
+			msg = msg[i:]
+		}
+		closed := updateStepStatuses(ps, eng.StepNames(), nextIdx, false, "", eng.Timings())
+		_, err := r.transitionClosing(ctx, base, ps, StateSuperseded, msg, "", closed)
+		return ctrl.Result{}, err
+	}
+	if intentErr && apierrors.IsConflict(execErr) {
+		// Requeue is rate limited (the controller's backoff).
+		log.Debug().Err(execErr).Msg("step changed while it ran; retrying on the fresh copy")
+		return ctrl.Result{Requeue: true}, nil
+	}
 	if execErr != nil {
 		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), eng.Timings(), execErr, nil, cred, env.StepTimeoutSeconds)
 	}
@@ -1415,7 +1443,14 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 	if retryable {
 		msg = fmt.Sprintf("%s (gave up after %d retries)", msg, maxStepRetries)
 	}
-	log.Error().Err(execErr).Str("env", ps.Spec.Environment).Msg("step engine failed")
+	if errors.Is(execErr, steps.ErrStalePush) {
+		// The push guard (#1681) cancelled a superseded, rejected or
+		// deleted Bundle's promotion before it could push over a newer
+		// one: the expected end of a stale step, not a controller error.
+		log.Info().Err(execErr).Str("env", ps.Spec.Environment).Msg("stale promotion cancelled before its push")
+	} else {
+		log.Error().Err(execErr).Str("env", ps.Spec.Environment).Msg("step engine failed")
+	}
 	closed = append(closed, updateStepStatuses(ps, stepNames, idx, true, msg, timings)...)
 	if closeErr := r.closeStepPR(ctx, ps, "the promotion failed: "+msg, false); closeErr != nil {
 		msg += fmt.Sprintf("; closing the PR it opened failed (%v) — %s", closeErr, closeByHand(closeErr))

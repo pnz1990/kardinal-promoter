@@ -239,7 +239,7 @@ func buildAnalysisNodes(in hookNodesInput, a AnalysisInput, bundle *kardinalv1al
 // run's own template stopped resolving (a Superseded Bundle).
 func terminateNode(in hookNodesInput, template, runName string) GraphNode {
 	cond := fmt.Sprintf(`${bundle.?status.?phase.orValue("") == "Superseded" || %s.exists(s, s.metadata.name == %s && `+
-		`s.?status.?state.orValue("") in ["Failed", "AbortedByAlarm", "RollingBack"])}`,
+		`s.?status.?state.orValue("") in ["Failed", "AbortedByAlarm", "RollingBack", "Superseded"])}`,
 		refStepsNodeID, strconv.Quote(in.stepK8sName))
 	return GraphNode{
 		ID: terminateNodeID(in.env.Name, template),
