@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -45,8 +46,9 @@ func TestProviders_HTTPClientsAreTraced(t *testing.T) {
 		"NewForgejoProvider":     func() (scm.SCMProvider, error) { return scm.NewForgejoProvider("t", srv.URL, ""), nil },
 		"NewBitbucketProvider":   func() (scm.SCMProvider, error) { return scm.NewBitbucketProvider("t", srv.URL, ""), nil },
 		"NewAzureDevOpsProvider": func() (scm.SCMProvider, error) { return scm.NewAzureDevOpsProvider("t", srv.URL, ""), nil },
+		"NewBitbucketDCProvider": func() (scm.SCMProvider, error) { return scm.NewBitbucketDCProvider("t", srv.URL, ""), nil },
 	}
-	for _, typ := range []string{"github", "gitlab", "forgejo", "gitea", "bitbucket", "azuredevops"} {
+	for _, typ := range []string{"github", "gitlab", "forgejo", "gitea", "bitbucket", "azuredevops", "bitbucket-datacenter"} {
 		typ := typ
 		build["NewProvider("+typ+")"] = func() (scm.SCMProvider, error) { return scm.NewProvider(typ, "t", srv.URL, "") }
 		build["NewDynamicProvider("+typ+")"] = func() (scm.SCMProvider, error) { return scm.NewDynamicProvider(typ, "t", srv.URL, "") }
@@ -64,7 +66,11 @@ func TestProviders_HTTPClientsAreTraced(t *testing.T) {
 			p, err := newProvider()
 			require.NoError(t, err)
 			rec.Reset()
-			_, _, _ = p.GetPRStatus(context.Background(), repo, 1)
+			r := repo
+			if strings.Contains(name, "DC") || strings.Contains(name, "datacenter") {
+				r = "PROJ/repo" // Data Center: <project key>/<repo slug>
+			}
+			_, _, _ = p.GetPRStatus(context.Background(), r, 1)
 			var hosts []string
 			for _, s := range rec.Ended() {
 				for _, a := range s.Attributes() {

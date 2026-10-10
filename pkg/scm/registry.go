@@ -136,7 +136,9 @@ func ProviderAllowlist(spec ProviderSpec) (*RepositoryAllowlist, string, error) 
 	if err != nil {
 		return nil, "", fmt.Errorf("%s %s: spec.allowedRepositories: %v: %w", spec.Identity.Kind, spec.Identity.Name, err, ErrProviderConfig)
 	}
-	return a, host, nil
+	// A Bitbucket Data Center repository is matched as KEY/slug, however
+	// the Pipeline's URL names it (/scm/, browse or ssh path).
+	return a.WithProviderType(spec.Spec.Type), host, nil
 }
 
 // RepositoryAllowed returns an error wrapping ErrRepositoryNotAllowed when

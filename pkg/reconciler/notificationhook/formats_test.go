@@ -17,16 +17,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/notificationhook"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
 
 // request is one POST a recordingServer received.
@@ -351,7 +354,7 @@ func TestDelivery_TemplateRenderFailureGivesUpAtOnce(t *testing.T) {
 	for name, tc := range map[string]struct{ body, want string }{
 		"invalid JSON":  {`{"text": "{{ .Message }}`, "rendered body is not valid JSON (content type application/json); quote values with {{ json .Field }}"},
 		"missing field": {`{{ .Nope }}`, "render: "},
-		"too large":     {strings.Repeat("x", 70000), "rendered body is over 65536 bytes"},
+		"too large":     {strings.Repeat("x", 70000), "template output is too large (more than 65536 bytes)"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv, url := newRecorder(t)
@@ -359,9 +362,16 @@ func TestDelivery_TemplateRenderFailureGivesUpAtOnce(t *testing.T) {
 			hook.Spec.Format = v1alpha1.NotificationFormatTemplate
 			hook.Spec.Template = &v1alpha1.NotificationTemplate{Body: tc.body}
 			f := newFixture(t, hook, failedBundle("app-v0", saturday))
+			rec := events.NewFakeRecorder(10)
+			f.hooks.Recorder = rec
+			dropped := observability.NotificationsDroppedTotal.WithLabelValues(ns, "hook", "template")
+			before := testutil.ToFloat64(dropped)
 			f.reconcileHook()
 			h := f.hook()
 			assert.Equal(t, metav1.ConditionTrue, readyCondition(t, h).Status, "the template parses")
+			assert.Equal(t, before+1, testutil.ToFloat64(dropped), "kardinal_notifications_dropped_total{reason=template}")
+			require.Len(t, rec.Events, 1)
+			assert.Contains(t, <-rec.Events, "Warning NotificationTemplateFailed gave up on Bundle.Failed/app-v0: template")
 			assert.Contains(t, h.Status.FailureMessage, "gave up on Bundle.Failed/app-v0: template")
 			assert.Contains(t, h.Status.FailureMessage, tc.want)
 			assert.Zero(t, h.Status.FailedAttempts)
