@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
@@ -384,7 +385,7 @@ func TestGitHub_ExampleGitHubDemo(t *testing.T) {
 	note := fmt.Sprintf("<!-- kardinal-promoter auto-generated PR -->\n## ROLLBACK: %s -> %s/prod\n\n"+
 		"> **This is a rollback PR.** It restores the images of bundle %s in environment prod.\n"+
 		"> Rolling back FROM: %s (%s)\n> Rolling back TO: %s (%s)\n> Rolled back by: %s\n",
-		rb, name, good, bad, fixtures.V3, good, fixtures.V2, alarmActor)
+		rb, name, good, bad, fixtures.V3, good, fixtures.V2, lifecycle.ControllerCreator)
 	assert.True(t, strings.HasPrefix(pr.Body, note), "the rollback note:\n%s", pr.Body)
 	assert.Contains(t, pr.Body, "### Policy Gate Compliance")
 	a.merge(t, pr)

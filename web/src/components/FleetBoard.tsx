@@ -11,7 +11,7 @@ import { Fragment, useRef } from 'react'
 import '../styles/FleetBoard.css'
 import { hasCommandModifier, rovingFocus, rovingItems, useRovingFocus } from '../useRovingFocus'
 import type { Pipeline } from '../types'
-import { ageOf, fleetRow, type FleetRow, type Station } from '../fleetModel'
+import { ageOf, fleetRow, wavePlate, WAVE_PLATE_MIN, type FleetRow, type Station, type StationState } from '../fleetModel'
 
 interface FleetBoardProps {
   pipelines: Pipeline[]
@@ -111,6 +111,38 @@ function StationPlate({ s, pipeline, now, onSelect }: {
   )
 }
 
+/** How a wave plate names a state in its counts. */
+const PLATE_STATE: Record<StationState, string> = {
+  failed: 'failed', held: 'held', arriving: 'on its way', ahead: 'not reached', settled: 'settled', empty: 'nothing deployed',
+}
+
+/**
+ * A wave of many environments at the same depth, as one plate: the range,
+ * the version most of it runs, and how many are in each state. Its pipeline
+ * view lists every environment.
+ */
+function WavePlateButton({ stations, pipeline, onSelect }: {
+  stations: Station[]; pipeline: Pipeline; onSelect: FleetBoardProps['onSelect']
+}) {
+  const w = wavePlate(stations)
+  const counts = w.counts.map(c => `${c.count} ${PLATE_STATE[c.state]}`).join(', ')
+  const others = w.otherVersions > 0 ? ` (+${w.otherVersions} on others)` : ''
+  return (
+    <button
+      type="button"
+      className="fleet-station fleet-station--wave"
+      data-state={w.state}
+      onClick={() => onSelect(pipeline.name, pipeline.namespace)}
+      aria-label={`${pipeline.name} ${w.first} to ${w.last}, ${w.size} environments: ${w.version ? `${w.version}${others}, ` : ''}${counts}`}
+    >
+      <span className="fleet-station__env">{w.size} environments</span>
+      <span className="fleet-station__range">{w.first} … {w.last}</span>
+      <span className="fleet-station__version">{w.version || '—'}{others && <span className="fleet-station__others">{others}</span>}</span>
+      <span className="fleet-station__note">{counts}</span>
+    </button>
+  )
+}
+
 function FleetLine({ row, now, onSelect }: { row: FleetRow; now: number; onSelect: FleetBoardProps['onSelect'] }) {
   const p = row.pipeline
   const track = useRef<HTMLDivElement>(null)
@@ -150,8 +182,10 @@ function FleetLine({ row, now, onSelect }: { row: FleetRow; now: number; onSelec
           row.groups.map((g, i) => (
             <Fragment key={g.map(s => s.env).join(',')}>
               {(i > 0 || row.liveGroup === 0) && <Rail row={row} index={i} />}
-              <div className="fleet-stop" data-fan={g.length > 1 || undefined} data-live={row.liveGroup === i && row.live ? row.live : undefined}>
-                {g.map(s => <StationPlate key={s.env} s={s} pipeline={p} now={now} onSelect={onSelect} />)}
+              <div className="fleet-stop" data-fan={(g.length > 1 && g.length < WAVE_PLATE_MIN) || undefined} data-live={row.liveGroup === i && row.live ? row.live : undefined}>
+                {g.length >= WAVE_PLATE_MIN
+                  ? <WavePlateButton stations={g} pipeline={p} onSelect={onSelect} />
+                  : g.map(s => <StationPlate key={s.env} s={s} pipeline={p} now={now} onSelect={onSelect} />)}
               </div>
             </Fragment>
           ))

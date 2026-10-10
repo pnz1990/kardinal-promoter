@@ -249,6 +249,28 @@
 }
 .fleet-station[data-state='empty'] .fleet-station__version { color: var(--color-text-faint); }
 
+/* A wave of many environments at one depth, drawn as one plate (#1580):
+   a stacked edge says it stands for several stations. */
+.fleet-station--wave {
+  max-width: 15rem;
+  box-shadow: 3px 3px 0 -1px var(--color-surface), 3px 3px 0 0 var(--color-border),
+              6px 6px 0 -1px var(--color-surface), 6px 6px 0 0 var(--color-border);
+  margin: 0 6px 6px 0;
+}
+.fleet-station__range {
+  font-family: var(--fleet-mono);
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fleet-station__others {
+  font-size: 0.68rem;
+  font-weight: 400;
+  color: var(--color-text-muted);
+}
+
 /* ── Rail between stations ─────────────────────────────────────────────── */
 
 .fleet-rail {
