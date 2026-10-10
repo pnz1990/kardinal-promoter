@@ -200,7 +200,7 @@ type headsEntry struct {
 // remoteHeads returns the branch heads of url, from the cache when they are
 // younger than remoteHeadsTTL.
 func (c *remoteCache) remoteHeads(ctx context.Context, rh scm.RemoteHeadReader, url string, auth scm.GitAuth, now time.Time) (map[string]string, error) {
-	if h, ok := c.cachedHeads(url, now); ok {
+	if h, ok := c.cachedHeads(headsKey(url, auth), now); ok {
 		return h, nil
 	}
 	c.missed("heads")
@@ -220,9 +220,10 @@ func (c *remoteCache) readHeads(ctx context.Context, rh scm.RemoteHeadReader, ur
 // fresh) read first checks the cache again: another flight may have stored
 // heads since the caller missed.
 func (c *remoteCache) loadHeads(ctx context.Context, rh scm.RemoteHeadReader, url string, auth scm.GitAuth, now time.Time, fresh bool) (map[string]string, error) {
-	v, _, err := c.shared(ctx, "heads\x00"+url+"\x00"+authKey(auth), fresh, func(ctx context.Context, started uint64) (any, error) {
+	hk := headsKey(url, auth)
+	v, _, err := c.shared(ctx, "heads\x00"+hk, fresh, func(ctx context.Context, started uint64) (any, error) {
 		if !fresh {
-			if h, ok := c.cachedHeads(url, now); ok {
+			if h, ok := c.cachedHeads(hk, now); ok {
 				return h, nil
 			}
 		}
@@ -230,7 +231,7 @@ func (c *remoteCache) loadHeads(ctx context.Context, rh scm.RemoteHeadReader, ur
 		if err != nil {
 			return nil, err
 		}
-		c.storeHeads(url, heads, now, started)
+		c.storeHeads(hk, heads, now, started)
 		return heads, nil
 	})
 	if err != nil {
@@ -239,12 +240,19 @@ func (c *remoteCache) loadHeads(ctx context.Context, rh scm.RemoteHeadReader, ur
 	return v.(map[string]string), nil
 }
 
-// cachedHeads returns the cached heads of url when they are younger than
-// remoteHeadsTTL at now.
-func (c *remoteCache) cachedHeads(url string, now time.Time) (map[string]string, bool) {
+// headsKey is the c.heads key of url read with auth: heads read with one
+// credential are never an answer for another (a wrong or missing one gets
+// its own error, not the other's data).
+func headsKey(url string, auth scm.GitAuth) string {
+	return url + "\x00" + authKey(auth)
+}
+
+// cachedHeads returns the cached heads under key (headsKey) when they are
+// younger than remoteHeadsTTL at now.
+func (c *remoteCache) cachedHeads(key string, now time.Time) (map[string]string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.heads[url]
+	e, ok := c.heads[key]
 	if ok && now.Sub(e.at) < remoteHeadsTTL && !now.Before(e.at) {
 		return e.heads, true
 	}
@@ -255,27 +263,27 @@ func (c *remoteCache) cachedHeads(url string, now time.Time) (map[string]string,
 // started. Reads overlap (a fresh read next to an older shared one): the
 // cache keeps the one that started last, so an older read finishing last
 // does not put back a head older than one already cached.
-func (c *remoteCache) storeHeads(url string, heads map[string]string, now time.Time, started uint64) {
+func (c *remoteCache) storeHeads(key string, heads map[string]string, now time.Time, started uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.heads == nil {
 		c.heads = map[string]headsEntry{}
 	}
-	if e, ok := c.heads[url]; !ok || e.started <= started {
-		c.heads[url] = headsEntry{at: now, heads: heads, started: started}
+	if e, ok := c.heads[key]; !ok || e.started <= started {
+		c.heads[key] = headsEntry{at: now, heads: heads, started: started}
 	}
 }
 
 // branchHistory returns the last maxCommits commits of branch at head.
 func (c *remoteCache) branchHistory(ctx context.Context, rh scm.RemoteHeadReader, url, branch, head string, auth scm.GitAuth, maxCommits int) ([]scm.CommitPaths, error) {
-	key := url + "\x00" + branch + "\x00" + head + "\x00" + strconv.Itoa(maxCommits)
+	key := url + "\x00" + branch + "\x00" + head + "\x00" + strconv.Itoa(maxCommits) + "\x00" + authKey(auth)
 	if h, ok := c.cachedHistory(key); ok {
 		return h, nil
 	}
 	c.missed("history")
 	// Inside the flight: check again (another flight may have stored it
 	// since), and store before the flight ends.
-	v, _, err := c.shared(ctx, "history\x00"+key+"\x00"+authKey(auth), false, func(ctx context.Context, _ uint64) (any, error) {
+	v, _, err := c.shared(ctx, "history\x00"+key, false, func(ctx context.Context, _ uint64) (any, error) {
 		if h, ok := c.cachedHistory(key); ok {
 			return h, nil
 		}

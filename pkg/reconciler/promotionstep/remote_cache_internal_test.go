@@ -5,6 +5,7 @@ package promotionstep
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -55,6 +56,70 @@ func TestRemoteCache(t *testing.T) {
 	assert.Equal(t, 2, rem.fetches, "a new head: fetched once")
 	_, _ = c.remoteHeads(ctx, rem, "https://git/other", scm.TokenAuth("tok"), t0)
 	assert.Equal(t, 3, rem.lsRemote, "per repository")
+}
+
+// authRemote answers only the credential good and refuses every other one,
+// counting the calls each credential made.
+type authRemote struct {
+	good  scm.GitAuth
+	calls map[string]int
+}
+
+var errAuthRefused = errors.New("authentication required")
+
+func (a *authRemote) call(auth scm.GitAuth) error {
+	if a.calls == nil {
+		a.calls = map[string]int{}
+	}
+	a.calls[auth.Token+string(auth.SSHPrivateKey)]++
+	if auth.Token != a.good.Token || string(auth.SSHPrivateKey) != string(a.good.SSHPrivateKey) {
+		return errAuthRefused
+	}
+	return nil
+}
+
+func (a *authRemote) RemoteHeads(_ context.Context, _ string, auth scm.GitAuth) (map[string]string, error) {
+	if err := a.call(auth); err != nil {
+		return nil, err
+	}
+	return map[string]string{"main": "a"}, nil
+}
+
+func (a *authRemote) BranchHistory(_ context.Context, _, _ string, auth scm.GitAuth, _ int) ([]scm.CommitPaths, error) {
+	if err := a.call(auth); err != nil {
+		return nil, err
+	}
+	return []scm.CommitPaths{{SHA: "a", Paths: []string{"environments/prod/secret.yaml"}}}, nil
+}
+
+// TestRemoteCache_PerCredential (#1672 QA): heads and history read with one
+// credential are never another credential's answer. Pipeline A caches them;
+// Pipeline B, on the same URL with a wrong token, a missing one, or another
+// ssh key, calls the remote itself and gets its own refusal, not A's data.
+func TestRemoteCache_PerCredential(t *testing.T) {
+	ctx := context.Background()
+	a := scm.TokenAuth("tok-a")
+	rem := &authRemote{good: a}
+	var c remoteCache
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	const url = "https://git/x"
+	h, err := c.remoteHeads(ctx, rem, url, a, now)
+	require.NoError(t, err)
+	require.Equal(t, "a", h["main"])
+	_, err = c.branchHistory(ctx, rem, url, "main", "a", a, 20)
+	require.NoError(t, err)
+	for _, b := range []scm.GitAuth{scm.TokenAuth("wrong"), {}, {SSHPrivateKey: []byte("other-key"), SSHKnownHosts: []byte("kh")}} {
+		_, err := c.remoteHeads(ctx, rem, url, b, now.Add(time.Second))
+		require.ErrorIs(t, err, errAuthRefused, "heads: B's own refusal, not A's cached heads")
+		_, err = c.branchHistory(ctx, rem, url, "main", "a", b, 20)
+		require.ErrorIs(t, err, errAuthRefused, "history: B's own refusal, not A's changed paths")
+	}
+	assert.Equal(t, 2, rem.calls["wrong"], "B read the remote itself, heads and history")
+	assert.Equal(t, 2, rem.calls[""])
+	assert.Equal(t, 2, rem.calls["tok-a"], "A's reads were cached, once each")
+	_, err = c.remoteHeads(ctx, rem, url, a, now.Add(2*time.Second))
+	require.NoError(t, err)
+	assert.Equal(t, 2, rem.calls["tok-a"], "A still reads from its cache")
 }
 
 // within receives from ch, failing the test after 5 seconds instead of
