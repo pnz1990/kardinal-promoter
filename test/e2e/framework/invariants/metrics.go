@@ -533,9 +533,11 @@ func restarts(ctx context.Context, e *framework.Env, o Options, check, ns, name 
 //     returned), so RSS is not bounded. Instead the memory the Go runtime
 //     holds from the OS (go_memstats_sys_bytes) may grow at most 25% from
 //     the warm sample to the end, and the heap in use after the first
-//     garbage collection once the load is over must be below the lowest
-//     heap in use of the five minutes after the warm baseline: what the
-//     load left reachable is gone. A missing Go memory series fails;
+//     garbage collection once the load is over may be at most heapGrowth
+//     (1.1x + 16 MiB) of the lowest heap in use of the five minutes after
+//     the warm baseline: what the load left reachable is gone, but caches
+//     of objects kept by design (AuditEvents up to the retention caps) may
+//     still grow. A missing Go memory series fails;
 //   - built with -race, with no warm baseline (a test whose load has no
 //     steady state measures from its start): resident memory at most 2.5x
 //     (plus 500 MiB) the start, as before the warm baseline existed. Steady
@@ -550,6 +552,14 @@ var (
 // raceSysGrowth is how much go_memstats_sys_bytes may grow from the warm
 // sample to the end in a -race build.
 const raceSysGrowth = 1.25
+
+// heapGrowth bounds the heap in use after the GC at the end of the load,
+// from the warm heap, in a -race build with a warm baseline. A Pod's
+// informer cache grows with the objects kept by design: the post-#1681 soak's
+// standby, which reconciles nothing, went from 49.1 to 50.9 MiB as kept
+// AuditEvents grew from about 15k to 19.9k (retention caps them), while a
+// real leak over a 9k-Bundle soak grows far past 10% + 16 MiB.
+var heapGrowth = growth{factor: 1.1, slackMiB: 16}
 
 type growth struct{ factor, slackMiB float64 }
 
@@ -583,9 +593,9 @@ func leaks(pods []PodSeries, start, end time.Time, limitMiB float64, shared, rac
 				p.Pod, p.SysWarmMiB, at, p.SysEndMiB, raceSysGrowth))
 		case race && p.HeapAfterGCMiB == 0:
 			v = append(v, fmt.Sprintf("%s: no garbage collection seen within 3 minutes of the load's end: heap after GC not measured", p.Pod))
-		case race && p.HeapAfterGCMiB >= p.HeapWarmMiB:
-			v = append(v, fmt.Sprintf("%s: heap in use %.0f MiB after a GC at the end, not below the warm %.0f MiB (%s)",
-				p.Pod, p.HeapAfterGCMiB, p.HeapWarmMiB, at))
+		case race && heapGrowth.exceeded(p.HeapWarmMiB, p.HeapAfterGCMiB):
+			v = append(v, fmt.Sprintf("%s: heap in use %.0f MiB after a GC at the end, over %gx + %g MiB of the warm %.0f MiB (%s)",
+				p.Pod, p.HeapAfterGCMiB, heapGrowth.factor, heapGrowth.slackMiB, p.HeapWarmMiB, at))
 		case !race && rssGrowth.exceeded(p.RSSWarmMiB, p.RSSEndMiB):
 			v = append(v, fmt.Sprintf("%s: resident memory %.0f MiB warm (%s), %.0f MiB at the end (over %gx + %g MiB; peak %.0f)",
 				p.Pod, p.RSSWarmMiB, at, p.RSSEndMiB, rssGrowth.factor, rssGrowth.slackMiB, p.RSSMaxMiB))
