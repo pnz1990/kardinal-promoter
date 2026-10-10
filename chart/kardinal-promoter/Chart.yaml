@@ -10,8 +10,8 @@ type: application
 # kro's CRDs use CRD selectableFields, which Kubernetes accepts from 1.30. The
 # -0 lets pre-release builds such as v1.30.5-eks-ce1d5eb match.
 kubeVersion: ">=1.30.0-0"
-version: 0.9.0
-appVersion: "v0.9.0"
+version: 0.10.0
+appVersion: "v0.10.0"
 keywords:
   - kubernetes
   - promotion

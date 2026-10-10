@@ -128,7 +128,7 @@ kubectl create secret generic github-token \
 ### 2. Install with Helm
 
 ```bash
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
   --namespace kardinal-system \
   --create-namespace \
   --set github.secretRef.name=github-token
@@ -178,11 +178,11 @@ macOS (`amd64`, `arm64`) and `kardinal-windows-amd64.exe`.
 ```bash
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
-curl -Lo kardinal "https://github.com/pnz1990/kardinal-promoter/releases/download/v0.9.0/kardinal-${OS}-${ARCH}"
+curl -Lo kardinal "https://github.com/pnz1990/kardinal-promoter/releases/download/v0.10.0/kardinal-${OS}-${ARCH}"
 chmod +x kardinal && sudo mv kardinal /usr/local/bin/
 kardinal version
-# CLI:        v0.9.0
-# Controller: v0.9.0
+# CLI:        v0.10.0
+# Controller: v0.10.0
 # Graph:      kro v0.10.0-rc.0
 ```
 
@@ -230,7 +230,7 @@ in environment variables, as the chart does for the SCM, UI and Bundle API token
 flags (`controller.extraArgs`). Only an empty `pprofAddress` turns it off.
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 --reset-then-reuse-values --set pprofAddress=:6060
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 --reset-then-reuse-values --set pprofAddress=:6060
 kubectl -n kardinal-system port-forward deploy/kardinal-promoter 6060:6060
 go tool pprof -sample_index=inuse_space http://localhost:6060/debug/pprof/heap
 # Compare two snapshots: what grew between them.
@@ -446,7 +446,7 @@ helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version
 Then upgrade the release:
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
   --namespace kardinal-system \
   --reset-then-reuse-values
 ```
@@ -490,7 +490,7 @@ You need:
 - `kubectl`, `jq`, `yq` and the new `kardinal` CLI.
 - A checkout of kardinal-promoter at this release, for `hack/install-kro.sh`.
 
-Check your Kubernetes version first. v0.9.0 needs 1.30 or later; on an older cluster, upgrade Kubernetes before step 1 (see [Kubernetes version](#kubernetes-version)).
+Check your Kubernetes version first. v0.9.0 and later need 1.30 or later; on an older cluster, upgrade Kubernetes before step 1 (see [Kubernetes version](#kubernetes-version)).
 
 ```bash
 kubectl version | grep Server
@@ -589,7 +589,7 @@ On Kubernetes older than 1.30 the script exits 1 and installs nothing (see [Kube
 **7. Apply the new kardinal CRDs.** The v0.8.1 chart shipped no CRDs, and Helm never upgrades CRDs, so apply all 12 by hand. This adds the new `notificationhooks.kardinal.io` CRD. Apply them before the new controller starts.
 
 ```bash
-helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 | kubectl apply --server-side -f -
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 | kubectl apply --server-side -f -
 ```
 
 If this reports field-manager conflicts, add `--force-conflicts`.
@@ -597,7 +597,7 @@ If this reports field-manager conflicts, add `--force-conflicts`.
 **8. Upgrade the chart.** Use `--reset-then-reuse-values`, not `--reuse-values`. With `--reuse-values`, the v0.8.1 `krocodile` default is carried over and fails the new schema.
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
   --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
 ```
 
@@ -678,7 +678,7 @@ kubectl delete crd promotiontemplates.kardinal.io --ignore-not-found
 
 #### Kubernetes version
 
-v0.9.0 needs Kubernetes 1.30 or later. kro's `graphrevisions.internal.kro.run` CRD uses CRD `selectableFields`, which older API servers reject. `hack/install-kro.sh` checks the server version first and exits 1 on an older cluster, and the chart's `kubeVersion` makes `helm upgrade` refuse it. v0.8.1 runs on 1.30, so on a v0.8.1 cluster on 1.29 or older, upgrade Kubernetes first, then follow the steps above.
+v0.10.0 needs Kubernetes 1.30 or later. kro's `graphrevisions.internal.kro.run` CRD uses CRD `selectableFields`, which older API servers reject. `hack/install-kro.sh` checks the server version first and exits 1 on an older cluster, and the chart's `kubeVersion` makes `helm upgrade` refuse it. v0.8.1 runs on 1.30, so on a v0.8.1 cluster on 1.29 or older, upgrade Kubernetes first, then follow the steps above.
 
 From 1.30, CRD validation ratcheting lets most writes to a stored object through when the new schema rejects one of its fields. On 1.30 to 1.32, status writes to such an object still fail, including the controller's. Some writes fail on every version, so step 1's finder is required. What each finding blocks once the new CRDs are applied:
 

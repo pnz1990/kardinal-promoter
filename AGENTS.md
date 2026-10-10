@@ -3,9 +3,8 @@
 A Kubernetes-native promotion controller: Go 1.26+ backend and a React 19 UI embedded with
 go:embed. All state is in Kubernetes CRDs; there is no external database.
 
-Status: v0.8.1 is the latest release (it bundles the old forked Graph controller). main is
-v0.9.0-dev and runs on upstream kro's `kro.run/v1alpha1` Graph (kro v0.10.0-rc.0, GraphKind
-feature gate). Journey status: docs/aide/definition-of-done.md §Journey Status.
+Status: v0.10.0 is the latest release. It runs on upstream kro's `kro.run/v1alpha1` Graph
+(kro v0.10.0-rc.0, GraphKind feature gate). Journey status: docs/aide/definition-of-done.md §Journey Status.
 
 Claude Code sessions load this file as instructions. It changes only through a reviewed PR.
 

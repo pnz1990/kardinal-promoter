@@ -7,9 +7,9 @@ This page describes what is currently available in kardinal-promoter and what is
 
 ---
 
-## Currently Available (v0.9.0)
+## Currently Available (v0.10.0)
 
-> v0.9.0 released 2026-10-02. kardinal runs on upstream kro Graph (v0.10.0-rc.0), and unfinished features (distributed mode, regions, custom steps, PromotionTemplate, the admission webhook) are removed. For the full list and the upgrade steps see the [changelog](changelog.md).
+> v0.10.0 released 2026-10-10, on upstream kro Graph (v0.10.0-rc.0). The list below is what v0.9.0 shipped; [New in v0.10.0](#new-in-v0100) adds this release. For the full list and the upgrade steps see the [changelog](changelog.md).
 
 All of the following are implemented and shipped:
 
@@ -101,7 +101,7 @@ Config and mixed Bundles run the `config-merge` step, which copies the environme
 - `RollbackPolicy` CRD + automated rollback PR
 - Pause/resume (`Pipeline.spec.paused`)
 - Supersession for concurrent Bundles
-- Multi-cluster health through an Argo CD or Flux hub (see [Multi-Cluster](multi-cluster.md))
+- Multi-cluster health through a kubeconfig Secret (`health.kubeconfigSecretRef`, v0.10.0) or an Argo CD or Flux hub (see [Multi-Cluster](multi-cluster.md))
 
 **CLI** — `get`, `explain`, `status`, `create`, `promote`, `rollback`, `pause`, `resume`, `override`, `history`, `audit`, `diff`, `logs`, `metrics`, `policy`, `validate`, `doctor`, `init`, `refresh`, `delete`, `dashboard`, `completion`, `version` (see [CLI Reference](cli-reference.md))
 
@@ -153,9 +153,9 @@ Not in the UI: overriding a gate (use `kardinal override`), the bake countdown, 
 
 ---
 
-## On main, not yet released
+## New in v0.10.0
 
-Everything under `[Unreleased]` in the [changelog](changelog.md) ships in v0.10.0, among it
+The [v0.10.0 changelog](changelog.md#v0100-2026-10-10) lists everything, among it
 `scm.allowedRepositories` (#1332), approval gates with `kardinal approve` (#1309, #1449), and
 verified override identity with a `GateOverridden` AuditEvent (#1286, #1450), per-environment
 PR controls (#1453), GitHub App and SSH git authentication (#1460), the Bitbucket Data

@@ -32,7 +32,7 @@ kubectl create secret generic github-token \
   --namespace kardinal-system \
   --from-literal=token=$GITHUB_PAT
 
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
   --namespace kardinal-system \
   --set demo.enabled=true \
   --set demo.git.url=$DEMO_REPO \
@@ -118,14 +118,14 @@ kubectl create secret generic github-token \
   --from-literal=token=$GITHUB_PAT \
   --dry-run=client -o yaml | kubectl apply -f -
 
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
   --namespace kardinal-system --create-namespace \
   --set github.secretRef.name=github-token
 
 # Option B: pass the token directly (development/testing only)
 # The chart stores it in Secret kardinal-promoter-github-token, but the token
 # also stays in the Helm release history.
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
   --namespace kardinal-system --create-namespace \
   --set github.token=$GITHUB_PAT
 ```
@@ -142,8 +142,8 @@ kubectl get pods -n kro-system
 # kro-7d4b8f9f5-xk2pq               1/1     Running   0          30s
 
 kardinal version
-# CLI:        v0.9.0
-# Controller: v0.9.0
+# CLI:        v0.10.0
+# Controller: v0.10.0
 # Graph:      kro v0.10.0-rc.0
 ```
 
