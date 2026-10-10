@@ -25,11 +25,11 @@ import (
 type RemoteHeadReader interface {
 	// RemoteHeads returns every branch of the remote with its commit, from
 	// one ls-remote.
-	RemoteHeads(ctx context.Context, url, token string) (map[string]string, error)
+	RemoteHeads(ctx context.Context, url string, auth GitAuth) (map[string]string, error)
 	// BranchHistory returns the last maxCommits commits of branch, newest
 	// first, each with the paths it changed against its first parent. The
 	// last entry's paths are nil when its parent was not fetched.
-	BranchHistory(ctx context.Context, url, branch, token string, maxCommits int) ([]CommitPaths, error)
+	BranchHistory(ctx context.Context, url, branch string, auth GitAuth, maxCommits int) ([]CommitPaths, error)
 }
 
 // CommitPaths is one commit of a BranchHistory and the paths it changed.
@@ -64,9 +64,15 @@ func PathsChangedSince(history []CommitPaths, since string) (paths []string, fou
 }
 
 // RemoteHeads lists the branches of the remote url.
-func (c *GoGitClient) RemoteHeads(ctx context.Context, url, token string) (map[string]string, error) {
+func (c *GoGitClient) RemoteHeads(ctx context.Context, url string, auth GitAuth) (map[string]string, error) {
+	am, err := authMethod(url, auth)
+	if err != nil {
+		return nil, fmt.Errorf("git ls-remote %s: %w", RedactURL(url), err)
+	}
+	proxyOpts, release := sshScope(ctx, am)
+	defer release()
 	rem := gogit.NewRemote(memory.NewStorage(), &config.RemoteConfig{Name: "origin", URLs: []string{url}})
-	refs, err := rem.ListContext(ctx, &gogit.ListOptions{Auth: httpAuth(url, token)})
+	refs, err := rem.ListContext(ctx, &gogit.ListOptions{Auth: am, ProxyOptions: proxyOpts})
 	if err != nil {
 		return nil, fmt.Errorf("git ls-remote %s: %s", RedactURL(url), gitErrorText(err))
 	}
@@ -79,15 +85,33 @@ func (c *GoGitClient) RemoteHeads(ctx context.Context, url, token string) (map[s
 	return out, nil
 }
 
-// BranchHistory fetches the last maxCommits commits of branch into memory
-// (no working tree) and diffs each against its parent.
-func (c *GoGitClient) BranchHistory(ctx context.Context, url, branch, token string, maxCommits int) ([]CommitPaths, error) {
+// shallowMemoryClone clones the last maxCommits commits of branch into
+// memory, with no working tree, authenticated as the step's clone is
+// (authMethod: the token over http(s), the key and known_hosts over ssh,
+// dialled through the egress-bound dial scope).
+func shallowMemoryClone(ctx context.Context, url, branch string, auth GitAuth, maxCommits int) (*gogit.Repository, error) {
+	am, err := authMethod(url, auth)
+	if err != nil {
+		return nil, fmt.Errorf("git fetch %s %s: %w", RedactURL(url), branch, err)
+	}
+	proxyOpts, release := sshScope(ctx, am)
+	defer release()
 	repo, err := gogit.CloneContext(ctx, memory.NewStorage(), nil, &gogit.CloneOptions{
-		URL: url, Auth: httpAuth(url, token), ReferenceName: plumbing.NewBranchReferenceName(branch),
-		SingleBranch: true, Depth: maxCommits, NoCheckout: true, Tags: gogit.NoTags,
+		URL: url, Auth: am, ReferenceName: plumbing.NewBranchReferenceName(branch),
+		SingleBranch: true, Depth: maxCommits, NoCheckout: true, Tags: gogit.NoTags, ProxyOptions: proxyOpts,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("git fetch %s %s: %s", RedactURL(url), branch, gitErrorText(err))
+	}
+	return repo, nil
+}
+
+// BranchHistory fetches the last maxCommits commits of branch into memory
+// (no working tree) and diffs each against its parent.
+func (c *GoGitClient) BranchHistory(ctx context.Context, url, branch string, auth GitAuth, maxCommits int) ([]CommitPaths, error) {
+	repo, err := shallowMemoryClone(ctx, url, branch, auth, maxCommits)
+	if err != nil {
+		return nil, err
 	}
 	head, err := repo.Head()
 	if err != nil {
@@ -149,7 +173,7 @@ type BranchGraphReader interface {
 	// BranchGraph fetches branch at depth maxCommits and returns the head
 	// it fetched and every fetched commit. A parent that is not a key was
 	// not fetched (the shallow boundary).
-	BranchGraph(ctx context.Context, url, branch, token string, maxCommits int) (head string, graph map[string]GraphCommit, err error)
+	BranchGraph(ctx context.Context, url, branch string, auth GitAuth, maxCommits int) (head string, graph map[string]GraphCommit, err error)
 }
 
 // GraphCommit is one commit of a BranchGraph.
@@ -163,13 +187,10 @@ type GraphCommit struct {
 
 // BranchGraph is BranchGraphReader.BranchGraph: a shallow clone of branch
 // in memory, and every commit object it fetched with the paths it changed.
-func (c *GoGitClient) BranchGraph(ctx context.Context, url, branch, token string, maxCommits int) (string, map[string]GraphCommit, error) {
-	repo, err := gogit.CloneContext(ctx, memory.NewStorage(), nil, &gogit.CloneOptions{
-		URL: url, Auth: httpAuth(url, token), ReferenceName: plumbing.NewBranchReferenceName(branch),
-		SingleBranch: true, Depth: maxCommits, NoCheckout: true, Tags: gogit.NoTags,
-	})
+func (c *GoGitClient) BranchGraph(ctx context.Context, url, branch string, auth GitAuth, maxCommits int) (string, map[string]GraphCommit, error) {
+	repo, err := shallowMemoryClone(ctx, url, branch, auth, maxCommits)
 	if err != nil {
-		return "", nil, fmt.Errorf("git fetch %s %s: %s", RedactURL(url), branch, gitErrorText(err))
+		return "", nil, err
 	}
 	head, err := repo.Head()
 	if err != nil {

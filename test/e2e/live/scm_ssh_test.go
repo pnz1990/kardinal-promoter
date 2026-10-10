@@ -63,6 +63,62 @@ func TestGitLab_SSHGit(t *testing.T) {
 	scmSSHGit(t, e)
 }
 
+// TestForgejo_SSHGitPRBranchRefresh (#1672): a pr-review PR whose
+// spec.git.url is ssh follows its base branch while it waits, as one over
+// https does. The controller reads the remote heads and the branch history
+// over ssh with the git Secret's key and known_hosts: a move at other paths
+// records the new head (status.outputs.baseSHA, no rebuild), and a move at
+// the environment's path rebuilds the PR branch over ssh on the new head.
+//
+// Covers SCM-SSH-FJ-02.
+func TestForgejo_SSHGitPRBranchRefresh(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	requireKind(t, e, "forgejo")
+	keys, ok := e.Git.(gitserver.SSHKeys)
+	require.True(t, ok, "%s git server cannot add ssh keys", e.Git.Kind())
+	a := newArgoApp(t, e, "prod")
+	ctx := context.Background()
+
+	privPEM, authorized := newSSHKey(t)
+	remove, err := keys.AddSSHKey(ctx, gitBotUser, "e2e-"+a.ns, authorized)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = remove(context.Background()) })
+	sshURL, err := gitserver.SSHCloneURL(a.repo)
+	require.NoError(t, err)
+	require.NoError(t, e.Client.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-ssh", Namespace: a.ns},
+		Data: map[string][]byte{"sshPrivateKey": privPEM, "knownHosts": []byte(knownHostsLine(t, sshURL, serverHostKey(t)))}}))
+	p := a.pipeline(map[string]string{"prod": "pr-review"})
+	p.Spec.Git.URL = sshURL
+	p.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "git-ssh"}
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	_, pr := a.waitOpenPR(t, bundle, "prod")
+
+	git := committer(t, e)
+	elsewhere, err := git.CommitFiles(ctx, a.repo, "ci note while the PR waits",
+		map[string][]byte{"notes/ssh-refresh.txt": []byte("note\n")})
+	require.NoError(t, err)
+	e.WaitStep(t, a.ns, pipelineName, bundle, "prod", 3*time.Minute, "baseSHA to follow the moved base over ssh",
+		func(ps *v1alpha1.PromotionStep) (bool, string) {
+			return ps.Status.Outputs["baseSHA"] == elsewhere, fmt.Sprintf("baseSHA=%s message=%q",
+				ps.Status.Outputs["baseSHA"], ps.Status.Message)
+		})
+
+	under, err := git.CommitFiles(ctx, a.repo, "a file under prod while the PR waits",
+		map[string][]byte{fixtures.Path("prod") + "/extra.yaml": []byte("x: 1\n")})
+	require.NoError(t, err)
+	e.WaitStep(t, a.ns, pipelineName, bundle, "prod", 3*time.Minute, "the PR branch to be rebuilt over ssh",
+		func(ps *v1alpha1.PromotionStep) (bool, string) {
+			return ps.Status.Outputs["baseSHA"] == under && ps.Status.Outputs["prBranchRebuilds"] == "1",
+				fmt.Sprintf("baseSHA=%s rebuilds=%s message=%q", ps.Status.Outputs["baseSHA"],
+					ps.Status.Outputs["prBranchRebuilds"], ps.Status.Message)
+		})
+	assert.Equal(t, "x: 1\n", e.ReadFile(t, a.repo, pr.Head, fixtures.Path("prod")+"/extra.yaml"),
+		"the rebuilt PR branch has the base's new file")
+	assert.Contains(t, e.ReadFile(t, a.repo, pr.Head, fixtures.Path("prod")+"/kustomization.yaml"), "newTag: "+fixtures.V2)
+}
+
 // gitBotUser is the git server user whose token the suites give the
 // controller (hack/e2e/components): the ssh key is added to it.
 const gitBotUser = "kardinal-bot"
