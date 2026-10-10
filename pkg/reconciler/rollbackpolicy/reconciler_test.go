@@ -143,7 +143,7 @@ func reconcileOnce(t *testing.T, objs ...interface{ DeepCopyObject() runtime.Obj
 			builder = builder.WithObjects(obj).WithStatusSubresource(obj)
 		}
 	}
-	c := builder.Build()
+	c := builder.WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	r := &rollbackpolicy.Reconciler{
 		Client: c,
@@ -196,7 +196,7 @@ func TestReconciler_AtThreshold_TriggersRollback(t *testing.T) {
 	s := buildScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(rp, step, bundle, rtPipeline(), good, goodStep).
-		WithStatusSubresource(rp, step, bundle).
+		WithStatusSubresource(rp, step, bundle).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	r := &rollbackpolicy.Reconciler{
@@ -263,7 +263,7 @@ func TestReconciler_AlreadyTriggered_IsNoOp(t *testing.T) {
 	s := buildScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(rp, step, bundle, existingRB).
-		WithStatusSubresource(rp, step, bundle, existingRB).
+		WithStatusSubresource(rp, step, bundle, existingRB).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	r := &rollbackpolicy.Reconciler{
@@ -295,7 +295,7 @@ func TestReconciler_NoPromotionStep_WaitsForTheWatch(t *testing.T) {
 	s := buildScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(rp, bundle).
-		WithStatusSubresource(rp, bundle).
+		WithStatusSubresource(rp, bundle).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	r := &rollbackpolicy.Reconciler{
@@ -313,7 +313,7 @@ func TestReconciler_NoPromotionStep_WaitsForTheWatch(t *testing.T) {
 
 func TestReconciler_NotFound_NoOp(t *testing.T) {
 	s := buildScheme(t)
-	c := fake.NewClientBuilder().WithScheme(s).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r := &rollbackpolicy.Reconciler{
 		Client: c,
 		NowFn:  func() time.Time { return fixedNow },
@@ -334,7 +334,7 @@ func TestReconciler_DefaultThreshold(t *testing.T) {
 	s := buildScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(rp, step, bundle).
-		WithStatusSubresource(rp, step, bundle).
+		WithStatusSubresource(rp, step, bundle).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	r := &rollbackpolicy.Reconciler{
@@ -480,7 +480,7 @@ func TestReconciler_RollbackBundleError_Requeues(t *testing.T) {
 				}
 				return cl.List(ctx, list, opts...)
 			},
-		}).Build()
+		}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r := &rollbackpolicy.Reconciler{Client: c, NowFn: func() time.Time { return fixedNow }}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "rp-1", Namespace: "default"}}
 
@@ -525,7 +525,7 @@ func TestReconciler_ShouldRollbackFollowsTheThreshold(t *testing.T) {
 			}
 
 			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
-				WithObjects(objs...).WithStatusSubresource(objs[0], objs[1]).Build()
+				WithObjects(objs...).WithStatusSubresource(objs[0], objs[1]).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			r := &rollbackpolicy.Reconciler{Client: c, NowFn: func() time.Time { return fixedNow }}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "rp-1", Namespace: "default"}}
 			// Twice: the second reconcile must not flip the result back.
@@ -556,7 +556,7 @@ func TestReconciler_ShouldRollbackFollowsTheThreshold(t *testing.T) {
 		step := makePromotionStep("step-1", "nginx-demo", "prod", 1)
 		c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
 			WithObjects(rp, step, makeBundle("bundle-1", "nginx-demo")).
-			WithStatusSubresource(rp, step).Build()
+			WithStatusSubresource(rp, step).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 		r := &rollbackpolicy.Reconciler{Client: c, NowFn: func() time.Time { return fixedNow }}
 		req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "rp-1", Namespace: "default"}}
 		get := func() v1alpha1.RollbackPolicy {
@@ -641,7 +641,7 @@ func TestReconciler_DeletedBeforeStatusWrite(t *testing.T) {
 	step := makePromotionStep("step-1", "nginx-demo", "prod", 2)
 	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
 		WithObjects(rp, step, makeBundle("bundle-1", "nginx-demo")).WithStatusSubresource(rp, step).
-		WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).Build()
+		WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r := &rollbackpolicy.Reconciler{Client: c, NowFn: func() time.Time { return fixedNow }}
 	var logs bytes.Buffer
 	res, err := r.Reconcile(objectgonetest.Context(&logs), ctrl.Request{

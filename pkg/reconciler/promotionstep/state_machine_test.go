@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 )
 
@@ -41,7 +42,7 @@ func newClient(t *testing.T, objs ...client.Object) client.Client {
 	t.Helper()
 	return fake.NewClientBuilder().WithScheme(buildScheme(t)).
 		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PRStatus{}, &v1alpha1.Bundle{}).
-		WithObjects(objs...).Build()
+		WithObjects(objs...).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 }
 
 // auditActions returns the sorted actions of every AuditEvent in the namespace.
@@ -396,7 +397,7 @@ func TestSupersession_CacheLagsOwnWrite(t *testing.T) {
 			}
 			api := fake.NewClientBuilder().WithScheme(buildScheme(t)).
 				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PRStatus{}, &v1alpha1.Bundle{}).
-				WithObjects(objs...).Build()
+				WithObjects(objs...).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			before := getStep(t, api, "step").Status
 			// The cached client serves the step as the cache had it before the
 			// previous reconcile's status patch; every write goes to api.

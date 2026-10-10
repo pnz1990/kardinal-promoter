@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
@@ -118,7 +119,7 @@ func TestSubscriptionReconciler_ImageType_NoChange(t *testing.T) {
 	sub.Status.LastSeenDigest = "sha256:existing"
 
 	s := newScheme()
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sub).WithStatusSubresource(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sub).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	r := &subscription.Reconciler{
 		Client: c,
@@ -146,7 +147,7 @@ func TestSubscriptionReconciler_ImageType_Changed(t *testing.T) {
 	sub.Status.LastSeenDigest = "sha256:old"
 
 	s := newScheme()
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sub).WithStatusSubresource(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sub).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	r := &subscription.Reconciler{
 		Client: c,
@@ -180,7 +181,7 @@ func TestSubscriptionReconciler_Deduplication(t *testing.T) {
 	sub.Status.LastSeenDigest = "sha256:same"
 
 	s := newScheme()
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sub).WithStatusSubresource(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sub).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	r := &subscription.Reconciler{
 		Client: c,
@@ -207,7 +208,7 @@ func TestSubscriptionReconciler_WatcherError(t *testing.T) {
 	sub := makeImageSub("sub-error", "default", "my-pipeline", "ghcr.io/test/app")
 
 	s := newScheme()
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sub).WithStatusSubresource(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sub).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	r := &subscription.Reconciler{
 		Client: c,
@@ -234,7 +235,7 @@ func TestSubscriptionReconciler_GitType_Changed(t *testing.T) {
 	sub.Status.LastSeenDigest = "0000000old"
 
 	s := newScheme()
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sub).WithStatusSubresource(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sub).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	r := &subscription.Reconciler{
 		Client: c,
@@ -260,7 +261,7 @@ func TestSubscriptionReconciler_Idempotent(t *testing.T) {
 	sub.Status.LastSeenDigest = "sha256:stable"
 
 	s := newScheme()
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sub).WithStatusSubresource(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sub).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	r := &subscription.Reconciler{
 		Client: c,
@@ -295,7 +296,7 @@ func TestSubscriptionReconciler_LabelSelectorDedup(t *testing.T) {
 	sub.Status.LastSeenDigest = ""
 
 	s := newScheme()
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sub).WithStatusSubresource(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sub).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	r := &subscription.Reconciler{
 		Client: c,
@@ -339,7 +340,7 @@ func TestSubscriptionReconciler_SourceDigestLabelIsDigestPrefix(t *testing.T) {
 	hex := strings.TrimPrefix(e2eDigest, "sha256:")
 	sub := makeImageSub("gaps-img2", "default", "gaps-sub-img", "ghcr.io/test/app")
 	sub.Status.LastSeenDigest = digestOf('0')
-	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r := &subscription.Reconciler{
 		Client: c,
 		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
@@ -403,7 +404,7 @@ func TestSubscriptionReconciler_LegacyDigestLabelStillDedups(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			sub := makeImageSub("gaps-img2", "default", "gaps-sub-img", "ghcr.io/test/app")
 			base := fake.NewClientBuilder().WithScheme(newScheme()).
-				WithObjects(sub, legacy(tt.existing)).WithStatusSubresource(sub).Build()
+				WithObjects(sub, legacy(tt.existing)).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			var c client.Client = base
 			if tt.staleList {
 				c = interceptor.NewClient(base, emptyBundleList)
@@ -512,7 +513,7 @@ func TestSubscriptionReconciler_RealOCIWatcher_NewPushCreatesBundle(t *testing.T
 
 	sub := makeImageSub("app-sub", "default", "my-pipeline", srv.URL+"/org/app")
 	sub.Spec.Image.TagFilter = `^v\d+\.\d+\.\d+$`
-	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r := newReconcilerWithRealWatchers(c, func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) }, srv.Client())
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}}
 
@@ -555,7 +556,7 @@ func TestSubscriptionReconciler_MutableTagRepush(t *testing.T) {
 
 	sub := makeImageSub("app-sub", "default", "my-pipeline", srv.URL+"/org/app")
 	sub.Spec.Image.TagFilter = "^latest$"
-	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r := newReconcilerWithRealWatchers(c, func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) }, srv.Client())
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}}
 
@@ -582,7 +583,7 @@ func TestSubscriptionReconciler_ReturningDigest(t *testing.T) {
 
 	sub := makeImageSub("app-sub", "default", "my-pipeline", srv.URL+"/org/app")
 	sub.Spec.Image.TagFilter = "^main$"
-	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	now := time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC)
 	r := newReconcilerWithRealWatchers(c, func() time.Time { now = now.Add(time.Second); return now }, srv.Client())
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}}
@@ -636,7 +637,7 @@ func TestSubscriptionReconciler_NameCollisionWithOtherDigestIsAnError(t *testing
 			Labels: map[string]string{"kardinal.io/subscription": "other", "kardinal.io/source-digest": "x"},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub, squatter).WithStatusSubresource(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub, squatter).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r := &subscription.Reconciler{
 		Client: c,
 		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
@@ -673,7 +674,7 @@ func TestSubscriptionReconciler_SpecNamespace(t *testing.T) {
 			sub := makeImageSub("app-sub", "default", "my-pipeline", "ghcr.io/org/app")
 			sub.Spec.Namespace = tt.specNS
 			sub.Status.LastSeenDigest = digestOf('0')
-			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
+			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			r := &subscription.Reconciler{
 				Client: c,
 				WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
@@ -718,7 +719,7 @@ func TestSubscriptionReconciler_DeletedBeforeStatusWrite(t *testing.T) {
 			sub := makeImageSub("sub-deleted", "default", "my-pipeline", "ghcr.io/test/app")
 			sub.Status.LastSeenDigest = "sha256:existing"
 			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).
-				WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).Build()
+				WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			r := &subscription.Reconciler{
 				Client: c,
 				WatcherFn: func(*kardinalv1alpha1.Subscription, source.Credentials) (source.Watcher, error) {

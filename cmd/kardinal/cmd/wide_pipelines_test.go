@@ -91,7 +91,7 @@ func TestPipelineTable_WideSummary(t *testing.T) {
 			Status:     v1alpha1.PromotionStepStatus{State: state},
 		})
 	}
-	c := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithObjects(objs...).Build()
+	c := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithObjects(objs...).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	var buf bytes.Buffer
 	require.NoError(t, getPipelinesOnce(&buf, c, "", nil, true))
@@ -128,7 +128,7 @@ func TestGetBundles_NewestFirst(t *testing.T) {
 		return b
 	}
 	c := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).
-		WithObjects(mk("app-nwxbj", 0), mk("app-84x44", 40), mk("app-tp67s", 44), mk("app-dczr7", 45)).Build()
+		WithObjects(mk("app-nwxbj", 0), mk("app-84x44", 40), mk("app-tp67s", 44), mk("app-dczr7", 45)).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	var buf bytes.Buffer
 	require.NoError(t, getBundlesFn(&buf, c, "default", []string{"app"}, false))
 	var names []string
@@ -156,7 +156,7 @@ func TestGetBundles_SameSecond(t *testing.T) {
 		mk("app-aaa", sec, 900),                          // same second, created last
 		mk("app-bbb", sec, 500), mk("app-ccc", sec, 500), // same instant: by name
 		mk("app-old", sec.Add(-time.Second), 999), // an earlier second wins over created-at
-	).Build()
+	).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	var buf bytes.Buffer
 	require.NoError(t, getBundlesFn(&buf, c, "default", []string{"app"}, false))
 	var names []string

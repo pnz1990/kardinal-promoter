@@ -71,6 +71,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
@@ -696,6 +697,10 @@ func urlHost(raw string) string {
 // PromotionStep objects, mapping them back to all NotificationHook instances so they are
 // re-evaluated on each relevant event.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Bundle reads of one Pipeline go through the spec.pipeline index (#1654).
+	if err := lifecycle.IndexBundlesByPipeline(context.Background(), mgr.GetFieldIndexer()); err != nil {
+		return err
+	}
 	// Map any Bundle/PolicyGate/PromotionStep change to all NotificationHooks in the same namespace.
 	mapToAllHooks := func(ctx context.Context, obj client.Object) []reconcile.Request {
 		var hooks v1alpha1.NotificationHookList

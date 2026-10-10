@@ -48,6 +48,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	pgrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	psrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	rprec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/rollbackpolicy"
@@ -114,7 +115,7 @@ func TestJourney1Quickstart(t *testing.T) {
 
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(pipeline, bundle, steps[0], steps[1], steps[2]).
-		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}).
+		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	rec := &psrec.Reconciler{
@@ -202,7 +203,7 @@ func TestJourney2MultiClusterFleet(t *testing.T) {
 
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(pipeline, bundle, steps[0], steps[1], steps[2], steps[3]).
-		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}).
+		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	rec := &psrec.Reconciler{
@@ -289,7 +290,7 @@ func TestJourney3PolicyGovernance(t *testing.T) {
 	// ── Test: weekend blocks ──────────────────────────────────────────────────
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(bundle, weekendGate).
-		WithStatusSubresource(&v1alpha1.PolicyGate{}).
+		WithStatusSubresource(&v1alpha1.PolicyGate{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	// Inject a Saturday timestamp via NowFn.
@@ -313,7 +314,7 @@ func TestJourney3PolicyGovernance(t *testing.T) {
 	tuesday := time.Date(2026, 4, 14, 10, 0, 0, 0, time.UTC) // Tuesday April 14, 2026
 	c2 := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(bundle, weekendGate.DeepCopy()).
-		WithStatusSubresource(&v1alpha1.PolicyGate{}).
+		WithStatusSubresource(&v1alpha1.PolicyGate{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 	rec2, err := pgrec.NewReconciler(c2)
 	require.NoError(t, err)
@@ -576,7 +577,7 @@ func journey4Rollback(t *testing.T, strategy appsv1.DeploymentStrategyType) {
 
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(pipeline, goodBundle, goodStep, badBundle, step, unhealthyDeploy, rollbackPolicy).
-		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}, &v1alpha1.RollbackPolicy{}).
+		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}, &v1alpha1.RollbackPolicy{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
@@ -810,7 +811,7 @@ func TestJourney6RenderedManifests(t *testing.T) {
 	step := makeJourneyStep("step-prod", "rendered-demo", "rendered-demo-v1", "prod", "auto")
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(pipeline, bundle, step).
-		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}).
+		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 	rec := &psrec.Reconciler{
 		Client:    c,
@@ -927,7 +928,7 @@ func TestJourney7MultiTenantSelfService(t *testing.T) {
 
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(orgGateTemplate, orgGateInstance, teamPipeline, bundle, otherPipeline).
-		WithStatusSubresource(&v1alpha1.PolicyGate{}).
+		WithStatusSubresource(&v1alpha1.PolicyGate{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	// ── Test 1: Namespace isolation — listing pipelines in payment-service ns ─────
@@ -961,7 +962,7 @@ func TestJourney7MultiTenantSelfService(t *testing.T) {
 	tuesday := time.Date(2026, 4, 14, 10, 0, 0, 0, time.UTC)
 	c2 := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(orgGateInstance.DeepCopy(), bundle.DeepCopy()).
-		WithStatusSubresource(&v1alpha1.PolicyGate{}).
+		WithStatusSubresource(&v1alpha1.PolicyGate{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 	pgRec2, err := pgrec.NewReconciler(c2)
 	require.NoError(t, err)
