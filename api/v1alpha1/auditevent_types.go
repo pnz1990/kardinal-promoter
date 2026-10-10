@@ -32,7 +32,8 @@ type AuditEventSpec struct {
 	// Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed",
 	//               "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
 	//               "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden",
-	//               "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased".
+	//               "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
+	//               "HoldBundleMissing".
 	// ApprovalRecorded and ApprovalRevoked are written by an approval gate
 	// when a decision (kardinal approve) appears in or leaves its
 	// spec.approvals.

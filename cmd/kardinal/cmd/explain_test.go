@@ -671,5 +671,5 @@ func TestExplain_ShowsHoldBundleMissing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "prod: held on rollback demo-rollback-gone by alice (INC-42), but the rollback Bundle does not exist since "+
 		since.UTC().Format(time.RFC3339)+". The hold stays in effect")
-	assert.Contains(t, out, "Release with: kardinal release-hold demo --env prod, or replace it with a new rollback --hold")
+	assert.Contains(t, out, "Release with: kardinal release-hold demo --env prod, then roll back with --hold again if wanted")
 }

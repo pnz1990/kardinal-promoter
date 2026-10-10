@@ -50,8 +50,9 @@ func controllerHoldGrace(t *testing.T, e *framework.Env) time.Duration {
 // effect, within the grace and after it, so a newer Bundle promotes to test
 // but gets no prod step. Past the grace the controller reports it once: the
 // HoldBundleMissing condition with the release command, a Warning Event and
-// a HoldBundleMissing AuditEvent; explain shows the command. Releasing the
-// hold is the way out: the newer Bundle then promotes into prod.
+// a HoldBundleMissing AuditEvent; explain shows the command, and a second
+// --hold is refused. The recovery is release-hold (the newer Bundle then
+// promotes into prod), then rollback --hold again.
 //
 // Covers RB-HOLD-03.
 func TestRollback_HoldBundleMissing(t *testing.T) {
@@ -147,7 +148,12 @@ func TestRollback_HoldBundleMissing(t *testing.T) {
 	assert.Contains(t, explain, "but the rollback Bundle does not exist")
 	assert.Contains(t, explain, "Release with: kardinal release-hold "+pipelineName+" --env prod")
 
-	// The way out: release the hold, and the newer Bundle promotes to prod.
+	// A second hold is refused while this one is there, missing Bundle or not.
+	again := rbRefused(t, a, "--env", "prod", "--hold", "--reason", "again")
+	assert.Contains(t, again, "environment prod is already held on "+missing)
+
+	// The documented recovery: release the hold (the newer Bundle then
+	// promotes to prod), then roll back and hold again.
 	e.MustKardinal(t, a.ns, "release-hold", pipelineName, "--env", "prod")
 	rbVerified(t, a, b2, "prod")
 	assertEnvAt(t, a, "prod", fixtures.V3)
@@ -155,4 +161,16 @@ func TestRollback_HoldBundleMissing(t *testing.T) {
 		p, _ := pipe(ctx)
 		return p != nil && len(p.Spec.Holds) == 0 && len(p.Status.HoldStates) == 0, "holds still recorded"
 	})
+	_, rb := rbRollback(t, a, "prod", "--hold", "--reason", "INC-7: hold again")
+	rbVerified(t, a, rb, "prod")
+	assertEnvAt(t, a, "prod", fixtures.V2)
+	framework.Eventually(t, time.Minute, "the new hold is Active", func(ctx context.Context) (bool, string) {
+		p, ok := pipe(ctx)
+		if !ok {
+			return false, "no hold state"
+		}
+		st := p.Status.HoldStates[0]
+		return st.Bundle == rb && st.State == v1alpha1.HoldStateActive, st.Bundle + " " + st.State
+	})
+	e.MustKardinal(t, a.ns, "release-hold", pipelineName, "--env", "prod")
 }

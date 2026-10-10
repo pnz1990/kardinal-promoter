@@ -295,7 +295,7 @@ func RollbackAndHold(ctx context.Context, c client.Client, req HoldRequest) (*Ro
 	// the held rollback, so the plan would fail for a less useful reason.
 	var p v1alpha1.Pipeline
 	if err := c.Get(ctx, types.NamespacedName{Namespace: req.Namespace, Name: req.Pipeline}, &p); err == nil {
-		if h := HoldOf(&p, req.Environment); h != nil && !Replaceable(&p, h) {
+		if h := HoldOf(&p, req.Environment); h != nil {
 			return nil, nil, heldConflict(req.Pipeline, h)
 		}
 	}
@@ -337,12 +337,11 @@ func setHold(ctx context.Context, c client.Client, ns, pipeline string, hold v1a
 			}
 			return fmt.Errorf("get pipeline %s/%s: %w", ns, pipeline, err)
 		}
-		if h := HoldOf(&p, hold.Environment); h != nil && !Replaceable(&p, h) {
+		if h := HoldOf(&p, hold.Environment); h != nil {
 			return heldConflict(pipeline, h)
 		}
 		// An expired entry of the environment the controller has not
-		// removed yet makes way (one entry per environment), and so does a
-		// hold whose rollback Bundle the controller reported missing.
+		// removed yet makes way (one entry per environment).
 		kept := make([]v1alpha1.EnvironmentHold, 0, len(p.Spec.Holds)+1)
 		for _, x := range p.Spec.Holds {
 			if x.Environment != hold.Environment {
@@ -353,15 +352,6 @@ func setHold(ctx context.Context, c client.Client, ns, pipeline string, hold v1a
 		p.Spec.Holds = kept
 		return c.Update(ctx, &p)
 	})
-}
-
-// Replaceable reports whether a new hold may replace h: the controller
-// reported its rollback Bundle missing past the grace (status.holdStates,
-// #1629). Writing the new hold needs pipelines/hold like any other, and the
-// controller itself never lifts a hold.
-func Replaceable(p *v1alpha1.Pipeline, h *v1alpha1.EnvironmentHold) bool {
-	st := p.HoldState(h)
-	return st != nil && st.State == v1alpha1.HoldStateBundleMissing && st.ReportedAt != nil
 }
 
 // heldConflict is the refusal to hold an environment that is held already.

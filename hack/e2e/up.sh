@@ -73,7 +73,7 @@ case "$SUITE" in
   # tests against their git server, plus the tests named after it.
   core) COMPONENTS=("giteafamily.sh forgejo" argocd.sh webhook-receiver.sh registry.sh ciapi.sh)
     RUN='^Test(Core|SCM|Forgejo|Gate|Bundle|Pipeline|Graph|Step|Rollback|Health|CLI|CIAPI|Notify|Sub|Audit)_'
-    # A short grace for holds naming a missing Bundle (TestRollback_OrphanedHold).
+    # A short grace for holds naming a missing Bundle (TestRollback_HoldBundleMissing).
     HELM_ARGS='--set controller.extraArgs={--hold-bundle-grace=30s}' ;;
   gitea) COMPONENTS=("giteafamily.sh gitea" argocd.sh) RUN='^Test(Core|SCM|Gitea)_' ;;
   gitlab) COMPONENTS=(gitlab.sh argocd.sh) RUN='^Test(Core|SCM|GitLab)_' ;;

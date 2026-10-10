@@ -77,7 +77,7 @@ type holdCheck struct {
 // createdAt is not trusted). The hold stays in effect whatever its state:
 // past the grace (--hold-bundle-grace) the controller reports it once
 // (ReportedAt; the caller writes the condition, Event, AuditEvent and
-// metric) and a human releases or replaces it. A Bundle that exists again
+// metric) and a human releases it. A Bundle that exists again
 // makes the hold Active.
 func (r *Reconciler) holdStates(ctx context.Context, p *kardinalv1alpha1.Pipeline, now time.Time) holdCheck {
 	var out holdCheck
@@ -86,7 +86,8 @@ func (r *Reconciler) holdStates(ctx context.Context, p *kardinalv1alpha1.Pipelin
 	for i := range p.Spec.Holds {
 		h := &p.Spec.Holds[i]
 		prev := p.HoldState(h)
-		st := kardinalv1alpha1.EnvironmentHoldState{Environment: h.Environment, Bundle: h.Bundle, State: kardinalv1alpha1.HoldStateActive}
+		st := kardinalv1alpha1.EnvironmentHoldState{Environment: h.Environment, Bundle: h.Bundle, CreatedAt: h.CreatedAt,
+			State: kardinalv1alpha1.HoldStateActive}
 		var b kardinalv1alpha1.Bundle
 		err := r.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: h.Bundle}, &b)
 		switch {
@@ -109,7 +110,7 @@ func (r *Reconciler) holdStates(ctx context.Context, p *kardinalv1alpha1.Pipelin
 				}
 			} else {
 				st.Message = fmt.Sprintf("rollback Bundle %s does not exist (missing since %s); the hold stays in effect "+
-					"and no other Bundle promotes into %s. Release it with: %s, or replace it with a new rollback --hold",
+					"and no other Bundle promotes into %s. Release it with: %s, then roll back with --hold again if wanted",
 					h.Bundle, since.UTC().Format(time.RFC3339), h.Environment, releaseCommand(p, h))
 				if st.ReportedAt == nil {
 					st.ReportedAt = &at

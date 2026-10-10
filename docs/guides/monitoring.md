@@ -90,7 +90,7 @@ The controller registers these on the same `/metrics` endpoint
 | `kardinal_gate_blocking_duration_seconds` | Histogram | — | How long a PolicyGate was blocked before it allowed |
 | `kardinal_promotionstep_age_seconds` | Histogram | — | PromotionStep age when it reaches a terminal state |
 | `kardinal_auditevents_pruned_total` | Counter | — | AuditEvents deleted by retention (`audit.retention`) |
-| `kardinal_hold_bundle_missing_total` | Counter | `pipeline_namespace`, `pipeline` | Holds whose rollback Bundle has been missing for `--hold-bundle-grace`, once per hold. The hold stays in effect until released ([A hold whose rollback Bundle does not exist](../rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |
+| `kardinal_hold_bundle_missing_total` | Counter | `pipeline_namespace`, `pipeline` | Holds whose rollback Bundle has been missing for `--hold-bundle-grace`, at most once per hold (the `HoldBundleMissing` AuditEvent is the durable record). The hold stays in effect until released ([A hold whose rollback Bundle does not exist](../rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |
 
 ### SCM API and git metrics
 

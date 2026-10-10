@@ -397,26 +397,39 @@ func TestPipelineHolds_DeletedBundleKeepsHold(t *testing.T) {
 	assert.Equal(t, metav1.ConditionFalse, cond.Status)
 }
 
-// TestPipelineHolds_ReplaceReportedHold: a new hold may replace one whose
-// Bundle was reported missing (the new write needs pipelines/hold anyway),
-// and not one that is Active or still within the grace.
+// TestPipelineHolds_ReaddedHoldReportedAgain (#1631 QA): a hold whose
+// missing Bundle was reported, released and added again (the same
+// environment and Bundle, a new createdAt) is a new hold: its state starts
+// over and it gets a report of its own.
 // Covers RB-HOLD-04.
-func TestPipelineHolds_ReplaceReportedHold(t *testing.T) {
+func TestPipelineHolds_ReaddedHoldReportedAgain(t *testing.T) {
 	at := metav1.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	f := newMissingFixture(t, kardinalv1alpha1.EnvironmentHold{Environment: "prod", Bundle: "app-rollback-gone",
 		Reason: "INC-42", CreatedAt: &at})
+	metric := testutil.ToFloat64(observability.HoldBundleMissingTotal.WithLabelValues("default", "app"))
 	f.reconcile()
-	h := f.get().Spec.Holds[0]
-	assert.False(t, lifecycle.Replaceable(f.get(), &h), "within the grace")
 	f.now = f.now.Add(2 * time.Minute)
 	f.reconcile()
-	assert.True(t, lifecycle.Replaceable(f.get(), &h), "reported")
+	f.reconcile()
+	ev, au, m := f.signals(metric)
+	require.Equal(t, [3]float64{1, 1, 1}, [3]float64{float64(ev), float64(au), m})
 
-	active := newMissingFixture(t, kardinalv1alpha1.EnvironmentHold{Environment: "prod", Bundle: "app-rollback-1",
-		Reason: "r", CreatedAt: &at}, holdBundle("app-rollback-1"))
-	active.reconcile()
-	ah := active.get().Spec.Holds[0]
-	assert.False(t, lifecycle.Replaceable(active.get(), &ah), "an Active hold is not replaceable")
+	// Released, then held again on the same Bundle name.
+	_, err := lifecycle.ReleaseHold(context.Background(), f.c, "default", "app", "prod")
+	require.NoError(t, err)
+	at2 := metav1.NewTime(f.now)
+	p := f.get()
+	p.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rollback-gone", Reason: "INC-43", CreatedAt: &at2}}
+	require.NoError(t, f.c.Update(context.Background(), p))
+	f.reconcile()
+	st := f.state()
+	assert.Nil(t, st.ReportedAt, "a new hold: not reported yet")
+	assert.Equal(t, f.now, st.BundleMissingSince.UTC(), "its own first sighting")
+	f.now = f.now.Add(2 * time.Minute)
+	f.reconcile()
+	f.reconcile()
+	ev, au, m = f.signals(metric)
+	assert.Equal(t, [3]float64{1, 2, 2}, [3]float64{float64(ev), float64(au), m}, "a report of its own")
 }
 
 // failingBundleGets fails every Bundle read with a server error.
