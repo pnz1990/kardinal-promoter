@@ -815,47 +815,24 @@ func (r *Reconciler) hasNewerSibling(ctx context.Context, b *kardinalv1alpha1.Bu
 // or Available may itself wait for the slot, so it does not count.
 func (r *Reconciler) newerSiblings(ctx context.Context, b *kardinalv1alpha1.Bundle,
 	countVerified bool) (newer, replaced bool, err error) {
-	// The Bundle an environment is held on (spec.holds, kardinal rollback
-	// --hold) is never superseded: the hold pins the environment to it until
-	// it is released.
-	var p kardinalv1alpha1.Pipeline
-	gotPipeline := r.Get(ctx, client.ObjectKey{Namespace: b.Namespace, Name: b.Spec.Pipeline}, &p) == nil
-	if gotPipeline && lifecycle.HoldNaming(&p, b.Name) != nil {
-		return false, false, nil
+	// lifecycle.SupersedingSiblings decides, with the push guard of the
+	// PromotionStep reconciler (#1603): the same type, no rejected artifact,
+	// in flight (or Verified with countVerified), newer, b not held, and not
+	// the rollback of another fleet target (D1).
+	var p *kardinalv1alpha1.Pipeline
+	var pl kardinalv1alpha1.Pipeline
+	if getErr := r.Get(ctx, client.ObjectKey{Namespace: b.Namespace, Name: b.Spec.Pipeline}, &pl); getErr == nil {
+		p = &pl
 	}
 	siblings, err := r.pipelineBundleList(ctx, b.Namespace, b.Spec.Pipeline)
 	if err != nil {
 		return false, false, fmt.Errorf("list bundles for supersession check: %w", err)
 	}
 	rejected := lifecycle.RejectedArtifactsOf(siblings, b.Spec.Pipeline)
-	for i := range siblings {
-		s := &siblings[i]
-		if s.Name == b.Name || s.Spec.Type != b.Spec.Type {
-			continue // image bundles are only superseded by image bundles, etc.
-		}
-		if _, bad := rejected.Carries(s); bad {
-			continue // a rejected Bundle, or one carrying a rejected artifact, never promotes: it supersedes nothing
-		}
-		if gotPipeline && targetRollback(&p, s) != "" && targetRollback(&p, s) != targetRollback(&p, b) {
-			// The rollback of one fleet target (kardinal rollback --env
-			// <fleet>-<target>) does not stop the fleet's rollout to the
-			// other targets (D1). A rollback of the same target still
-			// supersedes an older one.
-			continue
-		}
-		switch s.Status.Phase {
-		case phaseSuperseded, phaseFailed, phaseRejected:
-			continue
-		case phaseVerified:
-			if !countVerified {
-				continue
-			}
-		}
-		if lifecycle.CompareCreation(s, b) > 0 {
-			newer = true
-			if s.Status.Phase == phasePromoting || s.Status.Phase == phaseVerified {
-				replaced = true
-			}
+	for _, s := range lifecycle.SupersedingSiblings(p, b, siblings, rejected, countVerified, "") {
+		newer = true
+		if s.Status.Phase == phasePromoting || s.Status.Phase == phaseVerified {
+			replaced = true
 		}
 	}
 	return newer, replaced, nil
@@ -912,19 +889,6 @@ func (r *Reconciler) keepRemovedFleetTargets(ctx context.Context, log zerolog.Lo
 	b.Status.RetiredSteps = rec.Status.RetiredSteps
 	b.ResourceVersion = rec.ResourceVersion
 	return nil
-}
-
-// targetRollback is the fleet target b rolls back when b is the rollback of
-// one fleet target (label kardinal.io/rollback, intent.targetEnvironment a
-// target of a fleet of p), else "".
-func targetRollback(p *kardinalv1alpha1.Pipeline, b *kardinalv1alpha1.Bundle) string {
-	if b.Labels[lifecycle.LabelRollback] != "true" || b.Spec.Intent == nil || !graph.HasFleets(p) {
-		return ""
-	}
-	if t := b.Spec.Intent.TargetEnvironment; t != "" && graph.FleetOf(p, t) != "" {
-		return t
-	}
-	return ""
 }
 
 // pipelineBundleList lists the Bundles of a pipeline through the spec.pipeline index.
@@ -1535,8 +1499,31 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 					fmt.Sprintf("promotion failed for pipeline %s: %s", b.Spec.Pipeline, msg))
 				observability.BundlesTotal.WithLabelValues(phaseFailed).Inc()
 			})
+		case supersededStep(steps) != nil:
+			// A step refused its push because a Bundle that supersedes this
+			// one already pushed to its environment (#1603). The check above
+			// supersedes a Promoting Bundle only for a newer one in flight;
+			// one that is Verified already supersedes it here. Not a failure.
+			s := supersededStep(steps)
+			supersede(b)
+			setBundleCondition(b, condReady, metav1.ConditionFalse, "Superseded",
+				fmt.Sprintf("environment %s: %s", s.Spec.Environment, s.Status.Message))
+			after = append(after, func() { r.superseded(b) })
+		case pipeline != nil && supersededFleet(pipeline, b, steps) != "":
+			// Every target of a fleet was deployed by newer Bundles (each
+			// step Superseded): this Bundle was replaced everywhere there.
+			fleet := supersededFleet(pipeline, b, steps)
+			supersede(b)
+			setBundleCondition(b, condReady, metav1.ConditionFalse, "Superseded",
+				fmt.Sprintf("every target of fleet %s was deployed by a newer bundle", fleet))
+			after = append(after, func() { r.superseded(b) })
 		case pipeline != nil:
 			expected, err := graph.PromotedEnvironments(pipeline, b)
+			// A fleet target whose step is Superseded (#1603: the rollback
+			// of that one target pushed first) is settled: the Bundle is
+			// Verified when every other environment is.
+			settled := supersededTargets(steps)
+			expected = slices.DeleteFunc(slices.Clone(expected), func(e string) bool { return settled[e] })
 			if err == nil && allVerified(b.Status.Environments, expected) {
 				b.Status.Phase = phaseVerified
 				if b.Status.Metrics == nil {
@@ -1764,6 +1751,67 @@ func (r *Reconciler) event(b *kardinalv1alpha1.Bundle, eventType, reason, messag
 		action = "Reconcile"
 	}
 	kubeevent.Emit(r.Recorder, b, eventType, reason, action, message)
+}
+
+// supersededStep returns the first of steps that ended Superseded (it did not
+// push because a newer Bundle had pushed to its environment, #1603), or nil.
+// A fleet target's step does not count: the rollback of one target does not
+// stop the fleet's rollout to the others (D1); that target is settled
+// (supersededTargets).
+func supersededStep(steps []kardinalv1alpha1.PromotionStep) *kardinalv1alpha1.PromotionStep {
+	for i := range steps {
+		if steps[i].Status.State == phaseSuperseded && steps[i].Labels[graph.LabelFleet] == "" {
+			return &steps[i]
+		}
+	}
+	return nil
+}
+
+// supersededFleet returns a fleet of p that b promotes whose every target has
+// a Superseded step, or "".
+func supersededFleet(p *kardinalv1alpha1.Pipeline, b *kardinalv1alpha1.Bundle, steps []kardinalv1alpha1.PromotionStep) string {
+	settled := supersededTargets(steps)
+	if len(settled) == 0 {
+		return ""
+	}
+	expected, err := graph.PromotedEnvironments(p, b)
+	if err != nil {
+		return ""
+	}
+	targets, done := map[string]int{}, map[string]int{}
+	var fleets []string
+	for _, e := range expected {
+		f := graph.FleetOf(p, e)
+		if f == "" {
+			continue
+		}
+		if targets[f] == 0 {
+			fleets = append(fleets, f)
+		}
+		targets[f]++
+		if settled[e] {
+			done[f]++
+		}
+	}
+	for _, f := range fleets {
+		if done[f] == targets[f] {
+			return f
+		}
+	}
+	return ""
+}
+
+// supersededTargets returns the fleet targets whose step is Superseded: they
+// are settled, neither Verified nor failed (the compact Graph's
+// supersededTargets).
+func supersededTargets(steps []kardinalv1alpha1.PromotionStep) map[string]bool {
+	out := map[string]bool{}
+	for i := range steps {
+		if steps[i].Status.State == phaseSuperseded && steps[i].Labels[graph.LabelFleet] != "" {
+			out[steps[i].Spec.Environment] = true
+		}
+	}
+	return out
 }
 
 // failedState reports whether a PromotionStep state is a failure.

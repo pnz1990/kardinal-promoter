@@ -242,6 +242,12 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 	}
 	entries := make([]interface{}, len(steps))
 	fleets := stepsHaveFleets(steps)
+	fleetOf := map[string]string{}
+	for _, s := range steps {
+		if s.fleet != "" {
+			fleetOf[s.env] = s.fleet
+		}
+	}
 	for i, s := range steps {
 		upstreamStates := make([]interface{}, len(s.upstreams))
 		for j := range upstreamStates {
@@ -262,6 +268,7 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 		if fleets {
 			e := entries[i].(map[string]interface{})
 			e["fleet"], e["index"], e["maxConcurrent"], e["maxUnavailable"] = s.fleet, s.index, s.maxConcurrent, s.maxUnavailable
+			e["upstreamGroups"] = upstreamGroups(s.upstreams, fleetOf)
 		}
 		if anyHooks || anyAnalyses {
 			// Hooks and analyses (compact_extras.go): the step's lists, and
@@ -297,18 +304,30 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 	// collection is not referenced: kro publishes a collection only when every
 	// item applied (G11), and a step names its PRStatus literally and waits
 	// for it in WaitingForMerge.
-	ready := fmt.Sprintf("%shold == false && e.held == false && e.upstreams.all(u, u in %sverified) && e.gates.all(g, g in %sreadyGates)",
-		state, state, state)
+	// The upstreams are done when they are Verified. In a Pipeline with a
+	// fleet they come in groups, one per fleet (upstreamGroups): a group is
+	// done when every target is Verified or Superseded (#1603: a newer
+	// Bundle, the rollback of that one target, deployed it) and at least one
+	// is Verified, so a fleet that only newer Bundles deployed does not let
+	// the environments after it start.
+	upstreamsDone := fmt.Sprintf("e.upstreams.all(u, u in %sverified)", state)
+	if fleets {
+		upstreamsDone = fmt.Sprintf("e.upstreamGroups.all(g, g.all(u, u in %sverified || u in %ssupersededTargets) && g.exists(u, u in %sverified))",
+			state, state, state)
+	}
+	ready := fmt.Sprintf("%shold == false && e.held == false && %s && e.gates.all(g, g in %sreadyGates)",
+		state, upstreamsDone, state)
 	wave := fmt.Sprintf("${%s.steps.filter(e, e.environment in %sstarted || (%s))}", NodePromotionDAG, state, ready)
 	var eligible *GraphNode
 	if fleets {
 		// A fleet target that is ready also waits for a place: at most
 		// maxConcurrent of its fleet's targets are in flight (a step exists
-		// and is not Verified; a Failed one keeps its place). The ready
-		// targets without a step are ranked by their place in the fleet.
+		// and is not settled, Verified or Superseded; a Failed one keeps its
+		// place). The ready targets without a step are ranked by their place
+		// in the fleet.
 		eligible = &GraphNode{ID: NodePromotionEligible, Def: map[string]interface{}{"steps": fmt.Sprintf(
 			"${%s.steps.filter(e, !(e.environment in %sstarted) && %s)}", NodePromotionDAG, state, ready)}}
-		inFlight := fmt.Sprintf("(size(%sstartedFleets.filter(f, f == e.fleet)) - size(%sverifiedFleets.filter(f, f == e.fleet)))",
+		inFlight := fmt.Sprintf("(size(%sstartedFleets.filter(f, f == e.fleet)) - size(%ssettledFleets.filter(f, f == e.fleet)))",
 			state, state)
 		rank := fmt.Sprintf("size(%s.steps.filter(x, x.fleet == e.fleet && x.index < e.index))", NodePromotionEligible)
 		// maxUnavailable: once that many of the fleet's targets Failed,
@@ -409,8 +428,22 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 	if fleets {
 		stateDef := nodes[2].Def
 		stateDef["startedFleets"] = fmt.Sprintf(`${%s.map(s, s.metadata.labels[?"%s"].orValue(""))}`, NodeStepsObserved, LabelFleet)
-		stateDef["verifiedFleets"] = fmt.Sprintf(`${%s.filter(s, s.?status.?state.orValue("") == "Verified").map(s, s.metadata.labels[?"%s"].orValue(""))}`,
+		// Settled: Verified, or Superseded (#1603: the step did not push
+		// because a newer Bundle, the rollback of that one target, had). A
+		// settled target frees its place; a Superseded one is neither
+		// Verified nor a failure.
+		stateDef["settledFleets"] = fmt.Sprintf(`${%s.filter(s, s.?status.?state.orValue("") in ["Verified", "Superseded"]).map(s, s.metadata.labels[?"%s"].orValue(""))}`,
 			NodeStepsObserved, LabelFleet)
+		stateDef["supersededTargets"] = fmt.Sprintf(`${%s.filter(s, s.?status.?state.orValue("") == "Superseded" && s.metadata.labels[?"%s"].orValue("") != "").map(s, s.metadata.labels["kardinal.io/environment"])}`,
+			NodeStepsObserved, LabelFleet)
+		// The Graph is complete when every environment is settled: Verified,
+		// or a fleet target Superseded.
+		progress := nodes[len(nodes)-1]
+		progress.Def["settled"] = fmt.Sprintf("${size(%sverified) + size(%ssupersededTargets)}", state, state)
+		progress.ReadyWhen = []string{fmt.Sprintf("${%s.settled == %s.total}", NodePromotionProgress, NodePromotionProgress)}
+		nodes[len(nodes)-1] = progress
+		nodes[4].ReadyWhen = []string{fmt.Sprintf(`${each.?status.?state.orValue("") == "Verified" || `+
+			`(each.?status.?state.orValue("") == "Superseded" && each.metadata.labels[?"%s"].orValue("") != "")}`, LabelFleet)}
 		// A failure is Failed, AbortedByAlarm or RollingBack, as the Bundle
 		// reconciler counts it (failedState).
 		stateDef["failedFleets"] = fmt.Sprintf(`${%s.filter(s, s.?status.?state.orValue("") in ["Failed", "AbortedByAlarm", "RollingBack"]).map(s, s.metadata.labels[?"%s"].orValue(""))}`,
@@ -518,6 +551,28 @@ func toInterfaces(s []string) []interface{} {
 	out := make([]interface{}, len(s))
 	for i, v := range s {
 		out[i] = v
+	}
+	return out
+}
+
+// upstreamGroups groups upstreams by fleet, in their order: the targets of
+// one fleet are one group, any other upstream is a group of its own.
+func upstreamGroups(upstreams []string, fleetOf map[string]string) []interface{} {
+	var out []interface{}
+	at := map[string]int{}
+	for _, u := range upstreams {
+		f := fleetOf[u]
+		if i, ok := at[f]; ok && f != "" {
+			out[i] = append(out[i].([]interface{}), u)
+			continue
+		}
+		if f != "" {
+			at[f] = len(out)
+		}
+		out = append(out, []interface{}{u})
+	}
+	if out == nil {
+		out = []interface{}{}
 	}
 	return out
 }

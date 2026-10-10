@@ -669,3 +669,83 @@ func TestFleet_AdmittedOnceObserved(t *testing.T) {
 		assert.Equal(t, want, evalCEL(t, expr, vars), env)
 	}
 }
+
+// TestFleet_SupersededTargetIsSettled (#1603 with D1): the rollback of one
+// fleet target is a newer Bundle that pushed there, so the fleet Bundle's
+// step for that target refuses its push and ends Superseded. That target is
+// settled: it frees its maxConcurrent place, it is neither Verified nor a
+// failure (maxUnavailable), the environments after the fleet start once
+// every other target is Verified, and the Graph completes.
+//
+// Covers FLEET-08.
+func TestFleet_SupersededTargetIsSettled(t *testing.T) {
+	one := 1
+	p := bigFleet(3, 1, &one)
+	p.Spec.Environments = append(p.Spec.Environments, kardinalv1alpha1.EnvironmentSpec{Name: "audit"})
+	sim := fleetSim(t, p)
+	sim.advance()
+	sim.steps["test"] = "Verified"
+	assert.Equal(t, []string{"prod-t00", "test"}, sim.advance(), "maxConcurrent 1: one target at a time")
+
+	sim.steps["prod-t00"] = "Superseded" // a rollback of prod-t00 pushed first
+	assert.Contains(t, sim.advance(), "prod-t01", "a Superseded target frees its place, and is no failure under maxUnavailable 1")
+	assert.NotContains(t, sim.steps, "audit", "audit waits for the other targets")
+
+	sim.steps["prod-t01"] = "Verified"
+	assert.Contains(t, sim.advance(), "prod-t02")
+	_, complete := sim.wave()
+	assert.False(t, complete, "prod-t02 and audit are not settled")
+	assert.NotContains(t, sim.steps, "audit", "audit waits for prod-t02")
+
+	sim.steps["prod-t02"] = "Verified"
+	assert.Contains(t, sim.advance(), "audit", "every target that is not Superseded is Verified: audit starts")
+	_, complete = sim.wave()
+	assert.False(t, complete, "audit is not Verified yet")
+	sim.steps["audit"] = "Verified"
+	_, complete = sim.wave()
+	assert.True(t, complete, "every environment is settled: Verified, or a Superseded fleet target")
+
+	// A Superseded step outside a fleet is not settled: its Bundle is
+	// superseded (the Bundle reconciler), so the Graph never completes on it.
+	sim.steps["test"] = "Superseded"
+	_, complete = sim.wave()
+	assert.False(t, complete)
+}
+
+// TestFleet_SupersededTargetIsNoFailure: a Superseded target does not count
+// toward maxUnavailable, while a Failed one does.
+//
+// Covers FLEET-08.
+func TestFleet_SupersededTargetIsNoFailure(t *testing.T) {
+	one := 1
+	sim := fleetSim(t, bigFleet(4, 2, &one))
+	sim.steps["test"] = "Verified"
+	assert.Equal(t, []string{"prod-t00", "prod-t01", "test"}, sim.advance())
+	sim.steps["prod-t00"] = "Superseded"
+	assert.Contains(t, sim.advance(), "prod-t02", "Superseded is no failure")
+	sim.steps["prod-t01"] = "Failed"
+	before := len(sim.steps)
+	sim.advance()
+	assert.Len(t, sim.steps, before, "one Failed target stops the rollout under maxUnavailable 1")
+}
+
+// TestFleet_AllTargetsSupersededHoldsDownstream: a fleet whose every target is
+// Superseded has no Verified target, so the environments after it do not
+// start (the Bundle reconciler supersedes the Bundle: it was replaced
+// everywhere there). One Verified target among Superseded ones is enough.
+//
+// Covers FLEET-08.
+func TestFleet_AllTargetsSupersededHoldsDownstream(t *testing.T) {
+	p := bigFleet(2, 0, nil)
+	p.Spec.Environments = append(p.Spec.Environments, kardinalv1alpha1.EnvironmentSpec{Name: "audit"})
+	sim := fleetSim(t, p)
+	sim.steps["test"] = "Verified"
+	sim.advance()
+	sim.steps["prod-t00"], sim.steps["prod-t01"] = "Superseded", "Superseded"
+	assert.NotContains(t, sim.advance(), "audit", "no Verified target: audit waits")
+	_, complete := sim.wave()
+	assert.False(t, complete)
+
+	sim.steps["prod-t01"] = "Verified"
+	assert.Contains(t, sim.advance(), "audit", "one Verified target and the rest Superseded: audit starts")
+}

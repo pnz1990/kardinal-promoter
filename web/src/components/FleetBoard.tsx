@@ -35,7 +35,13 @@ function fleetNote(s: Station): string {
   const parts = [`${f.verified}/${f.total} verified`]
   if (f.inFlight > 0) parts.push(`${f.inFlight} in flight${f.maxConcurrent > 0 ? ` (max ${f.maxConcurrent})` : ''}`)
   if (f.failed > 0) parts.push(`${f.failed} failed`)
+  if (f.superseded > 0) parts.push(`${f.superseded} superseded (${namesOf(f.supersededTargets)})`)
   return parts.join(', ')
+}
+
+/** Up to three names, then "...". */
+function namesOf(names: string[]): string {
+  return names.length > 3 ? [...names.slice(0, 3), '...'].join(', ') : names.join(', ')
 }
 
 /** What a station says under its version. */
@@ -76,7 +82,7 @@ function Rail({ row, index }: { row: FleetRow; index: number }) {
   )
 }
 
-/** A fleet's targets as one bar: Verified, in flight, Failed, still to go. */
+/** A fleet's targets as one bar: Verified, in flight, Failed, Superseded, still to go. */
 function FleetBar({ f }: { f: NonNullable<Station['fleet']> }) {
   const pct = (n: number) => `${(100 * n) / f.total}%`
   return (
@@ -84,6 +90,7 @@ function FleetBar({ f }: { f: NonNullable<Station['fleet']> }) {
       <span data-part="verified" style={{ width: pct(f.verified) }} />
       <span data-part="inflight" style={{ width: pct(f.inFlight) }} />
       <span data-part="failed" style={{ width: pct(f.failed) }} />
+      <span data-part="superseded" style={{ width: pct(f.superseded) }} />
     </span>
   )
 }
