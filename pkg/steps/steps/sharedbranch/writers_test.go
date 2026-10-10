@@ -25,6 +25,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
+
 	// The built-in steps (git-clone, git-commit, git-push) register here.
 	_ "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
