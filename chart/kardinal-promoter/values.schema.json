@@ -598,7 +598,7 @@
           "properties": {
             "enabled": {
               "type": "boolean",
-              "description": "Turn AuditEvent retention on (off by default) and grant delete on AuditEvents."
+              "description": "AuditEvent retention (on by default) and delete on AuditEvents; false keeps every record."
             },
             "maxAge": {
               "type": "string",

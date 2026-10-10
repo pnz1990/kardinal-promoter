@@ -324,3 +324,26 @@ func TestPruner_CountCapGrace(t *testing.T) {
 	assert.Equal(t, 2, n)
 	assert.Equal(t, []string{"a/burst-2", "a/burst-3"}, names(t, c), "an Interval later, trimmed to the cap")
 }
+
+// TestPruner_RecordsWithoutPipeline: records that name no Pipeline (no
+// kardinal.io/pipeline label: API writes, overrides of standalone gates) are
+// capped too, as one bucket per namespace of at most MaxPerPipeline, oldest
+// first; a Pipeline's records in that namespace do not count against it.
+//
+// Covers AUDIT-RETENTION-02.
+func TestPruner_RecordsWithoutPipeline(t *testing.T) {
+	var objs []client.Object
+	for i := 0; i < 4; i++ {
+		ae := event("a", "", fmt.Sprintf("api-%d", i), now.Add(time.Duration(i)*time.Second))
+		delete(ae.Labels, "kardinal.io/pipeline")
+		objs = append(objs, ae)
+	}
+	objs = append(objs, event("a", "web", "web-0", now), event("a", "web", "web-1", now.Add(time.Second)))
+	c := newPaged(t, objs...)
+	p := &auditretention.Pruner{Client: c, MaxPerPipeline: 2, Now: func() time.Time { return now.Add(time.Hour) }}
+	n, err := p.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+	assert.Equal(t, []string{"a/api-2", "a/api-3", "a/web-0", "a/web-1"}, names(t, c))
+	assert.Equal(t, []string{"api-0", "api-1"}, c.deletes, "oldest first")
+}

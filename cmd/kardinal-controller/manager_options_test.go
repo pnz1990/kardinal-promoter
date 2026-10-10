@@ -191,3 +191,11 @@ func TestManagerOptions_LeaderElectionClient(t *testing.T) {
 
 	assert.Nil(t, buildManagerOptions(managerConfig{leaderElect: true}).LeaderElectionConfig)
 }
+
+// TestAuditRetentionDefault: AuditEvent retention is on unless turned off
+// (--audit-retention=false); the chart passes the flag either way.
+//
+// Covers AUDIT-RETENTION-02.
+func TestAuditRetentionDefault(t *testing.T) {
+	assert.True(t, auditRetentionDefault, "unbounded AuditEvents fill etcd: retention must default to on")
+}

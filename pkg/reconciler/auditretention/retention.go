@@ -16,9 +16,11 @@
 // they accumulate in etcd for ever. Pruner is a leader-only manager Runnable
 // that, every Interval, deletes the records older than MaxAge and, per
 // Pipeline, all but the MaxPerPipeline newest, except records created
-// within the last Interval. It is opt-in
-// (--audit-retention), and housekeeping like the Pipeline's Bundle
-// historyLimit: no promotion decision reads its result.
+// within the last Interval. It is on by default (--audit-retention: a full
+// etcd quota stops the whole cluster, which is worse than losing old audit
+// records), and housekeeping like the Pipeline's Bundle historyLimit: no
+// promotion decision reads its result. Records that name no Pipeline (no
+// kardinal.io/pipeline label) share one count cap per namespace.
 //
 // Memory and API load are bounded: records are listed metadata-only in pages
 // of listPage, age deletions are decided while streaming, the count cap
