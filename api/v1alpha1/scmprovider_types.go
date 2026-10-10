@@ -13,6 +13,7 @@ const (
 
 // ScmProviderSpec is the SCM a Pipeline opens its PRs on: its type, API and
 // credentials.
+// +kubebuilder:validation:XValidation:rule="!has(self.instanceSigners) || size(self.instanceSigners) == 0 || self.type in ['forgejo', 'gitea']",message="instanceSigners applies to forgejo and gitea providers only"
 type ScmProviderSpec struct {
 	// Type is the SCM: github, gitlab, forgejo, gitea, bitbucket,
 	// azuredevops or bitbucket-datacenter (the --scm-provider values). A
@@ -48,6 +49,17 @@ type ScmProviderSpec struct {
 	// +kubebuilder:validation:items:MaxLength=256
 	// +optional
 	AllowedRepositories []string `json:"allowedRepositories,omitempty"`
+
+	// InstanceSigners, Forgejo and Gitea only, are the names or emails the
+	// instance signs commits with (its repository.signing SIGNING_NAME and
+	// SIGNING_EMAIL), as --scm-instance-signers is for the controller's
+	// provider. Image verification treats a commit signed by one as a
+	// platform signature (forgejo-instance), even when a user of that name
+	// exists.
+	// +kubebuilder:validation:MaxItems=20
+	// +kubebuilder:validation:items:MaxLength=256
+	// +optional
+	InstanceSigners []string `json:"instanceSigners,omitempty"`
 }
 
 // ScmSecretKeyRef names one key of a Secret.

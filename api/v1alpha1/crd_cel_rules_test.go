@@ -319,3 +319,36 @@ func TestBundleCRDRejectedIsOneWay(t *testing.T) {
 	}
 	assert.Contains(t, crdSchema(t, "kardinal.io_bundles.yaml", "status", "phase")["enum"], "Rejected")
 }
+
+// TestScmProviderInstanceSignersRule: spec.instanceSigners is accepted only
+// on forgejo and gitea providers, ScmProvider and ClusterScmProvider alike
+// (#1618 review).
+func TestScmProviderInstanceSignersRule(t *testing.T) {
+	const msg = "instanceSigners applies to forgejo and gitea providers only"
+	for _, file := range []string{"kardinal.io_scmproviders.yaml", "kardinal.io_clusterscmproviders.yaml"} {
+		spec := crdSchema(t, file, "spec")
+		for _, tc := range []struct {
+			typ     string
+			signers []interface{}
+			ok      bool
+		}{
+			{"forgejo", []interface{}{"Forgejo"}, true},
+			{"gitea", []interface{}{"gitea@example.com"}, true},
+			{"github", nil, true},
+			{"github", []interface{}{}, true},
+			{"github", []interface{}{"web-flow"}, false},
+			{"gitlab", []interface{}{"x"}, false},
+		} {
+			self := map[string]interface{}{"type": tc.typ, "secretRef": map[string]interface{}{"name": "t"}}
+			if tc.signers != nil {
+				self["instanceSigners"] = tc.signers
+			}
+			failed := failingRules(t, spec, self)
+			if tc.ok {
+				assert.NotContains(t, failed, msg, "%s %s %v", file, tc.typ, tc.signers)
+			} else {
+				assert.Contains(t, failed, msg, "%s %s %v", file, tc.typ, tc.signers)
+			}
+		}
+	}
+}

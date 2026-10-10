@@ -1010,3 +1010,44 @@ func TestCompact_GateMirror(t *testing.T) {
 	// The mirror reads the approval gates too.
 	assert.Contains(t, fmt.Sprint(compact[graph.NodeGateMirror].Patch), graph.NodeApprovalGates)
 }
+
+// TestCompact_ImageVerificationCommitProvider: in the compact shape too, a
+// config Bundle's commit carries the Pipeline's resolved provider
+// (spec.commit.scmProvider, #1618), the ImageVerification's name changes
+// with it, and the root step waits for that name.
+func TestCompact_ImageVerificationCommitProvider(t *testing.T) {
+	p := makeLinearPipeline("app", "test", "prod")
+	p.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeCompact}
+	p.Spec.Git.URL = "https://github.com/org/gitops"
+	p.Spec.ImageVerification = &kardinalv1alpha1.ImageVerificationPolicy{
+		Commits: &kardinalv1alpha1.CommitSignaturePolicy{RequireSigned: true}}
+	b := makeBundle("cfg-1", "app")
+	b.UID = "uid-1"
+	b.Spec.Type, b.Spec.Images = "config", nil
+	sha := strings.Repeat("abc1", 10)
+	b.Spec.ConfigRef = &kardinalv1alpha1.ConfigRef{CommitSHA: sha}
+	build := func(id *kardinalv1alpha1.ScmProviderIdentity) (name string, commit interface{}, root interface{}) {
+		t.Helper()
+		res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: b, ScmProvider: id})
+		require.NoError(t, err)
+		assertKroValid(t, res.Graph)
+		require.Equal(t, "compact", res.Graph.Labels["kardinal.io/graph-shape"])
+		node := hookNode(t, res.Graph, "imageVerify").Template
+		for _, e := range hookNode(t, res.Graph, graph.NodePromotionDAG).Def["steps"].([]interface{}) {
+			if m := e.(map[string]interface{}); m["environment"] == "test" {
+				root = m["imageVerification"]
+			}
+		}
+		return node["metadata"].(map[string]interface{})["name"].(string), node["spec"].(map[string]interface{})["commit"], root
+	}
+	plainName, plain, plainRoot := build(nil)
+	assert.Equal(t, map[string]interface{}{"repo": "https://github.com/org/gitops", "sha": sha}, plain)
+	assert.Equal(t, plainName, plainRoot)
+
+	id := &kardinalv1alpha1.ScmProviderIdentity{Kind: kardinalv1alpha1.KindScmProvider, Name: "team", UID: "p-uid"}
+	name, commit, root := build(id)
+	assert.Equal(t, map[string]interface{}{"repo": "https://github.com/org/gitops", "sha": sha,
+		"scmProvider": map[string]interface{}{"kind": "ScmProvider", "name": "team", "uid": "p-uid"}}, commit)
+	assert.NotEqual(t, plainName, name, "another provider, another ImageVerification")
+	assert.Equal(t, name, root, "the root step waits for the ImageVerification with the provider")
+}

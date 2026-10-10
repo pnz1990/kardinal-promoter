@@ -103,6 +103,19 @@ func TestBuilder_ImageVerificationCommit(t *testing.T) {
 	require.NoError(t, err)
 	spec := hookNode(t, res.Graph, "imageVerify").Template["spec"].(map[string]interface{})
 	assert.Equal(t, map[string]interface{}{"repo": "https://github.com/org/gitops", "sha": sha}, spec["commit"])
+	plainName := hookNode(t, res.Graph, "imageVerify").Template["metadata"].(map[string]interface{})["name"]
+
+	// The Pipeline's spec.git.providerRef: the commit is checked with that
+	// provider, and it is in the spec, so the name (hash) changes with it
+	// (#1618).
+	id := &kardinalv1alpha1.ScmProviderIdentity{Kind: kardinalv1alpha1.KindScmProvider, Name: "team", UID: "uid-1"}
+	res, err = graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: b, ScmProvider: id})
+	require.NoError(t, err)
+	node := hookNode(t, res.Graph, "imageVerify").Template
+	assert.Equal(t, map[string]interface{}{"repo": "https://github.com/org/gitops", "sha": sha,
+		"scmProvider": map[string]interface{}{"kind": "ScmProvider", "name": "team", "uid": "uid-1"}},
+		node["spec"].(map[string]interface{})["commit"])
+	assert.NotEqual(t, plainName, node["metadata"].(map[string]interface{})["name"], "another provider, another ImageVerification")
 
 	// A short SHA is refused: a signed commit is checked by its full SHA
 	// (regression, QA #1521).

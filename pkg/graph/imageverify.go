@@ -124,7 +124,11 @@ func imageSelected(patterns []string, repository string) bool {
 
 // imageVerificationSpec returns the ImageVerification spec for bundle under
 // the Pipeline's policy, or nil when the policy selects nothing to verify.
-func imageVerificationSpec(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle) (*kardinalv1alpha1.ImageVerificationSpec, error) {
+// provider is the Pipeline's resolved spec.git.providerRef (nil: the
+// controller's --scm-provider): the config commit is checked with it, and
+// it is part of the spec, so another provider gives another verification.
+func imageVerificationSpec(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
+	provider *kardinalv1alpha1.ScmProviderIdentity) (*kardinalv1alpha1.ImageVerificationSpec, error) {
 	policy := pipeline.Spec.ImageVerification
 	if policy == nil {
 		return nil, nil
@@ -166,6 +170,10 @@ func imageVerificationSpec(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinal
 			repo = pipeline.Spec.Git.URL
 		}
 		spec.Commit = &kardinalv1alpha1.VerifiedCommit{Repo: repo, SHA: c.CommitSHA}
+		if provider != nil {
+			id := *provider
+			spec.Commit.ScmProvider = &id
+		}
 	}
 	if len(spec.Images) == 0 && spec.Commit == nil {
 		return nil, nil
@@ -175,8 +183,9 @@ func imageVerificationSpec(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinal
 
 // buildImageVerificationNode returns the ImageVerification node of bundle,
 // and its name; nil when there is nothing to verify.
-func buildImageVerificationNode(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle) (*GraphNode, string, error) {
-	spec, err := imageVerificationSpec(pipeline, bundle)
+func buildImageVerificationNode(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
+	provider *kardinalv1alpha1.ScmProviderIdentity) (*GraphNode, string, error) {
+	spec, err := imageVerificationSpec(pipeline, bundle, provider)
 	if err != nil || spec == nil {
 		return nil, "", err
 	}
