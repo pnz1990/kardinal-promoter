@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -48,4 +49,34 @@ func IndexBundlesByPipeline(ctx context.Context, indexer client.FieldIndexer) er
 		}
 	})
 	return o.err
+}
+
+// ListPipelineBundles lists the Bundles of pipeline in ns by spec.pipeline,
+// so a Pipeline's read costs its own Bundles, not every Bundle of the
+// namespace (#1654). A cached reader answers from the IndexBundlePipeline
+// index; the API server from the CRD's selectable field (Kubernetes 1.31+).
+// Only an API server that refuses the field selector (BadRequest: 1.30, or
+// selectable fields off) gets the namespace list, filtered here; any other
+// error, such as a cache with no index registered, is returned, so a missing
+// index is a bug that shows rather than a silent namespace-wide list.
+func ListPipelineBundles(ctx context.Context, c client.Reader, ns, pipeline string) ([]v1alpha1.Bundle, error) {
+	var list v1alpha1.BundleList
+	err := c.List(ctx, &list, client.InNamespace(ns), client.MatchingFields{IndexBundlePipeline: pipeline})
+	if err == nil {
+		return list.Items, nil
+	}
+	if !apierrors.IsBadRequest(err) {
+		return nil, fmt.Errorf("list bundles of pipeline %s: %w", pipeline, err)
+	}
+	list = v1alpha1.BundleList{}
+	if err := c.List(ctx, &list, client.InNamespace(ns)); err != nil {
+		return nil, fmt.Errorf("list bundles of pipeline %s: %w", pipeline, err)
+	}
+	out := list.Items[:0]
+	for _, b := range list.Items {
+		if b.Spec.Pipeline == pipeline {
+			out = append(out, b)
+		}
+	}
+	return out, nil
 }

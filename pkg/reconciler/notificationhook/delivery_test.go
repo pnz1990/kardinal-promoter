@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/notificationhook"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
@@ -134,7 +135,7 @@ func newFixture(t *testing.T, objs ...client.Object) *fixture {
 	}
 	c := fake.NewClientBuilder().WithScheme(nhScheme()).
 		WithObjects(append(base, objs...)...).
-		WithStatusSubresource(&v1alpha1.NotificationHook{}, &v1alpha1.PolicyGate{}).
+		WithStatusSubresource(&v1alpha1.NotificationHook{}, &v1alpha1.PolicyGate{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 	f := &fixture{t: t, c: c, now: saturday}
 	gates, err := policygate.NewReconciler(c)

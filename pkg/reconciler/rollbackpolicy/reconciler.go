@@ -393,8 +393,16 @@ func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logge
 // created before the shared planner existed (no kardinal.io/rollback-from
 // annotation, the failing Bundle in provenance.rollbackOf).
 func (r *Reconciler) existingRollback(ctx context.Context, rp *v1alpha1.RollbackPolicy) (string, error) {
+	// A rollback Bundle belongs to the Pipeline it rolls back: list that
+	// Pipeline's Bundles through the spec.pipeline index (#1654).
 	var bundles v1alpha1.BundleList
-	if err := r.List(ctx, &bundles, client.InNamespace(rp.Namespace)); err != nil {
+	if rp.Spec.PipelineName != "" {
+		items, err := lifecycle.ListPipelineBundles(ctx, r.Client, rp.Namespace, rp.Spec.PipelineName)
+		if err != nil {
+			return "", err
+		}
+		bundles.Items = items
+	} else if err := r.List(ctx, &bundles, client.InNamespace(rp.Namespace)); err != nil {
 		return "", fmt.Errorf("list bundles: %w", err)
 	}
 	for _, b := range bundles.Items {
@@ -433,6 +441,10 @@ func (r *Reconciler) now() time.Time {
 //     the new step are mapped, so a change of
 //     status.consecutiveHealthFailures, or a step moving away, enqueues.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Bundle reads of one Pipeline go through the spec.pipeline index (#1654).
+	if err := lifecycle.IndexBundlesByPipeline(context.Background(), mgr.GetFieldIndexer()); err != nil {
+		return err
+	}
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.RollbackPolicy{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		Watches(&v1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(r.policiesForStep))

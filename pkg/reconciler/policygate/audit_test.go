@@ -66,7 +66,7 @@ func TestPolicyGateReconciler_AuditsEveryTransition(t *testing.T) {
 			gate.Labels["kardinal.io/gate-template"] = "no-weekend-deploys"
 			c := fake.NewClientBuilder().WithScheme(newScheme()).
 				WithObjects(gate, makeBundle("nginx-demo-v1", "default")).
-				WithStatusSubresource(gate).Build()
+				WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			var now time.Time
 			r, err := policygate.NewReconciler(c)
 			require.NoError(t, err)
@@ -100,7 +100,7 @@ func TestPolicyGateReconciler_AuditNameAndLabelFallback(t *testing.T) {
 	gate.Labels["kardinal.io/gate-template"] = "no-weekend-deploys"
 	c := fake.NewClientBuilder().WithScheme(newScheme()).
 		WithObjects(gate, makeBundle("nginx-demo-v1", "default")).
-		WithStatusSubresource(gate).Build()
+		WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return tue }
@@ -130,7 +130,7 @@ func TestPolicyGateReconciler_AuditWriteErrorIsLogged(t *testing.T) {
 				}
 				return c.Create(ctx, obj, opts...)
 			},
-		}).Build()
+		}).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return tue }
@@ -167,7 +167,7 @@ func TestPolicyGateReconciler_AuditInTerminatingNamespace(t *testing.T) {
 				}
 				return c.Create(ctx, obj, opts...)
 			},
-		}).Build()
+		}).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 
@@ -203,7 +203,7 @@ func TestReconciler_OverrideRequeuesAtExpiry(t *testing.T) {
 			}
 			c := fake.NewClientBuilder().WithScheme(newScheme()).
 				WithObjects(gate, makeBundle("app-v1", "default")).
-				WithStatusSubresource(gate).Build()
+				WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			r, err := policygate.NewReconciler(c)
 			require.NoError(t, err)
 			r.NowFn = func() time.Time { return now }
@@ -248,7 +248,7 @@ func TestPolicyGateReconciler_AuditOutboxEtcdTimeout(t *testing.T) {
 				}
 				return c.Create(ctx, obj, opts...)
 			},
-		}).Build()
+		}).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	now := tue

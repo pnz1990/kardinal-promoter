@@ -54,6 +54,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
@@ -2339,8 +2340,14 @@ func bakeDeadlineMessage(ps *v1alpha1.PromotionStep, env v1alpha1.EnvironmentSpe
 //     gate, so a Pending step starts as soon as its gates are re-evaluated
 //     (checkRequiredGates).
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Bundle reads of one Pipeline go through the spec.pipeline index (#1654).
+	if err := lifecycle.IndexBundlesByPipeline(context.Background(), mgr.GetFieldIndexer()); err != nil {
+		return err
+	}
 	b := ctrl.NewControllerManagedBy(mgr).
-		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers,
+			// Workers are shared fairly between namespaces (#1577).
+			NewQueue: fairqueue.NewFor(mgr)}).
 		For(&v1alpha1.PromotionStep{}, builderutil.WithPredicates(
 			predicate.Or(predicate.GenerationChangedPredicate{},
 				eventfilter.LabelChangedExceptKro, predicate.AnnotationChangedPredicate{}, auditPending),

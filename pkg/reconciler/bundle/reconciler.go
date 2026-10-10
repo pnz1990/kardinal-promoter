@@ -56,6 +56,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
@@ -931,11 +932,7 @@ func (r *Reconciler) pipelineBundleList(ctx context.Context, ns, pipeline string
 	if pipeline == "" {
 		return nil, nil
 	}
-	var list kardinalv1alpha1.BundleList
-	if err := r.List(ctx, &list, client.InNamespace(ns), client.MatchingFields{indexPipeline: pipeline}); err != nil {
-		return nil, fmt.Errorf("list bundles of pipeline %s: %w", pipeline, err)
-	}
-	return list.Items, nil
+	return lifecycle.ListPipelineBundles(ctx, r.Client, ns, pipeline)
 }
 
 // markSuperseded sets this bundle's status.phase to "Superseded" (self-supersession).
@@ -2009,7 +2006,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("set up the bundle retirement controller: %w", err)
 	}
 	b := ctrl.NewControllerManagedBy(mgr).
-		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers,
+			// Workers are shared fairly between namespaces (#1577).
+			NewQueue: fairqueue.NewFor(mgr)}).
 		For(&kardinalv1alpha1.Bundle{}).
 		Watches(&kardinalv1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.waitingSiblings),
 			builder.WithPredicates(bundlePhaseChanged)).

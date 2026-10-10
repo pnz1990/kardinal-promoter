@@ -30,7 +30,7 @@ func newClient(t *testing.T, objs ...client.Object) client.Client {
 	s := runtime.NewScheme()
 	require.NoError(t, v1alpha1.AddToScheme(s))
 	return fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).
-		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}, &v1alpha1.Pipeline{}).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}, &v1alpha1.Pipeline{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 }
 
