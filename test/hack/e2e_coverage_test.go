@@ -122,9 +122,11 @@ var sourceRef = regexp.MustCompile(`^([^:\s]+)(?::([0-9]+)(?:-([0-9]+))?)?$`)
 var tableSeparator = regexp.MustCompile(`^\|?(\s*:?-{3,}:?\s*\|)+\s*(:?-{3,}:?)?$`)
 
 // TestE2ECoverage_SourceRefs: every source ref of every row names a path in
-// the repo; the changelog is cited by entry (changelogRefProblem), not line. A ref with lines names lines that exist, and its first line has
+// the repo. A ref with lines names lines that exist, and its first line has
 // content, so a reader of the row lands on the behavior. A covered rollback row
-// names lines in every ref.
+// names lines in every ref, except docs/changelog.md, which is cited by entry
+// title or heading and never by line (changelogRefProblem): a
+// docs/changelog.md#<anchor> ref is as precise as a line and does not shift.
 func TestE2ECoverage_SourceRefs(t *testing.T) {
 	root := repoRoot(t)
 	rows, err := coverage.Rows(root)
@@ -193,6 +195,8 @@ func TestSourceRefProblems(t *testing.T) {
 		{source: "docs/changelog.md#Release title", problem: "names no `- **Title**` entry or heading"},
 		{source: "docs/changelog.md"},
 		{source: "docs/changelog.md:7", problem: "cites the changelog by line"},
+		{source: "./docs/changelog.md:7", problem: "cites the changelog by line"},
+		{source: "docs/../docs/changelog.md:7-8", problem: "cites the changelog by line"},
 	} {
 		row := coverage.Row{ID: "TEST-01", Area: tc.area, Status: tc.status, Source: tc.source}
 		got := sourceRefProblems(root, []coverage.Row{row})
@@ -235,7 +239,7 @@ func sourceRefProblem(root string, files map[string][]string, r coverage.Row, re
 	if !filepath.IsLocal(path) {
 		return "names a path outside the repo"
 	}
-	if path == changelogPath && m[2] != "" {
+	if filepath.Clean(path) == changelogPath && m[2] != "" {
 		return "cites the changelog by line: write " + changelogPath + "#<entry title or heading>, which an entry added above does not shift"
 	}
 	if m[2] == "" {
