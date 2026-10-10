@@ -388,10 +388,10 @@ func (e *Env) PushBranch(t *testing.T, repo gitserver.Repo, branch, message stri
 		// not the test's.
 		branch = repo.Branch
 	}
-	// The shared GitHub repo: only the test's own branches (under
-	// BranchPrefix) and the PR branches kardinal opened for it.
-	if e.Git.Kind() == "github" && !strings.HasPrefix(branch, gitserver.BranchPrefix) && !strings.HasPrefix(branch, "kardinal/") {
-		t.Fatalf("refusing to push %s to the shared GitHub repo: not under %s", branch, gitserver.BranchPrefix)
+	// The shared GitHub repo: only the test's own branches and the PR
+	// branches kardinal opened for its namespace.
+	if e.Git.Kind() == "github" && !gitserver.GitHubPushAllowed(repo, branch) {
+		t.Fatalf("refusing to push %s to the shared GitHub repo: not a branch of this test", branch)
 	}
 	remote, token, err := gitserver.PushRemote(e.Git, repo)
 	if err != nil {

@@ -80,7 +80,11 @@ func (g *github) DeleteRepo(ctx context.Context, r Repo) error {
 				errs = append(errs, err)
 			}
 		}
-		errs = append(errs, g.deleteBranch(ctx, pr.Head))
+		// Only branches a test or kardinal made: a PR someone opened into a
+		// test branch from another branch keeps its head.
+		if strings.HasPrefix(pr.Head, BranchPrefix) || strings.HasPrefix(pr.Head, "kardinal/") {
+			errs = append(errs, g.deleteBranch(ctx, pr.Head))
+		}
 	}
 	errs = append(errs, g.deleteBranch(ctx, r.Branch))
 	return errors.Join(errs...)

@@ -5,9 +5,12 @@ package gitserver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // commits is Commits on GitHub: the shared repo's commits on branch, newest
@@ -50,4 +53,23 @@ func (g *github) commits(ctx context.Context, branch string, limit int) ([]Commi
 // BranchPrefix (framework.Env.PushBranch checks it).
 func (g *github) pushRemote() (string, string) {
 	return fmt.Sprintf("%s/%s.git", g.cloneBase, g.repo), g.token
+}
+
+// PRBranchPrefix is the prefix of the PR branches kardinal opens for the
+// Pipelines of namespace ns: kardinal/<first 8 hex of sha256(ns)>/.
+func PRBranchPrefix(ns string) string {
+	sum := sha256.Sum256([]byte(ns))
+	return "kardinal/" + hex.EncodeToString(sum[:])[:8] + "/"
+}
+
+// GitHubPushAllowed reports whether the test that owns r may push branch to
+// the shared GitHub repo: its own branches (r.Branch, under BranchPrefix, is
+// BranchPrefix + the test's namespace) and the PR branches kardinal opened
+// for that namespace, nothing else.
+func GitHubPushAllowed(r Repo, branch string) bool {
+	ns, ok := strings.CutPrefix(r.Branch, BranchPrefix)
+	if !ok || ns == "" {
+		return false
+	}
+	return strings.HasPrefix(branch, BranchPrefix) || strings.HasPrefix(branch, PRBranchPrefix(ns))
 }
