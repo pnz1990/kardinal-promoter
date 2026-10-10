@@ -4,7 +4,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -131,4 +133,38 @@ func TestUpstreamCache(t *testing.T) {
 	_, _ = c.get(&ps[1])
 	c.prune(ps[:1])
 	assert.Len(t, c.entries, 1)
+}
+
+// TestPipelineListResponse_TopologyResolved (#1580 QA): the UI tells a root
+// from "no upstreams sent" by topologyResolved. A Pipeline whose every
+// environment is in wave 1 has only roots, so no entry has upstreams, and it
+// is resolved. A dependsOn cycle cannot be resolved: no flag, and the UI
+// falls back to the spec.
+func TestPipelineListResponse_TopologyResolved(t *testing.T) {
+	envs := func(specs ...v1alpha1.EnvironmentSpec) v1alpha1.Pipeline {
+		return v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "ns", UID: types.UID("p-" + specs[0].Name)},
+			Spec: v1alpha1.PipelineSpec{Environments: specs}}
+	}
+	for _, tc := range []struct {
+		name     string
+		p        v1alpha1.Pipeline
+		resolved bool
+	}{
+		{"every environment in wave 1", envs(
+			v1alpha1.EnvironmentSpec{Name: "eu", Wave: 1}, v1alpha1.EnvironmentSpec{Name: "us", Wave: 1}, v1alpha1.EnvironmentSpec{Name: "ap", Wave: 1}), true},
+		{"a dependsOn cycle", envs(
+			v1alpha1.EnvironmentSpec{Name: "a", DependsOn: []string{"b"}}, v1alpha1.EnvironmentSpec{Name: "b", DependsOn: []string{"a"}}), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := pipelineListResponse([]v1alpha1.Pipeline{tc.p}, nil, nil, nil, time.Now(), nil)
+			require.Len(t, got, 1)
+			assert.Equal(t, tc.resolved, got[0].TopologyResolved)
+			for _, n := range got[0].EnvironmentTopology {
+				assert.Empty(t, n.Upstreams, n.Name)
+			}
+			raw, err := json.Marshal(got[0])
+			require.NoError(t, err)
+			assert.Equal(t, tc.resolved, strings.Contains(string(raw), `"topologyResolved":true`))
+		})
+	}
 }
