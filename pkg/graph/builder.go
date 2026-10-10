@@ -191,7 +191,7 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 		}
 	}
 	nodes, instances, upstreams, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates,
-		input.MetricChecks, input.PolicyNamespaces, input.Analyses, compact)
+		input.MetricChecks, input.PolicyNamespaces, input.Analyses, input.ScmProvider, compact)
 	if err != nil {
 		return nil, err
 	}
@@ -621,7 +621,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate,
 	skipGates map[string][]skipPermissionGate,
 	metricChecks []kardinalv1alpha1.MetricCheck, policyNamespaces []string, analyses AnalysisInput,
-	compact bool) ([]GraphNode, []kardinalv1alpha1.PolicyGate, map[string][]string, error) {
+	provider *kardinalv1alpha1.ScmProviderIdentity, compact bool) ([]GraphNode, []kardinalv1alpha1.PolicyGate, map[string][]string, error) {
 	pipelineName := pipeline.Name
 	bundleSlug := CELSafeSlug(bundle.Name) // camelCase — node IDs only
 
@@ -650,7 +650,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	}
 	nodes = append(nodes, bundleWatchNode)
 	nodes = append(nodes, readBackRefs(pipeline, filteredEnvs, bundle)...)
-	ivNode, ivName, err := buildImageVerificationNode(pipeline, bundle)
+	ivNode, ivName, err := buildImageVerificationNode(pipeline, bundle, provider)
 	if err != nil {
 		return nil, nil, nil, err
 	}
