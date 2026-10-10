@@ -98,14 +98,20 @@ func compactRenderNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1a
 		admit[field] = fmt.Sprintf(`${%[1]s.%[2]s.filter(r, r.name in %[3]srenderRuns || `+
 			`(r.step in %[3]srequested && %[3]ssuperseded == false))}`, NodeRenderRunData, field, rs)
 		item := func(f string) string { return "${" + iterRender + "." + f + "}" }
-		git := map[string]interface{}{
-			"url":            item("spec.git.url"),
-			"sourceBranch":   item("spec.git.sourceBranch"),
-			"renderedBranch": item("spec.git.renderedBranch"),
-			"pullRequest":    "${" + renderPullRequestCond(NodeStepsObserved, iterRender+".step") + "}",
-		}
-		if ref := pipeline.Spec.Git.SecretRef; ref != nil && ref.Name != "" {
-			git["secretName"] = item("spec.git.secretName")
+		// Every field of the item's spec (renderRunSpec: the same keys for
+		// every item), so the template drops none of the node shape's.
+		spec := map[string]interface{}{}
+		for k, v := range chunk[0].spec {
+			if k != "git" {
+				spec[k] = item("spec." + k)
+				continue
+			}
+			git := map[string]interface{}{}
+			for gk := range v.(map[string]interface{}) {
+				git[gk] = item("spec.git." + gk)
+			}
+			git["pullRequest"] = "${" + renderPullRequestCond(NodeStepsObserved, iterRender+".step") + "}"
+			spec["git"] = git
 		}
 		collections = append(collections, GraphNode{
 			ID:      chunkID(NodeRenderRuns, i),
@@ -122,16 +128,7 @@ func compactRenderNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1a
 						LabelBundleUID:            string(bundle.UID),
 					},
 				},
-				"spec": map[string]interface{}{
-					"pipelineName": pipeline.Name,
-					"bundleName":   bundle.Name,
-					"environment":  item("environment"),
-					"path":         item("spec.path"),
-					"git":          git,
-					"bundle":       item("spec.bundle"),
-					"update":       item("spec.update"),
-					"render":       item("spec.render"),
-				},
+				"spec": spec,
 			},
 		})
 	}

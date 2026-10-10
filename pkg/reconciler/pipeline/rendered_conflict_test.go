@@ -65,4 +65,19 @@ func TestPipelineReconciler_RenderedBranchConflict(t *testing.T) {
 	assert.Equal(t, metav1.ConditionTrue, ready(other).Status, "another branch")
 	assert.Equal(t, metav1.ConditionTrue, ready(elsewhere).Status, "another repository")
 	assert.Equal(t, "RenderedBranchConflict", ready(sameRepoOtherSpelling).Reason, "the same repository, spelt differently")
+
+	// A fleet target's default branch (env/<fleet>-<target>) counts: a
+	// newer Pipeline whose fleet target renders to an older Pipeline's
+	// explicit branch conflicts.
+	fleetP := at(newPipeline("edge", []kardinalv1alpha1.EnvironmentSpec{{Name: "prod", Layout: "branch",
+		Fleet: &kardinalv1alpha1.FleetSpec{Targets: []kardinalv1alpha1.FleetTarget{{Name: "eu"}, {Name: "us"}}}}}),
+		"team-a", base.Add(4*time.Hour))
+	require.NoError(t, c.Create(context.Background(), fleetP))
+	cond = ready(fleetP)
+	assert.Equal(t, metav1.ConditionTrue, cond.Status, "no older Pipeline renders to env/prod-eu yet: %s", cond.Message)
+	taker := at(newPipeline("taker", branch("env/prod-eu")), "team-a", base.Add(5*time.Hour))
+	require.NoError(t, c.Create(context.Background(), taker))
+	cond = ready(taker)
+	assert.Equal(t, "RenderedBranchConflict", cond.Reason)
+	assert.Contains(t, cond.Message, `which environment "prod-eu" of Pipeline team-a/edge renders to`, "the fleet target is named")
 }

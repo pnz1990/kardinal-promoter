@@ -109,8 +109,9 @@ func dropNulls(v interface{}) interface{} {
 }
 
 // renderRunSpec is the spec of env's RenderRun, without git.pullRequest,
-// which follows the step's recorded step list (its caller's expression).
-// spec.render is always set ({} without env.render: the same as unset).
+// which follows the step's recorded step list (each caller adds its
+// expression). spec.render is set only when env has render; the compact
+// shape sets {} otherwise, the same as unset (buildCompactRender).
 func renderRunSpec(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
 	env kardinalv1alpha1.EnvironmentSpec) (map[string]interface{}, error) {
 	rb := kardinalv1alpha1.RenderRunBundle{Type: bundle.Spec.Type, Images: bundle.Spec.Images, ConfigRef: bundle.Spec.ConfigRef}

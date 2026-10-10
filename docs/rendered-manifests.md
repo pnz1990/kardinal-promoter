@@ -110,7 +110,10 @@ A `chart` Bundle (a chart version from a [Helm Subscription](subscription.md#pro
 cannot promote a `layout: branch` environment yet: the Bundle fails at build. Both Graph shapes
 render: in the compact shape (`kardinal.io/graph-shape: compact`, or more environments than
 `--graph-compact-above`, and every Pipeline with a fleet) the RenderRuns come from one
-collection, created under the same condition.
+collection, created under the same condition. A fleet environment with `layout: branch` renders
+each target to its own branch, `env/<fleet>-<target>` (for example `env/prod-eu-west`); it takes
+no `render.branch` (the Pipeline is refused: every target would render to that one branch), and a
+target's branch that another environment's `render.branch` names is refused too.
 
 ## What a promotion does
 

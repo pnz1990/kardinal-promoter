@@ -217,6 +217,12 @@ func TestCompact_Renders(t *testing.T) {
 	}
 	for _, n := range g.Spec.Nodes {
 		if n.ID == graph.NodeRenderRuns {
+			// The template carries every field of the node shape's
+			// RenderRun spec, so none can be dropped silently.
+			tspec := n.Template["spec"].(map[string]interface{})
+			assert.ElementsMatch(t, mapKeys(want), mapKeys(tspec), "spec keys")
+			assert.ElementsMatch(t, mapKeys(want["git"].(map[string]interface{})),
+				mapKeys(tspec["git"].(map[string]interface{})), "spec.git keys")
 			git := n.Template["spec"].(map[string]interface{})["git"].(map[string]interface{})
 			assert.Contains(t, git["pullRequest"], "renderPullRequest", "the step's recorded list decides where to push")
 			assert.Contains(t, git["pullRequest"], graph.NodeStepsObserved)

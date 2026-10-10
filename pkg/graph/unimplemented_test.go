@@ -87,6 +87,10 @@ func TestValidateRenderedBranches(t *testing.T) {
 		}
 		return e
 	}
+	fleet := func(e kardinalv1alpha1.EnvironmentSpec) kardinalv1alpha1.EnvironmentSpec {
+		e.Fleet = &kardinalv1alpha1.FleetSpec{Targets: []kardinalv1alpha1.FleetTarget{{Name: "eu"}, {Name: "us"}}}
+		return e
+	}
 	tests := []struct {
 		name    string
 		envs    []kardinalv1alpha1.EnvironmentSpec
@@ -101,6 +105,12 @@ func TestValidateRenderedBranches(t *testing.T) {
 		{name: "lock suffix", envs: []kardinalv1alpha1.EnvironmentSpec{branch("a", "env/a.lock")}, wantErr: "not a valid branch name"},
 		{name: "argocd", envs: []kardinalv1alpha1.EnvironmentSpec{{Name: "a", Layout: "branch",
 			Update: kardinalv1alpha1.UpdateConfig{Strategy: "argocd"}}}, wantErr: "update.strategy argocd"},
+		// Fleets (QA on #1691): targets render to their own default branches.
+		{name: "fleet targets on their own branches", envs: []kardinalv1alpha1.EnvironmentSpec{branch("test", ""), fleet(branch("prod", ""))}},
+		{name: "fleet with render.branch", envs: []kardinalv1alpha1.EnvironmentSpec{fleet(branch("prod", "env/prod"))},
+			wantErr: `environment "prod": a fleet environment takes no render.branch: its targets would all render to "env/prod"`},
+		{name: "a target's branch named by another environment", envs: []kardinalv1alpha1.EnvironmentSpec{fleet(branch("prod", "")),
+			branch("audit", "env/prod-eu")}, wantErr: `environments "prod-eu" and "audit" both render to branch "env/prod-eu"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

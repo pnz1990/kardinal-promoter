@@ -303,8 +303,8 @@ the Bundle's ImageVerification.
 So are [rendered manifests](rendered-manifests.md) (`layout: branch`): the `RenderRuns`
 collection creates an environment's RenderRun once its step asks for the render, as the node
 shape does, keeps it once kro has created it for this Bundle, and the step reads it back through
-its own `spec.live.renders`. In a fleet, each target renders to its own branch once pacing starts
-it. A RenderRun that kro cannot create holds only its own environment (`RunsCreated`).
+its own `spec.live.renders`. In a fleet, each target renders to its own branch,
+`env/<fleet>-<target>`, once pacing starts it; a fleet environment takes no `render.branch`. A RenderRun that kro cannot create holds only its own environment (`RunsCreated`).
 
 The Graph's size grows with environments, PolicyGates, hooks and analyses: every gate instance,
 HookRun and AnalysisRun is one more object the Graph creates and tracks, and its data is in the
