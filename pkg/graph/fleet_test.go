@@ -428,6 +428,7 @@ func TestFleet_PerPromotionMetricChecks(t *testing.T) {
 func TestFleet_PreHooksArePaced(t *testing.T) {
 	p := bigFleet(2, 1, nil)
 	p.Spec.Environments[1].Hooks = []kardinalv1alpha1.HookSpec{hook("migrate", "pre", hookJob)}
+	p.Spec.Environments[0].Hooks = []kardinalv1alpha1.HookSpec{hook("prep", "pre", hookJob)}
 	b := makeBundle("app-v1", "app")
 	b.UID = "uid-1"
 	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: b})
@@ -453,10 +454,16 @@ func TestFleet_PreHooksArePaced(t *testing.T) {
 		vars[graph.NodeRunState] = sim.def(graph.NodeRunState, vars)
 		return admittedNames(t, g, graph.NodePromotionHooks, vars)
 	}
-	assert.Empty(t, admitted(map[string]string{"test": "Verified"}), "no target step yet: no hook")
-	assert.Equal(t, []string{m0}, admitted(map[string]string{"test": "Verified", "prod-t00": ""}),
+	prep := graph.HookRunName("app", "app-v1", "test", "pre", "prep")
+	// The same rule holds for an environment that is not a fleet target, in
+	// a Pipeline with fleets: test is ready (a root), but its pre hook waits
+	// until its step exists and is read back.
+	assert.Empty(t, admitted(map[string]string{}), "no step yet: not even test's hook")
+	assert.Equal(t, []string{prep}, admitted(map[string]string{"test": ""}), "test's hook once its step is started")
+	assert.Equal(t, []string{prep}, admitted(map[string]string{"test": "Verified"}), "no target step yet: no target hook")
+	assert.ElementsMatch(t, []string{prep, m0}, admitted(map[string]string{"test": "Verified", "prod-t00": ""}),
 		"the admitted target's hook; prod-t01 waits for a place")
-	assert.ElementsMatch(t, []string{m0, m1}, admitted(map[string]string{"test": "Verified", "prod-t00": "Verified", "prod-t01": ""}))
+	assert.ElementsMatch(t, []string{prep, m0, m1}, admitted(map[string]string{"test": "Verified", "prod-t00": "Verified", "prod-t01": ""}))
 }
 
 // TestFleet_SinkEnvironments (DORA): a fleet that is the last environment

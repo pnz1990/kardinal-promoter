@@ -835,7 +835,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			hooks = append(hooks, s.extras.hooks...)
 			runs = append(runs, s.extras.runs...)
 		}
-		nodes = append(nodes, compactRunNodes(pipeline, bundle, hooks, runs)...)
+		nodes = append(nodes, compactRunNodes(pipeline, bundle, hooks, runs, stepsHaveFleets(compactSteps))...)
 	}
 
 	return nodes, gates.instances, upstreamEnvs, nil

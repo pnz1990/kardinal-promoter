@@ -138,7 +138,7 @@ func buildCompactEnvExtras(in hookNodesInput, a AnalysisInput, bundle *kardinalv
 // compactRunNodes builds the compact shape's HookRun and AnalysisRun data,
 // admissions and collections, and the read-back state they share.
 func compactRunNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
-	hooks []compactHook, runs []compactRun) []GraphNode {
+	hooks []compactHook, runs []compactRun, fleets bool) []GraphNode {
 	if len(hooks) == 0 && len(runs) == 0 {
 		return nil
 	}
@@ -162,13 +162,13 @@ func compactRunNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alph
 		runState["analysisRuns"] = fmt.Sprintf(`${%s.filter(r, %s).map(r, r.metadata.name)}`, refAnalysisRunsNodeID, applied)
 	}
 	out := []GraphNode{{ID: NodeRunState, Def: runState}}
-	out = append(out, compactHookNodes(pipeline, bundle, hooks)...)
+	out = append(out, compactHookNodes(pipeline, bundle, hooks, fleets)...)
 	out = append(out, compactAnalysisNodes(pipeline, bundle, runs)...)
 	return out
 }
 
 // compactHookNodes builds the HookRun data, admission and collections.
-func compactHookNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle, hooks []compactHook) []GraphNode {
+func compactHookNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle, hooks []compactHook, fleets bool) []GraphNode {
 	if len(hooks) == 0 {
 		return nil
 	}
@@ -187,7 +187,7 @@ func compactHookNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alp
 	// (started, the step's spec.admitted), so no hook runs for a target
 	// pacing holds back or drops (ledger G11).
 	paced := "true"
-	if HasFleets(pipeline) {
+	if fleets {
 		paced = "h.environment in " + state + "started"
 	}
 	data := map[string]interface{}{}
@@ -211,9 +211,11 @@ func compactHookNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alp
 		// Rejected or waiting for a slot, the environment not held on another
 		// Bundle, every upstream Verified and every gate ready, and the
 		// image verified for a root step (a pause is not in the Graph: the
-		// HookRun reconciler waits while the Pipeline is paused),
-		// whether or not the step already exists; a post hook once the step
-		// entered Verifying and the Bundle is not Superseded.
+		// HookRun reconciler waits while the Pipeline is paused). Without
+		// fleets that is whether or not the step already exists; in a
+		// Pipeline with fleets only once the step exists and the Graph has
+		// read it back (paced). A post hook once the step entered Verifying
+		// and the Bundle is not Superseded.
 		admit[field] = fmt.Sprintf(`${%[1]s.%[2]s.filter(h, h.name in %[3]shookRuns || `+
 			`((h.prev == "" || h.prev in %[3]ssucceeded) && (h.phase == "pre" ? `+
 			`(%[5]s && %[6]s && %[4]shold == false && h.held == false && h.upstreams.all(u, u in %[4]sverified) && `+

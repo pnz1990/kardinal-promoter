@@ -205,6 +205,18 @@ type compactStep struct {
 	imageVerification string
 }
 
+// stepsHaveFleets reports whether any of the built steps is a fleet target:
+// the one flag that turns on fleet pacing, spec.admitted and the paced pre
+// hooks, so all three agree.
+func stepsHaveFleets(steps []compactStep) bool {
+	for _, s := range steps {
+		if s.fleet != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // compactNodes builds the compact shape's PromotionStep nodes: the DAG as data
 // and one collection that creates the PromotionSteps the DAG admits.
 //
@@ -229,10 +241,7 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 		anyIV = anyIV || s.imageVerification != ""
 	}
 	entries := make([]interface{}, len(steps))
-	fleets := false
-	for _, s := range steps {
-		fleets = fleets || s.fleet != ""
-	}
+	fleets := stepsHaveFleets(steps)
 	for i, s := range steps {
 		upstreamStates := make([]interface{}, len(s.upstreams))
 		for j := range upstreamStates {
