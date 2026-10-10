@@ -35,18 +35,42 @@ func renderedApp(t *testing.T, e *framework.Env, files func(fixtures.App) map[st
 	ns := e.Namespace(t)
 	a := &app{e: e, ns: ns, envs: envs, repo: e.Repo(t, ns, files(fixtures.App{Namespace: ns, Envs: envs}))}
 	for _, env := range envs {
-		rendered := a.repo
-		rendered.Branch = "env/" + env
+		rendered := onBranch(a.repo, a.renderedBranch(env))
+		if e.Git.Kind() == "github" {
+			// The shared repo: close the PRs into the test's rendered
+			// branch and delete it with their head branches.
+			t.Cleanup(func() { _ = e.Git.DeleteRepo(context.Background(), rendered) })
+		}
 		e.ArgoApp(t, a.argoApp(env), rendered, ".", ns)
 	}
 	return a
 }
 
-// renderedPipeline is a.pipeline with layout: branch on every environment.
+// renderedBranch is the rendered branch of env: the default env/<env> on a
+// repo of the test's own, and, in the GitHub suite, a branch under the
+// test's prefixed branch of the shared repo (gitserver.BranchPrefix), so a
+// test never writes or leaves a branch outside it.
+func (a *app) renderedBranch(env string) string {
+	if a.e.Git.Kind() == "github" {
+		return a.repo.Branch + "-env-" + env
+	}
+	return "env/" + env
+}
+
+// renderedPipeline is a.pipeline with layout: branch on every environment,
+// rendering to a.renderedBranch (render.branch, set only where it is not the
+// default).
 func (a *app) renderedPipeline(approval map[string]string) *v1alpha1.Pipeline {
 	p := a.pipeline(approval)
 	for i := range p.Spec.Environments {
-		p.Spec.Environments[i].Layout = "branch"
+		env := &p.Spec.Environments[i]
+		env.Layout = "branch"
+		if b := a.renderedBranch(env.Name); b != "env/"+env.Name {
+			if env.Render == nil {
+				env.Render = &v1alpha1.RenderConfig{}
+			}
+			env.Render.Branch = b
+		}
 	}
 	return p
 }
@@ -96,9 +120,9 @@ func TestCore_RenderedBranchKustomize(t *testing.T) {
 	rr := renderRunOf(t, e, a.ns, b2, "test")
 	assertRenderJobSandboxed(t, e, rr)
 	assert.Equal(t, dryHead, ps.Status.Outputs["dryCommit"], "the head of the DRY source was rendered")
-	assert.Contains(t, e.ReadFile(t, a.repo, "env/test", deployment("test")), "image: "+v2)
-	assert.Contains(t, e.ReadFile(t, a.repo, "env/test", ".kardinal/rendered.yaml"), "dryCommit: "+dryHead)
-	head, err := gitserver.Commits(ctx, e.Git, a.repo, "env/test", 1)
+	assert.Contains(t, e.ReadFile(t, a.repo, a.renderedBranch("test"), deployment("test")), "image: "+v2)
+	assert.Contains(t, e.ReadFile(t, a.repo, a.renderedBranch("test"), ".kardinal/rendered.yaml"), "dryCommit: "+dryHead)
+	head, err := gitserver.Commits(ctx, e.Git, a.repo, a.renderedBranch("test"), 1)
 	require.NoError(t, err)
 	require.NotEmpty(t, head)
 	assert.Contains(t, head[0].Message, "Kardinal-Dry-Commit: "+dryHead)
@@ -107,8 +131,8 @@ func TestCore_RenderedBranchKustomize(t *testing.T) {
 		"the DRY source is not committed to")
 	a.running(t, "test", v2, "test runs the rendered release")
 
-	pr := e.WaitPR(t, onBranch(a.repo, "env/prod"), promoteTimeout, "the prod PR into env/prod", func(p gitserver.PR) bool {
-		return p.Base == "env/prod" && p.State == "open"
+	pr := e.WaitPR(t, onBranch(a.repo, a.renderedBranch("prod")), promoteTimeout, "the prod PR into env/prod", func(p gitserver.PR) bool {
+		return p.Base == a.renderedBranch("prod") && p.State == "open"
 	})
 	assert.Contains(t, e.ReadFile(t, a.repo, pr.Head, deployment("prod")), "image: "+v2, "the PR diff is the rendered YAML")
 	require.NoError(t, e.Git.MergePR(ctx, a.repo, pr.Number))
@@ -131,14 +155,14 @@ func TestCore_RenderedBranchKustomize(t *testing.T) {
 	a.running(t, "test", v2, "test runs v2 again")
 
 	// Drift: someone pushes to env/test directly.
-	_, err = gitserver.CommitFiles(ctx, e.Git, a.repo, "env/test", "", "hotfix by hand",
+	_, err = gitserver.CommitFiles(ctx, e.Git, a.repo, a.renderedBranch("test"), "", "hotfix by hand",
 		map[string][]byte{deployment("test"): []byte("edited by hand\n")})
 	require.NoError(t, err)
-	before := headSHA(t, e, "env/test", a.repo)
+	before := headSHA(t, e, a.renderedBranch("test"), a.repo)
 	b4 := e.CreateBundle(t, a.ns, pipelineName, "--image", v3)
 	ps4 := e.WaitStepState(t, a.ns, pipelineName, b4, "test", "Failed", promoteTimeout)
-	assert.Contains(t, ps4.Status.Message, fmt.Sprintf("rendered branch env/test was changed outside kardinal: %s changed", deployment("test")))
-	assert.Equal(t, before, headSHA(t, e, "env/test", a.repo), "nothing is pushed to a drifted branch")
+	assert.Contains(t, ps4.Status.Message, fmt.Sprintf("rendered branch %s was changed outside kardinal: %s changed", a.renderedBranch("test"), deployment("test")))
+	assert.Equal(t, before, headSHA(t, e, a.renderedBranch("test"), a.repo), "nothing is pushed to a drifted branch")
 }
 
 // TestCore_RenderedBranchHelm renders a Helm chart (helm template in the
@@ -160,9 +184,9 @@ func TestCore_RenderedBranchHelm(t *testing.T) {
 	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 	checkSteps(t, ps, []string{"render", "health-check"})
 	assert.Equal(t, "helm", ps.Status.Outputs["renderer"])
-	dep := e.ReadFile(t, a.repo, "env/test", "deployment-"+fixtures.Workload("test")+".yaml")
+	dep := e.ReadFile(t, a.repo, a.renderedBranch("test"), "deployment-"+fixtures.Workload("test")+".yaml")
 	assert.Contains(t, dep, "image: "+v2)
-	_, err := e.Git.ReadFile(context.Background(), a.repo, "env/test", "Chart.yaml")
+	_, err := e.Git.ReadFile(context.Background(), a.repo, a.renderedBranch("test"), "Chart.yaml")
 	assert.Error(t, err, "the rendered branch holds no chart")
 	a.running(t, "test", v2, "test runs the rendered chart")
 	assert.True(t, strings.Contains(e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/"+fixtures.HelmValuesFile), fixtures.V1),
@@ -234,7 +258,7 @@ func renderFails(t *testing.T, e *framework.Env, a *app, p *v1alpha1.Pipeline, e
 	rr := renderRunOf(t, e, a.ns, bundle, env)
 	require.Equal(t, v1alpha1.RenderRunFailed, rr.Status.Phase)
 	assert.Contains(t, ps.Status.Message, rr.Status.Message)
-	commits, err := gitserver.Commits(context.Background(), e.Git, a.repo, "env/"+env, 5)
+	commits, err := gitserver.Commits(context.Background(), e.Git, a.repo, a.renderedBranch(env), 5)
 	if err == nil {
 		for _, c := range commits {
 			assert.NotContains(t, c.Message, "Kardinal-Bundle: "+bundle, "nothing rendered was pushed")
@@ -334,7 +358,7 @@ func TestCore_RenderedBranchOnePipelinePerBranch(t *testing.T) {
 	a.apply(t, a.renderedPipeline(nil))
 	first := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
 	e.WaitStepState(t, a.ns, pipelineName, first, "test", "Verified", promoteTimeout)
-	head := headSHA(t, e, "env/test", a.repo)
+	head := headSHA(t, e, a.renderedBranch("test"), a.repo)
 
 	second := a.renderedPipeline(nil)
 	second.Name = "intruder"
@@ -358,6 +382,6 @@ func TestCore_RenderedBranchOnePipelinePerBranch(t *testing.T) {
 
 	b := e.CreateBundle(t, a.ns, "intruder", "--image", fixtures.Image+":"+fixtures.V3)
 	ps := e.WaitStepState(t, a.ns, "intruder", b, "test", "Failed", promoteTimeout)
-	assert.Contains(t, ps.Status.Message, "rendered branch env/test is not this environment's: it was rendered for Pipeline "+a.ns+"/"+pipelineName)
-	assert.Equal(t, head, headSHA(t, e, "env/test", a.repo), "nothing was pushed")
+	assert.Contains(t, ps.Status.Message, "rendered branch "+a.renderedBranch("test")+" is not this environment's: it was rendered for Pipeline "+a.ns+"/"+pipelineName)
+	assert.Equal(t, head, headSHA(t, e, a.renderedBranch("test"), a.repo), "nothing was pushed")
 }
