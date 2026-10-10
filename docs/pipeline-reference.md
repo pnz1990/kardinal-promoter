@@ -451,7 +451,9 @@ force-pushes the base branch, so no writer's commit is lost:
   - when they changed one of its paths, or the whole branch was read and the PR's base is not
     in it (a force-push), it reruns the promotion's steps on a fresh clone of the new head and
     force-pushes the PR branch, so the PR is one commit on the current base
-    (`status.outputs.prBranchRebuilds` counts it; after a force-push the step message says so);
+    (`status.outputs.prBranchRebuilds` counts it; after a force-push the step message says so).
+    If the new head already has the promotion's change, nothing is pushed and nothing is counted:
+    only `baseSHA` moves. That happens when the PR merged before its status said so;
   - when the history cannot be read (an error, a read longer than 30 seconds, or a PR base
     further back than the last 500 commits), nothing is decided: the PR branch is kept as it
     is, the step message says why, and the next check reads again. Rebuilding on uncertainty

@@ -187,6 +187,9 @@ const outputPushedSHA = builtinsteps.OutputPushedSHA
 //   - If the history could not be read, or baseSHA is older than the last
 //     deepHistoryDepth commits, nothing is known: the PR branch is kept and
 //     checked again (#1584).
+//   - If the new head already has the promotion's change (the PR merged
+//     before its PRStatus said so), nothing is pushed or counted as a
+//     rebuild: baseSHA follows the head (#1640).
 //   - If the PR branch's head is not the commit kardinal pushed
 //     (status.outputs.pushedSHA), someone else committed to it: nothing is
 //     rebuilt, and the message says so.
@@ -299,6 +302,19 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 		ps.Status.Message = msg
 		return true, r.Status().Patch(ctx, ps, client.MergeFrom(base))
 	}
+	if state.Outputs["noChanges"] == "true" {
+		// The new head already has this change: usually the PR itself
+		// merged and its PRStatus has not caught up yet. Nothing was
+		// pushed, so this is no rebuild (#1640): the PR branch is kept and
+		// baseSHA follows the head.
+		outputs := cloneMap(ps.Status.Outputs)
+		outputs[builtinsteps.OutputBaseSHA] = head
+		ps.Status.Outputs = outputs
+		ps.Status.Message = withLabelsError(fmt.Sprintf("PR #%s is open, waiting for merge; base branch %s moved from %s to %s "+
+			"and already has this change (the PR merged and its status has not caught up, or someone applied the change), "+
+			"so the PR branch is kept", pr, branch, short(built), short(head)), outputs)
+		return true, r.Status().Patch(ctx, ps, client.MergeFrom(base))
+	}
 	n, _ := strconv.Atoi(ps.Status.Outputs[outputPRRebuilds])
 	outputs := cloneMap(ps.Status.Outputs)
 	for k, v := range state.Outputs {
@@ -316,10 +332,7 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 	ps.Status.Outputs = outputs
 	note := fmt.Sprintf("base branch %s moved from %s to %s; rebuilt the PR branch %s on it",
 		branch, short(built), short(head), outputs["branch"])
-	if outputs["noChanges"] == "true" {
-		note = fmt.Sprintf("base branch %s moved from %s to %s and already has this change; the PR branch is unchanged",
-			branch, short(built), short(head))
-	} else if found == baseRewritten {
+	if found == baseRewritten {
 		note += "; " + hintForcePushed
 	}
 	ps.Status.Message = withLabelsError(fmt.Sprintf("PR #%s is open, waiting for merge (%s)", pr, note), outputs)
