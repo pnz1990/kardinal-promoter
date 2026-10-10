@@ -101,7 +101,7 @@ Config and mixed Bundles run the `config-merge` step, which copies the environme
 - `RollbackPolicy` CRD + automated rollback PR
 - Pause/resume (`Pipeline.spec.paused`)
 - Supersession for concurrent Bundles
-- Multi-cluster health through a kubeconfig Secret (`health.kubeconfigSecretRef`) or an Argo CD or Flux hub (see [Multi-Cluster](multi-cluster.md))
+- Multi-cluster health through an Argo CD or Flux hub (see [Multi-Cluster](multi-cluster.md))
 
 **CLI** — `get`, `explain`, `status`, `create`, `promote`, `rollback`, `pause`, `resume`, `override`, `history`, `audit`, `diff`, `logs`, `metrics`, `policy`, `validate`, `doctor`, `init`, `refresh`, `delete`, `dashboard`, `completion`, `version` (see [CLI Reference](cli-reference.md))
 
@@ -158,8 +158,11 @@ Not in the UI: overriding a gate (use `kardinal override`), the bake countdown, 
 Everything under `[Unreleased]` in the [changelog](changelog.md) ships in v0.10.0, among it
 `scm.allowedRepositories` (#1332), approval gates with `kardinal approve` (#1309, #1449), and
 verified override identity with a `GateOverridden` AuditEvent (#1286, #1450), per-environment
-PR controls (#1453), GitHub App and SSH git authentication (#1460), and the Bitbucket Data
-Center provider (#1501).
+PR controls (#1453), GitHub App and SSH git authentication (#1460), the Bitbucket Data
+Center provider (#1501), remote-cluster health through a kubeconfig Secret
+(`health.kubeconfigSecretRef`, #1458), fleets (an environment that expands to N targets,
+#1457), rendered manifests on branches (`layout: branch`, in both Graph shapes, #1447,
+#1515), the user roles (#1466) and Kubernetes token authentication for the Bundle API.
 
 ## Planned
 

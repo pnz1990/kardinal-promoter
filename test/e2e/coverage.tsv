@@ -471,7 +471,7 @@ CIAPI-GITLAB-01	live	core	covered	ci-api	GitLab CI example payload creates a Bun
 CHART-DEFAULT-01	live	chart	covered	chart	default helm install: controller Deployment becomes Ready	docs/installation.md:128-171; chart/kardinal-promoter/templates/deployment.yaml:298-303
 CHART-IMAGE-01	live	chart	covered	chart	image.repository/tag/pullPolicy	chart/kardinal-promoter/values.yaml:19-25
 CHART-HA-01	live	chart	covered	chart	replicaCount > 1 with leaderElect, pdb and topologySpread: one leader reconciles, failover works	chart/kardinal-promoter/values.yaml:5; chart/kardinal-promoter/values.yaml:71; chart/kardinal-promoter/values.yaml:608-621
-CHART-LEADER-RELEASE-01	live	chart	covered	chart	a leader that shuts down (a rollout, a drain) releases its leader Lease, so the next replica takes it without waiting the 15-second lease duration	docs/installation.md:911-912; docs/faq.md:118-120; cmd/kardinal-controller/manager_options.go:114
+CHART-LEADER-RELEASE-01	live	chart	covered	chart	a leader that shuts down (a rollout, a drain) releases its leader Lease, so the next replica takes it without waiting the 15-second lease duration	docs/installation.md:911-912; docs/faq.md:121-123; cmd/kardinal-controller/manager_options.go:114
 CHART-GRACE-01	live	chart	covered	chart	terminationGracePeriodSeconds	chart/kardinal-promoter/values.yaml:11; chart/kardinal-promoter/templates/deployment.yaml:34-35
 CHART-SHUTDOWN-DELAY-01	live	chart	covered	chart	shutdownDelaySeconds (a preStop sleep; 0 removes the hook)	chart/kardinal-promoter/values.yaml:13-17; chart/kardinal-promoter/templates/deployment.yaml:284-291; docs/installation.md:923-932
 CHART-LOG-01	live	chart	covered	chart	logLevel	chart/kardinal-promoter/values.yaml:68

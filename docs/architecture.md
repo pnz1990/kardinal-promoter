@@ -60,7 +60,8 @@ The controller manager runs these reconcilers:
 | `HookRunReconciler` | `HookRun` | Runs a Pipeline hook's Job and records its result ([Pipeline hooks](hooks.md)) |
 | `ImageVerificationReconciler` | `ImageVerification` | Checks the signatures of a Bundle's images (sigstore) and of a config Bundle's commit; writes the verdict to its status |
 | `ScmProviderReconciler` | `ScmProvider`, `ClusterScmProvider` | Checks the provider's settings and Secrets; writes its `Ready` condition ([SCM providers](scm-providers.md)) |
-| Audit retention (`pkg/reconciler/auditretention`) | `AuditEvent` | Deletes records past `audit.retention` (off unless enabled) |
+| `RenderRunReconciler` | `RenderRun` | Runs a `layout: branch` environment's render in a sandboxed Job and records the rendered commit ([Rendered manifests](rendered-manifests.md)) |
+| Audit retention (`pkg/reconciler/auditretention`) | `AuditEvent` | Deletes records past `audit.retention` (on by default; `audit.retention.enabled: false` turns it off) |
 | Graph cleanup (`pkg/reconciler/graphcleanup`) | kro `Graph` | Deletes reader RoleBindings no Graph needs any more; lets a Graph in a terminating namespace go once kro can no longer tear it down |
 
 ### Translator (`pkg/translator`) and Graph builder (`pkg/graph`)

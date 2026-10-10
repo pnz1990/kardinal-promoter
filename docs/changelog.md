@@ -509,7 +509,7 @@ The v0.6.0 tag points to `369be4c`, a merge commit that is not on main. Its tree
 - **K-07: Integration test step** — built-in `integration-test` step runs a Kubernetes Job as part of the promotion sequence (#470)
 - **K-08: PR review gate** — `bundle.pr["staging"].isApproved` and `.approvalCount` in CEL context via PRStatus CRD (#472)
 - **K-09: `kardinal override` with audit record** — emergency gate override with mandatory reason + time limit; the override is recorded in the gate's `spec.overrides[]`, and the gate reason shows it in the PR evidence body (#471)
-- **K-10: Cross-stage history CEL** — `upstream.<env>.soakMinutes`, `.recentSuccessCount`, `.recentFailureCount`, `.lastPromotedAt` in gate expressions (#473)
+- **K-11: Cross-stage history CEL** — `upstream.<env>.soakMinutes`, `.recentSuccessCount`, `.recentFailureCount`, `.lastPromotedAt` in gate expressions (#473)
 - **Policy test** — `kardinal policy test` checks PolicyGate YAML and CEL syntax offline (#235)
 - **UI control plane** — all 7 UI issues shipped (#462–#468): fleet health dashboard, pipeline ops view, per-stage bake countdown, in-UI actions (pause/resume/rollback/override), release metrics bar, bundle timeline, policy gate detail panel
 
