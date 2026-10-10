@@ -18,9 +18,8 @@ type nopRecorder struct{}
 func (nopRecorder) Eventf(runtime.Object, runtime.Object, string, string, string, string, ...interface{}) {
 }
 
-// TestLimited_Bounded: whatever the number of namespaces and Events, the
-// Warning buckets and the dedupe memory stay at their bounds, least
-// recently used out first.
+// TestLimited_Bounded: whatever the number of namespaces, the Warning
+// buckets stay at their bound, least recently used out first.
 //
 // Covers PERF-EVENTS-01.
 func TestLimited_Bounded(t *testing.T) {
@@ -30,7 +29,6 @@ func TestLimited_Bounded(t *testing.T) {
 		l.Eventf(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "p"}}, nil, corev1.EventTypeWarning, "R", "A", "%d", i)
 	}
 	assert.Equal(t, WarningNamespaces, l.warnings.len())
-	assert.LessOrEqual(t, l.seen.len(), dedupeEntries)
 	_, newest := l.warnings.get(fmt.Sprintf("ns-%d", 5*WarningNamespaces-1))
 	_, oldest := l.warnings.get("ns-0")
 	assert.True(t, newest)

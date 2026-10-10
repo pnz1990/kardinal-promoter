@@ -37,15 +37,6 @@ const (
 // starts again with a full one.
 const WarningNamespaces = 1024
 
-// DedupeWindow is how long an Event repeating one just written (same
-// object, type, reason and message) passes without taking a token: the
-// broadcaster folds such repeats into the first Event's series, so they
-// cost no write. dedupeEntries bounds that memory.
-const (
-	DedupeWindow  = 5 * time.Second
-	dedupeEntries = 4096
-)
-
 // EventsDroppedTotal counts the Events a Limited recorder dropped over its
 // rate, by recorder name and Event type (Normal, Warning).
 var EventsDroppedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -60,14 +51,18 @@ type Limit struct {
 	Burst int
 }
 
+// burstFlag names the burst flag of each rate flag.
+var burstFlag = map[string]string{"event-qps": "event-burst", "event-warning-qps": "event-warning-burst"}
+
 // Validate refuses a limit main must not start with: a negative or
-// non-finite rate, or a burst below 1. flag names the rate's flag.
+// non-finite rate, or a burst below 1. flag names the rate's flag
+// (event-qps or event-warning-qps); the error names the flag at fault.
 func (l Limit) Validate(flag string) error {
 	if math.IsNaN(l.QPS) || math.IsInf(l.QPS, 0) || l.QPS < 0 {
 		return fmt.Errorf("--%s %v: want a finite rate of 0 (no limit) or more", flag, l.QPS)
 	}
 	if l.Burst < 1 {
-		return fmt.Errorf("--%s's burst %d: want 1 or more", flag, l.Burst)
+		return fmt.Errorf("--%s %d: want 1 or more", burstFlag[flag], l.Burst)
 	}
 	return nil
 }
@@ -88,8 +83,9 @@ func (l Limit) limiter() *rate.Limiter {
 //     (warning each, at most WarningNamespaces kept), so neither a flood of
 //     Normal transitions nor one tenant's burst of Warnings drops another
 //     namespace's one-shot Warning (HoldBundleMissing, NotificationDropped).
-//   - An Event repeating one written within DedupeWindow passes without a
-//     token: the broadcaster aggregates it into a series.
+//   - Every Event pays a token, repeats included: the broadcaster keys its
+//     aggregation on the regarding object's resourceVersion and more, so a
+//     repeat it would write anew must not pass free.
 //
 // client-go's events.k8s.io broadcaster (behind controller-runtime's
 // GetEventRecorder) starts one goroutine and one API write per Event, with
@@ -103,7 +99,7 @@ func Limited(rec events.EventRecorder, name string, normal, warning Limit) event
 		return rec
 	}
 	return &limited{next: rec, normal: normal.limiter(), warning: warning,
-		warnings: newLRU[*rate.Limiter](WarningNamespaces), seen: newLRU[time.Time](dedupeEntries), now: time.Now,
+		warnings: newLRU[*rate.Limiter](WarningNamespaces), now: time.Now,
 		droppedNormal:  EventsDroppedTotal.WithLabelValues(name, corev1.EventTypeNormal),
 		droppedWarning: EventsDroppedTotal.WithLabelValues(name, corev1.EventTypeWarning)}
 }
@@ -115,16 +111,15 @@ type limited struct {
 
 	mu       sync.Mutex
 	warnings *lru[*rate.Limiter] // namespace -> Warning bucket
-	seen     *lru[time.Time]     // Event key -> last written
 	now      func() time.Time
 
 	droppedNormal, droppedWarning prometheus.Counter
 }
 
-// Eventf writes the Event if its bucket allows it (or it repeats one just
-// written), else drops it. Any type but Warning counts as Normal.
+// Eventf writes the Event if its bucket allows it, else drops it. Any type
+// but Warning counts as Normal.
 func (l *limited) Eventf(regarding, related runtime.Object, eventtype, reason, action, note string, args ...interface{}) {
-	if !l.allow(regarding, eventtype, reason, note, args) {
+	if !l.allow(regarding, eventtype) {
 		if eventtype == corev1.EventTypeWarning {
 			l.droppedWarning.Inc()
 		} else {
@@ -135,22 +130,19 @@ func (l *limited) Eventf(regarding, related runtime.Object, eventtype, reason, a
 	l.next.Eventf(regarding, related, eventtype, reason, action, note, args...)
 }
 
-func (l *limited) allow(regarding runtime.Object, eventtype, reason, note string, args []interface{}) bool {
-	ns, obj := "", fmt.Sprintf("%T", regarding)
-	if m, err := meta.Accessor(regarding); err == nil {
-		ns, obj = m.GetNamespace(), obj+"/"+m.GetNamespace()+"/"+m.GetName()
-	}
-	key := obj + "\x00" + eventtype + "\x00" + reason + "\x00" + fmt.Sprintf(note, args...)
+func (l *limited) allow(regarding runtime.Object, eventtype string) bool {
+	lim := l.normal
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	now := l.now()
-	if at, ok := l.seen.get(key); ok && now.Sub(at) < DedupeWindow {
-		return true
-	}
-	lim := l.normal
 	if eventtype == corev1.EventTypeWarning {
 		lim = nil
 		if l.warning.QPS > 0 {
+			// The regarding object's namespace; a cluster-scoped object
+			// (the shard gate's Namespace Warnings) shares the "" bucket.
+			ns := ""
+			if m, err := meta.Accessor(regarding); err == nil {
+				ns = m.GetNamespace()
+			}
 			var ok bool
 			if lim, ok = l.warnings.get(ns); !ok {
 				lim = l.warning.limiter()
@@ -158,11 +150,7 @@ func (l *limited) allow(regarding runtime.Object, eventtype, reason, note string
 			}
 		}
 	}
-	if lim != nil && !lim.AllowN(now, 1) {
-		return false
-	}
-	l.seen.put(key, now)
-	return true
+	return lim == nil || lim.AllowN(l.now(), 1)
 }
 
 // lru is a map of at most size entries that evicts the least recently used.

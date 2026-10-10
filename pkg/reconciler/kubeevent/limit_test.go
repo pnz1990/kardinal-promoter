@@ -112,22 +112,32 @@ func TestLimited_WarningsPerNamespace(t *testing.T) {
 	assert.EqualValues(t, kubeevent.DefaultWarningBurst+1, next.warning.Load(), "tenant B's Warning is written")
 }
 
-// TestLimited_Dedupe: an Event repeating one just written (same object,
-// type, reason and message) passes without a token, so repeats the
-// broadcaster folds into a series do not use up the bucket.
+// TestLimited_RepeatsPayTokens: a repeat of the same Event on an object
+// whose resourceVersion changes (a status write between them, the usual
+// case) is a new Event to client-go's broadcaster, which keys on the
+// object reference including resourceVersion, so it must pay a token like
+// any other: through the real broadcaster, 500 such repeats write at most
+// the burst.
 //
 // Covers PERF-EVENTS-01.
-func TestLimited_Dedupe(t *testing.T) {
-	next := &countingRecorder{}
-	rec := kubeevent.Limited(next, "test-dedupe", kubeevent.Limit{QPS: 1, Burst: 2}, kubeevent.Limit{QPS: 1, Burst: 2})
-	for i := 0; i < 50; i++ {
-		rec.Eventf(pod("ns", "gate"), nil, corev1.EventTypeWarning, "Blocked", "Evaluate", "gate %s blocking", "weekend")
+func TestLimited_RepeatsPayTokens(t *testing.T) {
+	sink := &slowSink{latency: 10 * time.Millisecond}
+	b := events.NewBroadcaster(sink)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, b.StartRecordingToSinkWithContext(ctx))
+	defer b.Shutdown()
+	rec := kubeevent.Limited(b.NewRecorder(scheme.Scheme, "kardinal-test"), "test-repeats",
+		kubeevent.Limit{QPS: 1, Burst: 5}, kubeevent.Limit{QPS: 1, Burst: 5})
+	for i := 0; i < 500; i++ {
+		obj := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "gate", UID: "u", ResourceVersion: fmt.Sprint(i + 1)}}
+		rec.Eventf(obj, nil, corev1.EventTypeWarning, "Blocked", "Evaluate", "gate %s blocking", "weekend")
+		rec.Eventf(obj, nil, corev1.EventTypeNormal, "Evaluated", "Evaluate", "gate evaluated")
 	}
-	assert.EqualValues(t, 50, next.warning.Load(), "repeats pass (the broadcaster aggregates them)")
-	rec.Eventf(pod("ns", "gate"), nil, corev1.EventTypeWarning, "Blocked", "Evaluate", "gate %s blocking", "freeze")
-	assert.EqualValues(t, 51, next.warning.Load(), "a new message takes the second token")
-	rec.Eventf(pod("ns", "gate"), nil, corev1.EventTypeWarning, "Blocked", "Evaluate", "gate %s blocking", "hours")
-	assert.EqualValues(t, 51, next.warning.Load(), "the bucket is empty for new messages")
+	time.Sleep(500 * time.Millisecond)
+	require.Eventually(t, func() bool { return sink.inFlight.Load() == 0 }, 5*time.Second, 20*time.Millisecond)
+	assert.LessOrEqual(t, sink.writes.Load(), int64(5+5+2), "at most each bucket's burst (and a token refilled meanwhile)")
+	assert.LessOrEqual(t, sink.peak.Load(), int64(5+5+2))
 }
 
 // TestLimitValidate: main refuses a negative or non-finite rate and a burst
@@ -138,8 +148,17 @@ func TestLimitValidate(t *testing.T) {
 	for _, l := range []kubeevent.Limit{{QPS: 0, Burst: 1}, {QPS: 20, Burst: 100}, {QPS: 0.5, Burst: 1}} {
 		assert.NoError(t, l.Validate("event-qps"), "%+v", l)
 	}
-	for _, l := range []kubeevent.Limit{{QPS: -1, Burst: 10}, {QPS: math.NaN(), Burst: 10}, {QPS: math.Inf(1), Burst: 10}, {QPS: 20, Burst: 0}, {QPS: 0, Burst: -1}} {
-		assert.Error(t, l.Validate("event-qps"), "%+v", l)
+	for _, l := range []kubeevent.Limit{{QPS: -1, Burst: 10}, {QPS: math.NaN(), Burst: 10}, {QPS: math.Inf(1), Burst: 10}} {
+		err := l.Validate("event-qps")
+		require.Error(t, err, "%+v", l)
+		assert.Contains(t, err.Error(), "--event-qps")
+	}
+	for flag, burst := range map[string]string{"event-qps": "--event-burst", "event-warning-qps": "--event-warning-burst"} {
+		for _, l := range []kubeevent.Limit{{QPS: 20, Burst: 0}, {QPS: 0, Burst: -1}} {
+			err := l.Validate(flag)
+			require.Error(t, err, "%+v", l)
+			assert.Contains(t, err.Error(), burst, "the error names the burst flag")
+		}
 	}
 }
 

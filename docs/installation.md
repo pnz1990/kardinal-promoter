@@ -837,10 +837,10 @@ Events:
 | Warning | one per namespace (the 1,024 most recently used) | `--event-warning-qps` (5 a second) | `--event-warning-burst` (50) |
 
 So neither a flood of Normal transitions nor one tenant's burst of Warnings drops another
-namespace's Warning. An Event that repeats one written in the last 5 seconds (same object, type,
-reason and message) passes without a token: the broadcaster folds it into a series. Any other
-Event over its bucket is dropped, never queued, so a reconcile never waits on an Event, and
-`kardinal_events_dropped_total{recorder,type}` counts it. Set the flags with `controller.extraArgs`;
+namespace's Warning. The shard gate's Warnings regard Namespaces, which are cluster-scoped, so
+they share one cluster-wide Warning bucket (and are otherwise log only: see the table below).
+Every Event pays a token, repeats included. An Event over its bucket is dropped, never queued, so
+a reconcile never waits on an Event, and `kardinal_events_dropped_total{recorder,type}` counts it. Set the flags with `controller.extraArgs`;
 a rate of 0 removes that type's limit, and the controller refuses to start with a negative or
 non-finite rate or a burst below 1.
 
