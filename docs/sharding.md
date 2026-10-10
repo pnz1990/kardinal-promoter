@@ -112,6 +112,9 @@ latency: the owning shard's PRStatus poll records the merge.
 
 - **The cache**: every controller still watches the kardinal kinds in every
   namespace; memory is not divided. Only the work is.
+- **AuditEvent retention's list**: each shard's leader lists the AuditEvents of every
+  namespace (metadata only, at its own 5 requests a second), but counts and deletes only
+  in the namespaces its shard owns ([Retention](guides/security.md#retention)).
 - **kro**: one kro Graph controller reconciles the Graphs of all shards from one
   queue, so sharding kardinal does not raise the Graph throughput ceiling
   ([ledger G13](design/16-graph-capability-ledger.md#g13-the-graph-controller-cannot-be-sharded)).

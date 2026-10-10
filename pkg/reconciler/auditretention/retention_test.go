@@ -347,3 +347,37 @@ func TestPruner_RecordsWithoutPipeline(t *testing.T) {
 	assert.Equal(t, []string{"a/api-2", "a/api-3", "a/web-0", "a/web-1"}, names(t, c))
 	assert.Equal(t, []string{"api-0", "api-1"}, c.deletes, "oldest first")
 }
+
+// TestPruner_OnlyOwnedNamespaces: under --namespace-shard the pruner of one
+// shard neither counts nor deletes records in a namespace it does not own,
+// with either limit, and re-checks ownership before each delete (a
+// namespace can move to another shard during a run).
+//
+// Covers AUDIT-RETENTION-02.
+func TestPruner_OnlyOwnedNamespaces(t *testing.T) {
+	old := now.Add(-48 * time.Hour)
+	var objs []client.Object
+	for _, ns := range []string{"mine", "theirs"} {
+		objs = append(objs, event(ns, "web", ns+"-old", old))
+		for i := 0; i < 3; i++ {
+			objs = append(objs, event(ns, "web", fmt.Sprintf("%s-%d", ns, i), now.Add(time.Duration(i)*time.Second)))
+		}
+	}
+	c := newPaged(t, objs...)
+	owned := map[string]bool{"mine": true}
+	p := &auditretention.Pruner{Client: c, MaxAge: 24 * time.Hour, MaxPerPipeline: 2,
+		Owns: func(ns string) bool { return owned[ns] }, Now: func() time.Time { return now.Add(time.Hour) }}
+	n, err := p.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, n, "mine-old by age, mine-0 by count")
+	assert.ElementsMatch(t, []string{"mine-old", "mine-0"}, c.deletes)
+	assert.Equal(t, []string{"mine/mine-1", "mine/mine-2", "theirs/theirs-0", "theirs/theirs-1", "theirs/theirs-2", "theirs/theirs-old"}, names(t, c))
+
+	// The namespace moves away mid-run: nothing more is deleted there.
+	c = newPaged(t, objs...)
+	calls := 0
+	p.Client, p.Owns = c, func(ns string) bool { calls++; return ns == "mine" && calls <= 1 }
+	_, err = p.Run(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, c.deletes, "ownership is checked again at the delete")
+}

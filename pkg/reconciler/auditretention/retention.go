@@ -79,6 +79,12 @@ type Pruner struct {
 	// Namespace limits the pruner to one namespace (--watch-namespace);
 	// empty is every namespace.
 	Namespace string
+	// Owns reports whether this controller owns a namespace now
+	// (shard.Gate.Owns under --namespace-shard); nil owns every one. The
+	// pruner skips, and never deletes in, a namespace it does not own, so
+	// shards neither repeat each other's work nor apply their limits to
+	// another shard's records.
+	Owns func(namespace string) bool
 	// MaxAge deletes records created longer ago; 0 keeps any age.
 	MaxAge time.Duration
 	// MaxPerPipeline keeps the newest records of each Pipeline (namespace
@@ -251,6 +257,9 @@ func (r *run) list(ctx context.Context, opts []client.ListOption, fn func(rec re
 		}
 		for i := range list.Items {
 			m := &list.Items[i]
+			if !r.owns(m.Namespace) {
+				continue
+			}
 			if err := fn(recordOf(m), m.Labels[labelPipeline]); err != nil {
 				return err
 			}
@@ -302,7 +311,14 @@ func (r *run) prunePipeline(ctx context.Context, key string) error {
 	return nil
 }
 
+// owns reports whether the pruner may act in namespace.
+func (r *run) owns(namespace string) bool { return r.p.Owns == nil || r.p.Owns(namespace) }
+
 func (r *run) delete(ctx context.Context, rec record) error {
+	// Ownership can move to another shard during a run: check again.
+	if !r.owns(rec.namespace) {
+		return nil
+	}
 	uid := rec.uid
 	ae := &v1alpha1.AuditEvent{ObjectMeta: metav1.ObjectMeta{Name: rec.name, Namespace: rec.namespace}}
 	err := r.p.Client.Delete(ctx, ae, client.Preconditions{UID: &uid})

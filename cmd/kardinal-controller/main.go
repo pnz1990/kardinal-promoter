@@ -702,8 +702,11 @@ func main() {
 			logger.Fatal().Err(err).Msg("unable to create the AuditEvent retention client")
 		}
 		if err := mgr.Add(&auditretention.Pruner{
-			Client:         retentionClient,
-			Namespace:      watchNamespace,
+			Client:    retentionClient,
+			Namespace: watchNamespace,
+			// Under --namespace-shard each shard prunes only its own
+			// namespaces (shard.Active is nil-safe: owns all when off).
+			Owns:           func(ns string) bool { return shard.Active().Owns(ns) },
 			MaxAge:         auditMaxAge,
 			MaxPerPipeline: auditMaxPerPipeline,
 			Interval:       auditRetentionInterval,

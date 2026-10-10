@@ -398,8 +398,14 @@ A gate whose result changes often writes a record at each change, and can reach
 limit, or the time a busy Pipeline takes to write `maxPerPipeline` records), or turn
 retention off.
 
+**Sharding.** With `controller.namespaceShard` (`--namespace-shard`), each shard's leader
+prunes only the namespaces its shard owns, so shards neither repeat each other's work nor apply
+their limits to another shard's records ([Sharding](../sharding.md)).
+
 **Turning it off.** Set `audit.retention.enabled: false` (`--audit-retention=false`). The chart
-then also drops `delete` on AuditEvents. Every record stays, so size etcd for them (see the
+then also drops `delete` on AuditEvents. An install that does not use the chart, or that
+removed the `delete` grant, must set `--audit-retention=false` too: otherwise every run (every
+10 minutes) fails with `Forbidden` and logs the error. Every record stays, so size etcd for them (see the
 numbers above) or export and delete them yourself.
 
 **Exporting first.** To keep every record outside the cluster, run the
