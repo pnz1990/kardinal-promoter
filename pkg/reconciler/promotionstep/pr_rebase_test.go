@@ -440,7 +440,26 @@ func TestWaitingForMerge_OwnMergeIsNoRebuild(t *testing.T) {
 	assert.Equal(t, pr.Hash.String(), got.Status.Outputs["pushedSHA"])
 	assert.Contains(t, got.Status.Message, "already has this change")
 	assert.Contains(t, got.Status.Message, "the PR branch is kept")
+	assert.NotContains(t, got.Status.Message, "force-pushed")
+	assert.NotEqual(t, "true", got.Status.Outputs["noChanges"], "the refresh's own noChanges is not stored")
 	for len(rec.Events) > 0 {
 		assert.NotContains(t, <-rec.Events, "PRBranchRebuilt")
 	}
+
+	// main is force-pushed to a head that has the change too: still no
+	// rebuild, and the message says the base was rewritten.
+	forced := remote.commit(map[string]string{
+		"environments/prod/kustomization.yaml": pr.file(t, "environments/prod/kustomization.yaml"),
+		"README.md":                            "rewritten\n",
+	}, true)
+	now = now.Add(31 * time.Second)
+	reconcileStep(t, r, step.Name)
+	got = getStep(t, c, step.Name)
+	require.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
+	assert.Equal(t, pr.Hash, remote.head(branch).Hash, "nothing pushed")
+	assert.Empty(t, got.Status.Outputs["prBranchRebuilds"])
+	assert.Equal(t, forced, got.Status.Outputs["baseSHA"])
+	assert.Contains(t, got.Status.Message, "already has this change")
+	assert.Contains(t, got.Status.Message, "no longer in the base branch history (force-pushed)")
+	assert.NotEqual(t, "true", got.Status.Outputs["noChanges"])
 }

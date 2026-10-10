@@ -52,8 +52,10 @@ var historyTimeout = 30 * time.Second
 // hintForcePushed is added to the message of a rebuild because the base
 // branch was force-pushed: the commit the PR was built on is no longer in
 // its history, so which paths changed cannot be known.
-const hintForcePushed = "the commit the PR was built on is no longer in the base branch history (force-pushed), " +
-	"so the PR branch was rebuilt on the new base"
+const hintForcePushed = hintBaseRewritten + ", so the PR branch was rebuilt on the new base"
+
+// hintBaseRewritten names a force-pushed base in a refresh message.
+const hintBaseRewritten = "the commit the PR was built on is no longer in the base branch history (force-pushed)"
 
 // baseHistory is what a read of the base branch history found about the
 // commit a PR was built on.
@@ -310,9 +312,12 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 		outputs := cloneMap(ps.Status.Outputs)
 		outputs[builtinsteps.OutputBaseSHA] = head
 		ps.Status.Outputs = outputs
-		ps.Status.Message = withLabelsError(fmt.Sprintf("PR #%s is open, waiting for merge; base branch %s moved from %s to %s "+
-			"and already has this change (the PR merged and its status has not caught up, or someone applied the change), "+
-			"so the PR branch is kept", pr, branch, short(built), short(head)), outputs)
+		note := fmt.Sprintf("base branch %s moved from %s to %s and already has this change (the PR merged and its "+
+			"status has not caught up, or someone applied the change), so the PR branch is kept", branch, short(built), short(head))
+		if found == baseRewritten {
+			note += "; " + hintBaseRewritten
+		}
+		ps.Status.Message = withLabelsError(fmt.Sprintf("PR #%s is open, waiting for merge; %s", pr, note), outputs)
 		return true, r.Status().Patch(ctx, ps, client.MergeFrom(base))
 	}
 	n, _ := strconv.Atoi(ps.Status.Outputs[outputPRRebuilds])
