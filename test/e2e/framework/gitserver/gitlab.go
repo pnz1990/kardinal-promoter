@@ -169,20 +169,41 @@ func (g *gitlab) PullRequests(ctx context.Context, r Repo) ([]PR, error) {
 }
 
 // gitlabMergeRetry is how long MergePR retries while GitLab is still checking
-// whether a new MR can be merged.
-const gitlabMergeRetry = time.Minute
+// whether a new MR can be merged, or has not answered a merge in time.
+const gitlabMergeRetry = 3 * time.Minute
 
 // MergePR merges the MR. GitLab computes a new MR's merge status in the
 // background and refuses the merge until it has (405, 406 or 422 "Branch
 // cannot be merged"; 409 while the head is still being updated), so those
-// answers are retried for up to gitlabMergeRetry.
+// answers are retried for up to gitlabMergeRetry. GitLab merges inside the
+// PUT, waiting on Gitaly and Sidekiq; on a loaded host the answer can come
+// after the client's timeout while the merge goes on (#1652). A merge that
+// timed out or got a 5xx is not failed at once: the MR is read back, and the
+// merge is done when GitLab reports it merged, or asked again while it is
+// still open.
 func (g *gitlab) MergePR(ctx context.Context, r Repo, number int) error {
 	path := fmt.Sprintf("%s/merge_requests/%d/merge", g.projectPath(r), number)
 	deadline := time.Now().Add(gitlabMergeRetry)
 	for {
 		err := g.do(ctx, http.MethodPut, path, nil, nil)
-		se, ok := err.(*StatusError)
-		if err == nil || !ok || !retryableMerge(se.Code) || time.Now().After(deadline) {
+		if err == nil {
+			return nil
+		}
+		se, isStatus := err.(*StatusError)
+		retry := isStatus && retryableMerge(se.Code)
+		if !isStatus || se.Code >= 500 {
+			// No answer in time, or GitLab failed: did the merge happen?
+			var m gitlabMR
+			if gerr := g.do(ctx, http.MethodGet, fmt.Sprintf("%s/merge_requests/%d", g.projectPath(r), number), nil, &m); gerr == nil {
+				if m.State == "merged" {
+					return nil
+				}
+				retry = m.State == "opened"
+			} else {
+				retry = true // GitLab is still slow: ask again
+			}
+		}
+		if !retry || time.Now().After(deadline) {
 			return err
 		}
 		select {

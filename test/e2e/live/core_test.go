@@ -169,12 +169,18 @@ func TestCore_NewerBundleSupersedes(t *testing.T) {
 	olderPR := e.WaitPR(t, a.repo, time.Minute, "the older Bundle's prod PR", func(pr gitserver.PR) bool { return pr.State == "open" })
 	newer := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
 
+	since := time.Now()
 	e.WaitBundlePhase(t, a.ns, older, "Superseded", promoteTimeout)
-	// The PromotionStep reconciler watches Bundles, so the older step fails and
-	// its PR closes at once, not on the next 30s WaitingForMerge poll.
-	ps := e.WaitStepState(t, a.ns, pipelineName, older, "prod", "Failed", 15*time.Second)
+	// The PromotionStep reconciler watches Bundles, so the older step starts
+	// cancelling at once, not on the next 30s WaitingForMerge poll. The
+	// cancel closes the PR on the git server first, which a loaded GitLab
+	// can take tens of seconds to answer (#1652), so the start is what is
+	// timed, and the outcome is waited for.
+	e.WaitControllerLog(t, since, 15*time.Second, "the older prod step to start cancelling",
+		framework.LogMessage("closing open PR and cancelling step", "namespace", a.ns, "env", "prod", "bundle", older))
+	ps := e.WaitStepState(t, a.ns, pipelineName, older, "prod", "Failed", 2*time.Minute)
 	assert.Contains(t, ps.Status.Message, "superseded")
-	e.WaitPRState(t, a.repo, olderPR.Number, "closed", 15*time.Second)
+	e.WaitPRState(t, a.repo, olderPR.Number, "closed", time.Minute)
 	assert.Len(t, e.PRComments(t, a.repo, olderPR.Number, "kardinal closed this PR: bundle "+older+" was superseded"), 1)
 
 	e.WaitStepState(t, a.ns, pipelineName, newer, "test", "Verified", promoteTimeout)
