@@ -32,7 +32,7 @@ func TestScale_LoadPipelines(t *testing.T) {
 	r.Note("pipelines", len(names))
 	r.Note("pipelineSetupSeconds", int(time.Since(start).Seconds()))
 	r.Note("burst", r.Fleet.Burst(t, names, len(names), 50))
-	r.Finish()
+	r.Finish(scale.AllVerified)
 }
 
 // TestScale_LoadBurst creates the profile's BurstBundles Bundles (1,000 in
@@ -94,7 +94,7 @@ func TestScale_LatencySLO(t *testing.T) {
 	r.Note("pipelines", len(names))
 	r.Note("burst", r.Fleet.Burst(t, names, len(names), 50))
 	slo := r.P.SLO
-	r.Finish(func(o *invariants.Options) { o.SLO = &slo })
+	r.Finish(scale.AllVerified, func(o *invariants.Options) { o.SLO = &slo })
 }
 
 // TestScale_TwoTenants is two teams on one controller (#1577, #1578).
@@ -270,11 +270,11 @@ func tenantFairness(t *testing.T, r *scale.Run, startA func()) {
 		t.Fatalf("tenant A's Bundles did not settle")
 	}
 	r.Note("tenantAWaveSeconds", int(time.Since(aStart).Seconds()))
-	r.Finish()
+	r.Finish(scale.AllVerified)
 	// B's latency, with B's own targets.
 	t.Run("tenant-b", func(t *testing.T) {
 		slo := invariants.SLO{StepP99: r.P.TenantStepP99}
-		invariants.Check(t, r.E, invariants.Options{Namespace: tenantB.NS, Targets: tenantB.Targets(),
+		invariants.Check(t, r.E, invariants.Options{Namespace: tenantB.NS, Outcome: invariants.OutcomeAllVerified, Targets: tenantB.Targets(),
 			Image: scale.ImageRepo, SeedTag: scale.SeedTag, Start: r.Start, SLO: &slo,
 			Extra: map[string]interface{}{"tenant": "b"}})
 	})

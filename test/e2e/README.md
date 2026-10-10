@@ -149,7 +149,7 @@ in upper snake case (`KARDINAL_E2E_SCALE_SUSTAINED_RATE=5`,
 
 | Tests | What they do |
 |---|---|
-| `TestScale_Topology*` | a 100-stage chain, the 120-stage chain and 150-environment fan-out a large company asks for, waves, a diamond lattice, a fan-in, mixed auto and pr-review approval, several Pipelines writing one repo and branch |
+| `TestScale_Topology*` | a 100-stage chain, the 120-stage chain and 150-environment fan-out a large company asks for, the same fan-out with 151 Argo CD Applications and `argocd` health (`TestScale_TopologyArgoCD`, run alone), waves, a diamond lattice, a fan-in, mixed auto and pr-review approval, several Pipelines writing one repo and branch |
 | `TestScale_Load*`, `TestScale_LatencySLO`, `TestScale_TwoTenants`, `TestScale_TenantFairness` | 200 Pipelines with a Bundle each, a burst of 1,000 Bundles (the newest per Pipeline must end Verified), a sustained rate for a duration, the latency objective ([Latency SLO](#latency-slo)), and two tenants: a 149-environment wave on one branch in one namespace while another namespace's Pipeline must get its first reconcile within `TenantStartWithin` (20 s); and fairness: while that wave runs, or 149 Pipelines on their own repositories promote at once, another namespace promotes a Bundle on each of `TenantBBundles` (5) 3-environment Pipelines with step p99 within `TenantStepP99` (10 s) |
 | `TestScale_Race*` | rapid-fire Bundles, Pipeline edits, gate flapping, a ChangeWindow switched on while a step waits for merge, pause/resume storms, rollback during a promotion, PRs closed, reopened and merged from outside, a force-pushed branch, a namespace deleted mid-flight, duplicate, forged and out-of-order webhooks |
 | `TestScale_Chaos*` | the leader killed every 20-60 s, kro restarted, git latency and outages, API Priority and Fairness throttling the controller to one seat, the SCM token rotated mid-flight |
@@ -165,6 +165,7 @@ The invariants, after every Bundle settled:
 - no environment has two open PRs, and no open PR belongs to a finished Bundle;
 - no `kardinal/` branch is left without an open or merged PR;
 - every Bundle (and each of its steps) reached a terminal phase within the profile's `Settle`;
+- the Bundles ended as the test expects (`expected-outcome`): by default the newest Bundle of each Pipeline Verified and the others Verified or Superseded; `scale.AllVerified` for tests with one Bundle per Pipeline. A Failed Bundle passes only with `invariants.OutcomeAny` and a stated reason;
 - no Graph outlived its Bundle, stayed deleting, reports an error or nears etcd's request limit;
 - AuditEvents agree with the step states;
 - the controller logged no `DATA RACE`, no panic and no error-level line outside the allowlist (`invariants.Benign` plus the faults a test injects), and neither its containers nor kro's restarted (OOMKilled, crashed);
