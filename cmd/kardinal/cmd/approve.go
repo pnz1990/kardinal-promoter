@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"slices"
 	"sort"
 	"strings"
 
@@ -20,6 +19,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
@@ -115,7 +115,7 @@ func approveFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, bundl
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: b.Spec.Pipeline}, &p); err != nil {
 		return fmt.Errorf("approve: get pipeline %s of bundle %s: %w", b.Spec.Pipeline, bundleName, err)
 	}
-	if !slices.ContainsFunc(p.Spec.Environments, func(e v1alpha1.EnvironmentSpec) bool { return e.Name == o.env }) {
+	if !graph.HasEnvironment(&p, o.env) { // a fleet target included
 		return fmt.Errorf("approve: pipeline %s has no environment %q", p.Name, o.env)
 	}
 	if !o.revoke && lifecycle.Halted(&b) {

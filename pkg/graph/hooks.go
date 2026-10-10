@@ -100,7 +100,13 @@ func hooksOf(env kardinalv1alpha1.EnvironmentSpec, phase string) []kardinalv1alp
 	return out
 }
 
+// findEnvSpec is the spec of environment name of pipeline: a fleet target
+// is its fleet's spec with the target's name, path and health
+// (EnvironmentSpecFor), and any other name one of spec.environments.
 func findEnvSpec(pipeline *kardinalv1alpha1.Pipeline, name string) kardinalv1alpha1.EnvironmentSpec {
+	if e, ok := EnvironmentSpecFor(pipeline, name); ok {
+		return e
+	}
 	for _, e := range pipeline.Spec.Environments {
 		if e.Name == name {
 			return e

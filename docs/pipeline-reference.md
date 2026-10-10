@@ -438,7 +438,9 @@ How a fleet is promoted:
 - **Gates.** A PolicyGate that applies to the fleet environment (`kardinal.io/applies-to: prod`)
   applies to each target, which gets its own instance. A gate can also name one target
   (`prod-eu-west`). A per-promotion MetricCheck that such a gate reads gets one instance per
-  target. Each instance starts once the fleet's upstreams are Verified.
+  target. Each instance starts once the fleet's upstreams are Verified. An approval gate is
+  approved per target: `kardinal approve <bundle> --env prod-eu-west`. In a `pr-review` fleet,
+  each target's PR carries the `kardinal/gates` check for its own gate instances.
 - **After the fleet.** An environment that depends on the fleet waits for every target to be
   Verified. A failed target holds it until that target is Verified. With `maxUnavailable` unset,
   the Bundle is `Failed` while the other targets keep promoting. A fleet that depends on
@@ -467,8 +469,9 @@ How a fleet is promoted:
   selector it cannot read the cluster, so it checks the rest of the Pipeline with a
   stand-in target and prints a warning.
 - **Targets changed mid-rollout.** An edit to `fleet.targets`, or a change in what a selector
-  selects, updates the Graph of a Bundle in flight in place. An added target joins the queue
-  after the others. A removed target's PromotionStep is deleted: an open PR is closed and its
+  selects, updates the Graph of a Bundle in flight in place. An added target takes its place in
+  the target order (its list position, or its name for a selector), not the end of the queue:
+  it can start before targets that were already waiting. A removed target's PromotionStep is deleted: an open PR is closed and its
   branch deleted, and a Verified target's change stays in git. Its step's record (state,
   message, PR) is kept in the Bundle's `status.retiredSteps`. Targets already Verified are not
   promoted again.

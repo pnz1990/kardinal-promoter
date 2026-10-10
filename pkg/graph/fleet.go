@@ -203,6 +203,18 @@ func EnvironmentSpecFor(p *kardinalv1alpha1.Pipeline, name string) (kardinalv1al
 	return m.spec, ok
 }
 
+// HasEnvironment reports whether name is an environment of p: one of
+// spec.environments (a fleet environment included) or a fleet target.
+func HasEnvironment(p *kardinalv1alpha1.Pipeline, name string) bool {
+	for _, e := range p.Spec.Environments {
+		if e.Name == name {
+			return true
+		}
+	}
+	_, ok := EnvironmentSpecFor(p, name)
+	return ok
+}
+
 // FleetOf returns the fleet environment that target belongs to, or "" when
 // target is not a fleet target of p.
 func FleetOf(p *kardinalv1alpha1.Pipeline, target string) string {

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -59,14 +60,19 @@ func TestKeepRemovedFleetTargets(t *testing.T) {
 	}
 	s := runtime.NewScheme()
 	require.NoError(t, kardinalv1alpha1.AddToScheme(s))
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(
-		step("test", "", "Verified"), step("prod-eu", "prod", "Verified"), step("prod-us", "prod", "WaitingForMerge")).Build()
 	b := &kardinalv1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "web-b1", Namespace: "default"}}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(b,
+		step("test", "", "Verified"), step("prod-eu", "prod", "Verified"), step("prod-us", "prod", "WaitingForMerge")).
+		WithStatusSubresource(&kardinalv1alpha1.Bundle{}).Build()
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(b), b))
 	r := &Reconciler{Client: c}
 	for range 2 {
-		r.keepRemovedFleetTargets(context.Background(), zerolog.Nop(), b, p)
+		require.NoError(t, r.keepRemovedFleetTargets(context.Background(), zerolog.Nop(), b, p))
 	}
 	require.Len(t, b.Status.RetiredSteps, 1, "prod-us left the fleet; recorded once")
+	var stored kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(b), &stored))
+	assert.Len(t, stored.Status.RetiredSteps, 1, "and stored")
 	got := b.Status.RetiredSteps[0]
 	assert.Equal(t, "prod-us", got.Environment)
 	assert.Equal(t, "WaitingForMerge", got.State)
@@ -74,10 +80,17 @@ func TestKeepRemovedFleetTargets(t *testing.T) {
 }
 
 // nopTranslator counts Translate calls.
-type nopTranslator struct{ calls int }
+type nopTranslator struct {
+	calls int
+	// onTranslate, when set, runs at each Translate (before the Graph update).
+	onTranslate func()
+}
 
 func (m *nopTranslator) Translate(context.Context, *kardinalv1alpha1.Pipeline, *kardinalv1alpha1.Bundle) (string, error) {
 	m.calls++
+	if m.onTranslate != nil {
+		m.onTranslate()
+	}
 	return "g", nil
 }
 
@@ -96,21 +109,42 @@ func TestEnsurePipelineSpecCurrent_KeepsRemovedTargets(t *testing.T) {
 		Spec: kardinalv1alpha1.PromotionStepSpec{Environment: "prod-us"}, Status: kardinalv1alpha1.PromotionStepStatus{State: "WaitingForMerge"}}
 	s := runtime.NewScheme()
 	require.NoError(t, kardinalv1alpha1.AddToScheme(s))
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gone).Build()
-	tr := &nopTranslator{}
-	r := &Reconciler{Client: c, Translator: tr}
 	b := &kardinalv1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "web-b1", Namespace: "default"}}
 	b.Status.PipelineSpecHash = "old"
-	require.NoError(t, r.ensurePipelineSpecCurrent(context.Background(), zerolog.Nop(), b, p))
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gone, b.DeepCopy()).
+		WithStatusSubresource(&kardinalv1alpha1.Bundle{}).Build()
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(b), b))
+	ctx := context.Background()
+	tr := &nopTranslator{onTranslate: func() {
+		// The records are stored before the Graph update prunes the step: a
+		// crash here keeps them.
+		var stored kardinalv1alpha1.Bundle
+		require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(b), &stored))
+		require.Len(t, stored.Status.RetiredSteps, 1, "stored before the Graph update")
+		assert.Equal(t, "prod-us", stored.Status.RetiredSteps[0].Environment)
+	}}
+	r := &Reconciler{Client: c, Translator: tr}
+	b.Status.Phase = "Promoting" // an unpatched change of this reconcile
+	require.NoError(t, r.ensurePipelineSpecCurrent(ctx, zerolog.Nop(), b, p))
 	assert.Equal(t, 1, tr.calls)
 	require.Len(t, b.Status.RetiredSteps, 1)
 	assert.Equal(t, "prod-us", b.Status.RetiredSteps[0].Environment)
+	assert.Equal(t, "Promoting", b.Status.Phase, "the other changes of this reconcile are kept for the caller")
+
+	// A stale Bundle: the records cannot be stored, so the Graph is not updated.
+	stale := b.DeepCopy()
+	stale.ResourceVersion = "1"
+	stale.Status.RetiredSteps = nil
+	stale.Status.PipelineSpecHash = "old"
+	tr.onTranslate = nil
+	require.Error(t, r.ensurePipelineSpecCurrent(ctx, zerolog.Nop(), stale, p))
+	assert.Equal(t, 1, tr.calls, "no Graph update without the records")
 
 	// An unresolved selector fleet: nothing is recorded.
 	unresolved := p.DeepCopy()
 	unresolved.Spec.Environments[0].Fleet = &kardinalv1alpha1.FleetSpec{Selector: &kardinalv1alpha1.FleetSelector{
 		MatchLabels: map[string]string{"tier": "prod"}}}
 	b2 := &kardinalv1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "web-b1", Namespace: "default"}}
-	r.keepRemovedFleetTargets(context.Background(), zerolog.Nop(), b2, unresolved)
+	require.NoError(t, r.keepRemovedFleetTargets(context.Background(), zerolog.Nop(), b2, unresolved))
 	assert.Empty(t, b2.Status.RetiredSteps)
 }

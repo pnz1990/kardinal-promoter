@@ -535,7 +535,9 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 		Str("oldHash", b.Status.PipelineSpecHash).
 		Str("newHash", currentHash).
 		Msg("pipeline spec changed — updating Graph in place")
-	r.keepRemovedFleetTargets(ctx, log, b, pipeline)
+	if err := r.keepRemovedFleetTargets(ctx, log, b, pipeline); err != nil {
+		return err
+	}
 	if _, err := r.translate(ctx, log, pipeline, b); err != nil {
 		return fmt.Errorf("update graph for changed pipeline spec: %w", err)
 	}
@@ -860,26 +862,32 @@ func (r *Reconciler) newerSiblings(ctx context.Context, b *kardinalv1alpha1.Bund
 // keepRemovedFleetTargets records, in b's status.retiredSteps, the steps of
 // fleet targets that the Pipeline no longer has (D1): the in-place Graph
 // update prunes them, and their evidence (state, message, PR) would be lost.
-// The records are kept with the ones the retirement writes. It changes b in
-// memory only; the caller patches the status. A failed list records
+// The records are kept with the ones the retirement writes. New records are
+// patched into the stored status at once (on the resourceVersion b was read
+// at), before the caller updates the Graph; a failed patch is returned, so
+// the Graph is not updated and the reconcile retries. A failed list records
 // nothing (non-fatal).
 func (r *Reconciler) keepRemovedFleetTargets(ctx context.Context, log zerolog.Logger,
-	b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipeline) {
+	b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipeline) error {
 	if graph.ValidateFleets(pipeline) != nil {
 		// The fleets cannot be resolved (no targets yet, a selector not
 		// read): every target would look removed, and the Graph is not
 		// rebuilt from them anyway.
-		return
+		return nil
 	}
 	var steps kardinalv1alpha1.PromotionStepList
 	if err := r.List(ctx, &steps, client.InNamespace(b.Namespace), client.MatchingLabels{lifecycle.LabelBundle: b.Name}); err != nil {
 		log.Warn().Err(err).Msg("list steps to keep removed fleet targets (non-fatal)")
-		return
+		return nil
 	}
 	kept := make(map[string]bool, len(b.Status.RetiredSteps))
 	for _, rs := range b.Status.RetiredSteps {
 		kept[rs.Name] = true
 	}
+	// Patched on a copy: b may hold changes of this reconcile its caller
+	// patches later, and the patch response would overwrite them.
+	before := b.DeepCopy()
+	rec := b.DeepCopy()
 	for i := range steps.Items {
 		s := &steps.Items[i]
 		if s.Labels[graph.LabelFleet] == "" || kept[s.Name] {
@@ -888,9 +896,20 @@ func (r *Reconciler) keepRemovedFleetTargets(ctx context.Context, log zerolog.Lo
 		if _, ok := graph.EnvironmentSpecFor(pipeline, s.Spec.Environment); ok {
 			continue
 		}
-		b.Status.RetiredSteps = append(b.Status.RetiredSteps, lifecycle.RetiredStepOf(s))
+		rec.Status.RetiredSteps = append(rec.Status.RetiredSteps, lifecycle.RetiredStepOf(s))
 		log.Info().Str("env", s.Spec.Environment).Msg("fleet target removed from the Pipeline; its step is kept in status.retiredSteps")
 	}
+	if len(rec.Status.RetiredSteps) == len(b.Status.RetiredSteps) {
+		return nil
+	}
+	// Stored before the Graph update that makes kro prune the steps: a crash
+	// in between leaves the records, not steps nobody recorded.
+	if err := r.Status().Patch(ctx, rec, statusPatch(before)); err != nil {
+		return fmt.Errorf("record removed fleet targets in status.retiredSteps: %w", err)
+	}
+	b.Status.RetiredSteps = rec.Status.RetiredSteps
+	b.ResourceVersion = rec.ResourceVersion
+	return nil
 }
 
 // targetRollback is the fleet target b rolls back when b is the rollback of

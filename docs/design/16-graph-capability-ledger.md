@@ -632,7 +632,15 @@ collection grew (sizes 91, 95, 99), and kro routed 45,814 PromotionStep events o
 
 **kardinal workaround.** Pacing is done by choosing the list: a `def` node computes the items
 to admit from a selector `ref` that reads the collection's own objects back (no CEL edge, so no
-cycle), and items already admitted stay in the list, so pacing never prunes. Verified on kind
+cycle). Every item whose object the `ref` lists stays in the list, so pacing never prunes an
+observed item: pacing (rank, `maxConcurrent`, `maxUnavailable`) only limits new admissions
+(`TestFleet_PacingNeverPrunesAnObservedStep`, including stale observed states). The window that
+remains is between kro creating an item and the `ref` listing it. During that window the item is
+in the list only because of the current pacing. If the pacing changes before the `ref` sees the
+item (a lower-ranked target's gate turns ready, or a failure reaches `maxUnavailable`), kro
+deletes it. No CEL input can tell such an item from one that was never created: the
+collection's own objects are not in scope upstream of it. The window is one `ref` resync. The
+step may already have started; its finalizer closes a PR it opened. Verified on kind
 with `maxConcurrent` and `maxUnavailable`. kardinal's reconcilers must ignore label-only updates
 on the objects they own, or they reconcile every item on each growth.
 

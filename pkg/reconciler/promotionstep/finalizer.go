@@ -314,9 +314,8 @@ func (r *Reconciler) stepComeback(ctx context.Context, ps *v1alpha1.PromotionSte
 	if ok, err := read(key(b.Spec.Pipeline), &pl, "pipeline"); !ok || err != nil {
 		return noComeback, err
 	}
-	if !slices.ContainsFunc(pl.Spec.Environments, func(e v1alpha1.EnvironmentSpec) bool {
-		return e.Name == ps.Spec.Environment
-	}) {
+	// A fleet target comes back too: it is an environment of the Pipeline.
+	if !graph.HasEnvironment(&pl, ps.Spec.Environment) {
 		return noComeback, nil
 	}
 	name := b.Status.GraphRef
