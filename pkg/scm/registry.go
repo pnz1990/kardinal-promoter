@@ -49,6 +49,20 @@ var ErrNamespaceNotAllowed = errors.New("the ClusterScmProvider does not allow t
 // that is missing, lacks its key or is not labeled kardinal.io/referenceable.
 var ErrProviderConfig = errors.New("the SCM provider cannot be used")
 
+// ErrProviderURL is matched (errors.Is), besides ErrProviderConfig, by the
+// error for a provider whose spec.apiURL is refused: not a URL, an
+// unsupported scheme, or http:// without --scm-providers-allow-http.
+// Unlike a Secret that is missing or not referenceable yet, only an edit of
+// the provider's spec fixes it. Its message is not part of the error's.
+var ErrProviderURL = errors.New("the SCM provider's apiURL is refused")
+
+// urlError is a checkURL error: it is ErrProviderConfig (wrapped) and
+// ErrProviderURL.
+type urlError struct{ error }
+
+func (e urlError) Unwrap() error        { return e.error }
+func (e urlError) Is(target error) bool { return target == ErrProviderURL }
+
 // LabelReferenceable must be "true" on every Secret a ScmProvider or
 // ClusterScmProvider names: a user who may create providers but not read
 // Secrets must not be able to send a Secret of the namespace to an apiURL of
@@ -331,7 +345,7 @@ func (r *Registry) checkURL(spec ProviderSpec) error {
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
-		return fmt.Errorf("%s %s: spec.apiURL %q is not a URL: %w", spec.Identity.Kind, spec.Identity.Name, RedactURL(raw), ErrProviderConfig)
+		return urlError{fmt.Errorf("%s %s: spec.apiURL %q is not a URL: %w", spec.Identity.Kind, spec.Identity.Name, RedactURL(raw), ErrProviderConfig)}
 	}
 	switch {
 	case u.Scheme == "https":
@@ -339,11 +353,11 @@ func (r *Registry) checkURL(spec ProviderSpec) error {
 	case u.Scheme == "http" && r.AllowHTTP:
 		return nil
 	case u.Scheme == "http":
-		return fmt.Errorf("%s %s: spec.apiURL %s is http://, which would send the token in clear text; use https://, "+
+		return urlError{fmt.Errorf("%s %s: spec.apiURL %s is http://, which would send the token in clear text; use https://, "+
 			"or ask the cluster admin to set scm.providersAllowInsecureHTTP for an in-cluster SCM without TLS: %w",
-			spec.Identity.Kind, spec.Identity.Name, RedactURL(raw), ErrProviderConfig)
+			spec.Identity.Kind, spec.Identity.Name, RedactURL(raw), ErrProviderConfig)}
 	}
-	return fmt.Errorf("%s %s: spec.apiURL scheme %q is not supported: %w", spec.Identity.Kind, spec.Identity.Name, u.Scheme, ErrProviderConfig)
+	return urlError{fmt.Errorf("%s %s: spec.apiURL scheme %q is not supported: %w", spec.Identity.Kind, spec.Identity.Name, u.Scheme, ErrProviderConfig)}
 }
 
 // namespaceAllowed checks a ClusterScmProvider's allowedNamespaces against
