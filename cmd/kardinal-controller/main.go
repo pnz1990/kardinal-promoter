@@ -108,8 +108,8 @@ func main() {
 		metricsBindAddress     string
 		healthProbeBindAddress string
 		pprofAddress           string
-		eventQPS               float64
-		eventBurst             int
+		eventLimit             kubeevent.Limit
+		eventWarningLimit      kubeevent.Limit
 		webhookBindAddress     string
 		policyNamespaces       string
 		githubToken            string
@@ -195,10 +195,14 @@ func main() {
 		"The address the metric endpoint binds to.")
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081",
 		"The address the probe endpoint binds to.")
-	flag.Float64Var(&eventQPS, "event-qps", kubeevent.DefaultQPS,
-		"Most Kubernetes Events the controller writes a second; Events over --event-qps and --event-burst are dropped and counted in kardinal_events_dropped_total (every transition is also in status and AuditEvents). 0 removes the limit.")
-	flag.IntVar(&eventBurst, "event-burst", kubeevent.DefaultBurst,
-		"Most Kubernetes Events the controller writes at once, above --event-qps.")
+	flag.Float64Var(&eventLimit.QPS, "event-qps", kubeevent.DefaultQPS,
+		"Most Normal Kubernetes Events the controller writes a second; Events over the rate are dropped and counted in kardinal_events_dropped_total. Events are best effort: the durable record is status and AuditEvents. 0 removes the limit.")
+	flag.IntVar(&eventLimit.Burst, "event-burst", kubeevent.DefaultBurst,
+		"Most Normal Kubernetes Events the controller writes at once, above --event-qps.")
+	flag.Float64Var(&eventWarningLimit.QPS, "event-warning-qps", kubeevent.DefaultWarningQPS,
+		"Most Warning Kubernetes Events the controller writes a second, in a bucket of their own so a flood of Normal Events never drops them. 0 removes the limit.")
+	flag.IntVar(&eventWarningLimit.Burst, "event-warning-burst", kubeevent.DefaultWarningBurst,
+		"Most Warning Kubernetes Events the controller writes at once, above --event-warning-qps.")
 	flag.StringVar(&pprofAddress, "pprof-address", "",
 		"Address that serves Go's net/http/pprof profiles (heap, goroutine, CPU) under /debug/pprof/, with no authentication. Only an empty value (the default) disables it; an address without a host, such as :6060, binds to 127.0.0.1 only.")
 	flag.StringVar(&webhookBindAddress, "webhook-bind-address", ":8083",
@@ -641,7 +645,7 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to create the shard gate's clients")
 	}
 	gate := shard.New(shard.Options{Name: namespaceShard, Home: shardHome, Client: gateClient,
-		Reader: gateReader, Recorder: kubeevent.Limited(mgr.GetEventRecorder("kardinal-shard"), "kardinal-shard", eventQPS, eventBurst), Log: logger})
+		Reader: gateReader, Recorder: kubeevent.Limited(mgr.GetEventRecorder("kardinal-shard"), "kardinal-shard", eventLimit, eventWarningLimit), Log: logger})
 	if err := shard.Setup(mgr, gate); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up the shard gate")
 	}
@@ -724,7 +728,7 @@ func main() {
 	// client-go's events.k8s.io broadcaster starts a goroutine and an API
 	// write per Event with no bound: rate-limit and drop over the limit
 	// (--event-qps, --event-burst, #1682).
-	eventRecorder := kubeevent.Limited(mgr.GetEventRecorder("kardinal-controller"), "kardinal-controller", eventQPS, eventBurst)
+	eventRecorder := kubeevent.Limited(mgr.GetEventRecorder("kardinal-controller"), "kardinal-controller", eventLimit, eventWarningLimit)
 
 	if err := retire.Validate(); err != nil {
 		logger.Fatal().Err(err).Msg("invalid --graph-retire-*-after")

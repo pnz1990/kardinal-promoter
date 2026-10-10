@@ -24,28 +24,70 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 )
 
-type countingRecorder struct{ n atomic.Int64 }
+type countingRecorder struct{ normal, warning atomic.Int64 }
 
-func (c *countingRecorder) Eventf(runtime.Object, runtime.Object, string, string, string, string, ...interface{}) {
-	c.n.Add(1)
+func (c *countingRecorder) Eventf(_, _ runtime.Object, eventtype, _, _, _ string, _ ...interface{}) {
+	if eventtype == corev1.EventTypeWarning {
+		c.warning.Add(1)
+	} else {
+		c.normal.Add(1)
+	}
 }
 
-// TestLimited (#1682): the burst passes, the rest is dropped and counted,
-// never queued; qps 0 and a nil recorder pass through.
+func dropped(name, typ string) float64 {
+	return testutil.ToFloat64(kubeevent.EventsDroppedTotal.WithLabelValues(name, typ))
+}
+
+// TestLimited (#1682): each type's burst passes, the rest is dropped and
+// counted by type, never queued; no limit on either type and a nil
+// recorder pass through.
 //
 // Covers PERF-EVENTS-01.
 func TestLimited(t *testing.T) {
 	next := &countingRecorder{}
-	rec := kubeevent.Limited(next, "test-limited", 1, 5)
-	before := testutil.ToFloat64(kubeevent.EventsDroppedTotal.WithLabelValues("test-limited"))
+	rec := kubeevent.Limited(next, "test-limited", kubeevent.Limit{QPS: 1, Burst: 5}, kubeevent.Limit{QPS: 1, Burst: 2})
+	n0, w0 := dropped("test-limited", "Normal"), dropped("test-limited", "Warning")
 	for i := 0; i < 20; i++ {
 		rec.Eventf(&corev1.Pod{}, nil, corev1.EventTypeNormal, "R", "A", "n %d", i)
+		rec.Eventf(&corev1.Pod{}, nil, corev1.EventTypeWarning, "W", "A", "w %d", i)
 	}
-	assert.EqualValues(t, 5, next.n.Load(), "the burst passes")
-	assert.InDelta(t, 15, testutil.ToFloat64(kubeevent.EventsDroppedTotal.WithLabelValues("test-limited"))-before, 0.5, "the rest is dropped and counted")
+	assert.EqualValues(t, 5, next.normal.Load(), "the Normal burst passes")
+	assert.EqualValues(t, 2, next.warning.Load(), "the Warning burst passes")
+	assert.InDelta(t, 15, dropped("test-limited", "Normal")-n0, 0.5)
+	assert.InDelta(t, 18, dropped("test-limited", "Warning")-w0, 0.5)
 
-	assert.Same(t, next, kubeevent.Limited(next, "x", 0, 5), "qps 0: no limit")
-	assert.Nil(t, kubeevent.Limited(nil, "x", 1, 5))
+	assert.Same(t, next, kubeevent.Limited(next, "x", kubeevent.Limit{}, kubeevent.Limit{}), "no limit: rec as is")
+	assert.Nil(t, kubeevent.Limited(nil, "x", kubeevent.Limit{QPS: 1, Burst: 5}, kubeevent.Limit{QPS: 1, Burst: 5}))
+
+	// One type unlimited: only the other is bounded.
+	next = &countingRecorder{}
+	rec = kubeevent.Limited(next, "test-limited-one", kubeevent.Limit{QPS: 1, Burst: 1}, kubeevent.Limit{})
+	for i := 0; i < 10; i++ {
+		rec.Eventf(&corev1.Pod{}, nil, corev1.EventTypeNormal, "R", "A", "n")
+		rec.Eventf(&corev1.Pod{}, nil, corev1.EventTypeWarning, "W", "A", "w")
+	}
+	assert.EqualValues(t, 1, next.normal.Load())
+	assert.EqualValues(t, 10, next.warning.Load())
+}
+
+// TestLimited_WarningAfterNormalFlood: a flood of Normal Events that empties
+// their bucket never drops a one-shot Warning such as HoldBundleMissing or
+// NotificationDropped, with the defaults.
+//
+// Covers PERF-EVENTS-01.
+func TestLimited_WarningAfterNormalFlood(t *testing.T) {
+	next := &countingRecorder{}
+	rec := kubeevent.Limited(next, "test-flood",
+		kubeevent.Limit{QPS: kubeevent.DefaultQPS, Burst: kubeevent.DefaultBurst},
+		kubeevent.Limit{QPS: kubeevent.DefaultWarningQPS, Burst: kubeevent.DefaultWarningBurst})
+	w0 := dropped("test-flood", "Warning")
+	for i := 0; i < 5000; i++ {
+		rec.Eventf(&corev1.Pod{}, nil, corev1.EventTypeNormal, "Superseded", "Supersede", "bundle %d", i)
+	}
+	require.Less(t, next.normal.Load(), int64(5000), "the Normal bucket is empty")
+	rec.Eventf(&corev1.Pod{}, nil, corev1.EventTypeWarning, "HoldBundleMissing", "CheckHold", "hold of prod")
+	assert.EqualValues(t, 1, next.warning.Load(), "the Warning is written")
+	assert.Zero(t, dropped("test-flood", "Warning")-w0)
 }
 
 // slowSink is an events.EventSink whose writes take latency, like an API
@@ -108,7 +150,8 @@ func burst(rec events.EventRecorder) time.Duration {
 // TestLimited_BurstShape (#1682): through client-go's real events.k8s.io
 // broadcaster and a sink whose writes take 100ms, an unlimited recorder has
 // hundreds of writes (and their goroutines) in flight at once; the limited
-// one (the defaults) stays near its burst, drops the rest, and no Eventf
+// one (the defaults) stays near its bursts (the burst sends a Normal and a
+// Warning per Bundle), drops the rest, and no Eventf
 // call waits.
 //
 // Covers PERF-EVENTS-01.
@@ -122,7 +165,8 @@ func TestLimited_BurstShape(t *testing.T) {
 		defer b.Shutdown()
 		var rec events.EventRecorder = b.NewRecorder(scheme.Scheme, "kardinal-test")
 		if limit {
-			rec = kubeevent.Limited(rec, "test-burst", kubeevent.DefaultQPS, kubeevent.DefaultBurst)
+			rec = kubeevent.Limited(rec, "test-burst", kubeevent.Limit{QPS: kubeevent.DefaultQPS, Burst: kubeevent.DefaultBurst},
+				kubeevent.Limit{QPS: kubeevent.DefaultWarningQPS, Burst: kubeevent.DefaultWarningBurst})
 		}
 		slowest = burst(rec)
 		require.Eventually(t, func() bool { return sink.inFlight.Load() == 0 && sink.writes.Load() > 0 }, 10*time.Second, 20*time.Millisecond)
@@ -135,7 +179,7 @@ func TestLimited_BurstShape(t *testing.T) {
 
 	peak, writes, slowest := run(true)
 	t.Logf("limited: %d writes, %d in flight at peak, slowest Eventf %s", writes, peak, slowest)
-	assert.LessOrEqual(t, peak, int64(kubeevent.DefaultBurst+10), "in flight stays near --event-burst")
+	assert.LessOrEqual(t, peak, int64(kubeevent.DefaultBurst+kubeevent.DefaultWarningBurst+10), "in flight stays near the two bursts")
 	assert.Less(t, writes, int64(2000), "the rest is dropped")
 	assert.Less(t, slowest, 50*time.Millisecond, "a reconcile never waits on an Event")
 }

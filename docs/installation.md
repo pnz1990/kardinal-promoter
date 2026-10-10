@@ -828,12 +828,20 @@ run each of `TestScale_TenantFairnessManyRepos` in that shape:
 The controller writes `events.k8s.io` Events for its transitions (`kubectl events`). client-go's
 Event broadcaster starts a goroutine and an API write for every Event, with no bound, so when
 hundreds of Bundles change state at once the controller held over 2,000 goroutines and opened
-hundreds of new connections to the API server (#1682). The controller therefore writes at most
-`--event-qps` (default 20) Events a second, in bursts of up to `--event-burst` (default 100), and
-drops the rest: it never queues them, so a reconcile never waits on an Event.
-`kardinal_events_dropped_total` counts the dropped ones. Events are best effort; every transition is
-also in the object's status and in an AuditEvent. Set the flags with `controller.extraArgs`;
-`--event-qps=0` removes the limit.
+hundreds of new connections to the API server (#1682). The controller therefore rate-limits
+Events, with a bucket per type so a flood of Normal transitions never drops a one-shot Warning
+(`HoldBundleMissing`, `NotificationDropped`):
+
+| Type | Rate | Burst |
+|---|---|---|
+| Normal | `--event-qps` (20 a second) | `--event-burst` (100) |
+| Warning | `--event-warning-qps` (5 a second) | `--event-warning-burst` (50) |
+
+An Event over its bucket is dropped, never queued, so a reconcile never waits on an Event, and
+`kardinal_events_dropped_total{recorder,type}` counts it. **Events are best effort: the durable
+record of every transition is the object's status and its AuditEvent**, so alert on those (or on
+the metric), not on Events alone. Set the flags with `controller.extraArgs`; a rate of 0 removes
+that type's limit.
 
 ### Leader election under API pressure
 
