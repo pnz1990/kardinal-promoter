@@ -823,6 +823,18 @@ run each of `TestScale_TenantFairnessManyRepos` in that shape:
 | before | main at 106b12cf | 78 | 91 s | 8 s | 67 / 70 s | fail: Bundle p99 70 s over 35 s |
 | fair | #1662 at 8b032f78 | 56 | 65 s | 4 s | 10 / 12 s | pass |
 
+### Kubernetes Events
+
+The controller writes `events.k8s.io` Events for its transitions (`kubectl events`). client-go's
+Event broadcaster starts a goroutine and an API write for every Event, with no bound, so when
+hundreds of Bundles change state at once the controller held over 2,000 goroutines and opened
+hundreds of new connections to the API server (#1682). The controller therefore writes at most
+`--event-qps` (default 20) Events a second, in bursts of up to `--event-burst` (default 100), and
+drops the rest: it never queues them, so a reconcile never waits on an Event.
+`kardinal_events_dropped_total` counts the dropped ones. Events are best effort; every transition is
+also in the object's status and in an AuditEvent. Set the flags with `controller.extraArgs`;
+`--event-qps=0` removes the limit.
+
 ### Leader election under API pressure
 
 The leader renews its Lease every 2 seconds and gives up leadership when a

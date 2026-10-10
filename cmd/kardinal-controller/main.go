@@ -59,6 +59,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/graphcleanup"
 	hookrunrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/hookrun"
 	ivrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/imageverification"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	metriccheckrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/metriccheck"
 	nhookrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/notificationhook"
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
@@ -107,6 +108,8 @@ func main() {
 		metricsBindAddress     string
 		healthProbeBindAddress string
 		pprofAddress           string
+		eventQPS               float64
+		eventBurst             int
 		webhookBindAddress     string
 		policyNamespaces       string
 		githubToken            string
@@ -192,6 +195,10 @@ func main() {
 		"The address the metric endpoint binds to.")
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081",
 		"The address the probe endpoint binds to.")
+	flag.Float64Var(&eventQPS, "event-qps", kubeevent.DefaultQPS,
+		"Most Kubernetes Events the controller writes a second; Events over --event-qps and --event-burst are dropped and counted in kardinal_events_dropped_total (every transition is also in status and AuditEvents). 0 removes the limit.")
+	flag.IntVar(&eventBurst, "event-burst", kubeevent.DefaultBurst,
+		"Most Kubernetes Events the controller writes at once, above --event-qps.")
 	flag.StringVar(&pprofAddress, "pprof-address", "",
 		"Address that serves Go's net/http/pprof profiles (heap, goroutine, CPU) under /debug/pprof/, with no authentication. Only an empty value (the default) disables it; an address without a host, such as :6060, binds to 127.0.0.1 only.")
 	flag.StringVar(&webhookBindAddress, "webhook-bind-address", ":8083",
@@ -634,7 +641,7 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to create the shard gate's clients")
 	}
 	gate := shard.New(shard.Options{Name: namespaceShard, Home: shardHome, Client: gateClient,
-		Reader: gateReader, Recorder: mgr.GetEventRecorder("kardinal-shard"), Log: logger})
+		Reader: gateReader, Recorder: kubeevent.Limited(mgr.GetEventRecorder("kardinal-shard"), "kardinal-shard", eventQPS, eventBurst), Log: logger})
 	if err := shard.Setup(mgr, gate); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up the shard gate")
 	}
@@ -714,7 +721,10 @@ func main() {
 
 	// Reconcilers write events.k8s.io/v1 Events. The chart grants create and
 	// patch on events.k8s.io events for this recorder.
-	eventRecorder := mgr.GetEventRecorder("kardinal-controller")
+	// client-go's events.k8s.io broadcaster starts a goroutine and an API
+	// write per Event with no bound: rate-limit and drop over the limit
+	// (--event-qps, --event-burst, #1682).
+	eventRecorder := kubeevent.Limited(mgr.GetEventRecorder("kardinal-controller"), "kardinal-controller", eventQPS, eventBurst)
 
 	if err := retire.Validate(); err != nil {
 		logger.Fatal().Err(err).Msg("invalid --graph-retire-*-after")

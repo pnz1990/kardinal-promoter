@@ -90,6 +90,7 @@ The controller registers these on the same `/metrics` endpoint
 | `kardinal_gate_blocking_duration_seconds` | Histogram | — | How long a PolicyGate was blocked before it allowed |
 | `kardinal_promotionstep_age_seconds` | Histogram | — | PromotionStep age when it reaches a terminal state |
 | `kardinal_auditevents_pruned_total` | Counter | — | AuditEvents deleted by retention (`audit.retention`) |
+| `kardinal_events_dropped_total` | Counter | `recorder` | Kubernetes Events not written because the controller was over `--event-qps` / `--event-burst` ([Kubernetes Events](../installation.md#kubernetes-events)). The transition is still in the object's status and its AuditEvent |
 | `kardinal_hold_bundle_missing_total` | Counter | `pipeline_namespace`, `pipeline` | Holds whose rollback Bundle has been missing for `--hold-bundle-grace`, at most once per hold (the `HoldBundleMissing` AuditEvent is the durable record). The hold stays in effect until released ([A hold whose rollback Bundle does not exist](../rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |
 | `kardinal_notifications_dropped_total` | Counter | `hook_namespace`, `hook`, `reason` (`template`, `attempts`) | Events a NotificationHook gave up on without delivering: the body could not be rendered for the event, or the last of 10 delivery attempts failed. Each also emits a `Warning` Event on the hook ([Templated body](../notifications.md#templated-body)) |
 
