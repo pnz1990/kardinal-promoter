@@ -436,6 +436,8 @@ a cert-manager example.
 
 ## Upgrade
 
+**Upgrading from v0.9.0:** read [Before you upgrade](changelog.md#before-you-upgrade) in the v0.10.0 changelog first.
+
 Helm does not update CRDs on upgrade. Apply the new chart's CRDs first:
 
 ```bash
