@@ -99,7 +99,42 @@ function computePositions(nodes: GraphNode[], edges: GraphEdge[]): Map<string, {
     const { x, y } = g.node(node.id) as { x: number; y: number }
     positions.set(node.id, { x, y })
   }
+  orderRanks(nodes, edges, positions)
   return positions
+}
+
+/**
+ * orderRanks puts the nodes of each rank (column) top to bottom in the graph's
+ * order, which is the Pipeline's environment order (#1580): dagre breaks ties
+ * its own way and drew a wave of env-001…env-149 from env-149 down. Columns
+ * are visited left to right; a node sorts by the mean y of its upstream nodes
+ * (already placed), then by its position in nodes, and takes one of the
+ * column's existing y slots, so x and spacing stay dagre's.
+ */
+export function orderRanks(nodes: GraphNode[], edges: GraphEdge[], positions: Map<string, { x: number; y: number }>): void {
+  const index = new Map(nodes.map((n, i) => [n.id, i]))
+  const ups = new Map<string, string[]>()
+  for (const e of edges) {
+    if (index.has(e.from) && index.has(e.to)) ups.set(e.to, [...(ups.get(e.to) ?? []), e.from])
+  }
+  const columns = new Map<number, string[]>()
+  for (const n of nodes) {
+    const x = Math.round(positions.get(n.id)!.x)
+    columns.set(x, [...(columns.get(x) ?? []), n.id])
+  }
+  for (const x of [...columns.keys()].sort((a, b) => a - b)) {
+    const ids = columns.get(x)!
+    if (ids.length < 2) continue
+    const slots = ids.map(id => positions.get(id)!.y).sort((a, b) => a - b)
+    const key = (id: string): number => {
+      const from = ups.get(id) ?? []
+      if (from.length === 0) return 0
+      return from.reduce((sum, u) => sum + positions.get(u)!.y, 0) / from.length
+    }
+    const keys = new Map(ids.map(id => [id, key(id)]))
+    const sorted = [...ids].sort((a, b) => keys.get(a)! - keys.get(b)! || index.get(a)! - index.get(b)!)
+    sorted.forEach((id, i) => { positions.get(id)!.y = slots[i] })
+  }
 }
 
 /** A string that changes only when node IDs or edges change. */

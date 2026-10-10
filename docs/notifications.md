@@ -260,11 +260,15 @@ spec:
   events: [Bundle.Failed, PromotionStep.Failed, PromotionStep.WaitingForApproval]
 ```
 
+The body is rendered by the same sandbox as custom PR templates (`pkg/tmplsafe`).
 Functions, on top of the text/template builtins (`if`, `with`, `eq`, `and`, `index`,
 `len`, ...): `json` (the value as JSON, quotes and escapes included: use it for every
-string in a JSON body), `lower`, `upper`, `truncate N` (at most N characters, with `…` when
-cut) and `print` (joins its operands: `print "kardinal/" .Namespace`). `printf` is refused:
-with argument indexes (`%[1]s`) it repeats an operand without bound. `call` is refused too.
+string in a JSON body), `truncate N` (at most N characters, with `…` when cut), `print`
+(joins its operands: `print "kardinal/" .Namespace`), and the string functions `lower`,
+`upper`, `trimSpace`, `trimPrefix P`, `contains S`, `hasPrefix P`, `default D` (D when the
+value is empty) and `replace OLD NEW`, each taking the string last so it works in a
+pipeline (`{{ .Bundle | default "none" }}`). `printf` is refused: with argument indexes
+(`%[1]s`) it repeats an operand without bound. `call` is refused too.
 The comparison, logic and indexing builtins (`eq`, `ne`, `lt`, `le`, `gt`, `ge`, `and`, `or`,
 `not`, `len`, `index`, `slice`) take strings, numbers and bools; `and` and `or` evaluate every
 operand.
@@ -274,11 +278,17 @@ Limits, so a template cannot run away with the controller:
 - `range`, `define`, `block`, `template` and variables (`{{ $x := ... }}`, `{{ $x = ... }}`)
   are refused: every action runs once, so rendering is linear in the template's size. The
   body is at most 16 KiB, the rendered body at most 64 KiB.
-- Each function (`print`, `println`, `html`, `js`, `urlquery`, `json`, `lower`, `upper`,
-  `truncate`) refuses an input over 64 KiB. Before it runs, the most it can produce from
-  that input (6 times the input for `json`, `html` and `js`, 3 times for `urlquery`, `lower`
-  and `upper`) is charged to a budget of 256 KiB per render, so no render allocates much more
-  than that.
+- Before a function runs, the most it can build from its arguments is computed and
+  charged: 6 times the input for `json`, `html`, `js` and `urlquery`, 3 times for `lower`
+  and `upper`, the input for the others; a comparison (`eq`, `lt`, `contains`, ...) is
+  charged the bytes it reads. One call may be charged at most 64 KiB, and the calls of one
+  render at most 256 KiB together, so no render allocates much more than that. In practice:
+  - `json`, `html`, `js` and `urlquery` take at most about 10 KiB of input per call, and
+    `lower` and `upper` about 21 KiB. One field (at most 4 KiB) always fits; a `print` of
+    several long fields passed to `json` may not.
+  - The 256 KiB is shared by the whole render: a body that calls `json` on `.Message`
+    dozens of times can pass on short events and fail on an event with a long `Message`.
+    Build each value once.
 - Function arguments may only be strings, numbers or bools. A struct (such as `.` itself),
   a list or a map is refused before it is formatted: `{{ print . }}` is an error.
 - A render makes at most 2,000 function calls, builtins included. Together with the byte
@@ -297,7 +307,14 @@ A template that does not parse, or uses a refused action, makes the hook `Ready=
 (reason `InvalidTemplate`) and nothing is sent until it is fixed. A template that parses but
 fails to render for one event (invalid JSON, a body over 64 KiB, a refused argument) cannot succeed on a retry,
 so that event is given up on at once (`failureMessage: gave up on <key>: template: ...`) and
-the next event is delivered.
+the next event is delivered. A dropped event is not silent:
+
+- the hook gets a `Warning` Event, reason `NotificationTemplateFailed` (or
+  `NotificationDropped` for an event given up on after its last delivery attempt), with
+  the same message: `kubectl get events --field-selector involvedObject.name=<hook>`;
+- the counter `kardinal_notifications_dropped_total{hook_namespace,hook,reason}` (reason
+  `template` or `attempts`) goes up by one
+  ([kardinal metrics](guides/monitoring.md#kardinal-metrics)). Alert on any increase.
 
 ---
 
@@ -343,7 +360,7 @@ controller's memory.
 What is guaranteed:
 
 - **At least once.** An event that still qualifies is retried until a 2xx response, or
-  until 10 attempts fail (then it is given up on and named in `failureMessage`).
+  until 10 attempts fail (then it is given up on, named in `failureMessage`, with a `NotificationDropped` Warning Event and `kardinal_notifications_dropped_total{reason="attempts"}`).
 - **No duplicate after a restart, an upgrade or a leader change.** The key is written to
   status right after each successful POST, before the next one, and the new controller
   reads it from there. The one exception: the controller stops after the receiver
