@@ -724,6 +724,10 @@
           },
           "phase": {
             "type": "string"
+          },
+          "topologyResolved": {
+            "description": "TopologyResolved is true when the controller resolved the ordering, so environmentTopology[].upstreams is complete: an entry without upstreams is a root (a Pipeline whose every environment is in wave 1 has only roots). Absent when the ordering is invalid.",
+            "type": "boolean"
           }
         },
         "required": [

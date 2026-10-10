@@ -71,6 +71,95 @@
   white-space: nowrap;
 }
 
+/* ── Environments at one depth (#1580) ─────────────────────────────────── */
+/* Parallel environments (a short wave, or several dependsOn the same one)
+   stack in one column, so the lane does not read as a chain. */
+.stage-parallel__list,
+.stage-wave__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+/* A wave of many environments: one card that counts them by state and
+   expands to the list, which scrolls. */
+.stage-wave {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-muted);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  min-width: 170px;
+  max-width: 240px;
+  flex-shrink: 0;
+}
+
+.stage-wave__head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.stage-wave__title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.stage-wave__range {
+  font-size: 0.65rem;
+  font-family: monospace;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stage-wave__counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.stage-wave__count {
+  font-size: 0.65rem;
+  color: var(--color-text);
+  border: 1px solid var(--color-border-muted);
+  border-left-width: 3px;
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+.stage-wave__toggle {
+  align-self: flex-start;
+  font-size: 0.65rem;
+  color: var(--color-accent);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  cursor: pointer;
+}
+
+.stage-wave__list {
+  max-height: 12rem;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+
+/* A collapsed wave that holds the selected environment. */
+.stage-wave--selected {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.stage-wave__selected {
+  font-size: 0.65rem;
+  color: var(--color-accent);
+}
+
 /* The hold's rollback Bundle does not exist (#1629): the hold stays in effect. */
 .stage-card__hold-missing {
   flex-basis: 100%;
