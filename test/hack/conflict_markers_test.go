@@ -5,6 +5,7 @@ package hack
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,4 +45,35 @@ func TestNoConflictMarkers(t *testing.T) {
 		}
 	}
 	require.Empty(t, found, "merge conflict markers in tracked files")
+}
+
+// TestChangelogNoDuplicateEntries fails when a section of docs/changelog.md
+// (a ### heading under one release) lists the same entry twice: two bullets
+// with the same bold title. Merges that kept both sides of a changelog
+// conflict did that more than once.
+func TestChangelogNoDuplicateEntries(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "changelog.md"))
+	require.NoError(t, err)
+	title := regexp.MustCompile(`^- \*\*(.+?)\*\*`)
+	var dups []string
+	release, section := "", ""
+	seen := map[string]int{}
+	for i, line := range strings.Split(string(data), "\n") {
+		switch {
+		case strings.HasPrefix(line, "## "):
+			release, section, seen = line, "", map[string]int{}
+		case strings.HasPrefix(line, "### "):
+			section, seen = line, map[string]int{}
+		}
+		m := title.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		if first, ok := seen[m[1]]; ok {
+			dups = append(dups, fmt.Sprintf("%s %s: %q at lines %d and %d", release, section, m[1], first, i+1))
+			continue
+		}
+		seen[m[1]] = i + 1
+	}
+	require.Empty(t, dups, "duplicate changelog entries")
 }
