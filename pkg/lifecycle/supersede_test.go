@@ -54,7 +54,7 @@ func TestSupersedingSiblings(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			siblings := []v1alpha1.Bundle{b1, tt.sibling}
 			rejected := lifecycle.RejectedArtifactsOf(siblings, "app")
-			got := lifecycle.SupersedingSiblings(tt.pipeline, &b1, siblings, rejected, tt.countVerified)
+			got := lifecycle.SupersedingSiblings(tt.pipeline, &b1, siblings, rejected, tt.countVerified, "")
 			assert.Equal(t, tt.want, len(got) == 1, "%v", got)
 		})
 	}

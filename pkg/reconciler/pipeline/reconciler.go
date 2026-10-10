@@ -120,6 +120,20 @@ type Reconciler struct {
 	// does not carry yet is Ready=False. Nil is graph.DefaultCompactAbove.
 	CompactAbove *int
 
+	// Reader reads the Argo CD Applications a fleet selector matches. It is
+	// not cached: the controller does not watch Applications, whose CRD may
+	// be missing. Nil uses Client.
+	Reader client.Reader
+	// FleetApplicationNamespaces are the namespaces a fleet selector of kind
+	// Application may read (--fleet-application-namespaces); empty is
+	// argocd. A selector naming another namespace is refused, so a Pipeline
+	// cannot list the Applications of a namespace its author cannot read.
+	FleetApplicationNamespaces []string
+	// FleetClusterProfileNamespaces are the namespaces besides the
+	// Pipeline's own a ClusterProfile selector may read
+	// (--fleet-clusterprofile-namespaces).
+	FleetClusterProfileNamespaces []string
+
 	// Now is the clock of hold expiry (spec.holds[].expiresAt). Nil is
 	// time.Now.
 	Now func() time.Time
@@ -183,13 +197,19 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, err
 		}
 	}
-	desired := r.validate(&p, ownSecret)
+	// The fleets are resolved first: validate checks them as the Graph
+	// builder will see them.
+	desiredFleets := r.resolveFleets(ctx, &p)
+	validated := p.DeepCopy()
+	validated.Status.Fleets = desiredFleets
+	desired := r.validate(validated, ownSecret)
 	desiredSecret, err := r.gitSecretCondition(ctx, &p)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	// Nothing watches Secrets: a git.secretRef Secret created later, or a
-	// label added to one, is seen by these periodic re-checks.
+	// label added to one, is seen by these periodic re-checks. A selector
+	// fleet is re-resolved as often.
 	var result ctrl.Result
 	if desiredSecret != nil {
 		result.RequeueAfter = secretRecheck
@@ -199,6 +219,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	if desired.Reason == scm.ReasonRepositoryNotAllowed && p.Spec.Git.SecretRef != nil && !ownSecret {
 		result.RequeueAfter = secretRecheckInterval
+	}
+	if hasSelectorFleet(&p) && (result.RequeueAfter == 0 || fleetResync < result.RequeueAfter) {
+		result.RequeueAfter = fleetResync
 	}
 
 	// Derive status.phase from Bundle phases and PromotionStep states.
@@ -251,7 +274,8 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if desiredSecret != nil {
 		secretMatch = conditionMatches(p.Status.Conditions, *desiredSecret)
 	}
-	if condMatch && phaseMatch && metricsMatch && pausedMatch && conflictMatch && secretMatch {
+	fleetsMatch := fleetsEqual(p.Status.Fleets, desiredFleets)
+	if condMatch && phaseMatch && metricsMatch && pausedMatch && conflictMatch && secretMatch && fleetsMatch {
 		log.Debug().
 			Str("reason", desired.Reason).
 			Str("phase", desiredPhase).
@@ -283,6 +307,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		meta.RemoveStatusCondition(&p.Status.Conditions, conditionSecretReferenceable)
 	}
 	p.Status.DeploymentMetrics = desiredMetrics
+	p.Status.Fleets = desiredFleets
 
 	if err := r.Status().Patch(ctx, &p, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch pipeline status: %w", err)
@@ -551,6 +576,11 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline, ownSecret bool) meta
 	// Check the promotion order resolves (no dependsOn or wave cycle). Every
 	// Bundle of a cyclic pipeline would fail with CircularDependency.
 	if err := graph.DetectCycle(p); err != nil {
+		return invalid(err.Error())
+	}
+
+	// A fleet whose targets cannot be resolved fails every Bundle's build.
+	if err := graph.ValidateFleets(p); err != nil {
 		return invalid(err.Error())
 	}
 

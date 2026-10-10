@@ -409,9 +409,48 @@ func pipelineEnvStates(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
 				row.envs[env] = state
 			}
 		}
+		// A fleet environment's column counts its targets.
+		fleets, _ := graph.FleetTargetEnvironments(p)
+		for fleet, targets := range fleets {
+			if s := fleetCell(row.envs, targets); s != "" {
+				row.envs[fleet] = s
+			}
+		}
 		out[key] = row
 	}
 	return out
+}
+
+// fleetCell is the get pipelines cell of a fleet environment from its
+// targets' states: "Verified" once every target is, else how many are
+// Verified, with the Failed ones ("12/50 Verified, 1 Failed"). "" when no
+// target has a state.
+func fleetCell(envs map[string]string, targets []string) string {
+	verified, failed, seen := 0, 0, 0
+	for _, t := range targets {
+		st, ok := envs[t]
+		if !ok || st == "Waiting" {
+			continue
+		}
+		seen++
+		switch st {
+		case "Verified":
+			verified++
+		case "Failed", "AbortedByAlarm", "RollingBack":
+			failed++
+		}
+	}
+	if seen == 0 {
+		return ""
+	}
+	if verified == len(targets) {
+		return "Verified"
+	}
+	cell := fmt.Sprintf("%d/%d Verified", verified, len(targets))
+	if failed > 0 {
+		cell += fmt.Sprintf(", %d Failed", failed)
+	}
+	return cell
 }
 
 // formatPipelineTableInternal renders the pipeline table with one column per

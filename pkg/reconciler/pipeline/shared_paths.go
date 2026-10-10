@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 // conditionPathConflict is True on a Pipeline when two of its environments,
@@ -102,10 +103,20 @@ type written struct{ env, path string }
 // writtenPaths are the paths p's environments write in git: each
 // environment's directory, and a Helm valuesFile outside it (helm resolves
 // valuesFile from the environment path, so "../shared/values.yaml" writes
-// next to it). update.strategy argocd environments write no git.
+// next to it). update.strategy argocd environments write no git. A fleet
+// environment writes its targets' paths, each a directory of its own.
 func writtenPaths(p *kardinalv1alpha1.Pipeline) []written {
 	var out []written
+	targets := graph.FleetTargetSpecs(p)
+	var envs []kardinalv1alpha1.EnvironmentSpec
 	for _, e := range p.Spec.Environments {
+		if e.Fleet != nil {
+			envs = append(envs, targets[e.Name]...)
+			continue
+		}
+		envs = append(envs, e)
+	}
+	for _, e := range envs {
 		if e.Update.Strategy == "argocd" {
 			continue
 		}

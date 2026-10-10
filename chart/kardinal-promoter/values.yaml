@@ -610,3 +610,15 @@ grafanaDashboard:
   namespace: ""
   # -- Annotations to add to the ConfigMap.
   annotations: {}
+
+# Fleet environments (spec.environments[].fleet, docs/pipeline-reference.md#fleets).
+fleets:
+  # -- Namespaces a fleet selector of kind Application may read Argo CD
+  # Applications from (--fleet-application-namespaces). A selector naming
+  # another namespace is refused, so a Pipeline author cannot list the
+  # Applications of a namespace they cannot read.
+  applicationNamespaces:
+    - argocd
+  # -- Namespaces, besides the Pipeline's own, a fleet selector of kind
+  # ClusterProfile may read (--fleet-clusterprofile-namespaces).
+  clusterProfileNamespaces: []

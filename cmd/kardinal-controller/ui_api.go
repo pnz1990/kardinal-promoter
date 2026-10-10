@@ -153,9 +153,19 @@ func deployedByEnv(p *v1alpha1.Pipeline, byEnv map[string][]*v1alpha1.PromotionS
 		}
 		return v
 	}
+	// A fleet environment runs nothing itself: its targets do.
+	fleets, _ := graphpkg.FleetTargetEnvironments(p)
+	names := make([]string, 0, len(p.Spec.Environments))
 	for _, env := range p.Spec.Environments {
-		envSteps := byEnv[env.Name]
-		dep := lifecycle.DeployedInSteps(envSteps, p.Name, env.Name, bundles)
+		if env.Fleet != nil {
+			names = append(names, fleets[env.Name]...)
+		} else {
+			names = append(names, env.Name)
+		}
+	}
+	for _, name := range names {
+		envSteps := byEnv[name]
+		dep := lifecycle.DeployedInSteps(envSteps, p.Name, name, bundles)
 		if dep.Bundle == "" {
 			continue
 		}
@@ -183,7 +193,7 @@ func deployedByEnv(p *v1alpha1.Pipeline, byEnv map[string][]*v1alpha1.PromotionS
 		if !at.IsZero() {
 			d.VerifiedAt = at.UTC().Format(time.RFC3339)
 		}
-		out[env.Name] = d
+		out[name] = d
 	}
 	if len(out) == 0 {
 		return nil
@@ -205,9 +215,26 @@ type uiEnvironmentNode struct {
 	// resolves them (dependsOn, waves, or the previous entry), sorted; empty
 	// for a root. Absent when the Pipeline's ordering is invalid.
 	Upstreams []string `json:"upstreams,omitempty"`
+	// Fleet is set on a fleet environment: its targets' environments, which
+	// environmentStates and deployed are keyed by, and its pacing.
+	Fleet *uiFleet `json:"fleet,omitempty"`
 	// Hold is the environment's hold (spec.holds, kardinal rollback --hold),
 	// nil when it is not held.
 	Hold *uiHoldResponse `json:"hold,omitempty"`
+}
+
+// uiFleet is a fleet environment's targets and pacing (spec.fleet).
+type uiFleet struct {
+	// Targets are the target environments ("<environment>-<target>"), in
+	// the order they are promoted.
+	Targets []string `json:"targets"`
+	// MaxConcurrent is spec.fleet.maxConcurrent (0: every target at once).
+	MaxConcurrent int `json:"maxConcurrent,omitempty"`
+	// MaxUnavailable is spec.fleet.maxUnavailable: that many Failed targets
+	// stop the rollout. Absent when unset.
+	MaxUnavailable *int `json:"maxUnavailable,omitempty"`
+	// Message says why the targets cannot be resolved (a selector fleet).
+	Message string `json:"message,omitempty"`
 }
 
 // uiHoldResponse is a Pipeline environment hold (spec.holds).
@@ -623,6 +650,7 @@ func pipelineListResponse(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bund
 			// One ordering resolution per Pipeline: per environment it was
 			// cubic in the environment count.
 			upstreams, upErr := cache.get(&p)
+			fleets, fleetErr := graphpkg.FleetTargetEnvironments(&p)
 			for _, env := range p.Spec.Environments {
 				node := uiEnvironmentNode{
 					Name:      env.Name,
@@ -632,6 +660,21 @@ func pipelineListResponse(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bund
 				}
 				if upErr == nil && len(upstreams[env.Name]) > 0 {
 					node.Upstreams = upstreams[env.Name]
+				}
+				if env.Fleet != nil {
+					node.Fleet = &uiFleet{Targets: fleets[env.Name], MaxConcurrent: env.Fleet.MaxConcurrent,
+						MaxUnavailable: env.Fleet.MaxUnavailable}
+					if node.Fleet.Targets == nil {
+						node.Fleet.Targets = []string{}
+					}
+					for _, f := range p.Status.Fleets {
+						if f.Environment == env.Name {
+							node.Fleet.Message = f.Message
+						}
+					}
+					if fleetErr != nil && len(node.Fleet.Targets) == 0 && node.Fleet.Message == "" {
+						node.Fleet.Message = fleetErr.Error()
+					}
 				}
 				topo = append(topo, node)
 			}

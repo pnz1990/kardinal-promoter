@@ -391,6 +391,13 @@ func (r *Reconciler) reconcileState(ctx context.Context, log zerolog.Logger, ps 
 	}
 
 	switch ps.Status.State {
+	case StatePending, StatePendingExplicit, StatePromoting, StateWaitingForMerge, StateHealthChecking, StateVerifying:
+		if res, held, err := r.holdUnresolvedEnvironment(ctx, log, ps); held || err != nil {
+			return res, err
+		}
+	}
+
+	switch ps.Status.State {
 	case StatePending, StatePendingExplicit:
 		return r.handlePending(ctx, log, ps)
 	case StatePromoting:
@@ -2605,12 +2612,63 @@ func (r *Reconciler) cleanWorkDir(log zerolog.Logger, ps *v1alpha1.PromotionStep
 	}
 }
 
+// unresolvedRecheck is how often a step whose fleet environment cannot be
+// resolved looks again.
+const unresolvedRecheck = 30 * time.Second
+
+// holdUnresolvedEnvironment holds a step of a Pipeline with fleets, or a
+// fleet target's step, whose environment the Pipeline does not resolve to
+// (D1): a fleet target whose selector cannot be read or that left the
+// fleet (also after the last fleet is removed), or a step of an environment
+// that became a fleet while it was in flight. Running it would
+// promote with an empty environment spec (auto, the default path and
+// health), so it fails closed: the step stays where it is, says why, and
+// looks again every unresolvedRecheck. held is false for every other step.
+func (r *Reconciler) holdUnresolvedEnvironment(ctx context.Context, log zerolog.Logger,
+	ps *v1alpha1.PromotionStep) (ctrl.Result, bool, error) {
+	pipeline, err := r.loadPipeline(ctx, ps)
+	if err != nil {
+		return ctrl.Result{}, false, nil // the state's handler reports a missing Pipeline
+	}
+	// A fleet target's step (label kardinal.io/fleet) is held even when the
+	// Pipeline has no fleet any more: its target environment is gone.
+	fleet := ps.Labels[graph.LabelFleet]
+	if fleet == "" && !graph.HasFleets(pipeline) {
+		return ctrl.Result{}, false, nil
+	}
+	if _, ok := graph.EnvironmentSpecFor(pipeline, ps.Spec.Environment); ok {
+		return ctrl.Result{}, false, nil
+	}
+	why := "it is not an environment of the Pipeline"
+	if fleet != "" {
+		why = "it is a target of fleet " + fleet + ", which does not list it any more"
+	}
+	if err := graph.ValidateFleets(pipeline); err != nil {
+		why = err.Error()
+	}
+	for _, e := range pipeline.Spec.Environments {
+		if e.Name == ps.Spec.Environment && e.Fleet != nil {
+			why = "it is now a fleet environment, whose targets are promoted as " + e.Name + "-<target>"
+		}
+	}
+	msg := fmt.Sprintf("environment %s cannot be resolved (%s); the step waits and does not promote", ps.Spec.Environment, why)
+	if ps.Status.Message != msg {
+		log.Warn().Str("env", ps.Spec.Environment).Msg(msg)
+		base := ps.DeepCopy()
+		ps.Status.Message = msg
+		if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, true, fmt.Errorf("patch unresolved environment message: %w", err)
+		}
+	}
+	return ctrl.Result{RequeueAfter: unresolvedRecheck}, true, nil
+}
+
 // findEnv returns the EnvironmentSpec for the named environment, or empty spec if not found.
 func findEnv(pipeline *v1alpha1.Pipeline, envName string) v1alpha1.EnvironmentSpec {
-	for _, e := range pipeline.Spec.Environments {
-		if e.Name == envName {
-			return e
-		}
+	// A fleet target is an environment of its own: the fleet environment
+	// with the target's name, path and health.
+	if env, ok := graph.EnvironmentSpecFor(pipeline, envName); ok {
+		return env
 	}
 	return v1alpha1.EnvironmentSpec{Name: envName}
 }

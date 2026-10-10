@@ -142,7 +142,7 @@ func (r *Reconciler) newerPushed(ctx context.Context, reader client.Reader, ps *
 	}
 	rejected := lifecycle.RejectedArtifactsOf(bundles.Items, b.Spec.Pipeline)
 	newer := map[string]bool{}
-	for _, s := range lifecycle.SupersedingSiblings(p, b, bundles.Items, rejected, true) {
+	for _, s := range lifecycle.SupersedingSiblings(p, b, bundles.Items, rejected, true, ps.Spec.Environment) {
 		newer[s.Name] = true
 	}
 	if len(newer) == 0 {
@@ -170,7 +170,7 @@ func (r *Reconciler) newerPushed(ctx context.Context, reader client.Reader, ps *
 		if lifecycle.Rejected(&other) {
 			continue
 		}
-		if len(lifecycle.SupersedingSiblings(p, b, []v1alpha1.Bundle{other}, rejected, true)) > 0 {
+		if len(lifecycle.SupersedingSiblings(p, b, []v1alpha1.Bundle{other}, rejected, true, ps.Spec.Environment)) > 0 {
 			return other.Name, nil
 		}
 	}

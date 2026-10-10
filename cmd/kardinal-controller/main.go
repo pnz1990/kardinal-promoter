@@ -387,6 +387,12 @@ func main() {
 	flag.StringVar(&graphIdentity.ReaderClusterRole, "graph-reader-clusterrole",
 		graphpkg.DefaultReaderClusterRole,
 		"ClusterRole bound to the Graph ServiceAccount in namespaces its health checks read.")
+	var fleetApplicationNamespaces, fleetClusterProfileNamespaces string
+	flag.StringVar(&fleetApplicationNamespaces, "fleet-application-namespaces", "argocd",
+		"Comma-separated namespaces a fleet selector of kind Application may read Argo CD Applications from. "+
+			"A selector naming another namespace is refused.")
+	flag.StringVar(&fleetClusterProfileNamespaces, "fleet-clusterprofile-namespaces", "",
+		"Comma-separated namespaces, besides the Pipeline's own, a fleet selector of kind ClusterProfile may read.")
 	var graphReaderNamespaces string
 	flag.StringVar(&graphReaderNamespaces, "graph-reader-namespaces",
 		strings.Join(graphpkg.DefaultReaderNamespaces, ","),
@@ -714,7 +720,9 @@ func main() {
 	}
 
 	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos,
-		CompactAbove: &graphCompactAbove, Workers: *workers["pipeline"]}).
+		CompactAbove: &graphCompactAbove, Reader: mgr.GetAPIReader(), Workers: *workers["pipeline"],
+		FleetApplicationNamespaces:    splitCSV(fleetApplicationNamespaces),
+		FleetClusterProfileNamespaces: splitCSV(fleetClusterProfileNamespaces)}).
 		SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PipelineReconciler")
 	}
