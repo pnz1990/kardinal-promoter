@@ -173,7 +173,8 @@ healthProbeBindAddress: ":8081"
 # -- Address that serves Go pprof profiles under /debug/pprof/ (`--pprof-address`).
 # Empty (the default) serves none. An address without a host, such as ":6060",
 # binds to 127.0.0.1: reach it with `kubectl port-forward`. The profiles show heap
-# contents, so no Service or container port exposes it.
+# contents, so no Service or container port exposes it. It has no authentication, and
+# /debug/pprof/cmdline shows the process args: keep secrets out of controller.extraArgs.
 pprofAddress: ""
 
 # Service <fullname> and the matching container ports.

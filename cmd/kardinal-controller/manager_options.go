@@ -43,9 +43,9 @@ type managerConfig struct {
 	healthProbeBindAddress string
 	// pprofAddress is --pprof-address after pprofBindAddress: empty serves
 	// no profiles.
-	pprofAddress string
-	leaderElect  bool
-	watchNamespace         string
+	pprofAddress   string
+	leaderElect    bool
+	watchNamespace string
 	// namespaceShard is --namespace-shard: each shard elects its own leader.
 	namespaceShard string
 	// restConfig is the controller's API server config; nil leaves the

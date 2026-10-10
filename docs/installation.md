@@ -224,6 +224,10 @@ To see what holds the controller's memory, turn on Go's pprof profiles with
 127.0.0.1 inside the Pod, so only a port-forward reaches it, and the chart adds no Service or
 container port for it. The profiles show heap contents (object values, possibly tokens) and
 stacks, so do not bind it to every interface (`0.0.0.0:6060`) where untrusted clients can connect.
+The endpoint has no authentication or authorization: anyone who reaches the address can read
+every profile. `/debug/pprof/cmdline` also returns the process's command line, so pass secrets
+in environment variables, as the chart does for the SCM, UI and Bundle API tokens, never in
+flags (`controller.extraArgs`). Only an empty `pprofAddress` turns it off.
 
 ```bash
 helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --reuse-values --set pprofAddress=:6060

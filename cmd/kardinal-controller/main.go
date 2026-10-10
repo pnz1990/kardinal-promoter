@@ -183,7 +183,7 @@ func main() {
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081",
 		"The address the probe endpoint binds to.")
 	flag.StringVar(&pprofAddress, "pprof-address", "",
-		"Address that serves Go's net/http/pprof profiles (heap, goroutine, CPU) under /debug/pprof/. Empty (the default) serves none; an address without a host, such as :6060, binds to 127.0.0.1 only.")
+		"Address that serves Go's net/http/pprof profiles (heap, goroutine, CPU) under /debug/pprof/, with no authentication. Only an empty value (the default) disables it; an address without a host, such as :6060, binds to 127.0.0.1 only.")
 	flag.StringVar(&webhookBindAddress, "webhook-bind-address", ":8083",
 		"The address the SCM webhook endpoint binds to.")
 	flag.StringVar(&policyNamespaces, "policy-namespaces", "platform-policies",

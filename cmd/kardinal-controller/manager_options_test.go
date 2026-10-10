@@ -195,6 +195,8 @@ func TestManagerOptions_LeaderElectionClient(t *testing.T) {
 // TestPprofBindAddress: --pprof-address is off by default, binds to
 // 127.0.0.1 when it names no host, and reaches the manager as given
 // otherwise.
+//
+// Covers INST-PPROF-01.
 func TestPprofBindAddress(t *testing.T) {
 	for _, tc := range []struct{ in, want, err string }{
 		{in: "", want: ""},
