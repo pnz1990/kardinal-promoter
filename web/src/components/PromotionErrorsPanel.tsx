@@ -112,7 +112,7 @@ export function inferStepType(step: PromotionStep): string {
     'git-clone', 'git-commit', 'git-push',
     'kustomize-set-image', 'helm-set-image', 'argocd-set-image',
     'open-pr', 'wait-for-merge', 'health-check',
-    'config-merge', 'render',
+    'config-merge', 'render', 'render-manifests',
   ]
   const msg = step.message?.toLowerCase() ?? ''
   for (const sub of knownSubSteps) {
