@@ -30,6 +30,22 @@ type LoadStats struct {
 	WarmAt time.Time `json:"warmAt,omitempty"`
 }
 
+// warmTracker finds when every one of pipelines Pipelines has more than
+// HistoryLimit Bundles: from there the kept Bundles stop growing.
+type warmTracker struct {
+	pipelines, full int
+	at              time.Time
+}
+
+// created records a Pipeline's i-th Bundle, created at now.
+func (w *warmTracker) created(i int, now time.Time) {
+	if i == HistoryLimit+1 {
+		if w.full++; w.full == w.pipelines {
+			w.at = now
+		}
+	}
+}
+
 // HistoryLimit is the Bundles each fleet Pipeline keeps: the controller's
 // default historyLimit (pkg/reconciler/bundle defaultHistoryLimit), which
 // the fleet's Pipelines do not set.
@@ -101,18 +117,17 @@ func (f *Fleet) Sustained(ctx context.Context, t *testing.T, pipelines []string,
 	tick := time.NewTicker(time.Duration(float64(time.Second) / rate))
 	defer tick.Stop()
 	var (
-		wg     sync.WaitGroup
-		mu     sync.Mutex
-		next   = map[string]int{}
-		full   int // Pipelines with more than HistoryLimit Bundles
-		warmAt time.Time
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		next = map[string]int{}
+		warm = warmTracker{pipelines: len(pipelines)}
 	)
 	for {
 		select {
 		case <-ctx.Done():
 			wg.Wait()
 			s := rec.stats()
-			s.WarmAt = warmAt
+			s.WarmAt = warm.at
 			if s.Errors > 0 {
 				t.Errorf("sustained load: %d of %d Bundle creates failed; first: %s", s.Errors, s.Errors+s.Created, s.FirstError)
 			}
@@ -122,11 +137,7 @@ func (f *Fleet) Sustained(ctx context.Context, t *testing.T, pipelines []string,
 			mu.Lock()
 			next[p]++
 			i := next[p]
-			if i == HistoryLimit+1 {
-				if full++; full == len(pipelines) {
-					warmAt = time.Now()
-				}
-			}
+			warm.created(i, time.Now())
 			mu.Unlock()
 			wg.Add(1)
 			go func() {

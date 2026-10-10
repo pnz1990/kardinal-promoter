@@ -66,8 +66,9 @@ type PodSeries struct {
 	WarmAt     time.Time `json:"warmAt"`
 	RSSWarmMiB float64   `json:"rssWarmMiB"`
 	// SysWarmMiB and SysEndMiB are the memory the Go runtime holds from the
-	// OS (go_memstats_sys_bytes); HeapWarmMiB is the heap in use then
-	// (go_memstats_heap_inuse_bytes), and HeapAfterGCMiB the heap in use
+	// OS (go_memstats_sys_bytes); HeapWarmMiB is the lowest heap in use
+	// (go_memstats_heap_inuse_bytes) in the warmHeapWindow after the warm
+	// baseline, and HeapAfterGCMiB the heap in use
 	// after the first garbage collection once the load is over, read from
 	// the Pod (0 when not measured).
 	SysWarmMiB     float64 `json:"sysWarmMiB"`
@@ -317,7 +318,7 @@ func podSeries(ctx context.Context, e *framework.Env, start, end, warm time.Time
 	}
 	for _, s := range q("go_memstats_heap_inuse_bytes") {
 		if len(s.Points) > 0 {
-			get(s.Metric["pod"]).HeapWarmMiB = mib(pointAt(s.Points, warm).Value)
+			get(s.Metric["pod"]).HeapWarmMiB = mib(minFrom(s.Points, warm, warmHeapWindow))
 		}
 	}
 	for _, s := range q("go_goroutines") {
@@ -342,6 +343,25 @@ func podSeries(ctx context.Context, e *framework.Env, start, end, warm time.Time
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].From.Before(out[j].From) })
 	return out
+}
+
+// warmHeapWindow is how long after the warm baseline the warm heap is the
+// lowest sample of: one sample would land anywhere on the GC sawtooth.
+const warmHeapWindow = 5 * time.Minute
+
+// minFrom is the lowest value of the points in [t, t+d], or pointAt(t)'s
+// when none is in it.
+func minFrom(pts []framework.PromPoint, t time.Time, d time.Duration) float64 {
+	low := math.Inf(1)
+	for _, p := range pts {
+		if !p.Time.Before(t) && !p.Time.After(t.Add(d)) {
+			low = math.Min(low, p.Value)
+		}
+	}
+	if math.IsInf(low, 1) {
+		return pointAt(pts, t).Value
+	}
+	return low
 }
 
 // pointAt is the first point at or after t, or the last point.
@@ -479,8 +499,9 @@ func restarts(ctx context.Context, e *framework.Env, o Options, check, ns, name 
 //     returned), so RSS is not bounded. Instead the memory the Go runtime
 //     holds from the OS (go_memstats_sys_bytes) may grow at most 25% from
 //     the warm sample to the end, and the heap in use after the first
-//     garbage collection once the load is over must be below the warm
-//     sample's: what the load left reachable is gone;
+//     garbage collection once the load is over must be below the lowest
+//     heap in use of the five minutes after the warm baseline: what the
+//     load left reachable is gone. A missing Go memory series fails;
 //   - built with -race, with no warm baseline (a test whose load has no
 //     steady state measures from its start): resident memory at most 2.5x
 //     (plus 500 MiB) the start, as before the warm baseline existed. Steady
@@ -521,6 +542,8 @@ func leaks(pods []PodSeries, start, end time.Time, limitMiB float64, shared, rac
 				v = append(v, fmt.Sprintf("%s: resident memory %.0f MiB at the start, %.0f MiB at the end (over %gx + %g MiB; peak %.0f)",
 					p.Pod, p.RSSWarmMiB, p.RSSEndMiB, rssGrowthRace.factor, rssGrowthRace.slackMiB, p.RSSMaxMiB))
 			}
+		case race && (p.SysWarmMiB == 0 || p.HeapWarmMiB == 0):
+			v = append(v, fmt.Sprintf("%s: no go_memstats_sys_bytes or go_memstats_heap_inuse_bytes at the warm baseline (%s): Go memory not measured", p.Pod, at))
 		case race && p.SysEndMiB > raceSysGrowth*p.SysWarmMiB:
 			v = append(v, fmt.Sprintf("%s: Go runtime memory (go_memstats_sys_bytes) %.0f MiB warm (%s), %.0f MiB at the end (over %gx)",
 				p.Pod, p.SysWarmMiB, at, p.SysEndMiB, raceSysGrowth))

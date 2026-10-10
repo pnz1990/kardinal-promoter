@@ -169,6 +169,7 @@ func TestLeaks(t *testing.T) {
 		{"race, warm: Go runtime memory grew over 25%", []PodSeries{warmRace(430, 62)}, false, true, true, 1},
 		{"race, warm: heap after the GC not below the warm heap", []PodSeries{warmRace(345, 215)}, false, true, true, 1},
 		{"race, warm: no GC seen after the load", []PodSeries{warmRace(345, 0)}, false, true, true, 1},
+		{"race, warm: no Go memory series at the baseline", []PodSeries{func() PodSeries { p := warmRace(345, 62); p.SysWarmMiB = 0; return p }()}, false, true, true, 1},
 		{"no race, warm: RSS measured from the warm sample", []PodSeries{func() PodSeries {
 			p := pod(t0, t1, 300, 700, 300, 320)
 			p.RSSStartMiB = 60 // cold start: 700 > 2x60+200, but not 2x300+200
@@ -193,6 +194,21 @@ func TestLeaks(t *testing.T) {
 			assert.Len(t, leaks(tc.pods, t0, t1, 4096, tc.shared, tc.race, tc.warm), tc.want)
 		})
 	}
+}
+
+// TestPointAtAndMinFrom: the warm samples. pointAt is the first point at or
+// after t (the last one past the end); minFrom the lowest in [t, t+d].
+//
+// Covers SCALE-INV-LEAK-01.
+func TestPointAtAndMinFrom(t *testing.T) {
+	t0 := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	pts := []framework.PromPoint{{Time: t0, Value: 300}, {Time: t0.Add(time.Minute), Value: 250}, {Time: t0.Add(3 * time.Minute), Value: 207},
+		{Time: t0.Add(7 * time.Minute), Value: 150}, {Time: t0.Add(10 * time.Minute), Value: 272}}
+	assert.InDelta(t, 250, pointAt(pts, t0.Add(30*time.Second)).Value, 0)
+	assert.InDelta(t, 300, pointAt(pts, t0.Add(-time.Hour)).Value, 0)
+	assert.InDelta(t, 272, pointAt(pts, t0.Add(time.Hour)).Value, 0, "past the end: the last point")
+	assert.InDelta(t, 207, minFrom(pts, t0.Add(30*time.Second), 5*time.Minute), 0, "the 7-minute sample is outside the window")
+	assert.InDelta(t, 272, minFrom(pts, t0.Add(time.Hour), 5*time.Minute), 0, "no point in the window: pointAt's")
 }
 
 func TestParseMetrics(t *testing.T) {
