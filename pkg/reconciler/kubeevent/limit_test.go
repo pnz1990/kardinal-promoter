@@ -6,6 +6,7 @@ package kubeevent_test
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -63,8 +64,8 @@ func TestLimited(t *testing.T) {
 	next = &countingRecorder{}
 	rec = kubeevent.Limited(next, "test-limited-one", kubeevent.Limit{QPS: 1, Burst: 1}, kubeevent.Limit{})
 	for i := 0; i < 10; i++ {
-		rec.Eventf(&corev1.Pod{}, nil, corev1.EventTypeNormal, "R", "A", "n")
-		rec.Eventf(&corev1.Pod{}, nil, corev1.EventTypeWarning, "W", "A", "w")
+		rec.Eventf(&corev1.Pod{}, nil, corev1.EventTypeNormal, "R", "A", "n %d", i)
+		rec.Eventf(&corev1.Pod{}, nil, corev1.EventTypeWarning, "W", "A", "w %d", i)
 	}
 	assert.EqualValues(t, 1, next.normal.Load())
 	assert.EqualValues(t, 10, next.warning.Load())
@@ -88,6 +89,58 @@ func TestLimited_WarningAfterNormalFlood(t *testing.T) {
 	rec.Eventf(&corev1.Pod{}, nil, corev1.EventTypeWarning, "HoldBundleMissing", "CheckHold", "hold of prod")
 	assert.EqualValues(t, 1, next.warning.Load(), "the Warning is written")
 	assert.Zero(t, dropped("test-flood", "Warning")-w0)
+}
+
+func pod(ns, name string) *corev1.Pod {
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}
+}
+
+// TestLimited_WarningsPerNamespace: one tenant's burst of Warnings empties
+// only its own namespace's bucket; another tenant's Warning is still
+// written.
+//
+// Covers PERF-EVENTS-01.
+func TestLimited_WarningsPerNamespace(t *testing.T) {
+	next := &countingRecorder{}
+	rec := kubeevent.Limited(next, "test-tenants", kubeevent.Limit{QPS: kubeevent.DefaultQPS, Burst: kubeevent.DefaultBurst},
+		kubeevent.Limit{QPS: kubeevent.DefaultWarningQPS, Burst: kubeevent.DefaultWarningBurst})
+	for i := 0; i < 1000; i++ {
+		rec.Eventf(pod("tenant-a", fmt.Sprintf("step-%d", i)), nil, corev1.EventTypeWarning, "PromotionFailed", "Promote", "step %d failed", i)
+	}
+	require.EqualValues(t, kubeevent.DefaultWarningBurst, next.warning.Load(), "tenant A's burst is capped at its own bucket")
+	rec.Eventf(pod("tenant-b", "pipeline"), nil, corev1.EventTypeWarning, "HoldBundleMissing", "CheckHold", "hold of prod")
+	assert.EqualValues(t, kubeevent.DefaultWarningBurst+1, next.warning.Load(), "tenant B's Warning is written")
+}
+
+// TestLimited_Dedupe: an Event repeating one just written (same object,
+// type, reason and message) passes without a token, so repeats the
+// broadcaster folds into a series do not use up the bucket.
+//
+// Covers PERF-EVENTS-01.
+func TestLimited_Dedupe(t *testing.T) {
+	next := &countingRecorder{}
+	rec := kubeevent.Limited(next, "test-dedupe", kubeevent.Limit{QPS: 1, Burst: 2}, kubeevent.Limit{QPS: 1, Burst: 2})
+	for i := 0; i < 50; i++ {
+		rec.Eventf(pod("ns", "gate"), nil, corev1.EventTypeWarning, "Blocked", "Evaluate", "gate %s blocking", "weekend")
+	}
+	assert.EqualValues(t, 50, next.warning.Load(), "repeats pass (the broadcaster aggregates them)")
+	rec.Eventf(pod("ns", "gate"), nil, corev1.EventTypeWarning, "Blocked", "Evaluate", "gate %s blocking", "freeze")
+	assert.EqualValues(t, 51, next.warning.Load(), "a new message takes the second token")
+	rec.Eventf(pod("ns", "gate"), nil, corev1.EventTypeWarning, "Blocked", "Evaluate", "gate %s blocking", "hours")
+	assert.EqualValues(t, 51, next.warning.Load(), "the bucket is empty for new messages")
+}
+
+// TestLimitValidate: main refuses a negative or non-finite rate and a burst
+// below 1 at startup.
+//
+// Covers PERF-EVENTS-01.
+func TestLimitValidate(t *testing.T) {
+	for _, l := range []kubeevent.Limit{{QPS: 0, Burst: 1}, {QPS: 20, Burst: 100}, {QPS: 0.5, Burst: 1}} {
+		assert.NoError(t, l.Validate("event-qps"), "%+v", l)
+	}
+	for _, l := range []kubeevent.Limit{{QPS: -1, Burst: 10}, {QPS: math.NaN(), Burst: 10}, {QPS: math.Inf(1), Burst: 10}, {QPS: 20, Burst: 0}, {QPS: 0, Burst: -1}} {
+		assert.Error(t, l.Validate("event-qps"), "%+v", l)
+	}
 }
 
 // slowSink is an events.EventSink whose writes take latency, like an API

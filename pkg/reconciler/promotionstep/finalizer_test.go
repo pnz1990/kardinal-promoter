@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -33,6 +34,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
@@ -236,6 +238,8 @@ func TestPRFinalizer_BuiltSteps(t *testing.T) {
 // open PR closes the PR with a comment before the step goes. A merged PR, or a
 // step past its PR, is left alone. A failed close is retried until five
 // minutes after the delete; then the step goes anyway with a Warning Event.
+//
+// Covers PERF-EVENTS-01.
 func TestPRFinalizer_DeleteClosesPR(t *testing.T) {
 	merged := openPRStatus("prs-step", "test/repo", 5)
 	merged.Status.Open, merged.Status.Merged = false, true
@@ -332,8 +336,15 @@ func TestPRFinalizer_DeleteClosesPR(t *testing.T) {
 			r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: &mockGit{}, Recorder: rec,
 				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
 
+			closeFailed := testutil.ToFloat64(observability.PRCleanupFailuresTotal.WithLabelValues(promotionstep.ReasonClosePRFailed))
 			res, err := r.Reconcile(context.Background(), reqFor("step"))
 			require.NoError(t, err)
+			wantFailed := 0.0
+			if strings.Contains(tt.wantEvent, "ClosePRFailed") {
+				wantFailed = 1
+			}
+			assert.InDelta(t, wantFailed, testutil.ToFloat64(observability.PRCleanupFailuresTotal.WithLabelValues(promotionstep.ReasonClosePRFailed))-closeFailed, 0,
+				"kardinal_pr_cleanup_failures_total{reason=ClosePRFailed} counts a PR that could not be closed")
 			assert.Equal(t, tt.wantClosed, m.closed)
 			if tt.wantComment != "" {
 				require.Len(t, m.comments, 1)
@@ -672,6 +683,8 @@ func TestPRFinalizer_DeleteRestartAfterClose(t *testing.T) {
 // branch from a queue, after the delete call returns, and closed the new
 // step's PR. When the new step would wait or never come, the branch is
 // deleted, so it is not left with no PR.
+//
+// Covers PERF-EVENTS-01.
 func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 	deleted := metav1.NewTime(time.Now().Add(-time.Second).Truncate(time.Second))
 	type graphState int
@@ -1017,9 +1030,16 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 				NowFn:     func() time.Time { return deleted.Add(later) },
 				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
 
+			leftOpen := testutil.ToFloat64(observability.PRCleanupFailuresTotal.WithLabelValues(promotionstep.ReasonPRLeftOpen))
 			var logs bytes.Buffer
 			res, err := r.Reconcile(objectgonetest.Context(&logs), reqFor("step"))
 			require.NoError(t, err)
+			wantLeft := 0.0
+			if tt.wantLeftOpen {
+				wantLeft = 1
+			}
+			assert.InDelta(t, wantLeft, testutil.ToFloat64(observability.PRCleanupFailuresTotal.WithLabelValues(promotionstep.ReasonPRLeftOpen))-leftOpen, 0,
+				"kardinal_pr_cleanup_failures_total{reason=PRLeftOpen} counts a PR left open")
 			errorLines := strings.Count(logs.String(), `"level":"error"`)
 			evts := drain(rec)
 			if tt.wantLeftOpen {

@@ -151,6 +151,20 @@ var (
 		},
 		[]string{"hook_namespace", "hook", "reason"},
 	)
+
+	// PRCleanupFailuresTotal counts deleted PromotionSteps whose open PR
+	// the controller left open (PRLeftOpen: it could not tell whether the
+	// step comes back) or could not close (ClosePRFailed) before removing
+	// the step's finalizer. The step is gone, so nothing but this, the log
+	// and a Warning Event records it: an open PR nothing tracks, which a
+	// merge would deploy (#1687).
+	PRCleanupFailuresTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kardinal_pr_cleanup_failures_total",
+			Help: "Deleted PromotionSteps whose PR was left open (PRLeftOpen) or could not be closed (ClosePRFailed); close those PRs by hand.",
+		},
+		[]string{"reason"},
+	)
 )
 
 func init() {
@@ -158,6 +172,7 @@ func init() {
 		AuditEventsPrunedTotal,
 		HoldBundleMissingTotal,
 		NotificationsDroppedTotal,
+		PRCleanupFailuresTotal,
 		BundlesTotal,
 		StepsTotal,
 		GateEvaluationsTotal,

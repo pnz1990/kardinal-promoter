@@ -312,7 +312,7 @@ the next event is delivered. A dropped event is not silent:
 - the hook gets a `Warning` Event, reason `NotificationTemplateFailed` (or
   `NotificationDropped` for an event given up on after its last delivery attempt), with
   the same message: `kubectl get events --field-selector involvedObject.name=<hook>`;
-- the counter `kardinal_notifications_dropped_total{hook_namespace,hook,reason}` (reason
+- the counter `kardinal_notifications_dropped_total{hook_namespace,hook,reason}` (reason The Warning Event can itself be dropped under load ([Kubernetes Events](installation.md#kubernetes-events)); the counter and `status.failureMessage` are the durable record.
   `template` or `attempts`) goes up by one
   ([kardinal metrics](guides/monitoring.md#kardinal-metrics)). Alert on any increase.
 

@@ -196,13 +196,13 @@ func main() {
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081",
 		"The address the probe endpoint binds to.")
 	flag.Float64Var(&eventLimit.QPS, "event-qps", kubeevent.DefaultQPS,
-		"Most Normal Kubernetes Events the controller writes a second; Events over the rate are dropped and counted in kardinal_events_dropped_total. Events are best effort: the durable record is status and AuditEvents. 0 removes the limit.")
+		"Most Normal Kubernetes Events the controller writes a second (one bucket for all namespaces); Events over the rate are dropped and counted in kardinal_events_dropped_total. Events are best effort: docs/installation.md (Kubernetes Events) lists each Warning's durable record. 0 removes the limit.")
 	flag.IntVar(&eventLimit.Burst, "event-burst", kubeevent.DefaultBurst,
 		"Most Normal Kubernetes Events the controller writes at once, above --event-qps.")
 	flag.Float64Var(&eventWarningLimit.QPS, "event-warning-qps", kubeevent.DefaultWarningQPS,
-		"Most Warning Kubernetes Events the controller writes a second, in a bucket of their own so a flood of Normal Events never drops them. 0 removes the limit.")
+		"Most Warning Kubernetes Events the controller writes a second per namespace, in buckets of their own so neither Normal Events nor another namespace's Warnings use them up. 0 removes the limit.")
 	flag.IntVar(&eventWarningLimit.Burst, "event-warning-burst", kubeevent.DefaultWarningBurst,
-		"Most Warning Kubernetes Events the controller writes at once, above --event-warning-qps.")
+		"Most Warning Kubernetes Events the controller writes at once per namespace, above --event-warning-qps.")
 	flag.StringVar(&pprofAddress, "pprof-address", "",
 		"Address that serves Go's net/http/pprof profiles (heap, goroutine, CPU) under /debug/pprof/, with no authentication. Only an empty value (the default) disables it; an address without a host, such as :6060, binds to 127.0.0.1 only.")
 	flag.StringVar(&webhookBindAddress, "webhook-bind-address", ":8083",
@@ -730,6 +730,11 @@ func main() {
 	// (--event-qps, --event-burst, #1682).
 	eventRecorder := kubeevent.Limited(mgr.GetEventRecorder("kardinal-controller"), "kardinal-controller", eventLimit, eventWarningLimit)
 
+	for flag, l := range map[string]kubeevent.Limit{"event-qps": eventLimit, "event-warning-qps": eventWarningLimit} {
+		if err := l.Validate(flag); err != nil {
+			logger.Fatal().Err(err).Msg("invalid Event rate")
+		}
+	}
 	if err := retire.Validate(); err != nil {
 		logger.Fatal().Err(err).Msg("invalid --graph-retire-*-after")
 	}

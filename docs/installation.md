@@ -829,19 +829,43 @@ The controller writes `events.k8s.io` Events for its transitions (`kubectl event
 Event broadcaster starts a goroutine and an API write for every Event, with no bound, so when
 hundreds of Bundles change state at once the controller held over 2,000 goroutines and opened
 hundreds of new connections to the API server (#1682). The controller therefore rate-limits
-Events, with a bucket per type so a flood of Normal transitions never drops a one-shot Warning
-(`HoldBundleMissing`, `NotificationDropped`):
+Events:
 
-| Type | Rate | Burst |
+| Type | Bucket | Rate | Burst |
+|---|---|---|---|
+| Normal | one for the controller | `--event-qps` (20 a second) | `--event-burst` (100) |
+| Warning | one per namespace (the 1,024 most recently used) | `--event-warning-qps` (5 a second) | `--event-warning-burst` (50) |
+
+So neither a flood of Normal transitions nor one tenant's burst of Warnings drops another
+namespace's Warning. An Event that repeats one written in the last 5 seconds (same object, type,
+reason and message) passes without a token: the broadcaster folds it into a series. Any other
+Event over its bucket is dropped, never queued, so a reconcile never waits on an Event, and
+`kardinal_events_dropped_total{recorder,type}` counts it. Set the flags with `controller.extraArgs`;
+a rate of 0 removes that type's limit, and the controller refuses to start with a negative or
+non-finite rate or a burst below 1.
+
+**Events are best effort.** Alert on the durable record of each Warning, not on the Event:
+
+| Warning Event | On | Durable record |
 |---|---|---|
-| Normal | `--event-qps` (20 a second) | `--event-burst` (100) |
-| Warning | `--event-warning-qps` (5 a second) | `--event-warning-burst` (50) |
-
-An Event over its bucket is dropped, never queued, so a reconcile never waits on an Event, and
-`kardinal_events_dropped_total{recorder,type}` counts it. **Events are best effort: the durable
-record of every transition is the object's status and its AuditEvent**, so alert on those (or on
-the metric), not on Events alone. Set the flags with `controller.extraArgs`; a rate of 0 removes
-that type's limit.
+| `Rejected` | Bundle | `status.phase: Rejected`, `kardinal_bundles_total{phase="Rejected"}` |
+| `Failed` | Bundle | `status.phase: Failed` and the `Ready` condition's reason, `kardinal_bundles_total{phase="Failed"}` |
+| `PipelineNotFound`, `TranslationError` | Bundle | `Ready=False` condition with that reason |
+| `GraphDeleted`, `GraphSyncFailed` | Bundle | `GraphSynced=False` condition |
+| `InvalidRetireDelay` | Bundle | the `GraphRetired` condition's message names the ignored annotation |
+| step `Failed`, `AbortedByAlarm`, `RollingBack` | PromotionStep | `status.state`, and the `PromotionFailed` (or `RollbackStarted`) AuditEvent |
+| `GitCredentialMissing`, `SCMUnavailable` | PromotionStep | the condition of that name |
+| `GatesStatusFailed` | PromotionStep | `status.outputs.gatesStatus` (`error:…` with the retry time) |
+| `GatesStatusNoCommit` | PromotionStep | no `status.outputs.prHeadSHA`; the PR has no `kardinal/gates` status |
+| `MergedWhileBlocked` | PromotionStep | `status.outputs.mergedWhileBlocked` |
+| `PRLeftOpen`, `ClosePRFailed` | PromotionStep (deleted) | `kardinal_pr_cleanup_failures_total{reason}` and the controller's error log: the step is gone, so close the PR by hand ([troubleshooting](troubleshooting.md)) |
+| `Blocked` | PolicyGate | `Ready=False` condition (reason `Blocked`) and the `GateEvaluated` AuditEvent |
+| `GateExempted` | PolicyGate | `status.reason` (`EXEMPT: …`) and the `GateEvaluated` AuditEvent |
+| `HoldBundleMissing` | Pipeline | the `HoldBundleMissing` AuditEvent and `kardinal_hold_bundle_missing_total` |
+| `RollbackRefused` | RollbackPolicy | the `RollbackRefused` condition |
+| `InvalidSpec` | ChangeWindow | `Valid=False` condition |
+| `NotificationDropped`, `NotificationTemplateFailed` | NotificationHook | `status.failureMessage` and `kardinal_notifications_dropped_total{reason}` |
+| `ShardNotRunning`, `ShardHomeConflict` | Namespace | the controller's warning log only |
 
 ### Leader election under API pressure
 
