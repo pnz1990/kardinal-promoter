@@ -549,6 +549,7 @@ spec:
   allowedRepositories:               # optional; globs over the SCM repository path
     - platform/*
     - apps/**
+  # instanceSigners: [Forgejo]       # Forgejo/Gitea only: the instance's SIGNING_NAME / SIGNING_EMAIL
 ---
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
@@ -620,6 +621,13 @@ How it works:
   in-cluster SCM without TLS. Every provider API request goes through the controller's
   egress guard, the one NotificationHooks and MetricChecks use: no loopback, link-local
   or cloud metadata addresses, even after a redirect or a DNS change.
+- **Signed commits are checked with it too.** A Pipeline with
+  `imageVerification.commits.requireSigned` asks the provider, with its token and the same
+  checks, whether the config commit is signed, and the repository must be on the provider's
+  host. For Forgejo and Gitea, `instanceSigners` lists the names or emails the instance signs
+  commits with, as `--scm-instance-signers` does for the controller's provider; the
+  controller's list is not used for a provider. See
+  [Signed commits](image-verification.md#signed-commits).
 - **Git credentials do not change.** `git-clone` and `git-push` still use
   `spec.git.secretRef` (or an ssh remote). The provider's token is used only for the SCM
   API.
