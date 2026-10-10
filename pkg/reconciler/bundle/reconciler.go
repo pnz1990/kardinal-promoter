@@ -120,7 +120,7 @@ func skipTranslate(err error) bool {
 }
 
 // indexPipeline is the Bundle field index on spec.pipeline.
-const indexPipeline = "spec.pipeline"
+const indexPipeline = lifecycle.IndexBundlePipeline
 
 // requeueSlow is the retry interval for conditions that need a change
 // elsewhere (a missing Pipeline, a full maxConcurrentPromotions slot, a failing
@@ -1901,9 +1901,8 @@ func computeBundleMetrics(b *kardinalv1alpha1.Bundle, expected []string,
 //     whose Graph could not be built (InvalidSpec), so a fixed gate retries
 //     them (#1312).
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(),
-		&kardinalv1alpha1.Bundle{}, indexPipeline, bundlePipelineIndex); err != nil {
-		return fmt.Errorf("index Bundle by spec.pipeline: %w", err)
+	if err := lifecycle.IndexBundlesByPipeline(context.Background(), mgr.GetFieldIndexer()); err != nil {
+		return err
 	}
 
 	// Unstructured, so kardinal does not import the kro module.
@@ -1930,13 +1929,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // bundlePipelineIndex is the spec.pipeline index function.
-func bundlePipelineIndex(obj client.Object) []string {
-	b, ok := obj.(*kardinalv1alpha1.Bundle)
-	if !ok || b.Spec.Pipeline == "" {
-		return nil
-	}
-	return []string{b.Spec.Pipeline}
-}
+func bundlePipelineIndex(obj client.Object) []string { return lifecycle.BundlePipeline(obj) }
 
 // bundleLabelMapper maps a PromotionStep or Graph to the Bundle named by its
 // kardinal.io/bundle label, set by the Graph builder.
