@@ -5,6 +5,7 @@ package promotionstep_test
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
@@ -207,4 +209,56 @@ func TestAutoMerge_StaleKeysCleared(t *testing.T) {
 	assert.NotContains(t, got.Status.Outputs, "prAutoMergeError")
 	assert.NotContains(t, got.Status.Outputs, "prAutoMergeAttempts")
 	assert.Empty(t, m.enables)
+}
+
+// TestAutoMerge_StaleReadDoesNotHideEnabled (#1683): the reconcile after a
+// pause reads the step from a cache that has not seen the write of
+// prAutoMerge: enabled yet. It must not store suspended over enabled
+// without turning auto-merge off at the SCM: its write conflicts and it is
+// requeued, and the next reconcile, reading enabled, turns it off.
+func TestAutoMerge_StaleReadDoesNotHideEnabled(t *testing.T) {
+	ctx := context.Background()
+	ps, prs, gate := waitingAutoMergeStep()
+	c := newClient(t, ps, prs, gate, makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo"))
+	m := &autoMergeSCM{mockSCM: mockSCM{open: true}}
+	var stale *v1alpha1.PromotionStep
+	cached := interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, k client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if got, ok := obj.(*v1alpha1.PromotionStep); ok && stale != nil && k.Name == "step" {
+				stale.DeepCopyInto(got)
+				return nil
+			}
+			return cl.Get(ctx, k, obj, opts...)
+		}})
+	r := &promotionstep.Reconciler{Client: cached, APIReader: c, SCM: m, GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+
+	r.Client = c
+	reconcileStep(t, r, "step")
+	stored := getStep(t, c, "step")
+	require.Equal(t, "enabled", stored.Status.Outputs["prAutoMerge"])
+	require.Len(t, m.enables, 1)
+	// The cache's copy: everything the reconcile wrote before (the gates
+	// status), at the resourceVersion before the write of enabled.
+	stale = stored.DeepCopy()
+	stale.Status.Outputs["prAutoMerge"] = "pending"
+	stale.Status.Message = "PR #5 is open, waiting for merge"
+	rv, err := strconv.Atoi(stored.ResourceVersion)
+	require.NoError(t, err)
+	stale.ResourceVersion = strconv.Itoa(rv - 1)
+
+	require.NoError(t, lifecycle.Pause(ctx, c, "default", "nginx-demo"))
+	r.Client = cached // the cache still has the step from before enabled
+	res, err := r.Reconcile(ctx, reqFor("step"))
+	require.NoError(t, err)
+	assert.Equal(t, time.Second, res.RequeueAfter, "the stale write conflicts and is requeued")
+	got := getStep(t, c, "step")
+	assert.Equal(t, "enabled", got.Status.Outputs["prAutoMerge"], "enabled is not overwritten")
+	assert.Zero(t, m.disables)
+
+	stale = nil // the cache caught up
+	reconcileStep(t, r, "step")
+	got = getStep(t, c, "step")
+	assert.Equal(t, "suspended", got.Status.Outputs["prAutoMerge"])
+	assert.Equal(t, 1, m.disables, "auto-merge is turned off at the SCM")
 }

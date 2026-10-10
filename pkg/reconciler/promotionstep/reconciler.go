@@ -1691,7 +1691,20 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 	}
 	if msg != ps.Status.Message || autoMergeChanged {
 		ps.Status.Message = msg
-		if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
+		// Locked: the auto-merge state decides whether the next reconcile
+		// turns auto-merge off at the SCM. A reconcile that read the step
+		// from a cache behind the write of `enabled` would otherwise store
+		// `suspended` over it without turning it off, and the SCM merges the
+		// PR of a paused Pipeline (#1683). Its write conflicts instead, and
+		// the requeued reconcile reads `enabled`.
+		if err := r.patchStatusLocked(ctx, base, ps); err != nil {
+			if apierrors.IsNotFound(err) {
+				return ctrl.Result{}, nil
+			}
+			if apierrors.IsConflict(err) {
+				log.Debug().Str("step", ps.Name).Msg("step changed since it was read; wait-for-merge state not written, requeueing")
+				return ctrl.Result{RequeueAfter: time.Second}, nil
+			}
 			return ctrl.Result{}, fmt.Errorf("patch wait-for-merge message: %w", err)
 		}
 	}
