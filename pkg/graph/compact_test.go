@@ -965,3 +965,48 @@ func TestCompact_ApprovalGates(t *testing.T) {
 	sim.gatesReady[prodGate] = true
 	assert.Equal(t, []string{"prod", "test"}, sim.advance())
 }
+
+// TestCompact_GateMirror checks the #1518 gate mirror in the compact shape:
+// a pr-review environment with gates gets the GateMirror patch collection,
+// which targets its PromotionStep by the literal name the compact shape's
+// PromotionSteps collection gives it (the node shape's name), reads only
+// nodes the Graph has, and mirrors the same steps as the node shape.
+func TestCompact_GateMirror(t *testing.T) {
+	p := compactPipeline(
+		kardinalv1alpha1.EnvironmentSpec{Name: "test"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod", Approval: "pr-review", DependsOn: []string{"test"}},
+	)
+	gates := []kardinalv1alpha1.PolicyGate{
+		makePolicyGate("no-weekend", "platform-policies", "prod", "!schedule.isWeekend"),
+		makePolicyGate("two-approvers", "platform-policies", "prod", "true"),
+	}
+	gates[1].Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 2}
+	b := makeBundle("app-x7k2m", "app")
+	build := func(shape string) *graph.Graph {
+		pp := p.DeepCopy()
+		pp.Annotations = map[string]string{graph.AnnotationGraphShape: shape}
+		res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: pp, Bundle: b, PolicyGates: gates})
+		require.NoError(t, err)
+		assertKroValid(t, res.Graph)
+		return res.Graph
+	}
+	compact, nodesShape := nodeByID(build(graph.GraphShapeCompact).Spec.Nodes), nodeByID(build(graph.GraphShapeNodes).Spec.Nodes)
+	require.Contains(t, compact, graph.NodeGateMirror)
+	require.Contains(t, compact, graph.NodeGateMirrorData)
+	assert.Equal(t, nodesShape[graph.NodeGateMirrorData].Def, compact[graph.NodeGateMirrorData].Def,
+		"the same steps are mirrored, by the same names")
+	assert.Equal(t, nodesShape[graph.NodeGateMirror].Patch, compact[graph.NodeGateMirror].Patch)
+
+	// The mirrored name is the one the compact collection creates.
+	mirrored := compact[graph.NodeGateMirrorData].Def["steps"].([]interface{})
+	require.Len(t, mirrored, 1)
+	var dagName string
+	for _, e := range compact[graph.NodePromotionDAG].Def["steps"].([]interface{}) {
+		if e.(map[string]interface{})["environment"] == "prod" {
+			dagName = e.(map[string]interface{})["name"].(string)
+		}
+	}
+	assert.Equal(t, dagName, mirrored[0].(map[string]interface{})["name"])
+	// The mirror reads the approval gates too.
+	assert.Contains(t, fmt.Sprint(compact[graph.NodeGateMirror].Patch), graph.NodeApprovalGates)
+}
