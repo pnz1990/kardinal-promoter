@@ -146,6 +146,15 @@ func checkMetrics(ctx context.Context, e *framework.Env, o Options) (*Metrics, [
 		}
 		time.Sleep(10 * time.Second)
 	}
+	// The Pods' memory and goroutines end once the work the load left has
+	// drained and the goroutine count stopped falling: the last Bundles
+	// settling spawn a short burst of goroutines (the RC soak: 520 -> 1671
+	// for under a minute), which the window's last sample can land on.
+	memEnd := settleGoroutines(time.Now, time.Sleep, func() (float64, bool) {
+		v := byLabel(ctx, e, `sum by (job) (go_goroutines{`+ctrlSel+`})`, "job")
+		g, ok := v[framework.ControllerName]
+		return g, ok
+	})
 	var maxQ []string
 	for k, v := range m.QueueDepthMax {
 		if v >= 10 {
@@ -166,11 +175,11 @@ func checkMetrics(ctx context.Context, e *framework.Env, o Options) (*Metrics, [
 	if o.WarmAt.After(start) {
 		warm = o.WarmAt
 	}
-	m.Pods = podSeries(ctx, e, start, end, warm)
+	m.Pods = podSeries(ctx, e, start, memEnd, warm)
 	if o.RaceBuild && !o.SharedController && warm != start {
 		heapAfterGC(ctx, e, m.Pods, end)
 	}
-	leak.Violations = leaks(m.Pods, start, end, memoryLimitMiB(ctx, e), o.SharedController, o.RaceBuild, warm != start)
+	leak.Violations = leaks(m.Pods, start, memEnd, memoryLimitMiB(ctx, e), o.SharedController, o.RaceBuild, warm != start)
 
 	push := Result{Name: "metrics-push-efficiency"}
 	pushSel := `kardinal_git_operations_total{` + ctrlSel + `,operation="push"}`
@@ -343,6 +352,31 @@ func podSeries(ctx context.Context, e *framework.Env, start, end, warm time.Time
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].From.Before(out[j].From) })
 	return out
+}
+
+// goroutineSettleStep and goroutineSettleMax pace settleGoroutines: two
+// steps of podSeries' 15s range query between reads, for at most 2 minutes.
+const (
+	goroutineSettleStep = 30 * time.Second
+	goroutineSettleMax  = 2 * time.Minute
+)
+
+// settleGoroutines waits until the controller's goroutine count (read)
+// stops falling, reading it every goroutineSettleStep, for at most
+// goroutineSettleMax, and returns the time of the last read: where the
+// memory and goroutine series end. A read that fails ends the wait.
+func settleGoroutines(now func() time.Time, sleep func(time.Duration), read func() (float64, bool)) time.Time {
+	deadline := now().Add(goroutineSettleMax)
+	prev, ok := read()
+	for ok && now().Before(deadline) {
+		sleep(goroutineSettleStep)
+		cur, curOK := read()
+		if !curOK || cur >= prev {
+			break
+		}
+		prev = cur
+	}
+	return now()
 }
 
 // warmHeapWindow is how long after the warm baseline the warm heap is the
