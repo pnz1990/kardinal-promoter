@@ -127,3 +127,6 @@ func (r *Registry) CacheSizesForTest() (secrets, namespaces int) {
 	defer r.mu.Unlock()
 	return len(r.secrets), len(r.namespaces)
 }
+
+// NewerRVForTest exposes newerRV.
+var NewerRVForTest = newerRV

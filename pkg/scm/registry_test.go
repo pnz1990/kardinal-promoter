@@ -6,8 +6,10 @@ package scm_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -424,4 +426,149 @@ func TestRepositoryAllowed_DataCenter(t *testing.T) {
 		assert.NoError(t, scm.RepositoryAllowed(spec, repo), repo)
 	}
 	assert.ErrorIs(t, scm.RepositoryAllowed(spec, "scm/OTHER/web"), scm.ErrRepositoryNotAllowed)
+}
+
+// gatedReader reads the object when Get is called and, for the calls
+// listed in gates (counted per kind), returns that snapshot only once the
+// gate is closed: a slow read of a version that has since changed.
+type gatedReader struct {
+	client.Reader
+	mu      sync.Mutex
+	calls   map[string]int
+	gates   map[string]map[int]chan struct{}
+	entered chan string
+}
+
+func (g *gatedReader) Get(ctx context.Context, key types.NamespacedName, obj client.Object, opts ...client.GetOption) error {
+	kind := fmt.Sprintf("%T", obj)
+	g.mu.Lock()
+	i := g.calls[kind]
+	g.calls[kind] = i + 1
+	gate := g.gates[kind][i]
+	g.mu.Unlock()
+	err := g.Reader.Get(ctx, key, obj, opts...)
+	if gate != nil {
+		g.entered <- fmt.Sprintf("%s#%d", kind, i)
+		<-gate
+	}
+	return err
+}
+
+func newGatedReader(r client.Reader, kind string, call int) (*gatedReader, chan struct{}) {
+	gate := make(chan struct{})
+	return &gatedReader{Reader: r, calls: map[string]int{}, entered: make(chan string, 1),
+		gates: map[string]map[int]chan struct{}{kind: {call: gate}}}, gate
+}
+
+// TestRegistry_SlowSecretReadDoesNotOverwriteRotation (cache races QA): a
+// read of the Secret that started before a rotation but returns after a
+// later read of the rotated one does not put the old token back.
+//
+// Covers SEC-CACHE-ORDER-01.
+func TestRegistry_SlowSecretReadDoesNotOverwriteRotation(t *testing.T) {
+	ctx := context.Background()
+	c := fake.NewClientBuilder().WithScheme(registryScheme(t)).
+		WithObjects(refSecret("team-a", "hook", map[string]string{"secret": "old"})).Build()
+	api, slow := newGatedReader(c, "*v1.Secret", 0)
+	r := &scm.Registry{Client: c, APIReader: api}
+	spec := scm.ProviderSpec{Identity: v1alpha1.ScmProviderIdentity{Kind: "ScmProvider", Name: "p"}, SecretNamespace: "team-a",
+		Spec: v1alpha1.ScmProviderSpec{Type: "github", SecretRef: v1alpha1.ScmSecretKeyRef{Name: "tok"},
+			WebhookSecretRef: &v1alpha1.ScmSecretKeyRef{Name: "hook"}}}
+
+	first := make(chan string)
+	go func() {
+		v, err := r.WebhookSecret(ctx, spec)
+		assert.NoError(t, err)
+		first <- v
+	}()
+	<-api.entered // the first read has the old version and is held
+	rotated := refSecret("team-a", "hook", map[string]string{"secret": "new"})
+	var cur corev1.Secret
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: "team-a", Name: "hook"}, &cur))
+	rotated.ResourceVersion = cur.ResourceVersion
+	require.NoError(t, c.Update(ctx, rotated))
+	v, err := r.WebhookSecret(ctx, spec) // a second read gets the rotated one
+	require.NoError(t, err)
+	assert.Equal(t, "new", v)
+	close(slow)
+	assert.Equal(t, "new", <-first, "the slow caller gets the newer cached value")
+	v, err = r.WebhookSecret(ctx, spec)
+	require.NoError(t, err)
+	assert.Equal(t, "new", v, "the rotated secret stays cached")
+}
+
+// TestRegistry_InFlightReadAfterEvict (cache races QA): a Secret read in
+// flight when the provider is deleted (Evict) does not repopulate the cache
+// with its token.
+//
+// Covers SEC-CACHE-ORDER-01.
+func TestRegistry_InFlightReadAfterEvict(t *testing.T) {
+	ctx := context.Background()
+	c := fake.NewClientBuilder().WithScheme(registryScheme(t)).
+		WithObjects(refSecret("team-a", "hook", map[string]string{"secret": "h"})).Build()
+	api, slow := newGatedReader(c, "*v1.Secret", 0)
+	r := &scm.Registry{Client: c, APIReader: api}
+	spec := scm.ProviderSpec{Identity: v1alpha1.ScmProviderIdentity{Kind: v1alpha1.KindScmProvider, Name: "p"}, SecretNamespace: "team-a",
+		Spec: v1alpha1.ScmProviderSpec{Type: "github", SecretRef: v1alpha1.ScmSecretKeyRef{Name: "tok"},
+			WebhookSecretRef: &v1alpha1.ScmSecretKeyRef{Name: "hook"}}}
+	done := make(chan struct{})
+	go func() {
+		_, err := r.WebhookSecret(ctx, spec)
+		assert.NoError(t, err, "the in-flight caller still gets what it read")
+		close(done)
+	}()
+	<-api.entered
+	r.Evict(v1alpha1.KindScmProvider, "team-a", "p")
+	close(slow)
+	<-done
+	secrets, _ := r.CacheSizesForTest()
+	assert.Zero(t, secrets, "the deleted provider's secret is not kept")
+}
+
+// TestRegistry_SlowNamespaceReadDoesNotOverwriteRevoke (cache races QA):
+// a Namespace read that started before its labels were removed, returning
+// after a later read saw the removal, does not allow the namespace again.
+//
+// Covers SEC-CACHE-ORDER-01.
+func TestRegistry_SlowNamespaceReadDoesNotOverwriteRevoke(t *testing.T) {
+	ctx := context.Background()
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-a", Labels: map[string]string{"scm": "ghe"}}}
+	p := &v1alpha1.ClusterScmProvider{ObjectMeta: metav1.ObjectMeta{Name: "ghe", UID: "c1"},
+		Spec: v1alpha1.ClusterScmProviderSpec{
+			ScmProviderSpec:   v1alpha1.ScmProviderSpec{Type: "github", SecretRef: v1alpha1.ScmSecretKeyRef{Name: "tok", Namespace: "scm"}},
+			AllowedNamespaces: &metav1.LabelSelector{MatchLabels: map[string]string{"scm": "ghe"}}}}
+	c := fake.NewClientBuilder().WithScheme(registryScheme(t)).WithObjects(ns, p, refSecret("scm", "tok", map[string]string{"token": "x"})).Build()
+	api, slow := newGatedReader(c, "*v1.Namespace", 0)
+	r := &scm.Registry{Client: c, APIReader: api,
+		New: func(string, string, string, string) (scm.SCMProvider, error) { return &builtProvider{}, nil }}
+	id := v1alpha1.ScmProviderIdentity{Kind: v1alpha1.KindClusterScmProvider, Name: "ghe", UID: "c1"}
+
+	first := make(chan error)
+	go func() {
+		_, err := r.ForIdentity(ctx, "team-a", id, "acme/app")
+		first <- err
+	}()
+	<-api.entered // read with the label, held
+	var cur corev1.Namespace
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "team-a"}, &cur))
+	cur.Labels = nil
+	require.NoError(t, c.Update(ctx, &cur))
+	_, err := r.ForIdentity(ctx, "team-a", id, "acme/app")
+	require.ErrorIs(t, err, scm.ErrNamespaceNotAllowed, "the later read sees the label removed")
+	close(slow)
+	assert.ErrorIs(t, <-first, scm.ErrNamespaceNotAllowed, "the slow read gets the newer cached labels")
+	_, err = r.ForIdentity(ctx, "team-a", id, "acme/app")
+	assert.ErrorIs(t, err, scm.ErrNamespaceNotAllowed, "the revoked namespace stays refused")
+}
+
+// TestNewerRV: resourceVersions compare as etcd revisions; anything that
+// does not parse is never called newer, and the read order decides.
+//
+// Covers SEC-CACHE-ORDER-01.
+func TestNewerRV(t *testing.T) {
+	assert.True(t, scm.NewerRVForTest("10", "9"))
+	assert.False(t, scm.NewerRVForTest("9", "10"))
+	assert.False(t, scm.NewerRVForTest("5", "5"))
+	assert.False(t, scm.NewerRVForTest("x", "1"))
+	assert.False(t, scm.NewerRVForTest("2", ""))
 }

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -215,6 +216,14 @@ type Registry struct {
 	// secretsOf is the Secrets read for a provider (identityKey), which
 	// Evict forgets with its client.
 	secretsOf map[string][]types.NamespacedName
+	// reads numbers every Secret and Namespace read when it starts: a read
+	// stores its result only when no read that started later stored one
+	// first, so a slow read of an old version cannot overwrite a newer one.
+	reads uint64
+	// secretGen is bumped by Evict for each Secret it forgets; a read that
+	// started before stores nothing, so an in-flight read cannot bring a
+	// deleted provider's token back for another SecretTTL.
+	secretGen map[types.NamespacedName]uint64
 }
 
 type registryEntry struct {
@@ -226,12 +235,31 @@ type registryEntry struct {
 type secretEntry struct {
 	secret  *corev1.Secret // nil: not found
 	expires time.Time
+	started uint64 // the read's number (Registry.reads)
 }
 
 type namespaceEntry struct {
 	labels  map[string]string
 	err     error
 	expires time.Time
+	started uint64
+	rv      string
+}
+
+// newerRV reports whether resourceVersion a is newer than b. Kubernetes
+// documents resourceVersions as opaque, but the API server's are etcd
+// revisions; when either does not parse, neither is called newer and the
+// read order decides.
+func newerRV(a, b string) bool {
+	x, err1 := strconv.ParseUint(a, 10, 64)
+	y, err2 := strconv.ParseUint(b, 10, 64)
+	return err1 == nil && err2 == nil && x > y
+}
+
+// keepOld reports whether a cached result (started, rv) wins over a new
+// read's (started, rv): it started later, or it is a newer version.
+func keepOld(oldStarted, newStarted uint64, oldRV, newRV string) bool {
+	return oldStarted > newStarted || newerRV(oldRV, newRV)
 }
 
 // Resolved is a provider client and the spec it was built from.
@@ -352,6 +380,10 @@ func (r *Registry) namespaceLabels(ctx context.Context, ns string) (map[string]s
 	if ok && now.Before(e.expires) {
 		return e.labels, e.err
 	}
+	r.mu.Lock()
+	r.reads++
+	started := r.reads
+	r.mu.Unlock()
 	var n corev1.Namespace
 	if err := r.apiReader().Get(ctx, types.NamespacedName{Name: ns}, &n); err != nil {
 		// Not cached: retried at the next use.
@@ -370,7 +402,13 @@ func (r *Registry) namespaceLabels(ctx context.Context, ns string) (map[string]s
 	if r.namespaces == nil || len(r.namespaces) >= maxCacheEntries {
 		r.namespaces = map[string]namespaceEntry{}
 	}
-	r.namespaces[ns] = namespaceEntry{labels: n.Labels, expires: now.Add(ttl)}
+	if old, ok := r.namespaces[ns]; ok && keepOld(old.started, started, old.rv, n.ResourceVersion) {
+		// A read that started later, or a newer version, is cached: this
+		// slower read of an older one does not replace it.
+		r.mu.Unlock()
+		return old.labels, old.err
+	}
+	r.namespaces[ns] = namespaceEntry{labels: n.Labels, expires: now.Add(ttl), started: started, rv: n.ResourceVersion}
 	r.mu.Unlock()
 	return n.Labels, nil
 }
@@ -419,8 +457,12 @@ func (r *Registry) Evict(kind, ns, name string) {
 		r.clients.Remove(uid)
 	}
 	r.mu.Lock()
+	if r.secretGen == nil {
+		r.secretGen = map[types.NamespacedName]uint64{}
+	}
 	for _, nn := range r.secretsOf[key] {
 		delete(r.secrets, nn)
+		r.secretGen[nn]++
 	}
 	delete(r.secretsOf, key)
 	r.mu.Unlock()
@@ -535,9 +577,13 @@ func (r *Registry) secret(ctx context.Context, nn types.NamespacedName) (*corev1
 	e, ok := r.secrets[nn]
 	r.mu.Unlock()
 	if !ok || !now.Before(e.expires) {
+		r.mu.Lock()
+		r.reads++
+		started, gen := r.reads, r.secretGen[nn]
+		r.mu.Unlock()
 		var s corev1.Secret
 		err := r.apiReader().Get(ctx, nn, &s)
-		e = secretEntry{expires: now.Add(r.secretTTL())}
+		e = secretEntry{expires: now.Add(r.secretTTL()), started: started}
 		switch {
 		case err == nil:
 			e.secret = &s
@@ -555,13 +601,31 @@ func (r *Registry) secret(ctx context.Context, nn types.NamespacedName) (*corev1
 		if r.secrets == nil || len(r.secrets) >= maxCacheEntries {
 			r.secrets = map[types.NamespacedName]secretEntry{}
 		}
-		r.secrets[nn] = e
+		switch old, ok := r.secrets[nn]; {
+		case r.secretGen[nn] != gen:
+			// Evicted while the read was in flight: the caller gets what it
+			// read, but nothing is kept.
+		case ok && keepOld(old.started, started, rvOf(old.secret), rvOf(e.secret)):
+			// A later read, or a newer version (a rotation), is cached: an
+			// older read must not replace it.
+			e = old
+		default:
+			r.secrets[nn] = e
+		}
 		r.mu.Unlock()
 	}
 	if e.secret == nil {
 		return nil, fmt.Errorf("the Secret %s is not found: %w", nn, ErrProviderConfig)
 	}
 	return e.secret, nil
+}
+
+// rvOf is the resourceVersion of s, "" for none (not found).
+func rvOf(s *corev1.Secret) string {
+	if s == nil {
+		return ""
+	}
+	return s.ResourceVersion
 }
 
 func (r *Registry) secretTTL() time.Duration {
