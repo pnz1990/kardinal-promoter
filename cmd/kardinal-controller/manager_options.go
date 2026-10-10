@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -40,8 +41,11 @@ var hookJobSelector = func() labels.Selector {
 type managerConfig struct {
 	metricsBindAddress     string
 	healthProbeBindAddress string
-	leaderElect            bool
-	watchNamespace         string
+	// pprofAddress is --pprof-address after pprofBindAddress: empty serves
+	// no profiles.
+	pprofAddress   string
+	leaderElect    bool
+	watchNamespace string
 	// namespaceShard is --namespace-shard: each shard elects its own leader.
 	namespaceShard string
 	// restConfig is the controller's API server config; nil leaves the
@@ -96,6 +100,7 @@ func buildManagerOptions(cfg managerConfig) ctrl.Options {
 			BindAddress: cfg.metricsBindAddress,
 		},
 		HealthProbeBindAddress:        cfg.healthProbeBindAddress,
+		PprofBindAddress:              cfg.pprofAddress,
 		LeaderElection:                cfg.leaderElect,
 		LeaderElectionID:              leaderElectionID(cfg.namespaceShard),
 		LeaderElectionReleaseOnCancel: true,
@@ -106,6 +111,29 @@ func buildManagerOptions(cfg managerConfig) ctrl.Options {
 			Cache: &sigs_client.CacheOptions{DisableFor: uncachedObjects()},
 		},
 	}
+}
+
+// pprofBindAddress turns --pprof-address into the manager's
+// PprofBindAddress. Empty (the default) serves no profiles. An address
+// without a host binds to 127.0.0.1, so only a port-forward or a process in
+// the Pod reaches it; serving every interface takes an explicit host such as
+// 0.0.0.0. The profiles show the heap's contents and stacks, so they are
+// never on by default.
+func pprofBindAddress(addr string) (string, error) {
+	if addr == "" {
+		return "", nil
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", fmt.Errorf("--pprof-address %q: %w", addr, err)
+	}
+	if port == "" {
+		return "", fmt.Errorf("--pprof-address %q: no port", addr)
+	}
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port), nil
 }
 
 // leaderElectionID is the leader election Lease name: one per shard, so

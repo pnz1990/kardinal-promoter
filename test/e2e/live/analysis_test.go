@@ -7,6 +7,7 @@ package live
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -14,13 +15,16 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
@@ -369,9 +373,10 @@ func TestRollouts_AnalysisTemplateEditedMidFlight(t *testing.T) {
 }
 
 // TestRollouts_AnalysisForgedRunIgnored: an AnalysisRun created by hand with
-// the selector labels and the Bundle's UID, and status Successful, is no
-// verdict: the step keeps waiting for the run its Graph rendered
-// (regression, QA #1502 round 2).
+// the selector labels and the Bundle's UID, and status Successful, is
+// refused by the chart's graph-objects policy (#1544); made anyway by the
+// Graph ServiceAccount, kro's identity, it is no verdict: the step keeps
+// waiting for the run its Graph rendered (regression, QA #1502 round 2).
 //
 // Covers ANALYSIS-FORGED-01.
 func TestRollouts_AnalysisForgedRunIgnored(t *testing.T) {
@@ -403,8 +408,21 @@ func TestRollouts_AnalysisForgedRunIgnored(t *testing.T) {
 	// Argo Rollouts' AnalysisRun has no status subresource: whoever may
 	// create one sets its status.
 	require.NoError(t, unstructured.SetNestedField(forged.Object, "Successful", "status", "phase"))
-	_, err := e.Dynamic.Resource(analysisRunGVR).Namespace(a.ns).Create(ctx, forged, metav1.CreateOptions{})
-	require.NoError(t, err)
+	_, err := e.Dynamic.Resource(analysisRunGVR).Namespace(a.ns).Create(ctx, forged.DeepCopy(), metav1.CreateOptions{})
+	require.Error(t, err, "the cluster admin cannot create an AnalysisRun labelled for a Bundle")
+	assert.True(t, apierrors.IsForbidden(err), "%v", err)
+	assert.Contains(t, err.Error(), "only kardinal (the promotion Graph or the controller) creates or changes this object")
+	// Made anyway, as kro makes AnalysisRuns (the namespace's Graph
+	// ServiceAccount; #1544's policy admits it), the mirror still ignores a
+	// run this Graph did not render.
+	asGraph := impersonated(t, e, "system:serviceaccount:"+a.ns+":kardinal-graph",
+		"system:serviceaccounts", "system:serviceaccounts:"+a.ns, "system:authenticated")
+	u := forged.DeepCopy()
+	u.SetNamespace(a.ns)
+	framework.Eventually(t, time.Minute, "kro's identity creates the forged AnalysisRun", func(ctx context.Context) (bool, string) {
+		err := asGraph.Create(ctx, u.DeepCopy())
+		return err == nil || apierrors.IsAlreadyExists(err), fmt.Sprint(err)
+	})
 
 	framework.Consistently(t, 30*time.Second, "the forged Successful run is no verdict", func(ctx context.Context) (bool, string) {
 		ps, ok, err := e.Step(ctx, a.ns, pipelineName, bundle, "prod")
@@ -422,27 +440,188 @@ func TestRollouts_AnalysisForgedRunIgnored(t *testing.T) {
 	})
 }
 
-// TestGraph_AnalysisRefusedInCompactGraph: the compact Graph shape does not
-// carry verification, so a Pipeline with verification and
-// kardinal.io/graph-shape: compact is Ready=False naming it, and its Bundle
-// fails with GraphBuildFailed instead of promoting unverified.
+// TestRollouts_AnalysisInCompactGraph runs prod's verification with the
+// compact Graph shape (kardinal.io/graph-shape: compact): its AnalysisRun is
+// an item of the AnalysisRuns collection, created once the step is
+// Verifying, with the Bundle's tag as an arg, and prod is Verified once it is
+// Successful. A second Bundle with a failing analysis fails prod, and its
+// other run, which would measure for minutes, gets spec.terminate.
 //
 // Covers ANALYSIS-COMPACT-01.
-func TestGraph_AnalysisRefusedInCompactGraph(t *testing.T) {
+func TestRollouts_AnalysisInCompactGraph(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test", "prod")
+	createAnalysisTemplate(t, e, a.ns, "version-check", []string{"service", "tag"},
+		jobMetric("version", `for i in 1 2 3 4 5 6 7 8 9 10; do wget -qO- http://{{args.service}}:9898/version | grep -q '{{args.tag}}' && exit 0; sleep 3; done; exit 1`))
+	p := a.pipeline(nil)
+	p.Annotations = map[string]string{"kardinal.io/graph-shape": "compact"}
+	p.Spec.Environments[1].Verification = &v1alpha1.VerificationSpec{
+		AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "version-check"}},
+		Args:              []v1alpha1.AnalysisArg{{Name: "service", Value: fixtures.Workload("prod")}},
+	}
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	c := meta.FindStatusCondition(ps.Status.Conditions, "Verified")
+	require.NotNil(t, c)
+	assert.Equal(t, "VerificationSucceeded", c.Reason)
+	require.NotNil(t, ps.Spec.Live)
+	require.Len(t, ps.Spec.Live.Analyses, 1)
+	assert.Equal(t, "Successful", ps.Spec.Live.Analyses[0].Phase)
+	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
+	assert.Equal(t, "compact", bundleGraph(t, e, a.ns, bundle).GetLabels()["kardinal.io/graph-shape"])
+	runs, err := analysisRuns(ctx, e, a.ns, bundle, "prod")
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	assert.Equal(t, "AnalysisRuns", runs[0].GetLabels()["kro.run/node-id"], "made by the AnalysisRuns collection")
+	assert.Equal(t, map[string]string{"service": fixtures.Workload("prod"), "tag": fixtures.V2}, runArgs(runs[0]))
+	testRuns, err := analysisRuns(ctx, e, a.ns, bundle, "test")
+	require.NoError(t, err)
+	assert.Empty(t, testRuns, "test has no verification")
+
+	// A failing analysis fails prod and terminates the other run.
+	createAnalysisTemplate(t, e, a.ns, "fails", nil, jobMetric("errors", `exit 1`))
+	slow := jobMetric("slow", `sleep 5`)
+	slow["interval"] = "10s"
+	slow["count"] = int64(60)
+	createAnalysisTemplate(t, e, a.ns, "slow", nil, slow)
+	var live v1alpha1.Pipeline
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &live))
+	live.Spec.Environments[1].Verification = &v1alpha1.VerificationSpec{
+		AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "fails"}, {Name: "slow"}}}
+	require.NoError(t, e.Client.Update(ctx, &live))
+	second := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV3)
+	e.WaitStepState(t, a.ns, pipelineName, second, "prod", "Failed", promoteTimeout)
+	framework.Eventually(t, 2*time.Minute, "the slow run to be terminated", func(ctx context.Context) (bool, string) {
+		runs, err := analysisRuns(ctx, e, a.ns, second, "prod")
+		if err != nil {
+			return false, err.Error()
+		}
+		for _, r := range runs {
+			if r.GetLabels()["kardinal.io/analysis-template"] != "slow" {
+				continue
+			}
+			term, _, _ := unstructured.NestedBool(r.Object, "spec", "terminate")
+			phase, _, _ := unstructured.NestedString(r.Object, "status", "phase")
+			return term && phase != "Running" && phase != "Pending" && phase != "",
+				fmt.Sprintf("terminate=%v phase=%q", term, phase)
+		}
+		return false, "no run of slow"
+	})
+}
+
+// TestGraph_AnalysisFailsClosedWithoutRolloutsCompact is
+// TestGraph_AnalysisFailsClosedWithoutRollouts with the compact Graph shape.
+//
+// Covers ANALYSIS-CLOSED-01.
+func TestGraph_AnalysisFailsClosedWithoutRolloutsCompact(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	res, err := e.Kube.Discovery().ServerResourcesForGroupVersion("argoproj.io/v1alpha1")
+	require.NoError(t, err, "Argo CD serves argoproj.io/v1alpha1")
+	for _, r := range res.APIResources {
+		require.NotEqual(t, "analysisruns", r.Name, "this test needs a cluster without Argo Rollouts")
+	}
 	a := newArgoApp(t, e, "prod")
 	p := a.pipeline(nil)
 	p.Annotations = map[string]string{"kardinal.io/graph-shape": "compact"}
 	p.Spec.Environments[0].Verification = &v1alpha1.VerificationSpec{
 		AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "smoke"}}}
 	a.apply(t, p)
-	const feature = "Argo Rollouts analysis (spec.environments[].verification)"
-	e.WaitPipeline(t, a.ns, pipelineName, time.Minute, "Ready=False naming verification", func(p *v1alpha1.Pipeline) bool {
-		c := meta.FindStatusCondition(p.Status.Conditions, "Ready")
-		return c != nil && c.Status == metav1.ConditionFalse && strings.Contains(c.Message, feature)
-	})
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
-	e.WaitBundle(t, a.ns, bundle, time.Minute, "Failed with GraphBuildFailed", failedWith("GraphBuildFailed", feature))
+	e.WaitBundle(t, a.ns, bundle, time.Minute, "Failed with GraphBuildFailed",
+		failedWith("GraphBuildFailed", "AnalysisRun is not served"))
+	_, ok, err := e.Step(context.Background(), a.ns, pipelineName, bundle, "prod")
+	require.NoError(t, err)
+	assert.False(t, ok, "no environment was promoted")
 	a.fileHas(t, "prod", fixtures.V1, "prod in git")
+}
+
+// TestRollouts_CompactShape150HooksAndAnalysis promotes a Bundle through a
+// compact Pipeline of 150 environments (15 waves of 10, a gate on each),
+// every one with a pre hook, a post hook and an analysis: 300 HookRuns and
+// 150 AnalysisRuns from three collections. Every environment is Verified with
+// the new version in git, every pre hook finished before its step left
+// Pending, every post hook and analysis started after its step entered
+// Verifying, and the Graph stays under the guard and is Ready at the end.
+//
+// It does not run in parallel (a 150-overlay repo, see TestGraph_CompactShape300).
+//
+// Covers HOOK-COMPACT-02.
+func TestRollouts_CompactShape150HooksAndAnalysis(t *testing.T) {
+	e := framework.New(t)
+	ctx := context.Background()
+	const waves, perWave = 15, 10
+	a, p := wavePipeline(t, e, waves, perWave, func(string) string { return "true" })
+	ns, envs := a.ns, a.envs
+	createAnalysisTemplate(t, e, ns, "check", []string{"environment"}, jobMetric("env", `test -n "{{args.environment}}"`))
+	for i := range p.Spec.Environments {
+		p.Spec.Environments[i].Hooks = []v1alpha1.HookSpec{
+			{Name: "migrate", Phase: "pre", Job: hookJob(t, `echo migrate`, "")},
+			{Name: "smoke", Phase: "post", Job: hookJob(t, `echo smoke`, "")},
+		}
+		p.Spec.Environments[i].Verification = &v1alpha1.VerificationSpec{
+			AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "check"}}}
+	}
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
+
+	e.WaitStepState(t, ns, pipelineName, bundle, envs[perWave], "Verified", 15*time.Minute)
+	g := bundleGraph(t, e, ns, bundle)
+	assert.Equal(t, "compact", g.GetLabels()["kardinal.io/graph-shape"])
+	ids := graphNodeIDs(g)
+	for _, id := range append(append([]string(nil), compactNodeIDs...), graph.NodeHookRuns, graph.NodeAnalysisRuns, graph.NodeRunState) {
+		assert.Contains(t, ids, id)
+	}
+	assert.Less(t, len(ids), 30, "no node per environment")
+
+	e.WaitBundlePhase(t, ns, bundle, "Verified", 60*time.Minute)
+	var steps v1alpha1.PromotionStepList
+	require.NoError(t, e.Client.List(ctx, &steps, client.InNamespace(ns), client.MatchingLabels{"kardinal.io/bundle": bundle}))
+	require.Len(t, steps.Items, len(envs))
+	byEnv := map[string]v1alpha1.PromotionStep{}
+	for _, s := range steps.Items {
+		assert.Equal(t, "Verified", s.Status.State, s.Name)
+		byEnv[s.Spec.Environment] = s
+	}
+	var hrs v1alpha1.HookRunList
+	require.NoError(t, e.Client.List(ctx, &hrs, client.InNamespace(ns), client.MatchingLabels{"kardinal.io/bundle": bundle}))
+	require.Len(t, hrs.Items, 2*len(envs))
+	for _, hr := range hrs.Items {
+		assert.Equal(t, v1alpha1.HookRunSucceeded, hr.Status.Phase, hr.Name)
+		assert.Equal(t, graph.NodeHookRuns, hr.Labels["kro.run/node-id"], hr.Name)
+		ps := byEnv[hr.Spec.Environment]
+		require.NotNil(t, ps.Status.VerificationStartedAt, ps.Name)
+		if hr.Spec.Phase == "post" && hr.Status.StartedAt != nil {
+			assert.False(t, hr.Status.StartedAt.Before(ps.Status.VerificationStartedAt), "%s started after Verifying", hr.Name)
+		}
+		if hr.Spec.Phase == "pre" {
+			require.NotNil(t, hr.Status.FinishedAt, hr.Name)
+			assert.True(t, hr.Status.FinishedAt.Before(ps.Status.VerificationStartedAt), "%s finished before the step verified", hr.Name)
+		}
+	}
+	list, err := e.Dynamic.Resource(analysisRunGVR).Namespace(ns).List(ctx, metav1.ListOptions{LabelSelector: "kardinal.io/bundle=" + bundle})
+	require.NoError(t, err)
+	require.Len(t, list.Items, len(envs))
+	for _, r := range list.Items {
+		phase, _, _ := unstructured.NestedString(r.Object, "status", "phase")
+		assert.Equal(t, "Successful", phase, r.GetName())
+		ps := byEnv[r.GetLabels()["kardinal.io/environment"]]
+		require.NotNil(t, ps.Status.VerificationStartedAt, r.GetName())
+		assert.False(t, r.GetCreationTimestamp().Time.Before(ps.Status.VerificationStartedAt.Truncate(time.Second)),
+			"%s created after Verifying", r.GetName())
+	}
+	assert.Contains(t, e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path(envs[len(envs)-1])+"/kustomization.yaml"),
+		"newTag: "+fixtures.V2, "the last environment has the new version in git")
+	g = bundleGraph(t, e, ns, bundle)
+	raw, err := json.Marshal(g.Object)
+	require.NoError(t, err)
+	t.Logf("Graph %s: %d nodes, %d bytes (spec and status)", g.GetName(), len(graphNodeIDs(g)), len(raw))
+	assert.Less(t, len(raw), graph.MaxGraphBytes, "the applied Graph stays under the guard")
+	framework.Eventually(t, 2*time.Minute, "the Graph to be Ready", func(ctx context.Context) (bool, string) {
+		st, reason, msg := graphCondition(bundleGraph(t, e, ns, bundle), "Ready")
+		return st == "True", st + " " + reason + ": " + msg
+	})
 }

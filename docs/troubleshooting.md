@@ -211,7 +211,7 @@ own `kardinal/` branches and do not wait.
 
 ### Symptom: "base branch ... moved while promoting"
 
-In an `approval: auto` environment, something else (another Pipeline, Renovate, Dependabot, a CI job) pushed to the base branch while the step was promoting. `git-push` first replays the promotion's files onto the new head and pushes again, up to 6 times. When the other writer changed the same files, or the branch keeps moving, the step starts again from a fresh clone, up to 3 times in one reconcile. After that the message reads `(gave up after 3 restarts in this reconcile)` and the step is retried with a jittered backoff (at most 2 minutes), so writers that collided do not collide again: `retrying in <delay> (3, no limit while other writers keep moving the branch)`. These retries are counted in `status.contendedRetries`, not `status.retryCount`: contention alone never fails the step, it only slows it down. `pr-review` environments push to their own `kardinal/<namespace hash>/<bundle>/<env>` branch and do not hit this.
+In an `approval: auto` environment, something else (another Pipeline, Renovate, Dependabot, a CI job) pushed to the base branch while the step was promoting. `git-push` first replays the promotion's files onto the new head and pushes again, up to 6 times. When the other writer changed the same files, the branch keeps moving, or the shallow clone lacks the commit the promotion was made on (`the clone lacks the commit to rebase from`), the step starts again from a fresh clone, up to 3 times in one reconcile. After that the message reads `(gave up after 3 restarts in this reconcile)` and the step is retried with a jittered backoff (at most 2 minutes), so writers that collided do not collide again: `retrying in <delay> (3, no limit while other writers keep moving the branch)`. These retries are counted in `status.contendedRetries`, not `status.retryCount`: contention alone never fails the step, it only slows it down. A missing base commit is the exception. `git-push` first fetches the branch's last 200 commits to find it, and counts each fresh clone it still needs in `status.outputs.baseMissingRestarts`. After 5 of them, the step fails with `fresh clones lacked the commit to rebase from`. That message usually means the branch was force-pushed or rewritten during the promotion. `pr-review` environments push to their own `kardinal/<namespace hash>/<bundle>/<env>` branch and do not hit this.
 
 ### Symptom: "push ... was refused as non-fast-forward, but the remote branch did not move"
 
@@ -336,6 +336,21 @@ Fix what refuses the instance (raise the quota, allow it in the policy); kro ret
 the Bundle continues. A PRStatus that cannot be created holds only its own environment: its
 PromotionStep waits in `WaitingForMerge` with `waiting for PRStatus <name>: the Graph has not
 created it yet`.
+
+### Symptom: Bundle condition "RunsCreated" is False
+
+In a compact Graph, kro creates the HookRuns and AnalysisRuns from collections. The API server
+refused one of them, for example because of a `ResourceQuota`, an admission policy or an invalid
+Job. That run's environment waits: its step reports that it is waiting for the hook or the
+analysis. The other environments go on. The condition names the run, its environment and kro's
+error:
+
+```bash
+kubectl get bundle <name> -o jsonpath='{.status.conditions[?(@.type=="RunsCreated")].message}'
+```
+
+Fix what refuses the run. kro retries on its own, and the condition goes away once kro no longer
+reports the run.
 
 ## Debugging commands
 

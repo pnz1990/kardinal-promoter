@@ -61,8 +61,14 @@ type Options struct {
 	// Prometheus; other suites may not).
 	Metrics bool
 	// RaceBuild is set when the controller is built with -race: its memory
-	// growth threshold is wider (rssGrowthRace).
+	// is bounded by the Go runtime's own memory and the heap after a GC, not
+	// by RSS, which holds the race detector's shadow memory (leaks).
 	RaceBuild bool
+	// WarmAt is the warm baseline the memory checks measure from: the first
+	// sample once the controller holds the load's steady state (for a
+	// sustained load, every Pipeline at its historyLimit). Zero, or before
+	// Start, means Start.
+	WarmAt time.Time
 	// SharedController is set when other tests load the controller at the
 	// same time: the work queue and goroutine checks then only report, as
 	// neither drains nor stays flat for one test.
@@ -83,6 +89,12 @@ type Options struct {
 	SLO *SLO
 	// AllowEmpty lets the namespace have no Bundle (a test deleted them).
 	AllowEmpty bool
+	// Outcome is the phases the test expects its Bundles to end in
+	// (checkOutcome): by default the newest Bundle of each Pipeline Verified
+	// and the others Verified or Superseded. A Failed Bundle passes only
+	// with OutcomeAny, which needs OutcomeWhy.
+	Outcome    Outcome
+	OutcomeWhy string
 	// Skip names checks not to run, each with the reason, for a test whose
 	// own assertions replace them (the report lists them as skipped).
 	Skip map[string]string
@@ -124,6 +136,7 @@ func Check(t *testing.T, e *framework.Env, o Options) *Report {
 			r.add(checkSLO(st, o))
 		}
 		r.add(checkTerminal(st))
+		r.add(checkOutcome(st, o))
 		r.add(checkPhases(st))
 		r.add(checkEnvContent(ctx, e, o, st))
 		prs, branches := checkPRsAndBranches(ctx, e, o, st)
@@ -272,6 +285,83 @@ func checkTerminal(st *state) Result {
 	}
 	res.Note = fmt.Sprintf("%d Bundles", len(st.bundles))
 	return res
+}
+
+// Outcome is what a test expects its Bundles to end as.
+type Outcome string
+
+const (
+	// OutcomeNewestVerified (the default): the newest Bundle of each
+	// Pipeline (kardinal.io/created-at order) is Verified, every other one
+	// Verified or Superseded. No Bundle Failed.
+	OutcomeNewestVerified Outcome = ""
+	// OutcomeAllVerified: every Bundle is Verified (one Bundle per Pipeline,
+	// or Bundles promoted one after the other).
+	OutcomeAllVerified Outcome = "all-verified"
+	// OutcomeAny: any terminal phase, Failed included, for a test whose
+	// faults can fail a Bundle on purpose; OutcomeWhy says why.
+	OutcomeAny Outcome = "any"
+)
+
+// checkOutcome holds the Bundles to the test's Outcome. bundles-terminal
+// counts Failed as terminal, and phase-consistency only checks the steps of
+// each phase, so without it a test that expects success passed with Failed
+// Bundles.
+func checkOutcome(st *state, o Options) Result {
+	res := Result{Name: "expected-outcome"}
+	switch o.Outcome {
+	case OutcomeAny:
+		if o.OutcomeWhy == "" {
+			res.Violations = append(res.Violations, "Outcome any needs OutcomeWhy: say why this test accepts Failed Bundles")
+		}
+		res.Note = "any terminal phase: " + o.OutcomeWhy
+		return res
+	case OutcomeAllVerified:
+		for i := range st.bundles {
+			b := &st.bundles[i]
+			if b.Status.Phase != "Verified" {
+				res.Violations = append(res.Violations, fmt.Sprintf("Bundle %s (%s) is %q, want Verified (%s)",
+					b.Name, b.Spec.Pipeline, b.Status.Phase, bundleWhy(b)))
+			}
+		}
+		res.Note = "every Bundle Verified"
+		return res
+	case OutcomeNewestVerified:
+	default:
+		res.Violations = append(res.Violations, fmt.Sprintf("unknown Outcome %q", o.Outcome))
+		return res
+	}
+	newest := map[string]*v1alpha1.Bundle{}
+	for i := range st.bundles {
+		b := &st.bundles[i]
+		if n := newest[b.Spec.Pipeline]; n == nil || lifecycle.CompareCreation(b, n) > 0 {
+			newest[b.Spec.Pipeline] = b
+		}
+	}
+	for i := range st.bundles {
+		b := &st.bundles[i]
+		switch {
+		case newest[b.Spec.Pipeline] == b && b.Status.Phase != "Verified":
+			res.Violations = append(res.Violations, fmt.Sprintf("Pipeline %s: its newest Bundle %s is %q, want Verified (%s)",
+				b.Spec.Pipeline, b.Name, b.Status.Phase, bundleWhy(b)))
+		case newest[b.Spec.Pipeline] != b && b.Status.Phase != "Verified" && b.Status.Phase != "Superseded":
+			res.Violations = append(res.Violations, fmt.Sprintf("Bundle %s (%s) is %q, want Verified or Superseded (%s)",
+				b.Name, b.Spec.Pipeline, b.Status.Phase, bundleWhy(b)))
+		}
+	}
+	sort.Strings(res.Violations)
+	res.Note = fmt.Sprintf("newest Bundle Verified on each of %d Pipelines, the others Verified or Superseded", len(newest))
+	return res
+}
+
+// bundleWhy is the message of b's Ready condition, cut short.
+func bundleWhy(b *v1alpha1.Bundle) string {
+	for _, c := range b.Status.Conditions {
+		if c.Type == "Ready" {
+			return trim(c.Message, 160)
+		}
+	}
+	return "no Ready condition"
 }
 
 // checkPhases: a Verified Bundle has every one of its steps Verified; a step

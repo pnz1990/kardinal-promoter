@@ -63,11 +63,16 @@ jobs run once whatever `COUNT` is: the test upgrades its cluster
 
 Pull requests don't run the live suites in CI: run `make e2e-all`, or the
 suites a change touches, before you merge, and put the result in the PR.
-`.github/workflows/e2e-live.yml` runs the same jobs weekly, repeating every
-test three times to find flakes (the upgrade test once), and when dispatched
+`.github/workflows/e2e-live.yml` runs the same jobs on main nightly (each test
+once, to catch a regression in a suite pull requests don't run), weekly
+(repeating every test three times to find flakes; the upgrade test once), and
+when dispatched
 (`gh workflow run e2e-live.yml --ref <branch>`; `-f count=N` repeats each
 test). Only its `github` job gets the `DEMO_GITHUB_TOKEN` secret. Its
 `e2e live` job passes when every job passed and the coverage proof holds.
+After a scheduled run its `report` job writes a per-job summary and opens an
+issue titled "e2e live failed on main (nightly|weekly ...)" when a job failed,
+or comments on the one already open; the next passing run closes it.
 
 ## Suites
 
@@ -144,7 +149,7 @@ in upper snake case (`KARDINAL_E2E_SCALE_SUSTAINED_RATE=5`,
 
 | Tests | What they do |
 |---|---|
-| `TestScale_Topology*` | a 100-stage chain, the 120-stage chain and 150-environment fan-out a large company asks for, waves, a diamond lattice, a fan-in, mixed auto and pr-review approval, several Pipelines writing one repo and branch |
+| `TestScale_Topology*` | a 100-stage chain, the 120-stage chain and 150-environment fan-out a large company asks for, the same fan-out with 151 Argo CD Applications and `argocd` health (`TestScale_TopologyArgoCD`, run alone), waves, a diamond lattice, a fan-in, mixed auto and pr-review approval, several Pipelines writing one repo and branch |
 | `TestScale_Load*`, `TestScale_LatencySLO`, `TestScale_TwoTenants` | 200 Pipelines with a Bundle each, a burst of 1,000 Bundles (the newest per Pipeline must end Verified), a sustained rate for a duration, the latency objective ([Latency SLO](#latency-slo)), and two tenants: a 149-environment wave on one branch in one namespace while another namespace's Pipeline must get its first reconcile within `TenantStartWithin` (20 s) |
 | `TestScale_Race*` | rapid-fire Bundles, Pipeline edits, gate flapping, a ChangeWindow switched on while a step waits for merge, pause/resume storms, rollback during a promotion, PRs closed, reopened and merged from outside, a force-pushed branch, a namespace deleted mid-flight, duplicate, forged and out-of-order webhooks |
 | `TestScale_Chaos*` | the leader killed every 20-60 s, kro restarted, git latency and outages, API Priority and Fairness throttling the controller to one seat, the SCM token rotated mid-flight |
@@ -160,10 +165,11 @@ The invariants, after every Bundle settled:
 - no environment has two open PRs, and no open PR belongs to a finished Bundle;
 - no `kardinal/` branch is left without an open or merged PR;
 - every Bundle (and each of its steps) reached a terminal phase within the profile's `Settle`;
+- the Bundles ended as the test expects (`expected-outcome`): by default the newest Bundle of each Pipeline Verified and the others Verified or Superseded; `scale.AllVerified` for tests with one Bundle per Pipeline. A Failed Bundle passes only with `invariants.OutcomeAny` and a stated reason;
 - no Graph outlived its Bundle, stayed deleting, reports an error or nears etcd's request limit;
 - AuditEvents agree with the step states;
 - the controller logged no `DATA RACE`, no panic and no error-level line outside the allowlist (`invariants.Benign` plus the faults a test injects), and neither its containers nor kro's restarted (OOMKilled, crashed);
-- Prometheus: the reconcile error ratio stays under the test's limit, every work queue drains, and no controller Pod that ran the whole test in one role (leader or standby) grew its goroutines past 1.5x (+100), its resident memory past 2x (+200 MiB; 2.5x + 500 MiB for a `-race` build, whose shadow memory grows with every allocation and is never returned: steady leaders measured up to 2.3x and +261 MiB in the `full` profile) or its memory past 90% of the limit;
+- Prometheus: the reconcile error ratio stays under the test's limit, every work queue drains, and no controller Pod that ran the whole test in one role (leader or standby) grew its goroutines past 1.5x (+100) or its memory past 90% of the limit. Memory is measured from a warm baseline: the first sample once the load holds steady (`invariants.Options.WarmAt`; `TestScale_LoadSustained` sets it when every Pipeline has passed its `historyLimit` of 50 Bundles, and a test that sets none measures from its start). Built without `-race`, resident memory may grow at most 2x (+200 MiB) from that baseline. Built with `-race`, RSS holds the race detector's shadow memory, which the Go runtime does not account for and never returns (the soak's leader: 1.2 GiB of its 1.6 GiB RSS, with a flat Go heap), so with a warm baseline the check bounds what the controller holds instead: `go_memstats_sys_bytes` may grow at most 25% from the baseline to the end, and the heap in use after the first garbage collection once the load is over must be below the lowest heap in use of the 5 minutes after the baseline; a missing Go memory series fails. The suite also fails a test when `KARDINAL_E2E_RACE` and the controller's build (the `kardinal-version` ConfigMap) disagree, either way, and the sustained load fails when it was long enough to fill every Pipeline's history (over 1.5x `historyLimit` per Pipeline) but found no warm baseline. A `-race` test without a warm baseline keeps the RSS bound of 2.5x (+500 MiB) from its start (steady leaders measured up to 2.3x and +261 MiB in the `full` profile);
 - git pushes, counted from zero for the test (a series that appears during the test counts from 0, not from its first scrape): at most half a push refused as non-fast-forward per push that landed (`metrics-push-efficiency`, `Options.MaxRefusedPushRatio`): the auto promotions of one controller that write one branch take turns, so only another writer can make a push lose.
 
 Each test writes `diagnostics/scale/<test>/report.json` (every number:
