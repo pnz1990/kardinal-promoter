@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
@@ -103,14 +104,31 @@ func onBranch(r gitserver.Repo, branch string) gitserver.Repo {
 //   - a direct push to env/test is drift: the next promotion fails and pushes
 //     nothing.
 //
-// Covers REND-KUST-01, REND-PR-01, REND-ROLLBACK-01, REND-DRIFT-01.
+// It runs in both Graph shapes: in the compact shape the RenderRuns come
+// from the RenderRuns collection (GRAPH-COMPACT-07).
+//
+// Covers REND-KUST-01, REND-PR-01, REND-ROLLBACK-01, REND-DRIFT-01, GRAPH-COMPACT-07.
 func TestCore_RenderedBranchKustomize(t *testing.T) {
 	t.Parallel()
+	for _, shape := range []string{graph.GraphShapeNodes, graph.GraphShapeCompact} {
+		t.Run(shape, func(t *testing.T) {
+			t.Parallel()
+			renderedBranchKustomize(t, shape)
+		})
+	}
+}
+
+func renderedBranchKustomize(t *testing.T, shape string) {
 	e := framework.New(t)
 	ctx := context.Background()
 	a := renderedApp(t, e, fixtures.KustomizeRepo, "test", "prod")
 	dryHead := headSHA(t, e, a.repo.Branch, a.repo)
-	a.apply(t, a.renderedPipeline(map[string]string{"prod": "pr-review"}))
+	p := a.renderedPipeline(map[string]string{"prod": "pr-review"})
+	if p.Annotations == nil {
+		p.Annotations = map[string]string{}
+	}
+	p.Annotations[graph.AnnotationGraphShape] = shape
+	a.apply(t, p)
 	deployment := func(env string) string { return a.ns + "_deployment-" + fixtures.Workload(env) + ".yaml" }
 
 	v2 := fixtures.Image + ":" + fixtures.V2

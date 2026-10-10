@@ -107,9 +107,10 @@ would not restore what ran. Set `render.allowNondeterministic: true` to allow th
 `expandenv` are not available, as in Helm.
 
 A `chart` Bundle (a chart version from a [Helm Subscription](subscription.md#promoting-a-chart-version))
-cannot promote a `layout: branch` environment yet: the Bundle fails at build. Pipelines that
-render always use the node Graph shape: the compact shape (`kardinal.io/graph-shape: compact`,
-or more environments than `--graph-compact-above`) refuses `layout: branch`.
+cannot promote a `layout: branch` environment yet: the Bundle fails at build. Both Graph shapes
+render: in the compact shape (`kardinal.io/graph-shape: compact`, or more environments than
+`--graph-compact-above`, and every Pipeline with a fleet) the RenderRuns come from one
+collection, created under the same condition.
 
 ## What a promotion does
 

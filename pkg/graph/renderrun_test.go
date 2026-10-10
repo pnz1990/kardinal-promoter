@@ -114,34 +114,114 @@ func TestRenderRunName(t *testing.T) {
 	assert.LessOrEqual(t, len(long), 63)
 }
 
-// TestCompact_RefusesRenders: the compact shape builds no RenderRun nodes,
-// so a Pipeline with layout: branch is refused in it (naming the feature)
-// and reported by CompactUnsupported; the node shape builds it. Hooks are
-// carried by both shapes.
-func TestCompact_RefusesRenders(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		pipeline *kardinalv1alpha1.Pipeline
-		feature  string
-	}{
-		{name: "layout branch", pipeline: renderPipeline(), feature: "rendered manifests (layout: branch)"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, []string{tc.feature}, graph.CompactUnsupported(graph.BuildInput{Pipeline: tc.pipeline}))
-			build := func(shape string) error {
-				p := tc.pipeline.DeepCopy()
-				p.Annotations = map[string]string{graph.AnnotationGraphShape: shape}
-				_, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-v1", "app")})
-				return err
-			}
-			require.NoError(t, build(graph.GraphShapeNodes))
-			err := build(graph.GraphShapeCompact)
-			require.ErrorIs(t, err, graph.ErrInvalid)
-			assert.Contains(t, err.Error(), "does not support "+tc.feature)
-		})
+// TestCompact_Renders: the compact shape carries rendered manifests
+// (layout: branch): no refusal, a RenderRuns collection whose items are the
+// node shape's RenderRun specs, admitted once the step asked for its render
+// (status.renderRequestedAt) while the Bundle is not Superseded, kept once it
+// exists (applied by kro for this Bundle), and the step's spec.live.renders
+// reads its own RenderRun back.
+//
+// Covers GRAPH-COMPACT-08.
+func TestCompact_Renders(t *testing.T) {
+	p := renderPipeline()
+	p.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeCompact}
+	assert.Empty(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: p}), "rendered manifests are carried")
+	b := makeBundle("app-v1", "app")
+	b.UID = "uid-1"
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: b})
+	require.NoError(t, err, "no refusal")
+	assertKroValid(t, res.Graph)
+	g := res.Graph
+	for _, id := range []string{"refSteps", "refRenderRuns", graph.NodeRenderRunData, graph.NodePromotionRenders,
+		graph.NodeRenderState, graph.NodeRenderRuns} {
+		assert.True(t, hasNode(g, id), "node %s", id)
 	}
-	assert.Empty(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: makeLinearPipeline("app", "test", "prod")}))
-	assert.Empty(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: hookPipeline()}), "hooks are carried")
+	assert.False(t, hasNode(g, "render0prod"), "no RenderRun node of its own")
+	name := graph.RenderRunName("app", "app-v1", "prod")
+	prodStep, testStep := "app-app-v1-prod", "app-app-v1-test"
+
+	// The item is the node shape's RenderRun spec, but for git.pullRequest,
+	// which the template reads from the step.
+	nodesP := renderPipeline()
+	nodesRes, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: nodesP, Bundle: b})
+	require.NoError(t, err)
+	want := hookNode(t, nodesRes.Graph, "render0prod").Template["spec"].(map[string]interface{})
+	data := hookNode(t, g, graph.NodeRenderRunData).Def["items"].([]interface{})
+	require.Len(t, data, 1, "only prod renders")
+	item := data[0].(map[string]interface{})
+	assert.Equal(t, name, item["name"])
+	assert.Equal(t, prodStep, item["step"])
+	got := item["spec"].(map[string]interface{})
+	for k, v := range want {
+		if k == "git" {
+			wg, gg := v.(map[string]interface{}), got["git"].(map[string]interface{})
+			for gk, gv := range wg {
+				if gk != "pullRequest" {
+					assert.Equal(t, gv, gg[gk], "git.%s", gk)
+				}
+			}
+			continue
+		}
+		assert.Equal(t, v, got[k], "spec.%s", k)
+	}
+
+	vars := func(requested bool, phase string, renders ...map[string]interface{}) map[string]interface{} {
+		v := newCompactSim(t, g).vars()
+		st := map[string]interface{}{"state": "Promoting"}
+		if requested {
+			st["renderRequestedAt"] = "2026-10-10T00:00:00Z"
+		}
+		v[graph.NodeStepsObserved] = []interface{}{
+			map[string]interface{}{"metadata": map[string]interface{}{"name": testStep}, "status": map[string]interface{}{"state": "Verified"}},
+			map[string]interface{}{"metadata": map[string]interface{}{"name": prodStep}, "status": st},
+		}
+		var rr []interface{}
+		for _, r := range renders {
+			rr = append(rr, r)
+		}
+		v["refRenderRuns"] = rr
+		v["bundle"] = map[string]interface{}{"status": map[string]interface{}{"phase": phase}}
+		v[graph.NodeRenderState] = newCompactSim(t, g).def(graph.NodeRenderState, v)
+		return v
+	}
+	applied := map[string]interface{}{"metadata": map[string]interface{}{"name": name,
+		"labels": map[string]interface{}{graph.LabelKRONodeID: "RenderRuns", graph.LabelBundleUID: "uid-1"}},
+		"spec": map[string]interface{}{"environment": "prod"}, "status": map[string]interface{}{"phase": "Succeeded",
+			"result": map[string]interface{}{"commitSHA": "abc"}}}
+	forged := map[string]interface{}{"metadata": map[string]interface{}{"name": name},
+		"spec": map[string]interface{}{"environment": "prod"}}
+	assert.Empty(t, admittedNames(t, g, graph.NodePromotionRenders, vars(false, "Promoting")), "not before the step asks")
+	assert.Equal(t, []string{name}, admittedNames(t, g, graph.NodePromotionRenders, vars(true, "Promoting")))
+	assert.Empty(t, admittedNames(t, g, graph.NodePromotionRenders, vars(true, "Superseded")), "none new for a Superseded Bundle")
+	assert.Equal(t, []string{name}, admittedNames(t, g, graph.NodePromotionRenders, vars(false, "Superseded", applied)),
+		"a RenderRun that exists stays")
+	assert.Empty(t, admittedNames(t, g, graph.NodePromotionRenders, vars(false, "Superseded", forged)),
+		"one created by hand keeps nothing admitted")
+
+	// The step's spec.live.renders: its own RenderRun, applied by kro.
+	steps := hookNode(t, g, graph.NodePromotionSteps).Template["spec"].(map[string]interface{})
+	expr := steps["live"].(map[string]interface{})["renders"].(string)
+	for _, tc := range []struct {
+		env, run string
+		want     int
+	}{{"prod", name, 1}, {"test", "", 0}} {
+		v := vars(true, "Promoting", applied, forged)
+		v["Step"] = map[string]interface{}{"environment": tc.env, "renderRun": tc.run}
+		out := evalCEL(t, expr, v).([]interface{})
+		require.Len(t, out, tc.want, tc.env)
+		if tc.want == 1 {
+			r := out[0].(map[string]interface{})
+			assert.Equal(t, "Succeeded", r["phase"])
+			assert.Equal(t, "abc", r["result"].(map[string]interface{})["commitSHA"])
+		}
+	}
+	for _, n := range g.Spec.Nodes {
+		if n.ID == graph.NodeRenderRuns {
+			git := n.Template["spec"].(map[string]interface{})["git"].(map[string]interface{})
+			assert.Contains(t, git["pullRequest"], "renderPullRequest", "the step's recorded list decides where to push")
+			assert.Contains(t, git["pullRequest"], graph.NodeStepsObserved)
+		}
+	}
 }
 
 // TestBuilder_LiveRendersMirrorsKnownDigests: the mirror's renders
@@ -176,4 +256,33 @@ func TestBuilder_LiveRendersMirrorsKnownDigests(t *testing.T) {
 	second := out.([]interface{})[0].(map[string]interface{})
 	assert.Equal(t, []interface{}{}, second["knownMarkerDigests"], "none yet")
 	assert.Equal(t, "Pending", second["phase"])
+}
+
+// TestCompact_RendersFleetAndSize: a fleet environment with layout: branch
+// gets one RenderRun per target, each on its target's step and its own
+// rendered branch, and the size guard counts them (ObjectCount).
+//
+// Covers GRAPH-COMPACT-08.
+func TestCompact_RendersFleetAndSize(t *testing.T) {
+	p := bigFleet(3, 1, nil)
+	p.Spec.Environments[1].Layout = "branch"
+	b := makeBundle("app-x7k2m", "app")
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: b})
+	require.NoError(t, err)
+	assertKroValid(t, res.Graph)
+	data := hookNode(t, res.Graph, graph.NodeRenderRunData).Def["items"].([]interface{})
+	require.Len(t, data, 3, "one RenderRun per target")
+	branches := map[string]bool{}
+	for _, it := range data {
+		m := it.(map[string]interface{})
+		env := m["environment"].(string)
+		assert.Equal(t, graph.RenderRunName("app", "app-x7k2m", env), m["name"])
+		branches[m["spec"].(map[string]interface{})["git"].(map[string]interface{})["renderedBranch"].(string)] = true
+	}
+	assert.Len(t, branches, 3, "each target renders to its own branch: %v", branches)
+
+	without := bigFleet(3, 1, nil)
+	plain, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: without, Bundle: b})
+	require.NoError(t, err)
+	assert.Equal(t, graph.ObjectCount(plain.Graph)+3, graph.ObjectCount(res.Graph), "the size guard counts the RenderRuns")
 }

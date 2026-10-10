@@ -203,6 +203,8 @@ type compactStep struct {
 	// imageVerification is the Bundle's ImageVerification name for a root
 	// step of a Pipeline with spec.imageVerification, else "".
 	imageVerification string
+	// render is the environment's RenderRun (layout: branch), else nil.
+	render *compactRender
 }
 
 // stepsHaveFleets reports whether any of the built steps is a fleet target:
@@ -234,11 +236,12 @@ func stepsHaveFleets(steps []compactStep) bool {
 // otherwise ready as soon as they are.
 func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
 	steps []compactStep, gateCollections []string) []GraphNode {
-	var anyHooks, anyAnalyses, anyIV bool
+	var anyHooks, anyAnalyses, anyIV, anyRender bool
 	for _, s := range steps {
 		anyHooks = anyHooks || len(s.extras.hookRuns) > 0
 		anyAnalyses = anyAnalyses || len(s.extras.analysisRuns) > 0
 		anyIV = anyIV || s.imageVerification != ""
+		anyRender = anyRender || s.render != nil
 	}
 	entries := make([]interface{}, len(steps))
 	fleets := stepsHaveFleets(steps)
@@ -285,6 +288,15 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 			// Image verification (imageverify.go): a root step names the
 			// Bundle's ImageVerification and waits for it; the others "".
 			entries[i].(map[string]interface{})["imageVerification"] = s.imageVerification
+		}
+		if anyRender {
+			// Rendered manifests (compact_render.go): the RenderRun the
+			// step's spec.live.renders reads; "" for one that does not render.
+			name := ""
+			if s.render != nil {
+				name = s.render.name
+			}
+			entries[i].(map[string]interface{})["renderRun"] = name
 		}
 	}
 
@@ -358,8 +370,11 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 	if anyIV {
 		stepSpec["imageVerification"] = step("imageVerification")
 	}
-	if anyHooks || anyAnalyses || anyIV {
+	if anyHooks || anyAnalyses || anyIV || anyRender {
 		stepSpec["live"] = compactLive(bundle, anyHooks, anyAnalyses, anyIV)
+		if anyRender {
+			stepSpec["live"].(map[string]interface{})["renders"] = compactLiveRenders(bundle)
+		}
 	}
 	nodes := []GraphNode{
 		{ID: NodePromotionDAG, Def: map[string]interface{}{"steps": entries}},
