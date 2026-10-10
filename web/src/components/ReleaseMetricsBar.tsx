@@ -13,11 +13,13 @@
 
 // components/ReleaseMetricsBar.tsx — Release efficiency metrics panel (#465).
 // Computed client-side from the last 10 bundles of the pipeline:
-//  - Time to prod: mean time from bundle creation until the pipeline's last
+//  - Time to prod: mean time from bundle creation until every final
 //    environment passed its health check (status.environments[].healthCheckedAt).
+//    The final environments are those no other environment waits for: prod in
+//    test, uat, prod; every environment of a last wave (#1580).
 //  - Rollback rate: share of bundles that are rollbacks (spec.provenance.rollbackOf).
-//  - Deploys: bundles that reached the last environment.
-// The bar is hidden until at least one bundle has reached the last environment.
+//  - Deploys: bundles that reached every final environment.
+// The bar is hidden until at least one bundle has reached them.
 import type { Bundle, DeploymentMetrics } from '../types'
 import { sortBundlesNewestFirst } from '../bundleSelection'
 
@@ -32,9 +34,9 @@ export interface ReleaseMetrics {
   rollbackCount: number
   /** Percentage of bundles that are rollbacks (0-100). */
   rollbackRatePct: number
-  /** Mean time from bundle creation to the last environment's health check, in hours. */
+  /** Mean time from bundle creation to the last final environment's health check, in hours. */
   meanTtpHours: number
-  /** Bundles that reached the last environment. */
+  /** Bundles that reached every final environment. */
   deployCount: number
 }
 
@@ -47,23 +49,39 @@ function verifiedAt(b: Bundle, env: string): number | undefined {
 }
 
 /**
+ * When the bundle passed the health check in every one of `envs` (the latest
+ * of those times), in ms, or undefined while one of them has not.
+ */
+function verifiedInAll(b: Bundle, envs: string[]): number | undefined {
+  let done = -Infinity
+  for (const env of envs) {
+    const t = verifiedAt(b, env)
+    if (t === undefined) return undefined
+    done = Math.max(done, t)
+  }
+  return done
+}
+
+/**
  * Compute release efficiency metrics from the last `window` bundles.
- * `finalEnvironment` is the pipeline's last environment (usually prod).
- * Returns null when no bundle in the window has reached it.
+ * `finalEnvironments` are the pipeline's final environments (usually prod;
+ * every environment of a last wave); a bundle counts once it passed the
+ * health check in all of them.
+ * Returns null when no bundle in the window has reached them.
  * Does not mutate the input array.
  */
 export function computeReleaseMetrics(
   bundles: Bundle[],
-  finalEnvironment: string | undefined,
+  finalEnvironments: string[] | undefined,
   window = WINDOW,
 ): ReleaseMetrics | null {
-  if (!finalEnvironment) return null
+  if (!finalEnvironments || finalEnvironments.length === 0) return null
   const recent = sortBundlesNewestFirst(bundles).slice(0, window)
 
   let ttpSum = 0
   let deployCount = 0
   for (const b of recent) {
-    const done = verifiedAt(b, finalEnvironment)
+    const done = verifiedInAll(b, finalEnvironments)
     if (done === undefined) continue
     deployCount++
     const created = b.createdAt ? new Date(b.createdAt).getTime() : NaN
@@ -118,11 +136,13 @@ interface MetricCellProps {
   sub?: string
   color?: string
   last?: boolean
+  /** Tooltip for the cell. */
+  title?: string
 }
 
-function MetricCell({ label, value, sub, color, last }: MetricCellProps) {
+function MetricCell({ label, value, sub, color, last, title }: MetricCellProps) {
   return (
-    <div style={{ flex: 1, padding: '0.5rem 0.75rem', borderRight: last ? undefined : '1px solid var(--color-border-muted)' }}>
+    <div title={title} style={{ flex: 1, padding: '0.5rem 0.75rem', borderRight: last ? undefined : '1px solid var(--color-border-muted)' }}>
       <div style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.2rem' }}>
         {label}
       </div>
@@ -140,8 +160,9 @@ function MetricCell({ label, value, sub, color, last }: MetricCellProps) {
 
 interface ReleaseMetricsBarProps {
   bundles: Bundle[]
-  /** The pipeline's last environment; metrics count bundles that reached it. */
-  finalEnvironment?: string
+  /** The pipeline's final environments (terminalEnvironments); metrics count
+   *  bundles that reached all of them. */
+  finalEnvironments?: string[]
   /** The controller's Pipeline.status.deploymentMetrics: adds the change
    *  failure rate and time to restore (DORA stability) when it has deployments. */
   deploymentMetrics?: DeploymentMetrics
@@ -151,9 +172,12 @@ interface ReleaseMetricsBarProps {
  * ReleaseMetricsBar renders inline release efficiency metrics for a pipeline.
  * Computed client-side from the bundle list — no new backend API needed.
  */
-export function ReleaseMetricsBar({ bundles, finalEnvironment, deploymentMetrics }: ReleaseMetricsBarProps) {
-  const metrics = computeReleaseMetrics(bundles, finalEnvironment)
-  if (!metrics) return null
+export function ReleaseMetricsBar({ bundles, finalEnvironments, deploymentMetrics }: ReleaseMetricsBarProps) {
+  const metrics = computeReleaseMetrics(bundles, finalEnvironments)
+  if (!metrics || !finalEnvironments) return null
+  // One final environment is named; a final wave is counted.
+  const target = finalEnvironments.length === 1 ? finalEnvironments[0] : `all ${finalEnvironments.length} final envs`
+  const targetTitle = finalEnvironments.length === 1 ? undefined : `Final environments: ${finalEnvironments.join(', ')}`
 
   const scope = `last ${metrics.totalBundles} bundle${metrics.totalBundles === 1 ? '' : 's'}`
   const dm = deploymentMetrics
@@ -172,7 +196,8 @@ export function ReleaseMetricsBar({ bundles, finalEnvironment, deploymentMetrics
       }}
     >
       <MetricCell
-        label={`Time to ${finalEnvironment}`}
+        label={`Time to ${target}`}
+        title={targetTitle}
         value={formatHours(metrics.meanTtpHours)}
         sub={`mean, ${scope}`}
         color="var(--color-code)"
@@ -184,7 +209,8 @@ export function ReleaseMetricsBar({ bundles, finalEnvironment, deploymentMetrics
         color={rollbackColor(metrics.rollbackRatePct)}
       />
       <MetricCell
-        label={`Deploys to ${finalEnvironment}`}
+        label={`Deploys to ${target}`}
+        title={targetTitle}
         value={String(metrics.deployCount)}
         sub={scope}
         color="var(--color-accent)"

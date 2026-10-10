@@ -227,6 +227,15 @@ func (s *GitHubAppTokenSource) Token(ctx context.Context) (string, error) {
 	// holding the lock, and its cancellation neither fails the mint for the
 	// others nor counts toward the backoff.
 	ch := s.minting.DoChan("mint", func() (interface{}, error) {
+		// A flight that ended between this caller's cache check and here
+		// left a fresh token: use it instead of minting again.
+		s.mu.Lock()
+		if s.token != "" && s.now().Before(s.refreshAt) {
+			tok := s.token
+			s.mu.Unlock()
+			return tok, nil
+		}
+		s.mu.Unlock()
 		mctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), providerHTTPTimeout)
 		defer cancel()
 		tok, exp, err := s.mint(mctx)
