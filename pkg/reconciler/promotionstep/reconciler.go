@@ -293,7 +293,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// With the resourceVersion read: a merge patch of status.hookRecords
 		// from a stale copy would drop records another reconcile wrote (QA
 		// #1493). A conflict reads the step again.
-		err := r.Status().Patch(ctx, &ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+		err := r.patchStatusLocked(ctx, base, &ps)
 		switch {
 		case apierrors.IsConflict(err):
 			return ctrl.Result{RequeueAfter: time.Second}, nil
@@ -1107,6 +1107,16 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 			}
 		}()
 	}
+	// The cache can lag this controller's own last write; the steps must not
+	// run from a status that is already outdated (#1664). base is the copy
+	// the cache returned. Checked once the branch turn is taken, so a step
+	// waiting for its turn makes no API read; a requeue gives the turn back.
+	if behind, err := r.cacheBehind(ctx, base); err != nil {
+		return ctrl.Result{}, err
+	} else if behind {
+		log.Debug().Str("step", ps.Name).Msg("the cached step is behind the stored one; requeueing before running the steps")
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
 	nextIdx, result, execErr := eng.ExecuteFrom(ctx, state, prevIdx)
 
 	// Persist outputs regardless of result, so a PR opened in this reconcile is
@@ -1196,7 +1206,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		// progress would rewrite the step statuses a newer one wrote. (Not
 		// reached today: ExecuteFrom runs every remaining step and reports
 		// success only with nextIdx == len(seq).)
-		if patchErr := r.Status().Patch(ctx, ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); patchErr != nil {
+		if patchErr := r.patchStatusLocked(ctx, base, ps); patchErr != nil {
 			if apierrors.IsNotFound(patchErr) {
 				return ctrl.Result{}, nil
 			}
@@ -1384,7 +1394,7 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		// yet) would mark the credential missing again and emit a second
 		// Warning Event, and reset the backoff; its patch is refused with
 		// a Conflict instead, and it runs again on the fresh copy.
-		if patchErr := r.Status().Patch(ctx, ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); patchErr != nil {
+		if patchErr := r.patchStatusLocked(ctx, base, ps); patchErr != nil {
 			if apierrors.IsNotFound(patchErr) {
 				return ctrl.Result{}, nil
 			}
