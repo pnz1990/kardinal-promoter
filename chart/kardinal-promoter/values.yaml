@@ -174,6 +174,13 @@ metricsBindAddress: ":8080"
 # -- Address the health probe endpoint binds to
 healthProbeBindAddress: ":8081"
 
+# -- Address that serves Go pprof profiles under /debug/pprof/ (`--pprof-address`).
+# Empty (the default) serves none. An address without a host, such as ":6060",
+# binds to 127.0.0.1: reach it with `kubectl port-forward`. The profiles show heap
+# contents, so no Service or container port exposes it. It has no authentication, and
+# /debug/pprof/cmdline shows the process args: keep secrets out of controller.extraArgs.
+pprofAddress: ""
+
 # Service <fullname> and the matching container ports.
 service:
   # -- Metrics port (Prometheus)
@@ -253,8 +260,9 @@ github:
 # docs/guides/security.md#verified-identity).
 admission:
   # -- Usernames, besides this release's controller ServiceAccount, that run
-  # a kardinal controller: they may name any Bundle's kardinal.io/created-by
-  # and write the objects a promotion Graph manages. Exact usernames only,
+  # a kardinal controller: they may name any Bundle's kardinal.io/created-by,
+  # write the objects a promotion Graph manages, and record or revoke the
+  # UI's Approvals (kardinal.io/recorded-via: ui). Exact usernames only,
   # for example "system:serviceaccount:kardinal-system:kardinal-promoter-b";
   # there are no wildcards. Never list a ServiceAccount of a tenant's
   # namespace: whoever can mint tokens for a listed ServiceAccount passes
@@ -307,6 +315,25 @@ bundleAPI:
   tokenSecretRef:
     name: ""
     key: "token"
+  # -- Accept Kubernetes tokens on POST /api/v1/bundles (--bundle-api-tokenreview-auth):
+  # each caller is authenticated with a TokenReview and needs create on
+  # bundles (and get on the Pipeline) in the namespace, e.g. the promoter role.
+  # The static token, when set, still works as a single-tenant admin token.
+  tokenReview: false
+
+# -- TokenReview settings shared by ui.auth.tokenReview and
+# bundleAPI.tokenReview.
+tokenReview:
+  # -- Token audiences accepted (--tokenreview-audiences). Mint a token for
+  # kardinal with: kubectl create token <sa> --audience kardinal-promoter.
+  # Such a token is refused by the API server itself, so kardinal cannot
+  # replay it there. At least one, unless acceptAPIServerAudience is set.
+  audiences: ["kardinal-promoter"]
+  # -- Also accept tokens for the API server's own audience
+  # (--tokenreview-accept-apiserver-audience): kubeconfig tokens and default
+  # ServiceAccount tokens. Such a token also works against the API server, so
+  # whoever holds kardinal's traffic can use it there; opt in knowingly.
+  acceptAPIServerAudience: false
 
 # -- Embedded UI (:8082).
 ui:
@@ -334,6 +361,11 @@ ui:
     # (--ui-tokenreview-auth). Adds tokenreviews and subjectaccessreviews
     # create to the controller's ClusterRole.
     tokenReview: false
+    # -- Install even when tokenSecretRef.name and tokenReview are both set
+    # (--ui-auth-static-overrides-tokenreview). The static token then wins and
+    # every UI caller acts as the controller, so by default that combination
+    # fails the install.
+    allowStaticTokenWithTokenReview: false
 
 # -- Optional controller permissions, off by default.
 rbac:
@@ -345,6 +377,24 @@ rbac:
   # whatever this says. Kept so existing --set rbac.integrationTestJobs=...
   # keeps passing the values schema.
   integrationTestJobs: false
+  userRoles:
+    # -- ClusterRoles for users and automation: <fullname>-viewer, -promoter,
+    # -approver and -admin (templates/user-roles.yaml). Bind them per namespace
+    # with RoleBindings. See docs/guides/security.md#user-roles.
+    enabled: true
+    # -- Also aggregate them into the built-in view (viewer), edit (promoter,
+    # approver) and admin ClusterRoles. Off by default: with it, everyone
+    # bound to edit can both promote and approve gates in that namespace.
+    aggregateToDefaultRoles: false
+    # -- Also grant the promoter update on Pipelines and the approver update
+    # on PolicyGates, so kardinal pause, kardinal rollback --hold, kardinal
+    # release-hold and kardinal override work from their kubeconfigs. An
+    # admission policy limits those writes to spec.paused and spec.holds
+    # (Pipelines; the hold-writes policy checks each hold entry) and
+    # spec.overrides (PolicyGates). Off: they act through the UI API only. On weakens the
+    # audit trail: those writes are the user's own, with no requested-by
+    # record from kardinal, and createdBy is checked only by the policy.
+    directWrites: false
 
 # -- kro Graph integration.
 # kardinal renders one kro Graph (kro.run/v1alpha1) per Bundle. kro v0.10.0-rc.0
@@ -504,16 +554,18 @@ networkPolicy:
   # :9090 for MetricChecks or a webhook receiver for NotificationHooks.
   extraEgress: []
 
-# -- AuditEvent retention, off by default: an upgrade never deletes audit
-# records. AuditEvents have no owner, so without retention they stay in etcd
-# for ever. With enabled: true the leader deletes, every 10 minutes, the
-# records older than maxAge and, per Pipeline, all but the maxPerPipeline
-# newest, at most 2000 a run at 5 API requests a second; the chart then
-# grants the controller delete on AuditEvents. Export the records first if
-# you must keep them. See docs/guides/security.md (Retention).
+# -- AuditEvent retention, on by default. AuditEvents have no owner, so
+# without retention they stay in etcd for ever, and a full etcd quota stops
+# the whole cluster. The leader deletes, every 10 minutes, the records older
+# than maxAge and, per Pipeline, all but the maxPerPipeline newest (records
+# that name no Pipeline share one cap per namespace), at most 2000 a run at 5
+# API requests a second; the chart grants the controller delete on
+# AuditEvents. enabled: false keeps every record. Upgrading deletes the
+# records already past these limits: export them first if you must keep
+# them. See docs/guides/security.md (Retention).
 audit:
   retention:
-    enabled: false
+    enabled: true
     # -- Delete records created longer ago than this
     # (--audit-retention-max-age, a Go duration). "0s" keeps records of any
     # age.
@@ -653,3 +705,15 @@ grafanaDashboard:
   namespace: ""
   # -- Annotations to add to the ConfigMap.
   annotations: {}
+
+# Fleet environments (spec.environments[].fleet, docs/pipeline-reference.md#fleets).
+fleets:
+  # -- Namespaces a fleet selector of kind Application may read Argo CD
+  # Applications from (--fleet-application-namespaces). A selector naming
+  # another namespace is refused, so a Pipeline author cannot list the
+  # Applications of a namespace they cannot read.
+  applicationNamespaces:
+    - argocd
+  # -- Namespaces, besides the Pipeline's own, a fleet selector of kind
+  # ClusterProfile may read (--fleet-clusterprofile-namespaces).
+  clusterProfileNamespaces: []

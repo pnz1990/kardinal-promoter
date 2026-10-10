@@ -102,6 +102,15 @@ type PromotionStepSpec struct {
 	// +optional
 	Live *PromotionStepLive `json:"live,omitempty"`
 
+	// Admitted is written by a compact Graph with fleets: false while the
+	// Graph has not yet read the step back (its StepsObserved), true once it
+	// has. Only then is the step's admission final: until it is, a pacing
+	// change can make kro delete the step, so a Pending step does no work
+	// while Admitted is false (#1565). Unset (other Graphs) does not wait.
+	// Do not set it.
+	// +optional
+	Admitted *bool `json:"admitted,omitempty"`
+
 	// Region was set on the per-region PromotionSteps of a Pipeline
 	// environment with two or more spec.regions. The Graph builder no longer
 	// sets it; the reconciler fails a step that still has one (created by a

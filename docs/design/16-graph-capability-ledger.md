@@ -480,6 +480,7 @@ The detailed tracker is `docs/design/11-graph-purity-tech-debt.md`.
 | Health adapters (HealthChecking to Verified) | `pkg/health/adapter.go` via PromotionStep reconciler | A Graph cannot write PromotionStep status, and `readyWhen` does not gate dependents (G1, G3) | None needed: stays in the reconciler by design (#1283) |
 | MetricCheck query slots (`Limiter`, #1479) | `pkg/reconciler/metriccheck/limiter.go` | Rations outbound queries to user-chosen endpoints (per namespace and cluster-wide, FIFO, wake-ups through a channel source). Process-local: it holds no promotion state, every result is written to MetricCheck status, and a restart only makes the checks ask again. Approved as an exception to the in-memory-state rule (coordinator, as the owner's delegate, 2026-10-09) | None needed: concurrency control of side effects, not promotion logic |
 | Branch turns for auto pushes (#1578, #1577) | `pkg/reconciler/promotionstep/branch_queue.go` (`branchQueue`), taken in `handlePromoting` | Orders the git side effects of the promotions of one controller that write one repository branch: one clones, commits and pushes at a time, oldest first, and a waiting step is requeued at low priority and woken through a channel source when the turn ends. Process-local: no promotion state lives in it, every decision is written to the PromotionStep status, and a restart only makes the waiting steps ask again. The turn is per repository branch, not per namespace: two teams writing one branch take turns, as their pushes would collide. Approved as an exception to the in-memory-state rule (coordinator, as the owner's delegate, 2026-10-09); it times requeues only | None needed: concurrency control of side effects, not promotion logic |
+| Fair work queues between namespaces (#1577) | `pkg/reconciler/fairqueue` (`Queue`), the `NewQueue` of the PromotionStep, PRStatus, PolicyGate, Bundle, Pipeline and MetricCheck controllers | Orders the work queue: an item is placed, within its priority, behind fewer items the less its namespace has ready or in process, so one namespace's backlog cannot hold every worker. Process-local bookkeeping of the queue's own contents (which keys are queued or processing); it decides no promotion outcome. A restart starts empty, like the queue, and loses only the ordering, never correctness. Approved as work scheduling, the same class as the work queue itself and the branch turns (coordinator, as the owner's delegate, 2026-10-10) | None needed: worker scheduling, not promotion logic |
 | Remote-cluster health (`health.kubeconfigSecretRef`, #1458) | `pkg/health/remote.go` (`RemoteClusters`), `healthDetector` in `pkg/reconciler/promotionstep` | kro reads only the cluster it runs in: a ref node cannot point at another cluster, and the remote-cluster KREPs (KREP-012/013, kro#1060, kro#591) are RGD only and rotten or frozen. The translator leaves out the health ref node of such an environment (a ref to an object that is not in this cluster would hold the Graph) | A per-node kubeconfig reference for ref nodes, with the same rules (inline credentials only, https servers only, namespace-local Secret). No ask yet: hub-side Argo CD and Flux cover most users. The process-local client cache (`RemoteClusters`, LRU 128, TTL 1h) is approved as an exception to the in-memory-state rule (coordinator, as the owner's delegate, 2026-10-09): it holds no promotion state, every decision is written to the PromotionStep status, and a restart only rebuilds the clients |
 | Health on a later synced or applied commit: does it contain the promoted one (#1575) | `descends` in `pkg/reconciler/promotionstep/pr_rebase.go`, passed to the argocd and flux adapters as `CheckOptions.RevisionContains` | A git read of an external repository (the commit graph near the branch head), which a Graph node cannot make; the answer feeds the health check, which stays in the reconciler (row above) | None needed. A network read in the health path, approved by the coordinator as the owner's delegate (2026-10-09) because it is bounded: one `ls-remote` per repository per 30 s and one graph read per head and depth (20, then 500 commits), cached and shared by concurrent checks (singleflight), under a 30 s timeout. The cache holds no promotion state; the decision is written to the step's `status.message` |
 | Gate results as SCM commit statuses while a PR waits for merge (#1452) | PromotionStep reconciler posts `kardinal/gates`; the gate results reach the step through a mirror `patch` node (G14) | Side effect on an external system | Out of scope for kro |
@@ -613,7 +614,10 @@ over the steps read back through a selector `ref` (the G11 pacing pattern), and 
 health ref nodes. The Graph has 9 to 12 nodes whatever the environment count. Measured on kind: 300
 environments (30 waves of 10, a gate each) promoted end to end in 8 minutes, with the applied
 Graph at 472,213 bytes; estimated 0.9 MB with 3 gates each. Graphs also may not create more than
-4,500 objects (kro's inventory holds 5,000). The Pipeline CRD allows 500 environments (#1473).
+4,500 objects (kro's inventory holds 5,000). The Pipeline CRD allows 500 environments (#1473). With a
+pre hook, a post hook and an analysis on each of 150 environments (15 waves of 10, a gate each:
+300 HookRuns and 150 AnalysisRuns from collections), the Graph had 21 nodes and 672,098 bytes
+(spec and status) and promoted end to end on kind in 22 minutes.
 
 **Upstream work.** None filed. Optional ask: keep the inventory out of the Graph object (an
 ApplySet-style parent or a child object), so the spec alone bounds the size.
@@ -641,9 +645,41 @@ collection grew (sizes 91, 95, 99), and kro routed 45,814 PromotionStep events o
 
 **kardinal workaround.** Pacing is done by choosing the list: a `def` node computes the items
 to admit from a selector `ref` that reads the collection's own objects back (no CEL edge, so no
-cycle), and items already admitted stay in the list, so pacing never prunes. Verified on kind
+cycle). Every item whose object the `ref` lists stays in the list, so pacing never prunes an
+observed item: pacing (rank, `maxConcurrent`, `maxUnavailable`) only limits new admissions
+(`TestFleet_PacingNeverPrunesAnObservedStep`, including stale observed states). The window that
+remains is between kro creating an item and the `ref` listing it. During that window the item is
+in the list only because of the current pacing. If the pacing changes before the `ref` sees the
+item (a lower-ranked target's gate turns ready, or a failure reaches `maxUnavailable`), kro
+deletes it. No CEL input can tell such an item from one that was never created: the
+collection's own objects are not in scope upstream of it. The window is one `ref` resync, and
+it is harmless. The step template carries `spec.admitted:
+${PromotionState.started.exists(s_, s_ == Step.environment)}`, which is false until
+`StepsObserved` lists the step. The PromotionStep reconciler does no work in Pending while
+`admitted` is false (`TestFleet_PendingWaitsForAdmission`), so a step pruned in the window has
+not cloned, pushed, opened a PR or run a hook. A pre hook of a target is admitted only once its step is in `started` (`TestFleet_PreHooksArePaced`), so no Graph-created HookRun exists for a pruned step either. An `auto` target therefore cannot push to the
+base branch past `maxConcurrent` or `maxUnavailable`, and no PR or `kardinal/` branch of the
+pruned step is left waiting for the target to be admitted again. Pending holds no PR (`holdsPR`), so its finalizer
+closes, reopens and reverts nothing. When the step is admitted again, kro creates it afresh with
+nothing to reuse. Once `admitted` is true, the step is in `started` and pacing never drops it
+(`TestFleet_AdmittedOnceObserved`). The cost is one more apply per step of a Pipeline with fleets. Verified on kind
 with `maxConcurrent` and `maxUnavailable`. kardinal's reconcilers must ignore label-only updates
 on the objects they own, or they reconcile every item on each growth.
+
+Fleets (#1457) ship on this pattern, in the compact shape (`pkg/graph/compact.go`). Each DAG entry
+carries `fleet`, `index`, `maxConcurrent` and `maxUnavailable`. `PromotionState` adds
+`startedFleets`, `verifiedFleets` and `failedFleets`, read from the `kardinal.io/fleet` label of
+the observed steps. `PromotionEligible` holds the ready entries without a step, and
+`PromotionWave` admits the started entries plus each fleet's eligible entries ranked below its
+free places, while fewer than `maxUnavailable` of its targets have Failed. A target removed from
+the list leaves the wave; kro prunes its step, whose finalizer closes the PR. The PromotionStep
+reconciler ignores kro's label-only updates (`eventfilter.LabelChangedExceptKro`). Selector
+membership (Argo CD Applications, ClusterProfiles) is not a Graph collection `ref`: that would need
+reader RBAC on the Applications' namespace, which #1283 removes from the Graph identity. The
+Pipeline reconciler lists the selected objects and writes only its own `status.fleets`. The
+translator builds the Graph from that field, and the Bundle reconciler updates a Bundle's Graph in
+place when it changes (`pipelineSpecHashFor`). Membership changes are seen within a minute,
+because nothing watches Applications, whose CRD may not be installed.
 
 In the compact shape (G10) the PromotionSteps are one collection too, so the blast radius is the
 whole Bundle: one gate instance or step item that kro cannot apply, or that stays soft not-ready,
@@ -655,7 +691,13 @@ created holds every gated environment of the Bundle; the Bundle reconciler then 
 `GatesCreated=False` with the missing instance names and kro's message
 (`pkg/reconciler/bundle/gates_created.go`). Steps name their PRStatus literally, not through the
 PRStatuses collection, so a PRStatus that cannot be created holds only its own environment, whose
-step waits in WaitingForMerge with a message that names it.
+step waits in WaitingForMerge with a message that names it. The compact shape's HookRuns and
+AnalysisRuns follow the PRStatus pattern: steps read them back through the `refHookRuns` and
+`refAnalysisRuns` selector refs, never through their collections. So a run that cannot be created
+holds only its own environment, whose step says it waits for the hook or analysis. The step
+cannot show kro's error: the PromotionStep reconciler does not read the Graph, and the Bundle
+reconciler does not write step status. So the Bundle reconciler sets `RunsCreated=False`, naming
+the run, its environment and kro's message (`pkg/reconciler/bundle/runs_created.go`).
 
 **Upstream work.** None filed.
 
@@ -735,6 +777,11 @@ target an object a template node of the same Graph owns; the two field managers 
 Verified on kind: the mirrored gate result followed the gate (true, false, true) while the step
 node was Unresolved. Hooks use it (`live0<env>` writes `spec.live.hooks`, `pkg/graph/hooks.go`,
 #1443); gate commit statuses (#1452) use it as well.
+The compact shape needs no mirror for hooks and analyses: its PromotionSteps template
+carries no gating field (a `def` admits the items), so it renders `spec.live.hooks` and
+`spec.live.analyses` from the `refHookRuns` and `refAnalysisRuns` selector refs, which never pend
+(an empty list when nothing matches). HookRuns and AnalysisRuns are collections admitted the same
+way and kept once they exist (`pkg/graph/compact_extras.go`).
 
 **Upstream work.** None filed.
 

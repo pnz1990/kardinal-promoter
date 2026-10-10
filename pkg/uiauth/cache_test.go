@@ -129,10 +129,135 @@ func TestCachedAccessReviewer(t *testing.T) {
 func TestTTLCache_Bounded(t *testing.T) {
 	c := newTTLCache[int](time.Minute)
 	for i := 0; i < maxCacheEntries+10; i++ {
-		c.put(fmt.Sprint(i), i)
+		c.put(fmt.Sprint(i), i, c.start())
 	}
 	assert.LessOrEqual(t, len(c.entries), maxCacheEntries)
 	v, ok := c.get(fmt.Sprint(maxCacheEntries + 9))
 	assert.True(t, ok)
 	assert.Equal(t, maxCacheEntries+9, v)
+}
+
+// gatedAccess answers each SubjectAccessReview with the next scripted
+// decision. A call whose gate is set blocks, after signalling entered, until
+// the gate is closed.
+type gatedAccess struct {
+	answers []bool
+	gates   []chan struct{}
+	entered chan int
+	next    int
+	mu      chan struct{}
+}
+
+func (g *gatedAccess) Allowed(_ context.Context, _ authv1.UserInfo, _ authzv1.ResourceAttributes) (bool, string, error) {
+	g.mu <- struct{}{}
+	i := g.next
+	g.next++
+	<-g.mu
+	g.entered <- i
+	if g.gates[i] != nil {
+		<-g.gates[i]
+	}
+	return g.answers[i], fmt.Sprintf("answer %d", i), nil
+}
+
+// TestCachedAccessReviewer_OverlappingReviews (cache races QA): an
+// "allowed" review that started before an RBAC revoke but returns after a
+// later review's "denied" does not overwrite the denial.
+//
+// Covers SEC-CACHE-ORDER-01.
+func TestCachedAccessReviewer_OverlappingReviews(t *testing.T) {
+	slow := make(chan struct{})
+	g := &gatedAccess{answers: []bool{true, false}, gates: []chan struct{}{slow, nil},
+		entered: make(chan int, 2), mu: make(chan struct{}, 1)}
+	a := NewCachedAccessReviewer(g, time.Minute)
+	ctx := context.Background()
+	alice := authv1.UserInfo{Username: "alice"}
+	attrs := authzv1.ResourceAttributes{Verb: "get", Resource: "pipelines", Namespace: "a"}
+
+	first := make(chan bool)
+	go func() {
+		allowed, _, err := a.Allowed(ctx, alice, attrs)
+		assert.NoError(t, err)
+		first <- allowed
+	}()
+	require.Equal(t, 0, <-g.entered, "the first review is asked")
+	// RBAC is revoked; a second request's review returns "denied" at once.
+	allowed, _, err := a.Allowed(ctx, alice, attrs)
+	require.NoError(t, err)
+	require.Equal(t, 1, <-g.entered)
+	assert.False(t, allowed)
+	close(slow) // the older review returns "allowed" last
+	assert.True(t, <-first, "the slow caller gets its own answer")
+
+	allowed, reason, err := a.Allowed(ctx, alice, attrs)
+	require.NoError(t, err)
+	assert.False(t, allowed, "the cached decision is the newer review's denial")
+	assert.Equal(t, "answer 1", reason)
+	assert.Equal(t, 2, g.next, "served from the cache")
+}
+
+// gatedReviewer is gatedAccess for TokenReviews.
+type gatedReviewer struct {
+	answers []bool
+	gates   []chan struct{}
+	entered chan int
+	next    int
+	mu      chan struct{}
+}
+
+func (g *gatedReviewer) Review(_ context.Context, _ string) (*authv1.TokenReviewStatus, error) {
+	g.mu <- struct{}{}
+	i := g.next
+	g.next++
+	<-g.mu
+	g.entered <- i
+	if g.gates[i] != nil {
+		<-g.gates[i]
+	}
+	return &authv1.TokenReviewStatus{Authenticated: g.answers[i]}, nil
+}
+
+// TestCachedTokenReviewer_OverlappingReviews: the same ordering for
+// TokenReviews: a token revoked between two reviews stays rejected.
+//
+// Covers SEC-CACHE-ORDER-01.
+func TestCachedTokenReviewer_OverlappingReviews(t *testing.T) {
+	slow := make(chan struct{})
+	g := &gatedReviewer{answers: []bool{true, false}, gates: []chan struct{}{slow, nil},
+		entered: make(chan int, 2), mu: make(chan struct{}, 1)}
+	r := NewCachedTokenReviewer(g, time.Minute)
+	ctx := context.Background()
+	first := make(chan bool)
+	go func() {
+		st, err := r.Review(ctx, "tok")
+		assert.NoError(t, err)
+		first <- st.Authenticated
+	}()
+	require.Equal(t, 0, <-g.entered)
+	st, err := r.Review(ctx, "tok")
+	require.NoError(t, err)
+	require.Equal(t, 1, <-g.entered)
+	assert.False(t, st.Authenticated)
+	close(slow)
+	assert.True(t, <-first)
+	st, err = r.Review(ctx, "tok")
+	require.NoError(t, err)
+	assert.False(t, st.Authenticated, "the revoked token stays rejected")
+	assert.Equal(t, 2, g.next)
+}
+
+// TestTTLCache_OlderResultNotStoredAfterExpiry: a result older than the
+// stored one is dropped even when the stored one has expired.
+//
+// Covers SEC-CACHE-ORDER-01.
+func TestTTLCache_OlderResultNotStoredAfterExpiry(t *testing.T) {
+	now := time.Unix(0, 0)
+	c := newTTLCache[string](time.Second)
+	c.now = func() time.Time { return now }
+	older, newer := c.start(), c.start()
+	c.put("k", "denied", newer)
+	now = now.Add(2 * time.Second) // the denial expired
+	c.put("k", "allowed", older)
+	_, ok := c.get("k")
+	assert.False(t, ok, "nothing cached: the next request asks again")
 }

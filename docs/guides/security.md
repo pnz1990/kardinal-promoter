@@ -27,7 +27,7 @@ What the namespaced rules grant:
 | `events.k8s.io` `events` | create, patch | Events from every reconciler (the events.k8s.io/v1 API) |
 | `events` (core) | get, list, watch, create, patch | The UI step event list reads Events through core/v1; leader election writes core Events |
 | All kardinal.io kinds and their `/status` | full CRUD; get, update, patch on status | Reconcilers |
-| `auditevents` | get, list, watch, create; delete only with `audit.retention.enabled: true` (off by default) | Records are never changed; opt-in retention deletes old ones |
+| `auditevents` | get, list, watch, create; delete with `audit.retention.enabled: true` (the default) | Records are never changed; retention (on by default) deletes old ones |
 | `graphs.kro.run` | full CRUD; get on `graphs/status` | One Graph per Bundle |
 | `serviceaccounts`; `rolebindings`; `clusterroles` (bind, limited to the two Graph ClusterRoles) | get, create; get, list, create, update, delete; bind | The Graph identity. `list` is for the sweep that deletes reader bindings no Graph reads through; it runs in cluster mode only and touches only RoleBindings labeled `app.kubernetes.io/managed-by=kardinal-promoter` |
 | `deployments`, `argoproj.io` `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch | Health adapters. `rbac.argocdApplicationsWrite=true` adds `patch` on Applications for `update.strategy: argocd` |
@@ -400,15 +400,23 @@ spec is set at creation and never mutated. Kubernetes RBAC controls who can dele
 ### Retention
 
 An AuditEvent has no owner, so it outlives the Bundle and the step it records, and nothing
-else deletes it. Without retention a busy cluster keeps every record in etcd for ever.
-Retention is **off by default**, so an upgrade never deletes an audit record. Turn it on with
-`audit.retention.enabled: true`. The controller's leader then applies it every 10 minutes:
+else deletes it. Without retention a busy cluster keeps every record in etcd for ever, and a
+full etcd quota stops the whole cluster: no write of any kind succeeds until an operator
+compacts and defragments etcd. Each Verified promotion step writes two records of about
+1.2 KB in etcd; the scale suite's soak (5 Bundles a second) wrote 350-660 a minute, which fills
+etcd's default 2 GiB quota in 2 to 4 days. Retention is therefore **on by default**. The
+controller's leader applies it every 10 minutes:
 
 | Value | Flag | Default | Deletes |
 |---|---|---|---|
-| `audit.retention.enabled` | `--audit-retention` | `false` | `true` turns retention on and grants the controller `delete` on AuditEvents |
+| `audit.retention.enabled` | `--audit-retention` | `true` | `true` applies retention and grants the controller `delete` on AuditEvents; `false` keeps every record |
 | `audit.retention.maxAge` | `--audit-retention-max-age` | `2160h` (90 days) | records created longer ago (`metadata.creationTimestamp`, set by the API server). `0s` keeps any age |
 | `audit.retention.maxPerPipeline` | `--audit-retention-max-per-pipeline` | `1000` | per Pipeline (namespace and `kardinal.io/pipeline` label), all but the newest records, newest by `metadata.creationTimestamp` and, within one second, `kardinal.io/created-at`. A record created in the last 10 minutes (one run's interval) is kept even past the limit, so a burst, such as an [audit outbox](#audit-outbox) flushed after an outage, stays at least that long for an export to read. `0` keeps any number |
+
+Records that name no Pipeline (no `kardinal.io/pipeline` label, such as Bundle API writes and
+overrides of standalone gates) are capped too: in each namespace they share one cap of
+`maxPerPipeline`. So with the defaults a namespace holds at most 1000 records per Pipeline
+plus 1000 that name none, younger than 90 days.
 
 A run lists the records metadata-only, 500 at a time, and deletes at most 2000, the oldest
 first. It uses a client of its own limited to 5 API requests a second, so it never takes API
@@ -419,8 +427,29 @@ deletions.
 A gate whose result changes often writes a record at each change, and can reach
 `maxPerPipeline` quickly. If you must keep every record, export them
 ([SIEM integration](#siem-integration)) more often than the effective retention (the age
-limit, or the time a busy Pipeline takes to write `maxPerPipeline` records), or leave
+limit, or the time a busy Pipeline takes to write `maxPerPipeline` records), or turn
 retention off.
+
+**Sharding.** With `controller.namespaceShard` (`--namespace-shard`), each shard's leader
+prunes only the namespaces its shard owns, so shards neither repeat each other's work nor apply
+their limits to another shard's records ([Sharding](../sharding.md)).
+
+**Turning it off.** Set `audit.retention.enabled: false` (`--audit-retention=false`). The chart
+then also drops `delete` on AuditEvents. An install that does not use the chart, or that
+removed the `delete` grant, must set `--audit-retention=false` too: otherwise every run (every
+10 minutes) fails with `Forbidden` and logs the error. Every record stays, so size etcd for them (see the
+numbers above) or export and delete them yourself.
+
+**Exporting first.** To keep every record outside the cluster, run the
+[SIEM integration](#siem-integration) export on a schedule shorter than the effective
+retention, and make its first run before you install or upgrade to a release with retention
+on.
+
+**Upgrading** from a release without retention deletes, in the first runs after the upgrade,
+the records already past the limits: older than 90 days, or beyond each Pipeline's 1000 newest.
+A run deletes at most 2000, so a large backlog is cleared over several runs (about 7 minutes
+each). Export first if you must keep them, or upgrade with `audit.retention.enabled: false`
+and turn it on after the export.
 
 ### Events written automatically
 
@@ -433,6 +462,7 @@ retention off.
 | `PromotionRejected` | `kardinal reject` cancelled an in-flight promotion (its Bundle was [rejected](../rollback.md#reject-a-bundle)) |
 | `GateOverridden` | An entry in a gate instance's `spec.overrides[]` (`kardinal override` or the UI), written once per entry with its verified `createdBy`, stage, expiry and reason |
 | `ApprovalRecorded` / `ApprovalRevoked` | An approval gate saw a decision (`kardinal approve`) appear, or its Approval deleted, with the approver, the decision and whether it counts |
+| `HoldCreated` / `HoldReleased` / `HoldBundleMissing` | A hold (`kardinal rollback --hold`) appeared in, or left, `spec.holds`; or its rollback Bundle has been missing for `--hold-bundle-grace` (the hold stays in effect: [A hold whose rollback Bundle does not exist](../rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |
 | `GateEvaluated` | PolicyGate instance first evaluated, and every later change of readiness (blocked or unblocked); one record per change |
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
 | `RollbackSucceeded` | A PromotionStep of a rollback Bundle (from `kardinal rollback`, the UI, a RollbackPolicy or `onHealthFailure: rollback`) reached Verified; written besides `PromotionSucceeded`, one record per step |
@@ -778,9 +808,9 @@ chart installs a `ValidatingAdmissionPolicy` with a `Deny` binding, per release:
 |---|---|
 | `<release>-bundle-rejection` | A Bundle's new `spec.rejected.by` ([`kardinal reject`](../rollback.md#reject-a-bundle)) equals the requesting user's `request.userInfo.username`. A rejection already set is immutable (CRD rule), so it is checked only when it is first written. |
 | `<release>-gate-overrides` | Every new or changed `spec.overrides[]` entry of a PolicyGate ([`kardinal override`](../policy-gates.md#emergency-overrides-k-09)) has `createdBy` equal to the requesting user; the controller's ServiceAccount is exempt, because it writes overrides for the UI. Only the namespace's Graph ServiceAccount (kro) and the controller may create a gate instance (label `kardinal.io/bundle`, checked on CREATE and UPDATE) or change anything in it but `spec.overrides`: the rest of the spec and the whole metadata (labels, annotations, owner references, finalizers) are frozen, except `managedFields`, `resourceVersion` and `generation`, which the API server writes, and the `kardinal.io/force-recheck` annotation, which forces a re-evaluation. The garbage collector and the namespace controller may update an instance (they remove owner references and finalizers). In namespace mode (`controller.watchNamespace`) it applies to the watched namespace only. |
-| `<release>-approvals` | An `Approval` ([`kardinal approve`](../policy-gates.md#approval-gates)) is created only with `spec.user` equal to the requesting user and `spec.groups` among the requester's groups (checked at create time only), and its `kardinal.io/bundle` and `kardinal.io/environment` labels always equal `spec.bundle` and `spec.environment`. It may be owned only by the Bundle it approves (`spec.bundle`, `spec.bundleUID`), and its owner references cannot change later. Only its approver may delete (revoke) it; the garbage collector and the namespace controller are exempt (kardinal's controller is not: it never deletes Approvals). The spec is immutable (CRD rule). |
+| `<release>-approvals` | An `Approval` ([`kardinal approve`](../policy-gates.md#approval-gates)) is created only with `spec.user` equal to the requesting user and `spec.groups` among the requester's groups (checked at create time only), and its `kardinal.io/bundle` and `kardinal.io/environment` labels always equal `spec.bundle` and `spec.environment`. It may be owned only by the Bundle it approves (`spec.bundle`, `spec.bundleUID`), and its owner references cannot change later. Only its approver may delete (revoke) it; the garbage collector and the namespace controller are exempt (kardinal's controller is not: it never deletes Approvals). The spec is immutable (CRD rule). The UI records decisions for its TokenReview user: an Approval annotated `kardinal.io/recorded-via: ui` may be created in another name, and deleted, by this release's controller ServiceAccount (and `admission.controllerUsernames`) only. |
 | `<release>-bundle-creator` | A new Bundle's `kardinal.io/created-by` annotation, when set, equals the requesting user, and it cannot be added, changed or removed later. Exactly this release's controller ServiceAccount is exempt, plus the usernames listed in `admission.controllerUsernames` (exact usernames, no wildcards; never a namespace or a group: in namespace mode the release namespace is the tenant's): it names the creator of the Bundles it creates (the UI user, `subscription:<name>`, `bundle-api`, `kardinal-controller`). Another controller instance that is not listed creates its Bundles without a creator, which excludeAuthor gates hold. An approval gate's `excludeAuthor` reads it. |
-| `<release>-graph-objects` | The objects a promotion Graph makes and nothing else should: PromotionSteps, PRStatuses, HookRuns, RenderRuns, ImageVerifications and per-promotion MetricCheck instances (label `kardinal.io/bundle`; a MetricCheck you write is not checked), spec, metadata and status. Only kro, this release's controller ServiceAccount and the exact usernames in `admission.controllerUsernames` may create or change them. kro counts only when it impersonates the namespace's Graph ServiceAccount: a request as that ServiceAccount that carries `authentication.kubernetes.io/credential-id` (a token from `kubectl create token`, a bound token) or `authentication.kubernetes.io/pod-name` (a Pod running as it) is refused, so `kubectl create token` and Pods running as the Graph ServiceAccount do not pass as kro. Admission cannot tell kro's impersonation from anyone else's: whoever may impersonate the Graph ServiceAccount, or read a legacy token Secret of it, passes as kro (see Trust below). The garbage collector and the namespace controller may update them, as they do while deleting objects (owner references, their `orphan`/`foregroundDeletion` finalizers); kardinal's own finalizers are removed by its controller. Deleting one is not checked, since the Graph recreates it (deleting a failed PromotionStep retries it), except HookRuns: a recreated HookRun would run its hook again, so only kro, the controllers, the garbage collector and the namespace controller delete them. Argo Rollouts AnalysisRuns labelled `kardinal.io/bundle` are protected on create only: the Rollouts controller writes them afterwards. No one may turn an existing MetricCheck into an instance (kro adopts by name, see below). |
+| `<release>-graph-objects` | The objects a promotion Graph makes and nothing else should: PromotionSteps, PRStatuses, HookRuns, RenderRuns, ImageVerifications and per-promotion MetricCheck instances (label `kardinal.io/bundle`; a MetricCheck you write is not checked), spec, metadata and status. Only kro, this release's controller ServiceAccount and the exact usernames in `admission.controllerUsernames` may create or change them. kro counts only when it impersonates the namespace's Graph ServiceAccount: a request as that ServiceAccount that carries `authentication.kubernetes.io/credential-id` (a token from `kubectl create token`, a bound token) or `authentication.kubernetes.io/pod-name` (a Pod running as it) is refused, so `kubectl create token` and Pods running as the Graph ServiceAccount do not pass as kro. Admission cannot tell kro's impersonation from anyone else's: whoever may impersonate the Graph ServiceAccount, or read a legacy token Secret of it, passes as kro (see Trust below). The garbage collector and the namespace controller may update them, as they do while deleting objects (owner references, their `orphan`/`foregroundDeletion` finalizers); kardinal's own finalizers are removed by its controller. Deleting one is not checked, since the Graph recreates it (deleting a failed PromotionStep retries it), except HookRuns: only kro, the controllers, the garbage collector and the namespace controller delete them, and anyone else gets a message of its own ("HookRuns record that a hook ran; only kardinal deletes them ..."). The step's `status.hookRecords` keeps a recreated HookRun from running its hook again, but deleting the step as well (allowed: it is the documented retry) drops that record, and the Graph's new HookRun would run the hook a second time. Argo Rollouts AnalysisRuns labelled `kardinal.io/bundle` are protected on create only: the Rollouts controller writes them afterwards. No one may turn an existing MetricCheck into an instance (kro adopts by name, see below). |
 
 Anyone who may impersonate other users or groups (`impersonate` RBAC) passes these checks as
 whoever they impersonate: treat `impersonate` as full trust.
@@ -904,7 +934,10 @@ Authorization: Bearer <token>
 
 Requests without the token get `HTTP 401` with a `Www-Authenticate: Bearer realm="kardinal-ui"`
 header. The comparison is constant-time. Everyone who has the token has full UI access:
-there is no per-user authorization in this mode.
+there is no per-user authorization in this mode. **The shared token is a single-tenant admin
+credential**: it acts as the controller, in every namespace the controller watches. Use it for
+one team, or behind an authenticating proxy; for several teams, use Option 2 and the
+[user roles](#user-roles).
 
 ### Option 2: Kubernetes tokens (TokenReview)
 
@@ -914,22 +947,47 @@ helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --
   --set ui.auth.tokenReview=true
 ```
 
-This sets `--ui-tokenreview-auth=true`. Users sign in with a Kubernetes token, for example
-`kubectl create token <service-account> -n <namespace>`. For every `/api/v1/ui/*` request
-the controller:
+This sets `--ui-tokenreview-auth=true`. Users sign in with a Kubernetes token minted for
+kardinal's audience:
 
-1. Validates the token with a `TokenReview`. An invalid token gets `401`.
-2. Checks every object the request reads or writes with a `SubjectAccessReview` for that
-   user. A denied check gets `403` naming the verb, resource and namespace. A user never
-   sees or changes more through the UI than `kubectl` would allow them.
+```bash
+kubectl create token <service-account> -n <namespace> --audience kardinal-promoter
+```
+
+For every `/api/v1/ui/*` request the controller:
+
+1. Validates the token with a `TokenReview` for the audiences in `tokenReview.audiences`
+   (`--tokenreview-audiences`, default `kardinal-promoter`) and checks that the API server
+   returns one of them in `status.audiences`. An invalid token, or one for another audience,
+   gets `401`. A token for the `kardinal-promoter` audience is refused by the API server
+   itself, so kardinal cannot replay it there. Kubeconfig tokens and default ServiceAccount
+   tokens are for the API server's audience and are refused unless you opt in with
+   `tokenReview.acceptAPIServerAudience=true` (`--tokenreview-accept-apiserver-audience`).
+   Opt in only if you trust kardinal and every hop to it with tokens that also work against
+   the API server. Putting the API server's own audience in `tokenReview.audiences` is
+   refused at startup (the controller reads it from its own ServiceAccount token), so the
+   opt-in stays explicit.
+2. Checks every object the request reads with a `SubjectAccessReview` for that user, and every
+   write either on the object or, for pause, resume and gate approval, on its
+   [action subresource](#user-roles). A denied check gets `403` naming the verb, resource and
+   namespace. A user never sees more through the UI than `kubectl` would allow them.
 3. Fails closed. If the review API cannot be reached, the request gets `503`. If the review
    clients cannot be built, the controller does not start.
 4. Caches review results for 30 seconds per token and per action. A revoked token or a
-   removed RoleBinding keeps working through the UI for up to 30 seconds.
+   removed RoleBinding keeps working through the UI until 30 seconds after the last review
+   that started before the revoke returned (a review is bounded by the API request's
+   timeout): a review that started earlier never replaces a later one's result in the cache.
+5. Limits the TokenReviews it sends before sending them: 60 a minute per client address
+   and 600 a minute in all, shared by the UI API and the Bundle API. A cached token does not
+   count, so only a client sending new tokens (guessing) reaches the limit; it gets `429`
+   with `Retry-After: 60`. Behind an Ingress or a mesh sidecar every client has the proxy's
+   address and shares the per-address budget.
 
 When the chart enables this mode, it also grants the controller `create` on
-`tokenreviews` and `subjectaccessreviews`. If a shared UI token is set as well, the shared
-token wins and TokenReview is not used.
+`tokenreviews` and `subjectaccessreviews`. Setting a shared UI token as well is refused: the
+install fails, and the controller does not start with both flags, because the shared token
+would win and turn per-user RBAC off. To keep that behaviour anyway, set
+`ui.auth.allowStaticTokenWithTokenReview=true` (`--ui-auth-static-overrides-tokenreview`).
 
 The user needs these permissions:
 
@@ -940,46 +998,111 @@ The user needs these permissions:
 | Create a Bundle | `get` on `pipelines`; `create` on `bundles` |
 | Promote | `get` on `pipelines`; `list` on `promotionsteps` and `bundles`; `create` on `bundles` |
 | Roll back | `get` on `pipelines` and `bundles`; `list` on `promotionsteps` and `bundles`; `create` on `bundles` |
-| Pause, resume | `get`, `update` on `pipelines` |
-| Approve a gate | `get`, `update` on `policygates` |
+| Pause, resume | `get` on `pipelines`; `update` on `pipelines/pause` |
+| Roll back and hold, release a hold | as roll back; `update` on `pipelines/hold` |
+| Approve a gate | `get` on `policygates`; `update` on `policygates/override` |
 
 Each action is checked call by call, so it needs every verb in its row. Promote and roll
 back read the Pipeline and the environment's history before they create the Bundle. The
 reads are the view permissions, so a user who can view needs only the write verbs on top.
-Pause and resume only set `spec.paused` on the Pipeline. The controller manages the freeze
-gate itself, so the user needs no rights on `policygates` to pause.
+Pause, resume and gate approval are authorized on a virtual subresource
+(`pipelines/pause`, `policygates/override`) instead of `update` on the object: the API server
+serves no such endpoint, but RBAC grants it and a `SubjectAccessReview` checks it. The
+controller then makes the one change (`spec.paused`, or one `spec.overrides` entry whose
+`createdBy` is the caller) with its own identity. A user who may pause cannot edit the
+Pipeline, and one who may approve cannot change the gate's expression. The controller
+manages the freeze gate itself, so the user needs no rights on `policygates` to pause.
 
-The list views read all namespaces, so the user needs a ClusterRole bound with a
-ClusterRoleBinding. When the controller runs with `--watch-namespace`, lists are checked
-against that namespace only, and a Role and RoleBinding there are enough.
+The list views respect namespace RBAC. A user who may list a kind cluster-wide gets every
+namespace; one bound only in some namespaces (a RoleBinding) gets exactly the objects of those
+namespaces, and the rest are left out without an error; one who may list it nowhere gets an
+empty list. A read of one object, and every write, is still checked on that object and refused
+with `403`.
+When the controller runs with `--watch-namespace`, lists are checked against that namespace.
+The chart's [user roles](#user-roles) hold these permissions.
 
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: kardinal-ui-viewer
-rules:
-  - apiGroups: ["kardinal.io"]
-    resources: ["pipelines", "bundles", "policygates", "promotionsteps"]
-    verbs: ["get", "list"]
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["list"]
----
-# Bind this as well to let the user act: create Bundles, promote, roll back,
-# pause and resume Pipelines, and approve gates.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: kardinal-ui-operator
-rules:
-  - apiGroups: ["kardinal.io"]
-    resources: ["bundles"]
-    verbs: ["create"]
-  - apiGroups: ["kardinal.io"]
-    resources: ["pipelines", "policygates"]
-    verbs: ["update"]
+### User roles
+
+The chart installs four ClusterRoles (`rbac.userRoles.enabled`, default `true`) to bind people,
+CI and bots to. Bind them with a **RoleBinding** in a namespace for that namespace only, or with a
+ClusterRoleBinding for all. In TokenReview mode they decide what a caller can do through the UI
+API and the Bundle API, and they work the same for `kubectl` and the `kardinal` CLI.
+
+| ClusterRole | Grants | For |
+|-------------|--------|-----|
+| `<fullname>-viewer` | `get`, `list`, `watch` on every kardinal kind; `get`, `list`, `watch` on `events` | Dashboards, read-only users |
+| `<fullname>-promoter` | viewer, `create` on `bundles`, `update` on `pipelines/pause` and `pipelines/hold` | CI (Bundle API, `kardinal create bundle`), promote, roll back (and hold), pause and resume in the UI |
+| `<fullname>-approver` | viewer, `update` on `policygates/override`, `create` and `delete` on `approvals` | Gate overrides in the UI, approvals |
+| `<fullname>-admin` | every verb on every kardinal kind, `update` on `pipelines/pause`, `pipelines/hold`, `pipelines/edit`, `policygates/override` and `policygates/edit`; aggregates the three above | Pipeline owners |
+
+`<fullname>` is the release's full name: `kardinal-promoter` for the default release, so
+`kardinal-promoter-viewer` and so on. Bind these roles explicitly; that is the only way to
+grant kardinal access by default.
+
+To opt in to the built-in roles, set `rbac.userRoles.aggregateToDefaultRoles=true`. The roles
+then also aggregate into Kubernetes' built-in roles: the viewer into `view`, the promoter and
+approver into `edit`, and the admin rules into `admin`. A namespace RoleBinding to `view`,
+`edit` or `admin` then grants the matching kardinal access. Opt in knowingly: everyone bound to
+`edit` in a namespace can then both promote and approve gates there, so promoter and approver
+are no longer kept apart.
+
+```bash
+# Team A's CI may create Bundles in team-a only; its release managers approve gates there.
+kubectl create rolebinding ci-promoter -n team-a \
+  --clusterrole=kardinal-promoter-promoter --serviceaccount=team-a:ci
+kubectl create rolebinding release-managers -n team-a \
+  --clusterrole=kardinal-promoter-approver --group=team-a-release-managers
 ```
+
+Promote and roll back also read the environment's history (the viewer rules, included).
+
+Neither the promoter nor the approver role grants `update` on Pipelines or PolicyGates. They
+act through the UI API, which checks the action subresource and writes as the controller,
+recording the caller (`kardinal.io/created-by` and `kardinal.io/requested-by` on Bundles,
+`createdBy` on overrides and holds). The promoter also holds `pipelines/hold` (roll back and
+hold, release a hold) and the approver `create` and `delete` on `approvals`. The admin role
+holds `pipelines/edit` and `policygates/edit`, which mean "may change anything".
+
+`kardinal pause`, `kardinal rollback --hold`, `kardinal release-hold` and `kardinal override`
+write from the user's kubeconfig, so they need `update` on the object.
+`rbac.userRoles.directWrites=true` adds `update`/`patch` on `pipelines` to the promoter and
+on `policygates` to the approver, and the chart's `<fullname>-scoped-writes`
+ValidatingAdmissionPolicy (always installed, UPDATE only) limits such writes: a caller who
+holds `pipelines/pause` or `pipelines/hold` but not `pipelines/edit` may change only
+`spec.paused` (with `pipelines/pause`) and `spec.holds` (with `pipelines/hold`; the
+`<fullname>-hold-writes` policy checks each entry) of a Pipeline, and one who holds
+`policygates/override` but not `policygates/edit` only `spec.overrides` of a PolicyGate;
+neither may change labels or annotations. The policy checks
+with the API server's authorizer, so it applies to any binding, not only the chart's roles.
+A caller with neither subresource is not limited by it: their RBAC decides. For these
+callers the policy also keeps all of the metadata as it was, except what the API server sets
+(managedFields, resourceVersion, generation): no labels, annotations, finalizers or
+ownerReferences (an ownerReference to a deleted object would have the garbage collector
+delete the gate). It makes `spec.overrides` append-only, requires `createdBy` to be the
+caller on each new entry (as the `<fullname>-gate-overrides` policy does for everyone), and
+requires an `expiresAt` at most the override cap (`controller.gateOverrideMaxMinutes`,
+default 1440, the bound the UI and the PolicyGate reconciler apply) after its `createdAt`.
+The admission policy cannot read the clock, so the PolicyGate reconciler enforces the cap in
+time: it records when it first saw each override (`status.overrides`), ends an override at
+the earlier of its `expiresAt` and that time plus the cap, and does not count an entry whose
+`createdAt` is more than 5 minutes after it first saw it (condition `OverrideIgnored`, naming
+the entries). Entries chained a cap apart in advance therefore give one cap, not one per
+entry.
+
+`directWrites` weakens two guarantees. First, separation of duties: the narrow roles become
+direct write access, held back only by this policy. Second, the audit trail: such a write is
+the user's own, and kardinal records no `requested-by` for it. Its `createdBy` is self-declared
+and checked only by the policy. Prefer the UI API for pause and approval, and enable
+`directWrites` only where people need the CLI.
+
+What this separates, and what it does not:
+
+- The approver role cannot create Bundles and the promoter role cannot override gates, so a
+  CI token bound only to the promoter role cannot approve its own promotion.
+- Nothing stops one person from holding both roles, or `edit`/`admin` when
+  `aggregateToDefaultRoles` is on, which include them. Separation of duties holds only if your
+  bindings keep the roles apart; review who is bound to both.
+- An override records who made it; it is not a second person's sign-off on the change.
 
 ### Signing in from the browser
 

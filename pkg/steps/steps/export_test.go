@@ -5,3 +5,6 @@ package steps
 
 // MaxRebaseAttempts is maxRebaseAttempts.
 const MaxRebaseAttempts = maxRebaseAttempts
+
+// MaxBaseMissingRestarts is maxBaseMissingRestarts.
+const MaxBaseMissingRestarts = maxBaseMissingRestarts

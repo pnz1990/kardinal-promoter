@@ -23,7 +23,7 @@ import (
 // release (identity-admission.yaml).
 func identityAdmissionObjects(release string) []string {
 	var out []string
-	for _, p := range []string{"bundle-rejection", "gate-overrides", "approvals", "bundle-creator", "graph-objects"} {
+	for _, p := range []string{"bundle-rejection", "gate-overrides", "approvals", "bundle-creator", "graph-objects", "scoped-writes"} {
 		out = append(out, "ValidatingAdmissionPolicy/"+release+"-"+p, "ValidatingAdmissionPolicyBinding/"+release+"-"+p)
 	}
 	return out
@@ -448,6 +448,10 @@ func TestIdentityAdmission_Approvals(t *testing.T) {
 	}
 	controller := "system:serviceaccount:" + releaseNS + ":kardinal-promoter"
 	mine := []interface{}{"release-managers", "system:authenticated"}
+	viaUI := func(a map[string]interface{}) map[string]interface{} {
+		a["metadata"].(map[string]interface{})["annotations"] = map[string]interface{}{"kardinal.io/recorded-via": "ui"}
+		return a
+	}
 	tests := []struct {
 		name     string
 		obj, old map[string]interface{}
@@ -472,6 +476,17 @@ func TestIdentityAdmission_Approvals(t *testing.T) {
 			user: "system:serviceaccount:kube-system:namespace-controller", want: true},
 		{name: "kardinal's controller cannot revoke it", old: approval("alice", []interface{}{}, "app-v1", "prod"),
 			user: controller, want: false},
+		// The UI API records decisions for its TokenReview user (E6).
+		{name: "the controller records a UI decision in the UI user's name",
+			obj: viaUI(approval("alice", []interface{}{"release-managers"}, "app-v1", "prod")), user: controller, want: true},
+		{name: "the controller cannot create an unmarked Approval in another name",
+			obj: approval("alice", []interface{}{}, "app-v1", "prod"), user: controller, want: false},
+		{name: "the controller revokes a UI decision",
+			old: viaUI(approval("alice", []interface{}{}, "app-v1", "prod")), user: controller, want: true},
+		{name: "the UI mark does not let anyone else write in another name",
+			obj: viaUI(approval("bob", []interface{}{}, "app-v1", "prod")), user: "mallory", want: false},
+		{name: "the UI mark does not let anyone else revoke",
+			old: viaUI(approval("alice", []interface{}{}, "app-v1", "prod")), user: "mallory", want: false},
 		// The only owner an Approval may name is the Bundle it approves.
 		{name: "owned by its Bundle", obj: owned(approval("alice", []interface{}{}, "app-v1", "prod"), "Bundle", "app-v1", "uid-1"),
 			user: "alice", want: true},
@@ -575,6 +590,14 @@ func TestIdentityAdmission_GraphObjects(t *testing.T) {
 	require.Len(t, rules, 4)
 	assert.Equal(t, []admissionregistrationv1.OperationType{admissionregistrationv1.Delete}, rules[1].Operations)
 	assert.Equal(t, []string{"hookruns"}, rules[1].Resources, "a deleted HookRun would run its hook again")
+	// A refused HookRun delete gets its own message: "the Graph recreates
+	// it", the message for creates and changes, is not true for one.
+	require.Len(t, vap.Spec.Validations, 3)
+	assert.True(t, strings.HasPrefix(vap.Spec.Validations[0].Expression, "request.operation == 'DELETE' ||"),
+		"the create/change rule leaves deletes to the next")
+	assert.Contains(t, vap.Spec.Validations[1].Expression, "request.operation != 'DELETE'")
+	assert.Contains(t, vap.Spec.Validations[1].Message, "HookRuns record that a hook ran; only kardinal deletes them")
+	assert.NotContains(t, vap.Spec.Validations[1].Message, "recreates it")
 	rules = append(rules[:1], rules[2:]...)
 	assert.ElementsMatch(t, []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update},
 		rules[0].Operations, "DELETE recreates, it forges nothing")
@@ -824,5 +847,330 @@ func TestIdentityAdmission_GateOverridesImpersonated(t *testing.T) {
 		"another extra does not make it a token":     {old: gate("x"), cur: gate("y"), req: []map[string]interface{}{extra("example.com/team")}, want: true},
 	} {
 		assert.Equal(t, tc.want, admitsGroups(t, vap, tc.cur, tc.old, graphSA, groups, tc.req...), name)
+	}
+}
+
+// TestHelmTemplateScopedWritesPolicy verifies the scoped-writes
+// ValidatingAdmissionPolicy: always rendered, matching UPDATE on pipelines
+// and policygates, exempting the controller and the Graph ServiceAccount,
+// checking the virtual subresources with the authorizer, and bound to the
+// watched namespace only in namespace mode.
+func TestHelmTemplateScopedWritesPolicy(t *testing.T) {
+	find := func(docs []map[string]interface{}, kind string) map[string]interface{} {
+		for _, d := range docs {
+			if d["kind"] == kind && dig(d, "metadata", "name") == "kardinal-promoter-scoped-writes" {
+				return d
+			}
+		}
+		return nil
+	}
+	docs := renderChart(t, "kardinal-promoter")
+	vap := find(docs, "ValidatingAdmissionPolicy")
+	require.NotNil(t, vap)
+	rule := dig(vap, "spec", "matchConstraints", "resourceRules").([]interface{})[0]
+	assert.Equal(t, []interface{}{"UPDATE"}, dig(rule, "operations"))
+	assert.Equal(t, []interface{}{"pipelines", "policygates"}, dig(rule, "resources"))
+	vars := map[string]string{}
+	for _, v := range dig(vap, "spec", "variables").([]interface{}) {
+		vars[dig(v, "name").(string)] = dig(v, "expression").(string)
+	}
+	assert.Contains(t, vars["exempt"], `"system:serviceaccount:default:kardinal-promoter"`)
+	assert.Contains(t, vars["exempt"], `'kardinal-graph'`)
+	assert.Contains(t, vars["limited"], `subresource('edit')`)
+	assert.Contains(t, vars["mayPause"], `subresource('pause')`)
+	assert.Contains(t, vars["mayHold"], `subresource('hold')`)
+	assert.Contains(t, vars["mayOverride"], `subresource('override')`)
+	binding := find(docs, "ValidatingAdmissionPolicyBinding")
+	require.NotNil(t, binding)
+	assert.Equal(t, []interface{}{"Deny"}, dig(binding, "spec", "validationActions"))
+	assert.Nil(t, dig(binding, "spec", "matchResources"))
+
+	nsBinding := find(renderChart(t, "kardinal-promoter", "--namespace", "team-a", "--set", "controller.watchNamespace=team-a"),
+		"ValidatingAdmissionPolicyBinding")
+	assert.Equal(t, "team-a", dig(nsBinding, "spec", "matchResources", "namespaceSelector", "matchLabels", "kubernetes.io/metadata.name"))
+}
+
+// scopedWritesPolicy is the rendered scoped-writes policy.
+func scopedWritesPolicy(t *testing.T, args ...string) *admissionregistrationv1.ValidatingAdmissionPolicy {
+	t.Helper()
+	for _, d := range render(t, "kardinal-promoter", args...) {
+		if d.Kind == "ValidatingAdmissionPolicy" && d.Name == "kardinal-promoter-scoped-writes" {
+			var vap admissionregistrationv1.ValidatingAdmissionPolicy
+			decodeStrict(t, d, &vap)
+			return &vap
+		}
+	}
+	t.Fatal("no scoped-writes policy")
+	return nil
+}
+
+// scopedAdmits evaluates every validation of vap as the API server would for
+// an UPDATE of resource by user, with the authorizer-based variables (check,
+// exempt, mayPause, mayHold, mayOverride, limited) given: the CEL authorizer
+// is the API server's, so the test decides who holds which subresource and
+// checks the rest of the policy. perms are the subresources a limited caller
+// holds (pause, hold, override); none means pause for pipelines and
+// override for policygates.
+func scopedAdmits(t *testing.T, vap *admissionregistrationv1.ValidatingAdmissionPolicy, resource string,
+	object, oldObject map[string]interface{}, user string, limited bool, perms ...string) bool {
+	t.Helper()
+	env, err := cel.NewEnv(cel.Variable("object", cel.DynType), cel.Variable("oldObject", cel.DynType),
+		cel.Variable("request", cel.DynType), cel.Variable("variables", cel.DynType))
+	require.NoError(t, err)
+	if limited && len(perms) == 0 {
+		perms = []string{map[bool]string{true: "pause", false: "override"}[resource == "pipelines"]}
+	}
+	has := func(p string) bool {
+		for _, q := range perms {
+			if q == p {
+				return true
+			}
+		}
+		return false
+	}
+	variables := map[string]interface{}{"limited": limited, "exempt": false,
+		"mayPause": has("pause"), "mayHold": has("hold"), "mayOverride": has("override")}
+	vars := map[string]interface{}{
+		"object": object, "oldObject": oldObject, "variables": variables,
+		"request": map[string]interface{}{
+			"userInfo": map[string]interface{}{"username": user},
+			"resource": map[string]interface{}{"group": "kardinal.io", "resource": resource},
+		},
+	}
+	eval := func(expr string) interface{} {
+		ast, iss := env.Compile(expr)
+		require.NoError(t, iss.Err(), expr)
+		prg, err := env.Program(ast)
+		require.NoError(t, err)
+		out, _, err := prg.Eval(vars)
+		require.NoError(t, err, expr)
+		return out.Value()
+	}
+	for _, v := range vap.Spec.Variables {
+		if _, given := variables[v.Name]; given || v.Name == "check" {
+			continue
+		}
+		variables[v.Name] = eval(v.Expression)
+	}
+	for _, v := range vap.Spec.Validations {
+		if eval(v.Expression) != true {
+			return false
+		}
+	}
+	return true
+}
+
+// TestScopedWrites_AuthorizerVariables: limited means holding the action
+// subresource and not <resource>/edit, checked with the API server's
+// authorizer on the object; the controller and the Graph ServiceAccount are
+// exempt.
+func TestScopedWrites_AuthorizerVariables(t *testing.T) {
+	vap := scopedWritesPolicy(t)
+	vars := map[string]string{}
+	for _, v := range vap.Spec.Variables {
+		vars[v.Name] = v.Expression
+	}
+	assert.Contains(t, vars["check"], "authorizer.group('kardinal.io').resource(request.resource.resource)")
+	assert.Contains(t, vars["check"], ".namespace(object.metadata.namespace).name(object.metadata.name)")
+	assert.Contains(t, vars["limited"], "!variables.exempt")
+	assert.Contains(t, vars["limited"], "variables.mayPause || variables.mayHold || variables.mayOverride")
+	assert.Contains(t, vars["limited"], "!variables.check.subresource('edit').check('update').allowed()")
+	assert.Contains(t, vars["mayPause"], "variables.check.subresource('pause').check('update').allowed()")
+	assert.Contains(t, vars["mayHold"], "variables.check.subresource('hold').check('update').allowed()")
+	assert.Contains(t, vars["mayOverride"], "variables.check.subresource('override').check('update').allowed()")
+	assert.Contains(t, vars["exempt"], `"system:serviceaccount:`+releaseNS+`:kardinal-promoter"`)
+	assert.Contains(t, vars["exempt"], `'kardinal-graph'`)
+}
+
+// TestScopedWrites_Rules runs every rule of the scoped-writes policy for a
+// limited caller (pause or override, not edit), and checks an unlimited one
+// is not held by it.
+func TestScopedWrites_Rules(t *testing.T) {
+	vap := scopedWritesPolicy(t)
+	const alice = "system:serviceaccount:team-a:alice"
+	meta := func(mod func(m map[string]interface{})) map[string]interface{} {
+		m := map[string]interface{}{
+			"name": "obj", "namespace": "team-a", "uid": "u1", "resourceVersion": "10", "generation": int64(3),
+			"labels":        map[string]interface{}{"kardinal.io/environment": "prod"},
+			"managedFields": []interface{}{map[string]interface{}{"manager": "kubectl"}},
+		}
+		if mod != nil {
+			mod(m)
+		}
+		return m
+	}
+	pipeline := func(paused bool, branch string, mod func(map[string]interface{})) map[string]interface{} {
+		return map[string]interface{}{"metadata": meta(mod), "spec": map[string]interface{}{
+			"paused": paused, "git": map[string]interface{}{"url": "https://git.example/a.git", "branch": branch}}}
+	}
+	held := func(p map[string]interface{}) map[string]interface{} {
+		p["spec"].(map[string]interface{})["holds"] = []interface{}{
+			map[string]interface{}{"environment": "prod", "bundle": "app-rollback-1", "reason": "incident", "createdBy": alice}}
+		return p
+	}
+	ov := func(by, created, expires string) map[string]interface{} {
+		o := map[string]interface{}{"reason": "hotfix", "createdBy": by}
+		if created != "" {
+			o["createdAt"] = created
+		}
+		if expires != "" {
+			o["expiresAt"] = expires
+		}
+		return o
+	}
+	gate := func(expr string, mod func(map[string]interface{}), overrides ...map[string]interface{}) map[string]interface{} {
+		spec := map[string]interface{}{"expression": expr}
+		if len(overrides) > 0 {
+			list := make([]interface{}, len(overrides))
+			for i, o := range overrides {
+				list[i] = o
+			}
+			spec["overrides"] = list
+		}
+		return map[string]interface{}{"metadata": meta(mod), "spec": spec}
+	}
+	const t0, t1h, t25h = "2026-10-09T12:00:00Z", "2026-10-09T13:00:00Z", "2026-10-10T13:00:00Z"
+	first := ov("bob", t0, t1h)
+	tests := []struct {
+		name     string
+		resource string
+		old, cur map[string]interface{}
+		limited  bool
+		want     bool
+	}{
+		{"pause", "pipelines", pipeline(false, "main", nil), pipeline(true, "main", nil), true, true},
+		{"server-set metadata may change", "pipelines", pipeline(false, "main", nil),
+			pipeline(true, "main", func(m map[string]interface{}) {
+				m["resourceVersion"], m["generation"] = "11", int64(4)
+				m["managedFields"] = []interface{}{}
+			}), true, true},
+		{"another spec field", "pipelines", pipeline(false, "main", nil), pipeline(true, "other", nil), true, false},
+		{"a label", "pipelines", pipeline(false, "main", nil),
+			pipeline(true, "main", func(m map[string]interface{}) { m["labels"] = map[string]interface{}{"x": "y"} }), true, false},
+		{"an annotation", "pipelines", pipeline(false, "main", nil),
+			pipeline(false, "main", func(m map[string]interface{}) { m["annotations"] = map[string]interface{}{"a": "b"} }), true, false},
+		{"a finalizer", "pipelines", pipeline(false, "main", nil),
+			pipeline(false, "main", func(m map[string]interface{}) { m["finalizers"] = []interface{}{"x/hold"} }), true, false},
+		{"garbage collection by ownerReference", "policygates", gate("x", nil),
+			gate("x", func(m map[string]interface{}) {
+				m["ownerReferences"] = []interface{}{map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "name": "gone", "uid": "dead"}}
+			}), true, false},
+		{"removing a label", "policygates", gate("x", nil),
+			gate("x", func(m map[string]interface{}) { delete(m, "labels") }), true, false},
+		{"override as self", "policygates", gate("x", nil), gate("x", nil, ov(alice, t0, t1h)), true, true},
+		{"second override keeps the first", "policygates", gate("x", nil, first), gate("x", nil, first, ov(alice, t0, t1h)), true, true},
+		{"override in someone else's name", "policygates", gate("x", nil), gate("x", nil, ov("bob", t0, t1h)), true, false},
+		{"override without createdBy", "policygates", gate("x", nil),
+			gate("x", nil, map[string]interface{}{"reason": "r", "createdAt": t0, "expiresAt": t1h}), true, false},
+		{"editing an existing override", "policygates", gate("x", nil, first),
+			gate("x", nil, ov("bob", t0, t25h)), true, false},
+		{"removing an override", "policygates", gate("x", nil, first), gate("x", nil), true, false},
+		{"replacing an override with your own", "policygates", gate("x", nil, first), gate("x", nil, ov(alice, t0, t1h)), true, false},
+		{"expiring past the cap", "policygates", gate("x", nil), gate("x", nil, ov(alice, t0, t25h)), true, false},
+		{"expiring at the cap", "policygates", gate("x", nil), gate("x", nil, ov(alice, t0, "2026-10-10T12:00:00Z")), true, true},
+		{"expiring before it was created", "policygates", gate("x", nil), gate("x", nil, ov(alice, t1h, t0)), true, false},
+		{"no createdAt", "policygates", gate("x", nil), gate("x", nil, ov(alice, "", t1h)), true, false},
+		{"no expiresAt", "policygates", gate("x", nil), gate("x", nil, ov(alice, t0, "")), true, false},
+		{"changing the expression", "policygates", gate("x", nil), gate("true", nil), true, false},
+		{"not limited: an editor changes anything", "policygates", gate("x", nil, first),
+			gate("true", func(m map[string]interface{}) { m["labels"] = map[string]interface{}{} }), false, true},
+		{"hold with pipelines/hold", "pipelines", pipeline(false, "main", nil), held(pipeline(false, "main", nil)), true, true},
+		{"release a hold with pipelines/hold", "pipelines", held(pipeline(false, "main", nil)), pipeline(false, "main", nil), true, true},
+		{"hold with only pipelines/pause", "pipelines", pipeline(false, "main", nil), held(pipeline(false, "main", nil)), true, false},
+		{"pause with only pipelines/hold", "pipelines", pipeline(false, "main", nil), pipeline(true, "main", nil), true, false},
+		{"pause and hold with both", "pipelines", pipeline(false, "main", nil), held(pipeline(true, "main", nil)), true, true},
+		{"another spec field with both", "pipelines", pipeline(false, "main", nil), held(pipeline(true, "other", nil)), true, false},
+	}
+	// The subresources a limited caller holds, when not the default.
+	perms := map[string][]string{
+		"hold with pipelines/hold":           {"hold"},
+		"release a hold with pipelines/hold": {"hold"},
+		"hold with only pipelines/pause":     {"pause"},
+		"pause with only pipelines/hold":     {"hold"},
+		"pause and hold with both":           {"pause", "hold"},
+		"another spec field with both":       {"pause", "hold"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, scopedAdmits(t, vap, tt.resource, tt.cur, tt.old, alice, tt.limited, perms[tt.name]...))
+		})
+	}
+
+	// controller.gateOverrideMaxMinutes moves the cap.
+	for _, d := range render(t, "kardinal-promoter", "--set", "controller.gateOverrideMaxMinutes=30") {
+		if d.Kind == "ValidatingAdmissionPolicy" && d.Name == "kardinal-promoter-scoped-writes" {
+			assert.Contains(t, string(d.raw), "duration('30m')")
+		}
+	}
+}
+
+// TestGateOverrideCapIsOneValue: controller.gateOverrideMaxMinutes sets both
+// the controller flag the UI API and the PolicyGate reconciler read
+// (--gate-override-max-minutes; without it the binary's default, 1440 as in
+// ui_api.go and policygate.DefaultMaxOverride) and the scoped-writes
+// policy's bound, so the three never differ.
+func TestGateOverrideCapIsOneValue(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+		flag bool
+	}{
+		{nil, "1440", false},
+		{[]string{"--set", "controller.gateOverrideMaxMinutes=30"}, "30", true},
+		{[]string{"--set-string", "controller.gateOverrideMaxMinutes=45"}, "45", true},
+	} {
+		docs := render(t, "kardinal-promoter", tc.args...)
+		var vap, deploy string
+		for _, d := range docs {
+			switch {
+			case d.Kind == "ValidatingAdmissionPolicy" && d.Name == "kardinal-promoter-scoped-writes":
+				vap = string(d.raw)
+			case d.Kind == "Deployment":
+				deploy = string(d.raw)
+			}
+		}
+		assert.Contains(t, vap, "duration('"+tc.want+"m')")
+		if tc.flag {
+			assert.Contains(t, deploy, `--gate-override-max-minutes=`+tc.want)
+		} else {
+			assert.NotContains(t, deploy, `--gate-override-max-minutes`, "the binary default applies")
+		}
+	}
+}
+
+// TestScopedWrites_ExemptUsers (#1511 QA): the controller, the usernames in
+// admission.controllerUsernames (other kardinal controllers) and the
+// namespace's Graph ServiceAccount are exempt; anyone else, a lookalike
+// included, is not.
+func TestScopedWrites_ExemptUsers(t *testing.T) {
+	const other = "system:serviceaccount:kardinal-system:kardinal-promoter-b"
+	vap := scopedWritesPolicy(t, "--set", "admission.controllerUsernames={"+other+"}")
+	var exempt string
+	for _, v := range vap.Spec.Variables {
+		if v.Name == "exempt" {
+			exempt = v.Expression
+		}
+	}
+	require.NotEmpty(t, exempt)
+	env, err := cel.NewEnv(cel.Variable("object", cel.DynType), cel.Variable("request", cel.DynType))
+	require.NoError(t, err)
+	ast, iss := env.Compile(exempt)
+	require.NoError(t, iss.Err())
+	prg, err := env.Program(ast)
+	require.NoError(t, err)
+	for user, want := range map[string]bool{
+		"system:serviceaccount:" + releaseNS + ":kardinal-promoter": true,
+		other: true,
+		"system:serviceaccount:team-a:kardinal-graph":               true,
+		"system:serviceaccount:team-b:kardinal-graph":               false,
+		"system:serviceaccount:kardinal-system:kardinal-promoter-c": false,
+		"alice": false,
+	} {
+		out, _, err := prg.Eval(map[string]interface{}{
+			"object":  map[string]interface{}{"metadata": map[string]interface{}{"namespace": "team-a"}},
+			"request": map[string]interface{}{"userInfo": map[string]interface{}{"username": user}},
+		})
+		require.NoError(t, err, user)
+		assert.Equal(t, want, out.Value(), user)
 	}
 }

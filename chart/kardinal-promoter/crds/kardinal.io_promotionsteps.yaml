@@ -62,6 +62,15 @@ spec:
               PromotionStepSpec defines the desired state of a PromotionStep.
               PromotionStep objects are created by the Graph controller — not by users.
             properties:
+              admitted:
+                description: |-
+                  Admitted is written by a compact Graph with fleets: false while the
+                  Graph has not yet read the step back (its StepsObserved), true once it
+                  has. Only then is the step's admission final: until it is, a pacing
+                  change can make kro delete the step, so a Pending step does no work
+                  while Admitted is false (#1565). Unset (other Graphs) does not wait.
+                  Do not set it.
+                type: boolean
               analyses:
                 description: |-
                   Analyses names the AnalysisTemplates of the environment's
@@ -607,7 +616,8 @@ spec:
                             Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed",
                                           "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
                                           "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden",
-                                          "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased".
+                                          "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
+                                          "HoldBundleMissing".
                             ApprovalRecorded and ApprovalRevoked are written by an approval gate
                             when a decision (kardinal approve) appears in or leaves its
                             spec.approvals.
@@ -633,6 +643,7 @@ spec:
                           - ApprovalRevoked
                           - HoldCreated
                           - HoldReleased
+                          - HoldBundleMissing
                           type: string
                         bundleName:
                           description: BundleName is the name of the Bundle being

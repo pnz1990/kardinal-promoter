@@ -114,18 +114,17 @@ func TestRenderRunName(t *testing.T) {
 	assert.LessOrEqual(t, len(long), 63)
 }
 
-// TestCompact_RefusesRendersAndHooks: the compact shape builds no RenderRun,
-// HookRun or live mirror nodes, so a Pipeline with layout: branch or hooks
-// is refused in it (naming the feature) and reported by CompactUnsupported;
-// the node shape builds both.
-func TestCompact_RefusesRendersAndHooks(t *testing.T) {
+// TestCompact_RefusesRenders: the compact shape builds no RenderRun nodes,
+// so a Pipeline with layout: branch is refused in it (naming the feature)
+// and reported by CompactUnsupported; the node shape builds it. Hooks are
+// carried by both shapes.
+func TestCompact_RefusesRenders(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		pipeline *kardinalv1alpha1.Pipeline
 		feature  string
 	}{
 		{name: "layout branch", pipeline: renderPipeline(), feature: "rendered manifests (layout: branch)"},
-		{name: "hooks", pipeline: hookPipeline(), feature: "pre- and post-deploy hooks (spec.environments[].hooks)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, []string{tc.feature}, graph.CompactUnsupported(graph.BuildInput{Pipeline: tc.pipeline}))
@@ -142,6 +141,7 @@ func TestCompact_RefusesRendersAndHooks(t *testing.T) {
 		})
 	}
 	assert.Empty(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: makeLinearPipeline("app", "test", "prod")}))
+	assert.Empty(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: hookPipeline()}), "hooks are carried")
 }
 
 // TestBuilder_LiveRendersMirrorsKnownDigests: the mirror's renders

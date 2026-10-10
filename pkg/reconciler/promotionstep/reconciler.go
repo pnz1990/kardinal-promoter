@@ -54,6 +54,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
@@ -235,7 +236,8 @@ func (r *Reconciler) now() time.Time {
 //
 // A PromotionStep deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	return objectgone.Reconcile(ctx, req, promotionStepsResource, r.reconcile)
+	res, err := objectgone.Reconcile(ctx, req, promotionStepsResource, r.reconcile)
+	return requeueChanged(ctx, res, err)
 }
 
 // auditPending wakes the reconciler when a status patch stores audit
@@ -383,6 +385,13 @@ func (r *Reconciler) reconcileState(ctx context.Context, log zerolog.Logger, ps 
 			}
 			// The cache lagged a transition out of a cancellable state: the
 			// fresh state's handler runs below (RollingBack cleans the workdir).
+		}
+	}
+
+	switch ps.Status.State {
+	case StatePending, StatePendingExplicit, StatePromoting, StateWaitingForMerge, StateHealthChecking, StateVerifying:
+		if res, held, err := r.holdUnresolvedEnvironment(ctx, log, ps); held || err != nil {
+			return res, err
 		}
 	}
 
@@ -859,6 +868,19 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	pipeline, err := r.loadPipeline(ctx, ps)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
+	}
+	if a := ps.Spec.Admitted; a != nil && !*a {
+		// A fleet Graph has not read this step back yet, so its admission is
+		// not final (spec.admitted): do no work a pruned step would leave
+		// behind. The Graph's spec update wakes the step.
+		const msg = "waiting for the promotion Graph to confirm this step's admission (fleet pacing)"
+		if ps.Status.Message != msg {
+			ps.Status.Message = msg
+			if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil && !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("patch admission wait: %w", err)
+			}
+		}
+		return ctrl.Result{RequeueAfter: unresolvedRecheck}, nil
 	}
 	if held, res, holdErr := r.holdIfPaused(ctx, log, ps); held {
 		return res, holdErr
@@ -2321,8 +2343,14 @@ func bakeDeadlineMessage(ps *v1alpha1.PromotionStep, env v1alpha1.EnvironmentSpe
 //     gate, so a Pending step starts as soon as its gates are re-evaluated
 //     (checkRequiredGates).
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Bundle reads of one Pipeline go through the spec.pipeline index (#1654).
+	if err := lifecycle.IndexBundlesByPipeline(context.Background(), mgr.GetFieldIndexer()); err != nil {
+		return err
+	}
 	b := ctrl.NewControllerManagedBy(mgr).
-		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers,
+			// Workers are shared fairly between namespaces (#1577).
+			NewQueue: fairqueue.NewFor(mgr)}).
 		For(&v1alpha1.PromotionStep{}, builderutil.WithPredicates(
 			predicate.Or(predicate.GenerationChangedPredicate{},
 				eventfilter.LabelChangedExceptKro, predicate.AnnotationChangedPredicate{}, auditPending),
@@ -2589,12 +2617,63 @@ func (r *Reconciler) cleanWorkDir(log zerolog.Logger, ps *v1alpha1.PromotionStep
 	}
 }
 
+// unresolvedRecheck is how often a step whose fleet environment cannot be
+// resolved looks again.
+const unresolvedRecheck = 30 * time.Second
+
+// holdUnresolvedEnvironment holds a step of a Pipeline with fleets, or a
+// fleet target's step, whose environment the Pipeline does not resolve to
+// (D1): a fleet target whose selector cannot be read or that left the
+// fleet (also after the last fleet is removed), or a step of an environment
+// that became a fleet while it was in flight. Running it would
+// promote with an empty environment spec (auto, the default path and
+// health), so it fails closed: the step stays where it is, says why, and
+// looks again every unresolvedRecheck. held is false for every other step.
+func (r *Reconciler) holdUnresolvedEnvironment(ctx context.Context, log zerolog.Logger,
+	ps *v1alpha1.PromotionStep) (ctrl.Result, bool, error) {
+	pipeline, err := r.loadPipeline(ctx, ps)
+	if err != nil {
+		return ctrl.Result{}, false, nil // the state's handler reports a missing Pipeline
+	}
+	// A fleet target's step (label kardinal.io/fleet) is held even when the
+	// Pipeline has no fleet any more: its target environment is gone.
+	fleet := ps.Labels[graph.LabelFleet]
+	if fleet == "" && !graph.HasFleets(pipeline) {
+		return ctrl.Result{}, false, nil
+	}
+	if _, ok := graph.EnvironmentSpecFor(pipeline, ps.Spec.Environment); ok {
+		return ctrl.Result{}, false, nil
+	}
+	why := "it is not an environment of the Pipeline"
+	if fleet != "" {
+		why = "it is a target of fleet " + fleet + ", which does not list it any more"
+	}
+	if err := graph.ValidateFleets(pipeline); err != nil {
+		why = err.Error()
+	}
+	for _, e := range pipeline.Spec.Environments {
+		if e.Name == ps.Spec.Environment && e.Fleet != nil {
+			why = "it is now a fleet environment, whose targets are promoted as " + e.Name + "-<target>"
+		}
+	}
+	msg := fmt.Sprintf("environment %s cannot be resolved (%s); the step waits and does not promote", ps.Spec.Environment, why)
+	if ps.Status.Message != msg {
+		log.Warn().Str("env", ps.Spec.Environment).Msg(msg)
+		base := ps.DeepCopy()
+		ps.Status.Message = msg
+		if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, true, fmt.Errorf("patch unresolved environment message: %w", err)
+		}
+	}
+	return ctrl.Result{RequeueAfter: unresolvedRecheck}, true, nil
+}
+
 // findEnv returns the EnvironmentSpec for the named environment, or empty spec if not found.
 func findEnv(pipeline *v1alpha1.Pipeline, envName string) v1alpha1.EnvironmentSpec {
-	for _, e := range pipeline.Spec.Environments {
-		if e.Name == envName {
-			return e
-		}
+	// A fleet target is an environment of its own: the fleet environment
+	// with the target's name, path and health.
+	if env, ok := graph.EnvironmentSpecFor(pipeline, envName); ok {
+		return env
 	}
 	return v1alpha1.EnvironmentSpec{Name: envName}
 }

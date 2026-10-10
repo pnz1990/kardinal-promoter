@@ -1,0 +1,160 @@
+{{/*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+*/}}
+{{- /*
+ClusterRoles for people and automation (rbac.userRoles). Bind them with a
+RoleBinding in a namespace (namespace-scoped access) or a ClusterRoleBinding.
+In TokenReview mode the UI API and the Bundle API authorize each call with a
+SubjectAccessReview, so these roles decide what a caller can do there too
+(docs/guides/security.md#user-roles).
+
+  <fullname>-viewer    read pipelines, bundles, gates, steps and the other
+                       kardinal kinds, and step events
+  <fullname>-promoter  viewer + create Bundles (CI, create bundle, promote,
+                       rollback) + pause and resume Pipelines (pipelines/pause)
+                       + roll back and hold, and release a hold
+                       (pipelines/hold)
+  <fullname>-approver  viewer + override (approve) PolicyGates
+                       (policygates/override) + create Approvals
+  <fullname>-admin     every verb on every kardinal kind, and pipelines/edit
+                       and policygates/edit; aggregates the other three and
+                       <fullname>-admin-extra
+
+pipelines/pause, pipelines/hold, pipelines/edit, policygates/override and
+policygates/edit are virtual subresources: the API server serves no such
+endpoint, RBAC grants them and SubjectAccessReview checks them. The UI API
+authorizes pause, resume, the hold of a rollback, release-hold and gate
+approval on them and writes the change as the controller, recording the
+caller. The promoter and approver roles grant no update on Pipelines or
+PolicyGates, so they cannot edit a Pipeline or a gate. With
+rbac.userRoles.directWrites they also get update and patch, for kardinal
+pause, rollback --hold, release-hold and override from a kubeconfig; the
+scoped-writes ValidatingAdmissionPolicy in identity-admission.yaml then limits
+a caller who has pipelines/pause or pipelines/hold but not pipelines/edit to
+spec.paused (with pipelines/pause) and spec.holds (with pipelines/hold, each
+entry checked by the hold-writes policy), and one who has
+policygates/override but not policygates/edit to spec.overrides.
+
+With rbac.userRoles.aggregateToDefaultRoles the roles also aggregate into the
+built-in view, edit and admin ClusterRoles (viewer into view; promoter and
+approver into edit; admin-extra into admin), so existing namespace bindings
+to those roles grant kardinal access too.
+*/}}
+{{- define "kardinal-promoter.userRoles.readRules" }}
+- apiGroups: ["kardinal.io"]
+  resources: ["pipelines", "bundles", "policygates", "promotionsteps", "prstatuses", "metricchecks", "subscriptions", "notificationhooks", "rollbackpolicies", "scheduleclocks", "changewindows", "auditevents", "approvals", "scmproviders", "clusterscmproviders", "hookruns", "imageverifications", "renderruns"]
+  verbs: ["get", "list", "watch"]
+# Step events in the UI.
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["get", "list", "watch"]
+{{- end }}
+{{- if .Values.rbac.userRoles.enabled }}
+{{- $fullname := include "kardinal-promoter.fullname" . }}
+{{- $aggregate := .Values.rbac.userRoles.aggregateToDefaultRoles }}
+{{- $direct := .Values.rbac.userRoles.directWrites }}
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-viewer
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+    kardinal.io/aggregate-to-admin: "true"
+    {{- if $aggregate }}
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+    {{- end }}
+rules:
+{{- include "kardinal-promoter.userRoles.readRules" . }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-promoter
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+    kardinal.io/aggregate-to-admin: "true"
+    {{- if $aggregate }}
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    {{- end }}
+rules:
+{{- include "kardinal-promoter.userRoles.readRules" . }}
+# Create Bundles: the Bundle API, kardinal create bundle, promote, rollback.
+- apiGroups: ["kardinal.io"]
+  resources: ["bundles"]
+  verbs: ["create"]
+# Pause and resume in the UI; roll back and hold, and release a hold
+# (spec.holds; the hold-writes policy checks the entries).
+- apiGroups: ["kardinal.io"]
+  resources: ["pipelines/pause", "pipelines/hold"]
+  verbs: ["update"]
+{{- if $direct }}
+# kardinal pause, rollback --hold and release-hold from a kubeconfig.
+# identity-admission.yaml limits the write to spec.paused and spec.holds.
+- apiGroups: ["kardinal.io"]
+  resources: ["pipelines"]
+  verbs: ["update", "patch"]
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-approver
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+    kardinal.io/aggregate-to-admin: "true"
+    {{- if $aggregate }}
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    {{- end }}
+rules:
+{{- include "kardinal-promoter.userRoles.readRules" . }}
+# Override (approve) a gate in the UI.
+- apiGroups: ["kardinal.io"]
+  resources: ["policygates/override"]
+  verbs: ["update"]
+# Record an approval (approval gates), and revoke your own (only the
+# approver may delete it: identity-admission.yaml).
+- apiGroups: ["kardinal.io"]
+  resources: ["approvals"]
+  verbs: ["create", "delete"]
+{{- if $direct }}
+# kardinal override from a kubeconfig. identity-admission.yaml limits the
+# write to spec.overrides.
+- apiGroups: ["kardinal.io"]
+  resources: ["policygates"]
+  verbs: ["update", "patch"]
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-admin-extra
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+    kardinal.io/aggregate-to-admin: "true"
+    {{- if $aggregate }}
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    {{- end }}
+rules:
+- apiGroups: ["kardinal.io"]
+  resources: ["*"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+# "*" does not cover subresources: name the virtual ones.
+- apiGroups: ["kardinal.io"]
+  resources: ["pipelines/pause", "pipelines/hold", "pipelines/edit", "policygates/override", "policygates/edit"]
+  verbs: ["update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-admin
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+aggregationRule:
+  clusterRoleSelectors:
+    - matchLabels:
+        kardinal.io/aggregate-to-admin: "true"
+        app.kubernetes.io/instance: {{ .Release.Name }}
+rules: []
+{{- end }}

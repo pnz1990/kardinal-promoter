@@ -20,6 +20,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,6 +31,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
@@ -120,9 +122,32 @@ type Reconciler struct {
 	// does not carry yet is Ready=False. Nil is graph.DefaultCompactAbove.
 	CompactAbove *int
 
+	// Reader reads the Argo CD Applications a fleet selector matches. It is
+	// not cached: the controller does not watch Applications, whose CRD may
+	// be missing. Nil uses Client.
+	Reader client.Reader
+	// FleetApplicationNamespaces are the namespaces a fleet selector of kind
+	// Application may read (--fleet-application-namespaces); empty is
+	// argocd. A selector naming another namespace is refused, so a Pipeline
+	// cannot list the Applications of a namespace its author cannot read.
+	FleetApplicationNamespaces []string
+	// FleetClusterProfileNamespaces are the namespaces besides the
+	// Pipeline's own a ClusterProfile selector may read
+	// (--fleet-clusterprofile-namespaces).
+	FleetClusterProfileNamespaces []string
+
 	// Now is the clock of hold expiry (spec.holds[].expiresAt). Nil is
 	// time.Now.
 	Now func() time.Time
+
+	// HoldBundleGrace is how long a hold may name a Bundle that does not
+	// exist before the controller reports it (--hold-bundle-grace). 0 is
+	// DefaultHoldBundleGrace.
+	HoldBundleGrace time.Duration
+
+	// Recorder emits the HoldBundleMissing Warning Event. Nil emits none
+	// (tests).
+	Recorder events.EventRecorder
 }
 
 // Reconcile is called whenever a Pipeline, one of its PromotionSteps, the
@@ -183,13 +208,19 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, err
 		}
 	}
-	desired := r.validate(&p, ownSecret)
+	// The fleets are resolved first: validate checks them as the Graph
+	// builder will see them.
+	desiredFleets := r.resolveFleets(ctx, &p)
+	validated := p.DeepCopy()
+	validated.Status.Fleets = desiredFleets
+	desired := r.validate(validated, ownSecret)
 	desiredSecret, err := r.gitSecretCondition(ctx, &p)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	// Nothing watches Secrets: a git.secretRef Secret created later, or a
-	// label added to one, is seen by these periodic re-checks.
+	// label added to one, is seen by these periodic re-checks. A selector
+	// fleet is re-resolved as often.
 	var result ctrl.Result
 	if desiredSecret != nil {
 		result.RequeueAfter = secretRecheck
@@ -210,6 +241,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				Message: conflict, ObservedGeneration: p.Generation}
 		}
 	}
+	if hasSelectorFleet(&p) && (result.RequeueAfter == 0 || fleetResync < result.RequeueAfter) {
+		result.RequeueAfter = fleetResync
+	}
 
 	// Derive status.phase from Bundle phases and PromotionStep states.
 	// This is a Watch-node pattern: we read Bundle and PromotionStep CRD status
@@ -227,8 +261,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// Compute aggregate deployment metrics from Bundles + PromotionSteps.
 	// Graph-first: reads only CRD status fields written by their own reconcilers.
 	// Writes only to Pipeline.status.deploymentMetrics (our own CRD).
+	// Only this Pipeline's Bundles, through the spec.pipeline index: the
+	// namespace may hold every other Pipeline's history too (#1654).
 	var bundleList kardinalv1alpha1.BundleList
-	if err := r.List(ctx, &bundleList, client.InNamespace(p.Namespace)); err != nil {
+	if err := r.List(ctx, &bundleList, client.InNamespace(p.Namespace),
+		client.MatchingFields{lifecycle.IndexBundlePipeline: p.Name}); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list bundles of pipeline %s: %w", p.Name, err)
 	}
 	// Pipelines that share a repository and branch must write separate paths
@@ -261,7 +298,8 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if desiredSecret != nil {
 		secretMatch = conditionMatches(p.Status.Conditions, *desiredSecret)
 	}
-	if condMatch && phaseMatch && metricsMatch && pausedMatch && conflictMatch && secretMatch {
+	fleetsMatch := fleetsEqual(p.Status.Fleets, desiredFleets)
+	if condMatch && phaseMatch && metricsMatch && pausedMatch && conflictMatch && secretMatch && fleetsMatch {
 		log.Debug().
 			Str("reason", desired.Reason).
 			Str("phase", desiredPhase).
@@ -293,6 +331,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		meta.RemoveStatusCondition(&p.Status.Conditions, conditionSecretReferenceable)
 	}
 	p.Status.DeploymentMetrics = desiredMetrics
+	p.Status.Fleets = desiredFleets
 
 	if err := r.Status().Patch(ctx, &p, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch pipeline status: %w", err)
@@ -564,6 +603,11 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline, ownSecret bool) meta
 		return invalid(err.Error())
 	}
 
+	// A fleet whose targets cannot be resolved fails every Bundle's build.
+	if err := graph.ValidateFleets(p); err != nil {
+		return invalid(err.Error())
+	}
+
 	// A git.secretRef in another namespace is refused on purpose (confused
 	// deputy), so it is a validation error, not an unimplemented field.
 	if err := graph.ValidateSecretRef(p); err != nil {
@@ -639,9 +683,14 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	); err != nil {
 		return fmt.Errorf("index PromotionStep by spec.pipelineName: %w", err)
 	}
+	if err := lifecycle.IndexBundlesByPipeline(context.Background(), mgr.GetFieldIndexer()); err != nil {
+		return err
+	}
 
 	b := ctrl.NewControllerManagedBy(mgr).
-		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers,
+			// Workers are shared fairly between namespaces (#1577).
+			NewQueue: fairqueue.NewFor(mgr)}).
 		For(&kardinalv1alpha1.Pipeline{}).
 		// A Pipeline that renders to a branch of the same repository may
 		// clear or cause a rendered branch conflict.

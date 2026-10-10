@@ -38,6 +38,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
@@ -833,18 +834,10 @@ func (r *Reconciler) buildUpstreamContextWithHistory(
 		return result, nil
 	}
 
-	// List all Bundles for this pipeline in the same namespace.
-	var list kardinalv1alpha1.BundleList
-	if err := r.List(ctx, &list, client.InNamespace(ns)); err != nil {
-		return nil, fmt.Errorf("list bundles in namespace %s: %w", ns, err)
-	}
-
-	// Filter to this pipeline only (in-memory filter — no field indexer required).
-	var pipelineBundles []kardinalv1alpha1.Bundle
-	for _, b := range list.Items {
-		if b.Spec.Pipeline == pipelineName {
-			pipelineBundles = append(pipelineBundles, b)
-		}
+	// This pipeline's Bundles, through the spec.pipeline index (#1654).
+	pipelineBundles, err := lifecycle.ListPipelineBundles(ctx, r.Client, ns, pipelineName)
+	if err != nil {
+		return nil, err
 	}
 
 	// Sort by creation time (newest first) to take the last historyLimit.
@@ -1327,6 +1320,10 @@ var unstartedStepCreated = predicate.Funcs{
 // evaluated at or after it was created (#1300). The evaluation's status write
 // wakes the step (the PromotionStep reconciler watches PolicyGates).
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Bundle reads of one Pipeline go through the spec.pipeline index (#1654).
+	if err := lifecycle.IndexBundlesByPipeline(context.Background(), mgr.GetFieldIndexer()); err != nil {
+		return err
+	}
 	// scheduleClockMapper enqueues all PolicyGate instances across ALL namespaces
 	// when any ScheduleClock ticks, so schedule.* expressions are re-evaluated
 	// on every clock interval rather than only at their recheckInterval.
@@ -1342,7 +1339,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	b := ctrl.NewControllerManagedBy(mgr).
-		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers,
+			// Workers are shared fairly between namespaces (#1577).
+			NewQueue: fairqueue.NewFor(mgr)}).
 		For(&kardinalv1alpha1.PolicyGate{}, builder.WithPredicates(
 			predicate.Or(eventfilter.SpecOrAnnotationChanged, auditPending))).
 		// Watch MetricCheck objects: when a MetricCheck's result or value changes,

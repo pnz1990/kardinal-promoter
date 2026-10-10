@@ -6,6 +6,7 @@ package uiauth_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
@@ -313,4 +315,129 @@ func TestMiddleware_StoresUser(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "alice", got.Username)
 	assert.Equal(t, []string{"devs"}, got.Groups)
+}
+
+// TestAuthorizingClient_ListFallsBackToNamespaceRBAC: an all-namespaces
+// list by a user who may not list cluster-wide returns the items of the
+// namespaces where the user may list, without recording a denial; a user
+// who may list nowhere gets an empty list; one who may list cluster-wide
+// gets everything with one review.
+func TestAuthorizingClient_ListFallsBackToNamespaceRBAC(t *testing.T) {
+	objs := []client.Object{uiauthPipeline("team-a", "a1"), uiauthPipeline("team-a", "a2"),
+		uiauthPipeline("team-b", "b1"), uiauthPipeline("team-c", "c1")}
+	tests := []struct {
+		name      string
+		allow     func(string, authzv1.ResourceAttributes) bool
+		want      []string
+		wantForb  bool
+		wantCalls int
+	}{
+		{name: "cluster-wide viewer", allow: func(_ string, a authzv1.ResourceAttributes) bool { return true },
+			want: []string{"team-a/a1", "team-a/a2", "team-b/b1", "team-c/c1"}, wantCalls: 1},
+		{name: "viewer in team-a and team-c", allow: func(_ string, a authzv1.ResourceAttributes) bool {
+			return a.Namespace == "team-a" || a.Namespace == "team-c"
+		}, want: []string{"team-a/a1", "team-a/a2", "team-c/c1"}, wantCalls: 4},
+		{name: "viewer nowhere", allow: func(string, authzv1.ResourceAttributes) bool { return false }, want: nil},
+		{name: "may list other kinds only", allow: func(_ string, a authzv1.ResourceAttributes) bool {
+			return a.Resource == "bundles"
+		}, want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(uiauthScheme(t)).WithObjects(objs...).Build()
+			access := &fakeAccess{allow: tt.allow}
+			ac := uiauth.NewAuthorizingClient(c, access, "")
+			ctx := uiauth.WithUser(context.Background(), authv1.UserInfo{Username: "alice"})
+			var list v1alpha1.PipelineList
+			err := ac.List(ctx, &list)
+			if tt.wantForb {
+				require.Error(t, err)
+				assert.True(t, apierrors.IsForbidden(err), "%v", err)
+				return
+			}
+			require.NoError(t, err)
+			var got []string
+			for _, p := range list.Items {
+				got = append(got, p.Namespace+"/"+p.Name)
+			}
+			assert.ElementsMatch(t, tt.want, got)
+			if tt.wantCalls > 0 {
+				assert.Len(t, access.calls, tt.wantCalls, "%+v", access.calls)
+			}
+			for _, a := range access.calls {
+				assert.Equal(t, "list", a.Verb)
+				assert.Equal(t, "pipelines", a.Resource)
+			}
+		})
+	}
+}
+
+// TestMiddlewareFor_GuardsItsPrefixOnly: MiddlewareFor checks tokens on its
+// prefix with its realm and lets other paths through.
+func TestMiddlewareFor_GuardsItsPrefixOnly(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, ok := uiauth.UserFrom(r.Context())
+		if ok {
+			_, _ = w.Write([]byte(u.Username))
+		}
+	})
+	h := uiauth.MiddlewareFor(next, &userReviewer{user: authv1.UserInfo{Username: "ci-bot"}}, "/api/v1/bundles", "kardinal-bundle-api")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/bundles", nil))
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Equal(t, `Bearer realm="kardinal-bundle-api"`, w.Header().Get("Www-Authenticate"))
+	w = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bundles", nil)
+	req.Header.Set("Authorization", "Bearer x")
+	h.ServeHTTP(w, req)
+	assert.Equal(t, "ci-bot", w.Body.String())
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/webhook/scm/health", nil))
+	assert.Equal(t, http.StatusOK, w.Code, "other paths are not guarded")
+}
+
+// flakyAccess denies the cluster-wide list check and fails the review for
+// one namespace.
+type flakyAccess struct{ failNS string }
+
+func (f flakyAccess) Allowed(_ context.Context, _ authv1.UserInfo, a authzv1.ResourceAttributes) (bool, string, error) {
+	if a.Namespace == f.failNS {
+		return false, "", fmt.Errorf("review API down")
+	}
+	return a.Namespace == "team-a", "", nil
+}
+
+// TestAuthorizingClient_ListErrorLeavesNoItems: the fallback lists every
+// namespace as the controller before filtering. When a per-namespace review
+// fails, or the controller list itself fails, the call returns an error and
+// the list holds no items, so a caller that ignores the error shows nothing
+// it should not.
+func TestAuthorizingClient_ListErrorLeavesNoItems(t *testing.T) {
+	objs := []client.Object{uiauthPipeline("team-a", "a1"), uiauthPipeline("team-b", "b1")}
+	tests := []struct {
+		name    string
+		listErr error
+		failNS  string
+	}{
+		{name: "per-namespace review fails", failNS: "team-b"},
+		{name: "controller list fails", listErr: fmt.Errorf("etcd down")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := fake.NewClientBuilder().WithScheme(uiauthScheme(t)).WithObjects(objs...)
+			if tt.listErr != nil {
+				b = b.WithInterceptorFuncs(interceptor.Funcs{
+					List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+						require.NoError(t, cl.List(ctx, list, opts...)) // a partial result
+						return tt.listErr
+					},
+				})
+			}
+			ac := uiauth.NewAuthorizingClient(b.Build(), flakyAccess{failNS: tt.failNS}, "")
+			ctx := uiauth.WithUser(context.Background(), authv1.UserInfo{Username: "alice"})
+			var list v1alpha1.PipelineList
+			require.Error(t, ac.List(ctx, &list))
+			assert.Empty(t, list.Items, "no items survive an error")
+		})
+	}
 }

@@ -45,12 +45,19 @@ spec:
             - --zap-log-level={{ include "kardinal-promoter.zapLogLevel" . }}
             - --metrics-bind-address={{ .Values.metricsBindAddress }}
             - --health-probe-bind-address={{ .Values.healthProbeBindAddress }}
+            {{- with .Values.pprofAddress }}
+            - --pprof-address={{ . }}
+            {{- end }}
             - --ui-listen-address=:{{ .Values.service.uiPort }}
             - --webhook-bind-address=:{{ .Values.service.webhookPort }}
             - --graph-service-account={{ .Values.graph.serviceAccountName }}
             - --graph-applier-clusterrole={{ include "kardinal-promoter.graphApplierRole" . }}
             - --graph-reader-clusterrole={{ include "kardinal-promoter.graphReaderRole" . }}
             - --graph-reader-namespaces={{ join "," .Values.graph.readerNamespaces }}
+            - --fleet-application-namespaces={{ join "," .Values.fleets.applicationNamespaces }}
+            {{- with .Values.fleets.clusterProfileNamespaces }}
+            - --fleet-clusterprofile-namespaces={{ join "," . }}
+            {{- end }}
             - --hook-service-accounts={{ join "," .Values.hooks.serviceAccounts }}
             - --hook-pod-security-level={{ .Values.hooks.podSecurityLevel }}
             {{- if not (kindIs "invalid" .Values.graph.compactAbove) }}
@@ -78,6 +85,8 @@ spec:
             - --audit-retention=true
             - --audit-retention-max-age={{ .Values.audit.retention.maxAge }}
             - --audit-retention-max-per-pipeline={{ .Values.audit.retention.maxPerPipeline }}
+            {{- else }}
+            - --audit-retention=false
             {{- end }}
             {{- with .Values.controller.workers }}
             {{- with .promotionStep }}
@@ -154,6 +163,24 @@ spec:
             {{- end }}
             {{- if .Values.ui.auth.tokenReview }}
             - --ui-tokenreview-auth=true
+            {{- end }}
+            {{- if .Values.bundleAPI.tokenReview }}
+            - --bundle-api-tokenreview-auth=true
+            {{- end }}
+            {{- if or .Values.ui.auth.tokenReview .Values.bundleAPI.tokenReview }}
+            {{- if and (not .Values.tokenReview.audiences) (not .Values.tokenReview.acceptAPIServerAudience) }}
+            {{- fail "tokenReview.audiences is empty: set an audience (kardinal-promoter) or tokenReview.acceptAPIServerAudience=true" }}
+            {{- end }}
+            - --tokenreview-audiences={{ join "," .Values.tokenReview.audiences }}
+            {{- if .Values.tokenReview.acceptAPIServerAudience }}
+            - --tokenreview-accept-apiserver-audience=true
+            {{- end }}
+            {{- end }}
+            {{- if and .Values.ui.auth.tokenReview .Values.ui.auth.tokenSecretRef.name }}
+            {{- if not .Values.ui.auth.allowStaticTokenWithTokenReview }}
+            {{- fail "ui.auth.tokenSecretRef.name and ui.auth.tokenReview are both set: the static token would win and every UI caller would act as the controller. Unset one, or set ui.auth.allowStaticTokenWithTokenReview=true" }}
+            {{- end }}
+            - --ui-auth-static-overrides-tokenreview=true
             {{- end }}
             {{- if .Values.metricCheck.cloudWatch.ambientCredentials }}
             - --metriccheck-cloudwatch-ambient-credentials=true

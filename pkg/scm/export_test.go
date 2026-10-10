@@ -61,6 +61,19 @@ func (w *SecretWatcher) CheckAndReloadForTest(ctx context.Context) {
 // SetAppTokenClockForTest replaces the clock of a GitHubAppTokenSource.
 func SetAppTokenClockForTest(s *GitHubAppTokenSource, now func() time.Time) { s.now = now }
 
+// SetBeforeFlightForTest runs f between Token's cache check and the mint
+// flight. f may call SetAppTokenStateForTest to play a flight that ended in
+// that window.
+func SetBeforeFlightForTest(s *GitHubAppTokenSource, f func()) { s.beforeFlight = f }
+
+// SetAppTokenStateForTest sets the cache as a finished flight leaves it: a
+// token (with its refresh and expiry times), or a failure and its retry time.
+func SetAppTokenStateForTest(s *GitHubAppTokenSource, token string, refreshAt, expires time.Time, lastErr error, retryAt time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.token, s.refreshAt, s.expires, s.lastErr, s.retryAt = token, refreshAt, expires, lastErr, retryAt
+}
+
 // AuthMethodForTest exposes authMethod.
 var AuthMethodForTest = authMethod
 
@@ -113,4 +126,14 @@ func (r *Registry) CacheSizesForTest() (secrets, namespaces int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.secrets), len(r.namespaces)
+}
+
+// KeepOldForTest exposes keepOld.
+var KeepOldForTest = keepOld
+
+// EvictedForTest returns how many Secrets carry an eviction mark.
+func (r *Registry) EvictedForTest() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.evictedAt)
 }

@@ -22,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -513,10 +514,13 @@ func TestStep_HookPrivilegedRefused(t *testing.T) {
 	a.fileHas(t, "prod", fixtures.V1, "prod in git")
 }
 
-// TestStep_HookForgedHookRunIgnored: a HookRun created by hand for a
-// Bundle, with its selector labels and the Bundle's UID but without kro's
-// kro.run/node-id label, never gets a Job, while the Graph's own hook runs
-// and the environment is promoted (regression, QA #1493 round 2).
+// TestStep_HookForgedHookRunIgnored: a HookRun made by hand for a Bundle,
+// with its selector labels and the Bundle's UID, is refused by the chart's
+// graph-objects policy (only kro and kardinal create HookRuns, #1544). Made
+// anyway by an identity the policy admits, the Graph ServiceAccount as kro
+// uses it, but without kro's kro.run/node-id label, it never gets a Job or a
+// status (the controller's own check, QA #1493 round 2), while the Graph's
+// own hook runs and the environment is promoted.
 //
 // Covers HOOK-FORGED-01.
 func TestStep_HookForgedHookRunIgnored(t *testing.T) {
@@ -538,10 +542,28 @@ func TestStep_HookForgedHookRunIgnored(t *testing.T) {
 		Spec: v1alpha1.HookRunSpec{PipelineName: pipelineName, BundleName: bundle, Environment: "test",
 			Hook: "migrate", Phase: "pre", Job: hookJob(t, `echo forged`, "")},
 	}
-	require.NoError(t, e.Client.Create(ctx, forged))
+	err := e.Client.Create(ctx, forged.DeepCopy())
+	require.Error(t, err, "the cluster admin cannot forge a HookRun")
+	assert.True(t, apierrors.IsForbidden(err), "%v", err)
+	assert.Contains(t, err.Error(), "only kardinal (the promotion Graph or the controller) creates or changes this object")
+	// kro's path: impersonating the namespace's Graph ServiceAccount. Its
+	// RoleBinding is the controller's to create with the Bundle's Graph, so
+	// wait for the Graph's own HookRun (kro got through) and retry while
+	// the API server's RBAC cache catches up.
+	own := graph.HookRunName(pipelineName, bundle, "test", "pre", "migrate")
+	framework.Eventually(t, promoteTimeout, "the Graph's own HookRun", func(ctx context.Context) (bool, string) {
+		_, ok, err := hookRun(ctx, e, a.ns, own)
+		return err == nil && ok, fmt.Sprint(err)
+	})
+	asGraph := impersonated(t, e, "system:serviceaccount:"+a.ns+":kardinal-graph",
+		"system:serviceaccounts", "system:serviceaccounts:"+a.ns, "system:authenticated")
+	framework.Eventually(t, time.Minute, "kro's identity creates the forged HookRun", func(ctx context.Context) (bool, string) {
+		err := asGraph.Create(ctx, forged.DeepCopy())
+		return err == nil || apierrors.IsAlreadyExists(err), fmt.Sprint(err)
+	})
 
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
-	waitHookRun(t, e, a.ns, graph.HookRunName(pipelineName, bundle, "test", "pre", "migrate"), v1alpha1.HookRunSucceeded)
+	waitHookRun(t, e, a.ns, own, v1alpha1.HookRunSucceeded)
 	framework.Consistently(t, 10*time.Second, "the forged HookRun gets no Job and no status", func(ctx context.Context) (bool, string) {
 		_, err := e.Kube.BatchV1().Jobs(a.ns).Get(ctx, forged.Name, metav1.GetOptions{})
 		if !apierrors.IsNotFound(err) {
@@ -555,36 +577,193 @@ func TestStep_HookForgedHookRunIgnored(t *testing.T) {
 	})
 }
 
-// TestStep_HooksRefusedInCompactGraph: the compact Graph shape does not
-// carry hooks, so a Pipeline with hooks and kardinal.io/graph-shape: compact
-// is Ready=False naming them, and its Bundle fails with GraphBuildFailed
-// instead of promoting without its hooks.
+// impersonated is a client acting as user in groups (the test's cluster
+// admin may impersonate), for an identity an admission policy admits.
+func impersonated(t *testing.T, e *framework.Env, user string, groups ...string) client.Client {
+	t.Helper()
+	cfg := rest.CopyConfig(e.Config)
+	cfg.Impersonate = rest.ImpersonationConfig{UserName: user, Groups: groups}
+	c, err := client.New(cfg, client.Options{Scheme: e.Client.Scheme()})
+	require.NoError(t, err)
+	return c
+}
+
+// TestStep_HooksInCompactGraph runs TestStep_HooksPreAndPost's hooks with
+// the compact Graph shape (kardinal.io/graph-shape: compact): the HookRuns
+// are items of the HookRuns collection, the pre hooks run one after another
+// while prod's step waits and prod is unchanged, the post hook runs once
+// the step is Verifying, and prod is Verified with every hook recorded.
 //
 // Covers HOOK-COMPACT-01.
-func TestStep_HooksRefusedInCompactGraph(t *testing.T) {
+func TestStep_HooksInCompactGraph(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test", "prod")
+	p := a.pipeline(nil)
+	p.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeCompact}
+	smoke := fmt.Sprintf(`for i in 1 2 3 4 5 6 7 8 9 10; do wget -qO- http://%s:9898/version | grep -q '%s' && exit 0; sleep 3; done; exit 1`,
+		fixtures.Workload("prod"), fixtures.V2)
+	p.Spec.Environments[1].Hooks = []v1alpha1.HookSpec{
+		{Name: "migrate", Phase: "pre", Job: hookJob(t, `echo "migrate on ${HOSTNAME}"; sleep 20`, "")},
+		{Name: "seed", Phase: "pre", Job: hookJob(t, `echo seed`, "")},
+		{Name: "smoke", Phase: "post", Job: hookJob(t, smoke, "")},
+	}
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	migrate := graph.HookRunName(pipelineName, bundle, "prod", "pre", "migrate")
+	seed := graph.HookRunName(pipelineName, bundle, "prod", "pre", "seed")
+	post := graph.HookRunName(pipelineName, bundle, "prod", "post", "smoke")
+
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	m := waitHookRun(t, e, a.ns, migrate, v1alpha1.HookRunRunning)
+	assert.Equal(t, graph.NodeHookRuns, m.Labels["kro.run/node-id"], "made by the HookRuns collection")
+	assert.Equal(t, "compact", bundleGraph(t, e, a.ns, bundle).GetLabels()["kardinal.io/graph-shape"])
+	framework.Eventually(t, time.Minute, "prod step waiting for the pre hook", func(ctx context.Context) (bool, string) {
+		ps, ok, err := e.Step(ctx, a.ns, pipelineName, bundle, "prod")
+		if err != nil || !ok {
+			return false, fmt.Sprintf("step: %v %v", ok, err)
+		}
+		return ps.Status.State == "" && strings.Contains(ps.Status.Message, "waiting for pre-deploy hook migrate"),
+			fmt.Sprintf("state=%q message=%q", ps.Status.State, ps.Status.Message)
+	})
+	_, seedExists, err := hookRun(ctx, e, a.ns, seed)
+	require.NoError(t, err)
+	assert.False(t, seedExists, "the second pre hook waits for the first")
+	_, postExists, err := hookRun(ctx, e, a.ns, post)
+	require.NoError(t, err)
+	assert.False(t, postExists, "the post hook waits for Verifying")
+	a.fileHas(t, "prod", fixtures.V1, "prod in git while the pre hook runs")
+
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout+2*hookTimeout)
+	a.running(t, "prod", imageV2, "prod after the promotion")
+	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
+	m = waitHookRun(t, e, a.ns, migrate, v1alpha1.HookRunSucceeded)
+	s := waitHookRun(t, e, a.ns, seed, v1alpha1.HookRunSucceeded)
+	sm := waitHookRun(t, e, a.ns, post, v1alpha1.HookRunSucceeded)
+	require.NotNil(t, m.Status.FinishedAt)
+	require.NotNil(t, s.Status.StartedAt)
+	assert.False(t, s.Status.StartedAt.Before(m.Status.FinishedAt), "seed started after migrate finished")
+	require.NotNil(t, ps.Status.VerificationStartedAt)
+	require.NotNil(t, sm.Status.StartedAt)
+	assert.False(t, sm.Status.StartedAt.Before(ps.Status.VerificationStartedAt), "the post hook started after the health check passed")
+	c := meta.FindStatusCondition(ps.Status.Conditions, "Verified")
+	require.NotNil(t, c)
+	assert.Equal(t, "PostHooksSucceeded", c.Reason)
+	assert.Equal(t, []string{migrate, seed}, ps.Spec.PreHooks)
+	assert.Equal(t, []string{post}, ps.Spec.PostHooks)
+	require.NotNil(t, ps.Spec.Live)
+	require.Len(t, ps.Spec.Live.Hooks, 3, "the step reads every hook's result")
+	for _, h := range ps.Spec.Live.Hooks {
+		assert.Equal(t, v1alpha1.HookRunSucceeded, h.Result, h.Name)
+	}
+}
+
+// TestStep_CompactPauseHoldsNextPreHook: with the compact Graph shape,
+// prod's step and its first pre hook exist when the Pipeline is paused
+// (QA #1602). The first hook finishes, and the second does not run while
+// the Pipeline is paused: a pause does not rebuild the Graph, so the
+// HookRun reconciler holds it in Pending, as the PromotionStep reconciler
+// holds steps. After resume it runs and prod is Verified.
+//
+// Covers HOOK-COMPACT-03.
+func TestStep_CompactPauseHoldsNextPreHook(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test", "prod")
+	p := a.pipeline(nil)
+	p.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeCompact}
+	p.Spec.Environments[1].Hooks = []v1alpha1.HookSpec{
+		{Name: "migrate", Phase: "pre", Job: hookJob(t, `sleep 15; echo migrated`, "")},
+		{Name: "seed", Phase: "pre", Job: hookJob(t, `echo seed`, "")},
+	}
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	migrate := graph.HookRunName(pipelineName, bundle, "prod", "pre", "migrate")
+	seed := graph.HookRunName(pipelineName, bundle, "prod", "pre", "seed")
+
+	waitHookRun(t, e, a.ns, migrate, v1alpha1.HookRunRunning)
+	_, ok, err := e.Step(ctx, a.ns, pipelineName, bundle, "prod")
+	require.NoError(t, err)
+	require.True(t, ok, "prod's step exists")
+	e.MustKardinal(t, a.ns, "pause", pipelineName)
+	waitHookRun(t, e, a.ns, migrate, v1alpha1.HookRunSucceeded)
+	framework.Consistently(t, 30*time.Second, "the second pre hook not started while paused", func(ctx context.Context) (bool, string) {
+		hr, exists, err := hookRun(ctx, e, a.ns, seed)
+		if err != nil {
+			return false, err.Error()
+		}
+		if !exists {
+			return true, "seed not created yet"
+		}
+		pods, err := hookPods(ctx, e, a.ns, seed)
+		if err != nil {
+			return false, err.Error()
+		}
+		return hr.Status.StartedAt == nil && hr.Status.JobUID == "" && len(pods) == 0,
+			fmt.Sprintf("seed phase=%q message=%q pods=%d", hr.Status.Phase, hr.Status.Message, len(pods))
+	})
+	a.fileHas(t, "prod", fixtures.V1, "prod in git while paused")
+
+	e.MustKardinal(t, a.ns, "resume", pipelineName)
+	waitHookRun(t, e, a.ns, seed, v1alpha1.HookRunSucceeded)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout+hookTimeout)
+}
+
+// TestStep_PausedPreHookOfSupersededBundleSkipped: a pre hook that waits
+// through a pause does not run on resume once its Bundle was superseded
+// meanwhile (QA #1602: v1's migration then ran next to v2's). v1's second
+// pre hook waits Pending while the Pipeline is paused; v2 supersedes v1;
+// after resume v1's hook ends Skipped (or is pruned with v1's Graph) without
+// a Job, and v2 runs its own hooks and is Verified.
+//
+// Covers HOOK-HALT-01.
+func TestStep_PausedPreHookOfSupersededBundleSkipped(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	ctx := context.Background()
 	a := newArgoApp(t, e, "test")
 	p := a.pipeline(nil)
-	p.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeCompact}
-	p.Spec.Environments[0].Hooks = []v1alpha1.HookSpec{{Name: "migrate", Phase: "pre", Job: hookJob(t, `echo migrated`, "")}}
+	p.Spec.Environments[0].Hooks = []v1alpha1.HookSpec{
+		{Name: "migrate", Phase: "pre", Job: hookJob(t, `sleep 15; echo migrated`, "")},
+		{Name: "seed", Phase: "pre", Job: hookJob(t, `echo seed`, "")},
+	}
 	a.apply(t, p)
-	const feature = "pre- and post-deploy hooks (spec.environments[].hooks)"
-	e.WaitPipeline(t, a.ns, pipelineName, time.Minute, "Ready=False naming hooks", func(p *v1alpha1.Pipeline) bool {
-		c := meta.FindStatusCondition(p.Status.Conditions, "Ready")
-		return c != nil && c.Status == metav1.ConditionFalse && strings.Contains(c.Message, feature)
+	v1 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	seed := graph.HookRunName(pipelineName, v1, "test", "pre", "seed")
+	waitHookRun(t, e, a.ns, graph.HookRunName(pipelineName, v1, "test", "pre", "migrate"), v1alpha1.HookRunRunning)
+	e.MustKardinal(t, a.ns, "pause", pipelineName)
+	framework.Eventually(t, 2*time.Minute, "v1's second pre hook waiting for the pause", func(ctx context.Context) (bool, string) {
+		hr, ok, err := hookRun(ctx, e, a.ns, seed)
+		if err != nil || !ok {
+			return false, fmt.Sprint("not created yet ", err)
+		}
+		return hr.Status.Phase == v1alpha1.HookRunPending && strings.Contains(hr.Status.Message, "is paused"),
+			fmt.Sprintf("phase=%q message=%q", hr.Status.Phase, hr.Status.Message)
 	})
-	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
-	e.WaitBundle(t, a.ns, bundle, time.Minute, "Failed with GraphBuildFailed", failedWith("GraphBuildFailed", feature))
-	_, ok, err := e.Step(ctx, a.ns, pipelineName, bundle, "test")
+
+	v2 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV3)
+	e.WaitBundlePhase(t, a.ns, v1, "Superseded", 2*time.Minute)
+	e.MustKardinal(t, a.ns, "resume", pipelineName)
+	waitHookRun(t, e, a.ns, graph.HookRunName(pipelineName, v2, "test", "pre", "seed"), v1alpha1.HookRunSucceeded)
+	e.WaitStepState(t, a.ns, pipelineName, v2, "test", "Verified", promoteTimeout+hookTimeout)
+
+	hr, ok, err := hookRun(ctx, e, a.ns, seed)
 	require.NoError(t, err)
-	assert.False(t, ok, "nothing promoted without its hooks")
-	a.fileHas(t, "test", fixtures.V1, "test in git")
+	if ok {
+		assert.Equal(t, v1alpha1.HookRunSkipped, hr.Status.Phase, hr.Status.Message)
+		assert.Contains(t, hr.Status.Message, "was superseded")
+		assert.Empty(t, hr.Status.JobUID, "no Job")
+	}
+	pods, err := hookPods(ctx, e, a.ns, seed)
+	require.NoError(t, err)
+	assert.Empty(t, pods, "v1's second pre hook never ran")
 }
 
-// TestStep_HookDeletedWhileRunningRunsOnce: deleting a pre-hook HookRun
-// while its Job runs does not run the migration twice. The finalizer holds
+// TestStep_HookDeletedWhileRunningRunsOnce: a pre-hook HookRun deleted
+// (by the garbage collector) while its Job runs does not run the migration
+// twice. The finalizer holds
 // the HookRun until the Job ends and records its result, the step keeps the
 // result in status.hookRecords, and the HookRun the Graph applies again
 // takes the recorded result without a Job (regression, #1544 review).
@@ -601,7 +780,16 @@ func TestStep_HookDeletedWhileRunningRunsOnce(t *testing.T) {
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	name := graph.HookRunName(pipelineName, bundle, "test", "pre", "migrate")
 	first := waitHookRun(t, e, a.ns, name, v1alpha1.HookRunRunning)
-	require.NoError(t, e.Client.Delete(ctx, first))
+	// Only kardinal, kro, the garbage collector and the namespace controller
+	// delete HookRuns (graph-objects policy, #1544): the cluster admin is
+	// refused, and the delete comes from the garbage collector, as when the
+	// Graph drops the HookRun or its Bundle goes.
+	err := e.Client.Delete(ctx, first.DeepCopy())
+	require.Error(t, err, "a user cannot delete a HookRun")
+	assert.True(t, apierrors.IsForbidden(err), "%v", err)
+	assert.Contains(t, err.Error(), "HookRuns record that a hook ran; only kardinal deletes them")
+	require.NoError(t, impersonated(t, e, "system:serviceaccount:kube-system:generic-garbage-collector",
+		"system:serviceaccounts", "system:serviceaccounts:kube-system", "system:authenticated").Delete(ctx, first))
 
 	var again *v1alpha1.HookRun
 	framework.Eventually(t, 3*time.Minute, "the HookRun applied again", func(ctx context.Context) (bool, string) {

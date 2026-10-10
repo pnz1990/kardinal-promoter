@@ -66,7 +66,7 @@ func lcStep(bundle, env, state string, minute int) *v1alpha1.PromotionStep {
 func lcClient(t *testing.T, objs ...client.Object) client.Client {
 	t.Helper()
 	return fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithObjects(objs...).
-		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}, &v1alpha1.Pipeline{}).Build()
+		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}, &v1alpha1.Pipeline{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 }
 
 // newBundles returns the Bundles that are not in the fixture.

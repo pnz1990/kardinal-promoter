@@ -88,8 +88,16 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["batch"]
   resources: ["jobs"]
   verbs: ["get", "list", "watch", "create", "delete"]
-# Audit records are append-only. audit.retention.enabled adds delete: the
-# leader deletes records past their retention (pkg/reconciler/auditretention).
+# Approvals: the UI records, replaces and revokes decisions for its
+# TokenReview user (POST /api/v1/ui/approvals). An Approval is immutable, so
+# there is no update; the approvals admission policy admits the controller's
+# writes only for Approvals marked kardinal.io/recorded-via: ui.
+- apiGroups: ["kardinal.io"]
+  resources: ["approvals"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+# Audit records are append-only. audit.retention.enabled (the default) adds
+# delete: the leader deletes records past their retention
+# (pkg/reconciler/auditretention).
 - apiGroups: ["kardinal.io"]
   resources: ["auditevents"]
   {{- if .Values.audit.retention.enabled }}
@@ -163,6 +171,12 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["flagger.app"]
   resources: ["canaries"]
   verbs: ["get", "list", "watch"]
+# Fleet selectors of kind ClusterProfile (pkg/reconciler/pipeline/fleets.go):
+# the cluster inventory's ClusterProfiles are listed, uncached, to resolve a
+# fleet's targets. Argo CD Applications are covered above.
+- apiGroups: ["multicluster.x-k8s.io"]
+  resources: ["clusterprofiles"]
+  verbs: ["get", "list"]
 {{- end }}
 
 {{- define "kardinal-promoter.rules.cluster" -}}
@@ -233,9 +247,10 @@ rules exist for. A new client call needs a row there and a rule here.
   resources: ["validatingadmissionpolicies", "validatingadmissionpolicybindings"]
   verbs: ["get"]
   resourceNames: [{{ printf "%s-gate-overrides" (include "kardinal-promoter.fullname" .) | quote }}]
-{{- if .Values.ui.auth.tokenReview }}
-# ui.auth.tokenReview: the UI API validates each bearer token with a
-# TokenReview and authorizes it with a SubjectAccessReview.
+{{- if or .Values.ui.auth.tokenReview .Values.bundleAPI.tokenReview }}
+# ui.auth.tokenReview, bundleAPI.tokenReview: the UI API and the Bundle API
+# validate each bearer token with a TokenReview and authorize it with a
+# SubjectAccessReview.
 - apiGroups: ["authentication.k8s.io"]
   resources: ["tokenreviews"]
   verbs: ["create"]

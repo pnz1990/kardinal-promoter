@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 // An environment hold (Pipeline spec.holds, #1528) pins an environment to a
@@ -52,6 +53,22 @@ var HoldNow = time.Now
 // HoldOf returns the hold of env in p, or nil. A hold whose expiresAt has
 // passed counts as absent, also before the Pipeline reconciler removes it.
 func HoldOf(p *v1alpha1.Pipeline, env string) *v1alpha1.EnvironmentHold {
+	if h := exactHold(p, env); h != nil {
+		return h
+	}
+	// A fleet target is held by its own hold, or by its fleet's (kardinal
+	// rollback --env <fleet> --hold): the whole fleet stays on the rollback.
+	if p != nil && len(p.Spec.Holds) > 0 && graph.HasFleets(p) {
+		if fleet := graph.FleetOf(p, env); fleet != "" {
+			return exactHold(p, fleet)
+		}
+	}
+	return nil
+}
+
+// exactHold is the unexpired hold of p whose environment is env, without the
+// fleet fallback of HoldOf.
+func exactHold(p *v1alpha1.Pipeline, env string) *v1alpha1.EnvironmentHold {
 	if p == nil {
 		return nil
 	}
@@ -134,6 +151,12 @@ type HoldRequest struct {
 	// Creator is the rollback Bundle's kardinal.io/created-by (CreateBundleAs);
 	// empty records none.
 	Creator string
+	// HoldWriter, when set, writes spec.holds (the hold, and its removal when
+	// the Bundle cannot be created); the reads and the Bundle create use the
+	// client passed to RollbackAndHold. The UI API passes the controller's
+	// client here after checking pipelines/hold for the user, who needs no
+	// update on the Pipeline. Nil uses that client for everything.
+	HoldWriter client.Client
 }
 
 // ArtifactDigest is the digest of what a Bundle deploys: its type, images
@@ -314,11 +337,15 @@ func RollbackAndHold(ctx context.Context, c client.Client, req HoldRequest) (*Ro
 		exp := metav1.NewTime(now.UTC().Add(req.ExpiresIn))
 		hold.ExpiresAt = &exp
 	}
-	if err := setHold(ctx, c, req.Namespace, req.Pipeline, hold); err != nil {
+	writer := req.HoldWriter
+	if writer == nil {
+		writer = c
+	}
+	if err := setHold(ctx, writer, req.Namespace, req.Pipeline, hold); err != nil {
 		return nil, nil, err
 	}
 	if err := CreateBundleAs(ctx, c, plan.Bundle, req.Creator); err != nil {
-		if _, relErr := ReleaseHold(ctx, c, req.Namespace, req.Pipeline, req.Environment); relErr != nil {
+		if _, relErr := ReleaseHold(ctx, writer, req.Namespace, req.Pipeline, req.Environment); relErr != nil {
 			return nil, nil, fmt.Errorf("create rollback bundle: %w (and removing the hold failed: %v)", err, relErr)
 		}
 		return nil, nil, fmt.Errorf("create rollback bundle: %w", err)
@@ -372,8 +399,12 @@ func ReleaseHold(ctx context.Context, c client.Client, ns, pipeline, env string)
 			}
 			return fmt.Errorf("get pipeline %s/%s: %w", ns, pipeline, err)
 		}
-		h := HoldOf(&p, env)
+		h := exactHold(&p, env)
 		if h == nil {
+			if fh := HoldOf(&p, env); fh != nil {
+				return fmt.Errorf("environment %s of pipeline %s is held through its fleet %s; release the fleet with --env %s: %w",
+					env, pipeline, fh.Environment, fh.Environment, ErrNotFound)
+			}
 			return fmt.Errorf("environment %s of pipeline %s is not held: %w", env, pipeline, ErrNotFound)
 		}
 		cp := *h

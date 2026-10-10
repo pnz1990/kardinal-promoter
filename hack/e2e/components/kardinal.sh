@@ -126,6 +126,9 @@ args=(
   --set github.secretRef.name=git-token
   --set "scm.provider=${KARDINAL_E2E_SCM_PROVIDER:?git server component must run first}"
   --set "scm.apiURL=${KARDINAL_E2E_SCM_API:-}"
+  # Off by default; TestUI_UserRoles checks the opt-in (a binding to the
+  # built-in view role grants the viewer rules). test/helm covers the default.
+  --set rbac.userRoles.aggregateToDefaultRoles=true
   # The suites' git servers are in-cluster Services without TLS: let
   # ScmProviders use their http:// API (TestForgejo_ScmProvider*).
   --set scm.providersAllowInsecureHTTP=true
