@@ -129,6 +129,17 @@ var (
 		},
 	)
 
+	// HoldBundleMissingTotal counts holds (Pipeline spec.holds) whose
+	// rollback Bundle has not existed for the grace, once per hold. The
+	// hold stays in effect until a human releases it (#1629).
+	HoldBundleMissingTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kardinal_hold_bundle_missing_total",
+			Help: "Holds whose rollback Bundle does not exist past the grace, once per hold; the hold stays in effect until released.",
+		},
+		[]string{"pipeline_namespace", "pipeline"},
+	)
+
 	// NotificationsDroppedTotal counts events a NotificationHook gave up on
 	// without delivering: "template" when the body cannot be rendered for
 	// the event (retrying renders the same body), "attempts" after the last
@@ -145,6 +156,7 @@ var (
 func init() {
 	ctrlmetrics.Registry.MustRegister(
 		AuditEventsPrunedTotal,
+		HoldBundleMissingTotal,
 		NotificationsDroppedTotal,
 		BundlesTotal,
 		StepsTotal,
