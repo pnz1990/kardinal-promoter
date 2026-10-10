@@ -486,3 +486,129 @@ spec:
       reason: Forbidden
 ---
 {{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "graph-objects") }}
+---
+{{- /*
+scoped-writes: what a caller limited to a virtual subresource of
+user-roles.yaml may change (docs/guides/security.md#user-roles). Separate
+from the identity policies above: those check names on every write, this one
+checks scope for some callers. UPDATE only: creating a Pipeline or a gate
+needs create, which the limited roles do not have.
+*/}}
+{{- $fullname := include "kardinal-promoter.fullname" . }}
+{{- $maxOverride := int (.Values.controller.gateOverrideMaxMinutes | default 1440) }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $fullname }}-scoped-writes
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["UPDATE"]
+        resources: ["pipelines", "policygates"]
+  # The virtual subresources of user-roles.yaml: pipelines/pause and
+  # pipelines/hold (pipelines) or policygates/override (policygates) let a
+  # caller make one kind of change; <resource>/edit lets it change anything
+  # its RBAC update allows. A caller with one of the first and not the
+  # second (rbac.userRoles.directWrites grants such callers update) is
+  # limited:
+  #   - metadata stays as it was, except what the API server sets
+  #     (managedFields, resourceVersion, generation): no labels,
+  #     annotations, finalizers or ownerReferences (an ownerReference to a
+  #     deleted object would have the garbage collector delete it);
+  #   - of the spec, only spec.paused (with pipelines/pause), spec.holds
+  #     (with pipelines/hold; the hold-writes policy checks the entries) or
+  #     spec.overrides (policygates) changes;
+  #   - spec.overrides is append-only, and each new entry names the caller
+  #     in createdBy and expires at most controller.gateOverrideMaxMinutes
+  #     (the override cap) after its createdAt. CEL has no clock here, so
+  #     the PolicyGate reconciler ends each override at most the cap after
+  #     it first saw it (status.overrides) and does not count one created
+  #     more than 5 minutes after that (condition OverrideIgnored).
+  # Callers with neither subresource are not limited here: their RBAC decides.
+  # messageExpression cannot use the authorizer, so the messages use only
+  # the request.
+  variables:
+    - name: check
+      expression: >-
+        authorizer.group('kardinal.io').resource(request.resource.resource)
+        .namespace(object.metadata.namespace).name(object.metadata.name)
+    - name: exempt
+      expression: >-
+        request.userInfo.username in {{ prepend (.Values.admission.controllerUsernames | default list) $controller | toJson }} ||
+        request.userInfo.username == 'system:serviceaccount:' + object.metadata.namespace +
+        ':' + {{ .Values.graph.serviceAccountName | squote }}
+    - name: pipeline
+      expression: "request.resource.resource == 'pipelines'"
+    - name: mayPause
+      expression: "variables.pipeline && variables.check.subresource('pause').check('update').allowed()"
+    - name: mayHold
+      expression: "variables.pipeline && variables.check.subresource('hold').check('update').allowed()"
+    - name: mayOverride
+      expression: "!variables.pipeline && variables.check.subresource('override').check('update').allowed()"
+    # The spec fields a limited caller may change.
+    - name: fields
+      expression: >-
+        variables.pipeline ?
+          (variables.mayPause ? ['paused'] : []) + (variables.mayHold ? ['holds'] : []) :
+          ['overrides']
+    - name: limited
+      expression: >-
+        !variables.exempt && (variables.mayPause || variables.mayHold || variables.mayOverride) &&
+        !variables.check.subresource('edit').check('update').allowed()
+    - name: serverSet
+      expression: "['managedFields', 'resourceVersion', 'generation']"
+    - name: oldOverrides
+      expression: "has(oldObject.spec.overrides) ? oldObject.spec.overrides : []"
+    - name: newOverrides
+      expression: "has(object.spec.overrides) ? object.spec.overrides : []"
+  validations:
+    - expression: >-
+        !variables.limited ||
+        (object.metadata.all(k, k in variables.serverSet ||
+           (k in oldObject.metadata && object.metadata[k] == oldObject.metadata[k])) &&
+         oldObject.metadata.all(k, k in variables.serverSet || k in object.metadata))
+      messageExpression: >-
+        'you may not change the metadata (labels, annotations, finalizers, ownerReferences) of this ' +
+        request.resource.resource + ': you have ' +
+        (variables.pipeline ? 'pipelines/pause or pipelines/hold' : 'policygates/override') + ' but not ' +
+        request.resource.resource + '/edit'
+      reason: Forbidden
+    - expression: >-
+        !variables.limited ||
+        (object.spec.all(k, k in variables.fields || (k in oldObject.spec && object.spec[k] == oldObject.spec[k])) &&
+         oldObject.spec.all(k, k in variables.fields || k in object.spec))
+      messageExpression: >-
+        (variables.pipeline ?
+          'you may change only spec.paused (with pipelines/pause) and spec.holds (with pipelines/hold) of this pipelines' :
+          'you may change only spec.overrides of this policygates') +
+        ' (you do not have ' + request.resource.resource + '/edit)'
+      reason: Forbidden
+    - expression: >-
+        !variables.limited || variables.pipeline ||
+        (size(variables.newOverrides) >= size(variables.oldOverrides) &&
+         variables.oldOverrides.all(o, o in variables.newOverrides))
+      message: spec.overrides is append-only for you; existing entries may not be changed or removed
+      reason: Forbidden
+    - expression: >-
+        !variables.limited || variables.pipeline ||
+        variables.newOverrides.all(o, o in variables.oldOverrides ||
+          (has(o.createdBy) && o.createdBy == request.userInfo.username))
+      messageExpression: >-
+        'every new spec.overrides entry must have createdBy "' + request.userInfo.username + '"'
+      reason: Forbidden
+    - expression: >-
+        !variables.limited || variables.pipeline ||
+        variables.newOverrides.all(o, o in variables.oldOverrides ||
+          (has(o.createdAt) && has(o.expiresAt) &&
+           timestamp(o.expiresAt) > timestamp(o.createdAt) &&
+           timestamp(o.expiresAt) - timestamp(o.createdAt) <= duration('{{ $maxOverride }}m')))
+      message: >-
+        every new spec.overrides entry needs createdAt and an expiresAt at most {{ $maxOverride }} minutes later
+      reason: Forbidden
+---
+{{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "scoped-writes") }}

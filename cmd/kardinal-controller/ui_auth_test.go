@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	policygaterecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 )
 
 // uiTestAssets stands in for the embedded React build.
@@ -170,6 +171,7 @@ func TestUIHandler_TokenReviewAuthorizesActions(t *testing.T) {
 		path       string
 		body       string
 		wantCode   int
+		wantBody   string
 		wantPaused bool
 		wantGateBy string
 	}{
@@ -188,10 +190,14 @@ func TestUIHandler_TokenReviewAuthorizesActions(t *testing.T) {
 			path: "/api/v1/ui/gates/team-a/no-weekend/approve", body: `{"reason":"x"}`, wantCode: http.StatusForbidden},
 		{name: "viewer lists pipelines", token: "viewer-token", method: http.MethodGet, path: "/api/v1/ui/pipelines",
 			wantCode: http.StatusOK},
-		{name: "namespace-scoped deployer cannot list all namespaces", token: "deployer-token", method: http.MethodGet,
-			path: "/api/v1/ui/pipelines", wantCode: http.StatusForbidden},
-		{name: "unrelated service account cannot read", token: "random-token", method: http.MethodGet,
-			path: "/api/v1/ui/pipelines", wantCode: http.StatusForbidden},
+		// Lists follow namespace RBAC: a namespace-scoped user sees its
+		// namespace, an unrelated one an empty list; neither is a 403.
+		{name: "namespace-scoped deployer lists its namespace", token: "deployer-token", method: http.MethodGet,
+			path: "/api/v1/ui/pipelines", wantCode: http.StatusOK, wantBody: `"namespace":"team-a"`},
+		{name: "unrelated service account lists nothing", token: "random-token", method: http.MethodGet,
+			path: "/api/v1/ui/pipelines", wantCode: http.StatusOK, wantBody: "[]"},
+		{name: "unrelated service account cannot read a Bundle graph", token: "random-token", method: http.MethodGet,
+			path: "/api/v1/ui/bundles/b/graph?namespace=team-a", wantCode: http.StatusForbidden},
 		{name: "unknown token", token: "nope", method: http.MethodGet, path: "/api/v1/ui/pipelines",
 			wantCode: http.StatusUnauthorized},
 	}
@@ -205,6 +211,9 @@ func TestUIHandler_TokenReviewAuthorizesActions(t *testing.T) {
 
 			rec := uiAuthDo(t, h, tt.method, tt.path, "Bearer "+tt.token, tt.body)
 			require.Equal(t, tt.wantCode, rec.Code, rec.Body.String())
+			if tt.wantBody != "" {
+				assert.Contains(t, rec.Body.String(), tt.wantBody)
+			}
 
 			var pl v1alpha1.Pipeline
 			require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "app"}, &pl))
@@ -246,28 +255,35 @@ func TestBuildUIAuth(t *testing.T) {
 	good := &rest.Config{Host: "https://127.0.0.1:6443"}
 	// client-go refuses a QPS limit without a burst.
 	bad := &rest.Config{Host: "https://127.0.0.1:6443", QPS: 5, Burst: 0}
+	review := reviewOptions{audiences: []string{"kardinal-promoter"}}
 	tests := []struct {
-		name        string
-		cfg         *rest.Config
-		static      string
-		tokenReview bool
-		wantErr     bool
-		wantReview  bool
+		name       string
+		cfg        *rest.Config
+		flags      uiAuthFlags
+		wantErr    string
+		wantReview bool
 	}{
 		{name: "open", cfg: bad},
-		{name: "static token wins over TokenReview", cfg: bad, static: "s3cret", tokenReview: true},
-		{name: "TokenReview", cfg: good, tokenReview: true, wantReview: true},
-		{name: "TokenReview client cannot be built", cfg: bad, tokenReview: true, wantErr: true},
+		{name: "static token and TokenReview refused", cfg: bad,
+			flags: uiAuthFlags{staticToken: "s3cret", tokenReview: true, review: review}, wantErr: "--ui-auth-static-overrides-tokenreview"},
+		{name: "static token wins over TokenReview when allowed", cfg: bad,
+			flags: uiAuthFlags{staticToken: "s3cret", tokenReview: true, allowStaticWithTokenReview: true, review: review}},
+		{name: "static token", cfg: bad, flags: uiAuthFlags{staticToken: "s3cret"}},
+		{name: "TokenReview", cfg: good, flags: uiAuthFlags{tokenReview: true, review: review}, wantReview: true},
+		{name: "TokenReview needs an audience", cfg: good, flags: uiAuthFlags{tokenReview: true}, wantErr: "audience"},
+		{name: "TokenReview client cannot be built", cfg: bad, flags: uiAuthFlags{tokenReview: true, review: review}, wantErr: "token reviewer"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			auth, err := buildUIAuth(tt.cfg, tt.static, tt.tokenReview, "team-a")
-			if tt.wantErr {
+			tt.flags.scopeNamespace = "team-a"
+			auth, err := buildUIAuth(tt.cfg, tt.flags)
+			if tt.wantErr != "" {
 				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tt.static, auth.staticToken)
+			assert.Equal(t, tt.flags.staticToken, auth.staticToken)
 			assert.Equal(t, tt.wantReview, auth.tokens != nil)
 			assert.Equal(t, tt.wantReview, auth.access != nil)
 			assert.Equal(t, "team-a", auth.scopeNamespace)
@@ -377,6 +393,100 @@ func TestUIHandler_BodyLimit(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	var resp map[string]string
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+}
+
+// exactAccess allows "user verb resource[/subresource] namespace" tuples.
+type exactAccess map[string]bool
+
+func (a exactAccess) Allowed(_ context.Context, u authv1.UserInfo, attrs authzv1.ResourceAttributes) (bool, string, error) {
+	res := attrs.Resource
+	if attrs.Subresource != "" {
+		res += "/" + attrs.Subresource
+	}
+	return a[u.Username+" "+attrs.Verb+" "+res+" "+attrs.Namespace], "", nil
+}
+
+// TestUIHandler_ActionsUseVirtualSubresources: in TokenReview mode pausing
+// needs update on pipelines/pause and overriding a gate update on
+// policygates/override, not update on the object: a caller with only the
+// action permission succeeds (the controller writes, createdBy is the
+// caller); one with update on the object but not the action is refused.
+func TestUIHandler_ActionsUseVirtualSubresources(t *testing.T) {
+	tokens := &uiTestTokens{users: map[string]string{"p": "promoter", "a": "approver", "e": "editor"}}
+	access := exactAccess{
+		"promoter update pipelines/pause team-a":      true,
+		"approver update policygates/override team-a": true,
+		"editor update pipelines team-a":              true,
+		"editor update policygates team-a":            true,
+		"editor get pipelines team-a":                 true,
+		"editor get policygates team-a":               true,
+	}
+	tests := []struct {
+		name, token, path, body string
+		want                    int
+	}{
+		{"pause with pipelines/pause only", "p", "/api/v1/ui/pause", `{"pipeline":"app","namespace":"team-a"}`, http.StatusOK},
+		{"pause with update pipelines but no pipelines/pause", "e", "/api/v1/ui/pause", `{"pipeline":"app","namespace":"team-a"}`, http.StatusForbidden},
+		{"override with policygates/override only", "a", "/api/v1/ui/gates/team-a/g/approve", `{"reason":"r"}`, http.StatusOK},
+		{"override with update policygates but no override", "e", "/api/v1/ui/gates/team-a/g/approve", `{"reason":"r"}`, http.StatusForbidden},
+		{"promoter cannot override", "p", "/api/v1/ui/gates/team-a/g/approve", `{"reason":"r"}`, http.StatusForbidden},
+		{"approver cannot pause", "a", "/api/v1/ui/pause", `{"pipeline":"app","namespace":"team-a"}`, http.StatusForbidden},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
+				&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"}},
+				&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "team-a"}},
+			).Build()
+			h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: access}, "", nil, zerolog.Nop())
+			rec := uiAuthDo(t, h, http.MethodPost, tt.path, "Bearer "+tt.token, tt.body)
+			require.Equal(t, tt.want, rec.Code, rec.Body.String())
+			var p v1alpha1.Pipeline
+			require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "app"}, &p))
+			var g v1alpha1.PolicyGate
+			require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "g"}, &g))
+			if tt.want != http.StatusOK {
+				assert.False(t, p.Spec.Paused, "nothing written")
+				assert.Empty(t, g.Spec.Overrides, "nothing written")
+				return
+			}
+			if strings.Contains(tt.path, "pause") {
+				assert.True(t, p.Spec.Paused)
+			} else {
+				require.Len(t, g.Spec.Overrides, 1)
+				assert.Equal(t, "approver", g.Spec.Overrides[0].CreatedBy)
+			}
+		})
+	}
+}
+
+// TestGateOverrideCapDefault: the UI's default cap is the chart's
+// controller.gateOverrideMaxMinutes default (test/helm TestGateOverrideCapIsOneValue).
+func TestGateOverrideCapDefault(t *testing.T) {
+	assert.Equal(t, 1440, maxGateOverrideMinutes)
+	assert.Equal(t, policygaterecon.DefaultMaxOverride, time.Duration(maxGateOverrideMinutes)*time.Minute,
+		"the UI default is the reconciler default")
+}
+
+// TestApplyGateOverrideCap (#1511 QA): --gate-override-max-minutes sets the
+// reconciler's cap and the UI API's bound together: with 30 the UI accepts a
+// 30-minute override and refuses 31 minutes.
+func TestApplyGateOverrideCap(t *testing.T) {
+	saved := maxGateOverrideMinutes
+	t.Cleanup(func() { maxGateOverrideMinutes = saved })
+	r := &policygaterecon.Reconciler{}
+	applyGateOverrideCap(30, r)
+	assert.Equal(t, 30*time.Minute, r.MaxOverride)
+	assert.Equal(t, 30, maxGateOverrideMinutes)
+
+	for minutes, want := range map[int]int{30: http.StatusOK, 31: http.StatusBadRequest} {
+		c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
+			&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "team-a"}}).Build()
+		h := newUIHandler(c, nil, uiAuthConfig{}, "", nil, zerolog.Nop())
+		rec := uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/gates/team-a/g/approve", "",
+			`{"reason":"r","expiresInMinutes":`+strconv.Itoa(minutes)+`}`)
+		assert.Equal(t, want, rec.Code, "%d minutes: %s", minutes, rec.Body.String())
+	}
 }
 
 // holdAccess allows every kardinal.io verb in team-a, and the hold
@@ -533,4 +643,112 @@ func TestUIHandler_Approvals(t *testing.T) {
 	var l v1alpha1.ApprovalList
 	require.NoError(t, c2.List(ctx, &l))
 	assert.Empty(t, l.Items)
+}
+
+// holderAccess is a promoter: it may read every kardinal.io kind in team-a,
+// create Bundles and update pipelines/hold, but not update Pipelines.
+type holderAccess struct{}
+
+func (holderAccess) Allowed(_ context.Context, _ authv1.UserInfo, attrs authzv1.ResourceAttributes) (bool, string, error) {
+	if attrs.Group != "kardinal.io" || attrs.Namespace != "team-a" {
+		return false, "", nil
+	}
+	switch {
+	case attrs.Subresource == "hold":
+		return attrs.Resource == "pipelines" && attrs.Verb == "update", "", nil
+	case attrs.Subresource != "":
+		return false, "", nil
+	case attrs.Verb == "get", attrs.Verb == "list", attrs.Verb == "watch":
+		return true, "", nil
+	case attrs.Verb == "create":
+		return attrs.Resource == "bundles", "", nil
+	}
+	return false, "", nil
+}
+
+// TestUIHandler_HoldWithoutPipelineUpdate (#1511 QA): the promoter role holds
+// pipelines/hold but not update on Pipelines. Rolling back with a hold and
+// releasing it through the UI work: the controller writes spec.holds, the
+// plan's reads and the Bundle create go through the caller's client.
+func TestUIHandler_HoldWithoutPipelineUpdate(t *testing.T) {
+	tokens := &uiTestTokens{users: map[string]string{"p": "promoter"}}
+	ctx := context.Background()
+	t0 := time.Now().Add(-2 * time.Hour)
+	bundle := func(name, tag string, minute int) *v1alpha1.Bundle {
+		return &v1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a",
+				CreationTimestamp: metav1.NewTime(t0.Add(time.Duration(minute) * time.Minute))},
+			Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "app",
+				Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/o/app", Tag: tag}}},
+			Status: v1alpha1.BundleStatus{Phase: "Verified"},
+		}
+	}
+	// The PromotionSteps that say v1, then v2, were Verified in prod.
+	step := func(b string, minute int) *v1alpha1.PromotionStep {
+		at := metav1.NewTime(t0.Add(time.Duration(minute) * time.Minute))
+		return &v1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: b + "-prod", Namespace: "team-a", CreationTimestamp: at,
+				Labels: map[string]string{"kardinal.io/pipeline": "app", "kardinal.io/bundle": b, "kardinal.io/environment": "prod"}},
+			Spec: v1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: b, Environment: "prod"},
+			Status: v1alpha1.PromotionStepStatus{State: "Verified", Conditions: []metav1.Condition{
+				{Type: "Verified", Status: metav1.ConditionTrue, Reason: "Verified", LastTransitionTime: at}}},
+		}
+	}
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
+		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"},
+			Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "prod"}}}},
+		bundle("v1", "1.0", 0), bundle("v2", "2.0", 10), step("v1", 1), step("v2", 11),
+	).Build()
+	h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: holderAccess{}}, "", nil, zerolog.Nop())
+
+	rec := uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/rollback", "Bearer p",
+		`{"pipeline":"app","namespace":"team-a","environment":"prod","hold":true,"holdReason":"incident"}`)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	var p v1alpha1.Pipeline
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Namespace: "team-a", Name: "app"}, &p))
+	require.Len(t, p.Spec.Holds, 1, "the controller wrote the hold")
+	assert.Equal(t, "promoter", p.Spec.Holds[0].CreatedBy)
+	var bundles v1alpha1.BundleList
+	require.NoError(t, c.List(ctx, &bundles, client.InNamespace("team-a")))
+	assert.Len(t, bundles.Items, 3, "the rollback Bundle was created")
+
+	rec = uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/release-hold", "Bearer p",
+		`{"pipeline":"app","namespace":"team-a","environment":"prod"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Namespace: "team-a", Name: "app"}, &p))
+	assert.Empty(t, p.Spec.Holds, "the controller released the hold")
+}
+
+// recordingAccess is holderAccess without create on bundles, recording each
+// check.
+type recordingAccess struct{ checked *[]authzv1.ResourceAttributes }
+
+func (a recordingAccess) Allowed(ctx context.Context, u authv1.UserInfo, attrs authzv1.ResourceAttributes) (bool, string, error) {
+	*a.checked = append(*a.checked, attrs)
+	if attrs.Verb == "create" {
+		return false, "", nil
+	}
+	return holderAccess{}.Allowed(ctx, u, attrs)
+}
+
+// TestUIHandler_HoldNeedsBundleCreateFirst (#1511 QA): a caller with
+// pipelines/hold who cannot create Bundles is refused before the hold is
+// checked or written, so no hold appears on the Pipeline even for a moment.
+func TestUIHandler_HoldNeedsBundleCreateFirst(t *testing.T) {
+	tokens := &uiTestTokens{users: map[string]string{"h": "holder"}}
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
+		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"},
+			Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "prod"}}}},
+	).Build()
+	var checked []authzv1.ResourceAttributes
+	h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: recordingAccess{checked: &checked}}, "", nil, zerolog.Nop())
+	rec := uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/rollback", "Bearer h",
+		`{"pipeline":"app","namespace":"team-a","environment":"prod","hold":true,"holdReason":"incident"}`)
+	assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	for _, a := range checked {
+		assert.NotEqual(t, "hold", a.Subresource, "pipelines/hold is not checked after create bundles is denied")
+	}
+	var p v1alpha1.Pipeline
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "app"}, &p))
+	assert.Empty(t, p.Spec.Holds)
 }

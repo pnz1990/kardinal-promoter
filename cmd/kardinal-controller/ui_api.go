@@ -44,8 +44,20 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
-// maxGateOverrideMinutes bounds a UI gate override to one day.
-const maxGateOverrideMinutes = 24 * 60
+// maxGateOverrideMinutes bounds a UI gate override (--gate-override-max-minutes,
+// chart controller.gateOverrideMaxMinutes; one day by default). The chart's
+// scoped-writes admission policy applies the same bound to callers limited to
+// policygates/override.
+var maxGateOverrideMinutes = 24 * 60
+
+// applyGateOverrideCap sets the one override cap, --gate-override-max-minutes,
+// for the PolicyGate reconciler (how long an override counts) and the UI API
+// (the longest override it accepts). The chart's scoped-writes policy reads
+// the same Helm value (test/helm TestGateOverrideCapIsOneValue).
+func applyGateOverrideCap(minutes int, r *policygate.Reconciler) {
+	maxGateOverrideMinutes = minutes
+	r.MaxOverride = time.Duration(minutes) * time.Minute
+}
 
 // uiPipelineResponse is the JSON shape for a Pipeline in the UI API.
 type uiPipelineResponse struct {
@@ -1473,15 +1485,22 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 		CreatedAt: &createdAt,
 		CreatedBy: createdBy,
 	}
+	// In TokenReview mode the caller needs only the override action
+	// (policygates/override), not update on the gate: the controller writes it.
+	writer, err := s.actionClient(r.Context(), "policygates", "override", gateNS, gateName)
+	if err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	// Re-read and re-apply on a conflict: the reconciler and other approvers
 	// write the same gate, and a stale resourceVersion is not a user error.
-	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var gate v1alpha1.PolicyGate
-		if err := s.client.Get(r.Context(), client.ObjectKey{Name: gateName, Namespace: gateNS}, &gate); err != nil {
+		if err := writer.Get(r.Context(), client.ObjectKey{Name: gateName, Namespace: gateNS}, &gate); err != nil {
 			return err
 		}
 		gate.Spec.Overrides = append(gate.Spec.Overrides, override)
-		return s.client.Update(r.Context(), &gate)
+		return writer.Update(r.Context(), &gate)
 	})
 	switch {
 	case apierrors.IsNotFound(err):

@@ -1028,7 +1028,7 @@ func TestUI_APITokenReview(t *testing.T) {
 		_, err := e.Kube.CoreV1().ServiceAccounts(ns).Create(ctx, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: sa}}, metav1.CreateOptions{})
 		require.NoError(t, err)
 		tr, err := e.Kube.CoreV1().ServiceAccounts(ns).CreateToken(ctx, sa, &authnv1.TokenRequest{
-			Spec: authnv1.TokenRequestSpec{ExpirationSeconds: ptr.To[int64](1800)}}, metav1.CreateOptions{})
+			Spec: authnv1.TokenRequestSpec{ExpirationSeconds: ptr.To[int64](1800), Audiences: []string{"kardinal-promoter"}}}, metav1.CreateOptions{})
 		require.NoError(t, err)
 		return tr.Status.Token
 	}
@@ -1197,7 +1197,7 @@ func TestUI_APIRequesterTokenReview(t *testing.T) {
 	_, err = e.Kube.CoreV1().ServiceAccounts(a.ns).Create(ctx, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: sa}}, metav1.CreateOptions{})
 	require.NoError(t, err)
 	tr, err := e.Kube.CoreV1().ServiceAccounts(a.ns).CreateToken(ctx, sa, &authnv1.TokenRequest{
-		Spec: authnv1.TokenRequestSpec{ExpirationSeconds: ptr.To[int64](1800)}}, metav1.CreateOptions{})
+		Spec: authnv1.TokenRequestSpec{ExpirationSeconds: ptr.To[int64](1800), Audiences: []string{"kardinal-promoter"}}}, metav1.CreateOptions{})
 	require.NoError(t, err)
 	user := "system:serviceaccount:" + a.ns + ":" + sa
 	role := &rbacv1.Role{
