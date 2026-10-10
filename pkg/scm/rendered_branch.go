@@ -25,7 +25,7 @@ type BranchCloner interface {
 	// it creates an empty repository in dir with url as origin instead, and
 	// reports created; the first commit then becomes the branch's root commit
 	// when it is pushed. depth 0 clones the whole history.
-	CloneOrInit(ctx context.Context, url, branch, dir, token string, depth int) (created bool, err error)
+	CloneOrInit(ctx context.Context, url, branch, dir string, auth GitAuth, depth int) (created bool, err error)
 }
 
 // CommitMessage is a commit and its message.
@@ -43,16 +43,23 @@ type HistoryReader interface {
 }
 
 // CloneOrInit implements BranchCloner.
-func (c *GoGitClient) CloneOrInit(ctx context.Context, url, branch, dir, token string, depth int) (bool, error) {
+func (c *GoGitClient) CloneOrInit(ctx context.Context, url, branch, dir string, auth GitAuth, depth int) (bool, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return false, fmt.Errorf("create clone dir for %s: %w", RedactURL(url), err)
 	}
-	_, err := gogit.PlainCloneContext(ctx, dir, false, &gogit.CloneOptions{
+	am, err := authMethod(url, auth)
+	if err != nil {
+		return false, fmt.Errorf("git clone %s: %w", RedactURL(url), err)
+	}
+	proxyOpts, release := sshScope(ctx, am)
+	defer release()
+	_, err = gogit.PlainCloneContext(ctx, dir, false, &gogit.CloneOptions{
 		URL:           url,
 		Depth:         depth,
 		SingleBranch:  true,
 		ReferenceName: plumbing.NewBranchReferenceName(branch),
-		Auth:          httpAuth(url, token),
+		Auth:          am,
+		ProxyOptions:  proxyOpts,
 	})
 	if err == nil {
 		return false, nil
@@ -73,7 +80,7 @@ func (c *GoGitClient) CloneOrInit(ctx context.Context, url, branch, dir, token s
 	if err != nil {
 		return false, fmt.Errorf("add origin %s: %w", RedactURL(url), err)
 	}
-	if _, err := rem.ListContext(ctx, &gogit.ListOptions{Auth: httpAuth(url, token)}); err != nil &&
+	if _, err := rem.ListContext(ctx, &gogit.ListOptions{Auth: am, ProxyOptions: proxyOpts}); err != nil &&
 		!errors.Is(err, transport.ErrEmptyRemoteRepository) {
 		return false, fmt.Errorf("git ls-remote %s: %s", RedactURL(url), gitErrorText(err))
 	}
@@ -215,13 +222,19 @@ func (c *GoGitClient) ReachableFrom(_ context.Context, dir, commit, branch strin
 type BranchHeadReader interface {
 	// RemoteBranchHead returns the commit branch points at on url, or ""
 	// when the branch does not exist.
-	RemoteBranchHead(ctx context.Context, url, branch, token string) (string, error)
+	RemoteBranchHead(ctx context.Context, url, branch string, auth GitAuth) (string, error)
 }
 
 // RemoteBranchHead implements BranchHeadReader.
-func (c *GoGitClient) RemoteBranchHead(ctx context.Context, url, branch, token string) (string, error) {
+func (c *GoGitClient) RemoteBranchHead(ctx context.Context, url, branch string, auth GitAuth) (string, error) {
+	am, err := authMethod(url, auth)
+	if err != nil {
+		return "", fmt.Errorf("git ls-remote %s: %w", RedactURL(url), err)
+	}
+	proxyOpts, release := sshScope(ctx, am)
+	defer release()
 	rem := gogit.NewRemote(memory.NewStorage(), &config.RemoteConfig{Name: "origin", URLs: []string{url}})
-	refs, err := rem.ListContext(ctx, &gogit.ListOptions{Auth: httpAuth(url, token)})
+	refs, err := rem.ListContext(ctx, &gogit.ListOptions{Auth: am, ProxyOptions: proxyOpts})
 	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
 		return "", nil
 	}

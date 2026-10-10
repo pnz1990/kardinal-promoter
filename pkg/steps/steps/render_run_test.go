@@ -6,6 +6,7 @@ package steps_test
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -91,7 +92,7 @@ type headGit struct {
 	err  error
 }
 
-func (g headGit) RemoteBranchHead(context.Context, string, string, string) (string, error) {
+func (g headGit) RemoteBranchHead(context.Context, string, string, scm.GitAuth) (string, error) {
 	return g.head, g.err
 }
 
@@ -169,5 +170,62 @@ func TestRenderStep_NoChangesChecksTheHead(t *testing.T) {
 			assert.True(t, errors.Is(err, parentsteps.ErrPermanent))
 			assert.Contains(t, res.Message, tc.wantErr)
 		})
+	}
+}
+
+// authGit records the GitAuth the layout: branch calls are made with.
+type authGit struct {
+	scm.GitClient
+	head  string
+	auths map[string]scm.GitAuth
+}
+
+func (g *authGit) RemoteBranchHead(_ context.Context, _, _ string, auth scm.GitAuth) (string, error) {
+	g.auths["RemoteBranchHead"] = auth
+	return g.head, nil
+}
+
+func (g *authGit) CloneOrInit(_ context.Context, _, _, _ string, auth scm.GitAuth, _ int) (bool, error) {
+	g.auths["CloneOrInit"] = auth
+	return false, errors.New("stop after the clone")
+}
+
+func (g *authGit) HeadCommit(context.Context, string) (string, error) { return g.head, nil }
+
+// TestRenderBranch_SSHPipelineAuth (#1515, after #1491): a layout: branch
+// Pipeline with an ssh spec.git.url clones (or creates) its rendered branch
+// and reads its head with the git Secret's ssh key and known_hosts, not a
+// token alone. The transport itself is TestGoGitClient_RenderedBranchOverSSH.
+//
+// Covers REND-SSH-02.
+func TestRenderBranch_SSHPipelineAuth(t *testing.T) {
+	git := parentsteps.GitConfig{URL: "ssh://git@git.example.com/acme/web.git", Branch: "env/prod", SourceBranch: "main",
+		SSHPrivateKey: []byte("key"), SSHKnownHosts: []byte("git.example.com ssh-ed25519 AAAA")}
+	want := git.Auth()
+	commit := strings.Repeat("c", 40)
+
+	g := &authGit{head: commit, auths: map[string]scm.GitAuth{}}
+	clone, err := parentsteps.Lookup("git-clone")
+	require.NoError(t, err)
+	t.Setenv(parentsteps.RenderJobEnv, "1")
+	_, err = clone.Execute(context.Background(), &parentsteps.StepState{
+		PipelineName: "web", BundleName: "web-v2", WorkDir: filepath.Join(t.TempDir(), "w"),
+		Render:      &parentsteps.RenderContext{Namespace: "team"},
+		Environment: v1alpha1.EnvironmentSpec{Name: "prod", Path: "environments/prod", Layout: "branch"},
+		Bundle:      v1alpha1.BundleSpec{Type: "image", Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/org/web", Tag: "2"}}},
+		Git:         git, GitClient: g, Outputs: map[string]string{},
+	})
+	require.ErrorContains(t, err, "stop after the clone")
+
+	render, err := parentsteps.Lookup(parentsteps.RenderStepName)
+	require.NoError(t, err)
+	_, err = render.Execute(context.Background(), &parentsteps.StepState{Outputs: map[string]string{"renderRequested": "true"},
+		GitClient: g, Sequence: []string{"render", "health-check"}, Git: git,
+		LiveRenders: []v1alpha1.LiveRenderRun{{Name: "rr", Phase: "Succeeded",
+			Result: &v1alpha1.RenderRunResult{CommitSHA: commit, Branch: "env/prod"}}}})
+	require.NoError(t, err)
+
+	for _, call := range []string{"CloneOrInit", "RemoteBranchHead"} {
+		assert.Equal(t, want, g.auths[call], call)
 	}
 }

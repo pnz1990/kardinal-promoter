@@ -489,3 +489,38 @@ func TestRenderRun_RetiredLostRenderUnconfirmed(t *testing.T) {
 	assert.Equal(t, []string{"web-v2"}, got.Status.UnconfirmedBundles)
 	assert.Equal(t, []string{strings.Repeat("1", 64)}, got.Status.KnownMarkerDigests)
 }
+
+// TestRenderRun_GitSecretKeys (#1515): the render Job mounts the keys of
+// the git Secret its spec.git.url authenticates with: token for http(s),
+// sshPrivateKey and knownHosts for ssh (ssh:// or scp-like).
+//
+// Covers REND-SSH-02.
+func TestRenderRun_GitSecretKeys(t *testing.T) {
+	for _, tc := range []struct {
+		url  string
+		want []corev1.KeyToPath
+	}{
+		{url: "https://git.example.com/org/web.git", want: []corev1.KeyToPath{{Key: "token", Path: "token"}}},
+		{url: "ssh://git@git.example.com/org/web.git",
+			want: []corev1.KeyToPath{{Key: "sshPrivateKey", Path: "sshPrivateKey"}, {Key: "knownHosts", Path: "knownHosts"}}},
+		{url: "git@git.example.com:org/web.git",
+			want: []corev1.KeyToPath{{Key: "sshPrivateKey", Path: "sshPrivateKey"}, {Key: "knownHosts", Path: "knownHosts"}}},
+	} {
+		t.Run(tc.url, func(t *testing.T) {
+			rr := run("rr")
+			rr.Spec.Git.URL = tc.url
+			e := newEnv(t, rr)
+			e.reconcile(t, "rr")
+			e.reconcile(t, "rr")
+			pod := e.job(t, "rr").Spec.Template.Spec
+			var items []corev1.KeyToPath
+			for _, v := range pod.Volumes {
+				if v.Name == "git" {
+					items = v.Secret.Items
+				}
+			}
+			assert.Equal(t, tc.want, items)
+			assert.Equal(t, renderjob.GitSecretDir, pod.Containers[0].VolumeMounts[len(pod.Containers[0].VolumeMounts)-1].MountPath)
+		})
+	}
+}

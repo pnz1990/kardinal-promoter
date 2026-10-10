@@ -33,8 +33,15 @@ import (
 const (
 	// ConfigEnv holds the JSON Config.
 	ConfigEnv = "KARDINAL_RENDER_CONFIG"
+	// GitSecretDir is where the git Secret's keys are mounted: token for an
+	// http(s) spec.git.url, sshPrivateKey and knownHosts for an ssh one.
+	GitSecretDir = "/var/run/kardinal/git"
 	// TokenFile is where the git Secret's token key is mounted.
-	TokenFile = "/var/run/kardinal/git/token"
+	TokenFile = GitSecretDir + "/token"
+	// SSHPrivateKeyFile and KnownHostsFile are where the git Secret's
+	// sshPrivateKey and knownHosts keys are mounted.
+	SSHPrivateKeyFile = GitSecretDir + "/sshPrivateKey"
+	KnownHostsFile    = GitSecretDir + "/knownHosts"
 	// WorkDir is the emptyDir the render works in.
 	WorkDir = "/work"
 	// TerminationMessagePath is where the Result is written.
@@ -90,9 +97,9 @@ func ConfigFromRun(run *v1alpha1.RenderRun, authorName, authorEmail string) Conf
 	}
 }
 
-// Run renders cfg in workDir and returns what it did. token is the git
-// token ("" for none).
-func Run(ctx context.Context, cfg Config, workDir, token string, git scm.GitClient) (Result, error) {
+// Run renders cfg in workDir and returns what it did. auth is the git
+// Secret's credentials (empty for none).
+func Run(ctx context.Context, cfg Config, workDir string, auth scm.GitAuth, git scm.GitClient) (Result, error) {
 	env := v1alpha1.EnvironmentSpec{Name: cfg.Environment, Path: cfg.Path, Update: cfg.Update, Render: cfg.Render,
 		Layout: "branch"}
 	seq := steps.RenderJobSequence(cfg.Bundle.Type, cfg.Update.Strategy)
@@ -110,7 +117,8 @@ func Run(ctx context.Context, cfg Config, workDir, token string, git scm.GitClie
 		WorkDir:      filepath.Join(workDir, "rendered"),
 		Outputs:      map[string]string{},
 		Git: steps.GitConfig{URL: cfg.Git.URL, Branch: cfg.Git.RenderedBranch, SourceBranch: cfg.Git.SourceBranch,
-			Token: token, AuthorName: cfg.AuthorName, AuthorEmail: cfg.AuthorEmail},
+			Token: auth.Token, SSHPrivateKey: auth.SSHPrivateKey, SSHKnownHosts: auth.SSHKnownHosts,
+			AuthorName: cfg.AuthorName, AuthorEmail: cfg.AuthorEmail},
 		GitClient: git,
 		Sequence:  stateSeq,
 		Render: &steps.RenderContext{Namespace: cfg.Namespace, KnownMarkerDigests: cfg.KnownMarkerDigests,
@@ -187,12 +195,12 @@ var (
 	runRender   = Run
 	newGit      = func() scm.GitClient { return scm.NewGoGitClient() }
 	messagePath = TerminationMessagePath
-	tokenPath   = TokenFile
+	secretDir   = GitSecretDir
 	workDir     = WorkDir
 )
 
 // Main is the kardinal-render entry point: it reads the Config and the
-// token, locks the process's network to the Pipeline's git host, renders,
+// git Secret's keys, locks the process's network to the Pipeline's git host, renders,
 // writes the termination message and returns the exit code: 0, ExitPermanent
 // for a render that failed for good (the Job does not retry it), 1 otherwise.
 func Main(ctx context.Context) int {
@@ -204,10 +212,7 @@ func Main(ctx context.Context) int {
 		write(Result{Error: fmt.Sprintf("read %s: %v", ConfigEnv, err)})
 		return 1
 	}
-	token := ""
-	if b, err := os.ReadFile(tokenPath); err == nil {
-		token = strings.TrimSpace(string(b))
-	}
+	auth := readGitAuth(secretDir)
 	if err := lockNetwork(cfg.Git.URL); err != nil {
 		write(Result{Error: err.Error()})
 		return 1
@@ -216,7 +221,7 @@ func Main(ctx context.Context) int {
 		write(Result{Error: err.Error()})
 		return 1
 	}
-	res, err := runRender(ctx, cfg, workDir, token, newGit())
+	res, err := runRender(ctx, cfg, workDir, auth, newGit())
 	if err != nil {
 		write(Result{Error: scm.RedactText(err.Error())})
 		if errors.Is(err, steps.ErrPermanent) {
@@ -226,6 +231,20 @@ func Main(ctx context.Context) int {
 	}
 	write(res)
 	return 0
+}
+
+// readGitAuth reads the git Secret's keys mounted in dir; a key that is not
+// mounted is empty.
+func readGitAuth(dir string) scm.GitAuth {
+	read := func(name string) []byte {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			return nil
+		}
+		return b
+	}
+	return scm.GitAuth{Token: strings.TrimSpace(string(read("token"))),
+		SSHPrivateKey: read("sshPrivateKey"), SSHKnownHosts: read("knownHosts")}
 }
 
 // Digest is the sha256 of b, hex.

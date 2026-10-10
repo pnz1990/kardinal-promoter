@@ -80,7 +80,7 @@ func cloneRendered(ctx context.Context, state *parentsteps.StepState) (parentste
 	if state.Bundle.Provenance != nil && state.Bundle.Provenance.RollbackOf != "" {
 		depth = rollbackHistoryDepth
 	}
-	created, err := bc.CloneOrInit(ctx, state.Git.URL, state.Git.Branch, state.WorkDir, state.Git.Token, depth)
+	created, err := bc.CloneOrInit(ctx, state.Git.URL, state.Git.Branch, state.WorkDir, state.Git.Auth(), depth)
 	if err != nil {
 		msg := scm.RedactText(err.Error())
 		return fail(msg, errors.New(msg))

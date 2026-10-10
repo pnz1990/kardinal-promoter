@@ -40,6 +40,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/renderjob"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	stepsimpl "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
 
@@ -423,8 +424,8 @@ func (r *Reconciler) JobSpec(run *v1alpha1.RenderRun) (*batchv1.JobSpec, error) 
 	if name := run.Spec.Git.SecretName; name != "" {
 		mode := int32(0o440)
 		volumes = append(volumes, corev1.Volume{Name: "git", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
-			SecretName: name, DefaultMode: &mode, Items: []corev1.KeyToPath{{Key: "token", Path: "token"}}}}})
-		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{Name: "git", MountPath: "/var/run/kardinal/git", ReadOnly: true})
+			SecretName: name, DefaultMode: &mode, Items: gitSecretItems(run.Spec.Git.URL)}}})
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{Name: "git", MountPath: renderjob.GitSecretDir, ReadOnly: true})
 	}
 	var pullSecrets []corev1.LocalObjectReference
 	for _, n := range r.ImagePullSecrets {
@@ -801,4 +802,16 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&v1alpha1.RenderRun{}).
 		Owns(&batchv1.Job{}).
 		Complete(r)
+}
+
+// gitSecretItems are the keys of the git Secret the render Job mounts: the
+// ones its spec.git.url authenticates with, as the controller reads them
+// (sshPrivateKey and knownHosts for an ssh URL, token otherwise). A key the
+// Secret lacks fails the Pod's volume mount, so the Job does not start;
+// the controller's own steps say which key is missing first.
+func gitSecretItems(url string) []corev1.KeyToPath {
+	if scm.IsSSHRemote(url) {
+		return []corev1.KeyToPath{{Key: "sshPrivateKey", Path: "sshPrivateKey"}, {Key: "knownHosts", Path: "knownHosts"}}
+	}
+	return []corev1.KeyToPath{{Key: "token", Path: "token"}}
 }

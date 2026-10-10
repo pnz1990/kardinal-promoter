@@ -138,7 +138,10 @@ The RenderRun reconciler creates the Job, owned by the RenderRun, from the `kard
 (Helm `render.image`, controller flag `--render-image`):
 
 - it reads the DRY source and pushes the render with the Pipeline's own git Secret
-  (`spec.git.secretRef`, its `token` key mounted read-only), never the controller's credentials;
+  (`spec.git.secretRef`), never the controller's credentials. Only the keys its `spec.git.url` uses
+  are mounted, read-only: `token` for an `https://` URL, `sshPrivateKey` and `knownHosts` for an ssh
+  one (`ssh://` or `git@host:path`, see [SSH git authentication](scm-providers.md#ssh-git-authentication)). A key the Secret lacks
+  keeps the Pod from starting, and the RenderRun message says so;
 - it runs as the ServiceAccount `kardinal-render` (`render.serviceAccountName`), which the
   controller creates in the namespace without a token and binds to no role, with
   `automountServiceAccountToken: false`: the Pod has no Kubernetes credentials at all;
@@ -146,8 +149,9 @@ The RenderRun reconciler creates the Job, owned by the RenderRun, from the `kard
   dropped, the `RuntimeDefault` seccomp profile, no service links, and an `emptyDir` for its work;
 - no network but git to the Pipeline's repository: inside the render process every request through
   Go's default HTTP transport is refused (so a generator or transformer that fetches a URL reaches
-  nothing), and git dials only the host and port of `spec.git.url`, through the egress guard (no
-  loopback, link-local or cloud metadata addresses), never through a proxy;
+  nothing), and git dials only the host and port of `spec.git.url` (port 22 for an ssh URL without
+  one), through the egress guard (no loopback, link-local or cloud metadata addresses), never
+  through a proxy. Over ssh the host key must be in `knownHosts`;
 - CPU and memory limits (`render.resources.limits`, default 1 CPU and 512Mi) and an
   `activeDeadlineSeconds` (`render.timeout`, default 5m). A render that runs out of memory fails
   with `the render ran out of memory (512Mi) and was stopped`; one that runs out of time is ended by
@@ -160,7 +164,8 @@ The RenderRun reconciler creates the Job, owned by the RenderRun, from the `kard
   (`--render-image-pull-secrets`); they must exist in the Pipeline namespace;
 - `render.networkPolicy.enabled` adds, in each namespace of `render.networkPolicy.namespaces`, a
   NetworkPolicy that lets the render Pods reach DNS and the git hosts of
-  `render.networkPolicy.gitEgress` only (needs a CNI that enforces NetworkPolicy). It is off by
+  `render.networkPolicy.gitEgress` only (needs a CNI that enforces NetworkPolicy; open the ssh
+  port of the git host there for an ssh `spec.git.url`). It is off by
   default, and **recommended**: it is the boundary outside the render process.
 
 The result comes back through the Pod's termination message, which the RenderRun reconciler

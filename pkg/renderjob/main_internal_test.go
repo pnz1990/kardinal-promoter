@@ -52,29 +52,32 @@ func TestMain_LocksTheNetworkAndMapsExitCodes(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			msg, tok := filepath.Join(dir, "termination-log"), filepath.Join(dir, "token")
-			require.NoError(t, os.WriteFile(tok, []byte("tok3n\n"), 0o600))
+			msg := filepath.Join(dir, "termination-log")
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "token"), []byte("tok3n\n"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "sshPrivateKey"), []byte("key"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "knownHosts"), []byte("hosts"), 0o600))
 			var locked []string
 			ran := false
-			pLock, pRun, pGit, pMsg, pTok, pWork := lockNetwork, runRender, newGit, messagePath, tokenPath, workDir
+			pLock, pRun, pGit, pMsg, pDir, pWork := lockNetwork, runRender, newGit, messagePath, secretDir, workDir
 			t.Cleanup(func() {
-				lockNetwork, runRender, newGit, messagePath, tokenPath, workDir = pLock, pRun, pGit, pMsg, pTok, pWork
+				lockNetwork, runRender, newGit, messagePath, secretDir, workDir = pLock, pRun, pGit, pMsg, pDir, pWork
 			})
 			lockNetwork = func(url string) error {
 				locked = append(locked, url)
 				return tc.lockErr
 			}
-			runRender = func(_ context.Context, c Config, wd, token string, _ scm.GitClient) (Result, error) {
+			runRender = func(_ context.Context, c Config, wd string, auth scm.GitAuth, _ scm.GitClient) (Result, error) {
 				ran = true
 				assert.Equal(t, []string{cfg.Git.URL}, locked, "the network is locked before the render")
 				assert.Equal(t, "1", os.Getenv(steps.RenderJobEnv))
-				assert.Equal(t, "tok3n", token)
+				assert.Equal(t, scm.GitAuth{Token: "tok3n", SSHPrivateKey: []byte("key"), SSHKnownHosts: []byte("hosts")}, auth,
+					"the git Secret's mounted keys")
 				assert.Equal(t, dir, wd)
 				assert.Equal(t, cfg.BundleName, c.BundleName)
 				return Result{RenderRunResult: v1alpha1.RenderRunResult{CommitSHA: "c0ffee"}}, tc.runErr
 			}
 			newGit = func() scm.GitClient { return nil }
-			messagePath, tokenPath, workDir = msg, tok, dir
+			messagePath, secretDir, workDir = msg, dir, dir
 			t.Setenv(ConfigEnv, tc.config)
 			t.Setenv(steps.RenderJobEnv, "")
 

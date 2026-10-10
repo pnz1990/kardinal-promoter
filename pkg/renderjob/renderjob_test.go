@@ -65,7 +65,7 @@ func TestRun(t *testing.T) {
 	url := remote(t)
 	git := scm.NewGoGitClient()
 
-	res, err := renderjob.Run(ctx, config(url, false), t.TempDir(), "", git)
+	res, err := renderjob.Run(ctx, config(url, false), t.TempDir(), scm.GitAuth{}, git)
 	require.NoError(t, err)
 	assert.Equal(t, "env/prod", res.Branch)
 	assert.Len(t, res.CommitSHA, 40)
@@ -74,16 +74,16 @@ func TestRun(t *testing.T) {
 	assert.Equal(t, "kustomize", res.Renderer)
 	assert.Equal(t, 1, res.Objects)
 	assert.False(t, res.NoChanges)
-	head, err := git.RemoteBranchHead(ctx, url, "env/prod", "")
+	head, err := git.RemoteBranchHead(ctx, url, "env/prod", scm.GitAuth{})
 	require.NoError(t, err)
 	assert.Equal(t, res.CommitSHA, head, "ls-remote sees the pushed commit")
-	none, err := git.RemoteBranchHead(ctx, url, "env/none", "")
+	none, err := git.RemoteBranchHead(ctx, url, "env/none", scm.GitAuth{})
 	require.NoError(t, err)
 	assert.Empty(t, none)
 
 	again := config(url, false)
 	again.KnownMarkerDigests = []string{res.MarkerDigest}
-	res2, err := renderjob.Run(ctx, again, t.TempDir(), "", git)
+	res2, err := renderjob.Run(ctx, again, t.TempDir(), scm.GitAuth{}, git)
 	require.NoError(t, err)
 	// A retry of the same Bundle whose first result was lost: the branch
 	// head is already its render, which the result reports again.
@@ -94,7 +94,7 @@ func TestRun(t *testing.T) {
 	// wrote its result, so the RenderRun's known digests lack its own marker.
 	retry := config(url, false)
 	retry.KnownMarkerDigests = []string{strings.Repeat("0", 64)}
-	res4, err := renderjob.Run(ctx, retry, t.TempDir(), "", git)
+	res4, err := renderjob.Run(ctx, retry, t.TempDir(), scm.GitAuth{}, git)
 	require.NoError(t, err, "the retry adopts its own push")
 	assert.False(t, res4.NoChanges)
 	assert.Equal(t, res.CommitSHA, res4.CommitSHA, "the commit the first attempt pushed")
@@ -105,7 +105,7 @@ func TestRun(t *testing.T) {
 	// controller's render step checks with git ls-remote.
 	same := config(url, true)
 	same.KnownMarkerDigests = []string{res.MarkerDigest}
-	resNC, err := renderjob.Run(ctx, same, t.TempDir(), "", git)
+	resNC, err := renderjob.Run(ctx, same, t.TempDir(), scm.GitAuth{}, git)
 	require.NoError(t, err)
 	assert.True(t, resNC.NoChanges)
 	assert.Empty(t, resNC.Branch, "nothing pushed")
@@ -116,7 +116,7 @@ func TestRun(t *testing.T) {
 	pr.BundleName = "web-v3"
 	pr.Bundle.Images[0].Tag = "3.0.0"
 	pr.KnownMarkerDigests = []string{res.MarkerDigest}
-	res3, err := renderjob.Run(ctx, pr, t.TempDir(), "", git)
+	res3, err := renderjob.Run(ctx, pr, t.TempDir(), scm.GitAuth{}, git)
 	require.NoError(t, err)
 	prBranch := stepsimpl.PRBranch("team", "web-v3", "prod")
 	assert.Equal(t, prBranch, res3.Branch, "pr-review pushes to the promotion branch")
@@ -126,7 +126,7 @@ func TestRun(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(b), "ghcr.io/org/web:3.0.0")
 
-	_, err = renderjob.Run(ctx, config("file:///nonexistent", false), t.TempDir(), "", git)
+	_, err = renderjob.Run(ctx, config("file:///nonexistent", false), t.TempDir(), scm.GitAuth{}, git)
 	assert.Error(t, err)
 }
 

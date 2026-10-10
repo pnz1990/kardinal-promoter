@@ -449,6 +449,11 @@ config source of a config Bundle on the same ssh host uses the same key. With th
 `networkPolicy.enabled`, allow the ssh port (22, or the server's) in `networkPolicy.extraEgress`:
 the default egress rules allow 443 and 6443 only.
 
+`layout: branch` works over ssh too: the render Job gets the Secret's `sshPrivateKey` and
+`knownHosts` keys (not `token`) and dials only the ssh host and port of `spec.git.url`. With
+`render.networkPolicy.enabled`, add that port to `render.networkPolicy.gitEgress`
+([Rendered manifests](rendered-manifests.md)).
+
 Every git connection, ssh and HTTPS alike, fails after 5 minutes without a byte sent or
 received, so a server that stalls in the middle of a clone or push fails the step (with an
 `i/o timeout` error, retried like other git errors) instead of holding a controller worker.
