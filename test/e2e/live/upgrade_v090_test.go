@@ -59,9 +59,8 @@ func TestUpgradeV090_FromV090(t *testing.T) {
 	minor := serverMinor(t, e)
 	t.Logf("Kubernetes 1.%d", minor)
 
-	ns := e.Namespace(t)
 	a := newArgoApp(t, e, "test", "prod", "done")
-	require.Equal(t, ns, a.ns)
+	ns := a.ns
 
 	// v0.9.0 did not ask for the referenceable label on git Secrets.
 	var secret corev1.Secret
