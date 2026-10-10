@@ -510,16 +510,18 @@ networkPolicy:
   # :9090 for MetricChecks or a webhook receiver for NotificationHooks.
   extraEgress: []
 
-# -- AuditEvent retention, off by default: an upgrade never deletes audit
-# records. AuditEvents have no owner, so without retention they stay in etcd
-# for ever. With enabled: true the leader deletes, every 10 minutes, the
-# records older than maxAge and, per Pipeline, all but the maxPerPipeline
-# newest, at most 2000 a run at 5 API requests a second; the chart then
-# grants the controller delete on AuditEvents. Export the records first if
-# you must keep them. See docs/guides/security.md (Retention).
+# -- AuditEvent retention, on by default. AuditEvents have no owner, so
+# without retention they stay in etcd for ever, and a full etcd quota stops
+# the whole cluster. The leader deletes, every 10 minutes, the records older
+# than maxAge and, per Pipeline, all but the maxPerPipeline newest (records
+# that name no Pipeline share one cap per namespace), at most 2000 a run at 5
+# API requests a second; the chart grants the controller delete on
+# AuditEvents. enabled: false keeps every record. Upgrading deletes the
+# records already past these limits: export them first if you must keep
+# them. See docs/guides/security.md (Retention).
 audit:
   retention:
-    enabled: false
+    enabled: true
     # -- Delete records created longer ago than this
     # (--audit-retention-max-age, a Go duration). "0s" keeps records of any
     # age.
