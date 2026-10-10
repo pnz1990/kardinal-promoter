@@ -34,6 +34,7 @@ import (
 func newValidateCmd() *cobra.Command {
 	var file string
 	var allowedRepos []string
+	var scmProviderType string
 
 	cmd := &cobra.Command{
 		Use:   "validate",
@@ -56,7 +57,9 @@ Checks:
     --allowed-repositories (the controller's scm.allowedRepositories), a
     Pipeline must point spec.git.url at one of them unless it never needs
     the controller's SCM token: a git.secretRef and no pr-review
-    environment (the controller reports Ready=False/RepositoryNotAllowed). spec.policyGates is an
+    environment (the controller reports Ready=False/RepositoryNotAllowed);
+    with --scm-provider bitbucket-datacenter a URL is matched as KEY/slug,
+    as the controller does. spec.policyGates is an
     error (the API server rejects it); spec.git.provider is a warning (the
     controller ignores it).
   - PolicyGate: spec.expression set and compiles with the controller's
@@ -71,7 +74,7 @@ Exit codes:
   0 — file is valid
   1 — validation failed (actionable errors printed)`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runValidate(cmd, file, allowedRepos)
+			return runValidate(cmd, file, allowedRepos, scmProviderType)
 		},
 	}
 
@@ -80,15 +83,19 @@ Exit codes:
 	cmd.Flags().StringSliceVar(&allowedRepos, "allowed-repositories", nil,
 		"The controller's scm.allowedRepositories (comma-separated host/repository globs): report a "+
 			"Pipeline that would need the controller's SCM token for a spec.git.url that is not one of them")
+	cmd.Flags().StringVar(&scmProviderType, "scm-provider", "",
+		"The controller's scm.provider, for --allowed-repositories: with bitbucket-datacenter a spec.git.url "+
+			"is matched as KEY/slug however it names the repository (/scm/, browse or ssh path), as the controller does")
 
 	return cmd
 }
 
-func runValidate(cmd *cobra.Command, file string, allowedRepos []string) error {
+func runValidate(cmd *cobra.Command, file string, allowedRepos []string, scmProviderType string) error {
 	allowed, err := scm.ParseRepositoryAllowlist(allowedRepos)
 	if err != nil {
 		return fmt.Errorf("--allowed-repositories: %w", err)
 	}
+	allowed = allowed.WithProviderType(scmProviderType)
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return fmt.Errorf("cannot read %s: %w", file, err)
@@ -213,6 +220,9 @@ func validatePipeline(out io.Writer, file string, data []byte, allowed *scm.Repo
 		}
 	}
 	if err := graph.ValidateUpdateStrategy(&pipeline); err != nil {
+		errs = append(errs, err.Error())
+	}
+	if err := scm.ValidatePipelinePR(&pipeline); err != nil {
 		errs = append(errs, err.Error())
 	}
 	// #1332: the controller's shared token may act only on the allowed

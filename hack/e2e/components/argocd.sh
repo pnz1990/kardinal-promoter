@@ -51,6 +51,9 @@ if [ "${KARDINAL_E2E_ARGOCD_EXCLUDE_KARDINAL:-0}" = 1 ]; then
   kinds: [\"*\"]
   clusters: [\"*\"]"
   got=$("${KUBECTL[@]}" -n "$NS" get cm argocd-cm -o jsonpath='{.data.resource\.exclusions}')
+  # The release's own exclusions must survive the merge, and ours be in it.
+  [[ "$got" == "${shipped%$'\n'}"$'\n'* ]] ||
+    die "argocd-cm resource.exclusions lost the release's exclusions in the merge: $got"
   case "$got" in
     *"- apiGroups: [$groups]"*) ;;
     *) die "argocd-cm resource.exclusions does not exclude $groups after the merge: $got" ;;

@@ -50,26 +50,31 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/rs/zerolog"
+
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
+
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tmplsafe"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
@@ -157,7 +162,7 @@ type deliveryConfig struct {
 	url           string
 	authorization string
 	format        v1alpha1.NotificationHookFormat
-	tmpl          *template.Template
+	tmpl          *tmplsafe.Template
 	contentType   string
 	// signingKey, when set, signs every request (spec.signing).
 	signingKey []byte
@@ -188,6 +193,18 @@ type Reconciler struct {
 	HTTPClient *http.Client
 	// NowFn returns the current time. Overridable for testing.
 	NowFn func() time.Time
+	// Recorder emits a Warning Event on the hook for every event it gives up
+	// on. Nil emits none (tests).
+	Recorder events.EventRecorder
+}
+
+// dropped records an event the hook gave up on: the
+// kardinal_notifications_dropped_total counter and a Warning Event on the
+// hook, so a drop is visible beyond status.failureMessage, which the next
+// failure overwrites.
+func (r *Reconciler) dropped(hook *v1alpha1.NotificationHook, reason, eventReason, message string) {
+	observability.NotificationsDroppedTotal.WithLabelValues(hook.Namespace, hook.Name, reason).Inc()
+	kubeevent.Emit(r.Recorder, hook, corev1.EventTypeWarning, eventReason, "Deliver", message)
 }
 
 // Reconcile processes a single NotificationHook and delivers any pending events.
@@ -250,6 +267,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				Msg("notificationhook: cannot deliver until the hook is fixed")
 		}
 	}
+	// droppedMsg is the give-up after the last attempt, recorded once its
+	// status write succeeds.
+	var droppedMsg string
 	processed := make(map[string]bool, len(hook.Status.ProcessedEventKeys))
 	for _, k := range hook.Status.ProcessedEventKeys {
 		processed[k] = true
@@ -345,12 +365,16 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				if err := writeStatus(); err != nil {
 					return ctrl.Result{}, err
 				}
+				// Once the give-up is recorded, so a failed write does not
+				// count it twice.
+				r.dropped(&hook, "template", "NotificationTemplateFailed", hook.Status.FailureMessage)
 				continue
 			}
 			if hook.Status.FailedAttempts >= maxDeliveryAttempts {
 				processed[ev.eventKey] = true
 				hook.Status.FailureMessage = fmt.Sprintf("gave up on %s after %d attempts: %v",
 					ev.eventKey, maxDeliveryAttempts, deliveryErr)
+				droppedMsg = hook.Status.FailureMessage
 				hook.Status.FailedAttempts = 0
 				hook.Status.NextRetryAt = ""
 				result.RequeueAfter = retryBaseDelay
@@ -382,6 +406,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	if err := writeStatus(); err != nil {
 		return ctrl.Result{}, err
+	}
+	if droppedMsg != "" {
+		r.dropped(&hook, "attempts", "NotificationDropped", droppedMsg)
 	}
 	return result, nil
 }

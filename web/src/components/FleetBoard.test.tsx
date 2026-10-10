@@ -139,4 +139,22 @@ describe('FleetBoard — keyboard', () => {
     await user.keyboard('{Shift>}{ArrowRight}{/Shift}')
     expect(station('a', 'prod'), 'Shift is not a command modifier').toHaveFocus()
   })
+
+  it('draws a wave of many environments as one plate, not a column of stations (#1580)', () => {
+    const envs = Array.from({ length: 149 }, (_, i) => `env-${String(i + 1).padStart(3, '0')}`)
+    const p: Pipeline = {
+      name: 'fleet', namespace: 'team-w', phase: 'Ready', environmentCount: 150,
+      activeBundleName: 'fleet-2', activeBundleVersion: '2.0.0',
+      environmentTopology: [{ name: 'env-000' }, ...envs.map(name => ({ name, upstreams: ['env-000'] }))],
+      environmentStates: Object.fromEntries([['env-000', 'Verified'], ...envs.map((e, i) => [e, i < 100 ? 'Verified' : 'Promoting'])]),
+      deployed: Object.fromEntries(['env-000', ...envs].map((e, i) => [e, { bundle: i <= 100 ? 'fleet-2' : 'fleet-1', version: i <= 100 ? '2.0.0' : '1.0.0' }])),
+    }
+    render(<FleetBoard pipelines={[p]} total={1} onSelect={() => {}} now={now} />)
+    expect(screen.getAllByRole('button', { name: /^fleet / })).toHaveLength(2)
+    const plate = screen.getByRole('button', { name: /^fleet env-001 to env-149, 149 environments:/ })
+    expect(plate).toHaveAttribute('data-state', 'arriving')
+    expect(plate).toHaveAccessibleName('fleet env-001 to env-149, 149 environments: 2.0.0 (+49 on others), 49 on its way, 100 settled')
+    expect(within(plate).getByText('149 environments')).toBeInTheDocument()
+    expect(within(plate).getByText('env-001 … env-149')).toBeInTheDocument()
+  })
 })

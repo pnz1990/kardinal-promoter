@@ -26,6 +26,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -206,6 +207,12 @@ type Reconciler struct {
 	// retry backoff (status.nextRetryAt).
 	NowFn func() time.Time
 
+	// GitHubAppTokens mints the git tokens of Pipelines whose git Secret
+	// holds GitHub App credentials, at the controller's GitHub API
+	// (--scm-api-url). When nil, a cache for api.github.com is made on first
+	// use.
+	GitHubAppTokens *scm.AppTokenCache
+	appTokensOnce   sync.Once
 	// SCMWaitTimeout bounds how long a step waits for an open SCM circuit
 	// when its environment sets no stepTimeoutSeconds; 0 is
 	// DefaultSCMWaitTimeout (#1476).
@@ -802,12 +809,20 @@ func (r *Reconciler) markPRStatusClosedByKardinal(ctx context.Context, ps *v1alp
 }
 
 // withLabelsError appends the error of open-pr's failed attempt to label the
-// PR (steps.OutputPRLabelsError) to a WaitingForMerge message. The wait-for-
-// merge message replaces open-pr's, which carried it, so without this the
-// step message never said the PR has no labels (docs/pr-evidence.md).
+// PR (steps.OutputPRLabelsError), the pr controls it could not apply
+// (steps.OutputPRControlsError) and whether auto-merge is on
+// (steps.OutputPRAutoMerge) to a WaitingForMerge message. The wait-for-merge
+// message replaces open-pr's, which carried them, so without this the step
+// message never said the PR has no labels (docs/pr-evidence.md).
 func withLabelsError(msg string, outputs map[string]string) string {
 	if e := outputs[steps.OutputPRLabelsError]; e != "" {
-		return msg + "; adding labels failed: " + e
+		msg += "; adding labels failed: " + e
+	}
+	if e := outputs[steps.OutputPRControlsError]; e != "" {
+		msg += "; PR controls failed: " + e
+	}
+	if note := autoMergeNote(outputs); note != "" {
+		msg += "; " + note
 	}
 	return msg
 }
@@ -1112,6 +1127,10 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 					log.Warn().Err(prErr).Msg("failed to patch PRStatus spec (non-fatal)")
 				}
 			}
+			if state.Outputs[steps.OutputPRAutoMerge] != "" {
+				// Turn auto-merge on without waiting for the next poll.
+				return ctrl.Result{RequeueAfter: time.Second}, nil
+			}
 			return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
 		}
 
@@ -1186,11 +1205,13 @@ func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1al
 		WorkDir:      workDir,
 		Outputs:      cloneMap(ps.Status.Outputs),
 		Git: steps.GitConfig{
-			URL:         pipeline.Spec.Git.URL,
-			Branch:      baseBranch(pipeline),
-			Token:       cred.token,
-			AuthorName:  "kardinal-promoter",
-			AuthorEmail: "kardinal@kardinal.io",
+			URL:           pipeline.Spec.Git.URL,
+			Branch:        baseBranch(pipeline),
+			Token:         cred.token,
+			SSHPrivateKey: cred.sshKey,
+			SSHKnownHosts: cred.knownHosts,
+			AuthorName:    "kardinal-promoter",
+			AuthorEmail:   "kardinal@kardinal.io",
 		},
 		SCM:                  provider,
 		GitClient:            r.GitClient,
@@ -1586,6 +1607,20 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		base = ps.DeepCopy()
 	}
 
+	// pr.merge.auto: auto-merge on while the promotion may merge, off while
+	// the Pipeline is paused or a gate is closed.
+	requeue := requeueWaitForMerge
+	autoMergeChanged := false
+	if !prstatus.IsClosed(&prs.Status) && ps.Status.Outputs[steps.OutputPRAutoMerge] != "" {
+		if repo, num, prErr := stepPR(pipeline, ps); prErr == nil {
+			var wait time.Duration
+			autoMergeChanged, wait = r.syncAutoMerge(ctx, log, ps, repo, num)
+			if wait > 0 && wait < requeue {
+				requeue = wait
+			}
+		}
+	}
+
 	// Closed but still in the grace window: the PRStatus reconciler keeps
 	// polling, and a reopen resumes the wait. Only the message changes, and
 	// only when it differs, since each patch is a watch event.
@@ -1595,10 +1630,10 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 	switch {
 	case prstatus.IsClosed(&prs.Status):
 		msg = closedMsg
-	case msg == closedMsg:
+	case msg == closedMsg || ps.Status.Outputs[steps.OutputPRAutoMerge] != "":
 		msg = withLabelsError(fmt.Sprintf("PR #%d is open, waiting for merge", prs.Spec.PRNumber), ps.Status.Outputs)
 	}
-	if msg != ps.Status.Message {
+	if msg != ps.Status.Message || autoMergeChanged {
 		ps.Status.Message = msg
 		if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 			return ctrl.Result{}, fmt.Errorf("patch wait-for-merge message: %w", err)
@@ -1606,7 +1641,7 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 	}
 
 	// PR is still open or PRStatus reconciler hasn't polled yet — requeue.
-	return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
+	return ctrl.Result{RequeueAfter: requeue}, nil
 }
 
 // handleHealthChecking verifies that the environment runs the promoted

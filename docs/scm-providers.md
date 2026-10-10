@@ -19,6 +19,7 @@ below.
 | Gitea | `gitea` | Pull Requests | `X-Gitea-Signature` or `X-Hub-Signature-256` (HMAC-SHA256) | Yes | Yes | Commit status |
 | Bitbucket Cloud | `bitbucket` | Pull Requests | `X-Hub-Signature` (HMAC-SHA256) | No (Bitbucket has no PR labels) | Yes | Build status (key `kardinal/gates`) |
 | Azure DevOps | `azuredevops` | Pull Requests | `X-AzureDevOps-Token` (custom header you add to the service hook) | Yes (PR tags) | Yes | PR iteration status (genre `kardinal`, name `gates`) |
+| Bitbucket Data Center / Server | `bitbucket-datacenter` | Pull Requests | `X-Hub-Signature` (HMAC-SHA256) | No (no PR labels) | Yes | Not posted yet |
 
 All providers send webhooks to the same endpoint, `http://<controller-host>:8083/webhook/scm`.
 Webhooks only speed things up: without them, the controller still sees merges by polling.
@@ -31,7 +32,7 @@ for a PR the API reports not merged, or one the controller cannot check because 
 call failed, is answered with `204` and changes nothing; polling records the merge when
 there is one.
 
-Bitbucket Cloud and Azure DevOps are newer and less tested than GitHub and GitLab.
+Bitbucket Cloud, Azure DevOps and Bitbucket Data Center are newer and less tested than GitHub and GitLab: the e2e suites cannot host them, so they are checked against their documented REST APIs only.
 On Bitbucket, PRs carry no `kardinal` or `kardinal/rollback` labels, so find rollback
 PRs by their `[kardinal] Rollback` title instead.
 
@@ -79,6 +80,52 @@ every PR kardinal closes ends with its step asking you to delete the branch by h
 3. Set **Content type** to `application/json`.
 4. Set **Secret** to the same value as `--webhook-secret`.
 5. Select **Pull request** events.
+
+### GitHub App
+
+Instead of a personal access token, kardinal can authenticate as a GitHub App installation:
+the controller signs a JWT with the App's private key, exchanges it for an installation token
+(`POST /app/installations/<id>/access_tokens`), caches the token, and replaces it 10 minutes
+before it expires (installation tokens last one hour). PRs are then opened by the App
+(`<app-name>[bot]`).
+
+1. Create a GitHub App (**Settings → Developer settings → GitHub Apps → New GitHub App**) with
+   the repository permissions **Contents: Read and write**, **Pull requests: Read and write**
+   and **Metadata: Read-only**. Webhooks of the App are not used; configure the repository
+   webhook below if you want them.
+2. Install it on the account or organisation that owns the GitOps repositories, and note the
+   installation ID (the number at the end of the installation's settings URL).
+3. Generate a private key (PEM) and put the three values in the controller's Secret:
+
+```bash
+kubectl create secret generic github-app -n kardinal-system \
+  --from-literal=githubAppID=123456 \
+  --from-literal=githubAppInstallationID=78901234 \
+  --from-file=githubAppPrivateKey=my-app.private-key.pem
+helm upgrade --install kardinal-promoter ... \
+  --set github.secretRef.name=github-app --set github.app.enabled=true
+```
+
+The Secret is watched like a token Secret ([Credential rotation](#credential-rotation-zero-downtime)):
+a new key or ID is picked up within 30 seconds, and the controller mints a token at once to
+check it, logging `SCM GitHub App installation token minted`, or `SCM GITHUB APP WARNING` with
+GitHub's answer. After a failed mint kardinal waits before it asks again (5s, doubling to 5
+minutes) and keeps using a token that is still valid; a token issued for less than 20 minutes is
+replaced a tenth of its life before it expires. A Secret with `githubAppPrivateKey` is read as App credentials even if it also
+has a `token`. Without the chart, run the controller with `--scm-token-secret-name github-app`,
+or in static mode with `--github-app-id`, `--github-app-installation-id` and
+`--github-app-private-key-file` (or `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`,
+`GITHUB_APP_PRIVATE_KEY_FILE`) instead of `--github-token`.
+
+The token is minted at `--scm-api-url`, so GitHub Enterprise Server works the same way
+(`--scm-api-url https://github.example.com/api/v3`); auto-merge then uses
+`https://github.example.com/api/graphql`. The startup token check (`/user`) does not apply to
+an App; the mint is the check.
+
+For git, give the Pipeline's `spec.git.secretRef` Secret the same three keys instead of
+`token`: git-clone and git-push then use an installation token as the HTTPS password
+(`x-access-token`), minted at the controller's `--scm-api-url` and shared by every Pipeline
+that names the same App.
 
 ### GitHub Enterprise
 
@@ -299,6 +346,56 @@ status is `completed`.
 
 ---
 
+## Bitbucket Data Center
+
+```bash
+kardinal-controller \
+  --scm-provider bitbucket-datacenter \
+  --scm-api-url https://bitbucket.example.com \
+  --github-token $BITBUCKET_HTTP_ACCESS_TOKEN \
+  --webhook-secret $KARDINAL_WEBHOOK_SECRET
+```
+
+`--scm-api-url` is required: the server's base URL, with its context path if it has one
+(`https://example.com/bitbucket`). The controller uses REST API 1.0 (Bitbucket Server and Data
+Center 7.x and later).
+
+Use an **HTTP access token** (personal, project or repository) with **Repository write**
+(project admin for a project token is not needed). The controller sends it as a Bearer token.
+For git over HTTPS, put the same token in the Pipeline's git Secret; a personal token needs your
+username in the URL (`https://alice@bitbucket.example.com/scm/PLAT/web-app.git`). Or use
+[ssh](#ssh-git-authentication) (`ssh://git@bitbucket.example.com:7999/plat/web-app.git`).
+
+The repository is the project key and slug from `spec.git.url`: an HTTP clone URL
+(`/scm/PLAT/web-app.git`), a browse URL (`/projects/PLAT/repos/web-app/...`) or an ssh URL all
+work, and personal repositories (`/scm/~alice/web-app.git`, `/users/alice/repos/web-app`) too.
+Keys and slugs are matched without case, so the ssh URL's lower-case key matches webhooks.
+In `scm.allowedRepositories`, name a repository as `host/KEY/slug` on the host of `scm.apiURL`
+(`bitbucket.example.com/PLAT/*`, `bitbucket.example.com/~alice/*` for personal repositories):
+every URL form of the repository matches it ([the shared SCM token](guides/security.md#the-shared-scm-token-and-scmallowedrepositories)).
+`kardinal validate --allowed-repositories <list> --scm-provider bitbucket-datacenter` checks a
+file the same way.
+A ScmProvider or ClusterScmProvider of `type: bitbucket-datacenter` (with `apiURL`, the
+server's base URL) works the same way. Its `allowedRepositories` are `KEY/slug` globs, and they
+match every URL form of the repository.
+
+- **PRs**: opened from `kardinal/<bundle>/<env>`; a PR that is open between the same branches is
+  reused. Closing declines it (with the PR's current version) and deletes the branch with the
+  branch-utils API. There are no PR labels, so find rollback PRs by their `[kardinal] Rollback`
+  title.
+- **Approvals**: reviewers with status `APPROVED` count; one with `NEEDS_WORK` blocks
+  `bundle.pr.<env>.isApproved`.
+- **Merge commit**: read from the PR's `properties.mergeCommit`, which Bitbucket Data Center
+  returns for a merged PR though its OpenAPI description leaves it out (the webhook carries it
+  too). Without it the `argocd` and `flux` health checks fall back as described in
+  [When the merge commit is not known yet](health-adapters.md#when-the-merge-commit-is-not-known-yet).
+
+Webhook: **Repository settings → Webhooks → Create webhook**, URL
+`http://<controller-host>:8083/webhook/scm`, **Secret** the value of `--webhook-secret`, events
+**Pull request: Merged** (and optionally Declined). Bitbucket signs it in `X-Hub-Signature`.
+
+---
+
 ## Pipeline CRD configuration
 
 A Pipeline without `spec.git.providerRef` uses the controller's SCM provider, chosen by
@@ -322,6 +419,92 @@ spec:
     - name: prod
       approval: pr-review
 ```
+
+---
+
+## SSH git authentication
+
+git-clone and git-push can use ssh instead of HTTPS with every provider: set the Pipeline's
+`spec.git.url` to an ssh URL (`ssh://git@host:port/owner/repo.git` or `git@host:owner/repo.git`)
+and put an ssh key and the server's host keys in its `spec.git.secretRef` Secret:
+
+```bash
+ssh-keygen -t ed25519 -N '' -f kardinal-deploy-key      # add kardinal-deploy-key.pub as a deploy key with write access
+ssh-keyscan -p 22 github.com > known_hosts               # check the keys against the provider's published fingerprints
+kubectl create secret generic git-ssh -n <pipeline-namespace> \
+  --from-file=sshPrivateKey=kardinal-deploy-key \
+  --from-file=knownHosts=known_hosts
+```
+
+| Key | Purpose |
+|---|---|
+| `sshPrivateKey` | The private key, PEM or OpenSSH format, without a passphrase. The ssh user is the URL's (`git@`), or `git`. |
+| `knownHosts` | `known_hosts` lines for the server. **Required**: kardinal never accepts an unknown host key, and only offers the host key algorithms recorded for the host (`[host]:port` for a port other than 22). |
+
+Connecting and the ssh handshake are bounded (30s), and a push waits at most a minute for the
+server's post-receive hooks before it closes the connection. A step that is cancelled or times
+out closes its ssh connection at once. A wrong or missing host key fails the step with a `knownhosts:` error, and a Secret with an ssh
+URL but no `sshPrivateKey` or `knownHosts` fails it with a message naming the missing key. The
+config source of a config Bundle on the same ssh host uses the same key. With the chart's
+`networkPolicy.enabled`, allow the ssh port (22, or the server's) in `networkPolicy.extraEgress`:
+the default egress rules allow 443 and 6443 only.
+
+Every git connection, ssh and HTTPS alike, fails after 5 minutes without a byte sent or
+received, so a server that stalls in the middle of a clone or push fails the step (with an
+`i/o timeout` error, retried like other git errors) instead of holding a controller worker.
+A transfer that keeps moving data is not cut, however long it takes.
+
+PRs, labels, merge detection and the other SCM API calls still use the controller's token or
+GitHub App (`--scm-provider`); ssh only replaces git's transport. The repository is read from
+the ssh URL the same way (`owner/repo`, the GitLab project path, or `v3/org/project/repo` on
+Azure DevOps).
+
+## PR controls
+
+An environment's `pr` field ([Customising the PR](pr-evidence.md#customising-the-pr)) sets the
+PR's title, body, labels, reviewers and assignees, and can enable auto-merge. What each
+provider applies:
+
+| Control | GitHub | GitLab | Forgejo / Gitea | Bitbucket Cloud | Azure DevOps | Bitbucket Data Center |
+|---|---|---|---|---|---|---|
+| `titleTemplate`, `bodyTemplate` | Yes | Yes | Yes | Yes | Yes | Yes |
+| `labels` | Yes | Yes | Yes | No (no PR labels) | Yes (PR tags) | No (no PR labels) |
+| `reviewers` | Usernames | Usernames | Usernames | Account IDs or `{UUID}`s | Identity IDs | Usernames |
+| `teamReviewers` | Team slugs (organisation repos) | No | Team names (organisation repos) | No | Group identity IDs | No |
+| `assignees` | Usernames | Usernames | Usernames | No (no PR assignees) | No (no PR assignees) | No (no PR assignees) |
+| `merge.auto` | Auto-merge (GraphQL `enablePullRequestAutoMerge` / `disablePullRequestAutoMerge`) | Auto-merge (`auto_merge`, or `merge_when_pipeline_succeeds` before GitLab 17.11; cancelled with `cancel_merge_when_pipeline_succeeds`) | Scheduled merge (`merge_when_checks_succeed`; cancelled with `DELETE .../merge`) | No (no auto-merge API) | Auto-complete (cleared to turn it off) | Auto-merge (`POST .../merge` with `autoMerge: true`, 8.15 and later, enabled in the repository's auto-merge settings; `DELETE .../auto-merge` cancels it) |
+| `merge.method` | `merge`, `squash`, `rebase` | `merge`, `squash` (a rebase merge is the project's merge method setting) | `merge`, `squash`, `rebase` | — | `merge` (no fast-forward), `squash`, `rebase` | `merge` (`no-ff`), `squash`, `rebase` (`rebase-no-ff`); the strategy must be enabled on the repository |
+| `merge.commitMessageTemplate` | Yes | Yes (merge and squash commits) | Yes | — | Yes | Yes |
+
+A control the provider does not apply fails the step before the PR is opened, with a message
+such as `environment prod: pr.teamReviewers is not supported by the gitlab SCM provider`.
+
+What auto-merge needs, and what "nothing pending" means, on each provider. With nothing
+pending the SCM would merge at once, so kardinal leaves the PR for a merge by hand
+(`prAutoMerge: failed`) unless `pr.merge.allowImmediate` is set:
+
+- **GitHub**: the repository must allow auto-merge (**Settings → General → Allow auto-merge**).
+  Nothing pending: GitHub refuses auto-merge on a PR in "clean status" (no required check or
+  review pending); with `allowImmediate` kardinal merges it with the REST merge endpoint, which
+  applies branch protection too. The token needs **Contents: Read and write** and **Pull
+  requests: Read and write**.
+- **GitLab**: nothing pending: the MR's `detailed_merge_status` is `mergeable`. While GitLab is
+  still checking a new MR (`checking`, `unchecked`), kardinal tries again later. A project whose
+  merge method is merge commit makes a merge commit over the squash commit; both get the message.
+- **Forgejo / Gitea**: nothing pending: no commit status that is still pending or failing, and
+  no base branch protection that requires approvals or status checks. Forgejo and Gitea run a
+  scheduled merge when the checks succeed or an approval arrives.
+- **Bitbucket Data Center**: nothing pending: the mergeability check reports no merge check
+  vetoing the merge. Otherwise kardinal requests auto-merge (`autoMerge: true` on the merge
+  call), and Bitbucket merges the PR once its checks pass. Auto-merge needs Bitbucket Data
+  Center 8.15 or later with auto-merge turned on in the repository's (or project's) settings;
+  without it the call is refused (403, "auto-merge is disabled for this repository") and the PR
+  waits for a merge by hand (`prAutoMerge: failed`).
+- **Azure DevOps**: nothing pending: no branch policy evaluation queued, running or rejected.
+  Auto-complete is set by the token's identity, which opened the PR, and completes the PR once
+  its branch policies pass.
+
+kardinal keeps the PR's head branch when the SCM merges it, as it does for a merge by hand.
 
 ---
 
@@ -522,7 +705,8 @@ causing a gap in active promotions.
 
 When the controller is configured to read the token from a Kubernetes Secret
 (via `--scm-token-secret-name` or the Helm `github.secretRef.name` value), a background
-`SecretWatcher` polls that Secret every **30 seconds**. When the token value changes, the
+`SecretWatcher` polls that Secret every **30 seconds**. When the token value (or, for a
+[GitHub App](#github-app), any of its three keys) changes, the
 watcher atomically reloads the SCM provider using `sync/atomic.Pointer` semantics — concurrent
 reconciler goroutines see a consistent token snapshot at all times and are never interrupted.
 

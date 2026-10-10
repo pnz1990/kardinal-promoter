@@ -9,7 +9,7 @@
 #
 # The github job runs only when KARDINAL_E2E_GITHUB_TOKEN_FILE or
 # DEMO_GITHUB_TOKEN is set (components/github.sh); without one it is listed
-# as not run, and your gh login is never used. The weekly CI run covers it.
+# as not run, and your gh login is never used. The scheduled CI runs (nightly, weekly) cover it.
 # No other job sees the token.
 #
 #   -list    print the jobs this run would start and exit

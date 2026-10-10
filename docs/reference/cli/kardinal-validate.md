@@ -22,7 +22,9 @@ Checks:
     --allowed-repositories (the controller's scm.allowedRepositories), a
     Pipeline must point spec.git.url at one of them unless it never needs
     the controller's SCM token: a git.secretRef and no pr-review
-    environment (the controller reports Ready=False/RepositoryNotAllowed). spec.policyGates is an
+    environment (the controller reports Ready=False/RepositoryNotAllowed);
+    with --scm-provider bitbucket-datacenter a URL is matched as KEY/slug,
+    as the controller does. spec.policyGates is an
     error (the API server rejects it); spec.git.provider is a warning (the
     controller ignores it).
   - PolicyGate: spec.expression set and compiles with the controller's
@@ -47,6 +49,7 @@ kardinal validate [flags]
       --allowed-repositories strings   The controller's scm.allowedRepositories (comma-separated host/repository globs): report a Pipeline that would need the controller's SCM token for a spec.git.url that is not one of them
   -f, --file string                    Path to Pipeline or PolicyGate YAML file (required)
   -h, --help                           help for validate
+      --scm-provider string            The controller's scm.provider, for --allowed-repositories: with bitbucket-datacenter a spec.git.url is matched as KEY/slug however it names the repository (/scm/, browse or ssh path), as the controller does
 ```
 
 ### Options inherited from parent commands
