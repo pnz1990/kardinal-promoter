@@ -7,14 +7,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
@@ -90,6 +94,9 @@ func TestPushGuard(t *testing.T) {
 			wantState: "Failed", wantMsg: "bundle b1 was rejected"},
 		{name: "a newer Bundle already pushed to the environment",
 			both:      []client.Object{b2(nil), newerPushing()},
+			wantState: "Superseded", wantMsg: "newer bundle b2 already pushed to test"},
+		{name: "a newer Bundle and its step on the API server only: the cache never allows",
+			api:       []client.Object{b2(nil), newerPushing()},
 			wantState: "Superseded", wantMsg: "newer bundle b2 already pushed to test"},
 		{name: "a newer Verified Bundle pushed",
 			both:      []client.Object{b2(func(b *v1alpha1.Bundle) { b.Status.Phase = "Verified" }), newerPushing()},
@@ -229,4 +236,45 @@ func TestPushGuard_OtherNotFoundIsAStepError(t *testing.T) {
 			assert.Contains(t, got.Status.Message, "after error: step git-push: ", "the error is recorded on the step, which retries")
 		})
 	}
+}
+
+// TestPushGuard_IntentConflictRequeues: the push intent write is locked on the
+// resourceVersion the reconcile read. A Conflict (the step changed since)
+// pushes nothing and requeues; the next reconcile, on the fresh copy, records
+// the intent and pushes.
+func TestPushGuard_IntentConflictRequeues(t *testing.T) {
+	pl := makePipeline("nginx-demo")
+	step := labelled(asPromoting(makeStep("step-b1", "nginx-demo", "b1", "test"), pl))
+	var conflicted atomic.Bool
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PRStatus{}, &v1alpha1.Bundle{}).
+		WithObjects(step, pl, makeBundle("b1", "nginx-demo")).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+				patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				if ps, ok := obj.(*v1alpha1.PromotionStep); ok && ps.Status.Outputs["pushIntent"] != "" &&
+					conflicted.CompareAndSwap(false, true) {
+					return apierrors.NewConflict(schema.GroupResource{Group: "kardinal.io", Resource: "promotionsteps"},
+						ps.Name, errors.New("the object has been modified"))
+				}
+				return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+			},
+		}).Build()
+	git := &pushRecorder{headGit: headGit{sha: newSHA}}
+	r := &promotionstep.Reconciler{Client: c, APIReader: c, SCM: &mockSCM{}, GitClient: git,
+		WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+
+	res, err := r.Reconcile(context.Background(), reqFor(step.Name))
+	require.NoError(t, err)
+	assert.True(t, res.Requeue, "a Conflict on the intent write requeues")
+	assert.Empty(t, git.pushes, "and pushes nothing")
+	got := getStep(t, c, step.Name)
+	assert.Equal(t, "Promoting", got.Status.State)
+	assert.Empty(t, got.Status.Outputs["pushIntent"])
+
+	reconcileStep(t, r, step.Name)
+	got = getStep(t, c, step.Name)
+	assert.Equal(t, "HealthChecking", got.Status.State, got.Status.Message)
+	assert.Len(t, git.pushes, 1, "the next reconcile pushes")
+	assert.NotEmpty(t, got.Status.Outputs["pushIntent"])
 }
