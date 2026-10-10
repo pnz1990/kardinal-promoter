@@ -379,6 +379,10 @@ func (u *upgrade) deploymentReady(t *testing.T, ns, name string, timeout time.Du
 	})
 }
 
+// leaderElectionFlowSchema is the chart's FlowSchema for the leader
+// election Lease (#1592), <fullname>-<namespace>-leader-election.
+const leaderElectionFlowSchema = "FlowSchema /kardinal-promoter-kardinal-system-leader-election"
+
 // kroSystem is the kro-system Namespace.
 func (u *upgrade) kroSystem(t *testing.T) *corev1.Namespace {
 	t.Helper()
@@ -693,13 +697,14 @@ spec:
 	assert.Subset(t, added, []string{
 		"ClusterRole /kardinal-promoter-graph-applier", "ClusterRole /kardinal-promoter-graph-reader",
 		"ClusterRole /kardinal-promoter-kro-watch",
+		leaderElectionFlowSchema,
 		"Role kardinal-system/kardinal-promoter-leader-election", "RoleBinding kardinal-system/kardinal-promoter-leader-election",
 		"ValidatingAdmissionPolicy /kardinal-promoter-hold-writes", "ValidatingAdmissionPolicyBinding /kardinal-promoter-hold-writes",
 	}, "objects the new chart adds")
 	for _, o := range added {
-		// The leader election Lease's own API priority (#1592) is the
-		// chart's too: a FlowSchema naming an existing priority level.
-		ok := strings.HasPrefix(o, "FlowSchema /kardinal-promoter-") ||
+		// The leader election Lease's own API priority (#1592): the one
+		// FlowSchema of the chart, by its exact name.
+		ok := o == leaderElectionFlowSchema ||
 			strings.HasPrefix(o, "ValidatingAdmissionPolicy /kardinal-promoter-") ||
 			strings.HasPrefix(o, "ValidatingAdmissionPolicyBinding /kardinal-promoter-") ||
 			strings.HasPrefix(o, "ClusterRole /kardinal-promoter-") ||
