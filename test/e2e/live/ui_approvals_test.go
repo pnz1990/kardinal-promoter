@@ -73,7 +73,7 @@ func TestUI_APIApprovalsTokenReview(t *testing.T) {
 		}, metav1.CreateOptions{})
 		require.NoError(t, err)
 		tr, err := e.Kube.CoreV1().ServiceAccounts(a.ns).CreateToken(ctx, sa, &authnv1.TokenRequest{
-			Spec: authnv1.TokenRequestSpec{ExpirationSeconds: ptr.To[int64](1800)}}, metav1.CreateOptions{})
+			Spec: authnv1.TokenRequestSpec{ExpirationSeconds: ptr.To[int64](1800), Audiences: []string{"kardinal-promoter"}}}, metav1.CreateOptions{})
 		require.NoError(t, err)
 		return tr.Status.Token
 	}
