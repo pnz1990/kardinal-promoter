@@ -97,8 +97,10 @@ Pending ──pre hooks succeeded──▶ Promoting ─▶ (WaitingForMerge) �
   Job of that name, while it runs fails the HookRun; the hook is not started a second time. A Job
   of the HookRun's name that kardinal did not create fails it with a message naming the Job.
   Re-run a hook by promoting a new Bundle.
-- **A deleted HookRun does not run its hook again.** Deleting a HookRun while its Job runs
-  (by hand, or a namespace cleanup) holds it until the Job ends, records the result in its status
+- **A deleted HookRun does not run its hook again.** Only kardinal, kro, the garbage collector
+  and the namespace controller may delete a HookRun (the chart's `graph-objects` policy refuses
+  everyone else, see [Admission Validation](guides/security.md#admission-validation)). One deleted while its Job runs
+  (its Graph dropped it, or a namespace cleanup) is held until the Job ends, records the result in its status
   for 30 seconds, and only then lets it go. The step keeps each hook that ran in
   `status.hookRecords` (hook, phase, spec hash, result). The HookRun the Graph applies again
   takes that recorded result and creates no Job; when the earlier run's result was never seen, it
@@ -173,8 +175,11 @@ Only HookRuns the Bundle's Graph created count. kro labels what it applies `kro.
 and the Graph labels each HookRun `kardinal.io/bundle-uid` with its Bundle's UID. The controller
 never runs a HookRun without both (or whose UID is not its Bundle's), and the step reads results
 only from HookRuns with those labels whose names this Graph rendered. Labels can be copied, so
-this stops HookRuns created by mistake or by a naive script, not someone who can create HookRuns
-and reads the Bundle's UID: grant `create` on `hookruns` only to those you would let run hooks.
+the chart's `<release>-graph-objects` admission policy is what stops a forged HookRun: only kro
+(impersonating the namespace's Graph ServiceAccount), the controller and
+`admission.controllerUsernames` may create, change or delete HookRuns, whatever RBAC grants
+([Verified identity](guides/security.md#verified-identity)). Whoever may impersonate the Graph
+ServiceAccount passes as kro, so treat that permission as the right to run hooks.
 
 The controller needs `create`, `get`, `list`, `watch` and `delete` on `batch/jobs` in Pipeline
 namespaces (the chart grants it) and caches only Jobs labelled `kardinal.io/hookrun`.
