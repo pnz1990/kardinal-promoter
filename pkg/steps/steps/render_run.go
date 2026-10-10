@@ -130,7 +130,10 @@ func (s *renderStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 	}
 	// The commit the health check must see deployed: what the Job pushed to
 	// the rendered branch. A pr-review step takes the merge commit instead.
-	if res.CommitSHA != "" && !res.NoChanges && !state.OpensPR() {
+	// A render that pushed nothing names the rendered branch's head (checked
+	// above): the GitOps tool must have applied it, for auto and pr-review
+	// alike (#1669), not just any revision.
+	if res.CommitSHA != "" && (res.NoChanges || !state.OpensPR()) {
 		outputs["commitSHA"] = res.CommitSHA
 	}
 	msg := fmt.Sprintf("rendered %d objects from %s with %s into %s (RenderRun %s)", res.Objects,

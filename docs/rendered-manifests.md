@@ -174,7 +174,9 @@ commit id on the rendered branch (or the promotion branch of a `pr-review` step)
 full DRY commit. The step then reads the branch head on the remote (`git ls-remote`) and fails if
 it is not the reported commit. A result that pushed nothing (the branch already held the render)
 names the rendered branch's head too, which is checked the same way, and its marker digest must
-be one of the environment's recorded renders (`status.knownMarkerDigests`). A finished RenderRun never runs again; a RenderRun is never run in
+be one of the environment's recorded renders (`status.knownMarkerDigests`); that head is the
+commit the health check waits for, so the environment is Verified only once the GitOps tool has
+applied it. A finished RenderRun never runs again; a RenderRun is never run in
 the controller's own namespace.
 
 A render whose Job pushed but whose result was lost (its Pod gone, or a result that could not be

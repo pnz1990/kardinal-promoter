@@ -163,7 +163,7 @@ func TestRenderStep_NoChangesChecksTheHead(t *testing.T) {
 			if tc.wantErr == "" {
 				require.NoError(t, err)
 				assert.Equal(t, "true", res.Outputs["noChanges"])
-				assert.Empty(t, res.Outputs["commitSHA"], "an unchanged render sets no commit to health check")
+				assert.Equal(t, commit, res.Outputs["commitSHA"], "an unchanged render waits for the rendered branch head (#1669)")
 				return
 			}
 			require.Error(t, err)
