@@ -195,6 +195,25 @@ func NewGitHubAppTokenSource(creds GitHubAppCredentials, apiURL string) (*GitHub
 	}, nil
 }
 
+// cachedLocked answers from the cache when no mint is due: a token not yet
+// at its refresh time, or, while a failed mint's backoff lasts, the cached
+// token if it is still valid, else the mint's error. done is false when a
+// mint is due. s.mu must be held.
+func (s *GitHubAppTokenSource) cachedLocked() (tok string, done bool, err error) {
+	now := s.now()
+	if s.token != "" && now.Before(s.refreshAt) {
+		return s.token, true, nil
+	}
+	if s.lastErr != nil && now.Before(s.retryAt) {
+		if s.token != "" && now.Before(s.expires) {
+			// The cached token is still valid: use it while minting fails.
+			return s.token, true, nil
+		}
+		return "", true, fmt.Errorf("%w (not retried before %s)", s.lastErr, s.retryAt.UTC().Format(time.RFC3339))
+	}
+	return "", false, nil
+}
+
 // Token returns a cached installation token, or mints a new one when the
 // cached one expires within appTokenRefreshBefore.
 func (s *GitHubAppTokenSource) Token(ctx context.Context) (string, error) {
@@ -206,21 +225,11 @@ func (s *GitHubAppTokenSource) Token(ctx context.Context) (string, error) {
 		return "", err
 	}
 	s.mu.Lock()
-	now := s.now()
-	if s.token != "" && now.Before(s.refreshAt) {
-		tok := s.token
-		s.mu.Unlock()
-		return tok, nil
-	}
-	if s.lastErr != nil && now.Before(s.retryAt) {
-		defer s.mu.Unlock()
-		if s.token != "" && now.Before(s.expires) {
-			// The cached token is still valid: use it while minting fails.
-			return s.token, nil
-		}
-		return "", fmt.Errorf("%w (not retried before %s)", s.lastErr, s.retryAt.UTC().Format(time.RFC3339))
-	}
+	tok, done, err := s.cachedLocked()
 	s.mu.Unlock()
+	if done {
+		return tok, err
+	}
 
 	// One mint at a time, shared by every caller that needs it, run on a
 	// context of its own: a caller that gives up returns at once without
@@ -228,14 +237,17 @@ func (s *GitHubAppTokenSource) Token(ctx context.Context) (string, error) {
 	// others nor counts toward the backoff.
 	ch := s.minting.DoChan("mint", func() (interface{}, error) {
 		// A flight that ended between this caller's cache check and here
-		// left a fresh token: use it instead of minting again.
+		// left a fresh token, or failed and set the backoff: answer as the
+		// cache check would instead of minting again.
 		s.mu.Lock()
-		if s.token != "" && s.now().Before(s.refreshAt) {
-			tok := s.token
-			s.mu.Unlock()
+		tok, done, err := s.cachedLocked()
+		s.mu.Unlock()
+		if done {
+			if err != nil {
+				return nil, err
+			}
 			return tok, nil
 		}
-		s.mu.Unlock()
 		mctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), providerHTTPTimeout)
 		defer cancel()
 		tok, exp, err := s.mint(mctx)
