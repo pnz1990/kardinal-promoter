@@ -326,3 +326,38 @@ func TestPushGuard_IntentConflictRequeues(t *testing.T) {
 	assert.Len(t, git.pushes, 1, "the next reconcile pushes")
 	assert.NotEmpty(t, got.Status.Outputs["pushIntent"])
 }
+
+// TestPushGuard_IntentOverMetadataChange: a metadata change between the read
+// and the intent write (a label added) is no status conflict, so the intent
+// is written over the fresh copy (patchStatusLocked). The reconcile then
+// carries the fresh metadata: the push goes on and the label is kept.
+func TestPushGuard_IntentOverMetadataChange(t *testing.T) {
+	pl := makePipeline("nginx-demo")
+	step := labelled(asPromoting(makeStep("step-b1", "nginx-demo", "b1", "test"), pl))
+	var changed atomic.Bool
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PRStatus{}, &v1alpha1.Bundle{}).
+		WithObjects(step, pl, makeBundle("b1", "nginx-demo")).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+				patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				if ps, ok := obj.(*v1alpha1.PromotionStep); ok && ps.Status.Outputs["pushIntent"] != "" &&
+					changed.CompareAndSwap(false, true) {
+					var cur v1alpha1.PromotionStep
+					require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(obj), &cur))
+					cur.Labels["e2e.kardinal.io/touched"] = "true"
+					require.NoError(t, c.Update(ctx, &cur))
+				}
+				return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+			},
+		}).Build()
+	git := &pushRecorder{headGit: headGit{sha: newSHA}}
+	r := &promotionstep.Reconciler{Client: c, APIReader: c, SCM: &mockSCM{}, GitClient: git,
+		WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+	reconcileStep(t, r, step.Name)
+	got := getStep(t, c, step.Name)
+	assert.Equal(t, "HealthChecking", got.Status.State, got.Status.Message)
+	assert.Len(t, git.pushes, 1)
+	assert.NotEmpty(t, got.Status.Outputs["pushIntent"])
+	assert.Equal(t, "true", got.Labels["e2e.kardinal.io/touched"], "the fresh metadata is kept")
+}

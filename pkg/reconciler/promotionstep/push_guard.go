@@ -110,12 +110,15 @@ func (r *Reconciler) recordPushIntent(ctx context.Context, ps, base *v1alpha1.Pr
 	if err := r.patchStatusLocked(ctx, before, written); err != nil {
 		return fmt.Errorf("%w of %s: %w", errPushIntent, ps.Name, err)
 	}
-	ps.ResourceVersion = written.ResourceVersion
+	// written is the stored step now, its metadata the fresh copy's when the
+	// write went over a spec or metadata change (patchStatusLocked): ps and
+	// base take all of it, not just the resourceVersion.
+	written.ObjectMeta.DeepCopyInto(&ps.ObjectMeta)
 	if base != nil {
-		// base now matches the stored step: the same resourceVersion and the
+		// base now matches the stored step: the same metadata and the
 		// intent in its status, so the reconcile's own status write (and its
 		// conflict check, patchStatusLocked) starts from what is stored.
-		base.ResourceVersion = written.ResourceVersion
+		written.ObjectMeta.DeepCopyInto(&base.ObjectMeta)
 		base.Status.Outputs = cloneMap(base.Status.Outputs)
 		if base.Status.Outputs == nil {
 			base.Status.Outputs = map[string]string{}
