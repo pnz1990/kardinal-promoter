@@ -853,6 +853,7 @@ func main() {
 	if err := (&nhookrecon.Reconciler{
 		Client:    mgr.GetClient(),
 		APIReader: mgr.GetAPIReader(),
+		Recorder:  eventRecorder,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up NotificationHookReconciler")
 	}

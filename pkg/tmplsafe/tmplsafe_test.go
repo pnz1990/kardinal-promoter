@@ -4,6 +4,7 @@
 package tmplsafe_test
 
 import (
+	"errors"
 	"math/rand"
 	"runtime"
 	"strings"
@@ -113,6 +114,9 @@ func TestExecute_Bounds(t *testing.T) {
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
+				// Running out of time is ErrStopped (a caller retries it);
+				// nothing else is.
+				assert.Equal(t, strings.Contains(tt.wantErr, "took longer"), errors.Is(err, tmplsafe.ErrStopped), "ErrStopped")
 				return
 			}
 			require.NoError(t, err)

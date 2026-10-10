@@ -238,6 +238,7 @@ var (
 func prLimits(maxOutput int) tmplsafe.Limits {
 	l := tmplsafe.DefaultLimits
 	l.MaxOutput = maxOutput
+	l.RangeHint = "use the functions that list the data (provenanceTable, gatesTable, upstreamTable, imageList)"
 	return l
 }
 
