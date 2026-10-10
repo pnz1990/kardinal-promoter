@@ -649,7 +649,7 @@ base branch past `maxConcurrent` or `maxUnavailable`, and no PR or `kardinal/` b
 pruned step is left waiting for the target to be admitted again. Pending holds no PR (`holdsPR`), so its finalizer
 closes, reopens and reverts nothing. When the step is admitted again, kro creates it afresh with
 nothing to reuse. Once `admitted` is true, the step is in `started` and pacing never drops it
-(`TestFleet_AdmittedOnceObserved`). The cost is one more apply per fleet step. Verified on kind
+(`TestFleet_AdmittedOnceObserved`). The cost is one more apply per step of a Pipeline with fleets. Verified on kind
 with `maxConcurrent` and `maxUnavailable`. kardinal's reconcilers must ignore label-only updates
 on the objects they own, or they reconcile every item on each growth.
 

@@ -615,6 +615,8 @@ func TestFleet_PacingNeverPrunesAnObservedStep(t *testing.T) {
 // step and true from then on, when pacing can no longer drop it. A step kro
 // created but the Graph has not read back yet is admitted=false, so it does
 // no work that a pruned step would leave behind.
+//
+// Covers FLEET-08.
 func TestFleet_AdmittedOnceObserved(t *testing.T) {
 	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: bigFleet(3, 1, nil), Bundle: makeBundle("app-v1", "app")})
 	require.NoError(t, err)

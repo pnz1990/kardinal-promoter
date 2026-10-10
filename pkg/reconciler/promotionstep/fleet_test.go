@@ -97,6 +97,8 @@ func TestFleet_UnresolvedEnvironmentFailsClosed(t *testing.T) {
 // drops it in that window, kro deletes a step that pushed nothing, opened
 // no PR and holds no finalizer duty (Pending holds no PR). Once the Graph
 // sets admitted true, it starts.
+//
+// Covers FLEET-08.
 func TestFleet_PendingWaitsForAdmission(t *testing.T) {
 	p := makePipeline("web")
 	p.Spec.Environments[1].Fleet = &v1alpha1.FleetSpec{Targets: []v1alpha1.FleetTarget{{Name: "eu"}}}
