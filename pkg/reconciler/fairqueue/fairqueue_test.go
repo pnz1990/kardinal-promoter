@@ -323,3 +323,19 @@ func TestQueue_FewPriorities(t *testing.T) {
 	}
 	assert.LessOrEqual(t, len(rec.seen), 12, "priorities used: %v", rec.seen)
 }
+
+// BenchmarkQueue_AddLargeNamespace: an add costs about the same with 3,000
+// keys of the namespace queued as with none (the backlog is counted
+// incrementally, not by scanning the namespace).
+func BenchmarkQueue_AddLargeNamespace(b *testing.B) {
+	q := fairqueue.Wrap(priorityqueue.New[reconcile.Request](fmt.Sprintf("big-%d", queueN.Add(1))))
+	defer q.ShutDown()
+	for i := range 3000 {
+		q.AddAfter(req("a", fmt.Sprintf("w%04d", i)), time.Hour)
+		q.Add(req("a", fmt.Sprintf("r%04d", i)))
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		q.Add(req("a", fmt.Sprintf("r%04d", i%3000)))
+	}
+}

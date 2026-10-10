@@ -26,6 +26,7 @@
 package fairqueue
 
 import (
+	"container/heap"
 	"sync"
 	"time"
 
@@ -50,14 +51,46 @@ var buckets = []int{1, 4, 16, 64, 256}
 // state is the bookkeeping of one key.
 type state struct {
 	// queued: in the inner queue (ready or waiting); processing: handed to
-	// a worker and not yet Done.
-	queued, processing bool
+	// a worker and not yet Done; due: queued and its ready time has come.
+	queued, processing, due bool
 	// base is the highest base priority the key was added with since its
 	// last Get: what GetWithPriority returns, so the controller requeues
 	// with the priority the reconciler meant, not the shifted one.
 	base int
-	// readyAt is when a queued key is due (the earliest of its adds).
+	// readyAt is when a queued key is due (the earliest of its adds); gen
+	// invalidates its older entries in the namespace's waiting heap.
 	readyAt time.Time
+	gen     uint64
+}
+
+// waiter is a queued key that is not due yet.
+type waiter struct {
+	at  time.Time
+	key reconcile.Request
+	gen uint64
+}
+
+// waiters is a min-heap of waiters by ready time.
+type waiters []waiter
+
+func (w waiters) Len() int            { return len(w) }
+func (w waiters) Less(i, j int) bool  { return w[i].at.Before(w[j].at) }
+func (w waiters) Swap(i, j int)       { w[i], w[j] = w[j], w[i] }
+func (w *waiters) Push(x interface{}) { *w = append(*w, x.(waiter)) }
+func (w *waiters) Pop() interface{} {
+	old := *w
+	x := old[len(old)-1]
+	*w = old[:len(old)-1]
+	return x
+}
+
+// namespace is the bookkeeping of one namespace's keys. active counts the
+// keys that are processing or due, kept up to date as keys come and go, so
+// an add costs O(log n), not a scan of the namespace.
+type namespace struct {
+	keys    map[reconcile.Request]*state
+	active  int
+	waiting waiters
 }
 
 // Queue is a priorityqueue.PriorityQueue that orders items fairly between
@@ -65,10 +98,9 @@ type state struct {
 type Queue struct {
 	inner priorityqueue.PriorityQueue[reconcile.Request]
 
-	mu sync.Mutex
-	// keys is every key that is queued or processing, by namespace.
-	keys map[string]map[reconcile.Request]*state
-	now  func() time.Time
+	mu         sync.Mutex
+	namespaces map[string]*namespace
+	now        func() time.Time
 }
 
 var _ priorityqueue.PriorityQueue[reconcile.Request] = (*Queue)(nil)
@@ -83,41 +115,44 @@ func New(name string, rateLimiter workqueue.TypedRateLimiter[reconcile.Request])
 
 // Wrap makes inner fair between namespaces.
 func Wrap(inner priorityqueue.PriorityQueue[reconcile.Request]) *Queue {
-	return &Queue{inner: inner, keys: map[string]map[reconcile.Request]*state{}, now: time.Now}
+	return &Queue{inner: inner, namespaces: map[string]*namespace{}, now: time.Now}
 }
 
-// lookup returns the state of key, creating it with create.
-func (q *Queue) lookup(key reconcile.Request, create bool) *state {
-	ns := q.keys[key.Namespace]
-	if ns == nil {
-		if !create {
-			return nil
-		}
-		ns = map[reconcile.Request]*state{}
-		q.keys[key.Namespace] = ns
-	}
-	st := ns[key]
-	if st == nil && create {
-		st = &state{}
-		ns[key] = st
-	}
-	return st
-}
-
-// backlogOf counts the keys of ns other than self that are processing or
-// queued and due at now.
-func (q *Queue) backlogOf(ns string, self reconcile.Request, now time.Time) int {
-	n := 0
-	for k, st := range q.keys[ns] {
-		if k != self && (st.processing || (st.queued && !st.readyAt.After(now))) {
-			n++
-		}
+// ns returns the bookkeeping of name, creating it.
+func (q *Queue) ns(name string) *namespace {
+	n := q.namespaces[name]
+	if n == nil {
+		n = &namespace{keys: map[reconcile.Request]*state{}}
+		q.namespaces[name] = n
 	}
 	return n
 }
 
+// promote counts the waiters of n that are due at now.
+func (n *namespace) promote(now time.Time) {
+	for len(n.waiting) > 0 && !n.waiting[0].at.After(now) {
+		w := heap.Pop(&n.waiting).(waiter)
+		if st := n.keys[w.key]; st != nil && st.gen == w.gen && st.queued && !st.due {
+			st.due = true
+			n.active++
+		}
+	}
+}
+
+// release drops n's bookkeeping of key when it is neither queued nor
+// processing, and n itself when it has no keys.
+func (q *Queue) release(name string, n *namespace, key reconcile.Request, st *state) {
+	if st.queued || st.processing {
+		return
+	}
+	delete(n.keys, key)
+	if len(n.keys) == 0 {
+		delete(q.namespaces, name)
+	}
+}
+
 // shift is the priority an item of base priority gets when its namespace
-// has backlog other keys queued or processing.
+// has backlog other keys processing or due.
 func shift(base, backlog int) int {
 	step := 0
 	for _, b := range buckets {
@@ -141,23 +176,47 @@ func (q *Queue) AddWithOpts(o priorityqueue.AddOpts, items ...reconcile.Request)
 		if o.After > 0 {
 			ready = now.Add(o.After)
 		}
-		st := q.lookup(it, true)
-		if st.queued {
-			st.base = max(st.base, base)
-			if ready.Before(st.readyAt) {
-				st.readyAt = ready
-			}
-		} else {
-			st.base, st.readyAt = base, ready
+		n := q.ns(it.Namespace)
+		n.promote(now)
+		st := n.keys[it]
+		if st == nil {
+			st = &state{}
+			n.keys[it] = st
 		}
-		st.queued = true
-		// The backlog the item will meet when it is due.
-		p := shift(base, q.backlogOf(it.Namespace, it, ready))
+		switch {
+		case !st.queued:
+			st.base, st.queued, st.readyAt = base, true, ready
+			q.schedule(n, it, st, now)
+		default:
+			st.base = max(st.base, base)
+			if !st.due && ready.Before(st.readyAt) {
+				st.readyAt = ready
+				q.schedule(n, it, st, now)
+			}
+		}
+		backlog := n.active
+		if st.due || st.processing {
+			backlog-- // not itself
+		}
+		p := shift(base, backlog)
 		q.mu.Unlock()
 		opts := o
 		opts.Priority = &p
 		q.inner.AddWithOpts(opts, it)
 	}
+}
+
+// schedule counts st as due now, or keeps it waiting until its readyAt.
+func (q *Queue) schedule(n *namespace, key reconcile.Request, st *state, now time.Time) {
+	st.gen++
+	if !st.readyAt.After(now) {
+		if !st.due {
+			st.due = true
+			n.active++
+		}
+		return
+	}
+	heap.Push(&n.waiting, waiter{at: st.readyAt, key: key, gen: st.gen})
 }
 
 // Add adds item at the normal priority.
@@ -182,14 +241,27 @@ func (q *Queue) GetWithPriority() (reconcile.Request, int, bool) {
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	st := q.lookup(it, false)
+	n := q.ns(it.Namespace)
+	st := n.keys[it]
 	if st == nil || !st.queued {
-		// Not added through this queue (or bookkeeping lost it): count it
-		// now, at the priority level it came with.
-		st = q.lookup(it, true)
+		// Not added through this queue (or the bookkeeping lost it): count
+		// it now, at the priority level it came with.
+		if st == nil {
+			st = &state{}
+			n.keys[it] = st
+		}
 		st.base = p / span
 	}
-	st.queued, st.processing = false, true
+	if st.due {
+		st.due = false
+		n.active--
+	}
+	st.queued = false
+	st.gen++ // its waiting entry, if any, is stale
+	if !st.processing {
+		st.processing = true
+		n.active++
+	}
 	return it, st.base, false
 }
 
@@ -205,17 +277,19 @@ func (q *Queue) Done(item reconcile.Request) {
 	q.inner.Done(item)
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	st := q.lookup(item, false)
+	n := q.namespaces[item.Namespace]
+	if n == nil {
+		return
+	}
+	st := n.keys[item]
 	if st == nil {
 		return
 	}
-	st.processing = false
-	if !st.queued {
-		delete(q.keys[item.Namespace], item)
-		if len(q.keys[item.Namespace]) == 0 {
-			delete(q.keys, item.Namespace)
-		}
+	if st.processing {
+		st.processing = false
+		n.active--
 	}
+	q.release(item.Namespace, n, item, st)
 }
 
 // Backlog returns the keys of namespace ns that are processing or queued
@@ -223,7 +297,12 @@ func (q *Queue) Done(item reconcile.Request) {
 func (q *Queue) Backlog(ns string) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.backlogOf(ns, reconcile.Request{}, q.now())
+	n := q.namespaces[ns]
+	if n == nil {
+		return 0
+	}
+	n.promote(q.now())
+	return n.active
 }
 
 // Forget forwards to the inner queue.
