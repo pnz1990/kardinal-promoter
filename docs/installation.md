@@ -393,8 +393,10 @@ release name other than `kardinal-promoter`, the Service is named
   under an image Bundle, or the image tags of the last image Bundle under a config Bundle, as
   `kardinal status` does. A lit rail marks the active Bundle's version on its way into an environment:
   amber and moving while it promotes, waits for its PR or is health checked; amber and still
-  while a PolicyGate holds it; red where it failed. A station opens its Pipeline. The board
-  follows the sidebar's health filter.
+  while a PolicyGate holds it; red where it failed. A [fleet](pipeline-reference.md#fleets)
+  is one station with a bar of its targets (Verified, in flight, Failed) and a count such as
+  `20/50 verified, 5 in flight (max 5)`; it says `stopped` once `maxUnavailable` targets
+  failed. A station opens its Pipeline. The board follows the sidebar's health filter.
 - **Pipeline view.** The lane, the promotion graph, policy gates with their CEL expressions,
   the Bundle history and comparison, and pause, resume, promote, roll back and create bundle.
   The lane has one column per depth: parallel environments share a column, and a wave of five

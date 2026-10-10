@@ -247,6 +247,21 @@ func validatePipeline(out io.Writer, file string, data []byte, allowed *scm.Repo
 			buildable.Spec.Environments[i].Steps = nil             //nolint:staticcheck // SA1019: clear the deprecated field reported above
 			buildable.Spec.Environments[i].PromotionTemplate = nil //nolint:staticcheck // SA1019: clear the deprecated field reported above
 			buildable.Spec.Environments[i].Regions = nil           //nolint:staticcheck // SA1019: cleared because it is reported above
+			// An Application or ClusterProfile fleet's targets are in the
+			// cluster (status.fleets): offline, check the rest of the
+			// Pipeline with one stand-in target.
+			env := buildable.Spec.Environments[i]
+			if f := env.Fleet; f != nil && f.Selector != nil && f.Selector.Kind != kardinalv1alpha1.FleetSelectorTarget &&
+				!hasFleetStatus(buildable, env.Name) {
+				buildable.Status.Fleets = append(buildable.Status.Fleets, kardinalv1alpha1.FleetStatus{Environment: env.Name,
+					Targets: []kardinalv1alpha1.FleetTarget{{Name: "t"}}})
+				kind := f.Selector.Kind
+				if kind == "" {
+					kind = kardinalv1alpha1.FleetSelectorApplication
+				}
+				warnings = append(warnings, fmt.Sprintf("environment %q: its fleet targets are the %ss its selector matches in the cluster; "+
+					"validate does not read the cluster (the Pipeline's status.fleets lists them once applied)", env.Name, kind))
+			}
 		}
 		// A reserved name fails Build on its node ID, already reported above;
 		// the ordering checks (unknown dependsOn, cycles) still run.
@@ -343,6 +358,16 @@ func printValidateWarnings(out io.Writer, warnings []string) {
 	for _, w := range warnings {
 		_, _ = fmt.Fprintf(out, "  ! warning: %s\n", w)
 	}
+}
+
+// hasFleetStatus reports whether p's status.fleets has environment env.
+func hasFleetStatus(p *kardinalv1alpha1.Pipeline, env string) bool {
+	for _, f := range p.Status.Fleets {
+		if f.Environment == env {
+			return true
+		}
+	}
+	return false
 }
 
 func hasUnnamedEnv(p kardinalv1alpha1.Pipeline) bool {
