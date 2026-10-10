@@ -740,14 +740,33 @@ controller's memory and its working directory on disk.
 
 The PromotionStep, PRStatus, PolicyGate, Bundle, Pipeline and MetricCheck work queues share
 their workers between namespaces (#1577). An item's place in the queue is lowered, within its
-priority, by the number of items its namespace already has ready or in process, so an item of
-a namespace with little work goes ahead of another namespace's large backlog. A
-150-environment wave in one namespace therefore no longer makes another team's steps wait for
-it: they are picked up after at most a few of the wave's items. Within one namespace the order
+priority, by how many items its namespace already has ready or in process (in a few steps: none,
+1 to 3, 4 to 15, 16 to 63, 64 to 255, 256 or more), so an item of a namespace with little work
+goes ahead of another namespace's large backlog. One namespace's large promotion therefore no
+longer makes another team's steps wait for all of it. Within one namespace the order
 stays first in, first out, and a namespace alone on the controller still gets every worker, so
 no throughput is lost. A step waiting for its branch's turn (see above) stays behind every
-step that can run. **[RESULTS]** `TestScale_TenantFairness` (`full`): tenant B's step p99 and
-tenant A's wave time, before and after.
+step that can run.
+
+Measured with the scale suite's `full` profile on one kind cluster (controller with `-race`, 2
+replicas), two runs each, before (main) and with fair queues. Tenant B promotes one Bundle on
+each of five 3-environment Pipelines while tenant A runs either a 149-environment wave on one
+branch (`TestScale_TenantFairness`) or 149 3-environment Pipelines on their own repositories,
+all at once (`TestScale_TenantFairnessManyRepos`):
+
+| | A's load | A's steps p50 / p99 | B's steps p99 | B's Bundles p50 / p99 |
+|---|---|---|---|---|
+| one branch, before | 144 s, 137 s | 68 / 134 s, 58 / 133 s | 6 s, 6 s | 7 / 12 s, 7 / 12 s |
+| one branch, fair | 122 s, 152 s | 63 / 118 s, 68 / 145 s | 6 s, 6 s | 7 / 17 s, 12 / 18 s |
+| many repositories, before | 51 s, 54 s | 3 / 8 s, 3 / 8 s | 6 s, 7 s | 35 / 40 s, 32 / 48 s |
+| many repositories, fair | 44 s, 66 s | 2 / 13 s, 3 / 10 s | 7 s, 10 s | 14 / 21 s, 20 / 29 s |
+
+On one branch the branch turns already let B through, and fair queues change nothing beyond
+the noise. With many repositories, B's Bundles waited behind A's backlog and took longer than
+all of A (35 s against 51 s); with fair queues they take less than half as long, and A's load
+time is within the noise (52 s against 55 s on average; the second fair run had the host's
+1-minute load at 110). B's steps were under 10 s in every run; what B waited for was the time
+between its steps, which the Bundle and Pipeline queues govern.
 
 ### Leader election under API pressure
 

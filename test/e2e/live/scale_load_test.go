@@ -177,8 +177,10 @@ func TestScale_TwoTenants(t *testing.T) {
 // third of A's steps exist, tenant B, in another namespace, promotes
 // one Bundle on each of TenantBBundles three-environment Pipelines, 5 s
 // apart. B's step latency (creation to Verified, the latency-slo invariant)
-// must stay at p99 within TenantStepP99, and A must still be running when
-// all of B's Bundles have finished, or the test did not measure contention. A's wave time is noted (tenantAWaveSeconds)
+// must stay at p99 within TenantStepP99, and every B Bundle must start
+// while A runs, or the test did not measure contention. Whether A was
+// still running when B finished is noted (tenantAStillRunningAfterB): a
+// starved B outlasts A. A's wave time is noted (tenantAWaveSeconds)
 // to compare runs.
 //
 // Covers SCALE-LOAD-FAIR-01.
@@ -258,11 +260,11 @@ func tenantFairness(t *testing.T, r *scale.Run, startA func()) {
 	if !tenantB.WaitSettled(t, r.P.Settle) {
 		t.Fatalf("tenant B's Bundles did not settle")
 	}
-	stillA := !aDone()
 	r.Note("tenantBBundlesDuringA", during)
-	if during < len(bNames) || !stillA {
-		t.Errorf("tenant A's load ended before tenant B's Bundles did (%d of %d started during A, A still running after B: %v): nothing was measured under contention",
-			during, len(bNames), stillA)
+	r.Note("tenantAStillRunningAfterB", !aDone())
+	if during < len(bNames) {
+		t.Errorf("tenant A's load ended before %d of tenant B's %d Bundles started: nothing was measured under contention",
+			len(bNames)-during, len(bNames))
 	}
 	if !r.Fleet.WaitSettled(t, r.P.Settle) {
 		t.Fatalf("tenant A's Bundles did not settle")
