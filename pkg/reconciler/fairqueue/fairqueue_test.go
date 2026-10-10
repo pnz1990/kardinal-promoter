@@ -285,3 +285,41 @@ func BenchmarkQueue(b *testing.B) {
 		})
 	}
 }
+
+// recordingQueue records the priorities items are added to the inner queue
+// with.
+type recordingQueue struct {
+	priorityqueue.PriorityQueue[reconcile.Request]
+	mu   sync.Mutex
+	seen map[int]bool
+}
+
+func (r *recordingQueue) AddWithOpts(o priorityqueue.AddOpts, items ...reconcile.Request) {
+	r.mu.Lock()
+	p := 0
+	if o.Priority != nil {
+		p = *o.Priority
+	}
+	r.seen[p] = true
+	r.mu.Unlock()
+	r.PriorityQueue.AddWithOpts(o, items...)
+}
+
+// TestQueue_FewPriorities: however large the backlogs, the inner queue sees
+// at most 6 priorities per level. controller-runtime's depth metric stops
+// tracking a queue with more than 25 priorities, and its depth gauges then
+// never return to zero (#1577, found by the metrics-workqueue-drains
+// invariant).
+//
+// Covers PERF-FAIRQ-01.
+func TestQueue_FewPriorities(t *testing.T) {
+	rec := &recordingQueue{PriorityQueue: priorityqueue.New[reconcile.Request](fmt.Sprintf("few-%d", queueN.Add(1))), seen: map[int]bool{}}
+	t.Cleanup(rec.ShutDown)
+	q := fairqueue.Wrap(rec)
+	low := handler.LowPriority
+	for i := range 1000 {
+		q.Add(req("a", fmt.Sprintf("n%04d", i)))
+		q.AddWithOpts(priorityqueue.AddOpts{Priority: &low}, req("b", fmt.Sprintf("l%04d", i)))
+	}
+	assert.LessOrEqual(t, len(rec.seen), 12, "priorities used: %v", rec.seen)
+}

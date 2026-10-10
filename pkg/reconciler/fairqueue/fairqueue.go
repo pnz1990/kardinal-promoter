@@ -10,7 +10,8 @@
 // and an item of another namespace waits behind all of it. This queue wraps
 // the priority queue and lowers an item's priority, within its priority
 // level, by the number of other items its namespace has queued or in
-// process when it is added: an item of a namespace with little work goes
+// process when it is added (in a few steps: none, 1-3, 4-15, 16-63, 64-255,
+// 256 or more): an item of a namespace with little work goes
 // ahead of a namespace with a large backlog. Within one namespace the order
 // stays first in, first out, and the priority levels (handler.LowPriority,
 // the turn waiters' low priority) are kept apart. The backlog counts keys
@@ -34,9 +35,17 @@ import (
 )
 
 // span is the width of one priority level: an item's priority is
-// base*span minus its namespace's backlog, capped at span-1, so a backlog
-// never crosses into the next lower level.
+// base*span minus its namespace's backlog bucket, so a backlog never
+// crosses into the next lower level.
 const span = 1000
+
+// buckets are the backlog bounds of the priority steps within a level: a
+// backlog of 0 keeps the priority, 1-3 lowers it by one, 4-15 by two, and
+// so on. Few steps, because controller-runtime's work-queue depth metric
+// is labelled by priority and stops tracking a queue that uses more than 25
+// priorities (its depth gauges then never return to zero); with two levels
+// in use (normal and low) this queue uses at most 12.
+var buckets = []int{1, 4, 16, 64, 256}
 
 // state is the bookkeeping of one key.
 type state struct {
@@ -110,7 +119,13 @@ func (q *Queue) backlogOf(ns string, self reconcile.Request, now time.Time) int 
 // shift is the priority an item of base priority gets when its namespace
 // has backlog other keys queued or processing.
 func shift(base, backlog int) int {
-	return base*span - min(backlog, span-1)
+	step := 0
+	for _, b := range buckets {
+		if backlog >= b {
+			step++
+		}
+	}
+	return base*span - step
 }
 
 // AddWithOpts adds items with o, each at its namespace-shifted priority.
