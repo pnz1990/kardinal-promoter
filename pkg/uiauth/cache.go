@@ -31,13 +31,21 @@ const maxCacheEntries = 4096
 type cacheEntry[V any] struct {
 	value   V
 	expires time.Time
+	// started orders the reviews behind the entries (see ttlCache.start).
+	started uint64
 }
 
+// ttlCache caches review results. Each review takes a ticket from start
+// before it asks the API server, and put stores its result only when no
+// review that started later has stored one: an "allowed" that started
+// before an RBAC revoke but returned after the "denied" of a later review
+// must not overwrite the denial for another TTL.
 type ttlCache[V any] struct {
 	mu      sync.Mutex
 	ttl     time.Duration
 	now     func() time.Time
 	entries map[string]cacheEntry[V]
+	tickets uint64
 }
 
 func newTTLCache[V any](ttl time.Duration) *ttlCache[V] {
@@ -55,10 +63,25 @@ func (c *ttlCache[V]) get(key string) (V, bool) {
 	return e.value, true
 }
 
-func (c *ttlCache[V]) put(key string, v V) {
+// start returns the ticket of a review about to be asked.
+func (c *ttlCache[V]) start() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tickets++
+	return c.tickets
+}
+
+// put stores v, the result of the review with ticket started, unless a
+// review that started later has stored its result for key already.
+func (c *ttlCache[V]) put(key string, v V, started uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.now()
+	// Expired or not: a newer review's result, even an expired one, is
+	// fresher than this one, which then is not stored at all.
+	if e, ok := c.entries[key]; ok && e.started > started {
+		return
+	}
 	if len(c.entries) >= maxCacheEntries {
 		for k, e := range c.entries {
 			if !now.Before(e.expires) {
@@ -69,7 +92,7 @@ func (c *ttlCache[V]) put(key string, v V) {
 			c.entries = map[string]cacheEntry[V]{}
 		}
 	}
-	c.entries[key] = cacheEntry[V]{value: v, expires: now.Add(c.ttl)}
+	c.entries[key] = cacheEntry[V]{value: v, expires: now.Add(c.ttl), started: started}
 }
 
 func hashKey(parts ...any) string {
@@ -99,13 +122,14 @@ func (c *cachedTokenReviewer) Review(ctx context.Context, token string) (*authv1
 	if st, ok := c.cache.get(key); ok {
 		return &st, nil
 	}
+	ticket := c.cache.start()
 	st, err := c.inner.Review(ctx, token)
 	if err != nil {
 		return nil, err
 	}
 	// A review the API server answered, not the cache: a login.
 	accesslog.FromContext(ctx).Login = true
-	c.cache.put(key, *st.DeepCopy())
+	c.cache.put(key, *st.DeepCopy(), ticket)
 	return st, nil
 }
 
@@ -131,10 +155,11 @@ func (c *cachedAccessReviewer) Allowed(ctx context.Context, user authv1.UserInfo
 	if d, ok := c.cache.get(key); ok {
 		return d.allowed, d.reason, nil
 	}
+	ticket := c.cache.start()
 	allowed, reason, err := c.inner.Allowed(ctx, user, attrs)
 	if err != nil {
 		return false, "", err
 	}
-	c.cache.put(key, accessDecision{allowed: allowed, reason: reason})
+	c.cache.put(key, accessDecision{allowed: allowed, reason: reason}, ticket)
 	return allowed, reason, nil
 }
