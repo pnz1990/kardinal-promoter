@@ -892,8 +892,10 @@ func TestChart_Ports(t *testing.T) {
 // TestChart_WatchNamespace runs two namespace-scoped installs side by side,
 // as the security guide's two-team example does: each promotes its own
 // namespace through a Role, neither may touch the other's, and a namespace
-// with no install is left alone. The only cluster-wide grants are ChangeWindows
-// and get on the install's own Namespace object.
+// with no install is left alone. The cluster-wide grants are on
+// cluster-scoped kinds only (such as ChangeWindows, ClusterScmProviders and
+// Argo Rollouts' ClusterAnalysisTemplates), and get on the install's own
+// Namespace object.
 //
 // Covers CHART-WATCHNS-01.
 func TestChart_WatchNamespace(t *testing.T) {
