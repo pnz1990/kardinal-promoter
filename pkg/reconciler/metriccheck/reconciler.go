@@ -405,7 +405,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&kardinalv1alpha1.MetricCheck{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: workerCount(r.Limiter),
 			// Workers are shared fairly between namespaces (#1577).
-			NewQueue: fairqueue.New})
+			NewQueue: fairqueue.NewFor(mgr)})
 	if r.Limiter != nil {
 		wake := make(chan event.GenericEvent, wakeBuffer)
 		r.Limiter.Wake = func(key types.NamespacedName) {

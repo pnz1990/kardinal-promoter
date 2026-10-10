@@ -5,24 +5,39 @@
 // fairly between namespaces (#1577).
 //
 // controller-runtime's priority queue serves items by priority, then in the
-// order they were added. One namespace with hundreds of runnable items (a
-// 150-environment wave) then holds every worker until its backlog drains,
-// and an item of another namespace waits behind all of it. This queue wraps
-// the priority queue and lowers an item's priority, within its priority
-// level, by the number of other items its namespace has queued or in
-// process when it is added (in a few steps: none, 1-3, 4-15, 16-63, 64-255,
-// 256 or more): an item of a namespace with little work goes
-// ahead of a namespace with a large backlog. Within one namespace the order
-// stays first in, first out, and the priority levels (handler.LowPriority,
-// the turn waiters' low priority) are kept apart. The backlog counts keys
-// that are ready or processing; one waiting for a RequeueAfter (a health
-// check's next poll) does not count until it is due, so a namespace with
-// many idle objects is not penalised.
+// order they were added. One namespace with hundreds of runnable items then
+// holds every worker until its backlog drains, and an item of another
+// namespace waits behind all of it. This queue wraps the priority queue and
+// lowers an item's priority within its priority level by the size of its
+// namespace's backlog, in a few steps (none, 1-3, 4-15, 16-63, 64-255, 256
+// or more): an item of a namespace with little work goes ahead of a
+// namespace with a large backlog.
 //
-// It is work-conserving: a worker never idles while an item is ready, so a
-// namespace alone on the controller gets every worker, as before. The
-// counts are process-local bookkeeping of the queue itself, like the
-// queue's own contents: they order work and decide nothing.
+// The backlog counts the namespace's keys that are in process or due. A key
+// waiting for a RequeueAfter or a rate-limit backoff does not count until it
+// is due, so a namespace with many idle or failing objects is not penalised;
+// when it becomes due its priority is computed again (the inner queue keeps
+// the higher of the two), so a requeue is not stuck with the penalty of the
+// moment it was added.
+//
+// Aging bounds the unfairness the other way: a key that has been due for
+// longer than the aging bound (10 s by default) is raised back to its base
+// priority, so a busy namespace still gets a share of the workers under a
+// steady stream of small namespaces.
+//
+// Guarantees:
+//   - work-conserving: a worker never idles while an item is ready, so a
+//     namespace alone on the controller gets every worker, as before;
+//   - within a namespace and a priority step, keys are served in the order
+//     they became due;
+//   - priority levels (handler.LowPriority, the branch-turn waiters) are
+//     kept apart: no backlog or aging moves a key out of its level;
+//   - a due key waits at most about the aging bound behind keys of its own
+//     level before it competes as if it had no backlog.
+//
+// The counts are process-local bookkeeping of the queue itself, like the
+// queue's own contents: they order work and decide nothing, and a restart
+// loses only the ordering.
 package fairqueue
 
 import (
@@ -30,14 +45,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-logr/logr"
 	"k8s.io/client-go/util/workqueue"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/controller/priorityqueue"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // span is the width of one priority level: an item's priority is
-// base*span minus its namespace's backlog bucket, so a backlog never
-// crosses into the next lower level.
+// base*span minus its namespace's backlog step, so a backlog never crosses
+// into the next lower level.
 const span = 1000
 
 // buckets are the backlog bounds of the priority steps within a level: a
@@ -48,19 +66,25 @@ const span = 1000
 // in use (normal and low) this queue uses at most 12.
 var buckets = []int{1, 4, 16, 64, 256}
 
+// DefaultAging is how long a key may be due before it is raised back to
+// its base priority.
+const DefaultAging = 10 * time.Second
+
 // state is the bookkeeping of one key.
 type state struct {
 	// queued: in the inner queue (ready or waiting); processing: handed to
-	// a worker and not yet Done; due: queued and its ready time has come.
-	queued, processing, due bool
+	// a worker and not yet Done; due: queued and its ready time has come;
+	// aged: raised to its base priority since it became due.
+	queued, processing, due, aged bool
 	// base is the highest base priority the key was added with since its
 	// last Get: what GetWithPriority returns, so the controller requeues
 	// with the priority the reconciler meant, not the shifted one.
 	base int
-	// readyAt is when a queued key is due (the earliest of its adds); gen
-	// invalidates its older entries in the namespace's waiting heap.
-	readyAt time.Time
-	gen     uint64
+	// readyAt is when a queued key is due (the earliest of its adds);
+	// dueSince when it became due; gen invalidates its older entries in the
+	// namespace's waiting heap.
+	readyAt, dueSince time.Time
+	gen               uint64
 }
 
 // waiter is a queued key that is not due yet.
@@ -96,26 +120,147 @@ type namespace struct {
 // Queue is a priorityqueue.PriorityQueue that orders items fairly between
 // namespaces.
 type Queue struct {
-	inner priorityqueue.PriorityQueue[reconcile.Request]
+	inner   priorityqueue.PriorityQueue[reconcile.Request]
+	limiter workqueue.TypedRateLimiter[reconcile.Request]
+	aging   time.Duration
 
 	mu         sync.Mutex
 	namespaces map[string]*namespace
 	now        func() time.Time
+	stop       chan struct{}
+	stopOnce   sync.Once
 }
 
 var _ priorityqueue.PriorityQueue[reconcile.Request] = (*Queue)(nil)
 
+// Option configures a Queue.
+type Option func(*Queue)
+
+// Aging sets how long a key may be due before it is raised back to its
+// base priority (DefaultAging). Zero turns aging off.
+func Aging(d time.Duration) Option { return func(q *Queue) { q.aging = d } }
+
+// RateLimiter is the limiter the queue asks for an AddRateLimited's delay,
+// so the key counts only once its backoff is over. It must be the inner
+// queue's limiter (Forget and NumRequeues go there).
+func RateLimiter(l workqueue.TypedRateLimiter[reconcile.Request]) Option {
+	return func(q *Queue) { q.limiter = l }
+}
+
+// NewFor returns the controller.Options.NewQueue of a controller of mgr:
+// the fair queue over controller-runtime's priority queue, logged like the
+// default queue. With the manager's UsePriorityQueue set to false it
+// returns the plain rate-limited queue, as controller-runtime would.
+func NewFor(mgr manager.Manager) func(string, workqueue.TypedRateLimiter[reconcile.Request]) workqueue.TypedRateLimitingInterface[reconcile.Request] {
+	usePQ := ptr.Deref(mgr.GetControllerOptions().UsePriorityQueue, true)
+	log := mgr.GetLogger()
+	return func(name string, rl workqueue.TypedRateLimiter[reconcile.Request]) workqueue.TypedRateLimitingInterface[reconcile.Request] {
+		if !usePQ {
+			return workqueue.NewTypedRateLimitingQueueWithConfig(rl, workqueue.TypedRateLimitingQueueConfig[reconcile.Request]{Name: name})
+		}
+		return newQueue(name, rl, log.WithValues("controller", name))
+	}
+}
+
 // New wraps a controller-runtime priority queue named name with
 // rateLimiter. It has the signature of controller.Options.NewQueue.
 func New(name string, rateLimiter workqueue.TypedRateLimiter[reconcile.Request]) workqueue.TypedRateLimitingInterface[reconcile.Request] {
+	return newQueue(name, rateLimiter, logr.Discard())
+}
+
+func newQueue(name string, rateLimiter workqueue.TypedRateLimiter[reconcile.Request], log logr.Logger) *Queue {
 	return Wrap(priorityqueue.New(name, func(o *priorityqueue.Opts[reconcile.Request]) {
 		o.RateLimiter = rateLimiter
-	}))
+		o.Log = log
+	}), RateLimiter(rateLimiter))
 }
 
 // Wrap makes inner fair between namespaces.
-func Wrap(inner priorityqueue.PriorityQueue[reconcile.Request]) *Queue {
-	return &Queue{inner: inner, namespaces: map[string]*namespace{}, now: time.Now}
+func Wrap(inner priorityqueue.PriorityQueue[reconcile.Request], opts ...Option) *Queue {
+	q := &Queue{inner: inner, aging: DefaultAging, namespaces: map[string]*namespace{}, now: time.Now, stop: make(chan struct{})}
+	for _, o := range opts {
+		o(q)
+	}
+	go q.tick()
+	return q
+}
+
+// tick runs sweep until ShutDown: often enough that a waiter's recomputed
+// priority and an aged key take effect well within the aging bound.
+func (q *Queue) tick() {
+	every := q.aging / 4
+	if every <= 0 || every > time.Second {
+		every = time.Second
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-q.stop:
+			return
+		case <-t.C:
+			q.sweep()
+		}
+	}
+}
+
+// readd is a key to add to the inner queue again at priority p.
+type readd struct {
+	key reconcile.Request
+	p   int
+}
+
+// sweep re-adds the keys that became due since the last sweep at their
+// recomputed priority, and the keys due longer than the aging bound at
+// their base priority. The inner queue keeps the higher priority.
+func (q *Queue) sweep() {
+	now := q.now()
+	var out []readd
+	q.mu.Lock()
+	for _, n := range q.namespaces {
+		for _, pr := range n.promote(now) {
+			out = append(out, readd{pr.key, shift(pr.st.base, n.active-1)})
+		}
+		if q.aging <= 0 {
+			continue
+		}
+		for k, st := range n.keys {
+			if st.due && !st.aged && now.Sub(st.dueSince) >= q.aging {
+				st.aged = true
+				out = append(out, readd{k, st.base * span})
+			}
+		}
+	}
+	q.mu.Unlock()
+	q.readd(out)
+}
+
+// readd adds keys that are due to the inner queue again at their priority.
+func (q *Queue) readd(out []readd) {
+	for _, r := range out {
+		p := r.p
+		q.inner.AddWithOpts(priorityqueue.AddOpts{Priority: &p}, r.key)
+	}
+}
+
+// promoted is a key promote marked due.
+type promoted struct {
+	key reconcile.Request
+	st  *state
+}
+
+// promote counts the waiters of n that are due at now and returns them.
+func (n *namespace) promote(now time.Time) []promoted {
+	var out []promoted
+	for len(n.waiting) > 0 && !n.waiting[0].at.After(now) {
+		w := heap.Pop(&n.waiting).(waiter)
+		if st := n.keys[w.key]; st != nil && st.gen == w.gen && st.queued && !st.due {
+			st.due, st.dueSince = true, w.at
+			n.active++
+			out = append(out, promoted{w.key, st})
+		}
+	}
+	return out
 }
 
 // ns returns the bookkeeping of name, creating it.
@@ -126,17 +271,6 @@ func (q *Queue) ns(name string) *namespace {
 		q.namespaces[name] = n
 	}
 	return n
-}
-
-// promote counts the waiters of n that are due at now.
-func (n *namespace) promote(now time.Time) {
-	for len(n.waiting) > 0 && !n.waiting[0].at.After(now) {
-		w := heap.Pop(&n.waiting).(waiter)
-		if st := n.keys[w.key]; st != nil && st.gen == w.gen && st.queued && !st.due {
-			st.due = true
-			n.active++
-		}
-	}
 }
 
 // release drops n's bookkeeping of key when it is neither queued nor
@@ -163,21 +297,30 @@ func shift(base, backlog int) int {
 	return base*span - step
 }
 
-// AddWithOpts adds items with o, each at its namespace-shifted priority.
+// AddWithOpts adds items with o, each at its namespace-shifted priority. A
+// rate-limited add asks the rate limiter for its delay here, so the key is
+// counted only once its backoff is over.
 func (q *Queue) AddWithOpts(o priorityqueue.AddOpts, items ...reconcile.Request) {
 	base := 0
 	if o.Priority != nil {
 		base = *o.Priority
 	}
 	for _, it := range items {
+		opts := o
+		if opts.RateLimited && q.limiter != nil {
+			if d := q.limiter.When(it); opts.After <= 0 || d < opts.After {
+				opts.After = d
+			}
+			opts.RateLimited = false
+		}
 		q.mu.Lock()
 		now := q.now()
 		ready := now
-		if o.After > 0 {
-			ready = now.Add(o.After)
+		if opts.After > 0 {
+			ready = now.Add(opts.After)
 		}
 		n := q.ns(it.Namespace)
-		n.promote(now)
+		promoted := n.promote(now)
 		st := n.keys[it]
 		if st == nil {
 			st = &state{}
@@ -185,7 +328,7 @@ func (q *Queue) AddWithOpts(o priorityqueue.AddOpts, items ...reconcile.Request)
 		}
 		switch {
 		case !st.queued:
-			st.base, st.queued, st.readyAt = base, true, ready
+			st.base, st.queued, st.readyAt, st.aged = base, true, ready, false
 			q.schedule(n, it, st, now)
 		default:
 			st.base = max(st.base, base)
@@ -199,10 +342,16 @@ func (q *Queue) AddWithOpts(o priorityqueue.AddOpts, items ...reconcile.Request)
 			backlog-- // not itself
 		}
 		p := shift(base, backlog)
+		var again []readd
+		for _, pr := range promoted {
+			if pr.key != it {
+				again = append(again, readd{pr.key, shift(pr.st.base, n.active-1)})
+			}
+		}
 		q.mu.Unlock()
-		opts := o
 		opts.Priority = &p
 		q.inner.AddWithOpts(opts, it)
+		q.readd(again)
 	}
 }
 
@@ -211,7 +360,7 @@ func (q *Queue) schedule(n *namespace, key reconcile.Request, st *state, now tim
 	st.gen++
 	if !st.readyAt.After(now) {
 		if !st.due {
-			st.due = true
+			st.due, st.dueSince = true, now
 			n.active++
 		}
 		return
@@ -256,7 +405,7 @@ func (q *Queue) GetWithPriority() (reconcile.Request, int, bool) {
 		st.due = false
 		n.active--
 	}
-	st.queued = false
+	st.queued, st.aged = false, false
 	st.gen++ // its waiting entry, if any, is stale
 	if !st.processing {
 		st.processing = true
@@ -296,13 +445,19 @@ func (q *Queue) Done(item reconcile.Request) {
 // and due now.
 func (q *Queue) Backlog(ns string) int {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	n := q.namespaces[ns]
 	if n == nil {
+		q.mu.Unlock()
 		return 0
 	}
-	n.promote(q.now())
-	return n.active
+	var again []readd
+	for _, pr := range n.promote(q.now()) {
+		again = append(again, readd{pr.key, shift(pr.st.base, n.active-1)})
+	}
+	active := n.active
+	q.mu.Unlock()
+	q.readd(again)
+	return active
 }
 
 // Forget forwards to the inner queue.
@@ -314,11 +469,17 @@ func (q *Queue) NumRequeues(item reconcile.Request) int { return q.inner.NumRequ
 // Len forwards to the inner queue.
 func (q *Queue) Len() int { return q.inner.Len() }
 
-// ShutDown forwards to the inner queue.
-func (q *Queue) ShutDown() { q.inner.ShutDown() }
+// ShutDown stops the queue.
+func (q *Queue) ShutDown() {
+	q.stopOnce.Do(func() { close(q.stop) })
+	q.inner.ShutDown()
+}
 
-// ShutDownWithDrain forwards to the inner queue.
-func (q *Queue) ShutDownWithDrain() { q.inner.ShutDownWithDrain() }
+// ShutDownWithDrain stops the queue once its items are done.
+func (q *Queue) ShutDownWithDrain() {
+	q.stopOnce.Do(func() { close(q.stop) })
+	q.inner.ShutDownWithDrain()
+}
 
 // ShuttingDown forwards to the inner queue.
 func (q *Queue) ShuttingDown() bool { return q.inner.ShuttingDown() }

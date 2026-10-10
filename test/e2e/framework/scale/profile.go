@@ -88,6 +88,9 @@ type Profile struct {
 	// (creation to Verified) meanwhile (#1577).
 	TenantBBundles int
 	TenantStepP99  time.Duration
+	// TenantBundleP99 bounds the p99 of B's Bundles end to end: what B
+	// waits for between its steps, in the queues A fills.
+	TenantBundleP99 time.Duration
 
 	// SLOPipelines Pipelines of PipelineEnvs automatic environments get one
 	// Bundle each at once in TestScale_LatencySLO, which holds the
@@ -109,7 +112,7 @@ var profiles = map[string]Profile{
 		Pipelines: 20, PipelineEnvs: 3, BurstBundles: 100, BurstPipelines: 10,
 		SustainedRate: 0.5, SustainedFor: 2 * time.Minute, SustainedPipelines: 8,
 		RapidFire: 10, ChaosFor: 3 * time.Minute, ChaosPipelines: 8,
-		TenantWave: 30, TenantStartWithin: 20 * time.Second, TenantBBundles: 3, TenantStepP99: 20 * time.Second,
+		TenantWave: 30, TenantStartWithin: 20 * time.Second, TenantBBundles: 3, TenantStepP99: 20 * time.Second, TenantBundleP99: 90 * time.Second,
 		Settle:       10 * time.Minute,
 		SLOPipelines: 20,
 		SLO:          invariants.SLO{StepP50: 5 * time.Second, StepP99: 15 * time.Second, BundleP99: 45 * time.Second},
@@ -121,7 +124,7 @@ var profiles = map[string]Profile{
 		Pipelines: 200, PipelineEnvs: 3, BurstBundles: 1000, BurstPipelines: 100,
 		SustainedRate: 2, SustainedFor: 10 * time.Minute, SustainedPipelines: 50,
 		RapidFire: 40, ChaosFor: 10 * time.Minute, ChaosPipelines: 40,
-		TenantWave: 149, TenantStartWithin: 20 * time.Second, TenantBBundles: 5, TenantStepP99: 10 * time.Second,
+		TenantWave: 149, TenantStartWithin: 20 * time.Second, TenantBBundles: 5, TenantStepP99: 10 * time.Second, TenantBundleP99: 35 * time.Second,
 		Settle:       45 * time.Minute,
 		SLOPipelines: 200,
 		SLO:          invariants.SLO{StepP50: 10 * time.Second, StepP99: 30 * time.Second, BundleP99: 2 * time.Minute},

@@ -1345,7 +1345,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers,
 			// Workers are shared fairly between namespaces (#1577).
-			NewQueue: fairqueue.New}).
+			NewQueue: fairqueue.NewFor(mgr)}).
 		For(&kardinalv1alpha1.PolicyGate{}, builder.WithPredicates(
 			predicate.Or(eventfilter.SpecOrAnnotationChanged, auditPending))).
 		// Watch MetricCheck objects: when a MetricCheck's result or value changes,

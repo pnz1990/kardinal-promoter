@@ -769,10 +769,19 @@ their workers between namespaces (#1577). An item's place in the queue is lowere
 priority, by how many items its namespace already has ready or in process (in a few steps: none,
 1 to 3, 4 to 15, 16 to 63, 64 to 255, 256 or more), so an item of a namespace with little work
 goes ahead of another namespace's large backlog. One namespace's large promotion therefore no
-longer makes another team's steps wait for all of it. Within one namespace the order
-stays first in, first out, and a namespace alone on the controller still gets every worker, so
-no throughput is lost. A step waiting for its branch's turn (see above) stays behind every
-step that can run.
+longer makes another team's steps wait for all of it.
+
+- Only items that are due count: an item waiting for a requeue delay or a retry backoff counts
+  once its time has come, and its place is computed again then. A namespace with many idle or
+  failing objects is not pushed down.
+- Aging: an item that has been due for more than 10 seconds goes back to its normal place, so a
+  busy namespace still gets its share of the workers while many small namespaces keep the
+  queue busy.
+- Within one namespace and step, items are served in the order they became due.
+- Priority levels stay apart: a step waiting for its branch's turn (see above) stays behind
+  every step that can run.
+- No worker waits while an item is ready, so a namespace alone on the controller gets every
+  worker, as before. The fairness reorders work; it does not add any.
 
 Measured with the scale suite's `full` profile on one kind cluster (controller with `-race`, 2
 replicas), main and fair queues run alternately with the host's load under 64 at each start.

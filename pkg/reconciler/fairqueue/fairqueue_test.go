@@ -339,3 +339,107 @@ func BenchmarkQueue_AddLargeNamespace(b *testing.B) {
 		q.Add(req("a", fmt.Sprintf("r%04d", i%3000)))
 	}
 }
+
+// TestQueue_RateLimitedCountsAfterBackoff (#1662 QA): a rate-limited add
+// counts in its namespace's backlog only once its backoff is over, so a
+// namespace with failing objects does not push its healthy work down.
+//
+// Covers PERF-FAIRQ-01.
+func TestQueue_RateLimitedCountsAfterBackoff(t *testing.T) {
+	rl := workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](time.Hour, time.Hour)
+	q := fairqueue.New(fmt.Sprintf("rl-%d", queueN.Add(1)), rl).(*fairqueue.Queue)
+	t.Cleanup(q.ShutDown)
+	for i := range 20 {
+		q.AddRateLimited(req("a", fmt.Sprintf("failing%02d", i)))
+	}
+	assert.Zero(t, q.Backlog("a"), "keys in their backoff are not counted")
+	q.Add(req("a", "healthy"))
+	q.Add(req("b", "other"))
+	first, p := get(t, q)
+	assert.Equal(t, req("a", "healthy"), first, "a's healthy key is not pushed down by its failing ones")
+	assert.Zero(t, p)
+	assert.Equal(t, 1, q.NumRequeues(req("a", "failing00")), "the inner queue's limiter counted the requeue once")
+}
+
+// TestQueue_AgingGivesTheBusyNamespaceItsShare (#1662 QA): under a steady
+// stream of 40 one-key namespaces, a namespace with a 300-key backlog still
+// gets at least its share (1 in 41) of the handouts once its keys age.
+//
+// Covers PERF-FAIRQ-01.
+func TestQueue_AgingGivesTheBusyNamespaceItsShare(t *testing.T) {
+	share := func(aging time.Duration) float64 {
+		inner := priorityqueue.New[reconcile.Request](fmt.Sprintf("age-%d", queueN.Add(1)))
+		q := fairqueue.Wrap(inner, fairqueue.Aging(aging))
+		var a, all atomic.Int64
+		var measuring atomic.Bool
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for {
+					it, _, shutdown := q.GetWithPriority()
+					if shutdown {
+						return
+					}
+					if measuring.Load() {
+						all.Add(1)
+						if it.Namespace == "a" {
+							a.Add(1)
+						}
+					}
+					time.Sleep(time.Millisecond)
+					q.Done(it)
+					q.Add(it)
+				}
+			}()
+		}
+		for i := range 300 {
+			q.Add(req("a", fmt.Sprintf("s%03d", i)))
+		}
+		for i := range 40 {
+			q.Add(req(fmt.Sprintf("small%02d", i), "x"))
+		}
+		time.Sleep(time.Second) // warm-up: a's keys age
+		measuring.Store(true)
+		time.Sleep(2 * time.Second)
+		measuring.Store(false)
+		q.ShutDown()
+		wg.Wait()
+		require.NotZero(t, all.Load())
+		return float64(a.Load()) / float64(all.Load())
+	}
+	without, with := share(0), share(200*time.Millisecond)
+	t.Logf("a's share of the handouts: %.3f without aging, %.3f with aging (fair share %.3f)", without, with, 1.0/41)
+	assert.GreaterOrEqual(t, with, 1.0/41, "the busy namespace gets at least its share")
+}
+
+// TestQueue_DelayedRequeueRecomputed (#1662 QA): a requeue added with a
+// delay while its namespace was busy is not stuck with that penalty: when
+// it becomes due, its priority is computed again, so it goes ahead of an
+// item added earlier at a lower step.
+//
+// Covers PERF-FAIRQ-01.
+func TestQueue_DelayedRequeueRecomputed(t *testing.T) {
+	q := fairqueue.Wrap(priorityqueue.New[reconcile.Request](fmt.Sprintf("re-%d", queueN.Add(1))), fairqueue.Aging(time.Minute))
+	t.Cleanup(q.ShutDown)
+	for i := range 20 {
+		q.Add(req("a", fmt.Sprintf("busy%02d", i)))
+	}
+	q.AddAfter(req("a", "late"), 300*time.Millisecond) // penalised for a's 20 due keys
+	for range 20 {
+		it, _ := get(t, q)
+		q.Done(it)
+	}
+	q.Add(req("c", "c0"))
+	q.Add(req("c", "c1"))                          // one step down: c0 is due
+	time.Sleep(time.Second + 400*time.Millisecond) // late is due and swept
+	order := []reconcile.Request{}
+	for range 3 {
+		it, _ := get(t, q)
+		order = append(order, it)
+		q.Done(it)
+	}
+	assert.Equal(t, []reconcile.Request{req("c", "c0"), req("a", "late"), req("c", "c1")}, order,
+		"late was raised to the step of a namespace with no backlog when it became due")
+}

@@ -2314,7 +2314,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers,
 			// Workers are shared fairly between namespaces (#1577).
-			NewQueue: fairqueue.New}).
+			NewQueue: fairqueue.NewFor(mgr)}).
 		For(&v1alpha1.PromotionStep{}, builderutil.WithPredicates(
 			predicate.Or(predicate.GenerationChangedPredicate{},
 				eventfilter.LabelChangedExceptKro, predicate.AnnotationChangedPredicate{}, auditPending),

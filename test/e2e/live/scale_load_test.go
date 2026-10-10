@@ -186,10 +186,10 @@ func TestScale_TwoTenants(t *testing.T) {
 // third of A's steps exist, tenant B, in another namespace, promotes
 // one Bundle on each of TenantBBundles three-environment Pipelines, 5 s
 // apart. B's step latency (creation to Verified, the latency-slo invariant)
-// must stay at p99 within TenantStepP99, and every B Bundle must start
-// while A runs, or the test did not measure contention. Whether A was
-// still running when B finished is noted (tenantAStillRunningAfterB): a
-// starved B outlasts A. A's wave time is noted (tenantAWaveSeconds)
+// must stay at p99 within TenantStepP99 and B's Bundles at p99 within
+// TenantBundleP99 (35 s in full), every B Bundle must start while A runs,
+// or the test did not measure contention, and B must finish while A is
+// still running: a starved B outlasts A. A's wave time is noted (tenantAWaveSeconds)
 // to compare runs.
 //
 // Covers SCALE-LOAD-FAIR-01.
@@ -269,11 +269,15 @@ func tenantFairness(t *testing.T, r *scale.Run, startA func()) {
 	if !tenantB.WaitSettled(t, r.P.Settle) {
 		t.Fatalf("tenant B's Bundles did not settle")
 	}
+	stillA := !aDone()
 	r.Note("tenantBBundlesDuringA", during)
-	r.Note("tenantAStillRunningAfterB", !aDone())
+	r.Note("tenantAStillRunningAfterB", stillA)
 	if during < len(bNames) {
 		t.Errorf("tenant A's load ended before %d of tenant B's %d Bundles started: nothing was measured under contention",
 			len(bNames)-during, len(bNames))
+	}
+	if !stillA {
+		t.Errorf("tenant B's five Bundles finished only after all of tenant A's load: B was starved")
 	}
 	if !r.Fleet.WaitSettled(t, r.P.Settle) {
 		t.Fatalf("tenant A's Bundles did not settle")
@@ -282,7 +286,7 @@ func tenantFairness(t *testing.T, r *scale.Run, startA func()) {
 	r.Finish(scale.AllVerified)
 	// B's latency, with B's own targets.
 	t.Run("tenant-b", func(t *testing.T) {
-		slo := invariants.SLO{StepP99: r.P.TenantStepP99}
+		slo := invariants.SLO{StepP99: r.P.TenantStepP99, BundleP99: r.P.TenantBundleP99}
 		invariants.Check(t, r.E, invariants.Options{Namespace: tenantB.NS, Outcome: invariants.OutcomeAllVerified, Targets: tenantB.Targets(),
 			Image: scale.ImageRepo, SeedTag: scale.SeedTag, Start: r.Start, SLO: &slo,
 			Extra: map[string]interface{}{"tenant": "b"}})
