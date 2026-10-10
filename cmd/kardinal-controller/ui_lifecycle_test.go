@@ -494,3 +494,24 @@ func TestUIAPI_RollbackHold(t *testing.T) {
 	w = uiLcPost(t, c, "/api/v1/ui/release-hold", `{"pipeline":"app"}`)
 	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 }
+
+// TestHoldResponse_BundleMissing (#1629): the UI API says when a hold's
+// rollback Bundle is missing, with the controller's message and the release
+// command.
+//
+// Covers RB-HOLD-04.
+func TestHoldResponse_BundleMissing(t *testing.T) {
+	p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app"}}
+	p.Spec.Holds = []v1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rollback-gone", Reason: "INC-42"}}
+	got := holdResponse(p, "prod")
+	require.NotNil(t, got)
+	assert.False(t, got.BundleMissing)
+	assert.Equal(t, "kardinal release-hold app --env prod", got.ReleaseCommand)
+
+	p.Status.HoldStates = []v1alpha1.EnvironmentHoldState{{Environment: "prod", Bundle: "app-rollback-gone",
+		State: v1alpha1.HoldStateBundleMissing, Message: "rollback Bundle app-rollback-gone does not exist"}}
+	got = holdResponse(p, "prod")
+	require.NotNil(t, got, "the hold stays in effect")
+	assert.True(t, got.BundleMissing)
+	assert.Equal(t, "rollback Bundle app-rollback-gone does not exist", got.Message)
+}
