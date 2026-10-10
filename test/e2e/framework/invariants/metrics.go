@@ -147,11 +147,14 @@ func checkMetrics(ctx context.Context, e *framework.Env, o Options) (*Metrics, [
 		time.Sleep(10 * time.Second)
 	}
 	// The Pods' memory and goroutines end once the work the load left has
-	// drained, plus two scrapes: the last Bundles settling spawn a short
-	// burst of goroutines (the RC soak: 520 -> 1671 for under a minute),
-	// which the window's last sample can land on.
-	memEnd := time.Now().Add(drainScrapes)
-	time.Sleep(drainScrapes)
+	// drained and the goroutine count stopped falling: the last Bundles
+	// settling spawn a short burst of goroutines (the RC soak: 520 -> 1671
+	// for under a minute), which the window's last sample can land on.
+	memEnd := settleGoroutines(time.Now, time.Sleep, func() (float64, bool) {
+		v := byLabel(ctx, e, `sum by (job) (go_goroutines{`+ctrlSel+`})`, "job")
+		g, ok := v[framework.ControllerName]
+		return g, ok
+	})
 	var maxQ []string
 	for k, v := range m.QueueDepthMax {
 		if v >= 10 {
@@ -351,10 +354,30 @@ func podSeries(ctx context.Context, e *framework.Env, start, end, warm time.Time
 	return out
 }
 
-// drainScrapes is how long after the work queues drained the memory and
-// goroutine series end: two steps of podSeries' 15s range query (the suite's
-// Prometheus scrapes every 5s).
-const drainScrapes = 30 * time.Second
+// goroutineSettleStep and goroutineSettleMax pace settleGoroutines: two
+// steps of podSeries' 15s range query between reads, for at most 2 minutes.
+const (
+	goroutineSettleStep = 30 * time.Second
+	goroutineSettleMax  = 2 * time.Minute
+)
+
+// settleGoroutines waits until the controller's goroutine count (read)
+// stops falling, reading it every goroutineSettleStep, for at most
+// goroutineSettleMax, and returns the time of the last read: where the
+// memory and goroutine series end. A read that fails ends the wait.
+func settleGoroutines(now func() time.Time, sleep func(time.Duration), read func() (float64, bool)) time.Time {
+	deadline := now().Add(goroutineSettleMax)
+	prev, ok := read()
+	for ok && now().Before(deadline) {
+		sleep(goroutineSettleStep)
+		cur, curOK := read()
+		if !curOK || cur >= prev {
+			break
+		}
+		prev = cur
+	}
+	return now()
+}
 
 // warmHeapWindow is how long after the warm baseline the warm heap is the
 // lowest sample of: one sample would land anywhere on the GC sawtooth.
