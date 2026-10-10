@@ -41,10 +41,6 @@
          <lastmod>2026-10-10</lastmod>
     </url>
     <url>
-         <loc>https://pnz1990.github.io/kardinal-promoter/distributed-mode/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
          <loc>https://pnz1990.github.io/kardinal-promoter/faq/</loc>
          <lastmod>2026-10-10</lastmod>
     </url>
@@ -70,6 +66,10 @@
     </url>
     <url>
          <loc>https://pnz1990.github.io/kardinal-promoter/metric-checks/</loc>
+         <lastmod>2026-10-10</lastmod>
+    </url>
+    <url>
+         <loc>https://pnz1990.github.io/kardinal-promoter/multi-cluster/</loc>
          <lastmod>2026-10-10</lastmod>
     </url>
     <url>
@@ -125,35 +125,7 @@
          <lastmod>2026-10-10</lastmod>
     </url>
     <url>
-         <loc>https://pnz1990.github.io/kardinal-promoter/design/01-graph-integration/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
-         <loc>https://pnz1990.github.io/kardinal-promoter/design/02-pipeline-to-graph-translator/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
-         <loc>https://pnz1990.github.io/kardinal-promoter/design/03-promotionstep-reconciler/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
-         <loc>https://pnz1990.github.io/kardinal-promoter/design/04-policygate-reconciler/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
-         <loc>https://pnz1990.github.io/kardinal-promoter/design/05-health-adapters/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
          <loc>https://pnz1990.github.io/kardinal-promoter/design/06-kardinal-ui/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
-         <loc>https://pnz1990.github.io/kardinal-promoter/design/07-distributed-architecture/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
-         <loc>https://pnz1990.github.io/kardinal-promoter/design/08-promotion-steps-engine/</loc>
          <lastmod>2026-10-10</lastmod>
     </url>
     <url>
@@ -169,35 +141,7 @@
          <lastmod>2026-10-10</lastmod>
     </url>
     <url>
-         <loc>https://pnz1990.github.io/kardinal-promoter/design/12-autonomous-loop-discipline/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
-         <loc>https://pnz1990.github.io/kardinal-promoter/design/13-scheduled-execution/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
-         <loc>https://pnz1990.github.io/kardinal-promoter/design/14-v060-roadmap/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
-         <loc>https://pnz1990.github.io/kardinal-promoter/design/15-production-readiness/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
          <loc>https://pnz1990.github.io/kardinal-promoter/design/16-graph-capability-ledger/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
-         <loc>https://pnz1990.github.io/kardinal-promoter/design/39-demo-e2e-reliability/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
-         <loc>https://pnz1990.github.io/kardinal-promoter/design/41-published-docs-freshness/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
-         <loc>https://pnz1990.github.io/kardinal-promoter/design/design-v2.1/</loc>
          <lastmod>2026-10-10</lastmod>
     </url>
     <url>
