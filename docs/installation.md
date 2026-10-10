@@ -917,7 +917,7 @@ The controller's RBAC, in summary:
 
 | Resources | Verbs |
 |---|---|
-| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create, and delete only with `audit.retention.enabled: true`) and `changewindows`, `scmproviders` and `clusterscmproviders` (get, list, watch; get, update, patch on `/status`) |
+| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create, and delete with `audit.retention.enabled: true`, the default) and `changewindows`, `scmproviders` and `clusterscmproviders` (get, list, watch; get, update, patch on `/status`) |
 | `graphs.kro.run` | Full CRUD; get on `graphs/status` |
 | `serviceaccounts`, `rolebindings` | get, create; get, list, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs, `list` finds them for the sweep) |
 | `namespaces` | get, limited to `controller.watchNamespace` in namespace mode (lets go of a Graph whose namespace is being deleted) |

@@ -22,6 +22,13 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 )
 
+// auditRetentionDefault is --audit-retention's default: on. AuditEvents have
+// no owner, so unbounded they fill etcd, and a full etcd quota stops the
+// whole cluster, which is worse than losing records past 90 days or past a
+// Pipeline's 1000 newest (the release-candidate soak: 350-660 records a
+// minute, the default 2 GiB quota full in 2 to 4 days).
+const auditRetentionDefault = true
+
 // gracefulShutdownTimeout is how long the controller waits on shutdown for
 // in-flight reconciles, whose context the shutdown cancels, and HTTP requests
 // to return. It is half the pod's terminationGracePeriodSeconds (60s) to
