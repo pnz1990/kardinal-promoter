@@ -16,7 +16,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import dagre from '@dagrejs/dagre'
-import { DAGView } from './DAGView'
+import { DAGView, orderRanks } from './DAGView'
 import type { GraphNode, GraphEdge } from '../types'
 
 // Mock dagre to avoid layout computations in jsdom
@@ -261,5 +261,33 @@ describe('DAGView — tooltip on keyboard focus (C10a-web-18)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('orderRanks (#1580)', () => {
+  const n = (id: string, type: GraphNode['type'] = 'PromotionStep'): GraphNode => makeNode({ id, environment: id, label: id, type })
+
+  it('puts a wave top to bottom in list order, keeping the column and its slots', () => {
+    const nodes = [n('root'), n('w1'), n('w2'), n('w3')]
+    const edges: GraphEdge[] = [{ from: 'root', to: 'w1' }, { from: 'root', to: 'w2' }, { from: 'root', to: 'w3' }]
+    // dagre's tie-break drew the wave bottom-up.
+    const pos = new Map([['root', { x: 100, y: 200 }], ['w1', { x: 340, y: 300 }], ['w2', { x: 340, y: 200 }], ['w3', { x: 340, y: 100 }]])
+    orderRanks(nodes, edges, pos)
+    expect(['w1', 'w2', 'w3'].map(id => pos.get(id))).toEqual([{ x: 340, y: 100 }, { x: 340, y: 200 }, { x: 340, y: 300 }])
+    expect(pos.get('root')).toEqual({ x: 100, y: 200 })
+  })
+
+  it('follows the upstream order through gates, so edges do not cross', () => {
+    // a → gate-b → b and a → gate-c → c: the gates and their steps keep the same order.
+    const nodes = [n('a'), n('b'), n('gate-b', 'PolicyGate'), n('c'), n('gate-c', 'PolicyGate')]
+    const edges: GraphEdge[] = [{ from: 'a', to: 'gate-b' }, { from: 'gate-b', to: 'b' }, { from: 'a', to: 'gate-c' }, { from: 'gate-c', to: 'c' }]
+    const pos = new Map([
+      ['a', { x: 0, y: 50 }], ['gate-b', { x: 1, y: 90 }], ['gate-c', { x: 1, y: 10 }], ['b', { x: 2, y: 10 }], ['c', { x: 2, y: 90 }],
+    ])
+    orderRanks(nodes, edges, pos)
+    expect(pos.get('gate-b')!.y).toBe(10)
+    expect(pos.get('gate-c')!.y).toBe(90)
+    expect(pos.get('b')!.y).toBe(10)
+    expect(pos.get('c')!.y).toBe(90)
   })
 })
