@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/rs/zerolog"
 	"k8s.io/client-go/rest"
@@ -38,26 +39,89 @@ type uiAuthConfig struct {
 	scopeNamespace string
 }
 
+// reviewOptions are the TokenReview settings shared by the UI API and the
+// Bundle API (--tokenreview-audiences, --tokenreview-accept-apiserver-audience).
+type reviewOptions struct {
+	audiences       []string
+	acceptAPIServer bool
+	// apiServerAudiences are the API server's own token audiences (from the
+	// controller's ServiceAccount token); none of them may be in audiences.
+	apiServerAudiences []string
+	// shared, when set, makes every newReviewers call return the same
+	// reviewers, so the UI API and the Bundle API share one cache and one
+	// rate limit.
+	shared *sharedReviewers
+}
+
+// sharedReviewers builds the review clients once.
+type sharedReviewers struct {
+	once   sync.Once
+	tokens uiauth.TokenReviewer
+	access uiauth.AccessReviewer
+	err    error
+}
+
+// uiAuthFlags are the UI API auth flags.
+type uiAuthFlags struct {
+	staticToken string
+	tokenReview bool
+	// allowStaticWithTokenReview (--ui-auth-static-overrides-tokenreview)
+	// accepts both modes set, the static token winning; without it that
+	// combination is a startup error, since the static token silently turns
+	// per-user RBAC off.
+	allowStaticWithTokenReview bool
+	review                     reviewOptions
+	scopeNamespace             string
+}
+
 // buildUIAuth picks the UI API auth mode from the flags. The static token
-// takes precedence (spec issue-975 O4). In TokenReview mode an error building
-// either review client is returned, so the caller can refuse to start rather
-// than serve an open UI (C13b-design-09).
-func buildUIAuth(cfg *rest.Config, staticToken string, tokenReview bool, scopeNamespace string) (uiAuthConfig, error) {
-	auth := uiAuthConfig{staticToken: staticToken, scopeNamespace: scopeNamespace}
-	if staticToken != "" || !tokenReview {
+// takes precedence (spec issue-975 O4) when both are allowed. In TokenReview
+// mode an error building either review client is returned, so the caller can
+// refuse to start rather than serve an open UI (C13b-design-09).
+func buildUIAuth(cfg *rest.Config, f uiAuthFlags) (uiAuthConfig, error) {
+	if f.staticToken != "" && f.tokenReview && !f.allowStaticWithTokenReview {
+		return uiAuthConfig{}, fmt.Errorf("both --ui-auth-token and --ui-tokenreview-auth are set: the static token " +
+			"would win and every UI caller would act as the controller; unset one, or set " +
+			"--ui-auth-static-overrides-tokenreview (Helm ui.auth.allowStaticTokenWithTokenReview) to keep the static token")
+	}
+	auth := uiAuthConfig{staticToken: f.staticToken, scopeNamespace: f.scopeNamespace}
+	if f.staticToken != "" || !f.tokenReview {
 		return auth, nil
 	}
-	tokens, err := uiauth.NewKubeTokenReviewer(cfg)
+	tokens, access, err := newReviewers(cfg, f.review)
 	if err != nil {
-		return uiAuthConfig{}, fmt.Errorf("token reviewer: %w", err)
+		return uiAuthConfig{}, err
+	}
+	auth.tokens, auth.access = tokens, access
+	return auth, nil
+}
+
+// newReviewers builds the cached TokenReview and SubjectAccessReview clients
+// the UI API and the Bundle API authenticate and authorize callers with.
+// TokenReviews that miss the cache are limited per client address.
+func newReviewers(cfg *rest.Config, opts reviewOptions) (uiauth.TokenReviewer, uiauth.AccessReviewer, error) {
+	if s := opts.shared; s != nil {
+		s.once.Do(func() {
+			o := opts
+			o.shared = nil
+			s.tokens, s.access, s.err = newReviewers(cfg, o)
+		})
+		return s.tokens, s.access, s.err
+	}
+	if err := uiauth.CheckAudiences(opts.audiences, opts.apiServerAudiences); err != nil {
+		return nil, nil, err
+	}
+	tokens, err := uiauth.NewKubeTokenReviewer(cfg, opts.audiences, opts.acceptAPIServer)
+	if err != nil {
+		return nil, nil, fmt.Errorf("token reviewer: %w", err)
 	}
 	access, err := uiauth.NewKubeAccessReviewer(cfg)
 	if err != nil {
-		return uiAuthConfig{}, fmt.Errorf("access reviewer: %w", err)
+		return nil, nil, fmt.Errorf("access reviewer: %w", err)
 	}
-	auth.tokens = uiauth.NewCachedTokenReviewer(tokens, uiauth.DefaultCacheTTL)
-	auth.access = uiauth.NewCachedAccessReviewer(access, uiauth.DefaultCacheTTL)
-	return auth, nil
+	limited := uiauth.NewRateLimitedTokenReviewer(tokens, uiauth.DefaultReviewsPerClientPerMinute, uiauth.DefaultReviewsPerMinute)
+	return uiauth.NewCachedTokenReviewer(limited, uiauth.DefaultCacheTTL),
+		uiauth.NewCachedAccessReviewer(access, uiauth.DefaultCacheTTL), nil
 }
 
 // newUIHandler builds the UI server handler: the /api/v1/ui/* API, the
