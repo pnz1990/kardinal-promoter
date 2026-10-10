@@ -432,6 +432,7 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 		if err := r.checkGatesCreated(ctx, b, g); err != nil {
 			log.Warn().Err(err).Str("graph", name).Msg("check gate instances (non-fatal)")
 		}
+		checkRunsCreated(b, g)
 	}
 	return nil
 }
