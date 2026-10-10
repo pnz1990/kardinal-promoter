@@ -17,18 +17,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8stypes "k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/notificationhook"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 )
 
@@ -302,6 +305,10 @@ func TestDelivery_GivesUpAfterMaxAttempts(t *testing.T) {
 	defer ts.Close()
 
 	f := newFixture(t, newHook(ts.URL, v1alpha1.NotificationEventBundleFailed), failedBundle("app-v0", saturday))
+	rec := events.NewFakeRecorder(10)
+	f.hooks.Recorder = rec
+	dropped := observability.NotificationsDroppedTotal.WithLabelValues(ns, "hook", "attempts")
+	before := testutil.ToFloat64(dropped)
 
 	wantDelays := []time.Duration{
 		30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute,
@@ -315,6 +322,11 @@ func TestDelivery_GivesUpAfterMaxAttempts(t *testing.T) {
 	f.reconcileHook() // attempt 10
 	h := f.hook()
 	assert.Contains(t, h.Status.FailureMessage, "gave up on Bundle.Failed/app-v0 after 10 attempts")
+	// The drop is visible beyond the status message: a Warning Event and
+	// the dropped counter, once.
+	assert.Equal(t, before+1, testutil.ToFloat64(dropped))
+	require.Len(t, rec.Events, 1)
+	assert.Contains(t, <-rec.Events, "Warning NotificationDropped gave up on Bundle.Failed/app-v0 after 10 attempts")
 	assert.Zero(t, h.Status.FailedAttempts)
 	assert.Empty(t, h.Status.NextRetryAt)
 	assert.Contains(t, h.Status.ProcessedEventKeys, "Bundle.Failed/app-v0")

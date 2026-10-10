@@ -179,7 +179,7 @@ func TestPRTemplates_Sandbox(t *testing.T) {
 		{"doubling message", v1alpha1.PRConfig{Merge: &v1alpha1.PRMergeConfig{Auto: true, CommitMessageTemplate: doubling}},
 			"pr.merge.commitMessageTemplate: variables are not allowed"},
 		{"recursion", v1alpha1.PRConfig{BodyTemplate: `{{ define "r" }}{{ template "r" }}{{ end }}{{ template "r" }}`}, "pr.bodyTemplate: define and block are not allowed"},
-		{"range over a number", v1alpha1.PRConfig{BodyTemplate: `{{ range 100000000 }}{{ end }}`}, "range is not allowed"},
+		{"range over a number", v1alpha1.PRConfig{BodyTemplate: `{{ range 100000000 }}{{ end }}`}, "range is not allowed: the template language has no loops; use the functions that list the data (provenanceTable"},
 		{"range over the images", v1alpha1.PRConfig{Labels: []string{`{{ range .Bundle.Images }}{{ .Tag }}{{ end }}`}}, "pr.labels[0]: range is not allowed"},
 		{"printf", v1alpha1.PRConfig{TitleTemplate: `{{ printf "%999999999d" 1 }}`}, "printf is not available in this template"},
 		{"printf argument indexes", v1alpha1.PRConfig{BodyTemplate: `{{ printf "%[1]s%[1]s%[1]s%[1]s" .Bundle.Name }}`}, "printf is not available in this template"},
@@ -294,6 +294,9 @@ func TestCheckPRSupport(t *testing.T) {
 		require.NoError(t, err)
 		providers[kind] = p
 	}
+	dc, err := scm.NewProvider("bitbucket-datacenter", "t", "https://git.example.com", "")
+	require.NoError(t, err)
+	providers["bitbucket-datacenter"] = dc
 	dyn, err := scm.NewDynamicProvider("gitlab", "t", "", "")
 	require.NoError(t, err)
 	providers["dynamic gitlab"] = dyn
@@ -325,6 +328,11 @@ func TestCheckPRSupport(t *testing.T) {
 		{"azuredevops", &v1alpha1.PRConfig{Labels: []string{"a"}, Reviewers: []string{"id"}, TeamReviewers: []string{"id"}}, ""},
 		{"azuredevops", &v1alpha1.PRConfig{Assignees: []string{"a"}}, "pr.assignees is not supported by the azuredevops SCM provider"},
 		{"azuredevops", auto("rebase", "m"), ""},
+		{"bitbucket-datacenter", &v1alpha1.PRConfig{Reviewers: []string{"alice"}}, ""},
+		{"bitbucket-datacenter", auto("squash", "m"), ""},
+		{"bitbucket-datacenter", &v1alpha1.PRConfig{Labels: []string{"a"}}, "pr.labels is not supported by the bitbucket-datacenter SCM provider"},
+		{"bitbucket-datacenter", &v1alpha1.PRConfig{TeamReviewers: []string{"t"}}, "pr.teamReviewers is not supported"},
+		{"bitbucket-datacenter", &v1alpha1.PRConfig{Assignees: []string{"a"}}, "pr.assignees is not supported by the bitbucket-datacenter SCM provider"},
 	}
 	for _, c := range checks {
 		err := scm.CheckPRSupport(c.cfg, scm.SupportOf(providers[c.provider]))
