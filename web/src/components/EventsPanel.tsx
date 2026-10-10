@@ -6,14 +6,9 @@
 // Displays events newest-first, with Warning type styled differently from Normal.
 // #527
 
-export interface StepEvent {
-  type: string          // "Normal" | "Warning"
-  reason: string        // short CamelCase reason
-  message: string       // human-readable message
-  count: number         // number of occurrences
-  firstTimestamp: string  // RFC3339
-  lastTimestamp: string   // RFC3339
-}
+import type { StepEvent } from '../types'
+
+export type { StepEvent }
 
 interface EventsPanelProps {
   events: StepEvent[] | null

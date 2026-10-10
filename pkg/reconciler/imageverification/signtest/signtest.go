@@ -17,7 +17,6 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -186,10 +185,4 @@ func PushLegacy(ctx context.Context, sigRepo, digest string, payload, sig []byte
 		return err
 	}
 	return remote.Write(ref, img, append(opts, remote.WithContext(ctx))...)
-}
-
-// HexDigest is "sha256:" plus the hex sha256 of b.
-func HexDigest(b []byte) string {
-	sum := sha256.Sum256(b)
-	return "sha256:" + hex.EncodeToString(sum[:])
 }

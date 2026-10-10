@@ -94,6 +94,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Deprecated
 
+- **Removed in v0.11** — v0.10.0 still accepts, and ignores or refuses as before, every deprecated field and value: Pipeline `spec.policyGates`, `spec.git.provider`, `spec.environments[].shard`, `steps`, `promotionTemplate`, `regions` and `health.cluster`; PolicyGate `spec.selector` and `spec.when`; PromotionStep `spec.region`; `NotificationHook.spec.webhook.authorizationHeader`; the chart values `rbac.integrationTestJobs` and `validatingAdmissionPolicy.enabled`; and `kardinal rollback --emergency`. v0.11 removes them: drop them from your manifests, values and scripts now
 - **An unlabeled Pipeline git Secret** — a Secret named by `spec.git.secretRef` should carry `kardinal.io/referenceable: "true"`, like every Secret a custom resource references: its token goes to the Pipeline's `git.url`, which the Pipeline's author chooses. In v0.10.0 an unlabeled Secret still works and the Pipeline gets the warning condition `SecretReferenceable=False` (reason `SecretNotReferenceable`); v0.11 will refuse it (#1506). Label your git Secrets: `kubectl label secret <name> kardinal.io/referenceable=true`
 - `NotificationHook.spec.webhook.authorizationHeader` — it is stored in plain text in the spec. It still works and sets the condition `PlaintextCredential=True`; move the value to a Secret and use `spec.webhook.secretRef`
 
@@ -508,7 +509,7 @@ The v0.6.0 tag points to `369be4c`, a merge commit that is not on main. Its tree
 - **K-07: Integration test step** — built-in `integration-test` step runs a Kubernetes Job as part of the promotion sequence (#470)
 - **K-08: PR review gate** — `bundle.pr["staging"].isApproved` and `.approvalCount` in CEL context via PRStatus CRD (#472)
 - **K-09: `kardinal override` with audit record** — emergency gate override with mandatory reason + time limit; the override is recorded in the gate's `spec.overrides[]`, and the gate reason shows it in the PR evidence body (#471)
-- **K-10: Cross-stage history CEL** — `upstream.<env>.soakMinutes`, `.recentSuccessCount`, `.recentFailureCount`, `.lastPromotedAt` in gate expressions (#473)
+- **K-11: Cross-stage history CEL** — `upstream.<env>.soakMinutes`, `.recentSuccessCount`, `.recentFailureCount`, `.lastPromotedAt` in gate expressions (#473)
 - **Policy test** — `kardinal policy test` checks PolicyGate YAML and CEL syntax offline (#235)
 - **UI control plane** — all 7 UI issues shipped (#462–#468): fleet health dashboard, pipeline ops view, per-stage bake countdown, in-UI actions (pause/resume/rollback/override), release metrics bar, bundle timeline, policy gate detail panel
 

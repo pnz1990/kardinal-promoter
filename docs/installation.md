@@ -299,7 +299,7 @@ go tool pprof -top -base before.pb.gz after.pb.gz
 | `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers. Paths inside the container: mount the certificate Secret with `controller.extraVolumes` / `extraVolumeMounts`. Set both or neither: the chart refuses one alone, and a path that is not in a mounted `secret`, `projected` or `csi` volume (for certificates that come another way, set `KARDINAL_TLS_CERT_FILE` and `KARDINAL_TLS_KEY_FILE` with `controller.extraEnv`) |
 | `controller.extraArgs` / `extraEnv` / `extraVolumes` / `extraVolumeMounts` | `[]` | Extra controller args, env vars, volumes and mounts |
 | `rbac.argocdApplicationsWrite` | `false` | Grant `patch` on Argo CD Applications (the `argocd` update strategy) |
-| `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.10. The `integration-test` step was removed. The chart grants `batch/jobs` for [hooks](hooks.md) whatever it says |
+| `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.11. The `integration-test` step was removed. The chart grants `batch/jobs` for [hooks](hooks.md) whatever it says |
 | `hooks.serviceAccounts` | `[default]` | ServiceAccounts a [hook](hooks.md)'s Pod may run as (`--hook-service-accounts`), in the Pipeline namespace. The Graph ServiceAccount is never allowed |
 | `hooks.podSecurityLevel` | `baseline` | Pod Security Standard a [hook](hooks.md) Pod must meet (`--hook-pod-security-level`): `baseline`, `restricted` or `privileged` (no Pod checks); below `privileged`, `nodeName` and `hostPort` are refused too |
 | `render.image.repository`, `render.image.tag`, `render.image.digest` | `ghcr.io/pnz1990/kardinal-promoter/render`, the chart's appVersion, none | The `kardinal-render` image the render Jobs of [`layout: branch`](rendered-manifests.md#the-render-job) run (`--render-image`); with a digest, `repository@digest`. Renders never run in the controller. `image.digest` pins the controller image the same way. The render Pods get the chart's `imagePullSecrets`, which must exist in the Pipeline namespaces |
@@ -326,7 +326,7 @@ go tool pprof -top -base before.pb.gz after.pb.gz
 | `tracing.samplingRatio` | `0.1` | Fraction of traces recorded, decided at each trace's root; an inbound `traceparent` does not force recording |
 | `egress.allowlist` | `[]` | Destinations NotificationHook, MetricCheck and Subscription requests may reach (`--egress-allowlist`): host names, `*.` wildcards, CIDRs. Empty allows any destination outside the always-refused loopback, link-local and metadata addresses. See [Outbound requests to user URLs](guides/security.md#outbound-requests-to-user-urls) |
 | `scheduleClock.enabled` / `.interval` | `true` / `"1m"` | ScheduleClock `kardinal-clock` in the release namespace. Each tick re-evaluates every PolicyGate instance |
-| `validatingAdmissionPolicy.enabled` | `true` | Deprecated, no effect. The CRD schemas validate these fields |
+| `validatingAdmissionPolicy.enabled` | `true` | Deprecated, no effect, removed in v0.11. The CRD schemas validate these fields |
 
 The monitoring values (`serviceMonitor`, `prometheusRule`, `grafanaDashboard`) are described in
 [Monitoring](guides/monitoring.md), and `demo.*` in the [Quickstart](quickstart.md).
@@ -705,7 +705,7 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
     ```
 
 - **`validatingAdmissionPolicy.*`.** Deprecated, with no effect. The CRD schemas validate the kardinal fields; the chart's only ValidatingAdmissionPolicies are the identity policies ([Verified identity](guides/security.md#verified-identity)) and the hold-writes policy (only `pipelines/hold` may change `spec.holds`), which are always installed.
-- **`rbac.integrationTestJobs`.** Deprecated, with no effect, and removed in v0.10. The chart grants `batch/jobs` (create, get, list, watch, delete) for [hooks](hooks.md) whatever it says.
+- **`rbac.integrationTestJobs`.** Deprecated, with no effect, and removed in v0.11. The chart grants `batch/jobs` (create, get, list, watch, delete) for [hooks](hooks.md) whatever it says.
 - **`--reuse-values`** fails with `additional properties 'krocodile' not allowed` (Helm before 3.18.5: `Additional property krocodile is not allowed`), even when you never set `krocodile`. Use `--reset-then-reuse-values`.
 
 #### Other notes

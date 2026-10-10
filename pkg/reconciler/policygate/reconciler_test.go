@@ -1288,7 +1288,7 @@ func makeBundleWithHistory(name, ns, pipelineName string, envPhases map[string]s
 }
 
 // TestPolicyGateReconciler_CrossStageHistory_RecentSuccessCount verifies that
-// upstream.staging.recentSuccessCount counts Verified bundles correctly (K-10).
+// upstream.staging.recentSuccessCount counts Verified bundles correctly (K-11).
 func TestPolicyGateReconciler_CrossStageHistory_RecentSuccessCount(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1361,7 +1361,7 @@ func TestPolicyGateReconciler_CrossStageHistory_RecentSuccessCount(t *testing.T)
 }
 
 // TestPolicyGateReconciler_CrossStageHistory_RecentFailureCount verifies that
-// upstream.staging.recentFailureCount is correctly populated (K-10).
+// upstream.staging.recentFailureCount is correctly populated (K-11).
 func TestPolicyGateReconciler_CrossStageHistory_RecentFailureCount(t *testing.T) {
 	now := time.Now()
 	currentBundle := makeBundleWithHistory("current", "default", "my-pipeline",
@@ -1393,7 +1393,7 @@ func TestPolicyGateReconciler_CrossStageHistory_RecentFailureCount(t *testing.T)
 }
 
 // TestPolicyGateReconciler_CrossStageHistory_LastPromotedAt verifies that
-// upstream.staging.lastPromotedAt is non-empty after a successful promotion (K-10).
+// upstream.staging.lastPromotedAt is non-empty after a successful promotion (K-11).
 func TestPolicyGateReconciler_CrossStageHistory_LastPromotedAt(t *testing.T) {
 	now := time.Now()
 	currentBundle := makeBundleWithHistory("current", "default", "my-pipeline",
@@ -1425,7 +1425,7 @@ func TestPolicyGateReconciler_CrossStageHistory_LastPromotedAt(t *testing.T) {
 }
 
 // TestPolicyGateReconciler_CrossStageHistory_NoPipelineLabel verifies that when
-// the gate has no pipeline label, the reconciler falls back gracefully (K-10).
+// the gate has no pipeline label, the reconciler falls back gracefully (K-11).
 func TestPolicyGateReconciler_CrossStageHistory_NoPipelineLabel(t *testing.T) {
 	bundle := makeBundle("app-v1", "default")
 	// Gate without pipeline label — should not crash

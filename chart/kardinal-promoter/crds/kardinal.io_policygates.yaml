@@ -231,6 +231,7 @@ spec:
                   in its kardinal.io/applies-to label.
 
                   Deprecated: remove the field; use the kardinal.io/applies-to label.
+                  It is removed in v0.11.
                 properties:
                   matchExpressions:
                     description: matchExpressions is a list of label selector requirements.
@@ -303,6 +304,7 @@ spec:
                   Deprecated: remove this field. Every gate is re-checked before its
                   PromotionStep starts, whatever the value; pre-deploy and post-deploy
                   behave the same.
+                  It is removed in v0.11.
                 enum:
                 - pre-deploy
                 - post-deploy

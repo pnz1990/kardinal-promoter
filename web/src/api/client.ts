@@ -3,8 +3,7 @@
 //
 // api/client.ts — Typed fetch wrappers for the kardinal UI backend API.
 
-import type { Pipeline, Bundle, GraphResponse, PromotionStep, PolicyGate } from '../types'
-import type { StepEvent } from '../components/EventsPanel'
+import type { Pipeline, Bundle, GraphResponse, PromotionStep, PolicyGate, StepEvent } from '../types'
 
 const BASE = '/api/v1/ui'
 

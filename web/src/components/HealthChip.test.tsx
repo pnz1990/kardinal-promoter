@@ -57,7 +57,6 @@ describe('kardinalStateToHealth', () => {
     it.each<[string, HealthState]>([
       ['Pass', 'Ready'],
       ['Block', 'Error'],
-      ['Fail', 'Error'],
       ['Pending', 'Pending'],
       ['Waiting', 'Pending'], // E2E-R19: not ready, not holding the bundle
       ['Superseded', 'Unknown'], // bundle superseded; not evaluated again

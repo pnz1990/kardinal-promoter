@@ -387,7 +387,7 @@ func TestRollback_PolicyGates(t *testing.T) {
 	rbVerified(t, a, b2, "test")
 
 	out, rb := rbRollback(t, a, "test", "--emergency")
-	assert.Equal(t, "Flag --emergency has been deprecated, it has no effect; use kardinal override to pass a blocking gate\n"+
+	assert.Equal(t, "Flag --emergency has been deprecated, it has no effect and is removed in v0.11; use kardinal override to pass a blocking gate\n"+
 		rbOutput("test", b2, b1, imageV2, rb), out)
 	gate := e.WaitGateReady(t, a.ns, rb, "test", "no-rollbacks", false, expr+" = false", gateTimeout)
 	assert.Equal(t, msg+" (bundle.version="+fixtures.V2+": "+expr+" = false)", gate.Status.Reason)

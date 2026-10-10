@@ -4,7 +4,7 @@
 # The multi-cluster suite's workload cluster: creates the kind cluster
 # $KIND_CLUSTER-spoke (test/e2e/kind-config.yaml's node image), installs Argo
 # Rollouts and pulls podinfo (podinfo.sh) in it, and lets the hub ($KIND_CLUSTER) manage it the way
-# docs/distributed-mode.md describes: Argo CD in the hub gets a cluster
+# docs/multi-cluster.md describes: Argo CD in the hub gets a cluster
 # Secret for it, and Flux in the hub a kubeconfig Secret for Kustomizations'
 # spec.kubeConfig.secretRef. kardinal gets nothing: it reads health from the
 # hub's objects only. Run after argocd.sh and flux.sh. Idempotent.

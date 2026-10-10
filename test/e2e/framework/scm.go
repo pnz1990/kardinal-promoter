@@ -383,20 +383,6 @@ func (e *Env) PatchController(t *testing.T, edit func(*corev1.PodSpec)) (restore
 	return restore
 }
 
-// EditController changes the controller's pod template again after a
-// PatchController, whose restore puts the original back, and waits until a
-// new pod leads.
-func (e *Env) EditController(t *testing.T, edit func(*corev1.PodSpec)) {
-	t.Helper()
-	e.updateController(t, func(d *appsv1.Deployment) {
-		edit(&d.Spec.Template.Spec)
-		if d.Spec.Template.Annotations == nil {
-			d.Spec.Template.Annotations = map[string]string{}
-		}
-		d.Spec.Template.Annotations["kardinal.io/e2e-patched-at"] = time.Now().UTC().Format(time.RFC3339Nano)
-	})
-}
-
 // RestartController restarts the controller, as kubectl rollout restart
 // does, and waits until the new pod leads.
 func (e *Env) RestartController(t *testing.T) {

@@ -648,8 +648,9 @@ How it works:
   are labeled `kardinal.io/referenceable`, and have their keys. Otherwise it is `False`
   with the reason. Secrets are not watched, so the controller checks them again every 5
   minutes. It makes no SCM call before a Pipeline needs one.
-- **Only token authentication.** A provider uses an API token. GitHub App credentials
-  per provider are planned once the controller's GitHub App mode lands (#1491).
+- **Only token authentication.** A provider uses an API token. The [GitHub App](#github-app)
+  mode is for the controller's own GitHub credential (`github.secretRef`), not for an
+  ScmProvider or ClusterScmProvider.
 
 ### Webhooks per provider
 
@@ -768,6 +769,9 @@ the `helm upgrade` in [Upgrade](installation.md#upgrade) with `--set github.toke
      --namespace <pipeline-namespace> \
      --from-literal=token=<NEW_TOKEN> \
      --dry-run=client -o yaml | kubectl apply -f -
+   # A Secret a Pipeline names stays labelled referenceable (docs/guides/security.md).
+   kubectl label secret <pipeline-git-secret> --namespace <pipeline-namespace> \
+     kardinal.io/referenceable=true --overwrite
    ```
 4. Within 30 seconds the controller picks up the change. No controller restart is needed.
    Promotions in flight are not interrupted — the atomic swap completes before the next

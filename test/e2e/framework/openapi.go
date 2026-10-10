@@ -77,18 +77,6 @@ func (o *OpenAPI) ResponseSchema(t *testing.T, method, path string, status int) 
 	return schema
 }
 
-// Operations lists "METHOD path" for every operation.
-func (o *OpenAPI) Operations() []string {
-	var out []string
-	for p, item := range asMap(o.doc["paths"]) {
-		for m := range asMap(item) {
-			out = append(out, strings.ToUpper(m)+" "+p)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
 func (o *OpenAPI) resolve(ref string) map[string]interface{} {
 	node := interface{}(o.doc)
 	for _, part := range strings.Split(strings.TrimPrefix(ref, "#/"), "/") {

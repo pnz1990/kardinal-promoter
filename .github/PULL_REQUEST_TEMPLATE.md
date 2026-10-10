@@ -1,47 +1,27 @@
-# PR: [item title]
+## What and why
 
-## Item Reference
+<!-- What changes for users, and why. Link the issue: "Closes #N". -->
 
-- **Design doc**: `docs/design/<feature>.md`
+## Tests
 
-## What this implements
-
-<!-- 2-3 sentences: what was built and why -->
-
-## Acceptance Criteria
-
-<!-- Copy every Given/When/Then from the issue and mark each -->
-
-- [ ] Given [...], When [...], Then [...]
-- [ ] Given [...], When [...], Then [...]
-
-## Test Output
+<!-- Unit tests (table-driven, -race) and the live e2e tests that cover the
+change (test/e2e/live), with the coverage.tsv rows they cover. Pull requests
+don't run the live suites in CI: run the suites your change touches
+(make e2e-up SUITE=<suite>, then make test-e2e-live SUITE=<suite>) and paste
+the summary line here. -->
 
 ```
-# go test ./... -race (paste output)
+# go test ./... -race -count=1
+
+# make test-e2e-live SUITE=<suite>
 
 ```
 
-## Manual Validation
+## Checklist
 
-```
-# kubectl apply -f examples/quickstart/ (or multi-cluster-fleet/)
-# paste the full terminal output here
-
-```
-
-**Behavior matches docs/**:
-- [ ] `docs/quickstart.md` step X works as documented
-- [ ] `docs/concepts.md` behavior X is correct
-
-## Pre-merge Checklist
-
-- [ ] `go test ./... -race` passes
-- [ ] `go vet ./...` zero findings
-- [ ] All acceptance criteria from the issue implemented
-- [ ] Manual kubectl validation output included above
-- [ ] All new `.go` files have Apache 2.0 copyright header
-- [ ] No `util.go`, `helpers.go`, `common.go` created
-- [ ] No new entry in `go.mod require` block (or needs-human label set)
-- [ ] Every new reconciler has an idempotency test
-- [ ] No `github.com/kubernetes-sigs/kro` Go module in go.mod
+- [ ] `go build ./...`, `go vet ./...` and `go test ./... -race` pass
+- [ ] Every new behaviour has a test; a feature has a live e2e test and a `test/e2e/coverage.tsv` row (`go test ./test/hack` passes)
+- [ ] User docs in `docs/` and the `docs/changelog.md` `[Unreleased]` section are updated
+- [ ] New `.go` files have the Apache 2.0 header; no `util.go`, `helpers.go` or `common.go`
+- [ ] Generated files are regenerated (`make manifests generate api-docs`, `web/dist` with `make ui`, CLI docs with `go run ./hack/gen-cli-docs/main.go`)
+- [ ] The title follows Conventional Commits (`feat(scope): ...`, `fix(scope): ...`)

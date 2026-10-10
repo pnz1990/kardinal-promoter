@@ -19,9 +19,8 @@
 // users reach the UI with their existing credentials, and AuthorizingClient
 // checks every object the UI API reads or writes against the caller's RBAC.
 // Both reviews are cached briefly (NewCachedTokenReviewer,
-// NewCachedAccessReviewer).
-//
-// Design reference: docs/design/15-production-readiness.md §Lens 4
+// NewCachedAccessReviewer). See docs/guides/security.md, UI API Access
+// Control.
 package uiauth
 
 import (

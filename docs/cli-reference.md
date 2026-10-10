@@ -1,8 +1,7 @@
 # CLI Reference
 
 <!-- AUTO-GENERATED — do not edit by hand.
-     Run: go run ./hack/gen-cli-docs/main.go to regenerate.
-     Design ref: docs/design/41-published-docs-freshness.md -->
+     Run: go run ./hack/gen-cli-docs/main.go to regenerate. -->
 
 !!! note "Auto-generated"
     Generated from the kardinal CLI source. Every command is documented.

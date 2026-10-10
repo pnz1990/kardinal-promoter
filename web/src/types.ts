@@ -4,14 +4,6 @@
 // types.ts — TypeScript types matching the Go API response shapes
 // (cmd/kardinal-controller/ui_api.go). Keep the two in sync.
 
-/** PromotionStep status.state values (api/v1alpha1), plus the graph API's synthetic NotStarted. */
-export type PromotionStepState =
-  | 'Pending' | 'Promoting' | 'WaitingForMerge' | 'HealthChecking' | 'Verifying'
-  | 'Verified' | 'Failed' | 'AbortedByAlarm' | 'RollingBack' | 'Superseded' | 'NotStarted'
-
-/** Bundle status.phase values. */
-export type BundlePhase = 'Available' | 'Promoting' | 'Verified' | 'Failed' | 'Superseded' | 'Rejected'
-
 /** status.steps[].state values. */
 export type StepExecutionState = 'Pending' | 'InProgress' | 'Completed' | 'Failed'
 
@@ -157,7 +149,7 @@ export interface Bundle {
 
 /** #563: A container image reference — repository, tag, and optional digest. */
 export interface ImageRef {
-  repository?: string
+  repository: string
   tag?: string
   digest?: string
 }
@@ -323,4 +315,14 @@ export interface PolicyGateOverride {
   expiresAt?: string
   createdAt?: string
   createdBy?: string
+}
+
+/** A Kubernetes Event of a PromotionStep (GET /api/v1/ui/steps/:ns/:name/events). */
+export interface StepEvent {
+  type: string          // "Normal" | "Warning"
+  reason: string        // short CamelCase reason
+  message: string       // human-readable message
+  count: number         // number of occurrences
+  firstTimestamp: string  // RFC3339
+  lastTimestamp: string   // RFC3339
 }

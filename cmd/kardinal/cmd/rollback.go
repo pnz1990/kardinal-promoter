@@ -114,7 +114,7 @@ pipelines/hold. See docs/rollback.md.`,
 	// `kardinal override` to pass a blocking gate. Deleted in the next minor
 	// release (#1288).
 	cmd.Flags().BoolVar(&emergencyFlag, "emergency", false, "Deprecated: has no effect")
-	_ = cmd.Flags().MarkDeprecated("emergency", "it has no effect; use kardinal override to pass a blocking gate")
+	_ = cmd.Flags().MarkDeprecated("emergency", "it has no effect and is removed in v0.11; use kardinal override to pass a blocking gate")
 	_ = cmd.MarkFlagRequired("env")
 
 	return cmd

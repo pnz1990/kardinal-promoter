@@ -26,7 +26,6 @@ test.describe('Journey 011 — Rollback button in NodeDetail', () => {
   })
 
   test('Step 2: Rollback button is visible in NodeDetail', async ({ page }) => {
-    // Design ref: docs/design/14-v060-roadmap.md §14.6 PDCA Playwright fix
     const testNode = page.getByRole('button', { name: /test — /i })
     await testNode.click()
     await expect(page.getByLabel('Close')).toBeVisible()
@@ -36,7 +35,6 @@ test.describe('Journey 011 — Rollback button in NodeDetail', () => {
   })
 
   test('Step 3: Rollback asks first, then calls the rollback API on confirm', async ({ page }) => {
-    // Design ref: docs/design/14-v060-roadmap.md §14.6 PDCA Playwright fix
     const testNode = page.getByRole('button', { name: /test — /i })
     await testNode.click()
     await expect(page.getByLabel('Close')).toBeVisible()
