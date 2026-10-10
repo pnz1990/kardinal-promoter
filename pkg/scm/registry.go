@@ -28,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/resourceversion"
 	"k8s.io/utils/lru"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -229,6 +230,15 @@ type Registry struct {
 	// secretsOf is the Secrets read for a provider (identityKey), which
 	// Evict forgets with its client.
 	secretsOf map[string][]types.NamespacedName
+	// reads numbers every Secret and Namespace read when it starts: a read
+	// stores its result only when no read that started later stored one
+	// first, so a slow read of an old version cannot overwrite a newer one.
+	reads uint64
+	// evictedAt is the read number Evict saw when it forgot a Secret; a
+	// read that started at or before it stores nothing, so an in-flight read
+	// cannot bring a deleted provider's token back for another SecretTTL.
+	// Reset, like secrets, when it reaches maxCacheEntries.
+	evictedAt map[types.NamespacedName]uint64
 }
 
 type registryEntry struct {
@@ -240,12 +250,26 @@ type registryEntry struct {
 type secretEntry struct {
 	secret  *corev1.Secret // nil: not found
 	expires time.Time
+	started uint64 // the read's number (Registry.reads)
 }
 
 type namespaceEntry struct {
 	labels  map[string]string
 	err     error
 	expires time.Time
+	started uint64
+	rv      string
+}
+
+// keepOld reports whether a cached result (started, rv) wins over a new
+// read's: the higher resourceVersion when both have one (a read that
+// started later can still return an older version, from a lagging API
+// server), else the read that started later.
+func keepOld(oldStarted, newStarted uint64, oldRV, newRV string) bool {
+	if c, err := resourceversion.CompareResourceVersion(oldRV, newRV); err == nil && c != 0 {
+		return c > 0
+	}
+	return oldStarted > newStarted
 }
 
 // Resolved is a provider client and the spec it was built from.
@@ -366,6 +390,10 @@ func (r *Registry) namespaceLabels(ctx context.Context, ns string) (map[string]s
 	if ok && now.Before(e.expires) {
 		return e.labels, e.err
 	}
+	r.mu.Lock()
+	r.reads++
+	started := r.reads
+	r.mu.Unlock()
 	var n corev1.Namespace
 	if err := r.apiReader().Get(ctx, types.NamespacedName{Name: ns}, &n); err != nil {
 		// Not cached: retried at the next use.
@@ -384,7 +412,13 @@ func (r *Registry) namespaceLabels(ctx context.Context, ns string) (map[string]s
 	if r.namespaces == nil || len(r.namespaces) >= maxCacheEntries {
 		r.namespaces = map[string]namespaceEntry{}
 	}
-	r.namespaces[ns] = namespaceEntry{labels: n.Labels, expires: now.Add(ttl)}
+	if old, ok := r.namespaces[ns]; ok && keepOld(old.started, started, old.rv, n.ResourceVersion) {
+		// A read that started later, or a newer version, is cached: this
+		// slower read of an older one does not replace it.
+		r.mu.Unlock()
+		return old.labels, old.err
+	}
+	r.namespaces[ns] = namespaceEntry{labels: n.Labels, expires: now.Add(ttl), started: started, rv: n.ResourceVersion}
 	r.mu.Unlock()
 	return n.Labels, nil
 }
@@ -433,8 +467,14 @@ func (r *Registry) Evict(kind, ns, name string) {
 		r.clients.Remove(uid)
 	}
 	r.mu.Lock()
+	if r.evictedAt == nil || len(r.evictedAt) >= maxCacheEntries {
+		// Bounded like the caches: a tenant creating and deleting providers
+		// cannot grow it.
+		r.evictedAt = map[types.NamespacedName]uint64{}
+	}
 	for _, nn := range r.secretsOf[key] {
 		delete(r.secrets, nn)
+		r.evictedAt[nn] = r.reads
 	}
 	delete(r.secretsOf, key)
 	r.mu.Unlock()
@@ -549,9 +589,13 @@ func (r *Registry) secret(ctx context.Context, nn types.NamespacedName) (*corev1
 	e, ok := r.secrets[nn]
 	r.mu.Unlock()
 	if !ok || !now.Before(e.expires) {
+		r.mu.Lock()
+		r.reads++
+		started := r.reads
+		r.mu.Unlock()
 		var s corev1.Secret
 		err := r.apiReader().Get(ctx, nn, &s)
-		e = secretEntry{expires: now.Add(r.secretTTL())}
+		e = secretEntry{expires: now.Add(r.secretTTL()), started: started}
 		switch {
 		case err == nil:
 			e.secret = &s
@@ -566,16 +610,40 @@ func (r *Registry) secret(ctx context.Context, nn types.NamespacedName) (*corev1
 				delete(r.secrets, k)
 			}
 		}
-		if r.secrets == nil || len(r.secrets) >= maxCacheEntries {
+		if r.secrets == nil {
 			r.secrets = map[types.NamespacedName]secretEntry{}
+		} else if len(r.secrets) >= maxCacheEntries {
+			// At the cap the whole map is reset: entries are only re-read.
+			// The eviction marks go with it (a read in flight across an
+			// eviction at that very moment may then be cached once).
+			r.secrets = map[types.NamespacedName]secretEntry{}
+			r.evictedAt = nil
 		}
-		r.secrets[nn] = e
+		switch old, ok := r.secrets[nn]; {
+		case started <= r.evictedAt[nn]:
+			// Evicted while the read was in flight: the caller gets what it
+			// read, but nothing is kept.
+		case ok && keepOld(old.started, started, rvOf(old.secret), rvOf(e.secret)):
+			// A later read, or a newer version (a rotation), is cached: an
+			// older read must not replace it.
+			e = old
+		default:
+			r.secrets[nn] = e
+		}
 		r.mu.Unlock()
 	}
 	if e.secret == nil {
 		return nil, fmt.Errorf("the Secret %s is not found: %w", nn, ErrProviderConfig)
 	}
 	return e.secret, nil
+}
+
+// rvOf is the resourceVersion of s, "" for none (not found).
+func rvOf(s *corev1.Secret) string {
+	if s == nil {
+		return ""
+	}
+	return s.ResourceVersion
 }
 
 func (r *Registry) secretTTL() time.Duration {
