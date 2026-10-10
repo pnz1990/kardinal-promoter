@@ -4,9 +4,11 @@
 package promotionstep_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
@@ -183,9 +186,18 @@ func TestPushGuard(t *testing.T) {
 			}
 			r := &promotionstep.Reconciler{Client: cache, APIReader: api, SCM: &mockSCM{}, GitClient: git,
 				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
-			reconcileStep(t, r, step.Name)
+			var logs bytes.Buffer
+			_, err := r.Reconcile(objectgonetest.Context(&logs), reqFor(step.Name))
+			require.NoError(t, err)
 			got := getStep(t, cache, step.Name)
 			assert.Equal(t, tt.wantState, got.Status.State, got.Status.Message)
+			// A stale promotion the guard cancels is the expected end of a
+			// superseded, rejected or deleted Bundle's step, not an error:
+			// the scale suite's controller-logs invariant failed on it.
+			if strings.Contains(got.Status.Message, "stale promotion") {
+				assert.NotContains(t, logs.String(), `"level":"error"`, "logs: %s", logs.String())
+				assert.Contains(t, logs.String(), "stale promotion cancelled before its push")
+			}
 			if tt.wantMsg != "" {
 				assert.Contains(t, got.Status.Message, tt.wantMsg)
 			}
