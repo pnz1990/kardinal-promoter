@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
@@ -19,10 +20,11 @@ import (
 // repository that an environment of another, older Pipeline renders to.
 const reasonRenderedBranchConflict = "RenderedBranchConflict"
 
-// renderedBranches are p's layout: branch environments by rendered branch.
+// renderedBranches are p's layout: branch environments by rendered branch,
+// with each fleet's targets in its place (each renders to its own branch).
 func renderedBranches(p *kardinalv1alpha1.Pipeline) map[string]string {
 	out := map[string]string{}
-	for _, e := range p.Spec.Environments {
+	for _, e := range graph.ExpandedEnvironments(p) {
 		if kardinalv1alpha1.RendersToBranch(p.Spec, e) {
 			out[e.RenderedBranch()] = e.Name
 		}

@@ -56,6 +56,7 @@ var admissionData = map[string]string{
 	NodePromotionMetrics:  NodeMetricCheckData,
 	NodePromotionHooks:    NodeHookRunData,
 	NodePromotionAnalyses: NodeAnalysisRunData,
+	NodePromotionRenders:  NodeRenderRunData,
 }
 
 // reDefList matches a forEach expression that reads a def node's list field.

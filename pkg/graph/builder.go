@@ -783,7 +783,12 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			if err != nil {
 				return nil, nil, nil, err
 			}
+			render, err := buildCompactRender(pipeline, bundle, findEnvSpec(pipeline, envName), stepName)
+			if err != nil {
+				return nil, nil, nil, err
+			}
 			compactSteps = append(compactSteps, compactStep{env: envName,
+				render:            render,
 				name:              stepName,
 				prStatus:          prName,
 				upstreams:         rawUpstreams,
@@ -849,6 +854,13 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			runs = append(runs, s.extras.runs...)
 		}
 		nodes = append(nodes, compactRunNodes(pipeline, bundle, hooks, runs, stepsHaveFleets(compactSteps))...)
+		var renders []compactRender
+		for _, s := range compactSteps {
+			if s.render != nil {
+				renders = append(renders, *s.render)
+			}
+		}
+		nodes = append(nodes, compactRenderNodes(pipeline, bundle, renders)...)
 	}
 
 	return nodes, gates.instances, upstreamEnvs, nil

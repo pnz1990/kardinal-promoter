@@ -390,16 +390,26 @@ func ValidateUpdateStrategy(p *kardinalv1alpha1.Pipeline) error {
 // rendered branch must be a valid branch name, differ from spec.git.branch
 // (the render would overwrite the DRY source) and from every other
 // environment's rendered branch (two environments would overwrite each
-// other), and update.strategy argocd does not render. The Pipeline
-// reconciler sets Ready=False/ValidationFailed, "kardinal validate" reports
-// it, and Build fails the Bundle.
+// other), and update.strategy argocd does not render. A fleet environment
+// takes no render.branch: each target renders to its own default branch
+// (env/<fleet>-<target>), and the targets are checked as environments
+// (ExpandedEnvironments), so a target's branch that another environment
+// names is refused too. The Pipeline reconciler sets
+// Ready=False/ValidationFailed, "kardinal validate" reports it, and Build
+// fails the Bundle.
 func ValidateRenderedBranches(p *kardinalv1alpha1.Pipeline) error {
 	source := p.Spec.Git.Branch
 	if source == "" {
 		source = "main"
 	}
-	owner := map[string]string{}
 	for _, e := range p.Spec.Environments {
+		if e.Fleet != nil && kardinalv1alpha1.RendersToBranch(p.Spec, e) && e.Render != nil && e.Render.Branch != "" {
+			return fmt.Errorf("environment %q: a fleet environment takes no render.branch: its targets would "+
+				"all render to %q; each target renders to its own branch, env/%s-<target>", e.Name, e.Render.Branch, e.Name)
+		}
+	}
+	owner := map[string]string{}
+	for _, e := range ExpandedEnvironments(p) {
 		if !kardinalv1alpha1.RendersToBranch(p.Spec, e) {
 			continue
 		}

@@ -108,32 +108,28 @@ func dropNulls(v interface{}) interface{} {
 	return v
 }
 
-// buildRenderRunNode builds the RenderRun node of a layout: branch
-// environment.
-func buildRenderRunNode(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
-	env kardinalv1alpha1.EnvironmentSpec, stepK8sName string) (GraphNode, error) {
-	name := RenderRunName(pipeline.Name, bundle.Name, env.Name)
-	stepRef := func(cond string) string {
-		return fmt.Sprintf(`%s.exists(s, s.metadata.name == %s && %s)`, refStepsNodeID, strconv.Quote(stepK8sName), cond)
-	}
-	when := `bundle.status.phase != "Superseded" && ` + stepRef(`s.?status.?renderRequestedAt.hasValue()`)
+// renderRunSpec is the spec of env's RenderRun, without git.pullRequest,
+// which follows the step's recorded step list (each caller adds its
+// expression). spec.render is set only when env has render; the compact
+// shape sets {} otherwise, the same as unset (buildCompactRender).
+func renderRunSpec(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
+	env kardinalv1alpha1.EnvironmentSpec) (map[string]interface{}, error) {
 	rb := kardinalv1alpha1.RenderRunBundle{Type: bundle.Spec.Type, Images: bundle.Spec.Images, ConfigRef: bundle.Spec.ConfigRef}
 	if p := bundle.Spec.Provenance; p != nil {
 		rb.RollbackOf = p.RollbackOf
 	}
 	bundleSpec, err := toTemplateValue(rb)
 	if err != nil {
-		return GraphNode{}, fmt.Errorf("build: environment %q: bundle: %w", env.Name, err)
+		return nil, fmt.Errorf("build: environment %q: bundle: %w", env.Name, err)
 	}
 	update, err := toTemplateValue(env.Update)
 	if err != nil {
-		return GraphNode{}, fmt.Errorf("build: environment %q: update: %w", env.Name, err)
+		return nil, fmt.Errorf("build: environment %q: update: %w", env.Name, err)
 	}
 	git := map[string]interface{}{
 		"url":            literalStrings(pipeline.Spec.Git.URL),
 		"sourceBranch":   renderSourceBranch(pipeline),
 		"renderedBranch": env.RenderedBranch(),
-		"pullRequest":    "${" + stepRef(`s.?status.?outputs[?"renderPullRequest"].orValue("") == "true"`) + "}",
 	}
 	if ref := pipeline.Spec.Git.SecretRef; ref != nil && ref.Name != "" {
 		git["secretName"] = ref.Name
@@ -150,10 +146,36 @@ func buildRenderRunNode(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1a
 	if env.Render != nil {
 		r, err := toTemplateValue(env.Render)
 		if err != nil {
-			return GraphNode{}, fmt.Errorf("build: environment %q: render: %w", env.Name, err)
+			return nil, fmt.Errorf("build: environment %q: render: %w", env.Name, err)
 		}
 		spec["render"] = r
 	}
+	return spec, nil
+}
+
+// renderPullRequestCond is the condition "the step's recorded step list
+// pushes the render through a PR" (status.outputs.renderPullRequest) over
+// steps, a list of PromotionSteps, for the step named by step (a CEL
+// expression).
+func renderPullRequestCond(steps, step string) string {
+	return fmt.Sprintf(`%s.exists(s, s.metadata.name == %s && s.?status.?outputs[?"renderPullRequest"].orValue("") == "true")`,
+		steps, step)
+}
+
+// buildRenderRunNode builds the RenderRun node of a layout: branch
+// environment.
+func buildRenderRunNode(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
+	env kardinalv1alpha1.EnvironmentSpec, stepK8sName string) (GraphNode, error) {
+	name := RenderRunName(pipeline.Name, bundle.Name, env.Name)
+	stepRef := func(cond string) string {
+		return fmt.Sprintf(`%s.exists(s, s.metadata.name == %s && %s)`, refStepsNodeID, strconv.Quote(stepK8sName), cond)
+	}
+	when := `bundle.status.phase != "Superseded" && ` + stepRef(`s.?status.?renderRequestedAt.hasValue()`)
+	spec, err := renderRunSpec(pipeline, bundle, env)
+	if err != nil {
+		return GraphNode{}, err
+	}
+	spec["git"].(map[string]interface{})["pullRequest"] = "${" + renderPullRequestCond(refStepsNodeID, strconv.Quote(stepK8sName)) + "}"
 	return GraphNode{
 		ID: renderNodeID(env.Name),
 		Template: map[string]interface{}{
@@ -177,37 +199,22 @@ func buildRenderRunNode(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1a
 // RenderRun this build rendered (name), applied by kro for this Bundle
 // (genuineFilter), so a RenderRun created by hand is not a result.
 func liveRendersExpr(env, name, bundleUID string) string {
+	return fmt.Sprintf(`${%s.filter(r, %s && r.spec.environment == %s).map(r, %s)}`,
+		refRenderRunsNodeID, genuineFilter("r", []string{name}, bundleUID), strconv.Quote(env), renderRecord())
+}
+
+// renderRecord is one spec.live.renders entry of RenderRun r.
+func renderRecord() string {
 	res := func(field, zero string) string {
 		return fmt.Sprintf(`"%s": r.?status.?result.?%s.orValue(%s)`, field, field, zero)
 	}
 	result := "{" + strings.Join([]string{res("commitSHA", `""`), res("branch", `""`), res("dryCommit", `""`),
 		res("renderer", `""`), res("objects", "0"), res("markerDigest", `""`), res("noChanges", "false"),
 		res("driftOverwritten", `""`)}, ", ") + "}"
-	return fmt.Sprintf(`${%s.filter(r, %s && r.spec.environment == %s).map(r, {"name": r.metadata.name, `+
-		`"phase": r.?status.?phase.orValue("Pending"), "message": r.?status.?message.orValue(""), `+
-		`"knownMarkerDigests": r.?status.?knownMarkerDigests.orValue([]), "result": %s})}`,
-		refRenderRunsNodeID, genuineFilter("r", []string{name}, bundleUID), strconv.Quote(env), result)
+	return `{"name": r.metadata.name, "phase": r.?status.?phase.orValue("Pending"), "message": r.?status.?message.orValue(""), ` +
+		`"knownMarkerDigests": r.?status.?knownMarkerDigests.orValue([]), "result": ` + result + `}`
 }
 
-// The compact shape does not build RenderRun nodes or the live mirror patch:
-// a layout: branch environment's RenderRun waits on its PromotionStep node
-// (status.renderRequestedAt), which the compact shape folds into the
-// PromotionSteps collection. A Pipeline that renders is built in the node
-// shape, or refused (compactUnsupported).
-func init() {
-	RegisterCompactUnsupported(renderedBranchesUsed)
-}
-
-// renderedBranchesUsed returns the feature name when an environment of the
-// Pipeline uses layout: branch.
-func renderedBranchesUsed(in BuildInput) string {
-	if in.Pipeline == nil {
-		return ""
-	}
-	for _, e := range in.Pipeline.Spec.Environments {
-		if kardinalv1alpha1.RendersToBranch(in.Pipeline.Spec, e) {
-			return "rendered manifests (layout: branch)"
-		}
-	}
-	return ""
-}
+// A layout: branch environment's RenderRun is a node of its own in the node
+// shape (buildRenderRunNode) and an item of the RenderRuns collection in the
+// compact shape (compact_render.go).
