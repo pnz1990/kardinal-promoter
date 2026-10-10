@@ -563,6 +563,52 @@ func TestFlux_SiblingEnvsShareBranch(t *testing.T) {
 	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
 }
 
+// TestFlux_NoChangesWaitsForTheBranch (#1669): the environment's branch
+// already carries the Bundle's change, pushed by hand, but Flux has not
+// fetched it (its GitRepository is suspended), so the Deployment still runs
+// V1. The promotion's git-commit finds nothing to commit and pushes
+// nothing; the step records the branch head as the commit to verify and
+// stays HealthChecking while Flux is on the older revision, instead of
+// passing on it. Once Flux fetches and applies the head, it is Verified and
+// the Deployment runs V2.
+//
+// Covers HEALTH-FLUX-11.
+func TestFlux_NoChangesWaitsForTheBranch(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newFluxApp(t, e, "test")
+	e.SuspendFlux(t, framework.GitRepositoryGVR, a.ns, fluxSource, true)
+	a.apply(t, a.pipeline(nil))
+
+	path := fixtures.Path("test") + "/kustomization.yaml"
+	cur := e.ReadFile(t, a.repo, a.repo.Branch, path)
+	require.Contains(t, cur, "newTag: "+fixtures.V1)
+	head, err := gitserver.CommitFiles(ctx, e.Git, a.repo, a.repo.Branch, "", "deploy V2 by hand",
+		map[string][]byte{path: []byte(strings.Replace(cur, "newTag: "+fixtures.V1, "newTag: "+fixtures.V2, 1))})
+	require.NoError(t, err)
+
+	newImage := fixtures.Image + ":" + fixtures.V2
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", newImage)
+	e.WaitStep(t, a.ns, pipelineName, bundle, "test", 2*time.Minute, "the step to wait for the branch head",
+		func(ps *v1alpha1.PromotionStep) (bool, string) {
+			return ps.Status.State == "HealthChecking" && strings.Contains(ps.Status.Message, "waiting for "+shortSHA(head)),
+				fmt.Sprintf("state=%q message=%q outputs=%v", ps.Status.State, ps.Status.Message, ps.Status.Outputs)
+		})
+	ps, _, err := e.Step(ctx, a.ns, pipelineName, bundle, "test")
+	require.NoError(t, err)
+	assert.Equal(t, "true", ps.Status.Outputs["noChanges"], "git-commit found nothing to commit")
+	assert.Equal(t, head, ps.Status.Outputs["commitSHA"], "the branch head is the commit to verify")
+	e.HoldStep(t, 30*time.Second, a.ns, pipelineName, bundle, "test", "the step to stay HealthChecking while Flux is on V1",
+		func(ps *v1alpha1.PromotionStep) bool { return ps.Status.State == "HealthChecking" })
+	assert.Equal(t, fixtures.Image+":"+fixtures.V1, e.DeploymentImage(t, a.ns, fixtures.Workload("test")))
+
+	e.SuspendFlux(t, framework.GitRepositoryGVR, a.ns, fluxSource, false)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	assert.Equal(t, newImage, e.DeploymentImage(t, a.ns, fixtures.Workload("test")))
+	assert.Equal(t, fluxRev(a.repo.Branch, head), framework.FluxAppliedRevision(a.kustomization(t, "test")))
+}
+
 // TestFlux_BakeSurvivesFluxReconcile bakes an environment with
 // fail-on-alarm while Flux reconciles its Kustomization again and again
 // (as `flux reconcile` in a loop, a busy webhook receiver or a short interval

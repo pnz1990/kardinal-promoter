@@ -23,6 +23,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 const (
@@ -310,10 +311,23 @@ func TestFluxWaitsForTheMergeCommit(t *testing.T) {
 			hc: healthCase{env: prReview, prsRef: "prs", objs: []client.Object{merged(newSHA)},
 				dynObjs: []runtime.Object{fluxKustomization("p-prod", oldSHA)}},
 			wantState: "HealthChecking", wantMsg: "waiting for " + newSHA[:7]},
-		{name: "no changes: no PR to wait for",
+		// A step from before #1669 recorded no commit for no changes: it
+		// keeps the old behaviour until it finishes.
+		{name: "no changes, no commit recorded (in flight at the upgrade): no PR to wait for",
 			hc: healthCase{env: prReview, status: v1alpha1.PromotionStepStatus{
 				Outputs: map[string]string{"noChanges": "true"}},
 				dynObjs: []runtime.Object{fluxKustomization("p-prod", oldSHA)}},
+			wantState: "Verified", wantMsg: "via flux"},
+		// #1669: no changes records the branch head; Flux must apply it.
+		{name: "no changes, branch head recorded, previous commit applied: waits",
+			hc: healthCase{env: prReview, status: v1alpha1.PromotionStepStatus{
+				Outputs: map[string]string{"noChanges": "true", "commitSHA": newSHA}},
+				dynObjs: []runtime.Object{fluxKustomization("p-prod", oldSHA)}},
+			wantState: "HealthChecking", wantMsg: "waiting for " + newSHA[:7]},
+		{name: "no changes, branch head recorded and applied",
+			hc: healthCase{env: prReview, status: v1alpha1.PromotionStepStatus{
+				Outputs: map[string]string{"noChanges": "true", "commitSHA": newSHA}},
+				dynObjs: []runtime.Object{fluxKustomization("p-prod", newSHA)}},
 			wantState: "Verified", wantMsg: "via flux"},
 		{name: "auto approval is unchanged",
 			hc: healthCase{env: v1alpha1.EnvironmentSpec{Name: "prod", Health: flux},
@@ -493,6 +507,67 @@ type headGit struct {
 }
 
 func (g *headGit) HeadCommit(_ context.Context, _ string) (string, error) { return g.sha, nil }
+
+// nothingGit is headGit whose commit finds nothing to commit: the cloned
+// branch already has the change. It counts the pushes.
+type nothingGit struct {
+	headGit
+	pushes int
+}
+
+func (g *nothingGit) CommitAll(context.Context, string, string, string, string) error {
+	return scm.ErrNothingToCommit
+}
+
+func (g *nothingGit) Push(context.Context, string, string, string, scm.GitAuth, bool) error {
+	g.pushes++
+	return nil
+}
+
+// TestNoChangesRecordsTheBranchHead (#1669): a step whose git-commit finds
+// nothing to commit pushes and opens nothing, and records the head of the
+// branch it cloned (the one the GitOps tool tracks) as the commit the health
+// check waits for, for auto and pr-review alike. Before, it recorded none,
+// and the health check passed on any applied revision. A git client that
+// cannot read the head records none, as before.
+func TestNoChangesRecordsTheBranchHead(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		git  scm.GitClient
+		want string
+	}{
+		{name: "auto", env: "test", git: &nothingGit{headGit: headGit{sha: newSHA}}, want: newSHA},
+		{name: "pr-review: no PR opened", env: "prod", git: &nothingGit{headGit: headGit{sha: newSHA}}, want: newSHA},
+		{name: "head unknown", env: "test", git: &nothingNoHeadGit{}, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pl := makePipeline("p")
+			ps := asPromoting(makeStep("step", "p", "b1", tt.env), pl)
+			c := newClient(t, ps, pl, makeBundle("b1", "p"))
+			m := &mockSCM{open: true, prURL: "https://github.com/test/repo/pull/3", prNumber: 3}
+			r := &promotionstep.Reconciler{Client: c, GitClient: tt.git, SCM: m,
+				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+			reconcileStep(t, r, "step")
+			got := getStep(t, c, "step")
+			assert.Equal(t, "HealthChecking", got.Status.State, got.Status.Message)
+			assert.Equal(t, "true", got.Status.Outputs["noChanges"])
+			assert.Equal(t, tt.want, got.Status.Outputs["commitSHA"], "the commit the health check waits for")
+			assert.Zero(t, m.openCalled, "no PR for no changes")
+			if g, ok := tt.git.(*nothingGit); ok {
+				assert.Zero(t, g.pushes, "nothing pushed")
+			}
+		})
+	}
+}
+
+// nothingNoHeadGit finds nothing to commit and cannot read the head.
+type nothingNoHeadGit struct{ noopGit }
+
+func (g *nothingNoHeadGit) CommitAll(context.Context, string, string, string, string) error {
+	return scm.ErrNothingToCommit
+}
 
 // TestPushedCommitRecorded proves the auto half of E2E-01: the commit pushed
 // to the tracked branch is recorded as the revision to verify. A pr-review

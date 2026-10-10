@@ -1422,19 +1422,31 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 }
 
 // recordPushedCommit stores, as outputs.commitSHA, the commit the health check
-// must find deployed (E2E-01). It is known here only when the step pushed
+// must find deployed (E2E-01). It is known here when the step pushed
 // straight to the branch the GitOps tool tracks; when the recorded sequence
 // opens a PR the merge commit comes from the PRStatus instead.
+//
+// A step whose git-commit found nothing to commit (noChanges) pushed and
+// opened nothing, but the branch it cloned, the one the GitOps tool tracks,
+// already holds the change: the clone's head is the commit to wait for, so
+// the health check needs an applied revision that contains it (#1669).
+// Without it any revision passed: a step re-run after its own push (#1664),
+// or one whose change a sibling environment had written, was Verified
+// before the GitOps tool applied the branch.
 func (r *Reconciler) recordPushedCommit(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
 	pipeline *v1alpha1.Pipeline, workDir string) {
-	if opensPR(ps) || ps.Status.Outputs["commitSHA"] != "" {
-		// A pr-review step takes the merge commit; a render reported its
-		// commit itself.
-		return
+	noChanges := ps.Status.Outputs["noChanges"] == "true"
+	if ps.Status.Outputs["commitSHA"] != "" {
+		return // a render reported its commit itself, with or without changes
 	}
-	env := findEnv(pipeline, ps.Spec.Environment)
-	if pushed := ps.Status.Outputs["branch"]; pushed == "" || pushed != targetBranch(pipeline, env) {
-		return
+	if !noChanges {
+		if opensPR(ps) {
+			return // a pr-review step takes the merge commit
+		}
+		env := findEnv(pipeline, ps.Spec.Environment)
+		if pushed := ps.Status.Outputs["branch"]; pushed == "" || pushed != targetBranch(pipeline, env) {
+			return
+		}
 	}
 	hr, ok := r.GitClient.(scm.HeadCommitReader)
 	if !ok {
@@ -1442,7 +1454,7 @@ func (r *Reconciler) recordPushedCommit(ctx context.Context, log zerolog.Logger,
 	}
 	sha, err := hr.HeadCommit(ctx, workDir)
 	if err != nil || sha == "" {
-		log.Warn().Err(err).Msg("could not read the pushed commit; health will check images only")
+		log.Warn().Err(err).Bool("noChanges", noChanges).Msg("could not read the commit to verify; health will check images only")
 		return
 	}
 	if ps.Status.Outputs == nil {
