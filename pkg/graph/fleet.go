@@ -203,6 +203,27 @@ func EnvironmentSpecFor(p *kardinalv1alpha1.Pipeline, name string) (kardinalv1al
 	return m.spec, ok
 }
 
+// ExpandedEnvironments returns p's environments in spec order with each
+// fleet environment replaced by its targets (EnvironmentSpecFor's specs).
+// A fleet whose targets cannot be resolved is left out.
+func ExpandedEnvironments(p *kardinalv1alpha1.Pipeline) []kardinalv1alpha1.EnvironmentSpec {
+	members, byFleet, err := fleetMembers(p)
+	var out []kardinalv1alpha1.EnvironmentSpec
+	for _, e := range p.Spec.Environments {
+		if e.Fleet == nil {
+			out = append(out, e)
+			continue
+		}
+		if err != nil {
+			continue
+		}
+		for _, name := range byFleet[e.Name] {
+			out = append(out, members[name].spec)
+		}
+	}
+	return out
+}
+
 // HasEnvironment reports whether name is an environment of p: one of
 // spec.environments (a fleet environment included) or a fleet target.
 func HasEnvironment(p *kardinalv1alpha1.Pipeline, name string) bool {

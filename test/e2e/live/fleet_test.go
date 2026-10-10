@@ -523,3 +523,43 @@ func TestGraph_FleetTargetRolledBackFirst(t *testing.T) {
 	assert.Contains(t, e.ReadFile(t, repo, repo.Branch, "fleet/t03/kustomization.yaml"), "newTag: "+fixtures.V1,
 		"the targets after it run B")
 }
+
+// TestGraph_FleetRenderedBranches (#1515 with D1): a fleet environment with
+// layout: branch, which the compact shape a fleet always gets carries. Each
+// target renders its own overlay in a RenderRun of the RenderRuns collection
+// and pushes it to its own branch, env/<fleet>-<target>; the Bundle is
+// Verified.
+//
+// Covers GRAPH-COMPACT-07.
+func TestGraph_FleetRenderedBranches(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	if e.Git.Kind() == "github" {
+		t.Skip("a fleet's targets render to env/<fleet>-<target>, outside the shared repo's per-test branch prefix")
+	}
+	ns := e.Namespace(t)
+	names := []string{"t00", "t01", "t02"}
+	var targets []v1alpha1.FleetTarget
+	for _, n := range names {
+		targets = append(targets, v1alpha1.FleetTarget{Name: n})
+	}
+	repo := e.Repo(t, ns, fleetFiles(ns, []string{"test", "post"}, "fleet", names, false))
+	createCompactHealth(t, e, ns)
+	a := &app{e: e, ns: ns, envs: []string{"test", "prod", "post"}, repo: repo}
+	p := fleetPromotion(ns, repo, &v1alpha1.FleetSpec{MaxConcurrent: 2, Targets: targets}, "auto")
+	p.Spec.Environments[1].Layout = "branch"
+	a.apply(t, p)
+
+	b := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
+	e.WaitBundlePhase(t, ns, b, "Verified", 2*promoteTimeout)
+	for _, n := range names {
+		env := "prod-" + n
+		rr := renderRunOf(t, e, ns, b, env)
+		assert.Equal(t, graph.NodeRenderRuns, rr.Labels[graph.LabelKRONodeID], "%s: an item of the RenderRuns collection", env)
+		assert.Equal(t, "env/"+env, rr.Spec.Git.RenderedBranch, "%s renders to its own branch", env)
+		cm := e.ReadFile(t, repo, "env/"+env, ns+"_configmap-fleet-"+n+".yaml")
+		assert.Contains(t, cm, "target: "+n, "%s's branch has its own overlay rendered", env)
+	}
+	assert.Contains(t, e.ReadFile(t, repo, repo.Branch, "fleet/t00/kustomization.yaml"), "newTag: "+fixtures.V1,
+		"the DRY source is not committed to")
+}

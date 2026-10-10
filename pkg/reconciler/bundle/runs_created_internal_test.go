@@ -27,6 +27,8 @@ func TestCheckRunsCreated(t *testing.T) {
 				map[string]interface{}{"name": "p-b-prod-pre-migrate-1a2b3c4d", "environment": "prod"}}}},
 			{ID: graph.NodeAnalysisRunData, Def: map[string]interface{}{"items": []interface{}{
 				map[string]interface{}{"name": "p-b-uat-smoke-5e6f7a8b", "environment": "uat"}}}},
+			{ID: graph.NodeRenderRunData, Def: map[string]interface{}{"items": []interface{}{
+				map[string]interface{}{"name": "p-b-stage-render", "environment": "stage"}}}},
 		}
 		g.Status.Conditions = []metav1.Condition{{Type: "ResourcesConverged", Status: status, Reason: "ApplyFailed", Message: msg}}
 		return g
@@ -41,6 +43,8 @@ func TestCheckRunsCreated(t *testing.T) {
 			wantMsg: []string{"p-b-prod-pre-migrate-1a2b3c4d (prod)", "that environment waits", "exceeded quota"}},
 		{name: "analysis denied", graph: runGraph(metav1.ConditionFalse, `analysisruns "p-b-uat-smoke-5e6f7a8b": invalid`),
 			wantMsg: []string{"p-b-uat-smoke-5e6f7a8b (uat)"}},
+		{name: "render denied", graph: runGraph(metav1.ConditionFalse, `renderruns.kardinal.io "p-b-stage-render" is forbidden`),
+			wantMsg: []string{"p-b-stage-render (stage)"}},
 		{name: "another node", graph: runGraph(metav1.ConditionFalse, `apply "PolicyGates": denied`)},
 		{name: "converged", graph: runGraph(metav1.ConditionTrue, "")},
 	}
