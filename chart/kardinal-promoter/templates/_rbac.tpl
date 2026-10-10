@@ -54,6 +54,7 @@ rules exist for. A new client call needs a row there and a rule here.
     - scheduleclocks
     - notificationhooks
     - hookruns
+    - renderruns
     - imageverifications
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 # ScmProviders: read (the translator, reconcilers and the webhook endpoint)
@@ -77,16 +78,26 @@ rules exist for. A new client call needs a row there and a rule here.
     - scheduleclocks/status
     - notificationhooks/status
     - hookruns/status
+    - renderruns/status
     - imageverifications/status
   verbs: ["get", "update", "patch"]
-# Pipeline hooks (docs/hooks.md): the HookRun reconciler creates each hook's
-# Job, owned by the HookRun, and deletes one that ran past its timeout. The
-# informer caches only Jobs labelled kardinal.io/hookrun.
+# Pipeline hooks (docs/hooks.md) and rendered manifests
+# (docs/rendered-manifests.md): the HookRun and RenderRun reconcilers create
+# each hook's and render's Job, owned by its run, and delete one that ran
+# past its timeout. The informer caches only Jobs labelled kardinal.io/run-job.
 - apiGroups: ["batch"]
   resources: ["jobs"]
   verbs: ["get", "list", "watch", "create", "delete"]
-# Audit records are append-only. audit.retention.enabled adds delete: the
-# leader deletes records past their retention (pkg/reconciler/auditretention).
+# Approvals: the UI records, replaces and revokes decisions for its
+# TokenReview user (POST /api/v1/ui/approvals). An Approval is immutable, so
+# there is no update; the approvals admission policy admits the controller's
+# writes only for Approvals marked kardinal.io/recorded-via: ui.
+- apiGroups: ["kardinal.io"]
+  resources: ["approvals"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+# Audit records are append-only. audit.retention.enabled (the default) adds
+# delete: the leader deletes records past their retention
+# (pkg/reconciler/auditretention).
 - apiGroups: ["kardinal.io"]
   resources: ["auditevents"]
   {{- if .Values.audit.retention.enabled }}
@@ -107,6 +118,8 @@ rules exist for. A new client call needs a row there and a rule here.
 # through any more (C01-graph-04): after a translation, when a Graph is
 # deleted, and in the leader's sweep, which lists the RoleBindings carrying
 # the controller's managed-by label (cluster mode only).
+# The render Jobs' ServiceAccount (kardinal-render, no role, no token) is
+# created the same way in a namespace that has none.
 - apiGroups: [""]
   resources: ["serviceaccounts"]
   verbs: ["get", "create"]
@@ -234,9 +247,10 @@ rules exist for. A new client call needs a row there and a rule here.
   resources: ["validatingadmissionpolicies", "validatingadmissionpolicybindings"]
   verbs: ["get"]
   resourceNames: [{{ printf "%s-gate-overrides" (include "kardinal-promoter.fullname" .) | quote }}]
-{{- if .Values.ui.auth.tokenReview }}
-# ui.auth.tokenReview: the UI API validates each bearer token with a
-# TokenReview and authorizes it with a SubjectAccessReview.
+{{- if or .Values.ui.auth.tokenReview .Values.bundleAPI.tokenReview }}
+# ui.auth.tokenReview, bundleAPI.tokenReview: the UI API and the Bundle API
+# validate each bearer token with a TokenReview and authorize it with a
+# SubjectAccessReview.
 - apiGroups: ["authentication.k8s.io"]
   resources: ["tokenreviews"]
   verbs: ["create"]

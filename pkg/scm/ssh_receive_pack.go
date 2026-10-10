@@ -47,6 +47,13 @@ func init() {
 	client.InstallProtocol("ssh", sshTransport{Transport: gogitssh.DefaultClient})
 }
 
+// IsSSHTransport reports whether t is kardinal's ssh transport (the one this
+// package installs), so a wrapper can check it kept it.
+func IsSSHTransport(t transport.Transport) bool {
+	_, ok := t.(sshTransport)
+	return ok
+}
+
 // receivePackWait bounds the wait for git-receive-pack (and its hooks) to
 // exit after the report status. A variable so a test can shorten it.
 var receivePackWait = time.Minute

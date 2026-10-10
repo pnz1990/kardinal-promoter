@@ -44,6 +44,13 @@ func ConfigSourceDir(workDir string) string {
 	return filepath.Clean(workDir) + "#config-source"
 }
 
+// DrySourceDir is where git-clone checks out the DRY source (spec.git.branch)
+// for layout: branch, next to workDir, which holds the rendered branch.
+// Image update steps edit the DRY copy; it is never committed.
+func DrySourceDir(workDir string) string {
+	return filepath.Clean(workDir) + "#dry-source"
+}
+
 // workDirSegment makes s safe to use as one path segment. url.PathEscape is
 // injective, so distinct names stay distinct.
 func workDirSegment(s string) string {

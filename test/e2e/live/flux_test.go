@@ -284,7 +284,12 @@ func TestFlux_UnhealthyKustomizations(t *testing.T) {
 	e.SuspendFlux(t, framework.GitRepositoryGVR, a.ns, frozen, false)
 	e.WaitStepState(t, a.ns, "behind", behindBundle, "behind", "Verified", promoteTimeout)
 	assert.Equal(t, newImage, e.DeploymentImage(t, a.ns, fixtures.Workload("behind")))
-	assert.Equal(t, fluxRev(a.repo.Branch, commit), framework.FluxAppliedRevision(a.kustomization(t, "behind")))
+	// Flux applies the branch head: behind's commit, or a later one of gone
+	// or stalled, which push to the same branch in no set order (each push
+	// is rebased on the last, so the head contains behind's commit).
+	head := e.BranchHead(t, a.repo)
+	assert.Equal(t, fluxRev(a.repo.Branch, head), framework.FluxAppliedRevision(a.kustomization(t, "behind")))
+	assert.True(t, e.BranchContains(t, a.repo, a.repo.Branch, commit), "the applied head %s contains behind's commit %s", head, commit)
 }
 
 // TestFlux_StalledOnSiblingCommit checks a stall on a later commit of the
@@ -526,7 +531,8 @@ func TestFlux_SuspendedKustomization(t *testing.T) {
 // TestFlux_SiblingEnvsShareBranch promotes two parallel environments of one
 // Pipeline. Both push to the Pipeline branch, so Flux applies the later
 // commit to both Kustomizations; the environment that pushed first must
-// still be Verified, because its Deployment runs the Bundle image.
+// still be Verified, because the applied commit contains its own (or, when
+// the history cannot be read, its Deployment runs the Bundle image).
 //
 // Covers HEALTH-FLUX-06.
 func TestFlux_SiblingEnvsShareBranch(t *testing.T) {
@@ -554,13 +560,63 @@ func TestFlux_SiblingEnvsShareBranch(t *testing.T) {
 	for _, env := range a.envs {
 		ps := e.WaitStepState(t, a.ns, pipelineName, bundle, env, "Verified", promoteTimeout)
 		assert.Equal(t, newImage, e.DeploymentImage(t, a.ns, fixtures.Workload(env)))
-		if strings.Contains(ps.Status.Message, "but the Kustomization's Deployments run the Bundle images") {
+		// The skipped commit is accepted from the branch history (the
+		// applied commit contains it, #1591) or, when that cannot be read,
+		// because the Deployments run the Bundle images.
+		if strings.Contains(ps.Status.Message, "contains "+shortSHA(commits[env])) ||
+			strings.Contains(ps.Status.Message, "but the Kustomization's Deployments run the Bundle images") {
 			noted++
 			assert.Contains(t, ps.Status.Message, shortSHA(commits[env]), "the note names the commit the step pushed")
 		}
 	}
 	assert.Equal(t, 1, noted, "the environment whose commit Flux skipped says why it is Verified anyway")
 	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
+}
+
+// TestFlux_NoChangesWaitsForTheBranch (#1669): the environment's branch
+// already carries the Bundle's change, pushed by hand, but Flux has not
+// fetched it (its GitRepository is suspended), so the Deployment still runs
+// V1. The promotion's git-commit finds nothing to commit and pushes
+// nothing; the step records the branch head as the commit to verify and
+// stays HealthChecking while Flux is on the older revision, instead of
+// passing on it. Once Flux fetches and applies the head, it is Verified and
+// the Deployment runs V2.
+//
+// Covers HEALTH-FLUX-11.
+func TestFlux_NoChangesWaitsForTheBranch(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newFluxApp(t, e, "test")
+	e.SuspendFlux(t, framework.GitRepositoryGVR, a.ns, fluxSource, true)
+	a.apply(t, a.pipeline(nil))
+
+	path := fixtures.Path("test") + "/kustomization.yaml"
+	cur := e.ReadFile(t, a.repo, a.repo.Branch, path)
+	require.Contains(t, cur, "newTag: "+fixtures.V1)
+	head, err := gitserver.CommitFiles(ctx, e.Git, a.repo, a.repo.Branch, "", "deploy V2 by hand",
+		map[string][]byte{path: []byte(strings.Replace(cur, "newTag: "+fixtures.V1, "newTag: "+fixtures.V2, 1))})
+	require.NoError(t, err)
+
+	newImage := fixtures.Image + ":" + fixtures.V2
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", newImage)
+	e.WaitStep(t, a.ns, pipelineName, bundle, "test", 2*time.Minute, "the step to wait for the branch head",
+		func(ps *v1alpha1.PromotionStep) (bool, string) {
+			return ps.Status.State == "HealthChecking" && strings.Contains(ps.Status.Message, "waiting for "+shortSHA(head)),
+				fmt.Sprintf("state=%q message=%q outputs=%v", ps.Status.State, ps.Status.Message, ps.Status.Outputs)
+		})
+	ps, _, err := e.Step(ctx, a.ns, pipelineName, bundle, "test")
+	require.NoError(t, err)
+	assert.Equal(t, "true", ps.Status.Outputs["noChanges"], "git-commit found nothing to commit")
+	assert.Equal(t, head, ps.Status.Outputs["commitSHA"], "the branch head is the commit to verify")
+	e.HoldStep(t, 30*time.Second, a.ns, pipelineName, bundle, "test", "the step to stay HealthChecking while Flux is on V1",
+		func(ps *v1alpha1.PromotionStep) bool { return ps.Status.State == "HealthChecking" })
+	assert.Equal(t, fixtures.Image+":"+fixtures.V1, e.DeploymentImage(t, a.ns, fixtures.Workload("test")))
+
+	e.SuspendFlux(t, framework.GitRepositoryGVR, a.ns, fluxSource, false)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	assert.Equal(t, newImage, e.DeploymentImage(t, a.ns, fixtures.Workload("test")))
+	assert.Equal(t, fluxRev(a.repo.Branch, head), framework.FluxAppliedRevision(a.kustomization(t, "test")))
 }
 
 // TestFlux_BakeSurvivesFluxReconcile bakes an environment with

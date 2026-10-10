@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // TestHistory_ListsPromotionSteps verifies that historyFn lists promotion steps for a pipeline.
@@ -39,7 +40,7 @@ func TestHistory_ListsPromotionSteps(t *testing.T) {
 		Spec:   v1alpha1.PromotionStepSpec{PipelineName: "nginx-demo", BundleName: "nginx-demo-v2", Environment: "dev", StepType: "open-pr"},
 		Status: v1alpha1.PromotionStepStatus{State: "Promoting"},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(step1, step2).WithStatusSubresource(step1, step2).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(step1, step2).WithStatusSubresource(step1, step2).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	var buf bytes.Buffer
 	err := historyFn(&buf, c, "default", "nginx-demo", "", 20)
@@ -75,7 +76,7 @@ func TestHistory_EnvFilter(t *testing.T) {
 		Spec:   v1alpha1.PromotionStepSpec{PipelineName: "nginx-demo", BundleName: "nginx-demo-v1", Environment: "prod", StepType: "open-pr"},
 		Status: v1alpha1.PromotionStepStatus{State: "Verified"},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(stepDev, stepProd).WithStatusSubresource(stepDev, stepProd).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(stepDev, stepProd).WithStatusSubresource(stepDev, stepProd).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	var buf bytes.Buffer
 	err := historyFn(&buf, c, "default", "nginx-demo", "prod", 20)
@@ -120,7 +121,7 @@ func TestHistory_RollbackAction(t *testing.T) {
 	}
 	objs := []sigs_client.Object{rollback, labelled, promote,
 		stepFor("nginx-demo-rollback-x1"), stepFor("nginx-demo-rollback-x2"), stepFor("nginx-demo-v1")}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	var buf bytes.Buffer
 	require.NoError(t, historyFn(&buf, c, "default", "nginx-demo", "", 20))
@@ -225,7 +226,7 @@ func TestHistory_RetiredBundle(t *testing.T) {
 				State: "Verified", PRURL: "https://github.com/org/repo/pull/10", CreatedAt: at, VerifiedAt: &at}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(b).WithStatusSubresource(b).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(b).WithStatusSubresource(b).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	var buf bytes.Buffer
 	require.NoError(t, historyFn(&buf, c, "default", "nginx-demo", "", 20))

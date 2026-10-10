@@ -140,6 +140,9 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	if err := validateInput(input.Pipeline, input.Bundle); err != nil {
 		return nil, err
 	}
+	if err := ValidateRenderedBranches(input.Pipeline); err != nil {
+		return nil, fmt.Errorf("build: %w", err)
+	}
 	if err := ValidateHooks(input.Pipeline); err != nil {
 		return nil, err
 	}
@@ -195,7 +198,7 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 		}
 	}
 	nodes, instances, upstreams, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates,
-		input.MetricChecks, input.PolicyNamespaces, input.Analyses, compact, members)
+		input.MetricChecks, input.PolicyNamespaces, input.Analyses, input.ScmProvider, compact, members)
 	if err != nil {
 		return nil, err
 	}
@@ -650,7 +653,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate,
 	skipGates map[string][]skipPermissionGate,
 	metricChecks []kardinalv1alpha1.MetricCheck, policyNamespaces []string, analyses AnalysisInput,
-	compact bool,
+	provider *kardinalv1alpha1.ScmProviderIdentity, compact bool,
 	members map[string]fleetMember) ([]GraphNode, []kardinalv1alpha1.PolicyGate, map[string][]string, error) {
 	pipelineName := pipeline.Name
 	bundleSlug := CELSafeSlug(bundle.Name) // camelCase — node IDs only
@@ -680,7 +683,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	}
 	nodes = append(nodes, bundleWatchNode)
 	nodes = append(nodes, readBackRefs(pipeline, filteredEnvs, bundle)...)
-	ivNode, ivName, err := buildImageVerificationNode(pipeline, bundle)
+	ivNode, ivName, err := buildImageVerificationNode(pipeline, bundle, provider)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -766,16 +769,32 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		}
 
 		if compact {
+			stepName := promotionStepK8sName(pipelineName, bundle.Name, envName)
 			m := members[envName]
+			held := heldBundle(pipeline, envName, m.fleet) != "" && heldBundle(pipeline, envName, m.fleet) != bundle.Name
+			iv := ""
+			if len(upstreams) == 0 {
+				iv = ivName // a root step and its pre hooks wait for the image verification
+			}
+			extras, err := buildCompactEnvExtras(hookNodesInput{
+				pipeline: pipelineName, bundle: bundle.Name, namespace: bundle.Namespace,
+				bundleUID: string(bundle.UID), env: findEnvSpec(pipeline, envName), stepK8sName: stepName,
+				imageVerification: iv,
+			}, analyses, bundle, rawUpstreams, envGates, held)
+			if err != nil {
+				return nil, nil, nil, err
+			}
 			compactSteps = append(compactSteps, compactStep{env: envName,
-				name:           promotionStepK8sName(pipelineName, bundle.Name, envName),
-				prStatus:       prName,
-				upstreams:      rawUpstreams,
-				gates:          envGates,
-				fleet:          m.fleet,
-				index:          m.index,
-				maxConcurrent:  m.maxConcurrent,
-				maxUnavailable: m.maxUnavailable,
+				name:              stepName,
+				prStatus:          prName,
+				upstreams:         rawUpstreams,
+				gates:             envGates,
+				extras:            extras,
+				imageVerification: iv,
+				fleet:             m.fleet,
+				index:             m.index,
+				maxConcurrent:     m.maxConcurrent,
+				maxUnavailable:    m.maxUnavailable,
 			})
 			continue
 		}
@@ -784,6 +803,17 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			pipelineName, envName, CELSafeSlug(envName), bundle, upstreams, envGates, gates.readyCond, prName,
 			heldCond(pipeline, envName),
 		)
+		envSpec := findEnvSpec(pipeline, envName)
+		stepK8s := promotionStepK8sName(pipelineName, bundle.Name, envName)
+		render := ""
+		if kardinalv1alpha1.RendersToBranch(pipeline.Spec, envSpec) {
+			rn, err := buildRenderRunNode(pipeline, bundle, envSpec, stepK8s)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			nodes = append(nodes, rn)
+			render = RenderRunName(pipelineName, bundle.Name, envName)
+		}
 		in := hookNodesInput{
 			pipeline: pipelineName, bundle: bundle.Name, namespace: bundle.Namespace,
 			bundleUID:   string(bundle.UID),
@@ -797,7 +827,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			in.imageVerification = ivName
 			in.conds = append(in.conds, imageVerifiedCond())
 		}
-		extras, err := buildEnvExtras(in, analyses, bundle)
+		extras, err := buildEnvExtras(in, analyses, bundle, render)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -813,6 +843,13 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	if compact {
 		nodes = append(nodes, compactNodes(pipeline, bundle, compactSteps, gates.collectionIDs())...)
 		nodes = append(nodes, compactMetricNodes(pipelineName, bundle.Name, compactMetrics)...)
+		var hooks []compactHook
+		var runs []compactRun
+		for _, s := range compactSteps {
+			hooks = append(hooks, s.extras.hooks...)
+			runs = append(runs, s.extras.runs...)
+		}
+		nodes = append(nodes, compactRunNodes(pipeline, bundle, hooks, runs, stepsHaveFleets(compactSteps))...)
 	}
 
 	return nodes, gates.instances, upstreamEnvs, nil

@@ -56,6 +56,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
@@ -120,7 +121,7 @@ func skipTranslate(err error) bool {
 }
 
 // indexPipeline is the Bundle field index on spec.pipeline.
-const indexPipeline = "spec.pipeline"
+const indexPipeline = lifecycle.IndexBundlePipeline
 
 // requeueSlow is the retry interval for conditions that need a change
 // elsewhere (a missing Pipeline, a full maxConcurrentPromotions slot, a failing
@@ -432,6 +433,7 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 		if err := r.checkGatesCreated(ctx, b, g); err != nil {
 			log.Warn().Err(err).Str("graph", name).Msg("check gate instances (non-fatal)")
 		}
+		checkRunsCreated(b, g)
 	}
 	return nil
 }
@@ -535,7 +537,9 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 		Str("oldHash", b.Status.PipelineSpecHash).
 		Str("newHash", currentHash).
 		Msg("pipeline spec changed — updating Graph in place")
-	r.keepRemovedFleetTargets(ctx, log, b, pipeline)
+	if err := r.keepRemovedFleetTargets(ctx, log, b, pipeline); err != nil {
+		return err
+	}
 	if _, err := r.translate(ctx, log, pipeline, b); err != nil {
 		return fmt.Errorf("update graph for changed pipeline spec: %w", err)
 	}
@@ -837,26 +841,32 @@ func (r *Reconciler) newerSiblings(ctx context.Context, b *kardinalv1alpha1.Bund
 // keepRemovedFleetTargets records, in b's status.retiredSteps, the steps of
 // fleet targets that the Pipeline no longer has (D1): the in-place Graph
 // update prunes them, and their evidence (state, message, PR) would be lost.
-// The records are kept with the ones the retirement writes. It changes b in
-// memory only; the caller patches the status. A failed list records
+// The records are kept with the ones the retirement writes. New records are
+// patched into the stored status at once (on the resourceVersion b was read
+// at), before the caller updates the Graph; a failed patch is returned, so
+// the Graph is not updated and the reconcile retries. A failed list records
 // nothing (non-fatal).
 func (r *Reconciler) keepRemovedFleetTargets(ctx context.Context, log zerolog.Logger,
-	b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipeline) {
+	b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipeline) error {
 	if graph.ValidateFleets(pipeline) != nil {
 		// The fleets cannot be resolved (no targets yet, a selector not
 		// read): every target would look removed, and the Graph is not
 		// rebuilt from them anyway.
-		return
+		return nil
 	}
 	var steps kardinalv1alpha1.PromotionStepList
 	if err := r.List(ctx, &steps, client.InNamespace(b.Namespace), client.MatchingLabels{lifecycle.LabelBundle: b.Name}); err != nil {
 		log.Warn().Err(err).Msg("list steps to keep removed fleet targets (non-fatal)")
-		return
+		return nil
 	}
 	kept := make(map[string]bool, len(b.Status.RetiredSteps))
 	for _, rs := range b.Status.RetiredSteps {
 		kept[rs.Name] = true
 	}
+	// Patched on a copy: b may hold changes of this reconcile its caller
+	// patches later, and the patch response would overwrite them.
+	before := b.DeepCopy()
+	rec := b.DeepCopy()
 	for i := range steps.Items {
 		s := &steps.Items[i]
 		if s.Labels[graph.LabelFleet] == "" || kept[s.Name] {
@@ -865,9 +875,20 @@ func (r *Reconciler) keepRemovedFleetTargets(ctx context.Context, log zerolog.Lo
 		if _, ok := graph.EnvironmentSpecFor(pipeline, s.Spec.Environment); ok {
 			continue
 		}
-		b.Status.RetiredSteps = append(b.Status.RetiredSteps, lifecycle.RetiredStepOf(s))
+		rec.Status.RetiredSteps = append(rec.Status.RetiredSteps, lifecycle.RetiredStepOf(s))
 		log.Info().Str("env", s.Spec.Environment).Msg("fleet target removed from the Pipeline; its step is kept in status.retiredSteps")
 	}
+	if len(rec.Status.RetiredSteps) == len(b.Status.RetiredSteps) {
+		return nil
+	}
+	// Stored before the Graph update that makes kro prune the steps: a crash
+	// in between leaves the records, not steps nobody recorded.
+	if err := r.Status().Patch(ctx, rec, statusPatch(before)); err != nil {
+		return fmt.Errorf("record removed fleet targets in status.retiredSteps: %w", err)
+	}
+	b.Status.RetiredSteps = rec.Status.RetiredSteps
+	b.ResourceVersion = rec.ResourceVersion
+	return nil
 }
 
 // pipelineBundleList lists the Bundles of a pipeline through the spec.pipeline index.
@@ -875,11 +896,7 @@ func (r *Reconciler) pipelineBundleList(ctx context.Context, ns, pipeline string
 	if pipeline == "" {
 		return nil, nil
 	}
-	var list kardinalv1alpha1.BundleList
-	if err := r.List(ctx, &list, client.InNamespace(ns), client.MatchingFields{indexPipeline: pipeline}); err != nil {
-		return nil, fmt.Errorf("list bundles of pipeline %s: %w", pipeline, err)
-	}
-	return list.Items, nil
+	return lifecycle.ListPipelineBundles(ctx, r.Client, ns, pipeline)
 }
 
 // markSuperseded sets this bundle's status.phase to "Superseded" (self-supersession).
@@ -2023,9 +2040,8 @@ func computeBundleMetrics(b *kardinalv1alpha1.Bundle, expected []string,
 //     whose Graph could not be built (InvalidSpec), so a fixed gate retries
 //     them (#1312).
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(),
-		&kardinalv1alpha1.Bundle{}, indexPipeline, bundlePipelineIndex); err != nil {
-		return fmt.Errorf("index Bundle by spec.pipeline: %w", err)
+	if err := lifecycle.IndexBundlesByPipeline(context.Background(), mgr.GetFieldIndexer()); err != nil {
+		return err
 	}
 
 	// Unstructured, so kardinal does not import the kro module.
@@ -2038,7 +2054,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("set up the bundle retirement controller: %w", err)
 	}
 	b := ctrl.NewControllerManagedBy(mgr).
-		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers,
+			// Workers are shared fairly between namespaces (#1577).
+			NewQueue: fairqueue.NewFor(mgr)}).
 		For(&kardinalv1alpha1.Bundle{}).
 		Watches(&kardinalv1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.waitingSiblings),
 			builder.WithPredicates(bundlePhaseChanged)).
@@ -2052,13 +2070,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // bundlePipelineIndex is the spec.pipeline index function.
-func bundlePipelineIndex(obj client.Object) []string {
-	b, ok := obj.(*kardinalv1alpha1.Bundle)
-	if !ok || b.Spec.Pipeline == "" {
-		return nil
-	}
-	return []string{b.Spec.Pipeline}
-}
+func bundlePipelineIndex(obj client.Object) []string { return lifecycle.BundlePipeline(obj) }
 
 // bundleLabelMapper maps a PromotionStep or Graph to the Bundle named by its
 // kardinal.io/bundle label, set by the Graph builder.

@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 )
@@ -113,7 +114,7 @@ func TestSubscriptionReconciler_Credentials(t *testing.T) {
 				secret("helm-login", map[string]string{"username": "u", "password": "p"}),
 				secret("junk", map[string]string{"api-key": "do-not-print"}),
 				elsewhere, unlabelled,
-			).WithStatusSubresource(sub).Build()
+			).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			var got *source.Credentials
 			r := &subscription.Reconciler{Client: c,
 				WatcherFn: func(_ *kardinalv1alpha1.Subscription, creds source.Credentials) (source.Watcher, error) {
@@ -160,7 +161,7 @@ func helmSub(name, ns string, ref *kardinalv1alpha1.SubscriptionSecretRef) *kard
 func TestSubscriptionReconciler_HelmChartBundle(t *testing.T) {
 	sub := helmSub("podinfo-chart", "default", nil)
 	sub.Status.LastSeenDigest = "sha256:old"
-	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r := &subscription.Reconciler{Client: c,
 		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
 			return &changedWatcher{digest: "sha256:0123456789abcdef", tag: "6.15.0"}, nil
@@ -202,7 +203,7 @@ func TestSubscriptionReconciler_PathGlobRevision(t *testing.T) {
 	sub.Spec.Git.PathGlob = "apps/**"
 	sub.Status.ObservedPathGlob = "apps/**"
 	sub.Status.LastSeenRevision = "1111111111111111111111111111111111111111"
-	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	var seen string
 	r := &subscription.Reconciler{Client: c,
 		WatcherFn: func(s *kardinalv1alpha1.Subscription, creds source.Credentials) (source.Watcher, error) {
@@ -229,7 +230,7 @@ func TestSubscriptionReconciler_RefreshSpacing(t *testing.T) {
 	sub.Annotations = map[string]string{kardinalv1alpha1.RefreshAnnotation: "2026-10-08T09:59:58Z"}
 	sub.Status.LastSeenDigest = "sha256:x"
 	sub.Status.LastCheckedAt = now.Add(-3 * time.Second).Format(time.RFC3339)
-	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	polls := 0
 	r := &subscription.Reconciler{Client: c,
 		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
@@ -326,7 +327,7 @@ func TestSubscriptionReconciler_PrivateRegistryEndToEnd(t *testing.T) {
 		Labels: map[string]string{kardinalv1alpha1.LabelSecretReferenceable: "true"}},
 		Type: corev1.SecretTypeDockerConfigJson,
 		Data: map[string][]byte{".dockerconfigjson": []byte(`{"auths":{"` + host + `":{"username":"ci","password":"pw"}}}`)}}
-	c := fake.NewClientBuilder().WithScheme(schemeWithSecrets()).WithObjects(sub, pull).WithStatusSubresource(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(schemeWithSecrets()).WithObjects(sub, pull).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r := newReconcilerWithRealWatchers(c, func() time.Time { return time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC) }, srv.Client())
 
 	_, err := r.Reconcile(context.Background(), reqFor(sub))
@@ -351,7 +352,7 @@ func TestSubscriptionReconciler_PathGlobChangeIsBaseline(t *testing.T) {
 	sub.Status.LastSeenDigest = "cccccccccccccccccccccccccccccccccccccccc" // the head before the glob
 	sub.Status.LastSeenRevision = "cccccccccccccccccccccccccccccccccccccccc"
 	sub.Spec.Git.PathGlob = "apps/**"
-	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	var lastRevisions []string
 	digest := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // an older commit that touched apps/
 	r := &subscription.Reconciler{Client: c,

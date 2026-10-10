@@ -98,6 +98,12 @@ func (r *Run) Finish(edit ...func(*invariants.Options)) *invariants.Report {
 	return invariants.Check(r.T, r.E, o)
 }
 
+// AllVerified expects every Bundle of the test to end Verified
+// (invariants.OutcomeAllVerified): one Bundle per Pipeline, or Bundles
+// promoted one after the other. The default expects the newest Bundle of
+// each Pipeline Verified and the others Verified or Superseded.
+func AllVerified(o *invariants.Options) { o.Outcome = invariants.OutcomeAllVerified }
+
 // Allow adds benign error-log patterns for the faults a test injects.
 func Allow(patterns ...string) func(*invariants.Options) {
 	return func(o *invariants.Options) {
@@ -149,20 +155,34 @@ const EnvRace = "KARDINAL_E2E_RACE"
 // raceVersion is the ControllerVersion of the -race build (kardinal.sh).
 const raceVersion = "e2e-race"
 
-// checkRaceBuild fails the test when the suite asked for a -race controller
-// (EnvRace=1) and the controller runs another build: the controller writes
-// its version to the kardinal-version ConfigMap.
+// checkRaceBuild fails the test when EnvRace and the controller's build
+// disagree, either way: the memory checks pick their bounds from EnvRace
+// (invariants.Options.RaceBuild). The controller writes its version to the
+// kardinal-version ConfigMap.
 func checkRaceBuild(t *testing.T, e *framework.Env) {
 	t.Helper()
-	if os.Getenv(EnvRace) != "1" {
-		return
-	}
+	race := os.Getenv(EnvRace) == "1"
 	var cm corev1.ConfigMap
 	key := types.NamespacedName{Namespace: framework.ControllerNamespace, Name: "kardinal-version"}
 	if err := e.Client.Get(context.Background(), key, &cm); err != nil {
-		t.Fatalf("%s=1 but the controller version is unknown: %v", EnvRace, err)
+		if race {
+			t.Fatalf("%s=1 but the controller version is unknown: %v", EnvRace, err)
+		}
+		return
 	}
-	if v := cm.Data["version"]; v != raceVersion {
-		t.Fatalf("%s=1 but the controller runs version %q, not the -race build %q", EnvRace, v, raceVersion)
+	if msg := raceMismatch(race, cm.Data["version"]); msg != "" {
+		t.Fatal(msg)
 	}
+}
+
+// raceMismatch says how EnvRace (race) and the controller's version
+// disagree, or "".
+func raceMismatch(race bool, version string) string {
+	switch {
+	case race && version != raceVersion:
+		return fmt.Sprintf("%s=1 but the controller runs version %q, not the -race build %q", EnvRace, version, raceVersion)
+	case !race && version == raceVersion:
+		return fmt.Sprintf("the controller is the -race build (%q) but %s is not 1: the memory checks would use the bounds of a build without -race", raceVersion, EnvRace)
+	}
+	return ""
 }

@@ -102,6 +102,15 @@ type PromotionStepSpec struct {
 	// +optional
 	Live *PromotionStepLive `json:"live,omitempty"`
 
+	// Admitted is written by a compact Graph with fleets: false while the
+	// Graph has not yet read the step back (its StepsObserved), true once it
+	// has. Only then is the step's admission final: until it is, a pacing
+	// change can make kro delete the step, so a Pending step does no work
+	// while Admitted is false (#1565). Unset (other Graphs) does not wait.
+	// Do not set it.
+	// +optional
+	Admitted *bool `json:"admitted,omitempty"`
+
 	// Region was set on the per-region PromotionSteps of a Pipeline
 	// environment with two or more spec.regions. The Graph builder no longer
 	// sets it; the reconciler fails a step that still has one (created by a
@@ -139,9 +148,34 @@ type PromotionStepLive struct {
 	// +optional
 	Gates []LiveGate `json:"gates,omitempty"`
 
+	// Renders is the environment's RenderRun for this Bundle (layout:
+	// branch), at most one.
+	// +optional
+	Renders []LiveRenderRun `json:"renders,omitempty"`
+
 	// ImageVerification is the Bundle's ImageVerification result.
 	// +optional
 	ImageVerification *LiveImageVerification `json:"imageVerification,omitempty"`
+}
+
+// LiveRenderRun is the result of the RenderRun of a layout: branch
+// environment.
+type LiveRenderRun struct {
+	// Name is the RenderRun name.
+	Name string `json:"name"`
+	// Phase is the RenderRun's status.phase (Pending when it has none yet).
+	// +optional
+	Phase string `json:"phase,omitempty"`
+	// Message is the RenderRun's status.message.
+	// +optional
+	Message string `json:"message,omitempty"`
+	// Result is the RenderRun's status.result.
+	// +optional
+	Result *RenderRunResult `json:"result,omitempty"`
+	// KnownMarkerDigests is the RenderRun's status.knownMarkerDigests: a
+	// result that pushed nothing (noChanges) must name one of them.
+	// +optional
+	KnownMarkerDigests []string `json:"knownMarkerDigests,omitempty"`
 }
 
 // LiveImageVerification is the result of the Bundle's ImageVerification.
@@ -425,6 +459,12 @@ type PromotionStepStatus struct {
 	// condition or phase can outlast the Bundle's update.
 	// +optional
 	TargetUpdatedAt *metav1.Time `json:"targetUpdatedAt,omitempty"`
+
+	// RenderRequestedAt is when the step reached its render step (layout:
+	// branch). Set once; the Graph creates the environment's RenderRun once
+	// it is set.
+	// +optional
+	RenderRequestedAt *metav1.Time `json:"renderRequestedAt,omitempty"`
 
 	// VerificationStartedAt is when the step entered Verifying (its health
 	// check passed and its post-deploy hooks may start). Set once; the

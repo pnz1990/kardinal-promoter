@@ -235,25 +235,22 @@ func (s *HelmSetImageStep) Execute(ctx context.Context, state *StepState) (StepR
 }
 ```
 
-### kustomize-build (Phase 1)
+### render and render-manifests (layout: branch)
 
-Runs `kustomize build`. It runs only with `layout: branch`, which is not implemented yet (#1271). Today git-clone fails first.
+`kustomize-build` was never reachable and is gone. A `layout: branch` environment runs `render`
+in the controller and the render itself out of process ([Rendered Manifests](../rendered-manifests.md)):
 
-```go
-func (s *KustomizeBuildStep) Execute(ctx context.Context, state *StepState) (StepResult, error) {
-    envDir := filepath.Join(state.WorkDir, state.Environment.Path)
-    outputDir := state.StepConfig["outputDir"].(string) // where to write rendered output
-    cmd := exec.CommandContext(ctx, "kustomize", "build", envDir)
-    output, err := cmd.CombinedOutput()
-    if err != nil {
-        return StepResult{Status: StepFailed, Message: string(output)}, nil
-    }
-    if err := os.WriteFile(filepath.Join(state.WorkDir, outputDir, "manifests.yaml"), output, 0644); err != nil {
-        return StepResult{Status: StepFailed, Message: err.Error()}, nil
-    }
-    return StepResult{Status: StepSuccess, Message: "Rendered manifests written"}, nil
-}
-```
+- `render` (controller) sets `status.renderRequestedAt` and waits. The Bundle's Graph creates the
+  environment's `RenderRun` once that field is set and mirrors the RenderRun's status onto the
+  step's `spec.live.renders`, which `render` reads (the HookRun pattern, ledger G8 and G14).
+- The RenderRun reconciler runs a Job from the `kardinal-render` image in the Pipeline namespace:
+  no Kubernetes credentials, the Pipeline's own git Secret, read-only root filesystem, no
+  capabilities, memory, CPU and time limits. The Job runs `git-clone`, the image update step,
+  `render-manifests` (kustomize and Helm in process, refusing remote references, symbolic links,
+  oversized and nondeterministic output), `git-commit` and `git-push`, and reports its result in the
+  Pod's termination message, which the reconciler writes to `RenderRun.status.result`.
+- `render-manifests` refuses to run outside that Job (`KARDINAL_RENDER_JOB`), so a controller never
+  renders untrusted templates in its own process.
 
 ### config-merge
 

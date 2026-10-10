@@ -218,8 +218,15 @@ func (e *Env) StallPushes(t *testing.T, repo gitserver.Repo) (stalled func() boo
 	}
 	// The server's global pre-receive hook runs each repo's
 	// hooks/pre-receive.d/* (giteafamily.sh deploys it as deploy/<kind> in
-	// namespace <kind>, with its data at /var/lib/gitea).
-	dir := fmt.Sprintf("/var/lib/gitea/git/repositories/%s/%s.git", strings.ToLower(repo.Owner), strings.ToLower(repo.Name))
+	// namespace <kind>, with its data at /var/lib/gitea). Where under it the
+	// repositories live depends on the image and its generated app.ini
+	// (git/repositories, data/forgejo-repositories, data/gitea-repositories),
+	// so the repo's directory is looked up, not assumed.
+	rel := fmt.Sprintf("%s/%s.git", strings.ToLower(repo.Owner), strings.ToLower(repo.Name))
+	out := strings.TrimSpace(e.Kubectl(t, kind, "", "exec", "deploy/"+kind, "-c", kind, "--", "sh", "-c", fmt.Sprintf(
+		"for r in /var/lib/gitea/git/repositories /var/lib/gitea/data/forgejo-repositories /var/lib/gitea/data/gitea-repositories; "+
+			"do if [ -d \"$r/%[1]s\" ]; then echo \"$r/%[1]s\"; exit 0; fi; done; echo 'no directory for %[1]s' >&2; exit 1", rel)))
+	dir := out[strings.LastIndex(out, "\n")+1:] // the last line: kubectl may add its own above
 	hook := dir + "/hooks/pre-receive.d/kardinal-e2e-stall"
 	marker := dir + "/kardinal-e2e-stalled"
 	script := fmt.Sprintf("#!/bin/sh\n# kardinal e2e: hold the push until the test removes this hook, then refuse it.\n"+

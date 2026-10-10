@@ -280,8 +280,8 @@ func TestPushGuard_FleetTargetRollback(t *testing.T) {
 }
 
 // TestPushGuard_IntentConflictRequeues: the push intent write is locked on the
-// resourceVersion the reconcile read. A Conflict (the step changed since)
-// pushes nothing and requeues; the next reconcile, on the fresh copy, records
+// resourceVersion the reconcile read. A Conflict because another reconcile
+// wrote the step's status pushes nothing and requeues; the next reconcile, on the fresh copy, records
 // the intent and pushes.
 func TestPushGuard_IntentConflictRequeues(t *testing.T) {
 	pl := makePipeline("nginx-demo")
@@ -295,6 +295,13 @@ func TestPushGuard_IntentConflictRequeues(t *testing.T) {
 				patch client.Patch, opts ...client.SubResourcePatchOption) error {
 				if ps, ok := obj.(*v1alpha1.PromotionStep); ok && ps.Status.Outputs["pushIntent"] != "" &&
 					conflicted.CompareAndSwap(false, true) {
+					// Another reconcile wrote the step's status in between
+					// (a conflict from a spec or metadata change alone is
+					// written over the fresh copy, #1664).
+					var cur v1alpha1.PromotionStep
+					require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(obj), &cur))
+					cur.Status.Message = "written by another reconcile"
+					require.NoError(t, c.Status().Update(ctx, &cur))
 					return apierrors.NewConflict(schema.GroupResource{Group: "kardinal.io", Resource: "promotionsteps"},
 						ps.Name, errors.New("the object has been modified"))
 				}
@@ -307,7 +314,7 @@ func TestPushGuard_IntentConflictRequeues(t *testing.T) {
 
 	res, err := r.Reconcile(context.Background(), reqFor(step.Name))
 	require.NoError(t, err)
-	assert.True(t, res.Requeue, "a Conflict on the intent write requeues")
+	assert.True(t, res.Requeue, "a Conflict on the intent write requeues") //nolint:staticcheck // the reconciler requeues at once
 	assert.Empty(t, git.pushes, "and pushes nothing")
 	got := getStep(t, c, step.Name)
 	assert.Equal(t, "Promoting", got.Status.State)

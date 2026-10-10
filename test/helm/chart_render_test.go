@@ -408,6 +408,7 @@ func controllerAccess() []apiAccess {
 		{"", "events", []string{"list", "create", "patch"}, inWatched, "", "UI step events list (ui_api.go); leader election Events (controller-runtime)"},
 		{"", "secrets", []string{"get"}, inWatched, "", "Pipeline git secret (promotionstep Get), SCM SecretWatcher (Get; Secrets are uncached)"},
 		{"kardinal.io", "auditevents", []string{"get", "list", "watch", "create"}, inWatched, "", "audit.go"},
+		{"kardinal.io", "auditevents", []string{"delete"}, inWatched, "", "auditretention retention.go (audit.retention.enabled, the default)"},
 		{"kro.run", "graphs", rwVerbs, inWatched, "", "pkg/graph client; get: promotionstep finalizer.go stepComeback"},
 		{"kro.run", "graphs/status", []string{"get"}, inWatched, "", "pkg/graph client"},
 		{"", "serviceaccounts", []string{"get", "create"}, inWatched, "", "graph identity.go"},
@@ -463,9 +464,6 @@ var optionalAccess = []struct {
 		{"coordination.k8s.io", "leases", []string{"create"}, inCluster, "", "pkg/shard Gate.take (first token of a namespace)"},
 		{"coordination.k8s.io", "leases", []string{"get", "list"}, inCluster, "kardinal-shard-heartbeat-b", "pkg/shard Gate.heartbeatStopped/warnUnrunShards"},
 	}, true},
-	{"audit.retention.enabled=true", []apiAccess{
-		{"kardinal.io", "auditevents", []string{"delete"}, inWatched, "", "auditretention retention.go"},
-	}, false},
 	{"rbac.argocdApplicationsWrite=true", []apiAccess{
 		{"argoproj.io", "applications", []string{"patch"}, inWatched, "", "steps argocd_set_image.go"},
 	}, false},
@@ -887,6 +885,9 @@ var everyValue = []string{
 	"--set", "bundleAPI.tokenSecretRef.name=bundle-token",
 	"--set", "ui.auth.tokenSecretRef.name=ui-token",
 	"--set", "ui.auth.tokenReview=true",
+	"--set", "ui.auth.allowStaticTokenWithTokenReview=true",
+	"--set", "tokenReview.audiences={kardinal-promoter,ci}",
+	"--set", "tokenReview.acceptAPIServerAudience=true",
 	"--set", "ui.corsAllowedOrigins={https://a.example.com,https://b.example.com}",
 }
 
@@ -914,14 +915,17 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 	env := envByName(c)
 
 	wantArgs := map[string]string{
-		"policy-namespaces":        "platform-policies",
-		"scm-provider":             "gitlab",
-		"scm-api-url":              "https://gitlab.example.com",
-		"scm-allowed-repositories": "gitlab.example.com/acme/*,gitlab.example.com/platform/**",
-		"gates-commit-status":      "false",
-		"gates-status-context":     "acme/gates",
-		"ui-tokenreview-auth":      "true",
-		"cors-allowed-origins":     "https://a.example.com,https://b.example.com",
+		"policy-namespaces":                     "platform-policies",
+		"scm-provider":                          "gitlab",
+		"scm-api-url":                           "https://gitlab.example.com",
+		"scm-allowed-repositories":              "gitlab.example.com/acme/*,gitlab.example.com/platform/**",
+		"gates-commit-status":                   "false",
+		"gates-status-context":                  "acme/gates",
+		"ui-tokenreview-auth":                   "true",
+		"cors-allowed-origins":                  "https://a.example.com,https://b.example.com",
+		"ui-auth-static-overrides-tokenreview":  "true",
+		"tokenreview-audiences":                 "kardinal-promoter,ci",
+		"tokenreview-accept-apiserver-audience": "true",
 	}
 	for k, v := range wantArgs {
 		assert.Equal(t, v, args[k], "--%s", k)
@@ -1370,32 +1374,56 @@ func TestChartGateStatusHeartbeat(t *testing.T) {
 	assert.Error(t, err, "a value that is not a Go duration must fail:\n%s", out)
 }
 
-// TestChartAuditRetention: audit.retention is off by default (no flag, no
-// delete on AuditEvents, so an upgrade deletes no record); enabled: true
-// passes --audit-retention=true with the limits (90 days, 1000) and grants
-// delete; the schema refuses a maxAge that is not a Go duration and a
-// negative count.
+// TestChartRenderImage: the render Jobs get the render image (by tag, or by
+// digest when render.image.digest is set) and the chart's imagePullSecrets;
+// image.digest pins the controller image the same way.
+func TestChartRenderImage(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	args := argValues(c)
+	assert.Regexp(t, `^ghcr.io/pnz1990/kardinal-promoter/render:v?[0-9]`, args["render-image"])
+	assert.NotContains(t, args, "render-image-pull-secrets")
+	a, b := "sha256:"+strings.Repeat("a", 64), "sha256:"+strings.Repeat("b", 64)
+	c = controllerContainer(t, render(t, "kardinal-promoter", "--set", "render.image.digest="+a, "--set", "image.digest="+b,
+		"--set", "imagePullSecrets[0].name=regcred", "--set", "imagePullSecrets[1].name=other"))
+	args = argValues(c)
+	assert.Equal(t, "ghcr.io/pnz1990/kardinal-promoter/render@"+a, args["render-image"])
+	assert.Equal(t, "ghcr.io/pnz1990/kardinal-promoter/controller@"+b, c.Image)
+	assert.Equal(t, "regcred,other", args["render-image-pull-secrets"])
+	out, err := helmTemplate(t, "kardinal-promoter", "--set", "render.image.digest=latest")
+	require.Error(t, err, out)
+}
+
+// TestChartAuditRetention: audit.retention is on by default (#1654 RC
+// campaign: unbounded records fill etcd): --audit-retention=true with the
+// limits (90 days, 1000) and delete on AuditEvents. enabled: false passes
+// --audit-retention=false, since the flag defaults to on, and drops delete.
+// The schema refuses a maxAge that is not a Go duration and a negative count.
 func TestChartAuditRetention(t *testing.T) {
 	def := render(t, "kardinal-promoter")
 	c := controllerContainer(t, def)
-	for _, f := range []string{"audit-retention", "audit-retention-max-age", "audit-retention-max-per-pipeline"} {
-		assert.NotContains(t, argValues(c), f)
-	}
-	v := newRBACView(t, def)
-	for _, ns := range []string{"team-a", releaseNS} {
-		assert.False(t, v.allowed(releaseNS, "kardinal-promoter", ns, "kardinal.io", "auditevents", "delete", ""),
-			"retention off by default: no delete on AuditEvents in %s", ns)
-		assert.True(t, v.allowed(releaseNS, "kardinal-promoter", ns, "kardinal.io", "auditevents", "create", ""))
-	}
-
-	on := render(t, "kardinal-promoter", "--set", "audit.retention.enabled=true")
-	c = controllerContainer(t, on)
 	assert.Equal(t, "true", argValues(c)["audit-retention"])
 	assert.Equal(t, "2160h", argValues(c)["audit-retention-max-age"])
 	assert.Equal(t, "1000", argValues(c)["audit-retention-max-per-pipeline"])
-	assert.True(t, newRBACView(t, on).allowed(releaseNS, "kardinal-promoter", "team-a", "kardinal.io", "auditevents", "delete", ""))
+	v := newRBACView(t, def)
+	for _, ns := range []string{"team-a", releaseNS} {
+		assert.True(t, v.allowed(releaseNS, "kardinal-promoter", ns, "kardinal.io", "auditevents", "delete", ""),
+			"retention on by default: delete on AuditEvents in %s", ns)
+	}
 
-	c = controllerContainer(t, render(t, "kardinal-promoter", "--set", "audit.retention.enabled=true",
+	off := render(t, "kardinal-promoter", "--set", "audit.retention.enabled=false")
+	c = controllerContainer(t, off)
+	assert.Equal(t, "false", argValues(c)["audit-retention"], "the flag defaults to on: off must be passed")
+	for _, f := range []string{"audit-retention-max-age", "audit-retention-max-per-pipeline"} {
+		assert.NotContains(t, argValues(c), f)
+	}
+	v = newRBACView(t, off)
+	for _, ns := range []string{"team-a", releaseNS} {
+		assert.False(t, v.allowed(releaseNS, "kardinal-promoter", ns, "kardinal.io", "auditevents", "delete", ""),
+			"retention off: no delete on AuditEvents in %s", ns)
+		assert.True(t, v.allowed(releaseNS, "kardinal-promoter", ns, "kardinal.io", "auditevents", "create", ""))
+	}
+
+	c = controllerContainer(t, render(t, "kardinal-promoter",
 		"--set", "audit.retention.maxAge=720h", "--set", "audit.retention.maxPerPipeline=0"))
 	assert.Equal(t, "720h", argValues(c)["audit-retention-max-age"])
 	assert.Equal(t, "0", argValues(c)["audit-retention-max-per-pipeline"])
@@ -1513,4 +1541,21 @@ func TestChartFleetNamespaces(t *testing.T) {
 	assert.Equal(t, "fleet-system", argValues(c)["fleet-clusterprofile-namespaces"])
 	out, err := helmTemplate(t, "kardinal-promoter", "--set", "fleets.applicationNamespaces={}")
 	assert.Error(t, err, "applicationNamespaces must not be empty:\n%s", out)
+}
+
+// TestChartPprofAddress: pprofAddress unset passes no --pprof-address, so
+// the controller serves no profiles; set, it passes the value through, and
+// still opens no container port for it (#1647).
+//
+// Covers INST-PPROF-01.
+func TestChartPprofAddress(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	_, set := argValues(c)["pprof-address"]
+	assert.False(t, set, "no --pprof-address unless pprofAddress is set")
+
+	c = controllerContainer(t, render(t, "kardinal-promoter", "--set", "pprofAddress=:6060"))
+	assert.Equal(t, ":6060", argValues(c)["pprof-address"])
+	for _, p := range c.Ports {
+		assert.NotEqual(t, int32(6060), p.ContainerPort, "pprof gets no container port")
+	}
 }

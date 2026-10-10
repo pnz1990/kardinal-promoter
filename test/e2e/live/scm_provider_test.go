@@ -26,6 +26,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
 )
 
 // referenceable is the label every Secret an SCM provider names must carry.
@@ -220,7 +221,12 @@ func TestForgejo_ClusterScmProvider(t *testing.T) {
 		func(s *v1alpha1.PromotionStep) (bool, string) {
 			return s.Status.State == "Failed", fmt.Sprintf("state=%q message=%q", s.Status.State, s.Status.Message)
 		})
-	assert.Contains(t, got.Status.Message, "deleted and created again")
+	// The step may poll in the gap between the delete and the create ("is
+	// not found") or after it ("deleted and created again"): either way the
+	// provider it started with is gone, and it fails rather than polling
+	// through the new one.
+	assert.Contains(t, got.Status.Message, "the SCM provider the step started with is gone")
+	assert.Regexp(t, `deleted and created again|is not found`, got.Status.Message)
 	var p v1alpha1.ClusterScmProvider
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Name: name}, &p))
 	assert.NotEqual(t, oldUID, string(p.UID))
@@ -242,4 +248,66 @@ func waitBundleCondition(t *testing.T, e *framework.Env, ns, bundle, want string
 		}
 		return false, fmt.Sprintf("phase=%q conditions=%+v", bu.Status.Phase, bu.Status.Conditions)
 	})
+}
+
+// TestForgejo_ScmProviderChecksSignedCommits (#1618): with
+// commits.requireSigned, a Pipeline whose providerRef names a ScmProvider
+// has its config commit checked through that provider, with its token and
+// its checks, not with the controller's --scm-provider. The ImageVerification
+// names the provider. While the provider's allowedRepositories does not
+// allow the config repository, the verification fails with that reason (the
+// controller's provider would have verified it); once it does, a Bundle of
+// the same signed commit verifies and test is promoted.
+//
+// Covers IMGV-SCMPROVIDER-01.
+func TestForgejo_ScmProviderChecksSignedCommits(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	requireKind(t, e, "forgejo")
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	cfg, _ := a.configRepo(t, "test")
+
+	user := "ivp-" + a.ns[len(a.ns)-8:]
+	tok := e.GitUser(t, user, []string{"write:repository", "write:issue", "read:user"})
+	require.NoError(t, e.GitUsers(t).AddCollaborator(ctx, a.repo, user))
+	require.NoError(t, e.GitUsers(t).AddCollaborator(ctx, cfg, user))
+	require.NoError(t, e.Client.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: a.ns, Name: "team-scm", Labels: referenceable},
+		Data:       map[string][]byte{"token": []byte(tok)},
+	}))
+	prov := &v1alpha1.ScmProvider{
+		ObjectMeta: metav1.ObjectMeta{Namespace: a.ns, Name: "team"},
+		Spec: v1alpha1.ScmProviderSpec{Type: "forgejo", APIURL: os.Getenv(framework.EnvSCMAPI),
+			SecretRef:           v1alpha1.ScmSecretKeyRef{Name: "team-scm"},
+			AllowedRepositories: []string{a.repo.Owner + "/" + a.repo.Name}},
+	}
+	require.NoError(t, e.Client.Create(ctx, prov))
+
+	signer := "ivsigner-" + a.ns[len(a.ns)-8:]
+	p := a.pipeline(nil)
+	p.Spec.Git.ProviderRef = &v1alpha1.ScmProviderRef{Name: "team"}
+	p.Spec.ImageVerification = &v1alpha1.ImageVerificationPolicy{
+		Commits: &v1alpha1.CommitSignaturePolicy{RequireSigned: true, AllowedSigners: []string{signer}}}
+	a.apply(t, p)
+	sha, err := gitserver.CommitAs(ctx, e.Git, cfg, signer, "README.md", []byte("signed\n"), true)
+	require.NoError(t, err)
+
+	first := e.CreateBundle(t, a.ns, pipelineName, "--type", "config", "--config-commit", sha, "--config-repo", cfg.CloneURL)
+	iv := waitImageVerification(t, e, a.ns, first, "Failed")
+	require.NotNil(t, iv.Spec.Commit)
+	require.NotNil(t, iv.Spec.Commit.ScmProvider, "the ImageVerification names the Pipeline's provider")
+	assert.Equal(t, "team", iv.Spec.Commit.ScmProvider.Name)
+	assert.Contains(t, iv.Status.Message, "repository "+cfg.Owner+"/"+cfg.Name+" is not in its spec.allowedRepositories",
+		"checked through the ScmProvider, not the controller's provider (which would verify it)")
+	e.WaitBundlePhase(t, a.ns, first, "Failed", time.Minute)
+
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKeyFromObject(prov), prov))
+	prov.Spec.AllowedRepositories = []string{a.repo.Owner + "/*"}
+	require.NoError(t, e.Client.Update(ctx, prov))
+	second := e.CreateBundle(t, a.ns, pipelineName, "--type", "config", "--config-commit", sha, "--config-repo", cfg.CloneURL)
+	iv = waitImageVerification(t, e, a.ns, second, "Verified")
+	require.NotNil(t, iv.Status.Commit)
+	assert.Equal(t, signer, iv.Status.Commit.Signer)
+	e.WaitStepState(t, a.ns, pipelineName, second, "test", "Verified", promoteTimeout)
 }

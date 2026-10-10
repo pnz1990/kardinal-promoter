@@ -40,6 +40,10 @@
             "string",
             "number"
           ]
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^$|^sha256:[a-f0-9]{64}$"
         }
       }
     },
@@ -202,6 +206,9 @@
     "healthProbeBindAddress": {
       "type": "string"
     },
+    "pprofAddress": {
+      "type": "string"
+    },
     "service": {
       "type": "object",
       "additionalProperties": false,
@@ -359,6 +366,9 @@
               "default": "token"
             }
           }
+        },
+        "tokenReview": {
+          "type": "boolean"
         }
       }
     },
@@ -399,8 +409,28 @@
             },
             "tokenReview": {
               "type": "boolean"
+            },
+            "allowStaticTokenWithTokenReview": {
+              "type": "boolean"
             }
           }
+        }
+      }
+    },
+    "tokenReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "audiences": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^,\\s]+$"
+          }
+        },
+        "acceptAPIServerAudience": {
+          "type": "boolean"
         }
       }
     },
@@ -414,6 +444,15 @@
         "integrationTestJobs": {
           "type": "boolean",
           "description": "Deprecated, no effect, removed in v0.10."
+        },
+        "userRoles": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "aggregateToDefaultRoles": {"type": "boolean"},
+            "directWrites": {"type": "boolean"}
+          }
         }
       }
     },
@@ -619,7 +658,7 @@
           "properties": {
             "enabled": {
               "type": "boolean",
-              "description": "Turn AuditEvent retention on (off by default) and grant delete on AuditEvents."
+              "description": "AuditEvent retention (on by default) and delete on AuditEvents; false keeps every record."
             },
             "maxAge": {
               "type": "string",
@@ -751,6 +790,85 @@
         },
         "annotations": {
           "type": "object"
+        }
+      }
+    },
+    "render": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tag": {
+              "type": "string"
+            },
+            "pullPolicy": {
+              "type": "string",
+              "enum": [
+                "",
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^$|^sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        "serviceAccountName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "limits": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "cpu": {
+                  "type": [
+                    "string",
+                    "number"
+                  ]
+                },
+                "memory": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "timeout": {
+          "type": "string",
+          "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
+        },
+        "networkPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "namespaces": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "gitEgress": {
+              "type": "array"
+            }
+          }
         }
       }
     }

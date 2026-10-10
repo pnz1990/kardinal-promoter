@@ -69,8 +69,13 @@ type GitConfig struct {
 
 	// Branch is the base branch: git-clone checks it out, git-push pushes to
 	// it when the step opens no PR, and open-pr targets it. The reconciler
-	// never leaves it empty; an unset spec.git.branch is main.
+	// never leaves it empty; an unset spec.git.branch is main. With layout:
+	// branch it is the environment's rendered branch.
 	Branch string
+
+	// SourceBranch is spec.git.branch, the DRY source that layout: branch
+	// renders from. Empty for layout: directory, where Branch is both.
+	SourceBranch string
 
 	// Token is the HTTP(S) git token: a PAT, an access token or a GitHub App
 	// installation token.
@@ -180,6 +185,16 @@ type StepState struct {
 	// environment) must never land on the branch after a newer one (#1603).
 	// It wraps ErrStalePush when the push is refused for that reason.
 	BeforePush func(ctx context.Context, direct bool) error
+
+	// Render is set only in the kardinal-render Job, which runs the render
+	// of a layout: branch environment (git-clone, the image update,
+	// render-manifests, git-commit and git-push). The controller never sets
+	// it: rendering does not run in the controller.
+	Render *RenderContext
+
+	// LiveRenders is the RenderRun of a layout: branch environment, as the
+	// Graph mirrors it onto the PromotionStep (spec.live.renders).
+	LiveRenders []v1alpha1.LiveRenderRun
 }
 
 // ErrStalePush marks a push BeforePush refused because the promotion is
@@ -189,6 +204,26 @@ var ErrStalePush = errors.New("stale promotion: refusing to push")
 // ErrNewerPushed is the ErrStalePush for a newer Bundle that already pushed
 // to the environment: the step ends Superseded, not Failed (#1603).
 var ErrNewerPushed = fmt.Errorf("%w: a newer bundle already pushed", ErrStalePush)
+
+// RenderContext is what a render Job knows beyond the step state.
+type RenderContext struct {
+	// Namespace is the Pipeline's namespace: the render marker records it,
+	// so a rendered branch written for one Pipeline is never taken over by
+	// another.
+	Namespace string
+	// KnownMarkerDigests are the marker digests of earlier renders of this
+	// Pipeline environment (RenderRun status). When there are some, the
+	// rendered branch's marker must have one of them.
+	KnownMarkerDigests []string
+	// UnconfirmedBundles are Bundles whose render may have pushed without
+	// its result being recorded: a marker that names one of them, with the
+	// files it lists unchanged, is accepted too.
+	UnconfirmedBundles []string
+}
+
+// RenderJobEnv is set to "1" in the kardinal-render Job. render-manifests
+// refuses to run without it, so a controller can never render in process.
+const RenderJobEnv = "KARDINAL_RENDER_JOB"
 
 // OpenPRStepName is the name of the step that opens the promotion PR.
 const OpenPRStepName = "open-pr"

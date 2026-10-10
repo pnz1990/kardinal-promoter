@@ -37,9 +37,21 @@ target_cluster
 source "$E2E_OUT/env"
 
 IMAGE=${KARDINAL_E2E_IMAGE:-ghcr.io/pnz1990/kardinal-promoter/controller:e2e-$KIND_CLUSTER}
+RENDER_IMAGE=${KARDINAL_E2E_RENDER_IMAGE:-ghcr.io/pnz1990/kardinal-promoter/render:e2e-$KIND_CLUSTER}
 BUILD=${KARDINAL_E2E_BUILD:-docker}
 BIN="$E2E_OUT/bin"
 mkdir -p "$BIN"
+
+# build_render_host builds the render Job image from a host-built binary
+# (the render process is not race-instrumented: it is not the controller).
+build_render_host() {
+  local rctx
+  rctx=$(mktemp -d)
+  (cd "$REPO_ROOT" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false \
+    -ldflags="-s -w" -o "$rctx/kardinal-render" ./cmd/kardinal-render)
+  chmod 0755 "$rctx" "$rctx/kardinal-render"
+  docker build -q -t "$RENDER_IMAGE" -f "$E2E_DIR/render.Dockerfile" "$rctx" >/dev/null
+}
 
 [ "${KARDINAL_E2E_RACE:-0}" != 1 ] || BUILD=race
 case "$BUILD" in
@@ -53,23 +65,33 @@ case "$BUILD" in
       [ "$src" = "$RACE_RUNTIME_IMAGE" ] || docker tag "$src" "$RACE_RUNTIME_IMAGE"
     fi
     docker build -q -t "$IMAGE" --build-arg "RUNTIME=$RACE_RUNTIME_IMAGE" -f "$E2E_DIR/controller.Dockerfile" "$ctx" >/dev/null
+    build_render_host
     ;;
-  docker) docker build -q -t "$IMAGE" "$REPO_ROOT" >/dev/null ;;
+  docker)
+    docker build -q -t "$IMAGE" "$REPO_ROOT" >/dev/null
+    docker build -q -t "$RENDER_IMAGE" -f "$REPO_ROOT/render.Dockerfile" "$REPO_ROOT" >/dev/null
+    ;;
   host)
     ctx=$(mktemp -d)
     (cd "$REPO_ROOT" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false \
       -ldflags="-s -w -X main.ControllerVersion=e2e" -o "$ctx/kardinal-controller" ./cmd/kardinal-controller)
     chmod 0755 "$ctx" "$ctx/kardinal-controller"
     docker build -q -t "$IMAGE" -f "$E2E_DIR/controller.Dockerfile" "$ctx" >/dev/null
+    build_render_host
     ;;
-  none) docker image inspect "$IMAGE" >/dev/null || die "KARDINAL_E2E_BUILD=none but $IMAGE is not built" ;;
+  none)
+    docker image inspect "$IMAGE" >/dev/null || die "KARDINAL_E2E_BUILD=none but $IMAGE is not built"
+    docker image inspect "$RENDER_IMAGE" >/dev/null || die "KARDINAL_E2E_BUILD=none but $RENDER_IMAGE is not built"
+    ;;
   *) die "KARDINAL_E2E_BUILD must be docker, host or none" ;;
 esac
 load_image "$IMAGE"
+load_image "$RENDER_IMAGE"
 (cd "$REPO_ROOT" && go build -o "$BIN/kardinal" ./cmd/kardinal)
 log "controller image $IMAGE ($BUILD), CLI $BIN/kardinal"
 env_set KARDINAL_E2E_RACE "${KARDINAL_E2E_RACE:-0}"
 env_set KARDINAL_E2E_IMAGE "$IMAGE"
+env_set KARDINAL_E2E_RENDER_IMAGE "$RENDER_IMAGE"
 env_set KARDINAL_E2E_CHART "$REPO_ROOT/chart/kardinal-promoter"
 env_set KARDINAL_E2E_HELM "$(command -v helm)"
 
@@ -90,6 +112,8 @@ fi
 
 args=(
   --set "image.repository=${IMAGE%:*}" --set "image.tag=${IMAGE##*:}" --set image.pullPolicy=Never
+  --set "render.image.repository=${RENDER_IMAGE%:*}" --set "render.image.tag=${RENDER_IMAGE##*:}"
+  --set render.image.pullPolicy=Never
   --set logLevel=debug
   # Write gate status on every evaluation, so live tests can see each
   # evaluation in status.lastEvaluatedAt. TestChart_GateStatusHeartbeat covers
@@ -102,6 +126,9 @@ args=(
   --set github.secretRef.name=git-token
   --set "scm.provider=${KARDINAL_E2E_SCM_PROVIDER:?git server component must run first}"
   --set "scm.apiURL=${KARDINAL_E2E_SCM_API:-}"
+  # Off by default; TestUI_UserRoles checks the opt-in (a binding to the
+  # built-in view role grants the viewer rules). test/helm covers the default.
+  --set rbac.userRoles.aggregateToDefaultRoles=true
   # The suites' git servers are in-cluster Services without TLS: let
   # ScmProviders use their http:// API (TestForgejo_ScmProvider*).
   --set scm.providersAllowInsecureHTTP=true

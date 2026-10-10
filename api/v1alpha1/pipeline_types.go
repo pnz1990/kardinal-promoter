@@ -257,13 +257,18 @@ type EnvironmentSpec struct {
 
 	// Layout configures how the promotion interacts with the Git repo layout.
 	// "directory" (default): env manifests are in a subdirectory of the main branch.
-	// "branch": rendered manifests are committed to a separate env-specific branch.
-	//   In this mode the step sequence includes kustomize-build to render templates
-	//   before committing to the target branch.
+	// "branch": the environment's path on spec.git.branch (the DRY source) is
+	//   rendered (kustomize build, or helm template for a chart) and the plain
+	//   manifests are committed to the environment's rendered branch (render.branch,
+	//   default env/<name>), which Argo CD or Flux sync. See docs/rendered-manifests.md.
 	// +kubebuilder:validation:Enum=directory;branch
 	// +kubebuilder:default=directory
 	// +optional
 	Layout string `json:"layout,omitempty"`
+
+	// Render configures layout: branch.
+	// +optional
+	Render *RenderConfig `json:"render,omitempty"`
 
 	// Steps is not supported. kardinal has no custom step engine: every
 	// environment runs the default step sequence (see DefaultSequenceForBundle).
@@ -606,6 +611,57 @@ type UpdateConfig struct {
 	// spec.source.helm.valuesObject directly without a git commit.
 	// +optional
 	ArgoCD *ArgoCDUpdateConfig `json:"argocd,omitempty"`
+}
+
+// RenderConfig configures how an environment with layout: branch is
+// rendered and where the result goes.
+type RenderConfig struct {
+	// Branch is the rendered branch the manifests are committed to. Defaults
+	// to env/<environment name>. It must differ from spec.git.branch and from
+	// every other environment's rendered branch.
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._/-]*$`
+	// +kubebuilder:validation:MaxLength=200
+	// +optional
+	Branch string `json:"branch,omitempty"`
+
+	// OnDrift is what a promotion does when the rendered branch was changed
+	// outside kardinal since the last render (a file kardinal wrote was edited
+	// or deleted, or a file in its way was added): fail (default) fails the
+	// step and changes nothing; overwrite renders over the change.
+	// +kubebuilder:validation:Enum=fail;overwrite
+	// +optional
+	OnDrift string `json:"onDrift,omitempty"`
+
+	// Helm configures the render of a Helm chart (an environment path holding
+	// a Chart.yaml).
+	// +optional
+	Helm *HelmRenderConfig `json:"helm,omitempty"`
+
+	// AllowNondeterministic lets Helm templates call functions whose result
+	// changes from one render to the next (randAlphaNum, uuidv4, now, genCA
+	// and the like). Off by default: such a chart renders different
+	// manifests for the same DRY commit, so every promotion commits a change
+	// and a rollback does not restore what ran.
+	// +optional
+	AllowNondeterministic bool `json:"allowNondeterministic,omitempty"`
+}
+
+// HelmRenderConfig configures helm template for layout: branch.
+type HelmRenderConfig struct {
+	// ReleaseName is .Release.Name. Defaults to the Pipeline name.
+	// +optional
+	ReleaseName string `json:"releaseName,omitempty"`
+
+	// Namespace is .Release.Namespace. Defaults to the environment name.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// ValuesFiles are values files, relative to the chart directory, applied
+	// in order over the chart's values.yaml. Defaults to
+	// update.helm.valuesFile when that is set and is not values.yaml.
+	// +kubebuilder:validation:MaxItems=16
+	// +optional
+	ValuesFiles []string `json:"valuesFiles,omitempty"`
 }
 
 // YAMLUpdateConfig lists the edits of the yaml update strategy. All of them
@@ -980,6 +1036,68 @@ func (h *EnvironmentHold) Expired(now time.Time) bool {
 	return h != nil && h.ExpiresAt != nil && !now.Before(h.ExpiresAt.Time)
 }
 
+// The states of a hold (PipelineStatus.HoldStates). A hold is in effect in
+// every state: the controller never lifts a hold (#1629).
+const (
+	// HoldStateActive: the hold's Bundle exists.
+	HoldStateActive = "Active"
+	// HoldStateBundleMissing: the controller found the hold's Bundle
+	// missing. The hold stays in effect; past the grace the controller
+	// reports it (condition HoldBundleMissing, a Warning Event, an
+	// AuditEvent) and a human releases it.
+	HoldStateBundleMissing = "BundleMissing"
+)
+
+// EnvironmentHoldState is the state of one hold, written by the Pipeline
+// reconciler.
+type EnvironmentHoldState struct {
+	// Environment is the held environment.
+	Environment string `json:"environment"`
+	// Bundle is the hold's Bundle the state was found for.
+	Bundle string `json:"bundle"`
+	// CreatedAt is the hold's createdAt: with the environment and the
+	// Bundle it identifies the hold, so a hold released and added again
+	// gets a state, and a report, of its own.
+	// +optional
+	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
+	// State is Active or BundleMissing.
+	State string `json:"state"`
+	// BundleMissingSince is when the controller first found the Bundle
+	// missing: the grace counts from it, not from the client-set createdAt.
+	// +optional
+	BundleMissingSince *metav1.Time `json:"bundleMissingSince,omitempty"`
+	// ReportedAt is when the controller reported the missing Bundle, once,
+	// past the grace.
+	// +optional
+	ReportedAt *metav1.Time `json:"reportedAt,omitempty"`
+	// Message says what is wrong and how to recover.
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
+// sameTime reports whether a and b are both unset or the same second.
+func sameTime(a, b *metav1.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Truncate(time.Second).Equal(b.Truncate(time.Second))
+}
+
+// HoldState returns the status.holdStates entry of h, or nil: the entry of
+// the same environment, Bundle and createdAt.
+func (p *Pipeline) HoldState(h *EnvironmentHold) *EnvironmentHoldState {
+	if p == nil || h == nil {
+		return nil
+	}
+	for i := range p.Status.HoldStates {
+		st := &p.Status.HoldStates[i]
+		if st.Environment == h.Environment && st.Bundle == h.Bundle && sameTime(st.CreatedAt, h.CreatedAt) {
+			return st
+		}
+	}
+	return nil
+}
+
 // EnvironmentHold pins one environment of a Pipeline to a rollback Bundle.
 type EnvironmentHold struct {
 	// Environment is the held environment.
@@ -1053,8 +1171,18 @@ type PipelineStatus struct {
 	// +optional
 	ObservedHolds []EnvironmentHold `json:"observedHolds,omitempty"`
 
-	// PendingAuditEvents are the HoldCreated and HoldReleased AuditEvents not
-	// yet written (the audit outbox, #1552). Each entry is stored in the same
+	// HoldStates says, per hold of spec.holds, whether its rollback Bundle
+	// exists (#1629). A hold whose Bundle is missing (a crash between the
+	// hold and the Bundle create, or the Bundle deleted) stays in effect;
+	// past the grace the controller reports it, and a human releases it.
+	// +listType=map
+	// +listMapKey=environment
+	// +optional
+	HoldStates []EnvironmentHoldState `json:"holdStates,omitempty"`
+
+	// PendingAuditEvents are the HoldCreated, HoldReleased and
+	// HoldBundleMissing AuditEvents not yet written (the audit outbox,
+	// #1552). Each entry is stored in the same
 	// status patch as observedHolds and removed once the AuditEvent exists.
 	// Normally empty.
 	// +optional

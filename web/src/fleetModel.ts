@@ -5,7 +5,7 @@
 // out as stations in promotion order, what each runs, and where the active
 // Bundle is on its way. Pure functions; FleetBoard draws the result.
 
-import type { EnvironmentNode, Pipeline } from './types'
+import type { EnvironmentFleet, EnvironmentNode, Pipeline } from './types'
 
 /** Where the active Bundle is relative to one environment. */
 export type StationState =
@@ -31,6 +31,26 @@ export interface Station {
   state: StationState
   /** The active Bundle's step state here, when it has one. */
   incomingState?: string
+  /** Set on a fleet environment: its targets rolled up. */
+  fleet?: FleetRollup
+}
+
+/** A fleet environment's targets, counted by where the active Bundle is. */
+export interface FleetRollup {
+  total: number
+  verified: number
+  /** Started and not yet Verified or Failed. */
+  inFlight: number
+  failed: number
+  /** Not started by the active Bundle. */
+  pending: number
+  maxConcurrent: number
+  maxUnavailable?: number
+  /** maxUnavailable targets Failed: no further target starts. */
+  stopped: boolean
+  /** Distinct versions the targets run: more than one while a rollout is part way. */
+  versions: number
+  message?: string
 }
 
 export interface FleetRow {
@@ -118,12 +138,64 @@ export function groupByDepth(names: string[], ups: Map<string, string[]>): strin
   return groups.filter(g => g && g.length > 0)
 }
 
+/** One station for a fleet environment: its targets rolled up. */
+function fleetStation(env: string, f: EnvironmentFleet, p: Pipeline): Station {
+  const states = p.environmentStates ?? {}
+  const deployed = p.deployed ?? {}
+  const active = p.activeBundleName
+  let verified = 0, inFlight = 0, failed = 0, pending = 0
+  const versions = new Map<string, number>()
+  let latest: string | undefined
+  for (const t of f.targets) {
+    const st = active ? states[t] : undefined
+    if (st === 'Verified') verified++
+    else if (st && FAILED.has(st)) failed++
+    else if (st) inFlight++ // a step exists: it holds a place until Verified
+    else pending++
+    const d = deployed[t]
+    if (d) {
+      const v = d.version || d.bundle
+      versions.set(v, (versions.get(v) ?? 0) + 1)
+      if (d.verifiedAt && (!latest || d.verifiedAt > latest)) latest = d.verifiedAt
+    }
+  }
+  const total = f.targets.length
+  if (!active) {
+    // Nothing is moving: every target that runs something is settled.
+    verified = 0; pending = 0; inFlight = 0; failed = 0
+  }
+  const stopped = f.maxUnavailable !== undefined && failed >= f.maxUnavailable
+  let state: StationState
+  if (failed > 0) state = 'failed'
+  else if (active && inFlight > 0) state = 'arriving'
+  else if (active && verified === total && total > 0) state = 'settled'
+  else if (active && verified > 0) state = 'arriving' // part way: the next targets wait for a place
+  else if (active) state = 'ahead'
+  else state = versions.size > 0 ? 'settled' : 'empty'
+  // The version the most targets run, and how many versions there are.
+  let version = ''
+  let most = 0
+  for (const [v, n] of versions) if (n > most) { version = v; most = n }
+  const bundle = [...f.targets].map(t => deployed[t]?.bundle).find(b => b) ?? ''
+  return {
+    env, version, bundle, verifiedAt: versions.size === 1 ? latest : undefined, state,
+    incomingState: failed > 0 ? 'Failed' : inFlight > 0 ? 'Promoting' : undefined,
+    fleet: {
+      total, verified, inFlight, failed, pending, maxConcurrent: f.maxConcurrent ?? 0,
+      maxUnavailable: f.maxUnavailable, stopped, versions: versions.size, message: f.message,
+    },
+  }
+}
+
 /** The fleet board row of one Pipeline. */
 export function fleetRow(p: Pipeline): FleetRow {
   const states = p.environmentStates ?? {}
   const deployed = p.deployed ?? {}
   const active = p.activeBundleName
+  const fleets = new Map((p.environmentTopology ?? []).filter(e => e.fleet).map(e => [e.name, e.fleet!]))
   const groups = depthGroups(p).map(g => g.map((env): Station => {
+    const f = fleets.get(env)
+    if (f) return fleetStation(env, f, p)
     const d = deployed[env]
     const incoming = active ? states[env] : undefined
     let state: StationState

@@ -20,6 +20,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,6 +31,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
@@ -137,6 +139,15 @@ type Reconciler struct {
 	// Now is the clock of hold expiry (spec.holds[].expiresAt). Nil is
 	// time.Now.
 	Now func() time.Time
+
+	// HoldBundleGrace is how long a hold may name a Bundle that does not
+	// exist before the controller reports it (--hold-bundle-grace). 0 is
+	// DefaultHoldBundleGrace.
+	HoldBundleGrace time.Duration
+
+	// Recorder emits the HoldBundleMissing Warning Event. Nil emits none
+	// (tests).
+	Recorder events.EventRecorder
 }
 
 // Reconcile is called whenever a Pipeline, one of its PromotionSteps, the
@@ -220,6 +231,16 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if desired.Reason == scm.ReasonRepositoryNotAllowed && p.Spec.Git.SecretRef != nil && !ownSecret {
 		result.RequeueAfter = secretRecheckInterval
 	}
+	if desired.Status == metav1.ConditionTrue {
+		conflict, err := r.renderedBranchConflict(ctx, &p)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if conflict != "" {
+			desired = metav1.Condition{Type: "Ready", Status: metav1.ConditionFalse, Reason: reasonRenderedBranchConflict,
+				Message: conflict, ObservedGeneration: p.Generation}
+		}
+	}
 	if hasSelectorFleet(&p) && (result.RequeueAfter == 0 || fleetResync < result.RequeueAfter) {
 		result.RequeueAfter = fleetResync
 	}
@@ -240,8 +261,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// Compute aggregate deployment metrics from Bundles + PromotionSteps.
 	// Graph-first: reads only CRD status fields written by their own reconcilers.
 	// Writes only to Pipeline.status.deploymentMetrics (our own CRD).
+	// Only this Pipeline's Bundles, through the spec.pipeline index: the
+	// namespace may hold every other Pipeline's history too (#1654).
 	var bundleList kardinalv1alpha1.BundleList
-	if err := r.List(ctx, &bundleList, client.InNamespace(p.Namespace)); err != nil {
+	if err := r.List(ctx, &bundleList, client.InNamespace(p.Namespace),
+		client.MatchingFields{lifecycle.IndexBundlePipeline: p.Name}); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list bundles of pipeline %s: %w", p.Name, err)
 	}
 	// Pipelines that share a repository and branch must write separate paths
@@ -605,6 +629,9 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline, ownSecret bool) meta
 	if err := graph.ValidateUpdateStrategy(p); err != nil {
 		return invalid(err.Error())
 	}
+	if err := graph.ValidateRenderedBranches(p); err != nil {
+		return invalid(err.Error())
+	}
 	// A pr template that does not parse or render would fail every PR of
 	// the environment (docs/pr-evidence.md#customising-the-pr).
 	if err := scm.ValidatePipelinePR(p); err != nil {
@@ -656,10 +683,18 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	); err != nil {
 		return fmt.Errorf("index PromotionStep by spec.pipelineName: %w", err)
 	}
+	if err := lifecycle.IndexBundlesByPipeline(context.Background(), mgr.GetFieldIndexer()); err != nil {
+		return err
+	}
 
 	b := ctrl.NewControllerManagedBy(mgr).
-		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers,
+			// Workers are shared fairly between namespaces (#1577).
+			NewQueue: fairqueue.NewFor(mgr)}).
 		For(&kardinalv1alpha1.Pipeline{}).
+		// A Pipeline that renders to a branch of the same repository may
+		// clear or cause a rendered branch conflict.
+		Watches(&kardinalv1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.renderingPipelinesSharingRepo)).
 		// A Pipeline on the same repository and branch changed: re-check
 		// PathConflict on the others.
 		Watches(&kardinalv1alpha1.Pipeline{}, r.pipelinePeers()).

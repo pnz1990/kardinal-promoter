@@ -17,7 +17,6 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
 
 // TestStepErrors_PermanentMarker checks which step errors carry
@@ -43,9 +42,6 @@ func TestStepErrors_PermanentMarker(t *testing.T) {
 		state := makeKustomizeState(workDir, "prod", images)
 		state.Environment.Path = path
 		return state
-	}
-	build := func(state *parentsteps.StepState) (parentsteps.StepResult, error) {
-		return steps.NewKustomizeBuildStep(&stubKustomizeBuilder{output: []byte("x")}).Execute(context.Background(), state)
 	}
 	argo := func(t *testing.T, approval string, bundle v1alpha1.BundleSpec, app string) (parentsteps.StepResult, error) {
 		state := &parentsteps.StepState{
@@ -87,9 +83,6 @@ func TestStepErrors_PermanentMarker(t *testing.T) {
 		}},
 		{name: "git-clone: layout branch", wantPermanent: true, run: func(t *testing.T) (parentsteps.StepResult, error) {
 			return gitStep(t, "git-clone", &mockGitClient{}, nil, func(s *parentsteps.StepState) { s.Environment.Layout = "branch" })
-		}},
-		{name: "git-push: layout branch", wantPermanent: true, run: func(t *testing.T) (parentsteps.StepResult, error) {
-			return gitStep(t, "git-push", &mockGitClient{}, nil, func(s *parentsteps.StepState) { s.Pipeline.Git.Layout = "branch" })
 		}},
 		{name: "config-merge: config source not checked out", wantPermanent: true, run: func(t *testing.T) (parentsteps.StepResult, error) {
 			return configMerge(t, func(s *parentsteps.StepState) { s.WorkDir = filepath.Join(s.WorkDir, "environments") })
@@ -142,12 +135,6 @@ func TestStepErrors_PermanentMarker(t *testing.T) {
 		{name: "helm-set-image: symlink escape", wantPermanent: true, run: func(t *testing.T) (parentsteps.StepResult, error) {
 			return mustLookup(t, "helm-set-image").Execute(context.Background(), envState(t, "environments/prod", true))
 		}},
-		{name: "kustomize-build: env path climbs out", wantPermanent: true, run: func(t *testing.T) (parentsteps.StepResult, error) {
-			return build(envState(t, "../victim", false))
-		}},
-		{name: "kustomize-build: symlink escape", wantPermanent: true, run: func(t *testing.T) (parentsteps.StepResult, error) {
-			return build(envState(t, "environments/prod", true))
-		}},
 
 		// Network, API and git failures are retried.
 		{name: "git-clone: clone error", run: func(t *testing.T) (parentsteps.StepResult, error) {
@@ -163,11 +150,6 @@ func TestStepErrors_PermanentMarker(t *testing.T) {
 			scmP := &mockSCMProvider{openPRErr: &scm.APIError{Provider: "GitHub", Method: "POST", Path: "/repos/owner/repo/pulls",
 				StatusCode: 502, Transient: true}}
 			return gitStep(t, "open-pr", &mockGitClient{}, scmP, func(s *parentsteps.StepState) { s.Outputs["branch"] = "kardinal/x" })
-		}},
-		{name: "kustomize-build: build error", run: func(t *testing.T) (parentsteps.StepResult, error) {
-			state := envState(t, "", false)
-			require.NoError(t, os.MkdirAll(filepath.Join(state.WorkDir, "environments", "prod"), 0o755))
-			return steps.NewKustomizeBuildStep(&stubKustomizeBuilder{err: errors.New("exit status 1")}).Execute(context.Background(), state)
 		}},
 	}
 	for _, tc := range cases {

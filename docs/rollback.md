@@ -134,6 +134,50 @@ a second `--hold` on the same environment is refused until the first is released
 exemption ends, steps of other Bundles are no longer held, and the controller removes the entry
 and writes `HoldReleased`.
 
+#### A hold whose rollback Bundle does not exist
+
+The hold is written first, then the rollback Bundle. If the client or the controller stops
+between the two, or someone deletes the Bundle later, the hold names a Bundle that does not
+exist. **A missing Bundle never lifts a hold**: the hold stays in effect, and no other Bundle
+promotes into the environment until a person with `pipelines/hold` releases it.
+Deleting a Bundle therefore cannot end a hold.
+
+The controller records each hold's state in the Pipeline's `status.holdStates`: `Active`
+(the Bundle exists) or `BundleMissing` (the controller found it missing; `bundleMissingSince`
+is the first time it did, by the controller's clock). When the Bundle has been missing for
+2 minutes (the controller flag `--hold-bundle-grace`, set with `controller.extraArgs`), the
+controller reports it:
+
+- the Pipeline condition `HoldBundleMissing` is `True`, naming the environment, the Bundle and
+  the command that releases the hold;
+- a `HoldBundleMissing` AuditEvent (outcome `Failure`): the durable record, written once per
+  hold through the audit outbox;
+- a `Warning` Event with reason `HoldBundleMissing` on the Pipeline, and
+  `kardinal_hold_bundle_missing_total{pipeline_namespace,pipeline}` goes up by one
+  ([kardinal metrics](guides/monitoring.md#kardinal-metrics)), each at most once per hold
+  (Events expire, and a controller that stops between the status write and the Event can
+  miss them);
+- `kardinal explain` and the UI's hold badge show the missing Bundle and the release command.
+
+To recover, release the hold, then roll back and hold again if you still want the
+environment held:
+
+```bash
+kardinal release-hold my-app --env prod
+kardinal rollback my-app --env prod --hold --reason "INC-4521: v1.29.0 leaks connections"
+```
+
+The UI's **Release hold** does the first step. A second `--hold` is refused while the first
+is in `spec.holds`, missing Bundle or not. If the Bundle exists again, the hold is `Active`
+again and the condition is `False`. A hold released and added again is a new hold, with a
+report of its own. When the controller cannot read the Bundle (an API error other than not
+found), it keeps the hold's state and sets the condition to `Unknown` (reason
+`LookupFailed`).
+
+```bash
+kubectl get pipeline my-app -o jsonpath='{range .status.holdStates[*]}{.environment}={.state} {.message}{"\n"}{end}'
+```
+
 Release the hold when the fix is ready:
 
 ```bash
@@ -354,6 +398,8 @@ What happens, whatever phase the Bundle was in (Verified and Superseded included
 
 To take a rejected Bundle out of an environment that already runs it, roll that environment back. `historyLimit` never deletes a rejected Bundle (`spec.rejected`), whatever its phase, and does not count it: it is the record that its artifacts must not be promoted again (delete it by hand to lift the rejection). A Bundle that is `Rejected` only because it carries a rejected artifact (reason `RejectedArtifact`) adds nothing to that record and is history like a Superseded one, unless its change is live in an environment (see below): then it is kept. `kardinal get bundles --active` hides Rejected Bundles, and the pipeline views (`kardinal get pipelines`, `status`, `get steps`, `logs`, `explain`, the UI) treat them as history, as they treat Superseded ones, except where the rejected change is live: in an environment where a step of the Rejected Bundle is HealthChecking or Verified, that Bundle stays the current one there, marked Rejected (`<bundle>(Rejected)` in `kardinal get pipelines`), with the hint `rejected change is live; roll back (kardinal rollback <pipeline> --env <env>)`, and the Pipeline is `Degraded` until a rollback or a newer Bundle replaces it. This holds for a Bundle whose Graph was retired too: its `status.retiredSteps` say where it is live, and rejecting a retired Bundle works like rejecting any other. Rejecting from the UI is not available yet: the UI writes as the controller, not as you, so the identity policy would refuse it.
 
+In the UI, a rejected Bundle's chip in the Bundle history is Rejected, and the Bundle card says who rejected it, when and why (`Rejected by alice@example.com 5m ago: CVE in the base image`).
+
 ## Pause and Resume
 
 During an incident, you may want to stop promotions without rolling back.
@@ -370,9 +416,12 @@ kardinal resume my-app
 - No PromotionStep leaves `Pending`, so no new environment starts promoting.
 - A step in `Promoting` (clone, update manifests, commit, open PR) holds before its next git step. Its status message says the pipeline is paused.
 - A step in `WaitingForMerge` or `HealthChecking` finishes. Stopping it would leave a merged change unverified. Open PRs stay open; merging one during a pause still deploys it.
+- A [pre hook](hooks.md) that has not started its Job waits in `Pending`, and its timeout does not count. Post hooks keep running, like `HealthChecking` steps: their change is already deployed. A hook whose Job is running finishes.
 - New Bundles are still accepted, but their steps wait in `Pending`.
 
-After resume, held steps continue from where they stopped. A held step re-checks the pause every minute, so this takes up to a minute. No re-trigger is needed.
+After resume, held steps continue from where they stopped. A held step re-checks the pause every minute, so this takes up to a minute. A waiting pre hook starts as soon as the freeze gate is deleted. No re-trigger is needed.
+
+The pause is checked before each step and each pre hook starts its next piece of work, not continuously. A pause that lands while a step or hook is between that check and starting its git step or Job does not stop that one piece of work; the next one holds.
 
 While the Pipeline is paused it has a `Paused` condition. `True` (reason `FreezeGateActive`) means the freeze gate holds new promotions. Do not name your own PolicyGate `freeze-<pipeline>`: kardinal does not treat a gate it did not create (no `kardinal.io/freeze=true` label and not owned by the Pipeline) as a pause, and does not delete it. While such a gate exists, `kardinal pause` fails with an error naming it, and the condition is `False` with reason `FreezeGateNameConflict`, so the pipeline keeps running. Rename or delete that gate and the pause takes effect.
 

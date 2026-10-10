@@ -371,9 +371,12 @@ func scmMergeByPolling(t *testing.T, e *framework.Env, check func(a *app, bundle
 	ref := ps.Spec.PRStatusRef
 	since := time.Now()
 	a.merge(t, pr)
+	// The interval counts from when the merge is done: a loaded GitLab can
+	// take tens of seconds to answer the merge itself (#1652).
+	mergedAt := time.Now()
 	polled := e.WaitControllerLog(t, since, 90*time.Second, "the poll that finds PR #"+strconv.Itoa(pr.Number)+" merged",
 		framework.LogMessage("PR merged — status updated", "prstatus", ref, "namespace", a.ns))
-	assert.WithinDuration(t, since, polled.At, 45*time.Second, "PRStatus polls an open PR every 30s")
+	assert.WithinDuration(t, mergedAt, polled.At, 45*time.Second, "PRStatus polls an open PR every 30s")
 	e.WaitControllerLog(t, since, time.Minute, "the step to leave WaitingForMerge",
 		framework.LogMessage("PRStatus reports merged — advancing to HealthChecking", "prStatusRef", ref))
 

@@ -82,9 +82,24 @@ func setWindow(t *testing.T, e *framework.Env, cw string, active bool) {
 // the gate. The status goes on the commit kardinal pushed; a commit someone
 // else pushes to the PR branch gets none.
 //
-// Covers SCM-GATESTATUS-01, SCM-GATESTATUS-02.
+// It runs in both Graph shapes.
+//
+// Covers SCM-GATESTATUS-01, SCM-GATESTATUS-02, GRAPH-COMPACT-06.
 func TestForgejo_GatesCommitStatus(t *testing.T) {
 	t.Parallel()
+	for _, shape := range []string{"nodes", "compact"} {
+		t.Run(shape, func(t *testing.T) {
+			t.Parallel()
+			gatesCommitStatus(t, shape)
+		})
+	}
+}
+
+// gatesCommitStatus is TestForgejo_GatesCommitStatus with the Pipeline's
+// Graph shape set to shape: in the compact shape the GateMirror patch
+// collection writes spec.live.gates onto a step the PromotionSteps
+// collection created.
+func gatesCommitStatus(t *testing.T, shape string) {
 	e := framework.New(t)
 	require.Contains(t, []string{"forgejo", "gitea"}, e.Git.Kind())
 	a := newArgoApp(t, e, "test", "prod")
@@ -103,7 +118,9 @@ func TestForgejo_GatesCommitStatus(t *testing.T) {
 	g := framework.Gate(a.ns, "freeze", "prod", fmt.Sprintf("!changewindow.isBlocked(%q)", cw.Name), recheck)
 	g.Spec.Message = "prod is frozen"
 	e.CreateGate(t, g)
-	a.apply(t, a.pipeline(map[string]string{"prod": "pr-review"}))
+	pl := a.pipeline(map[string]string{"prod": "pr-review"})
+	pl.Annotations = map[string]string{"kardinal.io/graph-shape": shape}
+	a.apply(t, pl)
 
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "WaitingForMerge", promoteTimeout)

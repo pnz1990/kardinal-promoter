@@ -402,14 +402,17 @@ This is the standard pattern for large Argo CD deployments because:
 - Argo CD never runs `kustomize build` on every reconciliation cycle (significant performance gain at scale)
 - CODEOWNERS rules can be placed on individual rendered YAML files in the environment branch
 
-**Not implemented yet.** `layout: branch` is accepted by the API, but the `git-clone`
-step fails every promotion that uses it with `layout: branch is not implemented`
-(`kardinal validate` reports it and the Pipeline is `Ready=False`/`NotImplemented`), and
-nothing writes rendered YAML to an environment branch. `renderManifests`, `sourceBranch`
-and `branchPrefix` are not Pipeline fields. Use `layout: directory` (the default).
+Set `layout: branch` on an environment and kardinal renders it: the `render-manifests`
+step runs kustomize build or helm template on the DRY source in `spec.git.branch`, in a
+sandboxed Job of the environment's RenderRun (never in the controller), and commits the
+plain YAML to the rendered branch
+(`env/<name>` by default, `render.branch` to change it) with the DRY commit in the
+commit trailers. `pr-review` PRs show the rendered diff, a change pushed to the rendered
+branch outside kardinal fails the next promotion (`render.onDrift`), and a rollback
+re-renders the DRY commit of the Bundle it restores.
 
-See [Rendered Manifests](rendered-manifests.md) for the planned design, including
-Argo CD configuration and CODEOWNERS integration.
+See [Rendered Manifests](rendered-manifests.md) for the fields, the render Job, limits, Argo CD
+configuration and CODEOWNERS integration.
 
 ## Advanced Patterns
 
@@ -468,6 +471,7 @@ kardinal-promoter writes an immutable `AuditEvent` CRD for each key promotion li
 | `PromotionRejected` | `kardinal reject` cancels an in-flight promotion (a step that had not started writes none) |
 | `GateOverridden` | An override is recorded on a gate instance (`kardinal override` or the UI), once per override, with its verified author |
 | `ApprovalRecorded` / `ApprovalRevoked` | A decision (`kardinal approve`) appears in, or leaves, an approval gate instance, with the approver and whether it counts |
+| `HoldCreated` / `HoldReleased` / `HoldBundleMissing` | A hold (`kardinal rollback --hold`) appeared in, or left, `spec.holds`; or its rollback Bundle has been missing for `--hold-bundle-grace` (the hold stays in effect: [A hold whose rollback Bundle does not exist](rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |
 | `GateEvaluated` | A PolicyGate instance is first evaluated, and each later change of readiness (outcome `Failure` when blocked, `Success` when allowed) |
 | `RollbackStarted` | A health alarm with `onHealthFailure: rollback` starts a rollback |
 | `RollbackSucceeded` | A step of a rollback Bundle (from any rollback path) reaches Verified, besides `PromotionSucceeded`; one per step |

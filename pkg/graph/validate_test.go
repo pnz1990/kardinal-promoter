@@ -653,8 +653,8 @@ func TestBuild_RejectsArgoCDForConfigAndMixed(t *testing.T) {
 
 // TestBuild_ChartBundleNeedsHelm: a chart Bundle builds when every
 // environment it promotes uses update.strategy helm (the step that writes the
-// chart version), fails at build naming the first one that does not, and
-// needs chart.name and chart.version.
+// chart version), fails at build naming the first one that does not or that
+// renders (layout: branch), and needs chart.name and chart.version.
 func TestBuild_ChartBundleNeedsHelm(t *testing.T) {
 	pipeline := func(strategies ...string) *kardinalv1alpha1.Pipeline {
 		p := makeLinearPipeline("app", "test", "staging", "prod")
@@ -683,6 +683,12 @@ func TestBuild_ChartBundleNeedsHelm(t *testing.T) {
 			wantErr: `build: environment "prod" uses update.strategy kustomize, which cannot promote a chart Bundle`},
 		{name: "argocd in staging", pipeline: pipeline("helm", "argocd", "helm"), bundle: bundle(chart, ""),
 			wantErr: `build: environment "staging" uses update.strategy argocd, which cannot promote a chart Bundle`},
+		{name: "layout branch in prod", pipeline: func() *kardinalv1alpha1.Pipeline {
+			p := pipeline("helm", "helm", "helm")
+			p.Spec.Environments[2].Layout = "branch"
+			return p
+		}(), bundle: bundle(chart, ""),
+			wantErr: `build: environment "prod" uses layout: branch, which cannot promote a chart Bundle yet`},
 		{name: "stops before the kustomize environment", pipeline: pipeline("helm", "helm", ""), bundle: bundle(chart, "staging")},
 		{name: "no chart", pipeline: pipeline("helm", "helm", "helm"), bundle: bundle(nil, ""),
 			wantErr: `type "chart" requires chart.name and chart.version`},

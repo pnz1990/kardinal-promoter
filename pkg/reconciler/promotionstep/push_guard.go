@@ -94,9 +94,12 @@ func (r *Reconciler) recordPushIntent(ctx context.Context, ps, base *v1alpha1.Pr
 		return nil
 	}
 	at := r.now().UTC().Format(time.RFC3339Nano)
-	// Locked on the resourceVersion this reconcile read: a stale copy fails
-	// with a Conflict and the step is retried from a fresh read, so the
-	// write never turns a stale copy into a current one.
+	// Locked on the resourceVersion this reconcile read: a copy whose status
+	// is stale fails with a Conflict and the step is retried from a fresh
+	// read, so the write never turns a stale copy into a current one. A
+	// conflict caused only by a spec or metadata change is written over the
+	// fresh copy, as every status write of this reconciler is
+	// (patchStatusLocked, #1664).
 	written := ps.DeepCopy()
 	before := written.DeepCopy()
 	written.Status.Outputs = cloneMap(written.Status.Outputs)
@@ -104,12 +107,20 @@ func (r *Reconciler) recordPushIntent(ctx context.Context, ps, base *v1alpha1.Pr
 		written.Status.Outputs = map[string]string{}
 	}
 	written.Status.Outputs[outputPushIntent] = at
-	if err := r.Status().Patch(ctx, written, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+	if err := r.patchStatusLocked(ctx, before, written); err != nil {
 		return fmt.Errorf("%w of %s: %w", errPushIntent, ps.Name, err)
 	}
 	ps.ResourceVersion = written.ResourceVersion
 	if base != nil {
+		// base now matches the stored step: the same resourceVersion and the
+		// intent in its status, so the reconcile's own status write (and its
+		// conflict check, patchStatusLocked) starts from what is stored.
 		base.ResourceVersion = written.ResourceVersion
+		base.Status.Outputs = cloneMap(base.Status.Outputs)
+		if base.Status.Outputs == nil {
+			base.Status.Outputs = map[string]string{}
+		}
+		base.Status.Outputs[outputPushIntent] = at
 	}
 	if state.Outputs == nil {
 		state.Outputs = map[string]string{}

@@ -1,6 +1,7 @@
-# Planned design only: layout: branch is not implemented yet, so every promotion
-# of this Pipeline fails at git-clone. kardinal validate reports it, and the
-# Pipeline shows Ready=False/NotImplemented. See docs/rendered-manifests.md.
+# Rendered manifests (layout: branch): the overlays under overlays/<env> on the
+# "main" branch are the DRY source. Each promotion renders the environment's
+# overlay in the controller and commits the plain YAML to env/<env>, which the
+# Argo CD Application in application.yaml syncs. See docs/rendered-manifests.md.
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
 metadata:
@@ -9,27 +10,31 @@ metadata:
 spec:
   git:
     url: https://github.com/myorg/gitops-repo
-    branch: source
+    branch: main
     secretRef:
       name: github-token
   environments:
     - name: dev
-      # Source branch: "source" (from spec.git.branch)
-      # Target branch: "env/dev" (created automatically by git-clone in branch layout)
       path: overlays/dev
       approval: auto
-      layout: branch
+      layout: branch            # rendered into env/dev
       health:
-        type: resource
+        type: argocd
+        argocd: {name: rendered-demo-dev}
     - name: staging
       path: overlays/staging
       approval: auto
       layout: branch
       health:
         type: argocd
+        argocd: {name: rendered-demo-staging}
     - name: prod
       path: overlays/prod
-      approval: pr-review
+      approval: pr-review       # the PR into env/prod shows the rendered YAML
       layout: branch
+      render:
+        branch: env/prod
+        onDrift: fail           # a direct push to env/prod stops the next promotion
       health:
         type: argocd
+        argocd: {name: rendered-demo-prod}

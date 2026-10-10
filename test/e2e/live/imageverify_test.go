@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/imageverification/signtest"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
@@ -286,7 +287,7 @@ func requireGiteaFamily(t *testing.T, e *framework.Env) {
 	}
 }
 
-// TestSCM_SignedCommitPerson: on Forgejo and on Gitea (whose signer payloads
+// TestGiteaFamily_SignedCommitPerson: on Forgejo and on Gitea (whose signer payloads
 // differ: Forgejo names the login in signer.name, Gitea in
 // signer.username), a config commit a user signed with a GPG key registered
 // on the server is a person's signature: the Bundle verifies with
@@ -295,7 +296,7 @@ func requireGiteaFamily(t *testing.T, e *framework.Env) {
 // the instance key).
 //
 // Covers IMGV-SIGNER-01.
-func TestSCM_SignedCommitPerson(t *testing.T) {
+func TestGiteaFamily_SignedCommitPerson(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	requireGiteaFamily(t, e)
@@ -325,7 +326,7 @@ func TestSCM_SignedCommitPerson(t *testing.T) {
 	assert.Contains(t, iv.Status.Message, "who is not in commits.allowedSigners")
 }
 
-// TestSCM_SignedCommitInstance: a commit the server signed with its
+// TestGiteaFamily_SignedCommitInstance: a commit the server signed with its
 // instance key (an API file edit by a user with a key, with
 // repository.signing set up) is a
 // platform signature on Forgejo and on Gitea (Gitea reports SIGNING_NAME as
@@ -334,7 +335,7 @@ func TestSCM_SignedCommitPerson(t *testing.T) {
 // signatures passed as a person).
 //
 // Covers IMGV-SIGNER-02.
-func TestSCM_SignedCommitInstance(t *testing.T) {
+func TestGiteaFamily_SignedCommitInstance(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	requireGiteaFamily(t, e)
@@ -497,33 +498,56 @@ func waitImageVerificationPending(t *testing.T, e *framework.Env, ns, bundle str
 	return name
 }
 
-// TestStep_ImageVerificationRefusedInCompactGraph: the compact Graph shape
-// does not carry image verification, so a Pipeline with an image policy and
-// kardinal.io/graph-shape: compact is Ready=False naming it, and its Bundle
-// fails with GraphBuildFailed instead of promoting unverified.
+// TestStep_ImageVerificationInCompactGraph runs an image policy with the
+// compact Graph shape (kardinal.io/graph-shape: compact). Before the
+// signature is pushed the root environment's step waits in Pending, its pre
+// hook is not created (no migration for an unverified image) and test is
+// unchanged in git; once the signature is in the registry the
+// ImageVerification is Verified, the hook runs, and the Bundle is promoted
+// through test and prod. Only the root step names the ImageVerification.
 //
 // Covers IMGV-COMPACT-01.
-func TestStep_ImageVerificationRefusedInCompactGraph(t *testing.T) {
+func TestStep_ImageVerificationInCompactGraph(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
-	a := newArgoApp(t, e, "test")
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test", "prod")
 	s := newSignatures(t, a.ns)
-	_, pem, err := signtest.Bundle(fixtures.Image, fixtures.V2Digest)
+	bundleJSON, pem, err := signtest.Bundle(fixtures.Image, fixtures.V2Digest)
 	require.NoError(t, err)
 	p := a.pipeline(nil)
 	p.Annotations = map[string]string{"kardinal.io/graph-shape": "compact"}
 	p.Spec.ImageVerification = keyPolicy(t, e, a.ns, s, pem, "")
+	p.Spec.Environments[0].Hooks = []v1alpha1.HookSpec{{Name: "migrate", Phase: "pre", Job: hookJob(t, `echo migrated`, "")}}
 	a.apply(t, p)
-	const feature = "image signature verification (spec.imageVerification)"
-	e.WaitPipeline(t, a.ns, pipelineName, time.Minute, "Ready=False naming image verification", func(p *v1alpha1.Pipeline) bool {
-		for _, c := range p.Status.Conditions {
-			if c.Type == "Ready" && c.Status == metav1.ConditionFalse && strings.Contains(c.Message, feature) {
-				return true
-			}
+	byDigest := fixtures.Image + "@" + fixtures.V2Digest
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", byDigest)
+	migrate := graph.HookRunName(pipelineName, bundle, "test", "pre", "migrate")
+
+	framework.Eventually(t, time.Minute, "test waits for the verification", func(ctx context.Context) (bool, string) {
+		ps, ok, err := e.Step(ctx, a.ns, pipelineName, bundle, "test")
+		if err != nil || !ok {
+			return false, fmt.Sprintf("%v %v", ok, err)
 		}
-		return false
+		return ps.Status.State == "" && strings.Contains(ps.Status.Message, "no signature found yet"),
+			fmt.Sprintf("state=%q message=%q", ps.Status.State, ps.Status.Message)
 	})
-	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+"@"+fixtures.V2Digest)
-	e.WaitBundle(t, a.ns, bundle, time.Minute, "Failed with GraphBuildFailed", failedWith("GraphBuildFailed", feature))
-	a.fileHas(t, "test", fixtures.V1, "test in git")
+	assert.Equal(t, "compact", bundleGraph(t, e, a.ns, bundle).GetLabels()["kardinal.io/graph-shape"])
+	_, exists, err := hookRun(ctx, e, a.ns, migrate)
+	require.NoError(t, err)
+	assert.False(t, exists, "no pre hook before the image is verified")
+	a.fileHas(t, "test", fixtures.V1, "test in git while unverified")
+
+	s.pushBundle(t, fixtures.V2Digest, bundleJSON)
+	iv := waitImageVerification(t, e, a.ns, bundle, "Verified")
+	waitHookRun(t, e, a.ns, migrate, v1alpha1.HookRunSucceeded)
+	test := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	assert.Equal(t, iv.Name, test.Spec.ImageVerification)
+	require.NotNil(t, test.Spec.Live)
+	require.NotNil(t, test.Spec.Live.ImageVerification)
+	assert.Equal(t, "Verified", test.Spec.Live.ImageVerification.Phase)
+	prod := e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assert.Empty(t, prod.Spec.ImageVerification, "downstream steps need nothing")
+	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
+	e.WaitDeploymentImage(t, a.ns, fixtures.Workload("prod"), byDigest, syncTimeout)
 }

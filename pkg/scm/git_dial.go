@@ -35,13 +35,32 @@ import (
 var gitIdleTimeout = 5 * time.Minute
 
 // dialTCP dials a git connection; a test replaces it with a dial that
-// never connects (a blackholed address).
+// never connects (a blackholed address), and the render Job with one that
+// reaches only the Pipeline's git host (SetSSHDial).
 var dialTCP = (&net.Dialer{KeepAlive: 30 * time.Second}).DialContext
+
+// SetSSHDial makes dial the TCP dial of every ssh git connection of this
+// process. The render Job uses it to reach only the Pipeline's git host,
+// through the egress guard; the controller keeps the default. Every ssh
+// operation of GoGitClient dials through it (sshScope). It returns the dial
+// it replaces.
+func SetSSHDial(dial func(ctx context.Context, network, addr string) (net.Conn, error)) (previous func(ctx context.Context, network, addr string) (net.Conn, error)) {
+	previous, dialTCP = dialTCP, dial
+	return previous
+}
+
+// IsSSHRemote reports whether remoteURL uses the ssh transport: ssh:// or
+// the scp-like user@host:path form.
+func IsSSHRemote(remoteURL string) bool { return isSSHRemote(remoteURL) }
 
 // dialScheme is the proxy scheme kardinal's git client sets on ssh
 // endpoints (ProxyOptions) so that go-git dials through dialScope: go-git
 // has no other hook for the connection it opens for a fetch.
 const dialScheme = "kardinal-dial"
+
+// SSHDialScheme is dialScheme for code outside the package that must check
+// an ssh endpoint goes through kardinal's dial (the render Job's lock).
+const SSHDialScheme = dialScheme
 
 // dialScope ties the connections of one git operation to its context: they
 // are closed when the context ends, and closeAll closes them at once (a

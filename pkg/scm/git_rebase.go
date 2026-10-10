@@ -44,6 +44,20 @@ var ErrRebaseConflict = errors.New("the remote branch changed the same files")
 // contention would never end.
 var ErrBranchNotMoved = errors.New("the remote branch did not move")
 
+// ErrRebaseBaseMissing is returned by RebaseOnRemote when the commit HEAD was
+// made on is not in the local clone (#1606): the clone is shallow, and seen
+// under many writers on one branch. RebaseOnRemote first fetches the last
+// rebaseBaseDepth commits of the branch; when the base is not among them the
+// commit cannot be replayed, and the caller redoes its change from a fresh
+// clone.
+var ErrRebaseBaseMissing = errors.New("the commit HEAD was made on is not in the clone")
+
+// rebaseBaseDepth is how many commits of the branch RebaseOnRemote fetches
+// when the commit HEAD was made on is not in the clone: the base is an
+// earlier head of the branch, so it is found unless more writers than this
+// pushed since the clone, or the branch was force-pushed.
+const rebaseBaseDepth = 200
+
 // Rebaser is implemented by git clients that can move a local commit onto
 // the remote branch's new head. git-push uses it when another writer (another
 // Pipeline, or another environment) pushed first.
@@ -65,10 +79,11 @@ var _ Rebaser = (*GoGitClient)(nil)
 // commits since the clone touched any of those paths. Nothing is lost:
 // neither the other writer's files nor this commit's.
 func (c *GoGitClient) RebaseOnRemote(ctx context.Context, dir, remote, branch string, auth GitAuth) ([]string, error) {
-	repo, err := gogit.PlainOpen(dir)
+	repo, closeRepo, err := openRepo(dir)
 	if err != nil {
-		return nil, fmt.Errorf("open repo at %s: %w", dir, err)
+		return nil, err
 	}
+	defer func() { _ = closeRepo() }()
 	headRef, err := repo.Head()
 	if err != nil {
 		return nil, fmt.Errorf("resolve HEAD in %s: %w", dir, err)
@@ -80,11 +95,6 @@ func (c *GoGitClient) RebaseOnRemote(ctx context.Context, dir, remote, branch st
 	if local.NumParents() != 1 {
 		return nil, fmt.Errorf("rebase: HEAD %s has %d parents, want 1", local.Hash, local.NumParents())
 	}
-	base, err := local.Parent(0)
-	if err != nil {
-		return nil, fmt.Errorf("rebase: read the commit HEAD was made on: %w", err)
-	}
-
 	rem, err := repo.Remote(remote)
 	if err != nil {
 		return nil, fmt.Errorf("get remote %s: %w", remote, err)
@@ -101,17 +111,42 @@ func (c *GoGitClient) RebaseOnRemote(ctx context.Context, dir, remote, branch st
 	defer release()
 	tracking := plumbing.NewRemoteReferenceName(remote, branch)
 	spec := config.RefSpec("+" + plumbing.NewBranchReferenceName(branch).String() + ":" + tracking.String())
-	err = repo.FetchContext(ctx, &gogit.FetchOptions{
-		RemoteName:   remote,
-		RefSpecs:     []config.RefSpec{spec},
-		Depth:        1,
-		Auth:         am,
-		Force:        true,
-		Tags:         gogit.NoTags,
-		ProxyOptions: proxyOpts,
-	})
-	if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
-		return nil, fmt.Errorf("git fetch %s %s: %s", remote, branch, gitErrorText(err))
+	fetch := func(depth int) error {
+		err := repo.FetchContext(ctx, &gogit.FetchOptions{
+			RemoteName:   remote,
+			RefSpecs:     []config.RefSpec{spec},
+			Depth:        depth,
+			Auth:         am,
+			Force:        true,
+			Tags:         gogit.NoTags,
+			ProxyOptions: proxyOpts,
+		})
+		if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+			return fmt.Errorf("git fetch %s %s: %s", remote, branch, gitErrorText(err))
+		}
+		return nil
+	}
+
+	base, err := local.Parent(0)
+	if errors.Is(err, plumbing.ErrObjectNotFound) {
+		// The base is an earlier head of the branch: fetch the branch's
+		// recent history once, deep enough for the writers since (#1606).
+		if ferr := fetch(rebaseBaseDepth); ferr != nil {
+			return nil, fmt.Errorf("rebase: commit %s, parent of HEAD %s (%v): %w",
+				local.ParentHashes[0], local.Hash, ferr, ErrRebaseBaseMissing)
+		}
+		base, err = local.Parent(0)
+		if errors.Is(err, plumbing.ErrObjectNotFound) {
+			return nil, fmt.Errorf("rebase: commit %s, parent of HEAD %s, is not in the last %d commits of %s: %w",
+				local.ParentHashes[0], local.Hash, rebaseBaseDepth, branch, ErrRebaseBaseMissing)
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("rebase: read the commit HEAD was made on: %w", err)
+	}
+
+	if err := fetch(1); err != nil {
+		return nil, err
 	}
 	trackRef, err := repo.Reference(tracking, true)
 	if err != nil {

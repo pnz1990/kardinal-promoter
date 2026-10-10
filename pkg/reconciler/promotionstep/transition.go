@@ -5,6 +5,7 @@ package promotionstep
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -13,7 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
@@ -91,10 +92,24 @@ func (r *Reconciler) cancelUnstarted(ctx context.Context, base, ps *v1alpha1.Pro
 	return nil
 }
 
+// errStepChanged is the error of a status patch that found the step changed
+// since it was read. Reconcile requeues the step for it instead of failing.
+var errStepChanged = errors.New("step changed since it was read")
+
+// requeueChanged turns errStepChanged into a requeue: the step is read again
+// and the reconcile repeated from what is stored. Any other result is kept.
+func requeueChanged(ctx context.Context, res ctrl.Result, err error) (ctrl.Result, error) {
+	if errors.Is(err, errStepChanged) {
+		zerolog.Ctx(ctx).Debug().Err(err).Msg("requeued to reconcile the stored step")
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+	return res, err
+}
+
 // patchState sets state and message on ps and patches its status against
 // base. It reports whether the state changed; a step deleted while
-// reconciling, or changed since base was read (a stale cache), reports no
-// change and no error. The steps closed before the
+// reconciling reports no change and no error, and a step changed since base
+// was read (a stale cache) reports errStepChanged. The steps closed before the
 // call (closed) and by the state change are observed in
 // kardinal_step_duration_seconds only after the patch succeeds.
 //
@@ -116,17 +131,20 @@ func (r *Reconciler) patchState(ctx context.Context, base, ps *v1alpha1.Promotio
 	// Locked on the resourceVersion base was read at: a reconcile that read
 	// the step from a stale cache would otherwise repeat a transition a newer
 	// reconcile already wrote, with a second Event, AuditEvent and metric.
-	if err := r.Status().Patch(ctx, ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+	if err := r.patchStatusLocked(ctx, base, ps); err != nil {
 		if apierrors.IsNotFound(err) {
 			// Deleted while reconciling: nothing left to transition.
 			return false, nil
 		}
 		if apierrors.IsConflict(err) {
-			// Changed since it was read: the newer version's watch event
-			// reconciles it again, from what is stored.
+			// Changed since it was read. The reconcile ends and is requeued
+			// (requeueChanged), so it runs again from what is stored: the
+			// newer version's watch event is not enough, because a change
+			// the predicates drop (kro relabelling the step) does not
+			// reconcile it, and the transition would never be written (#1606).
 			zerolog.Ctx(ctx).Debug().Str("step", ps.Name).Str("state", state).
 				Msg("step changed since it was read; state not written")
-			return false, nil
+			return false, fmt.Errorf("patch state %s: %w: %w", state, errStepChanged, err)
 		}
 		return false, fmt.Errorf("patch state %s: %w", state, err)
 	}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -25,7 +26,7 @@ func TestGetBundles_FallbackReturnsItsOwnError(t *testing.T) {
 		List: func(context.Context, sigs_client.WithWatch, sigs_client.ObjectList, ...sigs_client.ListOption) error {
 			calls++
 			if calls == 1 {
-				return errors.New("field label not supported: spec.pipeline")
+				return apierrors.NewBadRequest("field label not supported: spec.pipeline") // Kubernetes 1.30
 			}
 			return errors.New("bundles.kardinal.io is forbidden")
 		},
@@ -33,6 +34,5 @@ func TestGetBundles_FallbackReturnsItsOwnError(t *testing.T) {
 
 	err := getBundlesFn(&bytes.Buffer{}, c, "default", []string{"demo"}, false)
 	require.Error(t, err)
-	assert.Equal(t, "list bundles: bundles.kardinal.io is forbidden (field-selector list: field label not supported: spec.pipeline)",
-		err.Error())
+	assert.Equal(t, "list bundles of pipeline demo: bundles.kardinal.io is forbidden", err.Error())
 }

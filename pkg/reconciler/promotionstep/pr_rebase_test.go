@@ -18,6 +18,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -249,7 +250,7 @@ type slowHistory struct {
 	fixed atomic.Bool
 }
 
-func (s *slowHistory) BranchHistory(ctx context.Context, url, branch, token string, max int) ([]scm.CommitPaths, error) {
+func (s *slowHistory) BranchHistory(ctx context.Context, url, branch string, token scm.GitAuth, max int) ([]scm.CommitPaths, error) {
 	s.calls.Add(1)
 	if s.fixed.Load() {
 		return s.GoGitClient.BranchHistory(ctx, url, branch, token, max)
@@ -325,7 +326,7 @@ type staleHeads struct {
 	staleHistory []scm.CommitPaths
 }
 
-func (s *staleHeads) BranchHistory(ctx context.Context, url, branch, token string, max int) ([]scm.CommitPaths, error) {
+func (s *staleHeads) BranchHistory(ctx context.Context, url, branch string, token scm.GitAuth, max int) ([]scm.CommitPaths, error) {
 	if h := s.staleHistory; h != nil {
 		s.staleHistory = nil
 		return h, nil
@@ -333,7 +334,7 @@ func (s *staleHeads) BranchHistory(ctx context.Context, url, branch, token strin
 	return s.GoGitClient.BranchHistory(ctx, url, branch, token, max)
 }
 
-func (s *staleHeads) RemoteHeads(ctx context.Context, url, token string) (map[string]string, error) {
+func (s *staleHeads) RemoteHeads(ctx context.Context, url string, token scm.GitAuth) (map[string]string, error) {
 	if h := s.stale; h != nil {
 		s.stale = nil
 		return h, nil
@@ -393,4 +394,72 @@ func TestWaitingForMerge_StaleHeadsDoNotRebuild(t *testing.T) {
 	assert.Equal(t, pushed, remote.head(branch).Hash, "not rebuilt for a stale history")
 	assert.Empty(t, got.Status.Outputs["prBranchRebuilds"], got.Status.Message)
 	assert.Equal(t, again, got.Status.Outputs["baseSHA"])
+}
+
+// TestWaitingForMerge_OwnMergeIsNoRebuild (#1640): the base branch moves to a
+// head that already has the promotion's change, as when the PR merged and its
+// PRStatus has not reported it yet. The PR branch is not pushed, the move is
+// not counted in status.outputs.prBranchRebuilds and no PRBranchRebuilt
+// Event is emitted; baseSHA follows the head and the message says why.
+func TestWaitingForMerge_OwnMergeIsNoRebuild(t *testing.T) {
+	remote := newGitRemote(t)
+	pl, b := makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo")
+	pl.Spec.Git.URL = remote.url()
+	pl.Spec.Environments[1].Path = "environments/prod"
+	b.Spec.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/test/app", Tag: "1.2.3"}}
+	step := builtStep(t, pl, b, "prod")
+	step.Status.State = "Promoting"
+	c := newClient(t, step, pl, b, openPRStatus(step.Spec.PRStatusRef, "", 0))
+	m := &mockSCM{open: true, prURL: "https://github.com/test/repo/pull/5", prNumber: 5}
+	now := time.Now()
+	rec := events.NewFakeRecorder(10)
+	r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: scm.NewGoGitClient(), Recorder: rec,
+		NowFn:     func() time.Time { return now },
+		WorkDirFn: func(_, _ string) string { return filepath.Join(t.TempDir(), "w") }}
+	reconcileStep(t, r, step.Name) // records the step list
+	reconcileStep(t, r, step.Name) // runs it, opens the PR
+	got := getStep(t, c, step.Name)
+	require.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
+	branch := got.Status.Outputs["branch"]
+	pr := remote.head(branch)
+	for len(rec.Events) > 0 {
+		<-rec.Events
+	}
+
+	// The PR's change lands on main (its merge), and the PRStatus still says open.
+	merged := remote.commit(map[string]string{
+		"environments/prod/kustomization.yaml": pr.file(t, "environments/prod/kustomization.yaml"),
+	}, false)
+	now = now.Add(31 * time.Second)
+	reconcileStep(t, r, step.Name)
+	got = getStep(t, c, step.Name)
+	require.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
+	assert.Equal(t, pr.Hash, remote.head(branch).Hash, "nothing pushed")
+	assert.Empty(t, got.Status.Outputs["prBranchRebuilds"], "not a rebuild")
+	assert.Equal(t, merged, got.Status.Outputs["baseSHA"])
+	assert.Equal(t, pr.Hash.String(), got.Status.Outputs["pushedSHA"])
+	assert.Contains(t, got.Status.Message, "already has this change")
+	assert.Contains(t, got.Status.Message, "the PR branch is kept")
+	assert.NotContains(t, got.Status.Message, "force-pushed")
+	assert.NotEqual(t, "true", got.Status.Outputs["noChanges"], "the refresh's own noChanges is not stored")
+	for len(rec.Events) > 0 {
+		assert.NotContains(t, <-rec.Events, "PRBranchRebuilt")
+	}
+
+	// main is force-pushed to a head that has the change too: still no
+	// rebuild, and the message says the base was rewritten.
+	forced := remote.commit(map[string]string{
+		"environments/prod/kustomization.yaml": pr.file(t, "environments/prod/kustomization.yaml"),
+		"README.md":                            "rewritten\n",
+	}, true)
+	now = now.Add(31 * time.Second)
+	reconcileStep(t, r, step.Name)
+	got = getStep(t, c, step.Name)
+	require.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
+	assert.Equal(t, pr.Hash, remote.head(branch).Hash, "nothing pushed")
+	assert.Empty(t, got.Status.Outputs["prBranchRebuilds"])
+	assert.Equal(t, forced, got.Status.Outputs["baseSHA"])
+	assert.Contains(t, got.Status.Message, "already has this change")
+	assert.Contains(t, got.Status.Message, "no longer in the base branch history (force-pushed)")
+	assert.NotEqual(t, "true", got.Status.Outputs["noChanges"])
 }

@@ -37,7 +37,7 @@ spec:
         - name: controller
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: {{ include "kardinal-promoter.controllerImage" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --leader-elect={{ .Values.leaderElect }}
@@ -45,6 +45,9 @@ spec:
             - --zap-log-level={{ include "kardinal-promoter.zapLogLevel" . }}
             - --metrics-bind-address={{ .Values.metricsBindAddress }}
             - --health-probe-bind-address={{ .Values.healthProbeBindAddress }}
+            {{- with .Values.pprofAddress }}
+            - --pprof-address={{ . }}
+            {{- end }}
             - --ui-listen-address=:{{ .Values.service.uiPort }}
             - --webhook-bind-address=:{{ .Values.service.webhookPort }}
             - --graph-service-account={{ .Values.graph.serviceAccountName }}
@@ -60,6 +63,21 @@ spec:
             {{- if not (kindIs "invalid" .Values.graph.compactAbove) }}
             - --graph-compact-above={{ .Values.graph.compactAbove }}
             {{- end }}
+            - --hook-service-accounts={{ join "," .Values.hooks.serviceAccounts }}
+            - --render-image={{ include "kardinal-promoter.renderImage" . }}
+            {{- with .Values.render.image.pullPolicy }}
+            - --render-image-pull-policy={{ . }}
+            {{- end }}
+            - --render-service-account={{ .Values.render.serviceAccountName }}
+            {{- with .Values.imagePullSecrets }}
+            - --render-image-pull-secrets={{ range $i, $s := . }}{{ if $i }},{{ end }}{{ $s.name }}{{ end }}
+            {{- end }}
+            - --render-cpu-limit={{ .Values.render.resources.limits.cpu }}
+            - --render-memory-limit={{ .Values.render.resources.limits.memory }}
+            - --render-timeout={{ .Values.render.timeout }}
+            {{- if .Values.hooks.allowPrivileged }}
+            - --hook-allow-privileged=true
+            {{- end }}
             {{- with include "kardinal-promoter.policyNamespaces" . }}
             - --policy-namespaces={{ . }}
             {{- end }}
@@ -67,6 +85,8 @@ spec:
             - --audit-retention=true
             - --audit-retention-max-age={{ .Values.audit.retention.maxAge }}
             - --audit-retention-max-per-pipeline={{ .Values.audit.retention.maxPerPipeline }}
+            {{- else }}
+            - --audit-retention=false
             {{- end }}
             {{- with .Values.controller.workers }}
             {{- with .promotionStep }}
@@ -143,6 +163,24 @@ spec:
             {{- end }}
             {{- if .Values.ui.auth.tokenReview }}
             - --ui-tokenreview-auth=true
+            {{- end }}
+            {{- if .Values.bundleAPI.tokenReview }}
+            - --bundle-api-tokenreview-auth=true
+            {{- end }}
+            {{- if or .Values.ui.auth.tokenReview .Values.bundleAPI.tokenReview }}
+            {{- if and (not .Values.tokenReview.audiences) (not .Values.tokenReview.acceptAPIServerAudience) }}
+            {{- fail "tokenReview.audiences is empty: set an audience (kardinal-promoter) or tokenReview.acceptAPIServerAudience=true" }}
+            {{- end }}
+            - --tokenreview-audiences={{ join "," .Values.tokenReview.audiences }}
+            {{- if .Values.tokenReview.acceptAPIServerAudience }}
+            - --tokenreview-accept-apiserver-audience=true
+            {{- end }}
+            {{- end }}
+            {{- if and .Values.ui.auth.tokenReview .Values.ui.auth.tokenSecretRef.name }}
+            {{- if not .Values.ui.auth.allowStaticTokenWithTokenReview }}
+            {{- fail "ui.auth.tokenSecretRef.name and ui.auth.tokenReview are both set: the static token would win and every UI caller would act as the controller. Unset one, or set ui.auth.allowStaticTokenWithTokenReview=true" }}
+            {{- end }}
+            - --ui-auth-static-overrides-tokenreview=true
             {{- end }}
             {{- if .Values.metricCheck.cloudWatch.ambientCredentials }}
             - --metriccheck-cloudwatch-ambient-credentials=true

@@ -303,9 +303,9 @@ func TestFleet_TargetSelector(t *testing.T) {
 	assert.Contains(t, err.Error(), "has no targets")
 }
 
-// TestFleet_TargetAddedMidRollout: a target added while the fleet rolls out
-// (the Graph rebuilt in place) joins the queue after the existing ones and
-// is promoted; the targets already Verified stay so, and the environment
+// TestFleet_TargetAddedMidRollout: a target added at the end of the list
+// while the fleet rolls out (the Graph rebuilt in place) is promoted after
+// the targets before it; the targets already Verified stay so, and the environment
 // after the fleet waits for it too.
 //
 // Covers FLEET-06.
@@ -332,6 +332,31 @@ func TestFleet_TargetAddedMidRollout(t *testing.T) {
 	}
 	assert.Contains(t, sim.advance(), "post")
 	assert.Equal(t, "Verified", sim.steps["prod-eu"], "a Verified target is not promoted again")
+}
+
+// TestFleet_TargetAddedTakesItsPlace: targets start in target order (list
+// position, or name for a selector), so a target added at the front of the
+// list starts before targets that were already waiting.
+//
+// Covers FLEET-06.
+func TestFleet_TargetAddedTakesItsPlace(t *testing.T) {
+	p := fleetPipeline(1)
+	sim := fleetSim(t, p)
+	sim.steps["test"] = "Verified"
+	assert.Contains(t, sim.advance(), "prod-eu")
+	sim.steps["prod-eu"] = "Verified"
+
+	targets := p.Spec.Environments[1].Fleet.Targets
+	p.Spec.Environments[1].Fleet.Targets = append([]kardinalv1alpha1.FleetTarget{{Name: "aa"}}, targets...)
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app")})
+	require.NoError(t, err)
+	steps := sim.steps
+	sim = newCompactSim(t, res.Graph)
+	sim.steps = steps
+	sim.fleet = map[string]string{"prod-aa": "prod", "prod-eu": "prod", "prod-us": "prod", "prod-ap": "prod"}
+	got := sim.advance()
+	assert.Contains(t, got, "prod-aa", "the new first target starts first")
+	assert.NotContains(t, got, "prod-us", "one place: prod-us, queued before the edit, waits")
 }
 
 // TestFleet_TargetRemovedMidRollout: a target removed while it is in
@@ -392,18 +417,53 @@ func TestFleet_PerPromotionMetricChecks(t *testing.T) {
 	assert.ElementsMatch(t, []string{"prod-t00", "prod-t01", "prod-t02", "prod-t03"}, envs, "one MetricCheck instance per target")
 }
 
-// TestFleet_CompactUnsupportedFeatures: a Pipeline with a fleet is always
-// compact, so a feature the compact shape does not carry (hooks) refuses
-// its Bundles with the feature's name instead of building a Graph without it.
+// TestFleet_PreHooksArePaced: a fleet's pre hooks run per target, and only
+// for a target whose step pacing admitted and the Graph has read back
+// (started): with maxConcurrent 1, the second target's migration waits
+// until its step exists, so no hook runs for a target held back or dropped
+// by pacing (ledger G11). A post hook follows its step's Verifying as
+// elsewhere.
 //
-// Covers FLEET-06.
-func TestFleet_CompactUnsupportedFeatures(t *testing.T) {
-	p := bigFleet(3, 1, nil)
-	p.Spec.Environments[1].Hooks = []kardinalv1alpha1.HookSpec{hook("smoke", "post", hookJob)}
-	_, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app")})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "hooks")
-	assert.NotEmpty(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: p}), "the Pipeline reconciler reports it too")
+// Covers FLEET-08.
+func TestFleet_PreHooksArePaced(t *testing.T) {
+	p := bigFleet(2, 1, nil)
+	p.Spec.Environments[1].Hooks = []kardinalv1alpha1.HookSpec{hook("migrate", "pre", hookJob)}
+	p.Spec.Environments[0].Hooks = []kardinalv1alpha1.HookSpec{hook("prep", "pre", hookJob)}
+	b := makeBundle("app-v1", "app")
+	b.UID = "uid-1"
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: b})
+	require.NoError(t, err)
+	assertKroValid(t, res.Graph)
+	g := res.Graph
+	m0 := graph.HookRunName("app", "app-v1", "prod-t00", "pre", "migrate")
+	m1 := graph.HookRunName("app", "app-v1", "prod-t01", "pre", "migrate")
+	admitted := func(steps map[string]string) []string {
+		vars := compactRunVars(t, g, nil, nil, nil, nil)
+		var observed []interface{}
+		for env, state := range steps {
+			labels := map[string]interface{}{"kardinal.io/environment": env}
+			if env != "test" {
+				labels[graph.LabelFleet] = "prod"
+			}
+			observed = append(observed, map[string]interface{}{"metadata": map[string]interface{}{
+				"name": "app-app-v1-" + env, "labels": labels}, "status": map[string]interface{}{"state": state}})
+		}
+		vars[graph.NodeStepsObserved] = observed
+		sim := newCompactSim(t, g)
+		vars[graph.NodePromotionState] = sim.def(graph.NodePromotionState, vars)
+		vars[graph.NodeRunState] = sim.def(graph.NodeRunState, vars)
+		return admittedNames(t, g, graph.NodePromotionHooks, vars)
+	}
+	prep := graph.HookRunName("app", "app-v1", "test", "pre", "prep")
+	// The same rule holds for an environment that is not a fleet target, in
+	// a Pipeline with fleets: test is ready (a root), but its pre hook waits
+	// until its step exists and is read back.
+	assert.Empty(t, admitted(map[string]string{}), "no step yet: not even test's hook")
+	assert.Equal(t, []string{prep}, admitted(map[string]string{"test": ""}), "test's hook once its step is started")
+	assert.Equal(t, []string{prep}, admitted(map[string]string{"test": "Verified"}), "no target step yet: no target hook")
+	assert.ElementsMatch(t, []string{prep, m0}, admitted(map[string]string{"test": "Verified", "prod-t00": ""}),
+		"the admitted target's hook; prod-t01 waits for a place")
+	assert.ElementsMatch(t, []string{prep, m0, m1}, admitted(map[string]string{"test": "Verified", "prod-t00": "Verified", "prod-t01": ""}))
 }
 
 // TestFleet_SinkEnvironments (DORA): a fleet that is the last environment
@@ -493,6 +553,121 @@ func TestFleet_HeldByFleetHold(t *testing.T) {
 
 	p.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod-t01", Bundle: "app-rollback-b", Reason: "r"}}
 	assert.Equal(t, map[string]bool{"test": false, "prod-t00": false, "prod-t01": true}, held(p, "app-v3"))
+}
+
+// TestFleet_PRReviewGateMirror (#1565 QA): the targets of a pr-review fleet
+// with a gate get the GateMirror patch, as the fleet environment would, so
+// their PRs' kardinal/gates check follows the gates (spec.live). Without it
+// the check stays in error and a protected branch never lets the PR merge.
+func TestFleet_PRReviewGateMirror(t *testing.T) {
+	p := bigFleet(3, 1, nil)
+	for i := range p.Spec.Environments {
+		if p.Spec.Environments[i].Fleet != nil {
+			p.Spec.Environments[i].Approval = "pr-review"
+		}
+	}
+	gates := []kardinalv1alpha1.PolicyGate{makePolicyGate("freeze", "default", "prod", "true")}
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-v1", "app"), PolicyGates: gates})
+	require.NoError(t, err)
+	assertKroValid(t, res.Graph)
+	data, ok := nodeByID(res.Graph.Spec.Nodes)[graph.NodeGateMirrorData]
+	require.True(t, ok, "a GateMirror for the fleet's targets")
+	var envs []string
+	for _, s := range data.Def["steps"].([]interface{}) {
+		envs = append(envs, s.(map[string]interface{})["environment"].(string))
+	}
+	assert.Equal(t, []string{"prod-t00", "prod-t01", "prod-t02"}, envs)
+}
+
+// TestFleet_BundleStrategyOfTargets (#1565 QA): the update strategy check of
+// a config Bundle reads a fleet target's spec, which is its fleet's: a fleet
+// with update.strategy argocd refuses the Bundle as an argocd environment
+// does, naming the target.
+func TestFleet_BundleStrategyOfTargets(t *testing.T) {
+	p := bigFleet(2, 1, nil)
+	for i := range p.Spec.Environments {
+		if p.Spec.Environments[i].Fleet != nil {
+			p.Spec.Environments[i].Update.Strategy = "argocd"
+		}
+	}
+	b := makeBundle("app-v1", "app")
+	b.Spec.Type = "config"
+	b.Spec.ConfigRef = &kardinalv1alpha1.ConfigRef{GitRepo: "https://github.com/org/config", CommitSHA: "abc123"}
+	_, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: b})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `environment "prod-t00" uses update.strategy argocd`)
+}
+
+// TestFleet_PacingNeverPrunesAnObservedStep (#1565 QA): pacing (maxConcurrent,
+// maxUnavailable, the rank of the waiting targets) only limits new
+// admissions. A target whose step StepsObserved lists stays in the wave
+// whatever the observed states say, even when they are stale, and whatever
+// the pacing would decide for it now: a failure reaching maxUnavailable,
+// maxConcurrent lowered, or a new target ranked before it.
+func TestFleet_PacingNeverPrunesAnObservedStep(t *testing.T) {
+	one := 1
+	for _, tc := range []struct {
+		name   string
+		states map[string]string // the observed states of the two admitted targets
+		edit   func(p *kardinalv1alpha1.Pipeline)
+	}{
+		{name: "states not observed yet", states: map[string]string{"prod-t00": "", "prod-t01": ""}},
+		{name: "a stale Failed reaches maxUnavailable", states: map[string]string{"prod-t00": "", "prod-t01": "Failed"}},
+		{name: "a Verified not observed yet", states: map[string]string{"prod-t00": "HealthChecking", "prod-t01": ""}},
+		{name: "maxConcurrent lowered to 1", states: map[string]string{"prod-t00": "", "prod-t01": ""},
+			edit: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[1].Fleet.MaxConcurrent = 1 }},
+		{name: "a new target ranked first", states: map[string]string{"prod-t00": "", "prod-t01": ""},
+			edit: func(p *kardinalv1alpha1.Pipeline) {
+				f := p.Spec.Environments[1].Fleet
+				f.Targets = append([]kardinalv1alpha1.FleetTarget{{Name: "aa"}}, f.Targets...)
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := bigFleet(6, 2, &one)
+			sim := fleetSim(t, p)
+			sim.steps["test"] = "Verified"
+			assert.Equal(t, []string{"prod-t00", "prod-t01", "test"}, sim.advance())
+			if tc.edit != nil {
+				tc.edit(p)
+				res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app")})
+				require.NoError(t, err)
+				steps, fleet := sim.steps, sim.fleet
+				sim = newCompactSim(t, res.Graph)
+				sim.steps, sim.fleet = steps, fleet
+				sim.fleet["prod-aa"] = "prod"
+			}
+			for env, st := range tc.states {
+				sim.steps[env] = st
+			}
+			wave, _ := sim.wave()
+			assert.Equal(t, []string{"prod-t00", "prod-t01", "test"}, wave, "the observed steps stay; no new target starts")
+		})
+	}
+}
+
+// TestFleet_AdmittedOnceObserved (#1565 QA): in a Pipeline with fleets each
+// PromotionStep carries spec.admitted, false until StepsObserved lists the
+// step and true from then on, when pacing can no longer drop it. A step kro
+// created but the Graph has not read back yet is admitted=false, so it does
+// no work that a pruned step would leave behind.
+//
+// Covers FLEET-08.
+func TestFleet_AdmittedOnceObserved(t *testing.T) {
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: bigFleet(3, 1, nil), Bundle: makeBundle("app-v1", "app")})
+	require.NoError(t, err)
+	assertKroValid(t, res.Graph)
+	tmpl := nodeByID(res.Graph.Spec.Nodes)[graph.NodePromotionSteps].Template
+	expr := tmpl["spec"].(map[string]interface{})["admitted"].(string)
+	sim := newCompactSim(t, res.Graph)
+	sim.steps["test"] = "Verified"
+	sim.fleet = map[string]string{"prod-t00": "prod"}
+	sim.steps["prod-t00"] = ""
+	vars := sim.vars()
+	vars[graph.NodePromotionState] = sim.def(graph.NodePromotionState, vars)
+	for env, want := range map[string]bool{"prod-t00": true, "prod-t01": false, "test": true} {
+		vars["Step"] = map[string]interface{}{"environment": env}
+		assert.Equal(t, want, evalCEL(t, expr, vars), env)
+	}
 }
 
 // TestFleet_SupersededTargetIsSettled (#1603 with D1): the rollback of one

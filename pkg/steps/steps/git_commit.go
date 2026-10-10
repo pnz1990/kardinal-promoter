@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
@@ -61,17 +62,21 @@ func (s *gitCommitStep) Execute(ctx context.Context, state *parentsteps.StepStat
 	}
 
 	message := PromoteMessage(state.BundleName, state.Environment.Name, state.PipelineName, state.Namespace)
-
-	authorName := state.Git.AuthorName
-	if authorName == "" {
-		authorName = "kardinal-promoter"
+	// A rendered commit records what it was rendered from, so the rendered
+	// branch's history says which DRY commit ran, and a rollback can render
+	// the same one again.
+	if dry := state.Outputs[outputDryCommit]; dry != "" && layoutBranch(state) {
+		// The path rendered, as render-manifests resolved it: the
+		// environment's path, or environments/<name> when it sets none.
+		envRel, err := envSubdir(state)
+		if err != nil {
+			return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
+		}
+		message += fmt.Sprintf("\n\n%s: %s\n%s: %s\n%s: %s", trailerDryCommit, dry,
+			trailerDryPath, filepath.ToSlash(envRel), trailerBundle, state.BundleName)
 	}
-	authorEmail := state.Git.AuthorEmail
-	if authorEmail == "" {
-		authorEmail = "kardinal@kardinal.io"
-	}
 
-	err := state.GitClient.CommitAll(ctx, state.WorkDir, message, authorName, authorEmail)
+	err := state.GitClient.CommitAll(ctx, state.WorkDir, message, authorName(state), authorEmail(state))
 	// The base branch already has this promotion's commit: an earlier
 	// attempt pushed it and its result was lost. The change is this
 	// promotion's, so it is not a no-op (deployment metrics count it). Only
@@ -103,4 +108,20 @@ func (s *gitCommitStep) Execute(ctx context.Context, state *parentsteps.StepStat
 		Message: "committed changes",
 		Outputs: map[string]string{outputNoChanges: "false"},
 	}, nil
+}
+
+// authorName is the commit author name, kardinal-promoter by default.
+func authorName(state *parentsteps.StepState) string {
+	if state.Git.AuthorName != "" {
+		return state.Git.AuthorName
+	}
+	return "kardinal-promoter"
+}
+
+// authorEmail is the commit author email, kardinal@kardinal.io by default.
+func authorEmail(state *parentsteps.StepState) string {
+	if state.Git.AuthorEmail != "" {
+		return state.Git.AuthorEmail
+	}
+	return "kardinal@kardinal.io"
 }

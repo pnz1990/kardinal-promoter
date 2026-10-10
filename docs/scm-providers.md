@@ -445,9 +445,17 @@ Connecting and the ssh handshake are bounded (30s), and a push waits at most a m
 server's post-receive hooks before it closes the connection. A step that is cancelled or times
 out closes its ssh connection at once. A wrong or missing host key fails the step with a `knownhosts:` error, and a Secret with an ssh
 URL but no `sshPrivateKey` or `knownHosts` fails it with a message naming the missing key. The
-config source of a config Bundle on the same ssh host uses the same key. With the chart's
+config source of a config Bundle on the same ssh host uses the same key, and so do the
+controller's reads of the branch while a PR waits: its heads (`ls-remote`) and recent history,
+which it uses to follow or rebuild the PR branch and to check a later synced commit in health.
+With the chart's
 `networkPolicy.enabled`, allow the ssh port (22, or the server's) in `networkPolicy.extraEgress`:
 the default egress rules allow 443 and 6443 only.
+
+`layout: branch` works over ssh too: the render Job gets the Secret's `sshPrivateKey` and
+`knownHosts` keys (not `token`) and dials only the ssh host and port of `spec.git.url`. With
+`render.networkPolicy.enabled`, add that port to `render.networkPolicy.gitEgress`
+([Rendered manifests](rendered-manifests.md)).
 
 Every git connection, ssh and HTTPS alike, fails after 5 minutes without a byte sent or
 received, so a server that stalls in the middle of a clone or push fails the step (with an
@@ -549,6 +557,7 @@ spec:
   allowedRepositories:               # optional; globs over the SCM repository path
     - platform/*
     - apps/**
+  # instanceSigners: [Forgejo]       # Forgejo/Gitea only: the instance's SIGNING_NAME / SIGNING_EMAIL
 ---
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
@@ -604,7 +613,11 @@ How it works:
   a rotated token is used within 30 seconds, and a change to a provider's `spec` is used
   at the next call. **When you rotate a provider's token, keep the old token valid for at
   least 30 seconds after you update the Secret**, so calls made from the cached Secret do
-  not fail. A deleted provider's client and its cached Secrets are dropped from memory.
+  not fail. A deleted provider's client and its cached Secrets are dropped from memory, and
+  a read of its Secret still in flight then is not cached. A slow read of an older Secret or
+  Namespace never replaces a newer one in the cache (the higher `resourceVersion` wins, and
+  without one the read that started later), so a rotation or a removed label is not undone by
+  it.
 - **`allowedRepositories`** lists globs over the repository path the SCM API uses, such
   as `owner/repo` or `group/subgroup/repo`, on the provider's host. Matching ignores
   case. `*` matches one path segment, and a trailing `/**` matches any depth below. A
@@ -620,6 +633,13 @@ How it works:
   in-cluster SCM without TLS. Every provider API request goes through the controller's
   egress guard, the one NotificationHooks and MetricChecks use: no loopback, link-local
   or cloud metadata addresses, even after a redirect or a DNS change.
+- **Signed commits are checked with it too.** A Pipeline with
+  `imageVerification.commits.requireSigned` asks the provider, with its token and the same
+  checks, whether the config commit is signed, and the repository must be on the provider's
+  host. For Forgejo and Gitea, `instanceSigners` lists the names or emails the instance signs
+  commits with, as `--scm-instance-signers` does for the controller's provider; the
+  controller's list is not used for a provider. See
+  [Signed commits](image-verification.md#signed-commits).
 - **Git credentials do not change.** `git-clone` and `git-push` still use
   `spec.git.secretRef` (or an ssh remote). The provider's token is used only for the SCM
   API.

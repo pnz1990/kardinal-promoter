@@ -217,6 +217,31 @@ its container limit, which the chart passes in from the downward API, so the gar
 works harder before the kernel would OOMKill it; set `GOMEMLIMIT` in `controller.extraEnv` to
 choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 
+#### Memory profiles
+
+To see what holds the controller's memory, turn on Go's pprof profiles with
+`--pprof-address` (chart value `pprofAddress`). They are off by default. A port alone binds to
+127.0.0.1 inside the Pod, so only a port-forward reaches it, and the chart adds no Service or
+container port for it. The profiles show heap contents (object values, possibly tokens) and
+stacks, so do not bind it to every interface (`0.0.0.0:6060`) where untrusted clients can connect.
+The endpoint has no authentication or authorization: anyone who reaches the address can read
+every profile. `/debug/pprof/cmdline` also returns the process's command line, so pass secrets
+in environment variables, as the chart does for the SCM, UI and Bundle API tokens, never in
+flags (`controller.extraArgs`). Only an empty `pprofAddress` turns it off.
+
+```bash
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 --reset-then-reuse-values --set pprofAddress=:6060
+kubectl -n kardinal-system port-forward deploy/kardinal-promoter 6060:6060
+go tool pprof -sample_index=inuse_space http://localhost:6060/debug/pprof/heap
+# Compare two snapshots: what grew between them.
+curl -s localhost:6060/debug/pprof/heap > before.pb.gz   # ... later:
+curl -s localhost:6060/debug/pprof/heap > after.pb.gz
+go tool pprof -top -base before.pb.gz after.pb.gz
+```
+
+`kubectl port-forward deploy/...` picks one Pod; with two replicas, forward the leader's Pod
+(the holder of the `kardinal-promoter-leader` Lease), which is the one reconciling.
+
 ## Helm values reference
 
 ### kardinal-promoter controller
@@ -252,6 +277,11 @@ choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 | `bundleAPI.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with the Bundle API bearer token (`KARDINAL_BUNDLE_TOKEN`). `POST /api/v1/bundles` is off until this is set |
 | `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`). With neither this nor `ui.auth.tokenReview` set, the UI API serves only local clients (`kubectl port-forward`) |
 | `ui.auth.tokenReview` | `false` | `--ui-tokenreview-auth`: validate UI tokens with TokenReview; adds the RBAC it needs |
+| `ui.auth.allowStaticTokenWithTokenReview` | `false` | Install with both a static UI token and `ui.auth.tokenReview` (the static token wins); refused otherwise |
+| `rbac.userRoles.aggregateToDefaultRoles` | `false` | Aggregate the user roles into `view`, `edit` and `admin` (then everyone bound to `edit` can promote and approve) |
+| `rbac.userRoles.directWrites` | `false` | Grant the promoter and approver `update` for `kardinal pause`, `kardinal rollback --hold` / `release-hold` and `kardinal override` from a kubeconfig, limited by the scoped-writes admission policy |
+| `tokenReview.audiences` | `["kardinal-promoter"]` | `--tokenreview-audiences`: token audiences the UI API and Bundle API accept (`kubectl create token <sa> --audience kardinal-promoter`) |
+| `tokenReview.acceptAPIServerAudience` | `false` | `--tokenreview-accept-apiserver-audience`: also accept kubeconfig and default ServiceAccount tokens |
 | `controller.accessLog.allRequests` | `false` | `--access-log-all-requests`: log every UI API and Bundle API request, not only logins, refusals and writes ([API access log](guides/security.md#api-access-log)) |
 | `controller.accessLog.sourceIP` / `.trustedProxies` | `false` / `[]` | `--access-log-source-ip`, `--access-log-trusted-proxies`: add the client address; believe `X-Forwarded-For` only from these proxy CIDRs |
 | `ui.corsAllowedOrigins` | `[]` | `--cors-allowed-origins` |
@@ -260,6 +290,7 @@ choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 | `service.webhookPort` | `8083` | Webhook (`/webhook/scm`) and Bundle API port (container and Service) |
 | `service.metricsPort` / `.healthPort` | `8080` / `8081` | Metrics and health probe Service ports |
 | `metricsBindAddress` / `healthProbeBindAddress` | `:8080` / `:8081` | `--metrics-bind-address` / `--health-probe-bind-address` (the container ports) |
+| `pprofAddress` | `""` | `--pprof-address`: serve Go pprof profiles. Off by default; a port alone (`:6060`) binds to 127.0.0.1. See [Memory profiles](#memory-profiles) |
 | `controller.watchNamespace` | `""` | Namespace-scoped mode (`--watch-namespace`). Must equal the release namespace |
 | `controller.policyNamespaces` | `[]` | Namespaces with org-level PolicyGates (`--policy-namespaces`; default `platform-policies`) |
 | `graph.compactAbove` | `null` | Environment count above which a Bundle's Graph uses the compact shape (`--graph-compact-above`; default `100`; `0` makes every Graph compact). See [Large Pipelines](pipeline-reference.md#large-pipelines) |
@@ -271,6 +302,11 @@ choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 | `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.10. The `integration-test` step was removed. The chart grants `batch/jobs` for [hooks](hooks.md) whatever it says |
 | `hooks.serviceAccounts` | `[default]` | ServiceAccounts a [hook](hooks.md)'s Pod may run as (`--hook-service-accounts`), in the Pipeline namespace. The Graph ServiceAccount is never allowed |
 | `hooks.podSecurityLevel` | `baseline` | Pod Security Standard a [hook](hooks.md) Pod must meet (`--hook-pod-security-level`): `baseline`, `restricted` or `privileged` (no Pod checks); below `privileged`, `nodeName` and `hostPort` are refused too |
+| `render.image.repository`, `render.image.tag`, `render.image.digest` | `ghcr.io/pnz1990/kardinal-promoter/render`, the chart's appVersion, none | The `kardinal-render` image the render Jobs of [`layout: branch`](rendered-manifests.md#the-render-job) run (`--render-image`); with a digest, `repository@digest`. Renders never run in the controller. `image.digest` pins the controller image the same way. The render Pods get the chart's `imagePullSecrets`, which must exist in the Pipeline namespaces |
+| `render.serviceAccountName` | `kardinal-render` | ServiceAccount of the render Pods; the controller creates it, without a token, in a Pipeline namespace that has none. Bind no role to it |
+| `render.resources.limits.cpu`, `.memory` | `1`, `512Mi` | Limits of a render Job; a render that needs more memory fails |
+| `render.timeout` | `5m` | How long a render Job may run |
+| `render.networkPolicy.enabled`, `.namespaces`, `.gitEgress` | `false`, `[]`, `[]` | A NetworkPolicy in each listed namespace that lets the render Pods reach only DNS and the git host rules in `gitEgress` (a CNI that enforces NetworkPolicy is needed). Recommended |
 | `resources.limits.cpu` | `500m` | CPU limit |
 | `resources.limits.memory` | `1Gi` | Memory limit; see [Sizing the controller](#sizing-the-controller) |
 | `resources.requests.cpu` | `10m` | CPU request |
@@ -738,6 +774,55 @@ regions on one branch takes about a minute even when each step is fast. Raise `p
 git hosts. Each step that runs at once holds one shallow clone of its repository in the
 controller's memory and its working directory on disk.
 
+### Fair sharing between namespaces
+
+The PromotionStep, PRStatus, PolicyGate, Bundle, Pipeline and MetricCheck work queues share
+their workers between namespaces (#1577). An item's place in the queue is lowered, within its
+priority, by how many items its namespace already has ready or in process (in a few steps: none,
+1 to 3, 4 to 15, 16 to 63, 64 to 255, 256 or more), so an item of a namespace with little work
+goes ahead of another namespace's large backlog. One namespace's large promotion therefore no
+longer makes another team's steps wait for all of it.
+
+- Only items that are due count: an item waiting for a requeue delay or a retry backoff counts
+  once its time has come, and its place is computed again then. A namespace with many idle or
+  failing objects is not pushed down.
+- Aging: an item that has been due for more than 10 seconds goes back to its normal place, so a
+  busy namespace still gets its share of the workers while many small namespaces keep the
+  queue busy.
+- Within one namespace and step, items are served in the order they became due.
+- Priority levels stay apart: a step waiting for its branch's turn (see above) stays behind
+  every step that can run.
+- No worker waits while an item is ready, so a namespace alone on the controller gets every
+  worker, as before. The fairness reorders work; it does not add any.
+
+Measured with the scale suite's `full` profile on one kind cluster (controller with `-race`, 2
+replicas), main and fair queues run alternately with the host's load under 64 at each start.
+Tenant B promotes one Bundle on each of five 3-environment Pipelines while tenant A runs either
+a 149-environment wave on one branch (`TestScale_TenantFairness`) or 149 3-environment
+Pipelines on their own repositories, all at once (`TestScale_TenantFairnessManyRepos`):
+
+| | runs | A's load time | A's steps p50 / p99 | B's steps p99 | B's Bundles p50 / p99 |
+|---|---|---|---|---|---|
+| one branch, before | 2 | 137-144 s | 58-68 / 133-134 s | 6 s | 7 / 12 s |
+| one branch, fair | 1 | 117 s | 56 / 110 s | 6 s | 7 / 12 s |
+| many repositories, before | 7 | 51-67 s (mean 58) | 2-3 / 7-9 s | 6-7 s | 25-41 / 40-53 s |
+| many repositories, fair | 3 | 44-55 s (mean 50) | 2-3 / 7-8 s | 7-8 s | 13-19 / 21-31 s |
+
+On one branch the branch turns already let B through. With many repositories, B's Bundles
+waited behind A's backlog and finished after all of A; with fair queues they take about half
+as long, and A is not slower. B's steps stayed under 10 s in every run: what B waited for was
+the time between its steps, in the Bundle, Pipeline and PromotionStep queues. These runs used 3-environment Pipelines for A.
+
+The test as it is now runs A as 5-environment Pipelines and starts B once a tenth of A's steps
+exist, B's Bundles 2 s apart, so that B can finish within A's load even on a quiet host. It
+gates on B's step p99 (10 s), B's Bundle p99 (35 s) and B finishing while A still runs. One
+run each of `TestScale_TenantFairnessManyRepos` in that shape:
+
+| | code | host load, median | A's load time | B's steps p99 | B's Bundles p50 / p99 | gates |
+|---|---|---|---|---|---|---|
+| before | main at 106b12cf | 78 | 91 s | 8 s | 67 / 70 s | fail: Bundle p99 70 s over 35 s |
+| fair | #1662 at 8b032f78 | 56 | 65 s | 4 s | 10 / 12 s | pass |
+
 ### Leader election under API pressure
 
 The leader renews its Lease every 2 seconds and gives up leadership when a
@@ -867,6 +952,8 @@ kubectl delete crd --ignore-not-found \
   changewindows.kardinal.io \
   subscriptions.kardinal.io \
   notificationhooks.kardinal.io \
+  hookruns.kardinal.io \
+  renderruns.kardinal.io \
   scmproviders.kardinal.io \
   clusterscmproviders.kardinal.io \
   promotiontemplates.kardinal.io \
@@ -893,7 +980,7 @@ The controller's RBAC, in summary:
 
 | Resources | Verbs |
 |---|---|
-| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create, and delete only with `audit.retention.enabled: true`) and `changewindows`, `scmproviders` and `clusterscmproviders` (get, list, watch; get, update, patch on `/status`) |
+| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create, and delete with `audit.retention.enabled: true`, the default) and `changewindows`, `scmproviders` and `clusterscmproviders` (get, list, watch; get, update, patch on `/status`) |
 | `graphs.kro.run` | Full CRUD; get on `graphs/status` |
 | `serviceaccounts`, `rolebindings` | get, create; get, list, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs, `list` finds them for the sweep) |
 | `namespaces` | get, limited to `controller.watchNamespace` in namespace mode (lets go of a Graph whose namespace is being deleted) |

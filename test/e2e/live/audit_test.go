@@ -8,6 +8,7 @@ package live
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	auditpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
@@ -52,8 +54,28 @@ func TestAudit_PromotionRecords(t *testing.T) {
 	prodStep := e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 	allowed := a.waitAudit(t, bundle, "GateEvaluated", "Success")
 
-	events, err := e.AuditEvents(ctx, a.ns, bundle)
-	require.NoError(t, err)
+	want := []string{
+		"prod GateEvaluated Failure", "prod GateEvaluated Success", "prod GateOverridden Success",
+		"prod PromotionStarted Pending", "prod PromotionSucceeded Success",
+		"test PromotionStarted Pending", "test PromotionSucceeded Success",
+	}
+	// A step writes its AuditEvents from its outbox (status.pendingAuditEvents,
+	// #1552) after the transition, and retries a failed write within
+	// auditRetryDelay (5s): wait for the records, a few retries at most, then
+	// check exactly what is there (#1676).
+	var events []v1alpha1.AuditEvent
+	framework.Eventually(t, auditOutboxWait, "the Bundle's AuditEvents, prod's PromotionSucceeded included", func(ctx context.Context) (bool, string) {
+		var err error
+		if events, err = e.AuditEvents(ctx, a.ns, bundle); err != nil {
+			return false, err.Error()
+		}
+		keys := make([]string, 0, len(events))
+		for _, ae := range events {
+			keys = append(keys, auditKey(ae))
+		}
+		sort.Strings(keys)
+		return slices.Equal(keys, want), fmt.Sprintf("seen %v", keys)
+	})
 	got := map[string]v1alpha1.AuditEvent{}
 	var keys []string
 	for _, ae := range events {
@@ -68,11 +90,7 @@ func TestAudit_PromotionRecords(t *testing.T) {
 			"%s: labels", ae.Name)
 	}
 	sort.Strings(keys)
-	assert.Equal(t, []string{
-		"prod GateEvaluated Failure", "prod GateEvaluated Success", "prod GateOverridden Success",
-		"prod PromotionStarted Pending", "prod PromotionSucceeded Success",
-		"test PromotionStarted Pending", "test PromotionSucceeded Success",
-	}, keys, "the Bundle's AuditEvents (environment, action, outcome)")
+	assert.Equal(t, want, keys, "the Bundle's AuditEvents (environment, action, outcome)")
 
 	for _, ps := range []*v1alpha1.PromotionStep{testStep, prodStep} {
 		env := ps.Spec.Environment
@@ -112,7 +130,7 @@ func TestAudit_PromotionRecords(t *testing.T) {
 
 	record := got["test PromotionSucceeded Success"]
 	record.Spec.Message = "rewritten"
-	err = e.Client.Update(ctx, &record)
+	err := e.Client.Update(ctx, &record)
 	require.Error(t, err, "an AuditEvent spec cannot change")
 	assert.Contains(t, err.Error(), "AuditEvent spec is immutable")
 }
@@ -176,8 +194,9 @@ func kubeNote(note string) string {
 // notes naming the environment. The gate instance's Blocked Event (Warning,
 // action Evaluate) carries the message cut to 1024 bytes ending in "...",
 // where the API server would reject a longer note and lose the Event; the
-// gate's status.reason and its GateEvaluated AuditEvent keep the whole
-// message. Every kardinal Event in the namespace has an action and a note of
+// gate's status.reason keeps the whole message, and its GateEvaluated
+// AuditEvent the first audit.MaxMessageBytes of it ending in "…" (the
+// AuditEvent goes through the writer's status outbox, #1552). Every kardinal Event in the namespace has an action and a note of
 // at most 1024 bytes.
 //
 // Covers STEP-EVENTS-01.
@@ -245,7 +264,17 @@ func TestAudit_Events(t *testing.T) {
 	assert.Equal(t, kubeNote(fmt.Sprintf("env prod pipeline %s: gate %s blocking promotion: %s",
 		pipelineName, inst.Name, inst.Status.Reason)), blocked.Note, "the note is the reason cut to 1024 bytes")
 	assert.True(t, strings.HasPrefix(inst.Status.Reason, long), "status.reason keeps the whole message")
-	assert.True(t, strings.HasPrefix(audit.Spec.Message, long), "the AuditEvent keeps the whole message (%d bytes)", len(audit.Spec.Message))
+	// The AuditEvent's message is cut to auditpkg.MaxMessageBytes on purpose:
+	// it travels through the writer's status outbox (#1552). Exactly that:
+	// at most the bound, ending in the marker, and the message's own start
+	// up to the bound (the gate message is ASCII, so the cut is not moved
+	// back to a rune boundary), not some shorter or other text.
+	const marker = "…"
+	assert.LessOrEqual(t, len(audit.Spec.Message), auditpkg.MaxMessageBytes, "the AuditEvent's message fits the outbox bound")
+	assert.True(t, strings.HasSuffix(audit.Spec.Message, marker), "a cut message ends in %q: %q", marker, tail(audit.Spec.Message))
+	body := strings.TrimSuffix(audit.Spec.Message, marker)
+	assert.Len(t, body, auditpkg.MaxMessageBytes-len(marker), "cut at the bound")
+	assert.True(t, strings.HasPrefix(long, body), "the AuditEvent keeps the start of the gate message")
 
 	all, err := e.Kube.EventsV1().Events(a.ns).List(ctx, metav1.ListOptions{})
 	require.NoError(t, err)
@@ -284,6 +313,10 @@ func (a *app) waitAudit(t *testing.T, bundle, action, outcome string) v1alpha1.A
 	})
 	return found
 }
+
+// auditOutboxWait bounds the wait for a step's outbox to write its
+// AuditEvents: six of the PromotionStep reconciler's auditRetryDelay (5s).
+const auditOutboxWait = 30 * time.Second
 
 // auditKey is "<environment> <action> <outcome>".
 func auditKey(ae v1alpha1.AuditEvent) string {

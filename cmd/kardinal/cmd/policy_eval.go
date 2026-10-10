@@ -38,6 +38,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 )
 
@@ -229,6 +230,8 @@ func newSimulationClient(scheme *runtime.Scheme, cluster sigs_client.Reader, obj
 	overlay := fake.NewClientBuilder().WithScheme(scheme).
 		WithObjects(objs...).
 		WithStatusSubresource(&v1alpha1.PolicyGate{}).
+		// The reconciler lists one Pipeline's Bundles by spec.pipeline (#1654).
+		WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 	s := &simulationClient{Client: overlay}
 	if cluster != nil {
