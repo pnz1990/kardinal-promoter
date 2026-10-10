@@ -285,6 +285,7 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 		return false, nil
 	}
 	state := r.stepState(ctx, log, ps, pipeline, env, bundle, seq, r.workDir(ps), cred, provider)
+	state.BeforePush = r.pushGuard(ps, base, state)
 	// The rebuilt commit is computed afresh: forget the previous run's
 	// "nothing to commit".
 	delete(state.Outputs, "noChanges")

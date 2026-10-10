@@ -201,6 +201,10 @@ func (r *Reconciler) recordTransition(ps *v1alpha1.PromotionStep, state, message
 	case StateRollingBack:
 		eventType, eventAction = corev1.EventTypeWarning, "Rollback"
 		note = fmt.Sprintf("env %s: %s", env, message)
+	case StateSuperseded:
+		// Not a failure (#1603): no failure AuditEvent or metric.
+		eventAction = "Supersede"
+		note = fmt.Sprintf("env %s: %s", env, message)
 	default:
 		return
 	}
@@ -289,7 +293,7 @@ func closeStepStatuses(ps *v1alpha1.PromotionStep, state string) stepObservation
 		for i := range steps {
 			complete(&steps[i])
 		}
-	case StateFailed, StateAbortedByAlarm, StateRollingBack:
+	case StateFailed, StateAbortedByAlarm, StateRollingBack, StateSuperseded:
 		for i := range steps {
 			switch steps[i].State {
 			case v1alpha1.StepExecutionFailed:

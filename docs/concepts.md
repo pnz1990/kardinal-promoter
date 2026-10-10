@@ -38,6 +38,13 @@ When a new Bundle is created while a previous Bundle is still promoting through 
 same Pipeline, the older Bundle is **superseded**:
 
 - The older Bundle's status transitions to `Superseded`, which is final
+- None of its PromotionSteps pushes any more: right before every `git-push` a step reads its
+  Bundle from the API server and fails ("promotion cancelled") if the Bundle is Superseded or
+  rejected. A push to the environment's branch is also refused when a Bundle that supersedes it
+  (newer, of the same type, neither rejected nor Failed) has already pushed there (each such push
+  first records `status.outputs.pushIntent`), so an older image never lands over a newer one: that
+  step ends `Superseded`, and so does its Bundle, which no failure count (Bundle failure,
+  `maxUnavailable`, DORA, `onHealthFailure`) includes
 - Its unfinished PromotionSteps are failed, and a PR one of them opened that is still
   open is closed with a comment. If the SCM fails to close it or to delete its branch, the
   step keeps its state and retries after 10s, 20s, 40s, 80s and 2m, with the
@@ -67,7 +74,7 @@ kardinal get bundles my-app
 
 kro keeps every Graph in memory, so kardinal does not keep the Graph of every finished Bundle.
 Once a Bundle has finished, and every one of its PromotionSteps has settled (`Verified`, `Failed`,
-`RollingBack` or `AbortedByAlarm`, with no PR left to close), its Graph is **retired** after a delay
+`RollingBack`, `AbortedByAlarm` or `Superseded`, with no PR left to close), its Graph is **retired** after a delay
 that starts when the last step settles:
 
 | Bundle | Retired after (chart value, controller flag) |
@@ -237,7 +244,7 @@ A PromotionStep represents one environment promotion for one Bundle. You do not 
 Each PromotionStep tracks:
 - Which environment it targets
 - Which Bundle it promotes
-- The current state (Pending, Promoting, WaitingForMerge, HealthChecking, Verifying, Verified, Failed, AbortedByAlarm, RollingBack). Verifying: the health check passed and the environment's [post-deploy hooks](hooks.md) run
+- The current state (Pending, Promoting, WaitingForMerge, HealthChecking, Verifying, Verified, Failed, AbortedByAlarm, RollingBack, Superseded). Superseded: the step did not push because a newer Bundle had already pushed to its environment; it is not a failure. Verifying: the health check passed and the environment's [post-deploy hooks](hooks.md) run
 - The PR URL (for pr-review environments)
 - Per-step progress and timing (`status.steps`), the current message and conditions, and bake and retry counters. Promotion evidence (provenance, gate results, upstream verification) goes into the PR body.
 

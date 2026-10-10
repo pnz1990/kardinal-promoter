@@ -213,7 +213,7 @@ func shortenPRURL(url string) string {
 // the step stops there, and the rollback Bundle carries the promotion on.
 func deriveDuration(s v1alpha1.PromotionStep) string {
 	switch s.Status.State {
-	case "Verified", "Failed", "AbortedByAlarm", "RollingBack":
+	case "Verified", "Failed", "AbortedByAlarm", "RollingBack", "Superseded":
 	case "", "Pending", "Promoting", "WaitingForMerge", "HealthChecking", "Verifying":
 		return "..."
 	default:

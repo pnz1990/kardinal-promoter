@@ -810,40 +810,23 @@ func (r *Reconciler) hasNewerSibling(ctx context.Context, b *kardinalv1alpha1.Bu
 // or Available may itself wait for the slot, so it does not count.
 func (r *Reconciler) newerSiblings(ctx context.Context, b *kardinalv1alpha1.Bundle,
 	countVerified bool) (newer, replaced bool, err error) {
-	// The Bundle an environment is held on (spec.holds, kardinal rollback
-	// --hold) is never superseded: the hold pins the environment to it until
-	// it is released.
-	var p kardinalv1alpha1.Pipeline
-	if getErr := r.Get(ctx, client.ObjectKey{Namespace: b.Namespace, Name: b.Spec.Pipeline}, &p); getErr == nil &&
-		lifecycle.HoldNaming(&p, b.Name) != nil {
-		return false, false, nil
+	// lifecycle.SupersedingSiblings decides, with the push guard of the
+	// PromotionStep reconciler (#1603): the same type, no rejected artifact,
+	// in flight (or Verified with countVerified), newer, and b not held.
+	var p *kardinalv1alpha1.Pipeline
+	var pl kardinalv1alpha1.Pipeline
+	if getErr := r.Get(ctx, client.ObjectKey{Namespace: b.Namespace, Name: b.Spec.Pipeline}, &pl); getErr == nil {
+		p = &pl
 	}
 	siblings, err := r.pipelineBundleList(ctx, b.Namespace, b.Spec.Pipeline)
 	if err != nil {
 		return false, false, fmt.Errorf("list bundles for supersession check: %w", err)
 	}
 	rejected := lifecycle.RejectedArtifactsOf(siblings, b.Spec.Pipeline)
-	for i := range siblings {
-		s := &siblings[i]
-		if s.Name == b.Name || s.Spec.Type != b.Spec.Type {
-			continue // image bundles are only superseded by image bundles, etc.
-		}
-		if _, bad := rejected.Carries(s); bad {
-			continue // a rejected Bundle, or one carrying a rejected artifact, never promotes: it supersedes nothing
-		}
-		switch s.Status.Phase {
-		case phaseSuperseded, phaseFailed, phaseRejected:
-			continue
-		case phaseVerified:
-			if !countVerified {
-				continue
-			}
-		}
-		if lifecycle.CompareCreation(s, b) > 0 {
-			newer = true
-			if s.Status.Phase == phasePromoting || s.Status.Phase == phaseVerified {
-				replaced = true
-			}
+	for _, s := range lifecycle.SupersedingSiblings(p, b, siblings, rejected, countVerified) {
+		newer = true
+		if s.Status.Phase == phasePromoting || s.Status.Phase == phaseVerified {
+			replaced = true
 		}
 	}
 	return newer, replaced, nil
@@ -1461,6 +1444,16 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 					fmt.Sprintf("promotion failed for pipeline %s: %s", b.Spec.Pipeline, msg))
 				observability.BundlesTotal.WithLabelValues(phaseFailed).Inc()
 			})
+		case supersededStep(steps) != nil:
+			// A step refused its push because a Bundle that supersedes this
+			// one already pushed to its environment (#1603). The check above
+			// supersedes a Promoting Bundle only for a newer one in flight;
+			// one that is Verified already supersedes it here. Not a failure.
+			s := supersededStep(steps)
+			supersede(b)
+			setBundleCondition(b, condReady, metav1.ConditionFalse, "Superseded",
+				fmt.Sprintf("environment %s: %s", s.Spec.Environment, s.Status.Message))
+			after = append(after, func() { r.superseded(b) })
 		case pipeline != nil:
 			expected, err := graph.PromotedEnvironments(pipeline, b)
 			if err == nil && allVerified(b.Status.Environments, expected) {
@@ -1673,6 +1666,17 @@ func (r *Reconciler) event(b *kardinalv1alpha1.Bundle, eventType, reason, messag
 		action = "Reconcile"
 	}
 	kubeevent.Emit(r.Recorder, b, eventType, reason, action, message)
+}
+
+// supersededStep returns the first of steps that ended Superseded (it did not
+// push because a newer Bundle had pushed to its environment, #1603), or nil.
+func supersededStep(steps []kardinalv1alpha1.PromotionStep) *kardinalv1alpha1.PromotionStep {
+	for i := range steps {
+		if steps[i].Status.State == phaseSuperseded {
+			return &steps[i]
+		}
+	}
+	return nil
 }
 
 // failedState reports whether a PromotionStep state is a failure.

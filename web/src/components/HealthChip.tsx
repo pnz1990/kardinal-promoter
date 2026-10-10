@@ -71,7 +71,7 @@ export function kardinalStateToHealth(state: string, nodeType?: string): HealthS
       return 'Pending'
     case 'Paused':
       return 'Paused'
-    case 'Superseded':
+    case 'Superseded':      // Bundle phase, and a step that did not push because a newer Bundle had (#1603); not a failure
     default:
       return 'Unknown'
   }

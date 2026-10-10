@@ -88,7 +88,8 @@ func stepStatePriority(state string) int {
 		return 3
 	case "Verified", "AbortedByAlarm", "RollingBack":
 		return 2
-	case "Failed":
+	case "Failed", "Superseded":
+		// Superseded: the step did not push; a newer Bundle's step runs.
 		return 1
 	default:
 		return 0
