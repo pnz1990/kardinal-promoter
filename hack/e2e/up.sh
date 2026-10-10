@@ -72,8 +72,8 @@ case "$SUITE" in
   # each run the TestCore_ promotion tests and the provider-agnostic TestSCM_
   # tests against their git server, plus the tests named after it.
   core) COMPONENTS=("giteafamily.sh forgejo" argocd.sh webhook-receiver.sh registry.sh ciapi.sh)
-    RUN='^Test(Core|SCM|Forgejo|Gate|Bundle|Pipeline|Graph|Step|Rollback|Health|CLI|CIAPI|Notify|Sub|Audit)_' ;;
-  gitea) COMPONENTS=("giteafamily.sh gitea" argocd.sh) RUN='^Test(Core|SCM|Gitea)_' ;;
+    RUN='^Test(Core|SCM|Forgejo|GiteaFamily|Gate|Bundle|Pipeline|Graph|Step|Rollback|Health|CLI|CIAPI|Notify|Sub|Audit)_' ;;
+  gitea) COMPONENTS=("giteafamily.sh gitea" argocd.sh) RUN='^Test(Core|SCM|Gitea|GiteaFamily)_' ;;
   gitlab) COMPONENTS=(gitlab.sh argocd.sh) RUN='^Test(Core|SCM|GitLab)_' ;;
   # The webhook receiver is the other API host TestGitHub_SCMAPIURL points
   # --scm-api-url at.

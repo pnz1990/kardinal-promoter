@@ -286,7 +286,7 @@ func requireGiteaFamily(t *testing.T, e *framework.Env) {
 	}
 }
 
-// TestSCM_SignedCommitPerson: on Forgejo and on Gitea (whose signer payloads
+// TestGiteaFamily_SignedCommitPerson: on Forgejo and on Gitea (whose signer payloads
 // differ: Forgejo names the login in signer.name, Gitea in
 // signer.username), a config commit a user signed with a GPG key registered
 // on the server is a person's signature: the Bundle verifies with
@@ -295,7 +295,7 @@ func requireGiteaFamily(t *testing.T, e *framework.Env) {
 // the instance key).
 //
 // Covers IMGV-SIGNER-01.
-func TestSCM_SignedCommitPerson(t *testing.T) {
+func TestGiteaFamily_SignedCommitPerson(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	requireGiteaFamily(t, e)
@@ -325,7 +325,7 @@ func TestSCM_SignedCommitPerson(t *testing.T) {
 	assert.Contains(t, iv.Status.Message, "who is not in commits.allowedSigners")
 }
 
-// TestSCM_SignedCommitInstance: a commit the server signed with its
+// TestGiteaFamily_SignedCommitInstance: a commit the server signed with its
 // instance key (an API file edit by a user with a key, with
 // repository.signing set up) is a
 // platform signature on Forgejo and on Gitea (Gitea reports SIGNING_NAME as
@@ -334,7 +334,7 @@ func TestSCM_SignedCommitPerson(t *testing.T) {
 // signatures passed as a person).
 //
 // Covers IMGV-SIGNER-02.
-func TestSCM_SignedCommitInstance(t *testing.T) {
+func TestGiteaFamily_SignedCommitInstance(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	requireGiteaFamily(t, e)
