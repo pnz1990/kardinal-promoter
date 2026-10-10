@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -242,6 +243,45 @@ func TestGitHubApp_TokenFlow(t *testing.T) {
 			f.mu.Unlock()
 		})
 	}
+
+	t.Run("a flight that ended after the cache check is not repeated", func(t *testing.T) {
+		// Deterministic form of the race #1636 and #1642 fix: between this
+		// caller's cache check and its joining the flight, another flight
+		// ends. The caller uses what it left, a token or its failure's
+		// backoff, and mints nothing.
+		failed := errors.New("mint failed: 404 Integration not found")
+		for _, tc := range []struct {
+			name    string
+			left    func(src *scm.GitHubAppTokenSource, now time.Time)
+			wantTok string
+			wantErr error
+		}{
+			{"a fresh token", func(src *scm.GitHubAppTokenSource, now time.Time) {
+				scm.SetAppTokenStateForTest(src, "ghs_other_flight", now.Add(time.Hour), now.Add(2*time.Hour), nil, time.Time{})
+			}, "ghs_other_flight", nil},
+			{"a failure in its backoff", func(src *scm.GitHubAppTokenSource, now time.Time) {
+				scm.SetAppTokenStateForTest(src, "", time.Time{}, time.Time{}, failed, now.Add(time.Minute))
+			}, "", failed},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				c := &clock{t: time.Now()}
+				k, pemKey := appKey(t, false)
+				f, srv := newFakeGitHubApp(t, &k.PublicKey, "", c.now)
+				src := appSource(t, pemKey, srv.URL, c)
+				scm.SetBeforeFlightForTest(src, func() { tc.left(src, c.now()) })
+				tok, err := src.Token(context.Background())
+				if tc.wantErr != nil {
+					assert.ErrorIs(t, err, tc.wantErr)
+				} else {
+					require.NoError(t, err)
+				}
+				assert.Equal(t, tc.wantTok, tok)
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				assert.Zero(t, f.mintCalls, "no mint of its own")
+			})
+		}
+	})
 
 	t.Run("concurrent callers share one mint", func(t *testing.T) {
 		c := &clock{t: time.Now()}
