@@ -218,8 +218,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// Compute aggregate deployment metrics from Bundles + PromotionSteps.
 	// Graph-first: reads only CRD status fields written by their own reconcilers.
 	// Writes only to Pipeline.status.deploymentMetrics (our own CRD).
+	// Only this Pipeline's Bundles, through the spec.pipeline index: the
+	// namespace may hold every other Pipeline's history too (#1654).
 	var bundleList kardinalv1alpha1.BundleList
-	if err := r.List(ctx, &bundleList, client.InNamespace(p.Namespace)); err != nil {
+	if err := r.List(ctx, &bundleList, client.InNamespace(p.Namespace),
+		client.MatchingFields{lifecycle.IndexBundlePipeline: p.Name}); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list bundles of pipeline %s: %w", p.Name, err)
 	}
 	// Pipelines that share a repository and branch must write separate paths
@@ -626,6 +629,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		},
 	); err != nil {
 		return fmt.Errorf("index PromotionStep by spec.pipelineName: %w", err)
+	}
+	if err := lifecycle.IndexBundlesByPipeline(context.Background(), mgr.GetFieldIndexer()); err != nil {
+		return err
 	}
 
 	b := ctrl.NewControllerManagedBy(mgr).

@@ -236,7 +236,8 @@ func (r *Reconciler) now() time.Time {
 //
 // A PromotionStep deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	return objectgone.Reconcile(ctx, req, promotionStepsResource, r.reconcile)
+	res, err := objectgone.Reconcile(ctx, req, promotionStepsResource, r.reconcile)
+	return requeueChanged(ctx, res, err)
 }
 
 // auditPending wakes the reconciler when a status patch stores audit

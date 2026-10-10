@@ -78,8 +78,17 @@ func TestScale_LoadSustained(t *testing.T) {
 	r := scale.Begin(t)
 	names := r.Fleet.Pipelines(t, "steady", r.P.SustainedPipelines, scale.Chain(r.P.PipelineEnvs))
 	r.Note("pipelines", len(names))
-	r.Note("sustained", r.Fleet.Sustained(context.Background(), t, names, r.P.SustainedRate, r.P.SustainedFor))
-	r.Finish()
+	s := r.Fleet.Sustained(context.Background(), t, names, r.P.SustainedRate, r.P.SustainedFor)
+	r.Note("sustained", s)
+	// A load long enough to fill every Pipeline's history must find the
+	// steady state, or the memory checks would fall back to the cold start.
+	if perPipeline := r.P.SustainedRate * r.P.SustainedFor.Seconds() / float64(len(names)); perPipeline > 1.5*scale.HistoryLimit && s.WarmAt.IsZero() {
+		t.Errorf("%.0f Bundles per Pipeline (over 1.5x historyLimit %d) but no warm baseline: some Pipeline never passed historyLimit",
+			perPipeline, scale.HistoryLimit)
+	}
+	// The memory checks measure from the steady state: once every Pipeline
+	// keeps HistoryLimit Bundles (the soak profile; zero otherwise).
+	r.Finish(func(o *invariants.Options) { o.WarmAt = s.WarmAt })
 	assertNewestVerified(t, r)
 }
 
