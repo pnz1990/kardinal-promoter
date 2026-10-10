@@ -132,6 +132,12 @@ func ListPromotionSteps(ctx context.Context, c client.Reader, ns string,
 		case !apierrors.IsNotFound(err):
 			return nil, fmt.Errorf("get bundle %s/%s: %w", ns, name, err)
 		}
+	} else if pipeline, ok := selector[LabelPipeline]; ok {
+		// One Pipeline's steps: its Bundles only (#1654).
+		var err error
+		if bundles, err = ListPipelineBundles(ctx, c, ns, pipeline); err != nil {
+			return nil, err
+		}
 	} else {
 		var bl v1alpha1.BundleList
 		if err := c.List(ctx, &bl, client.InNamespace(ns)); err != nil {

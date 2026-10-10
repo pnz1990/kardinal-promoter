@@ -49,3 +49,26 @@ func IndexBundlesByPipeline(ctx context.Context, indexer client.FieldIndexer) er
 	})
 	return o.err
 }
+
+// ListPipelineBundles lists the Bundles of pipeline in ns through the
+// IndexBundlePipeline index, so a Pipeline's read costs its own Bundles, not
+// every Bundle of the namespace (#1654). A reader without the index (the
+// CLI's direct client: the Bundle CRD declares no selectable fields) gets
+// the namespace list filtered here instead.
+func ListPipelineBundles(ctx context.Context, c client.Reader, ns, pipeline string) ([]v1alpha1.Bundle, error) {
+	var list v1alpha1.BundleList
+	if err := c.List(ctx, &list, client.InNamespace(ns), client.MatchingFields{IndexBundlePipeline: pipeline}); err == nil {
+		return list.Items, nil
+	}
+	list = v1alpha1.BundleList{}
+	if err := c.List(ctx, &list, client.InNamespace(ns)); err != nil {
+		return nil, fmt.Errorf("list bundles of pipeline %s: %w", pipeline, err)
+	}
+	out := list.Items[:0]
+	for _, b := range list.Items {
+		if b.Spec.Pipeline == pipeline {
+			out = append(out, b)
+		}
+	}
+	return out, nil
+}
