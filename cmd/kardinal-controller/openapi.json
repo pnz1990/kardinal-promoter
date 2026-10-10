@@ -1318,6 +1318,10 @@
             "description": "Bundle is the rollback Bundle the environment is held on.",
             "type": "string"
           },
+          "bundleMissing": {
+            "description": "BundleMissing is true when the controller found the rollback Bundle missing (status.holdStates, #1629). The hold stays in effect.",
+            "type": "boolean"
+          },
           "createdAt": {
             "description": "CreatedAt is when, RFC 3339.",
             "type": "string"
@@ -1330,14 +1334,23 @@
             "description": "ExpiresAt is when the controller removes the hold, RFC 3339; empty: when it is released.",
             "type": "string"
           },
+          "message": {
+            "description": "Message says what is wrong and how to recover, with BundleMissing.",
+            "type": "string"
+          },
           "reason": {
             "description": "Reason says why.",
+            "type": "string"
+          },
+          "releaseCommand": {
+            "description": "ReleaseCommand is the CLI command that releases the hold.",
             "type": "string"
           }
         },
         "required": [
           "bundle",
-          "reason"
+          "reason",
+          "releaseCommand"
         ],
         "type": "object"
       },
