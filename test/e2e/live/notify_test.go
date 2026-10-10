@@ -204,7 +204,10 @@ func decode(t *testing.T, r framework.Received) (payload, []string) {
 	ts, err := time.Parse(time.RFC3339, p.Timestamp)
 	if assert.NoError(t, err, "timestamp is RFC3339") {
 		assert.Equal(t, time.UTC, ts.Location(), "timestamp is UTC")
-		assert.WithinDuration(t, r.Time, ts, 5*time.Second, "timestamp is the delivery time")
+		// RFC3339 has whole seconds, and the receiver records its own time
+		// after the request crossed a loaded runner: 15s tells the delivery
+		// time from, say, the Bundle's creation, without flaking (5.1s seen).
+		assert.WithinDuration(t, r.Time, ts, 15*time.Second, "timestamp is the delivery time")
 	}
 	return p, keys
 }
