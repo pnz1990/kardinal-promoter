@@ -10,17 +10,23 @@ name: E2E live
 # Pull requests and pushes to main don't run it: twelve jobs of 10 to 45
 # minutes on every push filled the runners and held up every PR's required
 # checks. Before a merge, run the suites locally (make e2e-all,
-# hack/e2e/all.sh, the same jobs). This workflow runs weekly, repeating every
-# test three times to find flakes (the upgrade test once: it upgrades its
-# cluster), and on a manual dispatch (gh workflow run e2e-live.yml --ref
+# hack/e2e/all.sh, the same jobs). This workflow runs nightly on main, every
+# suite once, so a regression in a suite that pull requests don't run is
+# found the next morning (#1594-#1601 sat on main for days); weekly, repeating
+# every test three times to find flakes (the upgrade test once: it upgrades
+# its cluster); and on a manual dispatch (gh workflow run e2e-live.yml --ref
 # <branch>). Only the github job gets a secret, DEMO_GITHUB_TOKEN, in its
 # setup step.
 #
 # The "e2e live" job passes when every job passed and the coverage proof
-# holds. Branch protection does not require it.
+# holds. Branch protection does not require it. After a scheduled run the
+# "report" job writes a per-job summary and, when a job failed, opens an
+# issue (or comments on the one already open); a passing run closes it.
 on:
   schedule:
+    # Weekly: COUNT=3 (flakes). Nightly: COUNT=1 (regressions), every other day.
     - cron: '0 4 * * 1'
+    - cron: '0 3 * * 0,2-6'
   workflow_dispatch:
     inputs:
       count:
@@ -38,6 +44,12 @@ on:
 
 permissions:
   contents: read
+
+# One scheduled run at a time: a nightly run that outlives its night is not
+# overlapped by the next one.
+concurrency:
+  group: e2e-live-${{ github.event_name == 'schedule' && 'schedule' || github.run_id }}
+  cancel-in-progress: false
 
 # bash (not the default `bash -e`) so every step runs with -eo pipefail.
 defaults:
@@ -82,7 +94,7 @@ jobs:
     runs-on: ubuntu-latest
     # The weekly run repeats every test three times. The scale suite runs
     # once (its ci profile takes about an hour).
-    timeout-minutes: ${{ matrix.suite == 'scale' && 120 || (github.event_name == 'schedule' || inputs.count != '1') && 180 || 60 }}
+    timeout-minutes: ${{ matrix.suite == 'scale' && 120 || (github.event.schedule == '0 4 * * 1' || (inputs.count && inputs.count != '1')) && 180 || 60 }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.image.outputs.matrix) }}
@@ -92,7 +104,7 @@ jobs:
       KARDINAL_E2E_BUILD: none
       # hack/e2e/run.sh refuses COUNT above 1 for the upgrade suite; the
       # scale suite runs once too (hack/e2e/all.sh does the same).
-      COUNT: ${{ (matrix.suite == 'upgrade' || matrix.suite == 'scale') && '1' || github.event_name == 'schedule' && '3' || inputs.count || '1' }}
+      COUNT: ${{ (matrix.suite == 'upgrade' || matrix.suite == 'scale') && '1' || github.event.schedule == '0 4 * * 1' && '3' || inputs.count || '1' }}
       SHARD: ${{ matrix.shard }}
       # Opt-in: gh workflow run e2e-live.yml -f suites=core -f wave_envs=150
       KARDINAL_E2E_WAVE_ENVS: ${{ inputs.wave_envs || '30' }}
@@ -250,3 +262,63 @@ jobs:
             echo "::error::a live e2e job did not pass (result: $RESULT); see the suite jobs"
             exit 1
           fi
+
+  # After a scheduled run: a summary of every job, and an issue when one
+  # failed. It uses only the workflow's own token (issues: write); no other
+  # secret.
+  report:
+    name: report
+    needs: [suite, e2e-live]
+    if: always() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      KIND: ${{ github.event.schedule == '0 4 * * 1' && 'weekly (COUNT=3)' || 'nightly (COUNT=1)' }}
+    steps:
+      - name: Summarize the jobs
+        run: |
+          gh api --paginate "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
+            --jq '.jobs[] | select(.name != "report") | [.name, (.conclusion // .status)] | @tsv' > jobs.tsv
+          {
+            echo "## e2e live, $KIND, ${GITHUB_SHA::8}"
+            echo
+            echo "| job | result |"
+            echo "|---|---|"
+            awk -F'\t' '{print "| " $1 " | " $2 " |"}' jobs.tsv
+          } > summary.md
+          awk -F'\t' '$2 != "success" && $2 != "skipped"' jobs.tsv > failed.tsv
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Open or update the failure issue
+        if: needs.suite.result != 'success' || needs.e2e-live.result != 'success'
+        run: |
+          title="e2e live failed on main ($KIND)"
+          {
+            echo "The scheduled e2e live run on ${GITHUB_SHA::8} failed: $RUN_URL"
+            echo
+            echo "Failed jobs:"
+            awk -F'\t' '{print "- " $1 " (" $2 ")"}' failed.tsv
+            echo
+            echo "Diagnostics are in the run's e2e-live-* artifacts; the coverage proof in coverage-proof."
+          } > body.md
+          n=$(gh issue list --state open --search "in:title \"$title\"" --json number,title \
+            --jq "map(select(.title == \"$title\")) | .[0].number // empty")
+          if [ -n "$n" ]; then
+            gh issue comment "$n" --body-file body.md
+          else
+            gh issue create --title "$title" --body-file body.md --label kind/bug --label area/test
+          fi
+      - name: Close the failure issue after a passing run
+        if: needs.suite.result == 'success' && needs.e2e-live.result == 'success'
+        run: |
+          title="e2e live failed on main ($KIND)"
+          for n in $(gh issue list --state open --search "in:title \"$title\"" --json number,title \
+              --jq "map(select(.title == \"$title\")) | .[].number"); do
+            gh issue close "$n" --comment "Passed on ${GITHUB_SHA::8}: $RUN_URL"
+          done
