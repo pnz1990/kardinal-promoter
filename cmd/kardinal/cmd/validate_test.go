@@ -120,10 +120,10 @@ func TestValidate_Documents(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "layout branch",
+			name: "layout branch rendering into the source branch",
 			content: "apiVersion: kardinal.io/v1alpha1\nkind: Pipeline\nmetadata:\n  name: web\n" +
-				"spec:\n  git:\n    url: https://github.com/o/r\n    layout: branch\n  environments:\n  - name: test\n",
-			wantOut: []string{"✗ f.yaml is invalid:", "spec.git.layout: branch is not implemented"},
+				"spec:\n  git:\n    url: https://github.com/o/r\n    branch: main\n    layout: branch\n  environments:\n  - name: test\n    render:\n      branch: main\n",
+			wantOut: []string{"✗ f.yaml is invalid:", `environment "test": the rendered branch "main" is spec.git.branch`},
 			wantErr: true,
 		},
 		{

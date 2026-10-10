@@ -18,7 +18,7 @@ import (
 // token Leases (name kardinal-shard, kardinal's label), not every Lease in
 // the cluster; without sharding the Lease cache is untouched.
 //
-// The hook Job selector (only labelled Jobs are cached) is kept with
+// The run-Job selector (hook and render Jobs; only labelled Jobs are cached) is kept with
 // sharding on: the shard entries are added, not substituted.
 func TestShardCacheOpts(t *testing.T) {
 	unsharded := shardCacheOpts(buildCacheOpts(""), "").ByObject
@@ -28,7 +28,8 @@ func TestShardCacheOpts(t *testing.T) {
 	var leases int
 	for obj, by := range opts.ByObject {
 		if _, ok := obj.(*batchv1.Job); ok {
-			assert.True(t, by.Label.Matches(labels.Set{"kardinal.io/hookrun": "x"}), "hook Jobs cached")
+			assert.True(t, by.Label.Matches(labels.Set{"kardinal.io/run-job": "hookrun"}), "hook Jobs cached")
+			assert.True(t, by.Label.Matches(labels.Set{"kardinal.io/run-job": "renderrun"}), "render Jobs cached")
 			assert.False(t, by.Label.Matches(labels.Set{}), "other Jobs not cached")
 			continue
 		}

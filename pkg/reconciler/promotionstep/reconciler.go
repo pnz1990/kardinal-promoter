@@ -958,7 +958,7 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 		return ctrl.Result{}, fmt.Errorf("load bundle: %w", err)
 	}
 
-	seq := stepSequence(env, bundle)
+	seq := stepSequence(pipeline, env, bundle)
 	log.Info().
 		Str("env", ps.Spec.Environment).
 		Str("approval", approvalMode).
@@ -1046,7 +1046,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		// by hand or it started before status.steps existed. Record the list
 		// and run it from the next reconcile: the finalizer sync at the end of
 		// this one then adds kardinal.io/close-pr before open-pr can run.
-		ps.Status.Steps = initStepStatuses(stepSequence(env, bundle))
+		ps.Status.Steps = initStepStatuses(stepSequence(pipeline, env, bundle))
 		if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 			if apierrors.IsNotFound(err) {
 				return ctrl.Result{}, nil
@@ -1123,6 +1123,11 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	// never forgotten (C03-promotionstep-06).
 	ps.Status.Outputs = state.Outputs
 	ps.Status.CurrentStepIndex = nextIdx
+	if state.Outputs[steps.OutputRenderRequested] == "true" && ps.Status.RenderRequestedAt == nil {
+		// The Graph creates the environment's RenderRun once this is set.
+		now := metav1.NewTime(r.now())
+		ps.Status.RenderRequestedAt = &now
+	}
 	if nextIdx > prevIdx {
 		// Progress resets the retry budget.
 		ps.Status.RetryCount, ps.Status.GitCredentialRetries, ps.Status.ContendedRetries = 0, 0, 0
@@ -1238,7 +1243,8 @@ func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1al
 		Outputs:      cloneMap(ps.Status.Outputs),
 		Git: steps.GitConfig{
 			URL:           pipeline.Spec.Git.URL,
-			Branch:        baseBranch(pipeline),
+			Branch:        targetBranch(pipeline, env),
+			SourceBranch:  sourceBranch(pipeline, env),
 			Token:         cred.token,
 			SSHPrivateKey: cred.sshKey,
 			SSHKnownHosts: cred.knownHosts,
@@ -1252,6 +1258,9 @@ func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1al
 		GateResults:          r.collectGateResults(ctx, log, ps),
 		UpstreamEnvironments: upstreamEnvironments(bundle, ps.Spec.Environment),
 		Sequence:             seq,
+	}
+	if ps.Spec.Live != nil {
+		state.LiveRenders = ps.Spec.Live.Renders
 	}
 	r.setRollbackState(ctx, log, state, bundle)
 	return state
@@ -1428,10 +1437,13 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 // opens a PR the merge commit comes from the PRStatus instead.
 func (r *Reconciler) recordPushedCommit(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
 	pipeline *v1alpha1.Pipeline, workDir string) {
-	if opensPR(ps) {
+	if opensPR(ps) || ps.Status.Outputs["commitSHA"] != "" {
+		// A pr-review step takes the merge commit; a render reported its
+		// commit itself.
 		return
 	}
-	if pushed := ps.Status.Outputs["branch"]; pushed == "" || pushed != baseBranch(pipeline) {
+	env := findEnv(pipeline, ps.Spec.Environment)
+	if pushed := ps.Status.Outputs["branch"]; pushed == "" || pushed != targetBranch(pipeline, env) {
 		return
 	}
 	hr, ok := r.GitClient.(scm.HeadCommitReader)
@@ -2606,7 +2618,7 @@ func (r *Reconciler) cleanWorkDir(log zerolog.Logger, ps *v1alpha1.PromotionStep
 		return
 	}
 	dir := r.workDir(ps)
-	for _, d := range []string{dir, steps.ConfigSourceDir(dir)} {
+	for _, d := range []string{dir, steps.ConfigSourceDir(dir), steps.DrySourceDir(dir)} {
 		if err := os.RemoveAll(d); err != nil {
 			log.Warn().Err(err).Str("workDir", d).Msg("cleanWorkDir: failed to remove working directory")
 		} else {
@@ -2749,8 +2761,8 @@ func initStepStatuses(seq []string) []v1alpha1.StepStatus {
 
 // stepSequence is the step list a step of env runs for bundle, recorded in
 // status.steps when the step starts.
-func stepSequence(env v1alpha1.EnvironmentSpec, bundle *v1alpha1.Bundle) []string {
-	return steps.DefaultSequenceForBundle(env.Approval, bundle.Spec.Type, env.Update.Strategy, env.Layout)
+func stepSequence(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, bundle *v1alpha1.Bundle) []string {
+	return steps.DefaultSequenceForBundle(env.Approval, bundle.Spec.Type, env.Update.Strategy, effectiveLayout(pipeline, env))
 }
 
 // recordedSequence returns the step names in status.steps: the sequence

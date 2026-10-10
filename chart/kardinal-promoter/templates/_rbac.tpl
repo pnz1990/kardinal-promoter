@@ -54,6 +54,7 @@ rules exist for. A new client call needs a row there and a rule here.
     - scheduleclocks
     - notificationhooks
     - hookruns
+    - renderruns
     - imageverifications
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 # ScmProviders: read (the translator, reconcilers and the webhook endpoint)
@@ -77,11 +78,13 @@ rules exist for. A new client call needs a row there and a rule here.
     - scheduleclocks/status
     - notificationhooks/status
     - hookruns/status
+    - renderruns/status
     - imageverifications/status
   verbs: ["get", "update", "patch"]
-# Pipeline hooks (docs/hooks.md): the HookRun reconciler creates each hook's
-# Job, owned by the HookRun, and deletes one that ran past its timeout. The
-# informer caches only Jobs labelled kardinal.io/hookrun.
+# Pipeline hooks (docs/hooks.md) and rendered manifests
+# (docs/rendered-manifests.md): the HookRun and RenderRun reconcilers create
+# each hook's and render's Job, owned by its run, and delete one that ran
+# past its timeout. The informer caches only Jobs labelled kardinal.io/run-job.
 - apiGroups: ["batch"]
   resources: ["jobs"]
   verbs: ["get", "list", "watch", "create", "delete"]
@@ -115,6 +118,8 @@ rules exist for. A new client call needs a row there and a rule here.
 # through any more (C01-graph-04): after a translation, when a Graph is
 # deleted, and in the leader's sweep, which lists the RoleBindings carrying
 # the controller's managed-by label (cluster mode only).
+# The render Jobs' ServiceAccount (kardinal-render, no role, no token) is
+# created the same way in a namespace that has none.
 - apiGroups: [""]
   resources: ["serviceaccounts"]
   verbs: ["get", "create"]

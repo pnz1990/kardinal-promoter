@@ -224,6 +224,73 @@ spec:
                           none yet).
                         type: string
                     type: object
+                  renders:
+                    description: |-
+                      Renders is the environment's RenderRun for this Bundle (layout:
+                      branch), at most one.
+                    items:
+                      description: |-
+                        LiveRenderRun is the result of the RenderRun of a layout: branch
+                        environment.
+                      properties:
+                        knownMarkerDigests:
+                          description: |-
+                            KnownMarkerDigests is the RenderRun's status.knownMarkerDigests: a
+                            result that pushed nothing (noChanges) must name one of them.
+                          items:
+                            type: string
+                          type: array
+                        message:
+                          description: Message is the RenderRun's status.message.
+                          type: string
+                        name:
+                          description: Name is the RenderRun name.
+                          type: string
+                        phase:
+                          description: Phase is the RenderRun's status.phase (Pending
+                            when it has none yet).
+                          type: string
+                        result:
+                          description: Result is the RenderRun's status.result.
+                          properties:
+                            branch:
+                              description: Branch is the branch it was pushed to.
+                              type: string
+                            commitSHA:
+                              description: CommitSHA is the rendered commit pushed
+                                (empty when nothing changed).
+                              type: string
+                            driftOverwritten:
+                              description: |-
+                                DriftOverwritten lists the changes made outside kardinal that this
+                                render overwrote (render.onDrift: overwrite).
+                              type: string
+                            dryCommit:
+                              description: DryCommit is the DRY commit that was rendered.
+                              type: string
+                            markerDigest:
+                              description: |-
+                                MarkerDigest is the sha256 of the render marker
+                                (.kardinal/rendered.yaml) this render wrote: the list of files and
+                                their sha256. The next render of the environment accepts the rendered
+                                branch only when its marker has the digest of a render kardinal made.
+                              type: string
+                            noChanges:
+                              description: |-
+                                NoChanges is true when the render matched the rendered branch and
+                                nothing was pushed.
+                              type: boolean
+                            objects:
+                              description: Objects is how many objects were rendered.
+                              type: integer
+                            renderer:
+                              description: Renderer is kustomize or helm.
+                              type: string
+                          type: object
+                      required:
+                      - name
+                      type: object
+                    type: array
                 type: object
               pipelineName:
                 description: PipelineName is the Pipeline this step belongs to.
@@ -629,6 +696,13 @@ spec:
                 description: |-
                   PRURL is the GitHub pull request URL opened for this promotion.
                   Set when the step enters WaitingForMerge state.
+                type: string
+              renderRequestedAt:
+                description: |-
+                  RenderRequestedAt is when the step reached its render step (layout:
+                  branch). Set once; the Graph creates the environment's RenderRun once
+                  it is set.
+                format: date-time
                 type: string
               retryCount:
                 description: |-

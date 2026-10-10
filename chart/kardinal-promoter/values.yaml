@@ -23,8 +23,12 @@ image:
   pullPolicy: IfNotPresent
   # -- Image tag (defaults to chart appVersion)
   tag: ""
+  # -- Image digest (sha256:...); when set the image is repository@digest
+  # and the tag is not used.
+  digest: ""
 
-# -- Image pull secrets for private registries
+# -- Image pull secrets for private registries. The render Jobs get them too
+# (--render-image-pull-secrets); they must exist in the Pipeline namespaces.
 imagePullSecrets: []
 
 # -- Override the name of the chart
@@ -459,6 +463,45 @@ hooks:
   # dropped), or privileged (no Pod checks). Below privileged, nodeName and
   # hostPort are refused too. A hook that breaks it fails without running.
   podSecurityLevel: baseline
+
+# -- Rendered manifests (layout: branch, docs/rendered-manifests.md). Each
+# render runs as a Job in the Pipeline's namespace from this image, never in
+# the controller: no Kubernetes credentials (the ServiceAccount below gets no
+# role and no token), a read-only root filesystem, no capabilities, and these
+# limits. It reads the DRY source and pushes the render with the Pipeline's
+# own git Secret (spec.git.secretRef).
+render:
+  image:
+    # -- kardinal-render image repository.
+    repository: ghcr.io/pnz1990/kardinal-promoter/render
+    # -- Tag (defaults to chart appVersion).
+    tag: ""
+    # -- Digest (sha256:...); when set the image is repository@digest and
+    # the tag is not used.
+    digest: ""
+    # -- imagePullPolicy of the render Jobs (empty: Kubernetes' default).
+    pullPolicy: ""
+  # -- ServiceAccount the render Pods run as. The controller creates it in a
+  # Pipeline namespace that has none, without a token; bind no role to it.
+  serviceAccountName: kardinal-render
+  resources:
+    limits:
+      # -- CPU limit of a render Job.
+      cpu: "1"
+      # -- Memory limit of a render Job. A render that needs more fails.
+      memory: 512Mi
+  # -- How long a render Job may run.
+  timeout: 5m
+  # -- NetworkPolicy for the render Pods: egress only to DNS and the git
+  # host. Needs a CNI that enforces NetworkPolicy. It is created in each of
+  # namespaces (the Pipeline namespaces that use layout: branch).
+  networkPolicy:
+    enabled: false
+    # -- Namespaces to create the render NetworkPolicy in.
+    namespaces: []
+    # -- Egress rules (NetworkPolicyPeer lists with ports) for the git host,
+    # e.g. [{to: [{ipBlock: {cidr: 140.82.112.0/20}}], ports: [{port: 443, protocol: TCP}]}].
+    gitEgress: []
 
 # -- Deprecated, no effect. The CRD schemas validate the kardinal fields. The
 # chart always ships the identity ValidatingAdmissionPolicies

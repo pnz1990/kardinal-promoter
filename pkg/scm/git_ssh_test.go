@@ -248,6 +248,61 @@ func TestGoGitClient_SSHRoundTrip(t *testing.T) {
 	assert.Contains(t, err.Error(), "unable to authenticate")
 }
 
+// TestGoGitClient_RenderedBranchOverSSH (#1515): layout: branch over an
+// ssh spec.git.url. RemoteBranchHead and CloneOrInit authenticate with the
+// Secret's ssh key, as Clone and Push do: a missing rendered branch reads
+// as "" and is created empty, its first push makes it, and from then on it
+// is cloned and its head read. A token alone is refused for an ssh remote.
+// Covers SCM-SSH-01.
+func TestGoGitClient_RenderedBranchOverSSH(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("the ssh server runs the git binary")
+	}
+	ctx := context.Background()
+	remote := seedBareRemote(t, map[string]string{"environments/prod/kustomization.yaml": "newTag: v1\n"})
+	clientKey, clientPub := sshKeyPair(t)
+	var receiveExited atomic.Int32
+	addr, hostKey := sshGitServer(t, remote, clientPub, &receiveExited)
+	host, port, err := net.SplitHostPort(addr)
+	require.NoError(t, err)
+	url := "ssh://git@" + addr + "/kardinal/web.git"
+	auth := scm.GitAuth{SSHPrivateKey: clientKey,
+		SSHKnownHosts: []byte("[" + host + "]:" + port + " " + string(ssh.MarshalAuthorizedKey(hostKey)))}
+	c := scm.NewGoGitClient()
+
+	head, err := c.RemoteBranchHead(ctx, url, "env/prod", auth)
+	require.NoError(t, err)
+	assert.Empty(t, head, "the rendered branch does not exist yet")
+
+	work := filepath.Join(t.TempDir(), "w")
+	created, err := c.CloneOrInit(ctx, url, "env/prod", work, auth, 1)
+	require.NoError(t, err)
+	assert.True(t, created, "a missing branch is started empty")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "web.yaml"), []byte("kind: Deployment\n"), 0o600))
+	require.NoError(t, c.CommitAll(ctx, work, "render", "kardinal", "k@example.com"))
+	require.NoError(t, c.Push(ctx, work, "origin", "env/prod", auth, false))
+
+	head, err = c.RemoteBranchHead(ctx, url, "env/prod", auth)
+	require.NoError(t, err)
+	out, err := exec.Command("git", "-C", remote, "rev-parse", "env/prod").CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	assert.Equal(t, strings.TrimSpace(string(out)), head, "the head the server has")
+
+	again := filepath.Join(t.TempDir(), "w2")
+	created, err = c.CloneOrInit(ctx, url, "env/prod", again, auth, 1)
+	require.NoError(t, err)
+	assert.False(t, created, "the branch exists now and is cloned")
+	b, err := os.ReadFile(filepath.Join(again, "web.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, "kind: Deployment\n", string(b))
+
+	tokenOnly := scm.GitAuth{Token: "t"}
+	_, err = c.RemoteBranchHead(ctx, url, "env/prod", tokenOnly)
+	assert.ErrorIs(t, err, scm.ErrSSHKeyMissing)
+	_, err = c.CloneOrInit(ctx, url, "env/prod", filepath.Join(t.TempDir(), "w3"), tokenOnly, 1)
+	assert.ErrorIs(t, err, scm.ErrSSHKeyMissing)
+}
+
 // TestGoGitClient_SSHBounded: a server that accepts the TCP connection and
 // never runs the ssh handshake fails the clone and the push within the
 // connect limit, and a post-receive hook that hangs does not hold the push

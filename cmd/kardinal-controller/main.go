@@ -35,6 +35,7 @@ import (
 	tuffetcher "github.com/theupdateframework/go-tuf/v2/metadata/fetcher"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -64,6 +65,7 @@ import (
 	policygaterecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	psreconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	prstatusrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
+	renderrunrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/renderrun"
 	rbprecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/rollbackpolicy"
 	scheduleclockrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/scheduleclock"
 	scmproviderrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/scmprovider"
@@ -459,6 +461,25 @@ func main() {
 			"(no Pod checks). Below privileged, nodeName and hostPort are refused too. A hook that breaks it fails "+
 			"without running. See docs/hooks.md.")
 
+	// Rendered manifests (layout: branch) render in a Job, never in the
+	// controller (docs/rendered-manifests.md).
+	var renderImage, renderServiceAccount, renderPullPolicy, renderCPU, renderMemory string
+	var renderTimeout time.Duration
+	flag.StringVar(&renderImage, "render-image", os.Getenv("KARDINAL_RENDER_IMAGE"),
+		"The kardinal-render image the render Jobs of layout: branch environments run. Empty: layout: branch "+
+			"promotions fail with a message naming this flag.")
+	flag.StringVar(&renderPullPolicy, "render-image-pull-policy", "", "imagePullPolicy of the render Jobs (default: Kubernetes').")
+	flag.StringVar(&renderServiceAccount, "render-service-account", renderrunrecon.DefaultServiceAccount,
+		"ServiceAccount the render Jobs run as, in the Pipeline namespace. The controller creates it there, "+
+			"without a token, when it is missing; bind no role to it.")
+	var renderPullSecrets string
+	flag.StringVar(&renderPullSecrets, "render-image-pull-secrets", "",
+		"Comma-separated imagePullSecrets of the render Pods (Secrets in the Pipeline namespace).")
+	flag.StringVar(&renderCPU, "render-cpu-limit", "1", "CPU limit of a render Job.")
+	flag.StringVar(&renderMemory, "render-memory-limit", "512Mi", "Memory limit of a render Job; a render that needs more fails.")
+	flag.DurationVar(&renderTimeout, "render-timeout", renderrunrecon.DefaultTimeout,
+		"How long a render Job may run (its activeDeadlineSeconds).")
+
 	var tracingCfg tracing.Config
 	flag.BoolVar(&tracingCfg.Enabled, "tracing-enabled", os.Getenv("KARDINAL_TRACING_ENABLED") == "true",
 		"Export OpenTelemetry traces over OTLP/HTTP: a span per reconcile, promotion step, git clone and push, "+
@@ -834,6 +855,33 @@ func main() {
 		PodSecurityLevel:       hookPodSecurityLevel,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up HookRunReconciler")
+	}
+
+	renderResources := renderrunrecon.DefaultResources()
+	for name, v := range map[corev1.ResourceName]string{corev1.ResourceCPU: renderCPU, corev1.ResourceMemory: renderMemory} {
+		q, err := resource.ParseQuantity(v)
+		if err != nil {
+			logger.Fatal().Err(err).Str("resource", string(name)).Msg("invalid --render-cpu-limit or --render-memory-limit")
+		}
+		renderResources.Limits[name] = q
+		if req := renderResources.Requests[name]; req.Cmp(q) > 0 {
+			renderResources.Requests[name] = q
+		}
+	}
+	if err := (&renderrunrecon.Reconciler{
+		Client:              mgr.GetClient(),
+		APIReader:           mgr.GetAPIReader(),
+		Image:               renderImage,
+		ImagePullPolicy:     corev1.PullPolicy(renderPullPolicy),
+		ServiceAccount:      renderServiceAccount,
+		Resources:           renderResources,
+		Timeout:             renderTimeout,
+		ControllerNamespace: hookControllerNS,
+		ImagePullSecrets:    splitCSV(renderPullSecrets),
+		AuthorName:          "kardinal-promoter",
+		AuthorEmail:         "kardinal@kardinal.io",
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up RenderRunReconciler")
 	}
 
 	ivSCMHost, ivHostErr := scm.WebHost(scmProviderType, scmAPIURL)

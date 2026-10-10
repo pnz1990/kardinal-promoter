@@ -14,7 +14,7 @@ spec:
   git:                                  # Git repository configuration
     url: <string>                       # GitOps repo URL (HTTPS)
     branch: <string>                    # Base branch (default: "main")
-    layout: <string>                    # "directory" (default); "branch" is not implemented (promotions fail)
+    layout: <string>                    # "directory" (default) or "branch" (rendered manifests)
     provider: <string>                  # Deprecated and ignored; the controller's --scm-provider flag selects the SCM
     secretRef:
       name: <string>                    # Secret containing the Git token
@@ -74,7 +74,12 @@ spec:
       onHealthFailure: <string>         # "none" (default), "abort" or "rollback"
       delivery:
         delegate: <string>              # "none" (default), "argoRollouts" (implemented), "flagger" (implemented)
-      layout: <string>                  # "directory" (default); "branch" is not implemented (promotions fail)
+      layout: <string>                  # "directory" (default) or "branch" (rendered manifests)
+      render:                           # layout: branch
+        branch: <string>                # Rendered branch (default: "env/<name>")
+        onDrift: <string>               # "fail" (default) or "overwrite"
+        helm: {releaseName: <string>, namespace: <string>, valuesFiles: [<string>]}
+        allowNondeterministic: <bool>   # allow randAlphaNum, uuidv4, now, genCA, ... in Helm templates (default false)
       shard: <string>                   # Deprecated, not supported: must be empty (distributed mode was removed)
       regions: [<string>, ...]          # Deprecated, not supported: declare one environment per region
       steps:                            # Deprecated, not supported: the API server rejects it
@@ -110,7 +115,7 @@ spec:
 |---|---|---|---|
 | `url` | Yes | | URL of the GitOps repository: HTTPS, or ssh (`ssh://git@host/owner/repo.git`, `git@host:owner/repo.git`) with an ssh key in `secretRef` |
 | `branch` | No | `main` | Base branch: `git-clone` checks it out, `approval: auto` pushes to it, and `pr-review` PRs target it. The API server sets `main` when the field is omitted, and the controller also reads an empty value as `main`. |
-| `layout` | No | `directory` | `directory`: environments as directories on one branch. `branch` (rendered manifests on per-environment branches) is **not implemented**: the `git-clone` step fails every promotion that uses it. See [Rendered Manifests](rendered-manifests.md). |
+| `layout` | No | `directory` | `directory`: environments as directories on one branch. `branch`: every environment's path is rendered (kustomize build, or helm template for a chart) and committed as plain manifests to its rendered branch; see [Rendered Manifests](rendered-manifests.md). |
 | `provider` | No | (none) | **Not read by the controller.** The SCM provider is the controller's `--scm-provider` (`github`, `gitlab`, `forgejo`, `gitea`, `bitbucket` or `azuredevops`), or the one `providerRef` names; see [SCM Providers](scm-providers.md). The CRD accepts only `github` or `gitlab` here. Leave it unset. |
 | `secretRef.name` | No | | `secretRef` is optional; when it is set, `name` must be too. Name of a Kubernetes Secret in the Pipeline's namespace containing a `token` field with a GitHub PAT or GitLab token, GitHub App credentials (`githubAppID`, `githubAppInstallationID`, `githubAppPrivateKey`: git then uses installation tokens, see [GitHub App](scm-providers.md#github-app)), or for an ssh `url` the `sshPrivateKey` and `knownHosts` keys ([SSH git authentication](scm-providers.md#ssh-git-authentication)). Needed when the HTTPS remote refuses git without a token (every push to a hosted provider, and the clone of a private repository); not needed for a URL that carries its credentials (an ssh remote needs `sshPrivateKey` and `knownHosts` instead). When it is not set, or the Secret does not exist, and the HTTPS remote refuses `git-clone` or `git-push` without a token, the step retries until the Secret exists; the step message says what is missing (see [Troubleshooting](troubleshooting.md#symptom-authentication-required-with-git-secret-not-found-or-specgitsecretref-is-not-set)). **Label the Secret `kardinal.io/referenceable: "true"`** (`kubectl label secret github-token kardinal.io/referenceable=true`): the token goes to the Pipeline's `git.url`, which the Pipeline's author chooses, so the label records that the Secret's owner allows it. Deprecated in v0.10.0: an unlabeled Secret still works, and the Pipeline has the condition `SecretReferenceable=False` (reason `SecretNotReferenceable`); v0.11 will refuse it ([#1506](https://github.com/pnz1990/kardinal-promoter/issues/1506)). |
 | `secretRef.namespace` | No | Pipeline's namespace | Must be empty or the Pipeline's own namespace. Any other namespace fails the PromotionStep without reading the Secret, so a Pipeline cannot use another namespace's credentials. The Pipeline's `Ready` condition is `False` with reason `ValidationFailed`, and `kardinal validate` reports it when the file sets `metadata.namespace`. |
@@ -144,7 +149,7 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches the image tag at `update.helm.imagePathTemplate` in `update.helm.valuesFile`; one image per Bundle, so use one Bundle per chart image, or kustomize. `argocd`: patches the Argo CD Application's `spec.source.helm.valuesObject` directly, with no Git commit or PR. The API server rejects `argocd` with `approval: pr-review`, and a config or mixed Bundle fails before its first environment when any environment it promotes uses `argocd`; see [Argo CD native promotion](argocd-native-promotion.md). `yaml`: sets any YAML paths, in any files of the environment directory, to a Bundle image's tag, digest or reference; see [The yaml update strategy](#the-yaml-update-strategy). |
 | `update.helm.imagePathTemplate` | No | `.image.tag` | `helm` only. Dot path of the image tag in the values file. |
 | `update.helm.valuesFile` | No | `values.yaml` | `helm` only. Values file to patch, relative to the environment `path`. |
-| `update.helm.chartVersionFile` | No | `Chart.yaml` | `helm` only, for `chart` Bundles (from a [Helm Subscription](subscription.md#promoting-a-chart-version)). File the chart version is written to, relative to the environment `path`. A chart Bundle fails at build in an environment whose strategy is not `helm`. |
+| `update.helm.chartVersionFile` | No | `Chart.yaml` | `helm` only, for `chart` Bundles (from a [Helm Subscription](subscription.md#promoting-a-chart-version)). File the chart version is written to, relative to the environment `path`. A chart Bundle fails at build in an environment whose strategy is not `helm`, or whose `layout` is `branch` (the render Job does not get the chart version yet). |
 | `update.helm.chartVersionPath` | No | `.dependencies[name=<chart>].version` | `helm` only. [YAML path](#yaml-paths) of the chart version in `chartVersionFile` (`.helmCharts[name=podinfo].version`, `.spec.chart.spec.version`, `.spec.source.targetRevision`). The default is the umbrella chart's dependency named after the Bundle's chart; the step fails when there is none. |
 | `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for its merge: by a person, or by the SCM with `pr.merge.auto`. The step list is fixed when an environment's step starts: an edit applies to steps that start after it, so an environment already promoting finishes with the approval it started with and uses the new one from the next Bundle. A step that started as `auto` still pushes straight to the target branch after an edit to `pr-review`. The Bundle in flight still finishes: its Graph turns Ready once its steps are Verified and its gates pass, whether or not they opened a PR. |
 | `health.type` | No | `resource` | Health verification adapter: `resource`, `argocd`, `flux`, `argoRollouts` or `flagger`. `delivery.delegate`, when set, takes precedence. There is no auto-detection. The step is Verified only when the adapter sees the promoted revision (commit or Bundle images) healthy. See [Health Adapters](health-adapters.md). |
@@ -170,8 +175,8 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `verification` | No | (none) | Argo Rollouts analysis after the health check: `{analysisTemplates: [{name, kind}], args: [{name, value}], inconclusive, timeout}`. One AnalysisRun per template, with the Bundle's `tag`, `image`, `environment` and more as args; the environment is Verified only when every run is `Successful`, and a failed run applies `onHealthFailure`. Needs Argo Rollouts installed: without it the Bundle fails. See [Analysis](analysis.md). |
 | `regions` | No | (none) | **Deprecated, not supported.** Declare one environment per region instead (for example `prod-us` and `prod-eu`) and promote them in parallel with `wave` or `dependsOn`; each gets its own path, PR, gates and health check. Two or more regions set the Pipeline `Ready=False`, `kardinal validate` fails, and every Bundle fails when its Graph is built with `regions is not supported; declare one environment per region (prod-us, prod-eu) and use wave`. A single region is accepted and ignored. |
 
-**Reserved and unsupported fields.** `layout: branch` (on `spec.git` or an environment) and
-a `health.resource.kind` other than `Deployment` are not implemented; `regions` with two or
+**Reserved and unsupported fields.** A `health.resource.kind` other than `Deployment` is not
+implemented; `regions` with two or
 more entries, `shard` and `health.cluster` are deprecated and not supported. A Bundle fails
 when it reaches an environment that uses one (two or more `regions` fail it when its Graph is
 built; the others fail the environment's step before it changes anything in git).
@@ -295,6 +300,8 @@ created it for this Bundle. A run that kro cannot create holds only its own envi
 the Bundle's `RunsCreated` condition names it.
 So is [image verification](image-verification.md): the root steps and their pre hooks wait for
 the Bundle's ImageVerification.
+Rendered manifests (`layout: branch`) are not carried yet: both the Bundle and the Pipeline
+condition report them.
 
 The Graph's size grows with environments, PolicyGates, hooks and analyses: every gate instance,
 HookRun and AnalysisRun is one more object the Graph creates and tracks, and its data is in the
@@ -537,14 +544,11 @@ main branch:
 
 Promotion updates the image tag in the target directory and pushes (auto) or opens a PR (pr-review) against the base branch.
 
-**Branch layout** (`layout: branch`) is **not implemented**. It is meant for the rendered
-manifests pattern, where DRY Kustomize source lives on one branch and rendered plain YAML
-lives on per-environment branches (`env/<name>`). Today the `git-clone` step fails every
-promotion whose Pipeline or environment sets `layout: branch`, before it changes anything.
-`kardinal validate` reports it, and the Pipeline is `Ready=False` with reason `NotImplemented`.
-`sourceBranch`, `branchPrefix` and `renderManifests` are not Pipeline fields.
-
-See [Rendered Manifests](rendered-manifests.md) for the planned design.
+**Branch layout** (`layout: branch`): the DRY source (Kustomize overlays or Helm charts) lives on
+`spec.git.branch`, and kardinal renders each environment's path at promotion time and commits the
+plain YAML to the environment's rendered branch (`render.branch`, default `env/<name>`), which
+Argo CD or Flux syncs. A `pr-review` PR targets the rendered branch, so its diff is the rendered
+YAML. See [Rendered Manifests](rendered-manifests.md).
 
 ### Many Pipelines on one repository and branch
 
@@ -628,12 +632,13 @@ finishes, and its Graph turns Ready once its steps are Verified and its gates pa
 | Config Bundle | `git-clone`, `config-merge`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
 | Mixed Bundle | `git-clone`, `config-merge`, then the image Bundle's update step (`kustomize-set-image`, `helm-set-image` or `yaml-update`), `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
 | Image Bundle, `update.strategy: yaml` | `git-clone`, `yaml-update`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| `layout: branch` | `render` (waits for the environment's RenderRun, a Job that runs `git-clone`, the image update step (none for a config Bundle), `render-manifests`, `git-commit` and `git-push`), [`open-pr`, `wait-for-merge`,] `health-check` |
 | `update.strategy: argocd` | `argocd-set-image`, `health-check` |
 
 `open-pr` and `wait-for-merge` run only with `approval: pr-review`. When the files in git
 already have the Bundle's change, `git-commit` finds nothing to commit: `git-push`, `open-pr`
 and `wait-for-merge` then do nothing, no PR is opened, and the step goes on to the health check.
-`layout: branch` is not implemented and fails at `git-clone`. [Architecture: Steps Engine](architecture.md#steps-engine-pkgsteps)
+[Architecture: Steps Engine](architecture.md#steps-engine-pkgsteps)
 describes each step.
 
 kardinal has no custom step engine. `spec.environments[].steps` and
@@ -843,7 +848,7 @@ spec:
         argocd: { name: my-app-prod, namespace: argocd }   # Application in the hub, destination: the prod cluster
 ```
 
-### Rendered manifests (branch layout with kustomize-build)
+### Rendered manifests (branch layout)
 
-Not implemented yet: `layout: branch` fails the promotion. See
-[Rendered Manifests](rendered-manifests.md) for the planned design.
+`examples/rendered-manifests/pipeline.yaml`: every environment renders its overlay into
+`env/<name>`, prod through a PR. See [Rendered Manifests](rendered-manifests.md).

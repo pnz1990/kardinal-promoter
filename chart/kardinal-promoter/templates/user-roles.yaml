@@ -43,7 +43,7 @@ to those roles grant kardinal access too.
 */}}
 {{- define "kardinal-promoter.userRoles.readRules" }}
 - apiGroups: ["kardinal.io"]
-  resources: ["pipelines", "bundles", "policygates", "promotionsteps", "prstatuses", "metricchecks", "subscriptions", "notificationhooks", "rollbackpolicies", "scheduleclocks", "changewindows", "auditevents", "approvals", "scmproviders", "clusterscmproviders", "hookruns", "imageverifications"]
+  resources: ["pipelines", "bundles", "policygates", "promotionsteps", "prstatuses", "metricchecks", "subscriptions", "notificationhooks", "rollbackpolicies", "scheduleclocks", "changewindows", "auditevents", "approvals", "scmproviders", "clusterscmproviders", "hookruns", "imageverifications", "renderruns"]
   verbs: ["get", "list", "watch"]
 # Step events in the UI.
 - apiGroups: [""]

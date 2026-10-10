@@ -231,19 +231,19 @@ func TestGitCloneStep_Hardening(t *testing.T) {
 			},
 		},
 		{
-			name: "environment layout branch fails before cloning",
+			name: "environment layout branch needs a branch-capable git client",
 			setup: func(state *parentsteps.StepState, _ *mockGitClient) {
 				state.Environment.Layout = "branch"
 			},
 			check: func(t *testing.T, _ *parentsteps.StepState, git *mockGitClient, res parentsteps.StepResult, err error) {
 				assert.ErrorIs(t, err, parentsteps.ErrPermanent)
 				assert.Equal(t, parentsteps.StepFailed, res.Status)
-				assert.Contains(t, res.Message, "layout: branch is not implemented")
+				assert.Contains(t, res.Message, "layout: branch needs a git client that can create branches")
 				assert.Equal(t, 0, git.cloneCalls)
 			},
 		},
 		{
-			name: "pipeline layout branch fails before cloning",
+			name: "pipeline layout branch needs a branch-capable git client",
 			setup: func(state *parentsteps.StepState, _ *mockGitClient) {
 				state.Pipeline.Git.Layout = "branch"
 			},
@@ -335,8 +335,6 @@ func TestGitPushStep_Modes(t *testing.T) {
 			wantStatus: parentsteps.StepFailed, wantErr: true, wantPushes: 1, wantBranch: "kardinal/nginx-demo-v1-29-0/prod", wantForce: true},
 		{name: "nothing changed: no push", approval: "auto", noChanges: "true", wantStatus: parentsteps.StepSuccess,
 			wantPushes: 0, wantMsg: "nothing to push"},
-		{name: "layout branch: no push", approval: "auto", layout: "branch", wantStatus: parentsteps.StepFailed,
-			wantErr: true, wantPushes: 0, wantMsg: "not implemented"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
