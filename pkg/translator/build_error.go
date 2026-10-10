@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 // BuildError is the error Translate returns when the Graph builder refuses
@@ -38,8 +39,8 @@ func GatesHash(pipeline *kardinalv1alpha1.Pipeline, gates []kardinalv1alpha1.Pol
 		return ""
 	}
 	envs := make(map[string]bool, len(pipeline.Spec.Environments))
-	for _, e := range pipeline.Spec.Environments {
-		envs[e.Name] = true
+	for _, name := range graph.EnvironmentNames(pipeline) { // fleet targets included: a gate can name one
+		envs[name] = true
 	}
 	type entry struct {
 		Namespace string                          `json:"namespace"`

@@ -76,7 +76,9 @@ func TestUI_AccessLog(t *testing.T) {
 			"not yet"
 	})
 	tr, err := e.Kube.CoreV1().ServiceAccounts(a.ns).CreateToken(ctx, sa, &authnv1.TokenRequest{
-		Spec: authnv1.TokenRequestSpec{ExpirationSeconds: ptr.To[int64](600)}}, metav1.CreateOptions{})
+		// kardinal accepts only tokens for its own audience (TokenReview).
+		Spec: authnv1.TokenRequestSpec{ExpirationSeconds: ptr.To[int64](600), Audiences: []string{"kardinal-promoter"}}},
+		metav1.CreateOptions{})
 	require.NoError(t, err)
 	token := tr.Status.Token
 

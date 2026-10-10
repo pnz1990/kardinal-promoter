@@ -196,6 +196,9 @@ export const api = {
   /** Release the hold of a rollback on an environment (kardinal release-hold, #1528). */
   releaseHold: (pipeline: string, environment: string, namespace = 'default') =>
     post<{ message: string }>('/release-hold', { pipeline, environment, namespace }),
+  /** Approve, reject or revoke a Bundle for an environment as the UI user (kardinal approve; TokenReview mode). */
+  recordApproval: (req: { bundle: string; environment: string; namespace?: string; decision?: 'approve' | 'reject'; comment?: string; revoke?: boolean }) =>
+    post<{ outcome: string; approval: string; user: string; message: string }>('/approvals', req),
   /** Pause a pipeline — sets spec.paused=true (#506). */
   pause: (pipeline: string, namespace = 'default') =>
     post<{ message: string }>('/pause', { pipeline, namespace }),

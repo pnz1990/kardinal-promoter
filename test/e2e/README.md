@@ -81,8 +81,8 @@ pattern of its tests.
 
 | Suite | Components | Tests |
 |---|---|---|
-| `core` | Forgejo, Argo CD, a webhook receiver for NotificationHooks, two OCI registries for Subscriptions, the Bundle API token | `TestCore_*`, `TestSCM_*`, `TestForgejo_*`, `TestGate_*`, `TestBundle_*`, `TestPipeline_*`, `TestGraph_*`, `TestStep_*`, `TestRollback_*`, `TestHealth_*`, `TestCLI_*`, `TestCIAPI_*`, `TestNotify_*`, `TestSub_*`, `TestAudit_*` |
-| `gitea` | Gitea, Argo CD | `TestCore_*`, `TestSCM_*`, `TestGitea_*` |
+| `core` | Forgejo, Argo CD, a webhook receiver for NotificationHooks, two OCI registries for Subscriptions, the Bundle API token | `TestCore_*`, `TestSCM_*`, `TestForgejo_*`, `TestGiteaFamily_*`, `TestGate_*`, `TestBundle_*`, `TestPipeline_*`, `TestGraph_*`, `TestStep_*`, `TestRollback_*`, `TestHealth_*`, `TestCLI_*`, `TestCIAPI_*`, `TestNotify_*`, `TestSub_*`, `TestAudit_*` |
+| `gitea` | Gitea, Argo CD | `TestCore_*`, `TestSCM_*`, `TestGitea_*`, `TestGiteaFamily_*` |
 | `gitlab` | GitLab CE, Argo CD | `TestCore_*`, `TestSCM_*`, `TestGitLab_*` |
 | `github` | GitHub (branches of `pnz1990/kardinal-demo`), Argo CD, the webhook receiver (the other API host `TestGitHub_SCMAPIURL` points the controller at) | `TestCore_*`, `TestSCM_*`, `TestGitHub_*` |
 | `delivery` | Forgejo, Argo CD, Argo Rollouts, Flagger | `TestRollouts_*`, `TestFlagger_*`, `TestDelivery_*` |
@@ -96,7 +96,9 @@ pattern of its tests.
 
 `TestSCM_*` tests use only `Env.Git`, so they run against every git server;
 a test that needs one provider is named after it and checks `Env.Git.Kind()`
-first. The `github` suite takes its token from `KARDINAL_E2E_GITHUB_TOKEN_FILE`,
+first, and one that needs Forgejo or Gitea is `TestGiteaFamily_*` (the core
+and gitea suites run it). A skipped test fails its job, so a provider-specific
+test must not be `TestSCM_*`. The `github` suite takes its token from `KARDINAL_E2E_GITHUB_TOKEN_FILE`,
 `DEMO_GITHUB_TOKEN` or `gh auth token` (`hack/e2e/components/github.sh`).
 
 > **Warning: the `gh auth token` fallback hands your own GitHub login to the
@@ -169,7 +171,7 @@ The invariants, after every Bundle settled:
 - no Graph outlived its Bundle, stayed deleting, reports an error or nears etcd's request limit;
 - AuditEvents agree with the step states;
 - the controller logged no `DATA RACE`, no panic and no error-level line outside the allowlist (`invariants.Benign` plus the faults a test injects), and neither its containers nor kro's restarted (OOMKilled, crashed);
-- Prometheus: the reconcile error ratio stays under the test's limit, every work queue drains, and no controller Pod that ran the whole test in one role (leader or standby) grew its goroutines past 1.5x (+100), its resident memory past 2x (+200 MiB; 2.5x + 500 MiB for a `-race` build, whose shadow memory grows with every allocation and is never returned: steady leaders measured up to 2.3x and +261 MiB in the `full` profile) or its memory past 90% of the limit;
+- Prometheus: the reconcile error ratio stays under the test's limit, every work queue drains, and no controller Pod that ran the whole test in one role (leader or standby) grew its goroutines past 1.5x (+100) or its memory past 90% of the limit. Goroutines and memory are read once the work queues drained and the controller's goroutine count stopped falling (checked every 30 s, at most 2 minutes), not at the moment the last Bundle settled: settling spawns a short burst of goroutines (the release-candidate soak: 520 to 1,671 for under a minute) that is not a leak. Memory is measured from a warm baseline: the first sample once the load holds steady (`invariants.Options.WarmAt`; `TestScale_LoadSustained` sets it when every Pipeline has passed its `historyLimit` of 50 Bundles, and a test that sets none measures from its start). Built without `-race`, resident memory may grow at most 2x (+200 MiB) from that baseline. Built with `-race`, RSS holds the race detector's shadow memory, which the Go runtime does not account for and never returns (the soak's leader: 1.2 GiB of its 1.6 GiB RSS, with a flat Go heap), so with a warm baseline the check bounds what the controller holds instead: `go_memstats_sys_bytes` may grow at most 25% from the baseline to the end, and the heap in use after the first garbage collection once the load is over must be below the lowest heap in use of the 5 minutes after the baseline; a missing Go memory series fails. The suite also fails a test when `KARDINAL_E2E_RACE` and the controller's build (the `kardinal-version` ConfigMap) disagree, either way, and the sustained load fails when it was long enough to fill every Pipeline's history (over 1.5x `historyLimit` per Pipeline) but found no warm baseline. A `-race` test without a warm baseline keeps the RSS bound of 2.5x (+500 MiB) from its start (steady leaders measured up to 2.3x and +261 MiB in the `full` profile);
 - git pushes, counted from zero for the test (a series that appears during the test counts from 0, not from its first scrape): at most half a push refused as non-fast-forward per push that landed (`metrics-push-efficiency`, `Options.MaxRefusedPushRatio`): the auto promotions of one controller that write one branch take turns, so only another writer can make a push lose.
 
 Each test writes `diagnostics/scale/<test>/report.json` (every number:
@@ -218,8 +220,8 @@ asserts. `go test ./test/hack -run TestE2ECoverage` fails when the file and
 the tests disagree, when a live test claims no row, when no suite runs a live
 test, and when a row's `suite` (a suite in `hack/e2e/up.sh`, or `unit` for a
 contract row) runs none of its tests. It also fails when a `source` ref is
-not a repo path, `path:N` or `path:N-M`, names lines past the end of its
-file, or starts on a blank line, a bare `---` or a markdown table
+not a repo path, `path:N` or `path:N-M` (the changelog: `docs/changelog.md#<entry title or heading>@<release>`, bare for [Unreleased], never by line), names lines
+past the end of its file, or starts on a blank line, a bare `---` or a markdown table
 separator. Only live tests cover live rows;
 contract rows are covered by unit tests: Bitbucket and Azure DevOps, which
 can't be self-hosted, behaviors a live test cannot force, such as a race

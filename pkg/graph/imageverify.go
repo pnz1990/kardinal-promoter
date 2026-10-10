@@ -26,7 +26,10 @@ import (
 // with no upstream in the Graph carries spec.imageVerification and waits in
 // Pending until the mirror patch node copies phase Verified onto
 // spec.live.imageVerification; its pre-deploy hooks wait for it too.
-// Downstream steps need nothing: their upstream already waited.
+// Downstream steps need nothing: their upstream already waited. In the
+// compact shape the PromotionSteps template renders
+// spec.live.imageVerification itself and the root entries of the DAG carry
+// the name (compact.go, compact_extras.go).
 //
 // Digests are required. Verifying a tag and then promoting the tag lets a
 // different image be pushed under the tag in between; a selected image
@@ -121,7 +124,11 @@ func imageSelected(patterns []string, repository string) bool {
 
 // imageVerificationSpec returns the ImageVerification spec for bundle under
 // the Pipeline's policy, or nil when the policy selects nothing to verify.
-func imageVerificationSpec(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle) (*kardinalv1alpha1.ImageVerificationSpec, error) {
+// provider is the Pipeline's resolved spec.git.providerRef (nil: the
+// controller's --scm-provider): the config commit is checked with it, and
+// it is part of the spec, so another provider gives another verification.
+func imageVerificationSpec(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
+	provider *kardinalv1alpha1.ScmProviderIdentity) (*kardinalv1alpha1.ImageVerificationSpec, error) {
 	policy := pipeline.Spec.ImageVerification
 	if policy == nil {
 		return nil, nil
@@ -163,6 +170,10 @@ func imageVerificationSpec(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinal
 			repo = pipeline.Spec.Git.URL
 		}
 		spec.Commit = &kardinalv1alpha1.VerifiedCommit{Repo: repo, SHA: c.CommitSHA}
+		if provider != nil {
+			id := *provider
+			spec.Commit.ScmProvider = &id
+		}
 	}
 	if len(spec.Images) == 0 && spec.Commit == nil {
 		return nil, nil
@@ -172,8 +183,9 @@ func imageVerificationSpec(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinal
 
 // buildImageVerificationNode returns the ImageVerification node of bundle,
 // and its name; nil when there is nothing to verify.
-func buildImageVerificationNode(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle) (*GraphNode, string, error) {
-	spec, err := imageVerificationSpec(pipeline, bundle)
+func buildImageVerificationNode(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
+	provider *kardinalv1alpha1.ScmProviderIdentity) (*GraphNode, string, error) {
+	spec, err := imageVerificationSpec(pipeline, bundle, provider)
 	if err != nil || spec == nil {
 		return nil, "", err
 	}
@@ -223,21 +235,4 @@ func imageVerificationLive() map[string]interface{} {
 		"message": fmt.Sprintf(`${%s.?status.?message.orValue("")}`, imageVerifyNodeID),
 		"images":  fmt.Sprintf(`${%s.spec.?images.orValue([]).map(i, i.repository + "@" + i.digest)}`, imageVerifyNodeID),
 	}
-}
-
-// The compact shape does not build the ImageVerification node or the
-// mirror that holds the root steps (the steps come from one collection), so
-// a Pipeline with an image policy is built in the node shape, or refused
-// (compactUnsupported).
-func init() {
-	RegisterCompactUnsupported(imageVerificationUsed)
-}
-
-// imageVerificationUsed returns the feature name when the Pipeline has
-// spec.imageVerification.
-func imageVerificationUsed(in BuildInput) string {
-	if in.Pipeline == nil || in.Pipeline.Spec.ImageVerification == nil {
-		return ""
-	}
-	return "image signature verification (spec.imageVerification)"
 }

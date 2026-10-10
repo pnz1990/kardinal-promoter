@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 // RollbackRequest describes a rollback of one environment of a pipeline.
@@ -145,6 +146,9 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 	if !hasEnvironment(&p, req.Environment) {
 		return nil, fmt.Errorf("rollback: pipeline %s has no environment %q: %w", req.Pipeline, req.Environment, ErrInvalid)
 	}
+	if targets := fleetTargets(&p, req.Environment); targets != nil {
+		return planFleetRollback(ctx, c, req, targets)
+	}
 
 	h, err := loadEnvHistory(ctx, c, req.Namespace, req.Pipeline, req.Environment)
 	if err != nil {
@@ -167,7 +171,11 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 			plan.CurrentName, ErrConflict)
 	}
 
-	rolledBack, rbErr := rolledBackFrom(ctx, c, req.Namespace, req.Pipeline, req.Environment)
+	fleet := ""
+	if graph.HasFleets(&p) {
+		fleet = graph.FleetOf(&p, req.Environment)
+	}
+	rolledBack, rbErr := rolledBackFrom(ctx, c, req.Namespace, req.Pipeline, req.Environment, fleet)
 	if rbErr != nil {
 		return nil, fmt.Errorf("rollback: %w", rbErr)
 	}
@@ -626,6 +634,90 @@ func repositories(images []v1alpha1.ImageRef) string {
 	return strings.Join(repos, ", ")
 }
 
+// fleetTargets returns the target environments of env when env is a fleet
+// environment of p, else nil.
+func fleetTargets(p *v1alpha1.Pipeline, env string) []string {
+	for _, e := range p.Spec.Environments {
+		if e.Name == env && e.Fleet != nil {
+			byFleet, _ := graph.FleetTargetEnvironments(p)
+			if t := byFleet[env]; len(t) > 0 {
+				return t
+			}
+			return []string{}
+		}
+	}
+	return nil
+}
+
+// planFleetRollback plans the rollback of a whole fleet (kardinal rollback
+// --env <fleet>): one rollback Bundle with intent.targetEnvironment the fleet,
+// whose Graph promotes the restored artifacts to every target. It plans
+// from the fleet's first target that has something deployed, by
+// PlanRollback's rules, and only when every target that has something
+// deployed runs the same Bundle: targets on different versions (a rollout
+// part way, or one target rolled back alone) would all get the version
+// before the reference target's, which may be older than what another
+// target runs. Then it refuses with ErrConflict naming each target's Bundle,
+// unless ToBundle says where to go.
+func planFleetRollback(ctx context.Context, c client.Reader, req RollbackRequest, targets []string) (*RollbackPlan, error) {
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("rollback: fleet environment %s has no targets: %w", req.Environment, ErrInvalid)
+	}
+	ref := ""
+	runs := map[string]string{}
+	var deployedIn []string
+	for _, t := range targets {
+		h, err := loadEnvHistory(ctx, c, req.Namespace, req.Pipeline, t)
+		if err != nil {
+			return nil, fmt.Errorf("rollback of fleet %s: %w", req.Environment, err)
+		}
+		if d := h.deployed(); d != "" {
+			runs[t] = d
+			deployedIn = append(deployedIn, t)
+			if ref == "" {
+				ref = t
+			}
+		}
+	}
+	if ref == "" {
+		return nil, fmt.Errorf("rollback: nothing has been deployed to any target of fleet %s in pipeline %s yet: %w",
+			req.Environment, req.Pipeline, ErrConflict)
+	}
+	if req.ToBundle == "" && req.FromBundle == "" {
+		for _, t := range deployedIn {
+			if runs[t] != runs[ref] {
+				parts := make([]string, 0, len(deployedIn))
+				for _, x := range deployedIn {
+					parts = append(parts, x+" runs "+runs[x])
+				}
+				return nil, fmt.Errorf("rollback: the targets of fleet %s run different Bundles (%s); "+
+					"name the Bundle to go back to with --to, or roll back one target with --env <target>: %w",
+					req.Environment, strings.Join(parts, ", "), ErrConflict)
+			}
+		}
+	}
+	// With --to, plan from the first target where going there is a rollback
+	// (the Bundle was Verified there and is not what it runs now); targets
+	// that already run it are Verified at once.
+	candidates := []string{ref}
+	if req.ToBundle != "" {
+		candidates = deployedIn
+	}
+	var lastErr error
+	for _, t := range candidates {
+		sub := req
+		sub.Environment = t
+		plan, err := PlanRollback(ctx, c, sub)
+		if err != nil {
+			lastErr = fmt.Errorf("rollback of fleet %s (planned from target %s): %w", req.Environment, t, err)
+			continue
+		}
+		plan.Bundle.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: req.Environment}
+		return plan, nil
+	}
+	return nil, lastErr
+}
+
 // buildRollbackBundle builds the rollback Bundle of plan. restored holds the
 // images and config ref to deploy (restoreSources.restore).
 func buildRollbackBundle(ctx context.Context, req RollbackRequest, plan *RollbackPlan, restored *v1alpha1.Bundle) *v1alpha1.Bundle {
@@ -678,9 +770,10 @@ func buildRollbackBundle(ctx context.Context, req RollbackRequest, plan *Rollbac
 
 // rolledBackFrom returns the Bundles that a rollback in the environment has
 // rolled back from: the kardinal.io/rollback-from annotation of every rollback
-// Bundle of the pipeline that targets env. Rollback Bundles created before the
+// Bundle of the pipeline that targets env, or fleet (the fleet env is a
+// target of; "" when none). Rollback Bundles created before the
 // annotation existed are not counted.
-func rolledBackFrom(ctx context.Context, c client.Reader, ns, pipeline, env string) (map[string]bool, error) {
+func rolledBackFrom(ctx context.Context, c client.Reader, ns, pipeline, env, fleet string) (map[string]bool, error) {
 	var list v1alpha1.BundleList
 	if err := c.List(ctx, &list, client.InNamespace(ns), client.MatchingLabels{LabelRollback: "true"}); err != nil {
 		return nil, fmt.Errorf("list rollback bundles of pipeline %s: %w", pipeline, err)
@@ -692,7 +785,9 @@ func rolledBackFrom(ctx context.Context, c client.Reader, ns, pipeline, env stri
 		if from == "" || b.Spec.Pipeline != pipeline {
 			continue
 		}
-		if b.Spec.Intent != nil && b.Spec.Intent.TargetEnvironment != "" && b.Spec.Intent.TargetEnvironment != env {
+		// A rollback of env, or of the whole fleet env is a target of.
+		if t := b.Spec.Intent; t != nil && t.TargetEnvironment != "" && t.TargetEnvironment != env &&
+			(fleet == "" || t.TargetEnvironment != fleet) {
 			continue
 		}
 		out[from] = true

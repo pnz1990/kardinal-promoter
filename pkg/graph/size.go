@@ -49,6 +49,15 @@ func EstimateSize(g *Graph) (int, error) {
 	return len(data) + ObjectCount(g)*managedResourceBytes, nil
 }
 
+// admissionData maps the compact shape's admission defs to the data
+// nodes they filter: a collection over an admission creates at most every
+// item of the data.
+var admissionData = map[string]string{
+	NodePromotionMetrics:  NodeMetricCheckData,
+	NodePromotionHooks:    NodeHookRunData,
+	NodePromotionAnalyses: NodeAnalysisRunData,
+}
+
 // reDefList matches a forEach expression that reads a def node's list field.
 var reDefList = regexp.MustCompile(`^\$\{([A-Za-z][A-Za-z0-9]*)\.([A-Za-z][A-Za-z0-9]*)\}$`)
 
@@ -85,10 +94,10 @@ func ObjectCount(g *Graph) int {
 			for _, expr := range n.ForEach[0] {
 				if m := reDefList.FindStringSubmatch(expr); m != nil {
 					src := m[1]
-					if src == NodePromotionMetrics {
-						// A computed admission list: at most every instance
-						// in the data.
-						src = NodeMetricCheckData
+					if data, ok := admissionData[src]; ok {
+						// A computed admission list: at most every item in
+						// the data.
+						src = data
 					}
 					if list, ok := defs[src][m[2]].([]interface{}); ok {
 						items = len(list)

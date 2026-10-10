@@ -329,11 +329,19 @@ func validateSkipNames(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1al
 		return nil
 	}
 	known := make(map[string]bool, len(pipeline.Spec.Environments))
+	fleets := map[string]bool{}
 	for _, e := range pipeline.Spec.Environments {
 		known[e.Name] = true
+		if e.Fleet != nil {
+			fleets[e.Name] = true
+		}
 	}
 	var unknown []string
 	for _, s := range bundle.Spec.Intent.SkipEnvironments {
+		if fleets[s] {
+			return fmt.Errorf("build: intent.skipEnvironments names fleet environment %q; skipping a fleet is not supported "+
+				"(use intent.targetEnvironment to stop before it)", s)
+		}
 		if !known[s] {
 			unknown = append(unknown, s)
 		}
@@ -391,8 +399,13 @@ func validateBundleStrategy(pipeline *kardinalv1alpha1.Pipeline, bundle *kardina
 	for _, name := range envs {
 		promoted[name] = true
 	}
+	// The promoted environments' specs: a fleet target has its fleet's.
+	specs := make([]kardinalv1alpha1.EnvironmentSpec, 0, len(envs))
+	for _, name := range envs {
+		specs = append(specs, findEnvSpec(pipeline, name))
+	}
 	if bundle.Spec.Type == "chart" {
-		for _, e := range pipeline.Spec.Environments {
+		for _, e := range specs {
 			if promoted[e.Name] && e.Update.Strategy != "helm" {
 				strategy := e.Update.Strategy
 				if strategy == "" {
@@ -409,7 +422,7 @@ func validateBundleStrategy(pipeline *kardinalv1alpha1.Pipeline, bundle *kardina
 	if bundle.Spec.Type != "config" && bundle.Spec.Type != "mixed" {
 		return nil
 	}
-	for _, e := range pipeline.Spec.Environments {
+	for _, e := range specs {
 		if promoted[e.Name] && e.Update.Strategy == "argocd" {
 			return fmt.Errorf("build: environment %q uses update.strategy argocd, which does not support %s "+
 				"Bundles: it sets only the image in the Argo CD Application and would skip the config change; "+

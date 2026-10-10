@@ -124,9 +124,21 @@ was verified is the one deployed. The kustomize and Helm strategies write the di
 ## Signed commits
 
 With `commits.requireSigned`, the config Bundle's `configRef.commitSHA` must be the full 40- or
-64-character SHA (a short one fails the Bundle), and its repository must be on the controller's
-SCM host (`--scm-api-url`; `api.github.com` is `github.com`). The SCM is asked about that exact
-commit, and the SHA it answers for must be the same.
+64-character SHA (a short one fails the Bundle). The commit is checked with the Pipeline's SCM
+provider: the ScmProvider or ClusterScmProvider of its `spec.git.providerRef`
+([several SCM providers](scm-providers.md#several-scm-providers-scmprovider-and-clusterscmprovider)),
+otherwise the controller's `--scm-provider`. The repository must be on that provider's host
+(its `apiURL`, or `--scm-api-url`; `api.github.com` is `github.com`). The SCM is asked about
+that exact commit, and the SHA it answers for must be the same.
+
+With a `providerRef`, the provider is resolved as for the Pipeline's PRs: its own token, the
+same UID the Bundle's Graph was built with, a ClusterScmProvider's `allowedNamespaces`, and its
+`allowedRepositories`, which must allow the config repository (`configRef.gitRepo`, or
+`spec.git.url`). A provider that is gone, was created again, or does not allow the namespace or
+the repository fails the ImageVerification with the reason; it never falls back to the
+controller's provider. So does a provider whose `apiURL` is refused (not a URL, or `http://`
+without `scm.providersAllowInsecureHTTP`). A provider that cannot be used yet (its token Secret
+missing or not labeled `kardinal.io/referenceable`) is retried until the policy's timeout.
 
 The SCM's verdict is about the key it holds for the signer; `allowedSigners` narrows it to the
 people you accept, by login or email as the SCM reports the verified signer. Forgejo reports the
@@ -145,19 +157,18 @@ lists the platform identity explicitly:
 |---|---|---|
 | GitHub | `web-flow` | web UI edits, merges, squash merges and reverts, signed with GitHub's key |
 | GitLab | `gitlab-system` | commits GitLab created and signed itself (status `verified_system`: web UI, API) |
-| Forgejo / Gitea | `forgejo-instance` | commits signed with the instance key (`repository.signing`): a verified signature whose signer is not a user of the instance (`GET /api/v1/users/{name}` answers 404), or one named in `--scm-instance-signers` (Helm `scm.instanceSigners`: the instance's `SIGNING_NAME` or `SIGNING_EMAIL`) |
+| Forgejo / Gitea | `forgejo-instance` | commits signed with the instance key (`repository.signing`): a verified signature whose signer is not a user of the instance (`GET /api/v1/users/{name}` answers 404), or one named in `--scm-instance-signers` (Helm `scm.instanceSigners`: the instance's `SIGNING_NAME` or `SIGNING_EMAIL`), or, for a Pipeline's ScmProvider or ClusterScmProvider, in its `spec.instanceSigners` |
 
 To accept PRs merged in the web UI (the usual GitOps flow), list the identity, for example
 `allowedSigners: [web-flow, alice, bob@example.com]`. Anyone who can merge through the web UI then
 gets such a commit, so pair it with branch protection that requires reviews.
 
+In a [compact Graph](pipeline-reference.md#large-pipelines) (above `--graph-compact-above`
+environments) it works the same: the root environments' PromotionSteps name the
+ImageVerification and wait for it, and so do their pre-deploy hooks.
+
 ## What it cannot do
 
-- It needs the node Graph shape. A Pipeline whose Bundles get a
-  [compact Graph](pipeline-reference.md#large-pipelines) (more than `--graph-compact-above`
-  environments, default 100, or the annotation `kardinal.io/graph-shape: compact`) is
-  `Ready=False`, and its Bundles fail with `GraphBuildFailed` naming image signature
-  verification instead of promoting unverified.
 - It verifies before promotion, not at deploy time in the target cluster. To enforce signatures
   on every Pod, whoever deploys it, add admission-time verification there:
   [Sigstore policy-controller](https://docs.sigstore.dev/policy-controller/overview/) or

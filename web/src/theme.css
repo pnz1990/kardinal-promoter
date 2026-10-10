@@ -149,3 +149,10 @@
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.4; }
 }
+
+/* ── A rejected Bundle (kardinal reject) on the Bundle card ──────────────────── */
+.bundle-rejected {
+  flex-basis: 100%;
+  color: var(--color-error);
+  font-size: 0.8rem;
+}

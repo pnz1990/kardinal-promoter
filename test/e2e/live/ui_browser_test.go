@@ -772,6 +772,52 @@ func TestUI_BrowserStatic(t *testing.T) {
 	framework.Playwright(t, "static.spec.ts", browserEnv(c, a.ns))
 }
 
+// TestUI_BrowserApprovals checks an approval gate and a rejected Bundle in
+// the UI. podinfo's prod waits at a gate that needs two approvals from
+// release-managers; one allowed person approves with the CLI and one outside
+// the group does too. The pipeline view shows 1 of 2, which decision counts
+// and which does not and why, and the approve command. The Bundle is then
+// rejected with the CLI: the view says who rejected it and why, its chip is
+// Rejected, and the gate no longer holds it.
+//
+// Covers UI-APPROVALS-01, UI-REJECTED-01.
+func TestUI_BrowserApprovals(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	c := e.CLI(t)
+	a := newArgoApp(t, e, "test", "prod")
+	g := framework.Gate(a.ns, "two-approvers", "prod", "true", recheck)
+	g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 2, AllowedGroups: []string{"release-managers"}, ExcludeAuthor: true}
+	e.CreateGate(t, g)
+	a.apply(t, a.pipeline(nil))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	e.WaitGateReady(t, a.ns, bundle, "prod", "two-approvers", false, "waiting for approvals: 0 of 2", gateTimeout)
+
+	// The not-counted decision is the Bundle's creator's (excludeAuthor): an
+	// approval from outside the allowed group is not copied into the gate.
+	const approver = "alice@example.com"
+	outsider := whoAmI(t, e)
+	as := func(path string, args ...string) {
+		t.Helper()
+		r := c.Exec(framework.CLIOptions{Kubeconfig: path}, c.Args(a.ns, args...)...)
+		require.Equal(t, 0, r.Code, r.Output())
+	}
+	as(userKubeconfig(t, e, a.ns, approver, "release-managers"), "approve", bundle, "--env", "prod", "--comment", "canary looks clean")
+	as(userKubeconfig(t, e, a.ns, outsider, "release-managers"), "approve", bundle, "--env", "prod")
+	e.WaitGate(t, a.ns, bundle, "prod", "two-approvers", gateTimeout, "two decisions, one counted", func(g *v1alpha1.PolicyGate) bool {
+		return len(g.Status.Approvals) == 2 && !g.Status.Ready
+	})
+	framework.Playwright(t, "approvals.spec.ts", browserEnv(mainUI(t, e), a.ns,
+		"KARDINAL_UI_BUNDLE", bundle, "KARDINAL_UI_APPROVER", approver, "KARDINAL_UI_OUTSIDER", outsider))
+
+	const reason = "e2e: CVE in the base image"
+	e.MustKardinal(t, a.ns, "reject", bundle, "--reason", reason)
+	e.WaitBundlePhase(t, a.ns, bundle, "Rejected", time.Minute)
+	framework.Playwright(t, "rejected.spec.ts", browserEnv(mainUI(t, e), a.ns,
+		"KARDINAL_UI_BUNDLE", bundle, "KARDINAL_UI_REJECTER", whoAmI(t, e), "KARDINAL_UI_REASON", reason))
+}
+
 // TestUI_BrowserWaves checks how the UI draws a wave (#1580): podinfo is
 // test, then w1…w6 in wave 1 after it, all Verified by one Bundle. The fleet
 // board shows the wave as one plate, the stage lane as one card that counts

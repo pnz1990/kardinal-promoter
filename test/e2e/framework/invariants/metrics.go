@@ -61,6 +61,20 @@ type PodSeries struct {
 	GoroutinesStart float64   `json:"goroutinesStart"`
 	GoroutinesMax   float64   `json:"goroutinesMax"`
 	GoroutinesEnd   float64   `json:"goroutinesEnd"`
+	// WarmAt is the warm baseline (Options.WarmAt, or the series' start):
+	// the *Warm fields are the first sample at or after it.
+	WarmAt     time.Time `json:"warmAt"`
+	RSSWarmMiB float64   `json:"rssWarmMiB"`
+	// SysWarmMiB and SysEndMiB are the memory the Go runtime holds from the
+	// OS (go_memstats_sys_bytes); HeapWarmMiB is the lowest heap in use
+	// (go_memstats_heap_inuse_bytes) in the warmHeapWindow after the warm
+	// baseline, and HeapAfterGCMiB the heap in use
+	// after the first garbage collection once the load is over, read from
+	// the Pod (0 when not measured).
+	SysWarmMiB     float64 `json:"sysWarmMiB"`
+	SysEndMiB      float64 `json:"sysEndMiB"`
+	HeapWarmMiB    float64 `json:"heapWarmMiB"`
+	HeapAfterGCMiB float64 `json:"heapAfterGcMiB"`
 	// LeaderStart and LeaderEnd say whether the Pod led at the start and
 	// at the end of its series (leader_election_master_status): a standby
 	// that took over starts every controller, so its growth is no leak.
@@ -132,6 +146,15 @@ func checkMetrics(ctx context.Context, e *framework.Env, o Options) (*Metrics, [
 		}
 		time.Sleep(10 * time.Second)
 	}
+	// The Pods' memory and goroutines end once the work the load left has
+	// drained and the goroutine count stopped falling: the last Bundles
+	// settling spawn a short burst of goroutines (the RC soak: 520 -> 1671
+	// for under a minute), which the window's last sample can land on.
+	memEnd := settleGoroutines(time.Now, time.Sleep, func() (float64, bool) {
+		v := byLabel(ctx, e, `sum by (job) (go_goroutines{`+ctrlSel+`})`, "job")
+		g, ok := v[framework.ControllerName]
+		return g, ok
+	})
 	var maxQ []string
 	for k, v := range m.QueueDepthMax {
 		if v >= 10 {
@@ -148,8 +171,15 @@ func checkMetrics(ctx context.Context, e *framework.Env, o Options) (*Metrics, [
 		m.StepSeconds[k] = Quantiles{P50: round(v), P99: round(p99[k])}
 	}
 
-	m.Pods = podSeries(ctx, e, start, end)
-	leak.Violations = leaks(m.Pods, start, end, memoryLimitMiB(ctx, e), o.SharedController, o.RaceBuild)
+	warm := start
+	if o.WarmAt.After(start) {
+		warm = o.WarmAt
+	}
+	m.Pods = podSeries(ctx, e, start, memEnd, warm)
+	if o.RaceBuild && !o.SharedController && warm != start {
+		heapAfterGC(ctx, e, m.Pods, end)
+	}
+	leak.Violations = leaks(m.Pods, start, memEnd, memoryLimitMiB(ctx, e), o.SharedController, o.RaceBuild, warm != start)
 
 	push := Result{Name: "metrics-push-efficiency"}
 	pushSel := `kardinal_git_operations_total{` + ctrlSel + `,operation="push"}`
@@ -258,14 +288,17 @@ func countsFromZero(end, start []framework.PromSample, label string) map[string]
 	return out
 }
 
-// podSeries reads each controller Pod's RSS and goroutines over the window.
-func podSeries(ctx context.Context, e *framework.Env, start, end time.Time) []PodSeries {
+// podSeries reads each controller Pod's RSS, goroutines and Go memory over
+// the window; the *Warm fields are taken at warm.
+func podSeries(ctx context.Context, e *framework.Env, start, end, warm time.Time) []PodSeries {
 	step := 15 * time.Second
 	if d := end.Sub(start); d > 2*time.Hour {
 		step = d / 400
 	}
-	rss, _ := e.PromQueryRange(ctx, `process_resident_memory_bytes{`+ctrlSel+`}`, start, end, step)
-	gor, _ := e.PromQueryRange(ctx, `go_goroutines{`+ctrlSel+`}`, start, end, step)
+	q := func(metric string) []framework.PromSeries {
+		s, _ := e.PromQueryRange(ctx, metric+`{`+ctrlSel+`}`, start, end, step)
+		return s
+	}
 	byPod := map[string]*PodSeries{}
 	get := func(pod string) *PodSeries {
 		if byPod[pod] == nil {
@@ -273,18 +306,31 @@ func podSeries(ctx context.Context, e *framework.Env, start, end time.Time) []Po
 		}
 		return byPod[pod]
 	}
-	for _, s := range rss {
+	for _, s := range q("process_resident_memory_bytes") {
 		if len(s.Points) == 0 {
 			continue
 		}
 		p := get(s.Metric["pod"])
 		p.From, p.To = s.Points[0].Time, s.Points[len(s.Points)-1].Time
 		p.RSSStartMiB, p.RSSEndMiB = mib(s.Points[0].Value), mib(s.Points[len(s.Points)-1].Value)
+		w := pointAt(s.Points, warm)
+		p.WarmAt, p.RSSWarmMiB = w.Time, mib(w.Value)
 		for _, pt := range s.Points {
 			p.RSSMaxMiB = math.Max(p.RSSMaxMiB, mib(pt.Value))
 		}
 	}
-	for _, s := range gor {
+	for _, s := range q("go_memstats_sys_bytes") {
+		if len(s.Points) > 0 {
+			p := get(s.Metric["pod"])
+			p.SysWarmMiB, p.SysEndMiB = mib(pointAt(s.Points, warm).Value), mib(s.Points[len(s.Points)-1].Value)
+		}
+	}
+	for _, s := range q("go_memstats_heap_inuse_bytes") {
+		if len(s.Points) > 0 {
+			get(s.Metric["pod"]).HeapWarmMiB = mib(minFrom(s.Points, warm, warmHeapWindow))
+		}
+	}
+	for _, s := range q("go_goroutines") {
 		if len(s.Points) == 0 {
 			continue
 		}
@@ -305,6 +351,121 @@ func podSeries(ctx context.Context, e *framework.Env, start, end time.Time) []Po
 		out = append(out, *p)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].From.Before(out[j].From) })
+	return out
+}
+
+// goroutineSettleStep and goroutineSettleMax pace settleGoroutines: two
+// steps of podSeries' 15s range query between reads, for at most 2 minutes.
+const (
+	goroutineSettleStep = 30 * time.Second
+	goroutineSettleMax  = 2 * time.Minute
+)
+
+// settleGoroutines waits until the controller's goroutine count (read)
+// stops falling, reading it every goroutineSettleStep, for at most
+// goroutineSettleMax, and returns the time of the last read: where the
+// memory and goroutine series end. A read that fails ends the wait.
+func settleGoroutines(now func() time.Time, sleep func(time.Duration), read func() (float64, bool)) time.Time {
+	deadline := now().Add(goroutineSettleMax)
+	prev, ok := read()
+	for ok && now().Before(deadline) {
+		sleep(goroutineSettleStep)
+		cur, curOK := read()
+		if !curOK || cur >= prev {
+			break
+		}
+		prev = cur
+	}
+	return now()
+}
+
+// warmHeapWindow is how long after the warm baseline the warm heap is the
+// lowest sample of: one sample would land anywhere on the GC sawtooth.
+const warmHeapWindow = 5 * time.Minute
+
+// minFrom is the lowest value of the points in [t, t+d], or pointAt(t)'s
+// when none is in it.
+func minFrom(pts []framework.PromPoint, t time.Time, d time.Duration) float64 {
+	low := math.Inf(1)
+	for _, p := range pts {
+		if !p.Time.Before(t) && !p.Time.After(t.Add(d)) {
+			low = math.Min(low, p.Value)
+		}
+	}
+	if math.IsInf(low, 1) {
+		return pointAt(pts, t).Value
+	}
+	return low
+}
+
+// pointAt is the first point at or after t, or the last point.
+func pointAt(pts []framework.PromPoint, t time.Time) framework.PromPoint {
+	for _, p := range pts {
+		if !p.Time.Before(t) {
+			return p
+		}
+	}
+	return pts[len(pts)-1]
+}
+
+// heapAfterGC sets each Pod's HeapAfterGCMiB: the heap in use read from the
+// Pod's metrics endpoint just after its first garbage collection that ended
+// after loadEnd. The Go runtime forces a collection at least every two
+// minutes, so this waits up to three. A Pod with none stays at 0, which
+// leaks reports.
+func heapAfterGC(ctx context.Context, e *framework.Env, pods []PodSeries, loadEnd time.Time) {
+	deadline := time.Now().Add(3 * time.Minute)
+	for {
+		left := 0
+		for i := range pods {
+			if pods[i].HeapAfterGCMiB > 0 {
+				continue
+			}
+			v, err := podMetrics(ctx, e, pods[i].Pod, "go_memstats_last_gc_time_seconds", "go_memstats_heap_inuse_bytes")
+			if err == nil && v[0] > float64(loadEnd.Unix()) && v[1] > 0 {
+				pods[i].HeapAfterGCMiB = mib(v[1])
+				continue
+			}
+			left++
+		}
+		if left == 0 || time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(5 * time.Second)
+	}
+}
+
+// podMetrics reads the named unlabelled metrics from a controller Pod's
+// metrics endpoint through the API server's Pod proxy.
+func podMetrics(ctx context.Context, e *framework.Env, pod string, names ...string) ([]float64, error) {
+	raw, err := e.Kube.CoreV1().RESTClient().Get().
+		AbsPath("/api/v1/namespaces", framework.ControllerNamespace, "pods", pod+":8080", "proxy", "metrics").DoRaw(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("metrics of %s: %w", pod, err)
+	}
+	return parseMetrics(string(raw), names...), nil
+}
+
+// parseMetrics returns the values of the named unlabelled samples in a
+// Prometheus text exposition (NaN for one not found).
+func parseMetrics(text string, names ...string) []float64 {
+	out := make([]float64, len(names))
+	for i := range out {
+		out[i] = math.NaN()
+	}
+	for _, line := range strings.Split(text, "\n") {
+		name, val, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		for i, n := range names {
+			if name == n {
+				if f, err := strconv.ParseFloat(strings.TrimSpace(val), 64); err == nil {
+					out[i] = f
+				}
+			}
+		}
+	}
 	return out
 }
 
@@ -358,31 +519,43 @@ func restarts(ctx context.Context, e *framework.Env, o Options, check, ns, name 
 	return res
 }
 
-// leaks checks each controller Pod's series: one that ran the whole window
-// in one role (it started within a minute of start, was scraped within a
-// minute of end, and led at both ends or at neither) must not end with more than 1.5x (plus 100) its goroutines or 2x
-// (plus 200 MiB) its resident memory, unless other tests shared the
-// controller; and no Pod may pass 90% of the memory limit.
-// RSS growth a controller Pod may show over a test without counting as a
-// leak: end <= factor x start + slack MiB. The race detector keeps shadow
-// memory for every allocation and never gives it back, so a -race build
-// grows more under the same load: measured over the full profile, steady
-// leaders grew up to 2.3x (165 to 380 MiB) and +261 MiB (641 to 902 MiB)
-// with no leak (test/e2e/README.md#scale-suite).
+// leaks checks each controller Pod's series. A Pod that ran the whole
+// window in one role (it started within a minute of start, was scraped
+// within a minute of end, and led at both ends or at neither), unless other
+// tests shared the controller, must not end with more than 1.5x (plus 100)
+// its goroutines, and its memory is measured from the warm baseline
+// (PodSeries.WarmAt):
+//
+//   - built without -race: resident memory at most 2x (plus 200 MiB) the
+//     warm sample;
+//   - built with -race, with a warm baseline (Options.WarmAt): the race detector's shadow memory is not the
+//     controller's (the Go runtime does not account for it, and it is never
+//     returned), so RSS is not bounded. Instead the memory the Go runtime
+//     holds from the OS (go_memstats_sys_bytes) may grow at most 25% from
+//     the warm sample to the end, and the heap in use after the first
+//     garbage collection once the load is over must be below the lowest
+//     heap in use of the five minutes after the warm baseline: what the
+//     load left reachable is gone. A missing Go memory series fails;
+//   - built with -race, with no warm baseline (a test whose load has no
+//     steady state measures from its start): resident memory at most 2.5x
+//     (plus 500 MiB) the start, as before the warm baseline existed. Steady
+//     leaders measured up to 2.3x and +261 MiB in the full profile.
+//
+// No Pod may pass 90% of the memory limit, -race or not.
 var (
 	rssGrowth     = growth{factor: 2, slackMiB: 200}
 	rssGrowthRace = growth{factor: 2.5, slackMiB: 500}
 )
 
+// raceSysGrowth is how much go_memstats_sys_bytes may grow from the warm
+// sample to the end in a -race build.
+const raceSysGrowth = 1.25
+
 type growth struct{ factor, slackMiB float64 }
 
 func (g growth) exceeded(start, end float64) bool { return end > g.factor*start+g.slackMiB }
 
-func leaks(pods []PodSeries, start, end time.Time, limitMiB float64, shared, race bool) []string {
-	rss := rssGrowth
-	if race {
-		rss = rssGrowthRace
-	}
+func leaks(pods []PodSeries, start, end time.Time, limitMiB float64, shared, race, warm bool) []string {
 	var v []string
 	if len(pods) == 0 {
 		return []string{"Prometheus has no process_resident_memory_bytes for the controller in the run's window"}
@@ -395,9 +568,27 @@ func leaks(pods []PodSeries, start, end time.Time, limitMiB float64, shared, rac
 			v = append(v, fmt.Sprintf("%s: goroutines %.0f at the start, %.0f at the end (peak %.0f)",
 				p.Pod, p.GoroutinesStart, p.GoroutinesEnd, p.GoroutinesMax))
 		}
-		if whole && !shared && rss.exceeded(p.RSSStartMiB, p.RSSEndMiB) {
-			v = append(v, fmt.Sprintf("%s: resident memory %.0f MiB at the start, %.0f MiB at the end (over %gx + %g MiB; peak %.0f)",
-				p.Pod, p.RSSStartMiB, p.RSSEndMiB, rss.factor, rss.slackMiB, p.RSSMaxMiB))
+		at := p.WarmAt.UTC().Format(time.RFC3339)
+		switch {
+		case !whole || shared:
+		case race && !warm:
+			if rssGrowthRace.exceeded(p.RSSWarmMiB, p.RSSEndMiB) {
+				v = append(v, fmt.Sprintf("%s: resident memory %.0f MiB at the start, %.0f MiB at the end (over %gx + %g MiB; peak %.0f)",
+					p.Pod, p.RSSWarmMiB, p.RSSEndMiB, rssGrowthRace.factor, rssGrowthRace.slackMiB, p.RSSMaxMiB))
+			}
+		case race && (p.SysWarmMiB == 0 || p.HeapWarmMiB == 0):
+			v = append(v, fmt.Sprintf("%s: no go_memstats_sys_bytes or go_memstats_heap_inuse_bytes at the warm baseline (%s): Go memory not measured", p.Pod, at))
+		case race && p.SysEndMiB > raceSysGrowth*p.SysWarmMiB:
+			v = append(v, fmt.Sprintf("%s: Go runtime memory (go_memstats_sys_bytes) %.0f MiB warm (%s), %.0f MiB at the end (over %gx)",
+				p.Pod, p.SysWarmMiB, at, p.SysEndMiB, raceSysGrowth))
+		case race && p.HeapAfterGCMiB == 0:
+			v = append(v, fmt.Sprintf("%s: no garbage collection seen within 3 minutes of the load's end: heap after GC not measured", p.Pod))
+		case race && p.HeapAfterGCMiB >= p.HeapWarmMiB:
+			v = append(v, fmt.Sprintf("%s: heap in use %.0f MiB after a GC at the end, not below the warm %.0f MiB (%s)",
+				p.Pod, p.HeapAfterGCMiB, p.HeapWarmMiB, at))
+		case !race && rssGrowth.exceeded(p.RSSWarmMiB, p.RSSEndMiB):
+			v = append(v, fmt.Sprintf("%s: resident memory %.0f MiB warm (%s), %.0f MiB at the end (over %gx + %g MiB; peak %.0f)",
+				p.Pod, p.RSSWarmMiB, at, p.RSSEndMiB, rssGrowth.factor, rssGrowth.slackMiB, p.RSSMaxMiB))
 		}
 		if limitMiB > 0 && p.RSSMaxMiB > 0.9*limitMiB {
 			v = append(v, fmt.Sprintf("%s: resident memory peaked at %.0f MiB, over 90%% of its %.0f MiB limit",

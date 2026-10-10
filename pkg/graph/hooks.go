@@ -100,7 +100,13 @@ func hooksOf(env kardinalv1alpha1.EnvironmentSpec, phase string) []kardinalv1alp
 	return out
 }
 
+// findEnvSpec is the spec of environment name of pipeline: a fleet target
+// is its fleet's spec with the target's name, path and health
+// (EnvironmentSpecFor), and any other name one of spec.environments.
 func findEnvSpec(pipeline *kardinalv1alpha1.Pipeline, name string) kardinalv1alpha1.EnvironmentSpec {
+	if e, ok := EnvironmentSpecFor(pipeline, name); ok {
+		return e
+	}
 	for _, e := range pipeline.Spec.Environments {
 		if e.Name == name {
 			return e
@@ -336,11 +342,17 @@ func stepConds(held string, upstreams, gateNames []string, gateReady func(name s
 // passed the point a hook of phase runs at (started, for a pre hook;
 // finished, for a post hook), read through refSteps.
 func stepAdvanced(stepK8sName, phase string) string {
+	return stepAdvancedExpr(strconv.Quote(stepK8sName), phase)
+}
+
+// stepAdvancedExpr is stepAdvanced with the step name as a CEL expression
+// (a literal, or a collection item's field).
+func stepAdvancedExpr(step, phase string) string {
 	states := `!(s.?status.?state.orValue("") in ["", "Pending"])`
 	if phase == kardinalv1alpha1.HookPhasePost {
 		states = `s.?status.?state.orValue("") in ["Verified", "Failed", "AbortedByAlarm", "RollingBack"]`
 	}
-	return fmt.Sprintf(`${%s.exists(s, s.metadata.name == %s && %s)}`, refStepsNodeID, strconv.Quote(stepK8sName), states)
+	return fmt.Sprintf(`${%s.exists(s, s.metadata.name == %s && %s)}`, refStepsNodeID, step, states)
 }
 
 // hookRecorded is a HookRun's spec.recorded: the step's
@@ -350,32 +362,16 @@ func stepAdvanced(stepK8sName, phase string) string {
 // string whatever matches: kro type-checks a conditional's branches
 // against the HookRun schema.
 func hookRecorded(stepK8sName, phase, hook string) map[string]interface{} {
+	return hookRecordedExpr(strconv.Quote(stepK8sName), strconv.Quote(phase), strconv.Quote(hook))
+}
+
+// hookRecordedExpr is hookRecorded with the step name, phase and hook as CEL
+// expressions.
+func hookRecordedExpr(step, phase, hook string) map[string]interface{} {
 	field := func(f string) string {
 		return fmt.Sprintf(`${%s.filter(s, s.metadata.name == %s).map(s, s.?status.?hookRecords.orValue([]).filter(r, `+
 			`r.?hook.orValue("") == %s && r.?phase.orValue("") == %s).map(r, r.?%s.orValue(""))).map(l, l.join("")).join("")}`,
-			refStepsNodeID, strconv.Quote(stepK8sName), strconv.Quote(hook), strconv.Quote(phase), f)
+			refStepsNodeID, step, hook, phase, f)
 	}
 	return map[string]interface{}{"specHash": field("specHash"), "result": field("result"), "message": field("message")}
-}
-
-// The compact shape does not build HookRun nodes or the mirror patch node:
-// both are per environment and read the environment's step node, which the
-// compact shape folds into the PromotionSteps collection. A Pipeline with
-// hooks is built in the node shape, or refused (compactUnsupported).
-func init() {
-	RegisterCompactUnsupported(hooksUsed)
-}
-
-// hooksUsed returns the feature name when an environment of the Pipeline
-// has hooks.
-func hooksUsed(in BuildInput) string {
-	if in.Pipeline == nil {
-		return ""
-	}
-	for _, env := range in.Pipeline.Spec.Environments {
-		if len(env.Hooks) > 0 {
-			return "pre- and post-deploy hooks (spec.environments[].hooks)"
-		}
-	}
-	return ""
 }

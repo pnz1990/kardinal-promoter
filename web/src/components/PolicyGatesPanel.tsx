@@ -7,10 +7,14 @@
 import { useState, useEffect } from 'react'
 import type { GateState, PolicyGate } from '../types'
 import { HealthChip, healthChipColors, type HealthState } from './HealthChip'
+import { ApprovalQuorum } from './ApprovalQuorum'
 
 interface Props {
   gates: PolicyGate[]
   loading?: boolean
+  /** Called after an approve, reject or revoke from an approval gate, so the
+   *  parent refreshes the gates. */
+  onDecided?: () => void
 }
 
 function formatAge(iso: string | undefined): string {
@@ -78,7 +82,7 @@ function GateSummaryChip({ gates }: { gates: PolicyGate[] }) {
   )
 }
 
-export function PolicyGatesPanel({ gates, loading }: Props) {
+export function PolicyGatesPanel({ gates, loading, onDecided }: Props) {
   const blockedCount = count(gates, 'Block')
   // #524: auto-expand when any gate holds the bundle — the blocked state is the
   // most important information on screen and should not be hidden behind a
@@ -190,6 +194,10 @@ export function PolicyGatesPanel({ gates, loading }: Props) {
                 }}>
                   {gate.reason}
                 </div>
+              )}
+              {gate.approval && (
+                <ApprovalQuorum approval={gate.approval} bundle={gate.bundle} environment={gate.environment}
+                  namespace={gate.namespace} onDecided={onDecided} />
               )}
             </div>
           ))}

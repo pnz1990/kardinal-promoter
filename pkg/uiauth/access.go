@@ -145,15 +145,10 @@ func NewAuthorizingClient(c client.Client, access AccessReviewer, scopeNamespace
 }
 
 func (c *AuthorizingClient) authorize(ctx context.Context, verb string, obj runtime.Object, namespace, name, subresource string) error {
-	gvk, err := c.GroupVersionKindFor(obj)
+	gr, err := c.groupResource(obj)
 	if err != nil {
-		return fmt.Errorf("uiauth: resolve kind: %w", err)
+		return err
 	}
-	if _, isList := obj.(client.ObjectList); isList {
-		gvk.Kind = strings.TrimSuffix(gvk.Kind, "List")
-	}
-	plural, _ := meta.UnsafeGuessKindToResource(gvk)
-	gr := schema.GroupResource{Group: gvk.Group, Resource: plural.Resource}
 	if namespace == "" {
 		namespace = c.scopeNamespace
 	}
@@ -201,14 +196,6 @@ func (c *AuthorizingClient) authorize(ctx context.Context, verb string, obj runt
 	return nil
 }
 
-// AuthorizeSubresource checks that the request's user may verb the
-// (virtual) subresource of obj, such as update pipelines/hold, without
-// reading or writing anything. Handlers call it for a change the API server
-// would authorize against a subresource the controller's own write skips.
-func (c *AuthorizingClient) AuthorizeSubresource(ctx context.Context, verb string, obj client.Object, subresource string) error {
-	return c.authorize(ctx, verb, obj, obj.GetNamespace(), obj.GetName(), subresource)
-}
-
 // Get authorizes "get" and then reads through the wrapped client.
 func (c *AuthorizingClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 	if err := c.authorize(ctx, "get", obj, key.Namespace, key.Name, ""); err != nil {
@@ -217,14 +204,143 @@ func (c *AuthorizingClient) Get(ctx context.Context, key client.ObjectKey, obj c
 	return c.Client.Get(ctx, key, obj, opts...)
 }
 
-// List authorizes "list" in the requested namespace (all namespaces when unset).
+// List authorizes "list" in the requested namespace. An all-namespaces list
+// (no namespace, no --watch-namespace) that the user may not make
+// cluster-wide falls back to namespace RBAC: the controller lists, and only
+// the items in namespaces where the user may list that kind are returned. A
+// user bound in some namespaces sees those, not a 403; a user bound nowhere
+// gets an empty list. Nothing of a namespace the user may not list is
+// returned, and no denial is recorded.
 func (c *AuthorizingClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
 	lo := &client.ListOptions{}
 	lo.ApplyOptions(opts)
-	if err := c.authorize(ctx, "list", list, lo.Namespace, "", ""); err != nil {
+	if lo.Namespace != "" || c.scopeNamespace != "" {
+		if err := c.authorize(ctx, "list", list, lo.Namespace, "", ""); err != nil {
+			return err
+		}
+		return c.Client.List(ctx, list, opts...)
+	}
+	allowed, err := c.check(ctx, "list", list, "")
+	if err != nil {
+		return c.authorize(ctx, "list", list, "", "", "") // records the 401/503
+	}
+	if allowed {
+		return c.Client.List(ctx, list, opts...)
+	}
+	// The controller lists everything into list; every return below either
+	// replaces it with the filtered items or empties it, so an error never
+	// leaves items of a namespace the user may not list in it.
+	if err := c.Client.List(ctx, list, opts...); err != nil {
+		_ = meta.SetList(list, nil)
 		return err
 	}
-	return c.Client.List(ctx, list, opts...)
+	items, err := meta.ExtractList(list)
+	if err != nil {
+		_ = meta.SetList(list, nil)
+		return fmt.Errorf("uiauth: extract list: %w", err)
+	}
+	byNamespace := map[string]bool{}
+	kept := make([]runtime.Object, 0, len(items))
+	for _, it := range items {
+		mo, ok := it.(metav1.Object)
+		if !ok {
+			continue
+		}
+		ns := mo.GetNamespace()
+		ok, seen := byNamespace[ns]
+		if !seen {
+			if ns == "" {
+				ok = false // cluster-scoped item; the cluster-wide check denied it
+			} else if ok, err = c.check(ctx, "list", list, ns); err != nil {
+				_ = meta.SetList(list, nil)
+				return c.authorize(ctx, "list", list, ns, "", "")
+			}
+			byNamespace[ns] = ok
+		}
+		if ok {
+			kept = append(kept, it)
+		}
+	}
+	return meta.SetList(list, kept)
+}
+
+// AuthorizeAction checks that the request's user may perform verb on
+// group/resource/subresource (a virtual subresource such as pipelines/pause or
+// policygates/override) for the named object, recording a denial like any
+// other check. Callers that pass it write with Privileged(), as the
+// controller, and record the user as the requester: the user needs only the
+// narrow action permission, not update on the whole object.
+func (c *AuthorizingClient) AuthorizeAction(ctx context.Context, verb, group, resource, subresource, namespace, name string) error {
+	gr := schema.GroupResource{Group: group, Resource: resource + "/" + subresource}
+	state := requestAuthFrom(ctx)
+	if state != nil && state.get() != nil {
+		return apierrors.NewForbidden(gr, name, fmt.Errorf("an earlier check in this request was denied"))
+	}
+	fail := func(d denial, err error) error {
+		if state != nil {
+			state.record(d)
+		}
+		return err
+	}
+	user, ok := UserFrom(ctx)
+	if !ok || user.Username == "" {
+		return fail(denial{code: 401, msg: "unauthorized"}, apierrors.NewUnauthorized("no authenticated user"))
+	}
+	allowed, reason, err := c.access.Allowed(ctx, user, authzv1.ResourceAttributes{
+		Namespace: namespace, Verb: verb, Group: group, Resource: resource, Subresource: subresource, Name: name,
+	})
+	if err != nil {
+		return fail(denial{code: 503, msg: "auth unavailable"}, apierrors.NewServiceUnavailable(err.Error()))
+	}
+	if !allowed {
+		msg := fmt.Sprintf("forbidden: user %q cannot %s %s/%s.%s %q in namespace %s",
+			user.Username, verb, resource, subresource, group, name, namespace)
+		if reason != "" {
+			msg += ": " + reason
+		}
+		return fail(denial{code: 403, msg: msg}, apierrors.NewForbidden(gr, name, fmt.Errorf("%s", msg)))
+	}
+	return nil
+}
+
+// Privileged is the wrapped client, which acts as the controller. Use it
+// only after AuthorizeAction allowed the action.
+func (c *AuthorizingClient) Privileged() client.Client { return c.Client }
+
+// check reports whether the request's user may perform verb on obj's kind in
+// namespace, without recording a denial. err is set when there is no user or
+// the review API fails; authorize then reports it.
+func (c *AuthorizingClient) check(ctx context.Context, verb string, obj runtime.Object, namespace string) (bool, error) {
+	if state := requestAuthFrom(ctx); state != nil && state.get() != nil {
+		return false, nil
+	}
+	user, ok := UserFrom(ctx)
+	if !ok || user.Username == "" {
+		return false, errNoUser
+	}
+	gr, err := c.groupResource(obj)
+	if err != nil {
+		return false, err
+	}
+	allowed, _, err := c.access.Allowed(ctx, user, authzv1.ResourceAttributes{
+		Namespace: namespace, Verb: verb, Group: gr.Group, Resource: gr.Resource,
+	})
+	return allowed, err
+}
+
+var errNoUser = fmt.Errorf("uiauth: no authenticated user")
+
+// groupResource is the API group and plural resource of obj (a list's item kind).
+func (c *AuthorizingClient) groupResource(obj runtime.Object) (schema.GroupResource, error) {
+	gvk, err := c.GroupVersionKindFor(obj)
+	if err != nil {
+		return schema.GroupResource{}, fmt.Errorf("uiauth: resolve kind: %w", err)
+	}
+	if _, isList := obj.(client.ObjectList); isList {
+		gvk.Kind = strings.TrimSuffix(gvk.Kind, "List")
+	}
+	plural, _ := meta.UnsafeGuessKindToResource(gvk)
+	return schema.GroupResource{Group: gvk.Group, Resource: plural.Resource}, nil
 }
 
 // Create authorizes "create" in the object's namespace.

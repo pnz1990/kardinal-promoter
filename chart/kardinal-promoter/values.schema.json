@@ -202,6 +202,9 @@
     "healthProbeBindAddress": {
       "type": "string"
     },
+    "pprofAddress": {
+      "type": "string"
+    },
     "service": {
       "type": "object",
       "additionalProperties": false,
@@ -359,6 +362,9 @@
               "default": "token"
             }
           }
+        },
+        "tokenReview": {
+          "type": "boolean"
         }
       }
     },
@@ -399,8 +405,28 @@
             },
             "tokenReview": {
               "type": "boolean"
+            },
+            "allowStaticTokenWithTokenReview": {
+              "type": "boolean"
             }
           }
+        }
+      }
+    },
+    "tokenReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "audiences": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^,\\s]+$"
+          }
+        },
+        "acceptAPIServerAudience": {
+          "type": "boolean"
         }
       }
     },
@@ -414,6 +440,36 @@
         "integrationTestJobs": {
           "type": "boolean",
           "description": "Deprecated, no effect, removed in v0.10."
+        },
+        "userRoles": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "aggregateToDefaultRoles": {"type": "boolean"},
+            "directWrites": {"type": "boolean"}
+          }
+        }
+      }
+    },
+    "fleets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "applicationNamespaces": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+          }
+        },
+        "clusterProfileNamespaces": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+          }
         }
       }
     },
@@ -598,7 +654,7 @@
           "properties": {
             "enabled": {
               "type": "boolean",
-              "description": "Turn AuditEvent retention on (off by default) and grant delete on AuditEvents."
+              "description": "AuditEvent retention (on by default) and delete on AuditEvents; false keeps every record."
             },
             "maxAge": {
               "type": "string",

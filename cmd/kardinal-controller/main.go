@@ -71,6 +71,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 	"github.com/kardinal-promoter/kardinal-promoter/web"
 
 	// Import built-in steps to register them via init().
@@ -103,6 +104,7 @@ func main() {
 		zerologLevel           string
 		metricsBindAddress     string
 		healthProbeBindAddress string
+		pprofAddress           string
 		webhookBindAddress     string
 		policyNamespaces       string
 		githubToken            string
@@ -110,6 +112,7 @@ func main() {
 		scmProviderType        string
 		scmAPIURL              string
 		gateStatusHeartbeat    time.Duration
+		holdBundleGrace        time.Duration
 		auditRetention         bool
 		auditMaxAge            time.Duration
 		auditMaxPerPipeline    int
@@ -123,9 +126,10 @@ func main() {
 	flag.DurationVar(&scmWaitTimeout, "scm-wait-timeout", psreconciler.DefaultSCMWaitTimeout,
 		"Longest a PromotionStep waits for an open SCM circuit (its SCM host keeps failing) before it fails, "+
 			"when its environment sets no stepTimeoutSeconds.")
-	flag.BoolVar(&auditRetention, "audit-retention", false,
+	flag.BoolVar(&auditRetention, "audit-retention", auditRetentionDefault,
 		"Delete AuditEvents past their retention (--audit-retention-max-age, --audit-retention-max-per-pipeline). "+
-			"Off by default: every record is kept until you opt in.")
+			"On by default: unbounded records fill etcd, which takes down the whole cluster. "+
+			"false keeps every record (export them first: docs/guides/security.md, Retention).")
 	flag.DurationVar(&auditMaxAge, "audit-retention-max-age", auditretention.DefaultMaxAge,
 		"Delete AuditEvents created (metadata.creationTimestamp) longer ago than this. 0 keeps records of any age.")
 	flag.IntVar(&auditMaxPerPipeline, "audit-retention-max-per-pipeline", auditretention.DefaultMaxPerPipeline,
@@ -155,11 +159,16 @@ func main() {
 	var gateOverrideMaxMinutes int
 	flag.IntVar(&gateOverrideMaxMinutes, "gate-override-max-minutes", int(policygaterecon.DefaultMaxOverride.Minutes()),
 		"Longest a gate override counts, from when the controller first saw it; an override ends at the earlier of "+
-			"its expiresAt and this cap (Helm gates.overrideMaxMinutes).")
+			"its expiresAt and this cap. The UI API refuses a longer override, and the chart's scoped-writes "+
+			"admission policy one written with kubectl by a caller limited to policygates/override "+
+			"(Helm controller.gateOverrideMaxMinutes).")
 	var overrideIdentityPolicy string
 	flag.StringVar(&overrideIdentityPolicy, "override-identity-policy", "",
 		"Name of the chart's gate-overrides ValidatingAdmissionPolicy and binding. The controller records an "+
 			"override's createdBy as verified only while both exist; empty records every override unverified.")
+	flag.DurationVar(&holdBundleGrace, "hold-bundle-grace", pipelinereconciler.DefaultHoldBundleGrace,
+		"How long a hold (Pipeline spec.holds) may name a rollback Bundle that does not exist before the controller "+
+			"reports it (condition HoldBundleMissing, a Warning Event, an AuditEvent). The hold stays in effect.")
 	flag.DurationVar(&gateStatusHeartbeat, "gate-status-heartbeat", policygaterecon.DefaultStatusHeartbeat,
 		"Longest a PolicyGate's status goes unwritten while its result does not change. Each status write makes kro "+
 			"re-check the gate's whole Graph. 0 writes the status on every evaluation.")
@@ -181,6 +190,8 @@ func main() {
 		"The address the metric endpoint binds to.")
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081",
 		"The address the probe endpoint binds to.")
+	flag.StringVar(&pprofAddress, "pprof-address", "",
+		"Address that serves Go's net/http/pprof profiles (heap, goroutine, CPU) under /debug/pprof/, with no authentication. Only an empty value (the default) disables it; an address without a host, such as :6060, binds to 127.0.0.1 only.")
 	flag.StringVar(&webhookBindAddress, "webhook-bind-address", ":8083",
 		"The address the SCM webhook endpoint binds to.")
 	flag.StringVar(&policyNamespaces, "policy-namespaces", "platform-policies",
@@ -276,6 +287,14 @@ func main() {
 	// token check is applied and TokenReview is not called.
 	//
 	// Design ref: docs/design/15-production-readiness.md §Lens 4
+	var bundleTokenReviewAuth bool
+	flag.BoolVar(&bundleTokenReviewAuth, "bundle-api-tokenreview-auth",
+		os.Getenv("KARDINAL_BUNDLE_TOKENREVIEW_AUTH") == "true",
+		"Accept Kubernetes tokens on POST /api/v1/bundles: the caller is authenticated with a TokenReview and "+
+			"needs get on the Pipeline and create on bundles in the namespace (SubjectAccessReview), and is "+
+			"recorded in kardinal.io/requested-by. The static --bundle-api-token, when set, still works and acts "+
+			"as the controller. Chart value: bundleAPI.tokenReview. Also readable from KARDINAL_BUNDLE_TOKENREVIEW_AUTH.")
+
 	var uiTokenReviewAuth bool
 	flag.BoolVar(&uiTokenReviewAuth, "ui-tokenreview-auth",
 		os.Getenv("KARDINAL_UI_TOKENREVIEW_AUTH") == "true",
@@ -283,6 +302,26 @@ func main() {
 			"When true and --ui-auth-token is not set, each request's bearer token is "+
 			"validated via authenticationv1.TokenReview. Fail-closed: API errors return 503. "+
 			"Also readable from KARDINAL_UI_TOKENREVIEW_AUTH environment variable (set to 'true').")
+
+	tokenReviewAudiences := uiauth.DefaultAudience
+	if v, ok := os.LookupEnv("KARDINAL_TOKENREVIEW_AUDIENCES"); ok {
+		tokenReviewAudiences = v
+	}
+	flag.StringVar(&tokenReviewAudiences, "tokenreview-audiences", tokenReviewAudiences,
+		"Comma-separated token audiences the UI API and the Bundle API accept in TokenReview mode. Mint tokens with "+
+			"kubectl create token <sa> --audience kardinal-promoter. Chart value: tokenReview.audiences. "+
+			"Also readable from KARDINAL_TOKENREVIEW_AUDIENCES.")
+	var tokenReviewAcceptAPIServer bool
+	flag.BoolVar(&tokenReviewAcceptAPIServer, "tokenreview-accept-apiserver-audience",
+		os.Getenv("KARDINAL_TOKENREVIEW_ACCEPT_APISERVER_AUDIENCE") == "true",
+		"Also accept tokens for the API server's own audience (kubeconfig and default ServiceAccount tokens). "+
+			"Such a token also works against the API server, so kardinal could replay it; off by default. "+
+			"Chart value: tokenReview.acceptAPIServerAudience.")
+	var uiAllowStaticWithTokenReview bool
+	flag.BoolVar(&uiAllowStaticWithTokenReview, "ui-auth-static-overrides-tokenreview", false,
+		"Start even when both --ui-auth-token and --ui-tokenreview-auth are set; the static token then wins and "+
+			"every UI caller acts as the controller. Without it that combination stops the controller. "+
+			"Chart value: ui.auth.allowStaticTokenWithTokenReview.")
 
 	// --metriccheck-cloudwatch-ambient-credentials lets cloudwatch MetricChecks
 	// that name no credential Secret use the controller's own AWS identity
@@ -387,6 +426,12 @@ func main() {
 	flag.StringVar(&graphIdentity.ReaderClusterRole, "graph-reader-clusterrole",
 		graphpkg.DefaultReaderClusterRole,
 		"ClusterRole bound to the Graph ServiceAccount in namespaces its health checks read.")
+	var fleetApplicationNamespaces, fleetClusterProfileNamespaces string
+	flag.StringVar(&fleetApplicationNamespaces, "fleet-application-namespaces", "argocd",
+		"Comma-separated namespaces a fleet selector of kind Application may read Argo CD Applications from. "+
+			"A selector naming another namespace is refused.")
+	flag.StringVar(&fleetClusterProfileNamespaces, "fleet-clusterprofile-namespaces", "",
+		"Comma-separated namespaces, besides the Pipeline's own, a fleet selector of kind ClusterProfile may read.")
 	var graphReaderNamespaces string
 	flag.StringVar(&graphReaderNamespaces, "graph-reader-namespaces",
 		strings.Join(graphpkg.DefaultReaderNamespaces, ","),
@@ -537,11 +582,19 @@ func main() {
 		logger.Info().Str("shard", namespaceShard).Msg("sharded: reconciling the namespaces of this shard only")
 	}
 
+	pprofBind, err := pprofBindAddress(pprofAddress)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("invalid --pprof-address")
+	}
+	if pprofBind != "" {
+		logger.Warn().Str("address", pprofBind).Msg("serving pprof profiles: they expose heap contents; keep the address private")
+	}
 	restConfig := ctrl.GetConfigOrDie()
 	mgr, err := ctrl.NewManager(restConfig, buildManagerOptions(managerConfig{
 		restConfig:             restConfig,
 		metricsBindAddress:     metricsBindAddress,
 		healthProbeBindAddress: healthProbeBindAddress,
+		pprofAddress:           pprofBind,
 		leaderElect:            leaderElect,
 		watchNamespace:         watchNamespace,
 		namespaceShard:         namespaceShard,
@@ -701,8 +754,11 @@ func main() {
 			logger.Fatal().Err(err).Msg("unable to create the AuditEvent retention client")
 		}
 		if err := mgr.Add(&auditretention.Pruner{
-			Client:         retentionClient,
-			Namespace:      watchNamespace,
+			Client:    retentionClient,
+			Namespace: watchNamespace,
+			// Under --namespace-shard each shard prunes only its own
+			// namespaces (shard.Active is nil-safe: owns all when off).
+			Owns:           func(ns string) bool { return shard.Active().Owns(ns) },
 			MaxAge:         auditMaxAge,
 			MaxPerPipeline: auditMaxPerPipeline,
 			Interval:       auditRetentionInterval,
@@ -714,7 +770,10 @@ func main() {
 	}
 
 	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos,
-		CompactAbove: &graphCompactAbove, Workers: *workers["pipeline"]}).
+		CompactAbove: &graphCompactAbove, Reader: mgr.GetAPIReader(), Workers: *workers["pipeline"],
+		HoldBundleGrace: holdBundleGrace, Recorder: eventRecorder,
+		FleetApplicationNamespaces:    splitCSV(fleetApplicationNamespaces),
+		FleetClusterProfileNamespaces: splitCSV(fleetClusterProfileNamespaces)}).
 		SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PipelineReconciler")
 	}
@@ -729,7 +788,7 @@ func main() {
 	pgReconciler.PolicyNamespaces = splitCSV(policyNamespaces)
 	pgReconciler.StatusHeartbeat = gateStatusHeartbeat
 	pgReconciler.Workers = *workers["policygate"]
-	pgReconciler.MaxOverride = time.Duration(gateOverrideMaxMinutes) * time.Minute
+	applyGateOverrideCap(gateOverrideMaxMinutes, pgReconciler)
 	pgReconciler.IdentityPolicy = &policygaterecon.IdentityPolicyCheck{Reader: mgr.GetAPIReader(), Name: overrideIdentityPolicy}
 	if overrideIdentityPolicy == "" {
 		logger.Warn().Msg("--override-identity-policy is not set: gate overrides are recorded with an unverified createdBy")
@@ -785,6 +844,7 @@ func main() {
 		Client:          mgr.GetClient(),
 		Registry:        &ivrecon.OCIRegistry{},
 		SCM:             scmProvider,
+		Providers:       providers,
 		SCMHost:         ivSCMHost,
 		InstanceSigners: splitCSV(scmInstanceSigners),
 		PublicGoodRoot: ivrecon.PublicGoodRoot(func() (sigroot.TrustedMaterial, error) {
@@ -895,6 +955,8 @@ func main() {
 		logger.Warn().Msg("SCM webhooks disabled: no --webhook-secret set, /webhook/scm rejects every event; merges are detected by PR status polling")
 	}
 	bundleAPIToken := bundleToken
+	review := reviewOptions{audiences: splitCSV(tokenReviewAudiences), acceptAPIServer: tokenReviewAcceptAPIServer,
+		apiServerAudiences: uiauth.APIServerAudiences(uiauth.ServiceAccountTokenPath), shared: &sharedReviewers{}}
 	mux := http.NewServeMux()
 	mux.Handle("/webhook/scm", tracing.Handler("webhook.scm", webhookSrv.Handler()))
 	mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
@@ -906,8 +968,8 @@ func main() {
 	// with its own webhook secret (docs/scm-providers.md).
 	mux.HandleFunc("POST /webhook/scm/namespaces/{namespace}/{name}", webhookSrv.ProviderHandler(providers))
 	mux.HandleFunc("POST /webhook/scm/cluster/{name}", webhookSrv.ProviderHandler(providers))
-	// Bundle API endpoint — only mounted if a token is configured.
-	if bundleAPIToken != "" {
+	// Bundle API endpoint — only mounted if a token or TokenReview is configured.
+	if bundleAPIToken != "" || bundleTokenReviewAuth {
 		// Default to the watched namespace; in namespace-scoped mode it is
 		// also the only namespace Bundles may be created in.
 		bundleNS := "default"
@@ -917,6 +979,14 @@ func main() {
 		bundleAPI := newBundleAPIServerWithLogger(mgr.GetClient(), bundleAPIToken, bundleNS, logger)
 		bundleAPI.onlyNamespace = watchNamespace
 		bundleAPI.reader = mgr.GetAPIReader()
+		if bundleTokenReviewAuth {
+			tokens, access, err := newReviewers(mgr.GetConfig(), review)
+			if err != nil {
+				logger.Fatal().Err(err).Msg("bundle API TokenReview auth")
+			}
+			bundleAPI.enableTokenReview(tokens, access)
+			logger.Info().Msg("bundle API accepts Kubernetes tokens (TokenReview + SubjectAccessReview)")
+		}
 		mux.Handle("/api/v1/bundles", accessLog.Middleware("bundle-api", tracing.Handler("bundleapi.create", bundleAPI.Handler())))
 		logger.Info().Msg("bundle API endpoint enabled at /api/v1/bundles")
 	}
@@ -938,9 +1008,12 @@ func main() {
 	// UI API authentication. TokenReview mode fails closed: the controller does
 	// not start when the review clients cannot be built, instead of serving an
 	// open UI.
-	uiAuth, err := buildUIAuth(mgr.GetConfig(), uiAuthToken, uiTokenReviewAuth, watchNamespace)
+	uiAuth, err := buildUIAuth(mgr.GetConfig(), uiAuthFlags{
+		staticToken: uiAuthToken, tokenReview: uiTokenReviewAuth,
+		allowStaticWithTokenReview: uiAllowStaticWithTokenReview, review: review, scopeNamespace: watchNamespace,
+	})
 	if err != nil {
-		logger.Fatal().Err(err).Msg("UI API TokenReview: unable to create the review clients")
+		logger.Fatal().Err(err).Msg("UI API authentication")
 	}
 	switch {
 	case uiAuth.staticToken != "":

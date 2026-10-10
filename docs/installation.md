@@ -217,6 +217,31 @@ its container limit, which the chart passes in from the downward API, so the gar
 works harder before the kernel would OOMKill it; set `GOMEMLIMIT` in `controller.extraEnv` to
 choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 
+#### Memory profiles
+
+To see what holds the controller's memory, turn on Go's pprof profiles with
+`--pprof-address` (chart value `pprofAddress`). They are off by default. A port alone binds to
+127.0.0.1 inside the Pod, so only a port-forward reaches it, and the chart adds no Service or
+container port for it. The profiles show heap contents (object values, possibly tokens) and
+stacks, so do not bind it to every interface (`0.0.0.0:6060`) where untrusted clients can connect.
+The endpoint has no authentication or authorization: anyone who reaches the address can read
+every profile. `/debug/pprof/cmdline` also returns the process's command line, so pass secrets
+in environment variables, as the chart does for the SCM, UI and Bundle API tokens, never in
+flags (`controller.extraArgs`). Only an empty `pprofAddress` turns it off.
+
+```bash
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 --reset-then-reuse-values --set pprofAddress=:6060
+kubectl -n kardinal-system port-forward deploy/kardinal-promoter 6060:6060
+go tool pprof -sample_index=inuse_space http://localhost:6060/debug/pprof/heap
+# Compare two snapshots: what grew between them.
+curl -s localhost:6060/debug/pprof/heap > before.pb.gz   # ... later:
+curl -s localhost:6060/debug/pprof/heap > after.pb.gz
+go tool pprof -top -base before.pb.gz after.pb.gz
+```
+
+`kubectl port-forward deploy/...` picks one Pod; with two replicas, forward the leader's Pod
+(the holder of the `kardinal-promoter-leader` Lease), which is the one reconciling.
+
 ## Helm values reference
 
 ### kardinal-promoter controller
@@ -252,6 +277,11 @@ choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 | `bundleAPI.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with the Bundle API bearer token (`KARDINAL_BUNDLE_TOKEN`). `POST /api/v1/bundles` is off until this is set |
 | `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`). With neither this nor `ui.auth.tokenReview` set, the UI API serves only local clients (`kubectl port-forward`) |
 | `ui.auth.tokenReview` | `false` | `--ui-tokenreview-auth`: validate UI tokens with TokenReview; adds the RBAC it needs |
+| `ui.auth.allowStaticTokenWithTokenReview` | `false` | Install with both a static UI token and `ui.auth.tokenReview` (the static token wins); refused otherwise |
+| `rbac.userRoles.aggregateToDefaultRoles` | `false` | Aggregate the user roles into `view`, `edit` and `admin` (then everyone bound to `edit` can promote and approve) |
+| `rbac.userRoles.directWrites` | `false` | Grant the promoter and approver `update` for `kardinal pause`, `kardinal rollback --hold` / `release-hold` and `kardinal override` from a kubeconfig, limited by the scoped-writes admission policy |
+| `tokenReview.audiences` | `["kardinal-promoter"]` | `--tokenreview-audiences`: token audiences the UI API and Bundle API accept (`kubectl create token <sa> --audience kardinal-promoter`) |
+| `tokenReview.acceptAPIServerAudience` | `false` | `--tokenreview-accept-apiserver-audience`: also accept kubeconfig and default ServiceAccount tokens |
 | `controller.accessLog.allRequests` | `false` | `--access-log-all-requests`: log every UI API and Bundle API request, not only logins, refusals and writes ([API access log](guides/security.md#api-access-log)) |
 | `controller.accessLog.sourceIP` / `.trustedProxies` | `false` / `[]` | `--access-log-source-ip`, `--access-log-trusted-proxies`: add the client address; believe `X-Forwarded-For` only from these proxy CIDRs |
 | `ui.corsAllowedOrigins` | `[]` | `--cors-allowed-origins` |
@@ -260,6 +290,7 @@ choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 | `service.webhookPort` | `8083` | Webhook (`/webhook/scm`) and Bundle API port (container and Service) |
 | `service.metricsPort` / `.healthPort` | `8080` / `8081` | Metrics and health probe Service ports |
 | `metricsBindAddress` / `healthProbeBindAddress` | `:8080` / `:8081` | `--metrics-bind-address` / `--health-probe-bind-address` (the container ports) |
+| `pprofAddress` | `""` | `--pprof-address`: serve Go pprof profiles. Off by default; a port alone (`:6060`) binds to 127.0.0.1. See [Memory profiles](#memory-profiles) |
 | `controller.watchNamespace` | `""` | Namespace-scoped mode (`--watch-namespace`). Must equal the release namespace |
 | `controller.policyNamespaces` | `[]` | Namespaces with org-level PolicyGates (`--policy-namespaces`; default `platform-policies`) |
 | `graph.compactAbove` | `null` | Environment count above which a Bundle's Graph uses the compact shape (`--graph-compact-above`; default `100`; `0` makes every Graph compact). See [Large Pipelines](pipeline-reference.md#large-pipelines) |
@@ -362,8 +393,10 @@ release name other than `kardinal-promoter`, the Service is named
   under an image Bundle, or the image tags of the last image Bundle under a config Bundle, as
   `kardinal status` does. A lit rail marks the active Bundle's version on its way into an environment:
   amber and moving while it promotes, waits for its PR or is health checked; amber and still
-  while a PolicyGate holds it; red where it failed. A station opens its Pipeline. The board
-  follows the sidebar's health filter.
+  while a PolicyGate holds it; red where it failed. A [fleet](pipeline-reference.md#fleets)
+  is one station with a bar of its targets (Verified, in flight, Failed) and a count such as
+  `20/50 verified, 5 in flight (max 5)`; it says `stopped` once `maxUnavailable` targets
+  failed. A station opens its Pipeline. The board follows the sidebar's health filter.
 - **Pipeline view.** The lane, the promotion graph, policy gates with their CEL expressions,
   the Bundle history and comparison, and pause, resume, promote, roll back and create bundle.
   The lane has one column per depth: parallel environments share a column, and a wave of five
@@ -891,7 +924,7 @@ The controller's RBAC, in summary:
 
 | Resources | Verbs |
 |---|---|
-| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create, and delete only with `audit.retention.enabled: true`) and `changewindows`, `scmproviders` and `clusterscmproviders` (get, list, watch; get, update, patch on `/status`) |
+| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create, and delete with `audit.retention.enabled: true`, the default) and `changewindows`, `scmproviders` and `clusterscmproviders` (get, list, watch; get, update, patch on `/status`) |
 | `graphs.kro.run` | Full CRUD; get on `graphs/status` |
 | `serviceaccounts`, `rolebindings` | get, create; get, list, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs, `list` finds them for the sweep) |
 | `namespaces` | get, limited to `controller.watchNamespace` in namespace mode (lets go of a Graph whose namespace is being deleted) |
