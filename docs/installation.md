@@ -799,7 +799,7 @@ Pipelines on their own repositories, all at once (`TestScale_TenantFairnessManyR
 On one branch the branch turns already let B through. With many repositories, B's Bundles
 waited behind A's backlog and finished after all of A; with fair queues they take about half
 as long, and A is not slower. B's steps stayed under 10 s in every run: what B waited for was
-the time between its steps, in the Bundle, Pipeline and PromotionStep queues.
+the time between its steps, in the Bundle, Pipeline and PromotionStep queues. (These runs used 3-environment Pipelines for A; the test now uses 5, so that B's five Bundles finish within A's load even on a quiet host, and it checks that they do.)
 
 ### Leader election under API pressure
 

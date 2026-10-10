@@ -82,7 +82,7 @@ type Profile struct {
 	// for their first reconcile (#1577).
 	TenantWave        int
 	TenantStartWithin time.Duration
-	// TenantBBundles three-environment Pipelines, one Bundle each, 5 s
+	// TenantBBundles three-environment Pipelines, one Bundle each, 2 s
 	// apart, are what tenant B promotes in TestScale_TenantFairness* while
 	// A's load runs; TenantStepP99 bounds the p99 of B's step latency
 	// (creation to Verified) meanwhile (#1577).

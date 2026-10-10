@@ -183,8 +183,8 @@ func TestScale_TwoTenants(t *testing.T) {
 // TestScale_TenantFairness is #1577's acceptance: one namespace's large
 // promotion must not starve another's. Tenant A promotes a canary and a
 // TenantWave-wide wave on one branch (its pushes take turns, #1586). Once a
-// third of A's steps exist, tenant B, in another namespace, promotes
-// one Bundle on each of TenantBBundles three-environment Pipelines, 5 s
+// tenth of TenantWave steps exist, tenant B, in another namespace, promotes
+// one Bundle on each of TenantBBundles three-environment Pipelines, 2 s
 // apart. B's step latency (creation to Verified, the latency-slo invariant)
 // must stay at p99 within TenantStepP99 and B's Bundles at p99 within
 // TenantBundleP99 (35 s in full), every B Bundle must start while A runs,
@@ -202,7 +202,7 @@ func TestScale_TenantFairness(t *testing.T) {
 }
 
 // TestScale_TenantFairnessManyRepos is TestScale_TenantFairness with tenant
-// A's load spread over TenantWave three-environment Pipelines, each on its
+// A's load spread over TenantWave five-environment Pipelines, each on its
 // own repository, all promoted at once: no branch turns order them, so all
 // of A's steps clone and push at normal priority, and only the work queue's
 // fairness between namespaces lets B's steps through (#1577).
@@ -210,13 +210,13 @@ func TestScale_TenantFairness(t *testing.T) {
 // Covers SCALE-LOAD-FAIR-01.
 func TestScale_TenantFairnessManyRepos(t *testing.T) {
 	r := scale.Begin(t)
-	names := r.Fleet.Pipelines(t, "fairm", r.P.TenantWave, scale.Chain(3))
+	names := r.Fleet.Pipelines(t, "fairm", r.P.TenantWave, scale.Chain(5))
 	tenantFairness(t, r, func() {
 		r.Fleet.Burst(t, names, len(names), 50)
 	})
 }
 
-// tenantFairness starts tenant A's load with startA, waits until a third
+// tenantFairness starts tenant A's load with startA, waits until a tenth
 // of TenantWave steps exist, starts tenant B's Bundles, and checks B's
 // latency and that B ran while A did.
 func tenantFairness(t *testing.T, r *scale.Run, startA func()) {
@@ -234,7 +234,7 @@ func tenantFairness(t *testing.T, r *scale.Run, startA func()) {
 		if err := r.E.Client.List(ctx, &steps, client.InNamespace(r.Fleet.NS)); err != nil {
 			t.Fatal(err)
 		}
-		if len(steps.Items) >= r.P.TenantWave/3 {
+		if len(steps.Items) >= r.P.TenantWave/10 {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -254,12 +254,12 @@ func tenantFairness(t *testing.T, r *scale.Run, startA func()) {
 		}
 		return true
 	}
-	// One Bundle per B Pipeline, 5 s apart, so they meet A's load at
-	// different points.
+	// One Bundle per B Pipeline, 2 s apart, so they meet A's load at
+	// different points and can all finish within it.
 	during := 0
 	for i, name := range bNames {
 		if i > 0 {
-			time.Sleep(5 * time.Second)
+			time.Sleep(2 * time.Second)
 		}
 		tenantB.MustCreateBundle(t, name, scale.Tag(name, 1))
 		if !aDone() {
