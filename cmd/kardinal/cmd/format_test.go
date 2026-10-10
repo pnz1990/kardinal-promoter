@@ -1136,4 +1136,9 @@ func TestFormatPipelineTable_Fleet(t *testing.T) {
 	assert.Contains(t, out, "1/3 Verified, 1 Failed")
 	out = render(step("test", "Verified"), step("prod-a", "Verified"), step("prod-b", "Verified"), step("prod-c", "Verified"))
 	assert.NotContains(t, out, "/3")
+	// #1603: a target a newer Bundle (its rollback) deployed is Superseded,
+	// named, and not a failure.
+	out = render(step("test", "Verified"), step("prod-a", "Verified"), step("prod-b", "Superseded"), step("prod-c", "Verified"))
+	assert.Contains(t, out, "2/3 Verified, 1 Superseded (prod-b)")
+	assert.NotContains(t, out, "Failed")
 }

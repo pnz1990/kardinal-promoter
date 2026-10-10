@@ -1494,6 +1494,10 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 			after = append(after, func() { r.superseded(b) })
 		case pipeline != nil:
 			expected, err := graph.PromotedEnvironments(pipeline, b)
+			// A fleet target whose step is Superseded (#1603: the rollback
+			// of that one target pushed first) is settled: the Bundle is
+			// Verified when every other environment is.
+			expected = slices.DeleteFunc(slices.Clone(expected), func(e string) bool { return supersededTargets(steps)[e] })
 			if err == nil && allVerified(b.Status.Environments, expected) {
 				b.Status.Phase = phaseVerified
 				if b.Status.Metrics == nil {
@@ -1725,13 +1729,29 @@ func (r *Reconciler) event(b *kardinalv1alpha1.Bundle, eventType, reason, messag
 
 // supersededStep returns the first of steps that ended Superseded (it did not
 // push because a newer Bundle had pushed to its environment, #1603), or nil.
+// A fleet target's step does not count: the rollback of one target does not
+// stop the fleet's rollout to the others (D1); that target is settled
+// (supersededTargets).
 func supersededStep(steps []kardinalv1alpha1.PromotionStep) *kardinalv1alpha1.PromotionStep {
 	for i := range steps {
-		if steps[i].Status.State == phaseSuperseded {
+		if steps[i].Status.State == phaseSuperseded && steps[i].Labels[graph.LabelFleet] == "" {
 			return &steps[i]
 		}
 	}
 	return nil
+}
+
+// supersededTargets returns the fleet targets whose step is Superseded: they
+// are settled, neither Verified nor failed (the compact Graph's
+// supersededTargets).
+func supersededTargets(steps []kardinalv1alpha1.PromotionStep) map[string]bool {
+	out := map[string]bool{}
+	for i := range steps {
+		if steps[i].Status.State == phaseSuperseded && steps[i].Labels[graph.LabelFleet] != "" {
+			out[steps[i].Spec.Environment] = true
+		}
+	}
+	return out
 }
 
 // failedState reports whether a PromotionStep state is a failure.

@@ -445,6 +445,12 @@ How a fleet is promoted:
   another fleet waits for all of it: each of its N targets lists the M targets of the first as
   upstreams, so the Graph carries N×M upstream entries (50×50 is 2,500), which count toward its
   size limit.
+- **A target rolled back on its own.** `kardinal rollback --env <fleet>-<target>` rolls one
+  target back without stopping the fleet's Bundle. If the rollback pushes to that target before
+  the fleet's Bundle does, the fleet's step there does not push over it and ends `Superseded`.
+  That target is settled: it frees its `maxConcurrent` place, it is neither Verified nor a
+  failure (it does not count toward `maxUnavailable`), an environment after the fleet waits only
+  for the other targets, and the Bundle is Verified once they are.
 - **Selector membership.** The controller resolves an `Application` or `ClusterProfile` selector
   into the Pipeline's `status.fleets`, and reads it again every minute. An Application qualifies
   only if it deploys from the Pipeline's `spec.git.url` and has a `spec.source.path`, and any
@@ -501,7 +507,7 @@ How a fleet is promoted:
   verification and `verification` AnalysisTemplates, cannot be used in a Pipeline with a fleet:
   the Pipeline is `Ready=False` and its Bundles fail with `GraphBuildFailed`, naming the feature.
 - **CLI and UI.** `kardinal get pipelines` shows a fleet as one column, `Verified` or
-  `12/50 Verified, 1 Failed`. `kardinal status`, `promote` and `rollback` take a target's
+  `12/50 Verified, 1 Failed, 1 Superseded (prod-eu-west)`. `kardinal status`, `promote` and `rollback` take a target's
   environment name (`prod-eu-west`). The UI's fleet board draws the fleet as one station with
   a bar of its targets: Verified, in flight and Failed. It names the fleet as `stopped` once
   `maxUnavailable` is reached.

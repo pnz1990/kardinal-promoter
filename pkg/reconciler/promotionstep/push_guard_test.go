@@ -230,3 +230,44 @@ func TestPushGuard_OtherNotFoundIsAStepError(t *testing.T) {
 		})
 	}
 }
+
+// TestPushGuard_FleetTargetRollback (#1603 with D1): the rollback of one
+// fleet target does not supersede the fleet Bundle, but once it pushed to
+// that target the fleet Bundle's step there does not push over it: it ends
+// Superseded. The fleet's other targets are not affected.
+//
+// Covers FLEET-08.
+func TestPushGuard_FleetTargetRollback(t *testing.T) {
+	t0 := time.Date(2026, 10, 10, 2, 0, 0, 0, time.UTC)
+	pl := makePipeline("nginx-demo")
+	pl.Spec.Environments[0].Fleet = &v1alpha1.FleetSpec{Targets: []v1alpha1.FleetTarget{{Name: "eu"}, {Name: "us"}}}
+	fleetBundle := makeBundle("b1", "nginx-demo")
+	fleetBundle.CreationTimestamp = metav1.NewTime(t0)
+	rollback := makeBundle("rb-eu", "nginx-demo")
+	rollback.CreationTimestamp = metav1.NewTime(t0.Add(time.Minute))
+	rollback.Labels = map[string]string{"kardinal.io/rollback": "true"}
+	rollback.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "test-eu"}
+	rollbackStep := labelled(makeStep("step-rb-eu", "nginx-demo", "rb-eu", "test-eu"))
+	rollbackStep.Status.State = "HealthChecking"
+	rollbackStep.Status.Steps = []v1alpha1.StepStatus{{Name: "git-push", State: v1alpha1.StepExecutionCompleted}}
+	for _, tc := range []struct{ env, want string }{
+		{"test-eu", "Superseded"},
+		{"test-us", "HealthChecking"},
+	} {
+		t.Run(tc.env, func(t *testing.T) {
+			step := labelled(asPromoting(makeStep("step-b1", "nginx-demo", "b1", tc.env), pl))
+			step.Labels["kardinal.io/fleet"] = "test"
+			c := newClient(t, step, pl.DeepCopy(), fleetBundle.DeepCopy(), rollback.DeepCopy(), rollbackStep.DeepCopy())
+			git := &pushRecorder{headGit: headGit{sha: newSHA}}
+			r := &promotionstep.Reconciler{Client: c, APIReader: c, SCM: &mockSCM{}, GitClient: git,
+				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+			reconcileStep(t, r, step.Name)
+			got := getStep(t, c, step.Name)
+			assert.Equal(t, tc.want, got.Status.State, got.Status.Message)
+			if tc.want == "Superseded" {
+				assert.Empty(t, git.pushes)
+				assert.Contains(t, got.Status.Message, "newer bundle rb-eu already pushed to test-eu")
+			}
+		})
+	}
+}

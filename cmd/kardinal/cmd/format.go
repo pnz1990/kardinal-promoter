@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -423,10 +424,12 @@ func pipelineEnvStates(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
 
 // fleetCell is the get pipelines cell of a fleet environment from its
 // targets' states: "Verified" once every target is, else how many are
-// Verified, with the Failed ones ("12/50 Verified, 1 Failed"). "" when no
-// target has a state.
+// Verified, with the Failed ones and the Superseded ones by name ("12/50
+// Verified, 1 Failed, 1 Superseded (prod-eu)"; #1603: a newer Bundle, the
+// rollback of that one target, deployed it). "" when no target has a state.
 func fleetCell(envs map[string]string, targets []string) string {
 	verified, failed, seen := 0, 0, 0
+	var superseded []string
 	for _, t := range targets {
 		st, ok := envs[t]
 		if !ok || st == "Waiting" {
@@ -438,6 +441,8 @@ func fleetCell(envs map[string]string, targets []string) string {
 			verified++
 		case "Failed", "AbortedByAlarm", "RollingBack":
 			failed++
+		case "Superseded":
+			superseded = append(superseded, t)
 		}
 	}
 	if seen == 0 {
@@ -449,6 +454,13 @@ func fleetCell(envs map[string]string, targets []string) string {
 	cell := fmt.Sprintf("%d/%d Verified", verified, len(targets))
 	if failed > 0 {
 		cell += fmt.Sprintf(", %d Failed", failed)
+	}
+	if n := len(superseded); n > 0 {
+		names := superseded
+		if n > 3 {
+			names = append(slices.Clone(superseded[:3]), "...")
+		}
+		cell += fmt.Sprintf(", %d Superseded (%s)", n, strings.Join(names, ", "))
 	}
 	return cell
 }
