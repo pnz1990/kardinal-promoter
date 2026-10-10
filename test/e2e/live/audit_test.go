@@ -8,6 +8,7 @@ package live
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -53,8 +54,28 @@ func TestAudit_PromotionRecords(t *testing.T) {
 	prodStep := e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 	allowed := a.waitAudit(t, bundle, "GateEvaluated", "Success")
 
-	events, err := e.AuditEvents(ctx, a.ns, bundle)
-	require.NoError(t, err)
+	want := []string{
+		"prod GateEvaluated Failure", "prod GateEvaluated Success", "prod GateOverridden Success",
+		"prod PromotionStarted Pending", "prod PromotionSucceeded Success",
+		"test PromotionStarted Pending", "test PromotionSucceeded Success",
+	}
+	// A step writes its AuditEvents from its outbox (status.pendingAuditEvents,
+	// #1552) after the transition, and retries a failed write within
+	// auditRetryDelay (5s): wait for the records, a few retries at most, then
+	// check exactly what is there (#1676).
+	var events []v1alpha1.AuditEvent
+	framework.Eventually(t, auditOutboxWait, "the Bundle's AuditEvents, prod's PromotionSucceeded included", func(ctx context.Context) (bool, string) {
+		var err error
+		if events, err = e.AuditEvents(ctx, a.ns, bundle); err != nil {
+			return false, err.Error()
+		}
+		keys := make([]string, 0, len(events))
+		for _, ae := range events {
+			keys = append(keys, auditKey(ae))
+		}
+		sort.Strings(keys)
+		return slices.Equal(keys, want), fmt.Sprintf("seen %v", keys)
+	})
 	got := map[string]v1alpha1.AuditEvent{}
 	var keys []string
 	for _, ae := range events {
@@ -69,11 +90,7 @@ func TestAudit_PromotionRecords(t *testing.T) {
 			"%s: labels", ae.Name)
 	}
 	sort.Strings(keys)
-	assert.Equal(t, []string{
-		"prod GateEvaluated Failure", "prod GateEvaluated Success", "prod GateOverridden Success",
-		"prod PromotionStarted Pending", "prod PromotionSucceeded Success",
-		"test PromotionStarted Pending", "test PromotionSucceeded Success",
-	}, keys, "the Bundle's AuditEvents (environment, action, outcome)")
+	assert.Equal(t, want, keys, "the Bundle's AuditEvents (environment, action, outcome)")
 
 	for _, ps := range []*v1alpha1.PromotionStep{testStep, prodStep} {
 		env := ps.Spec.Environment
@@ -113,7 +130,7 @@ func TestAudit_PromotionRecords(t *testing.T) {
 
 	record := got["test PromotionSucceeded Success"]
 	record.Spec.Message = "rewritten"
-	err = e.Client.Update(ctx, &record)
+	err := e.Client.Update(ctx, &record)
 	require.Error(t, err, "an AuditEvent spec cannot change")
 	assert.Contains(t, err.Error(), "AuditEvent spec is immutable")
 }
@@ -296,6 +313,10 @@ func (a *app) waitAudit(t *testing.T, bundle, action, outcome string) v1alpha1.A
 	})
 	return found
 }
+
+// auditOutboxWait bounds the wait for a step's outbox to write its
+// AuditEvents: six of the PromotionStep reconciler's auditRetryDelay (5s).
+const auditOutboxWait = 30 * time.Second
 
 // auditKey is "<environment> <action> <outcome>".
 func auditKey(ae v1alpha1.AuditEvent) string {

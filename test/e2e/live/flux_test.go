@@ -284,7 +284,12 @@ func TestFlux_UnhealthyKustomizations(t *testing.T) {
 	e.SuspendFlux(t, framework.GitRepositoryGVR, a.ns, frozen, false)
 	e.WaitStepState(t, a.ns, "behind", behindBundle, "behind", "Verified", promoteTimeout)
 	assert.Equal(t, newImage, e.DeploymentImage(t, a.ns, fixtures.Workload("behind")))
-	assert.Equal(t, fluxRev(a.repo.Branch, commit), framework.FluxAppliedRevision(a.kustomization(t, "behind")))
+	// Flux applies the branch head: behind's commit, or a later one of gone
+	// or stalled, which push to the same branch in no set order (each push
+	// is rebased on the last, so the head contains behind's commit).
+	head := e.BranchHead(t, a.repo)
+	assert.Equal(t, fluxRev(a.repo.Branch, head), framework.FluxAppliedRevision(a.kustomization(t, "behind")))
+	assert.True(t, e.BranchContains(t, a.repo, a.repo.Branch, commit), "the applied head %s contains behind's commit %s", head, commit)
 }
 
 // TestFlux_StalledOnSiblingCommit checks a stall on a later commit of the
@@ -526,7 +531,8 @@ func TestFlux_SuspendedKustomization(t *testing.T) {
 // TestFlux_SiblingEnvsShareBranch promotes two parallel environments of one
 // Pipeline. Both push to the Pipeline branch, so Flux applies the later
 // commit to both Kustomizations; the environment that pushed first must
-// still be Verified, because its Deployment runs the Bundle image.
+// still be Verified, because the applied commit contains its own (or, when
+// the history cannot be read, its Deployment runs the Bundle image).
 //
 // Covers HEALTH-FLUX-06.
 func TestFlux_SiblingEnvsShareBranch(t *testing.T) {
@@ -554,7 +560,11 @@ func TestFlux_SiblingEnvsShareBranch(t *testing.T) {
 	for _, env := range a.envs {
 		ps := e.WaitStepState(t, a.ns, pipelineName, bundle, env, "Verified", promoteTimeout)
 		assert.Equal(t, newImage, e.DeploymentImage(t, a.ns, fixtures.Workload(env)))
-		if strings.Contains(ps.Status.Message, "but the Kustomization's Deployments run the Bundle images") {
+		// The skipped commit is accepted from the branch history (the
+		// applied commit contains it, #1591) or, when that cannot be read,
+		// because the Deployments run the Bundle images.
+		if strings.Contains(ps.Status.Message, "contains "+shortSHA(commits[env])) ||
+			strings.Contains(ps.Status.Message, "but the Kustomization's Deployments run the Bundle images") {
 			noted++
 			assert.Contains(t, ps.Status.Message, shortSHA(commits[env]), "the note names the commit the step pushed")
 		}

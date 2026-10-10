@@ -5,6 +5,7 @@ package promotionstep
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -20,12 +21,12 @@ type countingRemote struct {
 	head              string
 }
 
-func (c *countingRemote) RemoteHeads(context.Context, string, string) (map[string]string, error) {
+func (c *countingRemote) RemoteHeads(context.Context, string, scm.GitAuth) (map[string]string, error) {
 	c.lsRemote++
 	return map[string]string{"main": c.head}, nil
 }
 
-func (c *countingRemote) BranchHistory(context.Context, string, string, string, int) ([]scm.CommitPaths, error) {
+func (c *countingRemote) BranchHistory(context.Context, string, string, scm.GitAuth, int) ([]scm.CommitPaths, error) {
 	c.fetches++
 	return []scm.CommitPaths{{SHA: c.head}}, nil
 }
@@ -38,23 +39,87 @@ func TestRemoteCache(t *testing.T) {
 	var c remoteCache
 	t0 := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	for i := range 100 { // 100 waiting steps, checked within the TTL
-		h, err := c.remoteHeads(ctx, rem, "https://git/x", "tok", t0.Add(time.Duration(i)*100*time.Millisecond))
+		h, err := c.remoteHeads(ctx, rem, "https://git/x", scm.TokenAuth("tok"), t0.Add(time.Duration(i)*100*time.Millisecond))
 		require.NoError(t, err)
 		assert.Equal(t, "a", h["main"])
-		_, err = c.branchHistory(ctx, rem, "https://git/x", "main", h["main"], "tok", 20)
+		_, err = c.branchHistory(ctx, rem, "https://git/x", "main", h["main"], scm.TokenAuth("tok"), 20)
 		require.NoError(t, err)
 	}
 	assert.Equal(t, 1, rem.lsRemote)
 	assert.Equal(t, 1, rem.fetches)
 
 	rem.head = "b"
-	h, _ := c.remoteHeads(ctx, rem, "https://git/x", "tok", t0.Add(remoteHeadsTTL+time.Second))
+	h, _ := c.remoteHeads(ctx, rem, "https://git/x", scm.TokenAuth("tok"), t0.Add(remoteHeadsTTL+time.Second))
 	assert.Equal(t, "b", h["main"], "expired: read again")
-	_, _ = c.branchHistory(ctx, rem, "https://git/x", "main", "b", "tok", 20)
+	_, _ = c.branchHistory(ctx, rem, "https://git/x", "main", "b", scm.TokenAuth("tok"), 20)
 	assert.Equal(t, 2, rem.lsRemote)
 	assert.Equal(t, 2, rem.fetches, "a new head: fetched once")
-	_, _ = c.remoteHeads(ctx, rem, "https://git/other", "tok", t0)
+	_, _ = c.remoteHeads(ctx, rem, "https://git/other", scm.TokenAuth("tok"), t0)
 	assert.Equal(t, 3, rem.lsRemote, "per repository")
+}
+
+// authRemote answers only the credential good and refuses every other one,
+// counting the calls each credential made.
+type authRemote struct {
+	good  scm.GitAuth
+	calls map[string]int
+}
+
+var errAuthRefused = errors.New("authentication required")
+
+func (a *authRemote) call(auth scm.GitAuth) error {
+	if a.calls == nil {
+		a.calls = map[string]int{}
+	}
+	a.calls[auth.Token+string(auth.SSHPrivateKey)]++
+	if auth.Token != a.good.Token || string(auth.SSHPrivateKey) != string(a.good.SSHPrivateKey) {
+		return errAuthRefused
+	}
+	return nil
+}
+
+func (a *authRemote) RemoteHeads(_ context.Context, _ string, auth scm.GitAuth) (map[string]string, error) {
+	if err := a.call(auth); err != nil {
+		return nil, err
+	}
+	return map[string]string{"main": "a"}, nil
+}
+
+func (a *authRemote) BranchHistory(_ context.Context, _, _ string, auth scm.GitAuth, _ int) ([]scm.CommitPaths, error) {
+	if err := a.call(auth); err != nil {
+		return nil, err
+	}
+	return []scm.CommitPaths{{SHA: "a", Paths: []string{"environments/prod/secret.yaml"}}}, nil
+}
+
+// TestRemoteCache_PerCredential (#1672 QA): heads and history read with one
+// credential are never another credential's answer. Pipeline A caches them;
+// Pipeline B, on the same URL with a wrong token, a missing one, or another
+// ssh key, calls the remote itself and gets its own refusal, not A's data.
+func TestRemoteCache_PerCredential(t *testing.T) {
+	ctx := context.Background()
+	a := scm.TokenAuth("tok-a")
+	rem := &authRemote{good: a}
+	var c remoteCache
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	const url = "https://git/x"
+	h, err := c.remoteHeads(ctx, rem, url, a, now)
+	require.NoError(t, err)
+	require.Equal(t, "a", h["main"])
+	_, err = c.branchHistory(ctx, rem, url, "main", "a", a, 20)
+	require.NoError(t, err)
+	for _, b := range []scm.GitAuth{scm.TokenAuth("wrong"), {}, {SSHPrivateKey: []byte("other-key"), SSHKnownHosts: []byte("kh")}} {
+		_, err := c.remoteHeads(ctx, rem, url, b, now.Add(time.Second))
+		require.ErrorIs(t, err, errAuthRefused, "heads: B's own refusal, not A's cached heads")
+		_, err = c.branchHistory(ctx, rem, url, "main", "a", b, 20)
+		require.ErrorIs(t, err, errAuthRefused, "history: B's own refusal, not A's changed paths")
+	}
+	assert.Equal(t, 2, rem.calls["wrong"], "B read the remote itself, heads and history")
+	assert.Equal(t, 2, rem.calls[""])
+	assert.Equal(t, 2, rem.calls["tok-a"], "A's reads were cached, once each")
+	_, err = c.remoteHeads(ctx, rem, url, a, now.Add(2*time.Second))
+	require.NoError(t, err)
+	assert.Equal(t, 2, rem.calls["tok-a"], "A still reads from its cache")
 }
 
 // within receives from ch, failing the test after 5 seconds instead of
@@ -105,7 +170,7 @@ func (g *gatedRemote) next() (int, error) {
 	return n, nil
 }
 
-func (g *gatedRemote) RemoteHeads(context.Context, string, string) (map[string]string, error) {
+func (g *gatedRemote) RemoteHeads(context.Context, string, scm.GitAuth) (map[string]string, error) {
 	n, err := g.next()
 	if err != nil {
 		return nil, err
@@ -113,7 +178,7 @@ func (g *gatedRemote) RemoteHeads(context.Context, string, string) (map[string]s
 	return map[string]string{"main": g.heads[n]}, nil
 }
 
-func (g *gatedRemote) BranchHistory(context.Context, string, string, string, int) ([]scm.CommitPaths, error) {
+func (g *gatedRemote) BranchHistory(context.Context, string, string, scm.GitAuth, int) ([]scm.CommitPaths, error) {
 	n, err := g.next()
 	if err != nil {
 		return nil, err
@@ -144,20 +209,20 @@ func TestRemoteCache_FreshHeadsDoNotJoinAnOlderRead(t *testing.T) {
 	}
 	first := make(chan answer, 1)
 	go func() {
-		h, err := c.remoteHeads(ctx, rem, "https://git/x", "tok", now)
+		h, err := c.remoteHeads(ctx, rem, "https://git/x", scm.TokenAuth("tok"), now)
 		first <- answer{h["main"], err}
 	}()
 	within(t, rem.entered[0], "read 0 to start") // the other step's read is in progress
 	within(t, waiting, "a caller to wait")
 	shared := make(chan answer, 1)
 	go func() { // a cache miss joins it
-		h, err := c.remoteHeads(ctx, rem, "https://git/x", "tok", now)
+		h, err := c.remoteHeads(ctx, rem, "https://git/x", scm.TokenAuth("tok"), now)
 		shared <- answer{h["main"], err}
 	}()
 	within(t, waiting, "a caller to wait")
 	fresh := make(chan answer, 1)
 	go func() {
-		h, err := c.readHeads(ctx, rem, "https://git/x", "tok", now)
+		h, err := c.readHeads(ctx, rem, "https://git/x", scm.TokenAuth("tok"), now)
 		fresh <- answer{h["main"], err}
 	}()
 	within(t, rem.entered[1], "read 1 to start") // the fresh read starts its own ls-remote, not waiting for the old one
@@ -185,7 +250,7 @@ func TestRemoteCache_OlderFailedReadIsRetried(t *testing.T) {
 	}
 	first := make(chan answer, 1)
 	go func() {
-		h, err := c.branchHistory(ctx, rem, "https://git/x", "main", "a", "tok", 20)
+		h, err := c.branchHistory(ctx, rem, "https://git/x", "main", "a", scm.TokenAuth("tok"), 20)
 		first <- answer{len(h), err}
 	}()
 	within(t, rem.entered[0], "read 0 to start")
@@ -193,7 +258,7 @@ func TestRemoteCache_OlderFailedReadIsRetried(t *testing.T) {
 	late := make(chan answer, 3)
 	for range 3 {
 		go func() {
-			h, err := c.branchHistory(ctx, rem, "https://git/x", "main", "a", "tok", 20)
+			h, err := c.branchHistory(ctx, rem, "https://git/x", "main", "a", scm.TokenAuth("tok"), 20)
 			late <- answer{len(h), err}
 		}()
 	}
@@ -230,7 +295,7 @@ func TestRemoteCache_OlderHeadsFinishingLastAreNotCached(t *testing.T) {
 	}
 	older := make(chan answer, 1)
 	go func() {
-		h, err := c.remoteHeads(ctx, rem, "https://git/x", "tok", now)
+		h, err := c.remoteHeads(ctx, rem, "https://git/x", scm.TokenAuth("tok"), now)
 		older <- answer{h["main"], err}
 	}()
 	within(t, rem.entered[0], "the older read to start")
@@ -239,7 +304,7 @@ func TestRemoteCache_OlderHeadsFinishingLastAreNotCached(t *testing.T) {
 		done := make(chan struct{})
 		var h map[string]string
 		var err error
-		go func() { h, err = c.readHeads(ctx, rem, "https://git/x", "tok", now); close(done) }()
+		go func() { h, err = c.readHeads(ctx, rem, "https://git/x", scm.TokenAuth("tok"), now); close(done) }()
 		within(t, rem.entered[1], "the fresh read to start")
 		close(rem.release[1]) // the fresh read finishes first
 		within(t, done, "the fresh answer")
@@ -250,7 +315,7 @@ func TestRemoteCache_OlderHeadsFinishingLastAreNotCached(t *testing.T) {
 
 	close(rem.release[0]) // the older read finishes last
 	assert.Equal(t, answer{"old", nil}, within(t, older, "the older answer"), "its own caller gets its answer")
-	cached, err := c.remoteHeads(ctx, rem, "https://git/x", "tok", now.Add(time.Second))
+	cached, err := c.remoteHeads(ctx, rem, "https://git/x", scm.TokenAuth("tok"), now.Add(time.Second))
 	require.NoError(t, err)
 	assert.Equal(t, "new", cached["main"], "the cache keeps the heads read last, not the ones that finished last")
 	assert.Equal(t, 2, rem.callCount(), "served from the cache")
@@ -262,7 +327,7 @@ type graphRemote struct {
 	graphs int
 }
 
-func (g *graphRemote) BranchGraph(context.Context, string, string, string, int) (string, map[string]scm.GraphCommit, error) {
+func (g *graphRemote) BranchGraph(context.Context, string, string, scm.GitAuth, int) (string, map[string]scm.GraphCommit, error) {
 	g.graphs++
 	return g.head, map[string]scm.GraphCommit{g.head: {}}, nil
 }
@@ -292,11 +357,11 @@ func TestRemoteCache_StoreBeforeFlightEnds(t *testing.T) {
 				var err error
 				switch kind {
 				case "heads":
-					_, err = c.remoteHeads(ctx, rem, "https://git/x", "tok", now)
+					_, err = c.remoteHeads(ctx, rem, "https://git/x", scm.TokenAuth("tok"), now)
 				case "history":
-					_, err = c.branchHistory(ctx, rem, "https://git/x", "main", "a", "tok", 20)
+					_, err = c.branchHistory(ctx, rem, "https://git/x", "main", "a", scm.TokenAuth("tok"), 20)
 				case "graph":
-					_, err = c.branchGraph(ctx, rem, "https://git/x", "main", "a", "tok", 20)
+					_, err = c.branchGraph(ctx, rem, "https://git/x", "main", "a", scm.TokenAuth("tok"), 20)
 				}
 				return err
 			}
@@ -327,7 +392,7 @@ func TestRemoteCache_FreshDoesNotJoinARecheckHit(t *testing.T) {
 	waits := make(chan string, 8)
 	var bOnce sync.Once
 	c := remoteCache{onWait: func(key string) { waits <- key }}
-	_, err := c.loadHeads(ctx, rem, "https://git/x", "tok", now, false) // an older read stores "old"
+	_, err := c.loadHeads(ctx, rem, "https://git/x", scm.TokenAuth("tok"), now, false) // an older read stores "old"
 	require.NoError(t, err)
 	within(t, waits, "the older read")
 	rem.head = "new"
@@ -347,13 +412,13 @@ func TestRemoteCache_FreshDoesNotJoinARecheckHit(t *testing.T) {
 	}
 	a := make(chan answer, 1)
 	go func() {
-		h, err := c.readHeads(ctx, rem, "https://git/x", "tok", now)
+		h, err := c.readHeads(ctx, rem, "https://git/x", scm.TokenAuth("tok"), now)
 		a <- answer{h["main"], err}
 	}()
 	within(t, aBumped, "A to move the key to a new generation")
 	b := make(chan answer, 1)
 	go func() { // B missed the cache before "old" was stored; it reads now
-		h, err := c.loadHeads(ctx, rem, "https://git/x", "tok", now, false)
+		h, err := c.loadHeads(ctx, rem, "https://git/x", scm.TokenAuth("tok"), now, false)
 		b <- answer{h["main"], err}
 	}()
 	within(t, bInFlight, "B's flight to start")

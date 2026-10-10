@@ -445,7 +445,10 @@ Connecting and the ssh handshake are bounded (30s), and a push waits at most a m
 server's post-receive hooks before it closes the connection. A step that is cancelled or times
 out closes its ssh connection at once. A wrong or missing host key fails the step with a `knownhosts:` error, and a Secret with an ssh
 URL but no `sshPrivateKey` or `knownHosts` fails it with a message naming the missing key. The
-config source of a config Bundle on the same ssh host uses the same key. With the chart's
+config source of a config Bundle on the same ssh host uses the same key, and so do the
+controller's reads of the branch while a PR waits: its heads (`ls-remote`) and recent history,
+which it uses to follow or rebuild the PR branch and to check a later synced commit in health.
+With the chart's
 `networkPolicy.enabled`, allow the ssh port (22, or the server's) in `networkPolicy.extraEgress`:
 the default egress rules allow 443 and 6443 only.
 
