@@ -237,6 +237,7 @@
 .fleet-station__bar > [data-part='verified'] { background: var(--color-success); }
 .fleet-station__bar > [data-part='inflight'] { background: var(--color-warning); }
 .fleet-station__bar > [data-part='failed'] { background: var(--color-error); }
+.fleet-station__bar > [data-part='superseded'] { background: var(--color-text-muted); }
 
 .fleet-station[data-state='settled'] { --station-accent: var(--color-success); }
 .fleet-station[data-state='arriving'] { --station-accent: var(--color-warning); --station-note: var(--color-warning); }

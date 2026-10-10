@@ -154,6 +154,20 @@ describe('fleetRow: fleet environments (D1)', () => {
     expect(row.live).toBe('failed')
   })
 
+  it('a Superseded target is settled: not in flight, not failed, and named (#1603)', () => {
+    const states: Record<string, string> = { test: 'Verified' }
+    for (const t of targets) states[t] = 'Verified'
+    states['prod-c02'] = 'Superseded' // its rollback pushed first
+    const prod = fleetRow({ ...base, activeBundleName: 'web-2', environmentStates: states }).groups[1][0]
+    expect(prod.fleet).toMatchObject({ verified: 4, superseded: 1, supersededTargets: ['prod-c02'], inFlight: 0, failed: 0, stopped: false })
+    expect(prod.state).toBe('settled')
+
+    states['prod-c05'] = 'Promoting'
+    const moving = fleetRow({ ...base, activeBundleName: 'web-2', environmentStates: states }).groups[1][0]
+    expect(moving.fleet).toMatchObject({ verified: 3, superseded: 1, inFlight: 1 })
+    expect(moving.state).toBe('arriving')
+  })
+
   it('a fleet every target of which runs the active Bundle is settled', () => {
     const states: Record<string, string> = { test: 'Verified' }
     const deployed: Record<string, { bundle: string; version: string }> = {}

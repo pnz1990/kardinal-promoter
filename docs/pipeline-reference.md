@@ -532,7 +532,7 @@ How a fleet is promoted:
 - **CLI and UI.** `kardinal get pipelines` shows a fleet as one column, `Verified` or
   `12/50 Verified, 1 Failed, 1 Superseded (prod-eu-west)`. `kardinal status`, `promote` and `rollback` take a target's
   environment name (`prod-eu-west`). The UI's fleet board draws the fleet as one station with
-  a bar of its targets: Verified, in flight and Failed. It names the fleet as `stopped` once
+  a bar of its targets: Verified, in flight, Failed and Superseded, naming the Superseded ones. It names the fleet as `stopped` once
   `maxUnavailable` is reached.
 
 ## Git Layout: Directory vs Branch
