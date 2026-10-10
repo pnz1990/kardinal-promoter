@@ -240,6 +240,44 @@ func TestRetiredSteps(t *testing.T) {
 	}
 }
 
+// TestCheckOutcome (#1613 QA): a Failed Bundle fails a test that expects
+// success. By default the newest Bundle of each Pipeline must be Verified and
+// the others Verified or Superseded; all-verified wants every one Verified;
+// any accepts Failed only with a reason.
+//
+// Covers SCALE-INV-OUTCOME-01.
+func TestCheckOutcome(t *testing.T) {
+	at := func(name, pipeline, phase string, sec int) v1alpha1.Bundle {
+		b := bundle(name, phase)
+		b.Spec.Pipeline = pipeline
+		b.Annotations = map[string]string{lifecycle.AnnotationCreatedAt: time.Date(2026, 10, 9, 12, 0, sec, 0, time.UTC).Format(time.RFC3339Nano)}
+		return b
+	}
+	ok := testState([]v1alpha1.Bundle{at("a1", "a", "Superseded", 1), at("a2", "a", "Verified", 2), at("b1", "b", "Verified", 1)}, nil)
+	assert.Empty(t, checkOutcome(ok, Options{}).Violations)
+
+	newestFailed := testState([]v1alpha1.Bundle{at("a1", "a", "Superseded", 1), at("a2", "a", "Failed", 2)}, nil)
+	v := checkOutcome(newestFailed, Options{}).Violations
+	require.Len(t, v, 1)
+	assert.Contains(t, v[0], "newest Bundle a2 is \"Failed\"")
+
+	olderFailed := testState([]v1alpha1.Bundle{at("a1", "a", "Failed", 1), at("a2", "a", "Verified", 2)}, nil)
+	assert.Len(t, checkOutcome(olderFailed, Options{}).Violations, 1, "an older Bundle may not fail either")
+
+	// Name order and created-at order disagree: z-old was created first, so
+	// a-new is the newest and must be the one Verified.
+	byCreation := testState([]v1alpha1.Bundle{at("z-old", "a", "Superseded", 1), at("a-new", "a", "Verified", 2)}, nil)
+	assert.Empty(t, checkOutcome(byCreation, Options{}).Violations, "newest is by created-at, not name")
+	byName := testState([]v1alpha1.Bundle{at("z-old", "a", "Verified", 1), at("a-new", "a", "Superseded", 2)}, nil)
+	v = checkOutcome(byName, Options{}).Violations
+	require.Len(t, v, 1)
+	assert.Contains(t, v[0], "newest Bundle a-new is \"Superseded\"")
+
+	assert.Len(t, checkOutcome(ok, Options{Outcome: OutcomeAllVerified}).Violations, 1, "a1 is Superseded")
+	assert.Len(t, checkOutcome(newestFailed, Options{Outcome: OutcomeAny}).Violations, 1, "any needs a reason")
+	assert.Empty(t, checkOutcome(newestFailed, Options{Outcome: OutcomeAny, OutcomeWhy: "the test fails a Bundle"}).Violations)
+}
+
 // TestCountsFromZero (#1578 QA): a counter series that appears during the
 // window counts from zero, not from its first sample; one that existed at
 // the start counts from its value then; a reset series counts its end value.
