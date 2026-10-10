@@ -151,13 +151,12 @@ To accept PRs merged in the web UI (the usual GitOps flow), list the identity, f
 `allowedSigners: [web-flow, alice, bob@example.com]`. Anyone who can merge through the web UI then
 gets such a commit, so pair it with branch protection that requires reviews.
 
+In a [compact Graph](pipeline-reference.md#large-pipelines) (above `--graph-compact-above`
+environments) it works the same: the root environments' PromotionSteps name the
+ImageVerification and wait for it, and so do their pre-deploy hooks.
+
 ## What it cannot do
 
-- It needs the node Graph shape. A Pipeline whose Bundles get a
-  [compact Graph](pipeline-reference.md#large-pipelines) (more than `--graph-compact-above`
-  environments, default 100, or the annotation `kardinal.io/graph-shape: compact`) is
-  `Ready=False`, and its Bundles fail with `GraphBuildFailed` naming image signature
-  verification instead of promoting unverified.
 - It verifies before promotion, not at deploy time in the target cluster. To enforce signatures
   on every Pod, whoever deploys it, add admission-time verification there:
   [Sigstore policy-controller](https://docs.sigstore.dev/policy-controller/overview/) or
