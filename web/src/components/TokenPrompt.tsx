@@ -26,7 +26,7 @@ interface PendingPrompt {
   resolve: (token: string) => void
 }
 
-const TOKEN_COMMAND = 'kubectl create token <service-account> -n <namespace>'
+const TOKEN_COMMAND = 'kubectl create token <service-account> -n <namespace> --audience kardinal-promoter'
 
 /** TokenPrompt renders nothing until the controller asks for a token. */
 export function TokenPrompt() {
