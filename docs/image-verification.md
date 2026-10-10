@@ -136,8 +136,9 @@ same UID the Bundle's Graph was built with, a ClusterScmProvider's `allowedNames
 `allowedRepositories`, which must allow the config repository (`configRef.gitRepo`, or
 `spec.git.url`). A provider that is gone, was created again, or does not allow the namespace or
 the repository fails the ImageVerification with the reason; it never falls back to the
-controller's provider. A provider that cannot be used yet (its token Secret missing or not
-labeled `kardinal.io/referenceable`) is retried until the policy's timeout.
+controller's provider. So does a provider whose `apiURL` is refused (not a URL, or `http://`
+without `scm.providersAllowInsecureHTTP`). A provider that cannot be used yet (its token Secret
+missing or not labeled `kardinal.io/referenceable`) is retried until the policy's timeout.
 
 The SCM's verdict is about the key it holds for the signer; `allowedSigners` narrows it to the
 people you accept, by login or email as the SCM reports the verified signer. Forgejo reports the

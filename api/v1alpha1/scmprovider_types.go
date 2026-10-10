@@ -13,6 +13,7 @@ const (
 
 // ScmProviderSpec is the SCM a Pipeline opens its PRs on: its type, API and
 // credentials.
+// +kubebuilder:validation:XValidation:rule="!has(self.instanceSigners) || size(self.instanceSigners) == 0 || self.type in ['forgejo', 'gitea']",message="instanceSigners applies to forgejo and gitea providers only"
 type ScmProviderSpec struct {
 	// Type is the SCM: github, gitlab, forgejo, gitea, bitbucket,
 	// azuredevops or bitbucket-datacenter (the --scm-provider values). A

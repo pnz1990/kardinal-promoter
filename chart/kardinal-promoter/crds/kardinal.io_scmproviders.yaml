@@ -163,6 +163,10 @@ spec:
             - secretRef
             - type
             type: object
+            x-kubernetes-validations:
+            - message: instanceSigners applies to forgejo and gitea providers only
+              rule: '!has(self.instanceSigners) || size(self.instanceSigners) == 0
+                || self.type in [''forgejo'', ''gitea'']'
           status:
             description: |-
               ScmProviderStatus is what the controller found when it checked the

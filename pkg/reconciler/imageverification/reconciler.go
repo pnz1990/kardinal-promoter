@@ -405,20 +405,21 @@ func (r *Reconciler) commitSCM(ctx context.Context, ns string, c *v1alpha1.Verif
 	}
 	host, err := scm.WebHost(res.Spec.Spec.Type, res.Spec.Spec.APIURL)
 	if err != nil {
-		return commitSCM{}, fmt.Errorf("%s: %v: %w", name, err, scm.ErrProviderConfig)
+		return commitSCM{}, fmt.Errorf("%s: %v: %w", name, err, scm.ErrProviderURL)
 	}
 	return commitSCM{provider: res.Provider, host: host, name: name + "'s", instanceSigners: res.Spec.Spec.InstanceSigners}, nil
 }
 
 // permanentProviderError reports whether the Pipeline's provider cannot
 // check the commit however long the verification waits: it is gone (or
-// another object under its name), or it no longer allows the namespace or
-// the repository. These fail a PromotionStep too. Any other error (its
-// Secret missing or not referenceable, the API unreachable) is retried
-// until the deadline, so fixing the provider lets the check go on.
+// another object under its name), it no longer allows the namespace or the
+// repository (these fail a PromotionStep too), or its apiURL is refused
+// (not a URL, or http:// without the opt-in). Any other error (its Secret
+// missing or not referenceable yet, the API unreachable) is retried until
+// the deadline, so fixing the Secret lets the check go on.
 func permanentProviderError(err error) bool {
 	return errors.Is(err, scm.ErrProviderGone) || errors.Is(err, scm.ErrRepositoryNotAllowed) ||
-		errors.Is(err, scm.ErrNamespaceNotAllowed) || errors.Is(err, errNoProviders)
+		errors.Is(err, scm.ErrNamespaceNotAllowed) || errors.Is(err, scm.ErrProviderURL) || errors.Is(err, errNoProviders)
 }
 
 func commitAllowedSigners(iv *v1alpha1.ImageVerification) []string {
