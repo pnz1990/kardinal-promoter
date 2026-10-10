@@ -85,8 +85,9 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["batch"]
   resources: ["jobs"]
   verbs: ["get", "list", "watch", "create", "delete"]
-# Audit records are append-only. audit.retention.enabled adds delete: the
-# leader deletes records past their retention (pkg/reconciler/auditretention).
+# Audit records are append-only. audit.retention.enabled (the default) adds
+# delete: the leader deletes records past their retention
+# (pkg/reconciler/auditretention).
 - apiGroups: ["kardinal.io"]
   resources: ["auditevents"]
   {{- if .Values.audit.retention.enabled }}

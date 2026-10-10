@@ -980,6 +980,68 @@ func (h *EnvironmentHold) Expired(now time.Time) bool {
 	return h != nil && h.ExpiresAt != nil && !now.Before(h.ExpiresAt.Time)
 }
 
+// The states of a hold (PipelineStatus.HoldStates). A hold is in effect in
+// every state: the controller never lifts a hold (#1629).
+const (
+	// HoldStateActive: the hold's Bundle exists.
+	HoldStateActive = "Active"
+	// HoldStateBundleMissing: the controller found the hold's Bundle
+	// missing. The hold stays in effect; past the grace the controller
+	// reports it (condition HoldBundleMissing, a Warning Event, an
+	// AuditEvent) and a human releases it.
+	HoldStateBundleMissing = "BundleMissing"
+)
+
+// EnvironmentHoldState is the state of one hold, written by the Pipeline
+// reconciler.
+type EnvironmentHoldState struct {
+	// Environment is the held environment.
+	Environment string `json:"environment"`
+	// Bundle is the hold's Bundle the state was found for.
+	Bundle string `json:"bundle"`
+	// CreatedAt is the hold's createdAt: with the environment and the
+	// Bundle it identifies the hold, so a hold released and added again
+	// gets a state, and a report, of its own.
+	// +optional
+	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
+	// State is Active or BundleMissing.
+	State string `json:"state"`
+	// BundleMissingSince is when the controller first found the Bundle
+	// missing: the grace counts from it, not from the client-set createdAt.
+	// +optional
+	BundleMissingSince *metav1.Time `json:"bundleMissingSince,omitempty"`
+	// ReportedAt is when the controller reported the missing Bundle, once,
+	// past the grace.
+	// +optional
+	ReportedAt *metav1.Time `json:"reportedAt,omitempty"`
+	// Message says what is wrong and how to recover.
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
+// sameTime reports whether a and b are both unset or the same second.
+func sameTime(a, b *metav1.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Truncate(time.Second).Equal(b.Truncate(time.Second))
+}
+
+// HoldState returns the status.holdStates entry of h, or nil: the entry of
+// the same environment, Bundle and createdAt.
+func (p *Pipeline) HoldState(h *EnvironmentHold) *EnvironmentHoldState {
+	if p == nil || h == nil {
+		return nil
+	}
+	for i := range p.Status.HoldStates {
+		st := &p.Status.HoldStates[i]
+		if st.Environment == h.Environment && st.Bundle == h.Bundle && sameTime(st.CreatedAt, h.CreatedAt) {
+			return st
+		}
+	}
+	return nil
+}
+
 // EnvironmentHold pins one environment of a Pipeline to a rollback Bundle.
 type EnvironmentHold struct {
 	// Environment is the held environment.
@@ -1053,8 +1115,18 @@ type PipelineStatus struct {
 	// +optional
 	ObservedHolds []EnvironmentHold `json:"observedHolds,omitempty"`
 
-	// PendingAuditEvents are the HoldCreated and HoldReleased AuditEvents not
-	// yet written (the audit outbox, #1552). Each entry is stored in the same
+	// HoldStates says, per hold of spec.holds, whether its rollback Bundle
+	// exists (#1629). A hold whose Bundle is missing (a crash between the
+	// hold and the Bundle create, or the Bundle deleted) stays in effect;
+	// past the grace the controller reports it, and a human releases it.
+	// +listType=map
+	// +listMapKey=environment
+	// +optional
+	HoldStates []EnvironmentHoldState `json:"holdStates,omitempty"`
+
+	// PendingAuditEvents are the HoldCreated, HoldReleased and
+	// HoldBundleMissing AuditEvents not yet written (the audit outbox,
+	// #1552). Each entry is stored in the same
 	// status patch as observedHolds and removed once the AuditEvent exists.
 	// Normally empty.
 	// +optional
