@@ -34,6 +34,7 @@ With controller TLS set (`controller.tlsCertFile`), both listeners use `https://
 | `POST` | `/api/v1/ui/promote` | Promote the Bundle Verified upstream into an environment |
 | `POST` | `/api/v1/ui/rollback` | Roll an environment back (with `hold`, keep it on the rollback) |
 | `POST` | `/api/v1/ui/release-hold` | Release the hold of a rollback on an environment |
+| `POST` | `/api/v1/ui/approvals` | Approve, reject or revoke a Bundle for an environment's approval gates, as the UI user (TokenReview mode only) |
 | `POST` | `/api/v1/ui/pause` | Pause a Pipeline |
 | `POST` | `/api/v1/ui/resume` | Resume a Pipeline |
 | `POST` | `/api/v1/ui/validate-cel` | Compile a PolicyGate CEL expression |

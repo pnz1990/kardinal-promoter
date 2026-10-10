@@ -5,17 +5,11 @@ package cmd
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
-	"slices"
-	"sort"
-	"strings"
 
 	"github.com/spf13/cobra"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -75,35 +69,17 @@ with it. See docs/policy-gates.md (Approval gates).`,
 	return cmd
 }
 
-// approvalName is the name of user's Approval of bundle for env: one per user,
-// Bundle and environment, so a repeated approve finds it. It is a DNS
-// subdomain of at most 253 characters ending in a hash of the user.
-func approvalName(bundle, env, user string) string {
-	sum := sha256.Sum256([]byte(user))
-	suffix := "-" + env + "-" + hex.EncodeToString(sum[:])[:10]
-	if limit := 253 - len(suffix); len(bundle) > limit {
-		bundle = strings.TrimRight(bundle[:limit], "-.")
-	}
-	return bundle + suffix
-}
-
-// generatePrefix is a generateName for name: the API server appends five
-// characters, and the result must stay a DNS subdomain of 253.
-func generatePrefix(name string) string {
-	if len(name) > 247 {
-		name = strings.TrimRight(name[:247], "-.")
-	}
-	return name + "-"
-}
-
-// approveFn is the testable implementation of approve.
+// approveFn is the testable implementation of approve. The decision is
+// recorded by lifecycle.RecordApproval, which the UI shares.
 func approveFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, bundleName string, o approveOptions) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if o.decision != "approve" && o.decision != "reject" {
+	if o.decision != lifecycle.DecisionApprove && o.decision != lifecycle.DecisionReject {
 		return fmt.Errorf("approve: --decision must be approve or reject, not %q", o.decision)
 	}
+	// The bundle and environment are checked before the identity is read,
+	// so a typo is reported as such.
 	var b v1alpha1.Bundle
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: bundleName}, &b); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -111,99 +87,23 @@ func approveFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, bundl
 		}
 		return fmt.Errorf("approve: get bundle %s: %w", bundleName, err)
 	}
-	var p v1alpha1.Pipeline
-	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: b.Spec.Pipeline}, &p); err != nil {
-		return fmt.Errorf("approve: get pipeline %s of bundle %s: %w", b.Spec.Pipeline, bundleName, err)
-	}
-	if !slices.ContainsFunc(p.Spec.Environments, func(e v1alpha1.EnvironmentSpec) bool { return e.Name == o.env }) {
-		return fmt.Errorf("approve: pipeline %s has no environment %q", p.Name, o.env)
-	}
-	if !o.revoke && lifecycle.Halted(&b) {
-		return fmt.Errorf("approve: bundle %s is %s and never promotes again; approve a newer Bundle", bundleName, b.Status.Phase)
-	}
 	id, err := identityOf(ctx, c)
 	if err != nil {
 		return fmt.Errorf("approve: %w", err)
 	}
-	// Your Approval of this Bundle for env: found by its labels and
-	// spec.user, not by name. Anyone can create an object under the name
-	// approvalName derives, and an Approval of an earlier Bundle of the
-	// same name is not counted (the Graph matches spec.bundleUID).
-	var list v1alpha1.ApprovalList
-	if err := c.List(ctx, &list, sigs_client.InNamespace(ns),
-		sigs_client.MatchingLabels{"kardinal.io/bundle": bundleName, "kardinal.io/environment": o.env}); err != nil {
-		return fmt.Errorf("approve: list approvals of %s: %w", bundleName, err)
-	}
-	var mine []v1alpha1.Approval
-	for _, a := range list.Items {
-		if a.Spec.User != id.Username {
-			continue // never count, replace or revoke someone else's
-		}
-		if a.Spec.BundleUID != string(b.UID) {
-			if err := c.Delete(ctx, &a); err != nil && !apierrors.IsNotFound(err) {
-				return fmt.Errorf("approve: delete %s, your Approval of an earlier Bundle %s: %w", a.Name, bundleName, err)
-			}
-			continue
-		}
-		mine = append(mine, a)
-	}
-	sort.Slice(mine, func(i, j int) bool { return mine[i].Name < mine[j].Name })
-
-	switch {
-	case o.revoke && len(mine) == 0:
-		return fmt.Errorf("approve: %s has no Approval of %s for %s to revoke", id.Username, bundleName, o.env)
-	case o.revoke:
-		for i := range mine {
-			if err := c.Delete(ctx, &mine[i]); err != nil && !apierrors.IsNotFound(err) {
-				return fmt.Errorf("approve: revoke %s: %w", mine[i].Name, err)
-			}
-		}
-		return writef(w, "Revoked: %s no longer %ss %s for %s (Approval %s deleted)\n",
-			id.Username, mine[0].Spec.Decision, bundleName, o.env, mine[0].Name)
-	case len(mine) == 1 && mine[0].Spec.Decision == o.decision && mine[0].Spec.Comment == o.comment:
-		return writef(w, "Already recorded: %s %ss %s for %s (Approval %s)\n", id.Username, o.decision, bundleName, o.env, mine[0].Name)
-	}
-	// An Approval is immutable: a new decision replaces yours.
-	for i := range mine {
-		if err := c.Delete(ctx, &mine[i]); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("approve: replace %s: %w", mine[i].Name, err)
-		}
-	}
-	name := approvalName(bundleName, o.env, id.Username)
-
-	groups := id.Groups
-	if groups == nil {
-		groups = []string{}
-	}
-	a := &v1alpha1.Approval{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: ns,
-			Labels: map[string]string{
-				"kardinal.io/bundle":      bundleName,
-				"kardinal.io/environment": o.env,
-				"kardinal.io/pipeline":    b.Spec.Pipeline,
-			},
-			// Deleted with its Bundle (garbage collection).
-			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: v1alpha1.GroupVersion.String(), Kind: "Bundle", Name: b.Name, UID: b.UID,
-			}},
-		},
-		Spec: v1alpha1.ApprovalSpec{
-			Bundle: bundleName, BundleUID: string(b.UID), Environment: o.env, User: id.Username, Groups: groups,
-			Decision: o.decision, Comment: o.comment,
-		},
-	}
-	err = c.Create(ctx, a)
-	if apierrors.IsAlreadyExists(err) {
-		// The name is taken (by someone else's object, or a revoke still
-		// finishing): let the API server pick one.
-		a.Name, a.GenerateName = "", generatePrefix(name)
-		a.ResourceVersion = ""
-		err = c.Create(ctx, a)
-	}
+	outcome, a, err := lifecycle.RecordApproval(ctx, c, lifecycle.ApprovalRequest{
+		Namespace: ns, Bundle: bundleName, Environment: o.env, User: id.Username, Groups: id.Groups,
+		Decision: o.decision, Comment: o.comment, Revoke: o.revoke,
+	})
 	if err != nil {
-		return fmt.Errorf("approve: create approval for %s: %w", bundleName, err)
+		return fmt.Errorf("approve: %w", err)
+	}
+	switch outcome {
+	case lifecycle.ApprovalRevoked:
+		return writef(w, "Revoked: %s no longer %ss %s for %s (Approval %s deleted)\n",
+			id.Username, a.Spec.Decision, bundleName, o.env, a.Name)
+	case lifecycle.ApprovalUnchanged:
+		return writef(w, "Already recorded: %s %ss %s for %s (Approval %s)\n", id.Username, o.decision, bundleName, o.env, a.Name)
 	}
 	return writef(w, "Recorded: %s %ss %s for %s (Approval %s)\n", id.Username, o.decision, bundleName, o.env, a.Name)
 }

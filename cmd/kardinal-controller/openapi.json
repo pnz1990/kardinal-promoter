@@ -136,6 +136,14 @@
           "provenance": {
             "$ref": "#/components/schemas/BundleProvenance"
           },
+          "rejected": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/uiBundleRejection"
+              }
+            ],
+            "description": "Rejected is spec.rejected: who rejected the Bundle (kardinal reject), why and when. Absent when it is not rejected."
+          },
           "rejectedLiveEnvironments": {
             "description": "RejectedLiveEnvironments are the environments where this Rejected Bundle's change is live (lifecycle.RejectedLiveEnvs): the UI keeps it current there, marked Rejected, with a roll-back hint.",
             "items": {
@@ -835,6 +843,14 @@
         "additionalProperties": false,
         "description": "uiGateResponse is the JSON shape for a PolicyGate.",
         "properties": {
+          "approval": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/uiGateApproval"
+              }
+            ],
+            "description": "Approval is the gate's approval quorum and who approved (an approval gate, spec.approval). Absent for a gate without one."
+          },
           "bundle": {
             "type": "string"
           },
@@ -1276,6 +1292,90 @@
         ],
         "type": "object"
       },
+      "uiApprovalRequest": {
+        "additionalProperties": false,
+        "description": "uiApprovalRequest is the body of POST /api/v1/ui/approvals.",
+        "properties": {
+          "bundle": {
+            "description": "Bundle is the Bundle decided on.",
+            "type": "string"
+          },
+          "comment": {
+            "description": "Comment is a note shown with the decision.",
+            "type": "string"
+          },
+          "decision": {
+            "description": "Decision is \"approve\" or \"reject\". Ignored with revoke.",
+            "type": "string"
+          },
+          "environment": {
+            "description": "Environment is the environment whose approval gates count the decision.",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "Namespace of the Bundle. Defaults to \"default\".",
+            "type": "string"
+          },
+          "revoke": {
+            "description": "Revoke deletes the user's decision instead of recording one.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "bundle",
+          "environment"
+        ],
+        "type": "object"
+      },
+      "uiApprovalResponse": {
+        "additionalProperties": false,
+        "description": "uiApprovalResponse is the response of POST /api/v1/ui/approvals.",
+        "properties": {
+          "approval": {
+            "description": "Approval is the name of the Approval recorded or deleted.",
+            "type": "string"
+          },
+          "message": {
+            "description": "Message describes what was done.",
+            "type": "string"
+          },
+          "outcome": {
+            "description": "Outcome is \"Recorded\", \"Already recorded\" or \"Revoked\".",
+            "type": "string"
+          },
+          "user": {
+            "description": "User is who the decision is recorded for: the authenticated UI user.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "approval",
+          "message",
+          "outcome",
+          "user"
+        ],
+        "type": "object"
+      },
+      "uiBundleRejection": {
+        "additionalProperties": false,
+        "description": "uiBundleRejection is spec.rejected of a Bundle.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "by",
+          "reason"
+        ],
+        "type": "object"
+      },
       "uiDeployed": {
         "additionalProperties": false,
         "description": "uiDeployed is what one environment runs, for the fleet board.",
@@ -1307,6 +1407,91 @@
         },
         "required": [
           "bundle"
+        ],
+        "type": "object"
+      },
+      "uiGateApproval": {
+        "additionalProperties": false,
+        "description": "uiGateApproval is a gate's approval policy (spec.approval) and how the gate counted the decisions it has (status.approvals).",
+        "properties": {
+          "allowedGroups": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "allowedUsers": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "approved": {
+            "description": "Approved is the number of counted approve decisions; Rejected is true when a counted reject blocks the gate.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "decisions": {
+            "description": "Decisions are status.approvals, in the order the gate recorded them.",
+            "items": {
+              "$ref": "#/components/schemas/uiGateDecision"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "excludeAuthor": {
+            "type": "boolean"
+          },
+          "rejected": {
+            "type": "boolean"
+          },
+          "required": {
+            "description": "Required is how many distinct allowed people must approve (default 1).",
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "approved",
+          "required"
+        ],
+        "type": "object"
+      },
+      "uiGateDecision": {
+        "additionalProperties": false,
+        "description": "uiGateDecision is one approve or reject decision as the gate counted it.",
+        "properties": {
+          "comment": {
+            "type": "string"
+          },
+          "counted": {
+            "type": "boolean"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "firstSeenAt": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "user": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "counted",
+          "decision",
+          "user"
         ],
         "type": "object"
       },
@@ -1497,6 +1682,68 @@
         "summary": "This OpenAPI description (also on the Bundle API listener)",
         "tags": [
           "Meta"
+        ]
+      }
+    },
+    "/api/v1/ui/approvals": {
+      "post": {
+        "description": "Needs TokenReview UI auth: the decision is recorded for the authenticated user and groups.",
+        "operationId": "recordApproval",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/uiApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/uiApprovalResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "Approve, reject or revoke a Bundle for an environment's approval gates as the UI user (kardinal approve)",
+        "tags": [
+          "UI"
         ]
       }
     },

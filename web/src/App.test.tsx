@@ -592,3 +592,15 @@ describe('App keyboard access', () => {
     expect(screen.getAllByRole('img', { name: 'config Bundle' }).length).toBe(2)
   })
 })
+
+describe('App rejected Bundle (E6)', () => {
+  it('says who rejected the shown Bundle and why', async () => {
+    h.state.bundles = { app: [bundle('b-new', 'Rejected', 1, {
+      rejected: { by: 'alice', reason: 'CVE in the base image', at: new Date(Date.now() - 2 * 3600_000).toISOString() },
+    }), bundle('b-old', 'Superseded', 2)] }
+    render(<App />)
+    await flush()
+    const note = screen.getByRole('note')
+    expect(note).toHaveTextContent('Rejected by alice 2h ago: CVE in the base image')
+  })
+})
