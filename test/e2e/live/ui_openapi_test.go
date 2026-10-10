@@ -144,11 +144,13 @@ func TestUI_APIServiceAccountToken(t *testing.T) {
 	}
 
 	framework.Eventually(t, time.Minute, "the ServiceAccount token to list Pipelines", func(context.Context) (bool, string) {
-		res := framework.UIClient{BaseURL: url, Token: mint()}.Get(t, uiAPI+"/pipelines")
+		res := framework.UIClient{BaseURL: url, Token: mint("kardinal-promoter")}.Get(t, uiAPI+"/pipelines")
 		return res.Status == http.StatusOK, res.String()
 	})
 	res := framework.UIClient{BaseURL: url, Token: mint("https://not-the-api-server.example")}.Get(t, uiAPI+"/pipelines")
 	assert.Equal(t, http.StatusUnauthorized, res.Status, "another audience is refused: %s", res)
+	res = framework.UIClient{BaseURL: url, Token: mint()}.Get(t, uiAPI+"/pipelines")
+	assert.Equal(t, http.StatusUnauthorized, res.Status, "the API server's audience is refused without the opt-in: %s", res)
 }
 
 // bindViewer binds ServiceAccount saNS/sa to the documented UI viewer rules

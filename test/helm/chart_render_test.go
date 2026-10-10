@@ -884,6 +884,9 @@ var everyValue = []string{
 	"--set", "bundleAPI.tokenSecretRef.name=bundle-token",
 	"--set", "ui.auth.tokenSecretRef.name=ui-token",
 	"--set", "ui.auth.tokenReview=true",
+	"--set", "ui.auth.allowStaticTokenWithTokenReview=true",
+	"--set", "tokenReview.audiences={kardinal-promoter,ci}",
+	"--set", "tokenReview.acceptAPIServerAudience=true",
 	"--set", "ui.corsAllowedOrigins={https://a.example.com,https://b.example.com}",
 }
 
@@ -911,14 +914,17 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 	env := envByName(c)
 
 	wantArgs := map[string]string{
-		"policy-namespaces":        "platform-policies",
-		"scm-provider":             "gitlab",
-		"scm-api-url":              "https://gitlab.example.com",
-		"scm-allowed-repositories": "gitlab.example.com/acme/*,gitlab.example.com/platform/**",
-		"gates-commit-status":      "false",
-		"gates-status-context":     "acme/gates",
-		"ui-tokenreview-auth":      "true",
-		"cors-allowed-origins":     "https://a.example.com,https://b.example.com",
+		"policy-namespaces":                     "platform-policies",
+		"scm-provider":                          "gitlab",
+		"scm-api-url":                           "https://gitlab.example.com",
+		"scm-allowed-repositories":              "gitlab.example.com/acme/*,gitlab.example.com/platform/**",
+		"gates-commit-status":                   "false",
+		"gates-status-context":                  "acme/gates",
+		"ui-tokenreview-auth":                   "true",
+		"cors-allowed-origins":                  "https://a.example.com,https://b.example.com",
+		"ui-auth-static-overrides-tokenreview":  "true",
+		"tokenreview-audiences":                 "kardinal-promoter,ci",
+		"tokenreview-accept-apiserver-audience": "true",
 	}
 	for k, v := range wantArgs {
 		assert.Equal(t, v, args[k], "--%s", k)

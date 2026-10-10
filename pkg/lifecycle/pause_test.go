@@ -240,3 +240,55 @@ func TestSetPaused_WritesOnlyThePipeline(t *testing.T) {
 	}
 	assert.ErrorIs(t, lifecycle.SetPaused(ctx, newClient(t), ns, "missing", true), lifecycle.ErrNotFound)
 }
+
+// TestPauseResume_WithoutGateRights: a caller allowed to update the Pipeline
+// but not to write PolicyGates (the promoter role with
+// rbac.userRoles.directWrites) pauses and resumes; the Pipeline reconciler
+// creates and removes the freeze gate. Any other gate error still fails.
+func TestPauseResume_WithoutGateRights(t *testing.T) {
+	ctx := context.Background()
+	forbidden := apierrors.NewForbidden(schema.GroupResource{Group: "kardinal.io", Resource: "policygates"}, "freeze-app", fmt.Errorf("no"))
+	tests := []struct {
+		name    string
+		gateErr error
+		wantErr bool
+	}{
+		{"forbidden is left to the reconciler", forbidden, false},
+		{"other errors fail", fmt.Errorf("boom"), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			require.NoError(t, v1alpha1.AddToScheme(scheme))
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pipeline("app", "test")).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+						return tt.gateErr
+					},
+					Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+						if _, ok := obj.(*v1alpha1.PolicyGate); ok {
+							return tt.gateErr
+						}
+						return cl.Get(ctx, key, obj, opts...)
+					},
+				}).Build()
+			var p v1alpha1.Pipeline
+			err := lifecycle.Pause(ctx, c, ns, "app")
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "app"}, &p))
+			assert.True(t, p.Spec.Paused, "spec.paused is set either way")
+			err = lifecycle.Resume(ctx, c, ns, "app")
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "app"}, &p))
+			assert.False(t, p.Spec.Paused)
+		})
+	}
+}
