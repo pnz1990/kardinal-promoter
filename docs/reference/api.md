@@ -807,6 +807,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | PromotionStepSpec defines the desired state of a PromotionStep. PromotionStep objects are created by the Graph controller — not by users. |
+| `spec.admitted` | boolean |  | Admitted is written by a compact Graph with fleets: false while the Graph has not yet read the step back (its StepsObserved), true once it has. Only then is the step's admission final: until it is, a pacing change can make kro delete the step, so a Pending step does no work while Admitted is false (#1565). Unset (other Graphs) does not wait. Do not set it. |
 | `spec.analyses` | []string |  | Analyses names the AnalysisTemplates of the environment's verification. A step with analyses goes from HealthChecking to Verifying and is Verified only when, for every template, the newest AnalysisRun in spec.live.analyses is Successful: a run that a later translation replaced (the template changed) is not waited for, and the timeout keeps counting from status.verificationStartedAt. |
 | `spec.analysisPolicy` | object |  | AnalysisPolicy is the verification's verdict policy, copied from the Pipeline when the Graph was built, so a Pipeline edit does not change the verdict of a step in flight. |
 | `spec.analysisPolicy.inconclusive` | string |  | Inconclusive is "fail" (default) or "pass". |

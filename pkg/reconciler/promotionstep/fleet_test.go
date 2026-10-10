@@ -90,3 +90,47 @@ func TestFleet_UnresolvedEnvironmentFailsClosed(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step", Namespace: "default"}, &got))
 	assert.Equal(t, "Promoting", got.Status.State)
 }
+
+// TestFleet_PendingWaitsForAdmission (#1565 QA): a fleet target's step that
+// the Graph has created but not read back yet (spec.admitted false) does no
+// work: no git call, it stays Pending, says why and looks again. If pacing
+// drops it in that window, kro deletes a step that pushed nothing, opened
+// no PR and holds no finalizer duty (Pending holds no PR). Once the Graph
+// sets admitted true, it starts.
+func TestFleet_PendingWaitsForAdmission(t *testing.T) {
+	p := makePipeline("web")
+	p.Spec.Environments[1].Fleet = &v1alpha1.FleetSpec{Targets: []v1alpha1.FleetTarget{{Name: "eu"}}}
+	step := labelled(makeStep("step", "web", "bundle-1", "prod-eu"))
+	step.Labels["kardinal.io/fleet"] = "prod"
+	no := false
+	step.Spec.Admitted = &no
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithStatusSubresource(
+		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}, &v1alpha1.Pipeline{},
+	).WithObjects(step, p, makeBundle("bundle-1", "web")).Build()
+	git := &countingGit{}
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: git,
+		WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step", Namespace: "default"}}
+	for range 3 { // idempotent; the first reconcile records nothing else either
+		res, err := r.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+		assert.Equal(t, 30*time.Second, res.RequeueAfter)
+	}
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.Equal(t, "", got.Status.State, "still Pending")
+	assert.Contains(t, got.Status.Message, "confirm this step's admission")
+	assert.Zero(t, int(git.clones.Load()+git.pushes.Load()), "nothing is cloned or pushed")
+	assert.Empty(t, got.Finalizers, "no PR finalizer duty")
+
+	yes := true
+	got.Spec.Admitted = &yes
+	require.NoError(t, c.Update(context.Background(), &got))
+	for range 3 {
+		_, err := r.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+	}
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.NotEqual(t, "", got.Status.State, "admitted: it starts")
+	assert.NotContains(t, got.Status.Message, "admission")
+}

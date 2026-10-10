@@ -867,6 +867,19 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
 	}
+	if a := ps.Spec.Admitted; a != nil && !*a {
+		// A fleet Graph has not read this step back yet, so its admission is
+		// not final (spec.admitted): do no work a pruned step would leave
+		// behind. The Graph's spec update wakes the step.
+		const msg = "waiting for the promotion Graph to confirm this step's admission (fleet pacing)"
+		if ps.Status.Message != msg {
+			ps.Status.Message = msg
+			if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil && !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("patch admission wait: %w", err)
+			}
+		}
+		return ctrl.Result{RequeueAfter: unresolvedRecheck}, nil
+	}
 	if held, res, holdErr := r.holdIfPaused(ctx, log, ps); held {
 		return res, holdErr
 	}

@@ -639,8 +639,15 @@ remains is between kro creating an item and the `ref` listing it. During that wi
 in the list only because of the current pacing. If the pacing changes before the `ref` sees the
 item (a lower-ranked target's gate turns ready, or a failure reaches `maxUnavailable`), kro
 deletes it. No CEL input can tell such an item from one that was never created: the
-collection's own objects are not in scope upstream of it. The window is one `ref` resync. The
-step may already have started; its finalizer closes a PR it opened. Verified on kind
+collection's own objects are not in scope upstream of it. The window is one `ref` resync, and
+it is harmless. The step template carries `spec.admitted:
+${PromotionState.started.exists(s_, s_ == Step.environment)}`, which is false until
+`StepsObserved` lists the step. The PromotionStep reconciler does no work in Pending while
+`admitted` is false (`TestFleet_PendingWaitsForAdmission`), so a step pruned in the window has
+not cloned, pushed, opened a PR or run a hook. Pending holds no PR (`holdsPR`), so its finalizer
+closes, reopens and reverts nothing. When the step is admitted again, kro creates it afresh with
+nothing to reuse. Once `admitted` is true, the step is in `started` and pacing never drops it
+(`TestFleet_AdmittedOnceObserved`). The cost is one more apply per fleet step. Verified on kind
 with `maxConcurrent` and `maxUnavailable`. kardinal's reconcilers must ignore label-only updates
 on the objects they own, or they reconcile every item on each growth.
 

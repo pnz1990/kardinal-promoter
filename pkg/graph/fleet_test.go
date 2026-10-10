@@ -609,3 +609,26 @@ func TestFleet_PacingNeverPrunesAnObservedStep(t *testing.T) {
 		})
 	}
 }
+
+// TestFleet_AdmittedOnceObserved (#1565 QA): in a Pipeline with fleets each
+// PromotionStep carries spec.admitted, false until StepsObserved lists the
+// step and true from then on, when pacing can no longer drop it. A step kro
+// created but the Graph has not read back yet is admitted=false, so it does
+// no work that a pruned step would leave behind.
+func TestFleet_AdmittedOnceObserved(t *testing.T) {
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: bigFleet(3, 1, nil), Bundle: makeBundle("app-v1", "app")})
+	require.NoError(t, err)
+	assertKroValid(t, res.Graph)
+	tmpl := nodeByID(res.Graph.Spec.Nodes)[graph.NodePromotionSteps].Template
+	expr := tmpl["spec"].(map[string]interface{})["admitted"].(string)
+	sim := newCompactSim(t, res.Graph)
+	sim.steps["test"] = "Verified"
+	sim.fleet = map[string]string{"prod-t00": "prod"}
+	sim.steps["prod-t00"] = ""
+	vars := sim.vars()
+	vars[graph.NodePromotionState] = sim.def(graph.NodePromotionState, vars)
+	for env, want := range map[string]bool{"prod-t00": true, "prod-t01": false, "test": true} {
+		vars["Step"] = map[string]interface{}{"environment": env}
+		assert.Equal(t, want, evalCEL(t, expr, vars), env)
+	}
+}

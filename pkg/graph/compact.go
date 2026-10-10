@@ -369,6 +369,12 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 			NodeStepsObserved, LabelFleet)
 		steps := nodes[4].Template["metadata"].(map[string]interface{})["labels"].(map[string]interface{})
 		steps[LabelFleet] = step("fleet")
+		// Pacing can drop an item kro created before StepsObserved lists it
+		// (ledger G11): such a step must not start. spec.admitted turns true
+		// once the step is observed, and from then on it stays in the wave
+		// (started); the PromotionStep reconciler waits for it in Pending.
+		spec := nodes[4].Template["spec"].(map[string]interface{})
+		spec["admitted"] = fmt.Sprintf("${%sstarted.exists(s_, s_ == %s.environment)}", state, iterStep)
 		nodes = append(nodes[:3], append([]GraphNode{*eligible}, nodes[3:]...)...)
 	}
 	return nodes
