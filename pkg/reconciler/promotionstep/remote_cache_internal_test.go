@@ -311,3 +311,58 @@ func TestRemoteCache_StoreBeforeFlightEnds(t *testing.T) {
 		})
 	}
 }
+
+// TestRemoteCache_FreshDoesNotJoinARecheckHit (#1667 QA): a fresh readHeads
+// (A) moves the key to a new generation; a shared read (B) that missed the
+// cache earlier starts a flight in that generation, and its re-check finds
+// the heads an older read stored. A must not join that flight and take
+// those heads (its started is after A asked): fresh and shared reads use
+// different flights, and A makes its own ls-remote.
+func TestRemoteCache_FreshDoesNotJoinARecheckHit(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	rem := &countingRemote{head: "old"}
+	aBumped, aGo := make(chan struct{}), make(chan struct{})
+	bInFlight, bGo := make(chan struct{}), make(chan struct{})
+	waits := make(chan string, 8)
+	var bOnce sync.Once
+	c := remoteCache{onWait: func(key string) { waits <- key }}
+	_, err := c.loadHeads(ctx, rem, "https://git/x", "tok", now, false) // an older read stores "old"
+	require.NoError(t, err)
+	within(t, waits, "the older read")
+	rem.head = "new"
+	c.onFresh = func(string) { close(aBumped); <-aGo }
+	c.inFlight = func(string) {
+		first := false
+		bOnce.Do(func() { first = true })
+		if first { // B's flight: held until A has joined it or started its own
+			close(bInFlight)
+			<-bGo
+		}
+	}
+
+	type answer struct {
+		head string
+		err  error
+	}
+	a := make(chan answer, 1)
+	go func() {
+		h, err := c.readHeads(ctx, rem, "https://git/x", "tok", now)
+		a <- answer{h["main"], err}
+	}()
+	within(t, aBumped, "A to move the key to a new generation")
+	b := make(chan answer, 1)
+	go func() { // B missed the cache before "old" was stored; it reads now
+		h, err := c.loadHeads(ctx, rem, "https://git/x", "tok", now, false)
+		b <- answer{h["main"], err}
+	}()
+	within(t, bInFlight, "B's flight to start")
+	close(aGo)
+	within(t, waits, "a caller to wait")
+	within(t, waits, "the other caller to wait")
+	close(bGo)
+	assert.Equal(t, answer{"new", nil}, within(t, a, "A"), "A, a fresh read, reads the heads itself")
+	// B, a shared read, may answer from the cache: by now A stored "new".
+	require.NoError(t, within(t, b, "B").err)
+	assert.Equal(t, 2, rem.lsRemote)
+}

@@ -56,6 +56,9 @@ type remoteCache struct {
 	// onMiss, when set (tests), is called when a caller found nothing in
 	// the cache, before it starts or joins a read.
 	onMiss func(kind string)
+	// onFresh and inFlight, when set (tests), are called after a fresh
+	// caller moved the key to a new generation, and when a flight starts.
+	onFresh, inFlight func(key string)
 }
 
 // maxGenerations bounds remoteCache.gen.
@@ -104,10 +107,23 @@ func (c *remoteCache) shared(ctx context.Context, key string, fresh bool, read f
 	asked := c.seq.Add(1)
 	if fresh {
 		c.nextGeneration(key, c.generation(key))
+		if c.onFresh != nil {
+			c.onFresh(key)
+		}
 	}
 	for attempt := 0; ; attempt++ {
 		gen := c.generation(key)
-		ch := c.flight.DoChan(key+"\x00"+strconv.FormatUint(gen, 10), func() (any, error) {
+		// Fresh and shared reads never share a flight: a shared read checks
+		// the cache first and may answer with heads an older read stored,
+		// which a fresh caller must not take (#1667 QA).
+		flightKey := key + "\x00" + strconv.FormatUint(gen, 10)
+		if fresh {
+			flightKey += "\x00fresh"
+		}
+		ch := c.flight.DoChan(flightKey, func() (any, error) {
+			if c.inFlight != nil {
+				c.inFlight(flightKey)
+			}
 			started := c.seq.Add(1)
 			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), historyTimeout)
 			defer cancel()
