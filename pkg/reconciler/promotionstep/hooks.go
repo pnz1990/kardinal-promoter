@@ -187,15 +187,17 @@ func (r *Reconciler) holdForPreHooks(ctx context.Context, log zerolog.Logger, ba
 // Bundle (their HookRuns are Skipped).
 const ConditionHooksSkipped = "HooksSkipped"
 
-// recordSkippedHooks sets ConditionHooksSkipped from spec.live.hooks. It
-// reports whether the condition changed.
+// recordSkippedHooks sets ConditionHooksSkipped from spec.live.hooks: the
+// hooks Skipped because they were added late (HookRunSkippedAddedLate). A
+// hook Skipped because its Bundle was superseded or rejected is not one;
+// the step halts for that reason. It reports whether the condition changed.
 func recordSkippedHooks(ps *v1alpha1.PromotionStep, now time.Time) bool {
 	if ps.Spec.Live == nil {
 		return false
 	}
 	var skipped []string
 	for _, h := range ps.Spec.Live.Hooks {
-		if h.Result == v1alpha1.HookRunSkipped {
+		if h.Result == v1alpha1.HookRunSkipped && strings.HasPrefix(h.Message, v1alpha1.HookRunSkippedAddedLate) {
 			name := h.Hook
 			if name == "" {
 				name = h.Name
