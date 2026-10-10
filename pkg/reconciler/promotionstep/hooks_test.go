@@ -183,7 +183,8 @@ func TestHooksSkippedRecorded(t *testing.T) {
 	ps := labelled(makeStep("step", "p", "b1", "test"))
 	ps.Status.State = "WaitingForMerge"
 	ps.Spec.Live = &v1alpha1.PromotionStepLive{Hooks: []v1alpha1.LiveHookRun{{
-		Name: "p-b1-test-pre-migrate-1234", Hook: "migrate", Phase: "pre", Result: "Skipped"}}}
+		Name: "p-b1-test-pre-migrate-1234", Hook: "migrate", Phase: "pre", Result: "Skipped",
+		Message: v1alpha1.HookRunSkippedAddedLate + "the step had already started"}}}
 	c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
 	got, _ := reconcileHookStep(t, c, "step")
 	cond := meta.FindStatusCondition(got.Status.Conditions, promotionstep.ConditionHooksSkipped)
@@ -196,6 +197,33 @@ func TestHooksSkippedRecorded(t *testing.T) {
 	c2 := newClient(t, pending, makePipeline("p"), makeBundle("b1", "p"))
 	got2, _ := reconcileHookStep(t, c2, "step2")
 	assert.Equal(t, "Promoting", got2.Status.State, "a Skipped pre hook does not hold the step")
+}
+
+// TestHooksSkippedOnlyAddedLate: HooksSkipped ("added to the Pipeline after
+// this step passed ...") names only the hooks Skipped because they were added
+// late, not one Skipped because its Bundle was superseded (QA #1602).
+func TestHooksSkippedOnlyAddedLate(t *testing.T) {
+	ps := labelled(makeStep("step", "p", "b1", "test"))
+	ps.Status.State = "WaitingForMerge"
+	ps.Spec.Live = &v1alpha1.PromotionStepLive{Hooks: []v1alpha1.LiveHookRun{
+		{Name: "p-b1-test-pre-seed", Hook: "seed", Phase: "pre", Result: "Skipped",
+			Message: "not run: Bundle b1 was superseded by a newer Bundle"},
+		{Name: "p-b1-test-post-smoke", Hook: "smoke", Phase: "post", Result: "Skipped",
+			Message: v1alpha1.HookRunSkippedAddedLate + "the step had already finished"},
+	}}
+	c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
+	got, _ := reconcileHookStep(t, c, "step")
+	cond := meta.FindStatusCondition(got.Status.Conditions, promotionstep.ConditionHooksSkipped)
+	require.NotNil(t, cond)
+	assert.Contains(t, cond.Message, "post-deploy hook smoke")
+	assert.NotContains(t, cond.Message, "seed", "a hook skipped for a superseded Bundle was not added late")
+
+	only := labelled(makeStep("step2", "p", "b1", "test"))
+	only.Status.State = "WaitingForMerge"
+	only.Spec.Live = &v1alpha1.PromotionStepLive{Hooks: ps.Spec.Live.Hooks[:1]}
+	c2 := newClient(t, only, makePipeline("p"), makeBundle("b1", "p"))
+	got2, _ := reconcileHookStep(t, c2, "step2")
+	assert.Nil(t, meta.FindStatusCondition(got2.Status.Conditions, promotionstep.ConditionHooksSkipped))
 }
 
 // TestVerifyingEventText: entering Verifying records an Event that says the

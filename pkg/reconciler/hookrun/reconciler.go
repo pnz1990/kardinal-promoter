@@ -380,7 +380,7 @@ func (r *Reconciler) start(ctx context.Context, log zerolog.Logger, base, hr *v1
 		if hr.Spec.Phase == v1alpha1.HookPhasePost {
 			when = "the step had already finished"
 		}
-		r.finish(hr, v1alpha1.HookRunSkipped, fmt.Sprintf("not run: the hook was added to the Pipeline after %s", when))
+		r.finish(hr, v1alpha1.HookRunSkipped, v1alpha1.HookRunSkippedAddedLate+when)
 		log.Info().Msg("hook skipped: added after its step advanced")
 		return ctrl.Result{}, r.patch(ctx, base, hr)
 	}
