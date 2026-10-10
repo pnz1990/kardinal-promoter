@@ -686,8 +686,9 @@ spec:
 		"Deployment kro-system/graph-controller", "Namespace /kro-system", "ServiceAccount kro-system/graph-controller",
 	}, removed, "objects only v0.8.1 needed")
 	// The Graph identity and leader election are new in v0.9; past them the
-	// chart only adds admission policies (identity, holds, Graph objects...)
-	// and ClusterRoles of its own: no other workload or binding appears
+	// chart only adds admission policies (identity, holds, Graph objects...),
+	// the leader election's API priority (FlowSchema) and ClusterRoles of its
+	// own: no other workload or binding appears
 	// with the upgrade (#1560: listing each policy broke on every feature).
 	assert.Subset(t, added, []string{
 		"ClusterRole /kardinal-promoter-graph-applier", "ClusterRole /kardinal-promoter-graph-reader",
@@ -696,12 +697,15 @@ spec:
 		"ValidatingAdmissionPolicy /kardinal-promoter-hold-writes", "ValidatingAdmissionPolicyBinding /kardinal-promoter-hold-writes",
 	}, "objects the new chart adds")
 	for _, o := range added {
-		ok := strings.HasPrefix(o, "ValidatingAdmissionPolicy /kardinal-promoter-") ||
+		// The leader election Lease's own API priority (#1592) is the
+		// chart's too: a FlowSchema naming an existing priority level.
+		ok := strings.HasPrefix(o, "FlowSchema /kardinal-promoter-") ||
+			strings.HasPrefix(o, "ValidatingAdmissionPolicy /kardinal-promoter-") ||
 			strings.HasPrefix(o, "ValidatingAdmissionPolicyBinding /kardinal-promoter-") ||
 			strings.HasPrefix(o, "ClusterRole /kardinal-promoter-") ||
 			strings.HasPrefix(o, "Role kardinal-system/kardinal-promoter-") ||
 			strings.HasPrefix(o, "RoleBinding kardinal-system/kardinal-promoter-")
-		assert.True(t, ok, "the upgrade adds %s, which is not an admission policy or role of the chart", o)
+		assert.True(t, ok, "the upgrade adds %s, which is not an admission policy, FlowSchema or role of the chart", o)
 	}
 	framework.Eventually(t, time.Minute, "v0.8.1's Graph controller and CRDs deleted", func(ctx context.Context) (bool, string) {
 		if _, err := e.Kube.AppsV1().Deployments("kro-system").Get(ctx, "graph-controller", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
