@@ -177,10 +177,11 @@ const gitlabMergeRetry = 3 * time.Minute
 // cannot be merged"; 409 while the head is still being updated), so those
 // answers are retried for up to gitlabMergeRetry. GitLab merges inside the
 // PUT, waiting on Gitaly and Sidekiq; on a loaded host the answer can come
-// after the client's timeout while the merge goes on (#1652). A merge that
-// timed out or got a 5xx is not failed at once: the MR is read back, and the
-// merge is done when GitLab reports it merged, or asked again while it is
-// still open.
+// after the client's timeout while the merge goes on (#1652), and the retry
+// is then refused (405 or 422) because the MR is merged. So after a merge
+// that timed out, got a 5xx or one of those refusals, the MR is read back:
+// the merge is done when GitLab reports it merged, and asked again while it
+// is still open.
 func (g *gitlab) MergePR(ctx context.Context, r Repo, number int) error {
 	path := fmt.Sprintf("%s/merge_requests/%d/merge", g.projectPath(r), number)
 	deadline := time.Now().Add(gitlabMergeRetry)
@@ -190,18 +191,20 @@ func (g *gitlab) MergePR(ctx context.Context, r Repo, number int) error {
 			return nil
 		}
 		se, isStatus := err.(*StatusError)
-		retry := isStatus && retryableMerge(se.Code)
-		if !isStatus || se.Code >= 500 {
-			// No answer in time, or GitLab failed: did the merge happen?
+		// No answer in time, GitLab failed, or it refused the merge
+		// (405/406/409/422): read the MR back. A merge a timed-out PUT
+		// already did is refused on the retry (405 or 422, the MR is
+		// merged), so the state decides, not the answer.
+		retry := !isStatus || se.Code >= 500 || retryableMerge(se.Code)
+		if retry {
 			var m gitlabMR
 			if gerr := g.do(ctx, http.MethodGet, fmt.Sprintf("%s/merge_requests/%d", g.projectPath(r), number), nil, &m); gerr == nil {
 				if m.State == "merged" {
 					return nil
 				}
 				retry = m.State == "opened"
-			} else {
-				retry = true // GitLab is still slow: ask again
 			}
+			// A failed read: GitLab is still slow, ask again.
 		}
 		if !retry || time.Now().After(deadline) {
 			return err

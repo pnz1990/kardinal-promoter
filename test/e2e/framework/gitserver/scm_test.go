@@ -228,6 +228,11 @@ func TestGitLabMergeSlowAnswer(t *testing.T) {
 		"5xx, but it merged": {state: "merged", fail: []int{502}, want: []string{put, get}},
 		"5xx, still open":    {state: "opened", fail: []int{502}, want: []string{put, get, put}},
 		"5xx, then closed":   {state: "closed", fail: []int{502}, want: []string{put, get}},
+		// The retry of a merge that a timed-out PUT already did: GitLab
+		// refuses it as the MR is merged (QA on #1655).
+		"405 on a merged MR":            {state: "merged", fail: []int{405}, want: []string{put, get}},
+		"422 on a merged MR":            {state: "merged", fail: []int{422}, want: []string{put, get}},
+		"405 while GitLab still checks": {state: "opened", fail: []int{405}, want: []string{put, get, put}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, srv := newFake(t, map[string]string{put: `{}`, get: `{"iid":4,"state":"` + tc.state + `"}`})
