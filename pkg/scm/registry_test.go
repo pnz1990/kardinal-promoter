@@ -174,6 +174,7 @@ func TestRegistry_ForIdentity(t *testing.T) {
 	now = now.Add(scm.DefaultSecretTTL + time.Second)
 	_, err = r.ForIdentity(ctx, "team-a", id, "acme/app")
 	require.ErrorIs(t, err, scm.ErrProviderConfig)
+	assert.NotErrorIs(t, err, scm.ErrProviderURL, "a Secret error is not a refused apiURL")
 	assert.Contains(t, err.Error(), "not labeled kardinal.io/referenceable=true")
 	assert.NotContains(t, err.Error(), "t2", "errors never carry the token")
 
@@ -185,7 +186,9 @@ func TestRegistry_ForIdentity(t *testing.T) {
 	now = now.Add(scm.DefaultSecretTTL + time.Second)
 	_, err = r.ForIdentity(ctx, "team-a", id, "acme/app")
 	require.ErrorIs(t, err, scm.ErrProviderConfig)
+	assert.ErrorIs(t, err, scm.ErrProviderURL)
 	assert.Contains(t, err.Error(), "clear text")
+	assert.NotContains(t, err.Error(), scm.ErrProviderURL.Error(), "the sentinel adds nothing to the message")
 	r.AllowHTTP = true
 	_, err = r.ForIdentity(ctx, "team-a", id, "acme/app")
 	require.NoError(t, err)
