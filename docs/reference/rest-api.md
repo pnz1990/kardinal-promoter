@@ -102,20 +102,21 @@ and you revoke it like any Kubernetes identity.
         namespace: team-a
     ```
 
-    The list endpoints read all namespaces, so with a namespaced binding they are checked
-    against all namespaces and refused, unless the controller runs with
-    `--watch-namespace` set to that namespace. For a dashboard over every team, use the same
-    rules in a ClusterRole bound with a ClusterRoleBinding.
+    The list endpoints follow namespace RBAC: with a namespaced binding they return the
+    objects of the namespaces the caller may list, and an empty list when there are none.
+    For a dashboard over every team, use the same rules in a ClusterRole bound with a
+    ClusterRoleBinding.
 
 2. Mint a short-lived token with the TokenRequest API. `kubectl create token` calls it:
 
     ```bash
-    TOKEN=$(kubectl create token release-dashboard -n team-a --duration=1h)
+    TOKEN=$(kubectl create token release-dashboard -n team-a --duration=1h --audience kardinal-promoter)
     curl -s -H "Authorization: Bearer $TOKEN" https://kardinal.example.com/api/v1/ui/pipelines
     ```
 
     Programs call `POST /api/v1/namespaces/team-a/serviceaccounts/release-dashboard/token`
-    (client-go: `CoreV1().ServiceAccounts("team-a").CreateToken`) and request a new token
+    (client-go: `CoreV1().ServiceAccounts("team-a").CreateToken`, with
+    `spec.audiences: [kardinal-promoter]`) and request a new token
     before `status.expirationTimestamp`. Inside the cluster, mount a projected
     ServiceAccount token instead: the kubelet rotates it.
 
@@ -126,12 +127,15 @@ and you revoke it like any Kubernetes identity.
           sources:
             - serviceAccountToken:
                 path: token
+                audience: kardinal-promoter
                 expirationSeconds: 3600
     ```
 
-3. Keep the default audience. The controller's TokenReview does not name an audience, so
-   the API server accepts tokens for its own audience only: a token minted with
-   `--audience` for something else is refused with `401`.
+3. Use the `kardinal-promoter` audience (`tokenReview.audiences`). The controller's
+   TokenReview asks for it and checks the API server returned it, so a token minted for the
+   API server's own audience (a plain `kubectl create token`, a kubeconfig token) or for
+   anything else is refused with `401`. Such a token would also work against the API
+   server; accepting it is the explicit opt-in `tokenReview.acceptAPIServerAudience`.
 
 To revoke a client, delete its RoleBinding (effective within the 30-second review cache) or
 its ServiceAccount (its tokens stop validating). Prefer TokenRequest tokens to
