@@ -63,6 +63,11 @@ type uiPipelineResponse struct {
 	// #525: static pipeline topology from spec — rendered even when no Bundle is promoting.
 	// Each entry is one environment in pipeline order with its dependsOn edges.
 	EnvironmentTopology []uiEnvironmentNode `json:"environmentTopology,omitempty"`
+	// TopologyResolved is true when the controller resolved the ordering, so
+	// environmentTopology[].upstreams is complete: an entry without upstreams
+	// is a root (a Pipeline whose every environment is in wave 1 has only
+	// roots). Absent when the ordering is invalid.
+	TopologyResolved bool `json:"topologyResolved,omitempty"`
 
 	// Operations table columns (#462): derived from active Bundle + steps + gates.
 	// BlockerCount is the number of the active bundle's PolicyGates with
@@ -697,6 +702,7 @@ func pipelineListResponse(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bund
 				topo = append(topo, node)
 			}
 			resp.EnvironmentTopology = topo
+			resp.TopologyResolved = upErr == nil
 		}
 		byName := make(map[string]*v1alpha1.Bundle, len(bundlesByPipeline[key]))
 		for i := range bundlesByPipeline[key] {

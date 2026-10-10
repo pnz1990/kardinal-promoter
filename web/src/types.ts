@@ -40,6 +40,10 @@ export interface Pipeline {
   lastMergedAt?: string
   /** #525: static pipeline topology from spec — shown even when no Bundle is promoting. */
   environmentTopology?: EnvironmentNode[]
+  /** True when the controller resolved the ordering: environmentTopology[].upstreams
+   *  is then complete, and an entry without upstreams is a root. Absent from an
+   *  older controller, or when the ordering is invalid (#1580). */
+  topologyResolved?: boolean
   /** What the active Bundle ships: its image tag, or "config <sha>" (fleet board). */
   activeBundleVersion?: string
   /** Per environment, the Bundle it runs (fleet board). Absent: never deployed. */
