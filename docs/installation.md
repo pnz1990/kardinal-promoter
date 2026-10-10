@@ -240,6 +240,7 @@ choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 | `leaderElectionFlowSchema.priorityLevel` | `leader-election` | Priority level for the Lease requests |
 | `github.secretRef.name` | `""` | Existing Secret (release namespace) holding the SCM token. Recommended |
 | `github.secretRef.key` | `token` | Key in the Secret |
+| `github.app.enabled` | `false` | The `github.secretRef.name` Secret holds GitHub App credentials (`githubAppID`, `githubAppInstallationID`, `githubAppPrivateKey`) instead of a token; see [GitHub App](scm-providers.md#github-app). Needs `github.secretRef.name` |
 | `github.token` | `""` | Token value. The chart stores it in Secret `<fullname>-github-token` (`kardinal-promoter-github-token` for release `kardinal-promoter`); the value stays in the Helm release history. Setting both this and `secretRef.name` fails |
 | `scm.provider` | `""` | `--scm-provider`: `github` (default), `gitlab`, `forgejo`, `gitea`, `bitbucket`, `azuredevops` |
 | `scm.apiURL` | `""` | `--scm-api-url` for self-hosted SCM instances |
@@ -353,7 +354,8 @@ release name other than `kardinal-promoter`, the Service is named
 
 - **Fleet board** (the start page, and the kardinal logo from anywhere). Each Pipeline is a
   line of stations, one per environment in promotion order; environments promoted in parallel
-  are stacked. A station shows the version the environment runs and when it was Verified.
+  are stacked, and five or more of them (a wave) are one plate that names the range, the version
+  most of them run and how many are in each state. A station shows the version the environment runs and when it was Verified.
   That is the newest promotion there whose change landed, the Bundle `kardinal status` reports
   as deployed. Image and config Bundles do not replace each other, so a station also shows, under
   `+`, what the environment runs from another Bundle: the config commit of the last config Bundle
@@ -364,6 +366,13 @@ release name other than `kardinal-promoter`, the Service is named
   follows the sidebar's health filter.
 - **Pipeline view.** The lane, the promotion graph, policy gates with their CEL expressions,
   the Bundle history and comparison, and pause, resume, promote, roll back and create bundle.
+  The lane has one column per depth: parallel environments share a column, and a wave of five
+  or more is one card that counts its environments by state and expands to the list. The graph
+  lists the environments of a column in the Pipeline's order.
+- **Release metrics.** Time to the final environments and the deploys that reached them, over
+  the last 10 Bundles. The final environments are those no other environment waits for: `prod`
+  in test, uat, prod; every environment of a last wave, which a Bundle reaches when all of
+  them are Verified.
 - **Step timings.** Selecting an environment step lists the steps of that promotion
   (`git-clone` … `health-check`) with their durations, and a bar for each that shows where it
   ran in the promotion's time. A slow health check or push stands out at once.

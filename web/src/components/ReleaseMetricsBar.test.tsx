@@ -45,15 +45,15 @@ function bundle(name: string, opts: { ageDays?: number; ttpHours?: number; rollb
 describe('computeReleaseMetrics', () => {
   it.each([
     { name: 'no final environment known', bundles: [bundle('a', { ttpHours: 1 })], env: undefined },
-    { name: 'no bundle reached the final environment', bundles: [bundle('a'), bundle('b')], env: 'prod' },
-    { name: 'no bundles', bundles: [], env: 'prod' },
+    { name: 'no bundle reached the final environment', bundles: [bundle('a'), bundle('b')], env: ['prod'] },
+    { name: 'no bundles', bundles: [], env: ['prod'] },
   ])('returns null when $name', ({ bundles, env }) => {
     expect(computeReleaseMetrics(bundles, env)).toBeNull()
   })
 
   it('measures time to prod from healthCheckedAt, not from bundle age', () => {
     // 30-day-old bundles that reached prod 1h and 3h after creation.
-    const m = computeReleaseMetrics([bundle('a', { ageDays: 30, ttpHours: 1 }), bundle('b', { ageDays: 31, ttpHours: 3 })], 'prod')
+    const m = computeReleaseMetrics([bundle('a', { ageDays: 30, ttpHours: 1 }), bundle('b', { ageDays: 31, ttpHours: 3 })], ['prod'])
     expect(m?.meanTtpHours).toBe(2)
   })
 
@@ -64,24 +64,39 @@ describe('computeReleaseMetrics', () => {
       bundle('v3'),
       bundle('v4', { rollbackOf: 'v3', ttpHours: 1 }),
       bundle('v5', { rollbackOf: 'v2' }),
-    ], 'prod')
+    ], ['prod'])
     expect(m).toMatchObject({ totalBundles: 5, rollbackCount: 2, rollbackRatePct: 40 })
   })
 
   it('counts deploys that reached the final environment, not the window size', () => {
-    const m = computeReleaseMetrics([bundle('a', { ttpHours: 1 }), bundle('b'), bundle('c'), bundle('d', { ttpHours: 2 })], 'prod')
+    const m = computeReleaseMetrics([bundle('a', { ttpHours: 1 }), bundle('b'), bundle('c'), bundle('d', { ttpHours: 2 })], ['prod'])
     expect(m).toMatchObject({ totalBundles: 4, deployCount: 2 })
   })
 
   it('covers the 10 newest bundles only', () => {
     const bundles = Array.from({ length: 12 }, (_, i) => bundle(`b${i}`, { ageDays: i, ttpHours: i < 10 ? 1 : 100 }))
-    const m = computeReleaseMetrics(bundles, 'prod')
+    const m = computeReleaseMetrics(bundles, ['prod'])
     expect(m).toMatchObject({ totalBundles: 10, deployCount: 10, meanTtpHours: 1 })
+  })
+
+  it('counts a bundle once every final environment of a wave is verified, at the last of them', () => {
+    const wave = (name: string, done: Record<string, number>): Bundle => ({
+      name, namespace: 'default', phase: 'Promoting', type: 'image', pipeline: 'fleet',
+      createdAt: new Date(created).toISOString(),
+      environments: Object.entries(done).map(([env, h]) => (
+        { name: env, phase: 'Verified', healthCheckedAt: new Date(created + h * HOUR).toISOString() })),
+    })
+    const finals = ['w1', 'w2', 'w3']
+    const m = computeReleaseMetrics([
+      wave('all', { w0: 0.1, w1: 1, w2: 4, w3: 2 }),
+      wave('partial', { w0: 0.1, w1: 1, w3: 1 }),
+    ], finals)
+    expect(m).toMatchObject({ totalBundles: 2, deployCount: 1, meanTtpHours: 4 })
   })
 
   it('does not mutate the input array', () => {
     const bundles = [bundle('old', { ageDays: 2, ttpHours: 1 }), bundle('new', { ageDays: 1, ttpHours: 1 })]
-    computeReleaseMetrics(bundles, 'prod')
+    computeReleaseMetrics(bundles, ['prod'])
     expect(bundles.map(b => b.name)).toEqual(['old', 'new'])
   })
 })
@@ -98,7 +113,7 @@ describe('formatHours', () => {
 
 describe('ReleaseMetricsBar', () => {
   it('renders nothing until a bundle has reached the final environment', () => {
-    const { container } = render(<ReleaseMetricsBar bundles={[bundle('a')]} finalEnvironment="prod" />)
+    const { container } = render(<ReleaseMetricsBar bundles={[bundle('a')]} finalEnvironments={['prod']} />)
     expect(container).toBeEmptyDOMElement()
   })
 
@@ -106,7 +121,7 @@ describe('ReleaseMetricsBar', () => {
     render(
       <ReleaseMetricsBar
         bundles={[bundle('a', { ttpHours: 2 }), bundle('b', { rollbackOf: 'a', ttpHours: 4 }), bundle('c')]}
-        finalEnvironment="prod"
+        finalEnvironments={['prod']}
       />,
     )
     const bar = screen.getByRole('region', { name: 'Release metrics' })
@@ -115,11 +130,21 @@ describe('ReleaseMetricsBar', () => {
     expect(bar).toHaveTextContent('Deploys to prod2last 3 bundles')
   })
 
+  it('counts a final wave instead of naming one of its environments', () => {
+    const b = bundle('a', { ttpHours: 2 })
+    b.environments = [...(b.environments ?? []), { name: 'eu', phase: 'Verified', healthCheckedAt: b.environments![1].healthCheckedAt }]
+    render(<ReleaseMetricsBar bundles={[b]} finalEnvironments={['prod', 'eu']} />)
+    const bar = screen.getByRole('region', { name: 'Release metrics' })
+    expect(bar).toHaveTextContent('Time to all 2 final envs2h')
+    expect(bar).toHaveTextContent('Deploys to all 2 final envs1')
+    expect(screen.getAllByTitle('Final environments: prod, eu')).toHaveLength(2)
+  })
+
   it('adds the controller change failure rate and time to restore', () => {
     render(
       <ReleaseMetricsBar
         bundles={[bundle('a', { ttpHours: 2 })]}
-        finalEnvironment="prod"
+        finalEnvironments={['prod']}
         deploymentMetrics={{ deployments: 4, failedDeployments: 1, changeFailureRateMillis: 250,
           meanTimeToRestoreMinutes: 95, restoredFailures: 1 }}
       />,
@@ -133,14 +158,14 @@ describe('ReleaseMetricsBar', () => {
     const { rerender } = render(
       <ReleaseMetricsBar
         bundles={[bundle('a', { ttpHours: 2 })]}
-        finalEnvironment="prod"
+        finalEnvironments={['prod']}
         deploymentMetrics={{ deployments: 2, failedDeployments: 1, changeFailureRateMillis: 500 }}
       />,
     )
     const bar = screen.getByRole('region', { name: 'Release metrics' })
     expect(bar).toHaveTextContent('Time to restore—no restored failure')
     rerender(
-      <ReleaseMetricsBar bundles={[bundle('a', { ttpHours: 2 })]} finalEnvironment="prod" deploymentMetrics={{ sampleSize: 1 }} />,
+      <ReleaseMetricsBar bundles={[bundle('a', { ttpHours: 2 })]} finalEnvironments={['prod']} deploymentMetrics={{ sampleSize: 1 }} />,
     )
     expect(screen.getByRole('region', { name: 'Release metrics' })).not.toHaveTextContent('Change failure rate')
   })

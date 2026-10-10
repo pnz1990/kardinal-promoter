@@ -246,7 +246,7 @@ func TestSCMToken_TrailingNewlineTrimmed(t *testing.T) {
 	}
 
 	for _, tc := range []struct{ provider, repo string }{
-		{"github", "o/r"}, {"gitlab", "g/p"}, {"forgejo", "o/r"}, {"bitbucket", "w/r"}, {"azuredevops", "org/proj/repo"},
+		{"github", "o/r"}, {"gitlab", "g/p"}, {"forgejo", "o/r"}, {"bitbucket", "w/r"}, {"azuredevops", "org/proj/repo"}, {"bitbucket-datacenter", "PROJ/repo"},
 	} {
 		t.Run("NewProvider "+tc.provider, func(t *testing.T) {
 			p, err := scm.NewProvider(tc.provider, "tok\n", srv.URL, "")

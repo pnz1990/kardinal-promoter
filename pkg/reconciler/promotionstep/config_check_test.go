@@ -298,12 +298,12 @@ type cloneCountingGit struct {
 	clones int
 }
 
-func (g *cloneCountingGit) Clone(ctx context.Context, url, branch, dir, token string) error {
+func (g *cloneCountingGit) Clone(ctx context.Context, url, branch, dir string, auth scm.GitAuth) error {
 	g.clones++
-	return g.mockGit.Clone(ctx, url, branch, dir, token)
+	return g.mockGit.Clone(ctx, url, branch, dir, auth)
 }
 
-func (g *cloneCountingGit) CloneAt(ctx context.Context, url, ref, dir, token string) error {
+func (g *cloneCountingGit) CloneAt(ctx context.Context, url, ref, dir string, auth scm.GitAuth) error {
 	g.clones++
-	return g.mockGit.CloneAt(ctx, url, ref, dir, token)
+	return g.mockGit.CloneAt(ctx, url, ref, dir, auth)
 }

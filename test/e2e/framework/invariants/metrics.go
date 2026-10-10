@@ -152,7 +152,10 @@ func checkMetrics(ctx context.Context, e *framework.Env, o Options) (*Metrics, [
 	leak.Violations = leaks(m.Pods, start, end, memoryLimitMiB(ctx, e), o.SharedController, o.RaceBuild)
 
 	push := Result{Name: "metrics-push-efficiency"}
-	pushes := byLabel(ctx, e, `sum by (result) (increase(kardinal_git_operations_total{`+ctrlSel+`,operation="push"}[`+window+`]))`, "result")
+	pushSel := `kardinal_git_operations_total{` + ctrlSel + `,operation="push"}`
+	pushes := countsFromZero(
+		samples(ctx, e, `max_over_time(`+pushSel+`[`+window+`])`),
+		samples(ctx, e, fmt.Sprintf("%s @ %d", pushSel, start.Unix())), "result")
 	m.PushesLanded, m.PushesRefused = round(pushes["ok"]), round(pushes["non_fast_forward"])
 	push.Violations = pushEfficiency(m.PushesLanded, m.PushesRefused, o.MaxRefusedPushRatio, o.SharedController)
 	push.Note = fmt.Sprintf("%.0f pushes landed, %.0f refused as non-fast-forward", m.PushesLanded, m.PushesRefused)
@@ -198,6 +201,59 @@ func byLabel(ctx context.Context, e *framework.Env, q, label string) map[string]
 			continue
 		}
 		out[x.Metric[label]] = v
+	}
+	return out
+}
+
+// samples runs an instant query, nil on error.
+func samples(ctx context.Context, e *framework.Env, q string) []framework.PromSample {
+	s, err := e.PromQuery(ctx, q)
+	if err != nil {
+		return nil
+	}
+	return s
+}
+
+// countsFromZero sums, by label, how much each counter series grew over a
+// window: its highest value in the window (end) minus its value at the
+// window's start (start), or minus nothing when the series did not exist
+// then. increase() measures from a series' first sample instead, so a
+// series that appeared in the window (a fresh controller, a new result, a
+// new leader) lost the count it already had when first scraped: TwoTenants
+// reported 121 pushes for 151 environments. A series lower at the end than
+// at the start was reset (its container restarted) and counts its end
+// value.
+func countsFromZero(end, start []framework.PromSample, label string) map[string]float64 {
+	key := func(m map[string]string) string {
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			if k != "__name__" {
+				keys = append(keys, k)
+			}
+		}
+		sort.Strings(keys)
+		var b strings.Builder
+		for _, k := range keys {
+			b.WriteString(k + "=" + m[k] + ",")
+		}
+		return b.String()
+	}
+	base := map[string]float64{}
+	for _, x := range start {
+		if v, err := strconv.ParseFloat(x.Value, 64); err == nil && !math.IsNaN(v) {
+			base[key(x.Metric)] = v
+		}
+	}
+	out := map[string]float64{}
+	for _, x := range end {
+		v, err := strconv.ParseFloat(x.Value, 64)
+		if err != nil || math.IsNaN(v) {
+			continue
+		}
+		if b := base[key(x.Metric)]; v >= b {
+			v -= b
+		}
+		out[x.Metric[label]] += v
 	}
 	return out
 }

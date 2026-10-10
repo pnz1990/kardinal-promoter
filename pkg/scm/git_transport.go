@@ -15,8 +15,9 @@ import (
 
 // go-git's HTTP(S) transport, with the bytes of every smart-HTTP exchange
 // counted in kardinal_git_transfer_bytes_total (#1529). The counted client
-// wraps http.DefaultTransport, as go-git's own default client does, so
-// connection pooling and the environment's proxy settings are unchanged.
+// wraps gitIdleTransport: http.DefaultTransport's settings (connection
+// pooling, the environment's proxy) with the idle bound of git_dial.go on
+// every connection.
 //
 // go-git configures a per-endpoint *http.Transport for a CA bundle, a client
 // certificate, InsecureSkipTLS or a proxy in the clone or push options, and
@@ -25,7 +26,7 @@ import (
 // endpoints go to go-git's default client unchanged, uncounted.
 func init() {
 	t := gitHTTPTransport{
-		counted: githttp.NewClient(&http.Client{Transport: &countingTransport{base: http.DefaultTransport}}),
+		counted: githttp.NewClient(&http.Client{Transport: &countingTransport{base: gitIdleTransport}}),
 		plain:   githttp.DefaultClient,
 	}
 	client.InstallProtocol("https", t)
