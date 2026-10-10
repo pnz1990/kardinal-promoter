@@ -213,6 +213,27 @@ func TestForgejo_RenderedBranchOverSSH(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	requireKind(t, e, "forgejo")
+	renderedOverSSH(t, e)
+}
+
+// TestGitea_RenderedBranchOverSSH runs renderedOverSSH on Gitea's built-in
+// ssh server, which stops git-receive-pack when the client hangs up: the
+// render Job's push must wait for its post-receive hook (scm's ssh
+// transport), or the rendered branch is in git but not in Gitea's branch
+// list.
+//
+// Covers REND-SSH-GT-01.
+func TestGitea_RenderedBranchOverSSH(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	requireKind(t, e, "gitea")
+	renderedOverSSH(t, e)
+}
+
+// renderedOverSSH promotes a layout: branch environment over the git
+// server's ssh URL with a Secret holding only sshPrivateKey and knownHosts.
+func renderedOverSSH(t *testing.T, e *framework.Env) {
+	t.Helper()
 	keys, ok := e.Git.(gitserver.SSHKeys)
 	require.True(t, ok, "%s git server cannot add ssh keys", e.Git.Kind())
 	ctx := context.Background()

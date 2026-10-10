@@ -138,6 +138,13 @@ func TestGitHostPort_SSH(t *testing.T) {
 	// connection; one that does reaches the locked dial.
 	sshT := gitclient.Protocols["ssh"]
 	require.NotNil(t, sshT)
+	wrapper, ok := sshT.(scopedSSH)
+	require.True(t, ok, "LockNetwork wraps the ssh transport: %T", sshT)
+	assert.True(t, scm.IsSSHTransport(wrapper.Transport),
+		"the wrapped transport is still scm's (receive-pack wait, dial timeout), not go-git's default: %T", wrapper.Transport)
+	require.NoError(t, LockNetwork("git@git.example.com:org/repo.git"))
+	_, twice := gitclient.Protocols["ssh"].(scopedSSH).Transport.(scopedSSH)
+	assert.False(t, twice, "locking again does not wrap twice")
 	for _, url := range []string{"ssh://git@git.example.com/org/repo.git", "ssh://git@evil.example.com/org/repo.git"} {
 		ep, err := gittransport.NewEndpoint(url)
 		require.NoError(t, err)

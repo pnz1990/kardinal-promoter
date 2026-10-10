@@ -16,7 +16,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	gitclient "github.com/go-git/go-git/v5/plumbing/transport/client"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
-	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
@@ -106,11 +105,14 @@ func LockNetwork(gitURL string) error {
 	if scheme == "ssh" {
 		// kardinal's git client dials every ssh connection through scm's
 		// dial (SetSSHDial), which reaches only the git host; host keys are
-		// checked against knownHosts. go-git's ssh transport is wrapped so
+		// checked against knownHosts. The installed ssh transport (scm's,
+		// which waits for receive-pack and bounds the dial) is wrapped so
 		// that an ssh session without that dial (no ProxyOptions, which
 		// go-git would dial directly) is refused instead.
 		scm.SetSSHDial(gitDial(hostPort))
-		gitclient.InstallProtocol("ssh", scopedSSH{gitssh.DefaultClient})
+		if _, wrapped := gitclient.Protocols["ssh"].(scopedSSH); !wrapped {
+			gitclient.InstallProtocol("ssh", scopedSSH{gitclient.Protocols["ssh"]})
+		}
 		return nil
 	}
 	if hostPort != "" {
