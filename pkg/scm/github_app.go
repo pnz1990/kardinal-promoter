@@ -151,6 +151,9 @@ type GitHubAppTokenSource struct {
 
 	// minting runs one mint at a time for all callers.
 	minting singleflight.Group
+	// beforeFlight, when set (tests), runs between Token's cache check and
+	// joining the mint flight: the window in which another flight can end.
+	beforeFlight func()
 
 	mu      sync.Mutex
 	token   string
@@ -235,6 +238,9 @@ func (s *GitHubAppTokenSource) Token(ctx context.Context) (string, error) {
 	// context of its own: a caller that gives up returns at once without
 	// holding the lock, and its cancellation neither fails the mint for the
 	// others nor counts toward the backoff.
+	if s.beforeFlight != nil {
+		s.beforeFlight()
+	}
 	ch := s.minting.DoChan("mint", func() (interface{}, error) {
 		// A flight that ended between this caller's cache check and here
 		// left a fresh token, or failed and set the backoff: answer as the
