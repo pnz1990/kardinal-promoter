@@ -277,6 +277,11 @@ go tool pprof -top -base before.pb.gz after.pb.gz
 | `bundleAPI.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with the Bundle API bearer token (`KARDINAL_BUNDLE_TOKEN`). `POST /api/v1/bundles` is off until this is set |
 | `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`). With neither this nor `ui.auth.tokenReview` set, the UI API serves only local clients (`kubectl port-forward`) |
 | `ui.auth.tokenReview` | `false` | `--ui-tokenreview-auth`: validate UI tokens with TokenReview; adds the RBAC it needs |
+| `ui.auth.allowStaticTokenWithTokenReview` | `false` | Install with both a static UI token and `ui.auth.tokenReview` (the static token wins); refused otherwise |
+| `rbac.userRoles.aggregateToDefaultRoles` | `false` | Aggregate the user roles into `view`, `edit` and `admin` (then everyone bound to `edit` can promote and approve) |
+| `rbac.userRoles.directWrites` | `false` | Grant the promoter and approver `update` for `kardinal pause`, `kardinal rollback --hold` / `release-hold` and `kardinal override` from a kubeconfig, limited by the scoped-writes admission policy |
+| `tokenReview.audiences` | `["kardinal-promoter"]` | `--tokenreview-audiences`: token audiences the UI API and Bundle API accept (`kubectl create token <sa> --audience kardinal-promoter`) |
+| `tokenReview.acceptAPIServerAudience` | `false` | `--tokenreview-accept-apiserver-audience`: also accept kubeconfig and default ServiceAccount tokens |
 | `controller.accessLog.allRequests` | `false` | `--access-log-all-requests`: log every UI API and Bundle API request, not only logins, refusals and writes ([API access log](guides/security.md#api-access-log)) |
 | `controller.accessLog.sourceIP` / `.trustedProxies` | `false` / `[]` | `--access-log-source-ip`, `--access-log-trusted-proxies`: add the client address; believe `X-Forwarded-For` only from these proxy CIDRs |
 | `ui.corsAllowedOrigins` | `[]` | `--cors-allowed-origins` |
