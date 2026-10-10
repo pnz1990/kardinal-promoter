@@ -71,6 +71,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 	"github.com/kardinal-promoter/kardinal-promoter/web"
 
 	// Import built-in steps to register them via init().
@@ -158,7 +159,9 @@ func main() {
 	var gateOverrideMaxMinutes int
 	flag.IntVar(&gateOverrideMaxMinutes, "gate-override-max-minutes", int(policygaterecon.DefaultMaxOverride.Minutes()),
 		"Longest a gate override counts, from when the controller first saw it; an override ends at the earlier of "+
-			"its expiresAt and this cap (Helm gates.overrideMaxMinutes).")
+			"its expiresAt and this cap. The UI API refuses a longer override, and the chart's scoped-writes "+
+			"admission policy one written with kubectl by a caller limited to policygates/override "+
+			"(Helm controller.gateOverrideMaxMinutes).")
 	var overrideIdentityPolicy string
 	flag.StringVar(&overrideIdentityPolicy, "override-identity-policy", "",
 		"Name of the chart's gate-overrides ValidatingAdmissionPolicy and binding. The controller records an "+
@@ -284,6 +287,14 @@ func main() {
 	// token check is applied and TokenReview is not called.
 	//
 	// Design ref: docs/design/15-production-readiness.md §Lens 4
+	var bundleTokenReviewAuth bool
+	flag.BoolVar(&bundleTokenReviewAuth, "bundle-api-tokenreview-auth",
+		os.Getenv("KARDINAL_BUNDLE_TOKENREVIEW_AUTH") == "true",
+		"Accept Kubernetes tokens on POST /api/v1/bundles: the caller is authenticated with a TokenReview and "+
+			"needs get on the Pipeline and create on bundles in the namespace (SubjectAccessReview), and is "+
+			"recorded in kardinal.io/requested-by. The static --bundle-api-token, when set, still works and acts "+
+			"as the controller. Chart value: bundleAPI.tokenReview. Also readable from KARDINAL_BUNDLE_TOKENREVIEW_AUTH.")
+
 	var uiTokenReviewAuth bool
 	flag.BoolVar(&uiTokenReviewAuth, "ui-tokenreview-auth",
 		os.Getenv("KARDINAL_UI_TOKENREVIEW_AUTH") == "true",
@@ -291,6 +302,26 @@ func main() {
 			"When true and --ui-auth-token is not set, each request's bearer token is "+
 			"validated via authenticationv1.TokenReview. Fail-closed: API errors return 503. "+
 			"Also readable from KARDINAL_UI_TOKENREVIEW_AUTH environment variable (set to 'true').")
+
+	tokenReviewAudiences := uiauth.DefaultAudience
+	if v, ok := os.LookupEnv("KARDINAL_TOKENREVIEW_AUDIENCES"); ok {
+		tokenReviewAudiences = v
+	}
+	flag.StringVar(&tokenReviewAudiences, "tokenreview-audiences", tokenReviewAudiences,
+		"Comma-separated token audiences the UI API and the Bundle API accept in TokenReview mode. Mint tokens with "+
+			"kubectl create token <sa> --audience kardinal-promoter. Chart value: tokenReview.audiences. "+
+			"Also readable from KARDINAL_TOKENREVIEW_AUDIENCES.")
+	var tokenReviewAcceptAPIServer bool
+	flag.BoolVar(&tokenReviewAcceptAPIServer, "tokenreview-accept-apiserver-audience",
+		os.Getenv("KARDINAL_TOKENREVIEW_ACCEPT_APISERVER_AUDIENCE") == "true",
+		"Also accept tokens for the API server's own audience (kubeconfig and default ServiceAccount tokens). "+
+			"Such a token also works against the API server, so kardinal could replay it; off by default. "+
+			"Chart value: tokenReview.acceptAPIServerAudience.")
+	var uiAllowStaticWithTokenReview bool
+	flag.BoolVar(&uiAllowStaticWithTokenReview, "ui-auth-static-overrides-tokenreview", false,
+		"Start even when both --ui-auth-token and --ui-tokenreview-auth are set; the static token then wins and "+
+			"every UI caller acts as the controller. Without it that combination stops the controller. "+
+			"Chart value: ui.auth.allowStaticTokenWithTokenReview.")
 
 	// --metriccheck-cloudwatch-ambient-credentials lets cloudwatch MetricChecks
 	// that name no credential Secret use the controller's own AWS identity
@@ -748,7 +779,7 @@ func main() {
 	pgReconciler.PolicyNamespaces = splitCSV(policyNamespaces)
 	pgReconciler.StatusHeartbeat = gateStatusHeartbeat
 	pgReconciler.Workers = *workers["policygate"]
-	pgReconciler.MaxOverride = time.Duration(gateOverrideMaxMinutes) * time.Minute
+	applyGateOverrideCap(gateOverrideMaxMinutes, pgReconciler)
 	pgReconciler.IdentityPolicy = &policygaterecon.IdentityPolicyCheck{Reader: mgr.GetAPIReader(), Name: overrideIdentityPolicy}
 	if overrideIdentityPolicy == "" {
 		logger.Warn().Msg("--override-identity-policy is not set: gate overrides are recorded with an unverified createdBy")
@@ -914,6 +945,8 @@ func main() {
 		logger.Warn().Msg("SCM webhooks disabled: no --webhook-secret set, /webhook/scm rejects every event; merges are detected by PR status polling")
 	}
 	bundleAPIToken := bundleToken
+	review := reviewOptions{audiences: splitCSV(tokenReviewAudiences), acceptAPIServer: tokenReviewAcceptAPIServer,
+		apiServerAudiences: uiauth.APIServerAudiences(uiauth.ServiceAccountTokenPath), shared: &sharedReviewers{}}
 	mux := http.NewServeMux()
 	mux.Handle("/webhook/scm", tracing.Handler("webhook.scm", webhookSrv.Handler()))
 	mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
@@ -925,8 +958,8 @@ func main() {
 	// with its own webhook secret (docs/scm-providers.md).
 	mux.HandleFunc("POST /webhook/scm/namespaces/{namespace}/{name}", webhookSrv.ProviderHandler(providers))
 	mux.HandleFunc("POST /webhook/scm/cluster/{name}", webhookSrv.ProviderHandler(providers))
-	// Bundle API endpoint — only mounted if a token is configured.
-	if bundleAPIToken != "" {
+	// Bundle API endpoint — only mounted if a token or TokenReview is configured.
+	if bundleAPIToken != "" || bundleTokenReviewAuth {
 		// Default to the watched namespace; in namespace-scoped mode it is
 		// also the only namespace Bundles may be created in.
 		bundleNS := "default"
@@ -936,6 +969,14 @@ func main() {
 		bundleAPI := newBundleAPIServerWithLogger(mgr.GetClient(), bundleAPIToken, bundleNS, logger)
 		bundleAPI.onlyNamespace = watchNamespace
 		bundleAPI.reader = mgr.GetAPIReader()
+		if bundleTokenReviewAuth {
+			tokens, access, err := newReviewers(mgr.GetConfig(), review)
+			if err != nil {
+				logger.Fatal().Err(err).Msg("bundle API TokenReview auth")
+			}
+			bundleAPI.enableTokenReview(tokens, access)
+			logger.Info().Msg("bundle API accepts Kubernetes tokens (TokenReview + SubjectAccessReview)")
+		}
 		mux.Handle("/api/v1/bundles", accessLog.Middleware("bundle-api", tracing.Handler("bundleapi.create", bundleAPI.Handler())))
 		logger.Info().Msg("bundle API endpoint enabled at /api/v1/bundles")
 	}
@@ -957,9 +998,12 @@ func main() {
 	// UI API authentication. TokenReview mode fails closed: the controller does
 	// not start when the review clients cannot be built, instead of serving an
 	// open UI.
-	uiAuth, err := buildUIAuth(mgr.GetConfig(), uiAuthToken, uiTokenReviewAuth, watchNamespace)
+	uiAuth, err := buildUIAuth(mgr.GetConfig(), uiAuthFlags{
+		staticToken: uiAuthToken, tokenReview: uiTokenReviewAuth,
+		allowStaticWithTokenReview: uiAllowStaticWithTokenReview, review: review, scopeNamespace: watchNamespace,
+	})
 	if err != nil {
-		logger.Fatal().Err(err).Msg("UI API TokenReview: unable to create the review clients")
+		logger.Fatal().Err(err).Msg("UI API authentication")
 	}
 	switch {
 	case uiAuth.staticToken != "":

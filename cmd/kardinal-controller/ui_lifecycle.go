@@ -15,10 +15,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
@@ -197,13 +194,26 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if err := s.authorizeHold(r.Context(), ns, req.Pipeline); err != nil {
+		// The caller must be able to create the rollback Bundle before the
+		// hold is written: one who cannot never gets a hold that is removed
+		// again a moment later.
+		if az, ok := s.client.(actionAuthorizer); ok {
+			if err = az.AuthorizeAction(r.Context(), "create", "kardinal.io", "bundles", "", ns, ""); err != nil {
+				s.writeLifecycleError(w, "rollback", err)
+				return
+			}
+		}
+		// The hold needs pipelines/hold, not update on the Pipeline: the
+		// controller writes it. The plan's reads and the Bundle create stay
+		// on the caller's client.
+		var holdWriter client.Client
+		if holdWriter, err = s.actionClient(r.Context(), "pipelines", "hold", ns, req.Pipeline); err != nil {
 			s.writeLifecycleError(w, "hold", err)
 			return
 		}
 		plan, _, err = lifecycle.RollbackAndHold(r.Context(), s.client,
 			lifecycle.HoldRequest{RollbackRequest: rollbackReq, HoldReason: req.HoldReason, ExpiresIn: expiresIn,
-				Creator: requester})
+				Creator: requester, HoldWriter: holdWriter})
 	} else {
 		plan, err = lifecycle.PlanRollback(r.Context(), s.client, rollbackReq)
 		if err == nil {
@@ -242,22 +252,6 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// authorizeHold checks that the UI user may update pipelines/hold of the
-// Pipeline, the virtual subresource the hold-writes admission policy asks of
-// a direct write. The controller writes the hold itself, so without this
-// check a user with plain update on Pipelines could hold through the UI.
-// With no UI auth mode there is no user to check.
-func (s *uiAPIServer) authorizeHold(ctx context.Context, ns, pipeline string) error {
-	a, ok := s.client.(interface {
-		AuthorizeSubresource(ctx context.Context, verb string, obj client.Object, subresource string) error
-	})
-	if !ok {
-		return nil
-	}
-	return a.AuthorizeSubresource(ctx, "update",
-		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: pipeline, Namespace: ns}}, "hold")
-}
-
 // handleReleaseHold handles POST /api/v1/ui/release-hold: it removes the hold
 // of an environment (lifecycle.ReleaseHold). UI equivalent of
 // `kardinal release-hold`. 404 when the environment is not held.
@@ -279,11 +273,13 @@ func (s *uiAPIServer) handleReleaseHold(w http.ResponseWriter, r *http.Request) 
 	if ns == "" {
 		ns = "default"
 	}
-	if err := s.authorizeHold(r.Context(), ns, req.Pipeline); err != nil {
+	// pipelines/hold, not update on the Pipeline: the controller writes it.
+	writer, err := s.actionClient(r.Context(), "pipelines", "hold", ns, req.Pipeline)
+	if err != nil {
 		s.writeLifecycleError(w, "release hold", err)
 		return
 	}
-	h, err := lifecycle.ReleaseHold(r.Context(), s.client, ns, req.Pipeline, req.Environment)
+	h, err := lifecycle.ReleaseHold(r.Context(), writer, ns, req.Pipeline, req.Environment)
 	if err != nil {
 		s.writeLifecycleError(w, "release hold", err)
 		return
@@ -297,8 +293,9 @@ func (s *uiAPIServer) handleReleaseHold(w http.ResponseWriter, r *http.Request) 
 
 // handlePause handles POST /api/v1/ui/pause. It sets spec.paused
 // (lifecycle.SetPaused); the Pipeline reconciler then creates the freeze gate,
-// so no new step starts and in-flight steps hold at the next safe point. The
-// caller needs only get and update on the Pipeline.
+// so no new step starts and in-flight steps hold at the next safe point. In
+// TokenReview mode the caller needs update on pipelines/pause, not on the
+// Pipeline: the controller writes it (actionClient).
 //
 // Request body (JSON):
 //
@@ -342,7 +339,14 @@ func (s *uiAPIServer) handlePauseResume(w http.ResponseWriter, r *http.Request, 
 	}
 	// SetPaused retries a conflict, so a concurrent write to the Pipeline (for
 	// example its status) does not fail the request.
-	if err := lifecycle.SetPaused(r.Context(), s.client, ns, req.Pipeline, pause); err != nil {
+	// In TokenReview mode the caller needs only the pause action
+	// (pipelines/pause), not update on the Pipeline: the controller writes it.
+	writer, err := s.actionClient(r.Context(), "pipelines", "pause", ns, req.Pipeline)
+	if err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if err := lifecycle.SetPaused(r.Context(), writer, ns, req.Pipeline, pause); err != nil {
 		s.writeLifecycleError(w, action+" pipeline", err)
 		return
 	}
@@ -351,4 +355,28 @@ func (s *uiAPIServer) handlePauseResume(w http.ResponseWriter, r *http.Request, 
 		Str("requestedBy", uiRequester(r.Context())).Msg("ui: pipeline " + done)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(uiMessageResponse{Message: "pipeline " + req.Pipeline + " " + done})
+}
+
+// actionAuthorizer is the AuthorizingClient of TokenReview mode.
+type actionAuthorizer interface {
+	AuthorizeAction(ctx context.Context, verb, group, resource, subresource, namespace, name string) error
+	Privileged() client.Client
+}
+
+// actionClient returns the client to write the named object with for an
+// action the caller asked for. In TokenReview mode it checks that the
+// caller may perform the action, the virtual subresource resource/action
+// (pipelines/pause, policygates/override), and returns the controller's
+// client: the caller does not need update on the whole object, and the
+// handler records the caller as the requester. Otherwise (no auth mode, the
+// shared token) it returns the handler's client.
+func (s *uiAPIServer) actionClient(ctx context.Context, resource, action, namespace, name string) (client.Client, error) {
+	az, ok := s.client.(actionAuthorizer)
+	if !ok {
+		return s.client, nil
+	}
+	if err := az.AuthorizeAction(ctx, "update", "kardinal.io", resource, action, namespace, name); err != nil {
+		return nil, err
+	}
+	return az.Privileged(), nil
 }
