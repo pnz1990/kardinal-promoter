@@ -60,9 +60,10 @@ func init() { parentsteps.Register(writeEnvFile{}) }
 //
 // Under the race detector it runs raceWriters (30) writers: sixty took up to
 // two minutes on CI there and hit the 120s test timeout even in a package of
-// its own (#1638). Thirty still contend for every push, and some still need a
-// second reconcile (ErrContended), so the race detector checks the same code
-// paths. go test without -race runs all sixty (about 8s).
+// its own (#1638). Thirty still contend for every push, but do not always
+// need a second reconcile, so the ErrContended retry is asserted only in the
+// sixty-writer run without -race (about 8s), which CI runs as its own step
+// ("go test (shared-branch writers, no race)").
 func TestSharedBranch_SixtyWritersThroughTheEngine(t *testing.T) {
 	const maxStepRetries = 5
 	writers := 60
@@ -145,4 +146,7 @@ func TestSharedBranch_SixtyWritersThroughTheEngine(t *testing.T) {
 		}
 	}
 	t.Logf("%d of %d writers needed more than one reconcile", retried, writers)
+	if raceWriters == 0 {
+		assert.Positive(t, retried, "sixty writers lose some reconciles (ErrContended) and retry them")
+	}
 }
