@@ -25,8 +25,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
 
-// TestAudit_Retention turns retention on (off by default) and runs the
-// controller with small retention limits
+// TestAudit_Retention runs the controller with small retention limits
 // (--audit-retention=true, --audit-retention-max-per-pipeline=3, --audit-retention-max-age=24h,
 // --audit-retention-interval=5s) and checks that the leader deletes a
 // Pipeline's records past the 3 newest (within one second by
@@ -35,8 +34,8 @@ import (
 // is metadata.creationTimestamp). It grants the controller delete on
 // AuditEvents in its namespace (the chart does with
 // audit.retention.enabled) and restarts the
-// controller, so it is not parallel. The chart's defaults (90 days, 1000)
-// and the off switch are checked in test/helm.
+// controller, so it is not parallel. The chart's defaults (on, 90 days,
+// 1000) and the off switch are checked in test/helm.
 //
 // Covers AUDIT-RETENTION-01.
 func TestAudit_Retention(t *testing.T) {
@@ -60,9 +59,9 @@ func TestAudit_Retention(t *testing.T) {
 	create("api", "api-old", now.Add(-48*time.Hour))
 	create("api", "api-new", now)
 
-	// The chart grants delete on AuditEvents only with
-	// audit.retention.enabled, which this install leaves off: grant it in
-	// the test's namespace, as the chart's rule would.
+	// The chart grants delete on AuditEvents with audit.retention.enabled
+	// (the default); grant it in the test's namespace too, so the test does
+	// not depend on the install's value.
 	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "audit-retention"},
 		Rules: []rbacv1.PolicyRule{{APIGroups: []string{"kardinal.io"}, Resources: []string{"auditevents"}, Verbs: []string{"delete"}}}}
 	_, err := e.Kube.RbacV1().Roles(ns).Create(ctx, role, metav1.CreateOptions{})

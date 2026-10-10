@@ -124,7 +124,9 @@ var tableSeparator = regexp.MustCompile(`^\|?(\s*:?-{3,}:?\s*\|)+\s*(:?-{3,}:?)?
 // TestE2ECoverage_SourceRefs: every source ref of every row names a path in
 // the repo. A ref with lines names lines that exist, and its first line has
 // content, so a reader of the row lands on the behavior. A covered rollback row
-// names lines in every ref.
+// names lines in every ref, except docs/changelog.md, which is cited by entry
+// title or heading and never by line (changelogRefProblem): a
+// docs/changelog.md#<anchor> ref is as precise as a line and does not shift.
 func TestE2ECoverage_SourceRefs(t *testing.T) {
 	root := repoRoot(t)
 	rows, err := coverage.Rows(root)
@@ -141,6 +143,12 @@ func TestSourceRefProblems(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(root, "pkg"), 0o755))
 	doc := "# Title\n\n| a | b |\n|---|---|\n---\ntext\n- |\n| :--- | ---: |\n"
 	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte(doc), 0o600))
+	changelog := "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- **New thing** — text\n- **Fix with `code`: a colon** (#1) — text\n" +
+		"- **Twice** — one\n- **Twice** — two\n- **Shared title** — again\n  - **Not top level** — nested\n- plain bullet\n\n" +
+		"## [v1.0.0] — 2026-10-01\n\n### Before you upgrade\n\nprose\n\n" +
+		"## [v0.9.0] — 2026-09-01\n\n### Before you upgrade\n\n### Fixed\n\n- **Shared title** — first\n"
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "docs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "docs", "changelog.md"), []byte(changelog), 0o600))
 	for _, tc := range []struct {
 		source, area, status string
 		// problem is part of the one problem expected, or "" for none.
@@ -171,6 +179,24 @@ func TestSourceRefProblems(t *testing.T) {
 		{source: "doc.md:8", problem: "starts on a markdown table separator"},
 		{source: "doc.md:5-6", problem: "starts on a bare ---"},
 		{source: "doc.md", area: "rollback", status: "covered", problem: "names no lines"},
+		// docs/changelog.md is cited by entry title or heading, not line.
+		{source: "docs/changelog.md#New thing"},
+		{source: "docs/changelog.md#Fix with `code`: a colon"},
+		{source: "docs/changelog.md#Before you upgrade@v1.0.0"},
+		{source: "docs/changelog.md#Shared title@v0.9.0"},
+		{source: "docs/changelog.md#Fixed@v0.9.0", area: "rollback", status: "covered"},
+		{source: "docs/changelog.md#New thing; pkg"},
+		{source: "docs/changelog.md#New", problem: "names no `- **Title**` entry or heading"},
+		{source: "docs/changelog.md#new thing", problem: "names no `- **Title**` entry or heading"},
+		{source: "docs/changelog.md#New thing@v0.9.0", problem: "names no `- **Title**` entry or heading"},
+		{source: "docs/changelog.md#Twice", problem: "appears 2 times in release Unreleased"},
+		{source: "docs/changelog.md#Shared title", problem: "several releases (Unreleased, v0.9.0): add @<release>"},
+		{source: "docs/changelog.md#Before you upgrade", problem: "several releases (v0.9.0, v1.0.0): add @<release>"},
+		{source: "docs/changelog.md#Release title", problem: "names no `- **Title**` entry or heading"},
+		{source: "docs/changelog.md"},
+		{source: "docs/changelog.md:7", problem: "cites the changelog by line"},
+		{source: "./docs/changelog.md:7", problem: "cites the changelog by line"},
+		{source: "docs/../docs/changelog.md:7-8", problem: "cites the changelog by line"},
 	} {
 		row := coverage.Row{ID: "TEST-01", Area: tc.area, Status: tc.status, Source: tc.source}
 		got := sourceRefProblems(root, []coverage.Row{row})
@@ -202,6 +228,9 @@ func sourceRefProblems(root string, rows []coverage.Row) []string {
 // sourceRefProblem returns the rule that ref, a source ref of row r, breaks,
 // or "" when it keeps them all. files holds the lines of the files read so far.
 func sourceRefProblem(root string, files map[string][]string, r coverage.Row, ref string) string {
+	if anchor, ok := strings.CutPrefix(ref, changelogPath+"#"); ok {
+		return changelogRefProblem(root, files, anchor)
+	}
 	m := sourceRef.FindStringSubmatch(ref)
 	if m == nil {
 		return "is not path, path:N or path:N-M"
@@ -209,6 +238,9 @@ func sourceRefProblem(root string, files map[string][]string, r coverage.Row, re
 	path := m[1]
 	if !filepath.IsLocal(path) {
 		return "names a path outside the repo"
+	}
+	if filepath.Clean(path) == changelogPath && m[2] != "" {
+		return "cites the changelog by line: write " + changelogPath + "#<entry title or heading>, which an entry added above does not shift"
 	}
 	if m[2] == "" {
 		if r.Area == "rollback" && r.Status == "covered" {
@@ -248,4 +280,98 @@ func sourceRefProblem(root string, files map[string][]string, r coverage.Row, re
 		return "starts on a markdown table separator"
 	}
 	return ""
+}
+
+// changelogPath is the one file cited by entry title rather than by line:
+// every new entry shifts the lines of all the older ones, so line refs into
+// it made every open PR conflict on coverage.tsv.
+const changelogPath = "docs/changelog.md"
+
+// changelogRelease is a "## [<release>]" heading of the changelog.
+var changelogRelease = regexp.MustCompile(`^## \[([^\]]+)\]`)
+
+// changelogAnchor is what a changelog ref may name: the bold title of an
+// entry ("- **Title** — ...") or the text of a heading below a release
+// ("### Fixed", "#### From v0.8.1").
+var changelogAnchor = regexp.MustCompile(`^- \*\*(.+?)\*\*|^#{3,6} (.+?)\s*$`)
+
+// changelogAnchors maps each anchor of the changelog to the releases it
+// appears in and how often in each.
+func changelogAnchors(lines []string) map[string]map[string]int {
+	anchors := map[string]map[string]int{}
+	release := ""
+	for _, line := range lines {
+		if m := changelogRelease.FindStringSubmatch(line); m != nil {
+			release = m[1]
+			continue
+		}
+		m := changelogAnchor.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		text := m[1] + m[2]
+		if anchors[text] == nil {
+			anchors[text] = map[string]int{}
+		}
+		anchors[text][release]++
+	}
+	return anchors
+}
+
+// changelogRefProblem checks the anchor of a docs/changelog.md#<anchor> ref:
+// it names an entry title or a heading exactly, once in its release. An
+// anchor that appears in several releases names one with a suffix
+// "@<release>" (the release heading's name, such as v0.9.0). A release's
+// "Unreleased" heading is renamed when it ships, so qualify only what needs
+// it.
+func changelogRefProblem(root string, files map[string][]string, anchor string) string {
+	lines, ok := files[changelogPath]
+	if !ok {
+		b, err := os.ReadFile(filepath.Join(root, changelogPath))
+		if err != nil {
+			return fmt.Sprintf("names an entry of no file: %v", err)
+		}
+		lines = strings.Split(string(b), "\n")
+		files[changelogPath] = lines
+	}
+	anchors := changelogAnchors(lines)
+	text, release := anchor, ""
+	if i := strings.LastIndex(anchor, "@"); i > 0 {
+		if _, known := releasesOf(anchors)[anchor[i+1:]]; known {
+			text, release = anchor[:i], anchor[i+1:]
+		}
+	}
+	in := anchors[text]
+	if release != "" {
+		in = map[string]int{release: anchors[text][release]}
+		if in[release] == 0 {
+			in = nil
+		}
+	}
+	if len(in) == 0 {
+		return "names no `- **Title**` entry or heading of " + changelogPath
+	}
+	var releases []string
+	for rel, n := range in {
+		if n > 1 {
+			return fmt.Sprintf("names an entry that appears %d times in release %s", n, rel)
+		}
+		releases = append(releases, rel)
+	}
+	if len(releases) > 1 {
+		sort.Strings(releases)
+		return fmt.Sprintf("names an entry of several releases (%s): add @<release>", strings.Join(releases, ", "))
+	}
+	return ""
+}
+
+// releasesOf is the set of release names of the changelog's anchors.
+func releasesOf(anchors map[string]map[string]int) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, in := range anchors {
+		for rel := range in {
+			out[rel] = struct{}{}
+		}
+	}
+	return out
 }
