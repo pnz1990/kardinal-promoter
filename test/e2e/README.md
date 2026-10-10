@@ -63,11 +63,16 @@ jobs run once whatever `COUNT` is: the test upgrades its cluster
 
 Pull requests don't run the live suites in CI: run `make e2e-all`, or the
 suites a change touches, before you merge, and put the result in the PR.
-`.github/workflows/e2e-live.yml` runs the same jobs weekly, repeating every
-test three times to find flakes (the upgrade test once), and when dispatched
+`.github/workflows/e2e-live.yml` runs the same jobs on main nightly (each test
+once, to catch a regression in a suite pull requests don't run), weekly
+(repeating every test three times to find flakes; the upgrade test once), and
+when dispatched
 (`gh workflow run e2e-live.yml --ref <branch>`; `-f count=N` repeats each
 test). Only its `github` job gets the `DEMO_GITHUB_TOKEN` secret. Its
 `e2e live` job passes when every job passed and the coverage proof holds.
+After a scheduled run its `report` job writes a per-job summary and opens an
+issue titled "e2e live failed on main (nightly|weekly ...)" when a job failed,
+or comments on the one already open; the next passing run closes it.
 
 ## Suites
 
