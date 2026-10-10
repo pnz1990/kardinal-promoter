@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 )
@@ -109,6 +110,7 @@ func TestControllerIntegration(t *testing.T) {
 		WithScheme(scheme).
 		WithObjects(pipeline, bundle).
 		WithStatusSubresource(pipeline, bundle).
+		WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		WithIndex(&kardinalv1alpha1.PromotionStep{}, "spec.pipelineName",
 			func(obj client.Object) []string {
 				s, ok := obj.(*kardinalv1alpha1.PromotionStep)

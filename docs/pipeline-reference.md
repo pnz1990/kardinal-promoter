@@ -285,13 +285,19 @@ environment's instances (they leave the collection, so kro prunes them) and crea
 the upstreams are Verified; once the step has started, its instances are kept. Approval gates
 (`spec.approval`, or an expression that reads `approvals.*`) are carried too: their instances come
 from the `ApprovalGates` collection, and an environment is admitted only once they are ready.
-[Hooks](hooks.md) (`spec.environments[].hooks`), [analysis](analysis.md)
-(`spec.environments[].verification`) and [image verification](image-verification.md)
-(`spec.imageVerification`) are not carried yet: both the Bundle and the Pipeline condition report
-them.
+[Hooks](hooks.md) and [analysis](analysis.md) are carried too. HookRuns and AnalysisRuns are
+collections created under the conditions the node shape gates them on, even once the
+environment's step exists: see [Hooks](hooks.md) for the list. A run is kept once kro has
+created it for this Bundle. A run that kro cannot create holds only its own environment, and
+the Bundle's `RunsCreated` condition names it.
+So is [image verification](image-verification.md): the root steps and their pre hooks wait for
+the Bundle's ImageVerification.
 
-The Graph's size grows with environments and PolicyGates. Measured: 300 environments with one gate
-each, fully promoted, 0.47 MB; 300 with three gates each about 0.9 MB. A Bundle whose Graph would be
+The Graph's size grows with environments, PolicyGates, hooks and analyses: every gate instance,
+HookRun and AnalysisRun is one more object the Graph creates and tracks, and its data is in the
+Graph. Measured: 300 environments with one gate each, fully promoted, 0.47 MB; 300 with three
+gates each about 0.9 MB; 150 environments with a gate, a pre hook, a post hook and an analysis
+each (750 objects) 0.67 MB. A Bundle whose Graph would be
 over 1.2 MB, or create more than 4,500 objects, fails with `GraphBuildFailed` and the size in the
 message.
 
@@ -433,11 +439,16 @@ force-pushes the base branch, so no writer's commit is lost:
   other file the new head's. It pushes again, up to 6 times, without waiting in between. The
   step message then reads
   `pushed main after rebasing onto N newer commit(s) of other writers`. When the new commits
-  changed one of the same files, or the branch keeps moving, the whole step sequence runs
-  again from a fresh clone (at most 3 times in one reconcile), so the update is computed on
+  changed one of the same files, the branch keeps moving, or the shallow clone lacks the
+  commit the promotion was made on (seen with many writers on one branch), the whole step
+  sequence runs again from a fresh clone (at most 3 times in one reconcile), so the update is computed on
   the other writer's version. After that the step is retried with jittered backoff (at most
   2 minutes), counted in `status.contendedRetries` with no limit and not in
   `status.retryCount`, so contention slows a promotion down but does not fail it.
+  A missing base commit is the exception. `git-push` first fetches the last 200 commits of
+  the branch to find it. Each fresh clone it still needs is counted in
+  `status.outputs.baseMissingRestarts`. After 5 of them the step fails, because the branch was
+  probably force-pushed or rewritten.
 - **pr-review environments**: each promotion pushes its own branch
   `kardinal/<namespace hash>/<bundle>/<environment>` (the hash is the first 8 hex digits of
   the SHA-256 of the namespace, so Bundles of the same name in two namespaces get separate
