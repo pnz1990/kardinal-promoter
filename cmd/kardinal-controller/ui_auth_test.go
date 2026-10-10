@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	policygaterecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 )
 
@@ -698,7 +699,7 @@ func TestUIHandler_HoldWithoutPipelineUpdate(t *testing.T) {
 		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"},
 			Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "prod"}}}},
 		bundle("v1", "1.0", 0), bundle("v2", "2.0", 10), step("v1", 1), step("v2", 11),
-	).Build()
+	).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: holderAccess{}}, "", nil, zerolog.Nop())
 
 	rec := uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/rollback", "Bearer p",

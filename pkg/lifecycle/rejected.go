@@ -5,7 +5,6 @@ package lifecycle
 
 import (
 	"context"
-	"fmt"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -32,11 +31,11 @@ type RejectedArtifacts struct {
 // artifacts of the rejected ones. The Bundle reconciler never deletes a
 // Rejected Bundle (historyLimit exempts it), so the set does not shrink.
 func LoadRejectedArtifacts(ctx context.Context, c client.Reader, ns, pipeline string) (*RejectedArtifacts, error) {
-	var list v1alpha1.BundleList
-	if err := c.List(ctx, &list, client.InNamespace(ns)); err != nil {
-		return nil, fmt.Errorf("list bundles of pipeline %s: %w", pipeline, err)
+	bundles, err := ListPipelineBundles(ctx, c, ns, pipeline)
+	if err != nil {
+		return nil, err
 	}
-	return RejectedArtifactsOf(list.Items, pipeline), nil
+	return RejectedArtifactsOf(bundles, pipeline), nil
 }
 
 // RejectedArtifactsOf collects the artifacts of the rejected Bundles of

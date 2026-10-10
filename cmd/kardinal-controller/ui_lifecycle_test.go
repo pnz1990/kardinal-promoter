@@ -128,7 +128,7 @@ func TestUIAPI_Promote_CopiesBundleVerifiedUpstream(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(tc.objs...).Build()
+			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(tc.objs...).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			env := "prod"
 			if tc.wantCode == http.StatusBadRequest {
 				env = "test"
@@ -191,7 +191,7 @@ func TestUIAPI_Rollback_RestoresPreviousVerifiedBundle(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(tc.objs...).Build()
+			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(tc.objs...).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			w := uiLcPost(t, c, "/api/v1/ui/rollback", tc.body)
 			require.Equal(t, tc.wantCode, w.Code, w.Body.String())
 			created := uiLcCreated(t, c, "app-v1", "app-v2")
@@ -292,7 +292,7 @@ func TestUIHandler_ActionsRecordRequester(t *testing.T) {
 	for _, m := range modes {
 		for _, a := range actions {
 			t.Run(m.name+"/"+a.name, func(t *testing.T) {
-				c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(a.objs()...).Build()
+				c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(a.objs()...).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 				tokens := &uiTestTokens{users: users}
 				cfg := uiAuthConfig{staticToken: m.staticToken}
 				if m.tokenReview {
@@ -360,7 +360,7 @@ func TestUIAPI_PauseResume_SetsSpecPaused(t *testing.T) {
 				t.Errorf("UI pause and resume must not delete objects, deleted %T", obj)
 				return cl.Delete(ctx, obj, opts...)
 			},
-		}).Build()
+		}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	key := types.NamespacedName{Namespace: "default", Name: "app"}
 
 	w := uiLcPost(t, c, "/api/v1/ui/pause", `{"pipeline":"app"}`)
@@ -382,7 +382,7 @@ func TestUIAPI_PauseResume_SetsSpecPaused(t *testing.T) {
 // TestUIAPI_CreateBundle_StampsCreatedAt covers the UI half of C02-bundle-04:
 // Bundles created from the UI carry sub-second creation order.
 func TestUIAPI_CreateBundle_StampsCreatedAt(t *testing.T) {
-	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(uiLcPipeline()).Build()
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(uiLcPipeline()).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	w := uiLcPost(t, c, "/api/v1/ui/bundles", `{"pipeline":"app","image":"ghcr.io/org/app:1"}`)
 	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
 	created := uiLcCreated(t, c)
@@ -396,7 +396,7 @@ func TestUIAPI_CreateBundle_StampsCreatedAt(t *testing.T) {
 // pushes in the same second supersede in the order they were made, whatever
 // their generated names.
 func TestBundleAPI_StampsCreatedAt(t *testing.T) {
-	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(uiLcPipeline()).Build()
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(uiLcPipeline()).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	handler := newBundleAPIServer(c, "test-token", "default").Handler()
 	for range 2 {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/bundles",
@@ -435,14 +435,14 @@ func TestUIAPI_RollbackHold(t *testing.T) {
 		`{"pipeline":"app","environment":"prod","hold":true,"holdReason":" "}`: "a hold needs a holdReason",
 		`{"pipeline":"app","environment":"prod","holdReason":"x"}`:             "set hold",
 	} {
-		c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(objs()...).Build()
+		c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(objs()...).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 		w := uiLcPost(t, c, "/api/v1/ui/rollback", body)
 		assert.Equal(t, http.StatusBadRequest, w.Code, body)
 		assert.Contains(t, w.Body.String(), want, body)
 		assert.Empty(t, uiLcCreated(t, c, "app-v1", "app-v2"), body)
 	}
 
-	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(objs()...).Build()
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(objs()...).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	w := uiLcPost(t, c, "/api/v1/ui/rollback", `{"pipeline":"app","environment":"prod","hold":true,"holdReason":"INC-42"}`)
 	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
 	var resp uiRollbackResponse

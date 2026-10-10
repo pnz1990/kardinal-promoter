@@ -86,7 +86,7 @@ func TestRollbackPolicy_RefusalIsVisible(t *testing.T) {
 			}
 			objs = append(objs, tc.history...)
 			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(objs...).
-				WithStatusSubresource(&v1alpha1.RollbackPolicy{}, &v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).Build()
+				WithStatusSubresource(&v1alpha1.RollbackPolicy{}, &v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			rec := events.NewFakeRecorder(10)
 			r := &rollbackpolicy.Reconciler{Client: c, Recorder: rec, NowFn: func() time.Time { return fixedNow }}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "rp-1", Namespace: "default"}}
@@ -131,7 +131,7 @@ func TestRollbackPolicy_RefusalClearsOnSuccess(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
 		WithObjects(makeRollbackPolicy("rp-1", "nginx-demo", "prod", "bundle-1", 3), failing,
 			rtBundle("bundle-1", "1.25.0", 30), rtPipeline()).
-		WithStatusSubresource(&v1alpha1.RollbackPolicy{}, &v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).Build()
+		WithStatusSubresource(&v1alpha1.RollbackPolicy{}, &v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	rec := events.NewFakeRecorder(10)
 	r := &rollbackpolicy.Reconciler{Client: c, Recorder: rec, NowFn: func() time.Time { return fixedNow }}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "rp-1", Namespace: "default"}}
@@ -178,7 +178,7 @@ func TestRollbackPolicy_RefusalEventCountsFailures(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
 				WithObjects(makeRollbackPolicy("rp-1", "nginx-demo", "prod", "bundle-1", tc.threshold), failing,
 					rtBundle("bundle-1", "1.25.0", 30), rtPipeline()).
-				WithStatusSubresource(&v1alpha1.RollbackPolicy{}, &v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).Build()
+				WithStatusSubresource(&v1alpha1.RollbackPolicy{}, &v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			rec := events.NewFakeRecorder(10)
 			r := &rollbackpolicy.Reconciler{Client: c, Recorder: rec, NowFn: func() time.Time { return fixedNow }}
 

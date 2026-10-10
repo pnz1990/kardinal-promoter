@@ -27,7 +27,7 @@ func TestSubscription_StampsCreatedAt(t *testing.T) {
 	now := time.Date(2026, 4, 13, 10, 0, 0, 123456789, time.UTC)
 	sub := makeImageSub("sub-stamp", "default", "my-pipeline", "ghcr.io/test/app")
 	sub.Status.LastSeenDigest = "sha256:old"
-	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r := &subscription.Reconciler{
 		Client: c,
 		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {

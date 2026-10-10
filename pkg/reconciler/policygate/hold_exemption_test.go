@@ -159,7 +159,7 @@ func TestPolicyGateReconciler_HoldExemption(t *testing.T) {
 			gate.Labels["kardinal.io/gate-name"] = "no-weekend-deploys"
 			objs := append([]client.Object{gate, f.rb, f.target, f.pipeline}, f.steps...)
 			objs = append(objs, f.others...)
-			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(objs...).WithStatusSubresource(gate).Build()
+			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(objs...).WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			rec := events.NewFakeRecorder(10)
 			r, err := policygate.NewReconciler(c)
 			require.NoError(t, err)
