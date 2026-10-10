@@ -32,7 +32,8 @@ type AuditEventSpec struct {
 	// Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed",
 	//               "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
 	//               "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden",
-	//               "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased".
+	//               "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
+	//               "HoldBundleMissing".
 	// ApprovalRecorded and ApprovalRevoked are written by an approval gate
 	// when a decision (kardinal approve) appears in or leaves its
 	// spec.approvals.
@@ -42,7 +43,7 @@ type AuditEventSpec struct {
 	// failed health check records PromotionFailed (RollbackStarted when
 	// onHealthFailure is rollback), and a blocked gate records GateEvaluated
 	// with outcome Failure.
-	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased
+	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing
 	Action string `json:"action"`
 
 	// Outcome describes the result of the action.
@@ -92,7 +93,7 @@ func init() {
 var AuditActions = []string{
 	"PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected",
 	"RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated",
-	"GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
+	"GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased", "HoldBundleMissing",
 }
 
 // AuditOutcomes are the values spec.outcome accepts.

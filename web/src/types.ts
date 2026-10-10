@@ -110,6 +110,12 @@ export interface EnvironmentHold {
   createdAt?: string
   /** When the controller removes the hold, RFC 3339; absent: when released. */
   expiresAt?: string
+  /** The rollback Bundle does not exist (#1629); the hold stays in effect. */
+  bundleMissing?: boolean
+  /** What is wrong and how to recover, with bundleMissing. */
+  message?: string
+  /** The CLI command that releases the hold. */
+  releaseCommand?: string
 }
 
 export interface Bundle {

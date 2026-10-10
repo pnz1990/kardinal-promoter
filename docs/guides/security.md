@@ -430,6 +430,7 @@ and turn it on after the export.
 | `PromotionRejected` | `kardinal reject` cancelled an in-flight promotion (its Bundle was [rejected](../rollback.md#reject-a-bundle)) |
 | `GateOverridden` | An entry in a gate instance's `spec.overrides[]` (`kardinal override` or the UI), written once per entry with its verified `createdBy`, stage, expiry and reason |
 | `ApprovalRecorded` / `ApprovalRevoked` | An approval gate saw a decision (`kardinal approve`) appear, or its Approval deleted, with the approver, the decision and whether it counts |
+| `HoldCreated` / `HoldReleased` / `HoldBundleMissing` | A hold (`kardinal rollback --hold`) appeared in, or left, `spec.holds`; or its rollback Bundle has been missing for `--hold-bundle-grace` (the hold stays in effect: [A hold whose rollback Bundle does not exist](../rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |
 | `GateEvaluated` | PolicyGate instance first evaluated, and every later change of readiness (blocked or unblocked); one record per change |
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
 | `RollbackSucceeded` | A PromotionStep of a rollback Bundle (from `kardinal rollback`, the UI, a RollbackPolicy or `onHealthFailure: rollback`) reached Verified; written besides `PromotionSucceeded`, one record per step |
