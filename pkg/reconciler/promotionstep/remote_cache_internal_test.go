@@ -213,3 +213,45 @@ func TestRemoteCache_OlderFailedReadIsRetried(t *testing.T) {
 	}
 	assert.Equal(t, 2, rem.callCount(), "the later callers share one new read")
 }
+
+// TestRemoteCache_OlderHeadsFinishingLastAreNotCached (#1653 QA): a fresh
+// read overlaps an older shared one, and the older one finishes last. Its
+// caller gets its answer, but the cache keeps the heads of the read that
+// started last, so the next steps within remoteHeadsTTL see the newer head.
+func TestRemoteCache_OlderHeadsFinishingLastAreNotCached(t *testing.T) {
+	ctx := context.Background()
+	rem := newGatedRemote([]string{"old", "new"}, []bool{false, false})
+	waiting := make(chan string, 8)
+	c := remoteCache{onWait: func(key string) { waiting <- key }}
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	type answer struct {
+		head string
+		err  error
+	}
+	older := make(chan answer, 1)
+	go func() {
+		h, err := c.remoteHeads(ctx, rem, "https://git/x", "tok", now)
+		older <- answer{h["main"], err}
+	}()
+	within(t, rem.entered[0], "the older read to start")
+	within(t, waiting, "the older caller to wait")
+	h, err := func() (map[string]string, error) {
+		done := make(chan struct{})
+		var h map[string]string
+		var err error
+		go func() { h, err = c.readHeads(ctx, rem, "https://git/x", "tok", now); close(done) }()
+		within(t, rem.entered[1], "the fresh read to start")
+		close(rem.release[1]) // the fresh read finishes first
+		within(t, done, "the fresh answer")
+		return h, err
+	}()
+	require.NoError(t, err)
+	assert.Equal(t, "new", h["main"])
+
+	close(rem.release[0]) // the older read finishes last
+	assert.Equal(t, answer{"old", nil}, within(t, older, "the older answer"), "its own caller gets its answer")
+	cached, err := c.remoteHeads(ctx, rem, "https://git/x", "tok", now.Add(time.Second))
+	require.NoError(t, err)
+	assert.Equal(t, "new", cached["main"], "the cache keeps the heads read last, not the ones that finished last")
+	assert.Equal(t, 2, rem.callCount(), "served from the cache")
+}
