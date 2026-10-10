@@ -67,9 +67,24 @@ func userKubeconfig(t *testing.T, e *framework.Env, ns, user string, groups ...s
 // (revoke) an Approval, every decision writes an ApprovalRecorded or
 // ApprovalRevoked AuditEvent, and the Bundle names its verified creator.
 //
-// Covers GATE-APPROVAL-01, GATE-APPROVAL-02, GATE-APPROVAL-03, CLI-APPROVE-01.
+// It runs in both Graph shapes.
+//
+// Covers GATE-APPROVAL-01, GATE-APPROVAL-02, GATE-APPROVAL-03, CLI-APPROVE-01, GRAPH-COMPACT-05.
 func TestGate_ApprovalQuorum(t *testing.T) {
 	t.Parallel()
+	for _, shape := range []string{"nodes", "compact"} {
+		t.Run(shape, func(t *testing.T) {
+			t.Parallel()
+			approvalQuorum(t, shape)
+		})
+	}
+}
+
+// approvalQuorum is TestGate_ApprovalQuorum with the Pipeline's Graph shape
+// set to shape (kardinal.io/graph-shape): in the compact shape the gate
+// instance comes from the ApprovalGates collection and holds the compact
+// admission.
+func approvalQuorum(t *testing.T, shape string) {
 	e := framework.New(t)
 	c := e.CLI(t)
 	ctx := context.Background()
@@ -77,7 +92,9 @@ func TestGate_ApprovalQuorum(t *testing.T) {
 	g := framework.Gate(a.ns, "two-approvers", "prod", "true", recheck)
 	g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 2, AllowedGroups: []string{"release-managers"}, ExcludeAuthor: true}
 	e.CreateGate(t, g)
-	a.apply(t, a.pipeline(nil))
+	p := a.pipeline(nil)
+	p.Annotations = map[string]string{"kardinal.io/graph-shape": shape}
+	a.apply(t, p)
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 	e.WaitGateReady(t, a.ns, bundle, "prod", "two-approvers", false, "waiting for approvals: 0 of 2", gateTimeout)

@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -369,9 +370,10 @@ func TestRollouts_AnalysisTemplateEditedMidFlight(t *testing.T) {
 }
 
 // TestRollouts_AnalysisForgedRunIgnored: an AnalysisRun created by hand with
-// the selector labels and the Bundle's UID, and status Successful, is no
-// verdict: the step keeps waiting for the run its Graph rendered
-// (regression, QA #1502 round 2).
+// the selector labels and the Bundle's UID, and status Successful, is
+// refused by the chart's graph-objects policy (#1544); made anyway by the
+// Graph ServiceAccount, kro's identity, it is no verdict: the step keeps
+// waiting for the run its Graph rendered (regression, QA #1502 round 2).
 //
 // Covers ANALYSIS-FORGED-01.
 func TestRollouts_AnalysisForgedRunIgnored(t *testing.T) {
@@ -403,8 +405,21 @@ func TestRollouts_AnalysisForgedRunIgnored(t *testing.T) {
 	// Argo Rollouts' AnalysisRun has no status subresource: whoever may
 	// create one sets its status.
 	require.NoError(t, unstructured.SetNestedField(forged.Object, "Successful", "status", "phase"))
-	_, err := e.Dynamic.Resource(analysisRunGVR).Namespace(a.ns).Create(ctx, forged, metav1.CreateOptions{})
-	require.NoError(t, err)
+	_, err := e.Dynamic.Resource(analysisRunGVR).Namespace(a.ns).Create(ctx, forged.DeepCopy(), metav1.CreateOptions{})
+	require.Error(t, err, "the cluster admin cannot create an AnalysisRun labelled for a Bundle")
+	assert.True(t, apierrors.IsForbidden(err), "%v", err)
+	assert.Contains(t, err.Error(), "only kardinal (the promotion Graph or the controller) creates or changes this object")
+	// Made anyway, as kro makes AnalysisRuns (the namespace's Graph
+	// ServiceAccount; #1544's policy admits it), the mirror still ignores a
+	// run this Graph did not render.
+	asGraph := impersonated(t, e, "system:serviceaccount:"+a.ns+":kardinal-graph",
+		"system:serviceaccounts", "system:serviceaccounts:"+a.ns, "system:authenticated")
+	u := forged.DeepCopy()
+	u.SetNamespace(a.ns)
+	framework.Eventually(t, time.Minute, "kro's identity creates the forged AnalysisRun", func(ctx context.Context) (bool, string) {
+		err := asGraph.Create(ctx, u.DeepCopy())
+		return err == nil || apierrors.IsAlreadyExists(err), fmt.Sprint(err)
+	})
 
 	framework.Consistently(t, 30*time.Second, "the forged Successful run is no verdict", func(ctx context.Context) (bool, string) {
 		ps, ok, err := e.Step(ctx, a.ns, pipelineName, bundle, "prod")
