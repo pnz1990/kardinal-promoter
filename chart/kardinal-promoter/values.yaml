@@ -256,8 +256,9 @@ github:
 # docs/guides/security.md#verified-identity).
 admission:
   # -- Usernames, besides this release's controller ServiceAccount, that run
-  # a kardinal controller: they may name any Bundle's kardinal.io/created-by
-  # and write the objects a promotion Graph manages. Exact usernames only,
+  # a kardinal controller: they may name any Bundle's kardinal.io/created-by,
+  # write the objects a promotion Graph manages, and record or revoke the
+  # UI's Approvals (kardinal.io/recorded-via: ui). Exact usernames only,
   # for example "system:serviceaccount:kardinal-system:kardinal-promoter-b";
   # there are no wildcards. Never list a ServiceAccount of a tenant's
   # namespace: whoever can mint tokens for a listed ServiceAccount passes
@@ -661,3 +662,15 @@ grafanaDashboard:
   namespace: ""
   # -- Annotations to add to the ConfigMap.
   annotations: {}
+
+# Fleet environments (spec.environments[].fleet, docs/pipeline-reference.md#fleets).
+fleets:
+  # -- Namespaces a fleet selector of kind Application may read Argo CD
+  # Applications from (--fleet-application-namespaces). A selector naming
+  # another namespace is refused, so a Pipeline author cannot list the
+  # Applications of a namespace they cannot read.
+  applicationNamespaces:
+    - argocd
+  # -- Namespaces, besides the Pipeline's own, a fleet selector of kind
+  # ClusterProfile may read (--fleet-clusterprofile-namespaces).
+  clusterProfileNamespaces: []

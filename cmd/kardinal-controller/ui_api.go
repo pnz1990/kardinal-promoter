@@ -165,9 +165,19 @@ func deployedByEnv(p *v1alpha1.Pipeline, byEnv map[string][]*v1alpha1.PromotionS
 		}
 		return v
 	}
+	// A fleet environment runs nothing itself: its targets do.
+	fleets, _ := graphpkg.FleetTargetEnvironments(p)
+	names := make([]string, 0, len(p.Spec.Environments))
 	for _, env := range p.Spec.Environments {
-		envSteps := byEnv[env.Name]
-		dep := lifecycle.DeployedInSteps(envSteps, p.Name, env.Name, bundles)
+		if env.Fleet != nil {
+			names = append(names, fleets[env.Name]...)
+		} else {
+			names = append(names, env.Name)
+		}
+	}
+	for _, name := range names {
+		envSteps := byEnv[name]
+		dep := lifecycle.DeployedInSteps(envSteps, p.Name, name, bundles)
 		if dep.Bundle == "" {
 			continue
 		}
@@ -195,7 +205,7 @@ func deployedByEnv(p *v1alpha1.Pipeline, byEnv map[string][]*v1alpha1.PromotionS
 		if !at.IsZero() {
 			d.VerifiedAt = at.UTC().Format(time.RFC3339)
 		}
-		out[env.Name] = d
+		out[name] = d
 	}
 	if len(out) == 0 {
 		return nil
@@ -217,9 +227,26 @@ type uiEnvironmentNode struct {
 	// resolves them (dependsOn, waves, or the previous entry), sorted; empty
 	// for a root. Absent when the Pipeline's ordering is invalid.
 	Upstreams []string `json:"upstreams,omitempty"`
+	// Fleet is set on a fleet environment: its targets' environments, which
+	// environmentStates and deployed are keyed by, and its pacing.
+	Fleet *uiFleet `json:"fleet,omitempty"`
 	// Hold is the environment's hold (spec.holds, kardinal rollback --hold),
 	// nil when it is not held.
 	Hold *uiHoldResponse `json:"hold,omitempty"`
+}
+
+// uiFleet is a fleet environment's targets and pacing (spec.fleet).
+type uiFleet struct {
+	// Targets are the target environments ("<environment>-<target>"), in
+	// the order they are promoted.
+	Targets []string `json:"targets"`
+	// MaxConcurrent is spec.fleet.maxConcurrent (0: every target at once).
+	MaxConcurrent int `json:"maxConcurrent,omitempty"`
+	// MaxUnavailable is spec.fleet.maxUnavailable: that many Failed targets
+	// stop the rollout. Absent when unset.
+	MaxUnavailable *int `json:"maxUnavailable,omitempty"`
+	// Message says why the targets cannot be resolved (a selector fleet).
+	Message string `json:"message,omitempty"`
 }
 
 // uiHoldResponse is a Pipeline environment hold (spec.holds).
@@ -282,6 +309,9 @@ type uiBundleResponse struct {
 	// Bundle's change is live (lifecycle.RejectedLiveEnvs): the UI keeps it
 	// current there, marked Rejected, with a roll-back hint.
 	RejectedLiveEnvironments []string `json:"rejectedLiveEnvironments,omitempty"`
+	// Rejected is spec.rejected: who rejected the Bundle (kardinal reject),
+	// why and when. Absent when it is not rejected.
+	Rejected *uiBundleRejection `json:"rejected,omitempty"`
 }
 
 // uiBundleEnvStatus is the per-environment status summary of a Bundle (#503).
@@ -400,6 +430,68 @@ type uiGateResponse struct {
 	State string `json:"state"`
 	// #502: Override history from spec.overrides[].
 	Overrides []uiGateOverride `json:"overrides,omitempty"`
+	// Approval is the gate's approval quorum and who approved (an approval
+	// gate, spec.approval). Absent for a gate without one.
+	Approval *uiGateApproval `json:"approval,omitempty"`
+}
+
+// uiBundleRejection is spec.rejected of a Bundle.
+type uiBundleRejection struct {
+	Reason string `json:"reason"`
+	By     string `json:"by"`
+	At     string `json:"at,omitempty"`
+}
+
+// uiGateApproval is a gate's approval policy (spec.approval) and how the
+// gate counted the decisions it has (status.approvals).
+type uiGateApproval struct {
+	// Required is how many distinct allowed people must approve (default 1).
+	Required      int      `json:"required"`
+	AllowedUsers  []string `json:"allowedUsers,omitempty"`
+	AllowedGroups []string `json:"allowedGroups,omitempty"`
+	ExcludeAuthor bool     `json:"excludeAuthor,omitempty"`
+	// Approved is the number of counted approve decisions; Rejected is true
+	// when a counted reject blocks the gate.
+	Approved int  `json:"approved"`
+	Rejected bool `json:"rejected,omitempty"`
+	// Decisions are status.approvals, in the order the gate recorded them.
+	Decisions []uiGateDecision `json:"decisions,omitempty"`
+}
+
+// uiGateDecision is one approve or reject decision as the gate counted it.
+type uiGateDecision struct {
+	User        string `json:"user"`
+	Decision    string `json:"decision"`
+	Counted     bool   `json:"counted"`
+	Reason      string `json:"reason,omitempty"`
+	Comment     string `json:"comment,omitempty"`
+	FirstSeenAt string `json:"firstSeenAt,omitempty"`
+}
+
+// gateApproval is the uiGateApproval of g, or nil without spec.approval.
+func gateApproval(g *v1alpha1.PolicyGate) *uiGateApproval {
+	pol := g.Spec.Approval
+	if pol == nil {
+		return nil
+	}
+	out := &uiGateApproval{Required: max(pol.Required, 1), AllowedUsers: pol.AllowedUsers,
+		AllowedGroups: pol.AllowedGroups, ExcludeAuthor: pol.ExcludeAuthor}
+	for _, a := range g.Status.Approvals {
+		d := uiGateDecision{User: a.User, Decision: a.Decision, Counted: a.Counted, Reason: a.Reason, Comment: a.Comment}
+		if a.FirstSeenAt != nil {
+			d.FirstSeenAt = a.FirstSeenAt.UTC().Format(time.RFC3339)
+		}
+		if a.Counted {
+			switch a.Decision {
+			case "approve":
+				out.Approved++
+			case "reject":
+				out.Rejected = true
+			}
+		}
+		out.Decisions = append(out.Decisions, d)
+	}
+	return out
 }
 
 // uiGateOverride is the JSON shape for a PolicyGateOverride (K-09 audit record).
@@ -495,6 +587,7 @@ func (s *uiAPIServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/ui/promote", s.handlePromote)
 	mux.HandleFunc("/api/v1/ui/rollback", s.handleRollback)
 	mux.HandleFunc("/api/v1/ui/release-hold", s.handleReleaseHold)
+	mux.HandleFunc("/api/v1/ui/approvals", s.handleApproval)
 	mux.HandleFunc("/api/v1/ui/pause", s.handlePause)
 	mux.HandleFunc("/api/v1/ui/resume", s.handleResume)
 	mux.HandleFunc("/api/v1/ui/validate-cel", s.handleValidateCEL)
@@ -646,6 +739,7 @@ func pipelineListResponse(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bund
 			// One ordering resolution per Pipeline: per environment it was
 			// cubic in the environment count.
 			upstreams, upErr := cache.get(&p)
+			fleets, fleetErr := graphpkg.FleetTargetEnvironments(&p)
 			for _, env := range p.Spec.Environments {
 				node := uiEnvironmentNode{
 					Name:      env.Name,
@@ -655,6 +749,21 @@ func pipelineListResponse(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bund
 				}
 				if upErr == nil && len(upstreams[env.Name]) > 0 {
 					node.Upstreams = upstreams[env.Name]
+				}
+				if env.Fleet != nil {
+					node.Fleet = &uiFleet{Targets: fleets[env.Name], MaxConcurrent: env.Fleet.MaxConcurrent,
+						MaxUnavailable: env.Fleet.MaxUnavailable}
+					if node.Fleet.Targets == nil {
+						node.Fleet.Targets = []string{}
+					}
+					for _, f := range p.Status.Fleets {
+						if f.Environment == env.Name {
+							node.Fleet.Message = f.Message
+						}
+					}
+					if fleetErr != nil && len(node.Fleet.Targets) == 0 && node.Fleet.Message == "" {
+						node.Fleet.Message = fleetErr.Error()
+					}
 				}
 				topo = append(topo, node)
 			}
@@ -804,6 +913,12 @@ func (s *uiAPIServer) handleBundlesForPipeline(w http.ResponseWriter, r *http.Re
 			resp.Environments = envStatuses
 		}
 		resp.RejectedLiveEnvironments = lifecycle.RejectedLiveEnvs(&b, steps)
+		if rj := b.Spec.Rejected; rj != nil {
+			resp.Rejected = &uiBundleRejection{Reason: rj.Reason, By: rj.By}
+			if rj.At != nil {
+				resp.Rejected.At = rj.At.UTC().Format(time.RFC3339)
+			}
+		}
 		result = append(result, resp)
 	}
 	writeJSON(w, result)
@@ -1095,8 +1210,7 @@ func (s *uiAPIServer) handleBundleSteps(w http.ResponseWriter, r *http.Request, 
 
 	// Build a bake target index: pipelineName+envName → bake minutes.
 	// Populated lazily from the first step's Pipeline reference (#501).
-	bakeTarget := make(map[string]int) // key: "pipelineName/envName"
-	pipelinesLoaded := make(map[string]bool)
+	pipelines := make(map[string]*v1alpha1.Pipeline) // key: "namespace/pipelineName"; nil when not found
 
 	result := make([]uiStepResponse, 0)
 	for _, ps := range list.Items {
@@ -1105,19 +1219,22 @@ func (s *uiAPIServer) handleBundleSteps(w http.ResponseWriter, r *http.Request, 
 		}
 		// Load bake target minutes from Pipeline spec (once per pipeline) (#501).
 		plKey := ps.Namespace + "/" + ps.Spec.PipelineName
-		if !pipelinesLoaded[plKey] {
-			pipelinesLoaded[plKey] = true
-			var pl v1alpha1.Pipeline
+		pl, loaded := pipelines[plKey]
+		if !loaded {
+			var got v1alpha1.Pipeline
 			if err := s.client.Get(r.Context(),
-				client.ObjectKey{Name: ps.Spec.PipelineName, Namespace: ps.Namespace}, &pl); err == nil {
-				for _, env := range pl.Spec.Environments {
-					if env.Bake != nil {
-						bakeTarget[ps.Spec.PipelineName+"/"+env.Name] = env.Bake.Minutes
-					}
-				}
+				client.ObjectKey{Name: ps.Spec.PipelineName, Namespace: ps.Namespace}, &got); err == nil {
+				pl = &got
+			}
+			pipelines[plKey] = pl
+		}
+		bakeMinutes := 0
+		if pl != nil {
+			// A fleet target bakes as its fleet does.
+			if env, ok := graphpkg.EnvironmentSpecFor(pl, ps.Spec.Environment); ok && env.Bake != nil {
+				bakeMinutes = env.Bake.Minutes
 			}
 		}
-		bakeMinutes := bakeTarget[ps.Spec.PipelineName+"/"+ps.Spec.Environment]
 		result = append(result, uiStepResponse{
 			Name:               ps.Name,
 			Namespace:          ps.Namespace,
@@ -1196,6 +1313,7 @@ func (s *uiAPIServer) handleGates(w http.ResponseWriter, r *http.Request) {
 			Template:    g.Labels["kardinal.io/bundle"] == "",
 			Holding:     state == graphpkg.GateStateBlock,
 			State:       state,
+			Approval:    gateApproval(&g),
 		}
 		if g.Status.LastEvaluatedAt != nil {
 			resp.LastEvaluatedAt = g.Status.LastEvaluatedAt.UTC().Format("2006-01-02T15:04:05Z")

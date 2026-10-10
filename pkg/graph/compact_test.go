@@ -31,6 +31,8 @@ type compactSim struct {
 	phase      string
 	// waitingForSlot sets the Bundle's WaitingForSlot condition True.
 	waitingForSlot bool
+	// fleet maps a fleet target's environment to its fleet (the step label).
+	fleet map[string]string
 }
 
 func newCompactSim(t *testing.T, g *graph.Graph) *compactSim {
@@ -48,14 +50,17 @@ func (s *compactSim) vars() map[string]interface{} {
 	v := map[string]interface{}{}
 	for _, n := range s.g.Spec.Nodes {
 		if n.Def != nil && n.ID != graph.NodePromotionState && n.ID != graph.NodePromotionWave &&
-			n.ID != graph.NodePromotionProgress {
+			n.ID != graph.NodePromotionProgress && n.ID != graph.NodePromotionEligible {
 			v[n.ID] = n.Def
 		}
 	}
 	var observed []interface{}
 	for env, state := range s.steps {
-		obj := map[string]interface{}{"metadata": map[string]interface{}{
-			"labels": map[string]interface{}{"kardinal.io/environment": env}}}
+		labels := map[string]interface{}{"kardinal.io/environment": env}
+		if f := s.fleet[env]; f != "" {
+			labels[graph.LabelFleet] = f
+		}
+		obj := map[string]interface{}{"metadata": map[string]interface{}{"labels": labels}}
 		if state != "" {
 			obj["status"] = map[string]interface{}{"state": state}
 		}
@@ -110,6 +115,9 @@ func (s *compactSim) wave() (envs []string, complete bool) {
 	s.t.Helper()
 	vars := s.vars()
 	vars[graph.NodePromotionState] = s.def(graph.NodePromotionState, vars)
+	if _, ok := s.nodes[graph.NodePromotionEligible]; ok {
+		vars[graph.NodePromotionEligible] = s.def(graph.NodePromotionEligible, vars)
+	}
 	wave := s.def(graph.NodePromotionWave, vars)
 	for _, e := range wave["steps"].([]interface{}) {
 		envs = append(envs, e.(map[string]interface{})["environment"].(string))
@@ -964,4 +972,90 @@ func TestCompact_ApprovalGates(t *testing.T) {
 	assert.Equal(t, []string{"test"}, sim.advance(), "prod waits for two approvers")
 	sim.gatesReady[prodGate] = true
 	assert.Equal(t, []string{"prod", "test"}, sim.advance())
+}
+
+// TestCompact_GateMirror checks the #1518 gate mirror in the compact shape:
+// a pr-review environment with gates gets the GateMirror patch collection,
+// which targets its PromotionStep by the literal name the compact shape's
+// PromotionSteps collection gives it (the node shape's name), reads only
+// nodes the Graph has, and mirrors the same steps as the node shape.
+func TestCompact_GateMirror(t *testing.T) {
+	p := compactPipeline(
+		kardinalv1alpha1.EnvironmentSpec{Name: "test"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod", Approval: "pr-review", DependsOn: []string{"test"}},
+	)
+	gates := []kardinalv1alpha1.PolicyGate{
+		makePolicyGate("no-weekend", "platform-policies", "prod", "!schedule.isWeekend"),
+		makePolicyGate("two-approvers", "platform-policies", "prod", "true"),
+	}
+	gates[1].Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 2}
+	b := makeBundle("app-x7k2m", "app")
+	build := func(shape string) *graph.Graph {
+		pp := p.DeepCopy()
+		pp.Annotations = map[string]string{graph.AnnotationGraphShape: shape}
+		res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: pp, Bundle: b, PolicyGates: gates})
+		require.NoError(t, err)
+		assertKroValid(t, res.Graph)
+		return res.Graph
+	}
+	compact, nodesShape := nodeByID(build(graph.GraphShapeCompact).Spec.Nodes), nodeByID(build(graph.GraphShapeNodes).Spec.Nodes)
+	require.Contains(t, compact, graph.NodeGateMirror)
+	require.Contains(t, compact, graph.NodeGateMirrorData)
+	assert.Equal(t, nodesShape[graph.NodeGateMirrorData].Def, compact[graph.NodeGateMirrorData].Def,
+		"the same steps are mirrored, by the same names")
+	assert.Equal(t, nodesShape[graph.NodeGateMirror].Patch, compact[graph.NodeGateMirror].Patch)
+
+	// The mirrored name is the one the compact collection creates.
+	mirrored := compact[graph.NodeGateMirrorData].Def["steps"].([]interface{})
+	require.Len(t, mirrored, 1)
+	var dagName string
+	for _, e := range compact[graph.NodePromotionDAG].Def["steps"].([]interface{}) {
+		if e.(map[string]interface{})["environment"] == "prod" {
+			dagName = e.(map[string]interface{})["name"].(string)
+		}
+	}
+	assert.Equal(t, dagName, mirrored[0].(map[string]interface{})["name"])
+	// The mirror reads the approval gates too.
+	assert.Contains(t, fmt.Sprint(compact[graph.NodeGateMirror].Patch), graph.NodeApprovalGates)
+}
+
+// TestCompact_ImageVerificationCommitProvider: in the compact shape too, a
+// config Bundle's commit carries the Pipeline's resolved provider
+// (spec.commit.scmProvider, #1618), the ImageVerification's name changes
+// with it, and the root step waits for that name.
+func TestCompact_ImageVerificationCommitProvider(t *testing.T) {
+	p := makeLinearPipeline("app", "test", "prod")
+	p.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeCompact}
+	p.Spec.Git.URL = "https://github.com/org/gitops"
+	p.Spec.ImageVerification = &kardinalv1alpha1.ImageVerificationPolicy{
+		Commits: &kardinalv1alpha1.CommitSignaturePolicy{RequireSigned: true}}
+	b := makeBundle("cfg-1", "app")
+	b.UID = "uid-1"
+	b.Spec.Type, b.Spec.Images = "config", nil
+	sha := strings.Repeat("abc1", 10)
+	b.Spec.ConfigRef = &kardinalv1alpha1.ConfigRef{CommitSHA: sha}
+	build := func(id *kardinalv1alpha1.ScmProviderIdentity) (name string, commit interface{}, root interface{}) {
+		t.Helper()
+		res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: b, ScmProvider: id})
+		require.NoError(t, err)
+		assertKroValid(t, res.Graph)
+		require.Equal(t, "compact", res.Graph.Labels["kardinal.io/graph-shape"])
+		node := hookNode(t, res.Graph, "imageVerify").Template
+		for _, e := range hookNode(t, res.Graph, graph.NodePromotionDAG).Def["steps"].([]interface{}) {
+			if m := e.(map[string]interface{}); m["environment"] == "test" {
+				root = m["imageVerification"]
+			}
+		}
+		return node["metadata"].(map[string]interface{})["name"].(string), node["spec"].(map[string]interface{})["commit"], root
+	}
+	plainName, plain, plainRoot := build(nil)
+	assert.Equal(t, map[string]interface{}{"repo": "https://github.com/org/gitops", "sha": sha}, plain)
+	assert.Equal(t, plainName, plainRoot)
+
+	id := &kardinalv1alpha1.ScmProviderIdentity{Kind: kardinalv1alpha1.KindScmProvider, Name: "team", UID: "p-uid"}
+	name, commit, root := build(id)
+	assert.Equal(t, map[string]interface{}{"repo": "https://github.com/org/gitops", "sha": sha,
+		"scmProvider": map[string]interface{}{"kind": "ScmProvider", "name": "team", "uid": "p-uid"}}, commit)
+	assert.NotEqual(t, plainName, name, "another provider, another ImageVerification")
+	assert.Equal(t, name, root, "the root step waits for the ImageVerification with the provider")
 }

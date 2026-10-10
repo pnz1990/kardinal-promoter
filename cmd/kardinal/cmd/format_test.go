@@ -1112,3 +1112,28 @@ func TestFormatBundleErrors_NewerBundleHidesOlderFailure(t *testing.T) {
 		})
 	}
 }
+
+// TestFormatPipelineTable_Fleet (D1): a fleet environment is one column,
+// counting its targets' states; once every target is Verified it says so.
+//
+// Covers FLEET-05.
+func TestFormatPipelineTable_Fleet(t *testing.T) {
+	p := v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "edge"}}
+	p.Spec.Environments = []v1alpha1.EnvironmentSpec{{Name: "test"},
+		{Name: "prod", Fleet: &v1alpha1.FleetSpec{MaxConcurrent: 2, Targets: []v1alpha1.FleetTarget{{Name: "a"}, {Name: "b"}, {Name: "c"}}}}}
+	step := func(env, state string) v1alpha1.PromotionStep {
+		return v1alpha1.PromotionStep{Spec: v1alpha1.PromotionStepSpec{PipelineName: "edge", Environment: env, BundleName: "edge-1"},
+			Status: v1alpha1.PromotionStepStatus{State: state}}
+	}
+	render := func(steps ...v1alpha1.PromotionStep) string {
+		var buf bytes.Buffer
+		require.NoError(t, cmd.FormatPipelineTableFull(&buf, []v1alpha1.Pipeline{p}, stepBundles(steps), steps, nil, false))
+		return buf.String()
+	}
+	out := render(step("test", "Verified"), step("prod-a", "Verified"), step("prod-b", "Failed"), step("prod-c", "Promoting"))
+	assert.Contains(t, out, "PROD")
+	assert.NotContains(t, out, "PROD-A", "targets are not columns of their own")
+	assert.Contains(t, out, "1/3 Verified, 1 Failed")
+	out = render(step("test", "Verified"), step("prod-a", "Verified"), step("prod-b", "Verified"), step("prod-c", "Verified"))
+	assert.NotContains(t, out, "/3")
+}

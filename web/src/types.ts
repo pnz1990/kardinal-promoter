@@ -96,8 +96,23 @@ export interface EnvironmentNode {
   /** The environments it waits for as the controller resolves them (dependsOn,
    *  waves, or the previous entry). Absent for a root, or when the ordering is invalid. */
   upstreams?: string[]
+  /** Set on a fleet environment: environmentStates and deployed are keyed by
+   *  its target environments, which the fleet board rolls up (D1). */
+  fleet?: EnvironmentFleet
   /** The environment's hold (spec.holds, kardinal rollback --hold), if held. */
   hold?: EnvironmentHold
+}
+
+/** A fleet environment's targets and pacing (spec.fleet). */
+export interface EnvironmentFleet {
+  /** Target environments ("<environment>-<target>"), in promotion order. */
+  targets: string[]
+  /** Targets promoted at once; absent or 0 is all of them. */
+  maxConcurrent?: number
+  /** Failed targets that stop the rollout; absent when unset. */
+  maxUnavailable?: number
+  /** Why the targets cannot be resolved (a selector fleet). */
+  message?: string
 }
 
 /** A Pipeline environment pinned to a rollback Bundle until it is released (#1528). */
@@ -136,6 +151,8 @@ export interface Bundle {
    *  HealthChecking or Verified there): it stays current, marked Rejected,
    *  with a roll-back hint (RejectedLiveBanner). */
   rejectedLiveEnvironments?: string[]
+  /** spec.rejected: who rejected the Bundle (kardinal reject), why, and when (RFC 3339). */
+  rejected?: { reason: string; by: string; at?: string }
 }
 
 /** #563: A container image reference — repository, tag, and optional digest. */
@@ -268,6 +285,35 @@ export interface PolicyGate {
   state: GateState
   /** #502: Override history from spec.overrides[]. */
   overrides?: PolicyGateOverride[]
+  /** An approval gate's quorum and decisions (spec.approval, status.approvals). */
+  approval?: GateApproval
+}
+
+/** An approval gate: how many allowed people must approve, and who did. */
+export interface GateApproval {
+  /** Distinct allowed approvals needed (at least 1). */
+  required: number
+  allowedUsers?: string[]
+  allowedGroups?: string[]
+  /** The Bundle's creator's approval does not count. */
+  excludeAuthor?: boolean
+  /** Counted approve decisions. */
+  approved: number
+  /** A counted reject blocks the gate. */
+  rejected?: boolean
+  decisions?: GateDecision[]
+}
+
+/** One approve or reject decision as the gate counted it. */
+export interface GateDecision {
+  user: string
+  decision: 'approve' | 'reject' | string
+  counted: boolean
+  /** Why it does not count. */
+  reason?: string
+  comment?: string
+  /** RFC 3339: when the gate first saw it. */
+  firstSeenAt?: string
 }
 
 /** #502: A time-limited emergency override record (K-09 audit record). */

@@ -181,6 +181,12 @@ type VerifiedCommit struct {
 	Repo string `json:"repo"`
 	// SHA is the commit.
 	SHA string `json:"sha"`
+	// ScmProvider is the provider of the Pipeline's spec.git.providerRef,
+	// as the translator resolved it: the signature is checked with that
+	// provider (its token, host and allowedRepositories). Unset, the
+	// controller's --scm-provider checks it.
+	// +optional
+	ScmProvider *ScmProviderIdentity `json:"scmProvider,omitempty"`
 }
 
 // ImageVerificationSpec is what one Bundle must prove before its first

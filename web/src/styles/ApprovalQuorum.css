@@ -1,0 +1,95 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * ApprovalQuorum.css — an approval gate's quorum: one pip per approval needed,
+ * filled as people approve. The pips are the one visual signature; the rest
+ * is plain text in theme tokens. State is never colour alone: the summary
+ * says it in words.
+ */
+
+.approval-quorum {
+  --quorum-color: var(--color-warning);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.2rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--color-border-muted);
+  border-left: 3px solid var(--quorum-color);
+  border-radius: 4px;
+  background: var(--color-surface);
+  font-size: 0.72rem;
+}
+.approval-quorum[data-state='approved'] { --quorum-color: var(--color-success); }
+.approval-quorum[data-state='rejected'] { --quorum-color: var(--color-error); }
+
+.approval-quorum__head { display: flex; align-items: center; gap: 0.5rem; }
+.approval-quorum__meter { display: inline-flex; gap: 3px; }
+.approval-quorum__pip {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--quorum-color);
+}
+.approval-quorum__pip[data-filled] { background: var(--quorum-color); }
+.approval-quorum__summary { font-weight: 600; color: var(--quorum-color); }
+.approval-quorum__rule, .approval-quorum__none { color: var(--color-text-muted); }
+
+.approval-quorum__decisions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.2rem; }
+.approval-decision { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem; color: var(--color-text); }
+.approval-decision__user { font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace; }
+.approval-decision[data-decision='approve'][data-counted='true'] .approval-decision__verb { color: var(--color-success); }
+.approval-decision[data-decision='reject'][data-counted='true'] .approval-decision__verb { color: var(--color-error); }
+.approval-decision[data-counted='false'] { color: var(--color-text-muted); }
+.approval-decision__age, .approval-decision__why { color: var(--color-text-muted); }
+.approval-decision__comment { color: var(--color-text-muted); font-style: italic; flex-basis: 100%; padding-left: 0.5rem; }
+
+.approval-quorum__how { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; color: var(--color-text-muted); }
+.approval-quorum__how code {
+  font-size: 0.7rem;
+  color: var(--color-code);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-muted);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+@media (forced-colors: active) {
+  .approval-quorum__pip { border-color: CanvasText; }
+  .approval-quorum__pip[data-filled] { background: CanvasText; }
+}
+
+/* ── Deciding from the UI (ApprovalActions) ─────────────────────────────── */
+.approval-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding-top: 0.35rem;
+  border-top: 1px dashed var(--color-border-muted);
+}
+.approval-actions__label { color: var(--color-text-muted); }
+.approval-actions__comment {
+  font: inherit;
+  padding: 0.25rem 0.4rem;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+}
+.approval-actions__buttons { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+.approval-actions__buttons button {
+  font: inherit;
+  padding: 0.2rem 0.6rem;
+  border-radius: 3px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  cursor: pointer;
+}
+.approval-actions__buttons button:disabled { cursor: not-allowed; opacity: 0.6; }
+.approval-actions__buttons button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.approval-actions__buttons .approval-actions__approve { border-color: var(--color-success); color: var(--color-success); }
+.approval-actions__buttons .approval-actions__reject { border-color: var(--color-error); color: var(--color-error); }
+.approval-actions__result { color: var(--color-success); }
+.approval-actions__error { color: var(--color-error); overflow-wrap: anywhere; }
