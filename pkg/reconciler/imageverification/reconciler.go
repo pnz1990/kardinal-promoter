@@ -670,6 +670,15 @@ func (c *publicGoodCache) get(ctx context.Context, now time.Time) (root.TrustedM
 		return got, nil
 	}
 	ch := c.sf.DoChan("root", func() (interface{}, error) {
+		// A fetch that ended between this caller's cache check and here
+		// left a fresh root: use it instead of fetching again.
+		c.mu.Lock()
+		if c.got != nil && now.Sub(c.fetchedAt) < PublicGoodRootTTL {
+			tm := c.got
+			c.mu.Unlock()
+			return tm, nil
+		}
+		c.mu.Unlock()
 		tm, err := c.fetch()
 		c.mu.Lock()
 		defer c.mu.Unlock()
