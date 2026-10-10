@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // policyTestNow is a Wednesday. Every simulate test resolves --time from it.
@@ -77,7 +78,7 @@ func policyGate(name, ns, appliesTo, expr string, labels ...string) *v1alpha1.Po
 
 func policyClient(t *testing.T, objs ...sigs_client.Object) sigs_client.Client {
 	t.Helper()
-	return fake.NewClientBuilder().WithScheme(buildPolicyScheme(t)).WithObjects(objs...).Build()
+	return fake.NewClientBuilder().WithScheme(buildPolicyScheme(t)).WithObjects(objs...).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 }
 
 // runSimulate runs policy simulate for pipeline "demo" in "default" with

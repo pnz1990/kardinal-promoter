@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // repoRoot is the repository root relative to this package directory.
@@ -185,7 +186,7 @@ func docsCELFixture(t *testing.T) (*Reconciler, *kardinalv1alpha1.PolicyGate) {
 
 	s := runtime.NewScheme()
 	require.NoError(t, kardinalv1alpha1.AddToScheme(s))
-	c := fake.NewClientBuilder().WithScheme(s).WithRuntimeObjects(objs...).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithRuntimeObjects(objs...).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	r, err := NewReconciler(c)
 	require.NoError(t, err)

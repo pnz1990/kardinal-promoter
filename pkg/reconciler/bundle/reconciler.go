@@ -854,11 +854,7 @@ func (r *Reconciler) pipelineBundleList(ctx context.Context, ns, pipeline string
 	if pipeline == "" {
 		return nil, nil
 	}
-	var list kardinalv1alpha1.BundleList
-	if err := r.List(ctx, &list, client.InNamespace(ns), client.MatchingFields{indexPipeline: pipeline}); err != nil {
-		return nil, fmt.Errorf("list bundles of pipeline %s: %w", pipeline, err)
-	}
-	return list.Items, nil
+	return lifecycle.ListPipelineBundles(ctx, r.Client, ns, pipeline)
 }
 
 // markSuperseded sets this bundle's status.phase to "Superseded" (self-supersession).

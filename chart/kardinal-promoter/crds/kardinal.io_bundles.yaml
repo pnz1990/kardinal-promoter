@@ -551,6 +551,8 @@ spec:
                 retired'
               rule: '!has(oldSelf.retiredAt) || has(self.retiredAt)'
         type: object
+    selectableFields:
+    - jsonPath: .spec.pipeline
     served: true
     storage: true
     subresources:

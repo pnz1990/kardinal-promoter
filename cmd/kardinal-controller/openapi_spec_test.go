@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // The OpenAPI spec (openapi.json, served at /api/v1/openapi.json and copied
@@ -458,7 +459,7 @@ func TestOpenAPISpecIsUpToDate(t *testing.T) {
 // handlers: none is answered by the mux's own 404 or by 405, and every
 // path the code registers is documented.
 func TestOpenAPIRoutesAreServed(t *testing.T) {
-	c := fake.NewClientBuilder().WithScheme(uiScheme()).Build()
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	ui := http.NewServeMux()
 	newUIAPIServer(c, zerolog.Nop()).RegisterRoutes(ui)
 	bundle := http.NewServeMux()
@@ -565,7 +566,7 @@ func TestOpenAPIRoutesSucceed(t *testing.T) {
 		t.Run(r.id, func(t *testing.T) {
 			req, ok := requests[r.id]
 			require.True(t, ok, "no valid request for %s: add one", r.id)
-			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(fixtures()...).Build()
+			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(fixtures()...).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			mux := http.NewServeMux()
 			newUIAPIServer(c, zerolog.Nop()).RegisterRoutes(mux)
 			mux.HandleFunc("/api/v1/bundles", newBundleAPIServer(c, "token", "default").Handler())

@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 )
@@ -76,7 +77,7 @@ func TestPolicyGateReconciler_WeekdayGatePasses(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(gate, bundle).
-		WithStatusSubresource(gate).
+		WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	// Tuesday
@@ -105,7 +106,7 @@ func TestPolicyGateReconciler_WeekendGateBlocks(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(gate, bundle).
-		WithStatusSubresource(gate).
+		WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	// Saturday
@@ -131,7 +132,7 @@ func TestPolicyGateReconciler_BundleNotFound(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(gate). // bundle NOT added
-		WithStatusSubresource(gate).
+		WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	r, err := policygate.NewReconciler(c)
@@ -165,7 +166,7 @@ func TestPolicyGateReconciler_TemplateIgnored(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(template).
-		WithStatusSubresource(template).
+		WithStatusSubresource(template).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	r, err := policygate.NewReconciler(c)
@@ -198,7 +199,7 @@ func TestPolicyGateReconciler_RequeueAfterRecheckInterval(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(gate, bundle).
-		WithStatusSubresource(gate).
+		WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	r, err := policygate.NewReconciler(c)
@@ -215,7 +216,7 @@ func TestPolicyGateReconciler_RequeueAfterRecheckInterval(t *testing.T) {
 // TestPolicyGateReconciler_GateNotFound verifies no error when gate is deleted.
 func TestPolicyGateReconciler_GateNotFound(t *testing.T) {
 	s := newScheme()
-	c := fake.NewClientBuilder().WithScheme(s).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
@@ -236,7 +237,7 @@ func TestPolicyGateReconciler_Idempotent(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(gate, bundle).
-		WithStatusSubresource(gate).
+		WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	tuesday := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
@@ -298,7 +299,7 @@ func TestPolicyGateReconciler_MetricsContext_PassWhenMetricPasses(t *testing.T) 
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(gate, bundle, mc).
-		WithStatusSubresource(gate, mc).
+		WithStatusSubresource(gate, mc).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	r, err := policygate.NewReconciler(c)
@@ -326,7 +327,7 @@ func TestPolicyGateReconciler_MetricsContext_BlockWhenMetricFails(t *testing.T) 
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(gate, bundle, mc).
-		WithStatusSubresource(gate, mc).
+		WithStatusSubresource(gate, mc).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	r, err := policygate.NewReconciler(c)
@@ -361,7 +362,7 @@ func TestPolicyGateReconciler_UpstreamSoakContext_Passes(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(gate, bundle).
-		WithStatusSubresource(gate, bundle).
+		WithStatusSubresource(gate, bundle).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	r, err := policygate.NewReconciler(c)
@@ -394,7 +395,7 @@ func TestPolicyGateReconciler_UpstreamSoakContext_Blocks(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(gate, bundle).
-		WithStatusSubresource(gate, bundle).
+		WithStatusSubresource(gate, bundle).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	r, err := policygate.NewReconciler(c)
@@ -425,7 +426,7 @@ func TestPolicyGateReconciler_MetricsContext_NamespaceIsolation(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(gate, bundle, mcSameNS, mcOtherNS).
-		WithStatusSubresource(gate, mcSameNS, mcOtherNS).
+		WithStatusSubresource(gate, mcSameNS, mcOtherNS).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	r, err := policygate.NewReconciler(c)
@@ -455,7 +456,7 @@ func TestPolicyGateReconciler_MetricsContext_EmptyWhenNoMetricChecks(t *testing.
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(gate, bundle).
-		WithStatusSubresource(gate).
+		WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	tuesday := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
@@ -485,7 +486,7 @@ func TestPolicyGateReconciler_UpstreamSoakContext_ZeroWhenNotHealthChecked(t *te
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(gate, bundle).
-		WithStatusSubresource(gate, bundle).
+		WithStatusSubresource(gate, bundle).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	r, err := policygate.NewReconciler(c)
@@ -610,7 +611,7 @@ func TestPolicyGateReconciler_BundleUpstreamSoakMinutes(t *testing.T) {
 			c := fake.NewClientBuilder().
 				WithScheme(newScheme()).
 				WithObjects(objs...).
-				WithStatusSubresource(gate, bundle).
+				WithStatusSubresource(gate, bundle).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 				Build()
 
 			r, err := policygate.NewReconciler(c)
@@ -638,7 +639,7 @@ func TestPolicyGateReconciler_NoSoakReference_NoPipelineNeeded(t *testing.T) {
 	gate := makeGateInstance("plain", "default", "nginx-demo-v1", `bundle.type == "image"`, "1m")
 	bundle := makeBundle("nginx-demo-v1", "default")
 	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(gate, bundle).
-		WithStatusSubresource(gate).Build()
+		WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
@@ -662,7 +663,7 @@ func TestPolicyGateReconciler_InvalidCEL_SurfacesErrorInStatus(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(gate, bundle).
-		WithStatusSubresource(gate).
+		WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	r, err := policygate.NewReconciler(c)
@@ -700,7 +701,7 @@ func TestPolicyGateReconciler_StatusReasonContainsVersion(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(gate, bundle).
-		WithStatusSubresource(gate).
+		WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	tuesday := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
@@ -750,7 +751,7 @@ func TestPolicyGateReconciler_Template_InvalidCEL_SurfacesError(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(gate).
-		WithStatusSubresource(gate).
+		WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	r, err := policygate.NewReconciler(c)
@@ -781,7 +782,7 @@ func TestPolicyGateReconciler_Template_ValidCEL_StatusShowsValid(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(gate).
-		WithStatusSubresource(gate).
+		WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	r, err := policygate.NewReconciler(c)
@@ -844,7 +845,7 @@ func TestPolicyGateReconciler_ChangeWindowBlocked(t *testing.T) {
 
 	c := fake.NewClientBuilder().WithScheme(scheme).
 		WithObjects(gate, bundle, cw).
-		WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}).
+		WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 	r, err1 := policygate.NewReconciler(c)
 	require.NoError(t, err1)
@@ -895,7 +896,7 @@ func TestPolicyGateReconciler_ChangeWindowAllowed(t *testing.T) {
 
 	c := fake.NewClientBuilder().WithScheme(scheme).
 		WithObjects(gate, bundle, cw).
-		WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}).
+		WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 	r, err2 := policygate.NewReconciler(c)
 	require.NoError(t, err2)
@@ -936,7 +937,7 @@ func TestPolicyGateReconciler_ChangeWindowIsBlocked_MethodSyntax(t *testing.T) {
 	bundle := makeBundle("bundle-1", "default")
 
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(gate, bundle, cw).WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}).Build()
+		WithObjects(gate, bundle, cw).WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cw-method-blocked", Namespace: "default"}}
@@ -976,7 +977,7 @@ func TestPolicyGateReconciler_ChangeWindowIsAllowed_MethodSyntax(t *testing.T) {
 	bundle := makeBundle("bundle-1", "default")
 
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(gate, bundle, cw).WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}).Build()
+		WithObjects(gate, bundle, cw).WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cw-method-allowed", Namespace: "default"}}
@@ -1092,7 +1093,7 @@ func TestPolicyGateReconciler_ChangeWindowFailsClosed(t *testing.T) {
 					},
 				})
 			}
-			c := b.Build()
+			c := b.WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			r, err := policygate.NewReconciler(c)
 			require.NoError(t, err)
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cw-gate", Namespace: "default"}}
@@ -1156,7 +1157,7 @@ func TestPolicyGateReconciler_RecurringChangeWindow(t *testing.T) {
 			bundle := makeBundle("bundle-1", "default")
 			c := fake.NewClientBuilder().WithScheme(newScheme()).
 				WithObjects(gate, bundle, businessHours.DeepCopy(), broken.DeepCopy()).
-				WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}).
+				WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 				Build()
 			r, err := policygate.NewReconciler(c)
 			require.NoError(t, err)
@@ -1192,7 +1193,7 @@ func TestReconciler_OverrideActive(t *testing.T) {
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate, bundle).WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = time.Now
@@ -1218,7 +1219,7 @@ func TestReconciler_OverrideExpired(t *testing.T) {
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate, bundle).WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = time.Now
@@ -1243,7 +1244,7 @@ func TestReconciler_OverrideWrongStage(t *testing.T) {
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate, bundle).WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = time.Now
@@ -1342,7 +1343,7 @@ func TestPolicyGateReconciler_CrossStageHistory_RecentSuccessCount(t *testing.T)
 
 			s := newScheme()
 			c := fake.NewClientBuilder().WithScheme(s).
-				WithObjects(allObjects...).WithStatusSubresource(gate).Build()
+				WithObjects(allObjects...).WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			r, err := policygate.NewReconciler(c)
 			require.NoError(t, err)
 			r.NowFn = time.Now
@@ -1376,7 +1377,7 @@ func TestPolicyGateReconciler_CrossStageHistory_RecentFailureCount(t *testing.T)
 
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(gate, currentBundle, hist1, hist2).WithStatusSubresource(gate).Build()
+		WithObjects(gate, currentBundle, hist1, hist2).WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = time.Now
@@ -1408,7 +1409,7 @@ func TestPolicyGateReconciler_CrossStageHistory_LastPromotedAt(t *testing.T) {
 
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(gate, currentBundle).WithStatusSubresource(gate).Build()
+		WithObjects(gate, currentBundle).WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = time.Now
@@ -1432,7 +1433,7 @@ func TestPolicyGateReconciler_CrossStageHistory_NoPipelineLabel(t *testing.T) {
 
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
+		WithObjects(gate, bundle).WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = time.Now
@@ -1473,7 +1474,7 @@ func TestPolicyGateReconciler_PRReviewGate_Approved(t *testing.T) {
 
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(gate, bundle, prs).WithStatusSubresource(gate).Build()
+		WithObjects(gate, bundle, prs).WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = time.Now
@@ -1497,7 +1498,7 @@ func TestPolicyGateReconciler_PRReviewGate_NotApproved(t *testing.T) {
 
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(gate, bundle, prs).WithStatusSubresource(gate).Build()
+		WithObjects(gate, bundle, prs).WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = time.Now
@@ -1522,7 +1523,7 @@ func TestPolicyGateReconciler_PRReviewGate_OldPR(t *testing.T) {
 		`bundle.pr["prod"].isApproved || bundle.pr["prod"].approvalCount > 0`, "5m")
 
 	c := fake.NewClientBuilder().WithScheme(newScheme()).
-		WithObjects(gate, bundle, prs).WithStatusSubresource(gate).Build()
+		WithObjects(gate, bundle, prs).WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = time.Now
@@ -1557,7 +1558,7 @@ func TestPolicyGateReconciler_PRReviewGate_MinReviewers(t *testing.T) {
 
 			s := newScheme()
 			c := fake.NewClientBuilder().WithScheme(s).
-				WithObjects(gate, bundle, prs).WithStatusSubresource(gate).Build()
+				WithObjects(gate, bundle, prs).WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			r, err := policygate.NewReconciler(c)
 			require.NoError(t, err)
 			r.NowFn = time.Now
@@ -1583,7 +1584,7 @@ func TestPolicyGateReconciler_PRReviewGate_NoPRStatus(t *testing.T) {
 
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
+		WithObjects(gate, bundle).WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = time.Now
@@ -1606,7 +1607,7 @@ func TestPolicyGateReconciler_EmitsBlockedEvent(t *testing.T) {
 
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
+		WithObjects(gate, bundle).WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	fakeRecorder := events.NewFakeRecorder(10)
 	r, err := policygate.NewReconciler(c)
@@ -1636,7 +1637,7 @@ func TestPolicyGateReconciler_NoRecorderNoPanic(t *testing.T) {
 
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
+		WithObjects(gate, bundle).WithStatusSubresource(gate).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
@@ -1670,7 +1671,7 @@ func TestPolicyGateReconciler_DeletedBeforeWrite(t *testing.T) {
 			isGate := func(obj client.Object) bool { _, ok := obj.(*kardinalv1alpha1.PolicyGate); return ok }
 			c := fake.NewClientBuilder().WithScheme(newScheme()).
 				WithObjects(tt.gate, makeBundle("app-v1", "default")).WithStatusSubresource(tt.gate).
-				WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, isGate)).Build()
+				WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, isGate)).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			r, err := policygate.NewReconciler(c)
 			require.NoError(t, err)
 			var logs bytes.Buffer
