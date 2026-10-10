@@ -55,7 +55,14 @@ func (r *Reconciler) syncAutoMerge(ctx context.Context, log zerolog.Logger, ps *
 	if state == "" || state == steps.AutoMergeFailed {
 		return false, 0
 	}
-	ctrl, ok := r.SCM.(scm.PRController)
+	// The step's own provider (spec.scmProvider, #1517), as for the PR
+	// itself; one that cannot be used is retried at the next poll.
+	provider, err := r.scmFor(ctx, ps)
+	if err != nil {
+		log.Warn().Err(err).Msg("the step's SCM provider cannot be used for auto-merge; checking again later")
+		return false, requeueWaitForMerge
+	}
+	ctrl, ok := provider.(scm.PRController)
 	if !ok {
 		return false, 0
 	}
@@ -69,8 +76,12 @@ func (r *Reconciler) syncAutoMerge(ctx context.Context, log zerolog.Logger, ps *
 		if state == steps.AutoMergeSuspended && out[steps.OutputPRAutoMergeError] == why {
 			return false, 0
 		}
-		if state == steps.AutoMergeEnabled {
-			if err := ctrl.DisableAutoMerge(ctx, repo, prNumber); err != nil {
+		// pending does not mean off: an enable can succeed at the SCM while
+		// the client sees a timeout or a 5xx, or the controller can stop
+		// between the enable and the status write. Turning it off is a no-op
+		// on every provider when it is not on (#1683).
+		if state == steps.AutoMergeEnabled || state == steps.AutoMergePending {
+			if err := ctrl.DisableAutoMerge(ctx, repo, prNumber); err != nil && !errors.Is(err, scm.ErrPRControlUnsupported) {
 				log.Warn().Err(err).Int("pr", prNumber).Msg("disable auto-merge failed; retrying")
 				out[steps.OutputPRAutoMergeError] = fmt.Sprintf("%s, and turning auto-merge off failed: %v", why, err)
 				return true, requeueWaitForMerge
