@@ -117,8 +117,23 @@ Pending ──pre hooks succeeded──▶ Promoting ─▶ (WaitingForMerge) �
   is `Skipped`, and the step gets the condition `HooksSkipped` naming it. The next Bundle runs it.
 - **Nothing is left running.** Deleting the Bundle deletes its Graph, its HookRuns (once their
   Jobs ended), their Jobs and Pods (garbage collection through the owner references).
-- **A superseded Bundle starts no hooks.** A hook that is already running finishes; the
-  superseded Bundle's step does not start, and the new Bundle runs its own hooks.
+- **A paused Pipeline starts no pre hook.** After `kardinal pause`, a pre-hook HookRun that has
+  not started waits in `Pending` ("not started: pipeline ... is paused"), and its timeout does
+  not count until `kardinal resume`; it starts as soon as the Pipeline is resumed. A hook that is
+  already running finishes. Post hooks are not held: their step has merged and the change is
+  deployed, as a paused Pipeline still finishes steps that are `HealthChecking`
+  ([Pause and Resume](rollback.md#pause-and-resume)).
+- **A held environment starts no other Bundle's pre hook.** While an environment is held for a
+  rollback Bundle (`spec.holds`), another Bundle's pre hook for it waits in `Pending` ("not
+  started: environment ... is held for Bundle ..."), without its timeout counting, and runs if
+  that Bundle still promotes once the hold ends.
+- **A superseded or rejected Bundle starts no pre hook.** Its pre-hook HookRuns that have not
+  created their Job end `Skipped` ("not run: Bundle ... was superseded by a newer Bundle", or
+  "... was rejected"), also when they were waiting for a pause or a hold, so an old migration
+  never runs next to the new Bundle's. A hook that is already running finishes; the Bundle's step
+  does not start, and the new Bundle runs its own hooks.
+- These checks are made when the HookRun starts and again right before it creates its Job. A
+  pause, hold, supersede or rejection that lands after that does not stop the Job.
 
 ## Security: which ServiceAccount a hook runs as
 
@@ -169,13 +184,22 @@ ServiceAccount passes as kro, so treat that permission as the right to run hooks
 The controller needs `create`, `get`, `list`, `watch` and `delete` on `batch/jobs` in Pipeline
 namespaces (the chart grants it) and caches only Jobs labelled `kardinal.io/hookrun`.
 
+In a [compact Graph](pipeline-reference.md#large-pipelines) (above `--graph-compact-above`
+environments) the HookRuns are items of one collection, created under the conditions the node
+shape's HookRun nodes resolve under. A pre hook is created once the previous one succeeded, its
+environment's upstreams are Verified, its gates are ready, the
+environment is not held for another Bundle, the Bundle is not Superseded, Rejected or waiting for a
+`maxConcurrentPromotions` slot, and, for a root environment, the image is verified. All of this
+holds even after the environment's PromotionStep exists. A post hook is created once the step
+entered `Verifying` and the Bundle is not Superseded. A HookRun the Graph created stays, whatever
+changes after. Only HookRuns kro applied for this Bundle count: a forged HookRun with a hook's
+name keeps nothing admitted and does not let the next hook start. Each HookRun counts against the
+Graph's size limits. A HookRun that kro cannot create holds only its own environment, whose step
+waits for the hook. The Bundle's `RunsCreated` condition names it, with kro's error
+([Troubleshooting](troubleshooting.md#symptom-bundle-condition-runscreated-is-false)).
+
 ## What hooks cannot do
 
-- Hooks need the node Graph shape. A Pipeline whose Bundles get a
-  [compact Graph](pipeline-reference.md#large-pipelines) (more than `--graph-compact-above`
-  environments, default 100, or the annotation `kardinal.io/graph-shape: compact`) is
-  `Ready=False` and its Bundles fail with `GraphBuildFailed`, naming hooks, instead of promoting
-  without them.
 - Hooks run in the Pipeline's namespace in the cluster kardinal runs in, not in the target
   cluster of a remote environment. Reach the target through its Service or API from the Pod.
 - A pre hook runs before the step starts. When a PolicyGate turns false after the migration

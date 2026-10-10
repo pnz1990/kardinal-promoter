@@ -26,7 +26,10 @@ import (
 // with no upstream in the Graph carries spec.imageVerification and waits in
 // Pending until the mirror patch node copies phase Verified onto
 // spec.live.imageVerification; its pre-deploy hooks wait for it too.
-// Downstream steps need nothing: their upstream already waited.
+// Downstream steps need nothing: their upstream already waited. In the
+// compact shape the PromotionSteps template renders
+// spec.live.imageVerification itself and the root entries of the DAG carry
+// the name (compact.go, compact_extras.go).
 //
 // Digests are required. Verifying a tag and then promoting the tag lets a
 // different image be pushed under the tag in between; a selected image
@@ -223,21 +226,4 @@ func imageVerificationLive() map[string]interface{} {
 		"message": fmt.Sprintf(`${%s.?status.?message.orValue("")}`, imageVerifyNodeID),
 		"images":  fmt.Sprintf(`${%s.spec.?images.orValue([]).map(i, i.repository + "@" + i.digest)}`, imageVerifyNodeID),
 	}
-}
-
-// The compact shape does not build the ImageVerification node or the
-// mirror that holds the root steps (the steps come from one collection), so
-// a Pipeline with an image policy is built in the node shape, or refused
-// (compactUnsupported).
-func init() {
-	RegisterCompactUnsupported(imageVerificationUsed)
-}
-
-// imageVerificationUsed returns the feature name when the Pipeline has
-// spec.imageVerification.
-func imageVerificationUsed(in BuildInput) string {
-	if in.Pipeline == nil || in.Pipeline.Spec.ImageVerification == nil {
-		return ""
-	}
-	return "image signature verification (spec.imageVerification)"
 }

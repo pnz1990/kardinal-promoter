@@ -137,48 +137,73 @@ func terminateNodeID(env, template string) string {
 	return "terminate0" + CELSafeSlug(env) + "0" + CELSafeSlug(template)
 }
 
-// buildAnalysisNodes returns the AnalysisRun nodes of one environment.
-func buildAnalysisNodes(in hookNodesInput, a AnalysisInput, bundle *kardinalv1alpha1.Bundle) (analysisNodes, error) {
-	var out analysisNodes
+// analysisRun is one AnalysisRun an environment's verification needs.
+type analysisRun struct {
+	name, template string
+	spec           map[string]interface{}
+}
+
+// analysisRunsOf returns the AnalysisRuns of one environment's
+// verification, with their resolved specs, and the step's
+// spec.analysisPolicy; nothing for an environment without verification.
+func analysisRunsOf(in hookNodesInput, a AnalysisInput, bundle *kardinalv1alpha1.Bundle) ([]analysisRun, map[string]interface{}, error) {
 	if !hasVerification(in.env) {
-		return out, nil
+		return nil, nil, nil
 	}
 	v := in.env.Verification
 	where := fmt.Sprintf("build: environment %q verification", in.env.Name)
 	if a.Unavailable != "" {
-		return out, fmt.Errorf("%s: %s", where, a.Unavailable)
+		return nil, nil, fmt.Errorf("%s: %s", where, a.Unavailable)
 	}
 	if _, err := AnalysisTimeout(v.Timeout); err != nil {
-		return out, fmt.Errorf("%s: %w", where, err)
+		return nil, nil, fmt.Errorf("%s: %w", where, err)
 	}
 	builtins, invalid := analysisBuiltinArgs(in.pipeline, in.env.Name, bundle)
-	out.policy = map[string]interface{}{}
+	policy := map[string]interface{}{}
 	if v.Inconclusive != "" {
-		out.policy["inconclusive"] = v.Inconclusive
+		policy["inconclusive"] = v.Inconclusive
 	}
 	if v.Timeout != "" {
-		out.policy["timeout"] = v.Timeout
+		policy["timeout"] = v.Timeout
 	}
+	var runs []analysisRun
 	for _, ref := range v.AnalysisTemplates {
 		kind := AnalysisTemplateKind(ref)
 		tmpl, ok := a.Templates[AnalysisTemplateKey(kind, ref.Name)]
 		if !ok {
 			if kind == KindClusterAnalysisTemplate {
-				return out, fmt.Errorf("%s: ClusterAnalysisTemplate %q not found", where, ref.Name)
+				return nil, nil, fmt.Errorf("%s: ClusterAnalysisTemplate %q not found", where, ref.Name)
 			}
-			return out, fmt.Errorf("%s: AnalysisTemplate %q not found in namespace %q", where, ref.Name, in.namespace)
+			return nil, nil, fmt.Errorf("%s: AnalysisTemplate %q not found in namespace %q", where, ref.Name, in.namespace)
 		}
 		spec, err := analysisRunSpec(tmpl, v.Args, builtins, invalid)
 		if err != nil {
-			return out, fmt.Errorf("%s: %s %q: %w", where, kind, ref.Name, err)
+			return nil, nil, fmt.Errorf("%s: %s %q: %w", where, kind, ref.Name, err)
 		}
 		raw, err := json.Marshal(spec)
 		if err != nil {
-			return out, fmt.Errorf("%s: %s %q: %w", where, kind, ref.Name, err)
+			return nil, nil, fmt.Errorf("%s: %s %q: %w", where, kind, ref.Name, err)
 		}
 		sum := sha256.Sum256(raw)
-		name := AnalysisRunName(in.pipeline, in.bundle, in.env.Name, ref.Name, hex.EncodeToString(sum[:])[:8])
-		id := analysisNodeID(in.env.Name, ref.Name)
+		runs = append(runs, analysisRun{
+			name:     AnalysisRunName(in.pipeline, in.bundle, in.env.Name, ref.Name, hex.EncodeToString(sum[:])[:8]),
+			template: ref.Name,
+			spec:     spec,
+		})
+	}
+	return runs, policy, nil
+}
+
+// buildAnalysisNodes returns the AnalysisRun nodes of one environment.
+func buildAnalysisNodes(in hookNodesInput, a AnalysisInput, bundle *kardinalv1alpha1.Bundle) (analysisNodes, error) {
+	var out analysisNodes
+	runs, policy, err := analysisRunsOf(in, a, bundle)
+	if err != nil || len(runs) == 0 {
+		return out, err
+	}
+	out.policy = policy
+	for _, run := range runs {
+		id := analysisNodeID(in.env.Name, run.template)
 		conds := []string{`bundle.status.phase != "Superseded"`, verifyingCond(in.stepK8sName)}
 		out.nodes = append(out.nodes, GraphNode{
 			ID: id,
@@ -186,22 +211,22 @@ func buildAnalysisNodes(in hookNodesInput, a AnalysisInput, bundle *kardinalv1al
 				"apiVersion": AnalysisRunAPIVersion,
 				"kind":       "AnalysisRun",
 				"metadata": map[string]interface{}{
-					"name": resolvableWhen(strings.Join(conds, " && "), strconv.Quote(name)),
+					"name": resolvableWhen(strings.Join(conds, " && "), strconv.Quote(run.name)),
 					"labels": map[string]interface{}{
 						"kardinal.io/pipeline":    in.pipeline,
 						"kardinal.io/bundle":      in.bundle,
 						"kardinal.io/environment": in.env.Name,
-						LabelAnalysisTemplate:     ref.Name,
+						LabelAnalysisTemplate:     run.template,
 						LabelBundleUID:            in.bundleUID,
 					},
 				},
-				"spec": literalStrings(spec),
+				"spec": literalStrings(run.spec),
 			},
 			ReadyWhen: []string{fmt.Sprintf(`${%s.?status.?phase.orValue("") == "Successful"}`, id)},
 		})
-		out.nodes = append(out.nodes, terminateNode(in, ref.Name, name))
-		out.names = append(out.names, ref.Name)
-		out.runNames = append(out.runNames, name)
+		out.nodes = append(out.nodes, terminateNode(in, run.template, run.name))
+		out.names = append(out.names, run.template)
+		out.runNames = append(out.runNames, run.name)
 	}
 	return out, nil
 }
@@ -349,27 +374,4 @@ func analysisRunSpec(tmpl AnalysisTemplate, args []kardinalv1alpha1.AnalysisArg,
 		spec["args"] = out
 	}
 	return spec, nil
-}
-
-// The compact shape does not build AnalysisRun nodes, their terminate
-// patches or the mirror: they are per environment and read the
-// environment's step node, which the compact shape folds into the
-// PromotionSteps collection. A Pipeline with verification is built in the
-// node shape, or refused (compactUnsupported).
-func init() {
-	RegisterCompactUnsupported(verificationUsed)
-}
-
-// verificationUsed returns the feature name when an environment of the
-// Pipeline has spec.verification.
-func verificationUsed(in BuildInput) string {
-	if in.Pipeline == nil {
-		return ""
-	}
-	for _, env := range in.Pipeline.Spec.Environments {
-		if hasVerification(env) {
-			return "Argo Rollouts analysis (spec.environments[].verification)"
-		}
-	}
-	return ""
 }
