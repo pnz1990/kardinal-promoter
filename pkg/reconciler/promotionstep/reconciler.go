@@ -1443,7 +1443,14 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 	if retryable {
 		msg = fmt.Sprintf("%s (gave up after %d retries)", msg, maxStepRetries)
 	}
-	log.Error().Err(execErr).Str("env", ps.Spec.Environment).Msg("step engine failed")
+	if errors.Is(execErr, steps.ErrStalePush) {
+		// The push guard (#1681) cancelled a superseded, rejected or
+		// deleted Bundle's promotion before it could push over a newer
+		// one: the expected end of a stale step, not a controller error.
+		log.Info().Err(execErr).Str("env", ps.Spec.Environment).Msg("stale promotion cancelled before its push")
+	} else {
+		log.Error().Err(execErr).Str("env", ps.Spec.Environment).Msg("step engine failed")
+	}
 	closed = append(closed, updateStepStatuses(ps, stepNames, idx, true, msg, timings)...)
 	if closeErr := r.closeStepPR(ctx, ps, "the promotion failed: "+msg, false); closeErr != nil {
 		msg += fmt.Sprintf("; closing the PR it opened failed (%v) — %s", closeErr, closeByHand(closeErr))
