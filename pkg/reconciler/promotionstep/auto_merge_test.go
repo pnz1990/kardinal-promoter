@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -213,9 +214,11 @@ func TestAutoMerge_StaleKeysCleared(t *testing.T) {
 
 // TestAutoMerge_StaleReadDoesNotHideEnabled (#1683): the reconcile after a
 // pause reads the step from a cache that has not seen the write of
-// prAutoMerge: enabled yet. It must not store suspended over enabled
-// without turning auto-merge off at the SCM: its write conflicts and it is
-// requeued, and the next reconcile, reading enabled, turns it off.
+// prAutoMerge: enabled yet. It must not store suspended over enabled: its
+// write conflicts and it is requeued, and the next reconcile, reading
+// enabled, turns auto-merge off. (It turns it off too: pending is not off.)
+//
+// Covers SCM-PRCTL-PAUSE-01.
 func TestAutoMerge_StaleReadDoesNotHideEnabled(t *testing.T) {
 	ctx := context.Background()
 	ps, prs, gate := waitingAutoMergeStep()
@@ -254,11 +257,77 @@ func TestAutoMerge_StaleReadDoesNotHideEnabled(t *testing.T) {
 	assert.Equal(t, time.Second, res.RequeueAfter, "the stale write conflicts and is requeued")
 	got := getStep(t, c, "step")
 	assert.Equal(t, "enabled", got.Status.Outputs["prAutoMerge"], "enabled is not overwritten")
-	assert.Zero(t, m.disables)
+	assert.Equal(t, 1, m.disables, "pending is not taken for off: the stale reconcile turns it off too")
 
 	stale = nil // the cache caught up
 	reconcileStep(t, r, "step")
 	got = getStep(t, c, "step")
 	assert.Equal(t, "suspended", got.Status.Outputs["prAutoMerge"])
-	assert.Equal(t, 1, m.disables, "auto-merge is turned off at the SCM")
+	assert.Equal(t, 2, m.disables, "the reconcile that reads enabled turns auto-merge off")
+}
+
+// timeoutErr is a net.Error that timed out: the client did not see the
+// answer of a call the SCM may have carried out.
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "i/o timeout" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return true }
+
+// TestAutoMerge_PendingIsTurnedOffOnPause (#1683, QA): EnableAutoMerge
+// timed out at the client but took effect at the SCM, so the step is
+// pending (a retry is scheduled) while auto-merge is on. A pause must turn
+// it off: pending does not mean off.
+//
+// Covers SCM-PRCTL-PAUSE-01.
+func TestAutoMerge_PendingIsTurnedOffOnPause(t *testing.T) {
+	ctx := context.Background()
+	ps, prs, gate := waitingAutoMergeStep()
+	c := newClient(t, ps, prs, gate, makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo"))
+	m := &autoMergeSCM{mockSCM: mockSCM{open: true}, enableErrs: []error{timeoutErr{}}}
+	r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: &mockGit{}, WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+
+	reconcileStep(t, r, "step")
+	got := getStep(t, c, "step")
+	require.Equal(t, "pending", got.Status.Outputs["prAutoMerge"], "the timed-out enable is retried later")
+	require.Len(t, m.enables, 1, "the SCM got the enable")
+
+	require.NoError(t, lifecycle.Pause(ctx, c, "default", "nginx-demo"))
+	reconcileStep(t, r, "step")
+	got = getStep(t, c, "step")
+	assert.Equal(t, "suspended", got.Status.Outputs["prAutoMerge"])
+	assert.Equal(t, 1, m.disables, "auto-merge is turned off at the SCM though the step never saw it on")
+	assert.Len(t, m.enables, 1, "not enabled again while paused")
+}
+
+// TestAutoMerge_UsesTheStepsProvider (#1683, QA): a step whose PR was
+// opened on a ScmProvider (spec.scmProvider, #1517) turns auto-merge on and
+// off through that provider, never the controller's default one.
+//
+// Covers SCM-PRCTL-PAUSE-01.
+func TestAutoMerge_UsesTheStepsProvider(t *testing.T) {
+	ctx := context.Background()
+	ps, prs, gate := waitingAutoMergeStep()
+	ps.Spec.ScmProvider = &v1alpha1.ScmProviderIdentity{Kind: v1alpha1.KindScmProvider, Name: "team-gh", UID: "uid-1"}
+	prov := &v1alpha1.ScmProvider{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "team-gh", UID: "uid-1"},
+		Spec: v1alpha1.ScmProviderSpec{Type: "github", SecretRef: v1alpha1.ScmSecretKeyRef{Name: "team-token"}}}
+	tok := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "team-token",
+		Labels: map[string]string{scm.LabelReferenceable: "true"}}, Data: map[string][]byte{"token": []byte("team")}}
+	c := newClient(t, ps, prs, gate, prov, tok, makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo"))
+	controllerSCM := &autoMergeSCM{mockSCM: mockSCM{open: true}}
+	teamSCM := &autoMergeSCM{mockSCM: mockSCM{open: true}}
+	r := &promotionstep.Reconciler{Client: c, SCM: controllerSCM, GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+		Providers: &scm.Registry{Client: c, New: func(_, _, _, _ string) (scm.SCMProvider, error) { return teamSCM, nil }}}
+
+	reconcileStep(t, r, "step")
+	assert.Equal(t, "enabled", getStep(t, c, "step").Status.Outputs["prAutoMerge"])
+	require.NoError(t, lifecycle.Pause(ctx, c, "default", "nginx-demo"))
+	reconcileStep(t, r, "step")
+	assert.Equal(t, "suspended", getStep(t, c, "step").Status.Outputs["prAutoMerge"])
+
+	assert.Len(t, teamSCM.enables, 1, "enabled through the step's provider")
+	assert.Equal(t, 1, teamSCM.disables, "disabled through the step's provider")
+	assert.Empty(t, controllerSCM.enables, "the controller's provider is never used for this step")
+	assert.Zero(t, controllerSCM.disables)
 }
