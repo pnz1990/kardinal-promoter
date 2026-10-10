@@ -161,7 +161,7 @@ func TestCore_RenderedBranchKustomize(t *testing.T) {
 	before := headSHA(t, e, a.renderedBranch("test"), a.repo)
 	b4 := e.CreateBundle(t, a.ns, pipelineName, "--image", v3)
 	ps4 := e.WaitStepState(t, a.ns, pipelineName, b4, "test", "Failed", promoteTimeout)
-	assert.Contains(t, ps4.Status.Message, fmt.Sprintf("rendered branch env/test was changed outside kardinal: %s changed", deployment("test")))
+	assert.Contains(t, ps4.Status.Message, fmt.Sprintf("rendered branch %s was changed outside kardinal: %s changed", a.renderedBranch("test"), deployment("test")))
 	assert.Equal(t, before, headSHA(t, e, a.renderedBranch("test"), a.repo), "nothing is pushed to a drifted branch")
 }
 
