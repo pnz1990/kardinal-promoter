@@ -14,9 +14,10 @@ const (
 // ScmProviderSpec is the SCM a Pipeline opens its PRs on: its type, API and
 // credentials.
 type ScmProviderSpec struct {
-	// Type is the SCM: github, gitlab, forgejo, gitea, bitbucket or
-	// azuredevops (the --scm-provider values).
-	// +kubebuilder:validation:Enum=github;gitlab;forgejo;gitea;bitbucket;azuredevops
+	// Type is the SCM: github, gitlab, forgejo, gitea, bitbucket,
+	// azuredevops or bitbucket-datacenter (the --scm-provider values). A
+	// bitbucket-datacenter provider needs apiURL, the server's base URL.
+	// +kubebuilder:validation:Enum=github;gitlab;forgejo;gitea;bitbucket;azuredevops;bitbucket-datacenter
 	Type string `json:"type"`
 
 	// APIURL is the SCM's API base URL (the --scm-api-url value). Empty uses

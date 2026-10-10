@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -355,7 +354,7 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, p scm.SCMProvide
 		if prs.Spec.PRNumber != event.PRNumber || !scope.matches(prs) {
 			continue
 		}
-		if prs.Spec.Repo == "" || !strings.EqualFold(prs.Spec.Repo, event.RepoFullName) {
+		if prs.Spec.Repo == "" || !scm.SameRepo(s.scm, prs.Spec.Repo, event.RepoFullName) {
 			continue
 		}
 		if prstatus.DescribesSpec(prs) && prs.Status.Merged &&

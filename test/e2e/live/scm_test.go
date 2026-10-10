@@ -631,7 +631,7 @@ func scmLabels(t *testing.T, e *framework.Env) *app {
 		"> **This is a rollback PR.** It restores the images of bundle "+first+" in environment prod.\n"+
 		"> Rolling back FROM: "+second+" ("+fixtures.V3+")\n"+
 		"> Rolling back TO: "+first+" ("+fixtures.V2+")\n"+
-		"> Rolled back by: "+cliUser(t)+"\n"), "rollback body:\n%s", body)
+		"> Rolled back by: "+kubeUser(t, a.e)+"\n"), "rollback body:\n%s", body)
 	a.merge(t, pr)
 	e.WaitStepState(t, a.ns, pipelineName, rollback, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V2)
