@@ -65,12 +65,8 @@ func gateMirrorNodes(steps []interface{}, collections []string) []GraphNode {
 	}
 }
 
-// envApproval is the approval mode of environment env of pipeline.
+// envApproval is the approval mode of environment env of pipeline, a fleet
+// target included (its fleet's approval).
 func envApproval(pipeline *kardinalv1alpha1.Pipeline, env string) string {
-	for _, e := range pipeline.Spec.Environments {
-		if e.Name == env {
-			return e.Approval
-		}
-	}
-	return ""
+	return findEnvSpec(pipeline, env).Approval
 }

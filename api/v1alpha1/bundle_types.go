@@ -267,7 +267,9 @@ type BundleStatus struct {
 	// it created, so kro does not hold every finished Graph in memory
 	// (#1492). Rollback, promote, history, metrics, the CLI and the UI read
 	// these records where they read the steps of a Bundle that is still
-	// promoting.
+	// promoting. The step of a fleet target removed from the Pipeline while the
+	// Bundle promoted is recorded here when its Graph is updated, before kro
+	// prunes it, and kept at the retirement.
 	// +optional
 	// +listType=map
 	// +listMapKey=name

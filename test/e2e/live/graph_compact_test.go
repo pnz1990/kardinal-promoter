@@ -167,7 +167,6 @@ func TestGraph_CompactShape300(t *testing.T) {
 func wavePipeline(t *testing.T, e *framework.Env, waves, perWave int, gateExpr func(env string) string,
 	spare ...string) (*app, *v1alpha1.Pipeline) {
 	t.Helper()
-	ctx := context.Background()
 	ns := e.Namespace(t)
 	var envs []string
 	for w := 1; w <= waves; w++ {
@@ -182,10 +181,27 @@ func wavePipeline(t *testing.T, e *framework.Env, waves, perWave int, gateExpr f
 			fixtures.Image, fixtures.V1))
 	}
 	a := &app{e: e, ns: ns, envs: envs, repo: e.Repo(t, ns, files)}
+	createCompactHealth(t, e, ns)
 
+	p := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: pipelineName, Namespace: ns},
+		Spec: v1alpha1.PipelineSpec{Git: v1alpha1.PipelineGit{URL: a.repo.CloneURL, Branch: a.repo.Branch,
+			SecretRef: &v1alpha1.SecretRef{Name: framework.GitSecretName}}},
+	}
+	for i, env := range envs {
+		p.Spec.Environments = append(p.Spec.Environments, waveEnv(ns, env, i/perWave+1))
+		e.CreateGate(t, framework.Gate(ns, "gate-"+env, env, gateExpr(env), recheck))
+	}
+	return a, p
+}
+
+// createCompactHealth creates compactHealthDeployment in ns and waits until
+// it is available.
+func createCompactHealth(t *testing.T, e *framework.Env, ns string) {
+	t.Helper()
 	one := int32(1)
 	labels := map[string]string{"app": compactHealthDeployment}
-	require.NoError(t, e.Client.Create(ctx, &appsv1.Deployment{
+	require.NoError(t, e.Client.Create(context.Background(), &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: compactHealthDeployment, Namespace: ns},
 		Spec: appsv1.DeploymentSpec{Replicas: &one, Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels},
@@ -199,17 +215,6 @@ func wavePipeline(t *testing.T, e *framework.Env, waves, perWave int, gateExpr f
 		}
 		return d.Status.AvailableReplicas == 1, fmt.Sprintf("available %d", d.Status.AvailableReplicas)
 	})
-
-	p := &v1alpha1.Pipeline{
-		ObjectMeta: metav1.ObjectMeta{Name: pipelineName, Namespace: ns},
-		Spec: v1alpha1.PipelineSpec{Git: v1alpha1.PipelineGit{URL: a.repo.CloneURL, Branch: a.repo.Branch,
-			SecretRef: &v1alpha1.SecretRef{Name: framework.GitSecretName}}},
-	}
-	for i, env := range envs {
-		p.Spec.Environments = append(p.Spec.Environments, waveEnv(ns, env, i/perWave+1))
-		e.CreateGate(t, framework.Gate(ns, "gate-"+env, env, gateExpr(env), recheck))
-	}
-	return a, p
 }
 
 // waveEnv is environment env of a wavePipeline in wave.

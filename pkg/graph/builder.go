@@ -174,14 +174,18 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	}
 
 	// Step 4: collect and match PolicyGates by environment
-	gatesByEnv := matchGatesByEnv(filteredEnvs, input.PolicyGates)
+	members, _, err := fleetMembers(input.Pipeline)
+	if err != nil {
+		return nil, err
+	}
+	gatesByEnv := matchGatesByEnv(filteredEnvs, input.PolicyGates, members)
 	skipGates := skipPermissionGates(filteredEnvs, deps, input.Bundle, input.PolicyGates, input.PolicyNamespaces)
 	if err := validateGateNames(filteredEnvs, gatesByEnv, skipGates); err != nil {
 		return nil, err
 	}
 
 	// Step 5 & 6: build nodes and wire edges
-	compact, err := b.compactShape(input.Pipeline, len(filteredEnvs), input.Shape)
+	compact, err := b.compactShape(input.Pipeline, len(filteredEnvs), input.Shape, len(members) > 0)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +195,7 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 		}
 	}
 	nodes, instances, upstreams, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates,
-		input.MetricChecks, input.PolicyNamespaces, input.Analyses, input.ScmProvider, compact)
+		input.MetricChecks, input.PolicyNamespaces, input.Analyses, input.ScmProvider, compact, members)
 	if err != nil {
 		return nil, err
 	}
@@ -226,8 +230,24 @@ func (b *Builder) serviceAccountName() string {
 // --- Step 1: resolve environment ordering ---
 
 // resolveOrdering reads spec.environments, builds the dependency map,
-// and returns the topologically sorted environment names.
+// and returns the topologically sorted environment names, with every fleet
+// environment replaced by its targets (expandFleets).
 func resolveOrdering(pipeline *kardinalv1alpha1.Pipeline) ([]string, map[string][]string, error) {
+	ordered, deps, err := resolveSpecOrdering(pipeline)
+	if err != nil || !hasFleets(pipeline) {
+		return ordered, deps, err
+	}
+	_, byFleet, err := fleetMembers(pipeline)
+	if err != nil {
+		return nil, nil, err
+	}
+	ordered, deps = expandFleets(ordered, deps, byFleet)
+	return ordered, deps, nil
+}
+
+// resolveSpecOrdering is resolveOrdering over spec.environments as written:
+// a fleet environment is one environment.
+func resolveSpecOrdering(pipeline *kardinalv1alpha1.Pipeline) ([]string, map[string][]string, error) {
 	sorted, deps, cycle, err := orderEnvironments(pipeline, nil)
 	if cycle != nil {
 		// Only a cycle needs to know where each edge came from: record it
@@ -240,7 +260,7 @@ func resolveOrdering(pipeline *kardinalv1alpha1.Pipeline) ([]string, map[string]
 	return sorted, deps, err
 }
 
-// orderEnvironments is resolveOrdering's work. With why non-nil it records
+// orderEnvironments is resolveSpecOrdering's work. With why non-nil it records
 // where each edge came from. It returns the cycle, if there is one.
 func orderEnvironments(pipeline *kardinalv1alpha1.Pipeline, why map[string]map[string]edgeSource) ([]string, map[string][]string, []string, error) {
 	envs := pipeline.Spec.Environments
@@ -502,7 +522,9 @@ func filterByIntent(orderedEnvs []string, deps map[string][]string,
 
 	// Apply targetEnvironment: keep only envs up to and including target
 	if target := bundle.Spec.Intent.TargetEnvironment; target != "" {
-		found := false
+		// A fleet environment is not in orderedEnvs, but deps lists its
+		// targets (expandFleets), so the Graph stops after every target.
+		found := isFleetName(orderedEnvs, deps, target)
 		for _, e := range orderedEnvs {
 			if e == target {
 				found = true
@@ -569,11 +591,16 @@ func envPathTo(orderedEnvs []string, deps map[string][]string, target string) []
 // matchGatesByEnv returns a map of environmentName → []PolicyGate for gates
 // that apply to each environment and have type "gate" (not skip-permission).
 func matchGatesByEnv(filteredEnvs []string,
-	allGates []kardinalv1alpha1.PolicyGate) map[string][]kardinalv1alpha1.PolicyGate {
+	allGates []kardinalv1alpha1.PolicyGate, members map[string]fleetMember) map[string][]kardinalv1alpha1.PolicyGate {
 	result := make(map[string][]kardinalv1alpha1.PolicyGate)
 	envSet := make(map[string]bool, len(filteredEnvs))
+	// A gate that applies to a fleet environment applies to each target.
+	targetsOf := map[string][]string{}
 	for _, e := range filteredEnvs {
 		envSet[e] = true
+		if m, ok := members[e]; ok {
+			targetsOf[m.fleet] = append(targetsOf[m.fleet], e)
+		}
 	}
 	for _, g := range allGates {
 		// Skip-permission gates are placed by skipPermissionGates.
@@ -584,9 +611,11 @@ func matchGatesByEnv(filteredEnvs []string,
 		matched := make(map[string]bool)
 		for _, e := range strings.Split(appliesTo, ",") {
 			e = strings.TrimSpace(e)
-			if envSet[e] && !matched[e] {
-				matched[e] = true
-				result[e] = append(result[e], g)
+			for _, env := range append([]string{e}, targetsOf[e]...) {
+				if envSet[env] && !matched[env] {
+					matched[env] = true
+					result[env] = append(result[env], g)
+				}
 			}
 		}
 	}
@@ -621,7 +650,8 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate,
 	skipGates map[string][]skipPermissionGate,
 	metricChecks []kardinalv1alpha1.MetricCheck, policyNamespaces []string, analyses AnalysisInput,
-	provider *kardinalv1alpha1.ScmProviderIdentity, compact bool) ([]GraphNode, []kardinalv1alpha1.PolicyGate, map[string][]string, error) {
+	provider *kardinalv1alpha1.ScmProviderIdentity, compact bool,
+	members map[string]fleetMember) ([]GraphNode, []kardinalv1alpha1.PolicyGate, map[string][]string, error) {
 	pipelineName := pipeline.Name
 	bundleSlug := CELSafeSlug(bundle.Name) // camelCase — node IDs only
 
@@ -737,7 +767,8 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 
 		if compact {
 			stepName := promotionStepK8sName(pipelineName, bundle.Name, envName)
-			held := heldBundle(pipeline, envName) != "" && heldBundle(pipeline, envName) != bundle.Name
+			m := members[envName]
+			held := heldBundle(pipeline, envName, m.fleet) != "" && heldBundle(pipeline, envName, m.fleet) != bundle.Name
 			iv := ""
 			if len(upstreams) == 0 {
 				iv = ivName // a root step and its pre hooks wait for the image verification
@@ -757,6 +788,10 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 				gates:             envGates,
 				extras:            extras,
 				imageVerification: iv,
+				fleet:             m.fleet,
+				index:             m.index,
+				maxConcurrent:     m.maxConcurrent,
+				maxUnavailable:    m.maxUnavailable,
 			})
 			continue
 		}
@@ -800,7 +835,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			hooks = append(hooks, s.extras.hooks...)
 			runs = append(runs, s.extras.runs...)
 		}
-		nodes = append(nodes, compactRunNodes(pipeline, bundle, hooks, runs)...)
+		nodes = append(nodes, compactRunNodes(pipeline, bundle, hooks, runs, stepsHaveFleets(compactSteps))...)
 	}
 
 	return nodes, gates.instances, upstreamEnvs, nil
@@ -872,17 +907,26 @@ const bundleHeld = `bundle.status.phase != "Superseded" && bundle.status.phase !
 // follows it. A Bundle the condition holds back gets no step in env; the
 // steps that existed already are held by the PromotionStep reconciler.
 func heldCond(pipeline *kardinalv1alpha1.Pipeline, env string) string {
-	if h := heldBundle(pipeline, env); h != "" {
+	if h := heldBundle(pipeline, env, ""); h != "" {
 		return "bundle.metadata.name == " + celString(h)
 	}
 	return ""
 }
 
 // heldBundle is the Bundle the Pipeline holds env on (spec.holds), or "".
-func heldBundle(pipeline *kardinalv1alpha1.Pipeline, env string) string {
+func heldBundle(pipeline *kardinalv1alpha1.Pipeline, env, fleet string) string {
 	for _, h := range pipeline.Spec.Holds {
 		if h.Environment == env {
 			return h.Bundle
+		}
+	}
+	// A fleet target is also held by its fleet's hold (kardinal rollback
+	// --env <fleet> --hold).
+	if fleet != "" {
+		for _, h := range pipeline.Spec.Holds {
+			if h.Environment == fleet {
+				return h.Bundle
+			}
 		}
 	}
 	return ""

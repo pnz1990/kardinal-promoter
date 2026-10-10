@@ -116,6 +116,55 @@ describe('ageOf', () => {
   for (const [iso, want] of cases) it(`${iso} → ${want}`, () => expect(ageOf(iso, now)).toBe(want))
 })
 
+describe('fleetRow: fleet environments (D1)', () => {
+  const targets = ['prod-c01', 'prod-c02', 'prod-c03', 'prod-c04', 'prod-c05']
+  const topo = [
+    { name: 'test' },
+    { name: 'prod', upstreams: ['test'], fleet: { targets, maxConcurrent: 2, maxUnavailable: 1 } },
+    { name: 'audit', upstreams: ['prod'] },
+  ]
+  const base = { name: 'web', namespace: 'team', phase: 'Ready', environmentCount: 3, environmentTopology: topo }
+
+  it('rolls a fleet up into one station between its neighbours', () => {
+    const row = fleetRow({
+      ...base, activeBundleName: 'web-2', activeBundleVersion: '2.0.0',
+      environmentStates: { test: 'Verified', 'prod-c01': 'Verified', 'prod-c02': 'WaitingForMerge', 'prod-c03': 'Promoting' },
+      deployed: {
+        'prod-c01': { bundle: 'web-2', version: '2.0.0' },
+        'prod-c02': { bundle: 'web-1', version: '1.0.0' }, 'prod-c03': { bundle: 'web-1', version: '1.0.0' },
+      },
+    })
+    expect(row.groups.map(g => g.map(s => s.env))).toEqual([['test'], ['prod'], ['audit']])
+    const prod = row.groups[1][0]
+    expect(prod.state).toBe('arriving')
+    expect(prod.version).toBe('1.0.0')
+    expect(prod.fleet).toMatchObject({ total: 5, verified: 1, inFlight: 2, failed: 0, pending: 2, maxConcurrent: 2, stopped: false, versions: 2 })
+    expect(row.liveGroup).toBe(1)
+    expect(row.groups[2][0].state).toBe('ahead')
+  })
+
+  it('a failure past maxUnavailable stops the fleet', () => {
+    const row = fleetRow({
+      ...base, activeBundleName: 'web-2',
+      environmentStates: { test: 'Verified', 'prod-c01': 'Verified', 'prod-c02': 'Failed', 'prod-c03': 'Verified' },
+    })
+    const prod = row.groups[1][0]
+    expect(prod.state).toBe('failed')
+    expect(prod.fleet).toMatchObject({ verified: 2, failed: 1, inFlight: 0, pending: 2, stopped: true })
+    expect(row.live).toBe('failed')
+  })
+
+  it('a fleet every target of which runs the active Bundle is settled', () => {
+    const states: Record<string, string> = { test: 'Verified' }
+    const deployed: Record<string, { bundle: string; version: string }> = {}
+    for (const t of targets) { states[t] = 'Verified'; deployed[t] = { bundle: 'web-2', version: '2.0.0' } }
+    const prod = fleetRow({ ...base, activeBundleName: 'web-2', environmentStates: states, deployed }).groups[1][0]
+    expect(prod.state).toBe('settled')
+    expect(prod.version).toBe('2.0.0')
+    expect(prod.fleet).toMatchObject({ verified: 5, versions: 1 })
+  })
+})
+
 describe('terminalEnvironments', () => {
   const wave = [{ name: 'w000' }, ...Array.from({ length: 4 }, (_, i) => ({ name: `w00${i + 1}`, upstreams: ['w000'] }))]
   const cases: { name: string; topo: Parameters<typeof terminalEnvironments>[0]; want: string[] }[] = [

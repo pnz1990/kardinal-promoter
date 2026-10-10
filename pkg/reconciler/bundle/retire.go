@@ -246,9 +246,18 @@ func (r *Reconciler) retire(ctx context.Context, log zerolog.Logger, b *kardinal
 		}
 		return ctrl.Result{RequeueAfter: requeueRetireWait}, nil
 	}
-	records := make([]kardinalv1alpha1.RetiredStep, 0, len(list.Items))
+	records := make([]kardinalv1alpha1.RetiredStep, 0, len(list.Items)+len(b.Status.RetiredSteps))
+	live := make(map[string]bool, len(list.Items))
 	for i := range list.Items {
 		records = append(records, lifecycle.RetiredStepOf(&list.Items[i]))
+		live[list.Items[i].Name] = true
+	}
+	// Records written before the retirement (a fleet target removed while
+	// the Bundle promoted, keepRemovedFleetTargets) stay.
+	for _, rs := range b.Status.RetiredSteps {
+		if !live[rs.Name] {
+			records = append(records, rs)
+		}
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].Name < records[j].Name })
 	if why := tooManySteps(records); why != "" {

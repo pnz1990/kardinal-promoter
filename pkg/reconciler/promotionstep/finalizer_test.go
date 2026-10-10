@@ -688,6 +688,7 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 		nsDeleting   bool
 		bundle       func(*v1alpha1.Bundle) // nil: the Bundle is gone
 		dropEnv      bool                   // the Pipeline no longer has prod
+		fleet        bool                   // the step is fleet target prod-eu of fleet prod (#1565 QA)
 		noPipeline   bool
 		readErr      string                 // the kind whose read fails with an error other than NotFound
 		later        time.Duration          // how long after the delete the reconcile runs (default 1s)
@@ -835,6 +836,12 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 			wantClosed: true, wantComment: "bundle bundle-1 was deleted"},
 		{name: "the Pipeline dropped the environment but the Graph is still there: the branch is deleted",
 			graph: graphOld, bundle: func(*v1alpha1.Bundle) {}, dropEnv: true, wantClosed: true},
+		// A fleet target is an environment of the Pipeline: its step comes
+		// back with the Graph and reuses its PR (approvals kept).
+		{name: "a fleet target's Graph was recreated: the PR is kept", graph: graphNew, fleet: true,
+			bundle: func(*v1alpha1.Bundle) {}},
+		{name: "the fleet dropped the target and the Graph was recreated: the PR is closed", graph: graphNew,
+			fleet: true, dropEnv: true, bundle: func(*v1alpha1.Bundle) {}, wantClosed: true},
 		{name: "the Pipeline is gone but the Graph is still there: the branch is deleted", graph: graphOld,
 			bundle: func(*v1alpha1.Bundle) {}, noPipeline: true, wantClosed: true},
 		// Nothing recreates a failed Bundle's Graph, so the step does not come
@@ -877,6 +884,9 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 			}
 			step.Finalizers = []string{promotionstep.FinalizerClosePR}
 			step.DeletionTimestamp = &deleted
+			if tt.fleet {
+				step.Spec.Environment = "prod-eu"
+			}
 			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default", Finalizers: []string{"kubernetes"}}}
 			if tt.nsDeleting {
 				ns.DeletionTimestamp = &deleted
@@ -885,7 +895,14 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 			objs := []client.Object{step, ns, prs}
 			if !tt.noPipeline {
 				pl := makePipeline("nginx-demo")
-				if tt.dropEnv {
+				switch {
+				case tt.fleet:
+					targets := []v1alpha1.FleetTarget{{Name: "eu"}, {Name: "us"}}
+					if tt.dropEnv {
+						targets = targets[1:]
+					}
+					pl.Spec.Environments[1].Fleet = &v1alpha1.FleetSpec{Targets: targets}
+				case tt.dropEnv:
 					pl.Spec.Environments = pl.Spec.Environments[:1]
 				}
 				if tt.unsupported {
@@ -1035,7 +1052,7 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 				assert.Equal(t, 1, m.getPRCalled, "the SCM is asked whether the PR is open")
 			}
 			if tt.wantClosed && !tt.keepsBranch {
-				assert.Equal(t, []string{"test/repo:kardinal/37a8eec1/bundle-1/prod"}, m.deleted, "the closed PR's branch is deleted")
+				assert.Equal(t, []string{"test/repo:kardinal/37a8eec1/bundle-1/" + step.Spec.Environment}, m.deleted, "the closed PR's branch is deleted")
 			} else {
 				assert.Empty(t, m.deleted, "the branch is kept")
 			}
