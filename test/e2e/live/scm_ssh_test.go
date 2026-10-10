@@ -324,7 +324,7 @@ func renderedOverSSH(t *testing.T, e *framework.Env) {
 	}
 	assert.Equal(t, []corev1.KeyToPath{{Key: "sshPrivateKey", Path: "sshPrivateKey"}, {Key: "knownHosts", Path: "knownHosts"}}, items,
 		"the render Job mounts the ssh keys only")
-	assert.Equal(t, rr.Status.Result.CommitSHA, headSHA(t, e, "env/test", a.repo), "the render pushed over ssh")
-	assert.Contains(t, e.ReadFile(t, a.repo, "env/test", a.ns+"_deployment-"+fixtures.Workload("test")+".yaml"), "image: "+v2)
+	assert.Equal(t, rr.Status.Result.CommitSHA, headSHA(t, e, a.rendered("test"), a.repo), "the render pushed over ssh")
+	assert.Contains(t, e.ReadFile(t, a.repo, a.rendered("test"), a.ns+"_deployment-"+fixtures.Workload("test")+".yaml"), "image: "+v2)
 	a.running(t, "test", v2, "test runs the release rendered over ssh")
 }

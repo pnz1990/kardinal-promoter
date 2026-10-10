@@ -369,19 +369,22 @@ func (e *Env) ArgoAppSpec(t *testing.T, name string, spec map[string]interface{}
 	e.DeleteOnCleanup(t, app, prune)
 }
 
-// PushTree clones repo's default branch on the test runner, lets change edit
+// PushTree clones repo's branch (repo.Branch) on the test runner, lets change edit
 // the checkout in dir, and commits and pushes the result as a developer
 // would. Use it for content the git server's API cannot write, such as
 // symlinks. It returns the new commit SHA.
 func (e *Env) PushTree(t *testing.T, repo gitserver.Repo, message string, change func(dir string)) string {
 	t.Helper()
-	return e.PushBranch(t, repo, "", message, change)
+	return e.PushBranch(t, repo, repo.Branch, message, change)
 }
 
 // PushBranch is PushTree on branch (the default branch when empty), for
 // example a PR branch someone pushes to by hand.
 func (e *Env) PushBranch(t *testing.T, repo gitserver.Repo, branch, message string, change func(dir string)) string {
 	t.Helper()
+	if e.Git.Kind() == "github" && !strings.HasPrefix(branch, gitserver.BranchPrefix) {
+		t.Fatalf("refusing to push %q to the shared GitHub repo: not under %s", branch, gitserver.BranchPrefix)
+	}
 	remote, token, err := gitserver.PushRemote(e.Git, repo)
 	if err != nil {
 		t.Fatalf("push remote: %v", err)
