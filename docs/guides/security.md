@@ -942,7 +942,9 @@ For every `/api/v1/ui/*` request the controller:
 3. Fails closed. If the review API cannot be reached, the request gets `503`. If the review
    clients cannot be built, the controller does not start.
 4. Caches review results for 30 seconds per token and per action. A revoked token or a
-   removed RoleBinding keeps working through the UI for up to 30 seconds.
+   removed RoleBinding keeps working through the UI until 30 seconds after the last review
+   that started before the revoke returned (a review is bounded by the API request's
+   timeout): a review that started earlier never replaces a later one's result in the cache.
 5. Limits the TokenReviews it sends before sending them: 60 a minute per client address
    and 600 a minute in all, shared by the UI API and the Bundle API. A cached token does not
    count, so only a client sending new tokens (guessing) reaches the limit; it gets `429`
