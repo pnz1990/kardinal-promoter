@@ -146,6 +146,12 @@ func checkMetrics(ctx context.Context, e *framework.Env, o Options) (*Metrics, [
 		}
 		time.Sleep(10 * time.Second)
 	}
+	// The Pods' memory and goroutines end once the work the load left has
+	// drained, plus two scrapes: the last Bundles settling spawn a short
+	// burst of goroutines (the RC soak: 520 -> 1671 for under a minute),
+	// which the window's last sample can land on.
+	memEnd := time.Now().Add(drainScrapes)
+	time.Sleep(drainScrapes)
 	var maxQ []string
 	for k, v := range m.QueueDepthMax {
 		if v >= 10 {
@@ -166,11 +172,11 @@ func checkMetrics(ctx context.Context, e *framework.Env, o Options) (*Metrics, [
 	if o.WarmAt.After(start) {
 		warm = o.WarmAt
 	}
-	m.Pods = podSeries(ctx, e, start, end, warm)
+	m.Pods = podSeries(ctx, e, start, memEnd, warm)
 	if o.RaceBuild && !o.SharedController && warm != start {
 		heapAfterGC(ctx, e, m.Pods, end)
 	}
-	leak.Violations = leaks(m.Pods, start, end, memoryLimitMiB(ctx, e), o.SharedController, o.RaceBuild, warm != start)
+	leak.Violations = leaks(m.Pods, start, memEnd, memoryLimitMiB(ctx, e), o.SharedController, o.RaceBuild, warm != start)
 
 	push := Result{Name: "metrics-push-efficiency"}
 	pushSel := `kardinal_git_operations_total{` + ctrlSel + `,operation="push"}`
@@ -344,6 +350,11 @@ func podSeries(ctx context.Context, e *framework.Env, start, end, warm time.Time
 	sort.Slice(out, func(i, j int) bool { return out[i].From.Before(out[j].From) })
 	return out
 }
+
+// drainScrapes is how long after the work queues drained the memory and
+// goroutine series end: two steps of podSeries' 15s range query (the suite's
+// Prometheus scrapes every 5s).
+const drainScrapes = 30 * time.Second
 
 // warmHeapWindow is how long after the warm baseline the warm heap is the
 // lowest sample of: one sample would land anywhere on the GC sawtooth.
