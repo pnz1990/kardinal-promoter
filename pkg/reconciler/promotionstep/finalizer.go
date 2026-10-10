@@ -26,6 +26,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
@@ -198,6 +199,7 @@ func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, cach
 			"left its PR open: close it by hand if no new PromotionStep uses it", ps.Spec.Environment, closePRDeadline, err)
 		log.Error().Err(err).Str("env", ps.Spec.Environment).Str("prURL", ps.Status.PRURL).
 			Msg("gave up telling whether a deleted PromotionStep comes back; left its PR open and removed its finalizer")
+		observability.PRCleanupFailuresTotal.WithLabelValues(ReasonPRLeftOpen).Inc()
 		kubeevent.Emit(r.Recorder, ps, corev1.EventTypeWarning, ReasonPRLeftOpen, "Delete", note)
 	case back == comebackReusesPR:
 		log.Info().Str("env", ps.Spec.Environment).Str("prURL", ps.Status.PRURL).
@@ -219,11 +221,17 @@ func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, cach
 				ps.Spec.Environment, closePRDeadline, err, closeByHand(err))
 			log.Error().Err(err).Str("env", ps.Spec.Environment).Str("prURL", ps.Status.PRURL).
 				Msg("gave up closing the PR of a deleted PromotionStep; removing its finalizer")
-			kubeevent.Emit(r.Recorder, ps, corev1.EventTypeWarning, "ClosePRFailed", "Delete", note)
+			observability.PRCleanupFailuresTotal.WithLabelValues(ReasonClosePRFailed).Inc()
+			kubeevent.Emit(r.Recorder, ps, corev1.EventTypeWarning, ReasonClosePRFailed, "Delete", note)
 		}
 	}
 	return ctrl.Result{}, r.removePRFinalizer(ctx, ps)
 }
+
+// ReasonClosePRFailed is the Warning Event reason, and the
+// kardinal_pr_cleanup_failures_total reason, for a deleted step whose PR
+// could not be closed before its finalizer was removed.
+const ReasonClosePRFailed = "ClosePRFailed"
 
 // ReasonPRLeftOpen is the Warning Event reason for a deleted step whose PR was
 // left open because the controller could not tell whether the step comes back.

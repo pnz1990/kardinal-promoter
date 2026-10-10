@@ -716,6 +716,7 @@ with `(hold exemption refused: <why>)`.
 An exempt gate has the `status.reason`
 `EXEMPT: rollback <bundle> holds <env> (by <user>: <reason>); without the hold: <the gate's own result>`.
 The flip is a `GateEvaluated` AuditEvent, and the gate gets a `GateExempted` Warning Event, so
-`kardinal explain`, `kardinal audit` and `kubectl get events` all show it.
+`kardinal explain`, `kardinal audit` and `kubectl get events` all show it (the Event is best
+effort; the AuditEvent and `status.reason` are the durable record: [Kubernetes Events](installation.md#kubernetes-events)).
 `kardinal release-hold` ends the exemption, and the gates are evaluated again at once. See
 [Roll back and hold](rollback.md#roll-back-and-hold).
