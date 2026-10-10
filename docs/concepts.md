@@ -395,14 +395,17 @@ This is the standard pattern for large Argo CD deployments because:
 - Argo CD never runs `kustomize build` on every reconciliation cycle (significant performance gain at scale)
 - CODEOWNERS rules can be placed on individual rendered YAML files in the environment branch
 
-**Not implemented yet.** `layout: branch` is accepted by the API, but the `git-clone`
-step fails every promotion that uses it with `layout: branch is not implemented`
-(`kardinal validate` reports it and the Pipeline is `Ready=False`/`NotImplemented`), and
-nothing writes rendered YAML to an environment branch. `renderManifests`, `sourceBranch`
-and `branchPrefix` are not Pipeline fields. Use `layout: directory` (the default).
+Set `layout: branch` on an environment and kardinal renders it: the `render-manifests`
+step runs kustomize build or helm template on the DRY source in `spec.git.branch`, in a
+sandboxed Job of the environment's RenderRun (never in the controller), and commits the
+plain YAML to the rendered branch
+(`env/<name>` by default, `render.branch` to change it) with the DRY commit in the
+commit trailers. `pr-review` PRs show the rendered diff, a change pushed to the rendered
+branch outside kardinal fails the next promotion (`render.onDrift`), and a rollback
+re-renders the DRY commit of the Bundle it restores.
 
-See [Rendered Manifests](rendered-manifests.md) for the planned design, including
-Argo CD configuration and CODEOWNERS integration.
+See [Rendered Manifests](rendered-manifests.md) for the fields, the render Job, limits, Argo CD
+configuration and CODEOWNERS integration.
 
 ## Advanced Patterns
 

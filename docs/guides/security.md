@@ -356,6 +356,38 @@ securityContext:
 
 These defaults comply with the Kubernetes `restricted` pod security standard.
 
+### Render Jobs (layout: branch)
+
+A `layout: branch` environment renders kustomize overlays and Helm charts written by whoever can
+push to the DRY source: untrusted input. kardinal never renders in the controller. Each render is
+a RenderRun Job in the Pipeline's namespace ([Rendered Manifests](../rendered-manifests.md#the-render-job)),
+which also meets the `restricted` standard:
+
+- no Kubernetes credentials: `automountServiceAccountToken: false`, and its ServiceAccount
+  (`kardinal-render`, created by the controller in the namespace) has no token and no role. A
+  render that escaped the renderer still could not call the API server as anyone;
+- git access only through the Pipeline's own git Secret (`spec.git.secretRef`, the `token` key
+  only), which belongs to the tenant; the controller's SCM token is never in the Pod;
+- non-root, read-only root filesystem, no privilege escalation, every capability dropped,
+  `RuntimeDefault` seccomp, no service links;
+- CPU, memory and time limits (`render.resources.limits`, `render.timeout`): a template or overlay
+  that explodes is stopped by the kernel or the Job deadline, not by the controller's memory;
+- no network in the render process but git to the host of `spec.git.url`, through the egress
+  guard: every other HTTP request is refused;
+- recommended (`render.networkPolicy`, opt-in because it needs a CNI that enforces it): egress to
+  DNS and the git host only, so even a process that escaped the renderer reaches no cloud
+  metadata endpoint, no Kubernetes API and no other Service.
+
+The render Job's result (its termination message) is trusted as far as the controller checks it:
+the commit is read back from the remote, and its marker must be a recorded one. Whoever can create
+Pods in the Pipeline's namespace can mount the namespace's git Secret, push to the rendered branch
+and create a Pod that names a render Job as its owner, so that permission is trusted as much as push access to
+the rendered branch: grant it only to the namespace's owners.
+
+Inside the Job the renderer refuses remote references in any kustomization field, symbolic links
+anywhere in the DRY source, overlay diamonds past the object limit, oversized Helm template values
+and nondeterministic Helm functions; see [Determinism and limits](../rendered-manifests.md#determinism-and-limits).
+
 ---
 
 ## Audit Logging

@@ -1,63 +1,53 @@
 # Rendered Manifests Example
 
-> **Not implemented yet.** `layout: branch` is accepted by the API, but the `git-clone`
-> step fails every promotion that uses it (`layout: branch is not implemented`), and
-> nothing writes to `env/<name>` branches. `kardinal validate -f pipeline.yaml` reports it,
-> and the applied Pipeline shows `Ready=False` with reason `NotImplemented`. This example
-> shows the planned design only; applying it does not promote anything. See
-> `docs/rendered-manifests.md`.
+This example promotes with `layout: branch`: kardinal renders each environment's Kustomize
+overlay at promotion time and commits the plain YAML to that environment's branch, which Argo CD
+syncs. See [docs/rendered-manifests.md](../../docs/rendered-manifests.md).
 
-This example shows the planned **rendered manifests** pattern with `layout: branch`.
-
-## Repository Structure
+## Repository structure
 
 ```
-source/           ← DRY source branch (Kustomize base + overlays)
+main              ← DRY source (spec.git.branch)
   base/
     deployment.yaml
     kustomization.yaml
   overlays/
-    dev/
-      kustomization.yaml
-    staging/
-      kustomization.yaml
-    prod/
-      kustomization.yaml
+    dev/kustomization.yaml
+    staging/kustomization.yaml
+    prod/kustomization.yaml
 
-env/dev           ← Rendered: plain YAML for dev (tracked by Argo CD)
-env/staging       ← Rendered: plain YAML for staging
-env/prod          ← Rendered: plain YAML for prod
+env/dev           ← rendered by kardinal: plain YAML, one file per object
+env/staging
+env/prod
 ```
 
-## What Happens During Promotion
-
-With `layout: branch`, the promotion sequence is:
+## What happens during a promotion
 
 ```
-git-clone         → checks out the source branch, creates the env branch
-kustomize-set-image → updates image tag in the overlay kustomization.yaml
-kustomize-build   → renders the overlay to plain YAML
-git-commit        → commits rendered YAML to env/prod branch
-git-push          → pushes the env branch
-open-pr           → PR: env/prod-incoming → env/prod (for pr-review)
-wait-for-merge    → waits for PR merge
-health-check      → verifies Argo CD Application is Healthy+Synced
+git-clone           clones env/<env> (creating it the first time) and the DRY source
+kustomize-set-image sets the Bundle's image in the DRY overlay (never committed)
+render-manifests    renders the overlay in the controller, checks env/<env> for drift
+git-commit          commits to env/<env> with Kardinal-Dry-Commit trailers
+git-push            pushes env/<env> (dev, staging) or kardinal/<bundle>/prod
+open-pr             prod: a PR into env/prod whose diff is the rendered YAML
+wait-for-merge      prod: waits for the merge
+health-check        the Argo CD Application that syncs env/<env>
 ```
 
 ## Usage
 
 ```bash
+kubectl apply -f examples/rendered-manifests/application.yaml   # one Application per env branch
 kubectl apply -f examples/rendered-manifests/pipeline.yaml
 
 kardinal create bundle rendered-demo --image ghcr.io/myorg/app:v2.0.0
-
 kardinal get steps rendered-demo
-# The dev step fails: layout: branch is not implemented
 ```
 
 ## Benefits
 
-- PR reviewers see **rendered YAML diffs** — not Kustomize template changes
-- Argo CD syncs from `env/<name>` branch — no template expansion at sync time
-- `CODEOWNERS` can enforce review on rendered output
-- Source branch is never modified by promotions — only `env/*` branches change
+- PR reviewers see **rendered YAML diffs**, not Kustomize template changes
+- Argo CD applies plain YAML (directory source) instead of running kustomize on every reconcile
+- CODEOWNERS can name individual rendered files on `env/prod`
+- `git log env/prod` is the history of what ran in production, with the DRY commit of each render
+- A rollback re-renders the DRY commit of the release it restores

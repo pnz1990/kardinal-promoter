@@ -34,6 +34,8 @@ const (
 	retiredMessageMax = 512
 	// retiredPRURLMax is the CRD's maxLength of RetiredStep.prURL.
 	retiredPRURLMax = 2048
+	// markerDigestLen is the length of a render marker digest (hex sha256).
+	markerDigestLen = 64
 )
 
 // Retired reports whether b's Graph was retired: status.retiredAt is set.
@@ -60,6 +62,10 @@ func RetiredStepOf(s *v1alpha1.PromotionStep) v1alpha1.RetiredStep {
 		r.PRURL = s.Status.Outputs["prURL"]
 	}
 	r.PRURL = truncateUTF8(r.PRURL, retiredPRURLMax)
+	if d := s.Status.Outputs["markerDigest"]; len(d) == markerDigestLen {
+		r.MarkerDigest = d
+	}
+	r.RenderRequested = s.Status.Outputs["renderRequested"] == "true"
 	if t, ok := VerifiedTime(s); ok {
 		at := metav1.NewTime(t)
 		r.VerifiedAt = &at

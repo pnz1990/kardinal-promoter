@@ -329,6 +329,19 @@ type RetiredStep struct {
 	// once its change merged and the health check started.
 	// +optional
 	HealthCheckExpiry *metav1.Time `json:"healthCheckExpiry,omitempty"`
+
+	// MarkerDigest is the marker digest of the step's render (layout:
+	// branch): status.outputs.markerDigest. Later renders of the
+	// environment accept it as kardinal's after the RenderRun that wrote it
+	// was deleted with the Graph.
+	// +optional
+	// +kubebuilder:validation:MaxLength=64
+	MarkerDigest string `json:"markerDigest,omitempty"`
+
+	// RenderRequested is true when the step asked for its render (layout:
+	// branch): a Failed step that did may have lost a render that pushed.
+	// +optional
+	RenderRequested bool `json:"renderRequested,omitempty"`
 }
 
 // BundleMetrics holds deployment efficiency metrics for a single Bundle (K-05).

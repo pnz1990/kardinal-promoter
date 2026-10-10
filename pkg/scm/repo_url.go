@@ -328,6 +328,19 @@ func ParseWebhookRequest(p SCMProvider, payload []byte, h http.Header) (WebhookE
 	return p.ParseWebhookEvent(payload, signature)
 }
 
+// SameRepoURL reports whether repository URLs a and b name the same
+// repository: the same origin (SameOrigin) and the same owner/name path,
+// ignoring a ".git" suffix and letter case of the path. SameRepo compares
+// repository names (owner/name) for a provider.
+func SameRepoURL(a, b string) bool {
+	if !SameOrigin(a, b) {
+		return false
+	}
+	ra, errA := RepoFromURL(a)
+	rb, errB := RepoFromURL(b)
+	return errA == nil && errB == nil && strings.EqualFold(ra, rb)
+}
+
 // canonicalOf is p's canonical form of repo: its CanonicalRepo when it has
 // one, the repository in lower case otherwise (the SameRepo comparison).
 func canonicalOf(p SCMProvider, repo string) string {

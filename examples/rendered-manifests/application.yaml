@@ -1,0 +1,56 @@
+# One Argo CD Application per rendered branch (env/dev, env/staging, env/prod),
+# each syncing the plain YAML at the branch root. The names match
+# health.argocd.name in pipeline.yaml.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rendered-demo-dev
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/myorg/gitops-repo
+    targetRevision: env/dev
+    path: .
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: rendered-demo-dev
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=true]
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rendered-demo-staging
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/myorg/gitops-repo
+    targetRevision: env/staging
+    path: .
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: rendered-demo-staging
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=true]
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rendered-demo-prod
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/myorg/gitops-repo
+    targetRevision: env/prod
+    path: .
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: rendered-demo-prod
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=true]

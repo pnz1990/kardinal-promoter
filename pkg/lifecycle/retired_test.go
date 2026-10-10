@@ -156,3 +156,25 @@ func TestRetiredStep_PRURLCut(t *testing.T) {
 	s.Status.PRURL = "https://git.example/" + strings.Repeat("p", 3000)
 	assert.Len(t, lifecycle.RetiredStepOf(s).PRURL, 2048)
 }
+
+// TestRetiredStep_MarkerDigest: a retired step keeps the marker digest of
+// its render (status.outputs.markerDigest), so later renders of the
+// environment still know it once its RenderRun is gone; a value that is not
+// a sha256 digest is dropped, as the CRD allows 64 characters.
+func TestRetiredStep_MarkerDigest(t *testing.T) {
+	for _, tc := range []struct {
+		name, out, want string
+	}{
+		{name: "digest", out: strings.Repeat("a", 64), want: strings.Repeat("a", 64)},
+		{name: "none"},
+		{name: "not a digest", out: strings.Repeat("a", 65)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := step("v1", "app", "prod", "Verified", 1)
+			s.Status.Outputs = map[string]string{"markerDigest": tc.out, "renderRequested": "true"}
+			r := lifecycle.RetiredStepOf(s)
+			assert.Equal(t, tc.want, r.MarkerDigest)
+			assert.True(t, r.RenderRequested)
+		})
+	}
+}

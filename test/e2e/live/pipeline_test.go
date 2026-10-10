@@ -124,10 +124,10 @@ func TestPipeline_ValidationFailed(t *testing.T) {
 }
 
 // TestPipeline_NotImplemented checks the fields the controller accepts but
-// does not implement. Each Pipeline sets one of git.layout branch, shard,
-// health.cluster and two regions. Each gets Ready=False NotImplemented with
-// the documented message, and its Bundle fails with it: the step for layout,
-// shard and health.cluster, the Graph build (InvalidSpec) for regions.
+// does not implement. Each Pipeline sets one of shard, health.cluster and
+// two regions. Each gets Ready=False NotImplemented with the documented
+// message, and its Bundle fails with it: the step for shard and
+// health.cluster, the Graph build (InvalidSpec) for regions.
 // Nothing is committed. A health.resource.kind other than Deployment fails
 // the same way, before any git change: docs/pipeline-reference.md said it
 // failed the step after the change merged, during the health check.
@@ -153,12 +153,6 @@ func TestPipeline_NotImplemented(t *testing.T) {
 		// or bundle the Bundle's InvalidSpec message when no step runs.
 		ready, step, bundle string
 	}{{
-		name: "layout",
-		set:  func(p *v1alpha1.Pipeline, _ *v1alpha1.EnvironmentSpec) { p.Spec.Git.Layout = "branch" },
-		ready: "spec.git.layout: branch is not implemented: kardinal does not write rendered manifests to an " +
-			"env/<name> branch yet",
-		step: "layout: branch is not implemented: kardinal does not write rendered manifests to an env/<name> branch yet",
-	}, {
 		name: "shard",
 		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
 			env.Shard = "eu" //nolint:staticcheck // SA1019: set to check it is refused
