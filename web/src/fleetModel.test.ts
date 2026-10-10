@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0
 
 import { describe, expect, it } from 'vitest'
-import { ageOf, depthGroups, fleetRow } from './fleetModel'
+import { ageOf, depthGroups, fleetRow, terminalEnvironments, wavePlate, type Station } from './fleetModel'
 import type { Pipeline } from './types'
 
 const base = (over: Partial<Pipeline>): Pipeline => ({ name: 'app', namespace: 'ns', phase: 'Ready', environmentCount: 3, ...over })
@@ -114,4 +114,44 @@ describe('ageOf', () => {
     ['2026-10-01T02:00:00Z', '10h'], ['2026-09-28T12:00:00Z', '3d'],
   ]
   for (const [iso, want] of cases) it(`${iso} → ${want}`, () => expect(ageOf(iso, now)).toBe(want))
+})
+
+describe('terminalEnvironments', () => {
+  const wave = [{ name: 'w000' }, ...Array.from({ length: 4 }, (_, i) => ({ name: `w00${i + 1}`, upstreams: ['w000'] }))]
+  const cases: { name: string; topo: Parameters<typeof terminalEnvironments>[0]; want: string[] }[] = [
+    { name: 'linear: the last one', topo: linear, want: ['prod'] },
+    { name: 'a last wave: all of it, in spec order', topo: wave, want: ['w001', 'w002', 'w003', 'w004'] },
+    { name: 'fan-in: the join', topo: [{ name: 'test' }, { name: 'eu', upstreams: ['test'] }, { name: 'us', upstreams: ['test'] }, { name: 'global', upstreams: ['eu', 'us'] }], want: ['global'] },
+    { name: 'a side branch ends too', topo: [{ name: 'test' }, { name: 'perf', upstreams: ['test'] }, { name: 'prod', upstreams: ['test'] }], want: ['perf', 'prod'] },
+    { name: 'no upstreams sent: the previous entry', topo: [{ name: 'test' }, { name: 'uat' }, { name: 'prod' }], want: ['prod'] },
+    { name: 'no topology', topo: undefined, want: [] },
+  ]
+  for (const c of cases) it(c.name, () => expect(terminalEnvironments(c.topo)).toEqual(c.want))
+
+  // #1580 QA: a Pipeline whose every environment is in wave 1 has only roots,
+  // so no entry has upstreams. With topologyResolved that is the answer; an
+  // older controller sends no flag and the spec order is the fallback.
+  const allWave1 = [{ name: 'eu' }, { name: 'us' }, { name: 'ap' }]
+  it('all roots when the controller resolved the ordering', () => {
+    expect(terminalEnvironments(allWave1, true)).toEqual(['eu', 'us', 'ap'])
+    expect(depthGroups(base({ environmentTopology: allWave1, topologyResolved: true }))).toEqual([['eu', 'us', 'ap']])
+  })
+  it('the previous entry without the flag', () => {
+    expect(terminalEnvironments(allWave1)).toEqual(['ap'])
+    expect(depthGroups(base({ environmentTopology: allWave1 }))).toEqual([['eu'], ['us'], ['ap']])
+  })
+})
+
+describe('wavePlate', () => {
+  const st = (env: string, state: Station['state'], version = '2.0.0'): Station => ({ env, version, bundle: version ? 'b' : '', state })
+  it('names the range, the common version and the states, most urgent first', () => {
+    const w = wavePlate([st('w001', 'settled'), st('w002', 'arriving', '1.0.0'), st('w003', 'settled'), st('w004', 'failed'), st('w005', 'empty', '')])
+    expect(w).toEqual({
+      first: 'w001', last: 'w005', size: 5, state: 'failed', version: '2.0.0', otherVersions: 1,
+      counts: [{ state: 'failed', count: 1 }, { state: 'arriving', count: 1 }, { state: 'settled', count: 2 }, { state: 'empty', count: 1 }],
+    })
+  })
+  it('has no version when nothing is deployed', () => {
+    expect(wavePlate([st('a', 'empty', ''), st('b', 'empty', '')])).toMatchObject({ version: '', otherVersions: 0, state: 'empty' })
+  })
 })

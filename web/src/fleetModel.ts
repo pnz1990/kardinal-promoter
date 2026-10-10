@@ -5,7 +5,7 @@
 // out as stations in promotion order, what each runs, and where the active
 // Bundle is on its way. Pure functions; FleetBoard draws the result.
 
-import type { Pipeline } from './types'
+import type { EnvironmentNode, Pipeline } from './types'
 
 /** Where the active Bundle is relative to one environment. */
 export type StationState =
@@ -49,10 +49,38 @@ const ARRIVING = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking'])
 const FAILED = new Set(['Failed', 'AbortedByAlarm', 'RollingBack'])
 
 /**
+ * The upstream environments of each environment of a topology. Edges are the
+ * controller-resolved upstreams when the API says the ordering is resolved
+ * (Pipeline.topologyResolved; then an entry without upstreams is a root, as
+ * in a Pipeline whose every environment is in wave 1). Without the flag (an
+ * older controller, or an invalid ordering), upstreams when any entry has
+ * them, else dependsOn, else the previous entry.
+ */
+export function environmentUpstreams(topo: EnvironmentNode[], topologyResolved?: boolean): Map<string, string[]> {
+  const resolved = topologyResolved || topo.some(e => (e.upstreams ?? []).length > 0)
+  return new Map<string, string[]>(topo.map((e, i) => {
+    if (resolved) return [e.name, e.upstreams ?? []]
+    if (e.dependsOn && e.dependsOn.length > 0) return [e.name, e.dependsOn]
+    return [e.name, i > 0 ? [topo[i - 1].name] : []]
+  }))
+}
+
+/**
+ * The environments a release ends in: those no other environment waits for,
+ * in spec order. For test, uat, prod that is prod; for a last wave of 149
+ * environments it is all 149. Empty without a topology.
+ */
+export function terminalEnvironments(topo: EnvironmentNode[] | undefined, topologyResolved?: boolean): string[] {
+  if (!topo || topo.length === 0) return []
+  const ups = environmentUpstreams(topo, topologyResolved)
+  const waitedFor = new Set<string>()
+  for (const list of ups.values()) for (const up of list) waitedFor.add(up)
+  return topo.map(e => e.name).filter(name => !waitedFor.has(name))
+}
+
+/**
  * Environments of a Pipeline grouped by depth (longest path from a root), in
- * spec order. Edges are the controller-resolved upstreams; when the API sends
- * none (an older controller, or an invalid ordering), dependsOn, else the
- * previous entry, as the DAG view does.
+ * spec order, with the upstreams of environmentUpstreams.
  */
 export function depthGroups(p: Pipeline): string[][] {
   const topo = p.environmentTopology
@@ -60,29 +88,32 @@ export function depthGroups(p: Pipeline): string[][] {
     const envs = Object.keys(p.environmentStates ?? {})
     return envs.length ? [envs] : []
   }
-  const resolved = topo.some(e => (e.upstreams ?? []).length > 0)
-  const ups = new Map<string, string[]>(topo.map((e, i) => {
-    if (resolved) return [e.name, e.upstreams ?? []]
-    if (e.dependsOn && e.dependsOn.length > 0) return [e.name, e.dependsOn]
-    return [e.name, i > 0 ? [topo[i - 1].name] : []]
-  }))
+  return groupByDepth(topo.map(e => e.name), environmentUpstreams(topo, p.topologyResolved))
+}
+
+/**
+ * groupByDepth groups names by their longest path from a root, keeping the
+ * order of names inside each group. Upstreams not in names are ignored.
+ */
+export function groupByDepth(names: string[], ups: Map<string, string[]>): string[][] {
+  const known = new Set(names)
   const depth = new Map<string, number>()
   const visit = (name: string, seen: Set<string>): number => {
-    const known = depth.get(name)
-    if (known !== undefined) return known
+    const d0 = depth.get(name)
+    if (d0 !== undefined) return d0
     if (seen.has(name)) return 0 // a cycle: the controller refuses it; do not loop
     seen.add(name)
     let d = 0
     for (const up of ups.get(name) ?? []) {
-      if (ups.has(up)) d = Math.max(d, visit(up, seen) + 1)
+      if (known.has(up)) d = Math.max(d, visit(up, seen) + 1)
     }
     depth.set(name, d)
     return d
   }
   const groups: string[][] = []
-  for (const e of topo) {
-    const d = visit(e.name, new Set())
-    ;(groups[d] ??= []).push(e.name)
+  for (const name of names) {
+    const d = visit(name, new Set())
+    ;(groups[d] ??= []).push(name)
   }
   return groups.filter(g => g && g.length > 0)
 }
@@ -143,4 +174,48 @@ export function ageOf(iso: string | undefined, now: number = Date.now()): string
   const h = Math.floor(min / 60)
   if (h < 48) return `${h}h`
   return `${Math.floor(h / 24)}d`
+}
+
+/** This many stations or more at one depth are drawn as one wave plate (and one lane card). */
+export const WAVE_PLATE_MIN = 5
+
+/** One plate for a wave of stations at the same depth. */
+export interface WavePlate {
+  /** First and last environment, in spec order. */
+  first: string
+  last: string
+  size: number
+  /** The state that needs attention first: failed, held, arriving, ahead, settled, empty. */
+  state: StationState
+  /** The version most of the wave runs, '' when none runs one. */
+  version: string
+  /** Stations that run another version than `version`. */
+  otherVersions: number
+  /** How many stations are in each state, most urgent first. */
+  counts: Array<{ state: StationState; count: number }>
+}
+
+const PLATE_ORDER: StationState[] = ['failed', 'held', 'arriving', 'ahead', 'settled', 'empty']
+
+/** The plate of a wave of stations (at least one). */
+export function wavePlate(stations: Station[]): WavePlate {
+  const byState = new Map<StationState, number>()
+  const versions = new Map<string, number>()
+  for (const s of stations) {
+    byState.set(s.state, (byState.get(s.state) ?? 0) + 1)
+    if (s.version) versions.set(s.version, (versions.get(s.version) ?? 0) + 1)
+  }
+  let version = ''
+  let most = 0
+  for (const [v, n] of versions) if (n > most) { version = v; most = n }
+  const counts = PLATE_ORDER.filter(st => byState.has(st)).map(st => ({ state: st, count: byState.get(st)! }))
+  return {
+    first: stations[0].env,
+    last: stations[stations.length - 1].env,
+    size: stations.length,
+    state: counts[0].state,
+    version,
+    otherVersions: stations.length - most - stations.filter(s => !s.version).length,
+    counts,
+  }
 }

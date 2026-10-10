@@ -90,6 +90,7 @@ The controller registers these on the same `/metrics` endpoint
 | `kardinal_gate_blocking_duration_seconds` | Histogram | — | How long a PolicyGate was blocked before it allowed |
 | `kardinal_promotionstep_age_seconds` | Histogram | — | PromotionStep age when it reaches a terminal state |
 | `kardinal_auditevents_pruned_total` | Counter | — | AuditEvents deleted by retention (`audit.retention`) |
+| `kardinal_notifications_dropped_total` | Counter | `hook_namespace`, `hook`, `reason` (`template`, `attempts`) | Events a NotificationHook gave up on without delivering: the body could not be rendered for the event, or the last of 10 delivery attempts failed. Each also emits a `Warning` Event on the hook ([Templated body](../notifications.md#templated-body)) |
 
 ### SCM API and git metrics
 
