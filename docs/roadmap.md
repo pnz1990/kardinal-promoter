@@ -157,7 +157,9 @@ Not in the UI: overriding a gate (use `kardinal override`), the bake countdown, 
 
 Everything under `[Unreleased]` in the [changelog](changelog.md) ships in v0.10.0, among it
 `scm.allowedRepositories` (#1332), approval gates with `kardinal approve` (#1309, #1449), and
-verified override identity with a `GateOverridden` AuditEvent (#1286, #1450).
+verified override identity with a `GateOverridden` AuditEvent (#1286, #1450), per-environment
+PR controls (#1453), GitHub App and SSH git authentication (#1460), and the Bitbucket Data
+Center provider (#1501).
 
 ## Planned
 

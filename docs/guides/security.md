@@ -106,15 +106,15 @@ The controller polls this Secret every 30 seconds and reloads the token when it 
 restart is needed. It logs `SCM credentials rotated` when it loads the new token. Wait for that
 line before you revoke the old token.
 
-### Using OIDC instead of a PAT
+### Using a GitHub App instead of a PAT
 
-The controller has no OIDC or GitHub App token exchange, and the chart has no
-`github.auth` value. The controller only reads a token from the Secret in
-`github.secretRef`. It polls that Secret every 30 seconds and reloads the token without a
-restart. So a short-lived GitHub App installation token works if something outside kardinal
-refreshes the Secret before the token expires. The GitHub App needs `Pull requests: Read and write`
-and `Contents: Read and write`. That refresher can be an External Secrets generator or a
-CronJob.
+The controller can authenticate as a GitHub App installation (`github.app.enabled`): it mints
+an installation token from the App's private key, caches it, and replaces it before it
+expires, so no long-lived PAT is stored. See [GitHub App](../scm-providers.md#github-app).
+The App needs `Contents: Read and write`, `Pull requests: Read and write` and `Metadata:
+Read-only`. There is no OIDC token exchange; another short-lived token works if something
+outside kardinal (an External Secrets generator, a CronJob) refreshes the Secret in
+`github.secretRef` before it expires: the controller reloads it within 30 seconds.
 
 ---
 
