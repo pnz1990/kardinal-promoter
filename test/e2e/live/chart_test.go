@@ -33,6 +33,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -908,8 +909,10 @@ func TestChart_Ports(t *testing.T) {
 // TestChart_WatchNamespace runs two namespace-scoped installs side by side,
 // as the security guide's two-team example does: each promotes its own
 // namespace through a Role, neither may touch the other's, and a namespace
-// with no install is left alone. The only cluster-wide grants are ChangeWindows
-// and get on the install's own Namespace object.
+// with no install is left alone. The cluster-wide grants are on
+// cluster-scoped kinds only (such as ChangeWindows, ClusterScmProviders and
+// Argo Rollouts' ClusterAnalysisTemplates), and get on the install's own
+// Namespace object.
 //
 // Covers CHART-WATCHNS-01.
 func TestChart_WatchNamespace(t *testing.T) {
@@ -942,14 +945,14 @@ func TestChart_WatchNamespace(t *testing.T) {
 		require.NoError(t, err)
 		for _, rule := range cs.Rules {
 			for _, res := range rule.Resources {
-				// Cluster-scoped: ChangeWindows, ClusterScmProviders (#1517),
-				// Namespaces, Argo Rollouts' ClusterAnalysisTemplates (#1502)
-				// and the gate-overrides admission policy the reconciler
-				// reads (#1503).
-				assert.Contains(t, []string{"changewindows", "changewindows/status", "clusterscmproviders",
-					"clusterscmproviders/status", "namespaces", "clusteranalysistemplates",
-					"validatingadmissionpolicies", "validatingadmissionpolicybindings"}, res,
-					"the ClusterRole holds only cluster-scoped kinds")
+				// Every resource here is cluster-scoped, as the API server
+				// reports it: the list grows with each cluster-scoped kind
+				// kardinal reads (ClusterScmProvider #1517,
+				// ClusterAnalysisTemplate #1502), so it is not spelled out.
+				for _, g := range rule.APIGroups {
+					assert.True(t, servedClusterScoped(t, e, g, strings.SplitN(res, "/", 2)[0]),
+						"the ClusterRole holds only cluster-scoped kinds: %s.%s is namespaced", res, g)
+				}
 				if res == "namespaces" {
 					assert.Equal(t, []string{"get"}, rule.Verbs, "namespaces: get only")
 					assert.Equal(t, []string{x.a.ns}, rule.ResourceNames, "namespaces: only the watched one")
@@ -2697,3 +2700,31 @@ func TestChart_ShutdownDrain(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, base, now, "the restarted step pushed")
 }
+
+// servedClusterScoped reports whether the API server serves resource of
+// group as cluster-scoped. A resource it does not serve (a CRD this suite
+// does not install) is cluster-scoped only when knownClusterScoped says so.
+func servedClusterScoped(t *testing.T, e *framework.Env, group, resource string) bool {
+	t.Helper()
+	lists, err := e.Kube.Discovery().ServerPreferredResources()
+	if err != nil && len(lists) == 0 {
+		require.NoError(t, err)
+	}
+	for _, l := range lists {
+		gv, err := schema.ParseGroupVersion(l.GroupVersion)
+		if err != nil || gv.Group != group {
+			continue
+		}
+		for _, r := range l.APIResources {
+			if r.Name == resource {
+				return !r.Namespaced
+			}
+		}
+	}
+	t.Logf("%s.%s is not served in this cluster; checked against the chart's intent only", resource, group)
+	return knownClusterScoped[group+"/"+resource]
+}
+
+// knownClusterScoped are cluster-scoped kinds whose CRDs a suite may not
+// install (Argo Rollouts' in the chart suite).
+var knownClusterScoped = map[string]bool{"argoproj.io/clusteranalysistemplates": true}

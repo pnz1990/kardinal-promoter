@@ -363,9 +363,12 @@ spec:
           - {{ . }}
           - {{ . }}/status
           {{- end }}
-      # A HookRun records that a hook ran: deleting one would let the Graph
-      # recreate it and run the hook again, so only kardinal deletes them
-      # (with the garbage collector and the namespace controller).
+      # A HookRun records that a hook ran: only kardinal deletes them (with
+      # the garbage collector and the namespace controller). The step's
+      # status.hookRecords keeps a recreated HookRun from running its hook
+      # again, but deleting the step too (allowed: it is the documented
+      # retry) would drop that record, and the Graph's new HookRun would run
+      # the hook a second time.
       - apiGroups: ["kardinal.io"]
         apiVersions: ["*"]
         operations: ["DELETE"]
@@ -438,12 +441,20 @@ spec:
           (has(object.metadata.annotations) && k in object.metadata.annotations))
   validations:
     - expression: >-
+        request.operation == 'DELETE' ||
         variables.foreignRun || variables.userMetricCheck || variables.graph || variables.controller ||
         (variables.cleanup && oldObject != null) || variables.recheckOnly
       message: >-
         only kardinal (the promotion Graph or the controller) creates or changes this object, its
         status included: it decides a promotion. Delete it and the promotion Graph recreates it;
         the kardinal.io/force-recheck annotation is the one change open to you
+      reason: Forbidden
+    # DELETE is matched for HookRuns only (resourceRules above).
+    - expression: >-
+        request.operation != 'DELETE' || variables.graph || variables.controller || variables.cleanup
+      message: >-
+        HookRuns record that a hook ran; only kardinal deletes them (with the garbage collector and
+        the namespace controller). Promote a new Bundle to run the hook again
       reason: Forbidden
     # As for gate instances: kro adopts an existing object of the name it
     # applies, so no one may turn an existing MetricCheck into a
