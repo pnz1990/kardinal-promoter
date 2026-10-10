@@ -43,6 +43,7 @@ type PolicyGateSpec struct {
 	// in its kardinal.io/applies-to label.
 	//
 	// Deprecated: remove the field; use the kardinal.io/applies-to label.
+	// It is removed in v0.11.
 	// +kubebuilder:validation:XValidation:rule="false",message="spec.selector is not implemented; use the kardinal.io/applies-to label"
 	// +optional
 	Selector *metav1.LabelSelector `json:"selector,omitempty"`
@@ -56,6 +57,7 @@ type PolicyGateSpec struct {
 	// Deprecated: remove this field. Every gate is re-checked before its
 	// PromotionStep starts, whatever the value; pre-deploy and post-deploy
 	// behave the same.
+	// It is removed in v0.11.
 	// +kubebuilder:validation:Enum=pre-deploy;post-deploy
 	// +kubebuilder:default=post-deploy
 	// +optional

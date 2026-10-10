@@ -325,7 +325,8 @@ kardinal policy simulate                  # gate simulation with result
 
 ## Journey 6: Rendered Manifests — Pre-Rendered GitOps
 
-Not implemented yet (#1271).
+Implemented in v0.10.0 (#1515): the render runs in a sandboxed RenderRun Job, never in the
+controller (docs/rendered-manifests.md).
 
 **Source**: `docs/rendered-manifests.md`, `examples/rendered-manifests/`
 
@@ -350,10 +351,10 @@ CPU load, enables CODEOWNERS on rendered output, surfaces hidden config changes 
 # 2. Apply the Pipeline with branch layout
 kubectl apply -f examples/rendered-manifests/pipeline.yaml
 
-# There is no steps field. An environment with layout: branch runs the default sequence:
-# git-clone, kustomize-set-image, kustomize-build, git-commit, git-push, then open-pr and
-# wait-for-merge for pr-review, then health-check (pkg/steps/defaults.go).
-# Today git-clone fails it, because layout: branch is not implemented (#1271).
+# There is no steps field. An environment with layout: branch runs the render step: the
+# RenderRun Job clones the DRY source, sets the image, renders (kustomize build or helm
+# template) and pushes the rendered branch (or, for pr-review, a promotion branch the step
+# opens a PR from), then health-check (pkg/steps/defaults.go).
 
 # 3. Create a Bundle
 kardinal create bundle rendered-demo \
@@ -372,7 +373,7 @@ kardinal get pipelines
 
 ### Pass criteria
 
-- [ ] `layout: branch` renders manifests with `kustomize-build` and commits them to the env branch
+- [ ] `layout: branch` renders manifests in the RenderRun Job and commits them to the env branch
 - [ ] PR diff shows rendered YAML, not template source
 - [ ] Argo CD Application tracking `env/prod` branch reflects the merged content
 - [ ] `kardinal explain` shows the branch each environment tracks
@@ -467,7 +468,7 @@ the tests pass does not count either.
 | 3: Policy governance | live, partial | 2026-10-02 | GATE-ORG-01, GATE-TEAM-01, GATE-SOAK-01, GATE-RECHECK-01, CLI-POLICY-LIST-01 and CLI-POLICY-SIMULATE-01 passed in [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174). No live test covers pass criterion 7 (RBAC on `platform-policies`). |
 | 4: Rollback | live, partial | 2026-10-02 | RB-PREV-01, RB-TO-01, RB-PR-01, RB-HISTORY-01, CLI-ROLLBACK-01 and CLI-HISTORY-01 passed in [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174). |
 | 5: CLI workflow | live, partial | 2026-10-02 | All 35 live CLI-* rows passed in [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174). The two deprecated rows also passed: `approve` fails and points to `kardinal override`, and `rollback --emergency` has no effect. |
-| 6: Rendered manifests | not implemented in v0.9.0 | 2026-10-02 | `layout: branch` is not implemented (#1271, open), planned for v0.10.0. PIPE-NOTIMPL-01 only checks that the Pipeline reports NotImplemented. This journey cannot pass yet. |
+| 6: Rendered manifests | live, partial | 2026-10-10 | `layout: branch` shipped in #1515. The live core rows REND-KUST-01, REND-PR-01, REND-ROLLBACK-01, REND-DRIFT-01, REND-HELM-01, REND-SANDBOX-01, REND-CONFLICT-01 and REND-SSH-01 cover rendering, PRs into the rendered branch, rollback, drift and the sandbox. No live test runs `examples/rendered-manifests/` itself (`TestJourney6` checks it against a fake client), and pass criteria 3 (Argo CD syncing `env/prod`), 4 (`explain` shows the branch) and 6 (supersession during a render) have no live row. |
 | 7: Multi-tenant self-service | live, partial | 2026-10-02 | `TestHealth_MultiTenantExample` (EX-TENANT-01) passed in [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174). It covers one Pipeline per team from the ApplicationSet, and each team promoting. It does not cover RBAC isolation, the org weekend gate on a new team, or cascade delete. |
 
 The v0.9.0 evidence is e2e-live [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174) on 956bb4ed, the commit tagged v0.9.0: 16 of 17 jobs

@@ -331,6 +331,7 @@ spec:
 
                   Deprecated: declare one environment per region (prod-us, prod-eu) and
                   use wave.
+                  It is removed in v0.11.
                 type: string
               requiredGates:
                 description: |-

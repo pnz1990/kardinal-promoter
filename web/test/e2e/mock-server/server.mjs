@@ -14,6 +14,8 @@
 //   GET  /api/v1/ui/bundles/:name/graph               → graph fixture
 //   GET  /api/v1/ui/bundles/:name/steps               → steps fixture
 //   GET  /api/v1/ui/gates                             → gate instances + one template
+//   GET  /api/v1/ui/steps/:ns/:name/events            → [] (no Events)
+//   POST /api/v1/ui/bundles                           → { bundle: "new-bundle", message }
 //   POST /api/v1/ui/pause                             → { message: "paused" }
 //   POST /api/v1/ui/resume                            → { message: "resumed" }
 //   POST /api/v1/ui/promote                           → { bundle: "new-bundle", message }
@@ -245,10 +247,14 @@ const server = http.createServer(async (req, res) => {
     if (api.length === 3 && api[0] === 'bundles' && api[2] === 'steps') {
       return json(res, STEPS[api[1]] ?? [])
     }
+    if (api.length === 4 && api[0] === 'steps' && api[3] === 'events') {
+      return json(res, [])
+    }
   }
   if (api && method === 'POST' && api.length === 1) {
     const body = await readBody(req)
     switch (api[0]) {
+      case 'bundles': return json(res, { bundle: 'new-bundle', message: 'bundle created' })
       case 'pause': return json(res, { message: 'paused' })
       case 'resume': return json(res, { message: 'resumed' })
       case 'promote': return json(res, { bundle: 'new-bundle', message: 'promotion started' })

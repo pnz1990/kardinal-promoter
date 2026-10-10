@@ -93,6 +93,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Deprecated
 
+- **Removed in v0.11** — v0.10.0 still accepts, and ignores or refuses as before, every deprecated field and value: Pipeline `spec.policyGates`, `spec.git.provider`, `spec.environments[].shard`, `steps`, `promotionTemplate`, `regions` and `health.cluster`; PolicyGate `spec.selector` and `spec.when`; PromotionStep `spec.region`; `NotificationHook.spec.webhook.authorizationHeader`; the chart values `rbac.integrationTestJobs` and `validatingAdmissionPolicy.enabled`; and `kardinal rollback --emergency`. v0.11 removes them: drop them from your manifests, values and scripts now
 - **An unlabeled Pipeline git Secret** — a Secret named by `spec.git.secretRef` should carry `kardinal.io/referenceable: "true"`, like every Secret a custom resource references: its token goes to the Pipeline's `git.url`, which the Pipeline's author chooses. In v0.10.0 an unlabeled Secret still works and the Pipeline gets the warning condition `SecretReferenceable=False` (reason `SecretNotReferenceable`); v0.11 will refuse it (#1506). Label your git Secrets: `kubectl label secret <name> kardinal.io/referenceable=true`
 - `NotificationHook.spec.webhook.authorizationHeader` — it is stored in plain text in the spec. It still works and sets the condition `PlaintextCredential=True`; move the value to a Secret and use `spec.webhook.secretRef`
 

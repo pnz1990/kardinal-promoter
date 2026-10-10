@@ -92,6 +92,7 @@ type NotificationWebhookConfig struct {
 	// and sent as is: anyone who can read this NotificationHook can read it.
 	// A hook that sets it still delivers, and has the condition
 	// PlaintextCredential=True.
+	// It is removed in v0.11.
 	// +optional
 	AuthorizationHeader string `json:"authorizationHeader,omitempty"`
 
