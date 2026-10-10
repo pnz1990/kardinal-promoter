@@ -170,6 +170,12 @@ metricsBindAddress: ":8080"
 # -- Address the health probe endpoint binds to
 healthProbeBindAddress: ":8081"
 
+# -- Address that serves Go pprof profiles under /debug/pprof/ (`--pprof-address`).
+# Empty (the default) serves none. An address without a host, such as ":6060",
+# binds to 127.0.0.1: reach it with `kubectl port-forward`. The profiles show heap
+# contents, so no Service or container port exposes it.
+pprofAddress: ""
+
 # Service <fullname> and the matching container ports.
 service:
   # -- Metrics port (Prometheus)

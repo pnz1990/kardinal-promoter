@@ -103,6 +103,7 @@ func main() {
 		zerologLevel           string
 		metricsBindAddress     string
 		healthProbeBindAddress string
+		pprofAddress           string
 		webhookBindAddress     string
 		policyNamespaces       string
 		githubToken            string
@@ -181,6 +182,8 @@ func main() {
 		"The address the metric endpoint binds to.")
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081",
 		"The address the probe endpoint binds to.")
+	flag.StringVar(&pprofAddress, "pprof-address", "",
+		"Address that serves Go's net/http/pprof profiles (heap, goroutine, CPU) under /debug/pprof/. Empty (the default) serves none; an address without a host, such as :6060, binds to 127.0.0.1 only.")
 	flag.StringVar(&webhookBindAddress, "webhook-bind-address", ":8083",
 		"The address the SCM webhook endpoint binds to.")
 	flag.StringVar(&policyNamespaces, "policy-namespaces", "platform-policies",
@@ -537,11 +540,19 @@ func main() {
 		logger.Info().Str("shard", namespaceShard).Msg("sharded: reconciling the namespaces of this shard only")
 	}
 
+	pprofBind, err := pprofBindAddress(pprofAddress)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("invalid --pprof-address")
+	}
+	if pprofBind != "" {
+		logger.Warn().Str("address", pprofBind).Msg("serving pprof profiles: they expose heap contents; keep the address private")
+	}
 	restConfig := ctrl.GetConfigOrDie()
 	mgr, err := ctrl.NewManager(restConfig, buildManagerOptions(managerConfig{
 		restConfig:             restConfig,
 		metricsBindAddress:     metricsBindAddress,
 		healthProbeBindAddress: healthProbeBindAddress,
+		pprofAddress:           pprofBind,
 		leaderElect:            leaderElect,
 		watchNamespace:         watchNamespace,
 		namespaceShard:         namespaceShard,
