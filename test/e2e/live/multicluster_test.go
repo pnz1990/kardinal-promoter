@@ -61,7 +61,7 @@ func notInHub(t *testing.T, e *framework.Env, ns, name string) {
 	require.Truef(t, apierrors.IsNotFound(err), "Deployment %s/%s runs only in the spoke; the hub returned %v", ns, name, err)
 }
 
-// TestMultiCluster_ArgoHub checks the Argo CD hub of docs/distributed-mode.md:
+// TestMultiCluster_ArgoHub checks the Argo CD hub of docs/multi-cluster.md:
 // kardinal and Argo CD run in the hub, the workload in the spoke, and
 // health.type argocd reads the hub Application whose destination is the
 // spoke. A release is Verified once the spoke runs it and the Application
@@ -106,7 +106,7 @@ func TestMultiCluster_ArgoHub(t *testing.T) {
 	e.WaitBundlePhase(t, a.ns, bad, "Failed", time.Minute)
 }
 
-// TestMultiCluster_FluxHub checks the Flux hub of docs/distributed-mode.md: a
+// TestMultiCluster_FluxHub checks the Flux hub of docs/multi-cluster.md: a
 // Kustomization in the hub with spec.kubeConfig.secretRef applies the
 // environment to the spoke, and health.type flux reads it in the hub. With
 // spec.wait its Ready condition covers the spoke's workload: a release is

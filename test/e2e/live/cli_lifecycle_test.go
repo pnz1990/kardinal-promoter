@@ -33,7 +33,7 @@ import (
 // resume.
 
 // emergencyNotice is what the deprecated rollback --emergency prints.
-const emergencyNotice = "Flag --emergency has been deprecated, it has no effect; use kardinal override to pass a blocking gate\n"
+const emergencyNotice = "Flag --emergency has been deprecated, it has no effect and is removed in v0.11; use kardinal override to pass a blocking gate\n"
 
 // refuses runs a kardinal command that must fail: exit 1, want on stderr,
 // nothing on stdout.

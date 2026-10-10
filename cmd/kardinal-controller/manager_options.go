@@ -94,7 +94,7 @@ func leaderElectionConfig(cfg *rest.Config) *rest.Config {
 // RecoverPanic is intentionally left unset: controller-runtime defaults it to
 // true, so a panic in a Reconcile is caught, counted in the ReconcilePanics
 // metric and retried with backoff. Do not set it to false; that brings back
-// crash-loop-on-panic. (spec #920, docs/design/15-production-readiness.md)
+// crash-loop-on-panic (#920).
 //
 // LeaderElectionReleaseOnCancel makes a leader that shuts down release its
 // Lease, so a standby takes over at once instead of after the 15s lease
@@ -156,7 +156,6 @@ func leaderElectionID(shard string) string {
 // buildCacheOpts limits the informer cache to watchNamespace when it is set.
 // This is the mechanism behind namespace-scoped install mode, where the Helm
 // chart renders a Role/RoleBinding instead of a ClusterRole/ClusterRoleBinding.
-// (docs/design/15-production-readiness.md §Lens 6)
 //
 // Jobs are cached only when they carry the kardinal.io/run-job label: the
 // HookRun and RenderRun reconcilers own those (hook and render Jobs), and

@@ -334,7 +334,7 @@ The old `health.cluster` string field is **not supported** and is deprecated. Th
 health.cluster is not supported: to check a workload in another cluster set health.kubeconfigSecretRef to a kubeconfig Secret, or check its Argo CD Application or Flux Kustomization in this cluster (health.type: argocd or flux, see docs/health-adapters.md#remote-clusters)
 ```
 
-Distributed mode (`kardinal-agent`, `shard`) was removed; see [Multi-Cluster](distributed-mode.md).
+Distributed mode (`kardinal-agent`, `shard`) was removed; see [Multi-Cluster](multi-cluster.md).
 
 ## Timings and failures
 

@@ -118,6 +118,7 @@ type PromotionStepSpec struct {
 	//
 	// Deprecated: declare one environment per region (prod-us, prod-eu) and
 	// use wave.
+	// It is removed in v0.11.
 	// +optional
 	Region string `json:"region,omitempty"`
 }

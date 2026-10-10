@@ -34,6 +34,7 @@ type PipelineSpec struct {
 	//
 	// Deprecated: remove the field; label org PolicyGates with
 	// kardinal.io/applies-to instead.
+	// It is removed in v0.11.
 	// +kubebuilder:validation:XValidation:rule="size(self) == 0",message="spec.policyGates is not implemented; remove it (org gates use the kardinal.io/applies-to label)"
 	// +optional
 	PolicyGates []PipelinePolicyGateRef `json:"policyGates,omitempty"`
@@ -122,6 +123,7 @@ type PipelineGit struct {
 	// --scm-provider flag.
 	//
 	// Deprecated: ignored; the controller's --scm-provider flag selects the provider.
+	// It is removed in v0.11.
 	// +kubebuilder:validation:Enum=github;gitlab
 	// +optional
 	Provider string `json:"provider,omitempty"`
@@ -228,8 +230,9 @@ type EnvironmentSpec struct {
 	// supported".
 	//
 	// Deprecated: remove shard; the controller reconciles every environment.
-	// For workloads in other clusters, use the Argo CD or Flux hub (see
-	// docs/distributed-mode.md).
+	// For workloads in other clusters, use health.kubeconfigSecretRef or the
+	// Argo CD or Flux hub (see docs/multi-cluster.md).
+	// It is removed in v0.11.
 	// +optional
 	Shard string `json:"shard,omitempty"`
 
@@ -277,6 +280,7 @@ type EnvironmentSpec struct {
 	//
 	// Deprecated: remove it; the step sequence follows the Bundle type,
 	// update.strategy, approval and layout. See docs/pipeline-reference.md#promotion-steps.
+	// It is removed in v0.11.
 	//
 	// +optional
 	Steps []StepSpec `json:"steps,omitempty"`
@@ -287,6 +291,7 @@ type EnvironmentSpec struct {
 	//
 	// Deprecated: remove it; every environment runs the default step sequence.
 	// See docs/pipeline-reference.md#promotion-steps.
+	// It is removed in v0.11.
 	//
 	// +optional
 	PromotionTemplate *PromotionTemplateRef `json:"promotionTemplate,omitempty"`
@@ -349,6 +354,7 @@ type EnvironmentSpec struct {
 	//
 	// Deprecated: declare one environment per region (prod-us, prod-eu) and
 	// use wave.
+	// It is removed in v0.11.
 	// +optional
 	Regions []string `json:"regions,omitempty"`
 }
@@ -908,6 +914,7 @@ type HealthConfig struct {
 	// set kubeconfigSecretRef, or check its Argo CD Application
 	// (health.type: argocd) or Flux Kustomization (health.type: flux) in the
 	// hub cluster kardinal runs in; see docs/health-adapters.md#remote-clusters.
+	// It is removed in v0.11.
 	// +optional
 	Cluster string `json:"cluster,omitempty"`
 

@@ -291,6 +291,7 @@ spec:
                                       set kubeconfigSecretRef, or check its Argo CD Application
                                       (health.type: argocd) or Flux Kustomization (health.type: flux) in the
                                       hub cluster kardinal runs in; see docs/health-adapters.md#remote-clusters.
+                                      It is removed in v0.11.
                                     type: string
                                   flagger:
                                     description: |-
@@ -501,6 +502,7 @@ spec:
                             set kubeconfigSecretRef, or check its Argo CD Application
                             (health.type: argocd) or Flux Kustomization (health.type: flux) in the
                             hub cluster kardinal runs in; see docs/health-adapters.md#remote-clusters.
+                            It is removed in v0.11.
                           type: string
                         flagger:
                           description: |-
@@ -840,6 +842,7 @@ spec:
 
                         Deprecated: remove it; every environment runs the default step sequence.
                         See docs/pipeline-reference.md#promotion-steps.
+                        It is removed in v0.11.
                       properties:
                         name:
                           description: Name is the name of a PromotionTemplate (the
@@ -862,6 +865,7 @@ spec:
 
                         Deprecated: declare one environment per region (prod-us, prod-eu) and
                         use wave.
+                        It is removed in v0.11.
                       items:
                         type: string
                       type: array
@@ -926,8 +930,9 @@ spec:
                         supported".
 
                         Deprecated: remove shard; the controller reconciles every environment.
-                        For workloads in other clusters, use the Argo CD or Flux hub (see
-                        docs/distributed-mode.md).
+                        For workloads in other clusters, use health.kubeconfigSecretRef or the
+                        Argo CD or Flux hub (see docs/multi-cluster.md).
+                        It is removed in v0.11.
                       type: string
                     stepTimeoutSeconds:
                       description: |-
@@ -951,6 +956,7 @@ spec:
 
                         Deprecated: remove it; the step sequence follows the Bundle type,
                         update.strategy, approval and layout. See docs/pipeline-reference.md#promotion-steps.
+                        It is removed in v0.11.
                       items:
                         description: |-
                           StepSpec is the shape of the deprecated spec.environments[].steps field. A
@@ -1320,6 +1326,7 @@ spec:
                       --scm-provider flag.
 
                       Deprecated: ignored; the controller's --scm-provider flag selects the provider.
+                      It is removed in v0.11.
                     enum:
                     - github
                     - gitlab
@@ -1661,6 +1668,7 @@ spec:
 
                   Deprecated: remove the field; label org PolicyGates with
                   kardinal.io/applies-to instead.
+                  It is removed in v0.11.
                 items:
                   description: |-
                     PipelinePolicyGateRef is a reference to a PolicyGate that must pass before
@@ -1906,6 +1914,7 @@ spec:
                                   set kubeconfigSecretRef, or check its Argo CD Application
                                   (health.type: argocd) or Flux Kustomization (health.type: flux) in the
                                   hub cluster kardinal runs in; see docs/health-adapters.md#remote-clusters.
+                                  It is removed in v0.11.
                                 type: string
                               flagger:
                                 description: |-

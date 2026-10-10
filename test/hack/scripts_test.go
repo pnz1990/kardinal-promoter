@@ -299,32 +299,37 @@ func TestE2EScriptsUseKindContext(t *testing.T) {
 	}
 }
 
-// TestDemoTeardownIgnoresRemovedEKSFlag: the demo's --eks mode and
-// terraform/eks-e2e were removed (#1293). teardown.sh --eks used to run
-// terraform destroy; now it warns, says how to destroy an old EKS cluster, and
-// only deletes the kind clusters. An unknown flag is reported instead of
-// ignored.
-func TestDemoTeardownIgnoresRemovedEKSFlag(t *testing.T) {
+// TestDemoTeardownDeletesEveryDemoCluster: teardown.sh deletes the demo
+// cluster and the clusters of the older three-cluster demo when they exist,
+// warns about unknown flags, and never calls terraform or aws.
+func TestDemoTeardownDeletesEveryDemoCluster(t *testing.T) {
 	tests := []struct {
 		name     string
 		args     []string
+		clusters string
+		want     []string
 		wantWarn []string
 	}{
-		{name: "--eks", args: []string{"--eks"},
-			wantWarn: []string{"--eks was removed", "terraform/eks-e2e/"}},
-		{name: "unknown flag", args: []string{"--bogus"},
-			wantWarn: []string{"unknown flag: --bogus"}},
+		{name: "demo cluster", clusters: "kardinal-demo",
+			want: []string{"kind delete cluster --name kardinal-demo"}},
+		{name: "older three-cluster demo", clusters: "kardinal-control\nkardinal-dev\nkardinal-prod",
+			want: []string{"kind delete cluster --name kardinal-control", "kind delete cluster --name kardinal-dev",
+				"kind delete cluster --name kardinal-prod"}},
+		{name: "unknown flag", args: []string{"--eks"}, clusters: "kardinal-demo",
+			want: []string{"kind delete cluster --name kardinal-demo"}, wantWarn: []string{"unknown flag: --eks"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			// runScript resolves the script under hack/.
 			out, calls, err := runScript(t, filepath.Join("..", "demo", "scripts", "teardown.sh"),
-				map[string]string{"FAKE_KIND_CLUSTERS": "kardinal-control"}, tc.args...)
+				map[string]string{"FAKE_KIND_CLUSTERS": tc.clusters}, tc.args...)
 			require.NoError(t, err, out)
 			for _, w := range tc.wantWarn {
 				assert.Contains(t, out, w)
 			}
-			assert.Contains(t, calls, "kind delete cluster --name kardinal-control")
+			for _, c := range tc.want {
+				assert.Contains(t, calls, c)
+			}
 			for _, c := range calls {
 				assert.False(t, strings.HasPrefix(c, "terraform ") || strings.HasPrefix(c, "aws "),
 					"teardown must not call terraform or aws: %s", c)

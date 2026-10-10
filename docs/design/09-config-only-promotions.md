@@ -4,7 +4,7 @@
 > The original design (cherry-pick and overlay strategies, `spec.artifacts.gitCommit`,
 > a `gitCommit` Subscription) was never built; what is left of it is listed
 > under [Not implemented](#not-implemented). Mixed Bundles were added on 2026-10-01.
-> Depends on: 08-promotion-steps-engine (config-merge is a step), 02-pipeline-to-graph-translator
+> Depends on: the step engine (config-merge is a step, pkg/steps) and the Graph builder (pkg/graph)
 > Blocks: nothing (additive)
 > User docs: [concepts](../concepts.md), [CI integration](../ci-integration.md), `examples/config-promotion/`
 

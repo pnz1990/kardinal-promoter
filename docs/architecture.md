@@ -57,15 +57,22 @@ The controller manager runs these reconcilers:
 | `ChangeWindowReconciler` | `ChangeWindow` | Writes `status.active` and requeues at the next window boundary |
 | `SubscriptionReconciler` | `Subscription` | Polls OCI/Git sources; creates Bundles on new artifacts |
 | `NotificationHookReconciler` | `NotificationHook` | Sends webhooks for the events it selects; writes delivery status |
+| `HookRunReconciler` | `HookRun` | Runs a Pipeline hook's Job and records its result ([Pipeline hooks](hooks.md)) |
+| `ImageVerificationReconciler` | `ImageVerification` | Checks the signatures of a Bundle's images (sigstore) and of a config Bundle's commit; writes the verdict to its status |
+| `ScmProviderReconciler` | `ScmProvider`, `ClusterScmProvider` | Checks the provider's settings and Secrets; writes its `Ready` condition ([SCM providers](scm-providers.md)) |
+| `RenderRunReconciler` | `RenderRun` | Runs a `layout: branch` environment's render in a sandboxed Job and records the rendered commit ([Rendered manifests](rendered-manifests.md)) |
+| Audit retention (`pkg/reconciler/auditretention`) | `AuditEvent` | Deletes records past `audit.retention` (on by default; `audit.retention.enabled: false` turns it off) |
 | Graph cleanup (`pkg/reconciler/graphcleanup`) | kro `Graph` | Deletes reader RoleBindings no Graph needs any more; lets a Graph in a terminating namespace go once kro can no longer tear it down |
 
-### Translator (`pkg/translator`)
+### Translator (`pkg/translator`) and Graph builder (`pkg/graph`)
 
-Converts a `Pipeline` CRD + a `Bundle` CRD into a [kro](https://github.com/kubernetes-sigs/kro) `Graph` spec. The Graph encodes the full promotion DAG:
+The translator collects what a Bundle's Graph needs (the Pipeline, its PolicyGate templates, analysis templates, the SCM provider) and the builder in `pkg/graph` turns it into a [kro](https://github.com/kubernetes-sigs/kro) `Graph` spec. The Graph encodes the full promotion DAG:
 
 - One node per `PromotionStep` (environment)
-- One node per `PolicyGate` instance (injected between environments)
+- PolicyGate instances and PRStatuses as `forEach` collection nodes, one item per gate or environment
 - `readyWhen` expressions wired so the Graph controller advances nodes in dependency order
+
+[Graph coverage](graph-coverage.md) lists what the Graph decides and what stays in a reconciler.
 
 ### kro Graph Controller (`kro-system`)
 

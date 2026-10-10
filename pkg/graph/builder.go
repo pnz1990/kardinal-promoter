@@ -79,9 +79,8 @@ type BuildResult struct {
 // See identity.go for how the controller provisions it.
 const DefaultGraphServiceAccount = "kardinal-graph"
 
-// Builder generates Graph specs from Pipeline + Bundle + PolicyGates.
-// It implements the full translation algorithm from
-// docs/design/02-pipeline-to-graph-translator.md.
+// Builder generates Graph specs from Pipeline + Bundle + PolicyGates
+// (docs/architecture.md, docs/graph-coverage.md).
 type Builder struct {
 	// ServiceAccountName is written to Graph.spec.serviceAccountName.
 	// Empty means DefaultGraphServiceAccount.

@@ -35,7 +35,7 @@ prod-eu and prod-us run in parallel after pre-prod is verified and all policy ga
 Argo CD in the hub cluster manages Applications for all 4 workload clusters.
 kardinal-promoter reads Application health from the hub (`health.type: argocd`). It makes
 no cross-cluster API calls and needs no credentials for the workload clusters. See
-[Multi-Cluster](../../docs/distributed-mode.md).
+[Multi-Cluster](../../docs/multi-cluster.md).
 
 ## Prerequisites
 

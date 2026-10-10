@@ -443,7 +443,7 @@
         },
         "integrationTestJobs": {
           "type": "boolean",
-          "description": "Deprecated, no effect, removed in v0.10."
+          "description": "Deprecated, no effect, removed in v0.11."
         },
         "userRoles": {
           "type": "object",

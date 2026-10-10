@@ -2,7 +2,8 @@
 // Licensed under the Apache License, Version 2.0
 //
 // Journey 007: Empty state — no pipelines → onboarding card.
-// Requires a dedicated mock endpoint override that returns [].
+// The empty list comes from page.route, which overrides the mock server's
+// pipeline list for this test.
 
 import { test, expect } from '@playwright/test'
 

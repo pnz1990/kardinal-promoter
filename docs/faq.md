@@ -60,15 +60,20 @@ The Helm chart creates the necessary `ClusterRole` (a `Role` in namespace mode).
 
 - `get/list/watch/create/update/patch/delete` on the `kardinal.io` kinds, except
   `auditevents` (`get/list/watch/create`, plus `delete` for retention,
-  `audit.retention.enabled: true` by default: the controller never changes a record) and the
-  cluster-scoped `changewindows` (`get/list/watch`, in a `ClusterRole` in both modes)
+  `audit.retention.enabled: true` by default: the controller never changes a record),
+  `approvals` (`get/list/watch/create/delete`: an Approval is never edited), `scmproviders`
+  (`get/list/watch`: the controller never creates them) and the cluster-scoped
+  `changewindows` and `clusterscmproviders` (`get/list/watch`, in a `ClusterRole` in both
+  modes)
 - `get/update/patch` on the `status` subresources of those kinds (`auditevents` has none)
 - `get/list/watch/create/update/patch/delete` on `graphs.kro.run`
 - `get/list/watch` on the health targets: `deployments`, Argo CD `applications` and `rollouts`,
   Flux `kustomizations`, Flagger `canaries` (`patch` on `applications` only with
   `rbac.argocdApplicationsWrite`), `get` on `replicasets` (the ReplicaSet a Deployment's
   `ProgressDeadlineExceeded` names), and `list` on `pods` (the new ReplicaSet's pods, to name
-  why one is not ready; cluster-wide in cluster mode)
+  why one is not ready; cluster-wide in cluster mode), and `get` on Argo Rollouts
+  `analysistemplates` and `clusteranalysistemplates` that `spec.verification` names
+- `get/list` on `multicluster.x-k8s.io` `clusterprofiles`, to resolve a fleet's targets
 - `get` on `secrets` (Pipeline `spec.git.secretRef` and the SCM token); no `list` or `watch`
 - `get/create` on `serviceaccounts` and `get/list/create/update/delete` on `rolebindings`, plus
   `bind` on the two Graph ClusterRoles only, for the [Graph identity](installation.md)
@@ -77,9 +82,15 @@ The Helm chart creates the necessary `ClusterRole` (a `Role` in namespace mode).
 - `create/patch` on `events.k8s.io` `events` and `get/list/watch/create/patch` on core `events`
 - in the release namespace: the leader election `leases`, and `create` plus
   `get/update/patch` on the `kardinal-version` ConfigMap
-- `create` on `tokenreviews` and `subjectaccessreviews`, only with `ui.auth.tokenReview`
+- `get/list/watch/create/delete` on `batch` Jobs: each HookRun's Job ([Pipeline hooks](hooks.md))
+  and each RenderRun's render Job ([Rendered manifests](rendered-manifests.md))
+- `get` on the chart's `gate-overrides` ValidatingAdmissionPolicy and its binding, to know
+  whether an override's `createdBy` was checked
+- `create` on `tokenreviews` and `subjectaccessreviews`, only with `ui.auth.tokenReview` or
+  `bundleAPI.tokenReview`; the shard Leases, only with `controller.namespaceShard`
 
-It grants nothing on `pods`, `services`, other ConfigMaps or `batch` Jobs.
+It grants nothing on `services`, other ConfigMaps or other cluster objects, and reads `pods`
+only to explain a rollout that is not ready.
 
 See [Security Guide](guides/security.md) for a full RBAC manifest.
 

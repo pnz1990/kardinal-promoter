@@ -217,6 +217,8 @@ First, create a Secret with your GitHub token:
 kubectl create secret generic github-token \
   --namespace default \
   --from-literal=token=<your-github-pat>
+# A Secret a Pipeline names must be labelled referenceable (docs/guides/security.md).
+kubectl label secret github-token --namespace default kardinal.io/referenceable=true
 ```
 
 You can generate a starting Pipeline YAML using `kardinal init`:

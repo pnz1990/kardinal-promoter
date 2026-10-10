@@ -35,17 +35,6 @@ func asForgejo(s Server) (*forgejo, error) {
 	return f, nil
 }
 
-// RepoFor returns the Repo CreateRepo would return for name, without
-// creating it: a test can point a Pipeline at a repo that does not exist yet.
-func RepoFor(s Server, name string) (Repo, error) {
-	f, err := asForgejo(s)
-	if err != nil {
-		return Repo{}, err
-	}
-	return Repo{Owner: f.owner, Name: name, Branch: "main",
-		CloneURL: fmt.Sprintf("%s/%s/%s.git", f.cloneBase, f.owner, name)}, nil
-}
-
 // Commits returns the newest limit commits of branch, newest first.
 // Forgejo, Gitea, GitLab and GitHub are supported.
 func Commits(ctx context.Context, s Server, r Repo, branch string, limit int) ([]Commit, error) {

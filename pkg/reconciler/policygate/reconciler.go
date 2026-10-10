@@ -567,7 +567,7 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 	}
 
 	// Build upstream soak context from bundle environment statuses,
-	// enriched with cross-stage history from all Bundles in the pipeline (K-10).
+	// enriched with cross-stage history from all Bundles in the pipeline (K-11).
 	// SoakMinutes is read from Bundle.status.environments[*].soakMinutes (PG-3 fix).
 	pipelineName := gate.Labels[labelPipeline]
 	upstreamCtx, upstreamErr := r.buildUpstreamContextWithHistory(ctx, gate.Namespace, pipelineName, &bundle)
@@ -807,7 +807,7 @@ func buildUpstreamContext(bundle *kardinalv1alpha1.Bundle) map[string]interface{
 }
 
 // buildUpstreamContextWithHistory extends buildUpstreamContext with cross-stage
-// promotion history (K-10). It lists the last historyLimit Bundles for the same
+// promotion history (K-11). It lists the last historyLimit Bundles for the same
 // pipeline and computes per-environment history stats:
 //
 //   - soakMinutes         — minutes since this Bundle was Verified in the environment

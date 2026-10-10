@@ -50,11 +50,12 @@ The layer model:
 ```
 L1: kro Graph API            — universal DAG primitive, CEL evaluation
 L2: kardinal APIs             — PromotionStep, PolicyGate, Bundle, Pipeline CRDs
-                                All expressed as Graph Watch or Owned nodes
+                                Expressed as Graph nodes: resources the Graph
+                                creates, or ref nodes that read existing objects
 L3: kardinal customer APIs    — Pipeline and PolicyGate definitions
 ```
 
-**If a feature cannot be expressed as a Graph node** (Watch node, Owned node, or CEL
+**If a feature cannot be expressed as a Graph node** (a resource the Graph creates, a ref node, or a CEL
 extension on the Graph environment), that is a signal kro is missing a primitive
 that should be contributed upstream. Stop and ask the owner. No logic may leak outside the
 Graph layer without the owner's approval.
@@ -95,7 +96,7 @@ Use rollback and pause during incidents, from the CLI or the UI. Monitor promoti
 
 A user-facing CRD that defines the promotion path for one application. Lists environments in order with Git configuration. The controller translates this into a kro Graph, injecting PolicyGate nodes.
 
-Environments promote sequentially by default. For parallel fan-out, use the `dependsOn` field. Each environment specifies approval mode (`auto` or `pr-review`), update strategy (`kustomize` or `helm`) and health adapter.
+Environments promote sequentially by default. For parallel fan-out, use the `dependsOn` field. Each environment specifies approval mode (`auto` or `pr-review`), update strategy (`kustomize`, `helm`, `argocd` or `yaml`) and health adapter.
 
 ### F2: Bundle CRD
 
@@ -145,7 +146,7 @@ Single static Go binary. Commands include `init`, `get pipelines/steps/bundles/s
 
 ### F9: Config-Only Promotions
 
-Bundle `type: config` references a Git commit SHA. The `config-merge` step applies changes via cherry-pick or overlay. Config Bundles go through the same Pipeline, PolicyGates, and PR flow. Config and image Bundles coexist independently (different types do not supersede each other).
+Bundle `type: config` references a Git commit SHA. The `config-merge` step copies the environment's directory from that commit over the same path in the working tree (files deleted in the config commit are not deleted). Config Bundles go through the same Pipeline, PolicyGates, and PR flow. Config and image Bundles coexist independently (different types do not supersede each other).
 
 ### F10: Subscription CRD
 
@@ -217,8 +218,8 @@ Per-Bundle Graph lifecycle: created on Bundle promotion start, owned by Bundle v
 
 ### Scalability
 
-- Designed for fewer than 50 Pipelines per control plane
-- Git rate limits: no polling, webhook-only merge detection with startup reconciliation
+- Tested at 200 Pipelines and bursts of 1,000 Bundles per control plane (the `scale` live suite; sizing in `docs/installation.md`)
+- Merge detection: an SCM webhook marks a PR merged at once; each open PR's PRStatus also polls the SCM every 30 seconds, so a missed webhook costs at most one poll
 - PolicyGate recheck: ~20 writes/minute at 50 pipelines with `recheckInterval: 5m`
 
 ### Security
@@ -234,7 +235,7 @@ Per-Bundle Graph lifecycle: created on Bundle promotion start, owned by Bundle v
 - All reconcilers are idempotent (safe to re-run after crash)
 - Leader election via Kubernetes Lease (`--leader-elect`)
 - Graph controller down: existing steps continue, new steps paused
-- PR merge detection: webhook primary, startup reconciliation fallback
+- PR merge detection: webhook first, PRStatus polling (every 30 seconds) as the fallback
 - PolicyGate staleness: `lastEvaluatedAt` freshness check prevents stale advancement
 
 ## Constraints and Assumptions

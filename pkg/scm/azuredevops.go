@@ -41,8 +41,6 @@ const (
 // uses the standard ADO pattern: Authorization: Basic base64(:<PAT>).
 //
 // All methods are safe for concurrent use.
-//
-// Design ref: docs/design/15-production-readiness.md §Lens 1 (Kargo parity)
 type AzureDevOpsProvider struct {
 	// Token is the Azure DevOps Personal Access Token (PAT).
 	Token string
