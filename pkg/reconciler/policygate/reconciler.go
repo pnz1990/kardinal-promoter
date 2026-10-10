@@ -38,6 +38,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
@@ -1342,7 +1343,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	b := ctrl.NewControllerManagedBy(mgr).
-		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers,
+			// Workers are shared fairly between namespaces (#1577).
+			NewQueue: fairqueue.New}).
 		For(&kardinalv1alpha1.PolicyGate{}, builder.WithPredicates(
 			predicate.Or(eventfilter.SpecOrAnnotationChanged, auditPending))).
 		// Watch MetricCheck objects: when a MetricCheck's result or value changes,

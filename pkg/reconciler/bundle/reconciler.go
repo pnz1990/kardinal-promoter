@@ -56,6 +56,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
@@ -1916,7 +1917,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("set up the bundle retirement controller: %w", err)
 	}
 	b := ctrl.NewControllerManagedBy(mgr).
-		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers,
+			// Workers are shared fairly between namespaces (#1577).
+			NewQueue: fairqueue.New}).
 		For(&kardinalv1alpha1.Bundle{}).
 		Watches(&kardinalv1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.waitingSiblings),
 			builder.WithPredicates(bundlePhaseChanged)).

@@ -34,6 +34,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
@@ -402,7 +403,9 @@ func (r *Reconciler) now() time.Time {
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.MetricCheck{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
-		WithOptions(controller.Options{MaxConcurrentReconciles: workerCount(r.Limiter)})
+		WithOptions(controller.Options{MaxConcurrentReconciles: workerCount(r.Limiter),
+			// Workers are shared fairly between namespaces (#1577).
+			NewQueue: fairqueue.New})
 	if r.Limiter != nil {
 		wake := make(chan event.GenericEvent, wakeBuffer)
 		r.Limiter.Wake = func(key types.NamespacedName) {

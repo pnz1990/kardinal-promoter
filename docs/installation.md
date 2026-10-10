@@ -736,6 +736,19 @@ regions on one branch takes about a minute even when each step is fast. Raise `p
 git hosts. Each step that runs at once holds one shallow clone of its repository in the
 controller's memory and its working directory on disk.
 
+### Fair sharing between namespaces
+
+The PromotionStep, PRStatus, PolicyGate, Bundle, Pipeline and MetricCheck work queues share
+their workers between namespaces (#1577). An item's place in the queue is lowered, within its
+priority, by the number of items its namespace already has ready or in process, so an item of
+a namespace with little work goes ahead of another namespace's large backlog. A
+150-environment wave in one namespace therefore no longer makes another team's steps wait for
+it: they are picked up after at most a few of the wave's items. Within one namespace the order
+stays first in, first out, and a namespace alone on the controller still gets every worker, so
+no throughput is lost. A step waiting for its branch's turn (see above) stays behind every
+step that can run. **[RESULTS]** `TestScale_TenantFairness` (`full`): tenant B's step p99 and
+tenant A's wave time, before and after.
+
 ### Leader election under API pressure
 
 The leader renews its Lease every 2 seconds and gives up leadership when a
