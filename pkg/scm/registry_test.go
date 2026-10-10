@@ -561,14 +561,103 @@ func TestRegistry_SlowNamespaceReadDoesNotOverwriteRevoke(t *testing.T) {
 	assert.ErrorIs(t, err, scm.ErrNamespaceNotAllowed, "the revoked namespace stays refused")
 }
 
-// TestNewerRV: resourceVersions compare as etcd revisions; anything that
-// does not parse is never called newer, and the read order decides.
+// TestKeepOld: the higher resourceVersion wins when both are well formed;
+// otherwise (a cached NotFound has none) the read that started later.
 //
 // Covers SEC-CACHE-ORDER-01.
-func TestNewerRV(t *testing.T) {
-	assert.True(t, scm.NewerRVForTest("10", "9"))
-	assert.False(t, scm.NewerRVForTest("9", "10"))
-	assert.False(t, scm.NewerRVForTest("5", "5"))
-	assert.False(t, scm.NewerRVForTest("x", "1"))
-	assert.False(t, scm.NewerRVForTest("2", ""))
+func TestKeepOld(t *testing.T) {
+	assert.True(t, scm.KeepOldForTest(1, 2, "10", "9"), "older ticket, newer version: kept")
+	assert.False(t, scm.KeepOldForTest(2, 1, "9", "10"), "later ticket, older version: replaced")
+	assert.True(t, scm.KeepOldForTest(2, 1, "5", "5"), "same version: the later read")
+	assert.False(t, scm.KeepOldForTest(1, 2, "5", "5"))
+	assert.True(t, scm.KeepOldForTest(2, 1, "", "7"), "no version: the later read")
+	assert.False(t, scm.KeepOldForTest(1, 2, "x", "7"))
+}
+
+// scriptedSecrets answers the Secret reads with the scripted Secrets, in
+// call order; a call with a gate signals entered and returns once the gate
+// is closed.
+type scriptedSecrets struct {
+	client.Reader
+	mu      sync.Mutex
+	next    int
+	answers []*corev1.Secret
+	gates   map[int]chan struct{}
+	entered chan int
+}
+
+func (s *scriptedSecrets) Get(ctx context.Context, key types.NamespacedName, obj client.Object, opts ...client.GetOption) error {
+	sec, ok := obj.(*corev1.Secret)
+	if !ok {
+		return s.Reader.Get(ctx, key, obj, opts...)
+	}
+	s.mu.Lock()
+	i := s.next
+	s.next++
+	gate := s.gates[i]
+	s.mu.Unlock()
+	if gate != nil {
+		s.entered <- i
+		<-gate
+	}
+	s.answers[i].DeepCopyInto(sec)
+	return nil
+}
+
+// TestRegistry_LaterReadOfOlderVersionDoesNotWin (cache races QA): a read
+// that started later but returns an older resourceVersion (a lagging API
+// server) does not keep the cache from the newer Secret an earlier-started
+// read returns after it.
+//
+// Covers SEC-CACHE-ORDER-01.
+func TestRegistry_LaterReadOfOlderVersionDoesNotWin(t *testing.T) {
+	ctx := context.Background()
+	newer := refSecret("team-a", "hook", map[string]string{"secret": "new"})
+	newer.ResourceVersion = "5"
+	older := refSecret("team-a", "hook", map[string]string{"secret": "old"})
+	older.ResourceVersion = "3"
+	c := fake.NewClientBuilder().WithScheme(registryScheme(t)).Build()
+	held := make(chan struct{})
+	api := &scriptedSecrets{Reader: c, answers: []*corev1.Secret{newer, older}, gates: map[int]chan struct{}{0: held}, entered: make(chan int, 1)}
+	r := &scm.Registry{Client: c, APIReader: api}
+	spec := scm.ProviderSpec{Identity: v1alpha1.ScmProviderIdentity{Kind: "ScmProvider", Name: "p"}, SecretNamespace: "team-a",
+		Spec: v1alpha1.ScmProviderSpec{Type: "github", SecretRef: v1alpha1.ScmSecretKeyRef{Name: "tok"},
+			WebhookSecretRef: &v1alpha1.ScmSecretKeyRef{Name: "hook"}}}
+	// The first read to start (ticket 1) is held and answers with the newer
+	// version; the second (ticket 2) answers at once with the older one.
+	api.answers = []*corev1.Secret{newer, older}
+	first := make(chan string)
+	go func() {
+		v, err := r.WebhookSecret(ctx, spec)
+		assert.NoError(t, err)
+		first <- v
+	}()
+	require.Equal(t, 0, <-api.entered) // started first, held
+	v, err := r.WebhookSecret(ctx, spec)
+	require.NoError(t, err)
+	assert.Equal(t, "old", v, "the second read's own answer")
+	close(held)
+	assert.Equal(t, "new", <-first, "the held read's newer version is cached and returned")
+	v, err = r.WebhookSecret(ctx, spec)
+	require.NoError(t, err)
+	assert.Equal(t, "new", v, "the higher resourceVersion wins over the later-started read's older one")
+}
+
+// TestRegistry_EvictionMarksBounded (cache races QA): a tenant creating and
+// deleting providers does not grow the eviction marks without bound.
+//
+// Covers SEC-CACHE-ORDER-01.
+func TestRegistry_EvictionMarksBounded(t *testing.T) {
+	ctx := context.Background()
+	c := fake.NewClientBuilder().WithScheme(registryScheme(t)).Build()
+	r := &scm.Registry{Client: c, APIReader: c}
+	for i := range 5000 {
+		name := fmt.Sprintf("p%04d", i)
+		spec := scm.ProviderSpec{Identity: v1alpha1.ScmProviderIdentity{Kind: v1alpha1.KindScmProvider, Name: name}, SecretNamespace: "team-a",
+			Spec: v1alpha1.ScmProviderSpec{Type: "github", SecretRef: v1alpha1.ScmSecretKeyRef{Name: "tok"},
+				WebhookSecretRef: &v1alpha1.ScmSecretKeyRef{Name: "hook-" + name}}}
+		_, _ = r.WebhookSecret(ctx, spec) // records the Secret for the provider
+		r.Evict(v1alpha1.KindScmProvider, "team-a", name)
+	}
+	assert.LessOrEqual(t, r.EvictedForTest(), 4096)
 }

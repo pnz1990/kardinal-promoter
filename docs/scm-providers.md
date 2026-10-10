@@ -606,8 +606,9 @@ How it works:
   least 30 seconds after you update the Secret**, so calls made from the cached Secret do
   not fail. A deleted provider's client and its cached Secrets are dropped from memory, and
   a read of its Secret still in flight then is not cached. A slow read of an older Secret or
-  Namespace never replaces a newer one in the cache (the later read, or the higher
-  `resourceVersion`, wins), so a rotation or a removed label is not undone by it.
+  Namespace never replaces a newer one in the cache (the higher `resourceVersion` wins, and
+  without one the read that started later), so a rotation or a removed label is not undone by
+  it.
 - **`allowedRepositories`** lists globs over the repository path the SCM API uses, such
   as `owner/repo` or `group/subgroup/repo`, on the provider's host. Matching ignores
   case. `*` matches one path segment, and a trailing `/**` matches any depth below. A

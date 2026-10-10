@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/resourceversion"
 	"k8s.io/utils/lru"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -220,10 +220,11 @@ type Registry struct {
 	// stores its result only when no read that started later stored one
 	// first, so a slow read of an old version cannot overwrite a newer one.
 	reads uint64
-	// secretGen is bumped by Evict for each Secret it forgets; a read that
-	// started before stores nothing, so an in-flight read cannot bring a
-	// deleted provider's token back for another SecretTTL.
-	secretGen map[types.NamespacedName]uint64
+	// evictedAt is the read number Evict saw when it forgot a Secret; a
+	// read that started at or before it stores nothing, so an in-flight read
+	// cannot bring a deleted provider's token back for another SecretTTL.
+	// Reset, like secrets, when it reaches maxCacheEntries.
+	evictedAt map[types.NamespacedName]uint64
 }
 
 type registryEntry struct {
@@ -246,20 +247,15 @@ type namespaceEntry struct {
 	rv      string
 }
 
-// newerRV reports whether resourceVersion a is newer than b. Kubernetes
-// documents resourceVersions as opaque, but the API server's are etcd
-// revisions; when either does not parse, neither is called newer and the
-// read order decides.
-func newerRV(a, b string) bool {
-	x, err1 := strconv.ParseUint(a, 10, 64)
-	y, err2 := strconv.ParseUint(b, 10, 64)
-	return err1 == nil && err2 == nil && x > y
-}
-
 // keepOld reports whether a cached result (started, rv) wins over a new
-// read's (started, rv): it started later, or it is a newer version.
+// read's: the higher resourceVersion when both have one (a read that
+// started later can still return an older version, from a lagging API
+// server), else the read that started later.
 func keepOld(oldStarted, newStarted uint64, oldRV, newRV string) bool {
-	return oldStarted > newStarted || newerRV(oldRV, newRV)
+	if c, err := resourceversion.CompareResourceVersion(oldRV, newRV); err == nil && c != 0 {
+		return c > 0
+	}
+	return oldStarted > newStarted
 }
 
 // Resolved is a provider client and the spec it was built from.
@@ -457,12 +453,14 @@ func (r *Registry) Evict(kind, ns, name string) {
 		r.clients.Remove(uid)
 	}
 	r.mu.Lock()
-	if r.secretGen == nil {
-		r.secretGen = map[types.NamespacedName]uint64{}
+	if r.evictedAt == nil || len(r.evictedAt) >= maxCacheEntries {
+		// Bounded like the caches: a tenant creating and deleting providers
+		// cannot grow it.
+		r.evictedAt = map[types.NamespacedName]uint64{}
 	}
 	for _, nn := range r.secretsOf[key] {
 		delete(r.secrets, nn)
-		r.secretGen[nn]++
+		r.evictedAt[nn] = r.reads
 	}
 	delete(r.secretsOf, key)
 	r.mu.Unlock()
@@ -579,7 +577,7 @@ func (r *Registry) secret(ctx context.Context, nn types.NamespacedName) (*corev1
 	if !ok || !now.Before(e.expires) {
 		r.mu.Lock()
 		r.reads++
-		started, gen := r.reads, r.secretGen[nn]
+		started := r.reads
 		r.mu.Unlock()
 		var s corev1.Secret
 		err := r.apiReader().Get(ctx, nn, &s)
@@ -598,11 +596,17 @@ func (r *Registry) secret(ctx context.Context, nn types.NamespacedName) (*corev1
 				delete(r.secrets, k)
 			}
 		}
-		if r.secrets == nil || len(r.secrets) >= maxCacheEntries {
+		if r.secrets == nil {
 			r.secrets = map[types.NamespacedName]secretEntry{}
+		} else if len(r.secrets) >= maxCacheEntries {
+			// At the cap the whole map is reset: entries are only re-read.
+			// The eviction marks go with it (a read in flight across an
+			// eviction at that very moment may then be cached once).
+			r.secrets = map[types.NamespacedName]secretEntry{}
+			r.evictedAt = nil
 		}
 		switch old, ok := r.secrets[nn]; {
-		case r.secretGen[nn] != gen:
+		case started <= r.evictedAt[nn]:
 			// Evicted while the read was in flight: the caller gets what it
 			// read, but nothing is kept.
 		case ok && keepOld(old.started, started, rvOf(old.secret), rvOf(e.secret)):
