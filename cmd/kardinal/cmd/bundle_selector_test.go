@@ -40,7 +40,7 @@ func TestCLI_BundleSelectorBothServerPaths(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		selectable bool // the server supports the selectable field
-		wantListed int // Bundles each Bundle list read
+		wantListed int  // Bundles each Bundle list read
 	}{
 		{"1.31+: filtered on the server", true, 1},
 		{"1.30: BadRequest, namespace list filtered here", false, 21},
