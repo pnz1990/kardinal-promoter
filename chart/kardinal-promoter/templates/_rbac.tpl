@@ -166,6 +166,12 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["flagger.app"]
   resources: ["canaries"]
   verbs: ["get", "list", "watch"]
+# Fleet selectors of kind ClusterProfile (pkg/reconciler/pipeline/fleets.go):
+# the cluster inventory's ClusterProfiles are listed, uncached, to resolve a
+# fleet's targets. Argo CD Applications are covered above.
+- apiGroups: ["multicluster.x-k8s.io"]
+  resources: ["clusterprofiles"]
+  verbs: ["get", "list"]
 {{- end }}
 
 {{- define "kardinal-promoter.rules.cluster" -}}

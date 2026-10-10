@@ -762,6 +762,32 @@ func TestUIAPI_GetSteps_BakeFields(t *testing.T) {
 	assert.Equal(t, 1, resp[0].BakeResets, "BakeResets from step status")
 }
 
+// TestUIAPI_GetSteps_FleetTargetBakeTarget (#1565 QA): a fleet target's step
+// shows its fleet's bake target.
+func TestUIAPI_GetSteps_FleetTargetBakeTarget(t *testing.T) {
+	pl := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "prod",
+			Bake:  &v1alpha1.BakeConfig{Minutes: 20},
+			Fleet: &v1alpha1.FleetSpec{Targets: []v1alpha1.FleetTarget{{Name: "eu"}}}}}},
+	}
+	ps := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1-prod-eu", Namespace: "default"},
+		Spec:       v1alpha1.PromotionStepSpec{PipelineName: "my-app", BundleName: "my-app-v1", Environment: "prod-eu"},
+		Status:     v1alpha1.PromotionStepStatus{State: "HealthChecking"},
+	}
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(pl, ps).Build()
+	mux := http.NewServeMux()
+	newUIAPIServer(c, zerolog.Nop()).RegisterRoutes(mux)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/ui/bundles/my-app-v1/steps", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiStepResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+	assert.Equal(t, 20, resp[0].BakeTargetMinutes)
+}
+
 // TestUIAPI_GetSteps_NoBakeFieldsWhenNoPipeline verifies that bake target is 0
 // when the Pipeline spec has no bake configuration (#501).
 func TestUIAPI_GetSteps_NoBakeFieldsWhenNoPipeline(t *testing.T) {

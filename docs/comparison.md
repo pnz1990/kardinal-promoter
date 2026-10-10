@@ -31,7 +31,8 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Pause in-flight promotions** | Yes — `kardinal pause` (CLI or UI): no new step starts, and a step still preparing its change holds before its next git step | Turn off auto-promotion per Stage; a manual re-promote pins the Stage (v1.11) | `autoMerge: false` per environment (PRs wait for a manual merge) |
 | **Reject a release** | Yes — `kardinal reject`: the Bundle is never promoted again, its unfinished steps are cancelled and their PRs closed, and rollback never returns to it; the rejecting user is verified by the API server | No — rejecting Freight is an open request ([#6151](https://github.com/akuity/kargo/issues/6151)) | No reject action; close the PR by hand |
 | **Supersede an older release in flight** | Yes — a newer Bundle supersedes an older one that is still promoting | No — promotions queue ([#3108](https://github.com/akuity/kargo/issues/3108), its most-requested open issue) | Yes — the newest commit wins; intermediate commits may be skipped |
-| **Wave topology** | Yes — `wave:` field generates multi-region DAG edges automatically | No (a Kargo Enterprise fan-out to fleets of targets with a concurrency limit is on its main branch, unreleased) | No |
+| **Wave topology** | Yes — `wave:` field generates multi-region DAG edges automatically | No | No |
+| **Fleets of targets** | Yes — `fleet:` expands an environment into targets (listed, or selected by labels from Argo CD Applications or cluster inventory ClusterProfiles), `maxConcurrent` at a time, stopped after `maxUnavailable` failures, targets added or removed mid-rollout ([Fleets](pipeline-reference.md#fleets)) | Kargo Enterprise fan-out to fleets of targets with a concurrency limit, on its main branch, unreleased | No |
 | **CLI** | Full `kardinal` CLI incl. `explain`, `policy simulate`, `override`, `approve`, `reject`, `pause`, `rollback`, `metrics`, `logs`, `validate`, `status`, shell completion | `kargo` CLI (get, promote, approve, verify, grant, logs and more) | Minimal: `gitops-promoter dashboard`, `demo` and `version`; no operational commands |
 | **Explain and simulate gates** | Yes — `kardinal explain` shows why an environment is blocked; `kardinal policy simulate` runs the gates at a chosen time | No | No (a Go package can simulate `WebRequestCommitStatus` expressions) |
 | **UI dashboard** | Embedded UI: fleet board (the version each environment of every pipeline runs, and releases on their way), fleet health bar, ops table, pipeline lane and DAG, bundle timeline and comparison, policy gates with CEL expressions, metrics bar, step timings, Bundle type badges, dark and light themes, keyboard navigation (WCAG 2.1 AA checked); create bundle, pause/resume, promote and roll back from the UI (gate override is CLI-only) | Polished Kargo UI: pipeline graph, Freight timeline and diffs, drag-and-drop promotion, step logs | Read-only dashboard, plus an Argo CD UI extension; both show promotion history |
@@ -169,8 +170,16 @@ set up per PromotionStrategy.
 The `wave:` field on Pipeline environments generates DAG dependency edges automatically:
 wave 2 cannot start until all wave 1 stages are verified. This makes the prod-wave-1 →
 prod-wave-2 → prod-wave-3 pattern idiomatic in three lines of YAML. Kargo and GitOps
-Promoter have no wave concept. Kargo's main branch has an unreleased Kargo Enterprise
-fan-out to fleets of targets with a concurrency limit.
+Promoter have no wave concept.
+
+### Fleets
+
+A `fleet:` environment promotes one release to many targets, such as clusters, regions or
+tenants. The targets are listed, or selected by labels from Argo CD Applications or cluster
+inventory ClusterProfiles. They are promoted `maxConcurrent` at a time, and the rollout stops once
+`maxUnavailable` of them have failed. Each target has its own PR, gates and health check, and
+targets can be added or removed while a release rolls out. Kargo's main branch has an unreleased
+Kargo Enterprise fan-out to fleets of targets with a concurrency limit. GitOps Promoter has none.
 
 ### DORA metrics built-in
 

@@ -213,6 +213,15 @@ type EnvironmentSpec struct {
 	// +optional
 	Wave int `json:"wave,omitempty"`
 
+	// Fleet expands this environment into one environment per target, named
+	// "<name>-<target>". Each target gets its own PromotionStep, PRStatus and
+	// gate instances (a PolicyGate that applies to this environment applies
+	// to every target), and the targets are promoted at most maxConcurrent at
+	// a time. An environment that depends on this one waits for every target.
+	// Without a fleet the environment is promoted once.
+	// +optional
+	Fleet *FleetSpec `json:"fleet,omitempty"`
+
 	// Shard was the agent shard of distributed mode, which was removed. A
 	// non-empty value sets the Pipeline Ready=False (reason NotImplemented)
 	// and fails the environment's PromotionSteps with "shard is not
@@ -707,6 +716,114 @@ type ArgoCDUpdateConfig struct {
 	ImageKey string `json:"imageKey,omitempty"`
 }
 
+// FleetSpec lists the targets of a fleet environment and paces them.
+// +kubebuilder:validation:XValidation:rule="has(self.targets) || has(self.selector)",message="fleet: set targets, a selector, or both (a selector of kind Target)"
+// +kubebuilder:validation:XValidation:rule="!has(self.selector) || !has(self.targets) || self.selector.kind == 'Target'",message="fleet: targets with a selector need selector.kind Target; an Application or ClusterProfile selector finds the targets itself"
+// +kubebuilder:validation:XValidation:rule="!has(self.selector) || self.selector.kind != 'Target' || has(self.targets)",message="fleet: a selector of kind Target selects from targets, which is empty"
+type FleetSpec struct {
+	// Targets are the fleet's members, in the order they are promoted.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=500
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Targets []FleetTarget `json:"targets,omitempty"`
+
+	// Selector picks the targets by labels: from targets (kind Target),
+	// from the Argo CD Applications in a namespace (kind Application), or
+	// from the clusters of a cluster inventory (kind ClusterProfile,
+	// multicluster.x-k8s.io/v1alpha1). The controller resolves Application
+	// and ClusterProfile selectors into status.fleets, and rebuilds the Graph
+	// of a Bundle in flight when the members change.
+	// +optional
+	Selector *FleetSelector `json:"selector,omitempty"`
+
+	// MaxConcurrent is how many targets are promoted at once. A target is in
+	// flight from its PromotionStep's creation until it is Verified; a
+	// Failed target keeps its place. 0 promotes every target at once.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	MaxConcurrent int `json:"maxConcurrent,omitempty"`
+
+	// MaxUnavailable stops the rollout: once this many of the fleet's
+	// targets have failed (Failed, AbortedByAlarm or RollingBack), no
+	// further target starts, and the targets in flight finish. Unset, a failure only keeps its place in
+	// maxConcurrent. An environment after the fleet waits for every target
+	// to be Verified either way.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	MaxUnavailable *int `json:"maxUnavailable,omitempty"`
+}
+
+// FleetTarget is one member of a fleet.
+type FleetTarget struct {
+	// Name identifies the target. The target's environment is named
+	// "<environment>-<name>", which must be a DNS label of at most 63
+	// characters.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=62
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name"`
+
+	// Labels describe the target (region, tier, cluster); a selector of
+	// kind Target picks targets by them. The labels of a selected
+	// Application or ClusterProfile are its own.
+	// +kubebuilder:validation:MaxProperties=32
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// Path is the target's directory in the GitOps repo. Default: the
+	// environment's path (default environments/<environment>) followed by
+	// "/<name>".
+	// +optional
+	Path string `json:"path,omitempty"`
+
+	// Health replaces the environment's health check for this target.
+	// +optional
+	Health *HealthConfig `json:"health,omitempty"`
+}
+
+// The kinds a fleet selector selects.
+const (
+	FleetSelectorTarget         = "Target"
+	FleetSelectorApplication    = "Application"
+	FleetSelectorClusterProfile = "ClusterProfile"
+)
+
+// FleetSelector selects a fleet's targets by labels.
+// +kubebuilder:validation:XValidation:rule="has(self.matchLabels) || has(self.matchExpressions)",message="fleet.selector: set matchLabels or matchExpressions"
+type FleetSelector struct {
+	// Kind is what the selector selects: Target (spec.fleet.targets),
+	// Application (Argo CD Applications; the default) or ClusterProfile
+	// (multicluster.x-k8s.io/v1alpha1 clusters).
+	// +kubebuilder:validation:Enum=Target;Application;ClusterProfile
+	// +kubebuilder:default=Application
+	// +optional
+	Kind string `json:"kind,omitempty"`
+
+	// Namespace holds the Applications or ClusterProfiles. Applications are
+	// read only from the controller's fleets.applicationNamespaces (default
+	// argocd; the default namespace is the first of them), ClusterProfiles
+	// from the Pipeline's namespace (the default) and the controller's
+	// fleets.clusterProfileNamespaces. Unused by kind Target.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// MatchLabels selects by label values.
+	// +optional
+	MatchLabels map[string]string `json:"matchLabels,omitempty"`
+
+	// MatchExpressions selects by label expressions (In, NotIn, Exists,
+	// DoesNotExist), as in a Kubernetes label selector.
+	// +optional
+	MatchExpressions []metav1.LabelSelectorRequirement `json:"matchExpressions,omitempty"`
+}
+
+// LabelSelector is s as a Kubernetes label selector.
+func (s *FleetSelector) LabelSelector() *metav1.LabelSelector {
+	return &metav1.LabelSelector{MatchLabels: s.MatchLabels, MatchExpressions: s.MatchExpressions}
+}
+
 // HealthConfig holds health check configuration for an environment.
 type HealthConfig struct {
 	// Type selects the health check backend.
@@ -1020,6 +1137,28 @@ type PipelineStatus struct {
 	// last 30 Verified Bundles for this Pipeline. Written by PipelineReconciler.
 	// +optional
 	DeploymentMetrics *PipelineDeploymentMetrics `json:"deploymentMetrics,omitempty"`
+
+	// Fleets are the resolved targets of each fleet environment that uses a
+	// selector, written by the PipelineReconciler. A Bundle's Graph is built
+	// from them; a change rebuilds the Graph of a Bundle in flight.
+	// +optional
+	// +listType=map
+	// +listMapKey=environment
+	Fleets []FleetStatus `json:"fleets,omitempty"`
+}
+
+// FleetStatus is the resolved membership of one selector fleet.
+type FleetStatus struct {
+	// Environment is the fleet environment.
+	Environment string `json:"environment"`
+
+	// Targets are the selected Applications as targets, sorted by name.
+	// +optional
+	Targets []FleetTarget `json:"targets,omitempty"`
+
+	// Message says why the selector could not be resolved, when it could not.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // PipelineDeploymentMetrics holds aggregate promotion efficiency metrics for a Pipeline.
