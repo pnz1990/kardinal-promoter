@@ -136,6 +136,11 @@ func renderedBranchKustomize(t *testing.T, shape string) {
 	ps := e.WaitStepState(t, a.ns, pipelineName, b2, "test", "Verified", promoteTimeout)
 	checkSteps(t, ps, []string{"render", "health-check"})
 	rr := renderRunOf(t, e, a.ns, b2, "test")
+	wantNode := "render0test" // a node of its own
+	if shape == graph.GraphShapeCompact {
+		wantNode = graph.NodeRenderRuns // an item of the collection
+	}
+	assert.Equal(t, wantNode, rr.Labels[graph.LabelKRONodeID], "the %s shape created the RenderRun", shape)
 	assertRenderJobSandboxed(t, e, rr)
 	assert.Equal(t, dryHead, ps.Status.Outputs["dryCommit"], "the head of the DRY source was rendered")
 	assert.Contains(t, e.ReadFile(t, a.repo, a.renderedBranch("test"), deployment("test")), "image: "+v2)
