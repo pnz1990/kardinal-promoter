@@ -255,3 +255,114 @@ func TestRemoteCache_OlderHeadsFinishingLastAreNotCached(t *testing.T) {
 	assert.Equal(t, "new", cached["main"], "the cache keeps the heads read last, not the ones that finished last")
 	assert.Equal(t, 2, rem.callCount(), "served from the cache")
 }
+
+// graphRemote is countingRemote with a commit graph reader.
+type graphRemote struct {
+	countingRemote
+	graphs int
+}
+
+func (g *graphRemote) BranchGraph(context.Context, string, string, string, int) (string, map[string]scm.GraphCommit, error) {
+	g.graphs++
+	return g.head, map[string]scm.GraphCommit{g.head: {}}, nil
+}
+
+// TestRemoteCache_StoreBeforeFlightEnds (#1653 QA cache audit): a caller
+// that missed the cache while another caller's read was in flight, and
+// gets to its own read only after that flight ended, finds the stored
+// result instead of reading again: the flight stores before it ends, and
+// a new flight checks the cache first. For heads, history and graphs.
+func TestRemoteCache_StoreBeforeFlightEnds(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	for _, kind := range []string{"heads", "history", "graph"} {
+		t.Run(kind, func(t *testing.T) {
+			rem := &graphRemote{countingRemote: countingRemote{head: "a"}}
+			inMiss, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			c := remoteCache{onMiss: func(string) {
+				first := false
+				once.Do(func() { first = true })
+				if first { // the late caller: it missed, then waits here
+					close(inMiss)
+					<-release
+				}
+			}}
+			call := func() error {
+				var err error
+				switch kind {
+				case "heads":
+					_, err = c.remoteHeads(ctx, rem, "https://git/x", "tok", now)
+				case "history":
+					_, err = c.branchHistory(ctx, rem, "https://git/x", "main", "a", "tok", 20)
+				case "graph":
+					_, err = c.branchGraph(ctx, rem, "https://git/x", "main", "a", "tok", 20)
+				}
+				return err
+			}
+			late := make(chan error, 1)
+			go func() { late <- call() }()
+			within(t, inMiss, "the late caller to miss the cache")
+			require.NoError(t, call()) // another caller reads, stores, and its flight ends
+			close(release)
+			require.NoError(t, within(t, late, "the late caller"))
+			reads := map[string]int{"heads": rem.lsRemote, "history": rem.fetches, "graph": rem.graphs}[kind]
+			assert.Equal(t, 1, reads, "one read: the late caller's flight found it stored")
+		})
+	}
+}
+
+// TestRemoteCache_FreshDoesNotJoinARecheckHit (#1667 QA): a fresh readHeads
+// (A) moves the key to a new generation; a shared read (B) that missed the
+// cache earlier starts a flight in that generation, and its re-check finds
+// the heads an older read stored. A must not join that flight and take
+// those heads (its started is after A asked): fresh and shared reads use
+// different flights, and A makes its own ls-remote.
+func TestRemoteCache_FreshDoesNotJoinARecheckHit(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	rem := &countingRemote{head: "old"}
+	aBumped, aGo := make(chan struct{}), make(chan struct{})
+	bInFlight, bGo := make(chan struct{}), make(chan struct{})
+	waits := make(chan string, 8)
+	var bOnce sync.Once
+	c := remoteCache{onWait: func(key string) { waits <- key }}
+	_, err := c.loadHeads(ctx, rem, "https://git/x", "tok", now, false) // an older read stores "old"
+	require.NoError(t, err)
+	within(t, waits, "the older read")
+	rem.head = "new"
+	c.onFresh = func(string) { close(aBumped); <-aGo }
+	c.inFlight = func(string) {
+		first := false
+		bOnce.Do(func() { first = true })
+		if first { // B's flight: held until A has joined it or started its own
+			close(bInFlight)
+			<-bGo
+		}
+	}
+
+	type answer struct {
+		head string
+		err  error
+	}
+	a := make(chan answer, 1)
+	go func() {
+		h, err := c.readHeads(ctx, rem, "https://git/x", "tok", now)
+		a <- answer{h["main"], err}
+	}()
+	within(t, aBumped, "A to move the key to a new generation")
+	b := make(chan answer, 1)
+	go func() { // B missed the cache before "old" was stored; it reads now
+		h, err := c.loadHeads(ctx, rem, "https://git/x", "tok", now, false)
+		b <- answer{h["main"], err}
+	}()
+	within(t, bInFlight, "B's flight to start")
+	close(aGo)
+	within(t, waits, "a caller to wait")
+	within(t, waits, "the other caller to wait")
+	close(bGo)
+	assert.Equal(t, answer{"new", nil}, within(t, a, "A"), "A, a fresh read, reads the heads itself")
+	// B, a shared read, may answer from the cache: by now A stored "new".
+	require.NoError(t, within(t, b, "B").err)
+	assert.Equal(t, 2, rem.lsRemote)
+}

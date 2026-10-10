@@ -53,6 +53,12 @@ type remoteCache struct {
 	gen map[string]uint64
 	// onWait, when set (tests), is called once a caller waits for a read.
 	onWait func(key string)
+	// onMiss, when set (tests), is called when a caller found nothing in
+	// the cache, before it starts or joins a read.
+	onMiss func(kind string)
+	// onFresh and inFlight, when set (tests), are called after a fresh
+	// caller moved the key to a new generation, and when a flight starts.
+	onFresh, inFlight func(key string)
 }
 
 // maxGenerations bounds remoteCache.gen.
@@ -93,19 +99,35 @@ type branchGraph struct {
 //     caller's remaining ctx, and may fail too.
 //
 // started is the seq the answering read started at, which orders the
-// values written to the heads cache (loadHeads).
-func (c *remoteCache) shared(ctx context.Context, key string, fresh bool, read func(context.Context) (any, error)) (v any, started uint64, err error) {
+// values written to the heads cache (loadHeads). read gets it too: it runs
+// inside the flight, and checks the cache again and stores its result there
+// before the flight ends, so a caller that arrives between the end of a
+// flight and the store does not start another read.
+func (c *remoteCache) shared(ctx context.Context, key string, fresh bool, read func(ctx context.Context, started uint64) (any, error)) (v any, started uint64, err error) {
 	asked := c.seq.Add(1)
 	if fresh {
 		c.nextGeneration(key, c.generation(key))
+		if c.onFresh != nil {
+			c.onFresh(key)
+		}
 	}
 	for attempt := 0; ; attempt++ {
 		gen := c.generation(key)
-		ch := c.flight.DoChan(key+"\x00"+strconv.FormatUint(gen, 10), func() (any, error) {
+		// Fresh and shared reads never share a flight: a shared read checks
+		// the cache first and may answer with heads an older read stored,
+		// which a fresh caller must not take (#1667 QA).
+		flightKey := key + "\x00" + strconv.FormatUint(gen, 10)
+		if fresh {
+			flightKey += "\x00fresh"
+		}
+		ch := c.flight.DoChan(flightKey, func() (any, error) {
+			if c.inFlight != nil {
+				c.inFlight(flightKey)
+			}
 			started := c.seq.Add(1)
 			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), historyTimeout)
 			defer cancel()
-			v, err := read(rctx)
+			v, err := read(rctx, started)
 			return flightResult{val: v, started: started}, err
 		})
 		if c.onWait != nil {
@@ -123,6 +145,12 @@ func (c *remoteCache) shared(ctx context.Context, key string, fresh bool, read f
 			continue
 		}
 		return res.val, res.started, r.Err
+	}
+}
+
+func (c *remoteCache) missed(kind string) {
+	if c.onMiss != nil {
+		c.onMiss(kind)
 	}
 }
 
@@ -165,12 +193,10 @@ type headsEntry struct {
 // remoteHeads returns the branch heads of url, from the cache when they are
 // younger than remoteHeadsTTL.
 func (c *remoteCache) remoteHeads(ctx context.Context, rh scm.RemoteHeadReader, url, token string, now time.Time) (map[string]string, error) {
-	c.mu.Lock()
-	e, ok := c.heads[url]
-	c.mu.Unlock()
-	if ok && now.Sub(e.at) < remoteHeadsTTL && !now.Before(e.at) {
-		return e.heads, nil
+	if h, ok := c.cachedHeads(url, now); ok {
+		return h, nil
 	}
+	c.missed("heads")
 	return c.loadHeads(ctx, rh, url, token, now, false)
 }
 
@@ -183,51 +209,96 @@ func (c *remoteCache) readHeads(ctx context.Context, rh scm.RemoteHeadReader, ur
 }
 
 // loadHeads reads the branch heads of url, sharing a read in progress
-// (unless fresh: shared), and stores them for the others.
+// (unless fresh: shared), and stores them for the others. A shared (not
+// fresh) read first checks the cache again: another flight may have stored
+// heads since the caller missed.
 func (c *remoteCache) loadHeads(ctx context.Context, rh scm.RemoteHeadReader, url, token string, now time.Time, fresh bool) (map[string]string, error) {
-	v, started, err := c.shared(ctx, "heads\x00"+url+"\x00"+tokenKey(token), fresh, func(ctx context.Context) (any, error) {
-		return rh.RemoteHeads(ctx, url, token)
+	v, _, err := c.shared(ctx, "heads\x00"+url+"\x00"+tokenKey(token), fresh, func(ctx context.Context, started uint64) (any, error) {
+		if !fresh {
+			if h, ok := c.cachedHeads(url, now); ok {
+				return h, nil
+			}
+		}
+		heads, err := rh.RemoteHeads(ctx, url, token)
+		if err != nil {
+			return nil, err
+		}
+		c.storeHeads(url, heads, now, started)
+		return heads, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	heads := v.(map[string]string)
+	return v.(map[string]string), nil
+}
+
+// cachedHeads returns the cached heads of url when they are younger than
+// remoteHeadsTTL at now.
+func (c *remoteCache) cachedHeads(url string, now time.Time) (map[string]string, bool) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.heads[url]
+	if ok && now.Sub(e.at) < remoteHeadsTTL && !now.Before(e.at) {
+		return e.heads, true
+	}
+	return nil, false
+}
+
+// storeHeads caches heads read by the ls-remote that started at seq
+// started. Reads overlap (a fresh read next to an older shared one): the
+// cache keeps the one that started last, so an older read finishing last
+// does not put back a head older than one already cached.
+func (c *remoteCache) storeHeads(url string, heads map[string]string, now time.Time, started uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.heads == nil {
 		c.heads = map[string]headsEntry{}
 	}
-	// Reads overlap (a fresh read next to an older shared one): the cache
-	// keeps the one that started last, so an older read finishing last does
-	// not put back a head older than one already cached.
 	if e, ok := c.heads[url]; !ok || e.started <= started {
 		c.heads[url] = headsEntry{at: now, heads: heads, started: started}
 	}
-	c.mu.Unlock()
-	return heads, nil
 }
 
 // branchHistory returns the last maxCommits commits of branch at head.
 func (c *remoteCache) branchHistory(ctx context.Context, rh scm.RemoteHeadReader, url, branch, head, token string, maxCommits int) ([]scm.CommitPaths, error) {
 	key := url + "\x00" + branch + "\x00" + head + "\x00" + strconv.Itoa(maxCommits)
-	c.mu.Lock()
-	h, ok := c.history[key]
-	c.mu.Unlock()
-	if ok {
+	if h, ok := c.cachedHistory(key); ok {
 		return h, nil
 	}
-	v, _, err := c.shared(ctx, "history\x00"+key+"\x00"+tokenKey(token), false, func(ctx context.Context) (any, error) {
-		return rh.BranchHistory(ctx, url, branch, token, maxCommits)
+	c.missed("history")
+	// Inside the flight: check again (another flight may have stored it
+	// since), and store before the flight ends.
+	v, _, err := c.shared(ctx, "history\x00"+key+"\x00"+tokenKey(token), false, func(ctx context.Context, _ uint64) (any, error) {
+		if h, ok := c.cachedHistory(key); ok {
+			return h, nil
+		}
+		h, err := rh.BranchHistory(ctx, url, branch, token, maxCommits)
+		if err != nil {
+			return nil, err
+		}
+		if len(h) > 0 && h[0].SHA == head {
+			// Otherwise the branch moved again since the ls-remote: do not
+			// file this history under head.
+			c.storeHistory(key, h)
+		}
+		return h, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	h = v.([]scm.CommitPaths)
-	if len(h) == 0 || h[0].SHA != head {
-		// The branch moved again since the ls-remote: do not file this
-		// history under head.
-		return h, nil
-	}
+	return v.([]scm.CommitPaths), nil
+}
+
+func (c *remoteCache) cachedHistory(key string) ([]scm.CommitPaths, bool) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	h, ok := c.history[key]
+	return h, ok
+}
+
+func (c *remoteCache) storeHistory(key string, h []scm.CommitPaths) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.history == nil {
 		c.history = map[string][]scm.CommitPaths{}
 	}
@@ -239,8 +310,6 @@ func (c *remoteCache) branchHistory(ctx context.Context, rh scm.RemoteHeadReader
 			c.order = c.order[1:]
 		}
 	}
-	c.mu.Unlock()
-	return h, nil
 }
 
 // branchGraph returns the commit graph of branch at head, read at depth
@@ -250,24 +319,40 @@ func (c *remoteCache) branchHistory(ctx context.Context, rh scm.RemoteHeadReader
 // read with another Pipeline's credentials.
 func (c *remoteCache) branchGraph(ctx context.Context, gr scm.BranchGraphReader, url, branch, head, token string, maxCommits int) (branchGraph, error) {
 	key := url + "\x00" + branch + "\x00" + head + "\x00" + strconv.Itoa(maxCommits) + "\x00" + tokenKey(token)
-	c.mu.Lock()
-	g, ok := c.graphs[key]
-	c.mu.Unlock()
-	if ok {
+	if g, ok := c.cachedGraph(key); ok {
 		return g, nil
 	}
-	v, _, err := c.shared(ctx, "graph\x00"+key, false, func(ctx context.Context) (any, error) {
+	c.missed("graph")
+	v, _, err := c.shared(ctx, "graph\x00"+key, false, func(ctx context.Context, _ uint64) (any, error) {
+		if g, ok := c.cachedGraph(key); ok {
+			return g, nil
+		}
 		h, graph, err := gr.BranchGraph(ctx, url, branch, token, maxCommits)
-		return branchGraph{head: h, graph: graph}, err
+		if err != nil {
+			return branchGraph{}, err
+		}
+		g := branchGraph{head: h, graph: graph}
+		if g.head == head {
+			c.storeGraph(key, g)
+		}
+		return g, nil
 	})
 	if err != nil {
 		return branchGraph{}, err
 	}
-	g = v.(branchGraph)
-	if g.head != head {
-		return g, nil
-	}
+	return v.(branchGraph), nil
+}
+
+func (c *remoteCache) cachedGraph(key string) (branchGraph, bool) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	g, ok := c.graphs[key]
+	return g, ok
+}
+
+func (c *remoteCache) storeGraph(key string, g branchGraph) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.graphs == nil {
 		c.graphs = map[string]branchGraph{}
 	}
@@ -279,6 +364,4 @@ func (c *remoteCache) branchGraph(ctx context.Context, gr scm.BranchGraphReader,
 			c.gorder = c.gorder[1:]
 		}
 	}
-	c.mu.Unlock()
-	return g, nil
 }
