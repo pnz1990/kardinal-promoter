@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // policyTestNow is a Wednesday. Every simulate test resolves --time from it.
@@ -77,7 +78,7 @@ func policyGate(name, ns, appliesTo, expr string, labels ...string) *v1alpha1.Po
 
 func policyClient(t *testing.T, objs ...sigs_client.Object) sigs_client.Client {
 	t.Helper()
-	return fake.NewClientBuilder().WithScheme(buildPolicyScheme(t)).WithObjects(objs...).Build()
+	return fake.NewClientBuilder().WithScheme(buildPolicyScheme(t)).WithObjects(objs...).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 }
 
 // runSimulate runs policy simulate for pipeline "demo" in "default" with
@@ -753,6 +754,22 @@ func TestPolicyList(t *testing.T) {
 
 	var missing bytes.Buffer
 	assert.ErrorContains(t, policyListFn(&missing, c, "default", "nope", nil), `pipeline "nope" not found`)
+}
+
+// TestPolicyList_Fleet (#1565 QA): kardinal policy list --pipeline shows the
+// gates that apply to a fleet environment and to one of its targets only.
+func TestPolicyList_Fleet(t *testing.T) {
+	p := policyPipeline("web", "test", "prod")
+	p.Spec.Environments[1].Fleet = &v1alpha1.FleetSpec{Targets: []v1alpha1.FleetTarget{{Name: "eu"}, {Name: "us"}}}
+	c := policyClient(t, p,
+		policyGate("fleet-gate", "default", "prod", "true"),
+		policyGate("eu-only", "default", "prod-eu", "true"),
+		policyGate("unattached", "default", "staging", "true"))
+	var out bytes.Buffer
+	require.NoError(t, policyListFn(&out, c, "default", "web", nil))
+	assert.Contains(t, out.String(), "fleet-gate")
+	assert.Contains(t, out.String(), "eu-only", "a gate of one target")
+	assert.NotContains(t, out.String(), "unattached")
 }
 
 // TestPolicyList_LastEvaluated: LAST-EVALUATED is the newest evaluation of a

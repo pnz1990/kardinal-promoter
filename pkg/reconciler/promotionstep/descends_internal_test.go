@@ -26,13 +26,13 @@ type linearRemote struct {
 	delay    time.Duration
 }
 
-func (l *linearRemote) RemoteHeads(context.Context, string, string) (map[string]string, error) {
+func (l *linearRemote) RemoteHeads(context.Context, string, scm.GitAuth) (map[string]string, error) {
 	return map[string]string{"main": fmt.Sprintf("c%07d", l.n-1)}, nil
 }
 
 // BranchGraph is the last max commits of the chain, each with its parent
 // (the oldest one's parent is the shallow boundary).
-func (l *linearRemote) BranchGraph(_ context.Context, _, _, _ string, max int) (string, map[string]scm.GraphCommit, error) {
+func (l *linearRemote) BranchGraph(_ context.Context, _, _ string, _ scm.GitAuth, max int) (string, map[string]scm.GraphCommit, error) {
 	l.mu.Lock()
 	l.reads++
 	l.mu.Unlock()
@@ -53,7 +53,7 @@ func (l *linearRemote) BranchGraph(_ context.Context, _, _, _ string, max int) (
 	return fmt.Sprintf("c%07d", l.n-1), g, nil
 }
 
-func (l *linearRemote) BranchHistory(_ context.Context, _, _, _ string, max int) ([]scm.CommitPaths, error) {
+func (l *linearRemote) BranchHistory(_ context.Context, _, _ string, _ scm.GitAuth, max int) ([]scm.CommitPaths, error) {
 	var h []scm.CommitPaths
 	for i := l.n - 1; i >= 0 && len(h) < max; i-- {
 		h = append(h, scm.CommitPaths{SHA: fmt.Sprintf("c%07d", i)})
@@ -82,24 +82,24 @@ func TestDescends(t *testing.T) {
 		{"short SHAs compare by prefix", c(149)[:7], c(140), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ok, err := r.descends(ctx, rem, rem, "https://git/acc", "main", "tok", tc.rev, tc.want, envPaths)
+			ok, err := r.descends(ctx, rem, rem, "https://git/acc", "main", scm.TokenAuth("tok"), tc.rev, tc.want, envPaths)
 			require.NoError(t, err)
 			assert.Equal(t, tc.ok, ok)
 		})
 	}
 	fresh := &Reconciler{NowFn: r.NowFn}
 	cold := &linearRemote{n: 150}
-	_, _ = fresh.descends(ctx, cold, cold, "https://git/acc", "main", "tok", c(149), c(140), envPaths)
+	_, _ = fresh.descends(ctx, cold, cold, "https://git/acc", "main", scm.TokenAuth("tok"), c(149), c(140), envPaths)
 	assert.Equal(t, 1, cold.reads, "a recent commit: the first 20 commits")
-	_, _ = fresh.descends(ctx, cold, cold, "https://git/acc", "main", "tok", c(149), c(10), envPaths)
+	_, _ = fresh.descends(ctx, cold, cold, "https://git/acc", "main", scm.TokenAuth("tok"), c(149), c(10), envPaths)
 	assert.Equal(t, 2, cold.reads, "an older commit reads the deep history once")
 	for i := range 100 { // 100 environments' checks on the same head
-		_, _ = fresh.descends(ctx, cold, cold, "https://git/acc", "main", "tok", c(149), c(11+i%100), envPaths)
+		_, _ = fresh.descends(ctx, cold, cold, "https://git/acc", "main", scm.TokenAuth("tok"), c(149), c(11+i%100), envPaths)
 	}
 	assert.Equal(t, 2, cold.reads, "cached for the head")
 
 	deep := &linearRemote{n: deepHistoryDepth + 50}
-	ok, err := r.descends(ctx, deep, deep, "https://git/deep", "main", "tok", c(deep.n-1), c(0), envPaths)
+	ok, err := r.descends(ctx, deep, deep, "https://git/deep", "main", scm.TokenAuth("tok"), c(deep.n-1), c(0), envPaths)
 	require.NoError(t, err)
 	assert.False(t, ok, "a promoted commit past the deep history is not assumed")
 }
@@ -115,7 +115,7 @@ func TestDescends_OneReadPerHead(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ok, err := r.descends(ctx, rem, rem, "https://git/wave", "main", "tok", fmt.Sprintf("c%07d", 29), fmt.Sprintf("c%07d", 10+i%19), envPaths)
+			ok, err := r.descends(ctx, rem, rem, "https://git/wave", "main", scm.TokenAuth("tok"), fmt.Sprintf("c%07d", 29), fmt.Sprintf("c%07d", 10+i%19), envPaths)
 			assert.NoError(t, err)
 			assert.True(t, ok)
 		}()

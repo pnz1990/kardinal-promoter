@@ -219,7 +219,7 @@ The git server refused the push, yet the base branch is still at the commit the 
 
 ### Symptom: "base branch main moved from ... to ...; rebuilt the PR branch"
 
-Not an error. While a `pr-review` PR waits for its merge, the controller compares the base branch head with the commit the promotion was built on (`status.outputs.baseSHA`) every 30 seconds. When the new commits on the base changed a file under the environment's path (or a Helm `valuesFile` outside it), or the base was force-pushed, it runs the promotion's steps again from a fresh clone of the new head and force-pushes the PR branch. The PR keeps its number; `status.outputs.prBranchRebuilds` counts the rebuilds and the step emits a `PRBranchRebuilt` Event. A base that moved at other paths only updates `baseSHA`. A host that dismisses approvals on a new push (GitHub's "Dismiss stale pull request approvals") asks for the review again after a rebuild. When a rebuild fails, the message reads `rebuilding its branch on main at <sha> failed, retrying` and the PR stays as it was.
+Not an error. While a `pr-review` PR waits for its merge, the controller compares the base branch head with the commit the promotion was built on (`status.outputs.baseSHA`) every 30 seconds. When the new commits on the base changed a file under the environment's path (or a Helm `valuesFile` outside it), or the base was force-pushed, it runs the promotion's steps again from a fresh clone of the new head and force-pushes the PR branch. The PR keeps its number; `status.outputs.prBranchRebuilds` counts the rebuilds and the step emits a `PRBranchRebuilt` Event. A base that moved at other paths only updates `baseSHA`. So does a base that already has the promotion's change, typically the PR's own merge, seen before the PR's status reports it. That is not counted as a rebuild. A host that dismisses approvals on a new push (GitHub's "Dismiss stale pull request approvals") asks for the review again after a rebuild. When a rebuild fails, the message reads `rebuilding its branch on main at <sha> failed, retrying` and the PR stays as it was.
 
 ### Symptom: "its branch has commits kardinal did not push ... so it is not rebuilt"
 
@@ -569,7 +569,7 @@ kubectl logs -n kardinal-system deploy/kardinal-promoter | grep "open-pr\|pull_r
 
 Common causes:
 - The base branch (`spec.git.branch`, default `main`) does not exist in the GitOps repo
-- The environment already runs this version. `git-commit` finds nothing to change, so no PR is opened, and the PromotionStep has `status.outputs.noChanges: "true"`
+- The environment already runs this version. `git-commit` finds nothing to change, so no PR is opened, and the PromotionStep has `status.outputs.noChanges: "true"`. Its `status.outputs.commitSHA` is the branch head it cloned, and the health check waits until the GitOps tool has applied that commit (`waiting for <sha>`): a GitOps source that is suspended or pinned to an older revision keeps the step in `HealthChecking` until `health.timeout`
 - The GitOps repo is private and the token lacks `repo` scope
 
 ---
@@ -687,6 +687,9 @@ kardinal/<namespace hash>/<bundle>/<env> failed` (for a step with no PR, `the st
 branch kardinal/<namespace hash>/<bundle>/<env> failed`): delete that branch by hand. It also emits a
 `ClosePRFailed` Warning Event on the step, except in a namespace being deleted: the API server
 refuses new Events there, and the step is gone, so the controller log is the only record.
+`kardinal_pr_cleanup_failures_total{reason="ClosePRFailed"}` (and `reason="PRLeftOpen"` for the
+case below) counts these PRs, so alert on it: Warning Events are rate-limited and best effort
+([Kubernetes Events](installation.md#kubernetes-events)).
 
 Before it closes the PR, the controller reads the Bundle, its namespace, its Pipeline and its
 Graph to tell whether the step comes back (the Graph case above). If one of those reads keeps

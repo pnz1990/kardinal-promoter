@@ -120,10 +120,10 @@ func TestValidate_Documents(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "layout branch",
+			name: "layout branch rendering into the source branch",
 			content: "apiVersion: kardinal.io/v1alpha1\nkind: Pipeline\nmetadata:\n  name: web\n" +
-				"spec:\n  git:\n    url: https://github.com/o/r\n    layout: branch\n  environments:\n  - name: test\n",
-			wantOut: []string{"✗ f.yaml is invalid:", "spec.git.layout: branch is not implemented"},
+				"spec:\n  git:\n    url: https://github.com/o/r\n    branch: main\n    layout: branch\n  environments:\n  - name: test\n    render:\n      branch: main\n",
+			wantOut: []string{"✗ f.yaml is invalid:", `environment "test": the rendered branch "main" is spec.git.branch`},
 			wantErr: true,
 		},
 		{
@@ -334,4 +334,40 @@ func TestValidate_AllowedRepositories(t *testing.T) {
 			assert.Contains(t, out, tc.wantOut)
 		})
 	}
+}
+
+// TestValidate_FleetSelector (D1): offline, an Application selector fleet
+// cannot be resolved, so validate checks the rest of the Pipeline with a
+// stand-in target and says so; a static fleet is checked as written.
+//
+// Covers FLEET-03.
+func TestValidate_FleetSelector(t *testing.T) {
+	doc := `apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: web
+spec:
+  git:
+    url: https://github.com/o/r
+  environments:
+  - name: test
+  - name: prod
+    fleet:
+      maxConcurrent: 5
+      selector:
+        matchLabels: {tier: prod}
+  - name: audit
+`
+	t.Chdir(t.TempDir())
+	require.NoError(t, os.WriteFile("f.yaml", []byte(doc), 0o600))
+	out, err := executeRoot(t, "validate", "-f", "f.yaml")
+	require.NoError(t, err, out)
+	assert.Contains(t, out, "✓ f.yaml is valid")
+	assert.Contains(t, out, `environment "prod": its fleet targets are the Applications its selector matches in the cluster`)
+
+	bad := strings.Replace(doc, "      selector:\n        matchLabels: {tier: prod}\n", "      targets: [{name: eu}, {name: eu}]\n", 1)
+	require.NoError(t, os.WriteFile("f.yaml", []byte(bad), 0o600))
+	out, err = executeRoot(t, "validate", "-f", "f.yaml")
+	require.Error(t, err)
+	assert.Contains(t, out, `environment name "prod-eu" is already used`)
 }

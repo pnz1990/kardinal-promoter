@@ -39,6 +39,9 @@ const (
 	// NodePromotionState is what the observed steps and gates say: the
 	// environments started and Verified, and the gate instances ready.
 	NodePromotionState = "PromotionState"
+	// NodePromotionEligible is the DAG entries ready to start, in a Pipeline
+	// with fleets: NodePromotionWave admits them as the fleets' places allow.
+	NodePromotionEligible = "PromotionEligible"
 	// NodePromotionWave is the DAG entries whose PromotionStep may exist.
 	NodePromotionWave = "PromotionWave"
 	// NodePromotionSteps creates one PromotionStep per NodePromotionWave entry.
@@ -74,12 +77,18 @@ func ShapeOf(g *Graph) string {
 
 // compactShape reports whether the Graph for pipeline, promoting envs
 // environments, uses the compact shape. pinned, the shape of the Bundle's
-// existing Graph, wins over the threshold and the annotation.
-func (b *Builder) compactShape(pipeline *kardinalv1alpha1.Pipeline, envs int, pinned string) (bool, error) {
+// existing Graph, wins over the threshold and the annotation. A Pipeline with
+// fleets is always compact: pacing the targets needs the steps in one
+// collection, so a Bundle pinned to the nodes shape cannot take a fleet.
+func (b *Builder) compactShape(pipeline *kardinalv1alpha1.Pipeline, envs int, pinned string, fleets bool) (bool, error) {
 	switch pinned {
 	case GraphShapeCompact:
 		return true, nil
 	case GraphShapeNodes:
+		if fleets {
+			return false, fmt.Errorf("build: this Bundle's Graph has the %q shape, which cannot promote a fleet environment; "+
+				"the fleet applies to new Bundles", GraphShapeNodes)
+		}
 		return false, nil
 	case "":
 	default:
@@ -89,9 +98,13 @@ func (b *Builder) compactShape(pipeline *kardinalv1alpha1.Pipeline, envs int, pi
 	case GraphShapeCompact:
 		return true, nil
 	case GraphShapeNodes:
+		if fleets {
+			return false, fmt.Errorf("build: Pipeline annotation %s=%q: a Pipeline with a fleet environment needs the %q shape",
+				AnnotationGraphShape, v, GraphShapeCompact)
+		}
 		return false, nil
 	case "":
-		return envs > b.CompactAbove, nil
+		return fleets || envs > b.CompactAbove, nil
 	default:
 		return false, fmt.Errorf("build: Pipeline annotation %s=%q: use %q, %q or remove it",
 			AnnotationGraphShape, v, GraphShapeCompact, GraphShapeNodes)
@@ -162,9 +175,14 @@ func checkCompactSupport(in BuildInput) error {
 
 // WouldBeCompact reports whether a new Bundle of pipeline promoting envs
 // environments would get a compact Graph from b: the annotation, or more
-// environments than b.CompactAbove. An invalid annotation reports false.
+// environments than b.CompactAbove, or a fleet environment. An invalid
+// annotation reports false.
 func (b *Builder) WouldBeCompact(pipeline *kardinalv1alpha1.Pipeline, envs int) bool {
-	compact, err := b.compactShape(pipeline, envs, "")
+	fleets := false
+	for _, e := range pipeline.Spec.Environments {
+		fleets = fleets || e.Fleet != nil
+	}
+	compact, err := b.compactShape(pipeline, envs, "", fleets)
 	return err == nil && compact
 }
 
@@ -173,10 +191,30 @@ type compactStep struct {
 	env, name, prStatus string
 	upstreams           []string // environment names
 	gates               []string // gate instance names
-	extras              compactEnvExtras
+	// fleet, index and maxConcurrent pace a fleet target ("" for an
+	// environment that is not one).
+	fleet         string
+	index         int
+	maxConcurrent int
+	// maxUnavailable stops the fleet's admissions once that many of its
+	// targets Failed (0: unset).
+	maxUnavailable int
+	extras         compactEnvExtras
 	// imageVerification is the Bundle's ImageVerification name for a root
 	// step of a Pipeline with spec.imageVerification, else "".
 	imageVerification string
+}
+
+// stepsHaveFleets reports whether any of the built steps is a fleet target:
+// the one flag that turns on fleet pacing, spec.admitted and the paced pre
+// hooks, so all three agree.
+func stepsHaveFleets(steps []compactStep) bool {
+	for _, s := range steps {
+		if s.fleet != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // compactNodes builds the compact shape's PromotionStep nodes: the DAG as data
@@ -203,6 +241,13 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 		anyIV = anyIV || s.imageVerification != ""
 	}
 	entries := make([]interface{}, len(steps))
+	fleets := stepsHaveFleets(steps)
+	fleetOf := map[string]string{}
+	for _, s := range steps {
+		if s.fleet != "" {
+			fleetOf[s.env] = s.fleet
+		}
+	}
 	for i, s := range steps {
 		upstreamStates := make([]interface{}, len(s.upstreams))
 		for j := range upstreamStates {
@@ -218,7 +263,12 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 			// The Pipeline holds the environment on another Bundle's
 			// rollback (spec.holds, #1528; the node shape's heldCond): it
 			// is not admitted. A hold change rebuilds the Graph in place.
-			"held": heldBundle(pipeline, s.env) != "" && heldBundle(pipeline, s.env) != bundle.Name,
+			"held": heldBundle(pipeline, s.env, s.fleet) != "" && heldBundle(pipeline, s.env, s.fleet) != bundle.Name,
+		}
+		if fleets {
+			e := entries[i].(map[string]interface{})
+			e["fleet"], e["index"], e["maxConcurrent"], e["maxUnavailable"] = s.fleet, s.index, s.maxConcurrent, s.maxUnavailable
+			e["upstreamGroups"] = upstreamGroups(s.upstreams, fleetOf)
 		}
 		if anyHooks || anyAnalyses {
 			// Hooks and analyses (compact_extras.go): the step's lists, and
@@ -254,9 +304,40 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 	// collection is not referenced: kro publishes a collection only when every
 	// item applied (G11), and a step names its PRStatus literally and waits
 	// for it in WaitingForMerge.
-	wave := fmt.Sprintf("${%s.steps.filter(e, e.environment in %sstarted || "+
-		"(%shold == false && e.held == false && e.upstreams.all(u, u in %sverified) && e.gates.all(g, g in %sreadyGates)))}",
-		NodePromotionDAG, state, state, state, state)
+	// The upstreams are done when they are Verified. In a Pipeline with a
+	// fleet they come in groups, one per fleet (upstreamGroups): a group is
+	// done when every target is Verified or Superseded (#1603: a newer
+	// Bundle, the rollback of that one target, deployed it) and at least one
+	// is Verified, so a fleet that only newer Bundles deployed does not let
+	// the environments after it start.
+	upstreamsDone := fmt.Sprintf("e.upstreams.all(u, u in %sverified)", state)
+	if fleets {
+		upstreamsDone = fmt.Sprintf("e.upstreamGroups.all(g, g.all(u, u in %sverified || u in %ssupersededTargets) && g.exists(u, u in %sverified))",
+			state, state, state)
+	}
+	ready := fmt.Sprintf("%shold == false && e.held == false && %s && e.gates.all(g, g in %sreadyGates)",
+		state, upstreamsDone, state)
+	wave := fmt.Sprintf("${%s.steps.filter(e, e.environment in %sstarted || (%s))}", NodePromotionDAG, state, ready)
+	var eligible *GraphNode
+	if fleets {
+		// A fleet target that is ready also waits for a place: at most
+		// maxConcurrent of its fleet's targets are in flight (a step exists
+		// and is not settled, Verified or Superseded; a Failed one keeps its
+		// place). The ready targets without a step are ranked by their place
+		// in the fleet.
+		eligible = &GraphNode{ID: NodePromotionEligible, Def: map[string]interface{}{"steps": fmt.Sprintf(
+			"${%s.steps.filter(e, !(e.environment in %sstarted) && %s)}", NodePromotionDAG, state, ready)}}
+		inFlight := fmt.Sprintf("(size(%sstartedFleets.filter(f, f == e.fleet)) - size(%ssettledFleets.filter(f, f == e.fleet)))",
+			state, state)
+		rank := fmt.Sprintf("size(%s.steps.filter(x, x.fleet == e.fleet && x.index < e.index))", NodePromotionEligible)
+		// maxUnavailable: once that many of the fleet's targets Failed,
+		// none of its targets starts; the ones in flight finish.
+		failed := fmt.Sprintf("size(%sfailedFleets.filter(f, f == e.fleet))", state)
+		wave = fmt.Sprintf("${%s.steps.filter(e, e.environment in %sstarted) + %s.steps.filter(e, "+
+			"e.fleet == \"\" || ((e.maxUnavailable == 0 || %s < e.maxUnavailable) && "+
+			"(e.maxConcurrent == 0 || %s < e.maxConcurrent - %s)))}",
+			NodePromotionDAG, state, NodePromotionEligible, failed, rank, inFlight)
+	}
 
 	step := func(f string) string { return "${" + iterStep + "." + f + "}" }
 	stepSpec := map[string]interface{}{
@@ -280,7 +361,7 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 	if anyHooks || anyAnalyses || anyIV {
 		stepSpec["live"] = compactLive(bundle, anyHooks, anyAnalyses, anyIV)
 	}
-	return []GraphNode{
+	nodes := []GraphNode{
 		{ID: NodePromotionDAG, Def: map[string]interface{}{"steps": entries}},
 		{
 			ID: NodeStepsObserved,
@@ -344,6 +425,40 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 			ReadyWhen: []string{fmt.Sprintf("${%s.verified == %s.total}", NodePromotionProgress, NodePromotionProgress)},
 		},
 	}
+	if fleets {
+		stateDef := nodes[2].Def
+		stateDef["startedFleets"] = fmt.Sprintf(`${%s.map(s, s.metadata.labels[?"%s"].orValue(""))}`, NodeStepsObserved, LabelFleet)
+		// Settled: Verified, or Superseded (#1603: the step did not push
+		// because a newer Bundle, the rollback of that one target, had). A
+		// settled target frees its place; a Superseded one is neither
+		// Verified nor a failure.
+		stateDef["settledFleets"] = fmt.Sprintf(`${%s.filter(s, s.?status.?state.orValue("") in ["Verified", "Superseded"]).map(s, s.metadata.labels[?"%s"].orValue(""))}`,
+			NodeStepsObserved, LabelFleet)
+		stateDef["supersededTargets"] = fmt.Sprintf(`${%s.filter(s, s.?status.?state.orValue("") == "Superseded" && s.metadata.labels[?"%s"].orValue("") != "").map(s, s.metadata.labels["kardinal.io/environment"])}`,
+			NodeStepsObserved, LabelFleet)
+		// The Graph is complete when every environment is settled: Verified,
+		// or a fleet target Superseded.
+		progress := nodes[len(nodes)-1]
+		progress.Def["settled"] = fmt.Sprintf("${size(%sverified) + size(%ssupersededTargets)}", state, state)
+		progress.ReadyWhen = []string{fmt.Sprintf("${%s.settled == %s.total}", NodePromotionProgress, NodePromotionProgress)}
+		nodes[len(nodes)-1] = progress
+		nodes[4].ReadyWhen = []string{fmt.Sprintf(`${each.?status.?state.orValue("") == "Verified" || `+
+			`(each.?status.?state.orValue("") == "Superseded" && each.metadata.labels[?"%s"].orValue("") != "")}`, LabelFleet)}
+		// A failure is Failed, AbortedByAlarm or RollingBack, as the Bundle
+		// reconciler counts it (failedState).
+		stateDef["failedFleets"] = fmt.Sprintf(`${%s.filter(s, s.?status.?state.orValue("") in ["Failed", "AbortedByAlarm", "RollingBack"]).map(s, s.metadata.labels[?"%s"].orValue(""))}`,
+			NodeStepsObserved, LabelFleet)
+		steps := nodes[4].Template["metadata"].(map[string]interface{})["labels"].(map[string]interface{})
+		steps[LabelFleet] = step("fleet")
+		// Pacing can drop an item kro created before StepsObserved lists it
+		// (ledger G11): such a step must not start. spec.admitted turns true
+		// once the step is observed, and from then on it stays in the wave
+		// (started); the PromotionStep reconciler waits for it in Pending.
+		spec := nodes[4].Template["spec"].(map[string]interface{})
+		spec["admitted"] = fmt.Sprintf("${%sstarted.exists(s_, s_ == %s.environment)}", state, iterStep)
+		nodes = append(nodes[:3], append([]GraphNode{*eligible}, nodes[3:]...)...)
+	}
+	return nodes
 }
 
 // Node IDs and the iterator of the compact shape's per-promotion MetricCheck
@@ -436,6 +551,28 @@ func toInterfaces(s []string) []interface{} {
 	out := make([]interface{}, len(s))
 	for i, v := range s {
 		out[i] = v
+	}
+	return out
+}
+
+// upstreamGroups groups upstreams by fleet, in their order: the targets of
+// one fleet are one group, any other upstream is a group of its own.
+func upstreamGroups(upstreams []string, fleetOf map[string]string) []interface{} {
+	var out []interface{}
+	at := map[string]int{}
+	for _, u := range upstreams {
+		f := fleetOf[u]
+		if i, ok := at[f]; ok && f != "" {
+			out[i] = append(out[i].([]interface{}), u)
+			continue
+		}
+		if f != "" {
+			at[f] = len(out)
+		}
+		out = append(out, []interface{}{u})
+	}
+	if out == nil {
+		out = []interface{}{}
 	}
 	return out
 }

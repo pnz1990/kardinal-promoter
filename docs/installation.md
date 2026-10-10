@@ -277,6 +277,11 @@ go tool pprof -top -base before.pb.gz after.pb.gz
 | `bundleAPI.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with the Bundle API bearer token (`KARDINAL_BUNDLE_TOKEN`). `POST /api/v1/bundles` is off until this is set |
 | `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`). With neither this nor `ui.auth.tokenReview` set, the UI API serves only local clients (`kubectl port-forward`) |
 | `ui.auth.tokenReview` | `false` | `--ui-tokenreview-auth`: validate UI tokens with TokenReview; adds the RBAC it needs |
+| `ui.auth.allowStaticTokenWithTokenReview` | `false` | Install with both a static UI token and `ui.auth.tokenReview` (the static token wins); refused otherwise |
+| `rbac.userRoles.aggregateToDefaultRoles` | `false` | Aggregate the user roles into `view`, `edit` and `admin` (then everyone bound to `edit` can promote and approve) |
+| `rbac.userRoles.directWrites` | `false` | Grant the promoter and approver `update` for `kardinal pause`, `kardinal rollback --hold` / `release-hold` and `kardinal override` from a kubeconfig, limited by the scoped-writes admission policy |
+| `tokenReview.audiences` | `["kardinal-promoter"]` | `--tokenreview-audiences`: token audiences the UI API and Bundle API accept (`kubectl create token <sa> --audience kardinal-promoter`) |
+| `tokenReview.acceptAPIServerAudience` | `false` | `--tokenreview-accept-apiserver-audience`: also accept kubeconfig and default ServiceAccount tokens |
 | `controller.accessLog.allRequests` | `false` | `--access-log-all-requests`: log every UI API and Bundle API request, not only logins, refusals and writes ([API access log](guides/security.md#api-access-log)) |
 | `controller.accessLog.sourceIP` / `.trustedProxies` | `false` / `[]` | `--access-log-source-ip`, `--access-log-trusted-proxies`: add the client address; believe `X-Forwarded-For` only from these proxy CIDRs |
 | `ui.corsAllowedOrigins` | `[]` | `--cors-allowed-origins` |
@@ -297,6 +302,11 @@ go tool pprof -top -base before.pb.gz after.pb.gz
 | `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.10. The `integration-test` step was removed. The chart grants `batch/jobs` for [hooks](hooks.md) whatever it says |
 | `hooks.serviceAccounts` | `[default]` | ServiceAccounts a [hook](hooks.md)'s Pod may run as (`--hook-service-accounts`), in the Pipeline namespace. The Graph ServiceAccount is never allowed |
 | `hooks.podSecurityLevel` | `baseline` | Pod Security Standard a [hook](hooks.md) Pod must meet (`--hook-pod-security-level`): `baseline`, `restricted` or `privileged` (no Pod checks); below `privileged`, `nodeName` and `hostPort` are refused too |
+| `render.image.repository`, `render.image.tag`, `render.image.digest` | `ghcr.io/pnz1990/kardinal-promoter/render`, the chart's appVersion, none | The `kardinal-render` image the render Jobs of [`layout: branch`](rendered-manifests.md#the-render-job) run (`--render-image`); with a digest, `repository@digest`. Renders never run in the controller. `image.digest` pins the controller image the same way. The render Pods get the chart's `imagePullSecrets`, which must exist in the Pipeline namespaces |
+| `render.serviceAccountName` | `kardinal-render` | ServiceAccount of the render Pods; the controller creates it, without a token, in a Pipeline namespace that has none. Bind no role to it |
+| `render.resources.limits.cpu`, `.memory` | `1`, `512Mi` | Limits of a render Job; a render that needs more memory fails |
+| `render.timeout` | `5m` | How long a render Job may run |
+| `render.networkPolicy.enabled`, `.namespaces`, `.gitEgress` | `false`, `[]`, `[]` | A NetworkPolicy in each listed namespace that lets the render Pods reach only DNS and the git host rules in `gitEgress` (a CNI that enforces NetworkPolicy is needed). Recommended |
 | `resources.limits.cpu` | `500m` | CPU limit |
 | `resources.limits.memory` | `1Gi` | Memory limit; see [Sizing the controller](#sizing-the-controller) |
 | `resources.requests.cpu` | `10m` | CPU request |
@@ -388,8 +398,10 @@ release name other than `kardinal-promoter`, the Service is named
   under an image Bundle, or the image tags of the last image Bundle under a config Bundle, as
   `kardinal status` does. A lit rail marks the active Bundle's version on its way into an environment:
   amber and moving while it promotes, waits for its PR or is health checked; amber and still
-  while a PolicyGate holds it; red where it failed. A station opens its Pipeline. The board
-  follows the sidebar's health filter.
+  while a PolicyGate holds it; red where it failed. A [fleet](pipeline-reference.md#fleets)
+  is one station with a bar of its targets (Verified, in flight, Failed) and a count such as
+  `20/50 verified, 5 in flight (max 5)`; it says `stopped` once `maxUnavailable` targets
+  failed. A station opens its Pipeline. The board follows the sidebar's health filter.
 - **Pipeline view.** The lane, the promotion graph, policy gates with their CEL expressions,
   the Bundle history and comparison, and pause, resume, promote, roll back and create bundle.
   The lane has one column per depth: parallel environments share a column, and a wave of five
@@ -762,6 +774,99 @@ regions on one branch takes about a minute even when each step is fast. Raise `p
 git hosts. Each step that runs at once holds one shallow clone of its repository in the
 controller's memory and its working directory on disk.
 
+### Fair sharing between namespaces
+
+The PromotionStep, PRStatus, PolicyGate, Bundle, Pipeline and MetricCheck work queues share
+their workers between namespaces (#1577). An item's place in the queue is lowered, within its
+priority, by how many items its namespace already has ready or in process (in a few steps: none,
+1 to 3, 4 to 15, 16 to 63, 64 to 255, 256 or more), so an item of a namespace with little work
+goes ahead of another namespace's large backlog. One namespace's large promotion therefore no
+longer makes another team's steps wait for all of it.
+
+- Only items that are due count: an item waiting for a requeue delay or a retry backoff counts
+  once its time has come, and its place is computed again then. A namespace with many idle or
+  failing objects is not pushed down.
+- Aging: an item that has been due for more than 10 seconds goes back to its normal place, so a
+  busy namespace still gets its share of the workers while many small namespaces keep the
+  queue busy.
+- Within one namespace and step, items are served in the order they became due.
+- Priority levels stay apart: a step waiting for its branch's turn (see above) stays behind
+  every step that can run.
+- No worker waits while an item is ready, so a namespace alone on the controller gets every
+  worker, as before. The fairness reorders work; it does not add any.
+
+Measured with the scale suite's `full` profile on one kind cluster (controller with `-race`, 2
+replicas), main and fair queues run alternately with the host's load under 64 at each start.
+Tenant B promotes one Bundle on each of five 3-environment Pipelines while tenant A runs either
+a 149-environment wave on one branch (`TestScale_TenantFairness`) or 149 3-environment
+Pipelines on their own repositories, all at once (`TestScale_TenantFairnessManyRepos`):
+
+| | runs | A's load time | A's steps p50 / p99 | B's steps p99 | B's Bundles p50 / p99 |
+|---|---|---|---|---|---|
+| one branch, before | 2 | 137-144 s | 58-68 / 133-134 s | 6 s | 7 / 12 s |
+| one branch, fair | 1 | 117 s | 56 / 110 s | 6 s | 7 / 12 s |
+| many repositories, before | 7 | 51-67 s (mean 58) | 2-3 / 7-9 s | 6-7 s | 25-41 / 40-53 s |
+| many repositories, fair | 3 | 44-55 s (mean 50) | 2-3 / 7-8 s | 7-8 s | 13-19 / 21-31 s |
+
+On one branch the branch turns already let B through. With many repositories, B's Bundles
+waited behind A's backlog and finished after all of A; with fair queues they take about half
+as long, and A is not slower. B's steps stayed under 10 s in every run: what B waited for was
+the time between its steps, in the Bundle, Pipeline and PromotionStep queues. These runs used 3-environment Pipelines for A.
+
+The test as it is now runs A as 5-environment Pipelines and starts B once a tenth of A's steps
+exist, B's Bundles 2 s apart, so that B can finish within A's load even on a quiet host. It
+gates on B's step p99 (10 s), B's Bundle p99 (35 s) and B finishing while A still runs. One
+run each of `TestScale_TenantFairnessManyRepos` in that shape:
+
+| | code | host load, median | A's load time | B's steps p99 | B's Bundles p50 / p99 | gates |
+|---|---|---|---|---|---|---|
+| before | main at 106b12cf | 78 | 91 s | 8 s | 67 / 70 s | fail: Bundle p99 70 s over 35 s |
+| fair | #1662 at 8b032f78 | 56 | 65 s | 4 s | 10 / 12 s | pass |
+
+### Kubernetes Events
+
+The controller writes `events.k8s.io` Events for its transitions (`kubectl events`). client-go's
+Event broadcaster starts a goroutine and an API write for every Event, with no bound, so when
+hundreds of Bundles change state at once the controller held over 2,000 goroutines and opened
+hundreds of new connections to the API server (#1682). The controller therefore rate-limits
+Events:
+
+| Type | Bucket | Rate | Burst |
+|---|---|---|---|
+| Normal | one for the controller | `--event-qps` (20 a second) | `--event-burst` (100) |
+| Warning | one per namespace (the 1,024 most recently used) | `--event-warning-qps` (5 a second) | `--event-warning-burst` (50) |
+
+So neither a flood of Normal transitions nor one tenant's burst of Warnings drops another
+namespace's Warning. The shard gate's Warnings regard Namespaces, which are cluster-scoped, so
+they share one cluster-wide Warning bucket (and are otherwise log only: see the table below).
+Every Event pays a token, repeats included. An Event over its bucket is dropped, never queued, so
+a reconcile never waits on an Event, and `kardinal_events_dropped_total{recorder,type}` counts it. Set the flags with `controller.extraArgs`;
+a rate of 0 removes that type's limit, and the controller refuses to start with a negative or
+non-finite rate or a burst below 1.
+
+**Events are best effort.** Alert on the durable record of each Warning, not on the Event:
+
+| Warning Event | On | Durable record |
+|---|---|---|
+| `Rejected` | Bundle | `status.phase: Rejected`, `kardinal_bundles_total{phase="Rejected"}` |
+| `Failed` | Bundle | `status.phase: Failed` and the `Ready` condition's reason, `kardinal_bundles_total{phase="Failed"}` |
+| `PipelineNotFound`, `TranslationError` | Bundle | `Ready=False` condition with that reason |
+| `GraphDeleted`, `GraphSyncFailed` | Bundle | `GraphSynced=False` condition |
+| `InvalidRetireDelay` | Bundle | the `GraphRetired` condition's message names the ignored annotation |
+| step `Failed`, `AbortedByAlarm`, `RollingBack` | PromotionStep | `status.state`, and the `PromotionFailed` (or `RollbackStarted`) AuditEvent |
+| `GitCredentialMissing`, `SCMUnavailable` | PromotionStep | the condition of that name |
+| `GatesStatusFailed` | PromotionStep | `status.outputs.gatesStatus` (`error:…` with the retry time) |
+| `GatesStatusNoCommit` | PromotionStep | no `status.outputs.prHeadSHA`; the PR has no `kardinal/gates` status |
+| `MergedWhileBlocked` | PromotionStep | `status.outputs.mergedWhileBlocked` |
+| `PRLeftOpen`, `ClosePRFailed` | PromotionStep (deleted) | `kardinal_pr_cleanup_failures_total{reason}` and the controller's error log: the step is gone, so close the PR by hand ([troubleshooting](troubleshooting.md)) |
+| `Blocked` | PolicyGate | `Ready=False` condition (reason `Blocked`) and the `GateEvaluated` AuditEvent |
+| `GateExempted` | PolicyGate | `status.reason` (`EXEMPT: …`) and the `GateEvaluated` AuditEvent |
+| `HoldBundleMissing` | Pipeline | the `HoldBundleMissing` AuditEvent and `kardinal_hold_bundle_missing_total` |
+| `RollbackRefused` | RollbackPolicy | the `RollbackRefused` condition |
+| `InvalidSpec` | ChangeWindow | `Valid=False` condition |
+| `NotificationDropped`, `NotificationTemplateFailed` | NotificationHook | `status.failureMessage` and `kardinal_notifications_dropped_total{reason}` |
+| `ShardNotRunning`, `ShardHomeConflict` | Namespace | the controller's warning log only |
+
 ### Leader election under API pressure
 
 The leader renews its Lease every 2 seconds and gives up leadership when a
@@ -891,6 +996,8 @@ kubectl delete crd --ignore-not-found \
   changewindows.kardinal.io \
   subscriptions.kardinal.io \
   notificationhooks.kardinal.io \
+  hookruns.kardinal.io \
+  renderruns.kardinal.io \
   scmproviders.kardinal.io \
   clusterscmproviders.kardinal.io \
   promotiontemplates.kardinal.io \
@@ -917,7 +1024,7 @@ The controller's RBAC, in summary:
 
 | Resources | Verbs |
 |---|---|
-| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create, and delete only with `audit.retention.enabled: true`) and `changewindows`, `scmproviders` and `clusterscmproviders` (get, list, watch; get, update, patch on `/status`) |
+| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create, and delete with `audit.retention.enabled: true`, the default) and `changewindows`, `scmproviders` and `clusterscmproviders` (get, list, watch; get, update, patch on `/status`) |
 | `graphs.kro.run` | Full CRUD; get on `graphs/status` |
 | `serviceaccounts`, `rolebindings` | get, create; get, list, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs, `list` finds them for the sweep) |
 | `namespaces` | get, limited to `controller.watchNamespace` in namespace mode (lets go of a Graph whose namespace is being deleted) |

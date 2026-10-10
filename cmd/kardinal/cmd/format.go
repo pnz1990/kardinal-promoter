@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -88,7 +89,8 @@ func stepStatePriority(state string) int {
 		return 3
 	case "Verified", "AbortedByAlarm", "RollingBack":
 		return 2
-	case "Failed":
+	case "Failed", "Superseded":
+		// Superseded: the step did not push; a newer Bundle's step runs.
 		return 1
 	default:
 		return 0
@@ -408,9 +410,59 @@ func pipelineEnvStates(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
 				row.envs[env] = state
 			}
 		}
+		// A fleet environment's column counts its targets.
+		fleets, _ := graph.FleetTargetEnvironments(p)
+		for fleet, targets := range fleets {
+			if s := fleetCell(row.envs, targets); s != "" {
+				row.envs[fleet] = s
+			}
+		}
 		out[key] = row
 	}
 	return out
+}
+
+// fleetCell is the get pipelines cell of a fleet environment from its
+// targets' states: "Verified" once every target is, else how many are
+// Verified, with the Failed ones and the Superseded ones by name ("12/50
+// Verified, 1 Failed, 1 Superseded (prod-eu)"; #1603: a newer Bundle, the
+// rollback of that one target, deployed it). "" when no target has a state.
+func fleetCell(envs map[string]string, targets []string) string {
+	verified, failed, seen := 0, 0, 0
+	var superseded []string
+	for _, t := range targets {
+		st, ok := envs[t]
+		if !ok || st == "Waiting" {
+			continue
+		}
+		seen++
+		switch st {
+		case "Verified":
+			verified++
+		case "Failed", "AbortedByAlarm", "RollingBack":
+			failed++
+		case "Superseded":
+			superseded = append(superseded, t)
+		}
+	}
+	if seen == 0 {
+		return ""
+	}
+	if verified == len(targets) {
+		return "Verified"
+	}
+	cell := fmt.Sprintf("%d/%d Verified", verified, len(targets))
+	if failed > 0 {
+		cell += fmt.Sprintf(", %d Failed", failed)
+	}
+	if n := len(superseded); n > 0 {
+		names := superseded
+		if n > 3 {
+			names = append(slices.Clone(superseded[:3]), "...")
+		}
+		cell += fmt.Sprintf(", %d Superseded (%s)", n, strings.Join(names, ", "))
+	}
+	return cell
 }
 
 // formatPipelineTableInternal renders the pipeline table with one column per

@@ -16,7 +16,9 @@ import (
 // calls it to set Ready=False/ValidationFailed, and the Bundle reconciler
 // calls it to name the reason a Bundle failed.
 func DetectCycle(pipeline *kardinalv1alpha1.Pipeline) error {
-	_, _, err := resolveOrdering(pipeline)
+	// The ordering as written: fleet targets add no edge a cycle could need,
+	// and a selector fleet may not be resolved yet.
+	_, _, err := resolveSpecOrdering(pipeline)
 	return err
 }
 

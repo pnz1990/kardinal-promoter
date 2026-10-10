@@ -330,7 +330,8 @@ spec:
 ### Promoting a chart version
 
 A chart Bundle needs `update.strategy: helm` in every environment it promotes; any other
-strategy fails the Bundle when its Graph is built. The `helm-set-image` step writes
+strategy fails the Bundle when its Graph is built, and so does an environment with
+`layout: branch` (its render Job does not get the chart version yet). The `helm-set-image` step writes
 `spec.chart.version` at `update.helm.chartVersionPath` in `update.helm.chartVersionFile`
 (relative to the environment path), then commits and pushes (or opens a PR) as for images:
 

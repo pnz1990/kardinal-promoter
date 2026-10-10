@@ -94,12 +94,12 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 
 	// Rollback is a property of the Bundle (spec.provenance.rollbackOf), not
 	// of its PromotionSteps.
-	var bundles v1alpha1.BundleList
-	if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err != nil {
-		return fmt.Errorf("list bundles: %w", err)
+	bundles, err := lifecycle.ListPipelineBundles(ctx, c, ns, pipeline)
+	if err != nil {
+		return err
 	}
 	rollbacks := map[string]bool{}
-	for _, b := range bundles.Items {
+	for _, b := range bundles {
 		if b.Spec.Pipeline == pipeline && isRollbackBundle(b) {
 			rollbacks[b.Name] = true
 		}
@@ -213,7 +213,7 @@ func shortenPRURL(url string) string {
 // the step stops there, and the rollback Bundle carries the promotion on.
 func deriveDuration(s v1alpha1.PromotionStep) string {
 	switch s.Status.State {
-	case "Verified", "Failed", "AbortedByAlarm", "RollingBack":
+	case "Verified", "Failed", "AbortedByAlarm", "RollingBack", "Superseded":
 	case "", "Pending", "Promoting", "WaitingForMerge", "HealthChecking", "Verifying":
 		return "..."
 	default:

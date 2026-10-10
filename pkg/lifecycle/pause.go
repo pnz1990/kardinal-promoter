@@ -170,7 +170,12 @@ func Pause(ctx context.Context, c client.Client, ns, pipeline string) error {
 	if err != nil {
 		return err
 	}
-	return EnsureFreezeGate(ctx, c, p)
+	// A caller allowed to pause but not to write PolicyGates (the promoter
+	// role) leaves the freeze gate to the Pipeline reconciler.
+	if err := EnsureFreezeGate(ctx, c, p); err != nil && !apierrors.IsForbidden(err) {
+		return err
+	}
+	return nil
 }
 
 // Resume clears spec.paused on the Pipeline and deletes its freeze gate. It is
@@ -179,7 +184,12 @@ func Resume(ctx context.Context, c client.Client, ns, pipeline string) error {
 	if _, err := setPaused(ctx, c, ns, pipeline, false); err != nil {
 		return err
 	}
-	return RemoveFreezeGate(ctx, c, ns, pipeline)
+	// As in Pause: without rights on PolicyGates the Pipeline reconciler
+	// removes the gate.
+	if err := RemoveFreezeGate(ctx, c, ns, pipeline); err != nil && !apierrors.IsForbidden(err) {
+		return err
+	}
+	return nil
 }
 
 // SetPaused sets spec.paused on the Pipeline and leaves the freeze gate to

@@ -329,11 +329,19 @@ func validateSkipNames(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1al
 		return nil
 	}
 	known := make(map[string]bool, len(pipeline.Spec.Environments))
+	fleets := map[string]bool{}
 	for _, e := range pipeline.Spec.Environments {
 		known[e.Name] = true
+		if e.Fleet != nil {
+			fleets[e.Name] = true
+		}
 	}
 	var unknown []string
 	for _, s := range bundle.Spec.Intent.SkipEnvironments {
+		if fleets[s] {
+			return fmt.Errorf("build: intent.skipEnvironments names fleet environment %q; skipping a fleet is not supported "+
+				"(use intent.targetEnvironment to stop before it)", s)
+		}
 		if !known[s] {
 			unknown = append(unknown, s)
 		}
@@ -378,6 +386,42 @@ func ValidateUpdateStrategy(p *kardinalv1alpha1.Pipeline) error {
 	return nil
 }
 
+// ValidateRenderedBranches checks the layout: branch environments: the
+// rendered branch must be a valid branch name, differ from spec.git.branch
+// (the render would overwrite the DRY source) and from every other
+// environment's rendered branch (two environments would overwrite each
+// other), and update.strategy argocd does not render. The Pipeline
+// reconciler sets Ready=False/ValidationFailed, "kardinal validate" reports
+// it, and Build fails the Bundle.
+func ValidateRenderedBranches(p *kardinalv1alpha1.Pipeline) error {
+	source := p.Spec.Git.Branch
+	if source == "" {
+		source = "main"
+	}
+	owner := map[string]string{}
+	for _, e := range p.Spec.Environments {
+		if !kardinalv1alpha1.RendersToBranch(p.Spec, e) {
+			continue
+		}
+		b := e.RenderedBranch()
+		switch {
+		case e.Update.Strategy == "argocd":
+			return fmt.Errorf("environment %q: layout: branch renders manifests into git, which update.strategy "+
+				"argocd does not use; use kustomize or helm", e.Name)
+		case b == source:
+			return fmt.Errorf("environment %q: the rendered branch %q is spec.git.branch, the DRY source; "+
+				"set render.branch to another branch", e.Name, b)
+		case strings.Contains(b, "..") || strings.HasSuffix(b, "/") || strings.HasSuffix(b, ".lock") ||
+			strings.Contains(b, "//") || strings.HasSuffix(b, "."):
+			return fmt.Errorf("environment %q: %q is not a valid branch name", e.Name, b)
+		case owner[b] != "":
+			return fmt.Errorf("environments %q and %q both render to branch %q; set render.branch", owner[b], e.Name, b)
+		}
+		owner[b] = e.Name
+	}
+	return nil
+}
+
 // validateBundleStrategy fails a config or mixed Bundle when an environment it
 // promotes uses update.strategy argocd (#1281). argocd only sets the image in
 // the Argo CD Application, so the Bundle's Git config change would be
@@ -385,14 +429,27 @@ func ValidateUpdateStrategy(p *kardinalv1alpha1.Pipeline) error {
 // even when only a later one uses argocd.
 //
 // A chart Bundle needs update.strategy helm in every environment it promotes:
-// only helm-set-image writes the chart version.
+// only helm-set-image writes the chart version. A layout: branch environment
+// cannot promote one: its render Job does not get spec.chart.
 func validateBundleStrategy(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle, envs []string) error {
 	promoted := make(map[string]bool, len(envs))
 	for _, name := range envs {
 		promoted[name] = true
 	}
+	// The promoted environments' specs: a fleet target has its fleet's.
+	specs := make([]kardinalv1alpha1.EnvironmentSpec, 0, len(envs))
+	for _, name := range envs {
+		specs = append(specs, findEnvSpec(pipeline, name))
+	}
 	if bundle.Spec.Type == "chart" {
-		for _, e := range pipeline.Spec.Environments {
+		for _, e := range specs {
+			if promoted[e.Name] && kardinalv1alpha1.RendersToBranch(pipeline.Spec, e) {
+				// The render Job gets the Bundle's type, images and configRef
+				// (RenderRunBundle), not spec.chart: refuse rather than render
+				// the old chart version.
+				return fmt.Errorf("build: environment %q uses layout: branch, which cannot promote a chart "+
+					"Bundle yet; skip it with intent.skipEnvironments", e.Name)
+			}
 			if promoted[e.Name] && e.Update.Strategy != "helm" {
 				strategy := e.Update.Strategy
 				if strategy == "" {
@@ -409,7 +466,7 @@ func validateBundleStrategy(pipeline *kardinalv1alpha1.Pipeline, bundle *kardina
 	if bundle.Spec.Type != "config" && bundle.Spec.Type != "mixed" {
 		return nil
 	}
-	for _, e := range pipeline.Spec.Environments {
+	for _, e := range specs {
 		if promoted[e.Name] && e.Update.Strategy == "argocd" {
 			return fmt.Errorf("build: environment %q uses update.strategy argocd, which does not support %s "+
 				"Bundles: it sets only the image in the Argo CD Application and would skip the config change; "+

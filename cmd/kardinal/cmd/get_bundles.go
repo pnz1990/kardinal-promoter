@@ -57,29 +57,17 @@ func runGetBundles(cmd *cobra.Command, args []string, activeOnly bool) error {
 }
 
 func getBundlesFn(out io.Writer, client sigs_client.Client, ns string, args []string, activeOnly bool) error {
-	opts := []sigs_client.ListOption{sigs_client.InNamespace(ns)}
-	if len(args) == 1 {
-		opts = append(opts, sigs_client.MatchingFields{"spec.pipeline": args[0]})
-	}
-
+	// One Pipeline's Bundles: filtered on the server (the CRD's selectable
+	// field, Kubernetes 1.31+), or on 1.30 the namespace list filtered here.
 	var bundles v1alpha1.BundleList
-	if err := client.List(context.Background(), &bundles, opts...); err != nil {
-		// Fall back to unfiltered list and filter in-process if field indexer
-		// is not available (e.g. no cache).
-		var all v1alpha1.BundleList
-		if err2 := client.List(context.Background(), &all, sigs_client.InNamespace(ns)); err2 != nil {
-			return fmt.Errorf("list bundles: %w (field-selector list: %v)", err2, err)
+	if len(args) == 1 {
+		items, err := lifecycle.ListPipelineBundles(context.Background(), client, ns, args[0])
+		if err != nil {
+			return err
 		}
-		if len(args) == 1 {
-			pipeline := args[0]
-			for _, b := range all.Items {
-				if b.Spec.Pipeline == pipeline {
-					bundles.Items = append(bundles.Items, b)
-				}
-			}
-		} else {
-			bundles = all
-		}
+		bundles.Items = items
+	} else if err := client.List(context.Background(), &bundles, sigs_client.InNamespace(ns)); err != nil {
+		return fmt.Errorf("list bundles: %w", err)
 	}
 
 	// Apply --active filter if requested: exclude Superseded and Rejected

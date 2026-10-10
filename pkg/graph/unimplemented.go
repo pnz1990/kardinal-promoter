@@ -10,12 +10,6 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 )
 
-// layoutBranchNotImplemented is the reason a layout: branch Pipeline cannot
-// promote; the git-clone step fails its PromotionSteps with the same text.
-const layoutBranchNotImplemented = "layout: branch is not implemented: kardinal does not write rendered " +
-	"manifests to an env/<name> branch yet, so this promotion would change nothing; use layout: directory " +
-	"(see docs/rendered-manifests.md)"
-
 // ShardNotSupported is the reason a Pipeline environment may not set shard:
 // distributed mode (the kardinal-agent binary and --shard) was removed.
 const ShardNotSupported = "shard is not supported: distributed mode was removed; remove shard from the " +
@@ -39,8 +33,7 @@ const RegionsNotSupported = "regions is not supported; declare one environment p
 // (deprecated; the API server also rejects them) and two or more regions, so
 // every Bundle fails when its Graph is built; the PromotionStep reconciler
 // fails shard, health.cluster and a
-// health.resource.kind other than Deployment in that environment; the
-// git-clone step fails layout: branch in every environment it applies to; and
+// health.resource.kind other than Deployment in that environment; and
 // the API server rejects autoRollback, steps and promotionTemplate (CRD CEL),
 // which are also listed so a file checked offline, or a Pipeline stored before
 // the CEL rules existed, gets the same answer.
@@ -53,9 +46,6 @@ const RegionsNotSupported = "regions is not supported; declare one environment p
 // a Bundle does.
 func UnimplementedFields(p *kardinalv1alpha1.Pipeline) []string {
 	var msgs []string
-	if p.Spec.Git.Layout == "branch" {
-		msgs = append(msgs, "spec.git."+layoutBranchNotImplemented)
-	}
 	for i := range p.Spec.Environments {
 		e := &p.Spec.Environments[i]
 		if msg := customStepsUnimplemented(e); msg != "" {
@@ -70,9 +60,6 @@ func UnimplementedFields(p *kardinalv1alpha1.Pipeline) []string {
 		}
 		if e.Shard != "" { //nolint:staticcheck // SA1019: read to reject it
 			msgs = append(msgs, fmt.Sprintf("environment %q: %s", e.Name, ShardNotSupported))
-		}
-		if e.Layout == "branch" {
-			msgs = append(msgs, fmt.Sprintf("environment %q: %s", e.Name, layoutBranchNotImplemented))
 		}
 		if e.Health.Cluster != "" { //nolint:staticcheck // SA1019: read to reject it
 			msgs = append(msgs, fmt.Sprintf("environment %q: %s", e.Name, HealthClusterNotSupported))

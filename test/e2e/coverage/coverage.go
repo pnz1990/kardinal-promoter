@@ -45,7 +45,7 @@ type Row struct {
 	Area    string
 	Feature string
 	// Source is where the behavior is documented and implemented: refs
-	// separated by "; ", each a repo path, path:N or path:N-M.
+	// separated by "; ", each a repo path, path:N or path:N-M, or docs/changelog.md#<entry title or heading>[@<release>].
 	Source string
 }
 

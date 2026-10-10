@@ -130,7 +130,7 @@ func TestOnHealthFailureRollback_RestoresPreviousVerifiedBundle(t *testing.T) {
 			objs := append([]client.Object{pipeline.DeepCopy(), failingBundle, failing}, tc.earlier...)
 			c := fakeclient.NewClientBuilder().WithScheme(newTestScheme(t)).
 				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
-				WithObjects(objs...).Build()
+				WithObjects(objs...).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			r := &Reconciler{Client: c}
 			key := types.NamespacedName{Namespace: "default", Name: failing.Name}
 			env := findEnv(pipeline, "prod")

@@ -129,6 +129,17 @@ var (
 		},
 	)
 
+	// HoldBundleMissingTotal counts holds (Pipeline spec.holds) whose
+	// rollback Bundle has not existed for the grace, once per hold. The
+	// hold stays in effect until a human releases it (#1629).
+	HoldBundleMissingTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kardinal_hold_bundle_missing_total",
+			Help: "Holds whose rollback Bundle does not exist past the grace, once per hold; the hold stays in effect until released.",
+		},
+		[]string{"pipeline_namespace", "pipeline"},
+	)
+
 	// NotificationsDroppedTotal counts events a NotificationHook gave up on
 	// without delivering: "template" when the body cannot be rendered for
 	// the event (retrying renders the same body), "attempts" after the last
@@ -140,12 +151,28 @@ var (
 		},
 		[]string{"hook_namespace", "hook", "reason"},
 	)
+
+	// PRCleanupFailuresTotal counts deleted PromotionSteps whose open PR
+	// the controller left open (PRLeftOpen: it could not tell whether the
+	// step comes back) or could not close (ClosePRFailed) before removing
+	// the step's finalizer. The step is gone, so nothing but this, the log
+	// and a Warning Event records it: an open PR nothing tracks, which a
+	// merge would deploy (#1687).
+	PRCleanupFailuresTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kardinal_pr_cleanup_failures_total",
+			Help: "Deleted PromotionSteps whose PR was left open (PRLeftOpen) or could not be closed (ClosePRFailed); close those PRs by hand.",
+		},
+		[]string{"reason"},
+	)
 )
 
 func init() {
 	ctrlmetrics.Registry.MustRegister(
 		AuditEventsPrunedTotal,
+		HoldBundleMissingTotal,
 		NotificationsDroppedTotal,
+		PRCleanupFailuresTotal,
 		BundlesTotal,
 		StepsTotal,
 		GateEvaluationsTotal,

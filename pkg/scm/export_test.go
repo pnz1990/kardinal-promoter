@@ -127,3 +127,13 @@ func (r *Registry) CacheSizesForTest() (secrets, namespaces int) {
 	defer r.mu.Unlock()
 	return len(r.secrets), len(r.namespaces)
 }
+
+// KeepOldForTest exposes keepOld.
+var KeepOldForTest = keepOld
+
+// EvictedForTest returns how many Secrets carry an eviction mark.
+func (r *Registry) EvictedForTest() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.evictedAt)
+}

@@ -36,7 +36,14 @@ func asForgejo(s Server) (*forgejo, error) {
 }
 
 // Commits returns the newest limit commits of branch, newest first.
+// Forgejo, Gitea, GitLab and GitHub are supported.
 func Commits(ctx context.Context, s Server, r Repo, branch string, limit int) ([]Commit, error) {
+	switch g := s.(type) {
+	case *gitlab:
+		return g.commits(ctx, r, branch, limit)
+	case *github:
+		return g.commits(ctx, branch, limit)
+	}
 	f, err := asForgejo(s)
 	if err != nil {
 		return nil, err
@@ -142,6 +149,15 @@ func SetPrivate(ctx context.Context, s Server, r Repo, private bool) error {
 // PushRemote returns the URL the test runner pushes r to over HTTP and the
 // token it authenticates with (the suite's admin token; never log it).
 func PushRemote(s Server, r Repo) (remote, token string, err error) {
+	if g, ok := s.(*github); ok {
+		remote, token = g.pushRemote()
+		return remote, token, nil
+	}
+	if g, ok := s.(*gitlab); ok {
+		// GitLab takes a personal access token as the password with any
+		// user name.
+		return fmt.Sprintf("%s/%s/%s.git", g.api, r.Owner, r.Name), g.token, nil
+	}
 	f, err := asForgejo(s)
 	if err != nil {
 		return "", "", err

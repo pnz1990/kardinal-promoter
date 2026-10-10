@@ -54,6 +54,7 @@ The controller exposes a REST API at `/api/v1/ui/` that proxies CRD reads from t
 | `GET /api/v1/ui/steps/{namespace}/{name}/events` | Events of that PromotionStep only; `404` when the step does not exist | PromotionStep + Event |
 | `POST /api/v1/ui/bundles`, `/promote`, `/rollback` | Create a Bundle (`/rollback` with `hold`: and add the hold to the Pipeline) | Bundle (+ Pipeline with `hold`) |
 | `POST /api/v1/ui/release-hold` | Release a rollback hold (spec.holds) | Pipeline |
+| `POST /api/v1/ui/approvals` | Record, replace or revoke the TokenReview user's Approval (lifecycle.RecordApproval); 403 without a verified identity | Bundle + Pipeline + Approval |
 | `POST /api/v1/ui/pause`, `/resume` | Pause or resume a Pipeline | Pipeline |
 | `POST /api/v1/ui/gates/{namespace}/{name}/approve` | Add an override to a gate (retried on write conflicts) | PolicyGate |
 | `POST /api/v1/ui/validate-cel` | Check a CEL expression | none |

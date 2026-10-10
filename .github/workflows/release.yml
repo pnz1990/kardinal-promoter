@@ -29,6 +29,7 @@ jobs:
       prerelease: ${{ steps.version.outputs.prerelease }}
       make-latest: ${{ steps.version.outputs.make-latest }}
       image-tags: ${{ steps.version.outputs.image-tags }}
+      render-image-tags: ${{ steps.version.outputs.render-image-tags }}
       notes: ${{ steps.notes.outputs.notes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -67,12 +68,15 @@ jobs:
             exit 1
           fi
           IMAGE=ghcr.io/pnz1990/kardinal-promoter/controller
+          RENDER=ghcr.io/pnz1990/kardinal-promoter/render
           if [[ "$VERSION" == *-* ]]; then
             PRERELEASE=true
             TAGS="${IMAGE}:${VERSION}"
+            RENDER_TAGS="${RENDER}:${VERSION}"
           else
             PRERELEASE=false
             TAGS="${IMAGE}:${VERSION}"$'\n'"${IMAGE}:latest"
+            RENDER_TAGS="${RENDER}:${VERSION}"$'\n'"${RENDER}:latest"
           fi
           {
             echo "version=${VERSION}"
@@ -82,6 +86,9 @@ jobs:
             echo "image-tags<<IMAGE_TAGS_EOF"
             echo "$TAGS"
             echo "IMAGE_TAGS_EOF"
+            echo "render-image-tags<<RENDER_TAGS_EOF"
+            echo "$RENDER_TAGS"
+            echo "RENDER_TAGS_EOF"
           } >> "$GITHUB_OUTPUT"
           echo "${VERSION}: prerelease=${PRERELEASE}, image tags:"
           echo "$TAGS"
@@ -207,6 +214,27 @@ jobs:
             org.opencontainers.image.version=${{ env.VERSION }}
             org.opencontainers.image.revision=${{ github.sha }}
 
+      # ── Build kardinal-render image (the render Jobs of layout: branch) ────
+      - name: Build and push kardinal-render image (multi-arch)
+        id: build-render
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: render.Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ needs.preflight.outputs.render-image-tags }}
+          labels: |
+            org.opencontainers.image.title=kardinal-promoter-render
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Generate SLSA provenance attestation (render)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-name: ghcr.io/pnz1990/kardinal-promoter/render
+          subject-digest: ${{ steps.build-render.outputs.digest }}
+
       # ── SLSA Level 2 provenance ──────────────────────────────────────────────
       - name: Generate SLSA provenance attestation
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
@@ -224,6 +252,8 @@ jobs:
         run: |
           cosign sign --yes \
             "ghcr.io/pnz1990/kardinal-promoter/controller:${VERSION}"
+          cosign sign --yes \
+            "ghcr.io/pnz1990/kardinal-promoter/render:${VERSION}"
 
       # ── SBOM generation ─────────────────────────────────────────────────────
       - name: Generate SBOM with Syft
@@ -345,6 +375,7 @@ jobs:
             | Image | Tag | Platform |
             |---|---|---|
             | `ghcr.io/pnz1990/kardinal-promoter/controller` | `${{ env.VERSION }}` | linux/amd64, linux/arm64 |
+            | `ghcr.io/pnz1990/kardinal-promoter/render` | `${{ env.VERSION }}` | linux/amd64, linux/arm64 |
           files: dist/*
           draft: false
           prerelease: ${{ needs.preflight.outputs.prerelease }}

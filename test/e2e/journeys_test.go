@@ -48,9 +48,11 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	pgrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	psrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	rprec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/rollbackpolicy"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
 
 // journeyScheme builds the scheme used by all journey tests.
@@ -114,7 +116,7 @@ func TestJourney1Quickstart(t *testing.T) {
 
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(pipeline, bundle, steps[0], steps[1], steps[2]).
-		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}).
+		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	rec := &psrec.Reconciler{
@@ -202,7 +204,7 @@ func TestJourney2MultiClusterFleet(t *testing.T) {
 
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(pipeline, bundle, steps[0], steps[1], steps[2], steps[3]).
-		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}).
+		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	rec := &psrec.Reconciler{
@@ -289,7 +291,7 @@ func TestJourney3PolicyGovernance(t *testing.T) {
 	// ── Test: weekend blocks ──────────────────────────────────────────────────
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(bundle, weekendGate).
-		WithStatusSubresource(&v1alpha1.PolicyGate{}).
+		WithStatusSubresource(&v1alpha1.PolicyGate{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	// Inject a Saturday timestamp via NowFn.
@@ -313,7 +315,7 @@ func TestJourney3PolicyGovernance(t *testing.T) {
 	tuesday := time.Date(2026, 4, 14, 10, 0, 0, 0, time.UTC) // Tuesday April 14, 2026
 	c2 := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(bundle, weekendGate.DeepCopy()).
-		WithStatusSubresource(&v1alpha1.PolicyGate{}).
+		WithStatusSubresource(&v1alpha1.PolicyGate{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 	rec2, err := pgrec.NewReconciler(c2)
 	require.NoError(t, err)
@@ -576,7 +578,7 @@ func journey4Rollback(t *testing.T, strategy appsv1.DeploymentStrategyType) {
 
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(pipeline, goodBundle, goodStep, badBundle, step, unhealthyDeploy, rollbackPolicy).
-		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}, &v1alpha1.RollbackPolicy{}).
+		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}, &v1alpha1.RollbackPolicy{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
@@ -777,55 +779,40 @@ func runCLICmd(binary string, args ...string) (string, error) {
 }
 
 // TestJourney6RenderedManifests checks docs/aide/definition-of-done.md
-// Journey 6 against what kardinal does today: layout: branch is not
-// implemented (docs/pipeline-reference.md). The Pipeline reports it
-// (graph.UnimplementedFields gives the message of its Ready=False,
-// NotImplemented condition), and a PromotionStep in a layout: branch
-// environment fails at git-clone with that message instead of rendering
-// manifests or pushing.
+// Journey 6 against what kardinal does today: layout: branch is implemented
+// (docs/rendered-manifests.md, #1447). The Pipeline reports no unimplemented
+// field, the rendered branch is validated (env/<name> by default, never the
+// DRY source branch), and the promotion sequence renders the DRY source with
+// render-manifests before git-commit. The render itself is covered by
+// pkg/steps/steps/render_test.go and test/e2e/live/rendered_test.go.
 func TestJourney6RenderedManifests(t *testing.T) {
-	const notImplemented = "layout: branch is not implemented"
-	s := journeyScheme(t)
 	pipeline := &v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "rendered-demo", Namespace: "default"},
 		Spec: v1alpha1.PipelineSpec{
 			Git: v1alpha1.PipelineGit{URL: "https://github.com/pnz1990/kardinal-demo", Branch: "main"},
 			Environments: []v1alpha1.EnvironmentSpec{{
 				Name:     "prod",
-				Approval: "auto",
+				Approval: "pr-review",
 				Update:   v1alpha1.UpdateConfig{Strategy: "kustomize"},
 				Layout:   "branch",
 			}},
 		},
 	}
 
-	msgs := graph.UnimplementedFields(pipeline)
-	require.Len(t, msgs, 1, "journey 6: %v", msgs)
-	assert.Contains(t, msgs[0], `environment "prod": `+notImplemented)
+	assert.Empty(t, graph.UnimplementedFields(pipeline), "journey 6: layout: branch is implemented")
+	require.NoError(t, graph.ValidateRenderedBranches(pipeline))
+	assert.Equal(t, "env/prod", pipeline.Spec.Environments[0].RenderedBranch())
+	// The controller waits for the environment's RenderRun; its Job clones,
+	// sets the images, renders, commits and pushes.
+	assert.Equal(t, []string{"render", "open-pr", "wait-for-merge", "health-check"},
+		steps.DefaultSequenceForBundle("pr-review", "image", "kustomize", "branch"))
+	assert.Equal(t, []string{"git-clone", "kustomize-set-image", "render-manifests", "git-commit", "git-push"},
+		steps.RenderJobSequence("image", "kustomize"))
 
-	bundle := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "rendered-demo-v1", Namespace: "default"},
-		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "rendered-demo"},
-	}
-	step := makeJourneyStep("step-prod", "rendered-demo", "rendered-demo-v1", "prod", "auto")
-	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(pipeline, bundle, step).
-		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}).
-		Build()
-	rec := &psrec.Reconciler{
-		Client:    c,
-		SCM:       &mockSCMForLoop{prURL: "https://github.com/pnz1990/kardinal-demo/pull/1", prNumber: 1},
-		GitClient: &mockGitForLoop{},
-		WorkDirFn: func(_, _ string) string { return t.TempDir() },
-	}
-	ctx := context.Background()
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod", Namespace: "default"}}
-	driveStepToVerified(t, ctx, rec, c, req, "step-prod")
-
-	var got v1alpha1.PromotionStep
-	require.NoError(t, c.Get(ctx, req.NamespacedName, &got))
-	assert.Equal(t, "Failed", got.Status.State, "journey 6: a layout: branch promotion must fail, not promote")
-	assert.Contains(t, got.Status.Message, notImplemented)
+	pipeline.Spec.Environments[0].Render = &v1alpha1.RenderConfig{Branch: "main"}
+	err := graph.ValidateRenderedBranches(pipeline)
+	require.Error(t, err, "journey 6: rendering into the DRY source branch is refused")
+	assert.Contains(t, err.Error(), "the DRY source")
 }
 
 // TestJourney7MultiTenantSelfService validates docs/aide/definition-of-done.md Journey 7.
@@ -927,7 +914,7 @@ func TestJourney7MultiTenantSelfService(t *testing.T) {
 
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(orgGateTemplate, orgGateInstance, teamPipeline, bundle, otherPipeline).
-		WithStatusSubresource(&v1alpha1.PolicyGate{}).
+		WithStatusSubresource(&v1alpha1.PolicyGate{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	// ── Test 1: Namespace isolation — listing pipelines in payment-service ns ─────
@@ -961,7 +948,7 @@ func TestJourney7MultiTenantSelfService(t *testing.T) {
 	tuesday := time.Date(2026, 4, 14, 10, 0, 0, 0, time.UTC)
 	c2 := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(orgGateInstance.DeepCopy(), bundle.DeepCopy()).
-		WithStatusSubresource(&v1alpha1.PolicyGate{}).
+		WithStatusSubresource(&v1alpha1.PolicyGate{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 	pgRec2, err := pgrec.NewReconciler(c2)
 	require.NoError(t, err)

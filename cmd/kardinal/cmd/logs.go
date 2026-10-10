@@ -30,6 +30,7 @@ var terminalStates = map[string]bool{
 	"Failed":         true,
 	"AbortedByAlarm": true,
 	"RollingBack":    true,
+	"Superseded":     true,
 }
 
 func newLogsCmd() *cobra.Command {

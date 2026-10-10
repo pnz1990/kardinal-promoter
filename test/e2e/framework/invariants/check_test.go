@@ -167,7 +167,13 @@ func TestLeaks(t *testing.T) {
 		{"race, no warm baseline: growth past 2.5x + 500 MiB", []PodSeries{pod(t0, t1, 300, 1300, 300, 320)}, false, true, false, 1},
 		{"race, warm: RSS of race shadow memory is not bounded", []PodSeries{warmRace(345, 62)}, false, true, true, 0},
 		{"race, warm: Go runtime memory grew over 25%", []PodSeries{warmRace(430, 62)}, false, true, true, 1},
-		{"race, warm: heap after the GC not below the warm heap", []PodSeries{warmRace(345, 215)}, false, true, true, 1},
+		{"race, warm: heap after the GC within 1.1x + 16 MiB of warm", []PodSeries{warmRace(345, 1.1*210+16)}, false, true, true, 0},
+		{"race, warm: a standby whose cache grew with kept AuditEvents (49.1 -> 50.9 MiB)", []PodSeries{func() PodSeries {
+			p := warmRace(80, 50.9)
+			p.SysWarmMiB, p.HeapWarmMiB = 75.8, 49.1
+			return p
+		}()}, false, true, true, 0},
+		{"race, warm: heap after the GC over 1.1x + 16 MiB of warm", []PodSeries{warmRace(345, 1.1*210+16.5)}, false, true, true, 1},
 		{"race, warm: no GC seen after the load", []PodSeries{warmRace(345, 0)}, false, true, true, 1},
 		{"race, warm: no Go memory series at the baseline", []PodSeries{func() PodSeries { p := warmRace(345, 62); p.SysWarmMiB = 0; return p }()}, false, true, true, 1},
 		{"no race, warm: RSS measured from the warm sample", []PodSeries{func() PodSeries {
@@ -336,4 +342,33 @@ func TestCountsFromZero(t *testing.T) {
 	got := countsFromZero(end, start, "result")
 	assert.InDelta(t, 151+10+5, got["ok"], 0, "a new series from 0, an old one from its start, a reset one its end")
 	assert.InDelta(t, 3, got["non_fast_forward"], 0, "early refusals are not hidden")
+}
+
+// TestSettleGoroutines (#1658 QA): the series end once the goroutine count
+// stops falling, at most goroutineSettleMax after the queues drained.
+//
+// Covers SCALE-INV-LEAK-01.
+func TestSettleGoroutines(t *testing.T) {
+	run := func(counts ...float64) (time.Duration, int) {
+		t0 := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+		clock, reads := t0, 0
+		end := settleGoroutines(func() time.Time { return clock }, func(d time.Duration) { clock = clock.Add(d) },
+			func() (float64, bool) {
+				if reads >= len(counts) {
+					return 0, false
+				}
+				reads++
+				return counts[reads-1], true
+			})
+		return end.Sub(t0), reads
+	}
+	d, n := run(520, 520)
+	assert.Equal(t, goroutineSettleStep, d, "flat: one step")
+	assert.Equal(t, 2, n)
+	d, _ = run(1671, 1145, 600, 511, 515)
+	assert.Equal(t, 4*goroutineSettleStep, d, "the burst drains, then the count stops falling")
+	d, _ = run(1600, 1500, 1400, 1300, 1200, 1100, 1000, 900, 800)
+	assert.Equal(t, goroutineSettleMax, d, "still falling: capped")
+	d, _ = run()
+	assert.Zero(t, d, "no reading: no wait")
 }

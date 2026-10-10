@@ -22,15 +22,23 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 )
 
+// auditRetentionDefault is --audit-retention's default: on. AuditEvents have
+// no owner, so unbounded they fill etcd, and a full etcd quota stops the
+// whole cluster, which is worse than losing records past 90 days or past a
+// Pipeline's 1000 newest (the release-candidate soak: 350-660 records a
+// minute, the default 2 GiB quota full in 2 to 4 days).
+const auditRetentionDefault = true
+
 // gracefulShutdownTimeout is how long the controller waits on shutdown for
 // in-flight reconciles, whose context the shutdown cancels, and HTTP requests
 // to return. It is half the pod's terminationGracePeriodSeconds (60s) to
 // leave room for cleanup. (#574)
 const gracefulShutdownTimeout = 30 * time.Second
 
-// hookJobSelector selects the Jobs of HookRuns.
+// hookJobSelector selects the Jobs the controller runs: those of HookRuns
+// and RenderRuns.
 var hookJobSelector = func() labels.Selector {
-	req, err := labels.NewRequirement(hookrunrecon.LabelHookRun, selection.Exists, nil)
+	req, err := labels.NewRequirement(hookrunrecon.LabelRunJob, selection.Exists, nil)
 	if err != nil {
 		panic(err) // a constant key: unreachable
 	}
@@ -149,9 +157,9 @@ func leaderElectionID(shard string) string {
 // This is the mechanism behind namespace-scoped install mode, where the Helm
 // chart renders a Role/RoleBinding instead of a ClusterRole/ClusterRoleBinding.
 //
-// Jobs are cached only when they carry the kardinal.io/hookrun label: the
-// HookRun reconciler owns those (hook Jobs), and caching every Job in the
-// cluster would hold them all in memory for nothing.
+// Jobs are cached only when they carry the kardinal.io/run-job label: the
+// HookRun and RenderRun reconcilers own those (hook and render Jobs), and
+// caching every Job in the cluster would hold them all in memory for nothing.
 func buildCacheOpts(watchNamespace string) cache.Options {
 	opts := cache.Options{
 		ByObject: map[sigs_client.Object]cache.ByObject{
@@ -169,13 +177,16 @@ func buildCacheOpts(watchNamespace string) cache.Options {
 // would cache every Lease in the cluster, leader election Leases included.
 func shardCacheOpts(opts cache.Options, namespaceShard string) cache.Options {
 	if namespaceShard != "" {
-		if opts.ByObject == nil {
-			opts.ByObject = map[sigs_client.Object]cache.ByObject{}
+		// Added to buildCacheOpts' entries (the run-Job filter), not in
+		// place of them.
+		by := make(map[sigs_client.Object]cache.ByObject, len(opts.ByObject)+1)
+		for k, v := range opts.ByObject {
+			by[k] = v
 		}
-		// Added to, not replaced: the hook Job selector stays.
-		for obj, by := range shard.CacheByObject() {
-			opts.ByObject[obj] = by
+		for k, v := range shard.CacheByObject() {
+			by[k] = v
 		}
+		opts.ByObject = by
 	}
 	return opts
 }

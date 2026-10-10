@@ -705,7 +705,7 @@ func TestPromotionStepStateEnum(t *testing.T) {
 	}
 	want := []string{
 		"Pending", "Promoting", "WaitingForMerge", "HealthChecking", "Verifying", "Verified",
-		"Failed", "AbortedByAlarm", "RollingBack",
+		"Failed", "AbortedByAlarm", "RollingBack", "Superseded",
 	}
 	sort.Strings(got)
 	sort.Strings(want)

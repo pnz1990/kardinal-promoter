@@ -164,7 +164,6 @@ Center provider (#1501).
 ## Planned
 
 - kro v0.10.0 (v0.9.1, #1424)
-- `layout: branch`: promote rendered manifests (#1271)
 - `rollback` and `promote --env` without re-running upstream environments (#1311)
 
 ---

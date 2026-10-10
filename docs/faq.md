@@ -59,8 +59,8 @@ fails the step. Use one Bundle per chart image, or kustomize.
 The Helm chart creates the necessary `ClusterRole` (a `Role` in namespace mode). It grants:
 
 - `get/list/watch/create/update/patch/delete` on the `kardinal.io` kinds, except
-  `auditevents` (`get/list/watch/create`, plus `delete` when you turn on retention with
-  `audit.retention.enabled: true`: the controller never changes a record) and the
+  `auditevents` (`get/list/watch/create`, plus `delete` for retention,
+  `audit.retention.enabled: true` by default: the controller never changes a record) and the
   cluster-scoped `changewindows` and `clusterscmproviders` (`get/list/watch`, in a
   `ClusterRole` in both modes)
 - `get/update/patch` on the `status` subresources of those kinds (`auditevents` has none)

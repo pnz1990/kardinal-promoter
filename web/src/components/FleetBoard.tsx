@@ -21,8 +21,32 @@ interface FleetBoardProps {
   now?: number
 }
 
+/** What a fleet station says: how far the rollout is. */
+function fleetNote(s: Station): string {
+  const f = s.fleet!
+  if (f.message) return f.message
+  if (f.stopped) return `stopped: ${f.failed} failed (max ${f.maxUnavailable})`
+  if (s.state === 'settled' || s.state === 'empty') {
+    if (f.versions > 1) return `${f.total} targets, ${f.versions} versions`
+    return s.state === 'empty' ? `${f.total} targets, nothing deployed` : `${f.total} targets`
+  }
+  if (s.state === 'held') return `held by a gate, ${f.total} targets`
+  if (s.state === 'ahead') return `${f.total} targets, not reached yet`
+  const parts = [`${f.verified}/${f.total} verified`]
+  if (f.inFlight > 0) parts.push(`${f.inFlight} in flight${f.maxConcurrent > 0 ? ` (max ${f.maxConcurrent})` : ''}`)
+  if (f.failed > 0) parts.push(`${f.failed} failed`)
+  if (f.superseded > 0) parts.push(`${f.superseded} superseded (${namesOf(f.supersededTargets)})`)
+  return parts.join(', ')
+}
+
+/** Up to three names, then "...". */
+function namesOf(names: string[]): string {
+  return names.length > 3 ? [...names.slice(0, 3), '...'].join(', ') : names.join(', ')
+}
+
 /** What a station says under its version. */
 function stationNote(s: Station, now: number): string {
+  if (s.fleet) return fleetNote(s)
   switch (s.state) {
     case 'arriving':
       if (s.incomingState === 'WaitingForMerge') return 'waiting for merge'
@@ -58,6 +82,19 @@ function Rail({ row, index }: { row: FleetRow; index: number }) {
   )
 }
 
+/** A fleet's targets as one bar: Verified, in flight, Failed, Superseded, still to go. */
+function FleetBar({ f }: { f: NonNullable<Station['fleet']> }) {
+  const pct = (n: number) => `${(100 * n) / f.total}%`
+  return (
+    <span className="fleet-station__bar" aria-hidden="true">
+      <span data-part="verified" style={{ width: pct(f.verified) }} />
+      <span data-part="inflight" style={{ width: pct(f.inFlight) }} />
+      <span data-part="failed" style={{ width: pct(f.failed) }} />
+      <span data-part="superseded" style={{ width: pct(f.superseded) }} />
+    </span>
+  )
+}
+
 function StationPlate({ s, pipeline, now, onSelect }: {
   s: Station; pipeline: Pipeline; now: number; onSelect: FleetBoardProps['onSelect']
 }) {
@@ -66,6 +103,7 @@ function StationPlate({ s, pipeline, now, onSelect }: {
       type="button"
       className="fleet-station"
       data-state={s.state}
+      data-fleet={s.fleet ? true : undefined}
       onClick={() => onSelect(pipeline.name, pipeline.namespace)}
       aria-label={`${pipeline.name} ${s.env}: ${s.version ? `${s.version}, ` : ''}${s.alsoRuns ? `with ${s.alsoRuns} from ${s.alsoFrom}, ` : ''}${stationNote(s, now)}`}
     >
@@ -74,6 +112,7 @@ function StationPlate({ s, pipeline, now, onSelect }: {
       {s.alsoRuns && (
         <span className="fleet-station__also" title={`from ${s.alsoFrom}`}>+ {s.alsoRuns}</span>
       )}
+      {s.fleet && s.fleet.total > 0 && <FleetBar f={s.fleet} />}
       <span className="fleet-station__note">{stationNote(s, now)}</span>
     </button>
   )

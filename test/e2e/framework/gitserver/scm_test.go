@@ -5,7 +5,10 @@ package gitserver
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -208,4 +211,64 @@ func TestGitHubSCM(t *testing.T) {
 	require.ErrorContains(t, b.DeleteBranch(ctx, r, "main"), "refusing")
 	require.ErrorContains(t, b.DeleteBranch(ctx, r, "kardinal/nginx-demo-c7ntq/prod"), "refusing")
 	assert.Empty(t, f.seen, "nothing outside e2e/ is touched")
+}
+
+// TestGitLabMergeSlowAnswer (#1652): GitLab merges inside the PUT; on a
+// loaded host the answer comes after the client's timeout or as a 5xx while
+// the merge goes on. MergePR reads the MR back: merged is done, still open is
+// merged again, and a GitLab that keeps failing gives up after the deadline.
+func TestGitLabMergeSlowAnswer(t *testing.T) {
+	const put, get = "PUT /api/v4/projects/e2e%2Fr/merge_requests/4/merge", "GET /api/v4/projects/e2e%2Fr/merge_requests/4"
+	r := Repo{Owner: "e2e", Name: "r", Branch: "main"}
+	for name, tc := range map[string]struct {
+		state string
+		fail  []int
+		want  []string
+	}{
+		"5xx, but it merged": {state: "merged", fail: []int{502}, want: []string{put, get}},
+		"5xx, still open":    {state: "opened", fail: []int{502}, want: []string{put, get, put}},
+		"5xx, then closed":   {state: "closed", fail: []int{502}, want: []string{put, get}},
+		// The retry of a merge that a timed-out PUT already did: GitLab
+		// refuses it as the MR is merged (QA on #1655).
+		"405 on a merged MR":            {state: "merged", fail: []int{405}, want: []string{put, get}},
+		"422 on a merged MR":            {state: "merged", fail: []int{422}, want: []string{put, get}},
+		"405 while GitLab still checks": {state: "opened", fail: []int{405}, want: []string{put, get, put}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, srv := newFake(t, map[string]string{put: `{}`, get: `{"iid":4,"state":"` + tc.state + `"}`})
+			f.fail[put] = tc.fail
+			s := server(t, "gitlab", srv.URL, "")
+			s.(*gitlab).retry = time.Millisecond
+			err := s.MergePR(context.Background(), r, 4)
+			if tc.state == "closed" {
+				require.Error(t, err, "a closed MR is not merged")
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tc.want, f.seen)
+		})
+	}
+
+	t.Run("no answer in time, but it merged", func(t *testing.T) {
+		var mu sync.Mutex
+		var seen []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			seen = append(seen, r.Method)
+			mu.Unlock()
+			if r.Method == http.MethodPut {
+				time.Sleep(200 * time.Millisecond) // past the client timeout; GitLab merges anyway
+			}
+			_, _ = io.WriteString(w, `{"iid":4,"state":"merged"}`)
+		}))
+		t.Cleanup(srv.Close)
+		s, err := newServer("gitlab", client{api: srv.URL, cloneBase: "http://git.example", owner: "e2e", token: "tok",
+			http: &http.Client{Timeout: 50 * time.Millisecond}}, "")
+		require.NoError(t, err)
+		s.(*gitlab).retry = time.Millisecond
+		require.NoError(t, s.MergePR(context.Background(), r, 4))
+		mu.Lock()
+		defer mu.Unlock()
+		assert.Equal(t, []string{http.MethodPut, http.MethodGet}, seen)
+	})
 }

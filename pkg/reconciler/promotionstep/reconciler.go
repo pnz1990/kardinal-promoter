@@ -54,6 +54,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
@@ -88,6 +89,10 @@ const (
 	// created a rollback Bundle (K-03). The step takes no further action; the
 	// rollback Bundle's own step carries the promotion on.
 	StateRollingBack = "RollingBack"
+	// StateSuperseded — terminal, not a failure: the step did not push
+	// because a newer Bundle of the same kind had already pushed to its
+	// environment (#1603). Nothing counts it as a failed promotion.
+	StateSuperseded = "Superseded"
 
 	// requeueWaitForMerge is how often to requeue while waiting for a PR merge.
 	requeueWaitForMerge = 30 * time.Second
@@ -292,7 +297,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// With the resourceVersion read: a merge patch of status.hookRecords
 		// from a stale copy would drop records another reconcile wrote (QA
 		// #1493). A conflict reads the step again.
-		err := r.Status().Patch(ctx, &ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+		err := r.patchStatusLocked(ctx, base, &ps)
 		switch {
 		case apierrors.IsConflict(err):
 			return ctrl.Result{RequeueAfter: time.Second}, nil
@@ -388,6 +393,13 @@ func (r *Reconciler) reconcileState(ctx context.Context, log zerolog.Logger, ps 
 	}
 
 	switch ps.Status.State {
+	case StatePending, StatePendingExplicit, StatePromoting, StateWaitingForMerge, StateHealthChecking, StateVerifying:
+		if res, held, err := r.holdUnresolvedEnvironment(ctx, log, ps); held || err != nil {
+			return res, err
+		}
+	}
+
+	switch ps.Status.State {
 	case StatePending, StatePendingExplicit:
 		return r.handlePending(ctx, log, ps)
 	case StatePromoting:
@@ -398,7 +410,7 @@ func (r *Reconciler) reconcileState(ctx context.Context, log zerolog.Logger, ps 
 		return r.handleHealthChecking(ctx, log, ps)
 	case StateVerifying:
 		return r.handleVerifying(ctx, log, ps)
-	case StateVerified, StateFailed:
+	case StateVerified, StateFailed, StateSuperseded:
 		// Terminal states — clean up workdir if present (ST-7/ST-8 short-term mitigation).
 		r.cleanWorkDir(log, ps)
 		return ctrl.Result{}, nil
@@ -861,6 +873,19 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
 	}
+	if a := ps.Spec.Admitted; a != nil && !*a {
+		// A fleet Graph has not read this step back yet, so its admission is
+		// not final (spec.admitted): do no work a pruned step would leave
+		// behind. The Graph's spec update wakes the step.
+		const msg = "waiting for the promotion Graph to confirm this step's admission (fleet pacing)"
+		if ps.Status.Message != msg {
+			ps.Status.Message = msg
+			if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil && !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("patch admission wait: %w", err)
+			}
+		}
+		return ctrl.Result{RequeueAfter: unresolvedRecheck}, nil
+	}
 	if held, res, holdErr := r.holdIfPaused(ctx, log, ps); held {
 		return res, holdErr
 	}
@@ -937,7 +962,7 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 		return ctrl.Result{}, fmt.Errorf("load bundle: %w", err)
 	}
 
-	seq := stepSequence(env, bundle)
+	seq := stepSequence(pipeline, env, bundle)
 	log.Info().
 		Str("env", ps.Spec.Environment).
 		Str("approval", approvalMode).
@@ -1025,7 +1050,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		// by hand or it started before status.steps existed. Record the list
 		// and run it from the next reconcile: the finalizer sync at the end of
 		// this one then adds kardinal.io/close-pr before open-pr can run.
-		ps.Status.Steps = initStepStatuses(stepSequence(env, bundle))
+		ps.Status.Steps = initStepStatuses(stepSequence(pipeline, env, bundle))
 		if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 			if apierrors.IsNotFound(err) {
 				return ctrl.Result{}, nil
@@ -1059,6 +1084,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		return ctrl.Result{}, fmt.Errorf("scm provider: %w", err)
 	}
 	state := r.stepState(ctx, log, ps, pipeline, env, bundle, seq, workDir, cred, provider)
+	state.BeforePush = r.pushGuard(ps, base, state)
 
 	prevIdx := ps.Status.CurrentStepIndex
 	// An auto promotion pushing to its base branch waits for the branch's
@@ -1086,12 +1112,27 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 			}
 		}()
 	}
+	// The cache can lag this controller's own last write; the steps must not
+	// run from a status that is already outdated (#1664). base is the copy
+	// the cache returned. Checked once the branch turn is taken, so a step
+	// waiting for its turn makes no API read; a requeue gives the turn back.
+	if behind, err := r.cacheBehind(ctx, base); err != nil {
+		return ctrl.Result{}, err
+	} else if behind {
+		log.Debug().Str("step", ps.Name).Msg("the cached step is behind the stored one; requeueing before running the steps")
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
 	nextIdx, result, execErr := eng.ExecuteFrom(ctx, state, prevIdx)
 
 	// Persist outputs regardless of result, so a PR opened in this reconcile is
 	// never forgotten (C03-promotionstep-06).
 	ps.Status.Outputs = state.Outputs
 	ps.Status.CurrentStepIndex = nextIdx
+	if state.Outputs[steps.OutputRenderRequested] == "true" && ps.Status.RenderRequestedAt == nil {
+		// The Graph creates the environment's RenderRun once this is set.
+		now := metav1.NewTime(r.now())
+		ps.Status.RenderRequestedAt = &now
+	}
 	if nextIdx > prevIdx {
 		// Progress resets the retry budget.
 		ps.Status.RetryCount, ps.Status.GitCredentialRetries, ps.Status.ContendedRetries = 0, 0, 0
@@ -1105,6 +1146,29 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		clearSCMWait(ps, r.now())
 	}
 
+	// The push intent write (pushGuard) found the step gone, or changed since
+	// this reconcile read it: nothing was pushed. The next reconcile reads
+	// the step again. Only that write's errors: a NotFound or Conflict of
+	// any other step (an Argo CD Application patch) is a step error.
+	intentErr := errors.Is(execErr, errPushIntent)
+	if intentErr && apierrors.IsNotFound(execErr) {
+		return ctrl.Result{}, nil
+	}
+	if errors.Is(execErr, steps.ErrNewerPushed) {
+		// Not a failure: a newer Bundle already deployed to this environment.
+		msg := execErr.Error()
+		if i := strings.LastIndex(msg, "newer bundle "); i >= 0 {
+			msg = msg[i:]
+		}
+		closed := updateStepStatuses(ps, eng.StepNames(), nextIdx, false, "", eng.Timings())
+		_, err := r.transitionClosing(ctx, base, ps, StateSuperseded, msg, "", closed)
+		return ctrl.Result{}, err
+	}
+	if intentErr && apierrors.IsConflict(execErr) {
+		// Requeue is rate limited (the controller's backoff).
+		log.Debug().Err(execErr).Msg("step changed while it ran; retrying on the fresh copy")
+		return ctrl.Result{Requeue: true}, nil
+	}
 	if execErr != nil {
 		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), eng.Timings(), execErr, nil, cred, env.StepTimeoutSeconds)
 	}
@@ -1170,7 +1234,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		// progress would rewrite the step statuses a newer one wrote. (Not
 		// reached today: ExecuteFrom runs every remaining step and reports
 		// success only with nextIdx == len(seq).)
-		if patchErr := r.Status().Patch(ctx, ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); patchErr != nil {
+		if patchErr := r.patchStatusLocked(ctx, base, ps); patchErr != nil {
 			if apierrors.IsNotFound(patchErr) {
 				return ctrl.Result{}, nil
 			}
@@ -1207,7 +1271,8 @@ func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1al
 		Outputs:      cloneMap(ps.Status.Outputs),
 		Git: steps.GitConfig{
 			URL:           pipeline.Spec.Git.URL,
-			Branch:        baseBranch(pipeline),
+			Branch:        targetBranch(pipeline, env),
+			SourceBranch:  sourceBranch(pipeline, env),
 			Token:         cred.token,
 			SSHPrivateKey: cred.sshKey,
 			SSHKnownHosts: cred.knownHosts,
@@ -1221,6 +1286,9 @@ func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1al
 		GateResults:          r.collectGateResults(ctx, log, ps),
 		UpstreamEnvironments: upstreamEnvironments(bundle, ps.Spec.Environment),
 		Sequence:             seq,
+	}
+	if ps.Spec.Live != nil {
+		state.LiveRenders = ps.Spec.Live.Renders
 	}
 	r.setRollbackState(ctx, log, state, bundle)
 	return state
@@ -1354,7 +1422,7 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		// yet) would mark the credential missing again and emit a second
 		// Warning Event, and reset the backoff; its patch is refused with
 		// a Conflict instead, and it runs again on the fresh copy.
-		if patchErr := r.Status().Patch(ctx, ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); patchErr != nil {
+		if patchErr := r.patchStatusLocked(ctx, base, ps); patchErr != nil {
 			if apierrors.IsNotFound(patchErr) {
 				return ctrl.Result{}, nil
 			}
@@ -1375,7 +1443,14 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 	if retryable {
 		msg = fmt.Sprintf("%s (gave up after %d retries)", msg, maxStepRetries)
 	}
-	log.Error().Err(execErr).Str("env", ps.Spec.Environment).Msg("step engine failed")
+	if errors.Is(execErr, steps.ErrStalePush) {
+		// The push guard (#1681) cancelled a superseded, rejected or
+		// deleted Bundle's promotion before it could push over a newer
+		// one: the expected end of a stale step, not a controller error.
+		log.Info().Err(execErr).Str("env", ps.Spec.Environment).Msg("stale promotion cancelled before its push")
+	} else {
+		log.Error().Err(execErr).Str("env", ps.Spec.Environment).Msg("step engine failed")
+	}
 	closed = append(closed, updateStepStatuses(ps, stepNames, idx, true, msg, timings)...)
 	if closeErr := r.closeStepPR(ctx, ps, "the promotion failed: "+msg, false); closeErr != nil {
 		msg += fmt.Sprintf("; closing the PR it opened failed (%v) — %s", closeErr, closeByHand(closeErr))
@@ -1392,16 +1467,31 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 }
 
 // recordPushedCommit stores, as outputs.commitSHA, the commit the health check
-// must find deployed (E2E-01). It is known here only when the step pushed
+// must find deployed (E2E-01). It is known here when the step pushed
 // straight to the branch the GitOps tool tracks; when the recorded sequence
 // opens a PR the merge commit comes from the PRStatus instead.
+//
+// A step whose git-commit found nothing to commit (noChanges) pushed and
+// opened nothing, but the branch it cloned, the one the GitOps tool tracks,
+// already holds the change: the clone's head is the commit to wait for, so
+// the health check needs an applied revision that contains it (#1669).
+// Without it any revision passed: a step re-run after its own push (#1664),
+// or one whose change a sibling environment had written, was Verified
+// before the GitOps tool applied the branch.
 func (r *Reconciler) recordPushedCommit(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
 	pipeline *v1alpha1.Pipeline, workDir string) {
-	if opensPR(ps) {
-		return
+	noChanges := ps.Status.Outputs["noChanges"] == "true"
+	if ps.Status.Outputs["commitSHA"] != "" {
+		return // a render reported its commit itself, with or without changes
 	}
-	if pushed := ps.Status.Outputs["branch"]; pushed == "" || pushed != baseBranch(pipeline) {
-		return
+	if !noChanges {
+		if opensPR(ps) {
+			return // a pr-review step takes the merge commit
+		}
+		env := findEnv(pipeline, ps.Spec.Environment)
+		if pushed := ps.Status.Outputs["branch"]; pushed == "" || pushed != targetBranch(pipeline, env) {
+			return
+		}
 	}
 	hr, ok := r.GitClient.(scm.HeadCommitReader)
 	if !ok {
@@ -1409,7 +1499,7 @@ func (r *Reconciler) recordPushedCommit(ctx context.Context, log zerolog.Logger,
 	}
 	sha, err := hr.HeadCommit(ctx, workDir)
 	if err != nil || sha == "" {
-		log.Warn().Err(err).Msg("could not read the pushed commit; health will check images only")
+		log.Warn().Err(err).Bool("noChanges", noChanges).Msg("could not read the commit to verify; health will check images only")
 		return
 	}
 	if ps.Status.Outputs == nil {
@@ -1636,7 +1726,20 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 	}
 	if msg != ps.Status.Message || autoMergeChanged {
 		ps.Status.Message = msg
-		if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
+		// Locked: the auto-merge state decides whether the next reconcile
+		// turns auto-merge off at the SCM. A reconcile that read the step
+		// from a cache behind the write of `enabled` would otherwise store
+		// `suspended` over it without turning it off, and the SCM merges the
+		// PR of a paused Pipeline (#1683). Its write conflicts instead, and
+		// the requeued reconcile reads `enabled`.
+		if err := r.patchStatusLocked(ctx, base, ps); err != nil {
+			if apierrors.IsNotFound(err) {
+				return ctrl.Result{}, nil
+			}
+			if apierrors.IsConflict(err) {
+				log.Debug().Str("step", ps.Name).Msg("step changed since it was read; wait-for-merge state not written, requeueing")
+				return ctrl.Result{RequeueAfter: time.Second}, nil
+			}
 			return ctrl.Result{}, fmt.Errorf("patch wait-for-merge message: %w", err)
 		}
 	}
@@ -2310,8 +2413,14 @@ func bakeDeadlineMessage(ps *v1alpha1.PromotionStep, env v1alpha1.EnvironmentSpe
 //     gate, so a Pending step starts as soon as its gates are re-evaluated
 //     (checkRequiredGates).
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Bundle reads of one Pipeline go through the spec.pipeline index (#1654).
+	if err := lifecycle.IndexBundlesByPipeline(context.Background(), mgr.GetFieldIndexer()); err != nil {
+		return err
+	}
 	b := ctrl.NewControllerManagedBy(mgr).
-		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers,
+			// Workers are shared fairly between namespaces (#1577).
+			NewQueue: fairqueue.NewFor(mgr)}).
 		For(&v1alpha1.PromotionStep{}, builderutil.WithPredicates(
 			predicate.Or(predicate.GenerationChangedPredicate{},
 				eventfilter.LabelChangedExceptKro, predicate.AnnotationChangedPredicate{}, auditPending),
@@ -2569,7 +2678,7 @@ func (r *Reconciler) cleanWorkDir(log zerolog.Logger, ps *v1alpha1.PromotionStep
 		return
 	}
 	dir := r.workDir(ps)
-	for _, d := range []string{dir, steps.ConfigSourceDir(dir)} {
+	for _, d := range []string{dir, steps.ConfigSourceDir(dir), steps.DrySourceDir(dir)} {
 		if err := os.RemoveAll(d); err != nil {
 			log.Warn().Err(err).Str("workDir", d).Msg("cleanWorkDir: failed to remove working directory")
 		} else {
@@ -2578,12 +2687,63 @@ func (r *Reconciler) cleanWorkDir(log zerolog.Logger, ps *v1alpha1.PromotionStep
 	}
 }
 
+// unresolvedRecheck is how often a step whose fleet environment cannot be
+// resolved looks again.
+const unresolvedRecheck = 30 * time.Second
+
+// holdUnresolvedEnvironment holds a step of a Pipeline with fleets, or a
+// fleet target's step, whose environment the Pipeline does not resolve to
+// (D1): a fleet target whose selector cannot be read or that left the
+// fleet (also after the last fleet is removed), or a step of an environment
+// that became a fleet while it was in flight. Running it would
+// promote with an empty environment spec (auto, the default path and
+// health), so it fails closed: the step stays where it is, says why, and
+// looks again every unresolvedRecheck. held is false for every other step.
+func (r *Reconciler) holdUnresolvedEnvironment(ctx context.Context, log zerolog.Logger,
+	ps *v1alpha1.PromotionStep) (ctrl.Result, bool, error) {
+	pipeline, err := r.loadPipeline(ctx, ps)
+	if err != nil {
+		return ctrl.Result{}, false, nil // the state's handler reports a missing Pipeline
+	}
+	// A fleet target's step (label kardinal.io/fleet) is held even when the
+	// Pipeline has no fleet any more: its target environment is gone.
+	fleet := ps.Labels[graph.LabelFleet]
+	if fleet == "" && !graph.HasFleets(pipeline) {
+		return ctrl.Result{}, false, nil
+	}
+	if _, ok := graph.EnvironmentSpecFor(pipeline, ps.Spec.Environment); ok {
+		return ctrl.Result{}, false, nil
+	}
+	why := "it is not an environment of the Pipeline"
+	if fleet != "" {
+		why = "it is a target of fleet " + fleet + ", which does not list it any more"
+	}
+	if err := graph.ValidateFleets(pipeline); err != nil {
+		why = err.Error()
+	}
+	for _, e := range pipeline.Spec.Environments {
+		if e.Name == ps.Spec.Environment && e.Fleet != nil {
+			why = "it is now a fleet environment, whose targets are promoted as " + e.Name + "-<target>"
+		}
+	}
+	msg := fmt.Sprintf("environment %s cannot be resolved (%s); the step waits and does not promote", ps.Spec.Environment, why)
+	if ps.Status.Message != msg {
+		log.Warn().Str("env", ps.Spec.Environment).Msg(msg)
+		base := ps.DeepCopy()
+		ps.Status.Message = msg
+		if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, true, fmt.Errorf("patch unresolved environment message: %w", err)
+		}
+	}
+	return ctrl.Result{RequeueAfter: unresolvedRecheck}, true, nil
+}
+
 // findEnv returns the EnvironmentSpec for the named environment, or empty spec if not found.
 func findEnv(pipeline *v1alpha1.Pipeline, envName string) v1alpha1.EnvironmentSpec {
-	for _, e := range pipeline.Spec.Environments {
-		if e.Name == envName {
-			return e
-		}
+	// A fleet target is an environment of its own: the fleet environment
+	// with the target's name, path and health.
+	if env, ok := graph.EnvironmentSpecFor(pipeline, envName); ok {
+		return env
 	}
 	return v1alpha1.EnvironmentSpec{Name: envName}
 }
@@ -2661,8 +2821,8 @@ func initStepStatuses(seq []string) []v1alpha1.StepStatus {
 
 // stepSequence is the step list a step of env runs for bundle, recorded in
 // status.steps when the step starts.
-func stepSequence(env v1alpha1.EnvironmentSpec, bundle *v1alpha1.Bundle) []string {
-	return steps.DefaultSequenceForBundle(env.Approval, bundle.Spec.Type, env.Update.Strategy, env.Layout)
+func stepSequence(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, bundle *v1alpha1.Bundle) []string {
+	return steps.DefaultSequenceForBundle(env.Approval, bundle.Spec.Type, env.Update.Strategy, effectiveLayout(pipeline, env))
 }
 
 // recordedSequence returns the step names in status.steps: the sequence

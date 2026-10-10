@@ -52,8 +52,10 @@ var historyTimeout = 30 * time.Second
 // hintForcePushed is added to the message of a rebuild because the base
 // branch was force-pushed: the commit the PR was built on is no longer in
 // its history, so which paths changed cannot be known.
-const hintForcePushed = "the commit the PR was built on is no longer in the base branch history (force-pushed), " +
-	"so the PR branch was rebuilt on the new base"
+const hintForcePushed = hintBaseRewritten + ", so the PR branch was rebuilt on the new base"
+
+// hintBaseRewritten names a force-pushed base in a refresh message.
+const hintBaseRewritten = "the commit the PR was built on is no longer in the base branch history (force-pushed)"
 
 // baseHistory is what a read of the base branch history found about the
 // commit a PR was built on.
@@ -78,11 +80,11 @@ const (
 // including a read longer than historyTimeout, or a since older than the
 // deep history). top is the newest commit of the history read: head, or a
 // later one when head came from a stale cache and the read was fresh.
-func (r *Reconciler) changedSince(ctx context.Context, rh scm.RemoteHeadReader, url, branch, head, since, token string) (changed []string, found baseHistory, top string, err error) {
+func (r *Reconciler) changedSince(ctx context.Context, rh scm.RemoteHeadReader, url, branch, head, since string, auth scm.GitAuth) (changed []string, found baseHistory, top string, err error) {
 	hctx, cancel := context.WithTimeout(ctx, historyTimeout)
 	defer cancel()
 	for _, depth := range []int{historyDepth, deepHistoryDepth} {
-		history, err := r.remotes.branchHistory(hctx, rh, url, branch, head, token, depth)
+		history, err := r.remotes.branchHistory(hctx, rh, url, branch, head, auth, depth)
 		if err != nil {
 			// The shared read has its own historyTimeout, which can fire just
 			// before hctx's.
@@ -123,7 +125,7 @@ func (r *Reconciler) revisionContains(ctx context.Context, log zerolog.Logger, p
 	}
 	return func(ctx context.Context, rev string) (bool, error) {
 		cred := r.resolveGitCredential(ctx, log, pipeline)
-		return r.descends(ctx, rh, gr, pipeline.Spec.Git.URL, baseBranch(pipeline), cred.token, rev, want, prPaths(env))
+		return r.descends(ctx, rh, gr, pipeline.Spec.Git.URL, baseBranch(pipeline), cred.auth(), rev, want, prPaths(env))
 	}
 }
 
@@ -137,10 +139,10 @@ func (r *Reconciler) revisionContains(ctx context.Context, log zerolog.Logger, p
 // on the branch (another branch, a force-push) does not count, and neither
 // does a want the graph does not reach.
 func (r *Reconciler) descends(ctx context.Context, rh scm.RemoteHeadReader, gr scm.BranchGraphReader,
-	url, branch, token, rev, want string, paths []string) (bool, error) {
+	url, branch string, auth scm.GitAuth, rev, want string, paths []string) (bool, error) {
 	hctx, cancel := context.WithTimeout(ctx, historyTimeout)
 	defer cancel()
-	heads, err := r.remotes.remoteHeads(hctx, rh, url, token, r.now())
+	heads, err := r.remotes.remoteHeads(hctx, rh, url, auth, r.now())
 	if err != nil {
 		return false, fmt.Errorf("read the heads of %s: %w", scm.RedactURL(url), err)
 	}
@@ -149,7 +151,7 @@ func (r *Reconciler) descends(ctx context.Context, rh scm.RemoteHeadReader, gr s
 		return false, nil
 	}
 	for _, depth := range []int{historyDepth, deepHistoryDepth} {
-		g, err := r.remotes.branchGraph(hctx, gr, url, branch, head, token, depth)
+		g, err := r.remotes.branchGraph(hctx, gr, url, branch, head, auth, depth)
 		if err != nil {
 			return false, fmt.Errorf("read the history of %s: %w", branch, err)
 		}
@@ -187,6 +189,9 @@ const outputPushedSHA = builtinsteps.OutputPushedSHA
 //   - If the history could not be read, or baseSHA is older than the last
 //     deepHistoryDepth commits, nothing is known: the PR branch is kept and
 //     checked again (#1584).
+//   - If the new head already has the promotion's change (the PR merged
+//     before its PRStatus said so), nothing is pushed or counted as a
+//     rebuild: baseSHA follows the head (#1640).
 //   - If the PR branch's head is not the commit kardinal pushed
 //     (status.outputs.pushedSHA), someone else committed to it: nothing is
 //     rebuilt, and the message says so.
@@ -212,7 +217,7 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 	cred := r.resolveGitCredential(ctx, log, pipeline)
 	branch := baseBranch(pipeline)
 	url := pipeline.Spec.Git.URL
-	heads, err := r.remotes.remoteHeads(ctx, rh, url, cred.token, r.now())
+	heads, err := r.remotes.remoteHeads(ctx, rh, url, cred.auth(), r.now())
 	if err != nil {
 		log.Debug().Err(err).Msg("could not read the remote heads; the PR branch is not refreshed")
 		return false, nil
@@ -236,14 +241,14 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 	// head is not a move of the base. Its cached history does not contain
 	// built (read the heads again before rebuilding), and a fresh history
 	// read starts at a later commit (follow that one, never record the old).
-	changed, found, top, herr := r.changedSince(ctx, rh, url, branch, head, built, cred.token)
+	changed, found, top, herr := r.changedSince(ctx, rh, url, branch, head, built, cred.auth())
 	if found == baseRewritten {
-		if fresh, ferr := r.remotes.readHeads(ctx, rh, url, cred.token, r.now()); ferr == nil && fresh[branch] != head {
+		if fresh, ferr := r.remotes.readHeads(ctx, rh, url, cred.auth(), r.now()); ferr == nil && fresh[branch] != head {
 			head = fresh[branch]
 			if head == "" || head == built {
 				return false, nil
 			}
-			changed, found, top, herr = r.changedSince(ctx, rh, url, branch, head, built, cred.token)
+			changed, found, top, herr = r.changedSince(ctx, rh, url, branch, head, built, cred.auth())
 		}
 	}
 	if herr == nil && top != "" && top != head {
@@ -285,6 +290,7 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 		return false, nil
 	}
 	state := r.stepState(ctx, log, ps, pipeline, env, bundle, seq, r.workDir(ps), cred, provider)
+	state.BeforePush = r.pushGuard(ps, base, state)
 	// The rebuilt commit is computed afresh: forget the previous run's
 	// "nothing to commit".
 	delete(state.Outputs, "noChanges")
@@ -297,6 +303,22 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 			return false, nil
 		}
 		ps.Status.Message = msg
+		return true, r.Status().Patch(ctx, ps, client.MergeFrom(base))
+	}
+	if state.Outputs["noChanges"] == "true" {
+		// The new head already has this change: usually the PR itself
+		// merged and its PRStatus has not caught up yet. Nothing was
+		// pushed, so this is no rebuild (#1640): the PR branch is kept and
+		// baseSHA follows the head.
+		outputs := cloneMap(ps.Status.Outputs)
+		outputs[builtinsteps.OutputBaseSHA] = head
+		ps.Status.Outputs = outputs
+		note := fmt.Sprintf("base branch %s moved from %s to %s and already has this change (the PR merged and its "+
+			"status has not caught up, or someone applied the change), so the PR branch is kept", branch, short(built), short(head))
+		if found == baseRewritten {
+			note += "; " + hintBaseRewritten
+		}
+		ps.Status.Message = withLabelsError(fmt.Sprintf("PR #%s is open, waiting for merge; %s", pr, note), outputs)
 		return true, r.Status().Patch(ctx, ps, client.MergeFrom(base))
 	}
 	n, _ := strconv.Atoi(ps.Status.Outputs[outputPRRebuilds])
@@ -316,10 +338,7 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 	ps.Status.Outputs = outputs
 	note := fmt.Sprintf("base branch %s moved from %s to %s; rebuilt the PR branch %s on it",
 		branch, short(built), short(head), outputs["branch"])
-	if outputs["noChanges"] == "true" {
-		note = fmt.Sprintf("base branch %s moved from %s to %s and already has this change; the PR branch is unchanged",
-			branch, short(built), short(head))
-	} else if found == baseRewritten {
+	if found == baseRewritten {
 		note += "; " + hintForcePushed
 	}
 	ps.Status.Message = withLabelsError(fmt.Sprintf("PR #%s is open, waiting for merge (%s)", pr, note), outputs)

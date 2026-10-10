@@ -82,10 +82,11 @@ func PlanPromote(ctx context.Context, c client.Reader, req PromoteRequest) (*Pro
 		histories[env] = h
 	}
 
-	var bundles v1alpha1.BundleList
-	if err := c.List(ctx, &bundles, client.InNamespace(req.Namespace)); err != nil {
-		return nil, fmt.Errorf("promote: list bundles: %w", err)
+	items, err := ListPipelineBundles(ctx, c, req.Namespace, req.Pipeline)
+	if err != nil {
+		return nil, fmt.Errorf("promote: %w", err)
 	}
+	bundles := v1alpha1.BundleList{Items: items}
 	rejected := RejectedArtifactsOf(bundles.Items, req.Pipeline)
 	var candidates []*v1alpha1.Bundle
 	for i := range bundles.Items {

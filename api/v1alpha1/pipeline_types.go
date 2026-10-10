@@ -213,6 +213,15 @@ type EnvironmentSpec struct {
 	// +optional
 	Wave int `json:"wave,omitempty"`
 
+	// Fleet expands this environment into one environment per target, named
+	// "<name>-<target>". Each target gets its own PromotionStep, PRStatus and
+	// gate instances (a PolicyGate that applies to this environment applies
+	// to every target), and the targets are promoted at most maxConcurrent at
+	// a time. An environment that depends on this one waits for every target.
+	// Without a fleet the environment is promoted once.
+	// +optional
+	Fleet *FleetSpec `json:"fleet,omitempty"`
+
 	// Shard was the agent shard of distributed mode, which was removed. A
 	// non-empty value sets the Pipeline Ready=False (reason NotImplemented)
 	// and fails the environment's PromotionSteps with "shard is not
@@ -248,13 +257,18 @@ type EnvironmentSpec struct {
 
 	// Layout configures how the promotion interacts with the Git repo layout.
 	// "directory" (default): env manifests are in a subdirectory of the main branch.
-	// "branch": rendered manifests are committed to a separate env-specific branch.
-	//   In this mode the step sequence includes kustomize-build to render templates
-	//   before committing to the target branch.
+	// "branch": the environment's path on spec.git.branch (the DRY source) is
+	//   rendered (kustomize build, or helm template for a chart) and the plain
+	//   manifests are committed to the environment's rendered branch (render.branch,
+	//   default env/<name>), which Argo CD or Flux sync. See docs/rendered-manifests.md.
 	// +kubebuilder:validation:Enum=directory;branch
 	// +kubebuilder:default=directory
 	// +optional
 	Layout string `json:"layout,omitempty"`
+
+	// Render configures layout: branch.
+	// +optional
+	Render *RenderConfig `json:"render,omitempty"`
 
 	// Steps is not supported. kardinal has no custom step engine: every
 	// environment runs the default step sequence (see DefaultSequenceForBundle).
@@ -599,6 +613,57 @@ type UpdateConfig struct {
 	ArgoCD *ArgoCDUpdateConfig `json:"argocd,omitempty"`
 }
 
+// RenderConfig configures how an environment with layout: branch is
+// rendered and where the result goes.
+type RenderConfig struct {
+	// Branch is the rendered branch the manifests are committed to. Defaults
+	// to env/<environment name>. It must differ from spec.git.branch and from
+	// every other environment's rendered branch.
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._/-]*$`
+	// +kubebuilder:validation:MaxLength=200
+	// +optional
+	Branch string `json:"branch,omitempty"`
+
+	// OnDrift is what a promotion does when the rendered branch was changed
+	// outside kardinal since the last render (a file kardinal wrote was edited
+	// or deleted, or a file in its way was added): fail (default) fails the
+	// step and changes nothing; overwrite renders over the change.
+	// +kubebuilder:validation:Enum=fail;overwrite
+	// +optional
+	OnDrift string `json:"onDrift,omitempty"`
+
+	// Helm configures the render of a Helm chart (an environment path holding
+	// a Chart.yaml).
+	// +optional
+	Helm *HelmRenderConfig `json:"helm,omitempty"`
+
+	// AllowNondeterministic lets Helm templates call functions whose result
+	// changes from one render to the next (randAlphaNum, uuidv4, now, genCA
+	// and the like). Off by default: such a chart renders different
+	// manifests for the same DRY commit, so every promotion commits a change
+	// and a rollback does not restore what ran.
+	// +optional
+	AllowNondeterministic bool `json:"allowNondeterministic,omitempty"`
+}
+
+// HelmRenderConfig configures helm template for layout: branch.
+type HelmRenderConfig struct {
+	// ReleaseName is .Release.Name. Defaults to the Pipeline name.
+	// +optional
+	ReleaseName string `json:"releaseName,omitempty"`
+
+	// Namespace is .Release.Namespace. Defaults to the environment name.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// ValuesFiles are values files, relative to the chart directory, applied
+	// in order over the chart's values.yaml. Defaults to
+	// update.helm.valuesFile when that is set and is not values.yaml.
+	// +kubebuilder:validation:MaxItems=16
+	// +optional
+	ValuesFiles []string `json:"valuesFiles,omitempty"`
+}
+
 // YAMLUpdateConfig lists the edits of the yaml update strategy. All of them
 // are applied in one commit; when one cannot be applied, none is written.
 type YAMLUpdateConfig struct {
@@ -705,6 +770,114 @@ type ArgoCDUpdateConfig struct {
 	// Defaults to "image.tag" if empty.
 	// +optional
 	ImageKey string `json:"imageKey,omitempty"`
+}
+
+// FleetSpec lists the targets of a fleet environment and paces them.
+// +kubebuilder:validation:XValidation:rule="has(self.targets) || has(self.selector)",message="fleet: set targets, a selector, or both (a selector of kind Target)"
+// +kubebuilder:validation:XValidation:rule="!has(self.selector) || !has(self.targets) || self.selector.kind == 'Target'",message="fleet: targets with a selector need selector.kind Target; an Application or ClusterProfile selector finds the targets itself"
+// +kubebuilder:validation:XValidation:rule="!has(self.selector) || self.selector.kind != 'Target' || has(self.targets)",message="fleet: a selector of kind Target selects from targets, which is empty"
+type FleetSpec struct {
+	// Targets are the fleet's members, in the order they are promoted.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=500
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Targets []FleetTarget `json:"targets,omitempty"`
+
+	// Selector picks the targets by labels: from targets (kind Target),
+	// from the Argo CD Applications in a namespace (kind Application), or
+	// from the clusters of a cluster inventory (kind ClusterProfile,
+	// multicluster.x-k8s.io/v1alpha1). The controller resolves Application
+	// and ClusterProfile selectors into status.fleets, and rebuilds the Graph
+	// of a Bundle in flight when the members change.
+	// +optional
+	Selector *FleetSelector `json:"selector,omitempty"`
+
+	// MaxConcurrent is how many targets are promoted at once. A target is in
+	// flight from its PromotionStep's creation until it is Verified; a
+	// Failed target keeps its place. 0 promotes every target at once.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	MaxConcurrent int `json:"maxConcurrent,omitempty"`
+
+	// MaxUnavailable stops the rollout: once this many of the fleet's
+	// targets have failed (Failed, AbortedByAlarm or RollingBack), no
+	// further target starts, and the targets in flight finish. Unset, a failure only keeps its place in
+	// maxConcurrent. An environment after the fleet waits for every target
+	// to be Verified either way.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	MaxUnavailable *int `json:"maxUnavailable,omitempty"`
+}
+
+// FleetTarget is one member of a fleet.
+type FleetTarget struct {
+	// Name identifies the target. The target's environment is named
+	// "<environment>-<name>", which must be a DNS label of at most 63
+	// characters.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=62
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name"`
+
+	// Labels describe the target (region, tier, cluster); a selector of
+	// kind Target picks targets by them. The labels of a selected
+	// Application or ClusterProfile are its own.
+	// +kubebuilder:validation:MaxProperties=32
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// Path is the target's directory in the GitOps repo. Default: the
+	// environment's path (default environments/<environment>) followed by
+	// "/<name>".
+	// +optional
+	Path string `json:"path,omitempty"`
+
+	// Health replaces the environment's health check for this target.
+	// +optional
+	Health *HealthConfig `json:"health,omitempty"`
+}
+
+// The kinds a fleet selector selects.
+const (
+	FleetSelectorTarget         = "Target"
+	FleetSelectorApplication    = "Application"
+	FleetSelectorClusterProfile = "ClusterProfile"
+)
+
+// FleetSelector selects a fleet's targets by labels.
+// +kubebuilder:validation:XValidation:rule="has(self.matchLabels) || has(self.matchExpressions)",message="fleet.selector: set matchLabels or matchExpressions"
+type FleetSelector struct {
+	// Kind is what the selector selects: Target (spec.fleet.targets),
+	// Application (Argo CD Applications; the default) or ClusterProfile
+	// (multicluster.x-k8s.io/v1alpha1 clusters).
+	// +kubebuilder:validation:Enum=Target;Application;ClusterProfile
+	// +kubebuilder:default=Application
+	// +optional
+	Kind string `json:"kind,omitempty"`
+
+	// Namespace holds the Applications or ClusterProfiles. Applications are
+	// read only from the controller's fleets.applicationNamespaces (default
+	// argocd; the default namespace is the first of them), ClusterProfiles
+	// from the Pipeline's namespace (the default) and the controller's
+	// fleets.clusterProfileNamespaces. Unused by kind Target.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// MatchLabels selects by label values.
+	// +optional
+	MatchLabels map[string]string `json:"matchLabels,omitempty"`
+
+	// MatchExpressions selects by label expressions (In, NotIn, Exists,
+	// DoesNotExist), as in a Kubernetes label selector.
+	// +optional
+	MatchExpressions []metav1.LabelSelectorRequirement `json:"matchExpressions,omitempty"`
+}
+
+// LabelSelector is s as a Kubernetes label selector.
+func (s *FleetSelector) LabelSelector() *metav1.LabelSelector {
+	return &metav1.LabelSelector{MatchLabels: s.MatchLabels, MatchExpressions: s.MatchExpressions}
 }
 
 // HealthConfig holds health check configuration for an environment.
@@ -863,6 +1036,68 @@ func (h *EnvironmentHold) Expired(now time.Time) bool {
 	return h != nil && h.ExpiresAt != nil && !now.Before(h.ExpiresAt.Time)
 }
 
+// The states of a hold (PipelineStatus.HoldStates). A hold is in effect in
+// every state: the controller never lifts a hold (#1629).
+const (
+	// HoldStateActive: the hold's Bundle exists.
+	HoldStateActive = "Active"
+	// HoldStateBundleMissing: the controller found the hold's Bundle
+	// missing. The hold stays in effect; past the grace the controller
+	// reports it (condition HoldBundleMissing, a Warning Event, an
+	// AuditEvent) and a human releases it.
+	HoldStateBundleMissing = "BundleMissing"
+)
+
+// EnvironmentHoldState is the state of one hold, written by the Pipeline
+// reconciler.
+type EnvironmentHoldState struct {
+	// Environment is the held environment.
+	Environment string `json:"environment"`
+	// Bundle is the hold's Bundle the state was found for.
+	Bundle string `json:"bundle"`
+	// CreatedAt is the hold's createdAt: with the environment and the
+	// Bundle it identifies the hold, so a hold released and added again
+	// gets a state, and a report, of its own.
+	// +optional
+	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
+	// State is Active or BundleMissing.
+	State string `json:"state"`
+	// BundleMissingSince is when the controller first found the Bundle
+	// missing: the grace counts from it, not from the client-set createdAt.
+	// +optional
+	BundleMissingSince *metav1.Time `json:"bundleMissingSince,omitempty"`
+	// ReportedAt is when the controller reported the missing Bundle, once,
+	// past the grace.
+	// +optional
+	ReportedAt *metav1.Time `json:"reportedAt,omitempty"`
+	// Message says what is wrong and how to recover.
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
+// sameTime reports whether a and b are both unset or the same second.
+func sameTime(a, b *metav1.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Truncate(time.Second).Equal(b.Truncate(time.Second))
+}
+
+// HoldState returns the status.holdStates entry of h, or nil: the entry of
+// the same environment, Bundle and createdAt.
+func (p *Pipeline) HoldState(h *EnvironmentHold) *EnvironmentHoldState {
+	if p == nil || h == nil {
+		return nil
+	}
+	for i := range p.Status.HoldStates {
+		st := &p.Status.HoldStates[i]
+		if st.Environment == h.Environment && st.Bundle == h.Bundle && sameTime(st.CreatedAt, h.CreatedAt) {
+			return st
+		}
+	}
+	return nil
+}
+
 // EnvironmentHold pins one environment of a Pipeline to a rollback Bundle.
 type EnvironmentHold struct {
 	// Environment is the held environment.
@@ -936,8 +1171,18 @@ type PipelineStatus struct {
 	// +optional
 	ObservedHolds []EnvironmentHold `json:"observedHolds,omitempty"`
 
-	// PendingAuditEvents are the HoldCreated and HoldReleased AuditEvents not
-	// yet written (the audit outbox, #1552). Each entry is stored in the same
+	// HoldStates says, per hold of spec.holds, whether its rollback Bundle
+	// exists (#1629). A hold whose Bundle is missing (a crash between the
+	// hold and the Bundle create, or the Bundle deleted) stays in effect;
+	// past the grace the controller reports it, and a human releases it.
+	// +listType=map
+	// +listMapKey=environment
+	// +optional
+	HoldStates []EnvironmentHoldState `json:"holdStates,omitempty"`
+
+	// PendingAuditEvents are the HoldCreated, HoldReleased and
+	// HoldBundleMissing AuditEvents not yet written (the audit outbox,
+	// #1552). Each entry is stored in the same
 	// status patch as observedHolds and removed once the AuditEvent exists.
 	// Normally empty.
 	// +optional
@@ -948,6 +1193,28 @@ type PipelineStatus struct {
 	// last 30 Verified Bundles for this Pipeline. Written by PipelineReconciler.
 	// +optional
 	DeploymentMetrics *PipelineDeploymentMetrics `json:"deploymentMetrics,omitempty"`
+
+	// Fleets are the resolved targets of each fleet environment that uses a
+	// selector, written by the PipelineReconciler. A Bundle's Graph is built
+	// from them; a change rebuilds the Graph of a Bundle in flight.
+	// +optional
+	// +listType=map
+	// +listMapKey=environment
+	Fleets []FleetStatus `json:"fleets,omitempty"`
+}
+
+// FleetStatus is the resolved membership of one selector fleet.
+type FleetStatus struct {
+	// Environment is the fleet environment.
+	Environment string `json:"environment"`
+
+	// Targets are the selected Applications as targets, sorted by name.
+	// +optional
+	Targets []FleetTarget `json:"targets,omitempty"`
+
+	// Message says why the selector could not be resolved, when it could not.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // PipelineDeploymentMetrics holds aggregate promotion efficiency metrics for a Pipeline.

@@ -38,6 +38,13 @@ When a new Bundle is created while a previous Bundle is still promoting through 
 same Pipeline, the older Bundle is **superseded**:
 
 - The older Bundle's status transitions to `Superseded`, which is final
+- None of its PromotionSteps pushes any more: right before every `git-push` a step reads its
+  Bundle from the API server and fails ("promotion cancelled") if the Bundle is Superseded or
+  rejected. A push to the environment's branch is also refused when a Bundle that supersedes it
+  (newer, of the same type, neither rejected nor Failed) has already pushed there (each such push
+  first records `status.outputs.pushIntent`), so an older image never lands over a newer one: that
+  step ends `Superseded`, and so does its Bundle, which no failure count (Bundle failure,
+  `maxUnavailable`, DORA, `onHealthFailure`) includes
 - Its unfinished PromotionSteps are failed, and a PR one of them opened that is still
   open is closed with a comment. If the SCM fails to close it or to delete its branch, the
   step keeps its state and retries after 10s, 20s, 40s, 80s and 2m, with the
@@ -67,7 +74,7 @@ kardinal get bundles my-app
 
 kro keeps every Graph in memory, so kardinal does not keep the Graph of every finished Bundle.
 Once a Bundle has finished, and every one of its PromotionSteps has settled (`Verified`, `Failed`,
-`RollingBack` or `AbortedByAlarm`, with no PR left to close), its Graph is **retired** after a delay
+`RollingBack`, `AbortedByAlarm` or `Superseded`, with no PR left to close), its Graph is **retired** after a delay
 that starts when the last step settles:
 
 | Bundle | Retired after (chart value, controller flag) |
@@ -237,7 +244,7 @@ A PromotionStep represents one environment promotion for one Bundle. You do not 
 Each PromotionStep tracks:
 - Which environment it targets
 - Which Bundle it promotes
-- The current state (Pending, Promoting, WaitingForMerge, HealthChecking, Verifying, Verified, Failed, AbortedByAlarm, RollingBack). Verifying: the health check passed and the environment's [post-deploy hooks](hooks.md) run
+- The current state (Pending, Promoting, WaitingForMerge, HealthChecking, Verifying, Verified, Failed, AbortedByAlarm, RollingBack, Superseded). Superseded: the step did not push because a newer Bundle had already pushed to its environment; it is not a failure. Verifying: the health check passed and the environment's [post-deploy hooks](hooks.md) run
 - The PR URL (for pr-review environments)
 - Per-step progress and timing (`status.steps`), the current message and conditions, and bake and retry counters. Promotion evidence (provenance, gate results, upstream verification) goes into the PR body.
 
@@ -395,14 +402,17 @@ This is the standard pattern for large Argo CD deployments because:
 - Argo CD never runs `kustomize build` on every reconciliation cycle (significant performance gain at scale)
 - CODEOWNERS rules can be placed on individual rendered YAML files in the environment branch
 
-**Not implemented yet.** `layout: branch` is accepted by the API, but the `git-clone`
-step fails every promotion that uses it with `layout: branch is not implemented`
-(`kardinal validate` reports it and the Pipeline is `Ready=False`/`NotImplemented`), and
-nothing writes rendered YAML to an environment branch. `renderManifests`, `sourceBranch`
-and `branchPrefix` are not Pipeline fields. Use `layout: directory` (the default).
+Set `layout: branch` on an environment and kardinal renders it: the `render-manifests`
+step runs kustomize build or helm template on the DRY source in `spec.git.branch`, in a
+sandboxed Job of the environment's RenderRun (never in the controller), and commits the
+plain YAML to the rendered branch
+(`env/<name>` by default, `render.branch` to change it) with the DRY commit in the
+commit trailers. `pr-review` PRs show the rendered diff, a change pushed to the rendered
+branch outside kardinal fails the next promotion (`render.onDrift`), and a rollback
+re-renders the DRY commit of the Bundle it restores.
 
-See [Rendered Manifests](rendered-manifests.md) for the planned design, including
-Argo CD configuration and CODEOWNERS integration.
+See [Rendered Manifests](rendered-manifests.md) for the fields, the render Job, limits, Argo CD
+configuration and CODEOWNERS integration.
 
 ## Advanced Patterns
 
@@ -464,6 +474,7 @@ kardinal-promoter writes an immutable `AuditEvent` CRD for each key promotion li
 | `PromotionRejected` | `kardinal reject` cancels an in-flight promotion (a step that had not started writes none) |
 | `GateOverridden` | An override is recorded on a gate instance (`kardinal override` or the UI), once per override, with its verified author |
 | `ApprovalRecorded` / `ApprovalRevoked` | A decision (`kardinal approve`) appears in, or leaves, an approval gate instance, with the approver and whether it counts |
+| `HoldCreated` / `HoldReleased` / `HoldBundleMissing` | A hold (`kardinal rollback --hold`) appeared in, or left, `spec.holds`; or its rollback Bundle has been missing for `--hold-bundle-grace` (the hold stays in effect: [A hold whose rollback Bundle does not exist](rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |
 | `GateEvaluated` | A PolicyGate instance is first evaluated, and each later change of readiness (outcome `Failure` when blocked, `Success` when allowed) |
 | `RollbackStarted` | A health alarm with `onHealthFailure: rollback` starts a rollback |
 | `RollbackSucceeded` | A step of a rollback Bundle (from any rollback path) reaches Verified, besides `PromotionSucceeded`; one per step |

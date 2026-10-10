@@ -100,7 +100,13 @@ func hooksOf(env kardinalv1alpha1.EnvironmentSpec, phase string) []kardinalv1alp
 	return out
 }
 
+// findEnvSpec is the spec of environment name of pipeline: a fleet target
+// is its fleet's spec with the target's name, path and health
+// (EnvironmentSpecFor), and any other name one of spec.environments.
 func findEnvSpec(pipeline *kardinalv1alpha1.Pipeline, name string) kardinalv1alpha1.EnvironmentSpec {
+	if e, ok := EnvironmentSpecFor(pipeline, name); ok {
+		return e
+	}
 	for _, e := range pipeline.Spec.Environments {
 		if e.Name == name {
 			return e
@@ -344,7 +350,7 @@ func stepAdvanced(stepK8sName, phase string) string {
 func stepAdvancedExpr(step, phase string) string {
 	states := `!(s.?status.?state.orValue("") in ["", "Pending"])`
 	if phase == kardinalv1alpha1.HookPhasePost {
-		states = `s.?status.?state.orValue("") in ["Verified", "Failed", "AbortedByAlarm", "RollingBack"]`
+		states = `s.?status.?state.orValue("") in ["Verified", "Failed", "AbortedByAlarm", "RollingBack", "Superseded"]`
 	}
 	return fmt.Sprintf(`${%s.exists(s, s.metadata.name == %s && %s)}`, refStepsNodeID, step, states)
 }

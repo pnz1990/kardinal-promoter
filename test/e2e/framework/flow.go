@@ -369,7 +369,7 @@ func (e *Env) ArgoAppSpec(t *testing.T, name string, spec map[string]interface{}
 	e.DeleteOnCleanup(t, app, prune)
 }
 
-// PushTree clones repo's default branch on the test runner, lets change edit
+// PushTree clones repo's branch on the test runner, lets change edit
 // the checkout in dir, and commits and pushes the result as a developer
 // would. Use it for content the git server's API cannot write, such as
 // symlinks. It returns the new commit SHA.
@@ -378,10 +378,21 @@ func (e *Env) PushTree(t *testing.T, repo gitserver.Repo, message string, change
 	return e.PushBranch(t, repo, "", message, change)
 }
 
-// PushBranch is PushTree on branch (the default branch when empty), for
+// PushBranch is PushTree on branch (repo's branch when empty), for
 // example a PR branch someone pushes to by hand.
 func (e *Env) PushBranch(t *testing.T, repo gitserver.Repo, branch, message string, change func(dir string)) string {
 	t.Helper()
+	if branch == "" {
+		// The repo's branch, not the server's default branch: on GitHub
+		// the repo is a branch of a shared repo whose default branch is
+		// not the test's.
+		branch = repo.Branch
+	}
+	// The shared GitHub repo: only the test's own branches and the PR
+	// branches kardinal opened for its namespace.
+	if e.Git.Kind() == "github" && !gitserver.GitHubPushAllowed(repo, branch) {
+		t.Fatalf("refusing to push %s to the shared GitHub repo: not a branch of this test", branch)
+	}
 	remote, token, err := gitserver.PushRemote(e.Git, repo)
 	if err != nil {
 		t.Fatalf("push remote: %v", err)
@@ -415,6 +426,50 @@ func (e *Env) PushBranch(t *testing.T, repo gitserver.Repo, branch, message stri
 		t.Fatalf("git push %s: %v", repo.Name, err)
 	}
 	return sha.String()
+}
+
+// BranchContains reports whether commit sha is head or an ancestor of the
+// head of branch (repo's branch when empty), from a full clone on the test
+// runner.
+func (e *Env) BranchContains(t *testing.T, repo gitserver.Repo, branch, sha string) bool {
+	t.Helper()
+	if branch == "" {
+		branch = repo.Branch
+	}
+	remote, token, err := gitserver.PushRemote(e.Git, repo)
+	if err != nil {
+		t.Fatalf("push remote: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	opts := &gogit.CloneOptions{URL: remote, Auth: &gogithttp.BasicAuth{Username: "x-access-token", Password: token}}
+	if branch != "" {
+		opts.ReferenceName, opts.SingleBranch = plumbing.NewBranchReferenceName(branch), true
+	}
+	r, err := gogit.PlainCloneContext(ctx, t.TempDir(), true, opts)
+	if err != nil {
+		t.Fatalf("clone %s: %v", repo.Name, err)
+	}
+	ref, err := r.Head()
+	if err != nil {
+		t.Fatalf("head of %s: %v", repo.Name, err)
+	}
+	if ref.Hash().String() == sha {
+		return true
+	}
+	head, err := r.CommitObject(ref.Hash())
+	if err != nil {
+		t.Fatalf("head commit of %s: %v", repo.Name, err)
+	}
+	want, err := r.CommitObject(plumbing.NewHash(sha))
+	if err != nil {
+		return false // not in the branch's history
+	}
+	ok, err := want.IsAncestor(head)
+	if err != nil {
+		t.Fatalf("is %s an ancestor of %s: %v", sha, ref.Hash(), err)
+	}
+	return ok
 }
 
 // StateLog records every state each PromotionStep of a namespace passes
