@@ -3,8 +3,9 @@ name: E2E live
 # The live e2e suites (test/e2e/README.md). Each job in hack/e2e/matrix.txt
 # gets its own kind cluster with a real git server and GitOps engine and the
 # controller built from this commit; nothing is faked. The core suite runs on
-# the three Kubernetes minors in hack/tool-versions.env, split across two
-# jobs per minor (hack/e2e/run.sh SHARD); the upgrade suite on Kubernetes
+# the three Kubernetes minors in hack/tool-versions.env, split across three
+# jobs per minor (hack/e2e/run.sh SHARD), so each fits the 60-minute job
+# limit on a runner (#1680); the upgrade suite on Kubernetes
 # 1.30 (the oldest supported minor) and the newest minor.
 #
 # Pull requests and pushes to main don't run it: twelve jobs of 10 to 45

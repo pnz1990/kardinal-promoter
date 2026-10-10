@@ -47,7 +47,7 @@ SUITES='gitea flux' make e2e-all   # only these suites
 ```
 
 `hack/e2e/matrix.txt` lists the jobs: every suite, the core suite on each of
-the three Kubernetes minors split across two jobs per minor with `SHARD`, and
+the three Kubernetes minors split across three jobs per minor with `SHARD` (by the test durations in `hack/e2e/durations.txt`), and
 the upgrade suite on Kubernetes 1.30, the oldest supported minor, and the
 newest minor.
 `make e2e-all` runs them on this host, each on a kind cluster of its own

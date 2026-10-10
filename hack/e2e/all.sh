@@ -60,7 +60,7 @@ die() {
 }
 
 # One "id suite k8s shard" entry per matrix.txt line; the id names the job's
-# cluster, results and CI artifact (core-135-1of2).
+# cluster, results and CI artifact (core-135-1of3).
 matrix=()
 while read -r suite k8s shard _ || [ -n "$suite" ]; do
   case "$suite" in '' | '#'*) continue ;; esac
