@@ -80,11 +80,11 @@ const (
 // including a read longer than historyTimeout, or a since older than the
 // deep history). top is the newest commit of the history read: head, or a
 // later one when head came from a stale cache and the read was fresh.
-func (r *Reconciler) changedSince(ctx context.Context, rh scm.RemoteHeadReader, url, branch, head, since, token string) (changed []string, found baseHistory, top string, err error) {
+func (r *Reconciler) changedSince(ctx context.Context, rh scm.RemoteHeadReader, url, branch, head, since string, auth scm.GitAuth) (changed []string, found baseHistory, top string, err error) {
 	hctx, cancel := context.WithTimeout(ctx, historyTimeout)
 	defer cancel()
 	for _, depth := range []int{historyDepth, deepHistoryDepth} {
-		history, err := r.remotes.branchHistory(hctx, rh, url, branch, head, token, depth)
+		history, err := r.remotes.branchHistory(hctx, rh, url, branch, head, auth, depth)
 		if err != nil {
 			// The shared read has its own historyTimeout, which can fire just
 			// before hctx's.
@@ -125,7 +125,7 @@ func (r *Reconciler) revisionContains(ctx context.Context, log zerolog.Logger, p
 	}
 	return func(ctx context.Context, rev string) (bool, error) {
 		cred := r.resolveGitCredential(ctx, log, pipeline)
-		return r.descends(ctx, rh, gr, pipeline.Spec.Git.URL, baseBranch(pipeline), cred.token, rev, want, prPaths(env))
+		return r.descends(ctx, rh, gr, pipeline.Spec.Git.URL, baseBranch(pipeline), cred.auth(), rev, want, prPaths(env))
 	}
 }
 
@@ -139,10 +139,10 @@ func (r *Reconciler) revisionContains(ctx context.Context, log zerolog.Logger, p
 // on the branch (another branch, a force-push) does not count, and neither
 // does a want the graph does not reach.
 func (r *Reconciler) descends(ctx context.Context, rh scm.RemoteHeadReader, gr scm.BranchGraphReader,
-	url, branch, token, rev, want string, paths []string) (bool, error) {
+	url, branch string, auth scm.GitAuth, rev, want string, paths []string) (bool, error) {
 	hctx, cancel := context.WithTimeout(ctx, historyTimeout)
 	defer cancel()
-	heads, err := r.remotes.remoteHeads(hctx, rh, url, token, r.now())
+	heads, err := r.remotes.remoteHeads(hctx, rh, url, auth, r.now())
 	if err != nil {
 		return false, fmt.Errorf("read the heads of %s: %w", scm.RedactURL(url), err)
 	}
@@ -151,7 +151,7 @@ func (r *Reconciler) descends(ctx context.Context, rh scm.RemoteHeadReader, gr s
 		return false, nil
 	}
 	for _, depth := range []int{historyDepth, deepHistoryDepth} {
-		g, err := r.remotes.branchGraph(hctx, gr, url, branch, head, token, depth)
+		g, err := r.remotes.branchGraph(hctx, gr, url, branch, head, auth, depth)
 		if err != nil {
 			return false, fmt.Errorf("read the history of %s: %w", branch, err)
 		}
@@ -217,7 +217,7 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 	cred := r.resolveGitCredential(ctx, log, pipeline)
 	branch := baseBranch(pipeline)
 	url := pipeline.Spec.Git.URL
-	heads, err := r.remotes.remoteHeads(ctx, rh, url, cred.token, r.now())
+	heads, err := r.remotes.remoteHeads(ctx, rh, url, cred.auth(), r.now())
 	if err != nil {
 		log.Debug().Err(err).Msg("could not read the remote heads; the PR branch is not refreshed")
 		return false, nil
@@ -241,14 +241,14 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 	// head is not a move of the base. Its cached history does not contain
 	// built (read the heads again before rebuilding), and a fresh history
 	// read starts at a later commit (follow that one, never record the old).
-	changed, found, top, herr := r.changedSince(ctx, rh, url, branch, head, built, cred.token)
+	changed, found, top, herr := r.changedSince(ctx, rh, url, branch, head, built, cred.auth())
 	if found == baseRewritten {
-		if fresh, ferr := r.remotes.readHeads(ctx, rh, url, cred.token, r.now()); ferr == nil && fresh[branch] != head {
+		if fresh, ferr := r.remotes.readHeads(ctx, rh, url, cred.auth(), r.now()); ferr == nil && fresh[branch] != head {
 			head = fresh[branch]
 			if head == "" || head == built {
 				return false, nil
 			}
-			changed, found, top, herr = r.changedSince(ctx, rh, url, branch, head, built, cred.token)
+			changed, found, top, herr = r.changedSince(ctx, rh, url, branch, head, built, cred.auth())
 		}
 	}
 	if herr == nil && top != "" && top != head {

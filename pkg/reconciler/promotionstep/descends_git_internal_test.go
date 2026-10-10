@@ -79,7 +79,7 @@ func TestDescends_GitShapes(t *testing.T) {
 	check := func(t *testing.T, g *gitShapes, rev, want plumbing.Hash, contains bool) {
 		t.Helper()
 		r := &Reconciler{NowFn: func() time.Time { return time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC) }}
-		ok, err := r.descends(ctx, git, git, g.url(), "main", "", rev.String(), want.String(), []string{"environments/test"})
+		ok, err := r.descends(ctx, git, git, g.url(), "main", scm.GitAuth{}, rev.String(), want.String(), []string{"environments/test"})
 		require.NoError(t, err)
 		assert.Equal(t, contains, ok, "%s contains %s", rev.String()[:7], want.String()[:7])
 	}

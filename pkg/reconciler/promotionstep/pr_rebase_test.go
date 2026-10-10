@@ -250,7 +250,7 @@ type slowHistory struct {
 	fixed atomic.Bool
 }
 
-func (s *slowHistory) BranchHistory(ctx context.Context, url, branch, token string, max int) ([]scm.CommitPaths, error) {
+func (s *slowHistory) BranchHistory(ctx context.Context, url, branch string, token scm.GitAuth, max int) ([]scm.CommitPaths, error) {
 	s.calls.Add(1)
 	if s.fixed.Load() {
 		return s.GoGitClient.BranchHistory(ctx, url, branch, token, max)
@@ -326,7 +326,7 @@ type staleHeads struct {
 	staleHistory []scm.CommitPaths
 }
 
-func (s *staleHeads) BranchHistory(ctx context.Context, url, branch, token string, max int) ([]scm.CommitPaths, error) {
+func (s *staleHeads) BranchHistory(ctx context.Context, url, branch string, token scm.GitAuth, max int) ([]scm.CommitPaths, error) {
 	if h := s.staleHistory; h != nil {
 		s.staleHistory = nil
 		return h, nil
@@ -334,7 +334,7 @@ func (s *staleHeads) BranchHistory(ctx context.Context, url, branch, token strin
 	return s.GoGitClient.BranchHistory(ctx, url, branch, token, max)
 }
 
-func (s *staleHeads) RemoteHeads(ctx context.Context, url, token string) (map[string]string, error) {
+func (s *staleHeads) RemoteHeads(ctx context.Context, url string, token scm.GitAuth) (map[string]string, error) {
 	if h := s.stale; h != nil {
 		s.stale = nil
 		return h, nil
