@@ -285,7 +285,9 @@ an upstream leaves Verified before the environment's step starts, the compact sh
 environment's instances (they leave the collection, so kro prunes them) and creates them again once
 the upstreams are Verified; once the step has started, its instances are kept. Approval gates
 (`spec.approval`, or an expression that reads `approvals.*`) are carried too: their instances come
-from the `ApprovalGates` collection, and an environment is admitted only once they are ready.
+from the `ApprovalGates` collection, and an environment is admitted only once they are ready. The
+gate mirror of a `pr-review` environment (the `kardinal/gates` commit status) works the same way:
+the `GateMirror` patch collection writes `spec.live.gates` onto the step by its name.
 [Hooks](hooks.md) and [analysis](analysis.md) are carried too. HookRuns and AnalysisRuns are
 collections created under the conditions the node shape gates them on, even once the
 environment's step exists: see [Hooks](hooks.md) for the list. A run is kept once kro has

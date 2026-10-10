@@ -362,6 +362,9 @@
               "default": "token"
             }
           }
+        },
+        "tokenReview": {
+          "type": "boolean"
         }
       }
     },
@@ -402,8 +405,28 @@
             },
             "tokenReview": {
               "type": "boolean"
+            },
+            "allowStaticTokenWithTokenReview": {
+              "type": "boolean"
             }
           }
+        }
+      }
+    },
+    "tokenReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "audiences": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^,\\s]+$"
+          }
+        },
+        "acceptAPIServerAudience": {
+          "type": "boolean"
         }
       }
     },
@@ -417,6 +440,15 @@
         "integrationTestJobs": {
           "type": "boolean",
           "description": "Deprecated, no effect, removed in v0.10."
+        },
+        "userRoles": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "aggregateToDefaultRoles": {"type": "boolean"},
+            "directWrites": {"type": "boolean"}
+          }
         }
       }
     },

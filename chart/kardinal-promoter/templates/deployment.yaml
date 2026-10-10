@@ -149,6 +149,24 @@ spec:
             {{- if .Values.ui.auth.tokenReview }}
             - --ui-tokenreview-auth=true
             {{- end }}
+            {{- if .Values.bundleAPI.tokenReview }}
+            - --bundle-api-tokenreview-auth=true
+            {{- end }}
+            {{- if or .Values.ui.auth.tokenReview .Values.bundleAPI.tokenReview }}
+            {{- if and (not .Values.tokenReview.audiences) (not .Values.tokenReview.acceptAPIServerAudience) }}
+            {{- fail "tokenReview.audiences is empty: set an audience (kardinal-promoter) or tokenReview.acceptAPIServerAudience=true" }}
+            {{- end }}
+            - --tokenreview-audiences={{ join "," .Values.tokenReview.audiences }}
+            {{- if .Values.tokenReview.acceptAPIServerAudience }}
+            - --tokenreview-accept-apiserver-audience=true
+            {{- end }}
+            {{- end }}
+            {{- if and .Values.ui.auth.tokenReview .Values.ui.auth.tokenSecretRef.name }}
+            {{- if not .Values.ui.auth.allowStaticTokenWithTokenReview }}
+            {{- fail "ui.auth.tokenSecretRef.name and ui.auth.tokenReview are both set: the static token would win and every UI caller would act as the controller. Unset one, or set ui.auth.allowStaticTokenWithTokenReview=true" }}
+            {{- end }}
+            - --ui-auth-static-overrides-tokenreview=true
+            {{- end }}
             {{- if .Values.metricCheck.cloudWatch.ambientCredentials }}
             - --metriccheck-cloudwatch-ambient-credentials=true
             {{- end }}
