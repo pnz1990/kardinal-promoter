@@ -170,7 +170,7 @@ func TestFreeIdentifiers(t *testing.T) {
 }
 
 // assertRefsResolve checks that every CEL expression of g (templates, defs,
-// refs, readyWhen, includeWhen, forEach) only reads node IDs of g, the forEach
+// refs, patches, readyWhen, includeWhen, forEach) only reads node IDs of g, the forEach
 // iterators of its own node, "each" in readyWhen, and celNamespaces. A Graph
 // whose expression names a node it does not have (a MetricCheck held on a
 // step node the compact shape folds into a collection) fails here, though
@@ -209,6 +209,7 @@ func unresolvedRefs(t *testing.T, g *graph.Graph) []string {
 		eachString(n.Template, func(s string) { check("template", s, nil) })
 		eachString(n.Def, func(s string) { check("def", s, nil) })
 		eachString(n.Ref, func(s string) { check("ref", s, nil) })
+		eachString(n.Patch, func(s string) { check("patch", s, nil) })
 		for _, s := range n.ReadyWhen {
 			check("readyWhen", s, map[string]bool{"each": true})
 		}
