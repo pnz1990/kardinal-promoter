@@ -167,7 +167,13 @@ func TestLeaks(t *testing.T) {
 		{"race, no warm baseline: growth past 2.5x + 500 MiB", []PodSeries{pod(t0, t1, 300, 1300, 300, 320)}, false, true, false, 1},
 		{"race, warm: RSS of race shadow memory is not bounded", []PodSeries{warmRace(345, 62)}, false, true, true, 0},
 		{"race, warm: Go runtime memory grew over 25%", []PodSeries{warmRace(430, 62)}, false, true, true, 1},
-		{"race, warm: heap after the GC not below the warm heap", []PodSeries{warmRace(345, 215)}, false, true, true, 1},
+		{"race, warm: heap after the GC within 1.1x + 16 MiB of warm", []PodSeries{warmRace(345, 1.1*210+16)}, false, true, true, 0},
+		{"race, warm: a standby whose cache grew with kept AuditEvents (49.1 -> 50.9 MiB)", []PodSeries{func() PodSeries {
+			p := warmRace(80, 50.9)
+			p.SysWarmMiB, p.HeapWarmMiB = 75.8, 49.1
+			return p
+		}()}, false, true, true, 0},
+		{"race, warm: heap after the GC over 1.1x + 16 MiB of warm", []PodSeries{warmRace(345, 1.1*210+16.5)}, false, true, true, 1},
 		{"race, warm: no GC seen after the load", []PodSeries{warmRace(345, 0)}, false, true, true, 1},
 		{"race, warm: no Go memory series at the baseline", []PodSeries{func() PodSeries { p := warmRace(345, 62); p.SysWarmMiB = 0; return p }()}, false, true, true, 1},
 		{"no race, warm: RSS measured from the warm sample", []PodSeries{func() PodSeries {
