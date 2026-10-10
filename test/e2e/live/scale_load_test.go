@@ -277,7 +277,7 @@ func tenantFairness(t *testing.T, r *scale.Run, startA func()) {
 			len(bNames)-during, len(bNames))
 	}
 	if !stillA {
-		t.Errorf("tenant B's five Bundles finished only after all of tenant A's load: B was starved")
+		t.Errorf("tenant B's %d Bundles finished only after all of tenant A's load: B was starved", r.P.TenantBBundles)
 	}
 	if !r.Fleet.WaitSettled(t, r.P.Settle) {
 		t.Fatalf("tenant A's Bundles did not settle")

@@ -42,6 +42,7 @@ package fairqueue
 
 import (
 	"container/heap"
+	"sort"
 	"sync"
 	"time"
 
@@ -85,6 +86,9 @@ type state struct {
 	// namespace's waiting heap.
 	readyAt, dueSince time.Time
 	gen               uint64
+	// seq is the queue's add counter when the key was last queued: the tie
+	// break between keys that became due at the same time.
+	seq uint64
 }
 
 // waiter is a queued key that is not due yet.
@@ -125,6 +129,7 @@ type Queue struct {
 	aging   time.Duration
 
 	mu         sync.Mutex
+	seq        uint64
 	namespaces map[string]*namespace
 	now        func() time.Time
 	stop       chan struct{}
@@ -175,7 +180,10 @@ func newQueue(name string, rateLimiter workqueue.TypedRateLimiter[reconcile.Requ
 	}), RateLimiter(rateLimiter))
 }
 
-// Wrap makes inner fair between namespaces.
+// Wrap makes inner fair between namespaces. Without the RateLimiter option
+// a rate-limited add is forwarded as it is, and the key counts as due at
+// once although the inner queue holds it for its backoff; New and NewFor
+// set the option.
 func Wrap(inner priorityqueue.PriorityQueue[reconcile.Request], opts ...Option) *Queue {
 	q := &Queue{inner: inner, aging: DefaultAging, namespaces: map[string]*namespace{}, now: time.Now, stop: make(chan struct{})}
 	for _, o := range opts {
@@ -224,11 +232,24 @@ func (q *Queue) sweep() {
 		if q.aging <= 0 {
 			continue
 		}
+		// In the order they became due, so aging keeps a namespace's keys
+		// first in, first out.
+		var aged []promoted
 		for k, st := range n.keys {
 			if st.due && !st.aged && now.Sub(st.dueSince) >= q.aging {
 				st.aged = true
-				out = append(out, readd{k, st.base * span})
+				aged = append(aged, promoted{k, st})
 			}
+		}
+		sort.Slice(aged, func(i, j int) bool {
+			a, b := aged[i].st, aged[j].st
+			if !a.dueSince.Equal(b.dueSince) {
+				return a.dueSince.Before(b.dueSince)
+			}
+			return a.seq < b.seq
+		})
+		for _, pr := range aged {
+			out = append(out, readd{pr.key, pr.st.base * span})
 		}
 	}
 	q.mu.Unlock()
@@ -328,7 +349,8 @@ func (q *Queue) AddWithOpts(o priorityqueue.AddOpts, items ...reconcile.Request)
 		}
 		switch {
 		case !st.queued:
-			st.base, st.queued, st.readyAt, st.aged = base, true, ready, false
+			q.seq++
+			st.base, st.queued, st.readyAt, st.aged, st.seq = base, true, ready, false, q.seq
 			q.schedule(n, it, st, now)
 		default:
 			st.base = max(st.base, base)

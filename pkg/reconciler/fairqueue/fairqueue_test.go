@@ -10,12 +10,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/workqueue"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/controller/priorityqueue"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
@@ -442,4 +446,66 @@ func TestQueue_DelayedRequeueRecomputed(t *testing.T) {
 	}
 	assert.Equal(t, []reconcile.Request{req("c", "c0"), req("a", "late"), req("c", "c1")}, order,
 		"late was raised to the step of a namespace with no backlog when it became due")
+}
+
+// TestQueue_FIFOAfterAging (#1662 QA): keys of one namespace that age in
+// the same sweep are re-added in the order they became due, so aging keeps
+// the namespace first in, first out.
+//
+// Covers PERF-FAIRQ-01.
+func TestQueue_FIFOAfterAging(t *testing.T) {
+	for range 5 { // map order is random: one lucky run proves nothing
+		q := fairqueue.Wrap(priorityqueue.New[reconcile.Request](fmt.Sprintf("fifo-%d", queueN.Add(1))), fairqueue.Aging(100*time.Millisecond))
+		var want []reconcile.Request
+		for i := range 30 {
+			it := req("a", fmt.Sprintf("s%02d", i))
+			want = append(want, it)
+			q.Add(it) // later keys get lower steps as the backlog grows
+		}
+		time.Sleep(400 * time.Millisecond) // every key ages, in one sweep or a few
+		var got []reconcile.Request
+		for range 30 {
+			it, _ := get(t, q)
+			got = append(got, it)
+			q.Done(it)
+		}
+		q.ShutDown()
+		require.Equal(t, want, got)
+	}
+}
+
+// fakeManager is the part of a manager NewFor reads.
+type fakeManager struct {
+	manager.Manager
+	usePQ *bool
+}
+
+func (m fakeManager) GetControllerOptions() config.Controller {
+	return config.Controller{UsePriorityQueue: m.usePQ}
+}
+
+func (m fakeManager) GetLogger() logr.Logger { return logr.Discard() }
+
+// TestNewFor_UsePriorityQueue: NewFor returns the fair queue by default and
+// controller-runtime's plain rate-limited queue when the manager turns the
+// priority queue off.
+//
+// Covers PERF-FAIRQ-01.
+func TestNewFor_UsePriorityQueue(t *testing.T) {
+	rl := workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](time.Millisecond, time.Second)
+	for _, tc := range []struct {
+		use  *bool
+		fair bool
+	}{{nil, true}, {ptr.To(true), true}, {ptr.To(false), false}} {
+		q := fairqueue.NewFor(fakeManager{usePQ: tc.use})(fmt.Sprintf("nf-%d", queueN.Add(1)), rl)
+		_, isFair := q.(*fairqueue.Queue)
+		_, isPQ := q.(priorityqueue.PriorityQueue[reconcile.Request])
+		assert.Equal(t, tc.fair, isFair, "UsePriorityQueue=%v", tc.use)
+		assert.Equal(t, tc.fair, isPQ)
+		q.Add(req("a", "x"))
+		it, _ := q.Get()
+		assert.Equal(t, req("a", "x"), it)
+		q.Done(it)
+		q.ShutDown()
+	}
 }
