@@ -1883,3 +1883,79 @@ func TestReconciler_TransitionConflictRequeues(t *testing.T) {
 		}
 	}
 }
+
+// TestReconciler_StepsWaitForTheCache (#1664): the step engine runs no step
+// from a cached step whose status is behind the stored one. The reconcile
+// that moved the step to Promoting writes twice (the transition, then the
+// AuditEvent outbox flush), and the requeued reconcile could read the
+// cache between the two: it pushed, its HealthChecking patch was refused,
+// and the next reconcile found nothing to commit and recorded no commit
+// for the health check to wait for. A cached copy whose spec or metadata
+// alone is behind still runs, and its transition is written over the
+// stored step.
+func TestReconciler_StepsWaitForTheCache(t *testing.T) {
+	tests := []struct {
+		name          string
+		statusMoved   bool
+		wantClones    int
+		wantState     string
+		wantRequeueIn time.Duration
+	}{
+		{name: "status behind: requeued, no git work", statusMoved: true,
+			wantClones: 0, wantState: "Promoting", wantRequeueIn: time.Second},
+		{name: "only metadata behind: the steps run", statusMoved: false,
+			wantClones: 1, wantState: "HealthChecking"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			step := asPromoting(makeStep("step-prod", "my-app", "bundle-1", "test"), makePipeline("my-app"))
+			step.Status.PendingAuditEvents = []v1alpha1.PendingAuditEvent{{Name: "started"}}
+			api := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+				WithObjects(step, makeBundle("bundle-1", "my-app"), makePipeline("my-app")).
+				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PolicyGate{}, &v1alpha1.Bundle{}).
+				Build()
+			ctx := context.Background()
+			key := client.ObjectKeyFromObject(step)
+
+			// The cache keeps the copy from before the last write.
+			var cached v1alpha1.PromotionStep
+			require.NoError(t, api.Get(ctx, key, &cached))
+			var cur v1alpha1.PromotionStep
+			require.NoError(t, api.Get(ctx, key, &cur))
+			if tt.statusMoved {
+				cur.Status.PendingAuditEvents = nil // the outbox flush
+				require.NoError(t, api.Status().Update(ctx, &cur))
+			} else {
+				cur.Labels = map[string]string{"kro.run/relabelled": "true"}
+				require.NoError(t, api.Update(ctx, &cur))
+			}
+			lagging := interceptor.NewClient(api, interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, k client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if ps, ok := obj.(*v1alpha1.PromotionStep); ok && k == key {
+						cached.DeepCopyInto(ps)
+						return nil
+					}
+					return c.Get(ctx, k, obj, opts...)
+				},
+			})
+			git := &cloneCountingGit{}
+			r := &promotionstep.Reconciler{
+				Client:    lagging,
+				APIReader: api,
+				SCM:       &mockSCM{},
+				GitClient: git,
+				WorkDirFn: func(_, _ string) string { return t.TempDir() },
+			}
+
+			res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantClones, git.clones, "git work")
+			if tt.wantRequeueIn > 0 {
+				assert.Equal(t, tt.wantRequeueIn, res.RequeueAfter)
+			}
+			var got v1alpha1.PromotionStep
+			require.NoError(t, api.Get(ctx, key, &got))
+			assert.Equal(t, tt.wantState, got.Status.State)
+		})
+	}
+}

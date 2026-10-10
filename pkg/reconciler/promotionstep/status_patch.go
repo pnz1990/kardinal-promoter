@@ -52,3 +52,25 @@ func (r *Reconciler) patchStatusLocked(ctx context.Context, base, ps *v1alpha1.P
 	}
 	return err
 }
+
+// cacheBehind reports whether the API server stores a newer status for ps
+// than the copy this reconcile read, which comes from the informer cache.
+// The step engine checks it before running any step: its git work has
+// effects outside the cluster that a refused status patch cannot undo. A
+// reconcile requeued right after its own write (the Pending → Promoting
+// transition, then the AuditEvent outbox flush) can read the cache before
+// the last write arrives; it then pushed the commit, its HealthChecking
+// patch was refused, and the next reconcile ran the step list again and
+// found nothing to commit, so the step recorded no commit to wait for
+// (#1664). A newer spec or metadata alone is not a reason to wait:
+// patchStatusLocked writes over it.
+func (r *Reconciler) cacheBehind(ctx context.Context, ps *v1alpha1.PromotionStep) (bool, error) {
+	fresh, err := r.readStep(ctx, client.ObjectKeyFromObject(ps))
+	if err != nil || fresh == nil {
+		return false, err
+	}
+	if fresh.ResourceVersion == ps.ResourceVersion {
+		return false, nil
+	}
+	return !equality.Semantic.DeepEqual(fresh.Status, ps.Status), nil
+}
