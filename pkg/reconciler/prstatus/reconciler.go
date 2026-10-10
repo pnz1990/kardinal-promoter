@@ -82,6 +82,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
@@ -599,7 +600,9 @@ func (r *Reconciler) fetchMergeCommit(ctx context.Context, log zerolog.Logger, p
 // SetupWithManager registers the PRStatus reconciler with controller-runtime.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
-		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers,
+			// Workers are shared fairly between namespaces (#1577).
+			NewQueue: fairqueue.NewFor(mgr)}).
 		For(&v1alpha1.PRStatus{})
 	return shard.Active().Complete(b, tracing.WrapReconciler("prstatus", r), &v1alpha1.PRStatusList{})
 }

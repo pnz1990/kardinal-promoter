@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 )
@@ -35,7 +36,7 @@ func TestSubscriptionReconciler_RejectedArtifactNotPromoted(t *testing.T) {
 			Rejected: &kardinalv1alpha1.BundleRejection{By: "alice", Reason: "CVE"}},
 		Status: kardinalv1alpha1.BundleStatus{Phase: "Rejected"},
 	}
-	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub, bad).WithStatusSubresource(sub, bad).Build()
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub, bad).WithStatusSubresource(sub, bad).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	digest := "sha256:bad"
 	r := &subscription.Reconciler{
 		Client: c,
@@ -82,7 +83,7 @@ func TestSubscriptionReconciler_RejectedMovingTag(t *testing.T) {
 			Rejected: &kardinalv1alpha1.BundleRejection{By: "alice", Reason: "CVE"}},
 		Status: kardinalv1alpha1.BundleStatus{Phase: "Rejected"},
 	}
-	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub, bad).WithStatusSubresource(sub, bad).Build()
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub, bad).WithStatusSubresource(sub, bad).WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	digest := "sha256:bad"
 	r := &subscription.Reconciler{
 		Client: c,

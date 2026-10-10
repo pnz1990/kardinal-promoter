@@ -29,6 +29,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 func logsTestScheme(t *testing.T) *runtime.Scheme {
@@ -123,7 +124,7 @@ func TestLogsFollowExitsOnTerminal(t *testing.T) {
 	client := sigs_client.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(ps).
-		WithStatusSubresource(ps).
+		WithStatusSubresource(ps).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	var buf bytes.Buffer
@@ -159,7 +160,7 @@ func TestLogsStaticOutput(t *testing.T) {
 
 	client := sigs_client.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(ps).
+		WithObjects(ps).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
 	var buf bytes.Buffer

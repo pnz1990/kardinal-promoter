@@ -122,7 +122,14 @@ func (r *Reconciler) qualifyingEvents(ctx context.Context, hook *v1alpha1.Notifi
 // kubectl do not carry the kardinal.io/pipeline label.
 func (r *Reconciler) bundleEvents(ctx context.Context, ns, selector string, add func(pendingEvent)) error {
 	var bundles v1alpha1.BundleList
-	if err := r.List(ctx, &bundles, client.InNamespace(ns)); err != nil {
+	if selector != "" {
+		// One Pipeline's Bundles, through the spec.pipeline index (#1654).
+		items, err := lifecycle.ListPipelineBundles(ctx, r.Client, ns, selector)
+		if err != nil {
+			return err
+		}
+		bundles.Items = items
+	} else if err := r.List(ctx, &bundles, client.InNamespace(ns)); err != nil {
 		return fmt.Errorf("list bundles: %w", err)
 	}
 	for i := range bundles.Items {

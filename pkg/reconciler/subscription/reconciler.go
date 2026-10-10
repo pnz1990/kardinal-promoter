@@ -669,6 +669,10 @@ func digestLabelChars(digest string) string {
 // or git poll (C04-gates-36). Polling is driven by RequeueAfter; a spec edit or
 // an annotation change polls at once.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Bundle reads of one Pipeline go through the spec.pipeline index (#1654).
+	if err := lifecycle.IndexBundlesByPipeline(context.Background(), mgr.GetFieldIndexer()); err != nil {
+		return err
+	}
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.Subscription{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		// Several workers, so one slow source (each poll is bounded by
