@@ -1,0 +1,500 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: renderruns.kardinal.io
+spec:
+  group: kardinal.io
+  names:
+    kind: RenderRun
+    listKind: RenderRunList
+    plural: renderruns
+    singular: renderrun
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.pipelineName
+      name: Pipeline
+      type: string
+    - jsonPath: .spec.environment
+      name: Env
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.result.commitSHA
+      name: Commit
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          RenderRun is one render of a layout: branch environment for one Bundle:
+          a Kubernetes Job that clones the DRY source, sets the Bundle's images,
+          renders the environment (kustomize build or helm template) and commits the
+          plain manifests to the rendered branch. Created by the Bundle's kro Graph;
+          reconciled by the RenderRun reconciler, which runs the Job in the
+          Pipeline's namespace and records its result. Rendering never runs in the
+          controller.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              RenderRunSpec is one render of a layout: branch environment for one
+              Bundle. The kro Graph of the Bundle writes it from the Pipeline and the
+              Bundle; the RenderRun reconciler runs it as a Job.
+            properties:
+              bundle:
+                description: |-
+                  Bundle is what is promoted: the images to set, the config commit to
+                  render (a config or mixed Bundle) and the Bundle a rollback restores.
+                properties:
+                  configRef:
+                    description: |-
+                      ConfigRef is the config commit to render (a config or mixed Bundle,
+                      or an image Bundle that pins its DRY commit).
+                    properties:
+                      commitSHA:
+                        description: |-
+                          CommitSHA is the exact commit SHA for this config snapshot: 4 to 64
+                          hex characters.
+                        pattern: ^[0-9a-fA-F]{4,64}$
+                        type: string
+                      gitRepo:
+                        description: GitRepo is the GitOps repository URL.
+                        type: string
+                    type: object
+                  images:
+                    description: Images are the images to set in the DRY checkout.
+                    items:
+                      description: ImageRef identifies a container image by repository,
+                        tag, and/or digest.
+                      properties:
+                        digest:
+                          description: Digest is the image digest (sha256:...), in
+                            the OCI digest grammar.
+                          maxLength: 256
+                          pattern: ^[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,}$
+                          type: string
+                        repository:
+                          description: Repository is the image repository (e.g. "ghcr.io/nginx/nginx").
+                          maxLength: 512
+                          minLength: 1
+                          type: string
+                        tag:
+                          description: |-
+                            Tag is the image tag, in the OCI distribution grammar: up to 128
+                            characters of [A-Za-z0-9_.-], not starting with "." or "-".
+                          maxLength: 128
+                          pattern: ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$
+                          type: string
+                      required:
+                      - repository
+                      type: object
+                    type: array
+                  rollbackOf:
+                    description: |-
+                      RollbackOf is the Bundle a rollback restores: its render's DRY commit
+                      is rendered again.
+                    type: string
+                  type:
+                    description: 'Type is the Bundle type: image, config or mixed.'
+                    type: string
+                type: object
+              bundleName:
+                description: BundleName is the Bundle being promoted.
+                minLength: 1
+                type: string
+              environment:
+                description: Environment is the environment rendered.
+                minLength: 1
+                type: string
+              git:
+                description: Git is where the DRY source is read and the render is
+                  written.
+                properties:
+                  pullRequest:
+                    description: |-
+                      PullRequest pushes the render to the promotion branch
+                      kardinal/<bundle>/<environment>, from which the step opens a PR into
+                      RenderedBranch (approval: pr-review), instead of to RenderedBranch.
+                    type: boolean
+                  renderedBranch:
+                    description: RenderedBranch is the branch the rendered manifests
+                      are committed to.
+                    minLength: 1
+                    type: string
+                  secretName:
+                    description: |-
+                      SecretName is the Secret in the RenderRun's namespace whose "token" key
+                      the render Job uses for git (Pipeline spec.git.secretRef). Empty means
+                      no credentials.
+                    type: string
+                  sourceBranch:
+                    description: SourceBranch is the DRY source branch (Pipeline spec.git.branch).
+                    minLength: 1
+                    type: string
+                  url:
+                    description: URL is the repository (Pipeline spec.git.url).
+                    minLength: 1
+                    type: string
+                required:
+                - renderedBranch
+                - sourceBranch
+                - url
+                type: object
+              path:
+                description: |-
+                  Path is the environment path in the DRY source (environments/<name>
+                  when the Pipeline sets none).
+                minLength: 1
+                type: string
+              pipelineName:
+                description: PipelineName is the Pipeline the environment belongs
+                  to.
+                minLength: 1
+                type: string
+              render:
+                description: Render is the environment's render configuration.
+                properties:
+                  allowNondeterministic:
+                    description: |-
+                      AllowNondeterministic lets Helm templates call functions whose result
+                      changes from one render to the next (randAlphaNum, uuidv4, now, genCA
+                      and the like). Off by default: such a chart renders different
+                      manifests for the same DRY commit, so every promotion commits a change
+                      and a rollback does not restore what ran.
+                    type: boolean
+                  branch:
+                    description: |-
+                      Branch is the rendered branch the manifests are committed to. Defaults
+                      to env/<environment name>. It must differ from spec.git.branch and from
+                      every other environment's rendered branch.
+                    maxLength: 200
+                    pattern: ^[A-Za-z0-9][A-Za-z0-9._/-]*$
+                    type: string
+                  helm:
+                    description: |-
+                      Helm configures the render of a Helm chart (an environment path holding
+                      a Chart.yaml).
+                    properties:
+                      namespace:
+                        description: Namespace is .Release.Namespace. Defaults to
+                          the environment name.
+                        type: string
+                      releaseName:
+                        description: ReleaseName is .Release.Name. Defaults to the
+                          Pipeline name.
+                        type: string
+                      valuesFiles:
+                        description: |-
+                          ValuesFiles are values files, relative to the chart directory, applied
+                          in order over the chart's values.yaml. Defaults to
+                          update.helm.valuesFile when that is set and is not values.yaml.
+                        items:
+                          type: string
+                        maxItems: 16
+                        type: array
+                    type: object
+                  onDrift:
+                    description: |-
+                      OnDrift is what a promotion does when the rendered branch was changed
+                      outside kardinal since the last render (a file kardinal wrote was edited
+                      or deleted, or a file in its way was added): fail (default) fails the
+                      step and changes nothing; overwrite renders over the change.
+                    enum:
+                    - fail
+                    - overwrite
+                    type: string
+                type: object
+              update:
+                description: |-
+                  Update is the environment's update configuration: how the images are
+                  set in the DRY checkout before it is rendered.
+                properties:
+                  argocd:
+                    description: |-
+                      ArgoCD holds ArgoCD-native update configuration.
+                      Used when Strategy is "argocd". Patches the ArgoCD Application's
+                      spec.source.helm.valuesObject directly without a git commit.
+                    properties:
+                      application:
+                        description: Application is the name of the ArgoCD Application
+                          resource to patch.
+                        minLength: 1
+                        type: string
+                      imageKey:
+                        description: |-
+                          ImageKey is the dot-separated key path within spec.source.helm.valuesObject
+                          where the image tag should be written.
+                          Example: "image.tag" writes to spec.source.helm.valuesObject.image.tag.
+                          Defaults to "image.tag" if empty.
+                        type: string
+                      namespace:
+                        description: |-
+                          Namespace is the Kubernetes namespace where the ArgoCD Application lives.
+                          Defaults to "argocd" if empty.
+                        type: string
+                    required:
+                    - application
+                    type: object
+                  helm:
+                    description: |-
+                      Helm holds Helm-specific update configuration.
+                      Used when Strategy is "helm".
+                    properties:
+                      chartVersionFile:
+                        description: |-
+                          ChartVersionFile is the file a chart Bundle's version is written to,
+                          relative to the environment path: an umbrella Chart.yaml, an Argo CD
+                          Application, a Flux HelmRelease or a kustomization.yaml with
+                          helmCharts. Defaults to "Chart.yaml".
+                        type: string
+                      chartVersionPath:
+                        description: |-
+                          ChartVersionPath is the YAML path of the chart version in
+                          chartVersionFile, in the grammar of update.yaml.updates[].path: keys
+                          separated by ".", "[N]" (or a digits-only key) to index a list, and
+                          "[field=value]" for the list element whose field has that value. Defaults to
+                          ".dependencies[name=<chart>].version": the umbrella chart's dependency
+                          named after the Bundle's chart (an error when there is none). For
+                          example ".spec.source.targetRevision" (Argo CD Application),
+                          ".spec.chart.spec.version" (Flux HelmRelease) or
+                          ".helmCharts[name=podinfo].version" (kustomize).
+                        maxLength: 512
+                        pattern: ^\.?[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*(\.[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*)*$
+                        type: string
+                      imagePathTemplate:
+                        description: |-
+                          ImagePathTemplate is the YAML dot-path to the image tag in values.yaml.
+                          Example: ".image.tag" updates the `image.tag` key.
+                          If empty, defaults to ".image.tag".
+                        type: string
+                      valuesFile:
+                        description: |-
+                          ValuesFile is the name of the values file to update (relative to the
+                          environment path). Defaults to "values.yaml".
+                        type: string
+                    type: object
+                  strategy:
+                    default: kustomize
+                    description: |-
+                      Strategy selects the manifest update strategy: kustomize (default,
+                      kustomization.yaml images), helm (one values key), argocd (patch the
+                      Application, no git), or yaml (any YAML paths in any files of the
+                      environment directory).
+                    enum:
+                    - kustomize
+                    - helm
+                    - argocd
+                    - yaml
+                    type: string
+                  yaml:
+                    description: |-
+                      YAML holds the edits of the yaml strategy.
+                      Used when Strategy is "yaml".
+                    properties:
+                      updates:
+                        description: Updates are the values to set.
+                        items:
+                          description: |-
+                            YAMLUpdate sets one scalar in one YAML file to a value taken from a Bundle
+                            image. The file must be a regular file of at most 4 MiB holding one YAML
+                            document; symbolic links and anchors or aliases on the path are refused.
+                          properties:
+                            file:
+                              description: |-
+                                File is the YAML file, relative to the environment path, for example
+                                "values.yaml" or "deploy/deployment.yaml". It must stay inside the
+                                repository. A file with several documents (---) is not supported.
+                                Each path segment starts with a letter, digit or "_" and has single
+                                dots only, so the file can neither be absolute nor leave the
+                                environment path.
+                              maxLength: 512
+                              pattern: ^[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*(/[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*)*$
+                              type: string
+                            image:
+                              description: |-
+                                Image is the repository of the Bundle image whose value is written,
+                                for example "ghcr.io/org/app". It may be empty when the Bundle has
+                                exactly one image.
+                              type: string
+                            path:
+                              description: |-
+                                Path is the key path of the scalar to set, in the grammar
+                                chartVersionPath uses too: keys separated by "." (a leading "." is
+                                optional), "[N]" to index a list and "[field=value]" for the list
+                                element whose field has that value, for example "image.tag",
+                                "spec.template.spec.containers[0].image" or
+                                "spec.template.spec.containers[name=app].image". A digits-only key
+                                indexes a list when it reaches one. Missing mapping keys are created;
+                                list elements are not. A key that contains "." is not supported.
+                              maxLength: 512
+                              pattern: ^\.?[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*(\.[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*)*$
+                              type: string
+                            value:
+                              description: |-
+                                Value is what to write: tag (default), digest, tagWithDigest
+                                ("<tag>@<digest>"), image ("<repository>:<tag>"), or imageWithDigest
+                                ("<repository>:<tag>@<digest>", or "<repository>@<digest>" without a
+                                tag). A value the image does not have (a digest of a tag-only image)
+                                fails the step.
+                              enum:
+                              - tag
+                              - digest
+                              - tagWithDigest
+                              - image
+                              - imageWithDigest
+                              type: string
+                          required:
+                          - file
+                          - path
+                          type: object
+                        maxItems: 64
+                        minItems: 1
+                        type: array
+                    required:
+                    - updates
+                    type: object
+                type: object
+                x-kubernetes-validations:
+                - message: update.strategy yaml requires update.yaml.updates
+                  rule: '!has(self.strategy) || self.strategy != ''yaml'' || (has(self.yaml)
+                    && size(self.yaml.updates) > 0)'
+            required:
+            - bundle
+            - bundleName
+            - environment
+            - git
+            - path
+            - pipelineName
+            type: object
+          status:
+            description: RenderRunStatus is the observed state of a RenderRun.
+            properties:
+              deadline:
+                description: Deadline is StartedAt plus the render timeout.
+                format: date-time
+                type: string
+              finishedAt:
+                description: FinishedAt is when the RenderRun reached a terminal phase.
+                format: date-time
+                type: string
+              jobName:
+                description: JobName is the name of the Job the reconciler created.
+                type: string
+              jobUID:
+                description: |-
+                  JobUID is the UID of that Job. A Job of that name with another UID, or
+                  none at all, while the RenderRun runs, fails the RenderRun.
+                type: string
+              knownMarkerDigests:
+                description: |-
+                  KnownMarkerDigests are the marker digests of the earlier renders of
+                  this Pipeline environment the Job accepted on the rendered branch
+                  (RenderRunResult.MarkerDigest of the newest Succeeded RenderRuns).
+                items:
+                  type: string
+                type: array
+              message:
+                description: Message says why the RenderRun is in its phase.
+                type: string
+              phase:
+                description: |-
+                  Phase is Pending until the Job is created, Running while it runs, and
+                  Succeeded or Failed once it finished. Succeeded and Failed are terminal:
+                  the API server refuses to change them, and the Job is never created
+                  again.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                type: string
+                x-kubernetes-validations:
+                - message: a finished RenderRun's phase cannot change
+                  rule: '!(oldSelf in [''Succeeded'', ''Failed'']) || self == oldSelf'
+              result:
+                description: Result is what the Job reported (Succeeded only).
+                properties:
+                  branch:
+                    description: Branch is the branch it was pushed to.
+                    type: string
+                  commitSHA:
+                    description: CommitSHA is the rendered commit pushed (empty when
+                      nothing changed).
+                    type: string
+                  driftOverwritten:
+                    description: |-
+                      DriftOverwritten lists the changes made outside kardinal that this
+                      render overwrote (render.onDrift: overwrite).
+                    type: string
+                  dryCommit:
+                    description: DryCommit is the DRY commit that was rendered.
+                    type: string
+                  markerDigest:
+                    description: |-
+                      MarkerDigest is the sha256 of the render marker
+                      (.kardinal/rendered.yaml) this render wrote: the list of files and
+                      their sha256. The next render of the environment accepts the rendered
+                      branch only when its marker has the digest of a render kardinal made.
+                    type: string
+                  noChanges:
+                    description: |-
+                      NoChanges is true when the render matched the rendered branch and
+                      nothing was pushed.
+                    type: boolean
+                  objects:
+                    description: Objects is how many objects were rendered.
+                    type: integer
+                  renderer:
+                    description: Renderer is kustomize or helm.
+                    type: string
+                type: object
+              specHash:
+                description: |-
+                  SpecHash is a hash of the spec when the Job was created. A later spec
+                  change is not applied.
+                type: string
+              startedAt:
+                description: StartedAt is when the Job was created.
+                format: date-time
+                type: string
+              unconfirmedBundles:
+                description: |-
+                  UnconfirmedBundles holds the Bundle of the environment's newest
+                  RenderRun when it Failed after the last Succeeded one (at most one
+                  entry): its Job may have pushed before its result was lost. A rendered
+                  branch whose marker names it, and whose files match that marker, is
+                  accepted as kardinal's; so is a rollback to it.
+                items:
+                  type: string
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

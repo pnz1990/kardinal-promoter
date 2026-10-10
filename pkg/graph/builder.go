@@ -140,6 +140,9 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	if err := validateInput(input.Pipeline, input.Bundle); err != nil {
 		return nil, err
 	}
+	if err := ValidateRenderedBranches(input.Pipeline); err != nil {
+		return nil, fmt.Errorf("build: %w", err)
+	}
 	if err := ValidateHooks(input.Pipeline); err != nil {
 		return nil, err
 	}
@@ -800,6 +803,17 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			pipelineName, envName, CELSafeSlug(envName), bundle, upstreams, envGates, gates.readyCond, prName,
 			heldCond(pipeline, envName),
 		)
+		envSpec := findEnvSpec(pipeline, envName)
+		stepK8s := promotionStepK8sName(pipelineName, bundle.Name, envName)
+		render := ""
+		if kardinalv1alpha1.RendersToBranch(pipeline.Spec, envSpec) {
+			rn, err := buildRenderRunNode(pipeline, bundle, envSpec, stepK8s)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			nodes = append(nodes, rn)
+			render = RenderRunName(pipelineName, bundle.Name, envName)
+		}
 		in := hookNodesInput{
 			pipeline: pipelineName, bundle: bundle.Name, namespace: bundle.Namespace,
 			bundleUID:   string(bundle.UID),
@@ -813,7 +827,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			in.imageVerification = ivName
 			in.conds = append(in.conds, imageVerifiedCond())
 		}
-		extras, err := buildEnvExtras(in, analyses, bundle)
+		extras, err := buildEnvExtras(in, analyses, bundle, render)
 		if err != nil {
 			return nil, nil, nil, err
 		}

@@ -15,12 +15,10 @@
 //
 // These tests DO NOT require the kustomize binary in PATH.
 // The kustomize-set-image step is now implemented in pure Go (#494).
-// The kustomize-build step uses an injectable KustomizeBuilder for testing.
 package steps_test
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,7 +29,6 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 
 	// Import all built-ins to trigger init() registration.
 	_ "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
@@ -232,7 +229,7 @@ func TestEnvPathConfinement(t *testing.T) {
 			require.NoError(t, os.Symlink(outside, filepath.Join(workDir, "environments", "prod")))
 		}},
 	}
-	for _, step := range []string{"kustomize-set-image", "helm-set-image", "kustomize-build"} {
+	for _, step := range []string{"kustomize-set-image", "helm-set-image"} {
 		for _, tc := range cases {
 			t.Run(step+"/"+tc.name, func(t *testing.T) {
 				base := t.TempDir()
@@ -247,13 +244,7 @@ func TestEnvPathConfinement(t *testing.T) {
 				state := makeKustomizeState(workDir, "prod", images)
 				state.Environment.Path = tc.path
 
-				var s parentsteps.Step
-				if step == "kustomize-build" {
-					s = steps.NewKustomizeBuildStep(&stubKustomizeBuilder{output: []byte("x")})
-				} else {
-					s = mustLookup(t, step)
-				}
-				result, err := s.Execute(context.Background(), state)
+				result, err := mustLookup(t, step).Execute(context.Background(), state)
 				assert.Error(t, err)
 				assert.Equal(t, parentsteps.StepFailed, result.Status)
 				assert.Equal(t, "kind: Kustomization\n", readKustomization(t, outside), "outside kustomization must be untouched")
@@ -438,69 +429,6 @@ func TestKustomizeSetImage_CustomEnvPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, parentsteps.StepSuccess, result.Status)
 	assert.Contains(t, readKustomization(t, customPath), "v1.0.0")
-}
-
-// --- kustomize-build tests (injectable builder) ---
-
-type stubKustomizeBuilder struct {
-	output []byte
-	err    error
-	called bool
-	dir    string
-}
-
-func (s *stubKustomizeBuilder) Build(_ context.Context, dir string) ([]byte, error) {
-	s.called = true
-	s.dir = dir
-	return s.output, s.err
-}
-
-func TestKustomizeBuild_WritesRenderedManifest(t *testing.T) {
-	workDir := t.TempDir()
-	envPath := filepath.Join(workDir, "environments", "prod")
-	require.NoError(t, os.MkdirAll(envPath, 0o755))
-
-	stub := &stubKustomizeBuilder{
-		output: []byte("apiVersion: apps/v1\nkind: Deployment\n"),
-	}
-	step := steps.NewKustomizeBuildStep(stub)
-
-	state := &parentsteps.StepState{
-		WorkDir:     workDir,
-		Environment: v1alpha1.EnvironmentSpec{Name: "prod"},
-		Bundle:      v1alpha1.BundleSpec{},
-	}
-
-	result, err := step.Execute(context.Background(), state)
-	require.NoError(t, err)
-	assert.Equal(t, parentsteps.StepSuccess, result.Status)
-	assert.True(t, stub.called)
-
-	outputPath := result.Outputs["renderedManifestPath"]
-	require.NotEmpty(t, outputPath)
-	content, readErr := os.ReadFile(outputPath)
-	require.NoError(t, readErr)
-	assert.Equal(t, string(stub.output), string(content))
-}
-
-func TestKustomizeBuild_BuilderErrorPropagates(t *testing.T) {
-	workDir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(workDir, "environments", "prod"), 0o755))
-	stub := &stubKustomizeBuilder{
-		err: fmt.Errorf("kustomize build failed: bad overlay"),
-	}
-	step := steps.NewKustomizeBuildStep(stub)
-
-	state := &parentsteps.StepState{
-		WorkDir:     workDir,
-		Environment: v1alpha1.EnvironmentSpec{Name: "prod"},
-		Bundle:      v1alpha1.BundleSpec{},
-	}
-	result, err := step.Execute(context.Background(), state)
-	assert.Error(t, err)
-	assert.Equal(t, parentsteps.StepFailed, result.Status)
-	assert.True(t, stub.called, "the builder must have run")
-	assert.Contains(t, result.Message, "bad overlay")
 }
 
 // --- helpers ---

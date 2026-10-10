@@ -37,7 +37,7 @@ spec:
         - name: controller
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: {{ include "kardinal-promoter.controllerImage" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --leader-elect={{ .Values.leaderElect }}
@@ -62,6 +62,21 @@ spec:
             - --hook-pod-security-level={{ .Values.hooks.podSecurityLevel }}
             {{- if not (kindIs "invalid" .Values.graph.compactAbove) }}
             - --graph-compact-above={{ .Values.graph.compactAbove }}
+            {{- end }}
+            - --hook-service-accounts={{ join "," .Values.hooks.serviceAccounts }}
+            - --render-image={{ include "kardinal-promoter.renderImage" . }}
+            {{- with .Values.render.image.pullPolicy }}
+            - --render-image-pull-policy={{ . }}
+            {{- end }}
+            - --render-service-account={{ .Values.render.serviceAccountName }}
+            {{- with .Values.imagePullSecrets }}
+            - --render-image-pull-secrets={{ range $i, $s := . }}{{ if $i }},{{ end }}{{ $s.name }}{{ end }}
+            {{- end }}
+            - --render-cpu-limit={{ .Values.render.resources.limits.cpu }}
+            - --render-memory-limit={{ .Values.render.resources.limits.memory }}
+            - --render-timeout={{ .Values.render.timeout }}
+            {{- if .Values.hooks.allowPrivileged }}
+            - --hook-allow-privileged=true
             {{- end }}
             {{- with include "kardinal-promoter.policyNamespaces" . }}
             - --policy-namespaces={{ . }}

@@ -138,10 +138,11 @@ spec:
     interval: 2m
 ```
 
-kardinal writes every environment to a directory on one branch. Kargo pipelines that
-keep one branch per environment (`env/test`, `env/prod`) need their manifests moved to
-`environments/<name>/` on the base branch first: `spec.git.layout: branch` is accepted by
-the API but not implemented, and a promotion with it fails at `git-clone`.
+Kargo pipelines that keep one rendered branch per environment (`env/test`, `env/prod`) map to
+`layout: branch`: keep the overlays or charts on the base branch, and kardinal renders each
+environment into its branch at promotion time ([Rendered Manifests](../rendered-manifests.md)).
+A branch that already holds manifests kardinal did not write is drift for the first
+promotion: set `render.onDrift: overwrite` for it, or start from an empty branch.
 
 ---
 
@@ -331,6 +332,6 @@ helm uninstall kargo -n kargo
 
 **Namespace model:** Kargo Projects map to Kubernetes Namespaces in both systems. In kardinal, the Pipeline, its Bundles and the Subscriptions that feed it live in the same namespace: a Subscription creates Bundles only in its own namespace, for a Pipeline there (a different `spec.namespace` sets the Subscription to phase `Error`).
 
-**GitOps repo structure:** kardinal's `kustomize` update strategy edits `kustomization.yaml` the way Kargo's `kustomize-set-image` step does. Promoting rendered manifests (`layout: branch`) is not implemented yet ([#1271](https://github.com/pnz1990/kardinal-promoter/issues/1271)); Kargo does it with its `kustomize-build` and `helm-template` steps.
+**GitOps repo structure:** kardinal's `kustomize` update strategy edits `kustomization.yaml` the way Kargo's `kustomize-set-image` step does. Kargo's `kustomize-build` and `helm-template` steps map to `layout: branch`, which renders in a sandboxed Job per promotion (Kargo runs these steps in its controller) and commits plain YAML to the environment's branch ([Rendered Manifests](../rendered-manifests.md)).
 
 **Policy gates:** Kargo's AnalysisTemplates run as verification after a promotion. kardinal's PolicyGates are separate CRDs that evaluate independently and are wired into the Graph. This means gates are cluster-reusable and visible to all pipelines that reference the same PolicyGate namespace.

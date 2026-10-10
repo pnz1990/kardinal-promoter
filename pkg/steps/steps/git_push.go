@@ -85,10 +85,6 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 	if state.GitClient == nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: "GitClient not configured"}, nil
 	}
-	if layoutBranch(state) {
-		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: layoutBranchNotImplemented},
-			parentsteps.Permanent(errors.New(layoutBranchNotImplemented))
-	}
 	if noChanges(state) {
 		return parentsteps.StepResult{Status: parentsteps.StepSuccess, Message: "nothing to push: " + noChangesMessage}, nil
 	}
