@@ -103,10 +103,16 @@ func LockNetwork(gitURL string) error {
 		}
 	}
 	if scheme == "ssh" {
-		// go-git's ssh transport stays; kardinal's git client dials every
-		// ssh connection through scm's dial (SetSSHDial), which reaches
-		// only the git host. Host keys are checked against knownHosts.
+		// kardinal's git client dials every ssh connection through scm's
+		// dial (SetSSHDial), which reaches only the git host; host keys are
+		// checked against knownHosts. The installed ssh transport (scm's,
+		// which waits for receive-pack and bounds the dial) is wrapped so
+		// that an ssh session without that dial (no ProxyOptions, which
+		// go-git would dial directly) is refused instead.
 		scm.SetSSHDial(gitDial(hostPort))
+		if _, wrapped := gitclient.Protocols["ssh"].(scopedSSH); !wrapped {
+			gitclient.InstallProtocol("ssh", scopedSSH{gitclient.Protocols["ssh"]})
+		}
 		return nil
 	}
 	if hostPort != "" {
@@ -116,4 +122,29 @@ func LockNetwork(gitURL string) error {
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}))
 	}
 	return nil
+}
+
+// scopedSSH is an ssh transport that opens only sessions whose endpoint
+// dials through kardinal's dial (its Proxy is scm.SSHDialScheme).
+type scopedSSH struct{ transport.Transport }
+
+func (s scopedSSH) check(ep *transport.Endpoint) error {
+	if u, err := url.Parse(ep.Proxy.URL); err != nil || u.Scheme != scm.SSHDialScheme {
+		return fmt.Errorf("%w: ssh to %s without kardinal's git dial", ErrNetworkRefused, ep.Host)
+	}
+	return nil
+}
+
+func (s scopedSSH) NewUploadPackSession(ep *transport.Endpoint, auth transport.AuthMethod) (transport.UploadPackSession, error) {
+	if err := s.check(ep); err != nil {
+		return nil, err
+	}
+	return s.Transport.NewUploadPackSession(ep, auth)
+}
+
+func (s scopedSSH) NewReceivePackSession(ep *transport.Endpoint, auth transport.AuthMethod) (transport.ReceivePackSession, error) {
+	if err := s.check(ep); err != nil {
+		return nil, err
+	}
+	return s.Transport.NewReceivePackSession(ep, auth)
 }

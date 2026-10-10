@@ -58,6 +58,10 @@ func IsSSHRemote(remoteURL string) bool { return isSSHRemote(remoteURL) }
 // has no other hook for the connection it opens for a fetch.
 const dialScheme = "kardinal-dial"
 
+// SSHDialScheme is dialScheme for code outside the package that must check
+// an ssh endpoint goes through kardinal's dial (the render Job's lock).
+const SSHDialScheme = dialScheme
+
 // dialScope ties the connections of one git operation to its context: they
 // are closed when the context ends, and closeAll closes them at once (a
 // handshake that does not finish in time).

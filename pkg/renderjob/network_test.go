@@ -14,7 +14,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	gittransport "github.com/go-git/go-git/v5/plumbing/transport"
 	gitclient "github.com/go-git/go-git/v5/plumbing/transport/client"
+	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
@@ -130,6 +132,38 @@ func TestGitHostPort_SSH(t *testing.T) {
 	err = scm.NewGoGitClient().Clone(context.Background(), "git@evil.example.com:org/repo.git", "main", t.TempDir(), auth)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), ErrNetworkRefused.Error(), "another host over ssh")
+
+	// go-git's ssh transport refuses a session that does not dial through
+	// kardinal's dial (an endpoint without its ProxyOptions), before any
+	// connection; one that does reaches the locked dial.
+	sshT := gitclient.Protocols["ssh"]
+	require.NotNil(t, sshT)
+	wrapper, ok := sshT.(scopedSSH)
+	require.True(t, ok, "LockNetwork wraps the ssh transport: %T", sshT)
+	assert.True(t, scm.IsSSHTransport(wrapper.Transport),
+		"the wrapped transport is still scm's (receive-pack wait, dial timeout), not go-git's default: %T", wrapper.Transport)
+	require.NoError(t, LockNetwork("git@git.example.com:org/repo.git"))
+	_, twice := gitclient.Protocols["ssh"].(scopedSSH).Transport.(scopedSSH)
+	assert.False(t, twice, "locking again does not wrap twice")
+	for _, url := range []string{"ssh://git@git.example.com/org/repo.git", "ssh://git@evil.example.com/org/repo.git"} {
+		ep, err := gittransport.NewEndpoint(url)
+		require.NoError(t, err)
+		_, err = sshT.NewUploadPackSession(ep, nil)
+		require.ErrorIs(t, err, ErrNetworkRefused, url)
+		assert.Contains(t, err.Error(), "without kardinal's git dial", url)
+		_, err = sshT.NewReceivePackSession(ep, nil)
+		require.ErrorIs(t, err, ErrNetworkRefused, url)
+		assert.Contains(t, err.Error(), "without kardinal's git dial", url)
+	}
+	ep, err := gittransport.NewEndpoint("ssh://git@evil.example.com/org/repo.git")
+	require.NoError(t, err)
+	ep.Proxy = gittransport.ProxyOptions{URL: scm.SSHDialScheme + "://0"}
+	keys, err := gitssh.NewPublicKeys("git", auth.SSHPrivateKey, "")
+	require.NoError(t, err)
+	_, err = sshT.NewUploadPackSession(ep, keys)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "without kardinal's git dial", "kardinal's dial is used")
+	assert.Contains(t, err.Error(), "git may reach git.example.com:22 only", "and it is the locked one")
 }
 
 func keys[V any](m map[string]V) []string {

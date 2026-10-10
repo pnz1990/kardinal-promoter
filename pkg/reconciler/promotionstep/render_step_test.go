@@ -103,3 +103,53 @@ func TestRenderStep_FailedRenderFailsTheStep(t *testing.T) {
 	assert.Equal(t, "Failed", got.Status.State)
 	assert.Contains(t, got.Status.Message, "render failed (RenderRun rr): rendered branch env/test was changed outside kardinal")
 }
+
+// TestRenderStep_KeepsTheRenderedCommit (#1669 with #1515): the commit a
+// render step reports, the one it pushed or the rendered branch head when
+// it pushed nothing, is the commit the health check waits for. The
+// controller does not replace it with the head of a clone in the step's
+// work directory (a layout: branch step has none): the git client here
+// would report another commit.
+func TestRenderStep_KeepsTheRenderedCommit(t *testing.T) {
+	const rendered = "0123456789abcdef0123456789abcdef01234567"
+	for _, tc := range []struct {
+		name      string
+		noChanges bool
+	}{
+		{name: "pushed a render"},
+		{name: "branch already held the render", noChanges: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			p := makePipeline("web")
+			p.Spec.Environments[0].Layout = "branch"
+			b := makeBundle("b1", "web")
+			step := makeStep("web-b1-test", "web", "b1", "test")
+			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+				WithObjects(step, p, b).Build()
+			r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{},
+				GitClient: &headGit{sha: "ffffffffffffffffffffffffffffffffffffffff"},
+				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+			key := types.NamespacedName{Name: step.Name, Namespace: "default"}
+			reconcile := func() *v1alpha1.PromotionStep {
+				t.Helper()
+				_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+				require.NoError(t, err)
+				var got v1alpha1.PromotionStep
+				require.NoError(t, c.Get(ctx, key, &got))
+				return &got
+			}
+			reconcile() // Pending → Promoting
+			got := reconcile()
+			require.NotNil(t, got.Status.RenderRequestedAt)
+			got.Spec.Live = &v1alpha1.PromotionStepLive{Renders: []v1alpha1.LiveRenderRun{{Name: "rr", Phase: "Succeeded",
+				Result: &v1alpha1.RenderRunResult{CommitSHA: rendered, Branch: "env/test", NoChanges: tc.noChanges,
+					DryCommit: "d", Renderer: "kustomize", Objects: 2}}}}
+			require.NoError(t, c.Update(ctx, got))
+			got = reconcile()
+			require.Equal(t, "HealthChecking", got.Status.State, got.Status.Message)
+			assert.Equal(t, rendered, got.Status.Outputs["commitSHA"], "the render's commit, not the clone head")
+		})
+	}
+}
