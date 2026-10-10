@@ -134,6 +134,12 @@ type HoldRequest struct {
 	// Creator is the rollback Bundle's kardinal.io/created-by (CreateBundleAs);
 	// empty records none.
 	Creator string
+	// HoldWriter, when set, writes spec.holds (the hold, and its removal when
+	// the Bundle cannot be created); the reads and the Bundle create use the
+	// client passed to RollbackAndHold. The UI API passes the controller's
+	// client here after checking pipelines/hold for the user, who needs no
+	// update on the Pipeline. Nil uses that client for everything.
+	HoldWriter client.Client
 }
 
 // ArtifactDigest is the digest of what a Bundle deploys: its type, images
@@ -314,11 +320,15 @@ func RollbackAndHold(ctx context.Context, c client.Client, req HoldRequest) (*Ro
 		exp := metav1.NewTime(now.UTC().Add(req.ExpiresIn))
 		hold.ExpiresAt = &exp
 	}
-	if err := setHold(ctx, c, req.Namespace, req.Pipeline, hold); err != nil {
+	writer := req.HoldWriter
+	if writer == nil {
+		writer = c
+	}
+	if err := setHold(ctx, writer, req.Namespace, req.Pipeline, hold); err != nil {
 		return nil, nil, err
 	}
 	if err := CreateBundleAs(ctx, c, plan.Bundle, req.Creator); err != nil {
-		if _, relErr := ReleaseHold(ctx, c, req.Namespace, req.Pipeline, req.Environment); relErr != nil {
+		if _, relErr := ReleaseHold(ctx, writer, req.Namespace, req.Pipeline, req.Environment); relErr != nil {
 			return nil, nil, fmt.Errorf("create rollback bundle: %w (and removing the hold failed: %v)", err, relErr)
 		}
 		return nil, nil, fmt.Errorf("create rollback bundle: %w", err)
