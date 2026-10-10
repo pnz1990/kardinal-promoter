@@ -61,8 +61,14 @@ type Options struct {
 	// Prometheus; other suites may not).
 	Metrics bool
 	// RaceBuild is set when the controller is built with -race: its memory
-	// growth threshold is wider (rssGrowthRace).
+	// is bounded by the Go runtime's own memory and the heap after a GC, not
+	// by RSS, which holds the race detector's shadow memory (leaks).
 	RaceBuild bool
+	// WarmAt is the warm baseline the memory checks measure from: the first
+	// sample once the controller holds the load's steady state (for a
+	// sustained load, every Pipeline at its historyLimit). Zero, or before
+	// Start, means Start.
+	WarmAt time.Time
 	// SharedController is set when other tests load the controller at the
 	// same time: the work queue and goroutine checks then only report, as
 	// neither drains nor stays flat for one test.
