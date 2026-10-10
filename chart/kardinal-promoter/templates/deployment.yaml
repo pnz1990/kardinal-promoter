@@ -45,6 +45,9 @@ spec:
             - --zap-log-level={{ include "kardinal-promoter.zapLogLevel" . }}
             - --metrics-bind-address={{ .Values.metricsBindAddress }}
             - --health-probe-bind-address={{ .Values.healthProbeBindAddress }}
+            {{- with .Values.pprofAddress }}
+            - --pprof-address={{ . }}
+            {{- end }}
             - --ui-listen-address=:{{ .Values.service.uiPort }}
             - --webhook-bind-address=:{{ .Values.service.webhookPort }}
             - --graph-service-account={{ .Values.graph.serviceAccountName }}

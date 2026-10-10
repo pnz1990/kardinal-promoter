@@ -199,3 +199,33 @@ func TestManagerOptions_LeaderElectionClient(t *testing.T) {
 func TestAuditRetentionDefault(t *testing.T) {
 	assert.True(t, auditRetentionDefault, "unbounded AuditEvents fill etcd: retention must default to on")
 }
+
+// TestPprofBindAddress: --pprof-address is off by default, binds to
+// 127.0.0.1 when it names no host, and reaches the manager as given
+// otherwise.
+//
+// Covers INST-PPROF-01.
+func TestPprofBindAddress(t *testing.T) {
+	for _, tc := range []struct{ in, want, err string }{
+		{in: "", want: ""},
+		{in: ":6060", want: "127.0.0.1:6060"},
+		{in: "localhost:6060", want: "localhost:6060"},
+		{in: "0.0.0.0:6060", want: "0.0.0.0:6060"},
+		{in: "[::1]:6060", want: "[::1]:6060"},
+		{in: "6060", err: "missing port"},
+		{in: "127.0.0.1:", err: "no port"},
+	} {
+		t.Run(tc.in, func(t *testing.T) {
+			got, err := pprofBindAddress(tc.in)
+			if tc.err != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+	assert.Empty(t, buildManagerOptions(managerConfig{}).PprofBindAddress, "no profiles unless asked")
+	assert.Equal(t, "127.0.0.1:6060", buildManagerOptions(managerConfig{pprofAddress: "127.0.0.1:6060"}).PprofBindAddress)
+}

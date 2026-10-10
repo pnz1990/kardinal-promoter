@@ -202,6 +202,9 @@
     "healthProbeBindAddress": {
       "type": "string"
     },
+    "pprofAddress": {
+      "type": "string"
+    },
     "service": {
       "type": "object",
       "additionalProperties": false,
