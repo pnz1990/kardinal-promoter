@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -205,6 +207,77 @@ func TestGitHub_SCMAPIURL(t *testing.T) {
 	a.merge(t, pr)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V2)
+}
+
+// TestGitHub_RollbackPR is acceptance Scenario 5 on github.com: after two
+// promotions, `kardinal rollback --env prod` opens a PR on the real shared
+// repo (KARDINAL_E2E_GITHUB_REPO, pnz1990/kardinal-demo) that carries the
+// kardinal/rollback label and the evidence body: the rollback note naming
+// both Bundles and the actor, the artifact provenance of the restored image,
+// the policy gate table and the upstream verification. The PR is closed and
+// its branch deleted at the end (the test's branch cleanup also closes and
+// deletes every PR into the test's branch); nothing outside the test's own
+// branches is touched.
+//
+// Covers SCM-GH-13.
+func TestGitHub_RollbackPR(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	requireKind(t, e, "github")
+	a := newArgoApp(t, e, "test", "prod")
+	require.True(t, strings.HasPrefix(a.repo.Branch, gitserver.BranchPrefix), "the test's own branch of the shared repo")
+	e.CreateGate(t, framework.Gate(a.ns, "always", "prod", "true", recheck))
+	a.apply(t, a.pipeline(map[string]string{"prod": "pr-review"}))
+
+	first := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	_, pr := a.waitOpenPR(t, first, "prod")
+	a.merge(t, pr)
+	e.WaitStepState(t, a.ns, pipelineName, first, "prod", "Verified", promoteTimeout)
+	second := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV3)
+	_, pr = a.waitOpenPR(t, second, "prod")
+	a.merge(t, pr)
+	e.WaitStepState(t, a.ns, pipelineName, second, "prod", "Verified", promoteTimeout)
+
+	out := e.MustKardinal(t, a.ns, "rollback", pipelineName, "--env", "prod")
+	m := regexp.MustCompile(`Bundle (\S+) created \(rollbackOf=(\S+)\)`).FindStringSubmatch(out)
+	require.NotNil(t, m, "rollback output:\n%s", out)
+	rollback := m[1]
+	require.Equal(t, first, m[2], "rolls back to the Bundle before %s", second)
+	_, pr = a.waitOpenPR(t, rollback, "prod")
+	t.Cleanup(func() { _ = e.Git.ClosePR(context.Background(), a.repo, pr.Number) })
+
+	// Read back from github.com: the PR into the test's branch, by number.
+	var got gitserver.PR
+	framework.Eventually(t, time.Minute, "the rollback PR's labels on github.com", func(ctx context.Context) (bool, string) {
+		prs, err := e.Git.PullRequests(ctx, a.repo)
+		if err != nil {
+			return false, err.Error()
+		}
+		for _, p := range prs {
+			if p.Number == pr.Number {
+				got = p
+				return slices.Contains(p.Labels, "kardinal/rollback"), fmt.Sprintf("labels %v", p.Labels)
+			}
+		}
+		return false, fmt.Sprintf("PR #%d not found", pr.Number)
+	})
+	assert.Equal(t, "open", got.State)
+	assert.Equal(t, a.repo.Branch, got.Base, "into the test's branch")
+	assert.Equal(t, prHead(a.ns, rollback, "prod"), got.Head)
+	assert.Subset(t, got.Labels, []string{"kardinal", "kardinal/promotion", "kardinal/rollback"})
+	assert.Equal(t, "[kardinal] Rollback prod to "+rollback+" (restores "+fixtures.V2+")", got.Title)
+	body := prBody(got.Body)
+	assert.True(t, strings.HasPrefix(body, "<!-- kardinal-promoter auto-generated PR -->\n## ROLLBACK: "+rollback+" -> podinfo/prod\n\n"+
+		"> **This is a rollback PR.** It restores the images of bundle "+first+" in environment prod.\n"+
+		"> Rolling back FROM: "+second+" ("+fixtures.V3+")\n"+
+		"> Rolling back TO: "+first+" ("+fixtures.V2+")\n"+
+		"> Rolled back by: "+kubeUser(t, a.e)+"\n"), "rollback body:\n%s", body)
+	for _, section := range []string{"### Artifact Provenance", "### Policy Gate Compliance", "### Upstream Verification"} {
+		assert.Contains(t, body, section, "the evidence body")
+	}
+	assert.Contains(t, body, "| "+fixtures.Image+" | "+fixtures.V2+" |", "the restored image in the provenance table")
+	assert.Contains(t, body, "| always |", "the prod gate in the compliance table")
+	assert.Contains(t, body, "| test |", "test in the upstream verification")
 }
 
 // TestGitHub_ExampleGitHubDemo runs examples/github-demo on GitHub: its
