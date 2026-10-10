@@ -79,10 +79,11 @@ var _ Rebaser = (*GoGitClient)(nil)
 // commits since the clone touched any of those paths. Nothing is lost:
 // neither the other writer's files nor this commit's.
 func (c *GoGitClient) RebaseOnRemote(ctx context.Context, dir, remote, branch string, auth GitAuth) ([]string, error) {
-	repo, err := gogit.PlainOpen(dir)
+	repo, closeRepo, err := openRepo(dir)
 	if err != nil {
-		return nil, fmt.Errorf("open repo at %s: %w", dir, err)
+		return nil, err
 	}
+	defer func() { _ = closeRepo() }()
 	headRef, err := repo.Head()
 	if err != nil {
 		return nil, fmt.Errorf("resolve HEAD in %s: %w", dir, err)

@@ -287,10 +287,11 @@ func (c *GoGitClient) CloneAt(ctx context.Context, url, commitSHA, dir string, a
 // with the given message and author. It returns ErrNothingToCommit when the
 // work tree has no changes, instead of creating an empty commit.
 func (c *GoGitClient) CommitAll(ctx context.Context, dir, message, authorName, authorEmail string) error {
-	repo, err := gogit.PlainOpen(dir)
+	repo, closeRepo, err := openRepo(dir)
 	if err != nil {
-		return fmt.Errorf("open repo at %s: %w", dir, err)
+		return err
 	}
+	defer func() { _ = closeRepo() }()
 	wt, err := repo.Worktree()
 	if err != nil {
 		return fmt.Errorf("get worktree of %s: %w", repoName(repo, dir), err)
@@ -338,10 +339,11 @@ func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch string, auth
 	defer func() { tracing.End(span, err) }()
 	start := time.Now()
 	defer func() { observeGit("push", start, err) }()
-	repo, err := gogit.PlainOpen(dir)
+	repo, closeRepo, err := openRepo(dir)
 	if err != nil {
-		return fmt.Errorf("open repo at %s: %w", dir, err)
+		return err
 	}
+	defer func() { _ = closeRepo() }()
 
 	// go-git does not resolve a symbolic "HEAD" source in a refspec: it matches
 	// no local hash reference, the push sends nothing and reports
