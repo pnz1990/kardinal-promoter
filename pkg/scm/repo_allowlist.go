@@ -69,6 +69,38 @@ var ErrRepositoryNotAllowed = errors.New("repository not allowed")
 // today's behaviour).
 type RepositoryAllowlist struct {
 	patterns []repoPattern
+	// canon, when set (WithCanonicalRepo), is the provider's canonical form
+	// of a repository (RepoCanonicalizer): a Bitbucket Data Center
+	// repository is matched as KEY/slug however the URL names it.
+	canon func(string) string
+}
+
+// WithCanonicalRepo returns a copy of a that matches repositories in p's
+// canonical form (RepoCanonicalizer), or a when p has none. A nil
+// allowlist stays nil.
+func (a *RepositoryAllowlist) WithCanonicalRepo(p SCMProvider) *RepositoryAllowlist {
+	c, ok := p.(RepoCanonicalizer)
+	if a == nil || !ok {
+		return a
+	}
+	out := *a
+	out.canon = c.CanonicalRepo
+	return &out
+}
+
+// WithProviderType returns a copy of a that matches repositories in the
+// canonical form of the SCM providerType, as WithCanonicalRepo does with a
+// built provider: for "bitbucket-datacenter" a repository is matched as
+// key/slug however the URL names it. Other types keep a. A nil allowlist
+// stays nil. kardinal validate uses it, so it reports what the controller
+// enforces.
+func (a *RepositoryAllowlist) WithProviderType(providerType string) *RepositoryAllowlist {
+	if a == nil || providerType != "bitbucket-datacenter" {
+		return a
+	}
+	out := *a
+	out.canon = canonicalBitbucketDCRepo
+	return &out
 }
 
 type repoPattern struct {
@@ -161,6 +193,9 @@ func (a *RepositoryAllowlist) AllowsRepo(host, repo string) bool {
 	if a == nil {
 		return true
 	}
+	if a.canon != nil {
+		repo = a.canon(repo)
+	}
 	host, repo = strings.ToLower(host), strings.ToLower(strings.Trim(repo, "/"))
 	if host == "" || repo == "" {
 		return false
@@ -205,11 +240,17 @@ var azureNameSegment = regexp.MustCompile(`^[A-Za-z0-9._-]+( [A-Za-z0-9._-]+)*$`
 // validRepoSegment reports whether segs[i] may be a segment of a repository
 // on host: repoSegment and not "." or "..". Only the project and repository
 // names of an Azure DevOps repository (dev.azure.com, organization/project/repo)
-// may hold single spaces; its organization may not.
+// may hold single spaces; its organization may not. The first of two
+// segments may start with one "~": a Bitbucket Data Center personal
+// repository, ~user/slug.
 func validRepoSegment(host string, segs []string, i int) bool {
 	s := segs[i]
 	if s == "." || s == ".." {
 		return false
+	}
+	if i == 0 && len(segs) == 2 && strings.HasPrefix(s, "~") {
+		s = s[1:]
+		return s != "." && s != ".." && repoSegment.MatchString(s)
 	}
 	if host == "dev.azure.com" && len(segs) == 3 && i >= 1 {
 		return azureNameSegment.MatchString(s)
@@ -259,10 +300,15 @@ func RepoIdentity(gitURL string) (host, repo string, err error) {
 // provider's public host when no URL is set.
 func WebHost(providerType, apiURL string) (string, error) {
 	defaults := map[string]string{"": "github.com", "github": "github.com", "gitlab": "gitlab.com",
-		"forgejo": "codeberg.org", "gitea": "codeberg.org", "bitbucket": "bitbucket.org", "azuredevops": "dev.azure.com"}
+		"forgejo": "codeberg.org", "gitea": "codeberg.org", "bitbucket": "bitbucket.org", "azuredevops": "dev.azure.com",
+		// Data Center has no public host: the API URL names it.
+		"bitbucket-datacenter": ""}
 	def, ok := defaults[providerType]
 	if !ok {
 		return "", fmt.Errorf("unknown SCM provider type %q", providerType)
+	}
+	if def == "" && strings.TrimSpace(apiURL) == "" {
+		return "", fmt.Errorf("SCM provider %s needs an API URL to name its host", providerType)
 	}
 	if strings.TrimSpace(apiURL) == "" {
 		return def, nil

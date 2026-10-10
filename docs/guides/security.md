@@ -182,12 +182,18 @@ scm:
     - github.com/acme-platform/*      # every repository of an owner
     - gitlab.example.com/platform/**  # everything under a group, subgroups included
     - dev.azure.com/acme/platform/*   # Azure DevOps: organization/project/repository
+    - bitbucket.example.com/PLAT/*    # Bitbucket Data Center: host/KEY/slug
+    - bitbucket.example.com/~alice/*  # a Data Center user's personal repositories
 ```
 
 Each entry is `host/repository`: the SCM host, and the repository as the SCM API names it,
 `owner/repo` (GitHub, Forgejo, Gitea, Bitbucket), the full project path (GitLab), or
 `organization/project/repository` on `dev.azure.com` (Azure DevOps, also for
-`<org>.visualstudio.com` and SSH remotes). Matching ignores case, and a scheme, user, port or
+`<org>.visualstudio.com` and SSH remotes), or `KEY/slug` on Bitbucket Data Center, the project
+key and the repository slug, `~user/slug` for a personal repository. A Data Center URL is
+matched in that form whichever way it names the repository (`/scm/PLAT/web-app.git`,
+`/projects/PLAT/repos/web-app/browse`, `ssh://git@host:7999/plat/web-app.git`), so
+`bitbucket.example.com/PLAT/*` covers them all; the host is the one of `scm.apiURL`. Matching ignores case, and a scheme, user, port or
 `.git` in the entry (an IPv6 host may keep its brackets). `*` matches one path segment, and an
 entry ending in `/**` matches every repository below it. A `spec.git.url` that does not parse to
 a host and a repository never matches, and neither does a repository with a segment other than
@@ -207,7 +213,9 @@ except one that never uses the controller's token: its `git.secretRef` names a S
 exists in its namespace (git clone and push use that token) and no environment uses
 `approval: pr-review` (whose PR the controller's token opens). A Pipeline refused because its
 Secret is missing is checked again every minute. `kardinal validate --allowed-repositories
-<list>` reports the same before you apply the file (offline it takes the Secret to exist). When
+<list>` reports the same before you apply the file (offline it takes the Secret to exist); add
+`--scm-provider bitbucket-datacenter` for a Data Center controller, so URLs are matched as
+`KEY/slug` too. When
 the value is empty, every repository is allowed, as before, and the controller logs a warning at
 startup.
 

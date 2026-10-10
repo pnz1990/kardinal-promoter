@@ -160,3 +160,49 @@ func TestWebhook_AzureDevOps(t *testing.T) {
 			wantCode: http.StatusUnauthorized},
 	})
 }
+
+// TestWebhook_BitbucketDataCenter sends Bitbucket Data Center webhook
+// deliveries to the controller's webhook endpoint: a pr:merged delivery
+// signed in X-Hub-Signature marks the PRStatus merged, though the PRStatus
+// names the repository by its HTTP clone path (scm/PLAT/web-app) and the
+// payload by project key and slug; pr:declined does not, nor does a merged
+// delivery for a PR the API reports open; a wrong or missing signature, or a
+// controller without a webhook secret, is refused with 401.
+// Covers SCM-BBDC-04.
+func TestWebhook_BitbucketDataCenter(t *testing.T) {
+	const secret = "bbdc-webhook-secret"
+	event := func(key, state string) string {
+		return `{"eventKey":"` + key + `","date":"2026-10-09T10:00:00+0000","actor":{"name":"alice","slug":"alice"},` +
+			`"pullRequest":{"id":12,"version":3,"title":"[kardinal] Promote web-app-v2 to prod","state":"` + state + `",` +
+			`"fromRef":{"id":"refs/heads/kardinal/web-app-v2/prod","repository":{"slug":"web-app","project":{"key":"PLAT"}}},` +
+			`"toRef":{"id":"refs/heads/main","repository":{"slug":"web-app","project":{"key":"PLAT"}}},` +
+			`"properties":{"mergeCommit":{"displayId":"0a1b2c3d4e5","id":"0a1b2c3d4e5f60718293a4b5c6d7e8f901234567"}}}}`
+	}
+	merged, declined := event("pr:merged", "MERGED"), event("pr:declined", "DECLINED")
+	sign := func(key, body string) string {
+		m := hmac.New(sha256.New, []byte(key))
+		m.Write([]byte(body))
+		return "sha256=" + hex.EncodeToString(m.Sum(nil))
+	}
+	headers := func(key, sig string) map[string]string {
+		h := map[string]string{"Content-Type": "application/json; charset=utf-8", "X-Event-Key": key,
+			"X-Request-Id": "1f2e3d4c-5b6a-7980-a1b2-c3d4e5f60718"}
+		if sig != "" {
+			h["X-Hub-Signature"] = sig
+		}
+		return h
+	}
+	deliver(t, "bitbucket-datacenter", "scm/PLAT/web-app", "scm/PLAT/api", 12, []webhookDelivery{
+		{name: "merged", secret: secret, body: merged, headers: headers("pr:merged", sign(secret, merged)),
+			wantCode: http.StatusNoContent, wantMerged: true},
+		{name: "declined", secret: secret, body: declined, headers: headers("pr:declined", sign(secret, declined)),
+			wantCode: http.StatusNoContent},
+		{name: "merged, but the API reports the PR open", secret: secret, body: merged,
+			headers: headers("pr:merged", sign(secret, merged)), prOpen: true, wantCode: http.StatusNoContent},
+		{name: "wrong secret", secret: secret, body: merged, headers: headers("pr:merged", sign("guess", merged)),
+			wantCode: http.StatusUnauthorized},
+		{name: "unsigned", secret: secret, body: merged, headers: headers("pr:merged", ""), wantCode: http.StatusUnauthorized},
+		{name: "no webhook secret configured", body: merged, headers: headers("pr:merged", sign("", merged)),
+			wantCode: http.StatusUnauthorized},
+	})
+}
