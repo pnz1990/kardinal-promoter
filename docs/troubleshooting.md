@@ -691,6 +691,9 @@ kardinal/<namespace hash>/<bundle>/<env> failed` (for a step with no PR, `the st
 branch kardinal/<namespace hash>/<bundle>/<env> failed`): delete that branch by hand. It also emits a
 `ClosePRFailed` Warning Event on the step, except in a namespace being deleted: the API server
 refuses new Events there, and the step is gone, so the controller log is the only record.
+`kardinal_pr_cleanup_failures_total{reason="ClosePRFailed"}` (and `reason="PRLeftOpen"` for the
+case below) counts these PRs, so alert on it: Warning Events are rate-limited and best effort
+([Kubernetes Events](installation.md#kubernetes-events)).
 
 Before it closes the PR, the controller reads the Bundle, its namespace, its Pipeline and its
 Graph to tell whether the step comes back (the Graph case above). If one of those reads keeps
