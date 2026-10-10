@@ -40,7 +40,7 @@ go build -o "$E2E_OUT/bin/report" ./test/e2e/report
 RUN=${RUN:-$KARDINAL_E2E_RUN}
 COUNT=${COUNT:-1}
 # The upgrade test upgrades the cluster's v0.8.1 release, so it runs once.
-[ "$SUITE" != upgrade ] || [ "$COUNT" = 1 ] || die "COUNT=$COUNT: the upgrade suite's cluster serves one run; use COUNT=1"
+case $SUITE in upgrade | upgrade-v090) [ "$COUNT" = 1 ] || die "COUNT=$COUNT: the upgrade suite's cluster serves one run; use COUNT=1" ;; esac
 if [ -n "${SHARD:-}" ]; then
   if ! [[ "$SHARD" =~ ^([0-9]+)/([0-9]+)$ ]] || [ "${BASH_REMATCH[1]}" -lt 1 ] ||
     [ "${BASH_REMATCH[1]}" -gt "${BASH_REMATCH[2]}" ]; then

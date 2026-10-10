@@ -478,6 +478,63 @@ Bundle in flight (on any change to the Pipeline's spec, or a deleted Graph) it b
 shape, and kro then deletes every PromotionStep the compact Graph created: the Bundle promotes
 again from its first environment. Before you downgrade, let the Bundles of those Pipelines finish, or delete them.
 
+### Upgrading from v0.9.0
+
+These steps take a v0.9.0 installation to this release. The upgrade suite runs them as written
+(`TestUpgradeV090_FromV090`, on the oldest and newest supported Kubernetes minors). Promotions
+in flight keep running: their PromotionSteps, PRStatuses and gate instances are kept, and the
+Graph of every Bundle that is still promoting is rebuilt in place by the new controller.
+
+**1. Read the upgrade notes.** The changelog's [Before you upgrade](changelog.md#from-v090)
+lists what changes for existing objects: Bundle fields the Bundle CRD now refuses (check your
+CI first), the Bundle spec becoming immutable, the AuditEvent retention, and the environment
+name `time` becoming reserved.
+
+**2. Label the Pipelines' git Secrets.** A Secret named by `spec.git.secretRef` should carry
+`kardinal.io/referenceable: "true"`. This release still uses an unlabeled one but sets the
+Pipeline's `SecretReferenceable=False` condition; a later release refuses it.
+
+```bash
+kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.spec.git.secretRef.name}{"\n"}{end}' |
+  sort -u | while read -r ns name; do
+    [ -z "$name" ] || kubectl -n "$ns" label secret "$name" kardinal.io/referenceable=true --overwrite
+  done
+```
+
+**3. Apply the new CRDs.** Helm never upgrades CRDs. Apply them before the new controller starts.
+
+```bash
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 | kubectl apply --server-side -f -
+```
+
+If this reports field-manager conflicts, add `--force-conflicts`.
+
+**4. Upgrade kro.** Run this from a checkout of kardinal-promoter at this release; it installs
+the kro version the release targets, and leaves a kro that is already at it as it is.
+
+```bash
+KUBE_CONTEXT=<your-context> bash hack/install-kro.sh
+```
+
+**5. Upgrade the chart.** Use `--reset-then-reuse-values`, which keeps the values you set and
+takes every new default from the new chart.
+
+```bash
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
+  --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
+```
+
+**6. Check the result.**
+
+```bash
+kardinal doctor
+kubectl get graphs.kro.run -A
+kubectl get bundles -A
+```
+
+`kardinal doctor` passes every check. Every Bundle that was Promoting still has its Graph, and
+finishes; a Verified Bundle stays Verified; a new Bundle promotes end to end.
+
 ### Upgrading from v0.8.1
 
 v0.8.1 ran its own Graph controller (krocodile, `experimental.kro.run`) from the kardinal chart. This release runs on upstream kro (`kro.run`), which you install separately. `helm upgrade --reuse-values` fails. A `helm upgrade` that gets past the values check deletes the `kro-system` namespace. Follow the steps below instead.

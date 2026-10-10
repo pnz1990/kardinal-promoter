@@ -8,6 +8,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Before you upgrade
+
+#### From v0.9.0
+
+Follow the tested steps in [Upgrading from v0.9.0](https://pnz1990.github.io/kardinal-promoter/installation/#upgrading-from-v090): label the Pipelines' git Secrets, apply the new CRDs, re-run `hack/install-kro.sh` and `helm upgrade --reset-then-reuse-values`. Before that, check these changes for existing objects and clients (each is under Changed or Fixed below):
+
+1. **Bundle fields:** the Bundle CRD now refuses a tag outside the OCI grammar, a short or placeholder digest or commit SHA. Check that your CI sends real values before applying the new CRDs.
+2. **A Bundle's spec is immutable:** an update that changes its type, Pipeline, images, chart, configRef, provenance or intent is refused. Create a new Bundle instead.
+3. **AuditEvent retention is on by default:** after the upgrade the controller deletes AuditEvents older than 90 days or beyond each Pipeline's 1000 newest. Export them first if you must keep them, or set `audit.retention.enabled: false`.
+4. **Git Secrets:** a Secret named by `spec.git.secretRef` should be labeled `kardinal.io/referenceable: "true"`. Unlabeled, it still works with the warning condition `SecretReferenceable=False`; a later release refuses it.
+5. **The environment name `time` is reserved:** rename such an environment before you upgrade.
+
 ### Added
 - **Compact Graphs render to branches** — a `layout: branch` environment works in the compact Graph shape (more environments than `--graph-compact-above`, the `kardinal.io/graph-shape: compact` annotation, or a fleet): the `RenderRuns` collection creates its RenderRun once the step asks for the render, keeps it once kro created it for this Bundle, and the step reads it back through its own `spec.live.renders`; fleet targets render to their own branches, `env/<fleet>-<target>`, as pacing starts them; a fleet environment takes no `render.branch`, and a target's branch that another environment's `render.branch` names is refused (validation, and `RenderedBranchConflict` across Pipelines). Pipelines with more than 100 environments can use rendered manifests (#1515).
 
