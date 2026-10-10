@@ -450,7 +450,9 @@ How a fleet is promoted:
   the fleet's Bundle does, the fleet's step there does not push over it and ends `Superseded`.
   That target is settled: it frees its `maxConcurrent` place, it is neither Verified nor a
   failure (it does not count toward `maxUnavailable`), an environment after the fleet waits only
-  for the other targets, and the Bundle is Verified once they are.
+  for the other targets, and the Bundle is Verified once they are. A fleet needs at least one
+  Verified target: when every target is `Superseded`, newer Bundles replaced this one there, the
+  environments after the fleet do not start, and the Bundle ends `Superseded`.
 - **Selector membership.** The controller resolves an `Application` or `ClusterProfile` selector
   into the Pipeline's `status.fleets`, and reads it again every minute. An Application qualifies
   only if it deploys from the Pipeline's `spec.git.url` and has a `spec.source.path`, and any

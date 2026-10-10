@@ -223,6 +223,12 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 	for _, s := range steps {
 		fleets = fleets || s.fleet != ""
 	}
+	fleetOf := map[string]string{}
+	for _, s := range steps {
+		if s.fleet != "" {
+			fleetOf[s.env] = s.fleet
+		}
+	}
 	for i, s := range steps {
 		upstreamStates := make([]interface{}, len(s.upstreams))
 		for j := range upstreamStates {
@@ -243,6 +249,7 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 		if fleets {
 			e := entries[i].(map[string]interface{})
 			e["fleet"], e["index"], e["maxConcurrent"], e["maxUnavailable"] = s.fleet, s.index, s.maxConcurrent, s.maxUnavailable
+			e["upstreamGroups"] = upstreamGroups(s.upstreams, fleetOf)
 		}
 	}
 
@@ -262,15 +269,19 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 	// collection is not referenced: kro publishes a collection only when every
 	// item applied (G11), and a step names its PRStatus literally and waits
 	// for it in WaitingForMerge.
-	// An upstream is done when it is Verified, or, for a fleet target, when
-	// its step is Superseded (#1603): a newer Bundle, the rollback of that
-	// one target, deployed it, and the fleet goes on without it.
-	upstreamDone := fmt.Sprintf("u in %sverified", state)
+	// The upstreams are done when they are Verified. In a Pipeline with a
+	// fleet they come in groups, one per fleet (upstreamGroups): a group is
+	// done when every target is Verified or Superseded (#1603: a newer
+	// Bundle, the rollback of that one target, deployed it) and at least one
+	// is Verified, so a fleet that only newer Bundles deployed does not let
+	// the environments after it start.
+	upstreamsDone := fmt.Sprintf("e.upstreams.all(u, u in %sverified)", state)
 	if fleets {
-		upstreamDone = fmt.Sprintf("(u in %sverified || u in %ssupersededTargets)", state, state)
+		upstreamsDone = fmt.Sprintf("e.upstreamGroups.all(g, g.all(u, u in %sverified || u in %ssupersededTargets) && g.exists(u, u in %sverified))",
+			state, state, state)
 	}
-	ready := fmt.Sprintf("%shold == false && e.held == false && e.upstreams.all(u, %s) && e.gates.all(g, g in %sreadyGates)",
-		state, upstreamDone, state)
+	ready := fmt.Sprintf("%shold == false && e.held == false && %s && e.gates.all(g, g in %sreadyGates)",
+		state, upstreamsDone, state)
 	wave := fmt.Sprintf("${%s.steps.filter(e, e.environment in %sstarted || (%s))}", NodePromotionDAG, state, ready)
 	var eligible *GraphNode
 	if fleets {
@@ -486,6 +497,28 @@ func toInterfaces(s []string) []interface{} {
 	out := make([]interface{}, len(s))
 	for i, v := range s {
 		out[i] = v
+	}
+	return out
+}
+
+// upstreamGroups groups upstreams by fleet, in their order: the targets of
+// one fleet are one group, any other upstream is a group of its own.
+func upstreamGroups(upstreams []string, fleetOf map[string]string) []interface{} {
+	var out []interface{}
+	at := map[string]int{}
+	for _, u := range upstreams {
+		f := fleetOf[u]
+		if i, ok := at[f]; ok && f != "" {
+			out[i] = append(out[i].([]interface{}), u)
+			continue
+		}
+		if f != "" {
+			at[f] = len(out)
+		}
+		out = append(out, []interface{}{u})
+	}
+	if out == nil {
+		out = []interface{}{}
 	}
 	return out
 }

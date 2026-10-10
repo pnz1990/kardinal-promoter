@@ -100,6 +100,8 @@ func TestBundleReconciler_FleetTargetSupersededIsSettled(t *testing.T) {
 			lcStep("app-v2", "test", "s-test", "Verified"), target("prod-eu", "s-eu", "Superseded"), target("prod-us", "s-us", "Verified")}, "Verified"},
 		{"a Superseded target and another in flight", []*kardinalv1alpha1.PromotionStep{
 			lcStep("app-v2", "test", "s-test", "Verified"), target("prod-eu", "s-eu", "Superseded"), target("prod-us", "s-us", "Promoting")}, "Promoting"},
+		{"every target Superseded: replaced everywhere there", []*kardinalv1alpha1.PromotionStep{
+			lcStep("app-v2", "test", "s-test", "Verified"), target("prod-eu", "s-eu", "Superseded"), target("prod-us", "s-us", "Superseded")}, "Superseded"},
 		{"a Superseded step outside the fleet", []*kardinalv1alpha1.PromotionStep{
 			lcStep("app-v2", "test", "s-test", "Superseded")}, "Superseded"},
 	} {

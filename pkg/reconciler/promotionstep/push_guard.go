@@ -122,32 +122,14 @@ func (r *Reconciler) recordPushIntent(ctx context.Context, ps, base *v1alpha1.Pr
 // (lifecycle.SupersedingSiblings, Verified ones included) and whose step for
 // ps's environment recorded its push intent or completed git-push, or "".
 //
-// The Bundles come from the cache: their type and creation are immutable,
-// and a candidate is read again from the API server before it refuses the
-// push, so a newer Bundle rejected or failed a moment ago does not. The
-// environment's steps, which carry the intents, are listed from the API
-// server.
+// The API server decides: the environment's steps are listed from it, and
+// the Bundle and the Pipeline (holds) of each step that pushed or is pushing
+// are read from it, so a stale cache never lets a push through. Only the
+// rejected artifacts come from the cache: a rejection is final, so the cache
+// can miss one (and refuse a push the newer Bundle would no longer make) but
+// never invent one.
 func (r *Reconciler) newerPushed(ctx context.Context, reader client.Reader, ps *v1alpha1.PromotionStep,
 	b *v1alpha1.Bundle) (string, error) {
-	var bundles v1alpha1.BundleList
-	if err := r.List(ctx, &bundles, client.InNamespace(ps.Namespace)); err != nil {
-		return "", fmt.Errorf("list the bundles of %s: %w", ps.Spec.PipelineName, err)
-	}
-	var p *v1alpha1.Pipeline
-	var pl v1alpha1.Pipeline
-	if err := r.Get(ctx, client.ObjectKey{Namespace: ps.Namespace, Name: b.Spec.Pipeline}, &pl); err == nil {
-		p = &pl
-	} else if !apierrors.IsNotFound(err) {
-		return "", fmt.Errorf("read pipeline %s: %w", b.Spec.Pipeline, err)
-	}
-	rejected := lifecycle.RejectedArtifactsOf(bundles.Items, b.Spec.Pipeline)
-	newer := map[string]bool{}
-	for _, s := range lifecycle.SupersedingSiblings(p, b, bundles.Items, rejected, true, ps.Spec.Environment) {
-		newer[s.Name] = true
-	}
-	if len(newer) == 0 {
-		return "", nil
-	}
 	var list v1alpha1.PromotionStepList
 	if err := reader.List(ctx, &list, client.InNamespace(ps.Namespace), client.MatchingLabels{
 		"kardinal.io/pipeline":    ps.Spec.PipelineName,
@@ -155,20 +137,35 @@ func (r *Reconciler) newerPushed(ctx context.Context, reader client.Reader, ps *
 	}); err != nil {
 		return "", fmt.Errorf("list the steps of %s/%s: %w", ps.Spec.PipelineName, ps.Spec.Environment, err)
 	}
+	var candidates []*v1alpha1.PromotionStep
 	for i := range list.Items {
 		s := &list.Items[i]
-		if !newer[s.Spec.BundleName] || s.Spec.Environment != ps.Spec.Environment || !pushedOrPushing(s) {
-			continue
+		if s.Spec.BundleName != b.Name && s.Spec.Environment == ps.Spec.Environment && pushedOrPushing(s) {
+			candidates = append(candidates, s)
 		}
+	}
+	if len(candidates) == 0 {
+		return "", nil
+	}
+	var p *v1alpha1.Pipeline
+	var pl v1alpha1.Pipeline
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: ps.Namespace, Name: b.Spec.Pipeline}, &pl); err == nil {
+		p = &pl
+	} else if !apierrors.IsNotFound(err) {
+		return "", fmt.Errorf("read pipeline %s: %w", b.Spec.Pipeline, err)
+	}
+	var bundles v1alpha1.BundleList
+	if err := r.List(ctx, &bundles, client.InNamespace(ps.Namespace)); err != nil {
+		return "", fmt.Errorf("list the bundles of %s: %w", ps.Spec.PipelineName, err)
+	}
+	rejected := lifecycle.RejectedArtifactsOf(bundles.Items, b.Spec.Pipeline)
+	for _, s := range candidates {
 		var other v1alpha1.Bundle
 		if err := reader.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: s.Spec.BundleName}, &other); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
 			}
 			return "", fmt.Errorf("read bundle %s: %w", s.Spec.BundleName, err)
-		}
-		if lifecycle.Rejected(&other) {
-			continue
 		}
 		if len(lifecycle.SupersedingSiblings(p, b, []v1alpha1.Bundle{other}, rejected, true, ps.Spec.Environment)) > 0 {
 			return other.Name, nil

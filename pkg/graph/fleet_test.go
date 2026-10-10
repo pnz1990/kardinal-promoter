@@ -553,3 +553,24 @@ func TestFleet_SupersededTargetIsNoFailure(t *testing.T) {
 	sim.advance()
 	assert.Len(t, sim.steps, before, "one Failed target stops the rollout under maxUnavailable 1")
 }
+
+// TestFleet_AllTargetsSupersededHoldsDownstream: a fleet whose every target is
+// Superseded has no Verified target, so the environments after it do not
+// start (the Bundle reconciler supersedes the Bundle: it was replaced
+// everywhere there). One Verified target among Superseded ones is enough.
+//
+// Covers FLEET-08.
+func TestFleet_AllTargetsSupersededHoldsDownstream(t *testing.T) {
+	p := bigFleet(2, 0, nil)
+	p.Spec.Environments = append(p.Spec.Environments, kardinalv1alpha1.EnvironmentSpec{Name: "audit"})
+	sim := fleetSim(t, p)
+	sim.steps["test"] = "Verified"
+	sim.advance()
+	sim.steps["prod-t00"], sim.steps["prod-t01"] = "Superseded", "Superseded"
+	assert.NotContains(t, sim.advance(), "audit", "no Verified target: audit waits")
+	_, complete := sim.wave()
+	assert.False(t, complete)
+
+	sim.steps["prod-t01"] = "Verified"
+	assert.Contains(t, sim.advance(), "audit", "one Verified target and the rest Superseded: audit starts")
+}

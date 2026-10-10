@@ -1492,12 +1492,21 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 			setBundleCondition(b, condReady, metav1.ConditionFalse, "Superseded",
 				fmt.Sprintf("environment %s: %s", s.Spec.Environment, s.Status.Message))
 			after = append(after, func() { r.superseded(b) })
+		case pipeline != nil && supersededFleet(pipeline, b, steps) != "":
+			// Every target of a fleet was deployed by newer Bundles (each
+			// step Superseded): this Bundle was replaced everywhere there.
+			fleet := supersededFleet(pipeline, b, steps)
+			supersede(b)
+			setBundleCondition(b, condReady, metav1.ConditionFalse, "Superseded",
+				fmt.Sprintf("every target of fleet %s was deployed by a newer bundle", fleet))
+			after = append(after, func() { r.superseded(b) })
 		case pipeline != nil:
 			expected, err := graph.PromotedEnvironments(pipeline, b)
 			// A fleet target whose step is Superseded (#1603: the rollback
 			// of that one target pushed first) is settled: the Bundle is
 			// Verified when every other environment is.
-			expected = slices.DeleteFunc(slices.Clone(expected), func(e string) bool { return supersededTargets(steps)[e] })
+			settled := supersededTargets(steps)
+			expected = slices.DeleteFunc(slices.Clone(expected), func(e string) bool { return settled[e] })
 			if err == nil && allVerified(b.Status.Environments, expected) {
 				b.Status.Phase = phaseVerified
 				if b.Status.Metrics == nil {
@@ -1739,6 +1748,40 @@ func supersededStep(steps []kardinalv1alpha1.PromotionStep) *kardinalv1alpha1.Pr
 		}
 	}
 	return nil
+}
+
+// supersededFleet returns a fleet of p that b promotes whose every target has
+// a Superseded step, or "".
+func supersededFleet(p *kardinalv1alpha1.Pipeline, b *kardinalv1alpha1.Bundle, steps []kardinalv1alpha1.PromotionStep) string {
+	settled := supersededTargets(steps)
+	if len(settled) == 0 {
+		return ""
+	}
+	expected, err := graph.PromotedEnvironments(p, b)
+	if err != nil {
+		return ""
+	}
+	targets, done := map[string]int{}, map[string]int{}
+	var fleets []string
+	for _, e := range expected {
+		f := graph.FleetOf(p, e)
+		if f == "" {
+			continue
+		}
+		if targets[f] == 0 {
+			fleets = append(fleets, f)
+		}
+		targets[f]++
+		if settled[e] {
+			done[f]++
+		}
+	}
+	for _, f := range fleets {
+		if done[f] == targets[f] {
+			return f
+		}
+	}
+	return ""
 }
 
 // supersededTargets returns the fleet targets whose step is Superseded: they
