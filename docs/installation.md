@@ -230,7 +230,7 @@ in environment variables, as the chart does for the SCM, UI and Bundle API token
 flags (`controller.extraArgs`). Only an empty `pprofAddress` turns it off.
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --reuse-values --set pprofAddress=:6060
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 --reset-then-reuse-values --set pprofAddress=:6060
 kubectl -n kardinal-system port-forward deploy/kardinal-promoter 6060:6060
 go tool pprof -sample_index=inuse_space http://localhost:6060/debug/pprof/heap
 # Compare two snapshots: what grew between them.
