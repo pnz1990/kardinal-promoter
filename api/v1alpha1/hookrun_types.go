@@ -30,6 +30,12 @@ const (
 	HookRunSkipped = "Skipped"
 )
 
+// HookRunSkippedAddedLate starts the status.message of a HookRun Skipped
+// because the hook was added to the Pipeline after its step passed the point
+// it runs at. A HookRun is also Skipped, with another message, when its
+// Bundle was superseded or rejected before the Job started.
+const HookRunSkippedAddedLate = "not run: the hook was added to the Pipeline after "
+
 // HookSpec is one pre- or post-deploy hook of a Pipeline environment: a
 // Kubernetes Job the controller runs once per Bundle and environment.
 type HookSpec struct {

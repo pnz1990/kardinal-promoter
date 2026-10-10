@@ -16,6 +16,8 @@
 package pipeline_test
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -31,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 )
 
@@ -243,6 +246,7 @@ func newClientWithIndex(scheme *runtime.Scheme, objs ...client.Object) client.Cl
 		WithScheme(scheme).
 		WithObjects(objs...).
 		WithStatusSubresource(&kardinalv1alpha1.Pipeline{}).
+		WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		WithIndex(&kardinalv1alpha1.PromotionStep{}, "spec.pipelineName",
 			func(obj client.Object) []string {
 				s, ok := obj.(*kardinalv1alpha1.PromotionStep)
@@ -300,4 +304,54 @@ func TestPipelineReconciler_NilMetricsWhenNoBundles(t *testing.T) {
 
 	assert.Nil(t, got.Status.DeploymentMetrics,
 		"DeploymentMetrics must be nil when no bundles exist")
+}
+
+// bundleListCounter counts the Bundles each BundleList read returns.
+type bundleListCounter struct {
+	client.Client
+	listed []int
+}
+
+func (c *bundleListCounter) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	err := c.Client.List(ctx, list, opts...)
+	if bl, ok := list.(*kardinalv1alpha1.BundleList); ok && err == nil {
+		c.listed = append(c.listed, len(bl.Items))
+	}
+	return err
+}
+
+// TestPipelineReconciler_ListsOnlyItsBundles (#1654): a Pipeline reconcile
+// reads its own Bundles through the spec.pipeline index, not every Bundle of
+// the namespace. In the release-candidate soak (100 Pipelines, about 5,200
+// Bundles kept) the namespace-wide list deep-copied about 5,200 Bundles per
+// reconcile and held 34% of the heap. Another Pipeline's Bundles must not
+// change this one's status either.
+func TestPipelineReconciler_ListsOnlyItsBundles(t *testing.T) {
+	now := time.Now().UTC()
+	ns := "default"
+	mine := makePipelineWithEnvs("my-app", ns, "test", "prod")
+	other := makePipelineWithEnvs("other-app", ns, "test", "prod")
+	objs := []client.Object{mine, other}
+	b := makeVerifiedBundle("my-app-v1", ns, "my-app", now.Add(-2*time.Hour))
+	b.Status = kardinalv1alpha1.BundleStatus{Phase: "Verified"}
+	objs = append(objs, b, makeVerifiedStep("my-app-v1", "my-app", "prod", ns, now.Add(-30*time.Minute)))
+	for i := 0; i < 40; i++ {
+		ob := makeVerifiedBundle(fmt.Sprintf("other-app-v%d", i), ns, "other-app", now.Add(-time.Duration(i)*time.Minute))
+		ob.Status = kardinalv1alpha1.BundleStatus{Phase: "Verified"}
+		objs = append(objs, ob)
+	}
+	c := &bundleListCounter{Client: newClientWithIndex(newPipelineScheme(), objs...)}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "my-app", Namespace: ns}}
+	_, err := (&pipeline.Reconciler{Client: c}).Reconcile(t.Context(), req)
+	require.NoError(t, err)
+
+	require.NotEmpty(t, c.listed, "the reconcile reads Bundles")
+	for _, n := range c.listed {
+		assert.Equal(t, 1, n, "a Bundle list of my-app returned other Pipelines' Bundles")
+	}
+	var got kardinalv1alpha1.Pipeline
+	require.NoError(t, c.Get(t.Context(), req.NamespacedName, &got))
+	require.NotNil(t, got.Status.DeploymentMetrics)
+	assert.Equal(t, 1, got.Status.DeploymentMetrics.SampleSize, "only my-app's Bundle counts")
 }
