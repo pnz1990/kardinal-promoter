@@ -775,24 +775,22 @@ no throughput is lost. A step waiting for its branch's turn (see above) stays be
 step that can run.
 
 Measured with the scale suite's `full` profile on one kind cluster (controller with `-race`, 2
-replicas), two runs each, before (main) and with fair queues. Tenant B promotes one Bundle on
-each of five 3-environment Pipelines while tenant A runs either a 149-environment wave on one
-branch (`TestScale_TenantFairness`) or 149 3-environment Pipelines on their own repositories,
-all at once (`TestScale_TenantFairnessManyRepos`):
+replicas), main and fair queues run alternately with the host's load under 64 at each start.
+Tenant B promotes one Bundle on each of five 3-environment Pipelines while tenant A runs either
+a 149-environment wave on one branch (`TestScale_TenantFairness`) or 149 3-environment
+Pipelines on their own repositories, all at once (`TestScale_TenantFairnessManyRepos`):
 
-| | A's load | A's steps p50 / p99 | B's steps p99 | B's Bundles p50 / p99 |
-|---|---|---|---|---|
-| one branch, before | 144 s, 137 s | 68 / 134 s, 58 / 133 s | 6 s, 6 s | 7 / 12 s, 7 / 12 s |
-| one branch, fair | 122 s, 152 s | 63 / 118 s, 68 / 145 s | 6 s, 6 s | 7 / 17 s, 12 / 18 s |
-| many repositories, before | 51 s, 54 s | 3 / 8 s, 3 / 8 s | 6 s, 7 s | 35 / 40 s, 32 / 48 s |
-| many repositories, fair | 44 s, 66 s | 2 / 13 s, 3 / 10 s | 7 s, 10 s | 14 / 21 s, 20 / 29 s |
+| | runs | A's load time | A's steps p50 / p99 | B's steps p99 | B's Bundles p50 / p99 |
+|---|---|---|---|---|---|
+| one branch, before | 2 | 137-144 s | 58-68 / 133-134 s | 6 s | 7 / 12 s |
+| one branch, fair | 1 | 117 s | 56 / 110 s | 6 s | 7 / 12 s |
+| many repositories, before | 7 | 51-67 s (mean 58) | 2-3 / 7-9 s | 6-7 s | 25-41 / 40-53 s |
+| many repositories, fair | 3 | 44-55 s (mean 50) | 2-3 / 7-8 s | 7-8 s | 13-19 / 21-31 s |
 
-On one branch the branch turns already let B through, and fair queues change nothing beyond
-the noise. With many repositories, B's Bundles waited behind A's backlog and took longer than
-all of A (35 s against 51 s); with fair queues they take less than half as long, and A's load
-time is within the noise (52 s against 55 s on average; the second fair run had the host's
-1-minute load at 110). B's steps were under 10 s in every run; what B waited for was the time
-between its steps, which the Bundle and Pipeline queues govern.
+On one branch the branch turns already let B through. With many repositories, B's Bundles
+waited behind A's backlog and finished after all of A; with fair queues they take about half
+as long, and A is not slower. B's steps stayed under 10 s in every run: what B waited for was
+the time between its steps, in the Bundle, Pipeline and PromotionStep queues.
 
 ### Leader election under API pressure
 
