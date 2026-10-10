@@ -417,18 +417,46 @@ func TestFleet_PerPromotionMetricChecks(t *testing.T) {
 	assert.ElementsMatch(t, []string{"prod-t00", "prod-t01", "prod-t02", "prod-t03"}, envs, "one MetricCheck instance per target")
 }
 
-// TestFleet_CompactUnsupportedFeatures: a Pipeline with a fleet is always
-// compact, so a feature the compact shape does not carry (hooks) refuses
-// its Bundles with the feature's name instead of building a Graph without it.
+// TestFleet_PreHooksArePaced: a fleet's pre hooks run per target, and only
+// for a target whose step pacing admitted and the Graph has read back
+// (started): with maxConcurrent 1, the second target's migration waits
+// until its step exists, so no hook runs for a target held back or dropped
+// by pacing (ledger G11). A post hook follows its step's Verifying as
+// elsewhere.
 //
-// Covers FLEET-06.
-func TestFleet_CompactUnsupportedFeatures(t *testing.T) {
-	p := bigFleet(3, 1, nil)
-	p.Spec.Environments[1].Hooks = []kardinalv1alpha1.HookSpec{hook("smoke", "post", hookJob)}
-	_, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app")})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "hooks")
-	assert.NotEmpty(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: p}), "the Pipeline reconciler reports it too")
+// Covers FLEET-08.
+func TestFleet_PreHooksArePaced(t *testing.T) {
+	p := bigFleet(2, 1, nil)
+	p.Spec.Environments[1].Hooks = []kardinalv1alpha1.HookSpec{hook("migrate", "pre", hookJob)}
+	b := makeBundle("app-v1", "app")
+	b.UID = "uid-1"
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: b})
+	require.NoError(t, err)
+	assertKroValid(t, res.Graph)
+	g := res.Graph
+	m0 := graph.HookRunName("app", "app-v1", "prod-t00", "pre", "migrate")
+	m1 := graph.HookRunName("app", "app-v1", "prod-t01", "pre", "migrate")
+	admitted := func(steps map[string]string) []string {
+		vars := compactRunVars(t, g, nil, nil, nil, nil)
+		var observed []interface{}
+		for env, state := range steps {
+			labels := map[string]interface{}{"kardinal.io/environment": env}
+			if env != "test" {
+				labels[graph.LabelFleet] = "prod"
+			}
+			observed = append(observed, map[string]interface{}{"metadata": map[string]interface{}{
+				"name": "app-app-v1-" + env, "labels": labels}, "status": map[string]interface{}{"state": state}})
+		}
+		vars[graph.NodeStepsObserved] = observed
+		sim := newCompactSim(t, g)
+		vars[graph.NodePromotionState] = sim.def(graph.NodePromotionState, vars)
+		vars[graph.NodeRunState] = sim.def(graph.NodeRunState, vars)
+		return admittedNames(t, g, graph.NodePromotionHooks, vars)
+	}
+	assert.Empty(t, admitted(map[string]string{"test": "Verified"}), "no target step yet: no hook")
+	assert.Equal(t, []string{m0}, admitted(map[string]string{"test": "Verified", "prod-t00": ""}),
+		"the admitted target's hook; prod-t01 waits for a place")
+	assert.ElementsMatch(t, []string{m0, m1}, admitted(map[string]string{"test": "Verified", "prod-t00": "Verified", "prod-t01": ""}))
 }
 
 // TestFleet_SinkEnvironments (DORA): a fleet that is the last environment

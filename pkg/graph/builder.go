@@ -766,16 +766,32 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		}
 
 		if compact {
+			stepName := promotionStepK8sName(pipelineName, bundle.Name, envName)
 			m := members[envName]
+			held := heldBundle(pipeline, envName, m.fleet) != "" && heldBundle(pipeline, envName, m.fleet) != bundle.Name
+			iv := ""
+			if len(upstreams) == 0 {
+				iv = ivName // a root step and its pre hooks wait for the image verification
+			}
+			extras, err := buildCompactEnvExtras(hookNodesInput{
+				pipeline: pipelineName, bundle: bundle.Name, namespace: bundle.Namespace,
+				bundleUID: string(bundle.UID), env: findEnvSpec(pipeline, envName), stepK8sName: stepName,
+				imageVerification: iv,
+			}, analyses, bundle, rawUpstreams, envGates, held)
+			if err != nil {
+				return nil, nil, nil, err
+			}
 			compactSteps = append(compactSteps, compactStep{env: envName,
-				name:           promotionStepK8sName(pipelineName, bundle.Name, envName),
-				prStatus:       prName,
-				upstreams:      rawUpstreams,
-				gates:          envGates,
-				fleet:          m.fleet,
-				index:          m.index,
-				maxConcurrent:  m.maxConcurrent,
-				maxUnavailable: m.maxUnavailable,
+				name:              stepName,
+				prStatus:          prName,
+				upstreams:         rawUpstreams,
+				gates:             envGates,
+				extras:            extras,
+				imageVerification: iv,
+				fleet:             m.fleet,
+				index:             m.index,
+				maxConcurrent:     m.maxConcurrent,
+				maxUnavailable:    m.maxUnavailable,
 			})
 			continue
 		}
@@ -813,6 +829,13 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	if compact {
 		nodes = append(nodes, compactNodes(pipeline, bundle, compactSteps, gates.collectionIDs())...)
 		nodes = append(nodes, compactMetricNodes(pipelineName, bundle.Name, compactMetrics)...)
+		var hooks []compactHook
+		var runs []compactRun
+		for _, s := range compactSteps {
+			hooks = append(hooks, s.extras.hooks...)
+			runs = append(runs, s.extras.runs...)
+		}
+		nodes = append(nodes, compactRunNodes(pipeline, bundle, hooks, runs)...)
 	}
 
 	return nodes, gates.instances, upstreamEnvs, nil

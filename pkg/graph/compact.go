@@ -199,6 +199,10 @@ type compactStep struct {
 	// maxUnavailable stops the fleet's admissions once that many of its
 	// targets Failed (0: unset).
 	maxUnavailable int
+	extras         compactEnvExtras
+	// imageVerification is the Bundle's ImageVerification name for a root
+	// step of a Pipeline with spec.imageVerification, else "".
+	imageVerification string
 }
 
 // compactNodes builds the compact shape's PromotionStep nodes: the DAG as data
@@ -218,6 +222,12 @@ type compactStep struct {
 // otherwise ready as soon as they are.
 func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
 	steps []compactStep, gateCollections []string) []GraphNode {
+	var anyHooks, anyAnalyses, anyIV bool
+	for _, s := range steps {
+		anyHooks = anyHooks || len(s.extras.hookRuns) > 0
+		anyAnalyses = anyAnalyses || len(s.extras.analysisRuns) > 0
+		anyIV = anyIV || s.imageVerification != ""
+	}
 	entries := make([]interface{}, len(steps))
 	fleets := false
 	for _, s := range steps {
@@ -243,6 +253,22 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 		if fleets {
 			e := entries[i].(map[string]interface{})
 			e["fleet"], e["index"], e["maxConcurrent"], e["maxUnavailable"] = s.fleet, s.index, s.maxConcurrent, s.maxUnavailable
+		}
+		if anyHooks || anyAnalyses {
+			// Hooks and analyses (compact_extras.go): the step's lists, and
+			// the runs its spec.live reads.
+			e := entries[i].(map[string]interface{})
+			e["preHooks"] = toInterfaces(s.extras.preHooks)
+			e["postHooks"] = toInterfaces(s.extras.postHooks)
+			e["analyses"] = toInterfaces(s.extras.analyses)
+			e["analysisPolicy"] = s.extras.policy
+			e["hookRuns"] = toInterfaces(s.extras.hookRuns)
+			e["analysisRuns"] = toInterfaces(s.extras.analysisRuns)
+		}
+		if anyIV {
+			// Image verification (imageverify.go): a root step names the
+			// Bundle's ImageVerification and waits for it; the others "".
+			entries[i].(map[string]interface{})["imageVerification"] = s.imageVerification
 		}
 	}
 
@@ -286,6 +312,27 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 	}
 
 	step := func(f string) string { return "${" + iterStep + "." + f + "}" }
+	stepSpec := map[string]interface{}{
+		"pipelineName":   pipeline.Name,
+		"bundleName":     bundle.Name,
+		"environment":    step("environment"),
+		"stepType":       defaultStepType(bundle.Spec.Type),
+		"prStatusRef":    step("prStatus"),
+		"upstreamStates": step("upstreamStates"),
+		"requiredGates":  step("gates"),
+	}
+	if anyHooks || anyAnalyses {
+		stepSpec["preHooks"] = step("preHooks")
+		stepSpec["postHooks"] = step("postHooks")
+		stepSpec["analyses"] = step("analyses")
+		stepSpec["analysisPolicy"] = step("analysisPolicy")
+	}
+	if anyIV {
+		stepSpec["imageVerification"] = step("imageVerification")
+	}
+	if anyHooks || anyAnalyses || anyIV {
+		stepSpec["live"] = compactLive(bundle, anyHooks, anyAnalyses, anyIV)
+	}
 	nodes := []GraphNode{
 		{ID: NodePromotionDAG, Def: map[string]interface{}{"steps": entries}},
 		{
@@ -337,15 +384,7 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 						LabelBundleUID:            string(bundle.UID),
 					},
 				},
-				"spec": map[string]interface{}{
-					"pipelineName":   pipeline.Name,
-					"bundleName":     bundle.Name,
-					"environment":    step("environment"),
-					"stepType":       defaultStepType(bundle.Spec.Type),
-					"prStatusRef":    step("prStatus"),
-					"upstreamStates": step("upstreamStates"),
-					"requiredGates":  step("gates"),
-				},
+				"spec": stepSpec,
 			},
 			ReadyWhen: []string{`${each.?status.?state.orValue("") == "Verified"}`},
 		},

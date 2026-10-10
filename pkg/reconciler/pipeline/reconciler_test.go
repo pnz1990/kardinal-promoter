@@ -571,6 +571,7 @@ func TestPipelineReconciler_DeletedBeforeStatusWrite(t *testing.T) {
 	p := newPipeline("podinfo", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}})
 	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(p).
 		WithStatusSubresource(&kardinalv1alpha1.Pipeline{}).
+		WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		WithIndex(&kardinalv1alpha1.PromotionStep{}, "spec.pipelineName", func(client.Object) []string { return nil }).
 		WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).
 		Build()
