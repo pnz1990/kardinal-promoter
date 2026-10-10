@@ -176,10 +176,17 @@ func (c *remoteCache) nextGeneration(key string, gen uint64) {
 	}
 }
 
-// tokenKey identifies token in a cache key without holding it.
-func tokenKey(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:8])
+// authKey identifies the credential auth in a cache key without holding it:
+// the token, the ssh key and the known_hosts, so two Pipelines with other
+// credentials for one URL never share an answer.
+func authKey(auth scm.GitAuth) string {
+	h := sha256.New()
+	for _, part := range [][]byte{[]byte(auth.Token), auth.SSHPrivateKey, auth.SSHKnownHosts} {
+		_, _ = h.Write([]byte(strconv.Itoa(len(part))))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write(part)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 type headsEntry struct {
@@ -192,34 +199,34 @@ type headsEntry struct {
 
 // remoteHeads returns the branch heads of url, from the cache when they are
 // younger than remoteHeadsTTL.
-func (c *remoteCache) remoteHeads(ctx context.Context, rh scm.RemoteHeadReader, url, token string, now time.Time) (map[string]string, error) {
+func (c *remoteCache) remoteHeads(ctx context.Context, rh scm.RemoteHeadReader, url string, auth scm.GitAuth, now time.Time) (map[string]string, error) {
 	if h, ok := c.cachedHeads(url, now); ok {
 		return h, nil
 	}
 	c.missed("heads")
-	return c.loadHeads(ctx, rh, url, token, now, false)
+	return c.loadHeads(ctx, rh, url, auth, now, false)
 }
 
 // readHeads reads the branch heads of url now, bypassing the cache, and
 // stores them for the others. The read starts after the call: a read another
 // step started earlier, which can predate a commit this caller knows of, is
 // not used.
-func (c *remoteCache) readHeads(ctx context.Context, rh scm.RemoteHeadReader, url, token string, now time.Time) (map[string]string, error) {
-	return c.loadHeads(ctx, rh, url, token, now, true)
+func (c *remoteCache) readHeads(ctx context.Context, rh scm.RemoteHeadReader, url string, auth scm.GitAuth, now time.Time) (map[string]string, error) {
+	return c.loadHeads(ctx, rh, url, auth, now, true)
 }
 
 // loadHeads reads the branch heads of url, sharing a read in progress
 // (unless fresh: shared), and stores them for the others. A shared (not
 // fresh) read first checks the cache again: another flight may have stored
 // heads since the caller missed.
-func (c *remoteCache) loadHeads(ctx context.Context, rh scm.RemoteHeadReader, url, token string, now time.Time, fresh bool) (map[string]string, error) {
-	v, _, err := c.shared(ctx, "heads\x00"+url+"\x00"+tokenKey(token), fresh, func(ctx context.Context, started uint64) (any, error) {
+func (c *remoteCache) loadHeads(ctx context.Context, rh scm.RemoteHeadReader, url string, auth scm.GitAuth, now time.Time, fresh bool) (map[string]string, error) {
+	v, _, err := c.shared(ctx, "heads\x00"+url+"\x00"+authKey(auth), fresh, func(ctx context.Context, started uint64) (any, error) {
 		if !fresh {
 			if h, ok := c.cachedHeads(url, now); ok {
 				return h, nil
 			}
 		}
-		heads, err := rh.RemoteHeads(ctx, url, token)
+		heads, err := rh.RemoteHeads(ctx, url, auth)
 		if err != nil {
 			return nil, err
 		}
@@ -260,7 +267,7 @@ func (c *remoteCache) storeHeads(url string, heads map[string]string, now time.T
 }
 
 // branchHistory returns the last maxCommits commits of branch at head.
-func (c *remoteCache) branchHistory(ctx context.Context, rh scm.RemoteHeadReader, url, branch, head, token string, maxCommits int) ([]scm.CommitPaths, error) {
+func (c *remoteCache) branchHistory(ctx context.Context, rh scm.RemoteHeadReader, url, branch, head string, auth scm.GitAuth, maxCommits int) ([]scm.CommitPaths, error) {
 	key := url + "\x00" + branch + "\x00" + head + "\x00" + strconv.Itoa(maxCommits)
 	if h, ok := c.cachedHistory(key); ok {
 		return h, nil
@@ -268,11 +275,11 @@ func (c *remoteCache) branchHistory(ctx context.Context, rh scm.RemoteHeadReader
 	c.missed("history")
 	// Inside the flight: check again (another flight may have stored it
 	// since), and store before the flight ends.
-	v, _, err := c.shared(ctx, "history\x00"+key+"\x00"+tokenKey(token), false, func(ctx context.Context, _ uint64) (any, error) {
+	v, _, err := c.shared(ctx, "history\x00"+key+"\x00"+authKey(auth), false, func(ctx context.Context, _ uint64) (any, error) {
 		if h, ok := c.cachedHistory(key); ok {
 			return h, nil
 		}
-		h, err := rh.BranchHistory(ctx, url, branch, token, maxCommits)
+		h, err := rh.BranchHistory(ctx, url, branch, auth, maxCommits)
 		if err != nil {
 			return nil, err
 		}
@@ -317,8 +324,8 @@ func (c *remoteCache) storeHistory(key string, h []scm.CommitPaths) {
 // A graph read after the branch moved past head is returned but not cached
 // under head. Graphs are kept per token, so a Pipeline never gets an answer
 // read with another Pipeline's credentials.
-func (c *remoteCache) branchGraph(ctx context.Context, gr scm.BranchGraphReader, url, branch, head, token string, maxCommits int) (branchGraph, error) {
-	key := url + "\x00" + branch + "\x00" + head + "\x00" + strconv.Itoa(maxCommits) + "\x00" + tokenKey(token)
+func (c *remoteCache) branchGraph(ctx context.Context, gr scm.BranchGraphReader, url, branch, head string, auth scm.GitAuth, maxCommits int) (branchGraph, error) {
+	key := url + "\x00" + branch + "\x00" + head + "\x00" + strconv.Itoa(maxCommits) + "\x00" + authKey(auth)
 	if g, ok := c.cachedGraph(key); ok {
 		return g, nil
 	}
@@ -327,7 +334,7 @@ func (c *remoteCache) branchGraph(ctx context.Context, gr scm.BranchGraphReader,
 		if g, ok := c.cachedGraph(key); ok {
 			return g, nil
 		}
-		h, graph, err := gr.BranchGraph(ctx, url, branch, token, maxCommits)
+		h, graph, err := gr.BranchGraph(ctx, url, branch, auth, maxCommits)
 		if err != nil {
 			return branchGraph{}, err
 		}

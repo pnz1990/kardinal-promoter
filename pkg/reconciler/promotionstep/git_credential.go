@@ -74,6 +74,13 @@ type gitCredential struct {
 	readErr error
 }
 
+// auth is the git authentication of c, for every git remote call (clone,
+// push, ls-remote, history reads): the token over http(s), the ssh key and
+// known_hosts over ssh.
+func (c gitCredential) auth() scm.GitAuth {
+	return scm.GitAuth{Token: c.token, SSHPrivateKey: c.sshKey, SSHKnownHosts: c.knownHosts}
+}
+
 // resolveGitCredential reads the token from the Secret that
 // Pipeline spec.git.secretRef names, in the Pipeline's namespace
 // (unsupportedConfig has already refused any other secretRef.namespace,
