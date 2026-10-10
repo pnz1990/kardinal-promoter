@@ -337,3 +337,32 @@ func TestCountsFromZero(t *testing.T) {
 	assert.InDelta(t, 151+10+5, got["ok"], 0, "a new series from 0, an old one from its start, a reset one its end")
 	assert.InDelta(t, 3, got["non_fast_forward"], 0, "early refusals are not hidden")
 }
+
+// TestSettleGoroutines (#1658 QA): the series end once the goroutine count
+// stops falling, at most goroutineSettleMax after the queues drained.
+//
+// Covers SCALE-INV-LEAK-01.
+func TestSettleGoroutines(t *testing.T) {
+	run := func(counts ...float64) (time.Duration, int) {
+		t0 := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+		clock, reads := t0, 0
+		end := settleGoroutines(func() time.Time { return clock }, func(d time.Duration) { clock = clock.Add(d) },
+			func() (float64, bool) {
+				if reads >= len(counts) {
+					return 0, false
+				}
+				reads++
+				return counts[reads-1], true
+			})
+		return end.Sub(t0), reads
+	}
+	d, n := run(520, 520)
+	assert.Equal(t, goroutineSettleStep, d, "flat: one step")
+	assert.Equal(t, 2, n)
+	d, _ = run(1671, 1145, 600, 511, 515)
+	assert.Equal(t, 4*goroutineSettleStep, d, "the burst drains, then the count stops falling")
+	d, _ = run(1600, 1500, 1400, 1300, 1200, 1100, 1000, 900, 800)
+	assert.Equal(t, goroutineSettleMax, d, "still falling: capped")
+	d, _ = run()
+	assert.Zero(t, d, "no reading: no wait")
+}
