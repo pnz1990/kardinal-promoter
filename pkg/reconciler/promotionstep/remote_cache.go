@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -44,6 +45,23 @@ type remoteCache struct {
 	graphs  map[string]branchGraph
 	gorder  []string // graph keys, oldest first
 	flight  singleflight.Group
+	// seq orders requests and flights: a caller is numbered when it asks, a
+	// flight when its read starts (shared).
+	seq atomic.Uint64
+	// gen is the current flight generation of each key; a caller that must
+	// not use the flight in progress moves its key to the next one.
+	gen map[string]uint64
+	// onWait, when set (tests), is called once a caller waits for a read.
+	onWait func(key string)
+}
+
+// maxGenerations bounds remoteCache.gen.
+const maxGenerations = 4096
+
+// flightResult is a shared read's value and the seq its read started at.
+type flightResult struct {
+	val     any
+	started uint64
 }
 
 // branchGraph is a cached scm.BranchGraphReader result.
@@ -56,17 +74,68 @@ type branchGraph struct {
 // read runs on a context detached from the first caller's cancellation, so
 // one caller giving up does not fail the others, bounded by historyTimeout;
 // each caller still returns when its own ctx ends.
-func (c *remoteCache) shared(ctx context.Context, key string, read func(context.Context) (any, error)) (any, error) {
-	ch := c.flight.DoChan(key, func() (any, error) {
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), historyTimeout)
-		defer cancel()
-		return read(rctx)
-	})
-	select {
-	case r := <-ch:
-		return r.Val, r.Err
-	case <-ctx.Done():
-		return nil, ctx.Err()
+//
+// A caller may join a read that started before it asked, and use its value
+// (a wave of steps shares one read). Two exceptions (#1644):
+//   - fresh: the caller wants data read after it asked (heads read again
+//     because the cached ones are older than a commit it knows). It moves
+//     the key to a new generation first, so it starts, or shares with other
+//     fresh callers, a new read instead of waiting for the old one.
+//   - a read that started before the caller and failed is not the caller's
+//     answer: it may have spent most of its historyTimeout before the
+//     caller came. The caller reads again, once, sharing that new read with
+//     the others that joined the failed one.
+func (c *remoteCache) shared(ctx context.Context, key string, fresh bool, read func(context.Context) (any, error)) (any, error) {
+	asked := c.seq.Add(1)
+	if fresh {
+		c.nextGeneration(key, c.generation(key))
+	}
+	for attempt := 0; ; attempt++ {
+		gen := c.generation(key)
+		ch := c.flight.DoChan(key+"\x00"+strconv.FormatUint(gen, 10), func() (any, error) {
+			started := c.seq.Add(1)
+			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), historyTimeout)
+			defer cancel()
+			v, err := read(rctx)
+			return flightResult{val: v, started: started}, err
+		})
+		if c.onWait != nil {
+			c.onWait(key)
+		}
+		var r singleflight.Result
+		select {
+		case r = <-ch:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		res, _ := r.Val.(flightResult)
+		if attempt == 0 && res.started < asked && (fresh || r.Err != nil) {
+			c.nextGeneration(key, gen)
+			continue
+		}
+		return res.val, r.Err
+	}
+}
+
+// generation returns key's current flight generation.
+func (c *remoteCache) generation(key string) uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.gen[key]
+}
+
+// nextGeneration moves key past generation gen. Callers that saw gen move it
+// once: they then share one read of the next generation.
+func (c *remoteCache) nextGeneration(key string, gen uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gen == nil || len(c.gen) >= maxGenerations {
+		// Forgetting generations is safe: a read of an old one ends within
+		// historyTimeout, and its result is still checked against asked.
+		c.gen = map[string]uint64{}
+	}
+	if c.gen[key] == gen {
+		c.gen[key] = gen + 1
 	}
 }
 
@@ -90,13 +159,21 @@ func (c *remoteCache) remoteHeads(ctx context.Context, rh scm.RemoteHeadReader, 
 	if ok && now.Sub(e.at) < remoteHeadsTTL && !now.Before(e.at) {
 		return e.heads, nil
 	}
-	return c.readHeads(ctx, rh, url, token, now)
+	return c.loadHeads(ctx, rh, url, token, now, false)
 }
 
 // readHeads reads the branch heads of url now, bypassing the cache, and
-// stores them for the others.
+// stores them for the others. The read starts after the call: a read another
+// step started earlier, which can predate a commit this caller knows of, is
+// not used.
 func (c *remoteCache) readHeads(ctx context.Context, rh scm.RemoteHeadReader, url, token string, now time.Time) (map[string]string, error) {
-	v, err := c.shared(ctx, "heads\x00"+url+"\x00"+tokenKey(token), func(ctx context.Context) (any, error) {
+	return c.loadHeads(ctx, rh, url, token, now, true)
+}
+
+// loadHeads reads the branch heads of url, sharing a read in progress
+// (unless fresh: shared), and stores them for the others.
+func (c *remoteCache) loadHeads(ctx context.Context, rh scm.RemoteHeadReader, url, token string, now time.Time, fresh bool) (map[string]string, error) {
+	v, err := c.shared(ctx, "heads\x00"+url+"\x00"+tokenKey(token), fresh, func(ctx context.Context) (any, error) {
 		return rh.RemoteHeads(ctx, url, token)
 	})
 	if err != nil {
@@ -121,7 +198,7 @@ func (c *remoteCache) branchHistory(ctx context.Context, rh scm.RemoteHeadReader
 	if ok {
 		return h, nil
 	}
-	v, err := c.shared(ctx, "history\x00"+key+"\x00"+tokenKey(token), func(ctx context.Context) (any, error) {
+	v, err := c.shared(ctx, "history\x00"+key+"\x00"+tokenKey(token), false, func(ctx context.Context) (any, error) {
 		return rh.BranchHistory(ctx, url, branch, token, maxCommits)
 	})
 	if err != nil {
@@ -162,7 +239,7 @@ func (c *remoteCache) branchGraph(ctx context.Context, gr scm.BranchGraphReader,
 	if ok {
 		return g, nil
 	}
-	v, err := c.shared(ctx, "graph\x00"+key, func(ctx context.Context) (any, error) {
+	v, err := c.shared(ctx, "graph\x00"+key, false, func(ctx context.Context) (any, error) {
 		h, graph, err := gr.BranchGraph(ctx, url, branch, token, maxCommits)
 		return branchGraph{head: h, graph: graph}, err
 	})
