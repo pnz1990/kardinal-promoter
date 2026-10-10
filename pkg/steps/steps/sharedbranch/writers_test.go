@@ -1,7 +1,10 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 
-package steps_test
+// Package sharedbranch_test holds the sixty-writer shared-branch test on its
+// own: under -race it takes most of a minute or more, and in pkg/steps/steps
+// it pushed that package to CI's 120s test timeout.
+package sharedbranch_test
 
 import (
 	"context"
@@ -22,6 +25,8 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
+	// The built-in steps (git-clone, git-commit, git-push) register here.
+	_ "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
 
 // writeEnvFile is a test step that writes the environment's file, as an
