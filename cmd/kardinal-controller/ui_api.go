@@ -235,6 +235,13 @@ type uiHoldResponse struct {
 	// ExpiresAt is when the controller removes the hold, RFC 3339; empty:
 	// when it is released.
 	ExpiresAt string `json:"expiresAt,omitempty"`
+	// BundleMissing is true when the controller found the rollback Bundle
+	// missing (status.holdStates, #1629). The hold stays in effect.
+	BundleMissing bool `json:"bundleMissing,omitempty"`
+	// Message says what is wrong and how to recover, with BundleMissing.
+	Message string `json:"message,omitempty"`
+	// ReleaseCommand is the CLI command that releases the hold.
+	ReleaseCommand string `json:"releaseCommand"`
 }
 
 // holdResponse is the UI shape of the hold of env in p, or nil.
@@ -243,7 +250,11 @@ func holdResponse(p *v1alpha1.Pipeline, env string) *uiHoldResponse {
 	if h == nil {
 		return nil
 	}
-	out := &uiHoldResponse{Bundle: h.Bundle, Reason: h.Reason, CreatedBy: h.CreatedBy}
+	out := &uiHoldResponse{Bundle: h.Bundle, Reason: h.Reason, CreatedBy: h.CreatedBy,
+		ReleaseCommand: "kardinal release-hold " + p.Name + " --env " + env}
+	if st := p.HoldState(h); st != nil && st.State == v1alpha1.HoldStateBundleMissing {
+		out.BundleMissing, out.Message = true, st.Message
+	}
 	if h.CreatedAt != nil {
 		out.CreatedAt = h.CreatedAt.UTC().Format(time.RFC3339)
 	}

@@ -112,6 +112,7 @@ func main() {
 		scmProviderType        string
 		scmAPIURL              string
 		gateStatusHeartbeat    time.Duration
+		holdBundleGrace        time.Duration
 		auditRetention         bool
 		auditMaxAge            time.Duration
 		auditMaxPerPipeline    int
@@ -164,6 +165,9 @@ func main() {
 	flag.StringVar(&overrideIdentityPolicy, "override-identity-policy", "",
 		"Name of the chart's gate-overrides ValidatingAdmissionPolicy and binding. The controller records an "+
 			"override's createdBy as verified only while both exist; empty records every override unverified.")
+	flag.DurationVar(&holdBundleGrace, "hold-bundle-grace", pipelinereconciler.DefaultHoldBundleGrace,
+		"How long a hold (Pipeline spec.holds) may name a rollback Bundle that does not exist before the controller "+
+			"reports it (condition HoldBundleMissing, a Warning Event, an AuditEvent). The hold stays in effect.")
 	flag.DurationVar(&gateStatusHeartbeat, "gate-status-heartbeat", policygaterecon.DefaultStatusHeartbeat,
 		"Longest a PolicyGate's status goes unwritten while its result does not change. Each status write makes kro "+
 			"re-check the gate's whole Graph. 0 writes the status on every evaluation.")
@@ -756,7 +760,7 @@ func main() {
 	}
 
 	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos,
-		CompactAbove: &graphCompactAbove, Workers: *workers["pipeline"]}).
+		CompactAbove: &graphCompactAbove, Workers: *workers["pipeline"], HoldBundleGrace: holdBundleGrace, Recorder: eventRecorder}).
 		SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PipelineReconciler")
 	}

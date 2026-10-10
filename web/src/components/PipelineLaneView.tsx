@@ -260,6 +260,12 @@ export function PipelineLaneView({
               (hold.expiresAt ? ` (until ${hold.expiresAt})` : '')}>
             <span className="stage-card__hold-badge">Held</span>
             <span className="stage-card__hold-reason">{hold.reason}</span>
+            {hold.bundleMissing && (
+              <span className="stage-card__hold-missing" role="alert">
+                Rollback Bundle {hold.bundle} does not exist; the hold stays in effect.
+                {hold.releaseCommand && <> Release with <code>{hold.releaseCommand}</code>.</>}
+              </span>
+            )}
           </div>
         )}
 

@@ -1479,6 +1479,58 @@ spec:
                       Until a Bundle is Verified there, deploymentMetrics is not set at all.
                     type: integer
                 type: object
+              holdStates:
+                description: |-
+                  HoldStates says, per hold of spec.holds, whether its rollback Bundle
+                  exists (#1629). A hold whose Bundle is missing (a crash between the
+                  hold and the Bundle create, or the Bundle deleted) stays in effect;
+                  past the grace the controller reports it, and a human releases it.
+                items:
+                  description: |-
+                    EnvironmentHoldState is the state of one hold, written by the Pipeline
+                    reconciler.
+                  properties:
+                    bundle:
+                      description: Bundle is the hold's Bundle the state was found
+                        for.
+                      type: string
+                    bundleMissingSince:
+                      description: |-
+                        BundleMissingSince is when the controller first found the Bundle
+                        missing: the grace counts from it, not from the client-set createdAt.
+                      format: date-time
+                      type: string
+                    createdAt:
+                      description: |-
+                        CreatedAt is the hold's createdAt: with the environment and the
+                        Bundle it identifies the hold, so a hold released and added again
+                        gets a state, and a report, of its own.
+                      format: date-time
+                      type: string
+                    environment:
+                      description: Environment is the held environment.
+                      type: string
+                    message:
+                      description: Message says what is wrong and how to recover.
+                      type: string
+                    reportedAt:
+                      description: |-
+                        ReportedAt is when the controller reported the missing Bundle, once,
+                        past the grace.
+                      format: date-time
+                      type: string
+                    state:
+                      description: State is Active or BundleMissing.
+                      type: string
+                  required:
+                  - bundle
+                  - environment
+                  - state
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - environment
+                x-kubernetes-list-type: map
               observedHolds:
                 description: |-
                   ObservedHolds is spec.holds as the Pipeline reconciler last recorded
@@ -1538,8 +1590,9 @@ spec:
                 x-kubernetes-list-type: map
               pendingAuditEvents:
                 description: |-
-                  PendingAuditEvents are the HoldCreated and HoldReleased AuditEvents not
-                  yet written (the audit outbox, #1552). Each entry is stored in the same
+                  PendingAuditEvents are the HoldCreated, HoldReleased and
+                  HoldBundleMissing AuditEvents not yet written (the audit outbox,
+                  #1552). Each entry is stored in the same
                   status patch as observedHolds and removed once the AuditEvent exists.
                   Normally empty.
                 items:
@@ -1578,7 +1631,8 @@ spec:
                             Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed",
                                           "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
                                           "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden",
-                                          "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased".
+                                          "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
+                                          "HoldBundleMissing".
                             ApprovalRecorded and ApprovalRevoked are written by an approval gate
                             when a decision (kardinal approve) appears in or leaves its
                             spec.approvals.
@@ -1604,6 +1658,7 @@ spec:
                           - ApprovalRevoked
                           - HoldCreated
                           - HoldReleased
+                          - HoldBundleMissing
                           type: string
                         bundleName:
                           description: BundleName is the name of the Bundle being
