@@ -15,7 +15,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
@@ -132,7 +131,7 @@ func (r *Reconciler) patchState(ctx context.Context, base, ps *v1alpha1.Promotio
 	// Locked on the resourceVersion base was read at: a reconcile that read
 	// the step from a stale cache would otherwise repeat a transition a newer
 	// reconcile already wrote, with a second Event, AuditEvent and metric.
-	if err := r.Status().Patch(ctx, ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+	if err := r.patchStatusLocked(ctx, base, ps); err != nil {
 		if apierrors.IsNotFound(err) {
 			// Deleted while reconciling: nothing left to transition.
 			return false, nil

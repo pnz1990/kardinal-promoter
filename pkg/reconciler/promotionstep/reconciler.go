@@ -292,7 +292,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// With the resourceVersion read: a merge patch of status.hookRecords
 		// from a stale copy would drop records another reconcile wrote (QA
 		// #1493). A conflict reads the step again.
-		err := r.Status().Patch(ctx, &ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+		err := r.patchStatusLocked(ctx, base, &ps)
 		switch {
 		case apierrors.IsConflict(err):
 			return ctrl.Result{RequeueAfter: time.Second}, nil
@@ -1170,7 +1170,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		// progress would rewrite the step statuses a newer one wrote. (Not
 		// reached today: ExecuteFrom runs every remaining step and reports
 		// success only with nextIdx == len(seq).)
-		if patchErr := r.Status().Patch(ctx, ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); patchErr != nil {
+		if patchErr := r.patchStatusLocked(ctx, base, ps); patchErr != nil {
 			if apierrors.IsNotFound(patchErr) {
 				return ctrl.Result{}, nil
 			}
@@ -1354,7 +1354,7 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		// yet) would mark the credential missing again and emit a second
 		// Warning Event, and reset the backoff; its patch is refused with
 		// a Conflict instead, and it runs again on the fresh copy.
-		if patchErr := r.Status().Patch(ctx, ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); patchErr != nil {
+		if patchErr := r.patchStatusLocked(ctx, base, ps); patchErr != nil {
 			if apierrors.IsNotFound(patchErr) {
 				return ctrl.Result{}, nil
 			}
