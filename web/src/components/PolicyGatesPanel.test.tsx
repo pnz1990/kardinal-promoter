@@ -12,9 +12,12 @@
 // limitations under the License.
 
 // PolicyGatesPanel.test.tsx — Tests for the policy gates panel (#533).
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+const api = vi.hoisted(() => ({ recordApproval: vi.fn() }))
+vi.mock('../api/client', () => ({ api }))
+
 import { PolicyGatesPanel } from './PolicyGatesPanel'
 import type { PolicyGate } from '../types'
 
@@ -178,5 +181,39 @@ describe('PolicyGatesPanel — state from the UI API', () => {
   it('tells screen readers what "waiting" means, not only on hover', () => {
     render(<PolicyGatesPanel gates={[makeGate(waiting)]} />)
     expect(screen.getByRole('button', { name: /1 waiting, not ready, not holding the bundle/ })).toBeInTheDocument()
+  })
+})
+
+describe('PolicyGatesPanel — approval gates (E6)', () => {
+  it('shows the quorum and who approved under an approval gate', async () => {
+    const gate: PolicyGate = {
+      name: 'prod-approval', namespace: 'default', expression: 'true', ready: false, state: 'Block', holding: true,
+      reason: 'waiting for approvals: 1 of 2 (alice)', bundle: 'app-1', environment: 'prod',
+      approval: { required: 2, approved: 1, decisions: [{ user: 'alice', decision: 'approve', counted: true }] },
+    }
+    render(<PolicyGatesPanel gates={[gate]} />)
+    // A holding gate opens the panel by itself.
+    expect(await screen.findByRole('meter', { name: 'Approvals' })).toHaveAttribute('aria-valuetext', '1 of 2 approvals')
+    expect(screen.getByText('kardinal approve app-1 --env prod -n default')).toBeInTheDocument()
+  })
+
+  it('tells the parent after a decision, so the gates refresh', async () => {
+    const user = userEvent.setup()
+    const onDecided = vi.fn()
+    api.recordApproval.mockResolvedValue({ outcome: 'Recorded', approval: 'a1', user: 'bob', message: 'Recorded: bob approves app-1 for prod' })
+    const gate: PolicyGate = {
+      name: 'prod-approval', namespace: 'team-a', expression: 'true', ready: false, state: 'Block', holding: true,
+      reason: 'waiting for approvals: 0 of 1', bundle: 'app-1', environment: 'prod', approval: { required: 1, approved: 0 },
+    }
+    render(<PolicyGatesPanel gates={[gate]} onDecided={onDecided} />)
+    await user.click(await screen.findByRole('button', { name: 'Approve' }))
+    expect(api.recordApproval).toHaveBeenCalledWith(expect.objectContaining({ bundle: 'app-1', environment: 'prod', namespace: 'team-a' }))
+    await screen.findByText('Recorded: bob approves app-1 for prod')
+    expect(onDecided).toHaveBeenCalledOnce()
+  })
+
+  it('a gate without an approval policy has no quorum', () => {
+    render(<PolicyGatesPanel gates={[{ name: 'g', namespace: 'default', expression: 'true', ready: false, state: 'Block', holding: true }]} />)
+    expect(screen.queryByRole('meter')).not.toBeInTheDocument()
   })
 })

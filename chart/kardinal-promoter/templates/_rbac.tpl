@@ -85,6 +85,13 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["batch"]
   resources: ["jobs"]
   verbs: ["get", "list", "watch", "create", "delete"]
+# Approvals: the UI records, replaces and revokes decisions for its
+# TokenReview user (POST /api/v1/ui/approvals). An Approval is immutable, so
+# there is no update; the approvals admission policy admits the controller's
+# writes only for Approvals marked kardinal.io/recorded-via: ui.
+- apiGroups: ["kardinal.io"]
+  resources: ["approvals"]
+  verbs: ["get", "list", "watch", "create", "delete"]
 # Audit records are append-only. audit.retention.enabled (the default) adds
 # delete: the leader deletes records past their retention
 # (pkg/reconciler/auditretention).
