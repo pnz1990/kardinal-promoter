@@ -293,7 +293,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// With the resourceVersion read: a merge patch of status.hookRecords
 		// from a stale copy would drop records another reconcile wrote (QA
 		// #1493). A conflict reads the step again.
-		err := r.Status().Patch(ctx, &ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+		err := r.patchStatusLocked(ctx, base, &ps)
 		switch {
 		case apierrors.IsConflict(err):
 			return ctrl.Result{RequeueAfter: time.Second}, nil
@@ -958,7 +958,7 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 		return ctrl.Result{}, fmt.Errorf("load bundle: %w", err)
 	}
 
-	seq := stepSequence(env, bundle)
+	seq := stepSequence(pipeline, env, bundle)
 	log.Info().
 		Str("env", ps.Spec.Environment).
 		Str("approval", approvalMode).
@@ -1046,7 +1046,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		// by hand or it started before status.steps existed. Record the list
 		// and run it from the next reconcile: the finalizer sync at the end of
 		// this one then adds kardinal.io/close-pr before open-pr can run.
-		ps.Status.Steps = initStepStatuses(stepSequence(env, bundle))
+		ps.Status.Steps = initStepStatuses(stepSequence(pipeline, env, bundle))
 		if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 			if apierrors.IsNotFound(err) {
 				return ctrl.Result{}, nil
@@ -1107,12 +1107,27 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 			}
 		}()
 	}
+	// The cache can lag this controller's own last write; the steps must not
+	// run from a status that is already outdated (#1664). base is the copy
+	// the cache returned. Checked once the branch turn is taken, so a step
+	// waiting for its turn makes no API read; a requeue gives the turn back.
+	if behind, err := r.cacheBehind(ctx, base); err != nil {
+		return ctrl.Result{}, err
+	} else if behind {
+		log.Debug().Str("step", ps.Name).Msg("the cached step is behind the stored one; requeueing before running the steps")
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
 	nextIdx, result, execErr := eng.ExecuteFrom(ctx, state, prevIdx)
 
 	// Persist outputs regardless of result, so a PR opened in this reconcile is
 	// never forgotten (C03-promotionstep-06).
 	ps.Status.Outputs = state.Outputs
 	ps.Status.CurrentStepIndex = nextIdx
+	if state.Outputs[steps.OutputRenderRequested] == "true" && ps.Status.RenderRequestedAt == nil {
+		// The Graph creates the environment's RenderRun once this is set.
+		now := metav1.NewTime(r.now())
+		ps.Status.RenderRequestedAt = &now
+	}
 	if nextIdx > prevIdx {
 		// Progress resets the retry budget.
 		ps.Status.RetryCount, ps.Status.GitCredentialRetries, ps.Status.ContendedRetries = 0, 0, 0
@@ -1191,7 +1206,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		// progress would rewrite the step statuses a newer one wrote. (Not
 		// reached today: ExecuteFrom runs every remaining step and reports
 		// success only with nextIdx == len(seq).)
-		if patchErr := r.Status().Patch(ctx, ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); patchErr != nil {
+		if patchErr := r.patchStatusLocked(ctx, base, ps); patchErr != nil {
 			if apierrors.IsNotFound(patchErr) {
 				return ctrl.Result{}, nil
 			}
@@ -1228,7 +1243,8 @@ func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1al
 		Outputs:      cloneMap(ps.Status.Outputs),
 		Git: steps.GitConfig{
 			URL:           pipeline.Spec.Git.URL,
-			Branch:        baseBranch(pipeline),
+			Branch:        targetBranch(pipeline, env),
+			SourceBranch:  sourceBranch(pipeline, env),
 			Token:         cred.token,
 			SSHPrivateKey: cred.sshKey,
 			SSHKnownHosts: cred.knownHosts,
@@ -1242,6 +1258,9 @@ func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1al
 		GateResults:          r.collectGateResults(ctx, log, ps),
 		UpstreamEnvironments: upstreamEnvironments(bundle, ps.Spec.Environment),
 		Sequence:             seq,
+	}
+	if ps.Spec.Live != nil {
+		state.LiveRenders = ps.Spec.Live.Renders
 	}
 	r.setRollbackState(ctx, log, state, bundle)
 	return state
@@ -1375,7 +1394,7 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		// yet) would mark the credential missing again and emit a second
 		// Warning Event, and reset the backoff; its patch is refused with
 		// a Conflict instead, and it runs again on the fresh copy.
-		if patchErr := r.Status().Patch(ctx, ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); patchErr != nil {
+		if patchErr := r.patchStatusLocked(ctx, base, ps); patchErr != nil {
 			if apierrors.IsNotFound(patchErr) {
 				return ctrl.Result{}, nil
 			}
@@ -1413,16 +1432,31 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 }
 
 // recordPushedCommit stores, as outputs.commitSHA, the commit the health check
-// must find deployed (E2E-01). It is known here only when the step pushed
+// must find deployed (E2E-01). It is known here when the step pushed
 // straight to the branch the GitOps tool tracks; when the recorded sequence
 // opens a PR the merge commit comes from the PRStatus instead.
+//
+// A step whose git-commit found nothing to commit (noChanges) pushed and
+// opened nothing, but the branch it cloned, the one the GitOps tool tracks,
+// already holds the change: the clone's head is the commit to wait for, so
+// the health check needs an applied revision that contains it (#1669).
+// Without it any revision passed: a step re-run after its own push (#1664),
+// or one whose change a sibling environment had written, was Verified
+// before the GitOps tool applied the branch.
 func (r *Reconciler) recordPushedCommit(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
 	pipeline *v1alpha1.Pipeline, workDir string) {
-	if opensPR(ps) {
-		return
+	noChanges := ps.Status.Outputs["noChanges"] == "true"
+	if ps.Status.Outputs["commitSHA"] != "" {
+		return // a render reported its commit itself, with or without changes
 	}
-	if pushed := ps.Status.Outputs["branch"]; pushed == "" || pushed != baseBranch(pipeline) {
-		return
+	if !noChanges {
+		if opensPR(ps) {
+			return // a pr-review step takes the merge commit
+		}
+		env := findEnv(pipeline, ps.Spec.Environment)
+		if pushed := ps.Status.Outputs["branch"]; pushed == "" || pushed != targetBranch(pipeline, env) {
+			return
+		}
 	}
 	hr, ok := r.GitClient.(scm.HeadCommitReader)
 	if !ok {
@@ -1430,7 +1464,7 @@ func (r *Reconciler) recordPushedCommit(ctx context.Context, log zerolog.Logger,
 	}
 	sha, err := hr.HeadCommit(ctx, workDir)
 	if err != nil || sha == "" {
-		log.Warn().Err(err).Msg("could not read the pushed commit; health will check images only")
+		log.Warn().Err(err).Bool("noChanges", noChanges).Msg("could not read the commit to verify; health will check images only")
 		return
 	}
 	if ps.Status.Outputs == nil {
@@ -2596,7 +2630,7 @@ func (r *Reconciler) cleanWorkDir(log zerolog.Logger, ps *v1alpha1.PromotionStep
 		return
 	}
 	dir := r.workDir(ps)
-	for _, d := range []string{dir, steps.ConfigSourceDir(dir)} {
+	for _, d := range []string{dir, steps.ConfigSourceDir(dir), steps.DrySourceDir(dir)} {
 		if err := os.RemoveAll(d); err != nil {
 			log.Warn().Err(err).Str("workDir", d).Msg("cleanWorkDir: failed to remove working directory")
 		} else {
@@ -2739,8 +2773,8 @@ func initStepStatuses(seq []string) []v1alpha1.StepStatus {
 
 // stepSequence is the step list a step of env runs for bundle, recorded in
 // status.steps when the step starts.
-func stepSequence(env v1alpha1.EnvironmentSpec, bundle *v1alpha1.Bundle) []string {
-	return steps.DefaultSequenceForBundle(env.Approval, bundle.Spec.Type, env.Update.Strategy, env.Layout)
+func stepSequence(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, bundle *v1alpha1.Bundle) []string {
+	return steps.DefaultSequenceForBundle(env.Approval, bundle.Spec.Type, env.Update.Strategy, effectiveLayout(pipeline, env))
 }
 
 // recordedSequence returns the step names in status.steps: the sequence

@@ -1374,6 +1374,25 @@ func TestChartGateStatusHeartbeat(t *testing.T) {
 	assert.Error(t, err, "a value that is not a Go duration must fail:\n%s", out)
 }
 
+// TestChartRenderImage: the render Jobs get the render image (by tag, or by
+// digest when render.image.digest is set) and the chart's imagePullSecrets;
+// image.digest pins the controller image the same way.
+func TestChartRenderImage(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	args := argValues(c)
+	assert.Regexp(t, `^ghcr.io/pnz1990/kardinal-promoter/render:v?[0-9]`, args["render-image"])
+	assert.NotContains(t, args, "render-image-pull-secrets")
+	a, b := "sha256:"+strings.Repeat("a", 64), "sha256:"+strings.Repeat("b", 64)
+	c = controllerContainer(t, render(t, "kardinal-promoter", "--set", "render.image.digest="+a, "--set", "image.digest="+b,
+		"--set", "imagePullSecrets[0].name=regcred", "--set", "imagePullSecrets[1].name=other"))
+	args = argValues(c)
+	assert.Equal(t, "ghcr.io/pnz1990/kardinal-promoter/render@"+a, args["render-image"])
+	assert.Equal(t, "ghcr.io/pnz1990/kardinal-promoter/controller@"+b, c.Image)
+	assert.Equal(t, "regcred,other", args["render-image-pull-secrets"])
+	out, err := helmTemplate(t, "kardinal-promoter", "--set", "render.image.digest=latest")
+	require.Error(t, err, out)
+}
+
 // TestChartAuditRetention: audit.retention is on by default (#1654 RC
 // campaign: unbounded records fill etcd): --audit-retention=true with the
 // limits (90 days, 1000) and delete on AuditEvents. enabled: false passes

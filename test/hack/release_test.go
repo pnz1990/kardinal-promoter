@@ -478,12 +478,13 @@ func TestReleaseWorkflowWiring(t *testing.T) {
 
 	t.Run("preflight outputs come from its steps", func(t *testing.T) {
 		assert.Equal(t, map[string]string{
-			"version":       "${{ steps.version.outputs.version }}",
-			"chart-version": "${{ steps.version.outputs.chart-version }}",
-			"prerelease":    "${{ steps.version.outputs.prerelease }}",
-			"make-latest":   "${{ steps.version.outputs.make-latest }}",
-			"image-tags":    "${{ steps.version.outputs.image-tags }}",
-			"notes":         "${{ steps.notes.outputs.notes }}",
+			"version":           "${{ steps.version.outputs.version }}",
+			"chart-version":     "${{ steps.version.outputs.chart-version }}",
+			"prerelease":        "${{ steps.version.outputs.prerelease }}",
+			"make-latest":       "${{ steps.version.outputs.make-latest }}",
+			"image-tags":        "${{ steps.version.outputs.image-tags }}",
+			"render-image-tags": "${{ steps.version.outputs.render-image-tags }}",
+			"notes":             "${{ steps.notes.outputs.notes }}",
 		}, preflight.Outputs)
 		assert.Equal(t, map[string]string{"VERSION": "${{ steps.version.outputs.version }}"},
 			preflight.step(t, "notes").Env)

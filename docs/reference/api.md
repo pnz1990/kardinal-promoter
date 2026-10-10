@@ -25,6 +25,7 @@ PolicyGate expression can use in [CEL Context](cel-context.md).
 | [Pipeline](#pipeline) | `pipelines.kardinal.io` | Namespaced | `pipe` |
 | [PolicyGate](#policygate) | `policygates.kardinal.io` | Namespaced | `pg` |
 | [PromotionStep](#promotionstep) | `promotionsteps.kardinal.io` | Namespaced | `ps` |
+| [RenderRun](#renderrun) | `renderruns.kardinal.io` | Namespaced |  |
 | [RollbackPolicy](#rollbackpolicy) | `rollbackpolicies.kardinal.io` | Namespaced | `rbp` |
 | [ScheduleClock](#scheduleclock) | `scheduleclocks.kardinal.io` | Namespaced | `sclock` |
 | [ScmProvider](#scmprovider) | `scmproviders.kardinal.io` | Namespaced | `scmp` |
@@ -134,9 +135,11 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `status.retiredSteps[].createdAt` | string (date-time) | yes | CreatedAt is the PromotionStep's creationTimestamp. |
 | `status.retiredSteps[].environment` | string | yes | Environment is the PromotionStep's spec.environment. |
 | `status.retiredSteps[].healthCheckExpiry` | string (date-time) |  | HealthCheckExpiry is the PromotionStep's status.healthCheckExpiry: set once its change merged and the health check started. |
+| `status.retiredSteps[].markerDigest` | string |  | MarkerDigest is the marker digest of the step's render (layout: branch): status.outputs.markerDigest. Later renders of the environment accept it as kardinal's after the RenderRun that wrote it was deleted with the Graph. |
 | `status.retiredSteps[].message` | string |  | Message is the PromotionStep's final status.message, cut to 512 bytes. |
 | `status.retiredSteps[].name` | string | yes | Name is the PromotionStep's name. |
 | `status.retiredSteps[].prURL` | string |  | PRURL is the PromotionStep's status.prURL. |
+| `status.retiredSteps[].renderRequested` | boolean |  | RenderRequested is true when the step asked for its render (layout: branch): a Failed step that did may have lost a render that pushed. |
 | `status.retiredSteps[].state` | string |  | State is the PromotionStep's final status.state. |
 | `status.retiredSteps[].stepType` | string |  | StepType is the PromotionStep's spec.stepType. |
 | `status.retiredSteps[].verifiedAt` | string (date-time) |  | VerifiedAt is when the PromotionStep became Verified. |
@@ -542,7 +545,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].hooks[].name` | string | yes | Name identifies the hook within its environment and phase. It is part of the HookRun and Job names. |
 | `spec.environments[].hooks[].phase` | string | yes | Phase is when the hook runs. "pre": after the environment's upstreams are Verified and its gates are ready, before the promotion starts; the promotion starts only when every pre hook succeeded. "post": after the health check passed; the environment is Verified only when every post hook succeeded, and a failed post hook applies onHealthFailure. Hooks of one phase run one after another, in list order. One of: `pre`, `post`. |
 | `spec.environments[].hooks[].timeout` | string |  | Timeout bounds the hook from the moment its HookRun starts: a hook that has not finished by then fails and its Job is deleted. Empty or "0" means 30m. |
-| `spec.environments[].layout` | string |  | Layout configures how the promotion interacts with the Git repo layout. "directory" (default): env manifests are in a subdirectory of the main branch. "branch": rendered manifests are committed to a separate env-specific branch. In this mode the step sequence includes kustomize-build to render templates before committing to the target branch. One of: `directory`, `branch`. Default: `directory`. |
+| `spec.environments[].layout` | string |  | Layout configures how the promotion interacts with the Git repo layout. "directory" (default): env manifests are in a subdirectory of the main branch. "branch": the environment's path on spec.git.branch (the DRY source) is rendered (kustomize build, or helm template for a chart) and the plain manifests are committed to the environment's rendered branch (render.branch, default env/&lt;name&gt;), which Argo CD or Flux sync. See docs/rendered-manifests.md. One of: `directory`, `branch`. Default: `directory`. |
 | `spec.environments[].name` | string | yes | Name is the environment identifier (e.g. "test", "uat", "prod"). It must be a DNS label (lower-case letters, digits and '-', at most 63 characters): it names a Graph node, derived objects and, for the resource, argoRollouts and flagger health checks, a namespace. |
 | `spec.environments[].onHealthFailure` | string |  | OnHealthFailure controls what the reconciler does when health fails during bake or health checking (K-03). "rollback": create a rollback Bundle at the previous version; step → RollingBack. "abort": freeze the step; state → AbortedByAlarm; requires human intervention. "none" (default): step → Failed; downstream stops. One of: `rollback`, `abort`, `none`. Default: `none`. |
 | `spec.environments[].path` | string |  | Path is the subdirectory within the GitOps repository for this environment. Used when spec.git.layout is "directory". Defaults to "environments/&lt;name&gt;". |
@@ -562,6 +565,14 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].promotionTemplate.name` | string | yes | Name is the name of a PromotionTemplate (the CRD was removed). |
 | `spec.environments[].promotionTemplate.namespace` | string |  | Namespace is the namespace of the PromotionTemplate (the CRD was removed). |
 | `spec.environments[].regions` | []string |  | Regions is not supported: every region would edit the same path and push the same branch. With two or more regions the Pipeline is Ready=False (reason NotImplemented) and every Bundle fails when its Graph is built with "regions is not supported". One region has no effect. Deprecated: declare one environment per region (prod-us, prod-eu) and use wave. |
+| `spec.environments[].render` | object |  | Render configures layout: branch. |
+| `spec.environments[].render.allowNondeterministic` | boolean |  | AllowNondeterministic lets Helm templates call functions whose result changes from one render to the next (randAlphaNum, uuidv4, now, genCA and the like). Off by default: such a chart renders different manifests for the same DRY commit, so every promotion commits a change and a rollback does not restore what ran. |
+| `spec.environments[].render.branch` | string |  | Branch is the rendered branch the manifests are committed to. Defaults to env/&lt;environment name&gt;. It must differ from spec.git.branch and from every other environment's rendered branch. |
+| `spec.environments[].render.helm` | object |  | Helm configures the render of a Helm chart (an environment path holding a Chart.yaml). |
+| `spec.environments[].render.helm.namespace` | string |  | Namespace is .Release.Namespace. Defaults to the environment name. |
+| `spec.environments[].render.helm.releaseName` | string |  | ReleaseName is .Release.Name. Defaults to the Pipeline name. |
+| `spec.environments[].render.helm.valuesFiles` | []string |  | ValuesFiles are values files, relative to the chart directory, applied in order over the chart's values.yaml. Defaults to update.helm.valuesFile when that is set and is not values.yaml. |
+| `spec.environments[].render.onDrift` | string |  | OnDrift is what a promotion does when the rendered branch was changed outside kardinal since the last render (a file kardinal wrote was edited or deleted, or a file in its way was added): fail (default) fails the step and changes nothing; overwrite renders over the change. One of: `fail`, `overwrite`. |
 | `spec.environments[].shard` | string |  | Shard was the agent shard of distributed mode, which was removed. A non-empty value sets the Pipeline Ready=False (reason NotImplemented) and fails the environment's PromotionSteps with "shard is not supported". Deprecated: remove shard; the controller reconciles every environment. For workloads in other clusters, use the Argo CD or Flux hub (see docs/distributed-mode.md). |
 | `spec.environments[].stepTimeoutSeconds` | integer |  | StepTimeoutSeconds is the maximum number of seconds a single promotion step (git-clone, kustomize-set-image, open-pr, etc.) may run. The reconciler cancels a step that runs longer via context.WithTimeout and handles the timeout like any other step error: the step is retried with backoff (10s, 20s, 40s, 80s, then 2m), and the PromotionStep is marked Failed when the 5 retries are used up. When not set or 0 (default), no per-step timeout is applied. Useful for restricting execution in restricted-egress environments where git-clone against a slow SCM host can block the reconciler indefinitely. |
 | `spec.environments[].steps` | []object |  | Steps is not supported. kardinal has no custom step engine: every environment runs the default step sequence (see DefaultSequenceForBundle). The API server rejects a Pipeline that sets it, and so do Graph translation and "kardinal validate". Deprecated: remove it; the step sequence follows the Bundle type, update.strategy, approval and layout. See docs/pipeline-reference.md#promotion-steps. |
@@ -851,6 +862,20 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `spec.live.imageVerification.message` | string |  | Message is its status.message. |
 | `spec.live.imageVerification.name` | string |  | Name is the ImageVerification's name. |
 | `spec.live.imageVerification.phase` | string |  | Phase is its status.phase (Pending when it has none yet). |
+| `spec.live.renders` | []object |  | Renders is the environment's RenderRun for this Bundle (layout: branch), at most one. |
+| `spec.live.renders[].knownMarkerDigests` | []string |  | KnownMarkerDigests is the RenderRun's status.knownMarkerDigests: a result that pushed nothing (noChanges) must name one of them. |
+| `spec.live.renders[].message` | string |  | Message is the RenderRun's status.message. |
+| `spec.live.renders[].name` | string | yes | Name is the RenderRun name. |
+| `spec.live.renders[].phase` | string |  | Phase is the RenderRun's status.phase (Pending when it has none yet). |
+| `spec.live.renders[].result` | object |  | Result is the RenderRun's status.result. |
+| `spec.live.renders[].result.branch` | string |  | Branch is the branch it was pushed to. |
+| `spec.live.renders[].result.commitSHA` | string |  | CommitSHA is the rendered commit pushed (empty when nothing changed). |
+| `spec.live.renders[].result.driftOverwritten` | string |  | DriftOverwritten lists the changes made outside kardinal that this render overwrote (render.onDrift: overwrite). |
+| `spec.live.renders[].result.dryCommit` | string |  | DryCommit is the DRY commit that was rendered. |
+| `spec.live.renders[].result.markerDigest` | string |  | MarkerDigest is the sha256 of the render marker (.kardinal/rendered.yaml) this render wrote: the list of files and their sha256. The next render of the environment accepts the rendered branch only when its marker has the digest of a render kardinal made. |
+| `spec.live.renders[].result.noChanges` | boolean |  | NoChanges is true when the render matched the rendered branch and nothing was pushed. |
+| `spec.live.renders[].result.objects` | integer |  | Objects is how many objects were rendered. |
+| `spec.live.renders[].result.renderer` | string |  | Renderer is kustomize or helm. |
 | `spec.pipelineName` | string | yes | PipelineName is the Pipeline this step belongs to. |
 | `spec.postHooks` | []string |  | PostHooks names the HookRuns of the environment's post-deploy hooks, in order. A step with post hooks goes from HealthChecking to Verifying, and is Verified only when every one of them Succeeded in spec.live.hooks; a Failed one applies onHealthFailure. |
 | `spec.prStatusRef` | string |  | PRStatusRef is the name of the companion PRStatus CRD in the same namespace. Set by the Graph controller from the PRStatus Watch node's metadata.name CEL reference. The PromotionStep reconciler reads the PRStatus CRD instead of polling GitHub directly, eliminating the PS-4 / SCM-2 external API call on the reconcile hot path. |
@@ -903,6 +928,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.pendingAuditEvents[].spec.pipelineName` | string | yes | PipelineName is the name of the Pipeline the Bundle is promoting through. |
 | `status.pendingAuditEvents[].spec.timestamp` | string (date-time) | yes | Timestamp is when the event occurred (RFC 3339 format). |
 | `status.prURL` | string |  | PRURL is the GitHub pull request URL opened for this promotion. Set when the step enters WaitingForMerge state. |
+| `status.renderRequestedAt` | string (date-time) |  | RenderRequestedAt is when the step reached its render step (layout: branch). Set once; the Graph creates the environment's RenderRun once it is set. |
 | `status.retryCount` | integer |  | RetryCount is the number of consecutive step-engine errors retried in the current state. Reset when a step makes progress. When it reaches the retry limit the PromotionStep fails. Retries counted in gitCredentialRetries are not counted here. |
 | `status.scmWaitSince` | string (date-time) |  | SCMWaitSince is when the step started waiting for an open SCM circuit (condition SCMUnavailable): its SCM host failed, so the step makes no call and waits without spending retryCount. The wait ends when the SCM answers, or fails the step after the environment's stepTimeoutSeconds, else the controller's --scm-wait-timeout (30m). |
 | `status.state` | string |  | State is the step execution state. The Graph controller uses readyWhen expressions of the form ${step.status.state == "Verified"} to advance the promotion DAG. Verifying: the health check passed and the post-deploy hooks and analyses run. One of: `Pending`, `Promoting`, `WaitingForMerge`, `HealthChecking`, `Verifying`, `Verified`, `Failed`, `AbortedByAlarm`, `RollingBack`. |
@@ -917,6 +943,81 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.verificationStartedAt` | string (date-time) |  | VerificationStartedAt is when the step entered Verifying (its health check passed and its post-deploy hooks may start). Set once; the Graph creates the post-deploy HookRuns once it is set. |
 | `status.waitForMergeExpiry` | string (date-time) |  | WaitForMergeExpiry is the deadline for the PR merge, computed as (time step entered WaitingForMerge) + env.waitForMergeTimeout. Set once on the first reconcile in WaitingForMerge state when the environment configures a non-zero waitForMergeTimeout. Nil when no timeout is configured. Graph-purity: same pattern as HealthCheckExpiry — time.Now() called only when writing to CRD status. |
 | `status.workDir` | string |  | WorkDir is the working directory on the controller node used for git operations (clone, commit, push) and kustomize builds. Persisted to etcd so that a restarted controller can re-use the same directory and resume in-flight git work. ST-7/ST-8/ST-9 short-term mitigation: the workdir path is made observable via CRD status, enabling crash-recovery without re-cloning. Long-term: git operations become Kubernetes Jobs (owned nodes in the Graph). |
+
+## RenderRun
+
+`kardinal.io/v1alpha1`
+
+RenderRun is one render of a layout: branch environment for one Bundle: a Kubernetes Job that clones the DRY source, sets the Bundle's images, renders the environment (kustomize build or helm template) and commits the plain manifests to the rendered branch. Created by the Bundle's kro Graph; reconciled by the RenderRun reconciler, which runs the Job in the Pipeline's namespace and records its result. Rendering never runs in the controller.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec` | object |  | RenderRunSpec is one render of a layout: branch environment for one Bundle. The kro Graph of the Bundle writes it from the Pipeline and the Bundle; the RenderRun reconciler runs it as a Job. |
+| `spec.bundle` | object | yes | Bundle is what is promoted: the images to set, the config commit to render (a config or mixed Bundle) and the Bundle a rollback restores. |
+| `spec.bundle.configRef` | object |  | ConfigRef is the config commit to render (a config or mixed Bundle, or an image Bundle that pins its DRY commit). |
+| `spec.bundle.configRef.commitSHA` | string |  | CommitSHA is the exact commit SHA for this config snapshot: 4 to 64 hex characters. |
+| `spec.bundle.configRef.gitRepo` | string |  | GitRepo is the GitOps repository URL. |
+| `spec.bundle.images` | []object |  | Images are the images to set in the DRY checkout. |
+| `spec.bundle.images[].digest` | string |  | Digest is the image digest (sha256:...), in the OCI digest grammar. |
+| `spec.bundle.images[].repository` | string | yes | Repository is the image repository (e.g. "ghcr.io/nginx/nginx"). |
+| `spec.bundle.images[].tag` | string |  | Tag is the image tag, in the OCI distribution grammar: up to 128 characters of [A-Za-z0-9_.-], not starting with "." or "-". |
+| `spec.bundle.rollbackOf` | string |  | RollbackOf is the Bundle a rollback restores: its render's DRY commit is rendered again. |
+| `spec.bundle.type` | string |  | Type is the Bundle type: image, config or mixed. |
+| `spec.bundleName` | string | yes | BundleName is the Bundle being promoted. |
+| `spec.environment` | string | yes | Environment is the environment rendered. |
+| `spec.git` | object | yes | Git is where the DRY source is read and the render is written. |
+| `spec.git.pullRequest` | boolean |  | PullRequest pushes the render to the promotion branch kardinal/&lt;bundle&gt;/&lt;environment&gt;, from which the step opens a PR into RenderedBranch (approval: pr-review), instead of to RenderedBranch. |
+| `spec.git.renderedBranch` | string | yes | RenderedBranch is the branch the rendered manifests are committed to. |
+| `spec.git.secretName` | string |  | SecretName is the Secret in the RenderRun's namespace whose "token" key the render Job uses for git (Pipeline spec.git.secretRef). Empty means no credentials. |
+| `spec.git.sourceBranch` | string | yes | SourceBranch is the DRY source branch (Pipeline spec.git.branch). |
+| `spec.git.url` | string | yes | URL is the repository (Pipeline spec.git.url). |
+| `spec.path` | string | yes | Path is the environment path in the DRY source (environments/&lt;name&gt; when the Pipeline sets none). |
+| `spec.pipelineName` | string | yes | PipelineName is the Pipeline the environment belongs to. |
+| `spec.render` | object |  | Render is the environment's render configuration. |
+| `spec.render.allowNondeterministic` | boolean |  | AllowNondeterministic lets Helm templates call functions whose result changes from one render to the next (randAlphaNum, uuidv4, now, genCA and the like). Off by default: such a chart renders different manifests for the same DRY commit, so every promotion commits a change and a rollback does not restore what ran. |
+| `spec.render.branch` | string |  | Branch is the rendered branch the manifests are committed to. Defaults to env/&lt;environment name&gt;. It must differ from spec.git.branch and from every other environment's rendered branch. |
+| `spec.render.helm` | object |  | Helm configures the render of a Helm chart (an environment path holding a Chart.yaml). |
+| `spec.render.helm.namespace` | string |  | Namespace is .Release.Namespace. Defaults to the environment name. |
+| `spec.render.helm.releaseName` | string |  | ReleaseName is .Release.Name. Defaults to the Pipeline name. |
+| `spec.render.helm.valuesFiles` | []string |  | ValuesFiles are values files, relative to the chart directory, applied in order over the chart's values.yaml. Defaults to update.helm.valuesFile when that is set and is not values.yaml. |
+| `spec.render.onDrift` | string |  | OnDrift is what a promotion does when the rendered branch was changed outside kardinal since the last render (a file kardinal wrote was edited or deleted, or a file in its way was added): fail (default) fails the step and changes nothing; overwrite renders over the change. One of: `fail`, `overwrite`. |
+| `spec.update` | object |  | Update is the environment's update configuration: how the images are set in the DRY checkout before it is rendered. |
+| `spec.update.argocd` | object |  | ArgoCD holds ArgoCD-native update configuration. Used when Strategy is "argocd". Patches the ArgoCD Application's spec.source.helm.valuesObject directly without a git commit. |
+| `spec.update.argocd.application` | string | yes | Application is the name of the ArgoCD Application resource to patch. |
+| `spec.update.argocd.imageKey` | string |  | ImageKey is the dot-separated key path within spec.source.helm.valuesObject where the image tag should be written. Example: "image.tag" writes to spec.source.helm.valuesObject.image.tag. Defaults to "image.tag" if empty. |
+| `spec.update.argocd.namespace` | string |  | Namespace is the Kubernetes namespace where the ArgoCD Application lives. Defaults to "argocd" if empty. |
+| `spec.update.helm` | object |  | Helm holds Helm-specific update configuration. Used when Strategy is "helm". |
+| `spec.update.helm.chartVersionFile` | string |  | ChartVersionFile is the file a chart Bundle's version is written to, relative to the environment path: an umbrella Chart.yaml, an Argo CD Application, a Flux HelmRelease or a kustomization.yaml with helmCharts. Defaults to "Chart.yaml". |
+| `spec.update.helm.chartVersionPath` | string |  | ChartVersionPath is the YAML path of the chart version in chartVersionFile, in the grammar of update.yaml.updates[].path: keys separated by ".", "[N]" (or a digits-only key) to index a list, and "[field=value]" for the list element whose field has that value. Defaults to ".dependencies[name=&lt;chart&gt;].version": the umbrella chart's dependency named after the Bundle's chart (an error when there is none). For example ".spec.source.targetRevision" (Argo CD Application), ".spec.chart.spec.version" (Flux HelmRelease) or ".helmCharts[name=podinfo].version" (kustomize). |
+| `spec.update.helm.imagePathTemplate` | string |  | ImagePathTemplate is the YAML dot-path to the image tag in values.yaml. Example: ".image.tag" updates the `image.tag` key. If empty, defaults to ".image.tag". |
+| `spec.update.helm.valuesFile` | string |  | ValuesFile is the name of the values file to update (relative to the environment path). Defaults to "values.yaml". |
+| `spec.update.strategy` | string |  | Strategy selects the manifest update strategy: kustomize (default, kustomization.yaml images), helm (one values key), argocd (patch the Application, no git), or yaml (any YAML paths in any files of the environment directory). One of: `kustomize`, `helm`, `argocd`, `yaml`. Default: `kustomize`. |
+| `spec.update.yaml` | object |  | YAML holds the edits of the yaml strategy. Used when Strategy is "yaml". |
+| `spec.update.yaml.updates` | []object | yes | Updates are the values to set. |
+| `spec.update.yaml.updates[].file` | string | yes | File is the YAML file, relative to the environment path, for example "values.yaml" or "deploy/deployment.yaml". It must stay inside the repository. A file with several documents (---) is not supported. Each path segment starts with a letter, digit or "_" and has single dots only, so the file can neither be absolute nor leave the environment path. |
+| `spec.update.yaml.updates[].image` | string |  | Image is the repository of the Bundle image whose value is written, for example "ghcr.io/org/app". It may be empty when the Bundle has exactly one image. |
+| `spec.update.yaml.updates[].path` | string | yes | Path is the key path of the scalar to set, in the grammar chartVersionPath uses too: keys separated by "." (a leading "." is optional), "[N]" to index a list and "[field=value]" for the list element whose field has that value, for example "image.tag", "spec.template.spec.containers[0].image" or "spec.template.spec.containers[name=app].image". A digits-only key indexes a list when it reaches one. Missing mapping keys are created; list elements are not. A key that contains "." is not supported. |
+| `spec.update.yaml.updates[].value` | string |  | Value is what to write: tag (default), digest, tagWithDigest ("&lt;tag&gt;@&lt;digest&gt;"), image ("&lt;repository&gt;:&lt;tag&gt;"), or imageWithDigest ("&lt;repository&gt;:&lt;tag&gt;@&lt;digest&gt;", or "&lt;repository&gt;@&lt;digest&gt;" without a tag). A value the image does not have (a digest of a tag-only image) fails the step. One of: `tag`, `digest`, `tagWithDigest`, `image`, `imageWithDigest`. |
+| `status` | object |  | RenderRunStatus is the observed state of a RenderRun. |
+| `status.deadline` | string (date-time) |  | Deadline is StartedAt plus the render timeout. |
+| `status.finishedAt` | string (date-time) |  | FinishedAt is when the RenderRun reached a terminal phase. |
+| `status.jobName` | string |  | JobName is the name of the Job the reconciler created. |
+| `status.jobUID` | string |  | JobUID is the UID of that Job. A Job of that name with another UID, or none at all, while the RenderRun runs, fails the RenderRun. |
+| `status.knownMarkerDigests` | []string |  | KnownMarkerDigests are the marker digests of the earlier renders of this Pipeline environment the Job accepted on the rendered branch (RenderRunResult.MarkerDigest of the newest Succeeded RenderRuns). |
+| `status.message` | string |  | Message says why the RenderRun is in its phase. |
+| `status.phase` | string |  | Phase is Pending until the Job is created, Running while it runs, and Succeeded or Failed once it finished. Succeeded and Failed are terminal: the API server refuses to change them, and the Job is never created again. One of: `Pending`, `Running`, `Succeeded`, `Failed`. |
+| `status.result` | object |  | Result is what the Job reported (Succeeded only). |
+| `status.result.branch` | string |  | Branch is the branch it was pushed to. |
+| `status.result.commitSHA` | string |  | CommitSHA is the rendered commit pushed (empty when nothing changed). |
+| `status.result.driftOverwritten` | string |  | DriftOverwritten lists the changes made outside kardinal that this render overwrote (render.onDrift: overwrite). |
+| `status.result.dryCommit` | string |  | DryCommit is the DRY commit that was rendered. |
+| `status.result.markerDigest` | string |  | MarkerDigest is the sha256 of the render marker (.kardinal/rendered.yaml) this render wrote: the list of files and their sha256. The next render of the environment accepts the rendered branch only when its marker has the digest of a render kardinal made. |
+| `status.result.noChanges` | boolean |  | NoChanges is true when the render matched the rendered branch and nothing was pushed. |
+| `status.result.objects` | integer |  | Objects is how many objects were rendered. |
+| `status.result.renderer` | string |  | Renderer is kustomize or helm. |
+| `status.specHash` | string |  | SpecHash is a hash of the spec when the Job was created. A later spec change is not applied. |
+| `status.startedAt` | string (date-time) |  | StartedAt is when the Job was created. |
+| `status.unconfirmedBundles` | []string |  | UnconfirmedBundles holds the Bundle of the environment's newest RenderRun when it Failed after the last Succeeded one (at most one entry): its Job may have pushed before its result was lost. A rendered branch whose marker names it, and whose files match that marker, is accepted as kardinal's; so is a rollback to it. |
 
 ## RollbackPolicy
 

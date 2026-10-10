@@ -12,7 +12,8 @@ import (
 )
 
 // Per-environment nodes that run around a PromotionStep and report back to
-// it: hooks (hooks.go) and Argo Rollouts analyses (analysis.go). Their
+// it: hooks (hooks.go), Argo Rollouts analyses (analysis.go) and the
+// render of a layout: branch environment (render.go). Their
 // results reach the step through one mirror patch node per environment
 // (live0<env>) whose target is the step's literal name, so they keep
 // arriving after the step's own template stopped resolving (ledger G14).
@@ -33,7 +34,10 @@ type envExtras struct {
 
 // buildEnvExtras returns the hook and analysis nodes of one environment and
 // its mirror patch node; nothing for an environment with neither.
-func buildEnvExtras(in hookNodesInput, analyses AnalysisInput, bundle *kardinalv1alpha1.Bundle) (envExtras, error) {
+//
+// render is the name of the environment's RenderRun when it renders
+// (layout: branch, render.go), "" otherwise: its result is mirrored too.
+func buildEnvExtras(in hookNodesInput, analyses AnalysisInput, bundle *kardinalv1alpha1.Bundle, render string) (envExtras, error) {
 	hooks, err := buildHookNodes(in)
 	if err != nil {
 		return envExtras{}, err
@@ -50,9 +54,9 @@ func buildEnvExtras(in hookNodesInput, analyses AnalysisInput, bundle *kardinalv
 		out.analysisPolicy = runs.policy
 	}
 	out.imageVerification = in.imageVerification
-	if len(hooks.nodes) > 0 || len(runs.nodes) > 0 || in.imageVerification != "" {
+	if len(hooks.nodes) > 0 || len(runs.nodes) > 0 || in.imageVerification != "" || render != "" {
 		out.nodes = append(out.nodes, buildLiveMirrorNode(in.env.Name, in.stepK8sName, in.bundleUID,
-			hooks.names, runs.runNames, in.imageVerification != ""))
+			hooks.names, runs.runNames, in.imageVerification != "", render))
 	}
 	return out, nil
 }
@@ -78,12 +82,13 @@ func attachExtras(step GraphNode, x envExtras) {
 }
 
 // buildLiveMirrorNode builds the patch node that writes env's HookRun and
-// AnalysisRun results, and the Bundle's ImageVerification result, onto its
-// PromotionStep (spec.live). Hook results come only from the HookRuns this
-// build rendered (hookNames, a literal list rebuilt at every translation)
-// that kro applied for this Bundle (genuineFilter), so a HookRun created by
-// hand is not a result; the same holds for AnalysisRuns (runNames).
-func buildLiveMirrorNode(env, stepK8sName, bundleUID string, hookNames, runNames []string, imageVerification bool) GraphNode {
+// AnalysisRun results, the Bundle's ImageVerification result and the
+// environment's RenderRun onto its PromotionStep (spec.live). Hook results
+// come only from the HookRuns this build rendered (hookNames, a literal list
+// rebuilt at every translation) that kro applied for this Bundle
+// (genuineFilter), so a HookRun created by hand is not a result; the same
+// holds for AnalysisRuns (runNames) and the RenderRun (render).
+func buildLiveMirrorNode(env, stepK8sName, bundleUID string, hookNames, runNames []string, imageVerification bool, render string) GraphNode {
 	live := map[string]interface{}{}
 	if imageVerification {
 		live["imageVerification"] = imageVerificationLive()
@@ -100,6 +105,9 @@ func buildLiveMirrorNode(env, stepK8sName, bundleUID string, hookNames, runNames
 			`"template": r.metadata.labels[%q], "phase": r.?status.?phase.orValue("Pending"), "message": r.?status.?message.orValue("")})}`,
 			refAnalysisRunsNodeID, genuineFilter("r", runNames, bundleUID), LabelAnalysisTemplate)
 	}
+	if render != "" {
+		live["renders"] = liveRendersExpr(env, render, bundleUID)
+	}
 	return GraphNode{
 		ID: liveNodeID(env),
 		Patch: map[string]interface{}{
@@ -111,9 +119,10 @@ func buildLiveMirrorNode(env, stepK8sName, bundleUID string, hookNames, runNames
 	}
 }
 
-// readBackRefs returns the selector refs the Graph's hooks and analyses
-// need: the Bundle's PromotionSteps (post hooks and analyses start once the
-// step entered Verifying), HookRuns and AnalysisRuns.
+// readBackRefs returns the selector refs the Graph's hooks, analyses and
+// renders need: the Bundle's PromotionSteps (post hooks and analyses start
+// once the step entered Verifying; a RenderRun once the step asked for its
+// render), HookRuns, AnalysisRuns and RenderRuns.
 func readBackRefs(pipeline *kardinalv1alpha1.Pipeline, envs []string, bundle *kardinalv1alpha1.Bundle) []GraphNode {
 	var hooks, analyses bool
 	for _, name := range envs {
@@ -121,6 +130,7 @@ func readBackRefs(pipeline *kardinalv1alpha1.Pipeline, envs []string, bundle *ka
 		hooks = hooks || len(env.Hooks) > 0
 		analyses = analyses || hasVerification(env)
 	}
+	renders := rendersAny(pipeline, envs)
 	ref := func(id, apiVersion, kind string) GraphNode {
 		return GraphNode{ID: id, Ref: map[string]interface{}{
 			"apiVersion": apiVersion,
@@ -136,7 +146,7 @@ func readBackRefs(pipeline *kardinalv1alpha1.Pipeline, envs []string, bundle *ka
 		}}
 	}
 	var out []GraphNode
-	if hooks || analyses {
+	if hooks || analyses || renders {
 		out = append(out, ref(refStepsNodeID, "kardinal.io/v1alpha1", "PromotionStep"))
 	}
 	if hooks {
@@ -144,6 +154,9 @@ func readBackRefs(pipeline *kardinalv1alpha1.Pipeline, envs []string, bundle *ka
 	}
 	if analyses {
 		out = append(out, ref(refAnalysisRunsNodeID, AnalysisRunAPIVersion, "AnalysisRun"))
+	}
+	if renders {
+		out = append(out, ref(refRenderRunsNodeID, "kardinal.io/v1alpha1", "RenderRun"))
 	}
 	return out
 }

@@ -515,6 +515,14 @@ spec:
                         once its change merged and the health check started.
                       format: date-time
                       type: string
+                    markerDigest:
+                      description: |-
+                        MarkerDigest is the marker digest of the step's render (layout:
+                        branch): status.outputs.markerDigest. Later renders of the
+                        environment accept it as kardinal's after the RenderRun that wrote it
+                        was deleted with the Graph.
+                      maxLength: 64
+                      type: string
                     message:
                       description: Message is the PromotionStep's final status.message,
                         cut to 512 bytes.
@@ -527,6 +535,11 @@ spec:
                       description: PRURL is the PromotionStep's status.prURL.
                       maxLength: 2048
                       type: string
+                    renderRequested:
+                      description: |-
+                        RenderRequested is true when the step asked for its render (layout:
+                        branch): a Failed step that did may have lost a render that pushed.
+                      type: boolean
                     state:
                       description: State is the PromotionStep's final status.state.
                       type: string

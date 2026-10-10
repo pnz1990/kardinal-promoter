@@ -302,6 +302,11 @@ go tool pprof -top -base before.pb.gz after.pb.gz
 | `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.10. The `integration-test` step was removed. The chart grants `batch/jobs` for [hooks](hooks.md) whatever it says |
 | `hooks.serviceAccounts` | `[default]` | ServiceAccounts a [hook](hooks.md)'s Pod may run as (`--hook-service-accounts`), in the Pipeline namespace. The Graph ServiceAccount is never allowed |
 | `hooks.podSecurityLevel` | `baseline` | Pod Security Standard a [hook](hooks.md) Pod must meet (`--hook-pod-security-level`): `baseline`, `restricted` or `privileged` (no Pod checks); below `privileged`, `nodeName` and `hostPort` are refused too |
+| `render.image.repository`, `render.image.tag`, `render.image.digest` | `ghcr.io/pnz1990/kardinal-promoter/render`, the chart's appVersion, none | The `kardinal-render` image the render Jobs of [`layout: branch`](rendered-manifests.md#the-render-job) run (`--render-image`); with a digest, `repository@digest`. Renders never run in the controller. `image.digest` pins the controller image the same way. The render Pods get the chart's `imagePullSecrets`, which must exist in the Pipeline namespaces |
+| `render.serviceAccountName` | `kardinal-render` | ServiceAccount of the render Pods; the controller creates it, without a token, in a Pipeline namespace that has none. Bind no role to it |
+| `render.resources.limits.cpu`, `.memory` | `1`, `512Mi` | Limits of a render Job; a render that needs more memory fails |
+| `render.timeout` | `5m` | How long a render Job may run |
+| `render.networkPolicy.enabled`, `.namespaces`, `.gitEgress` | `false`, `[]`, `[]` | A NetworkPolicy in each listed namespace that lets the render Pods reach only DNS and the git host rules in `gitEgress` (a CNI that enforces NetworkPolicy is needed). Recommended |
 | `resources.limits.cpu` | `500m` | CPU limit |
 | `resources.limits.memory` | `1Gi` | Memory limit; see [Sizing the controller](#sizing-the-controller) |
 | `resources.requests.cpu` | `10m` | CPU request |
@@ -947,6 +952,8 @@ kubectl delete crd --ignore-not-found \
   changewindows.kardinal.io \
   subscriptions.kardinal.io \
   notificationhooks.kardinal.io \
+  hookruns.kardinal.io \
+  renderruns.kardinal.io \
   scmproviders.kardinal.io \
   clusterscmproviders.kardinal.io \
   promotiontemplates.kardinal.io \

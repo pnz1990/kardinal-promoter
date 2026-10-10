@@ -257,13 +257,18 @@ type EnvironmentSpec struct {
 
 	// Layout configures how the promotion interacts with the Git repo layout.
 	// "directory" (default): env manifests are in a subdirectory of the main branch.
-	// "branch": rendered manifests are committed to a separate env-specific branch.
-	//   In this mode the step sequence includes kustomize-build to render templates
-	//   before committing to the target branch.
+	// "branch": the environment's path on spec.git.branch (the DRY source) is
+	//   rendered (kustomize build, or helm template for a chart) and the plain
+	//   manifests are committed to the environment's rendered branch (render.branch,
+	//   default env/<name>), which Argo CD or Flux sync. See docs/rendered-manifests.md.
 	// +kubebuilder:validation:Enum=directory;branch
 	// +kubebuilder:default=directory
 	// +optional
 	Layout string `json:"layout,omitempty"`
+
+	// Render configures layout: branch.
+	// +optional
+	Render *RenderConfig `json:"render,omitempty"`
 
 	// Steps is not supported. kardinal has no custom step engine: every
 	// environment runs the default step sequence (see DefaultSequenceForBundle).
@@ -606,6 +611,57 @@ type UpdateConfig struct {
 	// spec.source.helm.valuesObject directly without a git commit.
 	// +optional
 	ArgoCD *ArgoCDUpdateConfig `json:"argocd,omitempty"`
+}
+
+// RenderConfig configures how an environment with layout: branch is
+// rendered and where the result goes.
+type RenderConfig struct {
+	// Branch is the rendered branch the manifests are committed to. Defaults
+	// to env/<environment name>. It must differ from spec.git.branch and from
+	// every other environment's rendered branch.
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._/-]*$`
+	// +kubebuilder:validation:MaxLength=200
+	// +optional
+	Branch string `json:"branch,omitempty"`
+
+	// OnDrift is what a promotion does when the rendered branch was changed
+	// outside kardinal since the last render (a file kardinal wrote was edited
+	// or deleted, or a file in its way was added): fail (default) fails the
+	// step and changes nothing; overwrite renders over the change.
+	// +kubebuilder:validation:Enum=fail;overwrite
+	// +optional
+	OnDrift string `json:"onDrift,omitempty"`
+
+	// Helm configures the render of a Helm chart (an environment path holding
+	// a Chart.yaml).
+	// +optional
+	Helm *HelmRenderConfig `json:"helm,omitempty"`
+
+	// AllowNondeterministic lets Helm templates call functions whose result
+	// changes from one render to the next (randAlphaNum, uuidv4, now, genCA
+	// and the like). Off by default: such a chart renders different
+	// manifests for the same DRY commit, so every promotion commits a change
+	// and a rollback does not restore what ran.
+	// +optional
+	AllowNondeterministic bool `json:"allowNondeterministic,omitempty"`
+}
+
+// HelmRenderConfig configures helm template for layout: branch.
+type HelmRenderConfig struct {
+	// ReleaseName is .Release.Name. Defaults to the Pipeline name.
+	// +optional
+	ReleaseName string `json:"releaseName,omitempty"`
+
+	// Namespace is .Release.Namespace. Defaults to the environment name.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// ValuesFiles are values files, relative to the chart directory, applied
+	// in order over the chart's values.yaml. Defaults to
+	// update.helm.valuesFile when that is set and is not values.yaml.
+	// +kubebuilder:validation:MaxItems=16
+	// +optional
+	ValuesFiles []string `json:"valuesFiles,omitempty"`
 }
 
 // YAMLUpdateConfig lists the edits of the yaml update strategy. All of them

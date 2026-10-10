@@ -13,6 +13,39 @@
 
 package steps
 
+// RenderStepName is the step of a layout: branch environment that waits for
+// its RenderRun.
+const RenderStepName = "render"
+
+// OutputRenderRequested is "true" once the render step ran: the reconciler
+// then sets status.renderRequestedAt, which lets the Graph create the
+// environment's RenderRun.
+const OutputRenderRequested = "renderRequested"
+
+// OutputRenderPullRequest is "true" when the render step's list opens a PR:
+// the RenderRun then pushes to the promotion branch.
+const OutputRenderPullRequest = "renderPullRequest"
+
+// RenderJobSequence is what the render Job of a layout: branch environment
+// runs: clone the rendered branch and the DRY source, set the Bundle's
+// images in the DRY checkout (never committed), render it into the rendered
+// branch checkout, commit and push. A config or mixed Bundle's configRef
+// commit is the DRY commit itself, so there is no config-merge.
+func RenderJobSequence(bundleType, updateStrategy string) []string {
+	seq := []string{"git-clone"}
+	if bundleType != "config" {
+		switch updateStrategy {
+		case "helm":
+			seq = append(seq, "helm-set-image")
+		case "yaml":
+			seq = append(seq, "yaml-update")
+		default:
+			seq = append(seq, "kustomize-set-image")
+		}
+	}
+	return append(seq, "render-manifests", "git-commit", "git-push")
+}
+
 // DefaultSequenceForBundle returns the default step sequence based on approval mode,
 // bundle type, update strategy, and layout.
 //
@@ -27,10 +60,10 @@ package steps
 //   - image + argocd → argocd-set-image, health-check (no git operations)
 //   - image + helm  → git-clone, helm-set-image, git-commit, git-push, [open-pr, wait-for-merge,] health-check
 //   - chart (helm)  → the same: helm-set-image writes the chart version (graph.Build
-//     refuses a chart Bundle in an environment whose strategy is not helm)
+//     refuses a chart Bundle in an environment whose strategy is not helm, or whose layout is branch)
 //   - image + yaml  → git-clone, yaml-update, git-commit, git-push, [open-pr, wait-for-merge,] health-check
-//   - layout:branch → git-clone, kustomize-set-image, kustomize-build, git-commit, git-push, [open-pr, wait-for-merge,] health-check
-//     (layout: branch is not implemented yet: git-clone fails the promotion, C05-steps-10)
+//   - layout:branch → render, [open-pr, wait-for-merge,] health-check: render waits for the
+//     environment's RenderRun, a Job that runs RenderJobSequence (never the controller)
 //   - image + kustomize (default) → git-clone, kustomize-set-image, git-commit, git-push, [open-pr, wait-for-merge,] health-check
 func DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy, layout string) []string {
 	// ArgoCD-native path: no git operations, no PR — direct Kubernetes API patch.
@@ -41,23 +74,32 @@ func DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy, layout s
 		return []string{"argocd-set-image", "health-check"}
 	}
 
-	var updateSteps []string
-	if bundleType == "config" || bundleType == "mixed" {
-		updateSteps = []string{"config-merge"}
+	if layout == "branch" {
+		// Rendered manifests: the render (clone, image update, render, commit,
+		// push) runs in the environment's RenderRun Job; the step waits for
+		// its result, then opens the PR or checks health as usual.
+		seq := []string{RenderStepName}
+		if approvalMode == "pr-review" {
+			seq = append(seq, OpenPRStepName, "wait-for-merge")
+		}
+		return append(seq, "health-check")
 	}
-	switch {
-	case bundleType == "config":
-		// No image to update.
-	case updateStrategy == "helm" || bundleType == "chart":
-		updateSteps = append(updateSteps, "helm-set-image")
-	case updateStrategy == "yaml":
-		updateSteps = append(updateSteps, "yaml-update")
-	case layout == "branch":
-		// Rendered manifests: run kustomize-set-image then kustomize-build.
-		// kustomize-build renders the overlay to a file; git-commit picks it up.
-		updateSteps = append(updateSteps, "kustomize-set-image", "kustomize-build")
-	default:
-		updateSteps = append(updateSteps, "kustomize-set-image")
+
+	var updateSteps []string
+	{
+		if bundleType == "config" || bundleType == "mixed" {
+			updateSteps = []string{"config-merge"}
+		}
+		switch {
+		case bundleType == "config":
+			// No image to update.
+		case updateStrategy == "helm" || bundleType == "chart":
+			updateSteps = append(updateSteps, "helm-set-image")
+		case updateStrategy == "yaml":
+			updateSteps = append(updateSteps, "yaml-update")
+		default:
+			updateSteps = append(updateSteps, "kustomize-set-image")
+		}
 	}
 
 	base := append([]string{"git-clone"}, updateSteps...)

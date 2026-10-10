@@ -573,7 +573,7 @@ kubectl logs -n kardinal-system deploy/kardinal-promoter | grep "open-pr\|pull_r
 
 Common causes:
 - The base branch (`spec.git.branch`, default `main`) does not exist in the GitOps repo
-- The environment already runs this version. `git-commit` finds nothing to change, so no PR is opened, and the PromotionStep has `status.outputs.noChanges: "true"`
+- The environment already runs this version. `git-commit` finds nothing to change, so no PR is opened, and the PromotionStep has `status.outputs.noChanges: "true"`. Its `status.outputs.commitSHA` is the branch head it cloned, and the health check waits until the GitOps tool has applied that commit (`waiting for <sha>`): a GitOps source that is suspended or pinned to an older revision keeps the step in `HealthChecking` until `health.timeout`
 - The GitOps repo is private and the token lacks `repo` scope
 
 ---

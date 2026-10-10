@@ -231,6 +231,16 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if desired.Reason == scm.ReasonRepositoryNotAllowed && p.Spec.Git.SecretRef != nil && !ownSecret {
 		result.RequeueAfter = secretRecheckInterval
 	}
+	if desired.Status == metav1.ConditionTrue {
+		conflict, err := r.renderedBranchConflict(ctx, &p)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if conflict != "" {
+			desired = metav1.Condition{Type: "Ready", Status: metav1.ConditionFalse, Reason: reasonRenderedBranchConflict,
+				Message: conflict, ObservedGeneration: p.Generation}
+		}
+	}
 	if hasSelectorFleet(&p) && (result.RequeueAfter == 0 || fleetResync < result.RequeueAfter) {
 		result.RequeueAfter = fleetResync
 	}
@@ -619,6 +629,9 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline, ownSecret bool) meta
 	if err := graph.ValidateUpdateStrategy(p); err != nil {
 		return invalid(err.Error())
 	}
+	if err := graph.ValidateRenderedBranches(p); err != nil {
+		return invalid(err.Error())
+	}
 	// A pr template that does not parse or render would fail every PR of
 	// the environment (docs/pr-evidence.md#customising-the-pr).
 	if err := scm.ValidatePipelinePR(p); err != nil {
@@ -679,6 +692,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 			// Workers are shared fairly between namespaces (#1577).
 			NewQueue: fairqueue.NewFor(mgr)}).
 		For(&kardinalv1alpha1.Pipeline{}).
+		// A Pipeline that renders to a branch of the same repository may
+		// clear or cause a rendered branch conflict.
+		Watches(&kardinalv1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.renderingPipelinesSharingRepo)).
 		// A Pipeline on the same repository and branch changed: re-check
 		// PathConflict on the others.
 		Watches(&kardinalv1alpha1.Pipeline{}, r.pipelinePeers()).

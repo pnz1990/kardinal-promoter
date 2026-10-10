@@ -87,8 +87,7 @@ func TestDockerfileBuildsForTheTargetPlatform(t *testing.T) {
 		assert.NotContains(t, all, arch, "the build stages must not hardcode an architecture")
 	}
 	assert.Contains(t, all, "GOARCH=${TARGETARCH}", "the controller must be compiled for the target architecture")
-	assert.Contains(t, all, "linux_${TARGETARCH}.tar.gz", "kustomize must be downloaded for the target architecture")
-	assert.Contains(t, all, "sha256sum -c", "the kustomize download must be verified")
+	assert.NotContains(t, all, "kustomize", "kustomize and Helm render in process; the image downloads no binary")
 	assert.NotRegexp(t, `apk add[^\n]*\bgit\b`, all, ".dockerignore excludes .git, so git in the builder stamps nothing")
 
 	assert.NotContains(t, final.from, "--platform", "the runtime stage must use the target platform's base image")
@@ -111,7 +110,7 @@ func TestDockerfileBuildsForTheTargetPlatform(t *testing.T) {
 	assert.Equal(t, "65532:65532", user, "the runtime stage must run as the nonroot UID")
 	assert.Contains(t, entrypoint, "/bin/kardinal-controller")
 	joined := strings.Join(copies, "\n")
-	assert.Contains(t, joined, "/usr/local/bin/kustomize", "the runtime stage must ship kustomize (the kustomize-build step runs it)")
+	assert.NotContains(t, joined, "kustomize", "the runtime stage ships no kustomize binary (renders run in process)")
 	assert.Contains(t, joined, "/bin/kardinal-controller")
 }
 
