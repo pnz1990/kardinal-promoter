@@ -417,6 +417,47 @@ func (e *Env) PushBranch(t *testing.T, repo gitserver.Repo, branch, message stri
 	return sha.String()
 }
 
+// BranchContains reports whether commit sha is head or an ancestor of the
+// head of branch (the default branch when empty), from a full clone on the
+// test runner.
+func (e *Env) BranchContains(t *testing.T, repo gitserver.Repo, branch, sha string) bool {
+	t.Helper()
+	remote, token, err := gitserver.PushRemote(e.Git, repo)
+	if err != nil {
+		t.Fatalf("push remote: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	opts := &gogit.CloneOptions{URL: remote, Auth: &gogithttp.BasicAuth{Username: "x-access-token", Password: token}}
+	if branch != "" {
+		opts.ReferenceName, opts.SingleBranch = plumbing.NewBranchReferenceName(branch), true
+	}
+	r, err := gogit.PlainCloneContext(ctx, t.TempDir(), true, opts)
+	if err != nil {
+		t.Fatalf("clone %s: %v", repo.Name, err)
+	}
+	ref, err := r.Head()
+	if err != nil {
+		t.Fatalf("head of %s: %v", repo.Name, err)
+	}
+	if ref.Hash().String() == sha {
+		return true
+	}
+	head, err := r.CommitObject(ref.Hash())
+	if err != nil {
+		t.Fatalf("head commit of %s: %v", repo.Name, err)
+	}
+	want, err := r.CommitObject(plumbing.NewHash(sha))
+	if err != nil {
+		return false // not in the branch's history
+	}
+	ok, err := want.IsAncestor(head)
+	if err != nil {
+		t.Fatalf("is %s an ancestor of %s: %v", sha, ref.Hash(), err)
+	}
+	return ok
+}
+
 // StateLog records every state each PromotionStep of a namespace passes
 // through, from a watch, so a test can assert the order of short-lived states
 // a poll could miss.

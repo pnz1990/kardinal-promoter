@@ -1057,15 +1057,6 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 			Msg("recorded the step list of a Promoting step that had none")
 		return ctrl.Result{Requeue: true}, nil
 	}
-	// The cache can lag this controller's own last write; the steps must not
-	// run from a status that is already outdated (#1664). base is the copy
-	// the cache returned.
-	if behind, err := r.cacheBehind(ctx, base); err != nil {
-		return ctrl.Result{}, err
-	} else if behind {
-		log.Debug().Str("step", ps.Name).Msg("the cached step is behind the stored one; requeueing before running the steps")
-		return ctrl.Result{RequeueAfter: time.Second}, nil
-	}
 	eng := steps.NewEngine(seq)
 
 	// The working directory is always recomputed from the PromotionStep's
@@ -1115,6 +1106,16 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 				res.Priority = &normalPriority
 			}
 		}()
+	}
+	// The cache can lag this controller's own last write; the steps must not
+	// run from a status that is already outdated (#1664). base is the copy
+	// the cache returned. Checked once the branch turn is taken, so a step
+	// waiting for its turn makes no API read; a requeue gives the turn back.
+	if behind, err := r.cacheBehind(ctx, base); err != nil {
+		return ctrl.Result{}, err
+	} else if behind {
+		log.Debug().Str("step", ps.Name).Msg("the cached step is behind the stored one; requeueing before running the steps")
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 	nextIdx, result, execErr := eng.ExecuteFrom(ctx, state, prevIdx)
 

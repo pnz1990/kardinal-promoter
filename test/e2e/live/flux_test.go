@@ -287,7 +287,9 @@ func TestFlux_UnhealthyKustomizations(t *testing.T) {
 	// Flux applies the branch head: behind's commit, or a later one of gone
 	// or stalled, which push to the same branch in no set order (each push
 	// is rebased on the last, so the head contains behind's commit).
-	assert.Equal(t, fluxRev(a.repo.Branch, e.BranchHead(t, a.repo)), framework.FluxAppliedRevision(a.kustomization(t, "behind")))
+	head := e.BranchHead(t, a.repo)
+	assert.Equal(t, fluxRev(a.repo.Branch, head), framework.FluxAppliedRevision(a.kustomization(t, "behind")))
+	assert.True(t, e.BranchContains(t, a.repo, a.repo.Branch, commit), "the applied head %s contains behind's commit %s", head, commit)
 }
 
 // TestFlux_StalledOnSiblingCommit checks a stall on a later commit of the
