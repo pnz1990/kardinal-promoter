@@ -125,9 +125,10 @@ func main() {
 	flag.DurationVar(&scmWaitTimeout, "scm-wait-timeout", psreconciler.DefaultSCMWaitTimeout,
 		"Longest a PromotionStep waits for an open SCM circuit (its SCM host keeps failing) before it fails, "+
 			"when its environment sets no stepTimeoutSeconds.")
-	flag.BoolVar(&auditRetention, "audit-retention", false,
+	flag.BoolVar(&auditRetention, "audit-retention", auditRetentionDefault,
 		"Delete AuditEvents past their retention (--audit-retention-max-age, --audit-retention-max-per-pipeline). "+
-			"Off by default: every record is kept until you opt in.")
+			"On by default: unbounded records fill etcd, which takes down the whole cluster. "+
+			"false keeps every record (export them first: docs/guides/security.md, Retention).")
 	flag.DurationVar(&auditMaxAge, "audit-retention-max-age", auditretention.DefaultMaxAge,
 		"Delete AuditEvents created (metadata.creationTimestamp) longer ago than this. 0 keeps records of any age.")
 	flag.IntVar(&auditMaxPerPipeline, "audit-retention-max-per-pipeline", auditretention.DefaultMaxPerPipeline,
@@ -716,8 +717,11 @@ func main() {
 			logger.Fatal().Err(err).Msg("unable to create the AuditEvent retention client")
 		}
 		if err := mgr.Add(&auditretention.Pruner{
-			Client:         retentionClient,
-			Namespace:      watchNamespace,
+			Client:    retentionClient,
+			Namespace: watchNamespace,
+			// Under --namespace-shard each shard prunes only its own
+			// namespaces (shard.Active is nil-safe: owns all when off).
+			Owns:           func(ns string) bool { return shard.Active().Owns(ns) },
 			MaxAge:         auditMaxAge,
 			MaxPerPipeline: auditMaxPerPipeline,
 			Interval:       auditRetentionInterval,

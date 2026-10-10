@@ -27,7 +27,7 @@ What the namespaced rules grant:
 | `events.k8s.io` `events` | create, patch | Events from every reconciler (the events.k8s.io/v1 API) |
 | `events` (core) | get, list, watch, create, patch | The UI step event list reads Events through core/v1; leader election writes core Events |
 | All kardinal.io kinds and their `/status` | full CRUD; get, update, patch on status | Reconcilers |
-| `auditevents` | get, list, watch, create; delete only with `audit.retention.enabled: true` (off by default) | Records are never changed; opt-in retention deletes old ones |
+| `auditevents` | get, list, watch, create; delete with `audit.retention.enabled: true` (the default) | Records are never changed; retention (on by default) deletes old ones |
 | `graphs.kro.run` | full CRUD; get on `graphs/status` | One Graph per Bundle |
 | `serviceaccounts`; `rolebindings`; `clusterroles` (bind, limited to the two Graph ClusterRoles) | get, create; get, list, create, update, delete; bind | The Graph identity. `list` is for the sweep that deletes reader bindings no Graph reads through; it runs in cluster mode only and touches only RoleBindings labeled `app.kubernetes.io/managed-by=kardinal-promoter` |
 | `deployments`, `argoproj.io` `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch | Health adapters. `rbac.argocdApplicationsWrite=true` adds `patch` on Applications for `update.strategy: argocd` |
@@ -368,15 +368,23 @@ spec is set at creation and never mutated. Kubernetes RBAC controls who can dele
 ### Retention
 
 An AuditEvent has no owner, so it outlives the Bundle and the step it records, and nothing
-else deletes it. Without retention a busy cluster keeps every record in etcd for ever.
-Retention is **off by default**, so an upgrade never deletes an audit record. Turn it on with
-`audit.retention.enabled: true`. The controller's leader then applies it every 10 minutes:
+else deletes it. Without retention a busy cluster keeps every record in etcd for ever, and a
+full etcd quota stops the whole cluster: no write of any kind succeeds until an operator
+compacts and defragments etcd. Each Verified promotion step writes two records of about
+1.2 KB in etcd; the scale suite's soak (5 Bundles a second) wrote 350-660 a minute, which fills
+etcd's default 2 GiB quota in 2 to 4 days. Retention is therefore **on by default**. The
+controller's leader applies it every 10 minutes:
 
 | Value | Flag | Default | Deletes |
 |---|---|---|---|
-| `audit.retention.enabled` | `--audit-retention` | `false` | `true` turns retention on and grants the controller `delete` on AuditEvents |
+| `audit.retention.enabled` | `--audit-retention` | `true` | `true` applies retention and grants the controller `delete` on AuditEvents; `false` keeps every record |
 | `audit.retention.maxAge` | `--audit-retention-max-age` | `2160h` (90 days) | records created longer ago (`metadata.creationTimestamp`, set by the API server). `0s` keeps any age |
 | `audit.retention.maxPerPipeline` | `--audit-retention-max-per-pipeline` | `1000` | per Pipeline (namespace and `kardinal.io/pipeline` label), all but the newest records, newest by `metadata.creationTimestamp` and, within one second, `kardinal.io/created-at`. A record created in the last 10 minutes (one run's interval) is kept even past the limit, so a burst, such as an [audit outbox](#audit-outbox) flushed after an outage, stays at least that long for an export to read. `0` keeps any number |
+
+Records that name no Pipeline (no `kardinal.io/pipeline` label, such as Bundle API writes and
+overrides of standalone gates) are capped too: in each namespace they share one cap of
+`maxPerPipeline`. So with the defaults a namespace holds at most 1000 records per Pipeline
+plus 1000 that name none, younger than 90 days.
 
 A run lists the records metadata-only, 500 at a time, and deletes at most 2000, the oldest
 first. It uses a client of its own limited to 5 API requests a second, so it never takes API
@@ -387,8 +395,29 @@ deletions.
 A gate whose result changes often writes a record at each change, and can reach
 `maxPerPipeline` quickly. If you must keep every record, export them
 ([SIEM integration](#siem-integration)) more often than the effective retention (the age
-limit, or the time a busy Pipeline takes to write `maxPerPipeline` records), or leave
+limit, or the time a busy Pipeline takes to write `maxPerPipeline` records), or turn
 retention off.
+
+**Sharding.** With `controller.namespaceShard` (`--namespace-shard`), each shard's leader
+prunes only the namespaces its shard owns, so shards neither repeat each other's work nor apply
+their limits to another shard's records ([Sharding](../sharding.md)).
+
+**Turning it off.** Set `audit.retention.enabled: false` (`--audit-retention=false`). The chart
+then also drops `delete` on AuditEvents. An install that does not use the chart, or that
+removed the `delete` grant, must set `--audit-retention=false` too: otherwise every run (every
+10 minutes) fails with `Forbidden` and logs the error. Every record stays, so size etcd for them (see the
+numbers above) or export and delete them yourself.
+
+**Exporting first.** To keep every record outside the cluster, run the
+[SIEM integration](#siem-integration) export on a schedule shorter than the effective
+retention, and make its first run before you install or upgrade to a release with retention
+on.
+
+**Upgrading** from a release without retention deletes, in the first runs after the upgrade,
+the records already past the limits: older than 90 days, or beyond each Pipeline's 1000 newest.
+A run deletes at most 2000, so a large backlog is cleared over several runs (about 7 minutes
+each). Export first if you must keep them, or upgrade with `audit.retention.enabled: false`
+and turn it on after the export.
 
 ### Events written automatically
 
