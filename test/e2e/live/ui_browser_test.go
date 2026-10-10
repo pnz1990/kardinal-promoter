@@ -771,3 +771,41 @@ func TestUI_BrowserStatic(t *testing.T) {
 
 	framework.Playwright(t, "static.spec.ts", browserEnv(c, a.ns))
 }
+
+// TestUI_BrowserWaves checks how the UI draws a wave (#1580): podinfo is
+// test, then w1…w6 in wave 1 after it, all Verified by one Bundle. The fleet
+// board shows the wave as one plate, the stage lane as one card that counts
+// it and expands to its six environments, the DAG lists them top to bottom
+// in spec order, and the release metrics count the whole wave as the final
+// environments instead of naming w6.
+//
+// Covers UI-WAVE-01.
+func TestUI_BrowserWaves(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	wave := []string{"w1", "w2", "w3", "w4", "w5", "w6"}
+	a := newArgoApp(t, e, append([]string{"test"}, wave...)...)
+	p := a.pipeline(nil)
+	for _, env := range wave {
+		envSpec(t, p, env).Wave = 1
+	}
+	a.apply(t, p)
+	b := createBundle(t, e, a.ns, pipelineName, "", fixtures.V2, nil)
+	for _, env := range append([]string{"test"}, wave...) {
+		e.WaitStepState(t, a.ns, pipelineName, b.Name, env, "Verified", promoteTimeout)
+	}
+	framework.Eventually(t, time.Minute, "the Bundle lists every environment health checked", func(ctx context.Context) (bool, string) {
+		var got v1alpha1.Bundle
+		if err := e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: b.Name}, &got); err != nil {
+			return false, err.Error()
+		}
+		checked := 0
+		for _, env := range got.Status.Environments {
+			if env.HealthCheckedAt != nil {
+				checked++
+			}
+		}
+		return checked == 1+len(wave), fmt.Sprintf("%d of %d health checked", checked, 1+len(wave))
+	})
+	framework.Playwright(t, "waves.spec.ts", browserEnv(mainUI(t, e), a.ns, "KARDINAL_UI_BUNDLE", b.Name))
+}
