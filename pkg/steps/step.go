@@ -15,6 +15,8 @@ package steps
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -175,6 +177,15 @@ type StepState struct {
 	// pass (B69).
 	Sequence []string
 
+	// BeforePush, when set, runs right before every push git-push makes
+	// (the first attempt and each one after a rebase). direct is true for a
+	// push to the environment's base branch, false for kardinal's PR branch.
+	// A non-nil error stops the push: a stale promotion (its Bundle was
+	// superseded or rejected, or a newer Bundle already pushed to this
+	// environment) must never land on the branch after a newer one (#1603).
+	// It wraps ErrStalePush when the push is refused for that reason.
+	BeforePush func(ctx context.Context, direct bool) error
+
 	// Render is set only in the kardinal-render Job, which runs the render
 	// of a layout: branch environment (git-clone, the image update,
 	// render-manifests, git-commit and git-push). The controller never sets
@@ -185,6 +196,14 @@ type StepState struct {
 	// Graph mirrors it onto the PromotionStep (spec.live.renders).
 	LiveRenders []v1alpha1.LiveRenderRun
 }
+
+// ErrStalePush marks a push BeforePush refused because the promotion is
+// stale (#1603). git-push fails the step with it, permanently.
+var ErrStalePush = errors.New("stale promotion: refusing to push")
+
+// ErrNewerPushed is the ErrStalePush for a newer Bundle that already pushed
+// to the environment: the step ends Superseded, not Failed (#1603).
+var ErrNewerPushed = fmt.Errorf("%w: a newer bundle already pushed", ErrStalePush)
 
 // RenderContext is what a render Job knows beyond the step state.
 type RenderContext struct {

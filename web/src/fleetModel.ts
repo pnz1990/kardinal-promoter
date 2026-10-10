@@ -42,6 +42,12 @@ export interface FleetRollup {
   /** Started and not yet Verified or Failed. */
   inFlight: number
   failed: number
+  /** Superseded: a newer Bundle (the rollback of that one target) deployed
+   *  it first, so the active Bundle's step there did not push (#1603). It is
+   *  settled: neither Verified, in flight nor a failure. */
+  superseded: number
+  /** The Superseded targets, by name. */
+  supersededTargets: string[]
   /** Not started by the active Bundle. */
   pending: number
   maxConcurrent: number
@@ -144,12 +150,14 @@ function fleetStation(env: string, f: EnvironmentFleet, p: Pipeline): Station {
   const deployed = p.deployed ?? {}
   const active = p.activeBundleName
   let verified = 0, inFlight = 0, failed = 0, pending = 0
+  let supersededTargets: string[] = []
   const versions = new Map<string, number>()
   let latest: string | undefined
   for (const t of f.targets) {
     const st = active ? states[t] : undefined
     if (st === 'Verified') verified++
     else if (st && FAILED.has(st)) failed++
+    else if (st === 'Superseded') supersededTargets.push(t)
     else if (st) inFlight++ // a step exists: it holds a place until Verified
     else pending++
     const d = deployed[t]
@@ -162,13 +170,14 @@ function fleetStation(env: string, f: EnvironmentFleet, p: Pipeline): Station {
   const total = f.targets.length
   if (!active) {
     // Nothing is moving: every target that runs something is settled.
-    verified = 0; pending = 0; inFlight = 0; failed = 0
+    verified = 0; pending = 0; inFlight = 0; failed = 0; supersededTargets = []
   }
+  const superseded = supersededTargets.length
   const stopped = f.maxUnavailable !== undefined && failed >= f.maxUnavailable
   let state: StationState
   if (failed > 0) state = 'failed'
   else if (active && inFlight > 0) state = 'arriving'
-  else if (active && verified === total && total > 0) state = 'settled'
+  else if (active && verified > 0 && verified + superseded === total) state = 'settled'
   else if (active && verified > 0) state = 'arriving' // part way: the next targets wait for a place
   else if (active) state = 'ahead'
   else state = versions.size > 0 ? 'settled' : 'empty'
@@ -181,7 +190,7 @@ function fleetStation(env: string, f: EnvironmentFleet, p: Pipeline): Station {
     env, version, bundle, verifiedAt: versions.size === 1 ? latest : undefined, state,
     incomingState: failed > 0 ? 'Failed' : inFlight > 0 ? 'Promoting' : undefined,
     fleet: {
-      total, verified, inFlight, failed, pending, maxConcurrent: f.maxConcurrent ?? 0,
+      total, verified, inFlight, failed, superseded, supersededTargets, pending, maxConcurrent: f.maxConcurrent ?? 0,
       maxUnavailable: f.maxUnavailable, stopped, versions: versions.size, message: f.message,
     },
   }

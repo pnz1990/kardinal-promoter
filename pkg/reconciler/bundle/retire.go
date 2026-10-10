@@ -394,7 +394,7 @@ func unsettledStep(steps []kardinalv1alpha1.PromotionStep) (busy string, aborted
 				len(s.Status.PendingAuditEvents)), aborted
 		}
 		switch s.Status.State {
-		case "Verified", "Failed", "RollingBack":
+		case "Verified", "Failed", "RollingBack", "Superseded":
 		case "AbortedByAlarm":
 			aborted = true
 		default:

@@ -317,7 +317,7 @@ type PromotionStepStatus struct {
 	// ${step.status.state == "Verified"} to advance the promotion DAG.
 	// Verifying: the health check passed and the post-deploy hooks and
 	// analyses run.
-	// +kubebuilder:validation:Enum=Pending;Promoting;WaitingForMerge;HealthChecking;Verifying;Verified;Failed;AbortedByAlarm;RollingBack
+	// +kubebuilder:validation:Enum=Pending;Promoting;WaitingForMerge;HealthChecking;Verifying;Verified;Failed;AbortedByAlarm;RollingBack;Superseded
 	State string `json:"state,omitempty"`
 
 	// Message provides human-readable detail about the current state.

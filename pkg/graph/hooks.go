@@ -350,7 +350,7 @@ func stepAdvanced(stepK8sName, phase string) string {
 func stepAdvancedExpr(step, phase string) string {
 	states := `!(s.?status.?state.orValue("") in ["", "Pending"])`
 	if phase == kardinalv1alpha1.HookPhasePost {
-		states = `s.?status.?state.orValue("") in ["Verified", "Failed", "AbortedByAlarm", "RollingBack"]`
+		states = `s.?status.?state.orValue("") in ["Verified", "Failed", "AbortedByAlarm", "RollingBack", "Superseded"]`
 	}
 	return fmt.Sprintf(`${%s.exists(s, s.metadata.name == %s && %s)}`, refStepsNodeID, step, states)
 }

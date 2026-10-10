@@ -463,3 +463,63 @@ func TestGraph_FleetSurvivesKroRestart(t *testing.T) {
 		assert.Equal(t, uid, steps[env].UID, "%s: the step admitted before the restart is the one that finished", env)
 	}
 }
+
+// TestGraph_FleetTargetRolledBackFirst (#1603 with D1): while a fleet Bundle
+// B promotes its targets one at a time, one target that B has not reached
+// yet is rolled back on its own. The rollback Bundle R is newer than B and
+// pushes to that target first, so B's step there does not push over it: it
+// ends Superseded. It is settled: the targets after it start (maxConcurrent
+// 1), post starts once the other targets are Verified, B ends Verified, and
+// the target keeps the rollback's version.
+//
+// Covers FLEET-09.
+func TestGraph_FleetTargetRolledBackFirst(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ns := e.Namespace(t)
+	names := []string{"t00", "t01", "t02", "t03", "t04"}
+	var targets []v1alpha1.FleetTarget
+	for _, n := range names {
+		targets = append(targets, v1alpha1.FleetTarget{Name: n})
+	}
+	repo := e.Repo(t, ns, fleetFiles(ns, []string{"test", "post"}, "fleet", names, false))
+	createCompactHealth(t, e, ns)
+	a := &app{e: e, ns: ns, envs: []string{"test", "prod", "post"}, repo: repo}
+	a.apply(t, fleetPromotion(ns, repo, &v1alpha1.FleetSpec{MaxConcurrent: 1, Targets: targets}, "auto"))
+
+	// Two releases everywhere, so prod-t02 has one to roll back to.
+	for _, img := range []string{imageV2, imageV3} {
+		b := e.CreateBundle(t, ns, pipelineName, "--image", img)
+		e.WaitBundlePhase(t, ns, b, "Verified", 2*promoteTimeout)
+	}
+
+	b := e.CreateBundle(t, ns, pipelineName, "--image", imageV1)
+	_, rb := rbRollback(t, a, "prod-t02")
+	rbStep := e.WaitStepState(t, ns, pipelineName, rb, "prod-t02", "Verified", promoteTimeout)
+
+	got := e.WaitStepState(t, ns, pipelineName, b, "prod-t02", "Superseded", 2*promoteTimeout)
+	require.True(t, got.CreationTimestamp.After(rbStep.CreationTimestamp.Time),
+		"the rollback must reach prod-t02 first for this test: B's step was created at %s, the rollback's at %s",
+		got.CreationTimestamp, rbStep.CreationTimestamp)
+	assert.Contains(t, got.Status.Message, "newer bundle "+rb+" already pushed to prod-t02")
+	for _, s := range got.Status.Steps {
+		if s.Name == "git-push" {
+			assert.NotEqual(t, v1alpha1.StepExecutionCompleted, s.State, "B did not push to prod-t02")
+		}
+	}
+
+	// Settled: the next targets start, post runs, and B is Verified.
+	for _, env := range []string{"prod-t03", "prod-t04", "post"} {
+		e.WaitStepState(t, ns, pipelineName, b, env, "Verified", promoteTimeout)
+	}
+	final := e.WaitBundlePhase(t, ns, b, "Verified", time.Minute)
+	for _, env := range final.Status.Environments {
+		if env.Name == "prod-t02" {
+			assert.Equal(t, "Superseded", env.Phase, "the Bundle names the Superseded target")
+		}
+	}
+	assert.Contains(t, e.ReadFile(t, repo, repo.Branch, "fleet/t02/kustomization.yaml"), "newTag: "+fixtures.V2,
+		"prod-t02 keeps the rollback's version")
+	assert.Contains(t, e.ReadFile(t, repo, repo.Branch, "fleet/t03/kustomization.yaml"), "newTag: "+fixtures.V1,
+		"the targets after it run B")
+}

@@ -96,6 +96,9 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 		force = false
 	}
 
+	if res, stop, err := beforePush(ctx, state, !force); stop {
+		return res, err
+	}
 	err := state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Auth(), force)
 	rebases := 0
 	if !force && errors.Is(err, scm.ErrNonFastForward) {
@@ -108,6 +111,9 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 		if restart != "" {
 			return parentsteps.StepResult{Status: parentsteps.StepRestart, Message: restart}, nil
 		}
+	}
+	if errors.Is(err, parentsteps.ErrStalePush) {
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, parentsteps.Permanent(err)
 	}
 	if err != nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("push failed: %v", err)}, err
@@ -135,6 +141,25 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 		Message: msg,
 		Outputs: outputs,
 	}, nil
+}
+
+// beforePush runs state.BeforePush. stop is true when the push must not be
+// made: a stale promotion fails the step permanently, any other error is
+// returned for a retry.
+func beforePush(ctx context.Context, state *parentsteps.StepState, direct bool) (parentsteps.StepResult, bool, error) {
+	if state.BeforePush == nil {
+		return parentsteps.StepResult{}, false, nil
+	}
+	err := state.BeforePush(ctx, direct)
+	switch {
+	case err == nil:
+		return parentsteps.StepResult{}, false, nil
+	case errors.Is(err, parentsteps.ErrStalePush):
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, true, parentsteps.Permanent(err)
+	default:
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("check before push: %v", err)},
+			true, fmt.Errorf("check before push: %w", err)
+	}
 }
 
 // OutputPushedSHA is the git-push output (status.outputs.pushedSHA) naming
@@ -214,6 +239,13 @@ func rebaseAndPush(ctx context.Context, state *parentsteps.StepState, branch str
 					"redoing the change from a fresh clone", branch, err), true, nil
 			}
 			return n, "", false, fmt.Errorf("rebase onto %s: %w", branch, err)
+		}
+		// The rebase moved this commit onto commits another writer pushed,
+		// a newer Bundle's among them perhaps: check again before pushing.
+		if state.BeforePush != nil {
+			if err := state.BeforePush(ctx, true); err != nil {
+				return n + 1, "", false, err
+			}
 		}
 		err := state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Auth(), false)
 		if err == nil {
