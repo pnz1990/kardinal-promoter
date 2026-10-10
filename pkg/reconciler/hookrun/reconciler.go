@@ -25,21 +25,29 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	builderutil "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
@@ -69,6 +77,11 @@ const (
 	// requeueSibling is the poll while another run of the same hook slot
 	// finishes.
 	requeueSibling = 10 * time.Second
+
+	// requeuePaused is the fallback poll while a pre hook waits for a pause
+	// or a hold to end; the freeze gate and Pipeline watches normally wake it
+	// first.
+	requeuePaused = 30 * time.Second
 )
 
 // Reconciler runs HookRun Jobs.
@@ -367,7 +380,7 @@ func (r *Reconciler) start(ctx context.Context, log zerolog.Logger, base, hr *v1
 		if hr.Spec.Phase == v1alpha1.HookPhasePost {
 			when = "the step had already finished"
 		}
-		r.finish(hr, v1alpha1.HookRunSkipped, fmt.Sprintf("not run: the hook was added to the Pipeline after %s", when))
+		r.finish(hr, v1alpha1.HookRunSkipped, v1alpha1.HookRunSkippedAddedLate+when)
 		log.Info().Msg("hook skipped: added after its step advanced")
 		return ctrl.Result{}, r.patch(ctx, base, hr)
 	}
@@ -381,6 +394,25 @@ func (r *Reconciler) start(ctx context.Context, log zerolog.Logger, base, hr *v1
 		r.finish(hr, v1alpha1.HookRunFailed, err.Error())
 		log.Warn().Err(err).Msg("hook rejected")
 		return ctrl.Result{}, r.patch(ctx, base, hr)
+	}
+	// A pre hook of a Bundle that is superseded or rejected is not run; one
+	// whose Pipeline is paused, or whose environment is held for another
+	// Bundle, waits (preHookHalt). Waiting before the start keeps the timeout
+	// from running down meanwhile.
+	skip, wait, err := r.preHookHalt(ctx, hr)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("hookrun %s: %w", hr.Name, err)
+	}
+	if skip != "" {
+		hr.Status.SpecHash, hr.Status.StartedAt = hash, &now
+		r.finish(hr, v1alpha1.HookRunSkipped, "not run: "+skip)
+		log.Info().Str("reason", skip).Msg("pre hook skipped")
+		return ctrl.Result{}, r.patch(ctx, base, hr)
+	}
+	if wait != "" {
+		hr.Status.Phase = v1alpha1.HookRunPending
+		hr.Status.Message = "not started: " + wait
+		return ctrl.Result{RequeueAfter: requeuePaused}, r.patch(ctx, base, hr)
 	}
 	if !controllerutil.ContainsFinalizer(hr, Finalizer) {
 		before := hr.DeepCopy()
@@ -406,6 +438,49 @@ func (r *Reconciler) start(ctx context.Context, log zerolog.Logger, base, hr *v1
 	return ctrl.Result{Requeue: true}, nil
 }
 
+// preHookHalt says whether a pre hook may start its Job now. skip is why it
+// never runs: its Bundle was superseded or rejected, so its step halts
+// before it would promote (haltOf), and a migration of a version nobody
+// promotes must not run; it could overlap the newer Bundle's. wait is why it
+// does not start yet: the Pipeline is paused (the freeze PolicyGate, read as
+// the PromotionStep reconciler reads it; a pause does not rebuild the Graph)
+// or its environment is held for another Bundle (spec.holds). Both end, and
+// the hook then runs. A post hook is never held: its step merged and the
+// change is live, as holdIfPaused never holds post-merge work.
+func (r *Reconciler) preHookHalt(ctx context.Context, hr *v1alpha1.HookRun) (skip, wait string, err error) {
+	if hr.Spec.Phase != v1alpha1.HookPhasePre {
+		return "", "", nil
+	}
+	var b v1alpha1.Bundle
+	if err := r.Get(ctx, types.NamespacedName{Namespace: hr.Namespace, Name: hr.Spec.BundleName}, &b); err != nil {
+		return "", "", fmt.Errorf("get bundle %s: %w", hr.Spec.BundleName, err)
+	}
+	switch {
+	case b.Spec.Rejected != nil || b.Status.Phase == "Rejected":
+		return fmt.Sprintf("Bundle %s was rejected", b.Name), "", nil
+	case b.Status.Phase == "Superseded":
+		return fmt.Sprintf("Bundle %s was superseded by a newer Bundle", b.Name), "", nil
+	}
+	var p v1alpha1.Pipeline
+	switch err := r.Get(ctx, types.NamespacedName{Namespace: hr.Namespace, Name: hr.Spec.PipelineName}, &p); {
+	case apierrors.IsNotFound(err):
+	case err != nil:
+		return "", "", fmt.Errorf("get pipeline %s: %w", hr.Spec.PipelineName, err)
+	default:
+		if h := lifecycle.HoldOf(&p, hr.Spec.Environment); h != nil && h.Bundle != b.Name {
+			return "", fmt.Sprintf("environment %s is held for Bundle %s", hr.Spec.Environment, h.Bundle), nil
+		}
+	}
+	paused, err := lifecycle.IsPaused(ctx, r.Client, hr.Namespace, hr.Spec.PipelineName)
+	if err != nil {
+		return "", "", err
+	}
+	if paused {
+		return "", lifecycle.PausedMessage(hr.Spec.PipelineName), nil
+	}
+	return "", "", nil
+}
+
 // createJob creates the hook's Job, owned by the HookRun. It is built from
 // the spec recorded at start: a spec that changed since fails the HookRun.
 func (r *Reconciler) createJob(ctx context.Context, log zerolog.Logger, base, hr *v1alpha1.HookRun) (ctrl.Result, error) {
@@ -428,6 +503,21 @@ func (r *Reconciler) createJob(ctx context.Context, log zerolog.Logger, base, hr
 	if err != nil {
 		r.finish(hr, v1alpha1.HookRunFailed, err.Error())
 		return ctrl.Result{}, r.patch(ctx, base, hr)
+	}
+	// Checked again right before the Job: a supersede, rejection, pause or
+	// hold that landed since start. The deadline is already running here, so
+	// a wait counts against the timeout.
+	skip, wait, err := r.preHookHalt(ctx, hr)
+	switch {
+	case err != nil:
+		return ctrl.Result{}, fmt.Errorf("hookrun %s: %w", hr.Name, err)
+	case skip != "":
+		r.finish(hr, v1alpha1.HookRunSkipped, "not run: "+skip)
+		log.Info().Str("reason", skip).Msg("pre hook skipped before its Job was created")
+		return ctrl.Result{}, r.patch(ctx, base, hr)
+	case wait != "":
+		hr.Status.Message = "not started: " + wait
+		return ctrl.Result{RequeueAfter: requeuePaused}, r.patch(ctx, base, hr)
 	}
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -704,6 +794,86 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// that owns the namespace runs a hook's Job.
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.HookRun{}).
-		Owns(&batchv1.Job{})
+		Owns(&batchv1.Job{}).
+		// A resume (the freeze gate deleted), a hold released and a Bundle
+		// superseded or rejected wake the pre hooks that wait for them
+		// (preHookHalt) at once, not on the next requeuePaused poll.
+		Watches(&v1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.freezeGateRuns),
+			builderutil.WithPredicates(freezeGateEvent)).
+		Watches(&v1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.pipelineRuns),
+			builderutil.WithPredicates(holdsChanged)).
+		Watches(&v1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.bundleRuns),
+			builderutil.WithPredicates(bundleHalted))
 	return shard.Active().Complete(b, tracing.WrapReconciler("hookrun", r), &v1alpha1.HookRunList{})
+}
+
+// freezePrefix starts every freeze PolicyGate name (lifecycle.FreezeGateName).
+var freezePrefix = lifecycle.FreezeGateName("")
+
+// freezeGateEvent passes the creation and deletion of a freeze PolicyGate
+// (pause and resume).
+var freezeGateEvent = predicate.Funcs{
+	CreateFunc:  func(e event.CreateEvent) bool { return strings.HasPrefix(e.Object.GetName(), freezePrefix) },
+	DeleteFunc:  func(e event.DeleteEvent) bool { return strings.HasPrefix(e.Object.GetName(), freezePrefix) },
+	UpdateFunc:  func(event.UpdateEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
+}
+
+// holdsChanged passes Pipeline updates that change spec.holds.
+var holdsChanged = predicate.Funcs{
+	CreateFunc:  func(event.CreateEvent) bool { return false },
+	DeleteFunc:  func(event.DeleteEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		o, ok1 := e.ObjectOld.(*v1alpha1.Pipeline)
+		n, ok2 := e.ObjectNew.(*v1alpha1.Pipeline)
+		return ok1 && ok2 && !equality.Semantic.DeepEqual(o.Spec.Holds, n.Spec.Holds)
+	},
+}
+
+// bundleHalted passes the Bundle update that supersedes or rejects it.
+var bundleHalted = predicate.Funcs{
+	CreateFunc:  func(event.CreateEvent) bool { return false },
+	DeleteFunc:  func(event.DeleteEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		o, ok1 := e.ObjectOld.(*v1alpha1.Bundle)
+		n, ok2 := e.ObjectNew.(*v1alpha1.Bundle)
+		return ok1 && ok2 && halted(n) && !halted(o)
+	},
+}
+
+func halted(b *v1alpha1.Bundle) bool {
+	return b.Spec.Rejected != nil || b.Status.Phase == "Rejected" || b.Status.Phase == "Superseded"
+}
+
+func (r *Reconciler) freezeGateRuns(ctx context.Context, obj client.Object) []reconcile.Request {
+	return r.waitingRuns(ctx, obj.GetNamespace(), client.MatchingLabels{
+		"kardinal.io/pipeline": strings.TrimPrefix(obj.GetName(), freezePrefix)})
+}
+
+func (r *Reconciler) pipelineRuns(ctx context.Context, obj client.Object) []reconcile.Request {
+	return r.waitingRuns(ctx, obj.GetNamespace(), client.MatchingLabels{"kardinal.io/pipeline": obj.GetName()})
+}
+
+func (r *Reconciler) bundleRuns(ctx context.Context, obj client.Object) []reconcile.Request {
+	return r.waitingRuns(ctx, obj.GetNamespace(), client.MatchingLabels{"kardinal.io/bundle": obj.GetName()})
+}
+
+// waitingRuns returns the pre-hook HookRuns matching sel that have no Job
+// yet and are not finished: the ones preHookHalt holds.
+func (r *Reconciler) waitingRuns(ctx context.Context, ns string, sel client.MatchingLabels) []reconcile.Request {
+	sel[graph.LabelHookPhase] = v1alpha1.HookPhasePre
+	var list v1alpha1.HookRunList
+	if err := r.List(ctx, &list, client.InNamespace(ns), sel); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range list.Items {
+		hr := &list.Items[i]
+		if hr.Status.JobUID == "" && !terminal(hr.Status.Phase) {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(hr)})
+		}
+	}
+	return reqs
 }
