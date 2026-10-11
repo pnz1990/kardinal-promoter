@@ -284,6 +284,7 @@ func TestRollbackCmd_Hold(t *testing.T) {
 // TestRollbackCmd_HoldFlags (#1528): --reason without --hold is refused
 // before anything is created, and release-hold needs --env.
 func TestRollbackCmd_HoldFlags(t *testing.T) {
+	keepStyle(t)
 	for args, want := range map[string]string{
 		"--reason x":           "--reason is the reason of a hold; add --hold",
 		"--hold":               "rollback --hold needs --reason",
@@ -324,7 +325,7 @@ func TestMutations_JSON(t *testing.T) {
 			lcBundle("app-v1", "app", "1", 0), lcBundle("app-v2", "app", "2", 10),
 			lcStep("app-v1", "uat", "Verified", 5), lcStep("app-v1", "prod", "Verified", 5), lcStep("app-v2", "prod", "Verified", 15)}
 	}
-	const url = "https://kardinal.example/ui/#pipeline=app&ns=default"
+	const url = "https://kardinal.example/ui/#/p/default/app"
 
 	var buf bytes.Buffer
 	c := lcClient(t, lcPipeline(), lcBundle("app-v1", "app", "1", 0), lcBundle("app-v2", "app", "2", 10),

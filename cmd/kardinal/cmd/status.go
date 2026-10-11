@@ -15,6 +15,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -42,15 +44,16 @@ func newStatusCmd() *cobra.Command {
 	var (
 		controllerNS string
 		watchFlag    bool
+		all          bool
 	)
 	cmd := &cobra.Command{
 		Use:   "status [<pipeline>]",
 		Short: "Show controller health or per-pipeline in-flight promotion details",
-		Long: `Without a pipeline: the controller version and how many pipelines and
-bundles there are. With one: per environment, the version running there, a
-newer one on its way in, its state in words and since when, its PR, and the
-gates holding it back. Run it first when a promotion is stuck; -w refreshes
-it and -o json prints it for scripts.`,
+		Long: `Without a pipeline: the controller and its readiness, the counts, and one
+line per pipeline with its summary. With one: per environment, the version
+running there, a newer one on its way in, its state and since when, its PR,
+and the gates holding it back. Run it first when a promotion is stuck; -w
+refreshes it and -o json prints it for scripts.`,
 		Example: `  kardinal status
   kardinal status my-app -w
   kardinal status my-app -o json | jq -r '.environments[] | .name + "=" + .version'`,
@@ -66,15 +69,30 @@ it and -o json prints it for scripts.`,
 				if len(args) == 1 {
 					return statusPipelineWriter(w, c, ns, args[0])
 				}
-				return statusSummaryFn(w, c, controllerNS)
+				// Every namespace, unless -n names one (-A: every namespace).
+				scope, fallback := "", ns
+				if cmd.Flags().Changed("namespace") && !all {
+					scope = ns
+				}
+				if all {
+					fallback = "" // asked for every namespace: no fallback
+				}
+				return statusSummaryIn(w, c, controllerNS, scope, fallback)
 			}
 			if !watchFlag {
-				return render()
+				if err := render(); err != nil {
+					return err
+				}
+				if len(args) == 1 && !structured() {
+					printUILink(ns, args[0], "")
+				}
+				return nil
 			}
 			return watchLoop(cmd.Context(), w, getPipelinesWatchInterval, render)
 		},
 	}
 	cmd.Flags().BoolVarP(&watchFlag, "watch", "w", false, "Refresh every 2 seconds (Ctrl-C to quit)")
+	cmd.Flags().BoolVarP(&all, "all-namespaces", "A", false, "Without a pipeline: every namespace (the default unless -n names one)")
 	cmd.Flags().StringVar(&controllerNS, "controller-namespace", defaultControllerNamespace,
 		"Namespace kardinal-promoter is installed in")
 	return cmd
@@ -85,25 +103,86 @@ type statusSummary struct {
 	// Controller is the controller version, "unknown" without its
 	// kardinal-version ConfigMap.
 	Controller string `json:"controller"`
-	Pipelines  int    `json:"pipelines"`
+	// ControllerReady is "<ready>/<desired>" of the controller Deployment
+	// in --controller-namespace, "" when there is none or it cannot be read.
+	ControllerReady string `json:"controllerReady,omitempty"`
+	// ControllerHealth is the same with why it is unknown: {ready, reason}.
+	ControllerHealth controllerHealth `json:"controllerHealth"`
+	// Namespace is the namespace listed, "" for every namespace; Note says
+	// why it is not what was asked (a cluster-wide list was forbidden).
+	Namespace string `json:"namespace,omitempty"`
+	Note      string `json:"note,omitempty"`
+	Pipelines int    `json:"pipelines"`
 	// Degraded is the namespace/name of every Degraded pipeline.
 	Degraded      []string `json:"degraded,omitempty"`
 	Bundles       int      `json:"bundles"`
 	ActiveBundles int      `json:"activeBundles"`
+	// Items is one line per pipeline: its namespace, name, phase and its
+	// status.summary sentence.
+	Items []statusSummaryItem `json:"items"`
 }
 
-// statusSummaryFn writes the cluster-level controller summary.
+// statusSummaryItem is one pipeline of kardinal status.
+type statusSummaryItem struct {
+	Namespace string `json:"namespace"`
+	Pipeline  string `json:"pipeline"`
+	Phase     string `json:"phase,omitempty"`
+	Summary   string `json:"summary,omitempty"`
+}
+
+// statusMaxRows is how many pipelines bare kardinal status lists.
+const statusMaxRows = 50
+
+// controllerHealth is the controller Deployment's readiness, or why it is
+// not known.
+type controllerHealth struct {
+	Ready  string `json:"ready,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// statusSummaryFn is statusSummaryIn across every namespace.
 func statusSummaryFn(out io.Writer, c sigs_client.Reader, controllerNS string) error {
+	return statusSummaryIn(out, c, controllerNS, "", "default")
+}
+
+// statusSummaryIn writes kardinal status without a pipeline for namespace
+// scope ("" for every namespace): a line on the controller (version and
+// readiness), a line of counts, then one line per pipeline with its summary
+// sentence. A cluster-wide read that is forbidden falls back to fallbackNS
+// with a note; without one (-A) it is an error that says to use -n.
+func statusSummaryIn(out io.Writer, c sigs_client.Reader, controllerNS, scope, fallbackNS string) error {
 	ctx := context.Background()
 	ctrlVersion := controllerVersion(ctx, c, controllerNS)
+	health := controllerReadiness(ctx, c, controllerNS)
+	ready := health.Ready
 
-	var pipelines v1alpha1.PipelineList
-	if err := c.List(ctx, &pipelines); err != nil {
-		return fmt.Errorf("list pipelines: %w", err)
+	list := func(scope string) (*v1alpha1.PipelineList, *v1alpha1.BundleList, error) {
+		var opts []sigs_client.ListOption
+		if scope != "" {
+			opts = append(opts, sigs_client.InNamespace(scope))
+		}
+		var pipelines v1alpha1.PipelineList
+		if err := c.List(ctx, &pipelines, opts...); err != nil {
+			return nil, nil, fmt.Errorf("list pipelines: %w", err)
+		}
+		var bundles v1alpha1.BundleList
+		if err := c.List(ctx, &bundles, opts...); err != nil {
+			return nil, nil, fmt.Errorf("list bundles: %w", err)
+		}
+		return &pipelines, &bundles, nil
 	}
-	var bundles v1alpha1.BundleList
-	if err := c.List(ctx, &bundles); err != nil {
-		return fmt.Errorf("list bundles: %w", err)
+	note := ""
+	pipelines, bundles, err := list(scope)
+	if err != nil && scope == "" && fallbackNS == "" && apierrors.IsForbidden(errors.Unwrap(err)) {
+		return fmt.Errorf("you may not list Pipelines and Bundles in every namespace: run kardinal status -n <namespace>")
+	}
+	if err != nil && scope == "" && apierrors.IsForbidden(errors.Unwrap(err)) {
+		scope = fallbackNS
+		note = fmt.Sprintf("you may not list every namespace; showing %s (-n for another)", scope)
+		pipelines, bundles, err = list(scope)
+	}
+	if err != nil {
+		return err
 	}
 
 	activeBundles := 0
@@ -112,30 +191,99 @@ func statusSummaryFn(out io.Writer, c sigs_client.Reader, controllerNS string) e
 			activeBundles++
 		}
 	}
+	pls := pipelines.Items
+	sort.Slice(pls, func(i, j int) bool { return pls[i].Namespace+"/"+pls[i].Name < pls[j].Namespace+"/"+pls[j].Name })
 	var degraded []string
-	for _, p := range pipelines.Items {
+	items := make([]statusSummaryItem, 0, len(pls))
+	for i := range pls {
+		p := &pls[i]
 		if p.Status.Phase == "Degraded" {
 			degraded = append(degraded, p.Namespace+"/"+p.Name)
 		}
+		items = append(items, statusSummaryItem{Namespace: p.Namespace, Pipeline: p.Name, Phase: p.Status.Phase, Summary: pipelineSentence(p)})
 	}
-	sort.Strings(degraded)
 
 	if structured() {
-		return writeStructured(out, statusSummary{Controller: ctrlVersion, Pipelines: len(pipelines.Items),
-			Degraded: degraded, Bundles: len(bundles.Items), ActiveBundles: activeBundles})
+		return writeStructured(out, statusSummary{Controller: ctrlVersion, ControllerReady: ready, ControllerHealth: health,
+			Namespace: scope, Note: note, Pipelines: len(pls),
+			Degraded: degraded, Bundles: len(bundles.Items), ActiveBundles: activeBundles, Items: items})
 	}
-	_, _ = fmt.Fprintf(out, "Controller:  %s\n", ctrlVersion)
-	_, _ = fmt.Fprintf(out, "Pipelines:   %d", len(pipelines.Items))
+	healthText := health.Reason
+	if ready != "" {
+		healthText = ready + " ready"
+		if r, d, ok := strings.Cut(ready, "/"); ok && (r == "0" || r != d) {
+			healthText = sty.Warning(healthText) + ": kardinal doctor"
+		}
+	}
+	if note != "" {
+		_, _ = fmt.Fprintf(errOut, "%s %s\n", sty.Warning("note:"), note)
+	}
+	_, _ = fmt.Fprintf(out, "Controller:  %s in %s, %s\n", ctrlVersion, controllerNS, healthText)
+	_, _ = fmt.Fprintf(out, "Pipelines:   %d", len(pls))
 	if len(degraded) > 0 {
 		_, _ = fmt.Fprintf(out, " (%d degraded: %s)", len(degraded), strings.Join(degraded, ", "))
 	}
 	_, _ = fmt.Fprintln(out)
-	_, _ = fmt.Fprintf(out, "Bundles:     %d (%d active)\n", len(bundles.Items), activeBundles)
+	_, _ = fmt.Fprintf(out, "Versions:    %d (%d in flight)\n", len(bundles.Items), activeBundles)
+	if len(items) > 0 {
+		_, _ = fmt.Fprintln(out)
+		tw := style.NewTable(out, 3)
+		_, _ = fmt.Fprintln(tw, "NAMESPACE\tPIPELINE\tSUMMARY")
+		for i, it := range items {
+			if i == statusMaxRows {
+				break
+			}
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\n", it.Namespace, it.Pipeline, orDash(it.Summary))
+		}
+		_ = tw.Flush()
+		if len(items) > statusMaxRows {
+			_, _ = fmt.Fprintf(out, "... and %d more: kardinal get pipelines -A\n", len(items)-statusMaxRows)
+		}
+		_, _ = fmt.Fprintln(out, "\n"+sty.Dim("Details:")+" kardinal status <pipeline> -n <namespace>")
+	}
 	if len(degraded) > 0 {
 		_, _ = fmt.Fprintf(out,
 			"\n%s %d pipeline(s) Degraded: run 'kardinal get pipelines' for details\n", sty.Warning("Warning:"), len(degraded))
 	}
 	return nil
+}
+
+// pipelineSentence is p's status.summary, or, from a controller that
+// predates it, its phase in words.
+func pipelineSentence(p *v1alpha1.Pipeline) string {
+	if p.Status.Summary != "" {
+		return p.Status.Summary
+	}
+	if p.Status.Phase == "" {
+		return ""
+	}
+	return display.Pipeline(p.Status.Phase, p.Spec.Paused).Label
+}
+
+// controllerReadiness is "<ready>/<desired>" of the kardinal-promoter
+// Deployments in ns, or why it is not known: there is none, or the caller
+// may not read Deployments there (the chart's user roles do not grant it).
+func controllerReadiness(ctx context.Context, c sigs_client.Reader, ns string) controllerHealth {
+	var list appsv1.DeploymentList
+	err := c.List(ctx, &list, sigs_client.InNamespace(ns), sigs_client.MatchingLabels{"app.kubernetes.io/name": "kardinal-promoter"})
+	switch {
+	case apierrors.IsForbidden(err):
+		return controllerHealth{Reason: fmt.Sprintf("can't read the controller Deployment (needs list on deployments in %s); kardinal doctor checks it", ns)}
+	case err != nil:
+		return controllerHealth{Reason: fmt.Sprintf("can't read the controller Deployment (%v); kardinal doctor checks it", HumanError(err))}
+	case len(list.Items) == 0:
+		return controllerHealth{Reason: "no controller Deployment found there: kardinal doctor"}
+	}
+	ready, desired := int32(0), int32(0)
+	for _, d := range list.Items {
+		ready += d.Status.ReadyReplicas
+		if d.Spec.Replicas != nil {
+			desired += *d.Spec.Replicas
+		} else {
+			desired++
+		}
+	}
+	return controllerHealth{Ready: fmt.Sprintf("%d/%d", ready, desired)}
 }
 
 // statusPipelineWriter renders the per-pipeline status to w using client c.
@@ -461,9 +609,32 @@ func pipelineNotices(p *v1alpha1.Pipeline) []string {
 }
 
 // statusReference is the detail of status for its reference page.
-const statusReference = `When called without arguments: displays the controller version (the
-kardinal-version ConfigMap in --controller-namespace), the pipeline count with
-any Degraded pipelines, and the bundle count (active = Available or Promoting).
+const statusReference = `When called without arguments, across every namespace (-n for one). When you
+may not list every namespace it shows the kubeconfig's, with a note on
+stderr; with -A, which asks for every namespace, it fails and says to use -n:
+
+  Controller:  v0.10.1 in kardinal-system, 1/1 ready
+  Pipelines:   2 (1 degraded: team-b/api)
+  Versions:    4 (2 in flight)
+
+  NAMESPACE   PIPELINE   SUMMARY
+  team-a      web        1.5.0 live in test, prod
+  team-b      api        A version failed
+
+  Details: kardinal status <pipeline> -n <namespace>
+
+the controller version (the kardinal-version ConfigMap in
+--controller-namespace) and how many replicas of its Deployment are ready
+(else "no controller Deployment found there: kardinal doctor", or "can't
+read the controller Deployment (needs list on deployments in <ns>)": the
+chart's user roles do not grant it; fewer ready than desired is a warning), the pipeline count with any Degraded pipelines,
+the version count (in flight = Available or Promoting), and one line per
+pipeline (at most 50; then kardinal get pipelines -A) with its
+status.summary sentence (its phase from a controller that predates it).
+-o json adds controllerReady, controllerHealth {ready, reason}, namespace
+and note (when it is not every namespace) and items [{namespace, pipeline,
+phase, summary}] to controller, pipelines, degraded, bundles and
+activeBundles.
 
 When called with a pipeline name: first the Pipeline's own problems, an
 ERROR when it is not Ready (such as GitCredentialMissing, with the command

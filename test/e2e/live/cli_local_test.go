@@ -909,6 +909,14 @@ func TestCLI_Dashboard(t *testing.T) {
 	assert.Equal(t, before, opened(), "--no-open opens nothing")
 	p.Interrupt()
 
+	// A pipeline's stage: the UI's route for it, on the forwarded address.
+	p = cli.Start(withOpener, "dashboard", "podinfo", "prod", "--no-open")
+	out = p.WaitStdout(60*time.Second, "dashboard <pipeline> <env> forwards", func(s string) bool {
+		return strings.Contains(s, "#/p/default/podinfo/env/prod\n")
+	})
+	assert.Regexp(t, `^kardinal UI: http://127\.0\.0\.1:\d+/ui/#/p/default/podinfo/env/prod\n`, out)
+	p.Interrupt()
+
 	// The help's --address example, on a port kubectl forwards to.
 	help := cli.Exec(noCluster, "dashboard", "--help").Stdout
 	m := regexp.MustCompile(`(?m)^\s+kardinal dashboard --address (\S+)$`).FindStringSubmatch(help)
@@ -936,6 +944,20 @@ func TestCLI_Dashboard(t *testing.T) {
 	framework.Consistently(t, 3*time.Second, "--no-open opens nothing", func(context.Context) (bool, string) {
 		return opened() == before, opened()
 	})
+
+	// Not a UI address (an app, a javascript: link, an opener's option):
+	// refused before the opener runs.
+	before = opened()
+	for _, bad := range []string{"javascript:alert(1)//", "/Applications/Calculator.app", "-a Terminal"} {
+		r = cli.Exec(noKube, "dashboard", "--address="+bad)
+		assert.Equal(t, 1, r.Code, r.Output())
+		assert.Empty(t, r.Stdout)
+		assert.Contains(t, r.Stderr, fmt.Sprintf("dashboard: --address %q is not an http(s) URL with a host", bad))
+		r = cli.Exec(framework.CLIOptions{Kubeconfig: "/dev/null", Env: append([]string{"KARDINAL_UI_URL=" + bad}, path...)}, "dashboard")
+		assert.Equal(t, 1, r.Code, r.Output())
+		assert.Contains(t, r.Stderr, fmt.Sprintf("dashboard: KARDINAL_UI_URL %q is not an http(s) URL with a host", bad))
+	}
+	assert.Equal(t, before, opened(), "the opener never got one")
 
 	// No cluster and no --address: nothing to forward to.
 	r = cli.Exec(noKube, "dashboard")

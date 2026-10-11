@@ -61,6 +61,9 @@ once, and exits when every step shown (only <env>'s, if given) has finished.`,
 			if err != nil {
 				return fmt.Errorf("logs: %w", err)
 			}
+			if bundleFlag, err = resolveBundleRef(contextOf(cmd), c, ns, pipeline, bundleFlag); err != nil {
+				return fmt.Errorf("logs: --bundle: %w", err)
+			}
 			if followFlag {
 				return logsFollowFn(cmd.Context(), cmd.OutOrStdout(), c, ns, pipeline, env, bundleFlag)
 			}
@@ -69,7 +72,7 @@ once, and exits when every step shown (only <env>'s, if given) has finished.`,
 	}
 
 	addEnvFlag(cmd, &envFlag, "Only this environment (or give it after the pipeline)")
-	cmd.Flags().StringVar(&bundleFlag, "bundle", "", "Show logs for one bundle (default: every bundle that is not Superseded)")
+	cmd.Flags().StringVar(&bundleFlag, "bundle", "", "Show logs for one Bundle, by name or version (default: every Bundle that is not Superseded)")
 	cmd.Flags().BoolVarP(&followFlag, "follow", "f", false, "Stream step progress, polling every 2s until the promotion ends")
 
 	return cmd

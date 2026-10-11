@@ -151,14 +151,17 @@ func TestCLI_Rollback(t *testing.T) {
 
 	refuses(t, c, a.ns, "rollback: bundle "+bB+" is what prod runs now: conflict",
 		"rollback", pipelineName, "--env", "prod", "--to", bB)
-	refuses(t, c, a.ns, "rollback: bundle "+a.ns+"/nope: not found",
-		"rollback", pipelineName, "--env", "prod", "--to", "nope")
+	// --to names a Bundle or a version; neither lists the newest.
+	r := c.Fail(a.ns, "rollback", pipelineName, "--env", "prod", "--to", "nope")
+	assert.Equal(t, 1, r.Code)
+	assert.True(t, strings.HasPrefix(r.Stderr, `rollback: --to: no Bundle named "nope", and no version "nope" of pipeline `+pipelineName+`; the newest are: `), r.Stderr)
+	assert.Contains(t, r.Stderr, framework.VersionCell(fixtures.V3, bB))
 	refuses(t, c, a.ns, "rollback: bundle "+bC+" was never Verified in prod, so it is not known to work there; pick a Bundle that was: invalid request",
 		"rollback", pipelineName, "--env", "prod", "--to", bC)
 	assert.Len(t, bundles(t, e, a.ns), 3, "a refused rollback creates nothing")
 
 	// The default target is A, the newest other Bundle Verified in prod.
-	r := c.Run(a.ns, "rollback", pipelineName, "--env", "prod")
+	r = c.Run(a.ns, "rollback", pipelineName, "--env", "prod")
 	require.Equal(t, 0, r.Code, r.Output())
 	assert.Empty(t, r.Stderr)
 	m := regexp.MustCompile(`^Rolling back podinfo in prod from ` + bB + ` to ` + bA + ` \(` + regexp.QuoteMeta(fixtures.Image+":"+fixtures.V2) + `\)\n` +
@@ -333,7 +336,8 @@ func TestCLI_DeleteBundle(t *testing.T) {
 	assert.Equal(t, head, e.BranchHead(t, a.repo), "deleting a Bundle writes nothing to git")
 	assertEnvAt(t, a, "prod", fixtures.V1)
 
-	refuses(t, c, a.ns, fmt.Sprintf("bundle %q not found in namespace %s", bA, a.ns), "delete", "bundle", bA)
+	refuses(t, c, a.ns, fmt.Sprintf("delete bundle: no Bundle named %q, and no version %q in %s: there are no Bundles in %s", bA, bA, a.ns, a.ns),
+		"delete", "bundle", bA)
 	bB := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
 	assert.Equal(t, "Bundle "+bB+" deleted\n", c.Must(a.ns, "delete", "bundles", bB))
 	waitBundleGone(t, e, a.ns, bB)

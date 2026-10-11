@@ -27,21 +27,24 @@ revert an environment that already runs the Bundle; roll that environment
 back with kardinal rollback. See docs/reject.md.
 
 ```
-kardinal reject <bundle> [flags]
+kardinal reject <bundle|version> [flags]
 ```
 
 ### Examples
 
 ```
   kardinal reject my-app-v1-5 --reason "CVE-2026-1234 in the base image"
+  kardinal reject 1.5.0 --reason "CVE-2026-1234 in the base image"
 ```
 
 ### Options
 
 ```
-  -h, --help            help for reject
-      --reason string   Why the version is rejected (required)
-      --yes             Do not ask for confirmation on a terminal
+  -h, --help              help for reject
+      --name string       The Bundle of this name, never a version (when a name is also another Bundle's version)
+      --pipeline string   Look for a version given as <bundle> in this pipeline only
+      --reason string     Why the version is rejected (required)
+      --yes               Do not ask for confirmation on a terminal
 ```
 
 ### Options inherited from parent commands

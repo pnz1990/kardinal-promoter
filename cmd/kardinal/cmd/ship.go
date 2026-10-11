@@ -32,6 +32,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
 	pipelinerec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 )
@@ -88,6 +89,7 @@ func newShipCmd() *cobra.Command {
 		dryRun     bool
 		wait       bool
 		stopAtGate bool
+		quiet      bool
 		timeout    = 30 * time.Minute
 	)
 	cmd := &cobra.Command{
@@ -104,6 +106,9 @@ merged (4), is replaced or rejected (5), or --timeout passes (6).`,
   kardinal ship my-app --image "$IMAGE" --wait -o json | jq -r .result`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if quiet && !wait {
+				return fmt.Errorf("ship: --quiet quiets --wait's progress; add --wait")
+			}
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("ship: %w", err)
@@ -114,12 +119,13 @@ merged (4), is replaced or rejected (5), or --timeout passes (6).`,
 				}
 				return createBundleDryRun(cmd.OutOrStdout(), c, ns, args[0], opts)
 			}
-			return shipFn(cmd.Context(), cmd.OutOrStdout(), c, ns, args[0], opts, wait, timeout, stopAtGate)
+			return shipFn(cmd.Context(), cmd.OutOrStdout(), c, ns, args[0], opts, wait, timeout, stopAtGate, quiet)
 		},
 	}
 	addBundleFlags(cmd, &opts, &dryRun)
 	cmd.Flags().BoolVar(&wait, "wait", false, "Follow the version until it is live, fails, stops at a gate, a hold or a PR, or is replaced")
 	cmd.Flags().Var(durationValue{&timeout}, "timeout", "With --wait: give up after this long (exit 6)")
+	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "With --wait: print only the last line (or -o's document); no progress, PR links or summary on stderr")
 	cmd.Flags().BoolVar(&stopAtGate, "stop-at-gate", false, "With --wait: stop (exit 3) at any gate that does not pass, also one that opens by itself (a soak, a schedule)")
 	withReference(cmd, shipReference)
 	return withStructuredOutput(cmd)
@@ -143,7 +149,7 @@ type shipResult struct {
 
 // shipFn creates the Bundle and, with wait, follows it.
 func shipFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline string, opts createBundleOptions,
-	wait bool, timeout time.Duration, stopAtGate bool) error {
+	wait bool, timeout time.Duration, stopAtGate, quiet bool) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -164,9 +170,15 @@ func shipFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline
 	// promotion.
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	_, _ = fmt.Fprintf(errOut, "Shipped %s as %s; following it (Ctrl-C stops following, the promotion goes on)\n",
-		versionOr(res.Version, b.Name), b.Name)
-	res = waitShip(ctx, c, ns, pipeline, b.Name, res, timeout, stopAtGate)
+	progress := &shipProgress{w: errOut, timed: true, start: shipNow(), created: b.CreationTimestamp.Time}
+	if quiet {
+		progress = &shipProgress{}
+	} else {
+		_, _ = fmt.Fprintf(errOut, "Shipped %s as %s; following it (Ctrl-C stops following, the promotion goes on)\n",
+			versionOr(res.Version, b.Name), b.Name)
+	}
+	res = followShip(ctx, c, ns, pipeline, b.Name, res, timeout, stopAtGate, progress)
+	progress.summary(res.Environments)
 	if structured() {
 		if err := writeStructured(w, res); err != nil {
 			return err
@@ -204,8 +216,110 @@ func versionRef(version, name string) string {
 // pause each time; three in a row end the wait with the error. stopAtGate
 // stops at any evaluated gate that does not pass (--stop-at-gate).
 func waitShip(ctx context.Context, c sigs_client.Client, ns, pipeline, name string, res shipResult, timeout time.Duration, stopAtGate bool) shipResult {
+	return followShip(ctx, c, ns, pipeline, name, res, timeout, stopAtGate, &shipProgress{w: errOut, start: shipNow()})
+}
+
+// shipNow is the clock of ship --wait's progress; a test replaces it.
+var shipNow = time.Now
+
+// shipProgress is what ship --wait prints on stderr while it follows a
+// Bundle: each environment's new state (with the time since the start when
+// timed), the URL of each PR it opens, and with timed a summary at the end.
+// A nil w prints nothing (--quiet).
+type shipProgress struct {
+	w     io.Writer
+	timed bool
+	start time.Time
+	// created is when the Bundle was created (the summary's "took" is
+	// measured from it), start when it is not known.
+	created time.Time
+	// seen is each environment's last state shown; changed when this
+	// follow saw it change; pr its PR shown.
+	seen    map[string]string
+	changed map[string]time.Time
+	pr      map[string]string
+}
+
+// observe prints what changed in envs since the last read.
+func (p *shipProgress) observe(envs []v1alpha1.PipelineEnvironmentStatus) {
+	if p.seen == nil {
+		p.seen, p.changed, p.pr = map[string]string{}, map[string]time.Time{}, map[string]string{}
+	}
+	now := shipNow()
+	for _, e := range envs {
+		text := sty.State(envState(e))
+		if p.seen[e.Name] != text {
+			p.seen[e.Name] = text
+			p.changed[e.Name] = now
+			p.printf("%s: %s", e.Name, text)
+		}
+		if e.PRURL != "" && p.pr[e.Name] != e.PRURL {
+			p.pr[e.Name] = e.PRURL
+			p.printf("%s: PR %s", e.Name, e.PRURL)
+		}
+	}
+}
+
+// printf prints one progress line, after the time since the start when
+// timed.
+func (p *shipProgress) printf(format string, args ...any) {
+	if p.w == nil {
+		return
+	}
+	line := fmt.Sprintf(format, args...)
+	if p.timed {
+		line = fmt.Sprintf("%7s  %s", "+"+shortDuration(shipNow().Sub(p.start)), line)
+	}
+	_, _ = fmt.Fprintln(p.w, "  "+line)
+}
+
+// summary prints, when timed, how long the follow took and each
+// environment's last state: how long after the Bundle was created it was
+// live there ("took"), or how long it has been in its state ("for"), both
+// from the controller's status.environments[].since; from what this
+// follow saw when the controller does not write it.
+func (p *shipProgress) summary(envs []v1alpha1.PipelineEnvironmentStatus) {
+	if p.w == nil || !p.timed || len(envs) == 0 {
+		return
+	}
+	now := shipNow()
+	created := p.created
+	if created.IsZero() {
+		created = p.start
+	}
+	_, _ = fmt.Fprintf(p.w, "%s after %s:\n", sty.Dim("Summary"), shortDuration(now.Sub(p.start)))
+	tw := style.NewTable(p.w, 3)
+	for _, e := range envs {
+		since, known := time.Time{}, false
+		if e.Since != nil {
+			since, known = e.Since.Time, true
+		} else if t, ok := p.changed[e.Name]; ok {
+			since, known = t, true
+		}
+		when := ""
+		switch {
+		case !known:
+		case e.State == "Verified" && !since.Before(created):
+			when = "took " + shortDuration(since.Sub(created))
+		case e.State == "Verified":
+			when = "already live"
+		default:
+			when = "for " + shortDuration(now.Sub(since))
+		}
+		_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\n", e.Name, sty.State(envState(e)), when)
+	}
+	_ = tw.Flush()
+}
+
+// shortDuration is d to the second, as Go writes it (1m5s), 0s under one.
+func shortDuration(d time.Duration) string {
+	return d.Round(time.Second).String()
+}
+
+// followShip is waitShip, printing its progress with p.
+func followShip(ctx context.Context, c sigs_client.Client, ns, pipeline, name string, res shipResult, timeout time.Duration,
+	stopAtGate bool, p *shipProgress) shipResult {
 	deadline := time.Now().Add(timeout)
-	seen := map[string]string{}
 	var pending *shipOutcomeResult
 	failures := 0
 	pause := shipPollInterval
@@ -221,12 +335,7 @@ func waitShip(ctx context.Context, c sigs_client.Client, ns, pipeline, name stri
 			pause = min(pause*2, 16*shipPollInterval)
 		} else {
 			failures, pause = 0, shipPollInterval
-			for _, e := range envs {
-				if text := sty.State(envState(e)); seen[e.Name] != text {
-					seen[e.Name] = text
-					_, _ = fmt.Fprintf(errOut, "  %s: %s\n", e.Name, text)
-				}
-			}
+			p.observe(envs)
 			res.Environments = envs
 			switch {
 			case out == nil:
@@ -561,8 +670,11 @@ var shipReference = `ship takes create bundle's flags and creates the same Bundl
 stays. Without --wait it prints the Bundle's name and, on stderr, how to
 follow it.
 
---wait follows the Bundle, printing each new state of its environments on
-stderr, and ends with one line on stdout (or, with -o json, an object with
+--wait follows the Bundle, printing on stderr each new state of its
+environments after the time since the start (+1m5s), the URL of each PR it
+opens, and at the end a summary: each environment's last state and how long
+it took, or how long it has waited in it. --quiet (-q) prints none of that.
+It ends with one line on stdout (or, with -o json, an object with
 bundle, pipeline, namespace, type, version, url, result, exitCode, message
 and the Bundle's environments from status.environments). Exit codes:
 

@@ -46,6 +46,7 @@ func secretRefDoc(meta, secretNS string) string {
 // server rejects: an empty git.url, a CEL expression the PolicyGate
 // environment does not compile, and every document in the file is checked.
 func TestValidate_Documents(t *testing.T) {
+	keepStyle(t)
 	// No UTF-8 locale: the output is ASCII (an arrow is "->").
 	t.Setenv("LC_ALL", "")
 	t.Setenv("LC_CTYPE", "")
@@ -280,6 +281,7 @@ func TestValidate_Documents(t *testing.T) {
 // git.secretRef whose spec.git.url is not allowed is invalid, with the
 // message of the controller's Ready=False/RepositoryNotAllowed.
 func TestValidate_AllowedRepositories(t *testing.T) {
+	keepStyle(t)
 	cases := []struct {
 		name    string
 		args    []string
@@ -327,6 +329,7 @@ func TestValidate_AllowedRepositories(t *testing.T) {
 //
 // Covers FLEET-03.
 func TestValidate_FleetSelector(t *testing.T) {
+	keepStyle(t)
 	doc := `apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
 metadata:

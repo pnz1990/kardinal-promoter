@@ -74,6 +74,9 @@ blocking gates pass as audited exemptions meanwhile. See docs/rollback.md.`,
 			if err != nil {
 				return fmt.Errorf("rollback: %w", err)
 			}
+			if toFlag, err = resolveBundleRef(contextOf(cmd), c, ns, pipeline, toFlag); err != nil {
+				return fmt.Errorf("rollback: --to: %w", err)
+			}
 			if lastEnvironment(cmd.Context(), c, ns, pipeline, env) {
 				if err := confirm(cmd, fmt.Sprintf("Roll %s of %s back? The rollback goes through every environment before it.", env, pipeline)); err != nil {
 					return err
@@ -94,7 +97,7 @@ blocking gates pass as audited exemptions meanwhile. See docs/rollback.md.`,
 	}
 
 	addEnvFlag(cmd, &envFlag, "Environment to roll back (or give it after the pipeline)")
-	cmd.Flags().StringVar(&toFlag, "to", "", "The Bundle to roll back to (default: the version Verified there before)")
+	cmd.Flags().StringVar(&toFlag, "to", "", "The Bundle, or version (image tag), to roll back to (default: the version Verified there before)")
 	cmd.Flags().BoolVar(&holdFlag, "hold", false,
 		"Keep the environment on the rollback until kardinal unhold; the rollback passes blocking gates, each pass audited")
 	cmd.Flags().StringVar(&reasonFlag, "reason", "", "Why the environment is held (required with --hold)")
