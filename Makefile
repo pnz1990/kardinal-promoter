@@ -40,6 +40,9 @@ build-cli:
 	$(GO) build -o $(BINARY_CLI) ./cmd/kardinal/
 
 ## UI
+reference-docs: ## Regenerate docs/reference/helm-values.md and controller-flags.md
+	$(GO) run ./hack/gen-reference-docs
+
 tokens: ## Regenerate the design tokens (web/tokens/tokens.json -> web/src/styles/tokens.css, web/src/tokens.ts, docs/stylesheets/tokens.css)
 	node scripts/gen-tokens.mjs
 
