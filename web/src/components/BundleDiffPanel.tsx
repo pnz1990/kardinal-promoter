@@ -184,10 +184,10 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
           padding: '0.4rem 0.6rem',
         }}>
           <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Name</span>
-          <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--color-code)' }} title={bundleA.name}>
+          <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: '0.75rem', color: 'var(--color-code)' }} title={bundleA.name}>
             {truncate(bundleA.name, 28)}
           </span>
-          <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--color-code)' }} title={bundleB.name}>
+          <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: '0.75rem', color: 'var(--color-code)' }} title={bundleB.name}>
             {truncate(bundleB.name, 28)}
           </span>
         </div>
@@ -253,7 +253,7 @@ function DiffCell({ value, changed, isLink, full }: { value: string | null; chan
       <span style={{
         fontSize: '0.75rem',
         color: changed ? 'var(--color-warning)' : 'var(--color-text-muted)',
-        fontFamily: 'monospace',
+        fontFamily: 'var(--k-font-mono)',
         whiteSpace: 'pre-line',
         overflowWrap: 'anywhere',
       }}>
@@ -267,7 +267,7 @@ function DiffCell({ value, changed, isLink, full }: { value: string | null; chan
         href={value}
         target="_blank"
         rel="noopener noreferrer"
-        style={{ fontSize: '0.75rem', color: 'var(--color-accent)', fontFamily: 'monospace' }}
+        style={{ fontSize: '0.75rem', color: 'var(--color-accent)', fontFamily: 'var(--k-font-mono)' }}
         title={value}
       >
         {truncate(value, 30)}
@@ -279,7 +279,7 @@ function DiffCell({ value, changed, isLink, full }: { value: string | null; chan
       style={{
         fontSize: '0.75rem',
         color: changed ? 'var(--color-warning)' : 'var(--color-text-muted)',
-        fontFamily: 'monospace',
+        fontFamily: 'var(--k-font-mono)',
       }}
       title={value}
     >
