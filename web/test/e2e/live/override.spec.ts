@@ -42,8 +42,8 @@ test('a gate that holds the bundle offers no approve or override control', async
 
   // The version's gates are on the Activity tab.
   await page.getByRole('tab', { name: /^Activity/ }).click()
-  // The Policy Gates panel opens by itself while the gate holds the bundle.
-  const toggle = page.getByRole('button', { name: /Policy Gates \(1\)/ })
+  // The gates panel opens by itself while the gate holds the bundle.
+  const toggle = page.getByRole('button', { name: /Gates \(1\)/ })
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
   await expect(toggle).toContainText('1 blocked')
   const panel = toggle.locator('..')
@@ -58,7 +58,7 @@ test('a gate that holds the bundle offers no approve or override control', async
   await page.getByRole('tab', { name: 'Map' }).click()
   await gateMark(page, holdGate).click()
   const detail = page.getByTestId('node-detail')
-  await expect(detail).toContainText('Type: PolicyGate')
+  await expect(detail.locator('details.k-k8s')).toContainText('KindPolicyGate')
   await expect(detail).toContainText(holdGate)
   await expectNoOverrideControl(page)
 

@@ -55,7 +55,7 @@ test('the sidebar shows each pipeline’s state, and the filters narrow it', asy
   await expect(held.locator('.health-chip')).toHaveText('Blocked by a gate')
   await expect(held.locator('.health-chip')).toHaveAttribute('data-health-state', 'InProgress')
   await expect(held).toContainText('2 envs')
-  await expect(held).toContainText('1 verified')
+  await expect(held).toContainText('1 live')
   await expect(held).not.toContainText('PAUSED')
 
   const pausedRow = sidebarRow(page, paused)
@@ -93,14 +93,14 @@ test('the sidebar shows each pipeline’s state, and the filters narrow it', asy
     await expect(fleet.getByRole('button', { name: 'Show all pipelines' })).toHaveText(`Pipelines${list!.length}`, { timeout: 500 })
     await expect(fleet.getByRole('button', { name: pipelines(healthy, 'healthy pipeline'), exact: true })).toBeVisible({ timeout: 500 })
     await expect(fleet.getByRole('button', { name: pipelines(blocked, 'blocked pipeline'), exact: true })).toBeVisible({ timeout: 500 })
-    await expect(fleet.getByRole('button', { name: `${pipelines(ciRed)} with CI failures`, exact: true })).toBeVisible({ timeout: 500 })
+    await expect(fleet.getByRole('button', { name: `${pipelines(ciRed)} with a failed promotion`, exact: true })).toBeVisible({ timeout: 500 })
     await expect(fleet.getByRole('button', { name: `${pipelines(promoting)} currently promoting`, exact: true })).toBeVisible({ timeout: 500 })
   }).toPass({ timeout: 30_000 })
 
   // Each badge filters the list, and a second click clears the filter.
   const all = fleet.getByRole('button', { name: 'Show all pipelines' })
   const blockedBadge = fleet.getByRole('button', { name: /^\d+ blocked pipelines?$/ })
-  const ciRedBadge = fleet.getByRole('button', { name: /^\d+ pipelines? with CI failures$/ })
+  const ciRedBadge = fleet.getByRole('button', { name: /^\d+ pipelines? with a failed promotion$/ })
   const healthyBadge = fleet.getByRole('button', { name: /^\d+ healthy pipelines?$/ })
   await expect(all).toHaveAttribute('aria-pressed', 'true')
 

@@ -48,6 +48,9 @@ export interface Pipeline {
   /** Pipeline.status.environments (P1, #1707; served since #1727): per environment, fleets
    *  expanded, what runs there and where the newest version stands. States go through displayState. */
   environments?: PipelineEnvironment[]
+  /** Pipeline.status.conditions (#1727): Ready (reasons such as ValidationFailed and
+   *  GitCredentialMissing), Paused, PathConflict and the SecretReferenceable warning. */
+  conditions?: Condition[]
 }
 
 /** One entry of Pipeline.status.environments (P1). States go through displayState. */
@@ -68,6 +71,15 @@ export interface PipelineEnvironment {
   prURL?: string
   /** A rollback hold keeps it on bundle. */
   held?: boolean
+}
+
+/** A Kubernetes status condition, as the UI API serves it. */
+export interface Condition {
+  type: string
+  status: string
+  reason?: string
+  message?: string
+  lastTransitionTime?: string
 }
 
 /** What one environment runs: the newest PromotionStep there that landed its change. */

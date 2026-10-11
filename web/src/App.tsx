@@ -7,11 +7,11 @@
 // long as it exists; otherwise the pipeline's active bundle (resolveShownBundle).
 // Polls never override the user's pick.
 // A pipeline is identified by namespace + name, so same-named pipelines in two
-// namespaces never share a header, bundle list or DAG.
+// namespaces never share a header, bundle list or map.
 // Every load carries a view sequence number; a response that arrives after the
 // user moved to another pipeline or bundle is dropped.
 // #326: selectedNode is lifted here so the stage drawer (U3) opens beside
-// DAGView.
+// the station map.
 // #740: URL routing — pipeline and node selection persisted in hash fragment.
 // #746: Global keyboard shortcuts — ?, r, Esc.
 // #747: ErrorBoundary wraps async components to prevent white-screen crashes.
@@ -26,8 +26,9 @@ import { RejectedLiveBanner } from './components/RejectedLiveBanner'
 import { InsecureConnectionBanner } from './components/InsecureConnectionBanner'
 import { Breadcrumb } from './components/Breadcrumb'
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
-import { Icon, Kbd, TabPanel, Tabs } from './ui'
+import { ErrorNotice, Icon, Kbd, TabPanel, Tabs } from './ui'
 import { NotFound } from './components/NotFound'
+import { PipelineConditions } from './components/PipelineConditions'
 import { NARROW_QUERY, useMediaQuery } from './useMediaQuery'
 import { useModalFocus } from './useModalFocus'
 import { displayState } from './displayStates.gen'
@@ -103,6 +104,8 @@ export function App() {
   const pipelineTab = urlState.tab ?? 'map'
   const [bundles, setBundles] = useState<Bundle[]>([])
   const [bundlesLoading, setBundlesLoading] = useState(false)
+  // True once a read of the pipeline's versions worked and found none (the first-version call to action).
+  const [noVersion, setNoVersion] = useState(false)
   // Name of the bundle whose graph is on screen.
   const [shownBundleName, setShownBundleName] = useState<string | undefined>()
 
@@ -117,7 +120,7 @@ export function App() {
   const [gates, setGates] = useState<PolicyGate[]>([])
   const [gatesLoading, setGatesLoading] = useState(true)
 
-  // #326: selectedNode lifted from DAGView so NodeDetail is a split-panel sibling.
+  // #326: selectedNode lifted here so the stage drawer is a split-panel sibling of the map.
   // #740: selectedNode ID is persisted in URL hash (node= param); full GraphNode object in local state.
   const [selectedNode, setSelectedNodeLocal] = useState<GraphNode | null>(null)
 
@@ -257,6 +260,7 @@ export function App() {
         const shown = resolveShownBundle(bs, userBundleRef.current, pl?.activeBundleName)
         if (!shown) {
           setBundles(bs)
+          setNoVersion(bs.length === 0)
           setBundlesLoading(false)
           setShownBundleName(undefined)
           setGraph(undefined)
@@ -277,6 +281,7 @@ export function App() {
         } finally {
           if (!stale()) {
             setBundles(bs)
+            setNoVersion(false)
             setBundlesLoading(false)
             setShownBundleName(shown.name)
           }
@@ -304,6 +309,7 @@ export function App() {
     setGraphError(undefined)
     setActiveSteps([])
     setBundles([])
+    setNoVersion(false)
     setSelectedNodeLocal(null)
     setCompareTarget(undefined)
     if (!selectedPipeline) {
@@ -504,6 +510,27 @@ export function App() {
     </button>
   ) : null
 
+  // The top bar's tools: Go to or do… (⌘K), and the visible way to help (?).
+  const topbarTools = (
+    <div className="app-topbar__tools">
+      <button type="button" className="app-topbar__search" aria-label="Go to or do… ⌘K" onClick={() => setPaletteOpen(true)}>
+        <Icon name="search" />
+        <span>Go to or do…</span>
+        <Kbd>⌘K</Kbd>
+      </button>
+      <button
+        type="button"
+        className="k-icon-button k-icon-button--md app-topbar__help"
+        aria-label="Help and keyboard shortcuts"
+        title="Help and keyboard shortcuts (?)"
+        aria-haspopup="dialog"
+        onClick={() => setShowShortcutsPanel(true)}
+      >
+        ?
+      </button>
+    </div>
+  )
+
   // #913: Insecure connection warning — plain HTTP from a non-loopback address.
   // It heads every main view, so it shows before any pipeline loads (the API
   // may refuse the page's requests outright).
@@ -663,6 +690,7 @@ export function App() {
               onSelect={(name, ns) => handleSelectPipeline(name, ns)}
               loading={pipelinesLoading}
               error={pipelinesError}
+              onRetry={() => { void manualRefresh() }}
               searchInputRef={searchInputRef}
               total={pipelines.length}
               initialQuery={urlState.q}
@@ -678,11 +706,7 @@ export function App() {
           <div className="app-topbar">
             {navButton}
             <Breadcrumb route={urlState} namespace={activePipeline?.namespace} />
-            <button type="button" className="app-topbar__search" aria-label="Go to or do… ⌘K" onClick={() => setPaletteOpen(true)}>
-              <Icon name="search" />
-              <span>Go to or do…</span>
-              <Kbd>⌘K</Kbd>
-            </button>
+            {topbarTools}
           </div>
           {insecureBanner}
           <PipelineOpsTable
@@ -692,6 +716,7 @@ export function App() {
             onSelect={(name, ns) => handleSelectPipeline(name, ns)}
             loading={pipelinesLoading}
             error={pipelinesError}
+            onRetry={() => { void manualRefresh() }}
           />
         </main>
       ) : (
@@ -700,17 +725,16 @@ export function App() {
           <div className="app-topbar">
             {navButton}
             <Breadcrumb route={urlState} namespace={activePipeline?.namespace} />
-            <button type="button" className="app-topbar__search" aria-label="Go to or do… ⌘K" onClick={() => setPaletteOpen(true)}>
-              <Icon name="search" />
-              <span>Go to or do…</span>
-              <Kbd>⌘K</Kbd>
-            </button>
+            {topbarTools}
           </div>
         {insecureBanner}
         {!selectedPipeline ? (
           <div className={pipelines.length > 0 ? 'app-fleet' : 'app-empty'}>
             {pipelines.length > 0 ? (
               <FleetBoard pipelines={filteredPipelines} total={pipelines.length} onSelect={handleSelectPipeline} />
+            ) : pipelinesError ? (
+              /* A failed first read: the cluster may have pipelines, so no onboarding. */
+              <ErrorNotice error={pipelinesError} onRetry={() => { void manualRefresh() }} className="app-empty__error" />
             ) : (
               /* #530: Improved empty state with copy button, docs link, expected output */
               <EmptyState />
@@ -740,7 +764,7 @@ export function App() {
                       pipelineName={activePipeline.name}
                       namespace={activePipeline.namespace ?? 'default'}
                       onRefresh={manualRefresh}
-                      variant={activePipeline.paused ? 'secondary' : 'primary'}
+                      variant={activePipeline.paused || (noVersion && !graphError) ? 'secondary' : 'primary'}
                     />
                   </div>
                 )}
@@ -786,6 +810,8 @@ export function App() {
                   )}
                 </p>
               )}
+              {/* #1727: the Pipeline's own problems (not Ready, an unlabelled git Secret). */}
+              <PipelineConditions conditions={activePipeline?.conditions} />
               {activeBundle && !versionMissing && <RejectedLiveBanner bundle={activeBundle} />}
               {activeBundle?.rejected && !versionMissing && (
                 <p className="bundle-rejected" role="note">
@@ -828,6 +854,20 @@ export function App() {
             <TabPanel id="map" hidden={pipelineTab !== 'map'} className="app-tab app-tab--map">
               {pipelineTab === 'map' && (<>
                 <div className="app-map-head">
+                  {/* An empty pipeline: the one thing to do next (U4). */}
+                  {/* Only after a read that worked: a failed one shows its error on the map instead. */}
+                  {noVersion && !graphError && (
+                    <div className="app-first-version" data-testid="first-version">
+                      <p className="app-first-version__text">No version of {activePipeline.name} has shipped yet.</p>
+                      <CreateBundleButton
+                        pipelineName={activePipeline.name}
+                        namespace={activePipeline.namespace ?? 'default'}
+                        onRefresh={manualRefresh}
+                        label="Ship your first version"
+                        variant={activePipeline.paused ? 'secondary' : 'primary'}
+                      />
+                    </div>
+                  )}
                   {/* Bundle Timeline — horizontal strip showing bundle history (Kargo freight timeline parity).
                       Receives bundles from parent state — no independent fetch (#321). */}
                   <ErrorBoundary fallbackMessage="Timeline unavailable">
@@ -871,6 +911,7 @@ export function App() {
                         compareBundle={bundles.find(b => b.name === (urlState.compare ?? compareBundle) && b.name !== activeBundle?.name)}
                         loading={graphLoading}
                         error={graphError}
+                        onRetry={() => { void manualRefresh() }}
                         focused={stageEnv}
                         onOpenStage={openStage}
                         onActionDone={() => { void manualRefresh() }}

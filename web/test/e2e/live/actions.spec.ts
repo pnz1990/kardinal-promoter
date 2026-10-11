@@ -96,10 +96,10 @@ const steps: Record<string, () => void> = {
     await station(page, 'prod').focus()
     await lane(page).getByRole('button', { name: 'Promote to prod' }).click()
     const dialog = page.getByRole('dialog', { name: `Promote ${PIPELINE} to prod?` })
-    await expect(dialog).toHaveAccessibleDescription(`Creates a new bundle for ${PIPELINE} that targets prod. Its progress shows in the bundle timeline.`)
+    await expect(dialog).toHaveAccessibleDescription(`Starts a new promotion of ${PIPELINE} to prod. Its progress shows on the map.`)
     await dialog.getByRole('button', { name: 'Promote to prod' }).click()
     await expect(dialog).toHaveCount(0)
-    await expect(page.getByRole('status').filter({ hasText: 'Promotion started' })).toHaveText(/^Promotion started: bundle podinfo-[a-z0-9-]+$/)
+    await expect(page.getByRole('status').filter({ hasText: 'Promotion started' })).toHaveText(/^Promotion started: version podinfo-[a-z0-9-]+$/)
   }),
 
   rollback: () => test('Roll back in the node details asks first, then rolls prod back', async ({ page }) => {
@@ -113,10 +113,10 @@ const steps: Record<string, () => void> = {
     const detail = page.getByTestId('node-detail')
     await detail.getByRole('button', { name: 'Roll back prod' }).click()
     const dialog = page.getByRole('dialog', { name: 'Roll back prod?' })
-    await expect(dialog).toHaveAccessibleDescription(`Creates a rollback bundle that returns prod to the previous verified version of ${PIPELINE}.`)
+    await expect(dialog).toHaveAccessibleDescription(`Returns prod to the previous verified version of ${PIPELINE}.`)
     await dialog.getByRole('button', { name: 'Roll back prod' }).click()
     await expect(dialog).toHaveCount(0)
-    await expect(detail.getByRole('status').filter({ hasText: 'Rollback started' })).toHaveText(/^Rollback started: bundle [a-z0-9-]+$/)
+    await expect(detail.getByRole('status').filter({ hasText: 'Rollback started' })).toHaveText(/^Rollback started: version [a-z0-9-]+$/)
   }),
 }
 

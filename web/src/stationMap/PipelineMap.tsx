@@ -12,6 +12,7 @@ import StationMap from './StationMap'
 import { canPromote, canRollback } from '../pipelineActions'
 import { PipelineActionDialog, type PipelineActionKind } from '../components/PipelineActionDialog'
 import { buildModel, bundleVersion } from './model'
+import { ErrorNotice } from '../ui/ErrorNotice'
 
 export interface PipelineMapProps {
   pipeline: Pipeline
@@ -32,9 +33,11 @@ export interface PipelineMapProps {
   gates?: PolicyGate[]
   /** The Pipeline's Bundles: an older followed Bundle is not shown as incoming. */
   bundles?: Bundle[]
+  /** Read the map's data again after a failed read (U4). */
+  onRetry?: () => void
 }
 
-export default function PipelineMap({ pipeline, bundle, graph, compareBundle, loading, error, focused, onOpenStage, onActionDone, onOpenGate, gates, bundles }: PipelineMapProps) {
+export default function PipelineMap({ pipeline, bundle, graph, compareBundle, loading, error, focused, onOpenStage, onActionDone, onOpenGate, gates, bundles, onRetry }: PipelineMapProps) {
   const [pending, setPending] = useState<{ kind: PipelineActionKind; env: string } | null>(null)
   const [result, setResult] = useState<string | null>(null)
   const key = `${pipeline.namespace}/${pipeline.name}`
@@ -82,7 +85,8 @@ export default function PipelineMap({ pipeline, bundle, graph, compareBundle, lo
   }
 
   if (error) {
-    return <div className="station-map station-map--message" role="alert">Error: {error}</div>
+    // What the failed read means, in words, with Retry (U4).
+    return <div className="station-map station-map--message"><ErrorNotice error={error} onRetry={onRetry} /></div>
   }
   if (loading && !graph && !pipeline.environmentTopology) {
     return <div className="station-map station-map--message" aria-busy="true">Loading the pipeline map…</div>

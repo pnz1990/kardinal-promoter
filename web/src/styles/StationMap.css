@@ -349,8 +349,9 @@
 
 /* The map's column on the pipeline page's Map tab: the map fills it (no padding, no scroll). */
 .app-dag.app-map { display: flex; padding: 0; overflow: hidden; }
-/* The map takes the page's height: its row keeps a small bottom margin only. */
+/* The map takes the page's height: its row keeps small margins only. */
 .app-tab--map .app-content { padding-block-end: var(--k-space-3); }
+.app-tab--map .app-map-head { padding-block-start: var(--k-space-2); }
 .app-map > .pipeline-map, .app-map > .station-map { flex: 1; min-inline-size: 0; }
 .station-map--message {
   align-items: center;

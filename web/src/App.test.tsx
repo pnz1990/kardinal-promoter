@@ -108,7 +108,7 @@ describe('App bundle selection', () => {
     await flush()
     expect(screen.getAllByText('env-of-b-new').length).toBeGreaterThan(0)
 
-    fireEvent.click(screen.getByTitle(/^b-old: Superseded/))
+    fireEvent.click(screen.getByTitle(/^b-old: Replaced by newer version/))
     await flush()
     expect(screen.getAllByText('env-of-b-old').length).toBeGreaterThan(0)
 
@@ -118,14 +118,14 @@ describe('App bundle selection', () => {
     expect(lastGraphCall()).toBe('b-old')
     expect(screen.getAllByText('env-of-b-old').length).toBeGreaterThan(0)
     expect(screen.queryAllByText('env-of-b-new')).toHaveLength(0)
-    expect(screen.getByTitle(/^b-old: Superseded/).className).toContain('bundle-chip--selected')
+    expect(screen.getByTitle(/^b-old: Replaced by newer version/).className).toContain('bundle-chip--selected')
     expect(screen.getByTitle(/^b-new: Promoting/).className).not.toContain('bundle-chip--selected')
   })
 
   it('says the selected version is gone, never showing another one silently, and links to the current one', async () => {
     render(<App />)
     await flush()
-    fireEvent.click(screen.getByTitle(/^b-old: Superseded/))
+    fireEvent.click(screen.getByTitle(/^b-old: Replaced by newer version/))
     await flush()
     expect(lastGraphCall()).toBe('b-old')
 
@@ -243,6 +243,38 @@ describe('App pipeline header', () => {
     for (const t of tabs) expect(document.getElementById(t.getAttribute('aria-controls')!)).not.toBeNull()
   })
 
+  it('has a visible ? control that opens help and the keyboard shortcuts', async () => {
+    render(<App />)
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: 'Help and keyboard shortcuts' }))
+    const dialog = screen.getByRole('dialog', { name: 'Keyboard shortcuts' })
+    expect(within(dialog).getByRole('link', { name: 'Concepts' })).toHaveAttribute('href', 'https://pnz1990.github.io/kardinal-promoter/concepts/')
+  })
+
+  it('a failed read of the versions shows its error, not Ship your first version, and one primary Ship button', async () => {
+    h.state.pipelines = [pipeline('app', { phase: 'Promoting', activeBundleName: 'b-new', environmentTopology: [{ name: 'test' }] } as Partial<Pipeline>)]
+    h.api.listBundles.mockRejectedValueOnce(new Error('API error 503: Service Unavailable'))
+    render(<App />)
+    await flush()
+    expect(screen.getByText('API error 503: Service Unavailable')).toBeInTheDocument()
+    expect(screen.queryByTestId('first-version')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ship a version of app' }).className).toContain('k-button--primary')
+  })
+
+  it('an empty pipeline offers Ship your first version, which opens the ship dialog', async () => {
+    h.state.pipelines = [pipeline('app', { phase: 'Unknown', activeBundleName: undefined, environmentTopology: [{ name: 'test' }, { name: 'prod' }] } as Partial<Pipeline>)]
+    h.state.bundles = { app: [] }
+    render(<App />)
+    await flush()
+    // The map shows the pipeline's environments, none reached yet.
+    expect(document.querySelector('.station-map [data-station="test"]')?.getAttribute('aria-label')).toMatch(/^test — Not reached/)
+    expect(document.querySelector('.station-map [data-station="prod"]')).toBeInTheDocument()
+    // One primary action: the call to action; the header's Ship a version steps back.
+    expect(screen.getByRole('button', { name: 'Ship a version of app' }).className).toContain('k-button--secondary')
+    fireEvent.click(screen.getByRole('button', { name: 'Ship your first version of app' }))
+    expect(screen.getByRole('dialog', { name: 'Ship a version of app' })).toBeInTheDocument()
+  })
+
   it('reads the summary sentence, with the version and its provenance as one line under the title', async () => {
     h.state.pipelines = [pipeline('app', { phase: 'Ready', activeBundleName: 'b-new', summary: 'b-new is promoting to prod.' })]
     render(<App />)
@@ -352,8 +384,8 @@ describe('App pipeline selection', () => {
 // #338: Shift-click picks the bundle to compare; the timeline then offers
 // Compare (opens the comparison, bundle= in the URL) and clear.
 describe('App bundle comparison', () => {
-  const dialog = () => screen.queryByRole('dialog', { name: 'Bundle comparison' })
-  const oldChip = () => screen.getByTitle(/^b-old: Superseded/)
+  const dialog = () => screen.queryByRole('dialog', { name: 'Version comparison' })
+  const oldChip = () => screen.getByTitle(/^b-old: Replaced by newer version/)
 
   it('leaves Compare and clear reachable after a shift-click, and Compare opens the comparison', async () => {
     render(<App />)
@@ -391,7 +423,7 @@ describe('App bundle comparison', () => {
     await flush()
     expect(oldChip().className).not.toContain('bundle-chip--compare')
     expect(screen.queryByRole('button', { name: 'Compare ↔' })).not.toBeInTheDocument()
-    expect(screen.getByText('Shift-click to compare')).toBeInTheDocument()
+    expect(oldChip().title).toContain('Shift-click to compare')
   })
 
   it('opens the comparison from an old bundle= link (now compare=)', async () => {
@@ -420,7 +452,7 @@ describe('App bundle comparison', () => {
     await flush()
     expect(picked()).toHaveLength(0)
     expect(screen.queryByRole('button', { name: '× clear' })).not.toBeInTheDocument()
-    expect(screen.getByText('Shift-click to compare')).toBeInTheDocument()
+    expect(oldChip().title).toContain('Shift-click to compare')
     expect(newChip().getAttribute('title')).toBe('b-new: Promoting')
 
     // Showing Bundle B makes it Bundle A, and drops it as B.
@@ -497,17 +529,30 @@ describe('App insecure connection banner', () => {
   })
 })
 
-// The API client throws Error('API error 503: ...'); the views print the
-// message after "Error: ", so it reads once, not "Error: Error: ...".
+// The API client throws Error('API error 503: ...'); the views say what it means
+// (errorMessage.ts), keep the message as detail once, and offer Retry.
 describe('App failed reads', () => {
   it('shows the message of a failed pipelines read once', async () => {
     h.state.pipelinesError = 'API error 503: Service Unavailable'
     render(<App />)
     await flush()
-    expect(screen.getByText('Error: API error 503: Service Unavailable')).toBeInTheDocument()
+    expect(screen.getByText('The controller had a problem. It may be restarting; try again.')).toBeInTheDocument()
+    expect(screen.getAllByText('API error 503: Service Unavailable')).toHaveLength(1)
     expect(screen.getByRole('button', { name: 'Refresh data' }).querySelector('span[aria-live="polite"]'))
       .toHaveAttribute('title', 'Error: API error 503: Service Unavailable')
     expect(screen.queryByText(/Error: Error/)).not.toBeInTheDocument()
+  })
+
+  it('a first read that fails shows the error with Retry, not the onboarding for an empty cluster', async () => {
+    h.state.pipelinesError = 'Failed to fetch'
+    render(<App />)
+    await flush()
+    expect(screen.queryByText('No pipelines found')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Retry' }).length).toBeGreaterThan(0)
+    h.state.pipelinesError = undefined
+    fireEvent.click(screen.getAllByRole('button', { name: 'Retry' })[0])
+    await flush()
+    expect(screen.queryByText("Can't reach the kardinal controller. Check that it is running and reachable from this browser.")).not.toBeInTheDocument()
   })
 
   it('keeps the sidebar list while a pipelines poll fails, and drops the error when one works', async () => {
@@ -519,13 +564,13 @@ describe('App failed reads', () => {
 
     h.state.pipelinesError = 'API error 503: Service Unavailable'
     await flush(5_100)
-    expect(screen.getByText('Error: API error 503: Service Unavailable')).toBeInTheDocument()
+    expect(screen.getByText('API error 503: Service Unavailable')).toBeInTheDocument()
     expect(within(list()).getByText('other')).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: 'Filter pipelines by name or namespace' })).toBeInTheDocument()
 
     h.state.pipelinesError = undefined
     await flush(5_100)
-    expect(screen.queryByText(/^Error: /)).not.toBeInTheDocument()
+    expect(screen.queryByText('API error 503: Service Unavailable')).not.toBeInTheDocument()
     expect(within(list()).getByText('other')).toBeInTheDocument()
   })
 
@@ -533,7 +578,16 @@ describe('App failed reads', () => {
     h.state.graphError = 'API error 500: Internal Server Error'
     render(<App />)
     await flush()
-    expect(screen.getByRole('alert')).toHaveTextContent(/^Error: API error 500: Internal Server Error$/)
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('The controller had a problem. It may be restarting; try again.API error 500: Internal Server ErrorRetry')
+
+    // Retry reads the graph again; once it works the graph shows.
+    h.state.graphError = undefined
+    const calls = h.api.getGraph.mock.calls.length
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
+    await flush()
+    expect(h.api.getGraph.mock.calls.length).toBeGreaterThan(calls)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })
 
@@ -663,7 +717,7 @@ describe('App keyboard access', () => {
     render(<App />)
     await flush()
     // The Bundle card and its timeline chip.
-    expect(screen.getAllByRole('img', { name: 'config Bundle' }).length).toBe(2)
+    expect(screen.getAllByRole('img', { name: 'config version' }).length).toBe(2)
   })
 })
 

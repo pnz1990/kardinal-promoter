@@ -14,7 +14,7 @@ test.describe('Journey 005 — Bundle timeline interaction', () => {
   })
 
   test('Step 1: Bundle timeline shows bundle history header, and the History tab lists them', async ({ page }) => {
-    await expect(page.getByText(/Bundle history \(newest/i)).toBeVisible()
+    await expect(page.getByText(/Versions \(newest/)).toBeVisible()
     await page.getByRole('tab', { name: /^Versions/ }).click()
     await expect(page.getByRole('list', { name: 'Versions' }).getByRole('listitem')).toHaveCount(3)
   })
@@ -28,9 +28,9 @@ test.describe('Journey 005 — Bundle timeline interaction', () => {
     await expect(page.getByText(/newest → oldest/i)).toBeVisible()
   })
 
-  test('Step 4: Previous bundle (Superseded) shows abbreviated label', async ({ page }) => {
-    // Superseded bundles show "Sup" abbreviation
-    await expect(page.getByText('Sup')).toBeVisible()
+  test('Step 4: Previous bundle (Superseded) shows its display label, not a truncated value', async ({ page }) => {
+    await expect(page.locator('.bundle-chip__phase', { hasText: 'Replaced by newer version' })).toBeVisible()
+    await expect(page.getByText('Sup', { exact: true })).toHaveCount(0)
   })
 
   test('Step 5: Clicking an older bundle shows its graph and keeps it after the next poll', async ({ page }) => {

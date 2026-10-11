@@ -24,7 +24,7 @@ test.describe('Journey 016 — Routes and the command palette', () => {
     await expect(page.getByTestId('stage-drawer')).toHaveCount(0)
 
     // A version from the history is its own route.
-    await page.getByRole('toolbar', { name: /Bundle history/ }).locator('.bundle-chip').nth(1).click()
+    await page.getByRole('toolbar', { name: /^Versions/ }).locator('.bundle-chip').nth(1).click()
     await expect(page).toHaveURL(/#\/p\/default\/kardinal-test-app\/v\/[\w-]+$/)
     const url = page.url()
     await page.reload()
@@ -57,6 +57,34 @@ test.describe('Journey 016 — Routes and the command palette', () => {
     await expect(page.getByRole('tab', { name: /^Versions/ })).toHaveAttribute('aria-selected', 'true')
     await expect(page.getByRole('list', { name: 'Versions' })).toBeVisible()
     await expect(new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze().then(r => r.violations.map(v => v.id))).resolves.toEqual([])
+  })
+
+  test("a pipeline's own problems show under its header with the command that fixes them", async ({ page }) => {
+    await page.goto('/ui/#/p/default/payments-service')
+    const warning = page.locator('.pipeline-conditions__notice[data-tone="warning"]')
+    await expect(warning).toContainText('Label the git Secret before upgrading to v0.11')
+    await expect(warning.locator('pre')).toHaveText('kubectl label secret github-token -n default kardinal.io/referenceable=true')
+    await expect(warning.getByRole('button', { name: 'Copy shell' })).toBeVisible()
+  })
+
+  test('a long fix command wraps instead of widening the page', async ({ page }) => {
+    // The message the PipelineReconciler writes for a missing git Secret (git_credential.go).
+    const message = 'spec.git.secretRef is not set, so git has no token for https://github.com/shop/payments-config; create the Secret '
+      + '(kubectl create secret generic git-token -n default --from-literal=token=<TOKEN> && kubectl label secret git-token -n default kardinal.io/referenceable=true) '
+      + 'and set spec.git.secretRef.name: git-token'
+    await page.route('**/api/v1/ui/pipelines', async (route) => {
+      const list = await (await route.fetch()).json()
+      for (const p of list) if (p.name === 'payments-service') p.conditions = [{ type: 'Ready', status: 'False', reason: 'GitCredentialMissing', message }]
+      await route.fulfill({ json: list })
+    })
+    for (const width of [1024, 1440]) {
+      await page.setViewportSize({ width, height: 800 })
+      await page.goto('/ui/#/p/default/payments-service')
+      const error = page.locator('.pipeline-conditions__notice[data-tone="failed"]')
+      await expect(error.locator('pre')).toHaveText(/^kubectl create secret generic git-token/)
+      const main = page.locator('#main-content')
+      expect(await main.evaluate((m) => m.scrollWidth - m.clientWidth), `main scrolls sideways at ${width}`).toBeLessThanOrEqual(0)
+    }
   })
 
   test('an old link redirects to its route', async ({ page }) => {

@@ -389,6 +389,10 @@ release name other than `kardinal-promoter`, the Service is named
 
 ### What the UI shows
 
+The UI calls a Bundle a *version*, a PromotionStep a *stage* and a PolicyGate a *gate*
+([Concepts](concepts.md)). An environment's or gate's panel has the Kubernetes kind and object
+name under **Kubernetes details**, for `kubectl`.
+
 - **Fleet board** (the start page, and the kardinal logo from anywhere). Each Pipeline is a
   line of stations, one per environment in promotion order; environments promoted in parallel
   are stacked, and five or more of them (a wave) are one plate that names the range, the version
@@ -414,6 +418,12 @@ release name other than `kardinal-promoter`, the Service is named
     gates with their CEL expressions and approvals.
   - **Metrics**: the release metrics.
 
+  Under the header, a Pipeline that is not Ready shows an error with its reason (for
+  `GitCredentialMissing`, the `kubectl` command that creates the git Secret), and a git Secret
+  without the `kardinal.io/referenceable=true` label shows a warning with the `kubectl label`
+  command; each command has a copy button. A Pipeline with no version yet shows its environments
+  and **Ship your first version**.
+
   On the **map** each environment is a station that shows the version it runs and the version on
   its way; gates sit on the edge into the environment they guard, an approval gate with its
   quorum; the version you follow is one red line through the stations it reached, and it stops
@@ -431,9 +441,14 @@ release name other than `kardinal-promoter`, the Service is named
 - **Step timings.** Selecting an environment step lists the steps of that promotion
   (`git-clone` … `health-check`) with their durations, and a bar for each that shows where it
   ran in the promotion's time. A slow health check or push stands out at once.
-- **Bundle types.** The Bundle card names what the shown Bundle changes: `image`, `config`,
-  `image + config` (a mixed Bundle) or `chart`. In the Bundle history only the Bundles that are
-  not image Bundles carry the tag.
+- **Version types.** A version that is not an image Bundle carries a tag for what it changes:
+  `config`, `image + config` (a mixed Bundle) or `chart`, in the header and in the version
+  history. Image Bundles, the common case, carry none.
+- **Errors.** A read that fails says what it means: the controller cannot be reached, it did
+  not answer in time, the token was refused, the account lacks the viewer role, or the
+  controller had an error. The client's message is under it, with **Retry**.
+- **Help.** The **?** button in the top bar (or the `?` key) lists the keyboard shortcuts and
+  links to these docs.
 - **Keyboard.** The first Tab stop skips to the main content. Each fleet line, and the Bundle
   history, is a single Tab stop: the arrow keys move between its stations or Bundles (Home and
   End to the ends, Up and Down between fleet lines), and Enter opens the one in focus. `?` lists
