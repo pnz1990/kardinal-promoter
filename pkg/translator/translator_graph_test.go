@@ -28,6 +28,7 @@ import (
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // resourceHealth is a type=resource health config for the Deployment "app" in ns.
@@ -264,6 +265,19 @@ func TestTranslate_PermanentErrors(t *testing.T) {
 		_, err := newTranslator(nil).Translate(ctx, p, teamBundle(nil))
 		require.Error(t, err)
 		assert.ErrorIs(t, err, graph.ErrInvalid)
+	})
+	// #1725 follow-up: the controller's own SCM token Secret as git.secretRef
+	// gets no Graph, so no RenderRun mounts it in a render Job.
+	t.Run("git.secretRef is the controller's token Secret", func(t *testing.T) {
+		p := teamPipeline(kardinalv1alpha1.EnvironmentSpec{Name: "prod"})
+		p.Spec.Git.SecretRef = &kardinalv1alpha1.SecretRef{Name: "kardinal-promoter-github-token"}
+		tr := newTranslator(nil).WithControllerSecret(
+			&scm.ControllerTokenSecret{Namespace: p.Namespace, Name: "kardinal-promoter-github-token"})
+		name, err := tr.Translate(ctx, p, teamBundle(nil))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, graph.ErrInvalid)
+		assert.Contains(t, err.Error(), "is the controller's own SCM token Secret")
+		assert.Empty(t, name, "no Graph")
 	})
 	t.Run("bundle with nothing to promote (#1285)", func(t *testing.T) {
 		p := teamPipeline(kardinalv1alpha1.EnvironmentSpec{Name: "prod"})
