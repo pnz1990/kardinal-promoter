@@ -190,7 +190,7 @@ function CELBlock({ expression }: { expression: string }) {
       borderRadius: '4px',
       padding: '0.5rem 0.75rem',
       fontSize: '0.8rem',
-      fontFamily: 'monospace',
+      fontFamily: 'var(--k-font-mono)',
       wordBreak: 'break-all',
       whiteSpace: 'pre-wrap',
     }}>
@@ -297,7 +297,7 @@ function StepProgress({ step }: { step: PromotionStep }) {
                 <span style={{
                   fontSize: '0.75rem',
                   color: shown === 'Pending' ? 'var(--color-text-faint)' : 'var(--color-text)',
-                  fontFamily: 'monospace',
+                  fontFamily: 'var(--k-font-mono)',
                   fontWeight: current ? 600 : 400,
                 }}>
                   {s.name}
@@ -691,7 +691,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
           </div>
           {activeBundle.images.map((img, i) => (
             <div key={i} style={{
-              fontFamily: 'monospace',
+              fontFamily: 'var(--k-font-mono)',
               fontSize: '0.78rem',
               color: 'var(--color-text)',
               wordBreak: 'break-all',
@@ -765,7 +765,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
                   {v.length > 40 ? v.slice(0, 37) + '…' : v}
                 </a>
               ) : (
-                <span style={{ fontFamily: 'monospace' }}>{v}</span>
+                <span style={{ fontFamily: 'var(--k-font-mono)' }}>{v}</span>
               )}
             </div>
           ))}
@@ -790,7 +790,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
                   style={{
                     fontSize: '0.7rem',
                     color: allHealthy ? 'var(--color-success)' : 'var(--color-error)',
-                    fontFamily: 'monospace',
+                    fontFamily: 'var(--k-font-mono)',
                   }}
                 >
                   {trueCount}/{total} healthy
@@ -815,7 +815,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
                 <span style={{
                   color: cond.status === 'True' ? 'var(--color-success)' : cond.status === 'False' ? 'var(--color-error)' : 'var(--color-text-muted)',
                   flexShrink: 0,
-                  fontFamily: 'monospace',
+                  fontFamily: 'var(--k-font-mono)',
                 }}>
                   {cond.status === 'True' ? '✓' : cond.status === 'False' ? '✗' : '?'}
                 </span>
@@ -828,7 +828,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
                       style={{
                         color: 'var(--color-text-faint)',
                         marginLeft: '0.4rem',
-                        fontFamily: 'monospace',
+                        fontFamily: 'var(--k-font-mono)',
                         fontSize: '0.7rem',
                       }}
                     >

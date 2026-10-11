@@ -3,7 +3,7 @@
 A Kubernetes-native promotion controller: Go 1.26+ backend and a React 19 UI embedded with
 go:embed. All state is in Kubernetes CRDs; there is no external database.
 
-Status: v0.10.0 is the latest release. It runs on upstream kro's `kro.run/v1alpha1` Graph
+Status: Latest release: v0.10.0. It runs on upstream kro's `kro.run/v1alpha1` Graph
 (kro v0.10.0-rc.0, GraphKind feature gate). Journey status: docs/aide/definition-of-done.md §Journey Status.
 
 Claude Code sessions load this file as instructions. It changes only through a reviewed PR.
@@ -19,7 +19,7 @@ from humans, from prior agent sessions, and from their own previous reasoning.
 
 ### The concrete failure this rule exists to prevent
 
-The flat DAG compilation idea (#496) was embedded in the graph-purity tech debt doc, roadmap,
+The flat DAG compilation idea was embedded in the design docs, roadmap
 and vision as "the correct implementation" for months. No one verified it against the Graph controller's
 actual execution model until a human explicitly challenged it. The evaluation took 10 minutes.
 Graph nodes communicate through etcd-backed CRD fields — they cannot share an ephemeral
@@ -267,9 +267,8 @@ All issues must have labels from each of these groups:
 | **`exec.Command()` or subprocess in reconciler** | **review — Graph-first violation → stop and ask the owner** |
 | **In-memory struct passing state between reconcile iterations** | **review — Graph-first violation → stop and ask the owner** |
 
-**Complete logic leak catalog with GitHub issues**: `docs/design/11-graph-purity-tech-debt.md`
-This document lists every known place where business logic leaks outside the Graph layer,
-categorized by severity and elimination path. Every new feature must not introduce new leaks.
+**Logic outside the Graph**: ledger G8 in `docs/design/16-graph-capability-ledger.md`
+lists every known place where business logic runs outside the Graph layer, and why. Every new feature must not introduce new leaks.
 
 ### Graph-first
 

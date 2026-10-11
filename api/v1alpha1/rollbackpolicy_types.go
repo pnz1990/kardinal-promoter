@@ -77,7 +77,7 @@ type RollbackPolicyStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=rbp
+// +kubebuilder:resource:scope=Namespaced,shortName=rbp,categories=kardinal-all
 // +kubebuilder:printcolumn:name="ShouldRollback",type=boolean,JSONPath=`.status.shouldRollback`
 // +kubebuilder:printcolumn:name="Failures",type=integer,JSONPath=`.status.consecutiveFailures`
 // +kubebuilder:printcolumn:name="Threshold",type=integer,JSONPath=`.spec.failureThreshold`
@@ -91,8 +91,7 @@ type RollbackPolicyStatus struct {
 // Architecture: the RollbackPolicyReconciler reads
 // PromotionStep.status.consecutiveHealthFailures and writes
 // status.shouldRollback (own CRD status). This makes the rollback
-// decision observable by the Graph, eliminating PS-6 and PS-7 from
-// docs/design/11-graph-purity-tech-debt.md.
+// decision observable by the Graph.
 type RollbackPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

@@ -64,7 +64,7 @@
 
 .bundle-chip__name {
   font-size: 0.75rem;
-  font-family: monospace;
+  font-family: var(--k-font-mono);
 }
 
 .bundle-chip--selected .bundle-chip__name,

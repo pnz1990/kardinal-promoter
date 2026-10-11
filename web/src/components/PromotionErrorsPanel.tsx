@@ -224,7 +224,7 @@ export default function PromotionErrorsPanel({ steps, onSelectEnvironment }: Pro
                   border: '1px solid var(--color-error)',
                   color: 'var(--color-error)',
                   flexShrink: 0,
-                  fontFamily: 'monospace',
+                  fontFamily: 'var(--k-font-mono)',
                   whiteSpace: 'nowrap',
                   marginTop: '1px',
                 }}
@@ -251,7 +251,7 @@ export default function PromotionErrorsPanel({ steps, onSelectEnvironment }: Pro
                 <div style={{
                   fontSize: '12px',
                   color: 'var(--color-error)',
-                  fontFamily: 'monospace',
+                  fontFamily: 'var(--k-font-mono)',
                   wordBreak: 'break-all',
                   lineHeight: 1.4,
                 }}>
@@ -321,7 +321,7 @@ export default function PromotionErrorsPanel({ steps, onSelectEnvironment }: Pro
                       cursor: 'pointer',
                       color: 'var(--color-error)',
                       fontSize: '12px',
-                      fontFamily: 'monospace',
+                      fontFamily: 'var(--k-font-mono)',
                     }}
                   >
                     {env.environment}

@@ -39,8 +39,8 @@
   border-color: var(--color-success);
 }
 
-/* Reconciling — amber */
-.health-chip--reconciling {
+/* In progress — amber */
+.health-chip--in-progress {
   background: var(--color-warning-bg);
   color: var(--color-warning);
   border-color: var(--color-warning);

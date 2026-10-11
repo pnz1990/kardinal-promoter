@@ -40,6 +40,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
@@ -165,17 +166,9 @@ func deployedByEnv(p *v1alpha1.Pipeline, byEnv map[string][]*v1alpha1.PromotionS
 		}
 		return v
 	}
-	// A fleet environment runs nothing itself: its targets do.
-	fleets, _ := graphpkg.FleetTargetEnvironments(p)
-	names := make([]string, 0, len(p.Spec.Environments))
-	for _, env := range p.Spec.Environments {
-		if env.Fleet != nil {
-			names = append(names, fleets[env.Name]...)
-		} else {
-			names = append(names, env.Name)
-		}
-	}
-	for _, name := range names {
+	// A fleet environment runs nothing itself: its targets do. The same
+	// names as the Pipeline's status.environments.
+	for _, name := range pipelinereconciler.EnvironmentNames(p) {
 		envSteps := byEnv[name]
 		dep := lifecycle.DeployedInSteps(envSteps, p.Name, name, bundles)
 		if dep.Bundle == "" {
@@ -263,7 +256,7 @@ type uiHoldResponse struct {
 	// when it is released.
 	ExpiresAt string `json:"expiresAt,omitempty"`
 	// BundleMissing is true when the controller found the rollback Bundle
-	// missing (status.holdStates, #1629). The hold stays in effect.
+	// missing (status.holdStates). The hold stays in effect.
 	BundleMissing bool `json:"bundleMissing,omitempty"`
 	// Message says what is wrong and how to recover, with BundleMissing.
 	Message string `json:"message,omitempty"`
@@ -494,7 +487,7 @@ func gateApproval(g *v1alpha1.PolicyGate) *uiGateApproval {
 	return out
 }
 
-// uiGateOverride is the JSON shape for a PolicyGateOverride (K-09 audit record).
+// uiGateOverride is the JSON shape for a PolicyGateOverride (an audit record).
 type uiGateOverride struct {
 	Reason    string `json:"reason"`
 	Stage     string `json:"stage,omitempty"`
@@ -594,6 +587,7 @@ func (s *uiAPIServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/ui/resume", s.handleResume)
 	mux.HandleFunc("/api/v1/ui/validate-cel", s.handleValidateCEL)
 	mux.HandleFunc("/api/v1/ui/steps/", s.handleStepsSubpath)
+	mux.HandleFunc("/api/v1/ui/display-states", s.handleDisplayStates)
 	mux.HandleFunc(openAPIPath, handleOpenAPI)
 }
 

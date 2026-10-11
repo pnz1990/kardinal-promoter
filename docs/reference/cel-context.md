@@ -17,7 +17,7 @@ Graph `readyWhen` and template expressions run in kro's CEL environment, not thi
 | `environment` | map | The target environment |
 | `upstream` | map | Per-environment soak data from upstream |
 | `metrics` | map | MetricCheck results from the gate's metrics namespace (the org policy namespace for an org gate, the gate's namespace otherwise) |
-| `changewindow` | map | ChangeWindow name → `true` while the window is active (blocking); also `changewindow.isBlocked("name")` and `changewindow.isAllowed("name")`. An unknown name blocks the gate. See [ChangeWindow attributes](../policy-gates.md#changewindow-attributes-k-04) |
+| `changewindow` | map | ChangeWindow name → `true` while the window is active (blocking); also `changewindow.isBlocked("name")` and `changewindow.isAllowed("name")`. An unknown name blocks the gate. See [ChangeWindow attributes](../policy-gates.md#changewindow-attributes) |
 | `approvals` | map | The Approvals counted for this gate instance (`kardinal approve`). See [`approvals.*`](#approvals) |
 
 ---

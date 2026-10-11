@@ -203,3 +203,43 @@ type uiCreateBundleResponse struct {
 	// Message describes how to follow it.
 	Message string `json:"message"`
 }
+
+// uiDisplayState is how one API state is shown (pkg/display): the same
+// labels as the CLI.
+type uiDisplayState struct {
+	// Value is the API value, unchanged, for example WaitingForMerge.
+	Value string `json:"value"`
+	// Label is the text a person reads, for example "Waiting for PR merge".
+	Label string `json:"label"`
+	// Glyph is a one-character Unicode symbol for the state.
+	Glyph string `json:"glyph"`
+	// ASCII is the glyph for a surface without Unicode.
+	ASCII string `json:"ascii"`
+	// Tone is the status bucket that picks colour and shape: verified,
+	// promoting, waiting, blocked, failed, superseded, paused, held,
+	// pending, degraded or unknown.
+	Tone string `json:"tone"`
+}
+
+// uiDisplayStates is the response of GET /api/v1/ui/display-states: every
+// known state of each kind, keyed by API value. A value not listed is shown
+// with its CamelCase split into words and tone unknown.
+type uiDisplayStates struct {
+	// Pipeline maps Pipeline status.phase values, and Paused.
+	Pipeline map[string]uiDisplayState `json:"pipeline"`
+	// Bundle maps Bundle status.phase values.
+	Bundle map[string]uiDisplayState `json:"bundle"`
+	// Step maps PromotionStep status.state values, and NotStarted (an
+	// environment not reached yet).
+	Step map[string]uiDisplayState `json:"step"`
+	// SubStep maps the state of a PromotionStep's status.steps[].
+	SubStep map[string]uiDisplayState `json:"substep"`
+	// Gate maps the state of a gate instance (Pass, Block, Waiting, Pending,
+	// Superseded, Rejected).
+	Gate map[string]uiDisplayState `json:"gate"`
+	// HeldByGate is the label of an environment a gate holds; {gate} is the
+	// gate's name. Its tone is blocked.
+	HeldByGate uiDisplayState `json:"heldByGate"`
+	// Held is the label of an environment held by a rollback (rollback --hold).
+	Held uiDisplayState `json:"held"`
+}

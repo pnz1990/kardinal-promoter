@@ -242,7 +242,7 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
                     borderTop: '1px solid var(--color-border-muted)',
-                    fontFamily: 'monospace',
+                    fontFamily: 'var(--k-font-mono)',
                     background: 'var(--color-bg-deep)',
                   }}>
                     {ns}
@@ -370,15 +370,14 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
                   </span>
                 )}
                 {p.phase && (
-                  // #523: phase "Unknown" means no bundle yet — show "Idle".
+                  // #523: phase "Unknown" means no bundle yet: the display
+                  // table says "No version yet".
                   // E2E-R05: a promoting pipeline held by a PolicyGate reads
                   // "Blocked" (amber, like the fleet bar's Blocked badge).
                   <HealthChip
                     state={p.paused ? 'Paused' : p.phase}
-                    label={p.paused ? undefined
-                      : p.phase === 'Unknown' ? 'Idle'
-                      : p.phase === 'Promoting' && (p.blockerCount ?? 0) > 0 ? 'Blocked'
-                      : undefined}
+                    kind="pipeline"
+                    label={!p.paused && p.phase === 'Promoting' && (p.blockerCount ?? 0) > 0 ? 'Blocked by a gate' : undefined}
                     size="sm"
                   />
                 )}
@@ -423,7 +422,7 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
                       <>
                         {envCount > 0 && <span>·</span>}
                         <span
-                          style={{ fontFamily: 'monospace', color: 'var(--color-text-muted)' }}
+                          style={{ fontFamily: 'var(--k-font-mono)', color: 'var(--color-text-muted)' }}
                           title={p.activeBundleName}
                         >
                           {bundle}
@@ -434,7 +433,7 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
                 )}
                 {/* Bundle name shown below the health bar when env states are shown */}
                 {p.environmentStates && bundle && (
-                  <span style={{ fontFamily: 'monospace', color: 'var(--color-text-muted)' }} title={p.activeBundleName}>
+                  <span style={{ fontFamily: 'var(--k-font-mono)', color: 'var(--color-text-muted)' }} title={p.activeBundleName}>
                     {bundle}
                   </span>
                 )}
