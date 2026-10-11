@@ -8,6 +8,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Before you upgrade
+
+#### From v0.10.0
+
+Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/kardinal-promoter/upgrade/#upgrading-from-v0100): take the `kardinal.io/referenceable` label off the controller's SCM token Secret, apply the new CRDs with `kubectl apply --server-side --force-conflicts` (they add the Pipeline and Bundle printer columns and status fields), then `helm upgrade --reset-then-reuse-values`. kro is unchanged.
+
+1. **The controller's SCM token Secret is not referenceable.** A Pipeline whose `git.secretRef` names it is `Ready=False` (`ValidationFailed`); give it a Secret of its own (see Added).
+2. **A chart Bundle with a `configRef` is refused.** Create a separate config Bundle for the config (see Changed).
+3. **Scripts read `-o json`, not the CLI's tables.** The tables show display labels ("Waiting for PR merge"), and `kardinal status` shows one row per environment; `-o json` keeps the API values (see Changed).
+4. **Roles you wrote for the UI** need `update` on `bundles/reject` to reject a version; the chart's promoter, approver and admin roles have it.
+5. **Chart values:** `scm.secretRef` and `scm.token` set the controller's token; setting one of them and its `github.*` name to different values fails the install.
+
 ### Added
 
 - **`ship --wait` says how long, and links the PR** — each new state on stderr comes after the time since the start (`+1m5s  test: Live`), each PR it opens is printed with its URL as soon as it exists, and a summary at the end gives each environment's last state and how long it took or has waited. `--quiet` (`-q`) prints only the last line, for CI logs ([CI integration](ci-integration.md#waiting-for-the-result-kardinal-ship-wait))

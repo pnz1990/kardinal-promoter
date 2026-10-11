@@ -1,6 +1,7 @@
 # Upgrade
 
-**Upgrading from v0.9.0:** follow [Upgrading from v0.9.0](#upgrading-from-v090).
+**Upgrading from v0.10.0:** follow [Upgrading from v0.10.0](#upgrading-from-v0100). **From v0.9.0:**
+follow [Upgrading from v0.9.0](#upgrading-from-v090).
 
 Helm does not update CRDs on upgrade. Apply the new chart's CRDs first:
 
@@ -40,6 +41,62 @@ than 100 environments, or the `kardinal.io/graph-shape: compact` annotation; see
 Bundle in flight (on any change to the Pipeline's spec, or a deleted Graph) it builds the node
 shape, and kro then deletes every PromotionStep the compact Graph created: the Bundle promotes
 again from its first environment. Before you downgrade, let the Bundles of those Pipelines finish, or delete them.
+
+## Upgrading from v0.10.0
+
+These steps take a v0.10.0 installation to this release. The upgrade suite runs them as written
+(`TestUpgradeV0100_FromV0100`, on the oldest and newest supported Kubernetes minors). Promotions
+in flight keep running: their Graphs, PromotionSteps, PRStatuses and gate instances are kept. This
+release targets the same kro as v0.10.0, so kro is not upgraded. In the commands, `<version>` is
+the chart version you upgrade to.
+
+**1. Read the upgrade notes.** The changelog's [From v0.10.0](changelog.md#from-v0100) lists
+every change for existing objects and clients.
+
+**2. Take the `kardinal.io/referenceable` label off the controller's SCM token Secret.** No
+Pipeline may use the controller's own token Secret, and the controller warns while that Secret
+carries the label. This removes it, if it is there:
+
+```bash
+SECRET=$(kubectl -n kardinal-system get deployment kardinal-promoter \
+  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="KARDINAL_SCM_TOKEN_SECRET_NAME")].value}')
+[ -z "$SECRET" ] || kubectl -n kardinal-system label secret "$SECRET" kardinal.io/referenceable-
+```
+
+A Pipeline whose `spec.git.secretRef` names that Secret is `Ready=False` with reason
+`ValidationFailed` after the upgrade. Give it a Secret of its own, labeled
+`kardinal.io/referenceable=true`, before you upgrade. The chart's demo Pipeline uses
+`demo.secretRef.name`.
+
+**3. Apply the new CRDs.** Helm never upgrades CRDs. The v0.10.0 chart installed them, so Helm
+owns their fields: `--force-conflicts` is required, or the apply stops with
+`conflict with "helm" ... .spec.versions`.
+
+```bash
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> | kubectl apply --server-side --force-conflicts -f -
+```
+
+**4. Upgrade the chart.** Use `--reset-then-reuse-values`, which keeps the values you set and
+takes every new default from the new chart.
+
+```bash
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> \
+  --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
+```
+
+**5. Check the result.**
+
+```bash
+kardinal doctor
+kubectl get pipelines -A
+kubectl get bundles -A
+```
+
+`kardinal doctor` passes every check. Within a minute, `kubectl get pipelines` shows each
+Pipeline's SUMMARY: what runs where. `kubectl get bundles` shows the VERSION of every Bundle that
+is promoting or created after the upgrade; a Bundle that finished before it shows none. A Verified
+Bundle stays Verified, every Bundle that was promoting finishes, and a new Bundle promotes end to
+end.
 
 ## Upgrading from v0.9.0
 
