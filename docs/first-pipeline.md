@@ -191,7 +191,7 @@ Verify the Pipeline was created:
 
 ```bash
 kardinal get pipelines
-# PIPELINE            BUNDLE   TEST   UAT   PROD   SUB   AGE
+# PIPELINE            VERSION  TEST   UAT   PROD   SUB   AGE
 # kardinal-test-app   -        -      -     -      0     10s
 ```
 
@@ -246,7 +246,7 @@ The promotion starts immediately. kardinal-promoter generates a Graph and begins
 ```bash
 # Watch the pipeline status
 kardinal get pipelines
-# PIPELINE            BUNDLE                    TEST   UAT               PROD          SUB   AGE
+# PIPELINE            VERSION                   TEST   UAT               PROD          SUB   AGE
 # kardinal-test-app   kardinal-test-app-x7k2p   Live   Checking health   Not reached   0     2m
 
 # See the steps of the version being promoted
@@ -299,7 +299,7 @@ The PR body contains:
 
 ```bash
 kardinal get pipelines
-# PIPELINE            BUNDLE                    TEST   UAT    PROD   SUB   AGE
+# PIPELINE            VERSION                   TEST   UAT    PROD   SUB   AGE
 # kardinal-test-app   kardinal-test-app-x7k2p   Live   Live   Live   0     8m
 ```
 
@@ -332,7 +332,7 @@ The next Bundle promoted to prod will have this gate injected into its Graph. If
 
 ```bash
 kardinal explain kardinal-test-app --env prod
-# ENVIRONMENT   BUNDLE                    TYPE         NAME                 STATE      EXPRESSION            REASON
+# ENVIRONMENT   VERSION                   TYPE         NAME                 STATE      EXPRESSION            REASON
 # prod          kardinal-test-app-9tptr   PolicyGate   no-weekend-deploys   Blocking   !schedule.isWeekend   Production deployments are blocked on weekends (bundle.version=sha-abc1234: !schedule.isWeekend = false)
 #
 # prod   deployed: kardinal-test-app-7qvsr (sha-1a2b3c4)

@@ -49,6 +49,7 @@
 | [`kardinal status`](reference/cli/kardinal-status.md) | Show controller health or per-pipeline in-flight promotion details |
 | [`kardinal validate`](reference/cli/kardinal-validate.md) | Validate Pipeline and PolicyGate YAML before applying to the cluster |
 | [`kardinal version`](reference/cli/kardinal-version.md) | Print the CLI, controller, and kro (Graph) versions |
+| [`kardinal why`](reference/cli/kardinal-why.md) | Say why an environment waits, and what moves it on |
 
 For full flag documentation, examples, and output formats, see the
 [individual command pages](reference/cli/kardinal.md).

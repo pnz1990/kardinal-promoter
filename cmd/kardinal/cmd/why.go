@@ -410,7 +410,7 @@ func waitingUpstreams(p *v1alpha1.Pipeline, env string, envs []v1alpha1.Pipeline
 	var out []string
 	for _, u := range up {
 		for _, e := range envs {
-			if e.Name == u && !(e.Bundle == bundle && e.IncomingBundle == "") {
+			if e.Name == u && (e.Bundle != bundle || e.IncomingBundle != "") {
 				out = append(out, u)
 			}
 		}

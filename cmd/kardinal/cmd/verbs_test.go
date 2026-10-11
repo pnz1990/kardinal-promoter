@@ -383,7 +383,7 @@ var updateShipRechecks = flag.Bool("update-ship-rechecks", false, "rewrite testd
 // string literal or a label that names a variable) need a person, QA's false
 // negatives (an index, spaces) wait.
 //
-// Covers CLI-VERBS-02.
+// Covers CLI-VERBS-01.
 func TestRechecks_Golden(t *testing.T) {
 	exprs := []string{
 		// Read a variable that changes with time: waits.

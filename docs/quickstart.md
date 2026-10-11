@@ -69,6 +69,15 @@ when it is not done yet:
     gate and health checked through the Applications.
 - It ships the first version, then follows it until prod waits for you.
 
+`kardinal why demo prod` says what prod waits for and the command that moves it on:
+
+```
+prod is waiting for your approval.
+  Version  sha-9349a3f (demo-7xk2p)
+  Gate     prod-approval · 0 of 1 approvals
+  Next     kardinal approve demo prod
+```
+
 `kardinal approve demo prod` ships the version to prod. `kardinal dashboard` port-forwards to
 the controller and opens the UI. A held stage there shows the same `kardinal approve demo prod`
 command with a copy button: the quickstart UI does not authenticate you, so it cannot record
@@ -124,7 +133,7 @@ helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --
 
 # 3. Check the demo Pipeline (it lives in the release namespace)
 kardinal get pipelines -n kardinal-system
-# PIPELINE   BUNDLE   TEST   UAT   PROD   SUB   AGE
+# PIPELINE   VERSION  TEST   UAT   PROD   SUB   AGE
 # demo       -        -      -     -      0     10s
 
 # 4. Trigger the first promotion. The kardinal-demo overlays already run

@@ -121,4 +121,5 @@ names the new Bundle.
 * [kardinal status](kardinal-status.md)	 - Show controller health or per-pipeline in-flight promotion details
 * [kardinal validate](kardinal-validate.md)	 - Validate Pipeline and PolicyGate YAML before applying to the cluster
 * [kardinal version](kardinal-version.md)	 - Print the CLI, controller, and kro (Graph) versions
+* [kardinal why](kardinal-why.md)	 - Say why an environment waits, and what moves it on
 
