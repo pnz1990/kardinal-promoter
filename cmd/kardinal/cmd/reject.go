@@ -24,25 +24,13 @@ func newRejectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "reject <bundle>",
 		Short: "Reject a Bundle: it is never promoted again, and rollback never picks it",
-		Long: `Reject a Bundle.
-
-Sets spec.rejected on the Bundle with your Kubernetes username (read from the
-API server with a SelfSubjectReview, as kubectl auth whoami does) and the
-reason. The Bundle turns Rejected, whatever its phase:
-
-  - no new PromotionStep is created for it;
-  - its steps that have not delivered the change (Pending, Promoting, or
-    WaitingForMerge with the PR still open) fail, and their PRs are closed;
-  - a step whose change is live (HealthChecking, or a PR that merged) keeps
-    going and is health-checked;
-  - kardinal rollback, onHealthFailure=rollback and kardinal promote never
-    pick it or any Bundle carrying its images or config commit, and a
-    Subscription creates no Bundle for them.
-
-Rejecting is final: spec.rejected cannot be changed or removed. It does not
-revert an environment that already runs the Bundle; roll that environment
-back with kardinal rollback. See docs/rollback.md.`,
-		Args: cobra.ExactArgs(1),
+		Long: `Reject a Bundle for good, with --reason, in your Kubernetes name. Steps that
+have not delivered it yet fail and their PRs close; steps whose change is live
+finish their health check. Rollback, promote and Subscriptions never pick it
+again. It does not revert an environment: use kardinal rollback for that.`,
+		Example:     `  kardinal reject my-app-v1-5 --reason "CVE-2026-1234 in the base image"`,
+		Annotations: map[string]string{ReferenceAnnotation: rejectReference},
+		Args:        cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
@@ -103,3 +91,21 @@ func rejectFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, name, 
 	}
 	return nil
 }
+
+// rejectReference is the detail of the command for its reference page.
+const rejectReference = `Sets spec.rejected on the Bundle with your Kubernetes username (read from the
+API server with a SelfSubjectReview, as kubectl auth whoami does) and the
+reason. The Bundle turns Rejected, whatever its phase:
+
+  - no new PromotionStep is created for it;
+  - its steps that have not delivered the change (Pending, Promoting, or
+    WaitingForMerge with the PR still open) fail, and their PRs are closed;
+  - a step whose change is live (HealthChecking, or a PR that merged) keeps
+    going and is health-checked;
+  - kardinal rollback, onHealthFailure=rollback and kardinal promote never
+    pick it or any Bundle carrying its images or config commit, and a
+    Subscription creates no Bundle for them.
+
+Rejecting is final: spec.rejected cannot be changed or removed. It does not
+revert an environment that already runs the Bundle; roll that environment
+back with kardinal rollback. See docs/rollback.md.`

@@ -4,6 +4,9 @@ List AuditEvent records — immutable promotion event log
 
 ### Synopsis
 
+List the AuditEvents the controller writes at each promotion, gate, approval
+and rollback transition, most recent first (at most --limit).
+
 List AuditEvents recording promotion lifecycle transitions.
 AuditEvents are written by the controller at key points:
   PromotionStarted     — Bundle starts promoting through an environment
@@ -27,11 +30,19 @@ are none).
 kardinal get auditevents [flags]
 ```
 
+### Examples
+
+```
+  kardinal get auditevents --pipeline my-app --env prod
+  kardinal get ae -A --limit 50
+```
+
 ### Options
 
 ```
+  -A, --all-namespaces    List events across all namespaces (adds NAMESPACE column)
       --bundle string     Filter by bundle name
-      --env string        Filter by environment name
+  -e, --env string        Filter by environment name
   -h, --help              help for auditevents
       --limit int         Maximum number of results to show (0 = unlimited) (default 20)
       --pipeline string   Filter by pipeline name

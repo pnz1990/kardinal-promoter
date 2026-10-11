@@ -27,7 +27,7 @@ import (
 )
 
 func newGetStepsCmd() *cobra.Command {
-	var watchFlag bool
+	var watchFlag, allNamespaces bool
 
 	cmd := &cobra.Command{
 		Use:         "steps <pipeline>",
@@ -37,36 +37,49 @@ func newGetStepsCmd() *cobra.Command {
 		Long: `List PromotionSteps for a pipeline.
 
 Use --watch / -w to stream live updates (polls every 2s, Ctrl-C to quit).`,
+		Example: `  kardinal get steps my-app
+  kardinal get steps my-app -w
+  kardinal get steps my-app -A`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runGetSteps(cmd, args, watchFlag)
+			return runGetSteps(cmd, args, watchFlag, allNamespaces)
 		},
 	}
 	cmd.Flags().BoolVarP(&watchFlag, "watch", "w", false,
 		"Stream live updates (polls every 2s, Ctrl-C to quit)")
+	cmd.Flags().BoolVarP(&allNamespaces, "all-namespaces", "A", false,
+		"The pipeline's steps in every namespace (adds NAMESPACE column)")
 	return cmd
 }
 
-func runGetSteps(cmd *cobra.Command, args []string, watch bool) error {
+func runGetSteps(cmd *cobra.Command, args []string, watch, allNamespaces bool) error {
 	c, ns, err := buildClient()
 	if err != nil {
 		return fmt.Errorf("get steps: %w", err)
+	}
+	if allNamespaces {
+		ns = ""
 	}
 
 	pipeline := args[0]
 
 	if !watch {
-		return getStepsOnce(cmd.OutOrStdout(), c, ns, pipeline)
+		return getStepsOnceNS(cmd.OutOrStdout(), c, ns, pipeline, allNamespaces)
 	}
 
 	w := cmd.OutOrStdout()
 	return watchLoop(cmd.Context(), w, getPipelinesWatchInterval, func() error {
-		return getStepsOnce(w, c, ns, pipeline)
+		return getStepsOnceNS(w, c, ns, pipeline, allNamespaces)
 	})
 }
 
 // getStepsOnce fetches and renders a single snapshot of PromotionStep status.
 func getStepsOnce(w io.Writer, c sigs_client.Client, ns, pipeline string) error {
+	return getStepsOnceNS(w, c, ns, pipeline, false)
+}
+
+// getStepsOnceNS is getStepsOnce; ns "" with showNS reads every namespace.
+func getStepsOnceNS(w io.Writer, c sigs_client.Client, ns, pipeline string, showNS bool) error {
 	ctx := context.Background()
 
 	var steps v1alpha1.PromotionStepList
@@ -105,7 +118,7 @@ func getStepsOnce(w io.Writer, c sigs_client.Client, ns, pipeline string) error 
 			}
 			return nil
 		}
-		if err := FormatStepsTable(w, activeSteps); err != nil {
+		if err := formatStepsTable(w, activeSteps, showNS); err != nil {
 			return err
 		}
 		for _, h := range hints {
