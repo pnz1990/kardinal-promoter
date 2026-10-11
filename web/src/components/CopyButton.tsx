@@ -14,11 +14,15 @@
 // components/CopyButton.tsx — Reusable copy-to-clipboard button.
 // Extracted from NodeDetail.tsx for use in EmptyState and other components (#530).
 import { useState, useCallback, useEffect, useRef } from 'react'
+import { Icon } from '../ui/Icon'
 
 interface Props {
-  text: string
-  /** Optional title override for the button. Defaults to "Copy to clipboard". */
+  /** The text to copy (also accepted as `value`). */
+  text?: string
+  value?: string
+  /** Optional title override for the button. Defaults to "Copy to clipboard". Also `label`. */
   title?: string
+  label?: string
   /**
    * Optional tabIndex override. Pass -1 when the button is nested inside another
    * interactive element (e.g. a selection <button>) to prevent nested-interactive
@@ -54,7 +58,9 @@ type CopyState = 'idle' | 'copied' | 'failed'
  * Uses execCommand when the Clipboard API is missing (plain-HTTP port-forward)
  * or refuses, and says so when both fail.
  */
-export default function CopyButton({ text, title, tabIndex }: Props) {
+export default function CopyButton({ text: textProp, value, title: titleProp, label: labelProp, tabIndex }: Props) {
+  const text = value ?? textProp ?? ''
+  const title = labelProp ?? titleProp
   const [state, setState] = useState<CopyState>('idle')
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => clearTimeout(timer.current), [])
@@ -88,19 +94,10 @@ export default function CopyButton({ text, title, tabIndex }: Props) {
       tabIndex={tabIndex}
       title={label}
       aria-label={label}
-      style={{
-        background: 'none',
-        border: '1px solid var(--color-border)',
-        borderRadius: '4px',
-        padding: '1px 6px',
-        cursor: 'pointer',
-        fontSize: '0.7rem',
-        color: state === 'copied' ? 'var(--color-success)' : state === 'failed' ? 'var(--color-error)' : 'var(--color-text-muted)',
-        transition: 'color 0.2s',
-        lineHeight: 1.4,
-      }}
+      className="k-copy"
+      data-state={state}
     >
-      {state === 'copied' ? '✓' : state === 'failed' ? '✕' : '📋'}
+      <Icon name={state === 'copied' ? 'check' : state === 'failed' ? 'cross' : 'copy'} />
     </button>
   )
 }

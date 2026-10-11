@@ -24,7 +24,7 @@ describe('CopyButton', () => {
   it('renders the copy icon by default', () => {
     render(<CopyButton text="hello" />)
     const btn = screen.getByTestId('copy-button')
-    expect(btn).toHaveTextContent('📋')
+    expect(btn.querySelector('svg.k-icon')).not.toBeNull()
   })
 
   it('uses clipboard API when available', async () => {
@@ -55,16 +55,16 @@ describe('CopyButton', () => {
     })
 
     it.each([
-      { name: 'no Clipboard API (plain-HTTP origin)', clipboard: undefined, exec: true, want: '✓', title: 'Copied!' },
-      { name: 'Clipboard API rejects', clipboard: { writeText: () => Promise.reject(new Error('denied')) }, exec: true, want: '✓', title: 'Copied!' },
-      { name: 'both fail', clipboard: undefined, exec: false, want: '✕', title: 'Copy failed: select the text and copy it by hand' },
+      { name: 'no Clipboard API (plain-HTTP origin)', clipboard: undefined, exec: true, want: 'copied', title: 'Copied!' },
+      { name: 'Clipboard API rejects', clipboard: { writeText: () => Promise.reject(new Error('denied')) }, exec: true, want: 'copied', title: 'Copied!' },
+      { name: 'both fail', clipboard: undefined, exec: false, want: 'failed', title: 'Copy failed: select the text and copy it by hand' },
     ])('$name', async ({ clipboard, exec, want, title }) => {
       Object.defineProperty(navigator, 'clipboard', { value: clipboard, configurable: true })
       const execCommand = vi.fn().mockReturnValue(exec)
       Object.defineProperty(document, 'execCommand', { value: execCommand, configurable: true })
       render(<CopyButton text="kubectl get pipelines" />)
       fireEvent.click(screen.getByTestId('copy-button'))
-      await waitFor(() => expect(screen.getByTestId('copy-button')).toHaveTextContent(want))
+      await waitFor(() => expect(screen.getByTestId('copy-button')).toHaveAttribute('data-state', want))
       expect(execCommand).toHaveBeenCalledWith('copy')
       expect(screen.getByTestId('copy-button')).toHaveAttribute('title', title)
     })
