@@ -91,8 +91,8 @@ func rejectFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, name, 
 		}
 		return fmt.Errorf("reject: patch bundle %s: %w", name, err)
 	}
-	phase := b.Status.Phase
-	if phase == "" {
+	phase := bundleLabel(b.Status.Phase)
+	if b.Status.Phase == "" {
 		phase = "new"
 	}
 	if _, err := fmt.Fprintf(w,

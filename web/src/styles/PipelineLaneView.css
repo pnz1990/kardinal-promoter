@@ -32,7 +32,7 @@
 .stage-card--ready       { border-left-color: var(--color-success); }
 .stage-card--error       { border-left-color: var(--color-error); }
 .stage-card--degraded    { border-left-color: var(--color-degraded); }
-.stage-card--reconciling { border-left-color: var(--color-warning); }
+.stage-card--inprogress { border-left-color: var(--color-warning); }
 .stage-card--pending     { border-left-color: var(--color-border); }
 .stage-card--unknown     { border-left-color: var(--color-border-muted); }
 .stage-card--paused      { border-left-color: var(--color-accent); }

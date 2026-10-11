@@ -20,8 +20,8 @@ test.describe('Journey 003 — Health chip CSS class regression guard (#532)', (
     await expect(chip).toBeVisible()
   })
 
-  test('Step 2: Active pipeline shows health-chip--reconciling class', async ({ page }) => {
-    // payments-service has "Unknown" phase → mapped to "Promoting" → Reconciling
+  test('Step 2: Active pipeline shows a health-chip state class', async ({ page }) => {
+    // payments-service has "Unknown" phase → mapped to "Promoting" → InProgress
     // Or has active env states showing Promoting
     const chip = page.locator('.health-chip').first()
     await expect(chip).toBeVisible()

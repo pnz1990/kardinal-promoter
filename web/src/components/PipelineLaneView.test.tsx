@@ -80,8 +80,8 @@ describe('PipelineLaneView — stage cards', () => {
   it('renders HealthChip for each stage', () => {
     const nodes = [makeNode({ environment: 'env1', state: 'Verified' })]
     render(<PipelineLaneView nodes={nodes} />)
-    // HealthChip renders the state as text (or label)
-    expect(screen.getByText('Verified')).toBeInTheDocument()
+    // HealthChip renders the display-state label (P2): a Verified step is Live
+    expect(screen.getByText('Live')).toBeInTheDocument()
   })
 
   it('calls onSelectNode when stage card is clicked', async () => {

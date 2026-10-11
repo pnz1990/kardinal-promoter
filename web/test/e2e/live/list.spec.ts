@@ -52,8 +52,8 @@ test('the sidebar shows each pipeline’s state, and the filters narrow it', asy
   await expect(sidebarRows(page)).toHaveCount(3)
 
   const held = sidebarRow(page, PIPELINE)
-  await expect(held.locator('.health-chip')).toHaveText('Blocked')
-  await expect(held.locator('.health-chip')).toHaveAttribute('data-health-state', 'Reconciling')
+  await expect(held.locator('.health-chip')).toHaveText('Blocked by a gate')
+  await expect(held.locator('.health-chip')).toHaveAttribute('data-health-state', 'InProgress')
   await expect(held).toContainText('2 envs')
   await expect(held).toContainText('1 verified')
   await expect(held).not.toContainText('PAUSED')
@@ -65,7 +65,7 @@ test('the sidebar shows each pipeline’s state, and the filters narrow it', asy
   await expect(pausedRow).toContainText('1 env')
 
   const brokenRow = sidebarRow(page, broken)
-  await expect(brokenRow.locator('.health-chip')).toHaveText('Degraded')
+  await expect(brokenRow.locator('.health-chip')).toHaveText('A version failed')
   await expect(brokenRow.locator('.health-chip')).toHaveAttribute('data-health-state', 'Degraded')
   await expect(brokenRow).toContainText('1 failed')
   await expect(brokenRow).not.toContainText('PAUSED')
