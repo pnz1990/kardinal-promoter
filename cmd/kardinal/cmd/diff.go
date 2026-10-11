@@ -30,20 +30,29 @@ import (
 
 func newDiffCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "diff <bundle-a> <bundle-b>",
+		Use:   "diff <bundle-a|version> <bundle-b|version>",
 		Short: "Show what changes between two versions (Bundles)",
 		Long: `Compare the images (by repository) and the provenance of two Bundles. A tag
 reads (absent) when a Bundle has no image for the repository and - when it is
 pinned by digest only; CHANGED marks the rows that differ.`,
 		Annotations: map[string]string{ReferenceAnnotation: diffReference},
-		Example:     `  kardinal diff my-app-sha-abc1234 my-app-sha-def5678`,
-		Args:        cobra.ExactArgs(2),
+		Example: `  kardinal diff my-app-sha-abc1234 my-app-sha-def5678
+  kardinal diff 1.4.0 1.5.0`,
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("diff: %w", err)
 			}
-			return diffFn(cmd.OutOrStdout(), c, ns, args[0], args[1])
+			a, err := resolveBundleRef(contextOf(cmd), c, ns, "", args[0])
+			if err != nil {
+				return fmt.Errorf("diff: %w", err)
+			}
+			b, err := resolveBundleRef(contextOf(cmd), c, ns, "", args[1])
+			if err != nil {
+				return fmt.Errorf("diff: %w", err)
+			}
+			return diffFn(cmd.OutOrStdout(), c, ns, a, b)
 		},
 	}
 }
