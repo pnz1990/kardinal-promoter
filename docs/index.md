@@ -66,6 +66,16 @@ kardinal checks the Deployment `my-app` in the namespace `<name>`.
 
 </div>
 
+<figure class="k-demo" id="demo-first-look">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="assets/demos/first-look-dark.png">
+    <source media="(prefers-reduced-motion: reduce)" srcset="assets/demos/first-look.png">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/demos/first-look-dark.webp">
+    <img src="assets/demos/first-look.webp" alt="The kardinal UI: the fleet board, then the checkout pipeline map, then an older version and back." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>From the fleet to a pipeline, following a version · <code>kardinal get pipelines</code></figcaption>
+</figure>
+
 ## How it works
 
 1. **CI creates a version** with the new image and where it came from.

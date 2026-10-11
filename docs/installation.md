@@ -179,6 +179,24 @@ The UI calls a Bundle a *version*, a PromotionStep a *stage* and a PolicyGate a 
 ([Concepts](concepts.md)). An environment's or gate's panel has the Kubernetes kind and object
 name under **Kubernetes details**, for `kubectl`.
 
+<figure class="k-demo" id="demo-compare">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/compare.png">
+    <img src="../assets/demos/compare.webp" alt="The UI: shift-clicking an older version and pressing Compare to see the two field by field." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>Compare two versions · <code>kardinal diff</code></figcaption>
+</figure>
+
+
+<figure class="k-demo" id="demo-palette">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/palette.png">
+    <img src="../assets/demos/palette.webp" alt="The UI: pressing Ctrl+K, typing storefront prod and opening that environment." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>Go anywhere with ⌘K or Ctrl+K</figcaption>
+</figure>
+
+
 - **Fleet board** (the start page, and the kardinal logo from anywhere). Each Pipeline is a
   line of stations, one per environment in promotion order; environments promoted in parallel
   are stacked, and five or more of them (a wave) are one plate that names the range, the version

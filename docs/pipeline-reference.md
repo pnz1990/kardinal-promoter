@@ -168,6 +168,17 @@ tenants, a few at a time. Each target becomes an environment of its own, named
 `<environment>-<target>`. It has its own PromotionStep, PR, gate instances and health check,
 and the steps carry the label `kardinal.io/fleet: <environment>`.
 
+<figure class="k-demo" id="demo-fleet">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/fleet-dark.png">
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/fleet.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/fleet-dark.webp">
+    <img src="../assets/demos/fleet.webp" alt="The UI: a board of sixteen pipelines, then an edge pipeline whose fleet of 42 points of presence promotes five at a time, at the overview, map and detail zoom levels, with the minimap." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>A big fleet: zoom levels and the minimap</figcaption>
+</figure>
+
+
 ```yaml
 environments:
   - name: staging

@@ -83,6 +83,15 @@ the controller and opens the UI. A held stage there shows the same `kardinal app
 command with a copy button: the quickstart UI does not authenticate you, so it cannot record
 an approval for you. Running `kardinal quickstart` again changes nothing.
 
+<figure class="k-demo" id="demo-why-waiting">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/why-waiting.png">
+    <img src="../assets/demos/why-waiting.webp" alt="The UI: selecting a waiting stage, then its gate, to read why the promotion waits." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>Why a stage is waiting, in the UI · <code>kardinal why demo prod</code></figcaption>
+</figure>
+
+
 To get a pull request with evidence for prod, as in the full setup below, set prod's
 `approval: pr-review` in the Pipeline (`kubectl edit pipeline demo`). The next version then
 waits for your approval at prod, opens a PR on your fork with the promotion evidence, and is

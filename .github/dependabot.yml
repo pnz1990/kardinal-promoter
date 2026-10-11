@@ -34,6 +34,20 @@ updates:
         update-types:
           - minor
           - patch
+  # The docs' UI recorder (hack/record-demos/package.json): Playwright and sharp.
+  - package-ecosystem: npm
+    directory: /hack/record-demos
+    schedule:
+      interval: monthly
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "chore(deps)"
+    open-pull-requests-limit: 2
+    groups:
+      record-demos:
+        patterns:
+          - "*"
   # Base images in the Dockerfile.
   - package-ecosystem: docker
     directory: /
