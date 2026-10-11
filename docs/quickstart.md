@@ -404,7 +404,6 @@ metadata:
   labels:
     kardinal.io/scope: org
     kardinal.io/applies-to: prod
-    kardinal.io/type: gate
 spec:
   expression: "!schedule.isWeekend"
   message: "Production deployments are blocked on weekends"
