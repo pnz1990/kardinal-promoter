@@ -71,7 +71,11 @@ explain's entries. -w refreshes every 3 seconds.`,
 				return explainHinted(w, c, ns, pipeline, env, colorFlag)
 			}
 			if !watchFlag {
-				return whyFn(cmd.Context(), w, c, ns, pipeline, env)
+				if err := whyFn(cmd.Context(), w, c, ns, pipeline, env); err != nil {
+					return err
+				}
+				printUILink(ns, pipeline, env)
+				return nil
 			}
 			return whyWatch(cmd.Context(), w, c, ns, pipeline, env, 3*time.Second)
 		},

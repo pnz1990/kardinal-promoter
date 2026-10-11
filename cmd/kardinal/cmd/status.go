@@ -80,7 +80,13 @@ refreshes it and -o json prints it for scripts.`,
 				return statusSummaryIn(w, c, controllerNS, scope, fallback)
 			}
 			if !watchFlag {
-				return render()
+				if err := render(); err != nil {
+					return err
+				}
+				if len(args) == 1 && !structured() {
+					printUILink(ns, args[0], "")
+				}
+				return nil
 			}
 			return watchLoop(cmd.Context(), w, getPipelinesWatchInterval, render)
 		},
