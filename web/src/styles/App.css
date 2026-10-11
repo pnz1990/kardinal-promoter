@@ -272,3 +272,29 @@
 .app-topbar__tools { display: flex; align-items: center; gap: var(--k-space-2); }
 .app-topbar__help { font-family: var(--k-font-display); font-weight: var(--k-weight-bold); }
 .app-empty__error { max-inline-size: calc(var(--k-space-24) * 6); margin-inline: auto; text-align: start; }
+
+/* ── Narrow screens (below the md breakpoint; App sets data-narrow from tokens.ts) ──
+   The pipeline list is a drawer over the page, opened from the top bar; the main
+   panel takes the full width. */
+.app[data-narrow] .app-sidebar {
+  position: fixed;
+  inset-block: 0;
+  inset-inline-start: 0;
+  z-index: var(--k-z-drawer);
+  inline-size: min(var(--k-layout-rail-expanded), 85vw);
+  box-shadow: var(--k-elev-2);
+}
+.app[data-narrow] .app-sidebar[hidden] { display: none; }
+.app-sidebar-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--k-z-drawer);
+  background: color-mix(in oklab, var(--k-surface-sunken) 72%, transparent);
+}
+.app[data-narrow] .app-topbar { padding-inline: var(--k-space-3); gap: var(--k-space-2); }
+.app[data-narrow] .app-topbar__search { min-inline-size: 0; }
+.app[data-narrow] .app-topbar__search > span,
+.app[data-narrow] .app-topbar__search kbd { display: none; }
+.app[data-narrow] .app-pipeline-head,
+.app[data-narrow] .app-map-head { padding-inline: var(--k-space-3); }
+.app[data-narrow] .app-content { padding-inline: var(--k-space-3); }

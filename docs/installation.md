@@ -447,6 +447,9 @@ name under **Kubernetes details**, for `kubectl`.
   End to the ends, Up and Down between fleet lines), and Enter opens the one in focus. `?` lists
   the shortcuts (`/` filter, `r` refresh, `Esc` close a panel). Every view is checked against
   WCAG 2.1 AA, colour contrast included, in both themes.
+- **Narrow screens.** Below 960 px wide (a phone or a split window) the pipeline list is a
+  drawer: the button at the start of the top bar opens it, and Esc, a pick or a click outside
+  closes it. The page then takes the full width.
 - **Go to anything (⌘K).** ⌘K, Ctrl+K or the **Go to or do…** box in the top bar opens one list
   of pipelines, environments (`pipeline › env`) and the shown pipeline's versions, and of actions:
   switch the theme or the density, refresh, the operations table, the shortcuts. Type to filter,

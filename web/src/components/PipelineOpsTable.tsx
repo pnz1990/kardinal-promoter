@@ -8,6 +8,7 @@
 import { useState, useMemo } from 'react'
 import type { Pipeline } from '../types'
 import { HealthChip } from './HealthChip'
+import { displayState } from '../displayStates.gen'
 import { Icon } from '../ui/Icon'
 import { ErrorNotice } from '../ui/ErrorNotice'
 import '../styles/PipelineOpsTable.css'
@@ -92,7 +93,8 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
       ? pipelines.filter(p =>
           p.name.toLowerCase().includes(q) ||
           p.namespace.toLowerCase().includes(q) ||
-          p.phase.toLowerCase().includes(q)
+          p.phase.toLowerCase().includes(q) ||
+          displayState('pipeline', p.paused ? 'Paused' : p.phase).label.toLowerCase().includes(q)
         )
       : pipelines
   }, [pipelines, filter])
@@ -265,7 +267,7 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
                   {/* Inventory age */}
                   <td className="ops-table__td" data-tone={inventoryTone(p.inventoryAgeDays)}>
                     {p.inventoryAgeDays !== undefined ? (
-                      <span title={`${p.inventoryAgeDays} day${p.inventoryAgeDays === 1 ? '' : 's'} since last bundle`}>
+                      <span title={`${p.inventoryAgeDays} day${p.inventoryAgeDays === 1 ? '' : 's'} since the newest version shipped`}>
                         {p.inventoryAgeDays === 0 ? 'today' : `${p.inventoryAgeDays}d`}
                         {isStale && <span className="ops-table__stale">⚠</span>}
                       </span>

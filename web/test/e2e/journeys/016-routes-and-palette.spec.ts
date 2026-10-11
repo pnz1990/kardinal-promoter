@@ -67,6 +67,26 @@ test.describe('Journey 016 — Routes and the command palette', () => {
     await expect(warning.getByRole('button', { name: 'Copy shell' })).toBeVisible()
   })
 
+  test('a long fix command wraps instead of widening the page', async ({ page }) => {
+    // The message the PipelineReconciler writes for a missing git Secret (git_credential.go).
+    const message = 'spec.git.secretRef is not set, so git has no token for https://github.com/shop/payments-config; create the Secret '
+      + '(kubectl create secret generic git-token -n default --from-literal=token=<TOKEN> && kubectl label secret git-token -n default kardinal.io/referenceable=true) '
+      + 'and set spec.git.secretRef.name: git-token'
+    await page.route('**/api/v1/ui/pipelines', async (route) => {
+      const list = await (await route.fetch()).json()
+      for (const p of list) if (p.name === 'payments-service') p.conditions = [{ type: 'Ready', status: 'False', reason: 'GitCredentialMissing', message }]
+      await route.fulfill({ json: list })
+    })
+    for (const width of [1024, 1440]) {
+      await page.setViewportSize({ width, height: 800 })
+      await page.goto('/ui/#/p/default/payments-service')
+      const error = page.locator('.pipeline-conditions__notice[data-tone="failed"]')
+      await expect(error.locator('pre')).toHaveText(/^kubectl create secret generic git-token/)
+      const main = page.locator('#main-content')
+      expect(await main.evaluate((m) => m.scrollWidth - m.clientWidth), `main scrolls sideways at ${width}`).toBeLessThanOrEqual(0)
+    }
+  })
+
   test('an old link redirects to its route', async ({ page }) => {
     await page.goto('/ui/#pipeline=kardinal-test-app&ns=default')
     await expect(page.getByRole('heading', { level: 1, name: 'kardinal-test-app' })).toBeVisible()

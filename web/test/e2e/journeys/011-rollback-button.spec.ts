@@ -60,7 +60,7 @@ test.describe('Journey 011 — Rollback button in NodeDetail', () => {
     expect(req.postDataJSON()).toMatchObject({ pipeline: 'kardinal-test-app', environment: 'test' })
 
     await expect(dialog).toBeHidden()
-    await expect(nodeDetail.getByRole('status')).toHaveText(/Rollback started: bundle rollback-bundle/)
+    await expect(nodeDetail.getByRole('status')).toHaveText(/Rollback started: version rollback-bundle/)
   })
 
   test('Step 4: Cancel closes the dialog without calling the API', async ({ page }) => {

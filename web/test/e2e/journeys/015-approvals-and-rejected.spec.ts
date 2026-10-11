@@ -18,7 +18,7 @@ test.describe('Journey 015 — Approvals and rejected Bundles', () => {
     await expect(meter).toBeVisible() // a holding gate opens the panel
     await expect(meter).toHaveAttribute('aria-valuetext', '1 of 2 approvals')
     await expect(page.locator('.approval-quorum__pip[data-filled]')).toHaveCount(1)
-    await expect(page.getByText("From members of release-managers; not the Bundle's creator")).toBeVisible()
+    await expect(page.getByText("From members of release-managers; not the person who shipped the version")).toBeVisible()
     const rows = page.getByRole('list', { name: 'Approval decisions' }).getByRole('listitem')
     await expect(rows).toHaveCount(2)
     await expect(rows.nth(0)).toContainText('alice')
