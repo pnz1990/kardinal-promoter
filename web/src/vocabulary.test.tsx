@@ -49,7 +49,7 @@ const graph: GraphResponse = {
 const gates = [
   { name: 'soak-app-v2-prod', namespace: 'default', expression: 'upstream.uat.soakMinutes >= 30', ready: false, reason: 'soak 0m < 30m', pipeline: 'app', bundle: 'app-v2', environment: 'prod', state: 'Block', holding: true },
   { name: 'approval-app-v2-prod', namespace: 'default', expression: 'true', ready: false, reason: 'waiting for approvals: 1 of 2', pipeline: 'app', bundle: 'app-v2', environment: 'prod', state: 'Waiting',
-    approval: { required: 2, allowedGroups: ['release-managers'], excludeAuthor: true, approved: 1, decisions: [{ user: 'alice', decision: 'approve', counted: true, comment: 'ok' }, { user: 'ci-bot', decision: 'approve', counted: false }] } },
+    approval: { required: 2, allowedGroups: ['release-managers'], excludeAuthor: true, approved: 1, decisions: [{ user: 'alice', decision: 'approve', counted: true, comment: 'ok' }, { user: 'ci-bot', decision: 'approve', counted: false, reason: "the version's author (approval.excludeAuthor)" }] } },
   { name: 'hours-app-v2-stage', namespace: 'default', expression: 'schedule.hour >= 9', ready: true, pipeline: 'app', bundle: 'app-v2', environment: 'stage', state: 'Pass' },
   { name: 'soak-app-v1-prod', namespace: 'default', expression: 'upstream.uat.soakMinutes >= 30', ready: false, pipeline: 'app', bundle: 'app-v1', environment: 'prod', state: 'Superseded' },
   { name: 'soak', namespace: 'default', expression: 'upstream.uat.soakMinutes >= 30', ready: false, template: true, state: 'Pending' },
@@ -116,12 +116,12 @@ const LABELS = [...new Set(Object.values(DISPLAY_STATES).flatMap((k) => Object.v
 
 /**
  * The words a person reads (text and accessible names), outside the Kubernetes details
- * disclosure and outside code (commands and their output, CEL), with the display labels
- * taken out.
+ * disclosure and other Kubernetes text marked data-k8s (kubectl output), with the display
+ * labels taken out.
  */
 function readable(root: HTMLElement): string {
   const clone = root.cloneNode(true) as HTMLElement
-  clone.querySelectorAll('details.k-k8s, pre, code, kbd').forEach((d) => d.remove())
+  clone.querySelectorAll('details.k-k8s, [data-k8s]').forEach((d) => d.remove())
   const names = [...clone.querySelectorAll('[title],[aria-label],[alt],[placeholder]')]
     .flatMap((e) => ['title', 'aria-label', 'alt', 'placeholder'].map((a) => e.getAttribute(a) ?? ''))
   // Text nodes joined by spaces: adjacent elements' textContent runs words together ("3 bundlesRollback").
@@ -173,6 +173,16 @@ describe('vocabulary', () => {
     await click(screen.getByRole('button', { name: 'Switch to List View' }))
 
     await go('#/p/default/app')
+    // A stage's and a gate's tooltip on the map.
+    for (const name of ['uat', 'soak']) {
+      const node = document.querySelector<SVGGElement>(`g.dag-node[aria-label^="${name} — "]`)!
+      fireEvent.mouseEnter(node)
+      await flush(400)
+      expect(screen.getByTestId('dag-tooltip')).toBeInTheDocument()
+      check(`tooltip ${name}`)
+      fireEvent.mouseLeave(node)
+      await flush(400)
+    }
     for (const tab of ['Map', 'Versions', 'Activity', 'Metrics']) {
       await click(screen.getByRole('tab', { name: new RegExp(`^${tab}`) }))
       check(`${tab} tab`)

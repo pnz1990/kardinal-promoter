@@ -73,8 +73,9 @@ export default function EmptyState() {
         <div className="empty-state__step-label">
           Then run <code className="empty-state__inline-code">kubectl get pipelines</code>:
         </div>
-        {/* It scrolls sideways on a narrow screen, so it takes focus (keyboard scrolling). */}
-        <pre className="empty-state__output" tabIndex={0} role="region" aria-label="Expected output of kubectl get pipelines">
+        {/* kubectl output (data-k8s: Kubernetes words, as kubectl prints them). It scrolls sideways
+            on a narrow screen, so it takes focus (keyboard scrolling). */}
+        <pre className="empty-state__output" data-k8s tabIndex={0} role="region" aria-label="Expected output of kubectl get pipelines">
           {EXPECTED_OUTPUT}
         </pre>
       </div>

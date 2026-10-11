@@ -339,6 +339,9 @@ export function DAGView({ nodes, edges, loading, error, onRetry, highlightNodeId
   }, [])
 
   const handleHoverEnd = useCallback(() => {
+    // Mouse leave and blur can both end a hover: keep one timer, or the first would
+    // hide the next node's tooltip.
+    if (hideTimerRef.current !== null) clearTimeout(hideTimerRef.current)
     hideTimerRef.current = setTimeout(() => {
       setTooltipTarget(null)
       hideTimerRef.current = null

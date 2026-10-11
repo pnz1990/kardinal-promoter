@@ -176,7 +176,7 @@ const GATES = [
       required: 2, allowedGroups: ['release-managers'], excludeAuthor: true, approved: 1,
       decisions: [
         { user: 'alice', decision: 'approve', counted: true, comment: 'canary looks clean', firstSeenAt: new Date(Date.now() - 3_600_000).toISOString() },
-        { user: 'ci-bot', decision: 'approve', counted: false, reason: 'the Bundle\'s creator (excludeAuthor)', firstSeenAt: new Date(Date.now() - 600_000).toISOString() },
+        { user: 'ci-bot', decision: 'approve', counted: false, reason: 'the version\'s author (approval.excludeAuthor)', firstSeenAt: new Date(Date.now() - 600_000).toISOString() },
       ],
     },
   },
