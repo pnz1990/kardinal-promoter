@@ -10,7 +10,7 @@ test.describe('Journey 002 — DAG node click opens NodeDetail', () => {
     await page.goto('/')
     await page.getByText('kardinal-test-app').first().click()
     // Wait for DAG to render
-    await expect(page.locator('svg')).toBeVisible()
+    await expect(page.locator('svg.dag-view__svg')).toBeVisible()
   })
 
   test('Step 1: DAG renders environment nodes', async ({ page }) => {

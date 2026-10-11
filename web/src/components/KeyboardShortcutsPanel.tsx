@@ -12,6 +12,8 @@
 
 import { useRef } from 'react'
 import { useModalFocus } from '../useModalFocus'
+import '../ui'
+import '../styles/KeyboardShortcutsPanel.css'
 
 interface ShortcutRow {
   key: string
@@ -39,15 +41,7 @@ export function KeyboardShortcutsPanel({ onClose }: KeyboardShortcutsPanelProps)
       role="dialog"
       aria-modal="true"
       aria-label="Keyboard shortcuts"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'rgba(0,0,0,0.45)',
-        zIndex: 1000,
-      }}
+      className="k-scrim"
       onClick={e => {
         // Close on backdrop click
         if (e.target === e.currentTarget) onClose()
@@ -58,99 +52,38 @@ export function KeyboardShortcutsPanel({ onClose }: KeyboardShortcutsPanelProps)
         if (e.key === '?') { e.preventDefault(); e.stopPropagation(); onClose() }
       }}
     >
-      <div
-        ref={panelRef}
-        style={{
-          background: 'var(--color-surface)',
-          border: '1px solid var(--color-border)',
-          borderRadius: '8px',
-          padding: '1.25rem 1.5rem',
-          minWidth: '280px',
-          maxWidth: '400px',
-          boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
-        }}
-      >
+      <div ref={panelRef} className="k-dialog shortcuts">
         {/* Header */}
-        <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: '1rem',
-        }}>
-          <span style={{
-            fontWeight: 600,
-            fontSize: '0.85rem',
-            color: 'var(--color-text)',
-            letterSpacing: '0.04em',
-          }}>
-            KEYBOARD SHORTCUTS
-          </span>
+        <div className="shortcuts__header">
+          <span className="shortcuts__title">KEYBOARD SHORTCUTS</span>
           <button
+            type="button"
             onClick={onClose}
             aria-label="Close keyboard shortcuts"
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              fontSize: '0.9rem',
-              color: 'var(--color-text-muted)',
-              lineHeight: 1,
-              padding: '2px 4px',
-            }}
+            className="k-icon-button k-icon-button--sm"
           >
             ✕
           </button>
         </div>
 
         {/* Shortcut rows */}
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <table className="shortcuts__table">
           <tbody>
             {SHORTCUTS.map(({ key, description }) => (
               <tr key={key}>
-                <td style={{
-                  paddingBottom: '0.5rem',
-                  paddingRight: '1rem',
-                  verticalAlign: 'top',
-                  width: '3rem',
-                }}>
-                  <kbd style={{
-                    display: 'inline-block',
-                    background: 'var(--color-surface-2)',
-                    border: '1px solid var(--color-border)',
-                    borderRadius: '4px',
-                    padding: '1px 6px',
-                    fontSize: '0.75rem',
-                    fontFamily: 'var(--k-font-mono)',
-                    color: 'var(--color-text)',
-                    minWidth: '1.5rem',
-                    textAlign: 'center',
-                  }}>
-                    {key}
-                  </kbd>
+                <td className="shortcuts__key">
+                  <kbd className="k-kbd">{key}</kbd>
                 </td>
-                <td style={{
-                  paddingBottom: '0.5rem',
-                  fontSize: '0.8rem',
-                  color: 'var(--color-text-muted)',
-                  verticalAlign: 'top',
-                }}>
-                  {description}
-                </td>
+                <td className="shortcuts__description">{description}</td>
               </tr>
             ))}
           </tbody>
         </table>
 
         {/* Footer hint */}
-        <div style={{
-          marginTop: '0.75rem',
-          paddingTop: '0.75rem',
-          borderTop: '1px solid var(--color-border-muted)',
-          fontSize: '0.7rem',
-          color: 'var(--color-text-faint)',
-        }}>
-          Press <kbd style={{ fontFamily: 'var(--k-font-mono)' }}>?</kbd> or{' '}
-          <kbd style={{ fontFamily: 'var(--k-font-mono)' }}>Esc</kbd> to close
+        <div className="shortcuts__footer">
+          Press <kbd className="shortcuts__hint-key">?</kbd> or{' '}
+          <kbd className="shortcuts__hint-key">Esc</kbd> to close
         </div>
       </div>
     </div>

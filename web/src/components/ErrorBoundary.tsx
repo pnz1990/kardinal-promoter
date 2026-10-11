@@ -27,6 +27,8 @@
 // - Never exposes raw stack traces in the fallback UI.
 
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import '../ui'
+import '../styles/ErrorBoundary.css'
 
 interface Props {
   /** Message shown in the error fallback card. */
@@ -72,29 +74,12 @@ export class ErrorBoundary extends Component<Props, State> {
         <div
           className="error-boundary-fallback"
           role="alert"
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '2rem',
-            gap: '1rem',
-            color: 'var(--color-text-secondary)',
-            fontSize: '0.875rem',
-          }}
         >
           <span>{this.props.fallbackMessage}</span>
           <button
+            type="button"
             onClick={this.handleRetry}
-            style={{
-              padding: '0.375rem 0.75rem',
-              borderRadius: '4px',
-              border: '1px solid var(--color-border)',
-              background: 'transparent',
-              color: 'var(--color-text, inherit)',
-              cursor: 'pointer',
-              fontSize: '0.875rem',
-            }}
+            className="k-button k-button--secondary k-button--sm"
           >
             Retry
           </button>

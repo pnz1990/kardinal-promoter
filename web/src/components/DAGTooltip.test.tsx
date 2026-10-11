@@ -90,9 +90,10 @@ describe('DAGTooltip', () => {
     expect(link).toHaveAttribute('href', promotionStepNode.prURL)
   })
 
-  it('shows 🔒 prefix and gate name for PolicyGate', () => {
+  it('shows the gate icon and gate name for PolicyGate', () => {
     render(<DAGTooltip target={makeTarget(policyGateNode)} />)
     expect(screen.getByText(/no-weekend-deploys/)).toBeInTheDocument()
+    expect(document.querySelector('.dag-tooltip__title svg.k-icon')).not.toBeNull()
   })
 
   it('shows CEL expression for PolicyGate', () => {

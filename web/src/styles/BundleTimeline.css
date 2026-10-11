@@ -40,8 +40,9 @@
 }
 
 .bundle-chip--selected {
-  border-color: var(--color-accent);
-  box-shadow: inset 0 0 0 1px var(--color-accent);
+  /* The shown Bundle is the selection: the thread. */
+  border-color: var(--k-thread);
+  box-shadow: inset 0 0 0 var(--k-border-hairline) var(--k-thread);
   color: var(--color-text);
 }
 
@@ -84,7 +85,7 @@
 }
 
 /* ── Bundle phase colors ─────────────────────────────────────────────────── */
-.bundle-chip--promoting  { --phase-color: var(--color-accent); }
+.bundle-chip--promoting  { --phase-color: var(--k-status-promoting-fg); }
 .bundle-chip--verified   { --phase-color: var(--color-success); }
 .bundle-chip--failed     { --phase-color: var(--color-error); }
 .bundle-chip--rejected   { --phase-color: var(--color-error); }
@@ -102,7 +103,46 @@
   animation: bundle-chip-shimmer 1.5s infinite;
 }
 
+/* The five skeleton chips, of differing widths. */
+.bundle-chip-skeleton:nth-of-type(1) { width: calc(var(--k-space-4) * 4.5); }
+.bundle-chip-skeleton:nth-of-type(2) { width: calc(var(--k-space-4) * 3.625); }
+.bundle-chip-skeleton:nth-of-type(3) { width: calc(var(--k-space-4) * 4); }
+.bundle-chip-skeleton:nth-of-type(4) { width: calc(var(--k-space-4) * 3.125); }
+.bundle-chip-skeleton:nth-of-type(5) { width: calc(var(--k-space-4) * 4.25); }
+
 @keyframes bundle-chip-shimmer {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
+
+/* ── Header row and chip strip ──────────────────────────────────────────── */
+.bundle-timeline__skeleton-row,
+.bundle-timeline__head { display: flex; align-items: center; gap: var(--k-space-2); }
+.bundle-timeline__head { margin-block-end: var(--k-space-1); }
+.bundle-timeline__title {
+  color: var(--k-ink-3);
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-2xs);
+  letter-spacing: var(--k-tracking-caps);
+  text-transform: uppercase;
+}
+.bundle-timeline__compare {
+  padding: var(--k-space-px) var(--k-space-1_5);
+  border: var(--k-border-hairline) solid var(--k-line-strong);
+  border-radius: var(--k-radius-1);
+  background: transparent;
+  color: var(--k-ink);
+  font-size: var(--k-text-2xs);
+  font-weight: var(--k-weight-semibold);
+  cursor: pointer;
+}
+.bundle-timeline__clear {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--k-ink-2);
+  font-size: var(--k-text-2xs);
+  cursor: pointer;
+}
+.bundle-timeline__hint { color: var(--k-ink-2); font-size: var(--k-text-2xs); }
+.bundle-timeline__chips { display: flex; align-items: stretch; gap: var(--k-space-1_5); }
