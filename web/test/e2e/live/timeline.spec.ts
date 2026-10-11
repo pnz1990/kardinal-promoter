@@ -179,10 +179,13 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
   await expect(chip(page, newer).locator('.bundle-chip__phase')).toHaveText(`Following · ${displayState('bundle', newer.phase).label}`)
 
   // Hovering the other tick previews its route on the map as a ghost thread; leaving clears it.
-  const ghost = page.locator('.station-map__thread--ghost path')
+  // The ghost is drawn once the hovered version's graph is read and built into a route. podinfo
+  // has one environment, so its route has no segments: the ghost has no paths here (journey 021
+  // checks the paths on a 30-environment map).
+  const ghost = page.locator('.station-map__thread--ghost')
   await expect(ghost).toHaveCount(0)
   await chip(page, older).hover()
-  await expect(ghost.first()).toBeAttached()
+  await expect(ghost).toBeAttached()
   await page.mouse.move(0, 0)
   await expect(ghost).toHaveCount(0)
 
