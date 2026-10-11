@@ -288,12 +288,13 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 
 	// B1: test's gate holds it; prod's gate waits.
 	b1 := e.CreateBundle(t, ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
-	blocked := "bundle.version=" + fixtures.V2 + ": " + openExpr + " = false"
+	result, version := openExpr+" = false", "version "+fixtures.V2
+	blocked := result + " (" + version + ")"
 	entry := e.WaitGateReady(t, ns, b1, "test", "entry", false, blocked, gateTimeout)
-	e.WaitGateReady(t, ns, b1, "prod", "hold", false, holdMsg+" ("+blocked+")", gateTimeout)
+	e.WaitGateReady(t, ns, b1, "prod", "hold", false, holdMsg+" ("+result+"; "+version+")", gateTimeout)
 	out = c.Must(ns, "explain", pipelineName)
 	assert.Equal(t, []map[string]string{
-		gateRow("prod", b1, "hold", "Waiting", openExpr, holdMsg+" ("+blocked+")"),
+		gateRow("prod", b1, "hold", "Waiting", openExpr, holdMsg+" ("+result+"; "+version+")"),
 		gateRow("test", b1, "entry", "Block", openExpr, blocked),
 	}, explainTable(t, out), out)
 	assert.Equal(t, "prod   deployed: none\ntest   deployed: none\n", explainDeployed(out))
@@ -478,7 +479,7 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	e.WaitGateReady(t, ns, b2, "prod", "hold", false, "", gateTimeout)
 	out = c.Must(ns, "explain", pipelineName, "--env", "prod")
 	assert.Equal(t, []map[string]string{gateRow("prod", b2, "hold", "Waiting", openExpr,
-		holdMsg+" (bundle.version="+fixtures.V3+": "+openExpr+" = false)")}, explainTable(t, out), out)
+		holdMsg+" ("+openExpr+" = false; version "+fixtures.V3+")")}, explainTable(t, out), out)
 	assert.Equal(t, "Bundle "+b2+" deleted\n", c.Must(ns, "delete", "bundle", b2))
 	waitBundleGone(t, e, ns, b2)
 	framework.Eventually(t, time.Minute, "B2's gate instances deleted with it", func(ctx context.Context) (bool, string) {

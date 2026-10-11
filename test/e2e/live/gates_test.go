@@ -79,7 +79,7 @@ func TestGate_ExpressionHoldsEnvironment(t *testing.T) {
 	assertEnvAt(t, a, "test", fixtures.V2)
 
 	e.WaitGateReady(t, a.ns, bundle, "prod", "needs-open-label", false,
-		"bundle.version="+fixtures.V2+": "+openExpr+" = false", gateTimeout)
+		openExpr+" = false (version "+fixtures.V2+")", gateTimeout)
 	e.NoStep(t, a.ns, pipelineName, bundle, "prod", holdFor)
 	assertEnvAt(t, a, "prod", fixtures.V1)
 	row := e.WaitExplainGate(t, a.ns, pipelineName, "prod", "needs-open-label", "Block", 10*time.Second)
@@ -87,7 +87,7 @@ func TestGate_ExpressionHoldsEnvironment(t *testing.T) {
 
 	e.SetBundleLabel(t, a.ns, bundle, openLabel, "true")
 	e.WaitGateReady(t, a.ns, bundle, "prod", "needs-open-label", true,
-		"bundle.version="+fixtures.V2+": "+openExpr+" = true", gateTimeout)
+		openExpr+" = true (version "+fixtures.V2+")", gateTimeout)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V2)
 	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
@@ -1222,7 +1222,8 @@ func TestGate_MessageShownWhenBlocked(t *testing.T) {
 	e.SetBundleLabel(t, a.ns, bundle, "e2e-closed", "true")
 	gate := e.WaitGateReady(t, a.ns, bundle, "prod", "explained", false, expr+" = false", gateTimeout)
 	assert.Equal(t, msg, gate.Spec.Message, "the instance carries the template's message")
-	assert.Equal(t, msg+" (bundle.version="+fixtures.V2+": "+expr+" = false)", gate.Status.Reason, "status.reason")
+	assert.Equal(t, msg+" ("+expr+" = false; version "+fixtures.V2+")", gate.Status.Reason, "status.reason")
+	assert.Equal(t, fixtures.V2, gate.Status.BundleVersion, "status.bundleVersion")
 	if c := meta.FindStatusCondition(gate.Status.Conditions, "Ready"); assert.NotNil(t, c) {
 		assert.Equal(t, gate.Status.Reason, c.Message, "Ready condition")
 	}

@@ -76,9 +76,9 @@ kardinal get pipelines
 # 3. Check what's gating prod
 kardinal explain github-demo --env prod
 # ENVIRONMENT   VERSION                           TYPE         NAME                 STATE      EXPRESSION                                      REASON
-# prod          sha-9349a3f (github-demo-9tptr)   PolicyGate   uat-soak-gate        Blocking   upstream.uat.soakMinutes >= 30                  UAT must have been Verified for at least 30 minutes (bundle.version=sha-9349a3f: upstream.uat.soakMinutes >= 30 = false)
-# prod          sha-9349a3f (github-demo-9tptr)   PolicyGate   no-bot-deploys       Passing    bundle.provenance.author != "dependabot[bot]"   bundle.version=sha-9349a3f: bundle.provenance.author != "dependabot[bot]" = true
-# prod          sha-9349a3f (github-demo-9tptr)   PolicyGate   no-weekend-deploys   Passing    !schedule.isWeekend                             bundle.version=sha-9349a3f: !schedule.isWeekend = true
+# prod          sha-9349a3f (github-demo-9tptr)   PolicyGate   uat-soak-gate        Blocking   upstream.uat.soakMinutes >= 30                  UAT must have been Verified for at least 30 minutes (upstream.uat.soakMinutes >= 30 = false; version sha-9349a3f)
+# prod          sha-9349a3f (github-demo-9tptr)   PolicyGate   no-bot-deploys       Passing    bundle.provenance.author != "dependabot[bot]"   bundle.provenance.author != "dependabot[bot]" = true (version sha-9349a3f)
+# prod          sha-9349a3f (github-demo-9tptr)   PolicyGate   no-weekend-deploys   Passing    !schedule.isWeekend                             !schedule.isWeekend = true (version sha-9349a3f)
 #
 # prod   deployed: none
 
@@ -203,9 +203,9 @@ See [PR Evidence](../../docs/pr-evidence.md).
 
 | Gate | Namespace | Result | Reason | Last Evaluated |
 |---|---|---|---|---|
-| no-bot-deploys | default | Pass | bundle.version=sha-9349a3f: bundle.provenance.author != "dependabot[bot]" = true | 2026-04-15T14:02Z |
-| no-weekend-deploys | default | Pass | bundle.version=sha-9349a3f: !schedule.isWeekend = true | 2026-04-15T14:02Z |
-| uat-soak-gate | default | Pass | bundle.version=sha-9349a3f: upstream.uat.soakMinutes >= 30 = true | 2026-04-15T14:02Z |
+| no-bot-deploys | default | Pass | bundle.provenance.author != "dependabot[bot]" = true (version sha-9349a3f) | 2026-04-15T14:02Z |
+| no-weekend-deploys | default | Pass | !schedule.isWeekend = true (version sha-9349a3f) | 2026-04-15T14:02Z |
+| uat-soak-gate | default | Pass | upstream.uat.soakMinutes >= 30 = true (version sha-9349a3f) | 2026-04-15T14:02Z |
 
 ### Upstream Verification
 

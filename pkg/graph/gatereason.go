@@ -9,20 +9,38 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
-// BlockedReason is the status.reason the PolicyGate reconciler writes on a
-// gate instance whose expression evaluated to false. detail is the result
-// ("bundle.version=1.2.0: !schedule.isWeekend = false", plus any stale
-// metric note). When the gate has a spec.message, the explanation its author
-// wrote for users, the reason leads with it and detail follows in
+// WithVersion is a gate instance's status.reason when no message leads it:
+// reason, then the version of the Bundle it was evaluated for in
 // parentheses:
 //
-//	Production deployments are blocked on weekends (bundle.version=1.2.0: !schedule.isWeekend = false)
+//	waiting for approvals: 0 of 1 (version 1.5.0)
 //
-// With no message it is detail unchanged. Evaluation errors, context errors
-// and overrides keep their own reasons, whose prefixes the CLI relies on.
-func BlockedReason(message, detail string) string {
+// With no version it is reason unchanged.
+func WithVersion(reason, version string) string {
+	if version == "" {
+		return reason
+	}
+	return reason + " (version " + version + ")"
+}
+
+// BlockedReason is the status.reason the PolicyGate reconciler writes on a
+// gate instance whose expression evaluated to false. detail is the result
+// ("!schedule.isWeekend = false", plus any stale metric note) and version the
+// Bundle's version. When the gate has a spec.message, the explanation its
+// author wrote for users, the reason leads with it and detail and version
+// follow in parentheses:
+//
+//	Production deployments are blocked on weekends (!schedule.isWeekend = false; version 1.2.0)
+//
+// With no message it is WithVersion(detail, version). Evaluation errors,
+// context errors and overrides keep their own reasons, whose prefixes the
+// CLI relies on.
+func BlockedReason(message, detail, version string) string {
 	if message == "" {
-		return detail
+		return WithVersion(detail, version)
+	}
+	if version != "" {
+		detail += "; version " + version
 	}
 	return message + " (" + detail + ")"
 }
@@ -54,4 +72,18 @@ func BlockedMessage(gate *kardinalv1alpha1.PolicyGate) string {
 		return ""
 	}
 	return m
+}
+
+// GateDetail is what gate's expression evaluated to, read from its
+// status.reason without the message (BlockedDetail) and the version
+// (status.bundleVersion): "!schedule.isWeekend = false".
+func GateDetail(gate *kardinalv1alpha1.PolicyGate) string {
+	d := BlockedDetail(gate.Spec.Message, gate.Status.Reason)
+	if v := gate.Status.BundleVersion; v != "" {
+		if t, ok := strings.CutSuffix(d, "; version "+v); ok {
+			return t
+		}
+		d = strings.TrimSuffix(d, " (version "+v+")")
+	}
+	return d
 }

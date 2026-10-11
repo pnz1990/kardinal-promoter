@@ -39,20 +39,23 @@ gate would not apply to any environment.
 ### What users see when a gate blocks
 
 When a gate's expression is false, its `status.reason` starts with `spec.message` and ends with the
-evaluated result in parentheses:
+evaluated result and the version in parentheses:
 
 ```
-Production deployments are blocked on weekends (bundle.version=1.29.0: !schedule.isWeekend = false)
+Production deployments are blocked on weekends (!schedule.isWeekend = false; version 1.29.0)
 ```
 
 The gate's `Ready` condition, `kardinal explain` and the UI show this reason. `kardinal status
 <pipeline>` shows the message alone under Blocking gates. The Pending step's message names
 the gate instance and the gate's message: `waiting for gate
 no-weekend-deploys-platform-policies-prod--<bundle>: Production deployments are blocked on
-weekends`. An instance name that is too long, or has characters a name cannot hold, ends in a hash. A gate without a message shows only the result (`bundle.version=1.29.0:
-!schedule.isWeekend = false`). The message is not shown when the gate blocks for another reason: an
-evaluation error (`bundle.version=1.29.0: CEL evaluation error: ...`) or a context error
-(`context error: ...`) keeps its own reason, because the message does not explain it.
+weekends`. An instance name that is too long, or has characters a name cannot hold, ends in a hash.
+A gate without a message shows the result, then the version (`!schedule.isWeekend = false (version
+1.29.0)`), and an approval gate the count (`waiting for approvals: 0 of 1 (version 1.29.0)`). The
+message is not shown when the gate blocks for another reason: an evaluation error (`CEL evaluation
+error: ... (version 1.29.0)`) or a context error (`context error: ...`) keeps its own reason,
+because the message does not explain it. The version is also in `status.bundleVersion`, for
+scripts.
 
 ### When a gate holds a step
 
