@@ -192,12 +192,15 @@ func TestQuickstart_Versions(t *testing.T) {
 	require.NotNil(t, m)
 	assert.Equal(t, string(m[1]), argoCDRelease)
 
-	// The image quickstart ships first is the one kardinal-demo's overlays
-	// run, pinned by digest; the next is the same digest under another tag.
-	_, digest, ok := strings.Cut(quickstartImage, "@")
-	require.True(t, ok, "the first image has a digest")
-	assert.True(t, strings.HasSuffix(quickstartNextImage, "@"+digest))
-	assert.NotEqual(t, quickstartImage, quickstartNextImage)
+	// The images are real kardinal-test-app tags, pinned by digest; the
+	// command quickstart prints ships the one after the first.
+	for _, img := range quickstartImages {
+		assert.Regexp(t, `^ghcr\.io/pnz1990/kardinal-test-app:[a-z0-9.-]+@sha256:[0-9a-f]{64}$`, img)
+	}
+	assert.Equal(t, quickstartImages[0], quickstartImage)
+	assert.Equal(t, quickstartImages[1], nextImage(quickstartImages[0]))
+	assert.Equal(t, quickstartImages[len(quickstartImages)-1], nextImage(quickstartImages[len(quickstartImages)-1]))
+	assert.Equal(t, quickstartImages[len(quickstartImages)-1], nextImage("ghcr.io/other/app:1.0"), "a --image quickstart does not know")
 }
 
 // quickstartCluster is a fake cluster where kro, Argo CD and kardinal run:
@@ -308,7 +311,7 @@ func TestQuickstart_Demo(t *testing.T) {
 	assert.Regexp(t, `  - First version: shipped as demo-\S+\n`, got)
 	assert.Contains(t, got, "Approve prod:    kardinal approve demo prod\n")
 	assert.Contains(t, got, "Open the UI:     kardinal dashboard\n")
-	assert.Contains(t, got, "Ship the next:   kardinal ship demo --image "+quickstartNextImage+" --wait\n")
+	assert.Contains(t, got, "Ship the next:   kardinal ship demo --image "+quickstartImages[1]+" --wait\n")
 
 	ctx := context.Background()
 	var s corev1.Secret
@@ -341,6 +344,8 @@ func TestQuickstart_Demo(t *testing.T) {
 	var bundles v1alpha1.BundleList
 	require.NoError(t, c.List(ctx, &bundles, sigs_client.InNamespace("default")))
 	require.Len(t, bundles.Items, 1)
+	assert.Equal(t, "version sha-9349a3f ("+bundles.Items[0].Name+")", versionRef(createdOf(&bundles.Items[0]).Version, bundles.Items[0].Name),
+		"quickstart's output names the version by its tag")
 
 	// A re-run changes nothing and ships nothing.
 	out.Reset()

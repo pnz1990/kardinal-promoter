@@ -141,8 +141,10 @@ func TestCLI_Quickstart(t *testing.T) {
 		"  - PolicyGate default/prod-approval (prod waits for your approval, as kubernetes-admin): applied\n",
 		"  - Pipeline default/demo: applied\n",
 		"  - First version: shipped as demo-",
-		"Following demo-",
-		"prod waits for approval at gate prod-approval (kardinal approve demo prod)\n",
+		"Following version " + fixtures.V2 + " (demo-",
+		") through test, uat and prod (Ctrl-C stops following, the promotion goes on)\n",
+		"Version " + fixtures.V2 + " (demo-",
+		") stopped: prod waits for approval at gate prod-approval (kardinal approve demo prod)\n",
 		"\nNext:\n  Approve prod:    kardinal approve demo prod\n",
 		"  Watch:           kardinal status demo -w\n",
 		"  Open the UI:     kardinal dashboard\n",
@@ -167,12 +169,25 @@ func TestCLI_Quickstart(t *testing.T) {
 	assert.Equal(t, []string{"kubernetes-admin"}, gate.Spec.Approval.AllowedUsers)
 	assert.False(t, gate.Spec.Approval.ExcludeAuthor)
 
+	// why says what prod waits for, and the command that gets past it.
+	r = cli.Exec(framework.CLIOptions{}, "why", "demo", "prod")
+	t.Logf("why demo prod:\n--- stdout\n%s--- stderr\n%s", r.Stdout, r.Stderr)
+	require.Equal(t, 0, r.Code, r.Output())
+	assert.Contains(t, r.Stdout, "prod-approval")
+	assert.Contains(t, r.Stderr, "kardinal approve demo prod")
+
 	// The command it prints ships it to prod.
 	r = cli.Exec(framework.CLIOptions{}, "approve", "demo", "prod", "--yes")
 	require.Equal(t, 0, r.Code, r.Output())
 	e.WaitStepState(t, "default", "demo", bundle, "prod", "Verified", promoteTimeout)
 	e.WaitDeploymentImage(t, workloadNS("prod"), app, image, syncTimeout)
 	e.WaitBundlePhase(t, "default", bundle, "Verified", time.Minute)
+	r = cli.Exec(framework.CLIOptions{}, "status", "demo")
+	t.Logf("status demo:\n--- stdout\n%s--- stderr\n%s", r.Stdout, r.Stderr)
+	require.Equal(t, 0, r.Code, r.Output())
+	for _, env := range envs {
+		assert.Regexp(t, `(?m)^\s*`+env+`\s.*`+regexp.QuoteMeta(fixtures.V2), r.Stdout, "status shows %s live on the version", env)
+	}
 
 	// A re-run changes nothing and ships nothing.
 	r = cli.Exec(withToken, "quickstart", "--repo", repo.CloneURL, "--image", image)

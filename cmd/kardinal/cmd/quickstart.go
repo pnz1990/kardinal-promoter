@@ -61,14 +61,30 @@ const (
 	quickstartAppSet = "kardinal-test-app"
 )
 
-// The kardinal-test-app images quickstart ships first and prints next: the
-// image kardinal-demo's overlays run, by tag and digest. Pinning the digest
-// changes the overlays, so the first one promotes; the next one is the same
-// build under the main tag.
-const (
-	quickstartImage     = "ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0"
-	quickstartNextImage = "ghcr.io/pnz1990/kardinal-test-app:main@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0"
-)
+// quickstartImages are the published kardinal-test-app images quickstart
+// knows, in order: it ships the first and prints the command that ships the
+// second. A new test-app release is one more line here. Today there is one
+// build (the one kardinal-demo's overlays run, sha-9349a3f), so both are it,
+// by digest: pinning the digest changes the overlays, so the first one
+// promotes, and the second is the same bits under another real tag.
+var quickstartImages = []string{
+	"ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0",
+	"ghcr.io/pnz1990/kardinal-test-app:main@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0",
+}
+
+// quickstartImage is the image quickstart ships first.
+var quickstartImage = quickstartImages[0]
+
+// nextImage is the image after image in quickstartImages (the last one is
+// followed by itself).
+func nextImage(image string) string {
+	for i, img := range quickstartImages {
+		if img == image && i+1 < len(quickstartImages) {
+			return quickstartImages[i+1]
+		}
+	}
+	return quickstartImages[len(quickstartImages)-1]
+}
 
 // kroNamespace is where hack/install-kro.sh installs kro.
 const kroNamespace = "kro-system"
@@ -650,7 +666,8 @@ func (q *quickstart) ship() error {
 	if q.o.noWait {
 		return nil
 	}
-	_, _ = fmt.Fprintf(q.w, "Following %s through test, uat and prod (Ctrl-C stops following, the promotion goes on)\n", b.Name)
+	_, _ = fmt.Fprintf(q.w, "Following %s through test, uat and prod (Ctrl-C stops following, the promotion goes on)\n",
+		versionRef(createdOf(b).Version, b.Name))
 	res := waitShip(q.ctx, q.c, quickstartNS, quickstartPipeline, b.Name, shipResult{createdBundle: createdOf(b)}, q.o.timeout, false)
 	switch res.Result {
 	case "Held", "Verified":
@@ -669,7 +686,7 @@ Next:
   Watch:           kardinal status %[1]s -w
   Open the UI:     kardinal dashboard
   Ship the next:   kardinal ship %[1]s --image %[2]s --wait
-`, quickstartPipeline, quickstartNextImage)
+`, quickstartPipeline, nextImage(q.o.image))
 }
 
 // quickstartReference is the detail of quickstart for its reference page.

@@ -28,14 +28,14 @@ Setting up the kardinal demo in kind-kardinal
   ✓ PolicyGate default/prod-approval (prod waits for your approval, as kubernetes-admin): applied
   ✓ Pipeline default/demo: applied
   ✓ First version: shipped as demo-7xk2p
-Following demo-7xk2p through test, uat and prod (Ctrl-C stops following, the promotion goes on)
+Following version sha-9349a3f (demo-7xk2p) through test, uat and prod (Ctrl-C stops following, the promotion goes on)
   test: Checking health
   test: Live
   uat: Promoting
   uat: Checking health
   uat: Live
   prod: Held by gate prod-approval
-Bundle demo-7xk2p stopped: prod waits for approval at gate prod-approval (kardinal approve demo prod)
+Version sha-9349a3f (demo-7xk2p) stopped: prod waits for approval at gate prod-approval (kardinal approve demo prod)
 
 Next:
   Approve prod:    kardinal approve demo prod
