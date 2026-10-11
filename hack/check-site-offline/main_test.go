@@ -4,9 +4,12 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestProblems(t *testing.T) {
@@ -28,8 +31,28 @@ func TestProblems(t *testing.T) {
 		{"local css font", "a.css", `@font-face{src:url("../assets/fonts/a.woff2")}`, 0},
 		{"mermaid with the local script", "a.html", `<pre class="mermaid"><code>graph</code></pre><script src="../assets/vendor/mermaid/mermaid-11.17.2.min.js"></script>`, 0},
 		{"mermaid without it", "a.html", `<pre class=mermaid><code>graph</code></pre>`, 1},
+		{"preload", "a.html", `<link rel="preload" href="https://cdn.example/f.woff2" as="font">`, 1},
+		{"modulepreload", "a.html", `<link rel=modulepreload href=https://cdn.example/m.js>`, 1},
+		{"dns-prefetch", "a.html", `<link rel="dns-prefetch" href="//cdn.example">`, 1},
+		{"div mermaid without the script", "a.html", `<div class="mermaid">graph LR</div>`, 1},
+		{"@import in a style element", "a.html", `<style>@import url("https://fonts.googleapis.com/css2?family=Inter");</style>`, 1},
+		{"a script that calls api.github.com", "app.js", `fetch("https://api.github.com/repos/pnz1990/kardinal-promoter")`, 0},
 		{"javascript is not scanned", "bundle.js", `fetch("https://unpkg.com/mermaid@11/dist/mermaid.min.js")`, 0},
 	} {
 		assert.Len(t, problems(tc.file, tc.body), tc.want, tc.name)
 	}
+}
+
+func TestCheckMissingLocalScript(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "concepts"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "assets"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "assets", "here.js"), []byte("1"), 0o644))
+	page := `<script src="../assets/here.js"></script><script src="/kardinal-promoter/assets/here.js"></script>` +
+		`<script src="../assets/vendor/mermaid/mermaid.min.js"></script>`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "concepts", "index.html"), []byte(page), 0o644))
+	found, err := check(root)
+	require.NoError(t, err)
+	require.Len(t, found, 1)
+	assert.Contains(t, found[0], "mermaid.min.js is not in the site")
 }

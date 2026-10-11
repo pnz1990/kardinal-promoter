@@ -4,7 +4,7 @@
 // check-site-offline fails when the built docs site loads a script, a
 // stylesheet or a font from another host, or has a Mermaid diagram on a page
 // without the self-hosted Mermaid script (Material would fetch it from
-// unpkg.com at run time). The site self-hosts its fonts and
+// unpkg.com at run time), or loads a local script the site does not have. The site self-hosts its fonts and
 // Mermaid, so a reader's browser contacts only the site (and api.github.com,
 // which the repository widget calls from JavaScript, not through a tag).
 //
@@ -31,6 +31,8 @@ var (
 	// without one, Material loads Mermaid from unpkg.com at run time.
 	mermaidBlock  = regexp.MustCompile(`(?i)<(pre|div)\b[^>]*\bclass=["']?mermaid\b`)
 	mermaidScript = regexp.MustCompile(`(?i)<script\b[^>]*\bsrc=["']?[^"'\s>:]*mermaid[^"'\s>]*\.js`)
+	// Every script source, to check that a local one exists in the site.
+	anyScript = regexp.MustCompile(`(?i)<script\b[^>]*\bsrc=["']?([^"'\s>]+)`)
 	// url(https://…) and @import "https://…" in CSS.
 	cssURL = regexp.MustCompile(`(?i)(url\(\s*["']?|@import\s+["'])(https?:)?//`)
 )
@@ -62,6 +64,41 @@ func problems(name string, body string) []string {
 	return out
 }
 
+// missingScripts lists the local scripts an HTML page loads that are not in
+// the site (a vendored file that was not committed, say).
+func missingScripts(root, rel, body string) []string {
+	var out []string
+	for _, m := range anyScript.FindAllStringSubmatch(body, -1) {
+		src := m[1]
+		if strings.Contains(src, "//") || strings.HasPrefix(src, "data:") {
+			continue
+		}
+		src, _, _ = strings.Cut(src, "?")
+		src, _, _ = strings.Cut(src, "#")
+		candidates := []string{filepath.Join(root, filepath.Dir(rel), filepath.FromSlash(src))}
+		if strings.HasPrefix(src, "/") {
+			// A root-relative path: the site is served at its site_url path
+			// (/kardinal-promoter/ on GitHub Pages), so also try without the
+			// first segment.
+			p := strings.TrimPrefix(src, "/")
+			candidates = []string{filepath.Join(root, filepath.FromSlash(p))}
+			if _, rest, ok := strings.Cut(p, "/"); ok {
+				candidates = append(candidates, filepath.Join(root, filepath.FromSlash(rest)))
+			}
+		}
+		found := false
+		for _, c := range candidates {
+			if _, err := os.Stat(c); err == nil {
+				found = true
+			}
+		}
+		if !found {
+			out = append(out, rel+": the script "+m[1]+" is not in the site")
+		}
+	}
+	return out
+}
+
 func check(root string) ([]string, error) {
 	var out []string
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -74,6 +111,9 @@ func check(root string) ([]string, error) {
 		}
 		rel, _ := filepath.Rel(root, p)
 		out = append(out, problems(rel, string(b))...)
+		if strings.EqualFold(filepath.Ext(rel), ".html") {
+			out = append(out, missingScripts(root, rel, string(b))...)
+		}
 		return nil
 	})
 	return out, err
