@@ -1207,6 +1207,74 @@ type PipelineStatus struct {
 	// +listType=map
 	// +listMapKey=environment
 	Fleets []FleetStatus `json:"fleets,omitempty"`
+
+	// Environments is, per environment in spec order (a fleet environment
+	// expands to its targets), what runs there and where the newest version
+	// stands. Written by the PipelineReconciler from the Bundles,
+	// PromotionSteps and gate instances of the Pipeline. It is a display
+	// projection: no controller decision reads it.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	Environments []PipelineEnvironmentStatus `json:"environments,omitempty"`
+
+	// Summary is one sentence on where the Pipeline's versions are, for
+	// example "1.5.0 live in test, uat; waiting for PR merge in prod (#42)".
+	// Written with Environments; display only.
+	// +optional
+	Summary string `json:"summary,omitempty"`
+
+	// EnvironmentSummary is Environments as one line, environment=version
+	// ("test=1.5.0 uat=1.5.0 prod=1.4.0"; "-" where nothing runs yet), for
+	// the wide printer column. Display only.
+	// +optional
+	EnvironmentSummary string `json:"environmentSummary,omitempty"`
+}
+
+// PipelineEnvironmentStatus is what one environment of a Pipeline runs, and
+// where the newest version that reached it stands.
+type PipelineEnvironmentStatus struct {
+	// Name is the environment name.
+	Name string `json:"name"`
+	// Bundle is the Bundle whose change runs in the environment: the newest
+	// one whose change landed there. Empty when none has.
+	// +optional
+	Bundle string `json:"bundle,omitempty"`
+	// Version is what Bundle ships: the image tag, "config <sha>" or the
+	// chart version.
+	// +optional
+	Version string `json:"version,omitempty"`
+	// IncomingBundle is a newer Bundle on its way into the environment (its
+	// step there is not yet live, or gates hold it before its step exists).
+	// Empty when the newest Bundle there is Bundle.
+	// +optional
+	IncomingBundle string `json:"incomingBundle,omitempty"`
+	// IncomingVersion is what IncomingBundle ships.
+	// +optional
+	IncomingVersion string `json:"incomingVersion,omitempty"`
+	// State is the PromotionStep state of the newest Bundle in the
+	// environment (IncomingBundle when set, else Bundle), an API value such
+	// as Verified or WaitingForMerge. Pending with BlockedBy set when gates
+	// hold the Bundle before its step exists. Empty when no Bundle reached
+	// the environment.
+	// +optional
+	State string `json:"state,omitempty"`
+	// Since is when State began: the Verified time for Verified, otherwise
+	// when the controller first recorded this Bundle in this State.
+	// +optional
+	Since *metav1.Time `json:"since,omitempty"`
+	// BlockedBy names the gates that hold the newest Bundle back in the
+	// environment, sorted.
+	// +optional
+	BlockedBy []string `json:"blockedBy,omitempty"`
+	// PRURL is the pull request of the newest Bundle's step while it waits
+	// for its merge.
+	// +optional
+	PRURL string `json:"prURL,omitempty"`
+	// Held is true when a rollback hold (spec.holds) keeps the environment
+	// on Bundle, so the newest Bundle waits.
+	// +optional
+	Held bool `json:"held,omitempty"`
 }
 
 // FleetStatus is the resolved membership of one selector fleet.
@@ -1309,9 +1377,11 @@ type PipelineDeploymentMetrics struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=pipe
+// +kubebuilder:resource:scope=Namespaced,shortName=pipe,categories=kardinal;kardinal-all
+// +kubebuilder:printcolumn:name="Summary",type=string,JSONPath=`.status.summary`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Paused",type=boolean,JSONPath=`.spec.paused`
+// +kubebuilder:printcolumn:name="Envs",type=string,JSONPath=`.status.environmentSummary`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Pipeline defines a promotion pipeline for one application.

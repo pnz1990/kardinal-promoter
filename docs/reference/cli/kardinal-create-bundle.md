@@ -4,7 +4,10 @@ Create a Bundle to trigger promotion through a Pipeline
 
 ### Synopsis
 
-Create a Bundle to trigger promotion through a Pipeline.
+Create a Bundle: the version to promote through <pipeline>. An image Bundle
+needs --image; a config Bundle --config-commit; a mixed one both. --commit,
+--author and --ci-run-url record its provenance for the PR body and the UI.
+--dry-run shows the promotion graph and creates nothing.
 
 The pipeline name is a required positional argument; the Pipeline must exist.
 An image or mixed Bundle needs at least one --image. A config or mixed Bundle

@@ -279,7 +279,7 @@ type OverrideRecord struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=pg
+// +kubebuilder:resource:scope=Namespaced,shortName=pg,categories=kardinal;kardinal-all
 // +kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=`.status.ready`
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.reason`,priority=1
 // +kubebuilder:printcolumn:name="Last-Evaluated",type=date,JSONPath=`.status.lastEvaluatedAt`,priority=1
