@@ -1146,8 +1146,13 @@ func TestGate_AuditsEvaluations(t *testing.T) {
 	out := e.MustKardinal(t, a.ns, "get", "auditevents", "--pipeline", pipelineName, "--bundle", bundle, "--env", "prod")
 	var rows []string
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "GateEvaluated") {
-			rows = append(rows, strings.Fields(line)[5])
+		// The OUTCOME follows the ACTION: the VERSION cell before them
+		// is "<tag> (<bundle>)", two words.
+		fields := strings.Fields(line)
+		for i, f := range fields {
+			if f == "GateEvaluated" && i+1 < len(fields) {
+				rows = append(rows, fields[i+1])
+			}
 		}
 	}
 	assert.Equal(t, []string{"Success", "Failure", "Success", "Failure"}, rows, "newest first")

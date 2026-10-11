@@ -423,7 +423,7 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	e.WaitExplainGate(t, ns, pipelineName, "prod", "hold", "Block", gateTimeout)
 	out = c.Must(ns, "explain", pipelineName)
 	assert.Equal(t, []map[string]string{
-		gateRow("prod", b1, "hold", "Block", openExpr, holdMsg+" ("+blocked+")"),
+		gateRow("prod", b1, "hold", "Block", openExpr, holdMsg+" ("+result+"; "+version+")"),
 		gateRow("test", b1, "entry", "Pass", openExpr, overridden),
 		stepRow(testStep),
 	}, explainTable(t, out), out)
@@ -470,7 +470,7 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	assert.Nil(t, sv.gates, "no gate holds prod now")
 	assert.Contains(t, sv.summary, "waiting for PR merge in prod (#", "the summary names the PR")
 	e.SetBundleLabel(t, ns, b1, openLabel, "")
-	e.WaitGateReady(t, ns, b1, "prod", "hold", false, holdMsg+" ("+blocked+")", gateTimeout)
+	e.WaitGateReady(t, ns, b1, "prod", "hold", false, holdMsg+" ("+result+"; "+version+")", gateTimeout)
 	e.WaitExplainGate(t, ns, pipelineName, "prod", "hold", "Waiting", gateTimeout)
 
 	// B2 supersedes B1; with B2 deleted, explain shows B1's gate Superseded.
@@ -494,7 +494,7 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	assert.Equal(t, "bundle "+b1+" was superseded — promotion cancelled", ps.Status.Message)
 	out = c.Must(ns, "explain", pipelineName, "--env", "prod")
 	assert.Equal(t, []map[string]string{
-		gateRow("prod", b1, "hold", "Superseded", openExpr, holdMsg+" ("+blocked+")"),
+		gateRow("prod", b1, "hold", "Superseded", openExpr, holdMsg+" ("+result+"; "+version+")"),
 		stepRow(ps),
 	}, explainTable(t, out), out)
 
