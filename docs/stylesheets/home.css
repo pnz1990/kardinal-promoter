@@ -235,3 +235,10 @@
     font-size: var(--k-text-sm);
   }
 }
+
+/* A print shows the finished promotion, not a frame of the animation. */
+@media print {
+  .k-thread-map * {
+    animation: none;
+  }
+}

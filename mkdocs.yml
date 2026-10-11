@@ -63,6 +63,9 @@ theme:
     - content.action.view
     - toc.follow
 
+extra_javascript:
+  - javascripts/scrollwrap.js
+
 extra_css:
   - stylesheets/tokens.css
   - stylesheets/kardinal.css

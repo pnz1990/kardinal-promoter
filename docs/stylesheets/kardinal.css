@@ -78,7 +78,7 @@
 
 .md-typeset a {
   text-decoration: underline var(--k-border-hairline) var(--k-thread-text);
-  text-underline-offset: 0.2em;
+  text-underline-offset: var(--k-space-0_5);
 }
 .md-typeset a:hover {
   color: var(--k-ink);
@@ -555,7 +555,8 @@ body {
 .md-search-result__article code {
   font-size: var(--k-text-xs);
 }
-.md-search-result mark {
+.md-search-result mark,
+.md-search-result .md-typeset :is(h1, h2) mark {
   color: var(--k-ink);
   text-decoration: underline var(--k-stroke-ring) var(--k-thread-text);
   background: none;
