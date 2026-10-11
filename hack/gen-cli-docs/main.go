@@ -14,8 +14,6 @@
 //
 //	go run ./hack/gen-cli-docs/main.go
 //	go run ./hack/gen-cli-docs/main.go --output /tmp/cli/ --quickref /tmp/cli-reference.md
-//
-// Design ref: docs/design/41-published-docs-freshness.md §41.1
 package main
 
 import (
@@ -124,8 +122,7 @@ func genQuickReference(root *cobra.Command, outPath string) error {
 	var b strings.Builder
 	b.WriteString("# CLI Reference\n\n")
 	b.WriteString("<!-- AUTO-GENERATED — do not edit by hand.\n")
-	b.WriteString("     Run: go run ./hack/gen-cli-docs/main.go to regenerate.\n")
-	b.WriteString("     Design ref: docs/design/41-published-docs-freshness.md -->\n\n")
+	b.WriteString("     Run: go run ./hack/gen-cli-docs/main.go to regenerate. -->\n\n")
 	b.WriteString("!!! note \"Auto-generated\"\n")
 	b.WriteString("    Generated from the kardinal CLI source. Every command is documented.\n")
 	b.WriteString("    See [detailed reference pages](reference/cli/kardinal.md) for flags and examples.\n\n")

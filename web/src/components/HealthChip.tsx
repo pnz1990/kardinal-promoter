@@ -38,8 +38,7 @@ export function kardinalStateToHealth(state: string, nodeType?: string): HealthS
   if (nodeType === 'PolicyGate') {
     switch (state) {
       case 'Pass':   return 'Ready'
-      case 'Block':
-      case 'Fail':   return 'Error'
+      case 'Block':  return 'Error'
       case 'Pending':
       case 'Waiting': return 'Pending' // not ready, not holding the bundle
       case 'Superseded': return 'Unknown' // bundle superseded; not evaluated again

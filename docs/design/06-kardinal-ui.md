@@ -58,6 +58,7 @@ The controller exposes a REST API at `/api/v1/ui/` that proxies CRD reads from t
 | `POST /api/v1/ui/pause`, `/resume` | Pause or resume a Pipeline | Pipeline |
 | `POST /api/v1/ui/gates/{namespace}/{name}/approve` | Add an override to a gate (retried on write conflicts) | PolicyGate |
 | `POST /api/v1/ui/validate-cel` | Check a CEL expression | none |
+| `GET /api/v1/openapi.json` | The OpenAPI document of the UI API and the Bundle API ([REST API](../reference/rest-api.md)) | none |
 
 All endpoints return JSON. The controller reads CRDs using its existing Kubernetes client and transforms them into UI-friendly JSON structures (omitting internal fields, resolving references).
 
@@ -65,14 +66,9 @@ Authentication (shared token, or TokenReview plus a SubjectAccessReview for ever
 
 ## Data Refresh
 
-The UI uses polling (fetch every 5 seconds on the active page) rather than WebSocket/watch for simplicity in Phase 1.
+The UI polls (fetch every 5 seconds on the active page) rather than using WebSocket or watch, for simplicity. The API has no response cache; each request reads through the controller's client.
 
-Phase 2+ may add WebSocket support for real-time updates:
-- Controller watches relevant CRDs via informers (already running for reconciliation)
-- On change, broadcast to connected WebSocket clients
-- UI receives updates and patches the local state
-
-For Phase 1, 5-second polling is sufficient. The API has no response cache; each request reads through the controller's client.
+Server push (the controller already watches the CRDs with informers, and could broadcast changes to WebSocket clients) is not planned.
 
 ## DAG Rendering
 
@@ -239,8 +235,8 @@ Frontend tests (Vitest):
 
 Backend API tests (Go):
 7. `/api/v1/ui/pipelines` returns correct structure.
-8. `/api/v1/ui/pipelines/:name/graph` returns nodes with status.
-9. `/api/v1/ui/bundles/:name` returns evidence.
+8. `/api/v1/ui/bundles/{name}/graph` returns nodes with status.
+9. `/api/v1/ui/bundles/{name}/steps` returns the steps with their evidence.
 10. Static assets: `/ui/` serves `index.html` and never lists a directory.
 
 ---
@@ -278,7 +274,7 @@ The following capabilities are implemented and shipped as of v0.9.0:
 - ✅ In-UI actions: pause and resume (ActionBar), promote and roll back one environment (stage lane, node detail) — PR #482 (2026-04-14). Gate override is CLI-only (`kardinal override`)
 - ✅ Bundle promotion timeline: BundleTimeline — the 10 newest bundles colored by phase, plus the selected one; shift-click two bundles to compare them — PR #478, PR #681 (2026-04-14)
 - 🔲 Policy gate detail panel with blocking duration and override history — the GateDetailPanel from PR #477 was never mounted and was removed; gate nodes show the highlighted CEL expression in NodeDetail
-- ✅ Release efficiency metrics bar: ReleaseMetricsBar — mean time to the last environment, rollback rate and deploy count over the last 10 bundles; hidden until a bundle reaches the last environment — PR #481 (2026-04-14)
+- ✅ Release efficiency metrics bar: ReleaseMetricsBar — mean time to the last environment, rollback rate and deploy count over the last 10 bundles; hidden until a bundle reaches the last environment — PR #481 (2026-04-14). It also shows the change failure rate and time to restore from `Pipeline.status.deploymentMetrics` once the Pipeline has deployments (#1488)
 
 ---
 
@@ -302,8 +298,7 @@ When this section was written, the embedded UI (`cmd/kardinal-controller/ui_api.
 ## Enterprise polish design (added 2026-04-17)
 
 This section documents design decisions made during the epic #587 UI overhaul.
-It was not written before the work (a DDDD violation — see issue history). It is
-written now to serve as the design layer for remaining 🔲 Future items.
+It was written after the work, as the design layer for the remaining 🔲 Future items.
 
 ### Theme system
 

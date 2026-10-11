@@ -245,7 +245,7 @@ Right after an upgrade from a version without `validUntil`, every MetricCheck is
 first evaluation. The controller evaluates all of them when it starts, so metric gates can hold for
 at most one `interval`.
 
-### Cross-stage history attributes (K-10)
+### Cross-stage history attributes (K-11)
 
 Available for all gates. The history is computed from Bundle CRD status across the last 10
 promotions for the pipeline — no external API calls. The lookup is scoped to the last 10
@@ -381,17 +381,6 @@ expression: '!changewindow["q4-holiday-freeze"]'
 # Only promote inside business hours, and never during the freeze
 expression: 'changewindow.isAllowed("business-hours") && !changewindow.isBlocked("q4-holiday-freeze")'
 ```
-
-### Planned attributes (not yet available)
-
-!!! warning "Not yet implemented"
-    The following attributes are on the roadmap but will cause a CEL evaluation error if referenced today.
-    Gates using them will fail closed.
-
-| Attribute | Type | Description |
-|---|---|---|
-| `delegation.status` | string | Argo Rollouts or Flagger rollout status |
-| `externalApproval.*` | map | Webhook gate response data |
 
 ## CEL Expression Examples
 

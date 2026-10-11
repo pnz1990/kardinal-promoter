@@ -113,21 +113,31 @@ PolicyGate `spec.when` is deprecated and ignored: pre-deploy and post-deploy beh
 ```
 cmd/
   kardinal/                 # CLI
-  kardinal-controller/      # controller binary
+  kardinal-controller/      # controller binary: reconcilers, UI API, Bundle API, webhooks
+  kardinal-render/          # the render Job's binary (layout: branch), never run in the controller
 pkg/
+  accesslog/                # structured access log of the UI API and Bundle API
+  audit/                    # AuditEvent outbox entries and writer
   cel/                      # CEL library adapted from kro (library/, conversion/); PolicyGate only
+  egress/                   # guard for outbound requests to user-supplied URLs: NotificationHooks,
+                            # MetricChecks, Subscription sources, image verification, remote health
   graph/                    # Graph builder + client (Pipeline + Bundle → kro Graph)
-  health/                   # health Watch nodes (resource, Argo CD, Flux, Argo Rollouts, Flagger)
-  lifecycle/                # pause/resume, rollback, promote (shared by CLI, UI API, reconcilers)
+  health/                   # health checks (resource, Argo CD, Flux, Argo Rollouts, Flagger; remote kubeconfig)
+  lifecycle/                # pause/resume, hold, rollback, promote (shared by CLI, UI API, reconcilers)
   reconciler/
-    bundle/  changewindow/  eventfilter/  metriccheck/  notificationhook/  observability/
-    pipeline/  policygate/  promotionstep/  prstatus/  rollbackpolicy/  scheduleclock/
-    subscription/
-  scm/                      # GitHub, GitLab, Bitbucket, Azure DevOps, Forgejo providers
-  source/                   # Subscription watchers (OCI registry, Git)
+    auditretention/  bundle/  changewindow/  eventfilter/  fairqueue/  graphcleanup/
+    hookrun/  imageverification/  kubeevent/  metriccheck/  notificationhook/  objectgone/
+    observability/  pipeline/  policygate/  promotionstep/  prstatus/  renderrun/
+    rollbackpolicy/  scheduleclock/  scmprovider/  subscription/
+  renderjob/                # what the render Job runs: clone, set image, render, drift check, push
+  scm/                      # GitHub, GitLab, Bitbucket, Azure DevOps, Forgejo/Gitea providers; git client
+  shard/                    # namespace sharding of the reconcilers (controller.namespaceShard)
+  source/                   # Subscription watchers (OCI registry, Git, Helm)
   steps/                    # step engine + built-in steps
+  tmplsafe/                 # sandboxed text/template for PR and NotificationHook templates
+  tracing/                  # OpenTelemetry tracing
   translator/               # Bundle → Graph translation
-  uiauth/                   # UI TokenReview + SubjectAccessReview
+  uiauth/                   # TokenReview + SubjectAccessReview for the UI API and Bundle API
 web/
   embed.go                  # go:embed all:dist
   src/                      # React 19 UI

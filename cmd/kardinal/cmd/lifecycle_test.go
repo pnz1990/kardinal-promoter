@@ -200,7 +200,7 @@ func TestRollbackCmd_EmergencyDeprecated(t *testing.T) {
 	cmd.SetErr(&out)
 	require.NoError(t, cmd.ParseFlags([]string{"--env", "prod", "--emergency"}))
 	assert.Contains(t, out.String(),
-		"Flag --emergency has been deprecated, it has no effect; use kardinal override to pass a blocking gate")
+		"Flag --emergency has been deprecated, it has no effect and is removed in v0.11; use kardinal override to pass a blocking gate")
 	assert.NotContains(t, cmd.Flags().FlagUsages(), "emergency", "a deprecated flag is not in the help")
 }
 

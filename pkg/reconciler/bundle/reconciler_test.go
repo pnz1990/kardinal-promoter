@@ -86,8 +86,7 @@ func TestBundleReconciler_SetsAvailablePhase(t *testing.T) {
 	// RequeueAfter must be >= 500ms — guards against the hot-loop regression
 	// where RequeueAfter was mistakenly set to time.Millisecond (1ms), bypassing
 	// controller-runtime rate limiting and pressuring the API server/etcd under
-	// concurrent Bundle load. See: docs/design/15-production-readiness.md Lens 7,
-	// pkg/reconciler/bundle/reconciler.go handleNew.
+	// concurrent Bundle load. See pkg/reconciler/bundle/reconciler.go handleNew.
 	assert.GreaterOrEqual(t, result.RequeueAfter, 500*time.Millisecond,
 		"handleNew RequeueAfter must be >= 500ms to avoid hot-loop regression")
 

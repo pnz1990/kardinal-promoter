@@ -192,7 +192,6 @@ jobs:
   # Scans Go module dependencies for HIGH/CRITICAL CVEs and blocks CI on findings.
   # Uses filesystem scan (no Docker image build required) — complements the
   # release.yml image scan and govulncheck for defense-in-depth.
-  # Design ref: docs/design/14-v060-roadmap.md §14.7
   trivy-fs:
     name: trivy vulnerability scan
     runs-on: ubuntu-latest

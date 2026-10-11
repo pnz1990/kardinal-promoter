@@ -101,7 +101,7 @@ Config and mixed Bundles run the `config-merge` step, which copies the environme
 - `RollbackPolicy` CRD + automated rollback PR
 - Pause/resume (`Pipeline.spec.paused`)
 - Supersession for concurrent Bundles
-- Multi-cluster through an Argo CD or Flux hub (see [Multi-Cluster](distributed-mode.md); `health.cluster` kubeconfig Secrets are not supported)
+- Multi-cluster health through an Argo CD or Flux hub (see [Multi-Cluster](multi-cluster.md))
 
 **CLI** — `get`, `explain`, `status`, `create`, `promote`, `rollback`, `pause`, `resume`, `override`, `history`, `audit`, `diff`, `logs`, `metrics`, `policy`, `validate`, `doctor`, `init`, `refresh`, `delete`, `dashboard`, `completion`, `version` (see [CLI Reference](cli-reference.md))
 
@@ -153,13 +153,21 @@ Not in the UI: overriding a gate (use `kardinal override`), the bake countdown, 
 
 ---
 
+## On main, not yet released
+
+Everything under `[Unreleased]` in the [changelog](changelog.md) ships in v0.10.0, among it
+`scm.allowedRepositories` (#1332), approval gates with `kardinal approve` (#1309, #1449), and
+verified override identity with a `GateOverridden` AuditEvent (#1286, #1450), per-environment
+PR controls (#1453), GitHub App and SSH git authentication (#1460), the Bitbucket Data
+Center provider (#1501), remote-cluster health through a kubeconfig Secret
+(`health.kubeconfigSecretRef`, #1458), fleets (an environment that expands to N targets,
+#1457), rendered manifests on branches (`layout: branch`, in both Graph shapes, #1447,
+#1515), the user roles (#1466) and Kubernetes token authentication for the Bundle API.
+
 ## Planned
 
 - kro v0.10.0 (v0.9.1, #1424)
-- `scm.allowedRepositories`: limit the repositories the SCM token may open PRs in (#1332)
-- `kardinal override` writes an AuditEvent with the cluster identity (#1286)
 - `rollback` and `promote --env` without re-running upstream environments (#1311)
-- `kardinal approve`: a real gate bypass, or removal (#1309)
 
 ---
 

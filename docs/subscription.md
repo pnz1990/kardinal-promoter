@@ -28,7 +28,10 @@ on a loopback (`localhost` is the controller's own pod), link-local, cloud metad
 unspecified or multicast address: the Subscription goes to phase `Error` with
 `destination address is not allowed` in its message (see
 [Outbound requests to user URLs](guides/security.md#outbound-requests-to-user-urls)).
-Private addresses, such as in-cluster Services, are allowed. With the chart's
+Private addresses, such as in-cluster Services, are allowed. With the controller's egress
+allowlist (chart value `egress.allowlist`, flag `--egress-allowlist`), a Subscription may
+reach only the hosts and CIDRs listed there (see
+[the egress allowlist](guides/security.md#outbound-requests-to-user-urls)). With the chart's
 `networkPolicy.enabled`, egress is open only on 443 and 6443: add an `extraEgress` rule
 for SSH (22) or a registry on another port.
 

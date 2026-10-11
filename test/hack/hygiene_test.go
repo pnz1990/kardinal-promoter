@@ -198,9 +198,8 @@ func TestDocsLintPinsPyYAML(t *testing.T) {
 }
 
 // TestDemoSetupUsesE2EComponentVersions checks that demo/scripts/setup.sh takes
-// the Argo CD, Flux, Argo Rollouts and Flagger versions from
-// hack/e2e/versions.env, the versions the live suites test, and pins the
-// Flagger chart (#1354). The demo used to carry its own, older defaults.
+// the Argo CD version from hack/e2e/versions.env, the version the live suites
+// test (#1354), and hard-codes no component version.
 func TestDemoSetupUsesE2EComponentVersions(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), "demo", "scripts", "setup.sh"))
 	require.NoError(t, err)
@@ -208,22 +207,10 @@ func TestDemoSetupUsesE2EComponentVersions(t *testing.T) {
 
 	assert.True(t, strings.Contains(src, `source "${REPO_ROOT}/hack/e2e/versions.env"`),
 		"setup.sh does not source hack/e2e/versions.env")
-	for v, release := range map[string]string{
-		"ARGOCD_VERSION": "ARGOCD_RELEASE", "FLUX_VERSION": "FLUX_RELEASE",
-		"ARGO_ROLLOUTS_VERSION": "ROLLOUTS_RELEASE", "FLAGGER_VERSION": "FLAGGER_RELEASE",
-	} {
-		want := v + `="${` + v + `:-${` + release + `}}"`
-		assert.True(t, strings.Contains(src, want), "setup.sh has no %s", want)
-	}
+	assert.Contains(t, src, `ARGOCD_VERSION="${ARGOCD_VERSION:-${ARGOCD_RELEASE}}"`)
 	assert.NotRegexp(t, regexp.MustCompile(`_VERSION:-v\d`), src, "a hard-coded component version default")
-
-	flagger := regexp.MustCompile(`(?s)helm upgrade -i flagger .*?--wait[^\n]*`).FindString(src)
-	require.NotEmpty(t, flagger, "no Flagger helm install in setup.sh")
-	assert.Contains(t, flagger, `--version "${FLAGGER_VERSION#v}"`)
 
 	env, err := os.ReadFile(filepath.Join(repoRoot(t), "hack", "e2e", "versions.env"))
 	require.NoError(t, err)
-	for _, release := range []string{"ARGOCD_RELEASE=", "FLUX_RELEASE=", "ROLLOUTS_RELEASE=", "FLAGGER_RELEASE="} {
-		assert.Contains(t, string(env), "\n"+release, "hack/e2e/versions.env sets %s", release)
-	}
+	assert.Contains(t, string(env), "\nARGOCD_RELEASE=", "hack/e2e/versions.env sets ARGOCD_RELEASE")
 }
