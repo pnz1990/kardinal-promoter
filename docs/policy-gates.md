@@ -46,7 +46,7 @@ Production deployments are blocked on weekends (bundle.version=1.29.0: !schedule
 ```
 
 The gate's `Ready` condition, `kardinal explain` and the UI show this reason. `kardinal status
-<pipeline>` shows the message alone under Blocking Policy Gates. The Pending step's message names
+<pipeline>` shows the message alone under Blocking gates. The Pending step's message names
 the gate instance and the gate's message: `waiting for gate
 no-weekend-deploys-platform-policies-prod--<bundle>: Production deployments are blocked on
 weekends`. An instance name that is too long, or has characters a name cannot hold, ends in a hash. A gate without a message shows only the result (`bundle.version=1.29.0:
@@ -71,8 +71,8 @@ The Graph acts on the gate's last result, which can be older than the step: it c
 metric, change window or schedule change. So the controller re-evaluates a new step's gates as soon
 as the step is created, and a gate that is still true lets the step start within seconds.
 
-While a gate that is not ready holds a step, `kardinal status` lists it under Blocking Policy Gates
-and the UI counts it as a blocker (the Blocked label and the Blockers column). A ready gate whose
+While a gate that is not ready holds a step, `kardinal status` says "Held by gate <name>" for that
+environment and lists the gate under Blocking gates, and the UI counts it as a blocker (the Blocked label and the Blockers column). A ready gate whose
 result is older than the step still shows as ready while the step waits for its re-evaluation; the
 step's message says which gate it waits for.
 
