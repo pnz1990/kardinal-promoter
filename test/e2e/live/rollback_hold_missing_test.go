@@ -145,7 +145,7 @@ func TestRollback_HoldBundleMissing(t *testing.T) {
 	})
 	explain := e.MustKardinal(t, a.ns, "explain", pipelineName, "--env", "prod")
 	assert.Contains(t, explain, "prod: held on rollback "+missing)
-	assert.Contains(t, explain, "but the rollback Bundle does not exist")
+	assert.Contains(t, explain, "but the rollback version does not exist")
 	assert.Contains(t, explain, "Release with: kardinal release-hold "+pipelineName+" --env prod")
 
 	// A second hold is refused while this one is there, missing Bundle or not.

@@ -800,7 +800,7 @@ func TestCLI_Doctor(t *testing.T) {
 
 	r = cli.Run(ns, "doctor", "--pipeline", pipelineName)
 	require.Equal(t, 0, r.Code, r.Output())
-	assert.Equal(t, header+checks+row("PASS", `Pipeline "podinfo"`, "status: Unknown (spec valid, no Bundle yet)")+
+	assert.Equal(t, header+checks+row("PASS", `Pipeline "podinfo"`, "status: Unknown (spec valid, no version shipped yet)")+
 		"\n6 check(s) passed\n", r.Stdout)
 
 	r = cli.Run(ns, "doctor", "--pipeline", refused.Name)

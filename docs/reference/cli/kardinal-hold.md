@@ -4,7 +4,7 @@ Keep an environment on what runs there now
 
 ### Synopsis
 
-Hold <env> on the Bundle that runs there now: no other Bundle promotes into
+Hold <env> on the version that runs there now: no other version promotes into
 it until kardinal unhold (or --expires-in). Nothing is rolled back and no
 Bundle is created; to go back to an earlier version and keep it, use
 kardinal rollback <pipeline> <env> --hold.

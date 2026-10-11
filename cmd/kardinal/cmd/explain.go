@@ -417,11 +417,11 @@ func writeExplainHolds(w io.Writer, p *v1alpha1.Pipeline, envFilter string) erro
 			if st.BundleMissingSince != nil {
 				since = " since " + st.BundleMissingSince.UTC().Format(time.RFC3339)
 			}
-			fmt.Fprintf(&buf, "%s: held on rollback %s by %s (%s), but the rollback Bundle does not exist%s. The hold stays in effect: no other Bundle promotes here. Release with: kardinal release-hold %s --env %s, then roll back with --hold again if wanted\n",
+			fmt.Fprintf(&buf, "%s: held on rollback %s by %s (%s), but the rollback version does not exist%s. The hold stays in effect: no other version promotes here. Release with: kardinal release-hold %s --env %s, then roll back with --hold again if wanted\n",
 				h.Environment, h.Bundle, by, h.Reason, since, p.Name, h.Environment)
 			continue
 		}
-		fmt.Fprintf(&buf, "%s: held on rollback %s by %s (%s); other Bundles do not promote here, and its gates here pass as EXEMPT while the controller verifies it. Release with: kardinal release-hold %s --env %s\n",
+		fmt.Fprintf(&buf, "%s: held on rollback %s by %s (%s); other versions do not promote here, and its gates here pass as EXEMPT while the controller verifies it. Release with: kardinal release-hold %s --env %s\n",
 			h.Environment, h.Bundle, by, h.Reason, p.Name, h.Environment)
 	}
 	if buf.Len() == 0 {
