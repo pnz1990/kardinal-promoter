@@ -4,8 +4,8 @@ name: UI perf
 # 018-table-and-matrix.spec.ts): the Matrix scrolls within one frame (20 ms p95) by default and
 # within two (33 ms p95) with every wave and fleet expanded. A shared CI runner cannot hold a
 # frame budget, so pull requests (ci.yml, npm run test:e2e) assert only what the page controls:
-# the cells drawn in any frame and no long task over 100 ms. This workflow adds the p95
-# assertions (KARDINAL_PERF_STRICT=1). It runs nightly on main and on a manual dispatch
+# the cells drawn in any frame and no long task over 200 ms. This workflow adds the p95
+# assertions and holds long tasks to 100 ms (KARDINAL_PERF_STRICT=1). It runs nightly on main and on a manual dispatch
 # (gh workflow run ui-perf.yml --ref <branch>). Branch protection does not require it.
 on:
   schedule:

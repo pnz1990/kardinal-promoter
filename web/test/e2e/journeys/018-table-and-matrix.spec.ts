@@ -150,9 +150,10 @@ test.describe('Journey 018 — Table and Matrix', () => {
   // @perf: npm run test:e2e runs these alone (one worker). A shared CI runner cannot hold a
   // frame budget, so by default they assert what the page controls: the cells it draws (the
   // virtualizers' bound) and no long task while scrolling. KARDINAL_PERF_STRICT=1 (the perf
-  // workflow, nightly) also asserts the frame-time p95.
+  // workflow, nightly) also asserts the frame-time p95, and holds long tasks to 100 ms (200 ms
+  // otherwise: a loaded runner stretches tasks, 79 ms seen at load 37).
   const STRICT = process.env.KARDINAL_PERF_STRICT === '1'
-  const LONG_TASK_MS = 100
+  const LONG_TASK_MS = STRICT ? 100 : 200
 
   /** Scrolls the matrix diagonally one step a frame: the frame times' p95 (ms), the most cells
    *  drawn in any frame, and the longest task (ms) seen while scrolling. */

@@ -44,9 +44,9 @@ the total but not the initial load.
 The `@perf` Playwright journeys (`npm run test:e2e` runs them after the others, on one worker)
 scroll the 200-version Matrix diagonally. On every run, CI included, they assert what the page
 controls: the cells drawn in any frame (under 600 in the default view, under 1,200 with every
-wave and fleet expanded, of 60,200) and no long task over 100 ms. A shared runner cannot hold a
-frame budget, so the frame-time p95 (20 ms by default, 33 ms expanded) is asserted only with
-`KARDINAL_PERF_STRICT=1`: the UI perf workflow (`.github/workflows/ui-perf.yml`) runs that
+wave and fleet expanded, of 60,200) and no long task over 200 ms. A shared runner cannot hold a
+frame budget, so the frame-time p95 (20 ms by default, 33 ms expanded) and the 100 ms long-task
+bound are asserted only with `KARDINAL_PERF_STRICT=1`: the UI perf workflow (`.github/workflows/ui-perf.yml`) runs that
 nightly and on a dispatch (`gh workflow run ui-perf.yml --ref <branch>`), and locally
 `cd web && KARDINAL_PERF_STRICT=1 npx playwright test --grep @perf --workers=1` on an idle machine.
 
