@@ -64,9 +64,10 @@ build_images_json() {
 
 # build_body <pipeline> <type> <namespace> <images_json> [config_commit] [config_repo]
 # — prints the POST /api/v1/bundles request body, with provenance from the
-# GitHub Actions environment. A config commit adds configRef (config and
-# mixed Bundles need one); config_repo is its gitRepo, omitted when empty so
-# the controller uses the Pipeline repository.
+# GitHub Actions environment. An empty type is left out, so the controller
+# infers it from the images and the configRef. A config commit adds configRef
+# (config and mixed Bundles need one); config_repo is its gitRepo, omitted
+# when empty so the controller uses the Pipeline repository.
 build_body() {
   python3 -c 'import json, os, sys
 pipeline, bundle_type, namespace, images = sys.argv[1:5]
@@ -86,6 +87,8 @@ body = {
         "author": os.environ.get("GITHUB_ACTOR", ""),
     },
 }
+if not bundle_type:
+    del body["type"]
 if config_commit:
     body["configRef"] = {"commitSHA": config_commit}
     if config_repo:
