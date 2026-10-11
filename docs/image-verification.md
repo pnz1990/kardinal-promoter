@@ -176,7 +176,7 @@ ImageVerification and wait for it, and so do their pre-deploy hooks.
   A change pushed to the GitOps repository outside kardinal is not verified by kardinal.
 - A verified image is not checked again: a key revoked after the verification is not seen.
 - Images that arrive through a config commit (a `configRef` whose files change an image) are not
-  image-verified: only the version's `spec.images` are. Use `commits.requireSigned` for config
+  image-verified: only the Bundle's `spec.images` are. Use `commits.requireSigned` for config
   versions, and admission-time verification for images in config changes.
 - Commit signatures are taken from the SCM's own verification (the keys its users registered),
   not checked against a key in the policy.

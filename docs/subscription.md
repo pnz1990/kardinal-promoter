@@ -307,7 +307,7 @@ the [tag filters](#tag-selection) wins; versions that are not semantic versions 
 ignored. Without `semverConstraint` pre-releases count. Some servers (GitHub, Gitea,
 Forgejo) answer 404 for a private repository read without credentials.
 
-A new version creates a `chart` version:
+A new chart version creates a `chart` Bundle:
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1

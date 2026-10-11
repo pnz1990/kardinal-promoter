@@ -327,7 +327,7 @@ roleRef:
 
 ## Provenance
 
-The `provenance` field on the version is optional but strongly recommended. It enables:
+The `provenance` field on the Bundle is optional but strongly recommended. It enables:
 - PR evidence showing who built the image and from which commit
 - Gate expressions that reference provenance (e.g., `bundle.provenance.author != "dependabot[bot]"`)
 - Audit trail linking deployments back to source changes

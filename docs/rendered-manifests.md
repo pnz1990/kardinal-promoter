@@ -264,7 +264,7 @@ compares the branch with it:
   one of them is drift, so a push that edits a file and rewrites the marker to match is caught
   too. A finished version's RenderRuns are deleted with its Graph when the Graph is retired
   ([Graph retirement](architecture.md#graph-retirement)); its steps keep their render's
-  marker digest in the version's `status.retiredSteps`, which later renders read too. An
+  marker digest in the Bundle's `status.retiredSteps`, which later renders read too. An
   environment whose earlier versions are all gone (deleted, or pruned by `spec.historyLimit`) has
   none, and its branch's marker is used as it is.
 
