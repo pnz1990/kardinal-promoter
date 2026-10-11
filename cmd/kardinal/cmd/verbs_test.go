@@ -93,10 +93,12 @@ var updateShipOutcomes = flag.Bool("update-ship-outcomes", false, "rewrite testd
 
 // TestShipOutcome (C5): how ship --wait reads a Bundle. It stops (3) only
 // where a person is needed: an approval gate, a hold, a pause, a gate that
-// does not pass and is never re-checked. A re-checked gate (recheckInterval,
-// a soak or schedule expression) and a PR the SCM merges by itself are waited
-// for; --stop-at-gate stops at any gate. A PR that needs a person is 4, a
-// deleted Bundle 5. Each case's line is golden (testdata/ship-outcomes.golden).
+// does not pass and does not open by itself (one on a Bundle label, whatever
+// its recheckInterval: the CRD gives every gate one). A gate that opens by
+// itself (a soak, schedule, upstream or metric expression) and a PR the SCM
+// merges by itself are waited for; --stop-at-gate stops at any gate. A PR
+// that needs a person is 4, a deleted Bundle 5. Each case's line is golden
+// (testdata/ship-outcomes.golden).
 //
 // Covers CLI-VERBS-01.
 func TestShipOutcome(t *testing.T) {
@@ -139,11 +141,14 @@ func TestShipOutcome(t *testing.T) {
 			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1}
 			g.Spec.RecheckInterval = "1m"
 		})}, false, "Held", ExitHeld},
-		{"gate never re-checked", "Promoting", []sigs_client.Object{blocked, gate(nil)}, false, "Held", ExitHeld},
-		{"re-checked gate: waited for", "Promoting", []sigs_client.Object{blocked, gate(func(g *v1alpha1.PolicyGate) { g.Spec.RecheckInterval = "5m" })}, false, "", 0},
+		{"label gate: a person", "Promoting", []sigs_client.Object{blocked, gate(nil)}, false, "Held", ExitHeld},
+		{"label gate with a recheckInterval (every gate has one): a person", "Promoting", []sigs_client.Object{blocked,
+			gate(func(g *v1alpha1.PolicyGate) { g.Spec.RecheckInterval = "5m" })}, false, "Held", ExitHeld},
+		{"upstream gate: waited for", "Promoting", []sigs_client.Object{blocked, gate(func(g *v1alpha1.PolicyGate) { g.Spec.Expression = "upstream.uat.verified" })}, false, "", 0},
+		{"metric gate: waited for", "Promoting", []sigs_client.Object{blocked, gate(func(g *v1alpha1.PolicyGate) { g.Spec.Expression = `metrics["errors"].result == "Pass"` })}, false, "", 0},
 		{"soak gate: waited for", "Promoting", []sigs_client.Object{blocked, gate(func(g *v1alpha1.PolicyGate) { g.Spec.Expression = "upstream.uat.soakMinutes >= 30" })}, false, "", 0},
 		{"schedule gate: waited for", "Promoting", []sigs_client.Object{blocked, gate(func(g *v1alpha1.PolicyGate) { g.Spec.Expression = "!schedule.isWeekend" })}, false, "", 0},
-		{"re-checked gate with --stop-at-gate", "Promoting", []sigs_client.Object{blocked, gate(func(g *v1alpha1.PolicyGate) { g.Spec.RecheckInterval = "5m" })}, true, "Held", ExitHeld},
+		{"soak gate with --stop-at-gate", "Promoting", []sigs_client.Object{blocked, gate(func(g *v1alpha1.PolicyGate) { g.Spec.Expression = "upstream.uat.soakMinutes >= 30" })}, true, "Held", ExitHeld},
 		{"a gate not evaluated yet does not stop it", "Promoting", []sigs_client.Object{blocked, gate(func(g *v1alpha1.PolicyGate) { g.Status.LastEvaluatedAt = nil })}, true, "", 0},
 		{"held", "Promoting", []sigs_client.Object{withEnvs(pesEnv("test", "b1", "", "Verified"), pesHeld("prod", "b0", "b1"))}, false, "Held", ExitHeld},
 		{"paused", "Promoting", []sigs_client.Object{paused}, false, "Held", ExitHeld},
@@ -259,7 +264,7 @@ func TestShipWait(t *testing.T) {
 	res := waitShip(context.Background(), c, "default", "demo", "demo-held", shipResult{createdBundle: createdOf(b)}, time.Minute, false)
 	assert.Equal(t, "Held", res.Result)
 	assert.Equal(t, ExitHeld, res.ExitCode)
-	assert.Equal(t, "Bundle demo-held stopped: prod is held by gate cab, which is not re-checked (kardinal why demo prod)", res.Message)
+	assert.Equal(t, "Bundle demo-held stopped: prod is held by gate cab, which does not open by itself (kardinal why demo prod)", res.Message)
 	raw, err := json.Marshal(res)
 	require.NoError(t, err)
 	for _, field := range []string{`"bundle":"demo-held"`, `"result":"Held"`, `"exitCode":3`, `"version":"1.6.0"`, `"environments":[`} {

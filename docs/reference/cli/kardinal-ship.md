@@ -21,17 +21,18 @@ and the Bundle's environments from status.environments). Exit codes:
   CODE  RESULT                         WHEN
   0     Verified                       live in every environment it promotes
   1     Failed, Error                  it failed, or it could not be read three times in a row (or the command itself failed)
-  3     Held                           a person is needed and nothing else of it is moving: an approval gate, a hold, a paused pipeline, or a gate that does not pass and is never re-checked (with --stop-at-gate, any gate that does not pass)
+  3     Held                           a person is needed and nothing else of it is moving: an approval gate, a hold, a paused pipeline, or a gate that does not pass and does not open by itself (with --stop-at-gate, any gate that does not pass)
   4     WaitingForMerge                its PR waits for a person to merge it (not one the SCM merges by itself, pr.merge.auto), and nothing else of it is moving
   5     Superseded, Rejected, Deleted  a newer version replaced it, it was rejected, or it was deleted
   6     Timeout, Interrupted           --timeout (default 30m) passed, or Ctrl-C or SIGTERM interrupted the wait; the result is printed first
 
 A stop at a gate, a hold or a PR counts once two reads agree, and a gate not
-evaluated yet never stops it. A gate that opens by itself (one with a
-recheckInterval, or a soak, schedule, metric or change window expression)
-and a PR the SCM merges by itself (pr.merge.auto) are waited for, until
---timeout: CI can wait through a soak. --stop-at-gate stops at any gate that
-does not pass instead. Stopping to follow does not stop the promotion:
+evaluated yet never stops it. A gate that opens by itself (its expression
+reads a schedule, a soak, an upstream environment, a metric or a change
+window) and a PR the SCM merges by itself (pr.merge.auto) are waited for,
+until --timeout: CI can wait through a soak. A gate on anything else (a
+Bundle label, its provenance) needs a person: exit 3. --stop-at-gate stops
+at any gate that does not pass. Stopping to follow does not stop the promotion:
 kardinal status <pipeline> -w goes on following it. The codes
 are stable: a new outcome gets a new code.
 
@@ -61,7 +62,7 @@ kardinal ship <pipeline> --image <ref> [flags]
       --graph-compact-above int   With --dry-run: the controller's --graph-compact-above (chart graph.compactAbove), the environment count above which the Graph is compact (default 100)
   -h, --help                      help for ship
       --image stringArray         Container image reference (can be specified multiple times); required for image and mixed Bundles
-      --stop-at-gate              With --wait: stop (exit 3) at any gate that does not pass, also one that is re-checked (a soak, a schedule)
+      --stop-at-gate              With --wait: stop (exit 3) at any gate that does not pass, also one that opens by itself (a soak, a schedule)
       --timeout duration          With --wait: give up after this long (exit 6) (default 30m)
       --type string               Bundle type: image, config, or mixed (default "image")
       --wait                      Follow the Bundle until it is live, fails, stops at a gate, a hold or a PR, or is replaced

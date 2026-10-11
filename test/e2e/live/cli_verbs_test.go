@@ -52,9 +52,9 @@ func TestCLI_ShipWait(t *testing.T) {
 	// A: test, then prod through a PR, with a gate on prod that is closed.
 	a := newArgoApp(t, e, "test", "prod")
 	a.apply(t, a.pipeline(map[string]string{"prod": "pr-review"}))
-	// No recheckInterval: a gate nothing re-checks needs a person (a gate
-	// re-checked by itself, like a soak, is waited for).
-	gate := framework.Gate(a.ns, "hold", "prod", openExpr, "")
+	// A gate on a Bundle label needs a person (a gate that opens by itself,
+	// like a soak, is waited for).
+	gate := framework.Gate(a.ns, "hold", "prod", openExpr, recheck)
 	e.CreateGate(t, gate)
 	waitPipelineValid(t, e, a.ns, pipelineName)
 
@@ -62,7 +62,7 @@ func TestCLI_ShipWait(t *testing.T) {
 	require.Equal(t, 3, code, "held at prod's gate: %+v", out)
 	assert.Equal(t, "Held", out.Result)
 	assert.Equal(t, fixtures.V2, out.Version)
-	assert.Equal(t, "Bundle "+out.Bundle+" stopped: prod is held by gate hold, which is not re-checked (kardinal why "+pipelineName+" prod)", out.Message)
+	assert.Equal(t, "Bundle "+out.Bundle+" stopped: prod is held by gate hold, which does not open by itself (kardinal why "+pipelineName+" prod)", out.Message)
 	assertEnvAt(t, a, "test", fixtures.V2)
 
 	// Without the gate, the next version waits for its prod PR.

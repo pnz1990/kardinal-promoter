@@ -119,7 +119,7 @@ merged (4), is replaced or rejected (5), or --timeout passes (6).`,
 	addBundleFlags(cmd, &opts, &dryRun)
 	cmd.Flags().BoolVar(&wait, "wait", false, "Follow the Bundle until it is live, fails, stops at a gate, a hold or a PR, or is replaced")
 	cmd.Flags().Var(durationValue{&timeout}, "timeout", "With --wait: give up after this long (exit 6)")
-	cmd.Flags().BoolVar(&stopAtGate, "stop-at-gate", false, "With --wait: stop (exit 3) at any gate that does not pass, also one that is re-checked (a soak, a schedule)")
+	cmd.Flags().BoolVar(&stopAtGate, "stop-at-gate", false, "With --wait: stop (exit 3) at any gate that does not pass, also one that opens by itself (a soak, a schedule)")
 	withReference(cmd, shipReference)
 	return withStructuredOutput(cmd)
 }
@@ -259,10 +259,10 @@ type shipOutcomeResult struct {
 // Pipeline's status.environments (computed with the controller's code when
 // the controller predates it). It stops only where a person is needed, with
 // nothing else of the Bundle moving: an approval gate, a gate that does not
-// pass and is never re-checked, a hold, a paused Pipeline, or a PR that no
-// one but a person will merge. A gate that is re-checked (recheckInterval,
-// or a soak, schedule, metric or change window expression) and a PR the SCM
-// merges by itself (pr.merge.auto) are waited for; with stopAtGate, any
+// pass and does not open by itself (rechecks), a hold, a paused Pipeline, or
+// a PR that no one but a person will merge. A gate that opens by itself (a
+// soak, schedule, upstream, metric or change window expression) and a PR the
+// SCM merges by itself (pr.merge.auto) are waited for; with stopAtGate, any
 // evaluated gate that does not pass stops it. A deleted Bundle is final.
 func shipOutcome(ctx context.Context, c sigs_client.Client, ns, pipeline, name string, stopAtGate bool) (*shipOutcomeResult, []v1alpha1.PipelineEnvironmentStatus, error) {
 	var b v1alpha1.Bundle
@@ -427,8 +427,8 @@ func shipEnvironments(ctx context.Context, c sigs_client.Client, p *v1alpha1.Pip
 
 // heldForAPerson is, per environment where Bundle name waits for a person,
 // what holds it: a hold, an approval gate, or a gate that was evaluated, does
-// not pass and is never re-checked (rechecks). A gate not evaluated yet, or
-// one that is re-checked, comes by itself, unless stopAtGate.
+// not pass and does not open by itself (rechecks). A gate not evaluated yet,
+// or one that opens by itself, comes by itself, unless stopAtGate.
 func heldForAPerson(pipeline, name string, envs []v1alpha1.PipelineEnvironmentStatus, gates []v1alpha1.PolicyGate, stopAtGate bool) []string {
 	var out []string
 	for _, e := range envs {
@@ -457,7 +457,7 @@ func heldForAPerson(pipeline, name string, envs []v1alpha1.PipelineEnvironmentSt
 		}
 		if len(closed) > 0 {
 			slices.Sort(closed)
-			why := ", which is not re-checked"
+			why := ", which does not open by itself"
 			if stopAtGate {
 				why = " (--stop-at-gate)"
 			}
@@ -470,15 +470,14 @@ func heldForAPerson(pipeline, name string, envs []v1alpha1.PipelineEnvironmentSt
 
 // timeExpressions are the PolicyGate context variables that change with
 // time: a gate on them opens by itself.
-var timeExpressions = []string{"schedule.", "soakMinutes", "metrics", "changewindow"}
+var timeExpressions = []string{"schedule.", "soakMinutes", "upstream.", "metrics", "changewindow"}
 
-// rechecks reports whether gate g is evaluated again by itself: it has a
-// recheckInterval, or its expression reads the time (a schedule, a soak, a
-// metric, a change window).
+// rechecks reports whether gate g opens by itself: its expression reads what
+// changes with time (a schedule, a soak, an upstream environment, a metric,
+// a change window). Its recheckInterval says nothing: the CRD defaults it to
+// 5m, so every gate has one. A gate on anything else (a Bundle label, its
+// provenance) waits for a person.
 func rechecks(g *v1alpha1.PolicyGate) bool {
-	if g.Spec.RecheckInterval != "" {
-		return true
-	}
 	for _, s := range timeExpressions {
 		if strings.Contains(g.Spec.Expression, s) {
 			return true
@@ -495,7 +494,7 @@ var shipExitCodes = []struct {
 }{
 	{ExitVerified, "Verified", "live in every environment it promotes"},
 	{ExitFailed, "Failed, Error", "it failed, or it could not be read three times in a row (or the command itself failed)"},
-	{ExitHeld, "Held", "a person is needed and nothing else of it is moving: an approval gate, a hold, a paused pipeline, or a gate that does not pass and is never re-checked (with --stop-at-gate, any gate that does not pass)"},
+	{ExitHeld, "Held", "a person is needed and nothing else of it is moving: an approval gate, a hold, a paused pipeline, or a gate that does not pass and does not open by itself (with --stop-at-gate, any gate that does not pass)"},
 	{ExitWaitingForMerge, "WaitingForMerge", "its PR waits for a person to merge it (not one the SCM merges by itself, pr.merge.auto), and nothing else of it is moving"},
 	{ExitReplaced, "Superseded, Rejected, Deleted", "a newer version replaced it, it was rejected, or it was deleted"},
 	{ExitTimeout, "Timeout, Interrupted", "--timeout (default 30m) passed, or Ctrl-C or SIGTERM interrupted the wait; the result is printed first"},
@@ -523,10 +522,11 @@ and the Bundle's environments from status.environments). Exit codes:
 
 ` + shipExitCodeTable() + `
 A stop at a gate, a hold or a PR counts once two reads agree, and a gate not
-evaluated yet never stops it. A gate that opens by itself (one with a
-recheckInterval, or a soak, schedule, metric or change window expression)
-and a PR the SCM merges by itself (pr.merge.auto) are waited for, until
---timeout: CI can wait through a soak. --stop-at-gate stops at any gate that
-does not pass instead. Stopping to follow does not stop the promotion:
+evaluated yet never stops it. A gate that opens by itself (its expression
+reads a schedule, a soak, an upstream environment, a metric or a change
+window) and a PR the SCM merges by itself (pr.merge.auto) are waited for,
+until --timeout: CI can wait through a soak. A gate on anything else (a
+Bundle label, its provenance) needs a person: exit 3. --stop-at-gate stops
+at any gate that does not pass. Stopping to follow does not stop the promotion:
 kardinal status <pipeline> -w goes on following it. The codes
 are stable: a new outcome gets a new code.`
