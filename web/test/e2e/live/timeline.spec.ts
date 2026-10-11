@@ -27,7 +27,7 @@ const comparison = (page: Page) => page.getByRole('dialog', { name: 'Bundle comp
 async function expectShown(page: Page, b: Entry, other: Entry) {
   await expect(chip(page, b)).toHaveAttribute('aria-pressed', 'true')
   await expect(chip(page, other)).toHaveAttribute('aria-pressed', 'false')
-  await expect(page.getByRole('button', { name: `Copy bundle name "${b.name}"` })).toBeVisible()
+  await expect(page.getByRole('button', { name: `Copy version name "${b.name}"` })).toBeVisible()
   await expect(page.getByTitle('Author', { exact: true })).toHaveText(b.author)
   await expect(dagNode(page, 'test')).toHaveAttribute('data-node-id', b.step)
 }
@@ -83,9 +83,9 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
   }
   await expectShown(page, newer, older)
 
-  // UI-BUNDLETYPE-01: the Bundle card names the type; image Bundles, the
-  // common case, carry no badge in the timeline.
-  await expect(page.getByRole('img', { name: 'image Bundle' })).toBeVisible()
+  // UI-BUNDLETYPE-01: image Bundles, the common case, carry no type tag, neither
+  // on the version line (U1) nor in the timeline.
+  await expect(page.getByRole('img', { name: 'image Bundle' })).toHaveCount(0)
   const bar = page.getByRole('toolbar', { name: /Bundle history/ })
   await expect(bar.getByRole('img')).toHaveCount(0)
   // UI-KEYBOARD-01: the timeline is one Tab stop, the arrow keys move in it.
