@@ -153,8 +153,7 @@ func TestUILink(t *testing.T) {
 	var stdout bytes.Buffer
 	run := func(args ...string) string {
 		var errb bytes.Buffer
-		prevErr := errOut
-		t.Cleanup(func() { errOut = prevErr })
+		keepStyle(t)
 		stdout.Reset()
 		root := NewRootCmd()
 		root.SetOut(&stdout)
