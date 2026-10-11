@@ -53,9 +53,13 @@ past the Pipeline's spec.historyLimit (default 50).`,
 			if err != nil {
 				return fmt.Errorf("delete bundle: %w", err)
 			}
+			if err := confirm(cmd, fmt.Sprintf("Delete Bundle %s? Its promotion stops and its open PRs are closed.", args[0])); err != nil {
+				return err
+			}
 			return deleteBundleFn(cmd.OutOrStdout(), c, ns, args[0])
 		},
 	}
+	addYesFlag(cmd)
 	return cmd
 }
 

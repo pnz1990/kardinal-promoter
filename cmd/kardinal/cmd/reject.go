@@ -36,11 +36,15 @@ again. It does not revert an environment: use kardinal rollback for that.`,
 			if err != nil {
 				return fmt.Errorf("reject: %w", err)
 			}
+			if err := confirm(cmd, fmt.Sprintf("Reject Bundle %s? It never promotes again.", args[0])); err != nil {
+				return err
+			}
 			return rejectFn(cmd.Context(), cmd.OutOrStdout(), c, ns, args[0], reason, time.Now())
 		},
 	}
 	cmd.Flags().StringVar(&reason, "reason", "", "Why the Bundle is rejected (required)")
 	_ = cmd.MarkFlagRequired("reason")
+	addYesFlag(cmd)
 	return cmd
 }
 

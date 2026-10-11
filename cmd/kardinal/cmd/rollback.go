@@ -74,6 +74,11 @@ blocking gates pass as audited exemptions meanwhile. See docs/rollback.md.`,
 			if err != nil {
 				return fmt.Errorf("rollback: %w", err)
 			}
+			if lastEnvironment(cmd.Context(), c, ns, pipeline, env) {
+				if err := confirm(cmd, fmt.Sprintf("Roll %s of %s back? A rollback Bundle goes through every environment before it.", env, pipeline)); err != nil {
+					return err
+				}
+			}
 			if holdFlag {
 				// The admission policy accepts a hold only with createdBy
 				// set to the requesting Kubernetes user.
@@ -99,6 +104,7 @@ blocking gates pass as audited exemptions meanwhile. See docs/rollback.md.`,
 	// release (#1288).
 	cmd.Flags().BoolVar(&emergencyFlag, "emergency", false, "Deprecated: has no effect")
 	_ = cmd.Flags().MarkDeprecated("emergency", "it has no effect and is removed in v0.11; use kardinal override to pass a blocking gate")
+	addYesFlag(cmd)
 
 	return withStructuredOutput(cmd)
 }
