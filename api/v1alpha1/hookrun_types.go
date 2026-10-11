@@ -191,7 +191,7 @@ type HookRunStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=hr
+// +kubebuilder:resource:scope=Namespaced,shortName=hr,categories=kardinal-all
 // +kubebuilder:printcolumn:name="Pipeline",type=string,JSONPath=`.spec.pipelineName`
 // +kubebuilder:printcolumn:name="Env",type=string,JSONPath=`.spec.environment`
 // +kubebuilder:printcolumn:name="Hook",type=string,JSONPath=`.spec.hook`

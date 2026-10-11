@@ -4,6 +4,9 @@ Print the CLI, controller, and kro (Graph) versions
 
 ### Synopsis
 
+Print the versions of the CLI, the controller and kro; the cluster ones are
+unknown when the cluster cannot be reached.
+
 Print the CLI version, the controller version (the kardinal-version ConfigMap
 the controller writes to its namespace) and the kro version (the image tag of
 the kro controller in kro-system). Cluster versions show as unknown when the
@@ -11,6 +14,12 @@ cluster cannot be reached.
 
 ```
 kardinal version [flags]
+```
+
+### Examples
+
+```
+  kardinal version
 ```
 
 ### Options

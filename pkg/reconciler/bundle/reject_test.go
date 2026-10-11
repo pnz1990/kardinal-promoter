@@ -5,6 +5,7 @@ package bundle_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
@@ -286,4 +289,63 @@ func TestBundleReconciler_RejectedArtifactSet(t *testing.T) {
 			assert.Equal(t, []string{"prod=app-v1"}, got.Status.RejectedArtifacts.ComparedWith)
 		})
 	}
+}
+
+// TestBundleReconciler_RejectionAudited: the rejection is recorded once, as a
+// BundleRejected AuditEvent naming who rejected the Bundle and why, through
+// the audit outbox: the entry is stored with phase Rejected, and when the
+// create fails it stays in status.pendingAuditEvents and a later reconcile
+// writes it. Reconciling again writes nothing more.
+func TestBundleReconciler_RejectionAudited(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Spec:       kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "prod"}}},
+	}
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "app", Rejected: rejection()},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Promoting", GraphRef: "app-app-v1"},
+	}
+	fails := 1
+	c := indexedBuilder(newScheme()).WithObjects(pipeline, b).WithStatusSubresource(b).
+		WithInterceptorFuncs(interceptor.Funcs{Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*kardinalv1alpha1.AuditEvent); ok && fails > 0 {
+				fails--
+				return errors.New("etcdserver: request timed out")
+			}
+			return cl.Create(ctx, obj, opts...)
+		}}).Build()
+	r := &bundle.Reconciler{Client: c, Translator: &mockTranslator{graphName: "app-app-v1"},
+		GraphChecker: &mockGraphChecker{exists: false}, Recorder: events.NewFakeRecorder(10)}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "app-v1", Namespace: "default"}}
+	ctx := context.Background()
+
+	res, err := r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Positive(t, res.RequeueAfter, "a record that could not be written is retried")
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &got))
+	assert.Equal(t, "Rejected", got.Status.Phase)
+	require.Len(t, got.Status.PendingAuditEvents, 1, "kept in the outbox")
+	var list kardinalv1alpha1.AuditEventList
+	require.NoError(t, c.List(ctx, &list))
+	assert.Empty(t, list.Items)
+
+	for range 3 {
+		_, err = r.Reconcile(ctx, req)
+		require.NoError(t, err)
+	}
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &got))
+	assert.Empty(t, got.Status.PendingAuditEvents, "written and removed")
+	require.NoError(t, c.List(ctx, &list))
+	require.Len(t, list.Items, 1, "one record")
+	ae := list.Items[0]
+	assert.Equal(t, "app-v1-rejected", ae.Name)
+	assert.Equal(t, "BundleRejected", ae.Spec.Action)
+	assert.Equal(t, "Success", ae.Spec.Outcome)
+	assert.Equal(t, "app", ae.Spec.PipelineName)
+	assert.Equal(t, "app-v1", ae.Spec.BundleName)
+	assert.Equal(t, "*", ae.Spec.Environment, "the whole Bundle")
+	assert.Equal(t, "alice rejected bundle app-v1: CVE-2026-1 in the base image", ae.Spec.Message)
+	assert.Equal(t, map[string]string{"kardinal.io/pipeline": "app", "kardinal.io/bundle": "app-v1", "kardinal.io/action": "BundleRejected"}, ae.Labels)
 }
