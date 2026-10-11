@@ -128,10 +128,9 @@ func TestOutputFlag_StructuredCommands(t *testing.T) {
 	} {
 		c, _, err := root.Find(path)
 		require.NoError(t, err)
-		globalOutput = "json"
+		setForTest(t, &globalOutput, "json")
 		assert.NoError(t, checkOutputFlag(c), c.CommandPath())
 	}
-	globalOutput = ""
 }
 
 // C09b-cli-22: refresh only annotates the Pipeline, and dashboard only opens a
