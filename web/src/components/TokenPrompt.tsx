@@ -18,6 +18,8 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { setTokenPrompt, type TokenPromptReason } from '../api/client'
 import CopyButton from './CopyButton'
+import '../ui'
+import '../styles/TokenPrompt.css'
 import { isInsecureNonLocalConnection, PORT_FORWARD_COMMAND } from './InsecureConnectionBanner'
 
 interface PendingPrompt {
@@ -89,86 +91,44 @@ function TokenForm({ reason, onSubmit }: TokenFormProps) {
       aria-modal="true"
       aria-labelledby="ui-token-title"
       aria-describedby={insecure ? 'ui-token-desc ui-token-insecure' : 'ui-token-desc'}
-      style={{
-        position: 'fixed', inset: 0,
-        background: 'rgba(0,0,0,0.7)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        zIndex: 2000,
-      }}
+      className="k-scrim token-prompt"
     >
-      <div
-        style={{
-          background: 'var(--color-bg)',
-          border: '1px solid var(--color-border)',
-          borderRadius: '8px',
-          padding: '1.5rem',
-          maxWidth: '460px',
-          width: '90%',
-        }}
-      >
-        <h2
-          id="ui-token-title"
-          style={{ margin: '0 0 0.25rem', fontSize: '1rem', fontWeight: 700, color: 'var(--color-text)' }}
-        >
+      <div className="k-dialog token-prompt__panel">
+        <h2 id="ui-token-title" className="k-dialog__title">
           Sign in to kardinal
         </h2>
-        <p id="ui-token-desc" style={{ color: 'var(--color-text-muted)', fontSize: '0.8rem', margin: '0 0 1rem', lineHeight: 1.5 }}>
+        <p id="ui-token-desc" className="k-dialog__description">
           This controller requires a bearer token. Use the UI token from your administrator
           or a Kubernetes token for an account with access to kardinal resources.
         </p>
 
         {insecure && (
-          <div
-            id="ui-token-insecure"
-            style={{
-              background: 'var(--color-warning-bg)',
-              border: '1px solid var(--color-warning)',
-              borderRadius: '6px',
-              padding: '0.5rem 0.6rem',
-              marginBottom: '1rem',
-              color: 'var(--color-warning)',
-              fontSize: '0.75rem',
-              lineHeight: 1.5,
-            }}
-          >
-            <div style={{ fontWeight: 600 }}>
+          <div id="ui-token-insecure" className="k-alert k-alert--blocked token-prompt__insecure">
+            <div className="token-prompt__insecure-title">
               <span aria-hidden="true">⚠ </span>
               This page is on plain HTTP, so the token is sent unencrypted.
             </div>
             <div>
               Sign in over HTTPS, or run this and open{' '}
-              <a href="http://localhost:8082/ui/" style={{ color: 'var(--color-warning)' }}>http://localhost:8082/ui/</a>:
+              <a href="http://localhost:8082/ui/" className="token-prompt__link">http://localhost:8082/ui/</a>:
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.25rem' }}>
-              <code style={{ flex: 1, fontFamily: 'var(--k-font-mono)', fontSize: '0.72rem', overflowWrap: 'anywhere' }}>
-                {PORT_FORWARD_COMMAND}
-              </code>
+            <div className="token-prompt__command token-prompt__command--inline">
+              <code className="token-prompt__code">{PORT_FORWARD_COMMAND}</code>
               <CopyButton text={PORT_FORWARD_COMMAND} title="Copy port-forward command" />
             </div>
           </div>
         )}
 
-        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.25rem' }}>
+        <div className="token-prompt__hint">
           Create a token for a ServiceAccount:
         </div>
-        <div
-          style={{
-            display: 'flex', alignItems: 'center', gap: '0.5rem',
-            background: 'var(--color-surface)', border: '1px solid var(--color-border-muted)',
-            borderRadius: '6px', padding: '0.4rem 0.6rem', marginBottom: '1rem',
-          }}
-        >
-          <code style={{ flex: 1, fontFamily: 'var(--k-font-mono)', fontSize: '0.75rem', color: 'var(--color-code)', overflowWrap: 'anywhere' }}>
-            {TOKEN_COMMAND}
-          </code>
+        <div className="token-prompt__command">
+          <code className="token-prompt__code token-prompt__code--command">{TOKEN_COMMAND}</code>
           <CopyButton text={TOKEN_COMMAND} title="Copy command" />
         </div>
 
         <form onSubmit={handleSubmit}>
-          <label
-            htmlFor="ui-token"
-            style={{ display: 'block', fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.25rem' }}
-          >
+          <label htmlFor="ui-token" className="token-prompt__label">
             Token
           </label>
           <input
@@ -181,45 +141,21 @@ function TokenForm({ reason, onSubmit }: TokenFormProps) {
             spellCheck={false}
             aria-invalid={errorId ? true : undefined}
             aria-describedby={errorId}
-            style={{
-              width: '100%', boxSizing: 'border-box',
-              background: 'var(--color-surface)',
-              border: `1px solid ${errorId ? 'var(--color-error)' : 'var(--color-border)'}`,
-              borderRadius: '6px', padding: '0.5rem 0.75rem',
-              color: 'var(--color-text)', fontSize: '0.875rem',
-              fontFamily: 'var(--k-font-mono)',
-              marginBottom: errorId ? '0.25rem' : '0.75rem',
-            }}
+            className="token-prompt__input"
           />
           {errorId && (
-            <div
-              id={errorId}
-              role="alert"
-              style={{ color: 'var(--color-error)', fontSize: '0.75rem', marginBottom: '0.75rem' }}
-            >
+            <div id={errorId} role="alert" className="token-prompt__error">
               {emptyError
                 ? 'Enter a token.'
                 : 'The controller rejected this token. Check that it is complete and has not expired.'}
             </div>
           )}
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', justifyContent: 'space-between', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.7rem', color: 'var(--color-text-faint)' }}>
+          <div className="token-prompt__footer">
+            <span className="token-prompt__note">
               Kept in this browser tab only. Closing the tab clears it.
             </span>
-            <button
-              type="submit"
-              style={{
-                padding: '0.45rem 1rem',
-                background: 'var(--color-accent-bg)',
-                border: '1px solid var(--color-accent)',
-                borderRadius: '6px',
-                color: 'var(--color-text)',
-                cursor: 'pointer',
-                fontSize: '0.875rem',
-                fontWeight: 600,
-              }}
-            >
+            <button type="submit" className="k-button k-button--primary k-button--md">
               Sign in
             </button>
           </div>

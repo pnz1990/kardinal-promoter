@@ -1,0 +1,39 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * CreateBundleDialog.css — the Create Bundle form (components/CreateBundleDialog.tsx),
+ * on the dialog primitive (.k-scrim, .k-dialog). Tokens only.
+ */
+
+.create-bundle__label {
+  display: block;
+  margin-block-end: var(--k-space-1);
+  color: var(--k-ink-2);
+  font-size: var(--k-text-xs);
+}
+.create-bundle__required { color: var(--k-status-failed-fg); }
+.create-bundle__optional { color: var(--k-ink-2); font-style: italic; }
+
+.create-bundle__input {
+  display: block;
+  inline-size: 100%;
+  box-sizing: border-box;
+  min-block-size: var(--k-control-md);
+  margin-block-end: var(--k-space-3);
+  padding: var(--k-space-2) var(--k-space-3);
+  border: var(--k-border-hairline) solid var(--k-line-strong);
+  border-radius: var(--k-radius-2);
+  background: var(--k-surface-canvas);
+  color: var(--k-ink);
+  font: inherit;
+  font-size: var(--k-text-md);
+}
+.create-bundle__input--mono { font-family: var(--k-font-mono); }
+.create-bundle__input[aria-invalid="true"] { margin-block-end: var(--k-space-1); border-color: var(--k-status-failed-fg); }
+.create-bundle__field-error {
+  margin-block-end: var(--k-space-3);
+  color: var(--k-status-failed-fg);
+  font-size: var(--k-text-xs);
+}
+.create-bundle__error { margin-block-end: var(--k-space-3); }

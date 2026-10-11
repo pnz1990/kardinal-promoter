@@ -6,7 +6,8 @@
 // passes only that bundle's gate instances, never the templates.
 import { useState, useEffect } from 'react'
 import type { GateState, PolicyGate } from '../types'
-import { HealthChip, healthChipColors, type HealthState } from './HealthChip'
+import { HealthChip, type HealthState } from './HealthChip'
+import '../styles/PolicyGatesPanel.css'
 import { ApprovalQuorum } from './ApprovalQuorum'
 
 interface Props {
@@ -15,6 +16,8 @@ interface Props {
   /** Called after an approve, reject or revoke from an approval gate, so the
    *  parent refreshes the gates. */
   onDecided?: () => void
+  /** Fold the panel (the stage drawer is open and shows its environment's gates). */
+  collapsed?: boolean
 }
 
 function formatAge(iso: string | undefined): string {
@@ -65,56 +68,35 @@ function GateSummaryChip({ gates }: { gates: PolicyGate[] }) {
     : rejected > 0
     ? ['Unknown', `${rejected} rejected`, 'bundle rejected, not evaluated again']
     : ['Ready', `${total} passing`, undefined]
-  const { bg, text, border } = healthChipColors(health)
   return (
-    <span title={meaning} style={{
-      fontSize: '0.65rem',
-      background: bg,
-      color: text,
-      border: `1px solid ${border}`,
-      borderRadius: '4px',
-      padding: '1px 6px',
-      marginLeft: '0.5rem',
-    }}>
+    <span title={meaning} className="gates-panel__summary" data-health={health}>
       {label}
       {meaning && <span className="sr-only">, {meaning}</span>}
     </span>
   )
 }
 
-export function PolicyGatesPanel({ gates, loading, onDecided }: Props) {
+export function PolicyGatesPanel({ gates, loading, onDecided, collapsed }: Props) {
   const blockedCount = count(gates, 'Block')
   // #524: auto-expand when any gate holds the bundle — the blocked state is the
   // most important information on screen and should not be hidden behind a
   // click. A waiting gate is not what the bundle waits on, so it does not.
   const [open, setOpen] = useState(false)
   useEffect(() => {
-    if (blockedCount > 0) setOpen(true)
-  }, [blockedCount])
+    if (blockedCount > 0 && !collapsed) setOpen(true)
+  }, [blockedCount, collapsed])
+  // The stage drawer shows the gates of the environment it is open on, so the
+  // panel folds away while it is open (U3).
+  useEffect(() => {
+    if (collapsed) setOpen(false)
+  }, [collapsed])
 
   if (loading) {
     return (
-      <div style={{ marginBottom: '0.75rem' }} aria-label="policy-gates-loading" aria-busy="true">
-        <style>{`
-          @keyframes shimmer-pg {
-            0% { background-position: 200% 0; }
-            100% { background-position: -200% 0; }
-          }
-        `}</style>
+      <div className="gates-panel" aria-label="policy-gates-loading" aria-busy="true">
         {/* Skeleton header bar mimicking the accordion button */}
-        {[70, 50].map((w, i) => (
-          <div
-            key={i}
-            style={{
-              height: '16px',
-              borderRadius: '3px',
-              background: 'linear-gradient(90deg, var(--color-surface) 25%, var(--color-surface-2) 50%, var(--color-surface) 75%)',
-              backgroundSize: '200% 100%',
-              animation: 'shimmer-pg 1.5s infinite',
-              marginBottom: '0.4rem',
-              width: `${w}%`,
-            }}
-          />
+        {[0, 1].map(i => (
+          <div key={i} className="gates-panel__skeleton" />
         ))}
       </div>
     )
@@ -123,20 +105,10 @@ export function PolicyGatesPanel({ gates, loading, onDecided }: Props) {
   if (gates.length === 0) return null
 
   return (
-    <div style={{ marginBottom: '0.75rem' }}>
+    <div className="gates-panel">
       <button
         onClick={() => setOpen(o => !o)}
-        style={{
-          background: 'none',
-          border: 'none',
-          color: 'var(--color-accent)',
-          cursor: 'pointer',
-          fontSize: '0.8rem',
-          padding: '0.25rem 0',
-          fontWeight: 600,
-          display: 'flex',
-          alignItems: 'center',
-        }}
+        className="gates-panel__toggle"
         aria-expanded={open}
       >
         {open ? '▾' : '▸'} Policy Gates ({gates.length})
@@ -144,54 +116,32 @@ export function PolicyGatesPanel({ gates, loading, onDecided }: Props) {
       </button>
 
       {open && (
-        <div style={{
-          borderLeft: '2px solid var(--color-border)',
-          paddingLeft: '0.75rem',
-          marginTop: '0.25rem',
-        }}>
+        <div className="gates-panel__list">
           {gates.map(gate => (
             <div
               key={`${gate.namespace}/${gate.name}`}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.2rem',
-                padding: '0.4rem 0',
-                borderBottom: '1px solid var(--color-border-muted)',
-              }}
+              className="gates-panel__gate"
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <div className="gates-panel__gate-head">
                 <HealthChip
                   state={gateState(gate)}
                   nodeType="PolicyGate"
                   size="sm"
                 />
-                <span style={{ fontSize: '0.8rem', color: 'var(--color-text)', fontWeight: 500 }}>
+                <span className="gates-panel__name">
                   {gate.name}
                 </span>
-                <span style={{ fontSize: '0.65rem', color: 'var(--color-text-faint)', marginLeft: 'auto' }}>
+                <span className="gates-panel__meta">
                   {gate.namespace} · {formatAge(gate.lastEvaluatedAt)}
                 </span>
               </div>
               {gate.expression && (
-                <code style={{
-                  fontSize: '0.72rem',
-                  color: 'var(--color-code)',
-                  background: 'var(--color-bg)',
-                  border: '1px solid var(--color-border-muted)',
-                  borderRadius: '3px',
-                  padding: '2px 6px',
-                  fontFamily: 'var(--k-font-mono)',
-                  wordBreak: 'break-all',
-                }}>
+                <code className="gates-panel__expr">
                   {gate.expression}
                 </code>
               )}
               {!gate.ready && gate.reason && (
-                <div style={{
-                  fontSize: '0.7rem',
-                  color: gateState(gate) === 'Block' ? 'var(--color-error)' : 'var(--color-text-muted)',
-                }}>
+                <div className="gates-panel__reason" data-blocking={gateState(gate) === 'Block' || undefined}>
                   {gate.reason}
                 </div>
               )}

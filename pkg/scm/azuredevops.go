@@ -385,6 +385,7 @@ func (a *AzureDevOpsProvider) do(ctx context.Context, method, path string, body,
 	}
 
 	resp, err := a.client.Do(req)
+	err = RedactErr(err) // a *url.Error quotes the URL
 	// Arguments are taken now; the circuit states are read at return, after Record.
 	defer call.done(resp, err, a.circuits, owner)
 	if err != nil {
