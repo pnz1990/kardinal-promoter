@@ -9,7 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
-
+- **One message for a cancelled stale promotion** — a step the push guard (#1681) refuses because its Bundle was superseded or rejected now says only why, `bundle <name> was superseded — promotion cancelled` (or `bundle <name> was rejected`), as a step the Bundle reconciler cancels does, without `step git-push: stale promotion: refusing to push:`.
 - **Release notes reach the GitHub release** — v0.10.0's release was created with an empty notes section: its changelog section (about 99 KB) went from the workflow's preflight job to the release job as a job output, and did not arrive. The notes now travel as the `release-notes` artifact, the release job writes the body to a file the release step reads, and the release fails when the notes in the finished body are empty. The body's CRD apply command uses `--force-conflicts`, as the upgrade guides do
 
 ## [v0.10.0] — 2026-10-11
