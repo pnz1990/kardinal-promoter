@@ -29,37 +29,35 @@ import (
 )
 
 func newPromoteCmd() *cobra.Command {
+	var envFlag string
 	cmd := &cobra.Command{
-		Use:   "promote <pipeline> --env <environment>",
+		Use:   "promote <pipeline> <env>",
 		Short: "Promote the Bundle verified upstream into an environment",
 		Long: `Promote the newest Bundle that is Verified in every upstream environment
-into the given environment.
+into <env>, as a new Bundle that targets it; gates and approval apply.
+It refuses, creating nothing, when nothing is Verified upstream yet, when
+that Bundle is already in <env>, or when a newer Bundle is still promoting.
+The first environment has nothing upstream: use kardinal ship there.`,
+		Example: `  # promote what uat verified into prod
+  kardinal promote my-app prod
 
-Creates a Bundle that copies that Bundle's images, config ref and provenance,
-with intent.targetEnvironment set to the environment. PolicyGates and approval
-mode apply as configured. The command refuses, and creates nothing, when no
-Bundle is Verified upstream yet, when that Bundle is already Verified or being
-promoted in the environment, or when a newer Bundle is still promoting (the new
-Bundle would supersede it). The first environment of a pipeline has nothing
-upstream; use kardinal create bundle for it.`,
-		Args: cobra.ExactArgs(1),
+  # the same, with the flag form
+  kardinal promote my-app --env prod`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// MarkFlagRequired refuses a missing --env, not --env "".
-			env, _ := cmd.Flags().GetString("env")
-			if env == "" {
-				return fmt.Errorf("--env is required")
+			pipeline, env, err := requireEnv(cmd, args, envFlag)
+			if err != nil {
+				return err
 			}
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("promote: %w", err)
 			}
-			return promoteFn(cmd.OutOrStdout(), c, ns, args[0], env)
+			return promoteFn(cmd.OutOrStdout(), c, ns, pipeline, env)
 		},
 	}
 
-	cmd.Flags().StringP("env", "e", "", "Target environment name (required)")
-	_ = cmd.MarkFlagRequired("env")
-
+	addEnvFlag(cmd, &envFlag, "Target environment (or give it after the pipeline)")
 	return cmd
 }
 

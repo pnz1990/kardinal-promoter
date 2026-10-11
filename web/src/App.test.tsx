@@ -261,7 +261,7 @@ describe('App pipeline selection', () => {
     }
   })
 
-  it('opens and closes the node details as Back and Forward change node=', async () => {
+  it('opens and closes the stage drawer as Back and Forward change node=', async () => {
     const go = async (hash: string) => {
       window.history.replaceState(null, '', `/ui/${hash}`)
       await act(async () => { window.dispatchEvent(new PopStateEvent('popstate')) })
@@ -270,14 +270,14 @@ describe('App pipeline selection', () => {
     window.history.replaceState(null, '', '/ui/#pipeline=app&node=b-new-step')
     render(<App />)
     await flush()
-    expect(screen.getByTestId('node-detail')).toBeInTheDocument()
+    expect(screen.getByTestId('stage-drawer')).toBeInTheDocument()
 
     // Back to the entry before the node was opened.
     await go('#pipeline=app')
-    expect(screen.queryByTestId('node-detail')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('stage-drawer')).not.toBeInTheDocument()
     // Forward to it again.
     await go('#pipeline=app&node=b-new-step')
-    expect(screen.getByTestId('node-detail')).toBeInTheDocument()
+    expect(screen.getByTestId('stage-drawer')).toBeInTheDocument()
   })
 })
 
@@ -480,22 +480,21 @@ describe('App header', () => {
   // #766, docs/changelog.md: the indicator is amber after 15 s and red after
   // 30 s. A failing API is how data gets that old, so an error does not keep
   // it amber.
-  it('turns the stale-data indicator red after 30 s, also while the polls fail', async () => {
+  it('marks the data stale after 30 s (late after 15 s), also while the polls fail', async () => {
     render(<App />)
     await flush()
     const indicator = () => screen.getByRole('button', { name: 'Refresh data' }).querySelector<HTMLElement>('span[aria-live="polite"]')!
-    expect(indicator().style.color).toBe('var(--color-text-secondary)')
+    expect(indicator()).toHaveAttribute('data-level', 'fresh')
 
     h.state.pipelinesError = 'API error 503: Service Unavailable'
     await flush(5_100)
-    expect(indicator().style.color).toBe('var(--color-warning)')
+    expect(indicator()).toHaveAttribute('data-level', 'late')
     await flush(11_000)
     expect(indicator().textContent).toMatch(/^⚠ 1\ds ago$/)
-    expect(indicator().style.color).toBe('var(--color-warning)')
+    expect(indicator()).toHaveAttribute('data-level', 'late')
     await flush(15_000)
     expect(indicator().textContent).toMatch(/^⚠ 3\ds ago$/)
-    expect(indicator().style.color).toBe('var(--color-error)')
-    expect(indicator().style.animation).toContain('stalePulse')
+    expect(indicator()).toHaveAttribute('data-level', 'stale')
     expect(indicator()).toHaveAttribute('title', 'Error: API error 503: Service Unavailable')
   })
 })

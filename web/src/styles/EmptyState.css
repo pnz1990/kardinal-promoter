@@ -1,0 +1,71 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * EmptyState.css — the "No pipelines found" onboarding card (components/EmptyState.tsx).
+ * Tokens only; the spinner stops under reduced motion (theme.css).
+ */
+
+.empty-state { max-inline-size: var(--k-layout-measure); padding: var(--k-space-8) var(--k-space-8); }
+.empty-state__title {
+  margin-block-end: var(--k-space-2);
+  color: var(--k-ink);
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-xl);
+  font-weight: var(--k-weight-bold);
+}
+.empty-state__lead {
+  margin-block-end: var(--k-space-6);
+  color: var(--k-ink-2);
+  font-size: var(--k-text-md);
+  line-height: var(--k-leading-lg);
+}
+.empty-state__term { color: var(--k-ink); }
+.empty-state__link { color: var(--k-ink); text-decoration: underline var(--k-border-hairline) var(--k-thread-text); text-underline-offset: 0.2em; }
+.empty-state__step { margin-block-end: var(--k-space-4); }
+.empty-state__step--last { margin-block-end: var(--k-space-6); }
+.empty-state__step-label {
+  margin-block-end: var(--k-space-1_5);
+  color: var(--k-ink-2);
+  font-size: var(--k-text-xs);
+  font-weight: var(--k-weight-semibold);
+}
+.empty-state__command {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-2);
+  padding: var(--k-space-2) var(--k-space-3);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-3);
+  background: var(--k-surface-canvas);
+}
+.empty-state__code {
+  flex: 1;
+  color: var(--k-ink-2);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-xs);
+  line-height: var(--k-leading-lg);
+  word-break: break-all;
+}
+.empty-state__inline-code { color: var(--k-syntax-ident); font-family: var(--k-font-mono); }
+.empty-state__output {
+  margin: 0;
+  padding: var(--k-space-2) var(--k-space-3);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-3);
+  background: var(--k-surface-canvas);
+  color: var(--k-ink-2);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-xs);
+  line-height: var(--k-leading-lg);
+  overflow: auto;
+}
+.empty-state__watching {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-1_5);
+  color: var(--k-ink-3);
+  font-size: var(--k-text-xs);
+}
+.empty-state__spinner { display: inline-block; animation: empty-state-spin 2s linear infinite; }
+@keyframes empty-state-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }

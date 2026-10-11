@@ -4,7 +4,9 @@ Generate shell completion scripts
 
 ### Synopsis
 
-Generate shell completion scripts for kardinal.
+Print the completion script of kardinal for bash, zsh, fish or powershell.
+Load it in the current shell, or install it permanently (examples below).
+The bash script needs the bash-completion package.
 
 The bash script needs the bash-completion package (it calls
 _get_comp_words_by_ref); install it with your OS package manager first.
@@ -40,9 +42,24 @@ To install completions permanently:
   # PowerShell
   kardinal completion powershell >> $PROFILE
 
-
 ```
 kardinal completion [bash|zsh|fish|powershell]
+```
+
+### Examples
+
+```
+  # load in the current shell
+  source <(kardinal completion bash)
+  source <(kardinal completion zsh)
+  kardinal completion fish | source
+  kardinal completion powershell | Out-String | Invoke-Expression
+
+  # install
+  kardinal completion bash > /etc/bash_completion.d/kardinal
+  kardinal completion zsh > "${fpath[1]}/_kardinal"
+  kardinal completion fish > ~/.config/fish/completions/kardinal.fish
+  kardinal completion powershell >> $PROFILE
 ```
 
 ### Options

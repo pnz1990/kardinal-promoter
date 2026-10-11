@@ -33,7 +33,7 @@ test.describe('Journey 008 — Loading state clears (#522 regression guard)', ()
     await page.getByText('kardinal-test-app').first().click()
 
     // DAG should render within 3s
-    await expect(page.locator('svg')).toBeVisible({ timeout: 3000 })
+    await expect(page.locator('svg.dag-view__svg')).toBeVisible({ timeout: 3000 })
     // Loading indicator should clear
     await expect(page.getByText('Loading...')).not.toBeVisible({ timeout: 5000 })
   })

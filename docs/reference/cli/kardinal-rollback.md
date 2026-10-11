@@ -4,50 +4,33 @@ Roll back a pipeline environment to a previous Bundle
 
 ### Synopsis
 
-Roll back a pipeline environment to a previous Bundle.
-
-Without --to, the target is the most recent Bundle, other than the one deployed
-now, that was Verified in the environment and deploys different artifacts. A
-Bundle that an earlier rollback in the environment rolled back from is skipped.
-With --to, the named Bundle must belong to the pipeline, carry images or a
-config commit, differ from what is deployed now, and have been Verified in the
-environment.
-
-Creates a new Bundle that copies the target's images and config ref, sets
-spec.provenance.rollbackOf to the target and intent.targetEnvironment to the
-environment. An image the deployed Bundle changed and the target does not name
-gets the version from the newest earlier Bundle Verified in the environment;
-when there is none, the rollback is refused and names the image. The rollback
-goes through the same PolicyGates and PR flow as any Bundle, and through every
-environment upstream of the target first.
-
-Config and mixed Bundles get back their config commit the same way. Without
---to, a mixed Bundle goes back to the newest earlier images and config commit,
-whichever Bundles deployed them. An image or config Bundle goes back to the
-newest earlier images or config commit, also when a mixed Bundle deployed them,
-and only those: the rest stays as deployed. --to a Bundle whose type cannot
-deploy what the deployed Bundle changed is refused.
-
-With --hold (and --reason), the environment stays on the rollback: no other
-Bundle promotes into it until kardinal release-hold <pipeline> --env <env>
-(or --hold-expires-in has passed). The rollback is never superseded, and it
-passes the PolicyGates of that environment that would block it while the
-controller verifies it restores what was Verified there, each pass shown as
-EXEMPT with who held the environment and why, recorded as a GateEvaluated
-AuditEvent and a GateExempted Warning Event. Holding needs update on
-pipelines/hold. See docs/rollback.md.
+Roll back <env> to the last Bundle Verified there that deploys something else
+(or --to a named Bundle), as a new Bundle that goes through the gates, the PR
+flow and every upstream environment first. With --hold and --reason, <env>
+stays on the rollback until kardinal release-hold (or --hold-expires-in); its
+blocking gates pass as audited exemptions meanwhile. See docs/rollback.md.
 
 ```
-kardinal rollback <pipeline> [flags]
+kardinal rollback <pipeline> <env> [flags]
+```
+
+### Examples
+
+```
+  # roll prod back to the previous verified version
+  kardinal rollback my-app prod
+
+  # roll back to a named Bundle and keep prod there for a day
+  kardinal rollback my-app prod --to my-app-v1-4 --hold --reason "incident 4521" --hold-expires-in 1d
 ```
 
 ### Options
 
 ```
-      --env string                 Target environment to roll back (required)
+  -e, --env string                 Environment to roll back (or give it after the pipeline)
   -h, --help                       help for rollback
       --hold                       Keep the environment on the rollback until kardinal release-hold; the rollback passes blocking gates, each pass audited
-      --hold-expires-in duration   End the hold this long after it is made (e.g. 24h); default: until kardinal release-hold
+      --hold-expires-in duration   End the hold this long after it is made (30m, 24h, 2d); default: until kardinal release-hold
       --reason string              Why the environment is held (required with --hold)
       --to string                  Specific Bundle name to roll back to
 ```
