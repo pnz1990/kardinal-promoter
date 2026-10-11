@@ -69,7 +69,7 @@ func userKubeconfig(t *testing.T, e *framework.Env, ns, user string, groups ...s
 //
 // It runs in both Graph shapes.
 //
-// Covers GATE-APPROVAL-01, GATE-APPROVAL-02, GATE-APPROVAL-03, CLI-APPROVE-01, GRAPH-COMPACT-05.
+// Covers GATE-APPROVAL-01, GATE-APPROVAL-02, GATE-APPROVAL-03, CLI-APPROVE-01, GRAPH-COMPACT-05, CLI-VERBS-03.
 func TestGate_ApprovalQuorum(t *testing.T) {
 	t.Parallel()
 	for _, shape := range []string{"nodes", "compact"} {
@@ -158,9 +158,13 @@ func approvalQuorum(t *testing.T, shape string) {
 	require.Equal(t, 0, r.Code, r.Output())
 	e.WaitGateReady(t, a.ns, bundle, "prod", "two-approvers", false, "rejected by bob@example.com (wait for the DB migration)", gateTimeout)
 
-	// bob changes his mind: the second allowed approval opens the gate.
-	r = as(bob, "approve", bundle, "--env", "prod")
+	// bob changes his mind: the second allowed approval opens the gate. He
+	// names the pipeline and the environment; approve finds the Bundle
+	// waiting there.
+	r = as(bob, "approve", pipelineName, "prod")
 	require.Equal(t, 0, r.Code, r.Output())
+	assert.Contains(t, r.Stderr, "Approving "+bundle+", the version waiting for prod")
+	assert.Contains(t, r.Stdout, "Recorded: bob@example.com approves "+bundle+" for prod")
 	e.WaitGateReady(t, a.ns, bundle, "prod", "two-approvers", true, "approved by alice@example.com, bob@example.com (2 of 2)", gateTimeout)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V2)
