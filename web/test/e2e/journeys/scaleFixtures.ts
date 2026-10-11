@@ -32,6 +32,8 @@ interface Fixture {
 
 function build(name: string, ns: string, topo: Env[], states: Record<string, string>, opts: {
   version: string; previous: string; gates?: Array<{ env: string; gate: string; state: string; holding?: boolean; expression: string; reason?: string }>
+  /** Older versions before the previous one (the Matrix's rows), Verified everywhere. */
+  older?: number
 }): Fixture {
   const bundle = `${name}-7`
   const prev = `${name}-6`
@@ -83,9 +85,14 @@ function build(name: string, ns: string, topo: Env[], states: Record<string, str
     },
     bundles: [
       { name: bundle, namespace: ns, phase: 'Promoting', type: 'image', pipeline: name, createdAt: ago(50),
-        images: [{ repository: `ghcr.io/acme/${name}`, tag: opts.version }], provenance: { author: 'dana', commitSHA: 'a1b2c3d4e5f6' } },
+        images: [{ repository: `ghcr.io/acme/${name}`, tag: opts.version }], provenance: { author: 'dana', commitSHA: 'a1b2c3d4e5f6' },
+        environments: envs.filter(e => states[e]).map(e => ({ name: e, phase: states[e] })) },
       { name: prev, namespace: ns, phase: 'Superseded', type: 'image', pipeline: name, createdAt: ago(60 * 27),
-        images: [{ repository: `ghcr.io/acme/${name}`, tag: opts.previous }] },
+        images: [{ repository: `ghcr.io/acme/${name}`, tag: opts.previous }], environments: envs.map(e => ({ name: e, phase: 'Verified' })) },
+      ...Array.from({ length: opts.older ?? 0 }, (_, i) => ({
+        name: `${name}-old-${pad(i + 1, 3)}`, namespace: ns, phase: 'Superseded', type: 'image', pipeline: name, createdAt: ago(60 * (28 + i)),
+        images: [{ repository: `ghcr.io/acme/${name}`, tag: `0.${i}` }], environments: envs.map(e => ({ name: e, phase: 'Verified' })),
+      })),
     ],
     graph: { nodes, edges },
     previousGraph: {
@@ -146,7 +153,8 @@ export function large300(): Fixture {
     else if (i < 115) states[e] = 'Failed'
     else if (i < 123) states[e] = 'Promoting'
   })
-  return build('large-300', 'scale', topo, states, { version: '2.1.0', previous: '2.0.9' })
+  // 200 versions in all, for the Matrix.
+  return build('large-300', 'scale', topo, states, { version: '2.1.0', previous: '2.0.9', older: 198 })
 }
 
 /** serveScale routes the scale fixtures in front of the mock server. */
