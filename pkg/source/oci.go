@@ -28,6 +28,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+
 	"golang.org/x/mod/semver"
 )
 
@@ -455,8 +457,9 @@ func (s *registrySession) do(ctx context.Context, method string, u *url.URL, acc
 			req.SetBasicAuth(s.auth.username, s.auth.password)
 		}
 		resp, err := s.client.Do(req)
+		err = scm.RedactErr(err) // a *url.Error quotes the URL
 		if err != nil {
-			return nil, fmt.Errorf("HTTP %s %s: %w", method, u.Redacted(), err)
+			return nil, fmt.Errorf("HTTP %s %s: %w", method, scm.RedactURL(u.String()), err)
 		}
 		if resp.StatusCode == http.StatusUnauthorized && !s.challenged {
 			challenge := resp.Header.Get("WWW-Authenticate")
@@ -572,6 +575,7 @@ func (s *registrySession) fetchToken(ctx context.Context, params map[string]stri
 	}
 	req.Header.Set("User-Agent", userAgent)
 	resp, err := s.client.Do(req)
+	err = scm.RedactErr(err) // a *url.Error quotes the URL
 	if err != nil {
 		return fmt.Errorf("%s to %s: %w", kind, realm.Host, err)
 	}
