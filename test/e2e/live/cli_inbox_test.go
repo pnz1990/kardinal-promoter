@@ -65,7 +65,8 @@ func TestCLI_Inbox(t *testing.T) {
 	})
 	out := c.Must(mine.ns, "inbox")
 	assert.True(t, strings.HasPrefix(out, "Waiting on you (1):\n"), out)
-	assert.Regexp(t, `\n  podinfo +prod +`+fixtures.V2+` \(`+bm+`\) +approval at cab · 0 of 1 +kardinal approve podinfo prod\n`, out)
+	// The commands name the namespace: it is not the kubeconfig's.
+	assert.Regexp(t, `\n  podinfo +prod +`+fixtures.V2+` \(`+bm+`\) +approval at cab · 0 of 1 +kardinal approve podinfo prod -n `+mine.ns+`\n`, out)
 	out = c.Must(theirs.ns, "inbox")
 	assert.True(t, strings.HasPrefix(out, "Waiting on someone else (1):\n"), out)
 	assert.Regexp(t, `\n  podinfo +prod +`+fixtures.V2+` \(`+bt+`\) +approval at cab · 0 of 1 +carol\n`, out)
@@ -79,6 +80,17 @@ func TestCLI_Inbox(t *testing.T) {
 		out := c.Must(mine.ns, "inbox")
 		return !strings.Contains(out, "approval at cab"), out
 	})
+
+	// A hold and a pause the caller may release are on them.
+	c.Must(mine.ns, "hold", pipelineName, "test", "--reason", "e2e freeze")
+	out = c.Must(mine.ns, "inbox")
+	assert.Regexp(t, `\n  podinfo +test +.* held on .* \(e2e freeze\) +kardinal unhold podinfo test -n `+mine.ns+`\n`, out)
+	c.Must(mine.ns, "unhold", pipelineName, "test")
+	c.Must(theirs.ns, "pause", pipelineName)
+	out = c.Must(theirs.ns, "inbox")
+	assert.Contains(t, out, "the pipeline is paused")
+	assert.Contains(t, out, "kardinal resume podinfo -n "+theirs.ns)
+	c.Must(theirs.ns, "resume", pipelineName)
 }
 
 // inboxView is kardinal inbox -o json.

@@ -23,6 +23,12 @@ import (
 
 	"github.com/spf13/cobra"
 	authorizationv1 "k8s.io/api/authorization/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/clientcmd"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -56,7 +62,7 @@ command that does it; then what waits on someone else, and who.`,
 			return inboxFn(contextOf(cmd), cmd.OutOrStdout(), c, ns)
 		},
 	}
-	cmd.Flags().BoolVarP(&all, "all-namespaces", "A", false, "Every namespace")
+	cmd.Flags().BoolVarP(&all, "all-namespaces", "A", false, "Every namespace you may read")
 	return cmd
 }
 
@@ -71,14 +77,17 @@ type inboxItem struct {
 	Kind string `json:"kind"`
 	// Waiting says what for, as a person reads it.
 	Waiting string `json:"waiting"`
-	// OnYou is true when you can move it on (the allow-lists and your
-	// Kubernetes rights say so).
+	// OnYou is true when you can move it on (the server's approval tally and
+	// your Kubernetes rights say so).
 	OnYou bool `json:"onYou"`
-	// Who may move it on, when it is not you (allowed users and groups, the
-	// PR's reviewers).
+	// Who may move it on, when it is not you.
 	Who []string `json:"who,omitempty"`
-	// Next is the command (or, for a PR, the URL) that moves it on.
+	// Next is the command (or, for a PR, its URL) that moves it on.
 	Next string `json:"next"`
+	// Reason is the server's word for why no one can move it on, when so.
+	Reason string `json:"reason,omitempty"`
+	// NeedsReason is true when Next also needs --reason <why>.
+	NeedsReason bool `json:"needsReason,omitempty"`
 	// Since is when the environment entered its state, when known.
 	Since *time.Time `json:"since,omitempty"`
 }
@@ -87,13 +96,17 @@ type inboxItem struct {
 type inboxOutput struct {
 	OnYou  []inboxItem `json:"onYou"`
 	Others []inboxItem `json:"others"`
+	// Skipped are the namespaces (or "namespace kind") inbox could not read.
+	Skipped []string `json:"skipped,omitempty"`
 }
 
-// canI reports whether the caller may verb resource in ns, from a
-// SelfSubjectAccessReview; a test replaces it. An error is "no".
-var canI = func(ctx context.Context, c sigs_client.Client, verb, resource, ns string) bool {
+// canI reports whether the caller may verb resource (with its
+// subresource, when given) in ns, from a SelfSubjectAccessReview; a test
+// replaces it. An error is "no".
+var canI = func(ctx context.Context, c sigs_client.Client, verb, resource, subresource, ns string) bool {
 	r := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{
-		ResourceAttributes: &authorizationv1.ResourceAttributes{Group: v1alpha1.GroupVersion.Group, Resource: resource, Verb: verb, Namespace: ns},
+		ResourceAttributes: &authorizationv1.ResourceAttributes{Group: v1alpha1.GroupVersion.Group, Resource: resource,
+			Subresource: subresource, Verb: verb, Namespace: ns},
 	}}
 	if err := c.Create(ctx, r); err != nil {
 		return false
@@ -101,13 +114,46 @@ var canI = func(ctx context.Context, c sigs_client.Client, verb, resource, ns st
 	return r.Status.Allowed
 }
 
+// contextNamespace is the kubeconfig context's namespace (default without
+// one), which a command runs in without -n; a test replaces it.
+var contextNamespace = func() string {
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if globalKubeconfig != "" {
+		rules.ExplicitPath = globalKubeconfig
+	}
+	overrides := &clientcmd.ConfigOverrides{}
+	if globalContext != "" {
+		overrides.CurrentContext = globalContext
+	}
+	ns, _, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides).Namespace()
+	if err != nil || ns == "" {
+		return "default"
+	}
+	return ns
+}
+
+// inboxRights are what each kind of item needs the caller to be allowed, as
+// the API server and the chart's admission policies check them.
+var inboxRights = map[string][][3]string{
+	"approval": {{"create", "approvals", ""}},
+	"gate":     {{"patch", "policygates", ""}, {"update", "policygates", "override"}},
+	"hold":     {{"update", "pipelines", ""}, {"update", "pipelines", "hold"}},
+	"paused":   {{"patch", "pipelines", ""}, {"update", "pipelines", "pause"}},
+}
+
 // inboxFn writes what waits for a person in ns ("" for every namespace).
 func inboxFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) error {
-	items, err := inboxItems(ctx, c, ns)
+	var me *lifecycle.ApproverIdentity
+	if id, err := identityOf(ctx, c); err == nil {
+		me = &lifecycle.ApproverIdentity{User: id.Username, Groups: id.Groups}
+	} else {
+		_, _ = fmt.Fprintf(errOut, "%s could not tell who you are (%v): approvals are listed under someone else\n", sty.Warning("note:"), HumanError(err))
+	}
+	items, skipped, err := inboxItems(ctx, c, ns, me)
 	if err != nil {
 		return err
 	}
-	out := inboxOutput{OnYou: []inboxItem{}, Others: []inboxItem{}}
+	out := inboxOutput{OnYou: []inboxItem{}, Others: []inboxItem{}, Skipped: skipped}
 	for _, it := range items {
 		if it.OnYou {
 			it.Who = nil
@@ -115,6 +161,9 @@ func inboxFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) 
 		} else {
 			out.Others = append(out.Others, it)
 		}
+	}
+	if len(skipped) > 0 {
+		_, _ = fmt.Fprintf(errOut, "%s skipped what you may not read: %s\n", sty.Warning("note:"), strings.Join(skipped, ", "))
 	}
 	if structured() {
 		return writeStructured(w, out)
@@ -131,19 +180,21 @@ func inboxFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) 
 			return err
 		}
 		tw := style.NewTable(w, 3)
-		header := "  PIPELINE\tENV\tVERSION\tWAITING FOR\t" + nextHeader
-		_, _ = fmt.Fprintln(tw, header)
+		_, _ = fmt.Fprintln(tw, "  PIPELINE\tENV\tVERSION\tWAITING FOR\t"+nextHeader)
 		for _, it := range list {
 			name := it.Pipeline
 			if ns == "" {
 				name = it.Namespace + "/" + it.Pipeline
 			}
 			next := it.Next
+			if it.NeedsReason {
+				next += " --reason <why>"
+			}
 			if !it.OnYou {
 				next = strings.Join(it.Who, ", ")
 			}
 			_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\n", name, orDash(it.Environment),
-				orDash(versionLabel(it.Version, it.Bundle)), it.Waiting, next)
+				orDash(versionLabel(it.Version, it.Bundle)), it.Waiting, orDash(next))
 		}
 		return tw.Flush()
 	}
@@ -156,114 +207,247 @@ func inboxFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) 
 	return section("Waiting on someone else", out.Others, "WHO")
 }
 
-// inboxItems is what waits for a person in ns ("" for every namespace), in
-// namespace, pipeline and promotion order.
-func inboxItems(ctx context.Context, c sigs_client.Client, ns string) ([]inboxItem, error) {
+// inboxNamespaces are the namespaces inbox reads for ns: ns itself, or for
+// "" (every namespace) "" when a cluster-wide List of Pipelines is allowed,
+// else the namespaces of the cluster (each read on its own).
+func inboxNamespaces(ctx context.Context, c sigs_client.Client, ns string) ([]string, error) {
+	if ns != "" {
+		return []string{ns}, nil
+	}
+	var probe v1alpha1.PipelineList
+	err := c.List(ctx, &probe, sigs_client.Limit(1))
+	switch {
+	case err == nil:
+		return []string{""}, nil
+	case !apierrors.IsForbidden(err):
+		return nil, fmt.Errorf("list pipelines: %w", HumanError(err))
+	}
+	var nsl corev1.NamespaceList
+	if err := c.List(ctx, &nsl); err != nil {
+		return nil, fmt.Errorf("you may not list Pipelines in every namespace, nor list the namespaces to read them one by one: "+
+			"run kardinal inbox -n <namespace>: %w", HumanError(err))
+	}
+	out := make([]string, 0, len(nsl.Items))
+	for _, n := range nsl.Items {
+		out = append(out, n.Name)
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+// inboxItems is what waits for a person in ns ("" for every namespace),
+// oldest first (by Since; unknown last), and what could not be read.
+func inboxItems(ctx context.Context, c sigs_client.Client, ns string, me *lifecycle.ApproverIdentity) ([]inboxItem, []string, error) {
+	namespaces, err := inboxNamespaces(ctx, c, ns)
+	if err != nil {
+		return nil, nil, err
+	}
+	r := &inboxReader{ctx: ctx, c: c, me: me, here: contextNamespace(), rights: map[string]bool{}, bundles: map[string]*v1alpha1.Bundle{}}
+	var items []inboxItem
+	var skipped []string
+	for _, n := range namespaces {
+		got, skip, err := r.namespace(n, ns == "" && len(namespaces) > 1)
+		if err != nil {
+			return nil, nil, err
+		}
+		items = append(items, got...)
+		skipped = append(skipped, skip...)
+	}
+	slices.SortStableFunc(items, func(a, b inboxItem) int {
+		switch {
+		case a.Since == nil && b.Since == nil:
+			return 0
+		case a.Since == nil:
+			return 1
+		case b.Since == nil:
+			return -1
+		}
+		return a.Since.Compare(*b.Since)
+	})
+	return items, skipped, nil
+}
+
+// inboxReader reads one inbox: the caller, what they may do and the Bundles
+// it needed, each asked once.
+type inboxReader struct {
+	ctx     context.Context
+	c       sigs_client.Client
+	me      *lifecycle.ApproverIdentity
+	here    string
+	rights  map[string]bool
+	bundles map[string]*v1alpha1.Bundle
+}
+
+// may reports whether the caller holds every right kind needs in ns.
+func (r *inboxReader) may(kind, ns string) bool {
+	key := kind + "/" + ns
+	if v, ok := r.rights[key]; ok {
+		return v
+	}
+	ok := true
+	for _, right := range inboxRights[kind] {
+		ok = ok && canI(r.ctx, r.c, right[0], right[1], right[2], ns)
+	}
+	r.rights[key] = ok
+	return ok
+}
+
+// bundle is Bundle name of ns, or nil when it cannot be read.
+func (r *inboxReader) bundle(ns, name string) *v1alpha1.Bundle {
+	key := ns + "/" + name
+	if b, ok := r.bundles[key]; ok {
+		return b
+	}
+	var b v1alpha1.Bundle
+	var got *v1alpha1.Bundle
+	if err := r.c.Get(r.ctx, types.NamespacedName{Namespace: ns, Name: name}, &b); err == nil {
+		got = &b
+	}
+	r.bundles[key] = got
+	return got
+}
+
+// nsFlag is " -n <ns>" when a command for ns must name it: ns is not the
+// kubeconfig context's namespace.
+func (r *inboxReader) nsFlag(ns string) string {
+	if ns != r.here {
+		return " -n " + ns
+	}
+	return ""
+}
+
+// namespace is what waits in ns ("" for a cluster-wide read). forbiddenOK
+// skips a namespace whose Pipelines may not be read, instead of failing.
+func (r *inboxReader) namespace(ns string, forbiddenOK bool) ([]inboxItem, []string, error) {
 	var opts []sigs_client.ListOption
 	if ns != "" {
 		opts = append(opts, sigs_client.InNamespace(ns))
 	}
 	var pipelines v1alpha1.PipelineList
-	if err := c.List(ctx, &pipelines, opts...); err != nil {
-		return nil, fmt.Errorf("list pipelines: %w", HumanError(err))
-	}
-	var bundles v1alpha1.BundleList
-	var steps v1alpha1.PromotionStepList
-	var gates v1alpha1.PolicyGateList
-	if err := c.List(ctx, &bundles, opts...); err != nil {
-		return nil, fmt.Errorf("list bundles: %w", HumanError(err))
-	}
-	if err := c.List(ctx, &steps, opts...); err != nil {
-		return nil, fmt.Errorf("list promotion steps: %w", HumanError(err))
-	}
-	if err := c.List(ctx, &gates, opts...); err != nil {
-		return nil, fmt.Errorf("list policy gates: %w", HumanError(err))
-	}
-	var me *Identity
-	if id, err := identityOf(ctx, c); err == nil {
-		me = &id
-	}
-	byName := map[string]*v1alpha1.Bundle{}
-	for i := range bundles.Items {
-		b := &bundles.Items[i]
-		byName[b.Namespace+"/"+b.Name] = b
-	}
-	// Rights are asked once per namespace and verb.
-	type right struct{ verb, resource, ns string }
-	rights := map[right]bool{}
-	may := func(verb, resource, ns string) bool {
-		k := right{verb, resource, ns}
-		if v, ok := rights[k]; ok {
-			return v
+	if err := r.c.List(r.ctx, &pipelines, opts...); err != nil {
+		if apierrors.IsForbidden(err) && forbiddenOK {
+			return nil, []string{ns}, nil
 		}
-		rights[k] = canI(ctx, c, verb, resource, ns)
-		return rights[k]
+		return nil, nil, fmt.Errorf("list pipelines: %w", HumanError(err))
 	}
-
+	var skipped []string
+	type envKey struct{ ns, pipeline, env, bundle string }
+	// The gate instances of the versions that wait, by label: not the
+	// history.
+	incoming := map[string][]string{} // namespace → bundles
 	pls := pipelines.Items
-	slices.SortFunc(pls, func(a, b v1alpha1.Pipeline) int {
-		return strings.Compare(a.Namespace+"/"+a.Name, b.Namespace+"/"+b.Name)
-	})
+	envsOf := map[string][]v1alpha1.PipelineEnvironmentStatus{}
+	for i := range pls {
+		p := &pls[i]
+		envs := p.Status.Environments
+		if len(envs) == 0 && !p.Spec.Paused {
+			// A controller that predates status.environments: project them.
+			projected, skip := r.project(p)
+			envs, skipped = projected, append(skipped, skip...)
+		}
+		envsOf[p.Namespace+"/"+p.Name] = envs
+		for _, e := range envs {
+			if b := waitingBundleOf(e); b != "" && len(e.BlockedBy) > 0 && !slices.Contains(incoming[p.Namespace], b) {
+				incoming[p.Namespace] = append(incoming[p.Namespace], b)
+			}
+		}
+	}
+	gates := map[envKey][]v1alpha1.PolicyGate{}
+	for gns, bundles := range incoming {
+		req, err := labels.NewRequirement("kardinal.io/bundle", selection.In, bundles)
+		if err != nil {
+			continue
+		}
+		var list v1alpha1.PolicyGateList
+		if err := r.c.List(r.ctx, &list, sigs_client.InNamespace(gns), sigs_client.MatchingLabelsSelector{Selector: labels.NewSelector().Add(*req)}); err != nil {
+			if apierrors.IsForbidden(err) {
+				skipped = append(skipped, gns+" policygates")
+				continue
+			}
+			return nil, nil, fmt.Errorf("list policy gates: %w", HumanError(err))
+		}
+		for _, g := range list.Items {
+			k := envKey{g.Namespace, g.Labels["kardinal.io/pipeline"], g.Labels["kardinal.io/environment"], g.Labels["kardinal.io/bundle"]}
+			gates[k] = append(gates[k], g)
+		}
+	}
 	var items []inboxItem
 	for i := range pls {
 		p := &pls[i]
 		if p.Spec.Paused {
 			items = append(items, inboxItem{Namespace: p.Namespace, Pipeline: p.Name, Kind: "paused",
-				Waiting: "the pipeline is paused", OnYou: may("update", "pipelines", p.Namespace), Who: []string{"someone who may resume it"},
-				Next: "kardinal resume " + p.Name + inboxNS(p.Namespace, ns)})
+				Waiting: "the pipeline is paused", OnYou: r.may("paused", p.Namespace), Who: []string{"someone who may resume it"},
+				Next: "kardinal resume " + p.Name + r.nsFlag(p.Namespace)})
 			continue
 		}
-		envs := p.Status.Environments
-		if len(envs) == 0 {
-			var own []v1alpha1.PromotionStep
-			for _, s := range steps.Items {
-				if s.Namespace == p.Namespace && s.Spec.PipelineName == p.Name {
-					own = append(own, s)
-				}
-			}
-			var mine []v1alpha1.Bundle
-			for _, b := range bundles.Items {
-				if b.Namespace == p.Namespace && b.Spec.Pipeline == p.Name {
-					mine = append(mine, b)
-				}
-			}
-			envs = pipelinerec.ProjectEnvironments(p, mine, own, gates.Items, nil, time.Time{})
-		}
-		for _, e := range envs {
-			items = append(items, inboxEnvironment(p, e, gates.Items, byName, me, ns, may)...)
+		for _, e := range envsOf[p.Namespace+"/"+p.Name] {
+			items = append(items, r.environment(p, e, gates[envKey{p.Namespace, p.Name, e.Name, waitingBundleOf(e)}])...)
 		}
 	}
-	return items, nil
+	return items, skipped, nil
 }
 
-// inboxNS is " -n <ns>" when the command must name the namespace (inbox -A,
-// or another namespace than the current one), else "".
-func inboxNS(itemNS, listNS string) string {
-	if listNS == "" && itemNS != "" {
-		return " -n " + itemNS
+// project is p's environments from its Bundles, steps and gates, as the
+// controller computes them, for a controller that does not write
+// status.environments; what may not be read is skipped.
+func (r *inboxReader) project(p *v1alpha1.Pipeline) ([]v1alpha1.PipelineEnvironmentStatus, []string) {
+	sel := []sigs_client.ListOption{sigs_client.InNamespace(p.Namespace), sigs_client.MatchingLabels{"kardinal.io/pipeline": p.Name}}
+	var bundles v1alpha1.BundleList
+	var steps v1alpha1.PromotionStepList
+	var gates v1alpha1.PolicyGateList
+	var skipped []string
+	var all v1alpha1.BundleList
+	if err := r.c.List(r.ctx, &all, sigs_client.InNamespace(p.Namespace)); err != nil {
+		return nil, []string{p.Namespace + " bundles"}
+	}
+	for _, b := range all.Items {
+		if b.Spec.Pipeline == p.Name {
+			bundles.Items = append(bundles.Items, b)
+		}
+	}
+	if err := r.c.List(r.ctx, &steps, sel...); err != nil {
+		skipped = append(skipped, p.Namespace+" promotionsteps")
+	}
+	if err := r.c.List(r.ctx, &gates, sel...); err != nil {
+		skipped = append(skipped, p.Namespace+" policygates")
+	}
+	return pipelinerec.ProjectEnvironments(p, bundles.Items, steps.Items, gates.Items, nil, time.Time{}), skipped
+}
+
+// waitingBundleOf is the Bundle environment e waits with: its incoming one,
+// or the one it runs while that is not Verified.
+func waitingBundleOf(e v1alpha1.PipelineEnvironmentStatus) string {
+	if e.IncomingBundle != "" {
+		return e.IncomingBundle
+	}
+	if e.State != "" && e.State != "Verified" {
+		return e.Bundle
 	}
 	return ""
 }
 
-// inboxEnvironment is what environment e of p waits a person for: a hold, an
-// approval, a gate that does not open by itself, or a PR to merge.
-func inboxEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, gates []v1alpha1.PolicyGate,
-	byName map[string]*v1alpha1.Bundle, me *Identity, listNS string, may func(verb, resource, ns string) bool) []inboxItem {
-	incoming, version := e.IncomingBundle, e.IncomingVersion
-	if incoming == "" && e.State != "" && e.State != "Verified" {
-		incoming, version = e.Bundle, e.Version
+// environment is what environment e of p waits a person for: a hold, an
+// approval, a gate that does not open by itself, or a PR to merge. gates are
+// the gate instances of e's waiting Bundle.
+func (r *inboxReader) environment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, gates []v1alpha1.PolicyGate) []inboxItem {
+	bundle, version := waitingBundleOf(e), e.IncomingVersion
+	if e.IncomingBundle == "" {
+		version = e.Version
 	}
 	var since *time.Time
 	if e.Since != nil {
 		t := e.Since.Time
 		since = &t
 	}
-	base := inboxItem{Namespace: p.Namespace, Pipeline: p.Name, Environment: e.Name, Bundle: incoming, Version: version, Since: since}
-	nsFlag := inboxNS(p.Namespace, listNS)
+	base := inboxItem{Namespace: p.Namespace, Pipeline: p.Name, Environment: e.Name, Bundle: bundle, Version: version, Since: since}
+	nsFlag := r.nsFlag(p.Namespace)
 	if h := lifecycle.HoldOf(p, e.Name); h != nil && !h.Expired(time.Now()) {
 		it := base
 		it.Kind = "hold"
-		held := versionLabel(versionOf(bundlesOf(byName, p.Namespace), h.Bundle), h.Bundle)
+		held := h.Bundle
+		if b := r.bundle(p.Namespace, h.Bundle); b != nil {
+			held = versionLabel(createdOf(b).Version, h.Bundle)
+		}
 		it.Waiting = "held on " + held
 		if h.CreatedBy != "" {
 			it.Waiting += " by " + h.CreatedBy
@@ -271,7 +455,7 @@ func inboxEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus
 		if h.Reason != "" {
 			it.Waiting += " (" + h.Reason + ")"
 		}
-		it.OnYou = may("update", "pipelines", p.Namespace)
+		it.OnYou = r.may("hold", p.Namespace)
 		it.Who = []string{"someone who may unhold it"}
 		it.Next = fmt.Sprintf("kardinal unhold %s %s%s", p.Name, e.Name, nsFlag)
 		return []inboxItem{it}
@@ -279,39 +463,52 @@ func inboxEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus
 	var out []inboxItem
 	for i := range gates {
 		g := &gates[i]
-		if g.Namespace != p.Namespace || g.Labels["kardinal.io/pipeline"] != p.Name || g.Labels["kardinal.io/environment"] != e.Name ||
-			g.Labels["kardinal.io/bundle"] != incoming || incoming == "" || g.Status.Ready || g.Status.LastEvaluatedAt == nil ||
-			!slices.Contains(e.BlockedBy, gateDisplayName(*g)) {
+		if g.Status.Ready || g.Status.LastEvaluatedAt == nil || !slices.Contains(e.BlockedBy, gateDisplayName(*g)) {
 			continue
 		}
 		it := base
 		name := gateDisplayName(*g)
-		if a := g.Spec.Approval; a != nil {
-			it.Kind = "approval"
-			approved := 0
-			for _, d := range g.Status.Approvals {
-				if d.Counted && d.Decision == "approve" {
-					approved++
-				}
-			}
-			it.Waiting = fmt.Sprintf("approval at %s · %d of %d", name, approved, max(a.Required, 1))
+		if g.Spec.Approval != nil {
 			creator := ""
-			if b := byName[p.Namespace+"/"+incoming]; b != nil {
+			if b := r.bundle(p.Namespace, bundle); b != nil {
 				creator = b.Annotations[lifecycle.AnnotationCreatedBy]
 			}
-			allowed, who := inboxMayApprove(a, me, creator)
-			it.OnYou = allowed && may("create", "approvals", p.Namespace)
-			it.Who = who
+			st := lifecycle.ApprovalStandingOf(g, creator, r.me)
+			if len(st.RejectedBy) > 0 {
+				continue // rejected: nobody's approval opens it (as the UI)
+			}
+			it.Kind = "approval"
+			it.Waiting = fmt.Sprintf("approval at %s · %d of %d", name, st.Approved, st.Required)
 			it.Next = fmt.Sprintf("kardinal approve %s %s%s", p.Name, e.Name, nsFlag)
+			it.OnYou = st.CanApprove && r.may("approval", p.Namespace)
+			it.Who = st.Who
+			switch {
+			case st.AlreadyCounted:
+				it.Waiting += " (you approved; it needs someone else)"
+			case st.Reason != "" && !st.CanApprove && strings.HasPrefix(st.Reason, "excludeAuthor cannot be enforced"):
+				short := "no verified creator"
+				if creator != "" {
+					short = "created by " + creator
+				}
+				it.Waiting = fmt.Sprintf("approval at %s, which no one can give (excludeAuthor, %s)", name, short)
+				it.Reason = st.Reason
+				it.Who = []string{"no one: ship it again as a person"}
+			case st.Reason == "the version's author (approval.excludeAuthor)":
+				it.Who = append(it.Who, "someone other than you (you created this version)")
+			}
+			if len(it.Who) == 0 {
+				it.Who = []string{"anyone who may create Approvals"}
+			}
 		} else {
 			if rechecks(g) {
 				continue // it opens by itself
 			}
 			it.Kind = "gate"
 			it.Waiting = "gate " + name + ", which does not open by itself"
-			it.OnYou = may("update", "policygates", p.Namespace)
+			it.OnYou = r.may("gate", p.Namespace)
 			it.Who = []string{"someone who may override it"}
-			it.Next = fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>%s", p.Name, e.Name, name, nsFlag)
+			it.Next = fmt.Sprintf("kardinal override %s %s --gate %s%s", p.Name, e.Name, name, nsFlag)
+			it.NeedsReason = true
 		}
 		out = append(out, it)
 	}
@@ -335,35 +532,6 @@ func inboxEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus
 	return nil
 }
 
-// inboxMayApprove reports whether the caller may give approval policy a's
-// approval (in allowedUsers or allowedGroups, or both empty; with
-// excludeAuthor, not the version's creator), and who may otherwise.
-func inboxMayApprove(a *v1alpha1.GateApprovalPolicy, me *Identity, creator string) (bool, []string) {
-	var who []string
-	who = append(who, a.AllowedUsers...)
-	for _, g := range a.AllowedGroups {
-		who = append(who, "group "+g)
-	}
-	if me == nil {
-		return false, who
-	}
-	if a.ExcludeAuthor && creator != "" && creator == me.Username {
-		return false, append(who, "someone other than you (you created this version)")
-	}
-	if len(a.AllowedUsers) == 0 && len(a.AllowedGroups) == 0 {
-		return true, nil
-	}
-	if slices.Contains(a.AllowedUsers, me.Username) {
-		return true, nil
-	}
-	for _, g := range me.Groups {
-		if slices.Contains(a.AllowedGroups, g) {
-			return true, nil
-		}
-	}
-	return false, who
-}
-
 // inboxEnvSpec is environment env of p's spec, or nil.
 func inboxEnvSpec(p *v1alpha1.Pipeline, env string) *v1alpha1.EnvironmentSpec {
 	for i := range p.Spec.Environments {
@@ -374,38 +542,36 @@ func inboxEnvSpec(p *v1alpha1.Pipeline, env string) *v1alpha1.EnvironmentSpec {
 	return nil
 }
 
-// bundlesOf is byName (namespace/name) restricted to ns, keyed by name.
-func bundlesOf(byName map[string]*v1alpha1.Bundle, ns string) map[string]*v1alpha1.Bundle {
-	out := map[string]*v1alpha1.Bundle{}
-	for k, b := range byName {
-		if strings.HasPrefix(k, ns+"/") {
-			out[b.Name] = b
-		}
-	}
-	return out
-}
-
 // inboxReference is the detail of inbox for its reference page.
 const inboxReference = `inbox lists, per environment, what waits for a person, from each Pipeline's
-status.environments, its gate instances and holds:
+status.environments, the gate instances of the versions that wait, and its
+holds:
 
-  approval  an approval gate that has not its quorum (n of m)
+  approval  an approval gate that has not its quorum (n of m) and nobody
+            rejected
   gate      a gate that does not pass and does not open by itself (its
             expression reads nothing that changes with time; see ship)
   hold      a hold (kardinal hold, rollback --hold)
   paused    the pipeline is paused
   pr        its PR waits for a person to merge it (not pr.merge.auto)
 
-"Waiting on you" is what you can move on: an approval when you are in its
-allowedUsers or allowedGroups (or both are empty) and did not create the
-version under excludeAuthor, and you may create approvals; a gate, a hold
-or a pause when your Kubernetes rights let you override, unhold or resume
-(a SelfSubjectAccessReview). Its NEXT column is the command. Everything else
-is "Waiting on someone else", with WHO: the allowed users and groups, or the
-PR's reviewers. A PR is never on you: the CLI cannot tell who may merge.
-Gates that open by themselves (a soak, a schedule) and promotions in flight
-are not listed: nothing is waiting for a person.
+"Waiting on you" is what you can move on, with the command in NEXT: an
+approval your approval would count for, by the same tally the server keeps
+(allowedUsers, allowedGroups, excludeAuthor, one approval per person), when
+you may create Approvals; a gate, a hold or a pause when you hold the rights
+the API server and the chart's admission policies check (patch policygates
+and update policygates/override; update pipelines and pipelines/hold; patch
+pipelines and update pipelines/pause), asked with SelfSubjectAccessReviews.
+Everything else is "Waiting on someone else", with WHO: the allowed users
+and groups, someone other than you when you created the version, or the PR's
+reviewers. An approval excludeAuthor cannot enforce (no verified creator, or
+a kardinal component created the version) is on no one. A PR is never on
+you: the CLI cannot tell who may merge. Gates that open by themselves and
+promotions in flight are not listed. The oldest wait comes first.
 
--A lists every namespace (with -n in the commands). -o json|yaml prints
-{onYou: [...], others: [...]}, each item with namespace, pipeline,
-environment, bundle, version, kind, waiting, onYou, who, next and since.`
+A command carries -n when its namespace is not the kubeconfig context's. -A
+lists every namespace; when you may not list Pipelines cluster-wide, inbox
+reads the namespaces one by one and notes on stderr the ones it may not read.
+-o json|yaml prints {onYou, others, skipped}; each item has namespace,
+pipeline, environment, bundle, version, kind, waiting, onYou, who, next
+(without --reason <why>: needsReason says it needs one) and since.`
