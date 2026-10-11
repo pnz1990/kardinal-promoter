@@ -1,69 +1,142 @@
 # Quickstart
 
-This guide walks you through setting up your first promotion pipeline with kardinal-promoter. By the end, you will have a working pipeline that promotes the `kardinal-test-app` through test, uat, and prod environments using Git pull requests.
+In about 10 minutes, on a local cluster, you ship a version of
+[`kardinal-test-app`](https://github.com/pnz1990/kardinal-test-app) through test, uat and prod,
+watch it stop at an approval gate before prod, and approve it.
 
-## Fast Start — about 10 minutes
+You need:
 
-Install with `demo.enabled=true` and you get a pre-configured
-Pipeline named `demo` in the release namespace. It pushes to the repository in
-`demo.git.url`, which defaults to the
-[`pnz1990/kardinal-demo`](https://github.com/pnz1990/kardinal-demo) reference repository.
-Your token cannot write to that repository, so fork it first and set `demo.git.url` to the fork.
+- Docker, and [kind](https://kind.sigs.k8s.io/) (k3d, minikube or Docker Desktop work too)
+- `kubectl` and `helm`
+- the GitHub CLI `gh`, signed in (`gh auth login`); `kardinal quickstart` uses its token
+<!-- C7: confirm the token sources (GITHUB_TOKEN, then `gh auth token`) and the scopes it needs -->
 
-Before you start, the cluster needs:
-
-- kro with the `GraphKind` feature gate (step 1 below).
-- Argo CD with one Application per environment: `kardinal-test-app-test`, `kardinal-test-app-uat`
-  and `kardinal-test-app-prod` in the `argocd` namespace. The demo Pipeline checks health
-  through them. Create them with the ApplicationSet in
-  [Create Argo CD Applications](first-pipeline.md#create-argo-cd-applications).
+## 1. Install the CLI
 
 ```bash
-# 0. Fork the demo GitOps repo (your GITHUB_PAT needs write access to the fork)
-gh repo fork pnz1990/kardinal-demo --clone=false
-DEMO_REPO=https://github.com/<your-user>/kardinal-demo
-
-# 1. Install kro (from a kardinal-promoter checkout)
-bash hack/install-kro.sh
-
-# 2. Store the token in a Secret, then install with demo mode
-kubectl create namespace kardinal-system
-kubectl create secret generic github-token \
-  --namespace kardinal-system \
-  --from-literal=token=$GITHUB_PAT
-
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
-  --namespace kardinal-system \
-  --set demo.enabled=true \
-  --set demo.git.url=$DEMO_REPO \
-  --set github.secretRef.name=github-token
-
-# 3. Check the demo Pipeline (it lives in the release namespace)
-kardinal get pipelines -n kardinal-system
-# PIPELINE   BUNDLE   TEST   UAT   PROD   SUB   AGE
-# demo       -        -      -     -      0     10s
-
-# 4. Trigger the first promotion. The kardinal-demo overlays already run
-#    sha-9349a3f, so a Bundle with only that tag changes nothing; the digest
-#    makes it a real change (see "Create your first Bundle" below).
-kardinal create bundle demo -n kardinal-system \
-  --image ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
+curl -Lo kardinal "https://github.com/pnz1990/kardinal-promoter/releases/latest/download/kardinal-${OS}-${ARCH}"
+chmod +x kardinal && sudo mv kardinal /usr/local/bin/
 ```
 
-The demo Pipeline uses your fork of the `kardinal-demo` GitOps repo (it already has the
-correct Kustomize layout). Test and uat environments promote automatically; prod opens a PR for review.
+## 2. Create a cluster and fork the demo repository
 
-!!! note "Estimated time: about 10 minutes on a fresh kind cluster"
-    Prerequisites: kind cluster, `helm`, `kubectl`, the `kardinal` CLI
-    ([Install the CLI](installation.md#3-install-the-cli)), Argo CD, and a GitHub PAT
-    with write access to the repository in `demo.git.url`. Point the ApplicationSet
-    `repoURL` in [Create Argo CD Applications](first-pipeline.md#create-argo-cd-applications) at the same fork.
+```bash
+kind create cluster --name kardinal
+gh repo fork pnz1990/kardinal-demo --clone=false
+```
 
----
+[`kardinal-demo`](https://github.com/pnz1990/kardinal-demo) is the GitOps repository kardinal
+writes to, with one directory per environment. Your fork receives its commits and pull requests.
+
+## 3. Run the quickstart
+
+```bash
+kardinal quickstart --repo github.com/<your-user>/kardinal-demo
+```
+
+It runs only against a local cluster and refuses any other kubectl context. It installs kro,
+Argo CD and kardinal, stores your token in one Secret, creates the `demo` Pipeline with an
+approval gate on prod, and ships the first version.
+<!-- C7: the exact list of what it installs and creates, its flags (--no-argocd, …) and the context check -->
+
+```text
+<C7: quickstart output, ending with the UI, watch and next-step lines>
+```
+
+The first version goes to test and uat on its own, then waits at prod's approval gate. Follow
+it with:
+
+```bash
+kardinal status demo -w
+```
+
+<!-- C7: namespace. If the demo Pipeline lives in kardinal-system, every command below needs
+     -n kardinal-system unless quickstart sets the context's namespace. -->
+
+## 4. Open the UI
+
+```bash
+<C7: the command quickstart prints for the UI, e.g. a port-forward and kardinal dashboard>
+```
+
+The UI opens on the fleet. Open `demo`: the map shows test, uat and prod, and the version on its
+way through them. Select prod to see why it is waiting.
+
+## 5. Ship a version
+
+```bash
+kardinal ship demo --image <C7: the second kardinal-test-app image quickstart suggests> --wait
+```
+
+`ship` creates a version and, with `--wait`, follows it, printing each environment's new state.
+The new version supersedes the first one, which has not reached prod.
+
+## 6. Watch it stop at the gate
+
+Test and uat are verified within a minute or two. Prod has an approval gate, so the version
+stops there and `ship` ends:
+
+```text
+<C7: ship --wait output ending at the gate>
+```
+
+```bash
+echo $?
+# 3
+```
+
+Exit code 3 means the version is held until a person acts: here, an approval. A CI job can act
+on the code; [Wait for the outcome in CI](ci-integration.md#wait-for-the-outcome-in-ci) lists
+them all.
+
+Ask why it is waiting:
+
+```bash
+kardinal why demo prod
+```
+
+```text
+<C7/#1736: why output for the demo's approval gate>
+```
+
+The last line is the command that gets past the gate. In the UI, prod's details show the same
+gate under "Why it's waiting", with an **Approve** button.
+
+## 7. Approve
+
+```bash
+kardinal approve demo prod
+```
+
+```text
+<#1736: the confirmation prompt and its answer>
+```
+
+The gate passes and prod promotes.
+<!-- C7: prod's approval mode in the demo. With pr-review, prod opens a PR in your fork and
+     this step ends with merging it; with auto, it goes live after the approval. -->
+
+```bash
+kardinal status demo
+```
+
+```text
+<C7: status with prod Verified>
+```
+
+## Clean up
+
+```bash
+kind delete cluster --name kardinal
+```
+
+Your fork keeps the commits and pull requests; delete it on GitHub when you are done.
 
 ## Next steps
 
 - [Your first pipeline](first-pipeline.md): set it up against your own GitOps repository
-- [Core Concepts](concepts.md): deeper dive into Bundles, Pipelines, PolicyGates, and health adapters
-- [Multi-Cluster Fleet Example](https://github.com/pnz1990/kardinal-promoter/tree/main/examples/multi-cluster-fleet): parallel prod regions with Argo Rollouts canary
-- [Architecture](architecture.md): how the controller works
+- [Concepts](concepts.md): versions, pipelines, environments and gates
+- [Require approvals](approvals.md): who may approve, how many, and from the CLI or the UI
+- [Add to CI](ci-integration.md#wait-for-the-outcome-in-ci): ship from your build and act on the exit code
