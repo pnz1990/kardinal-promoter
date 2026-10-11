@@ -27,3 +27,9 @@ func stubIdentity(t testing.TB, id Identity) {
 	}
 	t.Cleanup(func() { identityOf = old })
 }
+
+// KeepStyle is keepStyle, for the cmd_test package.
+func KeepStyle(t testing.TB) {
+	t.Helper()
+	keepStyle(t)
+}

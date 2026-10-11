@@ -32,6 +32,7 @@ kardinal delete bundle <name|version> [flags]
 
 ```
   -h, --help              help for bundle
+      --name string       The Bundle of this name, never a version (when a name is also another Bundle's version)
       --pipeline string   Look for a version given as <name> in this pipeline only
       --yes               Do not ask for confirmation on a terminal
 ```

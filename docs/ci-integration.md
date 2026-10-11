@@ -219,6 +219,24 @@ kardinal ship my-app --image "ghcr.io/myorg/my-app:${GITHUB_SHA}" --wait --timeo
 The codes are stable: a new outcome gets a new code. A stop at a gate, a hold or a pull request
 counts once two reads agree, and a gate that has not been evaluated yet never stops the wait.
 
+On stderr it prints each new state with the time since the start, the URL of each PR it opens,
+and a summary at the end; stdout is the last line only:
+
+```
+Shipped 1.5.0 as my-app-x7k2p; following it (Ctrl-C stops following, the promotion goes on)
+      +0s  test: Promoting
+    +1m5s  test: Live
+    +1m5s  prod: Promoting
+    +2m0s  prod: Waiting for PR merge
+    +2m0s  prod: PR https://github.com/myorg/gitops/pull/42
+Summary after 2m4s:
+  test   Live                   took 1m5s
+  prod   Waiting for PR merge   for 4s
+Version 1.5.0 (my-app-x7k2p) waits for its PR to be merged in prod: https://github.com/myorg/gitops/pull/42
+```
+
+`--quiet` (`-q`) prints only that last line (or, with `-o json`, the JSON document).
+
 A gate that does not pass ends the wait with exit `3` only when it needs a person. A gate that
 opens by itself keeps the job waiting, until `--timeout`: one whose expression, outside its string
 literals, reads one of these [PolicyGate variables](policy-gates.md) that change with time, with a

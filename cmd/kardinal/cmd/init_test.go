@@ -99,6 +99,7 @@ func runInitCmd(t *testing.T, dir, stdin string, args ...string) (string, string
 //
 // Covers CLI-INIT-02.
 func TestInitCmd_Flags(t *testing.T) {
+	keepStyle(t)
 	want, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", "minimal", "pipeline.yaml"))
 	require.NoError(t, err)
 	dir := t.TempDir()
@@ -145,6 +146,7 @@ func TestInitCmd_Flags(t *testing.T) {
 //
 // Covers CLI-INIT-02.
 func TestInitCmd_NoInjection(t *testing.T) {
+	keepStyle(t)
 	cases := []struct {
 		name string
 		args []string
@@ -220,6 +222,7 @@ func TestInitFn_NoNamespaceDefault(t *testing.T) {
 //
 // Covers CLI-INIT-02.
 func TestInitCmd_DetectSecretApply(t *testing.T) {
+	keepStyle(t)
 	app := &unstructured.Unstructured{}
 	app.SetGroupVersionKind(schema.GroupVersionKind{Group: "argoproj.io", Version: "v1alpha1", Kind: "Application"})
 	app.SetName("web-prod")
@@ -481,6 +484,7 @@ func TestRunInitWizard_Validation(t *testing.T) {
 // C09b-cli-15: --file names the output file, -o is the global format flag,
 // and the Kustomize scaffold is skipped for helm.
 func TestInitCmd_FileFlagAndHelmScaffold(t *testing.T) {
+	keepStyle(t)
 	dir := t.TempDir()
 	t.Chdir(dir)
 	t.Cleanup(func() { globalOutput = "" })
@@ -516,6 +520,7 @@ func TestInitCmd_FileFlagAndHelmScaffold(t *testing.T) {
 // --file creates the directories it names, as in the help's
 // "kardinal init --file deploy/pipeline.yaml".
 func TestInitCmd_FileInNewDirectory(t *testing.T) {
+	keepStyle(t)
 	dir := t.TempDir()
 	t.Chdir(dir)
 	t.Cleanup(func() { globalOutput = "" })
@@ -536,6 +541,7 @@ func TestInitCmd_FileInNewDirectory(t *testing.T) {
 // --stdout replaces the Pipeline file only. --scaffold-gitops and
 // --demo still write the scaffold, and stdout stays the bare YAML.
 func TestInitCmd_StdoutKeepsScaffold(t *testing.T) {
+	keepStyle(t)
 	dir := t.TempDir()
 	t.Chdir(dir)
 	t.Cleanup(func() { globalOutput = "" })
@@ -568,6 +574,7 @@ func TestInitCmd_StdoutKeepsScaffold(t *testing.T) {
 //
 // Covers CLI-INIT-02.
 func TestInitCmd_NamespaceAndSSH(t *testing.T) {
+	keepStyle(t)
 	out, _, err := runInitCmd(t, t.TempDir(), "", "--name", "web", "--repo", "https://github.com/o/r", "-n", "default", "--stdout")
 	require.NoError(t, err)
 	assert.Contains(t, out, "metadata: { name: web, namespace: default }\n")

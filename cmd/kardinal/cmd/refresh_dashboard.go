@@ -14,7 +14,6 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
-	"unicode"
 
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -205,14 +204,16 @@ func withRoute(address, route string) string {
 
 // checkUIAddress is why address is not a UI address kardinal links to or
 // hands to the system's opener (open, xdg-open, rundll32), or nil: it must be
-// an http or https URL with a host, without control characters or spaces.
+// an http or https URL with a host, in printable ASCII (no control or
+// format characters, such as a bidi override, and no spaces), and without
+// userinfo (user:password@, which can make a link look like another host).
 // So it never starts with "-" (an opener's option) and is never a file, an
 // app or a javascript: link.
 func checkUIAddress(address string) error {
-	bad := strings.IndexFunc(address, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }) >= 0
+	bad := strings.IndexFunc(address, func(r rune) bool { return r <= ' ' || r >= 0x7f }) >= 0
 	u, err := url.Parse(address)
-	if bad || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || strings.HasPrefix(address, "-") {
-		return fmt.Errorf("%q is not an http(s) URL with a host: set it to the UI's address, e.g. https://kardinal.example.com/ui/", address)
+	if bad || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || strings.HasPrefix(address, "-") {
+		return fmt.Errorf("%q is not an http(s) URL with a host, in ASCII and without user@: set it to the UI's address, e.g. https://kardinal.example.com/ui/", address)
 	}
 	return nil
 }
@@ -324,8 +325,8 @@ namespace from -n or the kubeconfig context), with <env> that stage's
 drawer (/env/<env>). kardinal why and kardinal status <pipeline> print the
 same link on stderr when KARDINAL_UI_URL says where the UI is.
 
---address and KARDINAL_UI_URL must be http or https URLs with a host, and
-without spaces or control characters: dashboard refuses another value
+--address and KARDINAL_UI_URL must be http or https URLs with a host, in
+printable ASCII (punycode a non-ASCII host) and without user@: dashboard refuses another value
 before it opens anything, and why and status print a warning instead of the
 link. The url of -o json (create bundle, promote, rollback) is the same
 #/p/<namespace>/<pipeline> page, empty when KARDINAL_UI_URL is not one.`
