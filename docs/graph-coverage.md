@@ -96,14 +96,7 @@ of items checked are in the [ledger](design/16-graph-capability-ledger.md#upstre
 | G8: clock in CEL | [KREP-025](https://github.com/kubernetes-sigs/kro/pull/1376) (approved once, in review) and its draft [kro#1434](https://github.com/kubernetes-sigs/kro/pull/1434) | Partial | Feedback shared with the author; the Graph re-check is planned for the final version, weekly windows for a follow-up proposal |
 | G8: gate rules, multi-cluster, custom functions | Nothing that applies to Graphs | None | No ask: time is the only real blocker |
 | G9: reconcile cost | None filed ([kro#1324](https://github.com/kubernetes-sigs/kro/issues/1324) is related) | None | Ask kro to cache the access check and skip unchanged applies |
-| G10–G14: object size, collections, Job cleanup, sharding, frozen nodes | None filed (recorded 2026-10-08) | None | See the [ledger](design/16-graph-capability-ledger.md#gaps-with-no-upstream-work) for each ask |
-
-No kro issue has been filed or commented on by kardinal yet.
-
-## Closed
-
-- **G6: Pipeline changes re-ran every environment.** This was a kardinal bug, not a kro gap.
-  kro updates a Graph in place, and kardinal now does too. Fixed 2026-09-29.
+| G10–G14: object size, collections, Job cleanup, sharding, frozen nodes | None filed | None | See the [ledger](design/16-graph-capability-ledger.md#gaps-with-no-upstream-work) for each ask |
 
 Want to help? Pick a row, check the ledger entry for the proposed kro change, and open an
 issue or discussion on [kardinal-promoter](https://github.com/pnz1990/kardinal-promoter/issues).

@@ -54,8 +54,7 @@ the same values.
 ### Sizing kro
 
 kro keeps every Graph it reconciles in memory: its compiled program and its watches, 3 to 6 MB
-for a kardinal Graph whatever its size (#1492: OOMKilled at 337 Graphs in 1 GiB; 5.4 MB per Graph
-measured for 14 KB Graphs under load). kardinal creates one Graph per
+for a kardinal Graph whatever its size (about 5 MB per Graph under load). kardinal creates one Graph per
 Bundle and retires it once the Bundle has finished: the Graph is deleted, and the Bundle keeps a
 record of each PromotionStep in `status.retiredSteps`, which rollback, promote, history, metrics,
 the CLI and the UI read. So the Graphs kro holds are:
@@ -83,7 +82,6 @@ Measured with the scale suite (`full` profile: 40 Pipelines, 2 Bundles a second 
 |---|---|---|
 | Steady load | 126 | 668 MiB |
 | Same load, controller leader killed 13 times | 91 | 657 MiB |
-| Before retirement had its own work queue, leader kills | about 300 | OOMKilled at 1 GiB |
 
 `hack/install-kro.sh` sets 2Gi: about three times that steady state, enough for the Graphs a
 restarted or lagging controller has not retired yet (some 300).
@@ -193,8 +191,7 @@ kardinal version
 The controller keeps an informer cache of every Pipeline, Bundle, PromotionStep, PRStatus and
 PolicyGate it watches, so its memory grows with the number of Pipelines times the Bundles each
 keeps (`historyLimit`), more than with the promotion rate. Measured with the scale suite (`full`
-profile, controller built without `-race`, 2 replicas; peak resident memory of the leader,
-[#1553](https://github.com/pnz1990/kardinal-promoter/issues/1553)):
+profile, controller built without `-race`, 2 replicas; peak resident memory of the leader):
 
 | Load | Controller memory (peak) |
 |---|---|
@@ -299,7 +296,7 @@ go tool pprof -top -base before.pb.gz after.pb.gz
 | `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers. Paths inside the container: mount the certificate Secret with `controller.extraVolumes` / `extraVolumeMounts`. Set both or neither: the chart refuses one alone, and a path that is not in a mounted `secret`, `projected` or `csi` volume (for certificates that come another way, set `KARDINAL_TLS_CERT_FILE` and `KARDINAL_TLS_KEY_FILE` with `controller.extraEnv`) |
 | `controller.extraArgs` / `extraEnv` / `extraVolumes` / `extraVolumeMounts` | `[]` | Extra controller args, env vars, volumes and mounts |
 | `rbac.argocdApplicationsWrite` | `false` | Grant `patch` on Argo CD Applications (the `argocd` update strategy) |
-| `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.11. The `integration-test` step was removed. The chart grants `batch/jobs` for [hooks](hooks.md) whatever it says |
+| `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.11. The chart grants `batch/jobs` for [hooks](hooks.md) whatever it says |
 | `hooks.serviceAccounts` | `[default]` | ServiceAccounts a [hook](hooks.md)'s Pod may run as (`--hook-service-accounts`), in the Pipeline namespace. The Graph ServiceAccount is never allowed |
 | `hooks.podSecurityLevel` | `baseline` | Pod Security Standard a [hook](hooks.md) Pod must meet (`--hook-pod-security-level`): `baseline`, `restricted` or `privileged` (no Pod checks); below `privileged`, `nodeName` and `hostPort` are refused too |
 | `render.image.repository`, `render.image.tag`, `render.image.digest` | `ghcr.io/pnz1990/kardinal-promoter/render`, the chart's appVersion, none | The `kardinal-render` image the render Jobs of [`layout: branch`](rendered-manifests.md#the-render-job) run (`--render-image`); with a digest, `repository@digest`. Renders never run in the controller. `image.digest` pins the controller image the same way. The render Pods get the chart's `imagePullSecrets`, which must exist in the Pipeline namespaces |
@@ -468,20 +465,12 @@ never applied, and a key the new chart removed fails its schema.
 `helm upgrade` upgrades the kardinal-promoter controller only. Upgrade kro separately by
 re-running `hack/install-kro.sh` from the matching kardinal-promoter release.
 
-From v0.10.0 the Pipeline CRD rejects an environment named `time`: kro#1434 proposes reserving it
-as a Graph node ID. Rename such an environment before you upgrade (see the reserved names in the
-[Pipeline reference](pipeline-reference.md)); renaming gives it new PromotionSteps and PR branches.
+The Pipeline CRD rejects an environment named `time` (reserved for a kro Graph node ID; see the
+reserved names in the [Pipeline reference](pipeline-reference.md)).
 
-### Downgrading
+### Downgrading to v0.9.0
 
-A controller from v0.9.0-rc.1 or earlier does not know the `kardinal.io/close-pr` finalizer
-that this release puts on PromotionSteps that open a PR, and never removes it: such a step, its
-Graph and its namespace then never finish deleting. After you downgrade, remove the finalizer
-from every step that holds it with the command under [Uninstall](#uninstall). The older
-controller does not close the PR of a deleted step, so close by hand the PRs of the steps you
-delete after the downgrade.
-
-A controller older than this release does not know the compact Graph shape (Pipelines with more
+The v0.9.0 controller does not know the compact Graph shape (Pipelines with more
 than 100 environments, or the `kardinal.io/graph-shape: compact` annotation; see
 [Large Pipelines](pipeline-reference.md#large-pipelines)). When it rebuilds the Graph of a
 Bundle in flight (on any change to the Pipeline's spec, or a deleted Graph) it builds the node
@@ -498,7 +487,10 @@ Graph of every Bundle that is still promoting is rebuilt in place by the new con
 **1. Read the upgrade notes.** The changelog's [Before you upgrade](changelog.md#from-v090)
 lists every change for existing objects and clients.
 
-**2. Label the Pipelines' git Secrets.** A Secret named by `spec.git.secretRef` should carry
+**2. Rename any environment named `time`.** The Pipeline CRD rejects it: `time` is reserved for
+a kro Graph node ID. Renaming gives the environment new PromotionSteps and PR branches.
+
+**3. Label the Pipelines' git Secrets.** A Secret named by `spec.git.secretRef` should carry
 `kardinal.io/referenceable: "true"`. This release still uses an unlabeled one but sets the
 Pipeline's `SecretReferenceable=False` condition; a later release refuses it.
 
@@ -509,7 +501,7 @@ kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "
   done
 ```
 
-**3. Apply the new CRDs.** Helm never upgrades CRDs. Apply them before the new controller starts.
+**4. Apply the new CRDs.** Helm never upgrades CRDs. Apply them before the new controller starts.
 The v0.9.0 chart installed them, so Helm owns their fields: `--force-conflicts` is required, or
 the apply stops with `conflict with "helm" ... .spec.versions`.
 
@@ -517,14 +509,14 @@ the apply stops with `conflict with "helm" ... .spec.versions`.
 helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 | kubectl apply --server-side --force-conflicts -f -
 ```
 
-**4. Upgrade kro.** Run this from a checkout of kardinal-promoter at this release; it installs
+**5. Upgrade kro.** Run this from a checkout of kardinal-promoter at this release; it installs
 the kro version the release targets, and leaves a kro that is already at it as it is.
 
 ```bash
 KUBE_CONTEXT=<your-context> bash hack/install-kro.sh
 ```
 
-**5. Upgrade the chart.** Use `--reset-then-reuse-values`, which keeps the values you set and
+**6. Upgrade the chart.** Use `--reset-then-reuse-values`, which keeps the values you set and
 takes every new default from the new chart.
 
 ```bash
@@ -532,7 +524,7 @@ helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --
   --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
 ```
 
-**6. Check the result.**
+**7. Check the result.**
 
 ```bash
 kardinal doctor
@@ -593,7 +585,7 @@ Fix each line it prints. In the commands below, `<i>` is the environment's posit
 | `steps` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/environments/<i>/steps"}]'`. Every environment runs the default step sequence. |
 | `promotionTemplate` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/environments/<i>/promotionTemplate"}]'`. Only clusters that ran a build from `main` have it. |
 | `autoRollback` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/environments/<i>/autoRollback"}]'`. Use `onHealthFailure` instead (see [Rollback](rollback.md)). |
-| `shard` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/environments/<i>/shard"}]'`. Distributed mode was removed. |
+| `shard` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/environments/<i>/shard"}]'`. `shard` is not supported. |
 | `spec.policyGates` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/policyGates"}]'`. Label org gates with `kardinal.io/applies-to`. |
 | PolicyGate `spec.selector` | `kubectl -n <ns> patch policygate <name> --type json -p '[{"op":"remove","path":"/spec/selector"}]'`. Use the `kardinal.io/applies-to` label. |
 | Invalid, reserved or duplicate environment name | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"replace","path":"/spec/environments/<i>/name","value":"<new-name>"}]'`. Renaming gives the environment new PromotionSteps and PR branches. Do it when the Pipeline has no Bundle in flight, and update any `dependsOn` that names it. |
@@ -736,7 +728,7 @@ kubectl delete crd promotiontemplates.kardinal.io --ignore-not-found
     kardinal override <pipeline> --stage <env> --gate <gate> --reason "<why>" --expires-in 1h
     ```
 
-- **Check that Verified environments have the image.** In our v0.8.1 run, v0.8.1 reported test and uat Verified without writing a commit, so the environments kept the old image. If an environment branch has no kardinal commit for a Bundle that v0.8.1 reported Verified, create a new Bundle for the same image after the upgrade. In our run, the new Bundle wrote the commits and reached prod in 90 seconds.
+- **Check that Verified environments have the image.** v0.8.1 can report an environment Verified without writing a commit. If an environment branch has no kardinal commit for a Bundle that v0.8.1 reported Verified, create a new Bundle for the same image after the upgrade.
 - **Bundles rebuilt from the start** only if the new CRDs were applied while v0.8.1 was running (see step 3). Nothing is lost, but steps that had already run are run again.
 
 #### Kubernetes version
@@ -776,6 +768,13 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 - **Custom RBAC.** If you manage the controller's RBAC yourself, allow `create` and `patch` on `events.k8s.io` events.
 - **UI.** With no UI auth mode set, `/api/` answers only local clients (`kubectl port-forward`). Set `ui.auth.tokenReview=true` or `ui.auth.tokenSecretRef.name` if the UI is reached another way.
 - **SCM token scope.** v0.8.1 had no `scm.allowedRepositories`, so after the upgrade any Pipeline without its own `git.secretRef` can still have the controller's SCM token open PRs in any repository the token can write, and the controller warns at startup. Set `scm.allowedRepositories` to the repositories your Pipelines use (see [The shared SCM token](guides/security.md#the-shared-scm-token-and-scmallowedrepositories)).
+- **Graph reader bindings.** v0.8.1 bound the reader role in every namespace a health `ref` named, and did not record those bindings. In cluster mode the sweep ([RBAC requirements](#rbac-requirements)) deletes them once no Graph reads through them; a binding that a Graph made by v0.8.1 still reads through stays until that Graph's Bundle is replaced. To revoke such bindings at once, list them and delete any in a namespace that is not the Graph's own and not in `graph.readerNamespaces`:
+
+    ```bash
+    kubectl get rolebindings -A -l app.kubernetes.io/managed-by=kardinal-promoter \
+      -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name | grep graph-reader-
+    ```
+
 - **Notes in the [changelog](changelog.md) that don't apply to v0.8.1:**
     - `promotionTemplate`, `PromotionStep.spec.inputs` and the `promotiontemplates` CRD don't exist in v0.8.1.
     - The `update.strategy: argocd` with `approval: pr-review` note doesn't apply: v0.8.1 allows only `kustomize` and `helm`.
@@ -796,29 +795,18 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 ## Controller concurrency
 
 Each controller reconciles several objects at once. A PromotionStep holds its worker through
-every git and SCM round trip, so one worker made the steps of every Pipeline in the cluster wait
-for each other: one slow repository or git host slowed every promotion. The defaults below
-were measured with the scale suite's `full` profile (`TestScale_LoadPipelines`: 200 Pipelines
+every git and SCM round trip, so the controllers run several workers. The defaults were sized
+with the scale suite's `full` profile (`TestScale_LoadPipelines`: 200 Pipelines
 x 3 automatic environments, one Bundle each, started together; `TestScale_LoadBurst`: 1,000
 Bundles over 100 Pipelines; controller built with `-race`, 4 CPU, 2 replicas):
 
 | Controller | 200 Pipelines: step p50 / p99 | Bundle end to end p50 / p99 | All settled | 1,000 Bundles: Bundle end to end p50 / p99 |
 |---|---|---|---|---|
-| 1 worker each (before) | 65 s / 81 s | 245 s / 319 s | 324 s | 201 s / 221 s |
-| the worker defaults | 1 s / 3 s | 110 s / 314 s | 325 s | 90 s / 153 s |
-| the defaults, and Graph translations of one namespace no longer list its Graphs under one lock for the whole controller | 3 s / 6 s | 52 s / 82 s | 87 s | 16 s / 26 s |
+| defaults | 3 s / 6 s | 52 s / 82 s | 87 s | 16 s / 26 s |
 
 With the defaults the `full` profile meets the latency objective of `TestScale_LatencySLO`
 (test/e2e/README.md, Latency SLO): automatic steps p50 2 s and p99 5 s, Bundles p99 92 s,
 against 10 s, 30 s and 2 minutes.
-
-With 1.5 s of latency on every git round trip and 2 Bundles a second over 40 Pipelines for 10
-minutes, one worker brought 180 steps to `Verified` (step p99 67 s, PromotionStep queue 84);
-the defaults brought 597 (step p99 20 s, queue 22). The controller's memory was the same with
-one worker and with the defaults (peak resident about 700 MiB in that run with the race
-detector, which inflates it), so in that run the workers added no memory of note. That is not a
-sizing guide: the controller's memory grows with the number of Pipelines, Bundles and steps it
-caches, and the chart's default limit is too small for the `full` profile ([#1553](https://github.com/pnz1990/kardinal-promoter/issues/1553)).
 
 | Value | Flag | Default | Why |
 |---|---|---|---|
@@ -840,11 +828,11 @@ controller's memory and its working directory on disk.
 ### Fair sharing between namespaces
 
 The PromotionStep, PRStatus, PolicyGate, Bundle, Pipeline and MetricCheck work queues share
-their workers between namespaces (#1577). An item's place in the queue is lowered, within its
+their workers between namespaces. An item's place in the queue is lowered, within its
 priority, by how many items its namespace already has ready or in process (in a few steps: none,
 1 to 3, 4 to 15, 16 to 63, 64 to 255, 256 or more), so an item of a namespace with little work
-goes ahead of another namespace's large backlog. One namespace's large promotion therefore no
-longer makes another team's steps wait for all of it.
+goes ahead of another namespace's large backlog. So one namespace's large promotion does not
+make another team's steps wait for all of it.
 
 - Only items that are due count: an item waiting for a requeue delay or a retry backoff counts
   once its time has come, and its place is computed again then. A namespace with many idle or
@@ -856,43 +844,12 @@ longer makes another team's steps wait for all of it.
 - Priority levels stay apart: a step waiting for its branch's turn (see above) stays behind
   every step that can run.
 - No worker waits while an item is ready, so a namespace alone on the controller gets every
-  worker, as before. The fairness reorders work; it does not add any.
-
-Measured with the scale suite's `full` profile on one kind cluster (controller with `-race`, 2
-replicas), main and fair queues run alternately with the host's load under 64 at each start.
-Tenant B promotes one Bundle on each of five 3-environment Pipelines while tenant A runs either
-a 149-environment wave on one branch (`TestScale_TenantFairness`) or 149 3-environment
-Pipelines on their own repositories, all at once (`TestScale_TenantFairnessManyRepos`):
-
-| | runs | A's load time | A's steps p50 / p99 | B's steps p99 | B's Bundles p50 / p99 |
-|---|---|---|---|---|---|
-| one branch, before | 2 | 137-144 s | 58-68 / 133-134 s | 6 s | 7 / 12 s |
-| one branch, fair | 1 | 117 s | 56 / 110 s | 6 s | 7 / 12 s |
-| many repositories, before | 7 | 51-67 s (mean 58) | 2-3 / 7-9 s | 6-7 s | 25-41 / 40-53 s |
-| many repositories, fair | 3 | 44-55 s (mean 50) | 2-3 / 7-8 s | 7-8 s | 13-19 / 21-31 s |
-
-On one branch the branch turns already let B through. With many repositories, B's Bundles
-waited behind A's backlog and finished after all of A; with fair queues they take about half
-as long, and A is not slower. B's steps stayed under 10 s in every run: what B waited for was
-the time between its steps, in the Bundle, Pipeline and PromotionStep queues. These runs used 3-environment Pipelines for A.
-
-The test as it is now runs A as 5-environment Pipelines and starts B once a tenth of A's steps
-exist, B's Bundles 2 s apart, so that B can finish within A's load even on a quiet host. It
-gates on B's step p99 (10 s), B's Bundle p99 (35 s) and B finishing while A still runs. One
-run each of `TestScale_TenantFairnessManyRepos` in that shape:
-
-| | code | host load, median | A's load time | B's steps p99 | B's Bundles p50 / p99 | gates |
-|---|---|---|---|---|---|---|
-| before | main at 106b12cf | 78 | 91 s | 8 s | 67 / 70 s | fail: Bundle p99 70 s over 35 s |
-| fair | #1662 at 8b032f78 | 56 | 65 s | 4 s | 10 / 12 s | pass |
+  worker. The fairness reorders work; it does not add any.
 
 ### Kubernetes Events
 
-The controller writes `events.k8s.io` Events for its transitions (`kubectl events`). client-go's
-Event broadcaster starts a goroutine and an API write for every Event, with no bound, so when
-hundreds of Bundles change state at once the controller held over 2,000 goroutines and opened
-hundreds of new connections to the API server (#1682). The controller therefore rate-limits
-Events:
+The controller writes `events.k8s.io` Events for its transitions (`kubectl events`). client-go
+starts a goroutine and an API write for every Event, so the controller rate-limits Events:
 
 | Type | Bucket | Rate | Burst |
 |---|---|---|---|
@@ -936,10 +893,10 @@ The leader renews its Lease every 2 seconds and gives up leadership when a
 renewal has not succeeded within 10 seconds. The controller's reconcilers
 can send many requests at once (see the worker table above), and a cluster
 can throttle a ServiceAccount through API Priority and Fairness. Either way,
-renewals used to wait behind reconcile traffic, and the leader exited
-("leader election lost") (#1592). Two things now keep renewals separate:
+renewals could wait behind reconcile traffic and the leader would exit
+("leader election lost"). Two things keep renewals separate:
 
-- **the fix:** the chart's FlowSchema (`leaderElectionFlowSchema`) puts the
+- the chart's FlowSchema (`leaderElectionFlowSchema`) puts the
   controller ServiceAccount's Lease requests in its namespace into the
   built-in `leader-election` priority level, as Kubernetes does for its own
   controllers. Keep its `matchingPrecedence` below any FlowSchema that
@@ -1046,7 +1003,6 @@ Then remove the CRDs and kro if you want:
 
 ```bash
 # Optional: remove kardinal CRDs (deletes all Pipelines, Bundles, PolicyGates, etc.)
-# promotiontemplates.kardinal.io exists only on clusters that ran a pre-release build from main.
 kubectl delete crd --ignore-not-found \
   pipelines.kardinal.io \
   bundles.kardinal.io \
@@ -1063,7 +1019,6 @@ kubectl delete crd --ignore-not-found \
   renderruns.kardinal.io \
   scmproviders.kardinal.io \
   clusterscmproviders.kardinal.io \
-  promotiontemplates.kardinal.io \
   auditevents.kardinal.io \
   approvals.kardinal.io
 
@@ -1118,17 +1073,6 @@ and, in cluster mode, by a sweep at controller startup and every 10 minutes that
 bindings of namespaces that are gone. The sweep lists only RoleBindings labeled
 `app.kubernetes.io/managed-by=kardinal-promoter`.
 See G5 in the [Graph capability ledger](design/16-graph-capability-ledger.md).
-
-**Upgrading:** earlier versions bound the reader role in every namespace a health `ref` named,
-and did not record those bindings. In cluster mode the sweep deletes them once no Graph reads
-through them. A binding that a Graph made by the old version still reads through stays until
-that Graph's Bundle is replaced. To revoke such bindings at once, list them and delete any in
-a namespace that is not the Graph's own and not in `graph.readerNamespaces`:
-
-```bash
-kubectl get rolebindings -A -l app.kubernetes.io/managed-by=kardinal-promoter \
-  -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name | grep graph-reader-
-```
 
 The Helm chart creates all of these ClusterRoles, Roles and bindings.
 
