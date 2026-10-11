@@ -1447,7 +1447,11 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		// The push guard (#1681) cancelled a superseded, rejected or
 		// deleted Bundle's promotion before it could push over a newer
 		// one: the expected end of a stale step, not a controller error.
+		// The step says why, as a step cancelled before its run does
+		// ("bundle X was superseded — promotion cancelled"), without the
+		// engine's "step git-push: stale promotion: refusing to push:".
 		log.Info().Err(execErr).Str("env", ps.Spec.Environment).Msg("stale promotion cancelled before its push")
+		msg = staleReason(execErr)
 	} else {
 		log.Error().Err(execErr).Str("env", ps.Spec.Environment).Msg("step engine failed")
 	}

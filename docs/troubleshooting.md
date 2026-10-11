@@ -164,12 +164,12 @@ Rollouts Rollout or a Flagger Canary. No GitOps engine is required.
 
 ### Does it work with GitLab, or with Helm?
 
-Yes. Start the controller with `--scm-provider gitlab`
+Yes to both. For GitLab, start the controller with `--scm-provider gitlab`
 (Helm value `scm.provider: gitlab`). A Pipeline can name another SCM with `spec.git.providerRef`
 (an ScmProvider or ClusterScmProvider); `spec.git.provider` is deprecated and ignored. Forgejo,
 Gitea, Bitbucket Cloud, Bitbucket Data Center and Azure DevOps are also supported. See [SCM Providers](scm-providers.md).
 
-Yes. Set `update: {strategy: helm}` on the Pipeline environment. kardinal
+For Helm, set `update: {strategy: helm}` on the Pipeline environment. kardinal
 will update the `image.tag` (or a custom path) in `values.yaml` instead of Kustomize
 overlays. It writes one image per Bundle: a Bundle with more than one tagged image
 fails the step. Use one Bundle per chart image, or kustomize.

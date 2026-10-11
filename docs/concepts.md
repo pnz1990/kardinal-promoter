@@ -312,8 +312,14 @@ When the skip is allowed, the permission's expression is evaluated in front of t
 For each version, kardinal translates the Pipeline into a [kro Graph](https://kro.run/next/docs/concepts/graph/overview/):
 one node per gate and per promotion step, in dependency order. kro's Graph controller creates
 them, and kardinal's controllers run the steps and evaluate the gates. You never write a Graph;
-the Pipeline is the interface. [Architecture](architecture.md) has the details, including
-supersession and when a finished version's Graph is retired.
+the Pipeline is the interface. kardinal uses kro because its Graph controller already creates
+objects in dependency order and waits for them to be ready, so kardinal does not reimplement DAG
+orchestration.
+
+There is no database and no extra service: all state is in Kubernetes objects, the UI is served
+by the controller, and the controller can restart at any time without losing a promotion.
+[Architecture](architecture.md) has the details, including supersession and when a finished
+version's Graph is retired.
 
 ## Where next
 
