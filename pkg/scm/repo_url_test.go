@@ -201,3 +201,15 @@ func TestWebhookSignature(t *testing.T) {
 		assert.Empty(t, scm.WebhookSignatureHeader(http.Header{}))
 	})
 }
+
+// TestRepoFromURL_ParseErrorRedacted: a URL that does not parse is not
+// echoed with its userinfo: a *url.Error quotes the raw URL, so a token used
+// as the user name would reach the step message and the Pipeline status.
+func TestRepoFromURL_ParseErrorRedacted(t *testing.T) {
+	for _, raw := range []string{"https://ghp_SECRET@github.com/o/%zz", "https://x:ghp_SECRET@github.com/o/r\x7f"} {
+		_, err := scm.RepoFromURL(raw)
+		require.Error(t, err, raw)
+		assert.NotContains(t, err.Error(), "SECRET")
+		assert.Contains(t, err.Error(), "parse repository URL")
+	}
+}

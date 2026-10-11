@@ -47,7 +47,8 @@ func splitRemoteURL(raw string) (host, path string, err error) {
 	}
 	u, perr := url.Parse(raw)
 	if perr != nil {
-		return "", "", fmt.Errorf("parse repository URL %q: %w", RedactURL(raw), perr)
+		// A *url.Error quotes the raw URL, userinfo and all.
+		return "", "", fmt.Errorf("parse repository URL: %s", RedactText(perr.Error()))
 	}
 	return strings.ToLower(u.Hostname()), strings.Trim(u.Path, "/"), nil
 }

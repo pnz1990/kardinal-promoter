@@ -29,6 +29,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -79,7 +81,7 @@ func isSSHURL(raw string) bool {
 func (w *GitWatcher) uploadPackSession(ctx context.Context) (transport.UploadPackSession, func(), error) {
 	ep, err := transport.NewEndpoint(w.RepoURL)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse repoURL: %w", err)
+		return nil, nil, fmt.Errorf("parse repoURL: %s", scm.RedactText(err.Error()))
 	}
 	var sess transport.UploadPackSession
 	if ep.Protocol == "ssh" {

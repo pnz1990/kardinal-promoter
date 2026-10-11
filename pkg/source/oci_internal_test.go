@@ -4,10 +4,13 @@
 package source
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -123,7 +126,19 @@ func TestRealmMustBeHTTPS(t *testing.T) {
 }
 
 func TestRedactURL(t *testing.T) {
-	assert.Equal(t, "https://x:xxxxx@github.com/org/repo", redactURL("https://x:secret@github.com/org/repo"))
-	assert.Equal(t, "https://github.com/org/repo", redactURL("https://github.com/org/repo"))
-	assert.Equal(t, "<invalid URL>", redactURL("https://x:secret@github.com/%zz"))
+	// One helper for every git URL in an error or status: scm.RedactURL drops
+	// the whole userinfo, a token used as the user name included.
+	assert.Equal(t, "https://github.com/org/repo", scm.RedactURL("https://x:secret@github.com/org/repo"))
+	assert.Equal(t, "https://github.com/org/repo", scm.RedactURL("https://ghp_secret@github.com/org/repo"))
+	assert.Equal(t, "https://github.com/org/repo", scm.RedactURL("https://github.com/org/repo"))
+	assert.NotContains(t, scm.RedactURL("https://x:secret@github.com/%zz"), "secret")
+}
+
+// TestGitWatcher_ParseErrorRedacted: an unparsable repoURL's error, which
+// goes to the Subscription status, does not carry the URL's userinfo.
+func TestGitWatcher_ParseErrorRedacted(t *testing.T) {
+	w := &GitWatcher{RepoURL: "https://ghp_SECRET@github.com/o/%zz"}
+	_, _, err := w.uploadPackSession(context.Background())
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "SECRET")
 }

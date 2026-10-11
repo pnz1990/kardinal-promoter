@@ -23,9 +23,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"path"
 	"strings"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 
 	"github.com/bmatcuk/doublestar/v4"
 )
@@ -125,12 +126,12 @@ func (w *GitWatcher) Watch(ctx context.Context, lastDigest string) (*WatchResult
 		sha, err = w.fetchLatestSHA(ctx, branch)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("GitWatcher: fetch latest SHA for %s@%s: %w", redactURL(w.RepoURL), branch, err)
+		return nil, fmt.Errorf("GitWatcher: fetch latest SHA for %s@%s: %w", scm.RedactURL(w.RepoURL), branch, err)
 	}
 	if w.PathGlob != "" {
 		res, err := w.watchPath(ctx, branch, sha, lastDigest)
 		if err != nil {
-			return nil, fmt.Errorf("GitWatcher: pathGlob %q on %s@%s: %w", w.PathGlob, redactURL(w.RepoURL), branch, err)
+			return nil, fmt.Errorf("GitWatcher: pathGlob %q on %s@%s: %w", w.PathGlob, scm.RedactURL(w.RepoURL), branch, err)
 		}
 		return res, nil
 	}
@@ -185,7 +186,7 @@ func (w *GitWatcher) httpBasic() (string, string, bool) {
 // answer with a v2 capability advertisement that lists no refs.
 func (w *GitWatcher) fetchLatestSHA(ctx context.Context, branch string) (string, error) {
 	refsURL := strings.TrimRight(w.RepoURL, "/") + "/info/refs?service=git-upload-pack"
-	repo := redactURL(w.RepoURL)
+	repo := scm.RedactURL(w.RepoURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, refsURL, nil)
 	if err != nil {
@@ -236,16 +237,6 @@ func (w *GitWatcher) fetchLatestSHA(ctx context.Context, branch string) (string,
 		return "", fmt.Errorf("repository %s advertises no refs (empty repository or not a git smart HTTP endpoint)", repo)
 	}
 	return "", fmt.Errorf("branch %q not found in %s (%d refs advertised)", branch, repo, refs)
-}
-
-// redactURL returns raw with any password replaced, for errors and status
-// messages. A URL that does not parse is not echoed.
-func redactURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "<invalid URL>"
-	}
-	return u.Redacted()
 }
 
 // parsePktLineRefs parses the Git pkt-line format used in Smart HTTP responses

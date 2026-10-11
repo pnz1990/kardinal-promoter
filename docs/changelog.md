@@ -14,6 +14,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **No git token in an error or status from a URL that does not parse** — when a git URL with a token as its user name (`https://<token>@host/...`) failed to parse, the error quoted the whole URL: in a PromotionStep message (repository name lookup), a RenderRun result and a git Subscription status. Those errors, the Subscription watcher (which kept the user name) and the rollback-hold config check now go through the one helper that drops userinfo (`scm.RedactURL`, `scm.RedactText`)
 - **The kardinal palette and fonts in the UI and the docs** (#1698) — the UI and this site now share one set of design tokens (`web/tokens/tokens.json`). Neutrals are spruce-tinted greys in equal light and dark themes. Cardinal red marks the followed release, the selection, links and focus. Status colours are distinct from it: failure is garnet, blocked is ochre, waiting is dusk blue, verified is spruce. Text is set in Atkinson Hyperlegible Next and Mono, headings in Archivo. The fonts are served by the UI and the site themselves (SIL Open Font License), so neither loads a font CDN. The UI's theme button cycles System, Light and Dark: System follows the operating system, and a saved choice applies before the page draws. Every colour pair is checked against WCAG 2.1 AA in both themes
 
 ### Fixed
