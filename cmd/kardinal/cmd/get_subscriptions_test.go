@@ -65,7 +65,7 @@ func TestFormatSubscriptionTable_empty(t *testing.T) {
 	assert.Contains(t, out, "PIPELINE")
 	assert.Contains(t, out, "PHASE")
 	assert.Contains(t, out, "LAST-CHECK")
-	assert.Contains(t, out, "LAST-BUNDLE")
+	assert.Contains(t, out, "LAST-VERSION")
 	assert.Contains(t, out, "AGE")
 }
 
@@ -171,7 +171,7 @@ func TestFormatSubscriptionTable_noLastChecked(t *testing.T) {
 	require.NoError(t, err)
 	out := buf.String()
 	assert.Contains(t, out, "bare")
-	// LAST-CHECK and LAST-BUNDLE are "-" when unset.
+	// LAST-CHECK and LAST-VERSION are "-" when unset.
 	assert.Regexp(t, `(?m)^bare +git +pipe +Unknown +- +- +\S+$`, out)
 	// Phase should show "Unknown" when empty
 	assert.Contains(t, out, "Unknown")
