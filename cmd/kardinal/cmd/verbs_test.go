@@ -495,6 +495,7 @@ func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return 
 // TestShip_QuietNeedsWait: --quiet without --wait is refused, also with
 // --dry-run, before anything is read.
 func TestShip_QuietNeedsWait(t *testing.T) {
+	keepStyle(t)
 	for _, args := range [][]string{{"ship", "demo", "--image", "app:1", "-q"}, {"ship", "demo", "--image", "app:1", "--dry-run", "--quiet"}} {
 		root := NewRootCmd()
 		root.SetOut(&bytes.Buffer{})
