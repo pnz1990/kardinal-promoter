@@ -5,7 +5,7 @@ kardinal has four core words: **version**, **pipeline**, **environment** and **g
 
 | Term | Kubernetes kind or field | Meaning |
 |---|---|---|
-| Version | `Bundle` | One immutable snapshot of what to deploy: images, a chart version or a config commit, with its provenance. The CLI and the UI also say Bundle |
+| Version | `Bundle` | A version of your app: one immutable snapshot of what to deploy (images, a chart version or a config commit) with its provenance. The `kardinal create bundle` and `get bundles` commands act on versions |
 | Pipeline | `Pipeline` | The promotion path of one application: its Git repository and its environments, in order |
 | Environment | `Pipeline` `spec.environments[]` | One place a version is deployed to, such as `test`, `uat` or `prod`; its directory or branch in the GitOps repository |
 | Stage, promotion step | `PromotionStep` | The promotion of one version into one environment: commit or pull request, merge, health check. kardinal creates them |
@@ -15,7 +15,7 @@ kardinal has four core words: **version**, **pipeline**, **environment** and **g
 | Override | `PolicyGate` `spec.overrides[]` | A time-limited, recorded force-pass of a gate (`kardinal override`) |
 | Change window | `ChangeWindow` | A cluster-wide blackout or allowed-hours window a gate can read |
 | Metric check | `MetricCheck` | A metric query with a threshold a gate can read (`metrics.<name>`) |
-| Soak, bake | `bundle.upstreamSoakMinutes`, `bake` | How long a version has been healthy upstream; `bake` requires continuous health before Verified |
+| Soak, bake | `upstream.<env>.soakMinutes`, `bake` | How long a version has been Verified in an upstream environment. `upstream.<env>.soakMinutes` names the environment; `bundle.upstreamSoakMinutes` is shorthand for the direct upstream (the minimum on fan-in). `bake` requires continuous health before Verified |
 | Health check | `health` | How a promotion step decides its environment runs the version healthily (Deployment, Argo CD, Flux, Argo Rollouts, Flagger) |
 | Hook | `hooks`, `HookRun` | A Job that runs before a promotion or after its health check |
 | Wave | `wave` | A number that promotes environments with the same number in parallel |

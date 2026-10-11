@@ -557,6 +557,9 @@ kubectl get auditevents -n my-team -o wide
 kubectl get auditevents -n my-team \
   -l kardinal.io/pipeline=my-app \
   --watch
+
+# Filter by action, across namespaces
+kubectl get auditevent -A -l kardinal.io/action=PromotionFailed
 ```
 
 ### SIEM integration

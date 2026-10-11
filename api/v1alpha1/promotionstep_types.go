@@ -44,7 +44,7 @@ type PromotionStepSpec struct {
 	// PRStatusRef is the name of the companion PRStatus CRD in the same namespace.
 	// Set by the Graph controller from the PRStatus Watch node's metadata.name CEL reference.
 	// The PromotionStep reconciler reads the PRStatus CRD instead of polling GitHub
-	// directly, eliminating the PS-4 / SCM-2 external API call on the reconcile hot path.
+	// directly, so the reconcile hot path makes no SCM call.
 	// +optional
 	PRStatusRef string `json:"prStatusRef,omitempty"`
 
@@ -324,8 +324,7 @@ type PromotionStepStatus struct {
 	Message string `json:"message,omitempty"`
 
 	// CurrentStepIndex is the index into the step sequence that the reconciler
-	// is currently executing. Persisted to etcd for idempotent crash recovery
-	// (spec 003 FR-002).
+	// is currently executing. Persisted to etcd for idempotent crash recovery.
 	// +optional
 	CurrentStepIndex int `json:"currentStepIndex,omitempty"`
 
@@ -368,9 +367,7 @@ type PromotionStepStatus struct {
 	// WorkDir is the working directory on the controller node used for git operations
 	// (clone, commit, push) and kustomize builds. Persisted to etcd so that a restarted
 	// controller can re-use the same directory and resume in-flight git work.
-	// ST-7/ST-8/ST-9 short-term mitigation: the workdir path is made observable via
-	// CRD status, enabling crash-recovery without re-cloning.
-	// Long-term: git operations become Kubernetes Jobs (owned nodes in the Graph).
+	// The path is in CRD status, so crash recovery does not clone again.
 	// +optional
 	WorkDir string `json:"workDir,omitempty"`
 
