@@ -320,5 +320,5 @@ func TestRollbackCmd_HoldFlags(t *testing.T) {
 	rel.SetArgs([]string{"app"})
 	rel.SetOut(&out)
 	rel.SetErr(&out)
-	require.ErrorContains(t, rel.Execute(), `required flag(s) "env" not set`)
+	require.ErrorContains(t, rel.Execute(), "which environment? Give it after the pipeline")
 }

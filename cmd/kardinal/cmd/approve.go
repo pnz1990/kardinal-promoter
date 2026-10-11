@@ -30,28 +30,17 @@ func newApproveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "approve <bundle> --env <environment>",
 		Short: "Approve (or reject) a Bundle for an environment's approval gates",
-		Long: `Approve a Bundle for an environment.
+		Long: `Record your approval (or, with --decision reject, a rejection) of a Bundle for
+an environment, in your Kubernetes name. An approval gate on that environment
+passes once enough allowed people approved and nobody rejected; approving
+before the Bundle reaches the gate is fine. --revoke deletes your Approval.`,
+		Example: `  kardinal approve my-app-v1-5 --env prod --comment "checked the canary"
 
-Creates an Approval object for the Bundle and environment in your name: your
-Kubernetes username and groups, read from the API server with a
-SelfSubjectReview (as kubectl auth whoami does). The chart's
-ValidatingAdmissionPolicy refuses an Approval in anyone else's name.
+  # decline (a gate rejection, not kardinal reject)
+  kardinal approve my-app-v1-5 --env prod --decision reject
 
-A PolicyGate with spec.approval on that environment counts the Approvals of
-the Bundle: it is ready when its expression is true, at least
-approval.required allowed people (approval.allowedUsers or allowedGroups)
-approved, and none of them rejected. The gate then lets the environment's
-PromotionStep start, for approval: auto environments as for pr-review ones.
-Approving before the Bundle reaches the gate is fine.
-
-  --decision reject   records a rejection: it blocks the gate.
-  --revoke            deletes your Approval for the Bundle and environment.
-
-Running approve again with the same decision does nothing; with another
-decision it replaces yours. Your Approval is found by its labels and
-spec.user, not by its name; if the name it would get is taken, the API
-server generates one. An Approval belongs to its Bundle and is deleted
-with it. See docs/approvals.md.`,
+  # take your decision back
+  kardinal approve my-app-v1-5 --env prod --revoke`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
@@ -66,6 +55,7 @@ with it. See docs/approvals.md.`,
 	cmd.Flags().StringVar(&o.decision, "decision", "approve", "approve or reject")
 	cmd.Flags().BoolVar(&o.revoke, "revoke", false, "Delete your Approval instead of recording one")
 	_ = cmd.MarkFlagRequired("env")
+	withReference(cmd, approveReference)
 	return cmd
 }
 
@@ -114,3 +104,25 @@ func writef(w io.Writer, format string, args ...interface{}) error {
 	}
 	return nil
 }
+
+// approveReference is the detail of the command for its reference page.
+const approveReference = `Creates an Approval object for the Bundle and environment in your name: your
+Kubernetes username and groups, read from the API server with a
+SelfSubjectReview (as kubectl auth whoami does). The chart's
+ValidatingAdmissionPolicy refuses an Approval in anyone else's name.
+
+A PolicyGate with spec.approval on that environment counts the Approvals of
+the Bundle: it is ready when its expression is true, at least
+approval.required allowed people (approval.allowedUsers or allowedGroups)
+approved, and none of them rejected. The gate then lets the environment's
+PromotionStep start, for approval: auto environments as for pr-review ones.
+Approving before the Bundle reaches the gate is fine.
+
+  --decision reject   records a rejection: it blocks the gate.
+  --revoke            deletes your Approval for the Bundle and environment.
+
+Running approve again with the same decision does nothing; with another
+decision it replaces yours. Your Approval is found by its labels and
+spec.user, not by its name; if the name it would get is taken, the API
+server generates one. An Approval belongs to its Bundle and is deleted
+with it. See docs/approvals.md.`

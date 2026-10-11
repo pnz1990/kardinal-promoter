@@ -257,3 +257,34 @@ See [Image Signature Verification](../image-verification.md).
 Extra namespaces to read PolicyGates from. It only adds: the org policy namespaces (the controller's `--policy-namespaces`, default `platform-policies`) and the Pipeline's namespace are always read. A gate found only through it is a team gate unless it is labelled `kardinal.io/scope: org`, and it never grants a skip. See [Policy Gates](../policy-gates.md).
 
 Default: none.
+
+## Status
+
+The Pipeline reconciler writes what runs where onto the Pipeline, so `kubectl` alone answers it:
+
+```
+$ kubectl get pipelines
+NAME     SUMMARY                                                       PHASE       PAUSED   AGE
+my-app   1.5.0 live in test, uat; waiting for PR merge in prod (#42)   Promoting   false    3d
+
+$ kubectl get pipelines -o wide      # adds ENVS
+ENVS
+test=1.5.0 uat=1.5.0 prod=1.4.0
+
+$ kubectl get bundles
+NAME          VERSION   TYPE    PIPELINE   PHASE       AGE
+my-app-x7k2p  1.5.0     image   my-app     Promoting   12m
+```
+
+| Field | Meaning |
+|---|---|
+| `status.summary` | One sentence: each version, its state in words (the labels the CLI and UI use) and the environments it is in. It starts with `Not ready (<reason>)` when the spec is invalid, and says `paused` when the Pipeline is paused. |
+| `status.environments[]` | Per environment, in spec order (a fleet environment lists its targets): `bundle` and `version`, what runs there (the newest Bundle whose change landed); `incomingBundle` and `incomingVersion`, a newer Bundle on its way in; `state`, the PromotionStep state of the newest Bundle there (an API value: `Verified`, `WaitingForMerge`, …); `since`, when that state began; `blockedBy`, the gates holding the newest Bundle back; `held`, a rollback hold keeps the environment on `bundle`; `prURL`, the PR waiting for its merge. |
+| `status.environmentSummary` | `env=version` per environment, `-` where nothing runs yet: the `ENVS` column. |
+| `status.phase` | The newest Bundle's progress: `Ready` (Verified everywhere it went), `Promoting`, `Degraded` (a version failed) or `Unknown` (no Bundle yet). |
+| `Ready` condition | Whether the **spec** is valid (reasons `Valid`, `ValidationFailed`, `NotImplemented`, …). It says nothing about promotions: a `Ready=True` Pipeline can be `Degraded`. |
+
+These fields are for reading: no controller decision uses them. `kubectl get kardinal` lists the
+kinds users write (Pipelines, Bundles, PolicyGates, MetricChecks, ChangeWindows, Subscriptions,
+NotificationHooks, ScmProviders, ClusterScmProviders); `kubectl get kardinal-all` adds the ones
+the controller generates (PromotionSteps, PRStatuses, AuditEvents, …).

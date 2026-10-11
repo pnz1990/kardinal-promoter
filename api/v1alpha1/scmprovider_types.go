@@ -98,7 +98,7 @@ type ScmProviderStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=scmp
+// +kubebuilder:resource:scope=Namespaced,shortName=scmp,categories=kardinal;kardinal-all
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
 // +kubebuilder:printcolumn:name="API",type=string,JSONPath=`.spec.apiURL`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
@@ -141,7 +141,7 @@ type ClusterScmProviderSpec struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Cluster,shortName=cscmp
+// +kubebuilder:resource:scope=Cluster,shortName=cscmp,categories=kardinal;kardinal-all
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
 // +kubebuilder:printcolumn:name="API",type=string,JSONPath=`.spec.apiURL`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
