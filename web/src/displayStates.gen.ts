@@ -49,7 +49,7 @@ export const DISPLAY_STATES: Record<DisplayKind, Record<string, DisplayState>> =
     Failed: { value: "Failed", label: "Failed", glyph: "✕", ascii: "x", tone: "failed" },
     HealthChecking: { value: "HealthChecking", label: "Checking health", glyph: "◌", ascii: "~", tone: "promoting" },
     NotStarted: { value: "NotStarted", label: "Not reached", glyph: "○", ascii: "o", tone: "pending" },
-    Pending: { value: "Pending", label: "Not started", glyph: "○", ascii: "o", tone: "pending" },
+    Pending: { value: "Pending", label: "Queued", glyph: "○", ascii: "o", tone: "pending" },
     Promoting: { value: "Promoting", label: "Promoting", glyph: "◐", ascii: ">", tone: "promoting" },
     RollingBack: { value: "RollingBack", label: "Rolling back", glyph: "↺", ascii: "<", tone: "failed" },
     Superseded: { value: "Superseded", label: "Replaced by newer version", glyph: "↷", ascii: "-", tone: "superseded" },
@@ -66,7 +66,7 @@ export const DISPLAY_STATES: Record<DisplayKind, Record<string, DisplayState>> =
   gate: {
     Block: { value: "Block", label: "Blocking", glyph: "▮", ascii: "#", tone: "blocked" },
     Pass: { value: "Pass", label: "Passing", glyph: "✓", ascii: "+", tone: "verified" },
-    Pending: { value: "Pending", label: "Not evaluated yet", glyph: "○", ascii: "o", tone: "pending" },
+    Pending: { value: "Pending", label: "Not evaluated yet", glyph: "○", ascii: "o", tone: "waiting" },
     Rejected: { value: "Rejected", label: "Version rejected", glyph: "⊘", ascii: "-", tone: "superseded" },
     Superseded: { value: "Superseded", label: "Replaced by newer version", glyph: "↷", ascii: "-", tone: "superseded" },
     Waiting: { value: "Waiting", label: "Not ready", glyph: "◷", ascii: "~", tone: "waiting" },

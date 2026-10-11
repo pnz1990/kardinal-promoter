@@ -61,9 +61,9 @@ func TestEveryAPIValueHasALabel(t *testing.T) {
 		display.KindBundle:   enum(t, "api/v1alpha1/bundle_types.go", "Phase string `json:\"phase,omitempty\"`"),
 		display.KindStep:     append(enum(t, "api/v1alpha1/promotionstep_types.go", "State string `json:\"state,omitempty\"`"), "NotStarted"),
 		display.KindSubStep:  enum(t, "api/v1alpha1/promotionstep_types.go", "State StepExecutionState `json:\"state\"`"),
-		display.KindPipeline: {"Ready", "Promoting", "Degraded", "Unknown", "Paused"},
-		display.KindGate: {graph.GateStatePass, graph.GateStateBlock, graph.GateStateSuperseded,
-			graph.GateStateRejected, graph.GateStatePending, graph.GateStateWaiting},
+		// Paused is not a phase: display.Pipeline shows it when spec.paused is set.
+		display.KindPipeline: append(enum(t, "api/v1alpha1/pipeline_types.go", "Phase string `json:\"phase,omitempty\"`"), "Paused"),
+		display.KindGate:     graph.GateStates,
 	}
 	table := display.Table()
 	for kind, values := range cases {
@@ -80,6 +80,23 @@ func TestEveryAPIValueHasALabel(t *testing.T) {
 			for _, r := range st.ASCII {
 				assert.Less(t, r, rune(unicode.MaxASCII), "%s %q: ASCII glyph %q", kind, v, st.ASCII)
 			}
+		}
+	}
+}
+
+// TestTableReversible: each kind's labels are unique, so ValueOf maps a
+// label back to its API value (the e2e parsers rely on it).
+//
+// Covers DISPLAY-STATES-01.
+func TestTableReversible(t *testing.T) {
+	for kind, states := range display.Table() {
+		seen := map[string]string{}
+		for v, st := range states {
+			if other, dup := seen[st.Label]; dup {
+				t.Errorf("%s: %q and %q share the label %q", kind, v, other, st.Label)
+			}
+			seen[st.Label] = v
+			assert.Equal(t, v, display.ValueOf(kind, display.Of(kind, v).Label), "%s %q", kind, v)
 		}
 	}
 }
@@ -102,6 +119,9 @@ func TestLabels(t *testing.T) {
 		{display.Pipeline("Ready", false), "● Up to date", display.ToneVerified},
 		{display.Pipeline("Promoting", true), "‖ Paused", display.TonePaused},
 		{display.Gate("Block"), "▮ Blocking", display.ToneBlocked},
+		{display.Step("Pending"), "○ Queued", display.TonePending},
+		{display.Step("NotStarted"), "○ Not reached", display.TonePending},
+		{display.Gate("Pending"), "○ Not evaluated yet", display.ToneWaiting},
 	} {
 		assert.Equal(t, tc.text, tc.got.Text(false))
 		assert.Equal(t, tc.tone, tc.got.Tone, tc.text)

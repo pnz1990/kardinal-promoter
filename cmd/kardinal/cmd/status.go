@@ -275,6 +275,15 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 	_, _ = fmt.Fprintln(w, strings.Repeat("─", 72))
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(tw, "ENVIRONMENT\tREGION\tBUNDLE\tSTATE\tACTIVE STEP\tPR\tAGE")
+	// A Pending step that a rollback hold or a blocking gate keeps waiting
+	// says so in STATE.
+	gatesByEnv := map[string][]string{}
+	for i := range blockingGates {
+		env := blockingGates[i].Labels["kardinal.io/environment"]
+		if n := gateDisplayName(blockingGates[i]); !slices.Contains(gatesByEnv[env], n) {
+			gatesByEnv[env] = append(gatesByEnv[env], n)
+		}
+	}
 	for _, r := range rows {
 		// Mark in-progress states with a pointer.
 		marker := "  "
@@ -287,7 +296,9 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 			prDisplay = prDisplay[len(prDisplay)-40:]
 		}
 		_, _ = fmt.Fprintf(tw, "%s%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			marker, r.env, r.region, r.bundle, stepLabel(r.state), r.activeStep, prDisplay, r.age)
+			marker, r.env, r.region, r.bundle,
+			stepRowLabel(r.state, lifecycle.HeldFrom(&pl, r.env, r.bundle) != nil, gatesByEnv[r.env]),
+			r.activeStep, prDisplay, r.age)
 	}
 	_ = tw.Flush()
 	for _, h := range rejectedLiveHints(pipeline, active, bundles.Items, steps.Items, "") {

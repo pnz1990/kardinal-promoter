@@ -24,8 +24,8 @@ type Tone string
 
 const (
 	ToneVerified   Tone = "verified"   // live, passing: healthy is quiet
-	TonePromoting  Tone = "promoting"  // moving: the change being followed
-	ToneWaiting    Tone = "waiting"    // waiting for a person or a time (PR review, gate not ready)
+	TonePromoting  Tone = "promoting"  // kardinal is acting (writing, checking health, verifying)
+	ToneWaiting    Tone = "waiting"    // needs a person or an external event (PR review, a gate, a time)
 	ToneBlocked    Tone = "blocked"    // a gate holds it back
 	ToneFailed     Tone = "failed"     // failed, stopped, rolling back, rejected
 	ToneSuperseded Tone = "superseded" // replaced by a newer version: final, not a failure
@@ -86,7 +86,7 @@ var table = map[Kind]map[string]State{
 	),
 	KindStep: index(
 		s("NotStarted", "Not reached", "○", "o", TonePending),
-		s("Pending", "Not started", "○", "o", TonePending),
+		s("Pending", "Queued", "○", "o", TonePending),
 		s("Promoting", "Promoting", "◐", ">", TonePromoting),
 		s("WaitingForMerge", "Waiting for PR merge", "◷", "~", ToneWaiting),
 		s("HealthChecking", "Checking health", "◌", "~", TonePromoting),
@@ -107,7 +107,7 @@ var table = map[Kind]map[string]State{
 		s("Pass", "Passing", "✓", "+", ToneVerified),
 		s("Block", "Blocking", "▮", "#", ToneBlocked),
 		s("Waiting", "Not ready", "◷", "~", ToneWaiting),
-		s("Pending", "Not evaluated yet", "○", "o", TonePending),
+		s("Pending", "Not evaluated yet", "○", "o", ToneWaiting),
 		s("Superseded", "Replaced by newer version", "↷", "-", ToneSuperseded),
 		s("Rejected", "Version rejected", "⊘", "-", ToneSuperseded),
 	),

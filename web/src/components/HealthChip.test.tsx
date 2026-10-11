@@ -176,7 +176,7 @@ describe('HealthChip component', () => {
 
   it('Pending state has health-chip--pending CSS class', () => {
     const { getByLabelText } = render(<HealthChip state="Pending" />)
-    expect(getByLabelText('Not started — pending')).toHaveClass('health-chip--pending')
+    expect(getByLabelText('Queued — pending')).toHaveClass('health-chip--pending')
   })
 
   it('Paused state has health-chip--paused CSS class', () => {

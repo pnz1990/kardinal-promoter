@@ -200,8 +200,8 @@ func TestPipelineTable_500EnvsUnderOneSecond(t *testing.T) {
 	ps, bs, ss := wideFleet()
 	start := time.Now()
 	var buf bytes.Buffer
-	require.NoError(t, formatPipelines(&buf, ps, bs, ss, nil, true, false))
-	require.NoError(t, formatPipelines(&buf, ps, bs, ss, nil, true, true))
+	require.NoError(t, formatPipelines(&buf, ps, bs, ss, nil, nil, true, false))
+	require.NoError(t, formatPipelines(&buf, ps, bs, ss, nil, nil, true, true))
 	elapsed := time.Since(start)
 	assert.Contains(t, buf.String(), "250 Live, 250 Promoting")
 	assert.Less(t, elapsed, time.Second)
@@ -211,6 +211,6 @@ func TestPipelineTable_500EnvsUnderOneSecond(t *testing.T) {
 func BenchmarkPipelineTable_500Envs(b *testing.B) {
 	ps, bs, ss := wideFleet()
 	for b.Loop() {
-		_ = formatPipelines(io.Discard, ps, bs, ss, nil, true, false)
+		_ = formatPipelines(io.Discard, ps, bs, ss, nil, nil, true, false)
 	}
 }

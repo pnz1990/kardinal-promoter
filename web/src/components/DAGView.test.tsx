@@ -124,7 +124,7 @@ describe('DAGView — node interaction', () => {
     const onSelect = vi.fn()
     const nodes = [makeNode({ id: 'step-env', environment: 'my-env', state: 'Pending' })]
     render(<DAGView nodes={nodes} edges={[]} onSelectNode={onSelect} />)
-    const btn = screen.getByRole('button', { name: /my-env — Not started/i })
+    const btn = screen.getByRole('button', { name: /my-env — Queued/i })
     await user.click(btn)
     expect(onSelect).toHaveBeenCalledTimes(1)
   })
@@ -134,7 +134,7 @@ describe('DAGView — node interaction', () => {
     const onSelect = vi.fn()
     const node = makeNode({ id: 'step-env', environment: 'my-env', state: 'Pending' })
     render(<DAGView nodes={[node]} edges={[]} selectedNode={node} onSelectNode={onSelect} />)
-    const btn = screen.getByRole('button', { name: /my-env — Not started/i })
+    const btn = screen.getByRole('button', { name: /my-env — Queued/i })
     await user.click(btn)
     expect(onSelect).toHaveBeenCalledWith(null)
   })
@@ -142,7 +142,7 @@ describe('DAGView — node interaction', () => {
   it('sets aria-pressed=true on selected node', () => {
     const node = makeNode({ id: 'step-env', environment: 'my-env', state: 'Pending' })
     render(<DAGView nodes={[node]} edges={[]} selectedNode={node} />)
-    const btn = screen.getByRole('button', { name: /my-env — Not started/i })
+    const btn = screen.getByRole('button', { name: /my-env — Queued/i })
     expect(btn).toHaveAttribute('aria-pressed', 'true')
   })
 })

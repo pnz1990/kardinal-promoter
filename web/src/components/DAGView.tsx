@@ -159,7 +159,7 @@ function DAGLegend() {
     { label: 'Verified', state: 'Verified', desc: 'Deployed and healthy' },
     { label: 'In progress', state: 'Promoting', desc: 'Promoting, waiting for the PR to merge, or checking health' },
     { label: 'Failed', state: 'Failed', desc: 'Failed, or stopped by an alarm' },
-    { label: 'Not started', state: 'Pending', desc: 'Not reached yet' },
+    { label: 'Queued', state: 'Pending', desc: 'Not reached yet, or waiting its turn' },
   ]
 
   return (

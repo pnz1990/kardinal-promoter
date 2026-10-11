@@ -190,8 +190,14 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 		if err := c.List(ctx, &subsList, opts...); err == nil {
 			subsItems = subsList.Items
 		}
+		// Gate instances name the gates that hold an environment. On error
+		// the cells say "Not reached" instead.
+		var gates v1alpha1.PolicyGateList
+		if err := c.List(ctx, &gates, opts...); err != nil {
+			gates.Items = nil
+		}
 		// kardinal get pipelines <name> shows every environment of it.
-		if err := formatPipelines(w, items, bundles.Items, steps.Items, subsItems, allNamespaces, len(args) == 1); err != nil {
+		if err := formatPipelines(w, items, bundles.Items, steps.Items, gates.Items, subsItems, allNamespaces, len(args) == 1); err != nil {
 			return err
 		}
 		// Bundle errors are listed for the shown pipelines only.

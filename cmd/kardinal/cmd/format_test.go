@@ -100,7 +100,7 @@ func TestFormatPipelineTable(t *testing.T) {
 	// P2: display labels, not the raw states (Verified, Pending).
 	assert.Contains(t, out, "Live")
 	assert.Contains(t, out, "Promoting")
-	assert.Contains(t, out, "Not started")
+	assert.Contains(t, out, "Queued")
 	assert.NotContains(t, out, "Verified")
 	assert.NotContains(t, out, "Pending")
 }
@@ -360,7 +360,7 @@ func TestFormatStepsTable(t *testing.T) {
 	assert.Contains(t, out, "MESSAGE")
 	assert.Contains(t, out, "test")
 	assert.Contains(t, out, "kustomize-set-image")
-	assert.Contains(t, out, "Not started")
+	assert.Contains(t, out, "Queued")
 	assert.Contains(t, out, "no-weekend-deploys")
 }
 

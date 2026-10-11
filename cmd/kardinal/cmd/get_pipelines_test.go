@@ -341,7 +341,7 @@ func TestGetPipelinesOnce_CurrentBundleState(t *testing.T) {
 				explainStep("demo", "b2", "uat", "Verified", "", recent),
 				explainGateInstance("demo", "b2", "prod", "require-uat-soak", "false", false, true, "soak 3m < 30m"),
 			}, b1Everywhere()...),
-			want: map[string]string{"BUNDLE": "b2", "TEST": "Verified", "UAT": "Verified", "PROD": "Waiting"},
+			want: map[string]string{"BUNDLE": "b2", "TEST": "Verified", "UAT": "Verified", "PROD": cellHeldByGate + "require-uat-soak"},
 		},
 		{
 			name: "bundle health checking in test, ungated uat",

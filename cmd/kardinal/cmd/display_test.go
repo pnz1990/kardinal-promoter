@@ -7,8 +7,13 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
 var cellGap = regexp.MustCompile(`\s{2,}`)
@@ -35,7 +40,7 @@ func TestEnvCellLabel(t *testing.T) {
 	assert.Equal(t, "Not reached", envCellLabel("Waiting"))
 	assert.Equal(t, "-", envCellLabel(""))
 	assert.Equal(t, "12/50 live, 1 failed", envCellLabel("12/50 live, 1 failed"))
-	assert.Equal(t, "Not started", stepLabel(""))
+	assert.Equal(t, "Queued", stepLabel(""))
 }
 
 var camelCase = regexp.MustCompile(`\b[A-Z][a-z]+[A-Z][A-Za-z]*\b`)
@@ -51,4 +56,58 @@ func assertNoRawStates(t *testing.T, out string) {
 	for _, s := range apiStates {
 		assert.NotContains(t, out, s, "raw API state %q in the default output:\n%s", s, out)
 	}
+}
+
+// TestHeldEnvironments (P2 QA): an environment the current Bundle waits for
+// because of a rollback hold or gates says "Held by rollback" or "Held by
+// gate <name>", not "Not reached", in get pipelines and in kardinal status.
+//
+// Covers DISPLAY-STATES-01.
+func TestHeldEnvironments(t *testing.T) {
+	old, recent := time.Now().Add(-2*time.Hour), time.Now().Add(-10*time.Minute)
+	assert.Equal(t, "Held by rollback", envCellLabel(heldCell("Waiting", true, nil)))
+	assert.Equal(t, "Held by gate a, b", envCellLabel(heldCell("Pending", false, []string{"a", "b"})))
+	assert.Equal(t, "Live", envCellLabel(heldCell("Verified", true, []string{"a"})), "only a waiting cell is held")
+	assert.Equal(t, "Not reached", envCellLabel(heldCell("Waiting", false, nil)))
+
+	t.Run("get pipelines: rollback hold", func(t *testing.T) {
+		p := policyPipeline("demo", "test", "prod")
+		p.Spec.Holds = []v1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "b1", Reason: "incident"}}
+		rows := pipelineEnvStates([]v1alpha1.Pipeline{*p},
+			[]v1alpha1.Bundle{*explainBundle("b1", "Verified", old), *explainBundle("b2", "Promoting", recent)},
+			[]v1alpha1.PromotionStep{
+				*explainStep("demo", "b1", "test", "Verified", "", old),
+				*explainStep("demo", "b1", "prod", "Verified", "", old),
+				*explainStep("demo", "b2", "test", "Verified", "", recent),
+			}, nil)
+		assert.Equal(t, "Held by rollback", envCellLabel(rows["default/demo"].envs["prod"]))
+		assert.Equal(t, "Live", envCellLabel(rows["default/demo"].envs["test"]))
+	})
+
+	t.Run("status: a Pending step a gate holds", func(t *testing.T) {
+		step := explainStep("demo", "b2", "prod", "Pending", "", recent)
+		gate := explainGateInstance("demo", "b2", "prod", "no-weekend-deploys", "!schedule.isWeekend",
+			false, true, "!schedule.isWeekend = false")
+		step.Spec.RequiredGates = []string{gate.Name}
+		out := runStatusPipeline(t, policyPipeline("demo", "uat", "prod"),
+			explainBundle("b2", "Promoting", recent),
+			explainStep("demo", "b2", "uat", "Verified", "", recent), step, gate)
+		steps, _, _ := strings.Cut(out, "Deployed")
+		assert.Contains(t, steps, "Held by gate no-weekend-deploys", out)
+		assertNoRawStates(t, out)
+	})
+
+	t.Run("status: a Pending step a rollback hold keeps out", func(t *testing.T) {
+		p := policyPipeline("demo", "uat", "prod")
+		p.Spec.Holds = []v1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "b1", Reason: "incident"}}
+		objs := []sigs_client.Object{p,
+			explainBundle("b1", "Verified", old), explainBundle("b2", "Promoting", recent),
+			explainStep("demo", "b1", "prod", "Verified", "", old),
+			explainStep("demo", "b2", "uat", "Verified", "", recent),
+			explainStep("demo", "b2", "prod", "Pending", "", recent)}
+		out := runStatusPipeline(t, objs...)
+		steps, _, found := strings.Cut(out, "Deployed")
+		require.True(t, found, out)
+		assert.Contains(t, steps, "Held by rollback", out)
+	})
 }

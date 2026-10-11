@@ -105,7 +105,7 @@ func stepStatePriority(state string) int {
 // pipeline. showNamespace prepends a NAMESPACE column (--all-namespaces).
 func FormatPipelineTableFull(w io.Writer, pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
 	steps []v1alpha1.PromotionStep, subs []v1alpha1.Subscription, showNamespace bool) error {
-	return formatPipelines(w, pipelines, bundles, steps, subs, showNamespace, false)
+	return formatPipelines(w, pipelines, bundles, steps, nil, subs, showNamespace, false)
 }
 
 // maxEnvColumns is the most environment columns the pipeline table shows:
@@ -117,7 +117,7 @@ const maxEnvColumns = 8
 // formatPipelines is FormatPipelineTableFull with allColumns: show one
 // column per environment however many there are.
 func formatPipelines(w io.Writer, pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
-	steps []v1alpha1.PromotionStep, subs []v1alpha1.Subscription, showNamespace, allColumns bool) error {
+	steps []v1alpha1.PromotionStep, gates []v1alpha1.PolicyGate, subs []v1alpha1.Subscription, showNamespace, allColumns bool) error {
 	var subCount map[string]int
 	if subs != nil {
 		// namespace/pipeline → count of active Subscriptions (Phase=="Watching").
@@ -131,7 +131,7 @@ func formatPipelines(w io.Writer, pipelines []v1alpha1.Pipeline, bundles []v1alp
 			}
 		}
 	}
-	rows := pipelineEnvStates(pipelines, bundles, steps)
+	rows := pipelineEnvStates(pipelines, bundles, steps, gates)
 	orders := pipelineOrders(pipelines)
 	envOrder := envColumnOrder(pipelines, orders)
 	if !allColumns && len(envOrder) > maxEnvColumns {
@@ -350,7 +350,16 @@ type pipelineRow struct {
 // (skipped, or past its target). Another Bundle's state is never shown, so a
 // row cannot pair a Bundle with a state it does not have.
 func pipelineEnvStates(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
-	steps []v1alpha1.PromotionStep) map[string]pipelineRow {
+	steps []v1alpha1.PromotionStep, gates []v1alpha1.PolicyGate) map[string]pipelineRow {
+	// Gate instances by namespace/bundle: a not-ready one that holds the
+	// current Bundle (graph.GateHolds) names the environment's cell.
+	gatesByBundle := make(map[string][]*v1alpha1.PolicyGate)
+	for i := range gates {
+		if b := gates[i].Labels["kardinal.io/bundle"]; b != "" && !gates[i].Status.Ready {
+			key := gates[i].Namespace + "/" + b
+			gatesByBundle[key] = append(gatesByBundle[key], &gates[i])
+		}
+	}
 	bundlesByPipeline := make(map[string][]v1alpha1.Bundle)
 	for i := range bundles {
 		if bundles[i].Spec.Pipeline != "" {
@@ -410,6 +419,17 @@ func pipelineEnvStates(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
 				row.envs[env] = state
 			}
 		}
+		// An environment the Bundle waits for says what holds it.
+		for env, cell := range row.envs {
+			var holding []string
+			for _, g := range gatesByBundle[p.Namespace+"/"+b.Name] {
+				if g.Labels["kardinal.io/environment"] == env && graph.GateHolds(p, b, g, own) {
+					holding = append(holding, gateDisplayName(*g))
+				}
+			}
+			slices.Sort(holding)
+			row.envs[env] = heldCell(cell, lifecycle.HeldFrom(p, env, b.Name) != nil, slices.Compact(holding))
+		}
 		// A fleet environment's column counts its targets.
 		fleets, _ := graph.FleetTargetEnvironments(p)
 		for fleet, targets := range fleets {
@@ -432,7 +452,7 @@ func fleetCell(envs map[string]string, targets []string) string {
 	var superseded []string
 	for _, t := range targets {
 		st, ok := envs[t]
-		if !ok || st == "Waiting" {
+		if !ok || st == "Waiting" || st == cellHeld || strings.HasPrefix(st, cellHeldByGate) {
 			continue
 		}
 		seen++
