@@ -457,7 +457,8 @@ func TestCLI_Init(t *testing.T) {
 		cli.Args(a.ns, "init", "--name", a.ns, "--repo", "https://git.example/o/r", "--envs", "test",
 			"--secret", "init-token", "--create-secret", "--apply", "--stdout")...)
 	require.Equal(t, 0, r.Code, r.Output())
-	assert.Equal(t, "apiVersion: kardinal.io/v1alpha1\nkind: Pipeline\nmetadata: { name: "+a.ns+" }\n"+
+	// -n (the framework passes it) names the namespace in the YAML.
+	assert.Equal(t, "apiVersion: kardinal.io/v1alpha1\nkind: Pipeline\nmetadata: { name: "+a.ns+", namespace: "+a.ns+" }\n"+
 		"spec:\n  git:\n    url: https://git.example/o/r\n    secretRef: { name: init-token }\n"+
 		"  environments:\n    - name: test\n      approval: pr-review\n      health: { type: argocd }\n", r.Stdout)
 	assert.Contains(t, r.Stderr, "Found Argo CD Application argocd/"+a.ns+"-test: test checks health with it\n")
