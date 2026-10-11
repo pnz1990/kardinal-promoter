@@ -23,8 +23,9 @@ const holdInstance = need('KARDINAL_UI_HOLD_INSTANCE')
 test('Override gate in the stage drawer asks first, then overrides the gate in prod', async ({ page }) => {
   const writes: string[] = []
   page.on('request', r => {
+    // Reads, and the drawer's CEL check (POST validate-cel, which writes nothing).
     const path = new URL(r.url()).pathname
-    if (r.method() !== 'GET' && path !== '/api/v1/ui/validate-cel' && path !== '/api/v1/ui/access') writes.push(`${r.method()} ${path}`)
+    if (r.method() !== 'GET' && !(r.method() === 'POST' && path === '/api/v1/ui/validate-cel')) writes.push(`${r.method()} ${path}`)
   })
   await openPipeline(page, base, ns)
   await dagNode(page, holdGate).click()

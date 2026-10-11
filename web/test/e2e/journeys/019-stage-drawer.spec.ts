@@ -84,6 +84,9 @@ test.describe('Journey 019 — Stage drawer', () => {
     await expect(details).not.toHaveAttribute('open', '')
     await page.emulateMedia({ colorScheme: 'dark' })
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))
+    // Let the theme's colour transitions finish: axe mid-transition reads a colour between
+    // the two themes (a flaky contrast failure on the fleet health total, not a real one).
+    await page.evaluate(() => Promise.all(document.getAnimations().map(a => a.finished.catch(() => undefined))))
     await axe(page)
 
     await page.setViewportSize({ width: 390, height: 844 })

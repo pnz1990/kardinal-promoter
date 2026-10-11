@@ -104,23 +104,25 @@ test('a gate shows its CEL expression, checked by the controller', async ({ page
   await expect(drawerHeading(page)).toHaveText('prod')
   const passing = section(detail, 'evidence').locator('.stage-gates > li').filter({ hasText: gate })
   await expect(passing).toContainText('Passing')
-  await expect(passing).toContainText(/ago/)
+  // When the controller last evaluated it.
+  await expect(passing).toContainText(/ · (\d+s|\d+m \d+s|\d+h \d+m) ago/)
   await passing.getByText('Details', { exact: true }).click()
-  await expect(passing.getByText('✓ valid', { exact: true })).toBeVisible()
-  await expect(passing.getByText('✗ error', { exact: true })).toHaveCount(0)
+  await expect(passing.locator('[data-cel-check="valid"]')).toHaveText('✓valid')
+  await expect(passing.locator('[data-cel-check="error"]')).toHaveCount(0)
 
   // An expression that does not compile holds its environment: why it's waiting names it,
   // and its Details show the compile error.
   await openPipeline(page, base, ns, celPipeline)
   await dagNode(page, badGate).click()
   const why = section(detail, 'why').locator('.stage-why__item').filter({ hasText: badGate })
-  await expect(why).toContainText(/evaluated .* ago|not evaluated yet/)
+  // When the controller last evaluated it: the Go test waits until it has.
+  await expect(why).toContainText(/evaluated (\d+s|\d+m \d+s|\d+h \d+m) ago/)
   await why.getByText('Details', { exact: true }).click()
   await expect(why).toContainText(badExpression)
-  const chip = why.getByText('✗ error', { exact: true })
-  await expect(chip).toBeVisible()
+  const chip = why.locator('[data-cel-check="error"]')
+  await expect(chip).toHaveText('✗error')
   await expect(chip).toHaveAttribute('title', /^CEL compile error: /)
   const error = await chip.getAttribute('title')
   await expect(why.getByText(error!, { exact: true })).toBeVisible()
-  await expect(why.getByText('✓ valid', { exact: true })).toHaveCount(0)
+  await expect(why.locator('[data-cel-check="valid"]')).toHaveCount(0)
 })

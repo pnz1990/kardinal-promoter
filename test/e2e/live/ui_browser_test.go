@@ -355,7 +355,7 @@ func TestUI_BrowserGateOverride(t *testing.T) {
 		r := c.Get(t, m[1])
 		require.Equal(t, http.StatusOK, r.Status, "GET %s: %s", m[1], r)
 		assert.NotContains(t, r.Body, "import(", "%s loads a chunk this test does not read", m[1])
-		assert.NotContains(t, r.Body, "/approve\"", "%s calls the per-gate approve endpoint", m[1])
+		assert.NotContains(t, r.Body, "/approve", "%s calls the per-gate approve endpoint", m[1])
 	}
 
 	framework.Playwright(t, "override.spec.ts", browserEnv(c, a.ns,

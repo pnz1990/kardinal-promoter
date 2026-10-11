@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0
 //
 // components/StepProgress.tsx — a promotion's sub-steps from status.steps[], with their
-// timing bars (UI-STEPTIME-01), shown by the node details and the stage drawer.
+// timing bars (UI-STEPTIME-01), shown by the stage drawer.
 import type { PromotionStep, StepStatus } from '../types'
 import { stepTimeline } from '../stepTimeline'
 import '../styles/NodeDetail.css'

@@ -1,8 +1,8 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 //
-// components/CELBlock.tsx — a CEL expression with syntax colours (#333), shown by the node
-// details and the stage drawer's Details.
+// components/CELBlock.tsx — a CEL expression with syntax colours (#333), shown by the stage
+// drawer's Details (they were the node details panel's).
 import '../styles/NodeDetail.css'
 
 type CELTokenType = 'keyword' | 'function' | 'string' | 'number' | 'operator' | 'boolean' | 'identifier' | 'plain'

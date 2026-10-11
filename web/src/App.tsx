@@ -10,7 +10,7 @@
 // namespaces never share a header, bundle list or DAG.
 // Every load carries a view sequence number; a response that arrives after the
 // user moved to another pipeline or bundle is dropped.
-// #326: selectedNode is lifted here so NodeDetail renders as a split panel
+// #326: selectedNode is lifted here so the stage drawer (U3) renders as a split panel
 // sibling of DAGView rather than a position:fixed overlay.
 // #740: URL routing — pipeline and node selection persisted in hash fragment.
 // #746: Global keyboard shortcuts — ?, r, Esc.
@@ -90,14 +90,14 @@ export function App() {
   const [graphLoading, setGraphLoading] = useState(false)
   const [graphError, setGraphError] = useState<string | undefined>()
 
-  // Steps for the active bundle — passed down to NodeDetail to avoid independent polling.
+  // Steps for the active bundle — passed down to the stage drawer to avoid independent polling.
   const [activeSteps, setActiveSteps] = useState<PromotionStep[]>([])
 
   // #340: PolicyGates — polled globally every 5s.
   const [gates, setGates] = useState<PolicyGate[]>([])
   const [gatesLoading, setGatesLoading] = useState(true)
 
-  // #326: selectedNode lifted from DAGView so NodeDetail is a split-panel sibling.
+  // #326: selectedNode lifted from DAGView so the stage drawer is a split-panel sibling.
   // #740: selectedNode ID is persisted in URL hash (node= param); full GraphNode object in local state.
   const [selectedNode, setSelectedNodeLocal] = useState<GraphNode | null>(null)
 
@@ -745,8 +745,7 @@ export function App() {
               loading={graphLoading}
             />
 
-            {/* #326: Content row — DAG + NodeDetail split panel side by side.
-                NodeDetail is a flex sibling, not position:fixed overlay. */}
+            {/* #326: Content row — the DAG and the stage drawer side by side. */}
             <div className="app-content">
               {/* DAG area */}
               <div className="app-dag" data-split={stageEnv ? true : undefined}>

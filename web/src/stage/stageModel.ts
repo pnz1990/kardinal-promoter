@@ -118,7 +118,8 @@ export function bundleVersion(b: Bundle): string {
 
 const PRIMARY: StageActionKind[] = ['approve', 'release', 'resume', 'promote', 'openPR']
 const PROMOTABLE = new Set(['NotStarted', 'Failed', 'AbortedByAlarm'])
-const IN_FLIGHT = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'Verifying'])
+/** Step states in which a promotion is running. */
+export const IN_FLIGHT: ReadonlySet<string> = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'Verifying'])
 
 /** Everything the drawer shows for env. */
 export function stageView(input: StageInput): StageView {
