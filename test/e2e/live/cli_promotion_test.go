@@ -716,7 +716,9 @@ func TestCLI_Reports(t *testing.T) {
 		}
 		var got []aeRow
 		for _, ev := range list {
-			got = append(got, aeRow{ev.Spec.PipelineName, ev.Spec.BundleName, ev.Spec.Environment, ev.Spec.Action, ev.Spec.Outcome})
+			// JSON carries the Bundle's name; the table its version cell.
+			cell := map[string]string{bA: vA, bB: vB}[ev.Spec.BundleName]
+			got = append(got, aeRow{ev.Spec.PipelineName, cell, ev.Spec.Environment, ev.Spec.Action, ev.Spec.Outcome})
 		}
 		assert.Equal(t, aes, got, "get auditevents -o %s", format)
 	}
