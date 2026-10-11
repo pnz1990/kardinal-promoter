@@ -253,6 +253,7 @@ export function apiHandler(state) {
       case 'approvals': return json(route, approve(state, body))
       case 'rollback': return json(route, rollback(state, body))
       case 'validate-cel': return json(route, { valid: true, expression: body.expression })
+      case 'override': return json(route, { message: `Overridden: ${body.environment} of ${body.pipeline} passes ${body.gate ?? 'the gate'} until it expires` })
       case 'pause': return json(route, { message: `paused ${body.pipeline}` })
       case 'resume': return json(route, { message: `resumed ${body.pipeline}` })
       case 'promote': return json(route, { bundle: 'promote-bundle', message: `promoting ${body.pipeline} to ${body.environment}` })
@@ -286,12 +287,20 @@ function approve(state, { bundle: bundleName, environment, decision = 'approve' 
   return { outcome: 'Recorded', approval: 'approval-1', user: 'you', message: `Recorded: you ${decision} ${bundleName} for ${environment}` }
 }
 
-/** A rollback ships the previous version to the environment, which starts promoting it. */
-function rollback(state, { pipeline: name, environment }) {
+/** A rollback ships the previous version to the environment, which starts promoting it; with a reason it holds the environment there. */
+function rollback(state, { pipeline: name, environment, holdReason }) {
   const p = state.pipelines.find((x) => x.name === name)
   const graph = p && state.graphs[p.activeBundleName]
   const node = graph?.nodes.find((n) => n.type === 'PromotionStep' && n.environment === environment)
+  const rollbackName = `${name}-rollback-${environment}`
   if (node) Object.assign(node, { state: 'Promoting', startedAt: new Date(NOW).toISOString() })
-  if (p) p.environmentStates = { ...p.environmentStates, [environment]: 'Promoting' }
-  return { bundle: `${name}-rollback-${environment}`, message: `Rolling back ${environment} of ${name} to the previous verified version` }
+  if (p) {
+    p.environmentStates = { ...p.environmentStates, [environment]: 'Promoting' }
+    if (holdReason) {
+      p.environmentTopology = p.environmentTopology.map((e) => e.name === environment
+        ? { ...e, hold: { bundle: rollbackName, reason: holdReason, createdBy: 'you', createdAt: new Date(NOW).toISOString() } }
+        : e)
+    }
+  }
+  return { bundle: rollbackName, held: !!holdReason, message: `Rolling back ${environment} of ${name} to the previous verified version` }
 }

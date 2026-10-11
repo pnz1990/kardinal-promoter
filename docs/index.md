@@ -44,6 +44,16 @@ kardinal-promoter is a Kubernetes-native controller that automates software prom
 
 </div>
 
+<figure class="k-demo" id="demo-first-look">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="assets/demos/first-look-dark.png">
+    <source media="(prefers-reduced-motion: reduce)" srcset="assets/demos/first-look.png">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/demos/first-look-dark.webp">
+    <img src="assets/demos/first-look.webp" alt="The kardinal UI: the fleet board, then the checkout pipeline map, then an older version and back." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>From the fleet to a pipeline, following a version · <code>kardinal get pipelines</code></figcaption>
+</figure>
+
 ## Why kardinal-promoter?
 
 All three tools can promote through a DAG of environments. These rows show where kardinal differs from Kargo v1.12.1 and GitOps Promoter v0.42.1; the [comparison](comparison.md) has the full feature matrix.

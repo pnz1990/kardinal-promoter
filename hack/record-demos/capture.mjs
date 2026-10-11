@@ -51,7 +51,7 @@ export function timeline(frames, { fps, holdMs }) {
  * Returns { webp, quality, fps, frames, durationMs }.
  */
 export async function encodeWebp(frames, { budget, width, holdMs = 1800 }) {
-  const tries = [[12, 62], [12, 50], [10, 42], [8, 36], [6, 30]]
+  const tries = [[15, 88], [15, 80], [12, 70], [12, 60], [10, 50], [8, 40], [6, 32]]
   let best
   for (const [fps, quality] of tries) {
     const kept = timeline(frames, { fps, holdMs })

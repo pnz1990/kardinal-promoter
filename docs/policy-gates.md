@@ -568,6 +568,15 @@ ready, not holding the Bundle).
 
 ## Approval gates
 
+<figure class="k-demo" id="demo-approve-override">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/approve-override.png">
+    <img src="../assets/demos/approve-override.webp" alt="The UI: approving a release from the Activity tab, then the confirmation a rejection asks for." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>Approve a release; a rejection asks first · <code>kardinal approve checkout-1-8-0 --env prod-eu</code></figcaption>
+</figure>
+
+
 An approval gate waits for people. Put `spec.approval` on a gate template; the gate is ready only when its expression is true and enough allowed people have approved the Bundle for the environment, and none of them rejected it. It works for `approval: auto` environments as for `pr-review` ones: the environment's PromotionStep is not created until the gate is ready.
 
 ```yaml

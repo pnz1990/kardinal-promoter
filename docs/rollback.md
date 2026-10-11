@@ -86,6 +86,15 @@ The `--to` flag names the Bundle to roll back to. It must exist in the Bundle hi
 
 ### Roll back and hold
 
+<figure class="k-demo" id="demo-rollback-hold">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/rollback-hold.png">
+    <img src="../assets/demos/rollback-hold.webp" alt="The UI: rolling back storefront prod, ticking Hold with a reason, and confirming." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>Roll back and hold, from the UI · <code>kardinal rollback storefront --env prod --hold --reason …</code></figcaption>
+</figure>
+
+
 ```bash
 kardinal rollback my-app --env prod --hold --reason "INC-4521: v1.29.0 leaks connections" [--hold-expires-in 24h]
 ```

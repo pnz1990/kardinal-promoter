@@ -69,6 +69,10 @@ theme:
 extra_css:
   - stylesheets/tokens.css
   - stylesheets/kardinal.css
+  - stylesheets/k-demo.css
+
+extra_javascript:
+  - javascripts/k-demo.js
 
 plugins:
   - search:

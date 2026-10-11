@@ -61,8 +61,8 @@ export const FLOWS = [
     },
   },
   {
-    name: 'approve',
-    title: 'Approve a release, and confirm before rejecting one',
+    name: 'approve-override',
+    title: 'Approve a release, and confirm before overriding or rejecting a gate',
     docs: ['policy-gates.md'],
     themes: ['light'],
     start: '#/p/shop/checkout?tab=activity',
@@ -88,8 +88,8 @@ export const FLOWS = [
     },
   },
   {
-    name: 'rollback',
-    title: 'Roll back an environment, after a confirmation',
+    name: 'rollback-hold',
+    title: 'Roll back prod and hold it there, after a confirmation',
     docs: ['rollback.md'],
     themes: ['light'],
     start: '#/p/shop/storefront',
@@ -98,11 +98,16 @@ export const FLOWS = [
       await d.move(stage(page, 'prod'))
       await d.pause(600)
       await d.click(page.getByRole('button', { name: 'Roll back prod', exact: true }).first(), { after: 1200 })
-      d.poster()
       const dialog = page.getByRole('dialog')
       await d.move(dialog.getByRole('heading').first())
-      await d.pause(1200)
-      await d.click(dialog.getByRole('button', { name: 'Roll back prod', exact: true }), { after: 2200 })
+      await d.pause(900)
+      // Hold prod on the rollback, with a reason, so nothing newer promotes over it.
+      await d.click(dialog.getByRole('checkbox', { name: /^Hold prod/ }), { after: 800 })
+      await d.click(dialog.getByRole('textbox', { name: /Reason/ }), { after: 300 })
+      await d.type('INC-4211: 2.3.0 leaks connections')
+      await d.pause(500)
+      d.poster()
+      await d.click(dialog.getByRole('button', { name: 'Roll back and hold prod', exact: true }), { after: 2400 })
     },
   },
   {
@@ -126,7 +131,7 @@ export const FLOWS = [
     },
   },
   {
-    name: 'big-fleet',
+    name: 'fleet',
     title: 'A big fleet: every pipeline on one board, a fleet of 42 targets',
     docs: ['pipeline-reference.md'],
     themes: ['light', 'dark'],
@@ -164,9 +169,9 @@ export const FLOWS = [
     async run(d, page) {
       await d.pause(1200)
       await d.press('Control+K', ['Ctrl', 'K'])
-      d.poster()
       await d.type('storefront prod')
       await d.pause(800)
+      d.poster()
       await d.press('ArrowDown')
       await d.press('ArrowUp')
       await d.press('Enter', ['Enter'])

@@ -326,6 +326,15 @@ EOF
 
 The promotion starts immediately. kardinal-promoter generates a Graph and begins promoting through environments.
 
+<figure class="k-demo" id="demo-why-waiting">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/why-waiting.png">
+    <img src="../assets/demos/why-waiting.webp" alt="The UI: selecting a waiting stage, then its gate, to read why the promotion waits." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>Why a stage is waiting, in the UI · <code>kardinal explain kardinal-test-app --env prod</code></figcaption>
+</figure>
+
+
 ```bash
 # Watch the pipeline status
 kardinal get pipelines

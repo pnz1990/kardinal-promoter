@@ -10,7 +10,7 @@
 //   npx playwright install chromium            # once
 //   node record.mjs                            # every flow, into docs/assets/demos
 //   node record.mjs --only first-look,palette  # some flows
-//   node record.mjs --check                    # record into a temp dir and check
+//   node record.mjs --check [--out dir]        # record into a temp dir (or dir) and check
 //                                              # each clip exists and fits the budget
 //
 // The mock server (web/test/e2e/mock-server) serves web/dist under the controller's
@@ -114,7 +114,8 @@ async function recordFlow(browser, base, flow, theme, opts) {
 
 async function main() {
   const opts = args(process.argv.slice(2))
-  if (opts.check) opts.out = fs.mkdtempSync(path.join(os.tmpdir(), 'kardinal-demos-'))
+  // --check records somewhere else (a temp dir, or --out), never over the committed clips.
+  if (opts.check && opts.out === OUT) opts.out = fs.mkdtempSync(path.join(os.tmpdir(), 'kardinal-demos-'))
   if (!fs.existsSync(DIST)) {
     console.error('record-demos: web/dist is missing; build the UI first (cd web && npm ci && npm run build)')
     process.exit(2)
