@@ -353,10 +353,6 @@
          <lastmod>2026-10-11</lastmod>
     </url>
     <url>
-         <loc>https://pnz1990.github.io/kardinal-promoter/reference/cli/kardinal-release-hold/</loc>
-         <lastmod>2026-10-11</lastmod>
-    </url>
-    <url>
          <loc>https://pnz1990.github.io/kardinal-promoter/reference/cli/kardinal-resume/</loc>
          <lastmod>2026-10-11</lastmod>
     </url>
@@ -370,6 +366,10 @@
     </url>
     <url>
          <loc>https://pnz1990.github.io/kardinal-promoter/reference/cli/kardinal-status/</loc>
+         <lastmod>2026-10-11</lastmod>
+    </url>
+    <url>
+         <loc>https://pnz1990.github.io/kardinal-promoter/reference/cli/kardinal-unhold/</loc>
          <lastmod>2026-10-11</lastmod>
     </url>
     <url>
