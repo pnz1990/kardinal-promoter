@@ -40,6 +40,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
@@ -165,17 +166,9 @@ func deployedByEnv(p *v1alpha1.Pipeline, byEnv map[string][]*v1alpha1.PromotionS
 		}
 		return v
 	}
-	// A fleet environment runs nothing itself: its targets do.
-	fleets, _ := graphpkg.FleetTargetEnvironments(p)
-	names := make([]string, 0, len(p.Spec.Environments))
-	for _, env := range p.Spec.Environments {
-		if env.Fleet != nil {
-			names = append(names, fleets[env.Name]...)
-		} else {
-			names = append(names, env.Name)
-		}
-	}
-	for _, name := range names {
+	// A fleet environment runs nothing itself: its targets do. The same
+	// names as the Pipeline's status.environments.
+	for _, name := range pipelinereconciler.EnvironmentNames(p) {
 		envSteps := byEnv[name]
 		dep := lifecycle.DeployedInSteps(envSteps, p.Name, name, bundles)
 		if dep.Bundle == "" {

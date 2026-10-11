@@ -291,7 +291,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 		gates = gateList.Items
 	}
-	desiredEnvs := ProjectEnvironments(&p, bundleList.Items, steps, gates, p.Status.Environments, r.now())
+	// validated carries the fleets just resolved, as the Graph builder will
+	// see them.
+	desiredEnvs := ProjectEnvironments(validated, bundleList.Items, steps, gates, p.Status.Environments, r.now())
 	desiredSummary := Summarize(&p, desired, desiredEnvs)
 	desiredEnvLine := EnvironmentLine(desiredEnvs)
 	desiredMetrics := ComputeDeploymentMetrics(&p, bundleList.Items, steps, time.Now().UTC())
