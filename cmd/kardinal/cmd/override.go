@@ -69,6 +69,14 @@ the Bundle waits. A single gate instance name is accepted too.`,
 			if err != nil {
 				return fmt.Errorf("override: %w", err)
 			}
+			where := "every environment"
+			if env != "" {
+				where = env
+			}
+			if err := confirm(cmd, fmt.Sprintf("Override gate %s of %s in %s for %s? It passes without its check.",
+				gateName, pipeline, where, durationText(expiresIn))); err != nil {
+				return err
+			}
 			return overrideFn(cmd.OutOrStdout(), c, ns, pipeline, env, gateName, reason, expiresIn)
 		},
 	}
@@ -79,6 +87,7 @@ the Bundle waits. A single gate instance name is accepted too.`,
 	cmd.Flags().String("gate", "", "PolicyGate name to override")
 	_ = cmd.MarkFlagRequired("reason")
 
+	addYesFlag(cmd)
 	return cmd
 }
 

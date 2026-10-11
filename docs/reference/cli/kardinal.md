@@ -33,8 +33,11 @@ with virtual-terminal processing; without it output has no colour.
 -o json and -o yaml print the API's values (Verified, WaitingForMerge) and the
 cluster's text unchanged, and no table placeholders ("-", "--", "..."): a
 field with nothing to say is left out. With -w, -o json prints one document
-per refresh and -o yaml separates them with "---". Warnings and hints go to
-stderr, so stdout stays valid JSON. get prints the objects as the API server
+per refresh and -o yaml separates them with "---". Hints, prompts and the
+CLI's own warnings go to stderr, so stdout stays valid JSON. The notices a
+report shows about what it read (the ERROR: and WARNING: lines of status,
+get pipelines and explain) are part of its output, on stdout, so
+kardinal status my-app | less shows them; with -o json they are fields. get prints the objects as the API server
 lists them. The others print these fields (in brackets the ones left out
 when empty):
 
@@ -88,7 +91,7 @@ names the new Bundle.
 
 ### SEE ALSO
 
-* [kardinal approve](kardinal-approve.md)	 - Approve (or reject) a Bundle for an environment's approval gates
+* [kardinal approve](kardinal-approve.md)	 - Approve (or reject) the version waiting for an environment's approval gates
 * [kardinal audit](kardinal-audit.md)	 - Audit log commands: view and summarize promotion events
 * [kardinal completion](kardinal-completion.md)	 - Generate shell completion scripts
 * [kardinal create](kardinal-create.md)	 - Create kardinal resources
@@ -99,6 +102,7 @@ names the new Bundle.
 * [kardinal explain](kardinal-explain.md)	 - Explain the current state of a promotion pipeline
 * [kardinal get](kardinal-get.md)	 - Display one or more kardinal resources
 * [kardinal history](kardinal-history.md)	 - Show Bundle promotion history for a pipeline
+* [kardinal hold](kardinal-hold.md)	 - Keep an environment on what runs there now
 * [kardinal init](kardinal-init.md)	 - Write a Pipeline for your GitOps repository, from flags or a few questions
 * [kardinal logs](kardinal-logs.md)	 - Show promotion step execution logs for a pipeline
 * [kardinal metrics](kardinal-metrics.md)	 - Show promotion metrics (DORA-style) for a pipeline
@@ -111,6 +115,7 @@ names the new Bundle.
 * [kardinal release-hold](kardinal-release-hold.md)	 - Release the hold of a rollback on an environment
 * [kardinal resume](kardinal-resume.md)	 - Resume a paused pipeline
 * [kardinal rollback](kardinal-rollback.md)	 - Roll back a pipeline environment to a previous Bundle
+* [kardinal ship](kardinal-ship.md)	 - Ship a version: create a Bundle, and with --wait follow it
 * [kardinal status](kardinal-status.md)	 - Show controller health or per-pipeline in-flight promotion details
 * [kardinal validate](kardinal-validate.md)	 - Validate Pipeline and PolicyGate YAML before applying to the cluster
 * [kardinal version](kardinal-version.md)	 - Print the CLI, controller, and kro (Graph) versions

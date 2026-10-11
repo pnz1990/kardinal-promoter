@@ -197,6 +197,35 @@ kardinal create bundle my-app --type config \
 `--commit`, `--author` and `--ci-run-url` set `spec.provenance`. See
 [`kardinal create bundle`](reference/cli/kardinal-create-bundle.md) for every flag.
 
+### Waiting for the result: `kardinal ship --wait`
+
+`kardinal ship` takes the flags of `kardinal create bundle` and creates the same Bundle. With
+`--wait` it follows the Bundle and exits with a code the CI job can act on: `0` live everywhere,
+`1` failed, `3` a person is needed, `4` its PR waits for a person to merge it, `5` replaced,
+rejected or deleted, `6` timed out or interrupted (see
+[`kardinal ship`](reference/cli/kardinal-ship.md) for the full table).
+
+```bash
+kardinal ship my-app -n my-team --image "ghcr.io/myorg/my-app:${GITHUB_SHA}" --wait --timeout 45m
+```
+
+A gate that does not pass ends the wait with exit `3` only when it needs a person. A gate that
+opens by itself keeps the job waiting, until `--timeout`: one whose expression contains any of
+these texts, which name the [PolicyGate variables](policy-gates.md) that change with time:
+
+| Text in the expression | Variables |
+|---|---|
+| `schedule.` | `schedule.isWeekend`, `schedule.hour`, `schedule.dayOfWeek` |
+| `soakMinutes` | `upstream.<env>.soakMinutes`, `bundle.upstreamSoakMinutes` |
+| `upstream.` | anything else of `upstream.<env>` |
+| `metrics` | `metrics.<name>.value`, `metrics.<name>.result` |
+| `changewindow` | `changewindow.<name>` |
+
+So a job can wait through a soak or a deploy window. Any other gate that does not pass (on a
+Bundle label, its provenance or its version) exits `3`, as do an approval gate, a hold and a
+paused pipeline. `--stop-at-gate` exits `3` at any gate that does not pass, also one that would
+open by itself. A PR the SCM merges by itself (`pr.merge.auto`) is waited for.
+
 ### kubectl (declarative)
 
 For teams that prefer a fully declarative approach, the version can be created via kubectl in CI:

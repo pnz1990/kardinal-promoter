@@ -201,11 +201,12 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
               if (!nsPipelines || nsPipelines.length === 0) return null
               return (
                 <li key={ns}>
-                  {/* Namespace header */}
-                  <div className="pipeline-list__namespace">
+                  {/* Namespace header; it names the nested list. A nested <ul> keeps list
+                      semantics (role="group" would leave its <li> outside any list). */}
+                  <div className="pipeline-list__namespace" id={`pipeline-ns-${ns}`}>
                     {ns}
                   </div>
-                  <ul role="group" className="pipeline-list__list">
+                  <ul role="list" aria-labelledby={`pipeline-ns-${ns}`} className="pipeline-list__list">
                     {nsPipelines.map(p => renderPipelineItem(p))}
                   </ul>
                 </li>

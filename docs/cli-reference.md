@@ -9,7 +9,7 @@
 
 | Command | Description |
 |---|---|
-| [`kardinal approve`](reference/cli/kardinal-approve.md) | Approve (or reject) a Bundle for an environment's approval gates |
+| [`kardinal approve`](reference/cli/kardinal-approve.md) | Approve (or reject) the version waiting for an environment's approval gates |
 | [`kardinal audit`](reference/cli/kardinal-audit.md) | Audit log commands: view and summarize promotion events |
 | [`kardinal audit summary`](reference/cli/kardinal-audit-summary.md) | Aggregate promotion metrics from AuditEvent records |
 | [`kardinal completion`](reference/cli/kardinal-completion.md) | Generate shell completion scripts |
@@ -28,6 +28,7 @@
 | [`kardinal get steps`](reference/cli/kardinal-get-steps.md) | List PromotionSteps for a pipeline |
 | [`kardinal get subscriptions`](reference/cli/kardinal-get-subscriptions.md) | List Subscriptions (passive artifact watchers) |
 | [`kardinal history`](reference/cli/kardinal-history.md) | Show Bundle promotion history for a pipeline |
+| [`kardinal hold`](reference/cli/kardinal-hold.md) | Keep an environment on what runs there now |
 | [`kardinal init`](reference/cli/kardinal-init.md) | Write a Pipeline for your GitOps repository, from flags or a few questions |
 | [`kardinal logs`](reference/cli/kardinal-logs.md) | Show promotion step execution logs for a pipeline |
 | [`kardinal metrics`](reference/cli/kardinal-metrics.md) | Show promotion metrics (DORA-style) for a pipeline |
@@ -43,6 +44,7 @@
 | [`kardinal release-hold`](reference/cli/kardinal-release-hold.md) | Release the hold of a rollback on an environment |
 | [`kardinal resume`](reference/cli/kardinal-resume.md) | Resume a paused pipeline |
 | [`kardinal rollback`](reference/cli/kardinal-rollback.md) | Roll back a pipeline environment to a previous Bundle |
+| [`kardinal ship`](reference/cli/kardinal-ship.md) | Ship a version: create a Bundle, and with --wait follow it |
 | [`kardinal status`](reference/cli/kardinal-status.md) | Show controller health or per-pipeline in-flight promotion details |
 | [`kardinal validate`](reference/cli/kardinal-validate.md) | Validate Pipeline and PolicyGate YAML before applying to the cluster |
 | [`kardinal version`](reference/cli/kardinal-version.md) | Print the CLI, controller, and kro (Graph) versions |

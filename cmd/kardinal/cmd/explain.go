@@ -53,7 +53,9 @@ Bundle's step and the gates it waits on, gates that are not ready first, with
 each gate's expression, state and reason, and what is deployed there now when
 the change has not landed yet. -w refreshes every 3 seconds.`,
 		Example: `  kardinal explain my-app
+  kardinal why my-app prod
   kardinal explain my-app prod -w`,
+		Aliases:     []string{"why"},
 		Annotations: map[string]string{ReferenceAnnotation: explainReference, outputAnnotation: "true"},
 		Args:        cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -67,7 +69,7 @@ the change has not landed yet. -w refreshes every 3 seconds.`,
 			}
 			w := cmd.OutOrStdout()
 			if !watchFlag {
-				return explainOnce(w, c, ns, pipeline, env, colorFlag)
+				return explainHinted(w, c, ns, pipeline, env, colorFlag)
 			}
 			return explainWatch(cmd.Context(), w, c, ns, pipeline, env, colorFlag, 3*time.Second)
 		},
@@ -118,7 +120,20 @@ func explainWatch(ctx context.Context, w io.Writer, c sigs_client.Client,
 	}
 }
 
+// explainHinted is explainOnce followed, on stderr, by the command that gets
+// past each gate that blocks: kardinal explain and why without -w (a watch
+// would repeat them every frame).
+func explainHinted(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter string, forceColor bool) error {
+	return explainRender(w, c, ns, pipeline, envFilter, forceColor, true)
+}
+
 func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter string, forceColor bool) error {
+	return explainRender(w, c, ns, pipeline, envFilter, forceColor, false)
+}
+
+// explainRender renders explain to w, and with hints the unblock commands
+// on stderr.
+func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter string, forceColor, hints bool) error {
 	ctx := context.Background()
 
 	pipe, err := getPipeline(ctx, c, ns, pipeline)
@@ -175,6 +190,7 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	}
 
 	var rows []explainRow
+	var unblock []string // next-step hints, for stderr
 	for _, s := range steps.Items {
 		env := s.Spec.Environment
 		if envFilter != "" && env != envFilter {
@@ -225,6 +241,16 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 			expression:  expr,
 			notReady:    !g.Status.Ready,
 		})
+		// How to get past a gate that was evaluated and does not pass.
+		if !g.Status.Ready && g.Status.LastEvaluatedAt != nil {
+			hint := fmt.Sprintf("Override: kardinal override %s %s --gate %s --reason <why>", pipeline, env, gateDisplayName(g))
+			if g.Spec.Approval != nil {
+				hint = fmt.Sprintf("Approve: kardinal approve %s %s", pipeline, env)
+			}
+			if !slices.Contains(unblock, hint) {
+				unblock = append(unblock, hint)
+			}
+		}
 	}
 
 	// Sort by environment, then kind (PolicyGate before Step), then gates
@@ -298,7 +324,18 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	if err := writeExplainDeployed(w, pipeline, envNames, envFilter, current, steps.Items, bundleByName); err != nil {
 		return err
 	}
-	return writeExplainHolds(w, pipe, envFilter)
+	if err := writeExplainHolds(w, pipe, envFilter); err != nil {
+		return err
+	}
+	// Hints go to stderr: stdout stays the table.
+	if !hints {
+		unblock = nil
+	}
+	for _, h := range unblock {
+		label, cmdline, _ := strings.Cut(h, ": ")
+		_, _ = fmt.Fprintf(errOut, "%s %s\n", sty.Dim(label+":"), cmdline)
+	}
+	return nil
 }
 
 // explainOutput is kardinal explain -o json|yaml: the rows of the table, with
@@ -380,11 +417,11 @@ func writeExplainHolds(w io.Writer, p *v1alpha1.Pipeline, envFilter string) erro
 			if st.BundleMissingSince != nil {
 				since = " since " + st.BundleMissingSince.UTC().Format(time.RFC3339)
 			}
-			fmt.Fprintf(&buf, "%s: held on rollback %s by %s (%s), but the rollback Bundle does not exist%s. The hold stays in effect: no other Bundle promotes here. Release with: kardinal release-hold %s --env %s, then roll back with --hold again if wanted\n",
+			fmt.Fprintf(&buf, "%s: held on rollback %s by %s (%s), but the rollback version does not exist%s. The hold stays in effect: no other version promotes here. Release with: kardinal release-hold %s --env %s, then roll back with --hold again if wanted\n",
 				h.Environment, h.Bundle, by, h.Reason, since, p.Name, h.Environment)
 			continue
 		}
-		fmt.Fprintf(&buf, "%s: held on rollback %s by %s (%s); other Bundles do not promote here, and its gates here pass as EXEMPT while the controller verifies it. Release with: kardinal release-hold %s --env %s\n",
+		fmt.Fprintf(&buf, "%s: held on rollback %s by %s (%s); other versions do not promote here, and its gates here pass as EXEMPT while the controller verifies it. Release with: kardinal release-hold %s --env %s\n",
 			h.Environment, h.Bundle, by, h.Reason, p.Name, h.Environment)
 	}
 	if buf.Len() == 0 {

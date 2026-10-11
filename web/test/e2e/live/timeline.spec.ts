@@ -29,7 +29,7 @@ const comparison = (page: Page) => page.getByRole('dialog', { name: 'Version com
 async function expectShown(page: Page, b: Entry, other: Entry) {
   await expect(chip(page, b)).toHaveAttribute('aria-pressed', 'true')
   await expect(chip(page, other)).toHaveAttribute('aria-pressed', 'false')
-  await expect(page.getByRole('button', { name: `Copy bundle name "${b.name}"` })).toBeVisible()
+  await expect(page.getByRole('button', { name: `Copy version name "${b.name}"` })).toBeVisible()
   await expect(page.getByTitle('Author', { exact: true })).toHaveText(b.author)
   await expect(dagNode(page, 'test')).toHaveAttribute('data-node-id', b.step)
 }
@@ -40,7 +40,7 @@ const envLabels = (envs: string) => envs.split('\n').map(l => l.replace(/: (\w+)
 /** expectComparison checks the panel for Bundle A a and Bundle B b. */
 async function expectComparison(panel: Locator, a: Entry, b: Entry) {
   await expect(panel.getByRole('heading', { name: 'Compare versions' })).toBeVisible()
-  const rows = panel.locator('div[style*="grid-template-columns"]')
+  const rows = panel.locator('.bundle-diff__row')
   const row = (label: string) => rows.filter({ hasText: new RegExp(`^(▸ )?${label}`) })
   const cells = (label: string) => row(label).locator(':scope > span')
 
@@ -89,9 +89,9 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
   }
   await expectShown(page, newer, older)
 
-  // UI-BUNDLETYPE-01: the Bundle card names the type; image versions, the
-  // common case, carry no badge in the timeline.
-  await expect(page.getByRole('img', { name: 'image version' })).toBeVisible()
+  // UI-BUNDLETYPE-01: image versions, the common case, carry no type tag, neither
+  // on the version line (U1) nor in the timeline.
+  await expect(page.getByRole('img', { name: 'image version' })).toHaveCount(0)
   const bar = page.getByRole('toolbar', { name: /^Versions/ })
   await expect(bar.getByRole('img')).toHaveCount(0)
   // UI-KEYBOARD-01: the timeline is one Tab stop, the arrow keys move in it.
