@@ -66,10 +66,12 @@ func runGetAuditEvents(cmd *cobra.Command, pipeline, bundle, env string, limit i
 	if err != nil {
 		return fmt.Errorf("get auditevents: %w", err)
 	}
-	if !allNamespaces {
-		if bundle, err = resolveBundleRef(contextOf(cmd), c, ns, pipeline, bundle); err != nil {
-			return fmt.Errorf("get auditevents: --bundle: %w", err)
-		}
+	scope := refScope{ns: ns, pipeline: pipeline}
+	if allNamespaces {
+		scope.ns = ""
+	}
+	if bundle, _, err = resolveBundleRefIn(contextOf(cmd), c, scope, bundle); err != nil {
+		return fmt.Errorf("get auditevents: --bundle: %w", err)
 	}
 	if allNamespaces {
 		ns = ""

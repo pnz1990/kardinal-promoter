@@ -37,6 +37,7 @@ func newDeleteCmd() *cobra.Command {
 }
 
 func newDeleteBundleCmd() *cobra.Command {
+	var pipeline string
 	cmd := &cobra.Command{
 		Use:     "bundle <name|version>",
 		Aliases: []string{"bundles"},
@@ -53,7 +54,7 @@ past the Pipeline's spec.historyLimit (default 50).`,
 			if err != nil {
 				return fmt.Errorf("delete bundle: %w", err)
 			}
-			name, err := resolveBundleRef(contextOf(cmd), c, ns, "", args[0])
+			name, _, err := resolveBundleRefIn(contextOf(cmd), c, refScope{ns: ns, pipeline: pipeline, strict: true}, args[0])
 			if err != nil {
 				return fmt.Errorf("delete bundle: %w", err)
 			}
@@ -63,6 +64,7 @@ past the Pipeline's spec.historyLimit (default 50).`,
 			return deleteBundleFn(cmd.OutOrStdout(), c, ns, name)
 		},
 	}
+	cmd.Flags().StringVar(&pipeline, "pipeline", "", "Look for a version given as <name> in this pipeline only")
 	addYesFlag(cmd)
 	return cmd
 }

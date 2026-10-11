@@ -40,9 +40,10 @@ kardinal reject <bundle|version> [flags]
 ### Options
 
 ```
-  -h, --help            help for reject
-      --reason string   Why the Bundle is rejected (required)
-      --yes             Do not ask for confirmation on a terminal
+  -h, --help              help for reject
+      --pipeline string   Look for a version given as <bundle> in this pipeline only
+      --reason string     Why the Bundle is rejected (required)
+      --yes               Do not ask for confirmation on a terminal
 ```
 
 ### Options inherited from parent commands

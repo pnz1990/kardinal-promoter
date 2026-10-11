@@ -26,6 +26,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -49,31 +54,50 @@ func refBundle(name, pipeline, phase string, minutes int, tags ...string) *v1alp
 //
 // Covers CLI-VERSIONREF-01.
 func TestResolveBundleRef_Golden(t *testing.T) {
+	chart := refBundle("demo-chart", "demo", "Verified", 15)
+	chart.Spec.Type, chart.Spec.Chart = "chart", &v1alpha1.ChartRef{Name: "mychart", Version: "7.7.7"}
+	cfg := refBundle("demo-cfg", "demo", "Verified", 12)
+	cfg.Spec.Type, cfg.Spec.ConfigRef = "config", &v1alpha1.ConfigRef{CommitSHA: "abc1234def5678abc1234def5678abc1234def56"}
+	other := refBundle("x-a", "x", "Verified", 5, "1.4.0")
+	other.Namespace = "team-b"
 	c := policyClient(t,
-		refBundle("demo-a", "demo", "Verified", 50, "1.4.0"),
+		refBundle("demo-a", "demo", "Verified", 50, "1.4.0", "web-a"),
 		refBundle("demo-b", "demo", "Superseded", 40, "1.5.0"),
 		refBundle("demo-c", "demo", "Promoting", 30, "1.5.0"),
 		refBundle("demo-d", "demo", "Verified", 20, "2.0.0", "sidecar-7"),
 		refBundle("web-a", "web", "Verified", 10, "1.4.0"),
+		chart, cfg, other,
 	)
-	cases := []struct{ pipeline, ref string }{
-		{"", "demo-a"},
-		{"demo", "1.4.0"},
-		{"", "1.4.0"},
-		{"demo", "1.5.0"},
-		{"demo", "sidecar-7"},
-		{"demo", "3.0.0"},
-		{"other", "1.4.0"},
+	cases := []refScope{
+		{ns: "default"}, {ns: "default", pipeline: "demo"}, {ns: "default"}, {ns: "default", pipeline: "demo"},
+		{ns: "default", pipeline: "demo"}, {ns: "default", pipeline: "demo"}, {ns: "default", pipeline: "other"},
+		{ns: "default"}, {ns: "default", strict: true}, {ns: "default", pipeline: "demo"},
+		{ns: "default", pipeline: "demo"}, {ns: "default", pipeline: "demo"}, {ns: ""}, {ns: ""},
 	}
+	refs := []string{"demo-a", "1.4.0", "1.4.0", "1.5.0", "sidecar-7", "3.0.0", "1.4.0",
+		"web-a", "web-a", "web-a", "7.7.7", "abc1234", "x-a", "1.4.0"}
 	var golden strings.Builder
-	for _, tc := range cases {
-		got, err := resolveBundleRef(context.Background(), c, "default", tc.pipeline, tc.ref)
+	for i, sc := range cases {
+		got, ns, err := resolveBundleRefIn(context.Background(), c, sc, refs[i])
 		if err != nil {
 			require.True(t, errors.Is(err, errBundleRef), err)
 			got = "error: " + err.Error()
+		} else {
+			got = ns + "/" + got
 		}
-		fmt.Fprintf(&golden, "pipeline=%q ref=%q\n  %s\n", tc.pipeline, tc.ref, got)
+		fmt.Fprintf(&golden, "ns=%q pipeline=%q strict=%v ref=%q\n  %s\n", sc.ns, sc.pipeline, sc.strict, refs[i], got)
 	}
+
+	// May get but not list Bundles: a missing name is not found, not
+	// "forbidden".
+	forbidden := fake.NewClientBuilder().WithScheme(rootScheme).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(context.Context, sigs_client.WithWatch, sigs_client.ObjectList, ...sigs_client.ListOption) error {
+			return apierrors.NewForbidden(schema.GroupResource{Group: "kardinal.io", Resource: "bundles"}, "", errors.New("no list"))
+		},
+	}).Build()
+	_, _, err := resolveBundleRefIn(context.Background(), forbidden, refScope{ns: "default"}, "nope")
+	require.Error(t, err)
+	fmt.Fprintf(&golden, "list forbidden, ref=\"nope\"\n  error: %s\n", err)
 	path := filepath.Join("testdata", "bundle-ref.golden")
 	if *updateBundleRef {
 		require.NoError(t, os.WriteFile(path, []byte(golden.String()), 0o644))

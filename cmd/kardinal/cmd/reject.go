@@ -20,7 +20,7 @@ import (
 )
 
 func newRejectCmd() *cobra.Command {
-	var reason string
+	var reason, pipeline string
 	cmd := &cobra.Command{
 		Use:   "reject <bundle|version>",
 		Short: "Reject a Bundle: it is never promoted again, and rollback never picks it",
@@ -37,7 +37,7 @@ again. It does not revert an environment: use kardinal rollback for that.`,
 			if err != nil {
 				return fmt.Errorf("reject: %w", err)
 			}
-			name, err := resolveBundleRef(contextOf(cmd), c, ns, "", args[0])
+			name, _, err := resolveBundleRefIn(contextOf(cmd), c, refScope{ns: ns, pipeline: pipeline, strict: true}, args[0])
 			if err != nil {
 				return fmt.Errorf("reject: %w", err)
 			}
@@ -49,6 +49,7 @@ again. It does not revert an environment: use kardinal rollback for that.`,
 	}
 	cmd.Flags().StringVar(&reason, "reason", "", "Why the Bundle is rejected (required)")
 	_ = cmd.MarkFlagRequired("reason")
+	cmd.Flags().StringVar(&pipeline, "pipeline", "", "Look for a version given as <bundle> in this pipeline only")
 	addYesFlag(cmd)
 	return cmd
 }
