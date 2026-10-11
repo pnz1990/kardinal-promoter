@@ -338,7 +338,7 @@ func TestMutations_JSON(t *testing.T) {
 			lcBundle("app-v1", "app", "1", 0), lcBundle("app-v2", "app", "2", 10),
 			lcStep("app-v1", "uat", "Verified", 5), lcStep("app-v1", "prod", "Verified", 5), lcStep("app-v2", "prod", "Verified", 15)}
 	}
-	const url = "https://kardinal.example/ui/#pipeline=app&ns=default"
+	const url = "https://kardinal.example/ui/#/p/default/app"
 
 	var buf bytes.Buffer
 	c := lcClient(t, lcPipeline(), lcBundle("app-v1", "app", "1", 0), lcBundle("app-v2", "app", "2", 10),
