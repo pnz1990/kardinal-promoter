@@ -491,8 +491,9 @@ kardinal why says the same in a sentence per environment.
 
 An environment where that Bundle's change has not landed yet (it has not
 reached the environment, or its PR is not merged) also gets a line after the
-table with the Bundle deployed there now: the one whose change landed last,
-as kardinal rollback judges it, with its image tags or config commit.
+table with the version deployed there now (its image tags or config commit,
+then its Bundle): the one whose change landed last, as kardinal rollback
+judges it.
 Image and config Bundles do not supersede each other: when the last one is an
 image Bundle and a config commit landed before it, the line adds
 "; config <sha> from <bundle>", and under a config Bundle it adds

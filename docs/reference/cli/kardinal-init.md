@@ -20,7 +20,7 @@ pipe.
 
 It writes the smallest Pipeline that says it, as examples/minimal does: a
 default (branch main, kustomize, approval auto, the default health check) is
-left out (also namespace default). The name, namespace and environments must
+left out (also namespace default, unless -n gives it). The name, namespace and environments must
 be DNS-1123 labels, --repo an https or ssh git URL (https://host/owner/repo,
 ssh://git@host/owner/repo or git@host:owner/repo.git) with no spaces, query
 or fragment, and --branch a git branch name; every value is written as a

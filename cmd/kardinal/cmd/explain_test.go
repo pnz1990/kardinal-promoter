@@ -116,9 +116,9 @@ func TestExplain_ShowsAppliedGateInstances(t *testing.T) {
 		explainStep("demo", "b1", "test", "Verified", "", created),
 		explainStep("demo", "b1", "uat", "Verified", "", created),
 		explainGateInstance("demo", "b1", "prod", "no-weekend-deploys", "!schedule.isWeekend", false, true,
-			"bundle.version=sha-abc1234: !schedule.isWeekend = false"),
+			"!schedule.isWeekend = false (version sha-abc1234)"),
 		explainGateInstance("demo", "b1", "prod", "change-freeze", "!changewindow['q4'].isBlocked()", true, true,
-			"bundle.version=sha-abc1234: !changewindow['q4'].isBlocked() = true"),
+			"!changewindow['q4'].isBlocked() = true (version sha-abc1234)"),
 	)
 
 	out, err := runExplain(t, c, "demo", "prod", false)
@@ -439,17 +439,17 @@ func TestExplain_SupersededBundleIsNotCurrent(t *testing.T) {
 		version := map[string]string{"kardinal-test-app-7qvsr": "main", "kardinal-test-app-9tptr": "sha-9349a3f"}[b]
 		objs = append(objs,
 			explainGateInstance("demo", b, "prod", "no-weekend-deploys", "!schedule.isWeekend", true, true,
-				"bundle.version="+version+": !schedule.isWeekend = true"),
+				"!schedule.isWeekend = true (version "+version+")"),
 			explainGateInstance("demo", b, "prod", "require-uat-soak", "bundle.upstreamSoakMinutes >= 30", true, true,
-				"bundle.version="+version+": bundle.upstreamSoakMinutes >= 30 = true"))
+				"bundle.upstreamSoakMinutes >= 30 = true (version "+version+")"))
 	}
 	c := policyClient(t, objs...)
 
 	out, err := runExplain(t, c, "demo", "prod", false)
 	require.NoError(t, err)
 	assert.Contains(t, out, "9tptr prod")
-	assert.Contains(t, out, "bundle.version=sha-9349a3f")
-	assert.NotContains(t, out, "bundle.version=main", "the Superseded Bundle's gates are not shown:\n%s", out)
+	assert.Contains(t, out, "(version sha-9349a3f)")
+	assert.NotContains(t, out, "(version main)", "the Superseded Bundle's gates are not shown:\n%s", out)
 
 	out, err = runExplain(t, c, "demo", "", false)
 	require.NoError(t, err)
@@ -466,7 +466,7 @@ func TestExplain_WaitingBundleSkipGate(t *testing.T) {
 	old := policyTestNow.Add(-5 * time.Minute)
 	recent := policyTestNow.Add(-time.Minute)
 	skip := explainGateInstance("demo", "gapa-e2e2-wbptb", "prod", "gapa-allow-stage-skip",
-		`bundle.version == "sha-9349a3f"`, false, true, `bundle.version=main: bundle.version == "sha-9349a3f" = false`)
+		`bundle.version == "sha-9349a3f"`, false, true, `bundle.version == "sha-9349a3f" = false (version main)`)
 	skip.Labels["kardinal.io/type"] = "skip-permission"
 	skip.Annotations = map[string]string{"kardinal.io/skipped-environments": "uat"}
 	skipping := explainBundle("gapa-e2e2-wbptb", "Promoting", recent)

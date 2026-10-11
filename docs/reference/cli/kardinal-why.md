@@ -19,7 +19,10 @@ details and the command that moves it on:
 
 The cases, in the order it checks them: the pipeline is paused (Next:
 kardinal resume); the environment is held (on what, by whom, why; Next:
-kardinal unhold); a gate holds it (an approval: how many of how many; any
+kardinal unhold); a gate holds it (an approval: how many of how many, and
+"your approval" only when you may give it: you are in allowedUsers or
+allowedGroups, or both are empty, and, with excludeAuthor, you did not create
+the version; else who may, "approval by alice or group release-managers"; any
 other gate: its message, Rule its expression, Now its last evaluation,
 Opens when it opens and how often it is rechecked; Next: kardinal approve or
 kardinal override); its PR waits to be merged (PR and its URL); the version
