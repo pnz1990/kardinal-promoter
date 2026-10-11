@@ -25,6 +25,9 @@ const SHORTCUTS: ShortcutRow[] = [
   { key: '/', description: 'Focus pipeline search' },
   { key: '?', description: 'Show / hide this help panel' },
   { key: 'r', description: 'Refresh data now' },
+  { key: 'j / k', description: 'Next / previous environment; on Approvals, next / previous approval' },
+  { key: 'a', description: 'Approve: the open environment, or the approval in focus' },
+  { key: 's', description: 'Ship a version of the open pipeline' },
   { key: 'Esc', description: 'Close the open side panel' },
 ]
 

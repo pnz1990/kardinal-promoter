@@ -134,7 +134,7 @@
   font-size: var(--k-text-2xs);
   line-height: var(--k-leading-xs);
   font-weight: var(--k-weight-semibold);
-  font-stretch: 87.5%;
+  font-stretch: var(--k-stretch-label);
   letter-spacing: var(--k-tracking-caps);
   text-transform: uppercase;
   color: var(--k-ink-3);
@@ -298,6 +298,21 @@
   text-underline-offset: var(--k-space-1);
 }
 
+/* An action the person may not take (U7): in place, focusable, inert. */
+.stage-button[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.stage-restricted {
+  margin: var(--k-space-3) 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--k-ink-3);
+  font-size: var(--k-text-xs);
+  line-height: var(--k-leading-xs);
+}
+
 .stage-button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -340,9 +355,7 @@
 }
 
 .stage-targets,
-.stage-gates,
-.stage-events,
-.stage-steps {
+.stage-gates {
   margin: 0;
   padding: 0;
   list-style: none;
@@ -351,20 +364,11 @@
   gap: var(--k-space-2);
 }
 
-.stage-targets li,
-.stage-steps__item {
+.stage-targets li {
   display: flex;
   align-items: center;
   gap: var(--k-space-3);
 }
-
-.stage-steps__glyph { inline-size: var(--k-space-4); text-align: center; }
-.stage-steps__name { font-family: var(--k-font-mono); font-size: var(--k-text-xs); }
-.stage-steps__item--failed .stage-steps__glyph { color: var(--k-status-failed-fg); }
-.stage-steps__item--promoting .stage-steps__glyph { color: var(--k-status-promoting-fg); }
-.stage-steps__item--verified .stage-steps__glyph { color: var(--k-status-verified-fg); }
-
-.stage-events__item--warning { color: var(--k-status-failed-fg); }
 
 .stage-conditions {
   margin: var(--k-space-2) 0 0;
@@ -454,3 +458,22 @@
 @media (prefers-reduced-motion: reduce) {
   .stage-drawer { scroll-behavior: auto; }
 }
+
+/* A gate's CEL under Details, with the controller's compile check (UI-NODE-01). */
+.stage-cel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--k-space-2);
+}
+
+.stage-cel__chip {
+  padding: var(--k-space-px) var(--k-space-2);
+  border-radius: var(--k-radius-1);
+  border: var(--k-border-hairline) solid currentColor;
+  font-size: var(--k-text-xs);
+  line-height: var(--k-leading-xs);
+}
+
+.stage-cel__chip--valid { color: var(--k-status-verified-fg); }
+.stage-cel__chip--error { color: var(--k-status-failed-fg); }

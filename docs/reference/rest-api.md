@@ -40,6 +40,7 @@ With controller TLS set (`controller.tlsCertFile`), both listeners use `https://
 | `POST` | `/api/v1/ui/approvals` | Approve, reject or revoke a Bundle for an environment's approval gates, as the UI user (TokenReview mode only) |
 | `POST` | `/api/v1/ui/pause` | Pause a Pipeline |
 | `POST` | `/api/v1/ui/resume` | Resume a Pipeline |
+| `POST` | `/api/v1/ui/access` | Which of the given actions the caller may take, and the role that grants each (the UI hides or disables the rest) |
 | `POST` | `/api/v1/ui/validate-cel` | Compile a PolicyGate CEL expression |
 | `GET` | `/api/v1/ui/steps/{namespace}/{step}/events` | The Kubernetes Events of a PromotionStep |
 | `POST` | `/api/v1/bundles` | Create a Bundle from CI (served only when a Bundle API token is set) |
@@ -55,6 +56,21 @@ TokenReview or SubjectAccessReview API is unreachable (TokenReview mode fails cl
 Write endpoints record the caller as the requester (`kardinal.io/requested-by` on the Bundles
 they create, `createdBy` on gate overrides): the Kubernetes user with TokenReview, else
 `kardinal-ui`.
+
+`POST /api/v1/ui/access` answers what the caller may do, so the UI offers only those actions:
+
+```json
+{"namespace": "team-a", "checks": [
+  {"verb": "create", "resource": "approvals"},
+  {"verb": "update", "resource": "pipelines", "subresource": "pause", "name": "checkout"}]}
+```
+
+returns `{"user": {"username": "alice", "groups": [...]}, "results": [{"allowed": true,
+"grantedBy": "approver or admin"}, {"allowed": false, "grantedBy": "promoter or admin"}]}`. In
+TokenReview mode each check is a SubjectAccessReview for the verified caller, cached for 30
+seconds like every other check, and a denial is `allowed: false`, not a `403`. Without TokenReview
+every check is allowed and no `user` is named (the UI then cannot record an approval). At most 32
+checks per request.
 
 ## API tokens for automation: ServiceAccount tokens
 

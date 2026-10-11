@@ -276,6 +276,8 @@ export interface PolicyGate {
   /** The template an instance was made from (kardinal.io/gate-template): the
    *  gate's name as the user wrote it. Empty on templates. */
   gateTemplate?: string
+  /** When the instance was created (RFC 3339): when its environment started waiting on it. */
+  createdAt?: string
   /** The longest override the controller accepts for this instance, in minutes. */
   maxOverrideMinutes?: number
   /** True for a PolicyGate template: never evaluated for a bundle, always ready=false. */
@@ -336,4 +338,25 @@ export interface StepEvent {
   count: number         // number of occurrences
   firstTimestamp: string  // RFC3339
   lastTimestamp: string   // RFC3339
+}
+
+/** One action the UI asks POST /access about: verb on a kardinal.io resource. */
+export interface AccessCheck {
+  verb: 'get' | 'list' | 'create' | 'update' | 'patch' | 'delete'
+  resource: string
+  subresource?: string
+  name?: string
+}
+
+/** The answer to one AccessCheck. */
+export interface AccessResult {
+  allowed: boolean
+  /** The chart roles that grant it ("approver or admin"). */
+  grantedBy?: string
+}
+
+/** POST /access: who the caller is (TokenReview mode only) and what they may do. */
+export interface AccessResponse {
+  user?: { username: string; groups?: string[] }
+  results: AccessResult[]
 }

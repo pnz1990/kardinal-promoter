@@ -9,18 +9,31 @@
 // the map returns focus to the station. At the lg breakpoint and wider the
 // drawer is a non-modal column beside the page (the page gives up its
 // width); narrower, a modal sheet with trapped focus. Esc closes an open action dialog first, then the drawer.
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { api } from '../api/client'
 import { displayState, type Tone } from '../displayStates.gen'
 import { formatElapsedSince } from '../timeFormat'
 import { breakpoint } from '../tokens'
+import { CELBlock } from '../components/CELBlock'
+import EventsPanel from '../components/EventsPanel'
+import { StepProgress } from '../components/StepProgress'
 import type { Bundle, Pipeline, PolicyGate, PromotionStep, StepEvent } from '../types'
 import { useModalFocus } from '../useModalFocus'
+import { ActionButton } from './ActionButton'
 import { ACTION_LABEL, DESTRUCTIVE, StageActions } from './StageActions'
+import { useStageAccess, type ReasonFor } from './useStageAccess'
+import { useChangeHalo } from '../useChangeHalo'
 import { gateDisplay, gateLabel, stageView, type StageActionKind, type WaitReason } from './stageModel'
+
+/** Step states in which the promotion is running (the elapsed time ticks). */
+const IN_FLIGHT = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'Verifying'])
 import '../styles/StageDrawer.css'
 
 export type StageSection = 'why' | 'actions' | 'evidence' | 'history'
+
+/** A keyboard command for the open drawer (U7): true when it opened the action, the reason when the
+ *  person may not take it, false when it does not apply here. */
+export type StageCommand = (kind: StageActionKind) => true | string | false
 
 export interface StageDrawerProps {
   namespace: string
@@ -35,6 +48,8 @@ export interface StageDrawerProps {
   onChanged?: () => void
   /** For tests: the current time. */
   now?: number
+  /** Set to the drawer's keyboard command while it is open (U7). */
+  commandRef?: MutableRefObject<StageCommand | null>
 }
 
 function useWide(): boolean {
@@ -89,11 +104,34 @@ function DrawerSheet(props: StageDrawerProps) {
   )
 }
 
-function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, data, onChanged, now = Date.now(),
-  onDialog }: StageDrawerProps & { onDialog?: (open: boolean) => void }) {
+function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, data, onChanged, now: nowProp,
+  onDialog, commandRef }: StageDrawerProps & { onDialog?: (open: boolean) => void }) {
   const p = data.pipeline
   const view = useMemo(() => p ? stageView({ env, pipeline: p, bundles: data.bundles, steps: data.steps, gates: data.gates }) : undefined,
     [env, p, data.bundles, data.steps, data.gates])
+  // The clock: each second while the promotion runs (its elapsed time ticks), else per render.
+  const running = !!view?.step && IN_FLIGHT.has(view.step.state)
+  const [clock, setClock] = useState(() => Date.now())
+  useEffect(() => {
+    if (nowProp !== undefined || !running) return
+    const t = window.setInterval(() => setClock(Date.now()), 1000)
+    return () => window.clearInterval(t)
+  }, [nowProp, running])
+  const now = nowProp ?? (running ? clock : Date.now())
+  const reasonFor = useStageAccess(view, pipeline, namespace)
+  // U7: the environment's state changed on a poll (not when another environment opens).
+  const stateChanged = useChangeHalo(view?.state.label ?? '', env) && !!view
+  useEffect(() => {
+    if (!commandRef) return
+    commandRef.current = kind => {
+      if (!view?.actions.has(kind)) return false
+      const why = reasonFor(kind)
+      if (why) return why
+      open(kind)
+      return true
+    }
+    return () => { commandRef.current = null }
+  })
   const [action, setAction] = useState<StageActionKind>()
   const [actionGate, setActionGate] = useState<PolicyGate>()
   const open = (k: StageActionKind | undefined, gate?: PolicyGate) => { setAction(k); setActionGate(gate); onDialog?.(!!k) }
@@ -136,7 +174,7 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
       {view && !fleet && (
         <>
           <div className="stage-drawer__status">
-            <StateChip label={view.state.label} tone={view.state.tone} glyph={view.state.glyph} />
+            <StateChip label={view.state.label} tone={view.state.tone} glyph={view.state.glyph} changed={stateChanged} />
             <dl className="stage-versions">
               <div><dt>Running</dt><dd>{view.running ? <Version {...view.running} /> : 'nothing yet'}
                 {view.running?.verifiedAt && <span className="stage-muted"> · live {formatElapsedSince(view.running.verifiedAt, now)}</span>}</dd></div>
@@ -149,14 +187,14 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
             {view.why.length === 0
               ? <p className="stage-muted">{view.running && !view.incoming ? `Nothing is waiting: ${view.running.version} is live.` : `${view.state.label}.`}</p>
               : <ol className="stage-why">{view.why.map((w, i) => (
-                  <WhyItem key={i} reason={w} now={now} primary={view.primary} onAct={k => open(k, w.gate)} onUpstream={u => onNavigate(u, 'why')}
+                  <WhyItem key={i} reason={w} now={now} primary={view.primary} reasonFor={reasonFor} onAct={k => open(k, w.gate)} onUpstream={u => onNavigate(u, 'why')}
                     upstreams={view.spec?.upstreams ?? []} />))}
                 </ol>}
           </section>
 
           <section className="stage-section" data-section="actions" ref={el => { sectionRefs.current.actions = el }} aria-labelledby={`${headingId}-actions`}>
             <h3 id={`${headingId}-actions`} className="stage-section__title">Actions</h3>
-            <StageActions view={view} pipeline={pipeline} namespace={namespace} active={action} activeGate={actionGate} onOpen={open} onChanged={onChanged} inline={inline} />
+            <StageActions view={view} pipeline={pipeline} namespace={namespace} active={action} activeGate={actionGate} onOpen={open} onChanged={onChanged} inline={inline} reasonFor={reasonFor} />
           </section>
 
           <section className="stage-section" data-section="evidence" ref={el => { sectionRefs.current.evidence = el }} aria-labelledby={`${headingId}-evidence`}>
@@ -167,7 +205,7 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
 
           <section className="stage-section" data-section="history" ref={el => { sectionRefs.current.history = el }} aria-labelledby={`${headingId}-history`}>
             <h3 id={`${headingId}-history`} className="stage-section__title">History</h3>
-            <History namespace={namespace} step={view.step} now={now} />
+            <History namespace={namespace} step={view.step} />
           </section>
         </>
       )}
@@ -175,8 +213,8 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
   )
 }
 
-function StateChip({ label, tone, glyph }: { label: string; tone: Tone; glyph?: string }) {
-  return <span className={`stage-chip stage-chip--${tone}`}>{glyph && <span aria-hidden="true">{glyph} </span>}{label}</span>
+function StateChip({ label, tone, glyph, changed }: { label: string; tone: Tone; glyph?: string; changed?: boolean }) {
+  return <span className={`stage-chip stage-chip--${tone}`} data-changed={changed || undefined}>{glyph && <span aria-hidden="true">{glyph} </span>}{label}</span>
 }
 
 /** A version as people know it (the tag), with the Bundle name after it only when it says something more. */
@@ -189,7 +227,8 @@ function Version({ version, bundle }: { version: string; bundle: string }) {
   )
 }
 
-function WhyItem({ reason: w, now, primary, onAct, onUpstream, upstreams }: { reason: WaitReason; now: number; primary?: StageActionKind;
+function WhyItem({ reason: w, now, primary, onAct, onUpstream, upstreams, reasonFor }: { reason: WaitReason; now: number; primary?: StageActionKind;
+  reasonFor: ReasonFor;
   onAct: (k: StageActionKind) => void; onUpstream: (env: string) => void; upstreams: string[] }) {
   const age = formatElapsedSince(w.evaluatedAt, now)
   return (
@@ -207,11 +246,9 @@ function WhyItem({ reason: w, now, primary, onAct, onUpstream, upstreams }: { re
           <button key={u} type="button" className="stage-link" onClick={() => onUpstream(u)}>Open {u}</button>
         ))}
         {w.next && w.next !== 'openPR' && (
-          <button type="button" data-action={w.next}
+          <ActionButton kind={w.next} label={ACTION_LABEL[w.next]} restricted={reasonFor(w.next, w.gate)}
             className={`stage-button stage-button--sm stage-button--${w.next === primary ? 'primary' : DESTRUCTIVE.has(w.next) ? 'destructive' : 'secondary'}`}
-            onClick={() => onAct(w.next!)}>
-            {ACTION_LABEL[w.next]}
-          </button>
+            onClick={() => onAct(w.next!)} />
         )}
         {w.next === 'openPR' && w.prURL && <a className="stage-link" href={w.prURL} target="_blank" rel="noreferrer">Open pull request</a>}
       </div>
@@ -219,10 +256,37 @@ function WhyItem({ reason: w, now, primary, onAct, onUpstream, upstreams }: { re
         <details className="stage-details">
           <summary>Details</summary>
           <p className="stage-muted">Gate instance {w.gate.name} in {w.gate.namespace}</p>
-          <pre className="stage-code"><code>{w.gate.expression}</code></pre>
+          <CelCheck expression={w.gate.expression} />
         </details>
       )}
     </li>
+  )
+}
+
+/** A gate's CEL, with whether the controller's CEL environment compiles it (UI-NODE-01). */
+function CelCheck({ expression }: { expression: string }) {
+  const [check, setCheck] = useState<{ valid: boolean; error?: string }>()
+  useEffect(() => {
+    setCheck(undefined)
+    if (!expression) return
+    let live = true
+    void Promise.resolve()
+      .then(() => api.validateCEL(expression))
+      .then(r => { if (live) setCheck(r) })
+      .catch(() => { /* advisory: no chip when the check itself fails */ })
+    return () => { live = false }
+  }, [expression])
+  return (
+    <div className="stage-cel" data-invalid={check?.valid === false || undefined}>
+      <pre className="stage-code"><CELBlock expression={expression} /></pre>
+      {check?.valid === true && <span className="stage-cel__chip stage-cel__chip--valid">✓ valid</span>}
+      {check?.valid === false && (
+        <>
+          <span className="stage-cel__chip stage-cel__chip--error" title={check.error ? `CEL compile error: ${check.error}` : 'CEL compile error'}>✗ error</span>
+          {check.error && <p className="stage-why__detail">{`CEL compile error: ${check.error}`}</p>}
+        </>
+      )}
+    </div>
   )
 }
 
@@ -239,20 +303,14 @@ function Images({ bundle }: { bundle?: Bundle }) {
 
 function Evidence({ step, gates, now }: { step?: PromotionStep; gates: PolicyGate[]; now: number }) {
   if (!step) return <p className="stage-muted">Evidence appears when this environment gets its first promotion: the steps it ran, its bake time and its gates.</p>
+  const startedAt = step.steps?.find(s => s.startedAt)?.startedAt
   return (
     <>
-      {step.steps && step.steps.length > 0 && (
-        <ol className="stage-steps">{step.steps.map((s, i) => {
-          const d = displayState('substep', s.state)
-          return (
-            <li key={i} className={`stage-steps__item stage-steps__item--${d.tone}`}>
-              <span aria-hidden="true" className="stage-steps__glyph">{d.glyph}</span>
-              <span className="stage-steps__name">{s.name}</span>
-              <span className="stage-muted">{d.label}{s.durationMs ? ` · ${Math.round(s.durationMs / 1000)}s` : ''}</span>
-            </li>
-          )
-        })}</ol>
+      {IN_FLIGHT.has(step.state) && startedAt && (
+        <p className="stage-muted" data-testid="stage-elapsed">Running for {formatElapsedSince(startedAt, now)}</p>
       )}
+      {/* The sub-steps and their timing bars (UI-STEPTIME-01), as the node details drew them. */}
+      <StepProgress step={step} />
       {step.bakeTargetMinutes ? (
         <p className="stage-muted">Bake: {step.bakeElapsedMinutes ?? 0} of {step.bakeTargetMinutes} healthy minutes
           {step.bakeResets ? `, reset ${step.bakeResets} time${step.bakeResets === 1 ? '' : 's'}` : ''}.</p>
@@ -279,10 +337,9 @@ function Evidence({ step, gates, now }: { step?: PromotionStep; gates: PolicyGat
   )
 }
 
-function History({ namespace, step, now }: { namespace: string; step?: PromotionStep; now: number }) {
+function History({ namespace, step }: { namespace: string; step?: PromotionStep }) {
   const [events, setEvents] = useState<StepEvent[]>()
   const [error, setError] = useState<string>()
-  const listId = useId()
   useEffect(() => {
     if (!step) return
     let live = true
@@ -295,11 +352,6 @@ function History({ namespace, step, now }: { namespace: string; step?: Promotion
   if (error) return <p className="stage-muted">The events could not be read: {error}</p>
   if (!events) return <p className="stage-muted">Loading events…</p>
   if (events.length === 0) return <p className="stage-muted">No events yet. They appear as the promotion runs.</p>
-  return (
-    <ol id={listId} className="stage-events">{events.map((e, i) => (
-      <li key={i} className={e.type === 'Warning' ? 'stage-events__item stage-events__item--warning' : 'stage-events__item'}>
-        <span className="stage-muted">{formatElapsedSince(e.lastTimestamp, now)} ago</span> {e.message}
-      </li>
-    ))}</ol>
-  )
+  // The Kubernetes events of the step, as the node details listed them (UI-NODE-01).
+  return <EventsPanel events={events} stepName={step.name} namespace={namespace} />
 }

@@ -416,6 +416,9 @@ type uiGateResponse struct {
 	// kardinal.io/gate-template label): the gate's name as the user wrote it,
 	// which the UI shows and POST /override takes. Empty on templates.
 	GateTemplate string `json:"gateTemplate,omitempty"`
+	// CreatedAt is when the gate instance was created (RFC 3339): when its
+	// environment started waiting on it. The approvals inbox orders by it.
+	CreatedAt string `json:"createdAt,omitempty"`
 	// MaxOverrideMinutes is the longest override the controller accepts for
 	// an instance (--gate-override-max-minutes). Unset on templates.
 	MaxOverrideMinutes int `json:"maxOverrideMinutes,omitempty"`
@@ -598,6 +601,7 @@ func (s *uiAPIServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/ui/validate-cel", s.handleValidateCEL)
 	mux.HandleFunc("/api/v1/ui/steps/", s.handleStepsSubpath)
 	mux.HandleFunc("/api/v1/ui/display-states", s.handleDisplayStates)
+	mux.HandleFunc("/api/v1/ui/access", s.handleAccess)
 	mux.HandleFunc(openAPIPath, handleOpenAPI)
 }
 
@@ -1324,6 +1328,9 @@ func (s *uiAPIServer) handleGates(w http.ResponseWriter, r *http.Request) {
 			Holding:     state == graphpkg.GateStateBlock,
 			State:       state,
 			Approval:    gateApproval(&g),
+		}
+		if !g.CreationTimestamp.IsZero() {
+			resp.CreatedAt = g.CreationTimestamp.UTC().Format(time.RFC3339)
 		}
 		if !resp.Template {
 			resp.GateTemplate = g.Labels["kardinal.io/gate-template"]

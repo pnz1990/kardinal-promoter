@@ -1,0 +1,31 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * ChangeHalo.css — the change highlight (useChangeHalo): one ink halo that
+ * spreads and fades as a polled card changes. Ink, not red: a change is news,
+ * not a selection or a failure. Reduced motion: an outline for one poll.
+ */
+
+[data-changed="true"] {
+  animation: k-change-halo var(--k-dur-slow) var(--k-ease-out) 2;
+}
+
+@keyframes k-change-halo {
+  from { box-shadow: 0 0 0 0 color-mix(in oklab, var(--k-ink) 45%, transparent); }
+  to { box-shadow: 0 0 0 var(--k-space-2) color-mix(in oklab, var(--k-ink) 0%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-changed="true"] {
+    animation: none;
+    outline: var(--k-border-strong) solid var(--k-ink-2);
+    outline-offset: var(--k-space-px);
+  }
+}
+
+[data-motion="reduce"] [data-changed="true"] {
+  animation: none;
+  outline: var(--k-border-strong) solid var(--k-ink-2);
+  outline-offset: var(--k-space-px);
+}

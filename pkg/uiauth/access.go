@@ -275,6 +275,40 @@ var actionRoles = map[string]string{
 	"policygates/edit":     "admin",
 }
 
+// grantRoles names the chart roles that grant the verbs the UI's actions
+// need on whole kinds (create a Bundle to promote, roll back or ship; create
+// an Approval to approve or decline).
+var grantRoles = map[string]string{
+	"create bundles":   "promoter or admin",
+	"create approvals": "approver or admin",
+}
+
+// RolesFor names the chart's user roles that grant verb on resource (with
+// subresource, a virtual one such as pipelines/pause), or "" when the chart
+// grants it to no user role in particular.
+func RolesFor(verb, resource, subresource string) string {
+	if subresource != "" {
+		return actionRoles[resource+"/"+subresource]
+	}
+	return grantRoles[verb+" "+resource]
+}
+
+// Can reports whether the request's user may perform attrs, without
+// recording a denial: the UI asks it to decide which actions to offer, and a
+// "no" must not turn the answer into a 403. The access reviewer caches the
+// result (DefaultCacheTTL).
+func (c *AuthorizingClient) Can(ctx context.Context, attrs authzv1.ResourceAttributes) (bool, error) {
+	user, ok := UserFrom(ctx)
+	if !ok || user.Username == "" {
+		return false, apierrors.NewUnauthorized("no authenticated user")
+	}
+	allowed, _, err := c.access.Allowed(ctx, user, attrs)
+	if err != nil {
+		return false, fmt.Errorf("access review: %w", err)
+	}
+	return allowed, nil
+}
+
 // AuthorizeAction checks that the request's user may perform verb on
 // group/resource/subresource (a virtual subresource such as pipelines/pause or
 // policygates/override) for the named object, recording a denial like any

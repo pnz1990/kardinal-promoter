@@ -2,16 +2,18 @@
 // Licensed under the Apache License, Version 2.0
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, within, act } from '@testing-library/react'
+import { render, screen, within, act, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 const api = vi.hoisted(() => ({
   recordApproval: vi.fn(), overrideGate: vi.fn(), rollback: vi.fn(), releaseHold: vi.fn(), pause: vi.fn(),
-  resume: vi.fn(), rejectBundle: vi.fn(), getStepEvents: vi.fn(),
+  resume: vi.fn(), rejectBundle: vi.fn(), getStepEvents: vi.fn(), checkAccess: vi.fn(), validateCEL: vi.fn(),
 }))
 vi.mock('../api/client', () => ({ api }))
 
-import { StageDrawer } from './StageDrawer'
+import { createRef } from 'react'
+import { resetAccessForTests } from '../access/access'
+import { StageDrawer, type StageCommand } from './StageDrawer'
 import type { Bundle, Pipeline, PolicyGate, PromotionStep } from '../types'
 
 const now = Date.parse('2026-10-11T09:03:00Z')
@@ -53,6 +55,11 @@ describe('StageDrawer (U3)', () => {
   beforeEach(() => {
     Object.values(api).forEach(f => f.mockReset())
     api.getStepEvents.mockResolvedValue([])
+    api.validateCEL.mockResolvedValue({ valid: true })
+    resetAccessForTests()
+    api.checkAccess.mockImplementation(async (_ns: string, checks: { resource: string }[]) => ({
+      user: { username: 'alice', groups: [] }, results: checks.map(() => ({ allowed: true })),
+    }))
   })
 
   it('puts why it is waiting first: the gate, its message and its age, before the actions', () => {
@@ -109,7 +116,8 @@ describe('StageDrawer (U3)', () => {
 
   it('keeps raw CEL and conditions behind Details', () => {
     renderDrawer()
-    const cel = screen.getByText('bundle.approvals >= 2')
+    const cel = document.querySelector('.cel-block') as HTMLElement
+    expect(cel).toHaveTextContent('bundle.approvals >= 2')
     expect(cel.closest('details')).not.toHaveAttribute('open')
     expect(screen.getByText('Ready').closest('details')).not.toHaveAttribute('open')
   })
@@ -252,5 +260,47 @@ describe('StageDrawer (U3)', () => {
     await user.click(screen.getByRole('button', { name: 'Close prod' }))
     expect(props.onClose).toHaveBeenCalledOnce()
     await act(async () => {})
+  })
+
+  it('an action the person may not take stays in place, inert, with the role that grants it (U7)', async () => {
+    const user = userEvent.setup()
+    api.checkAccess.mockImplementation(async (_ns: string, checks: { verb: string; resource: string; subresource?: string }[]) => ({
+      user: { username: 'alice', groups: [] },
+      results: checks.map(c => c.resource === 'pipelines'
+        ? { allowed: false, grantedBy: 'promoter or admin' } : { allowed: true, grantedBy: 'approver or admin' }),
+    }))
+    renderDrawer()
+    const pause = await screen.findByRole('button', { name: 'Pause pipeline' })
+    await waitFor(() => expect(pause).toHaveAttribute('aria-disabled', 'true'))
+    expect(pause).toHaveAccessibleDescription('Pausing the pipeline needs the promoter or admin role.')
+    expect(screen.getByRole('list', { name: 'Not available to you' })).toHaveTextContent('Pausing the pipeline needs the promoter or admin role.')
+    await user.click(pause)
+    expect(screen.queryByRole('dialog', { name: 'Pause web?' })).not.toBeInTheDocument()
+    expect(reasonButton('Approve')).not.toHaveAttribute('aria-disabled')
+  })
+
+  it('the keyboard command opens an action the drawer offers, and says why it cannot otherwise (U7)', async () => {
+    const commandRef = createRef<StageCommand | null>() as { current: StageCommand | null }
+    renderDrawer([approvalGate], { commandRef })
+    await waitFor(() => expect(api.checkAccess).toHaveBeenCalled())
+    expect(commandRef.current?.('promote')).toBe(false)
+    act(() => { expect(commandRef.current?.('approve')).toBe(true) })
+    expect(screen.getByRole('dialog', { name: 'Approve 1.5.0 for prod?' })).toBeInTheDocument()
+  })
+
+  it('Details checks the gate\'s CEL with the controller; the step shows its sub-steps and events (UI-NODE-01)', async () => {
+    api.validateCEL.mockResolvedValue({ valid: false, error: 'undeclared reference to \'bundel\'' })
+    api.getStepEvents.mockResolvedValue([{ type: 'Normal', reason: 'WaitingForMerge', message: 'PR opened', count: 1, lastTimestamp: '2026-10-11T09:00:00Z' }])
+    const running: PromotionStep = { ...step, state: 'WaitingForMerge', steps: [
+      { name: 'git-clone', state: 'Completed', startedAt: '2026-10-11T09:00:00Z', completedAt: '2026-10-11T09:00:02Z', durationMs: 2000 },
+      { name: 'open-pr', state: 'InProgress', startedAt: '2026-10-11T09:00:02Z' }] }
+    renderDrawer([freeze], { data: { pipeline, bundles, steps: [running], gates: [freeze] } })
+    const chip = await screen.findByText('✗ error')
+    expect(chip).toHaveAttribute('title', "CEL compile error: undeclared reference to 'bundel'")
+    const items = within(screen.getByRole('list', { name: 'Promotion steps' })).getAllByRole('listitem')
+    expect(items.map(i => i.getAttribute('data-step-state'))).toEqual(['Completed', 'InProgress'])
+    expect(items[1]).toHaveTextContent('waiting for merge')
+    expect(screen.getByTestId('stage-elapsed')).toHaveTextContent('Running for 3m 0s')
+    expect(await screen.findByTestId('events-panel')).toHaveTextContent('PR opened')
   })
 })

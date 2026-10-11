@@ -934,6 +934,10 @@
           "bundle": {
             "type": "string"
           },
+          "createdAt": {
+            "description": "CreatedAt is when the gate instance was created (RFC 3339): when its environment started waiting on it. The approvals inbox orders by it.",
+            "type": "string"
+          },
           "environment": {
             "type": "string"
           },
@@ -1401,6 +1405,125 @@
           "mergedPREvents",
           "status",
           "webhookConfigured"
+        ],
+        "type": "object"
+      },
+      "uiAccessCheck": {
+        "additionalProperties": false,
+        "description": "uiAccessCheck is one action the UI asks about: verb on a kardinal.io resource (or virtual subresource) in the request's namespace.",
+        "properties": {
+          "name": {
+            "description": "Name is the object, when the check is for one.",
+            "type": "string"
+          },
+          "resource": {
+            "description": "Resource is a kardinal.io resource, plural: bundles, pipelines, approvals, policygates.",
+            "type": "string"
+          },
+          "subresource": {
+            "description": "Subresource is a virtual subresource such as pause, hold, reject or override.",
+            "type": "string"
+          },
+          "verb": {
+            "description": "Verb is get, list, create, update, patch or delete.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource",
+          "verb"
+        ],
+        "type": "object"
+      },
+      "uiAccessRequest": {
+        "additionalProperties": false,
+        "description": "uiAccessRequest is the body of POST /api/v1/ui/access.",
+        "properties": {
+          "checks": {
+            "description": "Checks are answered in order, at most 32.",
+            "items": {
+              "$ref": "#/components/schemas/uiAccessCheck"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "namespace": {
+            "description": "Namespace the checks are in. Defaults to \"default\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "checks"
+        ],
+        "type": "object"
+      },
+      "uiAccessResponse": {
+        "additionalProperties": false,
+        "description": "uiAccessResponse is the body of a POST /api/v1/ui/access answer.",
+        "properties": {
+          "results": {
+            "description": "Results answer Checks, in order. Without TokenReview every check is allowed: the UI API then acts as the controller for anyone who reaches it.",
+            "items": {
+              "$ref": "#/components/schemas/uiAccessResult"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "user": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/uiAccessUser"
+              }
+            ],
+            "description": "User is the verified caller; absent when the UI API does not identify callers (no TokenReview), so an action that names who decided (an approval) cannot be taken from the UI."
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "type": "object"
+      },
+      "uiAccessResult": {
+        "additionalProperties": false,
+        "description": "uiAccessResult answers one check.",
+        "properties": {
+          "allowed": {
+            "description": "Allowed is whether the caller may do it.",
+            "type": "boolean"
+          },
+          "grantedBy": {
+            "description": "GrantedBy names the chart's user roles that grant it (\"approver or admin\"), when the chart grants it to particular roles.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "allowed"
+        ],
+        "type": "object"
+      },
+      "uiAccessUser": {
+        "additionalProperties": false,
+        "description": "uiAccessUser is who the caller is, as TokenReview verified.",
+        "properties": {
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username"
         ],
         "type": "object"
       },
@@ -1944,6 +2067,59 @@
         "summary": "This OpenAPI description (also on the Bundle API listener)",
         "tags": [
           "Meta"
+        ]
+      }
+    },
+    "/api/v1/ui/access": {
+      "post": {
+        "description": "In TokenReview mode each check is a SubjectAccessReview for the verified caller, cached for 30s; a denial is an answer (allowed: false), not a 403. Without TokenReview every check is allowed and no user is named. At most 32 checks.",
+        "operationId": "checkAccess",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/uiAccessRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/uiAccessResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "Which of the given actions the caller may take, and which role grants each",
+        "tags": [
+          "UI"
         ]
       }
     },

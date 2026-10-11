@@ -27,7 +27,12 @@ import { BlockedBanner } from './components/BlockedBanner'
 import { InsecureConnectionBanner } from './components/InsecureConnectionBanner'
 import { Breadcrumb } from './components/Breadcrumb'
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
-import { Icon, Kbd, MenuButton, TabPanel, Tabs } from './ui'
+import { Badge, Icon, Kbd, MenuButton, TabPanel, Tabs } from './ui'
+import { useAccessIn } from './access/access'
+import { actionCheck, restriction } from './access/actionAccess'
+import { ApprovalsPage, type ApprovalsHandle } from './approvals/ApprovalsPage'
+import { approvalsWaiting } from './approvals/approvalsModel'
+import type { StageCommand } from './stage/StageDrawer'
 import { BundleTimeline } from './components/BundleTimeline'
 import { BundleDiffPanel } from './components/BundleDiffPanel'
 import { BundleTypeBadge } from './components/BundleTypeBadge'
@@ -55,7 +60,7 @@ import { resolveShownBundle } from './bundleSelection'
 import { environmentUpstreams, terminalEnvironments } from './fleetModel'
 import { KeyboardShortcutsPanel } from './components/KeyboardShortcutsPanel'
 
-import type { Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep, PolicyGate } from './types'
+import type { AccessCheck, Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep, PolicyGate } from './types'
 
 const POLL_INTERVAL_MS = 5000
 
@@ -356,6 +361,10 @@ export function App() {
       searchInputRef.current?.focus()
     }, []),
     onPalette: useCallback(() => setPaletteOpen(true), []),
+    onNext: () => stepShortcut(1),
+    onPrevious: () => stepShortcut(-1),
+    onApprove: () => approveShortcut(),
+    onShip: () => shipShortcut(),
   })
 
   // One history entry per switch: the new pipeline, with no node or diff open.
@@ -496,10 +505,77 @@ export function App() {
     />
   )
 
+  // U7: the keyboard's next/previous environment, approve and ship. A key that has nothing
+  // to act on says why in a status line instead of doing nothing silently.
+  const approvalsRef = useRef<ApprovalsHandle>(null)
+  const drawerCommand = useRef<StageCommand | null>(null)
+  const [shipSignal, setShipSignal] = useState(0)
+  const [shortcutNote, setShortcutNote] = useState<string>()
+  useEffect(() => {
+    if (!shortcutNote) return
+    const t = window.setTimeout(() => setShortcutNote(undefined), 4000)
+    return () => window.clearTimeout(t)
+  }, [shortcutNote])
+
+  // U7: what the person at the UI may do here (POST /access, cached), and how many
+  // approvals wait on them.
+  const approvalNs = gates.find(g => g.approval && !g.template)?.namespace
+  const shipCheck = actionCheck('ship', {})!
+  const pauseCheck = actionCheck('pause', { pipeline: activePipeline?.name })!
+  const access = useAccessIn([
+    ...(approvalNs ? [[approvalNs, actionCheck('approve', {})!] as [string, AccessCheck]] : []),
+    ...(activePipeline ? [[activePipeline.namespace, shipCheck], [activePipeline.namespace, pauseCheck]] as [string, AccessCheck][] : []),
+  ])
+  const waitingOnMe = approvalsWaiting(gates, access.identity)
+  const shipRestricted = activePipeline ? restriction('ship', access.can(activePipeline.namespace, shipCheck), access.identity) : undefined
+  const pauseRestricted = activePipeline
+    ? restriction(activePipeline.paused ? 'resume' : 'pause', access.can(activePipeline.namespace, pauseCheck), access.identity) : undefined
+  const stepShortcut = (d: 1 | -1) => {
+    if (urlState.approvals) { approvalsRef.current?.move(d); return }
+    const envs = (activePipeline?.environmentTopology ?? []).map(e => e.name)
+    if (!activePipeline || envs.length === 0) { setShortcutNote('Open a pipeline to move between its environments.'); return }
+    const at = urlState.env ? envs.indexOf(urlState.env) : -1
+    const next = at < 0 ? (d > 0 ? 0 : envs.length - 1) : at + d
+    if (next < 0 || next >= envs.length) {
+      setShortcutNote(d > 0 ? `${envs[envs.length - 1]} is the last environment.` : `${envs[0]} is the first environment.`)
+      return
+    }
+    setSelectedNodeLocal(null)
+    setUrlState({ env: envs[next], node: undefined, section: undefined, tab: undefined })
+  }
+  const approveShortcut = () => {
+    if (urlState.approvals) {
+      if (!approvalsRef.current?.approve()) setShortcutNote('Nothing here waits on your approval.')
+      return
+    }
+    if (stageEnv) {
+      const r = drawerCommand.current?.('approve')
+      if (r !== true) setShortcutNote(typeof r === 'string' ? r : `Nothing in ${stageEnv} waits on an approval.`)
+      return
+    }
+    setShortcutNote(waitingOnMe > 0 ? `${waitingOnMe} waiting on you: open Approvals, or an environment, to approve.` : 'Nothing waits on your approval.')
+  }
+  const shipShortcut = () => {
+    if (!activePipeline) { setShortcutNote('Open a pipeline to ship a version of it.'); return }
+    if (shipRestricted) { setShortcutNote(shipRestricted); return }
+    setShipSignal(n => n + 1)
+  }
+
+  const approvalsLink = (
+    <a href="#/approvals" className="app-topbar__approvals" aria-current={urlState.approvals ? 'page' : undefined}
+      aria-label={waitingOnMe > 0 ? `Approvals, ${waitingOnMe} waiting on you` : 'Approvals'}>
+      Approvals
+      {waitingOnMe > 0 && <Badge count={waitingOnMe} tone="waiting" aria-hidden="true" />}
+    </a>
+  )
+
   const paletteCommands = useMemo<PaletteCommand[]>(() => {
     const go: PaletteCommand[] = [{
       id: 'go:fleet', group: 'Go to', label: 'Pipelines', hint: 'fleet',
       run: () => setUrlState({ ...EMPTY_URL_STATE, filter: urlState.filter, q: urlState.q }),
+    }, {
+      id: 'go:approvals', group: 'Go to', label: 'Approvals', hint: 'waiting on you', keywords: 'inbox approve',
+      run: () => setUrlState({ ...EMPTY_URL_STATE, approvals: true }),
     }]
     for (const p of pipelines) {
       go.push({ id: `go:p:${p.namespace}/${p.name}`, group: 'Go to', label: p.name, hint: p.namespace, run: () => handleSelectPipeline(p.name, p.namespace) })
@@ -547,6 +623,7 @@ export function App() {
         <KeyboardShortcutsPanel onClose={() => setShowShortcutsPanel(false)} />
       )}
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={paletteCommands} />
+      <p role="status" className="app-shortcut-note" data-shown={shortcutNote ? true : undefined}>{shortcutNote}</p>
       {/* Sidebar */}
       <aside className="app-sidebar">
         <div className="app-sidebar__brandbar">
@@ -650,6 +727,7 @@ export function App() {
         <main id="main-content" tabIndex={-1} className="app-main app-main--ops">
           <div className="app-topbar">
             <Breadcrumb route={urlState} namespace={activePipeline?.namespace} />
+            {approvalsLink}
             <button type="button" className="app-topbar__search" onClick={() => setPaletteOpen(true)}>
               <Icon name="search" />
               <span>Go to or do…</span>
@@ -671,6 +749,7 @@ export function App() {
         <main id="main-content" tabIndex={-1} className="app-main">
           <div className="app-topbar">
             <Breadcrumb route={urlState} namespace={activePipeline?.namespace} />
+            {approvalsLink}
             <button type="button" className="app-topbar__search" onClick={() => setPaletteOpen(true)}>
               <Icon name="search" />
               <span>Go to or do…</span>
@@ -679,6 +758,10 @@ export function App() {
           </div>
         {insecureBanner}
         {!selectedPipeline ? (
+          urlState.approvals ? (
+            <ApprovalsPage ref={approvalsRef} gates={gates} pipelines={pipelines} loading={gatesLoading}
+              onChanged={() => { void manualRefresh() }} />
+          ) : (
           <div className={pipelines.length > 0 ? 'app-fleet' : 'app-empty'}>
             {pipelines.length > 0 ? (
               <FleetBoard pipelines={filteredPipelines} total={pipelines.length} onSelect={handleSelectPipeline} />
@@ -687,6 +770,7 @@ export function App() {
               <EmptyState />
             )}
           </div>
+          )
         ) : (
           <>
             {/* Header: one line (name, paused, summary, Ship a version, More). */}
@@ -707,6 +791,8 @@ export function App() {
                       pipelineName={activePipeline.name}
                       namespace={activePipeline.namespace ?? 'default'}
                       onRefresh={manualRefresh}
+                      restricted={shipRestricted}
+                      openSignal={shipSignal}
                     />
                     <MenuButton label="More actions" icon="chevron">
                       {/* #506: pause / resume the pipeline. */}
@@ -715,6 +801,7 @@ export function App() {
                         namespace={activePipeline.namespace ?? 'default'}
                         paused={activePipeline.paused ?? false}
                         onRefresh={manualRefresh}
+                        restricted={pauseRestricted}
                       />
                     </MenuButton>
                   </div>
@@ -870,6 +957,7 @@ export function App() {
                         onNavigate={(env, section) => { setSelectedNodeLocal(null); setUrlState({ env, node: undefined, section }) }}
                         data={{ pipeline: activePipeline, bundles, steps: activeSteps, gates }}
                         onChanged={() => { void manualRefresh() }}
+                        commandRef={drawerCommand}
                       />
                     </ErrorBoundary>
                   )}
