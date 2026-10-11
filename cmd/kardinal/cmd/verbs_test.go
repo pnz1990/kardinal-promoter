@@ -236,6 +236,9 @@ func TestShipWait(t *testing.T) {
 			_ = c.List(ctx, &bl)
 			for i := range bl.Items {
 				b := bl.Items[i]
+				if b.Status.Phase == "Verified" {
+					continue // only the Bundle being shipped moves
+				}
 				var pl = p.DeepCopy()
 				_ = c.Get(ctx, types.NamespacedName{Namespace: "default", Name: "demo"}, pl)
 				pl.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "test", Bundle: b.Name, State: "Verified"},
@@ -259,6 +262,20 @@ func TestShipWait(t *testing.T) {
 	require.NoError(t, shipFn(context.Background(), &out, c, "default", "demo", opts, true, time.Minute, false, true))
 	assert.Equal(t, "1.5.0 is live in test, prod\n", out.String())
 	assert.Empty(t, progress.String(), "--quiet prints nothing on stderr")
+
+	// --quiet with -o json: the JSON document only, its schema unchanged.
+	progress.Reset()
+	out.Reset()
+	globalOutput = "json"
+	require.NoError(t, shipFn(context.Background(), &out, c, "default", "demo", opts, true, time.Minute, false, true))
+	globalOutput = ""
+	assert.Empty(t, progress.String(), "--quiet -o json prints nothing on stderr")
+	var quietJSON map[string]any
+	require.NoError(t, json.Unmarshal(out.Bytes(), &quietJSON), out.String())
+	for _, k := range []string{"bundle", "pipeline", "namespace", "type", "version", "url", "result", "exitCode", "message", "environments"} {
+		assert.Contains(t, quietJSON, k)
+	}
+	assert.Equal(t, "Verified", quietJSON["result"])
 
 	// Held at an evaluated gate: exit 3, JSON.
 	cancel()
@@ -475,6 +492,18 @@ func (s *syncBuffer) Write(p []byte) (int, error) {
 }
 func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
 
+// TestShip_QuietNeedsWait: --quiet without --wait is refused, also with
+// --dry-run, before anything is read.
+func TestShip_QuietNeedsWait(t *testing.T) {
+	for _, args := range [][]string{{"ship", "demo", "--image", "app:1", "-q"}, {"ship", "demo", "--image", "app:1", "--dry-run", "--quiet"}} {
+		root := NewRootCmd()
+		root.SetOut(&bytes.Buffer{})
+		root.SetErr(&bytes.Buffer{})
+		root.SetArgs(args)
+		assert.EqualError(t, root.Execute(), "ship: --quiet quiets --wait's progress; add --wait", "%v", args)
+	}
+}
+
 var updateShipProgress = flag.Bool("update-ship-progress", false, "rewrite testdata/ship-progress.golden")
 
 // TestShipProgress_Golden (CLI UX 10): ship --wait's stderr: each new state
@@ -489,7 +518,7 @@ func TestShipProgress_Golden(t *testing.T) {
 	shipNow = func() time.Time { return now }
 	t.Cleanup(func() { shipNow = prev })
 	var buf bytes.Buffer
-	p := &shipProgress{w: &buf, timed: true, start: start}
+	p := &shipProgress{w: &buf, timed: true, start: start, created: start.Add(-5 * time.Second)}
 	env := func(name, state string, more ...func(*v1alpha1.PipelineEnvironmentStatus)) v1alpha1.PipelineEnvironmentStatus {
 		e := v1alpha1.PipelineEnvironmentStatus{Name: name, State: state, IncomingBundle: "b2"}
 		for _, f := range more {
@@ -510,8 +539,19 @@ func TestShipProgress_Golden(t *testing.T) {
 		{2*time.Minute + 2*time.Second, []v1alpha1.PipelineEnvironmentStatus{env("test", "Verified"), env("uat", "WaitingForMerge", pr), env("prod", "Pending")}},
 		{3 * time.Minute, []v1alpha1.PipelineEnvironmentStatus{env("test", "Verified"), env("uat", "Verified"), env("prod", "Pending", gate)}},
 	}
+	// The controller's since: when each environment's state began.
+	state, began := map[string]string{}, map[string]*metav1.Time{}
 	for _, s := range steps {
 		now = start.Add(s.at)
+		for i := range s.envs {
+			e := &s.envs[i]
+			if state[e.Name] != e.State+strings.Join(e.BlockedBy, ",") {
+				state[e.Name] = e.State + strings.Join(e.BlockedBy, ",")
+				t := metav1.NewTime(now.Add(-time.Second)) // a second before the poll saw it
+				began[e.Name] = &t
+			}
+			e.Since = began[e.Name]
+		}
 		p.observe(s.envs)
 	}
 	now = start.Add(4*time.Minute + 15*time.Second)

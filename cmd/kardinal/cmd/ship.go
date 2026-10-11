@@ -106,6 +106,9 @@ merged (4), is replaced or rejected (5), or --timeout passes (6).`,
   kardinal ship my-app --image "$IMAGE" --wait -o json | jq -r .result`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if quiet && !wait {
+				return fmt.Errorf("ship: --quiet quiets --wait's progress; add --wait")
+			}
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("ship: %w", err)
@@ -115,9 +118,6 @@ merged (4), is replaced or rejected (5), or --timeout passes (6).`,
 					return fmt.Errorf("ship: --dry-run creates nothing to --wait for; drop one of them")
 				}
 				return createBundleDryRun(cmd.OutOrStdout(), c, ns, args[0], opts)
-			}
-			if quiet && !wait {
-				return fmt.Errorf("ship: --quiet quiets --wait's progress; add --wait")
 			}
 			return shipFn(cmd.Context(), cmd.OutOrStdout(), c, ns, args[0], opts, wait, timeout, stopAtGate, quiet)
 		},
@@ -170,7 +170,7 @@ func shipFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline
 	// promotion.
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	progress := &shipProgress{w: errOut, timed: true, start: shipNow()}
+	progress := &shipProgress{w: errOut, timed: true, start: shipNow(), created: b.CreationTimestamp.Time}
 	if quiet {
 		progress = &shipProgress{}
 	} else {
@@ -230,10 +230,12 @@ type shipProgress struct {
 	w     io.Writer
 	timed bool
 	start time.Time
-	// seen is each environment's last state shown; active when it first
-	// left Pending; changed when its state last changed; pr its PR shown.
+	// created is when the Bundle was created (the summary's "took" is
+	// measured from it), start when it is not known.
+	created time.Time
+	// seen is each environment's last state shown; changed when this
+	// follow saw it change; pr its PR shown.
 	seen    map[string]string
-	active  map[string]time.Time
 	changed map[string]time.Time
 	pr      map[string]string
 }
@@ -241,7 +243,7 @@ type shipProgress struct {
 // observe prints what changed in envs since the last read.
 func (p *shipProgress) observe(envs []v1alpha1.PipelineEnvironmentStatus) {
 	if p.seen == nil {
-		p.seen, p.active, p.changed, p.pr = map[string]string{}, map[string]time.Time{}, map[string]time.Time{}, map[string]string{}
+		p.seen, p.changed, p.pr = map[string]string{}, map[string]time.Time{}, map[string]string{}
 	}
 	now := shipNow()
 	for _, e := range envs {
@@ -249,9 +251,6 @@ func (p *shipProgress) observe(envs []v1alpha1.PipelineEnvironmentStatus) {
 		if p.seen[e.Name] != text {
 			p.seen[e.Name] = text
 			p.changed[e.Name] = now
-			if _, ok := p.active[e.Name]; !ok && e.State != "" && e.State != "Pending" {
-				p.active[e.Name] = now
-			}
 			p.printf("%s: %s", e.Name, text)
 		}
 		if e.PRURL != "" && p.pr[e.Name] != e.PRURL {
@@ -275,25 +274,37 @@ func (p *shipProgress) printf(format string, args ...any) {
 }
 
 // summary prints, when timed, how long the follow took and each
-// environment's last state: how long it took to get there, or how long it
-// has waited in it.
+// environment's last state: how long after the Bundle was created it was
+// live there ("took"), or how long it has been in its state ("for"), both
+// from the controller's status.environments[].since; from what this
+// follow saw when the controller does not write it.
 func (p *shipProgress) summary(envs []v1alpha1.PipelineEnvironmentStatus) {
 	if p.w == nil || !p.timed || len(envs) == 0 {
 		return
 	}
 	now := shipNow()
+	created := p.created
+	if created.IsZero() {
+		created = p.start
+	}
 	_, _ = fmt.Fprintf(p.w, "%s after %s:\n", sty.Dim("Summary"), shortDuration(now.Sub(p.start)))
 	tw := style.NewTable(p.w, 3)
 	for _, e := range envs {
+		since, known := time.Time{}, false
+		if e.Since != nil {
+			since, known = e.Since.Time, true
+		} else if t, ok := p.changed[e.Name]; ok {
+			since, known = t, true
+		}
 		when := ""
-		switch changed, ok := p.changed[e.Name]; {
-		case !ok:
-		case e.State == "Verified" && !p.active[e.Name].IsZero():
-			when = "took " + shortDuration(changed.Sub(p.active[e.Name]))
+		switch {
+		case !known:
+		case e.State == "Verified" && !since.Before(created):
+			when = "took " + shortDuration(since.Sub(created))
 		case e.State == "Verified":
 			when = "already live"
 		default:
-			when = "for " + shortDuration(now.Sub(changed))
+			when = "for " + shortDuration(now.Sub(since))
 		}
 		_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\n", e.Name, sty.State(envState(e)), when)
 	}
