@@ -14,7 +14,7 @@ kind-kardinal-demo   ← kardinal controller + kro + Argo CD
                        environments into namespaces kardinal-test-app-{test,uat,prod}
 ```
 
-For several clusters, see [Multi-Cluster](../docs/multi-cluster.md) and
+For several clusters, see [Remote Clusters](../docs/health-adapters.md#remote-clusters) and
 [examples/multi-cluster-fleet](../examples/multi-cluster-fleet).
 
 **Pipeline `kardinal-test-app`**

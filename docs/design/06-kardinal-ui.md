@@ -190,7 +190,7 @@ This allows exposing the UI to browser users (VPN) while restricting the webhook
 
 The UI API has three modes. Static assets at `/ui/*` are public in all of them (they hold no data).
 
-- **Off (default).** The controller logs a startup warning and reads and writes with its own ServiceAccount. `/api/` serves only clients whose TCP peer is loopback (`kubectl port-forward`) and whose request has no proxy header (`Forwarded`, `X-Forwarded-*`, `X-Real-Ip`, `X-Envoy-*`, `l5d-*`); everyone else gets `403` (#1262). To limit DNS rebinding, `/api/` requests are also accepted only when the Host is `localhost`, `127.0.0.1`, `::1` or a name in `--ui-allowed-hosts` (the chart adds the Service DNS names).
+- **Off (default).** The controller logs a startup warning and reads and writes with its own ServiceAccount. `/api/` serves only clients whose TCP peer is loopback (`kubectl port-forward`) and whose request has no proxy header (`Forwarded`, `X-Forwarded-*`, `X-Real-Ip`, `X-Envoy-*`, `l5d-*`); everyone else gets `403`. To limit DNS rebinding, `/api/` requests are also accepted only when the Host is `localhost`, `127.0.0.1`, `::1` or a name in `--ui-allowed-hosts` (the chart adds the Service DNS names).
 - **Static token** (`--ui-auth-token`, env `KARDINAL_UI_TOKEN`). Every `/api/v1/ui/*` request needs `Authorization: Bearer <token>`. It takes precedence over TokenReview.
 - **TokenReview** (`--ui-tokenreview-auth`, chart `ui.auth.tokenReview`, default `false`). Bearer tokens are checked with a TokenReview, and every object the API reads or writes is authorized with a SubjectAccessReview for the caller. It fails closed.
 
@@ -203,7 +203,7 @@ The UI provides both read and write operations:
 **Read operations** — DAG view, pipeline list, bundle timeline, policy gate expressions, health status.
 
 **Write operations**:
-- Pause/resume a pipeline (ActionBar, PR #482)
+- Pause/resume a pipeline (ActionBar)
 - Promote an environment, or roll it back to its previous verified version (stage lane and node detail panel, one shared confirmation dialog)
 
 Policy gate overrides are not in the UI; use `kardinal override` (CLI).
@@ -241,64 +241,36 @@ Backend API tests (Go):
 
 ---
 
-## Present (✅)
+## Capabilities
 
-The following capabilities are implemented and shipped as of v0.10.0:
+- Embedded React UI served by the controller binary (`go:embed`), with a backend API at `/api/v1/ui/`
+- DAG view: PromotionStep and PolicyGate nodes with per-node state colors
+- Pipeline list with the current Bundle per environment; a `/` shortcut focuses its search, and
+  lists of 50 or more entries are virtualized (`@tanstack/react-virtual`; the multi-namespace
+  grouped display is not)
+- Node detail side panel: the step list, PR links and Bundle provenance; gate nodes show the
+  highlighted CEL expression and its evaluation result
+- Bundle timeline: the 10 newest Bundles colored by phase, plus the selected one; shift-click two
+  Bundles to compare them
+- Fleet-wide health bar (blocked pipelines, CI red, interventions) and a per-pipeline operations
+  table (inventory age, last merge, blockage time), sortable
+- Release metrics bar: mean time to the last environment, rollback rate and deploy count over
+  the last 10 Bundles, and the change failure rate and time to restore from
+  `Pipeline.status.deploymentMetrics`; hidden until a Bundle reaches the last environment
+- Actions: pause and resume (action bar), promote and roll back one environment (stage lane, node
+  detail). Gate override is CLI-only (`kardinal override`)
+- CSS design tokens (no framework), light and dark themes, WCAG 2.1 AA checked by axe-core in
+  Playwright CI, error boundaries on each major view, copy-to-clipboard on pipeline names and
+  Bundle hashes, skeleton loading states, a stale-data indicator (amber, then red after 30s),
+  keyboard shortcuts (`?`, `r`, `Esc`, `/`) with a focus-trapped help modal, and a layout that
+  fits 1280px
 
-- ✅ Embedded React UI served by controller binary (`go:embed`) — PR #19
-- ✅ DAG view: PromotionStep and PolicyGate nodes with per-node state colors — PR #19
-- ✅ PipelineList: all pipelines with current Bundle per environment — PR #19
-- ✅ NodeDetail side panel: step details, PR links, Bundle provenance — PR #19
-- ✅ BundleTimeline: artifact history with diff links — PR #19
-- ✅ PolicyGateCard: CEL expression + evaluation result — PR #19
-- ✅ Backend API proxy at `/api/v1/ui/` — PR #19
-- ✅ CSS design tokens (no framework) — PR #19
-- ✅ Dark/light mode: system-aware with manual toggle — PR #734
-- ✅ CSS token migration: 206 hardcoded hex values replaced — PR #738
-- ✅ URL routing: pipeline + node selection persisted in hash fragment — PR #742
-- ✅ Global keyboard shortcuts: `?` (help modal), `r` (refresh), `Esc` (dismiss) — PR #750
-- ✅ WCAG 2.1 AA automated check: axe-core in Playwright CI — PR #756
-- ✅ WCAG 2.1 AA color contrast: full color system audit, all violations fixed — PR #760/#765
-- ✅ Nested-interactive WCAG fix: PipelineLaneView keyboard nav — PR #759
-- ✅ Error boundaries on DAGView, PipelineList, NodeDetail, BundleTimeline — PR #755
-- ✅ Copy-to-clipboard on pipeline names and bundle hashes — PR #764
-- ✅ Stale data indicator: amber→red+pulse escalation after 30s — PR #767
-- ✅ Focus trap in keyboard shortcuts modal (Tab/Shift+Tab cycle, return focus on close) — PR #783
-- ✅ Skeleton loading states: NodeDetail step details, BundleTimeline chips, PolicyGatesPanel — PR #791
-- ✅ `/` keyboard shortcut to focus pipeline search input; Esc clears + blurs; filter always visible — PR #805, 2026-04-19
-- ✅ Responsive layout at 1280px width: scrollWidth ≤ 1280 verified by Playwright test — PR #806, 2026-04-19
-- ✅ Virtualization for pipeline list with 50+ entries: @tanstack/react-virtual flat-list mode; falls back to normal for multi-namespace grouped display — PR #815, 2026-04-19
-- ✅ Fleet-wide health dashboard: FleetHealthBar — blocked pipelines, CI red, interventions scannable in one table — PR #480 (2026-04-14)
-- ✅ Per-pipeline operations view: PipelineOpsTable — sortable health columns: inventory age, last merge, blockage time — PR #475 (2026-04-14)
-- 🔲 Per-stage bake countdown and override history — the StageDetailPanel from PR #476 was never mounted and was removed; NodeDetail shows the step list
-- ✅ In-UI actions: pause and resume (ActionBar), promote and roll back one environment (stage lane, node detail) — PR #482 (2026-04-14). Gate override is CLI-only (`kardinal override`)
-- ✅ Bundle promotion timeline: BundleTimeline — the 10 newest bundles colored by phase, plus the selected one; shift-click two bundles to compare them — PR #478, PR #681 (2026-04-14)
-- 🔲 Policy gate detail panel with blocking duration and override history — the GateDetailPanel from PR #477 was never mounted and was removed; gate nodes show the highlighted CEL expression in NodeDetail
-- ✅ Release efficiency metrics bar: ReleaseMetricsBar — mean time to the last environment, rollback rate and deploy count over the last 10 bundles; hidden until a bundle reaches the last environment — PR #481 (2026-04-14). It also shows the change failure rate and time to restore from `Pipeline.status.deploymentMetrics` once the Pipeline has deployments (#1488)
+Not implemented: a per-stage bake countdown with override history, and a gate detail panel with
+blocking duration and override history.
 
 ---
 
-## Future (🔲)
-
-The following capabilities are declared in `docs/aide/vision.md` §F7 (kardinal-ui) but not yet implemented:
-
-*All epic #587 items are now complete.*
-
-### UI authentication gaps (competitive/security pressure — 2026-04-20)
-
-When this section was written, the embedded UI (`cmd/kardinal-controller/ui_api.go`) served all endpoints with **no authentication**. With no auth mode set, `/api/` now answers only loopback clients (see [Authentication](#authentication)); the items below added the opt-in modes. The UI listen address (`:8082`) binds all interfaces. A platform team at a Series B company would fail this in a security review on day one.
-
-- ✅ **UI API authentication** — `--ui-auth-token` flag (env: `KARDINAL_UI_TOKEN`) added to `main.go`. When set, all `/api/v1/ui/*` routes require `Authorization: Bearer <token>`. Static `/ui/*` assets bypass auth. Constant-time comparison via `crypto/subtle`. Implemented in PR #909. With no auth mode set, `/api/` now answers only loopback clients (`kubectl port-forward`); other clients get 403 (#1262).
-- ✅ **TLS for UI and webhook HTTP servers** — `--tls-cert-file` / `--tls-key-file` flags (env: `KARDINAL_TLS_CERT_FILE` / `KARDINAL_TLS_KEY_FILE`) added to `main.go`. When both are set, `http.ListenAndServeTLS` is used for both the UI server (`:8082`) and webhook server (`:8083`). Falls back to plain HTTP when neither is set (backwards compatible). Helm values `controller.tlsCertFile` and `controller.tlsKeyFile` support cert-manager volume mount pattern. Implemented in PR #911. **Update (audit remediation, 2026-09-29):** `listenAndServeWithTLS()` is replaced by `httpServer` (`cmd/kardinal-controller/http_server.go`), a manager Runnable: both servers start after the informer caches sync, have read/write/idle timeouts, drain in-flight requests on shutdown, and a bind or serve error stops the controller instead of only being logged. Setting only one of the two TLS flags is now a startup error instead of a silent fallback to plain HTTP.
-- ✅ **CORS lockdown for UI API** — `--cors-allowed-origins` flag (env: `KARDINAL_CORS_ORIGINS`) added to `main.go`. Default (empty): same-origin only — cross-origin requests to `/api/v1/ui/*` are rejected with 403. Set to an explicit comma-separated list to allow specific origins. Set to `*` to allow all origins (development opt-out). CORS headers are only applied to `/api/v1/ui/*`; static `/ui/*` assets and webhook routes are unaffected. Implemented in PR #912.
-- ✅ **In-cluster `kubectl port-forward` UX** — `InsecureConnectionBanner` component renders a dismissible amber warning when the UI is accessed over plain HTTP from a non-localhost address. Loopback (`localhost`, `127.0.0.1`, `[::1]`) is exempt since port-forward to localhost is the documented access method. `docs/installation.md` now has an "Accessing the UI" section documenting `kubectl port-forward svc/kardinal-promoter -n kardinal-system 8082:8082` (the chart Service exposes the UI port as `ui`). Implemented in PR #913.
-- ✅ **Kubernetes TokenReview-based auth for UI API** (PR #1015, 2026-04-21) — `--ui-tokenreview-auth` flag (env: `KARDINAL_UI_TOKENREVIEW_AUTH=true`) added. When enabled and `--ui-auth-token` is not set, the UI API authenticates bearer tokens via `authenticationv1.TokenReview`. Cluster-native authentication: users authenticate with their kubeconfig tokens. Static `--ui-auth-token` takes precedence when both are set. Fail-closed: TokenReview API failure → 503. Implementation in `pkg/uiauth/tokenreview.go` with testable `TokenReviewer` interface. **Update (audit remediation, 2026-09-29):** TokenReview mode now also authorizes: every object the UI API reads or writes for the caller is checked with a `SubjectAccessReview` (`pkg/uiauth/access.go`, `AuthorizingClient`), so a user cannot see or change more through the UI than through `kubectl`. Denied → 403, review API failure → 503, and the controller exits at startup if the review clients cannot be built (previously it logged and served an open UI). Results are cached for 30s per token and action. The web client now sends the token (kept in `sessionStorage`) and shows a sign-in dialog on 401; before this, enabling either auth mode made the UI unusable. User RBAC is documented in `docs/guides/security.md` §UI API Access Control.
----
-
-## Enterprise polish design (added 2026-04-17)
-
-This section documents design decisions made during the epic #587 UI overhaul.
-It was written after the work, as the design layer for the remaining 🔲 Future items.
+## Enterprise polish design
 
 ### Theme system
 

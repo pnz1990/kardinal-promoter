@@ -133,7 +133,7 @@ func TestUnsupportedConfigFailsLoudly(t *testing.T) {
 				env.Shard = "eu" //nolint:staticcheck // SA1019: tests the rejection
 				ps.Labels = map[string]string{"kardinal.io/shard": "eu"}
 			},
-			message: "shard is not supported: distributed mode was removed"},
+			message: "shard is not supported; remove shard"},
 		{name: "shard on the environment only", state: "",
 			mutate:  func(env *v1alpha1.EnvironmentSpec, _ *v1alpha1.PromotionStep) { env.Shard = "eu" }, //nolint:staticcheck // SA1019: tests the rejection
 			message: "shard is not supported"},

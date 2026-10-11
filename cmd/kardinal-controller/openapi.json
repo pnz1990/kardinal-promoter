@@ -921,7 +921,7 @@
       },
       "PolicyGateOverride": {
         "additionalProperties": false,
-        "description": "uiGateOverride is the JSON shape for a PolicyGateOverride (K-09 audit record).",
+        "description": "uiGateOverride is the JSON shape for a PolicyGateOverride (an audit record).",
         "properties": {
           "createdAt": {
             "type": "string"
@@ -1662,7 +1662,7 @@
             "type": "string"
           },
           "bundleMissing": {
-            "description": "BundleMissing is true when the controller found the rollback Bundle missing (status.holdStates, #1629). The hold stays in effect.",
+            "description": "BundleMissing is true when the controller found the rollback Bundle missing (status.holdStates). The hold stays in effect.",
             "type": "boolean"
           },
           "createdAt": {

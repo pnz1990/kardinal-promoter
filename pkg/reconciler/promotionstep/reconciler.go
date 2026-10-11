@@ -1447,7 +1447,11 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		// The push guard (#1681) cancelled a superseded, rejected or
 		// deleted Bundle's promotion before it could push over a newer
 		// one: the expected end of a stale step, not a controller error.
+		// The step says why, as a step cancelled before its run does
+		// ("bundle X was superseded — promotion cancelled"), without the
+		// engine's "step git-push: stale promotion: refusing to push:".
 		log.Info().Err(execErr).Str("env", ps.Spec.Environment).Msg("stale promotion cancelled before its push")
+		msg = staleReason(execErr)
 	} else {
 		log.Error().Err(execErr).Str("env", ps.Spec.Environment).Msg("step engine failed")
 	}
@@ -2130,7 +2134,7 @@ func isRollbackBundle(b *v1alpha1.Bundle) bool {
 //
 // Graph-first: reads CRD fields only — no external calls. The step writes
 // only its own status.message. kro cannot hold a step that already exists
-// without pruning it (docs/design/11-graph-purity-tech-debt.md, Accepted).
+// without pruning it (ledger G8, docs/design/16-graph-capability-ledger.md).
 func (r *Reconciler) checkRequiredGates(ctx context.Context, ps *v1alpha1.PromotionStep) (string, error) {
 	for _, gateName := range ps.Spec.RequiredGates {
 		var gate v1alpha1.PolicyGate
