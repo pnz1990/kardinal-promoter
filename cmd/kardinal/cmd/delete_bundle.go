@@ -38,7 +38,7 @@ func newDeleteCmd() *cobra.Command {
 
 func newDeleteBundleCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "bundle <name>",
+		Use:     "bundle <name|version>",
 		Aliases: []string{"bundles"},
 		Short:   "Delete a Bundle by name",
 		Long: `Delete a Bundle and stop its promotion: its Graph, steps and gate instances
@@ -53,10 +53,14 @@ past the Pipeline's spec.historyLimit (default 50).`,
 			if err != nil {
 				return fmt.Errorf("delete bundle: %w", err)
 			}
-			if err := confirm(cmd, fmt.Sprintf("Delete %s? Its promotion stops and its open PRs are closed.", args[0])); err != nil {
+			name, err := resolveBundleRef(contextOf(cmd), c, ns, "", args[0])
+			if err != nil {
+				return fmt.Errorf("delete bundle: %w", err)
+			}
+			if err := confirm(cmd, fmt.Sprintf("Delete %s? Its promotion stops and its open PRs are closed.", bundleRefLabel(contextOf(cmd), c, ns, name))); err != nil {
 				return err
 			}
-			return deleteBundleFn(cmd.OutOrStdout(), c, ns, args[0])
+			return deleteBundleFn(cmd.OutOrStdout(), c, ns, name)
 		},
 	}
 	addYesFlag(cmd)

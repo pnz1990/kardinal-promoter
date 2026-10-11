@@ -1,0 +1,14 @@
+pipeline="" ref="demo-a"
+  demo-a
+pipeline="demo" ref="1.4.0"
+  demo-a
+pipeline="" ref="1.4.0"
+  error: version "1.4.0" names 2 Bundles in default: 1.4.0 (web-a) of web, Verified; 1.4.0 (demo-a) of demo, Verified; give the Bundle's name
+pipeline="demo" ref="1.5.0"
+  error: version "1.5.0" names 2 Bundles of pipeline demo: 1.5.0 (demo-c), Promoting; 1.5.0 (demo-b), Superseded; give the Bundle's name
+pipeline="demo" ref="sidecar-7"
+  demo-d
+pipeline="demo" ref="3.0.0"
+  error: no Bundle named "3.0.0", and no version "3.0.0" of pipeline demo; the newest are: app0:2.0.0, app1:sidecar-7 (demo-d), Verified; 1.5.0 (demo-c), Promoting; 1.5.0 (demo-b), Superseded; 1.4.0 (demo-a), Verified
+pipeline="other" ref="1.4.0"
+  error: no Bundle named "1.4.0", and no version "1.4.0" of pipeline other: there are no Bundles of pipeline other

@@ -19,7 +19,7 @@ spec.historyLimit (default 50) are deleted automatically, oldest first;
 use this command to remove a Bundle before that.
 
 ```
-kardinal delete bundle <name> [flags]
+kardinal delete bundle <name|version> [flags]
 ```
 
 ### Examples

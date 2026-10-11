@@ -14,13 +14,14 @@ only. CHANGED is "*" on rows that differ. Commit and author are listed under
 PROVENANCE.
 
 ```
-kardinal diff <bundle-a> <bundle-b> [flags]
+kardinal diff <bundle-a|version> <bundle-b|version> [flags]
 ```
 
 ### Examples
 
 ```
   kardinal diff my-app-sha-abc1234 my-app-sha-def5678
+  kardinal diff 1.4.0 1.5.0
 ```
 
 ### Options

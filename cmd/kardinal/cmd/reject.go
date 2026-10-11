@@ -22,13 +22,14 @@ import (
 func newRejectCmd() *cobra.Command {
 	var reason string
 	cmd := &cobra.Command{
-		Use:   "reject <bundle>",
+		Use:   "reject <bundle|version>",
 		Short: "Reject a Bundle: it is never promoted again, and rollback never picks it",
 		Long: `Reject a Bundle for good, with --reason, in your Kubernetes name. Steps that
 have not delivered it yet fail and their PRs close; steps whose change is live
 finish their health check. Rollback, promote and Subscriptions never pick it
 again. It does not revert an environment: use kardinal rollback for that.`,
-		Example:     `  kardinal reject my-app-v1-5 --reason "CVE-2026-1234 in the base image"`,
+		Example: `  kardinal reject my-app-v1-5 --reason "CVE-2026-1234 in the base image"
+  kardinal reject 1.5.0 --reason "CVE-2026-1234 in the base image"`,
 		Annotations: map[string]string{ReferenceAnnotation: rejectReference},
 		Args:        cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -36,10 +37,14 @@ again. It does not revert an environment: use kardinal rollback for that.`,
 			if err != nil {
 				return fmt.Errorf("reject: %w", err)
 			}
-			if err := confirm(cmd, fmt.Sprintf("Reject %s? It never promotes again.", args[0])); err != nil {
+			name, err := resolveBundleRef(contextOf(cmd), c, ns, "", args[0])
+			if err != nil {
+				return fmt.Errorf("reject: %w", err)
+			}
+			if err := confirm(cmd, fmt.Sprintf("Reject %s? It never promotes again.", bundleRefLabel(contextOf(cmd), c, ns, name))); err != nil {
 				return err
 			}
-			return rejectFn(cmd.Context(), cmd.OutOrStdout(), c, ns, args[0], reason, time.Now())
+			return rejectFn(cmd.Context(), cmd.OutOrStdout(), c, ns, name, reason, time.Now())
 		},
 	}
 	cmd.Flags().StringVar(&reason, "reason", "", "Why the Bundle is rejected (required)")
