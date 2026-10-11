@@ -187,19 +187,19 @@ func TestScale_TopologySharedRepo(t *testing.T) {
 	r.Finish()
 }
 
-// TestScale_TopologyArgoCD is the BigWaves fan-out (canary and 10 waves of
-// 15, 151 environments) on one repository branch with Argo CD health: each
-// environment has an auto-syncing Application on its path, and its step is
-// Verified once Argo CD synced a commit that contains the promoted one. With
-// 151 environments on one branch, Argo CD has usually synced a later commit
-// by the time a step checks (#1591): the check must accept it from the branch
-// history, not wait for its own commit. The Bundle must end Verified with all
-// 151 steps Verified. It calls scale.Begin, so it runs on its own, like the
+// TestScale_TopologyArgoCD is a canary and ArgoWaves waves of ArgoWaveWidth
+// (full: 10 of 15, 151 environments; ci: 4 of 10, 41) on one repository
+// branch with Argo CD health: each environment has an auto-syncing
+// Application on its path, and its step is Verified once Argo CD synced a
+// commit that contains the promoted one. With that many environments on one
+// branch, Argo CD has usually synced a later commit by the time a step checks
+// (#1591): the check must accept it from the branch history, not wait for
+// its own commit. The Bundle must end Verified with every step Verified. It calls scale.Begin, so it runs on its own, like the
 // load and chaos tests, not in parallel with the other topology tests.
 // Covers SCALE-TOPO-ARGOCD-01.
 func TestScale_TopologyArgoCD(t *testing.T) {
 	r := scale.Begin(t)
-	envs := scale.Waves(r.P.BigWaves, r.P.BigWaveWidth)
+	envs := scale.Waves(r.P.ArgoWaves, r.P.ArgoWaveWidth)
 	name := "argo"
 	repo := r.Fleet.Repo(t, r.Fleet.NS+"-"+name, map[string][]string{name: scale.Names(envs)})
 	app := func(env string) string { return r.Fleet.NS + "-" + env }

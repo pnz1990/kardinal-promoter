@@ -23,11 +23,27 @@ func TestLoad(t *testing.T) {
 			assert.Equal(t, "ci", p.Name)
 			assert.Equal(t, 120, p.LongChainStages)
 			assert.Equal(t, 15, p.BigWaveWidth)
+			// Sized for a GitHub runner with the -race controller (measured
+			// p50 8-10 s, p99 13 s, Bundle p99 29-36 s; 1 + 9 Argo CD waves
+			// of 15 did not fit Settle).
+			assert.Equal(t, 15*time.Second, p.SLO.StepP50)
+			assert.Equal(t, 30*time.Second, p.SLO.StepP99)
+			assert.Equal(t, 75*time.Second, p.SLO.BundleP99)
+			assert.Equal(t, 1+4*10, 1+p.ArgoWaves*p.ArgoWaveWidth)
+		},
+	}, {
+		name: "the Argo CD fan-out is overridable",
+		env:  map[string]string{"KARDINAL_E2E_SCALE_ARGO_WAVES": "2", "KARDINAL_E2E_SCALE_ARGO_WAVE_WIDTH": "3"},
+		check: func(t *testing.T, p Profile) {
+			assert.Equal(t, 2, p.ArgoWaves)
+			assert.Equal(t, 3, p.ArgoWaveWidth)
 		},
 	}, {
 		name: "full",
 		env:  map[string]string{EnvProfile: "full"},
 		check: func(t *testing.T, p Profile) {
+			assert.Equal(t, 1+10*15, 1+p.ArgoWaves*p.ArgoWaveWidth, "full keeps the 151 Argo CD environments")
+			assert.Equal(t, 10*time.Second, p.SLO.StepP50, "full keeps the strict objective")
 			assert.Equal(t, 100, p.ChainStages)
 			assert.Equal(t, 200, p.Pipelines)
 			assert.Equal(t, 1000, p.BurstBundles)
