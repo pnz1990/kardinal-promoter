@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode"
@@ -75,7 +76,7 @@ func TestDocsLinkProblem(t *testing.T) {
 		require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
 	}
 	write("changelog.md", "# Changelog\n\n## [v1.0.0] — 2026-10-01\n\n### Before you upgrade\n\n#### From v0.9.0\n\n## [v0.9.0]\n\n### Before you upgrade\n")
-	write("upgrade.md", "# Upgrade\n\n## Upgrading from v0.10.0\n\n```bash\n# not a heading\n```\n\n## The `kardinal doctor` check\n\n## Same\n\n## Same\n\n### Custom { #my-id }\n\n<a id=\"html-id\"></a>\n")
+	write("upgrade.md", "# Upgrade\n\n## Upgrading from v0.10.0\n\n```bash\n# not a heading\n```\n\n<!-- a comment\n## Commented out\n-->\n\n## The `kardinal doctor` check <!-- note -->\n\n## Same\n\n## Same\n\n## Same_1\n\n## Taken\n\n### Custom { #my-id }\n\n<a id=\"html-id\"></a><a id=\"taken\"></a>\n")
 	write("index.md", "# Home\n\n## Why kardinal?\n")
 	write("guides/security.md", "# Security\n\n## User roles\n")
 	write("reference/openapi.json", "{}")
@@ -92,7 +93,16 @@ func TestDocsLinkProblem(t *testing.T) {
 		{target: "upgrade.md#my-id", docsLink: true},
 		{target: "upgrade.md#html-id", docsLink: true},
 		{target: "upgrade.md#not-a-heading", docsLink: true, problem: `no heading or id "not-a-heading" in upgrade.md`},
-		{target: "upgrade.md#same_2", docsLink: true, problem: `no heading or id "same_2" in upgrade.md`},
+		{target: "upgrade.md#same_2", docsLink: true},
+		{target: "upgrade.md#same_1_1", docsLink: true, problem: `no heading or id "same_1_1" in upgrade.md`},
+		{target: "upgrade.md#same_3", docsLink: true, problem: `no heading or id "same_3" in upgrade.md`},
+		{target: "upgrade.md#taken", docsLink: true},
+		{target: "upgrade.md#taken_1", docsLink: true, problem: `no heading or id "taken_1" in upgrade.md`},
+		{target: "upgrade.md#commented-out", docsLink: true, problem: `no heading or id "commented-out" in upgrade.md`},
+		{target: "http://pnz1990.github.io/kardinal-promoter/upgrade/#taken", docsLink: true},
+		{target: "https://pnz1990.github.io/kardinal-promoter", docsLink: true},
+		{target: "https://pnz1990.github.io/kardinal-promoter#why-kardinal", docsLink: true},
+		{target: "http://example.com/kardinal-promoter/"},
 		{target: "guides/security.md#user-roles", docsLink: true},
 		{target: "reference/openapi.json", docsLink: true},
 		{target: "missing.md", docsLink: true, problem: "no page docs/missing.md"},
@@ -144,11 +154,18 @@ type mdLinkRef struct {
 }
 
 // markdownLinks lists the link targets of a markdown text outside code
-// blocks and code spans.
+// blocks, HTML comments and code spans.
 func markdownLinks(text string) []mdLinkRef {
 	var out []mdLinkRef
-	fence := ""
+	fence, comment := "", false
 	for i, line := range strings.Split(text, "\n") {
+		if comment {
+			j := strings.Index(line, "-->")
+			if j < 0 {
+				continue
+			}
+			comment, line = false, line[j+3:]
+		}
 		if f := fenceMark(line); f != "" {
 			switch {
 			case fence == "":
@@ -160,6 +177,10 @@ func markdownLinks(text string) []mdLinkRef {
 		}
 		if fence != "" {
 			continue
+		}
+		line = htmlComment.ReplaceAllString(line, "")
+		if j := strings.Index(line, "<!--"); j >= 0 {
+			comment, line = true, line[:j]
 		}
 		for _, m := range mdLink.FindAllStringSubmatch(codeSpan.ReplaceAllString(line, ""), -1) {
 			out = append(out, mdLinkRef{line: i + 1, target: m[1]})
@@ -185,6 +206,12 @@ func fenceMark(line string) string {
 // when target is not a link to a docs page (another site, mailto).
 func docsLinkProblem(docs, from, target string, redirects map[string]string) (problem string, ok bool) {
 	var page, anchor string
+	if t, ok := strings.CutPrefix(target, "http://"); ok && strings.HasPrefix("https://"+t, strings.TrimSuffix(siteURL, "/")) {
+		target = "https://" + t // the site redirects http to https
+	}
+	if target == strings.TrimSuffix(siteURL, "/") || strings.HasPrefix(target, strings.TrimSuffix(siteURL, "/")+"#") {
+		target = siteURL + strings.TrimPrefix(target, strings.TrimSuffix(siteURL, "/"))
+	}
 	switch {
 	case strings.HasPrefix(target, siteURL):
 		rest := strings.TrimPrefix(target, siteURL)
@@ -228,51 +255,92 @@ func docsLinkProblem(docs, from, target string, redirects map[string]string) (pr
 	return "", true
 }
 
-// pageAnchors are the anchors of a markdown page: its headings' ids, as the
-// toc extension makes them (a repeated id gets _1, _2, …), attr_list ids and
-// inline HTML ids.
+// pageAnchors are the anchors of a markdown page: attr_list ids, inline HTML
+// ids, and the ids the toc extension gives the other headings. As in
+// Python-Markdown, the attr_list ids are taken first (inline HTML is not
+// parsed, so its ids take nothing), and a heading id that is taken (or empty)
+// gets _1, or its _N suffix raised by one, until it is free. Code blocks and
+// HTML comments are skipped.
 func pageAnchors(text string) map[string]bool {
-	anchors := map[string]bool{}
-	seen := map[string]int{}
-	fence := ""
-	for _, line := range strings.Split(text, "\n") {
-		if f := fenceMark(line); f != "" {
-			switch {
-			case fence == "":
-				fence = f
-			case strings.HasPrefix(f, fence):
-				fence = ""
-			}
-			continue
-		}
-		if fence != "" {
-			continue
-		}
+	used, html := map[string]bool{}, []string{}
+	var titles []string
+	for _, line := range contentLines(text) {
 		for _, m := range htmlID.FindAllStringSubmatch(line, -1) {
-			anchors[m[1]] = true
+			html = append(html, m[1])
 		}
 		m := atxHeading.FindStringSubmatch(line)
 		if m == nil {
 			if a := attrID.FindStringSubmatch(line); a != nil {
-				anchors[a[1]] = true
+				used[a[1]] = true
 			}
 			continue
 		}
-		title := m[2]
-		if a := attrID.FindStringSubmatchIndex(title); a != nil {
-			anchors[title[a[2]:a[3]]] = true
+		if a := attrID.FindStringSubmatch(m[2]); a != nil {
+			used[a[1]] = true
 			continue
 		}
-		id := headingSlug(title)
-		if n := seen[id]; n > 0 {
-			anchors[fmt.Sprintf("%s_%d", id, n)] = true
-		} else {
-			anchors[id] = true
-		}
-		seen[id]++
+		titles = append(titles, m[2])
 	}
-	return anchors
+	for _, title := range titles {
+		used[uniqueID(headingSlug(title), used)] = true
+	}
+	for _, id := range html {
+		used[id] = true
+	}
+	return used
 }
+
+// idCount is an id with a _N suffix.
+var idCount = regexp.MustCompile(`^(.*)_([0-9]+)$`)
+
+// uniqueID is Python-Markdown's toc unique(): id, or while it is taken or
+// empty, id with _1 added or its _N raised by one.
+func uniqueID(id string, used map[string]bool) string {
+	for used[id] || id == "" {
+		if m := idCount.FindStringSubmatch(id); m != nil {
+			n, _ := strconv.Atoi(m[2])
+			id = fmt.Sprintf("%s_%d", m[1], n+1)
+		} else {
+			id += "_1"
+		}
+	}
+	return id
+}
+
+// contentLines are the lines of a markdown text outside fenced code blocks
+// and HTML comments, which render no heading or link.
+func contentLines(text string) []string {
+	var out []string
+	fence, comment := "", false
+	for _, line := range strings.Split(text, "\n") {
+		if comment {
+			if i := strings.Index(line, "-->"); i >= 0 {
+				comment, line = false, line[i+3:]
+			} else {
+				continue
+			}
+		}
+		if fence == "" {
+			if f := fenceMark(line); f != "" {
+				fence = f
+				continue
+			}
+			line = htmlComment.ReplaceAllString(line, "")
+			if i := strings.Index(line, "<!--"); i >= 0 {
+				comment, line = true, line[:i]
+			}
+			out = append(out, line)
+			continue
+		}
+		if f := fenceMark(line); f != "" && strings.HasPrefix(f, fence) {
+			fence = ""
+		}
+	}
+	return out
+}
+
+// htmlComment is an HTML comment on one line.
+var htmlComment = regexp.MustCompile(`<!--.*?-->`)
 
 var (
 	mdLinkText = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
