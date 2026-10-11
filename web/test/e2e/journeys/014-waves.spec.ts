@@ -108,13 +108,13 @@ test.describe('Journey 014 — Waves', () => {
     await page.getByLabel('Close').click()
 
     // The grid reads in spec order from env-001 (all are Verified).
-    const at = async (env: string) => (await map.locator(`[data-station="${env}"]`).boundingBox())!
-    const before = async (a: string, b: string) => {
-      const [p, q] = [await at(a), await at(b)]
+    // Both cells are measured in one frame: the map may still be refitting after the drawer closed.
+    const before = (a: string, b: string) => page.evaluate(([a, b]) => {
+      const [p, q] = [a, b].map(env => document.querySelector(`.station-map [data-station="${env}"]`)!.getBoundingClientRect())
       return p.y < q.y - 1 || (Math.abs(p.y - q.y) <= 1 && p.x < q.x)
-    }
-    expect(await before('env-001', 'env-002')).toBe(true)
-    expect(await before('env-002', 'env-149')).toBe(true)
+    }, [a, b])
+    await expect.poll(() => before('env-001', 'env-002')).toBe(true)
+    await expect.poll(() => before('env-002', 'env-149')).toBe(true)
 
     // The band and its grid pass the WCAG 2.1 AA checks.
     const axe = await new AxeBuilder({ page }).include('.station-map').withTags(['wcag2a', 'wcag2aa']).analyze()

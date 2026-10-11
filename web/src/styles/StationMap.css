@@ -34,7 +34,7 @@
   font-size: var(--k-text-2xs);
   font-stretch: var(--k-stretch-label);
   font-weight: var(--k-weight-semibold);
-  letter-spacing: 0.06em;
+  letter-spacing: var(--k-tracking-caps);
   text-transform: uppercase;
   color: var(--k-ink-3);
 }
@@ -105,7 +105,7 @@
   font-family: var(--k-font-display);
   font-size: var(--k-text-2xs);
   font-stretch: var(--k-stretch-label);
-  letter-spacing: 0.06em;
+  letter-spacing: var(--k-tracking-caps);
   text-transform: uppercase;
   color: var(--k-ink);
 }
@@ -251,14 +251,14 @@
 
 /* Bands (waves) and platforms (fleets). */
 .group__head { cursor: pointer; outline: none; }
-.group__frame { fill: var(--k-surface-raised); stroke: var(--k-line); stroke-width: var(--k-border-hairline); vector-effect: non-scaling-stroke; rx: 2; }
+.group__frame { fill: var(--k-surface-raised); stroke: var(--k-line); stroke-width: var(--k-border-hairline); vector-effect: non-scaling-stroke; rx: var(--k-radius-1); }
 .group__head:focus-visible .group__frame { stroke: var(--k-thread); stroke-width: var(--k-stroke-ring); }
 .group__label {
   font-family: var(--k-font-display);
   --fs: var(--k-text-2xs);
   font-stretch: var(--k-stretch-label);
   font-weight: var(--k-weight-semibold);
-  letter-spacing: 0.06em;
+  letter-spacing: var(--k-tracking-caps);
   text-transform: uppercase;
   fill: var(--k-ink-2);
 }
@@ -411,3 +411,12 @@
 .legend__icon { color: var(--k-status-blocked-fg); }
 .gate-popover__icon { vertical-align: -0.125em; }
 .gate-popover__quorum { color: var(--k-ink-2); }
+
+/* A label culled at this zoom (it would overlap a more important one) shows on hover and focus. */
+.station [data-culled] { visibility: hidden; }
+.station:hover [data-culled], .station:focus-visible [data-culled], .station[data-focused] [data-culled] { visibility: visible; }
+/* Waiting (a person is next): a clock hand in the dot. */
+.station__tick { fill: none; stroke: var(--k-status-waiting-fg); stroke-width: var(--k-border-strong); stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.cell__clock { fill: none; stroke: var(--k-status-waiting-fg); stroke-width: var(--k-border-hairline); stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.legend__dot[data-tone="waiting"] { border-color: var(--k-status-waiting-fg); }
+.legend__dot[data-tone="held"] { border-color: var(--k-ink); box-shadow: 0 0 0 var(--k-border-hairline) var(--k-surface-raised), 0 0 0 var(--k-border-strong) var(--k-ink); }

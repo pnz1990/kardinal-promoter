@@ -253,6 +253,11 @@ function gateOf(node: GraphNode, gates: PolicyGate[] | undefined, bundle: Bundle
       (!bundle || !g.bundle || g.bundle === bundle.name))
 }
 
+/** A holding approval gate reads as waiting for a person (its state stays Block). */
+function waitingForApproval(d: DisplayState): DisplayState {
+  return { ...d, label: 'Waiting for approval' }
+}
+
 /** Step states the Bundle has finished with: a holding gate no longer decides them. */
 const SETTLED = new Set(['Verified', 'Failed', 'AbortedByAlarm', 'RollingBack', 'Superseded'])
 
@@ -297,7 +302,7 @@ export function buildModel(p: Pipeline, followed: Followed | undefined, opts: Bu
       id: g.id, name: g.label, state: g.state, display: displayState('gate', g.state),
       holding: !!g.holding, expression: g.expression, lastEvaluatedAt: g.lastEvaluatedAt, message: g.message,
       approval: gateOf(g, opts.gates, followed?.bundle)?.approval,
-    }))
+    })).map(g => (g.approval && g.holding ? { ...g, display: waitingForApproval(g.display) } : g))
     // Without the followed Bundle's graph, P1 says where the newest Bundle stands.
     // (P1's state is the newest Bundle's: what is incoming, else what runs.)
     const p1State = !step && pe && followedName && (pe.incomingBundle ? pe.incomingBundle === followedName : pe.bundle === followedName) ? pe.state ?? '' : ''
@@ -309,7 +314,10 @@ export function buildModel(p: Pipeline, followed: Followed | undefined, opts: Bu
     const holding = gates.find(g => g.holding) ??
       (!step && p1State && pe?.blockedBy?.length ? { name: pe.blockedBy[0] } as GateMark : undefined)
     if ((e.hold && e.hold.bundle !== followedName) || (pe?.held && pe.bundle !== followedName && !e.hold)) display = heldByRollback(stepState)
-    else if (holding && !SETTLED.has(stepState)) display = heldByGate(stepState, holding.name)
+    else if (holding && !SETTLED.has(stepState)) {
+      // An approval gate holds it for a person, not for a rule.
+      display = holding.approval ? { ...heldByGate(stepState, holding.name), label: `Waiting for approval at ${holding.name}` } : heldByGate(stepState, holding.name)
+    }
     else if (followed) display = displayState('step', reached ? stepState : 'NotStarted')
     else display = displayState('step', running ? 'Verified' : 'NotStarted')
 
@@ -524,4 +532,18 @@ export function stationLabel(st: Station, age: (iso?: string) => string): string
     }
   }
   return `${st.env} — ${parts.join(', ')}`
+}
+
+/** The gates on the edge into a node: a station's, or a group's worst per name. */
+export function gatesOn(node: MapNode, model: StationMapModel): GateMark[] {
+  if (node.kind === 'station') return node.station.gates
+  const byName = new Map<string, GateMark>()
+  const rank = (g: GateMark) => (g.holding ? 0 : g.display.tone === 'waiting' ? 1 : g.state === 'Pass' ? 3 : 2)
+  for (const m of node.group.members) {
+    for (const g of model.stations.get(m)!.gates) {
+      const prev = byName.get(g.name)
+      if (!prev || rank(g) < rank(prev)) byName.set(g.name, g)
+    }
+  }
+  return [...byName.values()].sort((a, b) => rank(a) - rank(b))
 }
