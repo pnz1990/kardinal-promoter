@@ -9,7 +9,7 @@ This page describes what is currently available in kardinal-promoter and what is
 
 ## Currently Available (v0.10.0)
 
-> v0.10.0 released 2026-10-10, on upstream kro Graph (v0.10.0-rc.0). The list below is what v0.9.0 shipped; [New in v0.10.0](#new-in-v0100) adds this release. For the full list and the upgrade steps see the [changelog](changelog.md).
+> v0.10.0 released 2026-10-11, on upstream kro Graph (v0.10.0-rc.0). The list below is what v0.9.0 shipped; [New in v0.10.0](#new-in-v0100) adds this release. For the full list and the upgrade steps see the [changelog](changelog.md).
 
 All of the following are implemented and shipped:
 
@@ -155,7 +155,7 @@ Not in the UI: overriding a gate (use `kardinal override`), the bake countdown, 
 
 ## New in v0.10.0
 
-The [v0.10.0 changelog](changelog.md#v0100-2026-10-10) lists everything, among it
+The [v0.10.0 changelog](changelog.md#v0100-2026-10-11) lists everything, among it
 `scm.allowedRepositories` (#1332), approval gates with `kardinal approve` (#1309, #1449), and
 verified override identity with a `GateOverridden` AuditEvent (#1286, #1450), per-environment
 PR controls (#1453), GitHub App and SSH git authentication (#1460), the Bitbucket Data
