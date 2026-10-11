@@ -40,8 +40,9 @@
 }
 
 .bundle-chip--selected {
-  border-color: var(--color-accent);
-  box-shadow: inset 0 0 0 1px var(--color-accent);
+  /* The shown Bundle is the selection: the thread. */
+  border-color: var(--k-thread);
+  box-shadow: inset 0 0 0 var(--k-border-hairline) var(--k-thread);
   color: var(--color-text);
 }
 
@@ -84,7 +85,7 @@
 }
 
 /* ── Bundle phase colors ─────────────────────────────────────────────────── */
-.bundle-chip--promoting  { --phase-color: var(--color-accent); }
+.bundle-chip--promoting  { --phase-color: var(--k-status-promoting-fg); }
 .bundle-chip--verified   { --phase-color: var(--color-success); }
 .bundle-chip--failed     { --phase-color: var(--color-error); }
 .bundle-chip--rejected   { --phase-color: var(--color-error); }
@@ -127,10 +128,10 @@
 }
 .bundle-timeline__compare {
   padding: var(--k-space-px) var(--k-space-1_5);
-  border: var(--k-border-hairline) solid var(--k-thread-text);
+  border: var(--k-border-hairline) solid var(--k-line-strong);
   border-radius: var(--k-radius-1);
-  background: var(--k-thread-wash);
-  color: var(--k-thread-text);
+  background: transparent;
+  color: var(--k-ink);
   font-size: var(--k-text-2xs);
   font-weight: var(--k-weight-semibold);
   cursor: pointer;

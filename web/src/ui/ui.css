@@ -32,10 +32,12 @@
 .k-button--lg { min-height: var(--k-control-lg); padding: 0 var(--k-space-4); }
 .k-button--primary { background: var(--k-ink); border-color: var(--k-ink); color: var(--k-ink-inverse); }
 .k-button--primary:hover:not(:disabled) { background: var(--k-ink-2); border-color: var(--k-ink-2); }
-.k-button--secondary { background: var(--k-surface-base); border-color: var(--k-line-strong); color: var(--k-ink); }
+/* secondary: a quiet outline. */
+.k-button--secondary { background: transparent; border-color: var(--k-line-strong); color: var(--k-ink); }
 .k-button--secondary:hover:not(:disabled) { background: var(--k-surface-sunken); }
-.k-button--quiet { background: transparent; color: var(--k-ink-2); }
-.k-button--quiet:hover:not(:disabled) { background: var(--k-surface-sunken); color: var(--k-ink); }
+/* ghost: no border until hovered. */
+.k-button--ghost { background: transparent; color: var(--k-ink-2); }
+.k-button--ghost:hover:not(:disabled) { background: var(--k-surface-sunken); color: var(--k-ink); }
 .k-button--destructive { background: transparent; border-color: var(--k-status-failed-fg); color: var(--k-status-failed-fg); }
 .k-button--destructive:hover:not(:disabled) { background: var(--k-status-failed-wash); }
 .k-button:disabled { cursor: not-allowed; opacity: 0.6; }

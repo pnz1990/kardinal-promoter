@@ -150,7 +150,7 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
             onClick={onCancel}
             disabled={loading}
             aria-label="Cancel bundle creation"
-            className="k-button k-button--quiet k-button--md"
+            className="k-button k-button--ghost k-button--md"
           >
             Cancel
           </button>

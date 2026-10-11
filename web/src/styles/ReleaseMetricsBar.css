@@ -44,7 +44,7 @@
 .release-metrics__value[data-tone="blocked"] { color: var(--k-status-blocked-fg); }
 .release-metrics__value[data-tone="failed"] { color: var(--k-status-failed-fg); }
 .release-metrics__value[data-tone="code"] { color: var(--k-syntax-ident); }
-.release-metrics__value[data-tone="accent"] { color: var(--k-thread-text); }
+.release-metrics__value[data-tone="accent"] { color: var(--k-ink); }
 
 .release-metrics__sub {
   margin-top: var(--k-space-0_5);

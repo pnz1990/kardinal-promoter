@@ -41,7 +41,7 @@
 .dag-node__state { fill: var(--dag-text); font-size: calc(var(--k-text-2xs) * 0.9); }
 .dag-node__elapsed { fill: var(--k-status-blocked-fg); font-size: calc(var(--k-text-2xs) * 0.82); }
 .dag-node__pr {
-  fill: var(--k-thread-text);
+  fill: var(--k-ink);
   font-size: calc(var(--k-text-2xs) * 0.82);
   text-decoration: underline;
   cursor: pointer;

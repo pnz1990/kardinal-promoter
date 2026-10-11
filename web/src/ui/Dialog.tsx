@@ -83,7 +83,7 @@ export function ConfirmDialog({ open, title, body, confirmLabel, tone = 'default
       busy={busy}
       footer={
         <>
-          <Button ref={cancelRef} variant="quiet" onClick={onCancel} disabled={busy}>Cancel</Button>
+          <Button ref={cancelRef} variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
           <Button variant={tone === 'destructive' ? 'destructive' : 'primary'} onClick={onConfirm} busy={busy} aria-label={confirmLabel}>
             {busy ? 'Working…' : confirmLabel}
           </Button>

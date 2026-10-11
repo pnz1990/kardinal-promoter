@@ -26,7 +26,7 @@ describe('Button and IconButton', () => {
       <div>
         <Button variant="primary" onClick={onClick}>Promote prod</Button>
         <Button variant="destructive" size="sm" icon="rollback">Roll back prod</Button>
-        <Button variant="quiet" size="lg" busy>Pause</Button>
+        <Button variant="ghost" size="lg" busy>Pause</Button>
         <IconButton label="Close" icon="close" />
       </div>,
     )

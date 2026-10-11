@@ -80,7 +80,7 @@
 }
 .stage-card__env { color: var(--k-ink); font-size: var(--k-text-xs); font-weight: var(--k-weight-bold); }
 .stage-card__bundle { color: var(--k-ink-2); font-family: var(--k-font-mono); font-size: var(--k-text-2xs); }
-.stage-card__pr { pointer-events: auto; color: var(--k-thread-text); font-size: var(--k-text-2xs); text-decoration: none; }
+.stage-card__pr { pointer-events: auto; color: var(--k-ink); text-decoration-color: var(--k-thread-text); font-size: var(--k-text-2xs); text-decoration: none; }
 .stage-card__message { color: var(--k-ink-2); font-size: var(--k-text-2xs); }
 .stage-card__actions { display: flex; gap: var(--k-space-1); margin-top: var(--k-space-0_5); pointer-events: auto; }
 .stage-card__action {
