@@ -77,7 +77,7 @@ func metricsFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 	var p v1alpha1.Pipeline
 	if err := c.Get(ctx, sigs_client.ObjectKey{Name: pipeline, Namespace: ns}, &p); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("pipeline %q not found in namespace %q", pipeline, ns)
+			return pipelineNotFound(ctx, c, ns, pipeline)
 		}
 		return fmt.Errorf("get pipeline %q: %w", pipeline, err)
 	}

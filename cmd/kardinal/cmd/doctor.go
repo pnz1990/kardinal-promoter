@@ -481,6 +481,10 @@ func checkPipelineHealth(ctx context.Context, client sigs_client.Client, ns, nam
 		r.failed = true
 		r.detail = fmt.Sprintf("Ready=%s (%s): %s", ready.Status, ready.Reason, ready.Message)
 		r.hint = "Fix the Pipeline spec; 'kardinal validate -f <your-pipeline.yaml>' reports the same problems."
+		if ready.Reason == "GitCredentialMissing" {
+			// Not a spec problem: the git Secret is missing or has no token.
+			r.hint = "Run the command in the message (with your token): it creates or fixes the git Secret."
+		}
 		return r
 	}
 	// Pipeline phases: Ready, Degraded, Promoting, Unknown (api/v1alpha1/pipeline_types.go).
