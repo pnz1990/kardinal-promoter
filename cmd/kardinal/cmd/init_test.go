@@ -15,6 +15,8 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,120 +24,175 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
-// TestInitFn_GeneratesValidPipelineYAML verifies that initFn generates YAML
-// with the required apiVersion/kind and all provided environments.
-func TestInitFn_GeneratesValidPipelineYAML(t *testing.T) {
-	cfg := &InitConfig{
-		AppName:        "nginx-demo",
-		Namespace:      "default",
-		Environments:   []string{"test", "uat", "prod"},
-		GitURL:         "https://github.com/myorg/gitops",
-		Branch:         "main",
-		UpdateStrategy: "kustomize",
+func init() {
+	// No unit test reaches a cluster: the host's default context may be a
+	// real one. Tests that want one set initClient themselves.
+	initClient = func() (sigs_client.Client, string, error) {
+		return nil, "", errors.New("no cluster in unit tests")
 	}
-
-	var buf bytes.Buffer
-	err := initFn(&buf, cfg)
-	require.NoError(t, err)
-
-	out := buf.String()
-	assert.Contains(t, out, "apiVersion: kardinal.io/v1alpha1")
-	assert.Contains(t, out, "kind: Pipeline")
-	assert.Contains(t, out, "name: nginx-demo")
-	assert.Contains(t, out, "namespace: default")
-	assert.Contains(t, out, "url: https://github.com/myorg/gitops")
-	assert.Contains(t, out, "branch: main")
-	assert.Contains(t, out, "strategy: kustomize")
 }
 
-// TestInitFn_AllEnvironments verifies that all environments appear in the output.
-func TestInitFn_AllEnvironments(t *testing.T) {
-	cfg := &InitConfig{
-		AppName:        "my-app",
-		Namespace:      "my-ns",
-		Environments:   []string{"dev", "staging", "prod"},
-		GitURL:         "https://github.com/test/repo",
-		Branch:         "main",
-		UpdateStrategy: "kustomize",
-	}
-
-	var buf bytes.Buffer
-	err := initFn(&buf, cfg)
+// TestInitFn_Minimal (C6): kardinal init with only --name and --repo writes
+// examples/minimal/pipeline.yaml byte for byte; each non-default value adds
+// only its own line.
+//
+// Covers CLI-INIT-02.
+func TestInitFn_Minimal(t *testing.T) {
+	want, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", "minimal", "pipeline.yaml"))
 	require.NoError(t, err)
+	var buf bytes.Buffer
+	require.NoError(t, initFn(&buf, &InitConfig{AppName: "my-app", GitURL: "https://github.com/myorg/gitops",
+		Environments: []string{"test", "uat", "prod"}}))
+	assert.Equal(t, string(want), buf.String(), "the golden output is examples/minimal")
 
-	out := buf.String()
-	assert.Contains(t, out, "name: dev")
-	assert.Contains(t, out, "name: staging")
-	assert.Contains(t, out, "name: prod")
+	buf.Reset()
+	require.NoError(t, initFn(&buf, &InitConfig{AppName: "web", Namespace: "team-a", GitURL: "https://github.com/o/r",
+		Branch: "release", UpdateStrategy: "helm", ProdApproval: "auto", Secret: "git",
+		Environments: []string{"dev", "prod"}, Health: map[string]string{"prod": "argocd"}}))
+	assert.Equal(t, `apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata: { name: web, namespace: team-a }
+spec:
+  git:
+    url: https://github.com/o/r
+    branch: release
+    secretRef: { name: git }
+  environments:
+    - name: dev
+      update: { strategy: helm }
+    - name: prod
+      update: { strategy: helm }
+      health: { type: argocd }
+`, buf.String())
 }
 
-// TestInitFn_DefaultApprovalModes verifies that the last environment gets
-// pr-review and others get auto by default.
-func TestInitFn_DefaultApprovalModes(t *testing.T) {
-	cfg := &InitConfig{
-		AppName:        "nginx-demo",
-		Namespace:      "default",
-		Environments:   []string{"test", "uat", "prod"},
-		GitURL:         "https://github.com/myorg/gitops",
-		Branch:         "main",
-		UpdateStrategy: "kustomize",
-	}
-
-	var buf bytes.Buffer
-	err := initFn(&buf, cfg)
-	require.NoError(t, err)
-
-	out := buf.String()
-	// prod should have pr-review, others auto
-	prodIdx := strings.Index(out, "name: prod")
-	testIdx := strings.Index(out, "name: test")
-	require.True(t, prodIdx >= 0, "prod env not found")
-	require.True(t, testIdx >= 0, "test env not found")
-
-	// Count occurrences of approval mode values
-	assert.Contains(t, out, "approval: pr-review")
-	assert.Contains(t, out, "approval: auto")
+// runInitCmd runs kardinal init in dir with stdin and returns its stdout,
+// stderr and error.
+func runInitCmd(t *testing.T, dir, stdin string, args ...string) (string, string, error) {
+	t.Helper()
+	t.Chdir(dir)
+	t.Cleanup(func() { globalOutput, globalNamespace = "", "" })
+	root := NewRootCmd()
+	var out, errb bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&errb)
+	root.SetIn(strings.NewReader(stdin))
+	root.SetArgs(append([]string{"init"}, args...))
+	err := root.Execute()
+	return out.String(), errb.String(), err
 }
 
-// TestInitFn_CredentialSecretRef verifies that a credentials secret ref is included.
-func TestInitFn_CredentialSecretRef(t *testing.T) {
-	cfg := &InitConfig{
-		AppName:        "nginx-demo",
-		Namespace:      "default",
-		Environments:   []string{"test", "prod"},
-		GitURL:         "https://github.com/myorg/gitops",
-		Branch:         "main",
-		UpdateStrategy: "kustomize",
+// TestInitCmd_Flags (C6): --repo makes init ask nothing; the flags it
+// checks, an existing file it does not overwrite without --force, and no
+// input with no --repo an error that names the flags.
+//
+// Covers CLI-INIT-02.
+func TestInitCmd_Flags(t *testing.T) {
+	want, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", "minimal", "pipeline.yaml"))
+	require.NoError(t, err)
+	dir := t.TempDir()
+	out, errOut, err := runInitCmd(t, dir, "", "--name", "my-app", "--repo", "https://github.com/myorg/gitops", "--stdout")
+	require.NoError(t, err)
+	assert.Equal(t, string(want), out, "the golden output is examples/minimal")
+	assert.Empty(t, errOut, "no questions")
+
+	_, _, err = runInitCmd(t, dir, "", "--repo", "https://github.com/o/r")
+	require.NoError(t, err)
+	_, _, err = runInitCmd(t, dir, "", "--repo", "https://github.com/o/r")
+	assert.EqualError(t, err, "init: pipeline.yaml exists; overwrite it with --force, or write another file with -f")
+	_, _, err = runInitCmd(t, dir, "", "--repo", "https://github.com/o/r2", "--force")
+	require.NoError(t, err)
+	content, _ := os.ReadFile(filepath.Join(dir, "pipeline.yaml"))
+	assert.Contains(t, string(content), "url: https://github.com/o/r2\n")
+
+	for args, msg := range map[string]string{
+		"--repo git@github.com:o/r.git":             `init: --repo needs an https:// repository URL, got "git@github.com:o/r.git"`,
+		"--repo https://x/y --strategy argo":        `init: --strategy must be kustomize or helm, got "argo"`,
+		"--repo https://x/y --prod-approval manual": `init: --prod-approval must be pr-review or auto, got "manual"`,
+		"--repo https://x/y --envs bundle --stdout": "init: the Pipeline it would write is not valid:",
+		"--repo https://x/y --apply":                "init: --apply and --create-secret need a cluster: no cluster in unit tests",
+	} {
+		_, _, err := runInitCmd(t, t.TempDir(), "", strings.Fields(args)...)
+		require.Error(t, err, args)
+		assert.Contains(t, err.Error(), msg, args)
 	}
 
-	var buf bytes.Buffer
-	err := initFn(&buf, cfg)
-	require.NoError(t, err)
-
-	out := buf.String()
-	assert.Contains(t, out, "github-token", "credentials secret ref must reference github-token")
+	_, _, err = runInitCmd(t, t.TempDir(), "", "--name", "web")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "give the answers as flags: kardinal init --name my-app --repo https://github.com/myorg/gitops")
 }
 
-// TestInitFn_SingleEnv verifies that a single environment works.
-func TestInitFn_SingleEnv(t *testing.T) {
-	cfg := &InitConfig{
-		AppName:        "simple-app",
-		Namespace:      "ops",
-		Environments:   []string{"prod"},
-		GitURL:         "https://github.com/test/repo",
-		Branch:         "main",
-		UpdateStrategy: "kustomize",
-	}
+// TestInitCmd_DetectSecretApply (C6): with a cluster, init finds the Argo
+// CD Application or Flux Kustomization of each environment, creates the
+// labelled git Secret from $GITHUB_TOKEN (else gh auth token) without
+// printing it, and applies the Pipeline, replacing one only with --force.
+//
+// Covers CLI-INIT-02.
+func TestInitCmd_DetectSecretApply(t *testing.T) {
+	app := &unstructured.Unstructured{}
+	app.SetGroupVersionKind(schema.GroupVersionKind{Group: "argoproj.io", Version: "v1alpha1", Kind: "Application"})
+	app.SetName("web-prod")
+	app.SetNamespace("argocd")
+	ks := &unstructured.Unstructured{}
+	ks.SetGroupVersionKind(schema.GroupVersionKind{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Kind: "Kustomization"})
+	ks.SetName("web-test")
+	ks.SetNamespace("flux-system")
+	c := fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(app, ks).Build()
+	prev := initClient
+	initClient = func() (sigs_client.Client, string, error) { return c, "team-a", nil }
+	t.Cleanup(func() { initClient = prev })
+	t.Setenv("GITHUB_TOKEN", "s3cret-token")
 
-	var buf bytes.Buffer
-	err := initFn(&buf, cfg)
+	out, errOut, err := runInitCmd(t, t.TempDir(), "", "--name", "web", "--repo", "https://github.com/o/r", "--envs", "test,uat,prod",
+		"--create-secret", "--apply")
 	require.NoError(t, err)
+	assert.Contains(t, errOut, "Found Argo CD Application argocd/web-prod: prod checks health with it\n")
+	assert.Contains(t, errOut, "Found Flux Kustomization flux-system/web-test: test checks health with it\n")
+	assert.Contains(t, out, "Secret team-a/github-token created from $GITHUB_TOKEN\n")
+	assert.Contains(t, out, "Pipeline team-a/web created\n")
+	assert.NotContains(t, out+errOut, "s3cret-token", "the token is never printed")
+	assert.Contains(t, errOut, "Next: ship a version: kardinal ship web --image <ref>\n")
 
-	out := buf.String()
-	assert.Contains(t, out, "name: prod")
-	assert.Contains(t, out, "approval: pr-review", "single env should always get pr-review")
+	var p v1alpha1.Pipeline
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "team-a", Name: "web"}, &p))
+	require.Len(t, p.Spec.Environments, 3)
+	assert.Equal(t, "flux", string(p.Spec.Environments[0].Health.Type))
+	assert.Empty(t, p.Spec.Environments[1].Health.Type)
+	assert.Equal(t, "argocd", string(p.Spec.Environments[2].Health.Type))
+	var s corev1.Secret
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "team-a", Name: "github-token"}, &s))
+	assert.Equal(t, "true", s.Labels[v1alpha1.LabelSecretReferenceable])
+	assert.Equal(t, "s3cret-token", s.StringData["token"])
+
+	// Again: the Secret is kept; the Pipeline is not replaced without --force.
+	_, _, err = runInitCmd(t, t.TempDir(), "", "--name", "web", "--repo", "https://github.com/o/r", "--create-secret", "--apply")
+	assert.EqualError(t, err, "init: Pipeline team-a/web exists; replace it with --force")
+	out, _, err = runInitCmd(t, t.TempDir(), "", "--name", "web", "--repo", "https://github.com/o/r2", "--create-secret", "--apply", "--force")
+	require.NoError(t, err)
+	assert.Contains(t, out, "Secret team-a/github-token exists; kept\n")
+	assert.Contains(t, out, "Pipeline team-a/web replaced\n")
+
+	// No GITHUB_TOKEN: gh auth token, and none at all is an error.
+	t.Setenv("GITHUB_TOKEN", "")
+	prevGH := ghToken
+	t.Cleanup(func() { ghToken = prevGH })
+	ghToken = func() (string, error) { return "", errors.New("not logged in") }
+	_, _, err = runInitCmd(t, t.TempDir(), "", "--name", "other", "--repo", "https://github.com/o/r", "--secret", "other-token", "--create-secret", "--stdout")
+	assert.EqualError(t, err, "init: --create-secret needs a git token: set GITHUB_TOKEN, or log in with gh auth login")
+	ghToken = func() (string, error) { return "gh-token", nil }
+	out, _, err = runInitCmd(t, t.TempDir(), "", "--name", "other", "--repo", "https://github.com/o/r", "--secret", "other-token", "--create-secret")
+	require.NoError(t, err)
+	assert.Contains(t, out, "Secret team-a/other-token created from gh auth token\n")
 }
 
 // TestInitScaffold_CreatesKustomizationFiles verifies that scaffoldGitOpsFn creates
@@ -302,17 +359,20 @@ func TestBuildKustomization_ImageBlock(t *testing.T) {
 }
 
 // C09b-cli-15: the wizard requires an https:// Git URL and a valid strategy,
-// re-prompting on a bad answer and failing at end of input.
+// re-prompting on a bad answer and failing at end of input; it asks only
+// for what no flag gives.
 func TestRunInitWizard_Validation(t *testing.T) {
+	none := func(string) bool { return false }
 	t.Run("defaults only: the URL is required", func(t *testing.T) {
-		_, err := runInitWizard(strings.NewReader("\n\n\n\n"), &bytes.Buffer{})
+		err := runInitWizard(strings.NewReader("\n\n\n\n"), &bytes.Buffer{}, &InitConfig{}, none)
 		require.Error(t, err)
 		assert.Equal(t, "Git repository URL: an https:// repository URL is required", err.Error())
 	})
 	t.Run("bad answers are re-prompted", func(t *testing.T) {
 		var out bytes.Buffer
-		cfg, err := runInitWizard(strings.NewReader(
-			"web\nteam-a\ntest,prod\n\ngit@github.com:o/r.git\nhttps://github.com/o/r\n\nargocd\nhelm\n"), &out)
+		cfg := &InitConfig{}
+		err := runInitWizard(strings.NewReader(
+			"web\nteam-a\ntest,prod\n\ngit@github.com:o/r.git\nhttps://github.com/o/r\n\nargocd\nhelm\n"), &out, cfg, none)
 		require.NoError(t, err)
 		assert.Equal(t, &InitConfig{
 			AppName: "web", Namespace: "team-a", Environments: []string{"test", "prod"},
@@ -320,6 +380,16 @@ func TestRunInitWizard_Validation(t *testing.T) {
 		}, cfg)
 		assert.Equal(t, 2, strings.Count(out.String(), "an https:// repository URL is required"))
 		assert.Contains(t, out.String(), `update strategy must be kustomize or helm, got "argocd"`)
+	})
+	t.Run("a flag's question is not asked", func(t *testing.T) {
+		var out bytes.Buffer
+		cfg := &InitConfig{AppName: "web", Environments: []string{"dev"}}
+		set := func(f string) bool { return f == "name" || f == "envs" }
+		require.NoError(t, runInitWizard(strings.NewReader("default\nhttps://github.com/o/r\nmain\nkustomize\n"), &out, cfg, set))
+		assert.NotContains(t, out.String(), "Application name")
+		assert.NotContains(t, out.String(), "Environments")
+		assert.Equal(t, "web", cfg.AppName)
+		assert.Equal(t, []string{"dev"}, cfg.Environments)
 	})
 }
 
@@ -346,7 +416,7 @@ func TestInitCmd_FileFlagAndHelmScaffold(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(dir, "deploy.yaml"))
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "url: https://github.com/o/r\n")
-	assert.Contains(t, string(content), "strategy: helm\n")
+	assert.Contains(t, string(content), "update: { strategy: helm }\n")
 	assert.Contains(t, out, "GitOps scaffold skipped: it writes Kustomize overlays, and the update strategy is helm\n")
 	_, err = os.Stat(filepath.Join(dir, "gitops"))
 	assert.True(t, os.IsNotExist(err), "no kustomization.yaml for helm")
@@ -392,7 +462,7 @@ func TestInitCmd_StdoutKeepsScaffold(t *testing.T) {
 	root.SetArgs([]string{"init", "--stdout", "--demo", "--gitops-dir", "gitops"})
 	require.NoError(t, root.Execute())
 
-	assert.True(t, strings.HasPrefix(stdout.String(), "# Generated by kardinal init\n"), stdout.String())
+	assert.True(t, strings.HasPrefix(stdout.String(), "apiVersion: kardinal.io/v1alpha1\n"), stdout.String())
 	assert.NotContains(t, stdout.String(), "created:", "stdout is only the YAML")
 	for _, env := range []string{"test", "prod"} {
 		path := filepath.Join("gitops", "environments", env, "kustomization.yaml")

@@ -28,7 +28,7 @@
 | [`kardinal get steps`](reference/cli/kardinal-get-steps.md) | List PromotionSteps for a pipeline |
 | [`kardinal get subscriptions`](reference/cli/kardinal-get-subscriptions.md) | List Subscriptions (passive artifact watchers) |
 | [`kardinal history`](reference/cli/kardinal-history.md) | Show Bundle promotion history for a pipeline |
-| [`kardinal init`](reference/cli/kardinal-init.md) | Interactive wizard to generate a Pipeline YAML and scaffold the GitOps repo |
+| [`kardinal init`](reference/cli/kardinal-init.md) | Write a Pipeline for your GitOps repository, from flags or a few questions |
 | [`kardinal logs`](reference/cli/kardinal-logs.md) | Show promotion step execution logs for a pipeline |
 | [`kardinal metrics`](reference/cli/kardinal-metrics.md) | Show promotion metrics (DORA-style) for a pipeline |
 | [`kardinal override`](reference/cli/kardinal-override.md) | Force-pass a PolicyGate with a mandatory audit record |

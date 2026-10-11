@@ -12,7 +12,7 @@ Usage:
 Get started:
   dashboard    Open the kardinal UI dashboard in a browser
   doctor       Run pre-flight checks to verify the cluster is correctly configured
-  init         Interactive wizard to generate a Pipeline YAML and scaffold the GitOps repo
+  init         Write a Pipeline for your GitOps repository, from flags or a few questions
   version      Print the CLI, controller, and kro (Graph) versions
 
 Ship and observe:
