@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// BlockedBanner.test.tsx — Tests for the blocked PolicyGate banner (#533).
+// BlockedBanner.test.tsx — Tests for the blocked-gates banner (#533).
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { BlockedBanner } from './BlockedBanner'
+import { BlockedBanner, blockedLabel } from './BlockedBanner'
 
 describe('BlockedBanner — hidden when no gates are blocked', () => {
   it('renders nothing when blockedCount=0', () => {
@@ -27,14 +27,19 @@ describe('BlockedBanner — hidden when no gates are blocked', () => {
 })
 
 describe('BlockedBanner — visible when gates are blocked', () => {
-  it('shows singular message for 1 blocked gate', () => {
-    render(<BlockedBanner blockedCount={1} highlightActive={false} onToggleHighlight={vi.fn()} />)
-    expect(screen.getByText('1 PolicyGate blocking promotion')).toBeInTheDocument()
+  it('names the environment one gate blocks, with one button', () => {
+    render(<BlockedBanner blockedCount={1} environments={['prod']} highlightActive={false} onToggleHighlight={vi.fn()} />)
+    expect(screen.getByText('1 gate blocking prod')).toBeInTheDocument()
+    expect(screen.getAllByRole('button')).toHaveLength(1)
   })
 
-  it('shows plural message for multiple blocked gates', () => {
-    render(<BlockedBanner blockedCount={5} highlightActive={false} onToggleHighlight={vi.fn()} />)
-    expect(screen.getByText('5 PolicyGates blocking promotion')).toBeInTheDocument()
+  it.each<[number, string[], string]>([
+    [2, ['prod', 'prod'], '2 gates blocking prod'],
+    [2, ['uat', 'prod'], '2 gates blocking uat and prod'],
+    [3, ['test', 'uat', 'prod'], '3 gates blocking test, uat and prod'],
+    [5, [], '5 gates blocking promotion'],
+  ])('%i gates on %j read "%s"', (count, envs, want) => {
+    expect(blockedLabel(count, envs)).toBe(want)
   })
 
   it('has role=alert for screen reader accessibility', () => {
