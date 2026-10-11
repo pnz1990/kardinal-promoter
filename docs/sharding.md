@@ -133,7 +133,7 @@ lowercase DNS labels.
 ## Identity admission policies
 
 Every release installs the chart's identity admission policies (gate overrides, Approvals,
-Bundle creators, the objects a promotion Graph makes; [Verified identity](guides/security.md#verified-identity))
+version creators, the objects a promotion Graph makes; [Verified identity](guides/security.md#verified-identity))
 and the hold-writes policy ([Who may hold](rollback.md#who-may-hold)).
 They exempt their own release's controller, so with `controller.namespaceShard` each release
 binds them to its shard's namespaces (label `kardinal.io/shard=<shard>`); the `default` shard adds

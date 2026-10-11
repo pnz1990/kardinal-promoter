@@ -7,6 +7,7 @@ kardinal-promoter is a Kubernetes-native controller. All state lives in etcd as 
 ## System Overview
 
 ```mermaid
+%%{init: {'flowchart': {'curve': 'linear'}}}%%
 graph TD
     CI["CI/CD Pipeline<br/>(GitHub Actions, etc.)"] -->|"POST /api/v1/bundles<br/>or kubectl apply"| Bundle
 
@@ -165,6 +166,7 @@ Checks whether a promotion is healthy after merging:
 ## Data Flow: Bundle → Verified
 
 ```mermaid
+%%{init: {'flowchart': {'curve': 'linear'}}}%%
 sequenceDiagram
     participant CI
     participant API as kardinal API
@@ -238,9 +240,9 @@ supersede an in-flight `config` Bundle, and vice versa.
 
 ```bash
 kardinal get bundles my-app
-# BUNDLE         TYPE    PHASE        AGE
-# my-app-7xk2p   image   Superseded   10m
-# my-app-9qd4s   image   Promoting    3m
+# BUNDLE         TYPE    PHASE                       AGE
+# my-app-7xk2p   image   Replaced by newer version   10m
+# my-app-9qd4s   image   Promoting                   3m
 ```
 
 ### Graph retirement
@@ -319,7 +321,7 @@ All state is stored in Kubernetes CRDs:
 | `PromotionStep` | Per-environment promotion progress; owned by Graph |
 | `PolicyGate` | Namespaced policy check: templates, and the per-Bundle instances the Graph creates |
 | `PRStatus` | Tracks a promotion PR's open, merged or closed state |
-| `RollbackPolicy` | Consecutive-failure rollback trigger for one Bundle in one environment (user-created; see [Rollback](rollback.md#autorollback-is-not-implemented)) |
+| `RollbackPolicy` | Consecutive-failure rollback trigger for one Bundle in one environment (user-created; see [Rollback](rollback.md#rollbackpolicy)) |
 | `MetricCheck` | Metric query (Prometheus, Datadog, CloudWatch, New Relic, web) with a pass/fail threshold, created by the user or, per promotion, by the Graph from a `perPromotion` template; gates read it as `metrics.<name>` |
 | `ScheduleClock` | Writes `status.tick` on a configurable interval; enables time-based policy gates |
 | `ChangeWindow` | Cluster-scoped blackout/recurring allow windows for pipeline promotions |
