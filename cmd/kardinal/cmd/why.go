@@ -347,29 +347,34 @@ func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1
 	name := gateDisplayName(g)
 	var a whyAnswer
 	switch {
-	case g.Spec.Approval != nil && known && lifecycle.ApprovalPolicyHeld(g.Spec.Approval, len(g.Spec.Approvals), creator, env) != "":
-		// The gate holds whatever approvals it gets: the server's own
-		// decision (lifecycle.ApprovalPolicyHeld), said in the CLI's words.
-		a.sentence = fmt.Sprintf("%s is held by gate %s: nobody can approve this version.", env, name)
-		a.lines = []whyLine{version,
-			{"Why", unapprovable(g.Spec.Approval, len(g.Spec.Approvals), creator)},
-			{"Next", fmt.Sprintf("ship it again as yourself: kardinal ship %s --image <ref>", p.Name)},
-			{"Or", fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>", p.Name, env, name)}}
-		if len(g.Spec.Approvals) > lifecycle.MaxGateApprovals {
-			a.lines[2].value = fmt.Sprintf("delete the stale Approvals: kubectl get approvals -n %s", p.Namespace)
-		}
 	case g.Spec.Approval != nil:
 		var id *lifecycle.ApproverIdentity
 		if me != nil {
 			id = &lifecycle.ApproverIdentity{User: me.Username, Groups: me.Groups}
 		}
 		st := lifecycle.ApprovalStandingOf(&g, creator, id)
-		by, next := approvalBy(st, me != nil, fmt.Sprintf("kardinal approve %s %s", p.Name, env))
+		// A version not read has an unknown creator, not none: nothing is
+		// said about excludeAuthor then.
+		creatorHeld := st.Block == lifecycle.ApprovalNoCreator || st.Block == lifecycle.ApprovalComponentCreator
+		if st.Block.Held() && (known || !creatorHeld) {
+			// The gate holds whatever approvals it gets: the server's own
+			// decision, said in the CLI's words.
+			a.sentence = fmt.Sprintf("%s is held by gate %s: nobody can approve this version.", env, name)
+			a.lines = []whyLine{version,
+				{"Why", unapprovable(st.Block, creator)},
+				{"Next", fmt.Sprintf("ship it again as yourself: kardinal ship %s --image <ref>", p.Name)},
+				{"Or", fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>", p.Name, env, name)}}
+			if st.Block == lifecycle.ApprovalTooMany {
+				a.lines[2].value = fmt.Sprintf("delete the stale Approvals: kubectl get approvals -n %s", p.Namespace)
+			}
+			break
+		}
+		by, next := approvalBy(st, me != nil && !creatorHeld, fmt.Sprintf("kardinal approve %s %s", p.Name, env))
 		a.sentence = fmt.Sprintf("%s is waiting for %s.", env, by)
 		a.lines = []whyLine{version,
 			{"Gate", fmt.Sprintf("%s · %d of %d approvals", name, st.Approved, st.Required)},
 			{"Next", next}}
-		if len(st.RejectedBy) > 0 {
+		if st.Block == lifecycle.ApprovalRejected {
 			// A counted reject blocks it: no approval opens it.
 			a.sentence = fmt.Sprintf("%s was %s.", env, st.Reason)
 			a.lines[2].value = fmt.Sprintf("ship a fixed version: kardinal ship %s --image <ref>", p.Name)
@@ -402,21 +407,18 @@ func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1
 	return a
 }
 
-// unapprovable says, in the CLI's words, why no approval can open approval
-// gate a with n decisions for a version created by creator: the cases of
-// lifecycle.ApprovalPolicyHeld, which decides. With excludeAuthor, a version
-// with no verified creator (kardinal.io/created-by), or one a kardinal
-// component created (the UI, the Bundle API, a Subscription), has no author
-// to exclude.
-func unapprovable(a *v1alpha1.GateApprovalPolicy, n int, creator string) string {
-	switch {
-	case n > lifecycle.MaxGateApprovals:
+// unapprovable says, in the CLI's words, why no approval can open an
+// approval gate held by block (lifecycle.ApprovalBlock.Held) for a version
+// created by creator. With excludeAuthor, a version with no verified creator
+// (kardinal.io/created-by), or one a kardinal component created (the UI, the
+// Bundle API, a Subscription), has no author to exclude.
+func unapprovable(block lifecycle.ApprovalBlock, creator string) string {
+	switch block {
+	case lifecycle.ApprovalTooMany:
 		return fmt.Sprintf("more than %d Approvals for this version; delete the stale ones (kubectl get approvals)", lifecycle.MaxGateApprovals)
-	case !a.ExcludeAuthor:
-		return ""
-	case creator == "":
+	case lifecycle.ApprovalNoCreator:
 		return "the gate excludes the version's author, and the version has no verified creator (kardinal.io/created-by)"
-	case lifecycle.ComponentCreator(creator):
+	case lifecycle.ApprovalComponentCreator:
 		return fmt.Sprintf("the gate excludes the version's author, and the version was created by the kardinal component %s, not a person", creator)
 	}
 	return ""
@@ -445,9 +447,9 @@ func approvalBy(st lifecycle.ApprovalStanding, known bool, approve string) (by, 
 		return "approval", approve
 	case st.CanApprove:
 		return "your approval", approve
-	case st.AlreadyCounted:
+	case st.Block == lifecycle.ApprovalCounted:
 		return "approval by someone else (you approved)", "someone else runs: " + approve
-	case st.Reason == "the version's author (approval.excludeAuthor)":
+	case st.Block == lifecycle.ApprovalAuthor:
 		if list != "" {
 			return "approval by " + list + ", someone other than you (you created this version)", "someone else runs: " + approve
 		}

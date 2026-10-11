@@ -47,22 +47,84 @@ type ApprovalTally struct {
 	Held string
 }
 
+// ApprovalBlock is why an approval does not count, or cannot be given, as a
+// value to branch on; ApprovalStanding.Reason says it in words.
+type ApprovalBlock string
+
+const (
+	// ApprovalOpen: nothing blocks (the caller may approve, or is unknown).
+	ApprovalOpen ApprovalBlock = ""
+	// ApprovalTooMany: more than MaxGateApprovals decisions; the policy
+	// cannot be met (held).
+	ApprovalTooMany ApprovalBlock = "TooMany"
+	// ApprovalNoCreator: excludeAuthor, and the Bundle has no verified
+	// creator (held).
+	ApprovalNoCreator ApprovalBlock = "NoCreator"
+	// ApprovalComponentCreator: excludeAuthor, and a kardinal component
+	// created the Bundle (held).
+	ApprovalComponentCreator ApprovalBlock = "ComponentCreator"
+	// ApprovalRejected: a counted reject blocks the gate.
+	ApprovalRejected ApprovalBlock = "Rejected"
+	// ApprovalCounted: the caller's approve already counts.
+	ApprovalCounted ApprovalBlock = "Counted"
+	// ApprovalNotAllowed: the caller is not in allowedUsers or allowedGroups.
+	ApprovalNotAllowed ApprovalBlock = "NotAllowed"
+	// ApprovalAuthor: excludeAuthor, and the caller created the Bundle.
+	ApprovalAuthor ApprovalBlock = "Author"
+)
+
+// Held reports whether b means the policy cannot be met at all, whatever
+// approvals come.
+func (b ApprovalBlock) Held() bool {
+	return b == ApprovalTooMany || b == ApprovalNoCreator || b == ApprovalComponentCreator
+}
+
+// approvalPolicyBlock is why approval policy p of a gate with n decisions
+// cannot be met for a Bundle created by creator: a held ApprovalBlock, or
+// ApprovalOpen.
+func approvalPolicyBlock(p *kardinalv1alpha1.GateApprovalPolicy, n int, creator string) ApprovalBlock {
+	switch {
+	case p == nil:
+		return ApprovalOpen
+	case n > MaxGateApprovals:
+		return ApprovalTooMany
+	case p.ExcludeAuthor && creator == "":
+		return ApprovalNoCreator
+	case p.ExcludeAuthor && ComponentCreator(creator):
+		return ApprovalComponentCreator
+	}
+	return ApprovalOpen
+}
+
 // ApprovalPolicyHeld is why approval policy p of a gate with n decisions
 // cannot be met for a Bundle created by creator (its verified
 // kardinal.io/created-by), or "".
 func ApprovalPolicyHeld(p *kardinalv1alpha1.GateApprovalPolicy, n int, creator, env string) string {
-	switch {
-	case p == nil:
-		return ""
-	case n > MaxGateApprovals:
+	switch approvalPolicyBlock(p, n, creator) {
+	case ApprovalTooMany:
 		return fmt.Sprintf("more than %d Approvals for this Bundle in %s; delete the stale ones (kubectl get approvals)", MaxGateApprovals, env)
-	case p.ExcludeAuthor && creator == "":
+	case ApprovalNoCreator:
 		return "excludeAuthor cannot be enforced: the Bundle has no verified creator (annotation kardinal.io/created-by)"
-	case p.ExcludeAuthor && ComponentCreator(creator):
+	case ApprovalComponentCreator:
 		return fmt.Sprintf("excludeAuthor cannot be enforced: the Bundle was created by the kardinal component %q, "+
 			"not a person; create it as yourself (kardinal create bundle, or the Bundle API with your own token)", creator)
 	}
 	return ""
+}
+
+// approvalDecisionBlock is why a decision by user (in groups) does not
+// count under approval policy p for a Bundle created by creator, or
+// ApprovalOpen.
+func approvalDecisionBlock(p *kardinalv1alpha1.GateApprovalPolicy, user string, groups []string, creator string) ApprovalBlock {
+	switch {
+	case p == nil:
+		return ApprovalOpen
+	case !approvalAllowed(p, user, groups):
+		return ApprovalNotAllowed
+	case p.ExcludeAuthor && creator != "" && user == creator:
+		return ApprovalAuthor
+	}
+	return ApprovalOpen
 }
 
 // ApprovalDecisionCounts reports whether a decision by user (in groups)
@@ -70,13 +132,10 @@ func ApprovalPolicyHeld(p *kardinalv1alpha1.GateApprovalPolicy, n int, creator, 
 // not: the user is in allowedUsers or one of the groups in allowedGroups
 // (anyone when both are empty), and, with excludeAuthor, is not creator.
 func ApprovalDecisionCounts(p *kardinalv1alpha1.GateApprovalPolicy, user string, groups []string, creator string) (bool, string) {
-	if p == nil {
-		return true, ""
-	}
-	if !approvalAllowed(p, user, groups) {
+	switch approvalDecisionBlock(p, user, groups, creator) {
+	case ApprovalNotAllowed:
 		return false, "not an allowed approver (approval.allowedUsers, approval.allowedGroups)"
-	}
-	if p.ExcludeAuthor && creator != "" && user == creator {
+	case ApprovalAuthor:
 		return false, "the version's author (approval.excludeAuthor)"
 	}
 	return true, ""
@@ -166,9 +225,12 @@ type ApprovalStanding struct {
 	AlreadyCounted bool
 	// RejectedBy are the users whose reject counts (the gate is blocked).
 	RejectedBy []string
-	// Reason is why the caller cannot approve, when CanApprove is false: the
-	// policy cannot be met (Held), it is rejected, the caller approved
-	// already, is not allowed, or is the author. "" when unknown (no caller).
+	// Block is why the caller cannot approve, to branch on: held first (the
+	// policy cannot be met), then rejected, then the caller's own (counted,
+	// not allowed, the author). ApprovalOpen when CanApprove, or when the
+	// caller is unknown and nothing else blocks.
+	Block ApprovalBlock
+	// Reason is Block in words ("" for ApprovalOpen).
 	Reason string
 	// Who may approve when the caller cannot: allowedUsers and "group <g>"
 	// of allowedGroups; empty when anyone with RBAC may.
@@ -190,16 +252,18 @@ func ApprovalStandingOf(gate *kardinalv1alpha1.PolicyGate, creator string, id *A
 	if id != nil {
 		s.AlreadyCounted = slices.Contains(t.Approvers, id.User)
 	}
+	p := gate.Spec.Approval
 	switch {
 	case t.Held != "":
-		s.Reason = t.Held
+		s.Block, s.Reason = approvalPolicyBlock(p, len(gate.Spec.Approvals), creator), t.Held
 	case len(t.Rejecters) > 0:
-		s.Reason = "rejected by " + joinUsers(t.Rejecters)
+		s.Block, s.Reason = ApprovalRejected, "rejected by "+joinUsers(t.Rejecters)
 	case id == nil:
 	case s.AlreadyCounted:
-		s.Reason = "you approved it; it needs someone else"
+		s.Block, s.Reason = ApprovalCounted, "you approved it; it needs someone else"
 	default:
-		ok, why := ApprovalDecisionCounts(gate.Spec.Approval, id.User, id.Groups, creator)
+		s.Block = approvalDecisionBlock(p, id.User, id.Groups, creator)
+		ok, why := ApprovalDecisionCounts(p, id.User, id.Groups, creator)
 		s.CanApprove, s.Reason = ok, why
 	}
 	return s

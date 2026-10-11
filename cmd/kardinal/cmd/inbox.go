@@ -476,7 +476,7 @@ func (r *inboxReader) environment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvir
 				unread = true // its creator is unknown, not absent
 			}
 			st := lifecycle.ApprovalStandingOf(g, creator, r.me)
-			if len(st.RejectedBy) > 0 {
+			if st.Block == lifecycle.ApprovalRejected {
 				continue // rejected: nobody's approval opens it (as the UI)
 			}
 			it.Kind = "approval"
@@ -484,15 +484,13 @@ func (r *inboxReader) environment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvir
 			it.Next = fmt.Sprintf("kardinal approve %s %s%s", p.Name, e.Name, nsFlag)
 			it.OnYou = st.CanApprove && r.may("approval", p.Namespace)
 			it.Who = st.Who
+			creatorHeld := st.Block == lifecycle.ApprovalNoCreator || st.Block == lifecycle.ApprovalComponentCreator
 			switch {
-			case st.AlreadyCounted:
-				it.Waiting += " (you approved; it needs someone else)"
-				it.Who = []string{"someone else who may approve"}
-			case st.Reason != "" && !st.CanApprove && strings.HasPrefix(st.Reason, "excludeAuthor cannot be enforced") && unread:
+			case creatorHeld && unread:
 				it.Waiting = fmt.Sprintf("approval at %s · %d of %d (could not read the version %s to see who created it)", name, st.Approved, st.Required, bundle)
 				it.Reason = "could not read Bundle " + p.Namespace + "/" + bundle
 				it.OnYou = false
-			case st.Reason != "" && !st.CanApprove && strings.HasPrefix(st.Reason, "excludeAuthor cannot be enforced"):
+			case creatorHeld:
 				short := "no verified creator"
 				if creator != "" {
 					short = "created by " + creator
@@ -500,7 +498,14 @@ func (r *inboxReader) environment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvir
 				it.Waiting = fmt.Sprintf("approval at %s, which no one can give (excludeAuthor, %s)", name, short)
 				it.Reason = st.Reason
 				it.Who = []string{"no one: ship it again as a person"}
-			case st.Reason == "the version's author (approval.excludeAuthor)":
+			case st.Block == lifecycle.ApprovalTooMany:
+				it.Waiting = fmt.Sprintf("approval at %s, which no one can give (more than %d Approvals)", name, lifecycle.MaxGateApprovals)
+				it.Reason = st.Reason
+				it.Who = []string{fmt.Sprintf("someone who deletes the stale ones (kubectl get approvals%s)", nsFlag)}
+			case st.Block == lifecycle.ApprovalCounted:
+				it.Waiting += " (you approved; it needs someone else)"
+				it.Who = []string{"someone else who may approve"}
+			case st.Block == lifecycle.ApprovalAuthor:
 				it.Who = append(it.Who, "someone other than you (you created this version)")
 			}
 			if len(it.Who) == 0 {
