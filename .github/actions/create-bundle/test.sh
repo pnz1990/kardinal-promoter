@@ -79,6 +79,9 @@ print(b["pipeline"], b["type"], b["namespace"], b["images"][0]["tag"], b["proven
   "my-app image default v1 abc123 https://github.com/myorg/myapp/actions/runs/42 engineer"
 check "no configRef without a config commit" "$(printf '%s' "$BODY" | python3 -c 'import json, sys
 print("configRef" in json.load(sys.stdin))')" "False"
+BODY=$(build_body "my-app" "" "default" '[]' "def456" "")
+check "an empty type is left out for the controller to infer" "$(printf '%s' "$BODY" | python3 -c 'import json, sys
+print("type" in json.load(sys.stdin))')" "False"
 BODY=$(build_body "my-app" "config" "default" '[]' "def456" "https://git.example.com/org/config")
 check "config commit and repo set configRef" "$(printf '%s' "$BODY" | python3 -c 'import json, sys
 b = json.load(sys.stdin)
