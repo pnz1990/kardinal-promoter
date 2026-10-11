@@ -221,7 +221,7 @@ name under **Kubernetes details**, for `kubectl`.
   and **Ship your first version**.
 
   On the **map** each environment is a station that shows the version it runs and the version on
-  its way; gates sit on the edge into the environment they guard, an approval gate with its
+  its way (the map colours only what needs attention: a Live station is ink, not green); gates sit on the edge into the environment they guard, an approval gate with its
   quorum; the version you follow is one red line through the stations it reached, and it stops
   at a gate that holds it. A wave of five or more environments is one band, and a fleet one
   platform; each counts its environments by state and expands to a grid, a row per state, in
