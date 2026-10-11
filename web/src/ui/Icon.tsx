@@ -3,7 +3,7 @@
 
 // Icon.tsx — the UI's icon set: inline SVG in currentColor, drawn like the logo (straight
 // strokes, 45° bends, round dots). Decorative (aria-hidden) unless it has a label.
-import type { SVGProps } from 'react'
+import { forwardRef, type SVGProps } from 'react'
 
 export type IconName =
   | 'close' | 'chevron' | 'check' | 'cross' | 'clock' | 'gate' | 'pin' | 'pause' | 'play'
@@ -39,10 +39,12 @@ export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {
   label?: string
 }
 
-export function Icon({ name, size = 16, label, className, ...rest }: IconProps) {
+/** The ref is the <svg>. */
+export const Icon = forwardRef<SVGSVGElement, IconProps>(function Icon({ name, size = 16, label, className, ...rest }, ref) {
   const filled = FILLED.has(name)
   return (
     <svg
+      ref={ref}
       viewBox="0 0 16 16"
       width={size}
       height={size}
@@ -55,6 +57,6 @@ export function Icon({ name, size = 16, label, className, ...rest }: IconProps) 
       {PATHS[name].map((d) => <path key={d} d={d} />)}
     </svg>
   )
-}
+})
 
 export const ICON_NAMES = Object.keys(PATHS) as IconName[]

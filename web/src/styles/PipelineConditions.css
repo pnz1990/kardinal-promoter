@@ -1,0 +1,31 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * PipelineConditions.css — the Pipeline's own problems under its header
+ * (components/PipelineConditions.tsx). Design tokens only (noLiterals.test.ts).
+ */
+.pipeline-conditions { display: grid; gap: var(--k-space-2); margin-block-end: var(--k-space-3); }
+.pipeline-conditions__notice {
+  display: grid;
+  gap: var(--k-space-1_5);
+  padding: var(--k-space-2) var(--k-space-3);
+  border: var(--k-border-hairline) solid var(--notice-fg);
+  border-radius: var(--k-radius-2);
+  background: var(--notice-bg);
+  font-size: var(--k-text-sm);
+}
+.pipeline-conditions__notice[data-tone="failed"] { --notice-fg: var(--k-status-failed-fg); --notice-bg: var(--k-status-failed-wash); }
+.pipeline-conditions__notice[data-tone="warning"] { --notice-fg: var(--k-status-blocked-fg); --notice-bg: var(--k-status-blocked-wash); }
+.pipeline-conditions__title { display: flex; align-items: center; gap: var(--k-space-2); margin: 0; color: var(--k-ink); font-weight: var(--k-weight-semibold); }
+.pipeline-conditions__badge {
+  padding: 0 var(--k-space-1_5);
+  border: var(--k-border-hairline) solid var(--notice-fg);
+  border-radius: var(--k-radius-1);
+  color: var(--notice-fg);
+  font-size: var(--k-text-2xs);
+  font-weight: var(--k-weight-bold);
+  letter-spacing: var(--k-tracking-caps);
+  text-transform: uppercase;
+}
+.pipeline-conditions__message { margin: 0; color: var(--k-ink-2); overflow-wrap: anywhere; }

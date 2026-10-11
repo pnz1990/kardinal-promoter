@@ -288,6 +288,7 @@
 .k-tabs__tab:hover { color: var(--k-ink); }
 .k-tabs__tab[aria-selected="true"] { color: var(--k-ink); border-block-end-color: var(--k-thread); }
 .k-tabpanel:focus-visible { outline-offset: var(--k-focus-offset); }
+.k-tabpanel[hidden] { display: none; }
 
 /* ── MenuButton ── */
 .k-menu { position: relative; display: inline-flex; }
@@ -318,3 +319,31 @@
 .k-k8s__row { display: flex; gap: var(--k-space-2); }
 .k-k8s__row dt { min-inline-size: var(--k-space-24); color: var(--k-ink-3); }
 .k-k8s__row dd { margin: 0; font-family: var(--k-font-mono); overflow-wrap: anywhere; }
+
+/* ── Tone text: a word or count in its display-state tone (data-tone = Tone, tone.ts) ── */
+.k-tone-text[data-tone="verified"] { color: var(--k-status-verified-fg); }
+.k-tone-text[data-tone="promoting"] { color: var(--k-status-promoting-fg); }
+.k-tone-text[data-tone="waiting"] { color: var(--k-status-waiting-fg); }
+.k-tone-text[data-tone="blocked"] { color: var(--k-status-blocked-fg); }
+.k-tone-text[data-tone="failed"],
+.k-tone-text[data-tone="degraded"] { color: var(--k-status-failed-fg); }
+.k-tone-text[data-tone="superseded"] { color: var(--k-status-superseded-fg); }
+.k-tone-text[data-tone="paused"] { color: var(--k-status-paused-fg); }
+.k-tone-text[data-tone="held"] { color: var(--k-status-held-fg); }
+.k-tone-text[data-tone="pending"],
+.k-tone-text[data-tone="unknown"] { color: var(--k-ink-3); }
+
+/* ── ErrorNotice ── */
+.k-error {
+  display: grid;
+  justify-items: start;
+  gap: var(--k-space-1);
+  padding: var(--k-space-2) var(--k-space-3);
+  border: var(--k-border-hairline) solid var(--k-status-failed-fg);
+  border-radius: var(--k-radius-2);
+  background: var(--k-status-failed-wash);
+  color: var(--k-status-failed-fg);
+  font-size: var(--k-text-sm);
+}
+.k-error__message { margin: 0; font-weight: var(--k-weight-semibold); }
+.k-error__detail { margin: 0; color: var(--k-ink-2); font-family: var(--k-font-mono); font-size: var(--k-text-xs); overflow-wrap: anywhere; }

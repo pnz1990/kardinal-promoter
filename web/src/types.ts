@@ -45,6 +45,18 @@ export interface Pipeline {
   /** Pipeline.status.summary: one sentence on where its versions are (P1, #1707), e.g.
    *  "1.5.0 live in test, uat; waiting for PR merge in prod (#42)". */
   summary?: string
+  /** Pipeline.status.conditions (#1727): Ready (reasons such as ValidationFailed and
+   *  GitCredentialMissing), Paused, PathConflict and the SecretReferenceable warning. */
+  conditions?: Condition[]
+}
+
+/** A Kubernetes status condition, as the UI API serves it. */
+export interface Condition {
+  type: string
+  status: string
+  reason?: string
+  message?: string
+  lastTransitionTime?: string
 }
 
 /** What one environment runs: the newest PromotionStep there that landed its change. */

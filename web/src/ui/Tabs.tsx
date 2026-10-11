@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0
 
 // Tabs.tsx — a tab list with roving focus (arrow keys, Home, End), and its panels.
-import { useRef, type KeyboardEvent, type ReactNode } from 'react'
+import { forwardRef, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { Badge } from './Chips'
 import { cx } from './cx'
 
@@ -24,7 +24,8 @@ export interface TabsProps {
 export const tabId = (id: string) => `k-tab-${id}`
 export const panelId = (id: string) => `k-tabpanel-${id}`
 
-export function Tabs({ value, onChange, items, label, className }: TabsProps) {
+/** The ref is the tab list (role="tablist"). */
+export const Tabs = forwardRef<HTMLDivElement, TabsProps>(function Tabs({ value, onChange, items, label, className }, ref) {
   const refs = useRef<(HTMLButtonElement | null)[]>([])
   const move = (e: KeyboardEvent, i: number) => {
     const last = items.length - 1
@@ -37,7 +38,7 @@ export function Tabs({ value, onChange, items, label, className }: TabsProps) {
     onChange(items[next].id)
   }
   return (
-    <div role="tablist" aria-label={label} className={cx('k-tabs', className)}>
+    <div ref={ref} role="tablist" aria-label={label} className={cx('k-tabs', className)}>
       {items.map((t, i) => (
         <button
           key={t.id}
@@ -58,12 +59,21 @@ export function Tabs({ value, onChange, items, label, className }: TabsProps) {
       ))}
     </div>
   )
+})
+
+export interface TabPanelProps {
+  id: string
+  /** An inactive panel: rendered hidden, so every tab's aria-controls resolves. */
+  hidden?: boolean
+  className?: string
+  children?: ReactNode
 }
 
-export function TabPanel({ id, className, children }: { id: string; className?: string; children?: ReactNode }) {
+/** The ref is the panel (role="tabpanel"). */
+export const TabPanel = forwardRef<HTMLDivElement, TabPanelProps>(function TabPanel({ id, hidden, className, children }, ref) {
   return (
-    <div role="tabpanel" id={panelId(id)} aria-labelledby={tabId(id)} tabIndex={0} className={cx('k-tabpanel', className)}>
+    <div ref={ref} role="tabpanel" id={panelId(id)} aria-labelledby={tabId(id)} tabIndex={0} hidden={hidden} className={cx('k-tabpanel', className)}>
       {children}
     </div>
   )
-}
+})

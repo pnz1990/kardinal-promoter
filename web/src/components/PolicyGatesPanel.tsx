@@ -104,7 +104,7 @@ export function PolicyGatesPanel({ gates, loading, onDecided }: Props) {
         className="gates-panel__toggle"
         aria-expanded={open}
       >
-        {open ? '▾' : '▸'} Policy Gates ({gates.length})
+        {open ? '▾' : '▸'} Gates ({gates.length})
         <GateSummaryChip gates={gates} />
       </button>
 

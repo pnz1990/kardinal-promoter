@@ -36,6 +36,37 @@ test.describe('Journey 016 — Routes and the command palette', () => {
     await expect(page.getByRole('region', { name: 'Fleet' })).toBeVisible()
   })
 
+  test('an unknown pipeline or version says not found and links back, never showing another', async ({ page }) => {
+    await page.goto('/ui/#/p/default/no-such-pipeline')
+    await expect(page.getByRole('heading', { name: 'No pipeline named no-such-pipeline in default' })).toBeVisible()
+    await page.getByRole('link', { name: 'Back to all pipelines' }).click()
+    await expect(page.getByRole('region', { name: 'Fleet' })).toBeVisible()
+
+    await page.goto('/ui/#/p/default/kardinal-test-app/v/no-such-version')
+    await expect(page.getByRole('heading', { name: 'No version no-such-version in kardinal-test-app' })).toBeVisible()
+    await expect(page.locator('svg.dag-view__svg')).toHaveCount(0)
+    await page.getByRole('link', { name: 'Show the current version of kardinal-test-app' }).click()
+    await expect(page).toHaveURL(/#\/p\/default\/kardinal-test-app$/)
+    await expect(page.locator('svg.dag-view__svg')).toBeVisible()
+  })
+
+  test('the pipeline tabs are Map, Versions, Activity and Metrics, and an old tab link still opens', async ({ page }) => {
+    await page.goto('/ui/#/p/default/kardinal-test-app')
+    await expect(page.getByRole('tab')).toHaveText([/^Map/, /^Versions/, /^Activity/, /^Metrics/])
+    await page.goto('/ui/#/p/default/kardinal-test-app?tab=history')
+    await expect(page.getByRole('tab', { name: /^Versions/ })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByRole('list', { name: 'Versions' })).toBeVisible()
+    await expect(new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze().then(r => r.violations.map(v => v.id))).resolves.toEqual([])
+  })
+
+  test("a pipeline's own problems show under its header with the command that fixes them", async ({ page }) => {
+    await page.goto('/ui/#/p/default/payments-service')
+    const warning = page.locator('.pipeline-conditions__notice[data-tone="warning"]')
+    await expect(warning).toContainText('Label the git Secret before upgrading to v0.11')
+    await expect(warning.locator('pre')).toHaveText('kubectl label secret github-token -n default kardinal.io/referenceable=true')
+    await expect(warning.getByRole('button', { name: 'Copy shell' })).toBeVisible()
+  })
+
   test('an old link redirects to its route', async ({ page }) => {
     await page.goto('/ui/#pipeline=kardinal-test-app&ns=default')
     await expect(page.getByRole('heading', { level: 1, name: 'kardinal-test-app' })).toBeVisible()

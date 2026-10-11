@@ -8,6 +8,8 @@
 import { useState, useMemo } from 'react'
 import type { Pipeline } from '../types'
 import { HealthChip } from './HealthChip'
+import { Icon } from '../ui/Icon'
+import { ErrorNotice } from '../ui/ErrorNotice'
 import '../styles/PipelineOpsTable.css'
 
 type SortColumn =
@@ -29,6 +31,8 @@ interface Props {
   onSelect: (name: string, namespace: string) => void
   loading?: boolean
   error?: string
+  /** Read the pipelines again (the error's Retry). */
+  onRetry?: () => void
 }
 
 /** Format a relative time string from an ISO timestamp. */
@@ -68,7 +72,7 @@ const COLUMNS: Column[] = [
   { key: 'lastMergedAt', label: 'Last merge', title: 'When an environment last reached Verified' },
 ]
 
-export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSelect, loading, error }: Props) {
+export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSelect, loading, error, onRetry }: Props) {
   const [sortCol, setSortCol] = useState<SortColumn>('blockerCount')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [filter, setFilter] = useState('')
@@ -129,9 +133,7 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
   }
   if (error) {
     return (
-      <div role="alert" className="ops-table__error">
-        Error: {error}
-      </div>
+      <ErrorNotice error={error} onRetry={onRetry} className="ops-table__error" />
     )
   }
 
@@ -242,7 +244,7 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
                   <td className="ops-table__td" data-tone={hasBlockers ? 'failed' : 'verified'}>
                     {hasBlockers ? (
                       <span title={`${p.blockerCount} gate${p.blockerCount === 1 ? '' : 's'} blocking`}>
-                        ⛔ {p.blockerCount}
+                        <Icon name="gate" className="ops-table__icon" /> {p.blockerCount}
                       </span>
                     ) : (
                       <span title="No blockers">0</span>

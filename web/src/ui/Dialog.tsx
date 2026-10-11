@@ -3,10 +3,10 @@
 
 // Dialog.tsx — Dialog, ConfirmDialog and Drawer. A modal traps focus (useModalFocus),
 // closes on Esc and on a click outside, and gives focus back to what opened it.
-import { useId, useRef, type CSSProperties, type ReactNode, type RefObject } from 'react'
+import { forwardRef, useId, useRef, type CSSProperties, type ForwardedRef, type ReactNode, type RefObject } from 'react'
 import { useModalFocus } from '../useModalFocus'
 import { Button, IconButton } from './Button'
-import { cx } from './cx'
+import { cx, mergeRefs } from './cx'
 
 export interface DialogProps {
   open: boolean
@@ -23,12 +23,13 @@ export interface DialogProps {
   children?: ReactNode
 }
 
-export function Dialog(props: DialogProps) {
+/** The ref is the dialog element (role="dialog"). */
+export const Dialog = forwardRef<HTMLDivElement, DialogProps>(function Dialog(props, ref) {
   if (!props.open) return null
-  return <DialogBody {...props} />
-}
+  return <DialogBody {...props} forwardedRef={ref} />
+})
 
-function DialogBody({ title, description, onClose, initialFocus, footer, busy, className, children }: DialogProps) {
+function DialogBody({ title, description, onClose, initialFocus, footer, busy, className, children, forwardedRef }: DialogProps & { forwardedRef?: ForwardedRef<HTMLDivElement> }) {
   const panelRef = useRef<HTMLDivElement>(null)
   const titleId = useId()
   const descId = useId()
@@ -37,7 +38,7 @@ function DialogBody({ title, description, onClose, initialFocus, footer, busy, c
   return (
     <div className="k-scrim" onClick={(e) => { if (e.target === e.currentTarget) close() }}>
       <div
-        ref={panelRef}
+        ref={mergeRefs(panelRef, forwardedRef)}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -110,15 +111,19 @@ export interface DrawerProps {
   children?: ReactNode
 }
 
-export function Drawer(props: DrawerProps) {
+/** The ref is the drawer element (the <aside>). */
+export const Drawer = forwardRef<HTMLElement, DrawerProps>(function Drawer(props, ref) {
   if (!props.open) return null
-  return props.modal ? <ModalDrawer {...props} /> : <DrawerPanel {...props} />
-}
+  return props.modal ? <ModalDrawer {...props} forwardedRef={ref} /> : <DrawerPanel {...props} forwardedRef={ref} />
+})
 
-function DrawerPanel({ title, label, onClose, className, children, width, modal }: DrawerProps & { panelRef?: RefObject<HTMLDivElement | null> }) {
+type DrawerPanelProps = DrawerProps & { forwardedRef?: ForwardedRef<HTMLElement> }
+
+function DrawerPanel({ title, label, onClose, className, children, width, modal, forwardedRef }: DrawerPanelProps) {
   const titleId = useId()
   return (
     <aside
+      ref={forwardedRef}
       role={modal ? 'dialog' : 'complementary'}
       aria-modal={modal || undefined}
       aria-labelledby={label ? undefined : titleId}
@@ -135,7 +140,7 @@ function DrawerPanel({ title, label, onClose, className, children, width, modal 
   )
 }
 
-function ModalDrawer(props: DrawerProps) {
+function ModalDrawer(props: DrawerPanelProps) {
   const ref = useRef<HTMLDivElement>(null)
   useModalFocus(ref, props.onClose)
   return (

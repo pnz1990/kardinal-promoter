@@ -87,7 +87,7 @@ describe('vocabulary', () => {
     window.history.replaceState(null, '', '/ui/#/p/default/app')
     await act(async () => { window.dispatchEvent(new PopStateEvent('popstate')) })
     await flush()
-    for (const tab of ['Map', 'History', 'Gates', 'Metrics']) {
+    for (const tab of ['Map', 'Versions', 'Activity', 'Metrics']) {
       fireEvent.click(screen.getByRole('tab', { name: new RegExp(`^${tab}`) }))
       await flush()
       expect.soft(context(readable(document.body)), `${tab} tab`).toEqual([])

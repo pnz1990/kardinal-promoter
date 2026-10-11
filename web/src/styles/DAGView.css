@@ -38,6 +38,7 @@
 .dag-node__state,
 .dag-node__elapsed { pointer-events: none; }
 .dag-node__name { fill: var(--k-ink); font-size: var(--k-text-2xs); font-weight: var(--k-weight-semibold); }
+.dag-node__icon { color: var(--k-ink-3); pointer-events: none; }
 .dag-node__state { fill: var(--dag-text); font-size: calc(var(--k-text-2xs) * 0.9); }
 .dag-node__elapsed { fill: var(--k-status-blocked-fg); font-size: calc(var(--k-text-2xs) * 0.82); }
 .dag-node__pr {
@@ -53,7 +54,6 @@
 .dag-view__edge { fill: none; stroke: var(--k-ink-3); stroke-width: var(--k-border-strong); }
 .dag-view__arrowhead { fill: var(--k-ink-3); }
 .dag-view__message { padding: var(--k-space-8); color: var(--k-ink-2); }
-.dag-view__message--error { color: var(--k-status-failed-fg); }
 
 /* #335: loading skeleton */
 .dag-view__skeleton { padding: var(--k-space-8); }

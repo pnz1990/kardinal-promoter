@@ -208,12 +208,12 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
       />
       {s.ciRed > 0 && (
         <SummaryBadge
-          label="CI Red"
+          label="Failed"
           count={s.ciRed}
           tone="failed"
           active={activeFilter === 'ci-red'}
           onClick={toggle('ci-red')}
-          aria-label={`${s.ciRed} pipeline${s.ciRed === 1 ? '' : 's'} with CI failures`}
+          aria-label={`${s.ciRed} pipeline${s.ciRed === 1 ? '' : 's'} with a failed promotion`}
         />
       )}
 

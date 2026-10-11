@@ -385,6 +385,10 @@ release name other than `kardinal-promoter`, the Service is named
 
 ### What the UI shows
 
+The UI calls a Bundle a *version*, a PromotionStep a *stage* and a PolicyGate a *gate*
+([Concepts](concepts.md)). An environment's or gate's panel has the Kubernetes kind and object
+name under **Kubernetes details**, for `kubectl`.
+
 - **Fleet board** (the start page, and the kardinal logo from anywhere). Each Pipeline is a
   line of stations, one per environment in promotion order; environments promoted in parallel
   are stacked, and five or more of them (a wave) are one plate that names the range, the version
@@ -400,16 +404,27 @@ release name other than `kardinal-promoter`, the Service is named
   `20/50 verified, 5 in flight (max 5)`; it says `stopped` once `maxUnavailable` targets
   failed. A station opens its Pipeline at that environment. The board follows the sidebar's
   health filter.
-- **Pipeline view.** One header line: the Pipeline's name, Paused when it is paused, its
-  summary, **Ship a version** (create a Bundle) and **More actions** (pause and resume). Below it
-  are four tabs:
+- **Pipeline view.** The header has the Pipeline's name, Paused when it is paused, **Pause**
+  (or **Resume**, the main action while paused) and **Ship a version** (create a Bundle). Under
+  it, one line: the Pipeline's summary sentence, then the shown version's name, commit, author
+  and CI run. Below that are four tabs:
   - **Map**: the lane, the promotion graph, and the Bundle history to pick the version shown and
     compare two. Promote and roll back are on the environments.
-  - **History**: every Bundle of the Pipeline.
-  - **Gates**: the policy gates with their CEL expressions and approvals.
+  - **Versions**: every Bundle of the Pipeline.
+  - **Activity**: failed promotions grouped across environments, and the shown Bundle's policy
+    gates with their CEL expressions and approvals.
   - **Metrics**: the release metrics.
 
-  When a gate holds the shown Bundle, a banner on the map says so and opens the Gates tab. The lane has one column per depth: parallel environments share a column, and a wave of five
+  Under the header, a Pipeline that is not Ready shows an error with its reason (for
+  `GitCredentialMissing`, the `kubectl` command that creates the git Secret), and a git Secret
+  without the `kardinal.io/referenceable=true` label shows a warning with the `kubectl label`
+  command; each command has a copy button. A Pipeline with no version yet shows its environments
+  and **Ship your first version**.
+
+  When gates hold the shown Bundle, a banner on the map names them and the environments they
+  block (`1 gate blocking prod`); **Show blocked** highlights them in the graph. An address with a
+  Pipeline or a version the cluster does not have says it is not found and links back; it does
+  not show another one. The lane has one column per depth: parallel environments share a column, and a wave of five
   or more is one card that counts its environments by state and expands to the list. The graph
   lists the environments of a column in the Pipeline's order.
 - **Release metrics.** Time to the final environments and the deploys that reached them, over
@@ -419,9 +434,14 @@ release name other than `kardinal-promoter`, the Service is named
 - **Step timings.** Selecting an environment step lists the steps of that promotion
   (`git-clone` … `health-check`) with their durations, and a bar for each that shows where it
   ran in the promotion's time. A slow health check or push stands out at once.
-- **Bundle types.** The Bundle card names what the shown Bundle changes: `image`, `config`,
-  `image + config` (a mixed Bundle) or `chart`. In the Bundle history only the Bundles that are
-  not image Bundles carry the tag.
+- **Version types.** A version that is not an image Bundle carries a tag for what it changes:
+  `config`, `image + config` (a mixed Bundle) or `chart`, in the header and in the version
+  history. Image Bundles, the common case, carry none.
+- **Errors.** A read that fails says what it means: the controller cannot be reached, it did
+  not answer in time, the token was refused, the account lacks the viewer role, or the
+  controller had an error. The client's message is under it, with **Retry**.
+- **Help.** The **?** button in the top bar (or the `?` key) lists the keyboard shortcuts and
+  links to these docs.
 - **Keyboard.** The first Tab stop skips to the main content. Each fleet line, and the Bundle
   history, is a single Tab stop: the arrow keys move between its stations or Bundles (Home and
   End to the ends, Up and Down between fleet lines), and Enter opens the one in focus. `?` lists
@@ -442,7 +462,7 @@ release name other than `kardinal-promoter`, the Service is named
   | `/ui/#/p/<namespace>/<pipeline>/v/<bundle>` | the Pipeline at that version |
 
   These options go after `?`:
-  - `tab=history|gates|metrics` picks a tab;
+  - `tab=versions|activity|metrics` picks a tab (`tab=history` opens Versions, `tab=gates` the map);
   - `compare=<bundle>` opens the comparison;
   - `view=ops` shows the operations table;
   - `filter=` and `q=` keep the sidebar's health filter and search.

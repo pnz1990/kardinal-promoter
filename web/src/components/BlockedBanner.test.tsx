@@ -27,16 +27,17 @@ describe('BlockedBanner — hidden when no gates are blocked', () => {
 })
 
 describe('BlockedBanner — visible when gates are blocked', () => {
-  it('names the environment one gate blocks', () => {
+  it('names the environment one gate blocks, with one button', () => {
     render(<BlockedBanner blockedCount={1} environments={['prod']} highlightActive={false} onToggleHighlight={vi.fn()} />)
-    expect(screen.getByText('1 gate is blocking prod')).toBeInTheDocument()
+    expect(screen.getByText('1 gate blocking prod')).toBeInTheDocument()
+    expect(screen.getAllByRole('button')).toHaveLength(1)
   })
 
   it.each<[number, string[], string]>([
-    [2, ['prod', 'prod'], '2 gates are blocking prod'],
-    [2, ['uat', 'prod'], '2 gates are blocking uat and prod'],
-    [3, ['test', 'uat', 'prod'], '3 gates are blocking test, uat and prod'],
-    [5, [], '5 gates are blocking promotion'],
+    [2, ['prod', 'prod'], '2 gates blocking prod'],
+    [2, ['uat', 'prod'], '2 gates blocking uat and prod'],
+    [3, ['test', 'uat', 'prod'], '3 gates blocking test, uat and prod'],
+    [5, [], '5 gates blocking promotion'],
   ])('%i gates on %j read "%s"', (count, envs, want) => {
     expect(blockedLabel(count, envs)).toBe(want)
   })

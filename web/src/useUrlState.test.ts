@@ -30,6 +30,17 @@ describe('routes', () => {
     expect(parseHash(serializeHash(s))).toEqual(s)
   })
 
+  it.each<[string, UrlState['tab']]>([
+    ['#/p/a/b?tab=versions', 'versions'],
+    ['#/p/a/b?tab=activity', 'activity'],
+    ['#/p/a/b?tab=metrics', 'metrics'],
+    ['#/p/a/b?tab=history', 'versions'],
+    ['#/p/a/b?tab=gates', undefined],
+    ['#/p/a/b?tab=nope', undefined],
+  ])('%s opens the %s tab', (hash, tab) => {
+    expect(parseHash(hash).tab).toBe(tab)
+  })
+
   it('ignores an unknown view and empty values', () => {
     expect(parseHash('#/?view=table&q=')).toEqual(state({}))
   })

@@ -240,7 +240,7 @@ function StepProgress({ step }: { step: PromotionStep }) {
   return (
     <div className="node-detail__section">
       <h4 className="node-detail__heading node-detail__heading--spaced">
-        Promotion Steps
+        Steps
       </h4>
       {list.length === 0 ? (
         <div className="node-detail__hint node-detail__hint--flush">

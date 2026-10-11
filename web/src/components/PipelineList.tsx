@@ -12,8 +12,13 @@ import { useState, useCallback, useRef, type RefObject } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { Pipeline } from '../types'
 import { HealthChip } from './HealthChip'
+import { displayState } from '../displayStates.gen'
 import CopyButton from './CopyButton'
+import { ErrorNotice } from '../ui/ErrorNotice'
 import '../styles/PipelineList.css'
+
+/** Short words for the sidebar's per-state counts; the rest use the display label (P2). */
+const SHORT_STATE: Record<string, string> = { WaitingForMerge: 'PR', HealthChecking: 'health', Superseded: 'replaced' }
 
 /** Number of pipelines above which virtual scrolling is enabled (flat list only). */
 const VIRTUAL_THRESHOLD = 50
@@ -28,6 +33,8 @@ interface Props {
   onSelect: (name: string, namespace: string) => void
   loading?: boolean
   error?: string
+  /** Read the pipelines again (the error's Retry). */
+  onRetry?: () => void
   /**
    * #800: Ref forwarded to the filter <input> so App can call
    * searchInputRef.current?.focus() when the / shortcut fires.
@@ -70,7 +77,7 @@ function matchesQuery(p: Pipeline, query: string): boolean {
     `${p.namespace}/${p.name}`.toLowerCase().includes(query)
 }
 
-export function PipelineList({ pipelines, selected, selectedNamespace, onSelect, loading, error, searchInputRef, total, initialQuery = '', onQueryChange }: Props) {
+export function PipelineList({ pipelines, selected, selectedNamespace, onSelect, loading, error, onRetry, searchInputRef, total, initialQuery = '', onQueryChange }: Props) {
   const isSelected = (p: Pipeline) =>
     selected === p.name && (selectedNamespace === undefined || selectedNamespace === p.namespace)
 
@@ -125,11 +132,7 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
   }
   // A failed read before any worked: there is no list to keep.
   if (error && (total ?? pipelines.length) === 0) {
-    return (
-      <div className="pipeline-list__load-error">
-        Error: {error}
-      </div>
-    )
+    return <ErrorNotice error={error} onRetry={onRetry} className="pipeline-list__load-error" />
   }
   if ((total ?? pipelines.length) === 0) {
     return <NoPipelines />
@@ -175,14 +178,7 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
       </div>
       {/* A failed poll keeps the last list App read; the error shows above it
           until a poll works again. */}
-      {error && (
-        <div
-          role="alert"
-          className="pipeline-list__error"
-        >
-          Error: {error}
-        </div>
-      )}
+      {error && <ErrorNotice error={error} onRetry={onRetry} className="pipeline-list__error" />}
       {/* #815: List container — scrollable, used as virtual scroll container when active */}
       <div
         ref={listContainerRef}
@@ -312,13 +308,9 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
                       for (const phase of Object.values(p.environmentStates!)) {
                         counts[phase] = (counts[phase] ?? 0) + 1
                       }
-                      const phaseTone: Record<string, string> = {
-                        Verified: 'verified', Promoting: 'promoting', WaitingForMerge: 'promoting',
-                        HealthChecking: 'waiting', Verifying: 'waiting', Failed: 'failed', Pending: 'pending',
-                      }
                       return Object.entries(counts).map(([phase, count]) => (
-                        <span key={phase} className="pipeline-list__state" data-tone={phaseTone[phase]} title={`${count} env${count !== 1 ? 's' : ''} in ${phase}`}>
-                          {count} {phase === 'WaitingForMerge' ? 'PR' : phase === 'HealthChecking' ? 'health' : phase.toLowerCase()}
+                        <span key={phase} className="pipeline-list__state k-tone-text" data-tone={displayState('step', phase).tone} title={`${count} env${count !== 1 ? 's' : ''}: ${displayState('step', phase).label}`}>
+                          {count} {SHORT_STATE[phase] ?? displayState('step', phase).label.toLowerCase()}
                         </span>
                       ))
                     })()}
