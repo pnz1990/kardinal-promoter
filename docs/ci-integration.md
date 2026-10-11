@@ -30,6 +30,10 @@ curl -X POST https://kardinal.example.com/api/v1/bundles \
   }'
 ```
 
+`type` may be omitted: it is inferred from the fields, `chart` when `chart` is set, `mixed` for
+`images` and `configRef`, `config` for `configRef` alone, else `image`. A `type` you set is kept
+and checked against the fields.
+
 The endpoint creates a Bundle CRD in the cluster. Authentication is a Bearer token compared
 with the controller's `--bundle-api-token` (one token for the whole controller, not one per
 Pipeline). The Pipeline named in the request must exist in the target namespace.
@@ -104,7 +108,7 @@ jobs:
 | `namespace` | No | `default` | Kubernetes namespace. The action always sends it, so set it when the controller runs with `--watch-namespace`, or the API answers `403` |
 | `kardinal-url` | Yes | — | Base URL of the Bundle API (the controller's webhook listener, `:8083` by default) |
 | `ui-url` | No | — | Base URL of the kardinal UI (`:8082` by default). Sets `bundle-status-url`; without it that output is empty |
-| `type` | No | `image` | Bundle type (`image`, `config`, `mixed`) |
+| `type` | No | empty | Bundle type (`image`, `config`, `mixed`). Empty leaves it out of the request, so the controller infers it: `mixed` for images and `config-commit`, `config` for `config-commit` alone, else `image` |
 | `config-commit` | For `config` and `mixed` | — | Commit SHA of the configuration change (`configRef.commitSHA`) |
 | `config-repo` | No | the Pipeline's repository | Git repository of `config-commit` (`configRef.gitRepo`) |
 
@@ -448,11 +452,11 @@ rejected with `400`, so a misspelt key fails the request instead of being ignore
 | Field | Required | Description |
 |---|---|---|
 | `pipeline` | Yes | Pipeline name (a valid Kubernetes name, at most 63 characters) |
-| `type` | No | `image` (default), `config`, `mixed` or `chart` |
+| `type` | No | `image`, `config`, `mixed` or `chart`. When omitted it is inferred: `chart` when `chart` is set, `mixed` for `images` and `configRef`, `config` for `configRef` alone, else `image` |
 | `namespace` | No | Target namespace. Defaults to `--watch-namespace`, or `default` |
 | `images` | For `image` and `mixed` | At least one image |
 | `configRef` | For `config` and `mixed` | `gitRepo` and `commitSHA` (`commitSHA` is required). An `image` Bundle with a `configRef` gets 400: it would deploy only its images |
-| `chart` | For `chart` | `name` and `version` (required), `repoURL`, `digest`; promoted with `update.strategy: helm` (see [Promoting a chart version](subscription.md#promoting-a-chart-version)) |
+| `chart` | For `chart` | `name` and `version` (required), `repoURL`, `digest`; promoted with `update.strategy: helm` (see [Promoting a chart version](subscription.md#promoting-a-chart-version)). A `chart` Bundle with a `configRef` gets 400: the configRef would be dropped |
 | `provenance` | No | `commitSHA`, `ciRunURL` (empty or an absolute `http(s)` URL, see [Provenance](#provenance)), `author`, `timestamp` (set to now if empty) |
 | `intent` | No | `targetEnvironment`, `skipEnvironments` |
 

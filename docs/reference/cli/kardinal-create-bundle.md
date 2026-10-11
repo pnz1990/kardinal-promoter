@@ -48,7 +48,7 @@ kardinal create bundle <pipeline> [flags]
       --graph-compact-above int   With --dry-run: the controller's --graph-compact-above (chart graph.compactAbove), the environment count above which the Graph is compact (default 100)
   -h, --help                      help for bundle
       --image stringArray         Container image reference (can be specified multiple times); required for image and mixed Bundles
-      --type string               Bundle type: image, config, or mixed (default "image")
+      --type string               Bundle type: image, config or mixed (chart Bundles come from POST /api/v1/bundles or a Helm Subscription: this command has no chart flags) (default "image")
 ```
 
 ### Options inherited from parent commands
