@@ -394,6 +394,7 @@ service:
 
 ## Further Reading
 
+- [Metrics](../reference/metrics.md) — every metric the controller serves
 - [Security Guide](security.md) — network policy, RBAC
 - [`kardinal metrics`](../reference/cli/kardinal-metrics.md) — DORA command reference
 - [Troubleshooting](../troubleshooting.md) — debugging stuck promotions

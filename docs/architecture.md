@@ -327,8 +327,8 @@ All state is stored in Kubernetes CRDs:
 | `NotificationHook` | Sends promotion events to a webhook URL |
 | `AuditEvent` | Append-only record of promotion events (see [Security](guides/security.md#audit-logging)) |
 
-The controller is **stateless**: it can be restarted at any time without data loss. All
-state is recovered by re-reading CRDs.
+There is no database. The controller is **stateless**: it can be restarted at any time without
+data loss, and every reconciler is idempotent. All state is recovered by re-reading CRDs.
 
 ---
 

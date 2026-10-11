@@ -206,8 +206,11 @@ release name other than `kardinal-promoter`, the Service is named
   End to the ends, Up and Down between fleet lines), and Enter opens the one in focus. `?` lists
   the shortcuts (`/` filter, `r` refresh, `Esc` close a panel). Every view is checked against
   WCAG 2.1 AA, colour contrast included, in both themes.
-- **Dark and light themes.** The UI follows the operating system's setting until you pick one
-  with the ☀ / ☾ button next to the refresh indicator; the choice is kept in the browser.
+- **Themes.** The theme button next to the refresh indicator cycles through System (◐),
+  Light (☀) and Dark (☾). System follows the operating system's setting, also when it changes.
+  Light or Dark is kept in the browser and applied before the page draws. The UI and these docs
+  share one palette and one set of fonts, which the UI serves itself; it loads nothing from a
+  font CDN.
 
 ### With TLS (production)
 
@@ -289,9 +292,20 @@ kubectl delete namespace kro-system
 
 ---
 
+## Sizing kro
+
+Size kro's memory for the Graphs it holds: see [Sizing kro](operate.md#sizing-kro).
+
+## Controller concurrency
+
+Workers per controller and fair sharing between namespaces: see
+[Controller concurrency](operate.md#controller-concurrency).
+
 ## Next steps
 
 - [Quickstart](quickstart.md) — apply your first Pipeline and promote a Bundle
 - [Concepts](concepts.md) — understand Pipelines, Bundles, PolicyGates
 - [Policy Gates](policy-gates.md) — write CEL expressions for promotion policies
 - [Troubleshooting](troubleshooting.md) — diagnose installation issues with `kardinal doctor`
+- [Operate at scale](operate.md) — sizing kro and the controller, concurrency, shutdown
+- [Helm values](reference/helm-values.md) — every chart value

@@ -89,4 +89,46 @@ test.describe('Journey 013 — Keyboard and Bundle types', () => {
     await expect(page.getByRole('dialog')).toBeVisible()
     await expectNoViolations(page, 'light create bundle dialog')
   })
+
+  test('the theme control cycles System, Light and Dark; the choice is kept and applied before the app loads', async ({ page }) => {
+    const html = page.locator('html')
+    const canvas = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor)
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await page.goto('/')
+    await expect(page.getByRole('region', { name: 'Fleet' })).toBeVisible()
+    await expect(html).toHaveAttribute('data-theme', 'dark')
+    expect(await canvas()).toBe('rgb(15, 21, 19)')
+
+    await page.getByRole('button', { name: 'Theme: System (dark). Switch to Light' }).click()
+    await expect(html).toHaveAttribute('data-theme', 'light')
+    expect(await canvas()).toBe('rgb(242, 244, 243)')
+    await page.getByRole('button', { name: 'Theme: Light. Switch to Dark' }).click()
+    await expect(html).toHaveAttribute('data-theme', 'dark')
+
+    // The saved choice is on <html> before any app code runs (public/theme-boot.js).
+    await page.emulateMedia({ colorScheme: 'light' })
+    await page.route('**/assets/index-*.js', (route) => route.abort())
+    await page.reload()
+    await expect(html).toHaveAttribute('data-theme', 'dark')
+    expect(await canvas()).toBe('rgb(15, 21, 19)')
+    await page.unroute('**/assets/index-*.js')
+    await page.reload()
+    await page.getByRole('button', { name: 'Theme: Dark. Switch to System' }).click()
+    await expect(html).toHaveAttribute('data-theme', 'light')
+    expect(await page.evaluate(() => localStorage.getItem('kardinal-theme'))).toBeNull()
+  })
+
+  test('compact density tightens the space tokens', async ({ page }) => {
+    await page.goto('/')
+    await page.evaluate(() => localStorage.setItem('kardinal-density', 'compact'))
+    await page.reload()
+    await expect(page.locator('html')).toHaveAttribute('data-density', 'compact')
+    const space4 = await page.evaluate(() => {
+      const probe = document.createElement('div')
+      probe.style.width = 'var(--k-space-4)'
+      document.body.appendChild(probe)
+      return probe.getBoundingClientRect().width
+    })
+    expect(space4).toBe(12) // 0.75 × 1rem
+  })
 })
