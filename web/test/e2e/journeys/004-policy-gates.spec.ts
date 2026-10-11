@@ -10,6 +10,8 @@ test.describe('Journey 004 — Policy gates auto-expand when blocked (#524)', ()
     await page.goto('/')
     // Select the pipeline that has blocked gates (kardinal-test-app)
     await page.getByText('kardinal-test-app').first().click()
+    // The gates are the pipeline page's Gates tab.
+    await page.getByRole('tab', { name: /^Activity/ }).click()
     await page.waitForTimeout(800) // wait for data load
   })
 

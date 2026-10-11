@@ -40,20 +40,28 @@ export interface KeyboardShortcutHandlers {
   onEscape: () => void
   /** Called when / is pressed (focus pipeline search input). #800 */
   onSearch?: () => void
+  /** Called on ⌘K / Ctrl+K (open the command palette), also from a form field. */
+  onPalette?: () => void
 }
 
 /**
  * useKeyboardShortcuts attaches a document-level keydown listener for the
- * four global shortcuts: ?, r, Esc, /. The listener is cleaned up on unmount.
+ * global shortcuts: ?, r, Esc, /, and ⌘K / Ctrl+K. The listener is cleaned up on unmount.
  *
  * A focused form field suppresses every shortcut, Esc included: the field
  * handles its own Esc (PipelineList's search box clears its filter).
  */
 export function useKeyboardShortcuts(handlers: KeyboardShortcutHandlers): void {
-  const { onHelp, onRefresh, onEscape, onSearch } = handlers
+  const { onHelp, onRefresh, onEscape, onSearch, onPalette } = handlers
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
+      if (onPalette && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+        if (isModalOpen()) return
+        e.preventDefault()
+        onPalette()
+        return
+      }
       if (e.ctrlKey || e.metaKey || e.altKey) return
       if (isInputFocused(e)) return
       if (isModalOpen()) return
@@ -81,7 +89,7 @@ export function useKeyboardShortcuts(handlers: KeyboardShortcutHandlers): void {
           break
       }
     },
-    [onHelp, onRefresh, onEscape, onSearch],
+    [onHelp, onRefresh, onEscape, onSearch, onPalette],
   )
 
   useEffect(() => {

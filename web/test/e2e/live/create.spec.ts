@@ -18,7 +18,7 @@ const commitSHA = need('KARDINAL_UI_COMMIT_SHA')
 const author = need('KARDINAL_UI_AUTHOR')
 
 const openDialog = async (page: Page) => {
-  await page.getByRole('button', { name: `Create bundle for ${PIPELINE}` }).click()
+  await page.getByRole('button', { name: `Ship a version of ${PIPELINE}` }).click()
   const dialog = page.getByRole('dialog', { name: `Create Bundle — ${PIPELINE}` })
   await expect(dialog).toBeVisible()
   return dialog

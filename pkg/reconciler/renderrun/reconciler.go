@@ -104,6 +104,10 @@ type Reconciler struct {
 	// ControllerNamespace is the controller's own namespace: a render there
 	// is refused, it would run next to the controller's credentials.
 	ControllerNamespace string
+	// ControllerSecret is the controller's own SCM token Secret: a render
+	// whose git Secret it is fails before its Job is created, so the token is
+	// never mounted in a render Pod. Nil refuses nothing.
+	ControllerSecret *scm.ControllerTokenSecret
 	// AuthorName and AuthorEmail sign the rendered commits.
 	AuthorName, AuthorEmail string
 	// ImagePullSecrets are added to the render Pods (they must exist in the
@@ -468,6 +472,12 @@ func (r *Reconciler) createJob(ctx context.Context, log zerolog.Logger, base, ru
 	}
 	if specHash(&run.Spec) != run.Status.SpecHash {
 		r.finish(run, v1alpha1.RenderRunFailed, "the RenderRun's spec changed before its Job was created", nil)
+		return ctrl.Result{}, r.patch(ctx, base, run)
+	}
+	// Checked right before the Job is created, whatever was checked when the
+	// RenderRun was translated.
+	if err := r.ControllerSecret.RefusesSecret(run.Namespace, run.Spec.Git.SecretName); err != nil {
+		r.finish(run, v1alpha1.RenderRunFailed, "ValidationFailed: "+err.Error(), nil)
 		return ctrl.Result{}, r.patch(ctx, base, run)
 	}
 	if err := r.ensureServiceAccount(ctx, run.Namespace); err != nil {

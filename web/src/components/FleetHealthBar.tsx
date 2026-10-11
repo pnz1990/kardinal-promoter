@@ -81,6 +81,13 @@ export function computeFleetHealth(pipelines: Pipeline[]): FleetHealthSummary {
 /** Filter category that maps to a UI badge. */
 export type FleetFilter = 'all' | 'healthy' | 'blocked' | 'ci-red' | 'promoting'
 
+const FLEET_FILTERS: readonly string[] = ['all', 'healthy', 'blocked', 'ci-red', 'promoting']
+
+/** Whether a value (the URL's filter=) is a fleet filter. */
+export function isFleetFilter(v: string | undefined): v is FleetFilter {
+  return v !== undefined && FLEET_FILTERS.includes(v)
+}
+
 /**
  * Filter a pipeline list by the given fleet filter.
  * Returns a new array — does not mutate input.
