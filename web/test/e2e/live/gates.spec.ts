@@ -46,9 +46,11 @@ test('a gate that holds the bundle shows in the attention strip, on the map and 
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
   await expect(toggle).toContainText('1 blocked')
   const panel = toggle.locator('..')
-  const row = (name: string) => panel.locator(':scope > div > div').filter({ has: page.getByText(name, { exact: true }) })
+  // A row shows the gate's template name (#1767); the instance name is its title.
+  const row = (name: string) => panel.locator(':scope > div > div').filter({ has: page.locator(`.gates-panel__name[title="${name}"]`) })
 
   const hold = row(holdInstance)
+  await expect(hold.locator('.gates-panel__name')).toHaveText(holdGate)
   await expect(hold.locator('.health-chip')).toHaveAttribute('data-health-state', 'Error')
   await expect(hold.locator('.health-chip')).toContainText('Block')
   await expect(hold.locator('code')).toHaveText('false')
