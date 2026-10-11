@@ -10,6 +10,7 @@
 import dagre from '@dagrejs/dagre'
 import { graph, text } from '../tokens'
 import type { MapEdge, MapNode, Station, Group } from './model'
+import { lowerFirst } from '../sentence'
 
 /** The graph.* design tokens (DESIGN-SYSTEM §2.4). */
 /** The type scale in px (the --k-text-* tokens are rem; 1rem = 16px). */
@@ -191,9 +192,6 @@ export function gridSize(g: Group, level: ZoomLevel = 'map'): { w: number; h: nu
   return { cols, w, h: space.head + height + space.foot }
 }
 
-function lowerFirst(s: string): string {
-  return s.length > 1 && s[1] === s[1].toLowerCase() ? s[0].toLowerCase() + s.slice(1) : s
-}
 
 export interface Box {
   x: number

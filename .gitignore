@@ -51,3 +51,4 @@ ITEM.md
 
 # Live e2e state: env file, generated credentials, failure diagnostics
 /test/e2e/results/
+test-results/

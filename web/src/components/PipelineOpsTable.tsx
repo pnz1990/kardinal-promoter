@@ -73,6 +73,11 @@ const COLUMNS: Column[] = [
   { key: 'lastMergedAt', label: 'Last merge', title: 'When an environment last reached Verified' },
 ]
 
+/** text, cut to max characters with an ellipsis. */
+function truncateEnd(text: string, max: number): string {
+  return text.length > max ? text.slice(0, max - 2) + '…' : text
+}
+
 export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSelect, loading, error, onRetry }: Props) {
   const [sortCol, setSortCol] = useState<SortColumn>('blockerCount')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
@@ -229,10 +234,9 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
                       )}
                     </div>
                     {p.activeBundleName && (
-                      <div className="ops-table__bundle">
-                        {p.activeBundleName.length > 20
-                          ? p.activeBundleName.slice(0, 18) + '…'
-                          : p.activeBundleName}
+                      // The active version by its tag, as everywhere; the Bundle name is the title.
+                      <div className="ops-table__bundle" title={p.activeBundleName}>
+                        {truncateEnd(p.activeBundleVersion || p.activeBundleName, 20)}
                       </div>
                     )}
                   </td>
