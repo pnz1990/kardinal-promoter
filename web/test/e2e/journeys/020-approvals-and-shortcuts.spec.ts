@@ -96,6 +96,11 @@ test.describe('Journey 020 — Approvals, access and shortcuts', () => {
     const help = page.getByRole('dialog', { name: 'Keyboard shortcuts' })
     for (const k of ['j / k', 'a', 's']) await expect(help.getByText(k, { exact: true })).toBeVisible()
     await axe(page)
+    // The top bar's ? opens the same list, for a mouse or a touch screen.
+    await page.keyboard.press('Escape')
+    await expect(help).toHaveCount(0)
+    await page.getByRole('button', { name: 'Keyboard shortcuts' }).click()
+    await expect(help).toBeVisible()
   })
 
   test('the inbox in dark and at 390 px: axe passes, nothing overflows', async ({ page }) => {

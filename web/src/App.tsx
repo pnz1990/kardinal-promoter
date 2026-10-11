@@ -728,6 +728,8 @@ export function App() {
           <div className="app-topbar">
             <Breadcrumb route={urlState} namespace={activePipeline?.namespace} />
             {approvalsLink}
+            <button type="button" className="app-topbar__help" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)"
+              onClick={() => setShowShortcutsPanel(true)}><Kbd>?</Kbd></button>
             <button type="button" className="app-topbar__search" onClick={() => setPaletteOpen(true)}>
               <Icon name="search" />
               <span>Go to or do…</span>
@@ -750,6 +752,8 @@ export function App() {
           <div className="app-topbar">
             <Breadcrumb route={urlState} namespace={activePipeline?.namespace} />
             {approvalsLink}
+            <button type="button" className="app-topbar__help" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)"
+              onClick={() => setShowShortcutsPanel(true)}><Kbd>?</Kbd></button>
             <button type="button" className="app-topbar__search" onClick={() => setPaletteOpen(true)}>
               <Icon name="search" />
               <span>Go to or do…</span>
