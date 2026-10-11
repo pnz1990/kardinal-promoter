@@ -307,8 +307,22 @@ effect at the next reconcile; removing the label stops its use again. Whoever ma
 
 Pipeline `spec.git.secretRef` has the same exposure (its token goes to the Pipeline's git URL).
 An unlabeled git Secret is deprecated: it still works with `SecretReferenceable=False`, and v0.11
-refuses it. Label your git Secrets. The controller's own SCM token Secret is set by the operator and
-is not covered.
+refuses it. Label your git Secrets.
+
+### The controller's own SCM token
+
+**Never label the controller's SCM token Secret** (`scm.secretRef.name`, or the chart's
+`<fullname>-github-token` from `scm.token`) `kardinal.io/referenceable: "true"`. The label would
+let any kardinal object in that namespace use it: a Pipeline `git.secretRef`, a MetricCheck
+`authorizationSecretRef`, a NotificationHook, an ScmProvider or a Subscription could send the
+controller's token to a URL its author chooses. The chart never labels it.
+
+The controller also refuses a Pipeline whose `git.secretRef` names its own token Secret
+(`--scm-token-secret-name` in `--scm-token-secret-namespace`), labelled or not: the Pipeline is
+`Ready=False` with reason `ValidationFailed`, and its steps fail before `git-clone`. Such a
+Pipeline would otherwise choose where the controller's token goes, and its own existing Secret
+would exempt it from `--scm-allowed-repositories`. Give each Pipeline its own Secret; the chart's
+demo Pipeline gets one (`demo.secretRef`, or a labelled copy the chart creates with `scm.token`).
 
 ### Recommended: External Secrets Operator
 

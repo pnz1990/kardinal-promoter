@@ -1190,9 +1190,11 @@ func TestChartGitHubTokenNotPlaintext(t *testing.T) {
 	assert.Equal(t, "kardinal-promoter-github-token", env["KARDINAL_SCM_TOKEN_SECRET_NAME"].Value,
 		"the chart Secret gets the same rotation watcher as github.secretRef")
 
-	// The demo Pipeline uses the chart Secret for git.
+	// The demo Pipeline uses its own copy for git, never the controller's
+	// Secret (#1725 QA).
 	for _, d := range docsOfKind(docs, "Pipeline") {
-		assert.Contains(t, string(d.raw), `"name":"kardinal-promoter-github-token"`)
+		assert.Contains(t, string(d.raw), `"name":"kardinal-promoter-demo-git-token"`)
+		assert.NotContains(t, string(d.raw), `"name":"kardinal-promoter-github-token"`)
 	}
 
 	out, err := helmTemplate(t, "kardinal-promoter",
@@ -1564,46 +1566,35 @@ func TestChartPprofAddress(t *testing.T) {
 
 // TestChartSCMTokenAliases (P5): scm.token and scm.secretRef are the
 // provider-neutral names of github.token and github.secretRef: each renders
-// exactly what its old name renders, both names with different values fail,
-// and the chart's own token Secret is labelled kardinal.io/referenceable, so
-// the demo Pipeline uses the controller's Secret for git as well.
+// exactly what its old name renders, and both names with different values
+// fail (a github.secretRef.key of "token", the old default, is the same as
+// unset).
 //
 // Covers CHART-SCM-ALIAS-01.
 func TestChartSCMTokenAliases(t *testing.T) {
+	set := func(vals ...string) []string {
+		var args []string
+		for _, v := range vals {
+			args = append(args, "--set", v)
+		}
+		return args
+	}
 	for _, tc := range []struct{ scm, github []string }{
 		{[]string{"scm.secretRef.name=git-token"}, []string{"github.secretRef.name=git-token"}},
 		{[]string{"scm.secretRef.name=git-token", "scm.secretRef.key=pat"},
 			[]string{"github.secretRef.name=git-token", "github.secretRef.key=pat"}},
 		{[]string{"scm.token=t0ken", "demo.enabled=true"}, []string{"github.token=t0ken", "demo.enabled=true"}},
-		{[]string{"scm.secretRef.name=git-token", "demo.enabled=true"}, []string{"github.secretRef.name=git-token", "demo.enabled=true"}},
+		{[]string{"scm.secretRef.name=git-token", "demo.enabled=true", "demo.secretRef.name=demo-git"},
+			[]string{"github.secretRef.name=git-token", "demo.enabled=true", "demo.secretRef.name=demo-git"}},
 	} {
-		set := func(vals []string) []string {
-			var args []string
-			for _, v := range vals {
-				args = append(args, "--set", v)
-			}
-			return args
-		}
-		got, err := helmTemplate(t, "kardinal-promoter", set(tc.scm)...)
+		got, err := helmTemplate(t, "kardinal-promoter", set(tc.scm...)...)
 		require.NoError(t, err, got)
-		want, err := helmTemplate(t, "kardinal-promoter", set(tc.github)...)
+		want, err := helmTemplate(t, "kardinal-promoter", set(tc.github...)...)
 		require.NoError(t, err, want)
 		assert.Equal(t, want, got, "%v renders as %v", tc.scm, tc.github)
 	}
-
-	docs := render(t, "kardinal-promoter", "--set", "scm.token=t0ken", "--set", "demo.enabled=true")
-	secrets := docsOfKind(docs, "Secret")
-	require.Len(t, secrets, 1)
-	var s corev1.Secret
-	decodeStrict(t, secrets[0], &s)
-	assert.Equal(t, "true", s.Labels["kardinal.io/referenceable"], "the demo Pipeline may use it")
-	assert.Equal(t, s.Name, envByName(controllerContainer(t, docs))["KARDINAL_SCM_TOKEN_SECRET_NAME"].Value)
-	pipelines := docsOfKind(docs, "Pipeline")
-	require.Len(t, pipelines, 1)
-	var p v1alpha1.Pipeline
-	decodeStrict(t, pipelines[0], &p)
-	require.NotNil(t, p.Spec.Git.SecretRef)
-	assert.Equal(t, s.Name, p.Spec.Git.SecretRef.Name, "one Secret for the controller and the demo Pipeline")
+	_, err := helmTemplate(t, "kardinal-promoter", set("scm.secretRef.name=x", "scm.secretRef.key=pat", "github.secretRef.key=token")...)
+	assert.NoError(t, err, "github.secretRef.key=token is the old default, not a conflict")
 
 	for _, tc := range []struct {
 		args []string
@@ -1611,15 +1602,65 @@ func TestChartSCMTokenAliases(t *testing.T) {
 	}{
 		{[]string{"scm.token=a", "github.token=b"}, "scm.token and github.token are the same setting"},
 		{[]string{"scm.secretRef.name=a", "github.secretRef.name=b"}, "scm.secretRef.name and github.secretRef.name are the same setting"},
+		{[]string{"scm.secretRef.name=x", "scm.secretRef.key=pat", "github.secretRef.key=other"}, "scm.secretRef.key and github.secretRef.key are the same setting"},
 		{[]string{"scm.token=a", "scm.secretRef.name=b"}, "set scm.token or scm.secretRef.name, not both"},
 		{[]string{"scm.secretRef.name=a", "scm.secretRef.namespace=other"}, "scm.secretRef.namespace (other) must be empty or the release namespace"},
 	} {
-		var args []string
-		for _, v := range tc.args {
-			args = append(args, "--set", v)
-		}
-		out, err := helmTemplate(t, "kardinal-promoter", args...)
+		out, err := helmTemplate(t, "kardinal-promoter", set(tc.args...)...)
 		require.Error(t, err, tc.args)
 		assert.Contains(t, out, tc.want)
+	}
+}
+
+// TestChartControllerSecretNeverReferenceable (#1725 QA): the controller's
+// own token Secret is never labelled kardinal.io/referenceable, with or
+// without the demo: the label would let any kardinal object in the namespace
+// send the controller's token to a URL its author chooses. With demo.enabled
+// and scm.token the demo Pipeline gets a separate, labelled copy; a demo
+// Secret that is the controller's fails the install.
+//
+// Covers CHART-SCM-ALIAS-02.
+func TestChartControllerSecretNeverReferenceable(t *testing.T) {
+	secretsOf := func(docs []renderedDoc) map[string]corev1.Secret {
+		out := map[string]corev1.Secret{}
+		for _, d := range docsOfKind(docs, "Secret") {
+			var s corev1.Secret
+			decodeStrict(t, d, &s)
+			out[s.Name] = s
+		}
+		return out
+	}
+	const controller = "kardinal-promoter-github-token"
+	for _, demo := range []string{"false", "true"} {
+		docs := render(t, "kardinal-promoter", "--set", "scm.token=t0ken", "--set", "demo.enabled="+demo)
+		secrets := secretsOf(docs)
+		require.Contains(t, secrets, controller)
+		assert.NotContains(t, secrets[controller].Labels, "kardinal.io/referenceable", "demo.enabled=%s", demo)
+		assert.Equal(t, controller, envByName(controllerContainer(t, docs))["KARDINAL_SCM_TOKEN_SECRET_NAME"].Value)
+		if demo == "false" {
+			assert.Len(t, secrets, 1, "no demo Secret without the demo")
+			continue
+		}
+		demoSecret, ok := secrets["kardinal-promoter-demo-git-token"]
+		require.True(t, ok, "the demo Pipeline's own Secret")
+		assert.Equal(t, "true", demoSecret.Labels["kardinal.io/referenceable"])
+		assert.Equal(t, "t0ken", demoSecret.StringData["token"])
+		pipelines := docsOfKind(docs, "Pipeline")
+		require.Len(t, pipelines, 1)
+		var p v1alpha1.Pipeline
+		decodeStrict(t, pipelines[0], &p)
+		require.NotNil(t, p.Spec.Git.SecretRef)
+		assert.Equal(t, "kardinal-promoter-demo-git-token", p.Spec.Git.SecretRef.Name, "never the controller's Secret")
+	}
+	// A Secret of your own for the demo: no copy is made.
+	docs := render(t, "kardinal-promoter", "--set", "scm.token=t0ken", "--set", "demo.enabled=true", "--set", "demo.secretRef.name=demo-git")
+	assert.NotContains(t, secretsOf(docs), "kardinal-promoter-demo-git-token")
+	for _, args := range [][]string{
+		{"--set", "scm.secretRef.name=github-token", "--set", "demo.enabled=true"},
+		{"--set", "scm.secretRef.name=tok", "--set", "demo.enabled=true", "--set", "demo.secretRef.name=tok"},
+	} {
+		out, err := helmTemplate(t, "kardinal-promoter", args...)
+		require.Error(t, err, args)
+		assert.Contains(t, out, "is the controller's SCM token Secret")
 	}
 }

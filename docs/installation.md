@@ -121,8 +121,6 @@ kubectl create namespace kardinal-system
 kubectl create secret generic github-token \
   --namespace kardinal-system \
   --from-literal=token=<your-github-token>
-# Lets a Pipeline in kardinal-system (such as the chart's demo Pipeline) use it for git too.
-kubectl label secret github-token --namespace kardinal-system kardinal.io/referenceable=true
 ```
 
 ### 2. Install with Helm
@@ -265,9 +263,9 @@ go tool pprof -top -base before.pb.gz after.pb.gz
 | `leaderElectionFlowSchema.enabled` | `true` | Create a FlowSchema that sends the controller's leader election Lease requests to the `leader-election` priority level, so a busy or throttled controller does not lose leadership ([Leader election under API pressure](#leader-election-under-api-pressure)). Cluster-scoped: the installer needs create/get/update/delete on `flowschemas.flowcontrol.apiserver.k8s.io`; set `false` for GitOps installs that may not manage cluster resources |
 | `leaderElectionFlowSchema.matchingPrecedence` | `90` | The FlowSchema's precedence: lower than any FlowSchema matching the controller's other requests |
 | `leaderElectionFlowSchema.priorityLevel` | `leader-election` | Priority level for the Lease requests |
-| `scm.secretRef.name` | `""` | Existing Secret (release namespace) holding the SCM token. Recommended. The demo Pipeline uses it for git too: label it `kardinal.io/referenceable=true` |
-| `scm.secretRef.key` | `token` | Key in the Secret |
-| `scm.token` | `""` | Token value. The chart stores it in Secret `<fullname>-github-token` (`kardinal-promoter-github-token` for release `kardinal-promoter`), labelled `kardinal.io/referenceable=true`; the value stays in the Helm release history. Setting both this and `scm.secretRef.name` fails |
+| `scm.secretRef.name` | `""` | Existing Secret (release namespace) holding the SCM token. Recommended. Never label it `kardinal.io/referenceable` and never name it in a Pipeline's `git.secretRef`: the controller refuses that ([Security](guides/security.md#the-controllers-own-scm-token)) |
+| `scm.secretRef.key` | `""` (`token`) | Key in the Secret; empty is `token` |
+| `scm.token` | `""` | Token value. The chart stores it in Secret `<fullname>-github-token` (`kardinal-promoter-github-token` for release `kardinal-promoter`); the value stays in the Helm release history. Setting both this and `scm.secretRef.name` fails |
 | `github.secretRef.*`, `github.token` | `""` | The old names of `scm.secretRef.*` and `scm.token`; they keep working. Setting an old and a new name to different values fails |
 | `github.app.enabled` | `false` | The `scm.secretRef.name` Secret holds GitHub App credentials (`githubAppID`, `githubAppInstallationID`, `githubAppPrivateKey`) instead of a token; see [GitHub App](scm-providers.md#github-app). Needs `scm.secretRef.name` |
 | `scm.provider` | `""` | `--scm-provider`: `github` (default), `gitlab`, `forgejo`, `gitea`, `bitbucket`, `azuredevops` |

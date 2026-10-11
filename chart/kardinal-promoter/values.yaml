@@ -265,18 +265,17 @@ scm:
   # Set one of:
   #   scm.secretRef.name  an existing Secret in the release namespace
   #                       (recommended; the token stays out of Helm values)
-  #   scm.token           the chart creates Secret <fullname>-github-token,
-  #                       labelled kardinal.io/referenceable=true (the token is
-  #                       kept in the Helm release history)
+  #   scm.token           the chart creates Secret <fullname>-github-token
+  #                       (the token is kept in the Helm release history)
   # Either way the controller reads GITHUB_TOKEN from the Secret and watches
-  # it, reloading the SCM provider when the token changes (no restart). The
-  # demo Pipeline (demo.enabled) uses the same Secret for git, so one Secret
-  # serves both: label your own one kardinal.io/referenceable=true.
+  # it, reloading the SCM provider when the token changes (no restart).
+  # Never label this Secret kardinal.io/referenceable, and never name it in a
+  # Pipeline's git.secretRef (the controller refuses that): see demo.secretRef
+  # for the demo Pipeline's own Secret, and docs/guides/security.md.
   #
-  #   kubectl create secret generic git-token -n kardinal-system \
+  #   kubectl create secret generic scm-token -n kardinal-system \
   #     --from-literal=token=$GITHUB_PAT
-  #   kubectl label secret git-token -n kardinal-system kardinal.io/referenceable=true
-  #   helm install ... --set scm.secretRef.name=git-token
+  #   helm install ... --set scm.secretRef.name=scm-token
   token: ""
   # -- Existing Secret holding the token.
   secretRef:
@@ -658,9 +657,10 @@ demo:
   # This is informational only (shown in the demo Pipeline annotations).
   # Run `kardinal create bundle demo --image <real-image>` to start a promotion.
   image: "ghcr.io/pnz1990/kardinal-test-app:sha-DEMO"
-  # -- Secret the demo Pipeline uses for git (spec.git.secretRef).
-  # Defaults to the chart's SCM token Secret (scm.secretRef.name, or
-  # <fullname>-github-token when scm.token is set), else "github-token".
+  # -- Secret the demo Pipeline uses for git (spec.git.secretRef), labelled
+  # kardinal.io/referenceable=true. Never the controller's SCM token Secret:
+  # the install fails if it is. When empty: with scm.token the chart creates
+  # <fullname>-demo-git-token, a labelled copy of the token; else "github-token".
   secretRef:
     name: ""
   git:

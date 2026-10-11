@@ -109,6 +109,7 @@ Install-mode checks. Rendered from deployment.yaml so a bad combination fails
 {{- range $f := list "token" "secretRef.name" "secretRef.namespace" "secretRef.key" -}}
 {{- $scm := include "kardinal-promoter.scmAliasValue" (list $.Values.scm $f) -}}
 {{- $gh := include "kardinal-promoter.scmAliasValue" (list $.Values.github $f) -}}
+{{- if and (eq $f "secretRef.key") (eq $gh "token") -}}{{- $gh = "" -}}{{- end -}}
 {{- if and $scm $gh (ne $scm $gh) -}}
 {{- fail (printf "scm.%s and github.%s are the same setting (github.* is the old name): set one of them" $f $f) -}}
 {{- end -}}
@@ -327,4 +328,19 @@ The values key that names the SCM token Secret, for error messages.
 */}}
 {{- define "kardinal-promoter.scmSecretRefValue" -}}
 {{- if include "kardinal-promoter.scmAliasValue" (list .Values.scm "secretRef.name") -}}scm.secretRef{{- else -}}github.secretRef{{- end -}}
+{{- end }}
+
+{{/*
+The demo Pipeline's git Secret, never the controller's: demo.secretRef.name;
+else, with scm.token, the chart's separate <fullname>-demo-git-token
+(demo-git-secret.yaml); else "github-token".
+*/}}
+{{- define "kardinal-promoter.demoSecretName" -}}
+{{- if .Values.demo.secretRef.name -}}
+{{- .Values.demo.secretRef.name -}}
+{{- else if include "kardinal-promoter.scmToken" . -}}
+{{- printf "%s-demo-git-token" (include "kardinal-promoter.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+github-token
+{{- end -}}
 {{- end }}

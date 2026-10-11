@@ -705,3 +705,26 @@ func TestDerivePhase_RejectedLive(t *testing.T) {
 	steps := lifecycle.AddRetiredSteps([]kardinalv1alpha1.PromotionStep{st("v1", "prod", "Verified")}, bundles, nil)
 	assert.Equal(t, "Degraded", pipeline.DerivePhase("app", bundles, steps), "a retired rejected change that is live")
 }
+
+// TestPipelineReconciler_ControllerSecretRefused (#1725 QA): naming the
+// controller's own SCM token Secret as git.secretRef is a validation error.
+//
+// Covers CHART-SCM-ALIAS-02.
+func TestPipelineReconciler_ControllerSecretRefused(t *testing.T) {
+	p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}})
+	p.Spec.Git.SecretRef = &kardinalv1alpha1.SecretRef{Name: "kardinal-promoter-github-token"}
+	c := newClientWithIndex(newScheme(), p, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name: "kardinal-promoter-github-token", Namespace: "default"}, Data: map[string][]byte{"token": []byte("t")}})
+	r := &pipeline.Reconciler{Client: c,
+		ControllerSecret: &scm.ControllerTokenSecret{Namespace: "default", Name: "kardinal-promoter-github-token"}}
+	key := types.NamespacedName{Name: "app", Namespace: "default"}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+	require.NoError(t, err)
+	var got kardinalv1alpha1.Pipeline
+	require.NoError(t, c.Get(context.Background(), key, &got))
+	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+	require.NotNil(t, ready)
+	assert.Equal(t, metav1.ConditionFalse, ready.Status)
+	assert.Equal(t, "ValidationFailed", ready.Reason)
+	assert.Contains(t, ready.Message, "is the controller's own SCM token Secret")
+}
