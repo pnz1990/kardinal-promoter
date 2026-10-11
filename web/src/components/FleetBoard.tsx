@@ -17,7 +17,8 @@ interface FleetBoardProps {
   pipelines: Pipeline[]
   /** Total before the sidebar filter, for the "showing N of M" note. */
   total: number
-  onSelect: (name: string, namespace: string) => void
+  /** Opens a pipeline; with env, its stage drawer for that environment. */
+  onSelect: (name: string, namespace: string, env?: string) => void
   now?: number
 }
 
@@ -113,7 +114,7 @@ function StationPlate({ s, pipeline, now, onSelect }: {
       className="fleet-station"
       data-state={s.state}
       data-fleet={s.fleet ? true : undefined}
-      onClick={() => onSelect(pipeline.name, pipeline.namespace)}
+      onClick={() => onSelect(pipeline.name, pipeline.namespace, s.env)}
       aria-label={`${pipeline.name} ${s.env}: ${s.version ? `${s.version}, ` : ''}${s.alsoRuns ? `with ${s.alsoRuns} from ${s.alsoFrom}, ` : ''}${stationNote(s, now)}`}
     >
       <span className="fleet-station__env">{s.env}</span>

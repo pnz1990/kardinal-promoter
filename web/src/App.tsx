@@ -20,7 +20,7 @@ import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { PipelineList } from './components/PipelineList'
 import { PipelineOpsTable } from './components/PipelineOpsTable'
 import { DAGView } from './components/DAGView'
-import { NodeDetail } from './components/NodeDetail'
+import { StageDrawer } from './stage/StageDrawer'
 import { HealthChip } from './components/HealthChip'
 import { RejectedLiveBanner } from './components/RejectedLiveBanner'
 import { BlockedBanner } from './components/BlockedBanner'
@@ -101,10 +101,12 @@ export function App() {
   // #740: selectedNode ID is persisted in URL hash (node= param); full GraphNode object in local state.
   const [selectedNode, setSelectedNodeLocal] = useState<GraphNode | null>(null)
 
-  /** Update both local state and URL hash when a node is selected. */
+  /** Update both local state and URL hash when a node is selected. The URL
+   *  names the environment (node=<env>, the stage drawer contract #1701); a
+   *  gate opens its environment's drawer at "why it's waiting". */
   const setSelectedNode = useCallback((node: GraphNode | null) => {
     setSelectedNodeLocal(node)
-    setUrlState({ node: node?.id ?? undefined })
+    setUrlState({ node: node?.environment || node?.id || undefined, section: node?.type === 'PolicyGate' ? 'why' : undefined })
   }, [setUrlState])
 
   // #740: When graph data changes, restore selectedNode from URL if a node= param is present
@@ -117,8 +119,9 @@ export function App() {
       return
     }
     if (!graph) return
-    if (selectedNode?.id === nodeId) return
-    const node = graph.nodes?.find(n => n.id === nodeId)
+    if (selectedNode && (selectedNode.environment || selectedNode.id) === nodeId) return
+    const node = graph.nodes?.find(n => n.type === 'PromotionStep' && n.environment === nodeId)
+      ?? graph.nodes?.find(n => n.id === nodeId)
     if (node) setSelectedNodeLocal(node)
   }, [graph, urlState.node, selectedNode?.id])
 
@@ -299,9 +302,9 @@ export function App() {
     onRefresh: useCallback(() => { void manualRefresh() }, [manualRefresh]),
     onEscape: useCallback(() => {
       if (showShortcutsPanel) { setShowShortcutsPanel(false); return }
-      if (selectedNode) { setSelectedNode(null); return }
+      if (selectedNode || urlState.node) { setSelectedNode(null); return }
       if (showDiffPanel) { closeDiffPanel(); return }
-    }, [showShortcutsPanel, selectedNode, showDiffPanel, setSelectedNode, closeDiffPanel]),
+    }, [showShortcutsPanel, selectedNode, urlState.node, showDiffPanel, setSelectedNode, closeDiffPanel]),
     // #800: / focuses the pipeline search input
     onSearch: useCallback(() => {
       searchInputRef.current?.focus()
@@ -310,15 +313,17 @@ export function App() {
 
   // One history entry per switch: the new pipeline, with no node or diff open.
   // The load effect above does the fetching.
-  const handleSelectPipeline = useCallback((name: string, namespace: string) => {
+  const handleSelectPipeline = useCallback((name: string, namespace: string, env?: string) => {
     setSelectedNodeLocal(null)
-    setUrlState({ pipeline: name, ns: namespace, node: undefined, bundle: undefined })
+    setUrlState({ pipeline: name, ns: namespace, node: env, section: undefined, bundle: undefined })
   }, [setUrlState])
 
   const activePipeline = selectedPipeline
     ? pipelines.find(p => p.name === selectedPipeline && (!urlState.ns || p.namespace === urlState.ns))
     : undefined
   const selectedNamespace = urlState.ns ?? activePipeline?.namespace
+  // The environment whose stage drawer is open: node= names it (#1701).
+  const stageEnv = urlState.node ? (selectedNode?.environment || urlState.node) : undefined
   const activeBundle = shownBundleName ? bundles.find(b => b.name === shownBundleName) : undefined
   // The picked comparison bundle, while the pipeline still has it and it is
   // not the bundle on screen (which is the one it is compared against).
@@ -648,7 +653,8 @@ export function App() {
               />
 
               {/* #340: PolicyGates panel — shows all active gates with CEL expressions */}
-              <PolicyGatesPanel gates={shownGates} loading={gatesLoading} onDecided={() => { void manualRefresh() }} />
+              <PolicyGatesPanel gates={shownGates} loading={gatesLoading} onDecided={() => { void manualRefresh() }}
+                collapsed={!!stageEnv} />
 
               {/* Bundle history (collapsible) */}
               {bundles.length > 0 && (
@@ -743,7 +749,7 @@ export function App() {
                 NodeDetail is a flex sibling, not position:fixed overlay. */}
             <div className="app-content">
               {/* DAG area */}
-              <div className="app-dag" data-split={selectedNode ? true : undefined}>
+              <div className="app-dag" data-split={stageEnv ? true : undefined}>
                 <ErrorBoundary fallbackMessage="Graph failed to load">
                   <DAGView
                     nodes={displayGraph?.nodes ?? []}
@@ -757,20 +763,19 @@ export function App() {
                 </ErrorBoundary>
               </div>
 
-              {/* NodeDetail split panel (#326) — sibling of DAGView, not overlay */}
-              {selectedNode && (
+              {/* U3: the stage drawer of the environment in node= (#1701), a
+                  sibling of the graph at lg and wider, a modal sheet narrower. */}
+              {stageEnv && activePipeline && (
                 <ErrorBoundary fallbackMessage="Details unavailable">
-                  <NodeDetail
-                    node={selectedNode}
+                  <StageDrawer
+                    namespace={activePipeline.namespace}
+                    pipeline={activePipeline.name}
+                    env={stageEnv}
+                    section={urlState.section}
                     onClose={() => setSelectedNode(null)}
-                    bundleName={activeBundle?.name}
-                    pipelineName={activePipeline?.name}
-                    namespace={activePipeline?.namespace ?? 'default'}
-                    steps={activeSteps}
-                    activeBundle={activeBundle}
-                    onActionDone={() => { void manualRefresh() }}
-                    nodes={graph?.nodes ?? []}
-                    edges={graph?.edges ?? []}
+                    onNavigate={(env, section) => { setSelectedNodeLocal(null); setUrlState({ node: env, section }) }}
+                    data={{ pipeline: activePipeline, bundles, steps: activeSteps, gates }}
+                    onChanged={() => { void manualRefresh() }}
                   />
                 </ErrorBoundary>
               )}

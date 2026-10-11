@@ -16,6 +16,8 @@ interface Props {
   /** Called after an approve, reject or revoke from an approval gate, so the
    *  parent refreshes the gates. */
   onDecided?: () => void
+  /** Fold the panel (the stage drawer is open and shows its environment's gates). */
+  collapsed?: boolean
 }
 
 function formatAge(iso: string | undefined): string {
@@ -74,15 +76,20 @@ function GateSummaryChip({ gates }: { gates: PolicyGate[] }) {
   )
 }
 
-export function PolicyGatesPanel({ gates, loading, onDecided }: Props) {
+export function PolicyGatesPanel({ gates, loading, onDecided, collapsed }: Props) {
   const blockedCount = count(gates, 'Block')
   // #524: auto-expand when any gate holds the bundle — the blocked state is the
   // most important information on screen and should not be hidden behind a
   // click. A waiting gate is not what the bundle waits on, so it does not.
   const [open, setOpen] = useState(false)
   useEffect(() => {
-    if (blockedCount > 0) setOpen(true)
-  }, [blockedCount])
+    if (blockedCount > 0 && !collapsed) setOpen(true)
+  }, [blockedCount, collapsed])
+  // The stage drawer shows the gates of the environment it is open on, so the
+  // panel folds away while it is open (U3).
+  useEffect(() => {
+    if (collapsed) setOpen(false)
+  }, [collapsed])
 
   if (loading) {
     return (
