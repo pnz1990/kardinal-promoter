@@ -13,7 +13,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/types"
 
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
@@ -50,7 +52,9 @@ func TestCLI_ShipWait(t *testing.T) {
 	// A: test, then prod through a PR, with a gate on prod that is closed.
 	a := newArgoApp(t, e, "test", "prod")
 	a.apply(t, a.pipeline(map[string]string{"prod": "pr-review"}))
-	gate := framework.Gate(a.ns, "hold", "prod", openExpr, recheck)
+	// No recheckInterval: a gate nothing re-checks needs a person (a gate
+	// re-checked by itself, like a soak, is waited for).
+	gate := framework.Gate(a.ns, "hold", "prod", openExpr, "")
 	e.CreateGate(t, gate)
 	waitPipelineValid(t, e, a.ns, pipelineName)
 
@@ -58,7 +62,7 @@ func TestCLI_ShipWait(t *testing.T) {
 	require.Equal(t, 3, code, "held at prod's gate: %+v", out)
 	assert.Equal(t, "Held", out.Result)
 	assert.Equal(t, fixtures.V2, out.Version)
-	assert.Equal(t, "Bundle "+out.Bundle+" stopped: prod is held by gate hold. Why: kardinal why "+pipelineName+" prod", out.Message)
+	assert.Equal(t, "Bundle "+out.Bundle+" stopped: prod is held by gate hold, which is not re-checked (kardinal why "+pipelineName+" prod)", out.Message)
 	assertEnvAt(t, a, "test", fixtures.V2)
 
 	// Without the gate, the next version waits for its prod PR.
@@ -86,6 +90,25 @@ func TestCLI_ShipWait(t *testing.T) {
 	assert.Contains(t, r.Stderr, "following it")
 	assert.Contains(t, r.Stderr, "test: Live")
 	assertEnvAt(t, b, "test", fixtures.V2)
+
+	// hold: refused to someone without hold rights (an approver), then made,
+	// made again (a no-op), and released.
+	approver := userKubeconfig(t, e, b.ns, "carol@example.com", "release-managers")
+	r = c.Exec(framework.CLIOptions{Kubeconfig: approver}, c.Args(b.ns, "hold", pipelineName, "test", "--reason", "freeze")...)
+	assert.Equal(t, 1, r.Code, r.Output())
+	assert.Contains(t, r.Stderr, "you (carol@example.com) cannot update pipelines in namespace "+b.ns)
+	assert.Contains(t, r.Stderr, "kardinal-promoter-promoter role")
+	var p v1alpha1.Pipeline
+	require.NoError(t, e.Client.Get(context.Background(), types.NamespacedName{Namespace: b.ns, Name: pipelineName}, &p))
+	assert.Empty(t, p.Spec.Holds, "a refused hold changes nothing")
+	r = c.Run(b.ns, "hold", pipelineName, "test", "--reason", "freeze")
+	require.Equal(t, 0, r.Code, r.Output())
+	assert.Regexp(t, `^Held test of podinfo on podinfo-[a-z0-9]+: no other Bundle promotes there until kardinal unhold podinfo test\n$`, r.Stdout)
+	r = c.Run(b.ns, "hold", pipelineName, "test", "--reason", "freeze")
+	require.Equal(t, 0, r.Code, "the same hold again: %s", r.Output())
+	assert.Contains(t, r.Stdout, "already, for that reason: nothing changed")
+	r = c.Run(b.ns, "unhold", pipelineName, "test")
+	require.Equal(t, 0, r.Code, r.Output())
 
 	// Without --wait: the name on stdout, the watch hint on stderr.
 	r = c.Run(b.ns, "ship", pipelineName, "--image", fixtures.Image+":"+fixtures.V3)

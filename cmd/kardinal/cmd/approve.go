@@ -14,6 +14,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"slices"
+	"strings"
 	"time"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -24,6 +25,7 @@ import (
 
 // approveOptions are the flags of kardinal approve.
 type approveOptions struct {
+	version  string
 	env      string
 	comment  string
 	decision string
@@ -65,6 +67,24 @@ your Approval.`,
 				return err
 			}
 			o.env = env
+			// Say which version it is, refuse one --version does not
+			// name, and ask on a terminal (--yes answers): a newer
+			// version may have arrived since it was reviewed.
+			version, err := approvalVersion(ctx, c, ns, bundle)
+			if err != nil {
+				return err
+			}
+			if o.version != "" && o.version != version {
+				return fmt.Errorf("approve: the version waiting for %s is %s (%s), not %s: nothing recorded",
+					env, versionOr(version, bundle), bundle, o.version)
+			}
+			verb := o.decision
+			if o.revoke {
+				verb = "revoke your decision on"
+			}
+			if err := confirm(cmd, fmt.Sprintf("%s %s (%s) for %s?", upperFirst(verb), versionOr(version, bundle), bundle, env)); err != nil {
+				return err
+			}
 			return approveFn(ctx, cmd.OutOrStdout(), c, ns, bundle, o)
 		},
 	}
@@ -72,6 +92,8 @@ your Approval.`,
 	cmd.Flags().StringVar(&o.comment, "comment", "", "Note shown with the decision")
 	cmd.Flags().StringVar(&o.decision, "decision", "approve", "approve or reject")
 	cmd.Flags().BoolVar(&o.revoke, "revoke", false, "Delete your Approval instead of recording one")
+	cmd.Flags().StringVar(&o.version, "version", "", "Approve only if this is the version waiting (the image tag, config commit or chart version)")
+	addYesFlag(cmd)
 	withReference(cmd, approveReference)
 	return cmd
 }
@@ -109,7 +131,6 @@ func approveTarget(ctx context.Context, c sigs_client.Client, ns string, cmd *co
 	if err != nil {
 		return "", "", err
 	}
-	_, _ = fmt.Fprintf(errOut, "%s %s, the version waiting for %s\n", sty.Dim("Approving"), bundle, env)
 	return bundle, env, nil
 }
 
@@ -173,6 +194,29 @@ func waitingBundle(ctx context.Context, c sigs_client.Client, ns, pipeline, env 
 	}
 	return "", fmt.Errorf("approve: no version waits for %s of %s: %s and no newer one is on its way; name one: kardinal approve <bundle> --env %s",
 		env, pipeline, what, env)
+}
+
+// approvalVersion is what Bundle name ships, announced on stderr before a
+// decision on it.
+func approvalVersion(ctx context.Context, c sigs_client.Client, ns, name string) (string, error) {
+	var b v1alpha1.Bundle
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &b); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", fmt.Errorf("approve: bundle %s not found in namespace %s", name, ns)
+		}
+		return "", fmt.Errorf("approve: get bundle %s: %w", name, err)
+	}
+	version := createdOf(&b).Version
+	_, _ = fmt.Fprintf(errOut, "%s %s (%s)\n", sty.Dim("Bundle:"), versionOr(version, name), name)
+	return version, nil
+}
+
+// upperFirst is s with its first letter in upper case.
+func upperFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // approveFn is the testable implementation of approve. The decision is

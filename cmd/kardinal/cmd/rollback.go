@@ -304,11 +304,15 @@ type heldEnvironment struct {
 
 // holdFn is the testable implementation of hold (lifecycle.HoldCurrent).
 func holdFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, reason, actor string, expiresIn time.Duration) error {
-	h, err := lifecycle.HoldCurrent(context.Background(), c, lifecycle.HoldCurrentRequest{
+	h, existed, err := lifecycle.HoldCurrent(context.Background(), c, lifecycle.HoldCurrentRequest{
 		Namespace: ns, Pipeline: pipeline, Environment: env, Reason: reason, Actor: actor, ExpiresIn: expiresIn, Now: time.Now(),
 	})
 	if err != nil {
 		return err
+	}
+	if existed && !structured() {
+		return writef(w, "%s %s of %s is held on %s already, for that reason: nothing changed\n",
+			sty.Paint(display.ToneHeld, "Held"), env, pipeline, h.Bundle)
 	}
 	if structured() {
 		return writeStructured(w, heldEnvironment{Pipeline: pipeline, Namespace: ns, Environment: env, Bundle: h.Bundle,

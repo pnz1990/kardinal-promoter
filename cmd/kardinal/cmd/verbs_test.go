@@ -9,18 +9,25 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // TestConfirm (C5): a destructive command asks on a terminal, --yes answers
@@ -82,56 +89,104 @@ func TestExitCode(t *testing.T) {
 		"the documented codes do not change")
 }
 
-// TestShipOutcome (C5): how ship --wait reads a Bundle: Verified, Failed,
-// replaced, held by a gate that was evaluated (not one that was not), held
-// by a rollback, waiting for its PR, or still moving.
+var updateShipOutcomes = flag.Bool("update-ship-outcomes", false, "rewrite testdata/ship-outcomes.golden")
+
+// TestShipOutcome (C5): how ship --wait reads a Bundle. It stops (3) only
+// where a person is needed: an approval gate, a hold, a pause, a gate that
+// does not pass and is never re-checked. A re-checked gate (recheckInterval,
+// a soak or schedule expression) and a PR the SCM merges by itself are waited
+// for; --stop-at-gate stops at any gate. A PR that needs a person is 4, a
+// deleted Bundle 5. Each case's line is golden (testdata/ship-outcomes.golden).
 //
 // Covers CLI-VERBS-01.
 func TestShipOutcome(t *testing.T) {
 	at := time.Now().Add(-time.Hour)
-	withEnvs := func(envs ...v1alpha1.PipelineEnvironmentStatus) sigs_client.Object {
+	withEnvs := func(envs ...v1alpha1.PipelineEnvironmentStatus) *v1alpha1.Pipeline {
 		p := policyPipeline("demo", "test", "prod")
 		p.Status.Environments = envs
 		return p
 	}
-	evaluated := explainGateInstance("demo", "b1", "prod", "cab", "false", false, true, "false = false")
-	fresh := explainGateInstance("demo", "b1", "prod", "cab", "false", false, false, "")
-	cases := []struct {
-		name   string
-		phase  string
-		objs   []sigs_client.Object
-		result string
-		code   int
-	}{
-		{"verified", "Verified", []sigs_client.Object{withEnvs(pesEnv("test", "b1", "", "Verified"), pesEnv("prod", "b1", "", "Verified"))}, "Verified", ExitVerified},
-		{"failed", "Failed", []sigs_client.Object{withEnvs(pesEnv("test", "b1", "", "Failed"))}, "Failed", ExitFailed},
-		{"superseded", "Superseded", []sigs_client.Object{withEnvs()}, "Superseded", ExitReplaced},
-		{"rejected", "Rejected", []sigs_client.Object{withEnvs()}, "Rejected", ExitReplaced},
-		{"held by an evaluated gate", "Promoting", []sigs_client.Object{withEnvs(pesEnv("test", "b1", "", "Verified"),
-			pesEnv("prod", "b0", "b1", "Pending", "cab")), evaluated}, "Held", ExitHeld},
-		{"a gate not evaluated yet does not stop it", "Promoting", []sigs_client.Object{withEnvs(pesEnv("test", "b1", "", "Verified"),
-			pesEnv("prod", "b0", "b1", "Pending", "cab")), fresh}, "", 0},
-		{"held by a rollback", "Promoting", []sigs_client.Object{withEnvs(pesEnv("test", "b1", "", "Verified"),
-			pesHeld("prod", "b0", "b1"))}, "Held", ExitHeld},
-		{"waiting for its PR", "Promoting", []sigs_client.Object{withEnvs(pesEnv("test", "b1", "", "Verified"),
-			pesPR(pesEnv("prod", "b0", "b1", "WaitingForMerge"), "https://git/pr/7"))}, "WaitingForMerge", ExitWaitingForMerge},
-		{"moving in one environment, held in another", "Promoting", []sigs_client.Object{withEnvs(pesEnv("test", "b1", "", "HealthChecking"),
-			pesEnv("prod", "b0", "b1", "Pending", "cab")), evaluated}, "", 0},
-		{"between steps", "Promoting", []sigs_client.Object{withEnvs(pesEnv("test", "b1", "", "Verified"))}, "", 0},
+	gate := func(mut func(*v1alpha1.PolicyGate)) *v1alpha1.PolicyGate {
+		g := explainGateInstance("demo", "b1", "prod", "cab", "bundle.labels.ok == 'yes'", false, true, "false")
+		if mut != nil {
+			mut(g)
+		}
+		return g
 	}
+	blocked := withEnvs(pesEnv("test", "b1", "", "Verified"), pesEnv("prod", "b0", "b1", "Pending", "cab"))
+	paused := blocked.DeepCopy()
+	paused.Spec.Paused = true
+	autoPR := withEnvs(pesEnv("test", "b1", "", "Verified"), pesPR(pesEnv("prod", "b0", "b1", "WaitingForMerge"), "https://git/pr/7"))
+	autoPR.Spec.Environments[1].PR = &v1alpha1.PRConfig{Merge: &v1alpha1.PRMergeConfig{Auto: true}}
+	prStep := func(autoMerge string) *v1alpha1.PromotionStep {
+		s := explainStep("demo", "b1", "prod", "WaitingForMerge", "", at)
+		s.Status.Outputs = map[string]string{"prAutoMerge": autoMerge}
+		return s
+	}
+	cases := []struct {
+		name       string
+		phase      string
+		objs       []sigs_client.Object
+		stopAtGate bool
+		result     string
+		code       int
+	}{
+		{"verified", "Verified", []sigs_client.Object{withEnvs(pesEnv("test", "b1", "", "Verified"), pesEnv("prod", "b1", "", "Verified"))}, false, "Verified", ExitVerified},
+		{"failed", "Failed", []sigs_client.Object{withEnvs(pesEnv("test", "b1", "", "Failed"))}, false, "Failed", ExitFailed},
+		{"superseded", "Superseded", []sigs_client.Object{withEnvs()}, false, "Superseded", ExitReplaced},
+		{"rejected", "Rejected", []sigs_client.Object{withEnvs()}, false, "Rejected", ExitReplaced},
+		{"approval gate", "Promoting", []sigs_client.Object{blocked, gate(func(g *v1alpha1.PolicyGate) {
+			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1}
+			g.Spec.RecheckInterval = "1m"
+		})}, false, "Held", ExitHeld},
+		{"gate never re-checked", "Promoting", []sigs_client.Object{blocked, gate(nil)}, false, "Held", ExitHeld},
+		{"re-checked gate: waited for", "Promoting", []sigs_client.Object{blocked, gate(func(g *v1alpha1.PolicyGate) { g.Spec.RecheckInterval = "5m" })}, false, "", 0},
+		{"soak gate: waited for", "Promoting", []sigs_client.Object{blocked, gate(func(g *v1alpha1.PolicyGate) { g.Spec.Expression = "upstream.uat.soakMinutes >= 30" })}, false, "", 0},
+		{"schedule gate: waited for", "Promoting", []sigs_client.Object{blocked, gate(func(g *v1alpha1.PolicyGate) { g.Spec.Expression = "!schedule.isWeekend" })}, false, "", 0},
+		{"re-checked gate with --stop-at-gate", "Promoting", []sigs_client.Object{blocked, gate(func(g *v1alpha1.PolicyGate) { g.Spec.RecheckInterval = "5m" })}, true, "Held", ExitHeld},
+		{"a gate not evaluated yet does not stop it", "Promoting", []sigs_client.Object{blocked, gate(func(g *v1alpha1.PolicyGate) { g.Status.LastEvaluatedAt = nil })}, true, "", 0},
+		{"held", "Promoting", []sigs_client.Object{withEnvs(pesEnv("test", "b1", "", "Verified"), pesHeld("prod", "b0", "b1"))}, false, "Held", ExitHeld},
+		{"paused", "Promoting", []sigs_client.Object{paused}, false, "Held", ExitHeld},
+		{"its PR needs a person", "Promoting", []sigs_client.Object{withEnvs(pesEnv("test", "b1", "", "Verified"),
+			pesPR(pesEnv("prod", "b0", "b1", "WaitingForMerge"), "https://git/pr/7"))}, false, "WaitingForMerge", ExitWaitingForMerge},
+		{"its PR merges by itself: waited for", "Promoting", []sigs_client.Object{autoPR, prStep("enabled")}, false, "", 0},
+		{"its auto-merge failed", "Promoting", []sigs_client.Object{autoPR, prStep("failed")}, false, "WaitingForMerge", ExitWaitingForMerge},
+		{"moving in one environment, held in another", "Promoting", []sigs_client.Object{withEnvs(pesEnv("test", "b1", "", "HealthChecking"),
+			pesEnv("prod", "b0", "b1", "Pending", "cab")), gate(nil)}, false, "", 0},
+		{"between steps", "Promoting", []sigs_client.Object{withEnvs(pesEnv("test", "b1", "", "Verified"))}, false, "", 0},
+	}
+	var golden strings.Builder
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			objs := append([]sigs_client.Object{explainBundle("b1", tc.phase, at)}, tc.objs...)
-			out, _ := shipOutcome(context.Background(), policyClient(t, objs...), "default", "demo", "b1")
+			out, _, err := shipOutcome(context.Background(), policyClient(t, objs...), "default", "demo", "b1", tc.stopAtGate)
+			require.NoError(t, err)
 			if tc.result == "" {
 				assert.Nil(t, out)
+				fmt.Fprintf(&golden, "%s: waits\n", tc.name)
 				return
 			}
 			require.NotNil(t, out)
 			assert.Equal(t, tc.result, out.result, out.message)
 			assert.Equal(t, tc.code, out.code)
+			fmt.Fprintf(&golden, "%s: %d %s: %s\n", tc.name, out.code, out.result, out.message)
 		})
 	}
+
+	// A Bundle deleted while it is followed.
+	out, _, err := shipOutcome(context.Background(), policyClient(t, blocked), "default", "demo", "b1", false)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, []any{"Deleted", ExitReplaced, true}, []any{out.result, out.code, out.final})
+	fmt.Fprintf(&golden, "deleted: %d %s: %s\n", out.code, out.result, out.message)
+
+	path := filepath.Join("testdata", "ship-outcomes.golden")
+	if *updateShipOutcomes {
+		require.NoError(t, os.WriteFile(path, []byte(golden.String()), 0o644))
+	}
+	want, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, string(want), golden.String())
 }
 
 // pesEnv is a status.environments entry for the tests.
@@ -188,7 +243,7 @@ func TestShipWait(t *testing.T) {
 		}
 	}()
 	var out bytes.Buffer
-	require.NoError(t, shipFn(context.Background(), &out, c, "default", "demo", opts, true, time.Minute))
+	require.NoError(t, shipFn(context.Background(), &out, c, "default", "demo", opts, true, time.Minute, false))
 	assert.Equal(t, "1.5.0 is live in test, prod\n", out.String())
 	assert.Contains(t, progress.String(), "following it")
 
@@ -201,10 +256,10 @@ func TestShipWait(t *testing.T) {
 	held.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "test", Bundle: "demo-held", State: "Verified"},
 		{Name: "prod", Bundle: "x", IncomingBundle: "demo-held", State: "Pending", BlockedBy: []string{"cab"}}}
 	c = policyClient(t, held, b, explainGateInstance("demo", "demo-held", "prod", "cab", "false", false, true, "no"))
-	res := waitShip(context.Background(), c, "default", "demo", "demo-held", shipResult{createdBundle: createdOf(b)}, time.Minute)
+	res := waitShip(context.Background(), c, "default", "demo", "demo-held", shipResult{createdBundle: createdOf(b)}, time.Minute, false)
 	assert.Equal(t, "Held", res.Result)
 	assert.Equal(t, ExitHeld, res.ExitCode)
-	assert.Equal(t, "Bundle demo-held stopped: prod is held by gate cab. Why: kardinal why demo prod", res.Message)
+	assert.Equal(t, "Bundle demo-held stopped: prod is held by gate cab, which is not re-checked (kardinal why demo prod)", res.Message)
 	raw, err := json.Marshal(res)
 	require.NoError(t, err)
 	for _, field := range []string{`"bundle":"demo-held"`, `"result":"Held"`, `"exitCode":3`, `"version":"1.6.0"`, `"environments":[`} {
@@ -215,8 +270,25 @@ func TestShipWait(t *testing.T) {
 	moving := policyPipeline("demo", "test", "prod")
 	moving.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "test", Bundle: "demo-held", State: "HealthChecking"}}
 	c = policyClient(t, moving, b)
-	res = waitShip(context.Background(), c, "default", "demo", "demo-held", shipResult{}, 5*time.Millisecond)
+	res = waitShip(context.Background(), c, "default", "demo", "demo-held", shipResult{}, 5*time.Millisecond, false)
 	assert.Equal(t, []any{"Timeout", ExitTimeout}, []any{res.Result, res.ExitCode})
+
+	// Interrupted (Ctrl-C, SIGTERM): the result, exit 6.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	cancel2()
+	res = waitShip(ctx2, c, "default", "demo", "demo-held", shipResult{}, time.Minute, false)
+	assert.Equal(t, []any{"Interrupted", ExitTimeout}, []any{res.Result, res.ExitCode})
+	assert.Contains(t, res.Message, "(interrupted); the promotion goes on")
+
+	// Reads that fail are retried; three in a row end the wait, exit 1.
+	failing := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(context.Context, sigs_client.WithWatch, sigs_client.ObjectKey, sigs_client.Object, ...sigs_client.GetOption) error {
+			return errors.New("etcd is down")
+		},
+	}).Build()
+	res = waitShip(context.Background(), failing, "default", "demo", "demo-held", shipResult{}, time.Minute, false)
+	assert.Equal(t, []any{"Error", ExitFailed}, []any{res.Result, res.ExitCode})
+	assert.Equal(t, "cannot follow Bundle demo-held: get bundle demo-held: etcd is down", res.Message)
 }
 
 // TestHoldAndWhy (C5): kardinal hold holds an environment on what runs
@@ -228,6 +300,10 @@ func TestHoldAndWhy(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, holdFn(&buf, c, "default", "app", "prod", "audit", "alice", 0))
 	assert.Equal(t, "Held prod of app on app-v1: no other Bundle promotes there until kardinal unhold app prod\n", buf.String())
+	buf.Reset()
+	require.NoError(t, holdFn(&buf, c, "default", "app", "prod", "audit", "alice", 0), "the same hold again is a no-op")
+	assert.Equal(t, "Held prod of app is held on app-v1 already, for that reason: nothing changed\n", buf.String())
+	assert.ErrorIs(t, holdFn(&buf, c, "default", "app", "prod", "another reason", "alice", 0), lifecycle.ErrConflict)
 	var p v1alpha1.Pipeline
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "app"}, &p))
 	require.Len(t, p.Spec.Holds, 1)
@@ -302,4 +378,95 @@ func TestExplainHints(t *testing.T) {
 	errb.Reset()
 	require.NoError(t, explainOnce(&out, c, "default", "demo", "", false))
 	assert.Empty(t, errb.String())
+}
+
+// syncBuffer is a bytes.Buffer safe to read while another goroutine writes.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
+
+// TestShipWait_Interrupt (C5): SIGINT during ship --wait ends the wait, not
+// the process: the JSON result is printed and the exit code is 6.
+//
+// Covers CLI-VERBS-01.
+func TestShipWait_Interrupt(t *testing.T) {
+	prevPoll, prevErr := shipPollInterval, errOut
+	shipPollInterval = 5 * time.Millisecond
+	progress := &syncBuffer{}
+	errOut = progress
+	globalOutput = "json"
+	t.Cleanup(func() { shipPollInterval, errOut, globalOutput = prevPoll, prevErr, "" })
+	stubIdentity(t, Identity{Username: "ci"})
+	c := policyClient(t, policyPipeline("demo", "test", "prod"))
+
+	go func() {
+		for !strings.Contains(progress.String(), "following it") {
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(20 * time.Millisecond)
+		_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
+	}()
+	var out bytes.Buffer
+	err := shipFn(context.Background(), &out, c, "default", "demo",
+		createBundleOptions{Images: []string{"ghcr.io/o/app:1.5.0"}, Type: "image"}, true, time.Minute, false)
+	require.Error(t, err)
+	assert.Equal(t, ExitTimeout, ExitCode(err))
+	var res shipResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &res), out.String())
+	assert.Equal(t, "Interrupted", res.Result)
+	assert.Equal(t, ExitTimeout, res.ExitCode)
+}
+
+// TestApprove_PinAndConfirm (C5): approve says which version it records a
+// decision on, refuses one --version does not name, and asks on a terminal
+// (--yes answers).
+//
+// Covers CLI-VERBS-01.
+func TestApprove_PinAndConfirm(t *testing.T) {
+	stubIdentity(t, Identity{Username: "alice"})
+	b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v2", Namespace: "default"},
+		Spec:   v1alpha1.BundleSpec{Type: "image", Pipeline: "app", Images: []v1alpha1.ImageRef{{Repository: "r/app", Tag: "2.0"}}},
+		Status: v1alpha1.BundleStatus{Phase: "Promoting"}}
+	p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "prod"}}}}
+	p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "app-v1", IncomingBundle: "app-v2", State: "Pending"}}
+	c := fake.NewClientBuilder().WithScheme(rejectScheme(t)).WithObjects(b, p).
+		WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
+	prevClient, prevPrompt := buildClient, promptable
+	buildClient = func() (sigs_client.Client, string, error) { return c, "default", nil }
+	t.Cleanup(func() { buildClient, promptable = prevClient, prevPrompt })
+	run := func(stdin string, tty bool, args ...string) (string, string, error) {
+		promptable = func() bool { return tty }
+		root := NewRootCmd()
+		var out, errb bytes.Buffer
+		root.SetOut(&out)
+		root.SetErr(&errb)
+		root.SetIn(strings.NewReader(stdin))
+		root.SetArgs(append([]string{"approve"}, args...))
+		err := root.Execute()
+		return out.String(), errb.String(), err
+	}
+
+	_, errOut, err := run("", false, "app", "prod", "--version", "1.9")
+	assert.EqualError(t, err, "approve: the version waiting for prod is 2.0 (app-v2), not 1.9: nothing recorded")
+	assert.Contains(t, errOut, "Bundle: 2.0 (app-v2)")
+	assert.Empty(t, approvals(t, c))
+
+	_, errOut, err = run("n\n", true, "app", "prod")
+	assert.ErrorIs(t, err, errCancelled)
+	assert.Contains(t, errOut, "Approve 2.0 (app-v2) for prod? [y/N] ")
+	assert.Empty(t, approvals(t, c), "declined: nothing recorded")
+
+	out, _, err := run("", true, "app", "prod", "--version", "2.0", "--yes")
+	require.NoError(t, err)
+	assert.Contains(t, out, "Recorded: alice approves app-v2 for prod")
+	assert.Len(t, approvals(t, c), 1)
 }

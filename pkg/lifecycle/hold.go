@@ -446,54 +446,60 @@ type HoldCurrentRequest struct {
 // hold is the same spec.holds entry RollbackAndHold writes, naming the
 // deployed Bundle. A fleet environment is refused (its targets may run
 // different Bundles: hold each target), and so is an environment that runs
-// nothing yet or is held already (ErrConflict).
-func HoldCurrent(ctx context.Context, c client.Client, req HoldCurrentRequest) (*v1alpha1.EnvironmentHold, error) {
+// nothing yet or is held already on another Bundle or for another reason
+// (ErrConflict). The same hold again (Bundle and reason) is a no-op that
+// returns it with existed true, so a retried hold succeeds.
+func HoldCurrent(ctx context.Context, c client.Client, req HoldCurrentRequest) (hold *v1alpha1.EnvironmentHold, existed bool, err error) {
 	if strings.TrimSpace(req.Reason) == "" {
-		return nil, fmt.Errorf("a hold needs a reason: %w", ErrInvalid)
+		return nil, false, fmt.Errorf("a hold needs a reason: %w", ErrInvalid)
 	}
 	var p v1alpha1.Pipeline
 	if err := c.Get(ctx, types.NamespacedName{Namespace: req.Namespace, Name: req.Pipeline}, &p); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("pipeline %s/%s: %w", req.Namespace, req.Pipeline, ErrNotFound)
+			return nil, false, fmt.Errorf("pipeline %s/%s: %w", req.Namespace, req.Pipeline, ErrNotFound)
 		}
-		return nil, fmt.Errorf("get pipeline %s/%s: %w", req.Namespace, req.Pipeline, err)
+		return nil, false, fmt.Errorf("get pipeline %s/%s: %w", req.Namespace, req.Pipeline, err)
 	}
 	if !hasEnvironment(&p, req.Environment) {
-		return nil, fmt.Errorf("pipeline %s has no environment %q: %w", req.Pipeline, req.Environment, ErrInvalid)
+		return nil, false, fmt.Errorf("pipeline %s has no environment %q: %w", req.Pipeline, req.Environment, ErrInvalid)
 	}
 	if fleetTargets(&p, req.Environment) != nil {
-		return nil, fmt.Errorf("%s is a fleet: its targets may run different Bundles; hold each target, or roll the fleet back with --hold: %w",
+		return nil, false, fmt.Errorf("%s is a fleet: its targets may run different Bundles; hold each target, or roll the fleet back with --hold: %w",
 			req.Environment, ErrInvalid)
 	}
-	if h := HoldOf(&p, req.Environment); h != nil {
-		return nil, heldConflict(req.Pipeline, h)
-	}
+	held := HoldOf(&p, req.Environment)
 	hist, err := loadEnvHistory(ctx, c, req.Namespace, req.Pipeline, req.Environment)
 	if err != nil {
-		return nil, fmt.Errorf("hold: %w", err)
+		return nil, false, fmt.Errorf("hold: %w", err)
 	}
 	deployed := hist.deployed()
+	if held != nil {
+		if held.Bundle == deployed && held.Reason == req.Reason {
+			return held, true, nil
+		}
+		return nil, false, heldConflict(req.Pipeline, held)
+	}
 	if deployed == "" {
-		return nil, fmt.Errorf("nothing runs in %s of pipeline %s yet, so there is nothing to hold it on: %w",
+		return nil, false, fmt.Errorf("nothing runs in %s of pipeline %s yet, so there is nothing to hold it on: %w",
 			req.Environment, req.Pipeline, ErrConflict)
 	}
 	b, err := getBundle(ctx, c, req.Namespace, deployed)
 	if err != nil {
-		return nil, fmt.Errorf("get the bundle that runs in %s, %s: %w", req.Environment, deployed, err)
+		return nil, false, fmt.Errorf("get the bundle that runs in %s, %s: %w", req.Environment, deployed, err)
 	}
 	now := req.Now
 	if now.IsZero() {
 		now = time.Now()
 	}
 	at := metav1.NewTime(now.UTC())
-	hold := v1alpha1.EnvironmentHold{Environment: req.Environment, Bundle: deployed, Reason: req.Reason,
+	h := v1alpha1.EnvironmentHold{Environment: req.Environment, Bundle: deployed, Reason: req.Reason,
 		CreatedBy: req.Actor, CreatedAt: &at, Artifacts: ArtifactDigest(b.Spec)}
 	if req.ExpiresIn > 0 {
 		exp := metav1.NewTime(now.UTC().Add(req.ExpiresIn))
-		hold.ExpiresAt = &exp
+		h.ExpiresAt = &exp
 	}
-	if err := setHold(ctx, c, req.Namespace, req.Pipeline, hold); err != nil {
-		return nil, err
+	if err := setHold(ctx, c, req.Namespace, req.Pipeline, h); err != nil {
+		return nil, false, err
 	}
-	return &hold, nil
+	return &h, false, nil
 }
