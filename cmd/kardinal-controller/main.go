@@ -665,6 +665,20 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up the SCM provider")
 	}
 	allowedRepos = canonicalRepos
+	// The controller's own token Secret: no Pipeline may name it as its
+	// git.secretRef (it would choose where the token goes, and skip
+	// --scm-allowed-repositories).
+	var controllerSecret *scm.ControllerTokenSecret
+	if scmTokenSecretName != "" {
+		ns := scmTokenSecretNamespace
+		if ns == "" {
+			ns = os.Getenv("POD_NAMESPACE")
+		}
+		if ns == "" {
+			ns = "kardinal-system"
+		}
+		controllerSecret = &scm.ControllerTokenSecret{Namespace: ns, Name: scmTokenSecretName}
+	}
 	if dynProvider != nil {
 		// Resolve the namespace: flag > env > controller namespace.
 		if scmTokenSecretNamespace == "" {
@@ -686,6 +700,9 @@ func main() {
 			scmTokenSecretKey,
 			logger,
 		)
+		// Warns (once per labelling) when the Secret is labelled
+		// kardinal.io/referenceable.
+		watcher.Recorder = mgr.GetEventRecorder("kardinal-scm-token-watcher")
 		if addErr := mgr.Add(watcher); addErr != nil {
 			logger.Fatal().Err(addErr).Msg("unable to register SCM credential watcher")
 		}
@@ -801,7 +818,8 @@ func main() {
 	}
 
 	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos,
-		CompactAbove: &graphCompactAbove, Reader: mgr.GetAPIReader(), Workers: *workers["pipeline"],
+		ControllerSecret: controllerSecret,
+		CompactAbove:     &graphCompactAbove, Reader: mgr.GetAPIReader(), Workers: *workers["pipeline"],
 		HoldBundleGrace: holdBundleGrace, Recorder: eventRecorder,
 		FleetApplicationNamespaces:    splitCSV(fleetApplicationNamespaces),
 		FleetClusterProfileNamespaces: splitCSV(fleetClusterProfileNamespaces)}).
@@ -834,6 +852,7 @@ func main() {
 		APIReader:           mgr.GetAPIReader(),
 		SCM:                 scmProvider,
 		AllowedRepositories: allowedRepos,
+		ControllerSecret:    controllerSecret,
 		Providers:           providers,
 		GitClient:           gitClient,
 		GatesStatusDisabled: !gatesCommitStatus,

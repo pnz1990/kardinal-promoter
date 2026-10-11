@@ -51,7 +51,7 @@ helm template kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter -
 To keep Secret access out of other namespaces, run in namespace mode
 (`controller.watchNamespace`), which turns the namespaced rules into a Role in that namespace.
 The release-namespace Role also grants `get` on the SCM token Secret, limited to its name
-(`github.secretRef.name`, or the Secret the chart creates from `github.token`). The rule is
+(`scm.secretRef.name`, or the Secret the chart creates from `scm.token`). The rule is
 left out when neither is set.
 
 ---
@@ -114,7 +114,7 @@ expires, so no long-lived PAT is stored. See [GitHub App](../scm-providers.md#gi
 The App needs `Contents: Read and write`, `Pull requests: Read and write` and `Metadata:
 Read-only`. There is no OIDC token exchange; another short-lived token works if something
 outside kardinal (an External Secrets generator, a CronJob) refreshes the Secret in
-`github.secretRef` before it expires: the controller reloads it within 30 seconds.
+`scm.secretRef` before it expires: the controller reloads it within 30 seconds.
 
 ---
 
@@ -162,7 +162,7 @@ The namespace is kardinal's tenancy unit. There is no Project CRD.
 #### The shared SCM token and `scm.allowedRepositories`
 
 Git clone and push use the Pipeline's `git.secretRef` token. The controller uses its own SCM
-token (`github.token` or `github.secretRef`, the controller Pod's `GITHUB_TOKEN`) to open, label,
+token (`scm.token` or `scm.secretRef`, the controller Pod's `GITHUB_TOKEN`) to open, label,
 comment on and close PRs. When it closes a PR that was not merged, it also deletes the PR's head
 branch, `kardinal/<namespace hash>/<bundle>/<env>`, with that token, so the closed PR cannot be merged later. It
 deletes that branch too when a step that pushed it ends before it opens a PR. It deletes only
@@ -246,14 +246,14 @@ helm install kardinal-team-a oci://ghcr.io/pnz1990/charts/kardinal-promoter --ve
   --namespace team-a \
   --create-namespace \
   --set controller.watchNamespace=team-a \
-  --set github.secretRef.name=github-token
+  --set scm.secretRef.name=github-token
 
 # Team B — separate install watching only the "team-b" namespace
 helm install kardinal-team-b oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
   --namespace team-b \
   --create-namespace \
   --set controller.watchNamespace=team-b \
-  --set github.secretRef.name=github-token
+  --set scm.secretRef.name=github-token
 ```
 
 Each install creates a `Role` and `RoleBinding` scoped to its watch namespace. Team A
@@ -307,8 +307,22 @@ effect at the next reconcile; removing the label stops its use again. Whoever ma
 
 Pipeline `spec.git.secretRef` has the same exposure (its token goes to the Pipeline's git URL).
 An unlabeled git Secret is deprecated: it still works with `SecretReferenceable=False`, and v0.11
-refuses it. Label your git Secrets. The controller's own SCM token Secret is set by the operator and
-is not covered.
+refuses it. Label your git Secrets.
+
+### The controller's own SCM token
+
+**Never label the controller's SCM token Secret** (`scm.secretRef.name`, or the chart's
+`<fullname>-github-token` from `scm.token`) `kardinal.io/referenceable: "true"`. The label would
+let any kardinal object in that namespace use it: a Pipeline `git.secretRef`, a MetricCheck
+`authorizationSecretRef`, a NotificationHook, an ScmProvider or a Subscription could send the
+controller's token to a URL its author chooses. The chart never labels it.
+
+The controller also refuses a Pipeline whose `git.secretRef` names its own token Secret
+(`--scm-token-secret-name` in `--scm-token-secret-namespace`), labelled or not: the Pipeline is
+`Ready=False` with reason `ValidationFailed`, and its steps fail before `git-clone`. Such a
+Pipeline would otherwise choose where the controller's token goes, and its own existing Secret
+would exempt it from `--scm-allowed-repositories`. Give each Pipeline its own Secret; the chart's
+demo Pipeline gets one (`demo.secretRef`, or a labelled copy the chart creates with `scm.token`).
 
 ### Recommended: External Secrets Operator
 
