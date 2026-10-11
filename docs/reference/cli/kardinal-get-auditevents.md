@@ -41,7 +41,7 @@ kardinal get auditevents [flags]
 
 ```
   -A, --all-namespaces    List events across all namespaces (adds NAMESPACE column)
-      --bundle string     Filter by bundle name
+      --bundle string     Filter by Bundle, by name or version
   -e, --env string        Filter by environment name
   -h, --help              help for auditevents
       --limit int         Maximum number of results to show (0 = unlimited) (default 20)

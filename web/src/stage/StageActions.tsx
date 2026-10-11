@@ -35,6 +35,9 @@ interface Props {
   inline?: Set<StageActionKind>
   /** Why an action is not available to the person at the UI (U7), or undefined. */
   reasonFor?: ReasonFor
+  /** Only this environment's actions (the Table's row): no "Whole pipeline" group, no
+   *  "nothing to do" note. */
+  envOnly?: boolean
 }
 
 /** The button label of each action; the dialog and the result use the same verb. */
@@ -51,12 +54,12 @@ const PIPELINE_ORDER: StageActionKind[] = ['resume', 'pause', 'rejectVersion']
 /** Actions that undo or refuse something here: garnet outline, never the thread's red. */
 export const DESTRUCTIVE = new Set<StageActionKind>(['reject', 'rollback'])
 
-export function StageActions({ view, pipeline, namespace, active, activeGate, onOpen, onChanged, inline, reasonFor }: Props) {
+export function StageActions({ view, pipeline, namespace, active, activeGate, onOpen, onChanged, inline, envOnly, reasonFor }: Props) {
   const [result, setResult] = useState<string>()
   const envKinds = ENV_ORDER.filter(k => view.actions.has(k) && !inline?.has(k))
   const primary = view.primary && envKinds.includes(view.primary) ? view.primary : undefined
   const ordered = primary ? [primary, ...envKinds.filter(k => k !== primary)] : envKinds
-  const pipelineKinds = PIPELINE_ORDER.filter(k => view.actions.has(k))
+  const pipelineKinds = envOnly ? [] : PIPELINE_ORDER.filter(k => view.actions.has(k))
   const prURL = view.step?.prURL
   // What the person may not do here, once each (U7).
   const restrictions = [...new Set([...(inline ?? []), ...ordered, ...pipelineKinds]
@@ -71,7 +74,7 @@ export function StageActions({ view, pipeline, namespace, active, activeGate, on
     <>
       {ordered.length > 0
         ? <div className="stage-actions">{ordered.map(k => button(k, k === primary ? 'primary' : DESTRUCTIVE.has(k) ? 'destructive' : 'secondary'))}</div>
-        : <p className="stage-muted">{inline && inline.size > 0
+        : envOnly ? null : <p className="stage-muted">{inline && inline.size > 0
             ? 'Use the button next to each reason above.'
             : `Nothing to do in ${view.env} right now.`}</p>}
       {pipelineKinds.length > 0 && (

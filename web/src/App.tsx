@@ -18,15 +18,13 @@
 // #800: / shortcut to focus pipeline search input.
 import { lazy, Suspense, useState, useCallback, useMemo, useRef, useEffect, type RefObject } from 'react'
 import { PipelineList } from './components/PipelineList'
-import { PipelineOpsTable } from './components/PipelineOpsTable'
 import PipelineMap from './stationMap/PipelineMap'
-import { StageDrawer } from './stage/StageDrawer'
 import { HealthChip } from './components/HealthChip'
 import { RejectedLiveBanner } from './components/RejectedLiveBanner'
 import { InsecureConnectionBanner } from './components/InsecureConnectionBanner'
 import { Breadcrumb } from './components/Breadcrumb'
-import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
-import { Badge, ErrorNotice, Icon, Kbd, TabPanel, Tabs } from './ui'
+import type { PaletteCommand } from './components/CommandPalette'
+import { Badge, ErrorNotice, Icon, Kbd, Skeleton, TabPanel, Tabs } from './ui'
 import { NotFound } from './components/NotFound'
 import { PipelineConditions } from './components/PipelineConditions'
 import { NARROW_QUERY, useMediaQuery } from './useMediaQuery'
@@ -42,29 +40,32 @@ import { approvalsWaiting } from './approvals/approvalsModel'
 // badge count (approvalsModel) stays in the first bundle.
 const ApprovalsPage = lazy(() => import('./approvals/ApprovalsPage').then(m => ({ default: m.ApprovalsPage })))
 
-/** What #/approvals shows while its code loads: the page's frame, in tokens. */
+/** What #/approvals shows while its code loads. */
 function ApprovalsLoading() {
-  return (
-    <section className="app-lazy" aria-busy="true">
-      <p role="status" className="app-lazy__status">Loading approvals…</p>
-      <span className="app-lazy__bar app-lazy__bar--title" aria-hidden="true" />
-      <span className="app-lazy__bar" aria-hidden="true" />
-      <span className="app-lazy__bar" aria-hidden="true" />
-    </section>
-  )
+  return <Skeleton label="Loading approvals…" rows={3} className="app-lazy" />
 }
 import type { StageCommand } from './stage/StageDrawer'
 import { BundleTimeline } from './components/BundleTimeline'
-import { BundleDiffPanel } from './components/BundleDiffPanel'
+// The palette and the comparison panel load when first opened: not part of the initial load.
+const CommandPalette = lazy(() => import('./components/CommandPalette').then(m => ({ default: m.CommandPalette })))
+// The stage drawer and the shortcuts help load when first opened (the drawer's code is
+// prefetched with the palette's, so a click on a station opens it at once).
+const StageDrawer = lazy(() => import('./stage/StageDrawer').then(m => ({ default: m.StageDrawer })))
+const KeyboardShortcutsPanel = lazy(() => import('./components/KeyboardShortcutsPanel').then(m => ({ default: m.KeyboardShortcutsPanel })))
+// The Activity and Metrics tabs and the operations table load when first shown.
+const PipelineOpsTable = lazy(() => import('./components/PipelineOpsTable').then(m => ({ default: m.PipelineOpsTable })))
+const PolicyGatesPanel = lazy(() => import('./components/PolicyGatesPanel').then(m => ({ default: m.PolicyGatesPanel })))
+const ReleaseMetricsBar = lazy(() => import('./components/ReleaseMetricsBar').then(m => ({ default: m.ReleaseMetricsBar })))
+const PromotionErrorsPanel = lazy(() => import('./components/PromotionErrorsPanel'))
+/** When the page is idle enough to fetch the palette's code (ms after the first render). */
+const PREFETCH_MS = 1500
+const BundleDiffPanel = lazy(() => import('./components/BundleDiffPanel').then(m => ({ default: m.BundleDiffPanel })))
 import { BundleTypeBadge } from './components/BundleTypeBadge'
-import { PolicyGatesPanel } from './components/PolicyGatesPanel'
 import { FleetHealthBar, filterPipelines, isFleetFilter, type FleetFilter } from './components/FleetHealthBar'
 import { FleetBoard } from './components/FleetBoard'
-import { ReleaseMetricsBar } from './components/ReleaseMetricsBar'
 import { ActionBar } from './components/ActionBar'
 import { CreateBundleButton } from './components/CreateBundleDialog'
 import EmptyState from './components/EmptyState'
-import PromotionErrorsPanel from './components/PromotionErrorsPanel'
 import CopyButton from './components/CopyButton'
 import { formatRelativeAge } from './components/approvalAge'
 import { CIRunLink } from './components/CIRunLink'
@@ -78,7 +79,6 @@ import { EMPTY_URL_STATE, serializeHash, useUrlState, type PipelineTab } from '.
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
 import { resolveShownBundle } from './bundleSelection'
 import { terminalEnvironments } from './fleetModel'
-import { KeyboardShortcutsPanel } from './components/KeyboardShortcutsPanel'
 
 import type { AccessCheck, Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep, PolicyGate } from './types'
 import { bundleVersion } from './stage/stageModel'
@@ -179,6 +179,16 @@ export function App() {
     const node = graph.nodes?.find(matches)
     if (node) setSelectedNodeLocal(node)
   }, [graph, urlState, selectedNode, setUrlState])
+
+
+  // The palette's code loads while the page is idle, so the first ⌘K opens at once.
+  useEffect(() => {
+    const t = setTimeout(() => { void import('./components/CommandPalette'); void import('./stage/StageDrawer') }, PREFETCH_MS)
+    return () => clearTimeout(t)
+  }, [])
+
+  // What the Table's rows read for the stage drawer's actions.
+  const stageData = useMemo(() => ({ steps: activeSteps, gates }), [activeSteps, gates])
 
   // U3: the environment whose stage drawer is open (the …/env/<env> route).
   const stageEnv = urlState.env
@@ -685,9 +695,15 @@ export function App() {
       </a>
       {/* #746: Keyboard shortcuts help panel — rendered at root level so it overlays all content. */}
       {showShortcutsPanel && (
-        <KeyboardShortcutsPanel onClose={() => setShowShortcutsPanel(false)} />
+        <Suspense fallback={null}>
+          <KeyboardShortcutsPanel onClose={() => setShowShortcutsPanel(false)} />
+        </Suspense>
       )}
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={paletteCommands} />
+      {paletteOpen && (
+        <Suspense fallback={<Skeleton label="Loading the command palette…" rows={3} className="app-palette-loading" />}>
+          <CommandPalette open onClose={() => setPaletteOpen(false)} commands={paletteCommands} />
+        </Suspense>
+      )}
       <p role="status" className="app-shortcut-note" data-shown={shortcutNote ? true : undefined}>{shortcutNote}</p>
       {/* Sidebar; below the md breakpoint a drawer over the page, opened from the top bar. */}
       {narrow && navOpen && <SidebarFocus sidebarRef={sidebarRef} onClose={closeNav} />}
@@ -806,6 +822,7 @@ export function App() {
             {topbarTools}
           </div>
           {insecureBanner}
+          <Suspense fallback={<Skeleton label="Loading the operations table…" />}>
           <PipelineOpsTable
             pipelines={pipelines}
             selected={selectedPipeline}
@@ -815,6 +832,7 @@ export function App() {
             error={pipelinesError}
             onRetry={() => { void manualRefresh() }}
           />
+          </Suspense>
         </main>
       ) : (
         <>{/* Main area — column layout for header + content row */}
@@ -999,11 +1017,13 @@ export function App() {
                     const compareBundleObj = bundles.find(b => b.name === urlState.compare)
                     if (!compareBundleObj) return null
                     return (
-                      <BundleDiffPanel
-                        bundleA={activeBundle}
-                        bundleB={compareBundleObj}
-                        onClose={closeDiffPanel}
-                      />
+                      <Suspense fallback={<Skeleton label="Loading the comparison…" />}>
+                        <BundleDiffPanel
+                          bundleA={activeBundle}
+                          bundleB={compareBundleObj}
+                          onClose={closeDiffPanel}
+                        />
+                      </Suspense>
                     )
                   })()
                 )}
@@ -1028,6 +1048,13 @@ export function App() {
                         onOpenGate={id => { const n = graph?.nodes.find(x => x.id === id); if (n) setSelectedNode(n) }}
                         gates={shownGates}
                         bundles={bundles}
+                        // Narrow screens open on the Table, the map's linear equivalent (DESIGN-SYSTEM §3.5).
+                        as={urlState.as ?? (narrow ? 'table' : 'map')}
+                        // A choice is kept in the link, Map included (a narrow screen would open on the Table).
+                        onAs={v => setUrlState({ as: v === 'map' && !narrow ? undefined : v })}
+                        onSelectVersion={handleTimelineBundleSelect}
+                        onCompareVersion={b => { setCompareTarget(b); setUrlState({ compare: b }) }}
+                        stageData={stageData}
                       />
                     </ErrorBoundary>
                   </div>
@@ -1036,6 +1063,7 @@ export function App() {
                       beside the page at lg and wider, a modal sheet narrower. */}
                   {stageEnv && activePipeline && (
                     <ErrorBoundary fallbackMessage="Details unavailable">
+                      <Suspense fallback={<Skeleton label={`Loading the details of ${stageEnv}…`} className="app-drawer-loading" />}>
                       <StageDrawer
                         namespace={activePipeline.namespace}
                         pipeline={activePipeline.name}
@@ -1047,6 +1075,7 @@ export function App() {
                         onChanged={() => { void manualRefresh() }}
                         commandRef={drawerCommand}
                       />
+                      </Suspense>
                     </ErrorBoundary>
                   )}
                 </div>
@@ -1074,7 +1103,7 @@ export function App() {
             </TabPanel>
 
             <TabPanel id="activity" hidden={pipelineTab !== 'activity'} className="app-tab">
-              {pipelineTab === 'activity' && (<>
+              {pipelineTab === 'activity' && (<Suspense fallback={<Skeleton label="Loading the activity…" />}>
                 {/* #528: failures grouped across environments; a click opens the environment on the map. */}
                 <PromotionErrorsPanel
                   steps={activeSteps}
@@ -1085,18 +1114,18 @@ export function App() {
                 />
                 {/* #340: the shown version's gates, their conditions and approvals. */}
                 <PolicyGatesPanel currentBundle={activePipeline?.activeBundleName} gates={shownGates} loading={gatesLoading} onDecided={() => { void manualRefresh() }} />
-              </>)}
+              </Suspense>)}
             </TabPanel>
 
             <TabPanel id="metrics" hidden={pipelineTab !== 'metrics'} className="app-tab">
-              {pipelineTab === 'metrics' && (<>
+              {pipelineTab === 'metrics' && (<Suspense fallback={<Skeleton label="Loading the metrics…" rows={2} />}>
                 {/* #504: Release efficiency metrics bar — inline metrics for the pipeline. */}
                 <ReleaseMetricsBar
                   bundles={bundles}
                   finalEnvironments={terminalEnvironments(activePipeline?.environmentTopology, activePipeline?.topologyResolved)}
                   deploymentMetrics={activePipeline?.deploymentMetrics}
                 />
-              </>)}
+              </Suspense>)}
             </TabPanel>
             </>
             ) : null}

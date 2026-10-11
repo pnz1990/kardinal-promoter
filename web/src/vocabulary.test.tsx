@@ -11,7 +11,7 @@
 // pipeline tab, both detail panels, each confirm dialog and the message after it, the approvals
 // list, the ship and compare dialogs, help, the palette, an empty pipeline, an empty cluster and
 // a failed read.
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { render, screen, act, fireEvent, within, cleanup } from '@testing-library/react'
 import type { Bundle, GraphResponse, Pipeline, PolicyGate } from './types'
 import { DISPLAY_STATES } from './displayStates.gen'
@@ -106,6 +106,13 @@ vi.mock('./api/client', () => ({
 }))
 
 import { App } from './App'
+
+// The lazily loaded views: load their code first, as the page prefetches it.
+beforeAll(async () => {
+  await Promise.all([import('./stage/StageDrawer'), import('./components/BundleDiffPanel'), import('./components/CommandPalette'),
+    import('./components/KeyboardShortcutsPanel'), import('./stationMap/StageTable'), import('./stationMap/VersionMatrix'),
+    import('./components/PolicyGatesPanel'), import('./components/PromotionErrorsPanel'), import('./components/ReleaseMetricsBar'), import('./components/PipelineOpsTable')])
+})
 
 /** The raw API values that have a different display label in every kind: they must not show. */
 const RAW_STATES = (() => {

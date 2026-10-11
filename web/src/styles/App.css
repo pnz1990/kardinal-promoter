@@ -342,27 +342,21 @@
 .app[data-narrow] .app-map-head { padding-inline: var(--k-space-3); }
 .app[data-narrow] .app-content { padding-inline: var(--k-space-3); }
 
-/* U7: a lazily loaded view's frame while its code arrives. */
-.app-lazy {
-  display: flex;
-  flex-direction: column;
-  gap: var(--k-space-3);
-  max-inline-size: var(--k-layout-measure);
-  padding: var(--k-space-8) var(--k-space-6);
-}
-.app-lazy__status {
-  margin: 0;
-  color: var(--k-ink-3);
-  font-size: var(--k-text-sm);
-}
-.app-lazy__bar {
-  display: block;
-  block-size: var(--k-space-4);
-  border-radius: var(--k-radius-1);
-  background: var(--k-surface-sunken);
-}
-.app-lazy__bar--title {
-  inline-size: 40%;
-  block-size: var(--k-space-6);
-}
+/* U7: the approvals inbox's frame while its code arrives (the Skeleton inside). */
+.app-lazy { max-inline-size: var(--k-layout-measure); padding: var(--k-space-8) var(--k-space-6); }
 
+/* The command palette's place while its code loads (first ⌘K): where the palette opens. */
+.app-palette-loading {
+  position: fixed;
+  z-index: var(--k-z-palette);
+  inset-block-start: var(--k-space-12);
+  inset-inline: 0;
+  margin-inline: auto;
+  inline-size: var(--k-layout-drawer);
+  background: var(--k-surface-raised);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-3);
+  box-shadow: var(--k-elev-2);
+}
+/* The stage drawer's place while its code loads: its column. */
+.app-drawer-loading { inline-size: var(--k-layout-drawer); flex-shrink: 0; background: var(--k-surface-raised); border-inline-start: var(--k-border-hairline) solid var(--k-line); }

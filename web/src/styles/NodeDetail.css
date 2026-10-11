@@ -31,10 +31,6 @@
 }
 .node-detail__hint--flush { margin-block-end: 0; }
 
-/* Promote and roll back */
-
-/* Loading skeleton */
-
 /* Promotion steps, with the waterfall */
 .node-detail__steps {
   margin: 0;
@@ -82,8 +78,6 @@
 }
 .node-detail__step[data-step-state="Completed"] .node-detail__bar { opacity: 0.75; }
 
-/* CEL expression */
-
 .cel-block {
   display: block;
   padding: var(--k-space-2) var(--k-space-3);
@@ -102,12 +96,3 @@
 .cel-token--operator { color: var(--k-syntax-punct); }
 .cel-token--identifier { color: var(--k-syntax-ident); }
 .cel-token--plain { color: var(--k-ink-2); }
-
-/* Images being promoted */
-
-/* Pull request */
-/* Ink fill and size come from .k-button--primary (ui.css); red is never a button fill. */
-
-/* Step outputs */
-
-/* Conditions */
