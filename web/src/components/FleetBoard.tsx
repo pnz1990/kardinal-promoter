@@ -17,7 +17,7 @@ interface FleetBoardProps {
   pipelines: Pipeline[]
   /** Total before the sidebar filter, for the "showing N of M" note. */
   total: number
-  /** Opens a pipeline; with env, its stage drawer for that environment. */
+  /** Opens a pipeline; a station passes its environment, which opens that environment's details. */
   onSelect: (name: string, namespace: string, env?: string) => void
   now?: number
 }

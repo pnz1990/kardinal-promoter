@@ -11,7 +11,7 @@
 // through the API, and the Go test checks it is paused.
 
 import { test, expect, type Page, type Request, type Route } from '@playwright/test'
-import { need, openPipeline, pipelineHash, filterSidebar, sidebarRows, sidebarRow, dagNode, PIPELINE, stageDrawer, drawerHeading } from './live'
+import { need, openPipeline, pipelineHash, route, filterSidebar, sidebarRows, sidebarRow, dagNode, PIPELINE, stageDrawer, drawerHeading } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -24,7 +24,6 @@ const isPipelinesPoll = (url: URL | string) => new URL(url.toString()).pathname 
 const filter = (page: Page) => page.getByRole('textbox', { name: 'Filter pipelines by name or namespace' })
 const shortcuts = (page: Page) => page.getByRole('dialog', { name: 'Keyboard shortcuts' })
 const details = (page: Page) => stageDrawer(page)
-const hashParams = (page: Page) => new URLSearchParams(new URL(page.url()).hash.slice(1))
 const heading = (page: Page) => page.getByRole('heading', { level: 1 })
 /** The "refreshed ago" indicator inside the Refresh data button. */
 const indicator = (page: Page) => page.getByRole('button', { name: 'Refresh data' }).locator('span[aria-live="polite"]')
@@ -101,6 +100,7 @@ test('keyboard shortcuts: / focuses the filter, ? shows the help, r refreshes, E
   await expect(help).toHaveAttribute('aria-modal', 'true')
   const rows = help.getByRole('row')
   const want: [string, string][] = [
+    ['⌘K / Ctrl+K', 'Go to a pipeline, environment or version, or run an action'],
     ['/', 'Focus pipeline search'],
     ['?', 'Show / hide this help panel'],
     ['r', 'Refresh data now'],
@@ -126,13 +126,13 @@ test('keyboard shortcuts: / focuses the filter, ? shows the help, r refreshes, E
   await help.click({ position: { x: 5, y: 5 } })
   await expect(help).toHaveCount(0)
 
-  // Esc closes the stage drawer, and the link loses the environment (node=<env>, #1701).
+  // Esc closes the stage drawer, and the link loses the environment.
   await dagNode(page, 'test').click()
   await expect(drawerHeading(page)).toHaveText('test')
-  expect(hashParams(page).get('node')).toBe('test')
+  expect(route(page).env).toBe('test')
   await page.keyboard.press('Escape')
   await expect(details(page)).toHaveCount(0)
-  await expect.poll(() => hashParams(page).get('node')).toBeNull()
+  await expect.poll(() => route(page).env ?? route(page).node ?? null).toBeNull()
 
   // "r" fetches the data at once, without waiting for the next poll.
   await page.locator('body').click({ position: { x: 1, y: 1 } })
@@ -192,23 +192,23 @@ test('a link opens the pipeline and node it names, and Back and Forward walk the
   await expect(drawerHeading(page)).toHaveText('test')
   await expect(dagNode(page, 'test')).toHaveAttribute('aria-pressed', 'true')
 
-  // Closing the drawer is one history entry. A link may name the step; the drawer opens its environment.
+  // Closing the details is one history entry.
   await details(page).getByRole('button', { name: 'Close test' }).click()
   await expect(details(page)).toHaveCount(0)
-  await expect.poll(() => hashParams(page).get('node')).toBeNull()
+  await expect.poll(() => route(page).env ?? route(page).node ?? null).toBeNull()
   await page.goBack()
   await expect(drawerHeading(page)).toHaveText('test')
-  expect(hashParams(page).get('node')).toBe(testStep)
+  expect(route(page).env).toBe('test')
   await page.goForward()
-  await expect.poll(() => hashParams(page).get('node')).toBeNull()
+  await expect.poll(() => route(page).env ?? route(page).node ?? null).toBeNull()
   await expect(details(page)).toHaveCount(0)
 
   // So is switching pipelines in the sidebar.
   await filterSidebar(page, ns)
   await sidebarRow(page, idle).click()
   await expect(heading(page)).toHaveText(idle)
-  expect(hashParams(page).get('pipeline')).toBe(idle)
-  expect(hashParams(page).get('ns')).toBe(ns)
+  expect(route(page).pipeline).toBe(idle)
+  expect(route(page).ns).toBe(ns)
   // No Bundle: the DAG is the pipeline's environments, not started.
   await expect(dagNode(page, 'test')).toHaveAttribute('aria-label', 'test — Not reached')
   await page.goBack()

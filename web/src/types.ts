@@ -42,6 +42,9 @@ export interface Pipeline {
   deployed?: Record<string, DeployedRelease>
   /** Pipeline.status.deploymentMetrics, computed by the controller (DORA). */
   deploymentMetrics?: DeploymentMetrics
+  /** Pipeline.status.summary: one sentence on where its versions are (P1, #1707), e.g.
+   *  "1.5.0 live in test, uat; waiting for PR merge in prod (#42)". */
+  summary?: string
 }
 
 /** What one environment runs: the newest PromotionStep there that landed its change. */

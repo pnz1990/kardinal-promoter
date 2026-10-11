@@ -11,7 +11,7 @@
 // and the name of their test step.
 
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { need, needJSON, openPipeline, dagNode, PIPELINE } from './live'
+import { need, needJSON, openPipeline, route, dagNode, PIPELINE } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -22,7 +22,6 @@ const [older, newer] = needJSON<Entry[]>('KARDINAL_UI_BUNDLES')
 const chips = (page: Page) => page.locator('.bundle-chip')
 const chip = (page: Page, b: Entry) => page.locator(`.bundle-chip[title^="${b.name}: "]`)
 const comparison = (page: Page) => page.getByRole('dialog', { name: 'Bundle comparison' })
-const hashParams = (page: Page) => new URLSearchParams(new URL(page.url()).hash.slice(1))
 
 /** expectShown checks that b is the Bundle on screen: chip, provenance, DAG. */
 async function expectShown(page: Page, b: Entry, other: Entry) {
@@ -118,7 +117,7 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
   await expect(chip(page, newer)).toHaveClass(/bundle-chip--compare/)
   await expect(chip(page, newer)).toContainText('⇅B')
   await expect(comparison(page)).toHaveCount(0)
-  expect(hashParams(page).get('bundle')).toBeNull()
+  expect((route(page).compare ?? null)).toBeNull()
   const compare = page.getByRole('button', { name: 'Compare ↔' })
   const clear = page.getByRole('button', { name: '× clear' })
   await expect(clear).toBeVisible()
@@ -126,13 +125,13 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
   const panel = comparison(page)
   await expect(panel).toBeVisible()
   await expectComparison(panel, older, newer)
-  expect(hashParams(page).get('bundle')).toBe(newer.name)
+  expect((route(page).compare ?? null)).toBe(newer.name)
 
   // Closing keeps Bundle B and puts focus back on Compare, so the keyboard
   // opens it again; Esc closes it.
   await panel.getByRole('button', { name: 'Close comparison' }).click()
   await expect(panel).toHaveCount(0)
-  await expect.poll(() => hashParams(page).get('bundle')).toBeNull()
+  await expect.poll(() => (route(page).compare ?? null)).toBeNull()
   await expect(chip(page, newer)).toHaveClass(/bundle-chip--compare/)
   await expect(compare).toBeFocused()
   await page.keyboard.press('Enter')
@@ -147,18 +146,18 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
   await expect(chip(page, newer)).not.toHaveClass(/bundle-chip--compare/)
   await expect(compare).toHaveCount(0)
   await expect(page.getByText('Shift-click to compare', { exact: true })).toBeVisible()
-  expect(hashParams(page).get('bundle')).toBeNull()
+  expect((route(page).compare ?? null)).toBeNull()
   await expectShown(page, older, newer)
 })
 
-test('a link with bundle= opens the comparison with the Bundle on screen', async ({ page }) => {
-  await openPipeline(page, base, ns, PIPELINE, { bundle: older.name })
+test('a link with compare= opens the comparison with the Bundle on screen', async ({ page }) => {
+  await openPipeline(page, base, ns, PIPELINE, { compare: older.name })
   const panel = comparison(page)
   await expect(panel).toBeVisible()
   await expectComparison(panel, newer, older)
   await page.keyboard.press('Escape')
   await expect(panel).toHaveCount(0)
-  await expect.poll(() => hashParams(page).get('bundle')).toBeNull()
+  await expect.poll(() => (route(page).compare ?? null)).toBeNull()
   await expectShown(page, newer, older)
   // The linked Bundle stays Bundle B, as after Compare.
   await expect(chip(page, older)).toHaveClass(/bundle-chip--compare/)
