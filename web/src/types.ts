@@ -45,9 +45,32 @@ export interface Pipeline {
   /** Pipeline.status.summary: one sentence on where its versions are (P1, #1707), e.g.
    *  "1.5.0 live in test, uat; waiting for PR merge in prod (#42)". */
   summary?: string
+  /** Pipeline.status.environments (P1, #1707; served since #1727): per environment, fleets
+   *  expanded, what runs there and where the newest version stands. States go through displayState. */
+  environments?: PipelineEnvironment[]
   /** Pipeline.status.conditions (#1727): Ready (reasons such as ValidationFailed and
    *  GitCredentialMissing), Paused, PathConflict and the SecretReferenceable warning. */
   conditions?: Condition[]
+}
+
+/** One entry of Pipeline.status.environments (P1). States go through displayState. */
+export interface PipelineEnvironment {
+  name: string
+  /** What runs there. */
+  bundle?: string
+  version?: string
+  /** A newer Bundle on its way in. */
+  incomingBundle?: string
+  incomingVersion?: string
+  /** The newest Bundle's step state there (Pending when gates hold it; "" when not reached). */
+  state?: string
+  /** RFC 3339: Verified time, else when this state was first recorded. */
+  since?: string
+  /** Gates holding it. */
+  blockedBy?: string[]
+  prURL?: string
+  /** A rollback hold keeps it on bundle. */
+  held?: boolean
 }
 
 /** A Kubernetes status condition, as the UI API serves it. */

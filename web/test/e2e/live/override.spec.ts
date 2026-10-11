@@ -13,7 +13,7 @@
 // (POST /api/v1/ui/override), and the Go test checks the instance.
 
 import { test, expect } from '@playwright/test'
-import { need, openPipeline, dagNode, stageDrawer, drawerHeading } from './live'
+import { need, openPipeline, gateMark, stageDrawer, drawerHeading } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -30,7 +30,7 @@ test('Override gate in the stage drawer asks first, then overrides the gate in p
     if (r.method() !== 'GET' && !(r.method() === 'POST' && reads.includes(path))) writes.push(`${r.method()} ${path}`)
   })
   await openPipeline(page, base, ns)
-  await dagNode(page, holdGate).click()
+  await gateMark(page, holdGate).click()
   const drawer = stageDrawer(page)
   await expect(drawerHeading(page)).toHaveText('prod')
   const why = drawer.locator('[data-section="why"] .stage-why__item').filter({ hasText: `Held by gate ${holdGate}.` })

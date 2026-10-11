@@ -277,7 +277,9 @@ describe('App pipeline header', () => {
     h.state.bundles = { app: [] }
     render(<App />)
     await flush()
-    expect(screen.getByTestId('dag-static-banner')).toBeInTheDocument()
+    // The map shows the pipeline's environments, none reached yet.
+    expect(document.querySelector('.station-map [data-station="test"]')?.getAttribute('aria-label')).toMatch(/^test — Not reached/)
+    expect(document.querySelector('.station-map [data-station="prod"]')).toBeInTheDocument()
     // One primary action: the call to action; the header's Ship a version steps back.
     expect(screen.getByRole('button', { name: 'Ship a version of app' }).className).toContain('k-button--secondary')
     fireEvent.click(screen.getByRole('button', { name: 'Ship your first version of app' }))
@@ -678,9 +680,11 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
     gateCase(false)
     render(<App />)
     await flush()
-    expect(screen.queryByText(/gates? blocking/)).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Show blocked' })).not.toBeInTheDocument()
-    expect(screen.getByLabelText('soak — Not ready')).toBeInTheDocument()
+    // The map mounts the gate on the edge into prod, not ready, not blocking; the
+    // attention strip does not count it (the bundle has not reached it).
+    expect(screen.getByRole('button', { name: 'gate soak, Not ready' })).toBeInTheDocument()
+    expect(screen.queryByText(/blocked by/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Needs attention' })).not.toBeInTheDocument()
     await openGates()
     expect(screen.queryByText(/\d+ blocked/)).not.toBeInTheDocument()
     expect(screen.getByText('1 waiting')).toBeInTheDocument()
@@ -700,8 +704,9 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
     gateCase(true)
     render(<App />)
     await flush()
-    expect(screen.getByText('1 gate blocking prod')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Show blocked' })).toBeInTheDocument()
+    // The map's attention strip names the gate, and the gate is a blocking mark on its edge.
+    expect(screen.getByRole('button', { name: '1 blocked by soak' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'gate soak, Blocking' })).toBeInTheDocument()
     await openGates()
     expect(screen.getByText('1 blocked')).toBeInTheDocument()
   })

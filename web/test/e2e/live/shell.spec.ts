@@ -11,7 +11,7 @@
 // through the API, and the Go test checks it is paused.
 
 import { test, expect, type Page, type Request, type Route } from '@playwright/test'
-import { need, openPipeline, pipelineHash, route, filterSidebar, sidebarRows, sidebarRow, dagNode, PIPELINE, stageDrawer, drawerHeading } from './live'
+import { need, openPipeline, pipelineHash, route, filterSidebar, sidebarRows, sidebarRow, station, PIPELINE, stageDrawer, drawerHeading } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -130,9 +130,12 @@ test('keyboard shortcuts: / focuses the filter, ? shows the help, r refreshes, E
   await expect(help).toHaveCount(0)
 
   // Esc closes the stage drawer, and the link loses the environment.
-  await dagNode(page, 'test').click()
+  await station(page, 'test').click()
   await expect(drawerHeading(page)).toHaveText('test')
   expect(route(page).env).toBe('test')
+  // Focus is on the map's station: the first Esc is the map's (it resets the zoom), the next closes the drawer.
+  await page.keyboard.press('Escape')
+  await expect(details(page)).toHaveCount(1)
   await page.keyboard.press('Escape')
   await expect(details(page)).toHaveCount(0)
   await expect.poll(() => route(page).env ?? route(page).node ?? null).toBeNull()
@@ -193,7 +196,7 @@ test('the theme follows the system until the user picks one, which the next visi
 test('a link opens the pipeline and node it names, and Back and Forward walk the selections', async ({ page }) => {
   await openPipeline(page, base, ns, PIPELINE, { node: testStep })
   await expect(drawerHeading(page)).toHaveText('test')
-  await expect(dagNode(page, 'test')).toHaveAttribute('aria-pressed', 'true')
+  await expect(station(page, 'test')).toHaveAttribute('aria-current', 'true')
 
   // Closing the details is one history entry.
   await details(page).getByRole('button', { name: 'Close test' }).click()
@@ -212,11 +215,11 @@ test('a link opens the pipeline and node it names, and Back and Forward walk the
   await expect(heading(page)).toHaveText(idle)
   expect(route(page).pipeline).toBe(idle)
   expect(route(page).ns).toBe(ns)
-  // No Bundle: the DAG is the pipeline's environments, not started.
-  await expect(dagNode(page, 'test')).toHaveAttribute('aria-label', 'test — Not reached')
+  // No Bundle: the map is the pipeline's environments, not reached.
+  await expect(station(page, 'test')).toHaveAttribute('aria-label', /^test — Not reached, /)
   await page.goBack()
   await expect(heading(page)).toHaveText(PIPELINE)
-  await expect(dagNode(page, 'test')).toHaveAttribute('aria-label', 'test — Live')
+  await expect(station(page, 'test')).toHaveAttribute('aria-label', /^test — Live, /)
   await expect(details(page)).toHaveCount(0)
   await page.goForward()
   await expect(heading(page)).toHaveText(idle)
