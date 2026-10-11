@@ -2371,7 +2371,8 @@ func TestChart_Demo(t *testing.T) {
 
 	// demo.secretRef: a Secret whose token the git server refuses stops the
 	// push; the real token in the same Secret lets the same Bundle land.
-	secret(t, e, ns, "demo-git", "token", randomHex(t, 20))
+	require.NoError(t, e.Client.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "demo-git",
+		Labels: map[string]string{"kardinal.io/referenceable": "true"}}, Data: map[string][]byte{"token": []byte(randomHex(t, 20))}}))
 	r.Upgrade(t, demo(framework.Values{"secretRef": framework.Values{"name": "demo-git"}}))
 	require.NoError(t, e.Client.Get(ctx, key, &p))
 	require.NotNil(t, p.Spec.Git.SecretRef)
