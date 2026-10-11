@@ -95,7 +95,7 @@ func explainWatch(ctx context.Context, w io.Writer, c sigs_client.Client,
 			_, _ = fmt.Fprint(w, "\033[H\033[2J")
 		}
 		if err := explainOnce(w, c, ns, pipeline, envFilter, forceColor); err != nil {
-			_, _ = fmt.Fprintf(w, "error: %v\n", err)
+			_, _ = fmt.Fprintf(w, "error: %v\n", HumanError(err))
 		}
 		_, _ = fmt.Fprintln(w, "\n(watching — press Ctrl-C to quit)")
 		select {

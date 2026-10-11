@@ -16,6 +16,7 @@ package cmd
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -80,6 +81,11 @@ kardinal-test-app image.`,
   kardinal init --demo --scaffold-gitops && kubectl apply -f pipeline.yaml`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := runInitWizard(cmd.InOrStdin(), cmd.ErrOrStderr())
+			var eof *initEOFError
+			if errors.As(err, &eof) {
+				return fmt.Errorf("kardinal init asks its questions on a terminal, and its input ended at %q (%v): "+
+					"run it in a terminal, or pipe one answer per line", eof.label, eof.err)
+			}
 			if err != nil {
 				return fmt.Errorf("init wizard: %w", err)
 			}
@@ -233,7 +239,7 @@ func runInitWizard(in io.Reader, out io.Writer) (*InitConfig, error) {
 				return answer, nil
 			}
 			if err == io.EOF {
-				return "", fmt.Errorf("%s: %w", label, verr)
+				return "", &initEOFError{label: label, err: verr}
 			}
 			if _, err := fmt.Fprintf(out, "  %v\n", verr); err != nil {
 				return "", fmt.Errorf("prompt write: %w", err)
@@ -352,3 +358,12 @@ Use --scaffold-gitops to also create the GitOps repository structure:
 The scaffold is Kustomize-only; it is skipped for the helm strategy.
 
 Use --demo to scaffold with the kardinal-test-app placeholder image.`
+
+// initEOFError is the wizard's input ending before a required answer.
+type initEOFError struct {
+	label string
+	err   error
+}
+
+func (e *initEOFError) Error() string { return fmt.Sprintf("%s: %v", e.label, e.err) }
+func (e *initEOFError) Unwrap() error { return e.err }
