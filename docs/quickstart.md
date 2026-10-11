@@ -2,7 +2,7 @@
 
 This guide walks you through setting up your first promotion pipeline with kardinal-promoter. By the end, you will have a working pipeline that promotes the `kardinal-test-app` through test, uat, and prod environments using Git pull requests.
 
-## Fast Start — under 10 minutes
+## Fast Start — about 10 minutes
 
 Install with `demo.enabled=true` and you get a pre-configured
 Pipeline named `demo` in the release namespace. It pushes to the repository in
@@ -53,7 +53,7 @@ kardinal create bundle demo -n kardinal-system \
 The demo Pipeline uses your fork of the `kardinal-demo` GitOps repo (it already has the
 correct Kustomize layout). Test and uat environments promote automatically; prod opens a PR for review.
 
-!!! note "Estimated time: under 10 minutes on a fresh kind cluster"
+!!! note "Estimated time: about 10 minutes on a fresh kind cluster"
     Prerequisites: kind cluster, `helm`, `kubectl`, the `kardinal` CLI
     ([Install the CLI](installation.md#3-install-the-cli)), Argo CD, and a GitHub PAT
     with write access to the repository in `demo.git.url`. Point the ApplicationSet

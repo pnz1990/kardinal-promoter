@@ -8,9 +8,9 @@
 
 Your CI builds a version. kardinal moves it through your environments by writing to Git, and
 gates decide when it may go further: no deploys on weekends, 30 minutes in uat first, two
-approvers for prod. Every production change is a pull request that shows what is shipping, which
-gates passed and how the earlier environments did. It works with Argo CD, Flux or plain
-Kubernetes, and keeps all its state in Kubernetes.
+approvers for prod. With `approval: pr-review`, each prod change is a pull request that shows what
+is shipping, which gates passed and how the earlier environments did. It works with Argo CD, Flux or plain
+Kubernetes. No database or extra services: the UI ships inside the controller.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -28,6 +28,9 @@ spec:
       approval: pr-review
 ```
 
+By default each environment deploys the `environments/<name>` directory of the repository, and
+kardinal checks the Deployment `my-app` in the namespace `<name>`.
+
 ```bash
 kardinal create bundle my-app --image ghcr.io/myorg/my-app:1.29.0   # ship a version
 kardinal explain my-app --env prod                                   # why is it not in prod yet?
@@ -35,7 +38,7 @@ kardinal explain my-app --env prod                                   # why is it
 
 <div class="grid cards" markdown>
 
--   :material-clock-fast:{ .lg .middle } **Try it in 10 minutes**
+-   :material-clock-fast:{ .lg .middle } **Try it in about 10 minutes**
 
     ---
 
@@ -88,8 +91,8 @@ graph LR
 4. **A pull request** is opened for review where an environment uses `approval: pr-review`, with
    the evidence in its body.
 
-[Concepts](concepts.md) explains the four words this needs: version, pipeline, environment and
-gate. To install, see [Install](installation.md). To compare with Kargo and GitOps Promoter, see
+Start with the [Quickstart](quickstart.md), then [Concepts](concepts.md), which explains the four
+words this needs: version, pipeline, environment and gate. To install, see [Install](installation.md). To compare with Kargo and GitOps Promoter, see
 the [comparison](comparison.md).
 
 ## Community

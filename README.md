@@ -17,9 +17,9 @@
 
 Your CI builds a version. kardinal moves it through your environments by writing to Git, and
 **gates** decide when it may go further: no deploys on weekends, 30 minutes in uat first,
-two approvers for prod. Every production change is a pull request that shows what is
-shipping, which gates passed and how the earlier environments did. It works with Argo CD, Flux
-or plain Kubernetes, and keeps all its state in Kubernetes.
+two approvers for prod. With `approval: pr-review`, each prod change is a pull request that
+shows what is shipping, which gates passed and how the earlier environments did. It works with Argo CD, Flux
+or plain Kubernetes.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -37,6 +37,9 @@ spec:
       approval: pr-review
 ```
 
+By default each environment deploys the `environments/<name>` directory of the repository, and
+kardinal checks the Deployment `my-app` in the namespace `<name>`.
+
 ```bash
 kardinal create bundle my-app --image ghcr.io/myorg/my-app:1.29.0   # ship a version
 kardinal explain my-app --env prod                                   # why is it not in prod yet?
@@ -50,14 +53,16 @@ Try it in about 10 minutes with the [Quickstart](https://pnz1990.github.io/kardi
   metrics and approvals. `kardinal explain` shows which gate holds a version and why;
   `kardinal policy simulate` tries a rule at any time. Platform teams set org gates that a team
   pipeline cannot remove.
-- **Soak that means healthy.** `bake` requires continuous health, and a health alarm restarts
-  the clock.
+- **Soak time that requires health.** `bake` requires continuous health, and a failed health
+  check restarts the clock.
 - **Pull requests with evidence.** Provenance, gate results and upstream health go into every
-  production PR. Merging it is the approval.
+  production PR. Merging it promotes.
 - **Parallel by design.** Fan out to regions with `dependsOn` or `wave`, or to many clusters
   with fleets.
 - **Rollback and incident controls.** Roll back, hold an environment on the rolled-back
   version, reject a version everywhere or pause a pipeline.
+- **No database or extra services.** The UI ships inside the controller, and all state is in
+  Kubernetes.
 - **Any Git host, any GitOps tool.** GitHub, GitLab, Forgejo, Gitea, Bitbucket Cloud and Data
   Center, Azure DevOps; health from Deployments, Argo CD, Flux, Argo Rollouts or Flagger.
 
@@ -72,6 +77,6 @@ The `kardinal.io/v1alpha1` API may change between minor releases; the
 
 ## Documentation
 
-[pnz1990.github.io/kardinal-promoter](https://pnz1990.github.io/kardinal-promoter/): start with
-[Concepts](docs/concepts.md), then [Install](docs/installation.md). Contributors: see
+[pnz1990.github.io/kardinal-promoter](https://pnz1990.github.io/kardinal-promoter/): start with the
+[Quickstart](docs/quickstart.md), then [Concepts](docs/concepts.md). Contributors: see
 [CONTRIBUTING.md](CONTRIBUTING.md) and [Architecture](docs/architecture.md).

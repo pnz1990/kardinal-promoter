@@ -268,9 +268,9 @@ spec:
 
 ### Step 6: Install kardinal and verify
 
-```bash
-# Install kro and kardinal-promoter first: see docs/installation.md
+Install kro and kardinal-promoter first ([Install](../installation.md)), then:
 
+```bash
 # Apply your Pipeline
 kubectl apply -f pipeline.yaml
 
