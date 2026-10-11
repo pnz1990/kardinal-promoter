@@ -143,6 +143,7 @@ func assertPlain(t *testing.T, out, what string) {
 //
 // Covers CLI-STYLE-01.
 func TestOutput_PlainWhenNotATerminal(t *testing.T) {
+	keepStyle(t)
 	t.Setenv("KUBECONFIG", "/dev/null")
 	// No UTF-8 locale: the stream takes ASCII only, the cluster's text is
 	// folded.
@@ -182,6 +183,7 @@ func TestOutput_PlainWhenNotATerminal(t *testing.T) {
 //
 // Covers CLI-STYLE-01.
 func TestOutput_UTF8Pipe(t *testing.T) {
+	keepStyle(t)
 	t.Setenv("KUBECONFIG", "/dev/null")
 	t.Setenv("LC_ALL", "")
 	t.Setenv("LANG", "en_US.UTF-8")
@@ -224,6 +226,7 @@ func walkJSON(v any, path string, f func(path, s string)) {
 //
 // Covers CLI-STYLE-01.
 func TestOutput_JSONHasNoPlaceholders(t *testing.T) {
+	keepStyle(t)
 	t.Setenv("KUBECONFIG", "/dev/null")
 	c := policyClient(t, outputFixture()...)
 	for _, args := range [][]string{
@@ -249,6 +252,7 @@ func TestOutput_JSONHasNoPlaceholders(t *testing.T) {
 //
 // Covers CLI-STYLE-01.
 func TestOutput_Terminal(t *testing.T) {
+	keepStyle(t)
 	t.Setenv("KUBECONFIG", "/dev/null")
 	c := policyClient(t, outputFixture()...)
 	asTerminal(t, "LANG", "en_US.UTF-8")
@@ -280,6 +284,7 @@ func TestOutput_Terminal(t *testing.T) {
 //
 // Covers CLI-STYLE-01.
 func TestOutput_JSON(t *testing.T) {
+	keepStyle(t)
 	t.Setenv("KUBECONFIG", "/dev/null")
 	t.Setenv("KARDINAL_UI_URL", "")
 	c := policyClient(t, outputFixture()...)

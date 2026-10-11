@@ -298,6 +298,7 @@ func TestRollbackCmd_Hold(t *testing.T) {
 // TestRollbackCmd_HoldFlags (#1528): --reason without --hold is refused
 // before anything is created, and release-hold needs --env.
 func TestRollbackCmd_HoldFlags(t *testing.T) {
+	keepStyle(t)
 	for args, want := range map[string]string{
 		"--reason x":           "--reason is the reason of a hold; add --hold",
 		"--hold":               "rollback --hold needs --reason",

@@ -44,6 +44,7 @@ func executeRoot(t *testing.T, args ...string) (string, error) {
 // E2E-15: an unknown subcommand of a group command is an error, not help
 // with exit 0.
 func TestGroupCommands_UnknownSubcommandFails(t *testing.T) {
+	keepStyle(t)
 	cases := []struct {
 		args    []string
 		wantErr string
@@ -68,6 +69,7 @@ func TestGroupCommands_UnknownSubcommandFails(t *testing.T) {
 // cobra's MarkFlagRequired refuses a missing flag but not an empty value, so
 // the commands check the value too, before they connect to a cluster.
 func TestRequiredFlags_EmptyValueRefused(t *testing.T) {
+	keepStyle(t)
 	t.Setenv("KUBECONFIG", "/dev/null")
 	cases := []struct {
 		args    []string
@@ -87,6 +89,7 @@ func TestRequiredFlags_EmptyValueRefused(t *testing.T) {
 }
 
 func TestGroupCommands_NoArgsShowsHelp(t *testing.T) {
+	keepStyle(t)
 	out, err := executeRoot(t, "get")
 	require.NoError(t, err)
 	assert.Contains(t, out, "Available Commands:")
@@ -96,6 +99,7 @@ func TestGroupCommands_NoArgsShowsHelp(t *testing.T) {
 // C09a-cli-18 / C09b-cli-24: -o is validated, and json/yaml fail on commands
 // that only print tables instead of being ignored.
 func TestOutputFlag_Validated(t *testing.T) {
+	keepStyle(t)
 	cases := []struct {
 		name    string
 		args    []string
