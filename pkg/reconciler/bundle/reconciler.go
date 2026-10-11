@@ -270,12 +270,6 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 
-	// Records a rejection stored but not written yet (the audit outbox).
-	if len(b.Status.PendingAuditEvents) > 0 {
-		if err := r.flushAudit(ctx, &b); err != nil {
-			return ctrl.Result{RequeueAfter: auditRetryDelay}, nil
-		}
-	}
 	// A rejection wins over every phase, Verified and Superseded included,
 	// and is recomputed from spec on every reconcile, so a crash between the
 	// spec write and this status write only delays it.

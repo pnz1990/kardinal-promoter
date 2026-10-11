@@ -734,7 +734,8 @@ func TestUI_BrowserStatic(t *testing.T) {
 
 	// The Dockerfile builds web/ itself, so the asset names are the image's,
 	// not the checkout's web/dist: read them from index.html.
-	types := map[string]string{".js": "javascript", ".css": "text/css", ".png": "image/png"}
+	// The fonts the UI serves itself (#1698) are preloaded from index.html.
+	types := map[string]string{".js": "javascript", ".css": "text/css", ".png": "image/png", ".woff2": "font/woff2"}
 	named := map[string]int{}
 	seen := map[string]bool{}
 	for _, m := range regexp.MustCompile(`(?:src|href)="(/ui/[^"]+)"`).FindAllStringSubmatch(index.Body, -1) {
