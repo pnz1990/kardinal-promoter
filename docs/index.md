@@ -68,16 +68,6 @@ kardinal checks the Deployment `my-app` in the namespace `<name>`.
 
 ## How it works
 
-```mermaid
-%%{init: {'flowchart': {'curve': 'linear'}}}%%
-graph LR
-    CI["CI builds a version"] --> Test["test<br/>commit, health check"]
-    Test --> UAT["uat<br/>commit, health check"]
-    UAT --> Gate{"gates"}
-    Gate --> Prod["prod<br/>pull request, merge, health check"]
-    Prod --> Done["Verified"]
-```
-
 1. **CI creates a version** with the new image and where it came from.
 2. **Each environment in turn** gets the version written to Git (directly, or through a pull
    request), and kardinal checks its health.

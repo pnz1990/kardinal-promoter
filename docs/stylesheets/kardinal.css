@@ -310,6 +310,9 @@ body {
 .md-typeset pre {
   border-radius: var(--k-radius-3);
 }
+.md-typeset pre > code {
+  background-color: var(--k-surface-raised);
+}
 .md-typeset .highlight > pre,
 .md-typeset pre:not(.highlight pre) {
   border: var(--k-border-hairline) solid var(--k-line);

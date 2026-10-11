@@ -25,7 +25,7 @@
           <a class="md-button" href="{{ config.repo_url }}">View on GitHub</a>
         </div>
         <div class="k-hero__cmd">
-          <code tabindex="0">kardinal create bundle my-app --image ghcr.io/myorg/my-app:1.29.0</code>
+          <code>kardinal create bundle my-app --image ghcr.io/myorg/my-app:1.29.0</code>
           <button class="md-clipboard k-hero__copy-btn" type="button" title="Copy the command"
                   aria-label="Copy the command"
                   data-clipboard-text="kardinal create bundle my-app --image ghcr.io/myorg/my-app:1.29.0"></button>
@@ -42,21 +42,23 @@
           <path class="k-edge" d="M60 170 H340 M340 170 L410 100 H520 M340 170 L410 240 H520"/>
 
           <!-- The thread: the followed version, drawn edge by edge. -->
-          <path class="k-thread k-thread--1" pathLength="1" d="M60 170 H200"/>
-          <path class="k-thread k-thread--2" pathLength="1" d="M200 170 H288"/>
+          <path class="k-thread k-thread--1" pathLength="1" d="M60 170 H170"/>
+          <path class="k-thread k-thread--2" pathLength="1" d="M170 170 H288"/>
           <path class="k-thread k-thread--3" pathLength="1" d="M284 170 H340"/>
           <path class="k-thread k-thread--eu" pathLength="1" d="M340 170 L410 100 H520"/>
           <path class="k-thread k-thread--us" pathLength="1" d="M340 170 L410 240 H520"/>
 
-          <!-- The gate, mounted on the edge it guards: a bar that lifts. -->
+          <!-- The gate, mounted on the edge it guards: an arm across the edge that
+               swings open about its post, below the edge, and stays there. -->
           <g class="k-gate">
-            <text class="k-gate__label" x="300" y="128" text-anchor="middle">!schedule.isWeekend</text>
-            <line class="k-gate__bar" x1="300" y1="146" x2="300" y2="194" transform-origin="300 146"/>
+            <line class="k-gate__bar" x1="300" y1="182" x2="300" y2="146" transform-origin="300 182"/>
+            <circle class="k-gate__post" cx="300" cy="182"/>
+            <text class="k-gate__label" x="300" y="214" text-anchor="middle">!schedule.isWeekend</text>
           </g>
 
           <!-- Stations. -->
           <g class="k-station k-station--test"><circle cx="60" cy="170"/><text x="60" y="206" text-anchor="middle">test</text></g>
-          <g class="k-station k-station--uat"><circle cx="200" cy="170"/><text x="200" y="206" text-anchor="middle">uat</text></g>
+          <g class="k-station k-station--uat"><circle cx="170" cy="170"/><text x="170" y="206" text-anchor="middle">uat</text></g>
           <g class="k-station k-station--eu"><circle cx="520" cy="100"/><text x="538" y="105">prod-eu</text></g>
           <g class="k-station k-station--us"><circle cx="520" cy="240"/><text x="538" y="245">prod-us</text></g>
         </svg>

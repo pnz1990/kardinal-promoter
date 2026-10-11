@@ -86,8 +86,8 @@
 .k-hero__cmd code {
   flex: 1;
   min-width: 0;
-  overflow-x: auto;
-  white-space: nowrap;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font-family: var(--k-font-mono);
   font-size: var(--k-text-sm);
   font-variant-numeric: var(--k-numeric-mono);
@@ -189,13 +189,17 @@
   stroke: var(--k-ink-3);
   stroke-width: var(--k-stroke-thread);
   stroke-linecap: round;
-  transform: rotate(-90deg);
+  transform: rotate(90deg);
   animation: k-lift var(--k-dur-base) var(--k-ease-out) backwards;
   animation-delay: calc(var(--k-dur-thread) * 6);
 }
+.k-gate__post {
+  r: var(--k-stroke-thread);
+  fill: var(--k-ink-3);
+}
 .k-gate__label {
   font-family: var(--k-font-mono);
-  font-size: var(--k-text-sm);
+  font-size: var(--k-text-xs);
   font-weight: var(--k-weight-regular);
   font-stretch: var(--k-stretch-normal);
   fill: var(--k-ink-3);
@@ -224,8 +228,10 @@
 /* On a phone the map is drawn at about half size: set its labels larger in
    the SVG's own units so they read at text-xs. */
 @media (max-width: 40em) {
-  .k-station text,
-  .k-gate__label {
+  .k-station text {
     font-size: var(--k-text-2xl);
+  }
+  .k-gate__label {
+    font-size: var(--k-text-sm);
   }
 }
