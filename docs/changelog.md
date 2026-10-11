@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **kubectl shows what runs where** — the Pipeline reconciler writes `status.environments[]` (per environment: the Bundle and version that run there, a newer one on its way in, its state and since when, the gates or rollback hold that keep it waiting, the PR waiting for its merge), `status.summary` ("1.5.0 live in test, uat; waiting for PR merge in prod (#42)") and `status.environmentSummary`. `kubectl get pipelines` shows the summary first, `-o wide` adds `ENVS`, and `kubectl get bundles` a `VERSION` column (from the new `status.version`; Bundles that finished before the upgrade leave it empty). Every kind is in the `kardinal-all` category and the kinds users write also in `kardinal`, so `kubectl get kardinal` lists Pipelines, Bundles, PolicyGates and the other user-written objects. The fields are display only: nothing decides on them. See [Pipeline status](pipeline-reference.md#status)
+
 ### Changed
 
 - **States read as words, the same in the CLI and the UI** — one display table (`pkg/display`) gives every Pipeline, Bundle, step, sub-step and gate state a label, a glyph and a tone: a step `WaitingForMerge` reads "Waiting for PR merge", `Verified` "Live", `AbortedByAlarm` "Stopped by alarm", `Superseded` "Replaced by newer version", a gate `Block` "Blocking". The CLI's table output (get pipelines, bundles and steps, status, explain, logs) and the UI's chips and graph use the labels; `-o json`, `-o yaml`, the CRDs and the UI API objects keep the API values unchanged. The UI API serves the table at `GET /api/v1/ui/display-states`. A script that parsed the CLI's table for a raw state should read `-o json` instead.

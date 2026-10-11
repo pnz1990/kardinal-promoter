@@ -172,7 +172,7 @@ func kustomizeTag(t *testing.T, a *app, env string) string {
 // promotion until Ctrl-C. A newer Bundle supersedes the older one: --active
 // and get steps leave it out. -o is checked per command.
 // Covers CLI-CREATE-BUNDLE-01, CLI-GET-PIPELINES-01, CLI-GET-BUNDLES-01,
-// CLI-GET-STEPS-01, CLI-OUTPUT-01.
+// CLI-GET-STEPS-01, CLI-OUTPUT-01, PIPE-ENVSTATUS-01.
 func TestCLI_CreateBundleAndGet(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -233,6 +233,33 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	e.WaitStepState(t, a.ns, pipelineName, b1, "test", "Verified", promoteTimeout)
 	e.WaitStepState(t, a.ns, pipelineName, b1, "prod", "WaitingForMerge", promoteTimeout)
 	pr1 := openPR(t, e, a.repo, fixtures.V2)
+
+	// P1: kubectl alone answers what runs where. kubectl get pipelines shows
+	// status.summary, -o wide each environment's version, kubectl get
+	// bundles the version, and kubectl get kardinal lists the kinds users
+	// write.
+	wantSummary := fmt.Sprintf("%s live in test; waiting for PR merge in prod (#%d)", fixtures.V2, pr1.Number)
+	require.Eventually(t, func() bool {
+		var p v1alpha1.Pipeline
+		return e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &p) == nil &&
+			p.Status.Summary == wantSummary
+	}, time.Minute, time.Second, "Pipeline status.summary is %q", wantSummary)
+	kp := e.Kubectl(t, a.ns, "", "get", "pipelines")
+	assert.Equal(t, []string{"NAME", "SUMMARY", "PHASE", "PAUSED", "AGE"}, cliCellGap.Split(strings.SplitN(kp, "\n", 2)[0], -1))
+	row = framework.TableRow(kp, "NAME", pipelineName)
+	require.NotNil(t, row, kp)
+	assert.Equal(t, wantSummary, row["SUMMARY"])
+	wide := framework.TableRow(e.Kubectl(t, a.ns, "", "get", "pipelines", "-o", "wide"), "NAME", pipelineName)
+	require.NotNil(t, wide)
+	assert.Equal(t, "test="+fixtures.V2+" prod=-", wide["ENVS"])
+	kb := framework.TableRow(e.Kubectl(t, a.ns, "", "get", "bundles"), "NAME", b1)
+	require.NotNil(t, kb)
+	assert.Equal(t, fixtures.V2, kb["VERSION"])
+	kinds := e.Kubectl(t, a.ns, "", "get", "kardinal", "-o", "name")
+	assert.Contains(t, kinds, "pipeline.kardinal.io/"+pipelineName+"\n")
+	assert.Contains(t, kinds, "bundle.kardinal.io/"+b1+"\n")
+	assert.NotContains(t, kinds, "promotionstep.kardinal.io/", "generated kinds are in kardinal-all only")
+	assert.Contains(t, e.Kubectl(t, a.ns, "", "get", "kardinal-all", "-o", "name"), "promotionstep.kardinal.io/")
 
 	tables := c.Must(a.ns, "get", "pipelines")
 	row = framework.TableRow(tables, "PIPELINE", pipelineName)
