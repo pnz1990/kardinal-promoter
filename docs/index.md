@@ -77,7 +77,7 @@ kubectl create secret generic github-token \
 helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
   --namespace kardinal-system \
   --create-namespace \
-  --set github.secretRef.name=github-token
+  --set scm.secretRef.name=github-token
 
 # 3. Install the CLI
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')

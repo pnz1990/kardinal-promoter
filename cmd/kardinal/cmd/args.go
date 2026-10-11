@@ -65,7 +65,11 @@ func envArgs(cmd *cobra.Command, args []string, flagEnv string) (pipeline, env s
 func requireEnv(cmd *cobra.Command, args []string, flagEnv string) (pipeline, env string, err error) {
 	pipeline, env, err = envArgs(cmd, args, flagEnv)
 	if err == nil && env == "" {
-		err = fmt.Errorf("which environment? Give it after the pipeline: %s %s <env>", cmd.CommandPath(), pipeline)
+		if envs := envHint(pipeline); envs != "" {
+			err = fmt.Errorf("which environment? %s has: %s. Give it after the pipeline: %s %s <env>", pipeline, envs, cmd.CommandPath(), pipeline)
+		} else {
+			err = fmt.Errorf("which environment? Give it after the pipeline: %s %s <env>", cmd.CommandPath(), pipeline)
+		}
 	}
 	return pipeline, env, err
 }

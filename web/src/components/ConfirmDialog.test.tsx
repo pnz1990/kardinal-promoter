@@ -36,7 +36,7 @@ describe('ConfirmDialog', () => {
     { name: 'confirm button', act: () => fireEvent.click(screen.getByRole('button', { name: 'Promote to prod' })), confirm: 1, cancel: 0 },
     { name: 'Cancel button', act: () => fireEvent.click(screen.getByRole('button', { name: 'Cancel' })), confirm: 0, cancel: 1 },
     { name: 'Escape', act: () => fireEvent.keyDown(document.activeElement!, { key: 'Escape' }), confirm: 0, cancel: 1 },
-    { name: 'backdrop click', act: () => fireEvent.click(screen.getByRole('dialog')), confirm: 0, cancel: 1 },
+    { name: 'backdrop click', act: () => fireEvent.click(screen.getByRole('dialog').parentElement!), confirm: 0, cancel: 1 },
   ])('$name', ({ act, confirm, cancel }) => {
     const { onConfirm, onCancel } = renderDialog()
     act()
@@ -47,7 +47,7 @@ describe('ConfirmDialog', () => {
   it('cannot be dismissed while the request runs', () => {
     const { onCancel } = renderDialog({ loading: true })
     fireEvent.keyDown(document, { key: 'Escape' })
-    fireEvent.click(screen.getByRole('dialog'))
+    fireEvent.click(screen.getByRole('dialog').parentElement!)
     expect(onCancel).not.toHaveBeenCalled()
     expect(screen.getByRole('button', { name: 'Promote to prod' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Promote to prod' })).toHaveTextContent('Working…')

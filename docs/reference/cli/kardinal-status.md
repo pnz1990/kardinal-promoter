@@ -13,7 +13,10 @@ When called without arguments: displays the controller version (the
 kardinal-version ConfigMap in --controller-namespace), the pipeline count with
 any Degraded pipelines, and the bundle count (active = Available or Promoting).
 
-When called with a pipeline name: shows in-flight promotion details for that
+When called with a pipeline name: first the Pipeline's own problems, an
+ERROR when it is not Ready (such as GitCredentialMissing, with the command
+that creates the git Secret) and a WARNING when its git Secret is not
+labelled kardinal.io/referenceable=true; then in-flight promotion details for that
 pipeline — the current bundle per environment (the newest bundle that is not
 Superseded and has a PromotionStep there, or a gate instance there and has not
 failed; see kardinal explain), its PromotionSteps (one row per environment it

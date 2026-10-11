@@ -1,0 +1,40 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * InsecureConnectionBanner.css — the plain-HTTP warning (components/InsecureConnectionBanner.tsx).
+ * Blocked (ochre) status tokens only.
+ */
+
+.insecure-banner {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--k-space-3);
+  margin: 0 0 var(--k-space-3);
+  padding: var(--k-space-2) var(--k-space-3);
+  border: var(--k-border-hairline) solid var(--k-status-blocked-fg);
+  border-radius: var(--k-radius-3);
+  background: var(--k-status-blocked-wash);
+  color: var(--k-status-blocked-fg);
+}
+.insecure-banner__message { display: flex; align-items: center; gap: var(--k-space-2); }
+.insecure-banner__icon { font-size: var(--k-text-md); }
+.insecure-banner__text { font-size: var(--k-text-sm); font-weight: var(--k-weight-semibold); }
+.insecure-banner__code { font-family: var(--k-font-mono); font-size: var(--k-text-xs); }
+.insecure-banner__link { color: inherit; }
+.insecure-banner__dismiss {
+  flex-shrink: 0;
+  padding: var(--k-space-0_5) var(--k-space-2);
+  border: var(--k-border-hairline) solid currentColor;
+  border-radius: var(--k-radius-2);
+  background: none;
+  color: inherit;
+  font-size: var(--k-text-xs);
+  font-weight: var(--k-weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--k-dur-quick) var(--k-ease-out);
+}
+.insecure-banner__dismiss:hover { background: var(--k-surface-raised); }

@@ -6,6 +6,8 @@
 // Adapted from kro-ui's AnomalyBanner (compile-error banner pattern).
 // Shows count of blocked PolicyGates with a "Show blocked" button to highlight them.
 
+import '../styles/BlockedBanner.css'
+
 interface BlockedBannerProps {
   /** Number of PolicyGate nodes holding the bundle back (GraphNode.holding). */
   blockedCount: number
@@ -29,39 +31,18 @@ export function BlockedBanner({ blockedCount, highlightActive, onToggleHighlight
   return (
     <div
       role="alert"
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        background: 'var(--color-warning-bg)',
-        border: '1px solid var(--color-warning)',
-        borderRadius: '6px',
-        padding: '0.5rem 0.75rem',
-        marginBottom: '0.75rem',
-        gap: '0.75rem',
-      }}
+      className="blocked-banner"
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        <span style={{ color: 'var(--color-warning)', fontSize: '0.9rem' }} aria-hidden="true">⚠</span>
-        <span style={{ fontSize: '0.82rem', color: 'var(--color-warning)', fontWeight: 600 }}>
+      <div className="blocked-banner__message">
+        <span className="blocked-banner__icon" aria-hidden="true">⚠</span>
+        <span className="blocked-banner__label">
           {label}
         </span>
       </div>
       <button
         onClick={onToggleHighlight}
         aria-pressed={highlightActive}
-        style={{
-          background: highlightActive ? 'var(--color-warning)' : 'none',
-          border: '1px solid var(--color-warning)',
-          borderRadius: '4px',
-          color: highlightActive ? 'var(--color-bg)' : 'var(--color-warning)',
-          cursor: 'pointer',
-          fontSize: '0.75rem',
-          fontWeight: 600,
-          padding: '2px 8px',
-          whiteSpace: 'nowrap',
-          transition: 'background 0.15s',
-        }}
+        className="blocked-banner__toggle"
       >
         {highlightActive ? 'Show all' : 'Show blocked'}
       </button>

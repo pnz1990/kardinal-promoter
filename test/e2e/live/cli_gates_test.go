@@ -200,7 +200,7 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	assert.Equal(t, "No promotion for \"prod\" in pipeline \"podinfo\" yet\n", c.Must(ns, "explain", pipelineName, "--env", "prod"))
 	refuses(t, c, ns, `environment "staging" not found in pipeline "podinfo" (environments: test, prod)`,
 		"explain", pipelineName, "--env", "staging")
-	refuses(t, c, ns, fmt.Sprintf("pipeline %q not found in namespace %q", "nope", ns), "explain", "nope")
+	refusesNotFound(t, c, ns, "", "nope", "explain", "nope")
 
 	summary := regexp.MustCompile(`^Controller:  (\S+)\nPipelines:   (\d+)(?: \((\d+) degraded: [^)\n]+\))?\n` +
 		`Bundles:     (\d+) \((\d+) active\)\n(?:\nWarning: (\d+) pipeline\(s\) Degraded — run 'kardinal get pipelines' for details\n)?$`)
@@ -213,7 +213,7 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	assert.Equal(t, m[3], m[6], "the warning counts the degraded pipelines")
 	assert.Regexp(t, `^Controller:  unknown\n`, c.Must(ns, "status", "--controller-namespace", ns), "no kardinal-version ConfigMap there")
 	assert.Equal(t, "Pipeline: podinfo   Namespace: "+ns+"\n\nNo active promotions.\n", c.Must(ns, "status", pipelineName))
-	refuses(t, c, ns, fmt.Sprintf("pipeline %q not found in namespace %q", "nope", ns), "status", "nope")
+	refusesNotFound(t, c, ns, "", "nope", "status", "nope")
 
 	// policy list: wait for the controller's CEL check of every template.
 	var list string
@@ -242,7 +242,7 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 		framework.ParseTable(out), "the gates attached to the pipeline:\n%s", out)
 	out = c.Must(ns, "policy", "list", "--pipeline", pipelineName, "--policy-namespaces", ns2)
 	assert.Equal(t, want[:3], framework.ParseTable(out), "with the org gates of %s:\n%s", ns2, out)
-	refuses(t, c, ns, fmt.Sprintf("pipeline %q not found in namespace %q", "nope", ns), "policy", "list", "--pipeline", "nope")
+	refusesNotFound(t, c, ns, "", "nope", "policy", "list", "--pipeline", "nope")
 
 	// B1: test's gate holds it; prod's gate waits.
 	b1 := e.CreateBundle(t, ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
@@ -287,7 +287,7 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	watch.WaitStdout(30*time.Second, "a first frame", func(s string) bool { return len(frames(s)) >= 1 })
 
 	// override refuses bad input and changes nothing.
-	refuses(t, c, ns, `required flag(s) "gate", "reason" not set`, "override", pipelineName)
+	refuses(t, c, ns, `required flag(s) "reason" not set`, "override", pipelineName)
 	refuses(t, c, ns, `required flag(s) "reason" not set`, "override", pipelineName, "--gate", "entry")
 	for d, why := range map[string]string{"soon": "want 30m, 4h or 2d", "-1h": "must be positive", "0s": "must be positive"} {
 		refuses(t, c, ns, fmt.Sprintf(`invalid argument %q for "--expires-in" flag: %s`, d, why),
@@ -298,8 +298,10 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	refuses(t, c, ns, fmt.Sprintf("policygate %s/%s is the instance for stage test, not prod", ns, entry.Name),
 		"override", pipelineName, "--stage", "prod", "--gate", entry.Name, "--reason", "r")
 	refuses(t, c, ns, `--reason is required for override (audit record)`, "override", pipelineName, "--gate", "entry", "--reason", "")
-	refuses(t, c, ns, `--gate is required`, "override", pipelineName, "--gate", "", "--reason", "r")
-	refuses(t, c, ns, fmt.Sprintf("pipeline \"other\" not found in namespace %q", ns),
+	// B1 waits at test's entry gate, and prod's hold gate is not ready yet.
+	refuses(t, c, ns, "which gate? Gates not passing for podinfo: entry, hold. Pass --gate <name>",
+		"override", pipelineName, "--gate", "", "--reason", "r")
+	refusesNotFound(t, c, ns, "", "other",
 		"override", "other", "--gate", entry.Name, "--reason", "r")
 	other := barePipeline(t, e, ns, "other")
 	refuses(t, c, ns, fmt.Sprintf("policygate %s/%s is an instance of pipeline podinfo, not other", ns, entry.Name),
@@ -391,8 +393,8 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	assert.Len(t, ansi.FindAllString(colored, -1), 2, "one colored cell:\n%q", colored)
 	assert.Equal(t, plain, ansi.ReplaceAllString(colored, ""))
 	colored = c.Must(ns, "explain", pipelineName, "--env", "test", "--color")
-	assert.Contains(t, colored, "\x1b[32mPass\x1b[0m")
-	assert.Contains(t, colored, "\x1b[32mVerified\x1b[0m")
+	assert.Contains(t, colored, "\x1b[32m"+display.Gate("Pass").Label+"\x1b[0m")
+	assert.Contains(t, colored, "\x1b[32m"+display.Step("Verified").Label+"\x1b[0m")
 	nc := c.Exec(framework.CLIOptions{Env: []string{"NO_COLOR=1"}}, c.Args(ns, "explain", pipelineName, "--env", "prod", "--color")...)
 	require.Equal(t, 0, nc.Code, nc.Output())
 	assert.Equal(t, plain, nc.Stdout, "NO_COLOR overrides --color")
@@ -592,7 +594,7 @@ func TestCLI_PolicySimulate(t *testing.T) {
 		"policy", "simulate", "--pipeline", pipelineName, "--env", "prod", "--soak-minutes", "-5")
 	refuses(t, c, ns, `environment "staging" not found in pipeline "podinfo" (environments: test, prod)`,
 		"policy", "simulate", "--pipeline", pipelineName, "--env", "staging")
-	refuses(t, c, ns, fmt.Sprintf("pipeline %q not found in namespace %q", "nope", ns),
+	refusesNotFound(t, c, ns, "", "nope",
 		"policy", "simulate", "--pipeline", "nope", "--env", "prod")
 
 	// Nothing was written: no Bundle, no gate instance, templates untouched.

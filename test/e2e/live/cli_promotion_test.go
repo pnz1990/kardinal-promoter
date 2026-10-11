@@ -206,7 +206,7 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 		{[]string{pipelineName, "--image", fixtures.Image + ":" + fixtures.V2, "--type", "helm"},
 			`create bundle: type must be one of image, config, mixed, chart (got "helm")`},
 		{[]string{"nope", "--image", fixtures.Image + ":" + fixtures.V2},
-			fmt.Sprintf("pipeline %q not found in namespace %q", "nope", a.ns)},
+			fmt.Sprintf("pipeline %q not found in namespace %q; pipelines here: %s. Other namespaces: kardinal get pipelines -A", "nope", a.ns, pipelineName)},
 	} {
 		r := c.Fail(a.ns, append([]string{"create", "bundle"}, tc.args...)...)
 		assert.Equal(t, 1, r.Code)
@@ -269,8 +269,8 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	assert.Equal(t, display.Step("WaitingForMerge").Label, row["PROD"])
 	assert.Equal(t, "0", row["SUB"])
 	sameTable(t, tables, c.Must(a.ns, "get", "pipelines", pipelineName), "the name filter keeps the only pipeline")
-	assert.Equal(t, "No pipelines found.\n  To get started, apply a Pipeline CRD:\n    kubectl apply -f examples/quickstart/pipeline.yaml\n  Or check CRD installation with: kardinal doctor\n",
-		c.Must(a.ns, "get", "pipelines", "nope"))
+	refuses(t, c, a.ns, fmt.Sprintf("pipeline %q not found in namespace %q; pipelines here: %s. Other namespaces: kardinal get pipelines -A",
+		"nope", a.ns, pipelineName), "get", "pipelines", "nope")
 	all := c.Must("", "get", "pipelines", "-A")
 	header := cliCellGap.Split(strings.SplitN(all, "\n", 2)[0], -1)
 	row = framework.TableRow(all, "NAMESPACE", a.ns)
@@ -612,8 +612,8 @@ func TestCLI_Reports(t *testing.T) {
 	}, rows)
 	assert.Equal(t, hist[:1], framework.ParseTable(c.Must(a.ns, "history", pipelineName, "--limit", "1")))
 	assert.Equal(t, []map[string]string{hist[0], hist[2]}, framework.ParseTable(c.Must(a.ns, "history", pipelineName, "--env", "prod")))
-	assert.Equal(t, "No promotion history found for pipeline \"podinfo\" env \"staging\"\n",
-		c.Must(a.ns, "history", pipelineName, "--env", "staging"))
+	// An environment the pipeline does not have is a typo, not an empty history.
+	refuses(t, c, a.ns, `pipeline podinfo has no environment "staging"; it has: test, prod`, "history", pipelineName, "--env", "staging")
 
 	// diff: images by repository, then provenance; * marks a change.
 	assert.Equal(t, [][]string{
@@ -784,7 +784,7 @@ func TestCLI_Reports(t *testing.T) {
 		want string
 	}{
 		{[]string{"--pipeline", pipelineName, "--days", "0"}, "--days must be positive, got 0"},
-		{[]string{"--pipeline", "nope"}, fmt.Sprintf("pipeline %q not found in namespace %q", "nope", a.ns)},
+		{[]string{"--pipeline", "nope"}, fmt.Sprintf("pipeline %q not found in namespace %q; pipelines here: %s. Other namespaces: kardinal get pipelines -A", "nope", a.ns, pipelineName)},
 		{nil, "which pipeline? kardinal metrics <pipeline> [<env>]"},
 	} {
 		r := c.Fail(a.ns, append([]string{"metrics"}, tc.args...)...)
