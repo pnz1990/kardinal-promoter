@@ -117,11 +117,11 @@ func TestMetric_GateBlocksUntilMetricPasses(t *testing.T) {
 	}
 	a.apply(t, a.pipeline(nil))
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
-	version := "bundle.version=" + fixtures.V2 + ": "
+	version := " (version " + fixtures.V2 + ")"
 
 	for name := range gates {
 		g := e.WaitGateReady(t, a.ns, bundle, "prod", name, false, "CEL evaluation error: no such key: "+metric, gateTimeout)
-		assert.True(t, strings.HasPrefix(g.Status.Reason, version),
+		assert.True(t, strings.HasSuffix(g.Status.Reason, version),
 			"%s: an evaluation error names the Bundle version too: %q", name, g.Status.Reason)
 	}
 
@@ -129,7 +129,7 @@ func TestMetric_GateBlocksUntilMetricPasses(t *testing.T) {
 	e.CreateMetricCheck(t, framework.MetricCheck(t, a.ns, metric, framework.PushedQuery(a.ns), "lt", 0.5, metricInterval))
 	e.WaitMetricCheck(t, a.ns, metric, metricTimeout, "failing", framework.MetricResult("Fail", "1 lt 0.5 = false"))
 	for name, expr := range gates {
-		e.WaitGateReady(t, a.ns, bundle, "prod", name, false, version+expr+" = false", gateTimeout)
+		e.WaitGateReady(t, a.ns, bundle, "prod", name, false, expr+" = false"+version, gateTimeout)
 	}
 	e.NoStep(t, a.ns, pipelineName, bundle, "prod", holdFor)
 	row := e.WaitExplainGate(t, a.ns, pipelineName, "prod", "metric-result", "Block", 10*time.Second)
@@ -139,7 +139,7 @@ func TestMetric_GateBlocksUntilMetricPasses(t *testing.T) {
 	e.SetMetric(t, a.ns, 0)
 	mc := e.WaitMetricCheck(t, a.ns, metric, metricTimeout, "passing", framework.MetricResult("Pass", "0 lt 0.5 = true"))
 	for name, expr := range gates {
-		g := e.WaitGateReady(t, a.ns, bundle, "prod", name, true, version+expr+" = true", gateTimeout)
+		g := e.WaitGateReady(t, a.ns, bundle, "prod", name, true, expr+" = true"+version, gateTimeout)
 		cond := meta.FindStatusCondition(g.Status.Conditions, "Ready")
 		require.NotNil(t, cond, "%s has a Ready condition", name)
 		lag := cond.LastTransitionTime.Sub(mc.Status.LastEvaluatedAt.Time)

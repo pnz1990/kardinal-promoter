@@ -42,16 +42,18 @@ func evaluateGate(t *testing.T, gate *kardinalv1alpha1.PolicyGate, objs ...clien
 
 // TestPolicyGateReconciler_BlockedReasonLeadsWithMessage (GATE-MESSAGE-01): a
 // gate whose expression is false says why in its own words. status.reason and
-// the Ready condition lead with spec.message; the evaluated version and CEL
-// result follow in parentheses.
+// the Ready condition lead with spec.message; the CEL result and the
+// evaluated version follow in parentheses, and status.bundleVersion holds the
+// version.
 func TestPolicyGateReconciler_BlockedReasonLeadsWithMessage(t *testing.T) {
 	const msg = "Production deployments are blocked on weekends"
 	gate := makeGateInstance("no-weekend", "default", "app-v1", "!schedule.isWeekend", "5m")
 	gate.Spec.Message = msg
 	got := evaluateGate(t, gate, makeBundleWithImage("app-v1", "default", "ghcr.io/example/app", "1.29.0"))
 
-	want := msg + " (bundle.version=1.29.0: !schedule.isWeekend = false)"
+	want := msg + " (!schedule.isWeekend = false; version 1.29.0)"
 	assert.False(t, got.Status.Ready)
+	assert.Equal(t, "1.29.0", got.Status.BundleVersion)
 	assert.Equal(t, want, got.Status.Reason)
 	if c := meta.FindStatusCondition(got.Status.Conditions, "Ready"); assert.NotNil(t, c) {
 		assert.Equal(t, want, c.Message)
@@ -60,9 +62,9 @@ func TestPolicyGateReconciler_BlockedReasonLeadsWithMessage(t *testing.T) {
 }
 
 // TestPolicyGateReconciler_ReasonWithoutMessageUnchanged: the reasons that do
-// not lead with the message are written as before: a gate with no message,
-// one that passes, and the error and override reasons whose prefixes the CLI
-// reads.
+// not lead with the message: a gate with no message and one that passes end
+// with the version, and the error and override reasons keep the prefixes the
+// CLI reads.
 func TestPolicyGateReconciler_ReasonWithoutMessageUnchanged(t *testing.T) {
 	const msg = "Production deployments are blocked on weekends"
 	bundle := func() *kardinalv1alpha1.Bundle {
@@ -75,15 +77,16 @@ func TestPolicyGateReconciler_ReasonWithoutMessageUnchanged(t *testing.T) {
 	}
 
 	got := evaluateGate(t, gate("!schedule.isWeekend", ""), bundle())
-	assert.Equal(t, "bundle.version=1.29.0: !schedule.isWeekend = false", got.Status.Reason, "no message")
+	assert.Equal(t, "!schedule.isWeekend = false (version 1.29.0)", got.Status.Reason, "no message")
 
 	got = evaluateGate(t, gate("schedule.isWeekend", msg), bundle())
 	assert.True(t, got.Status.Ready)
-	assert.Equal(t, "bundle.version=1.29.0: schedule.isWeekend = true", got.Status.Reason, "passing")
+	assert.Equal(t, "schedule.isWeekend = true (version 1.29.0)", got.Status.Reason, "passing")
 
 	got = evaluateGate(t, gate(`bundle.labels["missing"] == "x"`, msg), bundle())
 	assert.False(t, got.Status.Ready)
-	assert.True(t, strings.HasPrefix(got.Status.Reason, "bundle.version=1.29.0: CEL evaluation error: "), got.Status.Reason)
+	assert.True(t, strings.HasPrefix(got.Status.Reason, "CEL evaluation error: "), got.Status.Reason)
+	assert.True(t, strings.HasSuffix(got.Status.Reason, " (version 1.29.0)"), got.Status.Reason)
 	assert.NotContains(t, got.Status.Reason, msg, "evaluation error")
 
 	got = evaluateGate(t, gate("!schedule.isWeekend", msg))

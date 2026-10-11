@@ -23,8 +23,8 @@ func newRejectCmd() *cobra.Command {
 	var reason, pipeline string
 	cmd := &cobra.Command{
 		Use:   "reject <bundle|version>",
-		Short: "Reject a Bundle: it is never promoted again, and rollback never picks it",
-		Long: `Reject a Bundle for good, with --reason, in your Kubernetes name. Steps that
+		Short: "Reject a version: it is never promoted again, and rollback never picks it",
+		Long: `Reject a version for good, with --reason, in your Kubernetes name. Steps that
 have not delivered it yet fail and their PRs close; steps whose change is live
 finish their health check. Rollback, promote and Subscriptions never pick it
 again. It does not revert an environment: use kardinal rollback for that.`,
@@ -47,7 +47,7 @@ again. It does not revert an environment: use kardinal rollback for that.`,
 			return rejectFn(cmd.Context(), cmd.OutOrStdout(), c, ns, name, reason, time.Now())
 		},
 	}
-	cmd.Flags().StringVar(&reason, "reason", "", "Why the Bundle is rejected (required)")
+	cmd.Flags().StringVar(&reason, "reason", "", "Why the version is rejected (required)")
 	_ = cmd.MarkFlagRequired("reason")
 	cmd.Flags().StringVar(&pipeline, "pipeline", "", "Look for a version given as <bundle> in this pipeline only")
 	addYesFlag(cmd)

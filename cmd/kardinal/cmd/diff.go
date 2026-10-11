@@ -31,7 +31,7 @@ import (
 func newDiffCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "diff <bundle-a|version> <bundle-b|version>",
-		Short: "Show artifact differences between two Bundles",
+		Short: "Show what changes between two versions (Bundles)",
 		Long: `Compare the images (by repository) and the provenance of two Bundles. A tag
 reads (absent) when a Bundle has no image for the repository and - when it is
 pinned by digest only; CHANGED marks the rows that differ.`,
@@ -75,6 +75,16 @@ func diffFn(w io.Writer, c sigs_client.Client, ns, nameA, nameB string) error {
 	return FormatDiffTable(w, &bA, &bB)
 }
 
+// diffLabel names Bundle b in diff's header: its version and name when it
+// ships one image ("1.29.0 (app-b)"), its name otherwise (the rows list the
+// images).
+func diffLabel(b *v1alpha1.Bundle) string {
+	if len(b.Spec.Images) == 1 && b.Spec.ConfigRef == nil {
+		return versionLabel(createdOf(b).Version, b.Name)
+	}
+	return b.Name
+}
+
 // FormatDiffTable writes a table comparing the images and provenance of two
 // Bundles. Images are matched by repository (the n-th image of a repository
 // in A with the n-th in B). A tag cell is "(absent)" when the Bundle has no
@@ -83,7 +93,7 @@ func diffFn(w io.Writer, c sigs_client.Client, ns, nameA, nameB string) error {
 //
 // Example output:
 //
-//	ARTIFACT               BUNDLE-A (v1.28.0)   BUNDLE-B (v1.29.0)   CHANGED
+//	ARTIFACT               A: 1.28.0 (app-a)   B: 1.29.0 (app-b)   CHANGED
 //	ghcr.io/myorg/my-app   1.28.0               1.29.0               *
 //	  digest               sha256:def456...     sha256:abc123...     *
 //	PROVENANCE
@@ -99,7 +109,7 @@ func FormatDiffTable(w io.Writer, a, b *v1alpha1.Bundle) error {
 		}
 		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", label, av, bv, mark)
 	}
-	_, _ = fmt.Fprintf(tw, "ARTIFACT\tBUNDLE-A (%s)\tBUNDLE-B (%s)\tCHANGED\n", a.Name, b.Name)
+	_, _ = fmt.Fprintf(tw, "ARTIFACT\tA: %s\tB: %s\tCHANGED\n", diffLabel(a), diffLabel(b))
 
 	for _, p := range pairImages(a.Spec.Images, b.Spec.Images) {
 		aTag, bTag := imageTagCell(p.a), imageTagCell(p.b)

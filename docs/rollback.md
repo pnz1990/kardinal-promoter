@@ -125,7 +125,7 @@ Output:
 ```
 Rolling back my-app in prod from my-app-v1-29-0 to my-app-v1-28-0 (ghcr.io/myorg/my-app:v1.28.0)
 Bundle my-app-rollback-3f9a1c created (rollbackOf=my-app-v1-28-0)
-Environment prod held on my-app-rollback-3f9a1c: no other version promotes there until: kardinal release-hold my-app --env prod
+Environment prod held on my-app-rollback-3f9a1c: no other version promotes there until: kardinal unhold my-app prod
 Gates of prod that would block the rollback pass as EXEMPT (audited) while the controller verifies it restores what was Verified there.
 Track with: kardinal explain my-app --env prod
 ```
@@ -194,7 +194,7 @@ To recover, release the hold, then roll back and hold again if you still want th
 environment held:
 
 ```bash
-kardinal release-hold my-app --env prod
+kardinal unhold my-app prod
 kardinal rollback my-app --env prod --hold --reason "INC-4521: v1.29.0 leaks connections"
 ```
 
@@ -212,7 +212,7 @@ kubectl get pipeline my-app -o jsonpath='{range .status.holdStates[*]}{.environm
 Release the hold when the fix is ready:
 
 ```bash
-kardinal release-hold my-app --env prod
+kardinal unhold my-app prod
 ```
 
 The newest version that was held back then promotes into the environment through its gates as

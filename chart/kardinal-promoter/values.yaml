@@ -414,7 +414,7 @@ rbac:
     aggregateToDefaultRoles: false
     # -- Also grant the promoter update on Pipelines and the approver update
     # on PolicyGates, so kardinal pause, kardinal rollback --hold, kardinal
-    # release-hold and kardinal override work from their kubeconfigs. An
+    # unhold and kardinal override work from their kubeconfigs. An
     # admission policy limits those writes to spec.paused and spec.holds
     # (Pipelines; the hold-writes policy checks each hold entry) and
     # spec.overrides (PolicyGates). Off: they act through the UI API only. On weakens the

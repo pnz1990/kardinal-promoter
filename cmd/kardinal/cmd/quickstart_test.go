@@ -82,7 +82,8 @@ func noCluster(t *testing.T) {
 	}
 	quickstartLookPath = func(string) (string, error) { return "/bin/true", nil }
 	t.Cleanup(func() { quickstartClient, quickstartRun, quickstartLookPath = oldB, oldR, oldL })
-	for _, k := range []string{"HELM_KUBECONTEXT", "HELM_KUBEAPISERVER", "HELM_KUBETOKEN", "KUBERNETES_MASTER"} {
+	for _, k := range []string{"HELM_KUBECONTEXT", "HELM_KUBEAPISERVER", "HELM_KUBETOKEN", "KUBERNETES_MASTER",
+		"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"} {
 		t.Setenv(k, "")
 	}
 }
@@ -468,9 +469,136 @@ func TestQuickstart_Installs(t *testing.T) {
 		}
 	}
 
+	// The Argo CD it installs polls git every 10s, set before the install.
+	var cm corev1.ConfigMap
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "argocd", Name: "argocd-cm"}, &cm))
+	assert.Equal(t, map[string]string{"timeout.reconciliation": "10s", "timeout.reconciliation.jitter": "0s"}, cm.Data)
+
 	// The controller's SCM Secret: the token, and no referenceable label.
 	var s corev1.Secret
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "kardinal-system", Name: quickstartSCMSecret}, &s))
 	assert.Equal(t, "s3cr3t-token", s.StringData["token"])
 	assert.Empty(t, s.Labels[v1alpha1.LabelSecretReferenceable])
+}
+
+// TestQuickstart_NoProxy: a context whose cluster has a proxy-url is
+// refused before anything is sent: the proxy decides where requests go.
+func TestQuickstart_NoProxy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config")
+	require.NoError(t, os.WriteFile(path, []byte(`apiVersion: v1
+kind: Config
+clusters:
+- {name: local, cluster: {server: "https://127.0.0.1:6443", proxy-url: "socks5://127.0.0.1:1080"}}
+contexts:
+- {name: kind-kardinal, context: {cluster: local, user: me}}
+users:
+- {name: me, user: {token: t}}
+current-context: kind-kardinal
+`), 0o600))
+	oldK, oldC := globalKubeconfig, globalContext
+	globalKubeconfig, globalContext = path, ""
+	t.Cleanup(func() { globalKubeconfig, globalContext = oldK, oldC })
+	noCluster(t)
+	t.Setenv("GITHUB_TOKEN", "tok")
+	err := quickstartFn(context.Background(), &bytes.Buffer{}, quickstartOptions{repo: "https://github.com/me/kardinal-demo"})
+	require.ErrorIs(t, err, errNotLocal)
+	assert.Contains(t, err.Error(), "through socks5://127.0.0.1:1080")
+	assert.Contains(t, err.Error(), "nothing was changed")
+}
+
+// TestQuickstart_NoEnvironmentProxy: a proxy of the environment that applies
+// to the local server (Go bypasses it only for localhost and 127.0.0.1) is
+// refused before anything is sent, with the variable and the NO_PROXY that
+// excludes the server; NO_PROXY naming the server lets it pass.
+func TestQuickstart_NoEnvironmentProxy(t *testing.T) {
+	cases := []struct {
+		name, context, server, variable, noProxy string
+		refused                                  bool
+	}{
+		{"k3d on 0.0.0.0", "k3d-demo", "https://0.0.0.0:6443", "HTTPS_PROXY", "", true},
+		{"docker desktop host", "docker-desktop", "https://host.docker.internal:6443", "HTTPS_PROXY", "", true},
+		{"minikube network", "minikube", "https://192.168.49.2:8443", "https_proxy", "", true},
+		{"http server and HTTP_PROXY", "kind-kardinal", "http://0.0.0.0:8080", "HTTP_PROXY", "", true},
+		{"NO_PROXY names other hosts", "k3d-demo", "https://0.0.0.0:6443", "HTTPS_PROXY", ".corp.example", true},
+		{"NO_PROXY names the host", "minikube", "https://192.168.49.2:8443", "HTTPS_PROXY", "192.168.49.2", false},
+		{"NO_PROXY names the network", "minikube", "https://192.168.49.2:8443", "HTTPS_PROXY", "192.168.49.0/24", false},
+		{"loopback is never proxied", "kind-kardinal", "https://127.0.0.1:41234", "HTTPS_PROXY", "", false},
+		{"HTTP_PROXY does not apply to https", "k3d-demo", "https://0.0.0.0:6443", "HTTP_PROXY", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			writeKubeconfig(t, tc.context, tc.server)
+			noCluster(t)
+			t.Setenv(tc.variable, "http://user:secret@proxy.corp.example:3128")
+			t.Setenv("NO_PROXY", tc.noProxy)
+			_, _, err := requireLocalContext()
+			if !tc.refused {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, errNotLocal)
+			host := tc.server[strings.Index(tc.server, "//")+2 : strings.LastIndex(tc.server, ":")]
+			assert.Contains(t, err.Error(), tc.variable+"=http://user:xxxxx@proxy.corp.example:3128 applies to the server "+tc.server)
+			want := host
+			if tc.noProxy != "" {
+				want = tc.noProxy + "," + host // the NO_PROXY set is kept
+			}
+			assert.Contains(t, err.Error(), "export NO_PROXY="+want+" (or unset "+tc.variable+")")
+			assert.Contains(t, err.Error(), "nothing was changed")
+			assert.NotContains(t, err.Error(), "secret", "the proxy password is not printed")
+		})
+	}
+	// The credentials are masked in the proxy Go parsed, also for a value
+	// without a scheme and for a username alone (a token).
+	for value, want := range map[string]string{
+		"user:p4ss@proxy.corp:3128": "HTTPS_PROXY=http://user:xxxxx@proxy.corp:3128 applies",
+		"http://tok3n@proxy":        "HTTPS_PROXY=http://xxxxx@proxy applies",
+	} {
+		writeKubeconfig(t, "k3d-demo", "https://0.0.0.0:6443")
+		noCluster(t)
+		t.Setenv("HTTPS_PROXY", value)
+		_, _, err := requireLocalContext()
+		require.ErrorIs(t, err, errNotLocal, value)
+		assert.Contains(t, err.Error(), want)
+		assert.NotContains(t, err.Error(), "p4ss")
+		assert.NotContains(t, err.Error(), "tok3n")
+	}
+
+	// quickstartFn stops there too, before any cluster call or tool.
+	writeKubeconfig(t, "k3d-demo", "https://0.0.0.0:6443")
+	noCluster(t)
+	t.Setenv("GITHUB_TOKEN", "tok")
+	t.Setenv("HTTPS_PROXY", "http://proxy.corp.example:3128")
+	err := quickstartFn(context.Background(), &bytes.Buffer{}, quickstartOptions{repo: "https://github.com/me/kardinal-demo"})
+	require.ErrorIs(t, err, errNotLocal)
+}
+
+// TestQuickstart_InterruptRemovesKubeconfig: when the run is cancelled
+// (Ctrl-C, SIGTERM) in the middle of an install, quickstart returns and its
+// kubeconfig file for helm and kubectl is gone; KUBERC is off for them.
+func TestQuickstart_InterruptRemovesKubeconfig(t *testing.T) {
+	writeKubeconfig(t, "kind-kardinal", "https://127.0.0.1:41234")
+	noCluster(t)
+	t.Setenv("GITHUB_TOKEN", "tok")
+	c := fake.NewClientBuilder().WithScheme(rootScheme).Build() // nothing installed
+	quickstartClient = func(*clientcmdapi.Config) (sigs_client.Client, error) { return c, nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var file string
+	quickstartRun = func(ctx context.Context, name string, args ...string) (string, error) {
+		for i, a := range args {
+			if a == "--kubeconfig" {
+				file = args[i+1]
+			}
+		}
+		require.FileExists(t, file, "helm and kubectl get the kubeconfig file")
+		cancel() // Ctrl-C while helm runs
+		return "", ctx.Err()
+	}
+	err := quickstartFn(ctx, &bytes.Buffer{}, quickstartOptions{repo: "https://github.com/me/kardinal-demo"})
+	require.Error(t, err)
+	require.NotEmpty(t, file)
+	assert.NoFileExists(t, file, "the kubeconfig file is removed")
+
+	assert.Equal(t, []string{"PATH=/bin", "KUBERC=off"}, toolEnv([]string{"KUBERC=/home/me/.kube/kuberc", "PATH=/bin", "HELM_KUBECONTEXT=prod"}))
 }

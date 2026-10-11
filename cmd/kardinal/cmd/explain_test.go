@@ -116,9 +116,9 @@ func TestExplain_ShowsAppliedGateInstances(t *testing.T) {
 		explainStep("demo", "b1", "test", "Verified", "", created),
 		explainStep("demo", "b1", "uat", "Verified", "", created),
 		explainGateInstance("demo", "b1", "prod", "no-weekend-deploys", "!schedule.isWeekend", false, true,
-			"bundle.version=sha-abc1234: !schedule.isWeekend = false"),
+			"!schedule.isWeekend = false (version sha-abc1234)"),
 		explainGateInstance("demo", "b1", "prod", "change-freeze", "!changewindow['q4'].isBlocked()", true, true,
-			"bundle.version=sha-abc1234: !changewindow['q4'].isBlocked() = true"),
+			"!changewindow['q4'].isBlocked() = true (version sha-abc1234)"),
 	)
 
 	out, err := runExplain(t, c, "demo", "prod", false)
@@ -439,17 +439,17 @@ func TestExplain_SupersededBundleIsNotCurrent(t *testing.T) {
 		version := map[string]string{"kardinal-test-app-7qvsr": "main", "kardinal-test-app-9tptr": "sha-9349a3f"}[b]
 		objs = append(objs,
 			explainGateInstance("demo", b, "prod", "no-weekend-deploys", "!schedule.isWeekend", true, true,
-				"bundle.version="+version+": !schedule.isWeekend = true"),
+				"!schedule.isWeekend = true (version "+version+")"),
 			explainGateInstance("demo", b, "prod", "require-uat-soak", "bundle.upstreamSoakMinutes >= 30", true, true,
-				"bundle.version="+version+": bundle.upstreamSoakMinutes >= 30 = true"))
+				"bundle.upstreamSoakMinutes >= 30 = true (version "+version+")"))
 	}
 	c := policyClient(t, objs...)
 
 	out, err := runExplain(t, c, "demo", "prod", false)
 	require.NoError(t, err)
 	assert.Contains(t, out, "9tptr prod")
-	assert.Contains(t, out, "bundle.version=sha-9349a3f")
-	assert.NotContains(t, out, "bundle.version=main", "the Superseded Bundle's gates are not shown:\n%s", out)
+	assert.Contains(t, out, "(version sha-9349a3f)")
+	assert.NotContains(t, out, "(version main)", "the Superseded Bundle's gates are not shown:\n%s", out)
 
 	out, err = runExplain(t, c, "demo", "", false)
 	require.NoError(t, err)
@@ -466,7 +466,7 @@ func TestExplain_WaitingBundleSkipGate(t *testing.T) {
 	old := policyTestNow.Add(-5 * time.Minute)
 	recent := policyTestNow.Add(-time.Minute)
 	skip := explainGateInstance("demo", "gapa-e2e2-wbptb", "prod", "gapa-allow-stage-skip",
-		`bundle.version == "sha-9349a3f"`, false, true, `bundle.version=main: bundle.version == "sha-9349a3f" = false`)
+		`bundle.version == "sha-9349a3f"`, false, true, `bundle.version == "sha-9349a3f" = false (version main)`)
 	skip.Labels["kardinal.io/type"] = "skip-permission"
 	skip.Annotations = map[string]string{"kardinal.io/skipped-environments": "uat"}
 	skipping := explainBundle("gapa-e2e2-wbptb", "Promoting", recent)
@@ -640,15 +640,27 @@ func TestExplain_ShowsHold(t *testing.T) {
 	created := policyTestNow.Add(-time.Hour)
 	p := policyPipeline("demo", "test", "prod")
 	p.Spec.Holds = []v1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "demo-rollback-abc123", Reason: "INC-42", CreatedBy: "alice"}}
-	c := policyClient(t, p,
+	rb := explainBundle("demo-rollback-abc123", "Verified", created)
+	rb.Spec.Images = []v1alpha1.ImageRef{{Repository: "app", Tag: "1.3.0"}}
+	rb.Spec.Provenance = &v1alpha1.BundleProvenance{RollbackOf: "b0"}
+	c := policyClient(t, p, rb,
 		explainBundle("b1", "Promoting", created),
 		explainStep("demo", "b1", "test", "Verified", "", created),
 		explainStep("demo", "b1", "prod", "Promoting", "", created),
 	)
 	out, err := runExplain(t, c, "demo", "prod", false)
 	require.NoError(t, err)
-	assert.Contains(t, out, "prod: held on rollback demo-rollback-abc123 by alice (INC-42)")
-	assert.Contains(t, out, "Release with: kardinal release-hold demo --env prod")
+	assert.Contains(t, out, "prod: held on rollback 1.3.0 (demo-rollback-abc123) by alice (INC-42)")
+	assert.Contains(t, out, "EXEMPT")
+	assert.Contains(t, out, "Release with: kardinal unhold demo prod")
+
+	// kardinal hold (no rollback): held on the version, no EXEMPT.
+	p.Spec.Holds[0].Bundle = "b1"
+	c = policyClient(t, p, explainBundle("b1", "Promoting", created), explainStep("demo", "b1", "prod", "Promoting", "", created))
+	out, err = runExplain(t, c, "demo", "prod", false)
+	require.NoError(t, err)
+	assert.Contains(t, out, "prod: held on b1 by alice (INC-42); other versions do not promote here. Release with: kardinal unhold demo prod")
+	assert.NotContains(t, out, "EXEMPT")
 
 	out, err = runExplain(t, c, "demo", "test", false)
 	require.NoError(t, err)
@@ -672,7 +684,7 @@ func TestExplain_ShowsHoldBundleMissing(t *testing.T) {
 	)
 	out, err := runExplain(t, c, "demo", "prod", false)
 	require.NoError(t, err)
-	assert.Contains(t, out, "prod: held on rollback demo-rollback-gone by alice (INC-42), but the rollback version does not exist since "+
+	assert.Contains(t, out, "prod: held on demo-rollback-gone by alice (INC-42), but that version does not exist since "+
 		since.UTC().Format(time.RFC3339)+". The hold stays in effect")
-	assert.Contains(t, out, "Release with: kardinal release-hold demo --env prod, then roll back with --hold again if wanted")
+	assert.Contains(t, out, "Release with: kardinal unhold demo prod, then hold again if wanted")
 }
