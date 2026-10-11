@@ -150,9 +150,10 @@ rules exist for. A new client call needs a row there and a rule here.
   verbs: ["list"]
 - apiGroups: ["argoproj.io"]
   resources: ["applications"]
-  {{- if .Values.rbac.argocdApplicationsWrite }}
+  {{- if or .Values.rbac.argocdApplicationsWrite (eq (include "kardinal-promoter.healthRefresh" .) "true") }}
   # rbac.argocdApplicationsWrite: the argocd update strategy patches the
-  # Application's image overrides.
+  # Application's image overrides. health.refresh.enabled: a step sets
+  # argocd.argoproj.io/refresh on it (pkg/health/refresh.go).
   verbs: ["get", "list", "watch", "patch"]
   {{- else }}
   verbs: ["get", "list", "watch"]
@@ -167,7 +168,16 @@ rules exist for. A new client call needs a row there and a rule here.
   verbs: ["get"]
 - apiGroups: ["kustomize.toolkit.fluxcd.io"]
   resources: ["kustomizations"]
+  {{- if eq (include "kardinal-promoter.healthRefresh" .) "true" }}
+  # health.refresh.enabled: a step sets reconcile.fluxcd.io/requestedAt on
+  # the Kustomization and its source GitRepository (pkg/health/refresh.go).
+  verbs: ["get", "list", "watch", "patch"]
+- apiGroups: ["source.toolkit.fluxcd.io"]
+  resources: ["gitrepositories"]
+  verbs: ["patch"]
+  {{- else }}
   verbs: ["get", "list", "watch"]
+  {{- end }}
 - apiGroups: ["flagger.app"]
   resources: ["canaries"]
   verbs: ["get", "list", "watch"]

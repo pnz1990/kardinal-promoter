@@ -1,0 +1,378 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+
+package promotionstep_test
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/events"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
+)
+
+var (
+	applicationGVR   = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	kustomizationGVR = schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}
+	gitRepositoryGVR = schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"}
+)
+
+// refreshCase is a HealthChecking step "step" of Pipeline "p" with the
+// environment env, reconciled by a Reconciler whose health adapters read
+// dyn.
+type refreshCase struct {
+	env      v1alpha1.EnvironmentSpec
+	status   v1alpha1.PromotionStepStatus
+	prsRef   string
+	objs     []client.Object
+	dynObjs  []runtime.Object
+	disabled bool
+	// statusPatch, when set, intercepts the PromotionStep status patches.
+	statusPatch func(n int) error
+}
+
+type refreshRig struct {
+	c   client.Client
+	dyn *dynfake.FakeDynamicClient
+	r   *promotionstep.Reconciler
+	rec *events.FakeRecorder
+}
+
+func (rc refreshCase) rig(t *testing.T) *refreshRig {
+	t.Helper()
+	pipeline := makePipeline("p")
+	pipeline.Spec.Environments = []v1alpha1.EnvironmentSpec{rc.env}
+	ps := labelled(makeStep("step", "p", "b1", rc.env.Name))
+	ps.Spec.PRStatusRef = rc.prsRef
+	ps.Status = rc.status
+	if ps.Status.Steps == nil {
+		ps.Status.Steps = recordedSteps(rc.env.Approval)
+	}
+	ps.Status.State = "HealthChecking"
+	c := newClient(t, append([]client.Object{pipeline, makeBundle("b1", "p"), ps}, rc.objs...)...)
+	reader := c
+	if rc.statusPatch != nil {
+		n := 0
+		reader = interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+			SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object,
+				patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				n++
+				if err := rc.statusPatch(n); err != nil {
+					return err
+				}
+				return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+			}})
+	}
+	dyn := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), rc.dynObjs...)
+	rec := events.NewFakeRecorder(20)
+	r := &promotionstep.Reconciler{Client: reader, SCM: &mockSCM{}, GitClient: &mockGit{},
+		HealthDetector: health.NewAutoDetector(c, dyn), Recorder: rec, RefreshDisabled: rc.disabled,
+		NowFn: func() time.Time { return time.Date(2026, 10, 11, 12, 0, 0, 500, time.UTC) }}
+	return &refreshRig{c: c, dyn: dyn, r: r, rec: rec}
+}
+
+func (g *refreshRig) reconcile(t *testing.T) error {
+	t.Helper()
+	_, err := g.r.Reconcile(context.Background(), reqFor("step"))
+	return err
+}
+
+// patches lists the dynamic patches sent, as "resource ns/name".
+func (g *refreshRig) patches() []string {
+	var out []string
+	for _, a := range g.dyn.Actions() {
+		if p, ok := a.(k8stesting.PatchAction); ok {
+			out = append(out, p.GetResource().Resource+" "+p.GetNamespace()+"/"+p.GetName())
+		}
+	}
+	return out
+}
+
+func (g *refreshRig) annotation(t *testing.T, gvr schema.GroupVersionResource, ns, name, key string) string {
+	t.Helper()
+	obj, err := g.dyn.Resource(gvr).Namespace(ns).Get(context.Background(), name, metav1.GetOptions{})
+	require.NoError(t, err)
+	return obj.GetAnnotations()[key]
+}
+
+func (g *refreshRig) events() []string {
+	var out []string
+	for {
+		select {
+		case e := <-g.rec.Events:
+			out = append(out, e)
+		default:
+			return out
+		}
+	}
+}
+
+func fluxKustomizationFrom(ns, name, sourceKind, sourceName, sourceNS string) *unstructured.Unstructured {
+	ks := fluxKustomization(name, oldSHA)
+	ks.SetNamespace(ns)
+	ref := map[string]interface{}{"kind": sourceKind, "name": sourceName}
+	if sourceNS != "" {
+		ref["namespace"] = sourceNS
+	}
+	ks.Object["spec"] = map[string]interface{}{"sourceRef": ref}
+	return ks
+}
+
+func gitRepository(ns, name string) *unstructured.Unstructured {
+	return unstructuredObj("source.toolkit.fluxcd.io/v1", "GitRepository", ns, name, map[string]interface{}{})
+}
+
+var pushed = v1alpha1.PromotionStepStatus{Outputs: map[string]string{"commitSHA": newSHA}}
+
+// TestRefreshRequestedOnce proves that a step that pushed a commit asks the
+// GitOps object its health check names to sync it, records the request on
+// its own status and does not ask again on later reconciles.
+func TestRefreshRequestedOnce(t *testing.T) {
+	argo := v1alpha1.EnvironmentSpec{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{Type: "argocd"}}
+	flux := v1alpha1.EnvironmentSpec{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{Type: "flux"}}
+	at := "2026-10-11T12:00:00Z"
+	tests := []struct {
+		name        string
+		rc          refreshCase
+		wantPatches []string
+		wantAnn     func(t *testing.T, g *refreshRig)
+		wantMsg     string
+	}{
+		{name: "argocd Application",
+			rc:          refreshCase{env: argo, status: pushed, dynObjs: []runtime.Object{argoApplication("p-test", oldSHA)}},
+			wantPatches: []string{"applications argocd/p-test"},
+			wantAnn: func(t *testing.T, g *refreshRig) {
+				assert.Equal(t, "normal", g.annotation(t, applicationGVR, "argocd", "p-test", health.ArgoCDRefreshAnnotation))
+			},
+			wantMsg: "refresh requested: Application argocd/p-test"},
+		{name: "flux Kustomization and its GitRepository, source first",
+			rc: refreshCase{env: flux, status: pushed, dynObjs: []runtime.Object{
+				fluxKustomizationFrom("flux-system", "p-test", "GitRepository", "repo", ""), gitRepository("flux-system", "repo")}},
+			wantPatches: []string{"gitrepositories flux-system/repo", "kustomizations flux-system/p-test"},
+			wantAnn: func(t *testing.T, g *refreshRig) {
+				assert.Equal(t, at, g.annotation(t, gitRepositoryGVR, "flux-system", "repo", health.FluxRequestedAtAnnotation))
+				assert.Equal(t, at, g.annotation(t, kustomizationGVR, "flux-system", "p-test", health.FluxRequestedAtAnnotation))
+			},
+			wantMsg: "refresh requested: GitRepository flux-system/repo, Kustomization flux-system/p-test"},
+		{name: "flux source in another namespace",
+			rc: refreshCase{env: flux, status: pushed, dynObjs: []runtime.Object{
+				fluxKustomizationFrom("flux-system", "p-test", "GitRepository", "repo", "sources"), gitRepository("sources", "repo")}},
+			wantPatches: []string{"gitrepositories sources/repo", "kustomizations flux-system/p-test"},
+			wantMsg:     "GitRepository sources/repo"},
+		{name: "flux OCIRepository source: only the Kustomization",
+			rc: refreshCase{env: flux, status: pushed, dynObjs: []runtime.Object{
+				fluxKustomizationFrom("flux-system", "p-test", "OCIRepository", "oci", "")}},
+			wantPatches: []string{"kustomizations flux-system/p-test"},
+			wantMsg:     "refresh requested: Kustomization flux-system/p-test"},
+		{name: "merge commit from the PRStatus",
+			rc: refreshCase{env: v1alpha1.EnvironmentSpec{Name: "prod", Approval: "pr-review", Health: v1alpha1.HealthConfig{Type: "argocd"}},
+				prsRef: "prs", objs: []client.Object{mergedPRStatus(newSHA, false)},
+				dynObjs: []runtime.Object{argoApplication("p-prod", oldSHA)}},
+			wantPatches: []string{"applications argocd/p-prod"},
+			wantMsg:     "refresh requested: Application argocd/p-prod"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := tt.rc.rig(t)
+			require.NoError(t, g.reconcile(t))
+			assert.Equal(t, tt.wantPatches, g.patches())
+			if tt.wantAnn != nil {
+				tt.wantAnn(t, g)
+			}
+			got := getStep(t, g.c, "step")
+			require.NotNil(t, got.Status.RefreshRequestedAt)
+			assert.Equal(t, at, got.Status.RefreshRequestedAt.UTC().Format(time.RFC3339))
+			assert.Equal(t, newSHA, got.Status.RefreshRevision)
+			assert.Contains(t, got.Status.RefreshMessage, tt.wantMsg)
+			assert.Equal(t, "HealthChecking", got.Status.State)
+			ev := g.events()
+			require.Len(t, ev, 1)
+			assert.Contains(t, ev[0], "Normal "+promotionstep.ReasonRefreshRequested)
+
+			// Idempotent: later reconciles (the health check spacing is
+			// skipped by clearing lastHealthCheckAt) send nothing more.
+			for range 2 {
+				got = getStep(t, g.c, "step")
+				got.Status.LastHealthCheckAt = nil
+				require.NoError(t, g.c.Status().Update(context.Background(), &got))
+				require.NoError(t, g.reconcile(t))
+			}
+			assert.Equal(t, tt.wantPatches, g.patches())
+			assert.Empty(t, g.events())
+		})
+	}
+}
+
+func mergedPRStatus(sha string, unavailable bool) *v1alpha1.PRStatus {
+	prs := openPRStatus("prs", "org/repo", 42)
+	prs.Status.Open, prs.Status.Merged, prs.Status.MergeCommitSHA = false, true, sha
+	prs.Status.MergeCommitUnavailable = unavailable
+	return prs
+}
+
+// TestRefreshNotRequested covers the cases that send nothing: refresh turned
+// off by the controller or the environment, health types with no GitOps
+// object, a step with no changes or no commit, a step that already asked,
+// and a merge commit the PRStatus may still record.
+func TestRefreshNotRequested(t *testing.T) {
+	off := false
+	argo := v1alpha1.HealthConfig{Type: "argocd"}
+	app := []runtime.Object{argoApplication("p-test", oldSHA)}
+	asked := pushed
+	asked.RefreshRequestedAt = &metav1.Time{Time: time.Now()}
+	tests := []struct {
+		name string
+		rc   refreshCase
+	}{
+		{name: "controller --health-refresh=false",
+			rc: refreshCase{env: v1alpha1.EnvironmentSpec{Name: "test", Health: argo}, status: pushed, dynObjs: app, disabled: true}},
+		{name: "environment health.refresh: false",
+			rc: refreshCase{env: v1alpha1.EnvironmentSpec{Name: "test", Health: v1alpha1.HealthConfig{Type: "argocd", Refresh: &off}},
+				status: pushed, dynObjs: app}},
+		{name: "resource health type",
+			rc: refreshCase{env: v1alpha1.EnvironmentSpec{Name: "test", Health: v1alpha1.HealthConfig{Type: "resource"}},
+				status: pushed, objs: []client.Object{healthyDeployment("p", "test")}}},
+		{name: "already asked (a re-run after a crash once the request was recorded)",
+			rc: refreshCase{env: v1alpha1.EnvironmentSpec{Name: "test", Health: argo}, status: asked, dynObjs: app}},
+		{name: "no changes",
+			rc: refreshCase{env: v1alpha1.EnvironmentSpec{Name: "test", Health: argo},
+				status: v1alpha1.PromotionStepStatus{Outputs: map[string]string{"noChanges": "true", "commitSHA": newSHA}}, dynObjs: app}},
+		{name: "no commit and no PR (update.strategy argocd)",
+			rc: refreshCase{env: v1alpha1.EnvironmentSpec{Name: "test", Approval: "auto", Health: argo}, dynObjs: app}},
+		{name: "merge commit not recorded yet",
+			rc: refreshCase{env: v1alpha1.EnvironmentSpec{Name: "test", Approval: "pr-review", Health: argo},
+				prsRef: "prs", objs: []client.Object{mergedPRStatus("", false)}, dynObjs: app}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := tt.rc.rig(t)
+			require.NoError(t, g.reconcile(t))
+			assert.Empty(t, g.patches())
+			got := getStep(t, g.c, "step")
+			if tt.rc.status.RefreshRequestedAt == nil {
+				assert.Nil(t, got.Status.RefreshRequestedAt)
+			}
+			for _, e := range g.events() {
+				assert.NotContains(t, e, "GitOpsRefresh")
+			}
+		})
+	}
+}
+
+// TestRefreshWithoutMergeCommit: a PR merged with no merge commit the SCM
+// will report (status.mergeCommitUnavailable) is refreshed once, with no
+// revision.
+func TestRefreshWithoutMergeCommit(t *testing.T) {
+	g := refreshCase{env: v1alpha1.EnvironmentSpec{Name: "test", Approval: "pr-review", Health: v1alpha1.HealthConfig{Type: "argocd"}},
+		prsRef: "prs", objs: []client.Object{mergedPRStatus("", true)},
+		dynObjs: []runtime.Object{argoApplication("p-test", oldSHA)}}.rig(t)
+	require.NoError(t, g.reconcile(t))
+	assert.Equal(t, []string{"applications argocd/p-test"}, g.patches())
+	got := getStep(t, g.c, "step")
+	require.NotNil(t, got.Status.RefreshRequestedAt)
+	assert.Empty(t, got.Status.RefreshRevision)
+}
+
+// TestRefreshFailureFallsBackToPolling proves a failed request is not a
+// failure: the step records why, emits a Warning Event, keeps checking
+// health and passes once the tool syncs on its own poll, without asking
+// again.
+func TestRefreshFailureFallsBackToPolling(t *testing.T) {
+	argo := v1alpha1.EnvironmentSpec{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{Type: "argocd"}}
+	flux := v1alpha1.EnvironmentSpec{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{Type: "flux"}}
+	tests := []struct {
+		name    string
+		rc      refreshCase
+		forbid  bool
+		wantMsg string
+		synced  func(g *refreshRig)
+	}{
+		{name: "patch forbidden (no RBAC)", forbid: true,
+			rc:      refreshCase{env: argo, status: pushed, dynObjs: []runtime.Object{argoApplication("p-test", oldSHA)}},
+			wantMsg: "refresh request failed (annotate Application argocd/p-test: forbidden",
+			synced: func(g *refreshRig) {
+				_, _ = g.dyn.Resource(applicationGVR).Namespace("argocd").Update(context.Background(),
+					argoApplication("p-test", newSHA), metav1.UpdateOptions{})
+			}},
+		{name: "Kustomization missing",
+			rc:      refreshCase{env: flux, status: pushed},
+			wantMsg: "refresh request failed (get flux kustomization flux-system/p-test"},
+		{name: "GitRepository missing: the Kustomization is still annotated",
+			rc: refreshCase{env: flux, status: pushed, dynObjs: []runtime.Object{
+				fluxKustomizationFrom("flux-system", "p-test", "GitRepository", "gone", "")}},
+			wantMsg: "annotate GitRepository flux-system/gone"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := tt.rc.rig(t)
+			if tt.forbid {
+				g.dyn.PrependReactor("patch", "applications", func(k8stesting.Action) (bool, runtime.Object, error) {
+					return true, nil, errors.New("forbidden")
+				})
+			}
+			require.NoError(t, g.reconcile(t))
+			got := getStep(t, g.c, "step")
+			require.NotNil(t, got.Status.RefreshRequestedAt)
+			assert.Contains(t, got.Status.RefreshMessage, tt.wantMsg)
+			assert.Contains(t, got.Status.RefreshMessage, "waiting for")
+			assert.Equal(t, "HealthChecking", got.Status.State)
+			if len(tt.rc.dynObjs) > 0 {
+				// The refresh failure counts nothing (a missing
+				// Kustomization does fail its health check).
+				assert.Zero(t, got.Status.ConsecutiveHealthFailures)
+			}
+			ev := g.events()
+			require.Len(t, ev, 1)
+			assert.True(t, strings.HasPrefix(ev[0], "Warning "+promotionstep.ReasonRefreshFailed), ev[0])
+
+			if tt.synced == nil {
+				return
+			}
+			n := len(g.patches())
+			tt.synced(g)
+			got.Status.LastHealthCheckAt = nil
+			require.NoError(t, g.c.Status().Update(context.Background(), &got))
+			require.NoError(t, g.reconcile(t))
+			got = getStep(t, g.c, "step")
+			assert.Equal(t, "Verified", got.Status.State, got.Status.Message)
+			assert.Len(t, g.patches(), n, "no second request")
+		})
+	}
+}
+
+// TestRefreshCrashBeforeRecord: when the status patch that records the
+// request fails (a crash or an API error before it), no annotation is sent;
+// the re-run records and sends it once.
+func TestRefreshCrashBeforeRecord(t *testing.T) {
+	g := refreshCase{env: v1alpha1.EnvironmentSpec{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{Type: "argocd"}},
+		status: pushed, dynObjs: []runtime.Object{argoApplication("p-test", oldSHA)},
+		statusPatch: func(n int) error {
+			if n == 1 {
+				return errors.New("etcdserver: request timed out")
+			}
+			return nil
+		}}.rig(t)
+	require.Error(t, g.reconcile(t))
+	assert.Empty(t, g.patches())
+	assert.Nil(t, getStep(t, g.c, "step").Status.RefreshRequestedAt)
+
+	require.NoError(t, g.reconcile(t))
+	assert.Equal(t, []string{"applications argocd/p-test"}, g.patches())
+	require.NotNil(t, getStep(t, g.c, "step").Status.RefreshRequestedAt)
+}

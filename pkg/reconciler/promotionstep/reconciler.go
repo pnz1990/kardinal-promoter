@@ -196,6 +196,10 @@ type Reconciler struct {
 	// scm.GatesStatusContext ("kardinal/gates").
 	GatesStatusContext string
 
+	// RefreshDisabled is --health-refresh=false: no step asks Argo CD or
+	// Flux to sync its commit (requestRefresh); they sync on their own poll.
+	RefreshDisabled bool
+
 	// HealthDetector selects the health adapter for health checking.
 	// If nil, the health-check step stub (always-success) is used.
 	HealthDetector *health.AutoDetector
@@ -1890,6 +1894,15 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	if err != nil {
 		// Only an unknown type reaches here; admission rejects it.
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, err.Error())
+	}
+
+	// The promoted commit is in git: ask Argo CD or Flux to sync it now
+	// rather than at its next poll (health.refresh, once per step).
+	if r.refreshWanted(ps, env, adapter.Name(), opts.ExpectedRevision, mergeCommitPending) {
+		if err := r.requestRefresh(ctx, log, base, ps, detector, opts, opts.ExpectedRevision); err != nil {
+			return ctrl.Result{}, err
+		}
+		base = ps.DeepCopy()
 	}
 
 	// With no changes there is no PR and no merge commit, and the previous
