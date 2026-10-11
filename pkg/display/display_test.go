@@ -58,9 +58,9 @@ var camel = regexp.MustCompile(`[a-z][A-Z]`)
 // Covers DISPLAY-STATES-01.
 func TestEveryAPIValueHasALabel(t *testing.T) {
 	cases := map[display.Kind][]string{
-		display.KindBundle:   enum(t, "api/v1alpha1/bundle_types.go", "Phase string `json:\"phase,omitempty\"`"),
-		display.KindStep:     append(enum(t, "api/v1alpha1/promotionstep_types.go", "State string `json:\"state,omitempty\"`"), "NotStarted"),
-		display.KindSubStep:  enum(t, "api/v1alpha1/promotionstep_types.go", "State StepExecutionState `json:\"state\"`"),
+		display.KindBundle:  enum(t, "api/v1alpha1/bundle_types.go", "Phase string `json:\"phase,omitempty\"`"),
+		display.KindStep:    append(enum(t, "api/v1alpha1/promotionstep_types.go", "State string `json:\"state,omitempty\"`"), "NotStarted"),
+		display.KindSubStep: enum(t, "api/v1alpha1/promotionstep_types.go", "State StepExecutionState `json:\"state\"`"),
 		// Paused is not a phase: display.Pipeline shows it when spec.paused is set.
 		display.KindPipeline: append(enum(t, "api/v1alpha1/pipeline_types.go", "Phase string `json:\"phase,omitempty\"`"), "Paused"),
 		display.KindGate:     graph.GateStates,
