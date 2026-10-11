@@ -39,7 +39,8 @@ import (
 )
 
 // secretRecheckInterval is how often a Pipeline refused for a missing
-// git.secretRef Secret is checked again: the reconciler watches no Secrets.
+// git.secretRef Secret, or reported GitCredentialMissing, is checked again:
+// the reconciler watches no Secrets.
 const secretRecheckInterval = time.Minute
 
 // Ready condition reasons.
@@ -77,29 +78,18 @@ const (
 	secretRecheck = 5 * time.Minute
 )
 
-// gitSecretCondition returns the SecretReferenceable warning for p, or nil.
-// The Secret is read from the API server (Secrets are not cached).
-func (r *Reconciler) gitSecretCondition(ctx context.Context, p *kardinalv1alpha1.Pipeline) (*metav1.Condition, error) {
-	ref := p.Spec.Git.SecretRef
-	if ref == nil || ref.Name == "" {
-		return nil, nil
-	}
-	var secret corev1.Secret
-	if err := r.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: ref.Name}, &secret); err != nil {
-		if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get git secret %s: %w", ref.Name, err)
-	}
-	if secret.Labels[labelReferenceable] == "true" {
-		return nil, nil
+// gitSecretCondition returns the SecretReferenceable warning for p, or nil,
+// from its git Secret as readGitSecret read it.
+func gitSecretCondition(p *kardinalv1alpha1.Pipeline, gs gitSecret) *metav1.Condition {
+	if gs.secret == nil || gs.secret.Labels[labelReferenceable] == "true" {
+		return nil
 	}
 	return &metav1.Condition{
 		Type: conditionSecretReferenceable, Status: metav1.ConditionFalse, Reason: reasonSecretNotReferenceable,
 		ObservedGeneration: p.Generation,
-		Message: fmt.Sprintf("git Secret %s is not labeled %s=true; it is still used in v0.10.0 but will be refused "+
-			"in v0.11: label it (kubectl label secret %s %s=true)", ref.Name, labelReferenceable, ref.Name, labelReferenceable),
-	}, nil
+		Message: fmt.Sprintf("git Secret %s is not labeled %s=true; it is still used in v0.10 but will be refused "+
+			"in v0.11: label it (kubectl label secret %s -n %s %s=true)", gs.name, labelReferenceable, gs.name, p.Namespace, labelReferenceable),
+	}
 }
 
 // Reconciler watches Pipeline objects, validates them, and sets status.conditions
@@ -111,6 +101,11 @@ type Reconciler struct {
 	Workers int
 
 	client.Client
+
+	// ControllerSecret is the Secret holding the controller's own SCM token:
+	// a Pipeline whose git.secretRef names it is Ready=False/ValidationFailed.
+	// Nil refuses nothing.
+	ControllerSecret *scm.ControllerTokenSecret
 
 	// AllowedRepositories is --scm-allowed-repositories: a Pipeline that
 	// would need the shared SCM token for a spec.git.url it does not allow is
@@ -214,10 +209,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	validated := p.DeepCopy()
 	validated.Status.Fleets = desiredFleets
 	desired := r.validate(validated, ownSecret)
-	desiredSecret, err := r.gitSecretCondition(ctx, &p)
+	gs, err := r.readGitSecret(ctx, &p)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	desiredSecret := gitSecretCondition(&p, gs)
 	// Nothing watches Secrets: a git.secretRef Secret created later, or a
 	// label added to one, is seen by these periodic re-checks. A selector
 	// fleet is re-resolved as often.
@@ -239,6 +235,18 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if conflict != "" {
 			desired = metav1.Condition{Type: "Ready", Status: metav1.ConditionFalse, Reason: reasonRenderedBranchConflict,
 				Message: conflict, ObservedGeneration: p.Generation}
+		}
+	}
+	// A valid spec whose git has no credential: every git step of a Bundle
+	// would wait for it, so Ready says so before the first Bundle, with the
+	// command that fixes it. Re-checked every minute: Secrets are not
+	// watched.
+	if desired.Status == metav1.ConditionTrue {
+		if c := gitCredentialMissing(&p, gs); c != nil {
+			desired = *c
+			if result.RequeueAfter == 0 || secretRecheckInterval < result.RequeueAfter {
+				result.RequeueAfter = secretRecheckInterval
+			}
 		}
 	}
 	if hasSelectorFleet(&p) && (result.RequeueAfter == 0 || fleetResync < result.RequeueAfter) {
@@ -665,6 +673,9 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline, ownSecret bool) meta
 	// A git.secretRef in another namespace is refused on purpose (confused
 	// deputy), so it is a validation error, not an unimplemented field.
 	if err := graph.ValidateSecretRef(p); err != nil {
+		return invalid(err.Error())
+	}
+	if err := r.ControllerSecret.Refuses(p); err != nil {
 		return invalid(err.Error())
 	}
 	// The Pipeline would have the controller's shared SCM token act on a

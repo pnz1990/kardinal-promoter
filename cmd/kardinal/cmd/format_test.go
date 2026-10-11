@@ -83,7 +83,7 @@ func TestFormatPipelineTable(t *testing.T) {
 
 	// Header must have per-environment columns.
 	assert.Contains(t, out, "PIPELINE")
-	assert.Contains(t, out, "BUNDLE")
+	assert.Contains(t, out, "VERSION")
 	assert.Contains(t, out, "TEST")
 	assert.Contains(t, out, "UAT")
 	assert.Contains(t, out, "PROD")
@@ -129,7 +129,7 @@ func TestFormatPipelineTable_NoSteps(t *testing.T) {
 
 	row := tableRow(t, out, "my-pipeline")
 	assert.Equal(t, map[string]string{
-		"PIPELINE": "my-pipeline", "BUNDLE": "-", "DEV": "-", "PROD": "-", "AGE": "5m",
+		"PIPELINE": "my-pipeline", "VERSION": "-", "DEV": "-", "PROD": "-", "AGE": "5m",
 	}, row)
 }
 
@@ -308,7 +308,7 @@ func TestFormatBundleTable(t *testing.T) {
 	require.NoError(t, cmd.FormatBundleTable(&buf, bundles))
 	out := buf.String()
 
-	assert.Contains(t, out, "BUNDLE")
+	assert.Contains(t, out, "VERSION")
 	assert.Contains(t, out, "TYPE")
 	assert.Contains(t, out, "PHASE")
 	assert.Contains(t, out, "AGE")
@@ -543,7 +543,7 @@ func TestFormatPipelineTable_ActiveBundlePrefersPromoting(t *testing.T) {
 		"the old Verified bundle should not appear when a newer Promoting bundle exists")
 }
 
-// E2E-R17: BUNDLE is the pipeline's current Bundle (lifecycle.CurrentBundle,
+// E2E-R17: VERSION is the pipeline's current Bundle (lifecycle.CurrentBundle,
 // the UI's activeBundleName) and every environment cell describes that
 // Bundle: its step state there, Waiting while it is in flight and still to
 // come, a dash when it is terminal or does not promote the environment. An
@@ -599,22 +599,22 @@ func TestFormatPipelineTable_CurrentBundleState(t *testing.T) {
 			name:    "newer bundle failed at the first env",
 			bundles: []v1alpha1.Bundle{bundle("app-b1", "Verified", old), bundle("app-b2", "Failed", recent)},
 			steps:   b1Everywhere(step("app-b2", "dev", "Failed", recent)),
-			want:    map[string]string{"BUNDLE": "app-b2", "DEV": "Failed", "STAGE": "-", "PROD": "-"},
+			want:    map[string]string{"VERSION": "app-b2", "DEV": "Failed", "STAGE": "-", "PROD": "-"},
 		},
 		{
 			// j1-happy.log: B2 held at prod by a not-ready gate; the older
-			// bundle's Verified was shown next to BUNDLE B2.
+			// bundle's Verified was shown next to VERSION B2.
 			name:    "bundle held at prod, older bundle Verified there",
 			bundles: []v1alpha1.Bundle{bundle("app-b1", "Verified", old), bundle("app-b2", "Promoting", recent)},
 			steps: b1Everywhere(
 				step("app-b2", "dev", "Verified", recent), step("app-b2", "stage", "Verified", recent)),
-			want: map[string]string{"BUNDLE": "app-b2", "DEV": "Verified", "STAGE": "Verified", "PROD": "Waiting"},
+			want: map[string]string{"VERSION": "app-b2", "DEV": "Verified", "STAGE": "Verified", "PROD": "Waiting"},
 		},
 		{
 			name:    "bundle health checking in the first env, ungated envs after it",
 			bundles: []v1alpha1.Bundle{bundle("app-b1", "Verified", old), bundle("app-b2", "Promoting", recent)},
 			steps:   b1Everywhere(step("app-b2", "dev", "HealthChecking", recent)),
-			want:    map[string]string{"BUNDLE": "app-b2", "DEV": "HealthChecking", "STAGE": "Waiting", "PROD": "Waiting"},
+			want:    map[string]string{"VERSION": "app-b2", "DEV": "HealthChecking", "STAGE": "Waiting", "PROD": "Waiting"},
 		},
 		{
 			// The per-environment rule would name app-b2 (it has steps) while
@@ -623,47 +623,49 @@ func TestFormatPipelineTable_CurrentBundleState(t *testing.T) {
 			bundles: []v1alpha1.Bundle{bundle("app-b1", "Verified", old), bundle("app-b2", "Promoting", recent),
 				bundle("app-b3", "Available", newest)},
 			steps: b1Everywhere(step("app-b2", "dev", "Promoting", recent)),
-			want:  map[string]string{"BUNDLE": "app-b3", "DEV": "Waiting", "STAGE": "Waiting", "PROD": "Waiting"},
+			want:  map[string]string{"VERSION": "app-b3", "DEV": "Waiting", "STAGE": "Waiting", "PROD": "Waiting"},
 		},
 		{
 			name:    "held bundle over a Superseded bundle",
 			bundles: []v1alpha1.Bundle{bundle("app-b1", "Superseded", old), bundle("app-b2", "Promoting", recent)},
 			steps: b1Everywhere(
 				step("app-b2", "dev", "Verified", recent), step("app-b2", "stage", "Verified", recent)),
-			want: map[string]string{"BUNDLE": "app-b2", "DEV": "Verified", "STAGE": "Verified", "PROD": "Waiting"},
+			want: map[string]string{"VERSION": "app-b2", "DEV": "Verified", "STAGE": "Verified", "PROD": "Waiting"},
 		},
 		{
 			name:    "unstarted step of the current bundle is Pending",
 			bundles: []v1alpha1.Bundle{bundle("app-b1", "Verified", old), bundle("app-b2", "Promoting", recent)},
 			steps:   b1Everywhere(step("app-b2", "dev", "", recent)),
-			want:    map[string]string{"BUNDLE": "app-b2", "DEV": "Pending", "STAGE": "Waiting", "PROD": "Waiting"},
+			want:    map[string]string{"VERSION": "app-b2", "DEV": "Pending", "STAGE": "Waiting", "PROD": "Waiting"},
 		},
 		{
 			name:    "skipped env shows a dash",
 			bundles: []v1alpha1.Bundle{bundle("app-b1", "Verified", old), bundle("app-b2", "Promoting", recent, "stage")},
 			steps:   b1Everywhere(step("app-b2", "dev", "Verified", recent)),
-			want:    map[string]string{"BUNDLE": "app-b2", "DEV": "Verified", "STAGE": "-", "PROD": "Waiting"},
+			want:    map[string]string{"VERSION": "app-b2", "DEV": "Verified", "STAGE": "-", "PROD": "Waiting"},
 		},
 		{
 			name:    "steps of a deleted bundle are ignored",
 			bundles: []v1alpha1.Bundle{bundle("app-b2", "Promoting", recent)},
 			steps:   b1Everywhere(step("app-b2", "dev", "Promoting", recent)),
-			want:    map[string]string{"BUNDLE": "app-b2", "DEV": "Promoting", "STAGE": "Waiting", "PROD": "Waiting"},
+			want:    map[string]string{"VERSION": "app-b2", "DEV": "Promoting", "STAGE": "Waiting", "PROD": "Waiting"},
 		},
 		{
 			// QA #1489: a Rejected bundle whose change is live stays current,
-			// marked Rejected, with a roll-back hint.
+			// marked Rejected, with a roll-back hint. Its cancelled step in
+			// stage is not stage's state (status.environments: b1 runs
+			// there), so the row shows nothing there.
 			name:    "a rejected change that is live stays current, marked Rejected",
 			bundles: []v1alpha1.Bundle{bundle("app-b1", "Verified", old), rejectedB(bundle("app-b2", "Rejected", recent))},
 			steps:   b1Everywhere(step("app-b2", "dev", "Verified", recent), step("app-b2", "stage", "Failed", recent)),
-			want:    map[string]string{"BUNDLE": "app-b2(Rejected)", "DEV": "Verified", "STAGE": "Failed", "PROD": "-"},
+			want:    map[string]string{"VERSION": "app-b2 Rejected", "DEV": "Verified", "STAGE": "-", "PROD": "-"},
 			hint:    "WARNING: pipeline app: bundle app-b2 is Rejected in dev: rejected change is live; roll back (kardinal rollback app --env dev)",
 		},
 		{
 			name:    "a rejected bundle that never went live is skipped",
 			bundles: []v1alpha1.Bundle{bundle("app-b1", "Verified", old), rejectedB(bundle("app-b2", "Rejected", recent))},
 			steps:   b1Everywhere(step("app-b2", "dev", "Failed", recent)),
-			want:    map[string]string{"BUNDLE": "app-b1", "DEV": "Verified", "STAGE": "Verified", "PROD": "Verified"},
+			want:    map[string]string{"VERSION": "app-b1", "DEV": "Verified", "STAGE": "Verified", "PROD": "Verified"},
 		},
 	}
 	for _, tt := range tests {
@@ -672,13 +674,13 @@ func TestFormatPipelineTable_CurrentBundleState(t *testing.T) {
 			require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, tt.bundles, tt.steps, nil, false))
 			row := tableRow(t, buf.String(), "app")
 			for col, want := range tt.want {
-				if col != "BUNDLE" {
+				if col != "VERSION" {
 					want = envLabel(want)
 				}
 				assert.Equal(t, want, row[col], "column %s in:\n%s", col, buf.String())
 			}
 			if b := lifecycle.CurrentBundle(tt.bundles, tt.steps); assert.NotNil(t, b) {
-				assert.Equal(t, b.Name, strings.TrimSuffix(row["BUNDLE"], "(Rejected)"), "BUNDLE is the UI's activeBundleName")
+				assert.Equal(t, b.Name, strings.TrimSuffix(row["VERSION"], " Rejected"), "VERSION is the UI's activeBundleName")
 			}
 			if tt.hint != "" {
 				assert.Contains(t, buf.String(), tt.hint)
@@ -975,7 +977,7 @@ func TestFormatBundleErrors_OnlyCauseConditions(t *testing.T) {
 		}, `pipeline "web" not found`},
 		{"no cause condition", []metav1.Condition{
 			cond("GraphSynced", "Synced", "graph is current"),
-		}, "promotion failed — run `kubectl describe bundle web-1` for details"},
+		}, "promotion failed; run `kubectl describe bundle web-1` for details"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

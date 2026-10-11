@@ -1,70 +1,65 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 //
-// components/BlockedBanner.tsx — Banner shown when PolicyGates are blocking promotion.
+// components/BlockedBanner.tsx — Banner shown when gates are holding a version back.
 //
 // Adapted from kro-ui's AnomalyBanner (compile-error banner pattern).
-// Shows count of blocked PolicyGates with a "Show blocked" button to highlight them.
+// Says how many gates block which environments ("1 gate blocking prod"), with one
+// button, "Show blocked", that highlights them on the map.
+
+import '../styles/BlockedBanner.css'
 
 interface BlockedBannerProps {
-  /** Number of PolicyGate nodes holding the bundle back (GraphNode.holding). */
+  /** Number of gates holding the version back (GraphNode.holding). */
   blockedCount: number
+  /** The environments those gates guard, in pipeline order. */
+  environments?: string[]
   /** Whether the highlight filter is currently active. */
   highlightActive: boolean
   /** Toggle the highlight filter. */
   onToggleHighlight: () => void
 }
 
-/**
- * BlockedBanner renders an amber warning banner when one or more PolicyGates
- * are in a blocked state. It includes a toggle to highlight the blocked nodes in the DAG.
- */
-export function BlockedBanner({ blockedCount, highlightActive, onToggleHighlight }: BlockedBannerProps) {
-  if (blockedCount === 0) return null
+/** "prod", "uat and prod", "test, uat and prod". */
+function listOf(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? ''
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+}
 
-  const label = blockedCount === 1
-    ? '1 PolicyGate blocking promotion'
-    : `${blockedCount} PolicyGates blocking promotion`
+/** "1 gate blocking prod", "2 gates blocking uat and prod". */
+export function blockedLabel(count: number, environments: string[] = []): string {
+  const envs = [...new Set(environments.filter(Boolean))]
+  return `${count} ${count === 1 ? 'gate' : 'gates'} blocking ${envs.length ? listOf(envs) : 'promotion'}`
+}
+
+/**
+ * BlockedBanner renders an amber warning banner when one or more gates hold the
+ * version back. Its one button highlights the blocked gates on the map.
+ */
+export function BlockedBanner({ blockedCount, environments, highlightActive, onToggleHighlight }: BlockedBannerProps) {
+  if (blockedCount === 0) return null
 
   return (
     <div
       role="alert"
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        background: 'var(--color-warning-bg)',
-        border: '1px solid var(--color-warning)',
-        borderRadius: '6px',
-        padding: '0.5rem 0.75rem',
-        marginBottom: '0.75rem',
-        gap: '0.75rem',
-      }}
+      className="blocked-banner"
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        <span style={{ color: 'var(--color-warning)', fontSize: '0.9rem' }} aria-hidden="true">⚠</span>
-        <span style={{ fontSize: '0.82rem', color: 'var(--color-warning)', fontWeight: 600 }}>
-          {label}
+      <div className="blocked-banner__message">
+        <span className="blocked-banner__icon" aria-hidden="true">⚠</span>
+        <span className="blocked-banner__label">
+          {blockedLabel(blockedCount, environments)}
         </span>
       </div>
-      <button
-        onClick={onToggleHighlight}
-        aria-pressed={highlightActive}
-        style={{
-          background: highlightActive ? 'var(--color-warning)' : 'none',
-          border: '1px solid var(--color-warning)',
-          borderRadius: '4px',
-          color: highlightActive ? 'var(--color-bg)' : 'var(--color-warning)',
-          cursor: 'pointer',
-          fontSize: '0.75rem',
-          fontWeight: 600,
-          padding: '2px 8px',
-          whiteSpace: 'nowrap',
-          transition: 'background 0.15s',
-        }}
-      >
-        {highlightActive ? 'Show all' : 'Show blocked'}
-      </button>
+      <div className="blocked-banner__actions">
+        <button
+          type="button"
+          onClick={onToggleHighlight}
+          aria-pressed={highlightActive}
+          className="blocked-banner__toggle"
+        >
+          {highlightActive ? 'Show all' : 'Show blocked'}
+        </button>
+      </div>
     </div>
   )
 }

@@ -23,6 +23,9 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/client-go/tools/events"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -381,4 +384,40 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+// TestSecretWatcher_WarnsWhenReferenceable (#1725 QA): the controller's own
+// token Secret labelled kardinal.io/referenceable gets one Warning Event (and
+// log line) with the command that removes the label, once per labelling.
+//
+// Covers CHART-SCM-ALIAS-02.
+func TestSecretWatcher_WarnsWhenReferenceable(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "github-token", Namespace: "kardinal-system",
+		Labels: map[string]string{"kardinal.io/referenceable": "true"}}, Data: map[string][]byte{"token": []byte("t")}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+	dp, err := scm.NewDynamicProvider("github", "t", "", "")
+	require.NoError(t, err)
+	rec := events.NewFakeRecorder(10)
+	w := scm.NewSecretWatcher(c, dp, "github-token", "kardinal-system", "token", zerolog.Nop())
+	w.Recorder = rec
+
+	w.CheckAndReloadForTest(context.Background())
+	w.CheckAndReloadForTest(context.Background())
+	require.Len(t, rec.Events, 1, "one Event per labelling")
+	ev := <-rec.Events
+	assert.Contains(t, ev, "Warning ControllerSecretReferenceable")
+	assert.Contains(t, ev, "kubectl label secret github-token -n kardinal-system kardinal.io/referenceable-")
+
+	// Unlabelled: no warning; labelled again: warned again.
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(secret), secret))
+	secret.Labels = nil
+	require.NoError(t, c.Update(context.Background(), secret))
+	w.CheckAndReloadForTest(context.Background())
+	assert.Empty(t, rec.Events)
+	secret.Labels = map[string]string{"kardinal.io/referenceable": "true"}
+	require.NoError(t, c.Update(context.Background(), secret))
+	w.CheckAndReloadForTest(context.Background())
+	assert.Len(t, rec.Events, 1)
 }

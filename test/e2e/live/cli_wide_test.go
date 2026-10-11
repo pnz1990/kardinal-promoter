@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
@@ -46,31 +47,32 @@ func TestCLI_GetPipelinesWide(t *testing.T) {
 
 	out := c.Must(a.ns, "get", "pipelines")
 	header := cliCellGap.Split(strings.SplitN(out, "\n", 2)[0], -1)
-	assert.Equal(t, []string{"PIPELINE", "BUNDLE", "ENVS", "PROGRESS", "FURTHEST", "SUB", "AGE"}, header, out)
+	assert.Equal(t, []string{"PIPELINE", "VERSION", "ENVS", "PROGRESS", "FURTHEST", "SUB", "AGE"}, header, out)
 	row := framework.TableRow(out, "PIPELINE", pipelineName)
 	require.NotNil(t, row, out)
-	assert.Equal(t, b1, row["BUNDLE"])
+	assert.Equal(t, b1, framework.BundleOf(row["VERSION"]))
 	assert.Equal(t, "10", row["ENVS"])
-	assert.Equal(t, "10 Verified", row["PROGRESS"])
+	assert.Equal(t, "10 "+display.Step("Verified").Label, row["PROGRESS"])
 	assert.Equal(t, "r9", row["FURTHEST"], "the wave's last environment in spec order")
 	assert.Contains(t, out, "More than 8 environments: one row per Pipeline. Every environment of one: kardinal get pipelines <name>")
 
 	one := c.Must(a.ns, "get", "pipelines", pipelineName)
 	header = cliCellGap.Split(strings.SplitN(one, "\n", 2)[0], -1)
-	assert.Equal(t, []string{"PIPELINE", "BUNDLE", "TEST", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "SUB", "AGE"}, header,
+	assert.Equal(t, []string{"PIPELINE", "VERSION", "TEST", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "SUB", "AGE"}, header,
 		"every environment, in DAG order")
 	row = framework.TableRow(one, "PIPELINE", pipelineName)
 	require.NotNil(t, row, one)
 	for _, env := range envs {
-		assert.Equal(t, "Verified", row[strings.ToUpper(env)], env)
+		assert.Equal(t, display.Step("Verified").Label, row[strings.ToUpper(env)], env)
 	}
 
 	// A newer Bundle is listed first, by the table and by -o json.
 	b2 := createBundle(t, e, a.ns, pipelineName, "", fixtures.V3, nil).Name
 	lines := strings.Split(strings.TrimSpace(c.Must(a.ns, "get", "bundles")), "\n")
 	require.Len(t, lines, 3, lines)
-	assert.True(t, strings.HasPrefix(lines[1], b2+" "), "newest first: %v", lines)
-	assert.True(t, strings.HasPrefix(lines[2], b1+" "), "newest first: %v", lines)
+	rows := framework.ParseTable(strings.Join(lines, "\n"))
+	require.Len(t, rows, 2, lines)
+	assert.Equal(t, []string{b2, b1}, []string{framework.BundleOf(rows[0]["VERSION"]), framework.BundleOf(rows[1]["VERSION"])}, "newest first: %v", lines)
 	var bl []v1alpha1.Bundle
 	require.NoError(t, json.Unmarshal([]byte(c.Must(a.ns, "get", "bundles", "-o", "json")), &bl))
 	require.Len(t, bl, 2)

@@ -209,9 +209,12 @@ describe('FleetHealthBar', () => {
     expect(screen.queryByText('Full CD')).not.toBeInTheDocument()
   })
 
-  it('does not show CI Red badge when no CI red pipelines', () => {
-    const pipelines = [makePipeline({ failedStepCount: 0 })]
-    render(<FleetHealthBar pipelines={pipelines} activeFilter="all" onFilterChange={() => {}} />)
+  it('shows a Failed badge only when a pipeline has a failed promotion', () => {
+    const { unmount } = render(<FleetHealthBar pipelines={[makePipeline({ failedStepCount: 0 })]} activeFilter="all" onFilterChange={() => {}} />)
+    expect(screen.queryByText('Failed')).not.toBeInTheDocument()
+    unmount()
+    render(<FleetHealthBar pipelines={[makePipeline({ failedStepCount: 1 })]} activeFilter="all" onFilterChange={() => {}} />)
+    expect(screen.getByText('Failed')).toBeInTheDocument()
     expect(screen.queryByText('CI Red')).not.toBeInTheDocument()
   })
 
@@ -231,7 +234,7 @@ describe('FleetHealthBar', () => {
     )
     expect(screen.getByRole('button', { name: '1 healthy pipeline' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '2 blocked pipelines' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '1 pipeline with CI failures' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '1 pipeline with a failed promotion' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '1 pipeline currently promoting' })).toBeInTheDocument()
     unmount()
 
@@ -247,7 +250,7 @@ describe('FleetHealthBar', () => {
     )
     expect(screen.getByRole('button', { name: '0 healthy pipelines' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '2 blocked pipelines' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '2 pipelines with CI failures' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '2 pipelines with a failed promotion' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '2 pipelines currently promoting' })).toBeInTheDocument()
   })
 })

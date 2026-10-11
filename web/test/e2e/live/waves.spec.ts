@@ -48,6 +48,8 @@ test('the lane counts the wave, the DAG keeps spec order, the metrics count the 
   }
   expect(ys, 'w1 at the top, w6 at the bottom').toEqual([...ys].sort((a, b) => a - b))
 
+  // The release metrics are on the Metrics tab (U1).
+  await page.getByRole('tab', { name: 'Metrics' }).click()
   const metrics = page.getByRole('region', { name: 'Release metrics' })
   await expect(metrics).toContainText('Time to all 6 final envs')
   await expect(metrics).toContainText(/Deploys to all 6 final envs\s*1/)

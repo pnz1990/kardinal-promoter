@@ -31,6 +31,7 @@ kardinal override <pipeline> [<env>] --gate <gate> --reason <text> [flags]
       --gate string           PolicyGate name to override
   -h, --help                  help for override
       --reason string         Mandatory justification for the override (audit record)
+      --yes                   Do not ask for confirmation on a terminal
 ```
 
 ### Options inherited from parent commands
@@ -39,7 +40,7 @@ kardinal override <pipeline> [<env>] --gate <gate> --reason <text> [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: get auditevents, bundles, pipelines, steps, subscriptions)
+  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
 ```
 
 ### SEE ALSO

@@ -267,6 +267,30 @@ func TestBundleAPI_CarriesIntentAndConfigRef(t *testing.T) {
 	assert.Equal(t, "mixed", b.Spec.Type)
 }
 
+// TestBundleAPI_InfersType (P6): a request without "type" creates the Bundle
+// with the type its fields say: config, mixed, chart or image.
+//
+// Covers BUNDLE-API-TYPE-01.
+func TestBundleAPI_InfersType(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		{`{"pipeline":"app","images":[{"repository":"ghcr.io/org/app","tag":"v1"}]}`, "image"},
+		{`{"pipeline":"app","configRef":{"gitRepo":"https://github.com/org/cfg","commitSHA":"abc123"}}`, "config"},
+		{`{"pipeline":"app","images":[{"repository":"ghcr.io/org/app","tag":"v1"}],
+		  "configRef":{"gitRepo":"https://github.com/org/cfg","commitSHA":"abc123"}}`, "mixed"},
+		{`{"pipeline":"app","chart":{"name":"app","version":"1.2.3","repoURL":"oci://ghcr.io/org/charts"}}`, "chart"},
+	} {
+		c := bundleAPIClient()
+		srv := newBundleAPIServer(c, "tok", "default")
+		w := bundleAPIPost(t, srv, tc.body)
+		require.Equal(t, http.StatusCreated, w.Code, "%s: %s", tc.want, w.Body.String())
+		var resp bundleCreateResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		var b v1alpha1.Bundle
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: resp.Namespace, Name: resp.Name}, &b))
+		assert.Equal(t, tc.want, b.Spec.Type)
+	}
+}
+
 // TestBundleAPI_ValidatesRequest verifies that requests the controller cannot
 // act on are rejected with a clear status instead of creating a Bundle that
 // silently does nothing. Regression test for C07-controller-02/03/16/29.

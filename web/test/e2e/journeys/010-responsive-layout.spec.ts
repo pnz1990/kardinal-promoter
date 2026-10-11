@@ -58,9 +58,9 @@ test.describe('Journey 010 — Responsive layout at 1280px', () => {
     await page.getByText('kardinal-test-app').first().click()
     await page.waitForTimeout(300)
 
-    // Click a DAG node to open the NodeDetail split panel (340px)
+    // Click a DAG node to open the stage drawer (U3) beside the graph
     await page.getByRole('button', { name: /test — /i }).click()
-    await expect(page.locator('[data-testid="node-detail"]').first()).toBeVisible()
+    await expect(page.getByTestId('stage-drawer')).toBeVisible()
 
     const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth)
     expect(scrollWidth).toBeLessThanOrEqual(VIEWPORT_1280.width)

@@ -40,6 +40,8 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
 )
 
 // defaultControllerNamespace is the Helm release namespace the docs install
@@ -96,18 +98,18 @@ wrong.`,
 func runDoctor(w io.Writer, pipeline, controllerNS string) error {
 	cfg, ns, err := buildRestConfig()
 	if err != nil {
-		_, _ = fmt.Fprintf(w, "\n%s Could not build kubeconfig: %v\n", doctorFail, err)
+		_, _ = fmt.Fprintf(w, "\n%s Could not build kubeconfig: %v\n", doctorIcon(doctorFail), err)
 		_, _ = fmt.Fprintf(w, "Hint: ensure kubectl is configured and pointing at the correct cluster.\n")
 		return fmt.Errorf("build kubeconfig: %w", err)
 	}
 	client, err := sigs_client.New(cfg, sigs_client.Options{Scheme: rootScheme})
 	if err != nil {
-		_, _ = fmt.Fprintf(w, "\n%s Could not connect to cluster: %v\n", doctorFail, err)
+		_, _ = fmt.Fprintf(w, "\n%s Could not connect to cluster: %v\n", doctorIcon(doctorFail), err)
 		return fmt.Errorf("could not connect to cluster: %w", err)
 	}
 	disco, err := discovery.NewDiscoveryClientForConfig(cfg)
 	if err != nil {
-		_, _ = fmt.Fprintf(w, "\n%s Could not build discovery client: %v\n", doctorFail, err)
+		_, _ = fmt.Fprintf(w, "\n%s Could not build discovery client: %v\n", doctorIcon(doctorFail), err)
 		return fmt.Errorf("discovery client: %w", err)
 	}
 
@@ -133,9 +135,10 @@ func printDoctorResults(w io.Writer, results []doctorResult) error {
 
 	passed, warned, failed := 0, 0, 0
 	for _, r := range results {
-		_, _ = fmt.Fprintf(w, "%s  %-*s  %s\n", r.icon, doctorColWidth, r.label, r.detail)
+		icon := doctorIcon(r.icon)
+		_, _ = fmt.Fprintf(w, "%s  %-*s  %s\n", icon, doctorColWidth, r.label, r.detail)
 		if r.hint != "" {
-			indent := strings.Repeat(" ", 4+doctorColWidth+2)
+			indent := strings.Repeat(" ", style.Width(icon)+2+doctorColWidth+2)
 			_, _ = fmt.Fprintf(w, "%s%s\n", indent, r.hint)
 		}
 		switch {
@@ -164,11 +167,24 @@ func printDoctorResults(w io.Writer, results []doctorResult) error {
 	return nil
 }
 
+// The result of a check (doctorResult.icon), printed by doctorIcon.
 const (
-	doctorPass = "✅"
-	doctorWarn = "⚠️"
-	doctorFail = "❌"
+	doctorPass = "pass"
+	doctorWarn = "warn"
+	doctorFail = "fail"
 )
+
+// doctorIcon is the mark of a check result: a coloured ✓, ! or ✕ on a
+// terminal, PASS, WARN or FAIL in plain output.
+func doctorIcon(result string) string {
+	switch result {
+	case doctorPass:
+		return sty.Paint(display.ToneVerified, sty.Sym("✓", "PASS"))
+	case doctorWarn:
+		return sty.Paint(display.ToneBlocked, sty.Sym("!", "WARN"))
+	}
+	return sty.Paint(display.ToneDegraded, sty.Sym("✕", "FAIL"))
+}
 
 // installCommand is the helm command that installs the chart matching a CLI
 // version. A release CLI pins --version: without it helm picks the newest
@@ -481,6 +497,10 @@ func checkPipelineHealth(ctx context.Context, client sigs_client.Client, ns, nam
 		r.failed = true
 		r.detail = fmt.Sprintf("Ready=%s (%s): %s", ready.Status, ready.Reason, ready.Message)
 		r.hint = "Fix the Pipeline spec; 'kardinal validate -f <your-pipeline.yaml>' reports the same problems."
+		if ready.Reason == "GitCredentialMissing" {
+			// Not a spec problem: the git Secret is missing or has no token.
+			r.hint = "Run the command in the message (with your token): it creates or fixes the git Secret."
+		}
 		return r
 	}
 	// Pipeline phases: Ready, Degraded, Promoting, Unknown (api/v1alpha1/pipeline_types.go).
@@ -495,17 +515,20 @@ func checkPipelineHealth(ctx context.Context, client sigs_client.Client, ns, nam
 	default:
 		// Unknown is the phase before the first Bundle.
 		r.icon = doctorPass
-		r.detail = "status: Unknown (spec valid, no Bundle yet)"
+		r.detail = "status: Unknown (spec valid, no version shipped yet)"
 	}
 	return r
 }
 
 // doctorReference is the detail of the command for its reference page.
-const doctorReference = `  ✅ Controller reachable      kardinal-version ConfigMap in the controller namespace
-  ✅ CRDs installed            every kardinal.io/v1alpha1 resource served
-  ✅ kro running               kro controller pod in kro-system
-  ✅ kro Graph CRD installed   kro.run/v1alpha1 graphs registered
-  ✅ GitHub token              GITHUB_TOKEN set on the controller Deployment
+const doctorReference = `  PASS  Controller reachable      kardinal-version ConfigMap in the controller namespace
+  PASS  CRDs installed            every kardinal.io/v1alpha1 resource served
+  PASS  kro running               kro controller pod in kro-system
+  PASS  kro Graph CRD installed   kro.run/v1alpha1 graphs registered
+  PASS  GitHub token              GITHUB_TOKEN set on the controller Deployment
+
+Each check is PASS, WARN or FAIL (on a terminal a green ✓, an ochre ! or a
+garnet ✕).
 
 The token check is named after the controller's --scm-provider (GitHub token,
 GitLab token, Forgejo token, Gitea token, Bitbucket token or Azure DevOps

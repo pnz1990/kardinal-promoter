@@ -303,6 +303,7 @@ func TestCheckPipelineHealth(t *testing.T) {
 		client     sigs_client.Client
 		wantIcon   string
 		wantDetail string
+		wantHint   string
 	}{
 		{name: "ready", client: doctorClient(pipe("Ready")), wantIcon: doctorPass, wantDetail: "status: Up to date"},
 		{name: "degraded", client: doctorClient(pipe("Degraded")), wantIcon: doctorWarn, wantDetail: "status: Degraded"},
@@ -310,9 +311,9 @@ func TestCheckPipelineHealth(t *testing.T) {
 		{name: "promoting", client: doctorClient(pipe("Promoting")), wantIcon: doctorPass, wantDetail: "status: Promoting"},
 		// Unknown is the phase before the first Bundle.
 		{name: "unknown", client: doctorClient(pipe("Unknown")), wantIcon: doctorPass,
-			wantDetail: "status: Unknown (spec valid, no Bundle yet)"},
+			wantDetail: "status: Unknown (spec valid, no version shipped yet)"},
 		{name: "unset", client: doctorClient(pipe("")), wantIcon: doctorPass,
-			wantDetail: "status: Unknown (spec valid, no Bundle yet)"},
+			wantDetail: "status: Unknown (spec valid, no version shipped yet)"},
 		{name: "no Ready condition", client: doctorClient(noCondition), wantIcon: doctorWarn,
 			wantDetail: "not yet reconciled by the controller"},
 		{name: "condition of an older generation",
@@ -324,6 +325,11 @@ func TestCheckPipelineHealth(t *testing.T) {
 		{name: "refused after a promotion", client: doctorClient(withReady("Ready", metav1.ConditionFalse, "NotImplemented",
 			"not implemented", 2)),
 			wantIcon: doctorFail, wantDetail: "Ready=False (NotImplemented): not implemented"},
+		// P4: the git Secret is missing; the fix is the message's command.
+		{name: "git credential missing", client: doctorClient(withReady("Unknown", metav1.ConditionFalse, "GitCredentialMissing",
+			"git Secret t not found", 2)),
+			wantIcon: doctorFail, wantDetail: "Ready=False (GitCredentialMissing): git Secret t not found",
+			wantHint: "Run the command in the message (with your token): it creates or fixes the git Secret."},
 		{name: "not found", client: doctorClient(), wantIcon: doctorFail,
 			wantDetail: `Pipeline "web" not found in namespace "team-a"`},
 		{
@@ -342,6 +348,9 @@ func TestCheckPipelineHealth(t *testing.T) {
 			r := checkPipelineHealth(context.Background(), tc.client, "team-a", "web")
 			assert.Equal(t, tc.wantIcon, r.icon)
 			assert.Equal(t, tc.wantDetail, r.detail)
+			if tc.wantHint != "" {
+				assert.Equal(t, tc.wantHint, r.hint)
+			}
 		})
 	}
 }
@@ -424,9 +433,8 @@ func TestBuildRestConfig_ExplicitMissingKubeconfig(t *testing.T) {
 	assert.NotContains(t, err.Error(), "KUBERNETES_SERVICE_HOST")
 }
 
-// C09a-cli-23: doctorWarn has no trailing space, so columns line up.
-func TestDoctorIcons_NoTrailingSpace(t *testing.T) {
-	for _, icon := range []string{doctorPass, doctorWarn, doctorFail} {
-		assert.Equal(t, strings.TrimSpace(icon), icon)
-	}
+// C09a-cli-23, C4: every mark of a result has one width, so columns line
+// up: PASS, WARN and FAIL in plain output, ✓ ! ✕ on a terminal.
+func TestDoctorIcons_OneWidth(t *testing.T) {
+	assert.Equal(t, []string{"PASS", "WARN", "FAIL"}, []string{doctorIcon(doctorPass), doctorIcon(doctorWarn), doctorIcon(doctorFail)})
 }

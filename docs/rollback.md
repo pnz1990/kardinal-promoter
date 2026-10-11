@@ -101,7 +101,7 @@ kardinal hold my-app prod --reason "INC-4521: freeze prod while we investigate" 
 kardinal unhold my-app prod
 ```
 
-`hold` writes the same `spec.holds` entry a rollback hold writes, naming the version deployed in
+[`hold`](reference/cli/kardinal-hold.md) writes the same `spec.holds` entry a rollback hold writes, naming the version deployed in
 prod; nothing is rolled back and no version is created. To go back to an earlier version and
 keep it there, roll back with `--hold` (below).
 
@@ -119,7 +119,7 @@ Output:
 ```
 Rolling back my-app in prod from my-app-v1-29-0 to my-app-v1-28-0 (ghcr.io/myorg/my-app:v1.28.0)
 Bundle my-app-rollback-3f9a1c created (rollbackOf=my-app-v1-28-0)
-Environment prod held on my-app-rollback-3f9a1c: no other Bundle promotes there until: kardinal release-hold my-app --env prod
+Environment prod held on my-app-rollback-3f9a1c: no other version promotes there until: kardinal release-hold my-app --env prod
 Gates of prod that would block the rollback pass as EXEMPT (audited) while the controller verifies it restores what was Verified there.
 Track with: kardinal explain my-app --env prod
 ```
@@ -360,7 +360,7 @@ kardinal history my-app
 ```
 
 ```
-BUNDLE                  ACTION     ENV    PR     DURATION   TIMESTAMP
+VERSION                 ACTION     ENV    PR     DURATION   TIMESTAMP
 my-app-rollback-x7k2p   rollback   prod   #145   5m         2026-04-09 11:00
 my-app-v1-29-0          promote    prod   #144   15m        2026-04-09 10:20
 my-app-v1-28-0          promote    prod   #138   12m        2026-04-07 14:00

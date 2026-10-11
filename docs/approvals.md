@@ -21,7 +21,8 @@ spec:
     excludeAuthor: true         # the Bundle's verified creator does not count
 ```
 
-Approve with the CLI, naming the pipeline and the environment:
+Approve with the CLI ([`kardinal approve`](reference/cli/kardinal-approve.md)), naming the
+pipeline and the environment:
 
 ```bash
 kardinal approve my-app prod --comment "checked the migration"

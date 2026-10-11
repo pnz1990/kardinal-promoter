@@ -30,6 +30,10 @@ curl -X POST https://kardinal.example.com/api/v1/bundles \
   }'
 ```
 
+`type` may be omitted: it is inferred from the fields, `chart` when `chart` is set, `mixed` for
+`images` and `configRef`, `config` for `configRef` alone, else `image`. A `type` you set is kept
+and checked against the fields.
+
 The endpoint creates a Bundle CRD in the cluster. Authentication is a Bearer token compared
 with the controller's `--bundle-api-token` (one token for the whole controller, not one per
 Pipeline). The Pipeline named in the request must exist in the target namespace.
@@ -104,7 +108,7 @@ jobs:
 | `namespace` | No | `default` | Kubernetes namespace. The action always sends it, so set it when the controller runs with `--watch-namespace`, or the API answers `403` |
 | `kardinal-url` | Yes | — | Base URL of the Bundle API (the controller's webhook listener, `:8083` by default) |
 | `ui-url` | No | — | Base URL of the kardinal UI (`:8082` by default). Sets `bundle-status-url`; without it that output is empty |
-| `type` | No | `image` | Version type (`image`, `config`, `mixed`) |
+| `type` | No | empty | Version type (`image`, `config`, `mixed`). Empty leaves it out of the request, so the controller infers it: `mixed` for images and `config-commit`, `config` for `config-commit` alone, else `image` |
 | `config-commit` | For `config` and `mixed` | — | Commit SHA of the configuration change (`configRef.commitSHA`) |
 | `config-repo` | No | the Pipeline's repository | Git repository of `config-commit` (`configRef.gitRepo`) |
 
@@ -195,8 +199,9 @@ kardinal create bundle my-app --type config \
 
 #### Wait for the outcome in CI
 
-`kardinal ship` creates the same version as `kardinal create bundle`, with the same flags. With
-`--wait` it follows the version and exits with a code a CI job can act on:
+[`kardinal ship`](reference/cli/kardinal-ship.md) creates the same version as `kardinal create
+bundle`, with the same flags. With `--wait` it follows the version and exits with a code a CI job
+can act on:
 
 ```bash
 kardinal ship my-app --image "ghcr.io/myorg/my-app:${GITHUB_SHA}" --wait --timeout 1h
@@ -214,18 +219,23 @@ kardinal ship my-app --image "ghcr.io/myorg/my-app:${GITHUB_SHA}" --wait --timeo
 The codes are stable: a new outcome gets a new code. A stop at a gate, a hold or a pull request
 counts once two reads agree, and a gate that has not been evaluated yet never stops the wait.
 
-A gate that does not pass ends the wait with 3 only when it needs a person. A gate that opens by
-itself keeps the job waiting until `--timeout`: one whose expression contains any of these texts,
-which name the [gate variables](policy-gates.md) that change with time (text inside a string
-literal does not count):
+A gate that does not pass ends the wait with exit `3` only when it needs a person. A gate that
+opens by itself keeps the job waiting, until `--timeout`: one whose expression, outside its string
+literals, reads one of these [PolicyGate variables](policy-gates.md) that change with time, with a
+`.` or `[` after it (`schedule.hour`, `schedule["hour"]`):
 
-| Text in the expression | Variables |
+| Variable | What it covers |
 |---|---|
-| `schedule.` | `schedule.isWeekend`, `schedule.hour`, `schedule.dayOfWeek` |
-| `soakMinutes` | `upstream.<env>.soakMinutes`, `bundle.upstreamSoakMinutes` |
-| `upstream.` | anything else of `upstream.<env>` |
+| `schedule` | `schedule.isWeekend`, `schedule.hour`, `schedule.dayOfWeek` |
+| `upstream` | `upstream.<env>.soakMinutes` and every other field of `upstream.<env>` |
+| `bundle.upstreamSoakMinutes` | the soak of the environment before this one |
 | `metrics` | `metrics.<name>.value`, `metrics.<name>.result` |
 | `changewindow` | `changewindow.<name>` |
+
+A name inside a string (`author != "metrics-bot"`) or as a field of something else
+(`bundle.labels.soakMinutes`) does not count. An expression that reads one of them and also
+something else (`!schedule.isWeekend && bundle.labels.approved == "yes"`) waits, since it may
+open by itself.
 
 So a job can wait through a soak or a deploy window. Any other gate that does not pass (on a
 version's labels or its provenance) exits 3, as do an approval gate, a hold and a
@@ -501,11 +511,11 @@ rejected with `400`, so a misspelt key fails the request instead of being ignore
 | Field | Required | Description |
 |---|---|---|
 | `pipeline` | Yes | Pipeline name (a valid Kubernetes name, at most 63 characters) |
-| `type` | No | `image` (default), `config`, `mixed` or `chart` |
+| `type` | No | `image`, `config`, `mixed` or `chart`. When omitted it is inferred: `chart` when `chart` is set, `mixed` for `images` and `configRef`, `config` for `configRef` alone, else `image` |
 | `namespace` | No | Target namespace. Defaults to `--watch-namespace`, or `default` |
 | `images` | For `image` and `mixed` | At least one image |
 | `configRef` | For `config` and `mixed` | `gitRepo` and `commitSHA` (`commitSHA` is required). An `image` version with a `configRef` gets 400: it would deploy only its images |
-| `chart` | For `chart` | `name` and `version` (required), `repoURL`, `digest`; promoted with `update.strategy: helm` (see [Promoting a chart version](subscription.md#promoting-a-chart-version)) |
+| `chart` | For `chart` | `name` and `version` (required), `repoURL`, `digest`; promoted with `update.strategy: helm` (see [Promoting a chart version](subscription.md#promoting-a-chart-version)). A `chart` version with a `configRef` gets 400: the configRef would be dropped |
 | `provenance` | No | `commitSHA`, `ciRunURL` (empty or an absolute `http(s)` URL, see [Provenance](#provenance)), `author`, `timestamp` (set to now if empty) |
 | `intent` | No | `targetEnvironment`, `skipEnvironments` |
 

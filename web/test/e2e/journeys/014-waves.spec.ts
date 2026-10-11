@@ -109,15 +109,17 @@ test.describe('Journey 014 — Waves', () => {
     expect(await y('env-001')).toBeLessThan(await y('env-002'))
     expect(await y('env-002')).toBeLessThan(await y('env-149'))
 
+    // The wave card and its expanded list pass the WCAG 2.1 AA checks.
+    const axe = await new AxeBuilder({ page }).include('[aria-label="Pipeline stages"]').withTags(['wcag2a', 'wcag2aa']).analyze()
+    expect(axe.violations.map(v => `${v.id}: ${v.nodes[0]?.target[0]}`)).toEqual([])
+
+    // The release metrics are the Metrics tab.
+    await page.getByRole('tab', { name: 'Metrics' }).click()
     const metrics = page.getByRole('region', { name: 'Release metrics' })
     await expect(metrics).toContainText('Time to all 149 final envs')
     // The release ended when the slowest of the wave (env-001, 2h) verified.
     await expect(metrics).toContainText('2h')
     await expect(metrics).not.toContainText('env-149')
-
-    // The wave card and its expanded list pass the WCAG 2.1 AA checks.
-    const axe = await new AxeBuilder({ page }).include('[aria-label="Pipeline stages"]').withTags(['wcag2a', 'wcag2aa']).analyze()
-    expect(axe.violations.map(v => `${v.id}: ${v.nodes[0]?.target[0]}`)).toEqual([])
   })
 
   test('an all-wave-1 Pipeline is drawn as parallel roots, not a chain', async ({ page }) => {
@@ -138,6 +140,7 @@ test.describe('Journey 014 — Waves', () => {
 
     // With a Bundle the metrics count all three as final environments.
     await page.locator('aside').getByText('regions-live', { exact: true }).click()
+    await page.getByRole('tab', { name: 'Metrics' }).click()
     const metrics = page.getByRole('region', { name: 'Release metrics' })
     await expect(metrics).toContainText('Time to all 3 final envs')
     // The last of them (ap) was Verified 3h after creation.
