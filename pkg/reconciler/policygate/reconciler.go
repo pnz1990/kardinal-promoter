@@ -270,7 +270,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 	if active, ok := findActiveOverride(&gate, gate.Labels[labelEnvironment], now, r.maxOverride()); ok {
 		overrideReason := active.reason()
 		log.Info().Str("reason", overrideReason).Msg("policygate override active, passing")
-		if patchErr := r.patchStatus(ctx, &gate, true, overrideReason); patchErr != nil {
+		if patchErr := r.patchStatus(ctx, &gate, true, overrideReason, gate.Status.BundleVersion); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch gate status (override): %w", patchErr)
 		}
 		// Re-evaluate just after the override ends (its expiresAt or the
@@ -279,14 +279,14 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 		return ctrl.Result{RequeueAfter: min(recheckInterval, active.end.Sub(now)+time.Second)}, nil
 	}
 
-	// Build CEL context. bundleVersion is returned separately so it can be
-	// written to status.reason, making the evaluated bundle version CRD-observable
-	// (PG-6: extractVersion result was previously invisible to the Graph).
+	// Build CEL context. bundleVersion is returned separately: it is written
+	// to status.bundleVersion and named at the end of status.reason, so the
+	// version a result is for is CRD-observable (PG-6).
 	celCtx, bundleVersion, err := r.buildContext(ctx, &gate, bundleName)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to build CEL context, setting gate to blocked")
 		if patchErr := r.patchStatus(ctx, &gate, false,
-			fmt.Sprintf("context error: %s", err)); patchErr != nil {
+			fmt.Sprintf("context error: %s", err), ""); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch gate status: %w", patchErr)
 		}
 		return ctrl.Result{RequeueAfter: recheckInterval}, nil
@@ -320,13 +320,6 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 			reason = reason + "; " + notes
 		}
 	}
-	// Prefix reason with bundle version so it is CRD-observable without a
-	// separate status field (PG-6 partial fix — full fix requires api/v1alpha1
-	// field addition for a dedicated status.bundleVersion field). An
-	// evaluation error carries it too.
-	if bundleVersion != "" {
-		reason = fmt.Sprintf("bundle.version=%s: %s", bundleVersion, reason)
-	}
 	// The rollback an environment is held on (spec.holds) passes the gates
 	// of that environment, with an explicit EXEMPT reason, the GateEvaluated
 	// audit record of the flip and a Warning Event: never a silent pass
@@ -338,11 +331,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 			reason += " (hold exemption refused: " + refused + ")"
 		}
 		if h != nil {
-			reason = lifecycle.GateExemption(h, reason)
+			reason = lifecycle.GateExemption(h, graph.WithVersion(reason, bundleVersion))
 			log.Warn().Str("hold", h.Bundle).Str("reason", reason).Msg("policygate exempt for the held rollback")
 			// One Event per exempt episode, not per changed gate reason.
 			first := !gate.Status.Ready || !lifecycle.IsHoldExemption(gate.Status.Reason)
-			if patchErr := r.patchStatus(ctx, &gate, true, reason); patchErr != nil {
+			if patchErr := r.patchStatus(ctx, &gate, true, reason, bundleVersion); patchErr != nil {
 				return ctrl.Result{}, fmt.Errorf("patch gate status (hold exemption): %w", patchErr)
 			}
 			if r.Recorder != nil && first {
@@ -357,7 +350,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 		// expression, not an error, so the reason does not lead with it.
 		log.Warn().Err(evalErr).Str("expr", gate.Spec.Expression).
 			Msg("CEL evaluation error, setting gate to blocked")
-		if patchErr := r.patchStatus(ctx, &gate, false, reason); patchErr != nil {
+		if patchErr := r.patchStatus(ctx, &gate, false, graph.WithVersion(reason, bundleVersion), bundleVersion); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch gate status on eval error: %w", patchErr)
 		}
 		return ctrl.Result{RequeueAfter: recheckInterval}, nil
@@ -365,9 +358,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 
 	// A false expression is what spec.message explains: lead with it, so the
 	// Ready condition, kardinal explain/status, the UI, PR evidence and
-	// notifications show it (GATE-MESSAGE-01).
+	// notifications show it (GATE-MESSAGE-01). The version ends the reason.
 	if !pass {
-		reason = graph.BlockedReason(gate.Spec.Message, reason)
+		reason = graph.BlockedReason(gate.Spec.Message, reason, bundleVersion)
+	} else {
+		reason = graph.WithVersion(reason, bundleVersion)
 	}
 
 	log.Info().
@@ -376,7 +371,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 		Str("expr", gate.Spec.Expression).
 		Msg("policygate evaluated")
 
-	if patchErr := r.patchStatus(ctx, &gate, pass, reason); patchErr != nil {
+	if patchErr := r.patchStatus(ctx, &gate, pass, reason, bundleVersion); patchErr != nil {
 		return ctrl.Result{}, fmt.Errorf("patch gate status: %w", patchErr)
 	}
 
@@ -1051,12 +1046,13 @@ func (r *Reconciler) freshResultWanted(ctx context.Context, gate *kardinalv1alph
 	return false, nil
 }
 
-// patchStatus patches the PolicyGate's status fields. It writes nothing when
+// patchStatus patches the PolicyGate's status fields: ready, reason and
+// version (status.bundleVersion, the version evaluated). It writes nothing when
 // the result is unchanged and no step waits for a newer one
 // (unchangedResult).
 func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
-	ready bool, reason string) error {
-	if r.unchangedResult(ctx, gate, ready, reason, r.now()) {
+	ready bool, reason, version string) error {
+	if gate.Status.BundleVersion == version && r.unchangedResult(ctx, gate, ready, reason, r.now()) {
 		zerolog.Ctx(ctx).Debug().Bool("ready", ready).Msg("policygate result unchanged, status not written")
 		return nil
 	}
@@ -1077,6 +1073,7 @@ func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.Pol
 	now := metav1.NewTime(r.now())
 	gate.Status.Ready = ready
 	gate.Status.Reason = reason
+	gate.Status.BundleVersion = version
 	gate.Status.LastEvaluatedAt = &now
 	stampVerifiedSince(gate, now.Time)
 	// The Ready condition's lastTransitionTime moves only when the gate flips,

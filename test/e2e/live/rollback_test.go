@@ -390,7 +390,7 @@ func TestRollback_PolicyGates(t *testing.T) {
 	assert.Equal(t, "Flag --emergency has been deprecated, it has no effect and is removed in v0.11; use kardinal override to pass a blocking gate\n"+
 		rbOutput("test", b2, b1, imageV2, rb), out)
 	gate := e.WaitGateReady(t, a.ns, rb, "test", "no-rollbacks", false, expr+" = false", gateTimeout)
-	assert.Equal(t, msg+" (bundle.version="+fixtures.V2+": "+expr+" = false)", gate.Status.Reason)
+	assert.Equal(t, msg+" ("+expr+" = false; version "+fixtures.V2+")", gate.Status.Reason)
 	e.NoStep(t, a.ns, pipelineName, rb, "test", holdFor)
 	assertEnvAt(t, a, "test", fixtures.V3)
 
