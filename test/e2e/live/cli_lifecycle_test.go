@@ -193,10 +193,10 @@ func TestCLI_Rollback(t *testing.T) {
 	hist := framework.ParseTable(c.Must(a.ns, "history", pipelineName))
 	actions := map[string]string{}
 	for _, row := range hist {
-		if prev, ok := actions[row["BUNDLE"]]; ok {
-			assert.Equal(t, prev, row["ACTION"], "every row of %s has one action", row["BUNDLE"])
+		if prev, ok := actions[framework.BundleOf(row["VERSION"])]; ok {
+			assert.Equal(t, prev, row["ACTION"], "every row of %s has one action", framework.BundleOf(row["VERSION"]))
 		}
-		actions[row["BUNDLE"]] = row["ACTION"]
+		actions[framework.BundleOf(row["VERSION"])] = row["ACTION"]
 	}
 	assert.Equal(t, map[string]string{bA: "promote", bB: "promote", bC: "promote", bR: "rollback"}, actions, "history:\n%v", hist)
 
@@ -334,7 +334,7 @@ func TestCLI_DeleteBundle(t *testing.T) {
 	head := e.BranchHead(t, a.repo)
 	assert.Equal(t, "Bundle "+bA+" deleted\n", c.Must(a.ns, "delete", "bundle", bA))
 	waitBundleGone(t, e, a.ns, bA)
-	assert.Equal(t, "BUNDLE   TYPE   PHASE   AGE\n", c.Must(a.ns, "get", "bundles"))
+	assert.Equal(t, "VERSION   TYPE   PHASE   AGE\n", c.Must(a.ns, "get", "bundles"))
 	assert.Equal(t, "No active bundles for pipeline \"podinfo\".\n", c.Must(a.ns, "get", "steps", pipelineName))
 	assert.Equal(t, head, e.BranchHead(t, a.repo), "deleting a Bundle writes nothing to git")
 	assertEnvAt(t, a, "prod", fixtures.V1)
@@ -440,7 +440,7 @@ func TestCLI_ConfigBundle(t *testing.T) {
 	// names where the rest came from (unit: TestDeployed_ImageAndConfigBundles).
 	framework.Eventually(t, time.Minute, "status shows b3 running in test", func(context.Context) (bool, string) {
 		status := c.Must(a.ns, "status", pipelineName)
-		return regexp.MustCompile(`\ntest +` + regexp.QuoteMeta(b3+" ("+fixtures.V3+")") + ` +- +Live `).MatchString(status), status
+		return regexp.MustCompile(`\ntest +` + regexp.QuoteMeta(fixtures.V3+" ("+b3+")") + ` +- +Live `).MatchString(status), status
 	})
 }
 

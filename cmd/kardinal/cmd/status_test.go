@@ -103,7 +103,7 @@ func TestStatusPipelineWriter_ActiveStep(t *testing.T) {
 	assert.True(t, strings.HasPrefix(out, "Pipeline: demo   Namespace: default\n1.5.0 waiting for PR merge in prod (#42)\n\n"), out)
 	assert.Equal(t, []map[string]string{
 		{"ENVIRONMENT": "test", "RUNNING": "-", "INCOMING": "-", "STATE": "-", "SINCE": "-", "PR": "-"},
-		{"ENVIRONMENT": "prod", "RUNNING": "-", "INCOMING": "bundle-abc (1.5.0)", "STATE": "Waiting for PR merge", "SINCE": "-",
+		{"ENVIRONMENT": "prod", "RUNNING": "-", "INCOMING": "1.5.0 (bundle-abc)", "STATE": "Waiting for PR merge", "SINCE": "-",
 			"PR": "https://github.com/org/repo/pull/42"},
 	}, statusRows(t, out), out)
 	assertNoRawStates(t, out)
@@ -346,8 +346,8 @@ func TestStatusPipelineWriter_FromStatusEnvironments(t *testing.T) {
 	out := runStatusPipeline(t, objs...)
 	assert.True(t, strings.HasPrefix(out, "Pipeline: demo   Namespace: default\n"+p.Status.Summary+"\n\n"), out)
 	assert.Equal(t, []map[string]string{
-		{"ENVIRONMENT": "test", "RUNNING": "b2 (1.5.0)", "INCOMING": "-", "STATE": "Live", "SINCE": "1h", "PR": "-"},
-		{"ENVIRONMENT": "prod", "RUNNING": "b1 (1.4.0)", "INCOMING": "b2 (1.5.0)", "STATE": "Held by gate no-weekend", "SINCE": "1h", "PR": "-"},
+		{"ENVIRONMENT": "test", "RUNNING": "1.5.0 (b2)", "INCOMING": "-", "STATE": "Live", "SINCE": "1h", "PR": "-"},
+		{"ENVIRONMENT": "prod", "RUNNING": "1.4.0 (b1)", "INCOMING": "1.5.0 (b2)", "STATE": "Held by gate no-weekend", "SINCE": "1h", "PR": "-"},
 	}, statusRows(t, out), out)
 	gates := parseTable(strings.SplitN(blockingGates(out), "\n", 2)[1])
 	require.Len(t, gates, 1, "only the incoming Bundle's gate:\n%s", out)

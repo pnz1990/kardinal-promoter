@@ -305,7 +305,7 @@ func TestGetPipelinesOnce_HealthyBundles_NoErrorSection(t *testing.T) {
 	assert.NotContains(t, out, "ERROR:", "no ERROR: section expected when bundles are healthy")
 }
 
-// E2E-R17: every cell of a get pipelines row describes the row's BUNDLE, the
+// E2E-R17: every cell of a get pipelines row describes the row's VERSION, the
 // pipeline's newest bundle: Waiting where it is still to come, a dash where it
 // failed before getting there, never the older bundle's Verified.
 func TestGetPipelinesOnce_CurrentBundleState(t *testing.T) {
@@ -330,10 +330,10 @@ func TestGetPipelinesOnce_CurrentBundleState(t *testing.T) {
 				explainBundle("b2", "Failed", recent),
 				explainStep("demo", "b2", "test", "Failed", "", recent),
 			}, b1Everywhere()...),
-			want: map[string]string{"BUNDLE": "b2", "TEST": "Failed", "UAT": "-", "PROD": "-"},
+			want: map[string]string{"VERSION": "b2", "TEST": "Failed", "UAT": "-", "PROD": "-"},
 		},
 		{
-			// j1-happy.log: b1's Verified was shown next to BUNDLE b2.
+			// j1-happy.log: b1's Verified was shown next to VERSION b2.
 			name: "bundle held at prod by a gate",
 			objs: append([]sigs_client.Object{
 				explainBundle("b2", "Promoting", recent),
@@ -341,7 +341,7 @@ func TestGetPipelinesOnce_CurrentBundleState(t *testing.T) {
 				explainStep("demo", "b2", "uat", "Verified", "", recent),
 				explainGateInstance("demo", "b2", "prod", "require-uat-soak", "false", false, true, "soak 3m < 30m"),
 			}, b1Everywhere()...),
-			want: map[string]string{"BUNDLE": "b2", "TEST": "Verified", "UAT": "Verified", "PROD": cellHeldByGate + "require-uat-soak"},
+			want: map[string]string{"VERSION": "b2", "TEST": "Verified", "UAT": "Verified", "PROD": cellHeldByGate + "require-uat-soak"},
 		},
 		{
 			name: "bundle health checking in test, ungated uat",
@@ -349,7 +349,7 @@ func TestGetPipelinesOnce_CurrentBundleState(t *testing.T) {
 				explainBundle("b2", "Promoting", recent),
 				explainStep("demo", "b2", "test", "HealthChecking", "", recent),
 			}, b1Everywhere()...),
-			want: map[string]string{"BUNDLE": "b2", "TEST": "HealthChecking", "UAT": "Waiting", "PROD": "Waiting"},
+			want: map[string]string{"VERSION": "b2", "TEST": "HealthChecking", "UAT": "Waiting", "PROD": "Waiting"},
 		},
 	}
 	for _, tt := range tests {
@@ -366,7 +366,7 @@ func TestGetPipelinesOnce_CurrentBundleState(t *testing.T) {
 				row[h] = cells[i]
 			}
 			for col, want := range tt.want {
-				if col != "BUNDLE" {
+				if col != "VERSION" {
 					want = envCellLabel(want)
 				}
 				assert.Equal(t, want, row[col], "column %s in:\n%s", col, buf.String())

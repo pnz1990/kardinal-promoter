@@ -343,7 +343,7 @@ kardinal history my-app
 ```
 
 ```
-BUNDLE                  ACTION     ENV    PR     DURATION   TIMESTAMP
+VERSION                 ACTION     ENV    PR     DURATION   TIMESTAMP
 my-app-rollback-x7k2p   rollback   prod   #145   5m         2026-04-09 11:00
 my-app-v1-29-0          promote    prod   #144   15m        2026-04-09 10:20
 my-app-v1-28-0          promote    prod   #138   12m        2026-04-07 14:00
