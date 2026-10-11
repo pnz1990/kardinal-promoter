@@ -481,7 +481,7 @@ var updateShipProgress = flag.Bool("update-ship-progress", false, "rewrite testd
 // after the time since the start, each PR's URL once, and a summary of how
 // long each environment took, or has waited.
 //
-// Covers CLI-VERBS-02.
+// Covers CLI-VERBS-01.
 func TestShipProgress_Golden(t *testing.T) {
 	start := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
 	now := start
