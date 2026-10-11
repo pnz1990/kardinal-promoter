@@ -22,10 +22,13 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/net/http/httpproxy"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -115,7 +118,7 @@ var quickstartEnvs = []string{"test", "uat", "prod"}
 // returns its output; a test replaces it.
 var quickstartRun = func(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = scrubbedEnv(os.Environ())
+	cmd.Env = toolEnv(os.Environ())
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, out)
@@ -149,7 +152,11 @@ follows until prod waits for your approval. A re-run changes nothing.`,
   kardinal approve demo prod`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return quickstartFn(cmd.Context(), cmd.OutOrStdout(), o)
+			// Ctrl-C or SIGTERM cancels the step that runs (helm, kubectl or
+			// the follow) and quickstart returns, removing its kubeconfig file.
+			ctx, stop := signal.NotifyContext(contextOf(cmd), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return quickstartFn(ctx, cmd.OutOrStdout(), o)
 		},
 	}
 	f := cmd.Flags()
@@ -281,14 +288,20 @@ func targetOverrides(environ []string) []string {
 	return out
 }
 
+// toolEnv is the environment helm and kubectl run with: scrubbedEnv, and
+// KUBERC=off, so no kuberc alias or default changes what kubectl runs.
+func toolEnv(environ []string) []string {
+	return append(scrubbedEnv(environ), "KUBERC=off")
+}
+
 // scrubbedEnv is environ without what could point helm or kubectl at
-// another cluster: the targetOverrides and KUBECONFIG (quickstart passes
-// --kubeconfig).
+// another cluster or change their commands: the targetOverrides, KUBECONFIG
+// (quickstart passes --kubeconfig) and KUBERC (quickstartRun sets it off).
 func scrubbedEnv(environ []string) []string {
 	out := make([]string, 0, len(environ))
 	for _, kv := range environ {
 		k, _, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(k, "HELM_KUBE") || k == "KUBERNETES_MASTER" || k == "KUBECONFIG" {
+		if strings.HasPrefix(k, "HELM_KUBE") || k == "KUBERNETES_MASTER" || k == "KUBECONFIG" || k == "KUBERC" {
 			continue
 		}
 		out = append(out, kv)
@@ -321,7 +334,69 @@ func requireLocalContext() (string, *clientcmdapi.Config, error) {
 			"the context %q (server %s) is not one, and nothing was changed. Create a local cluster and use it: "+
 			"kind create cluster --name kardinal: %w", name, server, errNotLocal)
 	}
+	// A proxy (proxy-url) could send the requests to any cluster, wherever
+	// the server URL points.
+	if kc := only.Contexts[name]; kc != nil {
+		if cl := only.Clusters[kc.Cluster]; cl != nil && cl.ProxyURL != "" {
+			return "", nil, fmt.Errorf("kardinal quickstart does not use a kubeconfig context with a proxy: the context %q sends its requests through %s, "+
+				"so it may not be the local cluster it names, and nothing was changed. Use a local context without proxy-url: %w", name, cl.ProxyURL, errNotLocal)
+		}
+	}
+	// So could a proxy of the environment (HTTPS_PROXY, HTTP_PROXY): client-go,
+	// helm and kubectl use it for any server NO_PROXY does not exclude.
+	if v, proxy := envProxy(server); proxy != "" {
+		noProxy := server
+		if u, err := url.Parse(server); err == nil {
+			noProxy = u.Hostname()
+		}
+		if cur := httpproxy.FromEnvironment().NoProxy; cur != "" {
+			noProxy = cur + "," + noProxy
+		}
+		return "", nil, fmt.Errorf("kardinal quickstart does not send its requests through a proxy: %s=%s applies to the server %s of the context %q, "+
+			"so it may not be the local cluster it names, and nothing was changed. Exclude the server from the proxy: "+
+			"export NO_PROXY=%s (or unset %s): %w", v, proxy, server, name, noProxy, v, errNotLocal)
+	}
 	return name, only, nil
+}
+
+// envProxy is the proxy variable of the environment, and its value, that a
+// request to server would go through (httpproxy.FromEnvironment, as Go's
+// net/http reads it); "" when none applies, NO_PROXY or the loopback
+// exception included.
+func envProxy(server string) (variable, proxy string) {
+	u, err := url.Parse(server)
+	if err != nil {
+		return "", ""
+	}
+	p, err := httpproxy.FromEnvironment().ProxyFunc()(u)
+	if err != nil || p == nil {
+		return "", ""
+	}
+	names := []string{"HTTPS_PROXY", "https_proxy"}
+	if u.Scheme == "http" {
+		names = []string{"HTTP_PROXY", "http_proxy"}
+	}
+	for _, n := range names {
+		if os.Getenv(n) != "" {
+			return n, redactProxy(p)
+		}
+	}
+	return names[0], redactProxy(p)
+}
+
+// redactProxy is proxy URL p, as Go parsed it from the environment (a
+// schemeless value gets http://), with its credentials masked: the password
+// of user:password, or a username alone, which may be a token.
+func redactProxy(p *url.URL) string {
+	cp := *p
+	if cp.User != nil {
+		if _, ok := cp.User.Password(); ok {
+			cp.User = url.UserPassword(cp.User.Username(), "xxxxx")
+		} else {
+			cp.User = url.User("xxxxx")
+		}
+	}
+	return cp.String()
 }
 
 // quickstartClient is the cluster client of quickstart, from the kubeconfig
@@ -511,6 +586,14 @@ func (q *quickstart) argoCD() error {
 		!strings.Contains(err.Error(), "AlreadyExists") {
 		return fmt.Errorf("quickstart: install Argo CD: %w", err)
 	}
+	// The Argo CD quickstart installs polls git every 10s instead of its
+	// default 2m plus up to 1m of jitter, so each environment of the demo
+	// syncs its merged commit within seconds, not minutes; the controllers
+	// read it at start, so it goes in before them. The release's argocd-cm
+	// does not set these keys, so its server-side apply below leaves them.
+	if _, err := q.apply(argoCDPolling()); err != nil {
+		return fmt.Errorf("quickstart: install Argo CD: %w", err)
+	}
 	manifests := "https://raw.githubusercontent.com/argoproj/argo-cd/" + argoCDRelease + "/manifests/install.yaml"
 	if _, err := quickstartRun(q.ctx, "kubectl", append([]string{"apply", "-n", "argocd", "--server-side", "--force-conflicts", "-f", manifests}, q.kubectlFlags()...)...); err != nil {
 		return fmt.Errorf("quickstart: install Argo CD: %w", err)
@@ -522,6 +605,18 @@ func (q *quickstart) argoCD() error {
 	}
 	q.say(what, "installed")
 	return nil
+}
+
+// argoCDPolling is the argocd-cm quickstart applies to an Argo CD it
+// installs: git polled every 10s, with no jitter. Argo CD installed by
+// someone else keeps its settings.
+func argoCDPolling() *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "ConfigMap",
+		"metadata": map[string]any{"name": "argocd-cm", "namespace": "argocd",
+			"labels": map[string]any{"app.kubernetes.io/name": "argocd-cm", "app.kubernetes.io/part-of": "argocd"}},
+		"data": map[string]any{"timeout.reconciliation": "10s", "timeout.reconciliation.jitter": "0s"},
+	}}
 }
 
 // kardinal installs the kardinal-promoter chart.
@@ -813,15 +908,22 @@ rancher-desktop, or whose API server is not on this machine (loopback,
 drivers' networks 192.168.49.0/24, 192.168.39.0/24 and 192.168.59.0/24). It
 also refuses to run while a variable is set that points helm, kubectl or
 client-go elsewhere (HELM_KUBE*, such as HELM_KUBECONTEXT, and
-KUBERNETES_MASTER). There is no flag to override it, on purpose. Use
+KUBERNETES_MASTER), and refuses a context whose cluster has a proxy-url, or
+whose server an environment proxy (HTTPS_PROXY, HTTP_PROXY) applies to: the
+proxy decides where requests go. Go never proxies localhost and 127.0.0.1;
+for 0.0.0.0, host.docker.internal or a minikube address, add the host to
+NO_PROXY. There is no flag to override it, on purpose. Use
 --context to pick a local context. helm and kubectl run on a kubeconfig file
-with only that context, without KUBECONFIG or those variables. What it
+with only that context, without KUBECONFIG or those variables, and kubectl
+with KUBERC=off. Ctrl-C or SIGTERM stops the step that runs and removes
+that file. What it
 cannot see: a loopback port that tunnels to a remote cluster (kubectl
 port-forward, ssh -L) looks local; do not point a local context at one.
 
 On a local cluster it installs, each only when it is not there yet:
   kro (the version hack/install-kro.sh pins), with the Graph controller
-  Argo CD (its release manifests; --no-argocd when the cluster has one)
+  Argo CD (its release manifests, polling git every 10s instead of 2-3m;
+    --no-argocd when the cluster has one, which keeps its own settings)
   kardinal-promoter (the chart of this CLI's version, in kardinal-system;
     --chart, --chart-version and --set for another)
 Then it applies, in default (so no command needs -n):

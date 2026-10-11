@@ -8,8 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -22,135 +20,47 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
-// approvalTally is how a gate instance counts the decisions in its
-// spec.approvals (copied by the Graph from Approval objects) against its
-// spec.approval policy.
+// approvalTally is lifecycle.ApprovalTally, the tally the CLI and the UI
+// API use too, with the reconciler's views of it (blocked, met, context).
 type approvalTally struct {
-	// required is spec.approval.required, 0 without a policy.
-	required int
-	// approvers are the distinct users whose approve counts, sorted.
-	approvers []string
-	// rejecters are the distinct users whose reject counts, sorted, with
-	// their comment.
-	rejecters []string
-	comments  map[string]string
-	// records is one entry per decision, for status.approvals.
-	records []kardinalv1alpha1.GateApprovalStatus
-	// held is a reason the policy cannot be met at all: too many Approvals,
-	// or excludeAuthor on a Bundle with no verified creator.
-	held string
+	lifecycle.ApprovalTally
 }
-
-// maxGateApprovals is how many decisions a gate counts; the Graph copies at
-// most one more, so a gate with more blocks instead of counting a cut list.
-const maxGateApprovals = 100
 
 // tallyApprovals counts the decisions of gate's spec.approvals for its
-// Bundle and environment. A decision counts when its user is in
-// allowedUsers or one of its groups is in allowedGroups (everyone counts
-// when both are empty), and, with excludeAuthor, its user is not creator, the
-// Bundle's verified kardinal.io/created-by; with no creator, excludeAuthor
-// holds the gate.
-// Each user counts once; a reject from a counted user wins over their
-// approve. Decisions for another Bundle or environment are ignored: the
-// Graph filters them, so they only come from a hand-edited spec.
+// Bundle and environment (lifecycle.TallyApprovals): the shared rules, so
+// what the CLI says about who may approve matches what this counts.
 func tallyApprovals(gate *kardinalv1alpha1.PolicyGate, creator string) approvalTally {
-	t := approvalTally{comments: map[string]string{}}
-	p := gate.Spec.Approval
-	if p != nil {
-		t.required = max(p.Required, 1)
-		switch {
-		case len(gate.Spec.Approvals) > maxGateApprovals:
-			t.held = fmt.Sprintf("more than %d Approvals for this Bundle in %s; delete the stale ones (kubectl get approvals)",
-				maxGateApprovals, gate.Labels[labelEnvironment])
-		case p.ExcludeAuthor && creator == "":
-			t.held = "excludeAuthor cannot be enforced: the Bundle has no verified creator (annotation kardinal.io/created-by)"
-		case p.ExcludeAuthor && lifecycle.ComponentCreator(creator):
-			t.held = fmt.Sprintf("excludeAuthor cannot be enforced: the Bundle was created by the kardinal component %q, "+
-				"not a person; create it as yourself (kardinal create bundle, or the Bundle API with your own token)", creator)
-		}
-	}
-	bundle, env := gate.Labels[labelBundle], gate.Labels[labelEnvironment]
-	approved, rejected := map[string]bool{}, map[string]bool{}
-	for _, a := range gate.Spec.Approvals {
-		rec := kardinalv1alpha1.GateApprovalStatus{User: a.User, Decision: a.Decision, Comment: a.Comment}
-		switch {
-		case a.Bundle != bundle || a.Environment != env:
-			rec.Reason = fmt.Sprintf("for bundle %s in %s, not this gate's", a.Bundle, a.Environment)
-		case p != nil && !allowed(p, a):
-			rec.Reason = "not an allowed approver (approval.allowedUsers, approval.allowedGroups)"
-		case p != nil && p.ExcludeAuthor && creator != "" && a.User == creator:
-			rec.Reason = "the version's author (approval.excludeAuthor)"
-		default:
-			rec.Counted = true
-			if a.Decision == "reject" {
-				rejected[a.User] = true
-				if a.Comment != "" {
-					t.comments[a.User] = a.Comment
-				}
-			} else {
-				approved[a.User] = true
-			}
-		}
-		t.records = append(t.records, rec)
-	}
-	for u := range rejected {
-		t.rejecters = append(t.rejecters, u)
-	}
-	for u := range approved {
-		if !rejected[u] {
-			t.approvers = append(t.approvers, u)
-		}
-	}
-	sort.Strings(t.rejecters)
-	sort.Strings(t.approvers)
-	sort.SliceStable(t.records, func(i, j int) bool { return t.records[i].User < t.records[j].User })
-	return t
-}
-
-func allowed(p *kardinalv1alpha1.GateApprovalPolicy, a kardinalv1alpha1.GateApproval) bool {
-	if len(p.AllowedUsers) == 0 && len(p.AllowedGroups) == 0 {
-		return true
-	}
-	if slices.Contains(p.AllowedUsers, a.User) {
-		return true
-	}
-	for _, g := range a.Groups {
-		if slices.Contains(p.AllowedGroups, g) {
-			return true
-		}
-	}
-	return false
+	return approvalTally{lifecycle.TallyApprovals(gate, creator)}
 }
 
 // context is the approvals CEL variable: approvals.count (counted approvers),
 // approvals.required, approvals.users and approvals.rejected.
 func (t approvalTally) context() map[string]interface{} {
-	users := make([]interface{}, len(t.approvers))
-	for i, u := range t.approvers {
+	users := make([]interface{}, len(t.Approvers))
+	for i, u := range t.Approvers {
 		users[i] = u
 	}
 	return map[string]interface{}{
-		"count":    int64(len(t.approvers)),
-		"required": int64(t.required),
+		"count":    int64(len(t.Approvers)),
+		"required": int64(t.Required),
 		"users":    users,
-		"rejected": len(t.rejecters) > 0,
+		"rejected": len(t.Rejecters) > 0,
 	}
 }
 
 // blocked returns why the approval policy holds the gate, or "" when it is
 // met or the gate has no policy.
 func (t approvalTally) blocked() string {
-	if t.required == 0 {
+	if t.Required == 0 {
 		return ""
 	}
-	if t.held != "" {
-		return t.held
+	if t.Held != "" {
+		return t.Held
 	}
-	if len(t.rejecters) > 0 {
+	if len(t.Rejecters) > 0 {
 		var parts []string
-		for _, u := range t.rejecters {
-			if c := t.comments[u]; c != "" {
+		for _, u := range t.Rejecters {
+			if c := t.Comments[u]; c != "" {
 				parts = append(parts, fmt.Sprintf("%s (%s)", u, c))
 			} else {
 				parts = append(parts, u)
@@ -158,10 +68,10 @@ func (t approvalTally) blocked() string {
 		}
 		return "rejected by " + strings.Join(parts, ", ")
 	}
-	if len(t.approvers) < t.required {
-		msg := fmt.Sprintf("waiting for approvals: %d of %d", len(t.approvers), t.required)
-		if len(t.approvers) > 0 {
-			msg += " (" + strings.Join(t.approvers, ", ") + ")"
+	if len(t.Approvers) < t.Required {
+		msg := fmt.Sprintf("waiting for approvals: %d of %d", len(t.Approvers), t.Required)
+		if len(t.Approvers) > 0 {
+			msg += " (" + strings.Join(t.Approvers, ", ") + ")"
 		}
 		return msg
 	}
@@ -170,10 +80,10 @@ func (t approvalTally) blocked() string {
 
 // met returns the reason suffix of a gate whose policy is met.
 func (t approvalTally) met() string {
-	if t.required == 0 {
+	if t.Required == 0 {
 		return ""
 	}
-	return fmt.Sprintf("approved by %s (%d of %d)", strings.Join(t.approvers, ", "), len(t.approvers), t.required)
+	return fmt.Sprintf("approved by %s (%d of %d)", strings.Join(t.Approvers, ", "), len(t.Approvers), t.Required)
 }
 
 // recordApprovals writes the tally's records to status.approvals when they
@@ -182,8 +92,8 @@ func (t approvalTally) met() string {
 // from its own spec.
 func (r *Reconciler) recordApprovals(ctx context.Context, gate *kardinalv1alpha1.PolicyGate, t approvalTally) error {
 	now := metav1.NewTime(r.now())
-	records := make([]kardinalv1alpha1.GateApprovalStatus, len(t.records))
-	for i, rec := range t.records {
+	records := make([]kardinalv1alpha1.GateApprovalStatus, len(t.Records))
+	for i, rec := range t.Records {
 		rec.FirstSeenAt = &now
 		for _, old := range gate.Status.Approvals {
 			if old.User == rec.User && old.Decision == rec.Decision && old.FirstSeenAt != nil {
