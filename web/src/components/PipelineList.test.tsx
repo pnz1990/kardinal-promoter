@@ -290,3 +290,17 @@ describe('PipelineList — virtual scrolling (#815)', () => {
   // O4 (aria-pressed on the selected row in virtual mode, #819) is in
   // PipelineList.virtual.test.tsx, which stubs the virtualizer so rows render in jsdom.
 })
+
+describe('PipelineList — two namespaces', () => {
+  it('groups each namespace in a list named by it, with no axe violations', async () => {
+    const { default: axe } = await import('axe-core')
+    const { container } = render(
+      <PipelineList pipelines={[makePipeline({ name: 'alpha' }), makePipeline({ name: 'alpha', namespace: 'team-b' })]} onSelect={vi.fn()} />,
+    )
+    const teamB = screen.getByRole('list', { name: 'team-b' })
+    expect(teamB.querySelectorAll(':scope > li')).toHaveLength(1)
+    expect(screen.getByRole('list', { name: 'default' })).toBeInTheDocument()
+    const result = await axe.run(container, { runOnly: ['wcag2a', 'wcag2aa'], rules: { 'color-contrast': { enabled: false } } })
+    expect(result.violations.map((v) => v.id)).toEqual([])
+  })
+})
