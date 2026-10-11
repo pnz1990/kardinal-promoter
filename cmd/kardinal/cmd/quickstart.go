@@ -710,25 +710,13 @@ func (q *quickstart) scmSecret() error {
 // secret creates the git Secret of the demo Pipeline (createGitSecret: kept
 // when it exists, labelled referenceable when it is not).
 func (q *quickstart) secret() error {
-	key := types.NamespacedName{Namespace: quickstartNS, Name: quickstartSecret}
-	err := q.c.Get(q.ctx, key, &corev1.Secret{})
-	created := apierrors.IsNotFound(err)
-	if err != nil && !created {
-		return fmt.Errorf("quickstart: get Secret %s: %w", key, HumanError(err))
-	}
+	// One it creates is marked as quickstart's, in the Create itself, so
+	// quickstart --delete deletes it and never a Secret of the same name
+	// someone else made.
 	var out strings.Builder
-	if err := createGitSecret(q.ctx, q.c, quickstartNS, quickstartSecret, &out); err != nil {
+	if err := createGitSecretLabelled(q.ctx, q.c, quickstartNS, quickstartSecret, &out,
+		map[string]string{quickstartMark: quickstartMarkValue}); err != nil {
 		return fmt.Errorf("quickstart: %w", err)
-	}
-	if created {
-		// Marked as quickstart's, so quickstart --delete deletes it and
-		// never a Secret of the same name someone else made.
-		patch := []byte(`{"metadata":{"labels":{"` + quickstartMark + `":"` + quickstartMarkValue + `"}}}`)
-		var sec corev1.Secret
-		sec.Name, sec.Namespace = quickstartSecret, quickstartNS
-		if err := q.c.Patch(q.ctx, &sec, sigs_client.RawPatch(types.MergePatchType, patch)); err != nil {
-			return fmt.Errorf("quickstart: label Secret %s: %w", key, HumanError(err))
-		}
 	}
 	msg := strings.TrimSpace(out.String())
 	prefix := "Secret " + quickstartNS + "/" + quickstartSecret
@@ -981,7 +969,8 @@ gone), then the Pipeline demo, the gate prod-approval and the ApplicationSet
 (Argo CD deletes its Applications), each only when quickstart applied it
 (field manager kardinal-quickstart), and the Secret github-token only when
 quickstart created it (label kardinal.io/quickstart) and no other Pipeline
-uses it. Without a Pipeline demo, only versions with that label go. It keeps kro, Argo CD, kardinal-promoter with its
+uses it. Without a Pipeline demo, only versions with that label go. Do
+not add the label by hand: --delete deletes what carries it. It keeps kro, Argo CD, kardinal-promoter with its
 token Secret, and the kardinal-test-app-<env> namespaces, and prints the
 command that deletes those. It asks first on a terminal (--yes does not).
 A re-run deletes nothing.`
