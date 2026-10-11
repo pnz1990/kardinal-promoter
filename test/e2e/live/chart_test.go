@@ -529,7 +529,7 @@ func TestChart_LogLevel(t *testing.T) {
 		"controller-runtime has no warn level; the chart maps warn to error")
 }
 
-// TestChart_Schema checks the values schema rejects removed keys with an
+// TestChart_Schema checks the values schema rejects unknown keys with an
 // error that names them, before anything is applied.
 //
 // Covers CHART-SCHEMA-01.
@@ -540,13 +540,13 @@ func TestChart_Schema(t *testing.T) {
 	ns := e.Namespace(t)
 
 	for key, values := range map[string]framework.Values{
-		"shard":     {"controller": framework.Values{"shard": "shard-a"}},
 		"krocodile": {"krocodile": framework.Values{"enabled": true}},
+		"logLevel":  {"logLevel": "verbose"},
 	} {
 		_, out, err := e.TryInstallChart(t, releaseName(ns), ns, nsValues(ns, values), false)
 		require.Error(t, err, "helm install with %s", key)
 		assert.Contains(t, out, "values don't meet the specifications of the schema")
-		assert.Contains(t, out, key, "the error names the removed key")
+		assert.Contains(t, out, key, "the error names the unknown key")
 		_, serr := e.Helm(t, "status", releaseName(ns), "-n", ns)
 		assert.Error(t, serr, "no release is created")
 	}

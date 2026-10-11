@@ -438,7 +438,7 @@ graph:
     # in every environment (--graph-retire-superseded-after, default 1m).
     superseded: ""
     # -- A Failed Bundle (--graph-retire-failed-after, default 24h). A retired
-    # Failed Bundle no longer recovers.
+    # Failed Bundle does not recover.
     failed: ""
     # -- A Verified Bundle still deployed in an environment
     # (--graph-retire-verified-after, default 1h).

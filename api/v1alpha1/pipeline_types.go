@@ -236,8 +236,9 @@ type EnvironmentSpec struct {
 	// +optional
 	Shard string `json:"shard,omitempty"`
 
-	// AutoRollback is reserved and rejected by the API server: consecutive-failure
-	// auto-rollback is not implemented. See OnHealthFailure.
+	// AutoRollback is reserved, and the API server rejects it: to roll back on
+	// a failed health check use onHealthFailure: rollback, and to roll back
+	// after consecutive failures create a RollbackPolicy.
 	// +optional
 	AutoRollback *AutoRollbackSpec `json:"autoRollback,omitempty"`
 
@@ -904,10 +905,9 @@ type HealthConfig struct {
 	// +optional
 	Timeout string `json:"timeout,omitempty"`
 
-	// Cluster is not supported: kardinal checks health only in the cluster it
-	// runs in. A non-empty value sets the Pipeline Ready=False (reason
-	// NotImplemented) and fails the PromotionStep with "health.cluster is not
-	// supported" instead of silently checking the local cluster.
+	// Cluster is not supported: use kubeconfigSecretRef. A non-empty value sets
+	// the Pipeline Ready=False (reason NotImplemented) and fails the
+	// PromotionStep with "health.cluster is not supported".
 	//
 	// Deprecated: remove cluster. To verify a workload in another cluster,
 	// set kubeconfigSecretRef, or check its Argo CD Application

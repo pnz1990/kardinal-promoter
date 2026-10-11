@@ -184,7 +184,7 @@ func main() {
 		"How long the Graph of a Superseded Bundle, or of a Verified one a newer Bundle replaced in every environment, "+
 			"is kept before it is retired (deleted; the Bundle keeps its PromotionSteps in status.retiredSteps). 0 keeps it.")
 	flag.DurationVar(&retire.Failed, "graph-retire-failed-after", bundlereconciler.DefaultRetirePolicy.Failed,
-		"How long the Graph of a Failed Bundle is kept before it is retired. A retired Failed Bundle no longer recovers. 0 keeps it.")
+		"How long the Graph of a Failed Bundle is kept before it is retired. A retired Failed Bundle does not recover. 0 keeps it.")
 	flag.DurationVar(&retire.Verified, "graph-retire-verified-after", bundlereconciler.DefaultRetirePolicy.Verified,
 		"How long the Graph of a Verified Bundle that is still deployed in an environment is kept before it is retired. 0 keeps it.")
 	flag.BoolVar(&leaderElect, "leader-elect", false,
@@ -365,9 +365,6 @@ func main() {
 			"both the UI and webhook servers use HTTPS instead of plain HTTP. "+
 			"Also readable from KARDINAL_TLS_KEY_FILE environment variable.")
 
-	// --shard and --pipeline-admission-webhook were removed; setting one stops
-	// the controller with a message (removed_settings.go).
-	removed := bindRemovedFlags(flag.CommandLine, os.Getenv)
 
 	// SCM credential rotation — watch a Kubernetes Secret and reload the SCM
 	// provider on change without restarting the controller. When
@@ -537,10 +534,6 @@ func main() {
 	// zerolog logger in the reconcile context, so without this default every
 	// reconciler line, errors included, goes to a disabled logger.
 	zerolog.DefaultContextLogger = &logger
-
-	if err := removed.err(); err != nil {
-		logger.Fatal().Err(err).Msg("a removed controller setting is still set")
-	}
 
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
 
