@@ -1,8 +1,8 @@
 # CI Integration
 
-kardinal-promoter is triggered by your CI pipeline. After building and pushing a container image, CI creates a Bundle that enters the promotion pipeline.
+kardinal-promoter is triggered by your CI pipeline. After building and pushing a container image, CI creates a version that enters the promotion pipeline.
 
-## Bundle Creation Methods
+## Ways to create a version
 
 ### HTTP Webhook
 
@@ -103,12 +103,12 @@ jobs:
 |---|---|---|---|
 | `pipeline` | Yes | — | Pipeline name |
 | `image` | No | — | Single image (`repo:tag` or `repo@sha256:digest`). If both `image` and `images` are set, `image` wins |
-| `digest` | No | — | Digest (`sha256:...`) of the `image` input. It is sent with the tag from `image` (the Bundle records both) and replaces a digest given in `image` |
+| `digest` | No | — | Digest (`sha256:...`) of the `image` input. It is sent with the tag from `image` (the version records both) and replaces a digest given in `image` |
 | `images` | No | — | Newline-separated list of images (multi-image case) |
 | `namespace` | No | `default` | Kubernetes namespace. The action always sends it, so set it when the controller runs with `--watch-namespace`, or the API answers `403` |
 | `kardinal-url` | Yes | — | Base URL of the Bundle API (the controller's webhook listener, `:8083` by default) |
 | `ui-url` | No | — | Base URL of the kardinal UI (`:8082` by default). Sets `bundle-status-url`; without it that output is empty |
-| `type` | No | empty | Bundle type (`image`, `config`, `mixed`). Empty leaves it out of the request, so the controller infers it: `mixed` for images and `config-commit`, `config` for `config-commit` alone, else `image` |
+| `type` | No | empty | Version type (`image`, `config`, `mixed`). Empty leaves it out of the request, so the controller infers it: `mixed` for images and `config-commit`, `config` for `config-commit` alone, else `image` |
 | `config-commit` | For `config` and `mixed` | — | Commit SHA of the configuration change (`configRef.commitSHA`) |
 | `config-repo` | No | the Pipeline's repository | Git repository of `config-commit` (`configRef.gitRepo`) |
 
@@ -123,11 +123,11 @@ jobs:
 The action fills `provenance` from the job: `commitSHA` is `GITHUB_SHA`, `ciRunURL` is the
 run URL, and `author` is `GITHUB_ACTOR`.
 
-Creating a Bundle is not idempotent, so the action retries only when the request
+Creating a version is not idempotent, so the action retries only when the request
 cannot have reached the controller: DNS or connection failures, and HTTP 502/503 from
 a proxy. It makes up to 3 attempts with exponential backoff. Every other error —
 HTTP 4xx (bad token, bad input), HTTP 500, or a timeout — fails the step without a
-retry, because the Bundle may already exist; check `kubectl get bundles` before
+retry, because the version may already exist; check `kubectl get bundles` before
 re-running the job. `pipeline` and `namespace` must be valid Kubernetes names.
 Inputs are passed to the action's script as environment variables, so branch names
 or tags used in inputs cannot inject shell commands. `KARDINAL_TOKEN` must be set as
@@ -178,7 +178,7 @@ promote:
 
 `kardinal create bundle` uses the kubeconfig of the CI runner, like kubectl, and applies the
 same checks as the [Bundle API](#webhook-endpoint-reference): the Pipeline must exist, an
-`image` or `mixed` Bundle needs at least one `--image`, a `config` or `mixed` Bundle needs
+`image` or `mixed` version needs at least one `--image`, a `config` or `mixed` version needs
 `--config-commit`, and `--ci-run-url` must pass the [Provenance](#provenance) check. Nothing is
 created when a check fails.
 
@@ -228,7 +228,7 @@ open by itself. A PR the SCM merges by itself (`pr.merge.auto`) is waited for.
 
 ### kubectl (declarative)
 
-For teams that prefer a fully declarative approach, the Bundle can be created via kubectl in CI:
+For teams that prefer a fully declarative approach, the version can be created via kubectl in CI:
 
 ```yaml
 # In your CI pipeline
@@ -258,8 +258,8 @@ For teams that prefer a fully declarative approach, the Bundle can be created vi
 
 This requires the CI runner to have kubectl access to the cluster and RBAC permissions to create Bundle CRDs.
 
-A Bundle created this way is not checked when it is created. A Bundle that has nothing its type
-promotes (an `image` or `mixed` Bundle with no `images`, a `config` or `mixed` Bundle with no
+A version created this way is not checked when it is created. A version that has nothing its type
+promotes (an `image` or `mixed` version with no `images`, a `config` or `mixed` version with no
 `configRef.commitSHA`) goes to phase `Failed` with condition `InvalidSpec` before any environment
 is promoted.
 
@@ -286,9 +286,9 @@ helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --
   --set bundleAPI.tokenSecretRef.name=kardinal-ci-token
 ```
 
-There is one token per controller. Anyone holding it can create a Bundle for any Pipeline
+There is one token per controller. Anyone holding it can create a version for any Pipeline
 in any namespace the controller watches, so treat it like a deploy credential. With
-`--watch-namespace` set, Bundles can only be created in that namespace (`403` otherwise).
+`--watch-namespace` set, versions can only be created in that namespace (`403` otherwise).
 
 Rate limiting: 60 requests per minute. There is one token, so all callers share the limit.
 Every request with the right token counts, including ones rejected with `400`; a request
@@ -321,7 +321,7 @@ curl -X POST https://kardinal.example.com/api/v1/bundles -H "Authorization: Bear
 
 An invalid token, or one for another audience, gets `401`, a caller RBAC denies `403`
 naming the verb, resource and namespace, and an unreachable review API `503`. A client address
-that sends more than 60 new tokens a minute gets `429` before any `TokenReview` is sent. The Bundle records the caller as its
+that sends more than 60 new tokens a minute gets `429` before any `TokenReview` is sent. The version records the caller as its
 verified creator, `kardinal.io/created-by` (which an approval gate's `excludeAuthor` reads), and
 in `kardinal.io/requested-by`; with the static token the creator is `bundle-api`. Each caller has its own 60-a-minute window. The static token, when
 set, keeps working beside it (a request whose token is the static token acts as the
@@ -362,7 +362,7 @@ roleRef:
 
 The `provenance` field on the Bundle is optional but strongly recommended. It enables:
 - PR evidence showing who built the image and from which commit
-- PolicyGate expressions that reference provenance (e.g., `bundle.provenance.author != "dependabot[bot]"`)
+- Gate expressions that reference provenance (e.g., `bundle.provenance.author != "dependabot[bot]"`)
 - Audit trail linking deployments back to source changes
 
 | Field | Description | Example |
@@ -372,25 +372,25 @@ The `provenance` field on the Bundle is optional but strongly recommended. It en
 | `author` | Who or what triggered the build | `engineer-name`, `dependabot[bot]` |
 | `timestamp` | When the image was built (ISO 8601) | `2026-04-09T10:00:00Z` |
 
-The PR body and the UI link `ciRunURL`, so it is checked when a Bundle is created. It must be
+The PR body and the UI link `ciRunURL`, so it is checked when a version is created. It must be
 empty or an absolute `http://` or `https://` URL with a host, without user info
 (`https://user@host/...`), spaces or control characters.
 
 - The [Bundle API](#webhook-endpoint-reference) returns `400` for any other value, and
   `kardinal create bundle --ci-run-url` returns an error.
-- Bundles created directly (`kubectl apply`, your own client) and existing Bundles are not
-  checked. Where such a Bundle's `ciRunURL` fails the check, the PR body and the UI show `—`
+- Versions created directly (`kubectl apply`, your own client) and existing versions are not
+  checked. Where such a version's `ciRunURL` fails the check, the PR body and the UI show `—`
   instead of a link, and promote and rollback (CLI, UI and automatic) leave it out of the
-  Bundle they create.
+  version they create.
 
-kardinal records provenance as the caller gives it, whichever way the Bundle is created (Bundle
+kardinal records provenance as the caller gives it, whichever way the version is created (version
 API, `kardinal create bundle`, kubectl): it does not check `commitSHA`, `author` or `ciRunURL`
-against your source repository or CI. A PolicyGate on `bundle.provenance.author` therefore trusts
+against your source repository or CI. A gate on `bundle.provenance.author` therefore trusts
 everyone who holds the Bundle API token or may create Bundles in the namespace.
 
-## Multi-Image Bundles
+## Versions with several images
 
-A Bundle can contain multiple images for applications that deploy multiple containers together:
+A version can contain multiple images for applications that deploy multiple containers together:
 
 ```json
 {
@@ -411,13 +411,13 @@ A Bundle can contain multiple images for applications that deploy multiple conta
 }
 ```
 
-The kustomize update strategy writes an `images` entry for each image in the Bundle, as
+The kustomize update strategy writes an `images` entry for each image in the version, as
 `kustomize edit set image` does. It edits the file in Go, keeps comments, and does not need
 the `kustomize` binary.
 
-## Config-Only Bundles
+## Config-only versions
 
-To promote configuration changes (resource limits, env vars, feature flags) without an image change, create a config Bundle:
+To promote configuration changes (resource limits, env vars, feature flags) without an image change, create a config version:
 
 ```bash
 curl -X POST https://kardinal.example.com/api/v1/bundles \
@@ -438,13 +438,13 @@ curl -X POST https://kardinal.example.com/api/v1/bundles \
   }'
 ```
 
-Config Bundles go through the same Pipeline, PolicyGates, and PR flow as image Bundles. The only difference is the update step: instead of `kustomize-set-image`, the controller uses `config-merge`. It checks out `configRef.commitSHA` of `configRef.gitRepo` (default: the Pipeline repo) and copies the files under the environment's directory in that commit (`environments/<name>` or `environments[].path`) over the same directory of the GitOps checkout. Only that directory is copied; `.git`, symlinks and files outside it are not. Files deleted in the config commit are not deleted from the GitOps repo. The Pipeline's git token is sent to `configRef.gitRepo` only when it has the same scheme, host and port as the Pipeline repo, so it is never sent over plain `http://` or to another port. A config commit that has no directory for the environment fails the step.
+Config versions go through the same Pipeline, gates, and PR flow as image versions. The only difference is the update step: instead of `kustomize-set-image`, the controller uses `config-merge`. It checks out `configRef.commitSHA` of `configRef.gitRepo` (default: the Pipeline repo) and copies the files under the environment's directory in that commit (`environments/<name>` or `environments[].path`) over the same directory of the GitOps checkout. Only that directory is copied; `.git`, symlinks and files outside it are not. Files deleted in the config commit are not deleted from the GitOps repo. The Pipeline's git token is sent to `configRef.gitRepo` only when it has the same scheme, host and port as the Pipeline repo, so it is never sent over plain `http://` or to another port. A config commit that has no directory for the environment fails the step.
 
-A `mixed` Bundle carries both `images` and `configRef`. Each environment runs `config-merge` and then the image update step, and commits both changes together. The images are written after the merge, so they win over any image pin in the config commit.
+A `mixed` version carries both `images` and `configRef`. Each environment runs `config-merge` and then the image update step, and commits both changes together. The images are written after the merge, so they win over any image pin in the config commit.
 
-## Bundle Intent
+## How far a version goes
 
-When creating a Bundle from CI, you can specify the promotion intent:
+When creating a version from CI, you can specify the promotion intent:
 
 ```json
 {
@@ -461,7 +461,7 @@ When creating a Bundle from CI, you can specify the promotion intent:
 - `targetEnvironment` unset (default): promote through every environment in the Pipeline
 - `targetEnvironment: staging`: stop after staging (useful for testing)
 - `skipEnvironments: ["staging"]`: skip staging. If an org gate applies to staging, a
-  skip-permission PolicyGate in an org policy namespace must allow the skip; see
+  skip-permission gate in an org policy namespace must allow the skip; see
   [Skip Permissions](policy-gates.md#skip-permissions)
 
 `intent` and `configRef` are copied to the Bundle spec as sent. Unknown fields are
@@ -484,8 +484,8 @@ rejected with `400`, so a misspelt key fails the request instead of being ignore
 | `type` | No | `image`, `config`, `mixed` or `chart`. When omitted it is inferred: `chart` when `chart` is set, `mixed` for `images` and `configRef`, `config` for `configRef` alone, else `image` |
 | `namespace` | No | Target namespace. Defaults to `--watch-namespace`, or `default` |
 | `images` | For `image` and `mixed` | At least one image |
-| `configRef` | For `config` and `mixed` | `gitRepo` and `commitSHA` (`commitSHA` is required). An `image` Bundle with a `configRef` gets 400: it would deploy only its images |
-| `chart` | For `chart` | `name` and `version` (required), `repoURL`, `digest`; promoted with `update.strategy: helm` (see [Promoting a chart version](subscription.md#promoting-a-chart-version)). A `chart` Bundle with a `configRef` gets 400: the configRef would be dropped |
+| `configRef` | For `config` and `mixed` | `gitRepo` and `commitSHA` (`commitSHA` is required). An `image` version with a `configRef` gets 400: it would deploy only its images |
+| `chart` | For `chart` | `name` and `version` (required), `repoURL`, `digest`; promoted with `update.strategy: helm` (see [Promoting a chart version](subscription.md#promoting-a-chart-version)). A `chart` version with a `configRef` gets 400: the configRef would be dropped |
 | `provenance` | No | `commitSHA`, `ciRunURL` (empty or an absolute `http(s)` URL, see [Provenance](#provenance)), `author`, `timestamp` (set to now if empty) |
 | `intent` | No | `targetEnvironment`, `skipEnvironments` |
 
@@ -494,12 +494,12 @@ The body is limited to 1 MiB.
 **Response codes:**
 | Code | Meaning |
 |---|---|
-| 201 | Bundle created. The body is `{"name": "...", "namespace": "..."}` |
+| 201 | Version created. The body is `{"name": "...", "namespace": "..."}` |
 | 400 | Invalid request body, unknown field, or rejected by Bundle validation |
 | 401 | Invalid or missing token |
 | 403 | Namespace is not the one set by `--watch-namespace` |
 | 404 | Pipeline not found in the target namespace, or the endpoint is not enabled |
 | 405 | Method other than `POST` |
-| 409 | A Bundle with the generated name already exists |
+| 409 | A version with the generated name already exists |
 | 429 | Rate limit exceeded |
-| 500 | The controller could not read the Pipeline or create the Bundle |
+| 500 | The controller could not read the Pipeline or create the version |

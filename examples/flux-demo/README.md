@@ -118,8 +118,8 @@ After test and uat are Verified, the prod PR is open:
 
 ```bash
 kardinal get pipelines
-# PIPELINE    BUNDLE            TEST       UAT        PROD              SUB   AGE
-# flux-demo   flux-demo-x7k2p   Verified   Verified   WaitingForMerge   0     15m
+# PIPELINE    BUNDLE            TEST   UAT    PROD                   SUB   AGE
+# flux-demo   flux-demo-x7k2p   Live   Live   Waiting for PR merge   0     15m
 ```
 
 ## Troubleshooting
