@@ -98,6 +98,7 @@ Getting started:
 	root.SetCompletionCommandGroupID(groupAdmin)
 
 	requireSubcommand(root)
+	addNameCompletion(root)
 	return root
 }
 

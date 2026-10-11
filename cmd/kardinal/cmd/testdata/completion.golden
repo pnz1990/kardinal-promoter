@@ -1,0 +1,86 @@
+$ kardinal why <TAB>
+demo	test, uat, prod
+web	dev, live
+:4
+
+$ kardinal why demo <TAB>
+test
+uat
+prod
+:4
+
+$ kardinal approve demo <TAB>
+test
+uat
+prod
+:4
+
+$ kardinal approve demo prod --version <TAB>
+1.5.0	demo-b, Promoting
+1.4.0	demo-a, Verified
+:4
+
+$ kardinal rollback demo prod --to <TAB>
+demo-b	1.5.0, Promoting
+demo-a	1.4.0, Verified
+:4
+
+$ kardinal override demo prod --gate <TAB>
+no-weekend
+:4
+
+$ kardinal override demo --gate <TAB>
+no-weekend
+soak
+:4
+
+$ kardinal history --env <TAB>
+:4
+
+$ kardinal history web --env <TAB>
+dev
+live
+:4
+
+$ kardinal logs demo --bundle <TAB>
+demo-b	1.5.0, Promoting
+demo-a	1.4.0, Verified
+:4
+
+$ kardinal reject <TAB>
+--reason	Why the Bundle is rejected (required)
+demo-b	1.5.0, Promoting
+web-x	9.9.9, Promoting
+demo-a	1.4.0, Verified
+:4
+
+$ kardinal diff demo-a <TAB>
+demo-b	1.5.0, Promoting
+web-x	9.9.9, Promoting
+demo-a	1.4.0, Verified
+:4
+
+$ kardinal delete bundle <TAB>
+demo-b	1.5.0, Promoting
+web-x	9.9.9, Promoting
+demo-a	1.4.0, Verified
+:4
+
+$ kardinal get pipelines <TAB>
+demo	test, uat, prod
+web	dev, live
+:4
+
+$ kardinal get steps <TAB>
+demo	test, uat, prod
+web	dev, live
+:4
+
+$ kardinal metrics --pipeline <TAB>
+demo	test, uat, prod
+web	dev, live
+:4
+
+$ kardinal why demo prod <TAB>
+:4
+
