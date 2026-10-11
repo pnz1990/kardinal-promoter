@@ -146,7 +146,6 @@ func TestFindUITarget(t *testing.T) {
 // on stderr when the UI's address is known (KARDINAL_UI_URL), and nothing
 // otherwise (a port-forward may not be running).
 func TestUILink(t *testing.T) {
-	keepStyle(t) // Execute sets sty
 	c := policyClient(t, policyPipeline("demo", "test", "prod"))
 	prev := buildClient
 	buildClient = func() (sigs_client.Client, string, error) { return c, "default", nil }
