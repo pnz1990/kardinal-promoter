@@ -142,7 +142,8 @@ func TestUIHandler_Access_Bounded(t *testing.T) {
 	access := uiauth.NewCachedAccessReviewer(uiauth.NewRateLimitedAccessReviewer(inner,
 		uiauth.DefaultAccessReviewsPerUserPerMinute, uiauth.DefaultAccessReviewsPerMinute), uiauth.DefaultCacheTTL)
 	h := newUIHandler(fake.NewClientBuilder().WithScheme(uiScheme()).Build(), nil,
-		uiAuthConfig{tokens: tokens, access: access}, "", nil, zerolog.Nop())
+		uiAuthConfig{tokens: tokens, access: uiauth.NewCachedAccessReviewer(inner, uiauth.DefaultCacheTTL), accessCheck: access},
+		"", nil, zerolog.Nop())
 
 	rec := uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/access", "Bearer v",
 		`{"checks":[{"verb":"create","resource":"bundles"},{"verb":"create","resource":"bundles"}]}`)

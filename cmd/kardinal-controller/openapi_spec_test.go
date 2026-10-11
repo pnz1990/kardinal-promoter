@@ -143,7 +143,8 @@ var apiRoutes = []apiRoute{
 		desc: "Answers only for the UI's actions (create bundles, create approvals, update policygates/override, pipelines/pause, " +
 			"pipelines/hold, bundles/reject), in a DNS-1123 namespace (the --watch-namespace one when set) with DNS-1123 names; at most " +
 			"32 checks in 16 KiB, each distinct check reviewed once. In TokenReview mode each check is a SubjectAccessReview for the " +
-			"verified caller, cached for 30s and limited per user (429 past it); a denial is an answer (allowed: false), not a 403. " +
+			"verified caller, cached for 30s and limited per user and in total, for this endpoint only (429 past either, saying which); " +
+			"a denial is an answer (allowed: false), not a 403. " +
 			"Without TokenReview every check is allowed and no user is named, except create approvals (an approval names who decided).",
 		request: uiAccessRequest{}, status: 200, response: uiAccessResponse{}, errors: []int{400, 401, 429, 503}, security: "uiAuth"},
 	{method: "POST", path: "/api/v1/ui/validate-cel", server: serverUI, tag: "UI", id: "validateCEL",

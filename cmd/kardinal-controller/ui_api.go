@@ -43,6 +43,7 @@ import (
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 )
 
 // maxGateOverrideMinutes bounds a UI gate override (--gate-override-max-minutes,
@@ -534,6 +535,9 @@ type uiAPIServer struct {
 	// generation: the list is polled every few seconds and a Pipeline's
 	// ordering changes only with its spec.
 	upstreams upstreamCache
+	// accessCheck, when set, answers POST /access instead of the client's
+	// unlimited reviewer (uiAuthConfig.accessCheck).
+	accessCheck uiauth.AccessReviewer
 	// scopeNamespace is --watch-namespace: POST /access answers only for it when set.
 	scopeNamespace string
 }

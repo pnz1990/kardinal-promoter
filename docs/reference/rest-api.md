@@ -75,8 +75,11 @@ decided, so it answers `allowed: false` with a `reason`. It answers only for the
 `pipelines/hold` and `bundles/reject`), in a namespace that is a DNS-1123 label (the
 `--watch-namespace` one when it is set), for names that are DNS-1123 subdomains: anything else is
 a `400`. A request holds at most 32 checks in 16 KiB, and the same check twice is reviewed once.
-SubjectAccessReviews are limited to 300 a minute per user (3,000 for everyone), counted after
-the cache, as TokenReviews are per client address; past it the answer is `429`.
+Its SubjectAccessReviews are limited to 300 a minute per user (3,000 for everyone), counted after
+its cache, as TokenReviews are per client address; past either the answer is `429`, saying whether
+the caller's budget or everyone's ran out. The limit is this endpoint's alone: the checks that
+authorize UI reads and writes and the Bundle API are not limited, so a flood of `/access` calls
+does not lock anyone out of them.
 
 ## API tokens for automation: ServiceAccount tokens
 

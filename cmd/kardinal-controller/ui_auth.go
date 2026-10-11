@@ -34,6 +34,11 @@ type uiAuthConfig struct {
 	// caller's behalf. main sets both or neither.
 	tokens uiauth.TokenReviewer
 	access uiauth.AccessReviewer
+	// accessCheck answers POST /api/v1/ui/access only: access, rate-limited
+	// per user and in total, under its own cache. Request authorization and
+	// the Bundle API use access, which is not limited, so a flood of /access
+	// calls cannot lock anyone out of reads and writes. Nil uses access.
+	accessCheck uiauth.AccessReviewer
 	// scopeNamespace is --watch-namespace: all-namespace reads are checked
 	// against it because the controller cache only holds that namespace.
 	scopeNamespace string
@@ -55,10 +60,11 @@ type reviewOptions struct {
 
 // sharedReviewers builds the review clients once.
 type sharedReviewers struct {
-	once   sync.Once
-	tokens uiauth.TokenReviewer
-	access uiauth.AccessReviewer
-	err    error
+	once        sync.Once
+	tokens      uiauth.TokenReviewer
+	access      uiauth.AccessReviewer
+	accessCheck uiauth.AccessReviewer
+	err         error
 }
 
 // uiAuthFlags are the UI API auth flags.
@@ -88,40 +94,44 @@ func buildUIAuth(cfg *rest.Config, f uiAuthFlags) (uiAuthConfig, error) {
 	if f.staticToken != "" || !f.tokenReview {
 		return auth, nil
 	}
-	tokens, access, err := newReviewers(cfg, f.review)
+	tokens, access, accessCheck, err := newReviewers(cfg, f.review)
 	if err != nil {
 		return uiAuthConfig{}, err
 	}
-	auth.tokens, auth.access = tokens, access
+	auth.tokens, auth.access, auth.accessCheck = tokens, access, accessCheck
 	return auth, nil
 }
 
 // newReviewers builds the cached TokenReview and SubjectAccessReview clients
 // the UI API and the Bundle API authenticate and authorize callers with.
-// TokenReviews that miss the cache are limited per client address.
-func newReviewers(cfg *rest.Config, opts reviewOptions) (uiauth.TokenReviewer, uiauth.AccessReviewer, error) {
+// TokenReviews that miss the cache are limited per client address. The third
+// reviewer serves POST /api/v1/ui/access only: its SubjectAccessReviews are
+// limited per user and in total, under a cache of its own, while access (for
+// request authorization and the Bundle API) is not limited.
+func newReviewers(cfg *rest.Config, opts reviewOptions) (tokens uiauth.TokenReviewer, access, accessCheck uiauth.AccessReviewer, err error) {
 	if s := opts.shared; s != nil {
 		s.once.Do(func() {
 			o := opts
 			o.shared = nil
-			s.tokens, s.access, s.err = newReviewers(cfg, o)
+			s.tokens, s.access, s.accessCheck, s.err = newReviewers(cfg, o)
 		})
-		return s.tokens, s.access, s.err
+		return s.tokens, s.access, s.accessCheck, s.err
 	}
 	if err := uiauth.CheckAudiences(opts.audiences, opts.apiServerAudiences); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	tokens, err := uiauth.NewKubeTokenReviewer(cfg, opts.audiences, opts.acceptAPIServer)
+	kubeTokens, err := uiauth.NewKubeTokenReviewer(cfg, opts.audiences, opts.acceptAPIServer)
 	if err != nil {
-		return nil, nil, fmt.Errorf("token reviewer: %w", err)
+		return nil, nil, nil, fmt.Errorf("token reviewer: %w", err)
 	}
-	access, err := uiauth.NewKubeAccessReviewer(cfg)
+	kubeAccess, err := uiauth.NewKubeAccessReviewer(cfg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("access reviewer: %w", err)
+		return nil, nil, nil, fmt.Errorf("access reviewer: %w", err)
 	}
-	limited := uiauth.NewRateLimitedTokenReviewer(tokens, uiauth.DefaultReviewsPerClientPerMinute, uiauth.DefaultReviewsPerMinute)
+	limited := uiauth.NewRateLimitedTokenReviewer(kubeTokens, uiauth.DefaultReviewsPerClientPerMinute, uiauth.DefaultReviewsPerMinute)
 	return uiauth.NewCachedTokenReviewer(limited, uiauth.DefaultCacheTTL),
-		uiauth.NewCachedAccessReviewer(uiauth.NewRateLimitedAccessReviewer(access,
+		uiauth.NewCachedAccessReviewer(kubeAccess, uiauth.DefaultCacheTTL),
+		uiauth.NewCachedAccessReviewer(uiauth.NewRateLimitedAccessReviewer(kubeAccess,
 			uiauth.DefaultAccessReviewsPerUserPerMinute, uiauth.DefaultAccessReviewsPerMinute), uiauth.DefaultCacheTTL), nil
 }
 
@@ -141,6 +151,9 @@ func newUIHandler(k8s client.Client, assets fs.FS, auth uiAuthConfig, corsAllowe
 	uiMux := http.NewServeMux()
 	apiServer := newUIAPIServer(apiClient, log)
 	apiServer.scopeNamespace = auth.scopeNamespace
+	if tokenReview {
+		apiServer.accessCheck = auth.accessCheck
+	}
 	apiServer.RegisterRoutes(uiMux)
 	if assets != nil {
 		uiMux.Handle("/ui/", http.StripPrefix("/ui/", http.FileServer(http.FS(noDirListingFS{assets}))))

@@ -6,6 +6,7 @@ package uiauth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -89,7 +90,8 @@ func (r *rateLimitedReviewer) allow(addr string) bool {
 }
 
 // DefaultAccessReviewsPerUserPerMinute bounds the SubjectAccessReviews one
-// user can cause. Reviews come after the cache, so a UI that asks about the
+// user can cause through POST /api/v1/ui/access, the only caller limited:
+// request authorization does not share the budget. Reviews come after the cache, so a UI that asks about the
 // same objects costs one review each per DefaultCacheTTL; only a caller that
 // keeps naming new objects (POST /api/v1/ui/access with fresh names) reaches it.
 const DefaultAccessReviewsPerUserPerMinute = 300
@@ -98,9 +100,16 @@ const DefaultAccessReviewsPerUserPerMinute = 300
 // together can cause.
 const DefaultAccessReviewsPerMinute = 3000
 
-// ErrAccessRateLimited is returned by a rate-limited access reviewer when the
-// user has used their reviews for the current minute. Callers answer 429.
-var ErrAccessRateLimited = errors.New("uiauth: too many authorization checks for this user")
+// ErrAccessRateLimited is returned by a rate-limited access reviewer when
+// its budget for the current minute is used: errors.Is matches both
+// ErrAccessUserRateLimited and ErrAccessTotalRateLimited. Callers answer 429.
+var ErrAccessRateLimited = errors.New("uiauth: too many authorization checks")
+
+// ErrAccessUserRateLimited is the user's own per-minute budget being used.
+var ErrAccessUserRateLimited = fmt.Errorf("%w for this user", ErrAccessRateLimited)
+
+// ErrAccessTotalRateLimited is the budget for all users together being used.
+var ErrAccessTotalRateLimited = fmt.Errorf("%w for all users", ErrAccessRateLimited)
 
 // rateLimitedAccess allows perMinute SubjectAccessReviews per user (by
 // username) and total for everyone in each one-minute window, as
@@ -132,14 +141,19 @@ func (r *rateLimitedAccess) Allowed(ctx context.Context, user authv1.UserInfo, a
 		r.all = 0
 		r.resetAt = now.Add(time.Minute)
 	}
-	ok := r.counts[user.Username] < r.perMinute && (r.total <= 0 || r.all < r.total)
-	if ok {
+	var limited error
+	switch {
+	case r.counts[user.Username] >= r.perMinute:
+		limited = ErrAccessUserRateLimited
+	case r.total > 0 && r.all >= r.total:
+		limited = ErrAccessTotalRateLimited
+	default:
 		r.counts[user.Username]++
 		r.all++
 	}
 	r.mu.Unlock()
-	if !ok {
-		return false, "", ErrAccessRateLimited
+	if limited != nil {
+		return false, "", limited
 	}
 	return r.inner.Allowed(ctx, user, attrs)
 }

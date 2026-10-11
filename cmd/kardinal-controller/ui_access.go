@@ -11,6 +11,7 @@ import (
 	"net/http"
 
 	authzv1 "k8s.io/api/authorization/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
@@ -43,6 +44,23 @@ const approvalNeedsIdentity = "approving needs sign-in with your Kubernetes iden
 // request's user without recording a denial (uiauth.AuthorizingClient.Can).
 type accessChecker interface {
 	Can(ctx context.Context, attrs authzv1.ResourceAttributes) (bool, error)
+}
+
+// limitedChecker answers a check for the request's user with the /access
+// reviewer (uiAuthConfig.accessCheck), as uiauth.AuthorizingClient.Can does
+// with the unlimited one.
+type limitedChecker struct{ access uiauth.AccessReviewer }
+
+func (c limitedChecker) Can(ctx context.Context, attrs authzv1.ResourceAttributes) (bool, error) {
+	user, ok := uiauth.UserFrom(ctx)
+	if !ok || user.Username == "" {
+		return false, apierrors.NewUnauthorized("no authenticated user")
+	}
+	allowed, _, err := c.access.Allowed(ctx, user, attrs)
+	if err != nil {
+		return false, fmt.Errorf("access review: %w", err)
+	}
+	return allowed, nil
 }
 
 // uiAccessCheck is one action the UI asks about: verb on a kardinal.io
@@ -148,6 +166,9 @@ func (s *uiAPIServer) handleAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := uiAccessResponse{Results: make([]uiAccessResult, len(req.Checks))}
 	checker, tokenReview := s.client.(accessChecker)
+	if tokenReview && s.accessCheck != nil {
+		checker = limitedChecker{s.accessCheck}
+	}
 	if tokenReview {
 		if u, ok := uiauth.UserFrom(r.Context()); ok && u.Username != "" {
 			resp.User = &uiAccessUser{Username: u.Username, Groups: u.Groups}
@@ -166,6 +187,10 @@ func (s *uiAPIServer) handleAccess(w http.ResponseWriter, r *http.Request) {
 			allowed, err := checker.Can(r.Context(), authzv1.ResourceAttributes{
 				Namespace: ns, Verb: c.Verb, Group: "kardinal.io", Resource: c.Resource, Subresource: c.Subresource, Name: c.Name,
 			})
+			if errors.Is(err, uiauth.ErrAccessTotalRateLimited) {
+				http.Error(w, "too many authorization checks from all users together; try again in a minute", http.StatusTooManyRequests)
+				return
+			}
 			if errors.Is(err, uiauth.ErrAccessRateLimited) {
 				http.Error(w, "too many authorization checks for this user; try again in a minute", http.StatusTooManyRequests)
 				return
