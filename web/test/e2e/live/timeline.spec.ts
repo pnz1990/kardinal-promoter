@@ -43,8 +43,9 @@ async function expectComparison(panel: Locator, a: Entry, b: Entry) {
   const row = (label: string) => rows.filter({ hasText: new RegExp(`^(▸ )?${label}`) })
   const cells = (label: string) => row(label).locator(':scope > span')
 
-  await expect(cells('Name').nth(1)).toHaveAttribute('title', a.name)
-  await expect(cells('Name').nth(2)).toHaveAttribute('title', b.name)
+  // Each version by its tag, then its Bundle name.
+  await expect(cells('Version').nth(1)).toHaveText(`${a.image.split(':').pop()}${a.name}`)
+  await expect(cells('Version').nth(2)).toHaveText(`${b.image.split(':').pop()}${b.name}`)
 
   // [label, A, B]: what the panel prints for each field.
   const fields: [string, string, string][] = [

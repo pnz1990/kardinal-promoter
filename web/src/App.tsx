@@ -60,6 +60,7 @@ import { terminalEnvironments } from './fleetModel'
 import { KeyboardShortcutsPanel } from './components/KeyboardShortcutsPanel'
 
 import type { Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep, PolicyGate } from './types'
+import { bundleVersion } from './stage/stageModel'
 
 const POLL_INTERVAL_MS = 5000
 
@@ -561,7 +562,8 @@ export function App() {
     if (activePipeline) {
       for (const b of bundles) {
         go.push({
-          id: `go:v:${b.name}`, group: 'Go to', label: `Version ${b.name}`, hint: activePipeline.name, keywords: b.provenance?.commitSHA,
+          id: `go:v:${b.name}`, group: 'Go to', label: `Version ${bundleVersion(b)}`, hint: activePipeline.name,
+          keywords: [b.name, b.provenance?.commitSHA].filter(Boolean).join(' '),
           run: () => handleTimelineBundleSelect(b.name),
         })
       }
@@ -951,7 +953,7 @@ export function App() {
                     {bundles.map(b => (
                       <li key={b.name} className="app-history__item">
                         <HealthChip state={b.phase} kind="bundle" size="sm" />
-                        <a className="app-history__name" href={serializeHash({ ...urlState, version: b.name, env: undefined, node: undefined, tab: undefined })}><VersionLabel bundle={b} /></a>
+                        <a className="app-history__name" title={b.name} href={serializeHash({ ...urlState, version: b.name, env: undefined, node: undefined, tab: undefined })}><VersionLabel bundle={b} /></a>
                         {b.provenance?.commitSHA && (
                           <span className="app-sha">
                             {b.provenance.commitSHA.slice(0, 8)}
@@ -974,7 +976,7 @@ export function App() {
                   }}
                 />
                 {/* #340: the shown version's gates, their conditions and approvals. */}
-                <PolicyGatesPanel gates={shownGates} loading={gatesLoading} onDecided={() => { void manualRefresh() }} />
+                <PolicyGatesPanel currentBundle={activePipeline?.activeBundleName} gates={shownGates} loading={gatesLoading} onDecided={() => { void manualRefresh() }} />
               </>)}
             </TabPanel>
 

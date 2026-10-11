@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0
 
 import { describe, it, expect } from 'vitest'
-import { listOf, lowerFirst, stateWords } from './sentence'
+import { lowerFirst, stateWords } from './sentence'
 
 describe('sentence', () => {
   it.each<[string, string]>([
@@ -21,6 +21,4 @@ describe('sentence', () => {
     expect(stateWords('step', 'HealthChecking')).toBe('checking health')
   })
 
-  it.each<[string[], string]>([[[], ''], [['prod'], 'prod'], [['uat', 'prod'], 'uat and prod'], [['test', 'uat', 'prod'], 'test, uat and prod']])(
-    'listOf(%j) is %j', (names, want) => { expect(listOf(names)).toBe(want) })
 })

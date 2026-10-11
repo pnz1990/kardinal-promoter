@@ -30,6 +30,11 @@ describe('failureMessage', () => {
     ['the failed sub-step', { steps: [{ name: 'git-push', state: 'Failed', message: 'push rejected' }] }, 'push rejected'],
     ['the Ready condition', { conditions: [{ type: 'Ready', status: 'False', message: '0/3 replicas ready' }] }, '0/3 replicas ready'],
     ['nothing', {}, undefined],
+    // Precedence: the step's message, then the failed sub-step's, then the condition's.
+    ['the step message over the others', { message: 'step', steps: [{ name: 'x', state: 'Failed', message: 'sub' }],
+      conditions: [{ type: 'Ready', status: 'False', message: 'cond' }] }, 'step'],
+    ['the sub-step over the condition', { steps: [{ name: 'x', state: 'Failed', message: 'sub' }],
+      conditions: [{ type: 'Ready', status: 'False', message: 'cond' }] }, 'sub'],
   ])('reads %s', (_, over, want) => {
     expect(failureMessage(step(over))).toBe(want)
   })
@@ -43,5 +48,12 @@ describe('a failed stage', () => {
     const message = within(why).getByText(/0\/3 ready replicas/)
     const rollback = within(why).getByRole('button', { name: 'Roll back' })
     expect(message.compareDocumentPosition(rollback) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+  it('says "Why it’s waiting" when a gate hold comes first, even with a failed step', () => {
+    const gate = { name: 'freeze--search-2-prod', gateTemplate: 'freeze', namespace: 'shop', expression: 'false', ready: false, pipeline: 'search',
+      bundle: 'search-2', environment: 'prod', state: 'Block' as const, holding: true, reason: 'frozen' }
+    render(<StageDrawer namespace="shop" pipeline="search" env="prod" onClose={vi.fn()} onNavigate={vi.fn()} onChanged={vi.fn()}
+      data={{ pipeline, bundles, steps: [step({ message: 'boom' })], gates: [gate] }} />)
+    expect(screen.getByRole('region', { name: 'Why it’s waiting' })).toBeInTheDocument()
   })
 })

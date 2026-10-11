@@ -62,7 +62,6 @@
 }
 .bundle-diff__label { color: var(--k-ink-2); font-size: var(--k-text-xs); }
 .bundle-diff__row--field[data-changed] .bundle-diff__label { color: var(--k-ink); font-weight: var(--k-weight-bold); }
-.bundle-diff__name { color: var(--k-syntax-ident); font-family: var(--k-font-mono); font-size: var(--k-text-xs); }
 
 .bundle-diff__value { color: var(--k-ink-2); font-family: var(--k-font-mono); font-size: var(--k-text-xs); }
 .bundle-diff__value[data-changed] { color: var(--k-ink); }
@@ -77,3 +76,4 @@
   text-align: center;
 }
 .bundle-diff__footer { margin-block-start: var(--k-space-4); text-align: end; }
+.bundle-diff__version { flex-wrap: wrap; overflow-wrap: anywhere; }

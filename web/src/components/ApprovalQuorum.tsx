@@ -22,6 +22,9 @@ interface Props {
   approval: GateApproval
   /** The gate's Pipeline: the CLI command names it (kardinal approve <pipeline> <env>). */
   pipeline?: string
+  /** Whether bundle is the one on its way into environment, the one `kardinal approve <pipeline> <env>`
+   *  resolves (default true). Otherwise the command names the Bundle: `kardinal approve <bundle> --env <env>`. */
+  current?: boolean
   bundle?: string
   environment?: string
   /** Namespace of the gate; with bundle and environment it enables the actions. */
@@ -64,12 +67,15 @@ function DecisionRow({ d, now }: { d: GateDecision; now: number }) {
   )
 }
 
-export function ApprovalQuorum({ approval: a, pipeline, bundle, environment, namespace, onDecided, now = Date.now() }: Props) {
+export function ApprovalQuorum({ approval: a, pipeline, bundle, environment, namespace, current = true, onDecided, now = Date.now() }: Props) {
   const pips = a.required <= MAX_PIPS ? a.required : 0
   const state = a.rejected ? 'rejected' : a.approved >= a.required ? 'approved' : 'waiting'
   // The command the stage drawer shows (C5: kardinal approve <pipeline> <env>, -n outside default).
-  const command = pipeline && environment
-    ? cliCommand({ kind: 'approval', title: '' }, pipeline, environment, namespace ?? 'default') ?? '' : ''
+  const ns = namespace && namespace !== 'default' ? ` -n ${namespace}` : ''
+  const command = !environment ? ''
+    : current && pipeline ? cliCommand({ kind: 'approval', title: '' }, pipeline, environment, namespace ?? 'default') ?? ''
+      // Not the version on its way in: name it, or the CLI would approve the incoming one.
+      : bundle ? `kardinal approve ${bundle} --env ${environment}${ns}` : ''
   const decisions = a.decisions ?? []
   return (
     <div className="approval-quorum" data-state={state}>

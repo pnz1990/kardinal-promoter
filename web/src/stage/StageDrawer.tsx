@@ -160,7 +160,7 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
           </div>
 
           <section className="stage-section" data-section="why" ref={el => { sectionRefs.current.why = el }} aria-labelledby={`${headingId}-why`}>
-            <h3 id={`${headingId}-why`} className="stage-section__title">{view.why.some(w => w.kind === 'failed') ? 'Why it failed' : view.why.length > 0 ? 'Why it’s waiting' : 'Status'}</h3>
+            <h3 id={`${headingId}-why`} className="stage-section__title">{view.why[0]?.kind === 'failed' ? 'Why it failed' : view.why.length > 0 ? 'Why it’s waiting' : 'Status'}</h3>
             {view.why.length === 0
               ? <p className="stage-muted">{view.running && !view.incoming ? `Nothing is waiting: ${view.running.version} is live.` : `${view.state.label}.`}</p>
               : <ol className="stage-why">{view.why.map((w, i) => (

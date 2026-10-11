@@ -88,7 +88,7 @@ const PIPELINES = [
     environmentStates: { staging: 'Promoting', prod: 'Pending' },
     blockerCount: 2,
     failedStepCount: 0,
-    activeBundleVersion: 'v2.4.0 with config 1a2b3c4',
+    activeBundleVersion: '6.14.1',
     environmentTopology: [{ name: 'staging' }, { name: 'prod', upstreams: ['staging'] }],
     // status.conditions (#1727): its git Secret works but is not labelled referenceable.
     conditions: [

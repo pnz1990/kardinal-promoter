@@ -69,3 +69,11 @@ describe('ApprovalQuorum', () => {
     expect(screen.getByText('No decisions yet.')).toBeInTheDocument()
   })
 })
+
+describe('ApprovalQuorum — a gate of a version that is not on its way in', () => {
+  it('names the Bundle in the CLI line, so the command approves that version', () => {
+    const waiting = { required: 2, approved: 1, decisions: [] }
+    render(<ApprovalQuorum approval={waiting} pipeline="app" bundle="app-1" environment="prod" current={false} />)
+    expect(screen.getByText('kardinal approve app-1 --env prod')).toBeInTheDocument()
+  })
+})

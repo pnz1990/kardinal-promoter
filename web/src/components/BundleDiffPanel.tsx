@@ -16,6 +16,7 @@ import { useModalFocus } from '../useModalFocus'
 import { isCIRunURL } from '../prLink'
 import '../ui'
 import '../styles/BundleDiffPanel.css'
+import { VersionLabel } from './VersionLabel'
 
 interface Props {
   bundleA: Bundle
@@ -133,11 +134,11 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
           <div className="bundle-diff__col-head">Version B</div>
         </div>
 
-        {/* Bundle names */}
+        {/* The versions: what each ships (its tag), the Bundle name after it */}
         <div className="bundle-diff__row bundle-diff__row--names">
-          <span className="bundle-diff__label">Name</span>
-          <span className="bundle-diff__name" title={bundleA.name}>{truncate(bundleA.name, 28)}</span>
-          <span className="bundle-diff__name" title={bundleB.name}>{truncate(bundleB.name, 28)}</span>
+          <span className="bundle-diff__label">Version</span>
+          <VersionLabel bundle={bundleA} className="bundle-diff__version" />
+          <VersionLabel bundle={bundleB} className="bundle-diff__version" />
         </div>
 
         {/* Diff rows */}
