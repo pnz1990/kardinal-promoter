@@ -118,6 +118,9 @@ export function createFixtures({ big = false } = {}) {
   })
 
   // ── search: test → prod; 4.1.0 failed its prod health check ───────────────────────
+  const se403 = bundle('search', '4.0.3', 'Superseded', 4 * 24 * 60, {
+    environments: ['test', 'prod'].map((name) => ({ name, phase: 'Verified', healthCheckedAt: ago(4 * 24 * 60 * MIN) })),
+  })
   const se410 = bundle('search', '4.1.0', 'Failed', 75, {
     environments: [{ name: 'test', phase: 'Verified' }, { name: 'prod', phase: 'Failed' }],
   })
@@ -160,7 +163,7 @@ export function createFixtures({ big = false } = {}) {
     bundles: {
       checkout: [co180, co172, co171],
       storefront: [sf230, sf229],
-      search: [se410],
+      search: [se410, se403],
       'edge-cdn': [edge],
     },
     graphs: {
@@ -204,6 +207,17 @@ export function createFixtures({ big = false } = {}) {
       },
     },
     steps: {
+      [se410.name]: [{
+        name: 'search-prod-4-1-0', namespace: NS, pipeline: 'search', bundle: se410.name, environment: 'prod',
+        stepType: 'kustomize-set-image', state: 'Failed', currentStepIndex: 5,
+        message: 'health check: deployment search-prod has 0/3 ready replicas after 10m (ImagePullBackOff)',
+        steps: [['git-clone', 2100, 'Completed'], ['kustomize-set-image', 300, 'Completed'], ['git-commit', 200, 'Completed'], ['open-pr', 1600, 'Completed'],
+          ['wait-for-merge', 60_000, 'Completed'], ['health-check', 600_000, 'Failed']].reduce((acc, [name, ms, state]) => {
+          const from = acc.length ? Date.parse(acc[acc.length - 1].completedAt) : NOW - 75 * MIN
+          acc.push({ name, state, startedAt: new Date(from).toISOString(), completedAt: new Date(from + ms).toISOString(), durationMs: ms })
+          return acc
+        }, []),
+      }],
       [co180.name]: ['test', 'uat'].map((e, i) => ({
         name: `checkout-${e}-1-8-0`, namespace: NS, pipeline: 'checkout', bundle: co180.name, environment: e,
         stepType: 'kustomize-set-image', state: 'Verified', currentStepIndex: 5,

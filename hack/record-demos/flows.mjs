@@ -11,8 +11,8 @@ import { expect } from 'playwright/test'
 const station = (page, env) => page.getByRole('button', { name: new RegExp(`^${env} — `) }).first()
 /** The stage drawer (a column beside the map, or a sheet on narrow screens). */
 const drawer = (page) => page.getByTestId('stage-drawer')
-/** The version rail's chip for a version (the Bundle name without the pipeline prefix). */
-const chip = (page, version) => page.getByRole('toolbar', { name: /^Versions/ }).getByRole('button', { name: new RegExp(`^${version} `) })
+/** The version rail's chip for a version, by its tag. */
+const chip = (page, version) => page.getByRole('toolbar', { name: /^Versions/ }).getByRole('button', { name: new RegExp(`^${version.replaceAll('.', '\\.')} `) })
 
 export const FLOWS = [
   {
@@ -30,8 +30,8 @@ export const FLOWS = [
       await d.move(station(page, 'prod-eu'))
       await d.pause(900)
       // Follow the version prod runs today on the rail, then come back to the new one.
-      await d.click(chip(page, '1-7-2'), { after: 1700 })
-      await d.click(chip(page, '1-8-0'), { after: 1400 })
+      await d.click(chip(page, '1.7.2'), { after: 1700 })
+      await d.click(chip(page, '1.8.0'), { after: 1400 })
     },
   },
   {
@@ -82,13 +82,17 @@ export const FLOWS = [
   },
   {
     name: 'rollback-hold',
-    title: 'Roll back prod and hold it there, after a confirmation',
+    title: 'Why a stage failed, then roll it back and hold it there',
     themes: ['light'],
-    start: '#/p/shop/storefront',
+    start: '#/p/shop/search',
     async run(d, page) {
       await d.pause(1200)
-      await d.click(station(page, 'prod'), { after: 1200 })
-      await d.click(drawer(page).getByRole('button', { name: /^Roll back/ }).first(), { after: 1100 })
+      await d.click(station(page, 'prod'), { after: 1300 })
+      const why = drawer(page).getByRole('region', { name: 'Why it failed' })
+      await expect(why).toBeVisible()
+      await d.move(why.getByText(/0\/3 ready replicas/))
+      await d.pause(1400)
+      await d.click(why.getByRole('button', { name: /^Roll back/ }).first(), { after: 1100 })
       const dialog = page.getByRole('dialog')
       await expect(dialog).toBeVisible()
       await d.move(dialog.getByRole('heading').first())
@@ -96,7 +100,7 @@ export const FLOWS = [
       // Hold prod on the rollback, with a reason, so nothing newer promotes over it.
       await d.click(dialog.getByRole('checkbox', { name: /^Hold/ }), { after: 700 })
       await d.click(dialog.getByRole('textbox', { name: /Why hold|Reason/ }), { after: 300 })
-      await d.type('INC-4211: 2.3.0 leaks connections')
+      await d.type('INC-4211: 4.1.0 cannot pull its image')
       await d.pause(500)
       d.poster()
       await d.click(dialog.getByRole('button', { name: /^Roll back/ }).last(), { after: 2400 })
@@ -109,9 +113,9 @@ export const FLOWS = [
     start: '#/p/shop/checkout',
     async run(d, page) {
       await d.pause(1200)
-      await d.move(chip(page, '1-8-0'))
+      await d.move(chip(page, '1.8.0'))
       await d.pause(500)
-      await d.click(chip(page, '1-7-2'), { modifiers: ['Shift'], after: 900 })
+      await d.click(chip(page, '1.7.2'), { modifiers: ['Shift'], after: 900 })
       await d.click(page.getByRole('button', { name: /^Compare/ }).first(), { after: 1600 })
       const panel = page.getByRole('dialog', { name: /comparison/i })
       await expect(panel).toBeVisible()
