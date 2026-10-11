@@ -66,7 +66,7 @@ kubectl create secret generic github-token \
 kubectl label secret github-token kardinal.io/referenceable=true --overwrite
 ```
 
-A step that returns an error is retried with backoff (10s, 20s, 40s, 80s, then 2m) up to 5 times; `status.message` shows `retrying in <d> (<n>/5)` and `status.nextRetryAt` when the retry runs. The step waits for it even when something else reconciles it first, such as a gate re-evaluation or a PR status change. Rotate the token within that window and the step continues. After the last retry the PromotionStep is Failed; create a new Bundle to promote again.
+A step that returns an error is retried with backoff (10s, 20s, 40s, 80s, then 2m) up to 5 times; `status.message` shows `retrying in <d> (<n>/5)` and `status.nextRetryAt` when the retry runs. The step waits for it even when something else reconciles it first, such as a gate re-evaluation or a PR status change. Rotate the token within that window and the step continues. After the last retry the PromotionStep is Failed; create a new version to promote again.
 
 ### Symptom: Pipeline Ready=False with reason GitCredentialMissing
 
@@ -112,7 +112,7 @@ retrying in 20s (2/5) after error: step git-push: git push origin main: authenti
 The `GitCredentialMissing` condition is `True` with reason `SecretUnreadable`, with one `Warning`
 Event. Creating the Secret does not fix this, so the step keeps the limit of 5 retries and then
 fails. Fix the read error (for `forbidden`, the controller's RBAC: the chart grants `get` on
-Secrets in every namespace the controller reconciles), then create a new Bundle to promote again.
+Secrets in every namespace the controller reconciles), then create a new version to promote again.
 
 ### Symptom: "get PR status failed: HTTP 401", "HTTP 403" or "HTTP 404" on a PromotionStep
 
@@ -136,7 +136,7 @@ kubectl get prstatus -o custom-columns=NAME:.metadata.name,PR:.spec.prNumber,ERR
 ```
 
 The PRStatus keeps polling every 5 minutes and clears `pollError` once a poll succeeds, but the
-failed step does not resume. Fix the token or the repository, then create a new Bundle.
+failed step does not resume. Fix the token or the repository, then create a new version.
 
 ### Symptom: "403 rate limit exceeded" or "429 Too Many Requests" in controller logs
 

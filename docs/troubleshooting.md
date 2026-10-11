@@ -171,8 +171,8 @@ Gitea, Bitbucket Cloud, Bitbucket Data Center and Azure DevOps are also supporte
 
 For Helm, set `update: {strategy: helm}` on the Pipeline environment. kardinal
 will update the `image.tag` (or a custom path) in `values.yaml` instead of Kustomize
-overlays. It writes one image per Bundle: a Bundle with more than one tagged image
-fails the step. Use one Bundle per chart image, or kustomize.
+overlays. It writes one image per version: a version with more than one tagged image
+fails the step. Use one version per chart image, or kustomize.
 
 
 ### What does the controller need?
@@ -215,19 +215,19 @@ kardinal override <pipeline> --stage prod --gate <gate-name> \
 
 Rollbacks are triggered:
 
-1. **Manual**: `kardinal rollback <pipeline> --env prod` — creates a rollback Bundle. In a
+1. **Manual**: `kardinal rollback <pipeline> --env prod` — creates a rollback version. In a
    `pr-review` environment it opens a PR labelled `kardinal/rollback`; in an `auto` environment
    it commits and pushes straight to the branch, the same as any promotion there, with no PR
    (with `update.strategy: argocd` it sets the image on the Argo CD Application instead)
 2. **Automatic**: the environment sets `onHealthFailure: rollback` and its health check fails.
    That means a terminal result (a Deployment `ProgressDeadlineExceeded` from this promotion's
    rollout, a failed Flagger canary), no healthy result before `health.timeout`, or an unhealthy
-   check during a `bake` window with `policy: fail-on-alarm`. A rollback Bundle that fails its own
+   check during a `bake` window with `policy: fail-on-alarm`. A rollback version that fails its own
    health check is not rolled back again; its step ends `AbortedByAlarm`.
    See [Rollback](rollback.md#automatic-rollback).
    (`environments[].autoRollback` is not implemented and is rejected by the API server.)
 
-A rollback is a forward promotion of the previously-verified Bundle image through the
+A rollback is a forward promotion of the previously-verified version image through the
 same pipeline, same gates, same audit trail.
 
 ### How do I see what changed between two versions?
@@ -236,8 +236,8 @@ same pipeline, same gates, same audit trail.
 kardinal diff <bundle-a> <bundle-b>
 ```
 
-Compares the images (matched by repository) and provenance of two Bundles.
-`kardinal get bundles <pipeline>` lists the Bundle names.
+Compares the images (matched by repository) and provenance of two versions.
+`kardinal get bundles <pipeline>` lists the version names.
 
 
 ### Can a gate let hotfixes through the weekend block?
@@ -251,7 +251,7 @@ spec:
     ("kardinal.io/hotfix" in bundle.labels && bundle.labels["kardinal.io/hotfix"] == "true")
 ```
 
-Create the Bundle with `kubectl apply` and set `kardinal.io/hotfix: "true"` in `metadata.labels`.
+Create the version with `kubectl apply` and set `kardinal.io/hotfix: "true"` in `metadata.labels`.
 `kardinal create bundle` and the Bundle API do not set custom labels.
 Bundle annotations are not in the CEL context; labels are (`bundle.labels`).
 

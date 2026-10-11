@@ -321,7 +321,7 @@ All state is stored in Kubernetes CRDs:
 | `PromotionStep` | Per-environment promotion progress; owned by Graph |
 | `PolicyGate` | Namespaced policy check: templates, and the per-Bundle instances the Graph creates |
 | `PRStatus` | Tracks a promotion PR's open, merged or closed state |
-| `RollbackPolicy` | Consecutive-failure rollback trigger for one Bundle in one environment (user-created; see [Rollback](rollback.md#autorollback-is-not-implemented)) |
+| `RollbackPolicy` | Consecutive-failure rollback trigger for one Bundle in one environment (user-created; see [Rollback](rollback.md#rollbackpolicy)) |
 | `MetricCheck` | Metric query (Prometheus, Datadog, CloudWatch, New Relic, web) with a pass/fail threshold, created by the user or, per promotion, by the Graph from a `perPromotion` template; gates read it as `metrics.<name>` |
 | `ScheduleClock` | Writes `status.tick` on a configurable interval; enables time-based policy gates |
 | `ChangeWindow` | Cluster-scoped blackout/recurring allow windows for pipeline promotions |
