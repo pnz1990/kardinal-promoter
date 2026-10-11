@@ -11,7 +11,7 @@
 // through the API, and the Go test checks it is paused.
 
 import { test, expect, type Page, type Request, type Route } from '@playwright/test'
-import { need, openPipeline, pipelineHash, filterSidebar, sidebarRows, sidebarRow, dagNode, PIPELINE } from './live'
+import { need, openPipeline, pipelineHash, filterSidebar, sidebarRows, sidebarRow, dagNode, PIPELINE, stageDrawer, drawerHeading } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -23,7 +23,7 @@ const isPipelinesPoll = (url: URL | string) => new URL(url.toString()).pathname 
 
 const filter = (page: Page) => page.getByRole('textbox', { name: 'Filter pipelines by name or namespace' })
 const shortcuts = (page: Page) => page.getByRole('dialog', { name: 'Keyboard shortcuts' })
-const details = (page: Page) => page.getByTestId('node-detail')
+const details = (page: Page) => stageDrawer(page)
 const hashParams = (page: Page) => new URLSearchParams(new URL(page.url()).hash.slice(1))
 const heading = (page: Page) => page.getByRole('heading', { level: 1 })
 /** The "refreshed ago" indicator inside the Refresh data button. */
@@ -126,10 +126,10 @@ test('keyboard shortcuts: / focuses the filter, ? shows the help, r refreshes, E
   await help.click({ position: { x: 5, y: 5 } })
   await expect(help).toHaveCount(0)
 
-  // Esc closes the node details, and the link loses the node.
+  // Esc closes the stage drawer, and the link loses the environment (node=<env>, #1701).
   await dagNode(page, 'test').click()
-  await expect(details(page)).toContainText('Environment: test')
-  expect(hashParams(page).get('node')).toBe(testStep)
+  await expect(drawerHeading(page)).toHaveText('test')
+  expect(hashParams(page).get('node')).toBe('test')
   await page.keyboard.press('Escape')
   await expect(details(page)).toHaveCount(0)
   await expect.poll(() => hashParams(page).get('node')).toBeNull()
@@ -189,15 +189,15 @@ test('the theme follows the system until the user picks one, which the next visi
 
 test('a link opens the pipeline and node it names, and Back and Forward walk the selections', async ({ page }) => {
   await openPipeline(page, base, ns, PIPELINE, { node: testStep })
-  await expect(details(page)).toContainText('Environment: test')
+  await expect(drawerHeading(page)).toHaveText('test')
   await expect(dagNode(page, 'test')).toHaveAttribute('aria-pressed', 'true')
 
-  // Closing the details is one history entry.
-  await details(page).getByRole('button', { name: 'Close' }).click()
+  // Closing the drawer is one history entry. A link may name the step; the drawer opens its environment.
+  await details(page).getByRole('button', { name: 'Close test' }).click()
   await expect(details(page)).toHaveCount(0)
   await expect.poll(() => hashParams(page).get('node')).toBeNull()
   await page.goBack()
-  await expect(details(page)).toContainText('Environment: test')
+  await expect(drawerHeading(page)).toHaveText('test')
   expect(hashParams(page).get('node')).toBe(testStep)
   await page.goForward()
   await expect.poll(() => hashParams(page).get('node')).toBeNull()

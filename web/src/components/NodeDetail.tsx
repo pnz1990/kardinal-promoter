@@ -18,12 +18,13 @@
 //
 // #527: EventsPanel — K8s events for the selected step, refreshed with each poll.
 import { useState, useEffect } from 'react'
-import type { GraphEdge, GraphNode, PromotionStep, Bundle, StepStatus } from '../types'
+import type { GraphEdge, GraphNode, PromotionStep, Bundle } from '../types'
 import { HealthChip } from './HealthChip'
 import { api } from '../api/client'
 import EventsPanel, { type StepEvent } from './EventsPanel'
 import CopyButton from './CopyButton'
-import { stepTimeline } from '../stepTimeline'
+import { CELBlock } from './CELBlock'
+import { StepProgress } from './StepProgress'
 import { PipelineActionDialog, type PipelineActionKind } from './PipelineActionDialog'
 import { formatElapsedSince } from '../timeFormat'
 import { isHttpURL } from '../prLink'
@@ -56,6 +57,8 @@ interface Props {
 // took over; the rollback Bundle's own step is the one in flight.
 const IN_FLIGHT_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'Verifying'])
 
+const labelStyle = { color: 'var(--color-text)' } as const
+
 /** Format an ISO timestamp to a human-readable string. */
 function formatTimestamp(iso: string): string {
   try {
@@ -77,273 +80,8 @@ function formatTimestamp(iso: string): string {
 // Tokenizes a CEL expression for basic keyword/identifier/string/operator coloring.
 // Adapted from kro-ui KroCodeBlock pattern, simplified for CEL-only use.
 
-type CELTokenType = 'keyword' | 'function' | 'string' | 'number' | 'operator' | 'boolean' | 'identifier' | 'plain'
-interface CELToken { type: CELTokenType; text: string }
-
-const CEL_KEYWORDS = new Set(['true', 'false', 'null', 'in', 'has', 'all', 'exists', 'map', 'filter', 'exists_one', 'type'])
-const CEL_KRO_FUNCTIONS = new Set([
-  'json.marshal', 'json.unmarshal', 'lists.setAtIndex',
-  'lists.insertAtIndex', 'lists.removeAtIndex', 'random.seededInt', 'random.seededString',
-  'changewindow.isAllowed', 'changewindow.isBlocked', 'lowerAscii', 'contains', 'startsWith', 'endsWith',
-  'matches', 'size', 'int', 'uint', 'double', 'string', 'bytes', 'duration', 'timestamp',
-])
-
-function tokenizeCEL(expr: string): CELToken[] {
-  const tokens: CELToken[] = []
-  let i = 0
-  const len = expr.length
-
-  while (i < len) {
-    const ch = expr[i]
-
-    // String literal: single or double quoted
-    if (ch === '"' || ch === "'") {
-      const quote = ch
-      let j = i + 1
-      while (j < len && expr[j] !== quote) {
-        if (expr[j] === '\\') j++ // skip escape
-        j++
-      }
-      j++ // closing quote
-      tokens.push({ type: 'string', text: expr.slice(i, j) })
-      i = j
-      continue
-    }
-
-    // Number
-    if (/[0-9]/.test(ch) || (ch === '-' && /[0-9]/.test(expr[i + 1] ?? ''))) {
-      let j = i + 1
-      while (j < len && /[0-9.]/.test(expr[j])) j++
-      tokens.push({ type: 'number', text: expr.slice(i, j) })
-      i = j
-      continue
-    }
-
-    // Operator / punctuation
-    if (/[!&|=<>+\-*/%()[\]{},.:@]/.test(ch)) {
-      // Multi-char operators: !=, ==, <=, >=, &&, ||
-      const two = expr.slice(i, i + 2)
-      if (['!=', '==', '<=', '>=', '&&', '||'].includes(two)) {
-        tokens.push({ type: 'operator', text: two })
-        i += 2
-        continue
-      }
-      tokens.push({ type: 'operator', text: ch })
-      i++
-      continue
-    }
-
-    // Whitespace
-    if (/\s/.test(ch)) {
-      let j = i + 1
-      while (j < len && /\s/.test(expr[j])) j++
-      tokens.push({ type: 'plain', text: expr.slice(i, j) })
-      i = j
-      continue
-    }
-
-    // Identifier or keyword
-    if (/[a-zA-Z_$]/.test(ch)) {
-      let j = i + 1
-      while (j < len && /[a-zA-Z0-9_.[\]]/.test(expr[j])) j++
-      const word = expr.slice(i, j)
-      // check if it's a kro function call prefix (e.g. "json.unmarshal")
-      let type: CELTokenType = 'identifier'
-      if (CEL_KEYWORDS.has(word.toLowerCase())) {
-        type = word === 'true' || word === 'false' ? 'boolean' : 'keyword'
-      } else if (CEL_KRO_FUNCTIONS.has(word)) {
-        type = 'function'
-      } else if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(word) && j < len && expr[j] === '(') {
-        // Function call: word followed by (
-        type = 'function'
-      }
-      tokens.push({ type, text: word })
-      i = j
-      continue
-    }
-
-    // Fallback
-    tokens.push({ type: 'plain', text: ch })
-    i++
-  }
-  return tokens
-}
-
-const CEL_TOKEN_COLORS: Record<CELTokenType, string> = {
-  keyword: 'var(--color-warning)',     // true/false/in/has etc
-  function: 'var(--color-info)',       // function calls
-  string: 'var(--color-success)',      // string literals
-  number: 'var(--color-accent)',       // numbers
-  operator: 'var(--color-text)',       // operators
-  boolean: 'var(--color-warning)',     // boolean literals
-  identifier: 'var(--color-code)',     // identifiers (bundle.X, schedule.X)
-  plain: 'var(--color-text-muted)',    // whitespace and anything else
-}
-
-/** #333: Syntax-highlighted CEL expression block. */
-function CELBlock({ expression }: { expression: string }) {
-  const tokens = tokenizeCEL(expression)
-  return (
-    <code style={{
-      display: 'block',
-      background: 'var(--color-bg)',
-      borderRadius: '4px',
-      padding: '0.5rem 0.75rem',
-      fontSize: '0.8rem',
-      fontFamily: 'var(--k-font-mono)',
-      wordBreak: 'break-all',
-      whiteSpace: 'pre-wrap',
-    }}>
-      {tokens.map((token, idx) => (
-        <span key={idx} style={{ color: CEL_TOKEN_COLORS[token.type] }}>
-          {token.text}
-        </span>
-      ))}
-    </code>
-  )
-}
-// ── end CEL syntax highlighter ────────────────────────────────────────────────
 
 
-/** How one entry of status.steps[] is drawn. */
-const STEP_VIEW: Record<StepStatus['state'], { icon: string; color: string; label: string }> = {
-  Completed: { icon: '✓', color: 'var(--color-success)', label: 'done' },
-  InProgress: { icon: '▶', color: 'var(--color-warning)', label: 'running' },
-  Failed: { icon: '✗', color: 'var(--color-error)', label: 'failed' },
-  Pending: { icon: '○', color: 'var(--color-text-faint)', label: 'not started' },
-}
-
-/** "850ms", "2.0s", "3m 4s". */
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`
-  const sec = ms / 1000
-  if (sec < 60) return `${sec.toFixed(1)}s`
-  return `${Math.floor(sec / 60)}m ${Math.round(sec % 60)}s`
-}
-
-/**
- * The state to draw for a step. A step the engine left InProgress is shown as
- * failed once the promotion itself has failed (e.g. a health-check timeout is
- * recorded on the PromotionStep, not on the step entry).
- */
-function effectiveStepState(s: StepStatus, promotionState: string): StepStatus['state'] {
-  if (s.state === 'InProgress' && (promotionState === 'Failed' || promotionState === 'AbortedByAlarm')) return 'Failed'
-  return s.state
-}
-
-function stepNote(s: StepStatus, shown: StepStatus['state'], promotion: PromotionStep): string | null {
-  if (shown === 'Failed') return s.message || (s.state === 'InProgress' ? promotion.message ?? null : null)
-  if (shown === 'InProgress') {
-    if (promotion.state === 'WaitingForMerge') return 'waiting for merge'
-    if (promotion.state === 'HealthChecking') return 'checking health'
-    // Verifying waits for post-deploy hooks and Argo Rollouts analyses.
-    if (promotion.state === 'Verifying') return 'verifying: post-deploy hooks and analyses'
-    return null
-  }
-  if (shown === 'Completed' && s.durationMs) return formatDuration(s.durationMs)
-  return null
-}
-
-/**
- * Step progress for a PromotionStep node, from status.steps[]: the sequence
- * the controller resolved for this promotion (it differs per update strategy,
- * bundle type, approval mode and layout, so it is never hard-coded here).
- */
-function StepProgress({ step }: { step: PromotionStep }) {
-  const list = step.steps ?? []
-  const bars = stepTimeline(list)
-  const hasBars = bars.some(b => b !== null)
-  return (
-    <div style={{ marginBottom: '0.75rem' }}>
-      <h4 style={{ fontSize: '0.8rem', color: 'var(--color-text)', marginBottom: '0.5rem' }}>
-        Promotion Steps
-      </h4>
-      {list.length === 0 ? (
-        <div style={{ fontSize: '0.8rem', color: 'var(--color-text-faint)', fontStyle: 'italic' }}>
-          Steps appear here once this promotion starts.
-        </div>
-      ) : (
-        <ol
-          aria-label="Promotion steps"
-          style={{
-            listStyle: 'none',
-            margin: 0,
-            background: 'var(--color-bg)',
-            border: '1px solid var(--color-border-muted)',
-            borderRadius: '4px',
-            padding: '0.5rem 0.75rem',
-          }}
-        >
-          {list.map((s, i) => {
-            const shown = effectiveStepState(s, step.state)
-            const view = STEP_VIEW[shown] ?? STEP_VIEW.Pending
-            const note = stepNote(s, shown, step)
-            const current = shown === 'InProgress' || shown === 'Failed'
-            return (
-              <li
-                key={`${i}-${s.name}`}
-                data-step-state={shown}
-                style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  alignItems: 'baseline',
-                  gap: '0.5rem',
-                  marginBottom: i < list.length - 1 ? '0.3rem' : 0,
-                }}
-              >
-                <span aria-hidden="true" style={{ fontSize: '0.7rem', color: view.color, width: '12px', flexShrink: 0 }}>
-                  {view.icon}
-                </span>
-                <span style={{
-                  fontSize: '0.75rem',
-                  color: shown === 'Pending' ? 'var(--color-text-faint)' : 'var(--color-text)',
-                  fontFamily: 'var(--k-font-mono)',
-                  fontWeight: current ? 600 : 400,
-                }}>
-                  {s.name}
-                </span>
-                <span className="sr-only">{view.label}</span>
-                {note && (
-                  <span style={{
-                    fontSize: '0.68rem',
-                    color: shown === 'Completed' ? 'var(--color-text-faint)' : view.color,
-                    overflowWrap: 'anywhere',
-                  }}>
-                    {note}
-                  </span>
-                )}
-                {hasBars && (
-                  // Waterfall: where this step sits in the promotion's time span.
-                  <span
-                    aria-hidden="true"
-                    data-testid="step-bar-track"
-                    style={{ flexBasis: '100%', height: '3px', marginLeft: '20px', background: 'var(--color-border-muted)', borderRadius: '2px', position: 'relative' }}
-                  >
-                    {bars[i] && (
-                      <span
-                        data-testid="step-bar"
-                        data-offset={bars[i]!.offset.toFixed(1)}
-                        data-width={bars[i]!.width.toFixed(1)}
-                        style={{
-                          position: 'absolute', top: 0, bottom: 0, borderRadius: '2px',
-                          left: `${bars[i]!.offset}%`, width: `${bars[i]!.width}%`,
-                          background: view.color,
-                          opacity: shown === 'Completed' ? 0.75 : 1,
-                        }}
-                      />
-                    )}
-                  </span>
-                )}
-              </li>
-            )
-          })}
-        </ol>
-      )}
-    </div>
-  )
-}
-
-const labelStyle = { color: 'var(--color-text)' } as const
 
 export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace = 'default', steps, activeBundle, onActionDone, nodes = [], edges = [] }: Props) {
   const [stepDetail, setStepDetail] = useState<PromotionStep | null>(null)
