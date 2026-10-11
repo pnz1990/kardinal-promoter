@@ -116,6 +116,6 @@ test('the Table lists each environment and the Matrix each version by environmen
   const matrix = page.getByRole('region', { name: 'Versions by environment' })
   const row = matrix.locator(`tr[data-bundle="${bundle}"]`)
   await expect(row).toHaveAttribute('data-followed', 'true')
-  await expect(row.locator('td[title^="test:"]')).toHaveAttribute('title', 'test: Live')
-  await expect(row.locator('td[title^="prod:"]')).toHaveAttribute('title', 'prod: Waiting for PR merge')
+  await expect(row.locator('td[aria-label^="test:"]')).toHaveAttribute('aria-label', 'test: Live')
+  await expect(row.locator('td[aria-label^="prod:"]')).toHaveAttribute('aria-label', 'prod: Waiting for PR merge')
 })
