@@ -921,7 +921,7 @@
       },
       "PolicyGateOverride": {
         "additionalProperties": false,
-        "description": "uiGateOverride is the JSON shape for a PolicyGateOverride (K-09 audit record).",
+        "description": "uiGateOverride is the JSON shape for a PolicyGateOverride (an audit record).",
         "properties": {
           "createdAt": {
             "type": "string"
@@ -1418,6 +1418,122 @@
         ],
         "type": "object"
       },
+      "uiDisplayState": {
+        "additionalProperties": false,
+        "description": "uiDisplayState is how one API state is shown (pkg/display): the same labels as the CLI.",
+        "properties": {
+          "ascii": {
+            "description": "ASCII is the glyph for a surface without Unicode.",
+            "type": "string"
+          },
+          "glyph": {
+            "description": "Glyph is a one-character Unicode symbol for the state.",
+            "type": "string"
+          },
+          "label": {
+            "description": "Label is the text a person reads, for example \"Waiting for PR merge\".",
+            "type": "string"
+          },
+          "tone": {
+            "description": "Tone is the status bucket that picks colour and shape: verified, promoting, waiting, blocked, failed, superseded, paused, held, pending, degraded or unknown.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Value is the API value, unchanged, for example WaitingForMerge.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ascii",
+          "glyph",
+          "label",
+          "tone",
+          "value"
+        ],
+        "type": "object"
+      },
+      "uiDisplayStates": {
+        "additionalProperties": false,
+        "description": "uiDisplayStates is the response of GET /api/v1/ui/display-states: every known state of each kind, keyed by API value. A value not listed is shown with its CamelCase split into words and tone unknown.",
+        "properties": {
+          "bundle": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/uiDisplayState"
+            },
+            "description": "Bundle maps Bundle status.phase values.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "gate": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/uiDisplayState"
+            },
+            "description": "Gate maps the state of a gate instance (Pass, Block, Waiting, Pending, Superseded, Rejected).",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "held": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/uiDisplayState"
+              }
+            ],
+            "description": "Held is the label of an environment held by a rollback (rollback --hold)."
+          },
+          "heldByGate": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/uiDisplayState"
+              }
+            ],
+            "description": "HeldByGate is the label of an environment a gate holds; {gate} is the gate's name. Its tone is blocked."
+          },
+          "pipeline": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/uiDisplayState"
+            },
+            "description": "Pipeline maps Pipeline status.phase values, and Paused.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "step": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/uiDisplayState"
+            },
+            "description": "Step maps PromotionStep status.state values, and NotStarted (an environment not reached yet).",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "substep": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/uiDisplayState"
+            },
+            "description": "SubStep maps the state of a PromotionStep's status.steps[].",
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "bundle",
+          "gate",
+          "held",
+          "heldByGate",
+          "pipeline",
+          "step",
+          "substep"
+        ],
+        "type": "object"
+      },
       "uiFleet": {
         "additionalProperties": false,
         "description": "uiFleet is a fleet environment's targets and pacing (spec.fleet).",
@@ -1546,7 +1662,7 @@
             "type": "string"
           },
           "bundleMissing": {
-            "description": "BundleMissing is true when the controller found the rollback Bundle missing (status.holdStates, #1629). The hold stays in effect.",
+            "description": "BundleMissing is true when the controller found the rollback Bundle missing (status.holdStates). The hold stays in effect.",
             "type": "boolean"
           },
           "createdAt": {
@@ -1988,6 +2104,45 @@
           {}
         ],
         "summary": "The PromotionSteps of a Bundle, with per-step timings",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/display-states": {
+      "get": {
+        "operationId": "getDisplayStates",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/uiDisplayStates"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "The labels, glyphs and tones of every state, the words the CLI uses",
         "tags": [
           "UI"
         ]

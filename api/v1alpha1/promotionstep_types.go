@@ -106,15 +106,13 @@ type PromotionStepSpec struct {
 	// Graph has not yet read the step back (its StepsObserved), true once it
 	// has. Only then is the step's admission final: until it is, a pacing
 	// change can make kro delete the step, so a Pending step does no work
-	// while Admitted is false (#1565). Unset (other Graphs) does not wait.
+	// while Admitted is false. Unset (other Graphs) does not wait.
 	// Do not set it.
 	// +optional
 	Admitted *bool `json:"admitted,omitempty"`
 
-	// Region was set on the per-region PromotionSteps of a Pipeline
-	// environment with two or more spec.regions. The Graph builder no longer
-	// sets it; the reconciler fails a step that still has one (created by a
-	// Graph built before the upgrade) with "regions is not supported".
+	// Region is deprecated and not set by kardinal; the reconciler fails a
+	// step that has one with "regions is not supported".
 	//
 	// Deprecated: declare one environment per region (prod-us, prod-eu) and
 	// use wave.
@@ -355,7 +353,6 @@ type PromotionStepStatus struct {
 	// after the health check began, moved to health.timeout after the moment
 	// a bake window stops. It does not apply while a bake window runs.
 	// A Graph CEL expression can observe this field to detect a stale health check.
-	// Graph-purity: replaces the time.Since() call (PS-5 in 11-graph-purity-tech-debt.md).
 	// +optional
 	HealthCheckExpiry *metav1.Time `json:"healthCheckExpiry,omitempty"`
 
@@ -377,14 +374,14 @@ type PromotionStepStatus struct {
 	// +optional
 	WorkDir string `json:"workDir,omitempty"`
 
-	// BakeStartedAt is when the contiguous-healthy soak window began (K-01).
+	// BakeStartedAt is when the contiguous-healthy soak window began.
 	// Set on the first successful health check when env.bake is configured.
 	// Reset when BakeElapsedMinutes resets (health failure with reset-on-alarm).
 	// +optional
 	BakeStartedAt *metav1.Time `json:"bakeStartedAt,omitempty"`
 
 	// BakeElapsedMinutes is the number of contiguous healthy minutes accumulated
-	// so far in the current bake window (K-01). Resets to 0 on health failure
+	// so far in the current bake window. Resets to 0 on health failure
 	// when policy=reset-on-alarm. When this reaches env.bake.minutes, the step
 	// transitions to Verified.
 	// +optional
@@ -394,12 +391,12 @@ type PromotionStepStatus struct {
 	// the first healthy check with env.bake configured. It is never reset.
 	// With bake.policy reset-on-alarm, the step must complete one full
 	// window by BakeFirstStartedAt + bake.minutes + health.timeout, so a
-	// release that keeps flapping ends (#1423).
+	// release that keeps flapping ends.
 	// +optional
 	BakeFirstStartedAt *metav1.Time `json:"bakeFirstStartedAt,omitempty"`
 
 	// BakeResets is the number of times the bake timer was reset due to a
-	// health alarm during the current bake window (K-01).
+	// health alarm during the current bake window.
 	// +optional
 	BakeResets int `json:"bakeResets,omitempty"`
 
@@ -486,7 +483,7 @@ type PromotionStepStatus struct {
 	Steps []StepStatus `json:"steps,omitempty"`
 
 	// PendingAuditEvents are AuditEvents for this step's transitions that are
-	// not yet written (the audit outbox, #1552). Each entry is stored in the
+	// not yet written (the audit outbox). Each entry is stored in the
 	// same status patch as its transition and removed once the AuditEvent
 	// exists, so an API error or a controller restart between the two cannot
 	// lose the record. Normally empty.
@@ -497,7 +494,7 @@ type PromotionStepStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=ps
+// +kubebuilder:resource:scope=Namespaced,shortName=ps,categories=kardinal-all
 // +kubebuilder:printcolumn:name="Pipeline",type=string,JSONPath=`.spec.pipelineName`
 // +kubebuilder:printcolumn:name="Env",type=string,JSONPath=`.spec.environment`
 // +kubebuilder:printcolumn:name="Bundle",type=string,JSONPath=`.spec.bundleName`

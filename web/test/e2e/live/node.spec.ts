@@ -52,7 +52,7 @@ test('a step shows its sub-steps, elapsed time, merge link and events', async ({
   await expect(detail.getByRole('heading', { level: 3 })).toHaveText('prod')
   await expect(detail).toContainText('Type: PromotionStep')
   await expect(detail).toContainText('Environment: prod')
-  await expect(detail.locator('.health-chip').first()).toHaveAttribute('data-health-state', 'Reconciling')
+  await expect(detail.locator('.health-chip').first()).toHaveAttribute('data-health-state', 'InProgress')
   await expectSubSteps(detail, prodSteps)
   await expect(detail.locator('li[data-step-state="InProgress"]')).toContainText('waiting for merge')
 

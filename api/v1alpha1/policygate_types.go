@@ -63,7 +63,7 @@ type PolicyGateSpec struct {
 	// +optional
 	When string `json:"when,omitempty"`
 
-	// Overrides holds time-limited emergency overrides (K-09).
+	// Overrides holds time-limited emergency overrides.
 	// When any non-expired override exists (matching Stage or with empty Stage),
 	// the gate passes immediately. Expired overrides are kept as audit records.
 	// +optional
@@ -164,7 +164,7 @@ type GateApprovalStatus struct {
 	FirstSeenAt *metav1.Time `json:"firstSeenAt,omitempty"`
 }
 
-// PolicyGateOverride is a time-limited emergency override record (K-09).
+// PolicyGateOverride is a time-limited emergency override record.
 // When any non-expired override exists for a gate, the gate passes immediately
 // without evaluating the CEL expression, and status.reason reads
 // "OVERRIDDEN by <user>: <reason> (expires <time>)". A PR opened while the
@@ -221,7 +221,7 @@ type PolicyGateStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
 	// PendingAuditEvents are AuditEvents for this gate's transitions that are
-	// not yet written (the audit outbox, #1552). Each entry is stored in the
+	// not yet written (the audit outbox). Each entry is stored in the
 	// same status patch as its transition and removed once the AuditEvent
 	// exists, so an API error or a controller restart between the two cannot
 	// lose the record. Normally empty.
@@ -272,14 +272,14 @@ type OverrideRecord struct {
 	// +optional
 	Verified bool `json:"verified,omitempty"`
 	// Audited is true once the GateOverridden record is stored: in
-	// status.pendingAuditEvents until the AuditEvent is written (#1552).
+	// status.pendingAuditEvents until the AuditEvent is written.
 	// +optional
 	Audited bool `json:"audited,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=pg
+// +kubebuilder:resource:scope=Namespaced,shortName=pg,categories=kardinal;kardinal-all
 // +kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=`.status.ready`
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.reason`,priority=1
 // +kubebuilder:printcolumn:name="Last-Evaluated",type=date,JSONPath=`.status.lastEvaluatedAt`,priority=1

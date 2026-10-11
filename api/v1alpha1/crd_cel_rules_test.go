@@ -137,7 +137,7 @@ func TestPipelineCRDRejectsStepsAndPromotionTemplate(t *testing.T) {
 		}, want: "environments[].steps is not supported"},
 		{name: "promotionTemplate", self: map[string]interface{}{
 			"name": "prod", "promotionTemplate": map[string]interface{}{"name": "standard"},
-		}, want: "environments[].promotionTemplate is not supported"},
+		}, want: "environments[].promotionTemplate is deprecated and not supported"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
