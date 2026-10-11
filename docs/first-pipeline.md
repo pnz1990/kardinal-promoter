@@ -134,21 +134,25 @@ kubectl create secret generic github-token \
 kubectl label secret github-token --namespace default kardinal.io/referenceable=true
 ```
 
-You can generate a starting Pipeline YAML using `kardinal init`:
+Write the Pipeline and apply it with `kardinal init`. It finds the Argo CD Applications above
+(`kardinal-test-app-<env>` in `argocd`) and checks health with them; everything else is a default:
+each environment follows the one before it, at `environments/<name>` on `main`, updated with
+kustomize, and prod waits for its PR to be merged:
 
 ```bash
-kardinal init
-# Application name [my-app]: kardinal-test-app
-# Namespace [default]: default
-# Environments (comma-separated) [test,uat,prod]: test,uat,prod
-# Git repository URL: https://github.com/pnz1990/kardinal-demo
-# Base branch [main]: main
-# Update strategy (kustomize/helm) [kustomize]: kustomize
+kardinal init --name kardinal-test-app --repo https://github.com/pnz1990/kardinal-demo \
+  --envs test,uat,prod -n default --apply
+# Found Argo CD Application argocd/kardinal-test-app-test: test checks health with it
+# Found Argo CD Application argocd/kardinal-test-app-uat: uat checks health with it
+# Found Argo CD Application argocd/kardinal-test-app-prod: prod checks health with it
 # Pipeline YAML written to pipeline.yaml
-# Apply with: kubectl apply -f pipeline.yaml
+# Pipeline default/kardinal-test-app created
 ```
 
-`kardinal init` sets no health check. Without one, kardinal waits for a Deployment named after the Pipeline in a namespace named after the environment (`test`, `uat`, `prod`). The Applications above deploy to `kardinal-test-app-<env>`, so apply the Pipeline below instead. It checks the Argo CD Applications. It is `examples/quickstart/pipeline.yaml` (`kubectl apply -f examples/quickstart/pipeline.yaml` from a checkout) with the Application names written out. Everything else is a default: each environment follows the one before it, at `environments/<name>` on `main`, updated with kustomize, with `approval: auto` unless set:
+Running it again with the same flags changes nothing (`unchanged`). Add `--create-secret` to
+create the git Secret of the step above from `$GITHUB_TOKEN` (or `gh auth token`). Or apply the
+same Pipeline by hand, which also gives prod a longer health timeout. It is
+`examples/quickstart/pipeline.yaml` (`kubectl apply -f examples/quickstart/pipeline.yaml` from a checkout) with the Application names written out:
 
 ```bash
 cat <<EOF | kubectl apply -f -
@@ -187,7 +191,7 @@ Verify the Pipeline was created:
 
 ```bash
 kardinal get pipelines
-# PIPELINE            BUNDLE   TEST   UAT   PROD   SUB   AGE
+# PIPELINE            VERSION  TEST   UAT   PROD   SUB   AGE
 # kardinal-test-app   -        -      -     -      0     10s
 ```
 
@@ -242,7 +246,7 @@ The promotion starts immediately. kardinal-promoter generates a Graph and begins
 ```bash
 # Watch the pipeline status
 kardinal get pipelines
-# PIPELINE            BUNDLE                    TEST   UAT               PROD          SUB   AGE
+# PIPELINE            VERSION                   TEST   UAT               PROD          SUB   AGE
 # kardinal-test-app   kardinal-test-app-x7k2p   Live   Checking health   Not reached   0     2m
 
 # See the steps of the version being promoted
@@ -295,7 +299,7 @@ The PR body contains:
 
 ```bash
 kardinal get pipelines
-# PIPELINE            BUNDLE                    TEST   UAT    PROD   SUB   AGE
+# PIPELINE            VERSION                   TEST   UAT    PROD   SUB   AGE
 # kardinal-test-app   kardinal-test-app-x7k2p   Live   Live   Live   0     8m
 ```
 
@@ -328,7 +332,7 @@ The next Bundle promoted to prod will have this gate injected into its Graph. If
 
 ```bash
 kardinal explain kardinal-test-app --env prod
-# ENVIRONMENT   BUNDLE                    TYPE         NAME                 STATE      EXPRESSION            REASON
+# ENVIRONMENT   VERSION                   TYPE         NAME                 STATE      EXPRESSION            REASON
 # prod          kardinal-test-app-9tptr   PolicyGate   no-weekend-deploys   Blocking   !schedule.isWeekend   Production deployments are blocked on weekends (bundle.version=sha-abc1234: !schedule.isWeekend = false)
 #
 # prod   deployed: kardinal-test-app-7qvsr (sha-1a2b3c4)

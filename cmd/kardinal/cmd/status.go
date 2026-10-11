@@ -366,16 +366,13 @@ func envState(e v1alpha1.PipelineEnvironmentStatus) display.State {
 	return display.Step(e.State)
 }
 
-// versionCell is "bundle (version)" for a cell of the status table, "-"
-// without a bundle.
+// versionCell is "version (bundle)" for a cell of the status table
+// (versionLabel), "-" without a bundle.
 func versionCell(bundle, version string) string {
-	switch {
-	case bundle == "":
+	if bundle == "" {
 		return "-"
-	case version == "":
-		return bundle
 	}
-	return bundle + " (" + version + ")"
+	return versionLabel(version, bundle)
 }
 
 // writePipelineStatus writes view as kardinal status <pipeline> prints it.
