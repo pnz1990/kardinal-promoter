@@ -47,6 +47,9 @@ func TestPipelineEnvironmentsMatchDeployed(t *testing.T) {
 	for _, e := range []string{"dev", "test", "uat", "prod"} {
 		p.Spec.Environments = append(p.Spec.Environments, v1alpha1.EnvironmentSpec{Name: e})
 	}
+	// A fleet environment runs nothing itself: both list its targets.
+	p.Spec.Environments = append(p.Spec.Environments, v1alpha1.EnvironmentSpec{Name: "edge",
+		Fleet: &v1alpha1.FleetSpec{Targets: []v1alpha1.FleetTarget{{Name: "a"}, {Name: "b"}}}})
 	t1, t2 := t0.Add(time.Hour), t0.Add(2*time.Hour)
 	bundles := []v1alpha1.Bundle{
 		bundle("b1", "1.4.0", "Superseded", t0),
@@ -58,6 +61,7 @@ func TestPipelineEnvironmentsMatchDeployed(t *testing.T) {
 		step("b1", "uat", "Verified", t0), step("b1", "prod", "Verified", t0),
 		step("b2", "dev", "Verified", t1), step("b2", "test", "Verified", t1), step("b2", "uat", "Failed", t1),
 		step("b3", "dev", "Verified", t2), step("b3", "test", "HealthChecking", t2),
+		step("b1", "edge-a", "Verified", t0), step("b1", "edge-b", "Verified", t0), step("b2", "edge-a", "Verified", t1),
 	}
 
 	envs := pipeline.ProjectEnvironments(p, bundles, steps, nil, nil, t2.Add(time.Hour))
@@ -71,7 +75,8 @@ func TestPipelineEnvironmentsMatchDeployed(t *testing.T) {
 	}
 	deployed := deployedByEnv(p, stepsByEnv(steps, idx), byName)
 
-	require.Len(t, envs, len(p.Spec.Environments))
+	require.Len(t, envs, 6, "4 environments and the fleet's 2 targets")
+	require.Len(t, deployed, 6)
 	for _, e := range envs {
 		d := deployed[e.Name]
 		assert.Equal(t, d.Bundle, e.Bundle, e.Name)
@@ -85,7 +90,13 @@ func TestPipelineEnvironmentsMatchDeployed(t *testing.T) {
 	// health checking over an older one (test), failed over an older one
 	// (uat), and an older Bundle still running where nothing newer reached
 	// (prod).
-	assert.Equal(t, []string{"b3", "b3", "b1", "b1"}, []string{envs[0].Bundle, envs[1].Bundle, envs[2].Bundle, envs[3].Bundle})
+	names := make([]string, len(envs))
+	running := make([]string, len(envs))
+	for i, e := range envs {
+		names[i], running[i] = e.Name, e.Bundle
+	}
+	assert.Equal(t, []string{"dev", "test", "uat", "prod", "edge-a", "edge-b"}, names)
+	assert.Equal(t, []string{"b3", "b3", "b1", "b1", "b2", "b1"}, running)
 	assert.Equal(t, "HealthChecking", envs[1].State)
 	assert.Equal(t, "b2", envs[2].IncomingBundle)
 }
