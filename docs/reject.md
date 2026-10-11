@@ -1,4 +1,4 @@
-# Reject a Bundle
+# Reject a version
 
 A Bundle that must never reach another environment, for example a build with a known vulnerability, can be rejected:
 

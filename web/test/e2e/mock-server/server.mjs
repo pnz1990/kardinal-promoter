@@ -206,7 +206,7 @@ function serveFile(res, filePath) {
     const ext = path.extname(filePath)
     const mime = {
       '.html': 'text/html', '.js': 'application/javascript',
-      '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml',
+      '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.woff2': 'font/woff2',
     }[ext] ?? 'application/octet-stream'
     res.writeHead(200, { 'Content-Type': mime, ...SECURITY_HEADERS })
     res.end(content)
