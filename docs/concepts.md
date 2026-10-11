@@ -1,123 +1,56 @@
-# Core Concepts
+# Concepts
 
-## Bundle
+kardinal moves a **version** of your application through a **pipeline** of **environments**,
+and **gates** decide when the version may enter the next environment. Those four words are
+all you need to start; the [glossary](reference/glossary.md) maps every other term to them.
 
-A Bundle is an immutable, versioned snapshot of what to deploy. It contains container image references (tag and digest), optionally a Helm chart version or Git commit SHA, and build provenance (who built it, what commit, which CI run).
+```mermaid
+flowchart LR
+    CI["CI or a Subscription"] -->|creates| V["Version<br/>(Bundle)"]
+    V --> test["test<br/>commit, health check"]
+    test --> uat["uat<br/>commit, health check"]
+    uat --> G{"Gates<br/>(PolicyGates)"}
+    G -->|all pass| prod["prod<br/>pull request, merge, health check"]
+```
 
-The API server enforces the immutability: an update that changes `spec.type`, `spec.pipeline`, `spec.images`, `spec.chart`, `spec.configRef`, `spec.provenance` or `spec.intent` is refused (`spec.<field> is immutable: create a new Bundle`), because gates and verifications were evaluated against the artifact, and an intent edit would take effect only at a later re-translation. Labels and annotations stay editable. To promote a different artifact, or to another target, create a new Bundle; it supersedes the older one.
+Each box on the right is an **environment** of the **pipeline**. A version enters an
+environment once the environment before it has verified it and the environment's gates pass.
+kardinal then writes the version to the environment's directory in your GitOps repository
+(directly, or through a pull request you review), waits for Argo CD, Flux or Kubernetes to
+roll it out, and checks its health. A healthy environment is **Verified**, and the version
+moves on.
 
-Bundles are created by your CI pipeline after building and pushing an image. All creation paths produce the same CRD in etcd:
+## Version (Bundle)
+
+A **version** is one immutable snapshot of what to deploy: container images (tag and digest),
+or a Helm chart version, or a commit of a configuration repository, together with where it
+came from (author, commit, CI run). Its Kubernetes kind is `Bundle`, and the CLI and the UI
+call it a Bundle too.
+
+Your CI creates a version after it builds and pushes an image. Every way of creating one
+produces the same object:
 
 ```bash
-# From CI via webhook
+# From CI, through the Bundle API
 curl -X POST https://kardinal.example.com/api/v1/bundles \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"pipeline":"my-app","type":"image","images":[{"repository":"ghcr.io/myorg/my-app","tag":"1.29.0","digest":"sha256:abc..."}],"provenance":{"commitSHA":"abc123","ciRunURL":"https://...","author":"engineer"}}'
 
-# From CLI
+# From the CLI
 kardinal create bundle my-app --image ghcr.io/myorg/my-app:1.29.0
 
-# From kubectl
+# With kubectl
 kubectl apply -f bundle.yaml
 ```
 
-### Bundle phases
+A version cannot change: the API server refuses an update to its images, chart, config
+commit, provenance, pipeline or intent (`spec.<field> is immutable: create a new Bundle`),
+because gates and health checks were decided for that artifact. Labels and annotations stay
+editable. To ship something else, create a new version. A newer version of the same type
+replaces, or **supersedes**, an older one that has not finished; see
+[Bundle supersession](architecture.md#bundle-supersession).
 
-| Phase | Meaning |
-|---|---|
-| Available | Discovered, not yet promoted to any environment |
-| Promoting | Actively being promoted through the pipeline |
-| Verified | Successfully promoted to all target environments |
-| Failed | A promotion step or health check failed, kro rejected the Graph, or the Pipeline, the Bundle (its intent, or no images or config commit for its type) or a PolicyGate cannot be built into a Graph (condition `InvalidSpec`, with the reason). A Failed Bundle promotes again when the failed step is retried or, for `InvalidSpec`, when the Pipeline changes or, for reason `GraphBuildFailed`, a PolicyGate that applies to one of its environments changes |
-| Superseded | Replaced by a newer Bundle |
-| Rejected | Rejected with `kardinal reject` (`spec.rejected`): never promoted again, its unfinished steps are cancelled, and rollback never picks it. Final. See [Reject a Bundle](rollback.md#reject-a-bundle) |
-
-### Bundle supersession
-
-When a newer Bundle of the same type is created for the same Pipeline, an older Bundle that is
-still waiting or promoting (`Available` or `Promoting`) is **superseded**. A `Failed` Bundle
-stays `Failed`; if it would resume, a newer Bundle supersedes it instead. The new Bundle starts
-promoting from the beginning, and the older one:
-
-- The older Bundle's status transitions to `Superseded`, which is final
-- None of its PromotionSteps pushes any more: right before every `git-push` a step reads its
-  Bundle from the API server and fails ("promotion cancelled") if the Bundle is Superseded or
-  rejected. A push to the environment's branch is also refused when a Bundle that supersedes it
-  (newer, of the same type, neither rejected nor Failed) has already pushed there (each such push
-  first records `status.outputs.pushIntent`), so an older image never lands over a newer one: that
-  step ends `Superseded`, and so does its Bundle, which no failure count (Bundle failure,
-  `maxUnavailable`, DORA, `onHealthFailure`) includes
-- Its unfinished PromotionSteps are failed, and a PR one of them opened that is still
-  open is closed with a comment and its head branch
-  (`kardinal/<namespace hash>/<bundle>/<env>`) is deleted, so the closed PR cannot be merged
-  later. If the SCM fails to close it or to delete its branch, the
-  step keeps its state and retries after 10s, 20s, 40s, 80s and 2m, with the
-  `SupersededCloseFailed` condition `True` and `status.nextRetryAt`; after the last retry it
-  fails, and its message says to close the PR (or delete its branch) by hand
-- Its Graph, PromotionSteps and PolicyGates are kept as history until the Graph is retired
-  ([Graph retirement](#graph-retirement)), but the Graph creates no new PromotionStep,
-  and its PolicyGates are no longer evaluated: they keep the status they had when the
-  Bundle was superseded
-- A step the Graph created just before the Bundle was superseded, and that never started,
-  is failed with "superseded before this step started" and writes no AuditEvent
-- Deleting the Bundle deletes its Graph and everything the Graph created, and closes, with a
-  comment, a PR one of its steps opened that is still open
-
-Supersession is tracked independently by Bundle type. A new `image` Bundle does not
-supersede an in-flight `config` Bundle, and vice versa.
-
-```bash
-kardinal get bundles my-app
-# BUNDLE         TYPE    PHASE        AGE
-# my-app-7xk2p   image   Superseded   10m
-# my-app-9qd4s   image   Promoting    3m
-```
-
-### Graph retirement
-
-kro keeps every Graph in memory, so kardinal does not keep the Graph of every finished Bundle.
-Once a Bundle has finished, and every one of its PromotionSteps has settled (`Verified`, `Failed`,
-`RollingBack`, `AbortedByAlarm` or `Superseded`, with no PR left to close), its Graph is **retired** after a delay
-that starts when the last step settles:
-
-| Bundle | Retired after (chart value, controller flag) |
-|---|---|
-| Superseded, or Verified and replaced in every environment by a newer Verified Bundle of the same type | 1m (`graph.retire.superseded`, `--graph-retire-superseded-after`) |
-| Verified and still deployed in an environment | 1h (`graph.retire.verified`, `--graph-retire-verified-after`) |
-| Failed, unless a newer Verified Bundle replaced it in every environment it touched (then the first row); or not Superseded with a step stopped by a health alarm (`AbortedByAlarm`, which waits for a person to resume or roll back) | 24h (`graph.retire.failed`, `--graph-retire-failed-after`) |
-
-When a Bundle turns Verified, the older Verified and Failed Bundles of its Pipeline and type are
-checked again, so one it replaced everywhere retires after the first delay. `0s` keeps those Graphs;
-with all three at `0s` only the Bundles of Pipelines that set the annotation below are retired. A negative flag stops the controller at startup. The
-annotation `kardinal.io/graph-retire-after: <duration>` on a Pipeline replaces all three delays for
-its Bundles (`"0"` keeps them); a value that is not a duration is ignored, named in the
-`GraphRetired` condition and in a Warning Event `InvalidRetireDelay`.
-
-Retiring writes one record per PromotionStep to the Bundle's `status.retiredSteps` (name,
-environment, step type, final state and message, PR URL, creation and Verified times, health check
-expiry), sets the condition `GraphRetired` to `True`, and deletes the Graph. kro then deletes the
-Graph's PromotionSteps, PolicyGate instances and PRStatuses. `GraphRetired` is `Unknown` with
-reason `WaitingForSteps` while a step has not settled, and `False` with reason `Scheduled` while the
-delay runs. A Bundle with more than 1,000 PromotionSteps, or whose records would take more than
-512 KiB, keeps its Graph (reason `TooManySteps`).
-
-What a retired Bundle keeps and loses:
-
-- **Kept**: rollback and `kardinal promote` (which Bundle is deployed where, which were Verified),
-  `kardinal history`, `kardinal metrics` and the Pipeline's `status.deploymentMetrics`, the
-  Pipeline phase, `kardinal status`, `kardinal explain` and `kardinal get pipelines`, the UI's
-  graph and step list (state, message and PR link per environment), `status.environments`, and
-  the AuditEvents, which never belonged to the Graph.
-- **Lost**: the PolicyGate instances (gate results and overrides; the AuditEvents keep each
-  evaluation), the PRStatuses, a step's per-step detail (`status.steps[]`, outputs other than the
-  PR URL) and its Kubernetes Events.
-- A retired Bundle is final: a retired Failed Bundle no longer recovers, and a Pipeline change
-  does not rebuild it. Roll back or create a new Bundle instead.
-
-`spec.historyLimit` still decides how many finished Bundles, and so how many records, a Pipeline
-keeps.
-
-### Bundle types
+### Version types
 
 - **`image`** (default): References container image tags. The promotion updates image references in manifests using `kustomize-set-image` or `helm-set-image`. The Bundle API (`POST /api/v1/bundles`) and `kardinal create bundle` use it when `type` is omitted; a Bundle applied with kubectl must set `type`.
 - **`config`**: References a Git commit SHA from a configuration repository. The promotion merges that commit's changes into each environment directory. This supports promoting configuration changes (resource limits, env vars, feature flags) independently from image changes.
@@ -143,7 +76,7 @@ spec:
     commitSHA: "abc123def456"
 ```
 
-Both types go through the same Pipeline, same PolicyGates, and same PR flow.
+Both types go through the same pipeline, the same gates and the same pull request flow.
 For a config or mixed Bundle, the `config-merge` step copies the environment's directory
 (`environments/<name>` or `environments[].path`) from the `configRef` commit over the
 same directory in the GitOps repo. Nothing outside that directory is copied, and files
@@ -152,7 +85,7 @@ deleted in the config commit are not deleted.
 [`examples/config-promotion/`](https://github.com/pnz1990/kardinal-promoter/tree/main/examples/config-promotion)
 has a Pipeline and a config Bundle.
 
-### Bundle intent
+### How far a version goes
 
 The `spec.intent` field declares how far the Bundle should be promoted:
 
@@ -177,9 +110,22 @@ spec:
 The intent is set when the Bundle is created and cannot be changed afterwards. To change the
 target, create a new Bundle (or use `kardinal promote`, which creates one).
 
-## Pipeline
+### Version phases
 
-A Pipeline defines the promotion path for one application: which Git repo contains the manifests, which environments exist, and what order they promote in.
+| Phase | Meaning |
+|---|---|
+| Available | Created, not yet in any environment |
+| Promoting | Moving through the pipeline |
+| Verified | Verified in every environment it targets |
+| Failed | A promotion or health check failed, or the Pipeline, the version or a gate is invalid (condition `InvalidSpec`, with the reason). It promotes again when the failed promotion is retried or the invalid object is fixed ([details](architecture.md#when-a-failed-bundle-promotes-again)) |
+| Superseded | A newer version of the same type replaced it before it finished |
+| Rejected | Rejected with `kardinal reject`: never promoted again, and rollback never picks it. See [Reject a Bundle](rollback.md#reject-a-bundle) |
+
+## Pipeline and environments
+
+A **pipeline** is the promotion path of one application: the Git repository that holds its
+manifests, its **environments**, and the order they promote in. Its Kubernetes kind is
+`Pipeline`.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -217,21 +163,22 @@ Environments promote sequentially by default (dev, then staging, then prod). For
 
 Both prod regions promote in parallel after staging is verified.
 
+Wave numbers (`wave`) and [fleets](pipeline-reference.md#fleets) promote many environments in
+parallel; see the [Pipeline reference](pipeline-reference.md).
+
 ### Promotion steps
 
-Each environment runs the default promotion sequence (clone, update image, commit, push/PR, health check). The sequence is inferred from `update.strategy` and `approval` when the environment's step starts, and recorded in its `status.steps`; the step runs that list to the end, so an `approval` edit made meanwhile applies from the next Bundle. The Bundle in flight still finishes, and its Graph turns Ready once its steps are Verified and its gates pass, with or without a PR.
+The promotion of one version into one environment is a **promotion step** (kind
+`PromotionStep`; the UI calls it a stage). kardinal creates them; you do not. A step clones
+the repository, updates the image, commits, pushes or opens a pull request, waits for the
+merge, and checks health. Its state is one of Pending, Promoting, WaitingForMerge,
+HealthChecking, Verifying (the environment's [post-deploy hooks](hooks.md) run), Verified,
+Failed, AbortedByAlarm, RollingBack or Superseded (a newer version had already reached the
+environment; not a failure). `kardinal get steps <pipeline>` lists them.
 
-kardinal has no custom step engine. The API server rejects a Pipeline that sets the deprecated `spec.environments[].steps` or `promotionTemplate`, and `kardinal validate` reports them. For image signature checks and tests, see [Pipeline Reference: Promotion Steps](pipeline-reference.md#promotion-steps).
-
-### Multiple clusters
-
-kardinal runs in one cluster, next to the Argo CD or Flux hub that manages your workload clusters. Declare one environment per cluster or region (for example `prod-eu` and `prod-us`) and promote them in parallel with `wave` or `dependsOn`. Each environment reads its health from its cluster through a kubeconfig Secret (`health.kubeconfigSecretRef`), or from the hub: `health.type: argocd` on its Application, or `health.type: flux` on a hub Kustomization that targets the remote cluster. See [Remote Clusters](health-adapters.md#remote-clusters).
-
-`shard` is deprecated and not supported (removed in v0.11): the Pipeline is `Ready=False` (reason `NotImplemented`) and that environment's PromotionSteps fail with `shard is not supported`. Leave it unset; the controller reconciles every environment.
-
-### How it works under the hood
-
-When a Bundle is created, the kardinal-controller generates a [kro Graph](https://kro.run/next/docs/concepts/graph/overview/) from the Pipeline CRD. The Graph controller executes the DAG, creating PromotionStep and PolicyGate CRs in dependency order. You do not need to know about Graphs to use kardinal-promoter. The Pipeline CRD is the interface.
+The sequence is fixed per environment: it follows from `update.strategy` and `approval`.
+kardinal has no custom step engine; see
+[Pipeline reference: Promotion steps](pipeline-reference.md#promotion-steps).
 
 ### Approval modes
 
@@ -240,22 +187,31 @@ When a Bundle is created, the kardinal-controller generates a [kro Graph](https:
 | `auto` | Manifests are pushed directly to the target branch. No PR. Promotion proceeds automatically when the upstream environment is verified. |
 | `pr-review` | A PR is opened in the GitOps repo with promotion evidence (artifact provenance, policy gate compliance, upstream verification). A human reviews and merges. |
 
-## PromotionStep
+### Health checks
 
-A PromotionStep represents one environment promotion for one Bundle. You do not create these directly. The Graph controller creates them as nodes in the promotion DAG.
+A step is Verified when its environment is healthy and runs the promoted version. `health.type`
+picks what kardinal reads:
 
-Each PromotionStep tracks:
-- Which environment it targets
-- Which Bundle it promotes
-- The current state (Pending, Promoting, WaitingForMerge, HealthChecking, Verifying, Verified, Failed, AbortedByAlarm, RollingBack, Superseded). Superseded: the step did not push because a newer Bundle had already pushed to its environment; it is not a failure. Verifying: the health check passed and the environment's [post-deploy hooks](hooks.md) run
-- The PR URL (for pr-review environments)
-- Per-step progress and timing (`status.steps`), the current message and conditions, and bake and retry counters. Promotion evidence (provenance, gate results, upstream verification) goes into the PR body.
+| Adapter | What it checks | When to use |
+|---|---|---|
+| `resource` | Deployment runs the Bundle images, is fully rolled out and `Available` | Clusters without a GitOps tool |
+| `argocd` | Argo CD Application healthy and synced to the promoted commit | Argo CD users |
+| `flux` | Flux Kustomization `Ready` with `lastAppliedRevision` at the promoted commit | Flux users |
+| `argoRollouts` | Argo Rollouts Rollout phase | Canary/blue-green deployments |
+| `flagger` | Flagger Canary phase (`Failed` fails the step at once) | Canary deployments |
 
-Use `kardinal get steps <pipeline>` to see all active PromotionSteps.
+When `health.type` is omitted the adapter is `resource`, or the `delivery.delegate` value when
+that is set. See [Health checks](health-adapters.md).
 
-## PolicyGate
+### Several clusters
 
-A PolicyGate is a policy check that blocks a promotion until its CEL expression evaluates to true. PolicyGates are nodes in the promotion DAG, visible in the UI and inspectable via CLI.
+kardinal runs in one cluster, next to the Argo CD or Flux hub that manages your workload clusters. Declare one environment per cluster or region (for example `prod-eu` and `prod-us`) and promote them in parallel with `wave` or `dependsOn`. Each environment reads its health from its cluster through a kubeconfig Secret (`health.kubeconfigSecretRef`), or from the hub: `health.type: argocd` on its Application, or `health.type: flux` on a hub Kustomization that targets the remote cluster. See [Remote Clusters](health-adapters.md#remote-clusters).
+
+## Gates (PolicyGate)
+
+A **gate** holds a version out of an environment until its CEL expression is true. Its
+Kubernetes kind is `PolicyGate`. Gates show in the UI's promotion graph and in
+`kardinal explain`.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -326,146 +282,17 @@ spec:
 
 When the skip is allowed, the permission's expression is evaluated in front of the next environment: that environment waits until the expression is true. When no such gate exists, the Bundle goes to phase `Failed` and its status conditions say `skip denied for environment "staging": ...`. See [Skip Permissions](policy-gates.md#skip-permissions).
 
-## Health Verification
+## Under the hood
 
-After a promotion is applied (manifests written to Git), kardinal-promoter verifies that the target environment is healthy. Health adapters are pluggable. A step reaches Verified when the environment is healthy and runs the promoted revision: `argocd` and `flux` check the promoted commit, the other adapters the Bundle images. A config-only Bundle has no images, so `resource` and `argoRollouts` can verify it while the previous revision still runs (see [What "the promoted revision" means](health-adapters.md#what-the-promoted-revision-means)).
+For each version, kardinal translates the Pipeline into a [kro Graph](https://kro.run/next/docs/concepts/graph/overview/):
+one node per gate and per promotion step, in dependency order. kro's Graph controller creates
+them, and kardinal's controllers run the steps and evaluate the gates. You never write a Graph;
+the Pipeline is the interface. [Architecture](architecture.md) has the details, including
+supersession and when a finished version's Graph is retired.
 
-| Adapter | What it checks | When to use |
-|---|---|---|
-| `resource` | Deployment runs the Bundle images, is fully rolled out and `Available` | Clusters without a GitOps tool |
-| `argocd` | Argo CD Application healthy and synced to the promoted commit | Argo CD users |
-| `flux` | Flux Kustomization `Ready` with `lastAppliedRevision` at the promoted commit | Flux users |
-| `argoRollouts` | Argo Rollouts Rollout phase | Canary/blue-green deployments |
-| `flagger` | Flagger Canary phase (`Failed` fails the step at once) | Canary deployments |
+## Where next
 
-When `health.type` is omitted the adapter is `resource`, or the `delivery.delegate` value when that is set. kardinal does not probe the cluster for installed CRDs. See [Health Adapters](health-adapters.md) for the target defaults and overrides.
-
-Adapters read objects in the cluster that holds the PromotionSteps, unless `health.kubeconfigSecretRef` names a kubeconfig Secret for another cluster; a workload in another cluster can also be checked through its Argo CD Application or Flux Kustomization in the hub. The deprecated `health.cluster` string is not supported: a non-empty value fails the step. See [Remote Clusters](health-adapters.md#remote-clusters).
-
-## Subscription
-
-A Subscription watches external sources and auto-creates Bundles. This is an alternative to the CI webhook for teams that want fully passive promotion triggers.
-
-**Image Subscription** (watches an OCI repository for new images):
-
-```yaml
-apiVersion: kardinal.io/v1alpha1
-kind: Subscription
-metadata:
-  name: my-app-image-watch
-spec:
-  type: image
-  pipeline: my-app
-  image:
-    registry: ghcr.io/myorg/my-app
-    tagFilter: "^main$"          # one moving tag: a new Bundle for each new digest
-    interval: 5m
-```
-
-**Git Subscription** (watches a Git repository for config changes, creates config Bundles):
-
-```yaml
-apiVersion: kardinal.io/v1alpha1
-kind: Subscription
-metadata:
-  name: my-app-config-watch
-spec:
-  type: git
-  pipeline: my-app
-  git:
-    repoURL: https://github.com/myorg/app-config
-    branch: main
-    interval: 5m
-```
-
-The first poll records the current digest or commit as a baseline. After that, each new
-image or commit creates a Bundle of the matching type (`image` or `config`) in the
-Subscription's own namespace. A `helm` Subscription watches a chart repository and creates
-`chart` Bundles. Private sources read credentials from a Secret (`secretRef`), and registry
-and SCM [webhooks](subscription-webhooks.md) make a Subscription poll at once. See
-[Subscription](subscription.md) for tag filters, `pathGlob` and limits.
-
-## Rendered Manifests
-
-In the **rendered manifests** pattern, Kustomize (or Helm) templates are executed at
-promotion time and the rendered plain YAML is committed to Git. Argo CD and Flux sync
-from the rendered output, not from the source templates.
-
-This is the standard pattern for large Argo CD deployments because:
-- PR reviewers see exact YAML diffs, not template changes
-- Argo CD never runs `kustomize build` on every reconciliation cycle (significant performance gain at scale)
-- CODEOWNERS rules can be placed on individual rendered YAML files in the environment branch
-
-Set `layout: branch` on an environment and kardinal renders it: the `render-manifests`
-step runs kustomize build or helm template on the DRY source in `spec.git.branch`, in a
-sandboxed Job of the environment's RenderRun (never in the controller), and commits the
-plain YAML to the rendered branch
-(`env/<name>` by default, `render.branch` to change it) with the DRY commit in the
-commit trailers. `pr-review` PRs show the rendered diff, a change pushed to the rendered
-branch outside kardinal fails the next promotion (`render.onDrift`), and a rollback
-re-renders the DRY commit of the Bundle it restores.
-
-See [Rendered Manifests](rendered-manifests.md) for the fields, the render Job, limits, Argo CD
-configuration and CODEOWNERS integration.
-
-## Advanced Patterns
-
-### Multi-tenant self-service
-
-Use Argo CD ApplicationSets to auto-provision a Pipeline CRD for each new team
-service. A developer commits a folder to a platform repository and receives a
-complete promotion pipeline without platform team intervention. Org-level PolicyGates
-are inherited automatically.
-
-### Feature branch and ephemeral environments
-
-Use `intent.targetEnvironment: staging` to create Bundles that stop at staging, not prod.
-Use `intent.skipEnvironments` with SkipPermission PolicyGates for hotfixes. Use ApplicationSet
-pull-request generators for fully isolated ephemeral Pipelines per PR.
-
-### Repository strategies
-
-`layout: directory` (one branch, environments as directories) is the default. `layout: branch`
-writes rendered manifests to one branch per environment; see
-[Rendered Manifests](rendered-manifests.md).
-
-See [Advanced Patterns](advanced-patterns.md) for detailed guidance on all of these.
-
-## Key Anti-Patterns
-
-See [Anti-Patterns to Avoid](advanced-patterns.md#anti-patterns-to-avoid): mutating an Argo CD
-Application instead of Git, templated sources on rendered branches, `approval: auto` for
-production, and an unbounded `historyLimit`.
-
-## Audit Log
-
-kardinal-promoter writes an immutable `AuditEvent` CRD for each key promotion lifecycle transition:
-
-| Action | When |
-|---|---|
-| `PromotionStarted` | A PromotionStep starts promoting (enters Promoting) |
-| `PromotionSucceeded` | Health check passes and the step reaches Verified |
-| `PromotionFailed` | The step reaches Failed or AbortedByAlarm |
-| `PromotionSuperseded` | A newer Bundle supersedes an in-flight promotion (a step that had not started writes none) |
-| `PromotionRejected` | `kardinal reject` cancels an in-flight promotion (a step that had not started writes none) |
-| `GateOverridden` | An override is recorded on a gate instance (`kardinal override` or the UI), once per override, with its verified author |
-| `ApprovalRecorded` / `ApprovalRevoked` | A decision (`kardinal approve`) appears in, or leaves, an approval gate instance, with the approver and whether it counts |
-| `HoldCreated` / `HoldReleased` / `HoldBundleMissing` | A hold (`kardinal rollback --hold`) appeared in, or left, `spec.holds`; or its rollback Bundle has been missing for `--hold-bundle-grace` (the hold stays in effect: [A hold whose rollback Bundle does not exist](rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |
-| `GateEvaluated` | A PolicyGate instance is first evaluated, and each later change of readiness (outcome `Failure` when blocked, `Success` when allowed) |
-| `RollbackStarted` | A health alarm with `onHealthFailure: rollback` starts a rollback |
-| `RollbackSucceeded` | A step of a rollback Bundle (from any rollback path) reaches Verified, besides `PromotionSucceeded`; one per step |
-
-The CRD also accepts the actions `HealthCheckFailed` and `GateBlocked`, but kardinal never writes them. A failed health check records `PromotionFailed`, or `RollbackStarted` with `onHealthFailure: rollback`, and a blocked gate records `GateEvaluated` with outcome `Failure`.
-
-```bash
-# List all audit events across namespaces
-kubectl get auditevent --all-namespaces
-
-# Filter by pipeline
-kubectl get auditevent -A -l kardinal.io/pipeline=nginx-demo
-
-# Filter by action
-kubectl get auditevent -A -l kardinal.io/action=PromotionFailed
-```
-
-AuditEvents are written to the Pipeline's namespace. They are immutable: they are written once at the transition, and the API server rejects any change to their spec. Use `kubectl get auditevent -o yaml` to inspect the full record: timestamp, pipeline, bundle, environment, action, outcome and message.
+- Create versions without CI: [Subscriptions](subscription.md) watch registries and Git.
+- Commit rendered YAML instead of templates: [Rendered manifests](rendered-manifests.md).
+- Multi-tenant setups, ephemeral environments and anti-patterns: [Patterns](advanced-patterns.md).
+- Every transition is recorded as an `AuditEvent`: [Audit logging](guides/security.md#audit-logging).

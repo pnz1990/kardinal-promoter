@@ -112,10 +112,10 @@ graph LR
 
 ## Key concepts
 
-- **[Bundle](concepts.md#bundle)** — an immutable deployment unit created by CI
-- **[Pipeline](concepts.md#pipeline)** — defines environments, update strategy, and SCM config
-- **[PolicyGate](concepts.md#policygate)** — a CEL expression that blocks or allows promotion
-- **[PromotionStep](concepts.md#promotionstep)** — per-environment promotion progress
+- **[Bundle](concepts.md#version-bundle)** — an immutable deployment unit created by CI
+- **[Pipeline](concepts.md#pipeline-and-environments)** — defines environments, update strategy, and SCM config
+- **[PolicyGate](concepts.md#gates-policygate)** — a CEL expression that blocks or allows promotion
+- **[PromotionStep](concepts.md#promotion-steps)** — per-environment promotion progress
 
 ## Community
 
