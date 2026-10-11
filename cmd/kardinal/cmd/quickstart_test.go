@@ -469,6 +469,11 @@ func TestQuickstart_Installs(t *testing.T) {
 		}
 	}
 
+	// The Argo CD it installs polls git every 10s, set before the install.
+	var cm corev1.ConfigMap
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "argocd", Name: "argocd-cm"}, &cm))
+	assert.Equal(t, map[string]string{"timeout.reconciliation": "10s", "timeout.reconciliation.jitter": "0s"}, cm.Data)
+
 	// The controller's SCM Secret: the token, and no referenceable label.
 	var s corev1.Secret
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "kardinal-system", Name: quickstartSCMSecret}, &s))

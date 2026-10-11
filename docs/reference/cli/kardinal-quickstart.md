@@ -31,7 +31,8 @@ port-forward, ssh -L) looks local; do not point a local context at one.
 
 On a local cluster it installs, each only when it is not there yet:
   kro (the version hack/install-kro.sh pins), with the Graph controller
-  Argo CD (its release manifests; --no-argocd when the cluster has one)
+  Argo CD (its release manifests, polling git every 10s instead of 2-3m;
+    --no-argocd when the cluster has one, which keeps its own settings)
   kardinal-promoter (the chart of this CLI's version, in kardinal-system;
     --chart, --chart-version and --set for another)
 Then it applies, in default (so no command needs -n):

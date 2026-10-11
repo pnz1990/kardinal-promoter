@@ -62,7 +62,10 @@ when it is not done yet:
   `ssh -L`) looks local, so do not point a local context at such a tunnel.
 - It installs kro (the version `hack/install-kro.sh` pins), Argo CD, and the kardinal-promoter
   chart in `kardinal-system` (`--chart-version` and `--set` change it; `--no-argocd` skips
-  Argo CD when the cluster has one).
+  Argo CD when the cluster has one). The Argo CD it installs polls git every 10 seconds
+  (`timeout.reconciliation: 10s` in `argocd-cm`, no jitter) instead of every 2 to 3 minutes,
+  so each environment deploys its merged commit within seconds; an Argo CD that was already
+  there keeps its settings.
 - It creates in `default`, so no command needs `-n`:
   - the Pipeline's git Secret `github-token`;
   - an Argo CD ApplicationSet that deploys `environments/<env>` of your fork as the

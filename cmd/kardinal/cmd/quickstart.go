@@ -582,6 +582,14 @@ func (q *quickstart) argoCD() error {
 		!strings.Contains(err.Error(), "AlreadyExists") {
 		return fmt.Errorf("quickstart: install Argo CD: %w", err)
 	}
+	// The Argo CD quickstart installs polls git every 10s instead of its
+	// default 2m plus up to 1m of jitter, so each environment of the demo
+	// syncs its merged commit within seconds, not minutes; the controllers
+	// read it at start, so it goes in before them. The release's argocd-cm
+	// does not set these keys, so its server-side apply below leaves them.
+	if _, err := q.apply(argoCDPolling()); err != nil {
+		return fmt.Errorf("quickstart: install Argo CD: %w", err)
+	}
 	manifests := "https://raw.githubusercontent.com/argoproj/argo-cd/" + argoCDRelease + "/manifests/install.yaml"
 	if _, err := quickstartRun(q.ctx, "kubectl", append([]string{"apply", "-n", "argocd", "--server-side", "--force-conflicts", "-f", manifests}, q.kubectlFlags()...)...); err != nil {
 		return fmt.Errorf("quickstart: install Argo CD: %w", err)
@@ -593,6 +601,18 @@ func (q *quickstart) argoCD() error {
 	}
 	q.say(what, "installed")
 	return nil
+}
+
+// argoCDPolling is the argocd-cm quickstart applies to an Argo CD it
+// installs: git polled every 10s, with no jitter. Argo CD installed by
+// someone else keeps its settings.
+func argoCDPolling() *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "ConfigMap",
+		"metadata": map[string]any{"name": "argocd-cm", "namespace": "argocd",
+			"labels": map[string]any{"app.kubernetes.io/name": "argocd-cm", "app.kubernetes.io/part-of": "argocd"}},
+		"data": map[string]any{"timeout.reconciliation": "10s", "timeout.reconciliation.jitter": "0s"},
+	}}
 }
 
 // kardinal installs the kardinal-promoter chart.
@@ -898,7 +918,8 @@ port-forward, ssh -L) looks local; do not point a local context at one.
 
 On a local cluster it installs, each only when it is not there yet:
   kro (the version hack/install-kro.sh pins), with the Graph controller
-  Argo CD (its release manifests; --no-argocd when the cluster has one)
+  Argo CD (its release manifests, polling git every 10s instead of 2-3m;
+    --no-argocd when the cluster has one, which keeps its own settings)
   kardinal-promoter (the chart of this CLI's version, in kardinal-system;
     --chart, --chart-version and --set for another)
 Then it applies, in default (so no command needs -n):
