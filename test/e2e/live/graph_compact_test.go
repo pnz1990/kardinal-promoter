@@ -263,7 +263,6 @@ func TestGraph_ShapeKeptAcrossThreshold(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := framework.New(t)
-			ctx := context.Background()
 			if above := controllerCompactAbove(t, e); above != graph.DefaultCompactAbove {
 				t.Skipf("the controller runs with --graph-compact-above=%d; this test crosses the default, %d",
 					above, graph.DefaultCompactAbove)
@@ -291,15 +290,18 @@ func TestGraph_ShapeKeptAcrossThreshold(t *testing.T) {
 			before := stepUIDs(t, e, ns, bundle)
 			require.Len(t, before, perWave, "wave 1 only: wave 2's gates hold the Bundle")
 
-			// Cross the threshold.
-			var cur v1alpha1.Pipeline
-			require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: pipelineName}, &cur))
-			if tc.grow {
-				cur.Spec.Environments = append(cur.Spec.Environments, waveEnv(ns, "w04-r25", 4))
-			} else {
-				cur.Spec.Environments = cur.Spec.Environments[:len(cur.Spec.Environments)-1]
-			}
-			require.NoError(t, e.Client.Update(ctx, &cur))
+			// Cross the threshold. The Pipeline reconciler writes its status
+			// (status.environments) as the steps move, so the update retries
+			// on a conflict.
+			var envCount int
+			a.updatePipeline(t, pipelineName, func(cur *v1alpha1.Pipeline) {
+				if tc.grow {
+					cur.Spec.Environments = append(cur.Spec.Environments, waveEnv(ns, "w04-r25", 4))
+				} else {
+					cur.Spec.Environments = cur.Spec.Environments[:len(cur.Spec.Environments)-1]
+				}
+				envCount = len(cur.Spec.Environments)
+			})
 			framework.Eventually(t, 2*time.Minute, "the Graph updated in place", func(ctx context.Context) (bool, string) {
 				g := bundleGraph(t, e, ns, bundle)
 				return g.GetGeneration() > gen, fmt.Sprintf("generation %d", g.GetGeneration())
@@ -318,7 +320,7 @@ func TestGraph_ShapeKeptAcrossThreshold(t *testing.T) {
 
 			e.SetBundleLabel(t, ns, bundle, openLabel, "true")
 			e.WaitBundlePhase(t, ns, bundle, "Verified", 20*time.Minute)
-			assert.Len(t, stepUIDs(t, e, ns, bundle), len(cur.Spec.Environments), "every environment of the edited Pipeline")
+			assert.Len(t, stepUIDs(t, e, ns, bundle), envCount, "every environment of the edited Pipeline")
 		})
 	}
 }

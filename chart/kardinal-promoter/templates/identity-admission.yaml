@@ -448,7 +448,7 @@ spec:
         !(has(object.metadata.labels) && 'kardinal.io/bundle' in object.metadata.labels) &&
         !(oldObject != null && has(oldObject.metadata.labels) && 'kardinal.io/bundle' in oldObject.metadata.labels)
     # Anyone who may patch the object may set kardinal.io/force-recheck to
-    # have it reconciled at once (docs/troubleshooting.md): an update of the
+    # have it reconciled at once (docs/troubleshoot-promotions.md): an update of the
     # object itself that changes nothing else in spec or metadata.
     - name: recheckOnly
       expression: >-

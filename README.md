@@ -7,7 +7,7 @@
 <h1 align="center">kardinal-promoter</h1>
 
 <p align="center">
-  Kubernetes-native promotion controller with DAG pipelines and visible policy gates.<br/>
+  Promote every version of your app through test, uat and prod, with gates you can read.<br/>
   <a href="https://pnz1990.github.io/kardinal-promoter/">Docs</a> ·
   <a href="https://pnz1990.github.io/kardinal-promoter/quickstart/">Quickstart</a> ·
   <a href="https://pnz1990.github.io/kardinal-promoter/comparison/">Comparison</a>
@@ -15,36 +15,68 @@
 
 ---
 
-Kubernetes-native promotion controller built on [kro's Graph primitive](https://kro.run/next/docs/concepts/graph/overview/). Moves versioned artifact bundles through environment pipelines using Git pull requests as the approval mechanism, with policy gates expressed as CEL and represented as visible nodes in the promotion DAG.
+Your CI builds a version. kardinal moves it through your environments by writing to Git, and
+**gates** decide when it may go further: no deploys on weekends, 30 minutes in uat first,
+two approvers for prod. With `approval: pr-review`, each prod change is a pull request that
+shows what is shipping, which gates passed and how the earlier environments did. It works with Argo CD, Flux
+or plain Kubernetes.
 
-## How it works
+```yaml
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: my-app
+spec:
+  git:
+    url: https://github.com/myorg/gitops-repo
+    secretRef: { name: github-token }
+  environments:
+    - name: test
+    - name: uat
+    - name: prod
+      approval: pr-review
+```
 
-1. CI builds an image and creates a **Bundle** (a versioned artifact snapshot with build provenance).
-2. The controller generates a **Graph** (a kro DAG) from the Pipeline definition, injecting **PolicyGate** nodes based on org and team policies.
-3. The Graph controller creates **PromotionStep** CRs in dependency order.
-4. For each step, the kardinal-controller writes manifests to Git and monitors health. With `approval: pr-review` it opens a PR with promotion evidence (provenance, policy gate results, upstream health-check times) and waits for the merge.
-5. PolicyGates block downstream steps until their CEL expressions evaluate to true. They are visible as nodes in the DAG.
-6. When all environments are verified, the promotion is complete. On failure, the Graph stops downstream nodes. Automatic rollback is opt-in: with `onHealthFailure: rollback` on the environment (the default is `none`), a health failure creates a rollback Bundle that is promoted like any other. [Rollback](docs/rollback.md) lists when `onHealthFailure` applies.
+By default each environment deploys the `environments/<name>` directory of the repository, and
+kardinal checks the Deployment `my-app` in the namespace `<name>`.
 
-All state lives in Kubernetes CRDs. There is no external database.
+```bash
+kardinal create bundle my-app --image ghcr.io/myorg/my-app:1.29.0   # ship a version
+kardinal explain my-app --env prod                                   # why is it not in prod yet?
+```
 
-## Key properties
+Try it in about 10 minutes with the [Quickstart](https://pnz1990.github.io/kardinal-promoter/quickstart/).
 
-- **Graph-native pipelines.** Even linear pipelines run as kro Graphs. Fan-out and fan-in (`dependsOn`, `wave`) are native, and a Bundle can skip environments (`intent.skipEnvironments`).
-- **Policy gates as DAG nodes.** CEL-powered gates are visible in the UI and debuggable via `kardinal explain`. A team Pipeline cannot remove or weaken org-level gates; `kardinal override` force-passes one for a limited time and records the reason.
-- **Pluggable integrations.** SCM providers (GitHub, GitLab, Forgejo, Gitea, Bitbucket Cloud, Bitbucket Data Center, Azure DevOps; the controller's `--scm-provider` plus any number of ScmProviders and ClusterScmProviders), manifest update strategies (Kustomize, Helm, Argo CD), health adapters (Argo CD, Flux, Deployment, Argo Rollouts, Flagger), and delivery delegation (Argo Rollouts, Flagger) are Go interfaces. Adding a provider is one interface implementation.
-- **PR-native approval.** Promotion PRs contain artifact provenance, upstream verification, and policy gate compliance. Human approval for production is merging the PR.
-- **Multi-cluster.** Run one kardinal next to the GitOps hub. Health checks read the hub's Application or Kustomization, or any workload in another cluster through `health.kubeconfigSecretRef`.
+## Why kardinal
+
+- **Gates you can read.** Rules are CEL expressions over the version, the clock, soak time,
+  metrics and approvals. `kardinal explain` shows which gate holds a version and why;
+  `kardinal policy simulate` tries a rule at any time. Platform teams set org gates that a team
+  pipeline cannot remove.
+- **Soak time that requires health.** `bake` requires continuous health, and a failed health
+  check restarts the clock.
+- **Pull requests with evidence.** Provenance, gate results and upstream health go into every
+  production PR. Merging it promotes.
+- **Parallel by design.** Fan out to regions with `dependsOn` or `wave`, or to many clusters
+  with fleets.
+- **Rollback and incident controls.** Roll back, hold an environment on the rolled-back
+  version, reject a version everywhere or pause a pipeline.
+- **No database or extra services.** The UI ships inside the controller, and all state is in
+  Kubernetes.
+- **Any Git host, any GitOps tool.** GitHub, GitLab, Forgejo, Gitea, Bitbucket Cloud and Data
+  Center, Azure DevOps; health from Deployments, Argo CD, Flux, Argo Rollouts or Flagger.
+
+See how it compares with Kargo and GitOps Promoter in the
+[comparison](https://pnz1990.github.io/kardinal-promoter/comparison/).
 
 ## Status
 
-Alpha, in active development ([releases](https://github.com/pnz1990/kardinal-promoter/releases)). APIs (`kardinal.io/v1alpha1`) may change between minor releases. See the [changelog](docs/changelog.md) for what shipped.
-See the [full documentation](https://pnz1990.github.io/kardinal-promoter/) and [changelog](docs/changelog.md).
+Alpha, in active development ([releases](https://github.com/pnz1990/kardinal-promoter/releases)).
+The `kardinal.io/v1alpha1` API may change between minor releases; the
+[changelog](docs/changelog.md) lists every change.
 
 ## Documentation
 
-[https://pnz1990.github.io/kardinal-promoter/](https://pnz1990.github.io/kardinal-promoter/)
-
-## Design
-
-See [Architecture](docs/architecture.md) for how the controller works and [Concepts](docs/concepts.md) for the resource model.
+[pnz1990.github.io/kardinal-promoter](https://pnz1990.github.io/kardinal-promoter/): start with the
+[Quickstart](docs/quickstart.md), then [Concepts](docs/concepts.md). Contributors: see
+[CONTRIBUTING.md](CONTRIBUTING.md) and [Architecture](docs/architecture.md).

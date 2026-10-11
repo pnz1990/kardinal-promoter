@@ -313,7 +313,7 @@ kardinal policy test my-gate.yaml
 
 ## `approvals.*`
 
-The decisions `kardinal approve` recorded for the gate instance's Bundle and environment (the Graph copies them into `spec.approvals`). With `spec.approval` set, only allowed approvers count (see [Approval gates](../policy-gates.md#approval-gates)); without it, every approval counts. Each user counts once.
+The decisions `kardinal approve` recorded for the gate instance's Bundle and environment (the Graph copies them into `spec.approvals`). With `spec.approval` set, only allowed approvers count (see [Approval gates](../approvals.md)); without it, every approval counts. Each user counts once.
 
 | Field | Type | Example | When populated |
 |---|---|---|---|

@@ -23,7 +23,7 @@
   min-width: calc(var(--k-space-24) * 1.35);
   max-width: calc(var(--k-space-24) * 2.1);
   cursor: pointer;
-  transition: border-color var(--k-dur-instant) var(--k-ease-out);
+  transition: border-color var(--k-dur-quick) var(--k-ease-out);
   flex-shrink: 0;
   --stage-accent: var(--k-line);
 }

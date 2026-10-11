@@ -203,7 +203,7 @@ The `ci` objectives are what a GitHub-hosted runner does with the `-race` contro
 `KARDINAL_E2E_SCALE_SLO_STEP_P50`, `_SLO_STEP_P99`, `_SLO_BUNDLE_P99` and
 `_SLO_PIPELINES` override them. With the reconciler worker defaults
 (#1509) the `full` run measures automatic steps p50 2 s and p99 5 s, and
-Bundles p99 92 s (docs/installation.md, Controller concurrency); with one worker
+Bundles p99 92 s (docs/operate.md, Controller concurrency); with one worker
 each it was a step p50 of 65 s.
 
 A test that reproduces an open bug calls `scale.KnownBug(t, issue, ...)`
