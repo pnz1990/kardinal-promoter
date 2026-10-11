@@ -11,7 +11,7 @@
 <a id=__codelineno-0-11 name=__codelineno-0-11 href=#__codelineno-0-11></a>helm<span class=w> </span>install<span class=w> </span>kardinal-promoter<span class=w> </span>oci://ghcr.io/pnz1990/charts/kardinal-promoter<span class=w> </span>--version<span class=w> </span><span class=m>0</span>.10.0<span class=w> </span><span class=se>\</span>
 <a id=__codelineno-0-12 name=__codelineno-0-12 href=#__codelineno-0-12></a><span class=w>  </span>--namespace<span class=w> </span>kardinal-system<span class=w> </span><span class=se>\</span>
 <a id=__codelineno-0-13 name=__codelineno-0-13 href=#__codelineno-0-13></a><span class=w>  </span>--create-namespace<span class=w> </span><span class=se>\</span>
-<a id=__codelineno-0-14 name=__codelineno-0-14 href=#__codelineno-0-14></a><span class=w>  </span>--set<span class=w> </span>github.secretRef.name<span class=o>=</span>github-token
+<a id=__codelineno-0-14 name=__codelineno-0-14 href=#__codelineno-0-14></a><span class=w>  </span>--set<span class=w> </span>scm.secretRef.name<span class=o>=</span>github-token
 <a id=__codelineno-0-15 name=__codelineno-0-15 href=#__codelineno-0-15></a>
 <a id=__codelineno-0-16 name=__codelineno-0-16 href=#__codelineno-0-16></a><span class=c1># 3. Install the CLI</span>
 <a id=__codelineno-0-17 name=__codelineno-0-17 href=#__codelineno-0-17></a><span class=nv>OS</span><span class=o>=</span><span class=k>$(</span>uname<span class=w> </span>-s<span class=w> </span><span class=p>|</span><span class=w> </span>tr<span class=w> </span><span class=s1>'[:upper:]'</span><span class=w> </span><span class=s1>'[:lower:]'</span><span class=k>)</span>

@@ -5,28 +5,35 @@
 <a id=__codelineno-0-5 name=__codelineno-0-5 href=#__codelineno-0-5></a><span class=c1># 1. Install kro (from a kardinal-promoter checkout)</span>
 <a id=__codelineno-0-6 name=__codelineno-0-6 href=#__codelineno-0-6></a>bash<span class=w> </span>hack/install-kro.sh
 <a id=__codelineno-0-7 name=__codelineno-0-7 href=#__codelineno-0-7></a>
-<a id=__codelineno-0-8 name=__codelineno-0-8 href=#__codelineno-0-8></a><span class=c1># 2. Store the token in a Secret, then install with demo mode</span>
-<a id=__codelineno-0-9 name=__codelineno-0-9 href=#__codelineno-0-9></a>kubectl<span class=w> </span>create<span class=w> </span>namespace<span class=w> </span>kardinal-system
-<a id=__codelineno-0-10 name=__codelineno-0-10 href=#__codelineno-0-10></a>kubectl<span class=w> </span>create<span class=w> </span>secret<span class=w> </span>generic<span class=w> </span>github-token<span class=w> </span><span class=se>\</span>
-<a id=__codelineno-0-11 name=__codelineno-0-11 href=#__codelineno-0-11></a><span class=w>  </span>--namespace<span class=w> </span>kardinal-system<span class=w> </span><span class=se>\</span>
-<a id=__codelineno-0-12 name=__codelineno-0-12 href=#__codelineno-0-12></a><span class=w>  </span>--from-literal<span class=o>=</span><span class=nv>token</span><span class=o>=</span><span class=nv>$GITHUB_PAT</span>
-<a id=__codelineno-0-13 name=__codelineno-0-13 href=#__codelineno-0-13></a>
-<a id=__codelineno-0-14 name=__codelineno-0-14 href=#__codelineno-0-14></a>helm<span class=w> </span>install<span class=w> </span>kardinal-promoter<span class=w> </span>oci://ghcr.io/pnz1990/charts/kardinal-promoter<span class=w> </span>--version<span class=w> </span><span class=m>0</span>.10.0<span class=w> </span><span class=se>\</span>
-<a id=__codelineno-0-15 name=__codelineno-0-15 href=#__codelineno-0-15></a><span class=w>  </span>--namespace<span class=w> </span>kardinal-system<span class=w> </span><span class=se>\</span>
-<a id=__codelineno-0-16 name=__codelineno-0-16 href=#__codelineno-0-16></a><span class=w>  </span>--set<span class=w> </span>demo.enabled<span class=o>=</span><span class=nb>true</span><span class=w> </span><span class=se>\</span>
-<a id=__codelineno-0-17 name=__codelineno-0-17 href=#__codelineno-0-17></a><span class=w>  </span>--set<span class=w> </span>demo.git.url<span class=o>=</span><span class=nv>$DEMO_REPO</span><span class=w> </span><span class=se>\</span>
-<a id=__codelineno-0-18 name=__codelineno-0-18 href=#__codelineno-0-18></a><span class=w>  </span>--set<span class=w> </span>github.secretRef.name<span class=o>=</span>github-token
+<a id=__codelineno-0-8 name=__codelineno-0-8 href=#__codelineno-0-8></a><span class=c1># 2. Store the token in two Secrets: the controller's (never labelled, no</span>
+<a id=__codelineno-0-9 name=__codelineno-0-9 href=#__codelineno-0-9></a><span class=c1>#    Pipeline may use it) and the demo Pipeline's own git Secret, labelled so</span>
+<a id=__codelineno-0-10 name=__codelineno-0-10 href=#__codelineno-0-10></a><span class=c1>#    a Pipeline may name it. Then install with demo mode.</span>
+<a id=__codelineno-0-11 name=__codelineno-0-11 href=#__codelineno-0-11></a>kubectl<span class=w> </span>create<span class=w> </span>namespace<span class=w> </span>kardinal-system
+<a id=__codelineno-0-12 name=__codelineno-0-12 href=#__codelineno-0-12></a>kubectl<span class=w> </span>create<span class=w> </span>secret<span class=w> </span>generic<span class=w> </span>scm-token<span class=w> </span><span class=se>\</span>
+<a id=__codelineno-0-13 name=__codelineno-0-13 href=#__codelineno-0-13></a><span class=w>  </span>--namespace<span class=w> </span>kardinal-system<span class=w> </span><span class=se>\</span>
+<a id=__codelineno-0-14 name=__codelineno-0-14 href=#__codelineno-0-14></a><span class=w>  </span>--from-literal<span class=o>=</span><span class=nv>token</span><span class=o>=</span><span class=nv>$GITHUB_PAT</span>
+<a id=__codelineno-0-15 name=__codelineno-0-15 href=#__codelineno-0-15></a>kubectl<span class=w> </span>create<span class=w> </span>secret<span class=w> </span>generic<span class=w> </span>demo-git-token<span class=w> </span><span class=se>\</span>
+<a id=__codelineno-0-16 name=__codelineno-0-16 href=#__codelineno-0-16></a><span class=w>  </span>--namespace<span class=w> </span>kardinal-system<span class=w> </span><span class=se>\</span>
+<a id=__codelineno-0-17 name=__codelineno-0-17 href=#__codelineno-0-17></a><span class=w>  </span>--from-literal<span class=o>=</span><span class=nv>token</span><span class=o>=</span><span class=nv>$GITHUB_PAT</span>
+<a id=__codelineno-0-18 name=__codelineno-0-18 href=#__codelineno-0-18></a>kubectl<span class=w> </span>label<span class=w> </span>secret<span class=w> </span>demo-git-token<span class=w> </span>--namespace<span class=w> </span>kardinal-system<span class=w> </span>kardinal.io/referenceable<span class=o>=</span><span class=nb>true</span>
 <a id=__codelineno-0-19 name=__codelineno-0-19 href=#__codelineno-0-19></a>
-<a id=__codelineno-0-20 name=__codelineno-0-20 href=#__codelineno-0-20></a><span class=c1># 3. Check the demo Pipeline (it lives in the release namespace)</span>
-<a id=__codelineno-0-21 name=__codelineno-0-21 href=#__codelineno-0-21></a>kardinal<span class=w> </span>get<span class=w> </span>pipelines<span class=w> </span>-n<span class=w> </span>kardinal-system
-<a id=__codelineno-0-22 name=__codelineno-0-22 href=#__codelineno-0-22></a><span class=c1># PIPELINE   BUNDLE   TEST   UAT   PROD   SUB   AGE</span>
-<a id=__codelineno-0-23 name=__codelineno-0-23 href=#__codelineno-0-23></a><span class=c1># demo       -        -      -     -      0     10s</span>
-<a id=__codelineno-0-24 name=__codelineno-0-24 href=#__codelineno-0-24></a>
-<a id=__codelineno-0-25 name=__codelineno-0-25 href=#__codelineno-0-25></a><span class=c1># 4. Trigger the first promotion. The kardinal-demo overlays already run</span>
-<a id=__codelineno-0-26 name=__codelineno-0-26 href=#__codelineno-0-26></a><span class=c1>#    sha-9349a3f, so a Bundle with only that tag changes nothing; the digest</span>
-<a id=__codelineno-0-27 name=__codelineno-0-27 href=#__codelineno-0-27></a><span class=c1>#    makes it a real change (see "Create your first Bundle" below).</span>
-<a id=__codelineno-0-28 name=__codelineno-0-28 href=#__codelineno-0-28></a>kardinal<span class=w> </span>create<span class=w> </span>bundle<span class=w> </span>demo<span class=w> </span>-n<span class=w> </span>kardinal-system<span class=w> </span><span class=se>\</span>
-<a id=__codelineno-0-29 name=__codelineno-0-29 href=#__codelineno-0-29></a><span class=w>  </span>--image<span class=w> </span>ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0
+<a id=__codelineno-0-20 name=__codelineno-0-20 href=#__codelineno-0-20></a>helm<span class=w> </span>install<span class=w> </span>kardinal-promoter<span class=w> </span>oci://ghcr.io/pnz1990/charts/kardinal-promoter<span class=w> </span>--version<span class=w> </span><span class=m>0</span>.10.0<span class=w> </span><span class=se>\</span>
+<a id=__codelineno-0-21 name=__codelineno-0-21 href=#__codelineno-0-21></a><span class=w>  </span>--namespace<span class=w> </span>kardinal-system<span class=w> </span><span class=se>\</span>
+<a id=__codelineno-0-22 name=__codelineno-0-22 href=#__codelineno-0-22></a><span class=w>  </span>--set<span class=w> </span>demo.enabled<span class=o>=</span><span class=nb>true</span><span class=w> </span><span class=se>\</span>
+<a id=__codelineno-0-23 name=__codelineno-0-23 href=#__codelineno-0-23></a><span class=w>  </span>--set<span class=w> </span>demo.git.url<span class=o>=</span><span class=nv>$DEMO_REPO</span><span class=w> </span><span class=se>\</span>
+<a id=__codelineno-0-24 name=__codelineno-0-24 href=#__codelineno-0-24></a><span class=w>  </span>--set<span class=w> </span>scm.secretRef.name<span class=o>=</span>scm-token<span class=w> </span><span class=se>\</span>
+<a id=__codelineno-0-25 name=__codelineno-0-25 href=#__codelineno-0-25></a><span class=w>  </span>--set<span class=w> </span>demo.secretRef.name<span class=o>=</span>demo-git-token
+<a id=__codelineno-0-26 name=__codelineno-0-26 href=#__codelineno-0-26></a>
+<a id=__codelineno-0-27 name=__codelineno-0-27 href=#__codelineno-0-27></a><span class=c1># 3. Check the demo Pipeline (it lives in the release namespace)</span>
+<a id=__codelineno-0-28 name=__codelineno-0-28 href=#__codelineno-0-28></a>kardinal<span class=w> </span>get<span class=w> </span>pipelines<span class=w> </span>-n<span class=w> </span>kardinal-system
+<a id=__codelineno-0-29 name=__codelineno-0-29 href=#__codelineno-0-29></a><span class=c1># PIPELINE   BUNDLE   TEST   UAT   PROD   SUB   AGE</span>
+<a id=__codelineno-0-30 name=__codelineno-0-30 href=#__codelineno-0-30></a><span class=c1># demo       -        -      -     -      0     10s</span>
+<a id=__codelineno-0-31 name=__codelineno-0-31 href=#__codelineno-0-31></a>
+<a id=__codelineno-0-32 name=__codelineno-0-32 href=#__codelineno-0-32></a><span class=c1># 4. Trigger the first promotion. The kardinal-demo overlays already run</span>
+<a id=__codelineno-0-33 name=__codelineno-0-33 href=#__codelineno-0-33></a><span class=c1>#    sha-9349a3f, so a Bundle with only that tag changes nothing; the digest</span>
+<a id=__codelineno-0-34 name=__codelineno-0-34 href=#__codelineno-0-34></a><span class=c1>#    makes it a real change (see "Create your first Bundle" below).</span>
+<a id=__codelineno-0-35 name=__codelineno-0-35 href=#__codelineno-0-35></a>kardinal<span class=w> </span>create<span class=w> </span>bundle<span class=w> </span>demo<span class=w> </span>-n<span class=w> </span>kardinal-system<span class=w> </span><span class=se>\</span>
+<a id=__codelineno-0-36 name=__codelineno-0-36 href=#__codelineno-0-36></a><span class=w>  </span>--image<span class=w> </span>ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0
 </code></pre></div> <p>The demo Pipeline uses your fork of the <code>kardinal-demo</code> GitOps repo (it already has the correct Kustomize layout). Test and uat environments promote automatically; prod opens a PR for review.</p> <div class="admonition note"> <p class=admonition-title>Estimated time: under 10 minutes on a fresh kind cluster</p> <p>Prerequisites: kind cluster, <code>helm</code>, <code>kubectl</code>, the <code>kardinal</code> CLI (<a href=../installation/#3-install-the-cli>Install the CLI</a>), Argo CD, and a GitHub PAT with write access to the repository in <code>demo.git.url</code>. Point the ApplicationSet <code>repoURL</code> in <a href=#create-argo-cd-applications>Create Argo CD Applications</a> at the same fork.</p> </div> <hr> <h2 id=full-setup-bring-your-own-gitops-repo>Full Setup (bring your own GitOps repo)<a class=headerlink href=#full-setup-bring-your-own-gitops-repo title="Permanent link">&para;</a></h2> <p>Use the full guide below to set up kardinal-promoter against your own GitOps repository.</p> <h2 id=what-you-will-build>What you will build<a class=headerlink href=#what-you-will-build title="Permanent link">&para;</a></h2> <pre class=mermaid><code>graph LR
     CI["CI pushes image&lt;br/&gt;kardinal-test-app:sha-abc1234"] --&gt; Bundle["Bundle created"]
     Bundle --&gt; Test["test\n(auto-promote)"]
@@ -51,14 +58,14 @@
 <a id=__codelineno-2-9 name=__codelineno-2-9 href=#__codelineno-2-9></a>
 <a id=__codelineno-2-10 name=__codelineno-2-10 href=#__codelineno-2-10></a>helm<span class=w> </span>install<span class=w> </span>kardinal-promoter<span class=w> </span>oci://ghcr.io/pnz1990/charts/kardinal-promoter<span class=w> </span>--version<span class=w> </span><span class=m>0</span>.10.0<span class=w> </span><span class=se>\</span>
 <a id=__codelineno-2-11 name=__codelineno-2-11 href=#__codelineno-2-11></a><span class=w>  </span>--namespace<span class=w> </span>kardinal-system<span class=w> </span>--create-namespace<span class=w> </span><span class=se>\</span>
-<a id=__codelineno-2-12 name=__codelineno-2-12 href=#__codelineno-2-12></a><span class=w>  </span>--set<span class=w> </span>github.secretRef.name<span class=o>=</span>github-token
+<a id=__codelineno-2-12 name=__codelineno-2-12 href=#__codelineno-2-12></a><span class=w>  </span>--set<span class=w> </span>scm.secretRef.name<span class=o>=</span>github-token
 <a id=__codelineno-2-13 name=__codelineno-2-13 href=#__codelineno-2-13></a>
 <a id=__codelineno-2-14 name=__codelineno-2-14 href=#__codelineno-2-14></a><span class=c1># Option B: pass the token directly (development/testing only)</span>
 <a id=__codelineno-2-15 name=__codelineno-2-15 href=#__codelineno-2-15></a><span class=c1># The chart stores it in Secret kardinal-promoter-github-token, but the token</span>
 <a id=__codelineno-2-16 name=__codelineno-2-16 href=#__codelineno-2-16></a><span class=c1># also stays in the Helm release history.</span>
 <a id=__codelineno-2-17 name=__codelineno-2-17 href=#__codelineno-2-17></a>helm<span class=w> </span>install<span class=w> </span>kardinal-promoter<span class=w> </span>oci://ghcr.io/pnz1990/charts/kardinal-promoter<span class=w> </span>--version<span class=w> </span><span class=m>0</span>.10.0<span class=w> </span><span class=se>\</span>
 <a id=__codelineno-2-18 name=__codelineno-2-18 href=#__codelineno-2-18></a><span class=w>  </span>--namespace<span class=w> </span>kardinal-system<span class=w> </span>--create-namespace<span class=w> </span><span class=se>\</span>
-<a id=__codelineno-2-19 name=__codelineno-2-19 href=#__codelineno-2-19></a><span class=w>  </span>--set<span class=w> </span>github.token<span class=o>=</span><span class=nv>$GITHUB_PAT</span>
+<a id=__codelineno-2-19 name=__codelineno-2-19 href=#__codelineno-2-19></a><span class=w>  </span>--set<span class=w> </span>scm.token<span class=o>=</span><span class=nv>$GITHUB_PAT</span>
 </code></pre></div> <p>Verify the installation:</p> <div class=highlight><pre><span></span><code><a id=__codelineno-3-1 name=__codelineno-3-1 href=#__codelineno-3-1></a>kubectl<span class=w> </span>get<span class=w> </span>pods<span class=w> </span>-n<span class=w> </span>kardinal-system
 <a id=__codelineno-3-2 name=__codelineno-3-2 href=#__codelineno-3-2></a><span class=c1># NAME                                              READY   STATUS    RESTARTS   AGE</span>
 <a id=__codelineno-3-3 name=__codelineno-3-3 href=#__codelineno-3-3></a><span class=c1># kardinal-promoter-7f8d9c5b6d-x2k9q               1/1     Running   0          30s</span>
