@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -35,6 +36,7 @@ func outputFixture() []sigs_client.Object {
 	at := func(m int) time.Time { return time.Now().Add(-time.Duration(m) * time.Minute).Truncate(time.Second) }
 	since := metav1.NewTime(at(30))
 	p := policyPipeline("demo", "test", "uat", "prod")
+	p.CreationTimestamp = metav1.NewTime(at(600))
 	p.Status.Phase = "Promoting"
 	p.Status.Summary = "1.5.0 live in test; waiting for PR merge in uat (#42); held by gate no-weekend in prod"
 	// The cluster's text has non-ASCII characters (the controller writes
@@ -142,6 +144,11 @@ func assertPlain(t *testing.T, out, what string) {
 // Covers CLI-STYLE-01.
 func TestOutput_PlainWhenNotATerminal(t *testing.T) {
 	t.Setenv("KUBECONFIG", "/dev/null")
+	// No UTF-8 locale: the stream takes ASCII only, the cluster's text is
+	// folded.
+	t.Setenv("LC_ALL", "")
+	t.Setenv("LC_CTYPE", "")
+	t.Setenv("LANG", "C")
 	c := policyClient(t, outputFixture()...)
 	var golden strings.Builder
 	for _, args := range outputCommands {
@@ -151,7 +158,7 @@ func TestOutput_PlainWhenNotATerminal(t *testing.T) {
 		assertPlain(t, out, "piped: kardinal "+line)
 		golden.WriteString("$ kardinal " + line + "\n" + volatile.ReplaceAllString(out, "<time>") + "\n")
 
-		for _, env := range [][]string{{"NO_COLOR", "1", "LANG", "en_US.UTF-8"}, {"TERM", "dumb", "LANG", "en_US.UTF-8"}} {
+		for _, env := range [][]string{{"NO_COLOR", "1", "LANG", "C"}, {"TERM", "dumb", "LANG", "en_US.UTF-8"}} {
 			restore := asTerminal(t, env...)
 			out, _, err := runOutput(t, c, args...)
 			restore()
@@ -168,6 +175,72 @@ func TestOutput_PlainWhenNotATerminal(t *testing.T) {
 	want, err := os.ReadFile(path)
 	require.NoError(t, err, "run go test -run TestOutput_PlainWhenNotATerminal -update-output")
 	assert.Equal(t, string(want), golden.String(), "piped output changed; rerun with -update-output if intended")
+}
+
+// TestOutput_UTF8Pipe (C4): with a UTF-8 locale, a pipe keeps the cluster's
+// text as it is; the CLI's own words stay plain: no colour, no glyphs.
+//
+// Covers CLI-STYLE-01.
+func TestOutput_UTF8Pipe(t *testing.T) {
+	t.Setenv("KUBECONFIG", "/dev/null")
+	t.Setenv("LC_ALL", "")
+	t.Setenv("LANG", "en_US.UTF-8")
+	t.Setenv("TERM", "xterm")
+	c := policyClient(t, outputFixture()...)
+	out, _, err := runOutput(t, c, "logs", "demo")
+	require.NoError(t, err)
+	assert.Contains(t, out, "health alarm — rollback Bundle demo-b2 → demo-b1 created", "the cluster's text, unchanged")
+	assert.Contains(t, out, "[Failed]", "a label, no glyph")
+	assert.NotContains(t, out, "\x1b")
+
+	t.Setenv("TERM", "dumb")
+	out, _, err = runOutput(t, c, "logs", "demo")
+	require.NoError(t, err)
+	assert.Contains(t, out, "health alarm - rollback Bundle demo-b2 -> demo-b1 created", "TERM=dumb folds")
+}
+
+// placeholders are the table's display placeholders: JSON never carries
+// them.
+var placeholders = map[string]bool{"-": true, "--": true, "...": true, "—": true, "none": true}
+
+// walkJSON calls f on every string in v.
+func walkJSON(v any, path string, f func(path, s string)) {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, e := range x {
+			walkJSON(e, path+"."+k, f)
+		}
+	case []any:
+		for i, e := range x {
+			walkJSON(e, fmt.Sprintf("%s[%d]", path, i), f)
+		}
+	case string:
+		f(path, x)
+	}
+}
+
+// TestOutput_JSONHasNoPlaceholders (C4): no -o json output carries a table
+// placeholder ("-", "--", "...", "—", "none") as a value.
+//
+// Covers CLI-STYLE-01.
+func TestOutput_JSONHasNoPlaceholders(t *testing.T) {
+	t.Setenv("KUBECONFIG", "/dev/null")
+	c := policyClient(t, outputFixture()...)
+	for _, args := range [][]string{
+		{"status", "-o", "json"}, {"status", "demo", "-o", "json"}, {"explain", "demo", "-o", "json"},
+		{"history", "demo", "-o", "json"}, {"get", "pipelines", "-o", "json"}, {"get", "bundles", "-o", "json"},
+		{"get", "steps", "demo", "-o", "json"},
+		{"create", "bundle", "demo", "--image", "ghcr.io/o/app:1.6.0", "--dry-run", "-o", "json"},
+		{"create", "bundle", "demo", "--image", "ghcr.io/o/app:1.6.0", "-o", "json"},
+	} {
+		out, _, err := runOutput(t, c, args...)
+		require.NoError(t, err, args)
+		var v any
+		require.NoError(t, json.Unmarshal([]byte(out), &v), "%v: %s", args, out)
+		walkJSON(v, "", func(path, s string) {
+			assert.False(t, placeholders[strings.TrimSpace(s)], "%v: %s is the placeholder %q", args, path, s)
+		})
+	}
 }
 
 // TestOutput_Terminal (C4): on a terminal the states have their glyph and
@@ -279,4 +352,30 @@ func TestExplainWatch_JSON(t *testing.T) {
 	require.NoError(t, explainWatch(ctx, &out, c, "default", "nope", "", false, time.Millisecond))
 	assert.Empty(t, out.String(), "the error is not on stdout")
 	assert.Contains(t, errb.String(), `error: pipeline "nope" not found`)
+}
+
+// TestWatch_YAMLDocuments (C4): -o yaml -w separates its documents with
+// "---", so the stream parses as YAML documents.
+//
+// Covers CLI-STYLE-01.
+func TestWatch_YAMLDocuments(t *testing.T) {
+	globalOutput = "yaml"
+	t.Cleanup(func() { globalOutput = "" })
+	c := policyClient(t, outputFixture()...)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out bytes.Buffer
+	require.NoError(t, explainWatch(ctx, &out, c, "default", "demo", "", false, time.Millisecond))
+	assert.True(t, strings.HasPrefix(out.String(), "---\n"), out.String())
+	assert.Contains(t, out.String(), "\npipeline: demo\n")
+
+	out.Reset()
+	n := 0
+	require.NoError(t, watchLoop(ctx, &out, time.Millisecond, func() error {
+		n++
+		return statusPipelineWriter(&out, c, "default", "demo")
+	}))
+	assert.Equal(t, 1, n)
+	assert.True(t, strings.HasPrefix(out.String(), "---\n"), out.String())
+	assert.NotContains(t, out.String(), "watching")
 }

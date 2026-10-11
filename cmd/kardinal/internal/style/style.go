@@ -13,18 +13,17 @@
 
 // Package style renders the kardinal CLI's output for the stream it goes
 // to. A person at a terminal gets each state's glyph and its colour, the
-// status colours of the UI (DESIGN-SYSTEM.md: verified spruce, promoting
-// thread red, waiting dusk, blocked ochre, failed garnet as the only filled
-// chip, superseded and pending ink-3, paused and held ink). Anything else
-// gets plain words:
+// status colours of the UI, read from its design tokens (web/tokens). Any
+// other stream gets plain words: the state's label, no glyph, no colour:
 //
-//   - stdout not a terminal (a pipe, a file, CI): the state's label only,
-//     ASCII rules, no colour, so scripts and tests read stable text;
-//   - NO_COLOR (https://no-color.org/) or TERM=dumb on a terminal: the
-//     state's ASCII glyph and its label, no colour;
+//   - stdout not a terminal (a pipe, a file, CI), or a terminal with NO_COLOR
+//     (https://no-color.org/) or TERM=dumb: plain words;
 //   - a terminal without a UTF-8 locale: ASCII glyphs, in colour.
 //
-// The labels, glyphs and tones come from pkg/display, the table the UI uses.
+// Plain words keep UTF-8 when the locale is UTF-8 (LC_ALL, LC_CTYPE or
+// LANG), so the cluster's text (a dash, an arrow) passes through; without a
+// UTF-8 locale, or with TERM=dumb, everything is folded to ASCII (Fold).
+// The labels and tones come from pkg/display, the table the UI uses.
 package style
 
 import (
@@ -54,9 +53,13 @@ type Styler struct {
 	light bool
 	// truecolor is 24-bit colour (COLORTERM); the 16 ANSI colours when false.
 	truecolor bool
+	// utf8 is a UTF-8 locale, without TERM=dumb: the stream may carry
+	// non-ASCII text (the cluster's); when false, text is folded to ASCII.
+	utf8 bool
 }
 
-// Plain is the Styler of a stream that is not a terminal: words only.
+// Plain is the Styler of a stream that is not a terminal: words only, in
+// ASCII.
 func Plain() Styler { return Styler{} }
 
 // Detect is the Styler for w, from whether w is a terminal and from the
@@ -80,14 +83,16 @@ func Terminal(getenv func(string) string) Styler { return detect(true, getenv) }
 // as COLORTERM=truecolor; otherwise the 16 ANSI colours, which the
 // terminal's theme adapts to its background.
 func detect(tty bool, getenv func(string) string) Styler {
+	utf8 := utf8Locale(getenv) && getenv("TERM") != "dumb"
 	if !tty || getenv("NO_COLOR") != "" || getenv("TERM") == "dumb" {
-		return Plain()
+		return Styler{utf8: utf8}
 	}
 	light, known := background(getenv("COLORFGBG"))
 	return Styler{
 		color:     true,
 		glyphs:    true,
-		unicode:   utf8Locale(getenv),
+		unicode:   utf8,
+		utf8:      utf8,
 		light:     light,
 		truecolor: known && (getenv("COLORTERM") == "truecolor" || getenv("COLORTERM") == "24bit"),
 	}
@@ -113,6 +118,10 @@ func (s Styler) Color() bool { return s.color }
 
 // Unicode reports whether s writes Unicode glyphs and rules.
 func (s Styler) Unicode() bool { return s.unicode }
+
+// ASCIIOnly reports whether the stream takes ASCII only (no UTF-8 locale,
+// or TERM=dumb): its text, the cluster's too, is folded (Fold).
+func (s Styler) ASCIIOnly() bool { return !s.utf8 }
 
 // Terminal reports whether s writes for a person at a terminal (glyphs).
 func (s Styler) Terminal() bool { return s.glyphs }

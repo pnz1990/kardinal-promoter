@@ -23,42 +23,53 @@ are the nearest of the 16 ANSI colours, which the terminal's theme adapts.
 Without a UTF-8 locale the glyphs are ASCII (`* Live`, `~ Waiting for PR merge`).
 
 Piped to a file or another program, or with NO_COLOR (any value) or
-TERM=dumb, output is plain words: the labels without glyphs or colour, and
-ASCII only, also for what the cluster says (a dash is "-", an arrow "->",
-any other non-ASCII character "?"). On Windows, colour needs a console with
-virtual-terminal processing; without it output has no colour.
+TERM=dumb, output is plain words: the labels without glyphs or colour. The
+cluster's text (a step's message, a Pipeline's summary) passes through as it
+is when the locale is UTF-8 (LC_ALL, LC_CTYPE or LANG); without a UTF-8
+locale, or with TERM=dumb, everything is ASCII (a dash is "-", an arrow
+"->", any other non-ASCII character "?"). On Windows, colour needs a console
+with virtual-terminal processing; without it output has no colour.
 
 -o json and -o yaml print the API's values (Verified, WaitingForMerge) and the
-cluster's text unchanged. Warnings and hints go to stderr, so stdout stays
-valid JSON. get prints the objects as the API server lists them. The others
-print:
+cluster's text unchanged, and no table placeholders ("-", "--", "..."): a
+field with nothing to say is left out. With -w, -o json prints one document
+per refresh and -o yaml separates them with "---". Warnings and hints go to
+stderr, so stdout stays valid JSON. get prints the objects as the API server
+lists them. The others print these fields (in brackets the ones left out
+when empty):
 
   create bundle, promote, rollback:
-    bundle, pipeline, namespace, type, version, url; promote adds
+    bundle, pipeline, namespace, url, [type, version]; promote adds
     environment and from (the Bundle copied); rollback adds environment,
-    rollbackOf (the Bundle restored), replaces (the one replaced) and, with
-    --hold, hold {environment, bundle, reason, expiresAt}
+    rollbackOf (the Bundle restored), [replaces] (the one replaced) and,
+    with --hold, hold {environment, bundle, [reason, expiresAt]}
   create bundle --dry-run:
-    pipeline, namespace, type, version, nodes, compact,
-    environments [{name, gates}] in promotion order
+    pipeline, namespace, nodes, environments [{name, [gates]}] in promotion
+    order, [type, version, compact]
   release-hold:
     pipeline, namespace, environment, bundle (the rollback it was held on),
-    createdBy, reason, url
+    url, [createdBy, reason]
   status:
-    controller, pipelines, degraded [namespace/name], bundles, activeBundles
+    controller, pipelines, bundles, activeBundles, [degraded]
+    (namespace/name)
   status <pipeline>:
-    pipeline, namespace, phase, paused, summary, source ("controller" or
-    "cli"), environments (status.environments: name, bundle, version,
-    incomingBundle, incomingVersion, state, since, blockedBy, prURL, held),
-    blockingGates [{name, instance, environment, bundle, expression, message,
-    reason, lastEvaluatedAt}], warnings
+    pipeline, namespace, source ("controller" or "cli"), environments,
+    blockingGates, [phase, paused, summary, notices, warnings, regions];
+    an environment is status.environments' entry: name, [bundle, version,
+    incomingBundle, incomingVersion, state, since, blockedBy, prURL, held];
+    a gate: name, instance, environment, bundle, expression, [message,
+    reason, lastEvaluatedAt]
   explain:
     pipeline, namespace, entries [{environment, bundle, type (Step or
-    PolicyGate), name, state, expression, reason}], holds [{environment,
-    bundle, createdBy, reason, bundleMissing}]
+    PolicyGate), name, state, [expression, reason]}], [holds
+    [{environment, bundle, [createdBy, reason, bundleMissing]}]]
   history:
     a list of {bundle, action (promote or rollback), environment, state,
-    prURL, duration, createdAt}
+    createdAt, [prURL, durationSeconds, running]}: durationSeconds once the
+    step ended, running while it runs
+  ship:
+    the create bundle fields and exitCode, with --wait also [result,
+    message, environments]
 
 url is the pipeline in the UI: KARDINAL_UI_URL, else the address kardinal
 dashboard opens (http://localhost:8082/ui/). For example

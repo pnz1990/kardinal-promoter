@@ -99,6 +99,7 @@ func explainWatch(ctx context.Context, w io.Writer, c sigs_client.Client,
 		if clearScreen {
 			_, _ = fmt.Fprint(w, "\033[H\033[2J")
 		}
+		yamlDocument(w)
 		if err := explainOnce(w, c, ns, pipeline, envFilter, forceColor); err != nil {
 			if table {
 				_, _ = fmt.Fprintf(w, "error: %v\n", HumanError(err))
@@ -246,7 +247,7 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		for _, row := range rows {
 			out.Entries = append(out.Entries, explainEntry{
 				Environment: row.environment, Bundle: row.bundle, Type: row.kind, Name: row.name,
-				State: row.state, Expression: row.expression, Reason: row.reason,
+				State: row.state, Expression: noDash(row.expression), Reason: noDash(row.reason),
 			})
 		}
 		return writeStructured(w, out)
@@ -319,9 +320,21 @@ type explainEntry struct {
 	Name string `json:"name"`
 	// State is the step's state or the gate's (Pass, Block, Waiting,
 	// Pending, Superseded, Rejected), as the API has it.
-	State      string `json:"state"`
-	Expression string `json:"expression"`
-	Reason     string `json:"reason"`
+	State string `json:"state"`
+	// Expression is a gate's CEL expression; omitted for a step.
+	Expression string `json:"expression,omitempty"`
+	// Reason is a step's message or a gate's status reason; omitted when
+	// there is none.
+	Reason string `json:"reason,omitempty"`
+}
+
+// noDash is s, or "" for the table's "-" placeholder: JSON carries no
+// display placeholders.
+func noDash(s string) string {
+	if s == "-" {
+		return ""
+	}
+	return s
 }
 
 // explainHold is a hold (kardinal rollback --hold) of an environment shown.

@@ -46,9 +46,10 @@ var detectStyle = style.Detect
 func useStyle(cmd *cobra.Command) {
 	sty = detectStyle(cmd.OutOrStdout())
 	errOut = cmd.ErrOrStderr()
-	// Plain words are ASCII: what the CLI prints from the cluster too.
-	// -o json and yaml keep the cluster's text exact.
-	if !sty.Unicode() && !structured() {
+	// Without a UTF-8 locale (or with TERM=dumb) the stream takes ASCII
+	// only: what the CLI prints from the cluster is folded too. -o json and
+	// yaml keep the cluster's text exact.
+	if sty.ASCIIOnly() && !structured() {
 		cmd.SetOut(style.NewFolder(cmd.OutOrStdout()))
 	}
 }
@@ -76,6 +77,14 @@ func notice(line string) string {
 		}
 	}
 	return line
+}
+
+// yamlDocument starts a YAML document of a -w stream ("---"), so each
+// refresh is a document of its own; nothing for the other formats.
+func yamlDocument(w io.Writer) {
+	if OutputFormat() == "yaml" {
+		_, _ = fmt.Fprintln(w, "---")
+	}
 }
 
 // watchFooter ends each frame of a -w table.

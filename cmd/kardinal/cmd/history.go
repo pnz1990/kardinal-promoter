@@ -70,10 +70,14 @@ type HistoryRow struct {
 	PR        string
 	Duration  string
 	Timestamp string
-	// State, PRURL and Created are the step's, for -o json|yaml.
+	// State, PRURL, Created, Seconds and Running are the step's, for
+	// -o json|yaml: Seconds is how long it took (nil when no end is
+	// recorded), Running whether it still runs.
 	State   string
 	PRURL   string
 	Created time.Time
+	Seconds *int64
+	Running bool
 }
 
 // historyEntry is one entry of kardinal history -o json|yaml.
@@ -85,9 +89,11 @@ type historyEntry struct {
 	// State is the step's state, as the API has it.
 	State string `json:"state"`
 	PRURL string `json:"prURL,omitempty"`
-	// Duration is how long the step took ("..." while it runs, "--" when no
-	// end is recorded).
-	Duration  string    `json:"duration"`
+	// DurationSeconds is how long the step took; omitted while it runs or
+	// when no end is recorded.
+	DurationSeconds *int64 `json:"durationSeconds,omitempty"`
+	// Running is true while the step runs.
+	Running   bool      `json:"running,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -96,7 +102,7 @@ func writeHistoryStructured(w io.Writer, rows []HistoryRow) error {
 	out := make([]historyEntry, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, historyEntry{Bundle: r.Bundle, Action: r.Action, Environment: r.Env, State: r.State,
-			PRURL: r.PRURL, Duration: r.Duration, CreatedAt: r.Created.UTC()})
+			PRURL: r.PRURL, DurationSeconds: r.Seconds, Running: r.Running, CreatedAt: r.Created.UTC()})
 	}
 	return writeStructured(w, out)
 }
@@ -212,6 +218,8 @@ func buildHistoryRows(steps []v1alpha1.PromotionStep, rollbacks map[string]bool,
 			State:     s.Status.State,
 			PRURL:     s.Status.PRURL,
 			Created:   s.CreationTimestamp.Time,
+			Seconds:   stepSeconds(s),
+			Running:   duration == "...",
 		})
 	}
 	return rows
@@ -254,17 +262,40 @@ func shortenPRURL(url string) string {
 	return url
 }
 
+// stepSeconds is deriveDuration in whole seconds, nil when the step runs or
+// no end is recorded.
+func stepSeconds(s v1alpha1.PromotionStep) *int64 {
+	d, ok := stepDuration(s)
+	if !ok {
+		return nil
+	}
+	sec := int64(d / time.Second)
+	return &sec
+}
+
 // deriveDuration is the time from step creation to its end: the Verified
 // condition's transition, else the last completed step. "..." while the step
 // is running, "--" when no end time is recorded. RollingBack is an end state:
 // the step stops there, and the rollback Bundle carries the promotion on.
 func deriveDuration(s v1alpha1.PromotionStep) string {
 	switch s.Status.State {
-	case "Verified", "Failed", "AbortedByAlarm", "RollingBack", "Superseded":
 	case "", "Pending", "Promoting", "WaitingForMerge", "HealthChecking", "Verifying":
 		return "..."
-	default:
+	}
+	d, ok := stepDuration(s)
+	if !ok {
 		return "--"
+	}
+	return humanDuration(d)
+}
+
+// stepDuration is how long a finished step took (deriveDuration); false
+// while it runs or when no end time is recorded.
+func stepDuration(s v1alpha1.PromotionStep) (time.Duration, bool) {
+	switch s.Status.State {
+	case "Verified", "Failed", "AbortedByAlarm", "RollingBack", "Superseded":
+	default:
+		return 0, false
 	}
 	var end time.Time
 	if s.Status.State == "Verified" {
@@ -282,9 +313,9 @@ func deriveDuration(s v1alpha1.PromotionStep) string {
 		}
 	}
 	if end.IsZero() || s.CreationTimestamp.IsZero() || end.Before(s.CreationTimestamp.Time) {
-		return "--"
+		return 0, false
 	}
-	return humanDuration(end.Sub(s.CreationTimestamp.Time))
+	return end.Sub(s.CreationTimestamp.Time), true
 }
 
 // formatHistoryTable writes the history table to w.

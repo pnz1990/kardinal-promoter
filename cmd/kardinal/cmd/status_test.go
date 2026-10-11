@@ -556,3 +556,33 @@ func TestStatusPipelineWriter_PipelineNotices(t *testing.T) {
 	ok.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Valid"}}
 	assert.NotContains(t, runStatusPipeline(t, ok), "ERROR:")
 }
+
+// TestStatusPipelineWriter_RegionAndWide (C4 QA): REGION shows where each
+// environment runs when one of them says (here the kubeconfig of a remote
+// cluster), and -o wide adds the step each newest Bundle is on.
+//
+// Covers CLI-STYLE-01.
+func TestStatusPipelineWriter_RegionAndWide(t *testing.T) {
+	recent := time.Now().Add(-time.Hour)
+	p := policyPipeline("demo", "test", "prod")
+	p.Spec.Environments[1].Health.KubeconfigSecretRef = &v1alpha1.KubeconfigSecretRef{Name: "prod-eu-kubeconfig"}
+	step := explainStep("demo", "b1", "prod", "WaitingForMerge", "", recent)
+	step.Status.Steps = []v1alpha1.StepStatus{{Name: "open-pr", State: "Completed"}, {Name: "wait-for-merge", State: "InProgress"}}
+	objs := []sigs_client.Object{p, explainBundle("b1", "Promoting", recent), explainStep("demo", "b1", "test", "Verified", "", recent), step}
+
+	rows := statusRows(t, runStatusPipeline(t, objs...))
+	require.Len(t, rows, 2)
+	assert.Equal(t, "-", rows[0]["REGION"])
+	assert.Equal(t, "prod-eu-kubeconfig", rows[1]["REGION"])
+	assert.NotContains(t, rows[1], "ACTIVE STEP", "only with -o wide")
+
+	globalOutput = "wide"
+	t.Cleanup(func() { globalOutput = "" })
+	rows = statusRows(t, runStatusPipeline(t, objs...))
+	assert.Equal(t, "wait-for-merge", rows[1]["ACTIVE STEP"])
+
+	globalOutput = ""
+	plain := runStatusPipeline(t, policyPipeline("demo", "test", "prod"), explainBundle("b1", "Promoting", recent),
+		explainStep("demo", "b1", "test", "Verified", "", recent))
+	assert.NotContains(t, plain, "REGION", "no environment says where it runs")
+}
