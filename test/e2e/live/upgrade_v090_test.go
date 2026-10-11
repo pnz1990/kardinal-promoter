@@ -30,7 +30,7 @@ import (
 const guideChartV090 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0"
 
 // TestUpgradeV090_FromV090 follows "Upgrading from v0.9.0" in
-// docs/installation.md, running the guide's own commands, on a cluster that
+// docs/upgrade.md, running the guide's own commands, on a cluster that
 // runs kardinal-promoter v0.9.0 as released (its chart from the registry,
 // its CLI and kro at the version v0.9.0 targets).
 //

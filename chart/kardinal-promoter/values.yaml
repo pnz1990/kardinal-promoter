@@ -135,7 +135,7 @@ controller:
   # at once. Unset keeps the controller defaults, measured with the scale
   # suite: promotionStep 16, prStatus 8, policyGate 8, bundle 4, pipeline 4.
   # Raise promotionStep for many Pipelines on slow git hosts. See
-  # docs/installation.md (Controller concurrency).
+  # docs/operate.md (Controller concurrency).
   workers: {}
   #   promotionStep: 16
   #   prStatus: 8
@@ -199,7 +199,7 @@ service:
 # 166 MiB for 200 Pipelines with a Bundle each, 409 MiB for 2 Bundles a second
 # over 40 Pipelines with leader kills; 55-70 MiB with no Pipelines. The
 # defaults give the larger load 2.5x headroom; see "Sizing the controller" in
-# docs/installation.md.
+# docs/operate.md.
 resources:
   limits:
     cpu: 500m
@@ -217,38 +217,30 @@ tolerations: []
 # -- Affinity rules for the controller Pod
 affinity: {}
 
-# -- SCM token for the provider in scm.provider, for opening PRs and detecting
-# merges. Set one of:
-#   github.secretRef.name  an existing Secret in the release namespace
-#                          (recommended; the token stays out of Helm values)
-#   github.token           the chart creates Secret <fullname>-github-token
-#                          (the token is kept in the Helm release history)
-# Either way the controller reads GITHUB_TOKEN from the Secret and watches it,
-# reloading the SCM provider when the token changes (no restart).
-#
-#   kubectl create secret generic github-token -n kardinal-system \
-#     --from-literal=token=$GITHUB_PAT
-#   helm install ... --set github.secretRef.name=github-token
+# -- github.token and github.secretRef are the old names of scm.token and
+# scm.secretRef (below) and keep working, for every scm.provider. Setting
+# both names to different values fails the install.
 github:
-  # -- Token value; the chart stores it in a Secret. Prefer secretRef.
+  # -- Old name of scm.token.
   token: ""
-  # -- Existing Secret holding the token.
+  # -- Old name of scm.secretRef.
   secretRef:
+    # -- Old name of scm.secretRef.name.
     name: ""
-    # -- Must be empty or the release namespace: GITHUB_TOKEN is read with a
-    # secretKeyRef, which only reads the Pod's namespace.
+    # -- Old name of scm.secretRef.namespace.
     namespace: ""
-    key: "token"
-  # -- Authenticate as a GitHub App: the github.secretRef Secret holds
+    # -- Empty is "token".
+    key: ""
+  # -- Authenticate as a GitHub App: the scm.secretRef Secret holds
   # githubAppID, githubAppInstallationID and githubAppPrivateKey instead of a
   # token. The controller mints installation tokens, refreshes them before
   # they expire, and reloads the App credentials when the Secret changes.
-  # Needs scm.provider github (or empty) and github.secretRef.name.
+  # Needs scm.provider github (or empty) and scm.secretRef.name.
   #
   #   kubectl create secret generic github-app -n kardinal-system \
   #     --from-literal=githubAppID=123456 --from-literal=githubAppInstallationID=7890123 \
   #     --from-file=githubAppPrivateKey=app.private-key.pem
-  #   helm install ... --set github.secretRef.name=github-app --set github.app.enabled=true
+  #   helm install ... --set scm.secretRef.name=github-app --set github.app.enabled=true
   app:
     enabled: false
 
@@ -269,8 +261,39 @@ admission:
   # these checks.
   controllerUsernames: []
 scm:
+  # -- SCM provider (--scm-provider): github (default when empty), gitlab,
+  # forgejo, gitea, bitbucket, azuredevops or bitbucket-datacenter. A Pipeline
+  # can name another with spec.git.providerRef. See docs/scm-providers.md.
   provider: ""
+  # -- API base URL of a self-hosted SCM (--scm-api-url); empty: the
+  # provider's public API.
   apiURL: ""
+  # -- SCM token for scm.provider, for opening PRs and detecting merges.
+  # Set one of:
+  #   scm.secretRef.name  an existing Secret in the release namespace
+  #                       (recommended; the token stays out of Helm values)
+  #   scm.token           the chart creates Secret <fullname>-github-token
+  #                       (the token is kept in the Helm release history)
+  # Either way the controller reads GITHUB_TOKEN from the Secret and watches
+  # it, reloading the SCM provider when the token changes (no restart).
+  # Never label this Secret kardinal.io/referenceable, and never name it in a
+  # Pipeline's git.secretRef (the controller refuses that): see demo.secretRef
+  # for the demo Pipeline's own Secret, and docs/guides/security.md.
+  #
+  #   kubectl create secret generic scm-token -n kardinal-system \
+  #     --from-literal=token=$GITHUB_PAT
+  #   helm install ... --set scm.secretRef.name=scm-token
+  token: ""
+  # -- Existing Secret holding the token.
+  secretRef:
+    # -- Name of an existing Secret in the release namespace that holds the
+    # SCM token (or the GitHub App credentials with github.app.enabled).
+    name: ""
+    # -- Must be empty or the release namespace: GITHUB_TOKEN is read with a
+    # secretKeyRef, which only reads the Pod's namespace.
+    namespace: ""
+    # -- Key of the token in the Secret. Empty is "token".
+    key: ""
   # -- Repositories the controller's SCM token may act on
   # (--scm-allowed-repositories), as host/repository globs: "github.com/acme/*",
   # "gitlab.example.com/platform/**" for every subgroup,
@@ -313,7 +336,11 @@ webhook:
 # (KARDINAL_BUNDLE_TOKEN). The Bundle API is off until this is set.
 bundleAPI:
   tokenSecretRef:
+    # -- Name of a Secret in the release namespace holding the Bundle API bearer
+    # token (KARDINAL_BUNDLE_TOKEN). The Bundle API is off until a token or
+    # tokenReview is set.
     name: ""
+    # -- Key of the token in that Secret.
     key: "token"
   # -- Accept Kubernetes tokens on POST /api/v1/bundles (--bundle-api-tokenreview-auth):
   # each caller is authenticated with a TokenReview and needs create on
@@ -432,13 +459,13 @@ graph:
   # until spec.historyLimit prunes it runs kro out of memory. Go durations;
   # empty keeps the controller default; "0s" keeps those Graphs. A Pipeline's
   # kardinal.io/graph-retire-after annotation replaces all three for its
-  # Bundles. See docs/installation.md#sizing-kro.
+  # Bundles. See docs/operate.md#sizing-kro.
   retire:
     # -- A Superseded Bundle, or a Verified one that a newer Bundle replaced
     # in every environment (--graph-retire-superseded-after, default 1m).
     superseded: ""
     # -- A Failed Bundle (--graph-retire-failed-after, default 24h). A retired
-    # Failed Bundle no longer recovers.
+    # Failed Bundle does not recover.
     failed: ""
     # -- A Verified Bundle still deployed in an environment
     # (--graph-retire-verified-after, default 1h).
@@ -495,6 +522,7 @@ render:
   # host. Needs a CNI that enforces NetworkPolicy. It is created in each of
   # namespaces (the Pipeline namespaces that use layout: branch).
   networkPolicy:
+    # -- Create the render NetworkPolicy.
     enabled: false
     # -- Namespaces to create the render NetworkPolicy in.
     namespaces: []
@@ -540,6 +568,7 @@ egress:
 # NetworkPolicy. Egress: DNS, :443/:6443 (API server, SCM, git, registries),
 # graph.kroNamespace and extraEgress. Ingress: the four Service ports.
 networkPolicy:
+  # -- Create the controller NetworkPolicy.
   enabled: false
   # -- Peers allowed per ingress port (NetworkPolicyPeer list). Empty admits
   # any source on that port. Example:
@@ -564,6 +593,8 @@ networkPolicy:
 # them. See docs/guides/security.md (Retention).
 audit:
   retention:
+    # -- Delete AuditEvents past maxAge and maxPerPipeline (--audit-retention).
+    # false keeps every record.
     enabled: true
     # -- Delete records created longer ago than this
     # (--audit-retention-max-age, a Go duration). "0s" keeps records of any
@@ -608,6 +639,7 @@ scheduleClock:
 # Only created when replicaCount > 1 to ensure at least one replica is
 # available during node maintenance or rolling updates.
 pdb:
+  # -- Create the PodDisruptionBudget (only when replicaCount > 1).
   enabled: true
   # -- Minimum number of pods that must be available during disruption.
   minAvailable: 1
@@ -635,7 +667,7 @@ topologySpread:
 #     --namespace kardinal-system --create-namespace \
 #     --set demo.enabled=true \
 #     --set demo.git.url=https://github.com/<your-user>/kardinal-demo \
-#     --set github.secretRef.name=github-token
+#     --set scm.secretRef.name=github-token
 demo:
   # -- Enable the demo Pipeline. When true, a Pipeline named "demo" is created.
   enabled: false
@@ -643,9 +675,10 @@ demo:
   # This is informational only (shown in the demo Pipeline annotations).
   # Run `kardinal create bundle demo --image <real-image>` to start a promotion.
   image: "ghcr.io/pnz1990/kardinal-test-app:sha-DEMO"
-  # -- Secret the demo Pipeline uses for git (spec.git.secretRef).
-  # Defaults to the chart's SCM token Secret (github.secretRef.name, or
-  # <fullname>-github-token when github.token is set), else "github-token".
+  # -- Secret the demo Pipeline uses for git (spec.git.secretRef), labelled
+  # kardinal.io/referenceable=true. Never the controller's SCM token Secret:
+  # the install fails if it is. When empty: with scm.token the chart creates
+  # <fullname>-demo-git-token, a labelled copy of the token; else "github-token".
   secretRef:
     name: ""
   git:
@@ -689,7 +722,7 @@ serviceMonitor:
 #
 # Example (kube-prometheus-stack):
 #   helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
-#     --namespace kardinal-system --create-namespace --set github.secretRef.name=github-token \
+#     --namespace kardinal-system --create-namespace --set scm.secretRef.name=github-token \
 #     --set grafanaDashboard.enabled=true \
 #     --set 'grafanaDashboard.sidecarLabel.grafana_dashboard=1'
 grafanaDashboard:

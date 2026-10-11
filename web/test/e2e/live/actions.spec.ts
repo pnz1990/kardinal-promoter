@@ -14,15 +14,17 @@
 // rolled back.
 
 import { test, expect, type Page } from '@playwright/test'
-import { need, openPipeline, dagNode, filterSidebar, sidebarRow, PIPELINE } from './live'
+import { need, openPipeline, station, filterSidebar, sidebarRow, PIPELINE, stageDrawer, drawerHeading } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
 const action = need('KARDINAL_UI_ACTION')
 
 const toolbar = (page: Page) => page.getByRole('toolbar', { name: 'Pipeline actions' })
-const lane = (page: Page) => page.getByLabel('Pipeline stages')
-const pausedHeader = (page: Page) => page.getByText('⏸ PAUSED — no new promotions')
+/** The station map: its quiet actions under each station replace the stage lane's (U2). */
+const lane = (page: Page) => page.locator('.station-map')
+/** The map's paused band (the header's state also says Paused). */
+const pausedHeader = (page: Page) => page.getByRole('status').filter({ hasText: 'Paused · no new promotions' })
 /** The sidebar's PAUSED badge on this test's pipeline. */
 async function sidebarBadge(page: Page) {
   await filterSidebar(page, ns)
@@ -66,52 +68,61 @@ const steps: Record<string, () => void> = {
     await expect(await sidebarBadge(page)).toHaveCount(0)
   }),
 
-  promote: () => test('Promote in the stage lane asks first, then starts a promotion to prod', async ({ page }) => {
+  promote: () => test('Promote under the prod station asks first, then starts a promotion to prod', async ({ page }) => {
     await openPipeline(page, base, ns)
-    await expect(dagNode(page, 'test')).toHaveAttribute('aria-label', 'test — Live')
-    await expect(dagNode(page, 'prod')).toHaveAttribute('aria-label', 'prod — Not reached')
+    await expect(station(page, 'test')).toHaveAttribute('aria-label', /^test — Live, /)
+    await expect(station(page, 'prod')).toHaveAttribute('aria-label', /^prod — Not reached, /)
     // test is the first environment: CI starts it, so it has no Promote.
     await expect(lane(page).getByRole('button', { name: 'Promote to test' })).toHaveCount(0)
 
-    // The node details offer the same action, and none for test.
-    const detail = page.getByTestId('node-detail')
-    await dagNode(page, 'test').click()
-    await expect(detail).toContainText('Environment: test')
-    await expect(detail.getByRole('button', { name: /^Promote to / })).toHaveCount(0)
-    await dagNode(page, 'prod').click()
-    await expect(detail).toContainText('Environment: prod')
-    await expect(detail.getByRole('button', { name: 'Promote to prod' })).toBeVisible()
-    await expect(detail.getByRole('button', { name: 'Roll back prod' })).toHaveCount(0)
-    await detail.getByRole('button', { name: 'Close' }).click()
+    // The stage drawer offers the same action, and none for test.
+    const detail = stageDrawer(page)
+    await station(page, 'test').click()
+    await expect(drawerHeading(page)).toHaveText('test')
+    await expect(detail.locator('[data-action="promote"]')).toHaveCount(0)
+    // The drawer takes its column, so the map refits under the pointer: move it away first.
+    await page.mouse.move(0, 0)
+    await station(page, 'prod').click()
+    await expect(drawerHeading(page)).toHaveText('prod')
+    await expect(detail.locator('[data-action="promote"]')).toHaveText('Promote')
+    await detail.getByRole('button', { name: 'Close prod' }).click()
     await expect(detail).toHaveCount(0)
 
-    // Cancel creates nothing (the Go test checks).
+    // Cancel creates nothing (the Go test checks). The map offers the action under the station in focus.
+    await station(page, 'prod').focus()
     await lane(page).getByRole('button', { name: 'Promote to prod' }).click()
     await page.getByRole('dialog', { name: `Promote ${PIPELINE} to prod?` }).getByRole('button', { name: 'Cancel' }).click()
     await expect(page.getByRole('dialog')).toHaveCount(0)
 
+    await station(page, 'prod').focus()
     await lane(page).getByRole('button', { name: 'Promote to prod' }).click()
     const dialog = page.getByRole('dialog', { name: `Promote ${PIPELINE} to prod?` })
-    await expect(dialog).toHaveAccessibleDescription(`Creates a new bundle for ${PIPELINE} that targets prod. Its progress shows in the bundle timeline.`)
+    await expect(dialog).toHaveAccessibleDescription(`Starts a new promotion of ${PIPELINE} to prod. Its progress shows on the map.`)
     await dialog.getByRole('button', { name: 'Promote to prod' }).click()
     await expect(dialog).toHaveCount(0)
-    await expect(page.getByRole('status').filter({ hasText: 'Promotion started' })).toHaveText(/^Promotion started: bundle podinfo-[a-z0-9-]+$/)
+    await expect(page.getByRole('status').filter({ hasText: 'Promotion started' })).toHaveText(/^Promotion started: version podinfo-[a-z0-9-]+$/)
   }),
 
-  rollback: () => test('Roll back in the node details asks first, then rolls prod back', async ({ page }) => {
+  rollback: () => test('Roll back in the stage drawer asks first, then rolls prod back', async ({ page }) => {
     await openPipeline(page, base, ns)
-    await expect(dagNode(page, 'prod')).toHaveAttribute('aria-label', 'prod — Live')
-    // The stage lane offers the same action.
+    await expect(station(page, 'prod')).toHaveAttribute('aria-label', /^prod — Live, /)
+    // The map offers the same action under the station in focus.
+    await station(page, 'prod').focus()
     await expect(lane(page).getByRole('button', { name: 'Roll back prod' })).toBeVisible()
 
-    await dagNode(page, 'prod').click()
-    const detail = page.getByTestId('node-detail')
-    await detail.getByRole('button', { name: 'Roll back prod' }).click()
-    const dialog = page.getByRole('dialog', { name: 'Roll back prod?' })
-    await expect(dialog).toHaveAccessibleDescription(`Creates a rollback bundle that returns prod to the previous verified version of ${PIPELINE}.`)
-    await dialog.getByRole('button', { name: 'Roll back prod' }).click()
+    await station(page, 'prod').click()
+    const detail = stageDrawer(page)
+    await detail.locator('[data-action="rollback"]').click()
+    // The drawer offers the versions Verified in prod; the one before is first.
+    const dialog = page.getByRole('dialog', { name: /^Roll prod back to .+\?$/ })
+    await expect(dialog).toHaveAccessibleDescription(/^A new promotion deploys .+ \([a-z0-9-]+\) to prod\.$/)
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
     await expect(dialog).toHaveCount(0)
-    await expect(detail.getByRole('status').filter({ hasText: 'Rollback started' })).toHaveText(/^Rollback started: bundle [a-z0-9-]+$/)
+    await detail.locator('[data-action="rollback"]').click()
+    await dialog.getByRole('button', { name: 'Roll back' }).click()
+    await expect(dialog).toHaveCount(0)
+    await expect(detail.getByRole('status').filter({ hasText: 'Rolled back' }))
+      .toHaveText(/^Rolled back\. rollback started — rolling prod back to [a-z0-9-]+$/)
   }),
 }
 

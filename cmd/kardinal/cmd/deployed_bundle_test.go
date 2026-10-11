@@ -80,17 +80,17 @@ func TestExplain_BundleColumnAndDeployed(t *testing.T) {
 
 	lines := strings.Split(strings.TrimSpace(table), "\n")
 	require.Len(t, lines, 5, out)
-	assert.Regexp(t, `^ENVIRONMENT +BUNDLE +TYPE +NAME +STATE +EXPRESSION +REASON$`, lines[0])
+	assert.Regexp(t, `^ENVIRONMENT +VERSION +TYPE +NAME +STATE +EXPRESSION +REASON$`, lines[0])
 	for _, l := range lines[1:] {
-		assert.Equal(t, "b2", strings.Fields(l)[1], "row names the current Bundle: %q", l)
+		assert.Equal(t, []string{"2.0", "(b2)"}, strings.Fields(l)[1:3], "row names the current version and its Bundle: %q", l)
 	}
 
 	// test: b2 landed, no line. uat: b2 waits for merge, b1 still runs.
 	// prod: b2 has not reached it. canary: nothing landed yet.
 	assert.Equal(t, []string{
 		"canary   deployed: none",
-		"prod     deployed: b1 (1.0)",
-		"uat      deployed: b1 (1.0)",
+		"prod     deployed: 1.0 (b1)",
+		"uat      deployed: 1.0 (b1)",
 	}, strings.Split(strings.TrimSpace(deployed), "\n"))
 
 	out, err = runExplain(t, policyClient(t, deployedFixture()...), "demo", "test", false)
@@ -98,34 +98,26 @@ func TestExplain_BundleColumnAndDeployed(t *testing.T) {
 	assert.NotContains(t, out, "deployed:", "b2 landed in test")
 	out, err = runExplain(t, policyClient(t, deployedFixture()...), "demo", "prod", false)
 	require.NoError(t, err)
-	assert.Contains(t, out, "\n\nprod   deployed: b1 (1.0)\n")
+	assert.Contains(t, out, "\n\nprod   deployed: 1.0 (b1)\n")
 	assert.NotContains(t, out, "uat")
 
-	// Color only touches the STATE cell; the BUNDLE column does not shift it.
+	// Color only touches the STATE cell; the VERSION column does not shift it.
 	out, err = runExplain(t, policyClient(t, deployedFixture()...), "demo", "prod", true)
 	require.NoError(t, err)
-	assert.Regexp(t, regexp.MustCompile(`prod +b2 +PolicyGate +no-weekend-deploys +\x1b\[[0-9;]*mNot ready\x1b\[0m`), out)
+	assert.Regexp(t, regexp.MustCompile(`prod +2\.0 \(b2\) +PolicyGate +no-weekend-deploys +\x1b\[[0-9;]*mNot ready\x1b\[0m`), out)
 }
 
-// status names the Bundle of every step row and lists the Bundle deployed in
-// every environment, including ones the active Bundle has not reached.
-func TestStatusPipelineWriter_BundleColumnAndDeployed(t *testing.T) {
+// status lists what runs in every environment, including ones the newest
+// Bundle has not reached, and the Bundle on its way in.
+func TestStatusPipelineWriter_RunningAndIncoming(t *testing.T) {
 	out := runStatusPipeline(t, deployedFixture()...)
-	assert.Regexp(t, `\nENVIRONMENT +REGION +BUNDLE +STATE +ACTIVE STEP +PR +AGE\n`, out)
-	assert.Regexp(t, `\n  test +- +b2 +Live`, out)
-	assert.Regexp(t, `\n▶ uat +- +b2 +Waiting for PR merge`, out)
+	assert.Equal(t, []map[string]string{
+		{"ENVIRONMENT": "test", "RUNNING": "2.0 (b2)", "INCOMING": "-", "STATE": "Live", "SINCE": "-", "PR": "-"},
+		{"ENVIRONMENT": "uat", "RUNNING": "1.0 (b1)", "INCOMING": "2.0 (b2)", "STATE": "Waiting for PR merge", "SINCE": "-", "PR": "-"},
+		{"ENVIRONMENT": "prod", "RUNNING": "1.0 (b1)", "INCOMING": "-", "STATE": "Live", "SINCE": "-", "PR": "-"},
+		{"ENVIRONMENT": "canary", "RUNNING": "-", "INCOMING": "-", "STATE": "-", "SINCE": "-", "PR": "-"},
+	}, statusRows(t, out), out)
 	assertNoRawStates(t, out)
-
-	_, deployed, ok := strings.Cut(out, "\nDeployed\n")
-	require.True(t, ok, out)
-	assert.Equal(t, []string{
-		strings.Repeat("─", 72),
-		"ENVIRONMENT  BUNDLE",
-		"canary       none",
-		"prod         b1 (1.0)",
-		"test         b2 (2.0)",
-		"uat          b1 (1.0)",
-	}, strings.Split(strings.TrimSpace(deployed), "\n"))
 }
 
 // mixedDeployedFixture: in prod the image Bundle i1 (tag 1.0) landed, then the
@@ -160,23 +152,18 @@ func mixedDeployedFixture() []sigs_client.Object {
 }
 
 // With a Verified image Bundle and a Verified config Bundle in one
-// environment, status and explain name both: the newest one that landed, and
-// where the rest of what runs there came from (#1353).
+// environment, explain names both: the newest one that landed, and where the
+// rest of what runs there came from (#1353). status names the newest one.
 func TestDeployed_ImageAndConfigBundles(t *testing.T) {
 	out := runStatusPipeline(t, mixedDeployedFixture()...)
-	_, deployed, ok := strings.Cut(out, "\nDeployed\n")
-	require.True(t, ok, out)
-	assert.Equal(t, []string{
-		strings.Repeat("─", 72),
-		"ENVIRONMENT  BUNDLE",
-		"prod         i2 (2.0); config abcdef0 from c1",
-		"test         i3 (3.0)",
-		"uat          i3 (3.0); config abcdef0 from c1",
-	}, strings.Split(strings.TrimSpace(deployed), "\n"))
+	rows := statusRows(t, out)
+	require.Len(t, rows, 3, out)
+	assert.Equal(t, "2.0 (i2)", rows[2]["RUNNING"], out)
+	assert.Equal(t, "3.0 (i3)", rows[2]["INCOMING"], out)
 
 	out, err := runExplain(t, policyClient(t, mixedDeployedFixture()...), "demo", "prod", false)
 	require.NoError(t, err)
-	assert.Contains(t, out, "\n\nprod   deployed: i2 (2.0); config abcdef0 from c1\n")
+	assert.Contains(t, out, "\n\nprod   deployed: 2.0 (i2); config abcdef0 from c1\n")
 }
 
 // A config Bundle that landed last names the image Bundle whose images still
@@ -188,8 +175,8 @@ func TestDeployedLabel_ConfigOverImages(t *testing.T) {
 	cfg := &v1alpha1.Bundle{Spec: v1alpha1.BundleSpec{Type: "config",
 		ConfigRef: &v1alpha1.ConfigRef{CommitSHA: "1111111bbbb"}}}
 	byName := map[string]*v1alpha1.Bundle{"m1": mixed, "c2": cfg}
-	assert.Equal(t, "c2 (config 1111111); images 1.5 from m1",
+	assert.Equal(t, "config 1111111 (c2); images 1.5 from m1",
 		deployedLabelOf(deployedEnv{bundle: "c2", imagesFrom: "m1"}, byName))
-	assert.Equal(t, "m1 (1.5, config 0000000)", deployedLabelOf(deployedEnv{bundle: "m1"}, byName))
+	assert.Equal(t, "1.5, config 0000000 (m1)", deployedLabelOf(deployedEnv{bundle: "m1"}, byName))
 	assert.Equal(t, "none", deployedLabelOf(deployedEnv{}, byName))
 }

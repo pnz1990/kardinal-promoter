@@ -41,7 +41,7 @@ spec:
           annotations:
             summary: "kardinal {{ "{{" }} $labels.controller {{ "}}" }} reconciler error rate is elevated"
             description: "The {{ "{{" }} $labels.controller {{ "}}" }} reconciler is failing at {{ "{{" }} $value | humanize {{ "}}" }} errors/s. Promotions may be stuck or failing silently."
-            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#promotion-is-stuck"
+            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshoot-promotions/#promotion-is-stuck"
 
         # BundleReconciler stalled: Bundles are queued but none were reconciled
         # for 10 minutes. (An idle cluster has an empty queue and does not fire.)
@@ -55,7 +55,7 @@ spec:
           annotations:
             summary: "kardinal BundleReconciler has not run in 10 minutes"
             description: "Bundles are queued but none were reconciled in the last 10 minutes. The controller may be stuck or leader election may be broken."
-            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#bundle-not-promoting"
+            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshoot-promotions/#bundle-not-promoting"
 
         # Work queue backlog — controller is falling behind
         - alert: KardinalWorkQueueBacklog
@@ -67,7 +67,7 @@ spec:
           annotations:
             summary: "kardinal {{ "{{" }} $labels.name {{ "}}" }} work queue depth > 100"
             description: "The {{ "{{" }} $labels.name {{ "}}" }} work queue has {{ "{{" }} $value | humanize {{ "}}" }} items pending for more than 5 minutes. Controller may be overloaded."
-            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#graph-controller-issues"
+            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshoot-promotions/#graph-controller-issues"
 
         # PolicyGate reconciler slow — gates may be blocking promotions with stale evaluations
         - alert: KardinalPolicyGateReconcileSlow
@@ -81,5 +81,5 @@ spec:
           annotations:
             summary: "kardinal PolicyGate reconcile P99 latency is above 10s"
             description: "PolicyGate reconciles are taking more than 10s at P99. Gates may be stale and blocking or unblocking promotions late."
-            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#promotion-is-stuck"
+            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshoot-promotions/#promotion-is-stuck"
 {{- end }}

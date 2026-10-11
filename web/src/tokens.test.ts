@@ -108,8 +108,8 @@ describe('design tokens', () => {
     expect(total).toBeLessThanOrEqual(180 * 1024)
   })
 
-  it('docs/stylesheets/kardinal.css maps to tokens and holds no literal colour or length', () => {
-    const css = read('docs/stylesheets/kardinal.css').replace(/\/\*[\s\S]*?\*\//g, '')
+  it.each(fs.readdirSync(path.join(ROOT, 'docs/stylesheets')).filter((f) => f.endsWith('.css') && f !== 'tokens.css'))('docs/stylesheets/%s maps to tokens and holds no literal colour or length', (f) => {
+    const css = read(path.join('docs/stylesheets', f)).replace(/\/\*[\s\S]*?\*\//g, '')
     expect(css).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
     expect(css).not.toMatch(/\b(rgba?|hsla?|oklch)\(/)
     expect(css).not.toMatch(/\d(px|rem)\b/)

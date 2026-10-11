@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -39,7 +40,7 @@ import (
 
 // hintClient is the client the error hints read the cluster with
 // (buildClient); a test replaces it.
-var hintClient = buildClient
+var hintClient = func() (sigs_client.Client, string, error) { return buildClient() }
 
 // installHint is the command that installs kardinal-promoter.
 const installHint = "helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter -n kardinal-system --create-namespace"
@@ -63,10 +64,13 @@ func HumanError(err error) error {
 	case isNoMatch(err):
 		return noMatchError(err)
 	case apierrors.IsForbidden(err):
+		if denied := admissionDenial(err); denied != nil {
+			return denied
+		}
 		return forbiddenError(err)
 	case isUnreachable(err):
-		return fmt.Errorf("cannot reach the API server for context %s%s.\n"+
-			"Check: kubectl cluster-info%s, or pass --context", contextLabel(), serverLabel(), contextFlag())
+		return fmt.Errorf("cannot reach the API server for context %s%s: %s.\n"+
+			"Check: kubectl cluster-info%s, or pass --context", contextLabel(), serverLabel(), unreachableCause(err), contextFlag())
 	}
 	if name, ok := notFoundPipeline(err); ok {
 		c, ns, cerr := hintClient()
@@ -139,6 +143,47 @@ func isUnreachable(err error) bool {
 		}
 	}
 	return false
+}
+
+// unreachableCause is why the API server could not be reached: the
+// network error's own words ("connection refused", "no such host", "i/o
+// timeout").
+func unreachableCause(err error) string {
+	var op *net.OpError
+	if errors.As(err, &op) && op.Err != nil {
+		return op.Err.Error()
+	}
+	msg := err.Error()
+	for _, s := range []string{"connection refused", "no such host", "i/o timeout", "network is unreachable"} {
+		if strings.Contains(msg, s) {
+			return s
+		}
+	}
+	return msg
+}
+
+// admissionRE parses a ValidatingAdmissionPolicy or webhook denial, which
+// the API server reports as Forbidden. The message may span lines, and a
+// webhook may deny "without explanation".
+var admissionRE = regexp.MustCompile(`(?s)(?:ValidatingAdmissionPolicy '([^']+)' with binding '[^']*' denied request|admission webhook "([^"]+)" denied the request)(?:: (.*)| without explanation)`)
+
+// admissionDenial is the error for a request an admission policy (the
+// chart's identity, hold-writes or scoped-writes policies) refused: its
+// message says what is wrong, so it is shown instead of a role hint, whole.
+// nil when err is an RBAC refusal.
+func admissionDenial(err error) error {
+	m := admissionRE.FindStringSubmatch(err.Error())
+	if m == nil {
+		return nil
+	}
+	policy := m[1]
+	if policy == "" {
+		policy = m[2]
+	}
+	if msg := strings.TrimSpace(m[3]); msg != "" {
+		return fmt.Errorf("the cluster's admission policy %s refused the request: %s", policy, msg)
+	}
+	return fmt.Errorf("the cluster's admission policy %s refused the request, and said no more; ask your cluster admin", policy)
 }
 
 // forbiddenRE parses the API server's Forbidden message.
@@ -289,13 +334,27 @@ func contextLabel() string {
 	return fmt.Sprintf("%q", raw.CurrentContext)
 }
 
-// serverLabel is " (<server URL>)" of the context in use, or "".
+// serverLabel is " (<server URL>)" of the context in use, without any
+// password it holds, or "".
 func serverLabel() string {
 	cfg, _, err := buildRestConfig()
 	if err != nil || cfg.Host == "" {
 		return ""
 	}
-	return " (" + cfg.Host + ")"
+	return " (" + redactedHost(cfg.Host) + ")"
+}
+
+// redactedHost is a server URL with the password of its userinfo replaced
+// by "xxxxx" (url.URL.Redacted); a host without a scheme loses its userinfo
+// whole.
+func redactedHost(host string) string {
+	if u, err := url.Parse(host); err == nil && u.Scheme != "" && u.Host != "" {
+		return u.Redacted()
+	}
+	if at := strings.LastIndex(host, "@"); at >= 0 {
+		return host[at+1:]
+	}
+	return host
 }
 
 // contextFlag is the --kubeconfig and --context the user passed, for the

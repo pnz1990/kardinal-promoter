@@ -5,7 +5,7 @@
 // two clicks from Approve: its station opens the drawer, "why it's waiting"
 // comes first and names the approval gate with its message and age, and its
 // Approve asks before it records. Esc closes the dialog, then the drawer;
-// the URL carries node=<env>, so Back and a reload reopen it. WCAG 2.1 AA
+// the URL carries its environment (#/p/<ns>/<pipeline>/env/<env>), so Back and a reload reopen it. WCAG 2.1 AA
 // holds in both themes with the drawer and its dialog open.
 
 import { test, expect, type Page } from '@playwright/test'
@@ -25,7 +25,7 @@ test.describe('Journey 019 — Stage drawer', () => {
     await page.getByRole('button', { name: /^payments-service prod:/ }).click(); clicks++
     const drawer = page.getByTestId('stage-drawer')
     await expect(drawer).toBeVisible()
-    await expect(page).toHaveURL(/node=prod/)
+    await expect(page).toHaveURL(/\/env\/prod/)
     // At lg and wider the drawer sits beside the page: the page gives up its column.
     const reserved = await page.evaluate(() => {
       const main = document.getElementById('main-content') as HTMLElement
@@ -68,7 +68,7 @@ test.describe('Journey 019 — Stage drawer', () => {
     await expect(drawer.locator('[data-action="reject"]')).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(drawer).toBeHidden()
-    await expect(page).not.toHaveURL(/node=/)
+    await expect(page).not.toHaveURL(/\/env\//)
     await page.goBack()
     await expect(page.getByTestId('stage-drawer')).toBeVisible()
     await page.reload()
@@ -84,6 +84,12 @@ test.describe('Journey 019 — Stage drawer', () => {
     await expect(details).not.toHaveAttribute('open', '')
     await page.emulateMedia({ colorScheme: 'dark' })
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))
+    // Let the theme's colour transitions finish: axe mid-transition reads a colour between
+    // the two themes (a flaky contrast failure on the fleet health total, not a real one).
+    // Only the finite ones: the map's thread and promoting arc run forever.
+    await page.evaluate(() => Promise.all(document.getAnimations()
+      .filter(a => a.effect?.getTiming().iterations !== Infinity)
+      .map(a => a.finished.catch(() => undefined))))
     await axe(page)
 
     await page.setViewportSize({ width: 390, height: 844 })

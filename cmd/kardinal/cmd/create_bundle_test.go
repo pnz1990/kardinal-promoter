@@ -167,15 +167,15 @@ func TestCreateBundle_DryRun_EnvironmentsInPromotionOrder(t *testing.T) {
 			envs: []v1alpha1.EnvironmentSpec{
 				{Name: "test"}, {Name: "uat", DependsOn: []string{"test"}}, {Name: "prod", DependsOn: []string{"uat"}},
 			},
-			want: "  • test\n  • uat\n  • prod\n"},
+			want: "  * test\n  * uat\n  * prod\n"},
 		{name: "dependsOn declared out of order",
 			envs: []v1alpha1.EnvironmentSpec{
 				{Name: "test"}, {Name: "prod", DependsOn: []string{"uat"}}, {Name: "uat", DependsOn: []string{"test"}},
 			},
-			want: "  • test\n  • uat\n  • prod\n"},
+			want: "  * test\n  * uat\n  * prod\n"},
 		{name: "waves declared out of order",
 			envs: []v1alpha1.EnvironmentSpec{{Name: "prod", Wave: 2}, {Name: "test", Wave: 1}},
-			want: "  • test\n  • prod\n"},
+			want: "  * test\n  * prod\n"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -220,7 +220,7 @@ func TestCreateBundle_DryRun_DemoPipelinesListEveryEnvironment(t *testing.T) {
 			lines := strings.Split(list, "\n")
 			require.Len(t, lines, len(pipe.Spec.Environments), buf.String())
 			for _, env := range pipe.Spec.Environments {
-				assert.Contains(t, buf.String(), "  • "+env.Name, buf.String())
+				assert.Contains(t, buf.String(), "  * "+env.Name, buf.String())
 			}
 		})
 	}
@@ -442,9 +442,9 @@ func TestCreateBundle_DryRun_ListsEnvironmentsAndGates(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, createBundleDryRun(&buf, c, "default", "demo", createBundleOptions{Images: []string{"ghcr.io/org/app:sha-abc1234"}, Type: "image"}))
 	assert.Contains(t, buf.String(), "Environments in promotion order:\n"+
-		"  • test\n"+
-		"  • uat (gates: team-soak)\n"+
-		"  • prod (gates: no-weekend-deploys)\n", buf.String())
+		"  * test\n"+
+		"  * uat (gates: team-soak)\n"+
+		"  * prod (gates: no-weekend-deploys)\n", buf.String())
 }
 
 // TestCreateBundle_DryRun_CompactShape: the dry run uses the controller's

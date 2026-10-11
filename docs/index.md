@@ -1,121 +1,83 @@
-<div align="center" markdown>
-  ![Kardinal Promoter](assets/logo.png){ width="200" }
-</div>
+---
+template: home.html
+hide:
+  - navigation
+  - toc
+---
 
-# kardinal-promoter
+## What you write
 
-**GitOps promotion pipelines with visible policy gates and PR evidence.**
+One Pipeline per application. This one promotes through test and uat on its own, and opens a
+pull request for prod:
 
-kardinal-promoter is a Kubernetes-native controller that automates software promotion through environments (test → uat → prod) using a DAG of promotion steps, CEL-based policy gates, and structured PR evidence. All state lives in Kubernetes CRDs — no external database, no lock-in.
+```yaml
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: my-app
+spec:
+  git:
+    url: https://github.com/myorg/gitops-repo
+    secretRef: { name: github-token }
+  environments:
+    - name: test
+    - name: uat
+    - name: prod
+      approval: pr-review
+```
+
+By default each environment deploys the `environments/<name>` directory of the repository, and
+kardinal checks the Deployment `my-app` in the namespace `<name>`.
 
 <div class="grid cards" markdown>
 
--   :material-clock-fast:{ .lg .middle } **Get started in 5 minutes**
+-   :material-clock-fast:{ .lg .middle } **Try it in about 10 minutes**
 
     ---
 
-    Install kardinal-promoter, apply a Pipeline, create a Bundle, watch it promote.
+    A kind cluster, a sample repository and a first promotion.
 
     [:octicons-arrow-right-24: Quickstart](quickstart.md)
 
--   :material-shield-check:{ .lg .middle } **Policy gates**
+-   :material-shield-check:{ .lg .middle } **Gates you can read**
 
     ---
 
-    Block production deployments on weekends, require soak time, enforce team approvals — all in CEL.
+    Block weekends, require soak time, ask for approvers, read metrics, all in CEL.
+    `kardinal explain` says which gate holds a version and why.
 
-    [:octicons-arrow-right-24: Policy Gates](policy-gates.md)
+    [:octicons-arrow-right-24: Gate promotions](policy-gates.md)
 
--   :material-graph:{ .lg .middle } **DAG pipelines**
-
-    ---
-
-    Every promotion is a directed acyclic graph. Fan-out to parallel environments, gate on any condition.
-
-    [:octicons-arrow-right-24: Concepts](concepts.md)
-
--   :material-source-pull:{ .lg .middle } **PR evidence**
+-   :material-graph:{ .lg .middle } **Pipelines that fan out**
 
     ---
 
-    An environment with `approval: pr-review` promotes through a PR with structured evidence: image digest, CI run, gate results, upstream health checks.
+    Promote regions in parallel with `dependsOn` or waves, or many clusters with fleets.
 
-    [:octicons-arrow-right-24: PR Evidence](pr-evidence.md)
+    [:octicons-arrow-right-24: Design a pipeline](pipeline-reference.md)
+
+-   :material-source-pull:{ .lg .middle } **Pull requests with evidence**
+
+    ---
+
+    Provenance, gate results and upstream health in every production PR.
+
+    [:octicons-arrow-right-24: PR evidence](pr-evidence.md)
 
 </div>
 
-## Why kardinal-promoter?
-
-All three tools can promote through a DAG of environments. These rows show where kardinal differs from Kargo v1.12.1 and GitOps Promoter v0.42.1; the [comparison](comparison.md) has the full feature matrix.
-
-| Feature | kardinal | Kargo | GitOps Promoter |
-|---|---|---|---|
-| CEL policy gates with pipeline context (schedule, upstream soak, metrics, PR review, Bundle metadata) | ✅ | ❌ verification, soak and approval; no gate object | partial: expr-lang checks on commits and web responses |
-| Soak that resets on a health alarm (`bake`) | ✅ | ❌ elapsed only (`requiredSoakTime`) | ❌ elapsed only (`TimedCommitStatus`) |
-| Wave topology for multi-region rollouts | ✅ | ❌ | ❌ |
-| Structured PR evidence (provenance, gate results, upstream health) | ✅ | ❌ commit message, or a description you template | partial: commits, a diff link and the environment table |
-| DORA metrics built-in | ✅ | ❌ | ❌ on its roadmap |
-| Auto-rollback on health failure | ✅ | Enterprise only (beta) | ❌ |
-
-See [detailed comparison →](comparison.md)
-
-## Quick install
-
-kardinal-promoter runs on the upstream [kro](https://github.com/kubernetes-sigs/kro) Graph controller (v0.10.0-rc.0, `GraphKind` feature gate). Install kro first, then kardinal.
-
-```bash
-# 0. Install kro with the Graph feature gate (from a kardinal-promoter checkout)
-bash hack/install-kro.sh
-
-# 1. Create GitHub token secret
-kubectl create namespace kardinal-system
-kubectl create secret generic github-token \
-  --namespace kardinal-system \
-  --from-literal=token=$GITHUB_PAT
-
-# 2. Install kardinal-promoter
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
-  --namespace kardinal-system \
-  --create-namespace \
-  --set github.secretRef.name=github-token
-
-# 3. Install the CLI
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
-curl -Lo kardinal "https://github.com/pnz1990/kardinal-promoter/releases/download/v0.10.0/kardinal-${OS}-${ARCH}"
-chmod +x kardinal && sudo mv kardinal /usr/local/bin/
-
-# 4. Verify
-kardinal version
-```
-
-See [Installation](installation.md) for full prerequisites and configuration.
-
 ## How it works
 
-```mermaid
-graph LR
-    CI["CI pushes image"] --> Bundle["Bundle CRD created"]
-    Bundle --> Graph["kro Graph\n(promotion DAG)"]
-    Graph --> Test["test\nauto-promote"]
-    Test --> UAT["uat\nauto-promote"]
-    UAT --> Gate["PolicyGate\nCEL expression"]
-    Gate --> Prod["prod\nPR required"]
-    Prod --> Done["Verified ✅"]
-```
+1. **CI creates a version** with the new image and where it came from.
+2. **Each environment in turn** gets the version written to Git (directly, or through a pull
+   request), and kardinal checks its health.
+3. **Gates hold the version** out of an environment until their rules pass.
+4. **A pull request** is opened for review where an environment uses `approval: pr-review`, with
+   the evidence in its body.
 
-1. **CI creates a Bundle** with the new image reference and provenance
-2. **The controller translates** the Bundle + Pipeline into a kro DAG Graph
-3. **The Graph advances** through environments, running steps (image update → PR → health check)
-4. **PolicyGates block** or allow promotion based on CEL expressions
-5. **A PR is opened** for human review at `approval: pr-review` environments, with full evidence
-
-## Key concepts
-
-- **[Version](concepts.md#version)** — an immutable snapshot of what to deploy, created by CI
-- **[Pipeline](concepts.md#pipeline-and-environments)** — the environments a version moves through, in order
-- **[Gate](concepts.md#gates)** — a CEL expression that holds a version out of an environment
-- **[Promotion step](concepts.md#promotion-steps)** — the promotion of one version into one environment
+Start with the [Quickstart](quickstart.md), then [Concepts](concepts.md), which explains the four
+words this needs: version, pipeline, environment and gate. To install, see [Install](installation.md). To compare with Kargo and GitOps Promoter, see
+the [comparison](comparison.md).
 
 ## Community
 

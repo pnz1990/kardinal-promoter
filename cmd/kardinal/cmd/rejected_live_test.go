@@ -74,9 +74,11 @@ func TestCurrentBundleByEnv_RejectedLive(t *testing.T) {
 // is live, with a roll-back hint per environment.
 func TestStatus_RejectedLive(t *testing.T) {
 	out := runStatusPipeline(t, rejectedLiveObjects()...)
-	assert.Regexp(t, `\n  test +- +b2 +Live`, out)
-	assert.Regexp(t, `\n  uat +- +b1 +Live`, out)
-	assert.Regexp(t, `\n▶ prod +- +b2 +Checking health`, out)
+	rows := statusRows(t, out)
+	require.Len(t, rows, 3, out)
+	assert.Equal(t, []string{"b2", "Live"}, []string{rows[0]["RUNNING"], rows[0]["STATE"]}, out)
+	assert.Equal(t, []string{"b1", "Live"}, []string{rows[1]["RUNNING"], rows[1]["STATE"]}, out)
+	assert.Equal(t, []string{"b2", "Checking health"}, []string{rows[2]["RUNNING"], rows[2]["STATE"]}, out)
 	assert.Contains(t, out, hintTest)
 	assert.Contains(t, out, hintProd)
 }

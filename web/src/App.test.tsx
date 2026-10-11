@@ -77,6 +77,11 @@ async function flush(ms = 50) {
   await act(async () => { await vi.advanceTimersByTimeAsync(ms) })
 }
 const lastGraphCall = () => h.api.getGraph.mock.calls.at(-1)?.[0]
+/** Opens the pipeline page's Activity tab (the version's gates and failures). */
+async function openGates() {
+  fireEvent.click(screen.getByRole('tab', { name: /^Activity/ }))
+  await flush()
+}
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true })
@@ -103,7 +108,7 @@ describe('App bundle selection', () => {
     await flush()
     expect(screen.getAllByText('env-of-b-new').length).toBeGreaterThan(0)
 
-    fireEvent.click(screen.getByTitle(/^b-old: Superseded/))
+    fireEvent.click(screen.getByTitle(/^b-old: Replaced by newer version/))
     await flush()
     expect(screen.getAllByText('env-of-b-old').length).toBeGreaterThan(0)
 
@@ -113,22 +118,48 @@ describe('App bundle selection', () => {
     expect(lastGraphCall()).toBe('b-old')
     expect(screen.getAllByText('env-of-b-old').length).toBeGreaterThan(0)
     expect(screen.queryAllByText('env-of-b-new')).toHaveLength(0)
-    expect(screen.getByTitle(/^b-old: Superseded/).className).toContain('bundle-chip--selected')
+    expect(screen.getByTitle(/^b-old: Replaced by newer version/).className).toContain('bundle-chip--selected')
     expect(screen.getByTitle(/^b-new: Promoting/).className).not.toContain('bundle-chip--selected')
   })
 
-  it('falls back to the default bundle when the selected bundle disappears', async () => {
+  it('says the selected version is gone, never showing another one silently, and links to the current one', async () => {
     render(<App />)
     await flush()
-    fireEvent.click(screen.getByTitle(/^b-old: Superseded/))
+    fireEvent.click(screen.getByTitle(/^b-old: Replaced by newer version/))
     await flush()
     expect(lastGraphCall()).toBe('b-old')
 
     h.state.bundles = { app: [bundle('b-new', 'Promoting', 1)] }
     await flush(5_100)
+    expect(screen.getByRole('heading', { name: 'No version b-old in app' })).toBeInTheDocument()
+    expect(screen.queryByText('env-of-b-new')).not.toBeInTheDocument()
+    expect(screen.queryByRole('tablist', { name: 'Pipeline views' })).not.toBeInTheDocument()
+
+    const back = screen.getByRole('link', { name: 'Show the current version of app' })
+    expect(back).toHaveAttribute('href', '#/p/default/app')
+    await act(async () => {
+      window.history.pushState(null, '', back.getAttribute('href')!)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    await flush()
     expect(lastGraphCall()).toBe('b-new')
     expect(screen.getAllByText('env-of-b-new').length).toBeGreaterThan(0)
-    expect(screen.getByTitle(/^b-new: Promoting/).className).toContain('bundle-chip--selected')
+  })
+
+  it('says a pipeline the cluster does not have is not found, with a link to all pipelines', async () => {
+    window.history.replaceState(null, '', '/ui/#/p/default/nope')
+    render(<App />)
+    await flush()
+    expect(screen.getByRole('heading', { name: 'No pipeline named nope in default' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Back to all pipelines' })).toHaveAttribute('href', '#/')
+  })
+
+  it('says a version link to a version the pipeline does not have is not found', async () => {
+    window.history.replaceState(null, '', '/ui/#/p/default/app/v/b-gone')
+    render(<App />)
+    await flush()
+    expect(screen.getByRole('heading', { name: 'No version b-gone in app' })).toBeInTheDocument()
+    expect(screen.queryByRole('tablist', { name: 'Pipeline views' })).not.toBeInTheDocument()
   })
 
   it('shows the pipeline active bundle, not the first bundle in API order', async () => {
@@ -185,6 +216,75 @@ describe('App bundle selection', () => {
   })
 })
 
+describe('App pipeline header', () => {
+  it('puts Pause next to Ship a version, and makes Resume the primary action while paused', async () => {
+    render(<App />)
+    await flush()
+    const pause = screen.getByRole('button', { name: 'Pause pipeline' })
+    const ship = screen.getByRole('button', { name: 'Ship a version of app' })
+    expect(pause.closest('.app-pipeline-head__actions')).toBe(ship.closest('.app-pipeline-head__actions'))
+    expect(ship.className).toContain('k-button--primary')
+    expect(pause.className).toContain('k-button--secondary')
+  })
+
+  it('while paused, Resume is primary and Ship a version is secondary', async () => {
+    h.state.pipelines = [pipeline('app', { phase: 'Ready', activeBundleName: 'b-new', paused: true })]
+    render(<App />)
+    await flush()
+    expect(screen.getByRole('button', { name: 'Resume pipeline' }).className).toContain('k-button--primary')
+    expect(screen.getByRole('button', { name: 'Ship a version of app' }).className).toContain('k-button--secondary')
+  })
+
+  it('shows Map, Versions, Activity and Metrics, and every tab controls a panel in the page', async () => {
+    render(<App />)
+    await flush()
+    const tabs = screen.getAllByRole('tab')
+    expect(tabs.map(t => t.textContent?.replace(/\d+$/, ''))).toEqual(['Map', 'Versions', 'Activity', 'Metrics'])
+    for (const t of tabs) expect(document.getElementById(t.getAttribute('aria-controls')!)).not.toBeNull()
+  })
+
+  it('has a visible ? control that opens help and the keyboard shortcuts', async () => {
+    render(<App />)
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: 'Help and keyboard shortcuts' }))
+    const dialog = screen.getByRole('dialog', { name: 'Keyboard shortcuts' })
+    expect(within(dialog).getByRole('link', { name: 'Concepts' })).toHaveAttribute('href', 'https://pnz1990.github.io/kardinal-promoter/concepts/')
+  })
+
+  it('a failed read of the versions shows its error, not Ship your first version, and one primary Ship button', async () => {
+    h.state.pipelines = [pipeline('app', { phase: 'Promoting', activeBundleName: 'b-new', environmentTopology: [{ name: 'test' }] } as Partial<Pipeline>)]
+    h.api.listBundles.mockRejectedValueOnce(new Error('API error 503: Service Unavailable'))
+    render(<App />)
+    await flush()
+    expect(screen.getByText('API error 503: Service Unavailable')).toBeInTheDocument()
+    expect(screen.queryByTestId('first-version')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ship a version of app' }).className).toContain('k-button--primary')
+  })
+
+  it('an empty pipeline offers Ship your first version, which opens the ship dialog', async () => {
+    h.state.pipelines = [pipeline('app', { phase: 'Unknown', activeBundleName: undefined, environmentTopology: [{ name: 'test' }, { name: 'prod' }] } as Partial<Pipeline>)]
+    h.state.bundles = { app: [] }
+    render(<App />)
+    await flush()
+    // The map shows the pipeline's environments, none reached yet.
+    expect(document.querySelector('.station-map [data-station="test"]')?.getAttribute('aria-label')).toMatch(/^test — Not reached/)
+    expect(document.querySelector('.station-map [data-station="prod"]')).toBeInTheDocument()
+    // One primary action: the call to action; the header's Ship a version steps back.
+    expect(screen.getByRole('button', { name: 'Ship a version of app' }).className).toContain('k-button--secondary')
+    fireEvent.click(screen.getByRole('button', { name: 'Ship your first version of app' }))
+    expect(screen.getByRole('dialog', { name: 'Ship a version of app' })).toBeInTheDocument()
+  })
+
+  it('reads the summary sentence, with the version and its provenance as one line under the title', async () => {
+    h.state.pipelines = [pipeline('app', { phase: 'Ready', activeBundleName: 'b-new', summary: 'b-new is promoting to prod.' })]
+    render(<App />)
+    await flush()
+    const line = screen.getByText('b-new is promoting to prod.').closest('p')!
+    expect(line).toHaveClass('app-pipeline-head__summary')
+    expect(line).toHaveTextContent(/Version b-new/)
+  })
+})
+
 describe('App pipeline selection', () => {
   it('pushes a single history entry when a pipeline is selected', async () => {
     // A node is open on the current pipeline; switching pipelines must clear it
@@ -199,7 +299,7 @@ describe('App pipeline selection', () => {
     fireEvent.click(within(list).getByText('beta').closest('button')!)
     await flush()
     expect(push).toHaveBeenCalledTimes(1)
-    expect(window.location.hash).toBe('#pipeline=beta&ns=default')
+    expect(window.location.hash).toBe('#/p/default/beta')
     push.mockRestore()
   })
 
@@ -284,8 +384,8 @@ describe('App pipeline selection', () => {
 // #338: Shift-click picks the bundle to compare; the timeline then offers
 // Compare (opens the comparison, bundle= in the URL) and clear.
 describe('App bundle comparison', () => {
-  const dialog = () => screen.queryByRole('dialog', { name: 'Bundle comparison' })
-  const oldChip = () => screen.getByTitle(/^b-old: Superseded/)
+  const dialog = () => screen.queryByRole('dialog', { name: 'Version comparison' })
+  const oldChip = () => screen.getByTitle(/^b-old: Replaced by newer version/)
 
   it('leaves Compare and clear reachable after a shift-click, and Compare opens the comparison', async () => {
     render(<App />)
@@ -294,7 +394,7 @@ describe('App bundle comparison', () => {
     await flush()
     expect(oldChip().className).toContain('bundle-chip--compare')
     expect(dialog()).not.toBeInTheDocument()
-    expect(window.location.hash).not.toContain('bundle=')
+    expect(window.location.hash).not.toContain('compare=')
 
     // Compare opens the comparison and moves focus into it.
     const compare = screen.getByRole('button', { name: 'Compare ↔' })
@@ -303,13 +403,13 @@ describe('App bundle comparison', () => {
     await flush()
     expect(dialog()).toBeInTheDocument()
     expect(dialog()).toContainElement(document.activeElement as HTMLElement)
-    expect(window.location.hash).toContain('bundle=b-old')
+    expect(window.location.hash).toContain('compare=b-old')
 
     // Closing it returns focus to Compare, which opens it again.
     fireEvent.click(within(dialog()!).getByRole('button', { name: 'Close' }))
     await flush()
     expect(dialog()).not.toBeInTheDocument()
-    expect(window.location.hash).not.toContain('bundle=')
+    expect(window.location.hash).not.toContain('compare=')
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Compare ↔' }))
     fireEvent.click(screen.getByRole('button', { name: 'Compare ↔' }))
     await flush()
@@ -323,10 +423,10 @@ describe('App bundle comparison', () => {
     await flush()
     expect(oldChip().className).not.toContain('bundle-chip--compare')
     expect(screen.queryByRole('button', { name: 'Compare ↔' })).not.toBeInTheDocument()
-    expect(screen.getByText('Shift-click to compare')).toBeInTheDocument()
+    expect(oldChip().title).toContain('Shift-click to compare')
   })
 
-  it('opens the comparison from a bundle= link', async () => {
+  it('opens the comparison from an old bundle= link (now compare=)', async () => {
     window.history.replaceState(null, '', '/ui/#pipeline=app&bundle=b-old')
     render(<App />)
     await flush()
@@ -334,7 +434,7 @@ describe('App bundle comparison', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     await flush()
     expect(dialog()).not.toBeInTheDocument()
-    expect(window.location.hash).not.toContain('bundle=')
+    expect(window.location.hash).not.toContain('compare=')
     // The linked bundle stays picked, as after Compare.
     expect(oldChip().className).toContain('bundle-chip--compare')
     expect(screen.getByRole('button', { name: 'Compare ↔' })).toBeInTheDocument()
@@ -352,7 +452,7 @@ describe('App bundle comparison', () => {
     await flush()
     expect(picked()).toHaveLength(0)
     expect(screen.queryByRole('button', { name: '× clear' })).not.toBeInTheDocument()
-    expect(screen.getByText('Shift-click to compare')).toBeInTheDocument()
+    expect(oldChip().title).toContain('Shift-click to compare')
     expect(newChip().getAttribute('title')).toBe('b-new: Promoting')
 
     // Showing Bundle B makes it Bundle A, and drops it as B.
@@ -389,8 +489,9 @@ describe('App insecure connection banner', () => {
   })
   const banners = () => screen.queryAllByText(/^Insecure connection — kardinal UI is accessed over plain HTTP\./)
 
+  // #/ is the fleet: without a route, the only pipeline would open.
   it('warns on the landing page', async () => {
-    at('http://10.0.0.1:30082/ui/')
+    at('http://10.0.0.1:30082/ui/#/')
     render(<App />)
     await flush()
     expect(screen.getByRole('heading', { level: 2, name: 'Fleet' })).toBeInTheDocument()
@@ -420,7 +521,7 @@ describe('App insecure connection banner', () => {
   })
 
   it('does not warn on the documented port-forward', async () => {
-    at('http://127.0.0.1:8082/ui/')
+    at('http://127.0.0.1:8082/ui/#/')
     render(<App />)
     await flush()
     expect(screen.getByRole('heading', { level: 2, name: 'Fleet' })).toBeInTheDocument()
@@ -428,17 +529,30 @@ describe('App insecure connection banner', () => {
   })
 })
 
-// The API client throws Error('API error 503: ...'); the views print the
-// message after "Error: ", so it reads once, not "Error: Error: ...".
+// The API client throws Error('API error 503: ...'); the views say what it means
+// (errorMessage.ts), keep the message as detail once, and offer Retry.
 describe('App failed reads', () => {
   it('shows the message of a failed pipelines read once', async () => {
     h.state.pipelinesError = 'API error 503: Service Unavailable'
     render(<App />)
     await flush()
-    expect(screen.getByText('Error: API error 503: Service Unavailable')).toBeInTheDocument()
+    expect(screen.getByText('The controller had a problem. It may be restarting; try again.')).toBeInTheDocument()
+    expect(screen.getAllByText('API error 503: Service Unavailable')).toHaveLength(1)
     expect(screen.getByRole('button', { name: 'Refresh data' }).querySelector('span[aria-live="polite"]'))
       .toHaveAttribute('title', 'Error: API error 503: Service Unavailable')
     expect(screen.queryByText(/Error: Error/)).not.toBeInTheDocument()
+  })
+
+  it('a first read that fails shows the error with Retry, not the onboarding for an empty cluster', async () => {
+    h.state.pipelinesError = 'Failed to fetch'
+    render(<App />)
+    await flush()
+    expect(screen.queryByText('No pipelines found')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Retry' }).length).toBeGreaterThan(0)
+    h.state.pipelinesError = undefined
+    fireEvent.click(screen.getAllByRole('button', { name: 'Retry' })[0])
+    await flush()
+    expect(screen.queryByText("Can't reach the kardinal controller. Check that it is running and reachable from this browser.")).not.toBeInTheDocument()
   })
 
   it('keeps the sidebar list while a pipelines poll fails, and drops the error when one works', async () => {
@@ -450,13 +564,13 @@ describe('App failed reads', () => {
 
     h.state.pipelinesError = 'API error 503: Service Unavailable'
     await flush(5_100)
-    expect(screen.getByText('Error: API error 503: Service Unavailable')).toBeInTheDocument()
+    expect(screen.getByText('API error 503: Service Unavailable')).toBeInTheDocument()
     expect(within(list()).getByText('other')).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: 'Filter pipelines by name or namespace' })).toBeInTheDocument()
 
     h.state.pipelinesError = undefined
     await flush(5_100)
-    expect(screen.queryByText(/^Error: /)).not.toBeInTheDocument()
+    expect(screen.queryByText('API error 503: Service Unavailable')).not.toBeInTheDocument()
     expect(within(list()).getByText('other')).toBeInTheDocument()
   })
 
@@ -464,7 +578,16 @@ describe('App failed reads', () => {
     h.state.graphError = 'API error 500: Internal Server Error'
     render(<App />)
     await flush()
-    expect(screen.getByRole('alert')).toHaveTextContent(/^Error: API error 500: Internal Server Error$/)
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('The controller had a problem. It may be restarting; try again.API error 500: Internal Server ErrorRetry')
+
+    // Retry reads the graph again; once it works the graph shows.
+    h.state.graphError = undefined
+    const calls = h.api.getGraph.mock.calls.length
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
+    await flush()
+    expect(h.api.getGraph.mock.calls.length).toBeGreaterThan(calls)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })
 
@@ -508,6 +631,7 @@ describe('App policy gates panel', () => {
     ] as PolicyGate[]
     render(<App />)
     await flush()
+    await openGates()
     expect(screen.queryByText('1 blocked')).not.toBeInTheDocument()
     expect(screen.getByText('1 passing')).toBeInTheDocument()
     expect(screen.queryByText('other-gate')).not.toBeInTheDocument()
@@ -545,11 +669,14 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
     gateCase(false)
     render(<App />)
     await flush()
-    expect(screen.queryByText(/blocking promotion/)).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Show blocked' })).not.toBeInTheDocument()
+    // The map mounts the gate on the edge into prod, not ready, not blocking; the
+    // attention strip does not count it (the bundle has not reached it).
+    expect(screen.getByRole('button', { name: 'gate soak, Not ready' })).toBeInTheDocument()
+    expect(screen.queryByText(/blocked by/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Needs attention' })).not.toBeInTheDocument()
+    await openGates()
     expect(screen.queryByText(/\d+ blocked/)).not.toBeInTheDocument()
     expect(screen.getByText('1 waiting')).toBeInTheDocument()
-    expect(screen.getByLabelText('soak — Not ready')).toBeInTheDocument()
   })
 
   it('shows 0 blocked for a Failed bundle', async () => {
@@ -557,7 +684,7 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
     gateCase(false)
     render(<App />)
     await flush()
-    expect(screen.queryByText(/blocking promotion/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/gates? blocking/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Show blocked' })).not.toBeInTheDocument()
     expect(screen.queryByText(/\d+ blocked/)).not.toBeInTheDocument()
   })
@@ -566,8 +693,10 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
     gateCase(true)
     render(<App />)
     await flush()
-    expect(screen.getByText('1 PolicyGate blocking promotion')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Show blocked' })).toBeInTheDocument()
+    // The map's attention strip names the gate, and the gate is a blocking mark on its edge.
+    expect(screen.getByRole('button', { name: '1 blocked by soak' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'gate soak, Blocking' })).toBeInTheDocument()
+    await openGates()
     expect(screen.getByText('1 blocked')).toBeInTheDocument()
   })
 })
@@ -588,7 +717,7 @@ describe('App keyboard access', () => {
     render(<App />)
     await flush()
     // The Bundle card and its timeline chip.
-    expect(screen.getAllByRole('img', { name: 'config Bundle' }).length).toBe(2)
+    expect(screen.getAllByRole('img', { name: 'config version' }).length).toBe(2)
   })
 })
 
@@ -601,5 +730,112 @@ describe('App rejected Bundle (E6)', () => {
     await flush()
     const note = screen.getByRole('note')
     expect(note).toHaveTextContent('Rejected by alice 2h ago: CVE in the base image')
+  })
+})
+
+// U1 (UX-AUDIT.md §4.3): every screen is a route that survives a reload; Back and Forward
+// walk it; old links redirect; one pipeline opens directly; ⌘K opens the palette.
+describe('App routes', () => {
+  const go = async (hash: string) => {
+    window.history.replaceState(null, '', `/ui/${hash}`)
+    await act(async () => { window.dispatchEvent(new PopStateEvent('popstate')) })
+    await flush()
+  }
+
+  it('opens an environment from its route, and selecting one pushes its route', async () => {
+    window.history.replaceState(null, '', '/ui/#/p/default/app/env/env-of-b-new')
+    render(<App />)
+    await flush()
+    expect(screen.getByTestId('stage-drawer')).toHaveTextContent('env-of-b-new')
+    await go('#/p/default/app')
+    expect(screen.queryByTestId('stage-drawer')).not.toBeInTheDocument()
+    fireEvent.click(screen.getAllByRole('button', { name: /^env-of-b-new — / })[0])
+    await flush()
+    expect(window.location.hash).toBe('#/p/default/app/env/env-of-b-new')
+    expect(screen.getByTestId('stage-drawer')).toBeInTheDocument()
+  })
+
+  it('shows the version a route names, and a timeline pick is its route', async () => {
+    window.history.replaceState(null, '', '/ui/#/p/default/app/v/b-old')
+    render(<App />)
+    await flush()
+    expect(lastGraphCall()).toBe('b-old')
+    expect(screen.getAllByText('env-of-b-old').length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByTitle(/^b-new: Promoting/))
+    await flush()
+    expect(window.location.hash).toBe('#/p/default/app/v/b-new')
+    // Back to the old version.
+    await go('#/p/default/app/v/b-old')
+    expect(lastGraphCall()).toBe('b-old')
+    // Back to no pick: the pipeline's own bundle.
+    await go('#/p/default/app')
+    expect(lastGraphCall()).toBe('b-new')
+  })
+
+  it('keeps the operations table and the fleet filter in the URL', async () => {
+    h.state.pipelines = [pipeline('app', { activeBundleName: 'b-new' }), pipeline('beta', { blockerCount: 1 })]
+    window.history.replaceState(null, '', '/ui/#/?view=ops')
+    render(<App />)
+    await flush()
+    expect(screen.getByRole('button', { name: 'Switch to List View' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to List View' }))
+    await flush()
+    expect(window.location.hash).toBe('#/')
+    await go('#/?filter=blocked')
+    expect(within(screen.getByRole('list', { name: 'Pipelines' })).queryByText('app')).not.toBeInTheDocument()
+    expect(within(screen.getByRole('list', { name: 'Pipelines' })).getByText('beta')).toBeInTheDocument()
+  })
+
+  it('opens the only pipeline on a first visit, but not on #/', async () => {
+    window.history.replaceState(null, '', '/ui/')
+    const { unmount } = render(<App />)
+    await flush()
+    expect(window.location.hash).toBe('#/p/default/app')
+    expect(screen.getByRole('heading', { level: 1, name: 'app' })).toBeInTheDocument()
+    unmount()
+    window.history.replaceState(null, '', '/ui/#/')
+    render(<App />)
+    await flush()
+    expect(screen.queryByRole('heading', { level: 1, name: 'app' })).not.toBeInTheDocument()
+  })
+
+  it('rewrites an old link, and the breadcrumb leads back', async () => {
+    window.history.replaceState(null, '', '/ui/#pipeline=app&ns=default')
+    render(<App />)
+    await flush()
+    expect(window.location.hash).toBe('#/p/default/app')
+    const crumbs = screen.getByRole('navigation', { name: 'Breadcrumb' })
+    expect(within(crumbs).getByRole('link', { name: 'Pipelines' })).toHaveAttribute('href', '#/')
+    expect(within(crumbs).getByText('app')).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('keeps the pipeline page tab in the URL, and the blocked banner opens the gates', async () => {
+    window.history.replaceState(null, '', '/ui/#/p/default/app')
+    const { unmount } = render(<App />)
+    await flush()
+    expect(screen.getByRole('tab', { name: 'Map' })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(screen.getByRole('tab', { name: 'Metrics' }))
+    await flush()
+    expect(window.location.hash).toBe('#/p/default/app?tab=metrics')
+    expect(screen.getByRole('tabpanel', { name: 'Metrics' })).toBeInTheDocument()
+    unmount()
+    render(<App />)
+    await flush()
+    expect(screen.getByRole('tab', { name: 'Metrics' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('opens the palette with Ctrl+K and goes where it is told', async () => {
+    h.state.pipelines = [pipeline('app', { activeBundleName: 'b-new' }), pipeline('beta', { environmentTopology: [{ name: 'prod' }] } as Partial<Pipeline>)]
+    window.history.replaceState(null, '', '/ui/#/')
+    render(<App />)
+    await flush()
+    fireEvent.keyDown(document, { key: 'k', ctrlKey: true })
+    await flush()
+    const input = screen.getByRole('combobox', { name: /Search pipelines/ })
+    fireEvent.change(input, { target: { value: 'beta prod' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await flush()
+    expect(window.location.hash).toBe('#/p/default/beta/env/prod')
+    expect(screen.queryByRole('dialog', { name: 'Go to or do' })).not.toBeInTheDocument()
   })
 })

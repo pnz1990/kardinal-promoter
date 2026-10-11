@@ -51,8 +51,91 @@ helm template kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter -
 To keep Secret access out of other namespaces, run in namespace mode
 (`controller.watchNamespace`), which turns the namespaced rules into a Role in that namespace.
 The release-namespace Role also grants `get` on the SCM token Secret, limited to its name
-(`github.secretRef.name`, or the Secret the chart creates from `github.token`). The rule is
+(`scm.secretRef.name`, or the Secret the chart creates from `scm.token`). The rule is
 left out when neither is set.
+
+### Every permission the chart grants
+
+The Helm chart creates the necessary `ClusterRole` (a `Role` in namespace mode). It grants:
+
+- `get/list/watch/create/update/patch/delete` on the `kardinal.io` kinds, except
+  `auditevents` (`get/list/watch/create`, plus `delete` for retention,
+  `audit.retention.enabled: true` by default: the controller never changes a record),
+  `approvals` (`get/list/watch/create/delete`: an Approval is never edited), `scmproviders`
+  (`get/list/watch`: the controller never creates them) and the cluster-scoped
+  `changewindows` and `clusterscmproviders` (`get/list/watch`, in a `ClusterRole` in both
+  modes)
+- `get/update/patch` on the `status` subresources of those kinds (`auditevents` has none)
+- `get/list/watch/create/update/patch/delete` on `graphs.kro.run`
+- `get/list/watch` on the health targets: `deployments`, Argo CD `applications` and `rollouts`,
+  Flux `kustomizations`, Flagger `canaries` (`patch` on `applications` only with
+  `rbac.argocdApplicationsWrite`), `get` on `replicasets` (the ReplicaSet a Deployment's
+  `ProgressDeadlineExceeded` names), and `list` on `pods` (the new ReplicaSet's pods, to name
+  why one is not ready; cluster-wide in cluster mode), and `get` on Argo Rollouts
+  `analysistemplates` and `clusteranalysistemplates` that `spec.verification` names
+- `get/list` on `multicluster.x-k8s.io` `clusterprofiles`, to resolve a fleet's targets
+- `get` on `secrets` (Pipeline `spec.git.secretRef` and the SCM token); no `list` or `watch`
+- `get/create` on `serviceaccounts` and `get/list/create/update/delete` on `rolebindings`, plus
+  `bind` on the two Graph ClusterRoles only, for the [Graph identity](#rbac-requirements)
+- `get` on `namespaces` (only the watched one in namespace mode), to tell whether a Graph's,
+  Bundle's or step's namespace is being deleted
+- `create/patch` on `events.k8s.io` `events` and `get/list/watch/create/patch` on core `events`
+- in the release namespace: the leader election `leases`, and `create` plus
+  `get/update/patch` on the `kardinal-version` ConfigMap
+- `get/list/watch/create/delete` on `batch` Jobs: each HookRun's Job ([Pipeline hooks](../hooks.md))
+  and each RenderRun's render Job ([Rendered manifests](../rendered-manifests.md))
+- `get` on the chart's `gate-overrides` ValidatingAdmissionPolicy and its binding, to know
+  whether an override's `createdBy` was checked
+- `create` on `tokenreviews` and `subjectaccessreviews`, only with `ui.auth.tokenReview` or
+  `bundleAPI.tokenReview`; the shard Leases, only with `controller.namespaceShard`
+
+It grants nothing on `services`, other ConfigMaps or other cluster objects, and reads `pods`
+only to explain a rollout that is not ready.
+
+---
+
+## RBAC requirements
+
+The chart creates the controller's ServiceAccount (`kardinal-promoter`) and its RBAC.
+The installer itself (Helm, or a GitOps controller) also creates cluster-scoped objects: CRDs, ClusterRoles and bindings, admission policies, and the leader election FlowSchema, which needs `create`, `get`, `update` and `delete` on `flowschemas.flowcontrol.apiserver.k8s.io` (`leaderElectionFlowSchema.enabled=false` leaves it out; see [Leader election under API pressure](../operate.md#leader-election-under-api-pressure)).
+
+The controller's RBAC, in summary:
+
+| Resources | Verbs |
+|---|---|
+| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create, and delete with `audit.retention.enabled: true`, the default) and `changewindows`, `scmproviders` and `clusterscmproviders` (get, list, watch; get, update, patch on `/status`) |
+| `graphs.kro.run` | Full CRUD; get on `graphs/status` |
+| `serviceaccounts`, `rolebindings` | get, create; get, list, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs, `list` finds them for the sweep) |
+| `namespaces` | get, limited to `controller.watchNamespace` in namespace mode (lets go of a Graph whose namespace is being deleted) |
+| `clusterroles` | `bind`, limited to `<fullname>-graph-applier` and `<fullname>-graph-reader` |
+| `deployments`, Argo CD `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch (health adapters) |
+| `replicasets` | get only: the `resource` and `flux` adapters read the ReplicaSet a Deployment's `ProgressDeadlineExceeded` names |
+| `pods` | list only: while a Deployment's replicas are unavailable, the `resource` adapter lists the pods of its new ReplicaSet to name why one is not ready. In the default cluster mode `list` covers **every pod in the cluster** (pod specs, including literal `env` values, not Secrets); `controller.watchNamespace` limits it to one namespace. Without it, health messages leave the pod out |
+| `secrets` | get only: the controller reads each Secret by name and never lists or watches them. In the default cluster mode `get` covers **every Secret in the cluster**. The release-namespace Role adds `get` on the SCM token Secret by name |
+| `configmaps` | None in the watched namespaces. The leader-election Role reads and writes the `kardinal-version` ConfigMap by name |
+| `leases` | Leader election, through a Role in the release namespace |
+| `events` | get, list, watch, create, patch |
+
+Optional rules: `rbac.argocdApplicationsWrite` (patch Applications) and `ui.auth.tokenReview`
+(create TokenReviews and SubjectAccessReviews). The full list of objects and rules is in
+[Security: Controller RBAC](security.md#controller-rbac). Set `controller.watchNamespace`
+to turn the namespaced rules into a Role in one namespace.
+
+kro does not apply a Graph's children with its own identity. It impersonates the Graph's
+`spec.serviceAccountName` (default `kardinal-graph`) in the Graph's namespace. The kardinal-promoter
+controller creates that ServiceAccount and binds it with RoleBindings to `<fullname>-graph-applier`
+(in the Graph namespace) and `<fullname>-graph-reader` (in each namespace a health `ref` node reads,
+limited to the Graph's own namespace and `graph.readerNamespaces`). Each reader binding is named
+`<fullname>-graph-reader-<graph namespace>`: with release `kp`, `kp-kardinal-promoter-graph-reader-<graph namespace>`.
+`<fullname>` is the chart's full name: `fullnameOverride` if set, else the release name, plus
+`-kardinal-promoter` unless the release name contains it. Reader bindings that no Graph
+in the namespace needs any more are deleted: when a Bundle is translated, when a Graph is deleted,
+and, in cluster mode, by a sweep at controller startup and every 10 minutes that also catches the
+bindings of namespaces that are gone. The sweep lists only RoleBindings labeled
+`app.kubernetes.io/managed-by=kardinal-promoter`.
+See G5 in the [Graph capability ledger](../design/16-graph-capability-ledger.md).
+
+The Helm chart creates all of these ClusterRoles, Roles and bindings.
 
 ---
 
@@ -114,7 +197,7 @@ expires, so no long-lived PAT is stored. See [GitHub App](../scm-providers.md#gi
 The App needs `Contents: Read and write`, `Pull requests: Read and write` and `Metadata:
 Read-only`. There is no OIDC token exchange; another short-lived token works if something
 outside kardinal (an External Secrets generator, a CronJob) refreshes the Secret in
-`github.secretRef` before it expires: the controller reloads it within 30 seconds.
+`scm.secretRef` before it expires: the controller reloads it within 30 seconds.
 
 ---
 
@@ -162,7 +245,7 @@ The namespace is kardinal's tenancy unit. There is no Project CRD.
 #### The shared SCM token and `scm.allowedRepositories`
 
 Git clone and push use the Pipeline's `git.secretRef` token. The controller uses its own SCM
-token (`github.token` or `github.secretRef`, the controller Pod's `GITHUB_TOKEN`) to open, label,
+token (`scm.token` or `scm.secretRef`, the controller Pod's `GITHUB_TOKEN`) to open, label,
 comment on and close PRs. When it closes a PR that was not merged, it also deletes the PR's head
 branch, `kardinal/<namespace hash>/<bundle>/<env>`, with that token, so the closed PR cannot be merged later. It
 deletes that branch too when a step that pushed it ends before it opens a PR. It deletes only
@@ -246,14 +329,14 @@ helm install kardinal-team-a oci://ghcr.io/pnz1990/charts/kardinal-promoter --ve
   --namespace team-a \
   --create-namespace \
   --set controller.watchNamespace=team-a \
-  --set github.secretRef.name=github-token
+  --set scm.secretRef.name=github-token
 
 # Team B — separate install watching only the "team-b" namespace
 helm install kardinal-team-b oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
   --namespace team-b \
   --create-namespace \
   --set controller.watchNamespace=team-b \
-  --set github.secretRef.name=github-token
+  --set scm.secretRef.name=github-token
 ```
 
 Each install creates a `Role` and `RoleBinding` scoped to its watch namespace. Team A
@@ -307,8 +390,22 @@ effect at the next reconcile; removing the label stops its use again. Whoever ma
 
 Pipeline `spec.git.secretRef` has the same exposure (its token goes to the Pipeline's git URL).
 An unlabeled git Secret is deprecated: it still works with `SecretReferenceable=False`, and v0.11
-refuses it. Label your git Secrets. The controller's own SCM token Secret is set by the operator and
-is not covered.
+refuses it. Label your git Secrets.
+
+### The controller's own SCM token
+
+**Never label the controller's SCM token Secret** (`scm.secretRef.name`, or the chart's
+`<fullname>-github-token` from `scm.token`) `kardinal.io/referenceable: "true"`. The label would
+let any kardinal object in that namespace use it: a Pipeline `git.secretRef`, a MetricCheck
+`authorizationSecretRef`, a NotificationHook, an ScmProvider or a Subscription could send the
+controller's token to a URL its author chooses. The chart never labels it.
+
+The controller also refuses a Pipeline whose `git.secretRef` names its own token Secret
+(`--scm-token-secret-name` in `--scm-token-secret-namespace`), labelled or not: the Pipeline is
+`Ready=False` with reason `ValidationFailed`, its steps fail before `git-clone`, its Bundles get no Graph, and a RenderRun whose git Secret it is fails before its render Job is created, so no render Pod mounts the token. Such a
+Pipeline would otherwise choose where the controller's token goes, and its own existing Secret
+would exempt it from `--scm-allowed-repositories`. Give each Pipeline its own Secret; the chart's
+demo Pipeline gets one (`demo.secretRef`, or a labelled copy the chart creates with `scm.token`).
 
 ### Recommended: External Secrets Operator
 
@@ -458,7 +555,7 @@ and turn it on after the export.
 | `PromotionSucceeded` | Health check passed; PromotionStep reached Verified |
 | `PromotionFailed` | PromotionStep reached Failed or AbortedByAlarm |
 | `PromotionSuperseded` | A newer Bundle superseded an in-flight promotion (a step that had not started writes none) |
-| `PromotionRejected` | `kardinal reject` cancelled an in-flight promotion (its Bundle was [rejected](../rollback.md#reject-a-bundle); a step that had not started writes none) |
+| `PromotionRejected` | `kardinal reject` cancelled an in-flight promotion (its Bundle was [rejected](../reject.md); a step that had not started writes none) |
 | `BundleRejected` | A Bundle is rejected (`kardinal reject` or the UI), once, naming who rejected it and why; its environment is `*` (the whole Bundle) |
 | `GateOverridden` | An entry in a gate instance's `spec.overrides[]` (`kardinal override` or the UI), written once per entry with its verified `createdBy`, stage, expiry and reason |
 | `ApprovalRecorded` / `ApprovalRevoked` | An approval gate saw a decision (`kardinal approve`) appear, or its Approval deleted, with the approver, the decision and whether it counts |
@@ -493,7 +590,7 @@ status write, and messages are cut to 1 KiB. The outbox holds at
 most 32 entries. When it is full, the oldest entry is dropped and counted in
 `kardinal_audit_events_dropped_total`. A record the API server rejects as invalid
 is dropped too. `kardinal_audit_write_failures_total` counts the creates being
-retried ([Monitoring](monitoring.md#kardinal-metrics)). To see records not yet
+retried ([Monitoring](../reference/metrics.md#kardinal-metrics)). To see records not yet
 written:
 
 ```bash
@@ -765,7 +862,7 @@ Subscription credentials (`spec.*.secretRef`) and webhook tokens (`spec.webhook.
 are read only from the Subscription's own namespace, so whoever can create a Subscription
 can use only the Secrets of that namespace. The controller reads them with `get` on every
 poll or delivery; it never lists Secrets. The webhook receiver
-(`/webhook/subscriptions/...`, see [Subscription webhooks](../subscription-webhooks.md))
+(`/webhook/subscriptions/...`, see [Subscription webhooks](../subscription.md#webhooks))
 answers every authentication failure, and a Subscription that does not exist, with the
 same 401, limits requests per source address and per Subscription, and writes only the
 `kardinal.io/refresh` annotation. Any Secret a Subscription reads (credentials and the
@@ -813,9 +910,9 @@ chart installs a `ValidatingAdmissionPolicy` with a `Deny` binding, per release:
 
 | Policy | Checks |
 |---|---|
-| `<release>-bundle-rejection` | A Bundle's new `spec.rejected.by` ([`kardinal reject`](../rollback.md#reject-a-bundle)) equals the requesting user's `request.userInfo.username`. A rejection already set is immutable (CRD rule), so it is checked only when it is first written. |
-| `<release>-gate-overrides` | Every new or changed `spec.overrides[]` entry of a PolicyGate ([`kardinal override`](../policy-gates.md#emergency-overrides)) has `createdBy` equal to the requesting user; the controller's ServiceAccount is exempt, because it writes overrides for the UI. Only the namespace's Graph ServiceAccount (kro) and the controller may create a gate instance (label `kardinal.io/bundle`, checked on CREATE and UPDATE) or change anything in it but `spec.overrides`: the rest of the spec and the whole metadata (labels, annotations, owner references, finalizers) are frozen, except `managedFields`, `resourceVersion` and `generation`, which the API server writes, and the `kardinal.io/force-recheck` annotation, which forces a re-evaluation. The garbage collector and the namespace controller may update an instance (they remove owner references and finalizers). In namespace mode (`controller.watchNamespace`) it applies to the watched namespace only. |
-| `<release>-approvals` | An `Approval` ([`kardinal approve`](../policy-gates.md#approval-gates)) is created only with `spec.user` equal to the requesting user and `spec.groups` among the requester's groups (checked at create time only), and its `kardinal.io/bundle` and `kardinal.io/environment` labels always equal `spec.bundle` and `spec.environment`. It may be owned only by the Bundle it approves (`spec.bundle`, `spec.bundleUID`), and its owner references cannot change later. Only its approver may delete (revoke) it; the garbage collector and the namespace controller are exempt (kardinal's controller is not: it never deletes Approvals). The spec is immutable (CRD rule). The UI records decisions for its TokenReview user: an Approval annotated `kardinal.io/recorded-via: ui` may be created in another name, and deleted, by this release's controller ServiceAccount (and `admission.controllerUsernames`) only. |
+| `<release>-bundle-rejection` | A Bundle's new `spec.rejected.by` ([`kardinal reject`](../reject.md)) equals the requesting user's `request.userInfo.username`. A rejection already set is immutable (CRD rule), so it is checked only when it is first written. |
+| `<release>-gate-overrides` | Every new or changed `spec.overrides[]` entry of a PolicyGate ([`kardinal override`](../overrides.md)) has `createdBy` equal to the requesting user; the controller's ServiceAccount is exempt, because it writes overrides for the UI. Only the namespace's Graph ServiceAccount (kro) and the controller may create a gate instance (label `kardinal.io/bundle`, checked on CREATE and UPDATE) or change anything in it but `spec.overrides`: the rest of the spec and the whole metadata (labels, annotations, owner references, finalizers) are frozen, except `managedFields`, `resourceVersion` and `generation`, which the API server writes, and the `kardinal.io/force-recheck` annotation, which forces a re-evaluation. The garbage collector and the namespace controller may update an instance (they remove owner references and finalizers). In namespace mode (`controller.watchNamespace`) it applies to the watched namespace only. |
+| `<release>-approvals` | An `Approval` ([`kardinal approve`](../approvals.md)) is created only with `spec.user` equal to the requesting user and `spec.groups` among the requester's groups (checked at create time only), and its `kardinal.io/bundle` and `kardinal.io/environment` labels always equal `spec.bundle` and `spec.environment`. It may be owned only by the Bundle it approves (`spec.bundle`, `spec.bundleUID`), and its owner references cannot change later. Only its approver may delete (revoke) it; the garbage collector and the namespace controller are exempt (kardinal's controller is not: it never deletes Approvals). The spec is immutable (CRD rule). The UI records decisions for its TokenReview user: an Approval annotated `kardinal.io/recorded-via: ui` may be created in another name, and deleted, by this release's controller ServiceAccount (and `admission.controllerUsernames`) only. |
 | `<release>-bundle-creator` | A new Bundle's `kardinal.io/created-by` annotation, when set, equals the requesting user, and it cannot be added, changed or removed later. Exactly this release's controller ServiceAccount is exempt, plus the usernames listed in `admission.controllerUsernames` (exact usernames, no wildcards; never a namespace or a group: in namespace mode the release namespace is the tenant's): it names the creator of the Bundles it creates (the UI user, `subscription:<name>`, `bundle-api`, `kardinal-controller`). Another controller instance that is not listed creates its Bundles without a creator, which excludeAuthor gates hold. An approval gate's `excludeAuthor` reads it. |
 | `<release>-graph-objects` | The objects a promotion Graph makes and nothing else should: PromotionSteps, PRStatuses, HookRuns, RenderRuns, ImageVerifications and per-promotion MetricCheck instances (label `kardinal.io/bundle`; a MetricCheck you write is not checked), spec, metadata and status. Only kro, this release's controller ServiceAccount and the exact usernames in `admission.controllerUsernames` may create or change them. kro counts only when it impersonates the namespace's Graph ServiceAccount: a request as that ServiceAccount that carries `authentication.kubernetes.io/credential-id` (a token from `kubectl create token`, a bound token) or `authentication.kubernetes.io/pod-name` (a Pod running as it) is refused, so `kubectl create token` and Pods running as the Graph ServiceAccount do not pass as kro. Admission cannot tell kro's impersonation from anyone else's: whoever may impersonate the Graph ServiceAccount, or read a legacy token Secret of it, passes as kro (see Trust below). The garbage collector and the namespace controller may update them, as they do while deleting objects (owner references, their `orphan`/`foregroundDeletion` finalizers); kardinal's own finalizers are removed by its controller. Deleting one is not checked, since the Graph recreates it (deleting a failed PromotionStep retries it), except HookRuns: only kro, the controllers, the garbage collector and the namespace controller delete them, and anyone else gets a message of its own ("HookRuns record that a hook ran; only kardinal deletes them ..."). The step's `status.hookRecords` keeps a recreated HookRun from running its hook again, but deleting the step as well (allowed: it is the documented retry) drops that record, and the Graph's new HookRun would run the hook a second time. Argo Rollouts AnalysisRuns labelled `kardinal.io/bundle` are protected on create only: the Rollouts controller writes them afterwards. No one may turn an existing MetricCheck into an instance (kro adopts by name, see below). |
 
@@ -1300,4 +1397,4 @@ kubectl create secret tls kardinal-tls \
 
 - [Installation](../installation.md) — Helm values reference
 - [Monitoring](monitoring.md) — Prometheus metrics
-- [FAQ](../faq.md#what-permissions-does-the-controller-need) — RBAC questions
+- [Every permission the chart grants](#every-permission-the-chart-grants)

@@ -24,9 +24,29 @@ export function needJSON<T>(name: string): T {
 /** The pipeline every live test creates in its own namespace. */
 export const PIPELINE = 'podinfo'
 
-/** pipelineHash is the deep link to a pipeline (and optionally a node). */
+/** pipelineHash is the deep link to a pipeline (#/p/<ns>/<pipeline>), with an optional query
+ *  such as { node } (a node's details) or { compare } (src/useUrlState.ts). */
 export function pipelineHash(ns: string, pipeline = PIPELINE, extra: Record<string, string> = {}): string {
-  return '#' + new URLSearchParams({ pipeline, ns, ...extra }).toString()
+  const q = new URLSearchParams(extra).toString()
+  return `#/p/${encodeURIComponent(ns)}/${encodeURIComponent(pipeline)}${q ? `?${q}` : ''}`
+}
+
+/** route reads the UI's route from the page URL (the #/… form of src/useUrlState.ts). */
+export function route(page: Page): { pipeline?: string; ns?: string; env?: string; version?: string; compare?: string; node?: string } {
+  const [path, query = ''] = new URL(page.url()).hash.replace(/^#/, '').split('?', 2)
+  const seg = path.split('/').filter(Boolean).map(decodeURIComponent)
+  const q = new URLSearchParams(query)
+  const out: ReturnType<typeof route> = {
+    compare: q.get('compare') ?? undefined,
+    node: q.get('node') ?? undefined,
+  }
+  if (seg[0] === 'p') {
+    out.ns = seg[1] === '*' ? undefined : seg[1]
+    out.pipeline = seg[2]
+    if (seg[3] === 'env') out.env = seg[4]
+    if (seg[3] === 'v') out.version = seg[4]
+  }
+  return out
 }
 
 /**
@@ -54,7 +74,7 @@ export async function filterSidebar(page: Page, query: string) {
   const ns = query.split('/')[0].toLowerCase()
   await expect.poll(() => page.getByRole('list', { name: 'Pipelines' }).evaluate((list, ns) =>
     Array.from(list.children)
-      .filter(li => li.querySelector(':scope > ul[role="group"]'))
+      .filter(li => li.querySelector(':scope > ul[aria-labelledby]'))
       .map(li => li.firstElementChild?.textContent?.trim() ?? '')
       .filter(header => !header.toLowerCase().includes(ns)), ns)).toEqual([])
 }
@@ -74,9 +94,25 @@ export function sidebarRow(page: Page, name = PIPELINE) {
   return sidebarRows(page).filter({ has: page.getByText(name, { exact: true }) })
 }
 
-/** dagNode is the DAG node of an environment or gate (its aria-label starts with the name). */
-export function dagNode(page: Page, name: string) {
-  return page.locator(`g.dag-node[aria-label^="${name} — "]`)
+/** station is the station map's station of an environment (U2): its aria-label
+ *  starts with "<name> — " and the state label ("test — Live, runs …"). */
+export function station(page: Page, name: string) {
+  return page.locator(`.station-map [data-station="${name}"]`)
+}
+
+/** gateMark is a gate on the edge into the environment it guards ("gate <name>, Passing"). */
+export function gateMark(page: Page, name: string) {
+  return page.locator(`.station-map__gate[aria-label^="gate ${name}, "]`)
+}
+
+/** The stage drawer (U3): an environment's details, "why it's waiting" first. */
+export function stageDrawer(page: Page) {
+  return page.getByTestId('stage-drawer')
+}
+
+/** The environment the stage drawer is open on (its heading). */
+export function drawerHeading(page: Page) {
+  return stageDrawer(page).getByRole('heading', { level: 2 })
 }
 
 /**

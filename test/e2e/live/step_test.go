@@ -322,7 +322,7 @@ func TestStep_YAMLUpdate(t *testing.T) {
 // "retrying in 10s (1/5) after error: step git-clone: ..."), with no token
 // in the message and nothing pushed. Writing the right token into the Secret
 // lets the next retry clone and push over HTTP, and the promotion finishes,
-// as docs/troubleshooting.md says for a rotated token. The kind suite's git
+// as docs/troubleshoot-git.md says for a rotated token. The kind suite's git
 // server serves HTTP only, so HTTPS is not exercised.
 //
 // Covers STEP-GITAUTH-01.

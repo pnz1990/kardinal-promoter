@@ -125,6 +125,9 @@ func (r *Reconciler) revisionContains(ctx context.Context, log zerolog.Logger, p
 	}
 	return func(ctx context.Context, rev string) (bool, error) {
 		cred := r.resolveGitCredential(ctx, log, pipeline)
+		if cred.refused != nil {
+			return false, cred.refused
+		}
 		return r.descends(ctx, rh, gr, pipeline.Spec.Git.URL, baseBranch(pipeline), cred.auth(), rev, want, prPaths(env))
 	}
 }
@@ -215,6 +218,12 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 		return false, nil
 	}
 	cred := r.resolveGitCredential(ctx, log, pipeline)
+	if cred.refused != nil {
+		// No ls-remote with the controller's token (the Pipeline reconciler
+		// reports the refusal as Ready=False/ValidationFailed).
+		log.Debug().Err(cred.refused).Msg("the PR branch is not refreshed")
+		return false, nil
+	}
 	branch := baseBranch(pipeline)
 	url := pipeline.Spec.Git.URL
 	heads, err := r.remotes.remoteHeads(ctx, rh, url, cred.auth(), r.now())

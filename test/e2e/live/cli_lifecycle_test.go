@@ -193,10 +193,10 @@ func TestCLI_Rollback(t *testing.T) {
 	hist := framework.ParseTable(c.Must(a.ns, "history", pipelineName))
 	actions := map[string]string{}
 	for _, row := range hist {
-		if prev, ok := actions[row["BUNDLE"]]; ok {
-			assert.Equal(t, prev, row["ACTION"], "every row of %s has one action", row["BUNDLE"])
+		if prev, ok := actions[framework.BundleOf(row["VERSION"])]; ok {
+			assert.Equal(t, prev, row["ACTION"], "every row of %s has one action", framework.BundleOf(row["VERSION"]))
 		}
-		actions[row["BUNDLE"]] = row["ACTION"]
+		actions[framework.BundleOf(row["VERSION"])] = row["ACTION"]
 	}
 	assert.Equal(t, map[string]string{bA: "promote", bB: "promote", bC: "promote", bR: "rollback"}, actions, "history:\n%v", hist)
 
@@ -334,7 +334,7 @@ func TestCLI_DeleteBundle(t *testing.T) {
 	head := e.BranchHead(t, a.repo)
 	assert.Equal(t, "Bundle "+bA+" deleted\n", c.Must(a.ns, "delete", "bundle", bA))
 	waitBundleGone(t, e, a.ns, bA)
-	assert.Equal(t, "BUNDLE   TYPE   PHASE   AGE\n", c.Must(a.ns, "get", "bundles"))
+	assert.Equal(t, "VERSION   TYPE   PHASE   AGE\n", c.Must(a.ns, "get", "bundles"))
 	assert.Equal(t, "No active bundles for pipeline \"podinfo\".\n", c.Must(a.ns, "get", "steps", pipelineName))
 	assert.Equal(t, head, e.BranchHead(t, a.repo), "deleting a Bundle writes nothing to git")
 	assertEnvAt(t, a, "prod", fixtures.V1)
@@ -436,10 +436,12 @@ func TestCLI_ConfigBundle(t *testing.T) {
 	e.WaitStepState(t, a.ns, pipelineName, b3, "test", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "test", fixtures.V3)
 	e.WaitBundlePhase(t, a.ns, b2, "Verified", time.Minute)
-	status := c.Must(a.ns, "status", pipelineName)
-	_, deployed, ok := strings.Cut(status, "\nDeployed\n")
-	require.True(t, ok, status)
-	assert.Regexp(t, `\ntest +`+regexp.QuoteMeta(b3+" ("+fixtures.V3+"); config "+initSHA[:7]+" from "+b2)+"\n", deployed)
+	// status names the Bundle that runs there; explain's deployed line
+	// names where the rest came from (unit: TestDeployed_ImageAndConfigBundles).
+	framework.Eventually(t, time.Minute, "status shows b3 running in test", func(context.Context) (bool, string) {
+		status := c.Must(a.ns, "status", pipelineName)
+		return regexp.MustCompile(`\ntest +` + regexp.QuoteMeta(fixtures.V3+" ("+b3+")") + ` +- +Live `).MatchString(status), status
+	})
 }
 
 // TestCLI_CreateBundleDryRun previews a Bundle with kardinal create bundle
@@ -459,8 +461,8 @@ func TestCLI_CreateBundleDryRun(t *testing.T) {
 	want := "[DRY-RUN] Bundle \"podinfo-dry-run\" for pipeline \"podinfo\"\n\n" +
 		"Promotion graph: 7 node(s)\n\n" +
 		"Environments in promotion order:\n" +
-		"  • test\n" +
-		"  • prod (gates: change-freeze)\n\n" +
+		"  * test\n" +
+		"  * prod (gates: change-freeze)\n\n" +
 		"No resources were created. Remove --dry-run to apply.\n"
 	head := e.BranchHead(t, a.repo)
 	r := c.Run(a.ns, "create", "bundle", pipelineName, "--image", fixtures.Image+":"+fixtures.V2, "--dry-run")

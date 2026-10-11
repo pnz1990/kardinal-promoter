@@ -14,7 +14,13 @@ import type { Pipeline } from '../types'
 import { HealthChip } from './HealthChip'
 import { displayState } from '../displayStates.gen'
 import CopyButton from './CopyButton'
+import { ErrorNotice } from '../ui/ErrorNotice'
 import '../styles/PipelineList.css'
+
+/** A display label (P2) as a count's noun: "Live" reads "live", "Waiting for PR merge" keeps "PR". */
+function lowerFirst(label: string): string {
+  return /^[A-Z][a-z]/.test(label) ? label[0].toLowerCase() + label.slice(1) : label
+}
 
 /** Number of pipelines above which virtual scrolling is enabled (flat list only). */
 const VIRTUAL_THRESHOLD = 50
@@ -29,6 +35,8 @@ interface Props {
   onSelect: (name: string, namespace: string) => void
   loading?: boolean
   error?: string
+  /** Read the pipelines again (the error's Retry). */
+  onRetry?: () => void
   /**
    * #800: Ref forwarded to the filter <input> so App can call
    * searchInputRef.current?.focus() when the / shortcut fires.
@@ -41,6 +49,10 @@ interface Props {
    * empty cluster.
    */
   total?: number
+  /** The search the list starts with (the URL's q=). */
+  initialQuery?: string
+  /** Called with the search once typing settles, so it can go in the URL. */
+  onQueryChange?: (query: string) => void
 }
 
 /** Shorten a long bundle name for the sidebar: names over 14 characters keep
@@ -67,14 +79,16 @@ function matchesQuery(p: Pipeline, query: string): boolean {
     `${p.namespace}/${p.name}`.toLowerCase().includes(query)
 }
 
-export function PipelineList({ pipelines, selected, selectedNamespace, onSelect, loading, error, searchInputRef, total }: Props) {
+export function PipelineList({ pipelines, selected, selectedNamespace, onSelect, loading, error, onRetry, searchInputRef, total, initialQuery = '', onQueryChange }: Props) {
   const isSelected = (p: Pipeline) =>
     selected === p.name && (selectedNamespace === undefined || selectedNamespace === p.namespace)
 
   // #345: search/filter state with debounce
-  const [searchQuery, setSearchQuery] = useState('')
+  const [searchQuery, setSearchQuery] = useState(initialQuery)
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState(initialQuery.trim().toLowerCase())
+  const onQueryChangeRef = useRef(onQueryChange)
+  onQueryChangeRef.current = onQueryChange
 
   // #815: container ref for virtual scrolling
   const listContainerRef = useRef<HTMLDivElement>(null)
@@ -84,6 +98,7 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
     if (debounceTimer.current) clearTimeout(debounceTimer.current)
     debounceTimer.current = setTimeout(() => {
       setDebouncedQuery(value.trim().toLowerCase())
+      onQueryChangeRef.current?.(value.trim())
     }, 150)
   }, [])
 
@@ -119,11 +134,7 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
   }
   // A failed read before any worked: there is no list to keep.
   if (error && (total ?? pipelines.length) === 0) {
-    return (
-      <div className="pipeline-list__load-error">
-        Error: {error}
-      </div>
-    )
+    return <ErrorNotice error={error} onRetry={onRetry} className="pipeline-list__load-error" />
   }
   if ((total ?? pipelines.length) === 0) {
     return <NoPipelines />
@@ -169,14 +180,7 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
       </div>
       {/* A failed poll keeps the last list App read; the error shows above it
           until a poll works again. */}
-      {error && (
-        <div
-          role="alert"
-          className="pipeline-list__error"
-        >
-          Error: {error}
-        </div>
-      )}
+      {error && <ErrorNotice error={error} onRetry={onRetry} className="pipeline-list__error" />}
       {/* #815: List container — scrollable, used as virtual scroll container when active */}
       <div
         ref={listContainerRef}
@@ -197,11 +201,12 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
               if (!nsPipelines || nsPipelines.length === 0) return null
               return (
                 <li key={ns}>
-                  {/* Namespace header */}
-                  <div className="pipeline-list__namespace">
+                  {/* Namespace header; it names the nested list. A nested <ul> keeps list
+                      semantics (role="group" would leave its <li> outside any list). */}
+                  <div className="pipeline-list__namespace" id={`pipeline-ns-${ns}`}>
                     {ns}
                   </div>
-                  <ul role="group" className="pipeline-list__list">
+                  <ul role="list" aria-labelledby={`pipeline-ns-${ns}`} className="pipeline-list__list">
                     {nsPipelines.map(p => renderPipelineItem(p))}
                   </ul>
                 </li>
@@ -308,7 +313,7 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
                       }
                       return Object.entries(counts).map(([phase, count]) => (
                         <span key={phase} className="pipeline-list__state k-tone-text" data-tone={displayState('step', phase).tone} title={`${count} env${count !== 1 ? 's' : ''}: ${displayState('step', phase).label}`}>
-                          {count} {phase === 'WaitingForMerge' ? 'PR' : phase === 'HealthChecking' ? 'health' : phase.toLowerCase()}
+                          {count} {lowerFirst(displayState('step', phase).label)}
                         </span>
                       ))
                     })()}

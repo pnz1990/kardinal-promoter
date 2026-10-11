@@ -31,6 +31,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
@@ -522,9 +523,12 @@ func TestExplain_Errors(t *testing.T) {
 	assert.Equal(t, "No promotion for pipeline \"demo\" yet\n", out)
 }
 
-// C09a-cli-13: only the STATE cell is colored, and every step state has a color.
+// C09a-cli-13: only the STATE cell is colored, in its tone (promoting thread
+// red, verified spruce), and every step state has a color.
 func TestExplain_ColorOnlyStateColumn(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
+	t.Setenv("COLORTERM", "")
+	t.Setenv("COLORFGBG", "")
 	created := policyTestNow.Add(-time.Hour)
 	c := policyClient(t,
 		policyPipeline("demo", "test", "uat", "prod"),
@@ -536,10 +540,10 @@ func TestExplain_ColorOnlyStateColumn(t *testing.T) {
 
 	out, err := runExplain(t, c, "demo", "", true)
 	require.NoError(t, err)
-	assert.Contains(t, out, ansiYellow+"Promoting"+ansiReset)
-	assert.Contains(t, out, ansiGreen+"Live"+ansiReset)
-	assert.Contains(t, out, ansiGreen+"Passing"+ansiReset)
-	assert.Equal(t, 3, strings.Count(out, ansiReset), "exactly the three STATE cells are colored:\n%q", out)
+	assert.Contains(t, out, "\x1b[31mPromoting\x1b[0m")
+	assert.Contains(t, out, "\x1b[32mLive\x1b[0m")
+	assert.Contains(t, out, "\x1b[32mPassing\x1b[0m")
+	assert.Equal(t, 3, strings.Count(out, "\x1b[0m"), "exactly the three STATE cells are colored:\n%q", out)
 	assert.Contains(t, out, "push Failed once, retrying")
 	assert.Contains(t, out, "bundle.type != 'Block'")
 
@@ -547,8 +551,7 @@ func TestExplain_ColorOnlyStateColumn(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, plain, "\033[")
 	// Colouring only inserts escape codes; the columns stay aligned.
-	stripped := strings.NewReplacer(ansiYellow, "", ansiGreen, "", ansiReset, "").Replace(out)
-	assert.Equal(t, plain, stripped)
+	assert.Equal(t, plain, style.Strip(out))
 }
 
 // watchBuffer cancels the watch after it has rendered n times.
@@ -669,7 +672,7 @@ func TestExplain_ShowsHoldBundleMissing(t *testing.T) {
 	)
 	out, err := runExplain(t, c, "demo", "prod", false)
 	require.NoError(t, err)
-	assert.Contains(t, out, "prod: held on rollback demo-rollback-gone by alice (INC-42), but the rollback Bundle does not exist since "+
+	assert.Contains(t, out, "prod: held on rollback demo-rollback-gone by alice (INC-42), but the rollback version does not exist since "+
 		since.UTC().Format(time.RFC3339)+". The hold stays in effect")
 	assert.Contains(t, out, "Release with: kardinal release-hold demo --env prod, then roll back with --hold again if wanted")
 }

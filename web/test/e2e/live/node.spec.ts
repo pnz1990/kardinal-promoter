@@ -1,8 +1,8 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 //
-// UI-NODE-01: the node details panel (step progress, events, CEL check), and
-// UI-STEPTIME-01: the step timing bars. Go
+// UI-NODE-01: an environment's details in the stage drawer (step progress,
+// events, CEL check), and UI-STEPTIME-01: the step timing bars. Go
 // test: TestUI_BrowserNodeDetail (test/e2e/live/ui_browser_test.go).
 //
 // In KARDINAL_UI_NAMESPACE, podinfo's Bundle is Verified in test and waits
@@ -12,7 +12,7 @@
 // status.steps, as the controller wrote them.
 
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { need, needJSON, openPipeline, dagNode } from './live'
+import { need, needJSON, openPipeline, station, gateMark, stageDrawer, drawerHeading } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -31,7 +31,8 @@ const spoken: Record<SubStep['state'], string> = {
   Completed: 'done', InProgress: 'running', Failed: 'failed', Pending: 'not started',
 }
 
-const details = (page: Page) => page.getByTestId('node-detail')
+const details = (page: Page) => stageDrawer(page)
+const section = (detail: Locator, name: 'why' | 'actions' | 'evidence' | 'history') => detail.locator(`[data-section="${name}"]`)
 
 async function expectSubSteps(detail: Locator, want: SubStep[]) {
   const items = detail.getByRole('list', { name: 'Promotion steps' }).getByRole('listitem')
@@ -47,35 +48,35 @@ test('a step shows its sub-steps, elapsed time, merge link and events', async ({
   await openPipeline(page, base, ns)
   await expect(details(page)).toHaveCount(0)
 
-  await dagNode(page, 'prod').click()
+  await station(page, 'prod').click()
   const detail = details(page)
-  await expect(detail.getByRole('heading', { level: 3 })).toHaveText('prod')
-  await expect(detail).toContainText('Type: PromotionStep')
-  await expect(detail).toContainText('Environment: prod')
-  await expect(detail.locator('.health-chip').first()).toHaveAttribute('data-health-state', 'InProgress')
+  await expect(drawerHeading(page)).toHaveText('prod')
+  await expect(detail.locator('.stage-drawer__status .stage-chip')).toHaveText(/Waiting for PR merge/)
+  await expect(detail.locator('details.k-k8s').last()).toContainText('KindPromotionStep')
   await expectSubSteps(detail, prodSteps)
   await expect(detail.locator('li[data-step-state="InProgress"]')).toContainText('waiting for merge')
 
-  // The elapsed time ticks while the panel is open.
-  const elapsed = detail.locator('strong', { hasText: 'Elapsed:' }).locator('..')
-  await expect(elapsed).toHaveText(/^Elapsed: (\d+s|\d+m \d+s)$/)
+  // The elapsed time ticks while the drawer is open.
+  const elapsed = detail.getByTestId('stage-elapsed')
+  await expect(elapsed).toHaveText(/^Running for (\d+s|\d+m \d+s|\d+h \d+m)$/)
   const first = await elapsed.textContent()
   await expect.poll(() => elapsed.textContent(), { timeout: 5_000 }).not.toBe(first)
 
-  const merge = detail.getByRole('link', { name: 'Open Pull Request — Merge to Deploy' })
+  // Why it's waiting: its PR, with the link to merge it.
+  const merge = section(detail, 'why').getByRole('link', { name: 'Open pull request' })
   await expect(merge).toHaveAttribute('href', prURL)
   await expect(merge).toHaveAttribute('target', '_blank')
 
-  const events = detail.getByTestId('events-panel')
+  const events = section(detail, 'history').getByTestId('events-panel')
   await expect(events.getByRole('heading', { level: 4 })).toHaveText(/^Events \(\d+\)$/)
   const waiting = events.getByTestId('event-row').filter({ hasText: 'WaitingForMerge' })
   await expect(waiting.first()).toContainText(prURL)
   await expect(waiting.first().getByTestId('event-type')).toHaveText('Normal')
 
   // A finished step: every sub-step done, no elapsed time, no merge link.
-  await dagNode(page, 'test').click()
-  await expect(detail).toContainText('Environment: test')
-  await expect(detail.locator('.health-chip').first()).toHaveAttribute('data-health-state', 'Ready')
+  await station(page, 'test').click()
+  await expect(drawerHeading(page)).toHaveText('test')
+  await expect(detail.locator('.stage-drawer__status .stage-chip')).toHaveText(/Live/)
   await expectSubSteps(detail, testSteps)
   // UI-STEPTIME-01: each finished sub-step is a bar on the promotion's time
   // span, in the order the steps ran, the last one ending at the span's end.
@@ -87,34 +88,43 @@ test('a step shows its sub-steps, elapsed time, merge link and events', async ({
   for (let i = 1; i < spans.length; i++) expect(spans[i].offset).toBeGreaterThanOrEqual(spans[i - 1].offset)
   expect(spans[0].offset).toBe(0)
   expect(Math.max(...spans.map(s => s.offset + s.width))).toBeGreaterThanOrEqual(99)
-  await expect(detail.locator('strong', { hasText: 'Elapsed:' })).toHaveCount(0)
-  await expect(detail.getByRole('link', { name: /Pull Request/ })).toHaveCount(0)
+  await expect(detail.getByTestId('stage-elapsed')).toHaveCount(0)
+  await expect(detail.getByRole('link', { name: /pull request/i })).toHaveCount(0)
   const verified = detail.getByTestId('event-row').filter({ hasText: 'Verified' })
   await expect(verified.first()).toContainText('env test: step completed successfully')
 
-  await detail.getByRole('button', { name: 'Close' }).click()
+  await detail.getByRole('button', { name: 'Close test' }).click()
   await expect(details(page)).toHaveCount(0)
 })
 
 test('a gate shows its CEL expression, checked by the controller', async ({ page }) => {
+  // A gate opens the drawer of the environment it gates; a passing gate is in its evidence.
   await openPipeline(page, base, ns)
-  await dagNode(page, gate).click()
+  await gateMark(page, gate).click() // a gate on the map opens its own details
   const detail = details(page)
-  await expect(detail).toContainText('Type: PolicyGate')
-  await expect(detail.getByRole('heading', { level: 4, name: 'CEL Expression' })).toBeVisible()
-  await expect(detail.getByText('✓ valid', { exact: true })).toBeVisible()
-  await expect(detail.getByText('✗ error', { exact: true })).toHaveCount(0)
-  await expect(detail).toContainText('Last evaluated:')
+  await expect(drawerHeading(page)).toHaveText('prod')
+  const passing = section(detail, 'evidence').locator('.stage-gates > li').filter({ hasText: gate })
+  await expect(passing).toContainText('Passing')
+  // When the controller last evaluated it.
+  await expect(passing).toContainText(/ · (\d+s|\d+m \d+s|\d+h \d+m) ago/)
+  await passing.getByText('Details', { exact: true }).click()
+  await expect(passing.locator('[data-cel-check="valid"]')).toHaveText('✓valid')
+  await expect(passing.locator('[data-cel-check="error"]')).toHaveCount(0)
 
-  // An expression that does not compile: the chip and the compile error.
+  // An expression that does not compile holds its environment: why it's waiting names it,
+  // and its Details show the compile error.
   await openPipeline(page, base, ns, celPipeline)
-  await dagNode(page, badGate).click()
-  await expect(detail).toContainText('Type: PolicyGate')
-  await expect(detail).toContainText(badExpression)
-  const chip = detail.getByText('✗ error', { exact: true })
-  await expect(chip).toBeVisible()
+  await gateMark(page, badGate).click()
+  const why = section(detail, 'why').locator('.stage-why__item').filter({ hasText: badGate })
+  // When the controller last evaluated it: the Go test waits until it has.
+  await expect(why).toContainText(/evaluated (\d+s|\d+m \d+s|\d+h \d+m) ago/)
+  await expect(why.locator('details.k-k8s')).toContainText('KindPolicyGate')
+  await why.getByText('Details', { exact: true }).click()
+  await expect(why).toContainText(badExpression)
+  const chip = why.locator('[data-cel-check="error"]')
+  await expect(chip).toHaveText('✗error')
   await expect(chip).toHaveAttribute('title', /^CEL compile error: /)
   const error = await chip.getAttribute('title')
-  await expect(detail.getByText(error!, { exact: true })).toBeVisible()
-  await expect(detail.getByText('✓ valid', { exact: true })).toHaveCount(0)
+  await expect(why.getByText(error!, { exact: true })).toBeVisible()
+  await expect(why.locator('[data-cel-check="valid"]')).toHaveCount(0)
 })

@@ -6,12 +6,18 @@ on:
     paths:
       - "docs/**"
       - "mkdocs.yml"
+      - "overrides/**"
       - "web/tokens/**"
       - "web/src/assets/fonts/**"
       - "scripts/gen-tokens.mjs"
       - "api/v1alpha1/**"
       - "cmd/kardinal/**"
       - "hack/gen-cli-docs/**"
+      - "hack/gen-reference-docs/**"
+      - "chart/kardinal-promoter/values.yaml"
+      - "cmd/kardinal-controller/**"
+      - "pkg/**"
+      - "go.mod"
       - "README.md"
       - ".github/workflows/docs.yml"
   pull_request:
@@ -19,12 +25,18 @@ on:
     paths:
       - "docs/**"
       - "mkdocs.yml"
+      - "overrides/**"
       - "web/tokens/**"
       - "web/src/assets/fonts/**"
       - "scripts/gen-tokens.mjs"
       - "api/v1alpha1/**"
       - "cmd/kardinal/**"
       - "hack/gen-cli-docs/**"
+      - "hack/gen-reference-docs/**"
+      - "chart/kardinal-promoter/values.yaml"
+      - "cmd/kardinal-controller/**"
+      - "pkg/**"
+      - "go.mod"
       - "README.md"
       - ".github/workflows/docs.yml"
 
@@ -96,6 +108,14 @@ jobs:
         env:
           MKDOCS_GIT_COMMITTERS_APIKEY: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: The site loads no external scripts, stylesheets or fonts
+        run: go run ./hack/check-site-offline site
+
       - name: Upload site artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -115,6 +135,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Check the Helm values and controller flags pages are up to date
+        run: go run ./hack/gen-reference-docs --check
 
       - name: Check CLI detail pages and quick-reference are up to date
         run: |

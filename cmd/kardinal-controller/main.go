@@ -144,7 +144,7 @@ func main() {
 	// Workers per controller: one object is never reconciled twice at once
 	// (the work queue serializes it), so these only let different objects
 	// run side by side. The defaults are measured with the scale suite
-	// (docs/installation.md, Controller concurrency).
+	// (docs/operate.md, Controller concurrency).
 	for _, w := range []struct {
 		name string
 		def  int
@@ -184,7 +184,7 @@ func main() {
 		"How long the Graph of a Superseded Bundle, or of a Verified one a newer Bundle replaced in every environment, "+
 			"is kept before it is retired (deleted; the Bundle keeps its PromotionSteps in status.retiredSteps). 0 keeps it.")
 	flag.DurationVar(&retire.Failed, "graph-retire-failed-after", bundlereconciler.DefaultRetirePolicy.Failed,
-		"How long the Graph of a Failed Bundle is kept before it is retired. A retired Failed Bundle no longer recovers. 0 keeps it.")
+		"How long the Graph of a Failed Bundle is kept before it is retired. A retired Failed Bundle does not recover. 0 keeps it.")
 	flag.DurationVar(&retire.Verified, "graph-retire-verified-after", bundlereconciler.DefaultRetirePolicy.Verified,
 		"How long the Graph of a Verified Bundle that is still deployed in an environment is kept before it is retired. 0 keeps it.")
 	flag.BoolVar(&leaderElect, "leader-elect", false,
@@ -196,7 +196,7 @@ func main() {
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081",
 		"The address the probe endpoint binds to.")
 	flag.Float64Var(&eventLimit.QPS, "event-qps", kubeevent.DefaultQPS,
-		"Most Normal Kubernetes Events the controller writes a second (one bucket for all namespaces); Events over the rate are dropped and counted in kardinal_events_dropped_total. Events are best effort: docs/installation.md (Kubernetes Events) lists each Warning's durable record. 0 removes the limit.")
+		"Most Normal Kubernetes Events the controller writes a second (one bucket for all namespaces); Events over the rate are dropped and counted in kardinal_events_dropped_total. Events are best effort: docs/operate.md (Kubernetes Events) lists each Warning's durable record. 0 removes the limit.")
 	flag.IntVar(&eventLimit.Burst, "event-burst", kubeevent.DefaultBurst,
 		"Most Normal Kubernetes Events the controller writes at once, above --event-qps.")
 	flag.Float64Var(&eventWarningLimit.QPS, "event-warning-qps", kubeevent.DefaultWarningQPS,
@@ -364,10 +364,6 @@ func main() {
 		"Path to the TLS private key file (PEM). When set together with --tls-cert-file, "+
 			"both the UI and webhook servers use HTTPS instead of plain HTTP. "+
 			"Also readable from KARDINAL_TLS_KEY_FILE environment variable.")
-
-	// --shard and --pipeline-admission-webhook were removed; setting one stops
-	// the controller with a message (removed_settings.go).
-	removed := bindRemovedFlags(flag.CommandLine, os.Getenv)
 
 	// SCM credential rotation — watch a Kubernetes Secret and reload the SCM
 	// provider on change without restarting the controller. When
@@ -538,10 +534,6 @@ func main() {
 	// reconciler line, errors included, goes to a disabled logger.
 	zerolog.DefaultContextLogger = &logger
 
-	if err := removed.err(); err != nil {
-		logger.Fatal().Err(err).Msg("a removed controller setting is still set")
-	}
-
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
 
 	// The Go runtime's soft memory limit at 90% of the container limit, so
@@ -673,6 +665,20 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up the SCM provider")
 	}
 	allowedRepos = canonicalRepos
+	// The controller's own token Secret: no Pipeline may name it as its
+	// git.secretRef (it would choose where the token goes, and skip
+	// --scm-allowed-repositories).
+	var controllerSecret *scm.ControllerTokenSecret
+	if scmTokenSecretName != "" {
+		ns := scmTokenSecretNamespace
+		if ns == "" {
+			ns = os.Getenv("POD_NAMESPACE")
+		}
+		if ns == "" {
+			ns = "kardinal-system"
+		}
+		controllerSecret = &scm.ControllerTokenSecret{Namespace: ns, Name: scmTokenSecretName}
+	}
 	if dynProvider != nil {
 		// Resolve the namespace: flag > env > controller namespace.
 		if scmTokenSecretNamespace == "" {
@@ -694,6 +700,9 @@ func main() {
 			scmTokenSecretKey,
 			logger,
 		)
+		// Warns (once per labelling) when the Secret is labelled
+		// kardinal.io/referenceable.
+		watcher.Recorder = mgr.GetEventRecorder("kardinal-scm-token-watcher")
 		if addErr := mgr.Add(watcher); addErr != nil {
 			logger.Fatal().Err(addErr).Msg("unable to register SCM credential watcher")
 		}
@@ -745,8 +754,9 @@ func main() {
 		Client:  mgr.GetClient(),
 		// Uncached: the maxConcurrentPromotions count must see the Promoting
 		// patch of the previous reconcile (#1310).
-		APIReader:        mgr.GetAPIReader(),
-		Translator:       newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), providers, graphCompactAbove, logger),
+		APIReader: mgr.GetAPIReader(),
+		Translator: newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), providers, graphCompactAbove, logger).
+			WithControllerSecret(controllerSecret),
 		GraphChecker:     newGraphClient(mgr.GetConfig(), logger),
 		Recorder:         eventRecorder,
 		PolicyNamespaces: splitCSV(policyNamespaces),
@@ -809,7 +819,8 @@ func main() {
 	}
 
 	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos,
-		CompactAbove: &graphCompactAbove, Reader: mgr.GetAPIReader(), Workers: *workers["pipeline"],
+		ControllerSecret: controllerSecret,
+		CompactAbove:     &graphCompactAbove, Reader: mgr.GetAPIReader(), Workers: *workers["pipeline"],
 		HoldBundleGrace: holdBundleGrace, Recorder: eventRecorder,
 		FleetApplicationNamespaces:    splitCSV(fleetApplicationNamespaces),
 		FleetClusterProfileNamespaces: splitCSV(fleetClusterProfileNamespaces)}).
@@ -842,6 +853,7 @@ func main() {
 		APIReader:           mgr.GetAPIReader(),
 		SCM:                 scmProvider,
 		AllowedRepositories: allowedRepos,
+		ControllerSecret:    controllerSecret,
 		Providers:           providers,
 		GitClient:           gitClient,
 		GatesStatusDisabled: !gatesCommitStatus,
@@ -895,6 +907,7 @@ func main() {
 		Resources:           renderResources,
 		Timeout:             renderTimeout,
 		ControllerNamespace: hookControllerNS,
+		ControllerSecret:    controllerSecret,
 		ImagePullSecrets:    splitCSV(renderPullSecrets),
 		AuthorName:          "kardinal-promoter",
 		AuthorEmail:         "kardinal@kardinal.io",
