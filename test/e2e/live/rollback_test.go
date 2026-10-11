@@ -720,7 +720,13 @@ func TestRollback_OnHealthFailure(t *testing.T) {
 	out := e.MustKardinal(t, a.ns, "get", "auditevents", "--pipeline", pipelineName, "--bundle", b2, "--env", "test")
 	var actions []string
 	for _, l := range strings.Split(strings.TrimSpace(out), "\n")[1:] {
+		// The VERSION cell is "<tag> (<bundle>)", two words, or the
+		// Bundle alone when it has no tag.
 		f := strings.Fields(l)
+		if len(f) > 3 && f[3] == "("+b2+")" {
+			f = append(f[:2], f[3:]...)
+			f[2] = b2
+		}
 		require.GreaterOrEqual(t, len(f), 6, "auditevents row %q", l)
 		require.Equal(t, []string{pipelineName, b2, "test"}, f[1:4], "auditevents row %q", l)
 		actions = append(actions, f[4]+"/"+f[5])

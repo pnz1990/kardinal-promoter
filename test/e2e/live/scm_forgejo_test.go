@@ -363,8 +363,8 @@ func TestForgejo_PRBodySnapshot(t *testing.T) {
 	_, pr = a.waitOpenPR(t, second, "prod")
 	body = prBody(pr.Body)
 	assert.Contains(t, body, "| "+fixtures.Image+" | "+fixtures.V3+" | — | — | — | — |", "provenance row without provenance")
-	assert.Regexp(t, `\| hold \| `+regexp.QuoteMeta(a.ns)+` \| Pass \| bundle\.version=`+regexp.QuoteMeta(fixtures.V3)+": "+
-		regexp.QuoteMeta(openExpr)+` = true \| `+evaluatedAt+` \|`, body, "gate row")
+	assert.Regexp(t, `\| hold \| `+regexp.QuoteMeta(a.ns)+` \| Pass \| `+regexp.QuoteMeta(openExpr)+` = true \(version `+
+		regexp.QuoteMeta(fixtures.V3)+`\) \| `+evaluatedAt+` \|`, body, "gate row")
 	a.merge(t, pr)
 	e.WaitStepState(t, a.ns, pipelineName, second, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V3)
