@@ -209,6 +209,9 @@ describe('vocabulary', () => {
     // Roll back (a Verified stage), then its message.
     await click(screen.getAllByRole('button', { name: 'Roll back test' })[0])
     check('roll back dialog')
+    await click(within(screen.getByRole('dialog')).getByRole('checkbox', { name: /^Hold test/ }))
+    check('roll back and hold')
+    await click(within(screen.getByRole('dialog')).getByRole('checkbox', { name: /^Hold test/ }))
     await click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Roll back test' }))
     check('after roll back')
 
