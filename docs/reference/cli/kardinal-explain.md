@@ -55,6 +55,7 @@ kardinal explain <pipeline> [<env>] [flags]
 
 ```
   kardinal explain my-app
+  kardinal why my-app prod
   kardinal explain my-app prod -w
 ```
 

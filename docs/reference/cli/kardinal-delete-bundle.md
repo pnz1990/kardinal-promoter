@@ -32,6 +32,7 @@ kardinal delete bundle <name> [flags]
 
 ```
   -h, --help   help for bundle
+      --yes    Do not ask for confirmation on a terminal
 ```
 
 ### Options inherited from parent commands

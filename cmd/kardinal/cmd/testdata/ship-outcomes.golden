@@ -1,0 +1,21 @@
+verified: 0 Verified: b1 is live in test, prod
+failed: 1 Failed: Version b1 failed in test: kardinal why demo explains it
+superseded: 5 Superseded: Version b1 was replaced by a newer version: kardinal status demo
+rejected: 5 Rejected: Version b1 was rejected: kardinal history demo
+approval gate: 3 Held: Version b1 stopped: prod waits for approval at gate cab (kardinal approve demo prod)
+label gate: a person: 3 Held: Version b1 stopped: prod is held by gate cab, which does not open by itself (kardinal why demo prod)
+label gate with a recheckInterval (every gate has one): a person: 3 Held: Version b1 stopped: prod is held by gate cab, which does not open by itself (kardinal why demo prod)
+upstream gate: waited for: waits
+metric gate: waited for: waits
+soak gate: waited for: waits
+schedule gate: waited for: waits
+soak gate with --stop-at-gate: 3 Held: Version b1 stopped: prod is held by gate cab (--stop-at-gate) (kardinal why demo prod)
+a gate not evaluated yet does not stop it: waits
+held: 3 Held: Version b1 stopped: prod is held (kardinal unhold demo prod)
+paused: 3 Held: Version b1 stopped: pipeline demo is paused (kardinal resume demo)
+its PR needs a person: 4 WaitingForMerge: Version b1 waits for its PR to be merged in prod: https://git/pr/7
+its PR merges by itself: waited for: waits
+its auto-merge failed: 4 WaitingForMerge: Version b1 waits for its PR to be merged in prod: https://git/pr/7
+moving in one environment, held in another: waits
+between steps: waits
+deleted: 5 Deleted: Version b1 was deleted: kardinal status demo

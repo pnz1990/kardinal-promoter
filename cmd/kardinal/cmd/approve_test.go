@@ -198,3 +198,58 @@ func TestApprove_FleetTarget(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `pipeline app has no environment "prod-ap"`)
 }
+
+// TestApproveTarget (C5): kardinal approve <pipeline> <env> resolves the
+// Bundle waiting to enter env (status.environments' incoming Bundle, else
+// the current Bundle with env still ahead); <bundle> --env keeps working,
+// and an environment with nothing on its way says so.
+//
+// Covers CLI-VERBS-01.
+func TestApproveTarget(t *testing.T) {
+	ctx := context.Background()
+	b1 := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v1", Namespace: "default"},
+		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "app"}, Status: v1alpha1.BundleStatus{Phase: "Verified"}}
+	b2 := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v2", Namespace: "default"},
+		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "app"}, Status: v1alpha1.BundleStatus{Phase: "Promoting"}}
+	p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "prod"}}}}
+	p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{
+		{Name: "test", Bundle: "app-v2", State: "Verified"},
+		{Name: "prod", Bundle: "app-v1", IncomingBundle: "app-v2", State: "Pending", BlockedBy: []string{"cab"}},
+	}
+	c := fake.NewClientBuilder().WithScheme(rejectScheme(t)).WithObjects(b1, b2, p).
+		WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
+	approve, _, err := NewRootCmd().Find([]string{"approve"})
+	require.NoError(t, err)
+
+	bundle, env, err := approveTarget(ctx, c, "default", approve, []string{"app", "prod"}, "")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"app-v2", "prod"}, []string{bundle, env}, "the incoming Bundle")
+
+	bundle, env, err = approveTarget(ctx, c, "default", approve, []string{"app-v1"}, "prod")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"app-v1", "prod"}, []string{bundle, env}, "<bundle> --env names it")
+
+	_, _, err = approveTarget(ctx, c, "default", approve, []string{"app", "test"}, "")
+	assert.ErrorContains(t, err, "approve: no version waits for test of app: app-v2 runs there and no newer one is on its way")
+	_, _, err = approveTarget(ctx, c, "default", approve, []string{"app-v1"}, "")
+	assert.ErrorContains(t, err, "which environment? Give it with --env: kardinal approve app-v1 --env <env>")
+	_, _, err = approveTarget(ctx, c, "default", approve, []string{"nope"}, "prod")
+	assert.ErrorContains(t, err, "approve: bundle nope not found in namespace default (nor a pipeline of that name)")
+	_, _, err = approveTarget(ctx, c, "default", approve, []string{"app", "staging"}, "")
+	assert.ErrorContains(t, err, `pipeline app has no environment "staging"`)
+	_, _, err = approveTarget(ctx, c, "default", approve, []string{"app", "prod"}, "test")
+	assert.ErrorContains(t, err, "the environment is given twice")
+
+	// Ahead of the gate: with nothing incoming in prod yet, the current
+	// Bundle that will come there.
+	p2 := p.DeepCopy()
+	p2.ResourceVersion = ""
+	p2.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "test", Bundle: "app-v1", IncomingBundle: "app-v2", State: "Promoting"},
+		{Name: "prod", Bundle: "app-v1", State: "Verified"}}
+	c = fake.NewClientBuilder().WithScheme(rejectScheme(t)).WithObjects(b1, b2, p2).
+		WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
+	bundle, _, err = approveTarget(ctx, c, "default", approve, []string{"app", "prod"}, "")
+	require.NoError(t, err)
+	assert.Equal(t, "app-v2", bundle)
+}

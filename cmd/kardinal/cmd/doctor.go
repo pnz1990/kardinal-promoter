@@ -515,7 +515,7 @@ func checkPipelineHealth(ctx context.Context, client sigs_client.Client, ns, nam
 	default:
 		// Unknown is the phase before the first Bundle.
 		r.icon = doctorPass
-		r.detail = "status: Unknown (spec valid, no Bundle yet)"
+		r.detail = "status: Unknown (spec valid, no version shipped yet)"
 	}
 	return r
 }
