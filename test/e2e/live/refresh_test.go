@@ -164,7 +164,8 @@ func TestFlux_RefreshOnPromotion(t *testing.T) {
 	commit := ps.Status.Outputs["commitSHA"]
 	require.NotEmpty(t, commit)
 	assert.Equal(t, commit, ps.Status.RefreshRevision)
-	requested := ps.Status.RefreshRequestedAt.UTC().Format(time.RFC3339)
+	// The recorded time and the step (unique per step).
+	requested := ps.Status.RefreshRequestedAt.UTC().Format(time.RFC3339) + " " + ns + "/" + ps.Name
 	assert.Equal(t, fmt.Sprintf("refresh requested: GitRepository %s/%s, Kustomization %s/%s", ns, fluxSource, ns, fixtures.Workload("test")),
 		ps.Status.RefreshMessage)
 	assert.True(t, refreshEvent(t, e, ps, "GitOpsRefreshRequested"))
