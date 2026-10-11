@@ -147,7 +147,7 @@ func rbHistory(t *testing.T, a *app) []map[string]string {
 
 // rbHistoryRow is a history row's BUNDLE, ACTION, ENV and PR.
 func rbHistoryRow(r map[string]string) []string {
-	return []string{r["BUNDLE"], r["ACTION"], r["ENV"], r["PR"]}
+	return []string{framework.BundleOf(r["VERSION"]), r["ACTION"], r["ENV"], r["PR"]}
 }
 
 // rbFinished is a history DURATION of a finished step: a whole number of a
@@ -468,7 +468,7 @@ func TestRollback_History(t *testing.T) {
 		}
 		var got []string
 		for _, r := range framework.ParseTable(out) {
-			got = append(got, r["BUNDLE"]+"/"+r["ACTION"])
+			got = append(got, framework.BundleOf(r["VERSION"])+"/"+r["ACTION"])
 		}
 		return assert.ObjectsAreEqual([]string{b3 + "/promote", rb + "/rollback", b2 + "/promote"}, got), strings.Join(got, " ")
 	})

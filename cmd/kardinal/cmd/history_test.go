@@ -49,7 +49,7 @@ func TestHistory_ListsPromotionSteps(t *testing.T) {
 	out := buf.String()
 	assert.Contains(t, out, "nginx-demo-v1", "should show bundle v1")
 	assert.Contains(t, out, "nginx-demo-v2", "should show bundle v2")
-	assert.Contains(t, out, "BUNDLE", "should have header")
+	assert.Contains(t, out, "VERSION", "should have header")
 	assert.Contains(t, out, "ACTION", "should have ACTION column")
 	assert.Contains(t, out, "ENV", "should have ENV column")
 	assert.Contains(t, out, "#10", "should show PR number")

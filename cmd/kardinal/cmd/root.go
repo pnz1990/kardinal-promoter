@@ -52,6 +52,7 @@ func NewRootCmd() *cobra.Command {
 gates, pull requests and health checks, on Kubernetes.
 
 Getting started:
+  kardinal quickstart --repo <your fork>          try it on a local cluster
   kardinal init                                   write a Pipeline for your repository
   kardinal create bundle my-app --image app:1.4   start a promotion
   kardinal status my-app                          see where each version is, and why`,
@@ -88,8 +89,8 @@ Getting started:
 			root.AddCommand(c)
 		}
 	}
-	add(groupStart, newInitCmd(), newDoctorCmd(), newDashboardCmd(), newVersionCmd())
-	add(groupShip, newShipCmd(), newCreateCmd(), newStatusCmd(), newExplainCmd(), newHistoryCmd(), newLogsCmd(), newDiffCmd(), newGetCmd())
+	add(groupStart, newQuickstartCmd(), newInitCmd(), newDoctorCmd(), newDashboardCmd(), newVersionCmd())
+	add(groupShip, newShipCmd(), newCreateCmd(), newStatusCmd(), newWhyCmd(), newExplainCmd(), newHistoryCmd(), newLogsCmd(), newDiffCmd(), newGetCmd())
 	add(groupGate, newApproveCmd(), newOverrideCmd(), newPromoteCmd(), newPolicyCmd())
 	add(groupIncident, newPauseCmd(), newResumeCmd(), newRollbackCmd(), newHoldCmd(), newReleaseHoldCmd(), newRejectCmd())
 	add(groupAdmin, newValidateCmd(), newAuditCmd(), newMetricsCmd(), newRefreshCmd(), newDeleteCmd(), newCompletionCmd())

@@ -11,6 +11,7 @@
 // width); narrower, a modal sheet with trapped focus. Esc closes an open action dialog first, then the drawer.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
+import CopyButton from '../components/CopyButton'
 import { displayState, type Tone } from '../displayStates.gen'
 import { formatElapsedSince } from '../timeFormat'
 import { breakpoint } from '../tokens'
@@ -163,7 +164,7 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
             {view.why.length === 0
               ? <p className="stage-muted">{view.running && !view.incoming ? `Nothing is waiting: ${view.running.version} is live.` : `${view.state.label}.`}</p>
               : <ol className="stage-why">{view.why.map((w, i) => (
-                  <WhyItem key={i} reason={w} now={now} primary={view.primary} onAct={k => open(k, w.gate)} onUpstream={u => onNavigate(u, 'why')}
+                  <WhyItem key={i} reason={w} now={now} primary={view.primary} cli={cliCommand(w, pipeline, env, namespace)} onAct={k => open(k, w.gate)} onUpstream={u => onNavigate(u, 'why')}
                     upstreams={view.spec?.upstreams ?? []} />))}
                 </ol>}
           </section>
@@ -206,8 +207,19 @@ function Version({ version, bundle }: { version: string; bundle: string }) {
   )
 }
 
-function WhyItem({ reason: w, now, primary, onAct, onUpstream, upstreams }: { reason: WaitReason; now: number; primary?: StageActionKind;
-  onAct: (k: StageActionKind) => void; onUpstream: (env: string) => void; upstreams: string[] }) {
+/**
+ * The CLI command that moves a wait on, for the waits a person ends: the
+ * approval (where the UI cannot approve, e.g. without token review, this is
+ * the way to do it). -n only outside default.
+ */
+export function cliCommand(w: WaitReason, pipeline: string, env: string, namespace: string): string | undefined {
+  if (w.kind !== 'approval') return undefined
+  const ns = namespace && namespace !== 'default' ? ` -n ${namespace}` : ''
+  return `kardinal approve ${pipeline} ${env}${ns}`
+}
+
+function WhyItem({ reason: w, now, primary, cli, onAct, onUpstream, upstreams }: { reason: WaitReason; now: number; primary?: StageActionKind;
+  cli?: string; onAct: (k: StageActionKind) => void; onUpstream: (env: string) => void; upstreams: string[] }) {
   const age = formatElapsedSince(w.evaluatedAt, now)
   return (
     <li className={`stage-why__item stage-why__item--${w.kind}`}>
@@ -217,6 +229,13 @@ function WhyItem({ reason: w, now, primary, onAct, onUpstream, upstreams }: { re
         <ul className="stage-decisions">{w.gate.approval.decisions.map((d, i) => (
           <li key={i}>{d.user} {d.decision === 'approve' ? 'approved' : 'rejected'}{d.counted ? '' : ` (not counted: ${d.reason ?? 'not allowed'})`}</li>
         ))}</ul>
+      )}
+      {cli && (
+        <p className="stage-why__cli">
+          <span className="stage-muted">From a terminal: </span>
+          <code className="stage-cli">{cli}</code>
+          <CopyButton text={cli} title={`Copy ${cli}`} />
+        </p>
       )}
       <div className="stage-why__meta">
         {w.gate && <span className="stage-muted">{age ? `evaluated ${age} ago` : 'not evaluated yet'}</span>}

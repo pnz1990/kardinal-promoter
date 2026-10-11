@@ -127,16 +127,27 @@ func getAuditEventsFnNS(out io.Writer, client sigs_client.Client, ns, pipeline, 
 		return nil
 	}
 
+	// The table names each Bundle by its version; a Bundle that is gone (or
+	// cannot be listed) by its name.
+	versions := map[string]string{}
+	var bundles v1alpha1.BundleList
+	if err := client.List(context.Background(), &bundles, sigs_client.InNamespace(ns)); err == nil {
+		for i := range bundles.Items {
+			b := &bundles.Items[i]
+			versions[b.Namespace+"/"+b.Name] = createdOf(b).Version
+		}
+	}
+
 	// Print table.
 	tw := style.NewTable(out, 2)
-	_, _ = fmt.Fprintln(tw, nsCol(showNS, "NAMESPACE")+"TIMESTAMP\tPIPELINE\tBUNDLE\tENV\tACTION\tOUTCOME\tMESSAGE")
+	_, _ = fmt.Fprintln(tw, nsCol(showNS, "NAMESPACE")+"TIMESTAMP\tPIPELINE\tVERSION\tENV\tACTION\tOUTCOME\tMESSAGE")
 	for _, ae := range events {
 		ts := ae.Spec.Timestamp.UTC().Format("2006-01-02T15:04Z")
 		msg := truncateRunes(ae.Spec.Message, 50)
 		_, _ = fmt.Fprintf(tw, nsCol(showNS, ae.Namespace)+"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			ts,
 			ae.Spec.PipelineName,
-			ae.Spec.BundleName,
+			versionLabel(versions[ae.Namespace+"/"+ae.Spec.BundleName], ae.Spec.BundleName),
 			ae.Spec.Environment,
 			ae.Spec.Action,
 			ae.Spec.Outcome,
