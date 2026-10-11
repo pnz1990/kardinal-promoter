@@ -59,7 +59,7 @@ func TestWhy_Golden(t *testing.T) {
 		{"approval", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", IncomingBundle: "demo-zhxk2", IncomingVersion: "sha-9349a3f",
 				State: "Pending", BlockedBy: []string{"prod-approval"}}}
-			g := explainGateInstance("demo", "demo-zhxk2", "prod", "prod-approval", "true", false, true, "prod waits for your approval (bundle.version=sha-9349a3f: waiting for approvals: 0 of 1)")
+			g := explainGateInstance("demo", "demo-zhxk2", "prod", "prod-approval", "true", false, true, "prod waits for your approval (waiting for approvals: 0 of 1; version sha-9349a3f)")
 			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1}
 			return []sigs_client.Object{g}
 		}},
@@ -75,16 +75,18 @@ func TestWhy_Golden(t *testing.T) {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
 				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", BlockedBy: []string{"no-weekend-deploys"}}}
 			g := explainGateInstance("demo", "demo-b", "prod", "no-weekend-deploys", "!schedule.isWeekend", false, true,
-				"Production deployments are blocked on weekends (bundle.version=1.5.0: !schedule.isWeekend = false)")
+				"Production deployments are blocked on weekends (!schedule.isWeekend = false; version 1.5.0)")
 			g.Spec.Message = "Production deployments are blocked on weekends"
+			g.Status.BundleVersion = "1.5.0"
 			return []sigs_client.Object{g}
 		}},
 		{"a gate that needs a person", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
 				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", BlockedBy: []string{"label"}}}
 			g := explainGateInstance("demo", "demo-b", "prod", "label", `bundle.labels.approved == "yes"`, false, true,
-				`(bundle.version=1.5.0: bundle.labels.approved == "yes" = false)`)
+				`bundle.labels.approved == "yes" = false (version 1.5.0)`)
 			g.Spec.RecheckInterval = "1m"
+			g.Status.BundleVersion = "1.5.0"
 			return []sigs_client.Object{g}
 		}},
 		{"held", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
