@@ -7,8 +7,9 @@ objects (docs/health-adapters.md#sync-on-promotion). health.refresh.enabled
 grants the controller patch on every Application, Kustomization and
 GitRepository, for one annotation: argocd.argoproj.io/refresh or
 reconcile.fluxcd.io/requestedAt. RBAC cannot limit a patch to an annotation,
-so this policy denies any other change the controller makes to them (spec,
-status, labels, any other annotation, finalizers, owner references) unless
+so this policy denies any other change the controller makes to them (any
+field but metadata, any metadata but the annotation and resourceVersion,
+managedFields and generation) unless
 the controller may also update the object: rbac.argocdApplicationsWrite
 grants update on Applications for the argocd update strategy, and a Role of
 your own can grant it per object. Kubernetes 1.30+ serves
@@ -64,19 +65,20 @@ spec:
           (k in variables.oldAnnotations && variables.newAnnotations[k] == variables.oldAnnotations[k])) &&
         variables.oldAnnotations.all(k, k == variables.key || k in variables.newAnnotations)
     # Nothing else the controller could change is changed.
-    # An Application's operation (a sync request) is a top-level field.
+    # Nothing else changes: every top-level field but metadata (spec,
+    # status, an Application's operation, any other), and every metadata
+    # field but the annotations (above) and what the API server maintains
+    # itself (resourceVersion, managedFields, generation).
+    - name: serverFields
+      expression: "['annotations', 'resourceVersion', 'managedFields', 'generation']"
     - name: onlyRefresh
       expression: >-
-        variables.annotationsKept
-        {{- range $f := list "spec" "status" }}
-        && has(object.{{ $f }}) == has(oldObject.{{ $f }}) && (!has(object.{{ $f }}) || object.{{ $f }} == oldObject.{{ $f }})
-        {{- end }}
-        && (request.resource.group != 'argoproj.io' ||
-          has(object.operation) == has(oldObject.operation) && (!has(object.operation) || object.operation == oldObject.operation))
-        {{- range $f := list "labels" "finalizers" "ownerReferences" }}
-        && has(object.metadata.{{ $f }}) == has(oldObject.metadata.{{ $f }}) &&
-        (!has(object.metadata.{{ $f }}) || object.metadata.{{ $f }} == oldObject.metadata.{{ $f }})
-        {{- end }}
+        variables.annotationsKept &&
+        object.all(k, k == 'metadata' || (k in oldObject && object[k] == oldObject[k])) &&
+        oldObject.all(k, k == 'metadata' || k in object) &&
+        object.metadata.all(k, k in variables.serverFields ||
+          (k in oldObject.metadata && object.metadata[k] == oldObject.metadata[k])) &&
+        oldObject.metadata.all(k, k in variables.serverFields || k in object.metadata)
     # Wider writes need update on the object, which RBAC grants:
     # rbac.argocdApplicationsWrite on every Application, or a Role of yours.
     - name: mayUpdate

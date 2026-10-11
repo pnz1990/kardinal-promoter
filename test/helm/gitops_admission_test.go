@@ -161,6 +161,18 @@ func TestHelmTemplateGitOpsWritesPolicy(t *testing.T) {
 		{name: "finalizer added", kind: argo, new: func(m map[string]interface{}) {
 			m["metadata"].(map[string]interface{})["finalizers"] = []interface{}{"x"}
 		}, denied: true},
+		{name: "another top-level field added", kind: argo, new: func(m map[string]interface{}) {
+			m["extra"] = map[string]interface{}{"x": "y"}
+		}, denied: true},
+		{name: "another metadata field changed", kind: argo, new: func(m map[string]interface{}) {
+			m["metadata"].(map[string]interface{})["generateName"] = "x-"
+		}, denied: true},
+		{name: "fields the API server maintains change with the refresh", kind: argo, new: func(m map[string]interface{}) {
+			md := m["metadata"].(map[string]interface{})
+			md["resourceVersion"], md["generation"] = "2", int64(2)
+			md["managedFields"] = []interface{}{map[string]interface{}{"manager": "kardinal"}}
+			md["annotations"].(map[string]interface{})["argocd.argoproj.io/refresh"] = "normal"
+		}},
 		{name: "another user is not matched", user: "alice", kind: argo, new: func(m map[string]interface{}) {
 			m["spec"].(map[string]interface{})["project"] = "other"
 		}, unmatched: true},
