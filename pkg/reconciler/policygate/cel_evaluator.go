@@ -101,8 +101,8 @@ func ValidateExpression(expr string) error {
 //   - schedule — a plain map variable {isWeekend:bool, hour:int, dayOfWeek:string}
 //     NOTE: schedule.* is a map injection, NOT a CEL library function.
 //     It is only available here (PolicyGate CEL context), not in kro
-//     Graph readyWhen/includeWhen expressions. See issue #616 and
-//     docs/design/11-graph-purity-tech-debt.md §ScheduleClock Implementation.
+//     Graph readyWhen/includeWhen expressions. See ledger G8 in
+//     docs/design/16-graph-capability-ledger.md.
 func newEvaluator() (*evaluator, error) {
 	env, err := goccel.NewEnv(
 		goccel.Variable("bundle", goccel.DynType),

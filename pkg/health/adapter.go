@@ -1834,8 +1834,7 @@ func NewAutoDetector(k8s sigs_client.Client, dynClient dynamic.Interface) *AutoD
 // healthType must be one of: "resource", "argocd", "flux", "argoRollouts", "flagger".
 // An empty or unknown healthType returns an error. Callers resolve an omitted
 // health.type with EffectiveType (DefaultType "resource") before calling
-// Select; there is no auto-detection by CRD probing (HE-4 in
-// docs/design/11-graph-purity-tech-debt.md).
+// Select; there is no auto-detection by CRD probing.
 func (d *AutoDetector) Select(_ context.Context, healthType string) (Adapter, error) {
 	switch healthType {
 	case "resource":

@@ -44,7 +44,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
-import { useTheme } from './ThemeContext'
+import { useTheme, themeControlLabel } from './ThemeContext'
 import { useUrlState } from './useUrlState'
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
 import { resolveShownBundle } from './bundleSelection'
@@ -71,7 +71,7 @@ function formatElapsed(seconds: number | null): string {
 }
 
 export function App() {
-  const { theme, toggleTheme } = useTheme()
+  const { theme, preference, toggleTheme } = useTheme()
   // #740: URL routing — pipeline and node selection backed by hash fragment.
   const [urlState, setUrlState] = useUrlState()
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
@@ -509,8 +509,8 @@ export function App() {
           {/* Theme toggle button (#722) */}
           <button
             onClick={toggleTheme}
-            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            title={themeControlLabel(preference, theme)}
+            aria-label={themeControlLabel(preference, theme)}
             style={{
               background: 'none',
               border: '1px solid var(--color-border)',
@@ -522,7 +522,7 @@ export function App() {
               lineHeight: 1,
             }}
           >
-            {theme === 'dark' ? '☀' : '☾'}
+            <span aria-hidden="true">{preference === 'system' ? '◐' : preference === 'light' ? '☀' : '☾'}</span>
           </button>
           </div>
         </div>
@@ -554,7 +554,7 @@ export function App() {
                 borderRadius: '4px',
                 padding: '1px 5px',
                 fontWeight: 400,
-                fontFamily: 'monospace',
+                fontFamily: 'var(--k-font-mono)',
               }} title={`Namespace: ${currentNamespace}`}>
                 {currentNamespace}
               </span>
@@ -652,7 +652,7 @@ export function App() {
                     color: 'var(--color-text-muted)',
                   }}>
                     <span>
-                      Bundle: <span style={{ color: 'var(--color-code)', fontFamily: 'monospace' }}>{activeBundle.name}</span>
+                      Bundle: <span style={{ color: 'var(--color-code)', fontFamily: 'var(--k-font-mono)' }}>{activeBundle.name}</span>
                       {/* #763: copy bundle name */}
                       <CopyButton text={activeBundle.name} title={`Copy bundle name "${activeBundle.name}"`} />
                     </span>
@@ -663,7 +663,7 @@ export function App() {
                     {activeBundle.provenance?.commitSHA && (
                       <>
                         <span style={{ color: 'var(--color-text-faint)' }}>·</span>
-                        <span style={{ fontFamily: 'monospace', color: 'var(--color-text-muted)' }}
+                        <span style={{ fontFamily: 'var(--k-font-mono)', color: 'var(--color-text-muted)' }}
                               title="Commit SHA">
                           {activeBundle.provenance.commitSHA.slice(0, 8)}
                         </span>
@@ -758,9 +758,9 @@ export function App() {
                           color: 'var(--color-text-muted)',
                         }}>
                           <HealthChip state={b.phase} kind="bundle" size="sm" />
-                          <span style={{ fontFamily: 'monospace', color: 'var(--color-text)' }}>{b.name}</span>
+                          <span style={{ fontFamily: 'var(--k-font-mono)', color: 'var(--color-text)' }}>{b.name}</span>
                           {b.provenance?.commitSHA && (
-                            <span style={{ color: 'var(--color-text-muted)', fontFamily: 'monospace' }}>
+                            <span style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--k-font-mono)' }}>
                               {b.provenance.commitSHA.slice(0, 8)}
                             </span>
                           )}

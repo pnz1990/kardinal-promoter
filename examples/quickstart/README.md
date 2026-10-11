@@ -49,6 +49,7 @@ test (auto) --> uat (auto) --> [no-weekend-deploys] --> prod (pr-review)
 kubectl create secret generic github-token \
   --namespace=default \
   --from-literal=token="$GITHUB_PAT"
+kubectl label secret github-token --namespace=default kardinal.io/referenceable=true
 ```
 
 ### 2. Create the Argo CD Applications
@@ -66,6 +67,11 @@ kubectl apply -f policy-gates.yaml
 ```
 
 ### 4. Create the Pipeline
+
+`pipeline.yaml` sets only what differs from the defaults: the Argo CD health check and prod's
+PR review. Order, branch (`main`), paths (`environments/<name>`), the kustomize update and
+`approval: auto` are defaults; [examples/minimal](../minimal/) is the same Pipeline without the
+health checks, in 12 lines.
 
 ```bash
 kubectl apply -f pipeline.yaml

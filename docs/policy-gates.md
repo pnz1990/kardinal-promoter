@@ -137,7 +137,7 @@ spec:
 
 ### Team-level gates
 
-Created in the team's own namespace. Team gates are additive: they are injected alongside org gates. A team Pipeline can add restrictions but cannot remove or weaken org gates. The escape hatch is [`kardinal override`](#emergency-overrides-k-09): it patches the gate instances in the Pipeline namespace, so anyone with `patch` on PolicyGates there can force-pass an org gate for a limited time, with the reason recorded. Grant that verb only to the people allowed to break glass.
+Created in the team's own namespace. Team gates are additive: they are injected alongside org gates. A team Pipeline can add restrictions but cannot remove or weaken org gates. The escape hatch is [`kardinal override`](#emergency-overrides): it patches the gate instances in the Pipeline namespace, so anyone with `patch` on PolicyGates there can force-pass an org gate for a limited time, with the reason recorded. Grant that verb only to the people allowed to break glass.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -179,8 +179,7 @@ The Graph creates every gate instance in the Pipeline namespace and labels it
 `kardinal.io/gate-template-namespace` with its template's namespace. A gate from an org policy
 namespace reads `metrics.*` from the MetricChecks of that namespace, so the platform team owns
 the MetricChecks its gates use and a team MetricCheck of the same name cannot decide them. Every
-other gate reads the MetricChecks of the Pipeline namespace. An instance created before this
-label existed reads the Pipeline namespace until its Bundle's Graph is applied again.
+other gate reads the MetricChecks of the Pipeline namespace.
 
 A team can edit the labels of the instances in its namespace, so the controller trusts the label
 only when the namespace it names is an org policy namespace and holds the PolicyGate that the
@@ -190,33 +189,21 @@ the template, the gate evaluates with no metrics, so an expression that reads `m
 
 ## CEL Context
 
-All PolicyGate expressions are evaluated against the following context. All attributes listed are available in the current release; a test evaluates every attribute and example on this page against the controller's real context. Referencing an attribute or map key that does not exist is an evaluation error, and the gate blocks (fail-closed). See the [CEL context reference](reference/cel-context.md) for the full list.
+All PolicyGate expressions are evaluated against the same context. The
+[CEL context reference](reference/cel-context.md) lists every attribute with its type; a test
+evaluates every attribute and example on these pages against the controller's real context.
+Referencing an attribute or map key that does not exist is an evaluation error, and the gate
+blocks (fail-closed).
 
-### Core attributes
+The context has the Bundle (`bundle.*`, with `bundle.upstreamSoakMinutes` and the stage PRs'
+review state in `bundle.pr`), the time (`schedule.*`), the target environment
+(`environment.name`), per-environment soak and history (`upstream.*`), MetricCheck results
+(`metrics.*`), change windows (`changewindow`) and approvals (`approvals.*`).
 
-| Attribute | Type | Description | Example |
-|---|---|---|---|
-| `bundle.type` | string | Bundle type | `"image"` |
-| `bundle.version` | string | Image tag or semver | `"1.29.0"` |
-| `bundle.labels` | map | Bundle `metadata.labels`; values are strings. Always a map (empty when the Bundle has no labels) | `has(bundle.labels.hotfix) && bundle.labels.hotfix == "true"` |
-| `bundle.provenance.author` | string | Who triggered the CI build | `"dependabot[bot]"` |
-| `bundle.provenance.commitSHA` | string | Source commit | `"abc123"` |
-| `bundle.provenance.ciRunURL` | string | CI run link | `"https://..."` |
-| `bundle.intent.targetEnvironment` | string | `spec.intent.targetEnvironment` (empty when unset) | `"prod"` |
-| `schedule.isWeekend` | bool | Saturday or Sunday | `false` |
-| `schedule.hour` | int | Hour in UTC (0-23) | `14` |
-| `schedule.dayOfWeek` | string | Day name | `"Tuesday"` |
-| `environment.name` | string | Target environment name | `"prod"` |
+### Metric attributes
 
-### Metric and soak attributes
-
-| Attribute | Type | Description |
-|---|---|---|
-| `metrics.<name>.value` | string | Last value of the `MetricCheck` named `<name>` in the gate's [metrics namespace](#matching) (the org policy namespace for an org gate, the Pipeline namespace otherwise), as a string (`""` after a query error or when the result is stale). Convert with `double(...)` |
-| `metrics.<name>.result` | string | `"Pass"` or `"Fail"`: the MetricCheck's own threshold result. `"Stale"` when the result is stale |
-| `metrics.<name>.stale` | bool | `true` when the MetricCheck's result has not been refreshed in time: its `status.validUntil` is unset or has passed |
-| `bundle.upstreamSoakMinutes` | int | Soak minutes of the environment(s) directly upstream of the gated environment. With several direct upstreams (fan-in) it is the minimum. An upstream that is not Verified counts as 0. A root environment gets 0. |
-
+`metrics.<name>` reads the MetricCheck named `<name>` in the gate's [metrics namespace](#matching)
+(the org policy namespace for an org gate, the Pipeline namespace otherwise).
 MetricChecks query Prometheus, Datadog, CloudWatch, New Relic or any JSON web API, with credentials from Secrets; a `perPromotion` MetricCheck is instantiated for each Bundle and environment with the Bundle's version in its query, and the gate of that Bundle reads its own instance as `metrics.<name>` (see [Metric Checks](metric-checks.md)).
 
 The controller does not query a MetricCheck URL on a loopback, link-local or cloud metadata address: the MetricCheck's `status.reason` then reads `destination address is not allowed` (see [Outbound requests to user URLs](guides/security.md#outbound-requests-to-user-urls)).
@@ -241,11 +228,9 @@ parentheses when the gate has a message). `kubectl get metriccheck x -o yaml` sh
 
 A stale result is noticed at the gate's next evaluation (the next ScheduleClock tick or
 `recheckInterval`), and the first evaluation that refreshes it re-evaluates the gate at once.
-Right after an upgrade from a version without `validUntil`, every MetricCheck is stale until its
-first evaluation. The controller evaluates all of them when it starts, so metric gates can hold for
-at most one `interval`.
+The controller evaluates every MetricCheck when it starts.
 
-### Cross-stage history attributes (K-11)
+### Cross-stage history attributes
 
 Available for all gates. The history is computed from Bundle CRD status across the last 10
 promotions for the pipeline — no external API calls. The lookup is scoped to the last 10
@@ -253,23 +238,11 @@ Bundles by creation time. `upstream` has an entry for every environment in this 
 status or in that history (not only the gated environment's upstreams); any other name is an
 evaluation error and the gate blocks.
 
-| Attribute | Type | Description |
-|---|---|---|
-| `upstream.<env>.recentSuccessCount` | int | Number of bundles with `Verified` status for `<env>` in the last 10 promotions |
-| `upstream.<env>.recentFailureCount` | int | Number of bundles with `Failed` status for `<env>` in the last 10 promotions |
-| `upstream.<env>.lastPromotedAt` | string | RFC3339 timestamp of the last successful promotion for `<env>` (empty string if never) |
-| `upstream.<env>.soakMinutes` | int | This Bundle's soak minutes in `<env>` (from `Bundle.status.environments[].soakMinutes`; 0 when the Bundle has no status for `<env>`) |
-
-### PR review attributes (K-08)
+### PR review attributes
 
 Available when the stage has `approval: pr-review`. The review state is written by the
 PRStatus controller to `PRStatus.status.approved` / `status.approvalCount` — no
 external API calls are made during gate evaluation.
-
-| Attribute | Type | Description |
-|---|---|---|
-| `bundle.pr["<stageName>"].isApproved` | bool | True when the PR for the named stage has at least one approval and no outstanding change-request reviews |
-| `bundle.pr["<stageName>"].approvalCount` | int | Number of distinct approving reviews on the stage PR |
 
 Examples:
 
@@ -304,7 +277,7 @@ When no PRStatus exists for the named stage (e.g. the `open-pr` step has not run
 error and the gate blocks (fail-closed). To treat a missing PR as "not approved" without an
 error, write `"staging" in bundle.pr && bundle.pr["staging"].isApproved`.
 
-### ChangeWindow attributes (K-04)
+### ChangeWindow attributes
 
 A `ChangeWindow` is a cluster-scoped object that describes when promotions are blocked.
 It blocks nothing by itself: a PolicyGate blocks while a window it references is active.
@@ -375,7 +348,7 @@ Examples:
 # Block prod during Q4 holiday freeze
 expression: '!changewindow.isBlocked("q4-holiday-freeze")'
 
-# Equivalent legacy syntax
+# Equivalent map syntax
 expression: '!changewindow["q4-holiday-freeze"]'
 
 # Only promote inside business hours, and never during the freeze
@@ -547,7 +520,7 @@ Each Bundle's gate instances are copied from the PolicyGate templates when the c
 the Bundle's Graph. Editing a template, for example to fix its expression, does not change the
 instances of Bundles already in flight; Bundles created after the edit use the new expression. To
 release an in-flight Bundle that the old expression holds, use
-[`kardinal override`](#emergency-overrides-k-09) or create a new Bundle.
+[`kardinal override`](#emergency-overrides) or create a new Bundle.
 
 ### Gates of finished Bundles
 
@@ -635,7 +608,7 @@ How it works:
 - The gate counts a decision when its user is in `allowedUsers` or one of its groups is in `allowedGroups`, and, with `excludeAuthor`, the user is not the Bundle's verified creator. Each user counts once. A counted `reject` blocks the gate whatever the approvals. Every decision that appears or is revoked writes an `ApprovalRecorded` or `ApprovalRevoked` AuditEvent.
 - With neither `allowedUsers` nor `allowedGroups`, every Approval counts: RBAC on `approvals` decides who can approve, and that includes ServiceAccounts with `create` on `approvals`. Set an allow-list for a gate that only people may pass.
 - Group membership is checked when the Approval is created: an approval stays valid after its approver leaves the group. Revoke it by deleting the Approval (its approver) or with a new Bundle. Revoking only matters while the gate waits: once the gate passed and the environment's promotion started, a revoked approval does not stop or undo that promotion (reject the Bundle, or roll back, for that).
-- `excludeAuthor` compares approvers with the Bundle's `kardinal.io/created-by` annotation, its verified creator. `kardinal create bundle`, `kardinal promote` and `kardinal rollback` set it to your Kubernetes username, and the chart's `<release>-bundle-creator` policy admits it only in the requester's name and never lets it change. The UI sets the authenticated UI user (`kardinal-ui` without per-user authentication), a Subscription `subscription:<name>`, the Bundle API's static token `bundle-api`, an automatic rollback `kardinal-controller`; only this release's controller ServiceAccount (and the exact usernames in Helm `admission.controllerUsernames`) may name a creator other than itself. A Bundle without the annotation (created with `kubectl` or a GitOps tool without it) blocks a gate with `excludeAuthor`: `excludeAuthor cannot be enforced: the Bundle has no verified creator`. So does a Bundle created by a kardinal component (`subscription:*`, `bundle-api`, `kardinal-ui`, `kardinal-controller`): no person is known to exclude. For CI, create the Bundle as the CI identity: `kardinal create bundle` (or `kubectl create`) with the CI ServiceAccount's kubeconfig records that ServiceAccount, which the policy verifies; with the Bundle API, send the ServiceAccount's own token rather than the shared static token once TokenReview authentication of the Bundle API is enabled (#1511), so the controller records the authenticated caller.
+- `excludeAuthor` compares approvers with the Bundle's `kardinal.io/created-by` annotation, its verified creator. `kardinal create bundle`, `kardinal promote` and `kardinal rollback` set it to your Kubernetes username, and the chart's `<release>-bundle-creator` policy admits it only in the requester's name and never lets it change. The UI sets the authenticated UI user (`kardinal-ui` without per-user authentication), a Subscription `subscription:<name>`, the Bundle API's static token `bundle-api`, an automatic rollback `kardinal-controller`; only this release's controller ServiceAccount (and the exact usernames in Helm `admission.controllerUsernames`) may name a creator other than itself. A Bundle without the annotation (created with `kubectl` or a GitOps tool without it) blocks a gate with `excludeAuthor`: `excludeAuthor cannot be enforced: the Bundle has no verified creator`. So does a Bundle created by a kardinal component (`subscription:*`, `bundle-api`, `kardinal-ui`, `kardinal-controller`): no person is known to exclude. For CI, create the Bundle as the CI identity: `kardinal create bundle` (or `kubectl create`) with the CI ServiceAccount's kubeconfig records that ServiceAccount, which the policy verifies; with the Bundle API, send the ServiceAccount's own token rather than the shared static token once TokenReview authentication of the Bundle API is enabled, so the controller records the authenticated caller.
 - While it waits, the gate reason is `waiting for approvals: 1 of 2 (alice@example.com)` or `rejected by bob@example.com (wait for INC-42)`; once met, the expression's reason ends with `approved by alice@example.com, bob@example.com (2 of 2)`, which `kardinal explain`, the UI and the PR evidence show. `status.approvals` lists every decision, whether it counts, why not, and when the gate first saw it.
 - The expression can read the count: `approvals.count`, `approvals.required`, `approvals.users` and `approvals.rejected` ([CEL context](reference/cel-context.md#approvals)).
 - `kardinal override` still force-passes an approval gate, with its own audit record.
@@ -651,7 +624,7 @@ Limits:
 - Approving from the UI: the panel has **Approve**, **Reject** (which asks first) and **Revoke mine**, with an optional comment (`POST /api/v1/ui/approvals`). **Revoke mine** removes only your own decision: with `delete` on approvals you still cannot revoke someone else's from the UI (the request finds nothing of yours and changes nothing), nor with `kubectl delete` (the approvals policy refuses it). The copied CLI command names the namespace (`-n`). The decision is recorded for the user the UI authenticated. This needs TokenReview mode (`ui.auth.tokenReview=true`): with a static UI token or no UI auth there is no person to record, and the UI refuses and points to `kardinal approve`. Groups are the ones TokenReview returned, which `allowedGroups` is matched against. The UI checks with a SubjectAccessReview that the user may `create` (and, to replace or revoke, `delete`) Approvals in the namespace, then the controller writes the Approval with the user's name and groups and the annotation `kardinal.io/recorded-via: ui`. The `<release>-approvals` policy admits such a write from the controller only (and the usernames in `admission.controllerUsernames`), and lets the controller revoke only Approvals with that annotation. A decision made with `kardinal approve` is revoked with `kardinal approve --revoke`.
 - Upgrading: `helm upgrade` does not update CRDs. Apply `chart/kardinal-promoter/crds/kardinal.io_approvals.yaml` and the updated `kardinal.io_policygates.yaml` before you add `spec.approval` to a gate; a Graph with an approval gate cannot be built without the Approval CRD.
 
-## Emergency Overrides (K-09)
+## Emergency Overrides
 
 Use `kardinal override` to force-pass a PolicyGate with a mandatory audit record.
 

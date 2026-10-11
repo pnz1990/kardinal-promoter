@@ -195,7 +195,7 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
               border: '1px solid var(--color-border)',
               borderRadius: '4px',
               padding: '6px 8px',
-              fontFamily: 'monospace',
+              fontFamily: 'var(--k-font-mono)',
               fontSize: '11px',
               color: 'var(--color-text-muted)',
               wordBreak: 'break-word',

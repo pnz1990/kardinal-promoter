@@ -415,9 +415,6 @@ the first 63 characters (the label value limit), so you can find the Bundles of 
 kubectl get bundles -l kardinal.io/source-digest=$(echo "${DIGEST#sha256:}" | cut -c1-63)
 ```
 
-Bundles created by earlier releases carry the last 63 characters instead. The controller
-still matches those, so upgrading does not create a second Bundle for the same digest.
-
 Bundles carry labels, not owner references: deleting a Subscription does not delete
 the Bundles it created or stop their promotions.
 

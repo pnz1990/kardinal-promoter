@@ -59,7 +59,7 @@ export default function EventsPanel({ events, stepName, namespace }: EventsPanel
           }}
         >
           No events recorded yet.{' '}
-          <code style={{ fontStyle: 'normal', color: 'var(--color-text-muted)', fontFamily: 'monospace' }}>{kubectlCmd}</code>
+          <code style={{ fontStyle: 'normal', color: 'var(--color-text-muted)', fontFamily: 'var(--k-font-mono)' }}>{kubectlCmd}</code>
         </div>
       ) : (
         <div style={{
@@ -101,7 +101,7 @@ export default function EventsPanel({ events, stepName, namespace }: EventsPanel
                 {ev.count > 1 && (
                   <span style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>×{ev.count}</span>
                 )}
-                <span style={{ fontSize: '11px', color: 'var(--color-text-faint)', fontFamily: 'monospace', marginLeft: 'auto' }}>
+                <span style={{ fontSize: '11px', color: 'var(--color-text-faint)', fontFamily: 'var(--k-font-mono)', marginLeft: 'auto' }}>
                   {relativeTime(ev.lastTimestamp)}
                 </span>
               </div>

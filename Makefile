@@ -40,6 +40,9 @@ build-cli:
 	$(GO) build -o $(BINARY_CLI) ./cmd/kardinal/
 
 ## UI
+tokens: ## Regenerate the design tokens (web/tokens/tokens.json -> web/src/styles/tokens.css, web/src/tokens.ts, docs/stylesheets/tokens.css)
+	node scripts/gen-tokens.mjs
+
 ui: ## Build the embedded React UI (requires Node.js and npm)
 	cd web && npm ci && npm run build
 

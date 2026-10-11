@@ -15,7 +15,7 @@ This guide walks through migrating a Kargo-managed delivery pipeline to kardinal
 | `Promotion` | `PromotionStep` CRD | Created automatically by the Graph controller |
 | `VerifiedIn` / approval required | `approval: pr-review` on environment | PR approval required before HealthChecking |
 | `AnalysisTemplate` (verification) | `spec.environments[].verification` | The same AnalysisTemplates, run as AnalysisRuns after the health check; needs Argo Rollouts ([Analysis](../analysis.md)). Without it, a `MetricCheck` (Prometheus, Datadog, CloudWatch, New Relic or a JSON web query with a threshold; `perPromotion: true` with `{{ bundle.version }}` replaces AnalysisRun arguments, [Metric Checks](../metric-checks.md)) read by a PolicyGate |
-| Stage that updates an Argo CD Application in another cluster | Environment with `health.type: argocd` on that Application in the hub | Multi-cluster through an Argo CD or Flux hub; `health.cluster` kubeconfig Secrets are not supported |
+| Stage that updates an Argo CD Application in another cluster | Environment with `health.type: argocd` on that Application in the hub | Multi-cluster through an Argo CD or Flux hub, or `health.kubeconfigSecretRef` to a kubeconfig Secret |
 | `Project` | Kubernetes Namespace | RBAC isolation is namespace-scoped |
 | Argo Rollouts integration | `health.type: argoRollouts` on environment | Reads Rollout `.status.phase` |
 
@@ -322,7 +322,7 @@ helm uninstall kargo -n kargo
 | Evidence / audit | Promotion objects and Kubernetes Events; `record-audit-event` in Kargo Enterprise (v1.12) | PR body with structured evidence, `AuditEvent` CRD, `kardinal history` |
 | DAG visualization | Kargo UI | Built-in React UI (embedded in the controller) |
 | Promotion steps | A Stage's `promotionTemplate` composes built-in steps and PromotionTasks | Fixed sequence per environment, chosen by the Bundle type, `update.strategy` and `approval`; no custom steps |
-| Multi-cluster | Stages that update each cluster's Argo CD Application | Argo CD or Flux hub: `health.type: argocd` or `flux` reads each Application or Kustomization in the hub (`health.cluster` kubeconfig Secrets are not supported) |
+| Multi-cluster | Stages that update each cluster's Argo CD Application | Argo CD or Flux hub: `health.type: argocd` or `flux` reads each Application or Kustomization in the hub, or `health.kubeconfigSecretRef` for a cluster with no hub |
 
 ---
 

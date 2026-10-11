@@ -1,6 +1,7 @@
 # Org-level PolicyGates
-# These are applied to the platform-policies namespace and automatically
-# injected into every Pipeline that targets prod environments.
+# kardinal.io/applies-to: prod attaches each gate to every Pipeline's prod.
+# They live in platform-policies, the controller's org policy namespace;
+# kardinal.io/scope: org is what kardinal policy list shows as SCOPE.
 ---
 apiVersion: v1
 kind: Namespace
@@ -15,7 +16,6 @@ metadata:
   labels:
     kardinal.io/scope: org
     kardinal.io/applies-to: prod
-    kardinal.io/type: gate
 spec:
   expression: "!schedule.isWeekend"
   message: "Production deployments are blocked on weekends"
@@ -29,7 +29,6 @@ metadata:
   labels:
     kardinal.io/scope: org
     kardinal.io/applies-to: prod
-    kardinal.io/type: gate
 spec:
   expression: "bundle.upstreamSoakMinutes >= 30"
   message: "Bundle must be verified in uat for at least 30 minutes before promoting to prod"

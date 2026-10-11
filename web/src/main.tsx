@@ -6,6 +6,7 @@ import { createRoot } from 'react-dom/client'
 import { App } from './App'
 import { ThemeProvider } from './ThemeContext'
 import { TokenPrompt } from './components/TokenPrompt'
+import './styles/tokens.css'
 import './theme.css'
 
 const root = document.getElementById('root')
