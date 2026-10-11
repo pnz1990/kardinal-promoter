@@ -9,9 +9,8 @@ You need:
 - Docker, and a local cluster tool: [kind](https://kind.sigs.k8s.io/), k3d, minikube, Docker
   Desktop or Rancher Desktop
 - `kubectl` and `helm`
-- the GitHub CLI `gh`, signed in (`gh auth login`)
-- a GitHub token that can write contents and pull requests on your fork of the demo repository.
-  `kardinal quickstart` reads it from `GITHUB_TOKEN`, or else from `gh auth token`
+- a GitHub token that can write contents and pull requests on your fork of the demo repository:
+  `GITHUB_TOKEN`, or the GitHub CLI signed in (`gh auth login`)
 
 ## 1. Install the CLI
 
@@ -30,82 +29,108 @@ gh repo fork pnz1990/kardinal-demo --clone=false
 ```
 
 [`kardinal-demo`](https://github.com/pnz1990/kardinal-demo) is the GitOps repository kardinal
-writes to, with one directory per environment. Your fork receives its commits and pull requests.
+writes to, with one directory per environment. Your fork receives its commits.
 
 ## 3. Run the quickstart
 
 ```bash
-kardinal quickstart --repo github.com/<your-user>/kardinal-demo
+kardinal quickstart --repo https://github.com/<you>/kardinal-demo
 ```
 
-It runs only when the current kubectl context is a kind, k3d, minikube, Docker Desktop or Rancher
-Desktop cluster, and refuses any other. It installs kro, Argo CD and kardinal, stores your token
-in one Secret, and creates the `demo` Pipeline in the `default` namespace: test, uat and prod,
-with an approval gate on prod that you may approve. Then it ships the first version.
-<!-- C7: the exact list of what it installs and creates, and its flags -->
+It sets up the demo in the current kubectl context, then ships a first version and follows it:
 
 ```text
-<C7: quickstart output, ending with the UI, watch and next-step lines>
+Setting up the kardinal demo in kind-kardinal
+  ✓ kro 0.10.0-rc.0: installed
+  ✓ Argo CD v3.5.3: installed
+  ✓ Secret kardinal-system/kardinal-scm-token: created from $GITHUB_TOKEN (the controller's token for PRs)
+  ✓ kardinal-promoter 0.10.1: installed
+  ✓ Secret default/github-token: created from $GITHUB_TOKEN
+  ✓ Argo CD ApplicationSet argocd/kardinal-test-app (https://github.com/<you>/kardinal-demo): applied
+  ✓ PolicyGate default/prod-approval (prod waits for your approval, as kubernetes-admin): applied
+  ✓ Pipeline default/demo: applied
+  ✓ First version: shipped as demo-7xk2p
+Following demo-7xk2p through test, uat and prod (Ctrl-C stops following, the promotion goes on)
+  test: Checking health
+  test: Live
+  uat: Promoting
+  uat: Checking health
+  uat: Live
+  prod: Held by gate prod-approval
+Version demo-7xk2p stopped: prod waits for approval at gate prod-approval (kardinal approve demo prod)
+
+Next:
+  Approve prod:    kardinal approve demo prod
+  Watch:           kardinal status demo -w
+  Open the UI:     kardinal dashboard
+  Ship the next:   kardinal ship demo --image ghcr.io/pnz1990/kardinal-test-app:main@sha256:51a7355f… --wait
 ```
 
-The first version goes to test and uat on its own, then waits at prod's approval gate. Follow
-it with:
+What it set up:
 
-```bash
-kardinal status demo -w
-```
+- **kro, Argo CD and kardinal**, each installed once: running the quickstart again keeps what is
+  there.
+- **Your token** in two Secrets: the controller's, for pull requests, and the `demo` Pipeline's,
+  for git.
+- **Argo CD Applications** for test, uat and prod, from your fork.
+- **The `demo` Pipeline** in the `default` namespace: test, uat and prod. Prod promotes without
+  a pull request, behind the `prod-approval` gate, which you may approve.
+
+It runs only when the current kubectl context is a kind, k3d, minikube, Docker Desktop or Rancher
+Desktop cluster. With any other context it changes nothing and prints the command that switches
+to a local one.
+
+The first version went to test and uat on its own and now waits at prod's gate.
 
 ## 4. Open the UI
 
 ```bash
 kardinal dashboard
+# kardinal UI: http://localhost:8082/ui/
 ```
 
-It port-forwards to the controller and opens the UI in your browser. The UI opens on the fleet. Open `demo`: the map shows test, uat and prod, and the version on its
-way through them. Select prod to see why it is waiting.
+It port-forwards to the controller and opens the UI in your browser (`--no-open` only prints the
+address). Open `demo`: the map shows test, uat and prod, and the version on its way. Prod is
+held; select it, and its details show why, with `kardinal approve demo prod` to copy.
 
 ## 5. Ship a version
 
-```bash
-kardinal ship demo --image ghcr.io/pnz1990/kardinal-test-app:<C7: tag> --wait
-```
+Run the **Ship the next** line from the quickstart's output. It ships a newer version of
+`kardinal-test-app`, which supersedes the first one, and `--wait` follows it:
 
-Quickstart's output ends with this command, with a real tag of `kardinal-test-app`.
-`ship` creates a version and, with `--wait`, follows it, printing each environment's new state.
-The new version supersedes the first one, which has not reached prod.
+```text
+Shipped main as demo-q8m4t; following it (Ctrl-C stops following, the promotion goes on)
+  test: Promoting
+  test: Checking health
+  test: Live
+  uat: Promoting
+  uat: Checking health
+  uat: Live
+  prod: Held by gate prod-approval
+Version demo-q8m4t stopped: prod waits for approval at gate prod-approval (kardinal approve demo prod)
+```
 
 ## 6. Watch it stop at the gate
 
-Test and uat are verified within a minute or two. Prod has an approval gate, so the version
-stops there and `ship` ends:
-
-```text
-<C7: ship --wait output ending at the gate>
-```
+`ship` stopped at prod, because the gate needs a person, and exited with 3:
 
 ```bash
 echo $?
 # 3
 ```
 
-Exit code 3 means the version is held until a person acts: here, an approval. A CI job can act
-on the code; [Wait for the outcome in CI](ci-integration.md#wait-for-the-outcome-in-ci) lists
-them all.
-
-Ask why it is waiting:
+A CI job can act on the code: [Wait for the outcome in CI](ci-integration.md#wait-for-the-outcome-in-ci)
+lists them all. Ask why it is waiting:
 
 ```bash
 kardinal why demo prod
 ```
 
 ```text
-<C7/#1736: why output for the demo's approval gate>
+<#1736: kardinal why output for the prod-approval gate>
 ```
 
-The last line is the command that gets past the gate. In the UI, prod's details show the same
-gate under "Why it's waiting".
-<!-- C7: if quickstart installs with ui.auth.tokenReview=true, the UI can record the approval:
-     mention its Approve button here. Without it the UI refuses and points to kardinal approve. -->
+The last line is the command that gets past the gate.
 
 ## 7. Approve
 
@@ -114,18 +139,19 @@ kardinal approve demo prod
 ```
 
 ```text
-<#1736: the confirmation prompt and its answer>
+Bundle: main (demo-q8m4t)
+Approve main (demo-q8m4t) for prod? [y/N] y
+Recorded: kubernetes-admin approves demo-q8m4t for prod (Approval …)
 ```
 
-The gate passes. Prod's changes go in without a pull request (`approval: auto`), so the version
-goes live in prod within a minute or two.
+The gate passes, and the version goes live in prod within a minute or two, with no pull request:
 
 ```bash
 kardinal status demo
 ```
 
 ```text
-<C7: status with prod Verified>
+<C7: kardinal status demo with prod Live>
 ```
 
 ## Clean up
@@ -134,7 +160,7 @@ kardinal status demo
 kind delete cluster --name kardinal
 ```
 
-Your fork keeps the commits and pull requests; delete it on GitHub when you are done.
+Your fork keeps the commits; delete it on GitHub when you are done.
 
 ## Next steps
 
