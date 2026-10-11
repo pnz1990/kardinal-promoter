@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -73,15 +74,16 @@ func (d *AutoDetector) RefreshTargets(ctx context.Context, opts CheckOptions) ([
 		if ns == "" {
 			ns = "flux-system"
 		}
+		target := RefreshTarget{GVR: fluxKustomizationGVR, Kind: "Kustomization", Namespace: ns, Name: opts.Flux.Name}
 		ks, err := d.dynamic.Resource(fluxKustomizationGVR).Namespace(ns).Get(ctx, opts.Flux.Name, metav1.GetOptions{})
 		if err != nil {
-			return nil, fmt.Errorf("get flux kustomization %s/%s: %w", ns, opts.Flux.Name, err)
+			return nil, &RefreshError{Op: "get", Target: target, Err: err}
 		}
 		var targets []RefreshTarget
 		if src, ok := fluxGitSource(ks); ok {
 			targets = append(targets, src)
 		}
-		return append(targets, RefreshTarget{GVR: fluxKustomizationGVR, Kind: "Kustomization", Namespace: ns, Name: opts.Flux.Name}), nil
+		return append(targets, target), nil
 	}
 	return nil, nil
 }
@@ -101,18 +103,40 @@ func fluxGitSource(ks *unstructured.Unstructured) (RefreshTarget, bool) {
 	return RefreshTarget{GVR: fluxGitRepositoryGVR, Kind: "GitRepository", Namespace: ns, Name: name}, true
 }
 
+// FluxRequestValue is the reconcile.fluxcd.io/requestedAt value a step
+// sends: the time it recorded (RFC 3339) and the step, so that two steps
+// that ask in the same second, for example a fan-out sharing one
+// GitRepository, send different values. Flux reconciles an object when the
+// value differs from its status.lastHandledReconcileAt; the value is opaque
+// to it.
+func FluxRequestValue(at time.Time, namespace, name string) string {
+	return at.UTC().Format(time.RFC3339) + " " + namespace + "/" + name
+}
+
+// RefreshError is the failure of a refresh request on one target: reading
+// it (Op "get", the Kustomization for its source) or annotating it (Op
+// "annotate").
+type RefreshError struct {
+	Op     string
+	Target RefreshTarget
+	Err    error
+}
+
+func (e *RefreshError) Error() string { return fmt.Sprintf("%s %s: %v", e.Op, e.Target, e.Err) }
+
+func (e *RefreshError) Unwrap() error { return e.Err }
+
 // RequestRefresh merge-patches the refresh annotation onto each target: for
-// an Application ArgoCDRefreshNormal, for a Flux object at in RFC 3339 (the
-// caller records at in the PromotionStep status first, so the time sent is
-// the one recorded). Only metadata.annotations changes. Every target is
-// tried; the errors are joined.
-func (d *AutoDetector) RequestRefresh(ctx context.Context, targets []RefreshTarget, at time.Time) error {
+// an Application ArgoCDRefreshNormal, for a Flux object fluxValue
+// (FluxRequestValue of the time the caller recorded in the PromotionStep
+// status first). Only metadata.annotations changes. Every target is tried;
+// the errors are joined *RefreshErrors.
+func (d *AutoDetector) RequestRefresh(ctx context.Context, targets []RefreshTarget, fluxValue string) error {
 	var errs []error
 	for _, t := range targets {
-		value := ArgoCDRefreshNormal
-		key := ArgoCDRefreshAnnotation
+		key, value := ArgoCDRefreshAnnotation, ArgoCDRefreshNormal
 		if t.GVR.Group != argoCDApplicationGVR.Group {
-			key, value = FluxRequestedAtAnnotation, at.UTC().Format(time.RFC3339)
+			key, value = FluxRequestedAtAnnotation, fluxValue
 		}
 		body, err := json.Marshal(map[string]interface{}{
 			"metadata": map[string]interface{}{"annotations": map[string]string{key: value}},
@@ -122,10 +146,39 @@ func (d *AutoDetector) RequestRefresh(ctx context.Context, targets []RefreshTarg
 		}
 		if _, err := d.dynamic.Resource(t.GVR).Namespace(t.Namespace).
 			Patch(ctx, t.Name, types.MergePatchType, body, metav1.PatchOptions{}); err != nil {
-			errs = append(errs, fmt.Errorf("annotate %s: %w", t, err))
+			errs = append(errs, &RefreshError{Op: "annotate", Target: t, Err: err})
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// ClassifyRefreshError is a short reason for status and Events, per
+// target: what failed on which object, and the class of the error
+// (ClassifyRemoteError; a missing object is "not found (HTTP 404)"). It
+// never quotes the API server's answer or address, which can come from a
+// remote cluster (health.kubeconfigSecretRef): the full error belongs in
+// the log only.
+func ClassifyRefreshError(err error) string {
+	if err == nil {
+		return ""
+	}
+	errs := []error{err}
+	if j, ok := err.(interface{ Unwrap() []error }); ok {
+		errs = j.Unwrap()
+	}
+	parts := make([]string, 0, len(errs))
+	for _, e := range errs {
+		reason := ClassifyRemoteError(e)
+		if apierrors.IsNotFound(e) {
+			reason = "not found (HTTP 404)"
+		}
+		var re *RefreshError
+		if errors.As(e, &re) {
+			reason = re.Op + " " + re.Target.String() + ": " + reason
+		}
+		parts = append(parts, reason)
+	}
+	return strings.Join(parts, "; ")
 }
 
 // DescribeTargets lists targets for a status message.

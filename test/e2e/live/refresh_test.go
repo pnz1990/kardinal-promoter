@@ -14,8 +14,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
@@ -127,7 +130,10 @@ func TestHealth_ArgoCDRefresh(t *testing.T) {
 // Verified. uat has health.refresh: false: its commit is not applied while
 // the source is not fetched again, and the step stays HealthChecking, until
 // the test asks Flux to reconcile the source itself (the poll a real
-// interval would make). Covers HEALTH-REFRESH-02, HEALTH-REFRESH-03.
+// interval would make). As the controller's ServiceAccount, the test may set
+// only that annotation on the Kustomization and the GitRepository: a spec
+// change is denied by the chart's gitops-writes admission policy.
+// Covers HEALTH-REFRESH-02, HEALTH-REFRESH-03, HEALTH-REFRESH-04.
 func TestFlux_RefreshOnPromotion(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -196,4 +202,73 @@ func TestFlux_RefreshOnPromotion(t *testing.T) {
 	assert.False(t, refreshEvent(t, e, uat, "GitOpsRefreshRequested"))
 	assert.Equal(t, newImage, e.DeploymentImage(t, ns, fixtures.Workload("uat")))
 	e.WaitBundlePhase(t, ns, bundle, "Verified", time.Minute)
+
+	// The patch the chart grants on Flux objects is confined to
+	// reconcile.fluxcd.io/requestedAt (gitops-writes admission policy).
+	assertConfined(t, e, framework.KustomizationGVR, ns, fixtures.Workload("uat"), "reconcile.fluxcd.io/requestedAt",
+		`{"spec":{"suspend":true}}`)
+	assertConfined(t, e, framework.GitRepositoryGVR, ns, fluxSource, "reconcile.fluxcd.io/requestedAt",
+		`{"spec":{"suspend":true}}`)
+}
+
+// controllerPatch merge-patches an object as the controller's ServiceAccount.
+func controllerPatch(t *testing.T, e *framework.Env, gvr schema.GroupVersionResource, ns, name, patch string) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err := e.AsControllerDynamic(t).Resource(gvr).Namespace(ns).Patch(ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
+	return err
+}
+
+// assertConfined checks the chart's gitops-writes admission policy on one
+// object, acting as the controller: the refresh annotation key may be set,
+// and a change to spec, labels or another annotation is denied by the
+// policy (the RBAC grants the patch).
+func assertConfined(t *testing.T, e *framework.Env, gvr schema.GroupVersionResource, ns, name, key, specPatch string) {
+	t.Helper()
+	value := "e2e " + time.Now().UTC().Format(time.RFC3339Nano)
+	if key == "argocd.argoproj.io/refresh" {
+		value = "normal"
+	}
+	require.NoError(t, controllerPatch(t, e, gvr, ns, name,
+		fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, key, value)), "the refresh annotation is allowed")
+	for what, patch := range map[string]string{
+		"spec":               specPatch,
+		"a label":            `{"metadata":{"labels":{"kardinal-e2e-confined":"x"}}}`,
+		"another annotation": `{"metadata":{"annotations":{"kardinal-e2e-confined":"x"}}}`,
+		"both":               fmt.Sprintf(`{"metadata":{"annotations":{%q:"hard"}},"spec":%s}`, key, specPatch[len(`{"spec":`):len(specPatch)-1]),
+	} {
+		err := controllerPatch(t, e, gvr, ns, name, patch)
+		require.Error(t, err, "%s: the controller may not change %s", gvr.Resource, what)
+		assert.True(t, apierrors.IsForbidden(err), "%s %s: %v", gvr.Resource, what, err)
+		assert.Contains(t, err.Error(), "ValidatingAdmissionPolicy 'kardinal-promoter-gitops-writes'", "%s %s", gvr.Resource, what)
+	}
+}
+
+// TestHealth_GitOpsWritesConfined: the chart grants the controller patch on
+// every Application for the refresh request, and its gitops-writes
+// admission policy confines that patch to argocd.argoproj.io/refresh: as the
+// controller's ServiceAccount, setting it passes, and changing the spec, a
+// label or another annotation is denied, until a Role grants update on the
+// Application (what rbac.argocdApplicationsWrite grants on every one).
+// Covers HEALTH-REFRESH-04.
+func TestHealth_GitOpsWritesConfined(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test")
+	app := a.argoApp("test")
+	ns := framework.ArgoCDNamespace
+	require.True(t, e.ControllerCan(t, "patch", app))
+	require.False(t, e.ControllerCan(t, "update", app))
+	specPatch := `{"spec":{"revisionHistoryLimit":3}}`
+	assertConfined(t, e, framework.ApplicationGVR, ns, app, "argocd.argoproj.io/refresh", specPatch)
+	got, err := e.Dynamic.Resource(framework.ApplicationGVR).Namespace(ns).Get(context.Background(), app, metav1.GetOptions{})
+	require.NoError(t, err)
+	_, set, _ := unstructured.NestedInt64(got.Object, "spec", "revisionHistoryLimit")
+	assert.False(t, set, "the spec is unchanged")
+	assert.NotContains(t, got.GetLabels(), "kardinal-e2e-confined")
+
+	e.GrantArgoPatch(t, a.ns, app)
+	require.NoError(t, controllerPatch(t, e, framework.ApplicationGVR, ns, app, specPatch),
+		"with update on the Application the controller may change its spec")
 }

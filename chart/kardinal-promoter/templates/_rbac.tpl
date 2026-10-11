@@ -150,10 +150,16 @@ rules exist for. A new client call needs a row there and a rule here.
   verbs: ["list"]
 - apiGroups: ["argoproj.io"]
   resources: ["applications"]
-  {{- if or .Values.rbac.argocdApplicationsWrite (eq (include "kardinal-promoter.healthRefresh" .) "true") }}
+  {{- if .Values.rbac.argocdApplicationsWrite }}
   # rbac.argocdApplicationsWrite: the argocd update strategy patches the
-  # Application's image overrides. health.refresh.enabled: a step sets
-  # argocd.argoproj.io/refresh on it (pkg/health/refresh.go).
+  # Application's image overrides. update is what the gitops-writes admission
+  # policy checks before it lets the controller change more than the refresh
+  # annotation (templates/gitops-admission.yaml).
+  verbs: ["get", "list", "watch", "patch", "update"]
+  {{- else if eq (include "kardinal-promoter.healthRefresh" .) "true" }}
+  # health.refresh.enabled: a step sets argocd.argoproj.io/refresh on it
+  # (pkg/health/refresh.go); the gitops-writes admission policy denies any
+  # other change.
   verbs: ["get", "list", "watch", "patch"]
   {{- else }}
   verbs: ["get", "list", "watch"]
@@ -170,7 +176,8 @@ rules exist for. A new client call needs a row there and a rule here.
   resources: ["kustomizations"]
   {{- if eq (include "kardinal-promoter.healthRefresh" .) "true" }}
   # health.refresh.enabled: a step sets reconcile.fluxcd.io/requestedAt on
-  # the Kustomization and its source GitRepository (pkg/health/refresh.go).
+  # the Kustomization and its source GitRepository (pkg/health/refresh.go);
+  # the gitops-writes admission policy denies any other change.
   verbs: ["get", "list", "watch", "patch"]
 - apiGroups: ["source.toolkit.fluxcd.io"]
   resources: ["gitrepositories"]

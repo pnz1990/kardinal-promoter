@@ -173,8 +173,9 @@ var allFeatures = []string{
 // every Pipeline (spec.gitRepo does not exist), denied promote/rollback
 // Bundles and valid durations, and collided across releases. Validation lives
 // in the CRD schema (api/v1alpha1/crd_schema_test.go). The only admission
-// objects are the identity policies (identity-admission.yaml) and the
-// hold-writes policy (hold-admission.yaml, #1528), named per release and
+// objects are the identity policies (identity-admission.yaml), the
+// hold-writes policy (hold-admission.yaml, #1528) and the gitops-writes
+// policy (gitops-admission.yaml, health.refresh), named per release and
 // shipped whatever validatingAdmissionPolicy.enabled says, which stays a
 // deprecated no-op so existing --set values keep working.
 func TestChartRendersOnlyIdentityAdmissionPolicies(t *testing.T) {
@@ -192,6 +193,8 @@ func TestChartRendersOnlyIdentityAdmissionPolicies(t *testing.T) {
 		assert.ElementsMatch(t, append(identityAdmissionObjects("kardinal-promoter"),
 			"ValidatingAdmissionPolicy/kardinal-promoter-hold-writes",
 			"ValidatingAdmissionPolicyBinding/kardinal-promoter-hold-writes",
+			"ValidatingAdmissionPolicy/kardinal-promoter-gitops-writes",
+			"ValidatingAdmissionPolicyBinding/kardinal-promoter-gitops-writes",
 		), got, "args %v", args)
 	}
 }
@@ -470,6 +473,11 @@ var optionalAccess = []struct {
 		{"coordination.k8s.io", "leases", []string{"create"}, inCluster, "", "pkg/shard Gate.take (first token of a namespace)"},
 		{"coordination.k8s.io", "leases", []string{"get", "list"}, inCluster, "kardinal-shard-heartbeat-b", "pkg/shard Gate.heartbeatStopped/warnUnrunShards"},
 	}, true},
+	// update: what the gitops-writes admission policy checks before the
+	// argocd strategy's patch may change the Application's spec.
+	{"rbac.argocdApplicationsWrite=true", []apiAccess{
+		{"argoproj.io", "applications", []string{"update"}, inWatched, "", "steps argocd_set_image.go (gitops-admission.yaml)"},
+	}, false},
 }
 
 // TestChartRBACHealthRefreshOff: health.refresh.enabled=false drops the
@@ -490,7 +498,7 @@ func TestChartRBACHealthRefreshOff(t *testing.T) {
 		apiAccess{"kustomize.toolkit.fluxcd.io", "kustomizations", readVerbs, inWatched, "", "health adapter flux"}, true)
 	w := newRBACView(t, render(t, "kardinal-promoter", append(off, "--set", "rbac.argocdApplicationsWrite=true")...))
 	checkAccess(t, w, "rbac.argocdApplicationsWrite=true", watched,
-		apiAccess{"argoproj.io", "applications", []string{"patch"}, inWatched, "", "steps argocd_set_image.go"}, true)
+		apiAccess{"argoproj.io", "applications", []string{"patch", "update"}, inWatched, "", "steps argocd_set_image.go"}, true)
 	assert.Equal(t, "false", argValues(controllerContainer(t, render(t, "kardinal-promoter", off...)))["health-refresh"])
 	assert.NotContains(t, argValues(controllerContainer(t, render(t, "kardinal-promoter"))), "health-refresh")
 	// A release upgraded with --reuse-values from a chart without the value.

@@ -807,6 +807,13 @@ func TestIdentityAdmission_ShardMode(t *testing.T) {
 	// controller too, so it is bound the same way.
 	policies = append(policies, "kardinal-promoter-hold-writes")
 	team := bindings("--set", "controller.namespaceShard=team-b")
+	// gitops-writes (gitops-admission.yaml) matches the controller's writes
+	// to Argo CD and Flux objects in their own namespaces: one binding,
+	// cluster-wide, in every mode.
+	gitops, ok := team["kardinal-promoter-gitops-writes"]
+	require.True(t, ok)
+	assert.Nil(t, gitops.Spec.MatchResources)
+	delete(team, "kardinal-promoter-gitops-writes")
 	assert.Len(t, team, len(policies))
 	for _, name := range policies {
 		b, ok := team[name]
@@ -815,6 +822,7 @@ func TestIdentityAdmission_ShardMode(t *testing.T) {
 		assert.Equal(t, map[string]string{"kardinal.io/shard": "team-b"}, b.Spec.MatchResources.NamespaceSelector.MatchLabels, name)
 	}
 	def := bindings("--set", "controller.namespaceShard=default")
+	delete(def, "kardinal-promoter-gitops-writes")
 	assert.Len(t, def, 2*len(policies))
 	for _, name := range policies {
 		labelled, unlabelled := def[name], def[name+"-unlabelled"]

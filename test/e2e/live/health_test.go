@@ -1377,12 +1377,17 @@ func TestHealth_ArgoStrategyRejectsConfigBundles(t *testing.T) {
 }
 
 // TestHealth_ArgoStrategyNeedsPatchRBAC checks the argocd strategy's RBAC.
-// helm template shows that the chart's Applications rule is read-only with
-// health.refresh.enabled=false, and that health.refresh.enabled (the
-// default, for the refresh request) or rbac.argocdApplicationsWrite adds
-// patch. The chart installed with defaults therefore lets the controller
-// patch the test's Application with no Role of the test's, and the Bundle
-// promotes. CHART-ARGOCDWRITE-01 is checked on the rules helm template
+// The chart installed with defaults grants patch on Applications for the
+// refresh request (health.refresh.enabled), but its gitops-writes admission
+// policy lets the controller change only the refresh annotation unless it
+// may also update the Application. So the strategy's patch of the spec is
+// denied, retried and the step fails, and nothing changes. helm template
+// shows the Applications rule read-only with health.refresh.enabled=false,
+// patch by default, and patch and update with rbac.argocdApplicationsWrite.
+// The test does not upgrade the installed chart: it binds the rendered
+// rbac.argocdApplicationsWrite rule to the controller in a test Role in the
+// Application namespace, for this Application only, and the next Bundle
+// promotes. CHART-ARGOCDWRITE-01 is thus checked on the rules helm template
 // renders, not on an installed release's RBAC. Covers ARGOSTRAT-04,
 // CHART-ARGOCDWRITE-01.
 func TestHealth_ArgoStrategyNeedsPatchRBAC(t *testing.T) {
@@ -1390,6 +1395,31 @@ func TestHealth_ArgoStrategyNeedsPatchRBAC(t *testing.T) {
 	e := framework.New(t)
 	ns, repo, app := argoStrategyApp(t, e, map[string]interface{}{
 		"app": map[string]interface{}{"image": map[string]interface{}{"tag": fixtures.V1}}})
+	require.True(t, e.ControllerCan(t, "patch", app), "the chart grants patch for the refresh request")
+	require.False(t, e.ControllerCan(t, "update", app), "the chart's default RBAC grants no update on Applications")
+	require.NoError(t, e.Client.Create(context.Background(), argoStrategyPipeline(ns, repo, argoStrategyEnv("test", app, argoImageKey))))
+
+	denied := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
+	// The message is "step argocd-set-image: patch Application <namespace>/<name>: <API error>",
+	// the API error the gitops-writes policy's denial.
+	isDenied := func(msg, prefix string) bool {
+		return strings.HasPrefix(msg, prefix+"step argocd-set-image: ") && strings.Contains(msg, "patch Application") &&
+			strings.Contains(msg, "ValidatingAdmissionPolicy 'kardinal-promoter-gitops-writes'") &&
+			strings.Contains(msg, fmt.Sprintf("may change only the argocd.argoproj.io/refresh annotation of applications %s/%s",
+				framework.ArgoCDNamespace, app))
+	}
+	e.WaitStep(t, ns, pipelineName, denied, "test", promoteTimeout, "the denied patch to be retried",
+		func(ps *v1alpha1.PromotionStep) (bool, string) {
+			return ps.Status.State == "Promoting" && isDenied(ps.Status.Message, "retrying in 10s (1/5) after error: "),
+				framework.DescribeStep(ps)
+		})
+	// Retries back off 10s, 20s, 40s, 80s and 120s.
+	ps := e.WaitStepState(t, ns, pipelineName, denied, "test", "Failed", 7*time.Minute)
+	assert.True(t, isDenied(ps.Status.Message, "") && strings.HasSuffix(ps.Status.Message, " (gave up after 5 retries)"),
+		ps.Status.Message)
+	e.WaitBundlePhase(t, ns, denied, "Failed", time.Minute)
+	assert.Equal(t, fixtures.V1, valuesKey(t, e, app, argoImageKey))
+	assert.Equal(t, imageV1, e.DeploymentImage(t, ns, fixtures.Workload("test")))
 
 	verbs := func(rules []rbacv1.PolicyRule) [][]string {
 		var out [][]string
@@ -1398,17 +1428,21 @@ func TestHealth_ArgoStrategyNeedsPatchRBAC(t *testing.T) {
 		}
 		return out
 	}
-	readOnly := [][]string{{"get", "list", "watch"}}
-	write := [][]string{{"get", "list", "watch", "patch"}}
-	assert.Equal(t, readOnly, verbs(framework.ChartApplicationRules(t, "health.refresh.enabled=false")))
-	assert.Equal(t, write, verbs(framework.ChartApplicationRules(t,
-		"health.refresh.enabled=false", "rbac.argocdApplicationsWrite=true")))
-	assert.Equal(t, write, verbs(framework.ChartApplicationRules(t)), "health.refresh.enabled is the default")
+	assert.Equal(t, [][]string{{"get", "list", "watch"}}, verbs(framework.ChartApplicationRules(t, "health.refresh.enabled=false")))
+	assert.Equal(t, [][]string{{"get", "list", "watch", "patch"}}, verbs(framework.ChartApplicationRules(t)))
+	write := framework.ChartApplicationRules(t, "rbac.argocdApplicationsWrite=true")
+	require.Equal(t, [][]string{{"get", "list", "watch", "patch", "update"}}, verbs(write))
+	// Bound for this test's Application only: the tests running in parallel
+	// keep the chart's default RBAC on theirs.
+	for i := range write {
+		write[i].ResourceNames = []string{app}
+	}
+	e.BindArgoRules(t, ns, write)
+	e.WaitControllerCan(t, "update", app, time.Minute)
+	require.False(t, e.ControllerCan(t, "update", ""), "update is granted on %s only", app)
 
-	require.True(t, e.ControllerCan(t, "patch", app), "the chart's default RBAC grants patch on Applications")
-	require.NoError(t, e.Client.Create(context.Background(), argoStrategyPipeline(ns, repo, argoStrategyEnv("test", app, argoImageKey))))
 	bundle := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
-	ps := e.WaitStepState(t, ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	ps = e.WaitStepState(t, ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 	assert.Equal(t, argoVerified, ps.Status.Message)
 	assert.Nil(t, ps.Status.RefreshRequestedAt, "the argocd strategy writes no commit, so it asks for no refresh")
 	assert.Equal(t, fixtures.V2, valuesKey(t, e, app, argoImageKey))

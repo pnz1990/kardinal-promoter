@@ -57,14 +57,18 @@ func (r *Reconciler) refreshWanted(ps *v1alpha1.PromotionStep, env v1alpha1.Envi
 // status.refreshRevision and status.refreshMessage are patched before the
 // annotations are, so a controller that crashes in between does not ask
 // again (that step waits for the tool's poll, as before this existed). The
-// Flux requestedAt value sent is the recorded time.
+// Flux requestedAt value sent is health.FluxRequestValue of the recorded time
+// and the step. A failed read of the Kustomization (for its source) spends
+// the one request too: the step does not retry, the poll applies.
 //
 // A failure is not a health failure: the step records it in
 // status.refreshMessage, emits a Warning Event and goes on checking health,
 // which the tool's own poll then satisfies. Only the status patch can fail
 // the reconcile. The patch of the annotations changes only
 // metadata.annotations of the Application, Kustomization or GitRepository:
-// no other object's status is written.
+// no other object's status is written. Errors are written to status and the
+// Event classified (health.ClassifyRefreshError): the API server's answer and
+// address, which can be a remote cluster's, go to the log only.
 func (r *Reconciler) requestRefresh(ctx context.Context, log zerolog.Logger, base, ps *v1alpha1.PromotionStep,
 	detector *health.AutoDetector, opts health.CheckOptions, rev string) error {
 	targets, targetsErr := detector.RefreshTargets(ctx, opts)
@@ -84,7 +88,7 @@ func (r *Reconciler) requestRefresh(ctx context.Context, log zerolog.Logger, bas
 		kubeevent.Emit(r.Recorder, ps, corev1.EventTypeWarning, ReasonRefreshFailed, "Verify", ps.Status.RefreshMessage)
 		return nil
 	}
-	if err := detector.RequestRefresh(ctx, targets, at.Time); err != nil {
+	if err := detector.RequestRefresh(ctx, targets, health.FluxRequestValue(at.Time, ps.Namespace, ps.Name)); err != nil {
 		log.Warn().Err(err).Str("adapter", opts.Type).Msg("GitOps refresh request failed")
 		next := ps.DeepCopy()
 		next.Status.RefreshMessage = refreshFailedMessage(opts.Type, err)
@@ -109,7 +113,7 @@ func refreshFailedMessage(healthType string, err error) string {
 	}
 	reason := "no object to refresh"
 	if err != nil {
-		reason = err.Error()
+		reason = health.ClassifyRefreshError(err)
 	}
 	return fmt.Sprintf("refresh request failed (%s); waiting for %s to poll git", reason, tool)
 }

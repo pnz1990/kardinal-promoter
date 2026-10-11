@@ -5,13 +5,22 @@ package promotionstep_test
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -43,6 +52,7 @@ type refreshCase struct {
 	objs     []client.Object
 	dynObjs  []runtime.Object
 	disabled bool
+	remote   *health.RemoteClusters
 	// statusPatch, when set, intercepts the PromotionStep status patches.
 	statusPatch func(n int) error
 }
@@ -82,7 +92,7 @@ func (rc refreshCase) rig(t *testing.T) *refreshRig {
 	dyn := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), rc.dynObjs...)
 	rec := events.NewFakeRecorder(20)
 	r := &promotionstep.Reconciler{Client: reader, SCM: &mockSCM{}, GitClient: &mockGit{},
-		HealthDetector: health.NewAutoDetector(c, dyn), Recorder: rec, RefreshDisabled: rc.disabled,
+		HealthDetector: health.NewAutoDetector(c, dyn), Recorder: rec, RefreshDisabled: rc.disabled, RemoteClusters: rc.remote,
 		NowFn: func() time.Time { return time.Date(2026, 10, 11, 12, 0, 0, 500, time.UTC) }}
 	return &refreshRig{c: c, dyn: dyn, r: r, rec: rec}
 }
@@ -166,8 +176,9 @@ func TestRefreshRequestedOnce(t *testing.T) {
 				fluxKustomizationFrom("flux-system", "p-test", "GitRepository", "repo", ""), gitRepository("flux-system", "repo")}},
 			wantPatches: []string{"gitrepositories flux-system/repo", "kustomizations flux-system/p-test"},
 			wantAnn: func(t *testing.T, g *refreshRig) {
-				assert.Equal(t, at, g.annotation(t, gitRepositoryGVR, "flux-system", "repo", health.FluxRequestedAtAnnotation))
-				assert.Equal(t, at, g.annotation(t, kustomizationGVR, "flux-system", "p-test", health.FluxRequestedAtAnnotation))
+				// The recorded time and the step: unique per step (fan-out).
+				assert.Equal(t, at+" default/step", g.annotation(t, gitRepositoryGVR, "flux-system", "repo", health.FluxRequestedAtAnnotation))
+				assert.Equal(t, at+" default/step", g.annotation(t, kustomizationGVR, "flux-system", "p-test", health.FluxRequestedAtAnnotation))
 			},
 			wantMsg: "refresh requested: GitRepository flux-system/repo, Kustomization flux-system/p-test"},
 		{name: "flux source in another namespace",
@@ -305,25 +316,26 @@ func TestRefreshFailureFallsBackToPolling(t *testing.T) {
 	}{
 		{name: "patch forbidden (no RBAC)", forbid: true,
 			rc:      refreshCase{env: argo, status: pushed, dynObjs: []runtime.Object{argoApplication("p-test", oldSHA)}},
-			wantMsg: "refresh request failed (annotate Application argocd/p-test: forbidden",
+			wantMsg: "refresh request failed (annotate Application argocd/p-test: forbidden (HTTP 403))",
 			synced: func(g *refreshRig) {
 				_, _ = g.dyn.Resource(applicationGVR).Namespace("argocd").Update(context.Background(),
 					argoApplication("p-test", newSHA), metav1.UpdateOptions{})
 			}},
 		{name: "Kustomization missing",
 			rc:      refreshCase{env: flux, status: pushed},
-			wantMsg: "refresh request failed (get flux kustomization flux-system/p-test"},
+			wantMsg: "refresh request failed (get Kustomization flux-system/p-test: not found (HTTP 404))"},
 		{name: "GitRepository missing: the Kustomization is still annotated",
 			rc: refreshCase{env: flux, status: pushed, dynObjs: []runtime.Object{
 				fluxKustomizationFrom("flux-system", "p-test", "GitRepository", "gone", "")}},
-			wantMsg: "annotate GitRepository flux-system/gone"},
+			wantMsg: "annotate GitRepository flux-system/gone: not found (HTTP 404)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := tt.rc.rig(t)
 			if tt.forbid {
 				g.dyn.PrependReactor("patch", "applications", func(k8stesting.Action) (bool, runtime.Object, error) {
-					return true, nil, errors.New("forbidden")
+					return true, nil, apierrors.NewForbidden(applicationGVR.GroupResource(), "p-test",
+						errors.New("SECRET-ANSWER from https://10.1.2.3:6443"))
 				})
 			}
 			require.NoError(t, g.reconcile(t))
@@ -331,6 +343,8 @@ func TestRefreshFailureFallsBackToPolling(t *testing.T) {
 			require.NotNil(t, got.Status.RefreshRequestedAt)
 			assert.Contains(t, got.Status.RefreshMessage, tt.wantMsg)
 			assert.Contains(t, got.Status.RefreshMessage, "waiting for")
+			assert.NotContains(t, got.Status.RefreshMessage, "SECRET-ANSWER", "the server's answer is not copied")
+			assert.NotContains(t, got.Status.RefreshMessage, "10.1.2.3", "no address in status")
 			assert.Equal(t, "HealthChecking", got.Status.State)
 			if len(tt.rc.dynObjs) > 0 {
 				// The refresh failure counts nothing (a missing
@@ -340,6 +354,8 @@ func TestRefreshFailureFallsBackToPolling(t *testing.T) {
 			ev := g.events()
 			require.Len(t, ev, 1)
 			assert.True(t, strings.HasPrefix(ev[0], "Warning "+promotionstep.ReasonRefreshFailed), ev[0])
+			assert.NotContains(t, ev[0], "SECRET-ANSWER")
+			assert.NotContains(t, ev[0], "10.1.2.3")
 
 			if tt.synced == nil {
 				return
@@ -375,4 +391,79 @@ func TestRefreshCrashBeforeRecord(t *testing.T) {
 	require.NoError(t, g.reconcile(t))
 	assert.Equal(t, []string{"applications argocd/p-test"}, g.patches())
 	require.NotNil(t, getStep(t, g.c, "step").Status.RefreshRequestedAt)
+}
+
+// fakeRemoteArgoCD serves the Application argocd/custom as a remote API
+// server would, and records the bodies of the PATCH requests. A PATCH is
+// answered 403 with an answer that must not reach status when deny is set.
+func fakeRemoteArgoCD(t *testing.T, deny bool) (*httptest.Server, *[]string) {
+	t.Helper()
+	var mu sync.Mutex
+	var patches []string
+	app := argoApplication("custom", oldSHA)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer remote-token" ||
+			r.URL.Path != "/apis/argoproj.io/v1alpha1/namespaces/argocd/applications/custom" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPatch {
+			body, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			patches = append(patches, string(body))
+			mu.Unlock()
+			if deny {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403,` +
+					`"message":"SECRET-BODY: user remote-sa cannot patch at https://10.9.8.7:6443"}`))
+				return
+			}
+		}
+		_ = json.NewEncoder(w).Encode(app.Object)
+	}))
+	t.Cleanup(srv.Close)
+	remoteCA = base64.StdEncoding.EncodeToString(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
+	return srv, &patches
+}
+
+// TestRefreshRemoteCluster: with health.kubeconfigSecretRef the request goes
+// to the cluster the health check reads, with the kubeconfig's identity,
+// never to the controller's cluster; a refusal there is recorded classified,
+// without the remote server's answer or address. Covers HEALTH-REFRESH-05.
+func TestRefreshRemoteCluster(t *testing.T) {
+	env := v1alpha1.EnvironmentSpec{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{
+		Type: "argocd", ArgoCD: &v1alpha1.HealthTargetRef{Name: "custom"},
+		KubeconfigSecretRef: &v1alpha1.KubeconfigSecretRef{Name: "spoke"}}}
+	for _, deny := range []bool{false, true} {
+		t.Run(fmt.Sprintf("deny=%t", deny), func(t *testing.T) {
+			srv, patches := fakeRemoteArgoCD(t, deny)
+			g := refreshCase{env: env, status: pushed, remote: &health.RemoteClusters{Dial: loopbackDial},
+				objs: []client.Object{kubeconfigSecret("spoke", remoteKubeconfig(srv.URL, ""))},
+				// The controller's cluster has an Application of the same name:
+				// it must not be touched.
+				dynObjs: []runtime.Object{argoApplication("custom", oldSHA)}}.rig(t)
+			require.NoError(t, g.reconcile(t))
+			assert.Empty(t, g.patches(), "nothing is sent to the controller's cluster")
+			require.Len(t, *patches, 1, "one request to the remote cluster")
+			assert.JSONEq(t, `{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"normal"}}}`, (*patches)[0])
+			got := getStep(t, g.c, "step")
+			require.NotNil(t, got.Status.RefreshRequestedAt)
+			ev := g.events()
+			require.Len(t, ev, 1)
+			if !deny {
+				assert.Equal(t, "refresh requested: Application argocd/custom", got.Status.RefreshMessage)
+				assert.Contains(t, ev[0], "Normal "+promotionstep.ReasonRefreshRequested)
+				return
+			}
+			assert.Equal(t, "refresh request failed (annotate Application argocd/custom: forbidden (HTTP 403)); "+
+				"waiting for Argo CD to poll git", got.Status.RefreshMessage)
+			assert.Contains(t, ev[0], "Warning "+promotionstep.ReasonRefreshFailed)
+			for _, text := range []string{got.Status.RefreshMessage, ev[0]} {
+				assert.NotContains(t, text, "SECRET-BODY")
+				assert.NotContains(t, text, "10.9.8.7")
+				assert.NotContains(t, text, "127.0.0.1")
+			}
+		})
+	}
 }
