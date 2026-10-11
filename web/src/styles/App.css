@@ -340,3 +340,28 @@
 .app[data-narrow] .app-pipeline-head,
 .app[data-narrow] .app-map-head { padding-inline: var(--k-space-3); }
 .app[data-narrow] .app-content { padding-inline: var(--k-space-3); }
+
+/* U7: a lazily loaded view's frame while its code arrives. */
+.app-lazy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--k-space-3);
+  max-inline-size: var(--k-layout-measure);
+  padding: var(--k-space-8) var(--k-space-6);
+}
+.app-lazy__status {
+  margin: 0;
+  color: var(--k-ink-3);
+  font-size: var(--k-text-sm);
+}
+.app-lazy__bar {
+  display: block;
+  block-size: var(--k-space-4);
+  border-radius: var(--k-radius-1);
+  background: var(--k-surface-sunken);
+}
+.app-lazy__bar--title {
+  inline-size: 40%;
+  block-size: var(--k-space-6);
+}
+

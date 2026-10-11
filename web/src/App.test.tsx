@@ -868,7 +868,8 @@ describe('App approvals, access and shortcuts (U7)', () => {
     fireEvent.click(link)
     await flush()
     expect(window.location.hash).toBe('#/approvals')
-    expect(screen.getByRole('heading', { name: '2 waiting on you' })).toBeInTheDocument()
+    // The inbox's code loads when the route opens (React.lazy).
+    expect(await screen.findByRole('heading', { name: '2 waiting on you' })).toBeInTheDocument()
     expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent('Approvals')
   })
 

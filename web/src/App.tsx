@@ -16,7 +16,7 @@
 // #746: Global keyboard shortcuts — ?, r, Esc.
 // #747: ErrorBoundary wraps async components to prevent white-screen crashes.
 // #800: / shortcut to focus pipeline search input.
-import { useState, useCallback, useMemo, useRef, useEffect, type RefObject } from 'react'
+import { lazy, Suspense, useState, useCallback, useMemo, useRef, useEffect, type RefObject } from 'react'
 import { PipelineList } from './components/PipelineList'
 import { PipelineOpsTable } from './components/PipelineOpsTable'
 import PipelineMap from './stationMap/PipelineMap'
@@ -35,8 +35,24 @@ import { displayState } from './displayStates.gen'
 import { versionName } from './versionName'
 import { useAccessIn } from './access/access'
 import { actionCheck, restriction } from './access/actionAccess'
-import { ApprovalsPage, type ApprovalsHandle } from './approvals/ApprovalsPage'
+import type { ApprovalsHandle } from './approvals/ApprovalsPage'
 import { approvalsWaiting } from './approvals/approvalsModel'
+
+// The approvals inbox is not on the first screen: it loads when #/approvals opens. The
+// badge count (approvalsModel) stays in the first bundle.
+const ApprovalsPage = lazy(() => import('./approvals/ApprovalsPage').then(m => ({ default: m.ApprovalsPage })))
+
+/** What #/approvals shows while its code loads: the page's frame, in tokens. */
+function ApprovalsLoading() {
+  return (
+    <section className="app-lazy" aria-busy="true">
+      <p role="status" className="app-lazy__status">Loading approvals…</p>
+      <span className="app-lazy__bar app-lazy__bar--title" aria-hidden="true" />
+      <span className="app-lazy__bar" aria-hidden="true" />
+      <span className="app-lazy__bar" aria-hidden="true" />
+    </section>
+  )
+}
 import type { StageCommand } from './stage/StageDrawer'
 import { BundleTimeline } from './components/BundleTimeline'
 import { BundleDiffPanel } from './components/BundleDiffPanel'
@@ -810,8 +826,10 @@ export function App() {
         {insecureBanner}
         {!selectedPipeline ? (
           urlState.approvals ? (
-            <ApprovalsPage ref={approvalsRef} gates={gates} pipelines={pipelines} loading={gatesLoading}
-              onChanged={() => { void manualRefresh() }} />
+            <Suspense fallback={<ApprovalsLoading />}>
+              <ApprovalsPage ref={approvalsRef} gates={gates} pipelines={pipelines} loading={gatesLoading}
+                onChanged={() => { void manualRefresh() }} />
+            </Suspense>
           ) : (
           <div className={pipelines.length > 0 ? 'app-fleet' : 'app-empty'}>
             {pipelines.length > 0 ? (
