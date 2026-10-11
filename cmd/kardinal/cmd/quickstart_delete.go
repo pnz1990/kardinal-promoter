@@ -37,6 +37,15 @@ import (
 // object it manages fields of is one quickstart applied.
 const quickstartFieldManager = "kardinal-quickstart"
 
+// quickstartMark is the label quickstart puts on what it creates rather than
+// applies: the git Secret (when it creates it) and the first version.
+// quickstart --delete deletes a Secret or a Bundle only with it (a Bundle
+// also when it is of the demo Pipeline quickstart applied).
+const (
+	quickstartMark      = "kardinal.io/quickstart"
+	quickstartMarkValue = "demo"
+)
+
 // quickstartDeleteWait bounds how long --delete waits for the demo's
 // Bundles and PromotionSteps to go (the controller closes their open PRs
 // first); a test shortens it.
@@ -75,9 +84,10 @@ func quickstartDeleteFn(ctx context.Context, w io.Writer, confirm func(string) e
 		return err
 	}
 	// 1. The versions, while the Pipeline and its Secret are there for the
-	// controller to close their PRs with.
+	// controller to close their PRs with: of quickstart's Pipeline, every
+	// one; without it, only the ones quickstart marked.
 	if ours != "theirs" {
-		if err := q.deleteDemoBundles(); err != nil {
+		if err := q.deleteDemoBundles(ours == "ours"); err != nil {
 			return err
 		}
 	}
@@ -162,13 +172,19 @@ func (q *quickstart) deleteApplied(what string, gvk schema.GroupVersionKind, key
 	return nil
 }
 
-// deleteDemoBundles deletes the Bundles of the demo Pipeline and waits,
+// deleteDemoBundles deletes the Bundles of the demo Pipeline (only those
+// quickstart marked, unless the Pipeline is quickstart's) and waits,
 // up to quickstartDeleteWait, until they and their PromotionSteps are gone.
-func (q *quickstart) deleteDemoBundles() error {
+func (q *quickstart) deleteDemoBundles(ofOurPipeline bool) error {
 	what := "Versions of " + quickstartNS + "/" + quickstartPipeline
 	bundles, err := q.demoBundles()
 	if err != nil {
 		return err
+	}
+	if !ofOurPipeline {
+		// No Pipeline demo: a Bundle that names it is quickstart's only
+		// when quickstart marked it.
+		bundles = slices.DeleteFunc(bundles, func(b v1alpha1.Bundle) bool { return b.Labels[quickstartMark] != quickstartMarkValue })
 	}
 	var names []string
 	for i := range bundles {
@@ -182,7 +198,7 @@ func (q *quickstart) deleteDemoBundles() error {
 	}
 	deadline := time.Now().Add(quickstartDeleteWait)
 	for {
-		left, err := q.demoLeft()
+		left, err := q.demoLeft(ofOurPipeline)
 		if err != nil {
 			return err
 		}
@@ -218,7 +234,7 @@ func (q *quickstart) demoBundles() ([]v1alpha1.Bundle, error) {
 
 // demoLeft says what of the demo's versions is still being deleted ("" when
 // nothing): Bundles, and PromotionSteps of the Pipeline.
-func (q *quickstart) demoLeft() (string, error) {
+func (q *quickstart) demoLeft(ofOurPipeline bool) (string, error) {
 	bundles, err := q.demoBundles()
 	if err != nil {
 		return "", err
@@ -227,6 +243,14 @@ func (q *quickstart) demoLeft() (string, error) {
 	if err := q.c.List(q.ctx, &steps, sigs_client.InNamespace(quickstartNS),
 		sigs_client.MatchingLabels{"kardinal.io/pipeline": quickstartPipeline}); err != nil && !apierrors.IsNotFound(err) {
 		return "", fmt.Errorf("quickstart --delete: list PromotionSteps: %w", HumanError(err))
+	}
+	if !ofOurPipeline {
+		mine := map[string]bool{}
+		bundles = slices.DeleteFunc(bundles, func(b v1alpha1.Bundle) bool {
+			mine[b.Name] = b.Labels[quickstartMark] == quickstartMarkValue
+			return !mine[b.Name]
+		})
+		steps.Items = slices.DeleteFunc(steps.Items, func(s v1alpha1.PromotionStep) bool { return !mine[s.Labels["kardinal.io/bundle"]] })
 	}
 	var left []string
 	if n := len(bundles); n > 0 {
@@ -238,8 +262,8 @@ func (q *quickstart) demoLeft() (string, error) {
 	return strings.Join(left, " and "), nil
 }
 
-// deleteGitSecret deletes the demo's git Secret unless a Pipeline other than
-// the demo's refers to it.
+// deleteGitSecret deletes the demo's git Secret when quickstart created it
+// (quickstartMark) and no Pipeline other than a deleted one refers to it.
 func (q *quickstart) deleteGitSecret() error {
 	what := "Secret " + quickstartNS + "/" + quickstartSecret
 	var s corev1.Secret
@@ -249,6 +273,10 @@ func (q *quickstart) deleteGitSecret() error {
 			return nil
 		}
 		return fmt.Errorf("quickstart --delete: get %s: %w", what, HumanError(err))
+	}
+	if s.Labels[quickstartMark] != quickstartMarkValue {
+		q.say(what, "kept (quickstart did not create it)")
+		return nil
 	}
 	var pipelines v1alpha1.PipelineList
 	if err := q.c.List(q.ctx, &pipelines, sigs_client.InNamespace(quickstartNS)); err != nil {

@@ -57,8 +57,9 @@ the demo and nothing else: the demo's versions first (it waits up to 2m for
 the controller to close their open PRs, and stops there if they are not
 gone), then the Pipeline demo, the gate prod-approval and the ApplicationSet
 (Argo CD deletes its Applications), each only when quickstart applied it
-(field manager kardinal-quickstart), and the Secret github-token unless
-another Pipeline uses it. It keeps kro, Argo CD, kardinal-promoter with its
+(field manager kardinal-quickstart), and the Secret github-token only when
+quickstart created it (label kardinal.io/quickstart) and no other Pipeline
+uses it. Without a Pipeline demo, only versions with that label go. It keeps kro, Argo CD, kardinal-promoter with its
 token Secret, and the kardinal-test-app-<env> namespaces, and prints the
 command that deletes those. It asks first on a terminal (--yes does not).
 A re-run deletes nothing.

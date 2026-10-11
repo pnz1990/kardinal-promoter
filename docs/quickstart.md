@@ -104,10 +104,13 @@ kardinal quickstart --delete
 It runs only on a local context, as `kardinal quickstart` does, and asks first on a terminal
 (`--yes` skips the question). It deletes the demo's versions first and waits up to 2 minutes
 for the controller to close their open PRs. If they are not gone by then, it stops and deletes
-nothing else; run it again. Then it deletes the Pipeline `demo`, the gate `prod-approval`, the
-ApplicationSet `kardinal-test-app` (Argo CD deletes its Applications) and the Secret
-`github-token`. It deletes each of those only if quickstart applied it, and keeps the Secret
-while another Pipeline uses it. It prints one line per object:
+nothing else; run it again. The versions are those of the Pipeline `demo` when quickstart
+applied it; without it, only the version quickstart shipped (label `kardinal.io/quickstart`).
+Then it deletes the Pipeline `demo`, the gate `prod-approval` and the ApplicationSet
+`kardinal-test-app` (Argo CD deletes its Applications), each only if quickstart applied it, and
+the Secret `github-token` only if quickstart created it (label `kardinal.io/quickstart`; a
+`github-token` you made yourself is kept) and no other Pipeline uses it. It prints one line per
+object:
 
 ```
 Removing the kardinal demo from kind-kardinal

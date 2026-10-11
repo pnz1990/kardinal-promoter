@@ -219,6 +219,13 @@ func TestCLI_Quickstart(t *testing.T) {
 	}
 	assert.Equal(t, 1, n, "the re-run ships nothing")
 
+	// What quickstart created, not applied, carries its label: the git
+	// Secret and the first version.
+	var gitSecret corev1.Secret
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: "default", Name: "github-token"}, &gitSecret))
+	assert.Equal(t, "demo", gitSecret.Labels["kardinal.io/quickstart"])
+	assert.Equal(t, "demo", getBundle(t, e, "default", bundle).Labels["kardinal.io/quickstart"])
+
 	// --delete removes the demo, and only it: the versions first, then what
 	// quickstart applied, then the git Secret.
 	r = cli.Exec(framework.CLIOptions{}, "quickstart", "--delete", "--yes")

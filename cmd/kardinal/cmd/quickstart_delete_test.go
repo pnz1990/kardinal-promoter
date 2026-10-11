@@ -143,7 +143,7 @@ func TestQuickstartDelete_KeepsWhatIsNotQuickstarts(t *testing.T) {
 		"  - Pipeline default/demo: kept (quickstart did not create it)\n",
 		"  - PolicyGate default/prod-approval: kept (quickstart did not create it)\n",
 		"  - Argo CD ApplicationSet argocd/kardinal-test-app: already gone\n",
-		"  - Secret default/github-token: kept (used by Pipeline api, demo)\n",
+		"  - Secret default/github-token: kept (quickstart did not create it)\n",
 	} {
 		assert.Contains(t, out.String(), line)
 	}
@@ -225,4 +225,50 @@ func TestQuickstartDelete_Flags(t *testing.T) {
 		require.Error(t, err, strings.Join(args, " "))
 		assert.Contains(t, err.Error(), "none of the others can be")
 	}
+}
+
+// TestQuickstartDelete_OnlyWhatQuickstartMade: a github-token the user made
+// before quickstart survives the demo's round trip; with no Pipeline demo, a
+// user's Bundle naming it survives and quickstart's own goes; quickstart's
+// Secret stays while another Pipeline uses it.
+func TestQuickstartDelete_OnlyWhatQuickstartMade(t *testing.T) {
+	ctx := context.Background()
+	t.Run("the user's Secret", func(t *testing.T) {
+		users := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "github-token",
+			Labels: map[string]string{v1alpha1.LabelSecretReferenceable: "true"}}}
+		c := quickstartDemo(t, users)
+		var s corev1.Secret
+		require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: "default", Name: "github-token"}, &s))
+		assert.Empty(t, s.Labels[quickstartMark], "quickstart kept it, so it does not mark it")
+		var out bytes.Buffer
+		require.NoError(t, quickstartDeleteFn(ctx, &out, yes))
+		assert.Contains(t, out.String(), "  - Secret default/github-token: kept (quickstart did not create it)\n")
+		assert.Contains(t, out.String(), "  - Pipeline default/demo: deleted\n")
+		assert.False(t, gone(t, c, &corev1.Secret{}, types.NamespacedName{Namespace: "default", Name: "github-token"}))
+	})
+	t.Run("no Pipeline demo", func(t *testing.T) {
+		writeKubeconfig(t, "kind-kardinal", "https://127.0.0.1:41234")
+		noCluster(t)
+		users := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "demo-mine"}, Spec: v1alpha1.BundleSpec{Pipeline: "demo"}}
+		ours := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "demo-qs",
+			Labels: map[string]string{quickstartMark: quickstartMarkValue}}, Spec: v1alpha1.BundleSpec{Pipeline: "demo"}}
+		c := quickstartCluster(t, users, ours)
+		prev := quickstartClient
+		t.Cleanup(func() { quickstartClient = prev })
+		quickstartClient = func(*clientcmdapi.Config) (sigs_client.Client, error) { return c, nil }
+		var out bytes.Buffer
+		require.NoError(t, quickstartDeleteFn(ctx, &out, yes))
+		assert.Contains(t, out.String(), "  - Versions of default/demo: deleted 1 (demo-qs)\n")
+		assert.False(t, gone(t, c, &v1alpha1.Bundle{}, types.NamespacedName{Namespace: "default", Name: "demo-mine"}), "the user's Bundle stays")
+		assert.True(t, gone(t, c, &v1alpha1.Bundle{}, types.NamespacedName{Namespace: "default", Name: "demo-qs"}))
+	})
+	t.Run("quickstart's Secret, used by another Pipeline", func(t *testing.T) {
+		api := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "api"},
+			Spec: v1alpha1.PipelineSpec{Git: v1alpha1.PipelineGit{URL: "https://github.com/me/api", SecretRef: &v1alpha1.SecretRef{Name: "github-token"}}}}
+		c := quickstartDemo(t, api)
+		var out bytes.Buffer
+		require.NoError(t, quickstartDeleteFn(ctx, &out, yes))
+		assert.Contains(t, out.String(), "  - Secret default/github-token: kept (used by Pipeline api)\n")
+		assert.False(t, gone(t, c, &corev1.Secret{}, types.NamespacedName{Namespace: "default", Name: "github-token"}))
+	})
 }
