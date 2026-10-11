@@ -94,6 +94,16 @@ export function sidebarRow(page: Page, name = PIPELINE) {
   return sidebarRows(page).filter({ has: page.getByText(name, { exact: true }) })
 }
 
+/** The stage drawer (U3): an environment's details, "why it's waiting" first. */
+export function stageDrawer(page: Page) {
+  return page.getByTestId('stage-drawer')
+}
+
+/** The environment the stage drawer is open on (its heading). */
+export function drawerHeading(page: Page) {
+  return stageDrawer(page).getByRole('heading', { level: 2 })
+}
+
 /** dagNode is the DAG node of an environment or gate (its aria-label starts with the name). */
 export function dagNode(page: Page, name: string) {
   return page.locator(`g.dag-node[aria-label^="${name} — "]`)

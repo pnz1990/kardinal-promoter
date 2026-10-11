@@ -295,6 +295,9 @@ describe('StageDrawer (U3)', () => {
       { name: 'git-clone', state: 'Completed', startedAt: '2026-10-11T09:00:00Z', completedAt: '2026-10-11T09:00:02Z', durationMs: 2000 },
       { name: 'open-pr', state: 'InProgress', startedAt: '2026-10-11T09:00:02Z' }] }
     renderDrawer([freeze], { data: { pipeline, bundles, steps: [running], gates: [freeze] } })
+    expect(api.validateCEL).not.toHaveBeenCalled()
+    const details = document.querySelector('[data-section="why"] details') as HTMLDetailsElement
+    act(() => { details.open = true; details.dispatchEvent(new Event('toggle')) })
     const chip = await screen.findByText('✗ error')
     expect(chip).toHaveAttribute('title', "CEL compile error: undeclared reference to 'bundel'")
     const items = within(screen.getByRole('list', { name: 'Promotion steps' })).getAllByRole('listitem')

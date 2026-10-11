@@ -88,7 +88,9 @@ export const ApprovalsPage = forwardRef<ApprovalsHandle, ApprovalsPageProps>(fun
       <header className="appr__head">
         <p className="appr__eyebrow">Approvals</p>
         <h1 id="appr-title" className="appr__title">
-          {mine.length === 0 ? 'Nothing waits on you' : `${mine.length} waiting on you`}
+          {identity === null
+            ? (mine.length === 0 ? 'Nothing waits for approval' : `${mine.length} waiting for approval`)
+            : (mine.length === 0 ? 'Nothing waits on you' : `${mine.length} waiting on you`)}
         </h1>
         {identity === null && (
           <p className="appr__note">

@@ -252,14 +252,20 @@ function WhyItem({ reason: w, now, primary, onAct, onUpstream, upstreams, reason
         )}
         {w.next === 'openPR' && w.prURL && <a className="stage-link" href={w.prURL} target="_blank" rel="noreferrer">Open pull request</a>}
       </div>
-      {w.gate && (
-        <details className="stage-details">
-          <summary>Details</summary>
-          <p className="stage-muted">Gate instance {w.gate.name} in {w.gate.namespace}</p>
-          <CelCheck expression={w.gate.expression} />
-        </details>
-      )}
+      {w.gate && <GateDetails gate={w.gate} />}
     </li>
+  )
+}
+
+/** A gate's raw details, closed: its instance and its CEL, checked when opened. */
+function GateDetails({ gate }: { gate: PolicyGate }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <details className="stage-details" onToggle={e => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+      <summary>Details</summary>
+      <p className="stage-muted">Gate instance {gate.name} in {gate.namespace}</p>
+      {open ? <CelCheck expression={gate.expression} /> : <pre className="stage-code"><CELBlock expression={gate.expression} /></pre>}
+    </details>
   )
 }
 
@@ -321,7 +327,8 @@ function Evidence({ step, gates, now }: { step?: PromotionStep; gates: PolicyGat
           const d = gateDisplay(g)
           return (
             <li key={g.name}><StateChip label={d.label} tone={d.tone} glyph={d.glyph} /> <span title={g.name}>{gateLabel(g)}</span>
-              {g.lastEvaluatedAt && <span className="stage-muted"> · {formatElapsedSince(g.lastEvaluatedAt, now)} ago</span>}</li>
+              {g.lastEvaluatedAt && <span className="stage-muted"> · {formatElapsedSince(g.lastEvaluatedAt, now)} ago</span>}
+              <GateDetails gate={g} /></li>
           )
         })}</ul>
       )}
