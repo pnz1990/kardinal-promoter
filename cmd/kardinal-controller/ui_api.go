@@ -73,6 +73,19 @@ type uiPipelineResponse struct {
 	// Keys are environment names, values are the promotion phase.
 	EnvironmentStates map[string]string `json:"environmentStates,omitempty"`
 
+	// Environments is the Pipeline's status.environments, written by the
+	// PipelineReconciler: per environment what runs there, a newer Bundle on
+	// its way in, its state and since when, and what holds it (P1). Display
+	// only; the same rows kubectl and the CLI read.
+	Environments []v1alpha1.PipelineEnvironmentStatus `json:"environments,omitempty"`
+	// Summary is the Pipeline's status.summary, one sentence on where its
+	// versions are.
+	Summary string `json:"summary,omitempty"`
+	// Conditions are the Pipeline's status.conditions: Ready (with reasons
+	// such as ValidationFailed and GitCredentialMissing), Paused,
+	// PathConflict and the SecretReferenceable warning.
+	Conditions []uiCondition `json:"conditions,omitempty"`
+
 	// #525: static pipeline topology from spec — rendered even when no Bundle is promoting.
 	// Each entry is one environment in pipeline order with its dependsOn edges.
 	EnvironmentTopology []uiEnvironmentNode `json:"environmentTopology,omitempty"`
@@ -782,6 +795,9 @@ func pipelineListResponse(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bund
 		}
 		resp.Deployed = deployedByEnv(&p, stepsByEnv(steps, stepsByPipeline[nsName{p.Namespace, p.Name}]), byName)
 		resp.DeploymentMetrics = p.Status.DeploymentMetrics
+		resp.Environments = p.Status.Environments
+		resp.Summary = p.Status.Summary
+		resp.Conditions = buildUIConditions(p.Status.Conditions)
 		if ab := activeBundles[key]; ab != nil {
 			resp.ActiveBundleName = ab.name
 			resp.ActiveBundleVersion = scm.BundleVersion(ab.bundle.Spec)

@@ -2325,9 +2325,16 @@ func TestChart_Demo(t *testing.T) {
 	}
 	name := releaseName(ns)
 	deleteReaderBindingAtEnd(t, e, framework.ChartFullname(name)+"-graph-reader-"+ns)
+	// The demo Pipeline's own git Secret, never the controller's
+	// (#1725): a labelled copy of the suite's token.
+	var token corev1.Secret
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: framework.GitSecretName}, &token))
+	require.NoError(t, e.Client.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "demo-token",
+		Labels: map[string]string{"kardinal.io/referenceable": "true"}}, Data: token.Data}))
 	demo := func(over framework.Values) framework.Values {
 		return framework.Values{"demo": framework.MergeValues(framework.Values{
 			"enabled": true, "image": fixtures.Image + ":" + fixtures.V1, "git": framework.Values{"url": repo.CloneURL},
+			"secretRef": framework.Values{"name": "demo-token"},
 		}, over)}
 	}
 	r := e.InstallChart(t, name, ns, demo(nil))
@@ -2345,7 +2352,7 @@ func TestChart_Demo(t *testing.T) {
 	assert.Equal(t, "main", p.Spec.Git.Branch)
 	assert.Equal(t, "directory", p.Spec.Git.Layout)
 	require.NotNil(t, p.Spec.Git.SecretRef)
-	assert.Equal(t, framework.GitSecretName, p.Spec.Git.SecretRef.Name, "the default is the chart's SCM token Secret")
+	assert.Equal(t, "demo-token", p.Spec.Git.SecretRef.Name, "demo.secretRef.name, never the controller's Secret")
 	approvals := map[string]string{}
 	for _, env := range p.Spec.Environments {
 		approvals[env.Name] = env.Approval

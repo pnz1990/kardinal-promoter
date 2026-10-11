@@ -69,7 +69,7 @@ describe('PipelineOpsTable', () => {
     )
     const blockerCell = container.querySelector('td:nth-child(3)')
     expect(blockerCell?.textContent).toContain('3')
-    expect(blockerCell?.getAttribute('style') ?? '').toContain('var(--color-error)')
+    expect(blockerCell).toHaveAttribute('data-tone', 'failed')
   })
 
   it('shows green when no blockers', () => {
@@ -80,10 +80,7 @@ describe('PipelineOpsTable', () => {
       />
     )
     const blockerCell = container.querySelector('td:nth-child(3)')
-    const style = blockerCell?.getAttribute('style') ?? ''
-    expect(
-      style.includes('#22c55e') || style.includes('rgb(34, 197, 94)') || style.includes('var(--color-success)')
-    ).toBe(true)
+    expect(blockerCell).toHaveAttribute('data-tone', 'verified')
   })
 
   it('shows stale inventory warning when > 14 days', () => {
