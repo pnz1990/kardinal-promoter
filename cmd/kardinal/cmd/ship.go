@@ -292,9 +292,12 @@ func shipOutcome(ctx context.Context, c sigs_client.Client, ns, pipeline, name s
 	}
 	switch b.Status.Phase {
 	case "Verified":
-		return &shipOutcomeResult{result: "Verified", code: ExitVerified, final: true,
-			message: fmt.Sprintf("%s is %s in %s", versionOr(scmVersion(&b), name),
-				strings.ToLower(display.Step("Verified").Label), strings.Join(where(func(v1alpha1.PipelineEnvironmentStatus) bool { return true }), ", "))}, envs, nil
+		msg := fmt.Sprintf("%s is %s", versionOr(scmVersion(&b), name), strings.ToLower(display.Step("Verified").Label))
+		// status.environments may trail the Bundle's phase by a reconcile.
+		if in := where(func(v1alpha1.PipelineEnvironmentStatus) bool { return true }); len(in) > 0 {
+			msg += " in " + strings.Join(in, ", ")
+		}
+		return &shipOutcomeResult{result: "Verified", code: ExitVerified, final: true, message: msg}, envs, nil
 	case "Failed":
 		msg := fmt.Sprintf("Bundle %s failed", name)
 		if failed := where(func(e v1alpha1.PipelineEnvironmentStatus) bool {
@@ -388,9 +391,6 @@ func environmentSpec(p *v1alpha1.Pipeline, env string) *v1alpha1.EnvironmentSpec
 	}
 	return nil
 }
-
-// firstWord is s up to its first space: the environment a held line names.
-func firstWord(s string) string { w, _, _ := strings.Cut(s, " "); return w }
 
 // scmVersion is the version Bundle b ships.
 func scmVersion(b *v1alpha1.Bundle) string { return createdOf(b).Version }

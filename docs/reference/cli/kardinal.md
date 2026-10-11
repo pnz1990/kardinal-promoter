@@ -33,8 +33,11 @@ with virtual-terminal processing; without it output has no colour.
 -o json and -o yaml print the API's values (Verified, WaitingForMerge) and the
 cluster's text unchanged, and no table placeholders ("-", "--", "..."): a
 field with nothing to say is left out. With -w, -o json prints one document
-per refresh and -o yaml separates them with "---". Warnings and hints go to
-stderr, so stdout stays valid JSON. get prints the objects as the API server
+per refresh and -o yaml separates them with "---". Hints, prompts and the
+CLI's own warnings go to stderr, so stdout stays valid JSON. The notices a
+report shows about what it read (the ERROR: and WARNING: lines of status,
+get pipelines and explain) are part of its output, on stdout, so
+kardinal status my-app | less shows them; with -o json they are fields. get prints the objects as the API server
 lists them. The others print these fields (in brackets the ones left out
 when empty):
 

@@ -58,6 +58,8 @@ kardinal approve <pipeline> <env> [flags]
   -e, --env string        Environment the approval is for (or give it after the pipeline)
   -h, --help              help for approve
       --revoke            Delete your Approval instead of recording one
+      --version string    Approve only if this is the version waiting (the image tag, config commit or chart version)
+      --yes               Do not ask for confirmation on a terminal
 ```
 
 ### Options inherited from parent commands

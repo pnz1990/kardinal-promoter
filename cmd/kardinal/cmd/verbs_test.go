@@ -231,13 +231,13 @@ func TestShipWait(t *testing.T) {
 			_ = c.List(ctx, &bl)
 			for i := range bl.Items {
 				b := bl.Items[i]
-				b.Status.Phase = "Verified"
-				_ = c.Update(ctx, &b)
 				var pl = p.DeepCopy()
 				_ = c.Get(ctx, types.NamespacedName{Namespace: "default", Name: "demo"}, pl)
 				pl.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "test", Bundle: b.Name, State: "Verified"},
 					{Name: "prod", Bundle: b.Name, State: "Verified"}}
 				_ = c.Update(ctx, pl)
+				b.Status.Phase = "Verified"
+				_ = c.Update(ctx, &b)
 			}
 			time.Sleep(time.Millisecond)
 		}
