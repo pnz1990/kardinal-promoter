@@ -6,6 +6,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -70,16 +71,19 @@ func gitCredentialMissing(p *kardinalv1alpha1.Pipeline, gs gitSecret) *metav1.Co
 	if name == "" {
 		name = "git-token"
 	}
+	// A token used as the URL's user name ("https://<token>@host/...") must
+	// not reach the status, the CLI or the logs.
+	remote := withoutUserinfo(p.Spec.Git.URL)
 	create := fmt.Sprintf("kubectl create secret generic %s -n %s --from-literal=token=<TOKEN> && "+
 		"kubectl label secret %s -n %s %s=true", name, p.Namespace, name, p.Namespace, labelReferenceable)
 	var msg string
 	switch {
 	case gs.name == "":
 		msg = fmt.Sprintf("spec.git.secretRef is not set, so git has no token for %s; create the Secret (%s) "+
-			"and set spec.git.secretRef.name: %s", p.Spec.Git.URL, create, name)
+			"and set spec.git.secretRef.name: %s", remote, create, name)
 	case gs.notFound:
 		msg = fmt.Sprintf("git Secret %s not found in namespace %s, so git has no token for %s; create it: %s",
-			name, p.Namespace, p.Spec.Git.URL, create)
+			name, p.Namespace, remote, create)
 	case gs.secret == nil:
 		return nil
 	default:
@@ -96,10 +100,21 @@ func gitCredentialMissing(p *kardinalv1alpha1.Pipeline, gs gitSecret) *metav1.Co
 			fix += fmt.Sprintf(" && kubectl label secret %s -n %s %s=true", name, p.Namespace, labelReferenceable)
 		}
 		msg = fmt.Sprintf("git Secret %s has no token key, so git has no token for %s; add it: %s",
-			name, p.Spec.Git.URL, fix)
+			name, remote, fix)
 	}
 	return &metav1.Condition{
 		Type: "Ready", Status: metav1.ConditionFalse, Reason: reasonGitCredentialMissing,
 		Message: msg, ObservedGeneration: p.Generation,
 	}
+}
+
+// withoutUserinfo is remote without its user name and password, or "the
+// spec.git.url remote" when it does not parse.
+func withoutUserinfo(remote string) string {
+	u, err := url.Parse(strings.TrimSpace(remote))
+	if err != nil {
+		return "the spec.git.url remote"
+	}
+	u.User = nil
+	return u.String()
 }

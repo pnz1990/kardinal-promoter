@@ -159,6 +159,28 @@ func TestPipelineReconciler_GitCredentialMissing(t *testing.T) {
 	}
 }
 
+// TestPipelineReconciler_GitCredentialMissingHidesUserinfo (P4 QA): a URL
+// whose user name is a token ("https://<token>@host/...") needs a token, and
+// the Ready message names the remote without it.
+//
+// Covers PIPE-GITCRED-02.
+func TestPipelineReconciler_GitCredentialMissingHidesUserinfo(t *testing.T) {
+	p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}})
+	p.Spec.Git.SecretRef = nil
+	p.Spec.Git.URL = "https://ghp_s3cr3tT0ken@github.com/myorg/gitops.git"
+	c := newClientWithIndex(newScheme(), p)
+	key := types.NamespacedName{Name: "app", Namespace: "default"}
+	_, err := (&pipeline.Reconciler{Client: c}).Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+	require.NoError(t, err)
+	var got kardinalv1alpha1.Pipeline
+	require.NoError(t, c.Get(context.Background(), key, &got))
+	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+	require.NotNil(t, ready)
+	assert.Equal(t, "GitCredentialMissing", ready.Reason)
+	assert.NotContains(t, ready.Message, "s3cr3t")
+	assert.Contains(t, ready.Message, "git has no token for https://github.com/myorg/gitops.git;")
+}
+
 // TestPipelineReconciler_GitCredentialAfterSpecErrors (P4): a spec error is
 // reported first; the credential is checked only for a valid spec.
 //
