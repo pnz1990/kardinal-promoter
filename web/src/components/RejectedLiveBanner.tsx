@@ -7,6 +7,7 @@
 // merged, so the header says so and names the rollback to run.
 
 import type { Bundle } from '../types'
+import '../styles/RejectedLiveBanner.css'
 
 export function RejectedLiveBanner({ bundle }: { bundle: Bundle }) {
   const envs = bundle.rejectedLiveEnvironments ?? []
@@ -15,13 +16,7 @@ export function RejectedLiveBanner({ bundle }: { bundle: Bundle }) {
     <div
       role="alert"
       data-testid="rejected-live-banner"
-      style={{
-        border: '1px solid var(--color-error)',
-        borderRadius: 4,
-        padding: '0.35rem 0.6rem',
-        fontSize: '0.82rem',
-        color: 'var(--color-error)',
-      }}
+      className="rejected-live-banner"
     >
       Rejected change is live in {envs.join(', ')}; roll back:{' '}
       {envs.map((env, i) => (

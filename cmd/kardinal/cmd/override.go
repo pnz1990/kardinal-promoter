@@ -212,7 +212,10 @@ func missingGateError(pipeline, env string) error {
 		return fmt.Errorf("--gate is required: name the gate to override")
 	}
 	names, err := notPassingGates(context.Background(), c, ns, pipeline, env)
-	if err != nil || len(names) == 0 {
+	if err != nil {
+		return fmt.Errorf("--gate is required; the gates of %s could not be listed to suggest one: %w", where, HumanError(err))
+	}
+	if len(names) == 0 {
 		return fmt.Errorf("--gate is required: no gate of %s is holding a promotion back now", where)
 	}
 	return fmt.Errorf("which gate? Gates not passing for %s: %s. Pass --gate <name>", where, strings.Join(names, ", "))
