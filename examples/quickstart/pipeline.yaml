@@ -5,36 +5,21 @@ metadata:
   namespace: default
 spec:
   git:
+    # To promote into your own copy, fork pnz1990/kardinal-demo and put the
+    # fork here and in argocd-applications.yaml: https://github.com/<you>/kardinal-demo
     url: https://github.com/pnz1990/kardinal-demo
-    branch: main
-    layout: directory
     secretRef:
       name: github-token
-
+  # Defaults: each environment follows the one before it, lives at
+  # environments/<name> on main, and is updated with kustomize; approval is
+  # auto. Health is the Argo CD Application kardinal-test-app-<name>.
   environments:
     - name: test
-      path: environments/test
-      update:
-        strategy: kustomize
-      approval: auto
-      health:
-        type: argocd
-
+      health: { type: argocd }
     - name: uat
-      path: environments/uat
-      update:
-        strategy: kustomize
-      approval: auto
-      health:
-        type: argocd
-
+      health: { type: argocd }
     - name: prod
-      path: environments/prod
-      update:
-        strategy: kustomize
       approval: pr-review
       health:
         type: argocd
         timeout: 15m
-
-  historyLimit: 20

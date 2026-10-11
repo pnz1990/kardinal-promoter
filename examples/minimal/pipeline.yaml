@@ -1,0 +1,12 @@
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata: { name: my-app }
+spec:
+  git:
+    url: https://github.com/myorg/gitops
+    secretRef: { name: github-token }
+  environments:
+    - name: test
+    - name: uat
+    - name: prod
+      approval: pr-review

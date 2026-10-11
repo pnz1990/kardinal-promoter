@@ -235,7 +235,7 @@ kardinal init
 # Apply with: kubectl apply -f pipeline.yaml
 ```
 
-`kardinal init` sets no health check. Without one, kardinal waits for a Deployment named after the Pipeline in a namespace named after the environment (`test`, `uat`, `prod`). The Applications above deploy to `kardinal-test-app-<env>`, so apply the Pipeline below instead. It checks the Argo CD Applications. It is `examples/quickstart/pipeline.yaml` (`kubectl apply -f examples/quickstart/pipeline.yaml` from a checkout) with the Application names written out:
+`kardinal init` sets no health check. Without one, kardinal waits for a Deployment named after the Pipeline in a namespace named after the environment (`test`, `uat`, `prod`). The Applications above deploy to `kardinal-test-app-<env>`, so apply the Pipeline below instead. It checks the Argo CD Applications. It is `examples/quickstart/pipeline.yaml` (`kubectl apply -f examples/quickstart/pipeline.yaml` from a checkout) with the Application names written out. Everything else is a default: each environment follows the one before it, at `environments/<name>` on `main`, updated with kustomize, with `approval: auto` unless set:
 
 ```bash
 cat <<EOF | kubectl apply -f -
@@ -247,40 +247,26 @@ metadata:
 spec:
   git:
     url: https://github.com/pnz1990/kardinal-demo
-    branch: main
-    layout: directory
     secretRef:
       name: github-token
   environments:
     - name: test
-      path: environments/test
-      update:
-        strategy: kustomize
-      approval: auto
       health:
         type: argocd
         argocd:
           name: kardinal-test-app-test
     - name: uat
-      path: environments/uat
-      update:
-        strategy: kustomize
-      approval: auto
       health:
         type: argocd
         argocd:
           name: kardinal-test-app-uat
     - name: prod
-      path: environments/prod
-      update:
-        strategy: kustomize
       approval: pr-review
       health:
         type: argocd
         argocd:
           name: kardinal-test-app-prod
         timeout: 15m
-  historyLimit: 20
 EOF
 ```
 

@@ -10,6 +10,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A 12-line minimal Pipeline, and a quickstart that sets only what it changes** — `examples/minimal/pipeline.yaml` is the smallest Pipeline that promotes (git URL and Secret, three environments, prod `approval: pr-review`); the e2e suite validates it with `kardinal validate -f` and promotes a Bundle through it. `examples/quickstart/pipeline.yaml` drops the fields it set to their defaults (`branch`, `layout`, `path`, `update.strategy`, `approval: auto`, `historyLimit`) and says in a comment where a fork's URL goes; its PolicyGates drop the `kardinal.io/type: gate` label, which nothing reads. The quickstart README labels the token Secret `kardinal.io/referenceable=true`
+
 - **The kardinal palette and fonts in the UI and the docs** (#1698) — the UI and this site now share one set of design tokens (`web/tokens/tokens.json`). Neutrals are spruce-tinted greys in equal light and dark themes. Cardinal red marks the followed release, the selection, links and focus. Status colours are distinct from it: failure is garnet, blocked is ochre, waiting is dusk blue, verified is spruce. Text is set in Atkinson Hyperlegible Next and Mono, headings in Archivo. The fonts are served by the UI and the site themselves (SIL Open Font License), so neither loads a font CDN. The UI's theme button cycles System, Light and Dark: System follows the operating system, and a saved choice applies before the page draws. Every colour pair is checked against WCAG 2.1 AA in both themes
 
 ### Fixed
