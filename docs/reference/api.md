@@ -143,6 +143,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `status.retiredSteps[].state` | string |  | State is the PromotionStep's final status.state. |
 | `status.retiredSteps[].stepType` | string |  | StepType is the PromotionStep's spec.stepType. |
 | `status.retiredSteps[].verifiedAt` | string (date-time) |  | VerifiedAt is when the PromotionStep became Verified. |
+| `status.version` | string |  | Version is what the Bundle ships, for display: the image tag (the images, when several), "config &lt;sha&gt;", or the chart name and version. Written by the BundleReconciler from spec. |
 
 ## ChangeWindow
 
@@ -683,6 +684,18 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `status.deploymentMetrics.rolloutsLast30Days` | integer |  | RolloutsLast30Days is the number of successful (Verified) promotions to the final pipeline environment in the last 30 calendar days. |
 | `status.deploymentMetrics.sampleSize` | integer |  | SampleSize is the number of Bundles included in this computation. |
 | `status.deploymentMetrics.staleProdDays` | integer |  | StaleProdDays is the number of days since the last successful promotion to the final pipeline environment. 0 means a promotion completed today. Until a Bundle is Verified there, deploymentMetrics is not set at all. |
+| `status.environmentSummary` | string |  | EnvironmentSummary is Environments as one line, environment=version ("test=1.5.0 uat=1.5.0 prod=1.4.0"; "-" where nothing runs yet), for the wide printer column. Display only. |
+| `status.environments` | []object |  | Environments is, per environment in spec order (a fleet environment expands to its targets), what runs there and where the newest version stands. Written by the PipelineReconciler from the Bundles, PromotionSteps and gate instances of the Pipeline. It is a display projection: no controller decision reads it. |
+| `status.environments[].blockedBy` | []string |  | BlockedBy names the gates that hold the newest Bundle back in the environment, sorted. |
+| `status.environments[].bundle` | string |  | Bundle is the Bundle whose change runs in the environment: the newest one whose change landed there. Empty when none has. |
+| `status.environments[].held` | boolean |  | Held is true when a rollback hold (spec.holds) keeps the environment on Bundle, so the newest Bundle waits. |
+| `status.environments[].incomingBundle` | string |  | IncomingBundle is a newer Bundle on its way into the environment (its step there is not yet live, or gates hold it before its step exists). Empty when the newest Bundle there is Bundle. |
+| `status.environments[].incomingVersion` | string |  | IncomingVersion is what IncomingBundle ships. |
+| `status.environments[].name` | string | yes | Name is the environment name. |
+| `status.environments[].prURL` | string |  | PRURL is the pull request of the newest Bundle's step while it waits for its merge. |
+| `status.environments[].since` | string (date-time) |  | Since is when State began: the Verified time for Verified, otherwise when the controller first recorded this Bundle in this State. |
+| `status.environments[].state` | string |  | State is the PromotionStep state of the newest Bundle in the environment (IncomingBundle when set, else Bundle), an API value such as Verified or WaitingForMerge. Pending with BlockedBy set when gates hold the Bundle before its step exists. Empty when no Bundle reached the environment. |
+| `status.environments[].version` | string |  | Version is what Bundle ships: the image tag, "config &lt;sha&gt;" or the chart version. |
 | `status.fleets` | []object |  | Fleets are the resolved targets of each fleet environment that uses a selector, written by the PipelineReconciler. A Bundle's Graph is built from them; a change rebuilds the Graph of a Bundle in flight. |
 | `status.fleets[].environment` | string | yes | Environment is the fleet environment. |
 | `status.fleets[].message` | string |  | Message says why the selector could not be resolved, when it could not. |
@@ -744,6 +757,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `status.pendingAuditEvents[].spec.pipelineName` | string | yes | PipelineName is the name of the Pipeline the Bundle is promoting through. |
 | `status.pendingAuditEvents[].spec.timestamp` | string (date-time) | yes | Timestamp is when the event occurred (RFC 3339 format). |
 | `status.phase` | string |  | Phase is the overall pipeline phase: Promoting while a Bundle is in flight (also when a PolicyGate holds it), Degraded when the newest Bundle failed, Ready when the newest Bundle is Verified in every environment it reached, and Unknown before the first Bundle. One of: `Ready`, `Degraded`, `Promoting`, `Unknown`. Default: `Unknown`. |
+| `status.summary` | string |  | Summary is one sentence on where the Pipeline's versions are, for example "1.5.0 live in test, uat; waiting for PR merge in prod (#42)". Written with Environments; display only. |
 
 ## PolicyGate
 

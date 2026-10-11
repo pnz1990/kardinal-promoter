@@ -77,7 +77,7 @@ type RollbackPolicyStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=rbp
+// +kubebuilder:resource:scope=Namespaced,shortName=rbp,categories=kardinal-all
 // +kubebuilder:printcolumn:name="ShouldRollback",type=boolean,JSONPath=`.status.shouldRollback`
 // +kubebuilder:printcolumn:name="Failures",type=integer,JSONPath=`.status.consecutiveFailures`
 // +kubebuilder:printcolumn:name="Threshold",type=integer,JSONPath=`.spec.failureThreshold`
