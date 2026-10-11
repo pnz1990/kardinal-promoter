@@ -40,6 +40,17 @@ type Translator struct {
 	mapper meta.RESTMapper
 	// providers checks a Pipeline's spec.git.providerRef (WithProviders).
 	providers *scm.Registry
+	// controllerSecret is the controller's own SCM token Secret: a Pipeline
+	// whose git.secretRef names it gets no Graph (WithControllerSecret), so
+	// no RenderRun mounts it in a render Job.
+	controllerSecret *scm.ControllerTokenSecret
+}
+
+// WithControllerSecret sets the controller's own SCM token Secret, which no
+// Pipeline's Graph may use.
+func (t *Translator) WithControllerSecret(c *scm.ControllerTokenSecret) *Translator {
+	t.controllerSecret = c
+	return t
 }
 
 // New creates a new Translator.
@@ -91,6 +102,13 @@ func (t *Translator) Translate(ctx context.Context,
 		Str("bundle", bundle.Name).
 		Logger()
 	ctx = log.WithContext(ctx)
+
+	// The controller's token Secret is never a Pipeline's git Secret: the
+	// Graph's RenderRuns would mount it in a render Job. Permanent until the
+	// Pipeline changes.
+	if err := t.controllerSecret.Refuses(pipeline); err != nil {
+		return "", graph.Invalid(fmt.Errorf("translator.Translate: %w", err))
+	}
 
 	// Collect PolicyGates from the org policy namespaces, the Pipeline's
 	// spec.policyNamespaces, and the Pipeline namespace.

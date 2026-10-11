@@ -21,18 +21,24 @@ type ControllerTokenSecret struct {
 // Refuses returns why p may not use its git.secretRef, or nil. A nil c, or
 // one with no name (a token from a flag, not a Secret), refuses nothing.
 func (c *ControllerTokenSecret) Refuses(p *v1alpha1.Pipeline) error {
-	if c == nil || c.Name == "" || p == nil {
+	if p == nil {
 		return nil
 	}
 	ref := p.Spec.Git.SecretRef
-	if ref == nil || ref.Name != c.Name {
+	if ref == nil {
 		return nil
 	}
 	ns := ref.Namespace
 	if ns == "" {
 		ns = p.Namespace
 	}
-	if ns != c.Namespace {
+	return c.RefusesSecret(ns, ref.Name)
+}
+
+// RefusesSecret returns why the Secret name in namespace may not be used as
+// a Pipeline's git Secret (a render Job's mount, say), or nil.
+func (c *ControllerTokenSecret) RefusesSecret(namespace, name string) error {
+	if c == nil || c.Name == "" || name != c.Name || namespace != c.Namespace {
 		return nil
 	}
 	return fmt.Errorf("git.secretRef %q is the controller's own SCM token Secret (--scm-token-secret-name in %s): "+
