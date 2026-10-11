@@ -57,11 +57,11 @@ test.describe('Journey 013 — Keyboard and Bundle types', () => {
     await expect(chips.last()).toBeFocused()
     await page.keyboard.press('Home')
     await expect(chips.first()).toBeFocused()
-    // The Bundle card names the type of the shown Bundle.
-    await expect(page.getByRole('img', { name: 'image Bundle' })).toBeVisible()
+    // The header names the shown Bundle's type unless it is an image Bundle (the common case).
+    await expect(page.locator('.app-pipeline-head').getByRole('img', { name: 'image Bundle' })).toHaveCount(0)
 
     await page.locator('aside').getByText('payments-service').first().click()
-    await expect(page.getByRole('img', { name: 'image and config Bundle' }).first()).toHaveText('image + config')
+    await expect(page.locator('.app-pipeline-head').getByRole('img', { name: 'image and config Bundle' })).toHaveText('image + config')
   })
 
   test('WCAG 2.1 AA in the light theme, with node details and a dialog open', async ({ page }) => {
@@ -85,7 +85,7 @@ test.describe('Journey 013 — Keyboard and Bundle types', () => {
     await expectNoViolations(page, 'light node details')
 
     await page.keyboard.press('Escape')
-    await page.getByRole('button', { name: 'Create bundle for kardinal-test-app' }).click()
+    await page.getByRole('button', { name: 'Ship a version of kardinal-test-app' }).click()
     await expect(page.getByRole('dialog')).toBeVisible()
     await expectNoViolations(page, 'light create bundle dialog')
   })
