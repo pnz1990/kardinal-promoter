@@ -13,6 +13,10 @@
          <lastmod>2026-10-11</lastmod>
     </url>
     <url>
+         <loc>https://pnz1990.github.io/kardinal-promoter/approvals/</loc>
+         <lastmod>2026-10-11</lastmod>
+    </url>
+    <url>
          <loc>https://pnz1990.github.io/kardinal-promoter/architecture/</loc>
          <lastmod>2026-10-11</lastmod>
     </url>
@@ -41,7 +45,7 @@
          <lastmod>2026-10-11</lastmod>
     </url>
     <url>
-         <loc>https://pnz1990.github.io/kardinal-promoter/faq/</loc>
+         <loc>https://pnz1990.github.io/kardinal-promoter/first-pipeline/</loc>
          <lastmod>2026-10-11</lastmod>
     </url>
     <url>
@@ -73,6 +77,18 @@
          <lastmod>2026-10-11</lastmod>
     </url>
     <url>
+         <loc>https://pnz1990.github.io/kardinal-promoter/operate/</loc>
+         <lastmod>2026-10-11</lastmod>
+    </url>
+    <url>
+         <loc>https://pnz1990.github.io/kardinal-promoter/overrides/</loc>
+         <lastmod>2026-10-11</lastmod>
+    </url>
+    <url>
+         <loc>https://pnz1990.github.io/kardinal-promoter/pause/</loc>
+         <lastmod>2026-10-11</lastmod>
+    </url>
+    <url>
          <loc>https://pnz1990.github.io/kardinal-promoter/pipeline-reference/</loc>
          <lastmod>2026-10-11</lastmod>
     </url>
@@ -86,6 +102,10 @@
     </url>
     <url>
          <loc>https://pnz1990.github.io/kardinal-promoter/quickstart/</loc>
+         <lastmod>2026-10-11</lastmod>
+    </url>
+    <url>
+         <loc>https://pnz1990.github.io/kardinal-promoter/reject/</loc>
          <lastmod>2026-10-11</lastmod>
     </url>
     <url>
@@ -109,15 +129,19 @@
          <lastmod>2026-10-11</lastmod>
     </url>
     <url>
-         <loc>https://pnz1990.github.io/kardinal-promoter/subscription-webhooks/</loc>
-         <lastmod>2026-10-11</lastmod>
-    </url>
-    <url>
          <loc>https://pnz1990.github.io/kardinal-promoter/subscription/</loc>
          <lastmod>2026-10-11</lastmod>
     </url>
     <url>
          <loc>https://pnz1990.github.io/kardinal-promoter/troubleshooting/</loc>
+         <lastmod>2026-10-11</lastmod>
+    </url>
+    <url>
+         <loc>https://pnz1990.github.io/kardinal-promoter/upgrade/</loc>
+         <lastmod>2026-10-11</lastmod>
+    </url>
+    <url>
+         <loc>https://pnz1990.github.io/kardinal-promoter/verify/</loc>
          <lastmod>2026-10-11</lastmod>
     </url>
     <url>
@@ -158,6 +182,18 @@
     </url>
     <url>
          <loc>https://pnz1990.github.io/kardinal-promoter/reference/glossary/</loc>
+         <lastmod>2026-10-11</lastmod>
+    </url>
+    <url>
+         <loc>https://pnz1990.github.io/kardinal-promoter/reference/helm-values/</loc>
+         <lastmod>2026-10-11</lastmod>
+    </url>
+    <url>
+         <loc>https://pnz1990.github.io/kardinal-promoter/reference/metrics/</loc>
+         <lastmod>2026-10-11</lastmod>
+    </url>
+    <url>
+         <loc>https://pnz1990.github.io/kardinal-promoter/reference/pipeline/</loc>
          <lastmod>2026-10-11</lastmod>
     </url>
     <url>
