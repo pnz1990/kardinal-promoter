@@ -754,8 +754,9 @@ func main() {
 		Client:  mgr.GetClient(),
 		// Uncached: the maxConcurrentPromotions count must see the Promoting
 		// patch of the previous reconcile (#1310).
-		APIReader:        mgr.GetAPIReader(),
-		Translator:       newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), providers, graphCompactAbove, logger),
+		APIReader: mgr.GetAPIReader(),
+		Translator: newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), providers, graphCompactAbove, logger).
+			WithControllerSecret(controllerSecret),
 		GraphChecker:     newGraphClient(mgr.GetConfig(), logger),
 		Recorder:         eventRecorder,
 		PolicyNamespaces: splitCSV(policyNamespaces),
@@ -906,6 +907,7 @@ func main() {
 		Resources:           renderResources,
 		Timeout:             renderTimeout,
 		ControllerNamespace: hookControllerNS,
+		ControllerSecret:    controllerSecret,
 		ImagePullSecrets:    splitCSV(renderPullSecrets),
 		AuthorName:          "kardinal-promoter",
 		AuthorEmail:         "kardinal@kardinal.io",
