@@ -15,3 +15,4 @@ export { KubernetesDetails, type KubernetesDetailsProps } from './KubernetesDeta
 export { CodeInline, CodeBlock, Kbd, Stack, type CodeBlockProps, type StackProps, type Space } from './Text'
 export { TONES, toneVars, type Tone } from './tone'
 export { cx } from './cx'
+export { Skeleton, type SkeletonProps } from './Skeleton'
