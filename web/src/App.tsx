@@ -658,7 +658,7 @@ export function App() {
                     </span>
                     <BundleTypeBadge type={activeBundle.type} />
                     <span style={{ color: 'var(--color-text-faint)' }}>·</span>
-                    <HealthChip state={activeBundle.phase} size="sm" />
+                    <HealthChip state={activeBundle.phase} kind="bundle" size="sm" />
                     <RejectedLiveBanner bundle={activeBundle} />
                     {activeBundle.provenance?.commitSHA && (
                       <>
@@ -757,7 +757,7 @@ export function App() {
                           fontSize: '0.8rem',
                           color: 'var(--color-text-muted)',
                         }}>
-                          <HealthChip state={b.phase} size="sm" />
+                          <HealthChip state={b.phase} kind="bundle" size="sm" />
                           <span style={{ fontFamily: 'var(--k-font-mono)', color: 'var(--color-text)' }}>{b.name}</span>
                           {b.provenance?.commitSHA && (
                             <span style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--k-font-mono)' }}>
