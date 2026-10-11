@@ -50,15 +50,15 @@ Setting up the kardinal demo in kind-kardinal
   ✓ Argo CD ApplicationSet argocd/kardinal-test-app (https://github.com/<you>/kardinal-demo): applied
   ✓ PolicyGate default/prod-approval (prod waits for your approval, as kubernetes-admin): applied
   ✓ Pipeline default/demo: applied
-  ✓ First version: shipped as demo-7xk2p
-Following version sha-9349a3f (demo-7xk2p) through test, uat and prod (Ctrl-C stops following, the promotion goes on)
+  ✓ First version: shipped as demo-zhxk2
+Following version sha-9349a3f (demo-zhxk2) through test, uat and prod (Ctrl-C stops following, the promotion goes on)
   test: Checking health
   test: Live
   uat: Promoting
   uat: Checking health
   uat: Live
   prod: Held by gate prod-approval
-Version sha-9349a3f (demo-7xk2p) stopped: prod waits for approval at gate prod-approval (kardinal approve demo prod)
+Version sha-9349a3f (demo-zhxk2) stopped: prod waits for approval at gate prod-approval (kardinal approve demo prod)
 
 Next:
   Approve prod:    kardinal approve demo prod
@@ -91,7 +91,7 @@ kardinal why demo prod
 
 ```text
 prod is waiting for your approval.
-  Version  sha-9349a3f (demo-7xk2p)
+  Version  sha-9349a3f (demo-zhxk2)
   Gate     prod-approval · 0 of 1 approvals
   Next     kardinal approve demo prod
 ```
@@ -105,9 +105,9 @@ kardinal approve demo prod
 ```
 
 ```text
-Version: sha-9349a3f (demo-7xk2p)
-Approve sha-9349a3f (demo-7xk2p) for prod? [y/N] y
-Recorded: kubernetes-admin approves demo-7xk2p for prod (Approval demo-7xk2p-prod-…)
+Version: sha-9349a3f (demo-zhxk2)
+Approve sha-9349a3f (demo-zhxk2) for prod? [y/N] y
+Recorded: kubernetes-admin approves demo-zhxk2 for prod (Approval demo-zhxk2-prod-…)
 ```
 
 The gate passes, and the version goes live in prod within a minute or two, with no pull request:
@@ -121,9 +121,9 @@ Pipeline: demo   Namespace: default
 sha-9349a3f live in test, uat, prod
 
 ENVIRONMENT  RUNNING                   INCOMING  STATE  SINCE  PR
-test         demo-7xk2p (sha-9349a3f)  -         Live   35s    -
-uat          demo-7xk2p (sha-9349a3f)  -         Live   15s    -
-prod         demo-7xk2p (sha-9349a3f)  -         Live   1s     -
+test         sha-9349a3f (demo-zhxk2)  -         Live   35s    -
+uat          sha-9349a3f (demo-zhxk2)  -         Live   15s    -
+prod         sha-9349a3f (demo-zhxk2)  -         Live   1s     -
 ```
 
 ## 6. Open the UI
