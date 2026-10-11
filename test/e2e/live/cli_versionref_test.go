@@ -28,7 +28,8 @@ import (
 
 // TestCLI_VersionRefs checks that a version tag works where a Bundle name
 // does: diff, logs --bundle, rollback --to and reject, and that a version
-// two Bundles share, or none has, is refused with the candidates listed.
+// two Bundles share, or none has, is refused with the candidates listed;
+// --name takes a Bundle's name only.
 // Covers CLI-VERSIONREF-02.
 func TestCLI_VersionRefs(t *testing.T) {
 	t.Parallel()
@@ -73,4 +74,12 @@ func TestCLI_VersionRefs(t *testing.T) {
 	c.Must(a.ns, "reject", fixtures.V3, "--reason", "e2e")
 	e.WaitBundlePhase(t, a.ns, b3, "Rejected", time.Minute)
 	require.Equal(t, "Verified", getBundle(t, e, a.ns, b2).Status.Phase, "only the version named is rejected")
+
+	// --name is the Bundle of that name, never a version.
+	r = c.Fail(a.ns, "reject", "--name", fixtures.V2, "--reason", "e2e")
+	assert.Contains(t, r.Stderr, `reject: no Bundle named "`+fixtures.V2+`" in namespace `+a.ns+` (for a version, give it without --name)`)
+	r = c.Fail(a.ns, "delete", "bundle", b2, "--name", b2)
+	assert.Contains(t, r.Stderr, "give the Bundle as the argument or with --name, not both")
+	c.Must(a.ns, "reject", "--name", b2, "--reason", "e2e")
+	e.WaitBundlePhase(t, a.ns, b2, "Rejected", time.Minute)
 }

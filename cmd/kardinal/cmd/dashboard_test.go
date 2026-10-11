@@ -153,8 +153,7 @@ func TestUILink(t *testing.T) {
 	var stdout bytes.Buffer
 	run := func(args ...string) string {
 		var errb bytes.Buffer
-		prevErr := errOut
-		t.Cleanup(func() { errOut = prevErr })
+		keepStyle(t)
 		stdout.Reset()
 		root := NewRootCmd()
 		root.SetOut(&stdout)
@@ -206,6 +205,11 @@ func TestCheckUIAddress(t *testing.T) {
 		{"https://kardinal.example.com/ui/\x1b[2J", false},
 		{"https://kardinal.example.com/ui/\nfake: line", false},
 		{"https://kardinal.example.com/a b", false},
+		{"https://kardinal.example.com/ui/\u202e/lmth.exe", false}, // a bidi override (format character)
+		{"https://kardinal.exämple.com/ui/", false},                // not ASCII: punycode it
+		{"https://admin@kardinal.example.com/ui/", false},          // userinfo
+		{"https://kardinal.example.com@evil.example/ui/", false},   // userinfo that looks like a host
+		{"https://xn--krdinal-cua.example/ui/", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.address, func(t *testing.T) {
@@ -215,7 +219,7 @@ func TestCheckUIAddress(t *testing.T) {
 				return
 			}
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "is not an http(s) URL with a host: set it to the UI's address, e.g. https://kardinal.example.com/ui/")
+			assert.Contains(t, err.Error(), "is not an http(s) URL with a host, in ASCII and without user@: set it to the UI's address, e.g. https://kardinal.example.com/ui/")
 			assert.ErrorContains(t, openBrowser(tc.address), "open a browser:", "nothing unchecked reaches the opener")
 		})
 	}
