@@ -187,6 +187,7 @@ nav:
         - kardinal get subscriptions: reference/cli/kardinal-get-subscriptions.md
       - kardinal history: reference/cli/kardinal-history.md
       - kardinal hold: reference/cli/kardinal-hold.md
+      - kardinal inbox: reference/cli/kardinal-inbox.md
       - kardinal init: reference/cli/kardinal-init.md
       - kardinal logs: reference/cli/kardinal-logs.md
       - kardinal metrics: reference/cli/kardinal-metrics.md

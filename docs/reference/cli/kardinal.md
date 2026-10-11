@@ -104,6 +104,7 @@ names the new Bundle.
 * [kardinal get](kardinal-get.md)	 - Display one or more kardinal resources
 * [kardinal history](kardinal-history.md)	 - Show Bundle promotion history for a pipeline
 * [kardinal hold](kardinal-hold.md)	 - Keep an environment on what runs there now
+* [kardinal inbox](kardinal-inbox.md)	 - List what waits for a person: on you first, then on others
 * [kardinal init](kardinal-init.md)	 - Write a Pipeline for your GitOps repository, from flags or a few questions
 * [kardinal logs](kardinal-logs.md)	 - Show promotion step execution logs for a pipeline
 * [kardinal metrics](kardinal-metrics.md)	 - Show promotion metrics (DORA-style) for a pipeline

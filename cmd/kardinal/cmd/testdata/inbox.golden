@@ -1,0 +1,25 @@
+$ kardinal inbox
+Waiting on you (2):
+  PIPELINE   ENV    VERSION          WAITING FOR                             NEXT
+  api        prod   3.2.0 (api-b)    held on 3.1.0 (api-a) by bob (INC-42)   kardinal unhold api prod
+  shop       prod   2.0.0 (shop-b)   approval at cab · 0 of 2                kardinal approve shop prod
+
+Waiting on someone else (3):
+  PIPELINE   ENV      VERSION          WAITING FOR                                  WHO
+  shop       canary   2.0.0 (shop-b)   approval at release-managers · 0 of 1        someone other than you (you created this version)
+  shop       eu       2.0.0 (shop-b)   gate labels, which does not open by itself   someone who may override it
+  web        prod     1.5.0 (web-b)    its PR to be merged                          the PR's reviewers
+
+$ kardinal inbox -A
+Waiting on you (2):
+  PIPELINE       ENV    VERSION          WAITING FOR                             NEXT
+  default/api    prod   3.2.0 (api-b)    held on 3.1.0 (api-a) by bob (INC-42)   kardinal unhold api prod -n default
+  default/shop   prod   2.0.0 (shop-b)   approval at cab · 0 of 2                kardinal approve shop prod -n default
+
+Waiting on someone else (4):
+  PIPELINE       ENV      VERSION          WAITING FOR                                  WHO
+  default/shop   canary   2.0.0 (shop-b)   approval at release-managers · 0 of 1        someone other than you (you created this version)
+  default/shop   eu       2.0.0 (shop-b)   gate labels, which does not open by itself   someone who may override it
+  default/web    prod     1.5.0 (web-b)    its PR to be merged                          the PR's reviewers
+  team-b/batch   -        -                the pipeline is paused                       someone who may resume it
+

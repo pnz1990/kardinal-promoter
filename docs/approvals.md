@@ -21,6 +21,24 @@ spec:
     excludeAuthor: true         # the Bundle's verified creator does not count
 ```
 
+See what waits for you, across pipelines (`-A` for every namespace):
+
+```bash
+kardinal inbox
+```
+
+```
+Waiting on you (1):
+  PIPELINE   ENV    VERSION          WAITING FOR                NEXT
+  shop       prod   2.0.0 (shop-b)   approval at cab · 0 of 2   kardinal approve shop prod
+
+Waiting on someone else (1):
+  PIPELINE   ENV      VERSION          WAITING FOR                             WHO
+  shop       canary   2.0.0 (shop-b)   approval at release-managers · 0 of 1   group release-managers
+```
+
+An approval is on you when you are in its `allowedUsers` or `allowedGroups` (or both are empty), did not create the version under `excludeAuthor`, and may create Approvals. `inbox` also lists holds, paused pipelines, gates that do not open by themselves and PRs to merge; see [`kardinal inbox`](reference/cli/kardinal-inbox.md).
+
 Approve with the CLI:
 
 ```bash

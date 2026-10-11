@@ -29,6 +29,7 @@
 | [`kardinal get subscriptions`](reference/cli/kardinal-get-subscriptions.md) | List Subscriptions (passive artifact watchers) |
 | [`kardinal history`](reference/cli/kardinal-history.md) | Show Bundle promotion history for a pipeline |
 | [`kardinal hold`](reference/cli/kardinal-hold.md) | Keep an environment on what runs there now |
+| [`kardinal inbox`](reference/cli/kardinal-inbox.md) | List what waits for a person: on you first, then on others |
 | [`kardinal init`](reference/cli/kardinal-init.md) | Write a Pipeline for your GitOps repository, from flags or a few questions |
 | [`kardinal logs`](reference/cli/kardinal-logs.md) | Show promotion step execution logs for a pipeline |
 | [`kardinal metrics`](reference/cli/kardinal-metrics.md) | Show promotion metrics (DORA-style) for a pipeline |
