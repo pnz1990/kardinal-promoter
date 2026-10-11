@@ -50,7 +50,7 @@ func TestCLI_GetPipelinesWide(t *testing.T) {
 	assert.Equal(t, []string{"PIPELINE", "VERSION", "ENVS", "PROGRESS", "FURTHEST", "SUB", "AGE"}, header, out)
 	row := framework.TableRow(out, "PIPELINE", pipelineName)
 	require.NotNil(t, row, out)
-	assert.Equal(t, b1, framework.BundleOf(row["VERSION"]))
+	assert.Equal(t, framework.VersionCell(fixtures.V2, b1), row["VERSION"])
 	assert.Equal(t, "10", row["ENVS"])
 	assert.Equal(t, "10 "+display.Step("Verified").Label, row["PROGRESS"])
 	assert.Equal(t, "r9", row["FURTHEST"], "the wave's last environment in spec order")
@@ -72,7 +72,8 @@ func TestCLI_GetPipelinesWide(t *testing.T) {
 	require.Len(t, lines, 3, lines)
 	rows := framework.ParseTable(strings.Join(lines, "\n"))
 	require.Len(t, rows, 2, lines)
-	assert.Equal(t, []string{b2, b1}, []string{framework.BundleOf(rows[0]["VERSION"]), framework.BundleOf(rows[1]["VERSION"])}, "newest first: %v", lines)
+	assert.Equal(t, []string{framework.VersionCell(fixtures.V3, b2), framework.VersionCell(fixtures.V2, b1)},
+		[]string{rows[0]["VERSION"], rows[1]["VERSION"]}, "newest first: %v", lines)
 	var bl []v1alpha1.Bundle
 	require.NoError(t, json.Unmarshal([]byte(c.Must(a.ns, "get", "bundles", "-o", "json")), &bl))
 	require.Len(t, bl, 2)

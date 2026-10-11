@@ -30,6 +30,7 @@ Ship and observe:
 
 Approve and gate:
   approve      Approve (or reject) the version waiting for an environment's approval gates
+  inbox        List what waits for a person: on you first, then on others
   override     Force-pass a PolicyGate with a mandatory audit record
   policy       Manage and evaluate promotion policy gates
   promote      Promote the Bundle verified upstream into an environment
