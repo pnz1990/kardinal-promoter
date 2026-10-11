@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -28,6 +27,8 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+
+	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 )
 
 func newHistoryCmd() *cobra.Command {
@@ -58,17 +59,54 @@ the PR, how long it took, and when it started.`,
 
 	addEnvFlag(cmd, &envFlag, "Only this environment (or give it after the pipeline)")
 	cmd.Flags().IntVar(&limitFlag, "limit", 20, "Maximum number of entries to show")
-	return cmd
+	return withStructuredOutput(cmd)
 }
 
 // HistoryRow represents one row in the history output.
 type HistoryRow struct {
-	Bundle    string
+	Bundle string
+	// Version is the Bundle's version, for the table ("" when unknown).
+	Version   string
 	Action    string
 	Env       string
 	PR        string
 	Duration  string
 	Timestamp string
+	// State, PRURL, Created, Seconds and Running are the step's, for
+	// -o json|yaml: Seconds is how long it took (nil when no end is
+	// recorded), Running whether it still runs.
+	State   string
+	PRURL   string
+	Created time.Time
+	Seconds *int64
+	Running bool
+}
+
+// historyEntry is one entry of kardinal history -o json|yaml.
+type historyEntry struct {
+	Bundle string `json:"bundle"`
+	// Action is promote or rollback.
+	Action      string `json:"action"`
+	Environment string `json:"environment"`
+	// State is the step's state, as the API has it.
+	State string `json:"state"`
+	PRURL string `json:"prURL,omitempty"`
+	// DurationSeconds is how long the step took; omitted while it runs or
+	// when no end is recorded.
+	DurationSeconds *int64 `json:"durationSeconds,omitempty"`
+	// Running is true while the step runs.
+	Running   bool      `json:"running,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// writeHistoryStructured writes rows as -o json|yaml asks.
+func writeHistoryStructured(w io.Writer, rows []HistoryRow) error {
+	out := make([]historyEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, historyEntry{Bundle: r.Bundle, Action: r.Action, Environment: r.Env, State: r.State,
+			PRURL: r.PRURL, DurationSeconds: r.Seconds, Running: r.Running, CreatedAt: r.Created.UTC()})
+	}
+	return writeStructured(w, out)
 }
 
 // historyFn is the testable implementation of history.
@@ -84,6 +122,13 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 	steps := v1alpha1.PromotionStepList{Items: items}
 
 	if len(steps.Items) == 0 {
+		// A typo would look like an idle pipeline: say so.
+		if err := checkPipelineEnv(ctx, c, ns, pipeline, envFilter); err != nil {
+			return err
+		}
+		if structured() {
+			return writeHistoryStructured(w, nil)
+		}
 		if _, err := fmt.Fprintf(w, "No promotion history found for pipeline %q\n", pipeline); err != nil {
 			return fmt.Errorf("write empty: %w", err)
 		}
@@ -104,8 +149,21 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 	}
 
 	rows := buildHistoryRows(steps.Items, rollbacks, envFilter, limit)
+	versions := map[string]string{}
+	for i := range bundles {
+		versions[bundles[i].Name] = createdOf(&bundles[i]).Version
+	}
+	for i := range rows {
+		rows[i].Version = versions[rows[i].Bundle]
+	}
 
 	if len(rows) == 0 {
+		if err := checkPipelineEnv(ctx, c, ns, pipeline, envFilter); err != nil {
+			return err
+		}
+		if structured() {
+			return writeHistoryStructured(w, nil)
+		}
 		if envFilter != "" {
 			if _, err := fmt.Fprintf(w, "No promotion history found for pipeline %q env %q\n", pipeline, envFilter); err != nil {
 				return fmt.Errorf("write empty: %w", err)
@@ -118,6 +176,9 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 		return nil
 	}
 
+	if structured() {
+		return writeHistoryStructured(w, rows)
+	}
 	return formatHistoryTable(w, rows)
 }
 
@@ -163,6 +224,11 @@ func buildHistoryRows(steps []v1alpha1.PromotionStep, rollbacks map[string]bool,
 			PR:        pr,
 			Duration:  duration,
 			Timestamp: ts,
+			State:     s.Status.State,
+			PRURL:     s.Status.PRURL,
+			Created:   s.CreationTimestamp.Time,
+			Seconds:   stepSeconds(s),
+			Running:   duration == "...",
 		})
 	}
 	return rows
@@ -205,17 +271,40 @@ func shortenPRURL(url string) string {
 	return url
 }
 
+// stepSeconds is deriveDuration in whole seconds, nil when the step runs or
+// no end is recorded.
+func stepSeconds(s v1alpha1.PromotionStep) *int64 {
+	d, ok := stepDuration(s)
+	if !ok {
+		return nil
+	}
+	sec := int64(d / time.Second)
+	return &sec
+}
+
 // deriveDuration is the time from step creation to its end: the Verified
 // condition's transition, else the last completed step. "..." while the step
 // is running, "--" when no end time is recorded. RollingBack is an end state:
 // the step stops there, and the rollback Bundle carries the promotion on.
 func deriveDuration(s v1alpha1.PromotionStep) string {
 	switch s.Status.State {
-	case "Verified", "Failed", "AbortedByAlarm", "RollingBack", "Superseded":
 	case "", "Pending", "Promoting", "WaitingForMerge", "HealthChecking", "Verifying":
 		return "..."
-	default:
+	}
+	d, ok := stepDuration(s)
+	if !ok {
 		return "--"
+	}
+	return humanDuration(d)
+}
+
+// stepDuration is how long a finished step took (deriveDuration); false
+// while it runs or when no end time is recorded.
+func stepDuration(s v1alpha1.PromotionStep) (time.Duration, bool) {
+	switch s.Status.State {
+	case "Verified", "Failed", "AbortedByAlarm", "RollingBack", "Superseded":
+	default:
+		return 0, false
 	}
 	var end time.Time
 	if s.Status.State == "Verified" {
@@ -233,20 +322,20 @@ func deriveDuration(s v1alpha1.PromotionStep) string {
 		}
 	}
 	if end.IsZero() || s.CreationTimestamp.IsZero() || end.Before(s.CreationTimestamp.Time) {
-		return "--"
+		return 0, false
 	}
-	return humanDuration(end.Sub(s.CreationTimestamp.Time))
+	return end.Sub(s.CreationTimestamp.Time), true
 }
 
 // formatHistoryTable writes the history table to w.
 func formatHistoryTable(w io.Writer, rows []HistoryRow) error {
-	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "BUNDLE\tACTION\tENV\tPR\tDURATION\tTIMESTAMP"); err != nil {
+	tw := style.NewTable(w, 3)
+	if _, err := fmt.Fprintln(tw, "VERSION\tACTION\tENV\tPR\tDURATION\tTIMESTAMP"); err != nil {
 		return fmt.Errorf("write history header: %w", err)
 	}
 	for _, r := range rows {
 		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			r.Bundle, r.Action, r.Env, r.PR, r.Duration, r.Timestamp); err != nil {
+			versionLabel(r.Version, r.Bundle), r.Action, r.Env, r.PR, r.Duration, r.Timestamp); err != nil {
 			return fmt.Errorf("write history row: %w", err)
 		}
 	}

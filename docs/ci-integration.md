@@ -30,6 +30,10 @@ curl -X POST https://kardinal.example.com/api/v1/bundles \
   }'
 ```
 
+`type` may be omitted: it is inferred from the fields, `chart` when `chart` is set, `mixed` for
+`images` and `configRef`, `config` for `configRef` alone, else `image`. A `type` you set is kept
+and checked against the fields.
+
 The endpoint creates a Bundle CRD in the cluster. Authentication is a Bearer token compared
 with the controller's `--bundle-api-token` (one token for the whole controller, not one per
 Pipeline). The Pipeline named in the request must exist in the target namespace.
@@ -104,7 +108,7 @@ jobs:
 | `namespace` | No | `default` | Kubernetes namespace. The action always sends it, so set it when the controller runs with `--watch-namespace`, or the API answers `403` |
 | `kardinal-url` | Yes | — | Base URL of the Bundle API (the controller's webhook listener, `:8083` by default) |
 | `ui-url` | No | — | Base URL of the kardinal UI (`:8082` by default). Sets `bundle-status-url`; without it that output is empty |
-| `type` | No | `image` | Version type (`image`, `config`, `mixed`) |
+| `type` | No | empty | Version type (`image`, `config`, `mixed`). Empty leaves it out of the request, so the controller infers it: `mixed` for images and `config-commit`, `config` for `config-commit` alone, else `image` |
 | `config-commit` | For `config` and `mixed` | — | Commit SHA of the configuration change (`configRef.commitSHA`) |
 | `config-repo` | No | the Pipeline's repository | Git repository of `config-commit` (`configRef.gitRepo`) |
 
@@ -193,38 +197,40 @@ kardinal create bundle my-app --type config \
 `--commit`, `--author` and `--ci-run-url` set `spec.provenance`. See
 [`kardinal create bundle`](reference/cli/kardinal-create-bundle.md) for every flag.
 
-#### Wait for the outcome in CI
+### Waiting for the result: `kardinal ship --wait`
 
-`kardinal ship` creates the same version as `kardinal create bundle`, with the same flags. With
-`--wait` it follows the version and exits with a code a CI job can act on:
-
-```bash
-kardinal ship my-app --image "ghcr.io/myorg/my-app:${GITHUB_SHA}" --wait --timeout 1h
-```
-
-| Exit code | Result | When |
-|---|---|---|
-| 0 | Verified | live in every environment it promotes to |
-| 1 | Failed | the promotion failed, or the command itself failed |
-| 3 | Held | a gate that was evaluated and does not pass, or a rollback hold, keeps it out of an environment, and nothing else of it is moving |
-| 4 | WaitingForMerge | its pull request waits for a person to merge it, and nothing else of it is moving |
-| 5 | Superseded or Rejected | a newer version replaced it, or it was rejected |
-| 6 | Timeout | `--timeout` (default 30m) passed, or following was interrupted |
-
-The codes are stable: a new outcome gets a new code. A stop at a gate, a hold or a pull request
-counts once two reads agree, and a gate that has not been evaluated yet never stops the wait.
-Stopping does not stop the promotion: `kardinal status my-app -w` goes on following it.
-
-While it waits, `ship` prints each environment's new state on stderr; at the end it prints one
-line on stdout, or with `-o json` an object with `bundle`, `pipeline`, `namespace`, `type`,
-`version`, `url`, `result`, `exitCode`, `message` and `environments`:
+`kardinal ship` takes the flags of `kardinal create bundle` and creates the same Bundle. With
+`--wait` it follows the Bundle and exits with a code the CI job can act on: `0` live everywhere,
+`1` failed, `3` a person is needed, `4` its PR waits for a person to merge it, `5` replaced,
+rejected or deleted, `6` timed out or interrupted (see
+[`kardinal ship`](reference/cli/kardinal-ship.md) for the full table).
 
 ```bash
-result=$(kardinal ship my-app --image "$IMAGE" --wait -o json | jq -r .result)
+kardinal ship my-app -n my-team --image "ghcr.io/myorg/my-app:${GITHUB_SHA}" --wait --timeout 45m
 ```
 
-A job that ships to test and leaves prod to people can treat 3 and 4 as success: the version is
-where it should be, waiting for a gate or a review.
+A gate that does not pass ends the wait with exit `3` only when it needs a person. A gate that
+opens by itself keeps the job waiting, until `--timeout`: one whose expression, outside its string
+literals, reads one of these [PolicyGate variables](policy-gates.md) that change with time, with a
+`.` or `[` after it (`schedule.hour`, `schedule["hour"]`):
+
+| Variable | What it covers |
+|---|---|
+| `schedule` | `schedule.isWeekend`, `schedule.hour`, `schedule.dayOfWeek` |
+| `upstream` | `upstream.<env>.soakMinutes` and every other field of `upstream.<env>` |
+| `bundle.upstreamSoakMinutes` | the soak of the environment before this one |
+| `metrics` | `metrics.<name>.value`, `metrics.<name>.result` |
+| `changewindow` | `changewindow.<name>` |
+
+A name inside a string (`author != "metrics-bot"`) or as a field of something else
+(`bundle.labels.soakMinutes`) does not count. An expression that reads one of them and also
+something else (`!schedule.isWeekend && bundle.labels.approved == "yes"`) waits, since it may
+open by itself.
+
+So a job can wait through a soak or a deploy window. Any other gate that does not pass (on a
+Bundle label, its provenance or its version) exits `3`, as do an approval gate, a hold and a
+paused pipeline. `--stop-at-gate` exits `3` at any gate that does not pass, also one that would
+open by itself. A PR the SCM merges by itself (`pr.merge.auto`) is waited for.
 
 ### kubectl (declarative)
 
@@ -481,11 +487,11 @@ rejected with `400`, so a misspelt key fails the request instead of being ignore
 | Field | Required | Description |
 |---|---|---|
 | `pipeline` | Yes | Pipeline name (a valid Kubernetes name, at most 63 characters) |
-| `type` | No | `image` (default), `config`, `mixed` or `chart` |
+| `type` | No | `image`, `config`, `mixed` or `chart`. When omitted it is inferred: `chart` when `chart` is set, `mixed` for `images` and `configRef`, `config` for `configRef` alone, else `image` |
 | `namespace` | No | Target namespace. Defaults to `--watch-namespace`, or `default` |
 | `images` | For `image` and `mixed` | At least one image |
 | `configRef` | For `config` and `mixed` | `gitRepo` and `commitSHA` (`commitSHA` is required). An `image` version with a `configRef` gets 400: it would deploy only its images |
-| `chart` | For `chart` | `name` and `version` (required), `repoURL`, `digest`; promoted with `update.strategy: helm` (see [Promoting a chart version](subscription.md#promoting-a-chart-version)) |
+| `chart` | For `chart` | `name` and `version` (required), `repoURL`, `digest`; promoted with `update.strategy: helm` (see [Promoting a chart version](subscription.md#promoting-a-chart-version)). A `chart` version with a `configRef` gets 400: the configRef would be dropped |
 | `provenance` | No | `commitSHA`, `ciRunURL` (empty or an absolute `http(s)` URL, see [Provenance](#provenance)), `author`, `timestamp` (set to now if empty) |
 | `intent` | No | `targetEnvironment`, `skipEnvironments` |
 

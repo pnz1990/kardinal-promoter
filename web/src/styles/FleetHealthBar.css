@@ -1,0 +1,81 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * FleetHealthBar.css — the fleet health summary and its filter badges
+ * (components/FleetHealthBar.tsx). Design tokens only (noLiterals.test.ts).
+ */
+
+.fleet-health {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--k-space-2);
+  padding: var(--k-space-2) var(--k-space-3);
+  margin-bottom: var(--k-space-3);
+  background: var(--k-surface-sunken);
+  border: var(--k-border-hairline) solid var(--k-line-subtle);
+  border-radius: var(--k-radius-3);
+}
+
+.fleet-health__total,
+.fleet-health__badge {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-1_5);
+  padding: var(--k-space-1_5) var(--k-space-2);
+  background: transparent;
+  border: var(--k-border-hairline) solid var(--k-surface-base);
+  border-radius: var(--k-radius-3);
+  cursor: pointer;
+  transition: background var(--k-dur-quick) var(--k-ease-out), border-color var(--k-dur-quick) var(--k-ease-out);
+}
+
+.fleet-health__total[aria-pressed="true"] {
+  background: var(--k-surface-base);
+  border-color: var(--k-ink-3);
+}
+
+.fleet-health__total-label {
+  font-size: var(--k-text-2xs);
+  font-weight: var(--k-weight-semibold);
+  color: var(--k-ink-2);
+}
+
+.fleet-health__count {
+  font-size: var(--k-text-lg);
+  font-weight: var(--k-weight-bold);
+  font-variant-numeric: var(--k-numeric);
+  line-height: 1;
+  color: var(--k-ink);
+}
+
+.fleet-health__badge-label {
+  font-size: var(--k-text-xs);
+  font-weight: var(--k-weight-regular);
+  white-space: nowrap;
+  color: var(--k-ink-2);
+}
+
+.fleet-health__divider {
+  color: var(--k-surface-base);
+  font-size: var(--k-text-xl);
+  user-select: none;
+}
+
+.fleet-health__badge[data-tone="verified"] { --fleet-health-fg: var(--k-status-verified-fg); --fleet-health-bg: var(--k-status-verified-wash); }
+.fleet-health__badge[data-tone="blocked"] { --fleet-health-fg: var(--k-status-blocked-fg); --fleet-health-bg: var(--k-status-blocked-wash); }
+.fleet-health__badge[data-tone="failed"] { --fleet-health-fg: var(--k-status-failed-fg); --fleet-health-bg: var(--k-status-failed-wash); }
+.fleet-health__badge[data-tone="code"] { --fleet-health-fg: var(--k-syntax-ident); --fleet-health-bg: var(--k-surface-raised); }
+
+.fleet-health__badge .fleet-health__count { color: var(--fleet-health-fg); }
+
+.fleet-health__badge[aria-pressed="true"] {
+  background: var(--fleet-health-bg);
+  border-color: var(--fleet-health-fg);
+}
+
+.fleet-health__badge[aria-pressed="true"] .fleet-health__badge-label {
+  color: var(--fleet-health-fg);
+  font-weight: var(--k-weight-semibold);
+}

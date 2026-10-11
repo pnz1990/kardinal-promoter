@@ -92,21 +92,6 @@ kardinal rollback my-app --env prod --to my-app-v1-27-0
 
 The `--to` flag names the version to roll back to. It must exist in the version history (within `historyLimit`), belong to the pipeline, carry images or a config ref, differ from what is deployed now, and have been Verified in the environment; otherwise the command fails and creates nothing. `--to` can name a version that an earlier rollback rolled back from. Images the deployed version changed and the `--to` version does not name are filled in the same way as without `--to`.
 
-### Hold an environment
-
-To keep an environment on what it runs now, with no rollback:
-
-```bash
-kardinal hold my-app prod --reason "INC-4521: freeze prod while we investigate" [--expires-in 24h]
-kardinal unhold my-app prod
-```
-
-`hold` writes the same `spec.holds` entry a rollback hold writes, naming the version deployed in
-prod; nothing is rolled back and no version is created. To go back to an earlier version and keep
-it there, roll back with `--hold` (below). It refuses a fleet environment (its targets can run different
-versions), an environment that runs nothing yet, and one that is already held. `unhold` is
-`release-hold`.
-
 ### Roll back and hold
 
 ```bash
@@ -117,7 +102,7 @@ Output:
 ```
 Rolling back my-app in prod from my-app-v1-29-0 to my-app-v1-28-0 (ghcr.io/myorg/my-app:v1.28.0)
 Bundle my-app-rollback-3f9a1c created (rollbackOf=my-app-v1-28-0)
-Environment prod held on my-app-rollback-3f9a1c: no other Bundle promotes there until: kardinal release-hold my-app --env prod
+Environment prod held on my-app-rollback-3f9a1c: no other version promotes there until: kardinal release-hold my-app --env prod
 Gates of prod that would block the rollback pass as EXEMPT (audited) while the controller verifies it restores what was Verified there.
 Track with: kardinal explain my-app --env prod
 ```
@@ -358,7 +343,7 @@ kardinal history my-app
 ```
 
 ```
-BUNDLE                  ACTION     ENV    PR     DURATION   TIMESTAMP
+VERSION                 ACTION     ENV    PR     DURATION   TIMESTAMP
 my-app-rollback-x7k2p   rollback   prod   #145   5m         2026-04-09 11:00
 my-app-v1-29-0          promote    prod   #144   15m        2026-04-09 10:20
 my-app-v1-28-0          promote    prod   #138   12m        2026-04-07 14:00

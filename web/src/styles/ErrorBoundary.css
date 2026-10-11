@@ -1,0 +1,17 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * ErrorBoundary.css — the fallback a crashed panel shows (components/ErrorBoundary.tsx).
+ */
+
+.error-boundary-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--k-space-4);
+  padding: var(--k-space-8);
+  color: var(--k-ink-2);
+  font-size: var(--k-text-md);
+}

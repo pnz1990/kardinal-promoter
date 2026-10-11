@@ -10,8 +10,8 @@ You need:
 - Docker, and a local cluster tool: [kind](https://kind.sigs.k8s.io/), k3d, minikube, Docker
   Desktop or Rancher Desktop
 - `kubectl` and `helm`
-- a GitHub token that can write contents and pull requests on your fork of the demo repository:
-  `GITHUB_TOKEN`, or the GitHub CLI signed in (`gh auth login`)
+- a GitHub token with **contents** and **pull requests** read and write on your fork of the demo
+  repository: `GITHUB_TOKEN`, or the token of `gh auth login`
 
 ## 1. Install the CLI
 
@@ -77,9 +77,11 @@ What it set up:
 - **The `demo` Pipeline** in the `default` namespace: test, uat and prod. Prod promotes without
   a pull request, behind the `prod-approval` gate, which you may approve.
 
-It runs only when the current kubectl context is a kind, k3d, minikube, Docker Desktop or Rancher
-Desktop cluster. With any other context it changes nothing and prints the command that switches
-to a local one.
+It runs only when the kubectl context is a kind, k3d, minikube, Docker Desktop or Rancher Desktop
+cluster whose API server is on this machine; with any other it stops before it sends anything,
+and prints the command that switches to a local one. It never changes your kubeconfig;
+`--context` picks another local context. The indented state lines go to stderr, the rest to
+stdout.
 
 The first version, `sha-9349a3f`, went to test and uat on its own and now waits at prod's gate.
 
@@ -156,7 +158,8 @@ Version main (demo-q8m4t) stopped: prod waits for approval at gate prod-approval
 
 In the UI, the version moves along the map as the lines print: through test and uat, then
 stopped at the gate before prod. Select prod: its details say why it is waiting, with
-`kardinal approve demo prod` to copy.
+`kardinal approve demo prod` to copy. The quickstart's UI does not authenticate you, so it cannot
+record an approval for you: approve in the CLI.
 
 `ship` ended with exit code 3, because the gate needs a person:
 
@@ -165,7 +168,7 @@ echo $?
 # 3
 ```
 
-A CI job can act on the code: [Wait for the outcome in CI](ci-integration.md#wait-for-the-outcome-in-ci)
+A CI job can act on the code: [`kardinal ship`](reference/cli/kardinal-ship.md)
 lists them all.
 
 Approve it while you watch the map:
@@ -194,4 +197,4 @@ Your fork keeps the commits; delete it on GitHub when you are done.
 - [Your first pipeline](first-pipeline.md): set it up against your own GitOps repository
 - [Concepts](concepts.md): versions, pipelines, environments and gates
 - [Require approvals](approvals.md): who may approve, how many, and from the CLI or the UI
-- [Add to CI](ci-integration.md#wait-for-the-outcome-in-ci): ship from your build and act on the exit code
+- [Add to CI](ci-integration.md): ship from your build and act on the exit code

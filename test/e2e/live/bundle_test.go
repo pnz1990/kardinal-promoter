@@ -88,7 +88,8 @@ func TestBundle_LifecycleAndColumns(t *testing.T) {
 func checkColumns(t *testing.T, e *framework.Env, ns, bundle, step, phase, state string) {
 	t.Helper()
 	bt := e.GetTable(t, "kardinal.io", "v1alpha1", "bundles", ns)
-	assert.Equal(t, []string{"Name", "Type", "Pipeline", "Phase", "Age"}, bt.Columns, "bundle columns")
+	assert.Equal(t, []string{"Name", "Version", "Type", "Pipeline", "Phase", "Age"}, bt.Columns, "bundle columns")
+	assert.Equal(t, fixtures.V2, bt.Cell(bundle, "Version"), "status.version: the image tag")
 	assert.Equal(t, "image", bt.Cell(bundle, "Type"))
 	assert.Equal(t, pipelineName, bt.Cell(bundle, "Pipeline"))
 	assert.Equal(t, phase, bt.Cell(bundle, "Phase"))

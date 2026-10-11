@@ -1,22 +1,24 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 //
-// components/BundleTimeline.tsx — Horizontal timeline of bundle promotion history.
-// Inspired by Kargo's freight timeline. Shows the 10 newest bundles as chips,
-// colored by bundle phase, newest on the left. The selected bundle and the
-// comparison bundle always stay visible, even when they are older than the 10th.
+// components/BundleTimeline.tsx — the pipeline's version history (versions are Bundles).
+// Inspired by Kargo's freight timeline. Shows the 10 newest versions as chips,
+// colored by phase, newest on the left. The selected version and the
+// comparison version always stay visible, even when they are older than the 10th.
 //
 // Bundles are passed as a prop (managed by App) rather than fetched independently,
 // avoiding duplicate requests and stale-state races (issue #321).
 //
-// #338: Shift-click selects a second bundle for comparison.
-// When two bundles are selected, a "Compare" button appears.
+// #338: Shift-click selects a second version for comparison (the chip's tooltip says so).
+// When two versions are selected, a "Compare" button appears.
 // #532: Phase-driven visual properties use CSS classes (bundle-chip--{phase}).
 import { useRef } from 'react'
 import type { Bundle } from '../types'
 import { useRovingFocus } from '../useRovingFocus'
 import { sortBundlesNewestFirst } from '../bundleSelection'
 import { BundleTypeBadge, bundleTypeLabel } from './BundleTypeBadge'
+import { displayState } from '../displayStates.gen'
+import { versionName } from '../versionName'
 import '../styles/BundleTimeline.css'
 
 /** Number of newest bundles shown. */
@@ -53,15 +55,6 @@ export function visibleBundles(bundles: Bundle[], keep: (string | undefined)[]):
   return sorted.filter((b, i) => i < MAX_CHIPS || keep.includes(b.name))
 }
 
-/** Short display name for a bundle (last 6 chars of suffix). */
-function shortName(bundleName: string): string {
-  const parts = bundleName.split('-')
-  if (parts.length > 0) {
-    const suffix = parts[parts.length - 1]
-    return suffix.length >= 5 ? suffix : bundleName.slice(-6)
-  }
-  return bundleName.slice(-6)
-}
 
 export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundle, compareBundle, onCompareBundle, onCompare }: Props) {
   const chips = useRef<HTMLDivElement>(null)
@@ -70,10 +63,10 @@ export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundl
   if (loading) {
     return (
       <div className="bundle-timeline-bar" data-testid="bundle-timeline-skeleton">
-        <span className="sr-only" role="status">Loading bundles</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          {[72, 58, 64, 50, 68].map((w, i) => (
-            <div key={i} aria-hidden="true" className="bundle-chip-skeleton" style={{ width: `${w}px` }} />
+        <span className="sr-only" role="status">Loading versions</span>
+        <div className="bundle-timeline__skeleton-row">
+          {[0, 1, 2, 3, 4].map(i => (
+            <div key={i} aria-hidden="true" className="bundle-chip-skeleton" />
           ))}
         </div>
       </div>
@@ -87,25 +80,16 @@ export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundl
 
   return (
     <div className="bundle-timeline-bar">
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.3rem' }}>
-        <span style={{ fontSize: '0.65rem', color: 'var(--color-text-faint)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-          Bundle History (newest → oldest)
+      <div className="bundle-timeline__head">
+        <span className="bundle-timeline__title">
+          Versions (newest → oldest)
         </span>
         {/* #338: Compare button appears when two bundles are selected */}
         {showCompare && (
           <button
             onClick={onCompare}
-            style={{
-              fontSize: '0.65rem',
-              background: 'var(--color-accent-bg)',
-              color: 'var(--color-accent)',
-              border: '1px solid var(--color-accent)',
-              borderRadius: '3px',
-              padding: '1px 6px',
-              cursor: 'pointer',
-              fontWeight: 600,
-            }}
-            title="Compare selected bundles"
+            className="bundle-timeline__compare"
+            title="Compare the two selected versions"
           >
             Compare ↔
           </button>
@@ -113,36 +97,25 @@ export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundl
         {compareBundle && (
           <button
             onClick={() => onCompareBundle?.(null)}
-            style={{
-              fontSize: '0.65rem',
-              background: 'none',
-              color: 'var(--color-text-muted)',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '0',
-            }}
+            className="bundle-timeline__clear"
             title="Clear comparison selection"
           >
             × clear
           </button>
         )}
-        {!compareBundle && bundles.length >= 2 && (
-          <span style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)' }}>
-            Shift-click to compare
-          </span>
-        )}
       </div>
       <div
         ref={chips}
         role="toolbar"
-        aria-label="Bundle history (arrow keys move between bundles)"
+        aria-label="Versions (arrow keys move between versions)"
         onKeyDown={roving.onKeyDown}
         onFocus={roving.onFocus}
-        style={{ display: 'flex', gap: '0.4rem', alignItems: 'stretch' }}
+        className="bundle-timeline__chips"
       >
         {shown.map(b => {
           const isSelected = b.name === selectedBundle
           const isCompare = b.name === compareBundle
+          const phase = displayState('bundle', b.phase || 'Unknown')
           // #532: CSS classes for state-driven styling
           const chipClass = [
             'bundle-chip',
@@ -163,18 +136,16 @@ export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundl
                   onSelectBundle?.(b.name)
                 }
               }}
-              title={`${b.name}: ${b.phase || 'Unknown'}${(b.type || 'image') === 'image' ? '' : `, ${bundleTypeLabel(b.type)} Bundle`}${isCompare ? ' (comparison target)' : ''}${isSelected ? '' : '\nShift-click to compare'}`}
+              title={`${b.name}: ${phase.label}${(b.type || 'image') === 'image' ? '' : `, ${bundleTypeLabel(b.type)} version`}${isCompare ? ' (comparison target)' : ''}${isSelected ? '' : '\nShift-click to compare'}`}
               aria-pressed={isSelected}
               data-roving-default={isSelected || undefined}
               className={chipClass}
               data-bundle-phase={b.phase}
             >
               <span className="bundle-chip__dot" aria-hidden="true" />
-              <span className="bundle-chip__name">{shortName(b.name)}</span>
+              <span className="bundle-chip__name">{versionName(b.name, b.pipeline)}</span>
               <BundleTypeBadge type={b.type} compact />
-              <span className="bundle-chip__phase">
-                {b.phase === 'Superseded' ? 'Sup' : (b.phase || 'Unknown')}
-              </span>
+              <span className="bundle-chip__phase">{phase.label}</span>
               {/* #338: "B" badge for comparison bundle */}
               {isCompare && <span className="bundle-chip__compare-badge">⇅B</span>}
             </button>

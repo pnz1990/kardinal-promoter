@@ -63,7 +63,10 @@ theme:
     - content.action.view
     - toc.follow
 
+# Mermaid is self-hosted: Material uses window.mermaid when it is defined and
+# loads it from unpkg.com otherwise. Pinned; docs/assets/vendor/mermaid/LICENSE.
 extra_javascript:
+  - assets/vendor/mermaid/mermaid-11.17.2.min.js
   - javascripts/scrollwrap.js
 
 extra_css:
@@ -145,7 +148,10 @@ nav:
       - Sharding controllers: sharding.md
     - Upgrade: upgrade.md
     - Migrate from Kargo: guides/migrating-from-kargo.md
-    - Troubleshoot: troubleshooting.md
+    - Troubleshoot:
+      - Troubleshoot: troubleshooting.md
+      - Promotion stuck or failed: troubleshoot-promotions.md
+      - Git and SCM problems: troubleshoot-git.md
   - Concepts:
     - Concepts: concepts.md
     - Architecture: architecture.md
@@ -180,6 +186,7 @@ nav:
         - kardinal get steps: reference/cli/kardinal-get-steps.md
         - kardinal get subscriptions: reference/cli/kardinal-get-subscriptions.md
       - kardinal history: reference/cli/kardinal-history.md
+      - kardinal hold: reference/cli/kardinal-hold.md
       - kardinal init: reference/cli/kardinal-init.md
       - kardinal logs: reference/cli/kardinal-logs.md
       - kardinal metrics: reference/cli/kardinal-metrics.md
@@ -191,20 +198,24 @@ nav:
         - kardinal policy simulate: reference/cli/kardinal-policy-simulate.md
         - kardinal policy test: reference/cli/kardinal-policy-test.md
       - kardinal promote: reference/cli/kardinal-promote.md
+      - kardinal quickstart: reference/cli/kardinal-quickstart.md
       - kardinal refresh: reference/cli/kardinal-refresh.md
       - kardinal reject: reference/cli/kardinal-reject.md
       - kardinal release-hold: reference/cli/kardinal-release-hold.md
       - kardinal resume: reference/cli/kardinal-resume.md
       - kardinal rollback: reference/cli/kardinal-rollback.md
+      - kardinal ship: reference/cli/kardinal-ship.md
       - kardinal status: reference/cli/kardinal-status.md
       - kardinal validate: reference/cli/kardinal-validate.md
       - kardinal version: reference/cli/kardinal-version.md
+      - kardinal why: reference/cli/kardinal-why.md
       # END CLI NAV
     - CRD API: reference/api.md
     - Pipeline fields: reference/pipeline.md
     - REST API: reference/rest-api.md
     - CEL context: reference/cel-context.md
     - Helm values: reference/helm-values.md
+    - Controller flags: reference/controller-flags.md
     - Metrics: reference/metrics.md
     - Glossary: reference/glossary.md
   - Project:

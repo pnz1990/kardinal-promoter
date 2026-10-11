@@ -1,0 +1,21 @@
+waits     !schedule.isWeekend && schedule.hour >= 9 && schedule.hour < 17
+waits     schedule["hour"] >= 9
+waits     schedule . hour >= 9
+waits     upstream.uat.soakMinutes >= 30
+waits     upstream["uat"]["verified"]
+waits     bundle.upstreamSoakMinutes >= 30
+waits     metrics["error-rate"].result == "Pass"
+waits     metrics.latency.value < "200"
+waits     !changewindow.freeze
+waits     !schedule.isWeekend && bundle.labels.approved == "yes"
+waits     (schedule.dayOfWeek != "Friday")
+a person  bundle.labels.soakMinutes == "30"
+a person  bundle.labels.team == "schedule.ops"
+a person  bundle.provenance.author != "metrics-bot"
+a person  bundle.provenance.author != 'upstream.bot'
+a person  bundle.labels.schedule.x == "y"
+a person  bundle.labels["metrics"] == "on"
+a person  bundle.version.startsWith("changewindow.")
+a person  """schedule.hour""" != ""
+a person  bundle.provenance.author != "dependabot[bot]"
+a person  true

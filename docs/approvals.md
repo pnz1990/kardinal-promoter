@@ -21,17 +21,7 @@ spec:
     excludeAuthor: true         # the Bundle's verified creator does not count
 ```
 
-Approve with the CLI, naming the pipeline and the environment:
-
-```bash
-kardinal approve my-app prod --comment "checked the migration"
-```
-
-It approves the version waiting for prod: the newer version on its way in, or the version
-promoting now while prod is still ahead of it (approving before it reaches the gate is fine). It
-says which on stderr: `Approving my-app-v1-29-0, the version waiting for prod`. When prod already
-runs the newest version and nothing is on its way, it is an error. To name the version yourself,
-or to decline or take back a decision:
+Approve with the CLI:
 
 ```bash
 kardinal approve my-app-v1-29-0 --env prod --comment "checked the migration"

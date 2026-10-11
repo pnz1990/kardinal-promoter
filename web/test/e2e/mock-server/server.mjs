@@ -21,6 +21,7 @@
 //   POST /api/v1/ui/promote                           → { bundle: "new-bundle", message }
 //   POST /api/v1/ui/rollback                          → { bundle: "rollback-bundle", message }
 //   POST /api/v1/ui/approvals                         → { outcome, approval, user: "carol", message }
+//   POST /api/v1/ui/reject, /override, /release-hold  → { message } (override also { gates, expiresAt })
 //   POST /api/v1/ui/validate-cel                      → { valid: true }
 //   GET  /                                            → 302 to /ui/
 //   GET  /ui/*                                        → built static assets (web/dist), SPA fallback
@@ -29,6 +30,22 @@ import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+// Every time the mock serves is "so long ago", resolved when a response is sent:
+// computed once at load, a gate evaluated "30s ago" grew older the longer the server
+// ran, and checks that read ages (a stale gate, a freshness label) became flaky.
+const AGO = Symbol('ago')
+/** A timestamp ms before the moment the response is sent. */
+const ago = ms => ({ [AGO]: ms })
+/** data with each ago() resolved against now. */
+function resolveTimes(data, now = Date.now()) {
+  if (Array.isArray(data)) return data.map(v => resolveTimes(v, now))
+  if (data && typeof data === 'object') {
+    if (AGO in data) return new Date(now - data[AGO]).toISOString()
+    return Object.fromEntries(Object.entries(data).map(([k, v]) => [k, resolveTimes(v, now)]))
+  }
+  return data
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DIST = path.join(__dirname, '../../../dist')
@@ -43,15 +60,17 @@ const PIPELINES = [
     phase: 'Ready',
     environmentCount: 3,
     activeBundleName: 'kardinal-test-app-abc123',
+    // status.summary (P1), as the PipelineReconciler writes it.
+    summary: 'abc123 Verified in test, uat; Waiting for PR merge in prod (#42)',
     environmentStates: { test: 'Verified', uat: 'Verified', prod: 'WaitingForMerge' },
     blockerCount: 0,
     failedStepCount: 0,
     activeBundleVersion: 'sha-abc1234',
     environmentTopology: [{ name: 'test' }, { name: 'uat', upstreams: ['test'] }, { name: 'prod', upstreams: ['uat'], approval: 'pr-review' }],
     deployed: {
-      test: { bundle: 'kardinal-test-app-abc123', version: 'sha-abc1234', verifiedAt: new Date(Date.now() - 420_000).toISOString() },
-      uat: { bundle: 'kardinal-test-app-abc123', version: 'sha-abc1234', verifiedAt: new Date(Date.now() - 240_000).toISOString(), configFrom: 'kardinal-test-app-cfg9', configVersion: 'config 77aa001' },
-      prod: { bundle: 'kardinal-test-app-prev111', version: 'sha-9f8e7d6', verifiedAt: new Date(Date.now() - 7_000_000).toISOString() },
+      test: { bundle: 'kardinal-test-app-abc123', version: 'sha-abc1234', verifiedAt: ago(420_000) },
+      uat: { bundle: 'kardinal-test-app-abc123', version: 'sha-abc1234', verifiedAt: ago(240_000), configFrom: 'kardinal-test-app-cfg9', configVersion: 'config 77aa001' },
+      prod: { bundle: 'kardinal-test-app-prev111', version: 'sha-9f8e7d6', verifiedAt: ago(7_000_000) },
     },
   },
   {
@@ -65,6 +84,12 @@ const PIPELINES = [
     failedStepCount: 0,
     activeBundleVersion: 'v2.4.0 with config 1a2b3c4',
     environmentTopology: [{ name: 'staging' }, { name: 'prod', upstreams: ['staging'] }],
+    // status.conditions (#1727): its git Secret works but is not labelled referenceable.
+    conditions: [
+      { type: 'Ready', status: 'True', reason: 'Ready' },
+      { type: 'SecretReferenceable', status: 'False', reason: 'SecretNotReferenceable',
+        message: 'git Secret github-token is not labeled kardinal.io/referenceable=true; it is still used in v0.10 but will be refused in v0.11: label it (kubectl label secret github-token -n default kardinal.io/referenceable=true)' },
+    ],
   },
 ]
 
@@ -75,8 +100,9 @@ const BUNDLES = {
       namespace: 'default',
       phase: 'Promoting',
       type: 'image',
+      version: 'sha-abc1234',
       pipeline: 'kardinal-test-app',
-      createdAt: new Date(Date.now() - 600_000).toISOString(),
+      createdAt: ago(600_000),
       provenance: { author: 'ci-bot', commitSHA: 'abc1234567890', ciRunURL: 'https://github.com/org/repo/runs/1' },
     },
     {
@@ -85,7 +111,7 @@ const BUNDLES = {
       phase: 'Superseded',
       type: 'image',
       pipeline: 'kardinal-test-app',
-      createdAt: new Date(Date.now() - 7_200_000).toISOString(),
+      createdAt: ago(7_200_000),
     },
     {
       name: 'kardinal-test-app-cfg9',
@@ -93,7 +119,7 @@ const BUNDLES = {
       phase: 'Verified',
       type: 'config',
       pipeline: 'kardinal-test-app',
-      createdAt: new Date(Date.now() - 3_600_000).toISOString(),
+      createdAt: ago(3_600_000),
     },
   ],
   'payments-service': [
@@ -102,8 +128,9 @@ const BUNDLES = {
       namespace: 'default',
       phase: 'Promoting',
       type: 'mixed',
+      version: '6.14.1',
       pipeline: 'payments-service',
-      createdAt: new Date(Date.now() - 120_000).toISOString(),
+      createdAt: ago(120_000),
     },
     {
       name: 'payments-service-rej77',
@@ -111,8 +138,8 @@ const BUNDLES = {
       phase: 'Rejected',
       type: 'image',
       pipeline: 'payments-service',
-      createdAt: new Date(Date.now() - 900_000).toISOString(),
-      rejected: { by: 'bob', reason: 'CVE-2026-1234 in the base image', at: new Date(Date.now() - 300_000).toISOString() },
+      createdAt: ago(900_000),
+      rejected: { by: 'bob', reason: 'CVE-2026-1234 in the base image', at: ago(300_000) },
     },
   ],
 }
@@ -120,12 +147,12 @@ const BUNDLES = {
 const GRAPHS = {
   'kardinal-test-app-abc123': {
     nodes: [
-      { id: 'step-test', type: 'PromotionStep', label: 'test', environment: 'test', state: 'Verified', startedAt: new Date(Date.now() - 580_000).toISOString() },
-      { id: 'step-uat', type: 'PromotionStep', label: 'uat', environment: 'uat', state: 'Verified', startedAt: new Date(Date.now() - 400_000).toISOString() },
+      { id: 'step-test', type: 'PromotionStep', label: 'test', environment: 'test', state: 'Verified', startedAt: ago(580_000) },
+      { id: 'step-uat', type: 'PromotionStep', label: 'uat', environment: 'uat', state: 'Verified', startedAt: ago(400_000) },
       // holding: the UI API sets it with graph.GateHolds; the UI counts only
       // holding gates as blocked (E2E-R19). The mock states it, not the rule.
-      { id: 'gate-no-weekend', type: 'PolicyGate', label: 'no-weekend-deploys', environment: 'no-weekend-deploys', state: 'Block', holding: true, expression: '!schedule.isWeekend', lastEvaluatedAt: new Date(Date.now() - 30_000).toISOString() },
-      { id: 'step-prod', type: 'PromotionStep', label: 'prod', environment: 'prod', state: 'WaitingForMerge', prURL: 'https://github.com/org/repo/pull/42', startedAt: new Date(Date.now() - 200_000).toISOString() },
+      { id: 'gate-no-weekend', type: 'PolicyGate', label: 'no-weekend-deploys', environment: 'prod', state: 'Block', holding: true, expression: '!schedule.isWeekend', lastEvaluatedAt: ago(30_000) },
+      { id: 'step-prod', type: 'PromotionStep', label: 'prod', environment: 'prod', state: 'WaitingForMerge', prURL: 'https://github.com/org/repo/pull/42', startedAt: ago(200_000) },
     ],
     edges: [
       { from: 'step-test', to: 'step-uat' },
@@ -135,7 +162,7 @@ const GRAPHS = {
   },
   'payments-service-def456': {
     nodes: [
-      { id: 'step-staging', type: 'PromotionStep', label: 'staging', environment: 'staging', state: 'Promoting', startedAt: new Date(Date.now() - 60_000).toISOString() },
+      { id: 'step-staging', type: 'PromotionStep', label: 'staging', environment: 'staging', state: 'Promoting', startedAt: ago(60_000) },
       { id: 'step-prod', type: 'PromotionStep', label: 'prod', environment: 'prod', state: 'Pending' },
     ],
     edges: [{ from: 'step-staging', to: 'step-prod' }],
@@ -147,8 +174,8 @@ const STEPS = {
     { name: 'step-test-abc', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'test', stepType: 'kustomize-set-image', state: 'Verified', currentStepIndex: 7, conditions: [{ type: 'Ready', status: 'True', message: 'All steps complete' }],
       steps: [
         ['git-clone', 0, 2400], ['kustomize-set-image', 2400, 300], ['git-commit', 2700, 200], ['git-push', 2900, 1800], ['health-check', 4700, 41000],
-      ].map(([name, from, ms]) => ({ name, state: 'Completed', startedAt: new Date(Date.now() - 580_000 + from).toISOString(),
-        completedAt: new Date(Date.now() - 580_000 + from + ms).toISOString(), durationMs: ms })) },
+      ].map(([name, from, ms]) => ({ name, state: 'Completed', startedAt: ago(580_000 - from),
+        completedAt: ago(580_000 - from - ms), durationMs: ms })) },
     { name: 'step-prod-abc', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', stepType: 'kustomize-set-image', state: 'WaitingForMerge', prURL: 'https://github.com/org/repo/pull/42', currentStepIndex: 5 },
   ],
 }
@@ -158,17 +185,17 @@ const STEPS = {
 // state and holding are what graph.GateState and graph.GateHolds give
 // them; only a Block (holding) gate counts as blocked (E2E-R19).
 const GATES = [
-  { name: 'no-weekend-deploys-kardinal-test-app-abc123-prod', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', expression: '!schedule.isWeekend', ready: false, holding: true, state: 'Block', reason: 'Today is a weekend', lastEvaluatedAt: new Date(Date.now() - 30_000).toISOString() },
-  { name: 'business-hours-kardinal-test-app-abc123-prod', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', expression: 'schedule.hour >= 9 && schedule.hour < 17', ready: true, state: 'Pass', lastEvaluatedAt: new Date(Date.now() - 10_000).toISOString() },
+  { name: 'no-weekend-deploys-kardinal-test-app-abc123-prod', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', gateTemplate: 'no-weekend-deploys', maxOverrideMinutes: 1440, expression: '!schedule.isWeekend', ready: false, holding: true, state: 'Block', reason: 'Today is a weekend', lastEvaluatedAt: ago(30_000) },
+  { name: 'business-hours-kardinal-test-app-abc123-prod', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', gateTemplate: 'business-hours', maxOverrideMinutes: 1440, expression: 'schedule.hour >= 9 && schedule.hour < 17', ready: true, state: 'Pass', lastEvaluatedAt: ago(10_000) },
   { name: 'no-weekend-deploys', namespace: 'default', expression: '!schedule.isWeekend', ready: false, template: true, state: 'Pending' },
   {
     name: 'release-approval-payments-service-def456-prod', namespace: 'default', pipeline: 'payments-service', bundle: 'payments-service-def456', environment: 'prod',
-    expression: 'true', ready: false, holding: true, state: 'Block', reason: 'waiting for approvals: 1 of 2 (alice)', lastEvaluatedAt: new Date(Date.now() - 20_000).toISOString(),
+    gateTemplate: 'release-approval', maxOverrideMinutes: 1440, expression: 'true', ready: false, holding: true, state: 'Block', reason: 'waiting for approvals: 1 of 2 (alice)', lastEvaluatedAt: ago(20_000),
     approval: {
       required: 2, allowedGroups: ['release-managers'], excludeAuthor: true, approved: 1,
       decisions: [
-        { user: 'alice', decision: 'approve', counted: true, comment: 'canary looks clean', firstSeenAt: new Date(Date.now() - 3_600_000).toISOString() },
-        { user: 'ci-bot', decision: 'approve', counted: false, reason: 'the Bundle\'s creator (excludeAuthor)', firstSeenAt: new Date(Date.now() - 600_000).toISOString() },
+        { user: 'alice', decision: 'approve', counted: true, comment: 'canary looks clean', firstSeenAt: ago(3_600_000) },
+        { user: 'ci-bot', decision: 'approve', counted: false, reason: 'the version\'s author (approval.excludeAuthor)', firstSeenAt: ago(600_000) },
       ],
     },
   },
@@ -187,7 +214,7 @@ const SECURITY_HEADERS = {
 
 function json(res, data, status = 200) {
   res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', ...SECURITY_HEADERS })
-  res.end(JSON.stringify(data))
+  res.end(JSON.stringify(resolveTimes(data)))
 }
 
 function readBody(req) {
@@ -265,6 +292,10 @@ const server = http.createServer(async (req, res) => {
           : `Recorded: carol ${body.decision}s ${body.bundle} for ${body.environment}`,
       })
       case 'validate-cel': return json(res, { valid: true, expression: body.expression })
+      case 'reject': return json(res, { message: `bundle ${body.bundle} rejected by carol: it is never promoted again` })
+      case 'override': return json(res, { message: `gate ${body.gate} overridden in ${body.environment}`, gates: [body.gate],
+        expiresAt: new Date(Date.now() + (body.expiresInMinutes ?? 60) * 60_000).toISOString() })
+      case 'release-hold': return json(res, { message: 'hold released' })
     }
   }
   if (api) return json(res, { error: `no mock for ${method} ${url}` }, 404)

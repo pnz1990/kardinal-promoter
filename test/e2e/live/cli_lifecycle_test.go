@@ -45,6 +45,19 @@ func refuses(t *testing.T, c *framework.CLI, ns, want string, args ...string) {
 	assert.Empty(t, r.Stdout, "kardinal %v", args)
 }
 
+// refusesNotFound is refuses for a pipeline that does not exist: the error
+// names it and lists the pipelines of the namespace (which depend on the
+// test), so only its start (prefix, then the not-found sentence) and its end
+// are fixed.
+func refusesNotFound(t *testing.T, c *framework.CLI, ns, prefix, pipeline string, args ...string) {
+	t.Helper()
+	r := c.Fail(ns, args...)
+	assert.Equal(t, 1, r.Code, "kardinal %v", args)
+	assert.True(t, strings.HasPrefix(r.Stderr, fmt.Sprintf("%spipeline %q not found in namespace %q; ", prefix, pipeline, ns)), "kardinal %v: %s", args, r.Stderr)
+	assert.True(t, strings.HasSuffix(r.Stderr, ". Other namespaces: kardinal get pipelines -A\n"), "kardinal %v: %s", args, r.Stderr)
+	assert.Empty(t, r.Stdout, "kardinal %v", args)
+}
+
 // bundleNames lists the names of the Bundles in ns.
 func bundleNames(t *testing.T, e *framework.Env, ns string) []string {
 	t.Helper()
@@ -116,8 +129,8 @@ func TestCLI_Rollback(t *testing.T) {
 		"rollback", pipelineName, "--env", "prod")
 	refuses(t, c, a.ns, `rollback: pipeline podinfo has no environment "staging": invalid request`,
 		"rollback", pipelineName, "--env", "staging")
-	refuses(t, c, a.ns, "rollback: pipeline "+a.ns+"/nope: not found", "rollback", "nope", "--env", "prod")
-	refuses(t, c, a.ns, "which environment? Give it after the pipeline: kardinal rollback "+pipelineName+" <env>", "rollback", pipelineName)
+	refusesNotFound(t, c, a.ns, "", "nope", "rollback", "nope", "--env", "prod")
+	refuses(t, c, a.ns, "which environment? "+pipelineName+" has: test, prod. Give it after the pipeline: kardinal rollback "+pipelineName+" <env>", "rollback", pipelineName)
 	assert.Empty(t, bundles(t, e, a.ns), "a refused rollback creates nothing")
 
 	// A, then B, reach prod; C reaches only test.
@@ -180,10 +193,10 @@ func TestCLI_Rollback(t *testing.T) {
 	hist := framework.ParseTable(c.Must(a.ns, "history", pipelineName))
 	actions := map[string]string{}
 	for _, row := range hist {
-		if prev, ok := actions[row["BUNDLE"]]; ok {
-			assert.Equal(t, prev, row["ACTION"], "every row of %s has one action", row["BUNDLE"])
+		if prev, ok := actions[framework.BundleOf(row["VERSION"])]; ok {
+			assert.Equal(t, prev, row["ACTION"], "every row of %s has one action", framework.BundleOf(row["VERSION"]))
 		}
-		actions[row["BUNDLE"]] = row["ACTION"]
+		actions[framework.BundleOf(row["VERSION"])] = row["ACTION"]
 	}
 	assert.Equal(t, map[string]string{bA: "promote", bB: "promote", bC: "promote", bR: "rollback"}, actions, "history:\n%v", hist)
 
@@ -237,9 +250,9 @@ func TestCLI_Promote(t *testing.T) {
 		"promote", pipelineName, "-e", "test")
 	refuses(t, c, a.ns, "promote: no Bundle with artifacts is Verified in test yet: conflict", "promote", pipelineName, "-e", "prod")
 	refuses(t, c, a.ns, `promote: pipeline podinfo has no environment "staging": invalid request`, "promote", pipelineName, "--env", "staging")
-	refuses(t, c, a.ns, "promote: pipeline "+a.ns+"/nope: not found", "promote", "nope", "-e", "prod")
-	refuses(t, c, a.ns, "which environment? Give it after the pipeline: kardinal promote "+pipelineName+" <env>", "promote", pipelineName)
-	refuses(t, c, a.ns, "which environment? Give it after the pipeline: kardinal promote "+pipelineName+" <env>", "promote", pipelineName, "--env", "")
+	refusesNotFound(t, c, a.ns, "", "nope", "promote", "nope", "-e", "prod")
+	refuses(t, c, a.ns, "which environment? "+pipelineName+" has: test, prod. Give it after the pipeline: kardinal promote "+pipelineName+" <env>", "promote", pipelineName)
+	refuses(t, c, a.ns, "which environment? "+pipelineName+" has: test, prod. Give it after the pipeline: kardinal promote "+pipelineName+" <env>", "promote", pipelineName, "--env", "")
 	assert.Empty(t, bundles(t, e, a.ns), "a refused promote creates nothing")
 
 	// A is Verified in test only; B, newer, is held at test's gate.
@@ -321,7 +334,7 @@ func TestCLI_DeleteBundle(t *testing.T) {
 	head := e.BranchHead(t, a.repo)
 	assert.Equal(t, "Bundle "+bA+" deleted\n", c.Must(a.ns, "delete", "bundle", bA))
 	waitBundleGone(t, e, a.ns, bA)
-	assert.Equal(t, "BUNDLE   TYPE   PHASE   AGE\n", c.Must(a.ns, "get", "bundles"))
+	assert.Equal(t, "VERSION   TYPE   PHASE   AGE\n", c.Must(a.ns, "get", "bundles"))
 	assert.Equal(t, "No active bundles for pipeline \"podinfo\".\n", c.Must(a.ns, "get", "steps", pipelineName))
 	assert.Equal(t, head, e.BranchHead(t, a.repo), "deleting a Bundle writes nothing to git")
 	assertEnvAt(t, a, "prod", fixtures.V1)
@@ -423,10 +436,12 @@ func TestCLI_ConfigBundle(t *testing.T) {
 	e.WaitStepState(t, a.ns, pipelineName, b3, "test", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "test", fixtures.V3)
 	e.WaitBundlePhase(t, a.ns, b2, "Verified", time.Minute)
-	status := c.Must(a.ns, "status", pipelineName)
-	_, deployed, ok := strings.Cut(status, "\nDeployed\n")
-	require.True(t, ok, status)
-	assert.Regexp(t, `\ntest +`+regexp.QuoteMeta(b3+" ("+fixtures.V3+"); config "+initSHA[:7]+" from "+b2)+"\n", deployed)
+	// status names the Bundle that runs there; explain's deployed line
+	// names where the rest came from (unit: TestDeployed_ImageAndConfigBundles).
+	framework.Eventually(t, time.Minute, "status shows b3 running in test", func(context.Context) (bool, string) {
+		status := c.Must(a.ns, "status", pipelineName)
+		return regexp.MustCompile(`\ntest +` + regexp.QuoteMeta(fixtures.V3+" ("+b3+")") + ` +- +Live `).MatchString(status), status
+	})
 }
 
 // TestCLI_CreateBundleDryRun previews a Bundle with kardinal create bundle
@@ -446,8 +461,8 @@ func TestCLI_CreateBundleDryRun(t *testing.T) {
 	want := "[DRY-RUN] Bundle \"podinfo-dry-run\" for pipeline \"podinfo\"\n\n" +
 		"Promotion graph: 7 node(s)\n\n" +
 		"Environments in promotion order:\n" +
-		"  • test\n" +
-		"  • prod (gates: change-freeze)\n\n" +
+		"  * test\n" +
+		"  * prod (gates: change-freeze)\n\n" +
 		"No resources were created. Remove --dry-run to apply.\n"
 	head := e.BranchHead(t, a.repo)
 	r := c.Run(a.ns, "create", "bundle", pipelineName, "--image", fixtures.Image+":"+fixtures.V2, "--dry-run")
@@ -456,7 +471,7 @@ func TestCLI_CreateBundleDryRun(t *testing.T) {
 	assert.Empty(t, r.Stderr)
 	assert.Equal(t, want, c.Must(a.ns, "create", "bundle", pipelineName, "--type", "config", "--config-commit", head, "--dry-run"))
 
-	refuses(t, c, a.ns, fmt.Sprintf("dry-run: pipeline %q not found in namespace %q", "nope", a.ns),
+	refusesNotFound(t, c, a.ns, "dry-run: ", "nope",
 		"create", "bundle", "nope", "--image", fixtures.Image+":"+fixtures.V2, "--dry-run")
 	refuses(t, c, a.ns, `create bundle: type "config" requires --config-commit`,
 		"create", "bundle", pipelineName, "--type", "config", "--dry-run")
@@ -494,8 +509,8 @@ func TestCLI_PauseResume(t *testing.T) {
 	waitPipelineValid(t, e, a.ns, pipelineName)
 
 	paused := "Pipeline podinfo paused. No new promotions will start; in-flight steps hold at the next safe point.\n"
-	refuses(t, c, a.ns, "pause nope: pipeline "+a.ns+"/nope: not found", "pause", "nope")
-	refuses(t, c, a.ns, "resume nope: pipeline "+a.ns+"/nope: not found", "resume", "nope")
+	refusesNotFound(t, c, a.ns, "", "nope", "pause", "nope")
+	refusesNotFound(t, c, a.ns, "", "nope", "resume", "nope")
 	refuses(t, c, a.ns, "accepts 1 arg(s), received 0", "pause")
 
 	assert.Equal(t, paused, c.Must(a.ns, "pause", pipelineName))

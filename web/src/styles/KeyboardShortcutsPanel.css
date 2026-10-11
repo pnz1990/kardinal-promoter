@@ -1,0 +1,45 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * KeyboardShortcutsPanel.css — the "?" help dialog (components/KeyboardShortcutsPanel.tsx),
+ * on the dialog primitive. Tokens only.
+ */
+
+.shortcuts { padding: var(--k-space-4) var(--k-space-6); }
+.shortcuts__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-block-end: var(--k-space-4);
+}
+.shortcuts__title {
+  color: var(--k-ink);
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-sm);
+  font-stretch: var(--k-stretch-label);
+  font-weight: var(--k-weight-semibold);
+  letter-spacing: var(--k-tracking-caps);
+}
+.shortcuts__table { inline-size: 100%; border-collapse: collapse; }
+.shortcuts__key {
+  inline-size: var(--k-space-12);
+  padding-block-end: var(--k-space-2);
+  padding-inline-end: var(--k-space-4);
+  vertical-align: top;
+}
+.shortcuts__description {
+  padding-block-end: var(--k-space-2);
+  color: var(--k-ink-2);
+  font-size: var(--k-text-sm);
+  vertical-align: top;
+}
+.shortcuts__footer {
+  margin-block-start: var(--k-space-3);
+  padding-block-start: var(--k-space-3);
+  border-block-start: var(--k-border-hairline) solid var(--k-line-subtle);
+  color: var(--k-ink-3);
+  font-size: var(--k-text-xs);
+}
+.shortcuts__hint-key { font-family: var(--k-font-mono); }
+.shortcuts__docs { margin: var(--k-space-3) 0 0; color: var(--k-ink-2); font-size: var(--k-text-sm); }

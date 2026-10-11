@@ -115,9 +115,9 @@ export function healthChipColors(state: HealthState): { bg: string; text: string
  * screen reader ("Waiting — Pending"). Read instead of the health word.
  */
 const GATE_STATE_MEANING: Record<string, string> = {
-  Waiting: 'not ready, not holding the bundle',
-  Superseded: 'bundle superseded, not evaluated again',
-  Rejected: 'bundle rejected, not evaluated again',
+  Waiting: 'not ready, not holding the version',
+  Superseded: 'version replaced by a newer one, not evaluated again',
+  Rejected: 'version rejected, not evaluated again',
 }
 
 interface HealthChipProps {

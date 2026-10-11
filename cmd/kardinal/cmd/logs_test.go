@@ -244,7 +244,7 @@ func TestLogsFollow_StateChangesPrintedOnce(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, logsFollowFn(context.Background(), &out, policyClient(t, verified), "default", "demo", "", ""))
 	assert.Contains(t, out.String(), "[demo/test] git-clone")
-	assert.Contains(t, out.String(), "[demo/test] → Live\n")
+	assert.Contains(t, out.String(), "[demo/test] -> Live\n")
 
 	bare := explainStep("demo", "b1", "uat", "Verified", "", created)
 	running := explainStep("demo", "b1", "prod", "Promoting", "", created)
@@ -252,8 +252,8 @@ func TestLogsFollow_StateChangesPrintedOnce(t *testing.T) {
 	defer cancel()
 	out.Reset()
 	require.NoError(t, logsFollowFn(ctx, &out, policyClient(t, bare, running), "default", "demo", "", ""))
-	assert.Equal(t, 1, strings.Count(out.String(), "[demo/uat] → Live"), out.String())
-	assert.Equal(t, 1, strings.Count(out.String(), "[demo/prod] → Promoting"), out.String())
+	assert.Equal(t, 1, strings.Count(out.String(), "[demo/uat] -> Live"), out.String())
+	assert.Equal(t, 1, strings.Count(out.String(), "[demo/prod] -> Promoting"), out.String())
 }
 
 // RollingBack is terminal: the reconciler stops there, so --follow exits.
@@ -263,7 +263,7 @@ func TestLogsFollow_RollingBackIsTerminal(t *testing.T) {
 	defer cancel()
 	var out bytes.Buffer
 	require.NoError(t, logsFollowFn(ctx, &out, policyClient(t, step), "default", "demo", "", ""))
-	assert.True(t, strings.HasSuffix(out.String(), "[demo/prod] → Rolling back\nAll steps reached terminal state.\n"), out.String())
+	assert.True(t, strings.HasSuffix(out.String(), "[demo/prod] -> Rolling back\nAll steps reached terminal state.\n"), out.String())
 }
 
 // --follow waits for the Bundle, not only for the steps that exist: the next
@@ -292,7 +292,7 @@ func TestLogsFollow_WaitsForInFlightBundle(t *testing.T) {
 	out := follow(t, 2500*time.Millisecond, "", "", step, bundle("b1", "Promoting"))
 	assert.True(t, strings.HasSuffix(out, "\nStopped.\n"), "a Promoting Bundle keeps --follow running:\n%s", out)
 	assert.NotContains(t, out, done)
-	assert.Equal(t, 1, strings.Count(out, "[demo/test] → Live\n"), out)
+	assert.Equal(t, 1, strings.Count(out, "[demo/test] -> Live\n"), out)
 
 	for _, tc := range []struct {
 		name, env, bundle string

@@ -1,0 +1,472 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * StageDrawer.css — the stage drawer (U3) and its action dialogs. Tokens only
+ * (--k-*). Red is the thread: focus and selection only, never a status or a
+ * button. A destructive action is a garnet outline; the primary one is ink.
+ */
+
+.stage-drawer {
+  inline-size: var(--k-layout-drawer);
+  max-block-size: 100%;
+  overflow-y: auto;
+  background: var(--k-surface-raised);
+  border-inline-start: var(--k-border-hairline) solid var(--k-line);
+  color: var(--k-ink);
+  font-family: var(--k-font-body);
+  font-size: var(--k-text-sm);
+  line-height: var(--k-leading-sm);
+  padding: var(--k-space-4) var(--k-space-6) var(--k-space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--k-space-6);
+  flex-shrink: 0;
+}
+
+/* At lg and wider the drawer is a non-modal column pinned to the viewport's
+   end, and the page gives up that column while it is open
+   (.k-stage-drawer-open), so the drawer sits beside the page, not over it. */
+.stage-drawer:not(.stage-drawer--sheet) {
+  position: fixed;
+  inset-block: 0;
+  inset-inline-end: 0;
+  max-block-size: none;
+  z-index: var(--k-z-drawer);
+  box-shadow: var(--k-elev-2);
+}
+
+.k-stage-drawer-open #main-content {
+  padding-inline-end: var(--k-layout-drawer);
+}
+
+.stage-drawer__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--k-z-drawer);
+  background: color-mix(in oklab, var(--k-surface-sunken) 72%, transparent);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.stage-drawer--sheet {
+  inline-size: var(--k-layout-drawer);
+  block-size: 100%;
+  box-shadow: var(--k-elev-3);
+}
+
+.stage-drawer__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--k-space-3);
+}
+
+.stage-drawer__eyebrow {
+  margin: 0;
+  font-size: var(--k-text-xs);
+  line-height: var(--k-leading-xs);
+  letter-spacing: var(--k-tracking-caps);
+  text-transform: uppercase;
+  color: var(--k-ink-3);
+}
+
+.stage-drawer__title {
+  margin: 0;
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-2xl);
+  line-height: var(--k-leading-2xl);
+  font-weight: var(--k-weight-title);
+  font-stretch: var(--k-stretch-title);
+  letter-spacing: var(--k-tracking-display);
+  overflow-wrap: anywhere;
+}
+
+.stage-drawer__status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--k-space-3);
+}
+
+.stage-versions {
+  margin: 0;
+  display: grid;
+  gap: var(--k-space-1);
+}
+
+.stage-versions div {
+  display: flex;
+  gap: var(--k-space-3);
+}
+
+.stage-versions dt {
+  inline-size: var(--k-space-24);
+  color: var(--k-ink-3);
+  flex-shrink: 0;
+}
+
+.stage-versions dd {
+  margin: 0;
+}
+
+.stage-version {
+  font-family: var(--k-font-mono);
+  font-variant-numeric: var(--k-numeric-mono);
+  font-weight: var(--k-weight-semibold);
+}
+
+.stage-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--k-space-3);
+  scroll-margin-block-start: var(--k-space-4);
+}
+
+.stage-section + .stage-section {
+  border-block-start: var(--k-border-hairline) solid var(--k-line-subtle);
+  padding-block-start: var(--k-space-4);
+}
+
+.stage-section__title,
+.stage-eyebrow {
+  margin: 0;
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-2xs);
+  line-height: var(--k-leading-xs);
+  font-weight: var(--k-weight-semibold);
+  font-stretch: 87.5%;
+  letter-spacing: var(--k-tracking-caps);
+  text-transform: uppercase;
+  color: var(--k-ink-3);
+}
+
+/* "Whole pipeline": the pipeline-wide actions, set apart and quieter. */
+.stage-pipeline-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--k-space-2);
+  margin-block-start: var(--k-space-4);
+  padding-block-start: var(--k-space-3);
+  border-block-start: var(--k-border-hairline) dashed var(--k-line);
+}
+
+.stage-muted {
+  margin: 0;
+  color: var(--k-ink-3);
+}
+
+.stage-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--k-space-1);
+  align-self: flex-start;
+  padding: var(--k-space-px) var(--k-space-2);
+  border-radius: var(--k-radius-1);
+  font-size: var(--k-text-xs);
+  line-height: var(--k-leading-xs);
+  font-weight: var(--k-weight-medium);
+  border: var(--k-border-hairline) solid transparent;
+}
+
+.stage-chip--verified { color: var(--k-status-verified-fg); background: var(--k-status-verified-wash); }
+.stage-chip--promoting { color: var(--k-status-promoting-fg); background: var(--k-status-promoting-wash); }
+.stage-chip--waiting { color: var(--k-status-waiting-fg); background: var(--k-status-waiting-wash); }
+.stage-chip--blocked { color: var(--k-status-blocked-fg); background: var(--k-status-blocked-wash); }
+.stage-chip--failed { color: var(--k-status-failed-on-fill); background: var(--k-status-failed-fill); }
+.stage-chip--superseded { color: var(--k-status-superseded-fg); border: var(--k-border-hairline) dashed var(--k-line-strong); }
+.stage-chip--paused { color: var(--k-status-paused-fg); background: var(--k-hatch); }
+.stage-chip--held { color: var(--k-status-held-fg); background: var(--k-hatch); }
+.stage-chip--pending,
+.stage-chip--unknown { color: var(--k-ink-3); border-color: var(--k-status-pending-ring); }
+.stage-chip--degraded { color: var(--k-status-failed-fg); border-color: var(--k-status-failed-fg); }
+
+.stage-why {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--k-space-3);
+}
+
+.stage-why__item {
+  border-inline-start: var(--k-border-strong) solid var(--k-line-strong);
+  padding-inline-start: var(--k-space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--k-space-1);
+}
+
+.stage-why__item--gate { border-inline-start-color: var(--k-status-blocked-fg); }
+/* An approval waits on people, as the chip says (Waiting tone). */
+.stage-why__item--approval { border-inline-start-color: var(--k-status-waiting-fg); }
+.stage-why__item--failed { border-inline-start-color: var(--k-status-failed-fg); }
+.stage-why__item--held,
+.stage-why__item--paused { border-inline-start-color: var(--k-status-held-fg); }
+.stage-why__item--pr { border-inline-start-color: var(--k-status-waiting-fg); }
+
+.stage-why__title {
+  margin: 0;
+  font-weight: var(--k-weight-semibold);
+}
+
+.stage-why__detail {
+  margin: 0;
+  color: var(--k-ink-2);
+  overflow-wrap: anywhere;
+}
+
+.stage-why__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--k-space-3);
+}
+
+.stage-decisions {
+  margin: 0;
+  padding-inline-start: var(--k-space-4);
+  color: var(--k-ink-2);
+}
+
+.stage-details summary {
+  cursor: pointer;
+  color: var(--k-ink-3);
+  font-size: var(--k-text-xs);
+}
+
+.stage-why__cli {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--k-space-2);
+  margin: var(--k-space-2) 0 0;
+}
+
+.stage-cli {
+  padding: 0 var(--k-space-1);
+  background: var(--k-surface-sunken);
+  border-radius: var(--k-radius-1);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-xs);
+  overflow-wrap: anywhere;
+}
+
+.stage-code {
+  margin: var(--k-space-2) 0 0;
+  padding: var(--k-space-2) var(--k-space-3);
+  background: var(--k-surface-sunken);
+  border-radius: var(--k-radius-1);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.stage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--k-space-2);
+}
+
+.stage-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-block-size: var(--k-control-md);
+  padding: 0 var(--k-space-4);
+  border-radius: var(--k-radius-2);
+  border: var(--k-border-hairline) solid var(--k-line-strong);
+  background: var(--k-surface-raised);
+  color: var(--k-ink);
+  font: inherit;
+  font-weight: var(--k-weight-medium);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.stage-button--sm {
+  min-block-size: var(--k-control-sm);
+  padding: 0 var(--k-space-3);
+  font-size: var(--k-text-xs);
+}
+
+.stage-button--primary {
+  background: var(--k-ink);
+  border-color: var(--k-ink);
+  color: var(--k-ink-inverse);
+}
+
+.stage-button--destructive {
+  background: transparent;
+  color: var(--k-status-failed-fg);
+  border-color: var(--k-status-failed-fg);
+}
+
+/* A pipeline-wide action: text-weight, no outline; its dialog carries the warning. */
+.stage-button--quiet {
+  min-block-size: var(--k-control-sm);
+  padding: 0 var(--k-space-3);
+  border-color: transparent;
+  background: transparent;
+  color: var(--k-ink-2);
+  font-size: var(--k-text-xs);
+  text-decoration: underline;
+  text-underline-offset: var(--k-space-1);
+}
+
+.stage-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.stage-button:focus-visible,
+.stage-link:focus-visible,
+.stage-icon-button:focus-visible,
+.stage-details summary:focus-visible,
+.stage-field input:focus-visible,
+.stage-field select:focus-visible {
+  outline: var(--k-focus-ring);
+  outline-offset: var(--k-focus-offset);
+}
+
+.stage-icon-button {
+  inline-size: var(--k-control-md);
+  block-size: var(--k-control-md);
+  border: 0;
+  border-radius: var(--k-radius-2);
+  background: transparent;
+  color: var(--k-ink-2);
+  font-size: var(--k-text-xl);
+  cursor: pointer;
+}
+
+.stage-link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--k-thread-text);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.stage-result {
+  margin: 0;
+  color: var(--k-status-verified-fg);
+}
+
+.stage-targets,
+.stage-gates {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--k-space-2);
+}
+
+.stage-targets li {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-3);
+}
+
+
+
+.stage-conditions {
+  margin: var(--k-space-2) 0 0;
+  display: grid;
+  gap: var(--k-space-1);
+}
+
+.stage-conditions dt { font-weight: var(--k-weight-semibold); }
+.stage-conditions dd { margin: 0; color: var(--k-ink-2); overflow-wrap: anywhere; }
+
+.stage-dialog__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--k-z-dialog);
+  background: color-mix(in oklab, var(--k-surface-sunken) 72%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--k-space-4);
+}
+
+.stage-dialog {
+  inline-size: min(100%, var(--k-layout-drawer));
+  background: var(--k-surface-raised);
+  color: var(--k-ink);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-3);
+  box-shadow: var(--k-elev-3);
+  padding: var(--k-space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--k-space-4);
+  font-family: var(--k-font-body);
+  font-size: var(--k-text-sm);
+}
+
+.stage-dialog__title {
+  margin: 0;
+  font-size: var(--k-text-lg);
+  line-height: var(--k-leading-lg);
+  font-weight: var(--k-weight-title);
+  overflow-wrap: anywhere;
+}
+
+.stage-dialog__description { margin: 0; color: var(--k-ink-2); }
+
+.stage-dialog__error {
+  margin: 0;
+  padding: var(--k-space-2) var(--k-space-3);
+  color: var(--k-status-failed-fg);
+  background: var(--k-status-failed-wash);
+  border-radius: var(--k-radius-1);
+  overflow-wrap: anywhere;
+}
+
+.stage-dialog__buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--k-space-2);
+}
+
+.stage-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--k-space-1);
+}
+
+.stage-field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--k-space-2);
+}
+
+.stage-field label { font-weight: var(--k-weight-medium); }
+
+.stage-field input[type='text'],
+.stage-field select {
+  min-block-size: var(--k-control-md);
+  padding: 0 var(--k-space-3);
+  border: var(--k-border-hairline) solid var(--k-line-strong);
+  border-radius: var(--k-radius-2);
+  background: var(--k-surface-base);
+  color: var(--k-ink);
+  font: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-drawer { scroll-behavior: auto; }
+}
+
+/* A gate's CEL under Details, with the controller's compile check (UI-NODE-01). */
+.stage-cel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--k-space-2);
+}

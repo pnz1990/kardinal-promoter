@@ -1,0 +1,59 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * DAGTooltip.css — the DAG node hover tooltip (components/DAGTooltip.tsx). Its position
+ * is set inline from the node's rect; everything else is a design token.
+ */
+
+.dag-tooltip {
+  position: fixed;
+  z-index: var(--k-z-popover);
+  min-inline-size: calc(var(--k-space-24) * 2);
+  max-inline-size: min(calc(var(--k-space-24) * 3.5), 92vw);
+  padding: var(--k-space-2) var(--k-space-3);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-3);
+  background: var(--k-surface-raised);
+  box-shadow: var(--k-elev-1);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--k-dur-instant) ease-in;
+}
+.dag-tooltip[data-visible="true"] { opacity: 1; pointer-events: auto; }
+
+.dag-tooltip__title {
+  margin-block-end: var(--k-space-1_5);
+  color: var(--k-ink);
+  font-size: var(--k-text-sm);
+  font-weight: var(--k-weight-bold);
+}
+.dag-tooltip__state {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-1_5);
+  margin-block-end: var(--k-space-1_5);
+}
+.dag-tooltip__caption { color: var(--k-ink-3); font-size: var(--k-text-2xs); }
+.dag-tooltip__state-value { font-size: var(--k-text-xs); font-weight: var(--k-weight-semibold); }
+.dag-tooltip__message {
+  margin-block-end: var(--k-space-1_5);
+  color: var(--k-ink-2);
+  font-size: var(--k-text-2xs);
+  line-height: var(--k-leading-sm);
+  overflow-wrap: anywhere;
+}
+.dag-tooltip__message--after { margin-block: var(--k-space-1) 0; }
+.dag-tooltip__link-row { margin-block-end: var(--k-space-1); }
+.dag-tooltip__link { color: var(--k-ink); text-decoration: underline var(--k-border-hairline) var(--k-thread-text); text-underline-offset: 0.2em; font-size: var(--k-text-xs); }
+.dag-tooltip__expression {
+  margin-block-end: var(--k-space-1_5);
+  padding: var(--k-space-1_5) var(--k-space-2);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-2);
+  background: var(--k-surface-sunken);
+  color: var(--k-ink-2);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-2xs);
+  overflow-wrap: anywhere;
+}

@@ -42,6 +42,21 @@ export interface Pipeline {
   deployed?: Record<string, DeployedRelease>
   /** Pipeline.status.deploymentMetrics, computed by the controller (DORA). */
   deploymentMetrics?: DeploymentMetrics
+  /** Pipeline.status.summary: one sentence on where its versions are (P1, #1707), e.g.
+   *  "1.5.0 live in test, uat; waiting for PR merge in prod (#42)". */
+  summary?: string
+  /** Pipeline.status.conditions (#1727): Ready (reasons such as ValidationFailed and
+   *  GitCredentialMissing), Paused, PathConflict and the SecretReferenceable warning. */
+  conditions?: Condition[]
+}
+
+/** A Kubernetes status condition, as the UI API serves it. */
+export interface Condition {
+  type: string
+  status: string
+  reason?: string
+  message?: string
+  lastTransitionTime?: string
 }
 
 /** What one environment runs: the newest PromotionStep there that landed its change. */
@@ -137,7 +152,7 @@ export interface Bundle {
   /** #503: Per-environment promotion statuses. The bundle comparison shows
    *  them and the release metrics bar reads healthCheckedAt. */
   environments?: BundleEnvStatus[]
-  /** #563: Container images in this Bundle — used by NodeDetail diff preview. */
+  /** #563: Container images in this Bundle — shown in the stage drawer's evidence. */
   images?: ImageRef[]
   /** Environments where this Rejected bundle's change is live (its step is
    *  HealthChecking or Verified there): it stays current, marked Rejected,
@@ -145,6 +160,9 @@ export interface Bundle {
   rejectedLiveEnvironments?: string[]
   /** spec.rejected: who rejected the Bundle (kardinal reject), why, and when (RFC 3339). */
   rejected?: { reason: string; by: string; at?: string }
+  /** What the Bundle ships, for display (status.version: the image tag,
+   *  "config <sha>", or the chart and its version). */
+  version?: string
 }
 
 /** #563: A container image reference — repository, tag, and optional digest. */
@@ -267,6 +285,11 @@ export interface PolicyGate {
   pipeline?: string
   bundle?: string
   environment?: string
+  /** The template an instance was made from (kardinal.io/gate-template): the
+   *  gate's name as the user wrote it. Empty on templates. */
+  gateTemplate?: string
+  /** The longest override the controller accepts for this instance, in minutes. */
+  maxOverrideMinutes?: number
   /** True for a PolicyGate template: never evaluated for a bundle, always ready=false. */
   template?: boolean
   /** True when this gate instance holds its bundle back (graph.GateHolds, decided
