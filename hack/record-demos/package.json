@@ -1,0 +1,15 @@
+{
+  "name": "kardinal-record-demos",
+  "private": true,
+  "description": "Records the UI demo clips for the docs (docs/assets/demos) against the mock server.",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "record": "node record.mjs",
+    "check": "node record.mjs --check"
+  },
+  "dependencies": {
+    "playwright": "1.63.0",
+    "sharp": "0.35.5"
+  }
+}
