@@ -70,15 +70,15 @@ kardinal create bundle github-demo --image "$TEST_IMAGE"
 
 # 2. Watch test and uat auto-promote
 kardinal get pipelines
-# PIPELINE      VERSION             TEST   UAT    PROD                         SUB   AGE
-# github-demo   github-demo-9tptr   Live   Live   Held by gate uat-soak-gate   0     5m
+# PIPELINE      VERSION                           TEST   UAT    PROD                         SUB   AGE
+# github-demo   sha-9349a3f (github-demo-9tptr)   Live   Live   Held by gate uat-soak-gate   0     5m
 
 # 3. Check what's gating prod
 kardinal explain github-demo --env prod
-# ENVIRONMENT   VERSION             TYPE         NAME                 STATE      EXPRESSION                                      REASON
-# prod          github-demo-9tptr   PolicyGate   uat-soak-gate        Blocking   upstream.uat.soakMinutes >= 30                  UAT must have been Verified for at least 30 minutes (bundle.version=sha-9349a3f: upstream.uat.soakMinutes >= 30 = false)
-# prod          github-demo-9tptr   PolicyGate   no-bot-deploys       Passing    bundle.provenance.author != "dependabot[bot]"   bundle.version=sha-9349a3f: bundle.provenance.author != "dependabot[bot]" = true
-# prod          github-demo-9tptr   PolicyGate   no-weekend-deploys   Passing    !schedule.isWeekend                             bundle.version=sha-9349a3f: !schedule.isWeekend = true
+# ENVIRONMENT   VERSION                           TYPE         NAME                 STATE      EXPRESSION                                      REASON
+# prod          sha-9349a3f (github-demo-9tptr)   PolicyGate   uat-soak-gate        Blocking   upstream.uat.soakMinutes >= 30                  UAT must have been Verified for at least 30 minutes (bundle.version=sha-9349a3f: upstream.uat.soakMinutes >= 30 = false)
+# prod          sha-9349a3f (github-demo-9tptr)   PolicyGate   no-bot-deploys       Passing    bundle.provenance.author != "dependabot[bot]"   bundle.version=sha-9349a3f: bundle.provenance.author != "dependabot[bot]" = true
+# prod          sha-9349a3f (github-demo-9tptr)   PolicyGate   no-weekend-deploys   Passing    !schedule.isWeekend                             bundle.version=sha-9349a3f: !schedule.isWeekend = true
 #
 # prod   deployed: none
 
