@@ -342,7 +342,8 @@ func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1
 	g := gates[0]
 	name := gateDisplayName(g)
 	var a whyAnswer
-	if g.Spec.Approval != nil && known && unapprovable(g.Spec.Approval, creator) != "" {
+	switch {
+	case g.Spec.Approval != nil && known && unapprovable(g.Spec.Approval, creator) != "":
 		// The gate holds whatever approvals it gets (as tallyApprovals
 		// in pkg/reconciler/policygate/approvals.go decides).
 		a.sentence = fmt.Sprintf("%s is held by gate %s: nobody can approve this version.", env, name)
@@ -350,7 +351,7 @@ func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1
 			{"Why", unapprovable(g.Spec.Approval, creator)},
 			{"Next", fmt.Sprintf("ship it again as yourself: kardinal ship %s --image <ref>", p.Name)},
 			{"Or", fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>", p.Name, env, name)}}
-	} else if g.Spec.Approval != nil {
+	case g.Spec.Approval != nil:
 		approved, rejectedBy := approvalCount(g)
 		required := max(g.Spec.Approval.Required, 1)
 		by, mine := approvalBy(g.Spec.Approval, me, creator)
@@ -369,7 +370,7 @@ func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1
 		a.lines = []whyLine{version,
 			{"Gate", fmt.Sprintf("%s · %d of %d approvals", name, approved, required)},
 			{"Next", next}}
-	} else {
+	default:
 		a.sentence = fmt.Sprintf("%s is held by gate %s.", env, name)
 		a.lines = []whyLine{version}
 		if g.Spec.Message != "" {
