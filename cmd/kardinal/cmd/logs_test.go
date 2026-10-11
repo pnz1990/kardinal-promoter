@@ -169,7 +169,7 @@ func TestLogsStaticOutput(t *testing.T) {
 
 	out := buf.String()
 	assert.Contains(t, out, "static-pipeline/prod")
-	assert.Contains(t, out, "Verified")
+	assert.Contains(t, out, "[Live]")
 	assert.Contains(t, out, "all done")
 }
 
@@ -190,8 +190,8 @@ func TestLogsStepTable(t *testing.T) {
 				{Name: "open-pr", State: "Pending"},
 			},
 			want: [][]string{
-				{"git-clone", "Completed", "1.2s", "cloned"},
-				{"open-pr", "Pending", "-"},
+				{"git-clone", "Done", "1.2s", "cloned"},
+				{"open-pr", "Not started", "-"},
 			},
 		},
 		{
@@ -206,7 +206,7 @@ func TestLogsStepTable(t *testing.T) {
 			var buf bytes.Buffer
 			require.NoError(t, logsFn(&buf, policyClient(t, step), "default", "demo", "", ""))
 			out := buf.String()
-			require.Contains(t, out, "=== demo/prod (b1) [Verified] ===")
+			require.Contains(t, out, "=== demo/prod (b1) [Live] ===")
 
 			if tt.want == nil {
 				assert.NotContains(t, out, "steps:")
@@ -223,7 +223,7 @@ func TestLogsStepTable(t *testing.T) {
 			durCol := strings.Index(lines[0], "DURATION")
 			for i, row := range tt.want {
 				line := lines[2+i]
-				assert.Equal(t, row, strings.Fields(line))
+				assert.Equal(t, row, tableCells(line))
 				assert.Equal(t, durCol, strings.Index(line, " "+row[2])+1,
 					"DURATION column is aligned in %q", line)
 			}
@@ -244,7 +244,7 @@ func TestLogsFollow_StateChangesPrintedOnce(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, logsFollowFn(context.Background(), &out, policyClient(t, verified), "default", "demo", "", ""))
 	assert.Contains(t, out.String(), "[demo/test] git-clone")
-	assert.Contains(t, out.String(), "[demo/test] → Verified\n")
+	assert.Contains(t, out.String(), "[demo/test] → Live\n")
 
 	bare := explainStep("demo", "b1", "uat", "Verified", "", created)
 	running := explainStep("demo", "b1", "prod", "Promoting", "", created)
@@ -252,7 +252,7 @@ func TestLogsFollow_StateChangesPrintedOnce(t *testing.T) {
 	defer cancel()
 	out.Reset()
 	require.NoError(t, logsFollowFn(ctx, &out, policyClient(t, bare, running), "default", "demo", "", ""))
-	assert.Equal(t, 1, strings.Count(out.String(), "[demo/uat] → Verified"), out.String())
+	assert.Equal(t, 1, strings.Count(out.String(), "[demo/uat] → Live"), out.String())
 	assert.Equal(t, 1, strings.Count(out.String(), "[demo/prod] → Promoting"), out.String())
 }
 
@@ -263,7 +263,7 @@ func TestLogsFollow_RollingBackIsTerminal(t *testing.T) {
 	defer cancel()
 	var out bytes.Buffer
 	require.NoError(t, logsFollowFn(ctx, &out, policyClient(t, step), "default", "demo", "", ""))
-	assert.True(t, strings.HasSuffix(out.String(), "[demo/prod] → RollingBack\nAll steps reached terminal state.\n"), out.String())
+	assert.True(t, strings.HasSuffix(out.String(), "[demo/prod] → Rolling back\nAll steps reached terminal state.\n"), out.String())
 }
 
 // --follow waits for the Bundle, not only for the steps that exist: the next
@@ -292,7 +292,7 @@ func TestLogsFollow_WaitsForInFlightBundle(t *testing.T) {
 	out := follow(t, 2500*time.Millisecond, "", "", step, bundle("b1", "Promoting"))
 	assert.True(t, strings.HasSuffix(out, "\nStopped.\n"), "a Promoting Bundle keeps --follow running:\n%s", out)
 	assert.NotContains(t, out, done)
-	assert.Equal(t, 1, strings.Count(out, "[demo/test] → Verified\n"), out)
+	assert.Equal(t, 1, strings.Count(out, "[demo/test] → Live\n"), out)
 
 	for _, tc := range []struct {
 		name, env, bundle string
