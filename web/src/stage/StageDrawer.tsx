@@ -7,8 +7,8 @@
 // "details". The open/close contract with the station map is #1701: the page
 // owns node=<env> and section=, the drawer calls onClose and onNavigate, and
 // the map returns focus to the station. At the lg breakpoint and wider the
-// drawer is a non-modal column beside the map; narrower, a modal sheet with
-// trapped focus. Esc closes an open action dialog first, then the drawer.
+// drawer is a non-modal column beside the page (the page gives up its
+// width); narrower, a modal sheet with trapped focus. Esc closes an open action dialog first, then the drawer.
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { displayState, type Tone } from '../displayStates.gen'
@@ -16,8 +16,8 @@ import { formatElapsedSince } from '../timeFormat'
 import { breakpoint } from '../tokens'
 import type { Bundle, Pipeline, PolicyGate, PromotionStep, StepEvent } from '../types'
 import { useModalFocus } from '../useModalFocus'
-import { ACTION_LABEL, StageActions } from './StageActions'
-import { stageView, type StageActionKind, type WaitReason } from './stageModel'
+import { ACTION_LABEL, DESTRUCTIVE, StageActions } from './StageActions'
+import { gateDisplay, gateLabel, stageView, type StageActionKind, type WaitReason } from './stageModel'
 import '../styles/StageDrawer.css'
 
 export type StageSection = 'why' | 'actions' | 'evidence' | 'history'
@@ -55,8 +55,15 @@ export function StageDrawer(props: StageDrawerProps) {
   return wide ? <DrawerColumn {...props} /> : <DrawerSheet {...props} />
 }
 
+/** While a drawer column is open the page gives up its width (StageDrawer.css). */
+const OPEN_CLASS = 'k-stage-drawer-open'
+
 function DrawerColumn(props: StageDrawerProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
+  useEffect(() => {
+    document.documentElement.classList.add(OPEN_CLASS)
+    return () => document.documentElement.classList.remove(OPEN_CLASS)
+  }, [])
   return (
     <aside className="stage-drawer" data-testid="stage-drawer" aria-labelledby={`stage-drawer-${props.env}`}
       onKeyDown={e => {
@@ -88,12 +95,15 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
   const view = useMemo(() => p ? stageView({ env, pipeline: p, bundles: data.bundles, steps: data.steps, gates: data.gates }) : undefined,
     [env, p, data.bundles, data.steps, data.gates])
   const [action, setAction] = useState<StageActionKind>()
-  const open = (k: StageActionKind | undefined) => { setAction(k); onDialog?.(!!k) }
+  const [actionGate, setActionGate] = useState<PolicyGate>()
+  const open = (k: StageActionKind | undefined, gate?: PolicyGate) => { setAction(k); setActionGate(gate); onDialog?.(!!k) }
   const sectionRefs = useRef<Record<string, HTMLElement | null>>({})
   useEffect(() => {
     if (section) sectionRefs.current[section]?.scrollIntoView?.({ block: 'start' })
   }, [section, env])
   const headingId = `stage-drawer-${env}`
+  // Actions shown next to their reason; the action row does not repeat them.
+  const inline = useMemo(() => new Set((view?.why ?? []).map(w => w.next).filter((k): k is StageActionKind => !!k)), [view])
   const fleet = p?.environmentTopology?.find(n => n.name === env)?.fleet
 
   return (
@@ -128,10 +138,9 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
           <div className="stage-drawer__status">
             <StateChip label={view.state.label} tone={view.state.tone} glyph={view.state.glyph} />
             <dl className="stage-versions">
-              <div><dt>Running</dt><dd>{view.running ? <span className="stage-version">{view.running.version}</span> : 'nothing yet'}
+              <div><dt>Running</dt><dd>{view.running ? <Version {...view.running} /> : 'nothing yet'}
                 {view.running?.verifiedAt && <span className="stage-muted"> · live {formatElapsedSince(view.running.verifiedAt, now)}</span>}</dd></div>
-              {view.incoming && <div><dt>Incoming</dt><dd><span className="stage-version">{view.incoming.version}</span>
-                <span className="stage-muted"> · {view.incoming.bundle}</span></dd></div>}
+              {view.incoming && <div><dt>Incoming</dt><dd><Version {...view.incoming} /></dd></div>}
             </dl>
           </div>
 
@@ -140,14 +149,14 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
             {view.why.length === 0
               ? <p className="stage-muted">{view.running && !view.incoming ? `Nothing is waiting: ${view.running.version} is live.` : `${view.state.label}.`}</p>
               : <ol className="stage-why">{view.why.map((w, i) => (
-                  <WhyItem key={i} reason={w} now={now} onAct={k => open(k)} onUpstream={u => onNavigate(u, 'why')}
+                  <WhyItem key={i} reason={w} now={now} primary={view.primary} onAct={k => open(k, w.gate)} onUpstream={u => onNavigate(u, 'why')}
                     upstreams={view.spec?.upstreams ?? []} />))}
                 </ol>}
           </section>
 
           <section className="stage-section" data-section="actions" ref={el => { sectionRefs.current.actions = el }} aria-labelledby={`${headingId}-actions`}>
             <h3 id={`${headingId}-actions`} className="stage-section__title">Actions</h3>
-            <StageActions view={view} pipeline={pipeline} namespace={namespace} active={action} onOpen={open} onChanged={onChanged} />
+            <StageActions view={view} pipeline={pipeline} namespace={namespace} active={action} activeGate={actionGate} onOpen={open} onChanged={onChanged} inline={inline} />
           </section>
 
           <section className="stage-section" data-section="evidence" ref={el => { sectionRefs.current.evidence = el }} aria-labelledby={`${headingId}-evidence`}>
@@ -170,8 +179,18 @@ function StateChip({ label, tone, glyph }: { label: string; tone: Tone; glyph?: 
   return <span className={`stage-chip stage-chip--${tone}`}>{glyph && <span aria-hidden="true">{glyph} </span>}{label}</span>
 }
 
-function WhyItem({ reason: w, now, onAct, onUpstream, upstreams }: { reason: WaitReason; now: number; onAct: (k: StageActionKind) => void;
-  onUpstream: (env: string) => void; upstreams: string[] }) {
+/** A version as people know it (the tag), with the Bundle name after it only when it says something more. */
+function Version({ version, bundle }: { version: string; bundle: string }) {
+  return (
+    <>
+      <span className="stage-version">{version}</span>
+      {bundle !== version && <span className="stage-muted"> · {bundle}</span>}
+    </>
+  )
+}
+
+function WhyItem({ reason: w, now, primary, onAct, onUpstream, upstreams }: { reason: WaitReason; now: number; primary?: StageActionKind;
+  onAct: (k: StageActionKind) => void; onUpstream: (env: string) => void; upstreams: string[] }) {
   const age = formatElapsedSince(w.evaluatedAt, now)
   return (
     <li className={`stage-why__item stage-why__item--${w.kind}`}>
@@ -188,7 +207,9 @@ function WhyItem({ reason: w, now, onAct, onUpstream, upstreams }: { reason: Wai
           <button key={u} type="button" className="stage-link" onClick={() => onUpstream(u)}>Open {u}</button>
         ))}
         {w.next && w.next !== 'openPR' && (
-          <button type="button" className="stage-button stage-button--secondary stage-button--sm" onClick={() => onAct(w.next!)}>
+          <button type="button" data-action={w.next}
+            className={`stage-button stage-button--sm stage-button--${w.next === primary ? 'primary' : DESTRUCTIVE.has(w.next) ? 'destructive' : 'secondary'}`}
+            onClick={() => onAct(w.next!)}>
             {ACTION_LABEL[w.next]}
           </button>
         )}
@@ -197,7 +218,7 @@ function WhyItem({ reason: w, now, onAct, onUpstream, upstreams }: { reason: Wai
       {w.gate && (
         <details className="stage-details">
           <summary>Details</summary>
-          <p className="stage-muted">Gate {w.gate.name} in {w.gate.namespace}</p>
+          <p className="stage-muted">Gate instance {w.gate.name} in {w.gate.namespace}</p>
           <pre className="stage-code"><code>{w.gate.expression}</code></pre>
         </details>
       )}
@@ -217,7 +238,7 @@ function Images({ bundle }: { bundle?: Bundle }) {
 }
 
 function Evidence({ step, gates, now }: { step?: PromotionStep; gates: PolicyGate[]; now: number }) {
-  if (!step) return <p className="stage-muted">No promotion has reached this environment yet.</p>
+  if (!step) return <p className="stage-muted">Evidence appears when this environment gets its first promotion: the steps it ran, its bake time and its gates.</p>
   return (
     <>
       {step.steps && step.steps.length > 0 && (
@@ -239,9 +260,9 @@ function Evidence({ step, gates, now }: { step?: PromotionStep; gates: PolicyGat
       {step.message && <p className="stage-why__detail">{step.message}</p>}
       {gates.length > 0 && (
         <ul className="stage-gates">{gates.map(g => {
-          const d = displayState('gate', g.state)
+          const d = gateDisplay(g)
           return (
-            <li key={g.name}><StateChip label={d.label} tone={d.tone} glyph={d.glyph} /> <span>{g.name}</span>
+            <li key={g.name}><StateChip label={d.label} tone={d.tone} glyph={d.glyph} /> <span title={g.name}>{gateLabel(g)}</span>
               {g.lastEvaluatedAt && <span className="stage-muted"> · {formatElapsedSince(g.lastEvaluatedAt, now)} ago</span>}</li>
           )
         })}</ul>
@@ -270,10 +291,10 @@ function History({ namespace, step, now }: { namespace: string; step?: Promotion
       .catch(e => { if (live) setError(e instanceof Error ? e.message : String(e)) })
     return () => { live = false }
   }, [namespace, step?.name, step?.state])
-  if (!step) return <p className="stage-muted">Nothing has happened here yet.</p>
+  if (!step) return <p className="stage-muted">Events appear here once a promotion starts in this environment.</p>
   if (error) return <p className="stage-muted">The events could not be read: {error}</p>
   if (!events) return <p className="stage-muted">Loading events…</p>
-  if (events.length === 0) return <p className="stage-muted">No events.</p>
+  if (events.length === 0) return <p className="stage-muted">No events yet. They appear as the promotion runs.</p>
   return (
     <ol id={listId} className="stage-events">{events.map((e, i) => (
       <li key={i} className={e.type === 'Warning' ? 'stage-events__item stage-events__item--warning' : 'stage-events__item'}>

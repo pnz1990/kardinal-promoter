@@ -26,14 +26,26 @@ test.describe('Journey 019 — Stage drawer', () => {
     const drawer = page.getByTestId('stage-drawer')
     await expect(drawer).toBeVisible()
     await expect(page).toHaveURL(/node=prod/)
+    // At lg and wider the drawer sits beside the page: the page gives up its column.
+    const reserved = await page.evaluate(() => {
+      const main = document.getElementById('main-content') as HTMLElement
+      const d = document.querySelector('[data-testid="stage-drawer"]') as HTMLElement
+      return { pad: parseFloat(getComputedStyle(main).paddingRight), drawer: d.getBoundingClientRect().width,
+        mainEnd: main.getBoundingClientRect().right - parseFloat(getComputedStyle(main).paddingRight), drawerStart: d.getBoundingClientRect().left }
+    })
+    expect(Math.abs(reserved.pad - reserved.drawer)).toBeLessThan(2)
+    expect(reserved.mainEnd).toBeLessThanOrEqual(reserved.drawerStart + 1)
     const why = drawer.locator('[data-section="why"]')
     await expect(why.getByRole('heading', { name: 'Why it’s waiting' })).toBeVisible()
-    await expect(why).toContainText('Needs 1 more approval (1 of 2)')
+    await expect(why).toContainText('Needs 1 more approval (1 of 2) in release-approval.')
+    await expect(drawer).toContainText('Waiting for approval in release-approval')
+    await expect(drawer).toContainText('6.14.1')
     await expect(why).toContainText('waiting for approvals: 1 of 2 (alice)')
     await expect(why).toContainText(/evaluated \d+s ago/)
-    // 2: Approve.
-    await drawer.locator('[data-section="actions"] [data-action="approve"]').click(); clicks++
-    const dialog = page.getByRole('dialog', { name: 'Approve payments-service-def456 for prod?' })
+    // 2: Approve, next to its reason (offered once).
+    await expect(drawer.locator('[data-action="approve"]')).toHaveCount(1)
+    await why.locator('[data-action="approve"]').click(); clicks++
+    const dialog = page.getByRole('dialog', { name: 'Approve 6.14.1 for prod?' })
     await expect(dialog).toBeVisible()
     expect(clicks).toBeLessThanOrEqual(2)
     await axe(page)
@@ -48,7 +60,7 @@ test.describe('Journey 019 — Stage drawer', () => {
     await page.getByRole('button', { name: /^payments-service prod:/ }).click()
     const drawer = page.getByTestId('stage-drawer')
     await drawer.locator('[data-action="reject"]').click()
-    const dialog = page.getByRole('dialog', { name: /^Reject payments-service-def456 for prod\?$/ })
+    const dialog = page.getByRole('dialog', { name: /^Decline 6\.14\.1 for prod\?$/ })
     await expect(dialog).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(dialog).toBeHidden()

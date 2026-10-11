@@ -24,15 +24,20 @@
   flex-shrink: 0;
 }
 
-/* At lg and wider the drawer is a non-modal side panel pinned to the viewport,
-   so opening a stage from anywhere on the page shows it at once. */
+/* At lg and wider the drawer is a non-modal column pinned to the viewport's
+   end, and the page gives up that column while it is open
+   (.k-stage-drawer-open), so the drawer sits beside the page, not over it. */
 .stage-drawer:not(.stage-drawer--sheet) {
   position: fixed;
   inset-block: 0;
   inset-inline-end: 0;
   max-block-size: none;
   z-index: var(--k-z-drawer);
-  box-shadow: var(--k-elev-3);
+  box-shadow: var(--k-elev-2);
+}
+
+.k-stage-drawer-open #main-content {
+  padding-inline-end: var(--k-layout-drawer);
 }
 
 .stage-drawer__scrim {
@@ -122,11 +127,27 @@
   padding-block-start: var(--k-space-4);
 }
 
-.stage-section__title {
+.stage-section__title,
+.stage-eyebrow {
   margin: 0;
-  font-size: var(--k-text-md);
-  line-height: var(--k-leading-md);
-  font-weight: var(--k-weight-section);
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-2xs);
+  line-height: var(--k-leading-xs);
+  font-weight: var(--k-weight-semibold);
+  font-stretch: 87.5%;
+  letter-spacing: var(--k-tracking-caps);
+  text-transform: uppercase;
+  color: var(--k-ink-3);
+}
+
+/* "Whole pipeline": the pipeline-wide actions, set apart and quieter. */
+.stage-pipeline-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--k-space-2);
+  margin-block-start: var(--k-space-4);
+  padding-block-start: var(--k-space-3);
+  border-block-start: var(--k-border-hairline) dashed var(--k-line);
 }
 
 .stage-muted {
@@ -140,7 +161,7 @@
   gap: var(--k-space-1);
   align-self: flex-start;
   padding: var(--k-space-px) var(--k-space-2);
-  border-radius: var(--k-radius-pill);
+  border-radius: var(--k-radius-1);
   font-size: var(--k-text-xs);
   line-height: var(--k-leading-xs);
   font-weight: var(--k-weight-medium);
@@ -259,8 +280,21 @@
 }
 
 .stage-button--destructive {
+  background: transparent;
   color: var(--k-status-failed-fg);
   border-color: var(--k-status-failed-fg);
+}
+
+/* A pipeline-wide action: text-weight, no outline; its dialog carries the warning. */
+.stage-button--quiet {
+  min-block-size: var(--k-control-sm);
+  padding: 0 var(--k-space-3);
+  border-color: transparent;
+  background: transparent;
+  color: var(--k-ink-2);
+  font-size: var(--k-text-xs);
+  text-decoration: underline;
+  text-underline-offset: var(--k-space-1);
 }
 
 .stage-button:disabled {

@@ -27,14 +27,18 @@ const b = (name: string, tag: string, created: string, prod?: string): Bundle =>
 const bundles = [b('web-1', '1.3.0', '2026-10-01T00:00:00Z', 'Verified'), b('web-2', '1.4.0', '2026-10-05T00:00:00Z', 'Verified'),
   { ...b('web-3', '1.5.0', '2026-10-09T00:00:00Z'), phase: 'Promoting' }]
 const approvalGate: PolicyGate = { name: 'two-approvers--web-3-prod', namespace: 'team', expression: 'bundle.approvals >= 2', ready: false,
-  pipeline: 'web', bundle: 'web-3', environment: 'prod', state: 'Block', holding: true, reason: '1 of 2 approvals',
+  pipeline: 'web', bundle: 'web-3', environment: 'prod', gateTemplate: 'two-approvers', maxOverrideMinutes: 1440,
+  state: 'Block', holding: true, reason: '1 of 2 approvals',
   lastEvaluatedAt: '2026-10-11T09:00:00Z', approval: { required: 2, approved: 1, decisions: [{ user: 'bob', decision: 'approve', counted: true }] } }
 const freeze: PolicyGate = { name: 'no-weekend--web-3-prod', namespace: 'team', expression: '!schedule.isWeekend', ready: false,
-  pipeline: 'web', bundle: 'web-3', environment: 'prod', state: 'Block', holding: true, reason: 'weekend deploys are frozen',
+  pipeline: 'web', bundle: 'web-3', environment: 'prod', gateTemplate: 'no-weekend', maxOverrideMinutes: 1440,
+  state: 'Block', holding: true, reason: 'weekend deploys are frozen',
   lastEvaluatedAt: '2026-10-11T09:01:00Z' }
 const step: PromotionStep = { name: 'web-web-3-prod', namespace: 'team', pipeline: 'web', bundle: 'web-3', environment: 'prod',
   stepType: 'auto', state: 'Pending', conditions: [{ type: 'Ready', status: 'False', reason: 'Held' }] }
 
+/** A button next to a reason in "Why it's waiting". */
+const reasonButton = (name: string) => within(document.querySelector('[data-section="why"]') as HTMLElement).getByRole('button', { name })
 /** An action button of the Actions section. */
 const action = (name: string) => within(document.querySelector('[data-section="actions"]') as HTMLElement).getByRole('button', { name })
 
@@ -58,13 +62,49 @@ describe('StageDrawer (U3)', () => {
     expect(sections).toEqual(['why', 'actions', 'evidence', 'history'])
     const why = within(drawer.querySelector('[data-section="why"]') as HTMLElement)
     expect(why.getByRole('heading', { name: 'Why it’s waiting' })).toBeInTheDocument()
-    expect(why.getByText('Needs 1 more approval (1 of 2) in two-approvers--web-3-prod.')).toBeInTheDocument()
-    expect(why.getByText('Held by gate no-weekend--web-3-prod.')).toBeInTheDocument()
+    // Gates read as the user named them; the generated instance name is under Details.
+    expect(why.getByText('Needs 1 more approval (1 of 2) in two-approvers.')).toBeInTheDocument()
+    expect(why.getByText('Held by gate no-weekend.')).toBeInTheDocument()
     expect(why.getByText('weekend deploys are frozen')).toBeInTheDocument()
     expect(why.getByText('evaluated 2m 0s ago')).toBeInTheDocument()
-    expect(screen.getByText('Held by gate two-approvers--web-3-prod')).toBeInTheDocument()
+    expect(why.getByText('Gate instance two-approvers--web-3-prod in team')).toBeInTheDocument()
+    // A CEL gate blocks, so the environment reads as held by it.
+    expect(screen.getByText('Held by gate no-weekend')).toBeInTheDocument()
     expect(screen.getByText('1.4.0')).toBeInTheDocument()
     expect(screen.getByText('1.5.0')).toBeInTheDocument()
+  })
+
+  it('an approval gate collecting its quorum reads as waiting, not blocked', () => {
+    renderDrawer([approvalGate])
+    const chip = screen.getByText('Waiting for approval in two-approvers')
+    expect(chip.closest('.stage-chip')).toHaveClass('stage-chip--waiting')
+    const evidence = within(document.querySelector('[data-section="evidence"]') as HTMLElement)
+    expect(evidence.getByText('Waiting for approval')).toBeInTheDocument()
+  })
+
+  it('shows the version once: the Bundle name only when it says something more', () => {
+    const same: Bundle = { ...b('web-3', 'web-3', '2026-10-09T00:00:00Z'), phase: 'Promoting', version: 'web-3' }
+    renderDrawer([], { data: { pipeline, bundles: [same], steps: [], gates: [] } })
+    expect(screen.getAllByText('web-3')).toHaveLength(1)
+  })
+
+  it('offers Approve once, next to its reason; one primary; pipeline-wide actions apart and quiet', () => {
+    renderDrawer([approvalGate])
+    expect(screen.getAllByRole('button', { name: 'Approve' })).toHaveLength(1)
+    expect(reasonButton('Approve')).toHaveClass('stage-button--primary')
+    expect(document.querySelectorAll('.stage-button--primary')).toHaveLength(1)
+    expect(action('Decline')).toHaveClass('stage-button--destructive')
+    const pipelineWide = document.querySelector('.stage-pipeline-actions') as HTMLElement
+    expect(within(pipelineWide).getByText('Whole pipeline')).toBeInTheDocument()
+    for (const name of ['Pause pipeline', 'Reject version']) {
+      expect(within(pipelineWide).getByRole('button', { name })).toHaveClass('stage-button--quiet')
+    }
+  })
+
+  it('says what evidence and history will show before the first promotion', () => {
+    renderDrawer([], { data: { pipeline, bundles, steps: [], gates: [] } })
+    expect(screen.getByText(/Evidence appears when this environment gets its first promotion/)).toBeInTheDocument()
+    expect(screen.getByText('Events appear here once a promotion starts in this environment.')).toBeInTheDocument()
   })
 
   it('keeps raw CEL and conditions behind Details', () => {
@@ -78,8 +118,8 @@ describe('StageDrawer (U3)', () => {
     const user = userEvent.setup()
     api.recordApproval.mockResolvedValue({ outcome: 'Recorded', approval: 'a', user: 'alice', message: 'alice approves web-3 for prod' })
     const props = renderDrawer()
-    await user.click(action('Approve'))
-    const dialog = screen.getByRole('dialog', { name: 'Approve web-3 for prod?' })
+    await user.click(reasonButton('Approve'))
+    const dialog = screen.getByRole('dialog', { name: 'Approve 1.5.0 for prod?' })
     expect(dialog).toHaveTextContent('1 of 2 so far')
     await user.type(within(dialog).getByLabelText('Comment (optional)'), 'canary clean')
     await user.click(within(dialog).getByRole('button', { name: 'Approve' }))
@@ -89,22 +129,28 @@ describe('StageDrawer (U3)', () => {
     expect(props.onChanged).toHaveBeenCalledOnce()
   })
 
-  it('reject asks first; Cancel sends nothing', async () => {
+  it('decline asks first; Cancel sends nothing; Decline records a reject decision', async () => {
     const user = userEvent.setup()
+    api.recordApproval.mockResolvedValue({ outcome: 'Recorded', approval: 'a', user: 'alice', message: 'alice rejects web-3 for prod' })
     renderDrawer()
-    await user.click(action('Reject'))
-    const dialog = screen.getByRole('dialog', { name: 'Reject web-3 for prod?' })
+    await user.click(action('Decline'))
+    let dialog = screen.getByRole('dialog', { name: 'Decline 1.5.0 for prod?' })
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
     expect(api.recordApproval).not.toHaveBeenCalled()
-    expect(screen.queryByRole('dialog', { name: 'Reject web-3 for prod?' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Decline 1.5.0 for prod?' })).not.toBeInTheDocument()
+    await user.click(action('Decline'))
+    dialog = screen.getByRole('dialog', { name: 'Decline 1.5.0 for prod?' })
+    await user.click(within(dialog).getByRole('button', { name: 'Decline' }))
+    expect(api.recordApproval).toHaveBeenCalledWith(expect.objectContaining({ decision: 'reject' }))
+    expect(await screen.findByRole('status')).toHaveTextContent(/^Declined\./)
   })
 
   it('Esc closes the action dialog first, then the drawer', async () => {
     const user = userEvent.setup()
     const props = renderDrawer()
-    await user.click(action('Approve'))
+    await user.click(reasonButton('Approve'))
     await user.keyboard('{Escape}')
-    expect(screen.queryByRole('dialog', { name: 'Approve web-3 for prod?' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Approve 1.5.0 for prod?' })).not.toBeInTheDocument()
     expect(props.onClose).not.toHaveBeenCalled()
     await user.keyboard('{Escape}')
     expect(props.onClose).toHaveBeenCalledOnce()
@@ -114,8 +160,8 @@ describe('StageDrawer (U3)', () => {
     const user = userEvent.setup()
     api.overrideGate.mockResolvedValue({ message: 'gate overridden', gates: [freeze.name], expiresAt: '' })
     renderDrawer([freeze])
-    await user.click(action('Override gate'))
-    const dialog = screen.getByRole('dialog', { name: `Override ${freeze.name} in prod?` })
+    await user.click(reasonButton('Override gate'))
+    const dialog = screen.getByRole('dialog', { name: 'Override no-weekend in prod?' })
     const confirm = within(dialog).getByRole('button', { name: 'Override gate' })
     expect(confirm).toBeDisabled()
     await user.type(within(dialog).getByLabelText('Reason'), 'P0 hotfix')
@@ -123,6 +169,20 @@ describe('StageDrawer (U3)', () => {
     await user.click(confirm)
     expect(api.overrideGate).toHaveBeenCalledWith({ pipeline: 'web', namespace: 'team', gate: freeze.name, environment: 'prod',
       reason: 'P0 hotfix', expiresInMinutes: 240 })
+  })
+
+  it('override opens on the gate whose reason was clicked, with the controller\'s cap', async () => {
+    const user = userEvent.setup()
+    const hours: PolicyGate = { ...freeze, name: 'business-hours--web-3-prod', gateTemplate: 'business-hours', reason: 'outside 9-17',
+      maxOverrideMinutes: 240 }
+    renderDrawer([freeze, hours])
+    const items = document.querySelectorAll('.stage-why__item')
+    await user.click(within(items[1] as HTMLElement).getByRole('button', { name: 'Override gate' }))
+    const dialog = screen.getByRole('dialog', { name: 'Override business-hours in prod?' })
+    expect(within(dialog).getByLabelText('Gate')).toHaveValue(hours.name)
+    await user.selectOptions(within(dialog).getByLabelText('Gate'), hours.name)
+    const options = [...within(dialog).getByLabelText('For').querySelectorAll('option')].map(o => o.value)
+    expect(options).toEqual(['15', '60', '240'])
   })
 
   it('roll back sends the chosen version (toBundle), and the hold when asked', async () => {
@@ -141,7 +201,7 @@ describe('StageDrawer (U3)', () => {
     const user = userEvent.setup()
     api.rejectBundle.mockResolvedValue({ message: 'bundle web-3 rejected by alice' })
     renderDrawer([])
-    await user.click(action('Reject version'))
+    await user.click(screen.getByRole('button', { name: 'Reject version' }))
     const dialog = screen.getByRole('dialog', { name: 'Reject 1.5.0?' })
     await user.type(within(dialog).getByLabelText('Reason'), 'CVE-2026-1')
     await user.click(within(dialog).getByRole('button', { name: 'Reject version' }))
@@ -151,12 +211,29 @@ describe('StageDrawer (U3)', () => {
 
   it('a failed request says what failed and keeps the dialog', async () => {
     const user = userEvent.setup()
-    api.pause.mockRejectedValue(new Error('POST /api/v1/ui/pause: 403 forbidden'))
+    api.pause.mockRejectedValue(new Error('POST /api/v1/ui/pause: timed out'))
     renderDrawer([])
-    await user.click(action('Pause pipeline'))
+    await user.click(screen.getByRole('button', { name: 'Pause pipeline' }))
     const dialog = screen.getByRole('dialog', { name: 'Pause web?' })
     await user.click(within(dialog).getByRole('button', { name: 'Pause pipeline' }))
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Could not pause web: POST /api/v1/ui/pause: 403 forbidden')
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Could not pause web: POST /api/v1/ui/pause: timed out')
+  })
+
+  it('a 403 says which role grants the action; a 409 shows the server\'s text and how to retry', async () => {
+    const user = userEvent.setup()
+    api.pause.mockRejectedValue(new Error('API error 403: forbidden: user "bob" cannot update pipelines/pause.kardinal.io "web" in namespace team; the chart\'s promoter or admin role grants it'))
+    renderDrawer([])
+    await user.click(screen.getByRole('button', { name: 'Pause pipeline' }))
+    let dialog = screen.getByRole('dialog', { name: 'Pause web?' })
+    await user.click(within(dialog).getByRole('button', { name: 'Pause pipeline' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('You are not allowed to pause web: forbidden: user "bob" cannot update pipelines/pause.kardinal.io "web" in namespace team; the chart\'s promoter or admin role grants it')
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    api.rejectBundle.mockRejectedValue(new Error('API error 409: bundle web-3 is already rejected'))
+    await user.click(screen.getByRole('button', { name: 'Reject version' }))
+    dialog = screen.getByRole('dialog', { name: 'Reject 1.5.0?' })
+    await user.type(within(dialog).getByLabelText('Reason'), 'CVE')
+    await user.click(within(dialog).getByRole('button', { name: 'Reject version' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Could not reject web-3: bundle web-3 is already rejected. Refresh to see the current state, then try again.')
   })
 
   it('a fleet lists its targets, and a target opens through onNavigate', async () => {

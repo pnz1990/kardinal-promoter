@@ -305,6 +305,9 @@ type uiBundleResponse struct {
 	Environments []uiBundleEnvStatus `json:"environments,omitempty"`
 	// #563: Container images in this Bundle — used by NodeDetail diff preview.
 	Images []v1alpha1.ImageRef `json:"images,omitempty"`
+	// Version is what the Bundle ships, for display: status.version, else
+	// scm.BundleVersion of its spec (a Bundle the reconciler has not seen yet).
+	Version string `json:"version,omitempty"`
 	// RejectedLiveEnvironments are the environments where this Rejected
 	// Bundle's change is live (lifecycle.RejectedLiveEnvs): the UI keeps it
 	// current there, marked Rejected, with a roll-back hint.
@@ -416,6 +419,13 @@ type uiGateResponse struct {
 	Pipeline    string `json:"pipeline,omitempty"`
 	Bundle      string `json:"bundle,omitempty"`
 	Environment string `json:"environment,omitempty"`
+	// GateTemplate is the template an instance was made from (its
+	// kardinal.io/gate-template label): the gate's name as the user wrote it,
+	// which the UI shows and POST /override takes. Empty on templates.
+	GateTemplate string `json:"gateTemplate,omitempty"`
+	// MaxOverrideMinutes is the longest override the controller accepts for
+	// an instance (--gate-override-max-minutes). Unset on templates.
+	MaxOverrideMinutes int `json:"maxOverrideMinutes,omitempty"`
 	// Template is true for a PolicyGate template (no kardinal.io/bundle label).
 	// Templates are never evaluated for a bundle and always report ready=false,
 	// so the UI must not count them as blocking.
@@ -911,6 +921,10 @@ func (s *uiAPIServer) handleBundlesForPipeline(w http.ResponseWriter, r *http.Re
 			CreatedAt:  b.CreationTimestamp.Format("2006-01-02T15:04:05Z07:00"),
 			Provenance: b.Spec.Provenance,
 			Images:     b.Spec.Images, // #563: expose images for diff preview
+			Version:    b.Status.Version,
+		}
+		if resp.Version == "" {
+			resp.Version = scm.BundleVersion(b.Spec)
 		}
 		if len(envStatuses) > 0 {
 			resp.Environments = envStatuses
@@ -1318,6 +1332,10 @@ func (s *uiAPIServer) handleGates(w http.ResponseWriter, r *http.Request) {
 			State:       state,
 			Approval:    gateApproval(&g),
 		}
+		if !resp.Template {
+			resp.GateTemplate = g.Labels["kardinal.io/gate-template"]
+			resp.MaxOverrideMinutes = maxGateOverrideMinutes
+		}
 		if g.Status.LastEvaluatedAt != nil {
 			resp.LastEvaluatedAt = g.Status.LastEvaluatedAt.UTC().Format("2006-01-02T15:04:05Z")
 		}
@@ -1537,7 +1555,7 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 	// (policygates/override), not update on the gate: the controller writes it.
 	writer, err := s.actionClient(r.Context(), "policygates", "override", gateNS, gateName)
 	if err != nil {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		s.writeLifecycleError(w, "override gate "+gateName, err)
 		return
 	}
 	// Re-read and re-apply on a conflict: the reconciler and other approvers

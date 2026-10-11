@@ -38,6 +38,24 @@ export interface RollbackChoice {
   verifiedAt?: string
 }
 
+/** The name to show for a gate: the one its user gave it, not the generated
+ *  instance name (that stays under Details). */
+export function gateLabel(g: PolicyGate): string {
+  return g.gateTemplate || g.name
+}
+
+/** Whether g is an approval gate still collecting its quorum (no counted reject). */
+export function awaitingQuorum(g: PolicyGate): boolean {
+  return !!g.approval && !g.approval.rejected && g.approval.approved < g.approval.required
+}
+
+/** The state to show for a gate: an approval gate collecting its quorum is
+ *  waiting on people, not blocked by a rule. */
+export function gateDisplay(g: PolicyGate): DisplayState {
+  if (g.holding && awaitingQuorum(g)) return { ...displayState('gate', 'Waiting'), label: 'Waiting for approval' }
+  return displayState('gate', g.state)
+}
+
 export interface StageView {
   env: string
   /** The fleet this environment is a target of, or its own spec entry. */
@@ -55,6 +73,8 @@ export interface StageView {
   /** Blocking and passing gates of the incoming Bundle in this environment. */
   gates: PolicyGate[]
   actions: Set<StageActionKind>
+  /** The one action the state calls for, when there is one. */
+  primary?: StageActionKind
   rollbackChoices: RollbackChoice[]
 }
 
@@ -89,12 +109,14 @@ export function rollbackChoices(bundles: Bundle[], env: string, running?: string
   return out
 }
 
-/** The version a Bundle ships: its image tag(s), or its name. */
+/** The version a Bundle ships: status.version, else its image tag(s), else its name. */
 export function bundleVersion(b: Bundle): string {
+  if (b.version) return b.version
   const tags = (b.images ?? []).map(i => i.tag || i.digest?.slice(0, 19) || i.repository).filter(Boolean)
   return tags.length > 0 ? tags.join(', ') : b.name
 }
 
+const PRIMARY: StageActionKind[] = ['approve', 'release', 'resume', 'promote', 'openPR']
 const PROMOTABLE = new Set(['NotStarted', 'Failed', 'AbortedByAlarm'])
 const IN_FLIGHT = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'Verifying'])
 
@@ -103,7 +125,9 @@ export function stageView(input: StageInput): StageView {
   const { env, pipeline: p, bundles, steps, gates } = input
   const { spec, fleetOf } = stageSpec(p, env)
   const deployed = p.deployed?.[env]
-  const running = deployed ? { bundle: deployed.bundle, version: deployed.version || deployed.bundle, verifiedAt: deployed.verifiedAt } : undefined
+  const deployedBundle = deployed ? bundles.find(b => b.name === deployed.bundle) : undefined
+  const running = deployed ? { bundle: deployed.bundle, version: deployed.version || (deployedBundle ? bundleVersion(deployedBundle) : deployed.bundle),
+    verifiedAt: deployed.verifiedAt } : undefined
   const active = bundles.find(b => b.name === p.activeBundleName)
   const incoming = active && active.name !== running?.bundle && active.phase !== 'Rejected' && active.phase !== 'Superseded'
     ? { bundle: active.name, version: bundleVersion(active) } : undefined
@@ -129,11 +153,11 @@ export function stageView(input: StageInput): StageView {
       const a = g.approval
       const missing = Math.max(0, a.required - a.approved)
       why.push({ kind: 'approval', gate: g, evaluatedAt: g.lastEvaluatedAt, next: 'approve', detail: g.reason,
-        title: a.rejected ? `Rejected in ${g.name}: a counted reject holds it.`
-          : `Needs ${missing} more approval${missing === 1 ? '' : 's'} (${a.approved} of ${a.required}) in ${g.name}.` })
+        title: a.rejected ? `Rejected in ${gateLabel(g)}: a counted reject holds it.`
+          : `Needs ${missing} more approval${missing === 1 ? '' : 's'} (${a.approved} of ${a.required}) in ${gateLabel(g)}.` })
     } else {
       why.push({ kind: 'gate', gate: g, evaluatedAt: g.lastEvaluatedAt, next: 'override', detail: g.reason,
-        title: `Held by gate ${g.name}.` })
+        title: `Held by gate ${gateLabel(g)}.` })
     }
   }
   if (stepState === 'WaitingForMerge' && step?.prURL) {
@@ -152,7 +176,12 @@ export function stageView(input: StageInput): StageView {
 
   let state = displayState('step', stepState)
   if (hold) state = heldState(stepState)
-  else if (blocking.length > 0) state = heldByGate(stepState, blocking[0].name)
+  else if (blocking.length > 0) {
+    // A CEL gate blocks; an approval gate collecting its quorum waits on people.
+    const cel = blocking.find(g => !awaitingQuorum(g))
+    state = cel ? heldByGate(stepState, gateLabel(cel))
+      : { ...displayState('gate', 'Waiting'), value: stepState, label: `Waiting for approval in ${gateLabel(blocking[0])}` }
+  }
 
   const actions = new Set<StageActionKind>()
   if (blocking.some(g => g.approval)) actions.add('approve').add('reject')
@@ -173,5 +202,11 @@ export function stageView(input: StageInput): StageView {
   if (incoming) actions.add('rejectVersion')
   if (step?.prURL && stepState === 'WaitingForMerge') actions.add('openPR')
 
-  return { env, spec, fleetOf, running, incoming, state, step, why, gates: envGates, actions, rollbackChoices: choices }
+  // One primary action per state: the approval waiting, the hold or pause to
+  // lift, the promotion to start, the PR to merge; a roll back only when the
+  // environment failed. Everything else is secondary.
+  const failed = stepState === 'Failed' || stepState === 'AbortedByAlarm'
+  const primary = PRIMARY.find(k => actions.has(k)) ?? (failed && actions.has('rollback') ? 'rollback' : undefined)
+
+  return { env, spec, fleetOf, running, incoming, state, step, why, gates: envGates, actions, primary, rollbackChoices: choices }
 }

@@ -935,6 +935,37 @@ func TestUIAPI_Bundles_RejectedLiveEnvironments(t *testing.T) {
 	assert.Empty(t, resp[1].RejectedLiveEnvironments)
 }
 
+// TestUIAPI_Bundles_Version: a Bundle's version is status.version, and
+// before the reconciler writes it, what its spec ships; the stage drawer
+// shows it instead of the Bundle name.
+func TestUIAPI_Bundles_Version(t *testing.T) {
+	tests := []struct {
+		name   string
+		spec   v1alpha1.BundleSpec
+		status string
+		want   string
+	}{
+		{"status version", v1alpha1.BundleSpec{Pipeline: "app", Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/o/app", Tag: "1.2.0"}}}, "6.14.1", "6.14.1"},
+		{"not written yet: the image tag", v1alpha1.BundleSpec{Pipeline: "app", Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/o/app", Tag: "1.2.0"}}}, "", "1.2.0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := &v1alpha1.Bundle{
+				ObjectMeta: metav1.ObjectMeta{Name: "app-1", Namespace: "default", CreationTimestamp: metav1.NewTime(time.Now())},
+				Spec:       tt.spec,
+				Status:     v1alpha1.BundleStatus{Phase: "Promoting", Version: tt.status},
+			}
+			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(b).Build()
+			rec := uiReadGet(t, c, "/api/v1/ui/pipelines/app/bundles")
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			var resp []uiBundleResponse
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			require.Len(t, resp, 1)
+			assert.Equal(t, tt.want, resp[0].Version)
+		})
+	}
+}
+
 // TestUIAPI_Bundles_RejectedLiveRetired (QA #1489, #1492): a Bundle rejected
 // after its Graph was retired has no PromotionSteps any more; its
 // status.retiredSteps still say where its change is live.

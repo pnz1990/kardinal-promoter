@@ -2,61 +2,81 @@
 // Licensed under the Apache License, Version 2.0
 //
 // stage/StageActions.tsx — the incident actions of one environment, each
-// behind a confirmation dialog: approve or reject for an approval gate (with
-// its quorum), override a gate, roll back to a chosen version (toBundle,
-// optionally held), release a hold, pause or resume the pipeline, and reject
-// the version on its way in. Only the actions that make sense now are shown
-// (stageView). The button, the dialog's confirm button and the result
-// message use the same verb.
+// behind a confirmation dialog: approve or decline for an approval gate (with
+// its quorum), override a gate, promote, roll back to a chosen version
+// (toBundle, optionally held) and release a hold; and, under "Whole pipeline",
+// pause or resume the pipeline and reject the version on its way in. Only the
+// actions that make sense now are shown (stageView), and one of them is the
+// primary. The button, the dialog's confirm button and the result message
+// use the same verb.
 import { useId, useState } from 'react'
 import { api } from '../api/client'
 import { actionErrorMessage } from '../components/ConfirmDialog'
-import { maxOverrideMinutes } from './overrideLimits'
-import type { StageActionKind, StageView } from './stageModel'
+import type { PolicyGate } from '../types'
+import { overrideChoices } from './overrideLimits'
+import { gateLabel, type StageActionKind, type StageView } from './stageModel'
 import { StageDialog } from './StageDialog'
 
 interface Props {
   view: StageView
   pipeline: string
   namespace: string
-  /** The action to open (from a "why" reason), or undefined. */
+  /** The action to open (from a "why" reason or a button), or undefined. */
   active: StageActionKind | undefined
-  onOpen: (kind: StageActionKind | undefined) => void
+  /** The gate the action was opened for (a reason's gate), if any. */
+  activeGate?: PolicyGate
+  onOpen: (kind: StageActionKind | undefined, gate?: PolicyGate) => void
   /** Called after an action succeeds, so the page refreshes. */
   onChanged?: () => void
+  /** Actions already offered next to their reason: not repeated in the row. */
+  inline?: Set<StageActionKind>
 }
 
 /** The button label of each action; the dialog and the result use the same verb. */
 export const ACTION_LABEL: Record<StageActionKind, string> = {
-  approve: 'Approve', reject: 'Reject', override: 'Override gate', promote: 'Promote', rollback: 'Roll back',
+  approve: 'Approve', reject: 'Decline', override: 'Override gate', promote: 'Promote', rollback: 'Roll back',
   release: 'Release hold', pause: 'Pause pipeline', resume: 'Resume pipeline', rejectVersion: 'Reject version',
   openPR: 'Open pull request',
 }
 
-const ORDER: StageActionKind[] = ['approve', 'reject', 'override', 'promote', 'openPR', 'rollback', 'release', 'rejectVersion', 'pause', 'resume']
-const DESTRUCTIVE = new Set<StageActionKind>(['reject', 'rollback', 'rejectVersion', 'pause'])
+/** This environment's actions, in the order the row shows them. */
+const ENV_ORDER: StageActionKind[] = ['approve', 'promote', 'release', 'openPR', 'override', 'rollback', 'reject']
+/** Actions on the whole pipeline or the version everywhere: quiet buttons, garnet only in their dialog. */
+const PIPELINE_ORDER: StageActionKind[] = ['resume', 'pause', 'rejectVersion']
+/** Actions that undo or refuse something here: garnet outline, never the thread's red. */
+export const DESTRUCTIVE = new Set<StageActionKind>(['reject', 'rollback'])
 
-export function StageActions({ view, pipeline, namespace, active, onOpen, onChanged }: Props) {
+export function StageActions({ view, pipeline, namespace, active, activeGate, onOpen, onChanged, inline }: Props) {
   const [result, setResult] = useState<string>()
-  const kinds = ORDER.filter(k => view.actions.has(k))
-  if (kinds.length === 0) return <p className="stage-muted">No action applies here right now.</p>
+  const envKinds = ENV_ORDER.filter(k => view.actions.has(k) && !inline?.has(k))
+  const primary = view.primary && envKinds.includes(view.primary) ? view.primary : undefined
+  const ordered = primary ? [primary, ...envKinds.filter(k => k !== primary)] : envKinds
+  const pipelineKinds = PIPELINE_ORDER.filter(k => view.actions.has(k))
   const prURL = view.step?.prURL
+  const button = (k: StageActionKind, style: 'primary' | 'secondary' | 'destructive' | 'quiet') => k === 'openPR' && prURL
+    ? <a key={k} data-action={k} className={`stage-button stage-button--${style}`} href={prURL} target="_blank" rel="noreferrer">
+        {ACTION_LABEL[k]}
+      </a>
+    : <button key={k} type="button" data-action={k} className={`stage-button stage-button--${style}`}
+        onClick={() => { setResult(undefined); onOpen(k) }}>
+        {ACTION_LABEL[k]}
+      </button>
   return (
     <>
-      <div className="stage-actions">
-        {kinds.map(k => k === 'openPR' && prURL
-          ? <a key={k} data-action={k} className="stage-button stage-button--secondary" href={prURL} target="_blank" rel="noreferrer">
-              {ACTION_LABEL[k]}
-            </a>
-          : <button key={k} type="button" data-action={k}
-              className={`stage-button ${k === 'approve' || k === 'promote' ? 'stage-button--primary' : DESTRUCTIVE.has(k) ? 'stage-button--destructive' : 'stage-button--secondary'}`}
-              onClick={() => { setResult(undefined); onOpen(k) }}>
-              {ACTION_LABEL[k]}
-            </button>)}
-      </div>
+      {ordered.length > 0
+        ? <div className="stage-actions">{ordered.map(k => button(k, k === primary ? 'primary' : DESTRUCTIVE.has(k) ? 'destructive' : 'secondary'))}</div>
+        : <p className="stage-muted">{inline && inline.size > 0
+            ? 'Use the button next to each reason above.'
+            : `Nothing to do in ${view.env} right now.`}</p>}
+      {pipelineKinds.length > 0 && (
+        <div className="stage-pipeline-actions">
+          <p className="stage-eyebrow">Whole pipeline</p>
+          <div className="stage-actions">{pipelineKinds.map(k => button(k, 'quiet'))}</div>
+        </div>
+      )}
       {result && <p role="status" className="stage-result">{result}</p>}
       {active && active !== 'openPR' && (
-        <ActionDialog kind={active} view={view} pipeline={pipeline} namespace={namespace}
+        <ActionDialog kind={active} view={view} pipeline={pipeline} namespace={namespace} gate={activeGate}
           onCancel={() => onOpen(undefined)}
           onDone={msg => { setResult(msg); onOpen(undefined); onChanged?.() }} />
       )}
@@ -64,28 +84,60 @@ export function StageActions({ view, pipeline, namespace, active, onOpen, onChan
   )
 }
 
+/**
+ * What a failed action says: how to fix it. A 403 carries the controller's
+ * text, which names the permission and the role that grants it; a 409 the
+ * conflict as the server put it.
+ */
+export function stageErrorMessage(action: string, err: unknown): string {
+  const text = err instanceof Error ? err.message : String(err)
+  const m = /^API error (\d+): ([\s\S]*)$/.exec(text)
+  if (!m) return actionErrorMessage(action, err)
+  const [, code, body] = m
+  const detail = body.trim()
+  switch (code) {
+    case '403':
+      return /role/.test(detail)
+        ? `You are not allowed to ${action}: ${detail}`
+        : `You are not allowed to ${action}${detail ? ` (${detail})` : ''}. Ask an admin for the kardinal role that grants it (promoter, approver or admin).`
+    case '409':
+      return `Could not ${action}: ${detail}. Refresh to see the current state, then try again.`
+    case '401':
+      return `Could not ${action}: your session ended. Sign in again, then retry.`
+    default:
+      return `Could not ${action}: ${detail}`
+  }
+}
+
 interface DialogProps {
   kind: Exclude<StageActionKind, 'openPR'>
   view: StageView
   pipeline: string
   namespace: string
+  /** The gate the action was opened for, if any. */
+  gate?: PolicyGate
   onCancel: () => void
   onDone: (message: string) => void
 }
 
-function ActionDialog({ kind, view, pipeline, namespace, onCancel, onDone }: DialogProps) {
+function ActionDialog({ kind, view, pipeline, namespace, gate: openedFor, onCancel, onDone }: DialogProps) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
   const [text, setText] = useState('')
   const approvalGates = view.gates.filter(g => g.holding && g.approval)
   const plainGates = view.gates.filter(g => g.holding && !g.approval)
-  const [gate, setGate] = useState(plainGates[0]?.name ?? '')
+  const [gate, setGate] = useState((openedFor && !openedFor.approval ? openedFor : plainGates[0])?.name ?? '')
   const [minutes, setMinutes] = useState(60)
   const [toBundle, setToBundle] = useState(view.rollbackChoices[0]?.bundle ?? '')
   const [hold, setHold] = useState(false)
   const ids = { text: useId(), gate: useId(), minutes: useId(), to: useId(), hold: useId() }
   const env = view.env
   const incoming = view.incoming?.bundle ?? ''
+  const gateShown = plainGates.find(g => g.name === gate)
+  const gateName = gateShown ? gateLabel(gateShown) : ''
+  const durations = overrideChoices(gateShown)
+  const duration = durations.includes(minutes) ? minutes : durations[0]
+  const shown = view.incoming?.version ?? incoming
   const run = async (what: string, call: () => Promise<{ message: string }>, done: string) => {
     setBusy(true)
     setError(undefined)
@@ -93,7 +145,7 @@ function ActionDialog({ kind, view, pipeline, namespace, onCancel, onDone }: Dia
       const res = await call()
       onDone(`${done}. ${res.message}`)
     } catch (err) {
-      setError(actionErrorMessage(what, err))
+      setError(stageErrorMessage(what, err))
     } finally {
       setBusy(false)
     }
@@ -109,41 +161,41 @@ function ActionDialog({ kind, view, pipeline, namespace, onCancel, onDone }: Dia
   switch (kind) {
     case 'approve':
     case 'reject': {
-      const g = approvalGates[0]
+      const g = openedFor?.approval ? openedFor : approvalGates[0]
       const a = g?.approval
       const approve = kind === 'approve'
       return (
-        <StageDialog {...common} title={`${approve ? 'Approve' : 'Reject'} ${incoming} for ${env}?`}
+        <StageDialog {...common} title={`${approve ? 'Approve' : 'Decline'} ${shown} for ${env}?`}
           description={approve
-            ? `Your approval counts toward ${g?.name ?? 'the approval gate'}${a ? `: ${a.approved} of ${a.required} so far` : ''}. ${env} starts once the quorum is met and the other gates pass.`
-            : `Your reject holds ${g?.name ?? 'the approval gate'}: ${incoming} does not reach ${env} while it counts.`}
-          confirmLabel={approve ? 'Approve' : 'Reject'} tone={approve ? 'default' : 'destructive'}
-          onConfirm={() => void run(`${kind} ${incoming} for ${env}`, () => api.recordApproval({ bundle: incoming, environment: env, namespace,
-            decision: kind, comment: text.trim() || undefined }), approve ? 'Approved' : 'Rejected')}>
+            ? `Your approval counts toward ${g ? gateLabel(g) : 'the approval gate'}${a ? `: ${a.approved} of ${a.required} so far` : ''}. ${env} starts once the quorum is met and the other gates pass.`
+            : `Your decline holds ${g ? gateLabel(g) : 'the approval gate'}: ${shown} does not reach ${env} while it counts. It does not reject the version elsewhere.`}
+          confirmLabel={approve ? 'Approve' : 'Decline'} tone={approve ? 'default' : 'destructive'}
+          onConfirm={() => void run(`${approve ? 'approve' : 'decline'} ${shown} for ${env}`, () => api.recordApproval({ bundle: incoming, environment: env, namespace,
+            decision: kind, comment: text.trim() || undefined }), approve ? 'Approved' : 'Declined')}>
           {reason('Comment', false, approve ? 'e.g. checked the canary dashboards' : 'e.g. error rate up in uat')}
         </StageDialog>
       )
     }
     case 'override':
       return (
-        <StageDialog {...common} title={`Override ${gate || 'the gate'} in ${env}?`}
-          description={`${env} passes ${gate || 'the gate'} for ${incoming || 'the version on its way in'} until the override ends. Your name and reason are recorded.`}
+        <StageDialog {...common} title={`Override ${gateName || 'the gate'} in ${env}?`}
+          description={`${env} passes ${gateName || 'the gate'} for ${shown || 'the version on its way in'} until the override ends. Your name and reason are recorded.`}
           confirmLabel="Override gate" confirmDisabled={!gate || text.trim() === ''}
-          onConfirm={() => void run(`override ${gate} in ${env}`, () => api.overrideGate({ pipeline, namespace, gate, environment: env,
-            reason: text.trim(), expiresInMinutes: minutes }), 'Overridden')}>
+          onConfirm={() => void run(`override ${gateName} in ${env}`, () => api.overrideGate({ pipeline, namespace, gate, environment: env,
+            reason: text.trim(), expiresInMinutes: duration }), 'Overridden')}>
           {plainGates.length > 1 && (
             <div className="stage-field">
               <label htmlFor={ids.gate}>Gate</label>
               <select id={ids.gate} value={gate} disabled={busy} onChange={e => setGate(e.target.value)}>
-                {plainGates.map(g => <option key={g.name} value={g.name}>{g.name}</option>)}
+                {plainGates.map(g => <option key={g.name} value={g.name}>{gateLabel(g)}</option>)}
               </select>
             </div>
           )}
           {reason('Reason', true, 'e.g. P0 hotfix for incident 4521')}
           <div className="stage-field">
             <label htmlFor={ids.minutes}>For</label>
-            <select id={ids.minutes} value={minutes} disabled={busy} onChange={e => setMinutes(Number(e.target.value))}>
-              {[15, 60, 240, 1440].filter(m => m <= maxOverrideMinutes).map(m => <option key={m} value={m}>{durationLabel(m)}</option>)}
+            <select id={ids.minutes} value={duration} disabled={busy} onChange={e => setMinutes(Number(e.target.value))}>
+              {durations.map(m => <option key={m} value={m}>{durationLabel(m)}</option>)}
             </select>
           </div>
         </StageDialog>
@@ -193,7 +245,7 @@ function ActionDialog({ kind, view, pipeline, namespace, onCancel, onDone }: Dia
         <StageDialog {...common} tone={kind === 'pause' ? 'destructive' : 'default'}
           title={`${kind === 'pause' ? 'Pause' : 'Resume'} ${pipeline}?`}
           description={kind === 'pause'
-            ? `No new promotion starts in any environment of ${pipeline} until it is resumed. Promotions already running finish.`
+            ? `Versions in flight stop before their next environment, in every environment of ${pipeline}, until it is resumed.`
             : `Promotions of ${pipeline} start again where they stopped.`}
           confirmLabel={kind === 'pause' ? 'Pause pipeline' : 'Resume pipeline'}
           onConfirm={() => void run(`${kind} ${pipeline}`, () => kind === 'pause' ? api.pause(pipeline, namespace) : api.resume(pipeline, namespace),
@@ -214,6 +266,7 @@ function ActionDialog({ kind, view, pipeline, namespace, onCancel, onDone }: Dia
 function durationLabel(minutes: number): string {
   if (minutes < 60) return `${minutes} minutes`
   if (minutes === 60) return '1 hour'
-  if (minutes < 1440) return `${minutes / 60} hours`
-  return '24 hours'
+  if (minutes % 1440 === 0) return minutes === 1440 ? '24 hours' : `${minutes / 1440} days`
+  if (minutes % 60 === 0) return `${minutes / 60} hours`
+  return `${minutes} minutes`
 }

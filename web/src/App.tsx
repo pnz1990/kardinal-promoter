@@ -725,7 +725,8 @@ export function App() {
               />
 
               {/* #340: PolicyGates panel — shows all active gates with CEL expressions */}
-              <PolicyGatesPanel gates={shownGates} loading={gatesLoading} onDecided={() => { void manualRefresh() }} />
+              <PolicyGatesPanel gates={shownGates} loading={gatesLoading} onDecided={() => { void manualRefresh() }}
+                collapsed={!!stageEnv} />
 
               {/* Bundle history (collapsible) */}
               {bundles.length > 0 && (
