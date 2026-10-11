@@ -226,6 +226,17 @@ name under **Kubernetes details**, for `kubectl`.
   Roll back and Release hold are under the station in focus; shift-click a second Bundle on the
   rail to compare its route. An address with a Pipeline or a version the cluster does not have
   says it is not found and links back; it does not show another one.
+- **Environment details.** Selecting an environment (a fleet station, a station or a grid cell on
+  the map, or a row of the Table; a gate opens the environment it holds) opens its details beside the page, or as a sheet
+  on a narrow screen. They say first why the environment is waiting: paused, held by a rollback,
+  a gate (its message, when it was last evaluated, and the action that clears it), approvals
+  still needed, a PR to merge, a failure, or an environment before it that is not live yet. Then
+  its actions, each confirmed in a dialog: Approve or Decline, Override gate (a reason and a
+  duration up to the controller's override cap), Promote, Roll back to a chosen version (and
+  hold it there), Release hold, and for the whole pipeline Pause or Resume and Reject version.
+  Then its evidence (the steps with their timings, the bake, the gates) and its events. A gate's
+  CEL and the step's conditions are behind **Details**; opening a gate's Details checks its CEL
+  with the controller.
 - **Release metrics.** Time to the final environments and the deploys that reached them, over
   the last 10 Bundles. The final environments are those no other environment waits for: `prod`
   in test, uat, prod; every environment of a last wave, which a Bundle reaches when all of

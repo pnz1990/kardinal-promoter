@@ -312,3 +312,5 @@
   border-radius: var(--k-radius-3);
   box-shadow: var(--k-elev-2);
 }
+/* The stage drawer's place while its code loads: its column. */
+.app-drawer-loading { inline-size: var(--k-layout-drawer); flex-shrink: 0; background: var(--k-surface-raised); border-inline-start: var(--k-border-hairline) solid var(--k-line); }

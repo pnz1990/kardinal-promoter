@@ -61,7 +61,7 @@ func TestRollback_Hold(t *testing.T) {
 
 	const reason = "INC-42: v3 leaks connections"
 	out, rb := rbRollback(t, a, "prod", "--hold", "--reason", reason)
-	assert.Contains(t, out, fmt.Sprintf("Environment prod held on %s: no other Bundle promotes there until: kardinal release-hold %s --env prod",
+	assert.Contains(t, out, fmt.Sprintf("Environment prod held on %s: no other version promotes there until: kardinal release-hold %s --env prod",
 		rb, pipelineName))
 	assert.Contains(t, out, "Gates of prod that would block the rollback pass as EXEMPT (audited)")
 

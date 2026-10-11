@@ -65,7 +65,7 @@ import { App } from './App'
 // The comparison panel and the palette load lazily: load their code before the tests,
 // so a click opens them within one flush as it does once the page has prefetched them.
 beforeAll(async () => {
-  await Promise.all([import('./components/BundleDiffPanel'), import('./components/CommandPalette'), import('./stationMap/StageTable'), import('./stationMap/VersionMatrix')])
+  await Promise.all([import('./components/BundleDiffPanel'), import('./components/CommandPalette'), import('./stage/StageDrawer'), import('./components/KeyboardShortcutsPanel'), import('./stationMap/StageTable'), import('./stationMap/VersionMatrix')])
 })
 
 const day = 86_400_000
@@ -253,7 +253,7 @@ describe('App pipeline header', () => {
     render(<App />)
     await flush()
     fireEvent.click(screen.getByRole('button', { name: 'Help and keyboard shortcuts' }))
-    const dialog = screen.getByRole('dialog', { name: 'Keyboard shortcuts' })
+    const dialog = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })
     expect(within(dialog).getByRole('link', { name: 'Concepts' })).toHaveAttribute('href', 'https://pnz1990.github.io/kardinal-promoter/concepts/')
   })
 

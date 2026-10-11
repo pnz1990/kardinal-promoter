@@ -319,19 +319,18 @@ func TestUI_BrowserGates(t *testing.T) {
 	assert.False(t, exists, "the gate still holds prod")
 }
 
-// TestUI_BrowserNoGateOverride checks that the web app cannot approve or
-// override a gate: #1245 removed its Override gate dialog, and an override
-// is made with `kardinal override` (the UI API's approve endpoint stays, see
-// UIAPI-APPROVE-01). The scripts the controller serves are the whole app
-// (no lazily loaded chunk) and never name the approve endpoint. In a
-// browser, while gate hold-prod holds a Bundle, neither the gates
-// panel nor the gate's node details offers an approve or override control,
-// and the page sends no request but GETs and the node details' CEL check
-// (POST validate-cel, which writes nothing). Afterwards the gate instance has
-// no override and still holds prod.
+// TestUI_BrowserGateOverride checks overriding a gate from the stage drawer
+// (v0.10.1; #1245 had removed the old dialog). While gate hold-prod holds a
+// Bundle, prod's drawer names it under "why it's waiting" with Override gate
+// next to it; its dialog needs a reason, Cancel sends nothing, and confirming
+// sends one POST /api/v1/ui/override. The instance then has one override for
+// prod, recorded with the UI's requester (kardinal-ui: this UI does not run
+// TokenReview), lasting the 15 minutes chosen; the gate stops holding and
+// prod is promoted. The scripts the controller serves never name the old
+// per-gate approve endpoint.
 //
 // Covers UI-OVERRIDE-01.
-func TestUI_BrowserNoGateOverride(t *testing.T) {
+func TestUI_BrowserGateOverride(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	ctx := context.Background()
@@ -359,7 +358,7 @@ func TestUI_BrowserNoGateOverride(t *testing.T) {
 		r := c.Get(t, m[1])
 		require.Equal(t, http.StatusOK, r.Status, "GET %s: %s", m[1], r)
 		assert.NotContains(t, r.Body, "import(", "%s loads a chunk this test does not read", m[1])
-		assert.NotContains(t, r.Body, "/approve", "%s calls the approve endpoint", m[1])
+		assert.NotContains(t, r.Body, "/approve", "%s calls the per-gate approve endpoint", m[1])
 	}
 
 	framework.Playwright(t, "override.spec.ts", browserEnv(c, a.ns,
@@ -368,10 +367,14 @@ func TestUI_BrowserNoGateOverride(t *testing.T) {
 
 	var inst v1alpha1.PolicyGate
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: holding.Name}, &inst))
-	assert.Empty(t, inst.Spec.Overrides, "no override on the gate instance")
-	_, exists, err := e.Step(ctx, a.ns, pipelineName, held.Name, "prod")
-	require.NoError(t, err)
-	assert.False(t, exists, "the gate still holds prod")
+	require.Len(t, inst.Spec.Overrides, 1, "one override on the gate instance")
+	o := inst.Spec.Overrides[0]
+	assert.Equal(t, "prod", o.Stage)
+	assert.Equal(t, "UI-OVERRIDE-01 hotfix", o.Reason)
+	assert.Equal(t, "kardinal-ui", o.CreatedBy)
+	require.NotNil(t, o.CreatedAt)
+	assert.InDelta(t, 15*60, o.ExpiresAt.Sub(o.CreatedAt.Time).Seconds(), 1, "the 15 minutes chosen")
+	e.WaitStepState(t, a.ns, pipelineName, held.Name, "prod", "Verified", promoteTimeout)
 }
 
 // subSteps is a PromotionStep's status.steps as the node.spec.ts reads them.
@@ -734,6 +737,7 @@ func TestUI_BrowserStatic(t *testing.T) {
 
 	// The Dockerfile builds web/ itself, so the asset names are the image's,
 	// not the checkout's web/dist: read them from index.html.
+	// The fonts the UI serves itself (#1698) are preloaded from index.html.
 	types := map[string]string{".js": "javascript", ".css": "text/css", ".png": "image/png", ".woff2": "font/woff2"}
 	named := map[string]int{}
 	seen := map[string]bool{}

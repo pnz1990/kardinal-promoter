@@ -25,7 +25,9 @@ import (
 func main() {
 	root := cmd.NewRootCmd()
 	if err := root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, cmd.HumanError(err))
-		os.Exit(1)
+		if msg := cmd.HumanError(err).Error(); msg != "" {
+			fmt.Fprintln(os.Stderr, msg)
+		}
+		os.Exit(cmd.ExitCode(err))
 	}
 }

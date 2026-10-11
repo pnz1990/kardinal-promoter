@@ -163,13 +163,14 @@ func unreachableCause(err error) string {
 }
 
 // admissionRE parses a ValidatingAdmissionPolicy or webhook denial, which
-// the API server reports as Forbidden.
-var admissionRE = regexp.MustCompile(`(?:ValidatingAdmissionPolicy '([^']+)' with binding '[^']*' denied request|admission webhook "([^"]+)" denied the request): (.*)`)
+// the API server reports as Forbidden. The message may span lines, and a
+// webhook may deny "without explanation".
+var admissionRE = regexp.MustCompile(`(?s)(?:ValidatingAdmissionPolicy '([^']+)' with binding '[^']*' denied request|admission webhook "([^"]+)" denied the request)(?:: (.*)| without explanation)`)
 
 // admissionDenial is the error for a request an admission policy (the
 // chart's identity, hold-writes or scoped-writes policies) refused: its
-// message says what is wrong, so it is shown instead of a role hint. nil
-// when err is an RBAC refusal.
+// message says what is wrong, so it is shown instead of a role hint, whole.
+// nil when err is an RBAC refusal.
 func admissionDenial(err error) error {
 	m := admissionRE.FindStringSubmatch(err.Error())
 	if m == nil {
@@ -179,7 +180,10 @@ func admissionDenial(err error) error {
 	if policy == "" {
 		policy = m[2]
 	}
-	return fmt.Errorf("the cluster's admission policy %s refused the request: %s", policy, strings.TrimSpace(m[3]))
+	if msg := strings.TrimSpace(m[3]); msg != "" {
+		return fmt.Errorf("the cluster's admission policy %s refused the request: %s", policy, msg)
+	}
+	return fmt.Errorf("the cluster's admission policy %s refused the request, and said no more; ask your cluster admin", policy)
 }
 
 // forbiddenRE parses the API server's Forbidden message.

@@ -74,7 +74,7 @@ export async function filterSidebar(page: Page, query: string) {
   const ns = query.split('/')[0].toLowerCase()
   await expect.poll(() => page.getByRole('list', { name: 'Pipelines' }).evaluate((list, ns) =>
     Array.from(list.children)
-      .filter(li => li.querySelector(':scope > ul[role="group"]'))
+      .filter(li => li.querySelector(':scope > ul[aria-labelledby]'))
       .map(li => li.firstElementChild?.textContent?.trim() ?? '')
       .filter(header => !header.toLowerCase().includes(ns)), ns)).toEqual([])
 }
@@ -103,6 +103,16 @@ export function station(page: Page, name: string) {
 /** gateMark is a gate on the edge into the environment it guards ("gate <name>, Passing"). */
 export function gateMark(page: Page, name: string) {
   return page.locator(`.station-map__gate[aria-label^="gate ${name}, "]`)
+}
+
+/** The stage drawer (U3): an environment's details, "why it's waiting" first. */
+export function stageDrawer(page: Page) {
+  return page.getByTestId('stage-drawer')
+}
+
+/** The environment the stage drawer is open on (its heading). */
+export function drawerHeading(page: Page) {
+  return stageDrawer(page).getByRole('heading', { level: 2 })
 }
 
 /**

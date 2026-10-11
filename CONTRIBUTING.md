@@ -33,7 +33,8 @@ cd web && npm ci && npm run typecheck && npm test && npm run build && npm run si
 
 `npm run size` (CI runs it too) holds the UI to its gzip budgets: **initial JS ≤ 145 KB** (the
 entry chunk and what it imports statically: what the first page load waits for), **total JS
-≤ 200 KB** (every chunk, the lazily loaded views included), CSS ≤ 18 KB and fonts ≤ 180 KB. A
+≤ 200 KB** (every chunk, the lazily loaded views included), the same pair for CSS (initial
+≤ 18 KB, the stylesheets index.html links; total ≤ 22 KB) and fonts ≤ 180 KB. A
 large view that only some pages need (the Table and Matrix, the comparison panel, the command
 palette) is loaded with `React.lazy`, so it counts toward the total but not the initial load.
 

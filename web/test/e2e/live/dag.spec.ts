@@ -10,7 +10,7 @@
 // in the only environment, solo.
 
 import { test, expect, type Page } from '@playwright/test'
-import { need, openPipeline, station, gateMark } from './live'
+import { need, openPipeline, station, gateMark, stageDrawer, drawerHeading } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -73,10 +73,10 @@ test('the station map shows each environment and gate with its state, the PR, an
 
   // prod's stage drawer links its PR.
   await prodNode.click()
-  const detail = page.getByTestId('node-detail')
-  await expect(detail).toContainText('Environment: prod')
+  const detail = stageDrawer(page)
+  await expect(drawerHeading(page)).toHaveText('prod')
   await expect(detail.locator(`a[href="${prURL}"]`).first()).toBeVisible()
-  await detail.getByRole('button', { name: 'Close' }).click()
+  await detail.getByRole('button', { name: 'Close prod' }).click()
 
   // Picking the Bundle in the timeline reads its graph again.
   const reread = page.waitForRequest(r => new URL(r.url()).pathname.endsWith(`/bundles/${bundle}/graph`))

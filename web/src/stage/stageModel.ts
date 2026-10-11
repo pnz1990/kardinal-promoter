@@ -118,7 +118,8 @@ export function bundleVersion(b: Bundle): string {
 
 const PRIMARY: StageActionKind[] = ['approve', 'release', 'resume', 'promote', 'openPR']
 const PROMOTABLE = new Set(['NotStarted', 'Failed', 'AbortedByAlarm'])
-const IN_FLIGHT = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'Verifying'])
+/** Step states in which a promotion is running. */
+export const IN_FLIGHT: ReadonlySet<string> = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'Verifying'])
 
 /** Everything the drawer shows for env. */
 export function stageView(input: StageInput): StageView {
@@ -186,13 +187,21 @@ export function stageView(input: StageInput): StageView {
   const actions = new Set<StageActionKind>()
   if (blocking.some(g => g.approval)) actions.add('approve').add('reject')
   if (blocking.some(g => !g.approval)) actions.add('override')
-  // Promote: the environment is not reached, failed or was stopped by an
-  // alarm, and every environment it waits for is live (pipelineActions'
-  // rule; the first environment is started by creating a Bundle).
+  // Promote: the version on its way in has not reached the environment, failed
+  // or was stopped by an alarm there, and it is live in every environment the
+  // environment waits for (pipelineActions' rule for the shown Bundle; the
+  // first environment is started by creating a Bundle). Without a version on
+  // its way in, the environment's own state decides.
   const upstreams = spec?.upstreams ?? []
-  if (PROMOTABLE.has(stepState) && upstreams.length > 0 && upstreams.every(u => p.environmentStates?.[u] === 'Verified')) {
-    actions.add('promote')
-  }
+  const stateOf = (bundle: string, e: string) => steps.find(s => s.bundle === bundle && s.environment === e)?.state
+    ?? bundles.find(b => b.name === bundle)?.environments?.find(x => x.name === e)?.phase
+  // Where the Bundle says nothing about an environment, the Pipeline's state there does.
+  const live = (u: string) => (incoming && stateOf(incoming.bundle, u)) ? stateOf(incoming.bundle, u) === 'Verified'
+    : p.environmentStates?.[u] === 'Verified'
+  const promotable = incoming
+    ? PROMOTABLE.has(stateOf(incoming.bundle, env) ?? 'NotStarted') && upstreams.every(live)
+    : PROMOTABLE.has(stepState) && upstreams.every(live)
+  if (promotable && upstreams.length > 0) actions.add('promote')
   const choices = rollbackChoices(bundles, env, running?.bundle)
   // A choice of version when the Bundles say where they were Verified; else
   // the controller picks the one before (no toBundle).

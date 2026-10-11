@@ -62,7 +62,7 @@ func stampCreator(ctx context.Context, c sigs_client.Client, b *v1alpha1.Bundle)
 func creatorOf(ctx context.Context, c sigs_client.Client) string {
 	id, err := identityOf(ctx, c)
 	if err != nil {
-		_, _ = fmt.Fprintf(errOut, "warning: the Bundle records no creator (%v); an approval gate with excludeAuthor will not pass it\n", err)
+		_, _ = fmt.Fprintf(errOut, "warning: the version records no creator (%v); an approval gate with excludeAuthor will not pass it\n", err)
 		return ""
 	}
 	return id.Username

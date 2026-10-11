@@ -102,7 +102,7 @@ Output:
 ```
 Rolling back my-app in prod from my-app-v1-29-0 to my-app-v1-28-0 (ghcr.io/myorg/my-app:v1.28.0)
 Bundle my-app-rollback-3f9a1c created (rollbackOf=my-app-v1-28-0)
-Environment prod held on my-app-rollback-3f9a1c: no other Bundle promotes there until: kardinal release-hold my-app --env prod
+Environment prod held on my-app-rollback-3f9a1c: no other version promotes there until: kardinal release-hold my-app --env prod
 Gates of prod that would block the rollback pass as EXEMPT (audited) while the controller verifies it restores what was Verified there.
 Track with: kardinal explain my-app --env prod
 ```

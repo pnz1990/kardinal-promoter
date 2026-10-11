@@ -12,7 +12,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { GateMark, Group, Station, StationMapModel, ThreadSegment } from './model'
 import { gatesOn, gridOrder, groupSummary, stationLabel } from './model'
 import {
-  BAR, CH_EM, GRAPH, TEXT_ASCENT, GRID_FOOT_ROOM, GRID_HEAD_H, GRID_PAD_X, GRID_ROW_ROOM, groupHead, cullLabels, detailChars, dotOf, gateOffset, gridCells, gridText, groupPacing, groupSub, groupTitle, initialLevel, layout,
+  BAR, CH_EM, GRAPH, TEXT_ASCENT, GRID_PAD_X, TEXT_PX, gridSpace, groupHead, cullLabels, detailChars, dotOf, gateOffset, gridCells, gridText, groupPacing, groupSub, groupTitle, initialLevel, layout,
   pathOf, pointBeforeEnd, threadPoints, wrapWords,
   type Layout, type Placed, type Rect, type ZoomLevel,
 } from './geometry'
@@ -54,7 +54,9 @@ const GATE_LABEL_H = 16
 const MINIMAP_W = 160
 const MINIMAP_INSET = 12
 /** Label sizes in px (--k-text-xs, -sm, -lg) and the line height as a share of the font size. */
-const LABEL_PX = { sub: 12, name: 13, detailSub: 13, detailName: 16 } as const
+const LABEL_PX = { sub: TEXT_PX.xs, name: TEXT_PX.sm, detailSub: TEXT_PX.sm, detailName: TEXT_PX.lg } as const
+/** Slack for float rounding when a label's size is compared with its room (map units). */
+const ROUNDING = 0.01
 const LINE_EM = 1.25
 
 /** How long a gate's popover stays after the pointer leaves, so it can be reached (ms). */
@@ -340,6 +342,7 @@ export default function StationMap(props: StationMapProps) {
     const k = vp.view.k
     const labels: Array<{ id: string; priority: number; boxes: Rect[] }> = []
     const marks: Array<{ id: string; box: Rect }> = []
+    const flipped = new Set<string>()
     const onThread = new Set(model.thread.flatMap(t => [t.from, t.to]))
     for (const n of model.nodes) {
       const p = lay.placed.get(n.id)
@@ -348,8 +351,13 @@ export default function StationMap(props: StationMapProps) {
       const { x, y } = dotOf(p)
       const r = GRAPH.station.r
       marks.push({ id: n.id, box: { x: x - r, y: y - r, w: r * 2, h: r * 2 } })
-      const boxes = stationLabelBoxes(n.station, level, model, p, k, focusedId === n.id)
+      let boxes = stationLabelBoxes(n.station, level, model, p, k, focusedId === n.id)
       if (!boxes.length) continue
+      // A label that would run past the map's right edge is set to the dot's left instead.
+      if (boxes.some(b => b.x + b.w > lay.bounds.x + lay.bounds.w)) {
+        flipped.add(n.id)
+        boxes = boxes.map(b => ({ ...b, x: x + r - b.w }))
+      }
       const tone = n.station.display.tone
       const priority = focusedId === n.id ? 0 : tone === 'failed' || tone === 'blocked' || tone === 'held' ? 1 : onThread.has(n.id) ? 3 : 4
       labels.push({ id: n.id, priority, boxes })
@@ -370,7 +378,7 @@ export default function StationMap(props: StationMapProps) {
       }
     }
     const kept = cullLabels(labels, marks)
-    return { stations: kept, gates: kept }
+    return { stations: kept, gates: kept, flipped }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lay, model, level, vp.view.k, focusedId])
 
@@ -473,7 +481,7 @@ export default function StationMap(props: StationMapProps) {
             const placed = lay.placed.get(node.id)
             return placed ? { ...placed, node } : undefined
           }).filter((p): p is Placed => !!p).map(p => p.node.kind === 'station'
-            ? <StationGlyph key={p.node.id} p={p} st={p.node.station} level={level} model={model} k={vp.view.k} culled={!plan.stations.has(p.node.id)}
+            ? <StationGlyph key={p.node.id} p={p} st={p.node.station} level={level} model={model} k={vp.view.k} culled={!plan.stations.has(p.node.id)} flip={plan.flipped.has(p.node.id)}
                 differs={!!compare && differs(p.node.station, compare.stations.get(p.node.id))}
                 focusable={active === p.node.id} focused={focusedId === p.node.id}
                 dim={matches.length > 0 && !matchSet.has(p.node.id)}
@@ -618,9 +626,11 @@ interface StationGlyphProps {
   k: number
   /** Its labels overlap more important ones: hidden until hover or focus. */
   culled: boolean
+  /** Its labels would run past the map's right edge: set to the dot's left. */
+  flip: boolean
 }
 
-function StationGlyph({ p, st, level, model, focusable, focused, dim, chain, onOpen, onFocus, differs: diff, k, culled }: StationGlyphProps) {
+function StationGlyph({ p, st, level, model, focusable, focused, dim, chain, onOpen, onFocus, differs: diff, k, culled, flip }: StationGlyphProps) {
   const { x, y } = dotOf(p)
   const r = focused ? GRAPH.station.rFocus : GRAPH.station.r
   const tone = st.display.tone
@@ -641,9 +651,9 @@ function StationGlyph({ p, st, level, model, focusable, focused, dim, chain, onO
       {tone === 'promoting' && <circle className="station__arc" cx={x} cy={y} r={r + 3} pathLength={100} />}
       {diff && <text x={x + r + 3} y={y - r - 2} className="station__differs" aria-hidden="true">≠</text>}
       {/* A label that would overlap a more important one is hidden (culled); it shows on hover and focus. */}
-      {text.name && <text x={x - r} y={y - r - 6} className="station__name" data-culled={culled || undefined}>{text.name}</text>}
+      {text.name && <text x={flip ? x + r : x - r} textAnchor={flip ? 'end' : undefined} y={y - r - 6} className="station__name" data-culled={culled || undefined}>{text.name}</text>}
       {text.lines.map((l, i) => (
-        <text key={i} x={x - r} y={y + r + line * (i + 1)} className={l.cls} data-tone={l.cls === 'station__incoming' ? tone : undefined} data-culled={culled || undefined}>{l.text}</text>
+        <text key={i} x={flip ? x + r : x - r} textAnchor={flip ? 'end' : undefined} y={y + r + line * (i + 1)} className={l.cls} data-tone={l.cls === 'station__incoming' ? tone : undefined} data-culled={culled || undefined}>{l.text}</text>
       ))}
     </g>
   )
@@ -749,18 +759,25 @@ function GroupGlyph({ p, g, expanded, model, level, active, focusedEnv, matchSet
   const hd = groupHead(u, level !== 'overview')
   const fail = g.failed > 0 && !g.halted && !expanded ? `✕ ${g.failed}` : ''
   const chevronW = 2 * CH_EM * u
-  const showTitle = fitsIn(title, box.w - GRID_PAD_X * 3 - chevronW - (fail ? (fail.length + 1) * CH_EM * u : 0), k) && (expanded ? u + GRID_PAD_X / 2 <= GRID_HEAD_H : hd.threadY <= box.h)
+  // An expanded grid's text fits the space gridSpace gave it at this level; a collapsed head, its frame.
+  const room = gridSpace(level)
+  const headFits = expanded ? u <= room.u + ROUNDING : hd.threadY <= box.h
+  const titleY = expanded ? box.y + room.titleY : box.y + hd.titleY
+  const showTitle = headFits && fitsIn(title, box.w - GRID_PAD_X * 3 - chevronW - (fail ? (fail.length + 1) * CH_EM * u : 0), k)
   const showSub = level !== 'overview' && !expanded && hd.subY <= box.h && fitsIn(groupSub(g), box.w - GRID_PAD_X * 2, k)
   const head = (
     <g className="group__head" data-focus-id={g.id} role="button" tabIndex={active === g.id ? 0 : -1}
       aria-expanded={expanded} aria-label={`${name}${pacing ? `, ${pacing}` : ''}: ${summary}`}
       onClick={onToggle} onFocus={() => onFocusItem(g.id)}>
       <rect className="group__frame" x={box.x} y={box.y} width={box.w} height={box.h} />
-      {showTitle && <text x={box.x + GRID_PAD_X} y={box.y + hd.titleY} className="group__label">{title}</text>}
-      <text x={box.x + box.w - GRID_PAD_X} y={box.y + hd.titleY} textAnchor="end" className="group__chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</text>
+      {showTitle && <text x={box.x + GRID_PAD_X} y={titleY} className="group__label">{title}</text>}
+      {/* The chevron stays inside the frame: it goes with the head's text when that no longer fits. */}
+      {headFits && chevronW + GRID_PAD_X * 2 <= box.w && (
+        <text x={box.x + box.w - GRID_PAD_X} y={titleY} textAnchor="end" className="group__chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</text>
+      )}
       {/* A minority of failures is a mark on the band; the thread still fills by the share verified. */}
       {fail && showTitle && (
-        <text x={box.x + box.w - GRID_PAD_X - chevronW - CH_EM * u} y={box.y + hd.titleY} textAnchor="end" className="group__fail" aria-hidden="true">{fail}</text>
+        <text x={box.x + box.w - GRID_PAD_X - chevronW - CH_EM * u} y={titleY} textAnchor="end" className="group__fail" aria-hidden="true">{fail}</text>
       )}
       {!expanded && (
         <>
@@ -774,13 +791,13 @@ function GroupGlyph({ p, g, expanded, model, level, active, focusedEnv, matchSet
   if (!expanded) return <g className="group" data-group={g.id}>{head}</g>
   const order = gridOrder(g, model.stations)
   const cells = gridCells(g, order, box, level)
-  const text = gridText(g, box)
+  const text = gridText(g, box, level)
   const foot = groupSub(g)
   const c = GRAPH.grid.cell
   return (
     <g className="group group--expanded" data-group={g.id}>
       {head}
-      {u <= GRID_ROW_ROOM && text.rows.map(r => (
+      {u <= room.u + ROUNDING && text.rows.map(r => (
         <text key={`${r.y}`} x={r.x} y={r.y} className="group__row" data-tone={r.tone}>{r.text}</text>
       ))}
       {cells.map(cell => {
@@ -801,7 +818,7 @@ function GroupGlyph({ p, g, expanded, model, level, active, focusedEnv, matchSet
           </g>
         )
       })}
-      {u <= GRID_FOOT_ROOM && fitsIn(foot, text.foot.w, k) && <text x={text.foot.x} y={text.foot.y} className="group__sub">{foot}</text>}
+      {u <= room.u + ROUNDING && fitsIn(foot, text.foot.w, k) && <text x={text.foot.x} y={text.foot.y} className="group__sub">{foot}</text>}
     </g>
   )
 }

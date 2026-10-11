@@ -20,7 +20,6 @@ import { lazy, Suspense, useState, useCallback, useMemo, useRef, useEffect, type
 import { PipelineList } from './components/PipelineList'
 import { PipelineOpsTable } from './components/PipelineOpsTable'
 import PipelineMap from './stationMap/PipelineMap'
-import { StageDrawer } from './stage/StageDrawer'
 import { HealthChip } from './components/HealthChip'
 import { RejectedLiveBanner } from './components/RejectedLiveBanner'
 import { InsecureConnectionBanner } from './components/InsecureConnectionBanner'
@@ -36,6 +35,10 @@ import { versionName } from './versionName'
 import { BundleTimeline } from './components/BundleTimeline'
 // The palette and the comparison panel load when first opened: not part of the initial load.
 const CommandPalette = lazy(() => import('./components/CommandPalette').then(m => ({ default: m.CommandPalette })))
+// The stage drawer and the shortcuts help load when first opened (the drawer's code is
+// prefetched with the palette's, so a click on a station opens it at once).
+const StageDrawer = lazy(() => import('./stage/StageDrawer').then(m => ({ default: m.StageDrawer })))
+const KeyboardShortcutsPanel = lazy(() => import('./components/KeyboardShortcutsPanel').then(m => ({ default: m.KeyboardShortcutsPanel })))
 /** When the page is idle enough to fetch the palette's code (ms after the first render). */
 const PREFETCH_MS = 1500
 const BundleDiffPanel = lazy(() => import('./components/BundleDiffPanel').then(m => ({ default: m.BundleDiffPanel })))
@@ -61,7 +64,6 @@ import { EMPTY_URL_STATE, serializeHash, useUrlState, type PipelineTab } from '.
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
 import { resolveShownBundle } from './bundleSelection'
 import { terminalEnvironments } from './fleetModel'
-import { KeyboardShortcutsPanel } from './components/KeyboardShortcutsPanel'
 
 import type { Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep, PolicyGate } from './types'
 
@@ -168,7 +170,7 @@ export function App() {
 
   // The palette's code loads while the page is idle, so the first ⌘K opens at once.
   useEffect(() => {
-    const t = setTimeout(() => { void import('./components/CommandPalette') }, PREFETCH_MS)
+    const t = setTimeout(() => { void import('./components/CommandPalette'); void import('./stage/StageDrawer') }, PREFETCH_MS)
     return () => clearTimeout(t)
   }, [])
 
@@ -604,7 +606,9 @@ export function App() {
       </a>
       {/* #746: Keyboard shortcuts help panel — rendered at root level so it overlays all content. */}
       {showShortcutsPanel && (
-        <KeyboardShortcutsPanel onClose={() => setShowShortcutsPanel(false)} />
+        <Suspense fallback={null}>
+          <KeyboardShortcutsPanel onClose={() => setShowShortcutsPanel(false)} />
+        </Suspense>
       )}
       {paletteOpen && (
         <Suspense fallback={<Skeleton label="Loading the command palette…" rows={3} className="app-palette-loading" />}>
@@ -951,6 +955,7 @@ export function App() {
                       beside the page at lg and wider, a modal sheet narrower. */}
                   {stageEnv && activePipeline && (
                     <ErrorBoundary fallbackMessage="Details unavailable">
+                      <Suspense fallback={<Skeleton label={`Loading the details of ${stageEnv}…`} className="app-drawer-loading" />}>
                       <StageDrawer
                         namespace={activePipeline.namespace}
                         pipeline={activePipeline.name}
@@ -961,6 +966,7 @@ export function App() {
                         data={{ pipeline: activePipeline, bundles, steps: activeSteps, gates }}
                         onChanged={() => { void manualRefresh() }}
                       />
+                      </Suspense>
                     </ErrorBoundary>
                   )}
                 </div>

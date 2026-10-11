@@ -14,7 +14,7 @@
 // rolled back.
 
 import { test, expect, type Page } from '@playwright/test'
-import { need, openPipeline, station, filterSidebar, sidebarRow, PIPELINE } from './live'
+import { need, openPipeline, station, filterSidebar, sidebarRow, PIPELINE, stageDrawer, drawerHeading } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -75,16 +75,17 @@ const steps: Record<string, () => void> = {
     // test is the first environment: CI starts it, so it has no Promote.
     await expect(lane(page).getByRole('button', { name: 'Promote to test' })).toHaveCount(0)
 
-    // The node details offer the same action, and none for test.
-    const detail = page.getByTestId('node-detail')
+    // The stage drawer offers the same action, and none for test.
+    const detail = stageDrawer(page)
     await station(page, 'test').click()
-    await expect(detail).toContainText('Environment: test')
-    await expect(detail.getByRole('button', { name: /^Promote to / })).toHaveCount(0)
+    await expect(drawerHeading(page)).toHaveText('test')
+    await expect(detail.locator('[data-action="promote"]')).toHaveCount(0)
+    // The drawer takes its column, so the map refits under the pointer: move it away first.
+    await page.mouse.move(0, 0)
     await station(page, 'prod').click()
-    await expect(detail).toContainText('Environment: prod')
-    await expect(detail.getByRole('button', { name: 'Promote to prod' })).toBeVisible()
-    await expect(detail.getByRole('button', { name: 'Roll back prod' })).toHaveCount(0)
-    await detail.getByRole('button', { name: 'Close' }).click()
+    await expect(drawerHeading(page)).toHaveText('prod')
+    await expect(detail.locator('[data-action="promote"]')).toHaveText('Promote')
+    await detail.getByRole('button', { name: 'Close prod' }).click()
     await expect(detail).toHaveCount(0)
 
     // Cancel creates nothing (the Go test checks). The map offers the action under the station in focus.
@@ -102,7 +103,7 @@ const steps: Record<string, () => void> = {
     await expect(page.getByRole('status').filter({ hasText: 'Promotion started' })).toHaveText(/^Promotion started: version podinfo-[a-z0-9-]+$/)
   }),
 
-  rollback: () => test('Roll back in the node details asks first, then rolls prod back', async ({ page }) => {
+  rollback: () => test('Roll back in the stage drawer asks first, then rolls prod back', async ({ page }) => {
     await openPipeline(page, base, ns)
     await expect(station(page, 'prod')).toHaveAttribute('aria-label', /^prod — Live, /)
     // The map offers the same action under the station in focus.
@@ -110,13 +111,18 @@ const steps: Record<string, () => void> = {
     await expect(lane(page).getByRole('button', { name: 'Roll back prod' })).toBeVisible()
 
     await station(page, 'prod').click()
-    const detail = page.getByTestId('node-detail')
-    await detail.getByRole('button', { name: 'Roll back prod' }).click()
-    const dialog = page.getByRole('dialog', { name: 'Roll back prod?' })
-    await expect(dialog).toHaveAccessibleDescription(`Returns prod to the previous verified version of ${PIPELINE}.`)
-    await dialog.getByRole('button', { name: 'Roll back prod' }).click()
+    const detail = stageDrawer(page)
+    await detail.locator('[data-action="rollback"]').click()
+    // The drawer offers the versions Verified in prod; the one before is first.
+    const dialog = page.getByRole('dialog', { name: /^Roll prod back to .+\?$/ })
+    await expect(dialog).toHaveAccessibleDescription(/^A new promotion deploys .+ \([a-z0-9-]+\) to prod\.$/)
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
     await expect(dialog).toHaveCount(0)
-    await expect(detail.getByRole('status').filter({ hasText: 'Rollback started' })).toHaveText(/^Rollback started: version [a-z0-9-]+$/)
+    await detail.locator('[data-action="rollback"]').click()
+    await dialog.getByRole('button', { name: 'Roll back' }).click()
+    await expect(dialog).toHaveCount(0)
+    await expect(detail.getByRole('status').filter({ hasText: 'Rolled back' }))
+      .toHaveText(/^Rolled back\. rollback started — rolling prod back to [a-z0-9-]+$/)
   }),
 }
 

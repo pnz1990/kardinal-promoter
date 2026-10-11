@@ -104,3 +104,16 @@ describe('stageView: promote', () => {
     expect(stageView(input({ env: 'test', pipeline: p })).actions.has('promote')).toBe(false)
   })
 })
+
+describe('stageView: promote the version on its way in', () => {
+  it('offers Promote where the shown version is live upstream and has not reached the environment, though an older one runs there', () => {
+    // web-3 stopped at test (intent.targetEnvironment); prod runs web-2.
+    const p = pipeline({ environmentStates: { test: 'Verified', uat: 'Verified', prod: 'Verified' },
+      deployed: { prod: { bundle: 'web-2', version: '1.4.0' } } })
+    const b3 = bundle('web-3', '1.5.0', '2026-10-09T00:00:00Z', [{ name: 'test', phase: 'Verified' }, { name: 'uat', phase: 'Verified' }])
+    expect(stageView(input({ pipeline: p, bundles: [b3], steps: [] })).actions.has('promote')).toBe(true)
+    const halfway = { ...b3, environments: [{ name: 'test', phase: 'Verified' }, { name: 'uat', phase: 'Promoting' }] }
+    expect(stageView(input({ pipeline: p, bundles: [halfway], steps: [] })).actions.has('promote')).toBe(false)
+  })
+})
+
