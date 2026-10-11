@@ -354,12 +354,29 @@ func TestUI_BrowserGateOverride(t *testing.T) {
 	require.Equal(t, http.StatusOK, index.Status, "GET /ui/: %s", index)
 	scripts := regexp.MustCompile(`<script[^>]*\ssrc="(/ui/[^"]+\.js)"`).FindAllStringSubmatch(index.Body, -1)
 	require.NotEmpty(t, scripts, "index.html names no script: %s", index.Body)
+	// The entry script and every chunk it loads (the lazy views are their own chunks):
+	// none calls the per-gate approve endpoint.
+	chunk := regexp.MustCompile(`assets/[A-Za-z0-9_.-]+\.js`)
+	queue := []string{}
 	for _, m := range scripts {
-		r := c.Get(t, m[1])
-		require.Equal(t, http.StatusOK, r.Status, "GET %s: %s", m[1], r)
-		assert.NotContains(t, r.Body, "import(", "%s loads a chunk this test does not read", m[1])
-		assert.NotContains(t, r.Body, "/approve", "%s calls the per-gate approve endpoint", m[1])
+		queue = append(queue, m[1])
 	}
+	seen := map[string]bool{}
+	for len(queue) > 0 {
+		path := queue[0]
+		queue = queue[1:]
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		r := c.Get(t, path)
+		require.Equal(t, http.StatusOK, r.Status, "GET %s: %s", path, r)
+		assert.NotContains(t, r.Body, "/approve", "%s calls the per-gate approve endpoint", path)
+		for _, f := range chunk.FindAllString(r.Body, -1) {
+			queue = append(queue, "/ui/"+f)
+		}
+	}
+	assert.Greater(t, len(seen), len(scripts), "the lazy chunks were read too")
 
 	framework.Playwright(t, "override.spec.ts", browserEnv(c, a.ns,
 		"KARDINAL_UI_HOLD_GATE", hold.Name,
