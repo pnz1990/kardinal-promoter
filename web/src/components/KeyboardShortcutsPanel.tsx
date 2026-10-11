@@ -21,6 +21,7 @@ interface ShortcutRow {
 }
 
 const SHORTCUTS: ShortcutRow[] = [
+  { key: '⌘K / Ctrl+K', description: 'Go to a pipeline, environment or version, or run an action' },
   { key: '/', description: 'Focus pipeline search' },
   { key: '?', description: 'Show / hide this help panel' },
   { key: 'r', description: 'Refresh data now' },

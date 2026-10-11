@@ -1,0 +1,30 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * Breadcrumb.css — components/Breadcrumb.tsx. Design tokens only.
+ */
+
+.breadcrumb { margin-block-end: var(--k-space-2); }
+.breadcrumb__list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--k-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--k-ink-3);
+  font-size: var(--k-text-xs);
+}
+.breadcrumb__item { display: inline-flex; align-items: baseline; gap: var(--k-space-1); }
+.breadcrumb__item + .breadcrumb__item::before { content: "›"; color: var(--k-ink-3); }
+.breadcrumb__item[data-kind="namespace"],
+.breadcrumb__item[data-kind="version"] { font-family: var(--k-font-mono); }
+.breadcrumb__link {
+  color: var(--k-ink-2);
+  text-decoration: underline var(--k-border-hairline) var(--k-thread-text);
+  text-underline-offset: 0.2em;
+}
+.breadcrumb__link:hover { color: var(--k-ink); }
+.breadcrumb__here { color: var(--k-ink-2); }
