@@ -97,7 +97,8 @@ func barePipeline(t *testing.T, e *framework.Env, ns, name string, edit ...func(
 		Spec: v1alpha1.PipelineSpec{
 			// A repository per namespace: bare Pipelines of other tests at
 			// the same path would get PathConflict, a status change.
-			Git:          v1alpha1.PipelineGit{URL: "https://git.example/" + ns + "/" + name},
+			Git: v1alpha1.PipelineGit{URL: "https://git.example/" + ns + "/" + name,
+				SecretRef: &v1alpha1.SecretRef{Name: framework.GitSecretName}},
 			Environments: []v1alpha1.EnvironmentSpec{{Name: "test", Path: "environments/test"}},
 		},
 	}
@@ -336,8 +337,10 @@ func readFile(t *testing.T, path string) string {
 // kustomization.yaml per environment under --gitops-dir and keeps existing
 // files on a re-run, --demo scaffolds the kardinal-test-app placeholder,
 // and helm skips the Kustomize scaffold. A URL that is not https:// is asked
-// again; end of input without one fails.
-// Covers CLI-INIT-01.
+// again; end of input without one fails. Before its git Secret exists the
+// applied Pipeline is Ready=False/GitCredentialMissing with the command that
+// creates it.
+// Covers CLI-INIT-01, PIPE-GITCRED-01.
 func TestCLI_Init(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -377,6 +380,20 @@ func TestCLI_Init(t *testing.T) {
 	assert.Equal(t, yaml, readFile(t, filepath.Join(dir, "pipeline.yaml")), "the file holds the --stdout YAML")
 	out, err := cli.Kubectl(dir, "apply", "-f", "pipeline.yaml")
 	require.NoError(t, err, out)
+	// P4: before the git Secret exists, right after apply and before any
+	// Bundle, Ready=False/GitCredentialMissing gives the command that
+	// creates it; running it makes the Pipeline Ready.
+	fix := "kubectl create secret generic github-token -n " + ns + " --from-literal=token=<TOKEN> && " +
+		"kubectl label secret github-token -n " + ns + " kardinal.io/referenceable=true"
+	waitPipeline(t, e, ns, "web", time.Minute, "Ready=False GitCredentialMissing", func(p *v1alpha1.Pipeline) (bool, string) {
+		ok, seen := framework.CondIs(p.Status.Conditions, "Ready", metav1.ConditionFalse, "GitCredentialMissing")
+		c := meta.FindStatusCondition(p.Status.Conditions, "Ready")
+		return ok && c != nil && strings.HasSuffix(c.Message, fix), seen
+	})
+	for _, cmd := range strings.Split(strings.ReplaceAll(fix, "<TOKEN>", "t0ken"), " && ") {
+		out, err := cli.Kubectl(dir, strings.Fields(cmd)[1:]...)
+		require.NoError(t, err, out)
+	}
 	waitPipelineValid(t, e, ns, "web")
 
 	// --file into a new directory, with a scaffold under --gitops-dir.

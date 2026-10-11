@@ -168,6 +168,10 @@ type pipelineStatus struct {
 	Source        string                               `json:"source"`
 	Environments  []v1alpha1.PipelineEnvironmentStatus `json:"environments"`
 	BlockingGates []statusGate                         `json:"blockingGates"`
+	// Notices are the Pipeline's own problems, before everything else: an
+	// ERROR: line when it is not Ready, a WARNING: line when its git Secret
+	// is not referenceable.
+	Notices []string `json:"notices,omitempty"`
 	// Warnings are the WARNING: lines after the table (a Rejected Bundle
 	// whose change is live).
 	Warnings []string `json:"warnings,omitempty"`
@@ -204,7 +208,8 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 		return nil, fmt.Errorf("get pipeline: %w", err)
 	}
 	view := &pipelineStatus{Pipeline: pipeline, Namespace: ns, Phase: pl.Status.Phase, Paused: pl.Spec.Paused,
-		Source: "controller", Environments: pl.Status.Environments, Summary: pl.Status.Summary, BlockingGates: []statusGate{}}
+		Source: "controller", Environments: pl.Status.Environments, Summary: pl.Status.Summary, BlockingGates: []statusGate{},
+		Notices: pipelineNotices(&pl)}
 
 	var bundles v1alpha1.BundleList
 	if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err != nil {
@@ -312,6 +317,11 @@ func versionCell(bundle, version string) string {
 // writePipelineStatus writes view as kardinal status <pipeline> prints it.
 func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
 	_, _ = fmt.Fprintf(w, "Pipeline: %s   Namespace: %s\n", view.Pipeline, view.Namespace)
+	// The Pipeline's own problems come first: nothing promotes until they
+	// are fixed.
+	for _, n := range view.Notices {
+		_, _ = fmt.Fprintln(w, notice(n))
+	}
 	running := slices.ContainsFunc(view.Environments, func(e v1alpha1.PipelineEnvironmentStatus) bool {
 		return e.Bundle != "" || e.IncomingBundle != "" || e.State != ""
 	})
@@ -367,13 +377,32 @@ func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
 	return nil
 }
 
+// pipelineNotices are the Pipeline's own problems, shown before its
+// promotions: an ERROR when it is not Ready (an invalid spec, or
+// GitCredentialMissing with the command that fixes it), and a WARNING for a
+// git Secret that works today but is not labelled referenceable, so it is
+// fixed before v0.11 refuses it.
+func pipelineNotices(p *v1alpha1.Pipeline) []string {
+	var out []string
+	if c := meta.FindStatusCondition(p.Status.Conditions, "Ready"); c != nil && c.Status == metav1.ConditionFalse {
+		out = append(out, fmt.Sprintf("ERROR: pipeline %s is not Ready (%s): %s", p.Name, c.Reason, c.Message))
+	}
+	if c := meta.FindStatusCondition(p.Status.Conditions, "SecretReferenceable"); c != nil && c.Status == metav1.ConditionFalse {
+		out = append(out, fmt.Sprintf("WARNING: pipeline %s: %s", p.Name, c.Message))
+	}
+	return out
+}
+
 // statusReference is the detail of status for its reference page.
 const statusReference = `When called without arguments: displays the controller version (the
 kardinal-version ConfigMap in --controller-namespace), the pipeline count with
 any Degraded pipelines, and the bundle count (active = Available or Promoting).
 
-When called with a pipeline name: the Pipeline's summary sentence ("1.5.0 live
-in test; waiting for PR merge in prod (#42)"), then one row per environment
+When called with a pipeline name: first the Pipeline's own problems, an
+ERROR when it is not Ready (such as GitCredentialMissing, with the command
+that creates the git Secret) and a WARNING when its git Secret is not
+labelled kardinal.io/referenceable=true; then the Pipeline's summary sentence
+("1.5.0 live in test; waiting for PR merge in prod (#42)"), then one row per environment
 (a fleet environment expands to its targets) from the Pipeline's
 status.environments, which the controller writes:
 

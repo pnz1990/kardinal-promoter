@@ -1043,6 +1043,10 @@ API and the Bundle API, and they work the same for `kubectl` and the `kardinal` 
 `kardinal-promoter-viewer` and so on. Bind these roles explicitly; that is the only way to
 grant kardinal access by default.
 
+When the UI API refuses an action on a virtual subresource, its `403` names the role that
+grants it, for example `forbidden: user "bob" cannot update policygates/override.kardinal.io …;
+the chart's approver or admin role grants it`. The UI shows that text in the action's dialog.
+
 To opt in to the built-in roles, set `rbac.userRoles.aggregateToDefaultRoles=true`. The roles
 then also aggregate into Kubernetes' built-in roles: the viewer into `view`, the promoter and
 approver into `edit`, and the admin rules into `admin`. A namespace RoleBinding to `view`,

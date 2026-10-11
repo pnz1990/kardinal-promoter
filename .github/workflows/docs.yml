@@ -52,7 +52,7 @@ jobs:
           cache: true
 
       - name: Generate CLI reference pages
-        run: go run ./hack/gen-cli-docs/main.go --output docs/reference/cli/ --quickref docs/cli-reference.md
+        run: go run ./hack/gen-cli-docs/main.go --output docs/reference/cli/ --quickref docs/cli-reference.md --nav ""
 
       - name: Upload generated CLI docs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -118,7 +118,8 @@ jobs:
 
       - name: Check CLI detail pages and quick-reference are up to date
         run: |
-          go run ./hack/gen-cli-docs/main.go --output /tmp/cli-docs/ --quickref /tmp/cli-reference-gen.md
+          cp mkdocs.yml /tmp/mkdocs-gen.yml
+          go run ./hack/gen-cli-docs/main.go --output /tmp/cli-docs/ --quickref /tmp/cli-reference-gen.md --nav /tmp/mkdocs-gen.yml
           FAIL=0
           # Check per-command detail pages
           if ! diff -r /tmp/cli-docs/ docs/reference/cli/; then
@@ -128,6 +129,11 @@ jobs:
           # Check the consolidated quick-reference (docs/cli-reference.md)
           if ! diff /tmp/cli-reference-gen.md docs/cli-reference.md; then
             echo "::error::docs/cli-reference.md is stale. Run: go run ./hack/gen-cli-docs/main.go"
+            FAIL=1
+          fi
+          # Check the CLI block of the mkdocs.yml nav
+          if ! diff /tmp/mkdocs-gen.yml mkdocs.yml; then
+            echo "::error::the CLI nav in mkdocs.yml is stale. Run: go run ./hack/gen-cli-docs/main.go"
             FAIL=1
           fi
           if [ $FAIL -eq 0 ]; then

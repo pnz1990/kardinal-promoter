@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -67,6 +68,9 @@ func TestControllerIntegration(t *testing.T) {
 			Git: kardinalv1alpha1.PipelineGit{
 				URL:    "https://github.com/example/nginx-demo",
 				Branch: "main",
+				// git has a token, so the Pipeline is not
+				// Ready=False/GitCredentialMissing.
+				SecretRef: &kardinalv1alpha1.SecretRef{Name: "github-token"},
 			},
 			Environments: []kardinalv1alpha1.EnvironmentSpec{
 				{
@@ -79,6 +83,12 @@ func TestControllerIntegration(t *testing.T) {
 				},
 			},
 		},
+	}
+
+	gitSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "github-token", Namespace: namespace,
+			Labels: map[string]string{"kardinal.io/referenceable": "true"}},
+		Data: map[string][]byte{"token": []byte("t0ken")},
 	}
 
 	// Create a Bundle object
@@ -108,7 +118,7 @@ func TestControllerIntegration(t *testing.T) {
 	// reconciler returns the error of a List it cannot run.
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(pipeline, bundle).
+		WithObjects(pipeline, bundle, gitSecret).
 		WithStatusSubresource(pipeline, bundle).
 		WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		WithIndex(&kardinalv1alpha1.PromotionStep{}, "spec.pipelineName",
@@ -223,6 +233,28 @@ func TestControllerIntegration(t *testing.T) {
 		assert.Equal(t, "Ready", got.Status.Conditions[0].Type, "Pipeline.status.conditions[0].type must be 'Ready'")
 		assert.Equal(t, metav1.ConditionTrue, got.Status.Conditions[0].Status, "Pipeline.status.conditions[0].status must be 'True'")
 		assert.Equal(t, "Valid", got.Status.Conditions[0].Reason)
+	})
+
+	t.Run("PipelineReconciler reports a missing git credential", func(t *testing.T) {
+		// The same Pipeline without spec.git.secretRef: git has no token for
+		// its HTTPS remote (there is no fallback to the controller's token),
+		// so Ready is False with reason GitCredentialMissing, re-checked every
+		// minute because Secrets are not watched.
+		noCred := pipeline.DeepCopy()
+		noCred.Name, noCred.ResourceVersion = pipelineName+"-nocred", ""
+		noCred.Spec.Git.SecretRef = nil
+		require.NoError(t, fakeClient.Create(ctx, noCred))
+		r := &pipelinereconciler.Reconciler{Client: fakeClient}
+		result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: noCred.Name, Namespace: namespace}})
+		require.NoError(t, err)
+		assert.Equal(t, time.Minute, result.RequeueAfter)
+		var got kardinalv1alpha1.Pipeline
+		require.NoError(t, fakeClient.Get(ctx, client.ObjectKey{Name: noCred.Name, Namespace: namespace}, &got))
+		require.NotEmpty(t, got.Status.Conditions)
+		assert.Equal(t, "Ready", got.Status.Conditions[0].Type)
+		assert.Equal(t, metav1.ConditionFalse, got.Status.Conditions[0].Status)
+		assert.Equal(t, "GitCredentialMissing", got.Status.Conditions[0].Reason)
+		assert.Contains(t, got.Status.Conditions[0].Message, "kubectl create secret generic git-token -n "+namespace)
 	})
 
 	t.Run("PipelineReconciler is idempotent", func(t *testing.T) {
