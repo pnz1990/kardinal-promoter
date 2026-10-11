@@ -141,44 +141,50 @@ test('keyboard shortcuts: / focuses the filter, ? shows the help, r refreshes, E
 
 test('the theme follows the system until the user picks one, which the next visit keeps', async ({ page }) => {
   const root = page.locator('#root > div').first()
-  const toggle = (name: string) => page.getByRole('button', { name })
+  const toggle = (name: RegExp) => page.getByRole('button', { name })
   const stored = () => page.evaluate(() => localStorage.getItem('kardinal-theme'))
-  const dark = 'rgb(15, 23, 42)'
-  const light = 'rgb(241, 245, 249)'
+  // --k-surface-canvas in each theme (web/tokens/tokens.json).
+  const dark = 'rgb(15, 21, 19)'
+  const light = 'rgb(242, 244, 243)'
 
   await page.emulateMedia({ colorScheme: 'dark' })
   await openPipeline(page, base, ns)
-  await expect(page.locator('html')).not.toHaveAttribute('data-theme')
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   await expect(root).toHaveCSS('background-color', dark)
-  await expect(toggle('Switch to light mode')).toHaveText('☀')
+  await expect(toggle(/^Theme: System \(dark\)\. Switch to Light$/)).toHaveText('◐')
   expect(await stored()).toBeNull()
 
-  // No choice yet: the system's setting, as it changes.
+  // System: the OS setting, as it changes.
   await page.emulateMedia({ colorScheme: 'light' })
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
   await expect(root).toHaveCSS('background-color', light)
-  await expect(toggle('Switch to dark mode')).toHaveText('☾')
+  await expect(toggle(/^Theme: System \(light\)/)).toBeVisible()
   await page.emulateMedia({ colorScheme: 'dark' })
-  await expect(page.locator('html')).not.toHaveAttribute('data-theme')
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   expect(await stored()).toBeNull()
 
   // The user's choice wins over the system's and is kept across visits.
-  await toggle('Switch to light mode').click()
+  await toggle(/Switch to Light$/).click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
   await expect(root).toHaveCSS('background-color', light)
   expect(await stored()).toBe('light')
   await page.reload()
   await expect(heading(page)).toHaveText(PIPELINE)
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
-  await expect(toggle('Switch to dark mode')).toBeVisible()
+  await expect(toggle(/^Theme: Light\. Switch to Dark$/)).toHaveText('☀')
 
-  await toggle('Switch to dark mode').click()
-  await expect(page.locator('html')).not.toHaveAttribute('data-theme')
+  await toggle(/Switch to Dark$/).click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   await expect(root).toHaveCSS('background-color', dark)
   expect(await stored()).toBe('dark')
   await page.emulateMedia({ colorScheme: 'light' })
-  await expect(toggle('Switch to light mode')).toBeVisible()
-  await expect(page.locator('html')).not.toHaveAttribute('data-theme')
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  await expect(toggle(/^Theme: Dark\. Switch to System$/)).toHaveText('☾')
+
+  // System again: the choice is forgotten and the OS setting applies.
+  await toggle(/Switch to System$/).click()
+  expect(await stored()).toBeNull()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
 })
 
 test('a link opens the pipeline and node it names, and Back and Forward walk the selections', async ({ page }) => {

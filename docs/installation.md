@@ -419,8 +419,11 @@ release name other than `kardinal-promoter`, the Service is named
   End to the ends, Up and Down between fleet lines), and Enter opens the one in focus. `?` lists
   the shortcuts (`/` filter, `r` refresh, `Esc` close a panel). Every view is checked against
   WCAG 2.1 AA, colour contrast included, in both themes.
-- **Dark and light themes.** The UI follows the operating system's setting until you pick one
-  with the ☀ / ☾ button next to the refresh indicator; the choice is kept in the browser.
+- **Themes.** The theme button next to the refresh indicator cycles through System (◐),
+  Light (☀) and Dark (☾). System follows the operating system's setting, also when it changes.
+  Light or Dark is kept in the browser and applied before the page draws. The UI and these docs
+  share one palette and one set of fonts, which the UI serves itself; it loads nothing from a
+  font CDN.
 
 ### With TLS (production)
 

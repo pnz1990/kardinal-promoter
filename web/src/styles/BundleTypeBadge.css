@@ -17,7 +17,7 @@
   border: 1px solid currentColor;
   border-radius: 999px;
   color: var(--type-color);
-  font-family: ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-family: var(--k-font-mono);
   font-size: 0.68rem;
   line-height: 1.5;
   letter-spacing: 0.02em;
