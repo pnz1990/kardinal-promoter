@@ -1,0 +1,14 @@
+      +0s  test: Promoting
+      +0s  uat: Queued
+      +0s  prod: Queued
+     +40s  test: Checking health
+    +1m5s  test: Live
+    +1m5s  uat: Promoting
+    +2m0s  uat: Waiting for PR merge
+    +2m0s  uat: PR https://github.com/acme/gitops/pull/42
+    +3m0s  uat: Live
+    +3m0s  prod: Held by gate cab
+Summary after 4m15s:
+  test   Live               took 1m5s
+  uat    Live               took 1m55s
+  prod   Held by gate cab   for 1m15s

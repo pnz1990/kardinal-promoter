@@ -248,9 +248,17 @@ func TestShipWait(t *testing.T) {
 		}
 	}()
 	var out bytes.Buffer
-	require.NoError(t, shipFn(context.Background(), &out, c, "default", "demo", opts, true, time.Minute, false))
+	require.NoError(t, shipFn(context.Background(), &out, c, "default", "demo", opts, true, time.Minute, false, false))
 	assert.Equal(t, "1.5.0 is live in test, prod\n", out.String())
 	assert.Contains(t, progress.String(), "following it")
+	assert.Contains(t, progress.String(), "Summary after ", "a summary at the end")
+
+	// --quiet: the last line only, nothing on stderr.
+	progress.Reset()
+	out.Reset()
+	require.NoError(t, shipFn(context.Background(), &out, c, "default", "demo", opts, true, time.Minute, false, true))
+	assert.Equal(t, "1.5.0 is live in test, prod\n", out.String())
+	assert.Empty(t, progress.String(), "--quiet prints nothing on stderr")
 
 	// Held at an evaluated gate: exit 3, JSON.
 	cancel()
@@ -467,6 +475,56 @@ func (s *syncBuffer) Write(p []byte) (int, error) {
 }
 func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
 
+var updateShipProgress = flag.Bool("update-ship-progress", false, "rewrite testdata/ship-progress.golden")
+
+// TestShipProgress_Golden (CLI UX 10): ship --wait's stderr: each new state
+// after the time since the start, each PR's URL once, and a summary of how
+// long each environment took, or has waited.
+//
+// Covers CLI-VERBS-02.
+func TestShipProgress_Golden(t *testing.T) {
+	start := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
+	now := start
+	prev := shipNow
+	shipNow = func() time.Time { return now }
+	t.Cleanup(func() { shipNow = prev })
+	var buf bytes.Buffer
+	p := &shipProgress{w: &buf, timed: true, start: start}
+	env := func(name, state string, more ...func(*v1alpha1.PipelineEnvironmentStatus)) v1alpha1.PipelineEnvironmentStatus {
+		e := v1alpha1.PipelineEnvironmentStatus{Name: name, State: state, IncomingBundle: "b2"}
+		for _, f := range more {
+			f(&e)
+		}
+		return e
+	}
+	pr := func(e *v1alpha1.PipelineEnvironmentStatus) { e.PRURL = "https://github.com/acme/gitops/pull/42" }
+	gate := func(e *v1alpha1.PipelineEnvironmentStatus) { e.BlockedBy = []string{"cab"} }
+	steps := []struct {
+		at   time.Duration
+		envs []v1alpha1.PipelineEnvironmentStatus
+	}{
+		{0, []v1alpha1.PipelineEnvironmentStatus{env("test", "Promoting"), env("uat", "Pending"), env("prod", "Pending")}},
+		{40 * time.Second, []v1alpha1.PipelineEnvironmentStatus{env("test", "HealthChecking"), env("uat", "Pending"), env("prod", "Pending")}},
+		{65 * time.Second, []v1alpha1.PipelineEnvironmentStatus{env("test", "Verified"), env("uat", "Promoting"), env("prod", "Pending")}},
+		{2 * time.Minute, []v1alpha1.PipelineEnvironmentStatus{env("test", "Verified"), env("uat", "WaitingForMerge", pr), env("prod", "Pending")}},
+		{2*time.Minute + 2*time.Second, []v1alpha1.PipelineEnvironmentStatus{env("test", "Verified"), env("uat", "WaitingForMerge", pr), env("prod", "Pending")}},
+		{3 * time.Minute, []v1alpha1.PipelineEnvironmentStatus{env("test", "Verified"), env("uat", "Verified"), env("prod", "Pending", gate)}},
+	}
+	for _, s := range steps {
+		now = start.Add(s.at)
+		p.observe(s.envs)
+	}
+	now = start.Add(4*time.Minute + 15*time.Second)
+	p.summary(steps[len(steps)-1].envs)
+	path := filepath.Join("testdata", "ship-progress.golden")
+	if *updateShipProgress {
+		require.NoError(t, os.WriteFile(path, buf.Bytes(), 0o644))
+	}
+	want, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, string(want), buf.String())
+}
+
 // TestShipWait_Interrupt (C5): SIGINT during ship --wait ends the wait, not
 // the process: the JSON result is printed and the exit code is 6.
 //
@@ -490,7 +548,7 @@ func TestShipWait_Interrupt(t *testing.T) {
 	}()
 	var out bytes.Buffer
 	err := shipFn(context.Background(), &out, c, "default", "demo",
-		createBundleOptions{Images: []string{"ghcr.io/o/app:1.5.0"}, Type: "image"}, true, time.Minute, false)
+		createBundleOptions{Images: []string{"ghcr.io/o/app:1.5.0"}, Type: "image"}, true, time.Minute, false, false)
 	require.Error(t, err)
 	assert.Equal(t, ExitTimeout, ExitCode(err))
 	var res shipResult
