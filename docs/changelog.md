@@ -12,7 +12,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 #### From v0.9.0
 
-Follow the tested steps in [Upgrading from v0.9.0](https://pnz1990.github.io/kardinal-promoter/installation/#upgrading-from-v090): label the Pipelines' git Secrets, apply the new CRDs, re-run `hack/install-kro.sh` and `helm upgrade --reset-then-reuse-values`. Before that, check these changes for existing objects and clients (each is under Changed or Fixed below):
+Follow the tested steps in [Upgrading from v0.9.0](https://pnz1990.github.io/kardinal-promoter/installation/#upgrading-from-v090): label the Pipelines' git Secrets, apply the new CRDs (with `kubectl apply --server-side --force-conflicts`: the v0.9.0 chart installed them, so without it the apply stops on a conflict with Helm), re-run `hack/install-kro.sh` and `helm upgrade --reset-then-reuse-values`. Before that, check these changes for existing objects and clients (each is under Changed or Fixed below):
 
 1. **Bundle fields:** the Bundle CRD now refuses a tag outside the OCI grammar, a short or placeholder digest or commit SHA. Check that your CI sends real values before applying the new CRDs.
 2. **A Bundle's spec is immutable:** an update that changes its type, Pipeline, images, chart, configRef, provenance or intent is refused. Create a new Bundle instead.

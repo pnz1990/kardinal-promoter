@@ -440,8 +440,13 @@ Helm does not update CRDs on upgrade. Apply the new chart's CRDs first:
 
 ```bash
 helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> \
-  | kubectl apply --server-side -f -
+  | kubectl apply --server-side --force-conflicts -f -
 ```
+
+`--force-conflicts` is needed when Helm installed the CRDs (a release installed from the chart,
+which ships them): Helm owns their fields, and without it the apply stops with
+`conflict with "helm" ... .spec.versions`. kubectl then owns the CRDs; Helm never changes them
+after the install anyway.
 
 Then upgrade the release:
 
@@ -502,12 +507,12 @@ kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "
 ```
 
 **3. Apply the new CRDs.** Helm never upgrades CRDs. Apply them before the new controller starts.
+The v0.9.0 chart installed them, so Helm owns their fields: `--force-conflicts` is required, or
+the apply stops with `conflict with "helm" ... .spec.versions`.
 
 ```bash
-helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 | kubectl apply --server-side -f -
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 | kubectl apply --server-side --force-conflicts -f -
 ```
-
-If this reports field-manager conflicts, add `--force-conflicts`.
 
 **4. Upgrade kro.** Run this from a checkout of kardinal-promoter at this release; it installs
 the kro version the release targets, and leaves a kro that is already at it as it is.
