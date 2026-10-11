@@ -1,17 +1,22 @@
 # Quickstart
 
-In about 10 minutes, on a local cluster, you ship a version of
+In about 10 minutes, on a kind cluster, you ship a version of
 [`kardinal-test-app`](https://github.com/pnz1990/kardinal-test-app) through test, uat and prod,
 see it stop at an approval gate before prod, and approve it. Then you ship the next version and
 watch it move on the UI's map.
 
 You need:
 
-- Docker, and a local cluster tool: [kind](https://kind.sigs.k8s.io/), k3d, minikube, Docker
-  Desktop or Rancher Desktop
+- Docker and [kind](https://kind.sigs.k8s.io/)
 - `kubectl` and `helm`
-- a GitHub token with **contents** and **pull requests** read and write on your fork of the demo
-  repository: `GITHUB_TOKEN`, or the token of `gh auth login`
+- a GitHub account, and the GitHub CLI `gh`, logged in (`gh auth login`)
+
+The quickstart uses the token of `gh auth login`, or `GITHUB_TOKEN` when it is set. The token
+needs **contents** and **pull requests** read and write on your fork of the demo repository; a
+fine-grained token can be given access to the fork only once the fork exists, after step 2.
+
+The commands here use kind. The quickstart also runs on k3d, minikube, Docker Desktop and Rancher
+Desktop: create and delete the cluster your own way.
 
 ## 1. Install the CLI
 
@@ -38,19 +43,21 @@ writes to, with one directory per environment. Your fork receives its commits.
 kardinal quickstart --repo https://github.com/<you>/kardinal-demo
 ```
 
-It sets up the demo in the current kubectl context, then ships a first version and follows it:
+It sets up the demo in the current kubectl context, then ships a first version and follows it.
+This is its output in a log or a pipe; on a terminal the `-` marks are ✓ and each state has its
+symbol:
 
 ```text
 Setting up the kardinal demo in kind-kardinal
-  ✓ kro 0.10.0-rc.0: installed
-  ✓ Argo CD v3.5.3: installed
-  ✓ Secret kardinal-system/kardinal-scm-token: created from $GITHUB_TOKEN (the controller's token for PRs)
-  ✓ kardinal-promoter 0.10.1: installed
-  ✓ Secret default/github-token: created from $GITHUB_TOKEN
-  ✓ Argo CD ApplicationSet argocd/kardinal-test-app (https://github.com/<you>/kardinal-demo): applied
-  ✓ PolicyGate default/prod-approval (prod waits for your approval, as kubernetes-admin): applied
-  ✓ Pipeline default/demo: applied
-  ✓ First version: shipped as demo-zhxk2
+  - kro 0.10.0-rc.0: installed
+  - Argo CD v3.5.3: installed
+  - Secret kardinal-system/kardinal-scm-token: created from $GITHUB_TOKEN (the controller's token for PRs)
+  - kardinal-promoter 0.10.1: installed
+  - Secret default/github-token: created from $GITHUB_TOKEN
+  - Argo CD ApplicationSet argocd/kardinal-test-app (https://github.com/<you>/kardinal-demo): applied
+  - PolicyGate default/prod-approval (prod waits for your approval, as kubernetes-admin): applied
+  - Pipeline default/demo: applied
+  - First version: shipped as demo-zhxk2
 Following version sha-9349a3f (demo-zhxk2) through test, uat and prod (Ctrl-C stops following, the promotion goes on)
   test: Checking health
   test: Live
@@ -64,7 +71,7 @@ Next:
   Approve prod:    kardinal approve demo prod
   Watch:           kardinal status demo -w
   Open the UI:     kardinal dashboard
-  Ship the next:   kardinal ship demo --image ghcr.io/pnz1990/kardinal-test-app:main@sha256:51a7355f… --wait
+  Ship the next:   kardinal ship demo --image ghcr.io/pnz1990/kardinal-test-app:main@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0 --wait
 ```
 
 What it set up:
@@ -77,13 +84,18 @@ What it set up:
 - **The `demo` Pipeline** in the `default` namespace: test, uat and prod. Prod promotes without
   a pull request, behind the `prod-approval` gate, which you may approve.
 
-It runs only when the kubectl context is a kind, k3d, minikube, Docker Desktop or Rancher Desktop
-cluster whose API server is on this machine; with any other it stops before it sends anything,
-and prints the command that switches to a local one. It never changes your kubeconfig;
-`--context` picks another local context. The indented state lines go to stderr, the rest to
-stdout.
+It runs only when the kubectl context is a local cluster (kind, k3d, minikube, Docker Desktop or
+Rancher Desktop, with its API server on this machine). With any other context it stops before it
+sends anything, and prints `kind create cluster --name kardinal` to create one. It never changes
+your kubeconfig; `--context` picks another local context. The environment state lines
+(`test: Live`) go to stderr, the rest to stdout.
 
 The first version, `sha-9349a3f`, went to test and uat on its own and now waits at prod's gate.
+
+!!! tip "If it stops somewhere else"
+    If the quickstart stops before prod's gate, for example because the token cannot write to
+    your fork, `kardinal why demo` says what each environment waits for and the command that
+    moves it on, and `kardinal doctor` checks the cluster and the controller.
 
 ## 4. Ask why it is waiting
 
@@ -132,17 +144,28 @@ prod         sha-9349a3f (demo-zhxk2)  -         Live   1s     -
 
 ```bash
 kardinal dashboard
-# kardinal UI: http://localhost:8082/ui/
+```
+
+```text
+kardinal UI: http://127.0.0.1:8082/ui/
+Forwarding to the controller in kardinal-system; Ctrl-C stops.
+Opening in browser...
 ```
 
 It port-forwards to the controller and opens the UI in your browser (`--no-open` only prints the
-address). Open `demo`: the map shows test, uat and prod, each running `sha-9349a3f`. Keep it open
+address). The forward keeps the terminal busy: leave it running, and use a second terminal for
+the next step. Open `demo`: the map shows test, uat and prod, each running `sha-9349a3f`. Keep it open
 for the next step.
 
 ## 7. Ship the next version and watch it
 
-In another terminal, run the **Ship the next** line from the quickstart's output. It ships
-version `main`, and `--wait` follows it:
+In a second terminal, ship the next version, `main` (the quickstart's **Ship the next** line):
+
+```bash
+kardinal ship demo --image ghcr.io/pnz1990/kardinal-test-app:main@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0 --wait
+```
+
+`--wait` follows it:
 
 ```text
 Shipped main as demo-q8m4t; following it (Ctrl-C stops following, the promotion goes on)
