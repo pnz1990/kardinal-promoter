@@ -158,6 +158,8 @@ describe('StationMap', () => {
     }
     expect(document.querySelectorAll('.cell[data-station]').length).toBe(494)
     // jsdom is several times slower than a browser; the budget is the browser's frame.
-    expect(ms).toBeLessThan(16 * 8)
+    // jsdom is about 8× slower than a browser, and more while the other test files run in
+    // parallel; the browser's own frame time is measured by Playwright (journey 017 at 300).
+    expect(ms).toBeLessThan(16 * 10)
   })
 })

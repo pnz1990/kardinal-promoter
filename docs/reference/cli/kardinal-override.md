@@ -31,6 +31,7 @@ kardinal override <pipeline> [<env>] --gate <gate> --reason <text> [flags]
       --gate string           PolicyGate name to override
   -h, --help                  help for override
       --reason string         Mandatory justification for the override (audit record)
+      --yes                   Do not ask for confirmation on a terminal
 ```
 
 ### Options inherited from parent commands

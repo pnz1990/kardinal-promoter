@@ -202,6 +202,12 @@ func TestFixitFollowups(t *testing.T) {
 	hook := apierrors.NewForbidden(gr, "app", errors.New(`admission webhook "validate.example.com" denied the request: frozen`))
 	assert.EqualError(t, HumanError(hook), `the cluster's admission policy validate.example.com refused the request: frozen`)
 	assert.Contains(t, HumanError(forbidden("list", "pipelines")).Error(), "kardinal-promoter-viewer", "RBAC keeps the role hint")
+	multi := apierrors.NewForbidden(gr, "app", errors.New("ValidatingAdmissionPolicy 'kardinal-promoter-scoped-writes' with binding 'b' denied request: you may change only spec.paused\nand spec.holds of this pipeline"))
+	assert.EqualError(t, HumanError(multi), "the cluster's admission policy kardinal-promoter-scoped-writes refused the request: you may change only spec.paused\nand spec.holds of this pipeline",
+		"a message that spans lines is kept whole")
+	silent := apierrors.NewForbidden(gr, "app", errors.New(`admission webhook "validate.example.com" denied the request without explanation`))
+	assert.EqualError(t, HumanError(silent), "the cluster's admission policy validate.example.com refused the request, and said no more; ask your cluster admin")
+	assert.NotContains(t, HumanError(silent).Error(), "kardinal-promoter-", "no RBAC hint")
 
 	globalContext = "kind-dev"
 	t.Cleanup(func() { globalContext = "" })

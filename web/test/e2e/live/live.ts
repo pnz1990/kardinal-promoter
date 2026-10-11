@@ -105,6 +105,16 @@ export function gateMark(page: Page, name: string) {
   return page.locator(`.station-map__gate[aria-label^="gate ${name}, "]`)
 }
 
+/** The stage drawer (U3): an environment's details, "why it's waiting" first. */
+export function stageDrawer(page: Page) {
+  return page.getByTestId('stage-drawer')
+}
+
+/** The environment the stage drawer is open on (its heading). */
+export function drawerHeading(page: Page) {
+  return stageDrawer(page).getByRole('heading', { level: 2 })
+}
+
 /**
  * collectErrors records the page's console errors and uncaught exceptions,
  * so a spec can require that there were none.

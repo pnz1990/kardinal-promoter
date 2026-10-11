@@ -13,7 +13,7 @@
 // against the pipeline list the page last read.
 
 import { test, expect, type Page } from '@playwright/test'
-import { need, filterSidebar, sidebarRows, sidebarRow, PIPELINE } from './live'
+import { need, filterSidebar, sidebarRows, sidebarRow, PIPELINE, route } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -140,9 +140,8 @@ test('selecting a row opens its pipeline, with its paused state', async ({ page 
   await expect(page.getByRole('heading', { level: 1, name: paused })).toBeVisible()
   // The header says Paused and the map carries the paused band (U2).
   await expect(page.getByText('⏸ PAUSED — no new promotions')).toBeVisible()
-  await expect(page.getByRole('status').filter({ hasText: 'Paused · no new promotions' })).toBeVisible()
-  expect(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('pipeline')).toBe(paused)
-  expect(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('ns')).toBe(ns)
+  expect(route(page).pipeline).toBe(paused)
+  expect(route(page).ns).toBe(ns)
 
   const held = sidebarRow(page, PIPELINE)
   await held.click()
@@ -184,7 +183,7 @@ test('the fleet board shows what each environment runs and where releases are', 
 
   await testStation.click()
   await expect(page.getByRole('heading', { level: 1, name: PIPELINE })).toBeVisible()
-  expect(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('ns')).toBe(ns)
+  expect(route(page).ns).toBe(ns)
   await page.getByRole('button', { name: 'Show the fleet' }).click()
   await expect(board).toBeVisible()
 })

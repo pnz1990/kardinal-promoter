@@ -311,9 +311,9 @@ func TestCheckPipelineHealth(t *testing.T) {
 		{name: "promoting", client: doctorClient(pipe("Promoting")), wantIcon: doctorPass, wantDetail: "status: Promoting"},
 		// Unknown is the phase before the first Bundle.
 		{name: "unknown", client: doctorClient(pipe("Unknown")), wantIcon: doctorPass,
-			wantDetail: "status: Unknown (spec valid, no Bundle yet)"},
+			wantDetail: "status: Unknown (spec valid, no version shipped yet)"},
 		{name: "unset", client: doctorClient(pipe("")), wantIcon: doctorPass,
-			wantDetail: "status: Unknown (spec valid, no Bundle yet)"},
+			wantDetail: "status: Unknown (spec valid, no version shipped yet)"},
 		{name: "no Ready condition", client: doctorClient(noCondition), wantIcon: doctorWarn,
 			wantDetail: "not yet reconciled by the controller"},
 		{name: "condition of an older generation",

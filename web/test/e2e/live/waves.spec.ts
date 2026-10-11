@@ -8,7 +8,7 @@
 // after it. Bundle KARDINAL_UI_BUNDLE is Verified in all seven.
 
 import { test, expect } from '@playwright/test'
-import { need, openPipeline, station, filterSidebar, PIPELINE } from './live'
+import { need, openPipeline, station, filterSidebar, PIPELINE, stageDrawer, drawerHeading } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -41,8 +41,8 @@ test('the map draws the wave as a band, its grid keeps spec order, the metrics c
   for (const env of WAVE) await expect(station(page, env).or(map.locator(`.cell[data-station="${env}"]`))).toBeVisible()
   // A real click on a cell opens its environment (no force).
   await map.locator('.cell[data-station="w3"]').click()
-  await expect(page.getByTestId('node-detail')).toContainText('Environment: w3')
-  await page.getByTestId('node-detail').getByRole('button', { name: 'Close' }).click()
+  await expect(drawerHeading(page)).toHaveText('w3')
+  await stageDrawer(page).getByRole('button', { name: 'Close w3' }).click()
 
   // The grid reads in spec order: w1 first, w6 last.
   const order: Array<{ x: number; y: number }> = []
@@ -56,6 +56,7 @@ test('the map draws the wave as a band, its grid keeps spec order, the metrics c
     expect(p.y < q.y - 1 || (Math.abs(p.y - q.y) <= 1 && p.x < q.x), `${WAVE[i - 1]} before ${WAVE[i]}`).toBe(true)
   }
 
+  // The release metrics are on the Metrics tab (U1).
   await page.getByRole('tab', { name: 'Metrics' }).click()
   const metrics = page.getByRole('region', { name: 'Release metrics' })
   await expect(metrics).toContainText('Time to all 6 final envs')

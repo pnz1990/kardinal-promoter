@@ -60,7 +60,7 @@ test('Create Bundle checks the image, reports a refusal, and creates a Bundle th
 
   // The new Bundle is on screen, with its provenance.
   await expect(chips).toHaveCount(1)
-  await expect(page.getByRole('button', { name: /^Copy bundle name "podinfo-[a-z0-9]+"$/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Copy version name "podinfo-[a-z0-9]+"$/ })).toBeVisible()
   await expect(page.getByTitle('Commit SHA', { exact: true })).toHaveText(commitSHA.slice(0, 8))
   await expect(page.getByTitle('Author', { exact: true })).toHaveText(author)
 })
