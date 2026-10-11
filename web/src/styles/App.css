@@ -162,13 +162,13 @@
 
 /* ── Pipeline header ── */
 .app-pipeline-head { flex-shrink: 0; padding: var(--k-space-4) var(--k-space-6) 0; }
-/* One line: the name, its state, its summary, and the pipeline's actions on the right. */
+/* One line: the name, its paused state, and the pipeline's actions on the right. */
 .app-pipeline-head__bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--k-space-2) var(--k-space-3);
-  margin-block-end: var(--k-space-3);
+  margin-block-end: var(--k-space-1);
 }
 .app-pipeline-head__title {
   margin: 0;
@@ -176,14 +176,22 @@
   font-weight: var(--k-weight-bold);
   line-height: var(--k-leading-2xl);
 }
-.app-pipeline-head__summary { flex: 1 1 auto; min-inline-size: 0; margin: 0; color: var(--k-ink-2); font-size: var(--k-text-md); }
+/* Under the title: the summary sentence, then the version's provenance, quiet. */
+.app-pipeline-head__summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--k-space-1) var(--k-space-2);
+  margin: 0 0 var(--k-space-3);
+  color: var(--k-ink-2);
+  font-size: var(--k-text-md);
+}
 .app-pipeline-head__actions { display: flex; align-items: center; gap: var(--k-space-2); margin-inline-start: auto; }
 
 /* Tab panels: the map takes the rest of the page; the others scroll. */
 .app-tab { flex: 1; min-block-size: 0; overflow: auto; padding: var(--k-space-4) var(--k-space-6) var(--k-space-6); }
 .app-tab--map { display: flex; flex-direction: column; padding: 0; }
 .app-map-head { flex-shrink: 0; padding: var(--k-space-3) var(--k-space-6) 0; }
-.app-map-head .app-provenance { margin-block-end: var(--k-space-3); }
 .app-tab__empty { margin: 0; color: var(--k-ink-3); }
 /* Paused is an operator state: monochrome hatch, not a colour (DESIGN-SYSTEM §2.2). */
 .app-paused {
@@ -198,11 +206,11 @@
   letter-spacing: var(--k-tracking-caps);
 }
 .app-provenance {
-  display: flex;
+  display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--k-space-2);
-  color: var(--k-ink-2);
+  gap: var(--k-space-1_5);
+  color: var(--k-ink-3);
   font-size: var(--k-text-sm);
 }
 .app-provenance__bundle { color: var(--k-syntax-ident); font-family: var(--k-font-mono); }
