@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -54,16 +53,16 @@ func whoAmI(ctx context.Context, c sigs_client.Client) (Identity, error) {
 // chart's admission policy refuses any other name. When the API server does
 // not say who the caller is, the Bundle is created without it and a warning
 // is printed: excludeAuthor then blocks the gate.
-func stampCreator(ctx context.Context, w io.Writer, c sigs_client.Client, b *v1alpha1.Bundle) {
-	lifecycle.StampCreatedBy(b, creatorOf(ctx, w, c))
+func stampCreator(ctx context.Context, c sigs_client.Client, b *v1alpha1.Bundle) {
+	lifecycle.StampCreatedBy(b, creatorOf(ctx, c))
 }
 
 // creatorOf is the caller's username for kardinal.io/created-by, or "" with
-// a warning when the API server cannot say.
-func creatorOf(ctx context.Context, w io.Writer, c sigs_client.Client) string {
+// a warning on stderr when the API server cannot say.
+func creatorOf(ctx context.Context, c sigs_client.Client) string {
 	id, err := identityOf(ctx, c)
 	if err != nil {
-		_, _ = fmt.Fprintf(w, "warning: the Bundle records no creator (%v); an approval gate with excludeAuthor will not pass it\n", err)
+		_, _ = fmt.Fprintf(errOut, "warning: the version records no creator (%v); an approval gate with excludeAuthor will not pass it\n", err)
 		return ""
 	}
 	return id.Username

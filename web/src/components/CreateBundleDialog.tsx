@@ -69,7 +69,7 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
       )
       onDone()
     } catch (err) {
-      setError(actionErrorMessage('create the bundle', err))
+      setError(actionErrorMessage('ship the version', err))
     } finally {
       setLoading(false)
     }
@@ -84,10 +84,10 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
     >
       <form ref={formRef} onSubmit={handleSubmit} className="k-dialog create-bundle">
         <h2 id="create-bundle-title" className="k-dialog__title">
-          Create Bundle — {pipelineName}
+          Ship a version of {pipelineName}
         </h2>
         <p className="k-dialog__description">
-          Creates a new Bundle to start a promotion through all pipeline environments.
+          Ships this image as a new version, promoted through the pipeline's environments.
         </p>
 
         {/* Image input — required */}
@@ -149,7 +149,7 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
             type="button"
             onClick={onCancel}
             disabled={loading}
-            aria-label="Cancel bundle creation"
+            aria-label="Cancel shipping a version"
             className="k-button k-button--ghost k-button--md"
           >
             Cancel
@@ -158,10 +158,10 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
             type="submit"
             disabled={loading}
             aria-busy={loading || undefined}
-            aria-label="Create bundle"
+            aria-label="Ship version"
             className="k-button k-button--primary k-button--md"
           >
-            {loading ? 'Creating…' : 'Create Bundle'}
+            {loading ? 'Shipping…' : 'Ship version'}
           </button>
         </div>
       </form>
@@ -178,6 +178,8 @@ interface CreateBundleButtonProps {
   onRefresh: () => void
   /** primary, the page's main action; secondary while the pipeline is paused (Resume is). */
   variant?: 'primary' | 'secondary'
+  /** The button's words (default "Ship a version"); its name adds "of <pipeline>". */
+  label?: string
   /** Why the caller may not ship (U7: the role that grants it); the button is then inert. */
   restricted?: string
   /** Opens the dialog when it changes (the s shortcut); 0 does nothing. */
@@ -188,7 +190,7 @@ interface CreateBundleButtonProps {
  * CreateBundleButton renders the "Ship a version" button (the primary action) in the pipeline header.
  * Clicking opens the CreateBundleDialog.
  */
-export function CreateBundleButton({ pipelineName, namespace, onRefresh, variant = 'primary', restricted, openSignal = 0 }: CreateBundleButtonProps) {
+export function CreateBundleButton({ pipelineName, namespace, onRefresh, variant = 'primary', label = 'Ship a version', restricted, openSignal = 0 }: CreateBundleButtonProps) {
   const [showDialog, setShowDialog] = useState(false)
   const restrictedId = useId()
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -209,10 +211,10 @@ export function CreateBundleButton({ pipelineName, namespace, onRefresh, variant
         aria-disabled={restricted ? true : undefined}
         aria-describedby={restricted ? restrictedId : undefined}
         title={restricted}
-        aria-label={`Ship a version of ${pipelineName}`}
+        aria-label={`${label} of ${pipelineName}`}
         className={`k-button k-button--${variant} k-button--md`}
       >
-        Ship a version
+        {label}
       </button>
       {restricted && <span id={restrictedId} className="sr-only">{restricted}</span>}
 

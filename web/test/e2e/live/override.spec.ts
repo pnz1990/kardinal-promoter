@@ -23,9 +23,9 @@ const holdInstance = need('KARDINAL_UI_HOLD_INSTANCE')
 test('Override gate in the stage drawer asks first, then overrides the gate in prod', async ({ page }) => {
   const writes: string[] = []
   page.on('request', r => {
-    // Reads, the drawer's CEL check (POST validate-cel) and its question of what the
-    // caller may do (POST access, U7): neither writes anything.
+    // Reads, and the drawer's CEL check (POST validate-cel, which writes nothing).
     const path = new URL(r.url()).pathname
+    // POST access (U7) asks what the caller may do: a read too.
     const reads = ['/api/v1/ui/validate-cel', '/api/v1/ui/access']
     if (r.method() !== 'GET' && !(r.method() === 'POST' && reads.includes(path))) writes.push(`${r.method()} ${path}`)
   })
@@ -35,8 +35,11 @@ test('Override gate in the stage drawer asks first, then overrides the gate in p
   await expect(drawerHeading(page)).toHaveText('prod')
   const why = drawer.locator('[data-section="why"] .stage-why__item').filter({ hasText: `Held by gate ${holdGate}.` })
   await expect(why).toBeVisible()
-  await why.getByText('Details', { exact: true }).click()
-  await expect(why).toContainText(`Gate instance ${holdInstance} in ${ns}`)
+  // The gate's object, for kubectl, is under Kubernetes details (U4).
+  const k8s = why.locator('details.k-k8s')
+  await expect(k8s).toContainText('KindPolicyGate')
+  await expect(k8s).toContainText(holdInstance)
+  await expect(k8s).toContainText(ns)
 
   // Cancel writes nothing.
   await why.getByRole('button', { name: 'Override gate' }).click()

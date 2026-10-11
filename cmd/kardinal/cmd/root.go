@@ -58,6 +58,7 @@ Getting started:
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			useStyle(cmd)
 			return checkOutputFlag(cmd)
 		},
 	}
@@ -70,7 +71,9 @@ Getting started:
 	root.PersistentFlags().StringVar(&globalContext, "context", "",
 		"Kubeconfig context override")
 	root.PersistentFlags().StringVarP(&globalOutput, "output", "o", "",
-		"Output format: table (default), json, yaml (json and yaml: get auditevents, bundles, pipelines, steps, subscriptions)")
+		"Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)")
+
+	withReference(root, rootReference)
 
 	root.AddGroup(
 		&cobra.Group{ID: groupStart, Title: "Get started:"},
@@ -86,9 +89,9 @@ Getting started:
 		}
 	}
 	add(groupStart, newInitCmd(), newDoctorCmd(), newDashboardCmd(), newVersionCmd())
-	add(groupShip, newCreateCmd(), newStatusCmd(), newExplainCmd(), newHistoryCmd(), newLogsCmd(), newDiffCmd(), newGetCmd())
+	add(groupShip, newShipCmd(), newCreateCmd(), newStatusCmd(), newExplainCmd(), newHistoryCmd(), newLogsCmd(), newDiffCmd(), newGetCmd())
 	add(groupGate, newApproveCmd(), newOverrideCmd(), newPromoteCmd(), newPolicyCmd())
-	add(groupIncident, newPauseCmd(), newResumeCmd(), newRollbackCmd(), newReleaseHoldCmd(), newRejectCmd())
+	add(groupIncident, newPauseCmd(), newResumeCmd(), newRollbackCmd(), newHoldCmd(), newReleaseHoldCmd(), newRejectCmd())
 	add(groupAdmin, newValidateCmd(), newAuditCmd(), newMetricsCmd(), newRefreshCmd(), newDeleteCmd(), newCompletionCmd())
 	root.SetHelpCommandGroupID(groupAdmin)
 	root.SetCompletionCommandGroupID(groupAdmin)
@@ -109,12 +112,20 @@ const (
 // outputAnnotation marks a command that honours -o json|yaml.
 const outputAnnotation = "kardinal.io/structured-output"
 
+// wideAnnotation marks a command whose table has more columns with -o wide.
+const wideAnnotation = "kardinal.io/wide-output"
+
 // checkOutputFlag rejects an unknown -o value, and json or yaml on a command
 // that only prints tables.
 func checkOutputFlag(cmd *cobra.Command) error {
 	switch OutputFormat() {
 	case "", "table":
 		return nil
+	case "wide":
+		if cmd.Annotations[wideAnnotation] == "true" {
+			return nil
+		}
+		return fmt.Errorf("-o wide is not supported by %q; it prints one table", cmd.CommandPath())
 	case "json", "yaml":
 		if cmd.Annotations[outputAnnotation] == "true" {
 			return nil
@@ -150,9 +161,13 @@ func requireSubcommand(cmd *cobra.Command) {
 	}
 }
 
-// buildClient constructs a controller-runtime client from the persistent flags.
+// buildClient constructs a controller-runtime client from the persistent
+// flags (clusterClient); a test replaces it with a fake one.
+var buildClient = clusterClient
+
+// clusterClient constructs a controller-runtime client from the persistent flags.
 // Returns actionable error messages with hints for common failures (#688).
-func buildClient() (sigs_client.Client, string, error) {
+func clusterClient() (sigs_client.Client, string, error) {
 	cfg, ns, err := buildRestConfig()
 	if err != nil {
 		return nil, "", err
@@ -160,7 +175,7 @@ func buildClient() (sigs_client.Client, string, error) {
 	c, err := sigs_client.New(cfg, sigs_client.Options{Scheme: rootScheme})
 	if err != nil {
 		return nil, "", fmt.Errorf(
-			"failed to create Kubernetes client — check cluster connectivity: %w", err)
+			"failed to create Kubernetes client (check cluster connectivity): %w", err)
 	}
 	return c, ns, nil
 }
@@ -188,12 +203,12 @@ func resolveRestConfig(clientConfig clientcmd.ClientConfig, explicitKubeconfig b
 		// A broken file or an unknown context is reported as is; only a
 		// missing kubeconfig falls back to the pod's service account.
 		if explicitKubeconfig || !clientcmd.IsEmptyConfig(err) {
-			return nil, "", fmt.Errorf("load kubeconfig — run 'kardinal doctor' to diagnose: %w", err)
+			return nil, "", fmt.Errorf("load kubeconfig (run 'kardinal doctor' to diagnose): %w", err)
 		}
 		cfg, err = rest.InClusterConfig()
 		if err != nil {
 			return nil, "", fmt.Errorf(
-				"cannot connect to cluster: no kubeconfig and not running in a pod — run 'kardinal doctor' to diagnose\n"+
+				"cannot connect to cluster: no kubeconfig and not running in a pod; run 'kardinal doctor' to diagnose\n"+
 					"  (underlying error: %w)", err)
 		}
 	}
@@ -211,3 +226,72 @@ func resolveRestConfig(clientConfig clientcmd.ClientConfig, explicitKubeconfig b
 	}
 	return cfg, ns, nil
 }
+
+// rootReference is the detail of kardinal for its reference page: how the
+// output looks where it goes, and the JSON it prints.
+const rootReference = `Output follows where it goes. On a terminal, each state reads as a glyph and
+its label in the status colours of the UI, from its design tokens
+(web/tokens/tokens.json): Live (spruce), Promoting and Checking health
+(thread red), Waiting for PR merge and gates not ready yet (dusk blue), Held
+by gate (ochre), Failed (on garnet, the only filled state), Replaced by newer
+version and Not reached (grey); Paused and Held by rollback are bold.
+Without COLORTERM=truecolor and a COLORFGBG that names the background, they
+are the nearest of the 16 ANSI colours, which the terminal's theme adapts.
+Without a UTF-8 locale the glyphs are ASCII (` + "`* Live`, `~ Waiting for PR merge`" + `).
+
+Piped to a file or another program, or with NO_COLOR (any value) or
+TERM=dumb, output is plain words: the labels without glyphs or colour. The
+cluster's text (a step's message, a Pipeline's summary) passes through as it
+is when the locale is UTF-8 (LC_ALL, LC_CTYPE or LANG); without a UTF-8
+locale, or with TERM=dumb, everything is ASCII (a dash is "-", an arrow
+"->", any other non-ASCII character "?"). On Windows, colour needs a console
+with virtual-terminal processing; without it output has no colour.
+
+-o json and -o yaml print the API's values (Verified, WaitingForMerge) and the
+cluster's text unchanged, and no table placeholders ("-", "--", "..."): a
+field with nothing to say is left out. With -w, -o json prints one document
+per refresh and -o yaml separates them with "---". Hints, prompts and the
+CLI's own warnings go to stderr, so stdout stays valid JSON. The notices a
+report shows about what it read (the ERROR: and WARNING: lines of status,
+get pipelines and explain) are part of its output, on stdout, so
+kardinal status my-app | less shows them; with -o json they are fields. get prints the objects as the API server
+lists them. The others print these fields (in brackets the ones left out
+when empty):
+
+  create bundle, promote, rollback:
+    bundle, pipeline, namespace, url, [type, version]; promote adds
+    environment and from (the Bundle copied); rollback adds environment,
+    rollbackOf (the Bundle restored), [replaces] (the one replaced) and,
+    with --hold, hold {environment, bundle, [reason, expiresAt]}
+  create bundle --dry-run:
+    pipeline, namespace, nodes, environments [{name, [gates]}] in promotion
+    order, [type, version, compact]
+  release-hold:
+    pipeline, namespace, environment, bundle (the rollback it was held on),
+    url, [createdBy, reason]
+  status:
+    controller, pipelines, bundles, activeBundles, [degraded]
+    (namespace/name)
+  status <pipeline>:
+    pipeline, namespace, source ("controller" or "cli"), environments,
+    blockingGates, [phase, paused, summary, notices, warnings, regions];
+    an environment is status.environments' entry: name, [bundle, version,
+    incomingBundle, incomingVersion, state, since, blockedBy, prURL, held];
+    a gate: name, instance, environment, bundle, expression, [message,
+    reason, lastEvaluatedAt]
+  explain:
+    pipeline, namespace, entries [{environment, bundle, type (Step or
+    PolicyGate), name, state, [expression, reason]}], [holds
+    [{environment, bundle, [createdBy, reason, bundleMissing]}]]
+  history:
+    a list of {bundle, action (promote or rollback), environment, state,
+    createdAt, [prURL, durationSeconds, running]}: durationSeconds once the
+    step ended, running while it runs
+  ship:
+    the create bundle fields and exitCode, with --wait also [result,
+    message, environments]
+
+url is the pipeline in the UI: KARDINAL_UI_URL, else the address kardinal
+dashboard opens (http://localhost:8082/ui/). For example
+` + "`kardinal create bundle my-app --image app:1.4 -o json | jq -r .bundle`" + `
+names the new Bundle.`

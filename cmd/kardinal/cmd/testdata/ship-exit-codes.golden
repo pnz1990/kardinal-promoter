@@ -1,0 +1,7 @@
+  CODE  RESULT                         WHEN
+  0     Verified                       live in every environment it promotes
+  1     Failed, Error                  it failed, or it could not be read three times in a row (or the command itself failed)
+  3     Held                           a person is needed and nothing else of it is moving: an approval gate, a hold, a paused pipeline, or a gate that does not pass and does not open by itself (with --stop-at-gate, any gate that does not pass)
+  4     WaitingForMerge                its PR waits for a person to merge it (not one the SCM merges by itself, pr.merge.auto), and nothing else of it is moving
+  5     Superseded, Rejected, Deleted  a newer version replaced it, it was rejected, or it was deleted
+  6     Timeout, Interrupted           --timeout (default 30m) passed, or Ctrl-C or SIGTERM interrupted the wait; the result is printed first

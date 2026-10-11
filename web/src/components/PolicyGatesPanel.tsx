@@ -62,11 +62,11 @@ function GateSummaryChip({ gates }: { gates: PolicyGate[] }) {
   const [health, label, meaning]: [HealthState, string, string | undefined] = blocked > 0
     ? ['Error', `${blocked} blocked`, undefined]
     : waiting > 0
-    ? ['Pending', `${waiting} waiting`, 'not ready, not holding the bundle']
+    ? ['Pending', `${waiting} waiting`, 'not ready, not holding the version']
     : superseded > 0
-    ? ['Unknown', `${superseded} superseded`, 'bundle superseded, not evaluated again']
+    ? ['Unknown', `${superseded} superseded`, 'version replaced by a newer one, not evaluated again']
     : rejected > 0
-    ? ['Unknown', `${rejected} rejected`, 'bundle rejected, not evaluated again']
+    ? ['Unknown', `${rejected} rejected`, 'version rejected, not evaluated again']
     : ['Ready', `${total} passing`, undefined]
   return (
     <span title={meaning} className="gates-panel__summary" data-health={health}>
@@ -111,7 +111,7 @@ export function PolicyGatesPanel({ gates, loading, onDecided, collapsed }: Props
         className="gates-panel__toggle"
         aria-expanded={open}
       >
-        {open ? '▾' : '▸'} Policy Gates ({gates.length})
+        {open ? '▾' : '▸'} Gates ({gates.length})
         <GateSummaryChip gates={gates} />
       </button>
 

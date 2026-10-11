@@ -36,11 +36,15 @@ again. It does not revert an environment: use kardinal rollback for that.`,
 			if err != nil {
 				return fmt.Errorf("reject: %w", err)
 			}
+			if err := confirm(cmd, fmt.Sprintf("Reject %s? It never promotes again.", args[0])); err != nil {
+				return err
+			}
 			return rejectFn(cmd.Context(), cmd.OutOrStdout(), c, ns, args[0], reason, time.Now())
 		},
 	}
 	cmd.Flags().StringVar(&reason, "reason", "", "Why the Bundle is rejected (required)")
 	_ = cmd.MarkFlagRequired("reason")
+	addYesFlag(cmd)
 	return cmd
 }
 
@@ -108,4 +112,4 @@ reason. The Bundle turns Rejected, whatever its phase:
 
 Rejecting is final: spec.rejected cannot be changed or removed. It does not
 revert an environment that already runs the Bundle; roll that environment
-back with kardinal rollback. See docs/rollback.md.`
+back with kardinal rollback. See docs/reject.md.`

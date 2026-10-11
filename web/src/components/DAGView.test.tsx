@@ -57,7 +57,7 @@ describe('DAGView — loading state', () => {
 describe('DAGView — error state', () => {
   it('shows error message', () => {
     render(<DAGView nodes={[]} edges={[]} error="connection refused" />)
-    expect(screen.getByText(/Error: connection refused/i)).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent(/Can't reach the kardinal controller.*connection refused/)
   })
 })
 

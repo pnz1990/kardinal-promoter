@@ -20,6 +20,7 @@ import EventsPanel from '../components/EventsPanel'
 import { StepProgress } from '../components/StepProgress'
 import type { Bundle, Pipeline, PolicyGate, PromotionStep, StepEvent } from '../types'
 import { useModalFocus } from '../useModalFocus'
+import { KubernetesDetails } from '../ui/KubernetesDetails'
 import { ActionButton } from './ActionButton'
 import { ACTION_LABEL, DESTRUCTIVE, StageActions } from './StageActions'
 import { useStageAccess, type ReasonFor } from './useStageAccess'
@@ -205,6 +206,9 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
             <h3 id={`${headingId}-history`} className="stage-section__title">History</h3>
             <History namespace={namespace} step={view.step} />
           </section>
+
+          {/* The stage's object, for kubectl, collapsed at the bottom (U4 glossary). */}
+          {view.step && <KubernetesDetails kind="PromotionStep" name={view.step.name} namespace={view.step.namespace ?? namespace} />}
         </>
       )}
     </>
@@ -250,20 +254,23 @@ function WhyItem({ reason: w, now, primary, onAct, onUpstream, upstreams, reason
         )}
         {w.next === 'openPR' && w.prURL && <a className="stage-link" href={w.prURL} target="_blank" rel="noreferrer">Open pull request</a>}
       </div>
-      {w.gate && <GateDetails gate={w.gate} />}
+      {w.gate && <GateDetails gate={w.gate} k8s />}
     </li>
   )
 }
 
-/** A gate's raw details, closed: its instance and its CEL, checked when opened. */
-function GateDetails({ gate }: { gate: PolicyGate }) {
+/** A gate's raw details, closed: its CEL, checked when opened; for a gate that holds the
+ *  stage, also its object, for kubectl (the only place the drawer names the kind, U4). */
+function GateDetails({ gate, k8s }: { gate: PolicyGate; k8s?: boolean }) {
   const [open, setOpen] = useState(false)
   return (
-    <details className="stage-details" onToggle={e => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
-      <summary>Details</summary>
-      <p className="stage-muted">Gate instance {gate.name} in {gate.namespace}</p>
-      {open ? <CelCheck expression={gate.expression} /> : <pre className="stage-code"><CELBlock expression={gate.expression} /></pre>}
-    </details>
+    <>
+      <details className="stage-details" onToggle={e => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+        <summary>Details</summary>
+        {open ? <CelCheck expression={gate.expression} /> : <pre className="stage-code"><CELBlock expression={gate.expression} /></pre>}
+      </details>
+      {k8s && <KubernetesDetails kind="PolicyGate" name={gate.name} namespace={gate.namespace} />}
+    </>
   )
 }
 

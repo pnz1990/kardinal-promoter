@@ -19,6 +19,7 @@ validation:
 
 theme:
   name: material
+  custom_dir: overrides
   # Colours and fonts are the kardinal design tokens (docs/stylesheets/tokens.css, generated
   # from web/tokens/tokens.json, and kardinal.css). The fonts are self-hosted: no font CDN.
   palette:
@@ -66,10 +67,12 @@ theme:
 # loads it from unpkg.com otherwise. Pinned; docs/assets/vendor/mermaid/LICENSE.
 extra_javascript:
   - assets/vendor/mermaid/mermaid-11.17.2.min.js
+  - javascripts/scrollwrap.js
 
 extra_css:
   - stylesheets/tokens.css
   - stylesheets/kardinal.css
+  - stylesheets/home.css
 
 plugins:
   - search:
@@ -82,6 +85,8 @@ plugins:
   - redirects:
       redirect_maps:
         multi-cluster.md: health-adapters.md#remote-clusters
+        faq.md: troubleshooting.md
+        subscription-webhooks.md: subscription.md
 
 markdown_extensions:
   - admonition
@@ -112,32 +117,41 @@ nav:
     - Overview: index.md
     - Quickstart: quickstart.md
     - Install: installation.md
+    - Your first pipeline: first-pipeline.md
   - How-to:
     - Ship versions from CI: ci-integration.md
-    - Ship automatically on new images:
-      - Subscriptions: subscription.md
-      - Subscription webhooks: subscription-webhooks.md
+    - Ship automatically from images, charts and Git: subscription.md
     - Design a pipeline:
-      - Pipeline reference: pipeline-reference.md
+      - Design a pipeline: pipeline-reference.md
       - Rendered manifests: rendered-manifests.md
     - Gate promotions: policy-gates.md
+    - Require approvals: approvals.md
+    - Override a gate in an emergency: overrides.md
     - Verify a promotion:
+      - Verify a promotion: verify.md
       - Health checks: health-adapters.md
       - Metric checks: metric-checks.md
       - Analysis (Argo Rollouts): analysis.md
     - Run pre- and post-deploy hooks: hooks.md
     - Verify image signatures: image-verification.md
-    - Roll back, reject or pause: rollback.md
+    - Roll back: rollback.md
+    - Reject a version: reject.md
+    - Pause a pipeline: pause.md
     - Promote via Argo CD without git: argocd-native-promotion.md
     - Read PR evidence: pr-evidence.md
     - Connect your SCM: scm-providers.md
     - Notify: notifications.md
     - Secure: guides/security.md
     - Monitor: guides/monitoring.md
-    - Operate at scale: sharding.md
+    - Operate at scale:
+      - Operate at scale: operate.md
+      - Sharding controllers: sharding.md
+    - Upgrade: upgrade.md
     - Migrate from Kargo: guides/migrating-from-kargo.md
-    - Troubleshoot: troubleshooting.md
-    - FAQ: faq.md
+    - Troubleshoot:
+      - Troubleshoot: troubleshooting.md
+      - Promotion stuck or failed: troubleshoot-promotions.md
+      - Git and SCM problems: troubleshoot-git.md
   - Concepts:
     - Concepts: concepts.md
     - Architecture: architecture.md
@@ -172,6 +186,7 @@ nav:
         - kardinal get steps: reference/cli/kardinal-get-steps.md
         - kardinal get subscriptions: reference/cli/kardinal-get-subscriptions.md
       - kardinal history: reference/cli/kardinal-history.md
+      - kardinal hold: reference/cli/kardinal-hold.md
       - kardinal init: reference/cli/kardinal-init.md
       - kardinal logs: reference/cli/kardinal-logs.md
       - kardinal metrics: reference/cli/kardinal-metrics.md
@@ -188,13 +203,18 @@ nav:
       - kardinal release-hold: reference/cli/kardinal-release-hold.md
       - kardinal resume: reference/cli/kardinal-resume.md
       - kardinal rollback: reference/cli/kardinal-rollback.md
+      - kardinal ship: reference/cli/kardinal-ship.md
       - kardinal status: reference/cli/kardinal-status.md
       - kardinal validate: reference/cli/kardinal-validate.md
       - kardinal version: reference/cli/kardinal-version.md
       # END CLI NAV
     - CRD API: reference/api.md
+    - Pipeline fields: reference/pipeline.md
     - REST API: reference/rest-api.md
     - CEL context: reference/cel-context.md
+    - Helm values: reference/helm-values.md
+    - Controller flags: reference/controller-flags.md
+    - Metrics: reference/metrics.md
     - Glossary: reference/glossary.md
   - Project:
     - Roadmap: roadmap.md

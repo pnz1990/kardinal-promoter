@@ -134,7 +134,7 @@
   font-size: var(--k-text-2xs);
   line-height: var(--k-leading-xs);
   font-weight: var(--k-weight-semibold);
-  font-stretch: var(--k-stretch-label);
+  font-stretch: 87.5%;
   letter-spacing: var(--k-tracking-caps);
   text-transform: uppercase;
   color: var(--k-ink-3);
@@ -298,21 +298,6 @@
   text-underline-offset: var(--k-space-1);
 }
 
-/* An action the person may not take (U7): in place, focusable, inert. */
-.stage-button[aria-disabled="true"] {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.stage-restricted {
-  margin: var(--k-space-3) 0 0;
-  padding: 0;
-  list-style: none;
-  color: var(--k-ink-3);
-  font-size: var(--k-text-xs);
-  line-height: var(--k-leading-xs);
-}
-
 .stage-button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -369,6 +354,8 @@
   align-items: center;
   gap: var(--k-space-3);
 }
+
+
 
 .stage-conditions {
   margin: var(--k-space-2) 0 0;

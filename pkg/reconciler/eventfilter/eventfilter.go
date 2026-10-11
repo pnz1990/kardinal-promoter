@@ -19,7 +19,7 @@ import (
 // The reconciler's own status write changes neither, so it does not
 // re-trigger the reconcile (C04-gates-36). An annotation change does, so
 // `kubectl annotate <kind> <name> kardinal.io/force-recheck=$(date +%s)
-// --overwrite` forces a re-evaluation, as docs/troubleshooting.md documents.
+// --overwrite` forces a re-evaluation, as docs/troubleshoot-promotions.md documents.
 // Any annotation key works; the documented ones are conventions.
 var SpecOrAnnotationChanged = predicate.Or(
 	predicate.GenerationChangedPredicate{},

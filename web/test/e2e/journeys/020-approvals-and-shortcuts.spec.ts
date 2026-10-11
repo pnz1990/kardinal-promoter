@@ -89,9 +89,9 @@ test.describe('Journey 020 — Approvals, access and shortcuts', () => {
     await expect(page).toHaveURL(/\/env\/staging$/)
 
     await page.keyboard.press('s')
-    const ship = page.getByRole('dialog', { name: /Create Bundle/ })
+    const ship = page.getByRole('dialog', { name: /^Ship a version of / })
     await expect(ship).toBeVisible()
-    await ship.getByRole('button', { name: 'Cancel bundle creation' }).click()
+    await ship.getByRole('button', { name: 'Cancel shipping a version' }).click()
     await expect(page.getByRole('button', { name: 'Ship a version of payments-service' })).toBeFocused()
 
     await page.keyboard.press('?')
@@ -101,7 +101,7 @@ test.describe('Journey 020 — Approvals, access and shortcuts', () => {
     // The top bar's ? opens the same list, for a mouse or a touch screen.
     await page.keyboard.press('Escape')
     await expect(help).toHaveCount(0)
-    await page.getByRole('button', { name: 'Keyboard shortcuts' }).click()
+    await page.getByRole('button', { name: 'Help and keyboard shortcuts' }).click()
     await expect(help).toBeVisible()
   })
 

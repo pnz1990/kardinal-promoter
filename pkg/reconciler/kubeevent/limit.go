@@ -91,7 +91,7 @@ func (l Limit) limiter() *rate.Limiter {
 // GetEventRecorder) starts one goroutine and one API write per Event, with
 // no bound and no knob: when hundreds of Bundles and steps change state at
 // once it held 2,135 goroutines and dialed hundreds of TLS connections to
-// the API server (#1682). Events are best effort; docs/installation.md
+// the API server (#1682). Events are best effort; docs/operate.md
 // (Kubernetes Events) lists the durable record of each Warning. With neither
 // type limited, rec is returned as is.
 func Limited(rec events.EventRecorder, name string, normal, warning Limit) events.EventRecorder {

@@ -69,12 +69,15 @@ describe('StageDrawer (U3)', () => {
     expect(sections).toEqual(['why', 'actions', 'evidence', 'history'])
     const why = within(drawer.querySelector('[data-section="why"]') as HTMLElement)
     expect(why.getByRole('heading', { name: 'Why it’s waiting' })).toBeInTheDocument()
-    // Gates read as the user named them; the generated instance name is under Details.
+    // Gates read as the user named them; the generated instance is under Kubernetes details.
     expect(why.getByText('Needs 1 more approval (1 of 2) in two-approvers.')).toBeInTheDocument()
     expect(why.getByText('Held by gate no-weekend.')).toBeInTheDocument()
     expect(why.getByText('weekend deploys are frozen')).toBeInTheDocument()
     expect(why.getByText('evaluated 2m 0s ago')).toBeInTheDocument()
-    expect(why.getByText('Gate instance two-approvers--web-3-prod in team')).toBeInTheDocument()
+    const gateK8s = [...why.getByText('Needs 1 more approval (1 of 2) in two-approvers.').closest('li')!.querySelectorAll('details.k-k8s')]
+    expect(gateK8s).toHaveLength(1)
+    expect(gateK8s[0]).not.toHaveAttribute('open')
+    expect(gateK8s[0]).toHaveTextContent('KindPolicyGateNametwo-approvers--web-3-prodNamespaceteam')
     // A CEL gate blocks, so the environment reads as held by it.
     expect(screen.getByText('Held by gate no-weekend')).toBeInTheDocument()
     expect(screen.getByText('1.4.0')).toBeInTheDocument()
@@ -288,7 +291,7 @@ describe('StageDrawer (U3)', () => {
     expect(screen.getByRole('dialog', { name: 'Approve 1.5.0 for prod?' })).toBeInTheDocument()
   })
 
-  it('Details checks the gate\'s CEL with the controller; the step shows its sub-steps and events (UI-NODE-01)', async () => {
+  it('Details checks the gate\'s CEL with the controller; the step shows its sub-steps, running time and events (UI-NODE-01)', async () => {
     api.validateCEL.mockResolvedValue({ valid: false, error: 'undeclared reference to \'bundel\'' })
     api.getStepEvents.mockResolvedValue([{ type: 'Normal', reason: 'WaitingForMerge', message: 'PR opened', count: 1, lastTimestamp: '2026-10-11T09:00:00Z' }])
     const running: PromotionStep = { ...step, state: 'WaitingForMerge', steps: [

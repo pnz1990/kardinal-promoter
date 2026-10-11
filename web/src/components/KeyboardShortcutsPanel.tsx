@@ -15,6 +15,9 @@ import { useModalFocus } from '../useModalFocus'
 import '../ui'
 import '../styles/KeyboardShortcutsPanel.css'
 
+/** The published docs. */
+const DOCS = 'https://pnz1990.github.io/kardinal-promoter/'
+
 interface ShortcutRow {
   key: string
   description: string
@@ -83,6 +86,13 @@ export function KeyboardShortcutsPanel({ onClose }: KeyboardShortcutsPanelProps)
             ))}
           </tbody>
         </table>
+
+        {/* Where to read more */}
+        <p className="shortcuts__docs">
+          New here? <a href={`${DOCS}concepts/`} target="_blank" rel="noopener noreferrer">Concepts</a> explains
+          versions, stages and gates; the <a href={`${DOCS}installation/#what-the-ui-shows`} target="_blank" rel="noopener noreferrer">UI guide</a> walks
+          through each screen.
+        </p>
 
         {/* Footer hint */}
         <div className="shortcuts__footer">
