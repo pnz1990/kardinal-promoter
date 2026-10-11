@@ -56,8 +56,13 @@ type InitConfig struct {
 	AppName string
 
 	// Namespace is the Pipeline's namespace; empty leaves it out (the
-	// namespace it is applied in).
+	// namespace it is applied in), and so does default unless
+	// NamespaceGiven.
 	Namespace string
+
+	// NamespaceGiven is true when -n/--namespace was given: the namespace
+	// is written even when it is default.
+	NamespaceGiven bool
 
 	// Environments is the ordered list of environment names.
 	Environments []string
@@ -267,6 +272,7 @@ func initConfig(cmd *cobra.Command, o initOptions) (*InitConfig, error) {
 		UpdateStrategy: o.strategy, ProdApproval: o.prodApproval, Secret: o.secret}
 	if globalNamespace != "" {
 		cfg.Namespace = globalNamespace
+		cfg.NamespaceGiven = true
 	}
 	if o.repo == "" {
 		var eof *initEOFError
@@ -298,6 +304,16 @@ func initConfig(cmd *cobra.Command, o initOptions) (*InitConfig, error) {
 			"with no spaces, query or fragment; got %q", cfg.GitURL)
 	case cfg.Branch != "" && !validBranch(cfg.Branch):
 		return nil, fmt.Errorf("init: --branch %q is not a git branch name", cfg.Branch)
+	case o.createSecret && scm.IsSSHRemote(cfg.GitURL):
+		ns := cfg.Namespace
+		if ns == "" {
+			ns = "<namespace>"
+		}
+		return nil, fmt.Errorf("init: --create-secret creates a token Secret, and an ssh --repo needs an ssh key instead; "+
+			"create the Secret yourself and run init without --create-secret: "+
+			"kubectl create secret generic %[1]s -n %[2]s --from-file=sshPrivateKey=$HOME/.ssh/id_ed25519 "+
+			"--from-literal=knownHosts=\"$(ssh-keyscan %[3]s)\" && kubectl label secret %[1]s -n %[2]s %[4]s=true",
+			cfg.Secret, ns, sshHost(cfg.GitURL), v1alpha1.LabelSecretReferenceable)
 	case cfg.UpdateStrategy != "" && cfg.UpdateStrategy != "kustomize" && cfg.UpdateStrategy != "helm":
 		return nil, fmt.Errorf("init: --strategy must be kustomize or helm, got %q", cfg.UpdateStrategy)
 	case cfg.ProdApproval != "" && cfg.ProdApproval != "pr-review" && cfg.ProdApproval != "auto":
@@ -338,6 +354,19 @@ func checkInitNames(cfg *InitConfig) error {
 		return fmt.Errorf("init: the Secret name (--secret) %q is not a valid name: %s", cfg.Secret, strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+// sshHost is the host of ssh remote v (ssh://user@host/path or
+// user@host:path), for ssh-keyscan.
+func sshHost(v string) string {
+	if u, err := url.Parse(v); err == nil && u.Scheme == "ssh" {
+		return u.Hostname()
+	}
+	if _, rest, ok := strings.Cut(v, "@"); ok {
+		host, _, _ := strings.Cut(rest, ":")
+		return host
+	}
+	return "<host>"
 }
 
 // scpLikeRepo is git's scp-like ssh remote, user@host:path.
@@ -667,7 +696,7 @@ func initPipeline(cfg *InitConfig) *v1alpha1.Pipeline {
 	p := &v1alpha1.Pipeline{}
 	p.APIVersion, p.Kind = v1alpha1.GroupVersion.String(), "Pipeline"
 	p.Name = cfg.AppName
-	if cfg.Namespace != "default" {
+	if cfg.Namespace != "default" || cfg.NamespaceGiven {
 		p.Namespace = cfg.Namespace
 	}
 	secret := cfg.Secret
@@ -775,7 +804,7 @@ pipe.
 
 It writes the smallest Pipeline that says it, as examples/minimal does: a
 default (branch main, kustomize, approval auto, the default health check) is
-left out (also namespace default). The name, namespace and environments must
+left out (also namespace default, unless -n gives it). The name, namespace and environments must
 be DNS-1123 labels, --repo an https or ssh git URL (https://host/owner/repo,
 ssh://git@host/owner/repo or git@host:owner/repo.git) with no spaces, query
 or fragment, and --branch a git branch name; every value is written as a

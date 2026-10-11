@@ -22,7 +22,9 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -115,7 +117,7 @@ var quickstartEnvs = []string{"test", "uat", "prod"}
 // returns its output; a test replaces it.
 var quickstartRun = func(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = scrubbedEnv(os.Environ())
+	cmd.Env = toolEnv(os.Environ())
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, out)
@@ -149,7 +151,11 @@ follows until prod waits for your approval. A re-run changes nothing.`,
   kardinal approve demo prod`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return quickstartFn(cmd.Context(), cmd.OutOrStdout(), o)
+			// Ctrl-C or SIGTERM cancels the step that runs (helm, kubectl or
+			// the follow) and quickstart returns, removing its kubeconfig file.
+			ctx, stop := signal.NotifyContext(contextOf(cmd), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return quickstartFn(ctx, cmd.OutOrStdout(), o)
 		},
 	}
 	f := cmd.Flags()
@@ -281,14 +287,20 @@ func targetOverrides(environ []string) []string {
 	return out
 }
 
+// toolEnv is the environment helm and kubectl run with: scrubbedEnv, and
+// KUBERC=off, so no kuberc alias or default changes what kubectl runs.
+func toolEnv(environ []string) []string {
+	return append(scrubbedEnv(environ), "KUBERC=off")
+}
+
 // scrubbedEnv is environ without what could point helm or kubectl at
-// another cluster: the targetOverrides and KUBECONFIG (quickstart passes
-// --kubeconfig).
+// another cluster or change their commands: the targetOverrides, KUBECONFIG
+// (quickstart passes --kubeconfig) and KUBERC (quickstartRun sets it off).
 func scrubbedEnv(environ []string) []string {
 	out := make([]string, 0, len(environ))
 	for _, kv := range environ {
 		k, _, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(k, "HELM_KUBE") || k == "KUBERNETES_MASTER" || k == "KUBECONFIG" {
+		if strings.HasPrefix(k, "HELM_KUBE") || k == "KUBERNETES_MASTER" || k == "KUBECONFIG" || k == "KUBERC" {
 			continue
 		}
 		out = append(out, kv)
@@ -320,6 +332,14 @@ func requireLocalContext() (string, *clientcmdapi.Config, error) {
 		return "", nil, fmt.Errorf("kardinal quickstart installs a demo into a local cluster only (kind, k3d, minikube, Docker Desktop, Rancher Desktop); "+
 			"the context %q (server %s) is not one, and nothing was changed. Create a local cluster and use it: "+
 			"kind create cluster --name kardinal: %w", name, server, errNotLocal)
+	}
+	// A proxy (proxy-url) could send the requests to any cluster, wherever
+	// the server URL points.
+	if kc := only.Contexts[name]; kc != nil {
+		if cl := only.Clusters[kc.Cluster]; cl != nil && cl.ProxyURL != "" {
+			return "", nil, fmt.Errorf("kardinal quickstart does not use a kubeconfig context with a proxy: the context %q sends its requests through %s, "+
+				"so it may not be the local cluster it names, and nothing was changed. Use a local context without proxy-url: %w", name, cl.ProxyURL, errNotLocal)
+		}
 	}
 	return name, only, nil
 }
@@ -813,9 +833,12 @@ rancher-desktop, or whose API server is not on this machine (loopback,
 drivers' networks 192.168.49.0/24, 192.168.39.0/24 and 192.168.59.0/24). It
 also refuses to run while a variable is set that points helm, kubectl or
 client-go elsewhere (HELM_KUBE*, such as HELM_KUBECONTEXT, and
-KUBERNETES_MASTER). There is no flag to override it, on purpose. Use
+KUBERNETES_MASTER), and refuses a context whose cluster has a proxy-url (the
+proxy decides where requests go). There is no flag to override it, on purpose. Use
 --context to pick a local context. helm and kubectl run on a kubeconfig file
-with only that context, without KUBECONFIG or those variables. What it
+with only that context, without KUBECONFIG or those variables, and kubectl
+with KUBERC=off. Ctrl-C or SIGTERM stops the step that runs and removes
+that file. What it
 cannot see: a loopback port that tunnels to a remote cluster (kubectl
 port-forward, ssh -L) looks local; do not point a local context at one.
 

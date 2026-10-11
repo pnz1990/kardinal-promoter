@@ -138,14 +138,34 @@ func rbReason(events []eventsv1.Event, reason string) []eventsv1.Event {
 	return out
 }
 
-// rbHistory is kardinal history's rows, keyed by its columns BUNDLE, ACTION,
+// rbHistory is kardinal history's rows, keyed by its columns VERSION, ACTION,
 // ENV, PR, DURATION and TIMESTAMP.
 func rbHistory(t *testing.T, a *app) []map[string]string {
 	t.Helper()
-	return framework.ParseTable(a.e.MustKardinal(t, a.ns, "history", pipelineName))
+	rows := framework.ParseTable(a.e.MustKardinal(t, a.ns, "history", pipelineName))
+	assertVersionCells(t, a.e, a.ns, rows)
+	return rows
 }
 
-// rbHistoryRow is a history row's BUNDLE, ACTION, ENV and PR.
+// assertVersionCells checks that each row's VERSION cell is the whole
+// "<tag> (<bundle>)" of the Bundle it names, for each Bundle that still
+// exists and ships one image.
+func assertVersionCells(t *testing.T, e *framework.Env, ns string, rows []map[string]string) {
+	t.Helper()
+	for _, r := range rows {
+		name := framework.BundleOf(r["VERSION"])
+		var b v1alpha1.Bundle
+		if err := e.Client.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: name}, &b); err != nil {
+			continue
+		}
+		if len(b.Spec.Images) != 1 || b.Spec.ConfigRef != nil {
+			continue
+		}
+		assert.Equal(t, framework.VersionCell(b.Spec.Images[0].Tag, name), r["VERSION"], "the VERSION cell of %s", name)
+	}
+}
+
+// rbHistoryRow is a history row's Bundle (from VERSION), ACTION, ENV and PR.
 func rbHistoryRow(r map[string]string) []string {
 	return []string{framework.BundleOf(r["VERSION"]), r["ACTION"], r["ENV"], r["PR"]}
 }
@@ -467,7 +487,9 @@ func TestRollback_History(t *testing.T) {
 			return false, fmt.Sprintf("kardinal history: %v: %s", err, out)
 		}
 		var got []string
-		for _, r := range framework.ParseTable(out) {
+		rows := framework.ParseTable(out)
+		assertVersionCells(t, e, a.ns, rows)
+		for _, r := range rows {
 			got = append(got, framework.BundleOf(r["VERSION"])+"/"+r["ACTION"])
 		}
 		return assert.ObjectsAreEqual([]string{b3 + "/promote", rb + "/rollback", b2 + "/promote"}, got), strings.Join(got, " ")

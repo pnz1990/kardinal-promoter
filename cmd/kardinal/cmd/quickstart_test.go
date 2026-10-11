@@ -474,3 +474,58 @@ func TestQuickstart_Installs(t *testing.T) {
 	assert.Equal(t, "s3cr3t-token", s.StringData["token"])
 	assert.Empty(t, s.Labels[v1alpha1.LabelSecretReferenceable])
 }
+
+// TestQuickstart_NoProxy: a context whose cluster has a proxy-url is
+// refused before anything is sent: the proxy decides where requests go.
+func TestQuickstart_NoProxy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config")
+	require.NoError(t, os.WriteFile(path, []byte(`apiVersion: v1
+kind: Config
+clusters:
+- {name: local, cluster: {server: "https://127.0.0.1:6443", proxy-url: "socks5://127.0.0.1:1080"}}
+contexts:
+- {name: kind-kardinal, context: {cluster: local, user: me}}
+users:
+- {name: me, user: {token: t}}
+current-context: kind-kardinal
+`), 0o600))
+	oldK, oldC := globalKubeconfig, globalContext
+	globalKubeconfig, globalContext = path, ""
+	t.Cleanup(func() { globalKubeconfig, globalContext = oldK, oldC })
+	noCluster(t)
+	t.Setenv("GITHUB_TOKEN", "tok")
+	err := quickstartFn(context.Background(), &bytes.Buffer{}, quickstartOptions{repo: "https://github.com/me/kardinal-demo"})
+	require.ErrorIs(t, err, errNotLocal)
+	assert.Contains(t, err.Error(), "through socks5://127.0.0.1:1080")
+	assert.Contains(t, err.Error(), "nothing was changed")
+}
+
+// TestQuickstart_InterruptRemovesKubeconfig: when the run is cancelled
+// (Ctrl-C, SIGTERM) in the middle of an install, quickstart returns and its
+// kubeconfig file for helm and kubectl is gone; KUBERC is off for them.
+func TestQuickstart_InterruptRemovesKubeconfig(t *testing.T) {
+	writeKubeconfig(t, "kind-kardinal", "https://127.0.0.1:41234")
+	noCluster(t)
+	t.Setenv("GITHUB_TOKEN", "tok")
+	c := fake.NewClientBuilder().WithScheme(rootScheme).Build() // nothing installed
+	quickstartClient = func(*clientcmdapi.Config) (sigs_client.Client, error) { return c, nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var file string
+	quickstartRun = func(ctx context.Context, name string, args ...string) (string, error) {
+		for i, a := range args {
+			if a == "--kubeconfig" {
+				file = args[i+1]
+			}
+		}
+		require.FileExists(t, file, "helm and kubectl get the kubeconfig file")
+		cancel() // Ctrl-C while helm runs
+		return "", ctx.Err()
+	}
+	err := quickstartFn(ctx, &bytes.Buffer{}, quickstartOptions{repo: "https://github.com/me/kardinal-demo"})
+	require.Error(t, err)
+	require.NotEmpty(t, file)
+	assert.NoFileExists(t, file, "the kubeconfig file is removed")
+
+	assert.Equal(t, []string{"PATH=/bin", "KUBERC=off"}, toolEnv([]string{"KUBERC=/home/me/.kube/kuberc", "PATH=/bin", "HELM_KUBECONTEXT=prod"}))
+}

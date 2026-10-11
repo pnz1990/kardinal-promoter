@@ -51,7 +51,8 @@ when it is not done yet:
   `minikube`, `docker-desktop`, `rancher-desktop`; and by API server: this machine, or for
   minikube its drivers' networks 192.168.49.0/24, 192.168.39.0/24 and 192.168.59.0/24) before
   it sends anything to it, and refuses to run while `HELM_KUBE*` (such as `HELM_KUBECONTEXT`) or
-  `KUBERNETES_MASTER` is set, since helm or kubectl would follow them instead. There is no flag
+  `KUBERNETES_MASTER` is set, since helm or kubectl would follow them instead, or when the
+  context's cluster has a `proxy-url`. There is no flag
   to override that, on purpose. helm and kubectl run on a kubeconfig file with only the checked
   context. It never changes your kubeconfig; `--context` picks another local context. One thing
   it cannot tell: a loopback port that tunnels to a remote cluster (`kubectl port-forward`,

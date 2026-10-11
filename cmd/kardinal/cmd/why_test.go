@@ -51,6 +51,7 @@ func TestWhy_Golden(t *testing.T) {
 	whyNow = func() time.Time { return now }
 	t.Cleanup(func() { whyNow = prev })
 	since := metav1.NewTime(now.Add(-90 * time.Second))
+	stubIdentity(t, Identity{Username: "kubernetes-admin", Groups: []string{"system:masters", "system:authenticated"}})
 	cases := []struct {
 		name  string
 		env   string
@@ -62,6 +63,29 @@ func TestWhy_Golden(t *testing.T) {
 			g := explainGateInstance("demo", "demo-zhxk2", "prod", "prod-approval", "true", false, true, "prod waits for your approval (bundle.version=sha-9349a3f: waiting for approvals: 0 of 1)")
 			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1}
 			return []sigs_client.Object{g}
+		}},
+		{"approval, the caller is allowed", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", IncomingBundle: "demo-zhxk2", IncomingVersion: "sha-9349a3f",
+				State: "Pending", BlockedBy: []string{"prod-approval"}}}
+			g := explainGateInstance("demo", "demo-zhxk2", "prod", "prod-approval", "true", false, true, "waiting for approvals: 0 of 1")
+			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1, AllowedUsers: []string{"kubernetes-admin"}}
+			return []sigs_client.Object{g}
+		}},
+		{"approval by others", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", IncomingBundle: "demo-zhxk2", IncomingVersion: "sha-9349a3f",
+				State: "Pending", BlockedBy: []string{"cab"}}}
+			g := explainGateInstance("demo", "demo-zhxk2", "prod", "cab", "true", false, true, "waiting for approvals: 0 of 1")
+			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1, AllowedUsers: []string{"alice", "bob"}, AllowedGroups: []string{"release-managers"}}
+			return []sigs_client.Object{g}
+		}},
+		{"approval, the caller created the version", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", IncomingBundle: "demo-zhxk2", IncomingVersion: "sha-9349a3f",
+				State: "Pending", BlockedBy: []string{"cab"}}}
+			g := explainGateInstance("demo", "demo-zhxk2", "prod", "cab", "true", false, true, "waiting for approvals: 0 of 1")
+			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}
+			b := whyBundle("demo-zhxk2", "sha-9349a3f")
+			b.Annotations = map[string]string{"kardinal.io/created-by": "kubernetes-admin"}
+			return []sigs_client.Object{g, b}
 		}},
 		{"approval with one of two", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
