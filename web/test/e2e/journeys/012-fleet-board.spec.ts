@@ -15,7 +15,7 @@ test.describe('Journey 012 — Fleet board', () => {
     const prod = board.getByRole('button', { name: /^kardinal-test-app prod:/ })
     await expect(prod).toHaveAttribute('data-state', 'arriving')
     await expect(prod).toContainText('sha-9f8e7d6')
-    await expect(prod).toContainText('waiting for merge')
+    await expect(prod).toContainText('waiting for PR merge')
     await expect(board.locator('.fleet-rail__version', { hasText: 'sha-abc1234' })).toBeVisible()
     const uat = board.getByRole('button', { name: /^kardinal-test-app uat:/ })
     await expect(uat).toContainText(/verified \d+m ago/)

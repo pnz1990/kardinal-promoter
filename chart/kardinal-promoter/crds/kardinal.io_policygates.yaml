@@ -353,6 +353,12 @@ spec:
                   - user
                   type: object
                 type: array
+              bundleVersion:
+                description: |-
+                  BundleVersion is the version of the Bundle a gate instance was last
+                  evaluated for (bundle.version in its expression). Empty on a template
+                  and when the Bundle could not be read.
+                type: string
               conditions:
                 description: Conditions holds status conditions.
                 items:
@@ -603,8 +609,12 @@ spec:
                   The kro Graph gates downstream nodes on status.ready == true.
                 type: boolean
               reason:
-                description: Reason explains the current ready state in human-readable
-                  form.
+                description: |-
+                  Reason explains the current ready state in a sentence: the gate's
+                  message when its expression blocks, what the expression evaluated to,
+                  and the version it was evaluated for, for example "waiting for
+                  approvals: 0 of 1 (version 1.5.0)". It is for people; read BundleVersion
+                  for the version.
                 type: string
             required:
             - ready

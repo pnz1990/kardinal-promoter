@@ -125,3 +125,15 @@ describe('BundleDiffPanel — CI Run link', () => {
     expect(container.innerHTML).not.toContain('s3cret')
   })
 })
+
+describe('BundleDiffPanel — versions by tag', () => {
+  it('names each version by what it ships, with its Bundle name after it', () => {
+    const a = makeBundle({ name: 'app-cfg9', type: 'config', version: 'config 77aa001' })
+    const b = makeBundle({ name: 'app-prev', images: [{ repository: 'ghcr.io/o/app', tag: 'sha-9f8e7d6' }] })
+    const { container } = render(<BundleDiffPanel bundleA={a} bundleB={b} onClose={vi.fn()} />)
+    const tags = [...container.querySelectorAll('.bundle-diff__row--names .version-label__tag')].map((e) => e.textContent)
+    expect(tags).toEqual(['config 77aa001', 'sha-9f8e7d6'])
+    const names = [...container.querySelectorAll('.bundle-diff__row--names .version-label__name')].map((e) => e.textContent)
+    expect(names).toEqual(['app-cfg9', 'app-prev'])
+  })
+})

@@ -13,7 +13,6 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { need, needJSON, openPipeline, route, station, PIPELINE } from './live'
 import { displayState } from '../../../src/displayStates.gen'
-import { versionName } from '../../../src/versionName'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -44,8 +43,9 @@ async function expectComparison(panel: Locator, a: Entry, b: Entry) {
   const row = (label: string) => rows.filter({ hasText: new RegExp(`^(▸ )?${label}`) })
   const cells = (label: string) => row(label).locator(':scope > span')
 
-  await expect(cells('Name').nth(1)).toHaveAttribute('title', a.name)
-  await expect(cells('Name').nth(2)).toHaveAttribute('title', b.name)
+  // Each version by its tag, then its Bundle name.
+  await expect(cells('Version').nth(1)).toHaveText(`${a.image.split(':').pop()}${a.name}`)
+  await expect(cells('Version').nth(2)).toHaveText(`${b.image.split(':').pop()}${b.name}`)
 
   // [label, A, B]: what the panel prints for each field.
   const fields: [string, string, string][] = [
@@ -85,7 +85,8 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
     await expect(c).toHaveAttribute('title', `${b.name}: ${displayState('bundle', b.phase).label}${b === newer ? '' : '\nShift-click to compare'}`)
     await expect(c).toHaveAttribute('data-bundle-phase', b.phase)
     await expect(c).toHaveClass(new RegExp(`bundle-chip--${b.phase.toLowerCase()}`))
-    await expect(c.locator('.bundle-chip__name')).toHaveText(versionName(b.name, PIPELINE))
+    // A chip names the version by what it ships: the image's tag.
+    await expect(c.locator('.bundle-chip__name')).toHaveText(b.image.split(':').pop()!)
   }
   await expectShown(page, newer, older)
 

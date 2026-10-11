@@ -42,7 +42,7 @@ describe('ApprovalsPage (U7)', () => {
     expect(within(rows[1]).getByRole('link', { name: 'web, prod' })).toBeInTheDocument()
     expect(rows[0]).toHaveTextContent('2h 0m')
     expect(rows[1]).toHaveTextContent('12m')
-    expect(rows[1]).toHaveTextContent('1.5.0·release-approval')
+    expect(rows[1]).toHaveTextContent('1.5.0web-3·release-approval') // VersionLabel: the version, then the Bundle name
     expect(within(rows[1]).getByRole('img', { name: '1 of 2 approvals' })).toBeInTheDocument()
     expect(rows[1]).toHaveTextContent('1 of 2 · bob approved')
     expect(within(rows[1]).getByRole('link')).toHaveAttribute('href', '#/p/team/web/env/prod?section=why')

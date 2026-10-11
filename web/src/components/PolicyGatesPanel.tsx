@@ -7,6 +7,7 @@
 import { useState, useEffect } from 'react'
 import type { GateState, PolicyGate } from '../types'
 import { HealthChip, type HealthState } from './HealthChip'
+import { gateDisplay, gateLabel } from '../stage/stageModel'
 import '../styles/PolicyGatesPanel.css'
 import { ApprovalQuorum } from './ApprovalQuorum'
 
@@ -18,6 +19,9 @@ interface Props {
   onDecided?: () => void
   /** Fold the panel (the stage drawer is open and shows its environment's gates). */
   collapsed?: boolean
+  /** The pipeline's newest Bundle: `kardinal approve <pipeline> <env>` approves it. Gates of any
+   *  other Bundle get the CLI line that names theirs. */
+  currentBundle?: string
 }
 
 function formatAge(iso: string | undefined): string {
@@ -76,7 +80,7 @@ function GateSummaryChip({ gates }: { gates: PolicyGate[] }) {
   )
 }
 
-export function PolicyGatesPanel({ gates, loading, onDecided, collapsed }: Props) {
+export function PolicyGatesPanel({ gates, loading, onDecided, collapsed, currentBundle }: Props) {
   const blockedCount = count(gates, 'Block')
   // #524: auto-expand when any gate holds the bundle — the blocked state is the
   // most important information on screen and should not be hidden behind a
@@ -123,13 +127,16 @@ export function PolicyGatesPanel({ gates, loading, onDecided, collapsed }: Props
               className="gates-panel__gate"
             >
               <div className="gates-panel__gate-head">
+                {/* The stage model's words (gateDisplay): an approval still collecting its quorum
+                    reads "Waiting for approval", as on the map and in the drawer. */}
                 <HealthChip
-                  state={gateState(gate)}
+                  state={gateDisplay(gate).value}
                   nodeType="PolicyGate"
                   size="sm"
+                  label={gateDisplay(gate).label}
                 />
-                <span className="gates-panel__name">
-                  {gate.name}
+                <span className="gates-panel__name" title={gate.name}>
+                  {gateLabel(gate)}
                 </span>
                 <span className="gates-panel__meta">
                   {gate.namespace} · {formatAge(gate.lastEvaluatedAt)}
@@ -146,7 +153,8 @@ export function PolicyGatesPanel({ gates, loading, onDecided, collapsed }: Props
                 </div>
               )}
               {gate.approval && (
-                <ApprovalQuorum approval={gate.approval} bundle={gate.bundle} environment={gate.environment}
+                <ApprovalQuorum approval={gate.approval} pipeline={gate.pipeline} bundle={gate.bundle} environment={gate.environment}
+                  current={!currentBundle || gate.bundle === currentBundle}
                   namespace={gate.namespace} onDecided={onDecided} />
               )}
             </div>

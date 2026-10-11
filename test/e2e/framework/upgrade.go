@@ -36,6 +36,9 @@ const (
 	// EnvV090CLI is the kardinal CLI of v0.9.0, the release the
 	// upgrade-v090 suite upgrades from (components/kardinal-v090.sh).
 	EnvV090CLI = "KARDINAL_E2E_V090_CLI"
+	// EnvV0100CLI is the kardinal CLI of v0.10.0, the release the
+	// upgrade-v0100 suite upgrades from (components/kardinal-v0100.sh).
+	EnvV0100CLI = "KARDINAL_E2E_V0100_CLI"
 )
 
 // KrocodileGraphGVR is v0.8.1's Graph, reconciled by the krocodile Graph
@@ -216,16 +219,30 @@ func (e *Env) KardinalV081(t *testing.T, namespace string, args ...string) (stri
 // always set) and returns its combined output. It never fails the test.
 func (e *Env) KardinalV090(t *testing.T, namespace string, args ...string) (string, error) {
 	t.Helper()
-	cli := os.Getenv(EnvV090CLI)
+	return e.releasedKardinal(t, EnvV090CLI, "v0.9.0", "upgrade-v090", namespace, args...)
+}
+
+// KardinalV0100 runs the v0.10.0 CLI against the test cluster (--context is
+// always set) and returns its combined output. It never fails the test.
+func (e *Env) KardinalV0100(t *testing.T, namespace string, args ...string) (string, error) {
+	t.Helper()
+	return e.releasedKardinal(t, EnvV0100CLI, "v0.10.0", "upgrade-v0100", namespace, args...)
+}
+
+// releasedKardinal runs the released CLI that the env variable env names
+// (set by suite's component) against the test cluster.
+func (e *Env) releasedKardinal(t *testing.T, env, version, suite, namespace string, args ...string) (string, error) {
+	t.Helper()
+	cli := os.Getenv(env)
 	if cli == "" {
-		t.Fatalf("%s is not set; run hack/e2e/up.sh upgrade-v090", EnvV090CLI)
+		t.Fatalf("%s is not set; run hack/e2e/up.sh %s", env, suite)
 	}
 	full := append([]string{"--context", e.Context}, args...)
 	if namespace != "" {
 		full = append([]string{"-n", namespace}, full...)
 	}
 	out, err := exec.Command(cli, full...).CombinedOutput()
-	t.Logf("$ kardinal-v0.9.0 %s\n%s", strings.Join(full, " "), out)
+	t.Logf("$ kardinal-%s %s\n%s", version, strings.Join(full, " "), out)
 	return string(out), err
 }
 

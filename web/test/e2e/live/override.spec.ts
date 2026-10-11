@@ -1,8 +1,8 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 //
-// UI-OVERRIDE-01: overriding a gate from the stage drawer (v0.10.1; #1245 had
-// removed the old Override gate dialog). Go test: TestUI_BrowserGateOverride
+// UI-OVERRIDE-01: overriding a gate from the stage drawer. Go test:
+// TestUI_BrowserGateOverride
 // (test/e2e/live/ui_browser_test.go).
 //
 // In KARDINAL_UI_NAMESPACE, podinfo's Bundle is Verified in test and held

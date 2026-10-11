@@ -12,7 +12,8 @@ import { useAccessIn } from '../access/access'
 import { actionCheck, restriction } from '../access/actionAccess'
 import { ApprovalDialog } from '../stage/ApprovalDialog'
 import { ActionButton } from '../stage/ActionButton'
-import type { AccessCheck, Pipeline, PolicyGate } from '../types'
+import { VersionLabel } from '../components/VersionLabel'
+import type { AccessCheck, Bundle, Pipeline, PolicyGate } from '../types'
 import { useChangeHalo } from '../useChangeHalo'
 import { serializeHash, EMPTY_URL_STATE } from '../useUrlState'
 import { approvalItems, type ApprovalItem } from './approvalsModel'
@@ -153,7 +154,8 @@ function Row({ item, now, approveReason, declineReason, onDecide }: {
           {item.pipeline} <span aria-hidden="true">›</span> {item.env}
         </a>
         <p className="appr-item__what">
-          <span className="appr-item__version">{item.version}</span>
+          {/* The version as everywhere else (#1767): what it ships, the Bundle name after it. */}
+          <VersionLabel bundle={{ name: item.bundle, version: item.version } as Bundle} className="appr-item__version" />
           <span className="appr-item__sep" aria-hidden="true">·</span>
           <span>{item.gateName}</span>
         </p>
