@@ -326,7 +326,7 @@ kardinal override my-app --stage prod --gate no-weekend-deploys \
   --reason "Rollback of v1.29.0 — incident #4521" --expires-in 1h
 ```
 
-See [Emergency Overrides](policy-gates.md#emergency-overrides-k-09).
+See [Emergency Overrides](policy-gates.md#emergency-overrides).
 
 ## Rollback History
 
@@ -424,5 +424,3 @@ After resume, held steps continue from where they stopped. A held step re-checks
 The pause is checked before each step and each pre hook starts its next piece of work, not continuously. A pause that lands while a step or hook is between that check and starting its git step or Job does not stop that one piece of work; the next one holds.
 
 While the Pipeline is paused it has a `Paused` condition. `True` (reason `FreezeGateActive`) means the freeze gate holds new promotions. Do not name your own PolicyGate `freeze-<pipeline>`: kardinal does not treat a gate it did not create (no `kardinal.io/freeze=true` label and not owned by the Pipeline) as a pause, and does not delete it. While such a gate exists, `kardinal pause` fails with an error naming it, and the condition is `False` with reason `FreezeGateNameConflict`, so the pipeline keeps running. Rename or delete that gate and the pause takes effect.
-
-Upgrading: before this release the UI Pause button, and editing `spec.paused` by hand, set the field without creating the freeze gate, so the Pipeline kept promoting. After upgrading, the controller creates the gate for every Pipeline with `spec.paused: true`, and those Pipelines stop. Resume any that should keep running.

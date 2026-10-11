@@ -70,7 +70,7 @@ spec:
                   Graph has not yet read the step back (its StepsObserved), true once it
                   has. Only then is the step's admission final: until it is, a pacing
                   change can make kro delete the step, so a Pending step does no work
-                  while Admitted is false (#1565). Unset (other Graphs) does not wait.
+                  while Admitted is false. Unset (other Graphs) does not wait.
                   Do not set it.
                 type: boolean
               analyses:
@@ -326,10 +326,8 @@ spec:
                 type: array
               region:
                 description: |-
-                  Region was set on the per-region PromotionSteps of a Pipeline
-                  environment with two or more spec.regions. The Graph builder no longer
-                  sets it; the reconciler fails a step that still has one (created by a
-                  Graph built before the upgrade) with "regions is not supported".
+                  Region is deprecated and not set by kardinal; the reconciler fails a
+                  step that has one with "regions is not supported".
 
                   Deprecated: declare one environment per region (prod-us, prod-eu) and
                   use wave.
@@ -396,7 +394,7 @@ spec:
               bakeElapsedMinutes:
                 description: |-
                   BakeElapsedMinutes is the number of contiguous healthy minutes accumulated
-                  so far in the current bake window (K-01). Resets to 0 on health failure
+                  so far in the current bake window. Resets to 0 on health failure
                   when policy=reset-on-alarm. When this reaches env.bake.minutes, the step
                   transitions to Verified.
                 format: int64
@@ -407,17 +405,17 @@ spec:
                   the first healthy check with env.bake configured. It is never reset.
                   With bake.policy reset-on-alarm, the step must complete one full
                   window by BakeFirstStartedAt + bake.minutes + health.timeout, so a
-                  release that keeps flapping ends (#1423).
+                  release that keeps flapping ends.
                 format: date-time
                 type: string
               bakeResets:
                 description: |-
                   BakeResets is the number of times the bake timer was reset due to a
-                  health alarm during the current bake window (K-01).
+                  health alarm during the current bake window.
                 type: integer
               bakeStartedAt:
                 description: |-
-                  BakeStartedAt is when the contiguous-healthy soak window began (K-01).
+                  BakeStartedAt is when the contiguous-healthy soak window began.
                   Set on the first successful health check when env.bake is configured.
                   Reset when BakeElapsedMinutes resets (health failure with reset-on-alarm).
                 format: date-time
@@ -515,7 +513,6 @@ spec:
                   after the health check began, moved to health.timeout after the moment
                   a bake window stops. It does not apply while a bake window runs.
                   A Graph CEL expression can observe this field to detect a stale health check.
-                  Graph-purity: replaces the time.Since() call (PS-5 in 11-graph-purity-tech-debt.md).
                 format: date-time
                 type: string
               hookRecords:
@@ -579,7 +576,7 @@ spec:
               pendingAuditEvents:
                 description: |-
                   PendingAuditEvents are AuditEvents for this step's transitions that are
-                  not yet written (the audit outbox, #1552). Each entry is stored in the
+                  not yet written (the audit outbox). Each entry is stored in the
                   same status patch as its transition and removed once the AuditEvent
                   exists, so an API error or a controller restart between the two cannot
                   lose the record. Normally empty.
@@ -590,7 +587,7 @@ spec:
                     the same patch as the transition it records. It creates the AuditEvent on
                     that reconcile or a later one, then removes the entry. The name is fixed
                     when the entry is stored, so a retried create that the API server already
-                    applied returns AlreadyExists, which counts as written (#1552).
+                    applied returns AlreadyExists, which counts as written.
                   properties:
                     createdAt:
                       description: |-

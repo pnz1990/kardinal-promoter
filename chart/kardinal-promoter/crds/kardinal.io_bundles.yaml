@@ -63,10 +63,7 @@ spec:
           spec:
             description: |-
               BundleSpec defines the desired state of a Bundle.
-              An image Bundle deploys only its images, so a configRef on it is refused
-              instead of ignored (#1353). Bundles stored before the rule keep working:
-              CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest
-              supported) lets an update through when spec is unchanged.
+              An image Bundle deploys only its images, so a configRef on it is refused.
 
               A Bundle's spec is immutable: spec.type, spec.pipeline, spec.images,
               spec.chart, spec.configRef, spec.provenance and spec.intent cannot change
@@ -382,7 +379,7 @@ spec:
                 type: string
               metrics:
                 description: |-
-                  Metrics holds deployment efficiency metrics for this Bundle (K-05).
+                  Metrics holds deployment efficiency metrics for this Bundle.
                   Populated by the BundleReconciler when all environments reach Verified.
                 properties:
                   bakeResets:
@@ -416,7 +413,7 @@ spec:
                     the same patch as the transition it records. It creates the AuditEvent on
                     that reconcile or a later one, then removes the entry. The name is fixed
                     when the entry is stored, so a retried create that the API server already
-                    applied returns AlreadyExists, which counts as written (#1552).
+                    applied returns AlreadyExists, which counts as written.
                   properties:
                     createdAt:
                       description: |-
@@ -620,8 +617,8 @@ spec:
                   RetiredSteps records the PromotionSteps of a Bundle whose Graph was
                   retired (condition GraphRetired=True). Deleting a finished Bundle's
                   Graph deletes the PromotionSteps, PolicyGate instances and PRStatuses
-                  it created, so kro does not hold every finished Graph in memory
-                  (#1492). Rollback, promote, history, metrics, the CLI and the UI read
+                  it created, so kro does not hold every finished Graph in memory.
+                  Rollback, promote, history, metrics, the CLI and the UI read
                   these records where they read the steps of a Bundle that is still
                   promoting. The step of a fleet target removed from the Pipeline while the
                   Bundle promoted is recorded here when its Graph is updated, before kro

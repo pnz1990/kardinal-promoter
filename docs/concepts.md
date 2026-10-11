@@ -34,8 +34,10 @@ kubectl apply -f bundle.yaml
 
 ### Bundle supersession
 
-When a new Bundle is created while a previous Bundle is still promoting through the
-same Pipeline, the older Bundle is **superseded**:
+When a newer Bundle of the same type is created for the same Pipeline, an older Bundle that is
+still waiting or promoting (`Available` or `Promoting`) is **superseded**. A `Failed` Bundle
+stays `Failed`; if it would resume, a newer Bundle supersedes it instead. The new Bundle starts
+promoting from the beginning, and the older one:
 
 - The older Bundle's status transitions to `Superseded`, which is final
 - None of its PromotionSteps pushes any more: right before every `git-push` a step reads its
@@ -46,13 +48,14 @@ same Pipeline, the older Bundle is **superseded**:
   step ends `Superseded`, and so does its Bundle, which no failure count (Bundle failure,
   `maxUnavailable`, DORA, `onHealthFailure`) includes
 - Its unfinished PromotionSteps are failed, and a PR one of them opened that is still
-  open is closed with a comment. If the SCM fails to close it or to delete its branch, the
+  open is closed with a comment and its head branch
+  (`kardinal/<namespace hash>/<bundle>/<env>`) is deleted, so the closed PR cannot be merged
+  later. If the SCM fails to close it or to delete its branch, the
   step keeps its state and retries after 10s, 20s, 40s, 80s and 2m, with the
   `SupersededCloseFailed` condition `True` and `status.nextRetryAt`; after the last retry it
   fails, and its message says to close the PR (or delete its branch) by hand
 - Its Graph, PromotionSteps and PolicyGates are kept as history until the Graph is retired
-  ([Graph retirement](#graph-retirement)), but the Graph creates no new PromotionStep (a
-  Graph built before this behaviour can still create one at the moment of supersession),
+  ([Graph retirement](#graph-retirement)), but the Graph creates no new PromotionStep,
   and its PolicyGates are no longer evaluated: they keep the status they had when the
   Bundle was superseded
 - A step the Graph created just before the Bundle was superseded, and that never started,
@@ -222,9 +225,9 @@ kardinal has no custom step engine. The API server rejects a Pipeline that sets 
 
 ### Multiple clusters
 
-kardinal runs in one cluster, next to the Argo CD or Flux hub that manages your workload clusters. Declare one environment per cluster or region (for example `prod-eu` and `prod-us`) and promote them in parallel with `wave` or `dependsOn`. Each environment reads its health from its cluster through a kubeconfig Secret (`health.kubeconfigSecretRef`), or from the hub: `health.type: argocd` on its Application, or `health.type: flux` on a hub Kustomization that targets the remote cluster. See [Multi-Cluster](multi-cluster.md) and [Remote Clusters](health-adapters.md#remote-clusters).
+kardinal runs in one cluster, next to the Argo CD or Flux hub that manages your workload clusters. Declare one environment per cluster or region (for example `prod-eu` and `prod-us`) and promote them in parallel with `wave` or `dependsOn`. Each environment reads its health from its cluster through a kubeconfig Secret (`health.kubeconfigSecretRef`), or from the hub: `health.type: argocd` on its Application, or `health.type: flux` on a hub Kustomization that targets the remote cluster. See [Remote Clusters](health-adapters.md#remote-clusters).
 
-Distributed mode (`shard` and `kardinal-agent`) was removed. The API server accepts a Pipeline environment that sets `shard`, but the Pipeline is `Ready=False` (reason `NotImplemented`) and that environment's PromotionSteps fail with `shard is not supported`. Remove it; the controller reconciles every environment.
+`shard` is deprecated and not supported (removed in v0.11): the Pipeline is `Ready=False` (reason `NotImplemented`) and that environment's PromotionSteps fail with `shard is not supported`. Leave it unset; the controller reconciles every environment.
 
 ### How it works under the hood
 
@@ -277,21 +280,12 @@ spec:
 
 ### CEL context
 
-PolicyGate expressions are evaluated against a context that includes:
-
-| Attribute | Type | Example |
-|---|---|---|
-| `bundle.version` | string | "1.29.0" |
-| `bundle.labels` | map of string | `has(bundle.labels.hotfix) && bundle.labels.hotfix == "true"` |
-| `bundle.provenance.author` | string | "dependabot[bot]" |
-| `bundle.provenance.commitSHA` | string | "abc123" |
-| `bundle.intent.targetEnvironment` | string | "prod" |
-| `schedule.isWeekend` | bool | false |
-| `schedule.hour` | int | 14 |
-| `schedule.dayOfWeek` | string | "Tuesday" |
-| `environment.name` | string | "prod" |
-
-Additional attributes are available including metrics results (`metrics.*`), upstream soak time (`bundle.upstreamSoakMinutes`, `upstream.<env>.soakMinutes`) and change windows (`changewindow.*`). Referencing an attribute that does not exist blocks the gate. See the [CEL context reference](reference/cel-context.md) for the full list.
+PolicyGate expressions read the Bundle (`bundle.version`, `bundle.labels`, `bundle.provenance.*`,
+`bundle.upstreamSoakMinutes`), the time (`schedule.isWeekend`, `schedule.hour`), the target
+environment (`environment.name`), upstream soak and history (`upstream.<env>.*`), MetricCheck
+results (`metrics.*`), change windows (`changewindow.*`) and approvals (`approvals.*`).
+Referencing an attribute that does not exist blocks the gate. See the
+[CEL context reference](reference/cel-context.md) for the full list.
 
 ### Inspecting gates
 
@@ -431,35 +425,17 @@ pull-request generators for fully isolated ephemeral Pipelines per PR.
 
 ### Repository strategies
 
-`layout: directory` (one branch, environments as directories) is the supported layout.
-`layout: branch` (environments as separate branches, for rendered-manifest workflows)
-is planned; promotions that use it fail today.
+`layout: directory` (one branch, environments as directories) is the default. `layout: branch`
+writes rendered manifests to one branch per environment; see
+[Rendered Manifests](rendered-manifests.md).
 
 See [Advanced Patterns](advanced-patterns.md) for detailed guidance on all of these.
 
 ## Key Anti-Patterns
 
-### Pseudo-GitOps
-
-Some tools shortcut promotion by patching `spec.source.targetRevision` on an Argo CD
-Application directly, without writing to Git. This breaks the GitOps contract: Git is
-no longer the source of truth. kardinal-promoter's Git strategies (`kustomize`, `helm`,
-`yaml`) write to Git first and change no GitOps tool CRD. The one exception is opt-in:
-`update.strategy: argocd` patches the inline Helm values of an Argo CD Application that
-holds its configuration itself, with no Git repository (see
-[Argo CD-native promotion](argocd-native-promotion.md)).
-
-### `approval: auto` for production environments
-
-`approval: auto` pushes directly to the target branch without a PR. Use this only for
-dev and staging environments. Production should always use `approval: pr-review` so a
-human reviewer confirms the diff and gate compliance before the change lands.
-
-### Missing `historyLimit`
-
-The default `historyLimit: 50` retains 50 finished Bundles per Pipeline. In high-frequency
-pipelines (multiple deployments per day), reduce this to `5`. The Git audit trail in
-GitHub is permanent regardless — only the CRD state in etcd is bounded.
+See [Anti-Patterns to Avoid](advanced-patterns.md#anti-patterns-to-avoid): mutating an Argo CD
+Application instead of Git, templated sources on rendered branches, `approval: auto` for
+production, and an unbounded `historyLimit`.
 
 ## Audit Log
 

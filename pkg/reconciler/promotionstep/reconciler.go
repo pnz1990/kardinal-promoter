@@ -2134,7 +2134,7 @@ func isRollbackBundle(b *v1alpha1.Bundle) bool {
 //
 // Graph-first: reads CRD fields only — no external calls. The step writes
 // only its own status.message. kro cannot hold a step that already exists
-// without pruning it (docs/design/11-graph-purity-tech-debt.md, Accepted).
+// without pruning it (ledger G8, docs/design/16-graph-capability-ledger.md).
 func (r *Reconciler) checkRequiredGates(ctx context.Context, ps *v1alpha1.PromotionStep) (string, error) {
 	for _, gateName := range ps.Spec.RequiredGates {
 		var gate v1alpha1.PolicyGate

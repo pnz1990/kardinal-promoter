@@ -263,7 +263,7 @@ type uiHoldResponse struct {
 	// when it is released.
 	ExpiresAt string `json:"expiresAt,omitempty"`
 	// BundleMissing is true when the controller found the rollback Bundle
-	// missing (status.holdStates, #1629). The hold stays in effect.
+	// missing (status.holdStates). The hold stays in effect.
 	BundleMissing bool `json:"bundleMissing,omitempty"`
 	// Message says what is wrong and how to recover, with BundleMissing.
 	Message string `json:"message,omitempty"`
@@ -494,7 +494,7 @@ func gateApproval(g *v1alpha1.PolicyGate) *uiGateApproval {
 	return out
 }
 
-// uiGateOverride is the JSON shape for a PolicyGateOverride (K-09 audit record).
+// uiGateOverride is the JSON shape for a PolicyGateOverride (an audit record).
 type uiGateOverride struct {
 	Reason    string `json:"reason"`
 	Stage     string `json:"stage,omitempty"`
