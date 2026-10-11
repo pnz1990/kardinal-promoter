@@ -91,7 +91,7 @@ describe('PipelineOpsTable', () => {
       />
     )
     // Warning icon should be present in the inventory age cell
-    expect(screen.getByTitle('20 days since last bundle')).toBeTruthy()
+    expect(screen.getByTitle('20 days since the newest version shipped')).toBeTruthy()
   })
 
   it('calls onSelect when row is clicked', () => {

@@ -17,8 +17,10 @@ import CopyButton from './CopyButton'
 import { ErrorNotice } from '../ui/ErrorNotice'
 import '../styles/PipelineList.css'
 
-/** Short words for the sidebar's per-state counts; the rest use the display label (P2). */
-const SHORT_STATE: Record<string, string> = { WaitingForMerge: 'PR', HealthChecking: 'health', Superseded: 'replaced' }
+/** A display label (P2) as a count's noun: "Live" reads "live", "Waiting for PR merge" keeps "PR". */
+function lowerFirst(label: string): string {
+  return /^[A-Z][a-z]/.test(label) ? label[0].toLowerCase() + label.slice(1) : label
+}
 
 /** Number of pipelines above which virtual scrolling is enabled (flat list only). */
 const VIRTUAL_THRESHOLD = 50
@@ -310,7 +312,7 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
                       }
                       return Object.entries(counts).map(([phase, count]) => (
                         <span key={phase} className="pipeline-list__state k-tone-text" data-tone={displayState('step', phase).tone} title={`${count} env${count !== 1 ? 's' : ''}: ${displayState('step', phase).label}`}>
-                          {count} {SHORT_STATE[phase] ?? displayState('step', phase).label.toLowerCase()}
+                          {count} {lowerFirst(displayState('step', phase).label)}
                         </span>
                       ))
                     })()}

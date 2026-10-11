@@ -5,9 +5,11 @@
  * PipelineConditions.css — the Pipeline's own problems under its header
  * (components/PipelineConditions.tsx). Design tokens only (noLiterals.test.ts).
  */
-.pipeline-conditions { display: grid; gap: var(--k-space-2); margin-block-end: var(--k-space-3); }
+/* minmax(0, 1fr): a long command wraps instead of widening the page. */
+.pipeline-conditions { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--k-space-2); margin-block-end: var(--k-space-3); }
 .pipeline-conditions__notice {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--k-space-1_5);
   padding: var(--k-space-2) var(--k-space-3);
   border: var(--k-border-hairline) solid var(--notice-fg);
@@ -29,3 +31,4 @@
   text-transform: uppercase;
 }
 .pipeline-conditions__message { margin: 0; color: var(--k-ink-2); overflow-wrap: anywhere; }
+.pipeline-conditions .k-codeblock__pre { white-space: pre-wrap; overflow-wrap: anywhere; }

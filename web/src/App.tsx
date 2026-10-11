@@ -99,6 +99,8 @@ export function App() {
   const pipelineTab = urlState.tab ?? 'map'
   const [bundles, setBundles] = useState<Bundle[]>([])
   const [bundlesLoading, setBundlesLoading] = useState(false)
+  // True once a read of the pipeline's versions worked and found none (the first-version call to action).
+  const [noVersion, setNoVersion] = useState(false)
   // Name of the bundle whose graph is on screen.
   const [shownBundleName, setShownBundleName] = useState<string | undefined>()
 
@@ -236,6 +238,7 @@ export function App() {
         const shown = resolveShownBundle(bs, userBundleRef.current, pl?.activeBundleName)
         if (!shown) {
           setBundles(bs)
+          setNoVersion(bs.length === 0)
           setBundlesLoading(false)
           setShownBundleName(undefined)
           setGraph(undefined)
@@ -256,6 +259,7 @@ export function App() {
         } finally {
           if (!stale()) {
             setBundles(bs)
+            setNoVersion(false)
             setBundlesLoading(false)
             setShownBundleName(shown.name)
           }
@@ -283,6 +287,7 @@ export function App() {
     setGraphError(undefined)
     setActiveSteps([])
     setBundles([])
+    setNoVersion(false)
     setShowBlockedOnly(false)
     setSelectedNodeLocal(null)
     setCompareTarget(undefined)
@@ -771,7 +776,7 @@ export function App() {
                       pipelineName={activePipeline.name}
                       namespace={activePipeline.namespace ?? 'default'}
                       onRefresh={manualRefresh}
-                      variant={activePipeline.paused ? 'secondary' : 'primary'}
+                      variant={activePipeline.paused || (noVersion && !graphError) ? 'secondary' : 'primary'}
                     />
                   </div>
                 )}
@@ -862,7 +867,8 @@ export function App() {
               {pipelineTab === 'map' && (<>
                 <div className="app-map-head">
                   {/* An empty pipeline: the one thing to do next (U4). */}
-                  {!bundlesLoading && bundles.length === 0 && (
+                  {/* Only after a read that worked: a failed one shows its error on the map instead. */}
+                  {noVersion && !graphError && (
                     <div className="app-first-version" data-testid="first-version">
                       <p className="app-first-version__text">No version of {activePipeline.name} has shipped yet.</p>
                       <CreateBundleButton

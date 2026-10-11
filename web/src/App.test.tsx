@@ -251,12 +251,24 @@ describe('App pipeline header', () => {
     expect(within(dialog).getByRole('link', { name: 'Concepts' })).toHaveAttribute('href', 'https://pnz1990.github.io/kardinal-promoter/concepts/')
   })
 
+  it('a failed read of the versions shows its error, not Ship your first version, and one primary Ship button', async () => {
+    h.state.pipelines = [pipeline('app', { phase: 'Promoting', activeBundleName: 'b-new', environmentTopology: [{ name: 'test' }] } as Partial<Pipeline>)]
+    h.api.listBundles.mockRejectedValueOnce(new Error('API error 503: Service Unavailable'))
+    render(<App />)
+    await flush()
+    expect(screen.getByText('API error 503: Service Unavailable')).toBeInTheDocument()
+    expect(screen.queryByTestId('first-version')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ship a version of app' }).className).toContain('k-button--primary')
+  })
+
   it('an empty pipeline offers Ship your first version, which opens the ship dialog', async () => {
     h.state.pipelines = [pipeline('app', { phase: 'Unknown', activeBundleName: undefined, environmentTopology: [{ name: 'test' }, { name: 'prod' }] } as Partial<Pipeline>)]
     h.state.bundles = { app: [] }
     render(<App />)
     await flush()
     expect(screen.getByTestId('dag-static-banner')).toBeInTheDocument()
+    // One primary action: the call to action; the header's Ship a version steps back.
+    expect(screen.getByRole('button', { name: 'Ship a version of app' }).className).toContain('k-button--secondary')
     fireEvent.click(screen.getByRole('button', { name: 'Ship your first version of app' }))
     expect(screen.getByRole('dialog', { name: 'Ship a version of app' })).toBeInTheDocument()
   })
