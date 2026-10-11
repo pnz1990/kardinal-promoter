@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
@@ -270,9 +271,11 @@ func (e *Env) ExplainGate(t *testing.T, ns, pipeline, env, name string) (state, 
 	t.Helper()
 	out := e.MustKardinal(t, ns, "explain", pipeline, "--env", env)
 	for _, line := range strings.Split(out, "\n") {
-		f := strings.Fields(line)
+		f := cellGap.Split(strings.TrimSpace(line), -1)
 		if len(f) >= 5 && f[0] == env && f[2] == "PolicyGate" && f[3] == name {
-			return f[4], line, true
+			// The STATE cell is a display label ("Blocking"); callers
+			// compare the API value ("Block").
+			return display.ValueOf(display.KindGate, f[4]), line, true
 		}
 	}
 	return "", out, false

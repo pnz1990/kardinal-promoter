@@ -65,7 +65,8 @@ func TestStatusPipelineWriter_ActiveStep(t *testing.T) {
 	assert.Contains(t, out, "Pipeline: demo")
 	assert.Contains(t, out, "Active bundle(s): bundle-abc")
 	assert.Contains(t, out, "▶ prod")
-	assert.Contains(t, out, "WaitingForMerge")
+	assert.Contains(t, out, "Waiting for PR merge")
+	assertNoRawStates(t, out)
 	assert.Contains(t, out, "open-pr")
 	assert.Contains(t, out, "pull/42")
 }
@@ -303,9 +304,9 @@ func TestStatusPipelineWriter_ActiveBundleAndRegions(t *testing.T) {
 
 	assert.Contains(t, out, "Active bundle(s): b2\n")
 	assert.Contains(t, out, "REGION")
-	assert.Regexp(t, `\n  prod +eu-west-1 +b2 +Verified`, out)
+	assert.Regexp(t, `\n  prod +eu-west-1 +b2 +Live`, out)
 	assert.Regexp(t, `\n▶ prod +us-east-1 +b2 +Promoting`, out)
-	assert.Regexp(t, `\n  test +- +b2 +Verified`, out)
+	assert.Regexp(t, `\n  test +- +b2 +Live`, out)
 	assert.Equal(t, 3, strings.Count(out, "\n  prod")+strings.Count(out, "\n▶ prod")+strings.Count(out, "\n  test"),
 		"b1's steps are not listed:\n%s", out)
 }
@@ -331,9 +332,9 @@ func TestStatusPipelineWriter_CurrentBundle(t *testing.T) {
 			explainGateInstance("demo", "kardinal-test-app-9tptr", "prod", "require-uat-soak", "true", true, true, "x"),
 		)
 		assert.Contains(t, out, "Active bundle(s): kardinal-test-app-9tptr\n")
-		assert.Regexp(t, `\n  prod +- +kardinal-test-app-9tptr +Verified`, out)
-		assert.Regexp(t, `\n  uat +- +kardinal-test-app-9tptr +Verified`, out)
-		assert.Regexp(t, `\n  test +- +kardinal-test-app-9tptr +Verified`, out)
+		assert.Regexp(t, `\n  prod +- +kardinal-test-app-9tptr +Live`, out)
+		assert.Regexp(t, `\n  uat +- +kardinal-test-app-9tptr +Live`, out)
+		assert.Regexp(t, `\n  test +- +kardinal-test-app-9tptr +Live`, out)
 	})
 
 	// The Graph creates every gate instance when the Bundle starts: b2 failed
@@ -352,8 +353,8 @@ func TestStatusPipelineWriter_CurrentBundle(t *testing.T) {
 		)
 		assert.Contains(t, out, "Active bundle(s): b1, b2\n")
 		assert.Regexp(t, `\n  test +- +b2 +Failed`, out)
-		assert.Regexp(t, `\n  uat +- +b1 +Verified`, out)
-		assert.Regexp(t, `\n  prod +- +b1 +Verified`, out)
+		assert.Regexp(t, `\n  uat +- +b1 +Live`, out)
+		assert.Regexp(t, `\n  prod +- +b1 +Live`, out)
 		assert.NotContains(t, out, "Blocking Policy Gates")
 		assert.NotContains(t, out, "no-weekend-deploys")
 	})
@@ -391,7 +392,7 @@ func TestStatusPipelineWriter_TerminalSteps(t *testing.T) {
 				explainBundle("b1", "Promoting", time.Now().Add(-time.Hour)),
 				explainStep("demo", "b1", "prod", state, "", time.Now().Add(-time.Hour)),
 			)
-			assert.Contains(t, out, state)
+			assert.Contains(t, out, stepLabel(state))
 			assert.Contains(t, out, "terminal state")
 		})
 	}

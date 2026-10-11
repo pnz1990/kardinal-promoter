@@ -72,18 +72,21 @@ func isTerminal(w io.Writer) bool {
 //   - Pending / Waiting / Promoting / WaitingForMerge / HealthChecking /
 //     Verifying                                                     → yellow
 //   - anything else, such as Superseded                             → no color
-func (c colorizer) colorState(state string) string {
+func (c colorizer) colorState(state string) string { return c.colorStateText(state, state) }
+
+// colorStateText colors text, the display label of state (P2), by state.
+func (c colorizer) colorStateText(state, text string) string {
 	if !c.enabled {
-		return state
+		return text
 	}
 	switch state {
 	case "Pass", "Verified":
-		return ansiGreen + state + ansiReset
+		return ansiGreen + text + ansiReset
 	case "Block", "Failed", "AbortedByAlarm", "RollingBack":
-		return ansiRed + state + ansiReset
+		return ansiRed + text + ansiReset
 	case "Pending", "Waiting", "Promoting", "WaitingForMerge", "HealthChecking", "Verifying":
-		return ansiYellow + state + ansiReset
+		return ansiYellow + text + ansiReset
 	default:
-		return state
+		return text
 	}
 }

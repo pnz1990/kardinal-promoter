@@ -1,9 +1,7 @@
 # 09: Config-Only Promotions
 
-> Status: Partially implemented. This page was rewritten on 2026-09-29 to match the code.
-> The original design (cherry-pick and overlay strategies, `spec.artifacts.gitCommit`,
-> a `gitCommit` Subscription) was never built; what is left of it is listed
-> under [Not implemented](#not-implemented). Mixed Bundles were added on 2026-10-01.
+> Status: Partially implemented. Candidates not built yet are listed under
+> [Not implemented](#not-implemented).
 > Depends on: the step engine (config-merge is a step, pkg/steps) and the Graph builder (pkg/graph)
 > Blocks: nothing (additive)
 > User docs: [concepts](../concepts.md), [CI integration](../ci-integration.md), `examples/config-promotion/`
@@ -209,7 +207,7 @@ EOF
 
 ## Not implemented
 
-These parts of the original design were never built. Open an issue before relying on any of them.
+These are not built. Open an issue before relying on any of them.
 
 - A **cherry-pick** strategy that applies the commit's diff, and an **overlay** strategy that copies only the files the commit changed. `config-merge` copies the whole environment directory instead.
 - `strategy` and `sourcePath` step config, and a source path that differs from the environment path.

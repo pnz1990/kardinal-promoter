@@ -209,10 +209,10 @@ test('a link opens the pipeline and node it names, and Back and Forward walk the
   expect(route(page).pipeline).toBe(idle)
   expect(route(page).ns).toBe(ns)
   // No Bundle: the DAG is the pipeline's environments, not started.
-  await expect(dagNode(page, 'test')).toHaveAttribute('aria-label', 'test — NotStarted')
+  await expect(dagNode(page, 'test')).toHaveAttribute('aria-label', 'test — Not reached')
   await page.goBack()
   await expect(heading(page)).toHaveText(PIPELINE)
-  await expect(dagNode(page, 'test')).toHaveAttribute('aria-label', 'test — Verified')
+  await expect(dagNode(page, 'test')).toHaveAttribute('aria-label', 'test — Live')
   await expect(details(page)).toHaveCount(0)
   await page.goForward()
   await expect(heading(page)).toHaveText(idle)

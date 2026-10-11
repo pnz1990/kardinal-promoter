@@ -554,7 +554,7 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
     await flush()
     expect(screen.queryByText(/blocking promotion/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Show blocked' })).not.toBeInTheDocument()
-    expect(screen.getByLabelText('soak — Waiting')).toBeInTheDocument()
+    expect(screen.getByLabelText('soak — Not ready')).toBeInTheDocument()
     await openGates()
     expect(screen.queryByText(/\d+ blocked/)).not.toBeInTheDocument()
     expect(screen.getByText('1 waiting')).toBeInTheDocument()

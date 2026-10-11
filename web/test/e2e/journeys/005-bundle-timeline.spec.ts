@@ -38,13 +38,13 @@ test.describe('Journey 005 — Bundle timeline interaction', () => {
     const current = page.locator('button[data-bundle-phase]', { hasText: 'abc123' })
     const older = page.locator('button[data-bundle-phase]', { hasText: 'prev111' })
     await expect(current).toHaveAttribute('aria-pressed', 'true')
-    await expect(page.getByRole('button', { name: 'prod — WaitingForMerge' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'prod — Waiting for PR merge' })).toBeVisible()
 
     await older.click()
     await expect(older).toHaveAttribute('aria-pressed', 'true')
     await expect(current).toHaveAttribute('aria-pressed', 'false')
     // The mock has no graph for prev111, so the abc123 nodes go away.
-    await expect(page.getByRole('button', { name: 'prod — WaitingForMerge' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'prod — Waiting for PR merge' })).toHaveCount(0)
 
     // Wait past one 5 s poll of the bundle list.
     await page.waitForResponse(res => res.url().includes('/pipelines/kardinal-test-app/bundles'), { timeout: 8_000 })

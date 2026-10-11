@@ -693,7 +693,7 @@ func TestPolicyGateReconciler_InvalidCEL_SurfacesErrorInStatus(t *testing.T) {
 // TestPolicyGateReconciler_StatusReasonContainsVersion verifies that when a bundle
 // has an image tag, the evaluated status.reason includes the bundle version.
 // This makes the routing info (bundle version used for evaluation) CRD-observable
-// rather than staying in Go memory only (PG-6 in docs/design/11-graph-purity-tech-debt.md).
+// rather than staying in Go memory only.
 func TestPolicyGateReconciler_StatusReasonContainsVersion(t *testing.T) {
 	bundle := makeBundleWithImage("nginx-demo-v1", "default", "ghcr.io/nginx/nginx", "1.29.0")
 	gate := makeGateInstance("version-gate", "default", "nginx-demo-v1",

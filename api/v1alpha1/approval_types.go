@@ -61,7 +61,7 @@ type ApprovalSpec struct {
 }
 
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:scope=Namespaced,shortName=appr
+// +kubebuilder:resource:scope=Namespaced,shortName=appr,categories=kardinal-all
 // +kubebuilder:printcolumn:name="Bundle",type=string,JSONPath=`.spec.bundle`
 // +kubebuilder:printcolumn:name="Environment",type=string,JSONPath=`.spec.environment`
 // +kubebuilder:printcolumn:name="User",type=string,JSONPath=`.spec.user`

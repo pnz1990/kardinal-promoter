@@ -127,8 +127,8 @@ describe('NodeDetail — PromotionStep node', () => {
         onClose={vi.fn()}
       />
     )
-    // HealthChip renders the state label
-    expect(screen.getByText('Verified')).toBeInTheDocument()
+    // HealthChip renders the display-state label (P2): a Verified step is Live
+    expect(screen.getByText('Live')).toBeInTheDocument()
   })
 
   it('shows PR link when prURL is provided', () => {

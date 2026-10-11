@@ -342,7 +342,7 @@ type SubscriptionStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=sub
+// +kubebuilder:resource:scope=Namespaced,shortName=sub,categories=kardinal;kardinal-all
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
 // +kubebuilder:printcolumn:name="Pipeline",type=string,JSONPath=`.spec.pipeline`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`

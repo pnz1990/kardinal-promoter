@@ -68,8 +68,8 @@ const steps: Record<string, () => void> = {
 
   promote: () => test('Promote in the stage lane asks first, then starts a promotion to prod', async ({ page }) => {
     await openPipeline(page, base, ns)
-    await expect(dagNode(page, 'test')).toHaveAttribute('aria-label', 'test — Verified')
-    await expect(dagNode(page, 'prod')).toHaveAttribute('aria-label', 'prod — NotStarted')
+    await expect(dagNode(page, 'test')).toHaveAttribute('aria-label', 'test — Live')
+    await expect(dagNode(page, 'prod')).toHaveAttribute('aria-label', 'prod — Not reached')
     // test is the first environment: CI starts it, so it has no Promote.
     await expect(lane(page).getByRole('button', { name: 'Promote to test' })).toHaveCount(0)
 
@@ -100,7 +100,7 @@ const steps: Record<string, () => void> = {
 
   rollback: () => test('Roll back in the node details asks first, then rolls prod back', async ({ page }) => {
     await openPipeline(page, base, ns)
-    await expect(dagNode(page, 'prod')).toHaveAttribute('aria-label', 'prod — Verified')
+    await expect(dagNode(page, 'prod')).toHaveAttribute('aria-label', 'prod — Live')
     // The stage lane offers the same action.
     await expect(lane(page).getByRole('button', { name: 'Roll back prod' })).toBeVisible()
 

@@ -37,7 +37,7 @@
 .stage-card--ready       { --stage-accent: var(--k-status-verified-fg); --stage-accent-ring: var(--k-status-verified-fg); }
 .stage-card--error       { --stage-accent: var(--k-status-failed-fg); --stage-accent-ring: var(--k-status-failed-fg); }
 .stage-card--degraded    { --stage-accent: var(--k-status-failed-fg); --stage-accent-ring: var(--k-status-failed-fg); }
-.stage-card--reconciling { --stage-accent: var(--k-status-blocked-fg); --stage-accent-ring: var(--k-status-blocked-fg); }
+.stage-card--inprogress { --stage-accent: var(--k-status-blocked-fg); --stage-accent-ring: var(--k-status-blocked-fg); }
 .stage-card--pending     { --stage-accent: var(--k-line); }
 .stage-card--unknown     { --stage-accent: var(--k-line-subtle); }
 .stage-card--paused      { --stage-accent: var(--k-ink); }

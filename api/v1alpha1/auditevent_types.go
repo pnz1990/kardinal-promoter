@@ -62,7 +62,7 @@ type AuditEventSpec struct {
 // all pipelines.
 //
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:scope=Namespaced,shortName=ae;audit
+// +kubebuilder:resource:scope=Namespaced,shortName=ae;audit,categories=kardinal-all
 // +kubebuilder:printcolumn:name="Pipeline",type="string",JSONPath=".spec.pipelineName"
 // +kubebuilder:printcolumn:name="Bundle",type="string",JSONPath=".spec.bundleName"
 // +kubebuilder:printcolumn:name="Environment",type="string",JSONPath=".spec.environment"
@@ -108,7 +108,7 @@ const MaxPendingAuditEvents = 32
 // the same patch as the transition it records. It creates the AuditEvent on
 // that reconcile or a later one, then removes the entry. The name is fixed
 // when the entry is stored, so a retried create that the API server already
-// applied returns AlreadyExists, which counts as written (#1552).
+// applied returns AlreadyExists, which counts as written.
 type PendingAuditEvent struct {
 	// Name is the AuditEvent's name.
 	// +kubebuilder:validation:MinLength=1
