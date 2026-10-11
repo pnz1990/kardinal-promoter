@@ -12,6 +12,7 @@ import '../styles/FleetBoard.css'
 import { hasCommandModifier, rovingFocus, rovingItems, useRovingFocus } from '../useRovingFocus'
 import type { Pipeline } from '../types'
 import { ageOf, fleetRow, wavePlate, WAVE_PLATE_MIN, type FleetRow, type Station, type StationState } from '../fleetModel'
+import { stateWords } from '../sentence'
 
 interface FleetBoardProps {
   pipelines: Pipeline[]
@@ -50,11 +51,10 @@ function stationNote(s: Station, now: number): string {
   if (s.fleet) return fleetNote(s)
   switch (s.state) {
     case 'arriving':
-      if (s.incomingState === 'WaitingForMerge') return 'waiting for merge'
-      if (s.incomingState === 'HealthChecking') return 'checking health'
-      return 'promoting'
+      // The display labels (P2), as the map and the drawer read them.
+      return stateWords('step', s.incomingState === 'WaitingForMerge' || s.incomingState === 'HealthChecking' ? s.incomingState : 'Promoting')
     case 'failed':
-      return s.incomingState === 'RollingBack' ? 'rolling back' : 'release failed'
+      return s.incomingState === 'RollingBack' ? stateWords('step', 'RollingBack') : 'release failed'
     case 'held':
       return 'held by a gate'
     case 'empty':

@@ -22,7 +22,7 @@ Setting up the kardinal demo in kind-kardinal
   ✓ kro 0.10.0-rc.0: installed
   ✓ Argo CD v3.5.3: installed
   ✓ Secret kardinal-system/kardinal-scm-token: created from $GITHUB_TOKEN (the controller's token for PRs)
-  ✓ kardinal-promoter 0.10.1: installed
+  ✓ kardinal-promoter 0.11.0: installed
   ✓ Secret default/github-token: created from $GITHUB_TOKEN
   ✓ Argo CD ApplicationSet argocd/kardinal-test-app (https://github.com/<you>/kardinal-demo): applied
   ✓ PolicyGate default/prod-approval (prod waits for your approval, as kubernetes-admin): applied
@@ -51,14 +51,21 @@ when it is not done yet:
   `minikube`, `docker-desktop`, `rancher-desktop`; and by API server: this machine, or for
   minikube its drivers' networks 192.168.49.0/24, 192.168.39.0/24 and 192.168.59.0/24) before
   it sends anything to it, and refuses to run while `HELM_KUBE*` (such as `HELM_KUBECONTEXT`) or
-  `KUBERNETES_MASTER` is set, since helm or kubectl would follow them instead. There is no flag
+  `KUBERNETES_MASTER` is set, since helm or kubectl would follow them instead, or when the
+  context's cluster has a `proxy-url`, or when `HTTPS_PROXY` (`HTTP_PROXY` for an `http` server)
+  applies to its API server: the proxy would decide where requests go. Go never proxies
+  `localhost` and `127.0.0.1`; for `0.0.0.0` (k3d), `host.docker.internal` or a minikube address,
+  add the host to `NO_PROXY`. There is no flag
   to override that, on purpose. helm and kubectl run on a kubeconfig file with only the checked
   context. It never changes your kubeconfig; `--context` picks another local context. One thing
   it cannot tell: a loopback port that tunnels to a remote cluster (`kubectl port-forward`,
   `ssh -L`) looks local, so do not point a local context at such a tunnel.
 - It installs kro (the version `hack/install-kro.sh` pins), Argo CD, and the kardinal-promoter
   chart in `kardinal-system` (`--chart-version` and `--set` change it; `--no-argocd` skips
-  Argo CD when the cluster has one).
+  Argo CD when the cluster has one). The Argo CD it installs polls git every 10 seconds
+  (`timeout.reconciliation: 10s` in `argocd-cm`, no jitter) instead of every 2 to 3 minutes,
+  so each environment deploys its merged commit within seconds; an Argo CD that was already
+  there keeps its settings.
 - It creates in `default`, so no command needs `-n`:
   - the Pipeline's git Secret `github-token`;
   - an Argo CD ApplicationSet that deploys `environments/<env>` of your fork as the

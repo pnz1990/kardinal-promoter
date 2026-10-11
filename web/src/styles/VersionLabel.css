@@ -1,0 +1,17 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * VersionLabel.css — a version's tag, then its Bundle name, muted and monospace
+ * (components/VersionLabel.tsx). Design tokens only (noLiterals.test.ts).
+ */
+.version-label { display: inline-flex; align-items: baseline; gap: var(--k-space-1_5); min-inline-size: 0; }
+.version-label__tag { color: var(--k-ink); font-family: var(--k-font-mono); font-variant-numeric: var(--k-numeric-mono); }
+.version-label__name {
+  overflow: hidden;
+  color: var(--k-ink-3);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

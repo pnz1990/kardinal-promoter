@@ -16,6 +16,7 @@ import type { Bundle, EnvironmentHold, GraphNode, GraphResponse, Pipeline, GateA
 import { displayState, heldByGate, heldByRollback, type DisplayState, type Tone } from './display'
 import { environmentUpstreams, groupByDepth } from '../fleetModel'
 import { GRAPH } from './geometry'
+import { lowerFirst } from '../sentence'
 
 /** A gate mounted on the edge into the environment it guards. */
 export interface GateMark {
@@ -510,9 +511,6 @@ export function groupSummary(g: Group): string {
   return g.states.map(stateCount).join(', ')
 }
 
-function lowerFirst(s: string): string {
-  return s.length > 1 && s[1] === s[1].toLowerCase() ? s[0].toLowerCase() + s.slice(1) : s
-}
 
 /** The station's accessible name: "uat — Live, runs 1.4.2, 3h ago, 1 of 1 gate passing". */
 export function stationLabel(st: Station, age: (iso?: string) => string): string {

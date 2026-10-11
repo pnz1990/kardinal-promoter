@@ -159,7 +159,7 @@ run_job() {
     export KIND_CLUSTER="$PREFIX-$id" KIND_K8S="$k8s" SHARD="$shard" COUNT="${COUNT:-1}"
     # run.sh refuses COUNT above 1 for the upgrade suite; the scale suite's
     # load and chaos tests are long, and repeat nothing a second run adds.
-    case $suite in upgrade | upgrade-v090 | scale) COUNT=1 ;; esac
+    case $suite in upgrade | upgrade-v090 | upgrade-v0100 | scale) COUNT=1 ;; esac
     export E2E_OUT="$OUT/$id" KUBECONFIG="$OUT/$id/kubeconfig"
     mkdir -p "$E2E_OUT"
     bash "$E2E_DIR/up.sh" "$suite" && bash "$E2E_DIR/run.sh" "$suite"

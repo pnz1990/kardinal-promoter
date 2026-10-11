@@ -30,7 +30,48 @@ spec:
     excludeAuthor: true         # the Bundle's verified creator does not count
 ```
 
-Approve with the CLI:
+See what waits for you, across pipelines (`-A` for every namespace):
+
+```bash
+kardinal inbox
+```
+
+```
+Waiting on you (1):
+  PIPELINE   ENV    VERSION          WAITING FOR                NEXT
+  shop       prod   2.0.0 (shop-b)   approval at cab · 0 of 2   kardinal approve shop prod
+
+Waiting on someone else (1):
+  PIPELINE   ENV      VERSION          WAITING FOR                             WHO
+  shop       canary   2.0.0 (shop-b)   approval at release-managers · 0 of 1   group release-managers
+```
+
+An approval is on you when you are in its `allowedUsers` or `allowedGroups` (or both are empty), did not create the version under `excludeAuthor`, and may create Approvals. `inbox` also lists holds, paused pipelines, gates that do not open by themselves and PRs to merge; see [`kardinal inbox`](reference/cli/kardinal-inbox.md).
+
+Approve with the CLI ([`kardinal approve`](reference/cli/kardinal-approve.md)), naming the
+pipeline and the environment:
+
+```bash
+kardinal approve my-app prod --comment "checked the migration"
+```
+
+It approves the version waiting for prod: the newer version on its way in, or the version
+promoting now while prod is still ahead of it (approving before it reaches the gate is fine). When
+prod already runs the newest version and nothing is on its way, it is an error.
+
+It names the version on stderr and, at a terminal, asks before it records anything, since a newer
+version may have arrived since you reviewed it:
+
+```text
+Version: 1.29.0 (my-app-v1-29-0)
+Approve 1.29.0 (my-app-v1-29-0) for prod? [y/N]
+```
+
+`--yes` answers for you. Without a terminal (a script, CI) it does not ask. `--version 1.29.0`
+records the approval only if that is the version waiting (the image tag, config commit or chart
+version), and otherwise records nothing.
+
+To name the version yourself, or to decline or take back a decision:
 
 ```bash
 kardinal approve my-app-v1-29-0 --env prod --comment "checked the migration"
