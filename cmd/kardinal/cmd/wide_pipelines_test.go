@@ -97,7 +97,7 @@ func TestPipelineTable_WideSummary(t *testing.T) {
 	require.NoError(t, getPipelinesOnce(&buf, c, "", nil, true))
 	out := buf.String()
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	assert.Equal(t, []string{"NAMESPACE", "PIPELINE", "BUNDLE", "ENVS", "PROGRESS", "FURTHEST", "SUB", "AGE"}, tableCells(lines[0]))
+	assert.Equal(t, []string{"NAMESPACE", "PIPELINE", "VERSION", "ENVS", "PROGRESS", "FURTHEST", "SUB", "AGE"}, tableCells(lines[0]))
 	assert.Regexp(t, `fleet-b1\s+150\s+42 Live, 108 Checking health\s+env-041\s`, out, "FURTHEST: the last Verified environment in DAG order")
 	assert.Regexp(t, `app\s+-\s+3\s+-\s+-`, out)
 	assert.Contains(t, out, "More than 8 environments: one row per Pipeline. Every environment of one: kardinal get pipelines <name>")
@@ -113,7 +113,7 @@ func TestPipelineTable_WideSummary(t *testing.T) {
 	// A namespace of few-environment Pipelines keeps a column per environment.
 	buf.Reset()
 	require.NoError(t, getPipelinesOnce(&buf, c, "default", nil, false))
-	assert.Equal(t, []string{"PIPELINE", "BUNDLE", "TEST", "UAT", "PROD", "SUB", "AGE"}, strings.Fields(strings.SplitN(buf.String(), "\n", 2)[0]))
+	assert.Equal(t, []string{"PIPELINE", "VERSION", "TEST", "UAT", "PROD", "SUB", "AGE"}, strings.Fields(strings.SplitN(buf.String(), "\n", 2)[0]))
 }
 
 // TestGetBundles_NewestFirst (#1579): kardinal get bundles lists the newest

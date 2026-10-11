@@ -146,12 +146,12 @@ func TestRefreshAndDashboard(t *testing.T) {
 	require.Error(t, refreshFn(&buf, c, "default", "missing"))
 
 	buf.Reset()
-	require.NoError(t, dashboardFn(&buf, "", true))
+	require.NoError(t, dashboardFn(context.Background(), &buf, defaultUIAddress, "kardinal-system", true))
 	assert.Equal(t, "kardinal UI: http://localhost:8082/ui/\n", buf.String())
 
 	refreshHelp, dashboardHelp := newRefreshCmd().Long, newDashboardCmd().Long
 	assert.Contains(t, refreshHelp, "re-evaluate gates or re-run health\nchecks")
 	assert.NotContains(t, refreshHelp, "re-check health adapters")
-	assert.Contains(t, dashboardHelp, "It does not port-forward")
+	assert.Contains(t, dashboardHelp, "port-forwards a local port")
 	assert.NotContains(t, dashboardHelp, "Uses port-forwarding")
 }

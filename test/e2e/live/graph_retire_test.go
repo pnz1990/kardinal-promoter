@@ -105,7 +105,7 @@ func TestGraph_RetiresFinishedBundles(t *testing.T) {
 	})
 	var got []string
 	for _, r := range rbHistory(t, a) {
-		got = append(got, r["BUNDLE"]+"/"+r["ENV"])
+		got = append(got, framework.BundleOf(r["VERSION"])+"/"+r["ENV"])
 	}
 	assert.ElementsMatch(t, []string{b2 + "/prod", b2 + "/test", b1 + "/prod", b1 + "/test"}, got)
 

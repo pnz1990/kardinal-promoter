@@ -28,14 +28,15 @@ and the Bundle's environments from status.environments). Exit codes:
 
 A stop at a gate, a hold or a PR counts once two reads agree, and a gate not
 evaluated yet never stops it. A gate that does not pass is waited for, until
---timeout, when it opens by itself: its expression contains one of these
-texts, which name the variables that change with time:
+--timeout, when it opens by itself: its expression, outside its string
+literals, reads one of these variables that change with time (with a . or
+[ after it: schedule.hour, schedule["hour"]):
 
-  schedule.      schedule.isWeekend, schedule.hour, schedule.dayOfWeek
-  soakMinutes    upstream.<env>.soakMinutes, bundle.upstreamSoakMinutes
-  upstream.      anything else of upstream.<env>
-  metrics        metrics.<name>.value, metrics.<name>.result
-  changewindow   changewindow.<name>
+  schedule                    schedule.isWeekend, schedule.hour, schedule.dayOfWeek
+  upstream                    upstream.<env>.soakMinutes and every other field of upstream.<env>
+  bundle.upstreamSoakMinutes  the soak of the environment before this one
+  metrics                     metrics.<name>.value, metrics.<name>.result
+  changewindow                changewindow.<name>
 
 So CI can wait through a soak or a schedule. A PR the SCM merges by itself
 (pr.merge.auto) is waited for too. Any other gate that does not pass (on a

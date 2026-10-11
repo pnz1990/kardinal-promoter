@@ -64,7 +64,9 @@ the PR, how long it took, and when it started.`,
 
 // HistoryRow represents one row in the history output.
 type HistoryRow struct {
-	Bundle    string
+	Bundle string
+	// Version is the Bundle's version, for the table ("" when unknown).
+	Version   string
 	Action    string
 	Env       string
 	PR        string
@@ -147,6 +149,13 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 	}
 
 	rows := buildHistoryRows(steps.Items, rollbacks, envFilter, limit)
+	versions := map[string]string{}
+	for i := range bundles {
+		versions[bundles[i].Name] = createdOf(&bundles[i]).Version
+	}
+	for i := range rows {
+		rows[i].Version = versions[rows[i].Bundle]
+	}
 
 	if len(rows) == 0 {
 		if err := checkPipelineEnv(ctx, c, ns, pipeline, envFilter); err != nil {
@@ -321,12 +330,12 @@ func stepDuration(s v1alpha1.PromotionStep) (time.Duration, bool) {
 // formatHistoryTable writes the history table to w.
 func formatHistoryTable(w io.Writer, rows []HistoryRow) error {
 	tw := style.NewTable(w, 3)
-	if _, err := fmt.Fprintln(tw, "BUNDLE\tACTION\tENV\tPR\tDURATION\tTIMESTAMP"); err != nil {
+	if _, err := fmt.Fprintln(tw, "VERSION\tACTION\tENV\tPR\tDURATION\tTIMESTAMP"); err != nil {
 		return fmt.Errorf("write history header: %w", err)
 	}
 	for _, r := range rows {
 		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			r.Bundle, r.Action, r.Env, r.PR, r.Duration, r.Timestamp); err != nil {
+			versionLabel(r.Version, r.Bundle), r.Action, r.Env, r.PR, r.Duration, r.Timestamp); err != nil {
 			return fmt.Errorf("write history row: %w", err)
 		}
 	}

@@ -19,8 +19,9 @@ every Bundle there is Superseded, the newest one with a PromotionStep there is
 shown. Gates include org
 gates from the policy namespaces and skip-permission gates: they are the
 instances the Graph created for that Bundle, with the controller's latest
-evaluation. Gates that are not ready are listed first. BUNDLE names the
-Bundle each row belongs to.
+evaluation. Gates that are not ready are listed first. VERSION names the
+version each row belongs to: its tag, then its Bundle ("1.5.0 (app-x7k2p)").
+kardinal why says the same in a sentence per environment.
 
 An environment where that Bundle's change has not landed yet (it has not
 reached the environment, or its PR is not merged) also gets a line after the
@@ -55,7 +56,6 @@ kardinal explain <pipeline> [<env>] [flags]
 
 ```
   kardinal explain my-app
-  kardinal why my-app prod
   kardinal explain my-app prod -w
 ```
 

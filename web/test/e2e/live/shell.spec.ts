@@ -130,6 +130,9 @@ test('keyboard shortcuts: / focuses the filter, ? shows the help, r refreshes, E
   await station(page, 'test').click()
   await expect(drawerHeading(page)).toHaveText('test')
   expect(route(page).env).toBe('test')
+  // Focus is on the map's station: the first Esc is the map's (it resets the zoom), the next closes the drawer.
+  await page.keyboard.press('Escape')
+  await expect(details(page)).toHaveCount(1)
   await page.keyboard.press('Escape')
   await expect(details(page)).toHaveCount(0)
   await expect.poll(() => route(page).env ?? route(page).node ?? null).toBeNull()
@@ -190,7 +193,7 @@ test('the theme follows the system until the user picks one, which the next visi
 test('a link opens the pipeline and node it names, and Back and Forward walk the selections', async ({ page }) => {
   await openPipeline(page, base, ns, PIPELINE, { node: testStep })
   await expect(drawerHeading(page)).toHaveText('test')
-  await expect(station(page, 'test')).toHaveAttribute('aria-pressed', 'true')
+  await expect(station(page, 'test')).toHaveAttribute('aria-current', 'true')
 
   // Closing the details is one history entry.
   await details(page).getByRole('button', { name: 'Close test' }).click()
