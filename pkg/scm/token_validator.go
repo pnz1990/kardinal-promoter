@@ -112,6 +112,7 @@ func ValidateGitHubTokenScopes(ctx context.Context, token, apiURL string) ([]Tok
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 
 	resp, err := httpClient.Do(req)
+	err = RedactErr(err) // a *url.Error quotes the URL
 	if err != nil {
 		return nil, fmt.Errorf("call GitHub /user: %w", err)
 	}
@@ -194,6 +195,7 @@ func ValidateGitLabTokenScopes(ctx context.Context, token, apiURL string) ([]Tok
 	req.Header.Set("PRIVATE-TOKEN", token)
 
 	resp, err := httpClient.Do(req)
+	err = RedactErr(err) // a *url.Error quotes the URL
 	if err != nil {
 		return nil, fmt.Errorf("call GitLab token introspection: %w", err)
 	}
@@ -283,6 +285,7 @@ func validateGiteaFamilyTokenScopes(ctx context.Context, name, token, apiURL str
 	req.Header.Set("Authorization", "token "+token)
 
 	resp, err := httpClient.Do(req)
+	err = RedactErr(err) // a *url.Error quotes the URL
 	if err != nil {
 		return nil, fmt.Errorf("call %s /user: %w", name, err)
 	}
