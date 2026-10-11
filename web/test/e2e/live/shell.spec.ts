@@ -100,9 +100,13 @@ test('keyboard shortcuts: / focuses the filter, ? shows the help, r refreshes, E
   await expect(help).toHaveAttribute('aria-modal', 'true')
   const rows = help.getByRole('row')
   const want: [string, string][] = [
+    ['⌘K / Ctrl+K', 'Go to a pipeline, environment or version, or run an action'],
     ['/', 'Focus pipeline search'],
     ['?', 'Show / hide this help panel'],
     ['r', 'Refresh data now'],
+    ['j / k', 'Next / previous environment; on Approvals, next / previous approval'],
+    ['a', 'Approve: the open environment, or the approval in focus'],
+    ['s', 'Ship a version of the open pipeline'],
     ['Esc', 'Close the open side panel'],
   ]
   await expect(rows).toHaveCount(want.length)
