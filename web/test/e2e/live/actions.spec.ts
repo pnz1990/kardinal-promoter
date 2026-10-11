@@ -110,8 +110,8 @@ const steps: Record<string, () => void> = {
     const detail = stageDrawer(page)
     await detail.locator('[data-action="rollback"]').click()
     // The drawer offers the versions Verified in prod; the one before is first.
-    const dialog = page.getByRole('dialog', { name: /^Roll prod back( to .+)?\?$/ })
-    await expect(dialog).toBeVisible()
+    const dialog = page.getByRole('dialog', { name: /^Roll prod back to .+\?$/ })
+    await expect(dialog).toHaveAccessibleDescription(/^A new promotion deploys .+ \([a-z0-9-]+\) to prod\.$/)
     await dialog.getByRole('button', { name: 'Cancel' }).click()
     await expect(dialog).toHaveCount(0)
     await detail.locator('[data-action="rollback"]').click()

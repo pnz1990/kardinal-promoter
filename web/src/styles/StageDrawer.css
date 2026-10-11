@@ -466,14 +466,3 @@
   align-items: flex-start;
   gap: var(--k-space-2);
 }
-
-.stage-cel__chip {
-  padding: var(--k-space-px) var(--k-space-2);
-  border-radius: var(--k-radius-1);
-  border: var(--k-border-hairline) solid currentColor;
-  font-size: var(--k-text-xs);
-  line-height: var(--k-leading-xs);
-}
-
-.stage-cel__chip--valid { color: var(--k-status-verified-fg); }
-.stage-cel__chip--error { color: var(--k-status-failed-fg); }

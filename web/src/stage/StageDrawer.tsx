@@ -14,6 +14,7 @@ import { api } from '../api/client'
 import { displayState, type Tone } from '../displayStates.gen'
 import { formatElapsedSince } from '../timeFormat'
 import { breakpoint } from '../tokens'
+import { StatusChip } from '../ui'
 import { CELBlock } from '../components/CELBlock'
 import EventsPanel from '../components/EventsPanel'
 import { StepProgress } from '../components/StepProgress'
@@ -23,10 +24,7 @@ import { ActionButton } from './ActionButton'
 import { ACTION_LABEL, DESTRUCTIVE, StageActions } from './StageActions'
 import { useStageAccess, type ReasonFor } from './useStageAccess'
 import { useChangeHalo } from '../useChangeHalo'
-import { gateDisplay, gateLabel, stageView, type StageActionKind, type WaitReason } from './stageModel'
-
-/** Step states in which the promotion is running (the elapsed time ticks). */
-const IN_FLIGHT = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'Verifying'])
+import { gateDisplay, gateLabel, IN_FLIGHT, stageView, type StageActionKind, type WaitReason } from './stageModel'
 import '../styles/StageDrawer.css'
 
 export type StageSection = 'why' | 'actions' | 'evidence' | 'history'
@@ -285,10 +283,11 @@ function CelCheck({ expression }: { expression: string }) {
   return (
     <div className="stage-cel" data-invalid={check?.valid === false || undefined}>
       <pre className="stage-code"><CELBlock expression={expression} /></pre>
-      {check?.valid === true && <span className="stage-cel__chip stage-cel__chip--valid">✓ valid</span>}
+      {check?.valid === true && <StatusChip tone="verified" glyph="✓" label="valid" compact data-cel-check="valid" />}
       {check?.valid === false && (
         <>
-          <span className="stage-cel__chip stage-cel__chip--error" title={check.error ? `CEL compile error: ${check.error}` : 'CEL compile error'}>✗ error</span>
+          <StatusChip tone="failed" glyph="✗" label="error" compact data-cel-check="error"
+            title={check.error ? `CEL compile error: ${check.error}` : 'CEL compile error'} />
           {check.error && <p className="stage-why__detail">{`CEL compile error: ${check.error}`}</p>}
         </>
       )}

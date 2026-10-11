@@ -298,7 +298,9 @@ describe('StageDrawer (U3)', () => {
     expect(api.validateCEL).not.toHaveBeenCalled()
     const details = document.querySelector('[data-section="why"] details') as HTMLDetailsElement
     act(() => { details.open = true; details.dispatchEvent(new Event('toggle')) })
-    const chip = await screen.findByText('✗ error')
+    await waitFor(() => expect(document.querySelector('[data-cel-check="error"]')).not.toBeNull())
+    const chip = document.querySelector('[data-cel-check="error"]') as HTMLElement
+    expect(chip).toHaveTextContent('error')
     expect(chip).toHaveAttribute('title', "CEL compile error: undeclared reference to 'bundel'")
     const items = within(screen.getByRole('list', { name: 'Promotion steps' })).getAllByRole('listitem')
     expect(items.map(i => i.getAttribute('data-step-state'))).toEqual(['Completed', 'InProgress'])

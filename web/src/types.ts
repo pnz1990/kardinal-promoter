@@ -140,7 +140,7 @@ export interface Bundle {
   /** #503: Per-environment promotion statuses. The bundle comparison shows
    *  them and the release metrics bar reads healthCheckedAt. */
   environments?: BundleEnvStatus[]
-  /** #563: Container images in this Bundle — used by NodeDetail diff preview. */
+  /** #563: Container images in this Bundle — shown in the stage drawer's evidence. */
   images?: ImageRef[]
   /** Environments where this Rejected bundle's change is live (its step is
    *  HealthChecking or Verified there): it stays current, marked Rejected,
