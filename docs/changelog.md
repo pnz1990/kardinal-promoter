@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **States read as words, the same in the CLI and the UI** — one display table (`pkg/display`) gives every Pipeline, Bundle, step, sub-step and gate state a label, a glyph and a tone: a step `WaitingForMerge` reads "Waiting for PR merge", `Verified` "Live", `AbortedByAlarm` "Stopped by alarm", `Superseded` "Replaced by newer version", a gate `Block` "Blocking". The CLI's table output (get pipelines, bundles and steps, status, explain, logs) and the UI's chips and graph use the labels; `-o json`, `-o yaml`, the CRDs and the UI API objects keep the API values unchanged. The UI API serves the table at `GET /api/v1/ui/display-states`. A script that parsed the CLI's table for a raw state should read `-o json` instead.
+
 ### Fixed
 
 - **Release notes reach the GitHub release** — v0.10.0's release was created with an empty notes section: its changelog section (about 99 KB) went from the workflow's preflight job to the release job as a job output, and did not arrive. The notes now travel as the `release-notes` artifact, the release job writes the body to a file the release step reads, and the release fails when the notes in the finished body are empty. The body's CRD apply command uses `--force-conflicts`, as the upgrade guides do

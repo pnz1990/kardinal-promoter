@@ -324,7 +324,7 @@ func progressSummary(envs map[string]string) string {
 	})
 	parts := make([]string, len(states))
 	for i, st := range states {
-		parts[i] = fmt.Sprintf("%d %s", count[st], st)
+		parts[i] = fmt.Sprintf("%d %s", count[st], envCellLabel(st))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -451,16 +451,16 @@ func fleetCell(envs map[string]string, targets []string) string {
 	if verified == len(targets) {
 		return "Verified"
 	}
-	cell := fmt.Sprintf("%d/%d Verified", verified, len(targets))
+	cell := fmt.Sprintf("%d/%d live", verified, len(targets))
 	if failed > 0 {
-		cell += fmt.Sprintf(", %d Failed", failed)
+		cell += fmt.Sprintf(", %d failed", failed)
 	}
 	if n := len(superseded); n > 0 {
 		names := superseded
 		if n > 3 {
 			names = append(slices.Clone(superseded[:3]), "...")
 		}
-		cell += fmt.Sprintf(", %d Superseded (%s)", n, strings.Join(names, ", "))
+		cell += fmt.Sprintf(", %d replaced by newer version (%s)", n, strings.Join(names, ", "))
 	}
 	return cell
 }
@@ -516,7 +516,7 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, env
 			row = fmt.Sprintf("%s\t%s\t%s", p.Namespace, pipelineDisplay, bundleDisplay)
 		}
 		for _, env := range envOrder {
-			row += "\t" + orDash(pr.envs[env])
+			row += "\t" + envCellLabel(pr.envs[env])
 		}
 		if subCount != nil {
 			row += "\t" + fmt.Sprintf("%d", subCount[pipelineKey])
@@ -624,14 +624,10 @@ func FormatBundleTable(w io.Writer, bundles []v1alpha1.Bundle) error {
 		return fmt.Errorf("write bundle table header: %w", err)
 	}
 	for _, b := range bundles {
-		phase := b.Status.Phase
-		if phase == "" {
-			phase = "Unknown"
-		}
 		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
 			b.Name,
 			b.Spec.Type,
-			phase,
+			bundleLabel(b.Status.Phase),
 			HumanAge(b.CreationTimestamp.Time),
 		); err != nil {
 			return fmt.Errorf("write bundle row: %w", err)
@@ -705,7 +701,7 @@ func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
 				if msg == "" {
 					msg = "-"
 				}
-				if _, err := fmt.Fprintf(tw, "%s\t(no step detail)\t%s\t-\t%s\n", env, state, msg); err != nil {
+				if _, err := fmt.Fprintf(tw, "%s\t(no step detail)\t%s\t-\t%s\n", env, stepLabel(state), msg); err != nil {
 					return fmt.Errorf("write step row: %w", err)
 				}
 				continue
@@ -724,7 +720,7 @@ func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
 					envCol = "" // only print env once per step group
 				}
 				if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-					envCol, ss.Name, string(ss.State), dur, msg,
+					envCol, ss.Name, subStepLabel(string(ss.State)), dur, msg,
 				); err != nil {
 					return fmt.Errorf("write sub-step row: %w", err)
 				}
@@ -747,7 +743,7 @@ func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
 			if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
 				s.Spec.Environment,
 				s.Spec.StepType,
-				state,
+				stepLabel(state),
 				msg,
 			); err != nil {
 				return fmt.Errorf("write step row: %w", err)

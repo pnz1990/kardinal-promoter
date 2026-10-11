@@ -287,7 +287,7 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 			prDisplay = prDisplay[len(prDisplay)-40:]
 		}
 		_, _ = fmt.Fprintf(tw, "%s%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			marker, r.env, r.region, r.bundle, r.state, r.activeStep, prDisplay, r.age)
+			marker, r.env, r.region, r.bundle, stepLabel(r.state), r.activeStep, prDisplay, r.age)
 	}
 	_ = tw.Flush()
 	for _, h := range rejectedLiveHints(pipeline, active, bundles.Items, steps.Items, "") {

@@ -17,6 +17,8 @@ import (
 
 // TestDisplayStatesEndpoint (P2): the UI API serves pkg/display's table, so
 // the UI shows the CLI's words; only GET is allowed.
+//
+// Covers DISPLAY-STATES-01.
 func TestDisplayStatesEndpoint(t *testing.T) {
 	s := &uiAPIServer{}
 	rec := httptest.NewRecorder()

@@ -358,16 +358,20 @@ func TestGetPipelinesOnce_CurrentBundleState(t *testing.T) {
 			var buf bytes.Buffer
 			require.NoError(t, getPipelinesOnce(&buf, fc, "default", []string{"demo"}, false))
 			lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
-			header := strings.Fields(lines[0])
-			cells := strings.Fields(lines[1])
+			header := tableCells(lines[0])
+			cells := tableCells(lines[1])
 			require.Len(t, cells, len(header), buf.String())
 			row := map[string]string{}
 			for i, h := range header {
 				row[h] = cells[i]
 			}
 			for col, want := range tt.want {
+				if col != "BUNDLE" {
+					want = envCellLabel(want)
+				}
 				assert.Equal(t, want, row[col], "column %s in:\n%s", col, buf.String())
 			}
+			assertNoRawStates(t, buf.String())
 		})
 	}
 }

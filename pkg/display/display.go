@@ -208,3 +208,15 @@ func Words(value string) string {
 	}
 	return b.String()
 }
+
+// ValueOf is the API value whose label of kind is label, for a reader of the
+// CLI's table output (tests, scripts that cannot use -o json); "" when no
+// known state has it.
+func ValueOf(kind Kind, label string) string {
+	for v, st := range table[kind] {
+		if st.Label == label {
+			return v
+		}
+	}
+	return ""
+}

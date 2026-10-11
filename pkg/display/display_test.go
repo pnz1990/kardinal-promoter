@@ -54,6 +54,8 @@ var camel = regexp.MustCompile(`[a-z][A-Z]`)
 // TestEveryAPIValueHasALabel (P2): every value the API can hold has an
 // entry, so no surface falls back to the raw value; a new enum value fails
 // here until it gets a label.
+//
+// Covers DISPLAY-STATES-01.
 func TestEveryAPIValueHasALabel(t *testing.T) {
 	cases := map[display.Kind][]string{
 		display.KindBundle:   enum(t, "api/v1alpha1/bundle_types.go", "Phase string `json:\"phase,omitempty\"`"),
@@ -125,6 +127,8 @@ const tsPath = "web/src/displayStates.gen.ts"
 // TestTypeScriptTable (P2): web/src/displayStates.gen.ts is generated from
 // the Go table, so the UI cannot drift from the CLI. Regenerate with
 // KARDINAL_UPDATE_DISPLAY=1 go test ./pkg/display -run TestTypeScriptTable.
+//
+// Covers DISPLAY-STATES-01.
 func TestTypeScriptTable(t *testing.T) {
 	want := typeScript()
 	path := filepath.Join(repoRoot(t), tsPath)

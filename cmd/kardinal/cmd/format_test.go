@@ -15,6 +15,7 @@ package cmd_test
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/cmd"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
@@ -95,9 +97,12 @@ func TestFormatPipelineTable(t *testing.T) {
 	// Row data.
 	assert.Contains(t, out, "nginx-demo")
 	assert.Contains(t, out, "nginx-demo-v1-29-0")
-	assert.Contains(t, out, "Verified")
+	// P2: display labels, not the raw states (Verified, Pending).
+	assert.Contains(t, out, "Live")
 	assert.Contains(t, out, "Promoting")
-	assert.Contains(t, out, "Pending")
+	assert.Contains(t, out, "Not started")
+	assert.NotContains(t, out, "Verified")
+	assert.NotContains(t, out, "Pending")
 }
 
 // TestFormatPipelineTable_NoSteps verifies that an empty step list shows "-" for all env columns.
@@ -163,13 +168,39 @@ func stepBundles(steps []v1alpha1.PromotionStep) []v1alpha1.Bundle {
 }
 
 // tableRow returns the cells of the row whose first cell is first, keyed by
-// the header. Cells must not contain spaces.
+// the header. Cells are split at runs of 2+ spaces: a display label has
+// spaces ("Waiting for PR merge"), the tabwriter pads with 3.
+var cellGap = regexp.MustCompile(`\s{2,}`)
+
+func splitCells(line string) []string {
+	if line = strings.TrimSpace(line); line == "" {
+		return nil
+	}
+	return cellGap.Split(line, -1)
+}
+
+// envLabel is the pipeline-table cell of a raw state (P2): its display
+// label; "Waiting" (the Bundle will still come) is "Not reached"; "-" and a
+// fleet cell (already words) stay.
+func envLabel(v string) string {
+	switch v {
+	case "-", "":
+		return "-"
+	case "Waiting":
+		return display.Step("NotStarted").Label
+	}
+	if st := display.Step(v); st.Tone != display.ToneUnknown {
+		return st.Label
+	}
+	return v
+}
+
 func tableRow(t *testing.T, out, first string) map[string]string {
 	t.Helper()
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	header := strings.Fields(lines[0])
+	header := splitCells(lines[0])
 	for _, l := range lines[1:] {
-		cells := strings.Fields(l)
+		cells := splitCells(l)
 		if len(cells) == 0 || cells[0] != first {
 			continue
 		}
@@ -247,12 +278,12 @@ func TestFormatPipelineTable_MultiPipeline(t *testing.T) {
 
 	// app-a has no staging environment: its STAGING cell is "-".
 	a := tableRow(t, out, "app-a")
-	assert.Equal(t, "Verified", a["TEST"])
+	assert.Equal(t, "Live", a["TEST"])
 	assert.Equal(t, "-", a["STAGING"])
 	assert.Equal(t, "-", a["PROD"])
 	b := tableRow(t, out, "app-b")
 	assert.Equal(t, "-", b["TEST"])
-	assert.Equal(t, "Verified", b["STAGING"])
+	assert.Equal(t, "Live", b["STAGING"])
 }
 
 func TestFormatBundleTable(t *testing.T) {
@@ -329,7 +360,7 @@ func TestFormatStepsTable(t *testing.T) {
 	assert.Contains(t, out, "MESSAGE")
 	assert.Contains(t, out, "test")
 	assert.Contains(t, out, "kustomize-set-image")
-	assert.Contains(t, out, "Pending")
+	assert.Contains(t, out, "Not started")
 	assert.Contains(t, out, "no-weekend-deploys")
 }
 
@@ -641,6 +672,9 @@ func TestFormatPipelineTable_CurrentBundleState(t *testing.T) {
 			require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, tt.bundles, tt.steps, nil, false))
 			row := tableRow(t, buf.String(), "app")
 			for col, want := range tt.want {
+				if col != "BUNDLE" {
+					want = envLabel(want)
+				}
 				assert.Equal(t, want, row[col], "column %s in:\n%s", col, buf.String())
 			}
 			if b := lifecycle.CurrentBundle(tt.bundles, tt.steps); assert.NotNil(t, b) {
@@ -989,10 +1023,10 @@ func TestFormatPipelineTableFull_AllNamespacesNoCrossTalk(t *testing.T) {
 
 	rows := map[string][]string{}
 	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n")[1:] {
-		f := strings.Fields(line)
+		f := splitCells(line)
 		rows[f[0]] = f[1:5]
 	}
-	assert.Equal(t, []string{"web", "web-a1", "Verified", "1"}, rows["team-a"])
+	assert.Equal(t, []string{"web", "web-a1", "Live", "1"}, rows["team-a"])
 	assert.Equal(t, []string{"web", "web-b1", "Failed", "0"}, rows["team-b"])
 }
 
@@ -1030,7 +1064,7 @@ func TestStepStatePriority_AllStates(t *testing.T) {
 			}
 			var buf bytes.Buffer
 			require.NoError(t, cmd.FormatStepsTable(&buf, steps))
-			assert.Contains(t, buf.String(), " "+tc.want+" ", buf.String())
+			assert.Contains(t, buf.String(), " "+display.Step(tc.want).Label+" ", buf.String())
 		})
 	}
 }
@@ -1133,12 +1167,12 @@ func TestFormatPipelineTable_Fleet(t *testing.T) {
 	out := render(step("test", "Verified"), step("prod-a", "Verified"), step("prod-b", "Failed"), step("prod-c", "Promoting"))
 	assert.Contains(t, out, "PROD")
 	assert.NotContains(t, out, "PROD-A", "targets are not columns of their own")
-	assert.Contains(t, out, "1/3 Verified, 1 Failed")
+	assert.Contains(t, out, "1/3 live, 1 failed")
 	out = render(step("test", "Verified"), step("prod-a", "Verified"), step("prod-b", "Verified"), step("prod-c", "Verified"))
 	assert.NotContains(t, out, "/3")
 	// #1603: a target a newer Bundle (its rollback) deployed is Superseded,
 	// named, and not a failure.
 	out = render(step("test", "Verified"), step("prod-a", "Verified"), step("prod-b", "Superseded"), step("prod-c", "Verified"))
-	assert.Contains(t, out, "2/3 Verified, 1 Superseded (prod-b)")
+	assert.Contains(t, out, "2/3 live, 1 replaced by newer version (prod-b)")
 	assert.NotContains(t, out, "Failed")
 }
