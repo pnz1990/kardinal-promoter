@@ -465,15 +465,17 @@ func (r *inboxReader) environment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvir
 				unread = true // its creator is unknown, not absent
 			}
 			st := lifecycle.ApprovalStandingOf(g, creator, r.me)
-			if st.Block == lifecycle.ApprovalRejected {
-				continue // rejected: nobody's approval opens it (as the UI)
+			creatorHeld := st.Block == lifecycle.ApprovalNoCreator || st.Block == lifecycle.ApprovalComponentCreator
+			if st.Block == lifecycle.ApprovalRejected || (creatorHeld && unread && len(st.RejectedBy) > 0) {
+				// Rejected: nobody's approval opens it (as the UI). With the
+				// version not read, a known rejection still says so.
+				continue
 			}
 			it.Kind = "approval"
 			it.Waiting = fmt.Sprintf("approval at %s · %d of %d", name, st.Approved, st.Required)
 			it.Next = fmt.Sprintf("kardinal approve %s %s%s", p.Name, e.Name, nsFlag)
 			it.OnYou = st.CanApprove && r.may("approval", p.Namespace)
 			it.Who = st.Who
-			creatorHeld := st.Block == lifecycle.ApprovalNoCreator || st.Block == lifecycle.ApprovalComponentCreator
 			switch {
 			case creatorHeld && unread:
 				it.Waiting = fmt.Sprintf("approval at %s · %d of %d (could not read the version %s to see who created it)", name, st.Approved, st.Required, bundle)
