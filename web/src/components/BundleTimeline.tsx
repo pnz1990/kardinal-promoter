@@ -21,7 +21,7 @@ import { useRovingFocus } from '../useRovingFocus'
 import { sortBundlesNewestFirst } from '../bundleSelection'
 import { BundleTypeBadge, bundleTypeLabel } from './BundleTypeBadge'
 import { displayState } from '../displayStates.gen'
-import { versionName } from '../versionName'
+import { bundleVersion } from '../stage/stageModel'
 import '../styles/BundleTimeline.css'
 
 /** Number of newest bundles shown. */
@@ -174,7 +174,7 @@ export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundl
               data-tone={phase.tone}
             >
               <span className="bundle-chip__dot" aria-hidden="true">{phase.glyph}</span>
-              <span className="bundle-chip__name">{versionName(b.name, b.pipeline)}</span>
+              <span className="bundle-chip__name">{bundleVersion(b)}</span>
               <BundleTypeBadge type={b.type} compact />
               <span className={isSelected ? 'bundle-chip__phase' : 'bundle-chip__phase sr-only'}>{phase.label}</span>
               {isCompare && <span className="bundle-chip__compare-badge" aria-hidden="true">≠</span>}

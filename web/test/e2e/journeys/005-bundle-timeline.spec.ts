@@ -36,7 +36,7 @@ test.describe('Journey 005 — Bundle timeline interaction', () => {
   test('Step 5: Clicking an older bundle shows its graph and keeps it after the next poll', async ({ page }) => {
     // The timeline chips carry data-bundle-phase; the header's copy button also names the bundle.
     const current = page.locator('button[data-bundle-phase]', { hasText: 'abc123' })
-    const older = page.locator('button[data-bundle-phase]', { hasText: 'prev111' })
+    const older = page.locator('button[data-bundle-phase]', { hasText: 'sha-9f8e7d6' })
     await expect(current).toHaveAttribute('aria-pressed', 'true')
     // The station map labels each stage: under abc123 a gate holds prod (its PR is open).
     await expect(page.getByRole('button', { name: /^prod — Held by gate no-weekend-deploys/ })).toBeVisible()

@@ -319,10 +319,9 @@ func TestUI_BrowserGates(t *testing.T) {
 	assert.False(t, exists, "the gate still holds prod")
 }
 
-// TestUI_BrowserGateOverride checks overriding a gate from the stage drawer
-// (v0.10.1; #1245 had removed the old dialog). While gate hold-prod holds a
-// Bundle, prod's drawer names it under "why it's waiting" with Override gate
-// next to it; its dialog needs a reason, Cancel sends nothing, and confirming
+// TestUI_BrowserGateOverride checks overriding a gate from the stage drawer.
+// While gate hold-prod holds a Bundle, prod's drawer names it under "why it's
+// waiting" with Override gate next to it; its dialog needs a reason, Cancel sends nothing, and confirming
 // sends one POST /api/v1/ui/override. The instance then has one override for
 // prod, recorded with the UI's requester (kardinal-ui: this UI does not run
 // TokenReview), lasting the 15 minutes chosen; the gate stops holding and

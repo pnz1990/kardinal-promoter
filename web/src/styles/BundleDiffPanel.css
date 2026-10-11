@@ -28,7 +28,8 @@
 
 .bundle-diff__row {
   display: grid;
-  grid-template-columns: var(--bundle-diff-label) 1fr 1fr;
+  /* minmax(0, 1fr): a long value (a CI run URL) ellipsises in its column instead of overflowing. */
+  grid-template-columns: var(--bundle-diff-label) minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--k-space-2);
 }
 .bundle-diff__row--heads { margin-block-end: var(--k-space-2); }
@@ -44,9 +45,10 @@
   border: var(--k-border-hairline) solid transparent;
   border-radius: var(--k-radius-2);
 }
+/* A changed field: neutral (a sunken surface and a bold label). Ochre means a hold, not a diff. */
 .bundle-diff__row--field[data-changed] {
-  border-color: var(--k-status-blocked-fg);
-  background: var(--k-status-blocked-wash);
+  border-color: var(--k-line);
+  background: var(--k-surface-sunken);
 }
 
 .bundle-diff__col-head {
@@ -59,14 +61,13 @@
   text-transform: uppercase;
 }
 .bundle-diff__label { color: var(--k-ink-2); font-size: var(--k-text-xs); }
-.bundle-diff__row--field[data-changed] .bundle-diff__label { color: var(--k-status-blocked-fg); font-weight: var(--k-weight-semibold); }
-.bundle-diff__name { color: var(--k-syntax-ident); font-family: var(--k-font-mono); font-size: var(--k-text-xs); }
+.bundle-diff__row--field[data-changed] .bundle-diff__label { color: var(--k-ink); font-weight: var(--k-weight-bold); }
 
 .bundle-diff__value { color: var(--k-ink-2); font-family: var(--k-font-mono); font-size: var(--k-text-xs); }
-.bundle-diff__value[data-changed] { color: var(--k-status-blocked-fg); }
+.bundle-diff__value[data-changed] { color: var(--k-ink); }
 .bundle-diff__value--none { color: var(--k-ink-3); font-family: inherit; }
 .bundle-diff__value--full { white-space: pre-line; overflow-wrap: anywhere; }
-.bundle-diff__value--link { color: var(--k-ink); text-decoration: underline var(--k-border-hairline) var(--k-thread-text); text-underline-offset: 0.2em; }
+.bundle-diff__value--link { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--k-ink); text-decoration: underline var(--k-border-hairline) var(--k-thread-text); text-underline-offset: 0.2em; }
 
 .bundle-diff__same {
   margin-block-start: var(--k-space-2);
@@ -85,3 +86,4 @@
 .bundle-diff__row--env { padding-block: var(--k-space-0_5); }
 .bundle-diff__row--env[data-changed] .bundle-diff__env { color: var(--k-ink); font-weight: var(--k-weight-semibold); }
 .bundle-diff__env { font-family: var(--k-font-mono); font-size: var(--k-text-xs); color: var(--k-ink-2); }
+.bundle-diff__version { flex-wrap: wrap; overflow-wrap: anywhere; }

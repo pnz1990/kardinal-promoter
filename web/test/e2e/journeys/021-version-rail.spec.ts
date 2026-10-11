@@ -1,7 +1,7 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 //
-// Journey 020: the version rail (DESIGN-SYSTEM §3.3). Versions are ticks on a time axis,
+// Journey 021: the version rail (DESIGN-SYSTEM §3.3). Versions are ticks on a time axis,
 // newest on the right. Hovering a tick previews its route on the map as a ghost thread;
 // [ and ] follow an older or newer version and f the newest; c on a focused tick
 // compares it, and the comparison panel carries the map's marks, a row per environment.
@@ -14,7 +14,7 @@ import { serveScale } from './scaleFixtures'
 const rail = (page: import('@playwright/test').Page) => page.getByRole('toolbar', { name: /^Versions/ })
 const tick = (page: import('@playwright/test').Page, name: string) => rail(page).locator(`.bundle-chip[title^="${name}:"]`)
 
-test.describe('Journey 020 — Version rail', () => {
+test.describe('Journey 021 — Version rail', () => {
   test.beforeEach(async ({ page }) => {
     await serveScale(page)
     await page.setViewportSize({ width: 1440, height: 900 })

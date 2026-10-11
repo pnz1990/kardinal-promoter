@@ -176,7 +176,10 @@ release name other than `kardinal-promoter`, the Service is named
 ### What the UI shows
 
 The UI calls a Bundle a *version*, a PromotionStep a *stage* and a PolicyGate a *gate*
-([Concepts](concepts.md)). An environment's or gate's panel has the Kubernetes kind and object
+([Concepts](concepts.md)). A version reads as what it ships (its image tag, chart version or config commit, the
+`version` column of `kardinal get bundles`) on the map, the version rail, the Versions tab, the
+sidebar and the stage drawer; the Bundle name follows it in muted monospace, or is the tooltip
+where space is short. An environment's or gate's panel has the Kubernetes kind and object
 name under **Kubernetes details**, for `kubectl`.
 
 - **Fleet board** (the start page, and the kardinal logo from anywhere). Each Pipeline is a
