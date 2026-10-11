@@ -68,6 +68,7 @@ func TestBundleReconciler_SetsAvailablePhase(t *testing.T) {
 		Spec: kardinalv1alpha1.BundleSpec{
 			Type:     "image",
 			Pipeline: "nginx-demo",
+			Images:   []kardinalv1alpha1.ImageRef{{Repository: "nginx", Tag: "1.29.0"}},
 		},
 	}
 
@@ -95,6 +96,29 @@ func TestBundleReconciler_SetsAvailablePhase(t *testing.T) {
 		Name: "nginx-demo-v1", Namespace: "default",
 	}, &got))
 	assert.Equal(t, "Available", got.Status.Phase)
+	// P1: the Version printer column. Covers PIPE-ENVSTATUS-02.
+	assert.Equal(t, "1.29.0", got.Status.Version)
+}
+
+// TestBundleReconciler_VersionBackfilled (P1): a Bundle in flight from before
+// status.version existed gets it on its next reconcile.
+//
+// Covers PIPE-ENVSTATUS-02.
+func TestBundleReconciler_VersionBackfilled(t *testing.T) {
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v2", Namespace: "default"},
+		Spec: kardinalv1alpha1.BundleSpec{Type: "config", Pipeline: "nginx-demo",
+			ConfigRef: &kardinalv1alpha1.ConfigRef{GitRepo: "https://github.com/me/config", CommitSHA: "abcdef1234567"}},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+	c := indexedBuilder(newScheme()).WithObjects(b).WithStatusSubresource(b).Build()
+	r := &bundle.Reconciler{Client: c}
+	_, _ = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v2", Namespace: "default"},
+	})
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v2", Namespace: "default"}, &got))
+	assert.Equal(t, "config abcdef1", got.Status.Version)
 }
 
 // TestBundleReconciler_AvailableToPromoting verifies that an Available Bundle

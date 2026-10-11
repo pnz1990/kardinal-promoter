@@ -14,18 +14,20 @@ SubjectAccessReview, so these roles decide what a caller can do there too
   <fullname>-promoter  viewer + create Bundles (CI, create bundle, promote,
                        rollback) + pause and resume Pipelines (pipelines/pause)
                        + roll back and hold, and release a hold
-                       (pipelines/hold)
+                       (pipelines/hold) + reject Bundles in the UI
+                       (bundles/reject)
   <fullname>-approver  viewer + override (approve) PolicyGates
-                       (policygates/override) + create Approvals
+                       (policygates/override) + reject Bundles in the UI
+                       (bundles/reject) + create Approvals
   <fullname>-admin     every verb on every kardinal kind, and pipelines/edit
                        and policygates/edit; aggregates the other three and
                        <fullname>-admin-extra
 
-pipelines/pause, pipelines/hold, pipelines/edit, policygates/override and
-policygates/edit are virtual subresources: the API server serves no such
+pipelines/pause, pipelines/hold, pipelines/edit, policygates/override,
+policygates/edit and bundles/reject are virtual subresources: the API server serves no such
 endpoint, RBAC grants them and SubjectAccessReview checks them. The UI API
-authorizes pause, resume, the hold of a rollback, release-hold and gate
-approval on them and writes the change as the controller, recording the
+authorizes pause, resume, the hold of a rollback, release-hold, gate
+approval and Bundle rejection on them and writes the change as the controller, recording the
 caller. The promoter and approver roles grant no update on Pipelines or
 PolicyGates, so they cannot edit a Pipeline or a gate. With
 rbac.userRoles.directWrites they also get update and patch, for kardinal
@@ -85,9 +87,10 @@ rules:
   resources: ["bundles"]
   verbs: ["create"]
 # Pause and resume in the UI; roll back and hold, and release a hold
-# (spec.holds; the hold-writes policy checks the entries).
+# (spec.holds; the hold-writes policy checks the entries). Reject a Bundle
+# in the UI (bundles/reject): stopping a bad version is a safety action.
 - apiGroups: ["kardinal.io"]
-  resources: ["pipelines/pause", "pipelines/hold"]
+  resources: ["pipelines/pause", "pipelines/hold", "bundles/reject"]
   verbs: ["update"]
 {{- if $direct }}
 # kardinal pause, rollback --hold and release-hold from a kubeconfig.
@@ -109,9 +112,9 @@ metadata:
     {{- end }}
 rules:
 {{- include "kardinal-promoter.userRoles.readRules" . }}
-# Override (approve) a gate in the UI.
+# Override (approve) a gate, and reject a Bundle, in the UI.
 - apiGroups: ["kardinal.io"]
-  resources: ["policygates/override"]
+  resources: ["policygates/override", "bundles/reject"]
   verbs: ["update"]
 # Record an approval (approval gates), and revoke your own (only the
 # approver may delete it: identity-admission.yaml).
@@ -142,7 +145,7 @@ rules:
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
 # "*" does not cover subresources: name the virtual ones.
 - apiGroups: ["kardinal.io"]
-  resources: ["pipelines/pause", "pipelines/hold", "pipelines/edit", "policygates/override", "policygates/edit"]
+  resources: ["pipelines/pause", "pipelines/hold", "pipelines/edit", "policygates/override", "policygates/edit", "bundles/reject"]
   verbs: ["update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

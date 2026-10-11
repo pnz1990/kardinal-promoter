@@ -448,6 +448,7 @@ kardinal-promoter writes an immutable `AuditEvent` CRD for each key promotion li
 | `PromotionFailed` | The step reaches Failed or AbortedByAlarm |
 | `PromotionSuperseded` | A newer Bundle supersedes an in-flight promotion (a step that had not started writes none) |
 | `PromotionRejected` | `kardinal reject` cancels an in-flight promotion (a step that had not started writes none) |
+| `BundleRejected` | A Bundle is rejected (`kardinal reject` or the UI), once, naming who rejected it and why; its environment is `*` (the whole Bundle) |
 | `GateOverridden` | An override is recorded on a gate instance (`kardinal override` or the UI), once per override, with its verified author |
 | `ApprovalRecorded` / `ApprovalRevoked` | A decision (`kardinal approve`) appears in, or leaves, an approval gate instance, with the approver and whether it counts |
 | `HoldCreated` / `HoldReleased` / `HoldBundleMissing` | A hold (`kardinal rollback --hold`) appeared in, or left, `spec.holds`; or its rollback Bundle has been missing for `--hold-bundle-grace` (the hold stays in effect: [A hold whose rollback Bundle does not exist](rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |

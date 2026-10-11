@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 	"os/user"
-	"sort"
 	"strings"
 	"time"
 
@@ -25,54 +24,37 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/validation"
-	"k8s.io/client-go/util/retry"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 func newOverrideCmd() *cobra.Command {
 	var (
 		stage     string
 		reason    string
-		expiresIn string
+		expiresIn = time.Hour
 	)
 
 	cmd := &cobra.Command{
-		Use:   "override <pipeline> --stage <environment> --gate <gate-name> --reason <text> [--expires-in <duration>]",
+		Use:   "override <pipeline> [<env>] --gate <gate> --reason <text>",
 		Short: "Force-pass a PolicyGate with a mandatory audit record",
-		Long: `Override a PolicyGate for a specific pipeline stage.
+		Long: `Make --gate pass for the in-progress Bundles of <pipeline> (in <env>, or every
+environment), until --expires-in (default 1h). The override is recorded in the
+gate's spec.overrides[] under your Kubernetes username, with a GateOverridden
+AuditEvent; it applies to the gate instances that exist now, so run it while
+the Bundle waits. A single gate instance name is accepted too.`,
+		Example: `  kardinal override my-app prod --gate no-weekend-deploys --reason "P0 hotfix, incident 4521"
 
-The override is time-limited and creates a mandatory audit record in
-PolicyGate.spec.overrides[]. The gate passes immediately without evaluating
-the CEL expression until the override expires.
-
-The record names you by your Kubernetes username, read from the API server
-with a SelfSubjectReview (as kubectl auth whoami does); the chart's
-ValidatingAdmissionPolicy refuses an override in anyone else's name. The
-controller writes a GateOverridden AuditEvent for each override.
-
-Expired overrides stay in spec.overrides[] as an audit record for as long
-as the Bundle exists. Deleting a Bundle deletes its gate instances and their
-overrides, and the Pipeline's historyLimit cleanup deletes old finished
-Bundles (50 by default). Use --expires-in to control the override window
-(default: 1h).
-
---gate takes the gate template name (for example no-weekend-deploys). The
-override is recorded on the instances of that gate that the Pipeline's
-in-progress Bundles have for --stage (every stage when --stage is not set),
-so run it while the Bundle waits on the gate. Instances of Verified, Failed,
-Superseded and Rejected Bundles are left alone, because no promotion waits on them; if
-a Failed Bundle resumes, run the override again. The name of one gate
-instance, as kubectl get policygates shows it, is also accepted; that instance
-alone gets the override.
-
-Example:
-  kardinal override my-app --stage prod --gate no-weekend-deploys \
-    --reason "P0 hotfix — incident #4521"`,
-		Args: cobra.ExactArgs(1),
+  # longer window; --stage is the older name of the environment flag
+  kardinal override my-app --stage prod --gate change-freeze --reason "approved by CAB" --expires-in 4h`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			pipeline, env, err := envArgs(cmd, args, stage)
+			if err != nil {
+				return err
+			}
 			// MarkFlagRequired refuses a missing flag, not an empty one:
 			// --reason "" and --gate "" get here.
 			if reason == "" {
@@ -86,13 +68,13 @@ Example:
 			if err != nil {
 				return fmt.Errorf("override: %w", err)
 			}
-			return overrideFn(cmd.OutOrStdout(), c, ns, args[0], stage, gateName, reason, expiresIn)
+			return overrideFn(cmd.OutOrStdout(), c, ns, pipeline, env, gateName, reason, expiresIn)
 		},
 	}
 
-	cmd.Flags().StringVar(&stage, "stage", "", "Environment (stage) name the override applies to")
+	addEnvFlag(cmd, &stage, "Environment the override applies to (or give it after the pipeline; default: every environment)")
 	cmd.Flags().StringVar(&reason, "reason", "", "Mandatory justification for the override (audit record)")
-	cmd.Flags().StringVar(&expiresIn, "expires-in", "1h", "How long the override is active (Go duration, e.g. 1h, 4h, 30m)")
+	cmd.Flags().Var(durationValue{&expiresIn}, "expires-in", "How long the override is active (30m, 4h, 2d)")
 	cmd.Flags().String("gate", "", "PolicyGate name to override")
 	_ = cmd.MarkFlagRequired("reason")
 	_ = cmd.MarkFlagRequired("gate")
@@ -110,15 +92,10 @@ Example:
 func overrideFn(
 	w interface{ Write([]byte) (int, error) },
 	c sigs_client.Client,
-	ns, pipeline, stage, gateName, reason, expiresIn string,
+	ns, pipeline, stage, gateName, reason string,
+	expDuration time.Duration,
 ) error {
 	ctx := context.Background()
-
-	// Parse expiry duration
-	expDuration, err := time.ParseDuration(expiresIn)
-	if err != nil || expDuration <= 0 {
-		return fmt.Errorf("invalid --expires-in %q: must be a positive Go duration (e.g. 1h, 30m)", expiresIn)
-	}
 
 	// Say so when the pipeline is wrong, rather than that it has no gate.
 	var pl v1alpha1.Pipeline
@@ -180,109 +157,16 @@ func overrideFn(
 	return nil
 }
 
-// overrideTargets returns the gate instances an override of gateName is
-// recorded on.
-//
-// A gate template (for example platform-policies/no-weekend-deploy) is never
-// evaluated itself: each Bundle's Graph stamps an instance of it per
-// environment in the Pipeline namespace, labelled with the template name, and
-// the PolicyGate reconciler evaluates the instances. An instance name is
-// usually longer than the 63 characters a label value may have, so a name
-// that is an instance is read directly and never used in a label selector
-// (E2E-R08). A template name is resolved to the instances of the Bundles
-// still in progress. No promotion waits on the instances of a Verified,
-// Failed, Superseded or Rejected Bundle, so they are left alone.
+// overrideTargets is lifecycle.OverrideTargets.
 func overrideTargets(ctx context.Context, c sigs_client.Client, ns, pipeline, stage, gateName string) (
 	[]v1alpha1.PolicyGate, error) {
-	var gate v1alpha1.PolicyGate
-	getErr := c.Get(ctx, types.NamespacedName{Name: gateName, Namespace: ns}, &gate)
-	if getErr != nil && !apierrors.IsNotFound(getErr) {
-		return nil, fmt.Errorf("get policygate %s: %w", gateName, getErr)
-	}
-	if getErr == nil {
-		if _, isInstance := gate.Labels["kardinal.io/bundle"]; isInstance {
-			if p := gate.Labels["kardinal.io/pipeline"]; p != "" && p != pipeline {
-				return nil, fmt.Errorf("policygate %s/%s is an instance of pipeline %s, not %s",
-					ns, gateName, p, pipeline)
-			}
-			if env := gate.Labels["kardinal.io/environment"]; stage != "" && env != "" && env != stage {
-				return nil, fmt.Errorf("policygate %s/%s is the instance for stage %s, not %s",
-					ns, gateName, env, stage)
-			}
-			return []v1alpha1.PolicyGate{gate}, nil
-		}
-	}
-
-	// A template name is a valid label value (pkg/graph/validate.go checks
-	// it); anything longer cannot label an instance.
-	if len(validation.IsValidLabelValue(gateName)) > 0 {
-		return nil, fmt.Errorf("get policygate %s: no gate instance of that name in namespace %s: %w",
-			gateName, ns, getErr)
-	}
-	var instances v1alpha1.PolicyGateList
-	selector := sigs_client.MatchingLabels{
-		"kardinal.io/pipeline":      pipeline,
-		"kardinal.io/gate-template": gateName,
-	}
-	if stage != "" {
-		selector["kardinal.io/environment"] = stage
-	}
-	if err := c.List(ctx, &instances, sigs_client.InNamespace(ns), selector); err != nil {
-		return nil, fmt.Errorf("list instances of policygate %s: %w", gateName, err)
-	}
-	var bundles v1alpha1.BundleList
-	if len(instances.Items) > 0 {
-		if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err != nil {
-			return nil, fmt.Errorf("list bundles: %w", err)
-		}
-	}
-	inProgress := make(map[string]bool, len(bundles.Items))
-	for _, b := range bundles.Items {
-		switch b.Status.Phase {
-		case "Verified", "Failed", "Superseded", "Rejected":
-		default:
-			inProgress[b.Name] = true
-		}
-	}
-	var targets []v1alpha1.PolicyGate
-	for _, inst := range instances.Items {
-		if inProgress[inst.Labels["kardinal.io/bundle"]] {
-			targets = append(targets, inst)
-		}
-	}
-	if len(targets) > 0 {
-		sort.Slice(targets, func(i, j int) bool { return targets[i].Name < targets[j].Name })
-		return targets, nil
-	}
-
-	// An org gate's template is in a policy namespace, so the Get above does
-	// not find it; its instances are still here.
-	if getErr != nil && len(instances.Items) == 0 {
-		return nil, fmt.Errorf("get policygate %s: no gate instance or template of that name for pipeline %s "+
-			"in namespace %s: %w", gateName, pipeline, ns, getErr)
-	}
-	return nil, fmt.Errorf("no in-progress Bundle of pipeline %s has an instance of gate %s in namespace %s "+
-		"(stage %q; %d instance(s) of finished Bundles); an override applies to the instances a promoting "+
-		"Bundle creates, so run it while the Bundle waits on the gate",
-		pipeline, gateName, ns, stage, len(instances.Items))
+	return lifecycle.OverrideTargets(ctx, c, ns, pipeline, stage, gateName)
 }
 
-// appendOverride appends override to gate's spec.overrides. A merge patch
-// replaces the whole list, so it carries the resourceVersion and is retried
-// on conflict: a concurrent override is re-read, not overwritten.
+// appendOverride is lifecycle.AppendOverride.
 func appendOverride(ctx context.Context, c sigs_client.Client, gate *v1alpha1.PolicyGate,
 	override v1alpha1.PolicyGateOverride) error {
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		patch := sigs_client.MergeFromWithOptions(gate.DeepCopy(), sigs_client.MergeFromWithOptimisticLock{})
-		gate.Spec.Overrides = append(gate.Spec.Overrides, override)
-		err := c.Patch(ctx, gate, patch)
-		if apierrors.IsConflict(err) {
-			if getErr := c.Get(ctx, sigs_client.ObjectKeyFromObject(gate), gate); getErr != nil {
-				return getErr
-			}
-		}
-		return err
-	})
+	return lifecycle.AppendOverride(ctx, c, gate, override)
 }
 
 // currentUser returns the current OS user name for audit trail purposes.

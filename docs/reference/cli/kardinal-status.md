@@ -4,7 +4,10 @@ Show controller health or per-pipeline in-flight promotion details
 
 ### Synopsis
 
-Show the health of the kardinal controller and cluster resource summary.
+Without a pipeline: the controller version and how many pipelines and
+bundles there are. With one: per environment, the Bundle promoting and the one
+deployed, the step each is on with its PR, and the gates holding it back. This
+is the first command to run when a promotion is stuck; -w refreshes it.
 
 When called without arguments: displays the controller version (the
 kardinal-version ConfigMap in --controller-namespace), the pipeline count with
@@ -30,18 +33,15 @@ bundle's Pending PromotionStep there waits on it. A gate of an environment the
 bundle has not reached yet is not listed. This is the first command to run
 when a promotion is stuck.
 
-Examples:
-  # Cluster-level summary
-  kardinal status
+```
+kardinal status [<pipeline>] [flags]
+```
 
-  # Per-pipeline in-flight view
-  kardinal status nginx-demo
-
-For detailed gate diagnostics, use 'kardinal explain <pipeline>'.
-For step-level log output, use 'kardinal logs <pipeline>'.
+### Examples
 
 ```
-kardinal status [pipeline] [flags]
+  kardinal status
+  kardinal status my-app -w
 ```
 
 ### Options
@@ -49,6 +49,7 @@ kardinal status [pipeline] [flags]
 ```
       --controller-namespace string   Namespace kardinal-promoter is installed in (default "kardinal-system")
   -h, --help                          help for status
+  -w, --watch                         Refresh every 2 seconds (Ctrl-C to quit)
 ```
 
 ### Options inherited from parent commands

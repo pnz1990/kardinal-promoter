@@ -8,6 +8,8 @@ metadata:
 spec:
   group: kardinal.io
   names:
+    categories:
+    - kardinal-all
     kind: ImageVerification
     listKind: ImageVerificationList
     plural: imageverifications

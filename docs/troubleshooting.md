@@ -379,7 +379,7 @@ kardinal policy test my-gate.yaml
 kardinal policy simulate --pipeline my-app --env prod --time "Saturday 3pm"
 
 # Raw CRD inspection
-kubectl get pipelines,bundles,promotionsteps,policygates -o wide
+kubectl get kardinal-all -o wide     # every kardinal object; kubectl get kardinal: the ones you write
 kubectl get graph -l kardinal.io/pipeline=my-app
 ```
 

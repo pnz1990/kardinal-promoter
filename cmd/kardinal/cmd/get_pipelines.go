@@ -70,46 +70,13 @@ func newGetPipelinesCmd() *cobra.Command {
 		Annotations: map[string]string{outputAnnotation: "true"},
 		Aliases:     []string{"pipeline"},
 		Short:       "List Pipelines",
-		Long: `List Pipelines and their per-environment promotion status.
-
-BUNDLE is the pipeline's current bundle: the newest bundle that is not
-Superseded, whatever its phase (the newest one when all are Superseded), the
-same bundle the UI shows. Every environment column describes that bundle: its
-step state there, in words ("Live", "Waiting for PR merge"); "Not reached"
-when it has no step there yet and is still promoting (held by a gate, or an
-upstream environment is not live yet). A dash means the bundle has no PromotionStep there and is
-finished (Verified, Failed or Superseded) or skips the environment or stops
-before it (skipEnvironments or targetEnvironment). kardinal status and kardinal
-explain instead pick the current bundle per environment, so for an
-environment the newest bundle has not reached they describe the bundle that
-was there before.
-
-Environment columns follow the pipeline's DAG (waves and dependsOn), merged
-across the pipelines listed. With more than 8 environment columns (one wide
-pipeline, or several with different environments), each pipeline gets one
-summary row instead: ENVS, the environment count, and PROGRESS, the current
-bundle's states with counts, most advanced first ("42 Live, 108 Checking
-health"), and FURTHEST, the last environment in DAG order where the
-bundle is live (in a wave, the last one in spec order). kardinal get
-pipelines <name> shows every environment of that pipeline.
-
--o json and -o yaml print the Pipeline objects as the API server lists them
-(by namespace, then name), without the table's columns, with the API's state
-values (Verified, WaitingForMerge).
-
-The table needs list permission on bundles and promotionsteps; without it the
-command fails instead of showing dashes.
-
-Use --watch / -w to stream live updates (polls every 2s, Ctrl-C to quit).
-
-When a Bundle promotion fails (e.g. due to an invalid dependsOn reference
-or a circular dependency in the Pipeline spec), an ERROR: line is printed
-after the table with the pipeline name and root cause:
-
-  ERROR: pipeline my-app: build: environment "prod" dependsOn unknown environment "staging"
-
-This avoids the need to run kubectl describe bundle to find the root cause
-of a stalled promotion.`,
+		Long: `List Pipelines with the state of their current Bundle in each environment, in
+DAG order (wide pipelines get one summary row each: kardinal get pipelines
+<name> shows every environment). A failed build prints an ERROR: line with its
+cause after the table. -w refreshes it.`,
+		Example: `  kardinal get pipelines
+  kardinal get pipelines my-app -w
+  kardinal get pipelines -A -o json`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runGetPipelines(cmd, args, allNamespaces, watchFlag)
@@ -119,6 +86,7 @@ of a stalled promotion.`,
 		"List pipelines across all namespaces (adds NAMESPACE column)")
 	cmd.Flags().BoolVarP(&watchFlag, "watch", "w", false,
 		"Stream live updates (polls every 2s, Ctrl-C to quit)")
+	withReference(cmd, getPipelinesReference)
 	return cmd
 }
 
@@ -217,3 +185,43 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 		return nil
 	}
 }
+
+// getPipelinesReference is the detail of the command for its reference page.
+const getPipelinesReference = `BUNDLE is the pipeline's current bundle: the newest bundle that is not
+Superseded, whatever its phase (the newest one when all are Superseded), the
+same bundle the UI shows. Every environment column describes that bundle: its
+step state there, in words ("Live", "Waiting for PR merge"); "Not reached"
+when it has no step there yet and is still promoting (held by a gate, or an
+upstream environment is not live yet). A dash means the bundle has no PromotionStep there and is
+finished (Verified, Failed or Superseded) or skips the environment or stops
+before it (skipEnvironments or targetEnvironment). kardinal status and kardinal
+explain instead pick the current bundle per environment, so for an
+environment the newest bundle has not reached they describe the bundle that
+was there before.
+
+Environment columns follow the pipeline's DAG (waves and dependsOn), merged
+across the pipelines listed. With more than 8 environment columns (one wide
+pipeline, or several with different environments), each pipeline gets one
+summary row instead: ENVS, the environment count, and PROGRESS, the current
+bundle's states with counts, most advanced first ("42 Live, 108 Checking
+health"), and FURTHEST, the last environment in DAG order where the
+bundle is live (in a wave, the last one in spec order). kardinal get
+pipelines <name> shows every environment of that pipeline.
+
+-o json and -o yaml print the Pipeline objects as the API server lists them
+(by namespace, then name), without the table's columns, with the API's state
+values (Verified, WaitingForMerge).
+
+The table needs list permission on bundles and promotionsteps; without it the
+command fails instead of showing dashes.
+
+Use --watch / -w to stream live updates (polls every 2s, Ctrl-C to quit).
+
+When a Bundle promotion fails (e.g. due to an invalid dependsOn reference
+or a circular dependency in the Pipeline spec), an ERROR: line is printed
+after the table with the pipeline name and root cause:
+
+  ERROR: pipeline my-app: build: environment "prod" dependsOn unknown environment "staging"
+
+This avoids the need to run kubectl describe bundle to find the root cause
+of a stalled promotion.`
