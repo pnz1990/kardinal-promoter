@@ -157,6 +157,14 @@ func TestWhy_Golden(t *testing.T) {
 			}
 			return []sigs_client.Object{g, whyBundle("demo-b", "1.5.0")}
 		}, false},
+		{"approval, held and rejected (held wins)", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
+				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", BlockedBy: []string{"cab"}}}
+			g := explainGateInstance("demo", "demo-b", "prod", "cab", "true", false, true, "excludeAuthor cannot be enforced")
+			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}
+			g.Spec.Approvals = []v1alpha1.GateApproval{{User: "bob", Decision: "reject", Bundle: "demo-b", Environment: "prod"}}
+			return []sigs_client.Object{g, whyBundle("demo-b", "1.5.0")}
+		}, false},
 		{"a gate that opens by itself", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
 				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", BlockedBy: []string{"no-weekend-deploys"}}}

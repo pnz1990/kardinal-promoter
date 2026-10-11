@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -93,6 +94,13 @@ func inboxObjects() []sigs_client.Object {
 	// A version inbox cannot read (deleted, or no get on Bundles): who
 	// created it is unknown, not absent.
 	ghost := pipe("ghost", "default", wait("prod", "ghost-b", "", 7, "cab"))
+	// More than 100 Approvals, and excludeAuthor held with a reject: no one
+	// can give them (held wins over rejected, as the reconciler decides).
+	many := pipe("many", "default", wait("prod", "many-b", "4.0.0", 6, "cab"), wait("dr", "many-b", "4.0.0", 4, "author"))
+	var flood []v1alpha1.GateApproval
+	for i := 0; i <= 100; i++ {
+		flood = append(flood, v1alpha1.GateApproval{User: fmt.Sprintf("u%d", i), Decision: "approve"})
+	}
 	web := pipe("web", "default",
 		v1alpha1.PipelineEnvironmentStatus{Name: "prod", Bundle: "web-a", Version: "1.4.0", IncomingBundle: "web-b", IncomingVersion: "1.5.0",
 			State: "WaitingForMerge", PRURL: "https://github.com/acme/gitops/pull/42", Since: ago(60)},
@@ -122,6 +130,9 @@ func inboxObjects() []sigs_client.Object {
 		gate("default", "auth", "auth-b", "dr", "author", "true", &v1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}),
 		gate("default", "feed", "feed-b", "prod", "cab", "true", &v1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}),
 		ghost, gate("default", "ghost", "ghost-b", "prod", "cab", "true", &v1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}),
+		many, bundle("many-b", "default", "4.0.0", ""),
+		gate("default", "many", "many-b", "prod", "cab", "true", &v1alpha1.GateApprovalPolicy{Required: 1}, flood...),
+		gate("default", "many", "many-b", "dr", "author", "true", &v1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}, reject("carol")),
 	}
 }
 
@@ -130,6 +141,14 @@ func inboxObjects() []sigs_client.Object {
 // team-b; the kubeconfig's namespace is default. It returns stdout and
 // stderr.
 func inboxRun(t *testing.T, c sigs_client.Client, ns string, idErr error) (string, string) {
+	t.Helper()
+	out, errs, err := inboxRunE(t, c, ns, idErr)
+	require.NoError(t, err)
+	return out, errs
+}
+
+// inboxRunE is inboxRun that returns inbox's error.
+func inboxRunE(t *testing.T, c sigs_client.Client, ns string, idErr error) (string, string, error) {
 	t.Helper()
 	prevID, prevCan, prevNS, prevErr := identityOf, canI, contextNamespace, errOut
 	t.Cleanup(func() { identityOf, canI, contextNamespace, errOut = prevID, prevCan, prevNS, prevErr })
@@ -142,16 +161,15 @@ func inboxRun(t *testing.T, c sigs_client.Client, ns string, idErr error) (strin
 	contextNamespace = func() string { return "default" }
 	var out, errb bytes.Buffer
 	errOut = &errb
-	require.NoError(t, inboxFn(context.Background(), &out, c, ns))
-	return out.String(), errb.String()
+	err := inboxFn(context.Background(), &out, c, ns)
+	return out.String(), errb.String(), err
 }
 
 // TestInbox_Golden (CLI UX 4, #1765 QA): what waits for a person, on you
 // first (the server's approval tally and your rights) with the command,
 // then on others with who; rejected approvals are left out; commands carry
-// -n outside the kubeconfig's namespace; -A reads namespace by namespace
-// when it may not list cluster-wide, and notes what it skipped; an unknown
-// caller is noted.
+// -n outside the kubeconfig's namespace; -A that may not list cluster-wide
+// fails with the fix-it; an unknown caller is noted.
 //
 // Covers CLI-INBOX-01.
 func TestInbox_Golden(t *testing.T) {
@@ -179,7 +197,10 @@ func TestInbox_Golden(t *testing.T) {
 			return cl.List(ctx, list, opts...)
 		},
 	}).Build()
-	run("kardinal inbox -A (namespaced rights only)", limited, "", nil)
+	// -A asks for every namespace: without the right to list them all it
+	// fails and says to use -n, as status -A does.
+	_, _, err := inboxRunE(t, limited, "", nil)
+	require.EqualError(t, err, "you may not list Pipelines in every namespace: run kardinal inbox -n <namespace>")
 	run("kardinal inbox (SelfSubjectReview fails)", c, "default", errors.New("selfsubjectreviews is forbidden"))
 	path := filepath.Join("testdata", "inbox.golden")
 	if *updateInbox {

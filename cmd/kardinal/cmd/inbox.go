@@ -23,7 +23,6 @@ import (
 
 	"github.com/spf13/cobra"
 	authorizationv1 "k8s.io/api/authorization/v1"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
@@ -208,8 +207,8 @@ func inboxFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) 
 }
 
 // inboxNamespaces are the namespaces inbox reads for ns: ns itself, or for
-// "" (every namespace) "" when a cluster-wide List of Pipelines is allowed,
-// else the namespaces of the cluster (each read on its own).
+// "" (-A, every namespace) "" when a cluster-wide List of Pipelines is
+// allowed; else -A fails with the fix-it, as status -A does.
 func inboxNamespaces(ctx context.Context, c sigs_client.Client, ns string) ([]string, error) {
 	if ns != "" {
 		return []string{ns}, nil
@@ -219,20 +218,10 @@ func inboxNamespaces(ctx context.Context, c sigs_client.Client, ns string) ([]st
 	switch {
 	case err == nil:
 		return []string{""}, nil
-	case !apierrors.IsForbidden(err):
-		return nil, fmt.Errorf("list pipelines: %w", HumanError(err))
+	case apierrors.IsForbidden(err):
+		return nil, fmt.Errorf("you may not list Pipelines in every namespace: run kardinal inbox -n <namespace>")
 	}
-	var nsl corev1.NamespaceList
-	if err := c.List(ctx, &nsl); err != nil {
-		return nil, fmt.Errorf("you may not list Pipelines in every namespace, nor list the namespaces to read them one by one: "+
-			"run kardinal inbox -n <namespace>: %w", HumanError(err))
-	}
-	out := make([]string, 0, len(nsl.Items))
-	for _, n := range nsl.Items {
-		out = append(out, n.Name)
-	}
-	slices.Sort(out)
-	return out, nil
+	return nil, fmt.Errorf("list pipelines: %w", HumanError(err))
 }
 
 // inboxItems is what waits for a person in ns ("" for every namespace),
@@ -582,8 +571,9 @@ you: the CLI cannot tell who may merge. Gates that open by themselves and
 promotions in flight are not listed. The oldest wait comes first.
 
 A command carries -n when its namespace is not the kubeconfig context's. -A
-lists every namespace; when you may not list Pipelines cluster-wide, inbox
-reads the namespaces one by one and notes on stderr the ones it may not read.
+lists every namespace; when you may not list Pipelines cluster-wide it
+fails and says to use -n. A namespace whose gates or Bundles it may not
+read is noted on stderr.
 -o json|yaml prints {onYou, others, skipped}; each item has namespace,
 pipeline, environment, bundle, version, kind, waiting, onYou, who, next
 (without --reason <why>: needsReason says it needs one) and since.`
