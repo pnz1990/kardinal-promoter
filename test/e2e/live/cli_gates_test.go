@@ -298,10 +298,9 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	refuses(t, c, ns, fmt.Sprintf("policygate %s/%s is the instance for stage test, not prod", ns, entry.Name),
 		"override", pipelineName, "--stage", "prod", "--gate", entry.Name, "--reason", "r")
 	refuses(t, c, ns, `--reason is required for override (audit record)`, "override", pipelineName, "--gate", "entry", "--reason", "")
-	if r := c.Fail(ns, "override", pipelineName, "--gate", "", "--reason", "r"); assert.Equal(t, 1, r.Code) {
-		// The gates not passing now, or none: either way it asks for --gate.
-		assert.Regexp(t, `^(which gate\? Gates not passing for podinfo: .+\. Pass --gate <name>|--gate is required: no gate of podinfo is holding a promotion back now)\n$`, r.Stderr)
-	}
+	// B1 waits at test's entry gate, and prod's hold gate is not ready yet.
+	refuses(t, c, ns, "which gate? Gates not passing for podinfo: entry, hold. Pass --gate <name>",
+		"override", pipelineName, "--gate", "", "--reason", "r")
 	refusesNotFound(t, c, ns, "", "other",
 		"override", "other", "--gate", entry.Name, "--reason", "r")
 	other := barePipeline(t, e, ns, "other")
