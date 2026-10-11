@@ -70,8 +70,9 @@ func TestCLI_GetPipelinesWide(t *testing.T) {
 	b2 := createBundle(t, e, a.ns, pipelineName, "", fixtures.V3, nil).Name
 	lines := strings.Split(strings.TrimSpace(c.Must(a.ns, "get", "bundles")), "\n")
 	require.Len(t, lines, 3, lines)
-	assert.True(t, strings.HasPrefix(lines[1], b2+" "), "newest first: %v", lines)
-	assert.True(t, strings.HasPrefix(lines[2], b1+" "), "newest first: %v", lines)
+	rows := framework.ParseTable(strings.Join(lines, "\n"))
+	require.Len(t, rows, 2, lines)
+	assert.Equal(t, []string{b2, b1}, []string{framework.BundleOf(rows[0]["VERSION"]), framework.BundleOf(rows[1]["VERSION"])}, "newest first: %v", lines)
 	var bl []v1alpha1.Bundle
 	require.NoError(t, json.Unmarshal([]byte(c.Must(a.ns, "get", "bundles", "-o", "json")), &bl))
 	require.Len(t, bl, 2)
