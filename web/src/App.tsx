@@ -164,6 +164,9 @@ export function App() {
     if (node) setSelectedNodeLocal(node)
   }, [graph, urlState, selectedNode, setUrlState])
 
+  // The version whose route the rail previews on the map (hover or focus on a tick).
+  const [previewBundle, setPreviewBundle] = useState<string | null>(null)
+
   // The user picked the Map tab's view (Map, Table or Matrix): a narrow screen
   // then keeps the Map instead of opening on the Table.
   const [mapChosen, setMapChosen] = useState(false)
@@ -900,7 +903,10 @@ export function App() {
                       onSelectBundle={handleTimelineBundleSelect}
                       compareBundle={compareBundle}
                       onCompareBundle={(name) => setCompareTarget(name ?? undefined)}
-                      onCompare={() => setUrlState({ compare: compareBundle })}
+                      onCompare={(name) => setUrlState({ compare: name ?? compareBundle })}
+                      onPreview={setPreviewBundle}
+                      activeBundle={activePipeline?.activeBundleName}
+                      globalKeys
                     />
                   </ErrorBoundary>
                 </div>
@@ -947,6 +953,7 @@ export function App() {
                         onAs={v => { setMapChosen(true); setUrlState({ as: v }) }}
                         onSelectVersion={handleTimelineBundleSelect}
                         onCompareVersion={b => { setCompareTarget(b); setUrlState({ compare: b }) }}
+                        previewBundle={bundles.find(b => b.name === previewBundle && b.name !== activeBundle?.name)}
                       />
                     </ErrorBoundary>
                   </div>

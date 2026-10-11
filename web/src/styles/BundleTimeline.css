@@ -2,146 +2,67 @@
  * Copyright 2026 The kardinal-promoter Authors.
  * Licensed under the Apache License, Version 2.0
  *
- * BundleTimeline.css — CSS classes for the bundle timeline chips (#532).
- * All colors are theme tokens (theme.css), so dark and light mode both work.
- * The bundle phase sets --phase-color, used by the dot and the phase label;
- * selection and comparison only change the chip border, so the rules never
- * compete for the same property.
+ * BundleTimeline.css — the version rail: ticks on a hairline time axis, newest on the
+ * right. A tick is its state's glyph and the version's name; the followed one is the
+ * thread's red with its state, the compared one an ink dash, a rejected one struck.
  */
-
-.bundle-timeline-bar {
-  padding: 0.5rem 1rem;
-  background: var(--color-bg);
-  border-bottom: 1px solid var(--color-border-muted);
-  overflow-x: auto;
+.bundle-timeline-bar { padding-block: var(--k-space-1); overflow-x: auto; }
+.bundle-timeline__head { display: flex; align-items: baseline; gap: var(--k-space-3); }
+.bundle-timeline__title {
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-2xs);
+  font-stretch: var(--k-stretch-label);
+  letter-spacing: var(--k-tracking-caps);
+  text-transform: uppercase;
+  color: var(--k-ink-3);
 }
+.bundle-timeline__keys { font-size: var(--k-text-2xs); color: var(--k-ink-3); }
+.bundle-timeline__keys kbd { font-family: var(--k-font-mono); }
+.bundle-timeline__compare, .bundle-timeline__clear {
+  font: inherit;
+  font-size: var(--k-text-xs);
+  color: var(--k-ink);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: var(--k-space-0_5);
+}
+.bundle-timeline__chips { position: relative; display: flex; align-items: flex-end; gap: var(--k-space-1); padding-block-start: var(--k-space-1); }
+.bundle-timeline__axis { position: absolute; inset-inline: 0; inset-block-end: var(--k-space-3); border-block-end: var(--k-border-hairline) solid var(--k-line); }
 
-/* ── Bundle chip base ────────────────────────────────────────────────────── */
 .bundle-chip {
-  --phase-color: var(--color-text-muted);
+  position: relative;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
-  min-width: 56px;
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
-  padding: 0.3rem 0.5rem;
-  cursor: pointer;
-  font-size: 0.72rem;
-  background: var(--color-surface);
-  color: var(--color-text-muted);
-  transition: border-color 0.1s ease;
-}
-
-.bundle-chip:hover {
-  border-color: var(--color-accent-hover);
-}
-
-.bundle-chip--selected {
-  /* The shown Bundle is the selection: the thread. */
-  border-color: var(--k-thread);
-  box-shadow: inset 0 0 0 var(--k-border-hairline) var(--k-thread);
-  color: var(--color-text);
-}
-
-.bundle-chip--compare {
-  border-style: dashed;
-  border-color: var(--color-info);
-  color: var(--color-text);
-}
-
-.bundle-chip__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--phase-color);
-}
-
-.bundle-chip--selected .bundle-chip__dot {
-  box-shadow: 0 0 6px var(--phase-color);
-}
-
-.bundle-chip__name {
-  font-size: 0.75rem;
-  font-family: var(--k-font-mono);
-}
-
-.bundle-chip--selected .bundle-chip__name,
-.bundle-chip--compare .bundle-chip__name {
-  font-weight: 600;
-}
-
-.bundle-chip__phase {
-  font-size: 0.75rem;
-  color: var(--phase-color);
-}
-
-.bundle-chip__compare-badge {
-  font-size: 0.55rem;
-  color: var(--color-info);
-  font-weight: 700;
-}
-
-/* ── Bundle phase colors ─────────────────────────────────────────────────── */
-.bundle-chip--promoting  { --phase-color: var(--k-status-promoting-fg); }
-.bundle-chip--verified   { --phase-color: var(--color-success); }
-.bundle-chip--failed     { --phase-color: var(--color-error); }
-.bundle-chip--rejected   { --phase-color: var(--color-error); }
-.bundle-chip--available  { --phase-color: var(--color-warning); }
-.bundle-chip--superseded,
-.bundle-chip--unknown    { --phase-color: var(--color-text-muted); }
-
-/* ── Loading skeleton (#784) ─────────────────────────────────────────────── */
-.bundle-chip-skeleton {
-  height: 28px;
-  border-radius: 14px;
-  flex-shrink: 0;
-  background: linear-gradient(90deg, var(--color-surface) 25%, var(--color-surface-2) 50%, var(--color-surface) 75%);
-  background-size: 200% 100%;
-  animation: bundle-chip-shimmer 1.5s infinite;
-}
-
-/* The five skeleton chips, of differing widths. */
-.bundle-chip-skeleton:nth-of-type(1) { width: calc(var(--k-space-4) * 4.5); }
-.bundle-chip-skeleton:nth-of-type(2) { width: calc(var(--k-space-4) * 3.625); }
-.bundle-chip-skeleton:nth-of-type(3) { width: calc(var(--k-space-4) * 4); }
-.bundle-chip-skeleton:nth-of-type(4) { width: calc(var(--k-space-4) * 3.125); }
-.bundle-chip-skeleton:nth-of-type(5) { width: calc(var(--k-space-4) * 4.25); }
-
-@keyframes bundle-chip-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
-/* ── Header row and chip strip ──────────────────────────────────────────── */
-.bundle-timeline__skeleton-row,
-.bundle-timeline__head { display: flex; align-items: center; gap: var(--k-space-2); }
-.bundle-timeline__head { margin-block-end: var(--k-space-1); }
-.bundle-timeline__title {
+  gap: var(--k-space-0_5);
+  padding: var(--k-space-1) var(--k-space-2);
+  font: inherit;
+  font-size: var(--k-text-2xs);
   color: var(--k-ink-3);
-  font-family: var(--k-font-display);
-  font-size: var(--k-text-2xs);
-  letter-spacing: var(--k-tracking-caps);
-  text-transform: uppercase;
-}
-.bundle-timeline__compare {
-  padding: var(--k-space-px) var(--k-space-1_5);
-  border: var(--k-border-hairline) solid var(--k-line-strong);
-  border-radius: var(--k-radius-1);
-  background: transparent;
-  color: var(--k-ink);
-  font-size: var(--k-text-2xs);
-  font-weight: var(--k-weight-semibold);
-  cursor: pointer;
-}
-.bundle-timeline__clear {
-  padding: 0;
-  border: 0;
   background: none;
-  color: var(--k-ink-2);
-  font-size: var(--k-text-2xs);
+  border: 0;
+  border-block-end: var(--k-border-strong) solid transparent;
   cursor: pointer;
 }
-.bundle-timeline__chips { display: flex; align-items: stretch; gap: var(--k-space-1_5); }
+.bundle-chip:hover { color: var(--k-ink); border-block-end-color: var(--k-thread-ghost); }
+.bundle-chip:focus-visible { outline: var(--k-focus-ring); outline-offset: var(--k-focus-offset); }
+.bundle-chip__dot { font-size: var(--k-text-sm); line-height: 1; color: var(--k-ink-node); }
+.bundle-chip[data-tone="promoting"] .bundle-chip__dot { color: var(--k-thread-text); }
+.bundle-chip[data-tone="failed"] .bundle-chip__dot { color: var(--k-status-failed-fg); }
+.bundle-chip[data-tone="superseded"] .bundle-chip__dot, .bundle-chip[data-tone="pending"] .bundle-chip__dot { color: var(--k-ink-3); }
+.bundle-chip__name { font-family: var(--k-font-mono); font-size: var(--k-text-xs); }
+.bundle-chip--rejected .bundle-chip__name { text-decoration: line-through; text-decoration-color: var(--k-status-failed-fg); }
+.bundle-chip__phase { font-size: var(--k-text-2xs); }
+.bundle-chip--selected { color: var(--k-ink); border-block-end-color: var(--k-thread); }
+.bundle-chip--selected .bundle-chip__name { font-weight: var(--k-weight-semibold); }
+.bundle-chip--selected .bundle-chip__phase { color: var(--k-thread-text); }
+.bundle-chip--compare { color: var(--k-ink); border-block-end-style: dashed; border-block-end-color: var(--k-ink); }
+.bundle-chip__compare-badge { position: absolute; inset-block-start: 0; inset-inline-end: 0; font-family: var(--k-font-mono); font-weight: var(--k-weight-bold); color: var(--k-ink); }
+
+/* #784: skeleton while the versions load. */
+.bundle-timeline__skeleton-row { display: flex; gap: var(--k-space-2); padding-block: var(--k-space-2); }
+.bundle-chip-skeleton { inline-size: var(--k-space-12); block-size: var(--k-space-6); border-radius: var(--k-radius-1); background: var(--k-surface-sunken); }

@@ -14,7 +14,7 @@ test.describe('Journey 005 — Bundle timeline interaction', () => {
   })
 
   test('Step 1: Bundle timeline shows bundle history header, and the History tab lists them', async ({ page }) => {
-    await expect(page.getByText(/Versions \(newest/)).toBeVisible()
+    await expect(page.getByText(/Versions \(oldest → newest\)/)).toBeVisible()
     await page.getByRole('tab', { name: /^Versions/ }).click()
     await expect(page.getByRole('list', { name: 'Versions' }).getByRole('listitem')).toHaveCount(3)
   })
@@ -24,8 +24,8 @@ test.describe('Journey 005 — Bundle timeline interaction', () => {
     await expect(page.getByText(/Promoting/i).first()).toBeVisible()
   })
 
-  test('Step 3: Bundle timeline shows "newest → oldest" direction', async ({ page }) => {
-    await expect(page.getByText(/newest → oldest/i)).toBeVisible()
+  test('Step 3: the version rail reads oldest → newest (a time axis, newest on the right)', async ({ page }) => {
+    await expect(page.getByText(/oldest → newest/i)).toBeVisible()
   })
 
   test('Step 4: Previous bundle (Superseded) shows its display label, not a truncated value', async ({ page }) => {

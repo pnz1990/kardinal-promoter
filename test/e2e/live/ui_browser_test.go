@@ -642,7 +642,7 @@ type timelineEntry struct {
 // bundle= opens it. The Bundle card names the Bundle type, and the timeline
 // is one Tab stop moved through with the arrow keys.
 //
-// Covers UI-TIMELINE-01, UI-BUNDLETYPE-01, UI-KEYBOARD-01.
+// Covers UI-TIMELINE-01, UI-BUNDLETYPE-01, UI-KEYBOARD-01, UI-RAIL-01.
 func TestUI_BrowserTimeline(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)

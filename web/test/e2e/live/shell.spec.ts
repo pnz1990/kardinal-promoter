@@ -104,6 +104,9 @@ test('keyboard shortcuts: / focuses the filter, ? shows the help, r refreshes, E
     ['/', 'Focus pipeline search'],
     ['?', 'Show / hide this help panel'],
     ['r', 'Refresh data now'],
+    ['[ / ]', 'Follow an older / newer version'],
+    ['f', 'Follow the newest version'],
+    ['c', 'Compare the focused version with the followed one'],
     ['Esc', 'Close the open side panel'],
   ]
   await expect(rows).toHaveCount(want.length)

@@ -46,13 +46,35 @@ export interface PipelineMapProps {
   /** The Matrix: follow a version, or compare one with the followed version. */
   onSelectVersion?: (bundle: string) => void
   onCompareVersion?: (bundle: string) => void
+  /** A version the rail previews: its route is a ghost thread on the map. */
+  previewBundle?: Bundle
+}
+
+/** The graphs read for the compared and previewed versions, by namespace/name. */
+const GRAPHS = new Map<string, GraphResponse>()
+
+/** The graph of a Bundle, read once per Bundle (the compared and the previewed version). */
+function useBundleGraph(b: Bundle | undefined): { bundle: Bundle; graph: GraphResponse } | undefined {
+  const [g, setG] = useState<{ name: string; graph: GraphResponse } | undefined>()
+  useEffect(() => {
+    if (!b) { setG(undefined); return }
+    // A version hovered again shows its last route at once, then the fresh one.
+    const seen = GRAPHS.get(`${b.namespace}/${b.name}`)
+    if (seen) setG({ name: b.name, graph: seen })
+    let live = true
+    api.getGraph(b.name, b.namespace)
+      .then(graph => { GRAPHS.set(`${b.namespace}/${b.name}`, graph); if (live) setG({ name: b.name, graph }) })
+      .catch(() => { if (live) setG(undefined) })
+    return () => { live = false }
+  }, [b])
+  return useMemo(() => (b && g?.name === b.name ? { bundle: b, graph: g.graph } : undefined), [b, g])
 }
 
 const VIEWS: Array<{ id: MapView | undefined; label: string }> = [
   { id: undefined, label: 'Map' }, { id: 'table', label: 'Table' }, { id: 'matrix', label: 'Matrix' },
 ]
 
-export default function PipelineMap({ pipeline, bundle, graph, compareBundle, loading, error, focused, onOpenStage, onActionDone, onOpenGate, gates, bundles, onRetry, as, onAs, onSelectVersion, onCompareVersion }: PipelineMapProps) {
+export default function PipelineMap({ pipeline, bundle, graph, compareBundle, loading, error, focused, onOpenStage, onActionDone, onOpenGate, gates, bundles, onRetry, as, onAs, onSelectVersion, onCompareVersion, previewBundle }: PipelineMapProps) {
   const [pending, setPending] = useState<{ kind: PipelineActionKind; env: string } | null>(null)
   const [result, setResult] = useState<string | null>(null)
   const key = `${pipeline.namespace}/${pipeline.name}`
@@ -67,18 +89,8 @@ export default function PipelineMap({ pipeline, bundle, graph, compareBundle, lo
     return next
   })
 
-  // The compared Bundle's graph, read once per Bundle.
-  const [compareGraph, setCompareGraph] = useState<{ name: string; graph: GraphResponse } | undefined>()
-  useEffect(() => {
-    if (!compareBundle) { setCompareGraph(undefined); return }
-    let live = true
-    api.getGraph(compareBundle.name, compareBundle.namespace)
-      .then(g => { if (live) setCompareGraph({ name: compareBundle.name, graph: g }) })
-      .catch(() => { if (live) setCompareGraph(undefined) })
-    return () => { live = false }
-  }, [compareBundle])
-  const compare = useMemo(() => compareBundle && compareGraph?.name === compareBundle.name
-    ? { bundle: compareBundle, graph: compareGraph.graph } : undefined, [compareBundle, compareGraph])
+  const compare = useBundleGraph(compareBundle)
+  const preview = useBundleGraph(previewBundle)
 
   const followed = bundle ? { bundle, graph } : undefined
   const model = useMemo(() => buildModel(pipeline, followed, { expanded, gates, bundles }),
@@ -86,6 +98,8 @@ export default function PipelineMap({ pipeline, bundle, graph, compareBundle, lo
     [pipeline, bundle, graph, expanded, gates, bundles])
   const compareModel = useMemo(() => compare ? buildModel(pipeline, compare, { expanded, gates, bundles }) : undefined,
     [pipeline, compare, expanded, gates, bundles])
+  const previewModel = useMemo(() => preview ? buildModel(pipeline, preview, { expanded, gates, bundles }) : undefined,
+    [pipeline, preview, expanded, gates, bundles])
 
   // The lane's quick actions, under each station at Detail: Promote where the
   // upstreams are Verified, Roll back where the step landed, Release hold.
@@ -148,6 +162,7 @@ export default function PipelineMap({ pipeline, bundle, graph, compareBundle, lo
       key={key}
       model={model}
       compare={compareModel}
+      ghost={previewModel}
       focused={focused}
       onOpenStage={onOpenStage}
       expanded={expanded}

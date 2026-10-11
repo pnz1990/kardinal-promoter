@@ -34,14 +34,12 @@ async function expectShown(page: Page, b: Entry, other: Entry) {
   await expect(station(page, 'test')).toHaveAttribute('data-node-id', b.step)
 }
 
-/** "test: Verified\nprod: Pending" as the panel prints it, with each state's display label. */
-const envLabels = (envs: string) => envs.split('\n').map(l => l.replace(/: (\w+)$/, (_, st: string) => `: ${displayState('step', st).label}`)).join('\n')
 
 /** expectComparison checks the panel for Bundle A a and Bundle B b. */
 async function expectComparison(panel: Locator, a: Entry, b: Entry) {
   await expect(panel.getByRole('heading', { name: 'Compare versions' })).toBeVisible()
   const rows = panel.locator('.bundle-diff__row')
-  const row = (label: string) => rows.filter({ hasText: new RegExp(`^(▸ )?${label}`) })
+  const row = (label: string) => rows.filter({ hasText: new RegExp(`^(≠ )?${label}`) })
   const cells = (label: string) => row(label).locator(':scope > span')
 
   await expect(cells('Name').nth(1)).toHaveAttribute('title', a.name)
@@ -50,7 +48,6 @@ async function expectComparison(panel: Locator, a: Entry, b: Entry) {
   // [label, A, B]: what the panel prints for each field.
   const fields: [string, string, string][] = [
     ['Images', a.image, b.image],
-    ['Environments', envLabels(a.environments), envLabels(b.environments)],
     ['State', displayState('bundle', a.phase).label, displayState('bundle', b.phase).label],
     ['Type', 'image', 'image'],
     ['Author', a.author, b.author],
@@ -61,10 +58,20 @@ async function expectComparison(panel: Locator, a: Entry, b: Entry) {
   for (const [label, va, vb] of fields) {
     const differs = va !== vb
     if (differs) changed++
-    await expect(cells(label).nth(0)).toHaveText(differs ? `▸ ${label}` : label)
+    await expect(cells(label).nth(0)).toHaveText(differs ? `≠ ${label}` : label)
     await expect(cells(label).nth(1)).toHaveText(va)
     await expect(cells(label).nth(2)).toHaveText(vb)
   }
+  // The environments: one row each, the two versions' states there as chips, ≠ where they differ.
+  const envs = (list: string) => new Map(list.split('\n').map(l => l.split(': ') as [string, string]))
+  const [ea, eb] = [envs(a.environments), envs(b.environments)]
+  for (const env of new Set([...ea.keys(), ...eb.keys()])) {
+    const differs = ea.get(env) !== eb.get(env)
+    const r = panel.locator('.bundle-diff__row--env').filter({ hasText: new RegExp(`^(≠ )?${env}`) })
+    await expect(r.locator('.bundle-diff__env')).toHaveText(differs ? `≠ ${env}` : env)
+    if (ea.get(env)) await expect(r.locator('.k-chip').nth(0)).toContainText(displayState('step', ea.get(env)!).label)
+  }
+  if ([...ea].some(([k, v]) => eb.get(k) !== v) || ea.size !== eb.size) changed++
   // Created is shown, and never counts as a difference.
   await expect(cells('Created').nth(0)).toHaveText('Created')
   expect(changed).toBeGreaterThanOrEqual(3)
@@ -73,16 +80,16 @@ async function expectComparison(panel: Locator, a: Entry, b: Entry) {
 
 test('the timeline selects a Bundle, and shift-click compares two', async ({ page }) => {
   await openPipeline(page, base, ns)
-  await expect(page.getByText('Versions (newest → oldest)')).toBeVisible()
+  await expect(page.getByText('Versions (oldest → newest)')).toBeVisible()
   // No helper copy: shift-click is in each chip's tooltip.
   await expect(page.getByText('Shift-click to compare', { exact: true })).toHaveCount(0)
 
-  // Newest first, each with its phase; the newest is on screen, so only the
-  // other one offers a shift-click.
+  // Oldest on the left, newest on the right (a time axis), each with its phase; the newest is
+  // on screen, so only the other one offers a compare.
   await expect(chips(page)).toHaveCount(2)
-  for (const [i, b] of [newer, older].entries()) {
+  for (const [i, b] of [older, newer].entries()) {
     const c = chips(page).nth(i)
-    await expect(c).toHaveAttribute('title', `${b.name}: ${displayState('bundle', b.phase).label}${b === newer ? '' : '\nShift-click to compare'}`)
+    await expect(c).toHaveAttribute('title', `${b.name}: ${displayState('bundle', b.phase).label}${b === newer ? '' : '\nShift-click or c to compare'}`)
     await expect(c).toHaveAttribute('data-bundle-phase', b.phase)
     await expect(c).toHaveClass(new RegExp(`bundle-chip--${b.phase.toLowerCase()}`))
     await expect(c.locator('.bundle-chip__name')).toHaveText(versionName(b.name, PIPELINE))
@@ -97,9 +104,9 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
   // UI-KEYBOARD-01: the timeline is one Tab stop, the arrow keys move in it.
   await expect(bar.locator('.bundle-chip[tabindex="0"]')).toHaveCount(1)
   await chip(page, newer).focus()
-  await page.keyboard.press('ArrowRight')
-  await expect(chip(page, older)).toBeFocused()
   await page.keyboard.press('ArrowLeft')
+  await expect(chip(page, older)).toBeFocused()
+  await page.keyboard.press('ArrowRight')
   await expect(chip(page, newer)).toBeFocused()
   await expect(bar.locator('.bundle-chip[tabindex="0"]')).toHaveCount(1)
 
@@ -114,14 +121,14 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
   await chip(page, older).click({ modifiers: ['Shift'] })
   await expect(chip(page, older)).not.toHaveClass(/bundle-chip--compare/)
   await expect(page.getByRole('button', { name: '× clear' })).toHaveCount(0)
-  await expect(chip(page, newer)).toHaveAttribute('title', /\nShift-click to compare$/)
+  await expect(chip(page, newer)).toHaveAttribute('title', /\nShift-click or c to compare$/)
 
   // Shift-click the newer one: it becomes Bundle B, and Compare and clear
   // show. Compare opens the comparison, the shown Bundle as A.
   await expect(comparison(page)).toHaveCount(0)
   await chip(page, newer).click({ modifiers: ['Shift'] })
   await expect(chip(page, newer)).toHaveClass(/bundle-chip--compare/)
-  await expect(chip(page, newer)).toContainText('⇅B')
+  await expect(chip(page, newer)).toContainText('≠')
   await expect(comparison(page)).toHaveCount(0)
   expect((route(page).compare ?? null)).toBeNull()
   const compare = page.getByRole('button', { name: 'Compare ↔' })
@@ -151,9 +158,18 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
   await clear.click()
   await expect(chip(page, newer)).not.toHaveClass(/bundle-chip--compare/)
   await expect(compare).toHaveCount(0)
-  await expect(chip(page, newer)).toHaveAttribute('title', /\nShift-click to compare$/)
+  await expect(chip(page, newer)).toHaveAttribute('title', /\nShift-click or c to compare$/)
   expect((route(page).compare ?? null)).toBeNull()
   await expectShown(page, older, newer)
+
+  // UI-RAIL-01: ] follows the newer version, [ the older, f the newest.
+  await page.locator('body').click({ position: { x: 1, y: 1 } })
+  await page.keyboard.press(']')
+  await expectShown(page, newer, older)
+  await page.keyboard.press('[')
+  await expectShown(page, older, newer)
+  await page.keyboard.press('f')
+  await expectShown(page, newer, older)
 })
 
 test('a link with compare= opens the comparison with the Bundle on screen', async ({ page }) => {

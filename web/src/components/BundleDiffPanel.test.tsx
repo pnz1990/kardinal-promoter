@@ -51,10 +51,10 @@ describe('BundleDiffPanel — rendering', () => {
     { field: 'Commit SHA', a: { provenance: { commitSHA: 'aaaaaa000000' } }, b: { provenance: { commitSHA: 'bbbbbb111111' } } },
   ])('marks $field as the one changed field', ({ field, a, b }) => {
     render(<BundleDiffPanel bundleA={makeBundle(a)} bundleB={makeBundle(b)} onClose={vi.fn()} />)
-    expect(screen.getByText(`▸ ${field}`)).toBeInTheDocument()
+    expect(screen.getByText(`≠ ${field}`)).toBeInTheDocument()
     expect(screen.getByText(/1 field differs/)).toBeInTheDocument()
     for (const other of ['State', 'Author', 'Commit SHA'].filter(f => f !== field)) {
-      expect(screen.queryByText(`▸ ${other}`)).not.toBeInTheDocument()
+      expect(screen.queryByText(`≠ ${other}`)).not.toBeInTheDocument()
     }
   })
 })
@@ -82,7 +82,7 @@ describe('BundleDiffPanel — what counts as a difference (C10a-web-07)', () => 
     {
       name: 'different environment states are a difference',
       a: { environments: [{ name: 'prod', phase: 'Verified' }] }, b: { environments: [{ name: 'prod', phase: 'Failed' }] },
-      summary: '1 field differs between these versions', shown: ['prod: Failed'],
+      summary: '1 field differs between these versions', shown: ['≠ prod', 'Failed'],
     },
     {
       name: 'only the creation time differs: no difference',

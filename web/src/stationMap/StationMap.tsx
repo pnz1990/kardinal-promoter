@@ -45,6 +45,8 @@ export interface StationMapProps {
   onOpenGate?: (gateNodeId: string) => void
   /** The view switch (Map | Table | Matrix), shown in the map's bar. */
   views?: React.ReactNode
+  /** A version the rail previews: its route as a ghost thread (--k-thread-ghost). */
+  ghost?: StationMapModel
 }
 
 /** About how wide a character of a gate label is, and the label's line height (--k-text-xs). */
@@ -59,6 +61,10 @@ const LABEL_PX = { sub: TEXT_PX.xs, name: TEXT_PX.sm, detailSub: TEXT_PX.sm, det
 const ROUNDING = 0.01
 const LINE_EM = 1.25
 
+/** One zoom step in and out (keys +/- and the narrow map's buttons). */
+const ZOOM_STEP_IN = 1.25
+const ZOOM_STEP_OUT = 0.8
+
 /** How long a gate's popover stays after the pointer leaves, so it can be reached (ms). */
 const POPOVER_HIDE_MS = 150
 
@@ -69,7 +75,7 @@ const LEVELS: ZoomLevel[] = ['overview', 'map', 'detail']
 const LEVEL_LABEL: Record<ZoomLevel, string> = { overview: 'Overview', map: 'Map', detail: 'Detail' }
 
 export default function StationMap(props: StationMapProps) {
-  const { model, compare, focused, onOpenStage, expanded, onToggleGroup, onSetExpanded, paused, followedVersion, actionsFor, onOpenGate, views } = props
+  const { model, compare, focused, onOpenStage, expanded, onToggleGroup, onSetExpanded, paused, followedVersion, actionsFor, onOpenGate, views, ghost } = props
   const svgRef = useRef<SVGSVGElement | null>(null)
   const searchRef = useRef<HTMLInputElement | null>(null)
   const descId = useId()
@@ -299,8 +305,8 @@ export default function StationMap(props: StationMapProps) {
         }
         break
       }
-      case '+': case '=': e.preventDefault(); vp.zoomBy(1.25); break
-      case '-': case '_': e.preventDefault(); vp.zoomBy(0.8); break
+      case '+': case '=': e.preventDefault(); vp.zoomBy(ZOOM_STEP_IN); break
+      case '-': case '_': e.preventDefault(); vp.zoomBy(ZOOM_STEP_OUT); break
       case '0': e.preventDefault(); vp.fit(); break
       // The map's own search, not the page's: the event stops here (the page's
       // shortcuts listen on the document).
@@ -416,6 +422,12 @@ export default function StationMap(props: StationMapProps) {
           {query && <span className="station-map__count" aria-live="polite">{matches.length} {matches.length === 1 ? 'match' : 'matches'}</span>}
         </label>
         {views}
+        {/* On a narrow map the level control gives way to zoom buttons (touch also pinches). */}
+        <div className="station-map__zoom" role="group" aria-label="Zoom">
+          <button type="button" aria-label="Zoom out" onClick={() => vp.zoomBy(ZOOM_STEP_OUT)}>−</button>
+          <button type="button" aria-label="Zoom in" onClick={() => vp.zoomBy(ZOOM_STEP_IN)}>+</button>
+          <button type="button" aria-label="Fit the map" onClick={() => vp.fit()}>⤢</button>
+        </div>
         <div className="station-map__levels" role="radiogroup" aria-label="Zoom level">
           {LEVELS.map(l => (
             <button key={l} type="button" role="radio" aria-checked={level === l} className="station-map__level"
@@ -447,6 +459,14 @@ export default function StationMap(props: StationMapProps) {
             <path key={`lead>${to}`} d={pathOf(points)} className="station-map__lead" />
           ))}
         </g>
+        {ghost && (
+          <g className="station-map__thread station-map__thread--ghost" aria-hidden="true">
+            {ghost.thread.map(seg => {
+              const e = threadEdge(seg)
+              return e ? <path key={`${seg.from}>${seg.to}`} d={pathOf(e.points)} /> : null
+            })}
+          </g>
+        )}
         {compare && (
           <g className="station-map__thread station-map__thread--compare" aria-hidden="true">
             {compare.thread.map(seg => {
