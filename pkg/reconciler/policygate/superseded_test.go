@@ -31,7 +31,7 @@ import (
 func TestPolicyGateReconciler_SettledBundleNotEvaluated(t *testing.T) {
 	tuesday := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
 	lastEval := metav1.NewTime(tuesday.Add(-2 * time.Hour))
-	const frozenReason = "bundle.version=main: !schedule.isWeekend = false"
+	const frozenReason = "!schedule.isWeekend = false (version main)"
 	graphReady := func(status metav1.ConditionStatus) []metav1.Condition {
 		return []metav1.Condition{{Type: "GraphReady", Status: status, Reason: "Test", LastTransitionTime: lastEval}}
 	}

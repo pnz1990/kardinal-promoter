@@ -636,7 +636,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.git.secretRef.namespace` | string |  | Namespace is the Secret namespace. If empty, the Pipeline's namespace is used. For spec.git.secretRef it must be empty or equal to the Pipeline's namespace: the controller refuses to read a Secret from another namespace and fails the PromotionStep with a clear message, so a Pipeline author cannot borrow another team's credentials. |
 | `spec.git.url` | string | yes | URL is the GitOps repository URL (HTTPS). |
 | `spec.historyLimit` | integer |  | HistoryLimit is the number of completed Bundle promotions to retain. When unset or zero, defaults to 50. Terminal Bundles (Verified, Failed, Superseded) beyond this limit are deleted oldest-first on each new Bundle creation. Default: `50`. |
-| `spec.holds` | []object |  | Holds pin environments to a rollback (kardinal rollback --hold): while an environment has a hold, no Bundle but the hold's own promotes into it, the hold's Bundle is never superseded or garbage-collected, and, when the controller can verify it restores artifacts Verified in the environment, it passes that environment's PolicyGates, each pass recorded (GateExempted). kardinal release-hold removes it, and so does the controller at expiresAt. At most one hold per environment. Changing spec.holds needs update on the virtual subresource pipelines/hold (chart: &lt;release&gt;-hold-writes ValidatingAdmissionPolicy). |
+| `spec.holds` | []object |  | Holds pin environments to a rollback (kardinal rollback --hold): while an environment has a hold, no Bundle but the hold's own promotes into it, the hold's Bundle is never superseded or garbage-collected, and, when the controller can verify it restores artifacts Verified in the environment, it passes that environment's PolicyGates, each pass recorded (GateExempted). kardinal unhold removes it, and so does the controller at expiresAt. At most one hold per environment. Changing spec.holds needs update on the virtual subresource pipelines/hold (chart: &lt;release&gt;-hold-writes ValidatingAdmissionPolicy). |
 | `spec.holds[].artifacts` | string |  | Artifacts is the digest of the rollback Bundle's artifacts (type, images, configRef) when the hold was made (lifecycle.ArtifactDigest). The gate exemption applies only while the Bundle still has them. |
 | `spec.holds[].bundle` | string | yes | Bundle is the rollback Bundle the environment is held on: the only Bundle that promotes into it while the hold lasts. |
 | `spec.holds[].createdAt` | string (date-time) |  | CreatedAt is when. |
@@ -819,6 +819,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.approvals[].firstSeenAt` | string (date-time) |  | FirstSeenAt is when the gate first saw the decision. |
 | `status.approvals[].reason` | string |  | Reason says why a decision does not count. |
 | `status.approvals[].user` | string | yes | User is the approver. |
+| `status.bundleVersion` | string |  | BundleVersion is the version of the Bundle a gate instance was last evaluated for (bundle.version in its expression). Empty on a template and when the Bundle could not be read. |
 | `status.conditions` | []object |  | Conditions holds status conditions. |
 | `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
 | `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
@@ -846,7 +847,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.pendingAuditEvents[].spec.pipelineName` | string | yes | PipelineName is the name of the Pipeline the Bundle is promoting through. |
 | `status.pendingAuditEvents[].spec.timestamp` | string (date-time) | yes | Timestamp is when the event occurred (RFC 3339 format). |
 | `status.ready` | boolean | yes | Ready indicates whether the gate is currently allowing promotion. The kro Graph gates downstream nodes on status.ready == true. Default: `false`. |
-| `status.reason` | string |  | Reason explains the current ready state in human-readable form. |
+| `status.reason` | string |  | Reason explains the current ready state in a sentence: the gate's message when its expression blocks, what the expression evaluated to, and the version it was evaluated for, for example "waiting for approvals: 0 of 1 (version 1.5.0)". It is for people; read BundleVersion for the version. |
 
 ## PromotionStep
 

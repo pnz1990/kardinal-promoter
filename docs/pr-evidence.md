@@ -51,7 +51,7 @@ Created by: alice
 
 | Gate | Namespace | Result | Reason | Last Evaluated |
 |---|---|---|---|---|
-| no-weekend-deploys | platform-policies | Pass | bundle.version=1.29.0: !schedule.isWeekend = true | 2026-04-14T14:00Z |
+| no-weekend-deploys | platform-policies | Pass | !schedule.isWeekend = true (version 1.29.0) | 2026-04-14T14:00Z |
 
 ### Upstream Verification
 

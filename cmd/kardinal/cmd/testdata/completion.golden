@@ -50,7 +50,7 @@ demo-r	1.4.9, Rejected
 :36
 
 $ kardinal reject <TAB>
---reason	Why the Bundle is rejected (required)
+--reason	Why the version is rejected (required)
 demo-b	1.5.0, Promoting
 web-x	9.9.9, Promoting
 demo-a	1.4.0, Verified
