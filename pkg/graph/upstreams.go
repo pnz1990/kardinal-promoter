@@ -145,6 +145,10 @@ const (
 	GateStateWaiting    = "Waiting"
 )
 
+// GateStates are every state GateState returns.
+var GateStates = []string{GateStatePass, GateStateBlock, GateStateSuperseded,
+	GateStateRejected, GateStatePending, GateStateWaiting}
+
 // GateState is the one state the UI API (bundle graph and gate list) and
 // kardinal explain show for gate, a PolicyGate instance of bundle:
 //   - Pass: ready.

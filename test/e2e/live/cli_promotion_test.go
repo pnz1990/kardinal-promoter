@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
@@ -100,7 +101,8 @@ func cliSubSteps(t *testing.T, out string) []subStep {
 		if n == 5 {
 			env, cells = cells[0], cells[1:]
 		}
-		rows = append(rows, subStep{env: env, name: cells[0], state: cells[1], duration: cells[2], message: cells[3]})
+		// STATE is a display label (P2); keep the API value for comparisons.
+		rows = append(rows, subStep{env: env, name: cells[0], state: display.ValueOf(display.KindSubStep, cells[1]), duration: cells[2], message: cells[3]})
 	}
 	return rows
 }
@@ -236,8 +238,8 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	row = framework.TableRow(tables, "PIPELINE", pipelineName)
 	require.NotNil(t, row, tables)
 	assert.Equal(t, b1, row["BUNDLE"])
-	assert.Equal(t, "Verified", row["TEST"])
-	assert.Equal(t, "WaitingForMerge", row["PROD"])
+	assert.Equal(t, display.Step("Verified").Label, row["TEST"])
+	assert.Equal(t, display.Step("WaitingForMerge").Label, row["PROD"])
 	assert.Equal(t, "0", row["SUB"])
 	sameTable(t, tables, c.Must(a.ns, "get", "pipelines", pipelineName), "the name filter keeps the only pipeline")
 	assert.Equal(t, "No pipelines found.\n  To get started, apply a Pipeline CRD:\n    kubectl apply -f examples/quickstart/pipeline.yaml\n  Or check CRD installation with: kardinal doctor\n",
@@ -253,7 +255,7 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 		// environments: one summary row per Pipeline (CLI-GET-PIPELINES-02).
 		assert.Equal(t, []string{"NAMESPACE", "PIPELINE", "BUNDLE", "ENVS", "PROGRESS", "FURTHEST", "SUB", "AGE"}, header)
 		assert.Equal(t, "2", row["ENVS"])
-		assert.Equal(t, "1 Verified, 1 WaitingForMerge", row["PROGRESS"])
+		assert.Equal(t, "1 Live, 1 Waiting for PR merge", row["PROGRESS"])
 		assert.Equal(t, "test", row["FURTHEST"])
 	} else {
 		// The environment columns are the union over every namespace's Pipelines.
@@ -322,7 +324,7 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	e.WaitBundlePhase(t, a.ns, b1, "Superseded", promoteTimeout)
 	e.WaitPRState(t, a.repo, pr1.Number, "closed", time.Minute)
 	bt = c.Must(a.ns, "get", "bundles")
-	assert.Equal(t, "Superseded", framework.TableRow(bt, "BUNDLE", b1)["PHASE"], bt)
+	assert.Equal(t, display.Bundle("Superseded").Label, framework.TableRow(bt, "BUNDLE", b1)["PHASE"], bt)
 	require.NotNil(t, framework.TableRow(bt, "BUNDLE", b2), bt)
 	active := c.Must(a.ns, "get", "bundles", "--active")
 	assert.Nil(t, framework.TableRow(active, "BUNDLE", b1), "--active hides the Superseded Bundle:\n%s", active)
@@ -353,14 +355,14 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	jw := c.Start(framework.CLIOptions{}, c.Args(a.ns, "get", "pipelines", "-w", "-o", "json")...)
 	pw.WaitStdout(time.Minute, "a pipelines frame with prod waiting", func(out string) bool {
 		r := framework.TableRow(lastFrame(out), "PIPELINE", pipelineName)
-		return r != nil && r["BUNDLE"] == b2 && r["PROD"] == "WaitingForMerge"
+		return r != nil && r["BUNDLE"] == b2 && r["PROD"] == display.Step("WaitingForMerge").Label
 	})
 	sw.WaitStdout(time.Minute, "a steps frame", func(out string) bool { return lastFrame(out) != "" })
 	require.NoError(t, e.Git.MergePR(ctx, a.repo, pr2.Number))
 	e.WaitStepState(t, a.ns, pipelineName, b2, "prod", "Verified", promoteTimeout)
 	out = pw.WaitStdout(time.Minute, "a pipelines frame with prod Verified", func(out string) bool {
 		r := framework.TableRow(lastFrame(out), "PIPELINE", pipelineName)
-		return r != nil && r["BUNDLE"] == b2 && r["TEST"] == "Verified" && r["PROD"] == "Verified"
+		return r != nil && r["BUNDLE"] == b2 && r["TEST"] == display.Step("Verified").Label && r["PROD"] == display.Step("Verified").Label
 	})
 	assert.GreaterOrEqual(t, len(frames(out)), 2, "the watch redraws")
 	sw.WaitStdout(time.Minute, "a steps frame with wait-for-merge Completed", func(out string) bool {
@@ -414,7 +416,7 @@ type logBlock struct {
 }
 
 var (
-	logHeader = regexp.MustCompile(`^=== podinfo/(\S+) \((\S+)\) \[(\S+)\] ===$`)
+	logHeader = regexp.MustCompile(`^=== podinfo/(\S+) \((\S+)\) \[([^\]]+)\] ===$`)
 	logPRURL  = regexp.MustCompile(`^  pr_url:\s+(\S+)$`)
 	duration  = regexp.MustCompile(`^(-|\d+\.\ds)$`)
 )
@@ -426,7 +428,8 @@ func logBlocks(t *testing.T, out string) []logBlock {
 	inSteps := false
 	for _, line := range strings.Split(out, "\n") {
 		if m := logHeader.FindStringSubmatch(line); m != nil {
-			blocks = append(blocks, logBlock{env: m[1], bundle: m[2], state: m[3]})
+			// The state is a display label (P2); compare the API value.
+			blocks = append(blocks, logBlock{env: m[1], bundle: m[2], state: display.ValueOf(display.KindStep, m[3])})
 			inSteps = false
 			continue
 		}
@@ -445,7 +448,7 @@ func logBlocks(t *testing.T, out string) []logBlock {
 				continue
 			}
 			require.GreaterOrEqual(t, len(cells), 3, "steps row %q", line)
-			s := subStep{env: b.env, name: cells[0], state: cells[1], duration: cells[2]}
+			s := subStep{env: b.env, name: cells[0], state: display.ValueOf(display.KindSubStep, cells[1]), duration: cells[2]}
 			if len(cells) == 4 {
 				s.message = cells[3]
 			}
@@ -508,7 +511,7 @@ func TestCLI_Reports(t *testing.T) {
 	lf := c.Start(framework.CLIOptions{}, c.Args(a.ns, "logs", pipelineName, "--follow", "--bundle", bB)...)
 	e.WaitStepState(t, a.ns, pipelineName, bB, "prod", "WaitingForMerge", promoteTimeout)
 	lf.WaitStdout(time.Minute, "logs --follow to show prod waiting", func(out string) bool {
-		return strings.Contains(out, "[podinfo/prod] → WaitingForMerge\n")
+		return strings.Contains(out, "[podinfo/prod] → "+display.Step("WaitingForMerge").Label+"\n")
 	})
 	assert.False(t, lf.Exited(), "logs --follow runs while prod waits for its PR")
 	prB := openPR(t, e, a.repo, fixtures.V3)
@@ -518,9 +521,9 @@ func TestCLI_Reports(t *testing.T) {
 	res := lf.Wait(time.Minute)
 	assert.Equal(t, 0, res.Code)
 	assert.True(t, strings.HasPrefix(res.Stdout, "Following logs for pipeline podinfo (Ctrl+C to stop)...\n"), res.Stdout)
-	assert.True(t, strings.HasSuffix(res.Stdout, "[podinfo/prod] → Verified\nAll steps reached terminal state.\n"), res.Stdout)
+	assert.True(t, strings.HasSuffix(res.Stdout, "[podinfo/prod] → Live\nAll steps reached terminal state.\n"), res.Stdout)
 	for _, env := range []string{"test", "prod"} {
-		assert.Equal(t, 1, strings.Count(res.Stdout, "[podinfo/"+env+"] → Verified\n"), "each state change once:\n%s", res.Stdout)
+		assert.Equal(t, 1, strings.Count(res.Stdout, "[podinfo/"+env+"] → Live\n"), "each state change once:\n%s", res.Stdout)
 	}
 	assert.Regexp(t, `(?m)^\[podinfo/prod\] wait-for-merge\s+\S+`, res.Stdout, "--follow prints the steps it runs")
 	assert.NotContains(t, res.Stdout, bA, "--bundle follows only B")

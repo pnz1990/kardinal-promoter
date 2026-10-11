@@ -74,9 +74,9 @@ func TestCurrentBundleByEnv_RejectedLive(t *testing.T) {
 // is live, with a roll-back hint per environment.
 func TestStatus_RejectedLive(t *testing.T) {
 	out := runStatusPipeline(t, rejectedLiveObjects()...)
-	assert.Regexp(t, `\n  test +- +b2 +Verified`, out)
-	assert.Regexp(t, `\n  uat +- +b1 +Verified`, out)
-	assert.Regexp(t, `\n▶ prod +- +b2 +HealthChecking`, out)
+	assert.Regexp(t, `\n  test +- +b2 +Live`, out)
+	assert.Regexp(t, `\n  uat +- +b1 +Live`, out)
+	assert.Regexp(t, `\n▶ prod +- +b2 +Checking health`, out)
 	assert.Contains(t, out, hintTest)
 	assert.Contains(t, out, hintProd)
 }
@@ -103,7 +103,8 @@ func TestGetSteps_RejectedLive(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, getStepsOnce(&buf, policyClient(t, rejectedLiveObjects()...), "default", "demo"))
 	out := buf.String()
-	assert.Contains(t, out, "HealthChecking")
+	assert.Contains(t, out, "Checking health")
+	assertNoRawStates(t, out)
 	assert.Contains(t, out, hintProd)
 	assert.Contains(t, out, hintTest)
 }

@@ -344,7 +344,7 @@ The promotion starts immediately. kardinal-promoter generates a Graph and begins
 # Watch the pipeline status
 kardinal get pipelines
 # PIPELINE            BUNDLE                    TEST       UAT              PROD      SUB   AGE
-# kardinal-test-app   kardinal-test-app-x7k2p   Verified   HealthChecking   Waiting   0     2m
+# kardinal-test-app   kardinal-test-app-x7k2p   Live   Checking health   Not reached   0     2m
 
 # See the steps of the active Bundle
 kardinal get steps kardinal-test-app
@@ -361,7 +361,7 @@ kardinal explain kardinal-test-app --env prod
 # No promotion for "prod" in pipeline "kardinal-test-app" yet
 ```
 
-!!! tip "Troubleshooting: Test stuck in HealthChecking"
+!!! tip "Troubleshooting: Test stuck in Checking health"
     If the test environment stays in `HealthChecking` for more than a few minutes:
     ```bash
     kubectl get deployment kardinal-test-app -n kardinal-test-app-test
@@ -397,7 +397,7 @@ The PR body contains:
 ```bash
 kardinal get pipelines
 # PIPELINE            BUNDLE                    TEST       UAT        PROD       SUB   AGE
-# kardinal-test-app   kardinal-test-app-x7k2p   Verified   Verified   Verified   0     8m
+# kardinal-test-app   kardinal-test-app-x7k2p   Live   Live   Live   0     8m
 ```
 
 The promotion is complete.
