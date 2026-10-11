@@ -76,6 +76,11 @@ const pipelines: Pipeline[] = [
   { name: 'paused', namespace: 'default', phase: 'Ready', environmentCount: 1, paused: true, failedStepCount: 0, environmentStates: { prod: 'Superseded' } },
 ]
 
+const steps = (['test', 'uat', 'stage', 'dr'] as const).map((env) => ({
+  name: `app-v2-${env}`, namespace: 'default', pipeline: 'app', bundle: 'app-v2', environment: env, stepType: 'kustomize-set-image',
+  state: graph.nodes.find((n) => n.environment === env && n.type === 'PromotionStep')!.state,
+}))
+
 const h = vi.hoisted(() => ({ failPipelines: false, noPipelines: false }))
 
 vi.mock('./api/client', () => ({
@@ -87,7 +92,7 @@ vi.mock('./api/client', () => ({
     listGates: vi.fn(async () => gates),
     listBundles: vi.fn(async (name: string) => (name === 'app' ? bundles : [])),
     getGraph: vi.fn(async (name: string) => (name.startsWith('app-') ? graph : { nodes: [], edges: [] })),
-    getSteps: vi.fn(async () => []),
+    getSteps: vi.fn(async (name: string) => (name === 'app-v2' ? steps : [])),
     getStepEvents: vi.fn(async () => []),
     validateCEL: vi.fn(async () => ({ valid: true })),
     rollback: vi.fn(async () => ({ bundle: 'app-rollback', message: 'ok' })),
@@ -189,14 +194,17 @@ describe('vocabulary', () => {
     }
   })
 
-  it('the details of a stage and of a gate keep the kinds under Kubernetes details', async () => {
-    for (const [route, kind] of [['#/p/default/app/env/prod', 'PromotionStep'], ['#/p/default/app?node=soak-app-v2-prod', 'PolicyGate']]) {
+  it('the stage drawer keeps the kinds under Kubernetes details, for its stage and its gates', async () => {
+    // stage has a PromotionStep; prod is held by the soak gate (a PolicyGate) before its step exists.
+    for (const [route, kinds] of [['#/p/default/app/env/stage', ['PromotionStep']], ['#/p/default/app/env/prod', ['PolicyGate']]] as const) {
       window.history.replaceState(null, '', `/ui/${route}`)
       const { unmount } = render(<App />)
       await flush()
-      const detail = screen.getByTestId('node-detail')
+      const drawer = screen.getByTestId('stage-drawer')
       check(route)
-      expect(detail.querySelector('details.k-k8s')?.textContent).toContain(kind)
+      const k8s = [...drawer.querySelectorAll('details.k-k8s')]
+      expect(k8s.map((d) => d.querySelector('dd')?.textContent), route).toEqual(kinds)
+      expect(k8s.some((d) => d.hasAttribute('open')), `${route}: collapsed`).toBe(false)
       unmount()
     }
   })
