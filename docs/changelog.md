@@ -8,7 +8,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [v0.10.0] — 2026-10-10
+## [v0.10.0] — 2026-10-11
 
 **The features teams moving from Kargo or GitOps Promoter look for first, 500-environment Pipelines and 200-Pipeline clusters, and every recorded identity verified against the Kubernetes user who made the request. Read [Before you upgrade](#before-you-upgrade) first: some changes refuse objects v0.9.0 accepted.**
 
