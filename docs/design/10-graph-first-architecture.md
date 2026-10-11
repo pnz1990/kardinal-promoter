@@ -8,7 +8,7 @@
 > Where kro cannot do something yet, the gap is in
 > [16-graph-capability-ledger.md](16-graph-capability-ledger.md).
 
-> **See also**: `docs/design/11-graph-purity-tech-debt.md` — complete catalog of every known logic leak, with GitHub issues and elimination paths. That document is the authoritative index of architecture debt. This document states the principles; that document tracks the violations.
+> **See also**: ledger [G8](16-graph-capability-ledger.md#g8-logic-still-outside-the-graph) lists every piece of logic still outside the Graph. This document states the principles; the ledger tracks the exceptions.
 
 ---
 
@@ -22,8 +22,7 @@ in a kro Graph. This is not an aspiration. It is the governing constraint on eve
 implementation decision in this codebase.
 
 Today some of this logic still runs in reconcilers that write their own CRD status.
-Ledger [G8](16-graph-capability-ledger.md#g8-logic-still-outside-the-graph) and
-[doc 11](11-graph-purity-tech-debt.md#current-status-2026-09-29) list each piece.
+Ledger [G8](16-graph-capability-ledger.md#g8-logic-still-outside-the-graph) lists each piece.
 
 If a feature cannot be expressed as a Graph node, that is a signal that either:
 1. kro is missing a primitive that should be contributed upstream (log it in
@@ -156,33 +155,14 @@ writes its result to PolicyGate status (pattern 1). See Known Exceptions below.
 
 ## Upstream Contribution Policy
 
-The Graph gaps that force kardinal workarounds are G1-G14 in
+The Graph gaps that force kardinal workarounds are in
 [16-graph-capability-ledger.md](16-graph-capability-ledger.md), each with its proposed
-upstream contribution. The two items below are from the original design; the
-`recheckAfter` one was resolved without kro.
+upstream contribution. Re-evaluation of time-based gates needs no kro primitive: the chart
+creates a `ScheduleClock` object, its reconciler writes `status.tick` on an interval, and the
+PolicyGate reconciler re-queues every PolicyGate on each tick
+(`pkg/reconciler/policygate/reconciler.go` `SetupWithManager`).
 
-### ~~Contribution 1: `recheckAfter`~~ — RESOLVED via ScheduleClock pattern (#641)
-
-> **Status: Superseded.** The `ScheduleClock` CRD (PR #484) provides watch-driven
-> re-evaluation without a Graph-native `recheckAfter` primitive. This contribution
-> is now **nice-to-have** for the broader kro ecosystem, not a kardinal prerequisite.
-> See `docs/design/11-graph-purity-tech-debt.md §ScheduleClock Implementation` and
-> §Pending Upstream Contributions for context.
-
-~~**Problem:** Time-based and metric-based gates need periodic re-evaluation.
-Currently the PolicyGate reconciler implements this via `ctrl.Result{RequeueAfter: N}`...~~
-
-The kardinal solution: the chart creates a `ScheduleClock` object, and the ScheduleClock
-reconciler writes `status.tick` on a configurable interval, generating real Kubernetes
-watch events. It is not a Graph node. The PolicyGate reconciler watches ScheduleClock
-objects and re-queues every PolicyGate on each tick
-(`pkg/reconciler/policygate/reconciler.go` `SetupWithManager`) — no `recheckAfter`
-primitive required.
-
-If contributing upstream is desired, the target is
-[kubernetes-sigs/kro](https://github.com/kubernetes-sigs/kro). It is not blocking any kardinal work.
-
-### Contribution 2: `dependsOn` (explicit edges)
+### `dependsOn` (explicit edges)
 
 **Problem:** Some dependency edges are not expressible via data-flow alone.
 Currently expressed by referencing upstream node fields in templates.
@@ -196,43 +176,13 @@ structural dependencies that don't involve data flow.
 
 ## Known Exceptions
 
-The accepted exceptions are listed in
-[doc 11 §Current status](11-graph-purity-tech-debt.md#current-status-2026-09-29).
+The accepted exceptions are listed in ledger
+[G8](16-graph-capability-ledger.md#g8-logic-still-outside-the-graph). **No new exceptions are
+permitted without explicit human approval.**
 
-These are known violations of the Graph-first principle that exist as intentional
-transitional workarounds. Each must be tracked to resolution. **No new exceptions
-are permitted without explicit human approval.**
-
-### Exception 1: ~~`pkg/cel/` — standalone CEL evaluator~~ RESOLVED (#130)
-
-**Status: RESOLVED** — PR #487. The `pkg/cel/evaluator.go` and `pkg/cel/environment.go`
-files have been deleted. The CEL evaluator is now inline in `pkg/reconciler/policygate/`
-as a package-private implementation detail. `pkg/cel` now contains only the library
-extensions adapted from kro (library/, conversion/). Their use by `pkg/reconciler/policygate`
-is an accepted exception (ledger G8); it must not grow.
-
-The ScheduleClock CRD (PR #484) provides watch-driven re-evaluation, eliminating the
-need for a separate recheckAfter primitive.
-
-**Historical note:**
-
-**What it was:** A standalone CEL evaluator in `pkg/cel/` used by the PolicyGate
-reconciler to evaluate policy expressions.
-
-**Why it existed:**
-1. The Graph controller's node conditions only have access to the node's own Kubernetes object state.
-2. The Graph controller had no `recheckAfter` primitive (now replaced by ScheduleClock pattern).
-
-**Resolution path taken:**
-1. ScheduleClock CRD provides watch-driven re-evaluation (PR #484 — closes the recheckAfter gap).
-2. CEL evaluator moved inline to `pkg/reconciler/policygate/cel_evaluator.go` (PR #487).
-3. `pkg/cel/environment.go` and `pkg/cel/evaluator.go` deleted.
-
-**Remaining work**: None. pkg/cel is now library-only. The library package imports are allowed.
-
-**Current status:** The PolicyGate CEL evaluator in `pkg/reconciler/policygate` is an
-accepted exception (ledger G8). It must not grow. New gate types must use the `ref`
-node or owned node pattern.
+The PolicyGate CEL evaluator in `pkg/reconciler/policygate` is one of them: it evaluates
+`spec.expression` with kardinal's `pkg/cel/library` and writes the result to PolicyGate status.
+It must not grow. New gate types must use the `ref` node or owned node pattern.
 
 ---
 
@@ -248,20 +198,3 @@ These are violations that **review must block** and **engineers must not impleme
 | CEL expression that calls external HTTP API inside a `FunctionBinding` | Blocks the Graph controller reconcile loop; no retry/backoff | Use a dedicated reconciler + CRD status pattern |
 | Dependency between nodes expressed as in-memory state rather than CRD fields | Invisible to Graph, breaks restart safety | Represent dependency as Graph edge + CRD reference |
 | Bypassing Graph for "simple" cases (e.g. promoting directly without creating a Graph) | Undermines the universal DAG model | Everything goes through Graph, no exceptions |
-
----
-
-## Decision Log
-
-**2026-04-10 — Initial decision.**
-After thorough research into the Graph controller's architecture and CEL extension mechanisms,
-the team concluded that the world-is-a-DAG principle is architecturally correct and
-that `pkg/cel` is a known transitional workaround pending the `recheckAfter`
-upstream contribution. (Superseded: ScheduleClock closed the `recheckAfter` gap, and `pkg/cel`
-is now an accepted exception (ledger G8); it must not grow.) This design doc governs all future implementation decisions.
-
-Human approved. Agents must treat this as a hard architectural constraint.
-
-**2026-09 — Upstream kro.** kardinal moved from the pre-upstream Graph controller fork to
-upstream kro v0.10.0-rc.0. The principle is unchanged; gaps are tracked in
-[16-graph-capability-ledger.md](16-graph-capability-ledger.md).

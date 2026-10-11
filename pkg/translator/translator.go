@@ -280,8 +280,7 @@ func (t *Translator) servedKind(apiVersion, kind string) bool {
 
 // healthInjector adds read-only health ref nodes to a Graph.
 //
-// This is the translator-layer implementation of HE-1, HE-2, HE-3 from
-// docs/design/11-graph-purity-tech-debt.md. The health condition is not added
+// The health condition is not added
 // to the PromotionStep node's readyWhen: kro only lets readyWhen reference the
 // node itself (ledger gap G3).
 type healthInjector struct {
@@ -442,8 +441,7 @@ func healthConfigured(env kardinalv1alpha1.EnvironmentSpec) bool {
 // namespace. De-duplicates by name+namespace and skips gate instances
 // (labelled kardinal.io/gate-template) and every gate with spec.generated.
 //
-// spec.policyNamespaces only adds namespaces (TR-2,
-// docs/design/11-graph-purity-tech-debt.md). The org namespaces are always
+// spec.policyNamespaces only adds namespaces. The org namespaces are always
 // scanned, so a Pipeline cannot opt out of org policy by listing other
 // namespaces.
 func (t *Translator) collectGates(ctx context.Context,

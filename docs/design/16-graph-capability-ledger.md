@@ -57,9 +57,8 @@ Rules:
 | [G3](#g3-readywhen-may-only-reference-the-node-itself) | `readyWhen` may only reference the node itself | Low (reclassified 2026-10-02) | health stays in the PromotionStep reconciler | None, and not needed |
 | [G4](#g4-a-missing-crd-fails-the-whole-graph) | A missing CRD fails the whole Graph compile | Low (solved in kro, not adopted) | `pkg/translator/translator.go` `servedKind` filter | Complete for the compile failure (dynamic types, in the pin) |
 | [G5](#g5-the-graph-identity-is-provisioned-outside-the-graph) | The Graph's ServiceAccount and RBAC live outside the Graph | Medium | `pkg/graph/identity.go` `IdentityProvisioner` | Partial (kro#1402 docs, kro#1465) |
-| [G6](#g6-spec-changes-are-handled-by-delete-and-recreate) | Spec changes handled by delete-and-recreate (kardinal bug, fixed) | Closed | `pkg/graph/client.go` in-place update | Not needed |
 | [G7](#g7-no-ownerreferences-on-graph-children) | No ownerReferences on Graph children | Low | labels + kro inventory; Bundle owns the Graph only | None for the Graph kind |
-| [G8](#g8-logic-still-outside-the-graph) | Logic still outside the Graph (time, CEL gates, git/SCM) | High | reconcilers; see `11-graph-purity-tech-debt.md` | Time: Partial (KREP-025, in review). Everything else: none |
+| [G8](#g8-logic-still-outside-the-graph) | Logic still outside the Graph (time, CEL gates, git/SCM) | High | reconcilers | Time: Partial (KREP-025, in review). Everything else: none |
 | [G9](#g9-a-graph-reconcile-costs-three-api-calls-per-object) | A Graph reconcile costs about three uncached API calls per object, and kro reconciles one Graph at a time by default | High at scale | `hack/install-kro.sh` raises the worker count and client QPS; smaller Graphs | None filed; kro#1324 is related |
 | [G10](#g10-a-graph-is-one-etcd-object) | A Graph's spec and inventory share one etcd object (1.5 MiB) | Medium | `pkg/graph/size.go` `CheckSize` refuses a Graph over 1.2 MB | None filed |
 | [G11](#g11-collections-are-all-or-nothing) | A `forEach` collection is all-or-nothing on pending data and on apply errors, and every growth relabels every item | Medium | pacing by choosing the list; label-only events ignored | None filed |
@@ -377,39 +376,6 @@ Graph cannot grant itself RBAC while running as that identity. So `IdentityProvi
 
 ---
 
-## G6: Spec changes are handled by delete-and-recreate
-
-**Status: fixed in kardinal (2026-09-29). This was never a kro gap.**
-
-**Need.** When a Pipeline changes while a Bundle is in flight (#626), the Graph should
-pick up the new shape without re-running environments that are already Verified.
-
-**kro today.** kro supports in-place spec updates. It applies the new desired state and
-prunes only resources whose nodes were removed, using its managed-resource inventory
-(`pkg/controller/graph/controller.go:393-441`). Deleting a Graph runs its finalizer, which
-deletes **every** managed resource.
-
-Verified on kind with a scratch ConfigMap Graph:
-
-- Updating the spec kept the existing children, with the same UIDs.
-- Removing one node deleted only that node's ConfigMap.
-- Deleting the Graph deleted all of them.
-
-**What kardinal did.** `ensurePipelineSpecCurrent` deleted the Graph when the Pipeline spec
-hash changed, and the Bundle reconciler recreated it. Under kro that deletes every
-PromotionStep, including Verified ones. The recreated steps start Pending, so every
-environment promotes again.
-
-**Fix.** `GraphClient.Create` now creates the Graph or updates it in place (spec,
-ownerReferences, merged labels, and no write when unchanged). `ensurePipelineSpecCurrent`
-re-translates the Graph instead of deleting it (`pkg/graph/client.go`,
-`pkg/reconciler/bundle/reconciler.go`). The recreate path is still used when a Graph is
-deleted externally (#490).
-
-**Upstream contribution.** None needed.
-
----
-
 ## G7: No ownerReferences on Graph children
 
 **Need.** Find which Bundle a PromotionStep, PolicyGate instance or PRStatus belongs to,
@@ -466,7 +432,8 @@ SA). That gives `kubectl tree` and owner lookup, not G7-a. The old
 ## G8: Logic still outside the Graph
 
 These pieces are still Go code in reconcilers. Each is a candidate for a Graph primitive.
-The detailed tracker is `docs/design/11-graph-purity-tech-debt.md`.
+Every row writes its result to its own CRD status; a new row needs the owner's approval
+(AGENTS.md, Anti-Patterns).
 
 | Logic | Where | Why not in the Graph | Possible kro primitive |
 |-------|-------|----------------------|------------------------|
@@ -485,6 +452,12 @@ The detailed tracker is `docs/design/11-graph-purity-tech-debt.md`.
 | Health on a later synced or applied commit: does it contain the promoted one (#1575) | `descends` in `pkg/reconciler/promotionstep/pr_rebase.go`, passed to the argocd and flux adapters as `CheckOptions.RevisionContains` | A git read of an external repository (the commit graph near the branch head), which a Graph node cannot make; the answer feeds the health check, which stays in the reconciler (row above) | None needed. A network read in the health path, approved by the coordinator as the owner's delegate (2026-10-09) because it is bounded: one `ls-remote` per repository per 30 s and one graph read per head and depth (20, then 500 commits), cached and shared by concurrent checks (singleflight), under a 30 s timeout. The cache holds no promotion state; the decision is written to the step's `status.message` |
 | Gate results as SCM commit statuses while a PR waits for merge (#1452) | PromotionStep reconciler posts `kardinal/gates`; the gate results reach the step through a mirror `patch` node (G14) | Side effect on an external system | Out of scope for kro |
 | Holding an existing PromotionStep: pause (freeze gate) and the required-gate re-check before the step starts (#1300, #1313) | `holdIfPaused` and `checkRequiredGates` in `pkg/reconciler/promotionstep` | No primitive to hold an existing node without pruning it. `readyWhen` does not hold dependents in a standalone Graph; an Unresolved node leaves the existing object as it is; `includeWhen: false` prunes it; a ref to a missing object holds the whole Graph | A Graph-level "hold" on a node that keeps its object and blocks its dependents, or `GateReadiness` for standalone Graphs |
+| Auto-rollback Bundle creation | `createAutoRollback` in `pkg/reconciler/promotionstep/lifecycle.go`, built by `pkg/lifecycle`; the decision is `RollbackPolicy` `status.shouldRollback` | Creating a Bundle is a new Graph root, not a node of the failing Bundle's Graph | None needed |
+| Skip permissions (`intent.skip`) | `ValidateSkipPermissions` in `pkg/graph/skip.go`, when the Graph is built | The check decides which nodes exist; only the gate expressions run on the Graph | `includeWhen` over a SkipPermission ref, once G2 is solved |
+| PolicyGate re-evaluation timer | PolicyGate reconciler requeues at `recheckInterval` (default 5m); ScheduleClock ticks add re-evaluation | No time-based requeue in kro (see time, above) | KREP-025 |
+| Cross-CRD reads for the gate context: MetricChecks, ChangeWindows, PRStatuses and sibling Bundles | `buildMetricsContext`, `buildChangeWindowContext`, `buildPRContext`, `buildUpstreamContextWithHistory` in `pkg/reconciler/policygate` | See the PolicyGate CEL row | Selector refs (KREP-003) cover the reads; time does not |
+| PR merge polling | PRStatus reconciler polls the SCM every 30 s; SCM webhooks only shorten the wait | External I/O | Out of scope for kro |
+| AuditEvent retention | `pkg/reconciler/auditretention` reads the clock to delete records older than `--audit-retention-max-age` | Housekeeping like `historyLimit`: no promotion decision reads it, and AuditEvents have no owner whose change could trigger it, so it is a leader Runnable | None needed |
 
 **Upstream work: time.**
 
@@ -1118,37 +1091,3 @@ Nothing has been posted to kro yet. Each item is drafted and waits for owner app
 
 When an item is filed, link it from the gap above and from `docs/graph-coverage.md`, and
 label the kardinal issue that waits on it `blocked-on-upstream`.
-
----
-
-## E2E record (kind, 2026-09-29)
-
-| Check | Result |
-|-------|--------|
-| Graph compiles and is accepted by kro v0.10.0-rc.0 | Pass (12 nodes) |
-| Applies run as the impersonated `kardinal-graph` ServiceAccount | Pass |
-| `test` then `uat` ordering via G1 workaround | Pass |
-| PolicyGate instances created per Bundle, template gates not duplicated | Pass (after fix) |
-| `prod` held back by `require-uat-soak` and `no-weekend-deploys` | Pass |
-| Auto environments push to the base branch; Argo CD deploys the new image | Pass (after fix) |
-| `soakMinutes` advances while a Bundle is Promoting | Pass (after fix) |
-| A superseded Bundle's Pending `prod` step is cancelled, with no push and no PR | Pass (after fix) |
-| kro logs: no `forbidden` or watch errors under impersonation (G5) | Pass |
-| Probe: `forEach` expansion; `size(x) == N && x.all(...)` holds a dependent back | Pass |
-| Probe: a selector ref that matches nothing is ready | Confirmed (see Notes) |
-| Probe: in-place spec update keeps child UIDs; removing a node prunes only that child; deleting the Graph deletes all children | Pass (G6) |
-| `prod` (pr-review): step created once both gates are ready, PR opened on the demo repo, merge detected by PRStatus, step Verified, Graph `Ready=True` | Pass (PR #18) |
-| Bundle `status.metrics.commitToProductionMinutes` set once every environment is Verified | Pass (after fix: patch base was taken after the write) |
-| PR body lists the gates evaluated and upstream verification | Pass (after fix: fields were never populated) |
-| Bundle with `prod` still gated is not marked finished: no metrics, no `Ready=True`, soak clock keeps running | Pass (after fix: "all environments Verified" was computed over `status.environments`, which lacks environments whose step does not exist yet) |
-| Pipeline change while Promoting: Graph updated in place (same UID, generation 2), gate instances re-rendered in place, `test`/`uat` steps keep UID and Verified, no re-push to the demo repo | Pass (G6 fix) |
-| Second Pipeline change after `prod` Verified (restore): Graph generation 3, same UID, every child UID unchanged, all steps still Verified | Pass |
-| Reconciler log lines (`pipeline spec changed — updating Graph in place`, `graph updated in place`) visible in the controller log | Pass (after fix: no zerolog logger was attached to the reconcile context, so reconciler logs were dropped) |
-| Four no-op Pipeline changes leave the Graph generation unchanged | Pass (after fix: gate templates were listed in cache map order, so gate nodes swapped position between renders and each re-translation wrote a new spec) |
-
----
-
-## Closed
-
-- **G6** (2026-09-29): not a kro gap. kro v0.10.0-rc.0 updates a Graph in place and prunes
-  only removed nodes; kardinal now issues create-or-update instead of delete-and-recreate.
