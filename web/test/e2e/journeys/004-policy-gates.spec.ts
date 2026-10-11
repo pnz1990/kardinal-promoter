@@ -15,13 +15,13 @@ test.describe('Journey 004 — Policy gates auto-expand when blocked (#524)', ()
     await page.waitForTimeout(800) // wait for data load
   })
 
-  test('Step 1: Policy Gates section is visible', async ({ page }) => {
-    await expect(page.getByText(/Policy Gates/i)).toBeVisible()
+  test('Step 1: Gates section is visible', async ({ page }) => {
+    await expect(page.getByText(/Gates \(\d/)).toBeVisible()
   })
 
-  test('Step 2: Policy Gates section is auto-expanded (blocked gate present)', async ({ page }) => {
+  test('Step 2: Gates section is auto-expanded (blocked gate present)', async ({ page }) => {
     // The panel button should be aria-expanded=true because no-weekend-deploys is blocked
-    const toggleBtn = page.getByRole('button', { name: /Policy Gates/i })
+    const toggleBtn = page.getByRole('button', { name: /Gates \(\d/ })
     await expect(toggleBtn).toHaveAttribute('aria-expanded', 'true')
   })
 
@@ -33,19 +33,19 @@ test.describe('Journey 004 — Policy gates auto-expand when blocked (#524)', ()
 
   test('Step 4: Blocked gate summary shows "blocked" count', async ({ page }) => {
     // Use the summary chip inside the Policy Gates toggle button (e.g. "1 blocked")
-    await expect(page.getByRole('button', { name: /Policy Gates/i }).getByText(/blocked/i)).toBeVisible()
+    await expect(page.getByRole('button', { name: /Gates \(\d/ }).getByText(/blocked/i)).toBeVisible()
   })
 
   test('Step 4b: Counts the gates of the shown bundle only, not the template', async ({ page }) => {
     // The mock serves two gate instances for kardinal-test-app-abc123 and one
     // template with the same name. The panel counts the two instances.
-    const toggleBtn = page.getByRole('button', { name: /Policy Gates/i })
-    await expect(toggleBtn).toContainText('Policy Gates (2)')
+    const toggleBtn = page.getByRole('button', { name: /Gates \(\d/ })
+    await expect(toggleBtn).toContainText('Gates (2)')
     await expect(toggleBtn.getByText('1 blocked')).toBeVisible()
   })
 
   test('Step 5: Toggle button collapses the panel', async ({ page }) => {
-    const toggleBtn = page.getByRole('button', { name: /Policy Gates/i })
+    const toggleBtn = page.getByRole('button', { name: /Gates \(\d/ })
     await toggleBtn.click()
     await expect(toggleBtn).toHaveAttribute('aria-expanded', 'false')
   })

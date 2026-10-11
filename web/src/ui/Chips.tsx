@@ -57,11 +57,11 @@ export interface TagProps extends HTMLAttributes<HTMLSpanElement> {
   kind: TagKind
 }
 
-/** A Bundle type: a monochrome tag, named for screen readers as "<type> Bundle". */
+/** A Bundle type: a monochrome tag, named for screen readers as "<type> version". */
 export const Tag = forwardRef<HTMLSpanElement, TagProps>(function Tag({ kind, className, ...rest }, ref) {
   const t = TAG[kind]
   return (
-    <span ref={ref} role="img" aria-label={`${t.name} Bundle`} className={cx('k-tag', className)} {...rest}>
+    <span ref={ref} role="img" aria-label={`${t.name} version`} className={cx('k-tag', className)} {...rest}>
       <span aria-hidden="true">{t.glyph} {t.text}</span>
     </span>
   )
