@@ -377,7 +377,7 @@ func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1
 			a.lines = append(a.lines, whyLine{"Why", g.Spec.Message})
 		}
 		a.lines = append(a.lines, whyLine{"Rule", g.Spec.Expression})
-		if now := gateEvaluation(g.Status.Reason); now != "" {
+		if now := graph.GateDetail(&g); now != "" {
 			a.lines = append(a.lines, whyLine{"Now", now})
 		}
 		every := g.Spec.RecheckInterval
@@ -474,20 +474,6 @@ func approvalCount(g v1alpha1.PolicyGate) (approved int, rejectedBy string) {
 		}
 	}
 	return approved, rejectedBy
-}
-
-// gateEvaluation is the evaluation in a gate's status reason, which ends
-// "(<context>: <expression> = <result>)": the part after the context.
-func gateEvaluation(reason string) string {
-	open := strings.LastIndex(reason, "(")
-	if open < 0 || !strings.HasSuffix(reason, ")") {
-		return ""
-	}
-	inner := reason[open+1 : len(reason)-1]
-	if _, after, ok := strings.Cut(inner, ": "); ok {
-		inner = after
-	}
-	return inner
 }
 
 // waitingUpstreams are the environments env follows that do not run bundle
