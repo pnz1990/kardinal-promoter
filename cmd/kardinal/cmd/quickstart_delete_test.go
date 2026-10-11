@@ -210,6 +210,7 @@ func TestQuickstartDelete_Refuses(t *testing.T) {
 }
 
 func TestQuickstartDelete_Flags(t *testing.T) {
+	keepStyle(t)
 	writeKubeconfig(t, "kind-kardinal", "https://127.0.0.1:41234")
 	noCluster(t)
 	for _, args := range [][]string{
