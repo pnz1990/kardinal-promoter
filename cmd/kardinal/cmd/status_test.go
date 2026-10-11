@@ -532,3 +532,57 @@ func TestStatusSummary_ListError(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, "list bundles: bundles.kardinal.io is forbidden", err.Error())
 }
+
+// TestStatusPipelineWriter_PipelineNotices (P4): kardinal status shows the
+// Pipeline's own problems first, before any promotion: an ERROR for
+// Ready=False (GitCredentialMissing with the fix command) and a WARNING for
+// an unlabelled git Secret that still works.
+//
+// Covers PIPE-GITCRED-02.
+func TestStatusPipelineWriter_PipelineNotices(t *testing.T) {
+	p := policyPipeline("demo", "test", "prod")
+	p.Status.Conditions = []metav1.Condition{
+		{Type: "Ready", Status: metav1.ConditionFalse, Reason: "GitCredentialMissing",
+			Message: "git Secret t not found in namespace default, so git has no token for https://x; create it: kubectl create secret generic t"},
+		{Type: "SecretReferenceable", Status: metav1.ConditionFalse, Reason: "SecretNotReferenceable",
+			Message: "git Secret t is not labeled kardinal.io/referenceable=true; label it (kubectl label secret t -n default kardinal.io/referenceable=true)"},
+	}
+	out := runStatusPipeline(t, p)
+	assert.Contains(t, out, "ERROR: pipeline demo is not Ready (GitCredentialMissing): git Secret t not found in namespace default")
+	assert.Contains(t, out, "WARNING: pipeline demo: git Secret t is not labeled kardinal.io/referenceable=true")
+	assert.Less(t, strings.Index(out, "ERROR:"), strings.Index(out, "No versions yet."), out)
+
+	ok := policyPipeline("demo", "test", "prod")
+	ok.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Valid"}}
+	assert.NotContains(t, runStatusPipeline(t, ok), "ERROR:")
+}
+
+// TestStatusPipelineWriter_RegionAndWide (C4 QA): REGION shows where each
+// environment runs when one of them says (here the kubeconfig of a remote
+// cluster), and -o wide adds the step each newest Bundle is on.
+//
+// Covers CLI-STYLE-01.
+func TestStatusPipelineWriter_RegionAndWide(t *testing.T) {
+	recent := time.Now().Add(-time.Hour)
+	p := policyPipeline("demo", "test", "prod")
+	p.Spec.Environments[1].Health.KubeconfigSecretRef = &v1alpha1.KubeconfigSecretRef{Name: "prod-eu-kubeconfig"}
+	step := explainStep("demo", "b1", "prod", "WaitingForMerge", "", recent)
+	step.Status.Steps = []v1alpha1.StepStatus{{Name: "open-pr", State: "Completed"}, {Name: "wait-for-merge", State: "InProgress"}}
+	objs := []sigs_client.Object{p, explainBundle("b1", "Promoting", recent), explainStep("demo", "b1", "test", "Verified", "", recent), step}
+
+	rows := statusRows(t, runStatusPipeline(t, objs...))
+	require.Len(t, rows, 2)
+	assert.Equal(t, "-", rows[0]["REGION"])
+	assert.Equal(t, "prod-eu-kubeconfig", rows[1]["REGION"])
+	assert.NotContains(t, rows[1], "ACTIVE STEP", "only with -o wide")
+
+	globalOutput = "wide"
+	t.Cleanup(func() { globalOutput = "" })
+	rows = statusRows(t, runStatusPipeline(t, objs...))
+	assert.Equal(t, "wait-for-merge", rows[1]["ACTIVE STEP"])
+
+	globalOutput = ""
+	plain := runStatusPipeline(t, policyPipeline("demo", "test", "prod"), explainBundle("b1", "Promoting", recent),
+		explainStep("demo", "b1", "test", "Verified", "", recent))
+	assert.NotContains(t, plain, "REGION", "no environment says where it runs")
+}

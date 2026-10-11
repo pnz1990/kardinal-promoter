@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -63,9 +64,19 @@ func gateRow(env, bundle, name, state, expr, reason string) map[string]string {
 		"STATE": display.Gate(state).Label, "EXPRESSION": expr, "REASON": reason}
 }
 
-// plainText is text as the CLI prints the cluster's text on a pipe: ASCII,
-// a dash "-" and an arrow "->".
-var plainText = strings.NewReplacer("—", "-", "–", "-", "→", "->", "…", "...")
+// plainText is the cluster's text as the CLI prints it on a pipe: as it is
+// with a UTF-8 locale, else in ASCII (a dash "-", an arrow "->").
+var plainText = func() *strings.Replacer {
+	for _, k := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
+		if v := strings.ToLower(os.Getenv(k)); v != "" {
+			if (strings.Contains(v, "utf-8") || strings.Contains(v, "utf8")) && os.Getenv("TERM") != "dumb" {
+				return strings.NewReplacer()
+			}
+			break
+		}
+	}
+	return strings.NewReplacer("—", "-", "–", "-", "→", "->", "…", "...")
+}()
 
 // stepRow is one step row of kardinal explain: a Step's reason is its
 // status.message (in plain text), "-" when it has none.

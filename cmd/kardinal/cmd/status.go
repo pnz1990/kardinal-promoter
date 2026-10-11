@@ -54,7 +54,7 @@ it and -o json prints it for scripts.`,
 		Example: `  kardinal status
   kardinal status my-app -w
   kardinal status my-app -o json | jq -r '.environments[] | .name + "=" + .version'`,
-		Annotations: map[string]string{ReferenceAnnotation: statusReference, outputAnnotation: "true"},
+		Annotations: map[string]string{ReferenceAnnotation: statusReference, outputAnnotation: "true", wideAnnotation: "true"},
 		Args:        cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
@@ -168,9 +168,20 @@ type pipelineStatus struct {
 	Source        string                               `json:"source"`
 	Environments  []v1alpha1.PipelineEnvironmentStatus `json:"environments"`
 	BlockingGates []statusGate                         `json:"blockingGates"`
+	// Notices are the Pipeline's own problems, before everything else: an
+	// ERROR: line when it is not Ready, a WARNING: line when its git Secret
+	// is not referenceable.
+	Notices []string `json:"notices,omitempty"`
 	// Warnings are the WARNING: lines after the table (a Rejected Bundle
 	// whose change is live).
 	Warnings []string `json:"warnings,omitempty"`
+	// Regions is, per environment that has one, its region (spec regions)
+	// or the cluster its health check reads (health.kubeconfigSecretRef,
+	// or the deprecated health.cluster).
+	Regions map[string]string `json:"regions,omitempty"`
+	// activeSteps is, with -o wide, the sub-step each environment's newest
+	// step is on.
+	activeSteps map[string]string
 }
 
 // statusGate is a gate instance that holds the newest Bundle of an
@@ -204,7 +215,8 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 		return nil, fmt.Errorf("get pipeline: %w", err)
 	}
 	view := &pipelineStatus{Pipeline: pipeline, Namespace: ns, Phase: pl.Status.Phase, Paused: pl.Spec.Paused,
-		Source: "controller", Environments: pl.Status.Environments, Summary: pl.Status.Summary, BlockingGates: []statusGate{}}
+		Source: "controller", Environments: pl.Status.Environments, Summary: pl.Status.Summary, BlockingGates: []statusGate{},
+		Notices: pipelineNotices(&pl)}
 
 	var bundles v1alpha1.BundleList
 	if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err != nil {
@@ -252,6 +264,15 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 	if view.Environments == nil {
 		view.Environments = []v1alpha1.PipelineEnvironmentStatus{}
 	}
+	view.Regions = environmentRegions(&pl)
+	if OutputFormat() == "wide" {
+		var steps v1alpha1.PromotionStepList
+		if err := c.List(ctx, &steps, sigs_client.InNamespace(ns),
+			sigs_client.MatchingLabels{"kardinal.io/pipeline": pipeline}); err != nil {
+			return nil, fmt.Errorf("list promotion steps: %w", err)
+		}
+		view.activeSteps = activeSteps(view.Environments, steps.Items)
+	}
 
 	byName := make(map[string]*v1alpha1.Bundle, len(bundles.Items))
 	for i := range bundles.Items {
@@ -283,6 +304,54 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 	return view, nil
 }
 
+// environmentRegions is, per environment of p that has one, its region
+// (spec regions, deprecated) or the cluster its health check reads: the
+// kubeconfig Secret of health.kubeconfigSecretRef, or the deprecated
+// health.cluster. nil when no environment has one: the REGION column is
+// then hidden.
+func environmentRegions(p *v1alpha1.Pipeline) map[string]string {
+	out := map[string]string{}
+	for _, e := range p.Spec.Environments {
+		switch {
+		case len(e.Regions) > 0: //nolint:staticcheck // SA1019: shows the deprecated regions of an old Pipeline
+			out[e.Name] = strings.Join(e.Regions, ", ") //nolint:staticcheck // SA1019: as above
+		case e.Health.KubeconfigSecretRef != nil:
+			out[e.Name] = e.Health.KubeconfigSecretRef.Name
+		case e.Health.Cluster != "": //nolint:staticcheck // SA1019: shows the deprecated cluster of an old Pipeline
+			out[e.Name] = e.Health.Cluster //nolint:staticcheck // SA1019: as above
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// activeSteps is, per environment, the sub-step the newest Bundle's step
+// there is on (the first that is neither Completed nor Failed).
+func activeSteps(envs []v1alpha1.PipelineEnvironmentStatus, steps []v1alpha1.PromotionStep) map[string]string {
+	out := map[string]string{}
+	for _, e := range envs {
+		newest := e.Bundle
+		if e.IncomingBundle != "" {
+			newest = e.IncomingBundle
+		}
+		for i := range steps {
+			s := &steps[i]
+			if s.Spec.Environment != e.Name || s.Spec.BundleName != newest {
+				continue
+			}
+			for _, ss := range s.Status.Steps {
+				if ss.State != "Completed" && ss.State != "Failed" && ss.State != "" {
+					out[e.Name] = ss.Name
+					break
+				}
+			}
+		}
+	}
+	return out
+}
+
 // envState is the display state of an environment of status.environments:
 // held by a rollback hold or by gates when it says so.
 func envState(e v1alpha1.PipelineEnvironmentStatus) display.State {
@@ -312,6 +381,11 @@ func versionCell(bundle, version string) string {
 // writePipelineStatus writes view as kardinal status <pipeline> prints it.
 func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
 	_, _ = fmt.Fprintf(w, "Pipeline: %s   Namespace: %s\n", view.Pipeline, view.Namespace)
+	// The Pipeline's own problems come first: nothing promotes until they
+	// are fixed.
+	for _, n := range view.Notices {
+		_, _ = fmt.Fprintln(w, notice(n))
+	}
 	running := slices.ContainsFunc(view.Environments, func(e v1alpha1.PipelineEnvironmentStatus) bool {
 		return e.Bundle != "" || e.IncomingBundle != "" || e.State != ""
 	})
@@ -323,15 +397,33 @@ func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
 		_, _ = fmt.Fprintln(w, view.Summary)
 	}
 	_, _ = fmt.Fprintln(w)
+	// REGION shows where an environment runs when one of them says (a
+	// multi-cluster pipeline); ACTIVE STEP only with -o wide.
+	wide := OutputFormat() == "wide"
 	tw := style.NewTable(w, 2)
-	_, _ = fmt.Fprintln(tw, "ENVIRONMENT\tRUNNING\tINCOMING\tSTATE\tSINCE\tPR")
+	header := "ENVIRONMENT\t"
+	if view.Regions != nil {
+		header += "REGION\t"
+	}
+	header += "RUNNING\tINCOMING\tSTATE\t"
+	if wide {
+		header += "ACTIVE STEP\t"
+	}
+	_, _ = fmt.Fprintln(tw, header+"SINCE\tPR")
 	for _, e := range view.Environments {
 		since := "-"
 		if e.Since != nil && !e.Since.IsZero() {
 			since = HumanAge(e.Since.Time)
 		}
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", e.Name, versionCell(e.Bundle, e.Version),
-			versionCell(e.IncomingBundle, e.IncomingVersion), sty.State(envState(e)), since, orDash(e.PRURL))
+		row := e.Name + "\t"
+		if view.Regions != nil {
+			row += orDash(view.Regions[e.Name]) + "\t"
+		}
+		row += versionCell(e.Bundle, e.Version) + "\t" + versionCell(e.IncomingBundle, e.IncomingVersion) + "\t" + sty.State(envState(e)) + "\t"
+		if wide {
+			row += orDash(view.activeSteps[e.Name]) + "\t"
+		}
+		_, _ = fmt.Fprintln(tw, row+since+"\t"+orDash(e.PRURL))
 	}
 	if err := tw.Flush(); err != nil {
 		return fmt.Errorf("write status table: %w", err)
@@ -367,13 +459,32 @@ func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
 	return nil
 }
 
+// pipelineNotices are the Pipeline's own problems, shown before its
+// promotions: an ERROR when it is not Ready (an invalid spec, or
+// GitCredentialMissing with the command that fixes it), and a WARNING for a
+// git Secret that works today but is not labelled referenceable, so it is
+// fixed before v0.11 refuses it.
+func pipelineNotices(p *v1alpha1.Pipeline) []string {
+	var out []string
+	if c := meta.FindStatusCondition(p.Status.Conditions, "Ready"); c != nil && c.Status == metav1.ConditionFalse {
+		out = append(out, fmt.Sprintf("ERROR: pipeline %s is not Ready (%s): %s", p.Name, c.Reason, c.Message))
+	}
+	if c := meta.FindStatusCondition(p.Status.Conditions, "SecretReferenceable"); c != nil && c.Status == metav1.ConditionFalse {
+		out = append(out, fmt.Sprintf("WARNING: pipeline %s: %s", p.Name, c.Message))
+	}
+	return out
+}
+
 // statusReference is the detail of status for its reference page.
 const statusReference = `When called without arguments: displays the controller version (the
 kardinal-version ConfigMap in --controller-namespace), the pipeline count with
 any Degraded pipelines, and the bundle count (active = Available or Promoting).
 
-When called with a pipeline name: the Pipeline's summary sentence ("1.5.0 live
-in test; waiting for PR merge in prod (#42)"), then one row per environment
+When called with a pipeline name: first the Pipeline's own problems, an
+ERROR when it is not Ready (such as GitCredentialMissing, with the command
+that creates the git Secret) and a WARNING when its git Secret is not
+labelled kardinal.io/referenceable=true; then the Pipeline's summary sentence
+("1.5.0 live in test; waiting for PR merge in prod (#42)"), then one row per environment
 (a fleet environment expands to its targets) from the Pipeline's
 status.environments, which the controller writes:
 
@@ -384,6 +495,11 @@ status.environments, which the controller writes:
             "Held by rollback")
   SINCE     how long it has been in that state
   PR        the pull request it waits for, while it waits for its merge
+
+REGION, after ENVIRONMENT, shows where each environment runs when one of
+them says: its region (spec regions) or the cluster its health check reads
+(the health.kubeconfigSecretRef Secret). -o wide adds ACTIVE STEP, the step
+the newest Bundle there is on (git-clone, open-pr, health-check, ...).
 
 Then the gates holding a version back, with their CEL expression cut to 40
 characters, their message and when each was last checked; and a WARNING: line

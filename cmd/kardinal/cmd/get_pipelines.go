@@ -41,12 +41,13 @@ const getPipelinesWatchInterval = 2 * time.Second
 func watchLoop(ctx context.Context, w io.Writer, interval time.Duration, render func() error) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	table := OutputFormat() == "" || OutputFormat() == "table"
+	table := !structured()
 	clearScreen := table && style.IsTerminal(w)
 	for {
 		if clearScreen {
 			_, _ = fmt.Fprint(w, "\033[H\033[2J")
 		}
+		yamlDocument(w)
 		if err := render(); err != nil {
 			return err
 		}

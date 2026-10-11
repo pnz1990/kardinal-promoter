@@ -374,6 +374,7 @@ func (g *GitHubProvider) doURL(ctx context.Context, method, rawURL, path string,
 	}
 
 	resp, err := g.client.Do(req)
+	err = RedactErr(err) // a *url.Error quotes the URL
 	// Arguments are taken now; the circuit states are read at return, after Record.
 	defer call.done(resp, err, g.circuits, owner)
 	if err != nil {

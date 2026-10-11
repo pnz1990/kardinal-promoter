@@ -1,14 +1,14 @@
 $ kardinal get pipelines
 PIPELINE   BUNDLE    TEST   UAT                    PROD                      SUB   AGE
-demo       demo-b3   Live   Waiting for PR merge   Held by gate no-weekend   0     106751d
+demo       demo-b3   Live   Waiting for PR merge   Held by gate no-weekend   0     10h
 
 $ kardinal get pipelines -A
 NAMESPACE   PIPELINE   BUNDLE    TEST   UAT                    PROD                      SUB   AGE
-default     demo       demo-b3   Live   Waiting for PR merge   Held by gate no-weekend   0     106751d
+default     demo       demo-b3   Live   Waiting for PR merge   Held by gate no-weekend   0     10h
 
 $ kardinal get pipelines demo
 PIPELINE   BUNDLE    TEST   UAT                    PROD                      SUB   AGE
-demo       demo-b3   Live   Waiting for PR merge   Held by gate no-weekend   0     106751d
+demo       demo-b3   Live   Waiting for PR merge   Held by gate no-weekend   0     10h
 
 $ kardinal get bundles demo
 BUNDLE    TYPE    PHASE                       AGE

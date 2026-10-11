@@ -46,6 +46,10 @@ func secretRefDoc(meta, secretNS string) string {
 // server rejects: an empty git.url, a CEL expression the PolicyGate
 // environment does not compile, and every document in the file is checked.
 func TestValidate_Documents(t *testing.T) {
+	// No UTF-8 locale: the output is ASCII (an arrow is "->").
+	t.Setenv("LC_ALL", "")
+	t.Setenv("LC_CTYPE", "")
+	t.Setenv("LANG", "C")
 	cases := []struct {
 		name    string
 		content string
