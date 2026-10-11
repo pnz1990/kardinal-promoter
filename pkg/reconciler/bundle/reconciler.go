@@ -54,6 +54,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
@@ -251,6 +252,12 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("get bundle: %w", err)
 	}
 
+	// Records a rejection stored but not written yet (the audit outbox).
+	if len(b.Status.PendingAuditEvents) > 0 {
+		if err := r.flushAudit(ctx, &b); err != nil {
+			return ctrl.Result{RequeueAfter: auditRetryDelay}, nil
+		}
+	}
 	// A rejection wins over every phase, Verified and Superseded included,
 	// and is recomputed from spec on every reconcile, so a crash between the
 	// spec write and this status write only delays it.
@@ -959,6 +966,12 @@ func (r *Reconciler) markRejected(ctx context.Context, log zerolog.Logger,
 	patch := statusPatch(b.DeepCopy())
 	msg := rejectionMessage(b.Spec.Rejected)
 	b.Status.RejectedArtifacts = &set
+	if from != phaseRejected {
+		// The record of who rejected the Bundle, in the same write as the
+		// phase (the audit outbox): a crash before it is written retries it.
+		// time.Now() is inside this CRD status write (Graph-first).
+		b.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, b.Status.PendingAuditEvents, rejectionAuditEntry(b, time.Now()))
+	}
 	b.Status.Phase = phaseRejected
 	setBundleCondition(b, condReady, metav1.ConditionFalse, "Rejected", msg)
 	setBundleCondition(b, condRejected, metav1.ConditionTrue, "Rejected", msg)
@@ -975,7 +988,75 @@ func (r *Reconciler) markRejected(ctx context.Context, log zerolog.Logger,
 		Int("rejectedImages", len(set.Images)).Msg("bundle rejected")
 	r.event(b, corev1.EventTypeWarning, "Rejected", msg)
 	observability.BundlesTotal.WithLabelValues(phaseRejected).Inc()
+	if err := r.flushAudit(ctx, b); err != nil {
+		return ctrl.Result{RequeueAfter: auditRetryDelay}, nil
+	}
 	return ctrl.Result{}, nil
+}
+
+// auditKind labels the audit outbox metrics of Bundle records.
+const auditKind = "Bundle"
+
+// auditRetryDelay is how soon a Bundle whose audit outbox still holds an
+// unwritten record is reconciled again.
+const auditRetryDelay = 5 * time.Second
+
+// rejectionEnvironment is spec.environment of a BundleRejected record:
+// every environment of the Bundle.
+const rejectionEnvironment = "*"
+
+// AuditActionBundleRejected is the AuditEvent action of a rejection.
+const AuditActionBundleRejected = "BundleRejected"
+
+// rejectionAuditEntry is the outbox entry of b's rejection: who rejected it
+// and why, as spec.rejected records them (the requester, verified by the
+// bundle-rejection admission policy or by the UI's review). Its name is
+// fixed per Bundle, so writing it again is a no-op.
+func rejectionAuditEntry(b *kardinalv1alpha1.Bundle, now time.Time) kardinalv1alpha1.PendingAuditEvent {
+	name := b.Name + "-rejected"
+	if len(name) > 253 {
+		sum := sha256.Sum256([]byte(b.Name))
+		name = b.Name[:200] + "-" + hex.EncodeToString(sum[:])[:10] + "-rejected"
+	}
+	rej := b.Spec.Rejected
+	return audit.Entry(name, map[string]string{
+		lifecycle.LabelPipeline: b.Spec.Pipeline,
+		lifecycle.LabelBundle:   b.Name,
+		"kardinal.io/action":    AuditActionBundleRejected,
+	}, kardinalv1alpha1.AuditEventSpec{
+		BundleName:   b.Name,
+		PipelineName: b.Spec.Pipeline,
+		// A rejection is about the whole Bundle, not one environment.
+		Environment: rejectionEnvironment,
+		Action:      AuditActionBundleRejected,
+		Outcome:     "Success",
+		Message:     fmt.Sprintf("%s rejected bundle %s: %s", rej.By, b.Name, rej.Reason),
+	}, metav1.NewTime(now))
+}
+
+// flushAudit creates the AuditEvents in b's outbox and removes the written
+// entries from its status (optimistic lock, so an entry a newer reconcile
+// stored is not dropped). An unwritten entry stays and is retried; it never
+// blocks the Bundle.
+func (r *Reconciler) flushAudit(ctx context.Context, b *kardinalv1alpha1.Bundle) error {
+	if len(b.Status.PendingAuditEvents) == 0 {
+		return nil
+	}
+	remaining, ferr := audit.Flush(ctx, r.Client, auditKind, b.Namespace, b.Status.PendingAuditEvents)
+	if len(remaining) != len(b.Status.PendingAuditEvents) {
+		prev := b.Status.PendingAuditEvents
+		patch := statusPatch(b.DeepCopy())
+		b.Status.PendingAuditEvents = remaining
+		if err := r.Status().Patch(ctx, b, patch); err != nil && !apierrors.IsNotFound(err) {
+			b.Status.PendingAuditEvents = prev
+			return errors.Join(ferr, fmt.Errorf("remove written AuditEvents from the outbox: %w", err))
+		}
+	}
+	if ferr != nil {
+		zerolog.Ctx(ctx).Error().Err(ferr).Int("pending", len(remaining)).
+			Msg("failed to write AuditEvent; kept in status.pendingAuditEvents to retry")
+	}
+	return ferr
 }
 
 // inFlightOrFailed reports whether a Bundle in phase can still promote.

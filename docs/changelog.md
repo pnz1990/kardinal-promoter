@@ -8,6 +8,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Reject a Bundle and override a gate in an environment from the UI API** — `POST /api/v1/ui/reject` (bundle, reason) does what `kardinal reject` does, and `POST /api/v1/ui/override` (pipeline, gate, environment, reason, `expiresInMinutes` up to the override cap) does what `kardinal override --stage` does: it overrides the gate on the instances the Pipeline's in-progress Bundles have in that environment. The per-instance `/api/v1/ui/gates/{namespace}/{gate}/approve` stays. In TokenReview mode reject needs `update` on the new virtual subresource `bundles/reject` (granted to the promoter, approver and admin roles), and override needs `policygates/override` on every instance it writes, checked before any is written. The controller writes the change and records the verified UI user; the bundle-rejection admission policy now admits a rejection in another user's name only from the controller's own identity, as the gate-overrides policy does. Both are in the OpenAPI description ([REST API](reference/rest-api.md), [User roles](guides/security.md#user-roles))
+- **`BundleRejected` AuditEvent** — the Bundle reconciler records each rejection once, through the audit outbox (`status.pendingAuditEvents` on the Bundle), naming who rejected it and why; its environment is `*` ([AuditEvents](concepts.md))
+
 ### Fixed
 
 - **Release notes reach the GitHub release** — v0.10.0's release was created with an empty notes section: its changelog section (about 99 KB) went from the workflow's preflight job to the release job as a job output, and did not arrive. The notes now travel as the `release-notes` artifact, the release job writes the body to a file the release step reads, and the release fails when the notes in the finished body are empty. The body's CRD apply command uses `--force-conflicts`, as the upgrade guides do

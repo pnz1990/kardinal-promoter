@@ -119,6 +119,16 @@ var apiRoutes = []apiRoute{
 	{method: "POST", path: "/api/v1/ui/release-hold", server: serverUI, tag: "UI", id: "releaseHold",
 		summary: "Release the hold of a rollback on an environment (kardinal release-hold)",
 		request: uiReleaseHoldRequest{}, status: 200, response: uiMessageResponse{}, errors: []int{400, 401, 403, 404, 500}, security: "uiAuth"},
+	{method: "POST", path: "/api/v1/ui/reject", server: serverUI, tag: "UI", id: "rejectBundle",
+		summary: "Reject a Bundle: it is never promoted again (kardinal reject)",
+		desc: "Needs update on the virtual subresource bundles/reject in the Bundle's namespace (TokenReview mode). " +
+			"The controller writes spec.rejected with the caller as the rejecting user.",
+		request: uiRejectRequest{}, status: 200, response: uiMessageResponse{}, errors: []int{400, 401, 403, 404, 409, 500}, security: "uiAuth"},
+	{method: "POST", path: "/api/v1/ui/override", server: serverUI, tag: "UI", id: "overridePipelineGate",
+		summary: "Override a gate in one environment of a Pipeline for a while (kardinal override --stage)",
+		desc: "Records the override on the instances of the gate that the Pipeline's in-progress Bundles have in the environment. " +
+			"Needs update on policygates/override for each of them (TokenReview mode), checked before any is written.",
+		request: uiPipelineOverrideRequest{}, status: 200, response: uiPipelineOverrideResponse{}, errors: []int{400, 401, 403, 404, 409, 500}, security: "uiAuth"},
 	{method: "POST", path: "/api/v1/ui/pause", server: serverUI, tag: "UI", id: "pausePipeline",
 		summary: "Pause a Pipeline (kardinal pause)",
 		request: uiPipelineActionRequest{}, status: 200, response: uiMessageResponse{}, errors: []int{400, 401, 403, 404, 500}, security: "uiAuth"},
@@ -160,6 +170,8 @@ var schemaNames = map[string]string{
 	"uiGateOverrideRequest": "GateOverrideRequest", "uiCreateBundleRequest": "UICreateBundleRequest",
 	"uiCreateBundleResponse": "UICreateBundleResponse", "bundleCreateRequest": "CreateBundleRequest",
 	"bundleCreateResponse": "CreateBundleResponse", "webhookHealthResponse": "WebhookHealth",
+	"uiRejectRequest": "RejectRequest", "uiPipelineOverrideRequest": "PipelineOverrideRequest",
+	"uiPipelineOverrideResponse": "PipelineOverrideResponse",
 }
 
 // fieldDocs maps "Type.Field" to the field's doc comment, from the source of
@@ -548,7 +560,11 @@ func TestOpenAPIRoutesSucceed(t *testing.T) {
 			uiLcStep("app-v1", "uat", "Verified", 3), uiLcStep("app-v1", "prod", "Verified", 5),
 			uiLcStep("app-v2", "prod", "Verified", 15),
 			// app-v3 is Verified in uat only: promote copies it to prod.
-			uiLcBundle("app-v3", "3", 20), uiLcStep("app-v3", "uat", "Verified", 25), g}
+			uiLcBundle("app-v3", "3", 20), uiLcStep("app-v3", "uat", "Verified", 25), g,
+			// The prod instance of gate template g for the in-progress app-live.
+			&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "g--app-live-prod", Namespace: "default",
+				Labels: map[string]string{"kardinal.io/pipeline": "app", "kardinal.io/gate-template": "g",
+					"kardinal.io/environment": "prod", "kardinal.io/bundle": "app-live"}}}}
 	}
 	requests := map[string]struct{ path, body string }{
 		"listPipelines":           {"/api/v1/ui/pipelines", ""},
@@ -563,6 +579,8 @@ func TestOpenAPIRoutesSucceed(t *testing.T) {
 		"rollback":                {"/api/v1/ui/rollback", `{"pipeline":"app","environment":"prod"}`},
 		"recordApproval":          {"/api/v1/ui/approvals", `{"bundle":"app-live","environment":"prod","decision":"approve"}`},
 		"pausePipeline":           {"/api/v1/ui/pause", `{"pipeline":"app"}`},
+		"rejectBundle":            {"/api/v1/ui/reject", `{"bundle":"app-v2","reason":"r"}`},
+		"overridePipelineGate":    {"/api/v1/ui/override", `{"pipeline":"app","gate":"g","environment":"prod","reason":"r"}`},
 		"releaseHold":             {"/api/v1/ui/release-hold", `{"pipeline":"app","environment":"test"}`},
 		"resumePipeline":          {"/api/v1/ui/resume", `{"pipeline":"app"}`},
 		"validateCEL":             {"/api/v1/ui/validate-cel", `{"expression":"true"}`},

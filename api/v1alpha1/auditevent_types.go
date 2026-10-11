@@ -33,17 +33,20 @@ type AuditEventSpec struct {
 	//               "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
 	//               "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden",
 	//               "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
-	//               "HoldBundleMissing".
+	//               "HoldBundleMissing", "BundleRejected".
 	// ApprovalRecorded and ApprovalRevoked are written by an approval gate
 	// when a decision (kardinal approve) appears in or leaves its
 	// spec.approvals.
+	// BundleRejected is written once when a Bundle's spec.rejected is set
+	// (kardinal reject or the UI), naming who rejected it and why; its
+	// environment is "*" (the whole Bundle).
 	// GateOverridden is written once per spec.overrides entry of a gate
 	// instance, naming who created it (kardinal override or the UI).
 	// HealthCheckFailed and GateBlocked are accepted but never written: a
 	// failed health check records PromotionFailed (RollbackStarted when
 	// onHealthFailure is rollback), and a blocked gate records GateEvaluated
 	// with outcome Failure.
-	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing
+	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing;BundleRejected
 	Action string `json:"action"`
 
 	// Outcome describes the result of the action.
@@ -94,6 +97,7 @@ var AuditActions = []string{
 	"PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected",
 	"RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated",
 	"GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased", "HoldBundleMissing",
+	"BundleRejected",
 }
 
 // AuditOutcomes are the values spec.outcome accepts.

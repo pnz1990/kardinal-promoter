@@ -109,6 +109,45 @@ type uiPipelineActionRequest struct {
 	Namespace string `json:"namespace,omitempty"`
 }
 
+// uiRejectRequest is the body of POST /api/v1/ui/reject.
+type uiRejectRequest struct {
+	// Bundle is the Bundle to reject.
+	Bundle string `json:"bundle"`
+	// Namespace of the Bundle. Defaults to "default".
+	Namespace string `json:"namespace,omitempty"`
+	// Reason is recorded in spec.rejected and the audit trail. Required.
+	Reason string `json:"reason"`
+}
+
+// uiPipelineOverrideRequest is the body of POST /api/v1/ui/override: the
+// override of a gate template in one environment of a Pipeline, recorded on
+// the instances its in-progress Bundles have (kardinal override).
+type uiPipelineOverrideRequest struct {
+	// Pipeline whose in-progress Bundles' gate instances get the override.
+	Pipeline string `json:"pipeline"`
+	// Namespace of the Pipeline. Defaults to "default".
+	Namespace string `json:"namespace,omitempty"`
+	// Gate is the gate template name (or the name of one gate instance).
+	Gate string `json:"gate"`
+	// Environment is the environment the override applies to. Required.
+	Environment string `json:"environment"`
+	// Reason is recorded on the override and in the audit trail. Required.
+	Reason string `json:"reason"`
+	// ExpiresInMinutes is how long the override lasts, 1 to the cap
+	// (--gate-override-max-minutes). Defaults to 60.
+	ExpiresInMinutes int `json:"expiresInMinutes,omitempty"`
+}
+
+// uiPipelineOverrideResponse is the response of POST /api/v1/ui/override.
+type uiPipelineOverrideResponse struct {
+	// Message describes what was done.
+	Message string `json:"message"`
+	// Gates are the gate instances that got the override.
+	Gates []string `json:"gates"`
+	// ExpiresAt is when the override expires (RFC 3339).
+	ExpiresAt string `json:"expiresAt"`
+}
+
 // uiMessageResponse is the response of an action that creates nothing.
 type uiMessageResponse struct {
 	// Message describes what was done.

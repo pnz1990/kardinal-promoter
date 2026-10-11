@@ -74,12 +74,21 @@ spec:
         apiVersions: ["*"]
         operations: ["CREATE", "UPDATE"]
         resources: ["bundles"]
+  variables:
+    # The controller writes rejections for the UI, which authenticates its
+    # callers itself and records the verified requester (docs/guides/security.md,
+    # UI API Access Control). Other kardinal controllers:
+    # admission.controllerUsernames (exact usernames). The same exception as
+    # the gate-overrides policy.
+    - name: controller
+      expression: >-
+        request.userInfo.username in {{ prepend (.Values.admission.controllerUsernames | default list) $controller | toJson }}
   validations:
     # kardinal reject (spec.rejected) records the rejecting user. A new
     # rejection must name the requester; an existing one is immutable (CRD
     # transition rule), so only its first write is checked.
     - expression: >-
-        !has(object.spec.rejected) ||
+        variables.controller || !has(object.spec.rejected) ||
         (oldObject != null && has(oldObject.spec.rejected)) ||
         object.spec.rejected.by == request.userInfo.username
       messageExpression: >-

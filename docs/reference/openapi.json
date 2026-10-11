@@ -847,6 +847,74 @@
         },
         "type": "object"
       },
+      "PipelineOverrideRequest": {
+        "additionalProperties": false,
+        "description": "uiPipelineOverrideRequest is the body of POST /api/v1/ui/override: the override of a gate template in one environment of a Pipeline, recorded on the instances its in-progress Bundles have (kardinal override).",
+        "properties": {
+          "environment": {
+            "description": "Environment is the environment the override applies to. Required.",
+            "type": "string"
+          },
+          "expiresInMinutes": {
+            "description": "ExpiresInMinutes is how long the override lasts, 1 to the cap (--gate-override-max-minutes). Defaults to 60.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "gate": {
+            "description": "Gate is the gate template name (or the name of one gate instance).",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "Namespace of the Pipeline. Defaults to \"default\".",
+            "type": "string"
+          },
+          "pipeline": {
+            "description": "Pipeline whose in-progress Bundles' gate instances get the override.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Reason is recorded on the override and in the audit trail. Required.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment",
+          "gate",
+          "pipeline",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "PipelineOverrideResponse": {
+        "additionalProperties": false,
+        "description": "uiPipelineOverrideResponse is the response of POST /api/v1/ui/override.",
+        "properties": {
+          "expiresAt": {
+            "description": "ExpiresAt is when the override expires (RFC 3339).",
+            "type": "string"
+          },
+          "gates": {
+            "description": "Gates are the gate instances that got the override.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "message": {
+            "description": "Message describes what was done.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expiresAt",
+          "gates",
+          "message"
+        ],
+        "type": "object"
+      },
       "PolicyGate": {
         "additionalProperties": false,
         "description": "uiGateResponse is the JSON shape for a PolicyGate.",
@@ -1086,6 +1154,29 @@
           "pipeline",
           "state",
           "stepType"
+        ],
+        "type": "object"
+      },
+      "RejectRequest": {
+        "additionalProperties": false,
+        "description": "uiRejectRequest is the body of POST /api/v1/ui/reject.",
+        "properties": {
+          "bundle": {
+            "description": "Bundle is the Bundle to reject.",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "Namespace of the Bundle. Defaults to \"default\".",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Reason is recorded in spec.rejected and the audit trail. Required.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bundle",
+          "reason"
         ],
         "type": "object"
       },
@@ -2189,6 +2280,68 @@
         ]
       }
     },
+    "/api/v1/ui/override": {
+      "post": {
+        "description": "Records the override on the instances of the gate that the Pipeline's in-progress Bundles have in the environment. Needs update on policygates/override for each of them (TokenReview mode), checked before any is written.",
+        "operationId": "overridePipelineGate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PipelineOverrideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineOverrideResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "Override a gate in one environment of a Pipeline for a while (kardinal override --stage)",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
     "/api/v1/ui/pause": {
       "post": {
         "operationId": "pausePipeline",
@@ -2419,6 +2572,68 @@
           {}
         ],
         "summary": "Promote the Bundle Verified upstream into an environment (kardinal promote)",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/reject": {
+      "post": {
+        "description": "Needs update on the virtual subresource bundles/reject in the Bundle's namespace (TokenReview mode). The controller writes spec.rejected with the caller as the rejecting user.",
+        "operationId": "rejectBundle",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "Reject a Bundle: it is never promoted again (kardinal reject)",
         "tags": [
           "UI"
         ]

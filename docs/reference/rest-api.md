@@ -31,6 +31,8 @@ With controller TLS set (`controller.tlsCertFile`), both listeners use `https://
 | `GET` | `/api/v1/ui/gates` | List PolicyGates |
 | `POST` | `/api/v1/ui/gates/{gate}/approve` | Override a PolicyGate for a while |
 | `POST` | `/api/v1/ui/gates/{namespace}/{gate}/approve` | Override a PolicyGate in a namespace for a while |
+| `POST` | `/api/v1/ui/override` | Override a gate in one environment of a Pipeline for a while, on its in-progress Bundles' instances (as `kardinal override --stage`) |
+| `POST` | `/api/v1/ui/reject` | Reject a Bundle: it is never promoted again (as `kardinal reject`) |
 | `POST` | `/api/v1/ui/promote` | Promote the Bundle Verified upstream into an environment |
 | `POST` | `/api/v1/ui/rollback` | Roll an environment back (with `hold`, keep it on the rollback) |
 | `POST` | `/api/v1/ui/release-hold` | Release the hold of a rollback on an environment |
