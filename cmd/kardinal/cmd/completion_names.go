@@ -48,7 +48,8 @@ const (
 // [<env>] one of its environments; <bundle>, <bundle-a>, <bundle-b> and
 // <name> (delete bundle) a Bundle.
 func argKindOf(cmdName, token string) argKind {
-	t := strings.Trim(token, "[]<>")
+	// "<name|version>": the first alternative names the kind.
+	t, _, _ := strings.Cut(strings.Trim(token, "[]<>"), "|")
 	switch {
 	case t == "pipeline", t == "name" && cmdName == "pipelines":
 		return argPipeline

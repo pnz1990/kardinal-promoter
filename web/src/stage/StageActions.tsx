@@ -30,6 +30,9 @@ interface Props {
   onChanged?: () => void
   /** Actions already offered next to their reason: not repeated in the row. */
   inline?: Set<StageActionKind>
+  /** Only this environment's actions (the Table's row): no "Whole pipeline" group, no
+   *  "nothing to do" note. */
+  envOnly?: boolean
 }
 
 /** The button label of each action; the dialog and the result use the same verb. */
@@ -46,12 +49,12 @@ const PIPELINE_ORDER: StageActionKind[] = ['resume', 'pause', 'rejectVersion']
 /** Actions that undo or refuse something here: garnet outline, never the thread's red. */
 export const DESTRUCTIVE = new Set<StageActionKind>(['reject', 'rollback'])
 
-export function StageActions({ view, pipeline, namespace, active, activeGate, onOpen, onChanged, inline }: Props) {
+export function StageActions({ view, pipeline, namespace, active, activeGate, onOpen, onChanged, inline, envOnly }: Props) {
   const [result, setResult] = useState<string>()
   const envKinds = ENV_ORDER.filter(k => view.actions.has(k) && !inline?.has(k))
   const primary = view.primary && envKinds.includes(view.primary) ? view.primary : undefined
   const ordered = primary ? [primary, ...envKinds.filter(k => k !== primary)] : envKinds
-  const pipelineKinds = PIPELINE_ORDER.filter(k => view.actions.has(k))
+  const pipelineKinds = envOnly ? [] : PIPELINE_ORDER.filter(k => view.actions.has(k))
   const prURL = view.step?.prURL
   const button = (k: StageActionKind, style: 'primary' | 'secondary' | 'destructive' | 'quiet') => k === 'openPR' && prURL
     ? <a key={k} data-action={k} className={`stage-button stage-button--${style}`} href={prURL} target="_blank" rel="noreferrer">
@@ -65,7 +68,7 @@ export function StageActions({ view, pipeline, namespace, active, activeGate, on
     <>
       {ordered.length > 0
         ? <div className="stage-actions">{ordered.map(k => button(k, k === primary ? 'primary' : DESTRUCTIVE.has(k) ? 'destructive' : 'secondary'))}</div>
-        : <p className="stage-muted">{inline && inline.size > 0
+        : envOnly ? null : <p className="stage-muted">{inline && inline.size > 0
             ? 'Use the button next to each reason above.'
             : `Nothing to do in ${view.env} right now.`}</p>}
       {pipelineKinds.length > 0 && (

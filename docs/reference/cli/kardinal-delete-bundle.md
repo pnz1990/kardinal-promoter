@@ -19,7 +19,7 @@ spec.historyLimit (default 50) are deleted automatically, oldest first;
 use this command to remove a Bundle before that.
 
 ```
-kardinal delete bundle <name> [flags]
+kardinal delete bundle <name|version> [flags]
 ```
 
 ### Examples
@@ -31,8 +31,9 @@ kardinal delete bundle <name> [flags]
 ### Options
 
 ```
-  -h, --help   help for bundle
-      --yes    Do not ask for confirmation on a terminal
+  -h, --help              help for bundle
+      --pipeline string   Look for a version given as <name> in this pipeline only
+      --yes               Do not ask for confirmation on a terminal
 ```
 
 ### Options inherited from parent commands
