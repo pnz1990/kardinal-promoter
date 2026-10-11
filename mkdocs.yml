@@ -145,7 +145,10 @@ nav:
       - Sharding controllers: sharding.md
     - Upgrade: upgrade.md
     - Migrate from Kargo: guides/migrating-from-kargo.md
-    - Troubleshoot: troubleshooting.md
+    - Troubleshoot:
+      - Troubleshoot: troubleshooting.md
+      - Promotion stuck or failed: troubleshoot-promotions.md
+      - Git and SCM problems: troubleshoot-git.md
   - Concepts:
     - Concepts: concepts.md
     - Architecture: architecture.md

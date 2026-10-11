@@ -313,7 +313,7 @@ while read -r ns name i pr; do
 done
 ```
 
-See also [Troubleshooting: deletion hangs](troubleshooting.md#a-promotionstep-graph-or-namespace-never-finishes-deleting).
+See also [Troubleshooting: deletion hangs](troubleshoot-promotions.md#a-promotionstep-graph-or-namespace-never-finishes-deleting).
 Then remove the CRDs and kro if you want:
 
 ```bash

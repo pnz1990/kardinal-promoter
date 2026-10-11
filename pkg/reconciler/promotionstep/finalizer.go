@@ -144,7 +144,7 @@ func prFinalizerSyncFailed(log zerolog.Logger, err error) (ctrl.Result, error) {
 // reconciler recreates the Graph and the new step reuses the PR. Closing it
 // there made the new step open a second PR. If no new step comes (the Bundle
 // is deleted or stops promoting first), nothing closes that PR:
-// docs/troubleshooting.md says how to find it. A failed read in stepComeback
+// docs/troubleshoot-promotions.md says how to find it. A failed read in stepComeback
 // is retried like a failed close. Past closePRDeadline the finalizer is
 // removed and the PR is left open and uncommented, with an error log and a
 // PRLeftOpen Warning Event: leaking an open PR is safer than closing one a
@@ -194,7 +194,7 @@ func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, cach
 	case err != nil:
 		// Past the deadline the step may still come back and reuse the PR, and
 		// closing it would close the new step's PR under it. An open PR nothing
-		// tracks can be found and closed by hand (docs/troubleshooting.md).
+		// tracks can be found and closed by hand (docs/troubleshoot-promotions.md).
 		note := fmt.Sprintf("env %s: could not tell within %s whether the deleted step comes back (%v); "+
 			"left its PR open: close it by hand if no new PromotionStep uses it", ps.Spec.Environment, closePRDeadline, err)
 		log.Error().Err(err).Str("env", ps.Spec.Environment).Str("prURL", ps.Status.PRURL).
@@ -370,7 +370,7 @@ func (r *Reconciler) stepComeback(ctx context.Context, ps *v1alpha1.PromotionSte
 //
 // It is a prediction: a gate or a pause that changes in the second before kro
 // applies the step again can still make the new step wait with the kept
-// branch. docs/troubleshooting.md says how to find such a branch.
+// branch. docs/troubleshoot-promotions.md says how to find such a branch.
 func newStepPushesAtOnce(ctx context.Context, reader client.Reader, ps *v1alpha1.PromotionStep,
 	b *v1alpha1.Bundle, pl *v1alpha1.Pipeline, g *unstructured.Unstructured) (bool, error) {
 	if unsupportedConfig(pl, findEnv(pl, ps.Spec.Environment), ps) != "" {
