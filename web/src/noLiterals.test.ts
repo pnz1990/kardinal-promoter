@@ -27,7 +27,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { container } from './tokens'
+import { breakpoint, container } from './tokens'
 import allow from './noLiterals.allow.json'
 
 const SRC = path.dirname(new URL(import.meta.url).pathname)
@@ -148,8 +148,18 @@ describe('hard-coded colours and lengths (ratchet)', () => {
 
   const REPO = path.resolve(SRC, '../..')
   const docsCSS = fs.readdirSync(path.join(REPO, 'docs/stylesheets')).filter((f) => f.endsWith('.css') && f !== 'tokens.css')
+  // The docs also may not use em: an em length is allowed only in an @media
+  // prelude, and only at a breakpoint token (breakpoint.* px / 16).
+  const breakpointEm = new Set(Object.values(breakpoint).map((px) => `${px / 16}em`))
+  const EM = /(?<![\w.#-])-?(?:\d*\.)?\d+em\b/g
   it.each(docsCSS)('docs/stylesheets/%s has no literal', (f) => {
-    expect(countLiterals(f, fs.readFileSync(path.join(REPO, 'docs/stylesheets', f), 'utf8'))).toBe(0)
+    const css = fs.readFileSync(path.join(REPO, 'docs/stylesheets', f), 'utf8')
+    expect(countLiterals(f, css)).toBe(0)
+    const s = css.replace(/\/\*[\s\S]*?\*\//g, ' ')
+    const inMedia = [...s.matchAll(/@media[^{]*\{/g)].flatMap((m) => m[0].match(EM) ?? [])
+    expect(inMedia.filter((e) => !breakpointEm.has(e)), 'an @media em that is not a breakpoint token').toEqual([])
+    const outside = s.replace(/@media[^{]*\{/g, '').match(EM) ?? []
+    expect(outside.filter((e) => Number.parseFloat(e) !== 0), 'an em length outside @media').toEqual([])
   })
 
   const templates = fs.readdirSync(path.join(REPO, 'overrides')).filter((f) => f.endsWith('.html'))

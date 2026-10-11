@@ -317,7 +317,7 @@ helm uninstall kargo -n kargo
 
 ## Common differences to be aware of
 
-**version supersession:** When a new version of the same type is created while an older one is still Promoting, kardinal supersedes the older version (marks it `Superseded`). Kargo allows several Freight in flight at once. kardinal has no setting to turn supersession off; `spec.maxConcurrentPromotions` only caps how many versions promote at the same time.
+**Version supersession:** When a new version of the same type is created while an older one is still Promoting, kardinal supersedes the older version (marks it `Superseded`). Kargo allows several Freight in flight at once. kardinal has no setting to turn supersession off; `spec.maxConcurrentPromotions` only caps how many versions promote at the same time.
 
 **Namespace model:** Kargo Projects map to Kubernetes Namespaces in both systems. In kardinal, the Pipeline, its versions and the Subscriptions that feed it live in the same namespace: a Subscription creates versions only in its own namespace, for a Pipeline there (a different `spec.namespace` sets the Subscription to phase `Error`).
 

@@ -248,7 +248,7 @@ How a fleet is promoted:
   the target order (its list position, or its name for a selector), not the end of the queue:
   it can start before targets that were already waiting. A removed target's PromotionStep is deleted: an open PR is closed and its
   branch deleted, and a Verified target's change stays in git. Its step's record (state,
-  message, PR) is kept in the version's `status.retiredSteps`. Targets already Verified are not
+  message, PR) is kept in the Bundle's `status.retiredSteps`. Targets already Verified are not
   promoted again.
 - **Rollback.** `kardinal rollback <pipeline> --env <fleet>-<target>` rolls one target back.
   Its rollback version does not supersede the fleet's version, which goes on promoting the other

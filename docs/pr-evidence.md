@@ -97,7 +97,7 @@ version without it shows the client-written `kardinal.io/requested-by` instead, 
 
 ### Artifact Provenance
 
-One row per image in the version's `spec.images`:
+One row per image in the Bundle's `spec.images`:
 - **Image** and **Tag**: the image repository and tag
 - **Digest**: the image digest, when the version has one
 - **CI Run**: a link to the CI run that built the image; `—` when `spec.provenance.ciRunURL` is
@@ -107,7 +107,7 @@ One row per image in the version's `spec.images`:
 - **Author**: who or what triggered the build (human, dependabot, etc.). On a rollback it is
   the author of the restored build; who rolled back is on the "Rolled back by" line
 
-The CI run, commit and author come from the version's `spec.provenance` field, which is set when the version is created by CI.
+The CI run, commit and author come from the Bundle's `spec.provenance` field, which CI sets when it creates the version.
 `kardinal create bundle` sets them only from `--commit`, `--author` and `--ci-run-url`.
 
 "Created by", under the table, is the version's verified creator: the `kardinal.io/created-by`
@@ -132,7 +132,7 @@ left out. `_(none)_` means the environment has no gates. It also shows when no g
 
 ### Upstream Verification
 
-Lists every other environment recorded in the version's `status.environments`:
+Lists every other environment recorded in the Bundle's `status.environments`:
 - **Environment**: the environment name
 - **Health Checked At**: when the version passed its health check there
 - **Elapsed**: the time since that health check, when the PR was opened
