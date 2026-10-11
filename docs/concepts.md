@@ -5,6 +5,7 @@ and **gates** decide when the version may enter the next environment. Those four
 all you need to start; the [glossary](reference/glossary.md) maps every other term to them.
 
 ```mermaid
+%%{init: {'flowchart': {'curve': 'linear'}}}%%
 flowchart LR
     CI["Your CI"] -->|creates| V["Version"]
     V --> test["test<br/>commit, health check"]
@@ -128,7 +129,7 @@ target, create a new version (or use `kardinal promote`, which creates one).
 | Verified | Verified in every environment it targets |
 | Failed | A promotion or health check failed, or the Pipeline, the version or a gate is invalid: the version's `InvalidSpec` condition then gives the reason. It promotes again when the failed promotion is retried or the invalid object is fixed ([details](architecture.md#when-a-failed-bundle-promotes-again)) |
 | Superseded | A newer version of the same type replaced it before it finished |
-| Rejected | Rejected with `kardinal reject`: never promoted again, and rollback never picks it. See [Reject a version](rollback.md#reject-a-bundle) |
+| Rejected | Rejected with `kardinal reject`: never promoted again, and rollback never picks it. See [Reject a version](reject.md) |
 
 ## Pipeline and environments
 
@@ -202,7 +203,7 @@ An environment's `approval` decides how a version's change lands in Git:
 
 `approval: auto` does not mean "nobody approves". To require named people to approve a version
 before an environment, with a quorum and no self-approval, add an
-[approval gate](policy-gates.md#approval-gates): it works with either mode.
+[approval gate](approvals.md): it works with either mode.
 
 ### Health checks
 
@@ -275,16 +276,16 @@ Referencing an attribute that does not exist blocks the gate. See the
 kardinal explain my-app --env prod
 
 # Output:
-# ENVIRONMENT   BUNDLE         TYPE         NAME                 STATE   EXPRESSION                         REASON
-# prod          my-app-9tptr   PolicyGate   staging-soak         Block   bundle.upstreamSoakMinutes >= 30   bundle.version=1.29.0: bundle.upstreamSoakMinutes >= 30 = false
-# prod          my-app-9tptr   PolicyGate   no-weekend-deploys   Pass    !schedule.isWeekend                bundle.version=1.29.0: !schedule.isWeekend = true
+# ENVIRONMENT   BUNDLE         TYPE         NAME                 STATE      EXPRESSION                         REASON
+# prod          my-app-9tptr   PolicyGate   staging-soak         Blocking   bundle.upstreamSoakMinutes >= 30   bundle.version=1.29.0: bundle.upstreamSoakMinutes >= 30 = false
+# prod          my-app-9tptr   PolicyGate   no-weekend-deploys   Passing    !schedule.isWeekend                bundle.version=1.29.0: !schedule.isWeekend = true
 #
 # prod   deployed: my-app-7qvsr (1.28.0)
 ```
 
-Gates that are not ready come first. STATE is Pass, Block (holding the
-version), Superseded, Rejected, Pending or Waiting; REASON is the controller's latest
-evaluation. See [Inspecting PolicyGates](policy-gates.md#inspecting-policygates).
+Gates that are not ready come first. STATE is Passing, Blocking (holding the version),
+Replaced by newer version, Version rejected, Not evaluated yet or Not ready; REASON is the
+controller's latest evaluation. See [Inspecting gates](policy-gates.md#inspecting-gates).
 
 ### Skip permissions
 
@@ -312,8 +313,14 @@ When the skip is allowed, the permission's expression is evaluated in front of t
 For each version, kardinal translates the Pipeline into a [kro Graph](https://kro.run/next/docs/concepts/graph/overview/):
 one node per gate and per promotion step, in dependency order. kro's Graph controller creates
 them, and kardinal's controllers run the steps and evaluate the gates. You never write a Graph;
-the Pipeline is the interface. [Architecture](architecture.md) has the details, including
-supersession and when a finished version's Graph is retired.
+the Pipeline is the interface. kardinal uses kro because its Graph controller already creates
+objects in dependency order and waits for them to be ready, so kardinal does not reimplement DAG
+orchestration.
+
+There is no database and no extra service: all state is in Kubernetes objects, the UI is served
+by the controller, and the controller can restart at any time without losing a promotion.
+[Architecture](architecture.md) has the details, including supersession and when a finished
+version's Graph is retired.
 
 ## Where next
 

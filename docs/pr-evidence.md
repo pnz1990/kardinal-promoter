@@ -15,12 +15,12 @@ For rollbacks:
 [kardinal] Rollback <environment> to <bundle> (restores <version>)
 ```
 
-`<bundle>` is the Bundle name, for example `my-app-x7k2p` (`kardinal create bundle` names
-Bundles `<pipeline>-<random suffix>`). On a rollback it is the rollback Bundle. `<version>`
+`<bundle>` is the version name, for example `my-app-x7k2p` (`kardinal create bundle` names
+versions `<pipeline>-<random suffix>`). On a rollback it is the rollback version. `<version>`
 is what the rollback deploys: the image tag (or short digest), `<image>:<tag>` for each of
-several images (three at most, then "and N more"), `config <commit>` for a config Bundle, or
-both for a mixed Bundle (`1.28.0 with config 0123abc`). `<commit>` is the short (7-character)
-config commit. When the Bundle has no images or config commit, it is the name of the rollback's
+several images (three at most, then "and N more"), `config <commit>` for a config version, or
+both for a mixed version (`1.28.0 with config 0123abc`). `<commit>` is the short (7-character)
+config commit. When the version has no images or config commit, it is the name of the rollback's
 target (`spec.provenance.rollbackOf`).
 
 ### Labels
@@ -29,7 +29,7 @@ target (`spec.provenance.rollbackOf`).
 |---|---|---|
 | `kardinal` | Always | Identifies the PR as managed by kardinal-promoter |
 | `kardinal/promotion` | Always, rollbacks included | Promotion PR |
-| `kardinal/rollback` | On rollbacks | Added next to `kardinal/promotion` when the Bundle is a rollback (`spec.provenance.rollbackOf` is set) |
+| `kardinal/rollback` | On rollbacks | Added next to `kardinal/promotion` when the version is a rollback (`spec.provenance.rollbackOf` is set) |
 
 If adding the labels fails, the PR stays open without them: while the step waits for the merge, its message ends with `; adding labels failed: <error>`, and `status.outputs.prLabelsError` keeps the error. On Azure DevOps the labels are PR tags. Bitbucket Cloud and Bitbucket Data Center have no PR labels, so their PRs get none; find rollback PRs there by their `[kardinal] Rollback` title.
 
@@ -76,21 +76,21 @@ A rollback PR starts with `## ROLLBACK: <bundle> -> <pipeline>/<environment>` an
 ```
 
 The "This is a rollback PR." line of the note says what the rollback restores, by the rollback
-Bundle's type: the images of the target for an image Bundle, its config commit for a config
-Bundle, and for a mixed Bundle "It reverts environment prod to the state of bundle <target>".
-An image or config rollback can target a mixed Bundle and leave its other half as deployed (see
+version's type: the images of the target for an image version, its config commit for a config
+version, and for a mixed version "It reverts environment prod to the state of bundle <target>".
+An image or config rollback can target a mixed version and leave its other half as deployed (see
 [Rollback](rollback.md#images-the-target-does-not-name)).
 
 FROM is the Bundle the rollback replaces (the `kardinal.io/rollback-from` annotation) and the
 version it deploys; the version is left out when that Bundle was deleted, and the line says
 "the bundle deployed in prod now" when the annotation is not set. TO is the rollback's target
 (`spec.provenance.rollbackOf`) and the version the rollback deploys.
-"Rolled back by" is the rollback Bundle's verified creator, the `kardinal.io/created-by`
+"Rolled back by" is the rollback version's verified creator, the `kardinal.io/created-by`
 annotation that the `<release>-bundle-creator` admission policy pins: your Kubernetes user name
 for `kardinal rollback`, the UI user with TokenReview auth (`kardinal-ui` otherwise, see
 [who asked](guides/security.md#fields-on-every-event)), or `kardinal-controller` for an automatic
 rollback. A rollback
-Bundle without it shows the client-written `kardinal.io/requested-by` instead, marked
+version without it shows the client-written `kardinal.io/requested-by` instead, marked
 "(unverified)". The line is left out when neither is set.
 
 ## Sections Explained
@@ -99,7 +99,7 @@ Bundle without it shows the client-written `kardinal.io/requested-by` instead, m
 
 One row per image in the Bundle's `spec.images`:
 - **Image** and **Tag**: the image repository and tag
-- **Digest**: the image digest, when the Bundle has one
+- **Digest**: the image digest, when the version has one
 - **CI Run**: a link to the CI run that built the image; `—` when `spec.provenance.ciRunURL` is
   empty, is not an absolute `http://` or `https://` URL, or contains user info
   (`https://user@host/...`), spaces or control characters (see [Provenance](ci-integration.md#provenance))
@@ -107,24 +107,24 @@ One row per image in the Bundle's `spec.images`:
 - **Author**: who or what triggered the build (human, dependabot, etc.). On a rollback it is
   the author of the restored build; who rolled back is on the "Rolled back by" line
 
-The CI run, commit and author come from the Bundle's `spec.provenance` field, which is set when the Bundle is created by CI.
+The CI run, commit and author come from the Bundle's `spec.provenance` field, which CI sets when it creates the version.
 `kardinal create bundle` sets them only from `--commit`, `--author` and `--ci-run-url`.
 
-"Created by", under the table, is the Bundle's verified creator: the `kardinal.io/created-by`
+"Created by", under the table, is the version's verified creator: the `kardinal.io/created-by`
 annotation, which the chart's `<release>-bundle-creator` admission policy admits only in the
 requesting user's name. `kardinal create bundle` and `kardinal promote` record your Kubernetes
 user name; the UI, the Bundle API and Subscriptions record theirs (see
-[Approval gates](policy-gates.md#approval-gates)). A Bundle without it, for example one created
+[Approval gates](approvals.md)). A version without it, for example one created
 with `kubectl`, shows the client-written `kardinal.io/requested-by` instead, as
 "Requested by: <name> (unverified)": nothing checks that name. With neither, the line is left
 out. A rollback PR names its actor on the "Rolled back by" line instead.
 
-A Bundle with no images, such as a `config` Bundle, gets one row of `—`. The body then shows
+A version with no images, such as a `config` version, gets one row of `—`. The body then shows
 neither its provenance nor its config commit.
 
 ### Policy Gate Compliance
 
-Lists the PolicyGates the PromotionStep requires (`spec.requiredGates`). For each gate it shows
+Lists the gates the PromotionStep requires (`spec.requiredGates`). For each gate it shows
 the gate name, the namespace of the gate's template (for an org gate, its policy namespace such
 as `platform-policies`, not the Pipeline namespace its instance lives in), the result (`Pass` or `Fail`), the
 controller's latest reason, and when the gate was last evaluated. A gate that cannot be read is
@@ -134,7 +134,7 @@ left out. `_(none)_` means the environment has no gates. It also shows when no g
 
 Lists every other environment recorded in the Bundle's `status.environments`:
 - **Environment**: the environment name
-- **Health Checked At**: when the Bundle passed its health check there
+- **Health Checked At**: when the version passed its health check there
 - **Elapsed**: the time since that health check, when the PR was opened
 
 ## PR Body Updates
@@ -180,7 +180,7 @@ environments:
 | `labels` | Added to `kardinal`, `kardinal/promotion` and `kardinal/rollback`. At most 50 characters each, without commas. |
 | `reviewers` | Users asked to review the PR. |
 | `teamReviewers` | Teams asked to review the PR (team slugs). |
-| `assignees` | Users the PR is assigned to. `"{{ .Bundle.Author }}"` assigns whoever `spec.provenance.author` names, such as the CI actor (`kardinal create bundle --author`); a Bundle without an author adds no one. |
+| `assignees` | Users the PR is assigned to. `"{{ .Bundle.Author }}"` assigns whoever `spec.provenance.author` names, such as the CI actor (`kardinal create bundle --author`); a version without an author adds no one. |
 | `merge.auto` | Once the PR is open, kardinal enables the SCM's auto-merge: the SCM merges the PR once the repository's required checks, reviews or pipeline pass. Branch protection still applies. kardinal turns auto-merge **off** while the Pipeline is paused or a required gate of the environment is closed (a freeze, a soak), and on again when they clear. A PR with nothing pending (no required check, review or pipeline) is not merged: auto-merge is not turned on, and the PR waits for a merge by hand, unless `merge.allowImmediate` is set. kardinal sees the merge as it sees one made by hand. |
 | `merge.allowImmediate` | `true`: when nothing is pending on the PR, kardinal merges it at once. This skips human review and any CI the repository does not require; use it only for environments where the gates are the review. Needs `merge.auto: true`. Default `false`. |
 | `merge.method` | `merge` (a merge commit, the default), `squash` or `rebase`. Needs `merge.auto: true`. |
@@ -200,16 +200,16 @@ Every template is a Go [text/template](https://pkg.go.dev/text/template) with th
 |---|---|
 | `.Pipeline` | Pipeline name |
 | `.Environment` | Environment name |
-| `.Bundle.Name`, `.Bundle.Type` | Bundle name and type (`image`, `config`, `mixed`) |
-| `.Bundle.Version` | What the Bundle deploys: the tag of a one-image Bundle, `<image>:<tag>` for each of several images, `config <commit>` for a config Bundle (as in the rollback title) |
+| `.Bundle.Name`, `.Bundle.Type` | Version name and type (`image`, `config`, `mixed`) |
+| `.Bundle.Version` | What the version deploys: the tag of a one-image version, `<image>:<tag>` for each of several images, `config <commit>` for a config version (as in the rollback title) |
 | `.Bundle.Images` | The images: `.Repository`, `.Tag`, `.Digest`. Read one with `index`: `{{ (index .Bundle.Images 0).Tag }}`; list them with `imageList` |
-| `.Bundle.ConfigCommitSHA` | The config commit of a config or mixed Bundle |
-| `.Bundle.Author`, `.Bundle.CommitSHA`, `.Bundle.CIRunURL` | `spec.provenance`; empty when the Bundle has none |
+| `.Bundle.ConfigCommitSHA` | The config commit of a config or mixed version |
+| `.Bundle.Author`, `.Bundle.CommitSHA`, `.Bundle.CIRunURL` | `spec.provenance`; empty when the version has none |
 | `.IsRollback` | `true` for a rollback PR |
-| `.Rollback.Of`, `.Rollback.From`, `.Rollback.By`, `.Rollback.Restores` | The rollback's target, the Bundle it replaces, who asked for it and the version it restores; empty for a promotion |
+| `.Rollback.Of`, `.Rollback.From`, `.Rollback.By`, `.Rollback.Restores` | The rollback's target, the version it replaces, who asked for it and the version it restores; empty for a promotion |
 | `.PR.Number`, `.PR.URL`, `.PR.Title` | The opened PR: only in `merge.commitMessageTemplate` |
 
-Every field is a plain value, so a Bundle without provenance renders empty strings, not an error.
+Every field is a plain value, so a version without provenance renders empty strings, not an error.
 
 ### Template functions
 
@@ -231,7 +231,7 @@ Every field is a plain value, so a Bundle without provenance renders empty strin
 The templates run in the controller, so the language is restricted and has no loops: `range`,
 variables (`{{ $x := ... }}`, `{{ $x = ... }}`), `define`, `block`, `template`, `printf` and
 `call` are refused. Without loops, a render runs each part of the template at most once, so its
-work is bounded by the template's length, not by the Bundle. The lists a body shows (images,
+work is bounded by the template's length, not by the version. The lists a body shows (images,
 gates, upstream environments) come from `imageList` and the evidence functions. `$` and `.`
 work as usual. `print`, `println`, `html`, `js` and `urlquery` take strings, numbers and bools
 only: a struct, map, list or pointer argument, such as `.`, is refused before it is formatted.
@@ -240,7 +240,7 @@ included, is counted, and its result size (for a comparison, what it reads) is c
 its arguments before it runs: one call builds at most 64 KiB and a whole render at most 1 MiB,
 in at most 2000 calls and 500 ms, after which every call and write fails at once. A body
 renders at most 64 KiB, a title or list entry 4 KiB and a commit message 16 KiB. The data is
-bounded too: a Bundle holds at most 100 images, a template sees at most 20 of them, and each value is at most 1024 characters, image fields included. A
+bounded too: a version holds at most 100 images, a template sees at most 20 of them, and each value is at most 1024 characters, image fields included. A
 template that breaks a rule is refused like one that does not parse. A list template refuses a
 value with a line break (an author `alice\nbob` would make two entries).
 
@@ -291,23 +291,23 @@ The `argocd` and `flux` health checks compare the environment against the PR's m
 The GitHub, GitLab, Forgejo and Gitea webhooks record it together with the merge. In every other
 case (Bitbucket, Azure DevOps, no webhook, or a GitLab fast-forward merge, which reports none) the PRStatus
 reconciler asks the SCM API for it after the merge. Until it has the commit, both checks wait.
-If the PRStatus records that it will not get the commit, `argocd` checks the Bundle images
+If the PRStatus records that it will not get the commit, `argocd` checks the version images
 instead, and `flux` waits until `health.timeout`; see
 [When the merge commit is not known yet](health-adapters.md#when-the-merge-commit-is-not-known-yet).
 
 ## Gate status check (`kardinal/gates`)
 
-While a PR waits for its merge, kardinal keeps the results of the environment's PolicyGates on the PR as a commit status named `kardinal/gates` on **the commit kardinal pushed to the PR branch** (a build status on Bitbucket Cloud, a pull request iteration status with genre `kardinal` and name `gates` on Azure DevOps):
+While a PR waits for its merge, kardinal keeps the results of the environment's gates on the PR as a commit status named `kardinal/gates` on **the commit kardinal pushed to the PR branch** (a build status on Bitbucket Cloud, a pull request iteration status with genre `kardinal` and name `gates` on Azure DevOps):
 
 | State | When |
 |---|---|
 | `success` | every gate of the environment passes (`all 2 gates pass`), or the environment has none (`no kardinal gates on prod`) |
 | `failure` | a gate blocks: the description names it and its reason, for example `app-v1-freeze-prod: prod is frozen: release freeze` |
-| `error` (GitLab and Bitbucket show `failed`) | the gate results are unknown: the step's Graph does not mirror them. Re-promote (or let the next Bundle supersede it) to get the status |
+| `error` (GitLab and Bitbucket show `failed`) | the gate results are unknown: the step's Graph does not mirror them. Re-promote (or let the next version supersede it) to get the status |
 
 The gates are re-checked the whole time the PR waits, not only before the step started: a change window that starts while the PR is open, a soak or metric gate that turns false, or an approval that is revoked flips the status to `failure` within a gate recheck, and back to `success` when the gate passes again. The step itself keeps waiting; it does not fail or close the PR.
 
-**kardinal cannot stop a person from merging.** The status blocks the merge only when the repository requires it: make `kardinal/gates` a required status check of the environment branch (GitHub and Forgejo/Gitea branch protection, a GitLab "Pipelines must succeed"/external status check rule, a Bitbucket merge check on builds, an Azure DevOps status policy on genre `kardinal`, name `gates`, with "reset status whenever there are new changes"). Without that, a PR can be merged while a gate blocks. kardinal then treats the change as live: the step goes on to its health check, records the blocking gate in `status.outputs.mergedWhileBlocked` and emits a Warning Event `MergedWhileBlocked` (Events are best effort; the status output is the durable record: [Kubernetes Events](installation.md#kubernetes-events)). Failing the step would not revert the change; roll back if it should not have shipped.
+**kardinal cannot stop a person from merging.** The status blocks the merge only when the repository requires it: make `kardinal/gates` a required status check of the environment branch (GitHub and Forgejo/Gitea branch protection, a GitLab "Pipelines must succeed"/external status check rule, a Bitbucket merge check on builds, an Azure DevOps status policy on genre `kardinal`, name `gates`, with "reset status whenever there are new changes"). Without that, a PR can be merged while a gate blocks. kardinal then treats the change as live: the step goes on to its health check, records the blocking gate in `status.outputs.mergedWhileBlocked` and emits a Warning Event `MergedWhileBlocked` (Events are best effort; the status output is the durable record: [Kubernetes Events](operate.md#kubernetes-events)). Failing the step would not revert the change; roll back if it should not have shipped.
 
 **Only kardinal's commit gets the status.** The git-push step records the commit it pushed (`status.outputs.pushedSHA`), the step keeps it as `status.outputs.prHeadSHA` when it opens the PR, and the status is set there, never on whatever the PR head is now. A commit someone else pushes to the PR branch has no `kardinal/gates` status, so a required check holds that head until kardinal pushes again; kardinal never marks a head it did not push `success`. When kardinal pushes the PR branch again (a re-run after a restart, or a rebuild of the PR branch on a moved base branch, which updates `pushedSHA`), the status follows to the new commit. A PR opened by a release before this one has no recorded commit and gets no status; so does a step whose git client could not report the pushed commit, with a Warning Event `GatesStatusNoCommit`.
 
@@ -330,7 +330,7 @@ review.
 
 PR branches follow the pattern: `kardinal/<namespace hash>/<bundle>/<environment>`
 
-Example: `kardinal/3f9c2a1b/my-app-x7k2p/prod`. The namespace hash (the first 8 hex digits of the SHA-256 of the Bundle's namespace) keeps two namespaces with the same Bundle and environment names from sharing a branch.
+Example: `kardinal/3f9c2a1b/my-app-x7k2p/prod`. The namespace hash (the first 8 hex digits of the SHA-256 of the version's namespace) keeps two namespaces with the same version and environment names from sharing a branch.
 
 When kardinal closes a PR without a merge, it deletes this branch. It also deletes the branch
 of a step that ended before it opened a PR. A merged PR keeps its branch.

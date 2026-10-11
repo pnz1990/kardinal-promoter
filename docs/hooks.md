@@ -1,6 +1,6 @@
 # Pre- and Post-Deploy Hooks
 
-A hook is a Kubernetes Job that kardinal runs once per Bundle in an environment:
+A hook is a Kubernetes Job that kardinal runs once per version in an environment:
 
 - a **pre** hook runs before the environment's promotion starts, for example a database
   migration. The promotion starts only after every pre hook succeeded;
@@ -54,7 +54,7 @@ spec:
 |---|---|---|---|
 | `name` | Yes | | DNS label, at most 40 characters, unique within the environment. The HookRun and its Job are named `<pipeline>-<bundle>-<environment>-<phase>-<name>-<hash>`, the readable part cut to fit 63 characters. |
 | `phase` | Yes | | `pre` or `post`. |
-| `job` | Yes | | A `batch/v1` [JobSpec](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/job-v1/#JobSpec). The CRD keeps the field untyped; the controller rejects a job that is not a valid JobSpec (unknown fields included) or has no containers when it builds the Bundle's Graph, and the Bundle fails with `TranslationError`. Defaults: `backoffLimit` **0** (a failed migration is not retried; set it to retry), `template.spec.restartPolicy` `Never`, `activeDeadlineSeconds` the timeout. `ttlSecondsAfterFinished` is dropped: the HookRun owns the Job's cleanup, and a Job deleted as it finishes would read as deleted before it finished. `selector` and `manualSelector` are refused, and so are privileged Pods ([Security](#security-which-serviceaccount-a-hook-runs-as)). |
+| `job` | Yes | | A `batch/v1` [JobSpec](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/job-v1/#JobSpec). The CRD keeps the field untyped; the controller rejects a job that is not a valid JobSpec (unknown fields included) or has no containers when it builds the Bundle's Graph, and the version fails with `TranslationError`. Defaults: `backoffLimit` **0** (a failed migration is not retried; set it to retry), `template.spec.restartPolicy` `Never`, `activeDeadlineSeconds` the timeout. `ttlSecondsAfterFinished` is dropped: the HookRun owns the Job's cleanup, and a Job deleted as it finishes would read as deleted before it finished. `selector` and `manualSelector` are refused, and so are privileged Pods ([Security](#security-which-serviceaccount-a-hook-runs-as)). |
 | `timeout` | No | `30m` | Go duration from the moment the hook starts. A hook still running then fails and its Job is deleted, with its Pods. |
 
 Strings in the job are passed to the Pod as written: `${HOME}` in a command is expanded by
@@ -64,7 +64,7 @@ the shell in the container, not by kardinal or kro.
 
 1. The Bundle's Graph creates a `HookRun` (`kubectl get hookruns`) for each hook. A pre
    hook's HookRun is created when the environment could start: its upstream environments are
-   Verified, its PolicyGates are ready and the Bundle is not Superseded. A post hook's HookRun
+   Verified, its gates are ready and the version is not Superseded. A post hook's HookRun
    is created when the step enters `Verifying`. Hooks of one phase run one after another, in
    the order they are listed: each waits for the one before it to succeed.
 2. The HookRun controller creates the Job, named after the HookRun, in the Pipeline's
@@ -75,7 +75,7 @@ the shell in the container, not by kardinal or kro.
     - while a pre hook runs, the step stays `Pending` with the message
       `waiting for pre-deploy hook <name> (HookRun <run>): Running`. Nothing is committed or
       deployed. A failed pre hook fails the step (`pre-deploy hook <name> (HookRun <run>)
-      failed: ...`) and the Bundle;
+      failed: ...`) and the version;
     - after the health check (and any `bake` window) passed, a step with post hooks is
       `Verifying` until they finish (and any [analyses](analysis.md)). All succeeded: `Verified`. One failed: the environment's
       `onHealthFailure` applies, as for a failed health check (`none` fails the step, `abort`
@@ -91,12 +91,12 @@ Pending ──pre hooks succeeded──▶ Promoting ─▶ (WaitingForMerge) �
 
 ## Guarantees
 
-- **A hook runs once per Bundle and environment.** A finished HookRun never creates its Job
+- **A hook runs once per version and environment.** A finished HookRun never creates its Job
   again, and the API server refuses to change a finished HookRun's phase: deleting the Job (by
   hand, a cleanup tool) after it finished changes nothing. A Job deleted, or replaced by another
   Job of that name, while it runs fails the HookRun; the hook is not started a second time. A Job
   of the HookRun's name that kardinal did not create fails it with a message naming the Job.
-  Re-run a hook by promoting a new Bundle.
+  Re-run a hook by promoting a new version.
 - **A deleted HookRun does not run its hook again.** Only kardinal, kro, the garbage collector
   and the namespace controller may delete a HookRun (the chart's `graph-objects` policy refuses
   everyone else, see [Admission Validation](guides/security.md#admission-validation)). One deleted while its Job runs
@@ -107,31 +107,31 @@ Pending ──pre hooks succeeded──▶ Promoting ─▶ (WaitingForMerge) �
   is `Failed` ("result unknown"), never run a second time. An edited hook (a new spec hash) runs.
 - **Pipeline edits do not change a running hook.** An edit to a hook while it runs reaches
   the HookRun's spec, but the running Job keeps the spec it started with; the HookRun gets the
-  condition `SpecChangedAfterStart`. The next Bundle runs the edited hook.
+  condition `SpecChangedAfterStart`. The next version runs the edited hook.
 - **A hook is not cut off, and does not overlap itself.** A HookRun deleted while its Job runs
-  (its Bundle deleted, or the hook renamed or removed from the Pipeline) is held by the finalizer
+  (its version deleted, or the hook renamed or removed from the Pipeline) is held by the finalizer
   `kardinal.io/hookrun-job` until the Job ends or its timeout passes. A renamed hook's new HookRun
   waits for the old one's Job before it starts, so a migration does not run twice at once.
 - **A hook added too late is skipped.** A pre hook added to the Pipeline after the environment's
-  step started, or a post hook added after it finished, does not run for that Bundle: its HookRun
-  is `Skipped`, and the step gets the condition `HooksSkipped` naming it. The next Bundle runs it.
-- **Nothing is left running.** Deleting the Bundle deletes its Graph, its HookRuns (once their
+  step started, or a post hook added after it finished, does not run for that version: its HookRun
+  is `Skipped`, and the step gets the condition `HooksSkipped` naming it. The next version runs it.
+- **Nothing is left running.** Deleting the version deletes its Graph, its HookRuns (once their
   Jobs ended), their Jobs and Pods (garbage collection through the owner references).
 - **A paused Pipeline starts no pre hook.** After `kardinal pause`, a pre-hook HookRun that has
   not started waits in `Pending` ("not started: pipeline ... is paused"), and its timeout does
   not count until `kardinal resume`; it starts as soon as the Pipeline is resumed. A hook that is
   already running finishes. Post hooks are not held: their step has merged and the change is
   deployed, as a paused Pipeline still finishes steps that are `HealthChecking`
-  ([Pause and Resume](rollback.md#pause-and-resume)).
-- **A held environment starts no other Bundle's pre hook.** While an environment is held for a
-  rollback Bundle (`spec.holds`), another Bundle's pre hook for it waits in `Pending` ("not
-  started: environment ... is held for Bundle ..."), without its timeout counting, and runs if
-  that Bundle still promotes once the hold ends.
-- **A superseded or rejected Bundle starts no pre hook.** Its pre-hook HookRuns that have not
+  ([Pause and Resume](pause.md)).
+- **A held environment starts no other version's pre hook.** While an environment is held for a
+  rollback version (`spec.holds`), another version's pre hook for it waits in `Pending` ("not
+  started: environment ... is held for version ..."), without its timeout counting, and runs if
+  that version still promotes once the hold ends.
+- **A superseded or rejected version starts no pre hook.** Its pre-hook HookRuns that have not
   created their Job end `Skipped` ("not run: Bundle ... was superseded by a newer Bundle", or
   "... was rejected"), also when they were waiting for a pause or a hold, so an old migration
-  never runs next to the new Bundle's. A hook that is already running finishes; the Bundle's step
-  does not start, and the new Bundle runs its own hooks.
+  never runs next to the new version's. A hook that is already running finishes; the version's step
+  does not start, and the new version runs its own hooks.
 - These checks are made when the HookRun starts and again right before it creates its Job. A
   pause, hold, supersede or rejection that lands after that does not stop the Job.
 
@@ -172,8 +172,8 @@ Kubernetes ephemeral-volume controller (not as the hook's ServiceAccount), which
 the Pod. Limit storage with a ResourceQuota on the namespace if that matters.
 
 Only HookRuns the Bundle's Graph created count. kro labels what it applies `kro.run/node-id`,
-and the Graph labels each HookRun `kardinal.io/bundle-uid` with its Bundle's UID. The controller
-never runs a HookRun without both (or whose UID is not its Bundle's), and the step reads results
+and the Graph labels each HookRun `kardinal.io/bundle-uid` with its version's UID. The controller
+never runs a HookRun without both (or whose UID is not its version's), and the step reads results
 only from HookRuns with those labels whose names this Graph rendered. Labels can be copied, so
 the chart's `<release>-graph-objects` admission policy is what stops a forged HookRun: only kro
 (impersonating the namespace's Graph ServiceAccount), the controller and
@@ -188,25 +188,25 @@ In a [compact Graph](pipeline-reference.md#large-pipelines) (above `--graph-comp
 environments) the HookRuns are items of one collection, created under the conditions the node
 shape's HookRun nodes resolve under. A pre hook is created once the previous one succeeded, its
 environment's upstreams are Verified, its gates are ready, the
-environment is not held for another Bundle, the Bundle is not Superseded, Rejected or waiting for a
+environment is not held for another version, the version is not Superseded, Rejected or waiting for a
 `maxConcurrentPromotions` slot, and, for a root environment, the image is verified. All of this
 holds even after the environment's PromotionStep exists. A post hook is created once the step
-entered `Verifying` and the Bundle is not Superseded. A HookRun the Graph created stays, whatever
-changes after. Only HookRuns kro applied for this Bundle count: a forged HookRun with a hook's
+entered `Verifying` and the version is not Superseded. A HookRun the Graph created stays, whatever
+changes after. Only HookRuns kro applied for this version count: a forged HookRun with a hook's
 name keeps nothing admitted and does not let the next hook start. Each HookRun counts against the
 Graph's size limits. A HookRun that kro cannot create holds only its own environment, whose step
-waits for the hook. The Bundle's `RunsCreated` condition names it, with kro's error
-([Troubleshooting](troubleshooting.md#symptom-bundle-condition-runscreated-is-false)).
+waits for the hook. The version's `RunsCreated` condition names it, with kro's error
+([Troubleshooting](troubleshoot-promotions.md#symptom-bundle-condition-runscreated-is-false)).
 
 ## What hooks cannot do
 
 - Hooks run in the Pipeline's namespace in the cluster kardinal runs in, not in the target
   cluster of a remote environment. Reach the target through its Service or API from the Pod.
-- A pre hook runs before the step starts. When a PolicyGate turns false after the migration
+- A pre hook runs before the step starts. When a gate turns false after the migration
   ran and before the step started, the step waits for the gate with the migration already
   applied: write migrations that the running version tolerates (expand, then contract).
 - Hook results reach the step through the Graph (kro). While kro is down the step waits.
-- A rollback Bundle is a Bundle: it runs the hooks of every environment it promotes through.
+- A rollback version is a version: it runs the hooks of every environment it promotes through.
 
 ## Inspecting hooks
 

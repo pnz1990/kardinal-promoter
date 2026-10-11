@@ -71,18 +71,18 @@ Each AnalysisRun gets one arg for every arg its template declares, valued from, 
 
 1. `verification.args`;
 2. what kardinal knows about the promotion: `bundle`, `pipeline`, `environment`, `image` (the
-   Bundle's first image, `repository:tag` or `repository@digest`), `tag`, `digest`, and `commit`
-   (the config Bundle's commit, else `provenance.commitSHA`);
+   version's first image, `repository:tag` or `repository@digest`), `tag`, `digest`, and `commit`
+   (the config version's commit, else `provenance.commitSHA`);
 3. the template's own `value` or `valueFrom` (for example a `secretKeyRef` holding an API key).
 
 An arg left with no value fails the run: Argo Rollouts reports `args.<name> was not resolved`.
 
 ### Trust
 
-The built-in values come from the Bundle, which CI, a Subscription or anyone allowed to create
-Bundles writes; the AnalysisTemplate, written by whoever may create templates in the namespace,
+The built-in values come from the version, which CI, a Subscription or anyone allowed to create
+versions writes; the AnalysisTemplate, written by whoever may create templates in the namespace,
 interpolates them into queries, URLs and Job commands. So kardinal passes a built-in value only
-when it matches its grammar, and otherwise fails the Bundle before any environment
+when it matches its grammar, and otherwise fails the version before any environment
 (`InvalidSpec`, `GraphBuildFailed`, `arg tag: ...`):
 
 | Arg | Grammar |
@@ -100,7 +100,7 @@ they interpolate where the provider allows it.
 **Who can write the verdict.** The step reads the phase of the AnalysisRuns its Graph rendered
 and nothing else: an AnalysisRun counts only when its name is one this build of the Graph
 rendered (a list rebuilt at every translation), kro applied it (label `kro.run/node-id`) and it
-belongs to this Bundle (label `kardinal.io/bundle-uid` equal to the Bundle's UID). So an
+belongs to this version (label `kardinal.io/bundle-uid` equal to the version's UID). So an
 AnalysisRun someone creates with matching `kardinal.io/*` labels is ignored, and the chart's
 `<release>-graph-objects` admission policy refuses creating one labelled `kardinal.io/bundle`
 except as kro or the controller ([Verified identity](guides/security.md#verified-identity)). That does not make
@@ -125,14 +125,14 @@ edit access, and remove it from roles that must not affect promotions.
       reason `VerificationSucceeded`;
     - a run `Failed`, `Error`, or `Inconclusive` with `inconclusive: fail`, or the timeout passed:
       the environment's `onHealthFailure` applies, as for a failed health check (`none` fails the
-      step and the Bundle, `abort` stops it for a human, `rollback` rolls the environment back).
+      step and the version, `abort` stops it for a human, `rollback` rolls the environment back).
       The change is already deployed when the analysis runs.
 4. A run nothing waits for any more is terminated (`spec.terminate: true`, so Argo Rollouts stops
    measuring): when the step failed (a failed run or hook, the timeout), was aborted or rolled
-   back, or the Bundle was superseded.
+   back, or the version was superseded.
 
 `inconclusive` and `timeout` are copied into the step when its Graph is built
-(`spec.analysisPolicy`): a Pipeline edit applies to the next Bundle, not to a step already
+(`spec.analysisPolicy`): a Pipeline edit applies to the next version, not to a step already
 verifying.
 
 ```bash
@@ -145,28 +145,28 @@ kubectl get promotionstep -n my-app my-app-my-app-x7k2p-prod -o jsonpath='{.spec
 kardinal never promotes past an environment whose analysis it cannot run:
 
 - **Argo Rollouts not installed** (the cluster does not serve `argoproj.io/v1alpha1`
-  `AnalysisRun`): every Bundle that promotes through the environment fails before its first
+  `AnalysisRun`): every version that promotes through the environment fails before its first
   environment, with condition `InvalidSpec` (reason `GraphBuildFailed`) and the message
   `... AnalysisRun is not served by the cluster: install Argo Rollouts (its CRDs) or remove
   spec.verification`. Health checks are different: they skip a kind the cluster does not serve.
-- **A template that does not exist**: the Bundle fails the same way, naming the template.
+- **A template that does not exist**: the version fails the same way, naming the template.
 
 After installing Argo Rollouts or creating the template, apply the Pipeline again (any change)
-or create a new Bundle.
+or create a new version.
 
 ## Template changes
 
 kardinal reads the templates when it builds the Bundle's Graph and copies their metrics into the
-AnalysisRuns, as it copies PolicyGate templates into gate instances: an edit to a template applies
-to the next Bundle, or to the Bundle in flight when the Pipeline changes. The run's name carries a
+AnalysisRuns, as it copies gate templates into gate instances: an edit to a template applies
+to the next version, or to the version in flight when the Pipeline changes. The run's name carries a
 hash of its spec, so an edit picked up mid-flight starts a new run instead of changing a run in
 progress. The step then waits for the new run (the newest run of the template) and says so in its
 message; the timeout keeps counting from when the step entered `Verifying`, it does not restart.
 
 In a [compact Graph](pipeline-reference.md#large-pipelines) the AnalysisRuns are items of one
-collection. Each is created once its step entered `Verifying` while the Bundle is not Superseded,
+collection. Each is created once its step entered `Verifying` while the version is not Superseded,
 and kept from then on; `spec.terminate` is set the same way. Each AnalysisRun counts against the
-Graph's size limits. One that kro cannot create holds only its environment, and the Bundle's
+Graph's size limits. One that kro cannot create holds only its environment, and the version's
 `RunsCreated` condition names it.
 
 ## What it cannot do
@@ -174,7 +174,7 @@ Graph's size limits. One that kro cannot create holds only its environment, and 
 - The AnalysisRuns run in the Pipeline's namespace on the cluster kardinal runs in. The Argo
   Rollouts controller must watch that namespace (not run with `--namespaced` elsewhere).
 - An AnalysisRun deleted by hand is created again by the Graph and runs again.
-- A Bundle superseded while its analysis runs starts no new run; the running one is terminated.
+- A version superseded while its analysis runs starts no new run; the running one is terminated.
 
 ## Permissions
 
