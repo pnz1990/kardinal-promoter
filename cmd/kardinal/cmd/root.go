@@ -48,8 +48,13 @@ func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "kardinal",
 		Short: "kardinal manages promotion pipelines on Kubernetes",
-		Long: `kardinal is the CLI for kardinal-promoter.
-It communicates with the Kubernetes API server to read and write CRDs.`,
+		Long: `kardinal promotes versions of your application through environments, with
+gates, pull requests and health checks, on Kubernetes.
+
+Getting started:
+  kardinal init                                   write a Pipeline for your repository
+  kardinal create bundle my-app --image app:1.4   start a promotion
+  kardinal status my-app                          see where each version is, and why`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
@@ -67,36 +72,39 @@ It communicates with the Kubernetes API server to read and write CRDs.`,
 	root.PersistentFlags().StringVarP(&globalOutput, "output", "o", "",
 		"Output format: table (default), json, yaml (json and yaml: get auditevents, bundles, pipelines, steps, subscriptions)")
 
-	root.AddCommand(newVersionCmd())
-	root.AddCommand(newGetCmd())
-	root.AddCommand(newExplainCmd())
-	root.AddCommand(newCreateCmd())
-	root.AddCommand(newDeleteCmd())
-	root.AddCommand(newPromoteCmd())
-	root.AddCommand(newRollbackCmd())
-	root.AddCommand(newReleaseHoldCmd())
-	root.AddCommand(newRejectCmd())
-	root.AddCommand(newPauseCmd())
-	root.AddCommand(newResumeCmd())
-	root.AddCommand(newOverrideCmd())
-	root.AddCommand(newPolicyCmd())
-	root.AddCommand(newHistoryCmd())
-	root.AddCommand(newInitCmd())
-	root.AddCommand(newDiffCmd())
-	root.AddCommand(newMetricsCmd())
-	root.AddCommand(newApproveCmd())
-	root.AddCommand(newDoctorCmd())
-	root.AddCommand(newRefreshCmd())
-	root.AddCommand(newDashboardCmd())
-	root.AddCommand(newLogsCmd())
-	root.AddCommand(newAuditCmd())
-	root.AddCommand(newValidateCmd())
-	root.AddCommand(newStatusCmd())
-	root.AddCommand(newCompletionCmd())
+	root.AddGroup(
+		&cobra.Group{ID: groupStart, Title: "Get started:"},
+		&cobra.Group{ID: groupShip, Title: "Ship and observe:"},
+		&cobra.Group{ID: groupGate, Title: "Approve and gate:"},
+		&cobra.Group{ID: groupIncident, Title: "Incident:"},
+		&cobra.Group{ID: groupAdmin, Title: "Admin and debug:"},
+	)
+	add := func(group string, cmds ...*cobra.Command) {
+		for _, c := range cmds {
+			c.GroupID = group
+			root.AddCommand(c)
+		}
+	}
+	add(groupStart, newInitCmd(), newDoctorCmd(), newDashboardCmd(), newVersionCmd())
+	add(groupShip, newCreateCmd(), newStatusCmd(), newExplainCmd(), newHistoryCmd(), newLogsCmd(), newDiffCmd(), newGetCmd())
+	add(groupGate, newApproveCmd(), newOverrideCmd(), newPromoteCmd(), newPolicyCmd())
+	add(groupIncident, newPauseCmd(), newResumeCmd(), newRollbackCmd(), newReleaseHoldCmd(), newRejectCmd())
+	add(groupAdmin, newValidateCmd(), newAuditCmd(), newMetricsCmd(), newRefreshCmd(), newDeleteCmd(), newCompletionCmd())
+	root.SetHelpCommandGroupID(groupAdmin)
+	root.SetCompletionCommandGroupID(groupAdmin)
 
 	requireSubcommand(root)
 	return root
 }
+
+// The groups of kardinal --help.
+const (
+	groupStart    = "start"
+	groupShip     = "ship"
+	groupGate     = "gate"
+	groupIncident = "incident"
+	groupAdmin    = "admin"
+)
 
 // outputAnnotation marks a command that honours -o json|yaml.
 const outputAnnotation = "kardinal.io/structured-output"

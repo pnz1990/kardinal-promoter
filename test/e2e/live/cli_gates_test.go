@@ -287,8 +287,8 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	// override refuses bad input and changes nothing.
 	refuses(t, c, ns, `required flag(s) "gate", "reason" not set`, "override", pipelineName)
 	refuses(t, c, ns, `required flag(s) "reason" not set`, "override", pipelineName, "--gate", "entry")
-	for _, d := range []string{"soon", "-1h", "0s"} {
-		refuses(t, c, ns, fmt.Sprintf("invalid --expires-in %q: must be a positive Go duration (e.g. 1h, 30m)", d),
+	for d, why := range map[string]string{"soon": "want 30m, 4h or 2d", "-1h": "must be positive", "0s": "must be positive"} {
+		refuses(t, c, ns, fmt.Sprintf("invalid --expires-in %q: %s", d, why),
 			"override", pipelineName, "--gate", "entry", "--reason", "r", "--expires-in", d)
 	}
 	refuses(t, c, ns, fmt.Sprintf("get policygate nope: no gate instance or template of that name for pipeline podinfo in namespace %s: "+
@@ -582,8 +582,8 @@ func TestCLI_PolicySimulate(t *testing.T) {
 	assert.Equal(t, "RESULT: PASS\nNo PolicyGates found for pipeline \"podinfo\" environment \"test\"\n",
 		simulate("--env", "test", "--time", "Saturday 3pm"))
 
-	refuses(t, c, ns, `required flag(s) "env", "pipeline" not set`, "policy", "simulate")
-	refuses(t, c, ns, `required flag(s) "env" not set`, "policy", "simulate", "--pipeline", pipelineName)
+	refuses(t, c, ns, "which pipeline? kardinal policy simulate <pipeline> <env>", "policy", "simulate")
+	refuses(t, c, ns, "which environment? kardinal policy simulate "+pipelineName+" <env>", "policy", "simulate", "--pipeline", pipelineName)
 	refuses(t, c, ns, `invalid --time "someday": want a weekday and an hour in UTC ("Saturday 3pm", "tue 10:00") or an RFC 3339 timestamp`,
 		"policy", "simulate", "--pipeline", pipelineName, "--env", "prod", "--time", "someday")
 	refuses(t, c, ns, "--soak-minutes must not be negative",

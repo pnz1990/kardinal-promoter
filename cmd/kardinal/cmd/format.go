@@ -619,8 +619,14 @@ func FormatBundleErrors(w io.Writer, bundles []v1alpha1.Bundle, showNamespace bo
 
 // FormatBundleTable writes a tabwriter-formatted table of bundles to w.
 func FormatBundleTable(w io.Writer, bundles []v1alpha1.Bundle) error {
+	return formatBundleTable(w, bundles, false)
+}
+
+// formatBundleTable is FormatBundleTable; showNS prepends a NAMESPACE column
+// (--all-namespaces).
+func formatBundleTable(w io.Writer, bundles []v1alpha1.Bundle, showNS bool) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "BUNDLE\tTYPE\tPHASE\tAGE"); err != nil {
+	if _, err := fmt.Fprintln(tw, nsCol(showNS, "NAMESPACE")+"BUNDLE\tTYPE\tPHASE\tAGE"); err != nil {
 		return fmt.Errorf("write bundle table header: %w", err)
 	}
 	for _, b := range bundles {
@@ -628,7 +634,7 @@ func FormatBundleTable(w io.Writer, bundles []v1alpha1.Bundle) error {
 		if phase == "" {
 			phase = "Unknown"
 		}
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
+		if _, err := fmt.Fprintf(tw, nsCol(showNS, b.Namespace)+"%s\t%s\t%s\t%s\n",
 			b.Name,
 			b.Spec.Type,
 			phase,
@@ -650,8 +656,14 @@ func FormatBundleTable(w io.Writer, bundles []v1alpha1.Bundle) error {
 // WaitingForMerge, HealthChecking) take precedence over terminal states (Verified,
 // Failed). Within same priority, the most recently created step wins.
 func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
+	return formatStepsTable(w, steps, false)
+}
+
+// formatStepsTable is FormatStepsTable; showNS keeps each namespace's steps
+// apart and prepends a NAMESPACE column (--all-namespaces).
+func formatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep, showNS bool) error {
 	// Filter to the best step per environment (same priority as the pipeline table).
-	type stepKey struct{ env string }
+	type stepKey struct{ ns, env string }
 	type bestEntry struct {
 		step     v1alpha1.PromotionStep
 		priority int
@@ -659,6 +671,9 @@ func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
 	best := make(map[stepKey]bestEntry)
 	for _, s := range steps {
 		key := stepKey{env: s.Spec.Environment}
+		if showNS {
+			key.ns = s.Namespace
+		}
 		state := s.Status.State
 		if state == "" {
 			state = "Pending"
@@ -672,12 +687,17 @@ func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
 		}
 	}
 
-	// Sort by environment name for stable output.
-	envOrder := make([]string, 0, len(best))
+	// Sort by namespace, then environment name, for stable output.
+	envOrder := make([]stepKey, 0, len(best))
 	for k := range best {
-		envOrder = append(envOrder, k.env)
+		envOrder = append(envOrder, k)
 	}
-	sort.Strings(envOrder)
+	sort.Slice(envOrder, func(i, j int) bool {
+		if envOrder[i].ns != envOrder[j].ns {
+			return envOrder[i].ns < envOrder[j].ns
+		}
+		return envOrder[i].env < envOrder[j].env
+	})
 
 	// Determine if any PromotionStep has per-step detail populated.
 	hasSubSteps := false
@@ -690,11 +710,11 @@ func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
 
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
 	if hasSubSteps {
-		if _, err := fmt.Fprintln(tw, "ENVIRONMENT\tSTEP\tSTATE\tDURATION\tMESSAGE"); err != nil {
+		if _, err := fmt.Fprintln(tw, nsCol(showNS, "NAMESPACE")+"ENVIRONMENT\tSTEP\tSTATE\tDURATION\tMESSAGE"); err != nil {
 			return fmt.Errorf("write steps table header: %w", err)
 		}
-		for _, env := range envOrder {
-			s := best[stepKey{env: env}].step
+		for _, key := range envOrder {
+			s, env := best[key].step, key.env
 			if len(s.Status.Steps) == 0 {
 				// Fallback: no per-step detail, show environment-level row.
 				state := s.Status.State
@@ -705,7 +725,7 @@ func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
 				if msg == "" {
 					msg = "-"
 				}
-				if _, err := fmt.Fprintf(tw, "%s\t(no step detail)\t%s\t-\t%s\n", env, state, msg); err != nil {
+				if _, err := fmt.Fprintf(tw, nsCol(showNS, s.Namespace)+"%s\t(no step detail)\t%s\t-\t%s\n", env, state, msg); err != nil {
 					return fmt.Errorf("write step row: %w", err)
 				}
 				continue
@@ -723,7 +743,11 @@ func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
 				if i > 0 {
 					envCol = "" // only print env once per step group
 				}
-				if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+				nsCell := s.Namespace
+				if i > 0 {
+					nsCell = ""
+				}
+				if _, err := fmt.Fprintf(tw, nsCol(showNS, nsCell)+"%s\t%s\t%s\t%s\t%s\n",
 					envCol, ss.Name, string(ss.State), dur, msg,
 				); err != nil {
 					return fmt.Errorf("write sub-step row: %w", err)
@@ -731,11 +755,11 @@ func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
 			}
 		}
 	} else {
-		if _, err := fmt.Fprintln(tw, "ENVIRONMENT\tSTEP-TYPE\tSTATE\tMESSAGE"); err != nil {
+		if _, err := fmt.Fprintln(tw, nsCol(showNS, "NAMESPACE")+"ENVIRONMENT\tSTEP-TYPE\tSTATE\tMESSAGE"); err != nil {
 			return fmt.Errorf("write steps table header: %w", err)
 		}
-		for _, env := range envOrder {
-			s := best[stepKey{env: env}].step
+		for _, key := range envOrder {
+			s := best[key].step
 			state := s.Status.State
 			if state == "" {
 				state = "Pending"
@@ -744,7 +768,7 @@ func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
 			if msg == "" {
 				msg = "-"
 			}
-			if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
+			if _, err := fmt.Fprintf(tw, nsCol(showNS, s.Namespace)+"%s\t%s\t%s\t%s\n",
 				s.Spec.Environment,
 				s.Spec.StepType,
 				state,
@@ -758,6 +782,15 @@ func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
 		return fmt.Errorf("flush steps table: %w", err)
 	}
 	return nil
+}
+
+// nsCol is cell followed by a tab when showNS, else "": the NAMESPACE column
+// of an --all-namespaces table.
+func nsCol(showNS bool, cell string) string {
+	if !showNS {
+		return ""
+	}
+	return cell + "\t"
 }
 
 // ─── Output format helpers ────────────────────────────────────────────────────

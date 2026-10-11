@@ -4,6 +4,11 @@ Explain the current state of a promotion pipeline
 
 ### Synopsis
 
+For each environment of <pipeline> (or just <env>), show the current
+Bundle's step and the gates it waits on, gates that are not ready first, with
+each gate's expression, state and reason, and what is deployed there now when
+the change has not landed yet. -w refreshes every 3 seconds.
+
 Explain displays, per environment, the PromotionStep and the PolicyGates of
 the current Bundle there: the newest Bundle that is not Superseded and has a
 PromotionStep in that environment, or a gate instance there and has not
@@ -42,21 +47,24 @@ A gate's STATE is the one the UI shows, the first that applies:
     Waiting     evaluated not ready, not holding the Bundle: the Bundle has
                 not reached the environment, or it failed (it can retry)
 
-Use --env to filter to a specific environment.
-Use --watch to refresh every 3 seconds.
-Use --color to force ANSI color output (auto-detected when writing to a TTY).
-
 ```
 kardinal explain <pipeline> [flags]
+```
+
+### Examples
+
+```
+  kardinal explain my-app
+  kardinal explain my-app prod -w
 ```
 
 ### Options
 
 ```
       --color        Force ANSI color output (auto-detected when TTY)
-      --env string   Filter to a specific environment
+  -e, --env string   Only this environment (or give it after the pipeline)
   -h, --help         help for explain
-      --watch        Refresh every 3 seconds
+  -w, --watch        Refresh every 3 seconds
 ```
 
 ### Options inherited from parent commands

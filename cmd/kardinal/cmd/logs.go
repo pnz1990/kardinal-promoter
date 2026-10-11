@@ -41,44 +41,33 @@ func newLogsCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "logs <pipeline>",
+		Use:   "logs <pipeline> [<env>]",
 		Short: "Show promotion step execution logs for a pipeline",
-		Long: `Show the execution history and output of PromotionSteps for a pipeline.
-
-It shows the PromotionSteps of every Bundle of the pipeline that is not
-Superseded (all of them if those have none), or of the Bundle --bundle names.
-For each PromotionStep, it shows:
-  - Current state (Promoting, WaitingForMerge, HealthChecking, Verifying, Verified, Failed)
-  - Step message (error details, health check results, PR URLs)
-  - Step outputs (branch name, PR URL, PR number)
-  - Conditions from the status
-  - The steps it ran (status.steps), with state and duration
-
-Use --follow (-f) to stream step progress in real time, polling every 2 seconds.
-It exits when every step shown is in a terminal state (Verified, Failed,
-AbortedByAlarm or RollingBack) and no Bundle it follows is still promoting.
-With --env it exits once that environment's steps are terminal.
-Each state change is printed once.
-
-Example:
-  kardinal logs nginx-demo
-  kardinal logs nginx-demo --env prod
-  kardinal logs nginx-demo --bundle nginx-demo-v1-29-0
-  kardinal logs nginx-demo --follow`,
-		Args: cobra.ExactArgs(1),
+		Long: `Show each PromotionStep of <pipeline>'s Bundles that are not Superseded (or of
+--bundle): its state, message, outputs (branch, PR), conditions, and the steps
+it ran with their durations. -f follows: it polls every 2s, prints each change
+once, and exits when every step shown (only <env>'s, if given) has finished.`,
+		Example: `  kardinal logs my-app
+  kardinal logs my-app prod -f
+  kardinal logs my-app --bundle my-app-v1-29-0`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			pipeline, env, err := envArgs(args, envFlag)
+			if err != nil {
+				return err
+			}
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("logs: %w", err)
 			}
 			if followFlag {
-				return logsFollowFn(cmd.Context(), cmd.OutOrStdout(), c, ns, args[0], envFlag, bundleFlag)
+				return logsFollowFn(cmd.Context(), cmd.OutOrStdout(), c, ns, pipeline, env, bundleFlag)
 			}
-			return logsFn(cmd.OutOrStdout(), c, ns, args[0], envFlag, bundleFlag)
+			return logsFn(cmd.OutOrStdout(), c, ns, pipeline, env, bundleFlag)
 		},
 	}
 
-	cmd.Flags().StringVar(&envFlag, "env", "", "Filter by environment")
+	addEnvFlag(cmd, &envFlag, "Only this environment (or give it after the pipeline)")
 	cmd.Flags().StringVar(&bundleFlag, "bundle", "", "Show logs for one bundle (default: every bundle that is not Superseded)")
 	cmd.Flags().BoolVarP(&followFlag, "follow", "f", false, "Stream step progress, polling every 2s until the promotion ends")
 

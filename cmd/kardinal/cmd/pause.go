@@ -30,15 +30,14 @@ func newPauseCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "pause <pipeline>",
 		Short: "Pause a pipeline: no new promotion steps start, in-flight ones hold at the next safe point",
-		Long: `Pause a pipeline.
-
-Sets spec.paused on the Pipeline and creates the freeze PolicyGate
-freeze-<pipeline>. While the pipeline is paused, no PromotionStep leaves
-Pending and a step that is still preparing its change (clone, update,
-commit, open PR) holds before its next step. A step that is waiting for a
-PR merge or running its health check finishes, so a merged change is never
-left unverified. Resume with: kardinal resume <pipeline>.`,
-		Args: cobra.ExactArgs(1),
+		Long: `Hold <pipeline>: no step starts, and a step still preparing its change holds
+before its next step. A step waiting for its PR merge or running its health
+check finishes, so a merged change is always verified. Resume with
+kardinal resume <pipeline>.`,
+		Example: `  kardinal pause my-app
+  kardinal resume my-app`,
+		Annotations: map[string]string{ReferenceAnnotation: pauseReference},
+		Args:        cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
@@ -67,7 +66,10 @@ func newResumeCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "resume <pipeline>",
 		Short: "Resume a paused pipeline",
-		Args:  cobra.ExactArgs(1),
+		Long: `Resume <pipeline> after kardinal pause: its held steps continue and new
+promotions start again.`,
+		Example: `  kardinal resume my-app`,
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
@@ -89,3 +91,11 @@ func resumeFn(w io.Writer, c sigs_client.Client, ns, pipeline string) error {
 	}
 	return nil
 }
+
+// pauseReference is the detail of the command for its reference page.
+const pauseReference = `Sets spec.paused on the Pipeline and creates the freeze PolicyGate
+freeze-<pipeline>. While the pipeline is paused, no PromotionStep leaves
+Pending and a step that is still preparing its change (clone, update,
+commit, open PR) holds before its next step. A step that is waiting for a
+PR merge or running its health check finishes, so a merged change is never
+left unverified. Resume with: kardinal resume <pipeline>.`

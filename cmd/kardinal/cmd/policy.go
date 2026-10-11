@@ -67,32 +67,29 @@ func newPolicyListCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "list",
+		Use:   "list [<pipeline>]",
 		Short: "List PolicyGates",
-		Long: `List PolicyGate templates.
-
-Without --pipeline, lists every template in every namespace. With --pipeline,
-lists the templates the controller attaches to that pipeline's environments.
-
-The CEL column is the controller's syntax check of the expression: valid,
-invalid (see kubectl describe), or - when not checked yet.
-
-The controller evaluates the per-Bundle instances the Graph creates from a
-template, never the template, so LAST-EVALUATED is the newest evaluation of
-the template's instances (with --pipeline, of that pipeline's instances), or
-- when none has been evaluated. An instance records its template's name and
-namespace (kardinal.io/gate-template and kardinal.io/gate-template-namespace),
-so a template in an org policy namespace or in spec.policyNamespaces counts the
-instances in every Pipeline's namespace.`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Long: `List PolicyGate templates: every one, or those the controller attaches to
+<pipeline>'s environments. CEL is the controller's syntax check (valid,
+invalid, or - not checked yet); LAST-EVALUATED is the newest evaluation of the
+template's per-Bundle instances.`,
+		Example: `  kardinal policy list
+  kardinal policy list my-app`,
+		Annotations: map[string]string{ReferenceAnnotation: policyListReference},
+		Args:        cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			pipeline, err := pipelineArg(args, pipelineFlag)
+			if err != nil {
+				return err
+			}
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("policy list: %w", err)
 			}
-			return policyListFn(cmd.OutOrStdout(), c, ns, pipelineFlag, policyNS)
+			return policyListFn(cmd.OutOrStdout(), c, ns, pipeline, policyNS)
 		},
 	}
-	cmd.Flags().StringVar(&pipelineFlag, "pipeline", "", "Show only the gates attached to this pipeline")
+	cmd.Flags().StringVar(&pipelineFlag, "pipeline", "", "Show only the gates attached to this pipeline (or give it as the argument)")
 	addPolicyNamespacesFlag(cmd, &policyNS)
 	return cmd
 }
@@ -289,41 +286,38 @@ func newPolicySimulateCmd() *cobra.Command {
 	var opts simulateOptions
 
 	cmd := &cobra.Command{
-		Use:   "simulate",
+		Use:   "simulate <pipeline> <env>",
 		Short: "Simulate PolicyGate evaluation for a hypothetical promotion context",
-		Long: `Simulate PolicyGate evaluation.
-
-Selects the PolicyGates the controller attaches to the environment (the
-pipeline's namespace plus the policy namespaces, matched by the
-kardinal.io/applies-to label) and evaluates each one with the controller's
-PolicyGate reconciler, against a Bundle that has promoted through every
-upstream environment. Metrics, change windows and promotion history are read
-from the cluster; nothing is written to it. Metric results are used as they
-are now at every simulated time: a MetricCheck result is "Stale" only if it is
-stale now.
-
---time is UTC: a weekday and an hour ("Saturday 3pm", "tue 10:00",
-"15 Friday") or an RFC 3339 timestamp. The weekday is its next occurrence
-(today counts). Without --time the current time is used.
-
---soak-minutes is the soak time of every upstream environment
-(upstream.<env>.soakMinutes and bundle.upstreamSoakMinutes).
-
-A blocked gate shows the next hour, within 7 days, at which it would pass with
-the same inputs. Gates that do not depend on time show no window.
-
-The first line is RESULT: PASS or RESULT: BLOCKED. A blocked result then lists
-each blocking gate with its message and next window. Last comes one row per
-gate: its name, PASS or BLOCK, and the reason. The command exits 0 whether the
-result is PASS or BLOCKED, so a script reads the RESULT line; it exits non-zero
-only when it cannot simulate (a bad flag, a pipeline or environment that does
-not exist, or no cluster to read).
-
-Example:
-  kardinal policy simulate --pipeline nginx-demo --env prod --time "Saturday 3pm"
+		Long: `Evaluate the gates of <env> as the controller would, for a Bundle that went
+through every upstream environment, at --time (UTC; default now) with
+--soak-minutes upstream. Nothing is written. The first line is RESULT: PASS or
+RESULT: BLOCKED, then each blocking gate with its message and the next hour it
+would pass; it exits 0 either way.`,
+		Example: `  kardinal policy simulate my-app prod --time "Saturday 3pm"
   # RESULT: BLOCKED
-  # Blocked by: no-weekend-deploys`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+  # Blocked by: no-weekend-deploys
+
+  kardinal policy simulate --pipeline my-app --env prod --soak-minutes 60`,
+		Annotations: map[string]string{ReferenceAnnotation: policySimulateReference},
+		Args:        cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p, err := pipelineArg(args, opts.Pipeline)
+			if err != nil {
+				return err
+			}
+			if p == "" {
+				return fmt.Errorf("which pipeline? kardinal policy simulate <pipeline> <env>")
+			}
+			env := opts.Env
+			if len(args) > 1 {
+				if _, env, err = envArgs(args, opts.Env); err != nil {
+					return err
+				}
+			}
+			if env == "" {
+				return fmt.Errorf("which environment? kardinal policy simulate %s <env>", p)
+			}
+			opts.Pipeline, opts.Env = p, env
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("policy simulate: %w", err)
@@ -333,13 +327,11 @@ Example:
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.Pipeline, "pipeline", "", "Pipeline name (required)")
-	cmd.Flags().StringVar(&opts.Env, "env", "", "Environment name (required)")
+	cmd.Flags().StringVar(&opts.Pipeline, "pipeline", "", "Pipeline name (or give it as the first argument)")
+	addEnvFlag(cmd, &opts.Env, "Environment (or give it after the pipeline)")
 	cmd.Flags().StringVar(&opts.Time, "time", "", `Simulated UTC time (e.g. "Saturday 3pm", "Tuesday 10:00", RFC 3339)`)
 	cmd.Flags().Int64Var(&opts.SoakMinutes, "soak-minutes", 0, "Simulated soak time of each upstream environment, in minutes")
 	addPolicyNamespacesFlag(cmd, &opts.PolicyNamespaces)
-	_ = cmd.MarkFlagRequired("pipeline")
-	_ = cmd.MarkFlagRequired("env")
 
 	return cmd
 }
@@ -634,26 +626,13 @@ func newPolicyTestCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "test <file>",
 		Short: "Validate PolicyGate YAML syntax and dry-run CEL expressions",
-		Long: `Validate every PolicyGate in a YAML file (multiple documents are fine).
-
-Each expression is compiled with the controller's PolicyGate CEL environment,
-then evaluated by the controller's reconciler against a local context: the
-current time, a Bundle with no images or provenance, no metrics, no upstream
-history and no change windows. The environment is the first entry of the
-gate's kardinal.io/applies-to label.
-
-Results:
-  PASS     the gate would allow promotion in that context
-  FAIL     the gate would block promotion in that context
-  UNKNOWN  the expression needs cluster data the local context lacks
-           (metrics, upstream, bundle.pr); use 'kardinal policy simulate'
-
-No cluster access is required. The command exits non-zero only when an
-expression does not compile.
-
-Example:
-  kardinal policy test policy-gates.yaml`,
-		Args: cobra.ExactArgs(1),
+		Long: `Check every PolicyGate in a YAML file offline: each expression is compiled and
+evaluated as the controller would, now, for a Bundle with no images, metrics or
+history. PASS or FAIL per gate, UNKNOWN when it needs cluster data (use policy
+simulate). It exits non-zero only when an expression does not compile.`,
+		Example:     `  kardinal policy test policy-gates.yaml`,
+		Annotations: map[string]string{ReferenceAnnotation: policyTestReference},
+		Args:        cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return policyTestFn(cmd.OutOrStdout(), args[0], time.Now().UTC())
 		},
@@ -781,3 +760,61 @@ func parsePolicyGateYAML(data []byte) ([]v1alpha1.PolicyGate, error) {
 	}
 	return gates, nil
 }
+
+// policyListReference is the detail of policy list for its reference page.
+const policyListReference = `Without --pipeline, lists every template in every namespace. With --pipeline,
+lists the templates the controller attaches to that pipeline's environments.
+
+The CEL column is the controller's syntax check of the expression: valid,
+invalid (see kubectl describe), or - when not checked yet.
+
+The controller evaluates the per-Bundle instances the Graph creates from a
+template, never the template, so LAST-EVALUATED is the newest evaluation of
+the template's instances (with --pipeline, of that pipeline's instances), or
+- when none has been evaluated. An instance records its template's name and
+namespace (kardinal.io/gate-template and kardinal.io/gate-template-namespace),
+so a template in an org policy namespace or in spec.policyNamespaces counts the
+instances in every Pipeline's namespace.`
+
+// policySimulateReference is the detail of policy simulate for its reference page.
+const policySimulateReference = `Selects the PolicyGates the controller attaches to the environment (the
+pipeline's namespace plus the policy namespaces, matched by the
+kardinal.io/applies-to label) and evaluates each one with the controller's
+PolicyGate reconciler, against a Bundle that has promoted through every
+upstream environment. Metrics, change windows and promotion history are read
+from the cluster; nothing is written to it. Metric results are used as they
+are now at every simulated time: a MetricCheck result is "Stale" only if it is
+stale now.
+
+--time is UTC: a weekday and an hour ("Saturday 3pm", "tue 10:00",
+"15 Friday") or an RFC 3339 timestamp. The weekday is its next occurrence
+(today counts). Without --time the current time is used.
+
+--soak-minutes is the soak time of every upstream environment
+(upstream.<env>.soakMinutes and bundle.upstreamSoakMinutes).
+
+A blocked gate shows the next hour, within 7 days, at which it would pass with
+the same inputs. Gates that do not depend on time show no window.
+
+The first line is RESULT: PASS or RESULT: BLOCKED. A blocked result then lists
+each blocking gate with its message and next window. Last comes one row per
+gate: its name, PASS or BLOCK, and the reason. The command exits 0 whether the
+result is PASS or BLOCKED, so a script reads the RESULT line; it exits non-zero
+only when it cannot simulate (a bad flag, a pipeline or environment that does
+not exist, or no cluster to read).`
+
+// policyTestReference is the detail of the command for its reference page.
+const policyTestReference = `Each expression is compiled with the controller's PolicyGate CEL environment,
+then evaluated by the controller's reconciler against a local context: the
+current time, a Bundle with no images or provenance, no metrics, no upstream
+history and no change windows. The environment is the first entry of the
+gate's kardinal.io/applies-to label.
+
+Results:
+  PASS     the gate would allow promotion in that context
+  FAIL     the gate would block promotion in that context
+  UNKNOWN  the expression needs cluster data the local context lacks
+           (metrics, upstream, bundle.pr); use 'kardinal policy simulate'
+
+No cluster access is required. The command exits non-zero only when an
+expression does not compile.`

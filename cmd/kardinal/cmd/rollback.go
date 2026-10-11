@@ -41,42 +41,24 @@ func newRollbackCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "rollback <pipeline>",
+		Use:   "rollback <pipeline> <env>",
 		Short: "Roll back a pipeline environment to a previous Bundle",
-		Long: `Roll back a pipeline environment to a previous Bundle.
+		Long: `Roll back <env> to the last Bundle Verified there that deploys something else
+(or --to a named Bundle), as a new Bundle that goes through the gates, the PR
+flow and every upstream environment first. With --hold and --reason, <env>
+stays on the rollback until kardinal release-hold (or --hold-expires-in); its
+blocking gates pass as audited exemptions meanwhile. See docs/rollback.md.`,
+		Example: `  # roll prod back to the previous verified version
+  kardinal rollback my-app prod
 
-Without --to, the target is the most recent Bundle, other than the one deployed
-now, that was Verified in the environment and deploys different artifacts. A
-Bundle that an earlier rollback in the environment rolled back from is skipped.
-With --to, the named Bundle must belong to the pipeline, carry images or a
-config commit, differ from what is deployed now, and have been Verified in the
-environment.
-
-Creates a new Bundle that copies the target's images and config ref, sets
-spec.provenance.rollbackOf to the target and intent.targetEnvironment to the
-environment. An image the deployed Bundle changed and the target does not name
-gets the version from the newest earlier Bundle Verified in the environment;
-when there is none, the rollback is refused and names the image. The rollback
-goes through the same PolicyGates and PR flow as any Bundle, and through every
-environment upstream of the target first.
-
-Config and mixed Bundles get back their config commit the same way. Without
---to, a mixed Bundle goes back to the newest earlier images and config commit,
-whichever Bundles deployed them. An image or config Bundle goes back to the
-newest earlier images or config commit, also when a mixed Bundle deployed them,
-and only those: the rest stays as deployed. --to a Bundle whose type cannot
-deploy what the deployed Bundle changed is refused.
-
-With --hold (and --reason), the environment stays on the rollback: no other
-Bundle promotes into it until kardinal release-hold <pipeline> --env <env>
-(or --hold-expires-in has passed). The rollback is never superseded, and it
-passes the PolicyGates of that environment that would block it while the
-controller verifies it restores what was Verified there, each pass shown as
-EXEMPT with who held the environment and why, recorded as a GateEvaluated
-AuditEvent and a GateExempted Warning Event. Holding needs update on
-pipelines/hold. See docs/rollback.md.`,
-		Args: cobra.ExactArgs(1),
+  # roll back to a named Bundle and keep prod there for a day
+  kardinal rollback my-app prod --to my-app-v1-4 --hold --reason "incident 4521" --hold-expires-in 1d`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			pipeline, env, err := requireEnv(cmd.CommandPath(), args, envFlag)
+			if err != nil {
+				return err
+			}
 			if reasonFlag != "" && !holdFlag {
 				return fmt.Errorf("rollback: --reason is the reason of a hold; add --hold")
 			}
@@ -98,24 +80,23 @@ pipelines/hold. See docs/rollback.md.`,
 					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v; recording %s as the hold's createdBy\n", err, currentUser())
 					actor = currentUser()
 				}
-				return rollbackHoldFn(cmd.OutOrStdout(), c, ns, args[0], envFlag, toFlag, reasonFlag, actor, expiresFlag)
+				return rollbackHoldFn(cmd.OutOrStdout(), c, ns, pipeline, env, toFlag, reasonFlag, actor, expiresFlag)
 			}
-			return rollbackFn(cmd.OutOrStdout(), c, ns, args[0], envFlag, toFlag)
+			return rollbackFn(cmd.OutOrStdout(), c, ns, pipeline, env, toFlag)
 		},
 	}
 
-	cmd.Flags().StringVar(&envFlag, "env", "", "Target environment to roll back (required)")
+	addEnvFlag(cmd, &envFlag, "Environment to roll back (or give it after the pipeline)")
 	cmd.Flags().StringVar(&toFlag, "to", "", "Specific Bundle name to roll back to")
 	cmd.Flags().BoolVar(&holdFlag, "hold", false,
 		"Keep the environment on the rollback until kardinal release-hold; the rollback passes blocking gates, each pass audited")
 	cmd.Flags().StringVar(&reasonFlag, "reason", "", "Why the environment is held (required with --hold)")
-	cmd.Flags().DurationVar(&expiresFlag, "hold-expires-in", 0, "End the hold this long after it is made (e.g. 24h); default: until kardinal release-hold")
+	cmd.Flags().Var(durationValue{&expiresFlag}, "hold-expires-in", "End the hold this long after it is made (30m, 24h, 2d); default: until kardinal release-hold")
 	// Deprecated: --emergency never bypassed a gate and has no effect; use
 	// `kardinal override` to pass a blocking gate. Deleted in the next minor
 	// release (#1288).
 	cmd.Flags().BoolVar(&emergencyFlag, "emergency", false, "Deprecated: has no effect")
 	_ = cmd.Flags().MarkDeprecated("emergency", "it has no effect and is removed in v0.11; use kardinal override to pass a blocking gate")
-	_ = cmd.MarkFlagRequired("env")
 
 	return cmd
 }
@@ -205,24 +186,27 @@ func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBund
 func newReleaseHoldCmd() *cobra.Command {
 	var envFlag string
 	cmd := &cobra.Command{
-		Use:   "release-hold <pipeline>",
-		Short: "Release the hold of a rollback on an environment",
-		Long: `Release the hold kardinal rollback --hold put on an environment.
-
-Removes the environment from the Pipeline's spec.holds. The newest Bundle that
-was held back then promotes into the environment through its normal gates,
-and the rollback Bundle's gates are evaluated without the exemption again.`,
-		Args: cobra.ExactArgs(1),
+		Use:     "release-hold <pipeline> <env>",
+		Aliases: []string{"unhold"},
+		Short:   "Release the hold of a rollback on an environment",
+		Long: `Release the hold kardinal rollback --hold put on <env>. The newest Bundle
+held back then promotes into <env> through its normal gates.`,
+		Example: `  kardinal release-hold my-app prod
+  kardinal unhold my-app prod`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			pipeline, env, err := requireEnv(cmd.CommandPath(), args, envFlag)
+			if err != nil {
+				return err
+			}
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("release-hold: %w", err)
 			}
-			return releaseHoldFn(cmd.OutOrStdout(), c, ns, args[0], envFlag)
+			return releaseHoldFn(cmd.OutOrStdout(), c, ns, pipeline, env)
 		},
 	}
-	cmd.Flags().StringVar(&envFlag, "env", "", "Held environment to release (required)")
-	_ = cmd.MarkFlagRequired("env")
+	addEnvFlag(cmd, &envFlag, "Held environment to release (or give it after the pipeline)")
 	return cmd
 }
 

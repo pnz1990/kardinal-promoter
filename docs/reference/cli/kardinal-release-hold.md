@@ -4,20 +4,24 @@ Release the hold of a rollback on an environment
 
 ### Synopsis
 
-Release the hold kardinal rollback --hold put on an environment.
-
-Removes the environment from the Pipeline's spec.holds. The newest Bundle that
-was held back then promotes into the environment through its normal gates,
-and the rollback Bundle's gates are evaluated without the exemption again.
+Release the hold kardinal rollback --hold put on <env>. The newest Bundle
+held back then promotes into <env> through its normal gates.
 
 ```
-kardinal release-hold <pipeline> [flags]
+kardinal release-hold <pipeline> <env> [flags]
+```
+
+### Examples
+
+```
+  kardinal release-hold my-app prod
+  kardinal unhold my-app prod
 ```
 
 ### Options
 
 ```
-      --env string   Held environment to release (required)
+  -e, --env string   Held environment to release (or give it after the pipeline)
   -h, --help         help for release-hold
 ```
 

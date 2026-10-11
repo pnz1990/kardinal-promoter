@@ -8,6 +8,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The CLI's help is grouped, and every command has examples** — `kardinal --help` lists the commands in five groups (Get started, Ship and observe, Approve and gate, Incident, Admin and debug) under a three-line getting-started block, and every command's help shows examples and a description of five lines or fewer. The full detail of each command stays on its [reference page](https://pnz1990.github.io/kardinal-promoter/cli-reference/)
+- **One way to name a pipeline and an environment** — `promote`, `rollback`, `release-hold`, `override`, `history`, `logs`, `explain`, `metrics` and `policy simulate` take `<pipeline> [<env>]` as arguments (`kardinal rollback my-app prod`); `metrics`, `policy list`, `policy simulate` and `audit summary` take the pipeline as an argument. Every flag form keeps working: `--env` (now `-e` everywhere), `--stage` (an alias of `--env`) and `--pipeline`. An argument and a flag that disagree are refused. `release-hold` is also `unhold`
+- **More watch and all-namespace views** — `status` and `explain` refresh with `-w`; `get bundles`, `get steps` and `get auditevents` list every namespace with `-A`, with a NAMESPACE column
+- **Durations in days** — `override --expires-in` and `rollback --hold-expires-in` accept `2d`, like `audit summary --since`; `init --file` has the shorthand `-f`
+
 ### Fixed
 
 - **Release notes reach the GitHub release** — v0.10.0's release was created with an empty notes section: its changelog section (about 99 KB) went from the workflow's preflight job to the release job as a job output, and did not arrive. The notes now travel as the `release-notes` artifact, the release job writes the body to a file the release step reads, and the release fails when the notes in the finished body are empty. The body's CRD apply command uses `--force-conflicts`, as the upgrade guides do

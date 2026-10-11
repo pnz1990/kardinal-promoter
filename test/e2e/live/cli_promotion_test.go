@@ -686,8 +686,8 @@ func TestCLI_Reports(t *testing.T) {
 	for _, tc := range []struct{ since, want string }{
 		{"0", `invalid --since "0": must be positive`},
 		{"-1h", `invalid --since "-1h": must be positive`},
-		{"xd", `invalid --since "xd": invalid days "x": want a whole number such as 7d`},
-		{"soon", `invalid --since "soon": parse duration: time: invalid duration "soon"`},
+		{"xd", `invalid --since "xd": want a whole number of days such as 2d, or 30m or 4h`},
+		{"soon", `invalid --since "soon": want 30m, 4h or 2d`},
 	} {
 		r := c.Fail(a.ns, "audit", "summary", "--since", tc.since)
 		assert.Equal(t, tc.want+"\n", r.Stderr, "--since %s", tc.since)
@@ -755,7 +755,7 @@ func TestCLI_Reports(t *testing.T) {
 	}{
 		{[]string{"--pipeline", pipelineName, "--days", "0"}, "--days must be positive, got 0"},
 		{[]string{"--pipeline", "nope"}, fmt.Sprintf("pipeline %q not found in namespace %q", "nope", a.ns)},
-		{nil, `required flag(s) "pipeline" not set`},
+		{nil, "which pipeline? kardinal metrics <pipeline> [<env>]"},
 	} {
 		r := c.Fail(a.ns, append([]string{"metrics"}, tc.args...)...)
 		assert.Equal(t, tc.want+"\n", r.Stderr, "metrics %v", tc.args)

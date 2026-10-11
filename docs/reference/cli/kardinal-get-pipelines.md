@@ -4,7 +4,10 @@ List Pipelines
 
 ### Synopsis
 
-List Pipelines and their per-environment promotion status.
+List Pipelines with the state of their current Bundle in each environment, in
+DAG order (wide pipelines get one summary row each: kardinal get pipelines
+<name> shows every environment). A failed build prints an ERROR: line with its
+cause after the table. -w refreshes it.
 
 BUNDLE is the pipeline's current bundle: the newest bundle that is not
 Superseded, whatever its phase (the newest one when all are Superseded), the
@@ -46,6 +49,14 @@ of a stalled promotion.
 
 ```
 kardinal get pipelines [name] [flags]
+```
+
+### Examples
+
+```
+  kardinal get pipelines
+  kardinal get pipelines my-app -w
+  kardinal get pipelines -A -o json
 ```
 
 ### Options

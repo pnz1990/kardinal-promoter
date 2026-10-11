@@ -4,20 +4,26 @@ Open the kardinal UI dashboard in a browser
 
 ### Synopsis
 
-Open the embedded kardinal UI in the default system browser.
+Open the kardinal UI (served by the controller at /ui/, port 8082) in your
+browser. It does not port-forward: for an in-cluster controller, start one
+first and pass its URL with --address.
 
 The UI is served by the controller at /ui/ (default port 8082). This command
 only prints and opens the URL (default http://localhost:8082/ui/); it does not
 port-forward. For an in-cluster controller, start a kubectl port-forward to
 port 8082 first (see "Accessing the UI" in docs/installation.md).
 
-Example:
-  kardinal dashboard
-  kubectl -n kardinal-system port-forward svc/kardinal-promoter 9090:8082 &
-  kardinal dashboard --address http://localhost:9090/ui/
-
 ```
 kardinal dashboard [flags]
+```
+
+### Examples
+
+```
+  kardinal dashboard
+
+  kubectl -n kardinal-system port-forward svc/kardinal-promoter 9090:8082 &
+  kardinal dashboard --address http://localhost:9090/ui/
 ```
 
 ### Options
