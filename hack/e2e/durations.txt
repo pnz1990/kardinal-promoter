@@ -180,6 +180,7 @@ TestGraph_SkipNeedsPermission 39 parallel
 TestGraph_TargetEnvironmentStops 66 parallel
 TestGraph_WavesRunInParallel 118 parallel
 TestHealth_AbortStaysAborted 117 parallel
+TestHealth_ArgoCDRefresh 80 parallel
 TestHealth_ArgoCDWaveOnSharedBranch 60 parallel
 TestHealth_ArgoFailures 194 parallel
 TestHealth_ArgoIgnoresEarlierDegraded 147 parallel
@@ -199,6 +200,7 @@ TestHealth_BakeFailOnAlarm 39 parallel
 TestHealth_BakeFlappingEnds 207 parallel
 TestHealth_BakeResetOnAlarm 197 parallel
 TestHealth_ConfigFixOfStalledRelease 111 parallel
+TestHealth_GitOpsWritesConfined 30 parallel
 TestHealth_LabelSelector 100 parallel
 TestHealth_LabelSelectorStall 69 parallel
 TestHealth_MultiTenantExample 29 parallel
