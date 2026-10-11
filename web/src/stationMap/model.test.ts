@@ -3,8 +3,8 @@
 
 import { describe, expect, it } from 'vitest'
 import type { Bundle, GraphResponse, Pipeline } from '../types'
-import { buildModel, gridOrder, groupSummary, stationLabel } from './model'
-import { octilinear, layout, levelAt, initialLevel, trimEnd, lengthOf, gridCells, gridRows, pointBeforeEnd } from './geometry'
+import { buildModel, gatesOn, gridOrder, groupSummary, stationLabel, type StationMapModel } from './model'
+import { octilinear, layout, levelAt, initialLevel, trimEnd, lengthOf, gridCells, gridRows, pointBeforeEnd, threadPoints, gateOffset, wrapWords, THREAD_GAP_PX, type ZoomLevel } from './geometry'
 
 const bundle = (name: string, tag: string): Bundle => ({
   name, namespace: 'default', phase: 'Promoting', type: 'image', pipeline: 'app', images: [{ repository: 'ghcr.io/acme/app', tag }],
@@ -244,5 +244,80 @@ describe('geometry', () => {
     expect(xs[0]).toBeLessThan(xs[1])
     expect(xs[1]).toBeLessThan(xs[2])
     expect(l.edges).toHaveLength(2)
+  })
+})
+
+/** Lays out m and gives each thread segment into a gated node with the gate's
+ *  index, the distance its drawn thread ends before the edge's end, and the
+ *  vertical slope at every gate mark. */
+function threadIntoGates(m: StationMapModel, level: ZoomLevel, k = 1) {
+  const byId = new Map(m.nodes.map(n => [n.id, n]))
+  const lay = layout(m.nodes, m.edges, level, id => (byId.get(id) ? gatesOn(byId.get(id)!, m).length : 0))
+  return m.thread.map(seg => {
+    const e = lay.edges.find(x => x.edge.from === seg.from && x.edge.to === seg.to)!
+    const gates = gatesOn(byId.get(seg.to)!, m)
+    const holdAt = gates.findIndex(g => g.holding)
+    const drawn = threadPoints(e.points, seg.kind, holdAt, k)
+    return { seg, holdAt, short: lengthOf(e.points) - lengthOf(drawn) }
+  })
+}
+
+describe('the thread and the gates on the map', () => {
+  const holdGraph = (env: string, extra: GraphResponse['nodes'] = []): GraphResponse => ({
+    nodes: [step('test', 'Verified'), { ...gate(`g-${env}`, 'freeze', 'Block', true), environment: env }, ...extra],
+    edges: [{ from: 'step-test', to: `g-${env}` }, { from: `g-${env}`, to: `step-${env}` }],
+  })
+  const cases: Array<[string, Pipeline, GraphResponse, string]> = [
+    ['a plain station', threeEnvs({ environmentTopology: [{ name: 'test' }, { name: 'uat', upstreams: ['test'] }] }),
+      holdGraph('uat', [step('uat', 'WaitingForMerge')]), 'uat'],
+    ['a held station', threeEnvs({ environmentTopology: [{ name: 'test' }, { name: 'uat', upstreams: ['test'], hold: { bundle: 'app-rb', reason: 'x' } }] }),
+      holdGraph('uat'), 'uat'],
+    ['a band', { name: 'w', namespace: 'default', phase: 'Ready', environmentCount: 7, topologyResolved: true, activeBundleName: 'app-v2',
+      environmentTopology: [{ name: 'test' }, ...['w1', 'w2', 'w3', 'w4', 'w5', 'w6'].map(n => ({ name: n, upstreams: ['test'] }))] },
+      { ...holdGraph('w1'), nodes: [...holdGraph('w1').nodes, ...['w2', 'w3', 'w4', 'w5', 'w6'].map(n => step(n, 'Verified'))] }, 'band:1'],
+    ['a platform', { name: 'f', namespace: 'default', phase: 'Ready', environmentCount: 4, topologyResolved: true, activeBundleName: 'app-v2',
+      environmentTopology: [{ name: 'test' }, { name: 'prod', upstreams: ['test'], fleet: { targets: ['p1', 'p2', 'p3'] } }] },
+      { ...holdGraph('p1'), nodes: [...holdGraph('p1').nodes, step('p2', 'Verified'), step('p3', 'Verified')] }, 'platform:prod'],
+  ]
+  for (const [what, p, graph, target] of cases) {
+    for (const k of [1, 0.25]) {
+      it(`into ${what} that a gate holds, the thread ends a clear gap before the bar (zoom ${k})`, () => {
+        const m = buildModel(p, { bundle: bundle('app-v2', '1.4.2'), graph })
+        const into = threadIntoGates(m, 'map', k).find(t => t.seg.to === target)
+        expect(into, JSON.stringify(m.thread)).toBeDefined()
+        expect(into!.holdAt).toBeGreaterThanOrEqual(0)
+        expect(into!.short).toBeGreaterThanOrEqual(gateOffset(into!.holdAt) + THREAD_GAP_PX / k - 0.01)
+      })
+    }
+  }
+
+  for (const level of ['overview', 'map', 'detail'] as const) {
+    it(`gate marks sit on a straight run at ${level}`, () => {
+      const p: Pipeline = { name: 'c', namespace: 'default', phase: 'Ready', environmentCount: 6, topologyResolved: true, activeBundleName: 'app-v2',
+        environmentTopology: [{ name: 'test' }, { name: 'a', upstreams: ['test'] }, { name: 'b', upstreams: ['test'] }, { name: 'c', upstreams: ['test'] },
+          { name: 'audit', upstreams: ['a', 'b', 'c'] }, { name: 'dr', upstreams: ['a'] }] }
+      const graph: GraphResponse = {
+        nodes: [step('test', 'Verified'), step('a', 'Verified'), step('b', 'Verified'), step('c', 'Verified'),
+          { ...gate('g1', 'freeze', 'Block', true), environment: 'audit' }, { ...gate('g2', 'soak', 'Pass'), environment: 'audit' }],
+        edges: [{ from: 'step-a', to: 'g1' }, { from: 'g1', to: 'g2' }, { from: 'g2', to: 'step-audit' }],
+      }
+      const m = buildModel(p, { bundle: bundle('app-v2', '1.4.2'), graph })
+      const byId = new Map(m.nodes.map(n => [n.id, n]))
+      const lay = layout(m.nodes, m.edges, level, id => (byId.get(id) ? gatesOn(byId.get(id)!, m).length : 0))
+      const into = lay.edges.filter(e => e.edge.to === 'audit')
+      expect(into.length).toBe(3)
+      for (const e of into) {
+        for (let i = 0; i < 2; i++) expect(Math.abs(pointBeforeEnd(e.points, gateOffset(i)).dy), `${e.edge.from} gate ${i}`).toBeLessThan(0.01)
+      }
+    })
+  }
+})
+
+describe('wrapWords', () => {
+  it('wraps at spaces and hyphens, and ends in an ellipsis at a word boundary', () => {
+    expect(wrapWords('Held by gate no-weekend-deploys-in-eu-and-us-regions', 24, 2))
+      .toEqual(['Held by gate no-weekend-', 'deploys-in-eu-and-us-…'])
+    expect(wrapWords('Waiting for PR merge', 40, 2)).toEqual(['Waiting for PR merge'])
+    for (const l of wrapWords('Held by gate no-weekend-deploys-in-eu-and-us-regions', 16, 2)) expect(l.length).toBeLessThanOrEqual(16)
   })
 })

@@ -7,6 +7,7 @@
 // GRAPH.zoom.overview and GRAPH.zoom.detail.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { container } from '../tokens'
 import { GRAPH, levelAt, zoomFor, type Box, type ZoomLevel } from './geometry'
 
 export interface Viewport {
@@ -48,6 +49,8 @@ export interface MapViewport {
  * element `ref`. initial is the level the map opens at: Detail and Map fit
  * the map when it is smaller than the view, Overview fits it whole.
  */
+const LEVEL_RANK: Record<ZoomLevel, number> = { overview: 0, map: 1, detail: 2 }
+
 /** How far past Detail's zoom a small pipeline may be fitted. */
 const DETAIL_FILL = 4 / 3
 
@@ -59,6 +62,9 @@ export function useMapViewport(ref: React.RefObject<SVGSVGElement | null>, bound
   const fitted = useRef(false)
   // The user zoomed or picked a level: from then on the zoom decides the level.
   const [zoomed, setZoomed] = useState(false)
+  // A fit that has to zoom out past the level's threshold (a narrow screen) opens a
+  // lower level, whose labels fit; it never goes back up by itself.
+  const [fitLevel, setFitLevel] = useState<ZoomLevel>(initial)
   const drag = useRef<{ id: number; x: number; y: number; vx: number; vy: number; moved: boolean } | null>(null)
   const pinch = useRef(new Map<number, { x: number; y: number }>())
 
@@ -92,7 +98,11 @@ export function useMapViewport(ref: React.RefObject<SVGSVGElement | null>, bound
     // graph is small); the zoom only fits it, at most at Detail's.
     // A small pipeline fills the canvas at Detail, up to a third above Detail's zoom.
     const k0 = initial === 'detail' ? zoomFor('detail') * DETAIL_FILL : GRAPH.zoom.detail
-    setView(fitView(bounds, size, k0))
+    const v = fitView(bounds, size, k0)
+    setView(v)
+    // Only a narrow map (below the medium container) gives up its level: a wide one
+    // keeps the level its size opens at, zoomed to fit.
+    if (size.w < container.medium) setFitLevel(cur => (LEVEL_RANK[levelAt(v.k)] < LEVEL_RANK[cur] ? levelAt(v.k) : cur))
   }, [bounds, size, initial, fitView, measured])
 
   const zoomBy = useCallback((f: number, at?: { x: number; y: number }) => {
@@ -206,7 +216,7 @@ export function useMapViewport(ref: React.RefObject<SVGSVGElement | null>, bound
   return {
     view,
     // Until the user zooms, the level is the one the map opened at.
-    level: zoomed ? levelAt(view.k) : initial,
+    level: zoomed ? levelAt(view.k) : fitLevel,
     viewBox: `${view.x} ${view.y} ${size.w / view.k} ${size.h / view.k}`,
     zoomBy, setLevel, fit, reveal, centre, handlers, size,
   }

@@ -9,11 +9,12 @@
 // Detail), a minimap, an attention strip and search.
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import type { GateMark, Group, MapNode, Station, StationMapModel, ThreadSegment } from './model'
-import { gridOrder, groupSummary, stationLabel } from './model'
+import type { GateMark, Group, Station, StationMapModel, ThreadSegment } from './model'
+import { gatesOn, gridOrder, groupSummary, stationLabel } from './model'
 import {
-  BAR, GATE_STEP, GRAPH, detailChars, dotOf, gridCells, gridText, groupPacing, groupSub, groupTitle, initialLevel, layout, pathOf, pointBeforeEnd, trimEnd,
-  type Layout, type Placed, type ZoomLevel,
+  BAR, CH_EM, GRAPH, TEXT_ASCENT, GRID_FOOT_ROOM, GRID_HEAD_H, GRID_PAD_X, GRID_ROW_ROOM, groupHead, cullLabels, detailChars, dotOf, gateOffset, gridCells, gridText, groupPacing, groupSub, groupTitle, initialLevel, layout,
+  pathOf, pointBeforeEnd, threadPoints, wrapWords,
+  type Layout, type Placed, type Rect, type ZoomLevel,
 } from './geometry'
 import { useMapViewport } from './useMapViewport'
 import { ageOf } from '../fleetModel'
@@ -52,6 +53,10 @@ const GATE_LABEL_H = 16
 /** The minimap's width and its inset from the map's corner (--k-space-3). */
 const MINIMAP_W = 160
 const MINIMAP_INSET = 12
+/** Label sizes in px (--k-text-xs, -sm, -lg) and the line height as a share of the font size. */
+const LABEL_PX = { sub: 12, name: 13, detailSub: 13, detailName: 16 } as const
+const LINE_EM = 1.25
+
 /** How long a gate's popover stays after the pointer leaves, so it can be reached (ms). */
 const POPOVER_HIDE_MS = 150
 
@@ -328,8 +333,60 @@ export default function StationMap(props: StationMapProps) {
 
   const threadEdge = (seg: ThreadSegment) => lay.edges.find(x => x.edge.from === seg.from && x.edge.to === seg.to)
 
+  // Labels that would overlap more important ones, or a dot or a group frame, are
+  // hidden at the current zoom: the focused station's first, then the ones that need
+  // a person, the gates' names, the thread's, and the rest in spec order.
+  const plan = useMemo(() => {
+    const k = vp.view.k
+    const labels: Array<{ id: string; priority: number; boxes: Rect[] }> = []
+    const marks: Array<{ id: string; box: Rect }> = []
+    const onThread = new Set(model.thread.flatMap(t => [t.from, t.to]))
+    for (const n of model.nodes) {
+      const p = lay.placed.get(n.id)
+      if (!p) continue
+      if (n.kind !== 'station') { marks.push({ id: n.id, box: boxOf(p) }); continue }
+      const { x, y } = dotOf(p)
+      const r = GRAPH.station.r
+      marks.push({ id: n.id, box: { x: x - r, y: y - r, w: r * 2, h: r * 2 } })
+      const boxes = stationLabelBoxes(n.station, level, model, p, k, focusedId === n.id)
+      if (!boxes.length) continue
+      const tone = n.station.display.tone
+      const priority = focusedId === n.id ? 0 : tone === 'failed' || tone === 'blocked' || tone === 'held' ? 1 : onThread.has(n.id) ? 3 : 4
+      labels.push({ id: n.id, priority, boxes })
+    }
+    if (level === 'detail') {
+      const units = Math.max(GRAPH.labelMin, GRAPH.labelMin / k)
+      for (const { to, points } of [...lay.edges.map(({ edge, points }) => ({ to: edge.to, points })), ...[...lay.leads].map(([to, points]) => ({ to, points }))]) {
+        const node = model.nodes.find(n => n.id === to)
+        const gates = node ? gatesOn(node, model) : []
+        if (gates.length === 0) continue
+        const g = gates[0]
+        const p = pointBeforeEnd(points, gateOffset(0))
+        const half = g.holding ? GRAPH.gateTick : GRAPH.gateTick / 2
+        const label = gates.length > 1 ? `${g.name} +${gates.length - 1}` : g.name
+        const w = label.length * CH_EM * units
+        const top = p.y - half - GATE_LEADER - 4 - units
+        labels.push({ id: `${to}:${g.id}`, priority: 2, boxes: [{ x: p.x + 3 - w, y: top, w, h: units }] })
+      }
+    }
+    const kept = cullLabels(labels, marks)
+    return { stations: kept, gates: kept }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lay, model, level, vp.view.k, focusedId])
+
   return (
-    <div className={`station-map${paused ? ' station-map--paused' : ''}`} data-level={level}>
+    <div className={`station-map${paused ? ' station-map--paused' : ''}`} data-level={level}
+      onKeyDown={e => {
+        // `/` anywhere in the map (its controls, the attention strip, the background) searches the map, not the page.
+        const t = e.target as HTMLElement
+        if (e.key === '/' && !(t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement)) {
+          e.preventDefault(); e.stopPropagation(); searchRef.current?.focus()
+        }
+      }}
+      onBlur={e => {
+        // Focus left the map: no station is "in focus" any more (its actions go away).
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setCursor(undefined)
+      }}>
       <div className="station-map__bar">
         {attentionItems.length > 0 ? (
           <div className="station-map__attention" role="group" aria-label="Needs attention">
@@ -394,11 +451,10 @@ export default function StationMap(props: StationMapProps) {
           {model.thread.map(seg => {
             const e = threadEdge(seg)
             if (!e) return null
-            // A stopped thread ends before the holding gate's bar: past its comb offset, and a gap.
+            // Into a node a gate holds, the thread ends before the bar, whatever the node is.
             const target = model.nodes.find(n => n.id === seg.to)
-            const holdAt = target ? Math.max(0, gatesOn(target, model).findIndex(g => g.holding)) : 0
-            const pts = seg.kind === 'stopped' ? trimEnd(e.points, gateOffset(holdAt) + GRAPH.gateTick)
-              : seg.kind === 'snap' ? trimEnd(e.points, GRAPH.station.r + 5) : e.points
+            const holdAt = target ? gatesOn(target, model).findIndex(g => g.holding) : -1
+            const pts = threadPoints(e.points, seg.kind, holdAt, vp.view.k)
             const tip = pointBeforeEnd(pts, 0)
             return (
               <g key={`${seg.from}>${seg.to}`} data-kind={seg.kind}>
@@ -417,13 +473,13 @@ export default function StationMap(props: StationMapProps) {
             const placed = lay.placed.get(node.id)
             return placed ? { ...placed, node } : undefined
           }).filter((p): p is Placed => !!p).map(p => p.node.kind === 'station'
-            ? <StationGlyph key={p.node.id} p={p} st={p.node.station} level={level} model={model}
+            ? <StationGlyph key={p.node.id} p={p} st={p.node.station} level={level} model={model} k={vp.view.k} culled={!plan.stations.has(p.node.id)}
                 differs={!!compare && differs(p.node.station, compare.stations.get(p.node.id))}
                 focusable={active === p.node.id} focused={focusedId === p.node.id}
                 dim={matches.length > 0 && !matchSet.has(p.node.id)}
                 chain={upIds.has(p.node.id) ? 'up' : downIds.has(p.node.id) ? 'down' : undefined}
                 onOpen={() => onOpenStage(p.node.id)} onFocus={() => setCursor(p.node.id)} />
-            : <GroupGlyph key={p.node.id} p={p} g={p.node.group} expanded={p.node.expanded} model={model} level={level} hatch={`${patternId}-hatch`}
+            : <GroupGlyph key={p.node.id} p={p} g={p.node.group} expanded={p.node.expanded} model={model} level={level} hatch={`${patternId}-hatch`} k={vp.view.k}
                 active={active} focusedEnv={focused} matchSet={matchSet} searching={matches.length > 0}
                 onToggle={() => onToggleGroup(p.node.id)} onOpen={onOpenStage} onFocusItem={setCursor} />)}
         </g>
@@ -443,7 +499,7 @@ export default function StationMap(props: StationMapProps) {
               const nx = -p.dy * half
               const ny = p.dx * half
               const env = target.node.kind === 'station' ? target.node.id : target.node.group.members[0]
-              const labelled = level === 'detail' && i === 0
+              const labelled = level === 'detail' && i === 0 && plan.gates.has(`${to}:${g.id}`)
               const label = gates.length > 1 ? `${g.name} +${gates.length - 1}` : g.name
               const hit = GRAPH.gateTick + GRAPH.grid.gap
               const labelW = label.length * GATE_CH
@@ -460,7 +516,10 @@ export default function StationMap(props: StationMapProps) {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault(); e.stopPropagation()
                       if (onOpenGate) onOpenGate(g.id); else onOpenStage(env, 'why')
-                    } else if (e.key === 'Escape') { e.stopPropagation(); cancelHide(); setPopover(null) }
+                    } else if (e.key === 'Escape' && popover) {
+                      // The first Esc closes the popover; the next goes on to the page (it closes the drawer).
+                      e.stopPropagation(); cancelHide(); setPopover(null); escArmed.current = true
+                    }
                   }}
                   onClick={e => { e.stopPropagation(); if (onOpenGate) onOpenGate(g.id); else onOpenStage(env, 'why') }}>
                   {/* The hit area covers the mark and its label, so a click anywhere on the gate lands. */}
@@ -525,33 +584,12 @@ function labelsBottom(p: Placed, level: ZoomLevel): number {
   return y + GRAPH.station.r + lineOf(level) * (level === 'detail' ? 3 : 1) + GRAPH.grid.gap * 3
 }
 
-/** How far before the end of an edge the i-th gate mark sits. */
-function gateOffset(i: number): number {
-  return GRAPH.gateTick * 3 + i * GATE_STEP
-}
 
 function boxOf(p: Placed) {
   return { x: p.x - p.w / 2, y: p.y - p.h / 2, w: p.w, h: p.h }
 }
 
-/** The gates on the edge into a node: a station's, or a group's worst per name. */
-function gatesOn(node: MapNode, model: StationMapModel): GateMark[] {
-  if (node.kind === 'station') return node.station.gates
-  const byName = new Map<string, GateMark>()
-  const rank = (g: GateMark) => (g.holding ? 0 : g.display.tone === 'waiting' ? 1 : g.state === 'Pass' ? 3 : 2)
-  for (const m of node.group.members) {
-    for (const g of model.stations.get(m)!.gates) {
-      const prev = byName.get(g.name)
-      if (!prev || rank(g) < rank(prev)) byName.set(g.name, g)
-    }
-  }
-  return [...byName.values()].sort((a, b) => rank(a) - rank(b))
-}
 
-/** s cut to n characters with an ellipsis. */
-function clip(s: string, n: number): string {
-  return s.length <= n ? s : `${s.slice(0, Math.max(1, n - 1))}…`
-}
 
 function cssEscape(s: string): string {
   return s.replace(/["\\]/g, '\\$&')
@@ -576,21 +614,18 @@ interface StationGlyphProps {
   chain?: 'up' | 'down'
   onOpen: () => void
   onFocus: () => void
+  /** The zoom: labels are counter-scaled, so their lines spread with it. */
+  k: number
+  /** Its labels overlap more important ones: hidden until hover or focus. */
+  culled: boolean
 }
 
-function StationGlyph({ p, st, level, model, focusable, focused, dim, chain, onOpen, onFocus, differs: diff }: StationGlyphProps) {
+function StationGlyph({ p, st, level, model, focusable, focused, dim, chain, onOpen, onFocus, differs: diff, k, culled }: StationGlyphProps) {
   const { x, y } = dotOf(p)
   const r = focused ? GRAPH.station.rFocus : GRAPH.station.r
   const tone = st.display.tone
-  const onThread = model.thread.some(t => t.to === st.id || t.from === st.id)
-  const attention = tone === 'failed' || tone === 'blocked' || tone === 'held'
-  const showLabel = level !== 'overview' || onThread || attention || focused
-  // At Map zoom a version shows only where it differs from its upstream's.
-  const upVersion = st.upstreams.length ? model.stations.get(st.upstreams[0])?.running?.version : undefined
-  const showVersion = level === 'detail' || (level === 'map' && st.running?.version !== upVersion)
-  const age = ageOf(st.running?.verifiedAt)
-  const pr = st.incoming?.prURL ? prNumberFromURL(st.incoming.prURL) : null
-  const line = lineOf(level)
+  const text = stationText(st, level, model, p, focused)
+  const line = lineAt(level, k)
   return (
     <g className="station" data-station={st.env} data-node-id={st.stepId} data-focus-id={st.env} data-tone={tone} data-dim={dim || undefined}
       data-chain={chain} data-focused={focused || undefined}
@@ -602,31 +637,70 @@ function StationGlyph({ p, st, level, model, focusable, focused, dim, chain, onO
       {tone === 'held' && <circle className="station__ring2" cx={x} cy={y} r={r + 3} />}
       <circle className="station__dot" cx={x} cy={y} r={r} />
       {tone === 'failed' && <path className="station__notch" d={`M${x} ${y} L${x + r * 1.2} ${y - r * 0.7} L${x + r * 1.2} ${y + r * 0.7} Z`} />}
+      {tone === 'waiting' && <path className="station__tick" d={`M${x} ${y - r * 0.6} L${x} ${y} L${x + r * 0.5} ${y}`} />}
       {tone === 'promoting' && <circle className="station__arc" cx={x} cy={y} r={r + 3} pathLength={100} />}
       {diff && <text x={x + r + 3} y={y - r - 2} className="station__differs" aria-hidden="true">≠</text>}
-      {showLabel && (
-        <text x={x - r} y={y - r - 6} className="station__name">{st.env}</text>
-      )}
-      {showLabel && level !== 'overview' && (
-        <text x={x - r} y={y + r + line} className="station__sub">
-          {showVersion && st.running ? <tspan className="station__version">{st.running.version}</tspan> : null}
-          {showVersion && st.running && age ? <tspan>{` · ${age}`}</tspan> : null}
-          {!st.running && level === 'detail' ? <tspan>nothing deployed</tspan> : null}
-        </text>
-      )}
-      {level === 'detail' && st.incoming && (
-        <>
-          <text x={x - r} y={y + r + line * 2} className="station__incoming" data-tone={tone}>{clip(`→ ${st.incoming.version}`, detailChars(p))}</text>
-          <text x={x - r} y={y + r + line * 3} className="station__incoming" data-tone={tone}>
-            {clip(`${st.display.label}${pr ? ` · PR ${pr}` : ''}`, detailChars(p))}
-          </text>
-        </>
-      )}
-      {level === 'detail' && !st.incoming && st.display.tone !== 'verified' && st.display.tone !== 'pending' && (
-        <text x={x - r} y={y + r + line * 2} className="station__incoming" data-tone={tone}>{st.display.label}</text>
-      )}
+      {/* A label that would overlap a more important one is hidden (culled); it shows on hover and focus. */}
+      {text.name && <text x={x - r} y={y - r - 6} className="station__name" data-culled={culled || undefined}>{text.name}</text>}
+      {text.lines.map((l, i) => (
+        <text key={i} x={x - r} y={y + r + line * (i + 1)} className={l.cls} data-tone={l.cls === 'station__incoming' ? tone : undefined} data-culled={culled || undefined}>{l.text}</text>
+      ))}
     </g>
   )
+}
+
+/** The words a station shows at a level: its name, and its lines under the dot. */
+function stationText(st: Station, level: ZoomLevel, model: StationMapModel, p: Placed, focused: boolean): { name?: string; lines: Array<{ cls: string; text: string }> } {
+  const tone = st.display.tone
+  const onThread = model.thread.some(t => t.to === st.id || t.from === st.id)
+  const attention = tone === 'failed' || tone === 'blocked' || tone === 'held'
+  if (!(level !== 'overview' || onThread || attention || focused)) return { lines: [] }
+  if (level === 'overview') return { name: st.env, lines: [] }
+  const lines: Array<{ cls: string; text: string }> = []
+  // At Map zoom a version shows only where it differs from its upstream's.
+  const upVersion = st.upstreams.length ? model.stations.get(st.upstreams[0])?.running?.version : undefined
+  const showVersion = level === 'detail' || st.running?.version !== upVersion
+  const age = ageOf(st.running?.verifiedAt)
+  if (showVersion && st.running) lines.push({ cls: 'station__sub', text: `${st.running.version}${age ? ` · ${age}` : ''}` })
+  else if (!st.running && level === 'detail') lines.push({ cls: 'station__sub', text: 'nothing deployed' })
+  if (level !== 'detail') return { name: st.env, lines }
+  const chars = detailChars(p)
+  // What is on its way, with its PR first (so it is never the part an ellipsis drops), then its state.
+  const pr = st.incoming?.prURL ? prNumberFromURL(st.incoming.prURL) : null
+  if (st.incoming) lines.push({ cls: 'station__incoming', text: wrapWords(`→ ${st.incoming.version}${pr ? ` · PR ${pr}` : ''}`, chars, 1)[0] })
+  if (st.incoming || (tone !== 'verified' && tone !== 'pending')) {
+    for (const t of wrapWords(st.display.label, chars, 2)) lines.push({ cls: 'station__incoming', text: t })
+  }
+  return { name: st.env, lines }
+}
+
+/** The font size of a station label in map units at zoom k (counter-scaled, as StationMap.css does). */
+function labelUnits(px: number, minPx: number, k: number): number {
+  return Math.max(px, minPx / k)
+}
+
+/** A station's line height at zoom k: its lines never overlap as their text grows at low zoom. */
+function lineAt(level: ZoomLevel, k: number): number {
+  const sub = level === 'detail' ? LABEL_PX.detailSub : LABEL_PX.sub
+  return Math.max(lineOf(level), labelUnits(sub, GRAPH.labelMin, k) * LINE_EM)
+}
+
+/** The boxes of a station's labels in map units at zoom k: what culling compares. */
+function stationLabelBoxes(st: Station, level: ZoomLevel, model: StationMapModel, p: Placed, k: number, focused: boolean): Rect[] {
+  const text = stationText(st, level, model, p, focused)
+  if (!text.name) return []
+  const { x, y } = dotOf(p)
+  const r = GRAPH.station.r
+  const namePx = level === 'detail' ? LABEL_PX.detailName : level === 'map' ? LABEL_PX.name : LABEL_PX.sub
+  const nameU = labelUnits(namePx, LABEL_PX.sub, k)
+  const subU = labelUnits(level === 'detail' ? LABEL_PX.detailSub : LABEL_PX.sub, GRAPH.labelMin, k)
+  // The name above the line, and the lines under the dot: two boxes, so a wide line
+  // below does not cull a short name above (or the other way round).
+  const name: Rect = { x: x - r, y: y - r - 6 - nameU, w: text.name.length * CH_EM * nameU, h: nameU }
+  if (!text.lines.length) return [name]
+  const w = Math.max(...text.lines.map(l => l.text.length * CH_EM * subU))
+  const top = y + r + lineAt(level, k) - subU
+  return [name, { x: x - r, y: top, w, h: lineAt(level, k) * (text.lines.length - 1) + subU * (1 + (1 - TEXT_ASCENT)) }]
 }
 
 interface GroupGlyphProps {
@@ -644,9 +718,16 @@ interface GroupGlyphProps {
   onFocusItem: (id: string) => void
   /** The hatch pattern's id, for held cells. */
   hatch: string
+  /** The zoom: a head's text that no longer fits its frame is hidden (it stays in the name). */
+  k: number
 }
 
-function GroupGlyph({ p, g, expanded, model, level, active, focusedEnv, matchSet, searching, onToggle, onOpen, onFocusItem, hatch }: GroupGlyphProps) {
+/** Whether text of n characters (--k-text-2xs, counter-scaled at zoom k) fits in w map units. */
+function fitsIn(text: string, w: number, k: number): boolean {
+  return text.length * CH_EM * Math.max(GRAPH.labelMin, GRAPH.labelMin / k) <= w
+}
+
+function GroupGlyph({ p, g, expanded, model, level, active, focusedEnv, matchSet, searching, onToggle, onOpen, onFocusItem, hatch, k }: GroupGlyphProps) {
   const box = boxOf(p)
   const total = g.members.length
   const pacing = groupPacing(g)
@@ -662,26 +743,30 @@ function GroupGlyph({ p, g, expanded, model, level, active, focusedEnv, matchSet
     at += w
     return seg
   })
+  // The head's text at this zoom: counter-scaled, so it is placed by its size and
+  // hidden when the frame cannot hold it (the group's name says it all).
+  const u = Math.max(GRAPH.labelMin, GRAPH.labelMin / k)
+  const hd = groupHead(u, level !== 'overview')
+  const fail = g.failed > 0 && !g.halted && !expanded ? `✕ ${g.failed}` : ''
+  const chevronW = 2 * CH_EM * u
+  const showTitle = fitsIn(title, box.w - GRID_PAD_X * 3 - chevronW - (fail ? (fail.length + 1) * CH_EM * u : 0), k) && (expanded ? u + GRID_PAD_X / 2 <= GRID_HEAD_H : hd.threadY <= box.h)
+  const showSub = level !== 'overview' && !expanded && hd.subY <= box.h && fitsIn(groupSub(g), box.w - GRID_PAD_X * 2, k)
   const head = (
     <g className="group__head" data-focus-id={g.id} role="button" tabIndex={active === g.id ? 0 : -1}
       aria-expanded={expanded} aria-label={`${name}${pacing ? `, ${pacing}` : ''}: ${summary}`}
       onClick={onToggle} onFocus={() => onFocusItem(g.id)}>
       <rect className="group__frame" x={box.x} y={box.y} width={box.w} height={box.h} />
-      <text x={box.x + 12} y={box.y + 15} className="group__label">{title}</text>
-      <text x={box.x + box.w - 12} y={box.y + 15} textAnchor="end" className="group__chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</text>
+      {showTitle && <text x={box.x + GRID_PAD_X} y={box.y + hd.titleY} className="group__label">{title}</text>}
+      <text x={box.x + box.w - GRID_PAD_X} y={box.y + hd.titleY} textAnchor="end" className="group__chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</text>
       {/* A minority of failures is a mark on the band; the thread still fills by the share verified. */}
-      {g.failed > 0 && !g.halted && !expanded && (
-        <text x={box.x + box.w - 26} y={box.y + 15} textAnchor="end" className="group__fail" aria-hidden="true">{`✕ ${g.failed}`}</text>
+      {fail && showTitle && (
+        <text x={box.x + box.w - GRID_PAD_X - chevronW - CH_EM * u} y={box.y + hd.titleY} textAnchor="end" className="group__fail" aria-hidden="true">{fail}</text>
       )}
       {!expanded && (
         <>
-          {segments.map(s => <rect key={s.tone} className="group__seg" data-tone={s.tone} x={s.x} y={box.y + 24} width={Math.max(0, s.w - 1)} height={BAR.seg} />)}
-          {g.verified > 0 && <rect className="group__thread" x={box.x + 12} y={box.y + 34} width={(g.verified / total) * barW} height={BAR.thread} />}
-          {level !== 'overview' && (
-            <text x={box.x + 12} y={box.y + box.h - 7} className="group__sub">
-              {groupSub(g)}
-            </text>
-          )}
+          {segments.map(s => <rect key={s.tone} className="group__seg" data-tone={s.tone} x={s.x} y={box.y + hd.barY} width={Math.max(0, s.w - 1)} height={BAR.seg} />)}
+          {g.verified > 0 && <rect className="group__thread" x={box.x + GRID_PAD_X} y={box.y + hd.threadY} width={(g.verified / total) * barW} height={BAR.thread} />}
+          {showSub && <text x={box.x + GRID_PAD_X} y={box.y + hd.subY} className="group__sub">{groupSub(g)}</text>}
         </>
       )}
     </g>
@@ -695,7 +780,7 @@ function GroupGlyph({ p, g, expanded, model, level, active, focusedEnv, matchSet
   return (
     <g className="group group--expanded" data-group={g.id}>
       {head}
-      {text.rows.map(r => (
+      {u <= GRID_ROW_ROOM && text.rows.map(r => (
         <text key={`${r.y}`} x={r.x} y={r.y} className="group__row" data-tone={r.tone}>{r.text}</text>
       ))}
       {cells.map(cell => {
@@ -712,10 +797,11 @@ function GroupGlyph({ p, g, expanded, model, level, active, focusedEnv, matchSet
             {tone === 'held' && <rect className="cell__held" x={cell.x} y={cell.y} width={c} height={c} fill={`url(#${hatch})`} />}
             {tone === 'blocked' && <path className="cell__mark" d={`M${cell.x + 2} ${cell.y + c / 2} L${cell.x + c - 2} ${cell.y + c / 2}`} />}
             {tone === 'promoting' && <circle className="cell__dot" cx={cell.x + c / 2} cy={cell.y + c / 2} r={c / 5} />}
+            {tone === 'waiting' && <path className="cell__clock" d={`M${cell.x + c / 2} ${cell.y + 2} L${cell.x + c / 2} ${cell.y + c / 2} L${cell.x + c - 2.5} ${cell.y + c / 2}`} />}
           </g>
         )
       })}
-      <text x={text.foot.x} y={text.foot.y} className="group__sub">{foot}</text>
+      {u <= GRID_FOOT_ROOM && fitsIn(foot, text.foot.w, k) && <text x={text.foot.x} y={text.foot.y} className="group__sub">{foot}</text>}
     </g>
   )
 }
@@ -751,7 +837,9 @@ const LEGEND: Array<{ tone: string; label: string; desc: string }> = [
   { tone: 'verified', label: 'Live', desc: 'Deployed and healthy' },
   { tone: 'promoting', label: 'In progress', desc: 'Promoting, waiting for the PR to merge, or checking health' },
   { tone: 'failed', label: 'Failed', desc: 'Failed, or stopped by an alarm' },
-  { tone: 'blocked', label: 'Held', desc: 'A policy gate or a rollback holds it' },
+  { tone: 'waiting', label: 'Waiting for PR merge', desc: 'A person is next: a PR to merge, or an approval' },
+  { tone: 'blocked', label: 'Held by a gate', desc: 'A policy gate holds it' },
+  { tone: 'held', label: 'Held', desc: 'A rollback holds it on an earlier version' },
   { tone: 'pending', label: 'Not reached', desc: 'Not reached yet, or waiting its turn' },
 ]
 

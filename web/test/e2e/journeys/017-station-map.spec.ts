@@ -35,8 +35,8 @@ test.describe('Journey 017 — Station map', () => {
     const prod = page.locator('[data-station="prod"]')
     await expect(prod).toHaveAttribute('aria-label', /^prod — Held by gate no-weekend-deploys, runs sha-9f8e7d6, .* ago, incoming sha-abc1234, blocked by no-weekend-deploys$/)
     await expect(prod).toContainText('sha-9f8e7d6')
-    await expect(prod.locator('.station__incoming').nth(0)).toHaveText('→ sha-abc1234')
-    await expect(prod.locator('.station__incoming').nth(1)).toHaveText('Held by gate no-weekend-deploys · PR #42')
+    await expect(prod.locator('.station__incoming').nth(0)).toHaveText('→ sha-abc1234 · PR #42')
+    await expect(prod.locator('.station__incoming').nth(1)).toHaveText('Held by gate no-weekend-deploys')
     await expect(page.locator('[data-station="uat"]')).toContainText('sha-abc1234')
     const gate = page.getByRole('button', { name: 'gate no-weekend-deploys, Blocking' })
     await expect(gate).toBeVisible()
@@ -205,4 +205,66 @@ test.describe('Journey 017 — Station map', () => {
     expect(overflow).toBeLessThanOrEqual(0)
     await shot(page, '3-envs-390')
   })
+
+  for (const [n, pipeline, ns] of [['3', 'kardinal-test-app', 'default'], ['30', 'checkout-30', 'scale'], ['300', 'large-300', 'scale']] as const) {
+    test(`${n} environments: no map label overlaps another at 390 px, nor at the smallest zoom at 1440`, async ({ page }) => {
+      await serveScale(page)
+      await page.setViewportSize({ width: 390, height: 844 })
+      // A narrow screen opens on the Table; the map is one choice away.
+      await page.goto(`/ui/#/p/${ns}/${pipeline}`)
+      await page.getByRole('radiogroup', { name: 'Show the pipeline as' }).getByRole('radio', { name: 'Map' }).click()
+      await expect(page.locator('.station-map__svg [data-station]').first()).toBeVisible()
+      await page.waitForTimeout(400)
+      expect(await overlappingLabels(page)).toEqual([])
+      await page.setViewportSize({ width: 1440, height: 900 })
+      await page.reload()
+      await expect(page.locator('.station-map__svg [data-station]').first()).toBeVisible()
+      // Zoom out to the minimum (0.2).
+      const svg = page.locator('.station-map__svg')
+      await svg.focus()
+      for (let i = 0; i < 12; i++) await page.keyboard.press('-')
+      await page.waitForTimeout(300)
+      expect(await overlappingLabels(page)).toEqual([])
+    })
+  }
+
+  test('keyboard: / from the zoom control searches the map; Esc on a gate closes its popover, then the drawer', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await open(page, 'kardinal-test-app', 'default')
+    await page.locator('.station-map').getByRole('radiogroup', { name: 'Zoom level' }).getByRole('radio', { name: 'Map' }).focus()
+    await page.keyboard.press('/')
+    await expect(page.getByRole('searchbox', { name: /Search environments/ })).toBeFocused()
+    await page.locator('[data-station="uat"]').click()
+    const drawer = page.getByTestId('stage-drawer')
+    await expect(drawer).toBeVisible()
+    await page.getByRole('button', { name: 'gate no-weekend-deploys, Blocking' }).focus()
+    await expect(page.locator('.gate-popover')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.gate-popover')).toBeHidden()
+    await expect(drawer).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(drawer).toBeHidden()
+  })
 })
+
+/** The pairs of visible map labels whose boxes overlap (by more than half a pixel). */
+async function overlappingLabels(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const boxes = [...document.querySelectorAll<SVGTextElement>('.station-map__svg text')]
+      .filter(t => getComputedStyle(t).visibility !== 'hidden' && t.textContent?.trim())
+      .map(t => ({ t: t.textContent!.trim(), r: t.getBoundingClientRect() }))
+      .filter(b => b.r.width > 0)
+    const out: string[] = []
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i].r
+        const b = boxes[j].r
+        const dx = Math.min(a.right, b.right) - Math.max(a.left, b.left)
+        const dy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
+        if (dx > 0.5 && dy > 0.5) out.push(`${boxes[i].t} × ${boxes[j].t}`)
+      }
+    }
+    return out
+  })
+}
+

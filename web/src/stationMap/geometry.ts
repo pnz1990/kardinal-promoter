@@ -49,7 +49,9 @@ const LABEL_W: Record<ZoomLevel, number> = { overview: 44, map: 120, detail: 272
 const STATION_H: Record<ZoomLevel, number> = { overview: 28, map: 44, detail: 100 + GRAPH.rankSep / 2 }
 /** The dot sits this far below a station's top: its name goes above the line
  *  the edges run on, its version and state below (a metro map's labels). */
-const DOT_TOP = 22
+export const DOT_TOP = 22
+/** The layout's margin around the map, in map units. */
+const MARGIN = GRAPH.nodeSep - GRAPH.grid.gap * 2
 
 /** A band or platform's summary size; Overview is denser so 300 environments read at once. */
 const GROUP_W: Record<ZoomLevel, number> = { overview: 180, map: 210, detail: 210 }
@@ -66,6 +68,12 @@ export function gridColumns(n: number): number {
 const GRID_HEAD = 28
 const GRID_FOOT = 20
 const GRID_PAD = 12
+/** For the renderer: an expanded grid's head height and side padding, and the text
+ *  size (map units) its row labels and footer can hold. */
+export const GRID_HEAD_H = GRID_HEAD
+export const GRID_PAD_X = GRID_PAD
+export const GRID_ROW_ROOM = 20
+export const GRID_FOOT_ROOM = 20
 /** The space between two states' rows: room for a row label that is
  *  counter-scaled to stay readable at Map and Overview zoom. */
 const GRID_BLOCK_GAP = 10
@@ -104,6 +112,20 @@ export function labelUnits(level: ZoomLevel): number {
 export function textW(n: number, level: ZoomLevel): number {
   return n * CH_EM * labelUnits(level)
 }
+
+/** Where a collapsed group's head puts its title, bar, thread and sub line for
+ *  text of u map units: the frame grows with the counter-scaled text. */
+export function groupHead(u: number, withSub: boolean): { titleY: number; barY: number; threadY: number; subY: number; h: number } {
+  const pad = GRAPH.grid.gap * 2
+  const titleY = pad + u * TEXT_ASCENT
+  const barY = titleY + pad + GRAPH.grid.gap
+  const threadY = barY + BAR.seg + GRAPH.grid.gap
+  const subY = threadY + BAR.thread + pad + u * TEXT_ASCENT
+  return { titleY, barY, threadY, subY, h: (withSub ? subY : threadY + BAR.thread) + pad + GRAPH.grid.gap }
+}
+
+/** The share of a font size above the baseline. */
+export const TEXT_ASCENT = 0.9
 
 /** A band or platform's visible title: "WAVE 2 · 48", "EDGE · 12" (its accessible name says the rest). */
 export function groupTitle(g: Group): string {
@@ -206,6 +228,96 @@ export function gateRun(n: number): number {
 /** The spacing of gate marks on one edge (a comb). */
 export const GATE_STEP = 6
 
+/** How far before the end of an edge the i-th gate mark sits. */
+export function gateOffset(i: number): number {
+  return GRAPH.gateTick * 3 + i * GATE_STEP
+}
+
+/** The clear gap, in screen px, between a thread that stops and the bar or dot it stops at. */
+export const THREAD_GAP_PX = GRAPH.gateTick
+/** The space a rank needs so the run into a gated node is straight: its gates and two chamfers. */
+export function rankSepFor(level: ZoomLevel, maxGates: number): number {
+  return Math.max(RANK_SEP[level], gateRun(maxGates) + GRAPH.chamfer * 3)
+}
+
+/**
+ * threadPoints is the part of an edge the thread draws. Into a node with a gate
+ * that holds the Bundle it ends before that gate's bar, whatever the target's
+ * state (a band, a platform, a held environment): the thread never crosses a
+ * closed bar. Into a failure it ends short of the dot. The gap is in screen px,
+ * so it stays clear at any zoom k.
+ */
+export function threadPoints(points: Array<[number, number]>, kind: string, holdAt: number, k: number): Array<[number, number]> {
+  const len = lengthOf(points)
+  if (holdAt >= 0) return trimEnd(points, Math.min(len, gateOffset(holdAt) + THREAD_GAP_PX / k))
+  if (kind === 'snap') return trimEnd(points, Math.min(len, GRAPH.station.r + THREAD_GAP_PX / k / 2))
+  return points
+}
+
+/**
+ * wrapWords breaks text into at most maxLines lines of maxChars, at spaces and
+ * after hyphens; a last line that does not fit ends in an ellipsis at a word
+ * boundary. A word is cut only when it alone is longer than a line.
+ */
+export function wrapWords(text: string, maxChars: number, maxLines: number): string[] {
+  const n = Math.max(4, maxChars)
+  const words = text.split(/(?<=[-\s])/)
+  const lines: string[] = []
+  let cur = ''
+  let truncated = false
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]
+    if (cur && (cur + w).trimEnd().length > n) {
+      lines.push(cur.trimEnd())
+      cur = ''
+      if (lines.length === maxLines) { truncated = true; break }
+    }
+    cur += w
+  }
+  if (cur) {
+    if (lines.length < maxLines) lines.push(cur.trimEnd())
+    else truncated = true
+  }
+  if (lines.length === 0) return ['']
+  if (truncated) {
+    // An ellipsis at a word boundary: drop words from the last line until it fits with "…".
+    let l = lines[lines.length - 1]
+    while (l.length + 1 > n) {
+      // A boundary before the last character, so every step shortens the line.
+      const body = l.slice(0, -1)
+      const cut = Math.max(body.lastIndexOf(' '), body.lastIndexOf('-'))
+      l = cut > 0 ? l.slice(0, l[cut] === '-' ? cut + 1 : cut).trimEnd() : l.slice(0, n - 1)
+    }
+    lines[lines.length - 1] = `${l.trimEnd()}…`
+  }
+  // Only a word longer than a whole line is cut inside the word.
+  return lines.map(l => (l.length > n ? `${l.slice(0, n - 1)}…` : l))
+}
+
+/** A box in map units. */
+export interface Rect { x: number; y: number; w: number; h: number }
+
+function overlaps(a: Rect, b: Rect): boolean {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+}
+
+/**
+ * cullLabels keeps the labels that do not overlap one another or the map's
+ * marks, in priority order (lower first): a label that would overlap one kept
+ * already, or a mark, is hidden. Marks (dots, group frames) are always kept.
+ */
+export function cullLabels(labels: Array<{ id: string; priority: number; boxes: Rect[] }>, marks: Array<{ id: string; box: Rect }>): Set<string> {
+  const kept: Rect[] = []
+  const out = new Set<string>()
+  for (const l of [...labels].sort((a, b) => a.priority - b.priority)) {
+    if (l.boxes.some(b => kept.some(k => overlaps(k, b)))) continue
+    if (l.boxes.some(b => marks.some(m => m.id !== l.id && overlaps(m.box, b)))) continue
+    kept.push(...l.boxes)
+    out.add(l.id)
+  }
+  return out
+}
+
 /** The size dagre gives a node at a level. */
 export function nodeSize(n: MapNode, level: ZoomLevel): { w: number; h: number } {
   if (n.kind === 'station') {
@@ -218,9 +330,10 @@ export function nodeSize(n: MapNode, level: ZoomLevel): { w: number; h: number }
   }
   // Wide enough for its title (and the failure mark) and its sub line: no label is cut.
   const g = n.group
-  const title = textW(groupTitle(g).length + 2 + (g.failed > 0 ? String(g.failed).length + 2 : 0), level) + GRID_PAD * 3
+  // Title, chevron (2 characters) and the failure mark ("✕ 3" and a space), as GroupGlyph draws them.
+  const title = textW(groupTitle(g).length + 2 + (g.failed > 0 && !g.halted ? String(g.failed).length + 3 : 0), level) + GRID_PAD * 3 + GRAPH.grid.gap
   const sub = level === 'overview' ? 0 : textW(groupSub(g).length, level) + GRID_PAD * 2
-  return { w: Math.max(GROUP_W[level], title, sub), h: GROUP_H[level] }
+  return { w: Math.max(GROUP_W[level], title, sub), h: Math.max(GROUP_H[level], groupHead(labelUnits(level), level !== 'overview').h) }
 }
 
 /**
@@ -230,7 +343,9 @@ export function nodeSize(n: MapNode, level: ZoomLevel): { w: number; h: number }
  */
 export function layout(nodes: MapNode[], edges: MapEdge[], level: ZoomLevel, gatesInto: (id: string) => number = () => 0): Layout {
   const g = new dagre.graphlib.Graph()
-  g.setGraph({ rankdir: 'LR', nodesep: GRAPH.nodeSep, ranksep: RANK_SEP[level], marginx: 24 + LEAD, marginy: 24 })
+  // Every edge into a gated node gets the straight run its gates need, at every level.
+  const maxGates = Math.max(0, ...nodes.map(n => gatesInto(n.id)))
+  g.setGraph({ rankdir: 'LR', nodesep: GRAPH.nodeSep, ranksep: rankSepFor(level, maxGates), marginx: MARGIN + LEAD, marginy: MARGIN })
   g.setDefaultEdgeLabel(() => ({}))
   for (const n of nodes) {
     const { w, h } = nodeSize(n, level)

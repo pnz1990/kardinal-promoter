@@ -5,6 +5,7 @@ and **gates** decide when the version may enter the next environment. Those four
 all you need to start; the [glossary](reference/glossary.md) maps every other term to them.
 
 ```mermaid
+%%{init: {'flowchart': {'curve': 'linear'}}}%%
 flowchart LR
     CI["Your CI"] -->|creates| V["Version"]
     V --> test["test<br/>commit, health check"]
@@ -275,16 +276,16 @@ Referencing an attribute that does not exist blocks the gate. See the
 kardinal explain my-app --env prod
 
 # Output:
-# ENVIRONMENT   BUNDLE         TYPE         NAME                 STATE   EXPRESSION                         REASON
-# prod          my-app-9tptr   PolicyGate   staging-soak         Block   bundle.upstreamSoakMinutes >= 30   bundle.version=1.29.0: bundle.upstreamSoakMinutes >= 30 = false
-# prod          my-app-9tptr   PolicyGate   no-weekend-deploys   Pass    !schedule.isWeekend                bundle.version=1.29.0: !schedule.isWeekend = true
+# ENVIRONMENT   BUNDLE         TYPE         NAME                 STATE      EXPRESSION                         REASON
+# prod          my-app-9tptr   PolicyGate   staging-soak         Blocking   bundle.upstreamSoakMinutes >= 30   bundle.version=1.29.0: bundle.upstreamSoakMinutes >= 30 = false
+# prod          my-app-9tptr   PolicyGate   no-weekend-deploys   Passing    !schedule.isWeekend                bundle.version=1.29.0: !schedule.isWeekend = true
 #
 # prod   deployed: my-app-7qvsr (1.28.0)
 ```
 
-Gates that are not ready come first. STATE is Pass, Block (holding the
-version), Superseded, Rejected, Pending or Waiting; REASON is the controller's latest
-evaluation. See [Inspecting PolicyGates](policy-gates.md#inspecting-policygates).
+Gates that are not ready come first. STATE is Passing, Blocking (holding the version),
+Replaced by newer version, Version rejected, Not evaluated yet or Not ready; REASON is the
+controller's latest evaluation. See [Inspecting gates](policy-gates.md#inspecting-gates).
 
 ### Skip permissions
 

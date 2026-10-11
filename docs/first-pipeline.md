@@ -8,6 +8,7 @@ promoted to prod by your CI. For a demo against a sample repository, see the
 ## What you will build
 
 ```mermaid
+%%{init: {'flowchart': {'curve': 'linear'}}}%%
 graph LR
     CI["CI pushes image<br/>kardinal-test-app:sha-abc1234"] --> Bundle["Bundle created"]
     Bundle --> Test["test\n(auto-promote)"]
@@ -39,36 +40,8 @@ graph LR
 
 ## Install kardinal-promoter
 
-kardinal-promoter runs on the upstream [kro](https://github.com/kubernetes-sigs/kro) Graph controller. Install kro v0.10.0-rc.0 with the `GraphKind` feature gate first:
-
-```bash
-# From a kardinal-promoter checkout
-bash hack/install-kro.sh
-```
-
-Then install kardinal-promoter:
-
-```bash
-# Option A: reference an existing Secret (recommended for production)
-# The controller watches this Secret and reloads the token automatically on rotation —
-# no controller restart needed. See "Credential rotation" in docs/scm-providers.md.
-kubectl create namespace kardinal-system --dry-run=client -o yaml | kubectl apply -f -
-kubectl create secret generic github-token \
-  --namespace kardinal-system \
-  --from-literal=token=$GITHUB_PAT \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
-  --namespace kardinal-system --create-namespace \
-  --set scm.secretRef.name=github-token
-
-# Option B: pass the token directly (development/testing only)
-# The chart stores it in Secret kardinal-promoter-github-token, but the token
-# also stays in the Helm release history.
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
-  --namespace kardinal-system --create-namespace \
-  --set scm.token=$GITHUB_PAT
-```
+Follow [Install](installation.md): install kro, create the SCM token Secret, install the chart and
+the CLI.
 
 Verify the installation:
 
@@ -225,11 +198,11 @@ kardinal get pipelines
     kubectl logs -n kardinal-system deployment/kardinal-promoter | tail -20
     ```
 
-## Create your first Bundle
+## Create your first version
 
-In a real setup, your CI pipeline creates Bundles after building and pushing images.
-For this quickstart, promote the `kardinal-test-app` image `sha-9349a3f` with its digest pinned.
-The kardinal-demo overlays already run `sha-9349a3f`, so a Bundle with only that tag changes nothing and opens no PR; the digest adds a `digest:` line to each overlay.
+In a real setup, your CI pipeline creates a version after building and pushing images.
+For this guide, promote the `kardinal-test-app` image `sha-9349a3f` with its digest pinned.
+The kardinal-demo overlays already run `sha-9349a3f`, so a version with only that tag changes nothing and opens no PR; the digest adds a `digest:` line to each overlay.
 
 ```bash
 TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0"
@@ -269,17 +242,17 @@ The promotion starts immediately. kardinal-promoter generates a Graph and begins
 ```bash
 # Watch the pipeline status
 kardinal get pipelines
-# PIPELINE            BUNDLE                    TEST       UAT              PROD      SUB   AGE
+# PIPELINE            BUNDLE                    TEST   UAT               PROD          SUB   AGE
 # kardinal-test-app   kardinal-test-app-x7k2p   Live   Checking health   Not reached   0     2m
 
-# See the steps of the active Bundle
+# See the steps of the version being promoted
 kardinal get steps kardinal-test-app
-# ENVIRONMENT   STEP           STATE        DURATION   MESSAGE
-# test          git-clone      Completed    812ms      -
+# ENVIRONMENT   STEP           STATE         DURATION   MESSAGE
+# test          git-clone      Done          812ms      -
 #               ...
-# uat           git-clone      Completed    790ms      -
+# uat           git-clone      Done          790ms      -
 #               ...
-#               health-check   InProgress   -          -
+#               health-check   In progress   -          -
 
 # Check why prod hasn't started: prod gets a PromotionStep only after uat is
 # Verified (and, with gates, after every gate passes)
@@ -288,7 +261,7 @@ kardinal explain kardinal-test-app --env prod
 ```
 
 !!! tip "Troubleshooting: Test stuck in Checking health"
-    If the test environment stays in `HealthChecking` for more than a few minutes:
+    If the test environment stays in Checking health (`HealthChecking`) for more than a few minutes:
     ```bash
     kubectl get deployment kardinal-test-app -n kardinal-test-app-test
     kubectl describe application kardinal-test-app-test -n argocd
@@ -299,11 +272,11 @@ Once uat is verified, the prod PromotionStep is created. Since prod uses `approv
 
 ```bash
 kardinal get steps kardinal-test-app
-# ENVIRONMENT   STEP             STATE        DURATION   MESSAGE
+# ENVIRONMENT   STEP             STATE         DURATION   MESSAGE
 # ...
-# prod          git-clone        Completed    790ms      -
+# prod          git-clone        Done          790ms      -
 #               ...
-#               wait-for-merge   InProgress   -          -
+#               wait-for-merge   In progress   -          -
 ```
 
 Go to your fork of kardinal-demo. You will see a PR titled:
@@ -322,7 +295,7 @@ The PR body contains:
 
 ```bash
 kardinal get pipelines
-# PIPELINE            BUNDLE                    TEST       UAT        PROD       SUB   AGE
+# PIPELINE            BUNDLE                    TEST   UAT    PROD   SUB   AGE
 # kardinal-test-app   kardinal-test-app-x7k2p   Live   Live   Live   0     8m
 ```
 
@@ -355,8 +328,8 @@ The next Bundle promoted to prod will have this gate injected into its Graph. If
 
 ```bash
 kardinal explain kardinal-test-app --env prod
-# ENVIRONMENT   BUNDLE                    TYPE         NAME                 STATE   EXPRESSION            REASON
-# prod          kardinal-test-app-9tptr   PolicyGate   no-weekend-deploys   Block   !schedule.isWeekend   Production deployments are blocked on weekends (bundle.version=sha-abc1234: !schedule.isWeekend = false)
+# ENVIRONMENT   BUNDLE                    TYPE         NAME                 STATE      EXPRESSION            REASON
+# prod          kardinal-test-app-9tptr   PolicyGate   no-weekend-deploys   Blocking   !schedule.isWeekend   Production deployments are blocked on weekends (bundle.version=sha-abc1234: !schedule.isWeekend = false)
 #
 # prod   deployed: kardinal-test-app-7qvsr (sha-1a2b3c4)
 ```

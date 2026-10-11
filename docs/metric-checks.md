@@ -1,7 +1,7 @@
 # Metric Checks
 
 A `MetricCheck` runs one query against a metrics backend at a fixed interval, compares the value
-with a threshold, and writes `Pass` or `Fail` to its status. A [PolicyGate](policy-gates.md) reads
+with a threshold, and writes `Pass` or `Fail` to its status. A [gate](policy-gates.md) reads
 the result as `metrics.<name>.result`, `.value` and `.stale`, so a metric can hold a promotion.
 
 | Provider | Backend | Query |
@@ -206,8 +206,8 @@ gets an instance of it for its environment: a MetricCheck that the Graph owns, n
 
 | Placeholder | Value |
 |---|---|
-| `{{ bundle.name }}` | The Bundle's name |
-| `{{ bundle.version }}` | `bundle.version` as gates see it: the first image tag, or the first 8 characters of `configRef.commitSHA` for a config Bundle |
+| `{{ bundle.name }}` | The version's name |
+| `{{ bundle.version }}` | `bundle.version` as gates see it: the first image tag, or the first 8 characters of `configRef.commitSHA` for a config version |
 | `{{ bundle.imageTag }}` | The first image's tag |
 | `{{ bundle.imageDigest }}` | The first image's digest |
 | `{{ bundle.commitSHA }}` | `provenance.commitSHA` |
@@ -215,7 +215,7 @@ gets an instance of it for its environment: a MetricCheck that the Graph owns, n
 | `{{ environment.name }}` | The gated environment |
 | `{{ namespace }}` | The Pipeline's namespace |
 
-The gate of that Bundle and environment reads the instance's result as `metrics.<template name>`,
+The gate of that version and environment reads the instance's result as `metrics.<template name>`,
 so the same gate expression analyses each promotion on its own:
 
 ```yaml
@@ -250,14 +250,14 @@ How the Graph runs it:
 - The instance is created once every upstream environment of the gated one is Verified, so the
   analysis starts when there is a deployment to analyse. Until then the gate sees the template,
   which has no result, and blocks.
-- Once the Bundle is no longer promoting (Verified, Failed or Superseded) the Graph sets the
-  instance's `spec.suspend`, and it stops querying. A Failed Bundle that promotes again resumes it.
+- Once the version is no longer promoting (Verified, Failed or Superseded) the Graph sets the
+  instance's `spec.suspend`, and it stops querying. A Failed version that promotes again resumes it.
 - A value with a character outside `A-Z a-z 0-9 . _ + -` (a digest such as `sha256:<hex>`
   excepted), an empty value, a value that starts with `.`, and a value containing `..` are not put
-  into a query (a Bundle's tag comes from CI, and
+  into a query (a version's tag comes from CI, and
   `"} or vector(1)` would rewrite a PromQL query; an empty commit matches nothing, and a count over
   nothing is 0, which would pass). The placeholder stays, and the instance fails with
-  `unrendered placeholder {{ ... }}`. Bundle image tags must also follow the OCI tag grammar.
+  `unrendered placeholder {{ ... }}`. Version image tags must also follow the OCI tag grammar.
 - In `web.url` the scheme and host must be literal: a placeholder in the host, or a rendered URL
   whose scheme, host or port differs from the template's, leaves the URL unrendered, and the
   instance fails.
@@ -267,7 +267,7 @@ How the Graph runs it:
   and the template's `status.reason` names it. A MetricCheck that is not a template and contains a
   placeholder fails the same way.
 - Templates are read when the Bundle's Graph is built: a template created afterwards applies to
-  the next Bundle. Instances are deleted with the Bundle's Graph.
+  the next version. Instances are deleted with the Bundle's Graph.
 - Org gates read the MetricChecks of their org policy namespace, where the Graph creates nothing:
   a template there has no result and an org gate that reads it blocks. Use per-promotion templates
   with gates of the Pipeline namespace.
