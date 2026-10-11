@@ -29,10 +29,10 @@ prod is held by gate no-weekend-deploys.
 
 `kardinal why` names the gate, its rule and last evaluation, when it opens and the command that
 gets past it ([`kardinal why`](reference/cli/kardinal-why.md) lists every case). For every step
-and gate of the version in one table, run `kardinal explain my-app --env prod`.
+and gate of the version in one table, run `kardinal explain my-app prod`.
 
 If a gate holds it, its Rule is not satisfied, and Now shows what it evaluated to. Common causes:
-- `no-weekend-deploys`: it is a weekend. Wait for Monday, or record a break-glass override with `kardinal override <pipeline> --stage prod --gate no-weekend-deploys --reason "..."` (see [Emergency Overrides](overrides.md)).
+- `no-weekend-deploys`: it is a weekend. Wait for Monday, or record a break-glass override with `kardinal override <pipeline> prod --gate no-weekend-deploys --reason "..."` (see [Emergency Overrides](overrides.md)).
 - `staging-soak`: the upstream environment was verified recently. Wait for the soak time to pass.
 - CEL error: the expression uses a variable or key that is not in the [CEL context](reference/cel-context.md). Check `kardinal policy test <file>`.
 

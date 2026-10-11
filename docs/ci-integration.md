@@ -243,7 +243,7 @@ paused pipeline. A pull request the SCM merges by itself (`pr.merge.auto`) is wa
 its auto-merge has not failed. `--stop-at-gate` exits 3 at any gate that does not pass, also one
 that would open by itself.
 
-Stopping does not stop the promotion: `kardinal status my-app -w` goes on following it.
+Ctrl-C stops following; the promotion carries on. `kardinal status my-app -w` follows it again.
 
 While it waits, `ship` prints each environment's new state on stderr; at the end it prints one
 line on stdout, or with `-o json` an object with `bundle`, `pipeline`, `namespace`, `type`,

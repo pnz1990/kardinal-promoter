@@ -97,9 +97,11 @@ The `--to` flag names the version to roll back to. It must exist in the version 
 To keep an environment on what it runs now, with no rollback:
 
 ```bash
-kardinal hold my-app prod --reason "INC-4521: freeze prod while we investigate" [--expires-in 24h]
+kardinal hold my-app prod --reason "INC-4521: freeze prod while we investigate"
 kardinal unhold my-app prod
 ```
+
+Add `--expires-in 24h` to end the hold by itself.
 
 [`hold`](reference/cli/kardinal-hold.md) writes the same `spec.holds` entry a rollback hold writes, naming the version deployed in
 prod; nothing is rolled back and no version is created. To go back to an earlier version and
@@ -112,8 +114,10 @@ on another version or for another reason: release that hold first. `unhold` is `
 ### Roll back and hold
 
 ```bash
-kardinal rollback my-app --env prod --hold --reason "INC-4521: v1.29.0 leaks connections" [--hold-expires-in 24h]
+kardinal rollback my-app prod --hold --reason "INC-4521: v1.29.0 leaks connections"
 ```
+
+Add `--hold-expires-in 24h` to end the hold by itself.
 
 Output:
 ```
