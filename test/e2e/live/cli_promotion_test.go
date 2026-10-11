@@ -582,8 +582,8 @@ func TestCLI_Reports(t *testing.T) {
 	}, rows)
 	assert.Equal(t, hist[:1], framework.ParseTable(c.Must(a.ns, "history", pipelineName, "--limit", "1")))
 	assert.Equal(t, []map[string]string{hist[0], hist[2]}, framework.ParseTable(c.Must(a.ns, "history", pipelineName, "--env", "prod")))
-	assert.Equal(t, "No promotion history found for pipeline \"podinfo\" env \"staging\"\n",
-		c.Must(a.ns, "history", pipelineName, "--env", "staging"))
+	// An environment the pipeline does not have is a typo, not an empty history.
+	refuses(t, c, a.ns, `pipeline podinfo has no environment "staging"; it has: test, prod`, "history", pipelineName, "--env", "staging")
 
 	// diff: images by repository, then provenance; * marks a change.
 	assert.Equal(t, [][]string{

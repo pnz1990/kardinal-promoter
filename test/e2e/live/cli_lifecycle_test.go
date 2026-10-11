@@ -130,7 +130,7 @@ func TestCLI_Rollback(t *testing.T) {
 	refuses(t, c, a.ns, `rollback: pipeline podinfo has no environment "staging": invalid request`,
 		"rollback", pipelineName, "--env", "staging")
 	refusesNotFound(t, c, a.ns, "", "nope", "rollback", "nope", "--env", "prod")
-	refuses(t, c, a.ns, "which environment? Give it after the pipeline: kardinal rollback "+pipelineName+" <env>", "rollback", pipelineName)
+	refuses(t, c, a.ns, "which environment? "+pipelineName+" has: test, prod. Give it after the pipeline: kardinal rollback "+pipelineName+" <env>", "rollback", pipelineName)
 	assert.Empty(t, bundles(t, e, a.ns), "a refused rollback creates nothing")
 
 	// A, then B, reach prod; C reaches only test.
@@ -251,8 +251,8 @@ func TestCLI_Promote(t *testing.T) {
 	refuses(t, c, a.ns, "promote: no Bundle with artifacts is Verified in test yet: conflict", "promote", pipelineName, "-e", "prod")
 	refuses(t, c, a.ns, `promote: pipeline podinfo has no environment "staging": invalid request`, "promote", pipelineName, "--env", "staging")
 	refusesNotFound(t, c, a.ns, "", "nope", "promote", "nope", "-e", "prod")
-	refuses(t, c, a.ns, "which environment? Give it after the pipeline: kardinal promote "+pipelineName+" <env>", "promote", pipelineName)
-	refuses(t, c, a.ns, "which environment? Give it after the pipeline: kardinal promote "+pipelineName+" <env>", "promote", pipelineName, "--env", "")
+	refuses(t, c, a.ns, "which environment? "+pipelineName+" has: test, prod. Give it after the pipeline: kardinal promote "+pipelineName+" <env>", "promote", pipelineName)
+	refuses(t, c, a.ns, "which environment? "+pipelineName+" has: test, prod. Give it after the pipeline: kardinal promote "+pipelineName+" <env>", "promote", pipelineName, "--env", "")
 	assert.Empty(t, bundles(t, e, a.ns), "a refused promote creates nothing")
 
 	// A is Verified in test only; B, newer, is held at test's gate.

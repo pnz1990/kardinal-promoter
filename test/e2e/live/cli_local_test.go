@@ -924,6 +924,5 @@ func TestCLI_Refresh(t *testing.T) {
 
 	r = cli.Run(ns, "refresh", "missing")
 	assert.Equal(t, 1, r.Code)
-	assert.Contains(t, r.Stderr, `get pipeline missing: `)
-	assert.Contains(t, r.Stderr, `not found`)
+	assert.Equal(t, `pipeline "missing" not found in namespace "`+ns+`"; pipelines here: podinfo. Other namespaces: kardinal get pipelines -A`+"\n", r.Stderr)
 }
