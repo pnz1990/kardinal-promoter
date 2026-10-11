@@ -28,11 +28,13 @@ export interface UrlState {
   bundle: string | undefined
   /** The pipeline page's tab (map, gates, history, metrics); unset is the map. */
   tab?: string | undefined
+  /** The stage drawer section to scroll to (why, actions, evidence, history). */
+  section?: string | undefined
 }
 
 /** Parse the URL hash fragment into a UrlState. */
 function parseHash(hash: string): UrlState {
-  if (!hash || hash === '#') return { pipeline: undefined, ns: undefined, node: undefined, bundle: undefined }
+  if (!hash || hash === '#') return { pipeline: undefined, ns: undefined, node: undefined, bundle: undefined, section: undefined }
   const params = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash)
   return {
     pipeline: params.get('pipeline') ?? undefined,
@@ -40,6 +42,7 @@ function parseHash(hash: string): UrlState {
     node: params.get('node') ?? undefined,
     bundle: params.get('bundle') ?? undefined,
     tab: params.get('tab') ?? undefined,
+    section: params.get('section') ?? undefined,
   }
 }
 
@@ -51,6 +54,7 @@ function serializeHash(state: UrlState): string {
   if (state.node) params.set('node', state.node)
   if (state.bundle) params.set('bundle', state.bundle)
   if (state.tab) params.set('tab', state.tab)
+  if (state.section) params.set('section', state.section)
   const s = params.toString()
   return s ? `#${s}` : ''
 }

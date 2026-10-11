@@ -262,7 +262,7 @@ describe('App pipeline selection', () => {
     }
   })
 
-  it('opens and closes the node details as Back and Forward change node=', async () => {
+  it('opens and closes the stage drawer as Back and Forward change node=', async () => {
     const go = async (hash: string) => {
       window.history.replaceState(null, '', `/ui/${hash}`)
       await act(async () => { window.dispatchEvent(new PopStateEvent('popstate')) })
@@ -271,14 +271,14 @@ describe('App pipeline selection', () => {
     window.history.replaceState(null, '', '/ui/#pipeline=app&node=b-new-step')
     render(<App />)
     await flush()
-    expect(screen.getByTestId('node-detail')).toBeInTheDocument()
+    expect(screen.getByTestId('stage-drawer')).toBeInTheDocument()
 
     // Back to the entry before the node was opened.
     await go('#pipeline=app')
-    expect(screen.queryByTestId('node-detail')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('stage-drawer')).not.toBeInTheDocument()
     // Forward to it again.
     await go('#pipeline=app&node=b-new-step')
-    expect(screen.getByTestId('node-detail')).toBeInTheDocument()
+    expect(screen.getByTestId('stage-drawer')).toBeInTheDocument()
   })
 })
 

@@ -77,7 +77,7 @@ test.describe('Journey 013 — Keyboard and Bundle types', () => {
     await expectNoViolations(page, 'light pipeline view')
 
     await page.locator('.station-map [data-station="prod"]').click()
-    await expect(page.getByTestId('node-detail')).toBeVisible()
+    await expect(page.getByTestId('stage-drawer')).toBeVisible()
     // A gate's popover shows on hover; move the pointer off the map first.
     await page.mouse.move(0, 0)
     await expect(page.locator('.gate-popover')).toHaveCount(0)

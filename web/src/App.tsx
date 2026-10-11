@@ -10,7 +10,7 @@
 // namespaces never share a header, bundle list or DAG.
 // Every load carries a view sequence number; a response that arrives after the
 // user moved to another pipeline or bundle is dropped.
-// #326: selectedNode is lifted here so NodeDetail renders as a split panel
+// #326: selectedNode is lifted here so the stage drawer renders as a split panel
 // sibling of the station map rather than a position:fixed overlay.
 // #740: URL routing — pipeline and node selection persisted in hash fragment.
 // #746: Global keyboard shortcuts — ?, r, Esc.
@@ -19,7 +19,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { PipelineList } from './components/PipelineList'
 import { PipelineOpsTable } from './components/PipelineOpsTable'
-import { NodeDetail } from './components/NodeDetail'
+import { StageDrawer } from './stage/StageDrawer'
 import { HealthChip } from './components/HealthChip'
 import { RejectedLiveBanner } from './components/RejectedLiveBanner'
 import { InsecureConnectionBanner } from './components/InsecureConnectionBanner'
@@ -91,34 +91,35 @@ export function App() {
   const [graphLoading, setGraphLoading] = useState(false)
   const [graphError, setGraphError] = useState<string | undefined>()
 
-  // Steps for the active bundle — passed down to NodeDetail to avoid independent polling.
+  // Steps for the active bundle — passed down to the stage drawer to avoid independent polling.
   const [activeSteps, setActiveSteps] = useState<PromotionStep[]>([])
 
   // #340: PolicyGates — polled globally every 5s.
   const [gates, setGates] = useState<PolicyGate[]>([])
   const [gatesLoading, setGatesLoading] = useState(true)
 
-  // #326: selectedNode lifted from the map so NodeDetail is a split-panel sibling.
+  // #326: selectedNode lifted from the map so the stage drawer is a split-panel sibling.
   // #740: selectedNode ID is persisted in URL hash (node= param); full GraphNode object in local state.
   const [selectedNode, setSelectedNodeLocal] = useState<GraphNode | null>(null)
 
-  /** Update both local state and URL hash when a node is selected. */
+  /** Update both local state and URL hash when a node is selected. The URL
+   *  names the environment (node=<env>, the stage drawer contract #1701); a
+   *  gate opens its environment's drawer at "why it's waiting". */
   const setSelectedNode = useCallback((node: GraphNode | null) => {
     setSelectedNodeLocal(node)
-    setUrlState({ node: node?.id ?? undefined })
+    setUrlState({ node: node?.environment || node?.id || undefined, section: node?.type === 'PolicyGate' ? 'why' : undefined })
   }, [setUrlState])
 
   // U2: the pipeline page's tab, in the URL (tab=), the map when unset.
   const pipelineTab = pipelineTabOf(urlState.tab)
   const setPipelineTab = useCallback((tab: PipelineTab) => setUrlState({ tab: tab === 'map' ? undefined : tab }), [setUrlState])
 
-  // U2: a station opens its stage drawer (NodeDetail until U3, #1701). An
-  // environment the followed Bundle has not reached has no step node yet.
-  const openStage = useCallback((env: string) => {
-    const node = graph?.nodes.find(n => n.type === 'PromotionStep' && n.environment === env)
-      ?? { id: `env-${env}`, type: 'PromotionStep' as const, label: env, environment: env, state: 'NotStarted' }
-    setSelectedNode(node)
-  }, [graph, setSelectedNode])
+  // U2: a station opens its stage drawer (U3, the #1701 contract): node=<env>
+  // and the section to scroll to, also for an environment not reached yet.
+  const openStage = useCallback((env: string, section?: string) => {
+    setSelectedNodeLocal(graph?.nodes.find(n => n.type === 'PromotionStep' && n.environment === env) ?? null)
+    setUrlState({ node: env, section })
+  }, [graph, setUrlState])
 
   // #740: When graph data changes, restore selectedNode from URL if a node= param is present
   // and the current selectedNode doesn't already match. With no node= (Back to an entry
@@ -130,8 +131,9 @@ export function App() {
       return
     }
     if (!graph) return
-    if (selectedNode?.id === nodeId) return
-    const node = graph.nodes?.find(n => n.id === nodeId)
+    if (selectedNode && (selectedNode.environment || selectedNode.id) === nodeId) return
+    const node = graph.nodes?.find(n => n.type === 'PromotionStep' && n.environment === nodeId)
+      ?? graph.nodes?.find(n => n.id === nodeId)
     if (node) setSelectedNodeLocal(node)
   }, [graph, urlState.node, selectedNode?.id])
 
@@ -308,9 +310,9 @@ export function App() {
     onRefresh: useCallback(() => { void manualRefresh() }, [manualRefresh]),
     onEscape: useCallback(() => {
       if (showShortcutsPanel) { setShowShortcutsPanel(false); return }
-      if (selectedNode) { setSelectedNode(null); return }
+      if (selectedNode || urlState.node) { setSelectedNode(null); return }
       if (showDiffPanel) { closeDiffPanel(); return }
-    }, [showShortcutsPanel, selectedNode, showDiffPanel, setSelectedNode, closeDiffPanel]),
+    }, [showShortcutsPanel, selectedNode, urlState.node, showDiffPanel, setSelectedNode, closeDiffPanel]),
     // #800: / focuses the pipeline search input
     onSearch: useCallback(() => {
       searchInputRef.current?.focus()
@@ -319,15 +321,17 @@ export function App() {
 
   // One history entry per switch: the new pipeline, with no node or diff open.
   // The load effect above does the fetching.
-  const handleSelectPipeline = useCallback((name: string, namespace: string) => {
+  const handleSelectPipeline = useCallback((name: string, namespace: string, env?: string) => {
     setSelectedNodeLocal(null)
-    setUrlState({ pipeline: name, ns: namespace, node: undefined, bundle: undefined })
+    setUrlState({ pipeline: name, ns: namespace, node: env, section: undefined, bundle: undefined })
   }, [setUrlState])
 
   const activePipeline = selectedPipeline
     ? pipelines.find(p => p.name === selectedPipeline && (!urlState.ns || p.namespace === urlState.ns))
     : undefined
   const selectedNamespace = urlState.ns ?? activePipeline?.namespace
+  // The environment whose stage drawer is open: node= names it (#1701).
+  const stageEnv = urlState.node ? (selectedNode?.environment || urlState.node) : undefined
   const activeBundle = shownBundleName ? bundles.find(b => b.name === shownBundleName) : undefined
   // The picked comparison bundle, while the pipeline still has it and it is
   // not the bundle on screen (which is the one it is compared against).
@@ -730,31 +734,29 @@ export function App() {
                       compareBundle={bundles.find(b => b.name === (urlState.bundle ?? compareBundle) && b.name !== activeBundle?.name)}
                       loading={graphLoading}
                       error={graphError}
-                      focused={selectedNode?.environment}
+                      focused={stageEnv}
                       onOpenStage={openStage}
                       onActionDone={() => { void manualRefresh() }}
-                      onOpenGate={id => { const n = graph?.nodes.find(x => x.id === id); if (n) setSelectedNode(n) }}
+                      onOpenGate={id => { const n = graph?.nodes.find(x => x.id === id); if (n) openStage(n.environment, 'why') }}
                       gates={shownGates}
                       bundles={bundles}
                     />
                   )}
                 </ErrorBoundary>
 
-              {/* NodeDetail split panel (#326) — sibling of the station map, not overlay */}
-              {selectedNode && (
+              {/* U3: the stage drawer of the environment in node= (#1701), a
+                  sibling of the map at lg and wider, a modal sheet narrower. */}
+              {stageEnv && activePipeline && (
                 <ErrorBoundary fallbackMessage="Details unavailable">
-                  <NodeDetail
-                    node={selectedNode}
+                  <StageDrawer
+                    namespace={activePipeline.namespace}
+                    pipeline={activePipeline.name}
+                    env={stageEnv}
+                    section={urlState.section}
                     onClose={() => setSelectedNode(null)}
-                    bundleName={activeBundle?.name}
-                    pipelineName={activePipeline?.name}
-                    namespace={activePipeline?.namespace ?? 'default'}
-                    steps={activeSteps}
-                    activeBundle={activeBundle}
-                    onActionDone={() => { void manualRefresh() }}
-                    nodes={graph?.nodes ?? []}
-                    edges={graph?.edges ?? []}
-                    hold={activePipeline?.environmentTopology?.find(e => e.name === selectedNode.environment || e.fleet?.targets.includes(selectedNode.environment))?.hold}
+                    onNavigate={(env, section) => { setSelectedNodeLocal(null); setUrlState({ node: env, section }) }}
+                    data={{ pipeline: activePipeline, bundles, steps: activeSteps, gates }}
+                    onChanged={() => { void manualRefresh() }}
                   />
                 </ErrorBoundary>
               )}

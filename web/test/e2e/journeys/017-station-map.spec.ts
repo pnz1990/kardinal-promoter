@@ -79,6 +79,7 @@ test.describe('Journey 017 — Station map', () => {
     await page.keyboard.press('Enter')
     await expect(page.getByLabel('Close')).toBeVisible()
     await page.getByLabel('Close').click()
+    await expect(page.locator('[data-station="uat"]')).toBeFocused()
     // A gate takes focus and shows why it holds.
     await page.getByRole('button', { name: 'gate no-weekend-deploys, Blocking' }).focus()
     await expect(page.locator('.gate-popover')).toContainText('!schedule.isWeekend')
@@ -144,7 +145,8 @@ test.describe('Journey 017 — Station map', () => {
     await page.locator('[data-station="prod-eu-west-29"]').click()
     await expect(page.getByLabel('Close')).toBeVisible()
     expect(Date.now() - started).toBeLessThan(10_000) // the whole flow; the drawer itself opens at once
-    // Zoom levels can be set.
+    // Zoom levels can be set (with the drawer closed, the map has the width for them).
+    await page.getByLabel('Close').click()
     await map.getByRole('radio', { name: 'Map' }).click()
     await expect(map.getByRole('radio', { name: 'Map' })).toHaveAttribute('aria-checked', 'true')
   })
@@ -166,8 +168,9 @@ test.describe('Journey 017 — Station map', () => {
     await page.reload()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
     await expect(page.locator('.station-map__svg [data-station]').first()).toBeVisible()
-    // With motion allowed, the thread into the fleet does flow.
-    expect(await page.evaluate(() => document.getAnimations().filter(a => a instanceof CSSAnimation && a.animationName === 'thread-flow').length)).toBeGreaterThan(0)
+    // With motion allowed, the thread into the fleet does flow (once the followed Bundle's graph is in).
+    await expect(page.locator('.station-map__thread [data-kind="flow"]')).toHaveCount(1)
+    await expect.poll(() => page.evaluate(() => document.getAnimations().filter(a => a instanceof CSSAnimation && a.animationName === 'thread-flow').length)).toBeGreaterThan(0)
     await open(page, 'kardinal-test-app', 'default')
     await shot(page, '3-envs-dark')
     const axe = await new AxeBuilder({ page }).include('.station-map').withTags(['wcag2a', 'wcag2aa']).analyze()

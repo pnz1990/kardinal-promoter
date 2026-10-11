@@ -199,6 +199,7 @@ func (f *ForgejoProvider) getAnonymous(ctx context.Context, path string) error {
 	}
 	req.Header.Set("Accept", "application/json")
 	resp, err := f.client.Do(req)
+	err = RedactErr(err) // a *url.Error quotes the URL
 	if err != nil {
 		return fmt.Errorf("execute request GET %s: %w", path, err)
 	}

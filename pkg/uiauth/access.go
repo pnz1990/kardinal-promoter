@@ -264,6 +264,17 @@ func (c *AuthorizingClient) List(ctx context.Context, list client.ObjectList, op
 	return meta.SetList(list, kept)
 }
 
+// actionRoles names the chart's user roles (templates/user-roles.yaml) that
+// grant each virtual subresource, so a refused action says how to get it.
+var actionRoles = map[string]string{
+	"pipelines/pause":      "promoter or admin",
+	"pipelines/hold":       "promoter or admin",
+	"pipelines/edit":       "admin",
+	"bundles/reject":       "promoter, approver or admin",
+	"policygates/override": "approver or admin",
+	"policygates/edit":     "admin",
+}
+
 // AuthorizeAction checks that the request's user may perform verb on
 // group/resource/subresource (a virtual subresource such as pipelines/pause or
 // policygates/override) for the named object, recording a denial like any
@@ -297,6 +308,9 @@ func (c *AuthorizingClient) AuthorizeAction(ctx context.Context, verb, group, re
 			user.Username, verb, resource, subresource, group, name, namespace)
 		if reason != "" {
 			msg += ": " + reason
+		}
+		if roles := actionRoles[resource+"/"+subresource]; roles != "" {
+			msg += "; the chart's " + roles + " role grants it (docs/guides/security.md#user-roles)"
 		}
 		return fail(denial{code: 403, msg: msg}, apierrors.NewForbidden(gr, name, fmt.Errorf("%s", msg)))
 	}

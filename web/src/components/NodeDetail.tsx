@@ -8,7 +8,7 @@
 // Promote and Roll back follow the same rule as the pipeline lane
 // (pipelineActions.ts), so they only show where they can do something.
 //
-// #326: NodeDetail is rendered as a sibling of the station map in App.tsx's flex
+// #326: NodeDetail is rendered as a sibling of the DAGView in App.tsx's flex
 // layout, so it shifts the DAG left rather than overlapping it.
 //
 // Steps are passed as a prop (managed by App's 5s poll) rather than fetched
@@ -18,7 +18,7 @@
 //
 // #527: EventsPanel — K8s events for the selected step, refreshed with each poll.
 import { useState, useEffect } from 'react'
-import type { GraphEdge, GraphNode, PromotionStep, Bundle, StepStatus, EnvironmentHold } from '../types'
+import type { GraphEdge, GraphNode, PromotionStep, Bundle, StepStatus } from '../types'
 import { HealthChip } from './HealthChip'
 import { api } from '../api/client'
 import EventsPanel, { type StepEvent } from './EventsPanel'
@@ -49,9 +49,6 @@ interface Props {
   nodes?: GraphNode[]
   /** Graph edges of the active bundle — used to find the upstream environments. */
   edges?: GraphEdge[]
-  /** The environment's hold (spec.holds, kardinal rollback --hold), with the
-   *  Release hold action (moved here from the lane cards, U2). */
-  hold?: EnvironmentHold
 }
 
 /** PromotionStep states in which work is running (Go never reports "Running"). */
@@ -348,7 +345,7 @@ function StepProgress({ step }: { step: PromotionStep }) {
 
 const labelStyle = { color: 'var(--color-text)' } as const
 
-export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace = 'default', steps, activeBundle, onActionDone, nodes = [], edges = [], hold }: Props) {
+export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace = 'default', steps, activeBundle, onActionDone, nodes = [], edges = [] }: Props) {
   const [stepDetail, setStepDetail] = useState<PromotionStep | null>(null)
   const [stepLoading, setStepLoading] = useState(false)
   // Promote / rollback: the dialog being confirmed and the last result.
@@ -455,9 +452,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
   const liveNode = nodes.find(n => n.id === node.id) ?? node
   const canAct = isPromotionStep && !!pipelineName && !!node.environment
   const showPromote = canAct && canPromote(liveNode, nodes, edges)
-  // A held environment is already on a rollback: release it first.
-  const showRollback = canAct && canRollback(liveNode) && !hold
-  const showRelease = !!hold && !!pipelineName
+  const showRollback = canAct && canRollback(liveNode)
 
   return (
     <div data-testid="node-detail" style={{
@@ -509,26 +504,6 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
 
       {/* Promote / rollback — only where they can do something (pipelineActions.ts).
           The result stays visible after the step moves on and the buttons go. */}
-      {/* Held on a rollback (#1528): who, why, and the release action. */}
-      {hold && (
-        <div className="stage-hold" title={hold.expiresAt ? `until ${hold.expiresAt}` : undefined}>
-          <span className="stage-hold__badge">Held</span>{' '}
-          on {hold.bundle}{hold.createdBy ? ` by ${hold.createdBy}` : ''}: {hold.reason}
-          {hold.bundleMissing && (
-            <div className="stage-hold__missing" role="alert">
-              Rollback Bundle {hold.bundle} does not exist; the hold stays in effect.
-              {hold.releaseCommand && <> Release with <code>{hold.releaseCommand}</code>.</>}
-            </div>
-          )}
-          {showRelease && (
-            <button type="button" className="stage-hold__release"
-              onClick={() => { setActionResult(null); setConfirmAction('release-hold') }}>
-              Release hold on {node.environment}
-            </button>
-          )}
-        </div>
-      )}
-
       {canAct && (showPromote || showRollback || actionResult) && (
         <div style={{ marginBottom: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
           {showPromote && (

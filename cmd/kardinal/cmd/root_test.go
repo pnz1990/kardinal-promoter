@@ -74,7 +74,7 @@ func TestRequiredFlags_EmptyValueRefused(t *testing.T) {
 		wantErr string
 	}{
 		{[]string{"override", "p", "--gate", "g", "--reason", ""}, "--reason is required for override (audit record)"},
-		{[]string{"override", "p", "--gate", "", "--reason", "r"}, "--gate is required"},
+		{[]string{"override", "p", "--gate", "", "--reason", "r"}, "--gate is required: name the gate to override"},
 		{[]string{"promote", "p", "--env", ""}, "which environment? Give it after the pipeline: kardinal promote p <env>"},
 	}
 	for _, tc := range cases {
