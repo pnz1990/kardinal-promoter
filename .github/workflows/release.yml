@@ -30,7 +30,6 @@ jobs:
       make-latest: ${{ steps.version.outputs.make-latest }}
       image-tags: ${{ steps.version.outputs.image-tags }}
       render-image-tags: ${{ steps.version.outputs.render-image-tags }}
-      notes: ${{ steps.notes.outputs.notes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -96,6 +95,9 @@ jobs:
       # The release notes are the "## [<version>]" section of
       # docs/changelog.md. Write that section before tagging: without it the
       # release fails here. The notes never come from the commit history.
+      # They go to the release job as a file (the release-notes artifact),
+      # not as a job output: v0.10.0's notes, about 99 KB, did not arrive
+      # through the output, and the release was created without them.
       - name: Release notes from docs/changelog.md
         id: notes
         env:
@@ -120,14 +122,18 @@ jobs:
             echo "::error::docs/changelog.md has no \"## [${VERSION}]\" section, or it is empty. Add it before tagging."
             exit 1
           fi
-          # A random delimiter, so no changelog line can end the value early.
-          DELIM="NOTES_$(openssl rand -hex 16)"
-          {
-            echo "notes<<${DELIM}"
-            echo "$NOTES"
-            echo "${DELIM}"
-          } >> "$GITHUB_OUTPUT"
+          mkdir -p release-notes
+          printf '%s\n' "$NOTES" > release-notes/notes.md
+          echo "notes=release-notes/notes.md" >> "$GITHUB_OUTPUT"
           echo "$NOTES"
+
+      - name: Upload the release notes
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: release-notes
+          path: release-notes/notes.md
+          if-no-files-found: error
+          retention-days: 7
 
   # The tests run in their own job so that test code never runs with the
   # release job's write token.
@@ -314,68 +320,106 @@ jobs:
           helm push dist/kardinal-promoter-*.tgz oci://ghcr.io/pnz1990/charts
 
       # ── GitHub release ─────────────────────────────────────────────────────
+      - name: Download the release notes
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: release-notes
+          path: release-notes/
+
+      # The body is a file the GitHub release step reads (body_path): the
+      # notes from preflight, then how to install this version. The release
+      # fails here when the notes in the finished body are empty.
+      # test/hack/release_test.go runs this script.
+      - name: Release body
+        id: body
+        run: |
+          NOTES_FILE=release-notes/notes.md
+          if [ ! -s "$NOTES_FILE" ] || [ -z "$(tr -d '[:space:]' < "$NOTES_FILE")" ]; then
+            echo "::error::the release notes from preflight ($NOTES_FILE) are missing or empty"
+            exit 1
+          fi
+          cat > release-body.template.md <<'BODY_EOF'
+          ## kardinal-promoter @VERSION@
+
+          @NOTES@
+
+          ### Install
+
+          kardinal-promoter runs on the upstream [kro](https://github.com/kubernetes-sigs/kro)
+          Graph controller (kro v0.10.0-rc.0 or later with the `GraphKind` feature gate). Install kro first:
+
+          ```bash
+          helm install kro oci://registry.k8s.io/kro/charts/kro \
+            --namespace kro-system --create-namespace \
+            --version 0.10.0-rc.0 \
+            --set config.featureGates.GraphKind=true \
+            --set rbac.mode=aggregation
+          ```
+
+          Then install kardinal-promoter:
+
+          ```bash
+          helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+            --namespace kardinal-system --create-namespace \
+            --version @CHART_VERSION@ \
+            --set github.secretRef.name=github-token
+          ```
+
+          The chart installs the kardinal CRDs on first install. `helm upgrade` does not
+          update CRDs, so apply them before upgrading:
+
+          ```bash
+          helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version @CHART_VERSION@ \
+            | kubectl apply --server-side --force-conflicts -f -
+          ```
+
+          ### CLI
+
+          ```bash
+          # macOS (Apple Silicon)
+          curl -LO https://github.com/pnz1990/kardinal-promoter/releases/download/@VERSION@/kardinal-darwin-arm64
+          chmod +x kardinal-darwin-arm64 && sudo mv kardinal-darwin-arm64 /usr/local/bin/kardinal
+
+          # macOS (Intel)
+          curl -LO https://github.com/pnz1990/kardinal-promoter/releases/download/@VERSION@/kardinal-darwin-amd64
+          chmod +x kardinal-darwin-amd64 && sudo mv kardinal-darwin-amd64 /usr/local/bin/kardinal
+
+          # Linux
+          curl -LO https://github.com/pnz1990/kardinal-promoter/releases/download/@VERSION@/kardinal-linux-amd64
+          chmod +x kardinal-linux-amd64 && sudo mv kardinal-linux-amd64 /usr/local/bin/kardinal
+          ```
+
+          ### Container images
+
+          | Image | Tag | Platform |
+          |---|---|---|
+          | `ghcr.io/pnz1990/kardinal-promoter/controller` | `@VERSION@` | linux/amd64, linux/arm64 |
+          | `ghcr.io/pnz1990/kardinal-promoter/render` | `@VERSION@` | linux/amd64, linux/arm64 |
+          BODY_EOF
+          # The placeholders are filled in the template only; the notes go in
+          # between unchanged.
+          fill() { sed -e "s|@VERSION@|${VERSION}|g" -e "s|@CHART_VERSION@|${CHART_VERSION}|g"; }
+          {
+            sed -n '1,/^@NOTES@$/p' release-body.template.md | sed '$d' | fill
+            cat "$NOTES_FILE"
+            sed -n '/^@NOTES@$/,$p' release-body.template.md | sed '1d' | fill
+          } > release-body.md
+          # The notes between the title and the install section must not be
+          # empty in the finished body.
+          NOTES_IN_BODY=$(awk '/^## kardinal-promoter /{f=1; next} /^### Install$/{exit} f' release-body.md)
+          if [ -z "${NOTES_IN_BODY//[[:space:]]/}" ]; then
+            echo "::error::the release body has no notes"
+            exit 1
+          fi
+          echo "path=release-body.md" >> "$GITHUB_OUTPUT"
+          echo "release body: $(wc -c < release-body.md) bytes"
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
         with:
           tag_name: ${{ env.VERSION }}
           name: kardinal-promoter ${{ env.VERSION }}
-          body: |
-            ## kardinal-promoter ${{ env.VERSION }}
-
-            ${{ needs.preflight.outputs.notes }}
-
-            ### Install
-
-            kardinal-promoter runs on the upstream [kro](https://github.com/kubernetes-sigs/kro)
-            Graph controller (kro v0.10.0-rc.0 or later with the `GraphKind` feature gate). Install kro first:
-
-            ```bash
-            helm install kro oci://registry.k8s.io/kro/charts/kro \
-              --namespace kro-system --create-namespace \
-              --version 0.10.0-rc.0 \
-              --set config.featureGates.GraphKind=true \
-              --set rbac.mode=aggregation
-            ```
-
-            Then install kardinal-promoter:
-
-            ```bash
-            helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
-              --namespace kardinal-system --create-namespace \
-              --version ${{ env.CHART_VERSION }} \
-              --set github.secretRef.name=github-token
-            ```
-
-            The chart installs the kardinal CRDs on first install. `helm upgrade` does not
-            update CRDs, so apply them before upgrading:
-
-            ```bash
-            helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version ${{ env.CHART_VERSION }} \
-              | kubectl apply --server-side -f -
-            ```
-
-            ### CLI
-
-            ```bash
-            # macOS (Apple Silicon)
-            curl -LO https://github.com/pnz1990/kardinal-promoter/releases/download/${{ env.VERSION }}/kardinal-darwin-arm64
-            chmod +x kardinal-darwin-arm64 && sudo mv kardinal-darwin-arm64 /usr/local/bin/kardinal
-
-            # macOS (Intel)
-            curl -LO https://github.com/pnz1990/kardinal-promoter/releases/download/${{ env.VERSION }}/kardinal-darwin-amd64
-            chmod +x kardinal-darwin-amd64 && sudo mv kardinal-darwin-amd64 /usr/local/bin/kardinal
-
-            # Linux
-            curl -LO https://github.com/pnz1990/kardinal-promoter/releases/download/${{ env.VERSION }}/kardinal-linux-amd64
-            chmod +x kardinal-linux-amd64 && sudo mv kardinal-linux-amd64 /usr/local/bin/kardinal
-            ```
-
-            ### Container images
-
-            | Image | Tag | Platform |
-            |---|---|---|
-            | `ghcr.io/pnz1990/kardinal-promoter/controller` | `${{ env.VERSION }}` | linux/amd64, linux/arm64 |
-            | `ghcr.io/pnz1990/kardinal-promoter/render` | `${{ env.VERSION }}` | linux/amd64, linux/arm64 |
+          body_path: ${{ steps.body.outputs.path }}
           files: dist/*
           draft: false
           prerelease: ${{ needs.preflight.outputs.prerelease }}

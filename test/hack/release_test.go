@@ -390,15 +390,18 @@ func TestReleaseNotesFromChangelog(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.version, func(t *testing.T) {
+			_ = os.RemoveAll(filepath.Join(dir, "release-notes"))
 			out, got, err := runReleaseStep(t, dir, script, "VERSION="+tt.version)
 			if tt.wantErr {
 				require.Error(t, err, out)
 				assert.Contains(t, out, "docs/changelog.md has no \"## ["+tt.version+"]\" section")
 				assert.Empty(t, got, "a missing section must write no notes")
+				assert.NoFileExists(t, filepath.Join(dir, "release-notes", "notes.md"))
 				return
 			}
 			require.NoError(t, err, out)
-			assert.Equal(t, tt.want, got["notes"])
+			assert.Equal(t, "release-notes/notes.md", got["notes"])
+			assert.Equal(t, tt.want, readNotes(t, dir))
 		})
 	}
 }
@@ -429,12 +432,25 @@ func withoutCodeBlocks(text string) string {
 	return strings.Join(out, "\n")
 }
 
+// readNotes is the notes file the notes step wrote in dir, without the final
+// newline it adds.
+func readNotes(t *testing.T, dir string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "release-notes", "notes.md"))
+	require.NoError(t, err)
+	return strings.TrimSuffix(string(data), "\n")
+}
+
 // TestReleaseNotesForEveryChangelogVersion runs the notes step on the real
 // docs/changelog.md: every released version has a section the step can read.
 func TestReleaseNotesForEveryChangelogVersion(t *testing.T) {
 	script := preflightScript(t, "Release notes from docs/changelog.md")
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "changelog.md"))
 	require.NoError(t, err)
+	// A copy, so the notes file is not written into the checkout.
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "docs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "docs", "changelog.md"), data, 0o600))
 	matches := changelogVersionHeading.FindAllStringSubmatch(withoutCodeBlocks(string(data)), -1)
 	require.NotEmpty(t, matches)
 
@@ -446,9 +462,9 @@ func TestReleaseNotesForEveryChangelogVersion(t *testing.T) {
 		t.Run(version, func(t *testing.T) {
 			require.False(t, seen[version], "docs/changelog.md has two %s sections", version)
 			seen[version] = true
-			out, got, err := runReleaseStep(t, repoRoot(t), script, "VERSION="+version)
+			out, _, err := runReleaseStep(t, dir, script, "VERSION="+version)
 			require.NoError(t, err, out)
-			notes := got["notes"]
+			notes := readNotes(t, dir)
 			require.NotEmpty(t, notes)
 			assert.NotRegexp(t, `(?m)^## `, withoutCodeBlocks(notes), "the notes must stop at the next version")
 			if sha, ok := offMain[version]; ok {
@@ -484,8 +500,7 @@ func TestReleaseWorkflowWiring(t *testing.T) {
 			"make-latest":       "${{ steps.version.outputs.make-latest }}",
 			"image-tags":        "${{ steps.version.outputs.image-tags }}",
 			"render-image-tags": "${{ steps.version.outputs.render-image-tags }}",
-			"notes":             "${{ steps.notes.outputs.notes }}",
-		}, preflight.Outputs)
+		}, preflight.Outputs, "the notes go as an artifact, not a job output")
 		assert.Equal(t, map[string]string{"VERSION": "${{ steps.version.outputs.version }}"},
 			preflight.step(t, "notes").Env)
 	})
@@ -497,7 +512,7 @@ func TestReleaseWorkflowWiring(t *testing.T) {
 		for _, s := range preflight.Steps {
 			names = append(names, s.Name)
 		}
-		require.Len(t, names, 4)
+		require.Len(t, names, 5)
 		assert.True(t, strings.HasPrefix(preflight.Steps[0].Uses, "actions/checkout@"))
 		assert.Equal(t, "Check that the tagged commit is on main", names[1])
 		for name, job := range jobs {
@@ -523,8 +538,33 @@ func TestReleaseWorkflowWiring(t *testing.T) {
 		require.NotEmpty(t, gh.Uses, "release job has no GitHub release step")
 		assert.Equal(t, "${{ needs.preflight.outputs.prerelease }}", gh.With["prerelease"])
 		assert.Equal(t, "${{ needs.preflight.outputs.make-latest }}", gh.With["make_latest"])
-		assert.NotContains(t, gh.With, "body_path", "body_path would replace the changelog notes")
-		assert.Contains(t, gh.With["body"], "${{ needs.preflight.outputs.notes }}")
+		assert.NotContains(t, gh.With, "body", "the body is the file the Release body step writes")
+		assert.Equal(t, "${{ steps.body.outputs.path }}", gh.With["body_path"])
+	})
+
+	t.Run("the notes travel as the release-notes artifact", func(t *testing.T) {
+		var up, down releaseStep
+		for _, s := range preflight.Steps {
+			if strings.HasPrefix(s.Uses, "actions/upload-artifact@") {
+				up = s
+			}
+		}
+		for _, s := range jobs["release"].Steps {
+			if strings.HasPrefix(s.Uses, "actions/download-artifact@") && s.With["name"] == "release-notes" {
+				down = s
+			}
+		}
+		require.NotEmpty(t, up.Uses, "preflight uploads the notes")
+		assert.Equal(t, "release-notes", up.With["name"])
+		assert.Equal(t, "release-notes/notes.md", up.With["path"])
+		assert.Equal(t, "error", up.With["if-no-files-found"])
+		require.NotEmpty(t, down.Uses, "the release job downloads the notes")
+		assert.Equal(t, "release-notes/", down.With["path"])
+		for name, job := range jobs {
+			for _, s := range job.Steps {
+				assert.NotContains(t, s.Run+fmt.Sprint(s.With), "outputs.notes", "%s: step %q reads the notes as an output", name, s.Name)
+			}
+		}
 	})
 
 	t.Run("no other source of notes or latest", func(t *testing.T) {
@@ -550,5 +590,64 @@ func TestReleaseWorkflowWiring(t *testing.T) {
 				}
 			}
 		}
+	})
+}
+
+// releaseBodyScript is the release job's "Release body" script.
+func releaseBodyScript(t *testing.T) string {
+	t.Helper()
+	s := releaseJobs(t)["release"].step(t, "body")
+	require.NotEmpty(t, s.Run)
+	return s.Run
+}
+
+// TestReleaseBody runs the release job's body script: the finished body has
+// the title, the notes as they are, the install section with the version
+// and --force-conflicts on the CRD apply; missing or empty notes fail the
+// release.
+func TestReleaseBody(t *testing.T) {
+	script := releaseBodyScript(t)
+	env := []string{"VERSION=v0.11.0", "CHART_VERSION=0.11.0"}
+	run := func(t *testing.T, notes *string) (string, string, map[string]string, error) {
+		dir := t.TempDir()
+		if notes != nil {
+			require.NoError(t, os.MkdirAll(filepath.Join(dir, "release-notes"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "release-notes", "notes.md"), []byte(*notes), 0o600))
+		}
+		out, got, err := runReleaseStep(t, dir, script, env...)
+		body, _ := os.ReadFile(filepath.Join(dir, "release-body.md"))
+		return out, string(body), got, err
+	}
+
+	t.Run("notes, then install", func(t *testing.T) {
+		// Big, with code blocks, "##" lines and characters a template
+		// could eat (|, &, \, @VERSION@-like text).
+		notes := "### Highlights\n\n- a | b & c \\ d, and a literal @VERSION@ and @CHART_VERSION@\n\n```bash\n## not a heading\nkubectl apply -f x\n```\n" +
+			strings.Repeat("- **item** — a long line of notes text\n", 3000)
+		out, body, got, err := run(t, &notes)
+		require.NoError(t, err, out)
+		assert.Equal(t, "release-body.md", got["path"])
+		require.Greater(t, len(body), 100_000, "a body over 100 KB comes through whole")
+		assert.True(t, strings.HasPrefix(body, "## kardinal-promoter v0.11.0\n\n"+notes), "the title, then the notes as they are")
+		_, install, ok := strings.Cut(body, "### Install")
+		require.True(t, ok, "the body has an install section")
+		assert.Contains(t, install, "--version 0.11.0")
+		assert.Contains(t, install, "| kubectl apply --server-side --force-conflicts -f -")
+		assert.Contains(t, install, "releases/download/v0.11.0/kardinal-linux-amd64")
+		assert.NotContains(t, install, "@VERSION@", "the template's placeholders are filled")
+		assert.NotContains(t, install, "@CHART_VERSION@")
+		assert.NotContains(t, body, "@NOTES@")
+		assert.NotContains(t, body, "${{")
+	})
+	t.Run("missing notes fail", func(t *testing.T) {
+		out, _, _, err := run(t, nil)
+		require.Error(t, err)
+		assert.Contains(t, out, "release notes from preflight")
+	})
+	t.Run("empty notes fail", func(t *testing.T) {
+		empty := "  \n\n"
+		out, _, _, err := run(t, &empty)
+		require.Error(t, err)
+		assert.Contains(t, out, "missing or empty")
 	})
 }
