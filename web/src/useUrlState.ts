@@ -14,7 +14,8 @@
 // older `tab=history` reads as versions and `tab=gates` as the map), `view=ops`
 // (the operations table), `filter=` (a fleet filter),
 // `q=` (the pipeline search), `compare=<bundle>` (the comparison panel), `node=<id>` (a gate's
-// details), `v=<bundle>` (the version shown while an environment is open). Links from before
+// details), `v=<bundle>` (the version shown while an environment is open), `section=` (the
+// stage drawer section to scroll to). Links from before
 // these routes (`#pipeline=…&ns=…&node=…&bundle=…`) are rewritten in place, so they keep
 // working.
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -42,17 +43,20 @@ export interface UrlState {
   tab: PipelineTab | undefined
   /** #/approvals (reserved). */
   approvals: boolean | undefined
+  /** The stage drawer section to scroll to (why, actions, evidence, history; #1701). */
+  section: string | undefined
 }
 
 export const EMPTY_URL_STATE: UrlState = {
   pipeline: undefined, ns: undefined, env: undefined, version: undefined, compare: undefined,
   node: undefined, view: undefined, filter: undefined, q: undefined, tab: undefined, approvals: undefined,
+  section: undefined,
 }
 
 /** The namespace segment of a link that does not know it. */
 const ANY_NS = '*'
 
-const QUERY_KEYS = ['tab', 'view', 'filter', 'q', 'compare', 'node'] as const
+const QUERY_KEYS = ['tab', 'view', 'filter', 'q', 'compare', 'node', 'section'] as const
 export type PipelineTab = 'versions' | 'activity' | 'metrics'
 const TABS: readonly string[] = ['versions', 'activity', 'metrics']
 /** Tabs from before Map | Versions | Activity | Metrics: what each now opens (undefined: the map). */

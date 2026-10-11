@@ -673,6 +673,20 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up the SCM provider")
 	}
 	allowedRepos = canonicalRepos
+	// The controller's own token Secret: no Pipeline may name it as its
+	// git.secretRef (it would choose where the token goes, and skip
+	// --scm-allowed-repositories).
+	var controllerSecret *scm.ControllerTokenSecret
+	if scmTokenSecretName != "" {
+		ns := scmTokenSecretNamespace
+		if ns == "" {
+			ns = os.Getenv("POD_NAMESPACE")
+		}
+		if ns == "" {
+			ns = "kardinal-system"
+		}
+		controllerSecret = &scm.ControllerTokenSecret{Namespace: ns, Name: scmTokenSecretName}
+	}
 	if dynProvider != nil {
 		// Resolve the namespace: flag > env > controller namespace.
 		if scmTokenSecretNamespace == "" {
@@ -694,6 +708,9 @@ func main() {
 			scmTokenSecretKey,
 			logger,
 		)
+		// Warns (once per labelling) when the Secret is labelled
+		// kardinal.io/referenceable.
+		watcher.Recorder = mgr.GetEventRecorder("kardinal-scm-token-watcher")
 		if addErr := mgr.Add(watcher); addErr != nil {
 			logger.Fatal().Err(addErr).Msg("unable to register SCM credential watcher")
 		}
@@ -745,8 +762,9 @@ func main() {
 		Client:  mgr.GetClient(),
 		// Uncached: the maxConcurrentPromotions count must see the Promoting
 		// patch of the previous reconcile (#1310).
-		APIReader:        mgr.GetAPIReader(),
-		Translator:       newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), providers, graphCompactAbove, logger),
+		APIReader: mgr.GetAPIReader(),
+		Translator: newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), providers, graphCompactAbove, logger).
+			WithControllerSecret(controllerSecret),
 		GraphChecker:     newGraphClient(mgr.GetConfig(), logger),
 		Recorder:         eventRecorder,
 		PolicyNamespaces: splitCSV(policyNamespaces),
@@ -809,7 +827,8 @@ func main() {
 	}
 
 	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos,
-		CompactAbove: &graphCompactAbove, Reader: mgr.GetAPIReader(), Workers: *workers["pipeline"],
+		ControllerSecret: controllerSecret,
+		CompactAbove:     &graphCompactAbove, Reader: mgr.GetAPIReader(), Workers: *workers["pipeline"],
 		HoldBundleGrace: holdBundleGrace, Recorder: eventRecorder,
 		FleetApplicationNamespaces:    splitCSV(fleetApplicationNamespaces),
 		FleetClusterProfileNamespaces: splitCSV(fleetClusterProfileNamespaces)}).
@@ -842,6 +861,7 @@ func main() {
 		APIReader:           mgr.GetAPIReader(),
 		SCM:                 scmProvider,
 		AllowedRepositories: allowedRepos,
+		ControllerSecret:    controllerSecret,
 		Providers:           providers,
 		GitClient:           gitClient,
 		GatesStatusDisabled: !gatesCommitStatus,
@@ -895,6 +915,7 @@ func main() {
 		Resources:           renderResources,
 		Timeout:             renderTimeout,
 		ControllerNamespace: hookControllerNS,
+		ControllerSecret:    controllerSecret,
 		ImagePullSecrets:    splitCSV(renderPullSecrets),
 		AuthorName:          "kardinal-promoter",
 		AuthorEmail:         "kardinal@kardinal.io",

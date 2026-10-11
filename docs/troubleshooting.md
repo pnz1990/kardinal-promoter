@@ -228,7 +228,7 @@ Someone pushed to the PR branch (`kardinal/<namespace hash>/<bundle>/<env>`) aft
 
 The git token is invalid, expired, or lacks write permissions.
 
-git uses the Secret named by the Pipeline's `spec.git.secretRef` (key `token`), in the Pipeline's namespace. PR and API calls use the controller's token, set with the chart's `github.secretRef` in the controller's namespace. The controller reloads it when the Secret changes.
+git uses the Secret named by the Pipeline's `spec.git.secretRef` (key `token`), in the Pipeline's namespace. PR and API calls use the controller's token, set with the chart's `scm.secretRef` in the controller's namespace. The controller reloads it when the Secret changes.
 
 ```bash
 # Which Secret does git use?
@@ -441,7 +441,7 @@ above are conventions. A status-only write does not.
 
 The remote refused the push (HTTP 403): the token has no write access to the repository or lacks the required scope. An expired or revoked token gives `authentication required` instead (HTTP 401).
 
-git uses the Secret named by the Pipeline's `spec.git.secretRef` (key `token`), in the Pipeline's namespace. PR and API calls use the controller's token, set with the chart's `github.secretRef` in the controller's namespace. The controller reloads it when the Secret changes.
+git uses the Secret named by the Pipeline's `spec.git.secretRef` (key `token`), in the Pipeline's namespace. PR and API calls use the controller's token, set with the chart's `scm.secretRef` in the controller's namespace. The controller reloads it when the Secret changes.
 
 ```bash
 # Which Secret does git use?
@@ -462,6 +462,22 @@ kubectl label secret github-token kardinal.io/referenceable=true --overwrite
 ```
 
 A step that returns an error is retried with backoff (10s, 20s, 40s, 80s, then 2m) up to 5 times; `status.message` shows `retrying in <d> (<n>/5)` and `status.nextRetryAt` when the retry runs. The step waits for it even when something else reconciles it first, such as a gate re-evaluation or a PR status change. Rotate the token within that window and the step continues. After the last retry the PromotionStep is Failed; create a new Bundle to promote again.
+
+### Symptom: Pipeline Ready=False with reason GitCredentialMissing
+
+Right after apply, before any Bundle, the Pipeline says when git will have no token for its HTTPS
+remote: `spec.git.secretRef` is not set, names a Secret that does not exist, or a Secret with no
+`token` key (and no GitHub App credentials). The message ends with the command that fixes it:
+
+```
+$ kubectl get pipeline my-app -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}'
+git Secret github-token not found in namespace team-a, so git has no token for https://github.com/me/gitops; create it: kubectl create secret generic github-token -n team-a --from-literal=token=<TOKEN> && kubectl label secret github-token -n team-a kardinal.io/referenceable=true
+```
+
+Run it with your token. The controller checks again every minute (it does not watch Secrets), and
+the Pipeline becomes `Ready=True`. `kardinal doctor` reports the same. A Bundle created before
+that waits as the next section describes. An ssh remote, or a URL with a password, needs no token
+key, so it does not get this reason.
 
 ### Symptom: "authentication required" with "git Secret ... not found" or "spec.git.secretRef is not set"
 
@@ -552,7 +568,7 @@ kubectl rollout restart deployment/kardinal-promoter -n kardinal-system
 **Check current GitHub rate limit:**
 
 ```bash
-# The controller's token: the Secret named by the chart's github.secretRef.name
+# The controller's token: the Secret named by the chart's scm.secretRef.name
 TOKEN=$(kubectl get secret github-token -n kardinal-system -o jsonpath='{.data.token}' | base64 -d)
 curl -s -H "Authorization: token $TOKEN" https://api.github.com/rate_limit | jq .rate
 ```

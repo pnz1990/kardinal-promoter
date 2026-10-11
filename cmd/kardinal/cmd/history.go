@@ -35,30 +35,28 @@ func newHistoryCmd() *cobra.Command {
 	var limitFlag int
 
 	cmd := &cobra.Command{
-		Use:   "history <pipeline>",
+		Use:   "history <pipeline> [<env>]",
 		Short: "Show Bundle promotion history for a pipeline",
-		Long: `Show the promotion history for a Pipeline, including which Bundles
-were promoted to which environments and when.
-
-Output columns:
-  BUNDLE      Bundle name
-  ACTION      promote, or rollback when the Bundle is a rollback Bundle
-  ENV         Target environment
-  PR          Pull request number or --
-  DURATION    Time from step creation to Verified (or to its last completed
-              step when it failed); ... while running, -- when unknown
-  TIMESTAMP   When the step was created`,
-		Args: cobra.ExactArgs(1),
+		Long: `Show which Bundles were promoted to (or rolled back in) each environment of
+<pipeline>, newest first: the Bundle, promote or rollback, the environment,
+the PR, how long it took, and when it started.`,
+		Example: `  kardinal history my-app
+  kardinal history my-app prod --limit 5`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			pipeline, env, err := envArgs(cmd, args, envFlag)
+			if err != nil {
+				return err
+			}
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("history: %w", err)
 			}
-			return historyFn(cmd.OutOrStdout(), c, ns, args[0], envFlag, limitFlag)
+			return historyFn(cmd.OutOrStdout(), c, ns, pipeline, env, limitFlag)
 		},
 	}
 
-	cmd.Flags().StringVar(&envFlag, "env", "", "Filter by environment name")
+	addEnvFlag(cmd, &envFlag, "Only this environment (or give it after the pipeline)")
 	cmd.Flags().IntVar(&limitFlag, "limit", 20, "Maximum number of entries to show")
 	return cmd
 }
@@ -86,6 +84,10 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 	steps := v1alpha1.PromotionStepList{Items: items}
 
 	if len(steps.Items) == 0 {
+		// A typo would look like an idle pipeline: say so.
+		if err := checkPipelineEnv(ctx, c, ns, pipeline, envFilter); err != nil {
+			return err
+		}
 		if _, err := fmt.Fprintf(w, "No promotion history found for pipeline %q\n", pipeline); err != nil {
 			return fmt.Errorf("write empty: %w", err)
 		}
@@ -108,6 +110,9 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 	rows := buildHistoryRows(steps.Items, rollbacks, envFilter, limit)
 
 	if len(rows) == 0 {
+		if err := checkPipelineEnv(ctx, c, ns, pipeline, envFilter); err != nil {
+			return err
+		}
 		if envFilter != "" {
 			if _, err := fmt.Fprintf(w, "No promotion history found for pipeline %q env %q\n", pipeline, envFilter); err != nil {
 				return fmt.Errorf("write empty: %w", err)

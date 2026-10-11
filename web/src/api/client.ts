@@ -198,6 +198,13 @@ export const api = {
   /** Approve, reject or revoke a Bundle for an environment as the UI user (kardinal approve; TokenReview mode). */
   recordApproval: (req: { bundle: string; environment: string; namespace?: string; decision?: 'approve' | 'reject'; comment?: string; revoke?: boolean }) =>
     post<{ outcome: string; approval: string; user: string; message: string }>('/approvals', req),
+  /** Reject a Bundle: it is never promoted again (kardinal reject). Needs bundles/reject. */
+  rejectBundle: (bundle: string, reason: string, namespace = 'default') =>
+    post<{ message: string }>('/reject', { bundle, namespace, reason }),
+  /** Override a gate in one environment of a pipeline, on its in-progress
+   *  Bundles' instances (kardinal override --stage). Needs policygates/override. */
+  overrideGate: (req: { pipeline: string; gate: string; environment: string; reason: string; expiresInMinutes?: number; namespace?: string }) =>
+    post<{ message: string; gates: string[]; expiresAt: string }>('/override', req),
   /** Pause a pipeline — sets spec.paused=true (#506). */
   pause: (pipeline: string, namespace = 'default') =>
     post<{ message: string }>('/pause', { pipeline, namespace }),

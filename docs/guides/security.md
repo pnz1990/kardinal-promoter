@@ -51,7 +51,7 @@ helm template kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter -
 To keep Secret access out of other namespaces, run in namespace mode
 (`controller.watchNamespace`), which turns the namespaced rules into a Role in that namespace.
 The release-namespace Role also grants `get` on the SCM token Secret, limited to its name
-(`github.secretRef.name`, or the Secret the chart creates from `github.token`). The rule is
+(`scm.secretRef.name`, or the Secret the chart creates from `scm.token`). The rule is
 left out when neither is set.
 
 ---
@@ -114,7 +114,7 @@ expires, so no long-lived PAT is stored. See [GitHub App](../scm-providers.md#gi
 The App needs `Contents: Read and write`, `Pull requests: Read and write` and `Metadata:
 Read-only`. There is no OIDC token exchange; another short-lived token works if something
 outside kardinal (an External Secrets generator, a CronJob) refreshes the Secret in
-`github.secretRef` before it expires: the controller reloads it within 30 seconds.
+`scm.secretRef` before it expires: the controller reloads it within 30 seconds.
 
 ---
 
@@ -162,7 +162,7 @@ The namespace is kardinal's tenancy unit. There is no Project CRD.
 #### The shared SCM token and `scm.allowedRepositories`
 
 Git clone and push use the Pipeline's `git.secretRef` token. The controller uses its own SCM
-token (`github.token` or `github.secretRef`, the controller Pod's `GITHUB_TOKEN`) to open, label,
+token (`scm.token` or `scm.secretRef`, the controller Pod's `GITHUB_TOKEN`) to open, label,
 comment on and close PRs. When it closes a PR that was not merged, it also deletes the PR's head
 branch, `kardinal/<namespace hash>/<bundle>/<env>`, with that token, so the closed PR cannot be merged later. It
 deletes that branch too when a step that pushed it ends before it opens a PR. It deletes only
@@ -246,14 +246,14 @@ helm install kardinal-team-a oci://ghcr.io/pnz1990/charts/kardinal-promoter --ve
   --namespace team-a \
   --create-namespace \
   --set controller.watchNamespace=team-a \
-  --set github.secretRef.name=github-token
+  --set scm.secretRef.name=github-token
 
 # Team B — separate install watching only the "team-b" namespace
 helm install kardinal-team-b oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
   --namespace team-b \
   --create-namespace \
   --set controller.watchNamespace=team-b \
-  --set github.secretRef.name=github-token
+  --set scm.secretRef.name=github-token
 ```
 
 Each install creates a `Role` and `RoleBinding` scoped to its watch namespace. Team A
@@ -307,8 +307,22 @@ effect at the next reconcile; removing the label stops its use again. Whoever ma
 
 Pipeline `spec.git.secretRef` has the same exposure (its token goes to the Pipeline's git URL).
 An unlabeled git Secret is deprecated: it still works with `SecretReferenceable=False`, and v0.11
-refuses it. Label your git Secrets. The controller's own SCM token Secret is set by the operator and
-is not covered.
+refuses it. Label your git Secrets.
+
+### The controller's own SCM token
+
+**Never label the controller's SCM token Secret** (`scm.secretRef.name`, or the chart's
+`<fullname>-github-token` from `scm.token`) `kardinal.io/referenceable: "true"`. The label would
+let any kardinal object in that namespace use it: a Pipeline `git.secretRef`, a MetricCheck
+`authorizationSecretRef`, a NotificationHook, an ScmProvider or a Subscription could send the
+controller's token to a URL its author chooses. The chart never labels it.
+
+The controller also refuses a Pipeline whose `git.secretRef` names its own token Secret
+(`--scm-token-secret-name` in `--scm-token-secret-namespace`), labelled or not: the Pipeline is
+`Ready=False` with reason `ValidationFailed`, its steps fail before `git-clone`, its Bundles get no Graph, and a RenderRun whose git Secret it is fails before its render Job is created, so no render Pod mounts the token. Such a
+Pipeline would otherwise choose where the controller's token goes, and its own existing Secret
+would exempt it from `--scm-allowed-repositories`. Give each Pipeline its own Secret; the chart's
+demo Pipeline gets one (`demo.secretRef`, or a labelled copy the chart creates with `scm.token`).
 
 ### Recommended: External Secrets Operator
 
@@ -457,14 +471,19 @@ and turn it on after the export.
 | `PromotionStarted` | Bundle begins promoting through an environment |
 | `PromotionSucceeded` | Health check passed; PromotionStep reached Verified |
 | `PromotionFailed` | PromotionStep reached Failed or AbortedByAlarm |
-| `PromotionSuperseded` | A newer Bundle superseded an in-flight promotion |
-| `PromotionRejected` | `kardinal reject` cancelled an in-flight promotion (its Bundle was [rejected](../rollback.md#reject-a-bundle)) |
+| `PromotionSuperseded` | A newer Bundle superseded an in-flight promotion (a step that had not started writes none) |
+| `PromotionRejected` | `kardinal reject` cancelled an in-flight promotion (its Bundle was [rejected](../rollback.md#reject-a-bundle); a step that had not started writes none) |
+| `BundleRejected` | A Bundle is rejected (`kardinal reject` or the UI), once, naming who rejected it and why; its environment is `*` (the whole Bundle) |
 | `GateOverridden` | An entry in a gate instance's `spec.overrides[]` (`kardinal override` or the UI), written once per entry with its verified `createdBy`, stage, expiry and reason |
 | `ApprovalRecorded` / `ApprovalRevoked` | An approval gate saw a decision (`kardinal approve`) appear, or its Approval deleted, with the approver, the decision and whether it counts |
 | `HoldCreated` / `HoldReleased` / `HoldBundleMissing` | A hold (`kardinal rollback --hold`) appeared in, or left, `spec.holds`; or its rollback Bundle has been missing for `--hold-bundle-grace` (the hold stays in effect: [A hold whose rollback Bundle does not exist](../rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |
 | `GateEvaluated` | PolicyGate instance first evaluated, and every later change of readiness (blocked or unblocked); one record per change |
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
 | `RollbackSucceeded` | A PromotionStep of a rollback Bundle (from `kardinal rollback`, the UI, a RollbackPolicy or `onHealthFailure: rollback`) reached Verified; written besides `PromotionSucceeded`, one record per step |
+
+The CRD also accepts the actions `HealthCheckFailed` and `GateBlocked`, but kardinal never writes
+them: a failed health check records `PromotionFailed` (or `RollbackStarted` with
+`onHealthFailure: rollback`), and a blocked gate records `GateEvaluated` with outcome `Failure`.
 
 ### Audit outbox
 
@@ -553,6 +572,9 @@ kubectl get auditevents -n my-team -o wide
 kubectl get auditevents -n my-team \
   -l kardinal.io/pipeline=my-app \
   --watch
+
+# Filter by action, across namespaces
+kubectl get auditevent -A -l kardinal.io/action=PromotionFailed
 ```
 
 ### SIEM integration
@@ -999,15 +1021,21 @@ The user needs these permissions:
 | Pause, resume | `get` on `pipelines`; `update` on `pipelines/pause` |
 | Roll back and hold, release a hold | as roll back; `update` on `pipelines/hold` |
 | Approve a gate | `get` on `policygates`; `update` on `policygates/override` |
+| Override a gate in an environment (`/api/v1/ui/override`) | `get` on `pipelines` and `policygates`; `list` on `policygates` and `bundles`; `update` on `policygates/override` |
+| Reject a Bundle | `update` on `bundles/reject` |
 
 Each action is checked call by call, so it needs every verb in its row. Promote and roll
 back read the Pipeline and the environment's history before they create the Bundle. The
 reads are the view permissions, so a user who can view needs only the write verbs on top.
-Pause, resume and gate approval are authorized on a virtual subresource
-(`pipelines/pause`, `policygates/override`) instead of `update` on the object: the API server
-serves no such endpoint, but RBAC grants it and a `SubjectAccessReview` checks it. The
-controller then makes the one change (`spec.paused`, or one `spec.overrides` entry whose
-`createdBy` is the caller) with its own identity. A user who may pause cannot edit the
+Pause, resume, gate approval and rejecting a Bundle are authorized on a virtual subresource
+(`pipelines/pause`, `policygates/override`, `bundles/reject`) instead of `update` on the object:
+the API server serves no such endpoint, but RBAC grants it and a `SubjectAccessReview` checks it.
+The controller then makes the one change (`spec.paused`, one `spec.overrides` entry whose
+`createdBy` is the caller, or `spec.rejected` whose `by` is the caller) with its own identity. The
+bundle-rejection and gate-overrides admission policies admit a record in another user's name only
+from the controller's own ServiceAccount (and `admission.controllerUsernames`). An override of a
+gate in an environment checks `policygates/override` on every instance it writes, before it
+writes any. A user who may pause cannot edit the
 Pipeline, and one who may approve cannot change the gate's expression. The controller
 manages the freeze gate itself, so the user needs no rights on `policygates` to pause.
 
@@ -1029,13 +1057,17 @@ API and the Bundle API, and they work the same for `kubectl` and the `kardinal` 
 | ClusterRole | Grants | For |
 |-------------|--------|-----|
 | `<fullname>-viewer` | `get`, `list`, `watch` on every kardinal kind; `get`, `list`, `watch` on `events` | Dashboards, read-only users |
-| `<fullname>-promoter` | viewer, `create` on `bundles`, `update` on `pipelines/pause` and `pipelines/hold` | CI (Bundle API, `kardinal create bundle`), promote, roll back (and hold), pause and resume in the UI |
-| `<fullname>-approver` | viewer, `update` on `policygates/override`, `create` and `delete` on `approvals` | Gate overrides in the UI, approvals |
-| `<fullname>-admin` | every verb on every kardinal kind, `update` on `pipelines/pause`, `pipelines/hold`, `pipelines/edit`, `policygates/override` and `policygates/edit`; aggregates the three above | Pipeline owners |
+| `<fullname>-promoter` | viewer, `create` on `bundles`, `update` on `pipelines/pause`, `pipelines/hold` and `bundles/reject` | CI (Bundle API, `kardinal create bundle`), promote, roll back (and hold), pause and resume, and reject a Bundle in the UI |
+| `<fullname>-approver` | viewer, `update` on `policygates/override` and `bundles/reject`, `create` and `delete` on `approvals` | Gate overrides and Bundle rejection in the UI, approvals |
+| `<fullname>-admin` | every verb on every kardinal kind, `update` on `pipelines/pause`, `pipelines/hold`, `pipelines/edit`, `policygates/override`, `policygates/edit` and `bundles/reject`; aggregates the three above | Pipeline owners |
 
 `<fullname>` is the release's full name: `kardinal-promoter` for the default release, so
 `kardinal-promoter-viewer` and so on. Bind these roles explicitly; that is the only way to
 grant kardinal access by default.
+
+When the UI API refuses an action on a virtual subresource, its `403` names the role that
+grants it, for example `forbidden: user "bob" cannot update policygates/override.kardinal.io …;
+the chart's approver or admin role grants it`. The UI shows that text in the action's dialog.
 
 To opt in to the built-in roles, set `rbac.userRoles.aggregateToDefaultRoles=true`. The roles
 then also aggregate into Kubernetes' built-in roles: the viewer into `view`, the promoter and

@@ -21,6 +21,7 @@
 //   POST /api/v1/ui/promote                           → { bundle: "new-bundle", message }
 //   POST /api/v1/ui/rollback                          → { bundle: "rollback-bundle", message }
 //   POST /api/v1/ui/approvals                         → { outcome, approval, user: "carol", message }
+//   POST /api/v1/ui/reject, /override, /release-hold  → { message } (override also { gates, expiresAt })
 //   POST /api/v1/ui/validate-cel                      → { valid: true }
 //   GET  /                                            → 302 to /ui/
 //   GET  /ui/*                                        → built static assets (web/dist), SPA fallback
@@ -83,6 +84,7 @@ const BUNDLES = {
       namespace: 'default',
       phase: 'Promoting',
       type: 'image',
+      version: 'sha-abc1234',
       pipeline: 'kardinal-test-app',
       createdAt: new Date(Date.now() - 600_000).toISOString(),
       provenance: { author: 'ci-bot', commitSHA: 'abc1234567890', ciRunURL: 'https://github.com/org/repo/runs/1' },
@@ -110,6 +112,7 @@ const BUNDLES = {
       namespace: 'default',
       phase: 'Promoting',
       type: 'mixed',
+      version: '6.14.1',
       pipeline: 'payments-service',
       createdAt: new Date(Date.now() - 120_000).toISOString(),
     },
@@ -166,12 +169,12 @@ const STEPS = {
 // state and holding are what graph.GateState and graph.GateHolds give
 // them; only a Block (holding) gate counts as blocked (E2E-R19).
 const GATES = [
-  { name: 'no-weekend-deploys-kardinal-test-app-abc123-prod', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', expression: '!schedule.isWeekend', ready: false, holding: true, state: 'Block', reason: 'Today is a weekend', lastEvaluatedAt: new Date(Date.now() - 30_000).toISOString() },
-  { name: 'business-hours-kardinal-test-app-abc123-prod', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', expression: 'schedule.hour >= 9 && schedule.hour < 17', ready: true, state: 'Pass', lastEvaluatedAt: new Date(Date.now() - 10_000).toISOString() },
+  { name: 'no-weekend-deploys-kardinal-test-app-abc123-prod', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', gateTemplate: 'no-weekend-deploys', maxOverrideMinutes: 1440, expression: '!schedule.isWeekend', ready: false, holding: true, state: 'Block', reason: 'Today is a weekend', lastEvaluatedAt: new Date(Date.now() - 30_000).toISOString() },
+  { name: 'business-hours-kardinal-test-app-abc123-prod', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', gateTemplate: 'business-hours', maxOverrideMinutes: 1440, expression: 'schedule.hour >= 9 && schedule.hour < 17', ready: true, state: 'Pass', lastEvaluatedAt: new Date(Date.now() - 10_000).toISOString() },
   { name: 'no-weekend-deploys', namespace: 'default', expression: '!schedule.isWeekend', ready: false, template: true, state: 'Pending' },
   {
     name: 'release-approval-payments-service-def456-prod', namespace: 'default', pipeline: 'payments-service', bundle: 'payments-service-def456', environment: 'prod',
-    expression: 'true', ready: false, holding: true, state: 'Block', reason: 'waiting for approvals: 1 of 2 (alice)', lastEvaluatedAt: new Date(Date.now() - 20_000).toISOString(),
+    gateTemplate: 'release-approval', maxOverrideMinutes: 1440, expression: 'true', ready: false, holding: true, state: 'Block', reason: 'waiting for approvals: 1 of 2 (alice)', lastEvaluatedAt: new Date(Date.now() - 20_000).toISOString(),
     approval: {
       required: 2, allowedGroups: ['release-managers'], excludeAuthor: true, approved: 1,
       decisions: [
@@ -273,6 +276,10 @@ const server = http.createServer(async (req, res) => {
           : `Recorded: carol ${body.decision}s ${body.bundle} for ${body.environment}`,
       })
       case 'validate-cel': return json(res, { valid: true, expression: body.expression })
+      case 'reject': return json(res, { message: `bundle ${body.bundle} rejected by carol: it is never promoted again` })
+      case 'override': return json(res, { message: `gate ${body.gate} overridden in ${body.environment}`, gates: [body.gate],
+        expiresAt: new Date(Date.now() + (body.expiresInMinutes ?? 60) * 60_000).toISOString() })
+      case 'release-hold': return json(res, { message: 'hold released' })
     }
   }
   if (api) return json(res, { error: `no mock for ${method} ${url}` }, 404)

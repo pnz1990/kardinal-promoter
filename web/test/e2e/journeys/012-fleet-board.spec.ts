@@ -29,7 +29,7 @@ test.describe('Journey 012 — Fleet board', () => {
     await page.getByRole('region', { name: 'Fleet' }).getByRole('button', { name: /^kardinal-test-app uat:/ }).click()
     await expect(page.getByRole('heading', { level: 1, name: 'kardinal-test-app' })).toBeVisible()
     await expect(page).toHaveURL(/#\/p\/default\/kardinal-test-app\/env\/uat$/)
-    await expect(page.getByTestId('node-detail')).toContainText('uat')
+    await expect(page.getByTestId('stage-drawer')).toContainText('uat')
     await page.getByRole('button', { name: 'Show the fleet' }).click()
     await expect(page.getByRole('region', { name: 'Fleet' })).toBeVisible()
     await expect(page).not.toHaveURL(/\/p\//)

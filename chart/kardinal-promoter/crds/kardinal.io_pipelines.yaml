@@ -66,7 +66,7 @@ spec:
               environments:
                 description: |-
                   Environments lists the promotion path.
-                  Sequential ordering (GB-1): when an environment does not specify dependsOn,
+                  Sequential ordering: when an environment does not specify dependsOn,
                   it implicitly depends on the previous entry in this list. The first environment
                   has no upstream dependency. This sequential default means a list of N environments
                   without dependsOn fields produces a linear chain. Override with dependsOn to
@@ -2311,10 +2311,13 @@ spec:
                                           "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
                                           "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden",
                                           "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
-                                          "HoldBundleMissing".
+                                          "HoldBundleMissing", "BundleRejected".
                             ApprovalRecorded and ApprovalRevoked are written by an approval gate
                             when a decision (kardinal approve) appears in or leaves its
                             spec.approvals.
+                            BundleRejected is written once when a Bundle's spec.rejected is set
+                            (kardinal reject or the UI), naming who rejected it and why; its
+                            environment is "*" (the whole Bundle).
                             GateOverridden is written once per spec.overrides entry of a gate
                             instance, naming who created it (kardinal override or the UI).
                             HealthCheckFailed and GateBlocked are accepted but never written: a
@@ -2338,6 +2341,7 @@ spec:
                           - HoldCreated
                           - HoldReleased
                           - HoldBundleMissing
+                          - BundleRejected
                           type: string
                         bundleName:
                           description: BundleName is the name of the Bundle being

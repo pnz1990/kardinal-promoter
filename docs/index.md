@@ -77,7 +77,7 @@ kubectl create secret generic github-token \
 helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
   --namespace kardinal-system \
   --create-namespace \
-  --set github.secretRef.name=github-token
+  --set scm.secretRef.name=github-token
 
 # 3. Install the CLI
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -112,10 +112,10 @@ graph LR
 
 ## Key concepts
 
-- **[Bundle](concepts.md#bundle)** — an immutable deployment unit created by CI
-- **[Pipeline](concepts.md#pipeline)** — defines environments, update strategy, and SCM config
-- **[PolicyGate](concepts.md#policygate)** — a CEL expression that blocks or allows promotion
-- **[PromotionStep](concepts.md#promotionstep)** — per-environment promotion progress
+- **[Version](concepts.md#version)** — an immutable snapshot of what to deploy, created by CI
+- **[Pipeline](concepts.md#pipeline-and-environments)** — the environments a version moves through, in order
+- **[Gate](concepts.md#gates)** — a CEL expression that holds a version out of an environment
+- **[Promotion step](concepts.md#promotion-steps)** — the promotion of one version into one environment
 
 ## Community
 

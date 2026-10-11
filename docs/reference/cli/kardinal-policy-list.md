@@ -4,7 +4,10 @@ List PolicyGates
 
 ### Synopsis
 
-List PolicyGate templates.
+List PolicyGate templates: every one, or those the controller attaches to
+<pipeline>'s environments. CEL is the controller's syntax check (valid,
+invalid, or - not checked yet); LAST-EVALUATED is the newest evaluation of the
+template's per-Bundle instances.
 
 Without --pipeline, lists every template in every namespace. With --pipeline,
 lists the templates the controller attaches to that pipeline's environments.
@@ -21,14 +24,21 @@ so a template in an org policy namespace or in spec.policyNamespaces counts the
 instances in every Pipeline's namespace.
 
 ```
-kardinal policy list [flags]
+kardinal policy list [<pipeline>] [flags]
+```
+
+### Examples
+
+```
+  kardinal policy list
+  kardinal policy list my-app
 ```
 
 ### Options
 
 ```
   -h, --help                        help for list
-      --pipeline string             Show only the gates attached to this pipeline
+      --pipeline string             Show only the gates attached to this pipeline (or give it as the argument)
       --policy-namespaces strings   Namespaces the controller reads org PolicyGates from (its --policy-namespaces flag); a Pipeline's spec.policyNamespaces and its own namespace are read as well (default [platform-policies])
 ```
 

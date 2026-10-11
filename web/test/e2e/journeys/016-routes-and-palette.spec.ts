@@ -11,17 +11,17 @@ test.describe('Journey 016 — Routes and the command palette', () => {
   test('a pipeline, an environment and a version are routes that survive a reload', async ({ page }) => {
     await page.goto('/ui/#/p/default/kardinal-test-app/env/prod')
     await expect(page.getByRole('heading', { level: 1, name: 'kardinal-test-app' })).toBeVisible()
-    await expect(page.getByTestId('node-detail')).toContainText('prod')
+    await expect(page.getByTestId('stage-drawer')).toContainText('prod')
     await page.reload()
-    await expect(page.getByTestId('node-detail')).toContainText('prod')
+    await expect(page.getByTestId('stage-drawer')).toContainText('prod')
 
     // Back closes the details, Forward opens them again.
-    await page.getByTestId('node-detail').getByRole('button', { name: 'Close' }).click()
+    await page.getByTestId('stage-drawer').getByRole('button', { name: 'Close' }).click()
     await expect(page).toHaveURL(/#\/p\/default\/kardinal-test-app$/)
     await page.goBack()
-    await expect(page.getByTestId('node-detail')).toBeVisible()
+    await expect(page.getByTestId('stage-drawer')).toBeVisible()
     await page.goForward()
-    await expect(page.getByTestId('node-detail')).toHaveCount(0)
+    await expect(page.getByTestId('stage-drawer')).toHaveCount(0)
 
     // A version from the history is its own route.
     await page.getByRole('toolbar', { name: /^Versions/ }).locator('.bundle-chip').nth(1).click()
@@ -119,7 +119,7 @@ test.describe('Journey 016 — Routes and the command palette', () => {
     await page.keyboard.press('Enter')
     await expect(palette).toHaveCount(0)
     await expect(page).toHaveURL(/#\/p\/default\/kardinal-test-app\/env\/uat$/)
-    await expect(page.getByTestId('node-detail')).toContainText('uat')
+    await expect(page.getByTestId('stage-drawer')).toContainText('uat')
 
     // The visible button opens it too, and Esc closes it.
     await page.getByRole('button', { name: /^Go to or do/ }).click()

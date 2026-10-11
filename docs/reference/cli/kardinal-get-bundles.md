@@ -13,11 +13,19 @@ list them in the same order.
 kardinal get bundles [pipeline] [flags]
 ```
 
+### Examples
+
+```
+  kardinal get bundles my-app --active
+  kardinal get bundles -A -o json
+```
+
 ### Options
 
 ```
-      --active   Hide Superseded and Rejected bundles
-  -h, --help     help for bundles
+      --active           Hide Superseded and Rejected bundles
+  -A, --all-namespaces   List bundles across all namespaces (adds NAMESPACE column)
+  -h, --help             help for bundles
 ```
 
 ### Options inherited from parent commands

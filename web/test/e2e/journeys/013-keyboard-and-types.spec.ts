@@ -77,7 +77,7 @@ test.describe('Journey 013 — Keyboard and Bundle types', () => {
     await expectNoViolations(page, 'light pipeline view')
 
     await page.locator('[role=button][tabindex="0"]').filter({ hasText: 'prod' }).first().click()
-    await expect(page.getByTestId('node-detail')).toBeVisible()
+    await expect(page.getByTestId('stage-drawer')).toBeVisible()
     // The hover tooltip fades in over 80 ms; axe would measure it half
     // transparent. Move the pointer off the graph first.
     await page.mouse.move(0, 0)

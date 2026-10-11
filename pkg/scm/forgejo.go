@@ -445,6 +445,7 @@ func (f *ForgejoProvider) send(ctx context.Context, method, path string, body, r
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := f.client.Do(req)
+	err = RedactErr(err) // a *url.Error quotes the URL
 	if err != nil {
 		return nil, fmt.Errorf("execute request %s %s: %w", method, path, err)
 	}

@@ -160,6 +160,9 @@ export interface Bundle {
   rejectedLiveEnvironments?: string[]
   /** spec.rejected: who rejected the Bundle (kardinal reject), why, and when (RFC 3339). */
   rejected?: { reason: string; by: string; at?: string }
+  /** What the Bundle ships, for display (status.version: the image tag,
+   *  "config <sha>", or the chart and its version). */
+  version?: string
 }
 
 /** #563: A container image reference — repository, tag, and optional digest. */
@@ -282,6 +285,11 @@ export interface PolicyGate {
   pipeline?: string
   bundle?: string
   environment?: string
+  /** The template an instance was made from (kardinal.io/gate-template): the
+   *  gate's name as the user wrote it. Empty on templates. */
+  gateTemplate?: string
+  /** The longest override the controller accepts for this instance, in minutes. */
+  maxOverrideMinutes?: number
   /** True for a PolicyGate template: never evaluated for a bundle, always ready=false. */
   template?: boolean
   /** True when this gate instance holds its bundle back (graph.GateHolds, decided

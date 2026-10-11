@@ -5,24 +5,29 @@ Promote the Bundle verified upstream into an environment
 ### Synopsis
 
 Promote the newest Bundle that is Verified in every upstream environment
-into the given environment.
-
-Creates a Bundle that copies that Bundle's images, config ref and provenance,
-with intent.targetEnvironment set to the environment. PolicyGates and approval
-mode apply as configured. The command refuses, and creates nothing, when no
-Bundle is Verified upstream yet, when that Bundle is already Verified or being
-promoted in the environment, or when a newer Bundle is still promoting (the new
-Bundle would supersede it). The first environment of a pipeline has nothing
-upstream; use kardinal create bundle for it.
+into <env>, as a new Bundle that targets it; gates and approval apply.
+It refuses, creating nothing, when nothing is Verified upstream yet, when
+that Bundle is already in <env>, or when a newer Bundle is still promoting.
+The first environment has nothing upstream: use kardinal ship there.
 
 ```
-kardinal promote <pipeline> --env <environment> [flags]
+kardinal promote <pipeline> <env> [flags]
+```
+
+### Examples
+
+```
+  # promote what uat verified into prod
+  kardinal promote my-app prod
+
+  # the same, with the flag form
+  kardinal promote my-app --env prod
 ```
 
 ### Options
 
 ```
-  -e, --env string   Target environment name (required)
+  -e, --env string   Target environment (or give it after the pipeline)
   -h, --help         help for promote
 ```
 

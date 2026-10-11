@@ -10,8 +10,8 @@
 // namespaces never share a header, bundle list or DAG.
 // Every load carries a view sequence number; a response that arrives after the
 // user moved to another pipeline or bundle is dropped.
-// #326: selectedNode is lifted here so NodeDetail renders as a split panel
-// sibling of DAGView rather than a position:fixed overlay.
+// #326: selectedNode is lifted here so the stage drawer (U3) opens beside
+// DAGView.
 // #740: URL routing — pipeline and node selection persisted in hash fragment.
 // #746: Global keyboard shortcuts — ?, r, Esc.
 // #747: ErrorBoundary wraps async components to prevent white-screen crashes.
@@ -20,7 +20,7 @@ import { useState, useCallback, useMemo, useRef, useEffect, type RefObject } fro
 import { PipelineList } from './components/PipelineList'
 import { PipelineOpsTable } from './components/PipelineOpsTable'
 import { DAGView } from './components/DAGView'
-import { NodeDetail } from './components/NodeDetail'
+import { StageDrawer } from './stage/StageDrawer'
 import { HealthChip } from './components/HealthChip'
 import { RejectedLiveBanner } from './components/RejectedLiveBanner'
 import { BlockedBanner } from './components/BlockedBanner'
@@ -80,6 +80,13 @@ function formatElapsed(seconds: number | null): string {
   return `${mins}m ago`
 }
 
+/** The environment a gate node holds: the PromotionStep its edge leads to. */
+function gatedEnvironment(node: GraphNode, graph: { nodes?: GraphNode[]; edges?: { from: string; to: string }[] } | null | undefined): string | undefined {
+  const to = graph?.edges?.filter(e => e.from === node.id).map(e => graph.nodes?.find(n => n.id === e.to))
+    .find(n => n?.type === 'PromotionStep')
+  return to?.environment
+}
+
 /** Focus handling for the pipeline drawer while it is open (Esc closes it). */
 function SidebarFocus({ sidebarRef, onClose }: { sidebarRef: RefObject<HTMLElement | null>; onClose: () => void }) {
   useModalFocus(sidebarRef, onClose)
@@ -120,12 +127,14 @@ export function App() {
   const [selectedNode, setSelectedNodeLocal] = useState<GraphNode | null>(null)
 
   /** Update both local state and the URL when a node is selected: an environment's step is
-   *  the …/env/<env> route, any other node (a gate) is ?node=<id>. */
+   *  the …/env/<env> route (the stage drawer, #1701); a gate opens the drawer of the
+   *  environment it gates, at "why it's waiting". */
   const setSelectedNode = useCallback((node: GraphNode | null) => {
     setSelectedNodeLocal(node)
-    if (node?.type === 'PromotionStep' && node.environment) setUrlState({ env: node.environment, node: undefined })
-    else setUrlState({ node: node?.id ?? undefined, env: undefined })
-  }, [setUrlState])
+    if (!node) { setUrlState({ env: undefined, node: undefined, section: undefined }); return }
+    const env = node.type === 'PromotionStep' ? node.environment : gatedEnvironment(node, graph)
+    setUrlState({ env: env || undefined, node: undefined, section: node.type === 'PromotionStep' ? undefined : 'why' })
+  }, [setUrlState, graph])
 
   // #740: When graph data changes, restore selectedNode from URL if a node= param is present
   // and the current selectedNode doesn't already match. With no node= (Back to an entry
@@ -137,11 +146,22 @@ export function App() {
       return
     }
     if (!graph) return
+    // A node= link (a gate, or a step from before the env route): open the drawer of the
+    // environment it names, replacing the entry so Back does not return to it.
+    if (!env && nodeId) {
+      const n = graph.nodes?.find(x => x.id === nodeId || (x.type === 'PromotionStep' && x.environment === nodeId))
+      const target = n && (n.type === 'PromotionStep' ? n.environment : gatedEnvironment(n, graph))
+      if (target) setUrlState({ env: target, node: undefined, section: n?.type === 'PromotionStep' ? urlState.section : 'why' }, { replace: true })
+      return
+    }
     const matches = (n: GraphNode) => env ? n.type === 'PromotionStep' && n.environment === env : n.id === nodeId
     if (selectedNode && matches(selectedNode)) return
     const node = graph.nodes?.find(matches)
     if (node) setSelectedNodeLocal(node)
-  }, [graph, urlState, selectedNode])
+  }, [graph, urlState, selectedNode, setUrlState])
+
+  // U3: the environment whose stage drawer is open (the …/env/<env> route).
+  const stageEnv = urlState.env
 
   // #338: Bundle diff comparison state. Shift-click picks the bundle to
   // compare (compareTarget); the timeline then offers Compare and clear.
@@ -345,9 +365,9 @@ export function App() {
     onRefresh: useCallback(() => { void manualRefresh() }, [manualRefresh]),
     onEscape: useCallback(() => {
       if (showShortcutsPanel) { setShowShortcutsPanel(false); return }
-      if (selectedNode) { setSelectedNode(null); return }
+      if (selectedNode || urlState.env) { setSelectedNode(null); return }
       if (showDiffPanel) { closeDiffPanel(); return }
-    }, [showShortcutsPanel, selectedNode, showDiffPanel, setSelectedNode, closeDiffPanel]),
+    }, [showShortcutsPanel, selectedNode, urlState.env, showDiffPanel, setSelectedNode, closeDiffPanel]),
     // #800: / focuses the pipeline search input
     onSearch: useCallback(() => {
       searchInputRef.current?.focus()
@@ -931,11 +951,10 @@ export function App() {
                   loading={graphLoading}
                 />
 
-                {/* #326: Content row — DAG + NodeDetail split panel side by side.
-                    NodeDetail is a flex sibling, not position:fixed overlay. */}
+                {/* #326: Content row — the DAG; the stage drawer (U3) beside it. */}
                 <div className="app-content">
                   {/* DAG area */}
-                  <div className="app-dag" data-split={selectedNode ? true : undefined}>
+                  <div className="app-dag" data-split={stageEnv ? true : undefined}>
                     <ErrorBoundary fallbackMessage="Graph failed to load">
                       <DAGView
                         nodes={displayGraph?.nodes ?? []}
@@ -951,20 +970,19 @@ export function App() {
                     </ErrorBoundary>
                   </div>
 
-                  {/* NodeDetail split panel (#326) — sibling of DAGView, not overlay */}
-                  {selectedNode && (
+                  {/* U3: the stage drawer of the environment in the route (#1701): a column
+                      beside the page at lg and wider, a modal sheet narrower. */}
+                  {stageEnv && activePipeline && (
                     <ErrorBoundary fallbackMessage="Details unavailable">
-                      <NodeDetail
-                        node={selectedNode}
+                      <StageDrawer
+                        namespace={activePipeline.namespace}
+                        pipeline={activePipeline.name}
+                        env={stageEnv}
+                        section={urlState.section}
                         onClose={() => setSelectedNode(null)}
-                        bundleName={activeBundle?.name}
-                        pipelineName={activePipeline?.name}
-                        namespace={activePipeline?.namespace ?? 'default'}
-                        steps={activeSteps}
-                        activeBundle={activeBundle}
-                        onActionDone={() => { void manualRefresh() }}
-                        nodes={graph?.nodes ?? []}
-                        edges={graph?.edges ?? []}
+                        onNavigate={(env, section) => { setSelectedNodeLocal(null); setUrlState({ env, node: undefined, section }) }}
+                        data={{ pipeline: activePipeline, bundles, steps: activeSteps, gates }}
+                        onChanged={() => { void manualRefresh() }}
                       />
                     </ErrorBoundary>
                   )}

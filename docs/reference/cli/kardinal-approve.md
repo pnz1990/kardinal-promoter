@@ -4,7 +4,10 @@ Approve (or reject) a Bundle for an environment's approval gates
 
 ### Synopsis
 
-Approve a Bundle for an environment.
+Record your approval (or, with --decision reject, a rejection) of a Bundle for
+an environment, in your Kubernetes name. An approval gate on that environment
+passes once enough allowed people approved and nobody rejected; approving
+before the Bundle reaches the gate is fine. --revoke deletes your Approval.
 
 Creates an Approval object for the Bundle and environment in your name: your
 Kubernetes username and groups, read from the API server with a
@@ -29,6 +32,18 @@ with it. See docs/policy-gates.md (Approval gates).
 
 ```
 kardinal approve <bundle> --env <environment> [flags]
+```
+
+### Examples
+
+```
+  kardinal approve my-app-v1-5 --env prod --comment "checked the canary"
+
+  # decline (a gate rejection, not kardinal reject)
+  kardinal approve my-app-v1-5 --env prod --decision reject
+
+  # take your decision back
+  kardinal approve my-app-v1-5 --env prod --revoke
 ```
 
 ### Options

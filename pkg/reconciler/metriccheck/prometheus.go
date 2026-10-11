@@ -15,6 +15,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
@@ -123,9 +125,9 @@ func (p *PrometheusProvider) query(ctx context.Context, prometheusURL, query, au
 			if uerr.Timeout() {
 				return 0, errors.New("prometheus GET timed out")
 			}
-			return 0, fmt.Errorf("prometheus GET: %w", uerr.Err)
+			return 0, fmt.Errorf("prometheus GET: %w", scm.RedactErr(uerr.Err))
 		}
-		return 0, fmt.Errorf("prometheus GET: %w", err)
+		return 0, fmt.Errorf("prometheus GET: %w", scm.RedactErr(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
