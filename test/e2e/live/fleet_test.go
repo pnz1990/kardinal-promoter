@@ -466,7 +466,8 @@ func TestGraph_FleetSurvivesKroRestart(t *testing.T) {
 
 // TestGraph_FleetTargetRolledBackFirst (#1603 with D1): while a fleet Bundle
 // B promotes its targets one at a time, one target that B has not reached
-// yet is rolled back on its own. The rollback Bundle R is newer than B and
+// yet is rolled back on its own (a gate on that target holds B until the
+// rollback has pushed, then is overridden for B). The rollback Bundle R is newer than B and
 // pushes to that target first, so B's step there does not push over it: it
 // ends Superseded. It is settled: the targets after it start (maxConcurrent
 // 1), post starts once the other targets are Verified, B ends Verified, and
@@ -493,9 +494,17 @@ func TestGraph_FleetTargetRolledBackFirst(t *testing.T) {
 		e.WaitBundlePhase(t, ns, b, "Verified", 2*promoteTimeout)
 	}
 
+	// B must reach prod-t02 after the rollback, which is newer: a gate on
+	// that target lets only rollback Bundles through, so B waits there
+	// until the rollback has pushed and the gate is overridden for B.
+	const holdExpr = `"kardinal.io/rollback" in bundle.labels`
+	e.CreateGate(t, framework.Gate(ns, "hold-t02", "prod-t02", holdExpr, recheck))
 	b := e.CreateBundle(t, ns, pipelineName, "--image", imageV1)
+	e.WaitGateReady(t, ns, b, "prod-t02", "hold-t02", false, holdExpr+" = false", gateTimeout)
 	_, rb := rbRollback(t, a, "prod-t02")
 	rbStep := e.WaitStepState(t, ns, pipelineName, rb, "prod-t02", "Verified", promoteTimeout)
+	e.MustKardinal(t, ns, "override", pipelineName, "--stage", "prod-t02", "--gate", "hold-t02",
+		"--reason", "the rollback of prod-t02 has pushed", "--expires-in", "1h")
 
 	got := e.WaitStepState(t, ns, pipelineName, b, "prod-t02", "Superseded", 2*promoteTimeout)
 	require.True(t, got.CreationTimestamp.After(rbStep.CreationTimestamp.Time),
@@ -508,7 +517,7 @@ func TestGraph_FleetTargetRolledBackFirst(t *testing.T) {
 		}
 	}
 
-	// Settled: the next targets start, post runs, and B is Verified.
+	// Settled: the other targets are Verified, post runs, and B is Verified.
 	for _, env := range []string{"prod-t03", "prod-t04", "post"} {
 		e.WaitStepState(t, ns, pipelineName, b, env, "Verified", promoteTimeout)
 	}
