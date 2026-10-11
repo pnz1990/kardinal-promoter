@@ -75,7 +75,7 @@ blocking gates pass as audited exemptions meanwhile. See docs/rollback.md.`,
 				return fmt.Errorf("rollback: %w", err)
 			}
 			if lastEnvironment(cmd.Context(), c, ns, pipeline, env) {
-				if err := confirm(cmd, fmt.Sprintf("Roll %s of %s back? A rollback Bundle goes through every environment before it.", env, pipeline)); err != nil {
+				if err := confirm(cmd, fmt.Sprintf("Roll %s of %s back? The rollback goes through every environment before it.", env, pipeline)); err != nil {
 					return err
 				}
 			}
@@ -186,7 +186,7 @@ func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBund
 	}
 	if _, err := fmt.Fprintf(w,
 		"Rolling back %s in %s from %s to %s (%s)\nBundle %s created (rollbackOf=%s)\n"+
-			"Environment %s held on %s: no other Bundle promotes there until: kardinal release-hold %s --env %s\n"+
+			"Environment %s held on %s: no other version promotes there until: kardinal release-hold %s --env %s\n"+
 			"Gates of %s that would block the rollback pass as EXEMPT (audited) while the controller verifies it restores what was Verified there.\n"+
 			"Track with: kardinal explain %s --env %s\n",
 		pipeline, env, from, plan.Target.Name, artifactSummary(plan.Bundle),
@@ -254,7 +254,7 @@ func newHoldCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "hold <pipeline> <env> --reason <text>",
 		Short: "Keep an environment on what runs there now",
-		Long: `Hold <env> on the Bundle that runs there now: no other Bundle promotes into
+		Long: `Hold <env> on the version that runs there now: no other version promotes into
 it until kardinal unhold (or --expires-in). Nothing is rolled back and no
 Bundle is created; to go back to an earlier version and keep it, use
 kardinal rollback <pipeline> <env> --hold.`,
@@ -322,7 +322,7 @@ func holdFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, reason, actor 
 	if h.ExpiresAt != nil {
 		until += " (or " + h.ExpiresAt.UTC().Format(time.RFC3339) + ")"
 	}
-	return writef(w, "%s %s of %s on %s: no other Bundle promotes there until %s\n",
+	return writef(w, "%s %s of %s on %s: no other version promotes there until %s\n",
 		sty.Paint(display.ToneHeld, "Held"), env, pipeline, h.Bundle, until)
 }
 

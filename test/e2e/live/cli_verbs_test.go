@@ -104,7 +104,7 @@ func TestCLI_ShipWait(t *testing.T) {
 	assert.Empty(t, p.Spec.Holds, "a refused hold changes nothing")
 	r = c.Run(b.ns, "hold", pipelineName, "test", "--reason", "freeze")
 	require.Equal(t, 0, r.Code, r.Output())
-	assert.Regexp(t, `^Held test of podinfo on podinfo-[a-z0-9]+: no other Bundle promotes there until kardinal unhold podinfo test\n$`, r.Stdout)
+	assert.Regexp(t, `^Held test of podinfo on podinfo-[a-z0-9]+: no other version promotes there until kardinal unhold podinfo test\n$`, r.Stdout)
 	r = c.Run(b.ns, "hold", pipelineName, "test", "--reason", "freeze")
 	require.Equal(t, 0, r.Code, "the same hold again: %s", r.Output())
 	assert.Contains(t, r.Stdout, "already, for that reason: nothing changed")

@@ -44,12 +44,12 @@ func TestConfirm(t *testing.T) {
 		var errb bytes.Buffer
 		cmd.SetErr(&errb)
 		require.NoError(t, cmd.ParseFlags(args))
-		err := confirm(cmd, "Delete Bundle b?")
+		err := confirm(cmd, "Delete b?")
 		return errb.String(), err
 	}
 	asked, err := run(true, "y\n")
 	require.NoError(t, err)
-	assert.Equal(t, "Delete Bundle b? [y/N] ", asked)
+	assert.Equal(t, "Delete b? [y/N] ", asked)
 	_, err = run(true, "\n")
 	assert.ErrorIs(t, err, errCancelled, "the default is no")
 	_, err = run(true, "nope\n")
@@ -304,7 +304,7 @@ func TestHoldAndWhy(t *testing.T) {
 	c := lcClient(t, lcPipeline(), lcBundle("app-v1", "app", "1", 0), lcStep("app-v1", "prod", "Verified", 5))
 	var buf bytes.Buffer
 	require.NoError(t, holdFn(&buf, c, "default", "app", "prod", "audit", "alice", 0))
-	assert.Equal(t, "Held prod of app on app-v1: no other Bundle promotes there until kardinal unhold app prod\n", buf.String())
+	assert.Equal(t, "Held prod of app on app-v1: no other version promotes there until kardinal unhold app prod\n", buf.String())
 	buf.Reset()
 	require.NoError(t, holdFn(&buf, c, "default", "app", "prod", "audit", "alice", 0), "the same hold again is a no-op")
 	assert.Equal(t, "Held prod of app is held on app-v1 already, for that reason: nothing changed\n", buf.String())
