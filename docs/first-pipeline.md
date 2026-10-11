@@ -201,8 +201,8 @@ kardinal get pipelines
 ## Create your first Bundle
 
 In a real setup, your CI pipeline creates a version after building and pushing images.
-For this quickstart, promote the `kardinal-test-app` image `sha-9349a3f` with its digest pinned.
-The kardinal-demo overlays already run `sha-9349a3f`, so a Bundle with only that tag changes nothing and opens no PR; the digest adds a `digest:` line to each overlay.
+For this guide, promote the `kardinal-test-app` image `sha-9349a3f` with its digest pinned.
+The kardinal-demo overlays already run `sha-9349a3f`, so a version with only that tag changes nothing and opens no PR; the digest adds a `digest:` line to each overlay.
 
 ```bash
 TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0"
