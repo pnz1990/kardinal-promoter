@@ -4,7 +4,11 @@ Simulate PolicyGate evaluation for a hypothetical promotion context
 
 ### Synopsis
 
-Simulate PolicyGate evaluation.
+Evaluate the gates of <env> as the controller would, for a Bundle that went
+through every upstream environment, at --time (UTC; default now) with
+--soak-minutes upstream. Nothing is written. The first line is RESULT: PASS or
+RESULT: BLOCKED, then each blocking gate with its message and the next hour it
+would pass; it exits 0 either way.
 
 Selects the PolicyGates the controller attaches to the environment (the
 pipeline's namespace plus the policy namespaces, matched by the
@@ -32,21 +36,26 @@ result is PASS or BLOCKED, so a script reads the RESULT line; it exits non-zero
 only when it cannot simulate (a bad flag, a pipeline or environment that does
 not exist, or no cluster to read).
 
-Example:
-  kardinal policy simulate --pipeline nginx-demo --env prod --time "Saturday 3pm"
+```
+kardinal policy simulate <pipeline> <env> [flags]
+```
+
+### Examples
+
+```
+  kardinal policy simulate my-app prod --time "Saturday 3pm"
   # RESULT: BLOCKED
   # Blocked by: no-weekend-deploys
 
-```
-kardinal policy simulate [flags]
+  kardinal policy simulate --pipeline my-app --env prod --soak-minutes 60
 ```
 
 ### Options
 
 ```
-      --env string                  Environment name (required)
+  -e, --env string                  Environment (or give it after the pipeline)
   -h, --help                        help for simulate
-      --pipeline string             Pipeline name (required)
+      --pipeline string             Pipeline name (or give it as the first argument)
       --policy-namespaces strings   Namespaces the controller reads org PolicyGates from (its --policy-namespaces flag); a Pipeline's spec.policyNamespaces and its own namespace are read as well (default [platform-policies])
       --soak-minutes int            Simulated soak time of each upstream environment, in minutes
       --time string                 Simulated UTC time (e.g. "Saturday 3pm", "Tuesday 10:00", RFC 3339)

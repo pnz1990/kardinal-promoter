@@ -4,9 +4,12 @@ Run pre-flight checks to verify the cluster is correctly configured
 
 ### Synopsis
 
-Run pre-flight checks for kardinal-promoter:
+Check that kardinal can work in this cluster: the controller answers, the
+CRDs are installed, kro and its Graph CRD run, and the controller has an SCM
+token. --pipeline also checks one Pipeline. Run it first when something is
+wrong.
 
-  ✅ Controller reachable      kardinal-version ConfigMap in the controller namespace
+✅ Controller reachable      kardinal-version ConfigMap in the controller namespace
   ✅ CRDs installed            every kardinal.io/v1alpha1 resource served
   ✅ kro running               kro controller pod in kro-system
   ✅ kro Graph CRD installed   kro.run/v1alpha1 graphs registered
@@ -24,6 +27,13 @@ Use 'kardinal doctor' as the first troubleshooting step.
 
 ```
 kardinal doctor [flags]
+```
+
+### Examples
+
+```
+  kardinal doctor
+  kardinal doctor --pipeline my-app -n team-a
 ```
 
 ### Options

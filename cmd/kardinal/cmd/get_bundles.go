@@ -27,7 +27,7 @@ import (
 )
 
 func newGetBundlesCmd() *cobra.Command {
-	var activeOnly bool
+	var activeOnly, allNamespaces bool
 
 	cmd := &cobra.Command{
 		Use:         "bundles [pipeline]",
@@ -38,25 +38,37 @@ func newGetBundlesCmd() *cobra.Command {
 second, by the kardinal.io/created-at annotation (sub-second), then by name;
 the order supersession uses and kardinal history lists. -o json and -o yaml
 list them in the same order.`,
+		Example: `  kardinal get bundles my-app --active
+  kardinal get bundles -A -o json`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runGetBundles(cmd, args, activeOnly)
+			return runGetBundles(cmd, args, activeOnly, allNamespaces)
 		},
 	}
 	cmd.Flags().BoolVar(&activeOnly, "active", false,
 		"Hide Superseded and Rejected bundles")
+	cmd.Flags().BoolVarP(&allNamespaces, "all-namespaces", "A", false,
+		"List bundles across all namespaces (adds NAMESPACE column)")
 	return cmd
 }
 
-func runGetBundles(cmd *cobra.Command, args []string, activeOnly bool) error {
+func runGetBundles(cmd *cobra.Command, args []string, activeOnly, allNamespaces bool) error {
 	client, ns, err := buildClient()
 	if err != nil {
 		return fmt.Errorf("get bundles: %w", err)
 	}
-	return getBundlesFn(cmd.OutOrStdout(), client, ns, args, activeOnly)
+	if allNamespaces {
+		ns = ""
+	}
+	return getBundlesFnNS(cmd.OutOrStdout(), client, ns, args, activeOnly, allNamespaces)
 }
 
 func getBundlesFn(out io.Writer, client sigs_client.Client, ns string, args []string, activeOnly bool) error {
+	return getBundlesFnNS(out, client, ns, args, activeOnly, false)
+}
+
+// getBundlesFnNS is getBundlesFn; ns "" with showNS lists every namespace.
+func getBundlesFnNS(out io.Writer, client sigs_client.Client, ns string, args []string, activeOnly, showNS bool) error {
 	// One Pipeline's Bundles: filtered on the server (the CRD's selectable
 	// field, Kubernetes 1.31+), or on 1.30 the namespace list filtered here.
 	var bundles v1alpha1.BundleList
@@ -94,6 +106,6 @@ func getBundlesFn(out io.Writer, client sigs_client.Client, ns string, args []st
 	case "yaml":
 		return WriteYAML(out, items)
 	default:
-		return FormatBundleTable(out, items)
+		return formatBundleTable(out, items, showNS)
 	}
 }

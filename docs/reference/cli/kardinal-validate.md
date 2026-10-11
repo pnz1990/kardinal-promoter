@@ -4,6 +4,11 @@ Validate Pipeline and PolicyGate YAML before applying to the cluster
 
 ### Synopsis
 
+Check Pipeline and PolicyGate YAML offline: environments, the dependency
+graph, fields the controller does not implement, and every gate expression
+compiles. It exits 1 with the errors when the file is not valid; kubectl apply
+--dry-run=server checks the full schema.
+
 Validate Pipeline and PolicyGate YAML without connecting to the cluster.
 The file may hold several documents; each kardinal.io Pipeline and PolicyGate
 is checked. Other objects (a Namespace, another API group's Pipeline) are
@@ -41,6 +46,13 @@ Exit codes:
 
 ```
 kardinal validate [flags]
+```
+
+### Examples
+
+```
+  kardinal validate -f pipeline.yaml
+  kardinal validate -f examples/ --allowed-repositories github.com/acme/*
 ```
 
 ### Options

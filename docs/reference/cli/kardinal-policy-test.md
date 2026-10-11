@@ -4,7 +4,10 @@ Validate PolicyGate YAML syntax and dry-run CEL expressions
 
 ### Synopsis
 
-Validate every PolicyGate in a YAML file (multiple documents are fine).
+Check every PolicyGate in a YAML file offline: each expression is compiled and
+evaluated as the controller would, now, for a Bundle with no images, metrics or
+history. PASS or FAIL per gate, UNKNOWN when it needs cluster data (use policy
+simulate). It exits non-zero only when an expression does not compile.
 
 Each expression is compiled with the controller's PolicyGate CEL environment,
 then evaluated by the controller's reconciler against a local context: the
@@ -21,11 +24,14 @@ Results:
 No cluster access is required. The command exits non-zero only when an
 expression does not compile.
 
-Example:
-  kardinal policy test policy-gates.yaml
-
 ```
 kardinal policy test <file> [flags]
+```
+
+### Examples
+
+```
+  kardinal policy test policy-gates.yaml
 ```
 
 ### Options

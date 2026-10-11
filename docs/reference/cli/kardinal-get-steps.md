@@ -12,11 +12,20 @@ Use --watch / -w to stream live updates (polls every 2s, Ctrl-C to quit).
 kardinal get steps <pipeline> [flags]
 ```
 
+### Examples
+
+```
+  kardinal get steps my-app
+  kardinal get steps my-app -w
+  kardinal get steps my-app -A
+```
+
 ### Options
 
 ```
-  -h, --help    help for steps
-  -w, --watch   Stream live updates (polls every 2s, Ctrl-C to quit)
+  -A, --all-namespaces   The pipeline's steps in every namespace (adds NAMESPACE column)
+  -h, --help             help for steps
+  -w, --watch            Stream live updates (polls every 2s, Ctrl-C to quit)
 ```
 
 ### Options inherited from parent commands
