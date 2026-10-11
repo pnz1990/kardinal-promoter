@@ -2,7 +2,8 @@
 
 In about 10 minutes, on a local cluster, you ship a version of
 [`kardinal-test-app`](https://github.com/pnz1990/kardinal-test-app) through test, uat and prod,
-watch it stop at an approval gate before prod, and approve it.
+see it stop at an approval gate before prod, and approve it. Then you ship the next version and
+watch it move on the UI's map.
 
 You need:
 
