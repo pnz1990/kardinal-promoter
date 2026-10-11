@@ -142,7 +142,7 @@ environments: the invariants read what kardinal wrote to git.
 
 | Profile | Sizes | Time |
 |---|---|---|
-| `ci` (default) | 30-stage chain, canary and 3 waves x 4 regions, 20 Pipelines, a burst of 100 Bundles, 0.5 Bundles/s for 2 min, chaos for 3 min, 10 min to settle; sized for a GitHub-hosted runner (4 vCPUs, 16 GB), 4 tests at a time (`KARDINAL_E2E_PARALLEL`) | 25 min on a 32-core host |
+| `ci` (default) | 30-stage chain, canary and 3 waves x 4 regions, 20 Pipelines, a burst of 100 Bundles, 0.5 Bundles/s for 2 min, chaos for 3 min, an Argo CD fan-out of 41 environments, latency objective p50 15 s, 10 min to settle; sized for a GitHub-hosted runner (4 vCPUs, 16 GB), 4 tests at a time (`KARDINAL_E2E_PARALLEL`) | 25 min on a 32-core host |
 | `full` | 100-stage chain, canary and 9 waves x 11 regions (100 environments), fan-in of 50, 200 Pipelines, a burst of 1,000 Bundles over 100 Pipelines, 2 Bundles/s for 10 min, chaos for 10 min | 2 h on a 32-core host; give the kind node 24 GB (`KARDINAL_E2E_NODE_MEMORY=24g`) and kro 8 GB (`KARDINAL_E2E_KRO_MEMORY=8Gi`) until #1492 is fixed |
 | `soak` | `full`, with 5 Bundles/s for 30 min over 100 Pipelines | `full` plus 40 min |
 
@@ -152,7 +152,7 @@ in upper snake case (`KARDINAL_E2E_SCALE_SUSTAINED_RATE=5`,
 
 | Tests | What they do |
 |---|---|
-| `TestScale_Topology*` | a 100-stage chain, the 120-stage chain and 150-environment fan-out a large company asks for, the same fan-out with 151 Argo CD Applications and `argocd` health (`TestScale_TopologyArgoCD`, run alone), waves, a diamond lattice, a fan-in, mixed auto and pr-review approval, several Pipelines writing one repo and branch |
+| `TestScale_Topology*` | a 100-stage chain, the 120-stage chain and 150-environment fan-out a large company asks for, the same fan-out with 151 Argo CD Applications (41 in the `ci` profile) and `argocd` health (`TestScale_TopologyArgoCD`, run alone), waves, a diamond lattice, a fan-in, mixed auto and pr-review approval, several Pipelines writing one repo and branch |
 | `TestScale_Load*`, `TestScale_LatencySLO`, `TestScale_TwoTenants`, `TestScale_TenantFairness` | 200 Pipelines with a Bundle each, a burst of 1,000 Bundles (the newest per Pipeline must end Verified), a sustained rate for a duration, the latency objective ([Latency SLO](#latency-slo)), and two tenants: a 149-environment wave on one branch in one namespace while another namespace's Pipeline must get its first reconcile within `TenantStartWithin` (20 s); and fairness: while that wave runs, or 149 5-environment Pipelines on their own repositories promote at once, another namespace promotes a Bundle on each of `TenantBBundles` (5) 3-environment Pipelines with step p99 within `TenantStepP99` (10 s) |
 | `TestScale_Race*` | rapid-fire Bundles, Pipeline edits, gate flapping, a ChangeWindow switched on while a step waits for merge, pause/resume storms, rollback during a promotion, PRs closed, reopened and merged from outside, a force-pushed branch, a namespace deleted mid-flight, duplicate, forged and out-of-order webhooks |
 | `TestScale_Chaos*` | the leader killed every 20-60 s, kro restarted, git latency and outages, API Priority and Fairness throttling the controller to one seat, the SCM token rotated mid-flight |
@@ -195,8 +195,10 @@ objectives allow for the `-race` build, which makes each reconcile about
 
 | Profile | Pipelines | Auto step p50 | Auto step p99 | Bundle end to end p99 |
 |---|---|---|---|---|
-| `ci` | 20 | 5 s | 15 s | 45 s |
+| `ci` | 20 | 15 s | 30 s | 75 s |
 | `full`, `soak` | 200 | 10 s | 30 s | 2 min |
+
+The `ci` objectives are what a GitHub-hosted runner does with the `-race` controller (measured auto step p50 8-10 s, p99 13 s, Bundle p99 29-36 s), with margin; a 32-core host measures 1-2 s, and `full` keeps the strict objectives.
 
 `KARDINAL_E2E_SCALE_SLO_STEP_P50`, `_SLO_STEP_P99`, `_SLO_BUNDLE_P99` and
 `_SLO_PIPELINES` override them. With the reconciler worker defaults

@@ -62,7 +62,7 @@ type AuditEventSpec struct {
 // all pipelines.
 //
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:scope=Namespaced,shortName=ae;audit
+// +kubebuilder:resource:scope=Namespaced,shortName=ae;audit,categories=kardinal-all
 // +kubebuilder:printcolumn:name="Pipeline",type="string",JSONPath=".spec.pipelineName"
 // +kubebuilder:printcolumn:name="Bundle",type="string",JSONPath=".spec.bundleName"
 // +kubebuilder:printcolumn:name="Environment",type="string",JSONPath=".spec.environment"

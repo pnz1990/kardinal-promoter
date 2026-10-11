@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
@@ -54,10 +55,11 @@ func explainDeployed(out string) string {
 	return after
 }
 
-// gateRow is one gate row of kardinal explain.
+// gateRow is one gate row of kardinal explain; state is the API value, the
+// row shows its display label (P2).
 func gateRow(env, bundle, name, state, expr, reason string) map[string]string {
 	return map[string]string{"ENVIRONMENT": env, "BUNDLE": bundle, "TYPE": "PolicyGate", "NAME": name,
-		"STATE": state, "EXPRESSION": expr, "REASON": reason}
+		"STATE": display.Gate(state).Label, "EXPRESSION": expr, "REASON": reason}
 }
 
 // stepRow is one step row of kardinal explain: a Step's reason is its
@@ -68,7 +70,7 @@ func stepRow(ps *v1alpha1.PromotionStep) map[string]string {
 		reason = "-"
 	}
 	return map[string]string{"ENVIRONMENT": ps.Spec.Environment, "BUNDLE": ps.Spec.BundleName, "TYPE": "Step",
-		"NAME": ps.Spec.StepType, "STATE": ps.Status.State, "EXPRESSION": "-", "REASON": reason}
+		"NAME": ps.Spec.StepType, "STATE": display.Step(ps.Status.State).Label, "EXPRESSION": "-", "REASON": reason}
 }
 
 // statusSections splits kardinal status <pipeline> into the paragraphs
@@ -345,10 +347,10 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	// The watch shows the gate pass; Ctrl-C ends it with exit 0.
 	stream := watch.WaitStdout(30*time.Second, "a frame with the gate passed", func(s string) bool {
 		r := framework.TableRow(lastFrame(s), "NAME", "entry")
-		return r != nil && r["STATE"] == "Pass"
+		return r != nil && r["STATE"] == display.Gate("Pass").Label
 	})
 	fs := frames(stream)
-	assert.Equal(t, "Block", framework.TableRow(fs[0], "NAME", "entry")["STATE"], "the first frame:\n%s", fs[0])
+	assert.Equal(t, display.Gate("Block").Label, framework.TableRow(fs[0], "NAME", "entry")["STATE"], "the first frame:\n%s", fs[0])
 	assert.Equal(t, overridden, framework.TableRow(lastFrame(stream), "NAME", "entry")["REASON"])
 	watch.Interrupt()
 	r := watch.Wait(30 * time.Second)
@@ -376,7 +378,7 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	paras, tables = statusSections(out)
 	assert.Equal(t, []string{"Pipeline: podinfo   Namespace: " + ns, "Active bundle(s): " + b1}, paras, out)
 	assert.Equal(t, []string{"ENVIRONMENT", "REGION", "BUNDLE", "STATE", "ACTIVE STEP", "PR", "AGE"}, header(tables["Promotion Steps"]), out)
-	assert.Equal(t, []map[string]string{{"ENVIRONMENT": "test", "REGION": "-", "BUNDLE": b1, "STATE": "Verified", "ACTIVE STEP": "-", "PR": "-"}},
+	assert.Equal(t, []map[string]string{{"ENVIRONMENT": "test", "REGION": "-", "BUNDLE": b1, "STATE": display.Step("Verified").Label, "ACTIVE STEP": "-", "PR": "-"}},
 		stripAges(t, framework.ParseTable(tables["Promotion Steps"]), "AGE", ageRE), out)
 	assert.Equal(t, []map[string]string{{"ENVIRONMENT": "prod", "BUNDLE": "none"}, {"ENVIRONMENT": "test", "BUNDLE": b1 + " (" + fixtures.V2 + ")"}},
 		framework.ParseTable(tables["Deployed"]), out)
@@ -388,7 +390,7 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	assert.NotContains(t, plain, "\x1b[", "no color when stdout is not a terminal")
 	colored := c.Must(ns, "explain", pipelineName, "--env", "prod", "--color")
 	lines := strings.Split(colored, "\n")
-	assert.Equal(t, strings.Index(lines[0], "STATE"), strings.Index(lines[1], "\x1b[31mBlock\x1b[0m"), "Block, red, in the STATE column:\n%q", colored)
+	assert.Equal(t, strings.Index(lines[0], "STATE"), strings.Index(lines[1], "\x1b[31m"+display.Gate("Block").Label+"\x1b[0m"), "Blocking, red, in the STATE column:\n%q", colored)
 	assert.Len(t, ansi.FindAllString(colored, -1), 2, "one colored cell:\n%q", colored)
 	assert.Equal(t, plain, ansi.ReplaceAllString(colored, ""))
 	colored = c.Must(ns, "explain", pipelineName, "--env", "test", "--color")
@@ -418,8 +420,8 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	out = c.Must(ns, "status", pipelineName)
 	_, tables = statusSections(out)
 	assert.Equal(t, []map[string]string{
-		{"ENVIRONMENT": "▶ prod", "REGION": "-", "BUNDLE": b1, "STATE": "WaitingForMerge", "ACTIVE STEP": active, "PR": prCell},
-		{"ENVIRONMENT": "test", "REGION": "-", "BUNDLE": b1, "STATE": "Verified", "ACTIVE STEP": "-", "PR": "-"},
+		{"ENVIRONMENT": "▶ prod", "REGION": "-", "BUNDLE": b1, "STATE": display.Step("WaitingForMerge").Label, "ACTIVE STEP": active, "PR": prCell},
+		{"ENVIRONMENT": "test", "REGION": "-", "BUNDLE": b1, "STATE": display.Step("Verified").Label, "ACTIVE STEP": "-", "PR": "-"},
 	}, stripAges(t, framework.ParseTable(tables["Promotion Steps"]), "AGE", ageRE), out)
 	assert.NotContains(t, tables, "Blocking Policy Gates", out)
 	e.SetBundleLabel(t, ns, b1, openLabel, "")
