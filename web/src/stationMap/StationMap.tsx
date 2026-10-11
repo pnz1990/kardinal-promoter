@@ -21,6 +21,7 @@ import { ageOf } from '../fleetModel'
 import { prNumberFromURL } from '../prLink'
 import { Icon } from '../ui'
 import '../styles/StationMap.css'
+import { lowerFirst } from '../sentence'
 
 export interface StationMapProps {
   model: StationMapModel
@@ -193,7 +194,7 @@ export default function StationMap(props: StationMapProps) {
     for (const st of model.stations.values()) {
       const before = prevTones.current.get(st.env)
       if (before && before !== st.display.label && st.reached) {
-        changed.push(`${followedVersion ?? 'The version'} ${st.display.label.toLowerCase()} in ${st.env}`)
+        changed.push(`${followedVersion ?? 'The version'} ${lowerFirst(st.display.label)} in ${st.env}`)
       }
       prevTones.current.set(st.env, st.display.label)
     }

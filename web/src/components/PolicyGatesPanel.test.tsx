@@ -188,13 +188,15 @@ describe('PolicyGatesPanel — approval gates (E6)', () => {
   it('shows the quorum and who approved under an approval gate', async () => {
     const gate: PolicyGate = {
       name: 'prod-approval', namespace: 'default', expression: 'true', ready: false, state: 'Block', holding: true,
-      reason: 'waiting for approvals: 1 of 2 (alice)', bundle: 'app-1', environment: 'prod',
+      reason: 'waiting for approvals: 1 of 2 (alice)', pipeline: 'app', bundle: 'app-1', environment: 'prod',
       approval: { required: 2, approved: 1, decisions: [{ user: 'alice', decision: 'approve', counted: true }] },
     }
     render(<PolicyGatesPanel gates={[gate]} />)
     // A holding gate opens the panel by itself.
     expect(await screen.findByRole('meter', { name: 'Approvals' })).toHaveAttribute('aria-valuetext', '1 of 2 approvals')
-    expect(screen.getByText('kardinal approve app-1 --env prod -n default')).toBeInTheDocument()
+    expect(screen.getByText('kardinal approve app prod')).toBeInTheDocument()
+    // It reads as the map and the drawer do: waiting for approval, by the gate's name.
+    expect(screen.getByLabelText(/^Waiting for approval/)).toBeInTheDocument()
   })
 
   it('tells the parent after a decision, so the gates refresh', async () => {
@@ -215,5 +217,25 @@ describe('PolicyGatesPanel — approval gates (E6)', () => {
   it('a gate without an approval policy has no quorum', () => {
     render(<PolicyGatesPanel gates={[{ name: 'g', namespace: 'default', expression: 'true', ready: false, state: 'Block', holding: true }]} />)
     expect(screen.queryByRole('meter')).not.toBeInTheDocument()
+  })
+})
+
+describe('PolicyGatesPanel — names gates as the map and drawer do', () => {
+  it('shows the gate template, with the instance name in its title', () => {
+    render(<PolicyGatesPanel gates={[makeGate({ name: 'no-weekend--app-1-prod', gateTemplate: 'no-weekend', state: 'Block', holding: true, ready: false })]} />)
+    expect(screen.getByText('no-weekend')).toHaveAttribute('title', 'no-weekend--app-1-prod')
+  })
+})
+
+describe('PolicyGatesPanel — the approve command names the version', () => {
+  const gate = makeGate({ name: 'ok--app-1-prod', gateTemplate: 'ok', pipeline: 'app', bundle: 'app-1', environment: 'prod', state: 'Block', holding: true,
+    ready: false, approval: { required: 2, approved: 1, decisions: [] } })
+  it('uses kardinal approve <pipeline> <env> for the Bundle on its way in', () => {
+    render(<PolicyGatesPanel gates={[gate]} currentBundle="app-1" />)
+    expect(screen.getByText('kardinal approve app prod')).toBeInTheDocument()
+  })
+  it('names the Bundle when another one is on its way in', () => {
+    render(<PolicyGatesPanel gates={[gate]} currentBundle="app-2" />)
+    expect(screen.getByText('kardinal approve app-1 --env prod')).toBeInTheDocument()
   })
 })

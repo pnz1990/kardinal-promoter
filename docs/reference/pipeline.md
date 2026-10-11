@@ -185,7 +185,7 @@ Default: `false`.
 ### spec.holds
 
 Environments pinned to a rollback. `kardinal rollback --hold` (or the UI) writes them, and
-`kardinal release-hold` (or the UI) removes them. The controller also removes a hold at its
+`kardinal unhold` (or the UI) removes them. The controller also removes a hold at its
 `expiresAt`. Each entry has these fields:
 
 - `environment`

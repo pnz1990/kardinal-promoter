@@ -39,7 +39,7 @@ type PipelineSpec struct {
 	// it, the hold's Bundle is never superseded or garbage-collected, and,
 	// when the controller can verify it restores artifacts Verified in the
 	// environment, it passes that environment's PolicyGates, each pass
-	// recorded (GateExempted). kardinal release-hold removes it, and so does
+	// recorded (GateExempted). kardinal unhold removes it, and so does
 	// the controller at expiresAt. At most one hold per environment. Changing
 	// spec.holds needs update on the virtual subresource pipelines/hold
 	// (chart: <release>-hold-writes ValidatingAdmissionPolicy).

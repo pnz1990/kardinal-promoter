@@ -29,15 +29,16 @@
    (.k-stage-drawer-open), so the drawer sits beside the page, not over it. */
 .stage-drawer:not(.stage-drawer--sheet) {
   position: fixed;
-  inset-block: 0;
+  /* Below the top bar, which keeps the full width (breadcrumb and Go to or do… never squeeze). */
+  inset-block: var(--k-layout-topbar) 0;
   inset-inline-end: 0;
   max-block-size: none;
   z-index: var(--k-z-drawer);
   box-shadow: var(--k-elev-2);
 }
 
-.k-stage-drawer-open #main-content {
-  padding-inline-end: var(--k-layout-drawer);
+.k-stage-drawer-open #main-content > :not(.app-topbar) {
+  margin-inline-end: var(--k-layout-drawer);
 }
 
 .stage-drawer__scrim {

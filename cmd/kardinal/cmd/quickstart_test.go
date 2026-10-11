@@ -449,7 +449,7 @@ func TestQuickstart_Installs(t *testing.T) {
 		return "", nil
 	}
 	q := &quickstart{ctx: context.Background(), w: &bytes.Buffer{}, c: c, kctx: "kind-kardinal", kubeconfig: "/tmp/qs-kubeconfig",
-		o: quickstartOptions{chartVersion: "0.10.1", sets: []string{"ui.enabled=true"}}}
+		o: quickstartOptions{chartVersion: "9.9.9", sets: []string{"ui.enabled=true"}}}
 	require.NoError(t, q.kro())
 	require.NoError(t, q.argoCD())
 	require.NoError(t, q.kardinal())
@@ -460,7 +460,7 @@ func TestQuickstart_Installs(t *testing.T) {
 	assert.Contains(t, all, "https://raw.githubusercontent.com/kubernetes-sigs/kro/v0.10.0-rc.0/helm/crds/kro.run_graphs.yaml")
 	assert.Contains(t, all, "https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.3/manifests/install.yaml")
 	assert.Contains(t, all, "helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --namespace kardinal-system --create-namespace "+
-		"--set scm.provider=github --set scm.secretRef.name=kardinal-scm-token --wait --timeout 300s --version 0.10.1 --set ui.enabled=true")
+		"--set scm.provider=github --set scm.secretRef.name=kardinal-scm-token --wait --timeout 300s --version 9.9.9 --set ui.enabled=true")
 	for _, line := range ran {
 		if strings.HasPrefix(line, "helm ") {
 			assert.Contains(t, line, "--kubeconfig /tmp/qs-kubeconfig --kube-context kind-kardinal", line)

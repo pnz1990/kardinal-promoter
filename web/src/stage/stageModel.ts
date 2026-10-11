@@ -109,6 +109,18 @@ export function rollbackChoices(bundles: Bundle[], env: string, running?: string
   return out
 }
 
+/**
+ * Why a promotion failed, in the controller's words: the step's message, else the message
+ * of the sub-step that failed, else its Ready condition's. Undefined when none was recorded.
+ */
+export function failureMessage(step: PromotionStep | undefined): string | undefined {
+  if (!step) return undefined
+  return step.message
+    || step.steps?.find(s => s.state === 'Failed')?.message
+    || step.conditions?.find(c => c.type === 'Ready' && c.status === 'False')?.message
+    || undefined
+}
+
 /** The version a Bundle ships: status.version, else its image tag(s), else its name. */
 export function bundleVersion(b: Bundle): string {
   if (b.version) return b.version
@@ -165,7 +177,8 @@ export function stageView(input: StageInput): StageView {
     why.push({ kind: 'pr', title: 'Waiting for its pull request to be merged.', prURL: step.prURL, next: 'openPR' })
   }
   if (stepState === 'Failed' || stepState === 'AbortedByAlarm') {
-    why.push({ kind: 'failed', title: `${displayState('step', stepState).label}.`, detail: step?.message,
+    why.push({ kind: 'failed', title: `${displayState('step', stepState).label}.`,
+      detail: failureMessage(step) ?? 'No failure message was recorded: Evidence and History below have the steps and events.',
       next: running ? 'rollback' : undefined })
   }
   if (why.length === 0 && incoming && !IN_FLIGHT.has(stepState) && stepState !== 'Verified') {

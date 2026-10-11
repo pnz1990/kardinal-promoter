@@ -16,6 +16,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -52,10 +53,10 @@ func NewRootCmd() *cobra.Command {
 gates, pull requests and health checks, on Kubernetes.
 
 Getting started:
-  kardinal quickstart --repo <your fork>          try it on a local cluster
-  kardinal init                                   write a Pipeline for your repository
-  kardinal create bundle my-app --image app:1.4   start a promotion
-  kardinal status my-app                          see where each version is, and why`,
+  kardinal quickstart --repo <your fork>                 try it on a local cluster
+  kardinal init --name my-app --repo <gitops repo>       write a Pipeline for your repository
+  kardinal ship my-app --image app:1.4 --wait            ship a version and follow it
+  kardinal why my-app prod                               why it waits, and what moves it on`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
@@ -72,7 +73,7 @@ Getting started:
 	root.PersistentFlags().StringVar(&globalContext, "context", "",
 		"Kubeconfig context override")
 	root.PersistentFlags().StringVarP(&globalOutput, "output", "o", "",
-		"Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)")
+		"Output format: table (default), json, yaml") // the commands that take each are filled in by outputUsage
 
 	withReference(root, rootReference)
 
@@ -98,7 +99,44 @@ Getting started:
 	root.SetCompletionCommandGroupID(groupAdmin)
 
 	requireSubcommand(root)
+	addNameCompletion(root)
+	root.PersistentFlags().Lookup("output").Usage = outputUsage(root)
 	return root
+}
+
+// outputUsage is -o's help, with the commands that take json and yaml
+// (outputAnnotation) and wide (wideAnnotation), from the commands
+// themselves.
+func outputUsage(root *cobra.Command) string {
+	var structured, wide []string
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		for _, sub := range c.Commands() {
+			if sub.Hidden {
+				continue
+			}
+			path := strings.TrimPrefix(sub.CommandPath(), root.Name()+" ")
+			if sub.Annotations[outputAnnotation] == "true" {
+				structured = append(structured, path)
+			}
+			if sub.Annotations[wideAnnotation] == "true" {
+				wide = append(wide, path)
+			}
+			walk(sub)
+		}
+	}
+	walk(root)
+	slices.Sort(structured)
+	slices.Sort(wide)
+	u := "Output format: table (default), json, yaml"
+	if len(wide) > 0 {
+		u += ", wide"
+	}
+	u += " (json and yaml: " + strings.Join(structured, ", ")
+	if len(wide) > 0 {
+		u += "; wide: " + strings.Join(wide, ", ")
+	}
+	return u + ")"
 }
 
 // The groups of kardinal --help.
@@ -133,7 +171,7 @@ func checkOutputFlag(cmd *cobra.Command) error {
 		}
 		return fmt.Errorf("-o %s is not supported by %q; it prints a table", globalOutput, cmd.CommandPath())
 	default:
-		return fmt.Errorf("invalid -o %q: must be table, json or yaml", globalOutput)
+		return fmt.Errorf("invalid -o %q: must be table, json, yaml or wide", globalOutput)
 	}
 }
 
@@ -267,8 +305,8 @@ when empty):
   create bundle --dry-run:
     pipeline, namespace, nodes, environments [{name, [gates]}] in promotion
     order, [type, version, compact]
-  release-hold:
-    pipeline, namespace, environment, bundle (the rollback it was held on),
+  unhold (release-hold):
+    pipeline, namespace, environment, bundle (the version it was held on),
     url, [createdBy, reason]
   status:
     controller, pipelines, bundles, activeBundles, [degraded]

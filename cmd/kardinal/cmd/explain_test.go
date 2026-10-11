@@ -639,15 +639,27 @@ func TestExplain_ShowsHold(t *testing.T) {
 	created := policyTestNow.Add(-time.Hour)
 	p := policyPipeline("demo", "test", "prod")
 	p.Spec.Holds = []v1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "demo-rollback-abc123", Reason: "INC-42", CreatedBy: "alice"}}
-	c := policyClient(t, p,
+	rb := explainBundle("demo-rollback-abc123", "Verified", created)
+	rb.Spec.Images = []v1alpha1.ImageRef{{Repository: "app", Tag: "1.3.0"}}
+	rb.Spec.Provenance = &v1alpha1.BundleProvenance{RollbackOf: "b0"}
+	c := policyClient(t, p, rb,
 		explainBundle("b1", "Promoting", created),
 		explainStep("demo", "b1", "test", "Verified", "", created),
 		explainStep("demo", "b1", "prod", "Promoting", "", created),
 	)
 	out, err := runExplain(t, c, "demo", "prod", false)
 	require.NoError(t, err)
-	assert.Contains(t, out, "prod: held on rollback demo-rollback-abc123 by alice (INC-42)")
-	assert.Contains(t, out, "Release with: kardinal release-hold demo --env prod")
+	assert.Contains(t, out, "prod: held on rollback 1.3.0 (demo-rollback-abc123) by alice (INC-42)")
+	assert.Contains(t, out, "EXEMPT")
+	assert.Contains(t, out, "Release with: kardinal unhold demo prod")
+
+	// kardinal hold (no rollback): held on the version, no EXEMPT.
+	p.Spec.Holds[0].Bundle = "b1"
+	c = policyClient(t, p, explainBundle("b1", "Promoting", created), explainStep("demo", "b1", "prod", "Promoting", "", created))
+	out, err = runExplain(t, c, "demo", "prod", false)
+	require.NoError(t, err)
+	assert.Contains(t, out, "prod: held on b1 by alice (INC-42); other versions do not promote here. Release with: kardinal unhold demo prod")
+	assert.NotContains(t, out, "EXEMPT")
 
 	out, err = runExplain(t, c, "demo", "test", false)
 	require.NoError(t, err)
@@ -671,7 +683,7 @@ func TestExplain_ShowsHoldBundleMissing(t *testing.T) {
 	)
 	out, err := runExplain(t, c, "demo", "prod", false)
 	require.NoError(t, err)
-	assert.Contains(t, out, "prod: held on rollback demo-rollback-gone by alice (INC-42), but the rollback version does not exist since "+
+	assert.Contains(t, out, "prod: held on demo-rollback-gone by alice (INC-42), but that version does not exist since "+
 		since.UTC().Format(time.RFC3339)+". The hold stays in effect")
-	assert.Contains(t, out, "Release with: kardinal release-hold demo --env prod, then roll back with --hold again if wanted")
+	assert.Contains(t, out, "Release with: kardinal unhold demo prod, then hold again if wanted")
 }
