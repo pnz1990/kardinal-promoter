@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
+	"github.com/kardinal-promoter/kardinal-promoter/web/tokens"
 )
 
 func env(kv ...string) func(string) string {
@@ -24,12 +25,14 @@ func env(kv ...string) func(string) string {
 	return func(k string) string { return m[k] }
 }
 
-// TestDetect (C4): colour and Unicode only on a terminal; NO_COLOR and
-// TERM=dumb give ASCII glyphs without colour; a pipe gets words only.
+// TestDetect (C4): colour and glyphs only on a terminal; NO_COLOR and
+// TERM=dumb give plain words, like a pipe; exact colours only with
+// COLORTERM=truecolor and a known background.
 //
 // Covers CLI-STYLE-01.
 func TestDetect(t *testing.T) {
 	live := display.Step("Verified")
+	verified, _ := tokens.Color("color.status.verified.fg")
 	cases := []struct {
 		name string
 		tty  bool
@@ -38,10 +41,13 @@ func TestDetect(t *testing.T) {
 	}{
 		{"pipe", false, env("LANG", "en_US.UTF-8", "COLORTERM", "truecolor"), "Live"},
 		{"terminal, 16 colours", true, env("LANG", "en_US.UTF-8"), "\x1b[32m● Live\x1b[0m"},
-		{"terminal, truecolor, dark", true, env("LANG", "en_US.UTF-8", "COLORTERM", "truecolor"), "\x1b[38;2;108;199;155m● Live\x1b[0m"},
-		{"terminal, truecolor, light", true, env("LC_ALL", "C.UTF-8", "COLORTERM", "24bit", "COLORFGBG", "0;15"), "\x1b[38;2;43;110;82m● Live\x1b[0m"},
-		{"NO_COLOR", true, env("LANG", "en_US.UTF-8", "NO_COLOR", "1"), "* Live"},
-		{"TERM=dumb", true, env("LANG", "en_US.UTF-8", "TERM", "dumb"), "* Live"},
+		{"truecolor, background unknown: 16 colours", true, env("LANG", "en_US.UTF-8", "COLORTERM", "truecolor"), "\x1b[32m● Live\x1b[0m"},
+		{"truecolor, dark", true, env("LANG", "en_US.UTF-8", "COLORTERM", "truecolor", "COLORFGBG", "15;0"),
+			"\x1b[38;2;" + rgb(verified.Dark) + "m● Live\x1b[0m"},
+		{"truecolor, light", true, env("LC_ALL", "C.UTF-8", "COLORTERM", "24bit", "COLORFGBG", "0;15"),
+			"\x1b[38;2;" + rgb(verified.Light) + "m● Live\x1b[0m"},
+		{"NO_COLOR", true, env("LANG", "en_US.UTF-8", "NO_COLOR", "1"), "Live"},
+		{"TERM=dumb", true, env("LANG", "en_US.UTF-8", "TERM", "dumb"), "Live"},
 		{"no UTF-8 locale", true, env("LANG", "C"), "\x1b[32m* Live\x1b[0m"},
 		{"no locale", true, env(), "\x1b[32m* Live\x1b[0m"},
 	}
@@ -52,38 +58,66 @@ func TestDetect(t *testing.T) {
 	}
 }
 
-// TestPalette (C4): each tone has the DESIGN-SYSTEM.md status colour; failed
-// is the only filled one.
+// TestPalette (C4): each tone's colour is its design token
+// (web/tokens/tokens.json), read, not copied; failed is the only filled one.
+// The 16-colour form is the ANSI hue nearest the token: garnet is magenta,
+// the thread red of Promoting is red.
 //
 // Covers CLI-STYLE-01.
 func TestPalette(t *testing.T) {
 	dark := Styler{color: true, truecolor: true}
 	light := Styler{color: true, truecolor: true, light: true}
 	basic := Styler{color: true}
+	tok := func(path string) tokens.Pair {
+		c, ok := tokens.Color(path)
+		require.True(t, ok, path)
+		return c
+	}
+	onFill := tok("color.status.failed.on-fill")
 	cases := []struct {
-		tone               display.Tone
-		dark, light, basic string
+		tone        display.Tone
+		token       string
+		basic       string
+		filled, dim bool
 	}{
-		{display.ToneVerified, "38;2;108;199;155", "38;2;43;110;82", "32"},
-		{display.TonePromoting, "38;2;255;122;126", "38;2;192;21;27", "31"},
-		{display.ToneWaiting, "38;2;143;178;236", "38;2;53;96;158", "34"},
-		{display.ToneBlocked, "38;2;237;177;90", "38;2;134;84;0", "33"},
-		{display.ToneFailed, "1;38;2;15;21;19;48;2;255;123;163", "1;38;2;250;251;250;48;2;163;21;74", "1;97;41"},
-		{display.ToneDegraded, "38;2;255;123;163", "38;2;163;21;74", "1;31"},
-		{display.ToneSuperseded, "38;2;140;153;148", "38;2;95;107;102", "2"},
-		{display.TonePending, "38;2;140;153;148", "38;2;95;107;102", "2"},
-		{display.TonePaused, "1", "1", "1"},
-		{display.ToneHeld, "1", "1", "1"},
+		{display.ToneVerified, "color.status.verified.fg", "32", false, false},
+		{display.TonePromoting, "color.status.promoting.fg", "31", false, false},
+		{display.ToneWaiting, "color.status.waiting.fg", "34", false, false},
+		{display.ToneBlocked, "color.status.blocked.fg", "33", false, false},
+		// garnet: magenta with the final token (#8A1E66, hue 320)
+		{display.ToneFailed, "color.status.failed.fill", fmt.Sprintf("1;97;%d", 40+ansiHue(tok("color.status.failed.fill").Light)), true, false},
+		{display.ToneDegraded, "color.status.failed.fg", fmt.Sprintf("%d", 30+ansiHue(tok("color.status.failed.fg").Light)), false, false},
+		{display.ToneSuperseded, "color.status.superseded.fg", "2", false, true},
+		{display.TonePending, "color.status.superseded.fg", "2", false, true},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.tone), func(t *testing.T) {
-			assert.Equal(t, "\x1b["+tc.dark+"mx\x1b[0m", dark.Paint(tc.tone, "x"))
-			assert.Equal(t, "\x1b["+tc.light+"mx\x1b[0m", light.Paint(tc.tone, "x"))
+			c := tok(tc.token)
+			wantDark, wantLight := "38;2;"+rgb(c.Dark), "38;2;"+rgb(c.Light)
+			if tc.filled {
+				wantDark = "1;38;2;" + rgb(onFill.Dark) + ";48;2;" + rgb(c.Dark)
+				wantLight = "1;38;2;" + rgb(onFill.Light) + ";48;2;" + rgb(c.Light)
+			}
+			assert.Equal(t, "\x1b["+wantDark+"mx\x1b[0m", dark.Paint(tc.tone, "x"))
+			assert.Equal(t, "\x1b["+wantLight+"mx\x1b[0m", light.Paint(tc.tone, "x"))
 			assert.Equal(t, "\x1b["+tc.basic+"mx\x1b[0m", basic.Paint(tc.tone, "x"))
 		})
 	}
+	for _, tone := range []display.Tone{display.TonePaused, display.ToneHeld} {
+		assert.Equal(t, "\x1b[1mx\x1b[0m", dark.Paint(tone, "x"), "%s is ink, bold", tone)
+	}
 	assert.Equal(t, "x", dark.Paint(display.ToneUnknown, "x"), "an unknown state gets no colour")
 	assert.Equal(t, "x", Plain().Paint(display.ToneFailed, "x"))
+}
+
+// TestANSIHue (C4): the 16-colour form keeps a colour's hue.
+//
+// Covers CLI-STYLE-01.
+func TestANSIHue(t *testing.T) {
+	for hex, want := range map[string]int{"#C0151B": 1, "#2B6E52": 2, "#865400": 3, "#35609E": 4, "#8A1E66": 5, "#E78DD4": 5,
+		"#00B7C3": 6, "#5F6B66": -1, "#18211E": -1, "#FFFFFF": -1, "bad": -1} {
+		assert.Equal(t, want, ansiHue(hex), hex)
+	}
 }
 
 // TestForceColor (C4): --color colours a pipe without adding glyphs;
@@ -103,7 +137,8 @@ func TestForceColor(t *testing.T) {
 //
 // Covers CLI-STYLE-01.
 func TestPlainIsASCII(t *testing.T) {
-	for _, s := range []Styler{Plain(), detect(true, env("NO_COLOR", "1", "LANG", "en_US.UTF-8")), detect(true, env("TERM", "dumb"))} {
+	for _, s := range []Styler{Plain(), detect(true, env("NO_COLOR", "1", "LANG", "en_US.UTF-8")), detect(true, env("TERM", "dumb")),
+		detect(true, env("LANG", "C"))} {
 		var b strings.Builder
 		for _, states := range display.Table() {
 			for _, st := range states {
@@ -112,11 +147,41 @@ func TestPlainIsASCII(t *testing.T) {
 		}
 		b.WriteString(s.State(display.Held("Pending")) + s.State(display.HeldByGate("Pending", "g")))
 		b.WriteString(s.Rule(10) + s.Sym("→", "->") + s.Error("ERROR:") + s.Warning("WARNING:") + s.Dim("x"))
-		for _, r := range b.String() {
+		out := style16(b.String())
+		for _, r := range out {
 			require.Less(t, r, rune(0x80), "%q in %q", r, b.String())
 		}
-		assert.NotContains(t, b.String(), "\x1b")
+		if !s.color {
+			assert.NotContains(t, out, "\x1b")
+		}
 	}
+}
+
+// style16 is text without its colour codes, which are ASCII too.
+func style16(text string) string { return Strip(text) }
+
+// TestFold (C4): plain words are ASCII, whatever the cluster's messages say;
+// a character split across writes folds whole, and a table aligns on the
+// folded text.
+//
+// Covers CLI-STYLE-01.
+func TestFold(t *testing.T) {
+	assert.Equal(t, "paused - resume -> now... \"q\" ?", Fold("paused — resume → now… “q” 世"))
+	var b bytes.Buffer
+	f := NewFolder(&b)
+	msg := []byte("a—b→c")
+	for i := range msg {
+		_, err := f.Write(msg[i : i+1])
+		require.NoError(t, err)
+	}
+	assert.Equal(t, "a-b->c", b.String())
+
+	b.Reset()
+	tb := NewTable(NewFolder(&b), 2)
+	_, _ = fmt.Fprint(tb, "A\tB\nx→y\t1\nz\t2\n")
+	require.NoError(t, tb.Flush())
+	assert.Equal(t, "A     B\nx->y  1\nz     2\n", b.String())
+	assert.True(t, IsTerminal(NewFolder(&b)) == false)
 }
 
 // TestTable (C4): the table aligns like text/tabwriter on plain text, and

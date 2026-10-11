@@ -229,7 +229,7 @@ func releaseHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env string) 
 	}
 	if structured() {
 		return writeStructured(w, releasedHold{Pipeline: pipeline, Namespace: ns, Environment: env,
-			Bundle: h.Bundle, CreatedBy: h.CreatedBy, Reason: h.Reason})
+			Bundle: h.Bundle, CreatedBy: h.CreatedBy, Reason: h.Reason, URL: uiURL(ns, pipeline)})
 	}
 	if _, err := fmt.Fprintf(w, "Released the hold of %s on %s (rollback %s, held by %s: %s).\n",
 		pipeline, env, h.Bundle, orUnknown(h.CreatedBy), h.Reason); err != nil {
@@ -247,6 +247,8 @@ type releasedHold struct {
 	Bundle    string `json:"bundle"`
 	CreatedBy string `json:"createdBy,omitempty"`
 	Reason    string `json:"reason,omitempty"`
+	// URL is the pipeline in the UI (createdBundle.URL).
+	URL string `json:"url"`
 }
 
 func orUnknown(s string) string {

@@ -253,7 +253,7 @@ func TestValidate_Documents(t *testing.T) {
 				"    url: https://github.com/o/r\n  environments:\n  - name: bundle\n    dependsOn: [prod]\n" +
 				"  - name: prod\n    dependsOn: [bundle]\n",
 			wantOut: []string{`  - environment "bundle": reserved environment name: `,
-				"  - build: circular dependency in pipeline environments: bundle → prod → bundle (cycle!)"},
+				"  - build: circular dependency in pipeline environments: bundle -> prod -> bundle (cycle!)"},
 			wantErr: true,
 		},
 		{
