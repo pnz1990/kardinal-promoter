@@ -1,0 +1,144 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * PipelineOpsTable.css — the operations table (components/PipelineOpsTable.tsx).
+ * Design tokens only (noLiterals.test.ts).
+ */
+
+.ops-table {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.ops-table__loading {
+  padding: var(--k-space-6);
+  color: var(--k-ink-2);
+  font-size: var(--k-text-md);
+}
+
+.ops-table__error { margin: var(--k-space-4); }
+
+.ops-table__filter-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-2);
+  padding: var(--k-space-2) var(--k-space-4);
+  border-bottom: var(--k-border-hairline) solid var(--k-line-subtle);
+  background: var(--k-surface-sunken);
+}
+
+.ops-table__filter {
+  inline-size: calc(var(--k-space-24) * 2.3);
+  padding: var(--k-space-1) var(--k-space-2);
+  background: var(--k-surface-base);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-2);
+  color: var(--k-ink);
+  font-size: var(--k-text-sm);
+  outline: none;
+}
+
+.ops-table__count {
+  font-size: var(--k-text-xs);
+  color: var(--k-ink-3);
+}
+
+.ops-table__scroll {
+  flex: 1;
+  overflow: auto;
+}
+
+.ops-table__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: inherit;
+}
+
+.ops-table__th,
+.ops-table__td {
+  padding: var(--k-space-2) var(--k-space-3);
+  border-bottom: var(--k-border-hairline) solid var(--k-line-subtle);
+  font-size: var(--k-text-sm);
+  color: var(--k-ink);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.ops-table__th {
+  background: var(--k-surface-sunken);
+  border-bottom-color: var(--k-line);
+  color: var(--k-ink-2);
+  font-size: var(--k-text-xs);
+  text-align: start;
+  text-transform: uppercase;
+  letter-spacing: var(--k-tracking-caps);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ops-table__sort {
+  margin-left: var(--k-space-1);
+}
+
+.ops-table__empty {
+  padding: var(--k-space-8);
+  color: var(--k-ink-3);
+  text-align: center;
+}
+
+.ops-table__row {
+  cursor: pointer;
+  background: transparent;
+  border-left: var(--k-space-0_5) solid transparent;
+}
+
+.ops-table__row[aria-selected="true"] {
+  background: var(--k-surface-base);
+  border-left-color: var(--k-thread-text);
+}
+
+.ops-table__name-row {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-1_5);
+}
+
+.ops-table__name {
+  font-weight: var(--k-weight-regular);
+}
+
+.ops-table__row[aria-selected="true"] .ops-table__name {
+  font-weight: var(--k-weight-semibold);
+}
+
+.ops-table__paused {
+  padding: 0 var(--k-space-1);
+  background: var(--k-hatch), var(--k-surface-base);
+  color: var(--k-status-paused-fg);
+  border: var(--k-border-hairline) solid var(--k-line-strong);
+  border-radius: var(--k-radius-1);
+  font-size: var(--k-text-2xs);
+  font-weight: var(--k-weight-bold);
+}
+
+.ops-table__bundle {
+  margin-top: var(--k-space-0_5);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-2xs);
+  color: var(--k-ink-3);
+}
+
+.ops-table__td[data-tone="verified"] { color: var(--k-status-verified-fg); }
+.ops-table__td[data-tone="blocked"] { color: var(--k-status-blocked-fg); }
+.ops-table__td[data-tone="failed"] { color: var(--k-status-failed-fg); }
+.ops-table__td[data-tone="muted"] { color: var(--k-ink-2); }
+
+.ops-table__stale {
+  margin-left: var(--k-space-1);
+}
+
+.ops-table__muted {
+  color: var(--k-ink-2);
+}

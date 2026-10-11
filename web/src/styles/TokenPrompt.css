@@ -1,0 +1,76 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * TokenPrompt.css — the sign-in dialog (components/TokenPrompt.tsx), on the dialog
+ * primitive. It sits above every other dialog. Tokens only.
+ */
+
+.token-prompt { z-index: var(--k-z-toast); }
+.token-prompt__panel { background: var(--k-surface-canvas); }
+
+.token-prompt__insecure { margin-block-end: var(--k-space-4); font-size: var(--k-text-xs); line-height: var(--k-leading-lg); }
+.token-prompt__insecure-title { font-weight: var(--k-weight-semibold); }
+.token-prompt__link { color: inherit; }
+
+.token-prompt__hint,
+.token-prompt__label {
+  display: block;
+  margin-block-end: var(--k-space-1);
+  color: var(--k-ink-2);
+  font-size: var(--k-text-xs);
+}
+
+.token-prompt__command {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-2);
+  margin-block-end: var(--k-space-4);
+  padding: var(--k-space-1_5) var(--k-space-2);
+  border: var(--k-border-hairline) solid var(--k-line-subtle);
+  border-radius: var(--k-radius-2);
+  background: var(--k-surface-base);
+}
+.token-prompt__command--inline {
+  margin: var(--k-space-1) 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.token-prompt__code {
+  flex: 1;
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-xs);
+  overflow-wrap: anywhere;
+}
+.token-prompt__code--command { color: var(--k-syntax-ident); }
+
+.token-prompt__input {
+  display: block;
+  inline-size: 100%;
+  box-sizing: border-box;
+  min-block-size: var(--k-control-md);
+  margin-block-end: var(--k-space-3);
+  padding: var(--k-space-2) var(--k-space-3);
+  border: var(--k-border-hairline) solid var(--k-line-strong);
+  border-radius: var(--k-radius-2);
+  background: var(--k-surface-base);
+  color: var(--k-ink);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-md);
+}
+.token-prompt__input[aria-invalid="true"] { margin-block-end: var(--k-space-1); border-color: var(--k-status-failed-fg); }
+.token-prompt__error {
+  margin-block-end: var(--k-space-3);
+  color: var(--k-status-failed-fg);
+  font-size: var(--k-text-xs);
+}
+
+.token-prompt__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--k-space-3);
+}
+.token-prompt__note { color: var(--k-ink-3); font-size: var(--k-text-xs); }

@@ -160,11 +160,11 @@ func TestOverrideFn_Pipeline(t *testing.T) {
 		name, pipeline, gate, wantErr string
 	}{
 		{name: "missing pipeline, template name", pipeline: "nope", gate: "no-weekend-deploy",
-			wantErr: `pipeline "nope" not found in namespace "default"`},
+			wantErr: `pipeline "nope" not found in namespace "default"; pipelines here: my-app, other-app. Other namespaces: kardinal get pipelines -A`},
 		{name: "missing pipeline, instance name", pipeline: "nope", gate: inst.Name,
-			wantErr: `pipeline "nope" not found in namespace "default"`},
+			wantErr: `pipeline "nope" not found in namespace "default"; pipelines here: my-app, other-app. Other namespaces: kardinal get pipelines -A`},
 		{name: "missing pipeline, unknown gate", pipeline: "nope", gate: "nosuch",
-			wantErr: `pipeline "nope" not found in namespace "default"`},
+			wantErr: `pipeline "nope" not found in namespace "default"; pipelines here: my-app, other-app. Other namespaces: kardinal get pipelines -A`},
 		{name: "instance of another pipeline", pipeline: "other-app", gate: inst.Name,
 			wantErr: "policygate default/no-weekend-deploy-prod-b1 is an instance of pipeline my-app, not other-app"},
 	}

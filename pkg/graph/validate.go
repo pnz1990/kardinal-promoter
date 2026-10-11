@@ -91,6 +91,11 @@ func asInvalid(err error) error {
 	return &invalidError{err: err}
 }
 
+// Invalid is asInvalid for callers outside the package that refuse an input
+// before Build sees it (the translator), so the Bundle fails with the reason
+// instead of being retried.
+func Invalid(err error) error { return asInvalid(err) }
+
 // maxPipelineNameHint is the longest Pipeline name that leaves room for the
 // rollback Bundle name "<pipeline>-rollback-xxxxx" in a 63-character label.
 const maxPipelineNameHint = validation.LabelValueMaxLength - len("-rollback-xxxxx")

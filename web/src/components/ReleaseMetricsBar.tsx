@@ -22,6 +22,7 @@
 // The bar is hidden until at least one bundle has reached them.
 import type { Bundle, DeploymentMetrics } from '../types'
 import { sortBundlesNewestFirst } from '../bundleSelection'
+import '../styles/ReleaseMetricsBar.css'
 
 /** Number of most recent bundles the metrics cover. */
 const WINDOW = 10
@@ -130,27 +131,37 @@ function rollbackColor(pct: number): string {
   return 'var(--color-error)'
 }
 
+/** The colour of a metric value: a status bucket, or the code and accent colours. */
+type MetricTone = 'verified' | 'blocked' | 'failed' | 'code' | 'accent'
+
+/** The tone of one of the var(--color-*) values cfrColor and rollbackColor return. */
+function toneOf(color: string): MetricTone {
+  if (color.includes('success')) return 'verified'
+  if (color.includes('warning')) return 'blocked'
+  return 'failed'
+}
+
 interface MetricCellProps {
   label: string
   value: string
   sub?: string
-  color?: string
+  tone?: MetricTone
   last?: boolean
   /** Tooltip for the cell. */
   title?: string
 }
 
-function MetricCell({ label, value, sub, color, last, title }: MetricCellProps) {
+function MetricCell({ label, value, sub, tone, last, title }: MetricCellProps) {
   return (
-    <div title={title} style={{ flex: 1, padding: '0.5rem 0.75rem', borderRight: last ? undefined : '1px solid var(--color-border-muted)' }}>
-      <div style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.2rem' }}>
+    <div title={title} className={`release-metrics__cell${last ? ' release-metrics__cell--last' : ''}`}>
+      <div className="release-metrics__label">
         {label}
       </div>
-      <div style={{ fontSize: '1rem', fontWeight: 700, color: color ?? 'var(--color-text)', fontVariantNumeric: 'tabular-nums' }}>
+      <div className="release-metrics__value" data-tone={tone}>
         {value}
       </div>
       {sub && (
-        <div style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', marginTop: '0.1rem' }}>
+        <div className="release-metrics__sub">
           {sub}
         </div>
       )}
@@ -179,41 +190,34 @@ export function ReleaseMetricsBar({ bundles, finalEnvironments, deploymentMetric
   const target = finalEnvironments.length === 1 ? finalEnvironments[0] : `all ${finalEnvironments.length} final envs`
   const targetTitle = finalEnvironments.length === 1 ? undefined : `Final environments: ${finalEnvironments.join(', ')}`
 
-  const scope = `last ${metrics.totalBundles} bundle${metrics.totalBundles === 1 ? '' : 's'}`
+  const scope = `last ${metrics.totalBundles} version${metrics.totalBundles === 1 ? '' : 's'}`
   const dm = deploymentMetrics
   const stability = dm && (dm.deployments ?? 0) > 0 ? dm : undefined
   const cfrMillis = stability?.changeFailureRateMillis ?? 0
   return (
     <section
       aria-label="Release metrics"
-      style={{
-        background: 'var(--color-surface)',
-        border: '1px solid var(--color-border-muted)',
-        borderRadius: '6px',
-        display: 'flex',
-        overflow: 'hidden',
-        marginBottom: '1rem',
-      }}
+      className="release-metrics"
     >
       <MetricCell
         label={`Time to ${target}`}
         title={targetTitle}
         value={formatHours(metrics.meanTtpHours)}
         sub={`mean, ${scope}`}
-        color="var(--color-code)"
+        tone="code"
       />
       <MetricCell
         label="Rollback rate"
         value={`${metrics.rollbackRatePct}%`}
         sub={`${metrics.rollbackCount} rollback${metrics.rollbackCount === 1 ? '' : 's'}`}
-        color={rollbackColor(metrics.rollbackRatePct)}
+        tone={toneOf(rollbackColor(metrics.rollbackRatePct))}
       />
       <MetricCell
         label={`Deploys to ${target}`}
         title={targetTitle}
         value={String(metrics.deployCount)}
         sub={scope}
-        color="var(--color-accent)"
+        tone="accent"
         last={!stability}
       />
       {stability && (
@@ -221,7 +225,7 @@ export function ReleaseMetricsBar({ bundles, finalEnvironments, deploymentMetric
           label="Change failure rate"
           value={`${(cfrMillis / 10).toFixed(1)}%`}
           sub={`${stability.failedDeployments ?? 0} of ${stability.deployments} deployments`}
-          color={cfrColor(cfrMillis)}
+          tone={toneOf(cfrColor(cfrMillis))}
         />
       )}
       {stability && (
@@ -231,7 +235,7 @@ export function ReleaseMetricsBar({ bundles, finalEnvironments, deploymentMetric
           sub={(stability.restoredFailures ?? 0) > 0
             ? `mean of ${stability.restoredFailures} restored`
             : 'no restored failure'}
-          color="var(--color-code)"
+          tone="code"
           last
         />
       )}

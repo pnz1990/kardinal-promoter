@@ -57,7 +57,7 @@ describe('DAGView — loading state', () => {
 describe('DAGView — error state', () => {
   it('shows error message', () => {
     render(<DAGView nodes={[]} edges={[]} error="connection refused" />)
-    expect(screen.getByText(/Error: connection refused/i)).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent(/Can't reach the kardinal controller.*connection refused/)
   })
 })
 
@@ -168,20 +168,20 @@ describe('DAGView — legend', () => {
   })
 })
 
-// The PR badge text is "🔗 #N" (aria-hidden SVG text, found by text content).
+// The PR badge text is "PR #N" (aria-hidden SVG text, found by text content).
 function prBadge(): Element | null {
-  return Array.from(document.querySelectorAll('svg text')).find(t => t.textContent?.startsWith('🔗')) ?? null
+  return Array.from(document.querySelectorAll('svg text')).find(t => t.textContent?.startsWith('PR ')) ?? null
 }
 
 describe('DAGView — PR badge (C10a-web-13, C10a-web-14)', () => {
   afterEach(() => vi.restoreAllMocks())
 
   it.each([
-    { scm: 'GitHub', url: 'https://github.com/o/r/pull/42', want: '🔗 #42' },
-    { scm: 'GitLab', url: 'https://gitlab.com/o/r/-/merge_requests/7', want: '🔗 #7' },
-    { scm: 'Forgejo', url: 'https://code.example.com/o/r/pulls/9', want: '🔗 #9' },
-    { scm: 'Bitbucket', url: 'https://bitbucket.example.com/projects/P/repos/r/pull-requests/3/', want: '🔗 #3' },
-    { scm: 'Azure DevOps', url: 'https://dev.azure.com/o/p/_git/r/pullrequest/12', want: '🔗 #12' },
+    { scm: 'GitHub', url: 'https://github.com/o/r/pull/42', want: 'PR #42' },
+    { scm: 'GitLab', url: 'https://gitlab.com/o/r/-/merge_requests/7', want: 'PR #7' },
+    { scm: 'Forgejo', url: 'https://code.example.com/o/r/pulls/9', want: 'PR #9' },
+    { scm: 'Bitbucket', url: 'https://bitbucket.example.com/projects/P/repos/r/pull-requests/3/', want: 'PR #3' },
+    { scm: 'Azure DevOps', url: 'https://dev.azure.com/o/p/_git/r/pullrequest/12', want: 'PR #12' },
   ])('shows the PR number for a $scm PR', ({ url, want }) => {
     render(<DAGView nodes={[makeNode({ state: 'WaitingForMerge', prURL: url })]} edges={[]} />)
     expect(prBadge()).toHaveTextContent(want)

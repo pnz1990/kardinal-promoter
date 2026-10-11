@@ -80,7 +80,7 @@ func tallyApprovals(gate *kardinalv1alpha1.PolicyGate, creator string) approvalT
 		case p != nil && !allowed(p, a):
 			rec.Reason = "not an allowed approver (approval.allowedUsers, approval.allowedGroups)"
 		case p != nil && p.ExcludeAuthor && creator != "" && a.User == creator:
-			rec.Reason = "the Bundle's creator (approval.excludeAuthor)"
+			rec.Reason = "the version's author (approval.excludeAuthor)"
 		default:
 			rec.Counted = true
 			if a.Decision == "reject" {

@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"os/user"
+	"sort"
 	"strings"
 	"time"
 
@@ -62,7 +63,7 @@ the Bundle waits. A single gate instance name is accepted too.`,
 			}
 			gateName, _ := cmd.Flags().GetString("gate")
 			if gateName == "" {
-				return fmt.Errorf("--gate is required")
+				return missingGateError(pipeline, env)
 			}
 			c, ns, err := buildClient()
 			if err != nil {
@@ -77,7 +78,6 @@ the Bundle waits. A single gate instance name is accepted too.`,
 	cmd.Flags().Var(durationValue{&expiresIn}, "expires-in", "How long the override is active (30m, 4h, 2d)")
 	cmd.Flags().String("gate", "", "PolicyGate name to override")
 	_ = cmd.MarkFlagRequired("reason")
-	_ = cmd.MarkFlagRequired("gate")
 
 	return cmd
 }
@@ -101,7 +101,7 @@ func overrideFn(
 	var pl v1alpha1.Pipeline
 	if err := c.Get(ctx, types.NamespacedName{Name: pipeline, Namespace: ns}, &pl); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("pipeline %q not found in namespace %q", pipeline, ns)
+			return pipelineNotFound(ctx, c, ns, pipeline)
 		}
 		return fmt.Errorf("get pipeline %s: %w", pipeline, err)
 	}
@@ -189,3 +189,66 @@ func currentUser() string {
 
 // ExportedOverrideFn is exported for testing.
 var ExportedOverrideFn = overrideFn
+
+// missingGateError is the error of override without --gate: it lists the
+// gates holding pipeline's in-progress Bundles back (in env, when set), read
+// from the cluster when it can be.
+func missingGateError(pipeline, env string) error {
+	where := pipeline
+	if env != "" {
+		where += " in " + env
+	}
+	c, ns, err := hintClient()
+	if err != nil {
+		return fmt.Errorf("--gate is required: name the gate to override")
+	}
+	names, err := notPassingGates(context.Background(), c, ns, pipeline, env)
+	if err != nil {
+		return fmt.Errorf("--gate is required; the gates of %s could not be listed to suggest one: %w", where, HumanError(err))
+	}
+	if len(names) == 0 {
+		return fmt.Errorf("--gate is required: no gate of %s is holding a promotion back now", where)
+	}
+	return fmt.Errorf("which gate? Gates not passing for %s: %s. Pass --gate <name>", where, strings.Join(names, ", "))
+}
+
+// notPassingGates lists the gate templates (or instance names, for a gate
+// without a template) whose instances for pipeline's in-progress Bundles are
+// not ready, in env when set.
+func notPassingGates(ctx context.Context, c sigs_client.Client, ns, pipeline, env string) ([]string, error) {
+	labels := sigs_client.MatchingLabels{"kardinal.io/pipeline": pipeline}
+	if env != "" {
+		labels["kardinal.io/environment"] = env
+	}
+	var gates v1alpha1.PolicyGateList
+	if err := c.List(ctx, &gates, sigs_client.InNamespace(ns), labels); err != nil {
+		return nil, fmt.Errorf("list policygates: %w", err)
+	}
+	finished := map[string]bool{}
+	var bundles v1alpha1.BundleList
+	if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err == nil {
+		for _, b := range bundles.Items {
+			switch b.Status.Phase {
+			case "Verified", "Failed", "Superseded", "Rejected":
+				finished[b.Name] = true
+			}
+		}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, g := range gates.Items {
+		if g.Status.Ready || finished[g.Labels["kardinal.io/bundle"]] {
+			continue
+		}
+		name := g.Labels["kardinal.io/gate-template"]
+		if name == "" {
+			name = g.Name
+		}
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}

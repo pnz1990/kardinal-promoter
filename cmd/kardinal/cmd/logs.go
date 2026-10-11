@@ -11,7 +11,6 @@ import (
 	"os/signal"
 	"sort"
 	"syscall"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -19,6 +18,8 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+
+	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 )
 
 // terminalStates are PromotionStep states the reconciler takes no further
@@ -104,6 +105,9 @@ func logsFollowFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pi
 		}
 
 		if len(filtered) == 0 {
+			if err := checkPipelineEnv(ctx, c, ns, pipeline, envFilter); err != nil {
+				return err
+			}
 			_, _ = fmt.Fprintf(w, "No promotion steps found for pipeline %s\n", pipeline)
 		}
 
@@ -119,14 +123,14 @@ func logsFollowFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pi
 						dur = fmt.Sprintf("%.1fs", float64(step.DurationMs)/1000.0)
 					}
 					_, _ = fmt.Fprintf(w, "[%s/%s] %-25s %-15s %s %s\n",
-						pipeline, label, step.Name, subStepLabel(string(step.State)), dur, step.Message)
+						pipeline, label, step.Name, styledSubStep(string(step.State)), dur, step.Message)
 				}
 				cursor[s.Name] = len(newSteps)
 			}
 
 			// Print each state change once.
 			if state := stepState(s); state != lastState[s.Name] {
-				_, _ = fmt.Fprintf(w, "[%s/%s] → %s\n", pipeline, label, stepLabel(state))
+				_, _ = fmt.Fprintf(w, "[%s/%s] %s %s\n", pipeline, label, sty.Sym("→", "->"), styledStep(state))
 				lastState[s.Name] = state
 			}
 		}
@@ -238,6 +242,9 @@ func logsFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, bundleFi
 	}
 
 	if len(filtered) == 0 {
+		if err := checkPipelineEnv(ctx, c, ns, pipeline, envFilter); err != nil {
+			return err
+		}
 		_, _ = fmt.Fprintf(w, "No promotion steps found for pipeline %s", pipeline)
 		if envFilter != "" {
 			_, _ = fmt.Fprintf(w, " (env=%s)", envFilter)
@@ -246,10 +253,10 @@ func logsFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, bundleFi
 		return nil
 	}
 
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	tw := style.NewTable(w, 2)
 	for _, s := range filtered {
 		_, _ = fmt.Fprintf(tw, "=== %s/%s (%s) [%s] ===\n",
-			pipeline, s.Spec.Environment, s.Spec.BundleName, stepLabel(s.Status.State))
+			pipeline, s.Spec.Environment, s.Spec.BundleName, styledStep(s.Status.State))
 
 		// Message (execution log)
 		if s.Status.Message != "" {
@@ -294,7 +301,7 @@ func logsFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, bundleFi
 				}
 				msg := truncateRunes(step.Message, 83)
 				_, _ = fmt.Fprintf(tw, "    %s\t%s\t%s\t%s\n",
-					step.Name, subStepLabel(string(step.State)), dur, msg)
+					step.Name, styledSubStep(string(step.State)), dur, msg)
 			}
 		}
 

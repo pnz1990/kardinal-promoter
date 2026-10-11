@@ -68,7 +68,7 @@ To load completions immediately in the current shell session:
   # Bash
   source <(kardinal completion bash)
 
-  # Zsh — must have compinit enabled
+  # Zsh (compinit must be enabled)
   source <(kardinal completion zsh)
 
   # Fish

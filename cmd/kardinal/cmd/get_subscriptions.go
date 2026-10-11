@@ -19,13 +19,14 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+
+	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 )
 
 func newGetSubscriptionsCmd() *cobra.Command {
@@ -99,7 +100,7 @@ func getSubscriptionsFn(w io.Writer, c sigs_client.Client, ns string, args []str
 // FormatSubscriptionTable writes a tabwriter-formatted table of subscriptions to w.
 // When showNamespace is true, a NAMESPACE column is prepended.
 func FormatSubscriptionTable(w io.Writer, subs []v1alpha1.Subscription, showNamespace bool) error {
-	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+	tw := style.NewTable(w, 3)
 
 	header := "NAME\tTYPE\tPIPELINE\tPHASE\tLAST-CHECK\tLAST-BUNDLE\tAGE"
 	if showNamespace {
