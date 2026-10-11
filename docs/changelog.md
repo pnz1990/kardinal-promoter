@@ -26,7 +26,9 @@ Requires Kubernetes 1.30 or later and kro v0.10.0-rc.0 or later with the `GraphK
 
 ### Before you upgrade
 
-From v0.9.0. Apply the new CRDs before upgrading the chart (`helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 | kubectl apply --server-side -f -`): Helm does not update CRDs. The new CRDs are `approvals`, `scmproviders`, `clusterscmproviders`, `hookruns`, `imageverifications` and `renderruns`.
+#### From v0.9.0
+
+Follow the tested steps in [Upgrading from v0.9.0](https://pnz1990.github.io/kardinal-promoter/installation/#upgrading-from-v090): label the Pipelines' git Secrets, apply the new CRDs (with `kubectl apply --server-side --force-conflicts`: the v0.9.0 chart installed them, so without it the apply stops on a conflict with Helm), re-run `hack/install-kro.sh` and `helm upgrade --reset-then-reuse-values`. Before that, check these changes for existing objects and clients (each is under Changed or Fixed below):
 
 1. **A Bundle's spec is immutable.** A script that `kubectl apply`s a changed image or intent onto an existing Bundle must create a new Bundle instead (see Changed).
 2. **Bundle artifact fields are validated.** `images[].tag` follows the OCI tag grammar, `images[].digest` is an OCI digest, and the commit SHAs are hex. Check your CI first; stored Bundles keep working under CRD validation ratcheting (see Changed for the query that finds them).

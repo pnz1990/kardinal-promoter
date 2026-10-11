@@ -33,6 +33,9 @@ const (
 	// EnvUpgradePrometheusImage is the Prometheus image pulled into the node
 	// for BarePrometheus.
 	EnvUpgradePrometheusImage = "KARDINAL_E2E_PROMETHEUS_IMAGE"
+	// EnvV090CLI is the kardinal CLI of v0.9.0, the release the
+	// upgrade-v090 suite upgrades from (components/kardinal-v090.sh).
+	EnvV090CLI = "KARDINAL_E2E_V090_CLI"
 )
 
 // KrocodileGraphGVR is v0.8.1's Graph, reconciled by the krocodile Graph
@@ -98,15 +101,50 @@ func UpgradeGuide(t *testing.T) string {
 	return s
 }
 
+// UpgradeGuideFrom is the "Upgrading from v<version>" section of
+// docs/installation.md in the checkout, up to the next heading of its level
+// or above.
+func UpgradeGuideFrom(t *testing.T, version string) string {
+	t.Helper()
+	doc, err := os.ReadFile(filepath.Join(RepoRoot(t), "docs", "installation.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	heading := "### Upgrading from v" + version
+	s := string(doc)
+	i := strings.Index(s, heading+"\n")
+	if i < 0 {
+		t.Fatalf("docs/installation.md has no %q", heading)
+	}
+	s = s[i+len(heading):]
+	for _, next := range []string{"\n### ", "\n## "} {
+		if j := strings.Index(s, next); j >= 0 {
+			s = s[:j]
+		}
+	}
+	return heading + s
+}
+
 // GuideBlock is the one bash code block of the upgrade guide that contains
 // contains, dedented by its fence's indent (blocks in list items are
 // indented). It fails the test unless exactly one block matches.
 func GuideBlock(t *testing.T, contains string) string {
 	t.Helper()
+	return guideBlock(t, UpgradeGuide(t), contains)
+}
+
+// GuideBlockFrom is GuideBlock in UpgradeGuideFrom(version).
+func GuideBlockFrom(t *testing.T, version, contains string) string {
+	t.Helper()
+	return guideBlock(t, UpgradeGuideFrom(t, version), contains)
+}
+
+func guideBlock(t *testing.T, guide, contains string) string {
+	t.Helper()
 	var found []string
 	var block []string
 	indent, in := "", false
-	for _, line := range strings.Split(UpgradeGuide(t), "\n") {
+	for _, line := range strings.Split(guide, "\n") {
 		trimmed := strings.TrimLeft(line, " ")
 		switch {
 		case !in && trimmed == "```bash":
@@ -185,6 +223,23 @@ func (e *Env) KardinalV081(t *testing.T, namespace string, args ...string) (stri
 	}
 	out, err := exec.Command(cli, full...).CombinedOutput()
 	t.Logf("$ kardinal-v0.8.1 %s\n%s", strings.Join(full, " "), out)
+	return string(out), err
+}
+
+// KardinalV090 runs the v0.9.0 CLI against the test cluster (--context is
+// always set) and returns its combined output. It never fails the test.
+func (e *Env) KardinalV090(t *testing.T, namespace string, args ...string) (string, error) {
+	t.Helper()
+	cli := os.Getenv(EnvV090CLI)
+	if cli == "" {
+		t.Fatalf("%s is not set; run hack/e2e/up.sh upgrade-v090", EnvV090CLI)
+	}
+	full := append([]string{"--context", e.Context}, args...)
+	if namespace != "" {
+		full = append([]string{"-n", namespace}, full...)
+	}
+	out, err := exec.Command(cli, full...).CombinedOutput()
+	t.Logf("$ kardinal-v0.9.0 %s\n%s", strings.Join(full, " "), out)
 	return string(out), err
 }
 

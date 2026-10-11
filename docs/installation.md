@@ -436,14 +436,19 @@ a cert-manager example.
 
 ## Upgrade
 
-**Upgrading from v0.9.0:** read [Before you upgrade](changelog.md#before-you-upgrade) in the v0.10.0 changelog first.
+**Upgrading from v0.9.0:** follow [Upgrading from v0.9.0](#upgrading-from-v090).
 
 Helm does not update CRDs on upgrade. Apply the new chart's CRDs first:
 
 ```bash
 helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> \
-  | kubectl apply --server-side -f -
+  | kubectl apply --server-side --force-conflicts -f -
 ```
+
+`--force-conflicts` is needed when Helm installed the CRDs (a release installed from the chart,
+which ships them): Helm owns their fields, and without it the apply stops with
+`conflict with "helm" ... .spec.versions`. kubectl then owns the CRDs; Helm never changes them
+after the install anyway.
 
 Then upgrade the release:
 
@@ -479,6 +484,61 @@ than 100 environments, or the `kardinal.io/graph-shape: compact` annotation; see
 Bundle in flight (on any change to the Pipeline's spec, or a deleted Graph) it builds the node
 shape, and kro then deletes every PromotionStep the compact Graph created: the Bundle promotes
 again from its first environment. Before you downgrade, let the Bundles of those Pipelines finish, or delete them.
+
+### Upgrading from v0.9.0
+
+These steps take a v0.9.0 installation to this release. The upgrade suite runs them as written
+(`TestUpgradeV090_FromV090`, on the oldest and newest supported Kubernetes minors). Promotions
+in flight keep running: their PromotionSteps, PRStatuses and gate instances are kept, and the
+Graph of every Bundle that is still promoting is rebuilt in place by the new controller.
+
+**1. Read the upgrade notes.** The changelog's [Before you upgrade](changelog.md#from-v090)
+lists every change for existing objects and clients.
+
+**2. Label the Pipelines' git Secrets.** A Secret named by `spec.git.secretRef` should carry
+`kardinal.io/referenceable: "true"`. This release still uses an unlabeled one but sets the
+Pipeline's `SecretReferenceable=False` condition; a later release refuses it.
+
+```bash
+kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.spec.git.secretRef.name}{"\n"}{end}' |
+  sort -u | while read -r ns name; do
+    [ -z "$name" ] || kubectl -n "$ns" label secret "$name" kardinal.io/referenceable=true --overwrite
+  done
+```
+
+**3. Apply the new CRDs.** Helm never upgrades CRDs. Apply them before the new controller starts.
+The v0.9.0 chart installed them, so Helm owns their fields: `--force-conflicts` is required, or
+the apply stops with `conflict with "helm" ... .spec.versions`.
+
+```bash
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 | kubectl apply --server-side --force-conflicts -f -
+```
+
+**4. Upgrade kro.** Run this from a checkout of kardinal-promoter at this release; it installs
+the kro version the release targets, and leaves a kro that is already at it as it is.
+
+```bash
+KUBE_CONTEXT=<your-context> bash hack/install-kro.sh
+```
+
+**5. Upgrade the chart.** Use `--reset-then-reuse-values`, which keeps the values you set and
+takes every new default from the new chart.
+
+```bash
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
+  --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
+```
+
+**6. Check the result.**
+
+```bash
+kardinal doctor
+kubectl get graphs.kro.run -A
+kubectl get bundles -A
+```
+
+`kardinal doctor` passes every check. Every Bundle that was Promoting still has its Graph, and
+finishes; a Verified Bundle stays Verified; a new Bundle promotes end to end.
 
 ### Upgrading from v0.8.1
 
@@ -588,13 +648,11 @@ KUBE_CONTEXT=<your-context> bash hack/install-kro.sh
 
 On Kubernetes older than 1.30 the script exits 1 and installs nothing (see [Kubernetes version](#kubernetes-version)).
 
-**7. Apply the new kardinal CRDs.** The v0.8.1 chart shipped no CRDs, and Helm never upgrades CRDs, so apply all 12 by hand. This adds the new `notificationhooks.kardinal.io` CRD. Apply them before the new controller starts.
+**7. Apply the new kardinal CRDs.** The v0.8.1 chart shipped no CRDs, and Helm never upgrades CRDs, so apply all 18 by hand; this adds the CRDs v0.8.1 did not have. Apply them before the new controller starts. `--force-conflicts` takes over fields another field manager (Helm, or an earlier `kubectl apply`) set.
 
 ```bash
-helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 | kubectl apply --server-side -f -
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 | kubectl apply --server-side --force-conflicts -f -
 ```
-
-If this reports field-manager conflicts, add `--force-conflicts`.
 
 **8. Upgrade the chart.** Use `--reset-then-reuse-values`, not `--reuse-values`. With `--reuse-values`, the v0.8.1 `krocodile` default is carried over and fails the new schema.
 

@@ -602,11 +602,8 @@ spec:
 
 	// ── 7. Apply the new kardinal CRDs ──────────────────────────────────
 	crds := framework.Fill(t, framework.GuideBlock(t, "helm show crds"), guideChart, `"$KARDINAL_E2E_CHART"`)
+	assert.Contains(t, crds, "--force-conflicts", "the guide takes over fields other managers set")
 	run := e.Shell(t, crds)
-	if run.Code != 0 && strings.Contains(run.Output, "conflict") {
-		t.Logf("the CRD apply reported field-manager conflicts; adding --force-conflicts as the guide says")
-		run = e.Shell(t, framework.Fill(t, crds, "--server-side", "--server-side --force-conflicts"))
-	}
 	require.Zero(t, run.Code, run.Output)
 	var applied []string
 	for _, m := range regexp.MustCompile(`(?m)^customresourcedefinition\.apiextensions\.k8s\.io/(\S+) serverside-applied$`).FindAllStringSubmatch(run.Output, -1) {
