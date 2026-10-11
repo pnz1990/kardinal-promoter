@@ -119,6 +119,7 @@ func TestOverrideFn_NoIdentityWritesNothing(t *testing.T) {
 
 // TestOverrideFn_InvalidExpiry verifies that an invalid --expires-in returns an error.
 func TestOverrideFn_InvalidExpiry(t *testing.T) {
+	cmd.KeepStyle(t)
 	gate := makeTestGate("my-gate", "default")
 	fc := fake.NewClientBuilder().
 		WithScheme(newOverrideTestScheme()).
