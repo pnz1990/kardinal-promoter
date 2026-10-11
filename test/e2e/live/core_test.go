@@ -73,7 +73,7 @@ func TestCore_PromoteThroughEnvironments(t *testing.T) {
 }
 
 // closedGrace is prstatus.ClosedGracePeriod: how long a PR closed without
-// merging can be reopened before the step fails (docs/troubleshooting.md).
+// merging can be reopened before the step fails (docs/troubleshoot-promotions.md).
 const closedGrace = 5 * time.Minute
 
 // TestCore_ClosedPRFailsStep checks the documented close path: a promotion PR

@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -108,15 +109,20 @@ func TestInitCmd_Flags(t *testing.T) {
 
 	_, _, err = runInitCmd(t, dir, "", "--repo", "https://github.com/o/r")
 	require.NoError(t, err)
-	_, _, err = runInitCmd(t, dir, "", "--repo", "https://github.com/o/r")
-	assert.EqualError(t, err, "init: pipeline.yaml exists; overwrite it with --force, or write another file with -f")
+	// The same again changes nothing and succeeds; another Pipeline needs
+	// --force.
+	out, _, err = runInitCmd(t, dir, "", "--repo", "https://github.com/o/r")
+	require.NoError(t, err)
+	assert.Contains(t, out, "Pipeline YAML in pipeline.yaml unchanged\n")
+	_, _, err = runInitCmd(t, dir, "", "--repo", "https://github.com/o/r3")
+	assert.EqualError(t, err, "init: pipeline.yaml exists with another Pipeline; overwrite it with --force, or write another file with -f")
 	_, _, err = runInitCmd(t, dir, "", "--repo", "https://github.com/o/r2", "--force")
 	require.NoError(t, err)
 	content, _ := os.ReadFile(filepath.Join(dir, "pipeline.yaml"))
 	assert.Contains(t, string(content), "url: https://github.com/o/r2\n")
 
 	for args, msg := range map[string]string{
-		"--repo git@github.com:o/r.git":             `init: --repo needs an https:// repository URL, got "git@github.com:o/r.git"`,
+		"--repo http://github.com/o/r":              `init: --repo needs a git repository URL, https://host/owner/repo or ssh`,
 		"--repo https://x/y --strategy argo":        `init: --strategy must be kustomize or helm, got "argo"`,
 		"--repo https://x/y --prod-approval manual": `init: --prod-approval must be pr-review or auto, got "manual"`,
 		"--repo https://x/y --envs bundle --stdout": "init: the Pipeline it would write is not valid:",
@@ -130,6 +136,81 @@ func TestInitCmd_Flags(t *testing.T) {
 	_, _, err = runInitCmd(t, t.TempDir(), "", "--name", "web")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "give the answers as flags: kardinal init --name my-app --repo https://github.com/myorg/gitops")
+}
+
+// TestInitCmd_NoInjection (C6 QA): no flag value can add or change a field
+// of the Pipeline init writes: names are DNS-1123, the repository a URL with
+// no spaces, query or fragment, the branch a git branch name, and anything
+// else is quoted and checked by decoding the YAML back.
+//
+// Covers CLI-INIT-02.
+func TestInitCmd_NoInjection(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"name adds a namespace", []string{"--name", "x, namespace: kube-system"}, `init: the Pipeline name (--name) "x, namespace: kube-system" is not a valid name`},
+		{"name not DNS-1123", []string{"--name", "My_App"}, `init: the Pipeline name (--name) "My_App" is not a valid name`},
+		{"namespace not DNS-1123", []string{"-n", "team a"}, `init: the namespace (-n) "team a" is not a valid name`},
+		{"environment closes the list", []string{"--envs", "a,b }, { name: c"}, `init: the environment (--envs) "b }" is not a valid name`},
+		{"environment twice", []string{"--envs", "test,test"}, `init: the environment "test" is given twice (--envs)`},
+		{"secret adds a key", []string{"--secret", "x }, url: evil"}, `init: the Secret name (--secret) "x }, url: evil" is not a valid name`},
+		{"repo with a newline adds the branch", []string{"--repo", "https://github.com/o/r\nbranch: evil"}, "init: --repo needs a git repository URL"},
+		{"repo cut at a comment", []string{"--repo", "https://github.com/o/r #x"}, "init: --repo needs a git repository URL"},
+		{"repo with a fragment", []string{"--repo", "https://github.com/o/r#x"}, "init: --repo needs a git repository URL"},
+		{"repo with a query", []string{"--repo", "https://github.com/o/r?a=b"}, "init: --repo needs a git repository URL"},
+		{"repo with a password", []string{"--repo", "https://u:p@github.com/o/r"}, "init: --repo needs a git repository URL"},
+		{"repo without a path", []string{"--repo", "https://github.com"}, "init: --repo needs a git repository URL"},
+		{"branch adds the secret", []string{"--branch", "dev, secretRef: x"}, `init: --branch "dev, secretRef: x" is not a git branch name`},
+		{"branch with a newline", []string{"--branch", "dev\nlayout: evil"}, "is not a git branch name"},
+		{"branch with ..", []string{"--branch", "a..b"}, "is not a git branch name"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"--name", "web", "--repo", "https://github.com/o/r", "--stdout"}, tc.args...)
+			out, _, err := runInitCmd(t, t.TempDir(), "", args...)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+			assert.Empty(t, out, "nothing written")
+		})
+	}
+
+	// Valid values that YAML would read otherwise are quoted, and the
+	// Pipeline says exactly what was asked.
+	for _, tc := range []struct{ flag, value, yaml string }{
+		{"--repo", "git@github.com:o/r.git", "url: git@github.com:o/r.git"},
+		{"--repo", "ssh://git@github.com/o/r", "url: ssh://git@github.com/o/r"},
+		{"--branch", "release/1.0", "branch: release/1.0"},
+		{"--branch", "true", `branch: "true"`},
+		{"--branch", "1.10", `branch: "1.10"`},
+		{"--envs", "on,off", `- name: "on"`},
+	} {
+		out, _, err := runInitCmd(t, t.TempDir(), "", "--name", "web", "--repo", "https://github.com/o/r", "--stdout", tc.flag, tc.value)
+		require.NoError(t, err, tc.value)
+		assert.Contains(t, out, tc.yaml, tc.value)
+		var p v1alpha1.Pipeline
+		require.NoError(t, yaml.UnmarshalStrict([]byte(out), &p))
+		switch tc.flag {
+		case "--repo":
+			assert.Equal(t, tc.value, p.Spec.Git.URL)
+		case "--branch":
+			assert.Equal(t, tc.value, p.Spec.Git.Branch)
+		case "--envs":
+			assert.Equal(t, "on", p.Spec.Environments[0].Name)
+		}
+	}
+}
+
+// TestInitFn_NoNamespaceDefault (C6 QA): the namespace default is left out,
+// so the wizard's default answer writes the minimal Pipeline.
+func TestInitFn_NoNamespaceDefault(t *testing.T) {
+	var buf bytes.Buffer
+	require.NoError(t, initFn(&buf, &InitConfig{AppName: "my-app", Namespace: "default", GitURL: "https://github.com/myorg/gitops",
+		Environments: []string{"test", "uat", "prod"}}))
+	want, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", "minimal", "pipeline.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, string(want), buf.String())
 }
 
 // TestInitCmd_DetectSecretApply (C6): with a cluster, init finds the Argo
@@ -174,9 +255,13 @@ func TestInitCmd_DetectSecretApply(t *testing.T) {
 	assert.Equal(t, "true", s.Labels[v1alpha1.LabelSecretReferenceable])
 	assert.Equal(t, "s3cret-token", s.StringData["token"])
 
-	// Again: the Secret is kept; the Pipeline is not replaced without --force.
-	_, _, err = runInitCmd(t, t.TempDir(), "", "--name", "web", "--repo", "https://github.com/o/r", "--create-secret", "--apply")
-	assert.EqualError(t, err, "init: Pipeline team-a/web exists; replace it with --force")
+	// Again: the Secret is kept, and the same Pipeline is unchanged; another
+	// one is not replaced without --force.
+	out, _, err = runInitCmd(t, t.TempDir(), "", "--name", "web", "--repo", "https://github.com/o/r", "--create-secret", "--apply")
+	require.NoError(t, err)
+	assert.Contains(t, out, "Pipeline team-a/web unchanged\n")
+	_, _, err = runInitCmd(t, t.TempDir(), "", "--name", "web", "--repo", "https://github.com/o/r2", "--apply")
+	assert.EqualError(t, err, "init: Pipeline team-a/web exists with another spec; replace it with --force")
 	out, _, err = runInitCmd(t, t.TempDir(), "", "--name", "web", "--repo", "https://github.com/o/r2", "--create-secret", "--apply", "--force")
 	require.NoError(t, err)
 	assert.Contains(t, out, "Secret team-a/github-token exists; kept\n")
@@ -358,7 +443,7 @@ func TestBuildKustomization_ImageBlock(t *testing.T) {
 	}
 }
 
-// C09b-cli-15: the wizard requires an https:// Git URL and a valid strategy,
+// C09b-cli-15: the wizard requires a git repository URL (https or ssh) and a valid strategy,
 // re-prompting on a bad answer and failing at end of input; it asks only
 // for what no flag gives.
 func TestRunInitWizard_Validation(t *testing.T) {
@@ -366,19 +451,19 @@ func TestRunInitWizard_Validation(t *testing.T) {
 	t.Run("defaults only: the URL is required", func(t *testing.T) {
 		err := runInitWizard(strings.NewReader("\n\n\n\n"), &bytes.Buffer{}, &InitConfig{}, none)
 		require.Error(t, err)
-		assert.Equal(t, "Git repository URL: an https:// repository URL is required", err.Error())
+		assert.Equal(t, "Git repository URL: a git repository URL is required (https://host/owner/repo or git@host:owner/repo.git)", err.Error())
 	})
 	t.Run("bad answers are re-prompted", func(t *testing.T) {
 		var out bytes.Buffer
 		cfg := &InitConfig{}
 		err := runInitWizard(strings.NewReader(
-			"web\nteam-a\ntest,prod\n\ngit@github.com:o/r.git\nhttps://github.com/o/r\n\nargocd\nhelm\n"), &out, cfg, none)
+			"web\nteam-a\ntest,prod\n\nhttp://github.com/o/r\nhttps://github.com/o/r\n\nargocd\nhelm\n"), &out, cfg, none)
 		require.NoError(t, err)
 		assert.Equal(t, &InitConfig{
 			AppName: "web", Namespace: "team-a", Environments: []string{"test", "prod"},
 			GitURL: "https://github.com/o/r", Branch: "main", UpdateStrategy: "helm",
 		}, cfg)
-		assert.Equal(t, 2, strings.Count(out.String(), "an https:// repository URL is required"))
+		assert.Equal(t, 2, strings.Count(out.String(), "a git repository URL is required (https://host/owner/repo or git@host:owner/repo.git)"))
 		assert.Contains(t, out.String(), `update strategy must be kustomize or helm, got "argocd"`)
 	})
 	t.Run("a flag's question is not asked", func(t *testing.T) {
