@@ -362,7 +362,7 @@ jobs:
           helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
             --namespace kardinal-system --create-namespace \
             --version @CHART_VERSION@ \
-            --set github.secretRef.name=github-token
+            --set scm.secretRef.name=github-token
           ```
 
           The chart installs the kardinal CRDs on first install. `helm upgrade` does not
