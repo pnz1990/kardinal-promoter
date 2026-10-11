@@ -650,7 +650,7 @@ func TestCLI_Reports(t *testing.T) {
 	}, cells(c.Must(a.ns, "diff", bA, bA)), "a Bundle does not differ from itself")
 	r := c.Fail(a.ns, "diff", bA, "nope")
 	assert.Equal(t, 1, r.Code)
-	assert.True(t, strings.HasPrefix(r.Stderr, `get bundle "nope": `), r.Stderr)
+	assert.True(t, strings.HasPrefix(r.Stderr, `diff: no Bundle named "nope", and no version "nope" in `+a.ns+`; the newest are: `), r.Stderr)
 	assert.Empty(t, r.Stdout)
 	r = c.Fail(a.ns, "diff", bA)
 	assert.Contains(t, r.Stderr, "accepts 2 arg(s), received 1")
