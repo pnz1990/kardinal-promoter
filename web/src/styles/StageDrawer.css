@@ -24,11 +24,22 @@
   flex-shrink: 0;
 }
 
+/* At lg and wider the drawer is a non-modal side panel pinned to the viewport,
+   so opening a stage from anywhere on the page shows it at once. */
+.stage-drawer:not(.stage-drawer--sheet) {
+  position: fixed;
+  inset-block: 0;
+  inset-inline-end: 0;
+  max-block-size: none;
+  z-index: var(--k-z-drawer);
+  box-shadow: var(--k-elev-3);
+}
+
 .stage-drawer__scrim {
   position: fixed;
   inset: 0;
   z-index: var(--k-z-drawer);
-  background: var(--k-shadow-color);
+  background: color-mix(in oklab, var(--k-surface-sunken) 72%, transparent);
   display: flex;
   justify-content: flex-end;
 }
@@ -333,7 +344,7 @@
   position: fixed;
   inset: 0;
   z-index: var(--k-z-dialog);
-  background: var(--k-shadow-color);
+  background: color-mix(in oklab, var(--k-surface-sunken) 72%, transparent);
   display: flex;
   align-items: center;
   justify-content: center;
