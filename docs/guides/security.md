@@ -402,7 +402,7 @@ controller's token to a URL its author chooses. The chart never labels it.
 
 The controller also refuses a Pipeline whose `git.secretRef` names its own token Secret
 (`--scm-token-secret-name` in `--scm-token-secret-namespace`), labelled or not: the Pipeline is
-`Ready=False` with reason `ValidationFailed`, and its steps fail before `git-clone`. Such a
+`Ready=False` with reason `ValidationFailed`, its steps fail before `git-clone`, its Bundles get no Graph, and a RenderRun whose git Secret it is fails before its render Job is created, so no render Pod mounts the token. Such a
 Pipeline would otherwise choose where the controller's token goes, and its own existing Secret
 would exempt it from `--scm-allowed-repositories`. Give each Pipeline its own Secret; the chart's
 demo Pipeline gets one (`demo.secretRef`, or a labelled copy the chart creates with `scm.token`).
