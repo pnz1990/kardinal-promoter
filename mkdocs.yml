@@ -119,6 +119,7 @@ nav:
     - Install: installation.md
     - Your first pipeline: first-pipeline.md
   - How-to:
+    - Use the UI: ui.md
     - Ship versions from CI: ci-integration.md
     - Ship automatically from images, charts and Git: subscription.md
     - Design a pipeline:
