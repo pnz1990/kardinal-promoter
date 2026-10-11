@@ -18,13 +18,14 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/types"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+
+	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 )
 
 func newDiffCmd() *cobra.Command {
@@ -81,7 +82,7 @@ func diffFn(w io.Writer, c sigs_client.Client, ns, nameA, nameB string) error {
 //	  author               dependabot[bot]      engineer-name        *
 func FormatDiffTable(w io.Writer, a, b *v1alpha1.Bundle) error {
 	var buf strings.Builder
-	tw := tabwriter.NewWriter(&buf, 0, 0, 3, ' ', 0)
+	tw := style.NewTable(&buf, 3)
 	row := func(label, av, bv string, changed bool) {
 		mark := ""
 		if changed {

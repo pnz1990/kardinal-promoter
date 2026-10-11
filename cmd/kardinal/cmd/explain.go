@@ -25,15 +25,17 @@ import (
 	"sort"
 	"strings"
 	"syscall"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+
+	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 )
 
 func newExplainCmd() *cobra.Command {
@@ -52,7 +54,7 @@ each gate's expression, state and reason, and what is deployed there now when
 the change has not landed yet. -w refreshes every 3 seconds.`,
 		Example: `  kardinal explain my-app
   kardinal explain my-app prod -w`,
-		Annotations: map[string]string{ReferenceAnnotation: explainReference},
+		Annotations: map[string]string{ReferenceAnnotation: explainReference, outputAnnotation: "true"},
 		Args:        cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pipeline, env, err := envArgs(cmd, args, envFlag)
@@ -80,8 +82,8 @@ the change has not landed yet. -w refreshes every 3 seconds.`,
 
 // explainWatch re-renders explain every interval until ctx is done or the
 // process gets SIGINT (Ctrl-C) or SIGTERM, then returns nil, as the other
-// --watch commands do. Errors are printed and polling continues. The screen is
-// cleared only on a TTY.
+// --watch commands do. Errors are printed (on stderr with -o json or yaml)
+// and polling continues. The screen is cleared only for a table on a TTY.
 func explainWatch(ctx context.Context, w io.Writer, c sigs_client.Client,
 	ns, pipeline, envFilter string, forceColor bool, interval time.Duration) error {
 	if ctx == nil {
@@ -89,15 +91,25 @@ func explainWatch(ctx context.Context, w io.Writer, c sigs_client.Client,
 	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	tty := isTerminal(w)
+	// Only a table redraws in place with a footer; -o json and yaml print
+	// one document per refresh, errors on stderr, like get pipelines -w.
+	table := !structured()
+	clearScreen := table && style.IsTerminal(w)
 	for {
-		if tty {
+		if clearScreen {
 			_, _ = fmt.Fprint(w, "\033[H\033[2J")
 		}
+		yamlDocument(w)
 		if err := explainOnce(w, c, ns, pipeline, envFilter, forceColor); err != nil {
-			_, _ = fmt.Fprintf(w, "error: %v\n", err)
+			if table {
+				_, _ = fmt.Fprintf(w, "error: %v\n", HumanError(err))
+			} else {
+				_, _ = fmt.Fprintf(errOut, "error: %v\n", HumanError(err))
+			}
 		}
-		_, _ = fmt.Fprintln(w, "\n(watching — press Ctrl-C to quit)")
+		if table {
+			_, _ = fmt.Fprintln(w, watchFooter)
+		}
 		select {
 		case <-ctx.Done():
 			return nil
@@ -215,17 +227,6 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		})
 	}
 
-	if len(rows) == 0 {
-		msg := fmt.Sprintf("No promotion for pipeline %q yet\n", pipeline)
-		if envFilter != "" {
-			msg = fmt.Sprintf("No promotion for %q in pipeline %q yet\n", envFilter, pipeline)
-		}
-		if _, err := fmt.Fprint(w, msg); err != nil {
-			return fmt.Errorf("write empty message: %w", err)
-		}
-		return nil
-	}
-
 	// Sort by environment, then kind (PolicyGate before Step), then gates
 	// that are not ready before the ones that pass, then name.
 	sort.Slice(rows, func(i, j int) bool {
@@ -241,22 +242,47 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		return rows[i].name < rows[j].name
 	})
 
-	// Render plain text first so tabwriter aligns on visible widths, then
-	// color only the STATE cell of each row.
-	var tableBuf strings.Builder
-	tw := tabwriter.NewWriter(&tableBuf, 0, 0, 3, ' ', 0)
+	if structured() {
+		out := explainOutput{Pipeline: pipeline, Namespace: ns, Entries: []explainEntry{}, Holds: explainHolds(pipe, envFilter)}
+		for _, row := range rows {
+			out.Entries = append(out.Entries, explainEntry{
+				Environment: row.environment, Bundle: row.bundle, Type: row.kind, Name: row.name,
+				State: row.state, Expression: noDash(row.expression), Reason: noDash(row.reason),
+			})
+		}
+		return writeStructured(w, out)
+	}
+
+	if len(rows) == 0 {
+		msg := fmt.Sprintf("No promotion for pipeline %q yet\n", pipeline)
+		if envFilter != "" {
+			msg = fmt.Sprintf("No promotion for %q in pipeline %q yet\n", envFilter, pipeline)
+		}
+		if _, err := fmt.Fprint(w, msg); err != nil {
+			return fmt.Errorf("write empty message: %w", err)
+		}
+		return nil
+	}
+
+	// --color colours the STATE cells off a terminal too.
+	st := sty
+	if forceColor {
+		st = st.ForceColor()
+	}
+	tw := style.NewTable(w, 3)
 	if _, err := fmt.Fprintln(tw, "ENVIRONMENT\tBUNDLE\tTYPE\tNAME\tSTATE\tEXPRESSION\tREASON"); err != nil {
 		return fmt.Errorf("write explain header: %w", err)
 	}
-	label := func(row explainRow) string {
-		if row.kind == "PolicyGate" {
-			return gateLabel(row.state)
-		}
-		return stepLabel(row.state)
-	}
 	for _, row := range rows {
+		state := display.Step(row.state)
+		if row.state == "" {
+			state = display.Step("Pending")
+		}
+		if row.kind == "PolicyGate" {
+			state = display.Gate(row.state)
+		}
 		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			row.environment, row.bundle, row.kind, row.name, label(row), row.expression, row.reason,
+			row.environment, row.bundle, row.kind, row.name, st.State(state), row.expression, row.reason,
 		); err != nil {
 			return fmt.Errorf("write explain row: %w", err)
 		}
@@ -264,27 +290,8 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	if err := tw.Flush(); err != nil {
 		return fmt.Errorf("flush explain table: %w", err)
 	}
-
-	output := tableBuf.String()
-	if cr := newColorizer(w, forceColor); cr.enabled {
-		lines := strings.SplitAfter(output, "\n")
-		// Environment, bundle, type and name are Kubernetes names (ASCII), so the
-		// header's byte offset of STATE is the cell's offset on every row.
-		col := strings.Index(lines[0], "STATE")
-		for i, row := range rows {
-			line := lines[i+1]
-			text := label(row)
-			if col >= 0 && len(line) > col && strings.HasPrefix(line[col:], text) {
-				lines[i+1] = line[:col] + cr.colorStateText(row.state, text) + line[col+len(text):]
-			}
-		}
-		output = strings.Join(lines, "")
-	}
-	if _, err := fmt.Fprint(w, output); err != nil {
-		return fmt.Errorf("write explain output: %w", err)
-	}
 	for _, h := range rejectedLiveHints(pipeline, current, bundles.Items, steps.Items, envFilter) {
-		if _, err := fmt.Fprintln(w, h); err != nil {
+		if _, err := fmt.Fprintln(w, notice(h)); err != nil {
 			return fmt.Errorf("write explain hint: %w", err)
 		}
 	}
@@ -292,6 +299,67 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		return err
 	}
 	return writeExplainHolds(w, pipe, envFilter)
+}
+
+// explainOutput is kardinal explain -o json|yaml: the rows of the table, with
+// the API's state values, and the holds of the environments shown.
+type explainOutput struct {
+	Pipeline  string         `json:"pipeline"`
+	Namespace string         `json:"namespace"`
+	Entries   []explainEntry `json:"entries"`
+	Holds     []explainHold  `json:"holds,omitempty"`
+}
+
+// explainEntry is one row of kardinal explain: a step or a gate instance of
+// the current Bundle of an environment.
+type explainEntry struct {
+	Environment string `json:"environment"`
+	Bundle      string `json:"bundle"`
+	// Type is Step or PolicyGate.
+	Type string `json:"type"`
+	Name string `json:"name"`
+	// State is the step's state or the gate's (Pass, Block, Waiting,
+	// Pending, Superseded, Rejected), as the API has it.
+	State string `json:"state"`
+	// Expression is a gate's CEL expression; omitted for a step.
+	Expression string `json:"expression,omitempty"`
+	// Reason is a step's message or a gate's status reason; omitted when
+	// there is none.
+	Reason string `json:"reason,omitempty"`
+}
+
+// noDash is s, or "" for the table's "-" placeholder: JSON carries no
+// display placeholders.
+func noDash(s string) string {
+	if s == "-" {
+		return ""
+	}
+	return s
+}
+
+// explainHold is a hold (kardinal rollback --hold) of an environment shown.
+type explainHold struct {
+	Environment string `json:"environment"`
+	Bundle      string `json:"bundle"`
+	CreatedBy   string `json:"createdBy,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+	// BundleMissing is true when the held rollback Bundle does not exist.
+	BundleMissing bool `json:"bundleMissing,omitempty"`
+}
+
+// explainHolds is the holds of p that are in effect in the environments
+// explain shows (envFilter, or all).
+func explainHolds(p *v1alpha1.Pipeline, envFilter string) []explainHold {
+	var out []explainHold
+	for _, h := range p.Spec.Holds {
+		if (envFilter != "" && h.Environment != envFilter) || h.Expired(time.Now()) {
+			continue
+		}
+		st := p.HoldState(&h)
+		out = append(out, explainHold{Environment: h.Environment, Bundle: h.Bundle, CreatedBy: h.CreatedBy, Reason: h.Reason,
+			BundleMissing: st != nil && st.State == v1alpha1.HoldStateBundleMissing})
+	}
+	return out
 }
 
 // writeExplainHolds prints the holds (spec.holds, kardinal rollback --hold)
@@ -335,7 +403,7 @@ func writeExplainDeployed(w io.Writer, pipeline string, envNames []string, envFi
 	envs := slices.Sorted(slices.Values(envNames)) // the table's order
 	deployed := deployedBundles(steps, pipeline, envs, byName)
 	var buf strings.Builder
-	tw := tabwriter.NewWriter(&buf, 0, 0, 3, ' ', 0)
+	tw := style.NewTable(&buf, 3)
 	n := 0
 	for _, env := range envs {
 		if (envFilter != "" && env != envFilter) || current[env] == "" || deployed[env].bundle == current[env] {

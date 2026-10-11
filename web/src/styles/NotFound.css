@@ -1,0 +1,11 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * NotFound.css — the not-found state of a pipeline or version route (components/NotFound.tsx).
+ * Design tokens only (noLiterals.test.ts).
+ */
+.not-found { padding: var(--k-space-8) var(--k-space-6); }
+.not-found__title { margin: 0 0 var(--k-space-2); color: var(--k-ink); font-size: var(--k-text-xl); }
+.not-found__detail { margin: 0 0 var(--k-space-4); color: var(--k-ink-2); }
+.not-found__link { font-weight: var(--k-weight-semibold); }

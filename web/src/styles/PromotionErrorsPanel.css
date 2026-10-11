@@ -1,0 +1,92 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * PromotionErrorsPanel.css — failures grouped across environments
+ * (components/PromotionErrorsPanel.tsx). Design tokens only (noLiterals.test.ts).
+ */
+
+.promotion-errors {
+  margin: 0 var(--k-space-6) var(--k-space-4);
+  overflow: hidden;
+  border: var(--k-border-hairline) solid var(--k-status-failed-fg);
+  border-radius: var(--k-radius-3);
+  background: var(--k-surface-base);
+}
+.promotion-errors__header {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-2);
+  padding: var(--k-space-2) var(--k-space-3);
+  border-block-end: var(--k-border-hairline) solid var(--k-status-failed-fg);
+  background: var(--k-status-failed-wash);
+}
+.promotion-errors__icon { color: var(--k-status-failed-fg); font-size: var(--k-text-md); }
+.promotion-errors__title { color: var(--k-status-failed-fg); font-size: var(--k-text-sm); font-weight: var(--k-weight-semibold); }
+.promotion-errors__subtitle { color: var(--k-ink-3); font-size: var(--k-text-xs); }
+
+.promotion-errors__group + .promotion-errors__group { border-block-start: var(--k-border-hairline) solid var(--k-line); }
+.promotion-errors__row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--k-space-2);
+  padding: var(--k-space-2) var(--k-space-3);
+}
+.promotion-errors__step {
+  flex-shrink: 0;
+  margin-block-start: var(--k-space-px);
+  padding: var(--k-space-0_5) var(--k-space-1_5);
+  border: var(--k-border-hairline) solid var(--k-status-failed-fg);
+  border-radius: var(--k-radius-1);
+  background: var(--k-status-failed-wash);
+  color: var(--k-status-failed-fg);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-2xs);
+  font-weight: var(--k-weight-semibold);
+  white-space: nowrap;
+}
+.promotion-errors__count {
+  flex-shrink: 0;
+  margin-block-start: var(--k-space-0_5);
+  color: var(--k-status-failed-fg);
+  font-size: var(--k-text-2xs);
+  font-weight: var(--k-weight-semibold);
+  font-variant-numeric: var(--k-numeric);
+}
+.promotion-errors__body { flex: 1; min-inline-size: 0; }
+.promotion-errors__message {
+  color: var(--k-status-failed-fg);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-xs);
+  line-height: var(--k-leading-sm);
+  word-break: break-all;
+}
+.promotion-errors__ellipsis { color: var(--k-ink-3); }
+.promotion-errors__controls { display: flex; gap: var(--k-space-2); margin-block-start: var(--k-space-1_5); }
+.promotion-errors__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--k-ink-2);
+  font-size: var(--k-text-2xs);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.promotion-errors__link--raw { color: var(--k-ink); text-decoration: underline var(--k-border-hairline) var(--k-thread-text); text-underline-offset: 0.2em; }
+.promotion-errors__envs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--k-space-1_5);
+  padding: 0 var(--k-space-3) var(--k-space-2);
+}
+.promotion-errors__env {
+  padding: var(--k-space-0_5) var(--k-space-2);
+  border: var(--k-border-hairline) solid var(--k-status-failed-fg);
+  border-radius: var(--k-radius-2);
+  background: var(--k-status-failed-wash);
+  color: var(--k-status-failed-fg);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-xs);
+  cursor: pointer;
+}
+.promotion-errors__env-ns { margin-inline-start: var(--k-space-1); color: var(--k-ink-3); }

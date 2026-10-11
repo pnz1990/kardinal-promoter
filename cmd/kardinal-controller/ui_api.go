@@ -73,6 +73,19 @@ type uiPipelineResponse struct {
 	// Keys are environment names, values are the promotion phase.
 	EnvironmentStates map[string]string `json:"environmentStates,omitempty"`
 
+	// Environments is the Pipeline's status.environments, written by the
+	// PipelineReconciler: per environment what runs there, a newer Bundle on
+	// its way in, its state and since when, and what holds it (P1). Display
+	// only; the same rows kubectl and the CLI read.
+	Environments []v1alpha1.PipelineEnvironmentStatus `json:"environments,omitempty"`
+	// Summary is the Pipeline's status.summary, one sentence on where its
+	// versions are.
+	Summary string `json:"summary,omitempty"`
+	// Conditions are the Pipeline's status.conditions: Ready (with reasons
+	// such as ValidationFailed and GitCredentialMissing), Paused,
+	// PathConflict and the SecretReferenceable warning.
+	Conditions []uiCondition `json:"conditions,omitempty"`
+
 	// #525: static pipeline topology from spec — rendered even when no Bundle is promoting.
 	// Each entry is one environment in pipeline order with its dependsOn edges.
 	EnvironmentTopology []uiEnvironmentNode `json:"environmentTopology,omitempty"`
@@ -298,6 +311,9 @@ type uiBundleResponse struct {
 	Environments []uiBundleEnvStatus `json:"environments,omitempty"`
 	// #563: Container images in this Bundle — used by NodeDetail diff preview.
 	Images []v1alpha1.ImageRef `json:"images,omitempty"`
+	// Version is what the Bundle ships, for display: status.version, else
+	// scm.BundleVersion of its spec (a Bundle the reconciler has not seen yet).
+	Version string `json:"version,omitempty"`
 	// RejectedLiveEnvironments are the environments where this Rejected
 	// Bundle's change is live (lifecycle.RejectedLiveEnvs): the UI keeps it
 	// current there, marked Rejected, with a roll-back hint.
@@ -409,6 +425,13 @@ type uiGateResponse struct {
 	Pipeline    string `json:"pipeline,omitempty"`
 	Bundle      string `json:"bundle,omitempty"`
 	Environment string `json:"environment,omitempty"`
+	// GateTemplate is the template an instance was made from (its
+	// kardinal.io/gate-template label): the gate's name as the user wrote it,
+	// which the UI shows and POST /override takes. Empty on templates.
+	GateTemplate string `json:"gateTemplate,omitempty"`
+	// MaxOverrideMinutes is the longest override the controller accepts for
+	// an instance (--gate-override-max-minutes). Unset on templates.
+	MaxOverrideMinutes int `json:"maxOverrideMinutes,omitempty"`
 	// Template is true for a PolicyGate template (no kardinal.io/bundle label).
 	// Templates are never evaluated for a bundle and always report ready=false,
 	// so the UI must not count them as blocking.
@@ -772,6 +795,9 @@ func pipelineListResponse(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bund
 		}
 		resp.Deployed = deployedByEnv(&p, stepsByEnv(steps, stepsByPipeline[nsName{p.Namespace, p.Name}]), byName)
 		resp.DeploymentMetrics = p.Status.DeploymentMetrics
+		resp.Environments = p.Status.Environments
+		resp.Summary = p.Status.Summary
+		resp.Conditions = buildUIConditions(p.Status.Conditions)
 		if ab := activeBundles[key]; ab != nil {
 			resp.ActiveBundleName = ab.name
 			resp.ActiveBundleVersion = scm.BundleVersion(ab.bundle.Spec)
@@ -904,6 +930,10 @@ func (s *uiAPIServer) handleBundlesForPipeline(w http.ResponseWriter, r *http.Re
 			CreatedAt:  b.CreationTimestamp.Format("2006-01-02T15:04:05Z07:00"),
 			Provenance: b.Spec.Provenance,
 			Images:     b.Spec.Images, // #563: expose images for diff preview
+			Version:    b.Status.Version,
+		}
+		if resp.Version == "" {
+			resp.Version = scm.BundleVersion(b.Spec)
 		}
 		if len(envStatuses) > 0 {
 			resp.Environments = envStatuses
@@ -1311,6 +1341,10 @@ func (s *uiAPIServer) handleGates(w http.ResponseWriter, r *http.Request) {
 			State:       state,
 			Approval:    gateApproval(&g),
 		}
+		if !resp.Template {
+			resp.GateTemplate = g.Labels["kardinal.io/gate-template"]
+			resp.MaxOverrideMinutes = maxGateOverrideMinutes
+		}
 		if g.Status.LastEvaluatedAt != nil {
 			resp.LastEvaluatedAt = g.Status.LastEvaluatedAt.UTC().Format("2006-01-02T15:04:05Z")
 		}
@@ -1530,7 +1564,7 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 	// (policygates/override), not update on the gate: the controller writes it.
 	writer, err := s.actionClient(r.Context(), "policygates", "override", gateNS, gateName)
 	if err != nil {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		s.writeLifecycleError(w, "override gate "+gateName, err)
 		return
 	}
 	// Re-read and re-apply on a conflict: the reconciler and other approvers

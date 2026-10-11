@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "kardinal-promoter chart values",
-  "description": "Unknown keys are rejected so a misspelled or removed value fails instead of being ignored.",
+  "description": "Unknown keys are rejected so a misspelled or unknown value fails instead of being ignored.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -291,6 +291,26 @@
         },
         "apiURL": {
           "type": "string"
+        },
+        "token": {
+          "type": "string",
+          "description": "SCM token; the chart stores it in a Secret. github.token is the old name."
+        },
+        "secretRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Existing Secret with the SCM token. github.secretRef is the old name.",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "namespace": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            }
+          }
         },
         "allowedRepositories": {
           "type": "array",

@@ -39,8 +39,12 @@ describe('PipelineList — empty and loading states', () => {
   })
 
   it('renders error message when error prop is provided', () => {
-    render(<PipelineList pipelines={[]} error="API unavailable" onSelect={vi.fn()} />)
-    expect(screen.getByText(/Error: API unavailable/i)).toBeInTheDocument()
+    const onRetry = vi.fn()
+    render(<PipelineList pipelines={[]} error="Failed to fetch" onSelect={vi.fn()} onRetry={onRetry} />)
+    expect(screen.getByRole('alert')).toHaveTextContent(/Can't reach the kardinal controller/)
+    expect(screen.getByText('Failed to fetch')).toBeInTheDocument()
+    screen.getByRole('button', { name: 'Retry' }).click()
+    expect(onRetry).toHaveBeenCalledOnce()
   })
 
   // A failed poll keeps the last pipelines App read: the list, its filter and
@@ -53,7 +57,7 @@ describe('PipelineList — empty and loading states', () => {
     await user.type(screen.getByRole('textbox', { name: 'Filter pipelines by name or namespace' }), 'alp')
 
     rerender(<PipelineList pipelines={pipelines} error="API error 503: unavailable" onSelect={vi.fn()} searchInputRef={ref} />)
-    expect(screen.getByRole('alert')).toHaveTextContent(/^Error: API error 503: unavailable$/)
+    expect(screen.getByRole('alert')).toHaveTextContent(/may be restarting.*API error 503: unavailable$/)
     const filter = screen.getByRole('textbox', { name: 'Filter pipelines by name or namespace' })
     expect(ref.current).toBe(filter)
     expect(filter).toHaveValue('alp')

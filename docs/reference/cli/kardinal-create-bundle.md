@@ -48,7 +48,7 @@ kardinal create bundle <pipeline> [flags]
       --graph-compact-above int   With --dry-run: the controller's --graph-compact-above (chart graph.compactAbove), the environment count above which the Graph is compact (default 100)
   -h, --help                      help for bundle
       --image stringArray         Container image reference (can be specified multiple times); required for image and mixed Bundles
-      --type string               Bundle type: image, config, or mixed (default "image")
+      --type string               Bundle type: image, config or mixed (chart Bundles come from POST /api/v1/bundles or a Helm Subscription: this command has no chart flags) (default "image")
 ```
 
 ### Options inherited from parent commands
@@ -57,7 +57,7 @@ kardinal create bundle <pipeline> [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: get auditevents, bundles, pipelines, steps, subscriptions)
+  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
 ```
 
 ### SEE ALSO

@@ -74,7 +74,7 @@ func TestRequiredFlags_EmptyValueRefused(t *testing.T) {
 		wantErr string
 	}{
 		{[]string{"override", "p", "--gate", "g", "--reason", ""}, "--reason is required for override (audit record)"},
-		{[]string{"override", "p", "--gate", "", "--reason", "r"}, "--gate is required"},
+		{[]string{"override", "p", "--gate", "", "--reason", "r"}, "--gate is required: name the gate to override"},
 		{[]string{"promote", "p", "--env", ""}, "which environment? Give it after the pipeline: kardinal promote p <env>"},
 	}
 	for _, tc := range cases {
@@ -104,8 +104,8 @@ func TestOutputFlag_Validated(t *testing.T) {
 		{"unknown format", []string{"version", "-o", "xml"}, `invalid -o "xml": must be table, json or yaml`},
 		{"json on a table command", []string{"completion", "zsh", "-o", "json"},
 			`-o json is not supported by "kardinal completion"`},
-		{"yaml on history", []string{"history", "demo", "-o", "yaml"},
-			`-o yaml is not supported by "kardinal history"`},
+		{"yaml on logs", []string{"logs", "demo", "-o", "yaml"},
+			`-o yaml is not supported by "kardinal logs"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

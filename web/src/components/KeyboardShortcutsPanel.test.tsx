@@ -45,21 +45,20 @@ describe('KeyboardShortcutsPanel', () => {
     expect(onClose).toHaveBeenCalledOnce()
   })
 
-  // C10a-web-16: jsdom never moves focus on a synthetic Tab, so "focus stayed"
-  // proves nothing. The trap must cancel the Tab itself (the panel has one
-  // control, so both directions stay on it). The 2+ control wrap is tested in
-  // useModalFocus.test.tsx, the hook this panel uses.
+  // C10a-web-16: jsdom never moves focus on a synthetic Tab, so the trap must
+  // cancel the Tab itself and move focus: from the last control (the UI guide
+  // link) Tab wraps to Close, and Shift+Tab from Close wraps to the last.
   it.each([
-    { name: 'Tab', shiftKey: false },
-    { name: 'Shift+Tab', shiftKey: true },
-  ])('focus trap: $name on the only control is cancelled and focus stays', ({ shiftKey }) => {
+    { name: 'Tab from the last control', shiftKey: false, from: 'UI guide', to: 'Close keyboard shortcuts' },
+    { name: 'Shift+Tab from the first control', shiftKey: true, from: 'Close keyboard shortcuts', to: 'UI guide' },
+  ])('focus trap: $name wraps', ({ shiftKey, from, to }) => {
     render(<KeyboardShortcutsPanel onClose={onClose} />)
-    const closeBtn = screen.getByLabelText('Close keyboard shortcuts')
-    closeBtn.focus()
+    const start = screen.getByRole(from === 'UI guide' ? 'link' : 'button', { name: from })
+    start.focus()
     const ev = new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true, cancelable: true })
-    closeBtn.dispatchEvent(ev)
+    start.dispatchEvent(ev)
     expect(ev.defaultPrevented).toBe(true)
-    expect(closeBtn).toHaveFocus()
+    expect(screen.getByRole(to === 'UI guide' ? 'link' : 'button', { name: to })).toHaveFocus()
   })
 
   it('moves focus to close button on mount (#783 O1)', () => {

@@ -88,7 +88,7 @@ describe('fleetRow', () => {
   }
 })
 
-describe('fleetRow: image and config Bundles (#1353)', () => {
+describe('fleetRow: image and config versions (#1353)', () => {
   it('a station also names what it runs from another Bundle', () => {
     const r = fleetRow(base({
       environmentTopology: [{ name: 'test' }, { name: 'prod', upstreams: ['test'] }],

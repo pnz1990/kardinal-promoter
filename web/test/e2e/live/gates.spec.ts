@@ -1,14 +1,14 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 //
-// UI-GATES-01: the Policy Gates panel, the blocking banner and the Promotion
+// UI-GATES-01: the gates panel, the blocking banner and the Promotion
 // Errors panel. Go test: TestUI_BrowserGates (test/e2e/live/ui_browser_test.go).
 //
 // In KARDINAL_UI_NAMESPACE, podinfo's Bundle is Verified in test, past gate
 // check-test (true), and held before prod by gate hold-prod (false). In
 // KARDINAL_UI_FAILED_NAMESPACE, podinfo's Bundle failed in its only
 // environment, whose health check kardinal refuses. The DAG names a gate by
-// its template; the Policy Gates panel lists the Bundle's gate instances.
+// its template; the gates panel lists the Bundle's gate instances.
 
 import { test, expect, type Page } from '@playwright/test'
 import { need, openPipeline, dagNode } from './live'
@@ -25,13 +25,13 @@ const failedEnv = need('KARDINAL_UI_FAILED_ENV')
 const failedMessage = need('KARDINAL_UI_FAILED_MESSAGE')
 
 /** The banner about gates holding the bundle (the page has other alerts). */
-const blockedBanner = (page: Page) => page.getByRole('alert').filter({ hasText: /PolicyGates? blocking promotion/ })
+const blockedBanner = (page: Page) => page.getByRole('alert').filter({ hasText: /gates? blocking/ })
 
-test('a gate that holds the bundle shows in the banner, the DAG and the Policy Gates panel', async ({ page }) => {
+test('a gate that holds the bundle shows in the banner, the DAG and the gates panel', async ({ page }) => {
   await openPipeline(page, base, ns)
 
   const banner = blockedBanner(page)
-  await expect(banner).toContainText('1 PolicyGate blocking promotion')
+  await expect(banner).toContainText('1 gate blocking ')
   const highlight = banner.getByRole('button')
   await expect(highlight).toHaveText('Show blocked')
   await expect(highlight).toHaveAttribute('aria-pressed', 'false')
@@ -48,8 +48,10 @@ test('a gate that holds the bundle shows in the banner, the DAG and the Policy G
   await expect(highlight).toHaveText('Show blocked')
   await expect(dagNode(page, holdGate)).not.toHaveClass(/dag-node--highlighted/)
 
+  // The version's gates are on the Activity tab.
+  await page.getByRole('tab', { name: /^Activity/ }).click()
   // The panel opens by itself while a gate holds the bundle.
-  const toggle = page.getByRole('button', { name: /Policy Gates \(2\)/ })
+  const toggle = page.getByRole('button', { name: /Gates \(2\)/ })
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
   await expect(toggle).toContainText('1 blocked')
   const panel = toggle.locator('..')
@@ -106,7 +108,7 @@ test('a failed promotion shows in the Promotion Errors panel, whose link opens i
   await expect(detail).toHaveCount(0)
   await link.click()
   await expect(detail).toContainText(`Environment: ${failedEnv}`)
-  await expect(detail).toContainText('Type: PromotionStep')
+  await expect(detail.locator('details.k-k8s')).toContainText('KindPromotionStep')
   await expect(detail.locator('.health-chip').first()).toHaveAttribute('data-health-state', 'Error')
   await expect(detail).toContainText(`Message: ${failedMessage}`)
 })
