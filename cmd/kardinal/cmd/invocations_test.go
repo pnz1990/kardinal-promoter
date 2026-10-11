@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -107,13 +108,14 @@ func TestInvocations_Conflicts(t *testing.T) {
 	t.Setenv("KUBECONFIG", "/dev/null")
 	cases := map[string]string{
 		"promote my-app prod --env uat":                            `the environment is given twice: "prod" as an argument and "uat" with --env`,
-		"rollback my-app prod --stage uat":                         `the environment is given twice`,
+		"rollback my-app prod --stage uat":                         `the environment is given twice: "prod" as an argument and "uat" with --stage`,
+		"rollback my-app prod -e uat":                              `"uat" with --env`,
 		"metrics my-app --pipeline other":                          `the pipeline is given twice: "my-app" as an argument and "other" with --pipeline`,
 		"policy simulate my-app prod --pipeline other":             `the pipeline is given twice`,
 		"promote my-app":                                           `which environment? Give it after the pipeline: kardinal promote my-app <env>`,
 		"release-hold my-app":                                      `which environment?`,
 		"metrics":                                                  `which pipeline?`,
-		"override my-app prod --gate g --reason r --expires-in 2x": `invalid --expires-in`,
+		"override my-app prod --gate g --reason r --expires-in 2x": `invalid argument "2x" for "--expires-in" flag: want 30m, 4h or 2d`,
 	}
 	for line, want := range cases {
 		t.Run(line, func(t *testing.T) {
@@ -235,4 +237,25 @@ func splitWords(t *testing.T, s string) []string {
 		out = append(out, cur.String())
 	}
 	return out
+}
+
+// TestDurationFlag (C2): a duration flag prints the way it is typed, and no
+// default when it is unset.
+//
+// Covers CLI-MODEL-01.
+func TestDurationFlag(t *testing.T) {
+	for in, want := range map[string]string{"1h": "1h", "90m": "1h30m", "2d": "2d", "45s": "45s", "30m": "30m", "36h": "36h"} {
+		var d time.Duration
+		require.NoError(t, durationValue{&d}.Set(in), in)
+		assert.Equal(t, want, durationValue{&d}.String(), in)
+	}
+	var zero time.Duration
+	assert.Equal(t, "", durationValue{&zero}.String())
+
+	out, err := executeRoot(t, "rollback", "--help")
+	require.NoError(t, err)
+	assert.NotContains(t, out, "(default 0s)")
+	out, err = executeRoot(t, "override", "--help")
+	require.NoError(t, err)
+	assert.Contains(t, out, "(default 1h)")
 }

@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 )
 
 // Every command that names a pipeline and an environment takes them the same
@@ -28,36 +27,34 @@ import (
 // (--env, -e, --stage, --pipeline) keep working as aliases, and a positional
 // that disagrees with its flag is an error rather than a silent choice.
 
-// addEnvFlag registers --env (shorthand -e) on cmd with usage, and makes
-// --stage an alias of it.
+// addEnvFlag registers --env (shorthand -e) on cmd with usage, and --stage,
+// hidden, as another name of it.
 func addEnvFlag(cmd *cobra.Command, target *string, usage string) {
 	cmd.Flags().StringVarP(target, "env", "e", "", usage)
-	aliasFlag(cmd, "stage", "env")
+	cmd.Flags().StringVar(target, "stage", "", usage)
+	_ = cmd.Flags().MarkHidden("stage")
 }
 
-// aliasFlag makes --old an alias of --name on cmd's flags: cobra parses
-// --old as --name, and help lists --name only.
-func aliasFlag(cmd *cobra.Command, old, name string) {
-	prev := cmd.Flags().GetNormalizeFunc()
-	cmd.Flags().SetNormalizeFunc(func(f *pflag.FlagSet, n string) pflag.NormalizedName {
-		if n == old {
-			n = name
-		}
-		return prev(f, n)
-	})
+// envFlagName is the environment flag the user typed on cmd: --stage, or
+// --env (also for -e and when cmd is nil).
+func envFlagName(cmd *cobra.Command) string {
+	if cmd != nil && cmd.Flags().Changed("stage") {
+		return "--stage"
+	}
+	return "--env"
 }
 
 // envArgs returns the pipeline (args[0]) and the environment of a
-// <pipeline> [<env>] command: args[1], else the --env flag (flagEnv). Both
-// given and different is an error.
-func envArgs(args []string, flagEnv string) (pipeline, env string, err error) {
+// <pipeline> [<env>] command: args[1], else the environment flag of cmd
+// (flagEnv). Both given and different is an error.
+func envArgs(cmd *cobra.Command, args []string, flagEnv string) (pipeline, env string, err error) {
 	if len(args) == 0 {
 		return "", "", fmt.Errorf("a pipeline name is required")
 	}
 	pipeline, env = args[0], flagEnv
 	if len(args) > 1 {
 		if flagEnv != "" && flagEnv != args[1] {
-			return "", "", fmt.Errorf("the environment is given twice: %q as an argument and %q with --env; give it once", args[1], flagEnv)
+			return "", "", fmt.Errorf("the environment is given twice: %q as an argument and %q with %s; give it once", args[1], flagEnv, envFlagName(cmd))
 		}
 		env = args[1]
 	}
@@ -65,10 +62,10 @@ func envArgs(args []string, flagEnv string) (pipeline, env string, err error) {
 }
 
 // requireEnv is envArgs for a command that needs the environment.
-func requireEnv(cmdPath string, args []string, flagEnv string) (pipeline, env string, err error) {
-	pipeline, env, err = envArgs(args, flagEnv)
+func requireEnv(cmd *cobra.Command, args []string, flagEnv string) (pipeline, env string, err error) {
+	pipeline, env, err = envArgs(cmd, args, flagEnv)
 	if err == nil && env == "" {
-		err = fmt.Errorf("which environment? Give it after the pipeline: %s %s <env>", cmdPath, pipeline)
+		err = fmt.Errorf("which environment? Give it after the pipeline: %s %s <env>", cmd.CommandPath(), pipeline)
 	}
 	return pipeline, env, err
 }
@@ -112,11 +109,29 @@ func parseDuration(s string) (time.Duration, error) {
 // (parseDuration). The zero value means "not set".
 type durationValue struct{ d *time.Duration }
 
+// String is the duration as a flag takes it ("1h", "90m", "2d"), and "" for
+// zero, so help prints no default for an unset duration.
 func (v durationValue) String() string {
 	if v.d == nil || *v.d == 0 {
-		return "0s"
+		return ""
 	}
-	return v.d.String()
+	return durationText(*v.d)
+}
+
+// durationText writes d the way parseDuration reads it: whole days as "2d",
+// else Go's form without zero trailing units ("1h", "1h30m", "45s").
+func durationText(d time.Duration) string {
+	if d%(24*time.Hour) == 0 {
+		return strconv.Itoa(int(d/(24*time.Hour))) + "d"
+	}
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
 }
 
 func (v durationValue) Set(s string) error {

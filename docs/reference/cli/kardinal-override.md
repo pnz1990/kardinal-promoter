@@ -26,11 +26,11 @@ kardinal override <pipeline> [<env>] --gate <gate> --reason <text> [flags]
 ### Options
 
 ```
-  -e, --env string          Environment the override applies to (or give it after the pipeline; default: every environment)
-      --expires-in string   How long the override is active (30m, 4h, 2d) (default "1h")
-      --gate string         PolicyGate name to override
-  -h, --help                help for override
-      --reason string       Mandatory justification for the override (audit record)
+  -e, --env string            Environment the override applies to (or give it after the pipeline; default: every environment)
+      --expires-in duration   How long the override is active (30m, 4h, 2d) (default 1h)
+      --gate string           PolicyGate name to override
+  -h, --help                  help for override
+      --reason string         Mandatory justification for the override (audit record)
 ```
 
 ### Options inherited from parent commands

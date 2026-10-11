@@ -36,7 +36,7 @@ func newOverrideCmd() *cobra.Command {
 	var (
 		stage     string
 		reason    string
-		expiresIn string
+		expiresIn = time.Hour
 	)
 
 	cmd := &cobra.Command{
@@ -53,7 +53,7 @@ the Bundle waits. A single gate instance name is accepted too.`,
   kardinal override my-app --stage prod --gate change-freeze --reason "approved by CAB" --expires-in 4h`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			pipeline, env, err := envArgs(args, stage)
+			pipeline, env, err := envArgs(cmd, args, stage)
 			if err != nil {
 				return err
 			}
@@ -66,9 +66,6 @@ the Bundle waits. A single gate instance name is accepted too.`,
 			if gateName == "" {
 				return fmt.Errorf("--gate is required")
 			}
-			if _, err := parseDuration(expiresIn); err != nil {
-				return fmt.Errorf("invalid --expires-in %q: %w", expiresIn, err)
-			}
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("override: %w", err)
@@ -79,7 +76,7 @@ the Bundle waits. A single gate instance name is accepted too.`,
 
 	addEnvFlag(cmd, &stage, "Environment the override applies to (or give it after the pipeline; default: every environment)")
 	cmd.Flags().StringVar(&reason, "reason", "", "Mandatory justification for the override (audit record)")
-	cmd.Flags().StringVar(&expiresIn, "expires-in", "1h", "How long the override is active (30m, 4h, 2d)")
+	cmd.Flags().Var(durationValue{&expiresIn}, "expires-in", "How long the override is active (30m, 4h, 2d)")
 	cmd.Flags().String("gate", "", "PolicyGate name to override")
 	_ = cmd.MarkFlagRequired("reason")
 	_ = cmd.MarkFlagRequired("gate")
@@ -97,15 +94,10 @@ the Bundle waits. A single gate instance name is accepted too.`,
 func overrideFn(
 	w interface{ Write([]byte) (int, error) },
 	c sigs_client.Client,
-	ns, pipeline, stage, gateName, reason, expiresIn string,
+	ns, pipeline, stage, gateName, reason string,
+	expDuration time.Duration,
 ) error {
 	ctx := context.Background()
-
-	// Parse expiry duration
-	expDuration, err := parseDuration(expiresIn)
-	if err != nil {
-		return fmt.Errorf("invalid --expires-in %q: %w", expiresIn, err)
-	}
 
 	// Say so when the pipeline is wrong, rather than that it has no gate.
 	var pl v1alpha1.Pipeline
