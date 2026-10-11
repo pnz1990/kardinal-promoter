@@ -131,10 +131,7 @@ func stripAges(t *testing.T, rows []map[string]string, col string, re *regexp.Re
 	return rows
 }
 
-var (
-	ageRE = regexp.MustCompile(`^\d+[smhd]$`)
-	agoRE = regexp.MustCompile(`^\d+[smhd] ago$`)
-)
+var agoRE = regexp.MustCompile(`^\d+[smhd] ago$`)
 
 // truncated is s cut to 35 runes with "...", as status shows a gate's
 // reason.
