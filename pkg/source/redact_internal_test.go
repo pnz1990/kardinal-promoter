@@ -92,5 +92,31 @@ func TestWatchers_URLCredentialsNotRedirected(t *testing.T) {
 		assert.NotContains(t, err.Error(), "SECRET")
 		assert.Contains(t, err.Error(), "refusing a redirect from https to http", glob)
 	}
+	// The go-git path, called directly.
+	w := &GitWatcher{RepoURL: repo}
+	w.WithHTTPClient(tlsSrv.Client())
+	sess, done, err := w.uploadPackSession(context.Background())
+	require.NoError(t, err)
+	defer done()
+	_, err = sess.AdvertisedReferencesContext(context.Background())
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "SECRET")
+	assert.Contains(t, err.Error(), "refusing a redirect from https to http", "go-git path")
 	assert.Zero(t, leaked.Load(), "the http server never got the credentials")
+}
+
+// TestGitWatcher_URLCredentialsRefused (#1721 QA round 3): when the
+// credentials came from the URL and the server refuses them, the message
+// says so instead of asking for a secretRef.
+func TestGitWatcher_URLCredentialsRefused(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	w := &GitWatcher{RepoURL: strings.Replace(srv.URL, "https://", "https://u:ghp_SECRET@", 1) + "/o/r"}
+	w.WithHTTPClient(srv.Client())
+	_, err := w.Watch(context.Background(), "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "the credentials in the URL were refused")
+	assert.NotContains(t, err.Error(), "SECRET")
 }

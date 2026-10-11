@@ -212,6 +212,7 @@ func (w *GitWatcher) fetchLatestSHA(ctx context.Context, branch string) (string,
 	if httpClient == nil {
 		httpClient = newHTTPClient()
 	}
+	_, _, secretCreds := w.httpBasic()
 	if user, pass, ok := w.httpCredentials(urlUser); ok {
 		req.SetBasicAuth(user, pass)
 		// net/http keeps the Authorization header on a same-host redirect,
@@ -230,9 +231,13 @@ func (w *GitWatcher) fetchLatestSHA(ctx context.Context, branch string) (string,
 	case http.StatusNotFound:
 		return "", fmt.Errorf("repository not found: %s (HTTP 404)", repo)
 	case http.StatusUnauthorized, http.StatusForbidden:
-		if _, _, ok := w.httpBasic(); ok {
+		if secretCreds {
 			return "", fmt.Errorf("access denied to %s (HTTP %d) with the credentials from secretRef; "+
 				"check that the token can read the repository", repo, resp.StatusCode)
+		}
+		if urlUser != nil {
+			return "", fmt.Errorf("access denied to %s (HTTP %d): the credentials in the URL were refused; "+
+				"check them, or put a token in a Secret and set secretRef", repo, resp.StatusCode)
 		}
 		return "", fmt.Errorf("authentication required for %s (HTTP %d); the repository may be private: "+
 			"set secretRef to a Secret with a token for it", repo, resp.StatusCode)

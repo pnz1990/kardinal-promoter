@@ -33,17 +33,19 @@ var scpLikeURL = regexp.MustCompile(`^([A-Za-z0-9._~-]+)@([A-Za-z0-9.-]+):(.+)$`
 // is left alone.
 var userinfoInURL = regexp.MustCompile(`//[^/?#\s]*@`)
 
-// quotedUserinfo matches the userinfo of a quoted URL, as a *url.Error
-// prints it ("Get \"https://u:p w/x@host/...\""): inside the quotes a
-// password may hold a space or a "/", so the match runs to the last "@"
-// before the query, the fragment or the closing quote.
-var quotedUserinfo = regexp.MustCompile(`("[A-Za-z][A-Za-z0-9+.-]*://)[^"?#]*@`)
+// quotedURL matches a quoted URL, as a *url.Error prints it
+// ("Get \"https://u:p@host/...\""). Each one is redacted on its own with
+// RedactURL: parsed when it parses, so an "@" in its path ("/@scope/pkg",
+// "/@v/list") is kept, and cut to its last "@" when it does not (a password
+// with a space or a "/").
+var quotedURL = regexp.MustCompile(`"([A-Za-z][A-Za-z0-9+.-]*://[^"]*)"`)
 
 // secretParams are the URL parameter names (compared lower-cased, after
 // percent-decoding) whose values are credentials.
 var secretParams = map[string]bool{
 	"access_token": true, "token": true, "private_token": true, "password": true,
 	"api_key": true, "client_secret": true, "x-amz-signature": true, "x-amz-credential": true,
+	"x-amz-security-token": true, "sig": true, "refresh_token": true, "apikey": true, "key": true,
 }
 
 // urlParam matches one key=value pair of a query or fragment, after "?",
@@ -298,7 +300,14 @@ func (e redactedError) Unwrap() error { return e.err }
 // takes many texts for a relative URL and returns them percent-encoded, with
 // the credentials kept.
 func RedactText(s string) string {
-	return redactParams(userinfoInURL.ReplaceAllString(quotedUserinfo.ReplaceAllString(s, "${1}"), "//"))
+	s = quotedURL.ReplaceAllStringFunc(s, func(m string) string {
+		inner := m[1 : len(m)-1]
+		if !strings.Contains(inner, "@") {
+			return m
+		}
+		return `"` + RedactURL(inner) + `"`
+	})
+	return redactParams(userinfoInURL.ReplaceAllString(s, "//"))
 }
 
 // webhookSignatureHeaders lists the webhook authentication headers of the

@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -270,4 +271,31 @@ func TestRedactText_QAPatterns(t *testing.T) {
 		assert.NotContains(t, got, "SECRET", in)
 		assert.Contains(t, got, "host/repo", in)
 	}
+}
+
+// TestRedactText_QuotedPathAt (#1721 QA round 3): a quoted URL whose path has
+// an "@" (npm scopes, @types, the Go module proxy) keeps its host; its
+// userinfo is still removed; the new credential keys are redacted, and "key"
+// only as the whole parameter name.
+func TestRedactText_QuotedPathAt(t *testing.T) {
+	for _, u := range []string{
+		"https://registry.npmjs.org/@scope/pkg",
+		"https://registry.npmjs.org/@types/node",
+		"https://proxy.golang.org/github.com/x/y/@v/list",
+	} {
+		in := `Get "` + u + `": EOF`
+		assert.Equal(t, in, scm.RedactText(in), "the path's @ is not userinfo")
+		withUser := `Get "` + strings.Replace(u, "https://", "https://u:SECRET@", 1) + `": EOF`
+		assert.Equal(t, in, scm.RedactText(withUser))
+	}
+	for _, in := range []string{
+		"https://s3.example/o?X-Amz-Security-Token=SECRET",
+		"https://acct.blob.core.windows.net/c/b?sv=1&sig=SECRET",
+		"https://idp.example/t?refresh_token=SECRET",
+		"https://api.example/x?apikey=SECRET",
+		"https://maps.example/x?key=SECRET",
+	} {
+		assert.NotContains(t, scm.RedactText(in), "SECRET", in)
+	}
+	assert.Equal(t, "https://zoo.example/x?monkey=banana", scm.RedactText("https://zoo.example/x?monkey=banana"))
 }
