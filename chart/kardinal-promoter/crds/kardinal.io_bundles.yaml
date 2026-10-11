@@ -269,6 +269,10 @@ spec:
                 image Bundle deploys only its images; set type config or mixed, or
                 remove configRef'
               rule: '!(self.type == ''image'' && has(self.configRef))'
+            - message: 'spec.configRef is used only by config and mixed Bundles: a
+                chart Bundle deploys only its chart version; remove configRef, or
+                create a separate config Bundle'
+              rule: '!(self.type == ''chart'' && has(self.configRef))'
             - message: 'spec.rejected cannot be removed: a rejected Bundle stays rejected'
               rule: '!has(oldSelf.rejected) || has(self.rejected)'
             - message: spec.rejected is immutable once set

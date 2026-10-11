@@ -108,7 +108,7 @@ jobs:
 | `namespace` | No | `default` | Kubernetes namespace. The action always sends it, so set it when the controller runs with `--watch-namespace`, or the API answers `403` |
 | `kardinal-url` | Yes | — | Base URL of the Bundle API (the controller's webhook listener, `:8083` by default) |
 | `ui-url` | No | — | Base URL of the kardinal UI (`:8082` by default). Sets `bundle-status-url`; without it that output is empty |
-| `type` | No | `image` | Bundle type (`image`, `config`, `mixed`) |
+| `type` | No | empty | Bundle type (`image`, `config`, `mixed`). Empty leaves it out of the request, so the controller infers it: `mixed` for images and `config-commit`, `config` for `config-commit` alone, else `image` |
 | `config-commit` | For `config` and `mixed` | — | Commit SHA of the configuration change (`configRef.commitSHA`) |
 | `config-repo` | No | the Pipeline's repository | Git repository of `config-commit` (`configRef.gitRepo`) |
 

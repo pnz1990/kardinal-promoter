@@ -7,7 +7,7 @@ inputs:
     description: 'Name of the kardinal Pipeline to promote'
     required: true
   type:
-    description: 'Bundle type: image, config, mixed or chart. Empty (the default) lets the controller infer it: mixed for images and config-commit, config for config-commit alone, else image.'
+    description: 'Bundle type: image, config or mixed. Empty (the default) lets the controller infer it: mixed for images and config-commit, config for config-commit alone, else image.'
     required: false
     default: ''
   image:

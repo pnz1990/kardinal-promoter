@@ -25,6 +25,7 @@ import (
 // +kubebuilder:validation:XValidation:rule="has(self.provenance) == has(oldSelf.provenance) && (!has(self.provenance) || self.provenance == oldSelf.provenance)",message="spec.provenance is immutable: create a new Bundle"
 // +kubebuilder:validation:XValidation:rule="has(self.intent) == has(oldSelf.intent) && (!has(self.intent) || self.intent == oldSelf.intent)",message="spec.intent is immutable: create a new Bundle"
 // +kubebuilder:validation:XValidation:rule="!(self.type == 'image' && has(self.configRef))",message="spec.configRef is used only by config and mixed Bundles: an image Bundle deploys only its images; set type config or mixed, or remove configRef"
+// +kubebuilder:validation:XValidation:rule="!(self.type == 'chart' && has(self.configRef))",message="spec.configRef is used only by config and mixed Bundles: a chart Bundle deploys only its chart version; remove configRef, or create a separate config Bundle"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.rejected) || has(self.rejected)",message="spec.rejected cannot be removed: a rejected Bundle stays rejected"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.rejected) || !has(self.rejected) || self.rejected == oldSelf.rejected",message="spec.rejected is immutable once set"
 type BundleSpec struct {
