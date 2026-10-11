@@ -19,6 +19,7 @@
 import { useState, useCallback } from 'react'
 import { api } from '../api/client'
 import { ConfirmDialog, actionErrorMessage } from './ConfirmDialog'
+import { Button } from '../ui/Button'
 import '../styles/ActionBar.css'
 
 // ─── ActionBar ────────────────────────────────────────────────────────────────
@@ -73,21 +74,24 @@ export function ActionBar({ pipelineName, namespace, paused, onRefresh }: Action
         className="action-bar"
       >
         {paused ? (
-          <button
+          // While paused, Resume is the page's primary action.
+          <Button
+            variant="primary"
+            icon="play"
             onClick={() => { setActionError(undefined); setPendingAction('resume') }}
             aria-label="Resume pipeline"
-            className="action-bar__button action-bar__button--resume"
           >
-            ▶ Resume
-          </button>
+            Resume
+          </Button>
         ) : (
-          <button
+          <Button
+            variant="secondary"
+            icon="pause"
             onClick={() => { setActionError(undefined); setPendingAction('pause') }}
             aria-label="Pause pipeline"
-            className="action-bar__button action-bar__button--pause"
           >
-            ⏸ Pause
-          </button>
+            Pause
+          </Button>
         )}
 
         {/* While a dialog is open the error shows inside it; one alert, not two. */}

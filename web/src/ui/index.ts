@@ -8,6 +8,7 @@ export { Button, IconButton, type ButtonProps, type ButtonVariant, type ButtonSi
 export { StatusChip, Badge, Tag, type StatusChipProps, type BadgeProps, type TagProps, type TagKind } from './Chips'
 export { Dialog, ConfirmDialog, Drawer, type DialogProps, type ConfirmDialogProps, type DrawerProps } from './Dialog'
 export { Tabs, TabPanel, tabId, panelId, type TabsProps, type TabPanelProps, type TabItem } from './Tabs'
+export { MenuButton, type MenuButtonProps } from './MenuButton'
 export { Icon, ICON_NAMES, type IconName, type IconProps } from './Icon'
 export { CodeInline, CodeBlock, Kbd, Stack, type CodeBlockProps, type StackProps, type Space } from './Text'
 export { TONES, toneVars, type Tone } from './tone'

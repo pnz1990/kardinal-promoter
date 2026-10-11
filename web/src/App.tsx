@@ -10,13 +10,13 @@
 // namespaces never share a header, bundle list or DAG.
 // Every load carries a view sequence number; a response that arrives after the
 // user moved to another pipeline or bundle is dropped.
-// #326: selectedNode is lifted here so NodeDetail renders as a split panel
-// sibling of DAGView rather than a position:fixed overlay.
+// #326: selectedNode is lifted here so the stage drawer (U3) opens beside
+// DAGView.
 // #740: URL routing — pipeline and node selection persisted in hash fragment.
 // #746: Global keyboard shortcuts — ?, r, Esc.
 // #747: ErrorBoundary wraps async components to prevent white-screen crashes.
 // #800: / shortcut to focus pipeline search input.
-import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect, type RefObject } from 'react'
 import { PipelineList } from './components/PipelineList'
 import { PipelineOpsTable } from './components/PipelineOpsTable'
 import { DAGView } from './components/DAGView'
@@ -25,12 +25,20 @@ import { HealthChip } from './components/HealthChip'
 import { RejectedLiveBanner } from './components/RejectedLiveBanner'
 import { BlockedBanner } from './components/BlockedBanner'
 import { InsecureConnectionBanner } from './components/InsecureConnectionBanner'
+import { Breadcrumb } from './components/Breadcrumb'
+import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
+import { Icon, Kbd, TabPanel, Tabs } from './ui'
+import { NotFound } from './components/NotFound'
+import { NARROW_QUERY, useMediaQuery } from './useMediaQuery'
+import { useModalFocus } from './useModalFocus'
+import { displayState } from './displayStates.gen'
+import { versionName } from './versionName'
 import { BundleTimeline } from './components/BundleTimeline'
 import { BundleDiffPanel } from './components/BundleDiffPanel'
 import { BundleTypeBadge } from './components/BundleTypeBadge'
 import { PolicyGatesPanel } from './components/PolicyGatesPanel'
 import { PipelineLaneView } from './components/PipelineLaneView'
-import { FleetHealthBar, filterPipelines, type FleetFilter } from './components/FleetHealthBar'
+import { FleetHealthBar, filterPipelines, isFleetFilter, type FleetFilter } from './components/FleetHealthBar'
 import { FleetBoard } from './components/FleetBoard'
 import { ReleaseMetricsBar } from './components/ReleaseMetricsBar'
 import { ActionBar } from './components/ActionBar'
@@ -46,7 +54,7 @@ import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
 import { useTheme, themeControlLabel } from './ThemeContext'
 import './styles/App.css'
-import { useUrlState } from './useUrlState'
+import { EMPTY_URL_STATE, serializeHash, useUrlState, type PipelineTab } from './useUrlState'
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
 import { resolveShownBundle } from './bundleSelection'
 import { environmentUpstreams, terminalEnvironments } from './fleetModel'
@@ -71,8 +79,21 @@ function formatElapsed(seconds: number | null): string {
   return `${mins}m ago`
 }
 
+/** The environment a gate node holds: the PromotionStep its edge leads to. */
+function gatedEnvironment(node: GraphNode, graph: { nodes?: GraphNode[]; edges?: { from: string; to: string }[] } | null | undefined): string | undefined {
+  const to = graph?.edges?.filter(e => e.from === node.id).map(e => graph.nodes?.find(n => n.id === e.to))
+    .find(n => n?.type === 'PromotionStep')
+  return to?.environment
+}
+
+/** Focus handling for the pipeline drawer while it is open (Esc closes it). */
+function SidebarFocus({ sidebarRef, onClose }: { sidebarRef: RefObject<HTMLElement | null>; onClose: () => void }) {
+  useModalFocus(sidebarRef, onClose)
+  return null
+}
+
 export function App() {
-  const { theme, preference, toggleTheme } = useTheme()
+  const { theme, preference, toggleTheme, density, setDensity } = useTheme()
   // #740: URL routing — pipeline and node selection backed by hash fragment.
   const [urlState, setUrlState] = useUrlState()
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
@@ -80,9 +101,10 @@ export function App() {
   const [pipelinesError, setPipelinesError] = useState<string | undefined>()
 
   const selectedPipeline = urlState.pipeline
+  // The pipeline page's tab (tab= in the URL; Map when unset).
+  const pipelineTab = urlState.tab ?? 'map'
   const [bundles, setBundles] = useState<Bundle[]>([])
   const [bundlesLoading, setBundlesLoading] = useState(false)
-  const [bundleHistoryOpen, setBundleHistoryOpen] = useState(false)
   // Name of the bundle whose graph is on screen.
   const [shownBundleName, setShownBundleName] = useState<string | undefined>()
 
@@ -101,38 +123,51 @@ export function App() {
   // #740: selectedNode ID is persisted in URL hash (node= param); full GraphNode object in local state.
   const [selectedNode, setSelectedNodeLocal] = useState<GraphNode | null>(null)
 
-  /** Update both local state and URL hash when a node is selected. The URL
-   *  names the environment (node=<env>, the stage drawer contract #1701); a
-   *  gate opens its environment's drawer at "why it's waiting". */
+  /** Update both local state and the URL when a node is selected: an environment's step is
+   *  the …/env/<env> route (the stage drawer, #1701); a gate opens the drawer of the
+   *  environment it gates, at "why it's waiting". */
   const setSelectedNode = useCallback((node: GraphNode | null) => {
     setSelectedNodeLocal(node)
-    setUrlState({ node: node?.environment || node?.id || undefined, section: node?.type === 'PolicyGate' ? 'why' : undefined })
-  }, [setUrlState])
+    if (!node) { setUrlState({ env: undefined, node: undefined, section: undefined }); return }
+    const env = node.type === 'PromotionStep' ? node.environment : gatedEnvironment(node, graph)
+    setUrlState({ env: env || undefined, node: undefined, section: node.type === 'PromotionStep' ? undefined : 'why' })
+  }, [setUrlState, graph])
 
   // #740: When graph data changes, restore selectedNode from URL if a node= param is present
   // and the current selectedNode doesn't already match. With no node= (Back to an entry
   // before the node was opened), the details close.
   useEffect(() => {
-    const nodeId = urlState.node
-    if (!nodeId) {
-      if (selectedNode?.id) setSelectedNodeLocal(null)
+    const { env, node: nodeId } = urlState
+    if (!env && !nodeId) {
+      if (selectedNode) setSelectedNodeLocal(null)
       return
     }
     if (!graph) return
-    if (selectedNode && (selectedNode.environment || selectedNode.id) === nodeId) return
-    const node = graph.nodes?.find(n => n.type === 'PromotionStep' && n.environment === nodeId)
-      ?? graph.nodes?.find(n => n.id === nodeId)
+    // A node= link (a gate, or a step from before the env route): open the drawer of the
+    // environment it names, replacing the entry so Back does not return to it.
+    if (!env && nodeId) {
+      const n = graph.nodes?.find(x => x.id === nodeId || (x.type === 'PromotionStep' && x.environment === nodeId))
+      const target = n && (n.type === 'PromotionStep' ? n.environment : gatedEnvironment(n, graph))
+      if (target) setUrlState({ env: target, node: undefined, section: n?.type === 'PromotionStep' ? urlState.section : 'why' }, { replace: true })
+      return
+    }
+    const matches = (n: GraphNode) => env ? n.type === 'PromotionStep' && n.environment === env : n.id === nodeId
+    if (selectedNode && matches(selectedNode)) return
+    const node = graph.nodes?.find(matches)
     if (node) setSelectedNodeLocal(node)
-  }, [graph, urlState.node, selectedNode?.id])
+  }, [graph, urlState, selectedNode, setUrlState])
+
+  // U3: the environment whose stage drawer is open (the …/env/<env> route).
+  const stageEnv = urlState.env
 
   // #338: Bundle diff comparison state. Shift-click picks the bundle to
   // compare (compareTarget); the timeline then offers Compare and clear.
   // #740: the comparison is open while the URL has bundle=, so a link opens it.
   // Closing it keeps the pick, so Compare and clear are where focus returns.
   const [compareTarget, setCompareTarget] = useState<string | undefined>()
-  const showDiffPanel = !!urlState.bundle
+  const showDiffPanel = !!urlState.compare
   const closeDiffPanel = useCallback(() => {
-    setUrlState({ bundle: undefined })
+    setUrlState({ compare: undefined })
   }, [setUrlState])
 
   // Refresh indicator: tracks last successful poll for the staleness indicator.
@@ -144,15 +179,27 @@ export function App() {
   // #913: insecure connection banner — dismissed state for the current session.
   const [insecureBannerDismissed, setInsecureBannerDismissed] = useState(false)
 
-  // #462: view mode toggle — 'list' (sidebar) | 'ops-table' (full-width operations table).
-  const [viewMode, setViewMode] = useState<'list' | 'ops-table'>('list')
+  // #462: view mode — 'list' (sidebar) | 'ops-table' (full-width operations table), in the
+  // URL as view=ops.
+  type ViewMode = 'list' | 'ops-table'
+  const viewMode: ViewMode = urlState.view === 'ops' ? 'ops-table' : 'list'
+  const setViewMode = useCallback((v: ViewMode | ((prev: ViewMode) => ViewMode)) => {
+    const next = typeof v === 'function' ? v(viewMode) : v
+    setUrlState({ view: next === 'ops-table' ? 'ops' : undefined })
+  }, [viewMode, setUrlState])
 
-  // #505: Fleet filter — drives which pipelines are visible in the sidebar list.
-  const [fleetFilter, setFleetFilter] = useState<FleetFilter>('all')
+  // #505: Fleet filter — drives which pipelines are visible in the sidebar list; in the URL
+  // as filter=.
+  const fleetFilter: FleetFilter = isFleetFilter(urlState.filter) ? urlState.filter : 'all'
+  const setFleetFilter = useCallback((f: FleetFilter) => {
+    setUrlState({ filter: f === 'all' ? undefined : f })
+  }, [setUrlState])
   const filteredPipelines = filterPipelines(pipelines, fleetFilter)
 
   // #746: Keyboard shortcuts help panel visibility.
   const [showShortcutsPanel, setShowShortcutsPanel] = useState(false)
+  // ⌘K / Ctrl+K: the command palette.
+  const [paletteOpen, setPaletteOpen] = useState(false)
 
   // #800: Ref for the pipeline search input — used by the / keyboard shortcut.
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -248,13 +295,13 @@ export function App() {
   // deep link). Everything tied to the previous pipeline is cleared first.
   useEffect(() => {
     const seq = ++viewSeq.current
-    userBundleRef.current = undefined
+    // The version the URL names (…/v/<bundle>), if any, is the pick.
+    userBundleRef.current = urlState.version
     setShownBundleName(undefined)
     setGraph(undefined)
     setGraphError(undefined)
     setActiveSteps([])
     setBundles([])
-    setBundleHistoryOpen(false)
     setShowBlockedOnly(false)
     setSelectedNodeLocal(null)
     setCompareTarget(undefined)
@@ -268,12 +315,22 @@ export function App() {
     void loadPipeline(selectedPipeline, urlState.ns, seq)
   }, [selectedPipeline, urlState.ns, loadPipeline])
 
-  // An open comparison (bundle=, from Compare, a link or Back) is also the
+  // An open comparison (compare=, from Compare, a link or Back) is also the
   // pick. This runs after the reset above, so a link that names a pipeline
-  // and a bundle= keeps the pick when the comparison closes.
+  // and a compare= keeps the pick when the comparison closes.
   useEffect(() => {
-    if (urlState.bundle) setCompareTarget(urlState.bundle)
-  }, [urlState.bundle, selectedPipeline, urlState.ns])
+    if (urlState.compare) setCompareTarget(urlState.compare)
+  }, [urlState.compare, selectedPipeline, urlState.ns])
+
+  // With exactly one pipeline, a first visit (no route in the URL) opens it directly.
+  const openSingle = useRef(window.location.hash === '' || window.location.hash === '#')
+  useEffect(() => {
+    if (!openSingle.current || pipelinesLoading) return
+    openSingle.current = false
+    if (!selectedPipeline && pipelines.length === 1) {
+      setUrlState({ pipeline: pipelines[0].name, ns: pipelines[0].namespace }, { replace: true })
+    }
+  }, [pipelines, pipelinesLoading, selectedPipeline, setUrlState])
 
   // Poll pipeline list every 5 seconds.
   usePolling(doFetchAll, POLL_INTERVAL_MS)
@@ -302,28 +359,27 @@ export function App() {
     onRefresh: useCallback(() => { void manualRefresh() }, [manualRefresh]),
     onEscape: useCallback(() => {
       if (showShortcutsPanel) { setShowShortcutsPanel(false); return }
-      if (selectedNode || urlState.node) { setSelectedNode(null); return }
+      if (selectedNode || urlState.env) { setSelectedNode(null); return }
       if (showDiffPanel) { closeDiffPanel(); return }
-    }, [showShortcutsPanel, selectedNode, urlState.node, showDiffPanel, setSelectedNode, closeDiffPanel]),
+    }, [showShortcutsPanel, selectedNode, urlState.env, showDiffPanel, setSelectedNode, closeDiffPanel]),
     // #800: / focuses the pipeline search input
     onSearch: useCallback(() => {
       searchInputRef.current?.focus()
     }, []),
+    onPalette: useCallback(() => setPaletteOpen(true), []),
   })
 
   // One history entry per switch: the new pipeline, with no node or diff open.
   // The load effect above does the fetching.
   const handleSelectPipeline = useCallback((name: string, namespace: string, env?: string) => {
     setSelectedNodeLocal(null)
-    setUrlState({ pipeline: name, ns: namespace, node: env, section: undefined, bundle: undefined })
+    setUrlState({ pipeline: name, ns: namespace, env, node: undefined, version: undefined, compare: undefined, view: undefined })
   }, [setUrlState])
 
   const activePipeline = selectedPipeline
     ? pipelines.find(p => p.name === selectedPipeline && (!urlState.ns || p.namespace === urlState.ns))
     : undefined
   const selectedNamespace = urlState.ns ?? activePipeline?.namespace
-  // The environment whose stage drawer is open: node= names it (#1701).
-  const stageEnv = urlState.node ? (selectedNode?.environment || urlState.node) : undefined
   const activeBundle = shownBundleName ? bundles.find(b => b.name === shownBundleName) : undefined
   // The picked comparison bundle, while the pipeline still has it and it is
   // not the bundle on screen (which is the one it is compared against).
@@ -331,9 +387,8 @@ export function App() {
     ? compareTarget
     : undefined
 
-  // Handler for timeline bundle selection — shows that bundle until the user
-  // picks another one or it disappears.
-  const handleTimelineBundleSelect = useCallback((bundleName: string) => {
+  // Shows a bundle's graph and steps until the user picks another one or it disappears.
+  const showBundle = useCallback((bundleName: string) => {
     const seq = ++viewSeq.current
     const stale = () => seq !== viewSeq.current
     // The timeline lists the selected pipeline's bundles, so the picked one is
@@ -345,7 +400,7 @@ export function App() {
     setCompareTarget(t => t === bundleName ? undefined : t)
     setGraphLoading(true)
     setGraphError(undefined)
-    setSelectedNode(null) // close detail panel when switching bundles
+    setSelectedNodeLocal(null)
     void track(seq, Promise.all([api.getGraph(bundleName, namespace), api.getSteps(bundleName, namespace)])
       .then(([g, steps]) => {
         if (stale()) return
@@ -354,7 +409,28 @@ export function App() {
       })
       .catch(e => { if (!stale()) setGraphError(errorText(e)) })
       .finally(() => { if (!stale()) setGraphLoading(false) }))
-  }, [setSelectedNode, bundles, selectedNamespace])
+  }, [bundles, selectedNamespace])
+
+  // A timeline pick is the …/v/<bundle> route (one history entry, details closed).
+  const handleTimelineBundleSelect = useCallback((bundleName: string) => {
+    showBundle(bundleName)
+    setUrlState({ version: bundleName, env: undefined, node: undefined })
+  }, [setUrlState, showBundle])
+
+  // The URL's version, from a pick, a link, Back or Forward: show it once the pipeline's
+  // bundles are loaded. Without one, the pipeline's own choice (resolveShownBundle) applies.
+  useEffect(() => {
+    if (!selectedPipeline || bundlesLoading) return
+    const v = urlState.version
+    if (v) {
+      if (v !== shownBundleName && bundles.some(b => b.name === v)) showBundle(v)
+      return
+    }
+    if (userBundleRef.current) {
+      userBundleRef.current = undefined
+      void loadPipeline(selectedPipeline, urlState.ns, ++viewSeq.current)
+    }
+  }, [urlState.version, urlState.ns, selectedPipeline, bundles, bundlesLoading, shownBundleName, showBundle, loadPipeline])
 
   // Namespace chip: the selected pipeline's namespace, or the only namespace.
   const currentNamespace = activePipeline?.namespace
@@ -391,6 +467,20 @@ export function App() {
     return ids
   }, [graph])
 
+  // The environments those gates guard, in the order the graph lists them.
+  const blockedEnvironments = useMemo(
+    () => (graph?.nodes ?? []).filter(n => blockedGateIds.has(n.id)).map(n => n.environment),
+    [graph, blockedGateIds],
+  )
+  // Stages of the shown version whose promotion failed (the Activity tab groups them).
+  const failedStepCount = activeSteps.filter(st => st.state === 'Failed').length
+
+  // A route naming a pipeline or a version the cluster does not have says so (NotFound),
+  // and never shows another one in its place.
+  const pipelineMissing = !!selectedPipeline && !pipelinesLoading && !pipelinesError && !activePipeline
+  const versionMissing = !!activePipeline && !!urlState.version && !bundlesLoading
+    && !bundles.some(b => b.name === urlState.version)
+
   // When showBlockedOnly is active, pass the blocked IDs to DAGView for highlight.
   const highlightIds = showBlockedOnly ? blockedGateIds : undefined
 
@@ -420,6 +510,32 @@ export function App() {
   // Use the bundle graph when available; fall back to static topology (#525).
   const displayGraph = graph ?? staticGraph
 
+  // Below the md breakpoint the pipeline list is a drawer, so the page gets the full width.
+  const narrow = useMediaQuery(NARROW_QUERY)
+  const [navOpen, setNavOpen] = useState(false)
+  const sidebarRef = useRef<HTMLElement>(null)
+  const navButtonRef = useRef<HTMLButtonElement>(null)
+  const closeNav = useCallback(() => {
+    setNavOpen(false)
+    navButtonRef.current?.focus()
+  }, [])
+  // Going somewhere closes the drawer.
+  useEffect(() => { setNavOpen(false) }, [urlState.pipeline, urlState.ns, urlState.env, urlState.view, viewMode])
+  const navButton = narrow ? (
+    <button
+      ref={navButtonRef}
+      type="button"
+      className="k-icon-button k-icon-button--md app-topbar__nav"
+      aria-label="Pipelines"
+      title="Pipelines"
+      aria-expanded={navOpen}
+      aria-controls="app-sidebar"
+      onClick={() => setNavOpen(o => !o)}
+    >
+      <Icon name="menu" />
+    </button>
+  ) : null
+
   // #913: Insecure connection warning — plain HTTP from a non-loopback address.
   // It heads every main view, so it shows before any pipeline loads (the API
   // may refuse the page's requests outright).
@@ -431,8 +547,47 @@ export function App() {
     />
   )
 
+  const paletteCommands = useMemo<PaletteCommand[]>(() => {
+    const go: PaletteCommand[] = [{
+      id: 'go:fleet', group: 'Go to', label: 'Pipelines', hint: 'fleet',
+      run: () => setUrlState({ ...EMPTY_URL_STATE, filter: urlState.filter, q: urlState.q }),
+    }]
+    for (const p of pipelines) {
+      go.push({ id: `go:p:${p.namespace}/${p.name}`, group: 'Go to', label: p.name, hint: p.namespace, run: () => handleSelectPipeline(p.name, p.namespace) })
+    }
+    for (const p of pipelines) {
+      for (const e of p.environmentTopology ?? []) {
+        go.push({
+          id: `go:e:${p.namespace}/${p.name}/${e.name}`, group: 'Go to', label: `${p.name} › ${e.name}`, hint: p.namespace,
+          run: () => handleSelectPipeline(p.name, p.namespace, e.name),
+        })
+      }
+    }
+    if (activePipeline) {
+      for (const b of bundles) {
+        go.push({
+          id: `go:v:${b.name}`, group: 'Go to', label: `Version ${b.name}`, hint: activePipeline.name, keywords: b.provenance?.commitSHA,
+          run: () => handleTimelineBundleSelect(b.name),
+        })
+      }
+    }
+    const next = preference === 'system' ? 'Light' : preference === 'light' ? 'Dark' : 'System'
+    const act: PaletteCommand[] = [
+      { id: 'do:theme', group: 'Do', label: `Switch the theme to ${next}`, hint: 'theme', run: toggleTheme },
+      {
+        id: 'do:density', group: 'Do', label: density === 'compact' ? 'Use comfortable density' : 'Use compact density', hint: 'density',
+        run: () => setDensity(density === 'compact' ? 'comfortable' : 'compact'),
+      },
+      { id: 'do:refresh', group: 'Do', label: 'Refresh now', hint: 'r', run: () => { void manualRefresh() } },
+      { id: 'do:ops', group: 'Do', label: viewMode === 'ops-table' ? 'Show the fleet board' : 'Show the operations table', run: () => setViewMode(v => v === 'list' ? 'ops-table' : 'list') },
+      { id: 'do:shortcuts', group: 'Do', label: 'Show keyboard shortcuts', hint: '?', run: () => setShowShortcutsPanel(true) },
+    ]
+    return [...go, ...act]
+  }, [pipelines, activePipeline, bundles, preference, density, viewMode, urlState.filter, urlState.q, setUrlState,
+    handleSelectPipeline, handleTimelineBundleSelect, toggleTheme, setDensity, manualRefresh, setViewMode])
+
   return (
-    <div className="app">
+    <div className="app" data-narrow={narrow ? '' : undefined}>
       {/* The first Tab stop: past the sidebar to the main content. */}
       <a className="skip-link" href="#main-content"
         onClick={e => { e.preventDefault(); document.getElementById('main-content')?.focus() }}>
@@ -442,13 +597,22 @@ export function App() {
       {showShortcutsPanel && (
         <KeyboardShortcutsPanel onClose={() => setShowShortcutsPanel(false)} />
       )}
-      {/* Sidebar */}
-      <aside className="app-sidebar">
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={paletteCommands} />
+      {/* Sidebar; below the md breakpoint a drawer over the page, opened from the top bar. */}
+      {narrow && navOpen && <SidebarFocus sidebarRef={sidebarRef} onClose={closeNav} />}
+      {narrow && navOpen && <div className="app-sidebar-scrim" aria-hidden="true" onClick={closeNav} />}
+      <aside
+        ref={sidebarRef}
+        id="app-sidebar"
+        className="app-sidebar"
+        data-open={narrow && navOpen ? '' : undefined}
+        {...(narrow ? { role: 'dialog', 'aria-modal': navOpen || undefined, 'aria-label': 'Pipelines', hidden: !navOpen } : {})}
+      >
         <div className="app-sidebar__brandbar">
           {/* Brand: logo + wordmark; it opens the fleet board. */}
           <button
             type="button"
-            onClick={() => { setSelectedNodeLocal(null); setUrlState({ pipeline: undefined, ns: undefined, node: undefined, bundle: undefined }); setViewMode('list') }}
+            onClick={() => { setSelectedNodeLocal(null); setUrlState({ ...EMPTY_URL_STATE, filter: urlState.filter, q: urlState.q }) }}
             title="Show the fleet"
             aria-label="Show the fleet"
             className="app-brand"
@@ -528,11 +692,13 @@ export function App() {
               pipelines={filteredPipelines}
               selected={selectedPipeline}
               selectedNamespace={selectedNamespace}
-              onSelect={(name, ns) => { handleSelectPipeline(name, ns); if (viewMode === 'ops-table') setViewMode('list') }}
+              onSelect={(name, ns) => handleSelectPipeline(name, ns)}
               loading={pipelinesLoading}
               error={pipelinesError}
               searchInputRef={searchInputRef}
               total={pipelines.length}
+              initialQuery={urlState.q}
+              onQueryChange={q => setUrlState({ q: q || undefined }, { replace: true })}
             />
           </ErrorBoundary>
         </div>
@@ -541,12 +707,21 @@ export function App() {
       {/* Ops table mode — full-width table replaces the main content area */}
       {viewMode === 'ops-table' ? (
         <main id="main-content" tabIndex={-1} className="app-main app-main--ops">
+          <div className="app-topbar">
+            {navButton}
+            <Breadcrumb route={urlState} namespace={activePipeline?.namespace} />
+            <button type="button" className="app-topbar__search" aria-label="Go to or do… ⌘K" onClick={() => setPaletteOpen(true)}>
+              <Icon name="search" />
+              <span>Go to or do…</span>
+              <Kbd>⌘K</Kbd>
+            </button>
+          </div>
           {insecureBanner}
           <PipelineOpsTable
             pipelines={pipelines}
             selected={selectedPipeline}
             selectedNamespace={selectedNamespace}
-            onSelect={(name, ns) => { handleSelectPipeline(name, ns); setViewMode('list') }}
+            onSelect={(name, ns) => handleSelectPipeline(name, ns)}
             loading={pipelinesLoading}
             error={pipelinesError}
           />
@@ -554,6 +729,15 @@ export function App() {
       ) : (
         <>{/* Main area — column layout for header + content row */}
         <main id="main-content" tabIndex={-1} className="app-main">
+          <div className="app-topbar">
+            {navButton}
+            <Breadcrumb route={urlState} namespace={activePipeline?.namespace} />
+            <button type="button" className="app-topbar__search" aria-label="Go to or do… ⌘K" onClick={() => setPaletteOpen(true)}>
+              <Icon name="search" />
+              <span>Go to or do…</span>
+              <Kbd>⌘K</Kbd>
+            </button>
+          </div>
         {insecureBanner}
         {!selectedPipeline ? (
           <div className={pipelines.length > 0 ? 'app-fleet' : 'app-empty'}>
@@ -566,220 +750,251 @@ export function App() {
           </div>
         ) : (
           <>
-            {/* Header area (fixed height) */}
+            {/* Header: the name and the pipeline's actions, then one summary line. */}
             <div className="app-pipeline-head">
-              {/* Pipeline header */}
-              <div className="app-pipeline-head__title-block">
-                <div className="app-pipeline-head__title-row">
-                  <h1 className="app-pipeline-head__title">
-                    {activePipeline?.name}
-                  </h1>
-                  {/* Paused banner in main panel (#328) */}
-                  {activePipeline?.paused && (
-                    <span className="app-paused">
-                      ⏸ PAUSED — no new promotions
-                    </span>
-                  )}
-                </div>
-                {/* Bundle provenance card (#329) */}
-                {activeBundle && (
-                  <div className="app-provenance">
-                    <span>
-                      Bundle: <span className="app-provenance__bundle">{activeBundle.name}</span>
-                      {/* #763: copy bundle name */}
-                      <CopyButton text={activeBundle.name} title={`Copy bundle name "${activeBundle.name}"`} />
-                    </span>
-                    <BundleTypeBadge type={activeBundle.type} />
-                    <span className="app-sep">·</span>
-                    <HealthChip state={activeBundle.phase} kind="bundle" size="sm" />
-                    <RejectedLiveBanner bundle={activeBundle} />
-                    {activeBundle.provenance?.commitSHA && (
-                      <>
-                        <span className="app-sep">·</span>
-                        <span className="app-sha"
-                              title="Commit SHA">
-                          {activeBundle.provenance.commitSHA.slice(0, 8)}
-                        </span>
-                        {/* #763: copy full commit SHA */}
-                        <CopyButton text={activeBundle.provenance.commitSHA} title="Copy commit SHA" />
-                      </>
-                    )}
-                    {activeBundle.provenance?.author && (
-                      <>
-                        <span className="app-sep">·</span>
-                        <span title="Author">{activeBundle.provenance.author}</span>
-                      </>
-                    )}
-                    {activeBundle.provenance?.ciRunURL && (
-                      <>
-                        <span className="app-sep">·</span>
-                        <CIRunLink url={activeBundle.provenance.ciRunURL} />
-                      </>
-                    )}
-                    {activeBundle.rejected && (
-                      <span className="bundle-rejected" role="note">
-                        Rejected by <strong>{activeBundle.rejected.by}</strong>
-                        {activeBundle.rejected.at && <> {formatRelativeAge(activeBundle.rejected.at)}</>}: {activeBundle.rejected.reason}
-                      </span>
-                    )}
+              <div className="app-pipeline-head__bar">
+                <h1 className="app-pipeline-head__title">{activePipeline?.name ?? selectedPipeline}</h1>
+                {/* Paused banner in main panel (#328) */}
+                {activePipeline?.paused && (
+                  <span className="app-paused">⏸ PAUSED — no new promotions</span>
+                )}
+                {activePipeline && (
+                  <div className="app-pipeline-head__actions">
+                    {/* #506: pause / resume; while paused, Resume is the primary action. */}
+                    <ActionBar
+                      pipelineName={activePipeline.name}
+                      namespace={activePipeline.namespace ?? 'default'}
+                      paused={activePipeline.paused ?? false}
+                      onRefresh={manualRefresh}
+                    />
+                    {/* #917: ship a version from the UI. */}
+                    <CreateBundleButton
+                      pipelineName={activePipeline.name}
+                      namespace={activePipeline.namespace ?? 'default'}
+                      onRefresh={manualRefresh}
+                      variant={activePipeline.paused ? 'secondary' : 'primary'}
+                    />
                   </div>
                 )}
               </div>
-
-              {/* #506: ActionBar — pause/resume buttons for the selected pipeline. */}
               {activePipeline && (
-                <ActionBar
-                  pipelineName={activePipeline.name}
-                  namespace={activePipeline.namespace ?? 'default'}
-                  paused={activePipeline.paused ?? false}
-                  onRefresh={manualRefresh}
+                <p className="app-pipeline-head__summary">
+                  {/* P1's status.summary sentence; the shown version's state when there is none. */}
+                  <span>{activePipeline.summary ?? (activeBundle ? displayState('bundle', activeBundle.phase).label : 'No version yet')}</span>
+                  {/* #329/#763: the shown version's provenance, quiet; none for a version that is not found. */}
+                  {activeBundle && !versionMissing && (
+                    <span className="app-provenance">
+                      <span className="app-sep" aria-hidden="true">·</span>
+                      <span title={activeBundle.name}>
+                        Version <span className="app-provenance__bundle">{versionName(activeBundle.name, activePipeline.name)}</span>
+                      </span>
+                      <CopyButton text={activeBundle.name} title={`Copy version name "${activeBundle.name}"`} />
+                      <BundleTypeBadge type={activeBundle.type} compact />
+                      {urlState.version && (
+                        <span>({displayState('bundle', activeBundle.phase).label})</span>
+                      )}
+                      {activeBundle.provenance?.commitSHA && (
+                        <>
+                          <span className="app-sep" aria-hidden="true">·</span>
+                          <span className="app-sha" title="Commit SHA">
+                            {activeBundle.provenance.commitSHA.slice(0, 8)}
+                          </span>
+                          <CopyButton text={activeBundle.provenance.commitSHA} title="Copy commit SHA" />
+                        </>
+                      )}
+                      {activeBundle.provenance?.author && (
+                        <>
+                          <span className="app-sep" aria-hidden="true">·</span>
+                          <span title="Author">{activeBundle.provenance.author}</span>
+                        </>
+                      )}
+                      {activeBundle.provenance?.ciRunURL && (
+                        <>
+                          <span className="app-sep" aria-hidden="true">·</span>
+                          <CIRunLink url={activeBundle.provenance.ciRunURL} />
+                        </>
+                      )}
+                    </span>
+                  )}
+                </p>
+              )}
+              {activeBundle && !versionMissing && <RejectedLiveBanner bundle={activeBundle} />}
+              {activeBundle?.rejected && !versionMissing && (
+                <p className="bundle-rejected" role="note">
+                  Rejected by <strong>{activeBundle.rejected.by}</strong>
+                  {activeBundle.rejected.at && <> {formatRelativeAge(activeBundle.rejected.at)}</>}: {activeBundle.rejected.reason}
+                </p>
+              )}
+              {activePipeline && !versionMissing && (
+                <Tabs
+                  label="Pipeline views"
+                  value={pipelineTab}
+                  onChange={(t) => setUrlState({ tab: t === 'map' ? undefined : (t as PipelineTab) })}
+                  items={[
+                    { id: 'map', label: 'Map' },
+                    { id: 'versions', label: 'Versions', count: bundles.length || undefined },
+                    { id: 'activity', label: 'Activity', count: (blockedGateIds.size + failedStepCount) || undefined },
+                    { id: 'metrics', label: 'Metrics' },
+                  ]}
                 />
               )}
+            </div>
 
-              {/* #917: CreateBundleButton — lets platform engineers trigger a Bundle from the UI. */}
-              {activePipeline && (
-                <CreateBundleButton
-                  pipelineName={activePipeline.name}
-                  namespace={activePipeline.namespace ?? 'default'}
-                  onRefresh={manualRefresh}
-                />
-              )}
-
-              {/* Blocked PolicyGate banner */}
-              <BlockedBanner
-                blockedCount={blockedGateIds.size}
-                highlightActive={showBlockedOnly}
-                onToggleHighlight={() => setShowBlockedOnly(v => !v)}
+            {pipelineMissing ? (
+              <NotFound
+                title={`No pipeline named ${selectedPipeline}${urlState.ns ? ` in ${urlState.ns}` : ''}`}
+                detail="It may have been deleted, or the link has a typo."
+                href={serializeHash(EMPTY_URL_STATE)}
+                linkText="Back to all pipelines"
               />
+            ) : versionMissing ? (
+              <NotFound
+                title={`No version ${urlState.version} in ${activePipeline?.name}`}
+                detail="It may have been cleaned up after newer versions shipped, or the link has a typo."
+                href={serializeHash({ ...EMPTY_URL_STATE, pipeline: activePipeline?.name, ns: activePipeline?.namespace })}
+                linkText={`Show the current version of ${activePipeline?.name}`}
+              />
+            ) : activePipeline ? (
+            <>
+            {/* Every tab's panel is in the page (hidden when not shown), so each tab's aria-controls resolves. */}
+            <TabPanel id="map" hidden={pipelineTab !== 'map'} className="app-tab app-tab--map">
+              {pipelineTab === 'map' && (<>
+                <div className="app-map-head">
+                  {/* Gates holding the version back: one button, Show blocked. */}
+                  <BlockedBanner
+                    blockedCount={blockedGateIds.size}
+                    environments={blockedEnvironments}
+                    highlightActive={showBlockedOnly}
+                    onToggleHighlight={() => setShowBlockedOnly(v => !v)}
+                  />
+                  {/* Bundle Timeline — horizontal strip showing bundle history (Kargo freight timeline parity).
+                      Receives bundles from parent state — no independent fetch (#321). */}
+                  <ErrorBoundary fallbackMessage="Timeline unavailable">
+                    <BundleTimeline
+                      bundles={bundles}
+                      loading={bundlesLoading}
+                      selectedBundle={activeBundle?.name}
+                      onSelectBundle={handleTimelineBundleSelect}
+                      compareBundle={compareBundle}
+                      onCompareBundle={(name) => setCompareTarget(name ?? undefined)}
+                      onCompare={() => setUrlState({ compare: compareBundle })}
+                    />
+                  </ErrorBoundary>
+                </div>
 
-              {/* #340: PolicyGates panel — shows all active gates with CEL expressions */}
-              <PolicyGatesPanel gates={shownGates} loading={gatesLoading} onDecided={() => { void manualRefresh() }}
-                collapsed={!!stageEnv} />
+                {/* #338: Bundle diff panel — shows when two bundles are selected for comparison */}
+                {showDiffPanel && activeBundle && urlState.compare !== activeBundle.name && (
+                  (() => {
+                    const compareBundleObj = bundles.find(b => b.name === urlState.compare)
+                    if (!compareBundleObj) return null
+                    return (
+                      <BundleDiffPanel
+                        bundleA={activeBundle}
+                        bundleB={compareBundleObj}
+                        onClose={closeDiffPanel}
+                      />
+                    )
+                  })()
+                )}
 
-              {/* Bundle history (collapsible) */}
-              {bundles.length > 0 && (
-                <div className="app-history">
-                  <button
-                    onClick={() => setBundleHistoryOpen(o => !o)}
-                    className="app-history__toggle"
-                    aria-expanded={bundleHistoryOpen}
-                  >
-                    {bundleHistoryOpen ? '▾' : '▸'} Bundle history ({bundles.length})
-                  </button>
-                  {bundleHistoryOpen && (
-                    <ul className="app-history__list">
-                      {bundles.map(b => (
-                        <li key={b.name} className="app-history__item">
-                          <HealthChip state={b.phase} kind="bundle" size="sm" />
-                          <span className="app-history__name">{b.name}</span>
-                          {b.provenance?.commitSHA && (
-                            <span className="app-sha">
-                              {b.provenance.commitSHA.slice(0, 8)}
-                            </span>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
+                <PipelineLaneView
+                  nodes={graph?.nodes ?? []}
+                  edges={graph?.edges ?? []}
+                  selectedNode={selectedNode}
+                  onSelectNode={setSelectedNode}
+                  activeBundleName={activeBundle?.name}
+                  pipelineName={activePipeline?.name}
+                  namespace={activePipeline?.namespace ?? 'default'}
+                  onActionDone={() => { void manualRefresh() }}
+                  holds={Object.fromEntries((activePipeline?.environmentTopology ?? [])
+                    .filter(e => e.hold).map(e => [e.name, e.hold!]))}
+                  loading={graphLoading}
+                />
+
+                {/* #326: Content row — the DAG; the stage drawer (U3) beside it. */}
+                <div className="app-content">
+                  {/* DAG area */}
+                  <div className="app-dag" data-split={stageEnv ? true : undefined}>
+                    <ErrorBoundary fallbackMessage="Graph failed to load">
+                      <DAGView
+                        nodes={displayGraph?.nodes ?? []}
+                        edges={displayGraph?.edges ?? []}
+                        loading={graphLoading}
+                        error={graphError}
+                        highlightNodeIds={highlightIds}
+                        selectedNode={selectedNode}
+                        onSelectNode={setSelectedNode}
+                      />
+                    </ErrorBoundary>
+                  </div>
+
+                  {/* U3: the stage drawer of the environment in the route (#1701): a column
+                      beside the page at lg and wider, a modal sheet narrower. */}
+                  {stageEnv && activePipeline && (
+                    <ErrorBoundary fallbackMessage="Details unavailable">
+                      <StageDrawer
+                        namespace={activePipeline.namespace}
+                        pipeline={activePipeline.name}
+                        env={stageEnv}
+                        section={urlState.section}
+                        onClose={() => setSelectedNode(null)}
+                        onNavigate={(env, section) => { setSelectedNodeLocal(null); setUrlState({ env, node: undefined, section }) }}
+                        data={{ pipeline: activePipeline, bundles, steps: activeSteps, gates }}
+                        onChanged={() => { void manualRefresh() }}
+                      />
+                    </ErrorBoundary>
                   )}
                 </div>
-              )}
+              </>)}
+            </TabPanel>
 
-              {/* #504: Release efficiency metrics bar — inline metrics for the pipeline. */}
-              <ReleaseMetricsBar
-                bundles={bundles}
-                finalEnvironments={terminalEnvironments(activePipeline?.environmentTopology, activePipeline?.topologyResolved)}
-                deploymentMetrics={activePipeline?.deploymentMetrics}
-              />
+            <TabPanel id="versions" hidden={pipelineTab !== 'versions'} className="app-tab">
+              {pipelineTab === 'versions' && (bundles.length === 0
+                ? <p className="app-tab__empty">No version of this pipeline yet.</p>
+                : (
+                  <ul className="app-history__list" aria-label="Versions">
+                    {bundles.map(b => (
+                      <li key={b.name} className="app-history__item">
+                        <HealthChip state={b.phase} kind="bundle" size="sm" />
+                        <a className="app-history__name" title={b.name} href={serializeHash({ ...urlState, version: b.name, env: undefined, node: undefined, tab: undefined })}>{versionName(b.name, activePipeline.name)}</a>
+                        {b.provenance?.commitSHA && (
+                          <span className="app-sha">
+                            {b.provenance.commitSHA.slice(0, 8)}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                ))}
+            </TabPanel>
 
-              {/* Bundle Timeline — horizontal strip showing bundle history (Kargo freight timeline parity).
-                  Receives bundles from parent state — no independent fetch (#321). */}
-              <ErrorBoundary fallbackMessage="Timeline unavailable">
-                <BundleTimeline
-                  bundles={bundles}
-                  loading={bundlesLoading}
-                  selectedBundle={activeBundle?.name}
-                  onSelectBundle={handleTimelineBundleSelect}
-                  compareBundle={compareBundle}
-                  onCompareBundle={(name) => setCompareTarget(name ?? undefined)}
-                  onCompare={() => setUrlState({ bundle: compareBundle })}
+            <TabPanel id="activity" hidden={pipelineTab !== 'activity'} className="app-tab">
+              {pipelineTab === 'activity' && (<>
+                {/* #528: failures grouped across environments; a click opens the environment on the map. */}
+                <PromotionErrorsPanel
+                  steps={activeSteps}
+                  onSelectEnvironment={(env) => {
+                    const node = graph?.nodes.find(n => n.environment === env && n.type === 'PromotionStep')
+                    if (node) { setUrlState({ tab: undefined }); setSelectedNode(node) }
+                  }}
                 />
-              </ErrorBoundary>
-            </div>
+                {/* #340: the shown version's gates, their conditions and approvals. */}
+                <PolicyGatesPanel gates={shownGates} loading={gatesLoading} onDecided={() => { void manualRefresh() }} />
+              </>)}
+            </TabPanel>
 
-            {/* #338: Bundle diff panel — shows when two bundles are selected for comparison */}
-            {showDiffPanel && activeBundle && urlState.bundle !== activeBundle.name && (
-              (() => {
-                const compareBundleObj = bundles.find(b => b.name === urlState.bundle)
-                if (!compareBundleObj) return null
-                return (
-                  <BundleDiffPanel
-                    bundleA={activeBundle}
-                    bundleB={compareBundleObj}
-                    onClose={closeDiffPanel}
-                  />
-                )
-              })()
-            )}
-
-            {/* #332: Pipeline lane view — horizontal stage cards (Kargo-parity).
-                Shows each PromotionStep environment as a card with state chip, bundle, and actions. */}
-            {/* #528: Cross-environment error aggregation — shown above lane view when steps fail */}
-            <PromotionErrorsPanel
-              steps={activeSteps}
-              onSelectEnvironment={(env) => {
-                const node = graph?.nodes.find(n => n.environment === env && n.type === 'PromotionStep')
-                if (node) setSelectedNode(node)
-              }}
-            />
-            <PipelineLaneView
-              nodes={graph?.nodes ?? []}
-              edges={graph?.edges ?? []}
-              selectedNode={selectedNode}
-              onSelectNode={setSelectedNode}
-              activeBundleName={activeBundle?.name}
-              pipelineName={activePipeline?.name}
-              namespace={activePipeline?.namespace ?? 'default'}
-              onActionDone={() => { void manualRefresh() }}
-              holds={Object.fromEntries((activePipeline?.environmentTopology ?? [])
-                .filter(e => e.hold).map(e => [e.name, e.hold!]))}
-              loading={graphLoading}
-            />
-
-            {/* #326: Content row — DAG + NodeDetail split panel side by side.
-                NodeDetail is a flex sibling, not position:fixed overlay. */}
-            <div className="app-content">
-              {/* DAG area */}
-              <div className="app-dag" data-split={stageEnv ? true : undefined}>
-                <ErrorBoundary fallbackMessage="Graph failed to load">
-                  <DAGView
-                    nodes={displayGraph?.nodes ?? []}
-                    edges={displayGraph?.edges ?? []}
-                    loading={graphLoading}
-                    error={graphError}
-                    highlightNodeIds={highlightIds}
-                    selectedNode={selectedNode}
-                    onSelectNode={setSelectedNode}
-                  />
-                </ErrorBoundary>
-              </div>
-
-              {/* U3: the stage drawer of the environment in node= (#1701), a
-                  sibling of the graph at lg and wider, a modal sheet narrower. */}
-              {stageEnv && activePipeline && (
-                <ErrorBoundary fallbackMessage="Details unavailable">
-                  <StageDrawer
-                    namespace={activePipeline.namespace}
-                    pipeline={activePipeline.name}
-                    env={stageEnv}
-                    section={urlState.section}
-                    onClose={() => setSelectedNode(null)}
-                    onNavigate={(env, section) => { setSelectedNodeLocal(null); setUrlState({ node: env, section }) }}
-                    data={{ pipeline: activePipeline, bundles, steps: activeSteps, gates }}
-                    onChanged={() => { void manualRefresh() }}
-                  />
-                </ErrorBoundary>
-              )}
-            </div>
+            <TabPanel id="metrics" hidden={pipelineTab !== 'metrics'} className="app-tab">
+              {pipelineTab === 'metrics' && (<>
+                {/* #504: Release efficiency metrics bar — inline metrics for the pipeline. */}
+                <ReleaseMetricsBar
+                  bundles={bundles}
+                  finalEnvironments={terminalEnvironments(activePipeline?.environmentTopology, activePipeline?.topologyResolved)}
+                  deploymentMetrics={activePipeline?.deploymentMetrics}
+                />
+              </>)}
+            </TabPanel>
+            </>
+            ) : null}
           </>
         )}
       </main>
