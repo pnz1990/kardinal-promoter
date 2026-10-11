@@ -235,7 +235,7 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
 
                   {/* Status */}
                   <td className="ops-table__td">
-                    <HealthChip state={p.paused ? 'Paused' : p.phase} size="sm" />
+                    <HealthChip state={p.paused ? 'Paused' : p.phase} kind="pipeline" size="sm" />
                   </td>
 
                   {/* Blockers */}

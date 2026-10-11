@@ -43,7 +43,7 @@ test('the lane counts the wave, the DAG keeps spec order, the metrics count the 
 
   const ys: number[] = []
   for (const env of WAVE) {
-    await expect(dagNode(page, env)).toHaveAttribute('aria-label', `${env} — Verified`)
+    await expect(dagNode(page, env)).toHaveAttribute('aria-label', `${env} — Live`)
     ys.push((await dagNode(page, env).boundingBox())!.y)
   }
   expect(ys, 'w1 at the top, w6 at the bottom').toEqual([...ys].sort((a, b) => a - b))

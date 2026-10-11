@@ -16,7 +16,7 @@
   --dag-text: var(--k-ink-3);
 }
 .dag-node--ready { --dag-fill: var(--k-status-verified-wash); --dag-stroke: var(--k-status-verified-fg); --dag-text: var(--k-status-verified-fg); }
-.dag-node--reconciling { --dag-fill: var(--k-status-blocked-wash); --dag-stroke: var(--k-status-blocked-fg); --dag-text: var(--k-status-blocked-fg); }
+.dag-node--in-progress { --dag-fill: var(--k-status-blocked-wash); --dag-stroke: var(--k-status-blocked-fg); --dag-text: var(--k-status-blocked-fg); }
 .dag-node--error { --dag-fill: var(--k-status-failed-wash); --dag-stroke: var(--k-status-failed-fg); --dag-text: var(--k-status-failed-fg); }
 .dag-node--degraded { --dag-fill: var(--k-status-failed-wash); --dag-stroke: var(--k-status-failed-fg); --dag-text: var(--k-status-failed-fg); }
 .dag-node--pending { --dag-fill: var(--k-surface-base); --dag-stroke: var(--k-ink-3); --dag-text: var(--k-ink-2); }
@@ -106,7 +106,7 @@
   cursor: default;
 }
 .dag-legend__chip[data-health="ready"] { border-color: var(--k-status-verified-fg); background: var(--k-status-verified-wash); color: var(--k-status-verified-fg); }
-.dag-legend__chip[data-health="reconciling"] { border-color: var(--k-status-blocked-fg); background: var(--k-status-blocked-wash); color: var(--k-status-blocked-fg); }
+.dag-legend__chip[data-health="inprogress"] { border-color: var(--k-status-blocked-fg); background: var(--k-status-blocked-wash); color: var(--k-status-blocked-fg); }
 .dag-legend__chip[data-health="error"] { border-color: var(--k-status-failed-fg); background: var(--k-status-failed-wash); color: var(--k-status-failed-fg); }
 .dag-legend__chip[data-health="pending"] { border-color: var(--k-ink-3); color: var(--k-ink-2); }
 .dag-legend__highlight { margin-left: auto; color: var(--k-ink-3); }

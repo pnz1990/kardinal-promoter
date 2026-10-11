@@ -33,7 +33,7 @@ type ScheduleClockStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=sclock
+// +kubebuilder:resource:scope=Namespaced,shortName=sclock,categories=kardinal-all
 // +kubebuilder:printcolumn:name="Interval",type=string,JSONPath=`.spec.interval`
 // +kubebuilder:printcolumn:name="Last-Tick",type=string,JSONPath=`.status.tick`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

@@ -282,7 +282,7 @@ type ImageVerificationStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=iv
+// +kubebuilder:resource:scope=Namespaced,shortName=iv,categories=kardinal-all
 // +kubebuilder:printcolumn:name="Pipeline",type=string,JSONPath=`.spec.pipelineName`
 // +kubebuilder:printcolumn:name="Bundle",type=string,JSONPath=`.spec.bundleName`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`

@@ -586,7 +586,7 @@ export function App() {
                     </span>
                     <BundleTypeBadge type={activeBundle.type} />
                     <span className="app-sep">·</span>
-                    <HealthChip state={activeBundle.phase} size="sm" />
+                    <HealthChip state={activeBundle.phase} kind="bundle" size="sm" />
                     <RejectedLiveBanner bundle={activeBundle} />
                     {activeBundle.provenance?.commitSHA && (
                       <>
@@ -664,7 +664,7 @@ export function App() {
                     <ul className="app-history__list">
                       {bundles.map(b => (
                         <li key={b.name} className="app-history__item">
-                          <HealthChip state={b.phase} size="sm" />
+                          <HealthChip state={b.phase} kind="bundle" size="sm" />
                           <span className="app-history__name">{b.name}</span>
                           {b.provenance?.commitSHA && (
                             <span className="app-sha">

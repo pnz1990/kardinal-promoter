@@ -251,6 +251,18 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("get bundle: %w", err)
 	}
 
+	// status.version (the Version printer column) is written with
+	// Available; a Bundle still in flight from before it existed gets it
+	// here. Settled Bundles are left as they are: backfilling every one at
+	// an upgrade would be one status write per Bundle of history.
+	if v := scm.BundleVersion(b.Spec); b.Status.Phase != "" && b.Status.Version != v && inFlightOrFailed(b.Status.Phase) {
+		patch := statusPatch(b.DeepCopy())
+		b.Status.Version = v
+		if err := r.Status().Patch(ctx, &b, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("patch bundle status version: %w", err)
+		}
+	}
+
 	// A rejection wins over every phase, Verified and Superseded included,
 	// and is recomputed from spec on every reconcile, so a crash between the
 	// spec write and this status write only delays it.
@@ -614,6 +626,7 @@ func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 
 	patch := statusPatch(b.DeepCopy())
 	b.Status.Phase = phaseAvailable
+	b.Status.Version = scm.BundleVersion(b.Spec)
 	// Ready=False/Available lets operators observe the phase via kubectl wait
 	// and lets GitOps controllers gate on standard conditions.
 	setBundleCondition(b, condReady, metav1.ConditionFalse, "Available", "bundle received; awaiting promotion")
@@ -1395,6 +1408,7 @@ func (r *Reconciler) retryIfPipelineChanged(ctx context.Context, log zerolog.Log
 
 	patch := statusPatch(b.DeepCopy())
 	b.Status.Phase = phaseAvailable
+	b.Status.Version = scm.BundleVersion(b.Spec)
 	b.Status.PipelineSpecHash = ""
 	b.Status.PolicyGatesHash = ""
 	meta.RemoveStatusCondition(&b.Status.Conditions, condInvalidSpec)

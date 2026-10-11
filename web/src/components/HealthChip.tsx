@@ -18,11 +18,12 @@
 // healthChipColors() is retained for SVG contexts (DAGView) that require inline colors.
 
 import '../styles/HealthChip.css'
+import { displayState, type DisplayKind } from '../displayStates.gen'
 
 /** The 7 canonical health chip states. */
 export type HealthState =
   | 'Ready'         // Verified / Pass / Pipeline Ready — green
-  | 'Reconciling'   // Promoting / WaitingForMerge / HealthChecking — amber
+  | 'InProgress'    // Promoting / WaitingForMerge / HealthChecking / Verifying — amber
   | 'Error'         // Failed / AbortedByAlarm / Block / Bundle Rejected — red
   | 'Pending'       // Pending / Available / NotStarted / gate Waiting — slate
   | 'Unknown'       // Superseded / unknown — gray
@@ -55,7 +56,7 @@ export function kardinalStateToHealth(state: string, nodeType?: string): HealthS
     case 'WaitingForMerge':
     case 'HealthChecking':
     case 'Verifying':       // post-deploy hooks and analyses running
-      return 'Reconciling'
+      return 'InProgress'
     case 'Failed':
     case 'AbortedByAlarm':  // terminal: an alarm stopped the promotion; a human must act
     case 'RollingBack':     // terminal: health failed and a rollback Bundle took over (as the CLI shows it)
@@ -81,7 +82,7 @@ export function kardinalStateToHealth(state: string, nodeType?: string): HealthS
  * Used to apply health-chip--{state} class to the chip element.
  */
 export function healthStateClass(state: HealthState): string {
-  return `health-chip--${state.toLowerCase()}`
+  return state === 'InProgress' ? 'health-chip--in-progress' : `health-chip--${state.toLowerCase()}`
 }
 
 /**
@@ -93,7 +94,7 @@ export function healthChipColors(state: HealthState): { bg: string; text: string
   switch (state) {
     case 'Ready':
       return { bg: 'var(--color-success-bg)', text: 'var(--color-success)', border: 'var(--color-success)' }
-    case 'Reconciling':
+    case 'InProgress':
       return { bg: 'var(--color-warning-bg)', text: 'var(--color-warning)', border: 'var(--color-warning)' }
     case 'Error':
       return { bg: 'var(--color-error-bg)', text: 'var(--color-error)', border: 'var(--color-error)' }
@@ -124,32 +125,42 @@ interface HealthChipProps {
   state: string
   /** Optional node type for context-aware mapping ('PolicyGate' vs default). */
   nodeType?: string
-  /** Optional display label override (defaults to the raw state string). */
+  /**
+   * What the state belongs to, which picks the words (P2, displayStates.gen.ts):
+   * a Verified step is "Live", a Verified bundle "Verified". Defaults to 'gate'
+   * for a PolicyGate node, else 'step'.
+   */
+  kind?: DisplayKind
+  /** Optional display label override (defaults to the display-state label). */
   label?: string
   /** Size variant: 'sm' (default) or 'md'. */
   size?: 'sm' | 'md'
 }
 
 /**
- * HealthChip renders a pill badge with health state color coding.
+ * HealthChip renders a pill badge with health state color coding and the
+ * display-state label of the state (the CLI's words), never the raw value.
  *
  * #532: Uses CSS classes (health-chip--{state}) instead of inline styles.
  * Tests should assert className, not background-color.
  */
-export function HealthChip({ state, nodeType, label, size = 'sm' }: HealthChipProps) {
+export function HealthChip({ state, nodeType, kind, label, size = 'sm' }: HealthChipProps) {
   const health = kardinalStateToHealth(state, nodeType)
   const stateClass = healthStateClass(health)
   const sizeClass = `health-chip--${size}`
+  const shown = displayState(kind ?? (nodeType === 'PolicyGate' ? 'gate' : 'step'), state)
   const meaning = nodeType === 'PolicyGate' ? GATE_STATE_MEANING[state] : undefined
+  const text = label ?? shown.label
 
   return (
     <span
       className={`health-chip ${stateClass} ${sizeClass}`}
-      title={`${state} (${meaning ?? health})`}
-      aria-label={`${label ?? state} — ${meaning ?? health}`}
+      title={`${text} (${meaning ?? shown.tone})`}
+      aria-label={`${text} — ${meaning ?? shown.tone}`}
       data-health-state={health}
+      data-tone={shown.tone}
     >
-      {label ?? state}
+      {text}
       {/* aria-label on a span is not read by every screen reader. */}
       {meaning && <span className="sr-only">, {meaning}</span>}
     </span>

@@ -46,7 +46,7 @@ kardinal-promoter is a Kubernetes-native controller that automates software prom
 
 ## Why kardinal-promoter?
 
-All three tools can promote through a DAG of environments. The first rows show where kardinal differs. Surveyed on 2026-10-03 against Kargo v1.12.1 and GitOps Promoter v0.42.1.
+All three tools can promote through a DAG of environments. These rows show where kardinal differs from Kargo v1.12.1 and GitOps Promoter v0.42.1; the [comparison](comparison.md) has the full feature matrix.
 
 | Feature | kardinal | Kargo | GitOps Promoter |
 |---|---|---|---|
@@ -54,19 +54,8 @@ All three tools can promote through a DAG of environments. The first rows show w
 | Soak that resets on a health alarm (`bake`) | ✅ | ❌ elapsed only (`requiredSoakTime`) | ❌ elapsed only (`TimedCommitStatus`) |
 | Wave topology for multi-region rollouts | ✅ | ❌ | ❌ |
 | Structured PR evidence (provenance, gate results, upstream health) | ✅ | ❌ commit message, or a description you template | partial: commits, a diff link and the environment table |
-| Cluster-wide change freeze (`ChangeWindow` CRD) | ✅ | Enterprise only (promotion windows, beta) | per PromotionStrategy (`ScheduledCommitStatus`) |
 | DORA metrics built-in | ✅ | ❌ | ❌ on its roadmap |
-| Upstream promotion history in gates | ✅ | ❌ | ❌ |
-| Time-limited gate override with a recorded reason | ✅ | ❌ | ❌ |
 | Auto-rollback on health failure | ✅ | Enterprise only (beta) | ❌ |
-| Explain a blocked promotion, simulate a policy (`explain`, `policy simulate`) | ✅ | ❌ | ❌ |
-| A newer release supersedes an older one in flight | ✅ | ❌ promotions queue | ✅ newest commit wins |
-| DAG promotion pipelines | ✅ | ✅ Stage DAG | ✅ `dependsOn` |
-| GitOps-agnostic (ArgoCD + Flux) | ✅ | Argo CD only | partial: any engine, health checks for Argo CD only |
-| Every gate re-checked before a step starts | ✅ | ❌ | ✅ proposed commit statuses |
-| Custom promotion steps | ❌ fixed sequence per environment | ✅ promotion templates | ❌ |
-| Integration test step | No — run tests as an Argo CD PostSync hook with `health.type: argocd`, or gate on a `MetricCheck` ([how](pipeline-reference.md#image-signatures-and-tests)) | ✅ verification can run a Job | ❌ |
-| Graph-first architecture (kro Graph) | ✅ | ❌ | ❌ |
 
 See [detailed comparison →](comparison.md)
 

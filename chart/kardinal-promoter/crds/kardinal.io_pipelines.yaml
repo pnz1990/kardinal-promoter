@@ -8,6 +8,9 @@ metadata:
 spec:
   group: kardinal.io
   names:
+    categories:
+    - kardinal
+    - kardinal-all
     kind: Pipeline
     listKind: PipelineList
     plural: pipelines
@@ -17,12 +20,19 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .status.summary
+      name: Summary
+      type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
     - jsonPath: .spec.paused
       name: Paused
       type: boolean
+    - jsonPath: .status.environmentSummary
+      name: Envs
+      priority: 1
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -88,7 +98,7 @@ spec:
                       type: object
                     bake:
                       description: |-
-                        Bake configures a contiguous-healthy soak window for this environment (K-01).
+                        Bake configures a contiguous-healthy soak window for this environment.
                         When set, the health check must pass continuously for Bake.Minutes before
                         the step transitions to Verified. A health failure resets the timer if
                         policy is "reset-on-alarm" (default), or fails the step if "fail-on-alarm".
@@ -710,7 +720,7 @@ spec:
                       default: none
                       description: |-
                         OnHealthFailure controls what the reconciler does when health fails during
-                        bake or health checking (K-03).
+                        bake or health checking.
                         "rollback": create a rollback Bundle at the previous version; step → RollingBack.
                         "abort": freeze the step; state → AbortedByAlarm; requires human intervention.
                         "none" (default): step → Failed; downstream stops.
@@ -836,8 +846,7 @@ spec:
                       type: object
                     promotionTemplate:
                       description: |-
-                        PromotionTemplate is not supported, and the PromotionTemplate CRD was
-                        removed. The API server rejects a Pipeline that sets it, and so do Graph
+                        PromotionTemplate is deprecated and not supported. The API server rejects a Pipeline that sets it, and so do Graph
                         translation and "kardinal validate".
 
                         Deprecated: remove it; every environment runs the default step sequence.
@@ -845,13 +854,11 @@ spec:
                         It is removed in v0.11.
                       properties:
                         name:
-                          description: Name is the name of a PromotionTemplate (the
-                            CRD was removed).
+                          description: Name is the name of a PromotionTemplate.
                           minLength: 1
                           type: string
                         namespace:
-                          description: Namespace is the namespace of the PromotionTemplate
-                            (the CRD was removed).
+                          description: Namespace is the namespace of the PromotionTemplate.
                           type: string
                       required:
                       - name
@@ -924,14 +931,13 @@ spec:
                       type: object
                     shard:
                       description: |-
-                        Shard was the agent shard of distributed mode, which was removed. A
-                        non-empty value sets the Pipeline Ready=False (reason NotImplemented)
-                        and fails the environment's PromotionSteps with "shard is not
-                        supported".
+                        Shard is deprecated and not supported. A non-empty value sets the
+                        Pipeline Ready=False (reason NotImplemented) and fails the environment's
+                        PromotionSteps with "shard is not supported".
 
                         Deprecated: remove shard; the controller reconciles every environment.
                         For workloads in other clusters, use health.kubeconfigSecretRef or the
-                        Argo CD or Flux hub (see docs/multi-cluster.md).
+                        Argo CD or Flux hub (see docs/health-adapters.md#remote-clusters).
                         It is removed in v0.11.
                       type: string
                     stepTimeoutSeconds:
@@ -967,8 +973,8 @@ spec:
                             minLength: 1
                             type: string
                           webhook:
-                            description: Webhook was the endpoint of a custom webhook
-                              step, which was removed.
+                            description: 'Webhook is deprecated: nothing reads this
+                              field.'
                             properties:
                               secretRef:
                                 description: |-
@@ -1249,7 +1255,7 @@ spec:
                       type: string
                     wave:
                       description: |-
-                        Wave assigns this environment to a numbered deployment wave (K-06).
+                        Wave assigns this environment to a numbered deployment wave.
                         Environments with the same wave number are promoted in parallel. An
                         environment of a wave depends on every environment of the next lower wave
                         present; gaps in the numbering (10, 20, 30) are allowed and create no roots.
@@ -1280,9 +1286,9 @@ spec:
                       no custom step engine and every environment runs the default
                       step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)'
                     rule: '!has(self.steps) || size(self.steps) == 0'
-                  - message: 'environments[].promotionTemplate is not supported: the
-                      PromotionTemplate CRD was removed and every environment runs
-                      the default step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)'
+                  - message: 'environments[].promotionTemplate is deprecated and not
+                      supported: every environment runs the default step sequence;
+                      remove it (see docs/pipeline-reference.md#promotion-steps)'
                     rule: '!has(self.promotionTemplate)'
                   - message: 'reserved environment name: the name becomes a kro Graph
                       node ID; bundle, time, kro reserved IDs (spec, status, metadata,
@@ -1322,10 +1328,11 @@ spec:
                     type: string
                   provider:
                     description: |-
-                      Provider is ignored. One controller serves one SCM, chosen with its
-                      --scm-provider flag.
+                      Provider is ignored: the controller's --scm-provider flag, or
+                      spec.git.providerRef, selects the provider.
 
-                      Deprecated: ignored; the controller's --scm-provider flag selects the provider.
+                      Deprecated: ignored; the controller's --scm-provider flag, or spec.git.providerRef,
+                      selects the provider.
                       It is removed in v0.11.
                     enum:
                     - github
@@ -1852,6 +1859,84 @@ spec:
                       Until a Bundle is Verified there, deploymentMetrics is not set at all.
                     type: integer
                 type: object
+              environmentSummary:
+                description: |-
+                  EnvironmentSummary is Environments as one line, environment=version
+                  ("test=1.5.0 uat=1.5.0 prod=1.4.0"; "-" where nothing runs yet), for
+                  the wide printer column. Display only.
+                type: string
+              environments:
+                description: |-
+                  Environments is, per environment in spec order (a fleet environment
+                  expands to its targets), what runs there and where the newest version
+                  stands. Written by the PipelineReconciler from the Bundles,
+                  PromotionSteps and gate instances of the Pipeline. It is a display
+                  projection: no controller decision reads it.
+                items:
+                  description: |-
+                    PipelineEnvironmentStatus is what one environment of a Pipeline runs, and
+                    where the newest version that reached it stands.
+                  properties:
+                    blockedBy:
+                      description: |-
+                        BlockedBy names the gates that hold the newest Bundle back in the
+                        environment, sorted.
+                      items:
+                        type: string
+                      type: array
+                    bundle:
+                      description: |-
+                        Bundle is the Bundle whose change runs in the environment: the newest
+                        one whose change landed there. Empty when none has.
+                      type: string
+                    held:
+                      description: |-
+                        Held is true when a rollback hold (spec.holds) keeps the environment
+                        on Bundle, so the newest Bundle waits.
+                      type: boolean
+                    incomingBundle:
+                      description: |-
+                        IncomingBundle is a newer Bundle on its way into the environment (its
+                        step there is not yet live, or gates hold it before its step exists).
+                        Empty when the newest Bundle there is Bundle.
+                      type: string
+                    incomingVersion:
+                      description: IncomingVersion is what IncomingBundle ships.
+                      type: string
+                    name:
+                      description: Name is the environment name.
+                      type: string
+                    prURL:
+                      description: |-
+                        PRURL is the pull request of the newest Bundle's step while it waits
+                        for its merge.
+                      type: string
+                    since:
+                      description: |-
+                        Since is when State began: the Verified time for Verified, otherwise
+                        when the controller first recorded this Bundle in this State.
+                      format: date-time
+                      type: string
+                    state:
+                      description: |-
+                        State is the PromotionStep state of the newest Bundle in the
+                        environment (IncomingBundle when set, else Bundle), an API value such
+                        as Verified or WaitingForMerge. Pending with BlockedBy set when gates
+                        hold the Bundle before its step exists. Empty when no Bundle reached
+                        the environment.
+                      type: string
+                    version:
+                      description: |-
+                        Version is what Bundle ships: the image tag, "config <sha>" or the
+                        chart version.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               fleets:
                 description: |-
                   Fleets are the resolved targets of each fleet environment that uses a
@@ -2076,7 +2161,7 @@ spec:
               holdStates:
                 description: |-
                   HoldStates says, per hold of spec.holds, whether its rollback Bundle
-                  exists (#1629). A hold whose Bundle is missing (a crash between the
+                  exists. A hold whose Bundle is missing (a crash between the
                   hold and the Bundle create, or the Bundle deleted) stays in effect;
                   past the grace the controller reports it, and a human releases it.
                 items:
@@ -2185,8 +2270,8 @@ spec:
               pendingAuditEvents:
                 description: |-
                   PendingAuditEvents are the HoldCreated, HoldReleased and
-                  HoldBundleMissing AuditEvents not yet written (the audit outbox,
-                  #1552). Each entry is stored in the same
+                  HoldBundleMissing AuditEvents not yet written (the audit outbox).
+                  Each entry is stored in the same
                   status patch as observedHolds and removed once the AuditEvent exists.
                   Normally empty.
                 items:
@@ -2196,7 +2281,7 @@ spec:
                     the same patch as the transition it records. It creates the AuditEvent on
                     that reconcile or a later one, then removes the entry. The name is fixed
                     when the entry is stored, so a retried create that the API server already
-                    applied returns AlreadyExists, which counts as written (#1552).
+                    applied returns AlreadyExists, which counts as written.
                   properties:
                     createdAt:
                       description: |-
@@ -2313,6 +2398,12 @@ spec:
                 - Degraded
                 - Promoting
                 - Unknown
+                type: string
+              summary:
+                description: |-
+                  Summary is one sentence on where the Pipeline's versions are, for
+                  example "1.5.0 live in test, uat; waiting for PR merge in prod (#42)".
+                  Written with Environments; display only.
                 type: string
             type: object
         type: object

@@ -358,6 +358,7 @@ type MetricCheckStatus struct {
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:scope=Namespaced,categories=kardinal;kardinal-all
 // +kubebuilder:printcolumn:name="Provider",type=string,JSONPath=`.spec.provider`
 // +kubebuilder:printcolumn:name="Result",type=string,JSONPath=`.status.result`
 // +kubebuilder:printcolumn:name="LastValue",type=string,JSONPath=`.status.lastValue`

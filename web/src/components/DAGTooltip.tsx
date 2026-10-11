@@ -22,6 +22,7 @@
 // - Content adapts per node type (PromotionStep vs PolicyGate)
 // #526
 
+import { displayState } from '../displayStates.gen'
 import { useRef, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { GraphNode } from '../types'
@@ -144,7 +145,7 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
       <div className="dag-tooltip__state">
         <span className="dag-tooltip__caption">State:</span>
         <span className="dag-tooltip__state-value" style={{ color: stateColor }}>
-          {node.state || '—'}
+          {node.state ? displayState(node.type === 'PolicyGate' ? 'gate' : 'step', node.state).label : '—'}
         </span>
       </div>
 

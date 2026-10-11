@@ -8,6 +8,9 @@ metadata:
 spec:
   group: kardinal.io
   names:
+    categories:
+    - kardinal
+    - kardinal-all
     kind: MetricCheck
     listKind: MetricCheckList
     plural: metricchecks
