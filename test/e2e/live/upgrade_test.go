@@ -663,9 +663,10 @@ spec:
 `
 	reuse := e.Shell(t, framework.Fill(t, upgradeCmd, "--reset-then-reuse-values", "--reuse-values"))
 	assert.NotZero(t, reuse.Code, reuse.Output)
-	// Helm 3.18.5 and later say "additional properties 'krocodile' not
-	// allowed", older versions "Additional property krocodile is not allowed".
-	assert.Regexp(t, `additional properties 'krocodile' not allowed|Additional property krocodile is not allowed`, reuse.Output)
+	// Helm 3.18.5 and later list every key ("additional properties
+	// 'validatingAdmissionPolicy', 'krocodile' not allowed"), older versions
+	// say "Additional property krocodile is not allowed".
+	assert.Regexp(t, `additional properties [^\n]*'krocodile' not allowed|Additional property krocodile is not allowed`, reuse.Output)
 	assert.Equal(t, "1", u.helmRevision(t), "a failed --reuse-values upgrade changes nothing")
 	_, err = e.Kube.AppsV1().Deployments("kro-system").Get(ctx, "graph-controller", metav1.GetOptions{})
 	assert.NoError(t, err, "v0.8.1's graph-controller survives the failed upgrade")

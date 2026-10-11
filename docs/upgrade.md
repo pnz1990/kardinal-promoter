@@ -439,7 +439,7 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
     ```
 
 - **`validatingAdmissionPolicy` and `rbac.integrationTestJobs`.** The chart has neither. If `helm get values` in step 2 shows one, `--reset-then-reuse-values` keeps it and the schema rejects it: add `--set validatingAdmissionPolicy=null` or `--set rbac.integrationTestJobs=null` to step 8's command, which drops the value. The chart always installs its ValidatingAdmissionPolicies: the identity policies ([Verified identity](guides/security.md#verified-identity)) and the hold-writes policy (only `pipelines/hold` may change `spec.holds`). It grants `batch/jobs` (create, get, list, watch, delete) for [hooks](hooks.md).
-- **`--reuse-values`** fails with `additional properties 'krocodile' not allowed` (Helm before 3.18.5: `Additional property krocodile is not allowed`), even when you never set `krocodile`. Use `--reset-then-reuse-values`.
+- **`--reuse-values`** fails with `additional properties ... 'krocodile' not allowed` (Helm before 3.18.5: `Additional property krocodile is not allowed`), even when you never set `krocodile`. Use `--reset-then-reuse-values`.
 
 ### Other notes
 
