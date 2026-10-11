@@ -166,7 +166,7 @@ func approvalQuorum(t *testing.T, shape string) {
 	assert.Contains(t, r.Stderr, "approve: the version waiting for prod is "+fixtures.V2+" ("+bundle+"), not 0.0.0-not-it: nothing recorded")
 	r = as(bob, "approve", pipelineName, "prod", "--version", fixtures.V2)
 	require.Equal(t, 0, r.Code, r.Output())
-	assert.Contains(t, r.Stderr, "Bundle: "+fixtures.V2+" ("+bundle+")")
+	assert.Contains(t, r.Stderr, "Version: "+fixtures.V2+" ("+bundle+")")
 	assert.Contains(t, r.Stdout, "Recorded: bob@example.com approves "+bundle+" for prod")
 	e.WaitGateReady(t, a.ns, bundle, "prod", "two-approvers", true, "approved by alice@example.com, bob@example.com (2 of 2)", gateTimeout)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)

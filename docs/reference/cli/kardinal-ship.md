@@ -27,12 +27,21 @@ and the Bundle's environments from status.environments). Exit codes:
   6     Timeout, Interrupted           --timeout (default 30m) passed, or Ctrl-C or SIGTERM interrupted the wait; the result is printed first
 
 A stop at a gate, a hold or a PR counts once two reads agree, and a gate not
-evaluated yet never stops it. A gate that opens by itself (its expression
-reads a schedule, a soak, an upstream environment, a metric or a change
-window) and a PR the SCM merges by itself (pr.merge.auto) are waited for,
-until --timeout: CI can wait through a soak. A gate on anything else (a
-Bundle label, its provenance) needs a person: exit 3. --stop-at-gate stops
-at any gate that does not pass. Stopping to follow does not stop the promotion:
+evaluated yet never stops it. A gate that does not pass is waited for, until
+--timeout, when it opens by itself: its expression contains one of these
+texts, which name the variables that change with time:
+
+  schedule.      schedule.isWeekend, schedule.hour, schedule.dayOfWeek
+  soakMinutes    upstream.<env>.soakMinutes, bundle.upstreamSoakMinutes
+  upstream.      anything else of upstream.<env>
+  metrics        metrics.<name>.value, metrics.<name>.result
+  changewindow   changewindow.<name>
+
+So CI can wait through a soak or a schedule. A PR the SCM merges by itself
+(pr.merge.auto) is waited for too. Any other gate that does not pass (on a
+Bundle label, its provenance, its version) needs a person: exit 3, as do an
+approval gate, a hold and a paused pipeline. --stop-at-gate stops at any
+gate that does not pass. Stopping to follow does not stop the promotion:
 kardinal status <pipeline> -w goes on following it. The codes
 are stable: a new outcome gets a new code.
 

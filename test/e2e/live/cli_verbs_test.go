@@ -62,7 +62,7 @@ func TestCLI_ShipWait(t *testing.T) {
 	require.Equal(t, 3, code, "held at prod's gate: %+v", out)
 	assert.Equal(t, "Held", out.Result)
 	assert.Equal(t, fixtures.V2, out.Version)
-	assert.Equal(t, "Bundle "+out.Bundle+" stopped: prod is held by gate hold, which does not open by itself (kardinal why "+pipelineName+" prod)", out.Message)
+	assert.Equal(t, "Version "+fixtures.V2+" ("+out.Bundle+") stopped: prod is held by gate hold, which does not open by itself (kardinal why "+pipelineName+" prod)", out.Message)
 	assertEnvAt(t, a, "test", fixtures.V2)
 
 	// Without the gate, the next version waits for its prod PR.

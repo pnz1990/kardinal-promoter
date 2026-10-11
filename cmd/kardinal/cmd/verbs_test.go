@@ -264,7 +264,7 @@ func TestShipWait(t *testing.T) {
 	res := waitShip(context.Background(), c, "default", "demo", "demo-held", shipResult{createdBundle: createdOf(b)}, time.Minute, false)
 	assert.Equal(t, "Held", res.Result)
 	assert.Equal(t, ExitHeld, res.ExitCode)
-	assert.Equal(t, "Bundle demo-held stopped: prod is held by gate cab, which does not open by itself (kardinal why demo prod)", res.Message)
+	assert.Equal(t, "Version 1.6.0 (demo-held) stopped: prod is held by gate cab, which does not open by itself (kardinal why demo prod)", res.Message)
 	raw, err := json.Marshal(res)
 	require.NoError(t, err)
 	for _, field := range []string{`"bundle":"demo-held"`, `"result":"Held"`, `"exitCode":3`, `"version":"1.6.0"`, `"environments":[`} {
@@ -293,7 +293,7 @@ func TestShipWait(t *testing.T) {
 	}).Build()
 	res = waitShip(context.Background(), failing, "default", "demo", "demo-held", shipResult{}, time.Minute, false)
 	assert.Equal(t, []any{"Error", ExitFailed}, []any{res.Result, res.ExitCode})
-	assert.Equal(t, "cannot follow Bundle demo-held: get bundle demo-held: etcd is down", res.Message)
+	assert.Equal(t, "cannot follow version demo-held: get bundle demo-held: etcd is down", res.Message)
 }
 
 // TestHoldAndWhy (C5): kardinal hold holds an environment on what runs
@@ -356,6 +356,40 @@ func TestShipExitCodes_Golden(t *testing.T) {
 	ship, _, err := NewRootCmd().Find([]string{"ship"})
 	require.NoError(t, err)
 	assert.Contains(t, ship.Annotations[ReferenceAnnotation], got, "the reference page shows them")
+}
+
+// TestShipTimeVariables (C5): the texts that make a gate one ship --wait
+// waits for are listed, each with its variables, in the ship reference and in
+// docs/ci-integration.md, in the same order.
+//
+// Covers CLI-VERBS-01.
+func TestShipTimeVariables(t *testing.T) {
+	ship, _, err := NewRootCmd().Find([]string{"ship"})
+	require.NoError(t, err)
+	assert.Contains(t, ship.Annotations[ReferenceAnnotation], timeVariableList())
+	doc, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "ci-integration.md"))
+	require.NoError(t, err)
+	var rows []string
+	for _, v := range timeVariables {
+		vars := strings.Split(v.vars, ", ")
+		for i, x := range vars {
+			if strings.HasPrefix(x, "anything else of ") {
+				vars[i] = "anything else of `" + strings.TrimPrefix(x, "anything else of ") + "`"
+			} else {
+				vars[i] = "`" + x + "`"
+			}
+		}
+		rows = append(rows, "| `"+v.match+"` | "+strings.Join(vars, ", ")+" |")
+	}
+	assert.Contains(t, string(doc), strings.Join(rows, "\n"), "docs/ci-integration.md lists the time variables")
+
+	// Each text makes a gate that does not pass one ship waits for; a gate
+	// on a Bundle label does not.
+	for _, v := range timeVariables {
+		g := &v1alpha1.PolicyGate{Spec: v1alpha1.PolicyGateSpec{Expression: "x." + v.match + "y > 0"}}
+		assert.True(t, rechecks(g), v.match)
+	}
+	assert.False(t, rechecks(&v1alpha1.PolicyGate{Spec: v1alpha1.PolicyGateSpec{Expression: `bundle.provenance.author != "bot"`}}))
 }
 
 // TestExplainHints (C5): explain and why print, on stderr, the command that
@@ -462,7 +496,7 @@ func TestApprove_PinAndConfirm(t *testing.T) {
 
 	_, errOut, err := run("", false, "app", "prod", "--version", "1.9")
 	assert.EqualError(t, err, "approve: the version waiting for prod is 2.0 (app-v2), not 1.9: nothing recorded")
-	assert.Contains(t, errOut, "Bundle: 2.0 (app-v2)")
+	assert.Contains(t, errOut, "Version: 2.0 (app-v2)")
 	assert.Empty(t, approvals(t, c))
 
 	_, errOut, err = run("n\n", true, "app", "prod")
