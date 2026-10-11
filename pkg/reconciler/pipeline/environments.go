@@ -272,7 +272,8 @@ const summaryMaxNamed = 6
 //
 // A fleet's targets are counted under the fleet's name, and so are the
 // environments of a wave with more environments than a clause names
-// ("wave 2"): "7.2.0 live in canary and 27 of 42 pops; promoting in 5 pops".
+// ("7 of 9 in wave 2"): "7.2.0 live in canary and 27 of 42 pops; promoting
+// in 5 pops".
 // The first clause that counts a group gives its size. Other environments
 // are named as they are, at most summaryMaxNamed per clause, then "and N
 // more"; so are a clause's PRs.
@@ -332,7 +333,7 @@ func Summarize(p *kardinalv1alpha1.Pipeline, ready metav1.Condition, envs []kard
 	sized := map[string]bool{}
 	for _, c := range clauses {
 		var items []string
-		named, more, grouped := 0, 0, false
+		named, more, at, grouped := 0, 0, 0, false
 		for _, place := range c.places {
 			n, isGroup := c.count[place]
 			switch {
@@ -342,20 +343,31 @@ func Summarize(p *kardinalv1alpha1.Pipeline, ready metav1.Condition, envs []kard
 			case !isGroup:
 				named++
 				items = append(items, place)
+				at = len(items)
 				continue
 			}
 			grouped = true
+			// A wave reads "7 of 9 in wave 2", a fleet "27 of 42 pops".
+			in := " "
+			if strings.HasPrefix(place, "wave ") {
+				in = " in "
+			}
 			switch {
 			case sized[place]:
-				items = append(items, fmt.Sprintf("%d %s", n, place))
+				items = append(items, fmt.Sprintf("%d%s%s", n, in, place))
 			case n == size[place]:
-				items = append(items, fmt.Sprintf("all %d %s", n, place))
+				items = append(items, fmt.Sprintf("all %d%s%s", n, in, place))
 			default:
-				items = append(items, fmt.Sprintf("%d of %d %s", n, size[place], place))
+				items = append(items, fmt.Sprintf("%d of %d%s%s", n, size[place], in, place))
 			}
 			sized[place] = true
 		}
-		s := c.what + " in " + joinItems(items, more, grouped)
+		if more > 0 {
+			// "N more" follows the named environments it stands for, before
+			// any group counted after them.
+			items = slices.Insert(items, at, fmt.Sprintf("%d more", more))
+		}
+		s := c.what + " in " + joinItems(items, more > 0 || grouped)
 		if c.version != "" && c.version != last {
 			s = c.version + " " + s
 		}
@@ -423,15 +435,12 @@ func capped(names []string) ([]string, int) {
 	return slices.Clone(names[:summaryMaxNamed]), len(names) - summaryMaxNamed
 }
 
-// joinItems joins a clause's places, then "N more" when more environments
-// were left out. Named environments alone are a comma list ("test, uat");
-// with a group count or "N more" the last is joined with "and" ("canary and
-// 27 of 42 pops", "a, b, c, d, e, f and 3 more").
-func joinItems(items []string, more int, grouped bool) string {
-	if more > 0 {
-		items = append(items, fmt.Sprintf("%d more", more))
-	}
-	if len(items) < 2 || (more == 0 && !grouped) {
+// joinItems joins a clause's places. Named environments alone are a comma
+// list ("test, uat"); with "N more" or a group count (and) the last place is
+// joined with "and" ("canary and 27 of 42 pops", "a, b, c, d, e, f and 3
+// more", "a, b, c, d, e, f, 2 more and 4 of 10 pops").
+func joinItems(items []string, and bool) string {
+	if len(items) < 2 || !and {
 		return strings.Join(items, ", ")
 	}
 	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]

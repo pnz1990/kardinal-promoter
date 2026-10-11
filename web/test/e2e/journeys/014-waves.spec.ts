@@ -26,7 +26,7 @@ const pipeline = {
   environmentStates: Object.fromEntries(['env-000', ...WAVE].map(e => [e, 'Verified'])),
   deployed: Object.fromEntries(['env-000', ...WAVE].map(e => [e, { bundle: 'fleet-2', version: '2.0.0' }])),
   // status.summary counts a wave longer than a clause names under the wave.
-  summary: '2.0.0 live in env-000 and all 149 wave 1',
+  summary: '2.0.0 live in env-000 and all 149 in wave 1',
 }
 
 const verified = (env: string, hours: number) => ({ name: env, phase: 'Verified', healthCheckedAt: new Date(created + hours * 3_600_000).toISOString() })
@@ -94,7 +94,7 @@ test.describe('Journey 014 — Waves', () => {
     await page.goto('/')
     await page.locator('aside').getByText('fleet', { exact: true }).click()
     await expect(page.getByRole('heading', { level: 1, name: 'fleet' })).toBeVisible()
-    await expect(page.locator('.app-pipeline-head__summary')).toContainText('2.0.0 live in env-000 and all 149 wave 1')
+    await expect(page.locator('.app-pipeline-head__summary')).toContainText('2.0.0 live in env-000 and all 149 in wave 1')
 
     // The station map draws the wave of 149 as one band (U2).
     const map = page.locator('.station-map')
