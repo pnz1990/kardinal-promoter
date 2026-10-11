@@ -15,6 +15,7 @@ export const WEB_TS: string
 export const DOCS_CSS: string
 export const WEB_FONTS: string
 export const DOCS_FONTS: string
+export const PUBLIC_FONTS: string
 export function flatten(tree: TokenTree, prefix?: string[]): FlatToken[]
 export function cssName(path: string[]): string
 export function resolve(tokens: TokenTree, ref: string, theme: 'light' | 'dark'): unknown

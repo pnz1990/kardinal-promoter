@@ -13,5 +13,9 @@ original family names.
 
 The woff2 files are subsets made with `hack/subset-fonts.sh`. Archivo keeps
 Latin. The two Atkinson fonts keep Latin and Latin Extended. Every axis is
-kept. `scripts/gen-tokens.mjs` declares the `@font-face` rules and copies this
-directory to `docs/assets/fonts/`.
+kept. So is every name record, including the copyright (name ID 0), the
+license (13) and the license URL (14); `web/src/tokens.test.ts` checks them.
+
+`scripts/gen-tokens.mjs` declares the `@font-face` rules. It also copies this
+directory to `docs/assets/fonts/`, and the license files to `web/public/fonts/`
+so that they ship in `web/dist` and the controller binary next to the fonts.
