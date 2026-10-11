@@ -74,7 +74,7 @@ export async function filterSidebar(page: Page, query: string) {
   const ns = query.split('/')[0].toLowerCase()
   await expect.poll(() => page.getByRole('list', { name: 'Pipelines' }).evaluate((list, ns) =>
     Array.from(list.children)
-      .filter(li => li.querySelector(':scope > ul[role="group"]'))
+      .filter(li => li.querySelector(':scope > ul[aria-labelledby]'))
       .map(li => li.firstElementChild?.textContent?.trim() ?? '')
       .filter(header => !header.toLowerCase().includes(ns)), ns)).toEqual([])
 }
