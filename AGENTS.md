@@ -19,7 +19,7 @@ from humans, from prior agent sessions, and from their own previous reasoning.
 
 ### The concrete failure this rule exists to prevent
 
-The flat DAG compilation idea was embedded in the graph-purity tech debt doc, roadmap,
+The flat DAG compilation idea was embedded in the design docs, roadmap
 and vision as "the correct implementation" for months. No one verified it against the Graph controller's
 actual execution model until a human explicitly challenged it. The evaluation took 10 minutes.
 Graph nodes communicate through etcd-backed CRD fields — they cannot share an ephemeral

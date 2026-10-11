@@ -122,7 +122,8 @@ type PipelineGit struct {
 	// Provider is ignored: the controller's --scm-provider flag, or
 	// spec.git.providerRef, selects the provider.
 	//
-	// Deprecated: ignored; the controller's --scm-provider flag selects the provider.
+	// Deprecated: ignored; the controller's --scm-provider flag, or spec.git.providerRef,
+	// selects the provider.
 	// It is removed in v0.11.
 	// +kubebuilder:validation:Enum=github;gitlab
 	// +optional
