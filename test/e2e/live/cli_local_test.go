@@ -908,6 +908,14 @@ func TestCLI_Dashboard(t *testing.T) {
 	assert.Equal(t, before, opened(), "--no-open opens nothing")
 	p.Interrupt()
 
+	// A pipeline's stage: the UI's route for it, on the forwarded address.
+	p = cli.Start(withOpener, "dashboard", "podinfo", "prod", "--no-open")
+	out = p.WaitStdout(60*time.Second, "dashboard <pipeline> <env> forwards", func(s string) bool {
+		return strings.Contains(s, "#/p/default/podinfo/env/prod\n")
+	})
+	assert.Regexp(t, `^kardinal UI: http://127\.0\.0\.1:\d+/ui/#/p/default/podinfo/env/prod\n`, out)
+	p.Interrupt()
+
 	// The help's --address example, on a port kubectl forwards to.
 	help := cli.Exec(noCluster, "dashboard", "--help").Stdout
 	m := regexp.MustCompile(`(?m)^\s+kardinal dashboard --address (\S+)$`).FindStringSubmatch(help)

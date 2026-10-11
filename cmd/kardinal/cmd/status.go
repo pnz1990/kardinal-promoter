@@ -69,7 +69,13 @@ it and -o json prints it for scripts.`,
 				return statusSummaryFn(w, c, controllerNS)
 			}
 			if !watchFlag {
-				return render()
+				if err := render(); err != nil {
+					return err
+				}
+				if len(args) == 1 && !structured() {
+					printUILink(ns, args[0], "")
+				}
+				return nil
 			}
 			return watchLoop(cmd.Context(), w, getPipelinesWatchInterval, render)
 		},

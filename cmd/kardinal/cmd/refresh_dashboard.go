@@ -77,21 +77,29 @@ func newDashboardCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "dashboard",
+		Use:   "dashboard [<pipeline> [<env>]]",
 		Short: "Open the kardinal UI dashboard in a browser",
 		Long: `Open the kardinal UI (served by the controller at /ui/) in your browser.
 Without --address it port-forwards a local port (8082 when it is free) to the
 controller in --controller-namespace, opens the UI and keeps forwarding until
 Ctrl-C. With --address (or KARDINAL_UI_URL) it opens that URL and forwards
-nothing.`,
+nothing. With <pipeline> it opens that pipeline, with <env> its stage.`,
 		Example: `  kardinal dashboard
-  kardinal dashboard --no-open
+  kardinal dashboard my-app prod
   kardinal dashboard --address https://kardinal.example.com/ui/`,
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Args: cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(contextOf(cmd), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			return dashboardFn(ctx, cmd.OutOrStdout(), uiAddress, controllerNS, noOpen)
+			route := ""
+			if len(args) > 0 {
+				env := ""
+				if len(args) > 1 {
+					env = args[1]
+				}
+				route = uiRoute(linkNamespace(), args[0], env)
+			}
+			return dashboardFn(ctx, cmd.OutOrStdout(), uiAddress, controllerNS, noOpen, route)
 		},
 	}
 
@@ -115,7 +123,7 @@ func contextOf(cmd *cobra.Command) context.Context {
 // dashboardFn opens the UI at address, else KARDINAL_UI_URL, else through a
 // port-forward to the controller in controllerNS, which it keeps until ctx
 // is done.
-func dashboardFn(ctx context.Context, w io.Writer, address, controllerNS string, noOpen bool) error {
+func dashboardFn(ctx context.Context, w io.Writer, address, controllerNS string, noOpen bool, route string) error {
 	if address == "" {
 		address = os.Getenv("KARDINAL_UI_URL")
 	}
@@ -128,6 +136,7 @@ func dashboardFn(ctx context.Context, w io.Writer, address, controllerNS string,
 		}
 	}
 
+	address = withRoute(address, route)
 	if _, err := fmt.Fprintf(w, "kardinal UI: %s\n", address); err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
@@ -163,6 +172,60 @@ func dashboardFn(ctx context.Context, w io.Writer, address, controllerNS string,
 // defaultUIAddress is where kardinal dashboard opens the UI without
 // --address: the controller's UI port, forwarded to localhost.
 const defaultUIAddress = "http://localhost:8082/ui/"
+
+// uiRoute is the UI's route (#/p/<ns>/<pipeline>, with /env/<env> for a
+// stage) of pipeline in ns, "" without a pipeline.
+func uiRoute(ns, pipeline, env string) string {
+	if pipeline == "" {
+		return ""
+	}
+	r := "#/p/" + url.PathEscape(ns) + "/" + url.PathEscape(pipeline)
+	if env != "" {
+		r += "/env/" + url.PathEscape(env)
+	}
+	return r
+}
+
+// withRoute is the UI address with route in place of its fragment.
+func withRoute(address, route string) string {
+	if route == "" {
+		return address
+	}
+	if i := strings.Index(address, "#"); i >= 0 {
+		address = address[:i]
+	}
+	return address + route
+}
+
+// uiLink is the UI's page of pipeline (and env) in ns when the UI's address
+// is known (KARDINAL_UI_URL), else "": a port-forward may not be running.
+func uiLink(ns, pipeline, env string) string {
+	base := os.Getenv("KARDINAL_UI_URL")
+	if base == "" {
+		return ""
+	}
+	return withRoute(base, uiRoute(ns, pipeline, env))
+}
+
+// printUILink prints, on stderr, the UI page of pipeline (and env) in ns
+// when the UI's address is known (KARDINAL_UI_URL).
+func printUILink(ns, pipeline, env string) {
+	if link := uiLink(ns, pipeline, env); link != "" {
+		_, _ = fmt.Fprintf(errOut, "%s %s\n", sty.Dim("UI:"), link)
+	}
+}
+
+// linkNamespace is the namespace a link names: -n, else the kubeconfig
+// context's, else default.
+func linkNamespace() string {
+	if globalNamespace != "" {
+		return globalNamespace
+	}
+	if _, ns, err := buildRestConfig(); err == nil && ns != "" {
+		return ns
+	}
+	return "default"
+}
 
 // uiURL is the UI's page of pipeline in ns: KARDINAL_UI_URL (else
 // defaultUIAddress) with the pipeline's hash route.
@@ -207,4 +270,9 @@ free port when 8082 is taken) to that Pod, prints the URL, opens it (not with
 --no-open) and keeps forwarding until Ctrl-C. It needs get on services and
 endpointslices and create on pods/portforward in that namespace. With
 --address it prints and opens that URL, and forwards nothing (see "Accessing
-the UI" in docs/installation.md).`
+the UI" in docs/installation.md).
+
+With <pipeline> it opens the UI's page of it (#/p/<namespace>/<pipeline>, the
+namespace from -n or the kubeconfig context), with <env> that stage's
+drawer (/env/<env>). kardinal why and kardinal status <pipeline> print the
+same link on stderr when KARDINAL_UI_URL says where the UI is.`

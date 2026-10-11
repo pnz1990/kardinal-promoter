@@ -8,7 +8,7 @@ Open the kardinal UI (served by the controller at /ui/) in your browser.
 Without --address it port-forwards a local port (8082 when it is free) to the
 controller in --controller-namespace, opens the UI and keeps forwarding until
 Ctrl-C. With --address (or KARDINAL_UI_URL) it opens that URL and forwards
-nothing.
+nothing. With <pipeline> it opens that pipeline, with <env> its stage.
 
 The UI is served by the controller at /ui/ (port 8082, the Service port named
 ui). Without --address or KARDINAL_UI_URL, dashboard finds the
@@ -20,15 +20,20 @@ endpointslices and create on pods/portforward in that namespace. With
 --address it prints and opens that URL, and forwards nothing (see "Accessing
 the UI" in docs/installation.md).
 
+With <pipeline> it opens the UI's page of it (#/p/<namespace>/<pipeline>, the
+namespace from -n or the kubeconfig context), with <env> that stage's
+drawer (/env/<env>). kardinal why and kardinal status <pipeline> print the
+same link on stderr when KARDINAL_UI_URL says where the UI is.
+
 ```
-kardinal dashboard [flags]
+kardinal dashboard [<pipeline> [<env>]] [flags]
 ```
 
 ### Examples
 
 ```
   kardinal dashboard
-  kardinal dashboard --no-open
+  kardinal dashboard my-app prod
   kardinal dashboard --address https://kardinal.example.com/ui/
 ```
 

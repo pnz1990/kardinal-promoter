@@ -38,11 +38,16 @@ func TestDashboard(t *testing.T) {
 		want     string
 		wantErr  string
 		forwards bool
+		route    string
 	}{
 		{name: "address", address: "http://ui.example/ui/", noOpen: true,
 			want: "kardinal UI: http://ui.example/ui/\n"},
 		{name: "KARDINAL_UI_URL", envURL: "http://env.example/ui/", noOpen: true,
 			want: "kardinal UI: http://env.example/ui/\n"},
+		{name: "a pipeline's stage", address: "http://ui.example/ui/#old", noOpen: true, route: uiRoute("team-a", "my-app", "prod"),
+			want: "kardinal UI: http://ui.example/ui/#/p/team-a/my-app/env/prod\n"},
+		{name: "a pipeline, forwarded", noOpen: true, forwards: true, route: uiRoute("default", "demo", ""),
+			want: "kardinal UI: http://127.0.0.1:8082/ui/#/p/default/demo\nForwarding to the controller in kardinal-system; Ctrl-C stops.\n"},
 		{name: "port-forward", noOpen: true, forwards: true,
 			want: "kardinal UI: http://127.0.0.1:8082/ui/\nForwarding to the controller in kardinal-system; Ctrl-C stops.\n"},
 		{name: "no controller", forward: errors.New("no kardinal-promoter Service with a ui port in kardinal-system"),
@@ -71,7 +76,7 @@ func TestDashboard(t *testing.T) {
 			}
 			defer cancel()
 			var out bytes.Buffer
-			err := dashboardFn(ctx, &out, tc.address, "kardinal-system", tc.noOpen)
+			err := dashboardFn(ctx, &out, tc.address, "kardinal-system", tc.noOpen, tc.route)
 			if tc.wantErr != "" {
 				require.EqualError(t, err, tc.wantErr)
 				return
@@ -134,4 +139,32 @@ func TestFindUITarget(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+// TestUILink (CLI UX 7): why and status print the UI page of what they show
+// on stderr when the UI's address is known (KARDINAL_UI_URL), and nothing
+// otherwise (a port-forward may not be running).
+func TestUILink(t *testing.T) {
+	c := policyClient(t, policyPipeline("demo", "test", "prod"))
+	prev := buildClient
+	buildClient = func() (sigs_client.Client, string, error) { return c, "default", nil }
+	t.Cleanup(func() { buildClient, globalOutput, globalNamespace = prev, "", "" })
+	run := func(args ...string) string {
+		var errb bytes.Buffer
+		prevErr := errOut
+		t.Cleanup(func() { errOut = prevErr })
+		root := NewRootCmd()
+		root.SetOut(&bytes.Buffer{})
+		root.SetErr(&errb)
+		root.SetArgs(args)
+		require.NoError(t, root.Execute())
+		return errb.String()
+	}
+	t.Setenv("KARDINAL_UI_URL", "")
+	assert.NotContains(t, run("why", "demo", "prod"), "UI:")
+	t.Setenv("KARDINAL_UI_URL", "https://kardinal.example.com/ui/")
+	assert.Contains(t, run("why", "demo", "prod"), "UI: https://kardinal.example.com/ui/#/p/default/demo/env/prod\n")
+	assert.Contains(t, run("status", "demo"), "UI: https://kardinal.example.com/ui/#/p/default/demo\n")
+	assert.NotContains(t, run("status", "demo", "-o", "json"), "UI:", "not with -o json")
+	assert.Equal(t, "#/p/team%20a/my-app/env/prod", uiRoute("team a", "my-app", "prod"))
 }

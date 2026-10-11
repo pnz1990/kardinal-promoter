@@ -146,7 +146,7 @@ func TestRefreshAndDashboard(t *testing.T) {
 	require.Error(t, refreshFn(&buf, c, "default", "missing"))
 
 	buf.Reset()
-	require.NoError(t, dashboardFn(context.Background(), &buf, defaultUIAddress, "kardinal-system", true))
+	require.NoError(t, dashboardFn(context.Background(), &buf, defaultUIAddress, "kardinal-system", true, ""))
 	assert.Equal(t, "kardinal UI: http://localhost:8082/ui/\n", buf.String())
 
 	refreshHelp, dashboardHelp := newRefreshCmd().Long, newDashboardCmd().Long
