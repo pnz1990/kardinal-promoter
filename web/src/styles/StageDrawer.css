@@ -357,9 +357,7 @@
 }
 
 .stage-targets,
-.stage-gates,
-.stage-events,
-.stage-steps {
+.stage-gates {
   margin: 0;
   padding: 0;
   list-style: none;
@@ -368,20 +366,13 @@
   gap: var(--k-space-2);
 }
 
-.stage-targets li,
-.stage-steps__item {
+.stage-targets li {
   display: flex;
   align-items: center;
   gap: var(--k-space-3);
 }
 
-.stage-steps__glyph { inline-size: var(--k-space-4); text-align: center; }
-.stage-steps__name { font-family: var(--k-font-mono); font-size: var(--k-text-xs); }
-.stage-steps__item--failed .stage-steps__glyph { color: var(--k-status-failed-fg); }
-.stage-steps__item--promoting .stage-steps__glyph { color: var(--k-status-promoting-fg); }
-.stage-steps__item--verified .stage-steps__glyph { color: var(--k-status-verified-fg); }
 
-.stage-events__item--warning { color: var(--k-status-failed-fg); }
 
 .stage-conditions {
   margin: var(--k-space-2) 0 0;
@@ -470,4 +461,12 @@
 
 @media (prefers-reduced-motion: reduce) {
   .stage-drawer { scroll-behavior: auto; }
+}
+
+/* A gate's CEL under Details, with the controller's compile check (UI-NODE-01). */
+.stage-cel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--k-space-2);
 }

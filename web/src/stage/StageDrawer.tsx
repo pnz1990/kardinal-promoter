@@ -9,17 +9,21 @@
 // the map returns focus to the station. At the lg breakpoint and wider the
 // drawer is a non-modal column beside the page (the page gives up its
 // width); narrower, a modal sheet with trapped focus. Esc closes an open action dialog first, then the drawer.
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import CopyButton from '../components/CopyButton'
 import { displayState, type Tone } from '../displayStates.gen'
 import { formatElapsedSince } from '../timeFormat'
 import { breakpoint } from '../tokens'
+import { StatusChip } from '../ui'
+import { CELBlock } from '../components/CELBlock'
+import EventsPanel from '../components/EventsPanel'
+import { StepProgress } from '../components/StepProgress'
 import type { Bundle, Pipeline, PolicyGate, PromotionStep, StepEvent } from '../types'
 import { useModalFocus } from '../useModalFocus'
 import { KubernetesDetails } from '../ui/KubernetesDetails'
 import { ACTION_LABEL, DESTRUCTIVE, StageActions } from './StageActions'
-import { gateDisplay, gateLabel, stageView, type StageActionKind, type WaitReason } from './stageModel'
+import { gateDisplay, gateLabel, IN_FLIGHT, stageView, type StageActionKind, type WaitReason } from './stageModel'
 import '../styles/StageDrawer.css'
 
 export type StageSection = 'why' | 'actions' | 'evidence' | 'history'
@@ -91,11 +95,20 @@ function DrawerSheet(props: StageDrawerProps) {
   )
 }
 
-function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, data, onChanged, now = Date.now(),
+function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, data, onChanged, now: nowProp,
   onDialog }: StageDrawerProps & { onDialog?: (open: boolean) => void }) {
   const p = data.pipeline
   const view = useMemo(() => p ? stageView({ env, pipeline: p, bundles: data.bundles, steps: data.steps, gates: data.gates }) : undefined,
     [env, p, data.bundles, data.steps, data.gates])
+  // The clock: each second while the promotion runs (its elapsed time ticks), else per render.
+  const running = !!view?.step && IN_FLIGHT.has(view.step.state)
+  const [clock, setClock] = useState(() => Date.now())
+  useEffect(() => {
+    if (nowProp !== undefined || !running) return
+    const t = window.setInterval(() => setClock(Date.now()), 1000)
+    return () => window.clearInterval(t)
+  }, [nowProp, running])
+  const now = nowProp ?? (running ? clock : Date.now())
   const [action, setAction] = useState<StageActionKind>()
   const [actionGate, setActionGate] = useState<PolicyGate>()
   const open = (k: StageActionKind | undefined, gate?: PolicyGate) => { setAction(k); setActionGate(gate); onDialog?.(!!k) }
@@ -169,7 +182,7 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
 
           <section className="stage-section" data-section="history" ref={el => { sectionRefs.current.history = el }} aria-labelledby={`${headingId}-history`}>
             <h3 id={`${headingId}-history`} className="stage-section__title">History</h3>
-            <History namespace={namespace} step={view.step} now={now} />
+            <History namespace={namespace} step={view.step} />
           </section>
 
           {/* The stage's object, for kubectl, collapsed at the bottom (U4 glossary). */}
@@ -238,15 +251,51 @@ function WhyItem({ reason: w, now, primary, cli, onAct, onUpstream, upstreams }:
         )}
         {w.next === 'openPR' && w.prURL && <a className="stage-link" href={w.prURL} target="_blank" rel="noreferrer">Open pull request</a>}
       </div>
-      {w.gate && (
-        <details className="stage-details">
-          <summary>Details</summary>
-          <pre className="stage-code"><code>{w.gate.expression}</code></pre>
-        </details>
-      )}
-      {/* The gate's object, for kubectl: the only place the drawer names the kind. */}
-      {w.gate && <KubernetesDetails kind="PolicyGate" name={w.gate.name} namespace={w.gate.namespace} />}
+      {w.gate && <GateDetails gate={w.gate} k8s />}
     </li>
+  )
+}
+
+/** A gate's raw details, closed: its CEL, checked when opened; for a gate that holds the
+ *  stage, also its object, for kubectl (the only place the drawer names the kind, U4). */
+function GateDetails({ gate, k8s }: { gate: PolicyGate; k8s?: boolean }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <details className="stage-details" onToggle={e => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+        <summary>Details</summary>
+        {open ? <CelCheck expression={gate.expression} /> : <pre className="stage-code"><CELBlock expression={gate.expression} /></pre>}
+      </details>
+      {k8s && <KubernetesDetails kind="PolicyGate" name={gate.name} namespace={gate.namespace} />}
+    </>
+  )
+}
+
+/** A gate's CEL, with whether the controller's CEL environment compiles it (UI-NODE-01). */
+function CelCheck({ expression }: { expression: string }) {
+  const [check, setCheck] = useState<{ valid: boolean; error?: string }>()
+  useEffect(() => {
+    setCheck(undefined)
+    if (!expression) return
+    let live = true
+    void Promise.resolve()
+      .then(() => api.validateCEL(expression))
+      .then(r => { if (live) setCheck(r) })
+      .catch(() => { /* advisory: no chip when the check itself fails */ })
+    return () => { live = false }
+  }, [expression])
+  return (
+    <div className="stage-cel" data-invalid={check?.valid === false || undefined}>
+      <pre className="stage-code"><CELBlock expression={expression} /></pre>
+      {check?.valid === true && <StatusChip tone="verified" glyph="✓" label="valid" compact data-cel-check="valid" />}
+      {check?.valid === false && (
+        <>
+          <StatusChip tone="failed" glyph="✗" label="error" compact data-cel-check="error"
+            title={check.error ? `CEL compile error: ${check.error}` : 'CEL compile error'} />
+          {check.error && <p className="stage-why__detail">{`CEL compile error: ${check.error}`}</p>}
+        </>
+      )}
+    </div>
   )
 }
 
@@ -263,20 +312,14 @@ function Images({ bundle }: { bundle?: Bundle }) {
 
 function Evidence({ step, gates, now }: { step?: PromotionStep; gates: PolicyGate[]; now: number }) {
   if (!step) return <p className="stage-muted">Evidence appears when this environment gets its first promotion: the steps it ran, its bake time and its gates.</p>
+  const startedAt = step.steps?.find(s => s.startedAt)?.startedAt
   return (
     <>
-      {step.steps && step.steps.length > 0 && (
-        <ol className="stage-steps">{step.steps.map((s, i) => {
-          const d = displayState('substep', s.state)
-          return (
-            <li key={i} className={`stage-steps__item stage-steps__item--${d.tone}`}>
-              <span aria-hidden="true" className="stage-steps__glyph">{d.glyph}</span>
-              <span className="stage-steps__name">{s.name}</span>
-              <span className="stage-muted">{d.label}{s.durationMs ? ` · ${Math.round(s.durationMs / 1000)}s` : ''}</span>
-            </li>
-          )
-        })}</ol>
+      {IN_FLIGHT.has(step.state) && startedAt && (
+        <p className="stage-muted" data-testid="stage-elapsed">Running for {formatElapsedSince(startedAt, now)}</p>
       )}
+      {/* The sub-steps and their timing bars (UI-STEPTIME-01), as the node details drew them. */}
+      <StepProgress step={step} />
       {step.bakeTargetMinutes ? (
         <p className="stage-muted">Bake: {step.bakeElapsedMinutes ?? 0} of {step.bakeTargetMinutes} healthy minutes
           {step.bakeResets ? `, reset ${step.bakeResets} time${step.bakeResets === 1 ? '' : 's'}` : ''}.</p>
@@ -287,7 +330,8 @@ function Evidence({ step, gates, now }: { step?: PromotionStep; gates: PolicyGat
           const d = gateDisplay(g)
           return (
             <li key={g.name}><StateChip label={d.label} tone={d.tone} glyph={d.glyph} /> <span title={g.name}>{gateLabel(g)}</span>
-              {g.lastEvaluatedAt && <span className="stage-muted"> · {formatElapsedSince(g.lastEvaluatedAt, now)} ago</span>}</li>
+              {g.lastEvaluatedAt && <span className="stage-muted"> · {formatElapsedSince(g.lastEvaluatedAt, now)} ago</span>}
+              <GateDetails gate={g} /></li>
           )
         })}</ul>
       )}
@@ -303,10 +347,9 @@ function Evidence({ step, gates, now }: { step?: PromotionStep; gates: PolicyGat
   )
 }
 
-function History({ namespace, step, now }: { namespace: string; step?: PromotionStep; now: number }) {
+function History({ namespace, step }: { namespace: string; step?: PromotionStep }) {
   const [events, setEvents] = useState<StepEvent[]>()
   const [error, setError] = useState<string>()
-  const listId = useId()
   useEffect(() => {
     if (!step) return
     let live = true
@@ -319,11 +362,6 @@ function History({ namespace, step, now }: { namespace: string; step?: Promotion
   if (error) return <p className="stage-muted">The events could not be read: {error}</p>
   if (!events) return <p className="stage-muted">Loading events…</p>
   if (events.length === 0) return <p className="stage-muted">No events yet. They appear as the promotion runs.</p>
-  return (
-    <ol id={listId} className="stage-events">{events.map((e, i) => (
-      <li key={i} className={e.type === 'Warning' ? 'stage-events__item stage-events__item--warning' : 'stage-events__item'}>
-        <span className="stage-muted">{formatElapsedSince(e.lastTimestamp, now)} ago</span> {e.message}
-      </li>
-    ))}</ol>
-  )
+  // The Kubernetes events of the step, as the node details listed them (UI-NODE-01).
+  return <EventsPanel events={events} stepName={step.name} namespace={namespace} />
 }

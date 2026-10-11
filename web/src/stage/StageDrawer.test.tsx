@@ -2,12 +2,12 @@
 // Licensed under the Apache License, Version 2.0
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, within, act } from '@testing-library/react'
+import { render, screen, within, act, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 const api = vi.hoisted(() => ({
   recordApproval: vi.fn(), overrideGate: vi.fn(), rollback: vi.fn(), releaseHold: vi.fn(), pause: vi.fn(),
-  resume: vi.fn(), rejectBundle: vi.fn(), getStepEvents: vi.fn(),
+  resume: vi.fn(), rejectBundle: vi.fn(), getStepEvents: vi.fn(), validateCEL: vi.fn(),
 }))
 vi.mock('../api/client', () => ({ api }))
 
@@ -53,6 +53,7 @@ describe('StageDrawer (U3)', () => {
   beforeEach(() => {
     Object.values(api).forEach(f => f.mockReset())
     api.getStepEvents.mockResolvedValue([])
+    api.validateCEL.mockResolvedValue({ valid: true })
   })
 
   it('puts why it is waiting first: the gate, its message and its age, before the actions', () => {
@@ -127,7 +128,8 @@ describe('StageDrawer (U3)', () => {
 
   it('keeps raw CEL and conditions behind Details', () => {
     renderDrawer()
-    const cel = screen.getByText('bundle.approvals >= 2')
+    const cel = document.querySelector('.cel-block') as HTMLElement
+    expect(cel).toHaveTextContent('bundle.approvals >= 2')
     expect(cel.closest('details')).not.toHaveAttribute('open')
     expect(screen.getByText('Ready').closest('details')).not.toHaveAttribute('open')
   })
@@ -270,5 +272,26 @@ describe('StageDrawer (U3)', () => {
     await user.click(screen.getByRole('button', { name: 'Close prod' }))
     expect(props.onClose).toHaveBeenCalledOnce()
     await act(async () => {})
+  })
+
+  it('Details checks the gate\'s CEL with the controller; the step shows its sub-steps, running time and events (UI-NODE-01)', async () => {
+    api.validateCEL.mockResolvedValue({ valid: false, error: 'undeclared reference to \'bundel\'' })
+    api.getStepEvents.mockResolvedValue([{ type: 'Normal', reason: 'WaitingForMerge', message: 'PR opened', count: 1, lastTimestamp: '2026-10-11T09:00:00Z' }])
+    const running: PromotionStep = { ...step, state: 'WaitingForMerge', steps: [
+      { name: 'git-clone', state: 'Completed', startedAt: '2026-10-11T09:00:00Z', completedAt: '2026-10-11T09:00:02Z', durationMs: 2000 },
+      { name: 'open-pr', state: 'InProgress', startedAt: '2026-10-11T09:00:02Z' }] }
+    renderDrawer([freeze], { data: { pipeline, bundles, steps: [running], gates: [freeze] } })
+    expect(api.validateCEL).not.toHaveBeenCalled()
+    const details = document.querySelector('[data-section="why"] details') as HTMLDetailsElement
+    act(() => { details.open = true; details.dispatchEvent(new Event('toggle')) })
+    await waitFor(() => expect(document.querySelector('[data-cel-check="error"]')).not.toBeNull())
+    const chip = document.querySelector('[data-cel-check="error"]') as HTMLElement
+    expect(chip).toHaveTextContent('error')
+    expect(chip).toHaveAttribute('title', "CEL compile error: undeclared reference to 'bundel'")
+    const items = within(screen.getByRole('list', { name: 'Promotion steps' })).getAllByRole('listitem')
+    expect(items.map(i => i.getAttribute('data-step-state'))).toEqual(['Completed', 'InProgress'])
+    expect(items[1]).toHaveTextContent('waiting for merge')
+    expect(screen.getByTestId('stage-elapsed')).toHaveTextContent('Running for 3m 0s')
+    expect(await screen.findByTestId('events-panel')).toHaveTextContent('PR opened')
   })
 })
