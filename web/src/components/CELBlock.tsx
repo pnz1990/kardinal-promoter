@@ -3,6 +3,7 @@
 //
 // components/CELBlock.tsx — a CEL expression with syntax colours (#333), shown by the node
 // details and the stage drawer's Details.
+import '../styles/NodeDetail.css'
 
 type CELTokenType = 'keyword' | 'function' | 'string' | 'number' | 'operator' | 'boolean' | 'identifier' | 'plain'
 interface CELToken { type: CELTokenType; text: string }
@@ -96,33 +97,15 @@ export function tokenizeCEL(expr: string): CELToken[] {
   return tokens
 }
 
-const CEL_TOKEN_COLORS: Record<CELTokenType, string> = {
-  keyword: 'var(--color-warning)',     // true/false/in/has etc
-  function: 'var(--color-info)',       // function calls
-  string: 'var(--color-success)',      // string literals
-  number: 'var(--color-accent)',       // numbers
-  operator: 'var(--color-text)',       // operators
-  boolean: 'var(--color-warning)',     // boolean literals
-  identifier: 'var(--color-code)',     // identifiers (bundle.X, schedule.X)
-  plain: 'var(--color-text-muted)',    // whitespace and anything else
-}
 
 /** #333: Syntax-highlighted CEL expression block. */
 export function CELBlock({ expression }: { expression: string }) {
   const tokens = tokenizeCEL(expression)
   return (
-    <code className="cel-block" style={{
-      display: 'block',
-      background: 'var(--color-bg)',
-      borderRadius: '4px',
-      padding: '0.5rem 0.75rem',
-      fontSize: '0.8rem',
-      fontFamily: 'var(--k-font-mono)',
-      wordBreak: 'break-all',
-      whiteSpace: 'pre-wrap',
-    }}>
+    <code className="cel-block">
       {tokens.map((token, idx) => (
-        <span key={idx} style={{ color: CEL_TOKEN_COLORS[token.type] }}>
+        // The token type picks the syntax colour (NodeDetail.css, --k-syntax-*).
+        <span key={idx} className={`cel-token cel-token--${token.type}`}>
           {token.text}
         </span>
       ))}

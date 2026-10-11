@@ -1,0 +1,90 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * PolicyGatesPanel.css — the gates of the shown bundle (components/PolicyGatesPanel.tsx).
+ * Design tokens only (noLiterals.test.ts).
+ */
+
+.gates-panel { margin-block-end: var(--k-space-3); }
+
+.gates-panel__skeleton {
+  block-size: var(--k-space-4);
+  margin-block-end: var(--k-space-1_5);
+  border-radius: var(--k-radius-1);
+  background: linear-gradient(90deg, var(--k-surface-base) 25%, var(--k-surface-raised) 50%, var(--k-surface-base) 75%);
+  background-size: 200% 100%;
+  animation: gates-panel-shimmer 1.5s infinite;
+}
+.gates-panel__skeleton:nth-of-type(1) { inline-size: 70%; }
+.gates-panel__skeleton:nth-of-type(2) { inline-size: 50%; }
+@keyframes gates-panel-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.gates-panel__toggle {
+  display: flex;
+  align-items: center;
+  padding: var(--k-space-1) 0;
+  border: 0;
+  background: none;
+  color: var(--k-ink);
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-sm);
+  font-weight: var(--k-weight-semibold);
+  cursor: pointer;
+}
+
+/* The collapsed summary: tone of the most urgent state (HealthChip's health). */
+.gates-panel__summary {
+  margin-inline-start: var(--k-space-2);
+  padding: var(--k-space-px) var(--k-space-1_5);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-2);
+  background: var(--k-surface-base);
+  color: var(--k-ink-3);
+  font-size: var(--k-text-2xs);
+}
+.gates-panel__summary[data-health="Ready"] {
+  border-color: var(--k-status-verified-fg);
+  background: var(--k-status-verified-wash);
+  color: var(--k-status-verified-fg);
+}
+.gates-panel__summary[data-health="Error"] {
+  border-color: var(--k-status-failed-fg);
+  background: var(--k-status-failed-wash);
+  color: var(--k-status-failed-fg);
+}
+.gates-panel__summary[data-health="Pending"] {
+  border-color: var(--k-ink-3);
+  color: var(--k-ink-2);
+}
+
+.gates-panel__list {
+  margin-block-start: var(--k-space-1);
+  padding-inline-start: var(--k-space-3);
+  border-inline-start: var(--k-stroke-ring) solid var(--k-line);
+}
+.gates-panel__gate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--k-space-0_5);
+  padding: var(--k-space-1_5) 0;
+  border-block-end: var(--k-border-hairline) solid var(--k-line-subtle);
+}
+.gates-panel__gate-head { display: flex; align-items: center; gap: var(--k-space-2); }
+.gates-panel__name { color: var(--k-ink); font-size: var(--k-text-sm); font-weight: var(--k-weight-medium); }
+.gates-panel__meta { margin-inline-start: auto; color: var(--k-ink-3); font-size: var(--k-text-2xs); }
+.gates-panel__expr {
+  padding: var(--k-space-0_5) var(--k-space-1_5);
+  border: var(--k-border-hairline) solid var(--k-line-subtle);
+  border-radius: var(--k-radius-1);
+  background: var(--k-surface-canvas);
+  color: var(--k-syntax-ident);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-xs);
+  word-break: break-all;
+}
+.gates-panel__reason { color: var(--k-ink-2); font-size: var(--k-text-2xs); }
+.gates-panel__reason[data-blocking] { color: var(--k-status-failed-fg); }

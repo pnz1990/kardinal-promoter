@@ -29,6 +29,7 @@ import { PipelineActionDialog, type PipelineActionKind } from './PipelineActionD
 import { formatElapsedSince } from '../timeFormat'
 import { isHttpURL } from '../prLink'
 import { canPromote, canRollback } from '../pipelineActions'
+import '../styles/NodeDetail.css'
 
 interface Props {
   node: GraphNode | null
@@ -56,8 +57,6 @@ interface Props {
 // RollingBack is an end state: the step failed health and a rollback Bundle
 // took over; the rollback Bundle's own step is the one in flight.
 const IN_FLIGHT_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'Verifying'])
-
-const labelStyle = { color: 'var(--color-text)' } as const
 
 /** Format an ISO timestamp to a human-readable string. */
 function formatTimestamp(iso: string): string {
@@ -193,48 +192,28 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
   const showRollback = canAct && canRollback(liveNode)
 
   return (
-    <div data-testid="node-detail" style={{
-      width: '340px',
-      minWidth: '300px',
-      height: '100%',
-      background: 'var(--color-surface)',
-      borderLeft: '1px solid var(--color-border)',
-      padding: '1.5rem',
-      overflowY: 'auto',
-      flexShrink: 0,
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
-        <h3 style={{ fontSize: '1rem', fontWeight: 600, margin: 0 }}>{node.label}</h3>
-        <button
-          onClick={onClose}
-          style={{
-            background: 'none',
-            border: 'none',
-            color: 'var(--color-text-muted)',
-            cursor: 'pointer',
-            fontSize: '1.25rem',
-            lineHeight: 1,
-          }}
-          aria-label="Close"
-        >
+    <div data-testid="node-detail" className="node-detail">
+      <div className="node-detail__header">
+        <h3 className="node-detail__title">{node.label}</h3>
+        <button onClick={onClose} className="node-detail__close" aria-label="Close">
           ×
         </button>
       </div>
 
-      <div style={{ marginBottom: '0.75rem' }}>
+      <div className="node-detail__section">
         <HealthChip state={node.state} nodeType={node.type} size="md" />
       </div>
 
-      <div style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginBottom: '0.5rem' }}>
-        <strong style={labelStyle}>Type:</strong> {node.type}
+      <div className="node-detail__field">
+        <strong className="node-detail__label">Type:</strong> {node.type}
       </div>
-      <div style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginBottom: '0.5rem' }}>
-        <strong style={labelStyle}>Environment:</strong> {node.environment}
+      <div className="node-detail__field">
+        <strong className="node-detail__label">Environment:</strong> {node.environment}
       </div>
 
       {/* #330: Elapsed duration timer for active PromotionStep nodes */}
       {isActiveNode && (
-        <div style={{ fontSize: '0.85rem', color: 'var(--color-warning)', marginBottom: '0.5rem' }}>
+        <div className="node-detail__field node-detail__field--elapsed">
           <strong>Elapsed:</strong>{' '}
           {elapsedDisplay || 'running…'}
         </div>
@@ -243,25 +222,13 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
       {/* Promote / rollback — only where they can do something (pipelineActions.ts).
           The result stays visible after the step moves on and the buttons go. */}
       {canAct && (showPromote || showRollback || actionResult) && (
-        <div style={{ marginBottom: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+        <div className="node-detail__section node-detail__actions">
           {showPromote && (
             <button
               type="button"
               onClick={() => setConfirmAction('promote')}
               title={`Promote ${pipelineName} to ${node.environment}`}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.4rem',
-                padding: '0.35rem 0.8rem',
-                background: 'var(--color-accent-bg)',
-                color: 'var(--color-accent)',
-                border: '1px solid var(--color-accent)',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '0.8rem',
-                fontWeight: 500,
-              }}
+              className="node-detail__action node-detail__action--promote"
             >
               <span aria-hidden="true">▶</span>
               <span>Promote to {node.environment}</span>
@@ -273,26 +240,14 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
               type="button"
               onClick={() => setConfirmAction('rollback')}
               title={`Roll back ${node.environment} to the previous verified version`}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.4rem',
-                padding: '0.35rem 0.8rem',
-                background: 'transparent',
-                color: 'var(--color-error)',
-                border: '1px solid var(--color-error)',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '0.8rem',
-                fontWeight: 500,
-              }}
+              className="node-detail__action node-detail__action--rollback"
             >
               <span aria-hidden="true">↩</span>
               <span>Roll back {node.environment}</span>
             </button>
           )}
           {actionResult && (
-            <div role="status" style={{ fontSize: '0.75rem', color: 'var(--color-success)' }}>
+            <div role="status" className="node-detail__result">
               {actionResult}
             </div>
           )}
@@ -316,31 +271,13 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
 
       {/* PromotionStep: step progress log */}
       {isPromotionStep && stepLoading && (
-        <div style={{ marginBottom: '0.75rem' }} data-testid="step-skeleton">
+        <div className="node-detail__section" data-testid="step-skeleton">
           {/* #784: skeleton loading state — shimmer placeholders while step details load */}
-          <style>{`
-            @keyframes shimmer-nd {
-              0% { background-position: 200% 0; }
-              100% { background-position: -200% 0; }
-            }
-          `}</style>
           <span className="sr-only" role="status">
             Loading step details
           </span>
-          {[75, 55, 65, 45].map((w, i) => (
-            <div
-              key={i}
-              aria-hidden="true"
-              style={{
-                height: '20px',
-                borderRadius: '4px',
-                background: 'linear-gradient(90deg, var(--color-surface) 25%, var(--color-surface-2) 50%, var(--color-surface) 75%)',
-                backgroundSize: '200% 100%',
-                animation: 'shimmer-nd 1.5s infinite',
-                marginBottom: '0.5rem',
-                width: `${w}%`,
-              }}
-            />
+          {[0, 1, 2, 3].map(i => (
+            <div key={i} aria-hidden="true" className="node-detail__skeleton" />
           ))}
         </div>
       )}
@@ -348,43 +285,34 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
         <StepProgress step={stepDetail} />
       )}
       {isPromotionStep && !stepLoading && !stepDetail && !bundleName && (
-        <div style={{ fontSize: '0.8rem', color: 'var(--color-text-faint)', marginBottom: '0.75rem', fontStyle: 'italic' }}>
+        <div className="node-detail__hint">
           Step sequence available when promotion is active.
         </div>
       )}
 
       {/* PolicyGate: CEL expression display with server-side syntax validation */}
       {isPolicyGate && node.expression && (
-        <div style={{ marginBottom: '0.75rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
-            <h4 style={{ fontSize: '0.8rem', color: 'var(--color-text)', margin: 0 }}>
+        <div className="node-detail__section">
+          <div className="node-detail__section-head">
+            <h4 className="node-detail__heading">
               CEL Expression
             </h4>
             {/* Syntax validity chip — populated by POST /api/v1/ui/validate-cel */}
             {celValid === true && (
-              <span style={{
-                fontSize: '0.65rem', background: 'var(--color-success-bg)', color: 'var(--color-success)',
-                borderRadius: '4px', padding: '1px 6px',
-              }}>✓ valid</span>
+              <span className="node-detail__cel-chip node-detail__cel-chip--valid">✓ valid</span>
             )}
             {celValid === false && (
-              <span
-                style={{
-                  fontSize: '0.65rem', background: 'var(--color-error-bg)', color: 'var(--color-error)',
-                  borderRadius: '4px', padding: '1px 6px', cursor: 'help',
-                }}
-                title={celError ?? 'syntax error'}
-              >✗ error</span>
+              <span className="node-detail__cel-chip node-detail__cel-chip--error" title={celError ?? 'syntax error'}>✗ error</span>
             )}
             {/* #339: copy-to-clipboard for CEL expression */}
             <CopyButton text={node.expression} title="Copy expression" />
           </div>
           {/* #333: CEL expression with syntax highlighting */}
-          <div style={{ border: `1px solid ${celValid === false ? 'var(--color-error)' : 'var(--color-border)'}`, borderRadius: '4px' }}>
+          <div className="node-detail__cel" data-invalid={celValid === false || undefined}>
             <CELBlock expression={node.expression} />
           </div>
           {celValid === false && celError && (
-            <div style={{ fontSize: '0.7rem', color: 'var(--color-error)', marginTop: '0.25rem' }}>
+            <div className="node-detail__cel-error">
               {celError}
             </div>
           )}
@@ -393,8 +321,8 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
 
       {/* PolicyGate: last evaluated timestamp */}
       {isPolicyGate && node.lastEvaluatedAt && (
-        <div style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginBottom: '0.5rem' }}>
-          <strong style={labelStyle}>Last evaluated:</strong>{' '}
+        <div className="node-detail__field node-detail__field--sm">
+          <strong className="node-detail__label">Last evaluated:</strong>{' '}
           <span title={node.lastEvaluatedAt}>
             {formatTimestamp(node.lastEvaluatedAt)}
           </span>
@@ -403,42 +331,30 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
 
       {/* PolicyGate: placeholder when expression is not yet populated */}
       {isPolicyGate && !node.expression && (
-        <div style={{ fontSize: '0.8rem', color: 'var(--color-text-faint)', marginBottom: '0.75rem', fontStyle: 'italic' }}>
+        <div className="node-detail__hint">
           CEL expression will appear here when the graph API populates it.
         </div>
       )}
 
       {node.message && (
-        <div style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginBottom: '0.75rem' }}>
-          <strong style={labelStyle}>Message:</strong> {node.message}
+        <div className="node-detail__field node-detail__field--block">
+          <strong className="node-detail__label">Message:</strong> {node.message}
         </div>
       )}
 
       {/* #563: Image diff preview — shown when environment is actively promoting.
           Surfaces "what will change" without requiring the operator to open the PR. */}
       {activeBundle?.images && activeBundle.images.length > 0 && showsImages && (
-        <div style={{
-          marginBottom: '0.75rem',
-          padding: '0.6rem 0.75rem',
-          background: 'var(--color-surface)',
-          borderRadius: '6px',
-          border: '1px solid var(--color-border)',
-        }}>
-          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.4rem', fontWeight: 600 }}>
+        <div className="node-detail__section node-detail__images">
+          <div className="node-detail__images-title">
             Promoting Image{activeBundle.images.length > 1 ? 's' : ''}
           </div>
           {activeBundle.images.map((img, i) => (
-            <div key={i} style={{
-              fontFamily: 'var(--k-font-mono)',
-              fontSize: '0.78rem',
-              color: 'var(--color-text)',
-              wordBreak: 'break-all',
-              marginBottom: i < activeBundle.images!.length - 1 ? '0.3rem' : 0,
-            }}>
-              {img.repository && <span style={{ color: 'var(--color-code)' }}>{img.repository}</span>}
-              {img.tag && <><span style={{ color: 'var(--color-text-muted)' }}>:</span><span style={{ color: 'var(--color-success)' }}>{img.tag}</span></>}
+            <div key={i} className="node-detail__image">
+              {img.repository && <span className="node-detail__image-repo">{img.repository}</span>}
+              {img.tag && <><span className="node-detail__image-sep">:</span><span className="node-detail__image-tag">{img.tag}</span></>}
               {!img.tag && img.digest && (
-                <><span style={{ color: 'var(--color-text-muted)' }}>@</span><span style={{ color: 'var(--color-accent)' }}>{img.digest.slice(0, 16)}…</span></>
+                <><span className="node-detail__image-sep">@</span><span className="node-detail__image-digest">{img.digest.slice(0, 16)}…</span></>
               )}
             </div>
           ))}
@@ -446,11 +362,11 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
       )}
 
       {node.prURL && (
-        <div style={{ marginBottom: '0.75rem' }}>
+        <div className="node-detail__section">
           {!isHttpURL(node.prURL) ? (
             // Only http(s) links are opened; anything else is shown as text.
-            <div style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', overflowWrap: 'anywhere' }}>
-              <strong style={labelStyle}>Pull request:</strong> <code>{node.prURL}</code>
+            <div className="node-detail__field node-detail__field--sm node-detail__field--wrap">
+              <strong className="node-detail__label">Pull request:</strong> <code>{node.prURL}</code>
             </div>
           ) : node.state === 'WaitingForMerge' ? (
             /* Prominent merge CTA when WaitingForMerge */
@@ -458,18 +374,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
               href={node.prURL}
               target="_blank"
               rel="noopener noreferrer"
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '0.4rem',
-                padding: '0.4rem 0.9rem',
-                background: 'var(--color-accent)',
-                color: 'var(--color-bg)',
-                borderRadius: '4px',
-                fontSize: '0.82rem',
-                fontWeight: 600,
-                textDecoration: 'none',
-              }}
+              className="k-button k-button--primary k-button--md node-detail__merge-cta"
             >
               <span aria-hidden="true">↗</span>
               <span>Open Pull Request — Merge to Deploy</span>
@@ -479,7 +384,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
               href={node.prURL}
               target="_blank"
               rel="noopener noreferrer"
-              style={{ color: 'var(--color-accent)', fontSize: '0.85rem' }}
+              className="node-detail__link"
             >
               View Pull Request ↗
             </a>
@@ -489,21 +394,21 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
 
       {/* PromotionStep outputs from graph node */}
       {node.outputs && Object.keys(node.outputs).length > 0 && (
-        <div style={{ marginBottom: '0.75rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
-            <h4 style={{ fontSize: '0.8rem', color: 'var(--color-text)', margin: 0 }}>Step Outputs</h4>
+        <div className="node-detail__section">
+          <div className="node-detail__section-head">
+            <h4 className="node-detail__heading">Step Outputs</h4>
             {/* #339: copy-to-clipboard for step outputs JSON */}
             <CopyButton text={JSON.stringify(node.outputs, null, 2)} title="Copy outputs as JSON" />
           </div>
           {Object.entries(node.outputs).map(([k, v]) => (
-            <div key={k} style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginBottom: '0.2rem', overflowWrap: 'anywhere' }}>
-              <span style={{ color: 'var(--color-code)' }}>{k}</span>:{' '}
+            <div key={k} className="node-detail__output">
+              <span className="node-detail__output-key">{k}</span>:{' '}
               {isHttpURL(v) ? (
-                <a href={v} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-accent)' }} title={v}>
+                <a href={v} target="_blank" rel="noopener noreferrer" className="node-detail__output-link" title={v}>
                   {v.length > 40 ? v.slice(0, 37) + '…' : v}
                 </a>
               ) : (
-                <span style={{ fontFamily: 'var(--k-font-mono)' }}>{v}</span>
+                <span className="node-detail__mono">{v}</span>
               )}
             </div>
           ))}
@@ -512,10 +417,10 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
 
       {/* #341/#529: Kubernetes conditions panel — show condition history from step status */}
       {isPromotionStep && stepDetail?.conditions && stepDetail.conditions.length > 0 && (
-        <div style={{ marginBottom: '0.75rem' }}>
+        <div className="node-detail__section">
           {/* #529: Summary header — healthy count at a glance */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
-            <h4 style={{ fontSize: '0.8rem', color: 'var(--color-text)', margin: 0 }}>
+          <div className="node-detail__section-head node-detail__section-head--wide">
+            <h4 className="node-detail__heading">
               Conditions
             </h4>
             {(() => {
@@ -525,59 +430,33 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
               return (
                 <span
                   data-testid="conditions-summary"
-                  style={{
-                    fontSize: '0.7rem',
-                    color: allHealthy ? 'var(--color-success)' : 'var(--color-error)',
-                    fontFamily: 'var(--k-font-mono)',
-                  }}
+                  className="node-detail__conditions-summary"
+                  data-healthy={allHealthy}
                 >
                   {trueCount}/{total} healthy
                 </span>
               )
             })()}
           </div>
-          <div style={{
-            background: 'var(--color-bg)',
-            border: '1px solid var(--color-border-muted)',
-            borderRadius: '4px',
-            padding: '0.4rem 0.6rem',
-          }}>
+          <div className="node-detail__conditions">
             {stepDetail.conditions.map((cond, i) => (
-              <div key={i} style={{
-                display: 'flex',
-                gap: '0.5rem',
-                alignItems: 'flex-start',
-                fontSize: '0.75rem',
-                marginBottom: i < stepDetail.conditions!.length - 1 ? '0.3rem' : 0,
-              }}>
-                <span style={{
-                  color: cond.status === 'True' ? 'var(--color-success)' : cond.status === 'False' ? 'var(--color-error)' : 'var(--color-text-muted)',
-                  flexShrink: 0,
-                  fontFamily: 'var(--k-font-mono)',
-                }}>
+              <div key={i} className="node-detail__condition" data-status={cond.status}>
+                <span className="node-detail__condition-mark">
                   {cond.status === 'True' ? '✓' : cond.status === 'False' ? '✗' : '?'}
                 </span>
                 <div>
-                  <span style={{ color: 'var(--color-text)', fontWeight: 600 }}>{cond.type}</span>
+                  <span className="node-detail__condition-type">{cond.type}</span>
                   {/* #529: reason field — CamelCase code for quick triage */}
                   {cond.reason && (
-                    <span
-                      data-testid="condition-reason"
-                      style={{
-                        color: 'var(--color-text-faint)',
-                        marginLeft: '0.4rem',
-                        fontFamily: 'var(--k-font-mono)',
-                        fontSize: '0.7rem',
-                      }}
-                    >
+                    <span data-testid="condition-reason" className="node-detail__condition-reason">
                       [{cond.reason}]
                     </span>
                   )}
                   {cond.message && (
-                    <span style={{ color: 'var(--color-text-muted)', marginLeft: '0.4rem' }}>— {cond.message}</span>
+                    <span className="node-detail__condition-message">— {cond.message}</span>
                   )}
                   {cond.lastTransitionTime && (
-                    <div style={{ color: 'var(--color-text-faint)', fontSize: '0.68rem', marginTop: '0.1rem' }}>
+                    <div className="node-detail__condition-time">
                       {formatTimestamp(cond.lastTransitionTime)}
                     </div>
                   )}

@@ -5,13 +5,14 @@
 // timing bars (UI-STEPTIME-01), shown by the node details and the stage drawer.
 import type { PromotionStep, StepStatus } from '../types'
 import { stepTimeline } from '../stepTimeline'
+import '../styles/NodeDetail.css'
 
-/** How one entry of status.steps[] is drawn. */
-const STEP_VIEW: Record<StepStatus['state'], { icon: string; color: string; label: string }> = {
-  Completed: { icon: '✓', color: 'var(--color-success)', label: 'done' },
-  InProgress: { icon: '▶', color: 'var(--color-warning)', label: 'running' },
-  Failed: { icon: '✗', color: 'var(--color-error)', label: 'failed' },
-  Pending: { icon: '○', color: 'var(--color-text-faint)', label: 'not started' },
+/** How one entry of status.steps[] is drawn; its colour comes from data-step-state (NodeDetail.css). */
+const STEP_VIEW: Record<StepStatus['state'], { icon: string; label: string }> = {
+  Completed: { icon: '✓', label: 'done' },
+  InProgress: { icon: '▶', label: 'running' },
+  Failed: { icon: '✗', label: 'failed' },
+  Pending: { icon: '○', label: 'not started' },
 }
 
 /** "850ms", "2.0s", "3m 4s". */
@@ -55,26 +56,16 @@ export function StepProgress({ step }: { step: PromotionStep }) {
   const bars = stepTimeline(list)
   const hasBars = bars.some(b => b !== null)
   return (
-    <div style={{ marginBottom: '0.75rem' }}>
-      <h4 style={{ fontSize: '0.8rem', color: 'var(--color-text)', marginBottom: '0.5rem' }}>
+    <div className="node-detail__section">
+      <h4 className="node-detail__heading node-detail__heading--spaced">
         Promotion Steps
       </h4>
       {list.length === 0 ? (
-        <div style={{ fontSize: '0.8rem', color: 'var(--color-text-faint)', fontStyle: 'italic' }}>
+        <div className="node-detail__hint node-detail__hint--flush">
           Steps appear here once this promotion starts.
         </div>
       ) : (
-        <ol
-          aria-label="Promotion steps"
-          style={{
-            listStyle: 'none',
-            margin: 0,
-            background: 'var(--color-bg)',
-            border: '1px solid var(--color-border-muted)',
-            borderRadius: '4px',
-            padding: '0.5rem 0.75rem',
-          }}
-        >
+        <ol aria-label="Promotion steps" className="node-detail__steps">
           {list.map((s, i) => {
             const shown = effectiveStepState(s, step.state)
             const view = STEP_VIEW[shown] ?? STEP_VIEW.Pending
@@ -84,53 +75,31 @@ export function StepProgress({ step }: { step: PromotionStep }) {
               <li
                 key={`${i}-${s.name}`}
                 data-step-state={shown}
-                style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  alignItems: 'baseline',
-                  gap: '0.5rem',
-                  marginBottom: i < list.length - 1 ? '0.3rem' : 0,
-                }}
+                data-current={current || undefined}
+                className="node-detail__step"
               >
-                <span aria-hidden="true" style={{ fontSize: '0.7rem', color: view.color, width: '12px', flexShrink: 0 }}>
+                <span aria-hidden="true" className="node-detail__step-icon">
                   {view.icon}
                 </span>
-                <span style={{
-                  fontSize: '0.75rem',
-                  color: shown === 'Pending' ? 'var(--color-text-faint)' : 'var(--color-text)',
-                  fontFamily: 'var(--k-font-mono)',
-                  fontWeight: current ? 600 : 400,
-                }}>
+                <span className="node-detail__step-name">
                   {s.name}
                 </span>
                 <span className="sr-only">{view.label}</span>
                 {note && (
-                  <span style={{
-                    fontSize: '0.68rem',
-                    color: shown === 'Completed' ? 'var(--color-text-faint)' : view.color,
-                    overflowWrap: 'anywhere',
-                  }}>
+                  <span className="node-detail__step-note">
                     {note}
                   </span>
                 )}
                 {hasBars && (
                   // Waterfall: where this step sits in the promotion's time span.
-                  <span
-                    aria-hidden="true"
-                    data-testid="step-bar-track"
-                    style={{ flexBasis: '100%', height: '3px', marginLeft: '20px', background: 'var(--color-border-muted)', borderRadius: '2px', position: 'relative' }}
-                  >
+                  <span aria-hidden="true" data-testid="step-bar-track" className="node-detail__bar-track">
                     {bars[i] && (
                       <span
                         data-testid="step-bar"
                         data-offset={bars[i]!.offset.toFixed(1)}
                         data-width={bars[i]!.width.toFixed(1)}
-                        style={{
-                          position: 'absolute', top: 0, bottom: 0, borderRadius: '2px',
-                          left: `${bars[i]!.offset}%`, width: `${bars[i]!.width}%`,
-                          background: view.color,
-                          opacity: shown === 'Completed' ? 0.75 : 1,
-                        }}
+                        className="node-detail__bar"
+                        style={{ left: `${bars[i]!.offset}%`, width: `${bars[i]!.width}%` }}
                       />
                     )}
                   </span>
