@@ -78,7 +78,7 @@ There are no git operations. The `argocd-set-image` step:
 
 After the patch, ArgoCD's own reconciler picks up the spec change and syncs the application.
 The `health-check` step runs the environment's health adapter. Set `health.type: argocd` to wait
-until the Application is Healthy and Synced and `status.summary.images` shows the Bundle images.
+until the Application is Healthy and Synced and `status.summary.images` shows the version images.
 Without it, the default `resource` adapter checks a Deployment.
 
 ### What the `argocd` strategy rejects
@@ -90,20 +90,20 @@ before any Application is patched:
 | Case | Where it is rejected | What you see |
 |---|---|---|
 | `approval: pr-review` with `update.strategy: argocd` | The API server, when you apply the Pipeline (CRD validation rule) | `kubectl apply` fails: `environments[]: update.strategy argocd patches the Application directly and cannot honour approval: pr-review; ...` |
-| The same, in a file | `kardinal validate -f pipeline.yaml` | `✗ pipeline.yaml is invalid:` followed by the same message |
-| A config or mixed Bundle (`type: config` or `type: mixed`) when an environment it promotes uses `argocd` | Graph build, before the first environment | The Bundle is `Failed`, with an `InvalidSpec` condition, reason `GraphBuildFailed` |
+| The same, in a file | `kardinal validate -f pipeline.yaml` | `pipeline.yaml is invalid:` followed by the same message |
+| A config or mixed version (`type: config` or `type: mixed`) when an environment it promotes uses `argocd` | Graph build, before the first environment | The version is `Failed`, with an `InvalidSpec` condition, reason `GraphBuildFailed` |
 
 The `argocd-set-image` step checks both cases again as a last guard. It fails without patching
-the Application if the approval is `pr-review` or the Bundle is config or mixed.
+the Application if the approval is `pr-review` or the version is config or mixed.
 
 The CRD rule applies only after the new CRDs are installed. Helm installs the chart's `crds/`
 directory on first install and never upgrades it, so apply the new CRDs as described in
 [Installation: Upgrade](upgrade.md). Until you do, the API server accepts the
 combination, and the Pipeline reconciler, `kardinal validate` and the step still reject it.
 
-For a gated promotion, use `approval: auto` with a PolicyGate to control when the patch happens.
-For a reviewed promotion or a config Bundle, use the `kustomize` or `helm` strategy. To send a
-config Bundle past an `argocd` environment, list that environment in `intent.skipEnvironments`.
+For a gated promotion, use `approval: auto` with a gate to control when the patch happens.
+For a reviewed promotion or a config version, use the `kustomize` or `helm` strategy. To send a
+config version past an `argocd` environment, list that environment in `intent.skipEnvironments`.
 
 ---
 
@@ -148,12 +148,12 @@ The step creates intermediate maps as needed if they do not exist.
 
 ## Multi-image bundles
 
-When a Bundle contains multiple images, the `argocd-set-image` step uses the **first image
+When a version contains multiple images, the `argocd-set-image` step uses the **first image
 with a tag**. An image pinned by digest is written as `<tag>@<digest>` (for example
 `1.29.0@sha256:...`), as `helm-set-image` does, so a chart that renders
 `image: {{ .Values.image.repository }}:{{ .Values.image.tag }}` pulls exactly that digest; this
 is what [image verification](image-verification.md) needs, since a tag can be moved after it was
-verified. An image with a digest but no tag is skipped (the key holds a tag); a Bundle whose
+verified. An image with a digest but no tag is skipped (the key holds a tag); a version whose
 images have no tag sets nothing: the step succeeds with `no image tag to set`. Setting different tags for different keys in one promotion is not
 supported. kardinal has no custom step sequence to do it (a Pipeline that sets
 `spec.environments[].steps` is rejected; see [Promotion Steps](pipeline-reference.md#promotion-steps)).
@@ -168,5 +168,5 @@ supported. kardinal has no custom step sequence to do it (a Pipeline that sets
 | Creates a git commit | Yes | No |
 | Opens a PR | Yes (pr-review mode) | No (`approval: pr-review` is rejected) |
 | Promotion speed | PR merge required | Immediate |
-| Rollback mechanism | Forward promotion of an earlier Bundle (commit or PR) | Forward promotion of an earlier Bundle (Application patch) |
+| Rollback mechanism | Forward promotion of an earlier version (commit or PR) | Forward promotion of an earlier version (Application patch) |
 | Audit trail | Git history, PR and AuditEvent records | AuditEvent records only; no Git commit |

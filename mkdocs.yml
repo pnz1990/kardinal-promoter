@@ -19,6 +19,7 @@ validation:
 
 theme:
   name: material
+  custom_dir: overrides
   # Colours and fonts are the kardinal design tokens (docs/stylesheets/tokens.css, generated
   # from web/tokens/tokens.json, and kardinal.css). The fonts are self-hosted: no font CDN.
   palette:
@@ -62,9 +63,16 @@ theme:
     - content.action.view
     - toc.follow
 
+# Mermaid is self-hosted: Material uses window.mermaid when it is defined and
+# loads it from unpkg.com otherwise. Pinned; docs/assets/vendor/mermaid/LICENSE.
+extra_javascript:
+  - assets/vendor/mermaid/mermaid-11.17.2.min.js
+  - javascripts/scrollwrap.js
+
 extra_css:
   - stylesheets/tokens.css
   - stylesheets/kardinal.css
+  - stylesheets/home.css
 
 plugins:
   - search:
@@ -112,7 +120,7 @@ nav:
     - Your first pipeline: first-pipeline.md
   - How-to:
     - Ship versions from CI: ci-integration.md
-    - Ship automatically on new images: subscription.md
+    - Ship automatically from images, charts and Git: subscription.md
     - Design a pipeline:
       - Design a pipeline: pipeline-reference.md
       - Rendered manifests: rendered-manifests.md
@@ -140,7 +148,10 @@ nav:
       - Sharding controllers: sharding.md
     - Upgrade: upgrade.md
     - Migrate from Kargo: guides/migrating-from-kargo.md
-    - Troubleshoot: troubleshooting.md
+    - Troubleshoot:
+      - Troubleshoot: troubleshooting.md
+      - Promotion stuck or failed: troubleshoot-promotions.md
+      - Git and SCM problems: troubleshoot-git.md
   - Concepts:
     - Concepts: concepts.md
     - Architecture: architecture.md

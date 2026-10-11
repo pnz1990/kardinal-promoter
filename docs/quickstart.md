@@ -2,7 +2,7 @@
 
 This guide walks you through setting up your first promotion pipeline with kardinal-promoter. By the end, you will have a working pipeline that promotes the `kardinal-test-app` through test, uat, and prod environments using Git pull requests.
 
-## Fast Start — under 10 minutes
+## Fast Start — about 10 minutes
 
 Install with `demo.enabled=true` and you get a pre-configured
 Pipeline named `demo` in the release namespace. It pushes to the repository in
@@ -26,17 +26,24 @@ DEMO_REPO=https://github.com/<your-user>/kardinal-demo
 # 1. Install kro (from a kardinal-promoter checkout)
 bash hack/install-kro.sh
 
-# 2. Store the token in a Secret, then install with demo mode
+# 2. Store the token in two Secrets: the controller's (never labelled, no
+#    Pipeline may use it) and the demo Pipeline's own git Secret, labelled so
+#    a Pipeline may name it. Then install with demo mode.
 kubectl create namespace kardinal-system
-kubectl create secret generic github-token \
+kubectl create secret generic scm-token \
   --namespace kardinal-system \
   --from-literal=token=$GITHUB_PAT
+kubectl create secret generic demo-git-token \
+  --namespace kardinal-system \
+  --from-literal=token=$GITHUB_PAT
+kubectl label secret demo-git-token --namespace kardinal-system kardinal.io/referenceable=true
 
 helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
   --namespace kardinal-system \
   --set demo.enabled=true \
   --set demo.git.url=$DEMO_REPO \
-  --set github.secretRef.name=github-token
+  --set scm.secretRef.name=scm-token \
+  --set demo.secretRef.name=demo-git-token
 
 # 3. Check the demo Pipeline (it lives in the release namespace)
 kardinal get pipelines -n kardinal-system
@@ -53,7 +60,7 @@ kardinal create bundle demo -n kardinal-system \
 The demo Pipeline uses your fork of the `kardinal-demo` GitOps repo (it already has the
 correct Kustomize layout). Test and uat environments promote automatically; prod opens a PR for review.
 
-!!! note "Estimated time: under 10 minutes on a fresh kind cluster"
+!!! note "Estimated time: about 10 minutes on a fresh kind cluster"
     Prerequisites: kind cluster, `helm`, `kubectl`, the `kardinal` CLI
     ([Install the CLI](installation.md#3-install-the-cli)), Argo CD, and a GitHub PAT
     with write access to the repository in `demo.git.url`. Point the ApplicationSet

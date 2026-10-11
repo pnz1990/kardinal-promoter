@@ -81,7 +81,7 @@ after `failed: ` is the step's `status.message`.
 |---------------|--------|------------------------------------------------------|
 | `event`       | string | Event type (see §Events)                             |
 | `pipeline`    | string | Pipeline name                                        |
-| `bundle`      | string | Bundle name                                          |
+| `bundle`      | string | Version name                                          |
 | `environment` | string | Environment name (PolicyGate and PromotionStep events) |
 | `message`     | string | Human-readable description                          |
 | `timestamp`   | string | RFC3339 UTC timestamp of delivery                    |
@@ -98,13 +98,13 @@ whatever the format.
 
 | Event type                         | When it fires                                                   | Key                                   |
 |------------------------------------|-----------------------------------------------------------------|---------------------------------------|
-| `Bundle.Verified`                  | A Bundle reaches Phase=Verified (all environments succeeded)    | `Bundle.Verified/<bundle>`            |
-| `Bundle.Failed`                    | A Bundle reaches Phase=Failed                                   | `Bundle.Failed/<bundle>`              |
-| `Bundle.Superseded`                | A newer Bundle of the same Pipeline and type supersedes a Bundle (Phase=Superseded) | `Bundle.Superseded/<bundle>` |
-| `Bundle.RollbackStarted`           | A rollback Bundle (`kardinal rollback`, the UI, `onHealthFailure: rollback`, RollbackPolicy) starts promoting | `Bundle.RollbackStarted/<bundle>` |
-| `Bundle.RolledBack`                | A rollback Bundle reaches Phase=Verified: the environment runs the restored artifacts | `Bundle.RolledBack/<bundle>` |
-| `PolicyGate.Blocked`               | A PolicyGate instance starts blocking a Bundle (once per block) | `PolicyGate.Blocked/<gate>/<since>`   |
-| `PolicyGate.Unblocked`             | A PolicyGate instance that was blocking allows again (once per block) | `PolicyGate.Unblocked/<gate>/<since>` |
+| `Bundle.Verified`                  | A version reaches Phase=Verified (all environments succeeded)    | `Bundle.Verified/<bundle>`            |
+| `Bundle.Failed`                    | A version reaches Phase=Failed                                   | `Bundle.Failed/<bundle>`              |
+| `Bundle.Superseded`                | A newer version of the same Pipeline and type supersedes a version (Phase=Superseded) | `Bundle.Superseded/<bundle>` |
+| `Bundle.RollbackStarted`           | A rollback version (`kardinal rollback`, the UI, `onHealthFailure: rollback`, RollbackPolicy) starts promoting | `Bundle.RollbackStarted/<bundle>` |
+| `Bundle.RolledBack`                | A rollback version reaches Phase=Verified: the environment runs the restored artifacts | `Bundle.RolledBack/<bundle>` |
+| `PolicyGate.Blocked`               | A gate instance starts blocking a version (once per block) | `PolicyGate.Blocked/<gate>/<since>`   |
+| `PolicyGate.Unblocked`             | A gate instance that was blocking allows again (once per block) | `PolicyGate.Unblocked/<gate>/<since>` |
 | `PromotionStep.Failed`             | A PromotionStep transitions to state=Failed                     | `PromotionStep.Failed/<step>`         |
 | `PromotionStep.PROpened`           | A PromotionStep opens its promotion pull request (`status.prURL` is set) | `PromotionStep.PROpened/<step>` |
 | `PromotionStep.WaitingForApproval` | A PromotionStep waits for its PR to be reviewed and merged (state=WaitingForMerge, `approval: pr-review`) | `PromotionStep.WaitingForApproval/<step>` |
@@ -113,12 +113,12 @@ whatever the format.
 environments open promotion PRs today, so `PromotionStep.PROpened` and
 `PromotionStep.WaitingForApproval` come together: subscribe to `PROpened` to log every PR
 (rollback PRs included) and to `WaitingForApproval` to page a reviewer.
-`Bundle.Verified` and `Bundle.Failed` also fire for rollback Bundles.
+`Bundle.Verified` and `Bundle.Failed` also fire for rollback versions.
 
 Steps stopped by `onHealthFailure: abort` or `rollback` end in `AbortedByAlarm` or
-`RollingBack` and do not send `PromotionStep.Failed`. An `AbortedByAlarm` step fails its Bundle,
-so `Bundle.Failed` catches it. With `rollback`, the rollback Bundle supersedes the failing one
-(see [Rollback](rollback.md#automatic-rollback)), and the rollback Bundle's own `Bundle.Verified`
+`RollingBack` and do not send `PromotionStep.Failed`. An `AbortedByAlarm` step fails its version,
+so `Bundle.Failed` catches it. With `rollback`, the rollback version supersedes the failing one
+(see [Rollback](rollback.md#automatic-rollback)), and the rollback version's own `Bundle.Verified`
 or `Bundle.Failed` reports the outcome.
 
 `PolicyGate.Blocked` is sent once each time a gate instance goes from not
@@ -128,7 +128,7 @@ identified by the gate's `Ready` condition, whose `lastTransitionTime` only
 moves when the gate flips. `PolicyGate.Unblocked` is sent once each time a
 blocking gate instance allows again: its `Ready` condition is then `True` with
 reason `Unblocked` (a gate that allows on its first evaluation has reason
-`Allowed` and sends nothing). Gate templates (PolicyGates without a
+`Allowed` and sends nothing). Gate templates (gates without a
 `kardinal.io/bundle` label) are only syntax-checked, never evaluated, so they
 send neither.
 
@@ -166,8 +166,8 @@ send neither.
 | `id` | The event key, the same as `X-Kardinal-Event-Key`: a retried delivery has the same `id`, so receivers drop duplicates on it |
 | `source` | The Pipeline the event belongs to, as an API path; the namespace path for an event without a Pipeline |
 | `type` | `io.kardinal.` + the event name in lower case (`io.kardinal.policygate.blocked`, `io.kardinal.promotionstep.failed`) |
-| `subject` | The Bundle, with `/<environment>` when the event has one |
-| `time` | When the event happened (the Bundle phase change, gate block, or step transition); a retry keeps it. The payload's `timestamp` is the send time |
+| `subject` | The version, with `/<environment>` when the event has one |
+| `time` | When the event happened (the version phase change, gate block, or step transition); a retry keeps it. The payload's `timestamp` is the send time |
 | `data` | The [Webhook payload](#webhook-payload) |
 
 The `X-Kardinal-*` headers are sent as well. Binary content mode (`ce-*` headers) is not offered.
@@ -196,7 +196,7 @@ spec:
 ```
 
 The message has a header with the event title, the event message (Slack's `&`, `<` and `>`
-escaped), the pipeline, Bundle and environment as fields, an **Open pull request** button
+escaped), the pipeline, version and environment as fields, an **Open pull request** button
 when the event has a PR, and a context line with the event key and time. `text` carries
 `<title>: <message>` for notifications and clients that do not show blocks. Texts are cut
 to Slack's block limits. A `json` hook pointed at a Slack incoming webhook gets HTTP 400
@@ -217,7 +217,7 @@ spec:
 ```
 
 The body is a `message` whose one attachment is an Adaptive Card (version 1.4, full width):
-the event title (colored by outcome), the message, a fact set with the pipeline, Bundle and
+the event title (colored by outcome), the message, a fact set with the pipeline, version and
 environment, an **Open pull request** action when the event has a PR, and the event key and
 time. Office 365 connector URLs (`webhook.office.com`), which Microsoft retired, are not
 supported.
@@ -374,8 +374,8 @@ What is guaranteed:
 What is not guaranteed:
 
 - **Short-lived states.** An event exists while its state holds. A gate that blocks and
-  allows again before the controller sees the block, or a Bundle deleted before its event
-  is sent, sends nothing. Steps, Bundles and gate flips normally last far longer than a
+  allows again before the controller sees the block, or a version deleted before its event
+  is sent, sends nothing. Steps, versions and gate flips normally last far longer than a
   reconcile (milliseconds after the watch event).
 - **History.** A new hook sends nothing from before it existed. Only the 100
   newest qualifying events are tracked per hook.
@@ -581,7 +581,7 @@ See §Delivery for the retry schedule.
 
 `spec.pipelineSelector` restricts notifications to events from one pipeline. It
 matches a Bundle's `spec.pipeline`, a PromotionStep's `spec.pipelineName` and a
-PolicyGate's `kardinal.io/pipeline` label:
+gate's `kardinal.io/pipeline` label:
 
 ```yaml
 spec:

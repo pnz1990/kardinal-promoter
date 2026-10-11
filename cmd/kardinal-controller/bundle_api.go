@@ -54,8 +54,10 @@ const (
 type bundleCreateRequest struct {
 	// Pipeline is the target Pipeline name.
 	Pipeline string `json:"pipeline"`
-	// Type is the bundle type: "image", "config", "mixed" or "chart".
-	Type string `json:"type"`
+	// Type is the bundle type: "image", "config", "mixed" or "chart". When
+	// omitted it is inferred (lifecycle.InferBundleType): chart from chart,
+	// mixed from images and configRef, config from configRef, else image.
+	Type string `json:"type,omitempty"`
 	// Namespace is the target namespace. Defaults to the server's default namespace.
 	Namespace string `json:"namespace,omitempty"`
 	// Images lists the container images in this Bundle.

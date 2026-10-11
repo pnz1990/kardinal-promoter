@@ -38,7 +38,7 @@ built-in ones: a flag whose help names a `KARDINAL_*` variable reads it as its d
 | `--graph-compact-above` | int | `100` | Environment count above which a Bundle's Graph uses the compact shape (one PromotionStep collection) when the Pipeline's kardinal.io/graph-shape annotation does not choose one. 0 makes every Graph compact. |
 | `--graph-reader-clusterrole` | string | `"kardinal-graph-reader"` | ClusterRole bound to the Graph ServiceAccount in namespaces its health checks read. |
 | `--graph-reader-namespaces` | string | `"argocd,flux-system"` | Comma-separated namespaces, besides a Graph's own namespace, where the Graph ServiceAccount may be bound to the reader ClusterRole for health checks. "*" allows every namespace except kube-system, kube-public and kube-node-lease. Health checks in other namespaces get no Graph ref. |
-| `--graph-retire-failed-after` | duration | `24h0m0s` | How long the Graph of a Failed Bundle is kept before it is retired. A retired Failed Bundle no longer recovers. 0 keeps it. |
+| `--graph-retire-failed-after` | duration | `24h0m0s` | How long the Graph of a Failed Bundle is kept before it is retired. A retired Failed Bundle does not recover. 0 keeps it. |
 | `--graph-retire-superseded-after` | duration | `1m0s` | How long the Graph of a Superseded Bundle, or of a Verified one a newer Bundle replaced in every environment, is kept before it is retired (deleted; the Bundle keeps its PromotionSteps in status.retiredSteps). 0 keeps it. |
 | `--graph-retire-verified-after` | duration | `1h0m0s` | How long the Graph of a Verified Bundle that is still deployed in an environment is kept before it is retired. 0 keeps it. |
 | `--graph-service-account` | string | `"kardinal-graph"` | ServiceAccount (created in each Pipeline namespace) that kro impersonates to apply Graphs. |
@@ -55,7 +55,6 @@ built-in ones: a flag whose help names a `KARDINAL_*` variable reads it as its d
 | `--metrics-bind-address` | string | `":8080"` | The address the metric endpoint binds to. |
 | `--namespace-shard` | string |  | Shard this controller reconciles: namespaces labelled kardinal.io/shard=&lt;name&gt;; "default" also takes namespaces without the label and the cluster-scoped kinds. Empty (the default): no sharding, every namespace. Every controller of a sharded cluster needs a shard name. Also readable from KARDINAL_NAMESPACE_SHARD. |
 | `--override-identity-policy` | string |  | Name of the chart's gate-overrides ValidatingAdmissionPolicy and binding. The controller records an override's createdBy as verified only while both exist; empty records every override unverified. |
-| `--pipeline-admission-webhook` | bool | `false` | Removed: the Pipeline admission webhook is gone. Setting it (or KARDINAL_PIPELINE_ADMISSION_WEBHOOK=true) stops the controller. |
 | `--pipeline-workers` | int | `4` | How many Pipelines (status, history) are reconciled at once. |
 | `--policy-namespaces` | string | `"platform-policies"` | Comma-separated list of namespaces to scan for org-level PolicyGates. |
 | `--policygate-workers` | int | `8` | How many PolicyGates (CEL evaluation) are reconciled at once. |
@@ -78,7 +77,6 @@ built-in ones: a flag whose help names a `KARDINAL_*` variable reads it as its d
 | `--scm-token-secret-name` | string |  | Name of a Kubernetes Secret whose data key contains the SCM token. When set, the controller watches this Secret and reloads the SCM provider on token change — no restart required (zero-downtime credential rotation). Also readable from KARDINAL_SCM_TOKEN_SECRET_NAME environment variable. |
 | `--scm-token-secret-namespace` | string |  | Namespace of the Secret named by --scm-token-secret-name. Defaults to the POD_NAMESPACE environment variable, then 'kardinal-system'. Also readable from KARDINAL_SCM_TOKEN_SECRET_NAMESPACE environment variable. |
 | `--scm-wait-timeout` | duration | `30m0s` | Longest a PromotionStep waits for an open SCM circuit (its SCM host keeps failing) before it fails, when its environment sets no stepTimeoutSeconds. |
-| `--shard` | string |  | Removed: distributed mode is gone. Setting it (or KARDINAL_SHARD) stops the controller. |
 | `--tls-cert-file` | string |  | Path to the TLS certificate file (PEM). When set together with --tls-key-file, both the UI and webhook servers use HTTPS instead of plain HTTP. Also readable from KARDINAL_TLS_CERT_FILE environment variable. |
 | `--tls-key-file` | string |  | Path to the TLS private key file (PEM). When set together with --tls-cert-file, both the UI and webhook servers use HTTPS instead of plain HTTP. Also readable from KARDINAL_TLS_KEY_FILE environment variable. |
 | `--tokenreview-accept-apiserver-audience` | bool | `false` | Also accept tokens for the API server's own audience (kubeconfig and default ServiceAccount tokens). Such a token also works against the API server, so kardinal could replay it; off by default. Chart value: tokenReview.acceptAPIServerAudience. |

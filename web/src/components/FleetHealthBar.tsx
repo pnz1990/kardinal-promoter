@@ -16,6 +16,7 @@
 // FR-505-02: Clickable filter badges that drive the pipeline list filter.
 // FR-505-04: Empty state when zero pipelines loaded.
 import type { Pipeline } from '../types'
+import '../styles/FleetHealthBar.css'
 
 /** Derived fleet health summary computed from the pipeline list. */
 export interface FleetHealthSummary {
@@ -80,6 +81,13 @@ export function computeFleetHealth(pipelines: Pipeline[]): FleetHealthSummary {
 /** Filter category that maps to a UI badge. */
 export type FleetFilter = 'all' | 'healthy' | 'blocked' | 'ci-red' | 'promoting'
 
+const FLEET_FILTERS: readonly string[] = ['all', 'healthy', 'blocked', 'ci-red', 'promoting']
+
+/** Whether a value (the URL's filter=) is a fleet filter. */
+export function isFleetFilter(v: string | undefined): v is FleetFilter {
+  return v !== undefined && FLEET_FILTERS.includes(v)
+}
+
 /**
  * Filter a pipeline list by the given fleet filter.
  * Returns a new array — does not mutate input.
@@ -102,12 +110,13 @@ export function filterPipelines(
   }
 }
 
+/** The colour of a badge's count: a status bucket, or the code colour for promoting. */
+type BadgeTone = 'verified' | 'blocked' | 'failed' | 'code'
+
 interface SummaryBadgeProps {
   label: string
   count: number
-  color: string
-  bgColor: string
-  borderColor: string
+  tone: BadgeTone
   active: boolean
   onClick: () => void
   'aria-label'?: string
@@ -116,9 +125,7 @@ interface SummaryBadgeProps {
 function SummaryBadge({
   label,
   count,
-  color,
-  bgColor,
-  borderColor,
+  tone,
   active,
   onClick,
   'aria-label': ariaLabel,
@@ -128,33 +135,13 @@ function SummaryBadge({
       onClick={onClick}
       aria-label={ariaLabel ?? `Filter by ${label}`}
       aria-pressed={active}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.4rem',
-        padding: '0.35rem 0.65rem',
-        background: active ? bgColor : 'transparent',
-        border: `1px solid ${active ? borderColor : 'var(--color-surface)'}`,
-        borderRadius: '6px',
-        cursor: 'pointer',
-        transition: 'all 0.1s',
-      }}
+      className="fleet-health__badge"
+      data-tone={tone}
     >
-      <span style={{
-        fontSize: '1.1rem',
-        fontWeight: 700,
-        color,
-        fontVariantNumeric: 'tabular-nums',
-        lineHeight: 1,
-      }}>
+      <span className="fleet-health__count">
         {count}
       </span>
-      <span style={{
-        fontSize: '0.7rem',
-        color: active ? color : 'var(--color-text-muted)',  /* CSS var adapts to both dark and light theme — #94a3b8 was dark-only (#762 contrast fix) */
-        fontWeight: active ? 600 : 400,
-        whiteSpace: 'nowrap',
-      }}>
+      <span className="fleet-health__badge-label">
         {label}
       </span>
     </button>
@@ -184,50 +171,29 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
   return (
     <div
       aria-label="Fleet health summary"
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.5rem',
-        padding: '0.5rem 0.75rem',
-        background: 'var(--color-bg-deep)',
-        border: '1px solid var(--color-border-muted)',
-        borderRadius: '6px',
-        flexWrap: 'wrap',
-        marginBottom: '0.75rem',
-      }}
+      className="fleet-health"
     >
       {/* Total */}
       <button
         onClick={toggle('all')}
         aria-label="Show all pipelines"
         aria-pressed={activeFilter === 'all'}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.35rem',
-          padding: '0.3rem 0.55rem',
-          background: activeFilter === 'all' ? 'var(--color-surface)' : 'transparent',
-          border: `1px solid ${activeFilter === 'all' ? 'var(--color-text-faint)' : 'var(--color-surface)'}`,
-          borderRadius: '6px',
-          cursor: 'pointer',
-        }}
+        className="fleet-health__total"
       >
-        <span style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>
+        <span className="fleet-health__total-label">
           Pipelines
         </span>
-        <span style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--color-text)', fontVariantNumeric: 'tabular-nums' }}>
+        <span className="fleet-health__count">
           {s.total}
         </span>
       </button>
 
-      <span style={{ color: 'var(--color-surface)', fontSize: '1.2rem', userSelect: 'none' }}>|</span>
+      <span className="fleet-health__divider">|</span>
 
       <SummaryBadge
         label="Healthy"
         count={s.healthy}
-        color="var(--color-success)"
-        bgColor="var(--color-success-bg)"
-        borderColor="var(--color-success)"
+        tone="verified"
         active={activeFilter === 'healthy'}
         onClick={toggle('healthy')}
         aria-label={`${s.healthy} healthy pipeline${s.healthy === 1 ? '' : 's'}`}
@@ -235,34 +201,28 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
       <SummaryBadge
         label="Blocked"
         count={s.blocked}
-        color="var(--color-warning)"
-        bgColor="var(--color-warning-bg)"
-        borderColor="var(--color-warning)"
+        tone="blocked"
         active={activeFilter === 'blocked'}
         onClick={toggle('blocked')}
         aria-label={`${s.blocked} blocked pipeline${s.blocked === 1 ? '' : 's'}`}
       />
       {s.ciRed > 0 && (
         <SummaryBadge
-          label="CI Red"
+          label="Failed"
           count={s.ciRed}
-          color="var(--color-error)"
-          bgColor="var(--color-error-bg)"
-          borderColor="var(--color-error)"
+          tone="failed"
           active={activeFilter === 'ci-red'}
           onClick={toggle('ci-red')}
-          aria-label={`${s.ciRed} pipeline${s.ciRed === 1 ? '' : 's'} with CI failures`}
+          aria-label={`${s.ciRed} pipeline${s.ciRed === 1 ? '' : 's'} with a failed promotion`}
         />
       )}
 
-      <span style={{ color: 'var(--color-surface)', fontSize: '1.2rem', userSelect: 'none' }}>|</span>
+      <span className="fleet-health__divider">|</span>
 
       <SummaryBadge
         label="Promoting"
         count={s.promoting}
-        color="var(--color-code)"
-        bgColor="var(--color-surface-2)"
-        borderColor="var(--color-code)"
+        tone="code"
         active={activeFilter === 'promoting'}
         onClick={toggle('promoting')}
         aria-label={`${s.promoting} pipeline${s.promoting === 1 ? '' : 's'} currently promoting`}

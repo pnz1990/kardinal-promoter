@@ -32,6 +32,7 @@
 //   013 — keyboard-types:  Skip link, arrow keys on the fleet and the history, type badges, axe in light
 //   014 — waves:           A 149-environment wave: one plate, one lane card, DAG in spec order, final-wave metrics
 //   015 — approvals:       Approval gate quorum and decisions, approve/reject from the panel, rejected Bundles
+//   016 — routes:          #/ routes survive a reload, Back/Forward, old links redirect, breadcrumb, ⌘K palette
 
 import { defineConfig, devices } from '@playwright/test'
 

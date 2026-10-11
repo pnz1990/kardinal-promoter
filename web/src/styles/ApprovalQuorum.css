@@ -88,7 +88,7 @@
   cursor: pointer;
 }
 .approval-actions__buttons button:disabled { cursor: not-allowed; opacity: 0.6; }
-.approval-actions__buttons button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.approval-actions__buttons button:focus-visible { outline: var(--k-focus-ring); outline-offset: var(--k-focus-offset); }
 .approval-actions__buttons .approval-actions__approve { border-color: var(--color-success); color: var(--color-success); }
 .approval-actions__buttons .approval-actions__reject { border-color: var(--color-error); color: var(--color-error); }
 .approval-actions__result { color: var(--color-success); }

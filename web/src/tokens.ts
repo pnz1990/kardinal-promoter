@@ -63,7 +63,9 @@ export const layout = {
     expanded: "15rem",
   },
   drawer: "min(32rem, 92vw)",
+  dialog: "min(28rem, 100%)",
   measure: "72ch",
+  page: "80rem",
 } as const
 
 export const poll = {

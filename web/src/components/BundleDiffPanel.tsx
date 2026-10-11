@@ -9,10 +9,13 @@
 // two bundles are always created at different times.
 //
 // Adapted from kro-ui InstanceTable.tsx SpecDiffPanel pattern.
+import { displayState } from '../displayStates.gen'
 import { useRef } from 'react'
 import type { Bundle, ImageRef } from '../types'
 import { useModalFocus } from '../useModalFocus'
 import { isCIRunURL } from '../prLink'
+import '../ui'
+import '../styles/BundleDiffPanel.css'
 
 interface Props {
   bundleA: Bundle
@@ -40,7 +43,7 @@ function imagesOf(b: Bundle): string | null {
 }
 
 function environmentsOf(b: Bundle): string | null {
-  const envs = (b.environments ?? []).map(e => `${e.name}: ${e.phase || 'Pending'}`)
+  const envs = (b.environments ?? []).map(e => `${e.name}: ${displayState('step', e.phase || 'Pending').label}`)
   return envs.length ? envs.join('\n') : null
 }
 
@@ -58,9 +61,9 @@ export function buildRows(a: Bundle, b: Bundle): FieldRow[] {
     { label: 'Images', valueA: imagesA, valueB: imagesB, changed: imagesA !== imagesB, full: true },
     { label: 'Environments', valueA: envsA, valueB: envsB, changed: envsA !== envsB, full: true },
     {
-      label: 'Phase',
-      valueA: a.phase ?? null,
-      valueB: b.phase ?? null,
+      label: 'State',
+      valueA: a.phase ? displayState('bundle', a.phase).label : null,
+      valueB: b.phase ? displayState('bundle', b.phase).label : null,
       changed: a.phase !== b.phase,
     },
     {
@@ -104,111 +107,43 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
   useModalFocus(panelRef, onClose)
 
   return (
-    <div style={{
-      position: 'fixed',
-      top: 0, left: 0, right: 0, bottom: 0,
-      background: 'rgba(0,0,0,0.7)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 1000,
-    }}
-    onClick={onClose}
-    role="dialog"
-    aria-modal="true"
-    aria-label="Bundle comparison"
+    <div
+      className="k-scrim"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Version comparison"
     >
-      <div
-        ref={panelRef}
-        onClick={e => e.stopPropagation()}
-        style={{
-          background: 'var(--color-surface)',
-          border: '1px solid var(--color-border)',
-          borderRadius: '8px',
-          padding: '1.5rem',
-          maxWidth: '700px',
-          width: '95%',
-          maxHeight: '80vh',
-          overflowY: 'auto',
-        }}
-      >
+      <div ref={panelRef} onClick={e => e.stopPropagation()} className="k-dialog bundle-diff">
         {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
+        <div className="bundle-diff__header">
           <div>
-            <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-text)', margin: 0 }}>
-              Bundle Comparison
-            </h2>
-            <p style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', margin: '0.25rem 0 0' }}>
-              {changedCount === 1 ? '1 field differs' : `${changedCount} fields differ`} between these bundles
+            <h2 className="bundle-diff__title">Compare versions</h2>
+            <p className="bundle-diff__summary">
+              {changedCount === 1 ? '1 field differs' : `${changedCount} fields differ`} between these versions
             </p>
           </div>
-          <button
-            onClick={onClose}
-            aria-label="Close comparison"
-            style={{
-              background: 'none',
-              border: 'none',
-              color: 'var(--color-text-muted)',
-              cursor: 'pointer',
-              fontSize: '1.2rem',
-              padding: '0 4px',
-              lineHeight: 1,
-            }}
-          >×</button>
+          <button type="button" onClick={onClose} aria-label="Close comparison" className="k-icon-button k-icon-button--sm">×</button>
         </div>
 
         {/* Column headers */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: '140px 1fr 1fr',
-          gap: '0.5rem',
-          marginBottom: '0.5rem',
-        }}>
+        <div className="bundle-diff__row bundle-diff__row--heads">
           <div />
-          <div style={{ fontSize: '0.7rem', color: 'var(--color-text-faint)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Bundle A
-          </div>
-          <div style={{ fontSize: '0.7rem', color: 'var(--color-text-faint)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Bundle B
-          </div>
+          <div className="bundle-diff__col-head">Version A</div>
+          <div className="bundle-diff__col-head">Version B</div>
         </div>
 
         {/* Bundle names */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: '140px 1fr 1fr',
-          gap: '0.5rem',
-          marginBottom: '0.75rem',
-          background: 'var(--color-surface-2)',
-          borderRadius: '4px',
-          padding: '0.4rem 0.6rem',
-        }}>
-          <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Name</span>
-          <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: '0.75rem', color: 'var(--color-code)' }} title={bundleA.name}>
-            {truncate(bundleA.name, 28)}
-          </span>
-          <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: '0.75rem', color: 'var(--color-code)' }} title={bundleB.name}>
-            {truncate(bundleB.name, 28)}
-          </span>
+        <div className="bundle-diff__row bundle-diff__row--names">
+          <span className="bundle-diff__label">Name</span>
+          <span className="bundle-diff__name" title={bundleA.name}>{truncate(bundleA.name, 28)}</span>
+          <span className="bundle-diff__name" title={bundleB.name}>{truncate(bundleB.name, 28)}</span>
         </div>
 
         {/* Diff rows */}
         {rows.map(row => (
-          <div key={row.label} style={{
-            display: 'grid',
-            gridTemplateColumns: '140px 1fr 1fr',
-            gap: '0.5rem',
-            marginBottom: '0.3rem',
-            background: row.changed ? 'var(--color-warning-bg)' : 'transparent',
-            border: row.changed ? '1px solid var(--color-warning)' : '1px solid transparent',
-            borderRadius: '4px',
-            padding: '0.35rem 0.6rem',
-          }}>
-            <span style={{
-              fontSize: '0.75rem',
-              color: row.changed ? 'var(--color-warning)' : 'var(--color-text-muted)',
-              fontWeight: row.changed ? 600 : 400,
-            }}>
+          <div key={row.label} className="bundle-diff__row bundle-diff__row--field" data-changed={row.changed || undefined}>
+            <span className="bundle-diff__label">
               {row.changed ? '▸ ' : ''}{row.label}
             </span>
             <DiffCell value={row.valueA} changed={row.changed} full={row.full} isLink={row.label === 'CI Run'} />
@@ -217,24 +152,13 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
         ))}
 
         {changedCount === 0 && (
-          <p style={{ textAlign: 'center', color: 'var(--color-success)', fontSize: '0.85rem', marginTop: '0.5rem' }}>
-            ✓ No differences found between these bundles.
+          <p className="bundle-diff__same">
+            ✓ No differences found between these versions.
           </p>
         )}
 
-        <div style={{ marginTop: '1rem', textAlign: 'right' }}>
-          <button
-            onClick={onClose}
-            style={{
-              background: 'var(--color-surface-2)',
-              border: '1px solid var(--color-border)',
-              color: 'var(--color-text)',
-              borderRadius: '4px',
-              padding: '0.4rem 1rem',
-              cursor: 'pointer',
-              fontSize: '0.82rem',
-            }}
-          >
+        <div className="bundle-diff__footer">
+          <button type="button" onClick={onClose} className="k-button k-button--secondary k-button--md">
             Close
           </button>
         </div>
@@ -246,43 +170,24 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
 function DiffCell({ value, changed, isLink, full }: { value: string | null; changed: boolean; isLink?: boolean; full?: boolean }) {
   // A CI run URL that isCIRunURL rejects is not shown: it can hold credentials.
   if (!value || (isLink && !isCIRunURL(value))) {
-    return <span style={{ fontSize: '0.75rem', color: 'var(--color-text-faint)' }}>—</span>
+    return <span className="bundle-diff__value bundle-diff__value--none">—</span>
   }
   if (full) {
     return (
-      <span style={{
-        fontSize: '0.75rem',
-        color: changed ? 'var(--color-warning)' : 'var(--color-text-muted)',
-        fontFamily: 'var(--k-font-mono)',
-        whiteSpace: 'pre-line',
-        overflowWrap: 'anywhere',
-      }}>
+      <span className="bundle-diff__value bundle-diff__value--full" data-changed={changed || undefined}>
         {value}
       </span>
     )
   }
   if (isLink) {
     return (
-      <a
-        href={value}
-        target="_blank"
-        rel="noopener noreferrer"
-        style={{ fontSize: '0.75rem', color: 'var(--color-accent)', fontFamily: 'var(--k-font-mono)' }}
-        title={value}
-      >
+      <a href={value} target="_blank" rel="noopener noreferrer" className="bundle-diff__value bundle-diff__value--link" title={value}>
         {truncate(value, 30)}
       </a>
     )
   }
   return (
-    <span
-      style={{
-        fontSize: '0.75rem',
-        color: changed ? 'var(--color-warning)' : 'var(--color-text-muted)',
-        fontFamily: 'var(--k-font-mono)',
-      }}
-      title={value}
-    >
+    <span className="bundle-diff__value" data-changed={changed || undefined} title={value}>
       {truncate(value, 30)}
     </span>
   )

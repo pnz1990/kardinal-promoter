@@ -61,22 +61,24 @@ describe('BundleTimeline — bundle rendering', () => {
     expect(screen.getByText('Promoting')).toBeInTheDocument()
   })
 
-  it('renders Superseded as "Sup"', () => {
-    const bundles = [makeBundle({ phase: 'Superseded' })]
+  it('shows each phase by its display label, never a raw or truncated value', () => {
+    const bundles = [makeBundle({ phase: 'Superseded' }), makeBundle({ name: 'my-app-def456', phase: 'Available' })]
     render(<BundleTimeline bundles={bundles} />)
-    expect(screen.getByText('Sup')).toBeInTheDocument()
+    expect(screen.getByText('Replaced by newer version')).toBeInTheDocument()
+    expect(screen.getByText('Ready to promote')).toBeInTheDocument()
+    expect(screen.queryByText('Sup')).toBeNull()
   })
 
-  it('shows bundle history header', () => {
-    const bundles = [makeBundle()]
-    render(<BundleTimeline bundles={bundles} />)
-    expect(screen.getByText(/Bundle History/i)).toBeInTheDocument()
+  it('names chips by version: the Bundle name without the pipeline prefix', () => {
+    render(<BundleTimeline bundles={[makeBundle({ name: 'my-app-1-4-2', pipeline: 'my-app' })]} />)
+    expect(screen.getByText('1-4-2')).toBeInTheDocument()
   })
 
-  it('shows shift-click hint when 2+ bundles and no comparison', () => {
+  it('shows the versions header and no shift-click helper copy', () => {
     const bundles = [makeBundle(), makeBundle({ name: 'my-app-def456' })]
     render(<BundleTimeline bundles={bundles} />)
-    expect(screen.getByText(/Shift-click to compare/i)).toBeInTheDocument()
+    expect(screen.getByText(/Versions \(newest/)).toBeInTheDocument()
+    expect(screen.queryByText(/Shift-click to compare/i)).toBeNull()
   })
 })
 
@@ -247,7 +249,7 @@ describe('BundleTimeline — keyboard and type badges', () => {
   it('is one Tab stop, the shown bundle, and arrow keys move between bundles', async () => {
     const user = userEvent.setup()
     render(<><button>before</button><BundleTimeline bundles={bundles} selectedBundle="app-bbbbb" /><button>after</button></>)
-    const bar = screen.getByRole('toolbar', { name: /Bundle history/ })
+    const bar = screen.getByRole('toolbar', { name: /^Versions/ })
     const chips = Array.from(bar.querySelectorAll<HTMLButtonElement>('.bundle-chip'))
     expect(chips.map(c => c.tabIndex)).toEqual([-1, 0, -1])
 
@@ -272,10 +274,10 @@ describe('BundleTimeline — keyboard and type badges', () => {
 
   it('badges config and mixed bundles, not image ones', () => {
     render(<BundleTimeline bundles={bundles} />)
-    expect(screen.getByRole('img', { name: 'config Bundle' })).toBeInTheDocument()
-    expect(screen.getByRole('img', { name: 'image and config Bundle' })).toBeInTheDocument()
-    expect(screen.queryByRole('img', { name: 'image Bundle' })).not.toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'config version' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'image and config version' })).toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: 'image version' })).not.toBeInTheDocument()
     const chip = screen.getAllByRole('button').find(b => b.title.startsWith('app-bbbbb: '))!
-    expect(chip.title).toContain('config Bundle')
+    expect(chip.title).toContain('config version')
   })
 })

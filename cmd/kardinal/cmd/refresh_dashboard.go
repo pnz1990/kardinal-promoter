@@ -6,8 +6,11 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -94,7 +97,7 @@ first and pass its URL with --address.`,
 
 func dashboardFn(w interface{ Write([]byte) (int, error) }, address string, noOpen bool) error {
 	if address == "" {
-		address = "http://localhost:8082/ui/"
+		address = defaultUIAddress
 	}
 
 	if _, err := fmt.Fprintf(w, "kardinal UI: %s\n", address); err != nil {
@@ -113,6 +116,20 @@ func dashboardFn(w interface{ Write([]byte) (int, error) }, address string, noOp
 }
 
 // openBrowser opens the given URL in the default system browser.
+// defaultUIAddress is where kardinal dashboard opens the UI without
+// --address: the controller's UI port, forwarded to localhost.
+const defaultUIAddress = "http://localhost:8082/ui/"
+
+// uiURL is the UI's page of pipeline in ns: KARDINAL_UI_URL (else
+// defaultUIAddress) with the pipeline's hash route.
+func uiURL(ns, pipeline string) string {
+	base := os.Getenv("KARDINAL_UI_URL")
+	if base == "" {
+		base = defaultUIAddress
+	}
+	return strings.TrimSuffix(base, "#") + "#pipeline=" + url.QueryEscape(pipeline) + "&ns=" + url.QueryEscape(ns)
+}
+
 func openBrowser(url string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
@@ -123,7 +140,7 @@ func openBrowser(url string) error {
 	case "windows":
 		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
 	default:
-		return fmt.Errorf("unsupported OS: %s — navigate manually to %s", runtime.GOOS, url)
+		return fmt.Errorf("unsupported OS: %s; open %s in a browser", runtime.GOOS, url)
 	}
 	return cmd.Start()
 }

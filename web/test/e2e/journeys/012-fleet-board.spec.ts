@@ -19,17 +19,19 @@ test.describe('Journey 012 — Fleet board', () => {
     await expect(board.locator('.fleet-rail__version', { hasText: 'sha-abc1234' })).toBeVisible()
     const uat = board.getByRole('button', { name: /^kardinal-test-app uat:/ })
     await expect(uat).toContainText(/verified \d+m ago/)
-    // An image Bundle runs with the config of the last config Bundle (#1353).
+    // An image version runs with the config of the last config version (#1353).
     await expect(uat).toContainText('+ config 77aa001')
     await expect(uat).toHaveAccessibleName(/with config 77aa001 from kardinal-test-app-cfg9/)
   })
 
-  test('a station opens its pipeline and the logo returns to the fleet', async ({ page }) => {
+  test('a station opens its pipeline at that environment, and the logo returns to the fleet', async ({ page }) => {
     await page.goto('/')
     await page.getByRole('region', { name: 'Fleet' }).getByRole('button', { name: /^kardinal-test-app uat:/ }).click()
     await expect(page.getByRole('heading', { level: 1, name: 'kardinal-test-app' })).toBeVisible()
+    await expect(page).toHaveURL(/#\/p\/default\/kardinal-test-app\/env\/uat$/)
+    await expect(page.getByTestId('stage-drawer')).toContainText('uat')
     await page.getByRole('button', { name: 'Show the fleet' }).click()
     await expect(page.getByRole('region', { name: 'Fleet' })).toBeVisible()
-    await expect(page).not.toHaveURL(/pipeline=/)
+    await expect(page).not.toHaveURL(/\/p\//)
   })
 })
