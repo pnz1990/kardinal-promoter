@@ -10,7 +10,9 @@ running there, a newer one on its way in, its state and since when, its PR,
 and the gates holding it back. Run it first when a promotion is stuck; -w
 refreshes it and -o json prints it for scripts.
 
-When called without arguments, across every namespace:
+When called without arguments, across every namespace (-n for one; -A says
+every namespace explicitly; when you may not list every namespace it shows
+the kubeconfig's, with a note on stderr):
 
   Controller:  v0.10.1 in kardinal-system, 1/1 ready
   Pipelines:   2 (1 degraded: team-b/api)
@@ -24,13 +26,16 @@ When called without arguments, across every namespace:
 
 the controller version (the kardinal-version ConfigMap in
 --controller-namespace) and how many replicas of its Deployment are ready
-(else "no controller Deployment found there: kardinal doctor"; fewer ready
-than desired is a warning), the pipeline count with any Degraded pipelines,
+(else "no controller Deployment found there: kardinal doctor", or "can't
+read the controller Deployment (needs get on deployments in <ns>)": the
+chart's user roles do not grant it; fewer ready than desired is a warning), the pipeline count with any Degraded pipelines,
 the version count (in flight = Available or Promoting), and one line per
 pipeline (at most 50; then kardinal get pipelines -A) with its
 status.summary sentence (its phase from a controller that predates it).
--o json adds controllerReady and items [{namespace, pipeline, phase,
-summary}] to controller, pipelines, degraded, bundles and activeBundles.
+-o json adds controllerReady, controllerHealth {ready, reason}, namespace
+and note (when it is not every namespace) and items [{namespace, pipeline,
+phase, summary}] to controller, pipelines, degraded, bundles and
+activeBundles.
 
 When called with a pipeline name: first the Pipeline's own problems, an
 ERROR when it is not Ready (such as GitCredentialMissing, with the command
@@ -80,6 +85,7 @@ kardinal status [<pipeline>] [flags]
 ### Options
 
 ```
+  -A, --all-namespaces                Without a pipeline: every namespace (the default unless -n names one)
       --controller-namespace string   Namespace kardinal-promoter is installed in (default "kardinal-system")
   -h, --help                          help for status
   -w, --watch                         Refresh every 2 seconds (Ctrl-C to quit)

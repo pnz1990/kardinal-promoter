@@ -245,13 +245,21 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	assert.Equal(t, controllerVersion(t, e), m[1])
 	assert.Equal(t, m[2], m[3], "every controller replica is ready")
 	n, _ := strconv.Atoi(m[4])
-	assert.GreaterOrEqual(t, n, 1, "the cluster has this test's Pipeline")
+	assert.Equal(t, 1, n, "-n lists this namespace's Pipeline only")
 	if d, _ := strconv.Atoi(m[5]); d > 0 {
 		assert.Contains(t, out, fmt.Sprintf("Warning: %d pipeline(s) Degraded", d), "the warning counts the degraded pipelines")
 	}
 	// One line per pipeline, this test's with its summary sentence.
 	assert.Regexp(t, `(?m)^`+ns+` +`+pipelineName+` +\S`, out)
 	assert.Contains(t, out, "Details: kardinal status <pipeline> -n <namespace>\n")
+	assert.NotRegexp(t, `(?m)^`+ns2+` `, out, "-n leaves out the other namespace")
+	// -A: every namespace, this test's two among them.
+	all := c.Must(ns, "status", "-A")
+	m = summary.FindStringSubmatch(all)
+	require.NotNil(t, m, "status -A output:\n%s", all)
+	n, _ = strconv.Atoi(m[4])
+	assert.GreaterOrEqual(t, n, 1, "the cluster has this test's Pipeline")
+	assert.Regexp(t, `(?m)^`+ns+` +`+pipelineName+` +\S`, all)
 	assert.Regexp(t, `^Controller:  unknown in `+ns+`, no controller Deployment found there: kardinal doctor\n`,
 		c.Must(ns, "status", "--controller-namespace", ns), "no kardinal-version ConfigMap or Deployment there")
 	assert.Equal(t, "Pipeline: podinfo   Namespace: "+ns+"\n\nNo versions yet. Ship one: kardinal create bundle podinfo --image <ref>\n",

@@ -26,7 +26,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -599,4 +601,64 @@ func TestStatusPipelineWriter_RegionAndWide(t *testing.T) {
 	plain := runStatusPipeline(t, policyPipeline("demo", "test", "prod"), explainBundle("b1", "Promoting", recent),
 		explainStep("demo", "b1", "test", "Verified", "", recent))
 	assert.NotContains(t, plain, "REGION", "no environment says where it runs")
+}
+
+// TestStatusSummary_ScopeAndRights (#1768 QA): a caller who may not read the
+// controller Deployment is told so (not that there is none); -n lists one
+// namespace; a forbidden cluster-wide list falls back to the namespace with
+// a note on stderr.
+func TestStatusSummary_ScopeAndRights(t *testing.T) {
+	pipe := func(ns, name string) *v1alpha1.Pipeline {
+		p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
+		p.Status.Summary = "1.0.0 live in prod"
+		return p
+	}
+	forbidden := func(gr string) error {
+		return apierrors.NewForbidden(schema.GroupResource{Resource: gr}, "", errors.New("no"))
+	}
+	c := fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(pipe("team-a", "web"), pipe("team-b", "api")).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl sigs_client.WithWatch, list sigs_client.ObjectList, opts ...sigs_client.ListOption) error {
+				o := &sigs_client.ListOptions{}
+				o.ApplyOptions(opts)
+				switch list.(type) {
+				case *appsv1.DeploymentList:
+					return forbidden("deployments")
+				case *v1alpha1.PipelineList, *v1alpha1.BundleList:
+					if o.Namespace == "" {
+						return forbidden("pipelines")
+					}
+				}
+				return cl.List(ctx, list, opts...)
+			},
+		}).Build()
+	var out, errb bytes.Buffer
+	prev := errOut
+	errOut = &errb
+	t.Cleanup(func() { errOut = prev })
+
+	require.NoError(t, statusSummaryIn(&out, c, "kardinal-system", "", "team-a"))
+	assert.Contains(t, out.String(), "Controller:  unknown in kardinal-system, can't read the controller Deployment (needs get on deployments in kardinal-system); kardinal doctor checks it\n")
+	assert.Contains(t, out.String(), "team-a      web        1.0.0 live in prod\n")
+	assert.NotContains(t, out.String(), "team-b")
+	assert.Equal(t, "note: you may not list every namespace; showing team-a (-n for another)\n", errb.String())
+
+	out.Reset()
+	errb.Reset()
+	require.NoError(t, statusSummaryIn(&out, c, "kardinal-system", "team-b", "team-a"))
+	assert.Contains(t, out.String(), "team-b      api")
+	assert.NotContains(t, out.String(), "team-a")
+	assert.Empty(t, errb.String())
+
+	globalOutput = "json"
+	t.Cleanup(func() { globalOutput = "" })
+	out.Reset()
+	require.NoError(t, statusSummaryIn(&out, c, "kardinal-system", "", "team-a"))
+	var s statusSummary
+	require.NoError(t, json.Unmarshal(out.Bytes(), &s), out.String())
+	assert.Equal(t, "unknown", s.Controller, "controller stays the version string")
+	assert.Empty(t, s.ControllerHealth.Ready)
+	assert.Contains(t, s.ControllerHealth.Reason, "can't read the controller Deployment")
+	assert.Equal(t, "team-a", s.Namespace)
+	assert.Contains(t, s.Note, "you may not list every namespace")
 }
