@@ -43,10 +43,10 @@ kardinal audit summary [<pipeline>] [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: get auditevents, bundles, pipelines, steps, subscriptions)
+  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
 ```
 
 ### SEE ALSO
 
-* [kardinal audit](kardinal-audit.md)	 - Audit log commands — view and summarize promotion events
+* [kardinal audit](kardinal-audit.md)	 - Audit log commands: view and summarize promotion events
 

@@ -7,6 +7,7 @@ package live
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
@@ -73,25 +74,47 @@ func stepRow(ps *v1alpha1.PromotionStep) map[string]string {
 		"NAME": ps.Spec.StepType, "STATE": display.Step(ps.Status.State).Label, "EXPRESSION": "-", "REASON": reason}
 }
 
-// statusSections splits kardinal status <pipeline> into the paragraphs
-// before its tables and its titled tables (title → the table under the
-// rule).
-func statusSections(out string) (paras []string, tables map[string]string) {
-	rule := strings.Repeat("─", 72)
-	tables = map[string]string{}
-	for _, part := range strings.Split(strings.TrimSuffix(out, "\n"), "\n\n") {
-		lines := strings.SplitN(part, "\n", 3)
-		if len(lines) >= 2 && lines[1] == rule {
-			body := ""
-			if len(lines) == 3 {
-				body = lines[2] + "\n"
-			}
-			tables[lines[0]] = body
-			continue
-		}
-		paras = append(paras, part)
+// statusView is kardinal status <pipeline>: the summary sentence, the
+// environment rows and the blocking gate rows (nil without that section).
+type statusView struct {
+	summary string
+	envs    []map[string]string
+	gates   []map[string]string
+}
+
+// parseStatus parses kardinal status <pipeline>.
+func parseStatus(t *testing.T, out string) statusView {
+	t.Helper()
+	head, rest, ok := strings.Cut(out, "\n\nENVIRONMENT ")
+	require.True(t, ok, "status output:\n%s", out)
+	var v statusView
+	if lines := strings.SplitN(head, "\n", 2); len(lines) == 2 {
+		v.summary = lines[1]
 	}
-	return paras, tables
+	envs, gates, _ := strings.Cut("ENVIRONMENT "+rest, "\nBlocking gates\n"+strings.Repeat("-", 72)+"\n")
+	envs, _, _ = strings.Cut(envs, "\n\n")
+	v.envs = framework.ParseTable(envs)
+	if gates != "" {
+		v.gates = stripAges(t, framework.ParseTable(gates), "LAST CHECKED", agoRE)
+	}
+	return v
+}
+
+// waitStatus polls kardinal status <pipeline> until its environment rows
+// are want (the controller writes status.environments after each change)
+// and returns the view.
+func waitStatus(t *testing.T, c *framework.CLI, ns string, want []map[string]string) statusView {
+	t.Helper()
+	var v statusView
+	framework.Eventually(t, time.Minute, "kardinal status shows the environments", func(context.Context) (bool, string) {
+		out := c.Must(ns, "status", pipelineName)
+		v = parseStatus(t, out)
+		for _, r := range v.envs {
+			delete(r, "SINCE")
+		}
+		return assert.ObjectsAreEqual(want, v.envs), out
+	})
+	return v
 }
 
 // stripAges deletes column col from rows after checking it matches re.
@@ -203,7 +226,7 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	refusesNotFound(t, c, ns, "", "nope", "explain", "nope")
 
 	summary := regexp.MustCompile(`^Controller:  (\S+)\nPipelines:   (\d+)(?: \((\d+) degraded: [^)\n]+\))?\n` +
-		`Bundles:     (\d+) \((\d+) active\)\n(?:\nWarning: (\d+) pipeline\(s\) Degraded — run 'kardinal get pipelines' for details\n)?$`)
+		`Bundles:     (\d+) \((\d+) active\)\n(?:\nWarning: (\d+) pipeline\(s\) Degraded: run 'kardinal get pipelines' for details\n)?$`)
 	out := c.Must(ns, "status")
 	m := summary.FindStringSubmatch(out)
 	require.NotNil(t, m, "status output:\n%s", out)
@@ -212,7 +235,8 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	assert.GreaterOrEqual(t, n, 1, "the cluster has this test's Pipeline")
 	assert.Equal(t, m[3], m[6], "the warning counts the degraded pipelines")
 	assert.Regexp(t, `^Controller:  unknown\n`, c.Must(ns, "status", "--controller-namespace", ns), "no kardinal-version ConfigMap there")
-	assert.Equal(t, "Pipeline: podinfo   Namespace: "+ns+"\n\nNo active promotions.\n", c.Must(ns, "status", pipelineName))
+	assert.Equal(t, "Pipeline: podinfo   Namespace: "+ns+"\n\nNo versions yet. Ship one: kardinal create bundle podinfo --image <ref>\n",
+		c.Must(ns, "status", pipelineName))
 	refusesNotFound(t, c, ns, "", "nope", "status", "nope")
 
 	// policy list: wait for the controller's CEL check of every template.
@@ -259,15 +283,28 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	assert.Equal(t, []map[string]string{gateRow("test", b1, "entry", "Block", openExpr, blocked)}, explainTable(t, out), out)
 	assert.Equal(t, "test   deployed: none\n", explainDeployed(out))
 
-	out = c.Must(ns, "status", pipelineName)
-	paras, tables := statusSections(out)
-	assert.Equal(t, []string{"Pipeline: podinfo   Namespace: " + ns, "Active bundle(s): " + b1}, paras, out)
-	assert.Equal(t, "ENVIRONMENT  REGION  BUNDLE  STATE  ACTIVE STEP  PR  AGE\n", tables["Promotion Steps"], "no step yet:\n%s", out)
-	assert.Equal(t, []map[string]string{{"ENVIRONMENT": "prod", "BUNDLE": "none"}, {"ENVIRONMENT": "test", "BUNDLE": "none"}},
-		framework.ParseTable(tables["Deployed"]), out)
-	assert.Equal(t, []string{"GATE", "ENV", "EXPRESSION", "REASON", "LAST CHECKED"}, header(tables["Blocking Policy Gates"]), out)
+	// status: test's gate holds B1 there; prod is not reached yet.
+	v1 := fixtures.V2
+	sv := waitStatus(t, c, ns, []map[string]string{
+		{"ENVIRONMENT": "test", "RUNNING": "-", "INCOMING": b1 + " (" + v1 + ")", "STATE": "Held by gate entry", "PR": "-"},
+		{"ENVIRONMENT": "prod", "RUNNING": "-", "INCOMING": "-", "STATE": "-", "PR": "-"},
+	})
+	assert.Contains(t, sv.summary, "held by gate entry in test")
 	assert.Equal(t, []map[string]string{{"GATE": "entry", "ENV": "test", "EXPRESSION": openExpr, "REASON": truncated(blocked)}},
-		stripAges(t, framework.ParseTable(tables["Blocking Policy Gates"]), "LAST CHECKED", agoRE), "only the gate holding the Bundle:\n%s", out)
+		sv.gates, "only the gate holding the Bundle")
+	// -o json: the controller's status.environments, API values.
+	var sj struct {
+		Source       string `json:"source"`
+		Environments []v1alpha1.PipelineEnvironmentStatus
+		Gates        []struct{ Name, Environment, Bundle string } `json:"blockingGates"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(c.Must(ns, "status", pipelineName, "-o", "json")), &sj))
+	assert.Equal(t, "controller", sj.Source, "the controller writes status.environments")
+	require.Len(t, sj.Environments, 2)
+	assert.Equal(t, []string{"test", b1, "Pending", "entry"},
+		[]string{sj.Environments[0].Name, sj.Environments[0].IncomingBundle, sj.Environments[0].State, strings.Join(sj.Environments[0].BlockedBy, ",")})
+	require.Len(t, sj.Gates, 1)
+	assert.Equal(t, "entry", sj.Gates[0].Name)
 
 	// policy list never lists gate instances, but shows when they were last
 	// evaluated: for this namespace's team gates, not for ns2's org entry (the
@@ -374,56 +411,46 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	}, explainTable(t, out), out)
 	assert.Equal(t, "prod   deployed: none\n", explainDeployed(out), "test runs B1, so only prod gets a deployed line")
 
-	out = c.Must(ns, "status", pipelineName)
-	paras, tables = statusSections(out)
-	assert.Equal(t, []string{"Pipeline: podinfo   Namespace: " + ns, "Active bundle(s): " + b1}, paras, out)
-	assert.Equal(t, []string{"ENVIRONMENT", "REGION", "BUNDLE", "STATE", "ACTIVE STEP", "PR", "AGE"}, header(tables["Promotion Steps"]), out)
-	assert.Equal(t, []map[string]string{{"ENVIRONMENT": "test", "REGION": "-", "BUNDLE": b1, "STATE": display.Step("Verified").Label, "ACTIVE STEP": "-", "PR": "-"}},
-		stripAges(t, framework.ParseTable(tables["Promotion Steps"]), "AGE", ageRE), out)
-	assert.Equal(t, []map[string]string{{"ENVIRONMENT": "prod", "BUNDLE": "none"}, {"ENVIRONMENT": "test", "BUNDLE": b1 + " (" + fixtures.V2 + ")"}},
-		framework.ParseTable(tables["Deployed"]), out)
+	sv = waitStatus(t, c, ns, []map[string]string{
+		{"ENVIRONMENT": "test", "RUNNING": b1 + " (" + v1 + ")", "INCOMING": "-", "STATE": "Live", "PR": "-"},
+		{"ENVIRONMENT": "prod", "RUNNING": "-", "INCOMING": b1 + " (" + v1 + ")", "STATE": "Held by gate hold", "PR": "-"},
+	})
 	assert.Equal(t, []map[string]string{{"GATE": "hold", "ENV": "prod", "EXPRESSION": openExpr, "REASON": holdMsg}},
-		stripAges(t, framework.ParseTable(tables["Blocking Policy Gates"]), "LAST CHECKED", agoRE), "the gate's message, whole:\n%s", out)
+		sv.gates, "the gate's message, whole")
 
 	// --color colors the STATE cell only; NO_COLOR wins.
 	plain := c.Must(ns, "explain", pipelineName, "--env", "prod")
 	assert.NotContains(t, plain, "\x1b[", "no color when stdout is not a terminal")
-	colored := c.Must(ns, "explain", pipelineName, "--env", "prod", "--color")
+	// The 16-colour form: COLORTERM unset.
+	colorEnv := framework.CLIOptions{Env: []string{"COLORTERM=", "NO_COLOR="}}
+	cr := c.Exec(colorEnv, c.Args(ns, "explain", pipelineName, "--env", "prod", "--color")...)
+	require.Equal(t, 0, cr.Code, cr.Output())
+	colored := cr.Stdout
 	lines := strings.Split(colored, "\n")
-	assert.Equal(t, strings.Index(lines[0], "STATE"), strings.Index(lines[1], "\x1b[31m"+display.Gate("Block").Label+"\x1b[0m"), "Blocking, red, in the STATE column:\n%q", colored)
+	assert.Equal(t, strings.Index(lines[0], "STATE"), strings.Index(lines[1], "\x1b[33m"+display.Gate("Block").Label+"\x1b[0m"),
+		"Blocking, in the blocked tone (ochre), in the STATE column:\n%q", colored)
 	assert.Len(t, ansi.FindAllString(colored, -1), 2, "one colored cell:\n%q", colored)
 	assert.Equal(t, plain, ansi.ReplaceAllString(colored, ""))
-	colored = c.Must(ns, "explain", pipelineName, "--env", "test", "--color")
-	assert.Contains(t, colored, "\x1b[32mPass\x1b[0m")
-	assert.Contains(t, colored, "\x1b[32mVerified\x1b[0m")
+	cr = c.Exec(colorEnv, c.Args(ns, "explain", pipelineName, "--env", "test", "--color")...)
+	require.Equal(t, 0, cr.Code, cr.Output())
+	assert.Contains(t, cr.Stdout, "\x1b[32m"+display.Gate("Pass").Label+"\x1b[0m")
+	assert.Contains(t, cr.Stdout, "\x1b[32m"+display.Step("Verified").Label+"\x1b[0m")
 	nc := c.Exec(framework.CLIOptions{Env: []string{"NO_COLOR=1"}}, c.Args(ns, "explain", pipelineName, "--env", "prod", "--color")...)
 	require.Equal(t, 0, nc.Code, nc.Output())
 	assert.Equal(t, plain, nc.Stdout, "NO_COLOR overrides --color")
 
-	// Prod's step waits for its PR: status marks it active. Closing the gate
+	// Prod's step waits for its PR: status shows it with the PR. Closing the gate
 	// again leaves it Waiting: it no longer holds the Bundle.
 	e.SetBundleLabel(t, ns, b1, openLabel, "true")
 	prodStep := e.WaitStepState(t, ns, pipelineName, b1, "prod", "WaitingForMerge", promoteTimeout)
 	pr := openPR(t, e, a.repo, fixtures.V2)
 	assert.Equal(t, pr.URL, prodStep.Status.PRURL)
-	active := "-"
-	for _, s := range prodStep.Status.Steps {
-		if s.State != "Completed" && s.State != "Failed" && s.State != "" {
-			active = s.Name
-			break
-		}
-	}
-	prCell := pr.URL
-	if len(prCell) > 40 {
-		prCell = prCell[len(prCell)-40:]
-	}
-	out = c.Must(ns, "status", pipelineName)
-	_, tables = statusSections(out)
-	assert.Equal(t, []map[string]string{
-		{"ENVIRONMENT": "▶ prod", "REGION": "-", "BUNDLE": b1, "STATE": display.Step("WaitingForMerge").Label, "ACTIVE STEP": active, "PR": prCell},
-		{"ENVIRONMENT": "test", "REGION": "-", "BUNDLE": b1, "STATE": display.Step("Verified").Label, "ACTIVE STEP": "-", "PR": "-"},
-	}, stripAges(t, framework.ParseTable(tables["Promotion Steps"]), "AGE", ageRE), out)
-	assert.NotContains(t, tables, "Blocking Policy Gates", out)
+	sv = waitStatus(t, c, ns, []map[string]string{
+		{"ENVIRONMENT": "test", "RUNNING": b1 + " (" + v1 + ")", "INCOMING": "-", "STATE": "Live", "PR": "-"},
+		{"ENVIRONMENT": "prod", "RUNNING": "-", "INCOMING": b1 + " (" + v1 + ")", "STATE": display.Step("WaitingForMerge").Label, "PR": pr.URL},
+	})
+	assert.Nil(t, sv.gates, "no gate holds prod now")
+	assert.Contains(t, sv.summary, "waiting for PR merge in prod (#", "the summary names the PR")
 	e.SetBundleLabel(t, ns, b1, openLabel, "")
 	e.WaitGateReady(t, ns, b1, "prod", "hold", false, holdMsg+" ("+blocked+")", gateTimeout)
 	e.WaitExplainGate(t, ns, pipelineName, "prod", "hold", "Waiting", gateTimeout)

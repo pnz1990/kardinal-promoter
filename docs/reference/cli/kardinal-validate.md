@@ -41,8 +41,8 @@ This is not full CRD schema validation; 'kubectl apply --dry-run=server'
 checks the schema.
 
 Exit codes:
-  0 — file is valid
-  1 — validation failed (actionable errors printed)
+  0: file is valid
+  1: validation failed (actionable errors printed)
 
 ```
 kardinal validate [flags]
@@ -70,7 +70,7 @@ kardinal validate [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: get auditevents, bundles, pipelines, steps, subscriptions)
+  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
 ```
 
 ### SEE ALSO

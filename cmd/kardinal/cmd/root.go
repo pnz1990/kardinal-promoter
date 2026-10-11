@@ -71,7 +71,9 @@ Getting started:
 	root.PersistentFlags().StringVar(&globalContext, "context", "",
 		"Kubeconfig context override")
 	root.PersistentFlags().StringVarP(&globalOutput, "output", "o", "",
-		"Output format: table (default), json, yaml (json and yaml: get auditevents, bundles, pipelines, steps, subscriptions)")
+		"Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)")
+
+	withReference(root, rootReference)
 
 	root.AddGroup(
 		&cobra.Group{ID: groupStart, Title: "Get started:"},
@@ -216,3 +218,23 @@ func resolveRestConfig(clientConfig clientcmd.ClientConfig, explicitKubeconfig b
 	}
 	return cfg, ns, nil
 }
+
+// rootReference is the detail of kardinal for its reference page: how the
+// output looks where it goes.
+const rootReference = `Output follows where it goes. On a terminal, each state reads as a glyph and
+its label in the status colours of the UI: Live (spruce), Promoting and
+Checking health (red), Waiting for PR merge and gates not ready yet (blue),
+Held by gate (ochre), Failed (white on garnet, the only filled state),
+Replaced by newer version and Not reached (grey); Paused and Held by rollback
+are in bold. Piped to a file or another program, output is plain words: the
+labels without glyphs or colour, and ASCII only. NO_COLOR (any value) or
+TERM=dumb keeps glyphs, in ASCII (` + "`* Live`, `~ Waiting for PR merge`, `|| Held by gate`" + `),
+without colour. COLORTERM=truecolor gives the UI's exact
+colours, for a light background when COLORFGBG says so.
+
+-o json and -o yaml print the API's values (Verified, WaitingForMerge) for
+scripts: get, status, explain and history print what they show, and create
+bundle, promote and rollback print what they created, so
+` + "`kardinal create bundle my-app --image app:1.4 -o json | jq -r .bundle`" + `
+names the new Bundle. Warnings and hints go to stderr, so stdout stays valid
+JSON.`

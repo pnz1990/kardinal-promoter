@@ -436,10 +436,12 @@ func TestCLI_ConfigBundle(t *testing.T) {
 	e.WaitStepState(t, a.ns, pipelineName, b3, "test", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "test", fixtures.V3)
 	e.WaitBundlePhase(t, a.ns, b2, "Verified", time.Minute)
-	status := c.Must(a.ns, "status", pipelineName)
-	_, deployed, ok := strings.Cut(status, "\nDeployed\n")
-	require.True(t, ok, status)
-	assert.Regexp(t, `\ntest +`+regexp.QuoteMeta(b3+" ("+fixtures.V3+"); config "+initSHA[:7]+" from "+b2)+"\n", deployed)
+	// status names the Bundle that runs there; explain's deployed line
+	// names where the rest came from (unit: TestDeployed_ImageAndConfigBundles).
+	framework.Eventually(t, time.Minute, "status shows b3 running in test", func(context.Context) (bool, string) {
+		status := c.Must(a.ns, "status", pipelineName)
+		return regexp.MustCompile(`\ntest +` + regexp.QuoteMeta(b3+" ("+fixtures.V3+")") + ` +- +Live `).MatchString(status), status
+	})
 }
 
 // TestCLI_CreateBundleDryRun previews a Bundle with kardinal create bundle

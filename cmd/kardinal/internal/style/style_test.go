@@ -27,7 +27,7 @@ func env(kv ...string) func(string) string {
 // TestDetect (C4): colour and Unicode only on a terminal; NO_COLOR and
 // TERM=dumb give ASCII glyphs without colour; a pipe gets words only.
 //
-// Covers CLI-OUTPUT-01.
+// Covers CLI-STYLE-01.
 func TestDetect(t *testing.T) {
 	live := display.Step("Verified")
 	cases := []struct {
@@ -55,7 +55,7 @@ func TestDetect(t *testing.T) {
 // TestPalette (C4): each tone has the DESIGN-SYSTEM.md status colour; failed
 // is the only filled one.
 //
-// Covers CLI-OUTPUT-01.
+// Covers CLI-STYLE-01.
 func TestPalette(t *testing.T) {
 	dark := Styler{color: true, truecolor: true}
 	light := Styler{color: true, truecolor: true, light: true}
@@ -89,7 +89,7 @@ func TestPalette(t *testing.T) {
 // TestForceColor (C4): --color colours a pipe without adding glyphs;
 // NO_COLOR wins.
 //
-// Covers CLI-OUTPUT-01.
+// Covers CLI-STYLE-01.
 func TestForceColor(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	t.Setenv("COLORTERM", "")
@@ -101,7 +101,7 @@ func TestForceColor(t *testing.T) {
 // TestPlainIsASCII (C4): with words only, every state of the display table,
 // the rules and the symbols are ASCII.
 //
-// Covers CLI-OUTPUT-01.
+// Covers CLI-STYLE-01.
 func TestPlainIsASCII(t *testing.T) {
 	for _, s := range []Styler{Plain(), detect(true, env("NO_COLOR", "1", "LANG", "en_US.UTF-8")), detect(true, env("TERM", "dumb"))} {
 		var b strings.Builder
@@ -122,7 +122,7 @@ func TestPlainIsASCII(t *testing.T) {
 // TestTable (C4): the table aligns like text/tabwriter on plain text, and
 // on visible widths with colour.
 //
-// Covers CLI-OUTPUT-01.
+// Covers CLI-STYLE-01.
 func TestTable(t *testing.T) {
 	inputs := []string{
 		"A\tBB\tC\nlonger\tx\ty\n",

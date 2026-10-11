@@ -136,7 +136,7 @@ func assertPlain(t *testing.T, out, what string) {
 // NO_COLOR or TERM=dumb, has no ANSI escape and no non-ASCII character in
 // any command's stdout. The piped form is golden (testdata/output.golden).
 //
-// Covers CLI-OUTPUT-01.
+// Covers CLI-STYLE-01.
 func TestOutput_PlainWhenNotATerminal(t *testing.T) {
 	t.Setenv("KUBECONFIG", "/dev/null")
 	c := policyClient(t, outputFixture()...)
@@ -170,7 +170,7 @@ func TestOutput_PlainWhenNotATerminal(t *testing.T) {
 // TestOutput_Terminal (C4): on a terminal the states have their glyph and
 // tone colour, and the columns still line up.
 //
-// Covers CLI-OUTPUT-01.
+// Covers CLI-STYLE-01.
 func TestOutput_Terminal(t *testing.T) {
 	t.Setenv("KUBECONFIG", "/dev/null")
 	c := policyClient(t, outputFixture()...)
@@ -201,7 +201,7 @@ func TestOutput_Terminal(t *testing.T) {
 // rollback print JSON with -o json; the created Bundle's name is .bundle,
 // and warnings go to stderr, so stdout stays valid JSON.
 //
-// Covers CLI-OUTPUT-01.
+// Covers CLI-STYLE-01.
 func TestOutput_JSON(t *testing.T) {
 	t.Setenv("KUBECONFIG", "/dev/null")
 	c := policyClient(t, outputFixture()...)

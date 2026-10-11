@@ -12,6 +12,24 @@ Getting started:
   kardinal create bundle my-app --image app:1.4   start a promotion
   kardinal status my-app                          see where each version is, and why
 
+Output follows where it goes. On a terminal, each state reads as a glyph and
+its label in the status colours of the UI: Live (spruce), Promoting and
+Checking health (red), Waiting for PR merge and gates not ready yet (blue),
+Held by gate (ochre), Failed (white on garnet, the only filled state),
+Replaced by newer version and Not reached (grey); Paused and Held by rollback
+are in bold. Piped to a file or another program, output is plain words: the
+labels without glyphs or colour, and ASCII only. NO_COLOR (any value) or
+TERM=dumb keeps glyphs, in ASCII (`* Live`, `~ Waiting for PR merge`, `|| Held by gate`),
+without colour. COLORTERM=truecolor gives the UI's exact
+colours, for a light background when COLORFGBG says so.
+
+-o json and -o yaml print the API's values (Verified, WaitingForMerge) for
+scripts: get, status, explain and history print what they show, and create
+bundle, promote and rollback print what they created, so
+`kardinal create bundle my-app --image app:1.4 -o json | jq -r .bundle`
+names the new Bundle. Warnings and hints go to stderr, so stdout stays valid
+JSON.
+
 ### Options
 
 ```
@@ -19,13 +37,13 @@ Getting started:
   -h, --help                help for kardinal
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: get auditevents, bundles, pipelines, steps, subscriptions)
+  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
 ```
 
 ### SEE ALSO
 
 * [kardinal approve](kardinal-approve.md)	 - Approve (or reject) a Bundle for an environment's approval gates
-* [kardinal audit](kardinal-audit.md)	 - Audit log commands — view and summarize promotion events
+* [kardinal audit](kardinal-audit.md)	 - Audit log commands: view and summarize promotion events
 * [kardinal completion](kardinal-completion.md)	 - Generate shell completion scripts
 * [kardinal create](kardinal-create.md)	 - Create kardinal resources
 * [kardinal dashboard](kardinal-dashboard.md)	 - Open the kardinal UI dashboard in a browser
