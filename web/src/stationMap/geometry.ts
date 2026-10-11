@@ -46,14 +46,14 @@ export function initialLevel(n: number): ZoomLevel {
 /** The width of a station's label column at a level, in map units. */
 const LABEL_W: Record<ZoomLevel, number> = { overview: 44, map: 120, detail: 272 }
 /** A station's height: the dot and its label lines. */
-const STATION_H: Record<ZoomLevel, number> = { overview: 28, map: 44, detail: 84 + GRAPH.rankSep / 2 }
+const STATION_H: Record<ZoomLevel, number> = { overview: 28, map: 44, detail: 100 + GRAPH.rankSep / 2 }
 /** The dot sits this far below a station's top: its name goes above the line
  *  the edges run on, its version and state below (a metro map's labels). */
 const DOT_TOP = 22
 
 /** A band or platform's summary size; Overview is denser so 300 environments read at once. */
 const GROUP_W: Record<ZoomLevel, number> = { overview: 180, map: 210, detail: 210 }
-const GROUP_H: Record<ZoomLevel, number> = { overview: 40, map: 52, detail: 52 }
+const GROUP_H: Record<ZoomLevel, number> = { overview: 40, map: 56, detail: 56 }
 /** Rank spacing per level: Overview packs the columns. */
 const RANK_SEP: Record<ZoomLevel, number> = { overview: GRAPH.rankSep / 2, map: GRAPH.rankSep, detail: GRAPH.rankSep }
 
@@ -62,9 +62,7 @@ export function gridColumns(n: number): number {
   return Math.max(4, Math.min(24, Math.ceil(Math.sqrt(n * 3))))
 }
 
-/** The row labels' column of an expanded grid ("112 live"), and the space
- *  above the cells (the head) and below them (the footer). */
-export const GRID_LABEL_W = 132
+/** The space above an expanded grid's cells (the head) and below them (the footer). */
 const GRID_HEAD = 28
 const GRID_FOOT = 20
 const GRID_PAD = 12
@@ -91,13 +89,55 @@ export function gridRows(g: Group): Array<{ label?: { tone: string; text: string
   return rows
 }
 
-/** The size of an expanded group's grid, head, row labels and footer included. */
-export function gridSize(g: Group): { w: number; h: number; cols: number } {
+/** A character's width as a share of the font size (the map's small labels). */
+export const CH_EM = 0.62
+
+/** The font size, in map units, of a small label (--k-text-2xs) at a level's
+ *  zoom: counter-scaled so it reads at least labelMin px on screen. */
+export function labelUnits(level: ZoomLevel): number {
+  // The smallest zoom a level is fitted at: Map down to Overview's threshold.
+  const k = level === 'detail' ? GRAPH.zoom.detail : level === 'map' ? GRAPH.zoom.overview : zoomFor('overview')
+  return GRAPH.labelMin * Math.max(1, 1 / k)
+}
+
+/** How wide n characters of a small label are at a level, in map units. */
+export function textW(n: number, level: ZoomLevel): number {
+  return n * CH_EM * labelUnits(level)
+}
+
+/** A band or platform's visible title: "WAVE 2 · 48", "EDGE · 12" (its accessible name says the rest). */
+export function groupTitle(g: Group): string {
+  return `${g.label} · ${g.members.length}`
+}
+
+/** A platform's pacing line: "2 at a time · stop at 2 failed". */
+export function groupPacing(g: Group): string {
+  return g.kind === 'platform'
+    ? [g.maxConcurrent ? `${g.maxConcurrent} at a time` : '', g.maxUnavailable ? `stop at ${g.maxUnavailable} failed` : ''].filter(Boolean).join(' · ')
+    : ''
+}
+
+/** A group's sub line: its pacing, or what most of it runs. */
+export function groupSub(g: Group): string {
+  return groupPacing(g) || (g.version ? `most run ${g.version}` : 'nothing deployed')
+}
+
+/** The width of an expanded grid's row label column at a level: its longest label. */
+export function gridLabelW(g: Group, level: ZoomLevel): number {
+  const longest = Math.max(0, ...gridRows(g).map(r => r.label?.text.length ?? 0))
+  return textW(longest, level) + GRID_PAD
+}
+
+/** The size of an expanded group's grid, head, row labels and footer included:
+ *  wide enough that no label is cut. */
+export function gridSize(g: Group, level: ZoomLevel = 'map'): { w: number; h: number; cols: number } {
   const cols = gridColumns(g.members.length)
   const rows = gridRows(g)
   const step = GRAPH.grid.cell + GRAPH.grid.gap
   const height = rows.length ? rows[rows.length - 1].y + step : step
-  return { cols, w: Math.max(GROUP_W.map, GRID_LABEL_W + cols * step + GRID_PAD * 2), h: GRID_HEAD + height + GRID_FOOT }
+  const w = Math.max(GROUP_W.map, gridLabelW(g, level) + cols * step + GRID_PAD * 2,
+    textW(groupTitle(g).length + 2, level) + GRID_PAD * 3, textW(groupSub(g).length, level) + GRID_PAD * 2)
+  return { cols, w, h: GRID_HEAD + height + GRID_FOOT }
 }
 
 function lowerFirst(s: string): string {
@@ -142,12 +182,19 @@ const NAME_CH = 9.5
 
 /** The longest label line of a station at Detail: its name, its incoming line, or its version line. */
 function detailTextWidth(st: Station): number {
+  // The incoming version and its state are two lines ("→ 1.4.2", "Held by gate x · #42").
   const lines = [
     st.env.length * NAME_CH,
     ((st.running?.version.length ?? 16) + 8) * MONO_CH,
-    st.incoming ? (st.incoming.version.length + st.incoming.display.label.length + 12) * MONO_CH : 0,
+    st.incoming ? (st.incoming.version.length + 2) * MONO_CH : 0,
+    st.incoming ? (st.incoming.display.label.length + 6) * MONO_CH : 0,
   ]
   return Math.max(...lines)
+}
+
+/** How many mono characters fit in a station's label column at Detail. */
+export function detailChars(p: { w: number }): number {
+  return Math.floor((p.w - GRAPH.station.r * 2) / MONO_CH)
 }
 
 /** The straight run an edge keeps before a node with n gates: the gate marks
@@ -166,10 +213,14 @@ export function nodeSize(n: MapNode, level: ZoomLevel): { w: number; h: number }
     return { w: GRAPH.station.r * 2 + GRAPH.labelGap + label, h: STATION_H[level] }
   }
   if (n.expanded) {
-    const s = gridSize(n.group)
+    const s = gridSize(n.group, level)
     return { w: s.w, h: s.h }
   }
-  return { w: GROUP_W[level], h: GROUP_H[level] }
+  // Wide enough for its title (and the failure mark) and its sub line: no label is cut.
+  const g = n.group
+  const title = textW(groupTitle(g).length + 2 + (g.failed > 0 ? String(g.failed).length + 2 : 0), level) + GRID_PAD * 3
+  const sub = level === 'overview' ? 0 : textW(groupSub(g).length, level) + GRID_PAD * 2
+  return { w: Math.max(GROUP_W[level], title, sub), h: GROUP_H[level] }
 }
 
 /**
@@ -307,13 +358,14 @@ function round(n: number): number {
 
 /** Members of a group by grid cell, for an expanded group: rows by state
  *  (gridRows), with the row and column of each cell for the arrow keys. */
-export function gridCells(g: Group, order: string[], box: Box): Array<{ env: string; x: number; y: number; row: number; col: number }> {
+export function gridCells(g: Group, order: string[], box: Box, level: ZoomLevel = 'map'): Array<{ env: string; x: number; y: number; row: number; col: number }> {
   const step = GRAPH.grid.cell + GRAPH.grid.gap
+  const labelW = gridLabelW(g, level)
   const out: Array<{ env: string; x: number; y: number; row: number; col: number }> = []
   gridRows(g).forEach((r, row) => {
     for (let col = 0; col < r.count; col++) {
       const env = order[r.start + col]
-      if (env) out.push({ env, row, col, x: box.x + GRID_PAD + GRID_LABEL_W + col * step, y: box.y + GRID_HEAD + r.y })
+      if (env) out.push({ env, row, col, x: box.x + GRID_PAD + labelW + col * step, y: box.y + GRID_HEAD + r.y })
     }
   })
   return out

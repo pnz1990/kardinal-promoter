@@ -12,7 +12,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { GateMark, Group, MapNode, Station, StationMapModel, ThreadSegment } from './model'
 import { gridOrder, groupSummary, stationLabel } from './model'
 import {
-  BAR, GATE_STEP, GRAPH, GRID_LABEL_W, dotOf, gridCells, gridText, initialLevel, layout, pathOf, pointBeforeEnd, trimEnd,
+  BAR, GATE_STEP, GRAPH, detailChars, dotOf, gridCells, gridText, groupPacing, groupSub, groupTitle, initialLevel, layout, pathOf, pointBeforeEnd, trimEnd,
   type Layout, type Placed, type ZoomLevel,
 } from './geometry'
 import { useMapViewport } from './useMapViewport'
@@ -49,8 +49,8 @@ const GATE_LABEL_H = 16
 /** The minimap's width and its inset from the map's corner (--k-space-3). */
 const MINIMAP_W = 160
 const MINIMAP_INSET = 12
-/** A character's width as a share of the font size (the map's small labels). */
-const CH_EM = 0.62
+/** The leader from a gate's label down to its bar. */
+const GATE_LEADER = 8
 
 const LEVELS: ZoomLevel[] = ['overview', 'map', 'detail']
 const LEVEL_LABEL: Record<ZoomLevel, string> = { overview: 'Overview', map: 'Map', detail: 'Detail' }
@@ -114,11 +114,11 @@ export default function StationMap(props: StationMapProps) {
     const gp = lay.placed.get(gid)
     if (!gp) return undefined
     if (gp.node.kind === 'group' && gp.node.expanded) {
-      const cell = gridCells(gp.node.group, gridOrder(gp.node.group, model.stations), boxOf(gp)).find(c => c.env === env)
+      const cell = gridCells(gp.node.group, gridOrder(gp.node.group, model.stations), boxOf(gp), layoutLevel).find(c => c.env === env)
       if (cell) return { x: cell.x + GRAPH.grid.cell / 2, y: cell.y + GRAPH.grid.cell / 2 }
     }
     return { x: gp.x, y: gp.y }
-  }, [lay, model])
+  }, [lay, model, layoutLevel])
 
   // Focusable things in order: stations, groups, and the cells of expanded groups.
   const focusables = useMemo(() => {
@@ -201,7 +201,7 @@ export default function StationMap(props: StationMapProps) {
     const gp = lay.placed.get(gid)
     if (!gp || gp.node.kind !== 'group' || !gp.node.expanded) return undefined
     const g = model.groups.get(gid)!
-    return gridCells(g, gridOrder(g, model.stations), boxOf(gp))
+    return gridCells(g, gridOrder(g, model.stations), boxOf(gp), level)
   }
 
   const onKeyDown = (e: React.KeyboardEvent<SVGSVGElement>) => {
@@ -366,7 +366,7 @@ export default function StationMap(props: StationMapProps) {
             // A stopped thread ends before the holding gate's bar: past its comb offset, and a gap.
             const target = model.nodes.find(n => n.id === seg.to)
             const holdAt = target ? Math.max(0, gatesOn(target, model).findIndex(g => g.holding)) : 0
-            const pts = seg.kind === 'stopped' ? trimEnd(e.points, gateOffset(holdAt) + GRAPH.grid.gap * 2)
+            const pts = seg.kind === 'stopped' ? trimEnd(e.points, gateOffset(holdAt) + GRAPH.gateTick)
               : seg.kind === 'snap' ? trimEnd(e.points, GRAPH.station.r + 5) : e.points
             const tip = pointBeforeEnd(pts, 0)
             return (
@@ -392,7 +392,7 @@ export default function StationMap(props: StationMapProps) {
                 dim={matches.length > 0 && !matchSet.has(p.node.id)}
                 chain={upIds.has(p.node.id) ? 'up' : downIds.has(p.node.id) ? 'down' : undefined}
                 onOpen={() => onOpenStage(p.node.id)} onFocus={() => setCursor(p.node.id)} />
-            : <GroupGlyph key={p.node.id} p={p} g={p.node.group} expanded={p.node.expanded} model={model} level={level} hatch={`${patternId}-hatch`} k={vp.view.k}
+            : <GroupGlyph key={p.node.id} p={p} g={p.node.group} expanded={p.node.expanded} model={model} level={level} hatch={`${patternId}-hatch`}
                 active={active} focusedEnv={focused} matchSet={matchSet} searching={matches.length > 0}
                 onToggle={() => onToggleGroup(p.node.id)} onOpen={onOpenStage} onFocusItem={setCursor} />)}
         </g>
@@ -416,6 +416,8 @@ export default function StationMap(props: StationMapProps) {
               const label = gates.length > 1 ? `${g.name} +${gates.length - 1}` : g.name
               const hit = GRAPH.gateTick + GRAPH.grid.gap
               const labelW = label.length * GATE_CH
+              // The label stands above the edge, clear of the thread, with a hairline down to the bar.
+              const labelY = p.y - half - GATE_LEADER - 4
               return (
                 <g key={`${to}:${g.id}`} className="station-map__gate" data-tone={g.display.tone} data-gate={g.name}
                   tabIndex={0} role="button" aria-label={`gate ${g.name}, ${g.display.label}${g.approval ? `, ${g.approval.approved} of ${g.approval.required} approvals` : ''}`}
@@ -431,11 +433,14 @@ export default function StationMap(props: StationMapProps) {
                   }}
                   onClick={e => { e.stopPropagation(); if (onOpenGate) onOpenGate(g.id); else onOpenStage(env, 'why') }}>
                   {/* The hit area covers the mark and its label, so a click anywhere on the gate lands. */}
-                  <rect className="station-map__gate-hit" x={p.x - (labelled ? labelW : hit)} y={p.y - half - (labelled ? GATE_LABEL_H : hit)}
-                    width={(labelled ? labelW : hit) + hit} height={half + hit + (labelled ? GATE_LABEL_H : hit)} />
-                  <line x1={p.x - nx} y1={p.y - ny} x2={p.x + nx} y2={p.y + ny} />
+                  <rect className="station-map__gate-hit" x={p.x - (labelled ? labelW : hit)} y={p.y - half - (labelled ? GATE_LABEL_H + GATE_LEADER : hit)}
+                    width={(labelled ? labelW : hit) + hit} height={half + hit + (labelled ? GATE_LABEL_H + GATE_LEADER : hit)} />
+                  <line className="station-map__gate-bar" x1={p.x - nx} y1={p.y - ny} x2={p.x + nx} y2={p.y + ny} />
                   {labelled && (
-                    <text x={p.x + 3} y={p.y - half - 4} textAnchor="end" className="station-map__gate-label">{label}</text>
+                    <>
+                      <line className="station-map__gate-leader" x1={p.x} y1={labelY + 3} x2={p.x} y2={p.y - half - 1} />
+                      <text x={p.x + 3} y={labelY} textAnchor="end" className="station-map__gate-label">{label}</text>
+                    </>
                   )}
                   {/* An approval gate: a person and the quorum ("1/2") under the bar. */}
                   {g.approval && level !== 'overview' && (
@@ -458,10 +463,10 @@ export default function StationMap(props: StationMapProps) {
               const placed = lay.placed.get(node.id)
               const content = placed && actionsFor(node.id)
               if (!placed || !content) return null
-              const { x, y } = dotOf(placed)
+              const { x } = dotOf(placed)
               // Below the station's labels, as HTML buttons (foreignObject), so they are real buttons.
               return (
-                <foreignObject key={node.id} x={x - GRAPH.station.r} y={y + GRAPH.station.r + GRAPH.rankSep / 2}
+                <foreignObject key={node.id} x={x - GRAPH.station.r} y={labelsBottom(placed, level) + GRAPH.grid.gap}
                   width={placed.w} height={GRAPH.rankSep / 2} className="station-actions">
                   <div className="station-actions__row" onPointerDown={e => e.stopPropagation()}>{content}</div>
                 </foreignObject>
@@ -475,6 +480,17 @@ export default function StationMap(props: StationMapProps) {
       <div className="sr-only" aria-live="polite">{announce}</div>
     </div>
   )
+}
+
+/** The line height of a station's labels: Detail sets them a step larger (--k-text-sm). */
+function lineOf(level: ZoomLevel): number {
+  return level === 'detail' ? 17 : 14
+}
+
+/** Where a station's labels end (its click target's bottom); its actions go below. */
+function labelsBottom(p: Placed, level: ZoomLevel): number {
+  const { y } = dotOf(p)
+  return y + GRAPH.station.r + lineOf(level) * (level === 'detail' ? 3 : 1) + GRAPH.grid.gap * 3
 }
 
 /** How far before the end of an edge the i-th gate mark sits. */
@@ -542,15 +558,14 @@ function StationGlyph({ p, st, level, model, focusable, focused, dim, chain, onO
   const showVersion = level === 'detail' || (level === 'map' && st.running?.version !== upVersion)
   const age = ageOf(st.running?.verifiedAt)
   const pr = st.incoming?.prURL ? prNumberFromURL(st.incoming.prURL) : null
-  // Detail sets its lines a step larger (--k-text-sm).
-  const line = level === 'detail' ? 17 : 14
+  const line = lineOf(level)
   return (
     <g className="station" data-station={st.env} data-node-id={st.stepId} data-focus-id={st.env} data-tone={tone} data-dim={dim || undefined}
       data-chain={chain} data-focused={focused || undefined}
       role="button" tabIndex={focusable ? 0 : -1} aria-label={stationLabel(st, ageOf) + (diff ? ', the compared version differs here' : '')} aria-current={focused ? 'true' : undefined}
       onClick={onOpen} onFocus={onFocus}>
       {/* The whole station is the target: the dot and its labels. */}
-      <rect className="station__area" x={p.x - p.w / 2 - 4} y={p.y - p.h / 2} width={p.w + 8} height={p.h} />
+      <rect className="station__area" x={p.x - p.w / 2 - 4} y={p.y - p.h / 2} width={p.w + 8} height={Math.min(p.h, labelsBottom(p, level) - (p.y - p.h / 2))} />
       <circle className="station__hit" cx={x} cy={y} r={r + 8} />
       {tone === 'held' && <circle className="station__ring2" cx={x} cy={y} r={r + 3} />}
       <circle className="station__dot" cx={x} cy={y} r={r} />
@@ -568,9 +583,12 @@ function StationGlyph({ p, st, level, model, focusable, focused, dim, chain, onO
         </text>
       )}
       {level === 'detail' && st.incoming && (
-        <text x={x - r} y={y + r + line * 2} className="station__incoming" data-tone={tone}>
-          {`→ ${st.incoming.version} · ${st.display.label}`}{pr ? ` · ${pr}` : ''}
-        </text>
+        <>
+          <text x={x - r} y={y + r + line * 2} className="station__incoming" data-tone={tone}>{clip(`→ ${st.incoming.version}`, detailChars(p))}</text>
+          <text x={x - r} y={y + r + line * 3} className="station__incoming" data-tone={tone}>
+            {clip(`${st.display.label}${pr ? ` · ${pr}` : ''}`, detailChars(p))}
+          </text>
+        </>
       )}
       {level === 'detail' && !st.incoming && st.display.tone !== 'verified' && st.display.tone !== 'pending' && (
         <text x={x - r} y={y + r + line * 2} className="station__incoming" data-tone={tone}>{st.display.label}</text>
@@ -594,19 +612,15 @@ interface GroupGlyphProps {
   onFocusItem: (id: string) => void
   /** The hatch pattern's id, for held cells. */
   hatch: string
-  /** The zoom: small labels are counter-scaled, so fewer characters fit. */
-  k: number
 }
 
-function GroupGlyph({ p, g, expanded, model, level, active, focusedEnv, matchSet, searching, onToggle, onOpen, onFocusItem, hatch, k }: GroupGlyphProps) {
+function GroupGlyph({ p, g, expanded, model, level, active, focusedEnv, matchSet, searching, onToggle, onOpen, onFocusItem, hatch }: GroupGlyphProps) {
   const box = boxOf(p)
-  // How many characters of a small label (--k-text-2xs, counter-scaled) fit in w map units.
-  const fits = (w: number) => Math.max(4, Math.floor(w / (CH_EM * GRAPH.labelMin * Math.max(1, 1 / k))))
   const total = g.members.length
-  const pacing = g.kind === 'platform'
-    ? [g.maxConcurrent ? `${g.maxConcurrent} at a time` : '', g.maxUnavailable ? `stop at ${g.maxUnavailable} failed` : ''].filter(Boolean).join(' · ')
-    : ''
-  const title = g.kind === 'platform' ? `${g.label} · ${total} targets` : `${g.label} · ${total}`
+  const pacing = groupPacing(g)
+  // The accessible name says it in full; the head shows "EDGE · 12", sized to fit (no label is cut).
+  const name = g.kind === 'platform' ? `${g.label} · ${total} targets` : `${g.label} · ${total}`
+  const title = groupTitle(g)
   const summary = groupSummary(g)
   const barW = box.w - 24
   let at = 0
@@ -618,10 +632,10 @@ function GroupGlyph({ p, g, expanded, model, level, active, focusedEnv, matchSet
   })
   const head = (
     <g className="group__head" data-focus-id={g.id} role="button" tabIndex={active === g.id ? 0 : -1}
-      aria-expanded={expanded} aria-label={`${title}${pacing ? `, ${pacing}` : ''}: ${summary}`}
+      aria-expanded={expanded} aria-label={`${name}${pacing ? `, ${pacing}` : ''}: ${summary}`}
       onClick={onToggle} onFocus={() => onFocusItem(g.id)}>
       <rect className="group__frame" x={box.x} y={box.y} width={box.w} height={box.h} />
-      <text x={box.x + 12} y={box.y + 15} className="group__label">{clip(title, fits(box.w - 36 - (g.failed > 0 && !g.halted && !expanded ? 36 : 0)))}</text>
+      <text x={box.x + 12} y={box.y + 15} className="group__label">{title}</text>
       <text x={box.x + box.w - 12} y={box.y + 15} textAnchor="end" className="group__chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</text>
       {/* A minority of failures is a mark on the band; the thread still fills by the share verified. */}
       {g.failed > 0 && !g.halted && !expanded && (
@@ -633,7 +647,7 @@ function GroupGlyph({ p, g, expanded, model, level, active, focusedEnv, matchSet
           {g.verified > 0 && <rect className="group__thread" x={box.x + 12} y={box.y + 34} width={(g.verified / total) * barW} height={BAR.thread} />}
           {level !== 'overview' && (
             <text x={box.x + 12} y={box.y + 47} className="group__sub">
-              {clip(pacing || (g.version ? `most run ${g.version}` : 'nothing deployed'), fits(box.w - 24))}
+              {groupSub(g)}
             </text>
           )}
         </>
@@ -642,16 +656,15 @@ function GroupGlyph({ p, g, expanded, model, level, active, focusedEnv, matchSet
   )
   if (!expanded) return <g className="group" data-group={g.id}>{head}</g>
   const order = gridOrder(g, model.stations)
-  const cells = gridCells(g, order, box)
+  const cells = gridCells(g, order, box, level)
   const text = gridText(g, box)
-  // The footer: the pacing, or what most run, cut to the grid's width.
-  const foot = clip(pacing || (g.version ? `most run ${g.version}` : 'nothing deployed'), fits(text.foot.w))
+  const foot = groupSub(g)
   const c = GRAPH.grid.cell
   return (
     <g className="group group--expanded" data-group={g.id}>
       {head}
       {text.rows.map(r => (
-        <text key={`${r.y}`} x={r.x} y={r.y} className="group__row" data-tone={r.tone}>{clip(r.text, fits(GRID_LABEL_W - 4))}</text>
+        <text key={`${r.y}`} x={r.x} y={r.y} className="group__row" data-tone={r.tone}>{r.text}</text>
       ))}
       {cells.map(cell => {
         const st = model.stations.get(cell.env)!
@@ -732,5 +745,7 @@ function Minimap({ lay, view, size, model, onCentre, show }: {
 function minimapTone(model: StationMapModel, id: string): string | undefined {
   const st = model.stations.get(id)
   if (st) return st.display.tone
-  return model.groups.get(id)?.counts[0]?.tone
+  // A group reads as what most of it is (its failures are marks on the map itself).
+  const counts = model.groups.get(id)?.counts ?? []
+  return [...counts].sort((a, b) => b.count - a.count)[0]?.tone
 }

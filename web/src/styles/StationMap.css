@@ -122,7 +122,7 @@
 /* Map text never reads below --k-text-2xs on screen: each label sets --fs,
    and at Map and Overview zoom (--map-k < 1) the size is counter-scaled. */
 .station-map__svg text {
-  font-size: max(var(--fs, var(--k-text-xs)), calc(var(--k-text-2xs) / var(--map-k, 1)));
+  font-size: max(var(--fs, var(--k-text-xs)), calc(var(--fs-min, var(--k-text-2xs)) / var(--map-k, 1)));
 }
 
 /* Edges: fine ink lines, octilinear. */
@@ -172,19 +172,22 @@
 }
 
 /* Gates on the edge into the environment they guard. */
-.station-map__gate line {
+.station-map__gate-bar {
   stroke: var(--k-ink-node);
   stroke-width: var(--k-stroke-ring);
   vector-effect: non-scaling-stroke;
   stroke-linecap: square;
 }
 .station-map__gate { cursor: pointer; outline: none; }
-.station-map__gate:focus-visible .station-map__gate-hit { stroke: var(--k-thread); stroke-width: var(--k-stroke-ring); vector-effect: non-scaling-stroke; }
+/* One focus ring, the token's, offset from the gate. */
+.station-map__gate:focus-visible { outline: var(--k-focus-ring); outline-offset: var(--k-focus-offset); }
+.station-map__gate-leader { stroke: var(--k-ink-3); stroke-width: var(--k-border-hairline); vector-effect: non-scaling-stroke; }
+.station-map__gate[data-tone="blocked"] .station-map__gate-leader { stroke: var(--k-status-blocked-fg); }
 .station-map__gate-quorum circle, .station-map__gate-quorum path { fill: none; stroke: var(--k-ink-2); stroke-width: var(--k-border-hairline); vector-effect: non-scaling-stroke; }
 .station-map__gate-quorum text { font-family: var(--k-font-mono); --fs: var(--k-text-2xs); fill: var(--k-ink-2); }
-.station-map__gate[data-tone="waiting"] line { stroke: var(--k-status-waiting-fg); }
-.station-map__gate[data-tone="blocked"] line { stroke: var(--k-status-blocked-fg); stroke-width: calc(var(--k-stroke-thread-focus) * 1.2); }
-.station-map__gate[data-tone="superseded"] line { stroke: var(--k-ink-3); stroke-dasharray: 2 2; }
+.station-map__gate[data-tone="waiting"] .station-map__gate-bar { stroke: var(--k-status-waiting-fg); }
+.station-map__gate[data-tone="blocked"] .station-map__gate-bar { stroke: var(--k-status-blocked-fg); stroke-width: calc(var(--k-stroke-thread-focus) * 1.2); }
+.station-map__gate[data-tone="superseded"] .station-map__gate-bar { stroke: var(--k-ink-3); stroke-dasharray: 2 2; }
 .station-map__gate-label {
   font-family: var(--k-font-display);
   --fs: var(--k-text-2xs);
@@ -227,6 +230,8 @@
 .station__name {
   font-family: var(--k-font-display);
   --fs: var(--k-text-sm);
+  /* A station's name reads at --k-text-xs at least, at any zoom. */
+  --fs-min: var(--k-text-xs);
   font-weight: var(--k-weight-semibold);
   fill: var(--k-ink);
 }
