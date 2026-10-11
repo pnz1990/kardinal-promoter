@@ -140,7 +140,7 @@ On a branch shared with other environments, a later commit can reach Argo CD bef
 
 Unhealthy results count toward `status.consecutiveHealthFailures`; waiting results do not. When `health.timeout` expires without a Healthy result, whichever of the two the last check returned, the timeout counts as one more health failure and applies `onHealthFailure`. See [Timings and failures](#timings-and-failures).
 
-**Hook Jobs with a fixed name need `HookSucceeded`.** A hook Job with `argocd.argoproj.io/hook-delete-policy: BeforeHookCreation` alone stays after it succeeds, and the next sync deletes it and creates a new Job with the same name. Argo CD can then mark the new operation `Succeeded` from the old Job's `Complete` status while the new Job still runs, so the check passes even when the new Job fails. On Argo CD v3.5.3 this happened in 4 of 4 tries with a PostSync hook that fails on the new version. Use `argocd.argoproj.io/hook-delete-policy: HookSucceeded,BeforeHookCreation`: Argo CD deletes the Job once it succeeds, and the next sync waits for its own Job.
+**Hook Jobs with a fixed name need `HookSucceeded`.** A hook Job with `argocd.argoproj.io/hook-delete-policy: BeforeHookCreation` alone stays after it succeeds, and the next sync deletes it and creates a new Job with the same name. Argo CD can then mark the new operation `Succeeded` from the old Job's `Complete` status while the new Job still runs, so the check passes even when the new Job fails. Use `argocd.argoproj.io/hook-delete-policy: HookSucceeded,BeforeHookCreation`: Argo CD deletes the Job once it succeeds, and the next sync waits for its own Job.
 
 ## Adapter: flux
 
@@ -169,7 +169,7 @@ health:
 |---|---|
 | `Ready=True`, generation matches, promoted commit applied | Healthy |
 | `Ready=True`, older commit applied | Wait |
-| `Ready=True`, another commit applied (a sibling environment pushed to the same branch before Flux fetched ours) | Healthy when the branch history shows the applied commit is a later commit that contains the promoted one and no commit after ours changed the environment's files (`lastAppliedRevision <rev> contains <commit>`, #1575). Otherwise healthy when the Kustomization's Deployments (in `status.inventory` or `spec.healthChecks`) run the Bundle images and are rolled out; the message says `(not <commit>, but the Kustomization's Deployments run the Bundle images)`. Otherwise Wait, then `onHealthFailure` at `health.timeout`. A Kustomization with `spec.kubeConfig` (another cluster) has no Deployments kardinal can read, so it waits |
+| `Ready=True`, another commit applied (a sibling environment pushed to the same branch before Flux fetched ours) | Healthy when the branch history shows the applied commit is a later commit that contains the promoted one and no commit after ours changed the environment's files (`lastAppliedRevision <rev> contains <commit>`). Otherwise healthy when the Kustomization's Deployments (in `status.inventory` or `spec.healthChecks`) run the Bundle images and are rolled out; the message says `(not <commit>, but the Kustomization's Deployments run the Bundle images)`. Otherwise Wait, then `onHealthFailure` at `health.timeout`. A Kustomization with `spec.kubeConfig` (another cluster) has no Deployments kardinal can read, so it waits |
 | `Ready=Unknown` while Flux reconciles again the commit it applied (generation observed, `lastAttemptedRevision` equals `lastAppliedRevision`) | Flux sets this at the start of every reconcile, including its interval and a `reconcile.fluxcd.io/requestedAt` request. The result is the result of the Kustomization's Deployments (in `status.inventory` or `spec.healthChecks`) that run a Bundle image repository, with the revision rules above: Healthy keeps a running bake going, and one of them that lost its replicas or stalled in this promotion's rollout is a health failure (a `ProgressDeadlineExceeded` from an earlier rollout waits, see the stall row below). A Deployment that runs none of the Bundle's repositories (a cache, say) and is not healthy makes the check wait, never fail; Flux's own result decides once the reconcile ends. Without Deployments that run a Bundle repository it waits |
 | `Ready=Unknown` while Flux applies another commit, or generation not observed yet | Wait |
 | `spec.suspend: true` and the promoted commit not applied | Wait; the message starts with `Kustomization <namespace>/<name> is suspended; Flux applies nothing until it is resumed`. `onHealthFailure` at `health.timeout`. A suspended Kustomization that already applied the commit is Healthy |
@@ -254,7 +254,10 @@ The step message carries the message of the Canary's `Promoted` condition, for e
 
 ## Remote Clusters
 
-There are two ways to verify a workload in another cluster.
+Run one kardinal controller, next to the Argo CD or Flux hub if you have one. Declare one
+environment per cluster or region (for example `prod-eu` and `prod-us`), and use `wave` or
+`dependsOn` to promote them in parallel ([examples/multi-cluster-fleet](https://github.com/pnz1990/kardinal-promoter/tree/main/examples/multi-cluster-fleet)).
+kardinal writes to git, and there are two ways to verify a workload in another cluster.
 
 **1. Read the cluster directly with a kubeconfig Secret** (`health.kubeconfigSecretRef`). Every
 health type then reads its object (Deployment, Application, Kustomization, Rollout, Canary) in the
@@ -328,13 +331,13 @@ health:
 
   With a hub, kardinal sees only what the hub reports: while a managed spoke is unreachable, the hub's status is what Argo CD or Flux last recorded. A cluster that runs its own Argo CD or Flux and is not managed from the hub needs `kubeconfigSecretRef`.
 
-The old `health.cluster` string field is **not supported** and is deprecated. The Pipeline is `Ready=False` (reason `NotImplemented`), `kardinal validate` fails, and a PromotionStep whose environment sets it fails with:
+`spec.environments[].shard` is deprecated and not supported (removed in v0.11): a non-empty value sets the Pipeline `Ready=False` (reason `NotImplemented`) and `kardinal validate` fails. Leave it unset; the controller reconciles every environment.
+
+`health.cluster` is deprecated and not supported (removed in v0.11); use `health.kubeconfigSecretRef` or the Argo CD or Flux hub. The Pipeline is `Ready=False` (reason `NotImplemented`), `kardinal validate` fails, and a PromotionStep whose environment sets it fails with:
 
 ```
 health.cluster is not supported: to check a workload in another cluster set health.kubeconfigSecretRef to a kubeconfig Secret, or check its Argo CD Application or Flux Kustomization in this cluster (health.type: argocd or flux, see docs/health-adapters.md#remote-clusters)
 ```
-
-Distributed mode (`kardinal-agent`, `shard`) was removed; see [Multi-Cluster](multi-cluster.md).
 
 ## Timings and failures
 

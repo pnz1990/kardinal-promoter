@@ -110,9 +110,7 @@ type PRStatusStatus struct {
 	// ClosedFinal is true once the PR was still closed 5 minutes after
 	// closedAt. The reconciler then stops polling it and, once this is saved,
 	// comments on the PR (best-effort, not retried); the PromotionStep waiting
-	// for it fails. A closed PRStatus
-	// (open=false with lastCheckedAt set) that has no closedAt was written by
-	// an older release and counts as final too.
+	// for it fails.
 	// +optional
 	ClosedFinal bool `json:"closedFinal,omitempty"`
 
@@ -121,8 +119,7 @@ type PRStatusStatus struct {
 	// recreated step opened a new one; the PRStatus reconciler then clears
 	// the status of the old PR and polls the new one, and the PromotionStep
 	// does not act on a status whose observedGeneration is older than the
-	// spec. Zero on a status written by an older release: it is taken to
-	// describe the current spec.
+	// spec.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
@@ -141,12 +138,8 @@ type PRStatusStatus struct {
 // pull request, making it observable by the kro Graph.
 //
 // Architecture: PromotionStep open-pr step creates a PRStatus CR. The
-// PRStatusReconciler polls GitHub (or receives webhook events) and writes
-// status.merged. The PromotionStep watches status.merged, replacing the
-// previous polling loop in handleWaitingForMerge.
-//
-// Graph-purity: eliminates PS-4, SCM-2, ST-10, ST-11, BU-3, WH-1 from
-// docs/design/11-graph-purity-tech-debt.md.
+// PRStatusReconciler polls the SCM (or receives webhook events) and writes
+// status.merged. The PromotionStep watches status.merged.
 type PRStatus struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

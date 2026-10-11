@@ -61,7 +61,7 @@ kardinal explain my-app --env prod
 ```
 
 If the output shows a PolicyGate in Block state, the gate's CEL expression has not been satisfied; REASON shows what it evaluated to. Common causes:
-- `no-weekend-deploys`: it is a weekend. Wait for Monday, or record a break-glass override with `kardinal override <pipeline> --stage prod --gate no-weekend-deploys --reason "..."` (see [Emergency Overrides](policy-gates.md#emergency-overrides-k-09)).
+- `no-weekend-deploys`: it is a weekend. Wait for Monday, or record a break-glass override with `kardinal override <pipeline> --stage prod --gate no-weekend-deploys --reason "..."` (see [Emergency Overrides](policy-gates.md#emergency-overrides)).
 - `staging-soak`: the upstream environment was verified recently. Wait for the soak time to pass.
 - CEL error: the expression uses a variable or key that is not in the [CEL context](reference/cel-context.md). Check `kardinal policy test <file>`.
 
@@ -198,11 +198,10 @@ Either remove the environment from `intent.skipEnvironments`, or have the platfo
 
 Not an error. Automatic promotions of one controller that write the same
 branch of the same repository take turns: one clones, commits and pushes at a
-time, and the others wait without cloning (#1578). A wide wave of environments
+time, and the others wait without cloning. A wide wave of environments
 on one branch makes about one push per environment instead of racing for the
 branch. A waiting step uses no retry and gives its worker back, at low priority,
-so steps of other Pipelines and namespaces are not held up behind the wave
-(#1577). Turns go oldest first: when one ends, the oldest waiting step is woken at once
+so steps of other Pipelines and namespaces are not held up behind the wave. Turns go oldest first: when one ends, the oldest waiting step is woken at once
 and the others keep their place (each asks again after about its place in line
 times the length of a turn, at most 15 seconds). The turn is per repository
 branch, whatever the namespace: two teams whose Pipelines write one branch take
@@ -520,7 +519,7 @@ failed step does not resume. Fix the token or the repository, then create a new 
 
 ### Symptom: "403 rate limit exceeded" or "429 Too Many Requests" in controller logs
 
-GitHub's API rate limit (5000 req/hr for authenticated requests) or GitLab's rate limit has been hit. The **SCM circuit breaker** (shipped in v0.7.0) handles this automatically.
+GitHub's API rate limit (5000 req/hr for authenticated requests) or GitLab's rate limit has been hit. The **SCM circuit breaker** handles this automatically.
 
 **How the circuit breaker works:**
 1. Each repository owner (GitHub user or org, GitLab top-level group, Bitbucket workspace, Azure DevOps organization) has its own circuit. After 5 consecutive failures (5xx or a network error) for that owner's repositories, its circuit opens and its SCM calls are blocked for a cooldown period. Calls for other owners go on

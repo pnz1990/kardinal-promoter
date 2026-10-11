@@ -157,9 +157,9 @@ func TestPipeline_NotImplemented(t *testing.T) {
 		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
 			env.Shard = "eu" //nolint:staticcheck // SA1019: set to check it is refused
 		},
-		ready: `environment "test": shard is not supported: distributed mode was removed`,
-		step: "shard is not supported: distributed mode was removed; remove shard from the environment and the " +
-			"controller reconciles it (see docs/multi-cluster.md)",
+		ready: `environment "test": shard is not supported: it is deprecated`,
+		step: "shard is not supported: it is deprecated; remove shard from the environment and the " +
+			"controller reconciles it (see docs/health-adapters.md#remote-clusters)",
 	}, {
 		name: "cluster",
 		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
@@ -242,7 +242,7 @@ func TestPipeline_RejectedFields(t *testing.T) {
 		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
 			env.PromotionTemplate = &v1alpha1.PromotionTemplateRef{Name: "default"} //nolint:staticcheck // SA1019: set to check it is rejected
 		},
-		want: "environments[].promotionTemplate is not supported: the PromotionTemplate CRD was removed and every " +
+		want: "environments[].promotionTemplate is deprecated and not supported: every " +
 			"environment runs the default step sequence; remove it",
 	}, {
 		name: "autoRollback",

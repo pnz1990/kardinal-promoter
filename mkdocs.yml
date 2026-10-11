@@ -114,7 +114,7 @@ nav:
     - Subscriptions: subscription.md
     - Subscription Webhooks: subscription-webhooks.md
     - Notifications: notifications.md
-    - Multi-Cluster: multi-cluster.md
+    - Multi-Cluster: /kardinal-promoter/health-adapters/#remote-clusters
     - Sharding Controllers: sharding.md
     - SCM Providers: scm-providers.md
     - Advanced Patterns: advanced-patterns.md

@@ -40,7 +40,7 @@ func TestUnimplementedFields(t *testing.T) {
 				`(prod-us, prod-eu) and use wave`}},
 		// #1321: distributed mode was removed.
 		{name: "shard", env: kardinalv1alpha1.EnvironmentSpec{Name: "test", Shard: "eu"},
-			want: []string{`environment "test": shard is not supported: distributed mode was removed`}},
+			want: []string{`environment "test": shard is not supported: it is deprecated`}},
 		// layout: branch is implemented (#1447).
 		{name: "environment layout branch", env: kardinalv1alpha1.EnvironmentSpec{Name: "test", Layout: "branch"}},
 		{name: "pipeline layout branch", git: kardinalv1alpha1.PipelineGit{Layout: "branch"},

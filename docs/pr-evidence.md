@@ -303,7 +303,7 @@ While a PR waits for its merge, kardinal keeps the results of the environment's 
 |---|---|
 | `success` | every gate of the environment passes (`all 2 gates pass`), or the environment has none (`no kardinal gates on prod`) |
 | `failure` | a gate blocks: the description names it and its reason, for example `app-v1-freeze-prod: prod is frozen: release freeze` |
-| `error` (GitLab and Bitbucket show `failed`) | the gate results are unknown: the step's Graph does not mirror them, which happens to a step whose Graph was built before the upgrade that added the mirror. Re-promote (or let the next Bundle supersede it) to get the status |
+| `error` (GitLab and Bitbucket show `failed`) | the gate results are unknown: the step's Graph does not mirror them. Re-promote (or let the next Bundle supersede it) to get the status |
 
 The gates are re-checked the whole time the PR waits, not only before the step started: a change window that starts while the PR is open, a soak or metric gate that turns false, or an approval that is revoked flips the status to `failure` within a gate recheck, and back to `success` when the gate passes again. The step itself keeps waiting; it does not fail or close the PR.
 
@@ -330,7 +330,7 @@ review.
 
 PR branches follow the pattern: `kardinal/<namespace hash>/<bundle>/<environment>`
 
-Example: `kardinal/3f9c2a1b/my-app-x7k2p/prod`. The namespace hash (the first 8 hex digits of the SHA-256 of the Bundle's namespace) keeps two namespaces with the same Bundle and environment names from sharing a branch. A PR opened before this change keeps its `kardinal/<bundle>/<environment>` branch until it merges or closes.
+Example: `kardinal/3f9c2a1b/my-app-x7k2p/prod`. The namespace hash (the first 8 hex digits of the SHA-256 of the Bundle's namespace) keeps two namespaces with the same Bundle and environment names from sharing a branch.
 
 When kardinal closes a PR without a merge, it deletes this branch. It also deletes the branch
 of a step that ended before it opened a PR. A merged PR keeps its branch.

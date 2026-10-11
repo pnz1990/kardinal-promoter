@@ -95,7 +95,7 @@ type ChangeWindowStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // ChangeWindow defines a cluster-scoped time window during which promotions are
-// blocked (K-04). A ChangeWindow blocks nothing by itself: a PolicyGate blocks
+// blocked. A ChangeWindow blocks nothing by itself: a PolicyGate blocks
 // while a window it references is active, for example
 // !changewindow.isBlocked("holiday-freeze") or changewindow.isAllowed("business-hours").
 // A gate that names a ChangeWindow that does not exist blocks.
