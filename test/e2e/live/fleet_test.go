@@ -156,12 +156,14 @@ func maxOverlap(t *testing.T, steps map[string]v1alpha1.PromotionStep) int {
 // path (the Application's spec.source.path) and argocd health check on its
 // Application. At most 5 targets are in flight at once and the pacing
 // reaches 5; they start in name order, every target ends Verified with the
-// new version in its directory, and post starts only once all 50 are.
+// new version in its directory, and post starts only once all 50 are. The
+// Pipeline's status.summary then counts the targets under the fleet's name
+// ("<version> live in test, all 50 prod and post").
 //
 // It does not run in parallel: 50 Applications and 50 pushes would slow
 // Argo CD and the git server for the suite's other tests.
 //
-// Covers FLEET-01.
+// Covers FLEET-01, PIPE-SUMMARY-GROUPS-01.
 func TestGraph_FleetFiftyApplicationsFiveAtATime(t *testing.T) {
 	e := framework.New(t)
 	ctx := context.Background()
@@ -226,6 +228,17 @@ func TestGraph_FleetFiftyApplicationsFiveAtATime(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	startedAfter(t, post, last, "post starts after every target is Verified")
+
+	// status.summary counts the 50 targets under the fleet's name, in spec
+	// order, instead of naming each one.
+	want := fixtures.PauseV2 + " live in test, all 50 prod and post"
+	framework.Eventually(t, time.Minute, "status.summary "+want, func(ctx context.Context) (bool, string) {
+		var got v1alpha1.Pipeline
+		if err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: pipelineName}, &got); err != nil {
+			return false, err.Error()
+		}
+		return got.Status.Summary == want, got.Status.Summary
+	})
 }
 
 func maxTime(a, b time.Time) time.Time {

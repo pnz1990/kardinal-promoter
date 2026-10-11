@@ -5,6 +5,8 @@ package pipeline_test
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -259,4 +261,104 @@ func TestPipelineReconciler_EnvironmentsIdempotent(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(p), &got))
 	assert.Equal(t, rv, got.ResourceVersion, "nothing changed: no status write")
 	assert.True(t, got.Status.Environments[1].Since.Time.Equal(envT0.Add(time.Hour)))
+}
+
+// TestSummarizeGroups: status.summary counts a fleet's targets under the
+// fleet's name and the environments of a wave longer than a clause names
+// under "wave N"; the first clause that counts a group gives its size. Other
+// environments stay named, at most six per clause, then "and N more", and so
+// do a clause's PRs.
+func TestSummarizeGroups(t *testing.T) {
+	fleet := func(name string, n int) kardinalv1alpha1.EnvironmentSpec {
+		f := &kardinalv1alpha1.FleetSpec{}
+		for i := range n {
+			f.Targets = append(f.Targets, kardinalv1alpha1.FleetTarget{Name: fmt.Sprintf("t%02d", i)})
+		}
+		return kardinalv1alpha1.EnvironmentSpec{Name: name, Fleet: f}
+	}
+	st := func(name, version, state string) kardinalv1alpha1.PipelineEnvironmentStatus {
+		e := kardinalv1alpha1.PipelineEnvironmentStatus{Name: name, Version: version, State: state}
+		if state == "WaitingForMerge" {
+			e.PRURL = "https://github.com/me/gitops/pull/" + strings.TrimPrefix(name, "e")
+		}
+		return e
+	}
+	// targets returns the status of fleet targets from..to-1 in state.
+	targets := func(fleet string, from, to int, version, state string) []kardinalv1alpha1.PipelineEnvironmentStatus {
+		var out []kardinalv1alpha1.PipelineEnvironmentStatus
+		for i := from; i < to; i++ {
+			out = append(out, st(fmt.Sprintf("%s-t%02d", fleet, i), version, state))
+		}
+		return out
+	}
+	named := func(n int, wave int) []kardinalv1alpha1.EnvironmentSpec {
+		var out []kardinalv1alpha1.EnvironmentSpec
+		for i := range n {
+			out = append(out, kardinalv1alpha1.EnvironmentSpec{Name: fmt.Sprintf("e%d", i+1), Wave: wave})
+		}
+		return out
+	}
+	statuses := func(n int, version, state string) []kardinalv1alpha1.PipelineEnvironmentStatus {
+		var out []kardinalv1alpha1.PipelineEnvironmentStatus
+		for i := range n {
+			out = append(out, st(fmt.Sprintf("e%d", i+1), version, state))
+		}
+		return out
+	}
+	cat := func(parts ...[]kardinalv1alpha1.PipelineEnvironmentStatus) []kardinalv1alpha1.PipelineEnvironmentStatus {
+		var out []kardinalv1alpha1.PipelineEnvironmentStatus
+		for _, p := range parts {
+			out = append(out, p...)
+		}
+		return out
+	}
+	tests := []struct {
+		name string
+		envs []kardinalv1alpha1.EnvironmentSpec
+		st   []kardinalv1alpha1.PipelineEnvironmentStatus
+		want string
+	}{
+		{name: "a fleet is counted under its name",
+			envs: []kardinalv1alpha1.EnvironmentSpec{{Name: "canary"}, fleet("pops", 42)},
+			st: cat([]kardinalv1alpha1.PipelineEnvironmentStatus{st("canary", "7.2.0", "Verified")},
+				targets("pops", 0, 27, "7.2.0", "Verified"), targets("pops", 27, 32, "7.2.0", "Promoting"),
+				targets("pops", 32, 42, "7.2.0", "Pending")),
+			want: "7.2.0 live in canary and 27 of 42 pops; promoting in 5 pops; queued in 10 pops"},
+		{name: "a fleet live everywhere",
+			envs: []kardinalv1alpha1.EnvironmentSpec{{Name: "canary"}, fleet("pops", 3)},
+			st:   cat([]kardinalv1alpha1.PipelineEnvironmentStatus{st("canary", "7.2.0", "Verified")}, targets("pops", 0, 3, "7.2.0", "Verified")),
+			want: "7.2.0 live in canary and all 3 pops"},
+		{name: "places keep spec order",
+			envs: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}, fleet("prod", 50), {Name: "post"}},
+			st: cat([]kardinalv1alpha1.PipelineEnvironmentStatus{st("test", "2.0", "Verified")},
+				targets("prod", 0, 50, "2.0", "Verified"), []kardinalv1alpha1.PipelineEnvironmentStatus{st("post", "2.0", "Verified")}),
+			want: "2.0 live in test, all 50 prod and post"},
+		{name: "two fleets in one clause",
+			envs: []kardinalv1alpha1.EnvironmentSpec{fleet("eu", 4), fleet("us", 5)},
+			st:   cat(targets("eu", 0, 4, "1.0", "Verified"), targets("us", 0, 2, "1.0", "Verified"), targets("us", 2, 5, "1.0", "Promoting")),
+			want: "1.0 live in all 4 eu and 2 of 5 us; promoting in 3 us"},
+		{name: "a short wave stays named",
+			envs: append([]kardinalv1alpha1.EnvironmentSpec{{Name: "test"}}, named(3, 1)...),
+			st:   cat([]kardinalv1alpha1.PipelineEnvironmentStatus{st("test", "1.0", "Verified")}, statuses(3, "1.0", "Verified")),
+			want: "1.0 live in test, e1, e2, e3"},
+		{name: "a long wave is counted as the wave",
+			envs: append([]kardinalv1alpha1.EnvironmentSpec{{Name: "test"}}, named(9, 2)...),
+			st: cat([]kardinalv1alpha1.PipelineEnvironmentStatus{st("test", "1.0", "Verified")},
+				statuses(9, "1.0", "Verified")[:7], statuses(9, "1.0", "Failed")[7:]),
+			want: "1.0 live in test and 7 of 9 wave 2; failed in 2 wave 2"},
+		{name: "more than six named environments",
+			envs: named(9, 0),
+			st:   statuses(9, "1.0", "Verified"),
+			want: "1.0 live in e1, e2, e3, e4, e5, e6 and 3 more"},
+		{name: "more than six PRs",
+			envs: named(8, 0),
+			st:   statuses(8, "1.0", "WaitingForMerge"),
+			want: "1.0 waiting for PR merge in e1, e2, e3, e4, e5, e6 and 2 more (#1, #2, #3, #4, #5, #6, 2 more)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newPipeline("app", tt.envs)
+			assert.Equal(t, tt.want, pipeline.Summarize(p, validReady, tt.st))
+		})
+	}
 }
