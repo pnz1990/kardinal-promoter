@@ -36,8 +36,9 @@ you: the CLI cannot tell who may merge. Gates that open by themselves and
 promotions in flight are not listed. The oldest wait comes first.
 
 A command carries -n when its namespace is not the kubeconfig context's. -A
-lists every namespace; when you may not list Pipelines cluster-wide, inbox
-reads the namespaces one by one and notes on stderr the ones it may not read.
+lists every namespace; when you may not list Pipelines cluster-wide it
+fails and says to use -n. A namespace whose gates or Bundles it may not
+read is noted on stderr.
 -o json|yaml prints {onYou, others, skipped}; each item has namespace,
 pipeline, environment, bundle, version, kind, waiting, onYou, who, next
 (without --reason <why>: needsReason says it needs one) and since.
