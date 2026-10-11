@@ -198,8 +198,7 @@ name under **Kubernetes details**, for `kubectl`.
   (or **Resume**, the main action while paused) and **Ship a version** (create a Bundle). Under
   it, one line: the Pipeline's summary sentence, then the shown version's name, commit, author
   and CI run. Below that are four tabs:
-  - **Map**: the lane, the promotion graph, and the Bundle history to pick the version shown and
-    compare two. Promote and roll back are on the environments.
+  - **Map**: the station map, and the Bundle history to pick the version shown and compare two.
   - **Versions**: every Bundle of the Pipeline.
   - **Activity**: failed promotions grouped across environments, and the shown Bundle's policy
     gates with their CEL expressions and approvals.
@@ -211,14 +210,18 @@ name under **Kubernetes details**, for `kubectl`.
   command; each command has a copy button. A Pipeline with no version yet shows its environments
   and **Ship your first version**.
 
-  When gates hold the shown Bundle, a banner on the map names them and the environments they
-  block (`1 gate blocking prod`); **Show blocked** highlights them in the graph. An address with a
-  Pipeline or a version the cluster does not have says it is not found and links back; it does
-  not show another one. The lane has one column per depth: parallel environments share a column, and a wave of five
-  or more is one card that counts its environments by state and expands to the list. The graph
-  lists the environments of a column in the Pipeline's order.
-- **Environment details.** Selecting an environment (a fleet station, a lane card or a graph
-  node; a gate opens the environment it holds) opens its details beside the page, or as a sheet
+  On the **map** each environment is a station that shows the version it runs and the version on
+  its way; gates sit on the edge into the environment they guard, an approval gate with its
+  quorum; the version you follow is one red line through the stations it reached, and it stops
+  at a gate that holds it. A wave of five or more environments is one band, and a fleet one
+  platform; each counts its environments by state and expands to a grid, a row per state, in
+  spec order. The map opens at Detail, Map or Overview by the pipeline's size, and has search, a
+  minimap and a strip that lists what needs a person (`1 blocked by no-weekend-deploys`). Promote,
+  Roll back and Release hold are under the station in focus; shift-click a second Bundle on the
+  rail to compare its route. An address with a Pipeline or a version the cluster does not have
+  says it is not found and links back; it does not show another one.
+- **Environment details.** Selecting an environment (a fleet station, a station or a grid cell on
+  the map, or a row of the Table; a gate opens the environment it holds) opens its details beside the page, or as a sheet
   on a narrow screen. They say first why the environment is waiting: paused, held by a rollback,
   a gate (its message, when it was last evaluated, and the action that clears it), approvals
   still needed, a PR to merge, a failure, or an environment before it that is not live yet. Then
