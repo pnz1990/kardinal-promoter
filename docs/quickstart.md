@@ -80,47 +80,9 @@ It runs only when the current kubectl context is a kind, k3d, minikube, Docker D
 Desktop cluster. With any other context it changes nothing and prints the command that switches
 to a local one.
 
-The first version went to test and uat on its own and now waits at prod's gate.
+The first version, `sha-9349a3f`, went to test and uat on its own and now waits at prod's gate.
 
-## 4. Open the UI
-
-```bash
-kardinal dashboard
-# kardinal UI: http://localhost:8082/ui/
-```
-
-It port-forwards to the controller and opens the UI in your browser (`--no-open` only prints the
-address). Open `demo`: the map shows test, uat and prod, and the version on its way. Prod is
-held; select it, and its details show why, with `kardinal approve demo prod` to copy.
-
-## 5. Ship a version
-
-Run the **Ship the next** line from the quickstart's output. It ships a newer version of
-`kardinal-test-app`, which supersedes the first one, and `--wait` follows it:
-
-```text
-Shipped main as demo-zhxk2; following it (Ctrl-C stops following, the promotion goes on)
-  test: Promoting
-  test: Checking health
-  test: Live
-  uat: Promoting
-  uat: Checking health
-  uat: Live
-  prod: Held by gate prod-approval
-Version main (demo-zhxk2) stopped: prod waits for approval at gate prod-approval (kardinal approve demo prod)
-```
-
-## 6. Watch it stop at the gate
-
-`ship` stopped at prod, because the gate needs a person, and exited with 3:
-
-```bash
-echo $?
-# 3
-```
-
-A CI job can act on the code: [Wait for the outcome in CI](ci-integration.md#wait-for-the-outcome-in-ci)
-lists them all. Ask why it is waiting:
+## 4. Ask why it is waiting
 
 ```bash
 kardinal why demo prod
@@ -128,23 +90,23 @@ kardinal why demo prod
 
 ```text
 prod is waiting for your approval.
-  Version  main (demo-zhxk2)
+  Version  sha-9349a3f (demo-7xk2p)
   Gate     prod-approval · 0 of 1 approvals
   Next     kardinal approve demo prod
 ```
 
 **Next** is the command that gets past the gate.
 
-## 7. Approve
+## 5. Approve
 
 ```bash
 kardinal approve demo prod
 ```
 
 ```text
-Version: main (demo-zhxk2)
-Approve main (demo-zhxk2) for prod? [y/N] y
-Recorded: kubernetes-admin approves demo-zhxk2 for prod (Approval demo-zhxk2-prod-…)
+Version: sha-9349a3f (demo-7xk2p)
+Approve sha-9349a3f (demo-7xk2p) for prod? [y/N] y
+Recorded: kubernetes-admin approves demo-7xk2p for prod (Approval demo-7xk2p-prod-…)
 ```
 
 The gate passes, and the version goes live in prod within a minute or two, with no pull request:
@@ -155,13 +117,64 @@ kardinal status demo
 
 ```text
 Pipeline: demo   Namespace: default
-main live in test, uat, prod
+sha-9349a3f live in test, uat, prod
 
-ENVIRONMENT  RUNNING            INCOMING  STATE  SINCE  PR
-test         demo-zhxk2 (main)  -         Live   35s    -
-uat          demo-zhxk2 (main)  -         Live   15s    -
-prod         demo-zhxk2 (main)  -         Live   1s     -
+ENVIRONMENT  RUNNING                   INCOMING  STATE  SINCE  PR
+test         demo-7xk2p (sha-9349a3f)  -         Live   35s    -
+uat          demo-7xk2p (sha-9349a3f)  -         Live   15s    -
+prod         demo-7xk2p (sha-9349a3f)  -         Live   1s     -
 ```
+
+## 6. Open the UI
+
+```bash
+kardinal dashboard
+# kardinal UI: http://localhost:8082/ui/
+```
+
+It port-forwards to the controller and opens the UI in your browser (`--no-open` only prints the
+address). Open `demo`: the map shows test, uat and prod, each running `sha-9349a3f`. Keep it open
+for the next step.
+
+## 7. Ship the next version and watch it
+
+In another terminal, run the **Ship the next** line from the quickstart's output. It ships
+version `main`, and `--wait` follows it:
+
+```text
+Shipped main as demo-q8m4t; following it (Ctrl-C stops following, the promotion goes on)
+  test: Promoting
+  test: Checking health
+  test: Live
+  uat: Promoting
+  uat: Checking health
+  uat: Live
+  prod: Held by gate prod-approval
+Version main (demo-q8m4t) stopped: prod waits for approval at gate prod-approval (kardinal approve demo prod)
+```
+
+In the UI, the version moves along the map as the lines print: through test and uat, then
+stopped at the gate before prod. Select prod: its details say why it is waiting, with
+`kardinal approve demo prod` to copy.
+
+`ship` ended with exit code 3, because the gate needs a person:
+
+```bash
+echo $?
+# 3
+```
+
+A CI job can act on the code: [Wait for the outcome in CI](ci-integration.md#wait-for-the-outcome-in-ci)
+lists them all.
+
+Approve it while you watch the map:
+
+```bash
+kardinal approve demo prod
+```
+
+The prompt names `main (demo-q8m4t)`. Within a minute or two prod runs `main`, and the map shows
+it live in every environment.
 
 ## Clean up
 
