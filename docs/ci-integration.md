@@ -206,7 +206,7 @@ kardinal ship my-app --image "ghcr.io/myorg/my-app:${GITHUB_SHA}" --wait --timeo
 |---|---|---|
 | 0 | Verified | live in every environment it promotes to |
 | 1 | Failed, Error | the promotion failed, the version could not be read three times in a row, or the command itself failed |
-| 3 | Held | a person is needed and nothing else of it is moving: an approval gate, a hold, a paused pipeline, or a gate that does not pass and is never re-checked |
+| 3 | Held | a person is needed and nothing else of it is moving: an approval gate, a hold, a paused pipeline, or a gate that does not pass and does not open by itself |
 | 4 | WaitingForMerge | its pull request waits for a person to merge it, and nothing else of it is moving |
 | 5 | Superseded, Rejected, Deleted | a newer version replaced it, it was rejected, or it was deleted |
 | 6 | Timeout, Interrupted | `--timeout` (default 30m) passed, or Ctrl-C or SIGTERM stopped the wait; the result is printed first |
@@ -214,10 +214,12 @@ kardinal ship my-app --image "ghcr.io/myorg/my-app:${GITHUB_SHA}" --wait --timeo
 The codes are stable: a new outcome gets a new code. A stop at a gate, a hold or a pull request
 counts once two reads agree, and a gate that has not been evaluated yet never stops the wait.
 
-`ship` waits through what ends by itself: a gate with a `recheckInterval`, or with a soak,
-schedule, metric or change-window expression, and a pull request the SCM merges by itself
-(`pr.merge.auto`). Give `--timeout` room for them, so a job can wait through a soak. With
-`--stop-at-gate`, it stops with 3 at any gate that does not pass instead.
+`ship` waits through what ends by itself: a gate whose expression reads something that changes
+with time (`schedule.`, `soakMinutes`, `upstream.`, `metrics` or `changewindow`), and a pull
+request the SCM merges by itself (`pr.merge.auto`). Give `--timeout` room for them, so a job can
+wait through a soak. A gate on anything else, such as a version's labels or provenance, needs a
+person: exit 3, as for an approval, a hold or a pause. With `--stop-at-gate`, it stops with 3 at
+any gate that does not pass.
 
 Stopping does not stop the promotion: `kardinal status my-app -w` goes on following it.
 
