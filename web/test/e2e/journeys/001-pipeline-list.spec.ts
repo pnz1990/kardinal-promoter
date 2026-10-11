@@ -66,7 +66,7 @@ test.describe('Journey 001 — UI security headers', () => {
 
     await page.getByText('kardinal-test-app').first().click()
     await page.getByRole('button', { name: /test — /i }).click()
-    await expect(page.locator('[data-testid="node-detail"]').first()).toBeVisible()
+    await expect(page.getByTestId('stage-drawer')).toBeVisible()
 
     const violations = await page.evaluate(() => (window as unknown as { cspViolations: string[] }).cspViolations)
     expect(violations).toEqual([])

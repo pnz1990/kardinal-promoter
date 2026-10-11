@@ -21,6 +21,7 @@
 //   POST /api/v1/ui/promote                           → { bundle: "new-bundle", message }
 //   POST /api/v1/ui/rollback                          → { bundle: "rollback-bundle", message }
 //   POST /api/v1/ui/approvals                         → { outcome, approval, user: "carol", message }
+//   POST /api/v1/ui/reject, /override, /release-hold  → { message } (override also { gates, expiresAt })
 //   POST /api/v1/ui/validate-cel                      → { valid: true }
 //   GET  /                                            → 302 to /ui/
 //   GET  /ui/*                                        → built static assets (web/dist), SPA fallback
@@ -265,6 +266,10 @@ const server = http.createServer(async (req, res) => {
           : `Recorded: carol ${body.decision}s ${body.bundle} for ${body.environment}`,
       })
       case 'validate-cel': return json(res, { valid: true, expression: body.expression })
+      case 'reject': return json(res, { message: `bundle ${body.bundle} rejected by carol: it is never promoted again` })
+      case 'override': return json(res, { message: `gate ${body.gate} overridden in ${body.environment}`, gates: [body.gate],
+        expiresAt: new Date(Date.now() + (body.expiresInMinutes ?? 60) * 60_000).toISOString() })
+      case 'release-hold': return json(res, { message: 'hold released' })
     }
   }
   if (api) return json(res, { error: `no mock for ${method} ${url}` }, 404)
