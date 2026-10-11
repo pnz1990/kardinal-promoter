@@ -82,6 +82,9 @@ func assertRejectedWith(t *testing.T, errs []string, want string) {
 // TestCRDDropsRemovedFields: the fields v0.10.0 deprecated and v0.11.0
 // removed are not in the schemas, so the API server refuses them with
 // strict field validation and prunes them from stored objects.
+// PolicyGate spec.when stays, with no default: the gate instances of a Graph
+// built by an earlier release carry it, and kro compiles a Graph's templates
+// against the schema (TestCRDKeepsGateWhen).
 // Covers API-REMOVED-01.
 func TestCRDDropsRemovedFields(t *testing.T) {
 	crds := loadCRDs(t)
@@ -96,7 +99,7 @@ func TestCRDDropsRemovedFields(t *testing.T) {
 		{"Pipeline spec.git", pipeline.Properties["git"].Properties, []string{"provider"}},
 		{"Pipeline environments[]", env.Properties, []string{"shard", "steps", "promotionTemplate", "regions"}},
 		{"Pipeline environments[].health", env.Properties["health"].Properties, []string{"cluster"}},
-		{"PolicyGate spec", crds["PolicyGate"].structural.Properties["spec"].Properties, []string{"selector", "when"}},
+		{"PolicyGate spec", crds["PolicyGate"].structural.Properties["spec"].Properties, []string{"selector"}},
 		{"NotificationHook spec.webhook", crds["NotificationHook"].structural.Properties["spec"].Properties["webhook"].Properties,
 			[]string{"authorizationHeader"}},
 		{"PromotionStep spec", crds["PromotionStep"].structural.Properties["spec"].Properties, []string{"region"}},
@@ -214,4 +217,13 @@ spec:
 `)
 	errs := validateCR(t, crds, ev)
 	assert.ElementsMatch(t, []string{"unknown field spec.actor", "unknown field spec.bundleImage"}, errs)
+}
+
+// TestCRDKeepsGateWhen: PolicyGate spec.when stays in the schema, without a
+// default, so a Graph built by v0.10.0 or earlier (its gate instances carry
+// when: post-deploy) still compiles in kro after the upgrade.
+func TestCRDKeepsGateWhen(t *testing.T) {
+	when, ok := loadCRDs(t)["PolicyGate"].structural.Properties["spec"].Properties["when"]
+	require.True(t, ok, "spec.when stays in the schema")
+	assert.Nil(t, when.Default.Object, "spec.when has no default")
 }

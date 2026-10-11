@@ -221,10 +221,10 @@ func TestNotify_SecretRef(t *testing.T) {
 	assert.Equal(t, "Bearer SECRETTOKEN-unlabeled-creds", ur.Header("Authorization"), "sent once labeled")
 	waitHook(t, e, a.ns, "unlabeled", "the waiting event delivered", func(s v1alpha1.NotificationHookStatus) bool { return s.LastEventKey == key })
 
-	for _, name := range []string{"secret", "late", "plaintext", "unlabeled"} {
+	for _, name := range []string{"secret", "late", "unlabeled"} {
 		status, err := json.Marshal(getHook(t, e, a.ns, name).Status)
 		require.NoError(t, err)
-		for _, s := range []string{"SECRETTOKEN", "SECRETPATH", "B0E2E", "PLAINTOKEN"} {
+		for _, s := range []string{"SECRETTOKEN", "SECRETPATH", "B0E2E"} {
 			assert.NotContains(t, string(status), s, "%s: status", name)
 		}
 	}

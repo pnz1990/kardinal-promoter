@@ -239,6 +239,17 @@ spec:
                   environment the Bundle promotes, so that environment waits until it is true.
                   On any other gate this field has no effect.
                 type: boolean
+              when:
+                description: |-
+                  When is ignored: every gate on an environment is re-checked right
+                  before that environment's PromotionStep starts. It stays in the
+                  schema only so that a Graph built by an earlier release, whose gate
+                  instances carry it, still compiles while its Bundle finishes; gate
+                  instances do not copy it. Leave it unset.
+                enum:
+                - pre-deploy
+                - post-deploy
+                type: string
             required:
             - expression
             type: object

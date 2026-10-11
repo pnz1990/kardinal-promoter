@@ -38,6 +38,15 @@ type PolicyGateSpec struct {
 	// +optional
 	SkipPermission bool `json:"skipPermission,omitempty"`
 
+	// When is ignored: every gate on an environment is re-checked right
+	// before that environment's PromotionStep starts. It stays in the
+	// schema only so that a Graph built by an earlier release, whose gate
+	// instances carry it, still compiles while its Bundle finishes; gate
+	// instances do not copy it. Leave it unset.
+	// +kubebuilder:validation:Enum=pre-deploy;post-deploy
+	// +optional
+	When string `json:"when,omitempty"`
+
 	// Overrides holds time-limited emergency overrides.
 	// When any non-expired override exists (matching Stage or with empty Stage),
 	// the gate passes immediately. Expired overrides are kept as audit records.

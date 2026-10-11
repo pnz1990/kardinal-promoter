@@ -242,11 +242,17 @@ func TestValidate_Documents(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "removed PolicyGate fields",
+			name: "removed PolicyGate selector",
 			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: g\n" +
-				"spec:\n  expression: \"true\"\n  selector: {}\n  when: pre-deploy\n",
-			wantOut: []string{"f.yaml is invalid:", `unknown field "spec.selector"`, `unknown field "spec.when"`},
+				"spec:\n  expression: \"true\"\n  selector: {}\n",
+			wantOut: []string{"f.yaml is invalid:", `unknown field "spec.selector"`},
 			wantErr: true,
+		},
+		{
+			name: "PolicyGate spec.when warns",
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: g\n" +
+				"spec:\n  expression: \"true\"\n  when: pre-deploy\n",
+			wantOut: []string{"f.yaml is valid", "  ! warning: spec.when is ignored"},
 		},
 	}
 	for _, tc := range cases {

@@ -29,7 +29,7 @@ Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/ka
     - `environments[].regions`: one environment per region (`prod-us`, `prod-eu`) with `wave`, or a fleet.
     - `health.cluster` (environments and fleet targets): `health.kubeconfigSecretRef`, or the Argo CD or Flux Application in the hub.
     - PolicyGate `spec.selector`: the `kardinal.io/applies-to` label.
-    - PolicyGate `spec.when`: none; every gate is re-checked before its step starts.
+    - PolicyGate `spec.when` stays in the schema, ignored and with no default, so that Graphs of Bundles in flight at the upgrade, whose gate instances carry it, still compile; gate instances do not copy it, and `kardinal validate` warns when it is set.
     - PromotionStep `spec.region`: none (kardinal never set it).
 9. **`kardinal rollback --emergency` is removed.** Use `kardinal override` to pass a blocking gate; the flag is an unknown flag.
 10. **Chart values `validatingAdmissionPolicy` and `rbac.integrationTestJobs` are removed**, and the values schema refuses them. If `helm get values` shows one, add `--set validatingAdmissionPolicy=null` or `--set rbac.integrationTestJobs=null` to the `helm upgrade --reset-then-reuse-values` command. The chart always ships its admission policies and grants the hooks' Job access.
@@ -83,7 +83,7 @@ Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/ka
 
 ### Removed
 
-- **The v0.10.0 deprecations** — the API fields Pipeline `spec.policyGates` and `spec.git.provider`; `environments[].shard`, `steps`, `promotionTemplate`, `regions` and `health.cluster`; PolicyGate `spec.selector` and `spec.when`; NotificationHook `spec.webhook.authorizationHeader`; PromotionStep `spec.region`; the chart values `validatingAdmissionPolicy` and `rbac.integrationTestJobs`; and `kardinal rollback --emergency`. `kardinal validate` reports a removed field as an unknown field with its path, as `kubectl apply` does. Each replacement is in [Before you upgrade](#from-v0100), items 7 to 10 (#1352)
+- **The v0.10.0 deprecations** — the API fields Pipeline `spec.policyGates` and `spec.git.provider`; `environments[].shard`, `steps`, `promotionTemplate`, `regions` and `health.cluster`; PolicyGate `spec.selector`; NotificationHook `spec.webhook.authorizationHeader`; PromotionStep `spec.region`; the chart values `validatingAdmissionPolicy` and `rbac.integrationTestJobs`; and `kardinal rollback --emergency`. `kardinal validate` reports a removed field as an unknown field with its path, as `kubectl apply` does. Each replacement is in [Before you upgrade](#from-v0100), items 7 to 10 (#1352)
 
 ### Fixed
 

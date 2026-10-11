@@ -355,7 +355,6 @@ func (c *gateCollections) approvalCollectionNode(id, field string) GraphNode {
 		"message":         tmpl("message"),
 		"recheckInterval": tmpl("recheckInterval"),
 		"generated":       true,
-		"when":            fmt.Sprintf(`${%s.templates[%s.t].spec.?when.orValue("post-deploy")}`, NodePolicyGateData, iterGate),
 		"approvals":       approvalsOfItem(),
 	}
 	// A gate that only reads approvals.* in its expression has no policy: a

@@ -293,6 +293,10 @@ func validatePolicyGate(out io.Writer, file string, data []byte) error {
 
 	// Warnings do not fail validation.
 	var warnings []string
+	if gate.Spec.When != "" {
+		warnings = append(warnings, "spec.when is ignored: every gate is re-checked right before its PromotionStep "+
+			"starts; remove it")
+	}
 
 	if len(errs) > 0 {
 		_, _ = fmt.Fprintf(out, "%s%s is invalid:\n", sty.Paint(display.ToneDegraded, sty.Sym("✗ ", "")), file)
@@ -385,7 +389,7 @@ Checks:
     as the controller does.
   - PolicyGate: spec.expression set and compiles with the controller's
     PolicyGate CEL environment, and a name of at most 63 characters (the API
-    server rejects a longer one)
+    server rejects a longer one); spec.when is a warning (it is ignored)
 
 This is not full CRD schema validation; 'kubectl apply --dry-run=server'
 checks the schema.
