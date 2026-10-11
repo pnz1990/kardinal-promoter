@@ -2,9 +2,10 @@
 </code></pre></div> <h3 id=examples>Examples<a class=headerlink href=#examples title="Permanent link">&para;</a></h3> <div class=highlight><pre><span></span><code><a id=__codelineno-1-1 name=__codelineno-1-1 href=#__codelineno-1-1></a>  kardinal reject my-app-v1-5 --reason "CVE-2026-1234 in the base image"
 <a id=__codelineno-1-2 name=__codelineno-1-2 href=#__codelineno-1-2></a>  kardinal reject 1.5.0 --reason "CVE-2026-1234 in the base image"
 </code></pre></div> <h3 id=options>Options<a class=headerlink href=#options title="Permanent link">&para;</a></h3> <div class=highlight><pre><span></span><code><a id=__codelineno-2-1 name=__codelineno-2-1 href=#__codelineno-2-1></a>  -h, --help              help for reject
-<a id=__codelineno-2-2 name=__codelineno-2-2 href=#__codelineno-2-2></a>      --pipeline string   Look for a version given as &lt;bundle&gt; in this pipeline only
-<a id=__codelineno-2-3 name=__codelineno-2-3 href=#__codelineno-2-3></a>      --reason string     Why the version is rejected (required)
-<a id=__codelineno-2-4 name=__codelineno-2-4 href=#__codelineno-2-4></a>      --yes               Do not ask for confirmation on a terminal
+<a id=__codelineno-2-2 name=__codelineno-2-2 href=#__codelineno-2-2></a>      --name string       The Bundle of this name, never a version (when a name is also another Bundle's version)
+<a id=__codelineno-2-3 name=__codelineno-2-3 href=#__codelineno-2-3></a>      --pipeline string   Look for a version given as &lt;bundle&gt; in this pipeline only
+<a id=__codelineno-2-4 name=__codelineno-2-4 href=#__codelineno-2-4></a>      --reason string     Why the version is rejected (required)
+<a id=__codelineno-2-5 name=__codelineno-2-5 href=#__codelineno-2-5></a>      --yes               Do not ask for confirmation on a terminal
 </code></pre></div> <h3 id=options-inherited-from-parent-commands>Options inherited from parent commands<a class=headerlink href=#options-inherited-from-parent-commands title="Permanent link">&para;</a></h3> <div class=highlight><pre><span></span><code><a id=__codelineno-3-1 name=__codelineno-3-1 href=#__codelineno-3-1></a>      --context string      Kubeconfig context override
 <a id=__codelineno-3-2 name=__codelineno-3-2 href=#__codelineno-3-2></a>      --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
 <a id=__codelineno-3-3 name=__codelineno-3-3 href=#__codelineno-3-3></a>  -n, --namespace string    Kubernetes namespace (default: current context namespace)
