@@ -27,6 +27,8 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+
+	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 )
 
 // getPipelinesWatchInterval is the polling interval of get --watch: fast
@@ -39,17 +41,18 @@ const getPipelinesWatchInterval = 2 * time.Second
 func watchLoop(ctx context.Context, w io.Writer, interval time.Duration, render func() error) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	table := OutputFormat() == "" || OutputFormat() == "table"
-	clearScreen := table && isTerminal(w)
+	table := !structured()
+	clearScreen := table && style.IsTerminal(w)
 	for {
 		if clearScreen {
 			_, _ = fmt.Fprint(w, "\033[H\033[2J")
 		}
+		yamlDocument(w)
 		if err := render(); err != nil {
 			return err
 		}
 		if table {
-			_, _ = fmt.Fprintln(w, "\n(watching — press Ctrl-C to quit)")
+			_, _ = fmt.Fprintln(w, watchFooter)
 		}
 		select {
 		case <-ctx.Done():
@@ -130,6 +133,13 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 			}
 		}
 		items = filtered
+		// A name that matches nothing is a typo, not an empty cluster.
+		if len(items) == 0 && (OutputFormat() == "" || OutputFormat() == "table") {
+			if allNamespaces {
+				return fmt.Errorf("pipeline %q not found in any namespace", name)
+			}
+			return pipelineNotFound(ctx, c, ns, name)
+		}
 	}
 
 	switch OutputFormat() {

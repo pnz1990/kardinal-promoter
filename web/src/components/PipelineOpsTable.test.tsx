@@ -41,10 +41,10 @@ describe('PipelineOpsTable', () => {
     )
     expect(screen.getByText('Pipeline')).toBeTruthy()
     expect(screen.getByText('Status')).toBeTruthy()
-    expect(screen.getByText('Blockers')).toBeTruthy()
-    expect(screen.getByText('Failed Steps')).toBeTruthy()
-    expect(screen.getByText('Inventory Age')).toBeTruthy()
-    expect(screen.getByText('Last Merge')).toBeTruthy()
+    expect(screen.getByText('Blocking gates')).toBeTruthy()
+    expect(screen.getByText('Failed stages')).toBeTruthy()
+    expect(screen.getByText('Version age')).toBeTruthy()
+    expect(screen.getByText('Last merge')).toBeTruthy()
     // #1269: CD Level counted spec.policyGates, which gates nothing.
     expect(screen.queryByText('CD Level')).toBeNull()
   })
@@ -69,7 +69,7 @@ describe('PipelineOpsTable', () => {
     )
     const blockerCell = container.querySelector('td:nth-child(3)')
     expect(blockerCell?.textContent).toContain('3')
-    expect(blockerCell?.getAttribute('style') ?? '').toContain('var(--color-error)')
+    expect(blockerCell).toHaveAttribute('data-tone', 'failed')
   })
 
   it('shows green when no blockers', () => {
@@ -80,10 +80,7 @@ describe('PipelineOpsTable', () => {
       />
     )
     const blockerCell = container.querySelector('td:nth-child(3)')
-    const style = blockerCell?.getAttribute('style') ?? ''
-    expect(
-      style.includes('#22c55e') || style.includes('rgb(34, 197, 94)') || style.includes('var(--color-success)')
-    ).toBe(true)
+    expect(blockerCell).toHaveAttribute('data-tone', 'verified')
   })
 
   it('shows stale inventory warning when > 14 days', () => {
@@ -94,7 +91,7 @@ describe('PipelineOpsTable', () => {
       />
     )
     // Warning icon should be present in the inventory age cell
-    expect(screen.getByTitle('20 days since last bundle')).toBeTruthy()
+    expect(screen.getByTitle('20 days since the newest version shipped')).toBeTruthy()
   })
 
   it('calls onSelect when row is clicked', () => {

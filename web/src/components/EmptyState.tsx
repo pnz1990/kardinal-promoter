@@ -15,6 +15,7 @@
 // Replaces the plain div with an actionable onboarding card (#530).
 // NNG Heuristic 10: in-context help must be immediately actionable.
 import CopyButton from './CopyButton'
+import '../styles/EmptyState.css'
 
 const QUICKSTART_COMMAND = 'kubectl apply -f https://raw.githubusercontent.com/pnz1990/kardinal-promoter/main/examples/quickstart/pipeline.yaml'
 const DOCS_URL = 'https://pnz1990.github.io/kardinal-promoter/'
@@ -33,58 +34,34 @@ kardinal-test-app   Unknown   false    5s`
  */
 export default function EmptyState() {
   return (
-    <div
-      data-testid="empty-state"
-      style={{
-        padding: '2.5rem 2rem',
-        maxWidth: '600px',
-      }}
-    >
+    <div data-testid="empty-state" className="empty-state">
       {/* Title */}
-      <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--color-text)', marginBottom: '0.5rem' }}>
+      <div className="empty-state__title">
         No pipelines found
       </div>
 
       {/* One-sentence explanation */}
-      <p style={{ fontSize: '0.9rem', color: 'var(--color-text-muted)', marginBottom: '1.5rem', lineHeight: 1.5 }}>
-        A <strong style={{ color: 'var(--color-text)' }}>Pipeline</strong> defines your promotion environments
+      <p className="empty-state__lead">
+        A <strong className="empty-state__term">Pipeline</strong> defines your promotion environments
         (test → uat → prod) and the policy gates between them.{' '}
         <a
           href={DOCS_URL}
           target="_blank"
           rel="noopener noreferrer"
           data-testid="docs-link"
-          style={{ color: 'var(--color-accent)', textDecoration: 'underline' }}
+          className="empty-state__link"
         >
           Read the docs ↗
         </a>
       </p>
 
       {/* Quickstart command */}
-      <div style={{ marginBottom: '1rem' }}>
-        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.4rem', fontWeight: 600 }}>
+      <div className="empty-state__step">
+        <div className="empty-state__step-label">
           Apply the quickstart example:
         </div>
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          background: 'var(--color-bg)',
-          border: '1px solid var(--color-border)',
-          borderRadius: '6px',
-          padding: '8px 12px',
-        }}>
-          <code
-            data-testid="quickstart-command"
-            style={{
-              flex: 1,
-              fontSize: '0.75rem',
-              color: 'var(--color-text-muted)',
-              fontFamily: 'var(--k-font-mono)',
-              wordBreak: 'break-all',
-              lineHeight: 1.5,
-            }}
-          >
+        <div className="empty-state__command">
+          <code data-testid="quickstart-command" className="empty-state__code">
             {QUICKSTART_COMMAND}
           </code>
           <CopyButton text={QUICKSTART_COMMAND} title="Copy kubectl apply command" />
@@ -92,34 +69,21 @@ export default function EmptyState() {
       </div>
 
       {/* Expected output */}
-      <div style={{ marginBottom: '1.5rem' }}>
-        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.4rem', fontWeight: 600 }}>
-          Then run <code style={{ color: 'var(--color-code)', fontFamily: 'var(--k-font-mono)' }}>kubectl get pipelines</code>:
+      <div className="empty-state__step empty-state__step--last">
+        <div className="empty-state__step-label">
+          Then run <code className="empty-state__inline-code">kubectl get pipelines</code>:
         </div>
-        <pre style={{
-          background: 'var(--color-bg)',
-          border: '1px solid var(--color-border)',
-          borderRadius: '6px',
-          padding: '8px 12px',
-          fontSize: '0.75rem',
-          color: 'var(--color-text-muted)',
-          fontFamily: 'var(--k-font-mono)',
-          margin: 0,
-          lineHeight: 1.5,
-          overflow: 'auto',
-        }}>
+        {/* kubectl output (data-k8s: Kubernetes words, as kubectl prints them). It scrolls sideways
+            on a narrow screen, so it takes focus (keyboard scrolling). */}
+        <pre className="empty-state__output" data-k8s tabIndex={0} role="region" aria-label="Expected output of kubectl get pipelines">
           {EXPECTED_OUTPUT}
         </pre>
       </div>
 
       {/* Polling status */}
-      <div
-        data-testid="watching-indicator"
-        style={{ fontSize: '0.75rem', color: 'var(--color-text-faint)', display: 'flex', alignItems: 'center', gap: '6px' }}
-      >
-        <span style={{ animation: 'spin 2s linear infinite', display: 'inline-block' }}>◌</span>
+      <div data-testid="watching-indicator" className="empty-state__watching">
+        <span className="empty-state__spinner" aria-hidden="true">◌</span>
         Watching for new pipelines…
-        <style>{`@keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }`}</style>
       </div>
     </div>
   )

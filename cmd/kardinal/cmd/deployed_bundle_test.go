@@ -107,25 +107,17 @@ func TestExplain_BundleColumnAndDeployed(t *testing.T) {
 	assert.Regexp(t, regexp.MustCompile(`prod +b2 +PolicyGate +no-weekend-deploys +\x1b\[[0-9;]*mNot ready\x1b\[0m`), out)
 }
 
-// status names the Bundle of every step row and lists the Bundle deployed in
-// every environment, including ones the active Bundle has not reached.
-func TestStatusPipelineWriter_BundleColumnAndDeployed(t *testing.T) {
+// status lists what runs in every environment, including ones the newest
+// Bundle has not reached, and the Bundle on its way in.
+func TestStatusPipelineWriter_RunningAndIncoming(t *testing.T) {
 	out := runStatusPipeline(t, deployedFixture()...)
-	assert.Regexp(t, `\nENVIRONMENT +REGION +BUNDLE +STATE +ACTIVE STEP +PR +AGE\n`, out)
-	assert.Regexp(t, `\n  test +- +b2 +Live`, out)
-	assert.Regexp(t, `\n▶ uat +- +b2 +Waiting for PR merge`, out)
+	assert.Equal(t, []map[string]string{
+		{"ENVIRONMENT": "test", "RUNNING": "b2 (2.0)", "INCOMING": "-", "STATE": "Live", "SINCE": "-", "PR": "-"},
+		{"ENVIRONMENT": "uat", "RUNNING": "b1 (1.0)", "INCOMING": "b2 (2.0)", "STATE": "Waiting for PR merge", "SINCE": "-", "PR": "-"},
+		{"ENVIRONMENT": "prod", "RUNNING": "b1 (1.0)", "INCOMING": "-", "STATE": "Live", "SINCE": "-", "PR": "-"},
+		{"ENVIRONMENT": "canary", "RUNNING": "-", "INCOMING": "-", "STATE": "-", "SINCE": "-", "PR": "-"},
+	}, statusRows(t, out), out)
 	assertNoRawStates(t, out)
-
-	_, deployed, ok := strings.Cut(out, "\nDeployed\n")
-	require.True(t, ok, out)
-	assert.Equal(t, []string{
-		strings.Repeat("─", 72),
-		"ENVIRONMENT  BUNDLE",
-		"canary       none",
-		"prod         b1 (1.0)",
-		"test         b2 (2.0)",
-		"uat          b1 (1.0)",
-	}, strings.Split(strings.TrimSpace(deployed), "\n"))
 }
 
 // mixedDeployedFixture: in prod the image Bundle i1 (tag 1.0) landed, then the
@@ -160,19 +152,14 @@ func mixedDeployedFixture() []sigs_client.Object {
 }
 
 // With a Verified image Bundle and a Verified config Bundle in one
-// environment, status and explain name both: the newest one that landed, and
-// where the rest of what runs there came from (#1353).
+// environment, explain names both: the newest one that landed, and where the
+// rest of what runs there came from (#1353). status names the newest one.
 func TestDeployed_ImageAndConfigBundles(t *testing.T) {
 	out := runStatusPipeline(t, mixedDeployedFixture()...)
-	_, deployed, ok := strings.Cut(out, "\nDeployed\n")
-	require.True(t, ok, out)
-	assert.Equal(t, []string{
-		strings.Repeat("─", 72),
-		"ENVIRONMENT  BUNDLE",
-		"prod         i2 (2.0); config abcdef0 from c1",
-		"test         i3 (3.0)",
-		"uat          i3 (3.0); config abcdef0 from c1",
-	}, strings.Split(strings.TrimSpace(deployed), "\n"))
+	rows := statusRows(t, out)
+	require.Len(t, rows, 3, out)
+	assert.Equal(t, "i2 (2.0)", rows[2]["RUNNING"], out)
+	assert.Equal(t, "i3 (3.0)", rows[2]["INCOMING"], out)
 
 	out, err := runExplain(t, policyClient(t, mixedDeployedFixture()...), "demo", "prod", false)
 	require.NoError(t, err)

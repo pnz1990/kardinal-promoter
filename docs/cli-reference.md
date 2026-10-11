@@ -10,7 +10,7 @@
 | Command | Description |
 |---|---|
 | [`kardinal approve`](reference/cli/kardinal-approve.md) | Approve (or reject) a Bundle for an environment's approval gates |
-| [`kardinal audit`](reference/cli/kardinal-audit.md) | Audit log commands — view and summarize promotion events |
+| [`kardinal audit`](reference/cli/kardinal-audit.md) | Audit log commands: view and summarize promotion events |
 | [`kardinal audit summary`](reference/cli/kardinal-audit-summary.md) | Aggregate promotion metrics from AuditEvent records |
 | [`kardinal completion`](reference/cli/kardinal-completion.md) | Generate shell completion scripts |
 | [`kardinal create`](reference/cli/kardinal-create.md) | Create kardinal resources |
@@ -22,7 +22,7 @@
 | [`kardinal doctor`](reference/cli/kardinal-doctor.md) | Run pre-flight checks to verify the cluster is correctly configured |
 | [`kardinal explain`](reference/cli/kardinal-explain.md) | Explain the current state of a promotion pipeline |
 | [`kardinal get`](reference/cli/kardinal-get.md) | Display one or more kardinal resources |
-| [`kardinal get auditevents`](reference/cli/kardinal-get-auditevents.md) | List AuditEvent records — immutable promotion event log |
+| [`kardinal get auditevents`](reference/cli/kardinal-get-auditevents.md) | List AuditEvent records: the immutable promotion event log |
 | [`kardinal get bundles`](reference/cli/kardinal-get-bundles.md) | List Bundles, optionally filtered by pipeline name |
 | [`kardinal get pipelines`](reference/cli/kardinal-get-pipelines.md) | List Pipelines |
 | [`kardinal get steps`](reference/cli/kardinal-get-steps.md) | List PromotionSteps for a pipeline |

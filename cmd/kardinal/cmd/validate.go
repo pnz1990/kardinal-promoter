@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
@@ -262,7 +263,7 @@ func validatePipeline(out io.Writer, file string, data []byte, allowed *scm.Repo
 	}
 
 	if len(errs) > 0 {
-		_, _ = fmt.Fprintf(out, "✗ %s is invalid:\n", file)
+		_, _ = fmt.Fprintf(out, "%s%s is invalid:\n", sty.Paint(display.ToneDegraded, sty.Sym("✗ ", "")), file)
 		for _, e := range errs {
 			_, _ = fmt.Fprintf(out, "  - %s\n", e)
 		}
@@ -270,7 +271,7 @@ func validatePipeline(out io.Writer, file string, data []byte, allowed *scm.Repo
 		return fmt.Errorf("validation failed")
 	}
 
-	_, _ = fmt.Fprintf(out, "✓ %s is valid\n", file)
+	_, _ = fmt.Fprintf(out, "%s%s is valid\n", sty.Paint(display.ToneVerified, sty.Sym("✓ ", "")), file)
 	printValidateWarnings(out, warnings)
 	return nil
 }
@@ -314,7 +315,7 @@ func validatePolicyGate(out io.Writer, file string, data []byte) error {
 	}
 
 	if len(errs) > 0 {
-		_, _ = fmt.Fprintf(out, "✗ %s is invalid:\n", file)
+		_, _ = fmt.Fprintf(out, "%s%s is invalid:\n", sty.Paint(display.ToneDegraded, sty.Sym("✗ ", "")), file)
 		for _, e := range errs {
 			_, _ = fmt.Fprintf(out, "  - %s\n", e)
 		}
@@ -322,7 +323,7 @@ func validatePolicyGate(out io.Writer, file string, data []byte) error {
 		return fmt.Errorf("validation failed")
 	}
 
-	_, _ = fmt.Fprintf(out, "✓ %s is valid\n", file)
+	_, _ = fmt.Fprintf(out, "%s%s is valid\n", sty.Paint(display.ToneVerified, sty.Sym("✓ ", "")), file)
 	printValidateWarnings(out, warnings)
 	return nil
 }
@@ -412,5 +413,5 @@ This is not full CRD schema validation; 'kubectl apply --dry-run=server'
 checks the schema.
 
 Exit codes:
-  0 — file is valid
-  1 — validation failed (actionable errors printed)`
+  0: file is valid
+  1: validation failed (actionable errors printed)`

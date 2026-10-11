@@ -196,7 +196,7 @@ changes after. Only HookRuns kro applied for this Bundle count: a forged HookRun
 name keeps nothing admitted and does not let the next hook start. Each HookRun counts against the
 Graph's size limits. A HookRun that kro cannot create holds only its own environment, whose step
 waits for the hook. The Bundle's `RunsCreated` condition names it, with kro's error
-([Troubleshooting](troubleshooting.md#symptom-bundle-condition-runscreated-is-false)).
+([Troubleshooting](troubleshoot-promotions.md#symptom-bundle-condition-runscreated-is-false)).
 
 ## What hooks cannot do
 

@@ -307,3 +307,35 @@ func (g *cloneCountingGit) CloneAt(ctx context.Context, url, ref, dir string, au
 	g.clones++
 	return g.mockGit.CloneAt(ctx, url, ref, dir, auth)
 }
+
+// TestControllerSecretRefused (#1725 QA): a step whose Pipeline names the
+// controller's own SCM token Secret as git.secretRef fails before git-clone
+// and opens no PR, even with --scm-allowed-repositories, which its own
+// existing Secret would otherwise exempt it from.
+//
+// Covers CHART-SCM-ALIAS-02.
+func TestControllerSecretRefused(t *testing.T) {
+	allow, err := scm.ParseRepositoryAllowlist([]string{"github.com/myorg/*"})
+	require.NoError(t, err)
+	pipeline := makePipeline("nginx-demo")
+	pipeline.Spec.Git.URL = "https://github.com/other/repo.git"
+	pipeline.Spec.Environments[1].Approval = "auto"
+	pipeline.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "kardinal-promoter-github-token"}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter-github-token", Namespace: "default"},
+		Data: map[string][]byte{"token": []byte("controller-token")}}
+	ps := asPromoting(makeStep("step-own", "nginx-demo", "b1", "test"), pipeline)
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}).
+		WithObjects(pipeline, makeBundle("b1", "nginx-demo"), secret, ps).Build()
+	git := &cloneCountingGit{}
+	m := &mockSCM{}
+	r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: git, AllowedRepositories: allow,
+		ControllerSecret: &scm.ControllerTokenSecret{Namespace: "default", Name: "kardinal-promoter-github-token"},
+		WorkDirFn:        func(_, _ string) string { return filepath.Join(t.TempDir(), "w") }}
+	reconcileStep(t, r, "step-own")
+	got := getStep(t, c, "step-own")
+	assert.Equal(t, "Failed", got.Status.State)
+	assert.Contains(t, got.Status.Message, "is the controller's own SCM token Secret")
+	assert.Zero(t, git.clones, "no git-clone with the controller's token")
+	assert.Zero(t, m.openCalled, "no PR")
+}

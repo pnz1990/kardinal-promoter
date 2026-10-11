@@ -97,7 +97,8 @@ func barePipeline(t *testing.T, e *framework.Env, ns, name string, edit ...func(
 		Spec: v1alpha1.PipelineSpec{
 			// A repository per namespace: bare Pipelines of other tests at
 			// the same path would get PathConflict, a status change.
-			Git:          v1alpha1.PipelineGit{URL: "https://git.example/" + ns + "/" + name},
+			Git: v1alpha1.PipelineGit{URL: "https://git.example/" + ns + "/" + name,
+				SecretRef: &v1alpha1.SecretRef{Name: framework.GitSecretName}},
 			Environments: []v1alpha1.EnvironmentSpec{{Name: "test", Path: "environments/test"}},
 		},
 	}
@@ -215,7 +216,7 @@ func TestCLI_GlobalFlags(t *testing.T) {
 	assert.Equal(t, 1, r.Code)
 	assert.Contains(t, r.Stdout, `Pipeline "alpha" not found in namespace "default"`, "no namespace means default")
 
-	const doctorHint = "load kubeconfig — run 'kardinal doctor' to diagnose: "
+	const doctorHint = "load kubeconfig (run 'kardinal doctor' to diagnose): "
 	r = cli.Exec(framework.CLIOptions{Kubeconfig: kcA}, "--context", "nope", "get", "pipelines")
 	assert.Equal(t, 1, r.Code)
 	assert.Equal(t, "get pipelines: "+doctorHint+`context "nope" does not exist`+"\n", r.Stderr)
@@ -230,7 +231,7 @@ func TestCLI_GlobalFlags(t *testing.T) {
 	r = cli.Exec(noCluster, "get", "pipelines")
 	assert.Equal(t, 1, r.Code)
 	assert.True(t, strings.HasPrefix(r.Stderr, "get pipelines: cannot connect to cluster: no kubeconfig and not "+
-		"running in a pod — run 'kardinal doctor' to diagnose\n"), r.Stderr)
+		"running in a pod; run 'kardinal doctor' to diagnose\n"), r.Stderr)
 }
 
 // bashCompletionDriver sources the bash script from $1 and completes each
@@ -336,8 +337,10 @@ func readFile(t *testing.T, path string) string {
 // kustomization.yaml per environment under --gitops-dir and keeps existing
 // files on a re-run, --demo scaffolds the kardinal-test-app placeholder,
 // and helm skips the Kustomize scaffold. A URL that is not https:// is asked
-// again; end of input without one fails.
-// Covers CLI-INIT-01.
+// again; end of input without one fails. Before its git Secret exists the
+// applied Pipeline is Ready=False/GitCredentialMissing with the command that
+// creates it.
+// Covers CLI-INIT-01, PIPE-GITCRED-01.
 func TestCLI_Init(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -377,6 +380,20 @@ func TestCLI_Init(t *testing.T) {
 	assert.Equal(t, yaml, readFile(t, filepath.Join(dir, "pipeline.yaml")), "the file holds the --stdout YAML")
 	out, err := cli.Kubectl(dir, "apply", "-f", "pipeline.yaml")
 	require.NoError(t, err, out)
+	// P4: before the git Secret exists, right after apply and before any
+	// Bundle, Ready=False/GitCredentialMissing gives the command that
+	// creates it; running it makes the Pipeline Ready.
+	fix := "kubectl create secret generic github-token -n " + ns + " --from-literal=token=<TOKEN> && " +
+		"kubectl label secret github-token -n " + ns + " kardinal.io/referenceable=true"
+	waitPipeline(t, e, ns, "web", time.Minute, "Ready=False GitCredentialMissing", func(p *v1alpha1.Pipeline) (bool, string) {
+		ok, seen := framework.CondIs(p.Status.Conditions, "Ready", metav1.ConditionFalse, "GitCredentialMissing")
+		c := meta.FindStatusCondition(p.Status.Conditions, "Ready")
+		return ok && c != nil && strings.HasSuffix(c.Message, fix), seen
+	})
+	for _, cmd := range strings.Split(strings.ReplaceAll(fix, "<TOKEN>", "t0ken"), " && ") {
+		out, err := cli.Kubectl(dir, strings.Fields(cmd)[1:]...)
+		require.NoError(t, err, out)
+	}
 	waitPipelineValid(t, e, ns, "web")
 
 	// --file into a new directory, with a scaffold under --gitops-dir.
@@ -427,7 +444,7 @@ func TestCLI_Init(t *testing.T) {
 	assert.Contains(t, r.Stdout, "  - name: uat\n")
 	r = init(t.TempDir(), "\n\n\n\n", "--stdout")
 	assert.Equal(t, 1, r.Code)
-	assert.Contains(t, r.Stderr, "init wizard: Git repository URL: an https:// repository URL is required\n")
+	assert.Contains(t, r.Stderr, `kardinal init asks its questions on a terminal, and its input ended at "Git repository URL" (an https:// repository URL is required)`)
 	assert.Empty(t, r.Stdout)
 }
 
@@ -509,7 +526,7 @@ func TestCLI_Validate(t *testing.T) {
 				"rename the environment\n",
 			apiRejects: true, apiSays: reservedMsg},
 		{name: "environment named bundle", doc: pipeline("bundle", "", "  - name: test\n  - name: bundle\n"),
-			want: "✗ environment-named-bundle.yaml is invalid:\n" +
+			want: "environment-named-bundle.yaml is invalid:\n" +
 				`  - environment "bundle": reserved environment name: the name becomes a kro Graph node ID; bundle, time, kro ` +
 				`reserved IDs (spec, status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed; ` +
 				"rename the environment\n",
@@ -552,10 +569,10 @@ func TestCLI_Validate(t *testing.T) {
 		r := cli.Exec(framework.CLIOptions{Kubeconfig: "/dev/null", Dir: dir}, "validate", "-f", file)
 		if c.valid {
 			assert.Equal(t, 0, r.Code, "%s: validate passes", c.name)
-			assert.Contains(t, r.Stdout, "✓ "+file+" is valid\n", c.name)
+			assert.Contains(t, r.Stdout, file+" is valid\n", c.name)
 		} else {
 			assert.Equal(t, 1, r.Code, "%s: validate fails", c.name)
-			assert.Contains(t, r.Stdout, "✗ "+file+" is invalid:\n", c.name)
+			assert.Contains(t, r.Stdout, file+" is invalid:\n", c.name)
 			assert.Equal(t, "validation failed\n", r.Stderr, c.name)
 		}
 		assert.Contains(t, r.Stdout, c.want, c.name)
@@ -682,7 +699,7 @@ Some gates would BLOCK with current context (see FAIL results above) (3 gate(s))
 	r = run("bad.yaml")
 	assert.Equal(t, 1, r.Code)
 	assert.Equal(t, "CEL syntax errors in 1 of 2 gate(s)\n", r.Stderr)
-	m := regexp.MustCompile(`(?s)\n  Syntax: INVALID — (.+?)\n\n`).FindStringSubmatch(r.Stdout)
+	m := regexp.MustCompile(`(?s)\n  Syntax: INVALID: (.+?)\n\n`).FindStringSubmatch(r.Stdout)
 	require.NotNil(t, m, r.Stdout)
 	assert.True(t, strings.HasSuffix(r.Stdout, "CEL syntax errors found (2 gate(s))\n"), r.Stdout)
 
@@ -742,13 +759,13 @@ func TestCLI_Doctor(t *testing.T) {
 
 	header := "\nkardinal-promoter pre-flight check\n" + strings.Repeat("=", 50) + "\n"
 	row := func(icon, label, detail string) string { return fmt.Sprintf("%s  %-32s  %s\n", icon, label, detail) }
-	checks := row("✅", "Controller reachable", fmt.Sprintf("kardinal-promoter %s in kardinal-system", controllerVersion(t, e))) +
+	checks := row("PASS", "Controller reachable", fmt.Sprintf("kardinal-promoter %s in kardinal-system", controllerVersion(t, e))) +
 		// As many as config/crd/bases holds: the count followed every new
 		// CRD by hand and went stale (#1601).
-		row("✅", "CRDs installed", fmt.Sprintf("all %d kardinal.io/v1alpha1 resources served", len(crdFiles(t)))) +
-		row("✅", "kro running", fmt.Sprintf("kro %s in kro-system", kroTag(t, e))) +
-		row("✅", "kro Graph CRD installed", "kro.run/v1alpha1 graphs registered") +
-		row("✅", tokenLabel, "secret "+framework.GitSecretName+" (key token) present in kardinal-system")
+		row("PASS", "CRDs installed", fmt.Sprintf("all %d kardinal.io/v1alpha1 resources served", len(crdFiles(t)))) +
+		row("PASS", "kro running", fmt.Sprintf("kro %s in kro-system", kroTag(t, e))) +
+		row("PASS", "kro Graph CRD installed", "kro.run/v1alpha1 graphs registered") +
+		row("PASS", tokenLabel, "secret "+framework.GitSecretName+" (key token) present in kardinal-system")
 
 	r := cli.Run("", "doctor")
 	require.Equal(t, 0, r.Code, r.Output())
@@ -756,36 +773,36 @@ func TestCLI_Doctor(t *testing.T) {
 
 	r = cli.Run(ns, "doctor", "--pipeline", pipelineName)
 	require.Equal(t, 0, r.Code, r.Output())
-	assert.Equal(t, header+checks+row("✅", `Pipeline "podinfo"`, "status: Unknown (spec valid, no Bundle yet)")+
+	assert.Equal(t, header+checks+row("PASS", `Pipeline "podinfo"`, "status: Unknown (spec valid, no Bundle yet)")+
 		"\n6 check(s) passed\n", r.Stdout)
 
 	r = cli.Run(ns, "doctor", "--pipeline", refused.Name)
 	assert.Equal(t, 1, r.Code)
-	assert.Contains(t, r.Stdout, row("❌", `Pipeline "refused"`, fmt.Sprintf(`Ready=False (ValidationFailed): `+
+	assert.Contains(t, r.Stdout, row("FAIL", `Pipeline "refused"`, fmt.Sprintf(`Ready=False (ValidationFailed): `+
 		`git.secretRef.namespace %q is not allowed: the Secret must be in the Pipeline's namespace %q`,
-		framework.ControllerNamespace, ns))+strings.Repeat(" ", 38)+
+		framework.ControllerNamespace, ns))+strings.Repeat(" ", 40)+
 		"Fix the Pipeline spec; 'kardinal validate -f <your-pipeline.yaml>' reports the same problems.\n")
 	assert.True(t, strings.HasSuffix(r.Stdout, "\n5 check(s) passed, 1 failed\n"), r.Stdout)
 
 	r = cli.Run(ns, "doctor", "--pipeline", "missing")
 	assert.Equal(t, 1, r.Code)
-	assert.Contains(t, r.Stdout, row("❌", `Pipeline "missing"`, fmt.Sprintf(`Pipeline "missing" not found in namespace %q`, ns))+
-		strings.Repeat(" ", 38)+"Apply: kubectl apply -f <your-pipeline.yaml>\n")
+	assert.Contains(t, r.Stdout, row("FAIL", `Pipeline "missing"`, fmt.Sprintf(`Pipeline "missing" not found in namespace %q`, ns))+
+		strings.Repeat(" ", 40)+"Apply: kubectl apply -f <your-pipeline.yaml>\n")
 	assert.True(t, strings.HasSuffix(r.Stdout, "\n5 check(s) passed, 1 failed\n"), r.Stdout)
 	assert.Equal(t, "1 pre-flight check(s) failed\n", r.Stderr)
 
 	// No controller in the test namespace.
 	r = cli.Run("", "doctor", "--controller-namespace", ns)
 	assert.Equal(t, 1, r.Code)
-	assert.Contains(t, r.Stdout, row("❌", "Controller reachable", "kardinal-version ConfigMap not found in "+ns))
+	assert.Contains(t, r.Stdout, row("FAIL", "Controller reachable", "kardinal-version ConfigMap not found in "+ns))
 	assert.Contains(t, r.Stdout, "Installed elsewhere? Use --controller-namespace. Install: helm upgrade --install "+
 		"kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter")
-	assert.Contains(t, r.Stdout, row("⚠️", "SCM token", "no kardinal-promoter Deployment in "+ns))
+	assert.Contains(t, r.Stdout, row("WARN", "SCM token", "no kardinal-promoter Deployment in "+ns))
 	assert.True(t, strings.HasSuffix(r.Stdout, "\n3 check(s) passed, 1 warning(s), 1 failed\n"), r.Stdout)
 
 	r = cli.Exec(noCluster, "doctor")
 	assert.Equal(t, 1, r.Code)
-	assert.True(t, strings.HasPrefix(r.Stdout, "\n❌ Could not build kubeconfig: "), r.Stdout)
+	assert.True(t, strings.HasPrefix(r.Stdout, "\nFAIL Could not build kubeconfig: "), r.Stdout)
 	assert.Contains(t, r.Stdout, "\nHint: ensure kubectl is configured and pointing at the correct cluster.\n")
 }
 
@@ -924,6 +941,5 @@ func TestCLI_Refresh(t *testing.T) {
 
 	r = cli.Run(ns, "refresh", "missing")
 	assert.Equal(t, 1, r.Code)
-	assert.Contains(t, r.Stderr, `get pipeline missing: `)
-	assert.Contains(t, r.Stderr, `not found`)
+	assert.Equal(t, `pipeline "missing" not found in namespace "`+ns+`"; pipelines here: podinfo. Other namespaces: kardinal get pipelines -A`+"\n", r.Stderr)
 }

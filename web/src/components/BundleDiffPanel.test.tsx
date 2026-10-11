@@ -46,14 +46,14 @@ describe('BundleDiffPanel — rendering', () => {
   // C10a-web-16: assert the changed marker and the count, not just the label
   // (the label renders on every row, changed or not).
   it.each([
-    { field: 'Phase', a: { phase: 'Verified' }, b: { phase: 'Failed' } },
+    { field: 'State', a: { phase: 'Verified' }, b: { phase: 'Failed' } },
     { field: 'Author', a: { provenance: { author: 'alice' } }, b: { provenance: { author: 'bob' } } },
     { field: 'Commit SHA', a: { provenance: { commitSHA: 'aaaaaa000000' } }, b: { provenance: { commitSHA: 'bbbbbb111111' } } },
   ])('marks $field as the one changed field', ({ field, a, b }) => {
     render(<BundleDiffPanel bundleA={makeBundle(a)} bundleB={makeBundle(b)} onClose={vi.fn()} />)
     expect(screen.getByText(`▸ ${field}`)).toBeInTheDocument()
     expect(screen.getByText(/1 field differs/)).toBeInTheDocument()
-    for (const other of ['Phase', 'Author', 'Commit SHA'].filter(f => f !== field)) {
+    for (const other of ['State', 'Author', 'Commit SHA'].filter(f => f !== field)) {
       expect(screen.queryByText(`▸ ${other}`)).not.toBeInTheDocument()
     }
   })
@@ -77,18 +77,18 @@ describe('BundleDiffPanel — what counts as a difference (C10a-web-07)', () => 
     {
       name: 'different image tags are a difference',
       a: { images: img('sha-aaa1111') }, b: { images: img('sha-bbb2222') },
-      summary: '1 field differs between these bundles', shown: ['ghcr.io/pnz1990/kardinal-test-app:sha-bbb2222'],
+      summary: '1 field differs between these versions', shown: ['ghcr.io/pnz1990/kardinal-test-app:sha-bbb2222'],
     },
     {
       name: 'different environment states are a difference',
       a: { environments: [{ name: 'prod', phase: 'Verified' }] }, b: { environments: [{ name: 'prod', phase: 'Failed' }] },
-      summary: '1 field differs between these bundles', shown: ['prod: Failed'],
+      summary: '1 field differs between these versions', shown: ['prod: Failed'],
     },
     {
       name: 'only the creation time differs: no difference',
       a: { images: img('sha-aaa1111'), createdAt: '2026-04-15T10:00:00Z' },
       b: { images: img('sha-aaa1111'), createdAt: '2026-04-16T10:00:00Z' },
-      summary: '0 fields differ between these bundles', shown: ['✓ No differences found between these bundles.'],
+      summary: '0 fields differ between these versions', shown: ['✓ No differences found between these versions.'],
     },
   ])('$name', ({ a, b, summary, shown }) => {
     render(<BundleDiffPanel bundleA={makeBundle({ name: 'a', ...a })} bundleB={makeBundle({ name: 'b', ...b })} onClose={vi.fn()} />)

@@ -263,7 +263,7 @@ groups:
           severity: warning
         annotations:
           summary: "kardinal {{ $labels.controller }} reconcile error rate elevated"
-          runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#promotion-is-stuck"
+          runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshoot-promotions/#promotion-is-stuck"
 
       - alert: KardinalWorkQueueBacklog
         expr: workqueue_depth{name=~"bundle|promotionstep|policygate"} > 100
@@ -272,7 +272,7 @@ groups:
           severity: warning
         annotations:
           summary: "kardinal work queue depth > 100 for {{ $labels.name }}"
-          runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#graph-controller-issues"
+          runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshoot-promotions/#graph-controller-issues"
 ```
 
 ---

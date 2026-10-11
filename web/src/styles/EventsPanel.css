@@ -1,0 +1,59 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * EventsPanel.css — the Kubernetes events of a step (components/EventsPanel.tsx).
+ */
+
+.events-panel { margin-block-end: var(--k-space-3); }
+.events-panel__title { margin-block-end: var(--k-space-1_5); color: var(--k-ink); font-size: var(--k-text-sm); }
+.events-panel__count { color: var(--k-ink-2); font-weight: var(--k-weight-regular); }
+.events-panel__empty,
+.events-panel__list {
+  border: var(--k-border-hairline) solid var(--k-line-subtle);
+  border-radius: var(--k-radius-2);
+  background: var(--k-surface-canvas);
+}
+.events-panel__empty {
+  padding: var(--k-space-2) var(--k-space-3);
+  color: var(--k-ink-3);
+  font-size: var(--k-text-xs);
+  font-style: italic;
+}
+.events-panel__cmd { color: var(--k-ink-2); font-family: var(--k-font-mono); font-style: normal; }
+.events-panel__list { overflow: hidden; }
+.events-panel__row {
+  padding: var(--k-space-2) var(--k-space-3);
+  border-inline-start: var(--k-stroke-ring) solid transparent;
+}
+.events-panel__row + .events-panel__row { border-block-start: var(--k-border-hairline) solid var(--k-line-subtle); }
+.events-panel__row[data-type="warning"] { border-inline-start-color: var(--k-status-blocked-fg); }
+.events-panel__head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--k-space-1_5); }
+.events-panel__type {
+  padding: 0 var(--k-space-1);
+  border: var(--k-border-hairline) solid var(--k-status-verified-fg);
+  border-radius: var(--k-radius-1);
+  background: var(--k-status-verified-wash);
+  color: var(--k-status-verified-fg);
+  font-size: var(--k-text-2xs);
+  font-weight: var(--k-weight-semibold);
+}
+.events-panel__row[data-type="warning"] .events-panel__type {
+  border-color: var(--k-status-blocked-fg);
+  background: var(--k-status-blocked-wash);
+  color: var(--k-status-blocked-fg);
+}
+.events-panel__reason { color: var(--k-ink); font-size: var(--k-text-xs); font-weight: var(--k-weight-semibold); }
+.events-panel__repeat { color: var(--k-ink-2); font-size: var(--k-text-2xs); }
+.events-panel__time {
+  margin-inline-start: auto;
+  color: var(--k-ink-3);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-2xs);
+}
+.events-panel__message {
+  margin-block-start: var(--k-space-0_5);
+  color: var(--k-ink-2);
+  font-size: var(--k-text-xs);
+  line-height: var(--k-leading-sm);
+}

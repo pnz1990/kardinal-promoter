@@ -14,7 +14,11 @@ Usage after install:
   kardinal create bundle demo --image ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0
 */}}
 {{- if .Values.demo.enabled }}
-{{- $secretName := .Values.demo.secretRef.name | default (include "kardinal-promoter.githubSecretName" .) | default "github-token" }}
+{{- $secretName := include "kardinal-promoter.demoSecretName" . }}
+{{- $controller := include "kardinal-promoter.githubSecretName" . }}
+{{- if and $controller (eq $secretName $controller) }}
+{{- fail (printf "the demo Pipeline's git Secret %q (demo.secretRef.name, default github-token) is the controller's SCM token Secret: the controller refuses a Pipeline that uses it (it would choose where the token goes). Create a separate Secret for the demo Pipeline, labelled kardinal.io/referenceable=true, or set scm.token and the chart creates one." $secretName) }}
+{{- end }}
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
 metadata:

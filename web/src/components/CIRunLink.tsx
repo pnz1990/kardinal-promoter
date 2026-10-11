@@ -15,6 +15,7 @@
 // Only a URL that passes isCIRunURL is linked. Anything else is shown as "—",
 // as in the PR body, and never as text: it can hold credentials.
 import { isCIRunURL } from '../prLink'
+import '../styles/CIRunLink.css'
 
 export function CIRunLink({ url }: { url: string }) {
   if (isCIRunURL(url)) {
@@ -23,7 +24,7 @@ export function CIRunLink({ url }: { url: string }) {
         href={url}
         target="_blank"
         rel="noopener noreferrer"
-        style={{ color: 'var(--color-accent)', fontSize: '0.78rem' }}
+        className="ci-run-link"
         title="CI run"
       >
         CI run ↗
@@ -32,7 +33,7 @@ export function CIRunLink({ url }: { url: string }) {
   }
   return (
     <span
-      style={{ color: 'var(--color-text-muted)', fontSize: '0.78rem' }}
+      className="ci-run-link ci-run-link--none"
       title="Not linked: the CI run URL is not an http(s) URL"
     >
       CI run: —

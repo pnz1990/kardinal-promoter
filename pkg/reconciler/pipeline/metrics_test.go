@@ -239,9 +239,35 @@ func newPipelineScheme() *runtime.Scheme {
 	return s
 }
 
+// defaultGitSecret is the git Secret newPipeline names.
+const defaultGitSecret = "git-token"
+
+// gitTokenSecret is a labelled git Secret named name in "default" with a
+// token.
+func gitTokenSecret(name string) *corev1.Secret { return gitTokenSecretIn("default", name) }
+
+// gitTokenSecretIn is gitTokenSecret in namespace ns.
+func gitTokenSecretIn(ns, name string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns,
+			Labels: map[string]string{"kardinal.io/referenceable": "true"}},
+		Data: map[string][]byte{"token": []byte("t0ken")},
+	}
+}
+
 // newClientWithIndex builds a fake client that supports the spec.pipelineName
-// field selector used by PipelineReconciler to list PromotionSteps.
+// field selector used by PipelineReconciler to list PromotionSteps. It adds
+// defaultGitSecret unless objs has a Secret of that name.
 func newClientWithIndex(scheme *runtime.Scheme, objs ...client.Object) client.Client {
+	hasDefault := false
+	for _, o := range objs {
+		if _, ok := o.(*corev1.Secret); ok && o.GetName() == defaultGitSecret && o.GetNamespace() == "default" {
+			hasDefault = true
+		}
+	}
+	if !hasDefault {
+		objs = append(objs, gitTokenSecret(defaultGitSecret))
+	}
 	return fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(objs...).

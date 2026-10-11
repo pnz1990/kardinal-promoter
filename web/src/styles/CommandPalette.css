@@ -1,0 +1,73 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * CommandPalette.css — components/CommandPalette.tsx. Design tokens only.
+ */
+
+.k-dialog.palette {
+  inline-size: var(--k-layout-drawer);
+  align-self: flex-start;
+  margin-block-start: var(--k-space-12);
+  padding: var(--k-space-4);
+}
+.palette .k-dialog__title {
+  margin-block-end: var(--k-space-2);
+  color: var(--k-ink-3);
+  font-size: var(--k-text-2xs);
+  font-stretch: var(--k-stretch-label);
+  letter-spacing: var(--k-tracking-caps);
+  text-transform: uppercase;
+}
+.palette__input {
+  inline-size: 100%;
+  min-block-size: var(--k-control-lg);
+  padding: 0 var(--k-space-3);
+  border: var(--k-border-hairline) solid var(--k-line-strong);
+  border-radius: var(--k-radius-2);
+  background: var(--k-surface-base);
+  color: var(--k-ink);
+  font: inherit;
+  font-size: var(--k-text-lg);
+}
+.palette__input::placeholder { color: var(--k-ink-3); }
+.palette__count { margin: var(--k-space-2) 0; color: var(--k-ink-3); font-size: var(--k-text-xs); }
+.palette__list {
+  max-block-size: calc(var(--k-space-24) * 4);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.palette__option {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  column-gap: var(--k-space-3);
+  padding: var(--k-space-1_5) var(--k-space-2);
+  border-radius: var(--k-radius-2);
+  color: var(--k-ink);
+  font-size: var(--k-text-md);
+  cursor: pointer;
+}
+.palette__section + .palette__section { margin-block-start: var(--k-space-2); }
+.palette__options { margin: 0; padding: 0; list-style: none; }
+.palette__option[aria-selected="true"] {
+  background: var(--k-surface-sunken);
+  box-shadow: inset var(--k-stroke-ring) 0 0 var(--k-thread);
+}
+.palette__group {
+  display: block;
+  margin-block-end: var(--k-space-1);
+  padding-inline: var(--k-space-2);
+  color: var(--k-ink-3);
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-2xs);
+  font-stretch: var(--k-stretch-label);
+  font-weight: var(--k-weight-semibold);
+  letter-spacing: var(--k-tracking-caps);
+  text-transform: uppercase;
+}
+.palette__label { overflow-wrap: anywhere; }
+.palette__hint { color: var(--k-ink-3); font-family: var(--k-font-mono); font-size: var(--k-text-xs); }
+.palette__keys { margin: var(--k-space-3) 0 0; color: var(--k-ink-3); font-size: var(--k-text-xs); }

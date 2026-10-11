@@ -58,7 +58,7 @@ describe('kardinalStateToHealth', () => {
       ['Pass', 'Ready'],
       ['Block', 'Error'],
       ['Pending', 'Pending'],
-      ['Waiting', 'Pending'], // E2E-R19: not ready, not holding the bundle
+      ['Waiting', 'Pending'], // E2E-R19: not ready, not holding the version
       ['Superseded', 'Unknown'], // bundle superseded; not evaluated again
       ['Rejected', 'Unknown'], // bundle rejected; not evaluated again
       ['SomeUnknown', 'Unknown'],
@@ -214,10 +214,10 @@ describe('HealthChip component', () => {
 
   it('PolicyGate Waiting is read as what it means, not "Waiting — Pending"', () => {
     const { getByLabelText, queryByLabelText } = render(<HealthChip state="Waiting" nodeType="PolicyGate" />)
-    const chip = getByLabelText('Not ready — not ready, not holding the bundle')
+    const chip = getByLabelText('Not ready — not ready, not holding the version')
     expect(chip).toHaveClass('health-chip--pending')
     // Also as text, since not every screen reader reads aria-label on a span.
-    expect(chip.querySelector('.sr-only')).toHaveTextContent('not ready, not holding the bundle')
+    expect(chip.querySelector('.sr-only')).toHaveTextContent('not ready, not holding the version')
     expect(queryByLabelText('Not ready — waiting')).toBeNull()
   })
 

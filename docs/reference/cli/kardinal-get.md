@@ -18,13 +18,13 @@ kardinal get [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: get auditevents, bundles, pipelines, steps, subscriptions)
+  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
 ```
 
 ### SEE ALSO
 
 * [kardinal](kardinal.md)	 - kardinal manages promotion pipelines on Kubernetes
-* [kardinal get auditevents](kardinal-get-auditevents.md)	 - List AuditEvent records — immutable promotion event log
+* [kardinal get auditevents](kardinal-get-auditevents.md)	 - List AuditEvent records: the immutable promotion event log
 * [kardinal get bundles](kardinal-get-bundles.md)	 - List Bundles, optionally filtered by pipeline name
 * [kardinal get pipelines](kardinal-get-pipelines.md)	 - List Pipelines
 * [kardinal get steps](kardinal-get-steps.md)	 - List PromotionSteps for a pipeline

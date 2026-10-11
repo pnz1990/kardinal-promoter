@@ -207,6 +207,33 @@ func TestPolicyGateReconciler_ApprovalHeld(t *testing.T) {
 	}
 }
 
+// TestPolicyGateReconciler_ApprovalAuthorNotCounted: with excludeAuthor, the
+// author's own approval is recorded as not counted, with a reason the UI shows
+// as it is ("the version's author").
+func TestPolicyGateReconciler_ApprovalAuthorNotCounted(t *testing.T) {
+	gate := makeGateInstance("g", "default", "nginx-demo-v1", "true", "5m")
+	gate.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}
+	gate.Spec.Approvals = []kardinalv1alpha1.GateApproval{decision("bob", "approve"), decision("alice", "approve")}
+	bundle := makeBundle("nginx-demo-v1", "default")
+	bundle.Status.Phase = "Promoting"
+	bundle.Annotations = map[string]string{"kardinal.io/created-by": "bob"}
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(gate, bundle).WithStatusSubresource(gate, bundle).Build()
+	r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "g", Namespace: "default"}})
+	require.NoError(t, err)
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "g", Namespace: "default"}, &got))
+	byUser := map[string]kardinalv1alpha1.GateApprovalStatus{}
+	for _, a := range got.Status.Approvals {
+		byUser[a.User] = a
+	}
+	require.Contains(t, byUser, "bob")
+	assert.False(t, byUser["bob"].Counted)
+	assert.Equal(t, "the version's author (approval.excludeAuthor)", byUser["bob"].Reason)
+	assert.True(t, byUser["alice"].Counted)
+}
+
 // TestPolicyGateReconciler_ApprovalAudits: a decision that appears in the
 // gate's approvals writes ApprovalRecorded, one that leaves it (the Approval
 // was deleted) ApprovalRevoked, each once.
