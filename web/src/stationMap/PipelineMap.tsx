@@ -9,6 +9,9 @@ import { useEffect, useMemo, useState } from 'react'
 import type { Bundle, GraphResponse, Pipeline, PolicyGate } from '../types'
 import { api } from '../api/client'
 import StationMap from './StationMap'
+import StageTable from './StageTable'
+import VersionMatrix from './VersionMatrix'
+import type { MapView } from '../useUrlState'
 import { canPromote, canRollback } from '../pipelineActions'
 import { PipelineActionDialog, type PipelineActionKind } from '../components/PipelineActionDialog'
 import { buildModel, bundleVersion } from './model'
@@ -35,15 +38,32 @@ export interface PipelineMapProps {
   bundles?: Bundle[]
   /** Read the map's data again after a failed read (U4). */
   onRetry?: () => void
+  /** How to show the pipeline: the station map (undefined), a table or a matrix. */
+  as?: MapView
+  onAs?: (as: MapView | undefined) => void
+  /** The Matrix: follow a version, or compare one with the followed version. */
+  onSelectVersion?: (bundle: string) => void
+  onCompareVersion?: (bundle: string) => void
 }
 
-export default function PipelineMap({ pipeline, bundle, graph, compareBundle, loading, error, focused, onOpenStage, onActionDone, onOpenGate, gates, bundles, onRetry }: PipelineMapProps) {
+const VIEWS: Array<{ id: MapView | undefined; label: string }> = [
+  { id: undefined, label: 'Map' }, { id: 'table', label: 'Table' }, { id: 'matrix', label: 'Matrix' },
+]
+
+export default function PipelineMap({ pipeline, bundle, graph, compareBundle, loading, error, focused, onOpenStage, onActionDone, onOpenGate, gates, bundles, onRetry, as, onAs, onSelectVersion, onCompareVersion }: PipelineMapProps) {
   const [pending, setPending] = useState<{ kind: PipelineActionKind; env: string } | null>(null)
   const [result, setResult] = useState<string | null>(null)
   const key = `${pipeline.namespace}/${pipeline.name}`
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   // Expanded groups belong to one pipeline.
   useEffect(() => { setExpanded(new Set()) }, [key])
+
+  const toggleGroup = (id: string) => setExpanded(prev => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
 
   // The compared Bundle's graph, read once per Bundle.
   const [compareGraph, setCompareGraph] = useState<{ name: string; graph: GraphResponse } | undefined>()
@@ -84,6 +104,15 @@ export default function PipelineMap({ pipeline, bundle, graph, compareBundle, lo
     )
   }
 
+  // Map | Table | Matrix: in the map's own bar on the map, above the table or the matrix.
+  const views = onAs && (
+    <div className="map-views" role="radiogroup" aria-label="Show the pipeline as">
+      {VIEWS.map(v => (
+        <button key={v.label} type="button" role="radio" aria-checked={as === v.id} onClick={() => onAs(v.id)}>{v.label}</button>
+      ))}
+    </div>
+  )
+
   if (error) {
     // What the failed read means, in words, with Retry (U4).
     return <div className="station-map station-map--message"><ErrorNotice error={error} onRetry={onRetry} /></div>
@@ -99,7 +128,15 @@ export default function PipelineMap({ pipeline, bundle, graph, compareBundle, lo
         onDone={message => { setPending(null); setResult(message); onActionDone?.() }}
         onCancel={() => setPending(null)} />
     )}
+    {as && views && <div className="pipeline-map__views">{views}</div>}
+    {as === 'table' ? (
+      <StageTable model={model} focused={focused} onOpenStage={env => onOpenStage(env)} actionsFor={actionsFor} />
+    ) : as === 'matrix' ? (
+      <VersionMatrix model={model} pipeline={pipeline.name} bundles={bundles ?? []} followed={bundle?.name} compared={compareBundle?.name}
+        onSelect={b => onSelectVersion?.(b)} onCompare={b => onCompareVersion?.(b)} onToggleGroup={toggleGroup} />
+    ) : (
     <StationMap
+      views={views || undefined}
       actionsFor={actionsFor}
       onOpenGate={onOpenGate}
       key={key}
@@ -108,16 +145,12 @@ export default function PipelineMap({ pipeline, bundle, graph, compareBundle, lo
       focused={focused}
       onOpenStage={onOpenStage}
       expanded={expanded}
-      onToggleGroup={id => setExpanded(prev => {
-        const next = new Set(prev)
-        if (next.has(id)) next.delete(id)
-        else next.add(id)
-        return next
-      })}
+      onToggleGroup={toggleGroup}
       onSetExpanded={setExpanded}
       paused={pipeline.paused}
       followedVersion={bundle ? bundleVersion(bundle, bundle.name === pipeline.activeBundleName ? pipeline.activeBundleVersion : undefined) : undefined}
     />
+    )}
     </div>
   )
 }

@@ -199,6 +199,12 @@ name under **Kubernetes details**, for `kubectl`.
   it, one line: the Pipeline's summary sentence, then the shown version's name, commit, author
   and CI run. Below that are four tabs:
   - **Map**: the station map, and the Bundle history to pick the version shown and compare two.
+    **Map | Table | Matrix** shows the same pipeline three ways. The **Table** has one row per
+    environment (fleet targets included): its state, what it runs, what is on its way with its
+    PR, its gates and its actions, sortable by environment, state and age; a narrow screen opens
+    on it. The **Matrix** has one row per version, newest first, and one column per environment,
+    with waves and fleets as one column that counts its live environments; a click follows a
+    version, Shift-click compares it with the followed one.
   - **Versions**: every Bundle of the Pipeline.
   - **Activity**: failed promotions grouped across environments, and the shown Bundle's policy
     gates with their CEL expressions and approvals.

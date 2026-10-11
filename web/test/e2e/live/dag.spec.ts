@@ -99,3 +99,23 @@ test('the same Bundle name in another namespace shows that namespace’s map', a
   await expect(solo).toBeVisible()
   expectScoped(reads, other)
 })
+
+// UI-TABLE-01, UI-MATRIX-01: the Map tab's Table and Matrix views of the same pipeline.
+test('the Table lists each environment and the Matrix each version by environment', async ({ page }) => {
+  await openPipeline(page, base, ns)
+  const views = page.getByRole('radiogroup', { name: 'Show the pipeline as' })
+  await views.getByRole('radio', { name: 'Table' }).click()
+  const table = page.getByRole('region', { name: 'Environments' })
+  await expect(table.getByRole('row', { name: /^test/ })).toContainText('Live')
+  const prodRow = table.getByRole('row', { name: /^prod/ })
+  await expect(prodRow).toContainText('Waiting for PR merge')
+  await expect(prodRow.getByRole('link', { name: `PR #${prNumber}` })).toHaveAttribute('href', prURL)
+  await expect(prodRow).toContainText(`${gate}: Passing`)
+
+  await views.getByRole('radio', { name: 'Matrix' }).click()
+  const matrix = page.getByRole('region', { name: 'Versions by environment' })
+  const row = matrix.locator(`tr[data-bundle="${bundle}"]`)
+  await expect(row).toHaveAttribute('data-followed', 'true')
+  await expect(row.locator('td[title^="test:"]')).toHaveAttribute('title', 'test: Live')
+  await expect(row.locator('td[title^="prod:"]')).toHaveAttribute('title', 'prod: Waiting for PR merge')
+})

@@ -45,18 +45,23 @@ export interface UrlState {
   approvals: boolean | undefined
   /** The stage drawer section to scroll to (why, actions, evidence, history; #1701). */
   section: string | undefined
+  /** How the Map tab shows the pipeline: as a table or a matrix (the station map when unset). */
+  as: MapView | undefined
 }
+
+/** The Map tab's other views of the same pipeline (DESIGN-SYSTEM §3.5). */
+export type MapView = 'table' | 'matrix'
 
 export const EMPTY_URL_STATE: UrlState = {
   pipeline: undefined, ns: undefined, env: undefined, version: undefined, compare: undefined,
   node: undefined, view: undefined, filter: undefined, q: undefined, tab: undefined, approvals: undefined,
-  section: undefined,
+  section: undefined, as: undefined,
 }
 
 /** The namespace segment of a link that does not know it. */
 const ANY_NS = '*'
 
-const QUERY_KEYS = ['tab', 'view', 'filter', 'q', 'compare', 'node', 'section'] as const
+const QUERY_KEYS = ['tab', 'view', 'filter', 'q', 'compare', 'node', 'section', 'as'] as const
 export type PipelineTab = 'versions' | 'activity' | 'metrics'
 const TABS: readonly string[] = ['versions', 'activity', 'metrics']
 /** Tabs from before Map | Versions | Activity | Metrics: what each now opens (undefined: the map). */
@@ -95,6 +100,7 @@ export function parseHash(hash: string): UrlState {
     if (!v) continue
     if (k === 'view') out.view = v === 'ops' ? 'ops' : undefined
     else if (k === 'tab') out.tab = TABS.includes(v) ? (v as PipelineTab) : OLD_TABS[v]
+    else if (k === 'as') out.as = v === 'table' || v === 'matrix' ? v : undefined
     else out[k] = v
   }
   if (seg[0] === 'p' && seg[2]) {

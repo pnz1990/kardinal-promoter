@@ -42,6 +42,8 @@ export interface StationMapProps {
   /** Open a gate's own details (its graph node id); without it a gate opens
    *  its environment's stage drawer at "why" (U3, #1701). */
   onOpenGate?: (gateNodeId: string) => void
+  /** The view switch (Map | Table | Matrix), shown in the map's bar. */
+  views?: React.ReactNode
 }
 
 /** About how wide a character of a gate label is, and the label's line height (--k-text-xs). */
@@ -60,7 +62,7 @@ const LEVELS: ZoomLevel[] = ['overview', 'map', 'detail']
 const LEVEL_LABEL: Record<ZoomLevel, string> = { overview: 'Overview', map: 'Map', detail: 'Detail' }
 
 export default function StationMap(props: StationMapProps) {
-  const { model, compare, focused, onOpenStage, expanded, onToggleGroup, onSetExpanded, paused, followedVersion, actionsFor, onOpenGate } = props
+  const { model, compare, focused, onOpenStage, expanded, onToggleGroup, onSetExpanded, paused, followedVersion, actionsFor, onOpenGate, views } = props
   const svgRef = useRef<SVGSVGElement | null>(null)
   const searchRef = useRef<HTMLInputElement | null>(null)
   const descId = useId()
@@ -348,6 +350,7 @@ export default function StationMap(props: StationMapProps) {
             }} />
           {query && <span className="station-map__count" aria-live="polite">{matches.length} {matches.length === 1 ? 'match' : 'matches'}</span>}
         </label>
+        {views}
         <div className="station-map__levels" role="radiogroup" aria-label="Zoom level">
           {LEVELS.map(l => (
             <button key={l} type="button" role="radio" aria-checked={level === l} className="station-map__level"

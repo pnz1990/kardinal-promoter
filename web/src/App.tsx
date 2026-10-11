@@ -158,6 +158,10 @@ export function App() {
     if (node) setSelectedNodeLocal(node)
   }, [graph, urlState, selectedNode, setUrlState])
 
+  // The user picked the Map tab's view (Map, Table or Matrix): a narrow screen
+  // then keeps the Map instead of opening on the Table.
+  const [mapChosen, setMapChosen] = useState(false)
+
   // U3: the environment whose stage drawer is open (the …/env/<env> route).
   const stageEnv = urlState.env
 
@@ -918,6 +922,11 @@ export function App() {
                         onOpenGate={id => { const n = graph?.nodes.find(x => x.id === id); if (n) setSelectedNode(n) }}
                         gates={shownGates}
                         bundles={bundles}
+                        // Narrow screens open on the Table, the map's linear equivalent (DESIGN-SYSTEM §3.5).
+                        as={urlState.as ?? (narrow && !mapChosen ? 'table' : undefined)}
+                        onAs={v => { setMapChosen(true); setUrlState({ as: v }) }}
+                        onSelectVersion={handleTimelineBundleSelect}
+                        onCompareVersion={b => { setCompareTarget(b); setUrlState({ compare: b }) }}
                       />
                     </ErrorBoundary>
                   </div>

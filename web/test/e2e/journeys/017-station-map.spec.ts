@@ -112,7 +112,7 @@ test.describe('Journey 017 — Station map', () => {
     await page.setViewportSize({ width: 1366, height: 768 })
     await open(page, 'checkout-30', 'scale')
     const map = page.locator('.station-map')
-    await expect(map.getByRole('radio', { name: 'Map' })).toHaveAttribute('aria-checked', 'true')
+    await expect(map.getByRole('radiogroup', { name: 'Zoom level' }).getByRole('radio', { name: 'Map' })).toHaveAttribute('aria-checked', 'true')
     await expect(map.getByRole('button', { name: /^WAVE 1 · 6: / })).toBeVisible()
     const edge = map.getByRole('button', { name: /^edge · 12 targets, 2 at a time · stop at 2 failed: / })
     await expect(edge).toHaveAttribute('aria-expanded', 'false')
@@ -169,8 +169,8 @@ test.describe('Journey 017 — Station map', () => {
     expect(Date.now() - started).toBeLessThan(10_000) // the whole flow; the drawer itself opens at once
     // Zoom levels can be set (with the drawer closed, the map has the width for them).
     await page.getByLabel('Close').click()
-    await map.getByRole('radio', { name: 'Map' }).click()
-    await expect(map.getByRole('radio', { name: 'Map' })).toHaveAttribute('aria-checked', 'true')
+    await map.getByRole('radiogroup', { name: 'Zoom level' }).getByRole('radio', { name: 'Map' }).click()
+    await expect(map.getByRole('radiogroup', { name: 'Zoom level' }).getByRole('radio', { name: 'Map' })).toHaveAttribute('aria-checked', 'true')
   })
 
   test('reduced motion: no running animation; dark theme; no overflow at 390×844', async ({ page }) => {
@@ -199,7 +199,8 @@ test.describe('Journey 017 — Station map', () => {
     expect(axe.violations.map(v => `${v.id}: ${v.nodes[0]?.target[0]}`)).toEqual([])
 
     await page.setViewportSize({ width: 390, height: 844 })
-    await expect(page.locator('.station-map')).toBeVisible()
+    // A narrow screen opens on the Table, the map's linear equivalent.
+    await expect(page.getByRole('region', { name: 'Environments' })).toBeVisible()
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
     expect(overflow).toBeLessThanOrEqual(0)
     await shot(page, '3-envs-390')

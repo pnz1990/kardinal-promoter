@@ -151,7 +151,10 @@ func TestUI_BrowserInsecureBanner(t *testing.T) {
 // with other environments, must not leak into it: the UI asks for the graph
 // and steps of the namespace on screen.
 //
-// Covers UI-DAG-01.
+// The same spec checks the Map tab's Table (one row per environment, its
+// state, PR and gates) and Matrix (the Bundle's state in each environment).
+//
+// Covers UI-DAG-01, UI-TABLE-01, UI-MATRIX-01.
 func TestUI_BrowserDAG(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
