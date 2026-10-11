@@ -27,8 +27,36 @@ import (
 // scpLikeURL matches the scp-like git remote syntax "user@host:path".
 var scpLikeURL = regexp.MustCompile(`^([A-Za-z0-9._~-]+)@([A-Za-z0-9.-]+):(.+)$`)
 
-// userinfoInURL matches the userinfo part of a URL-looking string ("//user:pass@").
-var userinfoInURL = regexp.MustCompile(`//[^/@\s]+@`)
+// userinfoInURL matches the userinfo part of a URL-looking string
+// ("//user:pass@"), up to the last "@" before the path, query or fragment,
+// so a password with an "@" in it is removed whole and an "@" in the query
+// is left alone.
+var userinfoInURL = regexp.MustCompile(`//[^/?#\s]*@`)
+
+// quotedURL matches a quoted URL, as a *url.Error prints it
+// ("Get \"https://u:p@host/...\""). Each one is redacted on its own with
+// RedactURL: parsed when it parses, so an "@" in its path ("/@scope/pkg",
+// "/@v/list") is kept, and cut to its last "@" when it does not (a password
+// with a space or a "/").
+// A quoted string may hold escaped quotes (strconv.Quote writes \"), so the
+// match runs to the first unescaped quote, and only a string that starts
+// with a scheme is a URL.
+var quotedURL = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
+
+// urlScheme matches the start of a URL.
+var urlScheme = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
+
+// secretParams are the URL parameter names (compared lower-cased, after
+// percent-decoding) whose values are credentials.
+var secretParams = map[string]bool{
+	"access_token": true, "token": true, "private_token": true, "password": true,
+	"api_key": true, "client_secret": true, "x-amz-signature": true, "x-amz-credential": true,
+	"x-amz-security-token": true, "sig": true, "refresh_token": true, "apikey": true, "key": true,
+}
+
+// urlParam matches one key=value pair of a query or fragment, after "?",
+// "&", ";" or "#".
+var urlParam = regexp.MustCompile(`([?&;#])([^=&;#\s"']+)=([^&;#\s"']*)`)
 
 // splitRemoteURL returns the host and the path (without a leading slash) of a
 // git remote URL. It accepts https://, http://, ssh://, git:// and the
@@ -47,7 +75,8 @@ func splitRemoteURL(raw string) (host, path string, err error) {
 	}
 	u, perr := url.Parse(raw)
 	if perr != nil {
-		return "", "", fmt.Errorf("parse repository URL %q: %w", RedactURL(raw), perr)
+		// A *url.Error quotes the raw URL, userinfo and all.
+		return "", "", fmt.Errorf("parse repository URL: %s", RedactText(perr.Error()))
 	}
 	return strings.ToLower(u.Hostname()), strings.Trim(u.Path, "/"), nil
 }
@@ -213,20 +242,78 @@ func ParsePRURL(prURL string) (repo string, number int, err error) {
 // URLs, such as an error message, use RedactText.
 func RedactURL(raw string) string {
 	if strings.Contains(raw, "://") {
-		if u, err := url.Parse(raw); err == nil {
-			u.User = nil
-			return u.String()
+		u, err := url.Parse(raw)
+		if err != nil {
+			// Not a URL (a space or a "/" in the password): drop everything
+			// from "//" to the last "@" before the query or fragment.
+			if i := strings.Index(raw, "//"); i >= 0 {
+				rest := raw[i+2:]
+				end := len(rest)
+				if k := strings.IndexAny(rest, "?#"); k >= 0 {
+					end = k
+				}
+				if at := strings.LastIndex(rest[:end], "@"); at >= 0 {
+					raw = raw[:i+2] + rest[at+1:]
+				}
+			}
+			return redactParams(raw)
 		}
+		u.User = nil
+		return redactParams(u.String())
 	}
 	return RedactText(raw)
 }
+
+// redactParams replaces the value of every secretParams pair in s, in a
+// query or a fragment, "&"- or ";"-separated, with its key percent-encoded
+// or not.
+func redactParams(s string) string {
+	return urlParam.ReplaceAllStringFunc(s, func(m string) string {
+		sub := urlParam.FindStringSubmatch(m)
+		key, err := url.QueryUnescape(sub[2])
+		if err != nil {
+			key = sub[2]
+		}
+		if !secretParams[strings.ToLower(key)] {
+			return m
+		}
+		return sub[1] + sub[2] + "=REDACTED"
+	})
+}
+
+// RedactErr is err with RedactText applied to its message. errors.Is and
+// errors.As still see err, so a timeout or a context error is still one.
+// Nil stays nil. Use it on an HTTP client's error: a *url.Error quotes the
+// request URL, userinfo and query included.
+//
+// Caveat: errors.As (and errors.Unwrap) return the original error, whose
+// Error() is not redacted. Format the RedactErr value itself, never what
+// errors.As finds in it.
+func RedactErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	return redactedError{err}
+}
+
+type redactedError struct{ err error }
+
+func (e redactedError) Error() string { return RedactText(e.err.Error()) }
+func (e redactedError) Unwrap() error { return e.err }
 
 // RedactText removes the userinfo of every URL in s, a text such as an error
 // message or an HTTP response body. It never parses s as a URL: url.Parse
 // takes many texts for a relative URL and returns them percent-encoded, with
 // the credentials kept.
 func RedactText(s string) string {
-	return userinfoInURL.ReplaceAllString(s, "//")
+	s = quotedURL.ReplaceAllStringFunc(s, func(m string) string {
+		inner := m[1 : len(m)-1]
+		if !urlScheme.MatchString(inner) || !strings.Contains(inner, "@") {
+			return m
+		}
+		return `"` + RedactURL(inner) + `"`
+	})
+	return redactParams(userinfoInURL.ReplaceAllString(s, "//"))
 }
 
 // webhookSignatureHeaders lists the webhook authentication headers of the

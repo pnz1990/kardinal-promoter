@@ -341,6 +341,7 @@ func (s *GitHubAppTokenSource) mint(ctx context.Context) (string, time.Time, err
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	resp, err := s.client.Do(req)
+	err = RedactErr(err) // a *url.Error quotes the URL
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("mint GitHub App installation token: %w", err)
 	}
