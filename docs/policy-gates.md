@@ -137,7 +137,7 @@ spec:
 
 ### Team-level gates
 
-Created in the team's own namespace. Team gates are additive: they are injected alongside org gates. A team Pipeline can add restrictions but cannot remove or weaken org gates. The escape hatch is [`kardinal override`](#emergency-overrides): it patches the gate instances in the Pipeline namespace, so anyone with `patch` on PolicyGates there can force-pass an org gate for a limited time, with the reason recorded. Grant that verb only to the people allowed to break glass.
+Created in the team's own namespace. Team gates are additive: they are injected alongside org gates. A team Pipeline can add restrictions but cannot remove or weaken org gates. The escape hatch is [`kardinal override`](overrides.md): it patches the gate instances in the Pipeline namespace, so anyone with `patch` on PolicyGates there can force-pass an org gate for a limited time, with the reason recorded. Grant that verb only to the people allowed to break glass.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -520,7 +520,7 @@ Each Bundle's gate instances are copied from the PolicyGate templates when the c
 the Bundle's Graph. Editing a template, for example to fix its expression, does not change the
 instances of Bundles already in flight; Bundles created after the edit use the new expression. To
 release an in-flight Bundle that the old expression holds, use
-[`kardinal override`](#emergency-overrides) or create a new Bundle.
+[`kardinal override`](overrides.md) or create a new Bundle.
 
 ### Gates of finished Bundles
 
@@ -535,7 +535,7 @@ ScheduleClock tick follows the number of Bundles in flight, not the Bundle histo
 
 PolicyGates are injected into the Graph at Graph creation time (when the Bundle starts promoting). If a new org-level PolicyGate is added while a Bundle is mid-flight, it does not apply to that Bundle's existing Graph. It applies to all subsequent Bundles.
 
-To stop promotions at once, use `kardinal pause <pipeline>`. No new step starts, and in-flight steps hold at the next safe point (steps waiting for a PR merge or running health checks finish). See [Pause and Resume](rollback.md#pause-and-resume).
+To stop promotions at once, use `kardinal pause <pipeline>`. No new step starts, and in-flight steps hold at the next safe point (steps waiting for a PR merge or running health checks finish). See [Pause and Resume](pause.md).
 
 ## Inspecting PolicyGates
 
@@ -566,82 +566,7 @@ shown as **Superseded**: they are not evaluated again.
 (holding the Bundle), **Superseded**, **Pending** (not evaluated yet) or **Waiting** (evaluated not
 ready, not holding the Bundle).
 
-## Approval gates
-
-An approval gate waits for people. Put `spec.approval` on a gate template; the gate is ready only when its expression is true and enough allowed people have approved the Bundle for the environment, and none of them rejected it. It works for `approval: auto` environments as for `pr-review` ones: the environment's PromotionStep is not created until the gate is ready.
-
-```yaml
-apiVersion: kardinal.io/v1alpha1
-kind: PolicyGate
-metadata:
-  name: two-approvers
-  namespace: platform-policies
-  labels:
-    kardinal.io/scope: org
-    kardinal.io/applies-to: prod
-spec:
-  expression: "true"            # or any expression: both must pass
-  message: "prod needs two release managers"
-  approval:
-    required: 2                 # distinct people (default 1)
-    allowedGroups: [release-managers]
-    allowedUsers: [oidc:carol@example.com]
-    excludeAuthor: true         # the Bundle's verified creator does not count
-```
-
-Approve with the CLI:
-
-```bash
-kardinal approve my-app-v1-29-0 --env prod --comment "checked the migration"
-kardinal approve my-app-v1-29-0 --env prod --decision reject --comment "wait for INC-42"
-kardinal approve my-app-v1-29-0 --env prod --revoke
-```
-
-```
-Recorded: oidc:alice@example.com approves my-app-v1-29-0 for prod (Approval my-app-v1-29-0-prod-3f2a9c1b0d)
-```
-
-How it works:
-
-- `kardinal approve` creates an `Approval` object in the Pipeline namespace, labelled with the Bundle and environment, holding the Bundle's UID (`spec.bundleUID`) and owned by the Bundle (deleted with it). It records your Kubernetes username and groups, read from the API server with a SelfSubjectReview. The chart's `<release>-approvals` ValidatingAdmissionPolicy refuses an Approval whose `spec.user` is not the requester, whose `spec.groups` are not among the requester's groups, or whose labels do not match its spec, or that is owned by anything but the Bundle it approves (its owner references cannot change later), and lets only its approver delete it (the garbage collector and the namespace controller excepted; kardinal's controller never deletes Approvals) ([Verified identity](guides/security.md#verified-identity)). An Approval cannot be changed: approving again with another decision replaces yours, and `--revoke` deletes it. The CLI finds your Approval by its labels and `spec.user`, never by name: anyone can create an object under the name it would use, so when that name is taken the API server generates one.
-- The promotion Graph reads the Bundle's Approvals with a selector `ref` node and copies those for the environment, for this Bundle's UID and from approvers the gate allows (`allowedUsers`, `allowedGroups`; anyone when both are empty) into each approval gate instance (`spec.approvals`, at most 101; a gate with more than 100 blocks and says so). The allow-lists apply before the cap, so Approvals from people who may not approve cannot crowd out the ones that count. An Approval of an earlier Bundle that had the same name never counts. A new or deleted Approval re-renders the gate at once. Approving before the Bundle reaches the gate is fine.
-- The gate counts a decision when its user is in `allowedUsers` or one of its groups is in `allowedGroups`, and, with `excludeAuthor`, the user is not the Bundle's verified creator. Each user counts once. A counted `reject` blocks the gate whatever the approvals. Every decision that appears or is revoked writes an `ApprovalRecorded` or `ApprovalRevoked` AuditEvent.
-- With neither `allowedUsers` nor `allowedGroups`, every Approval counts: RBAC on `approvals` decides who can approve, and that includes ServiceAccounts with `create` on `approvals`. Set an allow-list for a gate that only people may pass.
-- Group membership is checked when the Approval is created: an approval stays valid after its approver leaves the group. Revoke it by deleting the Approval (its approver) or with a new Bundle. Revoking only matters while the gate waits: once the gate passed and the environment's promotion started, a revoked approval does not stop or undo that promotion (reject the Bundle, or roll back, for that).
-- `excludeAuthor` compares approvers with the Bundle's `kardinal.io/created-by` annotation, its verified creator. `kardinal create bundle`, `kardinal promote` and `kardinal rollback` set it to your Kubernetes username, and the chart's `<release>-bundle-creator` policy admits it only in the requester's name and never lets it change. The UI sets the authenticated UI user (`kardinal-ui` without per-user authentication), a Subscription `subscription:<name>`, the Bundle API's static token `bundle-api`, an automatic rollback `kardinal-controller`; only this release's controller ServiceAccount (and the exact usernames in Helm `admission.controllerUsernames`) may name a creator other than itself. A Bundle without the annotation (created with `kubectl` or a GitOps tool without it) blocks a gate with `excludeAuthor`: `excludeAuthor cannot be enforced: the Bundle has no verified creator`. So does a Bundle created by a kardinal component (`subscription:*`, `bundle-api`, `kardinal-ui`, `kardinal-controller`): no person is known to exclude. For CI, create the Bundle as the CI identity: `kardinal create bundle` (or `kubectl create`) with the CI ServiceAccount's kubeconfig records that ServiceAccount, which the policy verifies; with the Bundle API, send the ServiceAccount's own token rather than the shared static token once TokenReview authentication of the Bundle API is enabled, so the controller records the authenticated caller.
-- While it waits, the gate reason is `waiting for approvals: 1 of 2 (alice@example.com)` or `rejected by bob@example.com (wait for INC-42)`; once met, the expression's reason ends with `approved by alice@example.com, bob@example.com (2 of 2)`, which `kardinal explain`, the UI and the PR evidence show. `status.approvals` lists every decision, whether it counts, why not, and when the gate first saw it.
-- The expression can read the count: `approvals.count`, `approvals.required`, `approvals.users` and `approvals.rejected` ([CEL context](reference/cel-context.md#approvals)).
-- `kardinal override` still force-passes an approval gate, with its own audit record.
-
-Who may approve: bind the chart's `<release>-approvals` ClusterRole (create, delete and read `approvals`, read Bundles, Pipelines and PolicyGates) with a RoleBinding in the Pipeline namespace. The Graph ServiceAccount needs `list` and `watch` on `approvals`, which the chart's `graph-applier` role has.
-
-Trust: anyone allowed to impersonate users or groups (`impersonate` RBAC) can approve as anyone. The identity checks rely on the API server's authentication, so treat `impersonate` as full trust for approvals, overrides and rejections.
-
-Limits:
-
-- An Approval is for one Bundle: the next Bundle needs new approvals.
-- In the UI, an approval gate in the Policy Gates panel shows its quorum: one pip per approval it needs, filled for each counted approval, with `1 of 2 approvals`, `Approved (2 of 2)` or `Rejected by bob@example.com`. Below it are who may approve and every decision: who decided, whether it counts and why not, the comment, and when the gate saw it. While the quorum is not met, it shows the `kardinal approve <bundle> --env <env>` command to copy.
-- Approving from the UI: the panel has **Approve**, **Reject** (which asks first) and **Revoke mine**, with an optional comment (`POST /api/v1/ui/approvals`). **Revoke mine** removes only your own decision: with `delete` on approvals you still cannot revoke someone else's from the UI (the request finds nothing of yours and changes nothing), nor with `kubectl delete` (the approvals policy refuses it). The copied CLI command names the namespace (`-n`). The decision is recorded for the user the UI authenticated. This needs TokenReview mode (`ui.auth.tokenReview=true`): with a static UI token or no UI auth there is no person to record, and the UI refuses and points to `kardinal approve`. Groups are the ones TokenReview returned, which `allowedGroups` is matched against. The UI checks with a SubjectAccessReview that the user may `create` (and, to replace or revoke, `delete`) Approvals in the namespace, then the controller writes the Approval with the user's name and groups and the annotation `kardinal.io/recorded-via: ui`. The `<release>-approvals` policy admits such a write from the controller only (and the usernames in `admission.controllerUsernames`), and lets the controller revoke only Approvals with that annotation. A decision made with `kardinal approve` is revoked with `kardinal approve --revoke`.
-- Upgrading: `helm upgrade` does not update CRDs. Apply `chart/kardinal-promoter/crds/kardinal.io_approvals.yaml` and the updated `kardinal.io_policygates.yaml` before you add `spec.approval` to a gate; a Graph with an approval gate cannot be built without the Approval CRD.
-
-## Emergency Overrides
-
-Use `kardinal override` to force-pass a PolicyGate with a mandatory audit record.
-
-```bash
-kardinal override my-app --stage prod --gate no-weekend-deploy \
-  --reason "P0 hotfix — incident #4521" --expires-in 2h
-```
-
-`--gate` takes the name of the PolicyGate you wrote, the template, as `kardinal explain` and `kardinal policy list` show it. The command records a `PolicyGateOverride` entry in `spec.overrides[]` of every instance of that gate that the pipeline's in-progress Bundles have for the stage. With no `--stage`, it records the entry on the instances for every stage. The instances are the per-Bundle copies the Graph creates for each environment, so run the override while the Bundle waits on the gate. Instances of Verified, Failed, Superseded and Rejected Bundles are skipped, because no promotion waits on them; if a Failed Bundle resumes, run the override again. If no in-progress Bundle has an instance, the command fails and says so; it does not write to the template. `--gate` also accepts the name of one instance, as `kubectl get policygates` shows it; the command then records the entry on that instance only. The gate passes immediately until the override ends, and is re-evaluated about a second after that. An override counts from when the controller first saw it, for at most the override cap (`--gate-override-max-minutes`, Helm `controller.gateOverrideMaxMinutes`, 24 hours by default): it ends at the earlier of its `expiresAt` and first-seen time plus the cap. An entry whose `createdAt` is more than 5 minutes after the controller first saw it is not counted (condition `OverrideIgnored`), so a future-dated entry cannot chain overrides past the cap. While the override is active, the instance's `status.reason` is `OVERRIDDEN by <user>: <reason> (expires <end>)`, with the capped end. `--expires-in` defaults to `1h`. kardinal does not remove expired entries from `spec.overrides[]`. They stay on the instance as an audit record, for as long as the Bundle exists. Deleting a Bundle deletes its gate instances and their overrides. That includes the Pipeline's `historyLimit` cleanup: when a new Bundle is created, kardinal deletes the oldest finished Bundles beyond the limit (50 by default). The `GateOverridden` AuditEvent of each override stays after that. Where to see an override:
-- `kubectl get policygate <instance> -o yaml` shows every entry in `spec.overrides[]`, active or expired, while the Bundle exists.
-- `kardinal explain` shows the `OVERRIDDEN by ...` reason in the gate's REASON column while the override is active.
-- The PR evidence body has no separate badge. A PR opened while the override is active lists the gate in its Policy Gate Compliance table with Result `Pass` and the `OVERRIDDEN by ...` reason. The body is written when the PR is opened and is not updated afterwards, so an override recorded after that, or one that expired before it, does not appear there. An `auto` environment opens no PR.
-- `kardinal get auditevents` lists a `GateOverridden` AuditEvent for each override: the controller writes one the first time it sees an entry in `spec.overrides[]`, stamped with that time, with who created it (and whether that was verified), the stage, the capped end and the reason. The instance's `status.overrides` keeps one record per entry (`key`, `firstSeen`, `verified`, `audited`) so it is written once; records are never dropped, so an entry removed and added again keeps its first-seen time. Past 200 records a new override is not counted (`OverrideIgnored`).
-
-**Who overrode the gate is verified.** `createdBy` is your Kubernetes username, which `kardinal override` reads from the API server with a SelfSubjectReview (what `kubectl auth whoami` shows), not your local OS user. The chart's `<release>-gate-overrides` ValidatingAdmissionPolicy refuses a new or changed `spec.overrides[]` entry whose `createdBy` is not the requesting user, so `kubectl edit` cannot record an override in someone else's name either. The one exception is the controller's own ServiceAccount, which writes overrides for the UI: with `ui.auth.tokenReview` the UI records the username the API server authenticated, otherwise `kardinal-ui` ([UI API Access Control](guides/security.md#ui-api-access-control)). The same policy lets only kro (the namespace's Graph ServiceAccount) and the controller create a gate instance (a PolicyGate with the `kardinal.io/bundle` label) or change anything in it but `spec.overrides`, its whole metadata included (labels, annotations but `kardinal.io/force-recheck`, owner references, finalizers): an override is the audited way to pass a gate. An override is recorded as verified only when the controller first sees it while that policy and its binding exist; one already on a gate when you upgraded to a release with these checks, or seen while the policy was missing, is shown and audited as unverified (`OVERRIDDEN by <user> (unverified)`), since nothing checked its `createdBy`. Anyone who may update PolicyGates can remove an override or re-add it in their own name; the record and its AuditEvent stay. Revoking an override after the gate passed does not undo a promotion that already went through. See [Verified identity](guides/security.md#verified-identity).
-
-### Rollback hold exemption
+## Rollback hold exemption
 
 A rollback created with `kardinal rollback --hold` can pass gates that would block it, for as
 long as the hold lasts. This is exactly what is exempt:
@@ -679,6 +604,6 @@ An exempt gate has the `status.reason`
 `EXEMPT: rollback <bundle> holds <env> (by <user>: <reason>); without the hold: <the gate's own result>`.
 The flip is a `GateEvaluated` AuditEvent, and the gate gets a `GateExempted` Warning Event, so
 `kardinal explain`, `kardinal audit` and `kubectl get events` all show it (the Event is best
-effort; the AuditEvent and `status.reason` are the durable record: [Kubernetes Events](installation.md#kubernetes-events)).
+effort; the AuditEvent and `status.reason` are the durable record: [Kubernetes Events](operate.md#kubernetes-events)).
 `kardinal release-hold` ends the exemption, and the gates are evaluated again at once. See
 [Roll back and hold](rollback.md#roll-back-and-hold).

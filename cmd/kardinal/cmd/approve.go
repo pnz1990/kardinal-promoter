@@ -51,7 +51,7 @@ Running approve again with the same decision does nothing; with another
 decision it replaces yours. Your Approval is found by its labels and
 spec.user, not by its name; if the name it would get is taken, the API
 server generates one. An Approval belongs to its Bundle and is deleted
-with it. See docs/policy-gates.md (Approval gates).`,
+with it. See docs/approvals.md.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()

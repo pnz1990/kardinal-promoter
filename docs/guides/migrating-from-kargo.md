@@ -177,7 +177,7 @@ kubectl get warehouse my-app -n kargo-demo -o yaml
 
 A Warehouse with several subscriptions becomes one Subscription per source. Kargo's
 webhook receivers map to `spec.webhook` and
-[`/webhook/subscriptions/...`](../subscription-webhooks.md). See
+[`/webhook/subscriptions/...`](../subscription.md#webhooks). See
 [Subscription](../subscription.md).
 
 ### Step 3: Remove Kargo `Promotion` objects (if any)

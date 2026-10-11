@@ -135,7 +135,7 @@ controller:
   # at once. Unset keeps the controller defaults, measured with the scale
   # suite: promotionStep 16, prStatus 8, policyGate 8, bundle 4, pipeline 4.
   # Raise promotionStep for many Pipelines on slow git hosts. See
-  # docs/installation.md (Controller concurrency).
+  # docs/operate.md (Controller concurrency).
   workers: {}
   #   promotionStep: 16
   #   prStatus: 8
@@ -199,7 +199,7 @@ service:
 # 166 MiB for 200 Pipelines with a Bundle each, 409 MiB for 2 Bundles a second
 # over 40 Pipelines with leader kills; 55-70 MiB with no Pipelines. The
 # defaults give the larger load 2.5x headroom; see "Sizing the controller" in
-# docs/installation.md.
+# docs/operate.md.
 resources:
   limits:
     cpu: 500m
@@ -432,7 +432,7 @@ graph:
   # until spec.historyLimit prunes it runs kro out of memory. Go durations;
   # empty keeps the controller default; "0s" keeps those Graphs. A Pipeline's
   # kardinal.io/graph-retire-after annotation replaces all three for its
-  # Bundles. See docs/installation.md#sizing-kro.
+  # Bundles. See docs/operate.md#sizing-kro.
   retire:
     # -- A Superseded Bundle, or a Verified one that a newer Bundle replaced
     # in every environment (--graph-retire-superseded-after, default 1m).

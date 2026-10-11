@@ -61,7 +61,7 @@ kardinal explain my-app --env prod
 ```
 
 If the output shows a PolicyGate in Block state, the gate's CEL expression has not been satisfied; REASON shows what it evaluated to. Common causes:
-- `no-weekend-deploys`: it is a weekend. Wait for Monday, or record a break-glass override with `kardinal override <pipeline> --stage prod --gate no-weekend-deploys --reason "..."` (see [Emergency Overrides](policy-gates.md#emergency-overrides)).
+- `no-weekend-deploys`: it is a weekend. Wait for Monday, or record a break-glass override with `kardinal override <pipeline> --stage prod --gate no-weekend-deploys --reason "..."` (see [Emergency Overrides](overrides.md)).
 - `staging-soak`: the upstream environment was verified recently. Wait for the soak time to pass.
 - CEL error: the expression uses a variable or key that is not in the [CEL context](reference/cel-context.md). Check `kardinal policy test <file>`.
 
@@ -159,17 +159,6 @@ Common causes:
 - Health timeout is too short for slow deploys (increase `health.timeout`)
 - The health adapter is checking the wrong object (check `health.type` and the `health.resource`, `health.argocd` or `health.flux` override; see [Health Adapters](health-adapters.md))
 
-### Symptom: PolicyGate shows "CEL error"
-
-The CEL expression uses a variable or key that is not in the gate's context.
-
-```bash
-# Validate the expression
-kardinal policy test my-gate.yaml
-```
-
-The output will show which attribute is unavailable. Only the attributes in the [CEL context reference](reference/cel-context.md) exist; anything else (for example `delegation.status`, `externalApproval.*`, `previousBundle.*` or `bundle.metadata.*`) is an error and the gate blocks. `metrics.<name>` exists only when a `MetricCheck` named `<name>` exists in the gate's metrics namespace (the org policy namespace for an org gate, the Pipeline namespace otherwise), and `upstream.<env>` only when that environment appears in the Bundle's status or recent history.
-
 ## Bundle not promoting
 
 ### Symptom: Bundle stays in "Available"
@@ -180,7 +169,7 @@ The Bundle was created but no Graph was generated. Check that `spec.pipeline` na
 kubectl get bundle <name> -o jsonpath='{.spec.pipeline}{"\n"}{range .status.conditions[*]}{.type} {.reason}: {.message}{"\n"}{end}'
 ```
 
-Reason `PipelineNotFound` means no such Pipeline exists. Reason `WaitingForSlot` means the Pipeline's `maxConcurrentPromotions` Bundles are already promoting; the Bundle starts when one of them finishes. A `Failed` Bundle waits the same way before it recovers: see [spec.maxConcurrentPromotions](pipeline-reference.md#specmaxconcurrentpromotions).
+Reason `PipelineNotFound` means no such Pipeline exists. Reason `WaitingForSlot` means the Pipeline's `maxConcurrentPromotions` Bundles are already promoting; the Bundle starts when one of them finishes. A `Failed` Bundle waits the same way before it recovers: see [spec.maxConcurrentPromotions](reference/pipeline.md#specmaxconcurrentpromotions).
 
 ### Symptom: Bundle is Failed with "skip denied"
 
@@ -226,20 +215,8 @@ Someone pushed to the PR branch (`kardinal/<namespace hash>/<bundle>/<env>`) aft
 
 ### Symptom: "authentication required" or "authorization failed" on git clone or push
 
-The git token is invalid, expired, or lacks write permissions.
-
-git uses the Secret named by the Pipeline's `spec.git.secretRef` (key `token`), in the Pipeline's namespace. PR and API calls use the controller's token, set with the chart's `github.secretRef` in the controller's namespace. The controller reloads it when the Secret changes.
-
-```bash
-# Which Secret does git use?
-kubectl get pipeline my-app -o jsonpath='{.spec.git.secretRef.name}'
-
-# Verify the token works (from your machine)
-curl -H "Authorization: token $(kubectl get secret <secret> -o jsonpath='{.data.token}' | base64 -d)" \
-  https://api.github.com/repos/<owner>/<repo>
-```
-
-The token needs repo write access (for GitHub PATs: `Contents: Read and write`, `Pull requests: Read and write`).
+See [SCM provider failures](#scm-provider-failures): the token is missing, expired or has no write
+access.
 
 ## Health adapter issues
 
@@ -302,23 +279,39 @@ The limit cannot be changed. Create fewer Bundles (for example one per merge to 
 
 ## Graph controller issues
 
-### Symptom: Graph CR created but no PromotionSteps appear
+### Symptom: Graph shows `Accepted: False` with a CEL compile error
 
-The Graph controller is not reconciling. Check:
+kardinal generates the Graph, so a rejected Graph is a bug in kardinal. The Bundle is `Failed` with reason `GraphRejected` and kro's message: `kubectl describe bundle <name>`. Please open an issue with that message and the Pipeline.
+
+### Symptom: Graph exists but its Ready condition stays False
 
 ```bash
-# Is the Graph controller running?
-kubectl get pods -n kro-system
+# Graph conditions: Accepted, ResourcesConverged, Ready
+kubectl get graph -l kardinal.io/bundle=<bundle> -o jsonpath='{range .items[0].status.conditions[*]}{.type}={.status} {.reason}: {.message}{"\n"}{end}'
 
-# Check Graph status
-kubectl get graph -l kardinal.io/bundle=<bundle> -o yaml
+# Check for CRD schema issues
+kubectl get crd policygates.kardinal.io -o jsonpath='{.status.conditions}' | python3 -m json.tool
+
+# Verify kro is running
+kubectl get pods -n kro-system
 ```
 
-If the Graph controller is not running, PromotionSteps will not be created. kardinal-promoter requires the Graph controller to be operational.
+If kro is in CrashLoopBackOff:
+```bash
+kubectl describe deployment kro -n kro-system
+kubectl logs -n kro-system deployment/kro --previous
+```
 
-### Symptom: Graph shows "Accepted: False"
+### Symptom: PromotionStep CRDs are not created even though Graph exists
 
-See [Graph shows `Accepted: False` with a CEL compile error](#symptom-graph-shows-accepted-false-with-a-cel-compile-error).
+The Graph controller creates a PromotionStep only after the nodes it depends on are ready
+(their `readyWhen` holds). Check the Graph's conditions (`Accepted`, `ResourcesConverged`,
+`Ready`):
+```bash
+kubectl get graph -l kardinal.io/bundle=my-app-v1 -o jsonpath='{.items[0].status.conditions}'
+```
+
+If a PolicyGate node is not ready, downstream PromotionSteps will not be created until it passes.
 
 ### Symptom: Bundle condition "GatesCreated" is False
 
@@ -396,6 +389,8 @@ kubectl get policygates -A -l kardinal.io/gate-template=my-gate -o custom-column
 # Show the expression and current evaluation
 kardinal explain my-app --env prod
 ```
+
+**Unknown attribute:** `kardinal policy test my-gate.yaml` names the attribute that is missing. Only the attributes in the [CEL context reference](reference/cel-context.md) exist; anything else (for example `delegation.status`, `externalApproval.*`, `previousBundle.*` or `bundle.metadata.*`) is an error and the gate blocks. `metrics.<name>` exists only when a `MetricCheck` named `<name>` exists in the gate's metrics namespace (the org policy namespace for an org gate, the Pipeline namespace otherwise), and `upstream.<env>` only when that environment appears in the Bundle's status or recent history.
 
 **CEL syntax error:** The expression failed to compile. Common mistakes:
 - Calling a field as a function: `!schedule.isWeekend` (correct) vs `!schedule.isWeekend()` (fails with `undeclared reference to 'isWeekend'`: it is a map field, not a function)
@@ -530,7 +525,7 @@ GitHub's API rate limit (5000 req/hr for authenticated requests) or GitLab's rat
 6. A token rotation (a new value in the token Secret) keeps the circuits: the new token is first used by the probe
 7. A step that meets an open circuit waits for it and runs again. The wait does not count against the step's 5 retries: its message says "waiting ... for the SCM (not counted as a retry ...)", the condition `SCMUnavailable` is True, `status.scmWaitSince` says since when, and one `SCMUnavailable` Warning Event is written. The wait is bounded: the step fails ("the SCM was unavailable for ...") once it has waited the environment's `stepTimeoutSeconds`, or else the controller's `--scm-wait-timeout` (default 30 minutes). A superseded step closing its PR waits the same way, so its PR and `kardinal/` branch are not left behind, and after the bound it spends its close retries. PRStatus polls wait for the circuit too
 8. Once the bound fails a step, `status.scmWaitSince` is cleared and `SCMUnavailable` is False with reason `TimedOut`
-9. Metrics: `kardinal_scm_circuit_state{provider,owner}` is `0` closed, `1` half-open, `2` open, with `owner="_quota"` for the token's rate-limit circuit, and `kardinal_scm_requests_total{result="circuit_open"}` counts the calls an open circuit refused ([SCM API and git metrics](guides/monitoring.md#scm-api-and-git-metrics))
+9. Metrics: `kardinal_scm_circuit_state{provider,owner}` is `0` closed, `1` half-open, `2` open, with `owner="_quota"` for the token's rate-limit circuit, and `kardinal_scm_requests_total{result="circuit_open"}` counts the calls an open circuit refused ([SCM API and git metrics](reference/metrics.md#scm-api-and-git-metrics))
 
 **Checking circuit state in logs:**
 
@@ -603,42 +598,6 @@ kubectl auth can-i create policygates.kardinal.io -n platform-policies --as <use
 
 ---
 
-## kro Graph controller issues
-
-### Symptom: Graph shows `Accepted: False` with a CEL compile error
-
-kardinal generates the Graph, so a rejected Graph is a bug in kardinal. The Bundle is `Failed` with reason `GraphRejected` and kro's message: `kubectl describe bundle <name>`. Please open an issue with that message and the Pipeline.
-
-### Symptom: Graph exists but its Ready condition stays False
-
-```bash
-# Graph conditions: Accepted, ResourcesConverged, Ready
-kubectl get graph -l kardinal.io/bundle=<bundle> -o jsonpath='{range .items[0].status.conditions[*]}{.type}={.status} {.reason}: {.message}{"\n"}{end}'
-
-# Check for CRD schema issues
-kubectl get crd policygates.kardinal.io -o jsonpath='{.status.conditions}' | python3 -m json.tool
-
-# Verify kro is running
-kubectl get pods -n kro-system
-```
-
-If kro is in CrashLoopBackOff:
-```bash
-kubectl describe deployment kro -n kro-system
-kubectl logs -n kro-system deployment/kro --previous
-```
-
-### Symptom: PromotionStep CRDs are not created even though Graph exists
-
-The Graph controller creates a PromotionStep only after the nodes it depends on are ready
-(their `readyWhen` holds). Check the Graph's conditions (`Accepted`, `ResourcesConverged`,
-`Ready`):
-```bash
-kubectl get graph -l kardinal.io/bundle=my-app-v1 -o jsonpath='{.items[0].status.conditions}'
-```
-
-If a PolicyGate node is not ready, downstream PromotionSteps will not be created until it passes.
-
 ## A PromotionStep, Graph or namespace never finishes deleting
 
 Two finalizers can hold a delete, and the controller removes both itself while it runs.
@@ -688,7 +647,7 @@ branch kardinal/<namespace hash>/<bundle>/<env> failed`): delete that branch by 
 refuses new Events there, and the step is gone, so the controller log is the only record.
 `kardinal_pr_cleanup_failures_total{reason="ClosePRFailed"}` (and `reason="PRLeftOpen"` for the
 case below) counts these PRs, so alert on it: Warning Events are rate-limited and best effort
-([Kubernetes Events](installation.md#kubernetes-events)).
+([Kubernetes Events](operate.md#kubernetes-events)).
 
 Before it closes the PR, the controller reads the Bundle, its namespace, its Pipeline and its
 Graph to tell whether the step comes back (the Graph case above). If one of those reads keeps
@@ -767,46 +726,128 @@ kubectl patch graphs.kro.run <name> -n <namespace> --type=json -p \
 
 ---
 
-## Performance tuning (large-scale deployments)
+## Common questions
 
-### 50+ environments / 100+ concurrent Bundles
+### Can I use kardinal without Argo CD?
 
-The controller handles each Bundle independently via a dedicated Graph. For very large deployments, consider:
+Yes. kardinal writes to Git and checks health with a [health adapter](health-adapters.md): a
+plain Deployment (`resource`, the default), an Argo CD Application, a Flux Kustomization, an Argo
+Rollouts Rollout or a Flagger Canary. No GitOps engine is required.
 
-**1. Raise the controller's resource limits.** Extra replicas do not add throughput: the
-controller runs with `--leader-elect`, so only one replica reconciles and the others are
-standbys (`replicaCount`, default 1).
+### Does it work with GitLab, or with Helm?
+
+Yes. Start the controller with `--scm-provider gitlab`
+(Helm value `scm.provider: gitlab`). A Pipeline can name another SCM with `spec.git.providerRef`
+(an ScmProvider or ClusterScmProvider); `spec.git.provider` is deprecated and ignored. Forgejo,
+Gitea, Bitbucket Cloud, Bitbucket Data Center and Azure DevOps are also supported. See [SCM Providers](scm-providers.md).
+
+Yes. Set `update: {strategy: helm}` on the Pipeline environment. kardinal
+will update the `image.tag` (or a custom path) in `values.yaml` instead of Kustomize
+overlays. It writes one image per Bundle: a Bundle with more than one tagged image
+fails the step. Use one Bundle per chart image, or kustomize.
+
+
+### What does the controller need?
+
+Kubernetes 1.30 or later, [kro](installation.md#install-kro) with the Graph controller, and an
+SCM token (for GitHub, `repo` scope; for GitLab, `api` scope; see
+[SCM providers](scm-providers.md)). The chart creates its RBAC; every permission is listed in
+[Security](guides/security.md#every-permission-the-chart-grants). Put the token in a Secret and
+name it in `github.secretRef` ([Install](installation.md#1-create-the-github-token-secret)).
+
+### How many replicas should I run?
+
+One replica is sufficient for most clusters. Leader election is enabled by default
+(`leaderElect: true`), so you can safely run 2 for HA. The second replica stays in
+standby and takes over if the primary crashes. A leader that shuts down (a rollout or a
+node drain) releases its lease, so the standby takes over within seconds; after a crash
+it waits for the lease to expire (15 seconds).
+
+
+### What happens if the controller restarts mid-promotion?
+
+Nothing is lost. All state is persisted in CRDs. When the controller restarts, it
+reconciles all `PromotionStep` and `PolicyGate` CRs and resumes from where they left off.
+Each reconciler is idempotent and safe to re-run after a crash.
+
+### How do I force a blocked version through?
+
+Force-pass the blocking gate with [`kardinal override`](overrides.md). It records the reason, the
+expiry and your verified Kubernetes username on the gate:
+
+```bash
+kardinal override <pipeline> --stage prod --gate <gate-name> \
+  --reason "hotfix for INC-123" --expires-in 1h
+```
+
+`kardinal approve` does not bypass a gate: it records your approval for an
+[approval gate](approvals.md), which passes once enough allowed people approved.
+
+### What triggers a rollback?
+
+Rollbacks are triggered:
+
+1. **Manual**: `kardinal rollback <pipeline> --env prod` — creates a rollback Bundle. In a
+   `pr-review` environment it opens a PR labelled `kardinal/rollback`; in an `auto` environment
+   it commits and pushes straight to the branch, the same as any promotion there, with no PR
+   (with `update.strategy: argocd` it sets the image on the Argo CD Application instead)
+2. **Automatic**: the environment sets `onHealthFailure: rollback` and its health check fails.
+   That means a terminal result (a Deployment `ProgressDeadlineExceeded` from this promotion's
+   rollout, a failed Flagger canary), no healthy result before `health.timeout`, or an unhealthy
+   check during a `bake` window with `policy: fail-on-alarm`. A rollback Bundle that fails its own
+   health check is not rolled back again; its step ends `AbortedByAlarm`.
+   See [Rollback](rollback.md#automatic-rollback).
+   (`environments[].autoRollback` is not implemented and is rejected by the API server.)
+
+A rollback is a forward promotion of the previously-verified Bundle image through the
+same pipeline, same gates, same audit trail.
+
+### How do I see what changed between two versions?
+
+```bash
+kardinal diff <bundle-a> <bundle-b>
+```
+
+Compares the images (matched by repository) and provenance of two Bundles.
+`kardinal get bundles <pipeline>` lists the Bundle names.
+
+
+### Can a gate let hotfixes through the weekend block?
+
+Yes. Combine conditions:
+
 ```yaml
-# values.yaml
-resources:
-  limits:
-    cpu: "2"
-    memory: 2Gi
-  requests:
-    cpu: 500m
-    memory: 512Mi
+spec:
+  expression: >
+    !schedule.isWeekend ||
+    ("kardinal.io/hotfix" in bundle.labels && bundle.labels["kardinal.io/hotfix"] == "true")
 ```
 
-**2. Reconcile concurrency** is controller-runtime's default of one worker per CRD type
-(MetricCheck uses 4); there is no flag to change it.
+Create the Bundle with `kubectl apply` and set `kardinal.io/hotfix: "true"` in `metadata.labels`.
+`kardinal create bundle` and the Bundle API do not set custom labels.
+Bundle annotations are not in the CEL context; labels are (`bundle.labels`).
 
-**3. Reduce ScheduleClock tick frequency** if no gate needs minute-level `schedule.*`
-re-evaluation. The chart owns the `kardinal-clock` ScheduleClock, so set it through Helm:
-```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
-  -n kardinal-system --reset-then-reuse-values --set scheduleClock.interval=5m
-```
+### How often is a gate re-evaluated?
 
-**4. Bundle history** — finished Bundles are garbage-collected per Pipeline. Set
-`spec.historyLimit` on the Pipeline to keep fewer (see
-[Pipeline reference](pipeline-reference.md#spechistorylimit)).
+The `recheckInterval` field on the PolicyGate spec controls this (default: `5m`).
+The PolicyGateReconciler re-runs the CEL expression on that schedule. When a gate
+transitions from blocked to allowed, the Graph controller immediately advances.
 
-**5. Monitor controller performance:**
-```bash
-# Check reconcile queue depth (via Prometheus if PrometheusRule is installed)
-kubectl port-forward svc/kardinal-promoter -n kardinal-system 8080:8080
-curl -s http://localhost:8080/metrics | grep "^workqueue_depth"
+### Can I test a gate without deploying?
 
-# Or use the built-in Prometheus alerts (install with --set prometheusRule.enabled=true)
-kubectl get prometheusrule kardinal-promoter -n kardinal-system -o yaml
-```
+Yes. `kardinal policy simulate --pipeline my-app --env prod --time "Saturday 3pm"` evaluates the
+gates of an environment at a given time, and `kardinal policy test my-gate.yaml` checks a gate file.
+See [Simulating Expressions](reference/cel-context.md#simulating-expressions) and
+[Testing Expressions](reference/cel-context.md#testing-expressions).
+
+
+### Is kardinal-promoter production-ready?
+
+kardinal-promoter is pre-1.0 and under active development. The CRD API may change
+between minor versions. Recommended for early adopters who can absorb API changes between minor versions.
+Follow releases at [GitHub Releases](https://github.com/pnz1990/kardinal-promoter/releases).
+
+
+### Where do I report a bug?
+
+Open an issue at [github.com/pnz1990/kardinal-promoter/issues](https://github.com/pnz1990/kardinal-promoter/issues).

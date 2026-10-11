@@ -50,7 +50,7 @@ import (
 // finalizer stays until the controller is back. Uninstalling the controller
 // before deleting the Bundles, or downgrading to a controller that does not
 // know the finalizer, leaves such steps behind: remove the finalizer by hand
-// (docs/installation.md, Uninstall and Downgrading).
+// (docs/installation.md, Uninstall; docs/upgrade.md, Downgrading).
 const FinalizerClosePR = "kardinal.io/close-pr"
 
 // closePRDeadline is how long after the delete request a step keeps retrying

@@ -1551,7 +1551,7 @@ func hasAppRef(g *unstructured.Unstructured, ns string) bool {
 // deleteReaderBindingAtEnd deletes, when the test ends, the Graph reader
 // RoleBinding name in argocd that a cluster-mode release's controller made.
 // Nothing deletes it when the release and the Graph namespace go (see
-// docs/installation.md), so each run would leave one. Call it before
+// docs/guides/security.md, RBAC requirements), so each run would leave one. Call it before
 // installing the release, so it runs after the uninstall.
 func deleteReaderBindingAtEnd(t *testing.T, e *framework.Env, name string) {
 	t.Helper()
