@@ -28,10 +28,22 @@ kardinal approve my-app prod --comment "checked the migration"
 ```
 
 It approves the version waiting for prod: the newer version on its way in, or the version
-promoting now while prod is still ahead of it (approving before it reaches the gate is fine). It
-says which on stderr: `Approving my-app-v1-29-0, the version waiting for prod`. When prod already
-runs the newest version and nothing is on its way, it is an error. To name the version yourself,
-or to decline or take back a decision:
+promoting now while prod is still ahead of it (approving before it reaches the gate is fine). When
+prod already runs the newest version and nothing is on its way, it is an error.
+
+It names the version on stderr and, at a terminal, asks before it records anything, since a newer
+version may have arrived since you reviewed it:
+
+```text
+Bundle: 1.29.0 (my-app-v1-29-0)
+Approve 1.29.0 (my-app-v1-29-0) for prod? [y/N]
+```
+
+`--yes` answers for you. Without a terminal (a script, CI) it does not ask. `--version 1.29.0`
+records the approval only if that is the version waiting (the image tag, config commit or chart
+version), and otherwise records nothing.
+
+To name the version yourself, or to decline or take back a decision:
 
 ```bash
 kardinal approve my-app-v1-29-0 --env prod --comment "checked the migration"

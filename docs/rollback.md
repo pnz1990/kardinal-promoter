@@ -102,10 +102,12 @@ kardinal unhold my-app prod
 ```
 
 `hold` writes the same `spec.holds` entry a rollback hold writes, naming the version deployed in
-prod; nothing is rolled back and no version is created. To go back to an earlier version and keep
-it there, roll back with `--hold` (below). It refuses a fleet environment (its targets can run different
-versions), an environment that runs nothing yet, and one that is already held. `unhold` is
-`release-hold`.
+prod; nothing is rolled back and no version is created. To go back to an earlier version and
+keep it there, roll back with `--hold` (below).
+
+Running `hold` again with the same reason changes nothing. It refuses a fleet environment (its
+targets can run different versions), an environment that runs nothing yet, and one already held
+on another version or for another reason: release that hold first. `unhold` is `release-hold`.
 
 ### Roll back and hold
 

@@ -205,14 +205,20 @@ kardinal ship my-app --image "ghcr.io/myorg/my-app:${GITHUB_SHA}" --wait --timeo
 | Exit code | Result | When |
 |---|---|---|
 | 0 | Verified | live in every environment it promotes to |
-| 1 | Failed | the promotion failed, or the command itself failed |
-| 3 | Held | a gate that was evaluated and does not pass, or a rollback hold, keeps it out of an environment, and nothing else of it is moving |
+| 1 | Failed, Error | the promotion failed, the version could not be read three times in a row, or the command itself failed |
+| 3 | Held | a person is needed and nothing else of it is moving: an approval gate, a hold, a paused pipeline, or a gate that does not pass and is never re-checked |
 | 4 | WaitingForMerge | its pull request waits for a person to merge it, and nothing else of it is moving |
-| 5 | Superseded or Rejected | a newer version replaced it, or it was rejected |
-| 6 | Timeout | `--timeout` (default 30m) passed, or following was interrupted |
+| 5 | Superseded, Rejected, Deleted | a newer version replaced it, it was rejected, or it was deleted |
+| 6 | Timeout, Interrupted | `--timeout` (default 30m) passed, or Ctrl-C or SIGTERM stopped the wait; the result is printed first |
 
 The codes are stable: a new outcome gets a new code. A stop at a gate, a hold or a pull request
 counts once two reads agree, and a gate that has not been evaluated yet never stops the wait.
+
+`ship` waits through what ends by itself: a gate with a `recheckInterval`, or with a soak,
+schedule, metric or change-window expression, and a pull request the SCM merges by itself
+(`pr.merge.auto`). Give `--timeout` room for them, so a job can wait through a soak. With
+`--stop-at-gate`, it stops with 3 at any gate that does not pass instead.
+
 Stopping does not stop the promotion: `kardinal status my-app -w` goes on following it.
 
 While it waits, `ship` prints each environment's new state on stderr; at the end it prints one
