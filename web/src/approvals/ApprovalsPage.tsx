@@ -15,6 +15,7 @@ import { ActionButton } from '../stage/ActionButton'
 import { VersionLabel } from '../components/VersionLabel'
 import type { AccessCheck, Bundle, Pipeline, PolicyGate } from '../types'
 import { useChangeHalo } from '../useChangeHalo'
+import { Stack } from '../ui'
 import { serializeHash, EMPTY_URL_STATE } from '../useUrlState'
 import { approvalItems, type ApprovalItem } from './approvalsModel'
 import './ApprovalsPage.css'
@@ -86,7 +87,7 @@ export const ApprovalsPage = forwardRef<ApprovalsHandle, ApprovalsPageProps>(fun
 
   return (
     <section className="appr" aria-labelledby="appr-title">
-      <header className="appr__head">
+      <Stack as="header" gap="2" className="appr__head">
         <p className="appr__eyebrow">Approvals</p>
         <h1 id="appr-title" className="appr__title">
           {identity === null
@@ -94,12 +95,12 @@ export const ApprovalsPage = forwardRef<ApprovalsHandle, ApprovalsPageProps>(fun
             : (mine.length === 0 ? 'Nothing waits on you' : `${mine.length} waiting on you`)}
         </h1>
         {identity === null && (
-          <p className="appr__note">
+          <p className="appr__muted">
             The UI does not know who you are, so it cannot record an approval: sign in with your Kubernetes token
             (TokenReview mode), or approve with <code>kardinal approve</code>.
           </p>
         )}
-      </header>
+      </Stack>
 
       {loading && gates.length === 0 ? (
         <p className="appr__muted">Loading approvals…</p>
@@ -115,7 +116,7 @@ export const ApprovalsPage = forwardRef<ApprovalsHandle, ApprovalsPageProps>(fun
         </ol>
       )}
 
-      {result && <p role="status" className="appr__result">{result}</p>}
+      {result && <p role="status" className="appr__muted">{result}</p>}
 
       {others.length > 0 && (
         <details className="appr__others">
@@ -145,37 +146,37 @@ function Row({ item, now, approveReason, declineReason, onDecide }: {
   const approvers = (item.gate.approval?.decisions ?? []).filter(d => d.counted && d.decision === 'approve').map(d => d.user)
   return (
     <li className="appr-item" data-changed={changed || undefined}>
-      <p className="appr-item__wait" title={item.waitingSince ? `waiting since ${item.waitingSince}` : undefined}>
+      <Stack gap="0" className="appr-item__wait" title={item.waitingSince ? `waiting since ${item.waitingSince}` : undefined}>
         <span className="appr-item__waited">{waited(item.waitingSince, now)}</span>
-        <span className="appr-item__waited-label">waiting</span>
-      </p>
-      <div className="appr-item__body">
+        <span className="appr__eyebrow">waiting</span>
+      </Stack>
+      <Stack gap="1" className="appr-item__body">
         <a className="appr-item__where" href={href} aria-label={`${item.pipeline}, ${item.env}`}>
           {item.pipeline} <span aria-hidden="true">›</span> {item.env}
         </a>
-        <p className="appr-item__what">
+        <Stack direction="row" gap="2" wrap align="center" className="appr__muted">
           {/* The version as everywhere else (#1767): what it ships, the Bundle name after it. */}
-          <VersionLabel bundle={{ name: item.bundle, version: item.version } as Bundle} className="appr-item__version" />
-          <span className="appr-item__sep" aria-hidden="true">·</span>
+          <VersionLabel bundle={{ name: item.bundle, version: item.version } as Bundle} />
+          <span aria-hidden="true">·</span>
           <span>{item.gateName}</span>
-        </p>
-        <p className="appr-item__quorum">
-          <span className="appr-seats" role="img" aria-label={`${item.approved} of ${item.required} approvals`}>
+        </Stack>
+        <Stack direction="row" gap="2" wrap align="center" className="appr__muted">
+          <Stack direction="row" gap="1" role="img" aria-label={`${item.approved} of ${item.required} approvals`}>
             {Array.from({ length: Math.min(item.required, 10) }, (_, i) => (
               <span key={i} className={i < item.approved ? 'appr-seat appr-seat--filled' : 'appr-seat'} />
             ))}
-          </span>
+          </Stack>
           <span>{item.approved} of {item.required}{approvers.length > 0 ? ` · ${approvers.join(', ')} approved` : ''}</span>
-        </p>
-        {item.notMine && <p className="appr-item__why">{item.notMine}</p>}
-      </div>
+        </Stack>
+        {item.notMine && <p className="appr__muted">{item.notMine}</p>}
+      </Stack>
       {onDecide && (
-        <div className="appr-item__actions">
+        <Stack direction="row" gap="2" wrap align="center" className="appr-item__actions">
           <ActionButton kind="reject" label="Decline" className="k-button k-button--destructive k-button--sm"
             restricted={declineReason} onClick={() => onDecide('reject')} />
           <ActionButton kind="approve" label="Approve" className="k-button k-button--primary k-button--sm"
             restricted={approveReason} onClick={() => onDecide('approve')} />
-        </div>
+        </Stack>
       )}
     </li>
   )

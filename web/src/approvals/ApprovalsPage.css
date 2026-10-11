@@ -2,35 +2,22 @@
  * Copyright 2026 The kardinal-promoter Authors.
  * Licensed under the Apache License, Version 2.0
  *
- * ApprovalsPage.css — the approvals inbox (U7). A ledger, not a card grid:
- * one row per approval, ruled by hairlines, the wait leading in large
- * tabular numerals (what an approver clears first), the quorum as seats drawn
- * like the map's stations. Tokens only. Red stays the thread: Approve is ink,
- * Decline a garnet outline.
+ * ApprovalsPage.css — the approvals inbox (U7). Layout comes from the ui Stack primitive;
+ * this sheet holds only what is the inbox's own: the ledger rows ruled by hairlines, the
+ * wait in large tabular numerals, and the quorum as seats drawn like the map's stations.
  */
 
 .appr {
   container: appr / inline-size;
   max-inline-size: var(--k-layout-measure);
   padding: var(--k-space-8) min(var(--k-space-6), 4vw) var(--k-space-12);
-  color: var(--k-ink);
-  font-family: var(--k-font-body);
 }
 
-.appr__head {
-  display: flex;
-  flex-direction: column;
-  gap: var(--k-space-2);
-  margin-block-end: var(--k-space-6);
-}
+.appr__head { margin-block-end: var(--k-space-6); }
 
 .appr__eyebrow {
   margin: 0;
-  font-family: var(--k-font-display);
-  font-size: var(--k-text-2xs);
-  line-height: var(--k-leading-2xs);
-  font-weight: var(--k-weight-semibold);
-  font-stretch: var(--k-stretch-label);
+  font: var(--k-weight-semibold) var(--k-text-2xs) / var(--k-leading-2xs) var(--k-font-display);
   letter-spacing: var(--k-tracking-caps);
   text-transform: uppercase;
   color: var(--k-ink-3);
@@ -38,24 +25,14 @@
 
 .appr__title {
   margin: 0;
-  font-family: var(--k-font-display);
-  font-size: var(--k-text-2xl);
-  line-height: var(--k-leading-2xl);
-  font-weight: var(--k-weight-title);
-  font-stretch: var(--k-stretch-title);
+  font: var(--k-weight-title) var(--k-text-2xl) / var(--k-leading-2xl) var(--k-font-display);
   letter-spacing: var(--k-tracking-display);
 }
 
-.appr__note,
 .appr__muted {
   margin: 0;
   color: var(--k-ink-2);
   font-size: var(--k-text-sm);
-  line-height: var(--k-leading-sm);
-}
-
-.appr__note code {
-  font-family: var(--k-font-mono);
 }
 
 .appr__list {
@@ -68,161 +45,39 @@
 .appr-item {
   display: grid;
   grid-template-columns: minmax(var(--k-space-24), auto) 1fr auto;
-  align-items: start;
   gap: var(--k-space-2) var(--k-space-6);
   padding: var(--k-space-4) var(--k-space-2);
   border-block-end: var(--k-border-hairline) solid var(--k-line);
-  border-radius: var(--k-radius-1);
-}
-
-.appr-item__wait {
-  margin: 0;
-  display: flex;
-  flex-direction: column;
 }
 
 .appr-item__waited {
-  font-family: var(--k-font-mono);
+  font: var(--k-weight-medium) var(--k-text-xl) / var(--k-leading-xl) var(--k-font-mono);
   font-variant-numeric: var(--k-numeric-mono);
-  font-size: var(--k-text-xl);
-  line-height: var(--k-leading-xl);
-  font-weight: var(--k-weight-medium);
-}
-
-.appr-item__waited-label {
-  font-family: var(--k-font-display);
-  font-size: var(--k-text-2xs);
-  line-height: var(--k-leading-2xs);
-  font-stretch: var(--k-stretch-label);
-  letter-spacing: var(--k-tracking-caps);
-  text-transform: uppercase;
-  color: var(--k-ink-3);
-}
-
-.appr-item__body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--k-space-1);
-  min-inline-size: 0;
 }
 
 .appr-item__where {
   inline-size: fit-content;
   color: var(--k-ink);
-  font-family: var(--k-font-display);
-  font-size: var(--k-text-md);
-  line-height: var(--k-leading-md);
-  font-weight: var(--k-weight-section);
+  font: var(--k-weight-section) var(--k-text-md) / var(--k-leading-md) var(--k-font-display);
   text-decoration: none;
-  overflow-wrap: anywhere;
 }
 
-.appr-item__where:hover {
-  text-decoration: underline;
-  text-decoration-color: var(--k-thread-text);
-}
-
-.appr-item__where:focus-visible,
-.appr__others summary:focus-visible {
-  outline: var(--k-focus-ring);
-  outline-offset: var(--k-focus-offset);
-}
-
-.appr-item__what,
-.appr-item__quorum,
-.appr-item__why {
-  margin: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--k-space-2);
-  color: var(--k-ink-2);
-  font-size: var(--k-text-sm);
-  line-height: var(--k-leading-sm);
-}
-
-.appr-item__version {
-  font-family: var(--k-font-mono);
-  font-variant-numeric: var(--k-numeric-mono);
-  color: var(--k-ink);
-}
-
-.appr-item__why {
-  color: var(--k-ink-3);
-}
-
-/* The quorum as seats: one station-sized dot per approval needed, filled per counted approval. */
-.appr-seats {
-  display: inline-flex;
-  gap: var(--k-space-1);
-}
+.appr-item__where:hover { text-decoration: underline; }
+.appr-item__where:focus-visible { outline: var(--k-focus-ring); outline-offset: var(--k-focus-offset); }
 
 .appr-seat {
+  display: inline-block;
   inline-size: calc(var(--k-graph-station-r) * 2);
   block-size: calc(var(--k-graph-station-r) * 2);
   border-radius: var(--k-radius-dot);
   border: var(--k-border-strong) solid var(--k-status-waiting-fg);
 }
 
-.appr-seat--filled {
-  background: var(--k-status-waiting-fg);
-}
+.appr-seat--filled { background: var(--k-status-waiting-fg); }
 
-.appr-item__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--k-space-2);
-  align-self: center;
-}
+.appr__others { margin-block-start: var(--k-space-8); }
+.appr__others summary { cursor: pointer; color: var(--k-ink-2); }
 
-.appr__result {
-  margin: var(--k-space-4) 0 0;
-  font-size: var(--k-text-sm);
-}
-
-.appr__others {
-  margin-block-start: var(--k-space-8);
-}
-
-.appr__others summary {
-  cursor: pointer;
-  inline-size: fit-content;
-  margin-block-end: var(--k-space-3);
-  color: var(--k-ink-2);
-  font-size: var(--k-text-sm);
-  font-weight: var(--k-weight-medium);
-}
-
-.appr__list--others .appr-item__waited {
-  font-size: var(--k-text-md);
-  color: var(--k-ink-2);
-}
-
-@container appr (max-width: 720px) {
-  .appr-item {
-    grid-template-columns: auto 1fr;
-  }
-  .appr-item__actions {
-    grid-column: 1 / -1;
-    justify-content: flex-end;
-  }
-}
-
-/* Narrow: one column, the wait on its own line above the place. */
 @container appr (max-width: 480px) {
-  .appr-item {
-    grid-template-columns: 1fr;
-    gap: var(--k-space-2);
-  }
-  .appr-item__wait {
-    flex-direction: row;
-    align-items: baseline;
-    gap: var(--k-space-2);
-  }
-  .appr-item__waited {
-    font-size: var(--k-text-md);
-  }
-  .appr-item__actions {
-    justify-content: flex-start;
-  }
+  .appr-item { grid-template-columns: 1fr; }
 }

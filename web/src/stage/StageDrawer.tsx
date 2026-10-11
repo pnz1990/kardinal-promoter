@@ -217,7 +217,8 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
 }
 
 function StateChip({ label, tone, glyph, changed }: { label: string; tone: Tone; glyph?: string; changed?: boolean }) {
-  return <span className={`stage-chip stage-chip--${tone}`} data-changed={changed || undefined}>{glyph && <span aria-hidden="true">{glyph} </span>}{label}</span>
+  // The ui chip (its colours and shape); stage-chip names it for the specs.
+  return <StatusChip tone={tone} label={label} glyph={glyph} className={`stage-chip stage-chip--${tone}`} data-changed={changed || undefined} />
 }
 
 /** A version as people know it (the tag), with the Bundle name after it only when it says something more. */
