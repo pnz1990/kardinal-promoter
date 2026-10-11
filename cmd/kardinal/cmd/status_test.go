@@ -638,10 +638,17 @@ func TestStatusSummary_ScopeAndRights(t *testing.T) {
 	t.Cleanup(func() { errOut = prev })
 
 	require.NoError(t, statusSummaryIn(&out, c, "kardinal-system", "", "team-a"))
-	assert.Contains(t, out.String(), "Controller:  unknown in kardinal-system, can't read the controller Deployment (needs get on deployments in kardinal-system); kardinal doctor checks it\n")
+	assert.Contains(t, out.String(), "Controller:  unknown in kardinal-system, can't read the controller Deployment (needs list on deployments in kardinal-system); kardinal doctor checks it\n")
 	assert.Contains(t, out.String(), "team-a      web        1.0.0 live in prod\n")
 	assert.NotContains(t, out.String(), "team-b")
 	assert.Equal(t, "note: you may not list every namespace; showing team-a (-n for another)\n", errb.String())
+
+	// -A asked for every namespace: refused, not one namespace.
+	out.Reset()
+	errb.Reset()
+	err := statusSummaryIn(&out, c, "kardinal-system", "", "")
+	require.EqualError(t, err, "you may not list Pipelines and Bundles in every namespace: run kardinal status -n <namespace>")
+	assert.NotContains(t, out.String(), "team-a")
 
 	out.Reset()
 	errb.Reset()

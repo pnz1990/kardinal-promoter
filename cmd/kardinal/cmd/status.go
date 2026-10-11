@@ -70,11 +70,14 @@ refreshes it and -o json prints it for scripts.`,
 					return statusPipelineWriter(w, c, ns, args[0])
 				}
 				// Every namespace, unless -n names one (-A: every namespace).
-				scope := ""
+				scope, fallback := "", ns
 				if cmd.Flags().Changed("namespace") && !all {
 					scope = ns
 				}
-				return statusSummaryIn(w, c, controllerNS, scope, ns)
+				if all {
+					fallback = "" // asked for every namespace: no fallback
+				}
+				return statusSummaryIn(w, c, controllerNS, scope, fallback)
 			}
 			if !watchFlag {
 				return render()
@@ -140,7 +143,7 @@ func statusSummaryFn(out io.Writer, c sigs_client.Reader, controllerNS string) e
 // scope ("" for every namespace): a line on the controller (version and
 // readiness), a line of counts, then one line per pipeline with its summary
 // sentence. A cluster-wide read that is forbidden falls back to fallbackNS
-// with a note.
+// with a note; without one (-A) it is an error that says to use -n.
 func statusSummaryIn(out io.Writer, c sigs_client.Reader, controllerNS, scope, fallbackNS string) error {
 	ctx := context.Background()
 	ctrlVersion := controllerVersion(ctx, c, controllerNS)
@@ -164,6 +167,9 @@ func statusSummaryIn(out io.Writer, c sigs_client.Reader, controllerNS, scope, f
 	}
 	note := ""
 	pipelines, bundles, err := list(scope)
+	if err != nil && scope == "" && fallbackNS == "" && apierrors.IsForbidden(errors.Unwrap(err)) {
+		return fmt.Errorf("you may not list Pipelines and Bundles in every namespace: run kardinal status -n <namespace>")
+	}
 	if err != nil && scope == "" && apierrors.IsForbidden(errors.Unwrap(err)) {
 		scope = fallbackNS
 		note = fmt.Sprintf("you may not list every namespace; showing %s (-n for another)", scope)
@@ -256,7 +262,7 @@ func controllerReadiness(ctx context.Context, c sigs_client.Reader, ns string) c
 	err := c.List(ctx, &list, sigs_client.InNamespace(ns), sigs_client.MatchingLabels{"app.kubernetes.io/name": "kardinal-promoter"})
 	switch {
 	case apierrors.IsForbidden(err):
-		return controllerHealth{Reason: fmt.Sprintf("can't read the controller Deployment (needs get on deployments in %s); kardinal doctor checks it", ns)}
+		return controllerHealth{Reason: fmt.Sprintf("can't read the controller Deployment (needs list on deployments in %s); kardinal doctor checks it", ns)}
 	case err != nil:
 		return controllerHealth{Reason: fmt.Sprintf("can't read the controller Deployment (%v); kardinal doctor checks it", HumanError(err))}
 	case len(list.Items) == 0:
@@ -609,9 +615,9 @@ func pipelineNotices(p *v1alpha1.Pipeline) []string {
 }
 
 // statusReference is the detail of status for its reference page.
-const statusReference = `When called without arguments, across every namespace (-n for one; -A says
-every namespace explicitly; when you may not list every namespace it shows
-the kubeconfig's, with a note on stderr):
+const statusReference = `When called without arguments, across every namespace (-n for one). When you
+may not list every namespace it shows the kubeconfig's, with a note on
+stderr; with -A, which asks for every namespace, it fails and says to use -n:
 
   Controller:  v0.10.1 in kardinal-system, 1/1 ready
   Pipelines:   2 (1 degraded: team-b/api)
@@ -626,7 +632,7 @@ the kubeconfig's, with a note on stderr):
 the controller version (the kardinal-version ConfigMap in
 --controller-namespace) and how many replicas of its Deployment are ready
 (else "no controller Deployment found there: kardinal doctor", or "can't
-read the controller Deployment (needs get on deployments in <ns>)": the
+read the controller Deployment (needs list on deployments in <ns>)": the
 chart's user roles do not grant it; fewer ready than desired is a warning), the pipeline count with any Degraded pipelines,
 the version count (in flight = Available or Promoting), and one line per
 pipeline (at most 50; then kardinal get pipelines -A) with its
