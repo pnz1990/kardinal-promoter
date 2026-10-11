@@ -32,13 +32,13 @@ All state lives in Kubernetes CRDs. There is no external database.
 
 - **Graph-native pipelines.** Even linear pipelines run as kro Graphs. Fan-out and fan-in (`dependsOn`, `wave`) are native, and a Bundle can skip environments (`intent.skipEnvironments`).
 - **Policy gates as DAG nodes.** CEL-powered gates are visible in the UI and debuggable via `kardinal explain`. A team Pipeline cannot remove or weaken org-level gates; `kardinal override` force-passes one for a limited time and records the reason.
-- **Pluggable integrations.** SCM providers (GitHub, GitLab, Forgejo, Gitea, Bitbucket Cloud, Azure DevOps; the controller's `--scm-provider` plus any number of ScmProviders and ClusterScmProviders), manifest update strategies (Kustomize, Helm, Argo CD), health adapters (Argo CD, Flux, Deployment), and delivery delegation (Argo Rollouts, Flagger) are Go interfaces. Adding a provider is one interface implementation.
+- **Pluggable integrations.** SCM providers (GitHub, GitLab, Forgejo, Gitea, Bitbucket Cloud, Bitbucket Data Center, Azure DevOps; the controller's `--scm-provider` plus any number of ScmProviders and ClusterScmProviders), manifest update strategies (Kustomize, Helm, Argo CD), health adapters (Argo CD, Flux, Deployment, Argo Rollouts, Flagger), and delivery delegation (Argo Rollouts, Flagger) are Go interfaces. Adding a provider is one interface implementation.
 - **PR-native approval.** Promotion PRs contain artifact provenance, upstream verification, and policy gate compliance. Human approval for production is merging the PR.
-- **Multi-cluster.** Run kardinal in the Argo CD or Flux hub; health checks read the Application or Kustomization in the hub. `health.cluster` kubeconfig Secrets are not supported.
+- **Multi-cluster.** Run one kardinal next to the GitOps hub. Health checks read the hub's Application or Kustomization, or any workload in another cluster through `health.kubeconfigSecretRef`.
 
 ## Status
 
-**v0.10.0** — alpha, in active development. APIs (`kardinal.io/v1alpha1`) may change between minor releases. See the [changelog](docs/changelog.md) for what shipped.
+Alpha, in active development ([releases](https://github.com/pnz1990/kardinal-promoter/releases)). APIs (`kardinal.io/v1alpha1`) may change between minor releases. See the [changelog](docs/changelog.md) for what shipped.
 See the [full documentation](https://pnz1990.github.io/kardinal-promoter/) and [changelog](docs/changelog.md).
 
 ## Documentation

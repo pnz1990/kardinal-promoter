@@ -3,8 +3,8 @@
 This page compares kardinal-promoter with the two most similar tools in the GitOps promotion space.
 
 !!! note "Objectivity"
-    Surveyed on 2026-10-03 from each project's source, docs and release notes: kardinal-promoter
-    v0.9.0 (updated for v0.10.0 on 2026-10-10), Kargo v1.12.1 and GitOps Promoter v0.42.1. All three tools are actively developed;
+    Surveyed from each project's source, docs and release notes: kardinal-promoter
+    v0.10.0, Kargo v1.12.1 and GitOps Promoter v0.42.1. All three tools are actively developed;
     check each project's releases for the latest capabilities. "Kargo Enterprise" means the
     commercial edition (Kargo on the Akuity Platform); everything else in the Kargo column is open source.
 
@@ -58,29 +58,9 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 
 ---
 
-## What changed in 2026
+## Why kardinal-promoter
 
-Both projects closed some of the gaps this page used to list.
-
-**Kargo** (v1.8 to v1.12):
-
-- Promotion windows, `wait-for-approval` with approver quorum, and audit events, in Kargo Enterprise (v1.12, beta). Open source ignores the windows.
-- Auto-rollback to the last verified Freight, in Kargo Enterprise (beta).
-- Auto-promotion holds (v1.11): a manual re-promote of older Freight pins the Stage.
-- Freight creation criteria and the `MatchUpstream` selection policy (v1.8), a REST API with API tokens and a generic webhook receiver (v1.9), and its own Prometheus metrics (v1.12).
-- Notifications to Slack, email and HTTP, in Kargo Enterprise (v1.8+).
-- Next: v2.0.0, a storage rewrite, and a Kargo Enterprise fan-out to fleets of targets, unreleased.
-
-**GitOps Promoter** (v0.13 to v0.42):
-
-- DAG promotion with `dependsOn` and the required ordering gate (v0.38, v0.39). It now runs fan-out and fan-in like kardinal and Kargo.
-- `ScheduledCommitStatus` schedule windows (v0.34), `WebRequestCommitStatus` gates (v0.23) and `GitCommitStatus` expressions (v0.19).
-- An enriched default PR description (v0.37) and a promotion history CRD (v0.41).
-- Bitbucket Cloud, Azure DevOps and Gitea (v0.19, v0.20).
-- A redesigned dashboard and Argo CD UI extension with promotion history (v0.25 to v0.40).
-- Open PRs: a "restore this version" rollback and outbound notification webhooks.
-
-Still unique to kardinal: CEL gates that combine schedule, soak, history, metrics and change windows;
+Unique to kardinal: CEL gates that combine schedule, soak, history, metrics and change windows;
 the contiguous healthy soak; wave topology; gate results and provenance in the PR body; DORA metrics;
 `explain` and `policy simulate`; and auto-rollback in open source.
 
@@ -88,10 +68,6 @@ Open requests in their trackers that kardinal already ships:
 
 - Kargo: superseding queued promotions ([#3108](https://github.com/akuity/kargo/issues/3108)), time windows in open source ([#1328](https://github.com/akuity/kargo/issues/1328)), a system-wide stop ([#1422](https://github.com/akuity/kargo/issues/1422)), and provenance in PR bodies ([#2830](https://github.com/akuity/kargo/issues/2830)).
 - GitOps Promoter: DORA metrics ([#574](https://github.com/argoproj-labs/gitops-promoter/issues/574)) and holding a promotion ([#1803](https://github.com/argoproj-labs/gitops-promoter/issues/1803)).
-
----
-
-## Why kardinal-promoter
 
 ### Graph-native policy evaluation
 
@@ -258,7 +234,7 @@ If your constraint is that every promotion artefact must be a git commit with no
 Kubernetes-side state, kardinal is not the right model.
 
 **You need a larger community and commercial support today.**
-kardinal-promoter is at v0.10.0 with active development, on kro's alpha Graph API. Kargo has a
+kardinal-promoter is pre-1.0 and in active development, on kro's alpha Graph API. Kargo has a
 longer production track record and commercial backing from Akuity. If your organisation requires vendor
 support or a larger existing community before adopting, that is a legitimate constraint.
 

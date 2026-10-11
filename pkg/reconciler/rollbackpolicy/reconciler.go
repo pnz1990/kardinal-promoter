@@ -23,9 +23,8 @@
 // a rollback Bundle when triggered — creating a new resource is not the same as
 // mutating another CRD's status and is permitted.
 //
-// Graph-purity: eliminates PS-6 and PS-7 from docs/design/11-graph-purity-tech-debt.md.
-// The threshold comparison was previously invisible inside the PromotionStep reconciler;
-// now it is written to RollbackPolicy.status.shouldRollback and observable by the Graph.
+// The threshold comparison is written to RollbackPolicy.status.shouldRollback,
+// where the Graph can observe it.
 package rollbackpolicy
 
 import (

@@ -501,7 +501,7 @@ func checkPipelineHealth(ctx context.Context, client sigs_client.Client, ns, nam
 	switch p.Status.Phase {
 	case "Ready", "Promoting":
 		r.icon = doctorPass
-		r.detail = "status: " + p.Status.Phase
+		r.detail = "status: " + pipelineLabel(p.Status.Phase, false)
 	case "Degraded":
 		r.icon = doctorWarn
 		r.warned = true

@@ -54,9 +54,8 @@ Superseded and has a PromotionStep there, or a gate instance there and has not
 failed; see kardinal explain), its PromotionSteps (one row per environment it
 has a step in, ▶ marking a step that is Promoting, WaitingForMerge,
 HealthChecking or Verifying, with the Bundle each row belongs to, the step it is on, and the
-last 40 characters of the step's PR URL, open or merged; REGION is - unless the
-step was created by a Graph built before multi-region fan-out was removed;
-spec.regions is deprecated), the Bundle deployed in every environment (the
+last 40 characters of the step's PR URL, open or merged; REGION is the
+step's deprecated spec.region, - when empty), the Bundle deployed in every environment (the
 one whose change landed there last, as kardinal rollback judges it, with its
 image tags or config commit, and, as in kardinal explain, the config or
 image Bundle the rest of what runs there came from; "none" when no change has
@@ -286,6 +285,15 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 	_, _ = fmt.Fprintln(w, strings.Repeat("─", 72))
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(tw, "ENVIRONMENT\tREGION\tBUNDLE\tSTATE\tACTIVE STEP\tPR\tAGE")
+	// A Pending step that a rollback hold or a blocking gate keeps waiting
+	// says so in STATE.
+	gatesByEnv := map[string][]string{}
+	for i := range blockingGates {
+		env := blockingGates[i].Labels["kardinal.io/environment"]
+		if n := gateDisplayName(blockingGates[i]); !slices.Contains(gatesByEnv[env], n) {
+			gatesByEnv[env] = append(gatesByEnv[env], n)
+		}
+	}
 	for _, r := range rows {
 		// Mark in-progress states with a pointer.
 		marker := "  "
@@ -298,7 +306,9 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 			prDisplay = prDisplay[len(prDisplay)-40:]
 		}
 		_, _ = fmt.Fprintf(tw, "%s%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			marker, r.env, r.region, r.bundle, r.state, r.activeStep, prDisplay, r.age)
+			marker, r.env, r.region, r.bundle,
+			stepRowLabel(r.state, lifecycle.HeldFrom(&pl, r.env, r.bundle) != nil, gatesByEnv[r.env]),
+			r.activeStep, prDisplay, r.age)
 	}
 	_ = tw.Flush()
 	for _, h := range rejectedLiveHints(pipeline, active, bundles.Items, steps.Items, "") {

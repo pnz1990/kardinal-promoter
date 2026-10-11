@@ -119,10 +119,11 @@ type PipelineGit struct {
 	// +optional
 	Layout string `json:"layout,omitempty"`
 
-	// Provider is ignored. One controller serves one SCM, chosen with its
-	// --scm-provider flag.
+	// Provider is ignored: the controller's --scm-provider flag, or
+	// spec.git.providerRef, selects the provider.
 	//
-	// Deprecated: ignored; the controller's --scm-provider flag selects the provider.
+	// Deprecated: ignored; the controller's --scm-provider flag, or spec.git.providerRef,
+	// selects the provider.
 	// It is removed in v0.11.
 	// +kubebuilder:validation:Enum=github;gitlab
 	// +optional
@@ -159,7 +160,7 @@ type SecretRef struct {
 // +kubebuilder:validation:XValidation:rule="!(has(self.update) && has(self.update.strategy) && self.update.strategy == 'argocd' && has(self.approval) && self.approval == 'pr-review')",message="environments[]: update.strategy argocd patches the Application directly and cannot honour approval: pr-review; use approval: auto with a PolicyGate, or a git-based strategy (kustomize or helm) for a reviewed promotion"
 // +kubebuilder:validation:XValidation:rule="!has(self.autoRollback)",message="environments[].autoRollback is not implemented; remove it (automatic rollback is configured with onHealthFailure, see docs/rollback.md)"
 // +kubebuilder:validation:XValidation:rule="!has(self.steps) || size(self.steps) == 0",message="environments[].steps is not supported: kardinal has no custom step engine and every environment runs the default step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)"
-// +kubebuilder:validation:XValidation:rule="!has(self.promotionTemplate)",message="environments[].promotionTemplate is not supported: the PromotionTemplate CRD was removed and every environment runs the default step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)"
+// +kubebuilder:validation:XValidation:rule="!has(self.promotionTemplate)",message="environments[].promotionTemplate is deprecated and not supported: every environment runs the default step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)"
 // +kubebuilder:validation:XValidation:rule="!(self.name in ['api-version','kind','metadata','namespace','spec','status','graph','graphengine','kro','each','item','items','object','self','this','context','true','false','null','in','as','break','const','continue','else','for','function','if','import','let','loop','package','return','var','void','while','bundle','time'])",message="reserved environment name: the name becomes a kro Graph node ID; bundle, time, kro reserved IDs (spec, status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed; rename the environment"
 // +kubebuilder:validation:XValidation:rule="!has(self.pr) || (has(self.approval) && self.approval == 'pr-review')",message="environments[].pr configures the promotion pull request and needs approval: pr-review"
 type EnvironmentSpec struct {
@@ -200,7 +201,7 @@ type EnvironmentSpec struct {
 	// +optional
 	DependsOn []string `json:"dependsOn,omitempty"`
 
-	// Wave assigns this environment to a numbered deployment wave (K-06).
+	// Wave assigns this environment to a numbered deployment wave.
 	// Environments with the same wave number are promoted in parallel. An
 	// environment of a wave depends on every environment of the next lower wave
 	// present; gaps in the numbering (10, 20, 30) are allowed and create no roots.
@@ -224,14 +225,13 @@ type EnvironmentSpec struct {
 	// +optional
 	Fleet *FleetSpec `json:"fleet,omitempty"`
 
-	// Shard was the agent shard of distributed mode, which was removed. A
-	// non-empty value sets the Pipeline Ready=False (reason NotImplemented)
-	// and fails the environment's PromotionSteps with "shard is not
-	// supported".
+	// Shard is deprecated and not supported. A non-empty value sets the
+	// Pipeline Ready=False (reason NotImplemented) and fails the environment's
+	// PromotionSteps with "shard is not supported".
 	//
 	// Deprecated: remove shard; the controller reconciles every environment.
 	// For workloads in other clusters, use health.kubeconfigSecretRef or the
-	// Argo CD or Flux hub (see docs/multi-cluster.md).
+	// Argo CD or Flux hub (see docs/health-adapters.md#remote-clusters).
 	// It is removed in v0.11.
 	// +optional
 	Shard string `json:"shard,omitempty"`
@@ -241,7 +241,7 @@ type EnvironmentSpec struct {
 	// +optional
 	AutoRollback *AutoRollbackSpec `json:"autoRollback,omitempty"`
 
-	// Bake configures a contiguous-healthy soak window for this environment (K-01).
+	// Bake configures a contiguous-healthy soak window for this environment.
 	// When set, the health check must pass continuously for Bake.Minutes before
 	// the step transitions to Verified. A health failure resets the timer if
 	// policy is "reset-on-alarm" (default), or fails the step if "fail-on-alarm".
@@ -249,7 +249,7 @@ type EnvironmentSpec struct {
 	Bake *BakeConfig `json:"bake,omitempty"`
 
 	// OnHealthFailure controls what the reconciler does when health fails during
-	// bake or health checking (K-03).
+	// bake or health checking.
 	// "rollback": create a rollback Bundle at the previous version; step → RollingBack.
 	// "abort": freeze the step; state → AbortedByAlarm; requires human intervention.
 	// "none" (default): step → Failed; downstream stops.
@@ -285,8 +285,7 @@ type EnvironmentSpec struct {
 	// +optional
 	Steps []StepSpec `json:"steps,omitempty"`
 
-	// PromotionTemplate is not supported, and the PromotionTemplate CRD was
-	// removed. The API server rejects a Pipeline that sets it, and so do Graph
+	// PromotionTemplate is deprecated and not supported. The API server rejects a Pipeline that sets it, and so do Graph
 	// translation and "kardinal validate".
 	//
 	// Deprecated: remove it; every environment runs the default step sequence.
@@ -503,14 +502,14 @@ type AnalysisArg struct {
 }
 
 // PromotionTemplateRef is the shape of the deprecated
-// spec.environments[].promotionTemplate field. The PromotionTemplate CRD it
-// named was removed; a Pipeline that sets the field is rejected.
+// spec.environments[].promotionTemplate field. A Pipeline that sets the field
+// is rejected.
 type PromotionTemplateRef struct {
-	// Name is the name of a PromotionTemplate (the CRD was removed).
+	// Name is the name of a PromotionTemplate.
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 
-	// Namespace is the namespace of the PromotionTemplate (the CRD was removed).
+	// Namespace is the namespace of the PromotionTemplate.
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
 }
@@ -525,7 +524,7 @@ type AutoRollbackSpec struct {
 	FailureThreshold int `json:"failureThreshold,omitempty"`
 }
 
-// BakeConfig defines a contiguous-healthy soak window for an environment (K-01).
+// BakeConfig defines a contiguous-healthy soak window for an environment.
 // The health check must pass continuously for Minutes before the step is Verified.
 type BakeConfig struct {
 	// Minutes is the required contiguous healthy duration in minutes.
@@ -560,7 +559,7 @@ type BakeConfig struct {
 }
 
 // WebhookConfig is the shape of the deprecated spec.environments[].steps[].webhook
-// field. The custom webhook step was removed; nothing calls this endpoint.
+// field. Deprecated: nothing reads this field.
 type WebhookConfig struct {
 	// URL is the HTTP(S) endpoint to POST to.
 	// +kubebuilder:validation:MinLength=1
@@ -584,7 +583,7 @@ type StepSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Uses string `json:"uses"`
 
-	// Webhook was the endpoint of a custom webhook step, which was removed.
+	// Webhook is deprecated: nothing reads this field.
 	// +optional
 	Webhook *WebhookConfig `json:"webhook,omitempty"`
 }
@@ -1044,7 +1043,7 @@ func (h *EnvironmentHold) Expired(now time.Time) bool {
 }
 
 // The states of a hold (PipelineStatus.HoldStates). A hold is in effect in
-// every state: the controller never lifts a hold (#1629).
+// every state: the controller never lifts a hold.
 const (
 	// HoldStateActive: the hold's Bundle exists.
 	HoldStateActive = "Active"
@@ -1179,7 +1178,7 @@ type PipelineStatus struct {
 	ObservedHolds []EnvironmentHold `json:"observedHolds,omitempty"`
 
 	// HoldStates says, per hold of spec.holds, whether its rollback Bundle
-	// exists (#1629). A hold whose Bundle is missing (a crash between the
+	// exists. A hold whose Bundle is missing (a crash between the
 	// hold and the Bundle create, or the Bundle deleted) stays in effect;
 	// past the grace the controller reports it, and a human releases it.
 	// +listType=map
@@ -1188,8 +1187,8 @@ type PipelineStatus struct {
 	HoldStates []EnvironmentHoldState `json:"holdStates,omitempty"`
 
 	// PendingAuditEvents are the HoldCreated, HoldReleased and
-	// HoldBundleMissing AuditEvents not yet written (the audit outbox,
-	// #1552). Each entry is stored in the same
+	// HoldBundleMissing AuditEvents not yet written (the audit outbox).
+	// Each entry is stored in the same
 	// status patch as observedHolds and removed once the AuditEvent exists.
 	// Normally empty.
 	// +optional
@@ -1208,6 +1207,74 @@ type PipelineStatus struct {
 	// +listType=map
 	// +listMapKey=environment
 	Fleets []FleetStatus `json:"fleets,omitempty"`
+
+	// Environments is, per environment in spec order (a fleet environment
+	// expands to its targets), what runs there and where the newest version
+	// stands. Written by the PipelineReconciler from the Bundles,
+	// PromotionSteps and gate instances of the Pipeline. It is a display
+	// projection: no controller decision reads it.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	Environments []PipelineEnvironmentStatus `json:"environments,omitempty"`
+
+	// Summary is one sentence on where the Pipeline's versions are, for
+	// example "1.5.0 live in test, uat; waiting for PR merge in prod (#42)".
+	// Written with Environments; display only.
+	// +optional
+	Summary string `json:"summary,omitempty"`
+
+	// EnvironmentSummary is Environments as one line, environment=version
+	// ("test=1.5.0 uat=1.5.0 prod=1.4.0"; "-" where nothing runs yet), for
+	// the wide printer column. Display only.
+	// +optional
+	EnvironmentSummary string `json:"environmentSummary,omitempty"`
+}
+
+// PipelineEnvironmentStatus is what one environment of a Pipeline runs, and
+// where the newest version that reached it stands.
+type PipelineEnvironmentStatus struct {
+	// Name is the environment name.
+	Name string `json:"name"`
+	// Bundle is the Bundle whose change runs in the environment: the newest
+	// one whose change landed there. Empty when none has.
+	// +optional
+	Bundle string `json:"bundle,omitempty"`
+	// Version is what Bundle ships: the image tag, "config <sha>" or the
+	// chart version.
+	// +optional
+	Version string `json:"version,omitempty"`
+	// IncomingBundle is a newer Bundle on its way into the environment (its
+	// step there is not yet live, or gates hold it before its step exists).
+	// Empty when the newest Bundle there is Bundle.
+	// +optional
+	IncomingBundle string `json:"incomingBundle,omitempty"`
+	// IncomingVersion is what IncomingBundle ships.
+	// +optional
+	IncomingVersion string `json:"incomingVersion,omitempty"`
+	// State is the PromotionStep state of the newest Bundle in the
+	// environment (IncomingBundle when set, else Bundle), an API value such
+	// as Verified or WaitingForMerge. Pending with BlockedBy set when gates
+	// hold the Bundle before its step exists. Empty when no Bundle reached
+	// the environment.
+	// +optional
+	State string `json:"state,omitempty"`
+	// Since is when State began: the Verified time for Verified, otherwise
+	// when the controller first recorded this Bundle in this State.
+	// +optional
+	Since *metav1.Time `json:"since,omitempty"`
+	// BlockedBy names the gates that hold the newest Bundle back in the
+	// environment, sorted.
+	// +optional
+	BlockedBy []string `json:"blockedBy,omitempty"`
+	// PRURL is the pull request of the newest Bundle's step while it waits
+	// for its merge.
+	// +optional
+	PRURL string `json:"prURL,omitempty"`
+	// Held is true when a rollback hold (spec.holds) keeps the environment
+	// on Bundle, so the newest Bundle waits.
+	// +optional
+	Held bool `json:"held,omitempty"`
 }
 
 // FleetStatus is the resolved membership of one selector fleet.
@@ -1310,9 +1377,11 @@ type PipelineDeploymentMetrics struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=pipe
+// +kubebuilder:resource:scope=Namespaced,shortName=pipe,categories=kardinal;kardinal-all
+// +kubebuilder:printcolumn:name="Summary",type=string,JSONPath=`.status.summary`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Paused",type=boolean,JSONPath=`.spec.paused`
+// +kubebuilder:printcolumn:name="Envs",type=string,JSONPath=`.status.environmentSummary`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Pipeline defines a promotion pipeline for one application.

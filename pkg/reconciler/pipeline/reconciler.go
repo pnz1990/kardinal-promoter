@@ -283,6 +283,22 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	steps := lifecycle.AddRetiredSteps(stepList.Items, bundleList.Items,
 		map[string]string{lifecycle.LabelPipeline: p.Name})
 	desiredPhase := DerivePhase(p.Name, bundleList.Items, steps)
+	// The environment projection (display only, environments.go). Gate
+	// instances matter only while a Bundle is in flight.
+	var gates []kardinalv1alpha1.PolicyGate
+	if anyInFlight(p.Name, bundleList.Items) {
+		var gateList kardinalv1alpha1.PolicyGateList
+		if err := r.List(ctx, &gateList, client.InNamespace(p.Namespace),
+			client.MatchingLabels{lifecycle.LabelPipeline: p.Name}); err != nil {
+			return ctrl.Result{}, fmt.Errorf("list gates of pipeline %s: %w", p.Name, err)
+		}
+		gates = gateList.Items
+	}
+	// validated carries the fleets just resolved, as the Graph builder will
+	// see them.
+	desiredEnvs := ProjectEnvironments(validated, bundleList.Items, steps, gates, p.Status.Environments, r.now())
+	desiredSummary := Summarize(&p, desired, desiredEnvs)
+	desiredEnvLine := EnvironmentLine(desiredEnvs)
 	desiredMetrics := ComputeDeploymentMetrics(&p, bundleList.Items, steps, time.Now().UTC())
 
 	// Idempotency: only patch if something changed.
@@ -302,7 +318,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		secretMatch = conditionMatches(p.Status.Conditions, *desiredSecret)
 	}
 	fleetsMatch := fleetsEqual(p.Status.Fleets, desiredFleets)
-	if condMatch && phaseMatch && metricsMatch && pausedMatch && conflictMatch && secretMatch && fleetsMatch {
+	envsMatch := environmentsEqual(p.Status.Environments, desiredEnvs) &&
+		p.Status.Summary == desiredSummary && p.Status.EnvironmentSummary == desiredEnvLine
+	if condMatch && phaseMatch && metricsMatch && pausedMatch && conflictMatch && secretMatch && fleetsMatch && envsMatch {
 		log.Debug().
 			Str("reason", desired.Reason).
 			Str("phase", desiredPhase).
@@ -335,6 +353,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	p.Status.DeploymentMetrics = desiredMetrics
 	p.Status.Fleets = desiredFleets
+	p.Status.Environments = desiredEnvs
+	p.Status.Summary = desiredSummary
+	p.Status.EnvironmentSummary = desiredEnvLine
 
 	if err := r.Status().Patch(ctx, &p, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch pipeline status: %w", err)
@@ -387,6 +408,39 @@ func pipelineForFreezeGate(_ context.Context, obj client.Object) []ctrl.Request 
 		return nil
 	}
 	return []ctrl.Request{{NamespacedName: client.ObjectKey{Namespace: obj.GetNamespace(), Name: name}}}
+}
+
+// pipelineForGateInstance maps a gate instance to the Pipeline its
+// kardinal.io/pipeline label names; a template has no kardinal.io/bundle
+// label and maps to none.
+func pipelineForGateInstance(_ context.Context, obj client.Object) []ctrl.Request {
+	l := obj.GetLabels()
+	if l[lifecycle.LabelPipeline] == "" || l["kardinal.io/bundle"] == "" {
+		return nil
+	}
+	return []ctrl.Request{{NamespacedName: client.ObjectKey{Namespace: obj.GetNamespace(), Name: l[lifecycle.LabelPipeline]}}}
+}
+
+// gateReadyChanged passes gate creates and deletes, and updates that change
+// status.ready: a gate re-evaluates often, and only its readiness changes
+// what the Pipeline shows.
+var gateReadyChanged = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		oldG, okOld := e.ObjectOld.(*kardinalv1alpha1.PolicyGate)
+		newG, okNew := e.ObjectNew.(*kardinalv1alpha1.PolicyGate)
+		return okOld && okNew && oldG.Status.Ready != newG.Status.Ready
+	},
+}
+
+// anyInFlight reports whether a Bundle of pipeline is new, Available or
+// Promoting, so gates may hold it.
+func anyInFlight(pipeline string, bundles []kardinalv1alpha1.Bundle) bool {
+	for i := range bundles {
+		if bundles[i].Spec.Pipeline == pipeline && !lifecycle.Halted(&bundles[i]) && inFlightBundlePhases[bundles[i].Status.Phase] {
+			return true
+		}
+	}
+	return false
 }
 
 // pipelineForBundle maps a Bundle to the Pipeline named by spec.pipeline.
@@ -704,6 +758,10 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Deleting the freeze gate by hand while the pipeline is paused, or
 		// removing a user gate that has its name, re-enqueues the Pipeline.
 		Watches(&kardinalv1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(pipelineForFreezeGate)).
+		// A gate instance of one of its Bundles that turns ready or not
+		// changes status.environments[].blockedBy.
+		Watches(&kardinalv1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(pipelineForGateInstance),
+			builder.WithPredicates(gateReadyChanged)).
 		// A Bundle phase change re-derives status.phase: a Bundle held by a
 		// gate has no PromotionStep to trigger it (E2E-R05).
 		Watches(&kardinalv1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(pipelineForBundle),

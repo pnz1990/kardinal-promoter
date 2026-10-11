@@ -7,7 +7,7 @@ replicaCount: 1
 # -- Pod termination grace period in seconds.
 # Keep it above shutdownDelaySeconds plus the controller's 30s shutdown timeout: on SIGTERM the
 # controller gives in-flight HTTP requests up to 20s, then cancels in-flight reconciles, and exits
-# within 30s. (#574)
+# within 30s.
 terminationGracePeriodSeconds: 60
 
 # -- Seconds a controller Pod being deleted keeps serving before it gets SIGTERM (a preStop
@@ -70,7 +70,7 @@ logLevel: info
 # -- Enable leader election for controller manager
 leaderElect: true
 
-# API Priority and Fairness for the leader election Lease (#1592): a
+# API Priority and Fairness for the leader election Lease: a
 # FlowSchema sends the controller ServiceAccount's Lease requests in its
 # namespace to the built-in leader-election priority level, so a busy
 # controller (or a cluster that throttles it) cannot starve its own lease
@@ -195,7 +195,7 @@ service:
 
 # -- Controller resources. The controller caches every Pipeline, Bundle,
 # PromotionStep, PRStatus and PolicyGate it watches, so its memory grows with
-# Pipelines times the Bundle history. Measured peaks (scale suite, #1553):
+# Pipelines times the Bundle history. Measured peaks (scale suite):
 # 166 MiB for 200 Pipelines with a Bundle each, 409 MiB for 2 Bundles a second
 # over 40 Pipelines with leader kills; 55-70 MiB with no Pipelines. The
 # defaults give the larger load 2.5x headroom; see "Sizing the controller" in
@@ -372,9 +372,8 @@ rbac:
   # -- patch on argoproj.io Applications, for the argocd update strategy
   # (update.strategy: argocd).
   argocdApplicationsWrite: false
-  # -- Deprecated, no effect, removed in v0.11. The integration-test step was
-  # removed; the Job access the chart grants is for hooks (hooks.serviceAccounts),
-  # whatever this says. Kept so existing --set rbac.integrationTestJobs=...
+  # -- Deprecated, no effect, removed in v0.11. The chart grants Job access
+  # for hooks (hooks.serviceAccounts) whatever this says. Kept so existing --set rbac.integrationTestJobs=...
   # keeps passing the values schema.
   integrationTestJobs: false
   userRoles:

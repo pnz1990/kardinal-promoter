@@ -25,7 +25,7 @@
 //   006 — pause-resume:    Pause/Resume confirm, send the pipeline, and flip the button
 //   007 — empty-state:     No pipelines → onboarding card with the kubectl command
 //   008 — loading-state:   Spinner clears after first successful fetch (#522 guard)
-//   009 — accessibility:   WCAG 2.1 AA axe-core scan (#748)
+//   009 — accessibility:   WCAG 2.1 AA axe-core scan, light and dark theme (#748)
 //   010 — responsive:      No horizontal overflow at 1280×800 (#799)
 //   011 — rollback-button: Rollback asks first, then calls the API
 //   012 — fleet-board:     Stations show what each environment runs; a station opens its pipeline

@@ -11,10 +11,14 @@ import AxeBuilder from '@axe-core/playwright'
 //       DAG SVG role="link" removal from PR badge text element (#762).
 const DISABLED_RULES: string[] = []
 
-test.describe('Journey 009 — WCAG 2.1 AA accessibility', () => {
+for (const theme of ['light', 'dark'] as const) {
+test.describe(`Journey 009 — WCAG 2.1 AA accessibility (${theme} theme)`, () => {
+  // The OS setting picks the theme (no saved choice), as for a first visit.
+  test.use({ colorScheme: theme })
   test('default dashboard state passes structural WCAG 2.1 AA checks', async ({ page }) => {
     await page.goto('/')
     await page.waitForSelector('text=kardinal-test-app', { timeout: 8000 })
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
 
     const results = await new AxeBuilder({ page })
       .withTags(['wcag2a', 'wcag2aa'])
@@ -37,6 +41,7 @@ test.describe('Journey 009 — WCAG 2.1 AA accessibility', () => {
     await page.waitForSelector('text=kardinal-test-app', { timeout: 8000 })
     await page.getByText('kardinal-test-app').first().click()
     await page.waitForTimeout(500)
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
 
     const results = await new AxeBuilder({ page })
       .withTags(['wcag2a', 'wcag2aa'])
@@ -54,3 +59,4 @@ test.describe('Journey 009 — WCAG 2.1 AA accessibility', () => {
     expect(results.violations).toHaveLength(0)
   })
 })
+}
