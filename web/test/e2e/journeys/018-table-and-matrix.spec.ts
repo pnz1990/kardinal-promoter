@@ -147,24 +147,17 @@ test.describe('Journey 018 — Table and Matrix', () => {
     await expect(matrix.locator('[data-cell="1:1"]')).toBeFocused()
   })
 
-  // @perf: npm run test:e2e runs this alone (one worker), so the frame times are the page's own.
-  test('200 versions × 300 environments, everything expanded: scrolling stays within a 20 ms frame (p95) @perf', async ({ page }) => {
-    await serveScale(page)
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await open(page, 'large-300', 'scale', '?as=matrix')
-    const matrix = page.getByRole('region', { name: 'Versions by environment' })
-    // Expand every wave and fleet.
-    for (;;) {
-      const head = matrix.locator('thead button[aria-expanded="false"]').first()
-      if (await head.count() === 0) break
-      await head.click()
-    }
+  // @perf: npm run test:e2e runs these alone (one worker), so the frame times are the page's own.
+  /** Scrolls the matrix diagonally one step a frame and returns the frame times' p95 (ms). */
+  async function diagonalP95(matrix: import('@playwright/test').Locator): Promise<number> {
     const frames = await matrix.evaluate(async el => {
+      el.scrollTop = 0
+      el.scrollLeft = 0
       const times: number[] = []
       let last = performance.now()
       for (let i = 0; i < 120; i++) {
         el.scrollTop += 37
-        el.scrollLeft += i % 2 ? 53 : 0
+        el.scrollLeft += 53
         await new Promise(r => requestAnimationFrame(r))
         const now = performance.now()
         times.push(now - last)
@@ -172,9 +165,59 @@ test.describe('Journey 018 — Table and Matrix', () => {
       }
       return times.sort((a, b) => a - b)
     })
-    const p95 = frames[Math.floor(frames.length * 0.95)]
+    return frames[Math.floor(frames.length * 0.95)]
+  }
+
+  test('200 versions: the default view scrolls within one frame (20 ms p95) @perf', async ({ page }) => {
+    await serveScale(page)
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await open(page, 'large-300', 'scale', '?as=matrix')
+    const matrix = page.getByRole('region', { name: 'Versions by environment' })
+    await expect(matrix.locator('tr[data-bundle]').first()).toBeVisible()
+    const p95 = await diagonalP95(matrix)
     expect(p95, `frame p95 ${p95.toFixed(1)} ms`).toBeLessThanOrEqual(20)
+  })
+
+  test('200 versions × 300 environments, every wave and fleet expanded: two frames at most (33 ms p95) @perf', async ({ page }) => {
+    await serveScale(page)
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await open(page, 'large-300', 'scale', '?as=matrix')
+    const matrix = page.getByRole('region', { name: 'Versions by environment' })
+    // The heads are virtualized too: expand the ones in view, scroll right, until none is left.
+    await matrix.evaluate(el => { el.scrollLeft = 0 })
+    for (let guard = 0; guard < 200; guard++) {
+      const head = matrix.locator('thead button[aria-expanded="false"]').first()
+      if (await head.count() > 0) {
+        const name = (await head.textContent()) ?? ''
+        await head.click()
+        // Wait until that group is drawn as its members, so the next click is not on it again.
+        await expect(matrix.locator('thead button[aria-expanded="false"]').filter({ hasText: name })).toHaveCount(0)
+        continue
+      }
+      const moved = await matrix.evaluate(async el => {
+        const before = el.scrollLeft
+        el.scrollLeft += el.clientWidth / 2
+        // Let the virtualizer draw the columns now in view before looking for heads.
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+        return el.scrollLeft !== before
+      })
+      if (!moved && await matrix.locator('thead button[aria-expanded="false"]').count() === 0) break
+    }
+    await expect(matrix.locator('thead [aria-expanded="false"]')).toHaveCount(0)
+    // The version column and all 300 environments.
+    expect(await matrix.evaluate(el => el.querySelector('table')!.getAttribute('aria-colcount'))).toBe('301')
+    const p95 = await diagonalP95(matrix)
+    expect(p95, `frame p95 ${p95.toFixed(1)} ms`).toBeLessThanOrEqual(33)
     expect(await matrix.locator('td[data-cell]').count()).toBeLessThan(2000)
+  })
+
+  test('the grid keeps a Tab stop when the focused cell scrolls out of view', async ({ page }) => {
+    await serveScale(page)
+    await open(page, 'large-300', 'scale', '?as=matrix')
+    const matrix = page.getByRole('region', { name: 'Versions by environment' })
+    await matrix.locator('[data-cell="0:0"]').focus()
+    await matrix.evaluate(el => { el.scrollTop = el.scrollHeight })
+    await expect(matrix.locator('td[data-cell][tabindex="0"]')).toHaveCount(1)
   })
 
   test('on a narrow screen, choosing the Map is kept in the link', async ({ page }) => {

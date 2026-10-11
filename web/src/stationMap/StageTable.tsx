@@ -7,14 +7,14 @@
 // equivalent (for screen readers and narrow screens), sortable by environment
 // (spec order), state (most urgent first) and age.
 
-import { useMemo, useState } from 'react'
+import { memo, useCallback, useMemo, useState } from 'react'
 import type { StationMapModel, Station } from './model'
 import { TONE_ORDER } from './model'
 import { StatusChip } from '../ui'
 import { ageOf } from '../fleetModel'
 import { prNumberFromURL } from '../prLink'
 import type { Bundle, Pipeline, PolicyGate, PromotionStep } from '../types'
-import { stageView, type StageActionKind } from '../stage/stageModel'
+import { stageView, type StageActionKind, type StageView } from '../stage/stageModel'
 import { StageActions } from '../stage/StageActions'
 import '../styles/StageTable.css'
 
@@ -44,14 +44,11 @@ export default function StageTable({ model, focused, onOpenStage, stage }: Stage
   const [sort, setSort] = useState<{ key: SortKey; dir: Dir }>({ key: 'env', dir: 'ascending' })
   // The one open action dialog, on one row.
   const [active, setActive] = useState<{ env: string; kind: StageActionKind; gate?: PolicyGate }>()
-  const actionsFor = stage && ((env: string) => {
-    const view = stageView({ env, pipeline: stage.pipeline, bundles: stage.bundles, steps: stage.steps, gates: stage.gates })
-    return (
-      <StageActions view={view} pipeline={stage.pipeline.name} namespace={stage.pipeline.namespace} envOnly
-        active={active?.env === env ? active.kind : undefined} activeGate={active?.env === env ? active.gate : undefined}
-        onOpen={(kind, gate) => setActive(kind ? { env, kind, gate } : undefined)} onChanged={stage.onChanged} />
-    )
-  })
+  // Each environment's drawer view, once per change of the data (not per sort or render).
+  const views = useMemo(() => stage && new Map(model.order.map(env =>
+    [env, stageView({ env, pipeline: stage.pipeline, bundles: stage.bundles, steps: stage.steps, gates: stage.gates })])), [stage, model])
+  const onOpen = useCallback((env: string, kind: StageActionKind | undefined, gate?: PolicyGate) =>
+    setActive(kind ? { env, kind, gate } : undefined), [])
   const rows = useMemo(() => sortStations(model, sort.key, sort.dir), [model, sort])
   const by = (key: SortKey) => setSort(s => ({ key, dir: s.key === key && s.dir === 'ascending' ? 'descending' : 'ascending' }))
 
@@ -73,16 +70,22 @@ export default function StageTable({ model, focused, onOpenStage, stage }: Stage
           </tr>
         </thead>
         <tbody>
-          {rows.map(st => <Row key={st.env} st={st} model={model} focused={focused === st.env} onOpenStage={onOpenStage} actionsFor={actionsFor} />)}
+          {rows.map(st => (
+            <Row key={st.env} st={st} model={model} focused={focused === st.env} onOpenStage={onOpenStage}
+              view={views?.get(st.env)} stage={stage} active={active?.env === st.env ? active : undefined} onOpen={onOpen} />
+          ))}
         </tbody>
       </table>
     </div>
   )
 }
 
-function Row({ st, model, focused, onOpenStage, actionsFor }: {
-  st: Station; model: StationMapModel; focused: boolean
-  onOpenStage: (env: string) => void; actionsFor?: (env: string) => React.ReactNode
+/** One environment's row; memoized, so a sort or an open dialog re-renders only what changed. */
+const Row = memo(function Row({ st, model, focused, onOpenStage, view, stage, active, onOpen }: {
+  st: Station; model: StationMapModel; focused: boolean; onOpenStage: (env: string) => void
+  view?: StageView; stage?: StageTableProps['stage']
+  active?: { kind: StageActionKind; gate?: PolicyGate }
+  onOpen: (env: string, kind: StageActionKind | undefined, gate?: PolicyGate) => void
 }) {
   const age = ageOf(st.running?.verifiedAt)
   const pr = st.incoming?.prURL ? prNumberFromURL(st.incoming.prURL) : null
@@ -113,10 +116,17 @@ function Row({ st, model, focused, onOpenStage, actionsFor }: {
           </ul>
         )}
       </td>
-      <td className="stage-table__actions">{actionsFor?.(st.env)}</td>
+      <td>
+        {view && stage && (
+          <div className="stage-table__actions">
+            <StageActions view={view} pipeline={stage.pipeline.name} namespace={stage.pipeline.namespace} envOnly
+              active={active?.kind} activeGate={active?.gate} onOpen={(kind, gate) => onOpen(st.env, kind, gate)} onChanged={stage.onChanged} />
+          </div>
+        )}
+      </td>
     </tr>
   )
-}
+})
 
 /** The stations of the map in the order a sort asks for; spec order breaks ties. */
 export function sortStations(model: StationMapModel, key: SortKey, dir: Dir): Station[] {

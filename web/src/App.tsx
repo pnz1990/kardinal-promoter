@@ -175,6 +175,9 @@ export function App() {
     return () => clearTimeout(t)
   }, [])
 
+  // What the Table's rows read for the stage drawer's actions.
+  const stageData = useMemo(() => ({ steps: activeSteps, gates }), [activeSteps, gates])
+
   // U3: the environment whose stage drawer is open (the …/env/<env> route).
   const stageEnv = urlState.env
 
@@ -955,7 +958,7 @@ export function App() {
                         onSelectVersion={handleTimelineBundleSelect}
                         onCompareVersion={b => { setCompareTarget(b); setUrlState({ compare: b }) }}
                         previewBundle={bundles.find(b => b.name === previewBundle && b.name !== activeBundle?.name)}
-                        stageData={{ steps: activeSteps, gates }}
+                        stageData={stageData}
                       />
                     </ErrorBoundary>
                   </div>

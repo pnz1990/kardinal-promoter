@@ -95,6 +95,10 @@ export default function PipelineMap({ pipeline, bundle, graph, compareBundle, lo
   const compare = useBundleGraph(compareBundle)
   const preview = useBundleGraph(previewBundle)
 
+  // What the Table's rows read for the drawer's actions: one object while the data stays the same.
+  const tableStage = useMemo(() => stageData && { pipeline, bundles: bundles ?? [], steps: stageData.steps, gates: stageData.gates, onChanged: onActionDone },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pipeline, bundles, stageData?.steps, stageData?.gates])
   const followed = bundle ? { bundle, graph } : undefined
   const model = useMemo(() => buildModel(pipeline, followed, { expanded, gates, bundles }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -148,7 +152,7 @@ export default function PipelineMap({ pipeline, bundle, graph, compareBundle, lo
     {as === 'table' ? (
       <Suspense fallback={<Skeleton label="Loading the table…" />}>
         <StageTable model={model} focused={focused} onOpenStage={env => onOpenStage(env)}
-          stage={stageData && { pipeline, bundles: bundles ?? [], steps: stageData.steps, gates: stageData.gates, onChanged: onActionDone }} />
+          stage={tableStage} />
       </Suspense>
     ) : as === 'matrix' ? (
       <Suspense fallback={<Skeleton label="Loading the matrix…" />}>

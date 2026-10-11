@@ -124,6 +124,10 @@ export default function VersionMatrix({ model, pipeline, bundles, followed, comp
     if (moves[e.key]) { e.preventDefault(); focusCell(...moves[e.key]); return }
     if (e.key === 'Enter') { e.preventDefault(); (e.shiftKey ? onCompare : onSelect)(bundles[r].name) }
   }
+  // The grid keeps one Tab stop: the cursor's cell, or the first one drawn when the cursor's
+  // row or column has scrolled out of view.
+  const shown = rows.some(x => x.index === cursor.r) && cols.some(x => x.index === cursor.c)
+  const stop = shown || !rows.length || !cols.length ? cursor : { r: rows[0].index, c: cols[0].index }
   const at = bundles[cursor.r]
   const atCol = columns[cursor.c]
   const status = at && atCol ? `${versionName(at.name, pipeline)} in ${atCol.label}: ${cellText(atCol, states[cursor.r])}` : ''
@@ -177,7 +181,7 @@ export default function VersionMatrix({ model, pipeline, bundles, followed, comp
                 {colsBefore > 0 && <td aria-hidden="true" className="version-matrix__gap" />}
                 {cols.map(ci => (
                   <Cell key={columns[ci.index].id} column={columns[ci.index]} at={st} r={item.index} c={ci.index}
-                    focusable={cursor.r === item.index && cursor.c === ci.index} />
+                    focusable={stop.r === item.index && stop.c === ci.index} />
                 ))}
                 {colsAfter > 0 && <td aria-hidden="true" className="version-matrix__gap" />}
               </tr>
