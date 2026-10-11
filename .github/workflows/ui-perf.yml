@@ -1,0 +1,43 @@
+name: UI perf
+
+# The strict frame-time budgets of the @perf Playwright journeys (web/test/e2e/journeys/
+# 018-table-and-matrix.spec.ts): the Matrix scrolls within one frame (20 ms p95) by default and
+# within two (33 ms p95) with every wave and fleet expanded. A shared CI runner cannot hold a
+# frame budget, so pull requests (ci.yml, npm run test:e2e) assert only what the page controls:
+# the cells drawn in any frame and no long task over 100 ms. This workflow adds the p95
+# assertions (KARDINAL_PERF_STRICT=1). It runs nightly on main and on a manual dispatch
+# (gh workflow run ui-perf.yml --ref <branch>). Branch protection does not require it.
+on:
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  perf:
+    name: UI perf (strict)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+        working-directory: web
+      - name: Build
+        run: npm run build
+        working-directory: web
+      - name: Strict @perf journeys
+        run: |
+          npx playwright install chromium --with-deps
+          npx playwright test --grep @perf --workers=1
+        working-directory: web
+        env:
+          CI: "true"
+          KARDINAL_PERF_STRICT: "1"
