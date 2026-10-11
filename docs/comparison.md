@@ -4,7 +4,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 
 !!! note "Objectivity"
     Surveyed from each project's source, docs and release notes: kardinal-promoter
-    v0.10.1, Kargo v1.12.1 and GitOps Promoter v0.42.1. All three tools are actively developed;
+    v0.10.0, Kargo v1.12.1 and GitOps Promoter v0.42.1. All three tools are actively developed;
     check each project's releases for the latest capabilities. "Kargo Enterprise" means the
     commercial edition (Kargo on the Akuity Platform); everything else in the Kargo column is open source.
 
@@ -53,7 +53,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Artifact discovery** | Bundle created by CI (HTTP API, GitHub Action) or the CLI; the Subscription CRD watches OCI images, Git (HTTPS or SSH, `pathGlob`) and Helm charts (HTTP index or OCI), public or private (pull Secrets; ECR, GCR and ACR through refreshed token Secrets), with semver, regex and allow/ignore filters, and webhook receivers for Docker Hub, GHCR, Harbor, Quay, Artifactory and generic senders | Warehouse: images, Git and Helm charts, with webhook receivers for registries and SCMs | Git commits from a hydrator (Argo CD Source Hydrator or any other) |
 | **Multi-artifact bundle** | Yes (image + config in one Bundle) | Yes (Freight, with creation criteria since v1.8) | No |
 | **Architecture** | Graph-first (one kro Graph per Bundle) | Controllers over Stage and Freight CRDs; v2.0 will replace the storage layer | Controller, plus an optional API server for the dashboard |
-| **Maturity** | v0.10.1, active development; runs on kro's alpha Graph API (v0.10.0-rc.0) | v1.12.1, production-grade; v2.0.0 is next | v0.42.1, `v1alpha1` API, "experimental" per its README |
+| **Maturity** | v0.10.0, active development; runs on kro's alpha Graph API (v0.10.0-rc.0) | v1.12.1, production-grade; v2.0.0 is next | v0.42.1, `v1alpha1` API, "experimental" per its README |
 | **License** | Apache 2.0 | Apache 2.0 | Apache 2.0 |
 
 ---

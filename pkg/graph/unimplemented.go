@@ -11,9 +11,10 @@ import (
 )
 
 // ShardNotSupported is the reason a Pipeline environment may not set shard:
-// the field is deprecated.
-const ShardNotSupported = "shard is not supported: it is deprecated; remove shard from the " +
-	"environment and the controller reconciles it (see docs/health-adapters.md#remote-clusters)"
+// one controller reconciles every environment.
+const ShardNotSupported = "shard is not supported; remove shard from the environment and the " +
+	"controller reconciles it (to split work between controllers use --namespace-shard, see docs/sharding.md; " +
+	"for other clusters see docs/health-adapters.md#remote-clusters)"
 
 // HealthClusterNotSupported is the reason a Pipeline environment may not set
 // the deprecated health.cluster string: health.kubeconfigSecretRef replaced it.
@@ -90,8 +91,8 @@ func customStepsUnimplemented(e *kardinalv1alpha1.EnvironmentSpec) string {
 	}
 	if templateRef != nil {
 		return fmt.Sprintf("environment %q references PromotionTemplate %q; "+
-			"spec.environments[].promotionTemplate is not supported (it is deprecated, and the "+
-			"controller always runs the default step sequence), so remove it; "+
+			"spec.environments[].promotionTemplate is not supported (the controller always runs "+
+			"the default step sequence), so remove it; "+
 			"see docs/pipeline-reference.md#promotion-steps",
 			e.Name, templateRef.Name)
 	}
