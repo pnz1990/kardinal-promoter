@@ -1,0 +1,110 @@
+/* Copyright 2026 The kardinal-promoter Authors.
+   Licensed under the Apache License, Version 2.0 */
+
+/* The Map tab's Table and Matrix views: quiet ink rules, mono versions, state by chip. */
+.stage-table, .version-matrix {
+  flex: 1;
+  min-block-size: 0;
+  overflow: auto;
+  background: var(--k-surface-base);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-3);
+}
+.stage-table:focus-visible, .version-matrix:focus-visible { outline: var(--k-focus-ring); outline-offset: var(--k-focus-offset); }
+.stage-table table { inline-size: 100%; border-collapse: collapse; font-size: var(--k-text-sm); }
+.stage-table thead th {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: var(--k-z-base);
+  background: var(--k-surface-raised);
+  text-align: start;
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-2xs);
+  font-stretch: var(--k-stretch-label);
+  font-weight: var(--k-weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--k-ink-3);
+  padding: var(--k-space-2) var(--k-space-3);
+  border-block-end: var(--k-border-hairline) solid var(--k-line);
+}
+.stage-table th[aria-sort="ascending"] .stage-table__sort::after { content: " ↑"; }
+.stage-table th[aria-sort="descending"] .stage-table__sort::after { content: " ↓"; }
+.stage-table__sort, .stage-table__env {
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.stage-table__env { font-family: var(--k-font-display); font-size: var(--k-text-sm); font-weight: var(--k-weight-semibold); color: var(--k-ink); text-transform: none; letter-spacing: 0; }
+.stage-table__sort:focus-visible, .stage-table__env:focus-visible { outline: var(--k-focus-ring); outline-offset: var(--k-focus-offset); }
+.stage-table tbody th, .stage-table td {
+  text-align: start;
+  vertical-align: top;
+  padding: var(--k-space-2) var(--k-space-3);
+  border-block-end: var(--k-border-hairline) solid var(--k-line);
+}
+.stage-table tbody tr[aria-current="true"] { background: var(--k-surface-sunken); }
+.stage-table tbody tr[aria-current="true"] th { box-shadow: inset var(--k-border-strong) 0 0 var(--k-thread); }
+.stage-table__group { display: block; font-size: var(--k-text-2xs); color: var(--k-ink-3); font-family: var(--k-font-display); font-stretch: var(--k-stretch-label); text-transform: uppercase; letter-spacing: 0.06em; }
+.stage-table__mono { font-family: var(--k-font-mono); font-size: var(--k-text-xs); white-space: nowrap; }
+.stage-table__quiet { color: var(--k-ink-3); }
+.stage-table__gates { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--k-space-1); }
+.stage-table__actions { display: flex; flex-wrap: wrap; gap: var(--k-space-1); }
+
+/* Matrix: Bundles × environments. A sticky header row and version column; one glyph per cell. */
+.version-matrix { position: relative; }
+.version-matrix__table { border-collapse: collapse; table-layout: fixed; }
+.version-matrix__head, .version-matrix__version, .version-matrix__cell {
+  block-size: var(--k-space-8);
+  vertical-align: middle;
+  padding-inline: var(--k-space-2);
+  border-block-end: var(--k-border-hairline) solid var(--k-line);
+  white-space: nowrap;
+}
+.version-matrix__head {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: var(--k-z-base);
+  background: var(--k-surface-raised);
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-2xs);
+  font-stretch: var(--k-stretch-label);
+  font-weight: var(--k-weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--k-ink-3);
+}
+.version-matrix__head button { font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+.version-matrix__head button:focus-visible { outline: var(--k-focus-ring); outline-offset: var(--k-focus-offset); }
+.version-matrix__version {
+  position: sticky;
+  inset-inline-start: 0;
+  background: var(--k-surface-base);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-xs);
+  text-align: start;
+}
+.version-matrix__version .k-chip { margin-inline-start: var(--k-space-2); }
+.version-matrix__version button { font: inherit; color: var(--k-ink); background: none; border: 0; padding: 0; cursor: pointer; text-align: start; }
+.version-matrix__version button:focus-visible { outline: var(--k-focus-ring); outline-offset: var(--k-focus-offset); }
+.version-matrix__row[data-followed] .version-matrix__version { box-shadow: inset var(--k-border-strong) 0 0 var(--k-thread); font-weight: var(--k-weight-semibold); }
+.version-matrix__row[data-compared] .version-matrix__version { box-shadow: inset var(--k-border-strong) 0 0 var(--k-ink); }
+.version-matrix__corner { inset-inline-start: 0; z-index: var(--k-z-map-overlay); }
+.version-matrix__cell { text-align: center; font-family: var(--k-font-mono); font-size: var(--k-text-xs); color: var(--k-ink-3); }
+.version-matrix__cell[data-tone="verified"] { color: var(--k-ink-node); }
+.version-matrix__cell[data-tone="promoting"] { color: var(--k-thread-text); }
+.version-matrix__cell[data-tone="waiting"] { color: var(--k-status-waiting-fg); }
+.version-matrix__cell[data-tone="blocked"] { color: var(--k-status-blocked-fg); }
+.version-matrix__cell[data-tone="failed"] { color: var(--k-status-failed-fg); font-weight: var(--k-weight-bold); }
+.version-matrix__count { margin-inline-start: var(--k-space-1); color: var(--k-ink-3); }
+
+.version-matrix-wrap { flex: 1; min-block-size: 0; display: flex; flex-direction: column; }
+.version-matrix__cell:focus-visible { outline: var(--k-focus-ring); outline-offset: calc(var(--k-focus-offset) * -1); }
+.version-matrix__gap { padding: 0; border: 0; }
+/* The focused cell in words, for a sighted keyboard user (screen readers read the cell's name). */
+.version-matrix__status { margin: 0; padding: var(--k-space-1) var(--k-space-2); min-block-size: var(--k-space-6); font-family: var(--k-font-mono); font-size: var(--k-text-xs); color: var(--k-ink-2); }

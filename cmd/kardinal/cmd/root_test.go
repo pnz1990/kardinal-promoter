@@ -101,7 +101,7 @@ func TestOutputFlag_Validated(t *testing.T) {
 		args    []string
 		wantErr string
 	}{
-		{"unknown format", []string{"version", "-o", "xml"}, `invalid -o "xml": must be table, json or yaml`},
+		{"unknown format", []string{"version", "-o", "xml"}, `invalid -o "xml": must be table, json, yaml or wide`},
 		{"json on a table command", []string{"completion", "zsh", "-o", "json"},
 			`-o json is not supported by "kardinal completion"`},
 		{"yaml on logs", []string{"logs", "demo", "-o", "yaml"},
@@ -146,7 +146,7 @@ func TestRefreshAndDashboard(t *testing.T) {
 	require.Error(t, refreshFn(&buf, c, "default", "missing"))
 
 	buf.Reset()
-	require.NoError(t, dashboardFn(context.Background(), &buf, defaultUIAddress, "kardinal-system", true))
+	require.NoError(t, dashboardFn(context.Background(), &buf, defaultUIAddress, "kardinal-system", true, ""))
 	assert.Equal(t, "kardinal UI: http://localhost:8082/ui/\n", buf.String())
 
 	refreshHelp, dashboardHelp := newRefreshCmd().Long, newDashboardCmd().Long

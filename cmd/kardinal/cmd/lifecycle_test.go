@@ -282,7 +282,7 @@ func TestRollbackCmd_Hold(t *testing.T) {
 	out := buf.String()
 	assert.Contains(t, out, "from app-v2 to app-v1")
 	assert.Contains(t, out, "Environment prod held on "+created[0].Name)
-	assert.Contains(t, out, "kardinal release-hold app --env prod")
+	assert.Contains(t, out, "kardinal unhold app prod")
 	assert.Contains(t, out, "EXEMPT")
 	assert.Contains(t, out, "The hold expires at ")
 
@@ -290,7 +290,7 @@ func TestRollbackCmd_Hold(t *testing.T) {
 
 	buf.Reset()
 	require.NoError(t, releaseHoldFn(&buf, c, "default", "app", "prod"))
-	assert.Contains(t, buf.String(), "Released the hold of app on prod (rollback "+created[0].Name)
+	assert.Contains(t, buf.String(), "Released the hold of app on prod (held on 1 ("+created[0].Name+") by alice")
 	assert.Empty(t, getP(c).Spec.Holds)
 	require.ErrorIs(t, releaseHoldFn(&buf, c, "default", "app", "prod"), lifecycle.ErrNotFound)
 }
@@ -338,7 +338,7 @@ func TestMutations_JSON(t *testing.T) {
 			lcBundle("app-v1", "app", "1", 0), lcBundle("app-v2", "app", "2", 10),
 			lcStep("app-v1", "uat", "Verified", 5), lcStep("app-v1", "prod", "Verified", 5), lcStep("app-v2", "prod", "Verified", 15)}
 	}
-	const url = "https://kardinal.example/ui/#pipeline=app&ns=default"
+	const url = "https://kardinal.example/ui/#/p/default/app"
 
 	var buf bytes.Buffer
 	c := lcClient(t, lcPipeline(), lcBundle("app-v1", "app", "1", 0), lcBundle("app-v2", "app", "2", 10),

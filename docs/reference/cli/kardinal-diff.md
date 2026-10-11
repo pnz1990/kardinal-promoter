@@ -1,6 +1,6 @@
 ## kardinal diff
 
-Show artifact differences between two Bundles
+Show what changes between two versions (Bundles)
 
 ### Synopsis
 
@@ -14,13 +14,14 @@ only. CHANGED is "*" on rows that differ. Commit and author are listed under
 PROVENANCE.
 
 ```
-kardinal diff <bundle-a> <bundle-b> [flags]
+kardinal diff <bundle-a|version> <bundle-b|version> [flags]
 ```
 
 ### Examples
 
 ```
   kardinal diff my-app-sha-abc1234 my-app-sha-def5678
+  kardinal diff 1.4.0 1.5.0
 ```
 
 ### Options
@@ -35,7 +36,7 @@ kardinal diff <bundle-a> <bundle-b> [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO

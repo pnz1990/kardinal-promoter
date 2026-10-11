@@ -24,7 +24,7 @@ kardinal logs <pipeline> [<env>] [flags]
 ### Options
 
 ```
-      --bundle string   Show logs for one bundle (default: every bundle that is not Superseded)
+      --bundle string   Show logs for one Bundle, by name or version (default: every Bundle that is not Superseded)
   -e, --env string      Only this environment (or give it after the pipeline)
   -f, --follow          Stream step progress, polling every 2s until the promotion ends
   -h, --help            help for logs
@@ -36,7 +36,7 @@ kardinal logs <pipeline> [<env>] [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO

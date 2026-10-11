@@ -264,7 +264,7 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	tables := c.Must(a.ns, "get", "pipelines")
 	row = framework.TableRow(tables, "PIPELINE", pipelineName)
 	require.NotNil(t, row, tables)
-	assert.Equal(t, b1, framework.BundleOf(row["VERSION"]))
+	assert.Equal(t, framework.VersionCell(fixtures.V2, b1), row["VERSION"])
 	assert.Equal(t, display.Step("Verified").Label, row["TEST"])
 	assert.Equal(t, display.Step("WaitingForMerge").Label, row["PROD"])
 	assert.Equal(t, "0", row["SUB"])
@@ -276,7 +276,7 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	row = framework.TableRow(all, "NAMESPACE", a.ns)
 	require.NotNil(t, row, "-A lists the test's namespace:\n%s", all)
 	assert.Equal(t, pipelineName, row["PIPELINE"])
-	assert.Equal(t, b1, framework.BundleOf(row["VERSION"]))
+	assert.Equal(t, framework.VersionCell(fixtures.V2, b1), row["VERSION"])
 	if slices.Contains(header, "PROGRESS") {
 		// Another test's Pipeline in the cluster has more than 8
 		// environments: one summary row per Pipeline (CLI-GET-PIPELINES-02).
@@ -305,6 +305,7 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	bt := c.Must(a.ns, "get", "bundles")
 	row = framework.BundleRow(bt, b1)
 	require.NotNil(t, row, bt)
+	assert.Equal(t, framework.VersionCell(fixtures.V2, b1), row["VERSION"])
 	assert.Equal(t, "image", row["TYPE"])
 	assert.Equal(t, "Promoting", row["PHASE"])
 	sameTable(t, bt, c.Must(a.ns, "get", "bundles", pipelineName), "the pipeline filter keeps the pipeline's Bundles")
@@ -351,7 +352,7 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 		assert.Equal(t, b1, en.Bundle, "explain -o json: %+v", en)
 	}
 	r = c.Fail(a.ns, "get", "bundles", "-o", "xml")
-	assert.Equal(t, "invalid -o \"xml\": must be table, json or yaml\n", r.Stderr)
+	assert.Equal(t, "invalid -o \"xml\": must be table, json, yaml or wide\n", r.Stderr)
 	sameTable(t, bt, c.Must(a.ns, "get", "bundles", "-o", "table"), "-o table is the default")
 
 	// A newer Bundle supersedes the first. create bundle -o json names it
@@ -398,14 +399,14 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	jw := c.Start(framework.CLIOptions{}, c.Args(a.ns, "get", "pipelines", "-w", "-o", "json")...)
 	pw.WaitStdout(time.Minute, "a pipelines frame with prod waiting", func(out string) bool {
 		r := framework.TableRow(lastFrame(out), "PIPELINE", pipelineName)
-		return r != nil && framework.BundleOf(r["VERSION"]) == b2 && r["PROD"] == display.Step("WaitingForMerge").Label
+		return r != nil && r["VERSION"] == framework.VersionCell(fixtures.V3, b2) && r["PROD"] == display.Step("WaitingForMerge").Label
 	})
 	sw.WaitStdout(time.Minute, "a steps frame", func(out string) bool { return lastFrame(out) != "" })
 	require.NoError(t, e.Git.MergePR(ctx, a.repo, pr2.Number))
 	e.WaitStepState(t, a.ns, pipelineName, b2, "prod", "Verified", promoteTimeout)
 	out = pw.WaitStdout(time.Minute, "a pipelines frame with prod Verified", func(out string) bool {
 		r := framework.TableRow(lastFrame(out), "PIPELINE", pipelineName)
-		return r != nil && framework.BundleOf(r["VERSION"]) == b2 && r["TEST"] == display.Step("Verified").Label && r["PROD"] == display.Step("Verified").Label
+		return r != nil && r["VERSION"] == framework.VersionCell(fixtures.V3, b2) && r["TEST"] == display.Step("Verified").Label && r["PROD"] == display.Step("Verified").Label
 	})
 	assert.GreaterOrEqual(t, len(frames(out)), 2, "the watch redraws")
 	sw.WaitStdout(time.Minute, "a steps frame with wait-for-merge Completed", func(out string) bool {
@@ -616,15 +617,16 @@ func TestCLI_Reports(t *testing.T) {
 	type histRow struct{ bundle, action, env, pr string }
 	var rows []histRow
 	for _, r := range hist {
-		rows = append(rows, histRow{framework.BundleOf(r["VERSION"]), r["ACTION"], r["ENV"], r["PR"]})
+		rows = append(rows, histRow{r["VERSION"], r["ACTION"], r["ENV"], r["PR"]})
 		assert.Regexp(t, `^\d+(s|m)$`, r["DURATION"], "a finished step's duration")
 		assert.Regexp(t, `^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$`, r["TIMESTAMP"])
 	}
+	vA, vB := framework.VersionCell(fixtures.V2, bA), framework.VersionCell(fixtures.V3, bB)
 	assert.Equal(t, []histRow{
-		{bB, "promote", "prod", fmt.Sprintf("#%d", prB.Number)},
-		{bB, "promote", "test", "--"},
-		{bA, "promote", "prod", fmt.Sprintf("#%d", prA.Number)},
-		{bA, "promote", "test", "--"},
+		{vB, "promote", "prod", fmt.Sprintf("#%d", prB.Number)},
+		{vB, "promote", "test", "--"},
+		{vA, "promote", "prod", fmt.Sprintf("#%d", prA.Number)},
+		{vA, "promote", "test", "--"},
 	}, rows)
 	assert.Equal(t, hist[:1], framework.ParseTable(c.Must(a.ns, "history", pipelineName, "--limit", "1")))
 	assert.Equal(t, []map[string]string{hist[0], hist[2]}, framework.ParseTable(c.Must(a.ns, "history", pipelineName, "--env", "prod")))
@@ -633,14 +635,14 @@ func TestCLI_Reports(t *testing.T) {
 
 	// diff: images by repository, then provenance; * marks a change.
 	assert.Equal(t, [][]string{
-		{"ARTIFACT", "BUNDLE-A (" + bA + ")", "BUNDLE-B (" + bB + ")", "CHANGED"},
+		{"ARTIFACT", "A: " + framework.VersionCell(fixtures.V2, bA), "B: " + framework.VersionCell(fixtures.V3, bB), "CHANGED"},
 		{fixtures.Image, fixtures.V2, fixtures.V3, "*"},
 		{"PROVENANCE"},
 		{"commit", "aaaa1111", "bbbb2222", "*"},
 		{"author", "alice", "bob", "*"},
 	}, cells(c.Must(a.ns, "diff", bA, bB)))
 	assert.Equal(t, [][]string{
-		{"ARTIFACT", "BUNDLE-A (" + bA + ")", "BUNDLE-B (" + bA + ")", "CHANGED"},
+		{"ARTIFACT", "A: " + framework.VersionCell(fixtures.V2, bA), "B: " + framework.VersionCell(fixtures.V2, bA), "CHANGED"},
 		{fixtures.Image, fixtures.V2, fixtures.V2},
 		{"PROVENANCE"},
 		{"commit", "aaaa1111", "aaaa1111"},
@@ -648,7 +650,7 @@ func TestCLI_Reports(t *testing.T) {
 	}, cells(c.Must(a.ns, "diff", bA, bA)), "a Bundle does not differ from itself")
 	r := c.Fail(a.ns, "diff", bA, "nope")
 	assert.Equal(t, 1, r.Code)
-	assert.True(t, strings.HasPrefix(r.Stderr, `get bundle "nope": `), r.Stderr)
+	assert.True(t, strings.HasPrefix(r.Stderr, `diff: no Bundle named "nope", and no version "nope" in `+a.ns+`; the newest are: `), r.Stderr)
 	assert.Empty(t, r.Stdout)
 	r = c.Fail(a.ns, "diff", bA)
 	assert.Contains(t, r.Stderr, "accepts 2 arg(s), received 1")
@@ -666,14 +668,14 @@ func TestCLI_Reports(t *testing.T) {
 	type aeRow struct{ pipeline, bundle, env, action, outcome string }
 	var aes []aeRow
 	for i, ev := range events {
-		aes = append(aes, aeRow{ev["PIPELINE"], framework.BundleOf(ev["VERSION"]), ev["ENV"], ev["ACTION"], ev["OUTCOME"]})
+		aes = append(aes, aeRow{ev["PIPELINE"], ev["VERSION"], ev["ENV"], ev["ACTION"], ev["OUTCOME"]})
 		assert.Regexp(t, `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z$`, ev["TIMESTAMP"])
 		if i > 0 {
 			assert.LessOrEqual(t, ev["TIMESTAMP"], events[i-1]["TIMESTAMP"], "newest first")
 		}
 	}
 	var want []aeRow
-	for _, b := range []string{bA, bB} {
+	for _, b := range []string{vA, vB} {
 		for _, env := range []string{"test", "prod"} {
 			want = append(want,
 				aeRow{pipelineName, b, env, "PromotionStarted", "Pending"},
@@ -688,7 +690,7 @@ func TestCLI_Reports(t *testing.T) {
 		flag, value string
 		keep        func(aeRow) bool
 	}{
-		{"--bundle", bA, func(r aeRow) bool { return r.bundle == bA }},
+		{"--bundle", bA, func(r aeRow) bool { return r.bundle == vA }},
 		{"--env", "prod", func(r aeRow) bool { return r.env == "prod" }},
 	} {
 		var want, got []aeRow
@@ -698,7 +700,7 @@ func TestCLI_Reports(t *testing.T) {
 			}
 		}
 		for _, ev := range framework.ParseTable(c.Must(a.ns, "get", "auditevents", tc.flag, tc.value)) {
-			got = append(got, aeRow{ev["PIPELINE"], framework.BundleOf(ev["VERSION"]), ev["ENV"], ev["ACTION"], ev["OUTCOME"]})
+			got = append(got, aeRow{ev["PIPELINE"], ev["VERSION"], ev["ENV"], ev["ACTION"], ev["OUTCOME"]})
 		}
 		assert.Equal(t, want, got, "get auditevents %s %s", tc.flag, tc.value)
 	}
@@ -714,7 +716,9 @@ func TestCLI_Reports(t *testing.T) {
 		}
 		var got []aeRow
 		for _, ev := range list {
-			got = append(got, aeRow{ev.Spec.PipelineName, ev.Spec.BundleName, ev.Spec.Environment, ev.Spec.Action, ev.Spec.Outcome})
+			// JSON carries the Bundle's name; the table its version cell.
+			cell := map[string]string{bA: vA, bB: vB}[ev.Spec.BundleName]
+			got = append(got, aeRow{ev.Spec.PipelineName, cell, ev.Spec.Environment, ev.Spec.Action, ev.Spec.Outcome})
 		}
 		assert.Equal(t, aes, got, "get auditevents -o %s", format)
 	}

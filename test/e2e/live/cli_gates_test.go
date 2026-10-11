@@ -43,17 +43,11 @@ func header(out string) []string {
 	return cliCellGap.Split(strings.TrimSpace(strings.SplitN(out, "\n", 2)[0]), -1)
 }
 
-// explainTable asserts kardinal explain's header and returns its rows, each
-// with BUNDLE, the Bundle its VERSION cell names, in place of VERSION.
+// explainTable asserts kardinal explain's header and returns its rows.
 func explainTable(t *testing.T, out string) []map[string]string {
 	t.Helper()
 	require.Equal(t, explainHeader, header(out), "explain header in:\n%s", out)
-	rows := framework.ParseTable(out)
-	for _, r := range rows {
-		r["BUNDLE"] = framework.BundleOf(r["VERSION"])
-		delete(r, "VERSION")
-	}
-	return rows
+	return framework.ParseTable(out)
 }
 
 // explainDeployed is what explain prints after its table: the "deployed:"
@@ -65,8 +59,8 @@ func explainDeployed(out string) string {
 
 // gateRow is one gate row of kardinal explain; state is the API value, the
 // row shows its display label (P2).
-func gateRow(env, bundle, name, state, expr, reason string) map[string]string {
-	return map[string]string{"ENVIRONMENT": env, "BUNDLE": bundle, "TYPE": "PolicyGate", "NAME": name,
+func gateRow(env, version, bundle, name, state, expr, reason string) map[string]string {
+	return map[string]string{"ENVIRONMENT": env, "VERSION": framework.VersionCell(version, bundle), "TYPE": "PolicyGate", "NAME": name,
 		"STATE": display.Gate(state).Label, "EXPRESSION": expr, "REASON": reason}
 }
 
@@ -86,12 +80,12 @@ var plainText = func() *strings.Replacer {
 
 // stepRow is one step row of kardinal explain: a Step's reason is its
 // status.message (in plain text), "-" when it has none.
-func stepRow(ps *v1alpha1.PromotionStep) map[string]string {
+func stepRow(ps *v1alpha1.PromotionStep, version string) map[string]string {
 	reason := plainText.Replace(ps.Status.Message)
 	if reason == "" {
 		reason = "-"
 	}
-	return map[string]string{"ENVIRONMENT": ps.Spec.Environment, "BUNDLE": ps.Spec.BundleName, "TYPE": "Step",
+	return map[string]string{"ENVIRONMENT": ps.Spec.Environment, "VERSION": framework.VersionCell(version, ps.Spec.BundleName), "TYPE": "Step",
 		"NAME": ps.Spec.StepType, "STATE": display.Step(ps.Status.State).Label, "EXPRESSION": "-", "REASON": reason}
 }
 
@@ -243,16 +237,31 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 		"explain", pipelineName, "--env", "staging")
 	refusesNotFound(t, c, ns, "", "nope", "explain", "nope")
 
-	summary := regexp.MustCompile(`^Controller:  (\S+)\nPipelines:   (\d+)(?: \((\d+) degraded: [^)\n]+\))?\n` +
-		`Bundles:     (\d+) \((\d+) active\)\n(?:\nWarning: (\d+) pipeline\(s\) Degraded: run 'kardinal get pipelines' for details\n)?$`)
+	summary := regexp.MustCompile(`^Controller:  (\S+) in kardinal-system, (\d+)/(\d+) ready\nPipelines:   (\d+)(?: \((\d+) degraded: [^)\n]+\))?\n` +
+		`Versions:    (\d+) \((\d+) in flight\)\n\nNAMESPACE +PIPELINE +SUMMARY\n`)
 	out := c.Must(ns, "status")
 	m := summary.FindStringSubmatch(out)
 	require.NotNil(t, m, "status output:\n%s", out)
 	assert.Equal(t, controllerVersion(t, e), m[1])
-	n, _ := strconv.Atoi(m[2])
+	assert.Equal(t, m[2], m[3], "every controller replica is ready")
+	n, _ := strconv.Atoi(m[4])
+	assert.Equal(t, 1, n, "-n lists this namespace's Pipeline only")
+	if d, _ := strconv.Atoi(m[5]); d > 0 {
+		assert.Contains(t, out, fmt.Sprintf("Warning: %d pipeline(s) Degraded", d), "the warning counts the degraded pipelines")
+	}
+	// One line per pipeline, this test's with its summary sentence.
+	assert.Regexp(t, `(?m)^`+ns+` +`+pipelineName+` +\S`, out)
+	assert.Contains(t, out, "Details: kardinal status <pipeline> -n <namespace>\n")
+	assert.NotRegexp(t, `(?m)^`+ns2+` `, out, "-n leaves out the other namespace")
+	// -A: every namespace, this test's two among them.
+	all := c.Must(ns, "status", "-A")
+	m = summary.FindStringSubmatch(all)
+	require.NotNil(t, m, "status -A output:\n%s", all)
+	n, _ = strconv.Atoi(m[4])
 	assert.GreaterOrEqual(t, n, 1, "the cluster has this test's Pipeline")
-	assert.Equal(t, m[3], m[6], "the warning counts the degraded pipelines")
-	assert.Regexp(t, `^Controller:  unknown\n`, c.Must(ns, "status", "--controller-namespace", ns), "no kardinal-version ConfigMap there")
+	assert.Regexp(t, `(?m)^`+ns+` +`+pipelineName+` +\S`, all)
+	assert.Regexp(t, `^Controller:  unknown in `+ns+`, no controller Deployment found there: kardinal doctor\n`,
+		c.Must(ns, "status", "--controller-namespace", ns), "no kardinal-version ConfigMap or Deployment there")
 	assert.Equal(t, "Pipeline: podinfo   Namespace: "+ns+"\n\nNo versions yet. Ship one: kardinal create bundle podinfo --image <ref>\n",
 		c.Must(ns, "status", pipelineName))
 	refusesNotFound(t, c, ns, "", "nope", "status", "nope")
@@ -294,12 +303,12 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	e.WaitGateReady(t, ns, b1, "prod", "hold", false, holdMsg+" ("+result+"; "+version+")", gateTimeout)
 	out = c.Must(ns, "explain", pipelineName)
 	assert.Equal(t, []map[string]string{
-		gateRow("prod", b1, "hold", "Waiting", openExpr, holdMsg+" ("+result+"; "+version+")"),
-		gateRow("test", b1, "entry", "Block", openExpr, blocked),
+		gateRow("prod", fixtures.V2, b1, "hold", "Waiting", openExpr, holdMsg+" ("+result+"; "+version+")"),
+		gateRow("test", fixtures.V2, b1, "entry", "Block", openExpr, blocked),
 	}, explainTable(t, out), out)
 	assert.Equal(t, "prod   deployed: none\ntest   deployed: none\n", explainDeployed(out))
 	out = c.Must(ns, "explain", pipelineName, "--env", "test")
-	assert.Equal(t, []map[string]string{gateRow("test", b1, "entry", "Block", openExpr, blocked)}, explainTable(t, out), out)
+	assert.Equal(t, []map[string]string{gateRow("test", fixtures.V2, b1, "entry", "Block", openExpr, blocked)}, explainTable(t, out), out)
 	assert.Equal(t, "test   deployed: none\n", explainDeployed(out))
 
 	// status: test's gate holds B1 there; prod is not reached yet.
@@ -423,9 +432,9 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	e.WaitExplainGate(t, ns, pipelineName, "prod", "hold", "Block", gateTimeout)
 	out = c.Must(ns, "explain", pipelineName)
 	assert.Equal(t, []map[string]string{
-		gateRow("prod", b1, "hold", "Block", openExpr, holdMsg+" ("+result+"; "+version+")"),
-		gateRow("test", b1, "entry", "Pass", openExpr, overridden),
-		stepRow(testStep),
+		gateRow("prod", fixtures.V2, b1, "hold", "Block", openExpr, holdMsg+" ("+result+"; "+version+")"),
+		gateRow("test", fixtures.V2, b1, "entry", "Pass", openExpr, overridden),
+		stepRow(testStep, fixtures.V2),
 	}, explainTable(t, out), out)
 	assert.Equal(t, "prod   deployed: none\n", explainDeployed(out), "test runs B1, so only prod gets a deployed line")
 
@@ -478,7 +487,7 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	e.WaitBundlePhase(t, ns, b1, "Superseded", time.Minute)
 	e.WaitGateReady(t, ns, b2, "prod", "hold", false, "", gateTimeout)
 	out = c.Must(ns, "explain", pipelineName, "--env", "prod")
-	assert.Equal(t, []map[string]string{gateRow("prod", b2, "hold", "Waiting", openExpr,
+	assert.Equal(t, []map[string]string{gateRow("prod", fixtures.V3, b2, "hold", "Waiting", openExpr,
 		holdMsg+" ("+openExpr+" = false; version "+fixtures.V3+")")}, explainTable(t, out), out)
 	assert.Equal(t, "Bundle "+b2+" deleted\n", c.Must(ns, "delete", "bundle", b2))
 	waitBundleGone(t, e, ns, b2)
@@ -494,8 +503,8 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	assert.Equal(t, "bundle "+b1+" was superseded — promotion cancelled", ps.Status.Message)
 	out = c.Must(ns, "explain", pipelineName, "--env", "prod")
 	assert.Equal(t, []map[string]string{
-		gateRow("prod", b1, "hold", "Superseded", openExpr, holdMsg+" ("+result+"; "+version+")"),
-		stepRow(ps),
+		gateRow("prod", fixtures.V2, b1, "hold", "Superseded", openExpr, holdMsg+" ("+result+"; "+version+")"),
+		stepRow(ps, fixtures.V2),
 	}, explainTable(t, out), out)
 
 	// override applies only to in-progress Bundles.

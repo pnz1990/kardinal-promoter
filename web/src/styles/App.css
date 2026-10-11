@@ -125,7 +125,8 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--k-space-4);
-  min-block-size: var(--k-control-lg);
+  box-sizing: border-box;
+  block-size: var(--k-layout-topbar);
   padding: var(--k-space-2) var(--k-space-6);
   border-block-end: var(--k-border-hairline) solid var(--k-line-subtle);
 }
@@ -298,3 +299,19 @@
 .app[data-narrow] .app-pipeline-head,
 .app[data-narrow] .app-map-head { padding-inline: var(--k-space-3); }
 .app[data-narrow] .app-content { padding-inline: var(--k-space-3); }
+
+/* The command palette's place while its code loads (first ⌘K): where the palette opens. */
+.app-palette-loading {
+  position: fixed;
+  z-index: var(--k-z-palette);
+  inset-block-start: var(--k-space-12);
+  inset-inline: 0;
+  margin-inline: auto;
+  inline-size: var(--k-layout-drawer);
+  background: var(--k-surface-raised);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-3);
+  box-shadow: var(--k-elev-2);
+}
+/* The stage drawer's place while its code loads: its column. */
+.app-drawer-loading { inline-size: var(--k-layout-drawer); flex-shrink: 0; background: var(--k-surface-raised); border-inline-start: var(--k-border-hairline) solid var(--k-line); }

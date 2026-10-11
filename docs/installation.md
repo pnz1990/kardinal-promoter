@@ -176,7 +176,10 @@ release name other than `kardinal-promoter`, the Service is named
 ### What the UI shows
 
 The UI calls a Bundle a *version*, a PromotionStep a *stage* and a PolicyGate a *gate*
-([Concepts](concepts.md)). An environment's or gate's panel has the Kubernetes kind and object
+([Concepts](concepts.md)). A version reads as what it ships (its image tag, chart version or config commit, the
+`version` column of `kardinal get bundles`) on the map, the version rail, the Versions tab, the
+sidebar and the stage drawer; the Bundle name follows it in muted monospace, or is the tooltip
+where space is short. An environment's or gate's panel has the Kubernetes kind and object
 name under **Kubernetes details**, for `kubectl`.
 
 - **Fleet board** (the start page, and the kardinal logo from anywhere). Each Pipeline is a
@@ -199,6 +202,12 @@ name under **Kubernetes details**, for `kubectl`.
   it, one line: the Pipeline's summary sentence, then the shown version's name, commit, author
   and CI run. Below that are four tabs:
   - **Map**: the station map, and the Bundle history to pick the version shown and compare two.
+    **Map | Table | Matrix** shows the same pipeline three ways. The **Table** has one row per
+    environment (fleet targets included): its state, what it runs, what is on its way with its
+    PR, its gates and its actions, sortable by environment, state and age; a narrow screen opens
+    on it. The **Matrix** has one row per version, newest first, and one column per environment,
+    with waves and fleets as one column that counts its live environments; a click follows a
+    version, Shift-click compares it with the followed one.
   - **Versions**: every Bundle of the Pipeline.
   - **Activity**: failed promotions grouped across environments, and the shown Bundle's policy
     gates with their CEL expressions and approvals.
@@ -211,7 +220,7 @@ name under **Kubernetes details**, for `kubectl`.
   and **Ship your first version**.
 
   On the **map** each environment is a station that shows the version it runs and the version on
-  its way; gates sit on the edge into the environment they guard, an approval gate with its
+  its way (the map colours only what needs attention: a Live station is ink, not green); gates sit on the edge into the environment they guard, an approval gate with its
   quorum; the version you follow is one red line through the stations it reached, and it stops
   at a gate that holds it. A wave of five or more environments is one band, and a fleet one
   platform; each counts its environments by state and expands to a grid, a row per state, in

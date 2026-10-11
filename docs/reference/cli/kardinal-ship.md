@@ -79,7 +79,7 @@ kardinal ship <pipeline> --image <ref> [flags]
       --stop-at-gate              With --wait: stop (exit 3) at any gate that does not pass, also one that opens by itself (a soak, a schedule)
       --timeout duration          With --wait: give up after this long (exit 6) (default 30m)
       --type string               Bundle type: image, config or mixed (chart Bundles come from POST /api/v1/bundles or a Helm Subscription: this command has no chart flags) (default "image")
-      --wait                      Follow the Bundle until it is live, fails, stops at a gate, a hold or a PR, or is replaced
+      --wait                      Follow the version until it is live, fails, stops at a gate, a hold or a PR, or is replaced
 ```
 
 ### Options inherited from parent commands
@@ -88,7 +88,7 @@ kardinal ship <pipeline> --image <ref> [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO

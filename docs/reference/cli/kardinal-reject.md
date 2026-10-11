@@ -1,10 +1,10 @@
 ## kardinal reject
 
-Reject a Bundle: it is never promoted again, and rollback never picks it
+Reject a version: it is never promoted again, and rollback never picks it
 
 ### Synopsis
 
-Reject a Bundle for good, with --reason, in your Kubernetes name. Steps that
+Reject a version for good, with --reason, in your Kubernetes name. Steps that
 have not delivered it yet fail and their PRs close; steps whose change is live
 finish their health check. Rollback, promote and Subscriptions never pick it
 again. It does not revert an environment: use kardinal rollback for that.
@@ -27,21 +27,23 @@ revert an environment that already runs the Bundle; roll that environment
 back with kardinal rollback. See docs/reject.md.
 
 ```
-kardinal reject <bundle> [flags]
+kardinal reject <bundle|version> [flags]
 ```
 
 ### Examples
 
 ```
   kardinal reject my-app-v1-5 --reason "CVE-2026-1234 in the base image"
+  kardinal reject 1.5.0 --reason "CVE-2026-1234 in the base image"
 ```
 
 ### Options
 
 ```
-  -h, --help            help for reject
-      --reason string   Why the Bundle is rejected (required)
-      --yes             Do not ask for confirmation on a terminal
+  -h, --help              help for reject
+      --pipeline string   Look for a version given as <bundle> in this pipeline only
+      --reason string     Why the version is rejected (required)
+      --yes               Do not ask for confirmation on a terminal
 ```
 
 ### Options inherited from parent commands
@@ -50,7 +52,7 @@ kardinal reject <bundle> [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO

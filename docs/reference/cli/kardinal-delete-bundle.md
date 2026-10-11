@@ -19,7 +19,7 @@ spec.historyLimit (default 50) are deleted automatically, oldest first;
 use this command to remove a Bundle before that.
 
 ```
-kardinal delete bundle <name> [flags]
+kardinal delete bundle <name|version> [flags]
 ```
 
 ### Examples
@@ -31,8 +31,9 @@ kardinal delete bundle <name> [flags]
 ### Options
 
 ```
-  -h, --help   help for bundle
-      --yes    Do not ask for confirmation on a terminal
+  -h, --help              help for bundle
+      --pipeline string   Look for a version given as <name> in this pipeline only
+      --yes               Do not ask for confirmation on a terminal
 ```
 
 ### Options inherited from parent commands
@@ -41,7 +42,7 @@ kardinal delete bundle <name> [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO

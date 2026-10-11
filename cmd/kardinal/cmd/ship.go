@@ -123,7 +123,7 @@ merged (4), is replaced or rejected (5), or --timeout passes (6).`,
 		},
 	}
 	addBundleFlags(cmd, &opts, &dryRun)
-	cmd.Flags().BoolVar(&wait, "wait", false, "Follow the Bundle until it is live, fails, stops at a gate, a hold or a PR, or is replaced")
+	cmd.Flags().BoolVar(&wait, "wait", false, "Follow the version until it is live, fails, stops at a gate, a hold or a PR, or is replaced")
 	cmd.Flags().Var(durationValue{&timeout}, "timeout", "With --wait: give up after this long (exit 6)")
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "With --wait: print only the last line (or -o's document); no progress, PR links or summary on stderr")
 	cmd.Flags().BoolVar(&stopAtGate, "stop-at-gate", false, "With --wait: stop (exit 3) at any gate that does not pass, also one that opens by itself (a soak, a schedule)")
