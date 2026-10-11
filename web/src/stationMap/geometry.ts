@@ -8,11 +8,20 @@
 //
 
 import dagre from '@dagrejs/dagre'
-import { graph } from '../tokens'
+import { graph, text } from '../tokens'
 import type { MapEdge, MapNode, Station, Group } from './model'
 
 /** The graph.* design tokens (DESIGN-SYSTEM §2.4). */
-export const GRAPH = { ...graph, /** --k-text-2xs in px: no map label reads smaller on screen. */ labelMin: 11 } as const
+/** The type scale in px (the --k-text-* tokens are rem; 1rem = 16px). */
+const REM_PX = 16
+export const TEXT_PX = {
+  '2xs': Number.parseFloat(text['2xs']) * REM_PX,
+  xs: Number.parseFloat(text.xs) * REM_PX,
+  sm: Number.parseFloat(text.sm) * REM_PX,
+  lg: Number.parseFloat(text.lg) * REM_PX,
+} as const
+
+export const GRAPH = { ...graph, /** --k-text-2xs in px: no map label reads smaller on screen. */ labelMin: TEXT_PX['2xs'] } as const
 
 /** A band's segmented bar, the thread's fill under it, and the minimap's thread hint: from the grid tokens. */
 export const BAR = {
@@ -70,24 +79,43 @@ const GRID_FOOT = 20
 const GRID_PAD = 12
 /** For the renderer: an expanded grid's head height and side padding, and the text
  *  size (map units) its row labels and footer can hold. */
-export const GRID_HEAD_H = GRID_HEAD
 export const GRID_PAD_X = GRID_PAD
-export const GRID_ROW_ROOM = 20
-export const GRID_FOOT_ROOM = 20
+
+/**
+ * The vertical space an expanded grid gives its text at a level: the head (its
+ * title), the gap between two states' rows (a row label each) and the footer,
+ * all grown with u, the counter-scaled text size of the level, so no label meets
+ * another or a cell. The renderer hides a label whose actual size exceeds u.
+ */
+export function gridSpace(level: ZoomLevel): { u: number; head: number; gap: number; foot: number; titleY: number } {
+  const u = labelUnits(level)
+  const pad = GRAPH.grid.gap * 2
+  const step = GRAPH.grid.cell + GRAPH.grid.gap
+  const titleY = pad + u * TEXT_ASCENT
+  // The first row's label (its baseline at the row's cell bottom) starts below the title.
+  const head = Math.max(GRID_HEAD, pad + u + pad + u * TEXT_ASCENT - GRAPH.grid.cell)
+  const gap = Math.max(GRID_BLOCK_GAP, u * LABEL_LEADING - step)
+  const foot = Math.max(GRID_FOOT, u + pad * 2)
+  return { u, head, gap, foot, titleY }
+}
+
+/** A label's height as a share of its font size, with room to the next one. */
+const LABEL_LEADING = 1.2
 /** The space between two states' rows: room for a row label that is
  *  counter-scaled to stay readable at Map and Overview zoom. */
 const GRID_BLOCK_GAP = 10
 
 /** The rows of an expanded group's grid: each state starts a row, labelled
  *  with its count ("3 failed"); a state wider than the grid wraps. */
-export function gridRows(g: Group): Array<{ label?: { tone: string; text: string }; start: number; count: number; y: number }> {
+export function gridRows(g: Group, level: ZoomLevel = 'map'): Array<{ label?: { tone: string; text: string }; start: number; count: number; y: number }> {
+  const blockGap = gridSpace(level).gap
   const cols = gridColumns(g.members.length)
   const step = GRAPH.grid.cell + GRAPH.grid.gap
   const rows: Array<{ label?: { tone: string; text: string }; start: number; count: number; y: number }> = []
   let at = 0
   let y = 0
   g.states.forEach((st, b) => {
-    if (b > 0) y += GRID_BLOCK_GAP
+    if (b > 0) y += blockGap
     for (let i = 0; i < st.count; i += cols) {
       rows.push({ y, start: at + i, count: Math.min(cols, st.count - i), label: i === 0 ? { tone: st.tone, text: `${st.count} ${lowerFirst(st.label)}` } : undefined })
       y += step
@@ -146,7 +174,7 @@ export function groupSub(g: Group): string {
 
 /** The width of an expanded grid's row label column at a level: its longest label. */
 export function gridLabelW(g: Group, level: ZoomLevel): number {
-  const longest = Math.max(0, ...gridRows(g).map(r => r.label?.text.length ?? 0))
+  const longest = Math.max(0, ...gridRows(g, level).map(r => r.label?.text.length ?? 0))
   return textW(longest, level) + GRID_PAD
 }
 
@@ -154,12 +182,13 @@ export function gridLabelW(g: Group, level: ZoomLevel): number {
  *  wide enough that no label is cut. */
 export function gridSize(g: Group, level: ZoomLevel = 'map'): { w: number; h: number; cols: number } {
   const cols = gridColumns(g.members.length)
-  const rows = gridRows(g)
+  const rows = gridRows(g, level)
+  const space = gridSpace(level)
   const step = GRAPH.grid.cell + GRAPH.grid.gap
   const height = rows.length ? rows[rows.length - 1].y + step : step
   const w = Math.max(GROUP_W.map, gridLabelW(g, level) + cols * step + GRID_PAD * 2,
     textW(groupTitle(g).length + 2, level) + GRID_PAD * 3, textW(groupSub(g).length, level) + GRID_PAD * 2)
-  return { cols, w, h: GRID_HEAD + height + GRID_FOOT }
+  return { cols, w, h: space.head + height + space.foot }
 }
 
 function lowerFirst(s: string): string {
@@ -476,20 +505,24 @@ function round(n: number): number {
 export function gridCells(g: Group, order: string[], box: Box, level: ZoomLevel = 'map'): Array<{ env: string; x: number; y: number; row: number; col: number }> {
   const step = GRAPH.grid.cell + GRAPH.grid.gap
   const labelW = gridLabelW(g, level)
+  const { head } = gridSpace(level)
   const out: Array<{ env: string; x: number; y: number; row: number; col: number }> = []
-  gridRows(g).forEach((r, row) => {
+  gridRows(g, level).forEach((r, row) => {
     for (let col = 0; col < r.count; col++) {
       const env = order[r.start + col]
-      if (env) out.push({ env, row, col, x: box.x + GRID_PAD + labelW + col * step, y: box.y + GRID_HEAD + r.y })
+      if (env) out.push({ env, row, col, x: box.x + GRID_PAD + labelW + col * step, y: box.y + head + r.y })
     }
   })
   return out
 }
 
 /** Where an expanded grid's row labels and footer go. */
-export function gridText(g: Group, box: Box): { rows: Array<{ x: number; y: number; tone: string; text: string }>; foot: { x: number; y: number; w: number } } {
-  const rows = gridRows(g).flatMap(r => r.label ? [{ ...r.label, x: box.x + GRID_PAD, y: box.y + GRID_HEAD + r.y + GRAPH.grid.cell - 1 }] : [])
-  return { rows, foot: { x: box.x + GRID_PAD, y: box.y + box.h - GRID_FOOT / 2 + 3, w: box.w - GRID_PAD * 2 } }
+export function gridText(g: Group, box: Box, level: ZoomLevel = 'map'): { rows: Array<{ x: number; y: number; tone: string; text: string }>; foot: { x: number; y: number; w: number }; title: { y: number } } {
+  const { head, foot, u, titleY } = gridSpace(level)
+  const rows = gridRows(g, level).flatMap(r => r.label ? [{ ...r.label, x: box.x + GRID_PAD, y: box.y + head + r.y + GRAPH.grid.cell - 1 }] : [])
+  // The footer's baseline: centred in its band.
+  const footY = box.y + box.h - foot / 2 + u * (TEXT_ASCENT - 0.5)
+  return { rows, foot: { x: box.x + GRID_PAD, y: footY, w: box.w - GRID_PAD * 2 }, title: { y: box.y + titleY } }
 }
 
 /** A station's dot centre within its placed box. */

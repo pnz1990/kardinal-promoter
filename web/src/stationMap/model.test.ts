@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Bundle, GraphResponse, Pipeline } from '../types'
 import { buildModel, gatesOn, gridOrder, groupSummary, stationLabel, type StationMapModel } from './model'
-import { octilinear, layout, levelAt, initialLevel, trimEnd, lengthOf, gridCells, gridRows, pointBeforeEnd, threadPoints, gateOffset, wrapWords, THREAD_GAP_PX, type ZoomLevel } from './geometry'
+import { octilinear, layout, levelAt, initialLevel, trimEnd, lengthOf, gridCells, gridRows, pointBeforeEnd, threadPoints, gateOffset, wrapWords, THREAD_GAP_PX, gridSpace, gridSize, gridText, groupTitle, CH_EM, TEXT_ASCENT, type ZoomLevel } from './geometry'
 
 const bundle = (name: string, tag: string): Bundle => ({
   name, namespace: 'default', phase: 'Promoting', type: 'image', pipeline: 'app', images: [{ repository: 'ghcr.io/acme/app', tag }],
@@ -320,4 +320,41 @@ describe('wrapWords', () => {
     expect(wrapWords('Waiting for PR merge', 40, 2)).toEqual(['Waiting for PR merge'])
     for (const l of wrapWords('Held by gate no-weekend-deploys-in-eu-and-us-regions', 16, 2)) expect(l.length).toBeLessThanOrEqual(16)
   })
+})
+
+describe('an expanded grid at every level', () => {
+  // checkout-30's fleet (12 targets in four states) and large-300's prod fleet (149 in four).
+  const fleet = (n: number, states: string[]) => {
+    const targets = Array.from({ length: n }, (_, i) => `t${String(i).padStart(3, '0')}`)
+    const p: Pipeline = { name: 'f', namespace: 'default', phase: 'Ready', environmentCount: n, activeBundleName: 'b2',
+      environmentTopology: [{ name: 'edge', fleet: { targets, maxConcurrent: 2, maxUnavailable: 2 } }] }
+    const graph = { nodes: targets.map((t, i) => step(t, states[i % states.length])), edges: [] }
+    return buildModel(p, { bundle: bundle('b2', '2'), graph }, { expanded: new Set(['platform:edge']) }).groups.get('platform:edge')!
+  }
+  const overlap = (a: { x: number; y: number; w: number; h: number }, b: typeof a) =>
+    a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+  for (const [what, g] of [['12 targets', fleet(12, ['Verified', 'Failed', 'Promoting', 'NotStarted', 'Verified', 'Verified'])],
+    ['149 targets', fleet(149, ['Verified', 'Verified', 'Verified', 'Failed', 'Promoting', 'NotStarted'])]] as const) {
+    for (const level of ['overview', 'map', 'detail'] as const) {
+      it(`${what} at ${level}: its title, row labels, footer and cells never overlap`, () => {
+        const size = gridSize(g, level)
+        const box = { x: 0, y: 0, w: size.w, h: size.h }
+        const { u } = gridSpace(level)
+        const t = gridText(g, box, level)
+        const textBox = (x: number, y: number, chars: number) => ({ x, y: y - u * TEXT_ASCENT, w: chars * CH_EM * u, h: u })
+        const texts = [
+          { name: 'title', r: textBox(12, t.title.y, groupTitle(g).length) },
+          ...t.rows.map(r => ({ name: r.text, r: textBox(r.x, r.y, r.text.length) })),
+          { name: 'footer', r: textBox(t.foot.x, t.foot.y, 30) },
+        ]
+        const cells = gridCells(g, gridOrder(g, new Map(g.members.map(m => [m, { display: { tone: 'verified', label: '' } }])) as never), box, level)
+          .map(c => ({ x: c.x, y: c.y, w: 10, h: 10 }))
+        for (let i = 0; i < texts.length; i++) {
+          for (let j = i + 1; j < texts.length; j++) expect(overlap(texts[i].r, texts[j].r), `${texts[i].name} × ${texts[j].name}`).toBe(false)
+          for (const c of cells) expect(overlap(texts[i].r, c), `${texts[i].name} × a cell`).toBe(false)
+          expect(texts[i].r.y + texts[i].r.h, `${texts[i].name} inside the frame`).toBeLessThanOrEqual(box.h + 0.01)
+        }
+      })
+    }
+  }
 })

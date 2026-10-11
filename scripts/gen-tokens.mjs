@@ -46,7 +46,7 @@ export const FONTS = [
 
 // Groups that go to tokens.ts (numbers JS needs). Durations become milliseconds and px
 // dimensions become numbers; other dimensions stay strings.
-const TS_GROUPS = ['breakpoint', 'container', 'density', 'dur', 'graph', 'layout', 'poll', 'z']
+const TS_GROUPS = ['breakpoint', 'container', 'density', 'dur', 'graph', 'layout', 'poll', 'text', 'z']
 
 const THEMES = ['light', 'dark']
 

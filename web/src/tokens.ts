@@ -73,6 +73,18 @@ export const poll = {
   staleAfterS: 30,
 } as const
 
+export const text = {
+  "2xs": "0.6875rem",
+  xs: "0.75rem",
+  sm: "0.8125rem",
+  md: "0.875rem",
+  lg: "1rem",
+  xl: "1.1875rem",
+  "2xl": "1.4375rem",
+  "3xl": "1.75rem",
+  display: "clamp(2.25rem, 1.4rem + 3.2vw, 4rem)",
+} as const
+
 export const z = {
   base: 0,
   mapOverlay: 10,
