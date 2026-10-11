@@ -38,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -286,6 +287,7 @@ func quickstartCluster(t *testing.T, objs ...sigs_client.Object) sigs_client.Cli
 		v1alpha1.GroupVersion.WithKind("Pipeline"),
 		v1alpha1.GroupVersion.WithKind("PolicyGate"),
 		v1alpha1.GroupVersion.WithKind("Bundle"),
+		v1alpha1.GroupVersion.WithKind("PromotionStep"),
 		corev1.SchemeGroupVersion.WithKind("Secret"),
 		corev1.SchemeGroupVersion.WithKind("Namespace"),
 		appsv1.SchemeGroupVersion.WithKind("Deployment"),
@@ -305,9 +307,31 @@ func quickstartCluster(t *testing.T, objs ...sigs_client.Object) sigs_client.Cli
 	}
 	all := append([]sigs_client.Object{ready("kro-system/kro"), ready("argocd/argocd-repo-server"),
 		ready("kardinal-system/kardinal-promoter")}, objs...)
+	// applied are the objects quickstart applied: Get gives them the field
+	// manager the API server records (the fake client keeps none).
+	applied := map[string]bool{}
 	c := fake.NewClientBuilder().WithScheme(rootScheme).WithRESTMapper(mapper).WithObjects(all...).
 		WithStatusSubresource(&appsv1.Deployment{}).
 		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl sigs_client.WithWatch, key sigs_client.ObjectKey, obj sigs_client.Object, opts ...sigs_client.GetOption) error {
+				if err := cl.Get(ctx, key, obj, opts...); err != nil {
+					return err
+				}
+				gvk, err := apiutil.GVKForObject(obj, cl.Scheme())
+				if err == nil && applied[gvk.Kind+"/"+key.Namespace+"/"+key.Name] {
+					obj.SetManagedFields([]metav1.ManagedFieldsEntry{{Manager: quickstartFieldManager, Operation: metav1.ManagedFieldsOperationApply}})
+				}
+				return nil
+			},
+			Delete: func(ctx context.Context, cl sigs_client.WithWatch, obj sigs_client.Object, opts ...sigs_client.DeleteOption) error {
+				if err := cl.Delete(ctx, obj, opts...); err != nil {
+					return err
+				}
+				if gvk, err := apiutil.GVKForObject(obj, cl.Scheme()); err == nil {
+					delete(applied, gvk.Kind+"/"+obj.GetNamespace()+"/"+obj.GetName())
+				}
+				return nil
+			},
 			Apply: func(ctx context.Context, cl sigs_client.WithWatch, obj runtime.ApplyConfiguration, _ ...sigs_client.ApplyOption) error {
 				content := obj.(interface{ UnstructuredContent() map[string]any }).UnstructuredContent()
 				u := &unstructured.Unstructured{Object: runtime.DeepCopyJSON(content)}
@@ -316,6 +340,7 @@ func quickstartCluster(t *testing.T, objs ...sigs_client.Object) sigs_client.Cli
 						"type": "Ready", "status": "True", "reason": "Valid", "message": "",
 						"lastTransitionTime": "2026-01-01T00:00:00Z"}}, "status", "conditions")
 				}
+				applied[u.GroupVersionKind().Kind+"/"+u.GetNamespace()+"/"+u.GetName()] = true
 				cur := &unstructured.Unstructured{}
 				cur.SetGroupVersionKind(u.GroupVersionKind())
 				err := cl.Get(ctx, sigs_client.ObjectKeyFromObject(u), cur)

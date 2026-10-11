@@ -147,13 +147,25 @@ test.describe('Journey 018 — Table and Matrix', () => {
     await expect(matrix.locator('[data-cell="1:1"]')).toBeFocused()
   })
 
-  // @perf: npm run test:e2e runs these alone (one worker), so the frame times are the page's own.
-  /** Scrolls the matrix diagonally one step a frame and returns the frame times' p95 (ms). */
-  async function diagonalP95(matrix: import('@playwright/test').Locator): Promise<number> {
-    const frames = await matrix.evaluate(async el => {
+  // @perf: npm run test:e2e runs these alone (one worker). A shared CI runner cannot hold a
+  // frame budget, so by default they assert what the page controls: the cells it draws (the
+  // virtualizers' bound) and no long task while scrolling. KARDINAL_PERF_STRICT=1 (the perf
+  // workflow, nightly) also asserts the frame-time p95, and holds long tasks to 100 ms (200 ms
+  // otherwise: a loaded runner stretches tasks, 79 ms seen at load 37).
+  const STRICT = process.env.KARDINAL_PERF_STRICT === '1'
+  const LONG_TASK_MS = STRICT ? 100 : 200
+
+  /** Scrolls the matrix diagonally one step a frame: the frame times' p95 (ms), the most cells
+   *  drawn in any frame, and the longest task (ms) seen while scrolling. */
+  async function diagonalScroll(matrix: import('@playwright/test').Locator): Promise<{ p95: number; cells: number; longest: number }> {
+    return matrix.evaluate(async el => {
       el.scrollTop = 0
       el.scrollLeft = 0
+      const tasks: number[] = []
+      const obs = new PerformanceObserver(list => { for (const e of list.getEntries()) tasks.push(e.duration) })
+      obs.observe({ type: 'longtask' })
       const times: number[] = []
+      let cells = el.querySelectorAll('td[data-cell]').length
       let last = performance.now()
       for (let i = 0; i < 120; i++) {
         el.scrollTop += 37
@@ -162,23 +174,36 @@ test.describe('Journey 018 — Table and Matrix', () => {
         const now = performance.now()
         times.push(now - last)
         last = now
+        cells = Math.max(cells, el.querySelectorAll('td[data-cell]').length)
       }
-      return times.sort((a, b) => a - b)
+      // Long tasks are reported after they end: one more frame, then stop.
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+      tasks.push(...obs.takeRecords().map(e => e.duration))
+      obs.disconnect()
+      times.sort((a, b) => a - b)
+      return { p95: times[Math.floor(times.length * 0.95)], cells, longest: Math.max(0, ...tasks) }
     })
-    return frames[Math.floor(frames.length * 0.95)]
   }
 
-  test('200 versions: the default view scrolls within one frame (20 ms p95) @perf', async ({ page }) => {
+  /** The bounds every run asserts (at most maxCells drawn in any frame, no long task), and the
+   *  frame budget when strict. */
+  function expectScroll(r: { p95: number; cells: number; longest: number }, maxCells: number, budgetMs: number) {
+    expect(r.cells, `cells drawn ${r.cells}`).toBeLessThan(maxCells)
+    expect(r.longest, `longest task ${r.longest.toFixed(0)} ms`).toBeLessThanOrEqual(LONG_TASK_MS)
+    if (STRICT) expect(r.p95, `frame p95 ${r.p95.toFixed(1)} ms`).toBeLessThanOrEqual(budgetMs)
+  }
+
+  test('200 versions: the default view scrolls with a bounded DOM (strict: 20 ms p95) @perf', async ({ page }) => {
     await serveScale(page)
     await page.setViewportSize({ width: 1440, height: 900 })
     await open(page, 'large-300', 'scale', '?as=matrix')
     const matrix = page.getByRole('region', { name: 'Versions by environment' })
     await expect(matrix.locator('tr[data-bundle]').first()).toBeVisible()
-    const p95 = await diagonalP95(matrix)
-    expect(p95, `frame p95 ${p95.toFixed(1)} ms`).toBeLessThanOrEqual(20)
+    // At 1440×900 the default view draws at most 280 cells of 200 × its columns.
+    expectScroll(await diagonalScroll(matrix), 600, 20)
   })
 
-  test('200 versions × 300 environments, every wave and fleet expanded: two frames at most (33 ms p95) @perf', async ({ page }) => {
+  test('200 versions × 300 environments, every wave and fleet expanded: a bounded DOM (strict: 33 ms p95) @perf', async ({ page }) => {
     await serveScale(page)
     await page.setViewportSize({ width: 1440, height: 900 })
     await open(page, 'large-300', 'scale', '?as=matrix')
@@ -206,9 +231,8 @@ test.describe('Journey 018 — Table and Matrix', () => {
     await expect(matrix.locator('thead [aria-expanded="false"]')).toHaveCount(0)
     // The version column and all 300 environments.
     expect(await matrix.evaluate(el => el.querySelector('table')!.getAttribute('aria-colcount'))).toBe('301')
-    const p95 = await diagonalP95(matrix)
-    expect(p95, `frame p95 ${p95.toFixed(1)} ms`).toBeLessThanOrEqual(33)
-    expect(await matrix.locator('td[data-cell]').count()).toBeLessThan(2000)
+    // At 1440×900 it draws at most 980 of the 60,200 cells (narrow member columns mid-scroll).
+    expectScroll(await diagonalScroll(matrix), 1200, 33)
   })
 
   test('the grid keeps a Tab stop when the focused cell scrolls out of view', async ({ page }) => {

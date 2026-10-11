@@ -52,6 +52,18 @@ Then: kardinal approve demo prod ships it to prod; kardinal dashboard opens
 the UI; the Next lines show the command that ships the next version. To get
 PR evidence for prod, set its approval to pr-review in the Pipeline.
 
+kardinal quickstart --delete, behind the same local-context check, deletes
+the demo and nothing else: the demo's versions first (it waits up to 2m for
+the controller to close their open PRs, and stops there if they are not
+gone), then the Pipeline demo, the gate prod-approval and the ApplicationSet
+(Argo CD deletes its Applications), each only when quickstart applied it
+(field manager kardinal-quickstart), and the Secret github-token only when
+quickstart created it (label kardinal.io/quickstart) and no other Pipeline
+uses it. Without a Pipeline demo, only versions with that label go. It keeps kro, Argo CD, kardinal-promoter with its
+token Secret, and the kardinal-test-app-<env> namespaces, and prints the
+command that deletes those. It asks first on a terminal (--yes does not).
+A re-run deletes nothing.
+
 ```
 kardinal quickstart --repo <your fork of kardinal-demo> [flags]
 ```
@@ -62,6 +74,7 @@ kardinal quickstart --repo <your fork of kardinal-demo> [flags]
   kind create cluster --name kardinal
   kardinal quickstart --repo https://github.com/<you>/kardinal-demo
   kardinal approve demo prod
+  kardinal quickstart --delete
 ```
 
 ### Options
@@ -69,6 +82,7 @@ kardinal quickstart --repo <your fork of kardinal-demo> [flags]
 ```
       --chart string           The kardinal-promoter Helm chart, an OCI reference or a directory (default: the published chart, ghcr.io/pnz1990/charts)
       --chart-version string   Chart version (default: this CLI's version; the newest for a development build)
+      --delete                 Delete the demo quickstart applied (its versions, Pipeline, gate, ApplicationSet and git Secret); keep kro, Argo CD and kardinal
   -h, --help                   help for quickstart
       --image string           The first version to ship (default "ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0")
       --no-argocd              Do not install Argo CD (the cluster has one)
@@ -76,6 +90,7 @@ kardinal quickstart --repo <your fork of kardinal-demo> [flags]
       --repo string            Your fork of github.com/pnz1990/kardinal-demo (the token needs contents and pull requests read and write on it)
       --set stringArray        A Helm value for the kardinal-promoter chart (key=value; repeatable)
       --timeout duration       How long to follow the first version (default 15m)
+      --yes                    Do not ask for confirmation on a terminal
 ```
 
 ### Options inherited from parent commands
