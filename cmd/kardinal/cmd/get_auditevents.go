@@ -29,57 +29,54 @@ import (
 
 func newGetAuditEventsCmd() *cobra.Command {
 	var (
-		pipeline string
-		bundle   string
-		env      string
-		limit    int
+		pipeline      string
+		bundle        string
+		env           string
+		limit         int
+		allNamespaces bool
 	)
 
 	cmd := &cobra.Command{
 		Use:         "auditevents",
 		Aliases:     []string{"auditevent", "ae", "audit"},
 		Short:       "List AuditEvent records — immutable promotion event log",
-		Annotations: map[string]string{outputAnnotation: "true"},
-		Long: `List AuditEvents recording promotion lifecycle transitions.
-AuditEvents are written by the controller at key points:
-  PromotionStarted     — Bundle starts promoting through an environment
-  PromotionSucceeded   — Health check passed; step reached Verified
-  PromotionFailed      — Step reached Failed state
-  PromotionSuperseded  — Newer Bundle superseded an in-flight promotion
-  PromotionRejected    — kardinal reject cancelled an in-flight promotion
-  GateEvaluated        — PolicyGate changed readiness state
-  GateOverridden       — An override was recorded on a gate (verified author)
-  ApprovalRecorded     — An approval gate saw a kardinal approve decision
-  ApprovalRevoked      — An approval gate saw that decision's Approval deleted
-  RollbackStarted      — onHealthFailure=rollback triggered a rollback Bundle
-  RollbackSucceeded    — A rollback Bundle's step reached Verified (written
-                         besides PromotionSucceeded, once per step)
-
-Events are listed most recent first, at most --limit of them. -o json and
--o yaml print the same events as a list of AuditEvent objects ([] when there
-are none).`,
+		Annotations: map[string]string{ReferenceAnnotation: getAuditEventsReference, outputAnnotation: "true"},
+		Long: `List the AuditEvents the controller writes at each promotion, gate, approval
+and rollback transition, most recent first (at most --limit).`,
+		Example: `  kardinal get auditevents --pipeline my-app --env prod
+  kardinal get ae -A --limit 50`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runGetAuditEvents(cmd, pipeline, bundle, env, limit)
+			return runGetAuditEvents(cmd, pipeline, bundle, env, limit, allNamespaces)
 		},
 	}
 
 	cmd.Flags().StringVar(&pipeline, "pipeline", "", "Filter by pipeline name")
 	cmd.Flags().StringVar(&bundle, "bundle", "", "Filter by bundle name")
-	cmd.Flags().StringVar(&env, "env", "", "Filter by environment name")
+	cmd.Flags().StringVarP(&env, "env", "e", "", "Filter by environment name")
 	cmd.Flags().IntVar(&limit, "limit", 20, "Maximum number of results to show (0 = unlimited)")
+	cmd.Flags().BoolVarP(&allNamespaces, "all-namespaces", "A", false,
+		"List events across all namespaces (adds NAMESPACE column)")
 
 	return cmd
 }
 
-func runGetAuditEvents(cmd *cobra.Command, pipeline, bundle, env string, limit int) error {
+func runGetAuditEvents(cmd *cobra.Command, pipeline, bundle, env string, limit int, allNamespaces bool) error {
 	c, ns, err := buildClient()
 	if err != nil {
 		return fmt.Errorf("get auditevents: %w", err)
 	}
-	return getAuditEventsFn(cmd.OutOrStdout(), c, ns, pipeline, bundle, env, limit)
+	if allNamespaces {
+		ns = ""
+	}
+	return getAuditEventsFnNS(cmd.OutOrStdout(), c, ns, pipeline, bundle, env, limit, allNamespaces)
 }
 
 func getAuditEventsFn(out io.Writer, client sigs_client.Client, ns, pipeline, bundle, env string, limit int) error {
+	return getAuditEventsFnNS(out, client, ns, pipeline, bundle, env, limit, false)
+}
+
+// getAuditEventsFnNS is getAuditEventsFn; ns "" with showNS lists every namespace.
+func getAuditEventsFnNS(out io.Writer, client sigs_client.Client, ns, pipeline, bundle, env string, limit int, showNS bool) error {
 
 	var aeList v1alpha1.AuditEventList
 	listOpts := []sigs_client.ListOption{sigs_client.InNamespace(ns)}
@@ -131,11 +128,11 @@ func getAuditEventsFn(out io.Writer, client sigs_client.Client, ns, pipeline, bu
 
 	// Print table.
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "TIMESTAMP\tPIPELINE\tBUNDLE\tENV\tACTION\tOUTCOME\tMESSAGE")
+	_, _ = fmt.Fprintln(tw, nsCol(showNS, "NAMESPACE")+"TIMESTAMP\tPIPELINE\tBUNDLE\tENV\tACTION\tOUTCOME\tMESSAGE")
 	for _, ae := range events {
 		ts := ae.Spec.Timestamp.UTC().Format("2006-01-02T15:04Z")
 		msg := truncateRunes(ae.Spec.Message, 50)
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(tw, nsCol(showNS, ae.Namespace)+"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			ts,
 			ae.Spec.PipelineName,
 			ae.Spec.BundleName,
@@ -147,3 +144,23 @@ func getAuditEventsFn(out io.Writer, client sigs_client.Client, ns, pipeline, bu
 	}
 	return tw.Flush()
 }
+
+// getAuditEventsReference is the detail of the command for its reference page.
+const getAuditEventsReference = `List AuditEvents recording promotion lifecycle transitions.
+AuditEvents are written by the controller at key points:
+  PromotionStarted     — Bundle starts promoting through an environment
+  PromotionSucceeded   — Health check passed; step reached Verified
+  PromotionFailed      — Step reached Failed state
+  PromotionSuperseded  — Newer Bundle superseded an in-flight promotion
+  PromotionRejected    — kardinal reject cancelled an in-flight promotion
+  GateEvaluated        — PolicyGate changed readiness state
+  GateOverridden       — An override was recorded on a gate (verified author)
+  ApprovalRecorded     — An approval gate saw a kardinal approve decision
+  ApprovalRevoked      — An approval gate saw that decision's Approval deleted
+  RollbackStarted      — onHealthFailure=rollback triggered a rollback Bundle
+  RollbackSucceeded    — A rollback Bundle's step reached Verified (written
+                         besides PromotionSucceeded, once per step)
+
+Events are listed most recent first, at most --limit of them. -o json and
+-o yaml print the same events as a list of AuditEvent objects ([] when there
+are none).`

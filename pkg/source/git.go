@@ -27,6 +27,8 @@ import (
 	"path"
 	"strings"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+
 	"github.com/bmatcuk/doublestar/v4"
 )
 
@@ -125,12 +127,12 @@ func (w *GitWatcher) Watch(ctx context.Context, lastDigest string) (*WatchResult
 		sha, err = w.fetchLatestSHA(ctx, branch)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("GitWatcher: fetch latest SHA for %s@%s: %w", redactURL(w.RepoURL), branch, err)
+		return nil, fmt.Errorf("GitWatcher: fetch latest SHA for %s@%s: %w", scm.RedactURL(w.RepoURL), branch, err)
 	}
 	if w.PathGlob != "" {
 		res, err := w.watchPath(ctx, branch, sha, lastDigest)
 		if err != nil {
-			return nil, fmt.Errorf("GitWatcher: pathGlob %q on %s@%s: %w", w.PathGlob, redactURL(w.RepoURL), branch, err)
+			return nil, fmt.Errorf("GitWatcher: pathGlob %q on %s@%s: %w", w.PathGlob, scm.RedactURL(w.RepoURL), branch, err)
 		}
 		return res, nil
 	}
@@ -154,12 +156,22 @@ func shortSHA(sha string) string {
 	return sha
 }
 
-// setHTTPAuth adds the HTTP(S) credentials to req: a token as the password
-// of user "git" (or Credentials.Username), or a username and password.
-func (w *GitWatcher) setHTTPAuth(req *http.Request) {
+// httpCredentials are the basic credentials of an HTTP(S) request to the
+// repository: the Secret's (httpBasic), else the user name and password the
+// repoURL itself carries (urlUser, nil when none). Either way they travel in
+// the Authorization header, never in the request URL, and the caller must
+// guard redirects with credentialRedirects.
+func (w *GitWatcher) httpCredentials(urlUser *url.Userinfo) (string, string, bool) {
 	if user, pass, ok := w.httpBasic(); ok {
-		req.SetBasicAuth(user, pass)
+		return user, pass, true
 	}
+	if urlUser != nil {
+		pass, _ := urlUser.Password()
+		if urlUser.Username() != "" || pass != "" {
+			return urlUser.Username(), pass, true
+		}
+	}
+	return "", "", false
 }
 
 // httpBasic returns the HTTP(S) basic credentials, if any.
@@ -185,24 +197,31 @@ func (w *GitWatcher) httpBasic() (string, string, bool) {
 // answer with a v2 capability advertisement that lists no refs.
 func (w *GitWatcher) fetchLatestSHA(ctx context.Context, branch string) (string, error) {
 	refsURL := strings.TrimRight(w.RepoURL, "/") + "/info/refs?service=git-upload-pack"
-	repo := redactURL(w.RepoURL)
+	repo := scm.RedactURL(w.RepoURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, refsURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
+		return "", fmt.Errorf("build request: %s", scm.RedactText(err.Error()))
 	}
 	req.Header.Set("User-Agent", userAgent)
-	w.setHTTPAuth(req)
-
+	// Credentials go in the Authorization header, never in the request URL:
+	// net/http errors quote the request URL, user name included.
+	urlUser := req.URL.User
+	req.URL.User = nil
 	httpClient := w.httpClient
 	if httpClient == nil {
 		httpClient = newHTTPClient()
 	}
-	if _, _, ok := w.httpBasic(); ok {
+	_, _, secretCreds := w.httpBasic()
+	if user, pass, ok := w.httpCredentials(urlUser); ok {
+		req.SetBasicAuth(user, pass)
+		// net/http keeps the Authorization header on a same-host redirect,
+		// an https to http one included.
 		httpClient = credentialRedirects(httpClient, false)
 	}
 
 	resp, err := httpClient.Do(req)
+	err = scm.RedactErr(err) // a *url.Error quotes the URL
 	if err != nil {
 		return "", fmt.Errorf("GET info/refs: %w", err)
 	}
@@ -212,9 +231,13 @@ func (w *GitWatcher) fetchLatestSHA(ctx context.Context, branch string) (string,
 	case http.StatusNotFound:
 		return "", fmt.Errorf("repository not found: %s (HTTP 404)", repo)
 	case http.StatusUnauthorized, http.StatusForbidden:
-		if _, _, ok := w.httpBasic(); ok {
+		if secretCreds {
 			return "", fmt.Errorf("access denied to %s (HTTP %d) with the credentials from secretRef; "+
 				"check that the token can read the repository", repo, resp.StatusCode)
+		}
+		if urlUser != nil {
+			return "", fmt.Errorf("access denied to %s (HTTP %d): the credentials in the URL were refused; "+
+				"check them, or put a token in a Secret and set secretRef", repo, resp.StatusCode)
 		}
 		return "", fmt.Errorf("authentication required for %s (HTTP %d); the repository may be private: "+
 			"set secretRef to a Secret with a token for it", repo, resp.StatusCode)
@@ -236,16 +259,6 @@ func (w *GitWatcher) fetchLatestSHA(ctx context.Context, branch string) (string,
 		return "", fmt.Errorf("repository %s advertises no refs (empty repository or not a git smart HTTP endpoint)", repo)
 	}
 	return "", fmt.Errorf("branch %q not found in %s (%d refs advertised)", branch, repo, refs)
-}
-
-// redactURL returns raw with any password replaced, for errors and status
-// messages. A URL that does not parse is not echoed.
-func redactURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "<invalid URL>"
-	}
-	return u.Redacted()
 }
 
 // parsePktLineRefs parses the Git pkt-line format used in Smart HTTP responses

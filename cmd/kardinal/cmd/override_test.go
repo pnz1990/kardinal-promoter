@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -75,7 +76,7 @@ func TestOverrideFn_BasicOverride(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := cmd.ExportedOverrideFn(&buf, fc, "default", "my-app", "prod", "no-weekend-deploy",
-		"P0 hotfix — incident #4521", "1h")
+		"P0 hotfix — incident #4521", time.Hour)
 	require.NoError(t, err)
 
 	// Output should confirm the override
@@ -108,7 +109,7 @@ func TestOverrideFn_NoIdentityWritesNothing(t *testing.T) {
 	require.NoError(t, authenticationv1.AddToScheme(s))
 	fc := fake.NewClientBuilder().WithScheme(s).WithObjects(gate, overridePipeline("my-app")).Build()
 
-	err := cmd.ExportedOverrideFn(io.Discard, fc, "default", "my-app", "prod", "no-weekend-deploy", "x", "1h")
+	err := cmd.ExportedOverrideFn(io.Discard, fc, "default", "my-app", "prod", "no-weekend-deploy", "x", time.Hour)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "read your identity (SelfSubjectReview)")
 	var got v1alpha1.PolicyGate
@@ -124,11 +125,15 @@ func TestOverrideFn_InvalidExpiry(t *testing.T) {
 		WithObjects(gate).
 		Build()
 
-	var buf bytes.Buffer
-	err := cmd.ExportedOverrideFn(&buf, fc, "default", "my-app", "prod", "my-gate",
-		"some reason", "not-a-duration")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid --expires-in")
+	_ = fc
+	t.Setenv("KUBECONFIG", "/dev/null")
+	root := cmd.NewRootCmd()
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"override", "my-app", "prod", "--gate", "my-gate", "--reason", "some reason", "--expires-in", "not-a-duration"})
+	err := root.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `invalid argument "not-a-duration" for "--expires-in" flag`)
 }
 
 // TestOverrideFn_GateNotFound verifies that missing gate returns an error.
@@ -140,7 +145,7 @@ func TestOverrideFn_GateNotFound(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := cmd.ExportedOverrideFn(&buf, fc, "default", "my-app", "prod", "nonexistent-gate",
-		"some reason", "1h")
+		"some reason", time.Hour)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "get policygate")
 }
@@ -155,11 +160,11 @@ func TestOverrideFn_Pipeline(t *testing.T) {
 		name, pipeline, gate, wantErr string
 	}{
 		{name: "missing pipeline, template name", pipeline: "nope", gate: "no-weekend-deploy",
-			wantErr: `pipeline "nope" not found in namespace "default"`},
+			wantErr: `pipeline "nope" not found in namespace "default"; pipelines here: my-app, other-app. Other namespaces: kardinal get pipelines -A`},
 		{name: "missing pipeline, instance name", pipeline: "nope", gate: inst.Name,
-			wantErr: `pipeline "nope" not found in namespace "default"`},
+			wantErr: `pipeline "nope" not found in namespace "default"; pipelines here: my-app, other-app. Other namespaces: kardinal get pipelines -A`},
 		{name: "missing pipeline, unknown gate", pipeline: "nope", gate: "nosuch",
-			wantErr: `pipeline "nope" not found in namespace "default"`},
+			wantErr: `pipeline "nope" not found in namespace "default"; pipelines here: my-app, other-app. Other namespaces: kardinal get pipelines -A`},
 		{name: "instance of another pipeline", pipeline: "other-app", gate: inst.Name,
 			wantErr: "policygate default/no-weekend-deploy-prod-b1 is an instance of pipeline my-app, not other-app"},
 	}
@@ -169,7 +174,7 @@ func TestOverrideFn_Pipeline(t *testing.T) {
 				template.DeepCopy(), inst.DeepCopy(), overridePipeline("my-app"), overridePipeline("other-app"),
 				overrideBundle("my-app-x7k2m", "my-app", "Promoting")).Build()
 			var buf bytes.Buffer
-			err := cmd.ExportedOverrideFn(&buf, fc, "default", tt.pipeline, "prod", tt.gate, "hotfix", "1h")
+			err := cmd.ExportedOverrideFn(&buf, fc, "default", tt.pipeline, "prod", tt.gate, "hotfix", time.Hour)
 			require.Error(t, err)
 			assert.Equal(t, tt.wantErr, err.Error())
 			assert.Empty(t, buf.String())
@@ -193,9 +198,9 @@ func TestOverrideFn_MultipleOverrides(t *testing.T) {
 
 	var buf bytes.Buffer
 	require.NoError(t, cmd.ExportedOverrideFn(&buf, fc, "default", "my-app", "prod", "rate-limit-gate",
-		"first override", "1h"))
+		"first override", time.Hour))
 	require.NoError(t, cmd.ExportedOverrideFn(&buf, fc, "default", "my-app", "prod", "rate-limit-gate",
-		"second override", "2h"))
+		"second override", 2*time.Hour))
 
 	var updatedGate v1alpha1.PolicyGate
 	require.NoError(t, fc.Get(context.Background(), types.NamespacedName{
@@ -221,7 +226,7 @@ func TestOverrideFn_EmptyStageAppliesGlobally(t *testing.T) {
 	var buf bytes.Buffer
 	// No --stage means stage="" which applies to all environments
 	err := cmd.ExportedOverrideFn(&buf, fc, "default", "my-app", "", "global-gate",
-		"global override", "30m")
+		"global override", 30*time.Minute)
 	require.NoError(t, err)
 
 	var updatedGate v1alpha1.PolicyGate
@@ -300,7 +305,7 @@ func TestOverrideFn_TemplateName(t *testing.T) {
 
 			var buf bytes.Buffer
 			err := cmd.ExportedOverrideFn(&buf, fc, "default", "my-app", tt.stage, "no-weekend-deploy",
-				"P0 hotfix", "1h")
+				"P0 hotfix", time.Hour)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
@@ -337,13 +342,13 @@ func TestOverrideFn_ConcurrentOverridesBothKept(t *testing.T) {
 				calls++
 				if calls == 1 {
 					require.NoError(t, cmd.ExportedOverrideFn(io.Discard, cl, "default", "demo", "", "g",
-						"second operator", "2h"))
+						"second operator", 2*time.Hour))
 				}
 				return cl.Patch(ctx, obj, patch, opts...)
 			},
 		}).Build()
 
-	require.NoError(t, cmd.ExportedOverrideFn(io.Discard, c, "default", "demo", "prod", "g", "first operator", "1h"))
+	require.NoError(t, cmd.ExportedOverrideFn(io.Discard, c, "default", "demo", "prod", "g", "first operator", time.Hour))
 
 	var g v1alpha1.PolicyGate
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "g", Namespace: "default"}, &g))
@@ -432,7 +437,7 @@ func TestOverrideFn_LongInstanceNames(t *testing.T) {
 
 			var buf bytes.Buffer
 			err := cmd.ExportedOverrideFn(&buf, c, "default", "kardinal-test-app", tt.stage, tt.gate,
-				"hotfix", "30m")
+				"hotfix", 30*time.Minute)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)

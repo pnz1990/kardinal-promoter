@@ -34,43 +34,27 @@ func newOverrideCmd() *cobra.Command {
 	var (
 		stage     string
 		reason    string
-		expiresIn string
+		expiresIn = time.Hour
 	)
 
 	cmd := &cobra.Command{
-		Use:   "override <pipeline> --stage <environment> --gate <gate-name> --reason <text> [--expires-in <duration>]",
+		Use:   "override <pipeline> [<env>] --gate <gate> --reason <text>",
 		Short: "Force-pass a PolicyGate with a mandatory audit record",
-		Long: `Override a PolicyGate for a specific pipeline stage.
+		Long: `Make --gate pass for the in-progress Bundles of <pipeline> (in <env>, or every
+environment), until --expires-in (default 1h). The override is recorded in the
+gate's spec.overrides[] under your Kubernetes username, with a GateOverridden
+AuditEvent; it applies to the gate instances that exist now, so run it while
+the Bundle waits. A single gate instance name is accepted too.`,
+		Example: `  kardinal override my-app prod --gate no-weekend-deploys --reason "P0 hotfix, incident 4521"
 
-The override is time-limited and creates a mandatory audit record in
-PolicyGate.spec.overrides[]. The gate passes immediately without evaluating
-the CEL expression until the override expires.
-
-The record names you by your Kubernetes username, read from the API server
-with a SelfSubjectReview (as kubectl auth whoami does); the chart's
-ValidatingAdmissionPolicy refuses an override in anyone else's name. The
-controller writes a GateOverridden AuditEvent for each override.
-
-Expired overrides stay in spec.overrides[] as an audit record for as long
-as the Bundle exists. Deleting a Bundle deletes its gate instances and their
-overrides, and the Pipeline's historyLimit cleanup deletes old finished
-Bundles (50 by default). Use --expires-in to control the override window
-(default: 1h).
-
---gate takes the gate template name (for example no-weekend-deploys). The
-override is recorded on the instances of that gate that the Pipeline's
-in-progress Bundles have for --stage (every stage when --stage is not set),
-so run it while the Bundle waits on the gate. Instances of Verified, Failed,
-Superseded and Rejected Bundles are left alone, because no promotion waits on them; if
-a Failed Bundle resumes, run the override again. The name of one gate
-instance, as kubectl get policygates shows it, is also accepted; that instance
-alone gets the override.
-
-Example:
-  kardinal override my-app --stage prod --gate no-weekend-deploys \
-    --reason "P0 hotfix — incident #4521"`,
-		Args: cobra.ExactArgs(1),
+  # longer window; --stage is the older name of the environment flag
+  kardinal override my-app --stage prod --gate change-freeze --reason "approved by CAB" --expires-in 4h`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			pipeline, env, err := envArgs(cmd, args, stage)
+			if err != nil {
+				return err
+			}
 			// MarkFlagRequired refuses a missing flag, not an empty one:
 			// --reason "" and --gate "" get here.
 			if reason == "" {
@@ -78,22 +62,21 @@ Example:
 			}
 			gateName, _ := cmd.Flags().GetString("gate")
 			if gateName == "" {
-				return fmt.Errorf("--gate is required")
+				return missingGateError(pipeline, env)
 			}
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("override: %w", err)
 			}
-			return overrideFn(cmd.OutOrStdout(), c, ns, args[0], stage, gateName, reason, expiresIn)
+			return overrideFn(cmd.OutOrStdout(), c, ns, pipeline, env, gateName, reason, expiresIn)
 		},
 	}
 
-	cmd.Flags().StringVar(&stage, "stage", "", "Environment (stage) name the override applies to")
+	addEnvFlag(cmd, &stage, "Environment the override applies to (or give it after the pipeline; default: every environment)")
 	cmd.Flags().StringVar(&reason, "reason", "", "Mandatory justification for the override (audit record)")
-	cmd.Flags().StringVar(&expiresIn, "expires-in", "1h", "How long the override is active (Go duration, e.g. 1h, 4h, 30m)")
+	cmd.Flags().Var(durationValue{&expiresIn}, "expires-in", "How long the override is active (30m, 4h, 2d)")
 	cmd.Flags().String("gate", "", "PolicyGate name to override")
 	_ = cmd.MarkFlagRequired("reason")
-	_ = cmd.MarkFlagRequired("gate")
 
 	return cmd
 }
@@ -108,21 +91,16 @@ Example:
 func overrideFn(
 	w interface{ Write([]byte) (int, error) },
 	c sigs_client.Client,
-	ns, pipeline, stage, gateName, reason, expiresIn string,
+	ns, pipeline, stage, gateName, reason string,
+	expDuration time.Duration,
 ) error {
 	ctx := context.Background()
-
-	// Parse expiry duration
-	expDuration, err := time.ParseDuration(expiresIn)
-	if err != nil || expDuration <= 0 {
-		return fmt.Errorf("invalid --expires-in %q: must be a positive Go duration (e.g. 1h, 30m)", expiresIn)
-	}
 
 	// Say so when the pipeline is wrong, rather than that it has no gate.
 	var pl v1alpha1.Pipeline
 	if err := c.Get(ctx, types.NamespacedName{Name: pipeline, Namespace: ns}, &pl); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("pipeline %q not found in namespace %q", pipeline, ns)
+			return pipelineNotFound(ctx, c, ns, pipeline)
 		}
 		return fmt.Errorf("get pipeline %s: %w", pipeline, err)
 	}
@@ -210,3 +188,63 @@ func currentUser() string {
 
 // ExportedOverrideFn is exported for testing.
 var ExportedOverrideFn = overrideFn
+
+// missingGateError is the error of override without --gate: it lists the
+// gates holding pipeline's in-progress Bundles back (in env, when set), read
+// from the cluster when it can be.
+func missingGateError(pipeline, env string) error {
+	where := pipeline
+	if env != "" {
+		where += " in " + env
+	}
+	c, ns, err := hintClient()
+	if err != nil {
+		return fmt.Errorf("--gate is required: name the gate to override")
+	}
+	names, err := notPassingGates(context.Background(), c, ns, pipeline, env)
+	if err != nil || len(names) == 0 {
+		return fmt.Errorf("--gate is required: no gate of %s is holding a promotion back now", where)
+	}
+	return fmt.Errorf("which gate? Gates not passing for %s: %s. Pass --gate <name>", where, strings.Join(names, ", "))
+}
+
+// notPassingGates lists the gate templates (or instance names, for a gate
+// without a template) whose instances for pipeline's in-progress Bundles are
+// not ready, in env when set.
+func notPassingGates(ctx context.Context, c sigs_client.Client, ns, pipeline, env string) ([]string, error) {
+	labels := sigs_client.MatchingLabels{"kardinal.io/pipeline": pipeline}
+	if env != "" {
+		labels["kardinal.io/environment"] = env
+	}
+	var gates v1alpha1.PolicyGateList
+	if err := c.List(ctx, &gates, sigs_client.InNamespace(ns), labels); err != nil {
+		return nil, fmt.Errorf("list policygates: %w", err)
+	}
+	finished := map[string]bool{}
+	var bundles v1alpha1.BundleList
+	if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err == nil {
+		for _, b := range bundles.Items {
+			switch b.Status.Phase {
+			case "Verified", "Failed", "Superseded", "Rejected":
+				finished[b.Name] = true
+			}
+		}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, g := range gates.Items {
+		if g.Status.Ready || finished[g.Labels["kardinal.io/bundle"]] {
+			continue
+		}
+		name := g.Labels["kardinal.io/gate-template"]
+		if name == "" {
+			name = g.Name
+		}
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}

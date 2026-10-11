@@ -252,6 +252,12 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("get bundle: %w", err)
 	}
 
+	// Records a rejection stored but not written yet (the audit outbox).
+	if len(b.Status.PendingAuditEvents) > 0 {
+		if err := r.flushAudit(ctx, &b); err != nil {
+			return ctrl.Result{RequeueAfter: auditRetryDelay}, nil
+		}
+	}
 	// status.version (the Version printer column) is written with
 	// Available; a Bundle still in flight from before it existed gets it
 	// here. Settled Bundles are left as they are: backfilling every one at
