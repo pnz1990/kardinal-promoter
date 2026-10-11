@@ -115,8 +115,17 @@ func (w *GitWatcher) httpUploadPackSession(ep *transport.Endpoint) (transport.Up
 	if client == nil {
 		client = newHTTPClient()
 	}
+	// The URL's own credentials become BasicAuth, out of the endpoint, as on
+	// the plain HTTP path (fetchLatestSHA).
+	var urlUser *url.Userinfo
+	if ep.User != "" || ep.Password != "" {
+		urlUser = url.UserPassword(ep.User, ep.Password)
+		stripped := *ep
+		stripped.User, stripped.Password = "", ""
+		ep = &stripped
+	}
 	var auth transport.AuthMethod
-	if user, pass, ok := w.httpBasic(); ok {
+	if user, pass, ok := w.httpCredentials(urlUser); ok {
 		auth = &githttp.BasicAuth{Username: user, Password: pass}
 		client = credentialRedirects(client, false)
 	}

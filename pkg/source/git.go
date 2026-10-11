@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 
@@ -155,12 +156,22 @@ func shortSHA(sha string) string {
 	return sha
 }
 
-// setHTTPAuth adds the HTTP(S) credentials to req: a token as the password
-// of user "git" (or Credentials.Username), or a username and password.
-func (w *GitWatcher) setHTTPAuth(req *http.Request) {
+// httpCredentials are the basic credentials of an HTTP(S) request to the
+// repository: the Secret's (httpBasic), else the user name and password the
+// repoURL itself carries (urlUser, nil when none). Either way they travel in
+// the Authorization header, never in the request URL, and the caller must
+// guard redirects with credentialRedirects.
+func (w *GitWatcher) httpCredentials(urlUser *url.Userinfo) (string, string, bool) {
 	if user, pass, ok := w.httpBasic(); ok {
-		req.SetBasicAuth(user, pass)
+		return user, pass, true
 	}
+	if urlUser != nil {
+		pass, _ := urlUser.Password()
+		if urlUser.Username() != "" || pass != "" {
+			return urlUser.Username(), pass, true
+		}
+	}
+	return "", "", false
 }
 
 // httpBasic returns the HTTP(S) basic credentials, if any.
@@ -193,21 +204,18 @@ func (w *GitWatcher) fetchLatestSHA(ctx context.Context, branch string) (string,
 		return "", fmt.Errorf("build request: %s", scm.RedactText(err.Error()))
 	}
 	req.Header.Set("User-Agent", userAgent)
-	// Credentials in the URL itself are sent as basic auth, not as part of
-	// the URL: net/http errors quote the request URL, user name included.
-	if u := req.URL.User; u != nil {
-		if pass, ok := u.Password(); ok || u.Username() != "" {
-			req.SetBasicAuth(u.Username(), pass)
-		}
-		req.URL.User = nil
-	}
-	w.setHTTPAuth(req)
-
+	// Credentials go in the Authorization header, never in the request URL:
+	// net/http errors quote the request URL, user name included.
+	urlUser := req.URL.User
+	req.URL.User = nil
 	httpClient := w.httpClient
 	if httpClient == nil {
 		httpClient = newHTTPClient()
 	}
-	if _, _, ok := w.httpBasic(); ok {
+	if user, pass, ok := w.httpCredentials(urlUser); ok {
+		req.SetBasicAuth(user, pass)
+		// net/http keeps the Authorization header on a same-host redirect,
+		// an https to http one included.
 		httpClient = credentialRedirects(httpClient, false)
 	}
 

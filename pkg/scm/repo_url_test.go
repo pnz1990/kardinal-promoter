@@ -243,3 +243,31 @@ func TestRedactURL_HardCases(t *testing.T) {
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.NoError(t, scm.RedactErr(nil))
 }
+
+// TestRedactText_QAPatterns (#1721 QA round 2): an "@" in the query is not
+// userinfo; credentials in a fragment, in ";"-separated pairs, under
+// percent-encoded keys and in api_key, client_secret and X-Amz-* parameters
+// are redacted; a password with a space or a "/" is removed from a quoted URL
+// (a *url.Error) and from a URL that does not parse.
+func TestRedactText_QAPatterns(t *testing.T) {
+	assert.Equal(t, "https://host?email=a@b.com", scm.RedactText("https://host?email=a@b.com"), "an @ in the query is kept")
+	assert.Equal(t, "https://host/x#email=a@b", scm.RedactText("https://host/x#email=a@b"))
+	for _, in := range []string{
+		"https://host/cb#access_token=SECRET&state=x",
+		"https://host/x?a=1;token=SECRET",
+		"https://host/x?access%5Ftoken=SECRET",
+		"https://host/x?api_key=SECRET",
+		"https://host/x?client_secret=SECRET",
+		"https://bucket.s3.example/o?X-Amz-Credential=SECRET&X-Amz-Signature=SECRET",
+		`Get "https://u:pa ss/SECRET@host/repo/info/refs": refused`,
+		`Get "https://u:pa/SECRET@host/repo": refused`,
+	} {
+		got := scm.RedactText(in)
+		assert.NotContains(t, got, "SECRET", in)
+	}
+	for _, in := range []string{"https://u:pa/SECRET@host/repo", "https://u:pa SECRET@host/repo"} {
+		got := scm.RedactURL(in)
+		assert.NotContains(t, got, "SECRET", in)
+		assert.Contains(t, got, "host/repo", in)
+	}
+}

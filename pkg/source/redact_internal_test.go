@@ -7,6 +7,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -60,3 +63,34 @@ func TestWatchers_URLCredentialsNotInErrors(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// TestWatchers_URLCredentialsNotRedirected (#1721 QA): credentials taken from
+// the repoURL travel in the Authorization header, so they get the same
+// redirect guard as a Secret's: a redirect from https to http is refused and
+// the http server never sees them, on the plain HTTP path (fetchLatestSHA)
+// and on the go-git path (pathGlob).
+func TestWatchers_URLCredentialsNotRedirected(t *testing.T) {
+	var leaked atomic.Int64
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			leaked.Add(1)
+		}
+		http.NotFound(w, r)
+	}))
+	defer plain.Close()
+	tlsSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+r.URL.RequestURI(), http.StatusFound)
+	}))
+	defer tlsSrv.Close()
+	repo := strings.Replace(tlsSrv.URL, "https://", "https://u:ghp_SECRET@", 1) + "/o/r"
+
+	for _, glob := range []string{"", "apps/**"} {
+		w := &GitWatcher{RepoURL: repo, PathGlob: glob}
+		w.WithHTTPClient(tlsSrv.Client())
+		_, err := w.Watch(context.Background(), "")
+		require.Error(t, err, glob)
+		assert.NotContains(t, err.Error(), "SECRET")
+		assert.Contains(t, err.Error(), "refusing a redirect from https to http", glob)
+	}
+	assert.Zero(t, leaked.Load(), "the http server never got the credentials")
+}
