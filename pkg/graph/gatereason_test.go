@@ -4,6 +4,7 @@
 package graph
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -51,6 +52,22 @@ func TestGateDetail(t *testing.T) {
 	assert.Equal(t, detail, GateDetail(gate("", detail, "")))
 	assert.Equal(t, "CEL evaluation error: x (version 1.2.0)", GateDetail(gate(msg, "CEL evaluation error: x (version 1.2.0)", "")),
 		"a reason the version does not match is left as it is")
+
+	// An older controller wrote no status.bundleVersion and led the result
+	// with bundle.version=<v>: (a rolling upgrade, a new CLI on an old
+	// controller).
+	for reason, want := range map[string]string{
+		msg + " (bundle.version=1.5.0: !schedule.isWeekend = false)":       "!schedule.isWeekend = false",
+		"bundle.version=1.5.0: !schedule.isWeekend = false":                "!schedule.isWeekend = false",
+		"bundle.version=sha-abc1234: CEL evaluation error: no such key: x": "CEL evaluation error: no such key: x",
+		"context error: get bundle: not found":                             "context error: get bundle: not found",
+	} {
+		m := ""
+		if strings.HasPrefix(reason, msg) {
+			m = msg
+		}
+		assert.Equal(t, want, GateDetail(gate(m, reason, "")), reason)
+	}
 }
 
 // TestBlockedMessage: the message is reported only for a gate that blocks

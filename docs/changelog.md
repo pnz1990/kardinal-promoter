@@ -19,6 +19,7 @@ Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/ka
 3. **Scripts read `-o json`, not the CLI's tables.** The tables show display labels ("Waiting for PR merge"), and `kardinal status` shows one row per environment; `-o json` keeps the API values (see Changed).
 4. **Roles you wrote for the UI** need `update` on `bundles/reject` to reject a version; the chart's promoter, approver and admin roles have it.
 5. **Chart values:** `scm.secretRef` and `scm.token` set the controller's token; setting one of them and its `github.*` name to different values fails the install.
+6. **Scripts that read a gate's version read `status.bundleVersion`.** A gate's `status.reason` is a sentence for people that ends with the version, `(version <v>)` or `; version <v>)` after the gate's message; `status.bundleVersion` holds the version (see Changed).
 
 ### Added
 

@@ -1205,7 +1205,7 @@ func TestGate_InvalidGatesRejected(t *testing.T) {
 // once its gates pass, so a paused Pipeline holds prod's step while the gate
 // closes, as in TestGate_HoldsStepBeforeStart.
 //
-// Covers GATE-MESSAGE-01.
+// Covers GATE-MESSAGE-01, GATE-VERSION-01.
 func TestGate_MessageShownWhenBlocked(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)

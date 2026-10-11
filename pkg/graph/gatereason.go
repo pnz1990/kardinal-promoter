@@ -4,6 +4,7 @@
 package graph
 
 import (
+	"regexp"
 	"strings"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -76,14 +77,24 @@ func BlockedMessage(gate *kardinalv1alpha1.PolicyGate) string {
 
 // GateDetail is what gate's expression evaluated to, read from its
 // status.reason without the message (BlockedDetail) and the version
-// (status.bundleVersion): "!schedule.isWeekend = false".
+// (status.bundleVersion): "!schedule.isWeekend = false". A controller older
+// than status.bundleVersion led the result with "bundle.version=<v>: ";
+// with no status.bundleVersion that prefix is dropped too.
 func GateDetail(gate *kardinalv1alpha1.PolicyGate) string {
 	d := BlockedDetail(gate.Spec.Message, gate.Status.Reason)
-	if v := gate.Status.BundleVersion; v != "" {
-		if t, ok := strings.CutSuffix(d, "; version "+v); ok {
-			return t
+	v := gate.Status.BundleVersion
+	if v == "" {
+		if m := legacyVersionPrefix.FindString(d); m != "" {
+			return d[len(m):]
 		}
-		d = strings.TrimSuffix(d, " (version "+v+")")
+		return d
 	}
-	return d
+	if t, ok := strings.CutSuffix(d, "; version "+v); ok {
+		return t
+	}
+	return strings.TrimSuffix(d, " (version "+v+")")
 }
+
+// legacyVersionPrefix is how a controller older than status.bundleVersion
+// began the result in a gate's reason.
+var legacyVersionPrefix = regexp.MustCompile(`^bundle\.version=[^\s:]+: `)
