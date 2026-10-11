@@ -1178,7 +1178,7 @@ recording the caller (`kardinal.io/created-by` and `kardinal.io/requested-by` on
 hold, release a hold) and the approver `create` and `delete` on `approvals`. The admin role
 holds `pipelines/edit` and `policygates/edit`, which mean "may change anything".
 
-`kardinal pause`, `kardinal rollback --hold`, `kardinal release-hold` and `kardinal override`
+`kardinal pause`, `kardinal rollback --hold`, `kardinal unhold` (`release-hold`) and `kardinal override`
 write from the user's kubeconfig, so they need `update` on the object.
 `rbac.userRoles.directWrites=true` adds `update`/`patch` on `pipelines` to the promoter and
 on `policygates` to the approver, and the chart's `<fullname>-scoped-writes`
