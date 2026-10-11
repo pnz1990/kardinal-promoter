@@ -8,6 +8,8 @@
 import { useState, useMemo } from 'react'
 import type { Pipeline } from '../types'
 import { HealthChip } from './HealthChip'
+import { Icon } from '../ui/Icon'
+import '../styles/PipelineOpsTable.css'
 
 type SortColumn =
   | 'name'
@@ -44,33 +46,12 @@ function relativeTime(iso: string | undefined): string {
   return `${diffMonths}mo ago`
 }
 
-/** Red/amber/green staleness color for inventory age. */
-function inventoryColor(days: number | undefined): string {
-  if (days === undefined) return 'var(--color-text-muted)'
-  if (days > 30) return 'var(--color-error)'
-  if (days > 14) return 'var(--color-warning)'
-  return 'var(--color-success)'
-}
-
-const CELL: React.CSSProperties = {
-  padding: '0.45rem 0.75rem',
-  borderBottom: '1px solid var(--color-border-muted)',
-  fontSize: '0.82rem',
-  color: 'var(--color-text)',
-  whiteSpace: 'nowrap',
-  verticalAlign: 'middle',
-}
-
-const HEADER_CELL: React.CSSProperties = {
-  ...CELL,
-  color: 'var(--color-text-muted)',
-  fontSize: '0.72rem',
-  textTransform: 'uppercase' as const,
-  letterSpacing: '0.05em',
-  background: 'var(--color-bg-deep)',
-  borderBottom: '1px solid var(--color-border)',
-  cursor: 'pointer',
-  userSelect: 'none' as const,
+/** Staleness of the inventory age: verified (fresh), blocked (over 14 days), failed (over 30). */
+function inventoryTone(days: number | undefined): 'muted' | 'failed' | 'blocked' | 'verified' {
+  if (days === undefined) return 'muted'
+  if (days > 30) return 'failed'
+  if (days > 14) return 'blocked'
+  return 'verified'
 }
 
 interface Column {
@@ -142,61 +123,41 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
 
   if (loading) {
     return (
-      <div style={{ padding: '1.5rem', color: 'var(--color-text-muted)', fontSize: '0.85rem' }}>
+      <div className="ops-table__loading">
         Loading pipelines…
       </div>
     )
   }
   if (error) {
     return (
-      <div role="alert" style={{ padding: '1rem', color: 'var(--color-error)', fontSize: '0.82rem' }}>
+      <div role="alert" className="ops-table__error">
         Error: {error}
       </div>
     )
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div className="ops-table">
       {/* Filter bar */}
-      <div style={{
-        padding: '0.6rem 1rem',
-        borderBottom: '1px solid var(--color-border-muted)',
-        background: 'var(--color-bg-deep)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.5rem',
-      }}>
+      <div className="ops-table__filter-bar">
         <input
           type="text"
           placeholder="Filter pipelines…"
           value={filter}
           onChange={e => setFilter(e.target.value)}
           aria-label="Filter pipelines"
-          style={{
-            background: 'var(--color-surface)',
-            border: '1px solid var(--color-border)',
-            borderRadius: '4px',
-            padding: '0.3rem 0.6rem',
-            fontSize: '0.8rem',
-            color: 'var(--color-text)',
-            outline: 'none',
-            width: '220px',
-          }}
+          className="ops-table__filter"
         />
-        <span style={{ fontSize: '0.75rem', color: 'var(--color-text-faint)' }}>
+        <span className="ops-table__count">
           {sorted.length} pipeline{sorted.length !== 1 ? 's' : ''}
           {filter ? ` matching "${filter}"` : ''}
         </span>
       </div>
 
       {/* Table */}
-      <div style={{ flex: 1, overflow: 'auto' }}>
+      <div className="ops-table__scroll">
         <table
-          style={{
-            width: '100%',
-            borderCollapse: 'collapse',
-            fontFamily: 'inherit',
-          }}
+          className="ops-table__table"
           aria-label="Pipeline operations table"
         >
           <thead>
@@ -206,7 +167,7 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
                   key={col.key}
                   title={col.title}
                   onClick={() => handleSort(col.key)}
-                  style={HEADER_CELL}
+                  className="ops-table__th"
                   aria-sort={
                     sortCol === col.key
                       ? sortDir === 'asc' ? 'ascending' : 'descending'
@@ -215,7 +176,7 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
                 >
                   {col.label}
                   {sortCol === col.key && (
-                    <span style={{ marginLeft: '0.3rem' }}>
+                    <span className="ops-table__sort">
                       {sortDir === 'asc' ? '↑' : '↓'}
                     </span>
                   )}
@@ -228,7 +189,7 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
               <tr>
                 <td
                   colSpan={COLUMNS.length}
-                  style={{ ...CELL, color: 'var(--color-text-faint)', textAlign: 'center', padding: '2rem' }}
+                  className="ops-table__td ops-table__empty"
                 >
                   {filter ? `No pipelines match "${filter}"` : 'No pipelines found.'}
                 </td>
@@ -252,37 +213,20 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
                     onSelect(p.name, p.namespace)
                   }}
                   aria-selected={isSelected}
-                  style={{
-                    cursor: 'pointer',
-                    background: isSelected ? 'var(--color-surface)' : 'transparent',
-                    borderLeft: isSelected ? '3px solid var(--color-accent)' : '3px solid transparent',
-                  }}
+                  className="ops-table__row"
                 >
                   {/* Pipeline name */}
-                  <td style={CELL}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                      <span style={{ fontWeight: isSelected ? 600 : 400 }}>{p.name}</span>
+                  <td className="ops-table__td">
+                    <div className="ops-table__name-row">
+                      <span className="ops-table__name">{p.name}</span>
                       {p.paused && (
-                        <span style={{
-                          fontSize: '0.6rem',
-                          background: 'var(--color-accent-bg)',
-                          color: 'var(--color-accent)',
-                          border: '1px solid var(--color-accent)',
-                          borderRadius: '3px',
-                          padding: '0px 4px',
-                          fontWeight: 700,
-                        }}>
+                        <span className="ops-table__paused">
                           PAUSED
                         </span>
                       )}
                     </div>
                     {p.activeBundleName && (
-                      <div style={{
-                        fontSize: '0.68rem',
-                        color: 'var(--color-text-faint)',
-                        fontFamily: 'var(--k-font-mono)',
-                        marginTop: '0.15rem',
-                      }}>
+                      <div className="ops-table__bundle">
                         {p.activeBundleName.length > 20
                           ? p.activeBundleName.slice(0, 18) + '…'
                           : p.activeBundleName}
@@ -291,15 +235,15 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
                   </td>
 
                   {/* Status */}
-                  <td style={CELL}>
+                  <td className="ops-table__td">
                     <HealthChip state={p.paused ? 'Paused' : p.phase} kind="pipeline" size="sm" />
                   </td>
 
                   {/* Blockers */}
-                  <td style={{ ...CELL, color: hasBlockers ? 'var(--color-error)' : 'var(--color-success)' }}>
+                  <td className="ops-table__td" data-tone={hasBlockers ? 'failed' : 'verified'}>
                     {hasBlockers ? (
                       <span title={`${p.blockerCount} gate${p.blockerCount === 1 ? '' : 's'} blocking`}>
-                        ⛔ {p.blockerCount}
+                        <Icon name="gate" className="ops-table__icon" /> {p.blockerCount}
                       </span>
                     ) : (
                       <span title="No blockers">0</span>
@@ -307,7 +251,7 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
                   </td>
 
                   {/* Failed steps */}
-                  <td style={{ ...CELL, color: hasFailed ? 'var(--color-error)' : 'var(--color-success)' }}>
+                  <td className="ops-table__td" data-tone={hasFailed ? 'failed' : 'verified'}>
                     {hasFailed ? (
                       <span title={`${p.failedStepCount} failed step${p.failedStepCount === 1 ? '' : 's'}`}>
                         ✗ {p.failedStepCount}
@@ -318,18 +262,18 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
                   </td>
 
                   {/* Inventory age */}
-                  <td style={{ ...CELL, color: inventoryColor(p.inventoryAgeDays) }}>
+                  <td className="ops-table__td" data-tone={inventoryTone(p.inventoryAgeDays)}>
                     {p.inventoryAgeDays !== undefined ? (
                       <span title={`${p.inventoryAgeDays} day${p.inventoryAgeDays === 1 ? '' : 's'} since last bundle`}>
                         {p.inventoryAgeDays === 0 ? 'today' : `${p.inventoryAgeDays}d`}
-                        {isStale && <span style={{ marginLeft: '0.3rem' }}>⚠</span>}
+                        {isStale && <span className="ops-table__stale">⚠</span>}
                       </span>
                     ) : '—'}
                   </td>
 
                   {/* Last merge */}
-                  <td style={CELL}>
-                    <span title={p.lastMergedAt ?? 'Never merged'} style={{ color: 'var(--color-text-muted)' }}>
+                  <td className="ops-table__td">
+                    <span title={p.lastMergedAt ?? 'Never merged'} className="ops-table__muted">
                       {relativeTime(p.lastMergedAt)}
                     </span>
                   </td>

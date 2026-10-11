@@ -21,6 +21,7 @@
 
 import { useState } from 'react'
 import type { PromotionStep } from '../types'
+import '../styles/PromotionErrorsPanel.css'
 
 /** Minimum grouping for a single failed step. */
 interface ErrorGroup {
@@ -163,118 +164,53 @@ export default function PromotionErrorsPanel({ steps, onSelectEnvironment }: Pro
   }
 
   return (
-    <div
-      data-testid="promotion-errors-panel"
-      style={{
-        margin: '0 1.5rem 1rem',
-        border: '1px solid var(--color-error)',
-        borderRadius: '6px',
-        background: 'var(--color-surface)',
-        overflow: 'hidden',
-      }}
-    >
+    <div data-testid="promotion-errors-panel" className="promotion-errors">
       {/* Header */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-        padding: '10px 14px',
-        background: 'var(--color-error-bg)',
-        borderBottom: '1px solid var(--color-error)',
-      }}>
-        <span style={{ color: 'var(--color-error)', fontSize: '14px' }}>✗</span>
-        <span style={{ fontWeight: 600, color: 'var(--color-error)', fontSize: '13px' }}>
+      <div className="promotion-errors__header">
+        <span className="promotion-errors__icon">✗</span>
+        <span className="promotion-errors__title">
           {totalFailed} environment{totalFailed !== 1 ? 's' : ''} failed
         </span>
-        <span style={{ color: 'var(--color-text-faint)', fontSize: '12px' }}>
+        <span className="promotion-errors__subtitle">
           — {groups.length} distinct failure pattern{groups.length !== 1 ? 's' : ''}
         </span>
       </div>
 
       {/* Error groups */}
-      {groups.map((group, gi) => {
+      {groups.map(group => {
         const key = `${group.stepType}::${group.messagePrefix}`
         const isGroupExpanded = expandedGroups.has(key)
         const isRawExpanded = expandedRaw.has(key)
 
         return (
-          <div
-            key={key}
-            data-testid="error-group"
-            style={{
-              borderBottom: gi < groups.length - 1 ? '1px solid var(--color-border)' : undefined,
-            }}
-          >
+          <div key={key} data-testid="error-group" className="promotion-errors__group">
             {/* Group header row */}
-            <div style={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: '10px',
-              padding: '10px 14px',
-            }}>
+            <div className="promotion-errors__row">
               {/* Step type badge */}
-              <span
-                data-testid="error-step-type"
-                style={{
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  padding: '2px 7px',
-                  borderRadius: '3px',
-                  background: 'var(--color-error-bg)',
-                  border: '1px solid var(--color-error)',
-                  color: 'var(--color-error)',
-                  flexShrink: 0,
-                  fontFamily: 'var(--k-font-mono)',
-                  whiteSpace: 'nowrap',
-                  marginTop: '1px',
-                }}
-              >
+              <span data-testid="error-step-type" className="promotion-errors__step">
                 {group.stepType}
               </span>
 
               {/* Affected count */}
-              <span
-                data-testid="error-count"
-                style={{
-                  fontSize: '11px',
-                  color: 'var(--color-error)',
-                  flexShrink: 0,
-                  fontWeight: 600,
-                  marginTop: '2px',
-                }}
-              >
+              <span data-testid="error-count" className="promotion-errors__count">
                 {group.count}×
               </span>
 
               {/* Message preview + controls */}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{
-                  fontSize: '12px',
-                  color: 'var(--color-error)',
-                  fontFamily: 'var(--k-font-mono)',
-                  wordBreak: 'break-all',
-                  lineHeight: 1.4,
-                }}>
+              <div className="promotion-errors__body">
+                <div className="promotion-errors__message">
                   {isRawExpanded ? group.message : group.messagePrefix}
                   {group.message.length > 80 && !isRawExpanded && (
-                    <span style={{ color: 'var(--color-text-faint)' }}>…</span>
+                    <span className="promotion-errors__ellipsis">…</span>
                   )}
                 </div>
 
                 {/* Controls */}
-                <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
+                <div className="promotion-errors__controls">
                   {group.message.length > 80 && (
                     <button
                       onClick={() => toggleRaw(key)}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        padding: 0,
-                        cursor: 'pointer',
-                        color: 'var(--color-accent)',
-                        fontSize: '11px',
-                        textDecoration: 'underline',
-                      }}
+                      className="promotion-errors__link promotion-errors__link--raw"
                     >
                       {isRawExpanded ? 'Hide raw' : 'Show raw'}
                     </button>
@@ -282,15 +218,7 @@ export default function PromotionErrorsPanel({ steps, onSelectEnvironment }: Pro
                   <button
                     data-testid="expand-environments"
                     onClick={() => toggleGroup(key)}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      padding: 0,
-                      cursor: 'pointer',
-                      color: 'var(--color-text-muted)',
-                      fontSize: '11px',
-                      textDecoration: 'underline',
-                    }}
+                    className="promotion-errors__link"
                   >
                     {isGroupExpanded
                       ? 'Collapse'
@@ -302,31 +230,17 @@ export default function PromotionErrorsPanel({ steps, onSelectEnvironment }: Pro
 
             {/* Expanded environment list */}
             {isGroupExpanded && (
-              <div style={{
-                padding: '0 14px 10px 14px',
-                display: 'flex',
-                flexWrap: 'wrap',
-                gap: '6px',
-              }}>
+              <div className="promotion-errors__envs">
                 {group.environments.map(env => (
                   <button
                     key={`${env.namespace}/${env.environment}`}
                     data-testid="environment-link"
                     onClick={() => onSelectEnvironment?.(env.environment)}
-                    style={{
-                      background: 'var(--color-error-bg)',
-                      border: '1px solid var(--color-error)',
-                      borderRadius: '4px',
-                      padding: '3px 10px',
-                      cursor: 'pointer',
-                      color: 'var(--color-error)',
-                      fontSize: '12px',
-                      fontFamily: 'var(--k-font-mono)',
-                    }}
+                    className="promotion-errors__env"
                   >
                     {env.environment}
                     {env.namespace !== 'default' && (
-                      <span style={{ color: 'var(--color-text-faint)', marginLeft: '4px' }}>
+                      <span className="promotion-errors__env-ns">
                         ({env.namespace})
                       </span>
                     )}
