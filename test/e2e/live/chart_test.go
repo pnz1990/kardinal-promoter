@@ -541,7 +541,7 @@ func TestChart_Schema(t *testing.T) {
 
 	for key, values := range map[string]framework.Values{
 		"krocodile": {"krocodile": framework.Values{"enabled": true}},
-		"logLevel":  {"logLevel": "verbose"},
+		"shard":     {"controller": framework.Values{"shard": "shard-a"}},
 	} {
 		_, out, err := e.TryInstallChart(t, releaseName(ns), ns, nsValues(ns, values), false)
 		require.Error(t, err, "helm install with %s", key)
