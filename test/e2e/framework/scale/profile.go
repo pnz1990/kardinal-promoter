@@ -46,6 +46,12 @@ type Profile struct {
 	// BigWaves and BigWaveWidth are the fan-out a large company asks for (10
 	// waves of 15 regions, 150 environments).
 	BigWaves, BigWaveWidth int
+	// ArgoWaves and ArgoWaveWidth are TestScale_TopologyArgoCD's fan-out,
+	// one Argo CD Application per environment. Argo CD syncs every wave
+	// before the next can start, so on a GitHub runner each wave of the full
+	// fan-out took about a minute and the 151 environments did not fit the
+	// ci profile's Settle; ci runs a smaller one (41), full the 151.
+	ArgoWaves, ArgoWaveWidth int
 	// LatticeDepth layers of LatticeWidth environments, each depending on
 	// every environment of the layer before (a diamond lattice).
 	LatticeDepth, LatticeWidth int
@@ -107,7 +113,7 @@ type Profile struct {
 var profiles = map[string]Profile{
 	"ci": {
 		ChainStages: 30, LongChainStages: 120,
-		Waves: 3, WaveWidth: 4, BigWaves: 10, BigWaveWidth: 15,
+		Waves: 3, WaveWidth: 4, BigWaves: 10, BigWaveWidth: 15, ArgoWaves: 4, ArgoWaveWidth: 10,
 		LatticeDepth: 3, LatticeWidth: 3, FanIn: 10, SharedPipelines: 3,
 		Pipelines: 20, PipelineEnvs: 3, BurstBundles: 100, BurstPipelines: 10,
 		SustainedRate: 0.5, SustainedFor: 2 * time.Minute, SustainedPipelines: 8,
@@ -115,11 +121,15 @@ var profiles = map[string]Profile{
 		TenantWave: 30, TenantStartWithin: 20 * time.Second, TenantBBundles: 3, TenantStepP99: 20 * time.Second, TenantBundleP99: 90 * time.Second,
 		Settle:       10 * time.Minute,
 		SLOPipelines: 20,
-		SLO:          invariants.SLO{StepP50: 5 * time.Second, StepP99: 15 * time.Second, BundleP99: 45 * time.Second},
+		// Measured on GitHub runners with the -race controller (nightly
+		// and v0.10.0 tag, 2026-10-10/11): auto step p50 8-10 s, p99 13 s,
+		// Bundle p99 29-36 s; a 32-core host measures 1-2 s. The objective
+		// keeps about 1.5-2x margin over the runner; full stays strict.
+		SLO: invariants.SLO{StepP50: 15 * time.Second, StepP99: 30 * time.Second, BundleP99: 75 * time.Second},
 	},
 	"full": {
 		ChainStages: 100, LongChainStages: 120,
-		Waves: 9, WaveWidth: 11, BigWaves: 10, BigWaveWidth: 15,
+		Waves: 9, WaveWidth: 11, BigWaves: 10, BigWaveWidth: 15, ArgoWaves: 10, ArgoWaveWidth: 15,
 		LatticeDepth: 6, LatticeWidth: 5, FanIn: 50, SharedPipelines: 5,
 		Pipelines: 200, PipelineEnvs: 3, BurstBundles: 1000, BurstPipelines: 100,
 		SustainedRate: 2, SustainedFor: 10 * time.Minute, SustainedPipelines: 50,
@@ -172,6 +182,7 @@ func overrides(p *Profile) []override {
 	ints := map[string]*int{
 		"CHAIN_STAGES": &p.ChainStages, "LONG_CHAIN_STAGES": &p.LongChainStages,
 		"WAVES": &p.Waves, "WAVE_WIDTH": &p.WaveWidth, "BIG_WAVES": &p.BigWaves, "BIG_WAVE_WIDTH": &p.BigWaveWidth,
+		"ARGO_WAVES": &p.ArgoWaves, "ARGO_WAVE_WIDTH": &p.ArgoWaveWidth,
 		"LATTICE_DEPTH": &p.LatticeDepth, "LATTICE_WIDTH": &p.LatticeWidth, "FAN_IN": &p.FanIn,
 		"SHARED_PIPELINES": &p.SharedPipelines, "PIPELINES": &p.Pipelines, "PIPELINE_ENVS": &p.PipelineEnvs,
 		"BURST_BUNDLES": &p.BurstBundles, "BURST_PIPELINES": &p.BurstPipelines,
