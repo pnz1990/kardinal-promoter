@@ -6,10 +6,12 @@ watch it stop at an approval gate before prod, and approve it.
 
 You need:
 
-- Docker, and [kind](https://kind.sigs.k8s.io/) (k3d, minikube or Docker Desktop work too)
+- Docker, and a local cluster tool: [kind](https://kind.sigs.k8s.io/), k3d, minikube, Docker
+  Desktop or Rancher Desktop
 - `kubectl` and `helm`
-- the GitHub CLI `gh`, signed in (`gh auth login`); `kardinal quickstart` uses its token
-<!-- C7: confirm the token sources (GITHUB_TOKEN, then `gh auth token`) and the scopes it needs -->
+- the GitHub CLI `gh`, signed in (`gh auth login`)
+- a GitHub token that can write contents and pull requests on your fork of the demo repository.
+  `kardinal quickstart` reads it from `GITHUB_TOKEN`, or else from `gh auth token`
 
 ## 1. Install the CLI
 
@@ -36,10 +38,11 @@ writes to, with one directory per environment. Your fork receives its commits an
 kardinal quickstart --repo github.com/<your-user>/kardinal-demo
 ```
 
-It runs only against a local cluster and refuses any other kubectl context. It installs kro,
-Argo CD and kardinal, stores your token in one Secret, creates the `demo` Pipeline with an
-approval gate on prod, and ships the first version.
-<!-- C7: the exact list of what it installs and creates, its flags (--no-argocd, …) and the context check -->
+It runs only when the current kubectl context is a kind, k3d, minikube, Docker Desktop or Rancher
+Desktop cluster, and refuses any other. It installs kro, Argo CD and kardinal, stores your token
+in one Secret, and creates the `demo` Pipeline in the `default` namespace: test, uat and prod,
+with an approval gate on prod that you may approve. Then it ships the first version.
+<!-- C7: the exact list of what it installs and creates, and its flags -->
 
 ```text
 <C7: quickstart output, ending with the UI, watch and next-step lines>
@@ -52,24 +55,22 @@ it with:
 kardinal status demo -w
 ```
 
-<!-- C7: namespace. If the demo Pipeline lives in kardinal-system, every command below needs
-     -n kardinal-system unless quickstart sets the context's namespace. -->
-
 ## 4. Open the UI
 
 ```bash
-<C7: the command quickstart prints for the UI, e.g. a port-forward and kardinal dashboard>
+kardinal dashboard
 ```
 
-The UI opens on the fleet. Open `demo`: the map shows test, uat and prod, and the version on its
+It port-forwards to the controller and opens the UI in your browser. The UI opens on the fleet. Open `demo`: the map shows test, uat and prod, and the version on its
 way through them. Select prod to see why it is waiting.
 
 ## 5. Ship a version
 
 ```bash
-kardinal ship demo --image <C7: the second kardinal-test-app image quickstart suggests> --wait
+kardinal ship demo --image ghcr.io/pnz1990/kardinal-test-app:<C7: tag> --wait
 ```
 
+Quickstart's output ends with this command, with a real tag of `kardinal-test-app`.
 `ship` creates a version and, with `--wait`, follows it, printing each environment's new state.
 The new version supersedes the first one, which has not reached prod.
 
@@ -102,7 +103,9 @@ kardinal why demo prod
 ```
 
 The last line is the command that gets past the gate. In the UI, prod's details show the same
-gate under "Why it's waiting", with an **Approve** button.
+gate under "Why it's waiting".
+<!-- C7: if quickstart installs with ui.auth.tokenReview=true, the UI can record the approval:
+     mention its Approve button here. Without it the UI refuses and points to kardinal approve. -->
 
 ## 7. Approve
 
@@ -114,9 +117,8 @@ kardinal approve demo prod
 <#1736: the confirmation prompt and its answer>
 ```
 
-The gate passes and prod promotes.
-<!-- C7: prod's approval mode in the demo. With pr-review, prod opens a PR in your fork and
-     this step ends with merging it; with auto, it goes live after the approval. -->
+The gate passes. Prod's changes go in without a pull request (`approval: auto`), so the version
+goes live in prod within a minute or two.
 
 ```bash
 kardinal status demo
@@ -136,6 +138,10 @@ Your fork keeps the commits and pull requests; delete it on GitHub when you are 
 
 ## Next steps
 
+- Review prod's changes as pull requests: set `approval: pr-review` on prod with
+  `kubectl edit pipeline demo`, and ship again. Prod then opens a pull request in your fork, with
+  the version's provenance and every gate's result in its body, and goes live when you merge it
+  ([PR evidence](pr-evidence.md)).
 - [Your first pipeline](first-pipeline.md): set it up against your own GitOps repository
 - [Concepts](concepts.md): versions, pipelines, environments and gates
 - [Require approvals](approvals.md): who may approve, how many, and from the CLI or the UI
