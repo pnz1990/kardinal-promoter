@@ -38,7 +38,7 @@ Incident:
   rollback     Roll back a pipeline environment to a previous Bundle
 
 Admin and debug:
-  audit        Audit log commands — view and summarize promotion events
+  audit        Audit log commands: view and summarize promotion events
   completion   Generate shell completion scripts
   delete       Delete kardinal resources
   help         Help about any command
@@ -51,6 +51,6 @@ Flags:
   -h, --help                help for kardinal
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: get auditevents, bundles, pipelines, steps, subscriptions)
+  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
 
 Use "kardinal [command] --help" for more information about a command.

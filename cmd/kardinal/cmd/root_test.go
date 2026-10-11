@@ -104,8 +104,8 @@ func TestOutputFlag_Validated(t *testing.T) {
 		{"unknown format", []string{"version", "-o", "xml"}, `invalid -o "xml": must be table, json or yaml`},
 		{"json on a table command", []string{"completion", "zsh", "-o", "json"},
 			`-o json is not supported by "kardinal completion"`},
-		{"yaml on history", []string{"history", "demo", "-o", "yaml"},
-			`-o yaml is not supported by "kardinal history"`},
+		{"yaml on logs", []string{"logs", "demo", "-o", "yaml"},
+			`-o yaml is not supported by "kardinal logs"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

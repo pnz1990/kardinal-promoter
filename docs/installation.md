@@ -389,15 +389,19 @@ release name other than `kardinal-promoter`, the Service is named
 
 ### What the UI shows
 
+The UI calls a Bundle a *version*, a PromotionStep a *stage* and a PolicyGate a *gate*
+([Concepts](concepts.md)). An environment's or gate's panel has the Kubernetes kind and object
+name under **Kubernetes details**, for `kubectl`.
+
 - **Fleet board** (the start page, and the kardinal logo from anywhere). Each Pipeline is a
   line of stations, one per environment in promotion order; environments promoted in parallel
   are stacked, and five or more of them (a wave) are one plate that names the range, the version
   most of them run and how many are in each state. A station shows the version the environment runs and when it was Verified.
   That is the newest promotion there whose change landed, the Bundle `kardinal status` reports
-  as deployed. Image and config Bundles do not replace each other, so a station also shows, under
+  as running. Image and config Bundles do not replace each other, so a station also shows, under
   `+`, what the environment runs from another Bundle: the config commit of the last config Bundle
   under an image Bundle, or the image tags of the last image Bundle under a config Bundle, as
-  `kardinal status` does. A lit rail marks the active Bundle's version on its way into an environment:
+  `kardinal explain` does. A lit rail marks the active Bundle's version on its way into an environment:
   amber and moving while it promotes, waits for its PR or is health checked; amber and still
   while a PolicyGate holds it; red where it failed. A [fleet](pipeline-reference.md#fleets)
   is one station with a bar of its targets (Verified, in flight, Failed) and a count such as
@@ -415,6 +419,12 @@ release name other than `kardinal-promoter`, the Service is named
     gates with their CEL expressions and approvals.
   - **Metrics**: the release metrics.
 
+  Under the header, a Pipeline that is not Ready shows an error with its reason (for
+  `GitCredentialMissing`, the `kubectl` command that creates the git Secret), and a git Secret
+  without the `kardinal.io/referenceable=true` label shows a warning with the `kubectl label`
+  command; each command has a copy button. A Pipeline with no version yet shows its environments
+  and **Ship your first version**.
+
   When gates hold the shown Bundle, a banner on the map names them and the environments they
   block (`1 gate blocking prod`); **Show blocked** highlights them in the graph. An address with a
   Pipeline or a version the cluster does not have says it is not found and links back; it does
@@ -428,9 +438,14 @@ release name other than `kardinal-promoter`, the Service is named
 - **Step timings.** Selecting an environment step lists the steps of that promotion
   (`git-clone` … `health-check`) with their durations, and a bar for each that shows where it
   ran in the promotion's time. A slow health check or push stands out at once.
-- **Bundle types.** The Bundle card names what the shown Bundle changes: `image`, `config`,
-  `image + config` (a mixed Bundle) or `chart`. In the Bundle history only the Bundles that are
-  not image Bundles carry the tag.
+- **Version types.** A version that is not an image Bundle carries a tag for what it changes:
+  `config`, `image + config` (a mixed Bundle) or `chart`, in the header and in the version
+  history. Image Bundles, the common case, carry none.
+- **Errors.** A read that fails says what it means: the controller cannot be reached, it did
+  not answer in time, the token was refused, the account lacks the viewer role, or the
+  controller had an error. The client's message is under it, with **Retry**.
+- **Help.** The **?** button in the top bar (or the `?` key) lists the keyboard shortcuts and
+  links to these docs.
 - **Keyboard.** The first Tab stop skips to the main content. Each fleet line, and the Bundle
   history, is a single Tab stop: the arrow keys move between its stations or Bundles (Home and
   End to the ends, Up and Down between fleet lines), and Enter opens the one in focus. `?` lists

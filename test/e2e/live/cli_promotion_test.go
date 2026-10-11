@@ -42,7 +42,7 @@ var cliCellGap = regexp.MustCompile(`\s{2,}`)
 
 // watchFooter ends each table frame of a --watch command whose stdout is not
 // a terminal; the screen is not cleared between frames.
-const watchFooter = "\n(watching — press Ctrl-C to quit)\n"
+const watchFooter = "\n(watching; press Ctrl-C to quit)\n"
 
 // frames splits a --watch table stream into its complete frames.
 func frames(out string) []string {
@@ -340,14 +340,30 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	assert.Len(t, sl, 2)
 
 	// -o: json and yaml where a command supports them, else an error.
-	r := c.Fail(a.ns, "explain", pipelineName, "-o", "json")
-	assert.Equal(t, "-o json is not supported by \"kardinal explain\"; it prints a table\n", r.Stderr)
+	r := c.Fail(a.ns, "logs", pipelineName, "-o", "json")
+	assert.Equal(t, "-o json is not supported by \"kardinal logs\"; it prints a table\n", r.Stderr)
+	var ex struct {
+		Entries []struct{ Environment, Bundle, Type, State string } `json:"entries"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(c.Must(a.ns, "explain", pipelineName, "-o", "json")), &ex))
+	require.NotEmpty(t, ex.Entries)
+	for _, en := range ex.Entries {
+		assert.Equal(t, b1, en.Bundle, "explain -o json: %+v", en)
+	}
 	r = c.Fail(a.ns, "get", "bundles", "-o", "xml")
 	assert.Equal(t, "invalid -o \"xml\": must be table, json or yaml\n", r.Stderr)
 	sameTable(t, bt, c.Must(a.ns, "get", "bundles", "-o", "table"), "-o table is the default")
 
-	// A newer Bundle supersedes the first.
-	b2 := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
+	// A newer Bundle supersedes the first. create bundle -o json names it
+	// for a script (kardinal create bundle ... -o json | jq -r .bundle).
+	cr := c.Run(a.ns, "create", "bundle", pipelineName, "--image", fixtures.Image+":"+fixtures.V3, "-o", "json")
+	require.Equal(t, 0, cr.Code, cr.Output())
+	var created struct{ Bundle, Pipeline, Namespace, Type, Version string }
+	require.NoError(t, json.Unmarshal([]byte(cr.Stdout), &created), "stdout is JSON only:\n%s", cr.Stdout)
+	assert.Equal(t, []string{pipelineName, a.ns, "image", fixtures.V3}, []string{created.Pipeline, created.Namespace, created.Type, created.Version})
+	b2 := created.Bundle
+	var made v1alpha1.Bundle
+	require.NoError(t, e.Client.Get(context.Background(), types.NamespacedName{Namespace: a.ns, Name: b2}, &made), "the Bundle .bundle names exists")
 	e.WaitBundlePhase(t, a.ns, b1, "Superseded", promoteTimeout)
 	e.WaitPRState(t, a.repo, pr1.Number, "closed", time.Minute)
 	bt = c.Must(a.ns, "get", "bundles")
@@ -538,7 +554,7 @@ func TestCLI_Reports(t *testing.T) {
 	lf := c.Start(framework.CLIOptions{}, c.Args(a.ns, "logs", pipelineName, "--follow", "--bundle", bB)...)
 	e.WaitStepState(t, a.ns, pipelineName, bB, "prod", "WaitingForMerge", promoteTimeout)
 	lf.WaitStdout(time.Minute, "logs --follow to show prod waiting", func(out string) bool {
-		return strings.Contains(out, "[podinfo/prod] → "+display.Step("WaitingForMerge").Label+"\n")
+		return strings.Contains(out, "[podinfo/prod] -> "+display.Step("WaitingForMerge").Label+"\n")
 	})
 	assert.False(t, lf.Exited(), "logs --follow runs while prod waits for its PR")
 	prB := openPR(t, e, a.repo, fixtures.V3)
@@ -548,9 +564,9 @@ func TestCLI_Reports(t *testing.T) {
 	res := lf.Wait(time.Minute)
 	assert.Equal(t, 0, res.Code)
 	assert.True(t, strings.HasPrefix(res.Stdout, "Following logs for pipeline podinfo (Ctrl+C to stop)...\n"), res.Stdout)
-	assert.True(t, strings.HasSuffix(res.Stdout, "[podinfo/prod] → Live\nAll steps reached terminal state.\n"), res.Stdout)
+	assert.True(t, strings.HasSuffix(res.Stdout, "[podinfo/prod] -> Live\nAll steps reached terminal state.\n"), res.Stdout)
 	for _, env := range []string{"test", "prod"} {
-		assert.Equal(t, 1, strings.Count(res.Stdout, "[podinfo/"+env+"] → Live\n"), "each state change once:\n%s", res.Stdout)
+		assert.Equal(t, 1, strings.Count(res.Stdout, "[podinfo/"+env+"] -> Live\n"), "each state change once:\n%s", res.Stdout)
 	}
 	assert.Regexp(t, `(?m)^\[podinfo/prod\] wait-for-merge\s+\S+`, res.Stdout, "--follow prints the steps it runs")
 	assert.NotContains(t, res.Stdout, bA, "--bundle follows only B")
@@ -770,7 +786,7 @@ func TestCLI_Reports(t *testing.T) {
 		{"target_env", "prod"},
 		{"bundles_total", "2"},
 		{"deployment_frequency", "0.29/day", "(2 verified in target env)"},
-		{"lead_time_avg", "<lead>", "(creation → prod verified, 2 samples)"},
+		{"lead_time_avg", "<lead>", "(creation to prod verified, 2 samples)"},
 		{"change_fail_rate", "0.0%", "(0 failed / 2 total)"},
 		{"rollback_count", "0"},
 	}, mc)
@@ -778,7 +794,7 @@ func TestCLI_Reports(t *testing.T) {
 	require.Len(t, mc, 8, "%v", mc)
 	assert.Equal(t, []string{"pipeline", "podinfo", "(last 30 days)"}, mc[1])
 	assert.Equal(t, []string{"deployment_frequency", "0.07/day", "(2 verified in target env)"}, mc[4])
-	assert.Equal(t, "(creation → test verified, 2 samples)", mc[5][2])
+	assert.Equal(t, "(creation to test verified, 2 samples)", mc[5][2])
 	for _, tc := range []struct {
 		args []string
 		want string

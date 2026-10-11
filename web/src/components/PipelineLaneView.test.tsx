@@ -162,7 +162,7 @@ describe('PipelineLaneView — promote and roll back (C10b-web-08)', () => {
 
     await user.click(within(dialog).getByRole('button', { name: 'Promote to prod' }))
     expect(api.promote).toHaveBeenCalledWith('app', 'prod', 'team-a')
-    expect(await screen.findByRole('status')).toHaveTextContent('Promotion started: bundle app-xyz')
+    expect(await screen.findByRole('status')).toHaveTextContent('Promotion started: version app-xyz')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(onActionDone).toHaveBeenCalledOnce()
   })
@@ -219,7 +219,7 @@ describe('PipelineLaneView — rollback hold (#1528)', () => {
     await user.selectOptions(within(again).getByLabelText('Hold ends'), '24h')
     await user.click(within(again).getByRole('button', { name: 'Roll back and hold prod' }))
     expect(api.rollback).toHaveBeenLastCalledWith('app', 'prod', 'team-a', undefined, 'INC-43', '24h')
-    expect(await screen.findByRole('status')).toHaveTextContent('Rollback started: bundle app-rollback-abc123; prod is held on it')
+    expect(await screen.findByRole('status')).toHaveTextContent('Rollback started: version app-rollback-abc123; prod is held on it')
   })
 
   it('a plain rollback sends no hold', async () => {
