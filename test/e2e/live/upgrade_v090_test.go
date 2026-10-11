@@ -129,7 +129,7 @@ func TestUpgradeV090_FromV090(t *testing.T) {
 	require.NoError(t, err)
 
 	// ── 3. Label the Pipelines' git Secrets ─────────────────────────────
-	e.MustShell(t, framework.GuideBlockFrom(t, "0.9.0", "kardinal.io/referenceable=true"))
+	e.MustShell(t, framework.GuideBlockFrom(t, "0.9.0", "kardinal.io/referenceable=true --overwrite"))
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: framework.GitSecretName}, &secret))
 	assert.Equal(t, "true", secret.Labels["kardinal.io/referenceable"], "the guide labels the git Secret")
 
