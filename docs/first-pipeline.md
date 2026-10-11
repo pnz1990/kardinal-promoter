@@ -333,7 +333,7 @@ The next Bundle promoted to prod will have this gate injected into its Graph. If
 ```bash
 kardinal explain kardinal-test-app --env prod
 # ENVIRONMENT   VERSION                                 TYPE         NAME                 STATE      EXPRESSION            REASON
-# prod          sha-abc1234 (kardinal-test-app-9tptr)   PolicyGate   no-weekend-deploys   Blocking   !schedule.isWeekend   Production deployments are blocked on weekends (bundle.version=sha-abc1234: !schedule.isWeekend = false)
+# prod          sha-abc1234 (kardinal-test-app-9tptr)   PolicyGate   no-weekend-deploys   Blocking   !schedule.isWeekend   Production deployments are blocked on weekends (!schedule.isWeekend = false; version sha-abc1234)
 #
 # prod   deployed: sha-1a2b3c4 (kardinal-test-app-7qvsr)
 ```

@@ -19,9 +19,10 @@ interface Props {
   onDecided?: () => void
   /** Fold the panel (the stage drawer is open and shows its environment's gates). */
   collapsed?: boolean
-  /** The pipeline's newest Bundle: `kardinal approve <pipeline> <env>` approves it. Gates of any
-   *  other Bundle get the CLI line that names theirs. */
-  currentBundle?: string
+  /** The Bundle on its way into an environment (status.environments[].incomingBundle, else the
+   *  pipeline's newest): `kardinal approve <pipeline> <env>` approves it. Gates of any other Bundle
+   *  get the CLI line that names theirs. */
+  incomingFor?: (environment: string) => string | undefined
 }
 
 function formatAge(iso: string | undefined): string {
@@ -80,7 +81,7 @@ function GateSummaryChip({ gates }: { gates: PolicyGate[] }) {
   )
 }
 
-export function PolicyGatesPanel({ gates, loading, onDecided, collapsed, currentBundle }: Props) {
+export function PolicyGatesPanel({ gates, loading, onDecided, collapsed, incomingFor }: Props) {
   const blockedCount = count(gates, 'Block')
   // #524: auto-expand when any gate holds the bundle — the blocked state is the
   // most important information on screen and should not be hidden behind a
@@ -154,7 +155,7 @@ export function PolicyGatesPanel({ gates, loading, onDecided, collapsed, current
               )}
               {gate.approval && (
                 <ApprovalQuorum approval={gate.approval} pipeline={gate.pipeline} bundle={gate.bundle} environment={gate.environment}
-                  current={!currentBundle || gate.bundle === currentBundle}
+                  current={(() => { const incoming = gate.environment ? incomingFor?.(gate.environment) : undefined; return !incoming || gate.bundle === incoming })()}
                   namespace={gate.namespace} onDecided={onDecided} />
               )}
             </div>
