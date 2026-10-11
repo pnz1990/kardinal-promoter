@@ -41,17 +41,13 @@ func newDeleteBundleCmd() *cobra.Command {
 		Use:     "bundle <name>",
 		Aliases: []string{"bundles"},
 		Short:   "Delete a Bundle by name",
-		Long: `Delete a Bundle by name.
-
-Deleting a Bundle stops its promotion: its Graph, PromotionSteps and gate
-instances are deleted with it. Nothing is written to git. A pull request the
-promotion opened that is still open is closed, with a comment, before its
-PromotionStep goes away.
-
-Finished Bundles (Verified, Failed or Superseded) beyond the Pipeline's
-spec.historyLimit (default 50) are deleted automatically, oldest first;
-use this command to remove a Bundle before that.`,
-		Args: cobra.ExactArgs(1),
+		Long: `Delete a Bundle and stop its promotion: its Graph, steps and gate instances
+go with it, and a PR it opened that is still open is closed with a comment.
+Nothing is written to git. Old finished Bundles are deleted automatically
+past the Pipeline's spec.historyLimit (default 50).`,
+		Example:     `  kardinal delete bundle my-app-v1-5`,
+		Annotations: map[string]string{ReferenceAnnotation: deleteBundleReference},
+		Args:        cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
@@ -79,3 +75,13 @@ func deleteBundleFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Cli
 
 	return nil
 }
+
+// deleteBundleReference is the detail of the command for its reference page.
+const deleteBundleReference = `Deleting a Bundle stops its promotion: its Graph, PromotionSteps and gate
+instances are deleted with it. Nothing is written to git. A pull request the
+promotion opened that is still open is closed, with a comment, before its
+PromotionStep goes away.
+
+Finished Bundles (Verified, Failed or Superseded) beyond the Pipeline's
+spec.historyLimit (default 50) are deleted automatically, oldest first;
+use this command to remove a Bundle before that.`

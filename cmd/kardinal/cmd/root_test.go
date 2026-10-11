@@ -74,8 +74,8 @@ func TestRequiredFlags_EmptyValueRefused(t *testing.T) {
 		wantErr string
 	}{
 		{[]string{"override", "p", "--gate", "g", "--reason", ""}, "--reason is required for override (audit record)"},
-		{[]string{"override", "p", "--gate", "", "--reason", "r"}, "--gate is required"},
-		{[]string{"promote", "p", "--env", ""}, "--env is required"},
+		{[]string{"override", "p", "--gate", "", "--reason", "r"}, "--gate is required: name the gate to override"},
+		{[]string{"promote", "p", "--env", ""}, "which environment? Give it after the pipeline: kardinal promote p <env>"},
 	}
 	for _, tc := range cases {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
@@ -150,8 +150,8 @@ func TestRefreshAndDashboard(t *testing.T) {
 	assert.Equal(t, "kardinal UI: http://localhost:8082/ui/\n", buf.String())
 
 	refreshHelp, dashboardHelp := newRefreshCmd().Long, newDashboardCmd().Long
-	assert.Contains(t, refreshHelp, "does not re-evaluate gates")
+	assert.Contains(t, refreshHelp, "re-evaluate gates or re-run health\nchecks")
 	assert.NotContains(t, refreshHelp, "re-check health adapters")
-	assert.Contains(t, dashboardHelp, "it does not\nport-forward")
+	assert.Contains(t, dashboardHelp, "It does not port-forward")
 	assert.NotContains(t, dashboardHelp, "Uses port-forwarding")
 }

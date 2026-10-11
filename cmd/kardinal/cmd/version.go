@@ -32,10 +32,10 @@ func newVersionCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "version",
 		Short: "Print the CLI, controller, and kro (Graph) versions",
-		Long: `Print the CLI version, the controller version (the kardinal-version ConfigMap
-the controller writes to its namespace) and the kro version (the image tag of
-the kro controller in kro-system). Cluster versions show as unknown when the
-cluster cannot be reached.`,
+		Long: `Print the versions of the CLI, the controller and kro; the cluster ones are
+unknown when the cluster cannot be reached.`,
+		Example:     `  kardinal version`,
+		Annotations: map[string]string{ReferenceAnnotation: versionReference},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			controllerVer, graphVer := "unknown", ""
 			// Best-effort: without a cluster the CLI version is still printed.
@@ -111,3 +111,9 @@ func buildInfoVersion() string {
 	}
 	return CLIVersion
 }
+
+// versionReference is the detail of the command for its reference page.
+const versionReference = `Print the CLI version, the controller version (the kardinal-version ConfigMap
+the controller writes to its namespace) and the kro version (the image tag of
+the kro controller in kro-system). Cluster versions show as unknown when the
+cluster cannot be reached.`

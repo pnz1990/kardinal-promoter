@@ -173,3 +173,11 @@ func keys[V any](m map[string]V) []string {
 	}
 	return out
 }
+
+// TestGitHostPort_ParseErrorRedacted: the parse error of spec.git.url does
+// not carry a token used as the URL's user name.
+func TestGitHostPort_ParseErrorRedacted(t *testing.T) {
+	_, _, err := gitHostPort("https://ghp_SECRET@github.com/o/%zz")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "SECRET")
+}
