@@ -87,7 +87,11 @@ func BaseChartValues(t *testing.T) Values {
 		"image":    Values{"repository": image[:i], "tag": image[i+1:], "pullPolicy": "Never"},
 		"logLevel": "debug",
 		"scm":      Values{"provider": os.Getenv(EnvSCMProvider), "apiURL": os.Getenv(EnvSCMAPI)},
-		"github":   Values{"secretRef": Values{"name": GitSecretName}},
+		// The release's own SCM token Secret, never a Pipeline's git
+		// Secret: the controller refuses a Pipeline that names it. Set
+		// with the old github.* name, so a test's github.* values replace
+		// it rather than conflict with it.
+		"github": Values{"secretRef": Values{"name": ControllerSCMSecretName}},
 		// A release the test installs has its own identity admission
 		// policies, cluster-wide in cluster mode: they must let the suite's
 		// controller and its variants write what kardinal writes.
@@ -172,6 +176,7 @@ func valuesFile(t *testing.T, v Values) string {
 // when the test ends (see Release.cleanup).
 func (e *Env) TryInstallChart(t *testing.T, name, ns string, values Values, wait bool) (*Release, string, error) {
 	t.Helper()
+	e.ensureControllerSCMSecret(t, ns)
 	all := MergeValues(BaseChartValues(t), values)
 	args := []string{"install", name, chartDir(t), "-n", ns, "-f", valuesFile(t, all)}
 	if wait {
@@ -600,4 +605,37 @@ func suiteControllers() []string {
 		out = append(out, fmt.Sprintf("system:serviceaccount:%s:variant-%d", ControllerNamespace, i))
 	}
 	return out
+}
+
+// ControllerSCMSecretName is the SCM token Secret of a release a test
+// installs (scm.secretRef.name in BaseChartValues): a copy of the suite's git
+// token, without the kardinal.io/referenceable label, apart from the
+// GitSecretName Secret the test's Pipelines use.
+const ControllerSCMSecretName = "kardinal-scm-token"
+
+// ensureControllerSCMSecret creates ControllerSCMSecretName in ns from the
+// suite's git token, or refreshes its token when it exists (a release
+// reinstalled in the same namespace after the suite's token changed).
+func (e *Env) ensureControllerSCMSecret(t *testing.T, ns string) {
+	t.Helper()
+	ctx := context.Background()
+	var src corev1.Secret
+	if err := e.Client.Get(ctx, types.NamespacedName{Namespace: ControllerNamespace, Name: GitSecretName}, &src); err != nil {
+		if apierrors.IsNotFound(err) {
+			return
+		}
+		t.Fatalf("read %s/%s: %v", ControllerNamespace, GitSecretName, err)
+	}
+	cp := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: ControllerSCMSecretName}, Data: src.Data}
+	err := e.Client.Create(ctx, cp)
+	if apierrors.IsAlreadyExists(err) {
+		var cur corev1.Secret
+		if err = e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: ControllerSCMSecretName}, &cur); err == nil {
+			cur.Data = src.Data
+			err = e.Client.Update(ctx, &cur)
+		}
+	}
+	if err != nil {
+		t.Fatalf("create or refresh %s/%s: %v", ns, ControllerSCMSecretName, err)
+	}
 }
