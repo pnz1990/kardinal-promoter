@@ -61,7 +61,7 @@ func TestRollback_Hold(t *testing.T) {
 
 	const reason = "INC-42: v3 leaks connections"
 	out, rb := rbRollback(t, a, "prod", "--hold", "--reason", reason)
-	assert.Contains(t, out, fmt.Sprintf("Environment prod held on %s: no other version promotes there until: kardinal release-hold %s --env prod",
+	assert.Contains(t, out, fmt.Sprintf("Environment prod held on %s: no other version promotes there until: kardinal unhold %s prod",
 		rb, pipelineName))
 	assert.Contains(t, out, "Gates of prod that would block the rollback pass as EXEMPT (audited)")
 
@@ -174,8 +174,8 @@ func TestRollback_Hold(t *testing.T) {
 		return false, fmt.Sprintf("%d events, none GateExempted", len(evs))
 	})
 	explain := e.MustKardinal(t, a.ns, "explain", pipelineName, "--env", "prod")
-	assert.Contains(t, explain, fmt.Sprintf("prod: held on rollback %s by %s (%s)", rb, hold.CreatedBy, reason))
-	assert.Contains(t, explain, "Release with: kardinal release-hold "+pipelineName+" --env prod")
+	assert.Contains(t, explain, fmt.Sprintf("prod: held on rollback %s by %s (%s)", framework.VersionCell(fixtures.V2, rb), hold.CreatedBy, reason))
+	assert.Contains(t, explain, "Release with: kardinal unhold "+pipelineName+" prod")
 
 	// A newer Bundle promotes to test and then waits: no prod step while
 	// prod is held, and the rollback is not superseded.
@@ -187,9 +187,9 @@ func TestRollback_Hold(t *testing.T) {
 	again := rbRefused(t, a, "--env", "prod", "--hold", "--reason", "again")
 	assert.Contains(t, again, "environment prod is already held on "+rb)
 
-	rel := e.MustKardinal(t, a.ns, "release-hold", pipelineName, "--env", "prod")
-	assert.Equal(t, fmt.Sprintf("Released the hold of %s on prod (rollback %s, held by %s: %s).\n",
-		pipelineName, rb, hold.CreatedBy, reason), rel)
+	rel := e.MustKardinal(t, a.ns, "unhold", pipelineName, "prod")
+	assert.Equal(t, fmt.Sprintf("Released the hold of %s on prod (held on %s by %s: %s).\n",
+		pipelineName, framework.VersionCell(fixtures.V2, rb), hold.CreatedBy, reason), rel)
 	rbVerified(t, a, b3, "prod")
 	assertEnvAt(t, a, "prod", fixtures.V3)
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &p))

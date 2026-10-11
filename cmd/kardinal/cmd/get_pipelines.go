@@ -73,7 +73,7 @@ func newGetPipelinesCmd() *cobra.Command {
 		Annotations: map[string]string{outputAnnotation: "true"},
 		Aliases:     []string{"pipeline"},
 		Short:       "List Pipelines",
-		Long: `List Pipelines with the state of their current Bundle in each environment, in
+		Long: `List Pipelines with the state of their current version in each environment, in
 DAG order (wide pipelines get one summary row each: kardinal get pipelines
 <name> shows every environment). A failed build prints an ERROR: line with its
 cause after the table. -w refreshes it.`,
