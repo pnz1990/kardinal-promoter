@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"io"
@@ -36,6 +37,8 @@ func outputFixture() []sigs_client.Object {
 	p := policyPipeline("demo", "test", "uat", "prod")
 	p.Status.Phase = "Promoting"
 	p.Status.Summary = "1.5.0 live in test; waiting for PR merge in uat (#42); held by gate no-weekend in prod"
+	// The cluster's text has non-ASCII characters (the controller writes
+	// dashes and arrows): plain output folds them.
 	p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{
 		{Name: "test", Bundle: "demo-b3", Version: "1.5.0", State: "Verified", Since: &since},
 		{Name: "uat", Bundle: "demo-b1", Version: "1.4.0", IncomingBundle: "demo-b3", IncomingVersion: "1.5.0",
@@ -61,7 +64,7 @@ func outputFixture() []sigs_client.Object {
 		explainStep("demo", "demo-b1", "test", "Verified", "", at(300)),
 		explainStep("demo", "demo-b1", "uat", "Verified", "", at(290)),
 		explainStep("demo", "demo-b1", "prod", "Verified", "", at(280)),
-		explainStep("demo", "demo-b2", "test", "Failed", "health check failed", at(200)),
+		explainStep("demo", "demo-b2", "test", "Failed", "health alarm — rollback Bundle demo-b2 → demo-b1 created", at(200)),
 		explainStep("demo", "demo-b0", "test", "Superseded", "", at(400)),
 		explainStep("demo", "demo-b3", "test", "Verified", "", at(50)),
 	}
@@ -194,7 +197,7 @@ func TestOutput_Terminal(t *testing.T) {
 	asTerminal(t, "LANG", "C")
 	out, _, err = runOutput(t, c, "get", "bundles", "demo")
 	require.NoError(t, err)
-	assert.Contains(t, out, "\x1b[1;97;41mx Failed\x1b[0m", "ASCII glyph without a UTF-8 locale, failed filled")
+	assert.Regexp(t, "\x1b\\[1;97;4[0-7]mx Failed\x1b\\[0m", out, "ASCII glyph without a UTF-8 locale, failed filled")
 }
 
 // TestOutput_JSON (C4): status, explain, history, create bundle, promote and
@@ -204,6 +207,7 @@ func TestOutput_Terminal(t *testing.T) {
 // Covers CLI-STYLE-01.
 func TestOutput_JSON(t *testing.T) {
 	t.Setenv("KUBECONFIG", "/dev/null")
+	t.Setenv("KARDINAL_UI_URL", "")
 	c := policyClient(t, outputFixture()...)
 	for _, args := range [][]string{
 		{"status", "-o", "json"},
@@ -222,7 +226,8 @@ func TestOutput_JSON(t *testing.T) {
 	var created createdBundle
 	require.NoError(t, json.Unmarshal([]byte(out), &created), out)
 	assert.True(t, strings.HasPrefix(created.Bundle, "demo-"), out)
-	assert.Equal(t, createdBundle{Bundle: created.Bundle, Pipeline: "demo", Namespace: "default", Type: "image", Version: "1.6.0"}, created)
+	assert.Equal(t, createdBundle{Bundle: created.Bundle, Pipeline: "demo", Namespace: "default", Type: "image", Version: "1.6.0",
+		URL: "http://localhost:8082/ui/#pipeline=demo&ns=default"}, created)
 	assert.Contains(t, stderr, "warning: the Bundle records no creator", "the fake API server says nobody: a warning, on stderr")
 
 	var view pipelineStatus
@@ -250,4 +255,28 @@ func TestOutput_JSON(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal([]byte(out), &view), out)
 	assert.Equal(t, "Pending", view.Environments[2].State)
+}
+
+// TestExplainWatch_JSON (C4): explain -w -o json prints JSON documents only:
+// no footer, no screen clear, and its errors on stderr.
+//
+// Covers CLI-STYLE-01.
+func TestExplainWatch_JSON(t *testing.T) {
+	globalOutput = "json"
+	var errb bytes.Buffer
+	prevErr := errOut
+	errOut = &errb
+	t.Cleanup(func() { globalOutput, errOut = "", prevErr })
+	c := policyClient(t, outputFixture()...)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out bytes.Buffer
+	require.NoError(t, explainWatch(ctx, &out, c, "default", "demo", "", false, time.Millisecond))
+	assert.True(t, json.Valid(out.Bytes()), out.String())
+	assert.NotContains(t, out.String(), "watching")
+
+	out.Reset()
+	require.NoError(t, explainWatch(ctx, &out, c, "default", "nope", "", false, time.Millisecond))
+	assert.Empty(t, out.String(), "the error is not on stdout")
+	assert.Contains(t, errb.String(), `error: pipeline "nope" not found`)
 }

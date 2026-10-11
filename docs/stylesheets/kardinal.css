@@ -1,0 +1,114 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * kardinal.css — maps MkDocs Material's --md-* variables to the kardinal design
+ * tokens (tokens.css, generated from web/tokens/tokens.json), so the docs use the
+ * UI's palette and fonts. Only var(--k-*) references: web/src/tokens.test.ts fails
+ * on a literal colour or length here.
+ *
+ * Material sets data-md-color-scheme on <body>, so the mapping is declared there
+ * as well as on :root.
+ */
+
+:root,
+[data-md-color-scheme="default"],
+[data-md-color-scheme="slate"] {
+  --md-text-font-family: var(--k-font-body);
+  --md-code-font-family: var(--k-font-mono);
+
+  --md-default-bg-color: var(--k-surface-canvas);
+  --md-default-bg-color--light: var(--k-surface-base);
+  --md-default-bg-color--lighter: var(--k-surface-raised);
+  --md-default-bg-color--lightest: var(--k-surface-sunken);
+  --md-default-fg-color: var(--k-ink);
+  --md-default-fg-color--light: var(--k-ink-2);
+  --md-default-fg-color--lighter: var(--k-ink-3);
+  --md-default-fg-color--lightest: var(--k-line);
+
+  /* The header is a quiet bar, not a coloured slab. */
+  --md-primary-fg-color: var(--k-surface-base);
+  --md-primary-fg-color--light: var(--k-surface-raised);
+  --md-primary-fg-color--dark: var(--k-surface-sunken);
+  --md-primary-bg-color: var(--k-ink);
+  --md-primary-bg-color--light: var(--k-ink-2);
+  --md-accent-fg-color: var(--k-thread-text);
+  --md-accent-fg-color--transparent: var(--k-thread-wash);
+  --md-accent-bg-color: var(--k-surface-raised);
+  --md-accent-bg-color--light: var(--k-surface-base);
+
+  --md-typeset-color: var(--k-ink);
+  /* Links: ink text with a thread underline (below). */
+  --md-typeset-a-color: var(--k-ink);
+  --md-typeset-mark-color: var(--k-status-blocked-wash);
+  --md-typeset-table-color: var(--k-line);
+  --md-typeset-table-color--light: var(--k-surface-base);
+
+  --md-code-bg-color: var(--k-surface-sunken);
+  --md-code-fg-color: var(--k-ink);
+  --md-code-hl-color: var(--k-thread-ghost);
+  --md-code-hl-keyword-color: var(--k-syntax-keyword);
+  --md-code-hl-name-color: var(--k-syntax-ident);
+  --md-code-hl-variable-color: var(--k-syntax-ident);
+  --md-code-hl-constant-color: var(--k-syntax-ident);
+  --md-code-hl-string-color: var(--k-syntax-string);
+  --md-code-hl-number-color: var(--k-syntax-number);
+  --md-code-hl-special-color: var(--k-syntax-number);
+  --md-code-hl-function-color: var(--k-syntax-function);
+  --md-code-hl-operator-color: var(--k-syntax-punct);
+  --md-code-hl-punctuation-color: var(--k-syntax-punct);
+  --md-code-hl-comment-color: var(--k-syntax-comment);
+  --md-code-hl-generic-color: var(--k-ink-2);
+
+  --md-admonition-fg-color: var(--k-ink);
+  --md-admonition-bg-color: var(--k-surface-base);
+  --md-footer-fg-color: var(--k-ink-2);
+  --md-footer-fg-color--light: var(--k-ink-3);
+  --md-footer-fg-color--lighter: var(--k-ink-3);
+  --md-footer-bg-color: var(--k-surface-sunken);
+  --md-footer-bg-color--dark: var(--k-surface-sunken);
+
+  --md-mermaid-font-family: var(--k-font-body);
+  --md-mermaid-edge-color: var(--k-ink-node);
+  --md-mermaid-node-bg-color: var(--k-surface-base);
+  --md-mermaid-node-fg-color: var(--k-ink);
+  --md-mermaid-label-bg-color: var(--k-surface-canvas);
+  --md-mermaid-label-fg-color: var(--k-ink-2);
+}
+
+.md-typeset a {
+  text-decoration: underline var(--k-border-hairline) var(--k-thread-text);
+  text-underline-offset: 0.2em;
+}
+.md-typeset a:hover {
+  color: var(--k-ink);
+  text-decoration-thickness: var(--k-stroke-ring);
+}
+
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-header__topic {
+  font-family: var(--k-font-display);
+  font-stretch: var(--k-stretch-normal);
+}
+.md-typeset h1 {
+  color: var(--k-ink);
+  font-weight: var(--k-weight-title);
+}
+
+.md-typeset code,
+.md-typeset kbd,
+.md-typeset pre {
+  font-variant-numeric: var(--k-numeric-mono);
+}
+
+/* The header search field: a quiet well, its text in ink. */
+.md-search__input {
+  background-color: var(--k-surface-sunken);
+  color: var(--k-ink);
+}
+.md-search__input::placeholder,
+.md-search__icon {
+  color: var(--k-ink-2);
+}

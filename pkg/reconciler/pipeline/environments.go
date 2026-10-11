@@ -75,6 +75,9 @@ func ProjectEnvironments(p *kardinalv1alpha1.Pipeline, bundles []kardinalv1alpha
 		if b == nil || lifecycle.Halted(b) || !inFlightBundlePhases[b.Status.Phase] {
 			continue
 		}
+		// All of the Pipeline's steps, not only the gate environment's:
+		// before the environment has a step, a gate holds the Bundle only
+		// once every upstream environment is Verified (graph.GateHolds).
 		if graph.GateHoldsSteps(p, b, g, mine) {
 			env := g.Labels["kardinal.io/environment"]
 			held[env] = append(held[env], heldBy{bundle: b, gate: gateName(g)})
@@ -212,7 +215,7 @@ func currentStep(steps []*kardinalv1alpha1.PromotionStep, all map[string]*kardin
 		if b == nil {
 			continue
 		}
-		if lifecycle.Halted(b) && !(lifecycle.Rejected(b) && lifecycle.RejectedLiveStep(b, s)) {
+		if lifecycle.Halted(b) && (!lifecycle.Rejected(b) || !lifecycle.RejectedLiveStep(b, s)) {
 			continue
 		}
 		if best == nil || lifecycle.CompareCreation(b, bestBundle) > 0 ||

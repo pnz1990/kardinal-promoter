@@ -55,6 +55,10 @@ func Strip(text string) string { return ansiRE.ReplaceAllString(text, "") }
 func (t *Table) Flush() error {
 	text := t.buf.String()
 	t.buf.Reset()
+	if _, ok := t.w.(*Folder); ok {
+		// Fold before measuring, so a folded cell ("->") lines up.
+		text = Fold(text)
+	}
 	if text == "" {
 		return nil
 	}

@@ -63,7 +63,7 @@ export function InsecureConnectionBanner({ dismissed, onDismiss, margin = '0 0 0
         <span style={{ fontSize: '0.82rem', color: 'var(--color-warning)', fontWeight: 600 }}>
           Insecure connection — kardinal UI is accessed over plain HTTP.{' '}
           Use{' '}
-          <code style={{ fontFamily: 'monospace', fontSize: '0.78rem' }}>
+          <code style={{ fontFamily: 'var(--k-font-mono)', fontSize: '0.78rem' }}>
             {PORT_FORWARD_COMMAND}
           </code>{' '}
           and open{' '}

@@ -220,21 +220,56 @@ func resolveRestConfig(clientConfig clientcmd.ClientConfig, explicitKubeconfig b
 }
 
 // rootReference is the detail of kardinal for its reference page: how the
-// output looks where it goes.
+// output looks where it goes, and the JSON it prints.
 const rootReference = `Output follows where it goes. On a terminal, each state reads as a glyph and
-its label in the status colours of the UI: Live (spruce), Promoting and
-Checking health (red), Waiting for PR merge and gates not ready yet (blue),
-Held by gate (ochre), Failed (white on garnet, the only filled state),
-Replaced by newer version and Not reached (grey); Paused and Held by rollback
-are in bold. Piped to a file or another program, output is plain words: the
-labels without glyphs or colour, and ASCII only. NO_COLOR (any value) or
-TERM=dumb keeps glyphs, in ASCII (` + "`* Live`, `~ Waiting for PR merge`, `|| Held by gate`" + `),
-without colour. COLORTERM=truecolor gives the UI's exact
-colours, for a light background when COLORFGBG says so.
+its label in the status colours of the UI, from its design tokens
+(web/tokens/tokens.json): Live (spruce), Promoting and Checking health
+(thread red), Waiting for PR merge and gates not ready yet (dusk blue), Held
+by gate (ochre), Failed (on garnet, the only filled state), Replaced by newer
+version and Not reached (grey); Paused and Held by rollback are bold.
+Without COLORTERM=truecolor and a COLORFGBG that names the background, they
+are the nearest of the 16 ANSI colours, which the terminal's theme adapts.
+Without a UTF-8 locale the glyphs are ASCII (` + "`* Live`, `~ Waiting for PR merge`" + `).
 
--o json and -o yaml print the API's values (Verified, WaitingForMerge) for
-scripts: get, status, explain and history print what they show, and create
-bundle, promote and rollback print what they created, so
+Piped to a file or another program, or with NO_COLOR (any value) or
+TERM=dumb, output is plain words: the labels without glyphs or colour, and
+ASCII only, also for what the cluster says (a dash is "-", an arrow "->",
+any other non-ASCII character "?"). On Windows, colour needs a console with
+virtual-terminal processing; without it output has no colour.
+
+-o json and -o yaml print the API's values (Verified, WaitingForMerge) and the
+cluster's text unchanged. Warnings and hints go to stderr, so stdout stays
+valid JSON. get prints the objects as the API server lists them. The others
+print:
+
+  create bundle, promote, rollback:
+    bundle, pipeline, namespace, type, version, url; promote adds
+    environment and from (the Bundle copied); rollback adds environment,
+    rollbackOf (the Bundle restored), replaces (the one replaced) and, with
+    --hold, hold {environment, bundle, reason, expiresAt}
+  create bundle --dry-run:
+    pipeline, namespace, type, version, nodes, compact,
+    environments [{name, gates}] in promotion order
+  release-hold:
+    pipeline, namespace, environment, bundle (the rollback it was held on),
+    createdBy, reason, url
+  status:
+    controller, pipelines, degraded [namespace/name], bundles, activeBundles
+  status <pipeline>:
+    pipeline, namespace, phase, paused, summary, source ("controller" or
+    "cli"), environments (status.environments: name, bundle, version,
+    incomingBundle, incomingVersion, state, since, blockedBy, prURL, held),
+    blockingGates [{name, instance, environment, bundle, expression, message,
+    reason, lastEvaluatedAt}], warnings
+  explain:
+    pipeline, namespace, entries [{environment, bundle, type (Step or
+    PolicyGate), name, state, expression, reason}], holds [{environment,
+    bundle, createdBy, reason, bundleMissing}]
+  history:
+    a list of {bundle, action (promote or rollback), environment, state,
+    prURL, duration, createdAt}
+
+url is the pipeline in the UI: KARDINAL_UI_URL, else the address kardinal
+dashboard opens (http://localhost:8082/ui/). For example
 ` + "`kardinal create bundle my-app --image app:1.4 -o json | jq -r .bundle`" + `
-names the new Bundle. Warnings and hints go to stderr, so stdout stays valid
-JSON.`
+names the new Bundle.`

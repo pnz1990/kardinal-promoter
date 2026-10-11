@@ -147,8 +147,7 @@ The controller reads org gates from the namespaces in `--policy-namespaces` (def
 
 ### Multi-tenant isolation
 
-The namespace is kardinal's tenancy unit. There is no Project CRD, and none is planned
-([#1187](https://github.com/pnz1990/kardinal-promoter/issues/1187)).
+The namespace is kardinal's tenancy unit. There is no Project CRD.
 
 - Put each team's Pipelines, Bundles and PolicyGates in the team's namespace, and give the team
   a `Role` and `RoleBinding` there on the `kardinal.io` resources. Kubernetes RBAC then keeps
@@ -216,7 +215,7 @@ Secret is missing is checked again every minute. `kardinal validate --allowed-re
 <list>` reports the same before you apply the file (offline it takes the Secret to exist); add
 `--scm-provider bitbucket-datacenter` for a Data Center controller, so URLs are matched as
 `KEY/slug` too. When
-the value is empty, every repository is allowed, as before, and the controller logs a warning at
+the value is empty, every repository is allowed and the controller logs a warning at
 startup.
 
 Also:
@@ -235,7 +234,7 @@ Also:
 #### Stronger isolation: one install per team namespace
 
 When teams must not share a controller or its SCM token, run one kardinal installation per
-team namespace. This uses the `controller.watchNamespace` Helm value (added in v0.6.0) to limit each
+team namespace. This uses the `controller.watchNamespace` Helm value to limit each
 controller to a single namespace, with a `Role`/`RoleBinding` scoped to that namespace
 instead of a cluster-wide `ClusterRole`.
 
@@ -306,9 +305,9 @@ reports reason `SecretNotReferenceable` where it reports errors. Labeling the Se
 effect at the next reconcile; removing the label stops its use again. Whoever may `update` or
 `patch` Secrets in the namespace may set the label, so grant that as narrowly as reading them.
 
-Pipeline `spec.git.secretRef` has the same exposure (its token goes to the Pipeline's git URL)
-and will follow the rule in v0.11 ([#1506](https://github.com/pnz1990/kardinal-promoter/issues/1506));
-label your git Secrets now. The controller's own SCM token Secret is set by the operator and
+Pipeline `spec.git.secretRef` has the same exposure (its token goes to the Pipeline's git URL).
+An unlabeled git Secret is deprecated: it still works with `SecretReferenceable=False`, and v0.11
+refuses it. Label your git Secrets. The controller's own SCM token Secret is set by the operator and
 is not covered.
 
 ### Recommended: External Secrets Operator
@@ -469,8 +468,8 @@ and turn it on after the export.
 
 ### Audit outbox
 
-A transition and its AuditEvent are two API writes, so an etcd timeout, a lost
-leader or a crash between them used to lose the record. Now every writer (the
+A transition and its AuditEvent are two API writes. So that an etcd timeout, a lost
+leader or a crash between them cannot lose the record, every writer (the
 PromotionStep reconciler; the PolicyGate reconciler for gate results, approvals
 and overrides; the Pipeline reconciler for holds) records the AuditEvent in its own
 `status.pendingAuditEvents` in the same status patch as the transition. They then
@@ -502,7 +501,7 @@ kubectl get promotionsteps,policygates -A -o json \
 | Field | Description |
 |---|---|
 | `spec.timestamp` | RFC 3339 time when the event occurred, stored to the second |
-| `metadata.annotations["kardinal.io/created-at"]` | The same time with nanoseconds: it orders events within one second, such as a gate that flips twice in a second (`kardinal get auditevents` sorts by it). Events written before v0.10.0 do not have it |
+| `metadata.annotations["kardinal.io/created-at"]` | The same time with nanoseconds: it orders events within one second, such as a gate that flips twice in a second (`kardinal get auditevents` sorts by it) |
 | `spec.pipelineName` | Name of the Pipeline |
 | `spec.bundleName` | Name of the Bundle being promoted |
 | `spec.environment` | Environment name (e.g. `prod`) |
@@ -780,7 +779,7 @@ GET or POST to a URL its author chooses and copies one JSONPath value of the ans
 loopback, link-local and metadata addresses, but private addresses stay allowed, so anyone who can
 create a MetricCheck can read a field from an in-cluster Service that answers JSON. Give `create`
 on MetricChecks only to people who may read those Services, and restrict the targets with the
-controller egress allowlist (`--egress-allowlist`, #1474) or the chart NetworkPolicy
+controller egress allowlist (`--egress-allowlist`) or the chart NetworkPolicy
 (`networkPolicy.enabled`, `networkPolicy.extraEgress`).
 
 ## Admission Validation
@@ -807,7 +806,7 @@ chart installs a `ValidatingAdmissionPolicy` with a `Deny` binding, per release:
 | Policy | Checks |
 |---|---|
 | `<release>-bundle-rejection` | A Bundle's new `spec.rejected.by` ([`kardinal reject`](../rollback.md#reject-a-bundle)) equals the requesting user's `request.userInfo.username`. A rejection already set is immutable (CRD rule), so it is checked only when it is first written. |
-| `<release>-gate-overrides` | Every new or changed `spec.overrides[]` entry of a PolicyGate ([`kardinal override`](../policy-gates.md#emergency-overrides-k-09)) has `createdBy` equal to the requesting user; the controller's ServiceAccount is exempt, because it writes overrides for the UI. Only the namespace's Graph ServiceAccount (kro) and the controller may create a gate instance (label `kardinal.io/bundle`, checked on CREATE and UPDATE) or change anything in it but `spec.overrides`: the rest of the spec and the whole metadata (labels, annotations, owner references, finalizers) are frozen, except `managedFields`, `resourceVersion` and `generation`, which the API server writes, and the `kardinal.io/force-recheck` annotation, which forces a re-evaluation. The garbage collector and the namespace controller may update an instance (they remove owner references and finalizers). In namespace mode (`controller.watchNamespace`) it applies to the watched namespace only. |
+| `<release>-gate-overrides` | Every new or changed `spec.overrides[]` entry of a PolicyGate ([`kardinal override`](../policy-gates.md#emergency-overrides)) has `createdBy` equal to the requesting user; the controller's ServiceAccount is exempt, because it writes overrides for the UI. Only the namespace's Graph ServiceAccount (kro) and the controller may create a gate instance (label `kardinal.io/bundle`, checked on CREATE and UPDATE) or change anything in it but `spec.overrides`: the rest of the spec and the whole metadata (labels, annotations, owner references, finalizers) are frozen, except `managedFields`, `resourceVersion` and `generation`, which the API server writes, and the `kardinal.io/force-recheck` annotation, which forces a re-evaluation. The garbage collector and the namespace controller may update an instance (they remove owner references and finalizers). In namespace mode (`controller.watchNamespace`) it applies to the watched namespace only. |
 | `<release>-approvals` | An `Approval` ([`kardinal approve`](../policy-gates.md#approval-gates)) is created only with `spec.user` equal to the requesting user and `spec.groups` among the requester's groups (checked at create time only), and its `kardinal.io/bundle` and `kardinal.io/environment` labels always equal `spec.bundle` and `spec.environment`. It may be owned only by the Bundle it approves (`spec.bundle`, `spec.bundleUID`), and its owner references cannot change later. Only its approver may delete (revoke) it; the garbage collector and the namespace controller are exempt (kardinal's controller is not: it never deletes Approvals). The spec is immutable (CRD rule). The UI records decisions for its TokenReview user: an Approval annotated `kardinal.io/recorded-via: ui` may be created in another name, and deleted, by this release's controller ServiceAccount (and `admission.controllerUsernames`) only. |
 | `<release>-bundle-creator` | A new Bundle's `kardinal.io/created-by` annotation, when set, equals the requesting user, and it cannot be added, changed or removed later. Exactly this release's controller ServiceAccount is exempt, plus the usernames listed in `admission.controllerUsernames` (exact usernames, no wildcards; never a namespace or a group: in namespace mode the release namespace is the tenant's): it names the creator of the Bundles it creates (the UI user, `subscription:<name>`, `bundle-api`, `kardinal-controller`). Another controller instance that is not listed creates its Bundles without a creator, which excludeAuthor gates hold. An approval gate's `excludeAuthor` reads it. |
 | `<release>-graph-objects` | The objects a promotion Graph makes and nothing else should: PromotionSteps, PRStatuses, HookRuns, RenderRuns, ImageVerifications and per-promotion MetricCheck instances (label `kardinal.io/bundle`; a MetricCheck you write is not checked), spec, metadata and status. Only kro, this release's controller ServiceAccount and the exact usernames in `admission.controllerUsernames` may create or change them. kro counts only when it impersonates the namespace's Graph ServiceAccount: a request as that ServiceAccount that carries `authentication.kubernetes.io/credential-id` (a token from `kubectl create token`, a bound token) or `authentication.kubernetes.io/pod-name` (a Pod running as it) is refused, so `kubectl create token` and Pods running as the Graph ServiceAccount do not pass as kro. Admission cannot tell kro's impersonation from anyone else's: whoever may impersonate the Graph ServiceAccount, or read a legacy token Secret of it, passes as kro (see Trust below). The garbage collector and the namespace controller may update them, as they do while deleting objects (owner references, their `orphan`/`foregroundDeletion` finalizers); kardinal's own finalizers are removed by its controller. Deleting one is not checked, since the Graph recreates it (deleting a failed PromotionStep retries it), except HookRuns: only kro, the controllers, the garbage collector and the namespace controller delete them, and anyone else gets a message of its own ("HookRuns record that a hook ran; only kardinal deletes them ..."). The step's `status.hookRecords` keeps a recreated HookRun from running its hook again, but deleting the step as well (allowed: it is the documented retry) drops that record, and the Graph's new HookRun would run the hook a second time. Argo Rollouts AnalysisRuns labelled `kardinal.io/bundle` are protected on create only: the Rollouts controller writes them afterwards. No one may turn an existing MetricCheck into an instance (kro adopts by name, see below). |
@@ -851,8 +850,7 @@ ServiceAccounts, by exact username, in `admission.controllerUsernames`:
 ServiceAccounts and let their holders create legacy ServiceAccount token Secrets, so a user with
 `edit` or `admin` in a namespace can act as its Graph ServiceAccount through either, and is
 trusted as kro there: they can forge a gate instance, a PromotionStep or a PRStatus in that
-namespace. kardinal's user roles (`<release>-viewer`, `-promoter` and `-approver`, from #1511; until
-it lands, `<release>-approvals`) grant neither `impersonate` nor `create` on Secrets. Give tenants kardinal's roles plus the stock `view` role,
+namespace. kardinal's user roles (`<release>-viewer`, `-promoter` and `-approver`) grant neither `impersonate` nor `create` on Secrets. Give tenants kardinal's roles plus the stock `view` role,
 not `edit`, where promotions must not be forged. A namespace's `edit`/`admin` holders are its
 owners as far as kardinal can check (ledger G16 has the upstream ask that would close this).
 
@@ -1001,15 +999,21 @@ The user needs these permissions:
 | Pause, resume | `get` on `pipelines`; `update` on `pipelines/pause` |
 | Roll back and hold, release a hold | as roll back; `update` on `pipelines/hold` |
 | Approve a gate | `get` on `policygates`; `update` on `policygates/override` |
+| Override a gate in an environment (`/api/v1/ui/override`) | `get` on `pipelines` and `policygates`; `list` on `policygates` and `bundles`; `update` on `policygates/override` |
+| Reject a Bundle | `update` on `bundles/reject` |
 
 Each action is checked call by call, so it needs every verb in its row. Promote and roll
 back read the Pipeline and the environment's history before they create the Bundle. The
 reads are the view permissions, so a user who can view needs only the write verbs on top.
-Pause, resume and gate approval are authorized on a virtual subresource
-(`pipelines/pause`, `policygates/override`) instead of `update` on the object: the API server
-serves no such endpoint, but RBAC grants it and a `SubjectAccessReview` checks it. The
-controller then makes the one change (`spec.paused`, or one `spec.overrides` entry whose
-`createdBy` is the caller) with its own identity. A user who may pause cannot edit the
+Pause, resume, gate approval and rejecting a Bundle are authorized on a virtual subresource
+(`pipelines/pause`, `policygates/override`, `bundles/reject`) instead of `update` on the object:
+the API server serves no such endpoint, but RBAC grants it and a `SubjectAccessReview` checks it.
+The controller then makes the one change (`spec.paused`, one `spec.overrides` entry whose
+`createdBy` is the caller, or `spec.rejected` whose `by` is the caller) with its own identity. The
+bundle-rejection and gate-overrides admission policies admit a record in another user's name only
+from the controller's own ServiceAccount (and `admission.controllerUsernames`). An override of a
+gate in an environment checks `policygates/override` on every instance it writes, before it
+writes any. A user who may pause cannot edit the
 Pipeline, and one who may approve cannot change the gate's expression. The controller
 manages the freeze gate itself, so the user needs no rights on `policygates` to pause.
 
@@ -1031,9 +1035,9 @@ API and the Bundle API, and they work the same for `kubectl` and the `kardinal` 
 | ClusterRole | Grants | For |
 |-------------|--------|-----|
 | `<fullname>-viewer` | `get`, `list`, `watch` on every kardinal kind; `get`, `list`, `watch` on `events` | Dashboards, read-only users |
-| `<fullname>-promoter` | viewer, `create` on `bundles`, `update` on `pipelines/pause` and `pipelines/hold` | CI (Bundle API, `kardinal create bundle`), promote, roll back (and hold), pause and resume in the UI |
-| `<fullname>-approver` | viewer, `update` on `policygates/override`, `create` and `delete` on `approvals` | Gate overrides in the UI, approvals |
-| `<fullname>-admin` | every verb on every kardinal kind, `update` on `pipelines/pause`, `pipelines/hold`, `pipelines/edit`, `policygates/override` and `policygates/edit`; aggregates the three above | Pipeline owners |
+| `<fullname>-promoter` | viewer, `create` on `bundles`, `update` on `pipelines/pause`, `pipelines/hold` and `bundles/reject` | CI (Bundle API, `kardinal create bundle`), promote, roll back (and hold), pause and resume, and reject a Bundle in the UI |
+| `<fullname>-approver` | viewer, `update` on `policygates/override` and `bundles/reject`, `create` and `delete` on `approvals` | Gate overrides and Bundle rejection in the UI, approvals |
+| `<fullname>-admin` | every verb on every kardinal kind, `update` on `pipelines/pause`, `pipelines/hold`, `pipelines/edit`, `policygates/override`, `policygates/edit` and `bundles/reject`; aggregates the three above | Pipeline owners |
 
 `<fullname>` is the release's full name: `kardinal-promoter` for the default release, so
 `kardinal-promoter-viewer` and so on. Bind these roles explicitly; that is the only way to

@@ -77,7 +77,7 @@ $ kardinal logs demo
 === demo/test (demo-b1) [Live] ===
 
 === demo/test (demo-b2) [Failed] ===
-  message:  health check failed
+  message:  health alarm - rollback Bundle demo-b2 -> demo-b1 created
 
 === demo/test (demo-b3) [Live] ===
 

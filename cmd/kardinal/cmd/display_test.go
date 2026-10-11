@@ -42,8 +42,6 @@ func TestEnvCellLabel(t *testing.T) {
 	assert.Equal(t, "Queued", stepLabel(""))
 }
 
-var camelCase = regexp.MustCompile(`\b[A-Z][a-z]+[A-Z][A-Za-z]*\b`)
-
 // apiStates are the CamelCase API values of the step, bundle, sub-step and
 // gate states (the single-word ones are words already).
 var apiStates = []string{"WaitingForMerge", "HealthChecking", "AbortedByAlarm", "RollingBack", "InProgress", "NotStarted"}

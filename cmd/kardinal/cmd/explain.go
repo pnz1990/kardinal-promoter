@@ -84,8 +84,8 @@ the change has not landed yet. -w refreshes every 3 seconds.`,
 
 // explainWatch re-renders explain every interval until ctx is done or the
 // process gets SIGINT (Ctrl-C) or SIGTERM, then returns nil, as the other
-// --watch commands do. Errors are printed and polling continues. The screen is
-// cleared only on a TTY.
+// --watch commands do. Errors are printed (on stderr with -o json or yaml)
+// and polling continues. The screen is cleared only for a table on a TTY.
 func explainWatch(ctx context.Context, w io.Writer, c sigs_client.Client,
 	ns, pipeline, envFilter string, forceColor bool, interval time.Duration) error {
 	if ctx == nil {
@@ -93,15 +93,24 @@ func explainWatch(ctx context.Context, w io.Writer, c sigs_client.Client,
 	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	tty := style.IsTerminal(w)
+	// Only a table redraws in place with a footer; -o json and yaml print
+	// one document per refresh, errors on stderr, like get pipelines -w.
+	table := !structured()
+	clearScreen := table && style.IsTerminal(w)
 	for {
-		if tty {
+		if clearScreen {
 			_, _ = fmt.Fprint(w, "\033[H\033[2J")
 		}
 		if err := explainOnce(w, c, ns, pipeline, envFilter, forceColor); err != nil {
-			_, _ = fmt.Fprintf(w, "error: %v\n", HumanError(err))
+			if table {
+				_, _ = fmt.Fprintf(w, "error: %v\n", HumanError(err))
+			} else {
+				_, _ = fmt.Fprintf(errOut, "error: %v\n", HumanError(err))
+			}
 		}
-		_, _ = fmt.Fprintln(w, watchFooter)
+		if table {
+			_, _ = fmt.Fprintln(w, watchFooter)
+		}
 		select {
 		case <-ctx.Done():
 			return nil

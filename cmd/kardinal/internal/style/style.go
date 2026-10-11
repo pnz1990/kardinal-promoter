@@ -30,6 +30,7 @@ package style
 import (
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -37,6 +38,7 @@ import (
 	"github.com/mattn/go-isatty"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
+	"github.com/kardinal-promoter/kardinal-promoter/web/tokens"
 )
 
 // Styler renders text for one output stream. The zero value is Plain.
@@ -59,25 +61,35 @@ func Plain() Styler { return Styler{} }
 
 // Detect is the Styler for w, from whether w is a terminal and from the
 // environment (NO_COLOR, TERM, COLORTERM, COLORFGBG and the locale).
-func Detect(w io.Writer) Styler { return detect(IsTerminal(w), os.Getenv) }
+func Detect(w io.Writer) Styler {
+	s := detect(IsTerminal(w), os.Getenv)
+	if s.color && !enableColor(w) {
+		// A Windows console without virtual-terminal processing.
+		s.color = false
+	}
+	return s
+}
 
 // Terminal is the Styler of a terminal with the environment getenv reads:
 // what Detect returns for a terminal.
 func Terminal(getenv func(string) string) Styler { return detect(true, getenv) }
 
 // detect is Detect for a stream that is a terminal when tty, reading the
-// environment with getenv.
+// environment with getenv. NO_COLOR and TERM=dumb get plain words, as a pipe
+// does. The exact token colours need a known background (COLORFGBG) as well
+// as COLORTERM=truecolor; otherwise the 16 ANSI colours, which the
+// terminal's theme adapts to its background.
 func detect(tty bool, getenv func(string) string) Styler {
-	if !tty {
+	if !tty || getenv("NO_COLOR") != "" || getenv("TERM") == "dumb" {
 		return Plain()
 	}
-	plain := getenv("NO_COLOR") != "" || getenv("TERM") == "dumb"
+	light, known := background(getenv("COLORFGBG"))
 	return Styler{
-		color:     !plain,
+		color:     true,
 		glyphs:    true,
-		unicode:   !plain && utf8Locale(getenv),
-		light:     lightBackground(getenv("COLORFGBG")),
-		truecolor: getenv("COLORTERM") == "truecolor" || getenv("COLORTERM") == "24bit",
+		unicode:   utf8Locale(getenv),
+		light:     light,
+		truecolor: known && (getenv("COLORTERM") == "truecolor" || getenv("COLORTERM") == "24bit"),
 	}
 }
 
@@ -89,8 +101,10 @@ func (s Styler) ForceColor() Styler {
 		return s
 	}
 	s.color = true
-	s.truecolor = s.truecolor || os.Getenv("COLORTERM") == "truecolor" || os.Getenv("COLORTERM") == "24bit"
-	s.light = s.light || lightBackground(os.Getenv("COLORFGBG"))
+	if light, known := background(os.Getenv("COLORFGBG")); known {
+		s.light = light
+		s.truecolor = os.Getenv("COLORTERM") == "truecolor" || os.Getenv("COLORTERM") == "24bit"
+	}
 	return s
 }
 
@@ -103,8 +117,11 @@ func (s Styler) Unicode() bool { return s.unicode }
 // Terminal reports whether s writes for a person at a terminal (glyphs).
 func (s Styler) Terminal() bool { return s.glyphs }
 
-// IsTerminal reports whether w is a terminal.
+// IsTerminal reports whether w is a terminal (also through a Folder).
 func IsTerminal(w io.Writer) bool {
+	if fw, ok := w.(*Folder); ok {
+		w = fw.w
+	}
 	f, ok := w.(*os.File)
 	return ok && (isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd()))
 }
@@ -121,15 +138,16 @@ func utf8Locale(getenv func(string) string) bool {
 	return false
 }
 
-// lightBackground reports whether COLORFGBG ("fg;bg", as rxvt, Konsole and
-// iTerm2 set it) names a light background colour (7, or 9 to 15 but 8).
-func lightBackground(colorfgbg string) bool {
+// background reads COLORFGBG ("fg;bg", as rxvt, Konsole and iTerm2 set it):
+// light is a light background colour (7, or 9 to 15), known whether it
+// names one at all.
+func background(colorfgbg string) (light, known bool) {
 	parts := strings.Split(colorfgbg, ";")
 	bg, err := strconv.Atoi(parts[len(parts)-1])
-	if err != nil {
-		return false
+	if err != nil || colorfgbg == "" {
+		return false, false
 	}
-	return bg == 7 || (bg >= 9 && bg <= 15)
+	return bg == 7 || (bg >= 9 && bg <= 15), true
 }
 
 // State is the text of st: its label, after its glyph (when it has one) on
@@ -180,50 +198,104 @@ func (s Styler) Sym(unicode, ascii string) string {
 	return ascii
 }
 
-// palette is one tone's colours: DESIGN-SYSTEM.md's status -fg for a light
-// and a dark background, and the nearest of the 16 ANSI colours, which a
-// terminal's theme adapts to its own background. A filled tone (failed)
-// also has its chip background.
-type palette struct {
-	light, dark     string // foreground hex
-	lightBg, darkBg string // chip background hex; "" when not filled
-	basic           string // SGR parameters of the 16-colour form
-}
-
-// palettes maps each tone to its colours. Paused and held are ink, the
-// terminal's own foreground, in bold: they are a person's decision, not a
-// system signal, so they get no hue.
-var palettes = map[display.Tone]palette{
-	display.ToneVerified:   {light: "#2B6E52", dark: "#6CC79B", basic: "32"},
-	display.TonePromoting:  {light: "#C0151B", dark: "#FF7A7E", basic: "31"},
-	display.ToneWaiting:    {light: "#35609E", dark: "#8FB2EC", basic: "34"},
-	display.ToneBlocked:    {light: "#865400", dark: "#EDB15A", basic: "33"},
-	display.ToneFailed:     {light: "#FAFBFA", dark: "#0F1513", lightBg: "#A3154A", darkBg: "#FF7BA3", basic: "1;97;41"},
-	display.ToneDegraded:   {light: "#A3154A", dark: "#FF7BA3", basic: "1;31"},
-	display.ToneSuperseded: {light: "#5F6B66", dark: "#8C9994", basic: "2"},
-	display.TonePending:    {light: "#5F6B66", dark: "#8C9994", basic: "2"},
-	display.TonePaused:     {basic: "1"},
-	display.ToneHeld:       {basic: "1"},
+// tokenOf is the design token of each tone's colour (web/tokens/tokens.json,
+// DESIGN-SYSTEM.md "Status"); failed is a filled chip, its text on-fill.
+// Paused and held are ink, the terminal's own foreground, in bold: a
+// person's decision, not a system signal, so they get no hue.
+var tokenOf = map[display.Tone]string{
+	display.ToneVerified:   "color.status.verified.fg",
+	display.TonePromoting:  "color.status.promoting.fg",
+	display.ToneWaiting:    "color.status.waiting.fg",
+	display.ToneBlocked:    "color.status.blocked.fg",
+	display.ToneFailed:     "color.status.failed.fill",
+	display.ToneDegraded:   "color.status.failed.fg",
+	display.ToneSuperseded: "color.status.superseded.fg",
+	display.TonePending:    "color.status.superseded.fg",
 }
 
 // sgr is the SGR parameters of tone for s; "" for no colour.
 func (s Styler) sgr(tone display.Tone) string {
-	p, ok := palettes[tone]
+	switch tone {
+	case display.TonePaused, display.ToneHeld:
+		return "1"
+	}
+	path, ok := tokenOf[tone]
 	if !ok {
 		return ""
 	}
-	if !s.truecolor || p.light == "" {
-		return p.basic
+	c, ok := tokens.Color(path)
+	if !ok {
+		return ""
 	}
-	fg, bg := p.dark, p.darkBg
+	filled := tone == display.ToneFailed
+	if !s.truecolor {
+		hue := ansiHue(c.Light)
+		switch {
+		case hue < 0:
+			return "2" // a grey: dim
+		case filled:
+			return fmt.Sprintf("1;97;%d", 40+hue)
+		}
+		return fmt.Sprintf("%d", 30+hue)
+	}
+	fg := c.Dark
 	if s.light {
-		fg, bg = p.light, p.lightBg
+		fg = c.Light
 	}
-	out := "38;2;" + rgb(fg)
-	if bg != "" {
-		out = "1;" + out + ";48;2;" + rgb(bg)
+	if !filled {
+		return "38;2;" + rgb(fg)
 	}
-	return out
+	on, _ := tokens.Color("color.status.failed.on-fill")
+	text := on.Dark
+	if s.light {
+		text = on.Light
+	}
+	return "1;38;2;" + rgb(text) + ";48;2;" + rgb(fg)
+}
+
+// ansiHue is the ANSI colour (1 red, 2 green, 3 yellow, 4 blue, 5 magenta,
+// 6 cyan) of a #RRGGBB colour's hue, -1 for a grey (low saturation) or not a
+// colour, so the 16-colour form keeps each token's hue. The bands follow how
+// terminal themes draw the six colours: green reaches into blue-green
+// (spruce), magenta into purple-red (garnet).
+func ansiHue(hex string) int {
+	if len(hex) != 7 || hex[0] != '#' {
+		return -1
+	}
+	v, err := strconv.ParseUint(hex[1:], 16, 32)
+	if err != nil {
+		return -1
+	}
+	r, g, b := float64(v>>16&0xff)/255, float64(v>>8&0xff)/255, float64(v&0xff)/255
+	mx, mn := max(r, g, b), min(r, g, b)
+	if mx == 0 || (mx-mn)/mx < 0.3 {
+		return -1
+	}
+	var h float64
+	switch mx {
+	case r:
+		h = 60 * math.Mod((g-b)/(mx-mn), 6)
+	case g:
+		h = 60 * ((b-r)/(mx-mn) + 2)
+	default:
+		h = 60 * ((r-g)/(mx-mn) + 4)
+	}
+	if h < 0 {
+		h += 360
+	}
+	switch {
+	case h < 30 || h >= 340:
+		return 1
+	case h < 75:
+		return 3
+	case h < 165:
+		return 2
+	case h < 195:
+		return 6
+	case h < 270:
+		return 4
+	}
+	return 5
 }
 
 // rgb is "r;g;b" of a #RRGGBB colour.

@@ -8,10 +8,7 @@ import (
 )
 
 // BundleSpec defines the desired state of a Bundle.
-// An image Bundle deploys only its images, so a configRef on it is refused
-// instead of ignored (#1353). Bundles stored before the rule keep working:
-// CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest
-// supported) lets an update through when spec is unchanged.
+// An image Bundle deploys only its images, so a configRef on it is refused.
 //
 // A Bundle's spec is immutable: spec.type, spec.pipeline, spec.images,
 // spec.chart, spec.configRef, spec.provenance and spec.intent cannot change
@@ -237,7 +234,7 @@ type BundleStatus struct {
 	// +optional
 	Environments []EnvironmentStatus `json:"environments,omitempty"`
 
-	// Metrics holds deployment efficiency metrics for this Bundle (K-05).
+	// Metrics holds deployment efficiency metrics for this Bundle.
 	// Populated by the BundleReconciler when all environments reach Verified.
 	// +optional
 	Metrics *BundleMetrics `json:"metrics,omitempty"`
@@ -270,8 +267,8 @@ type BundleStatus struct {
 	// RetiredSteps records the PromotionSteps of a Bundle whose Graph was
 	// retired (condition GraphRetired=True). Deleting a finished Bundle's
 	// Graph deletes the PromotionSteps, PolicyGate instances and PRStatuses
-	// it created, so kro does not hold every finished Graph in memory
-	// (#1492). Rollback, promote, history, metrics, the CLI and the UI read
+	// it created, so kro does not hold every finished Graph in memory.
+	// Rollback, promote, history, metrics, the CLI and the UI read
 	// these records where they read the steps of a Bundle that is still
 	// promoting. The step of a fleet target removed from the Pipeline while the
 	// Bundle promoted is recorded here when its Graph is updated, before kro
@@ -296,6 +293,14 @@ type BundleStatus struct {
 	// final; the GraphRetired condition only shows the retirement's progress.
 	// +optional
 	RetiredAt *metav1.Time `json:"retiredAt,omitempty"`
+
+	// PendingAuditEvents are the BundleRejected AuditEvents the Bundle
+	// reconciler has recorded but not written yet (the audit outbox, #1552):
+	// the entry is stored in the same status write that sets phase
+	// Rejected, and removed once its AuditEvent exists.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	PendingAuditEvents []PendingAuditEvent `json:"pendingAuditEvents,omitempty"`
 }
 
 // RetiredStep is what a retired Bundle keeps of one of its PromotionSteps.
@@ -350,7 +355,7 @@ type RetiredStep struct {
 	RenderRequested bool `json:"renderRequested,omitempty"`
 }
 
-// BundleMetrics holds deployment efficiency metrics for a single Bundle (K-05).
+// BundleMetrics holds deployment efficiency metrics for a single Bundle.
 type BundleMetrics struct {
 	// CommitToProductionMinutes is the time from Bundle creation to the last
 	// environment reaching Verified. Indicates total promotion pipeline latency.

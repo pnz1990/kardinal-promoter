@@ -207,7 +207,7 @@ export function PipelineLaneView({
         {activeBundleName && (
           <div style={{
             fontSize: '0.65rem',
-            fontFamily: 'monospace',
+            fontFamily: 'var(--k-font-mono)',
             color: 'var(--color-text-muted)',
             overflow: 'hidden',
             textOverflow: 'ellipsis',

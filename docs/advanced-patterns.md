@@ -314,23 +314,10 @@ removes the Pipeline and its Bundles are garbage-collected.
 
 ## Bundle Supersession
 
-When a newer Bundle of the same type is created for the same Pipeline, an older Bundle that is
-still waiting or promoting (`Available` or `Promoting`) is superseded. A `Failed` Bundle stays
-`Failed`; if it would resume, a newer Bundle supersedes it instead:
-
-1. The old Bundle's status is set to `Superseded`, which is final.
-2. Its unfinished PromotionSteps are failed. A PR one of them opened that is still open
-   is closed with a comment noting it was superseded, and its head branch
-   (`kardinal/<namespace hash>/<bundle>/<env>`) is deleted, so the closed PR cannot be merged later.
-3. Its Graph, PromotionSteps and PolicyGates are kept as history. The Graph creates no
-   new PromotionStep (for a Graph built before this behaviour, only a step created at the
-   moment of supersession), and its PolicyGates are no longer evaluated: they keep the
-   status they had when the Bundle was superseded.
-4. A step created just before supersession that never started is failed with
-   "superseded before this step started" and writes no AuditEvent.
-5. The new Bundle starts promoting from the beginning.
-
-Deleting the superseded Bundle deletes its Graph and everything the Graph created.
+A newer Bundle of the same type supersedes an older one still in flight: the older Bundle's
+steps stop, its open PRs are closed and the new Bundle promotes from the beginning. Image and
+config Bundles are tracked separately. See [Bundle supersession](concepts.md#bundle-supersession)
+for the details.
 
 ```bash
 # Check which Bundles were superseded
@@ -339,10 +326,6 @@ kardinal get bundles my-app
 # my-app-7f3k2   image   Superseded   5m
 # my-app-9x8q1   image   Promoting    2m
 ```
-
-**When supersession does not occur:** Config Bundles (`type: config`) and Image Bundles
-(`type: image`) have separate supersession tracking. A new image Bundle does not
-supersede an in-flight config Bundle, and vice versa.
 
 ## Webhook Responsiveness
 

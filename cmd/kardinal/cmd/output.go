@@ -46,6 +46,11 @@ var detectStyle = style.Detect
 func useStyle(cmd *cobra.Command) {
 	sty = detectStyle(cmd.OutOrStdout())
 	errOut = cmd.ErrOrStderr()
+	// Plain words are ASCII: what the CLI prints from the cluster too.
+	// -o json and yaml keep the cluster's text exact.
+	if !sty.Unicode() && !structured() {
+		cmd.SetOut(style.NewFolder(cmd.OutOrStdout()))
+	}
 }
 
 // Styled state cells: the display label (pkg/display), with its glyph and
@@ -120,6 +125,9 @@ type createdBundle struct {
 	Replaces   string `json:"replaces,omitempty"`
 	// Hold is the hold rollback --hold made.
 	Hold *createdHold `json:"hold,omitempty"`
+	// URL is the pipeline in the UI: KARDINAL_UI_URL, else the address
+	// kardinal dashboard opens.
+	URL string `json:"url"`
 }
 
 // createdHold is the hold of rollback --hold.
@@ -133,5 +141,5 @@ type createdHold struct {
 // createdOf is the createdBundle of b.
 func createdOf(b *v1alpha1.Bundle) createdBundle {
 	return createdBundle{Bundle: b.Name, Pipeline: b.Spec.Pipeline, Namespace: b.Namespace, Type: b.Spec.Type,
-		Version: scm.BundleVersion(b.Spec)}
+		Version: scm.BundleVersion(b.Spec), URL: uiURL(b.Namespace, b.Spec.Pipeline)}
 }

@@ -63,10 +63,14 @@ func gateRow(env, bundle, name, state, expr, reason string) map[string]string {
 		"STATE": display.Gate(state).Label, "EXPRESSION": expr, "REASON": reason}
 }
 
+// plainText is text as the CLI prints the cluster's text on a pipe: ASCII,
+// a dash "-" and an arrow "->".
+var plainText = strings.NewReplacer("—", "-", "–", "-", "→", "->", "…", "...")
+
 // stepRow is one step row of kardinal explain: a Step's reason is its
-// status.message, "-" when it has none.
+// status.message (in plain text), "-" when it has none.
 func stepRow(ps *v1alpha1.PromotionStep) map[string]string {
-	reason := ps.Status.Message
+	reason := plainText.Replace(ps.Status.Message)
 	if reason == "" {
 		reason = "-"
 	}
