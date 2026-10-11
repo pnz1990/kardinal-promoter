@@ -646,7 +646,7 @@ function GroupGlyph({ p, g, expanded, model, level, active, focusedEnv, matchSet
           {segments.map(s => <rect key={s.tone} className="group__seg" data-tone={s.tone} x={s.x} y={box.y + 24} width={Math.max(0, s.w - 1)} height={BAR.seg} />)}
           {g.verified > 0 && <rect className="group__thread" x={box.x + 12} y={box.y + 34} width={(g.verified / total) * barW} height={BAR.thread} />}
           {level !== 'overview' && (
-            <text x={box.x + 12} y={box.y + 47} className="group__sub">
+            <text x={box.x + 12} y={box.y + box.h - 7} className="group__sub">
               {groupSub(g)}
             </text>
           )}

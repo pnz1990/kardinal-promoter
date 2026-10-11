@@ -53,7 +53,7 @@ const DOT_TOP = 22
 
 /** A band or platform's summary size; Overview is denser so 300 environments read at once. */
 const GROUP_W: Record<ZoomLevel, number> = { overview: 180, map: 210, detail: 210 }
-const GROUP_H: Record<ZoomLevel, number> = { overview: 40, map: 56, detail: 56 }
+const GROUP_H: Record<ZoomLevel, number> = { overview: 40, map: 66, detail: 62 }
 /** Rank spacing per level: Overview packs the columns. */
 const RANK_SEP: Record<ZoomLevel, number> = { overview: GRAPH.rankSep / 2, map: GRAPH.rankSep, detail: GRAPH.rankSep }
 

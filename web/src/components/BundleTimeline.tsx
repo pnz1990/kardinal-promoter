@@ -71,9 +71,9 @@ export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundl
     return (
       <div className="bundle-timeline-bar" data-testid="bundle-timeline-skeleton">
         <span className="sr-only" role="status">Loading bundles</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          {[72, 58, 64, 50, 68].map((w, i) => (
-            <div key={i} aria-hidden="true" className="bundle-chip-skeleton" style={{ width: `${w}px` }} />
+        <div className="bundle-timeline__skeleton-row">
+          {[0, 1, 2, 3, 4].map(i => (
+            <div key={i} aria-hidden="true" className="bundle-chip-skeleton" />
           ))}
         </div>
       </div>
@@ -87,24 +87,15 @@ export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundl
 
   return (
     <div className="bundle-timeline-bar">
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.3rem' }}>
-        <span style={{ fontSize: '0.65rem', color: 'var(--color-text-faint)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+      <div className="bundle-timeline__head">
+        <span className="bundle-timeline__title">
           Bundle History (newest → oldest)
         </span>
         {/* #338: Compare button appears when two bundles are selected */}
         {showCompare && (
           <button
             onClick={onCompare}
-            style={{
-              fontSize: '0.65rem',
-              background: 'var(--color-accent-bg)',
-              color: 'var(--color-accent)',
-              border: '1px solid var(--color-accent)',
-              borderRadius: '3px',
-              padding: '1px 6px',
-              cursor: 'pointer',
-              fontWeight: 600,
-            }}
+            className="bundle-timeline__compare"
             title="Compare selected bundles"
           >
             Compare ↔
@@ -113,21 +104,14 @@ export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundl
         {compareBundle && (
           <button
             onClick={() => onCompareBundle?.(null)}
-            style={{
-              fontSize: '0.65rem',
-              background: 'none',
-              color: 'var(--color-text-muted)',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '0',
-            }}
+            className="bundle-timeline__clear"
             title="Clear comparison selection"
           >
             × clear
           </button>
         )}
         {!compareBundle && bundles.length >= 2 && (
-          <span style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)' }}>
+          <span className="bundle-timeline__hint">
             Shift-click to compare
           </span>
         )}
@@ -138,7 +122,7 @@ export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundl
         aria-label="Bundle history (arrow keys move between bundles)"
         onKeyDown={roving.onKeyDown}
         onFocus={roving.onFocus}
-        style={{ display: 'flex', gap: '0.4rem', alignItems: 'stretch' }}
+        className="bundle-timeline__chips"
       >
         {shown.map(b => {
           const isSelected = b.name === selectedBundle

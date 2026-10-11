@@ -1,0 +1,7 @@
+{
+  "components/FleetBoard.tsx": 1,
+  "components/NodeDetail.tsx": 1,
+  "components/PipelineList.tsx": 2,
+  "stationMap/StationMap.tsx": 2,
+  "ui/Dialog.tsx": 1
+}

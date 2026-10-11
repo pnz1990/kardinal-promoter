@@ -14,7 +14,7 @@ test.describe('Journey 011 — Rollback button in the stage drawer', () => {
     await page.goto('/')
     await page.getByText('kardinal-test-app').first().click()
     // Wait for DAG to render
-    await expect(page.locator('svg')).toBeVisible()
+    await expect(page.locator('svg.station-map__svg')).toBeVisible()
   })
 
   test('Step 1: Clicking a PromotionStep node opens the stage drawer', async ({ page }) => {
