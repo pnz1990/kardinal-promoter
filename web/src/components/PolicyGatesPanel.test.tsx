@@ -144,7 +144,7 @@ describe('PolicyGatesPanel — waiting gates (E2E-R19)', () => {
     const gates = [makeGate({ ...waiting, reason: 'soak 0m < 30m' })]
     render(<PolicyGatesPanel gates={gates} />)
     await user.click(screen.getByRole('button', { name: /Policy Gates/i }))
-    expect(screen.getByLabelText('Waiting — not ready, not holding the bundle')).toBeInTheDocument()
+    expect(screen.getByLabelText('Not ready — not ready, not holding the bundle')).toBeInTheDocument()
     expect(screen.queryByLabelText('Waiting — Pending')).not.toBeInTheDocument()
     expect(screen.queryByText('Block')).not.toBeInTheDocument()
     expect(screen.getByText('soak 0m < 30m')).toBeInTheDocument()
@@ -167,7 +167,7 @@ describe('PolicyGatesPanel — state from the UI API', () => {
     const btn = screen.getByRole('button', { name: /Policy Gates/i })
     expect(btn).toHaveAttribute('aria-expanded', 'false')
     await user.click(btn)
-    expect(screen.getByLabelText('Superseded — bundle superseded, not evaluated again')).toBeInTheDocument()
+    expect(screen.getByLabelText('Replaced by newer version — bundle superseded, not evaluated again')).toBeInTheDocument()
   })
 
   it('counts a holding gate not evaluated yet as blocked', () => {
