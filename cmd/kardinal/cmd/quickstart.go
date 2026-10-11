@@ -133,7 +133,7 @@ var quickstartLookPath = exec.LookPath
 type quickstartOptions struct {
 	repo, image, chart, chartVersion string
 	sets                             []string
-	noArgoCD, noWait                 bool
+	noArgoCD, noWait, delete         bool
 	timeout                          time.Duration
 }
 
@@ -149,13 +149,17 @@ fork, a Pipeline with an approval gate on prod, and a first version, which it
 follows until prod waits for your approval. A re-run changes nothing.`,
 		Example: `  kind create cluster --name kardinal
   kardinal quickstart --repo https://github.com/<you>/kardinal-demo
-  kardinal approve demo prod`,
+  kardinal approve demo prod
+  kardinal quickstart --delete`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Ctrl-C or SIGTERM cancels the step that runs (helm, kubectl or
 			// the follow) and quickstart returns, removing its kubeconfig file.
 			ctx, stop := signal.NotifyContext(contextOf(cmd), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+			if o.delete {
+				return quickstartDeleteFn(ctx, cmd.OutOrStdout(), func(q string) error { return confirm(cmd, q) })
+			}
 			return quickstartFn(ctx, cmd.OutOrStdout(), o)
 		},
 	}
@@ -168,6 +172,16 @@ follows until prod waits for your approval. A re-run changes nothing.`,
 	f.BoolVar(&o.noArgoCD, "no-argocd", false, "Do not install Argo CD (the cluster has one)")
 	f.BoolVar(&o.noWait, "no-wait", false, "Do not follow the first version")
 	f.Var(durationValue{&o.timeout}, "timeout", "How long to follow the first version")
+	f.BoolVar(&o.delete, "delete", false, "Delete the demo quickstart applied (its versions, Pipeline, gate, ApplicationSet and git Secret); keep kro, Argo CD and kardinal")
+	addYesFlag(cmd)
+	cmd.MarkFlagsMutuallyExclusive("delete", "repo")
+	cmd.MarkFlagsMutuallyExclusive("delete", "image")
+	cmd.MarkFlagsMutuallyExclusive("delete", "chart")
+	cmd.MarkFlagsMutuallyExclusive("delete", "chart-version")
+	cmd.MarkFlagsMutuallyExclusive("delete", "set")
+	cmd.MarkFlagsMutuallyExclusive("delete", "no-argocd")
+	cmd.MarkFlagsMutuallyExclusive("delete", "no-wait")
+	cmd.MarkFlagsMutuallyExclusive("delete", "timeout")
 	withReference(cmd, quickstartReference)
 	return cmd
 }
@@ -731,7 +745,7 @@ func (q *quickstart) apply(u *unstructured.Unstructured) (bool, error) {
 		return false, fmt.Errorf("get %s %s/%s: %w", u.GetKind(), u.GetNamespace(), u.GetName(), HumanError(err))
 	}
 	if err := q.c.Apply(q.ctx, sigs_client.ApplyConfigurationFromUnstructured(u),
-		sigs_client.FieldOwner("kardinal-quickstart"), sigs_client.ForceOwnership); err != nil {
+		sigs_client.FieldOwner(quickstartFieldManager), sigs_client.ForceOwnership); err != nil {
 		return false, fmt.Errorf("apply %s %s/%s: %w", u.GetKind(), u.GetNamespace(), u.GetName(), HumanError(err))
 	}
 	after, err := version()
@@ -941,4 +955,15 @@ change your kubeconfig. A re-run changes nothing.
 
 Then: kardinal approve demo prod ships it to prod; kardinal dashboard opens
 the UI; the Next lines show the command that ships the next version. To get
-PR evidence for prod, set its approval to pr-review in the Pipeline.`
+PR evidence for prod, set its approval to pr-review in the Pipeline.
+
+kardinal quickstart --delete, behind the same local-context check, deletes
+the demo and nothing else: the demo's versions first (it waits up to 2m for
+the controller to close their open PRs, and stops there if they are not
+gone), then the Pipeline demo, the gate prod-approval and the ApplicationSet
+(Argo CD deletes its Applications), each only when quickstart applied it
+(field manager kardinal-quickstart), and the Secret github-token unless
+another Pipeline uses it. It keeps kro, Argo CD, kardinal-promoter with its
+token Secret, and the kardinal-test-app-<env> namespaces, and prints the
+command that deletes those. It asks first on a terminal (--yes does not).
+A re-run deletes nothing.`

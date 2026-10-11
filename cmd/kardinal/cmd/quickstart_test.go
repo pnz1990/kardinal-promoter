@@ -286,6 +286,7 @@ func quickstartCluster(t *testing.T, objs ...sigs_client.Object) sigs_client.Cli
 		v1alpha1.GroupVersion.WithKind("Pipeline"),
 		v1alpha1.GroupVersion.WithKind("PolicyGate"),
 		v1alpha1.GroupVersion.WithKind("Bundle"),
+		v1alpha1.GroupVersion.WithKind("PromotionStep"),
 		corev1.SchemeGroupVersion.WithKind("Secret"),
 		corev1.SchemeGroupVersion.WithKind("Namespace"),
 		appsv1.SchemeGroupVersion.WithKind("Deployment"),
@@ -316,6 +317,8 @@ func quickstartCluster(t *testing.T, objs ...sigs_client.Object) sigs_client.Cli
 						"type": "Ready", "status": "True", "reason": "Valid", "message": "",
 						"lastTransitionTime": "2026-01-01T00:00:00Z"}}, "status", "conditions")
 				}
+				// As the API server records it: quickstart manages its fields.
+				u.SetManagedFields([]metav1.ManagedFieldsEntry{{Manager: quickstartFieldManager, Operation: metav1.ManagedFieldsOperationApply}})
 				cur := &unstructured.Unstructured{}
 				cur.SetGroupVersionKind(u.GroupVersionKind())
 				err := cl.Get(ctx, sigs_client.ObjectKeyFromObject(u), cur)
