@@ -292,6 +292,26 @@
         "apiURL": {
           "type": "string"
         },
+        "token": {
+          "type": "string",
+          "description": "SCM token; the chart stores it in a Secret. github.token is the old name."
+        },
+        "secretRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Existing Secret with the SCM token. github.secretRef is the old name.",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "namespace": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            }
+          }
+        },
         "allowedRepositories": {
           "type": "array",
           "items": {

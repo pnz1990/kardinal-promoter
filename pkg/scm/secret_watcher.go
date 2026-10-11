@@ -22,6 +22,7 @@ import (
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -58,6 +59,15 @@ type SecretWatcher struct {
 
 	// Log is the zerolog logger.
 	Log zerolog.Logger
+
+	// Recorder emits the ControllerSecretReferenceable Warning Event on the
+	// Secret. Nil emits none.
+	Recorder events.EventRecorder
+
+	// warnedReferenceable is set while the Secret carries the
+	// kardinal.io/referenceable label and the warning was given, so it is
+	// given once per labelling.
+	warnedReferenceable bool
 
 	// lastToken tracks the most recently applied token so we only call Reload
 	// when the token actually changes.
@@ -133,6 +143,7 @@ func (w *SecretWatcher) checkAndReload(ctx context.Context, log zerolog.Logger) 
 		log.Error().Err(err).Msg("SCM credential watcher: failed to read Secret (will retry)")
 		return
 	}
+	w.warnIfReferenceable(log, secret)
 
 	app, isApp, appErr := GitHubAppCredentialsFromData(secret.Data)
 	if appErr != nil {
@@ -181,6 +192,33 @@ func (w *SecretWatcher) checkAndReload(ctx context.Context, log zerolog.Logger) 
 		return
 	}
 	log.Info().Msg("SCM credentials rotated — provider reloaded with " + what)
+}
+
+// ReasonControllerSecretReferenceable is the reason of the Warning Event on a
+// controller SCM token Secret that carries LabelReferenceable.
+const ReasonControllerSecretReferenceable = "ControllerSecretReferenceable"
+
+// warnIfReferenceable warns, once per labelling, when the controller's own
+// token Secret carries LabelReferenceable: any kardinal object in its
+// namespace that names a Secret (a MetricCheck, a NotificationHook, an
+// ScmProvider, a Subscription) could then send the controller's token to a
+// URL its author chooses. Earlier charts did not set it; a user may have.
+func (w *SecretWatcher) warnIfReferenceable(log zerolog.Logger, secret *corev1.Secret) {
+	if secret.Labels[LabelReferenceable] != "true" {
+		w.warnedReferenceable = false
+		return
+	}
+	if w.warnedReferenceable {
+		return
+	}
+	w.warnedReferenceable = true
+	msg := fmt.Sprintf("the controller's SCM token Secret %s/%s is labelled %s=true, which lets custom resources in "+
+		"its namespace send the token to a URL of their choice; remove the label: kubectl label secret %s -n %s %s-",
+		secret.Namespace, secret.Name, LabelReferenceable, secret.Name, secret.Namespace, LabelReferenceable)
+	log.Warn().Msg(msg)
+	if w.Recorder != nil {
+		w.Recorder.Eventf(secret, nil, corev1.EventTypeWarning, ReasonControllerSecretReferenceable, "CheckSecret", "%s", msg)
+	}
 }
 
 // appCheckTimeout bounds the installation token mint that checks new GitHub
