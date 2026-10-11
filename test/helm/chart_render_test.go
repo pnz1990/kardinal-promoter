@@ -1050,9 +1050,8 @@ func TestChartTLSFilesInASecret(t *testing.T) {
 	}
 }
 
-// TestChartRejectsUnknownValues: values.schema.json fails unknown keys, so the
-// value names the docs used to give can no longer be silently ignored.
-// controller.shard was removed with distributed mode (#1321).
+// TestChartRejectsUnknownValues: values.schema.json fails unknown keys, so a
+// misspelled or unknown value is never silently ignored.
 func TestChartRejectsUnknownValues(t *testing.T) {
 	for _, set := range []string{
 		"controller.shard=eu",
