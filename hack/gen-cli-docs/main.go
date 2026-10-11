@@ -116,7 +116,7 @@ func commandPages(root *cobra.Command) []cmdPage {
 	var pages []cmdPage
 	var walk func(cmd *cobra.Command, prefix string)
 	walk = func(cmd *cobra.Command, prefix string) {
-		if cmd.Hidden || cmd.Deprecated != "" || cmd.Name() == "help" {
+		if !listed(cmd) {
 			return
 		}
 		fullName := strings.TrimSpace(prefix + " " + cmd.Name())
@@ -134,9 +134,44 @@ func commandPages(root *cobra.Command) []cmdPage {
 	return pages
 }
 
+// listed reports whether cmd has a generated page.
+func listed(cmd *cobra.Command) bool {
+	return !cmd.Hidden && cmd.Deprecated == "" && cmd.Name() != "help"
+}
+
+// navLines returns the nav entries of cmd and its subcommands: a command with
+// listed subcommands is a section that starts with its own page; the root's
+// subcommands are listed after the root page, not inside a section. Siblings
+// are sorted by name.
+func navLines(cmd *cobra.Command, prefix, indent string) []string {
+	fullName := strings.TrimSpace(prefix + " " + cmd.Name())
+	page := fmt.Sprintf("- %s: reference/cli/%s.md", fullName, strings.ReplaceAll(fullName, " ", "-"))
+	var subs []*cobra.Command
+	for _, sub := range cmd.Commands() {
+		if listed(sub) {
+			subs = append(subs, sub)
+		}
+	}
+	sort.Slice(subs, func(i, j int) bool { return subs[i].Name() < subs[j].Name() })
+	if len(subs) == 0 {
+		return []string{indent + page}
+	}
+	childIndent := indent + "  "
+	lines := []string{indent + "- " + fullName + ":", childIndent + page}
+	if prefix == "" {
+		// The root: its page, then each command at the same level.
+		lines = []string{indent + page}
+		childIndent = indent
+	}
+	for _, sub := range subs {
+		lines = append(lines, navLines(sub, fullName, childIndent)...)
+	}
+	return lines
+}
+
 // writeNav replaces the lines between the BEGIN and END CLI NAV markers of
-// the mkdocs config at path with one nav entry per command page, indented as
-// the BEGIN marker is.
+// the mkdocs config at path with one nav entry per command page, grouped by
+// parent command and indented as the BEGIN marker is.
 func writeNav(root *cobra.Command, path string) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -157,9 +192,7 @@ func writeNav(root *cobra.Command, path string) error {
 	}
 	indent := lines[begin][:len(lines[begin])-len(strings.TrimLeft(lines[begin], " "))]
 	out := append([]string{}, lines[:begin+1]...)
-	for _, p := range commandPages(root) {
-		out = append(out, fmt.Sprintf("%s- %s: reference/cli/%s", indent, p.name, p.file))
-	}
+	out = append(out, navLines(root, "", indent)...)
 	out = append(out, lines[end:]...)
 	if err := os.WriteFile(path, []byte(strings.Join(out, "\n")), 0o644); err != nil {
 		return fmt.Errorf("write: %w", err)
