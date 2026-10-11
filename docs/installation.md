@@ -145,7 +145,7 @@ Helm installs `crds/` only on the first install and never updates or deletes it.
 The chart ships `values.schema.json`, which rejects unknown keys: a misspelled `--set` fails the
 install instead of being ignored.
 
-Create the Secrets first. The controller reads `github.secretRef`, `webhook.secretRef`,
+Create the Secrets first. The controller reads `scm.secretRef`, `webhook.secretRef`,
 `bundleAPI.tokenSecretRef` and `ui.auth.tokenSecretRef` at startup, so a Pod whose Secret or key
 is missing waits in `CreateContainerConfigError`, and `helm install --wait` would time out with
 only `context deadline exceeded`. When Helm talks to the cluster (`helm install`, `helm upgrade`,
@@ -153,7 +153,7 @@ only `context deadline exceeded`. When Helm talks to the cluster (`helm install`
 with the value, the Secret and the missing key, for example:
 
 ```
-Error: INSTALLATION FAILED: ... github.secretRef.name: Secret "github-token" does not exist in namespace kardinal-system. Create it before installing ...
+Error: INSTALLATION FAILED: ... scm.secretRef.name: Secret "github-token" does not exist in namespace kardinal-system. Create it before installing ...
 ```
 
 The installer needs `get` on Secrets in the release namespace for this check. `helm template`

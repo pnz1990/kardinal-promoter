@@ -1076,6 +1076,9 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	// The git token from Pipeline spec.git.secretRef. A git step that fails
 	// without one says why (B48).
 	cred := r.resolveGitCredential(ctx, log, pipeline)
+	if cred.refused != nil {
+		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, cred.refused.Error())
+	}
 
 	// spec.scmProvider: the provider the translator resolved for this step;
 	// without it the controller's --scm-provider. A provider that is gone, or

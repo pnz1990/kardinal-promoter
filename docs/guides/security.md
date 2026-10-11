@@ -51,7 +51,7 @@ helm template kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter -
 To keep Secret access out of other namespaces, run in namespace mode
 (`controller.watchNamespace`), which turns the namespaced rules into a Role in that namespace.
 The release-namespace Role also grants `get` on the SCM token Secret, limited to its name
-(`github.secretRef.name`, or the Secret the chart creates from `github.token`). The rule is
+(`scm.secretRef.name`, or the Secret the chart creates from `scm.token`). The rule is
 left out when neither is set.
 
 ---
@@ -114,7 +114,7 @@ expires, so no long-lived PAT is stored. See [GitHub App](../scm-providers.md#gi
 The App needs `Contents: Read and write`, `Pull requests: Read and write` and `Metadata:
 Read-only`. There is no OIDC token exchange; another short-lived token works if something
 outside kardinal (an External Secrets generator, a CronJob) refreshes the Secret in
-`github.secretRef` before it expires: the controller reloads it within 30 seconds.
+`scm.secretRef` before it expires: the controller reloads it within 30 seconds.
 
 ---
 
@@ -162,7 +162,7 @@ The namespace is kardinal's tenancy unit. There is no Project CRD.
 #### The shared SCM token and `scm.allowedRepositories`
 
 Git clone and push use the Pipeline's `git.secretRef` token. The controller uses its own SCM
-token (`github.token` or `github.secretRef`, the controller Pod's `GITHUB_TOKEN`) to open, label,
+token (`scm.token` or `scm.secretRef`, the controller Pod's `GITHUB_TOKEN`) to open, label,
 comment on and close PRs. When it closes a PR that was not merged, it also deletes the PR's head
 branch, `kardinal/<namespace hash>/<bundle>/<env>`, with that token, so the closed PR cannot be merged later. It
 deletes that branch too when a step that pushed it ends before it opens a PR. It deletes only
@@ -246,14 +246,14 @@ helm install kardinal-team-a oci://ghcr.io/pnz1990/charts/kardinal-promoter --ve
   --namespace team-a \
   --create-namespace \
   --set controller.watchNamespace=team-a \
-  --set github.secretRef.name=github-token
+  --set scm.secretRef.name=github-token
 
 # Team B — separate install watching only the "team-b" namespace
 helm install kardinal-team-b oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
   --namespace team-b \
   --create-namespace \
   --set controller.watchNamespace=team-b \
-  --set github.secretRef.name=github-token
+  --set scm.secretRef.name=github-token
 ```
 
 Each install creates a `Role` and `RoleBinding` scoped to its watch namespace. Team A

@@ -708,6 +708,9 @@ func main() {
 			scmTokenSecretKey,
 			logger,
 		)
+		// Warns (once per labelling) when the Secret is labelled
+		// kardinal.io/referenceable.
+		watcher.Recorder = mgr.GetEventRecorder("kardinal-scm-token-watcher")
 		if addErr := mgr.Add(watcher); addErr != nil {
 			logger.Fatal().Err(addErr).Msg("unable to register SCM credential watcher")
 		}

@@ -72,6 +72,10 @@ type gitCredential struct {
 	secret string
 	// readErr is why the Secret could not be read (reasonSecretUnreadable).
 	readErr error
+	// refused is set when spec.git.secretRef names the controller's own SCM
+	// token Secret (ControllerSecret): the Secret is not read, and no git
+	// remote call may be made with this credential.
+	refused error
 }
 
 // auth is the git authentication of c, for every git remote call (clone,
@@ -87,6 +91,12 @@ func (c gitCredential) auth() scm.GitAuth {
 // C03-promotionstep-18). It never returns the token in an error or a note.
 func (r *Reconciler) resolveGitCredential(ctx context.Context, log zerolog.Logger,
 	pipeline *v1alpha1.Pipeline) gitCredential {
+	// Every path that talks to the remote gets its credential here, so the
+	// refusal covers them all: the git steps, the PR branch refresh while
+	// the PR waits for its merge, and the history reads.
+	if err := r.ControllerSecret.Refuses(pipeline); err != nil {
+		return gitCredential{refused: err}
+	}
 	needsToken := remoteNeedsToken(pipeline.Spec.Git.URL)
 	ref := pipeline.Spec.Git.SecretRef
 	if ref == nil || ref.Name == "" {

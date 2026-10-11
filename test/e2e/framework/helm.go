@@ -614,7 +614,8 @@ func suiteControllers() []string {
 const ControllerSCMSecretName = "kardinal-scm-token"
 
 // ensureControllerSCMSecret creates ControllerSCMSecretName in ns from the
-// suite's git token, unless it exists.
+// suite's git token, or refreshes its token when it exists (a release
+// reinstalled in the same namespace after the suite's token changed).
 func (e *Env) ensureControllerSCMSecret(t *testing.T, ns string) {
 	t.Helper()
 	ctx := context.Background()
@@ -626,7 +627,15 @@ func (e *Env) ensureControllerSCMSecret(t *testing.T, ns string) {
 		t.Fatalf("read %s/%s: %v", ControllerNamespace, GitSecretName, err)
 	}
 	cp := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: ControllerSCMSecretName}, Data: src.Data}
-	if err := e.Client.Create(ctx, cp); err != nil && !apierrors.IsAlreadyExists(err) {
-		t.Fatalf("create %s/%s: %v", ns, ControllerSCMSecretName, err)
+	err := e.Client.Create(ctx, cp)
+	if apierrors.IsAlreadyExists(err) {
+		var cur corev1.Secret
+		if err = e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: ControllerSCMSecretName}, &cur); err == nil {
+			cur.Data = src.Data
+			err = e.Client.Update(ctx, &cur)
+		}
+	}
+	if err != nil {
+		t.Fatalf("create or refresh %s/%s: %v", ns, ControllerSCMSecretName, err)
 	}
 }
