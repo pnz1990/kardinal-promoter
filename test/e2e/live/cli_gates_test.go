@@ -243,16 +243,23 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 		"explain", pipelineName, "--env", "staging")
 	refusesNotFound(t, c, ns, "", "nope", "explain", "nope")
 
-	summary := regexp.MustCompile(`^Controller:  (\S+)\nPipelines:   (\d+)(?: \((\d+) degraded: [^)\n]+\))?\n` +
-		`Bundles:     (\d+) \((\d+) active\)\n(?:\nWarning: (\d+) pipeline\(s\) Degraded: run 'kardinal get pipelines' for details\n)?$`)
+	summary := regexp.MustCompile(`^Controller:  (\S+) in kardinal-system, (\d+)/(\d+) ready\nPipelines:   (\d+)(?: \((\d+) degraded: [^)\n]+\))?\n` +
+		`Versions:    (\d+) \((\d+) in flight\)\n\nNAMESPACE +PIPELINE +SUMMARY\n`)
 	out := c.Must(ns, "status")
 	m := summary.FindStringSubmatch(out)
 	require.NotNil(t, m, "status output:\n%s", out)
 	assert.Equal(t, controllerVersion(t, e), m[1])
-	n, _ := strconv.Atoi(m[2])
+	assert.Equal(t, m[2], m[3], "every controller replica is ready")
+	n, _ := strconv.Atoi(m[4])
 	assert.GreaterOrEqual(t, n, 1, "the cluster has this test's Pipeline")
-	assert.Equal(t, m[3], m[6], "the warning counts the degraded pipelines")
-	assert.Regexp(t, `^Controller:  unknown\n`, c.Must(ns, "status", "--controller-namespace", ns), "no kardinal-version ConfigMap there")
+	if d, _ := strconv.Atoi(m[5]); d > 0 {
+		assert.Contains(t, out, fmt.Sprintf("Warning: %d pipeline(s) Degraded", d), "the warning counts the degraded pipelines")
+	}
+	// One line per pipeline, this test's with its summary sentence.
+	assert.Regexp(t, `(?m)^`+ns+` +`+pipelineName+` +\S`, out)
+	assert.Contains(t, out, "Details: kardinal status <pipeline> -n <namespace>\n")
+	assert.Regexp(t, `^Controller:  unknown in `+ns+`, no controller Deployment found there: kardinal doctor\n`,
+		c.Must(ns, "status", "--controller-namespace", ns), "no kardinal-version ConfigMap or Deployment there")
 	assert.Equal(t, "Pipeline: podinfo   Namespace: "+ns+"\n\nNo versions yet. Ship one: kardinal create bundle podinfo --image <ref>\n",
 		c.Must(ns, "status", pipelineName))
 	refusesNotFound(t, c, ns, "", "nope", "status", "nope")

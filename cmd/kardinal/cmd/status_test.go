@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	appsv1 "k8s.io/api/apps/v1"
 	"regexp"
 	"strings"
 	"testing"
@@ -496,9 +497,15 @@ func TestStatusSummary(t *testing.T) {
 		b.Status.Phase = phase
 		return b
 	}
+	web := pipe("team-a", "web", "Ready")
+	web.Status.Summary = "1.5.0 live in test, prod"
+	one := int32(1)
+	ctrl := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "kardinal", Name: "kardinal-promoter",
+		Labels: map[string]string{"app.kubernetes.io/name": "kardinal-promoter"}}, Spec: appsv1.DeploymentSpec{Replicas: &one}}
+	ctrl.Status.ReadyReplicas = 1
 	c := doctorClient(
-		versionConfigMap("kardinal", "v0.6.0"),
-		pipe("team-a", "web", "Ready"),
+		versionConfigMap("kardinal", "v0.6.0"), ctrl,
+		web,
 		pipe("team-b", "api", "Degraded"),
 		bundle("b1", "Available"), bundle("b2", "Promoting"),
 		bundle("b3", "Verified"), bundle("b4", "Superseded"),
@@ -506,15 +513,22 @@ func TestStatusSummary(t *testing.T) {
 
 	var buf bytes.Buffer
 	require.NoError(t, statusSummaryFn(&buf, c, "kardinal"))
-	out := buf.String()
-	assert.Contains(t, out, "Controller:  v0.6.0\n")
-	assert.Contains(t, out, "Pipelines:   2 (1 degraded: team-b/api)\n")
-	assert.Contains(t, out, "Bundles:     4 (2 active)\n")
-	assert.Contains(t, out, "Warning: 1 pipeline(s) Degraded")
+	assert.Equal(t, `Controller:  v0.6.0 in kardinal, 1/1 ready
+Pipelines:   2 (1 degraded: team-b/api)
+Versions:    4 (2 in flight)
+
+NAMESPACE   PIPELINE   SUMMARY
+team-a      web        1.5.0 live in test, prod
+team-b      api        A version failed
+
+Details: kardinal status <pipeline> -n <namespace>
+
+Warning: 1 pipeline(s) Degraded: run 'kardinal get pipelines' for details
+`, buf.String())
 
 	buf.Reset()
 	require.NoError(t, statusSummaryFn(&buf, c, defaultControllerNamespace))
-	assert.Contains(t, buf.String(), "Controller:  unknown\n")
+	assert.Contains(t, buf.String(), "Controller:  unknown in kardinal-system, no controller Deployment found there: kardinal doctor\n")
 }
 
 func TestStatusSummary_ListError(t *testing.T) {

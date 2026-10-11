@@ -4,15 +4,33 @@ Show controller health or per-pipeline in-flight promotion details
 
 ### Synopsis
 
-Without a pipeline: the controller version and how many pipelines and
-bundles there are. With one: per environment, the version running there, a
-newer one on its way in, its state in words and since when, its PR, and the
-gates holding it back. Run it first when a promotion is stuck; -w refreshes
-it and -o json prints it for scripts.
+Without a pipeline: the controller and its readiness, the counts, and one
+line per pipeline with its summary. With one: per environment, the version
+running there, a newer one on its way in, its state and since when, its PR,
+and the gates holding it back. Run it first when a promotion is stuck; -w
+refreshes it and -o json prints it for scripts.
 
-When called without arguments: displays the controller version (the
-kardinal-version ConfigMap in --controller-namespace), the pipeline count with
-any Degraded pipelines, and the bundle count (active = Available or Promoting).
+When called without arguments, across every namespace:
+
+  Controller:  v0.10.1 in kardinal-system, 1/1 ready
+  Pipelines:   2 (1 degraded: team-b/api)
+  Versions:    4 (2 in flight)
+
+  NAMESPACE   PIPELINE   SUMMARY
+  team-a      web        1.5.0 live in test, prod
+  team-b      api        A version failed
+
+  Details: kardinal status <pipeline> -n <namespace>
+
+the controller version (the kardinal-version ConfigMap in
+--controller-namespace) and how many replicas of its Deployment are ready
+(else "no controller Deployment found there: kardinal doctor"; fewer ready
+than desired is a warning), the pipeline count with any Degraded pipelines,
+the version count (in flight = Available or Promoting), and one line per
+pipeline (at most 50; then kardinal get pipelines -A) with its
+status.summary sentence (its phase from a controller that predates it).
+-o json adds controllerReady and items [{namespace, pipeline, phase,
+summary}] to controller, pipelines, degraded, bundles and activeBundles.
 
 When called with a pipeline name: first the Pipeline's own problems, an
 ERROR when it is not Ready (such as GitCredentialMissing, with the command
