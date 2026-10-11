@@ -10,7 +10,7 @@ This guide walks through migrating a Kargo-managed delivery pipeline to kardinal
 |---|---|---|
 | `Warehouse` | `Subscription` CRD | OCI watcher polls registries; creates `Bundle` on new digest |
 | `Stage` | Environment in `Pipeline.spec.environments[]` | One Pipeline holds all environments |
-| `Freight` | `Bundle` CRD | One version per artifact version; carries provenance |
+| `Freight` | `Bundle` CRD | One version of your app per artifact; carries provenance |
 | `FreightRequest` | `Bundle.spec.intent` | Targets a specific environment; can skip others |
 | `Promotion` | `PromotionStep` CRD | Created automatically by the Graph controller |
 | `VerifiedIn` / approval required | `approval: pr-review` on environment | PR approval required before HealthChecking |
@@ -323,4 +323,4 @@ helm uninstall kargo -n kargo
 
 **GitOps repo structure:** kardinal's `kustomize` update strategy edits `kustomization.yaml` the way Kargo's `kustomize-set-image` step does. Kargo's `kustomize-build` and `helm-template` steps map to `layout: branch`, which renders in a sandboxed Job per promotion (Kargo runs these steps in its controller) and commits plain YAML to the environment's branch ([Rendered Manifests](../rendered-manifests.md)).
 
-**Policy gates:** Kargo's AnalysisTemplates run as verification after a promotion. kardinal's gates are separate CRDs that evaluate independently and are wired into the Graph. This means gates are cluster-reusable and visible to all pipelines that reference the same gate namespace.
+**Policy gates:** Kargo's AnalysisTemplates run as verification after a promotion. kardinal's gates are PolicyGate objects that evaluate independently and are wired into the Graph. This means gates are cluster-reusable and visible to all pipelines that reference the same gate namespace.

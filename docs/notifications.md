@@ -60,7 +60,7 @@ The controller POSTs a JSON body to the configured URL on each qualifying event:
 }
 ```
 
-Version events have no `environment` field. Gate and PromotionStep events
+Bundle events have no `environment` field. PolicyGate and PromotionStep events
 carry the environment:
 
 ```json
@@ -82,7 +82,7 @@ after `failed: ` is the step's `status.message`.
 | `event`       | string | Event type (see §Events)                             |
 | `pipeline`    | string | Pipeline name                                        |
 | `bundle`      | string | Version name                                          |
-| `environment` | string | Environment name (gate and PromotionStep events) |
+| `environment` | string | Environment name (PolicyGate and PromotionStep events) |
 | `message`     | string | Human-readable description                          |
 | `timestamp`   | string | RFC3339 UTC timestamp of delivery                    |
 | `prURL`       | string | Pull request URL (`PromotionStep.PROpened` and `PromotionStep.WaitingForApproval` only) |
@@ -352,7 +352,7 @@ the next event is delivered. A dropped event is not silent:
 
 ### Delivery guarantees
 
-Events are derived from the state of versions, gates and PromotionSteps, each with a
+Events are derived from the state of Bundles, PolicyGates and PromotionSteps, each with a
 deterministic key ([Events](#events)). The hook's `status.processedEventKeys` records the
 key of every event delivered or given up on; it lives in the API server, not in the
 controller's memory.
@@ -580,7 +580,7 @@ See §Delivery for the retry schedule.
 ## Pipeline selector
 
 `spec.pipelineSelector` restricts notifications to events from one pipeline. It
-matches a version's `spec.pipeline`, a PromotionStep's `spec.pipelineName` and a
+matches a Bundle's `spec.pipeline`, a PromotionStep's `spec.pipelineName` and a
 gate's `kardinal.io/pipeline` label:
 
 ```yaml

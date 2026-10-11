@@ -353,7 +353,7 @@ empty or an absolute `http://` or `https://` URL with a host, without user info
 kardinal records provenance as the caller gives it, whichever way the version is created (version
 API, `kardinal create bundle`, kubectl): it does not check `commitSHA`, `author` or `ciRunURL`
 against your source repository or CI. A gate on `bundle.provenance.author` therefore trusts
-everyone who holds the Bundle API token or may create versions in the namespace.
+everyone who holds the Bundle API token or may create Bundles in the namespace.
 
 ## Versions with several images
 
@@ -462,7 +462,7 @@ The body is limited to 1 MiB.
 | Code | Meaning |
 |---|---|
 | 201 | Version created. The body is `{"name": "...", "namespace": "..."}` |
-| 400 | Invalid request body, unknown field, or rejected by version validation |
+| 400 | Invalid request body, unknown field, or rejected by Bundle validation |
 | 401 | Invalid or missing token |
 | 403 | Namespace is not the one set by `--watch-namespace` |
 | 404 | Pipeline not found in the target namespace, or the endpoint is not enabled |
