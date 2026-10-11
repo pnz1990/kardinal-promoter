@@ -452,11 +452,11 @@ rejected with `400`, so a misspelt key fails the request instead of being ignore
 | Field | Required | Description |
 |---|---|---|
 | `pipeline` | Yes | Pipeline name (a valid Kubernetes name, at most 63 characters) |
-| `type` | No | `image` (default), `config`, `mixed` or `chart` |
+| `type` | No | `image`, `config`, `mixed` or `chart`. When omitted it is inferred: `chart` when `chart` is set, `mixed` for `images` and `configRef`, `config` for `configRef` alone, else `image` |
 | `namespace` | No | Target namespace. Defaults to `--watch-namespace`, or `default` |
 | `images` | For `image` and `mixed` | At least one image |
 | `configRef` | For `config` and `mixed` | `gitRepo` and `commitSHA` (`commitSHA` is required). An `image` Bundle with a `configRef` gets 400: it would deploy only its images |
-| `chart` | For `chart` | `name` and `version` (required), `repoURL`, `digest`; promoted with `update.strategy: helm` (see [Promoting a chart version](subscription.md#promoting-a-chart-version)) |
+| `chart` | For `chart` | `name` and `version` (required), `repoURL`, `digest`; promoted with `update.strategy: helm` (see [Promoting a chart version](subscription.md#promoting-a-chart-version)). A `chart` Bundle with a `configRef` gets 400: the configRef would be dropped |
 | `provenance` | No | `commitSHA`, `ciRunURL` (empty or an absolute `http(s)` URL, see [Provenance](#provenance)), `author`, `timestamp` (set to now if empty) |
 | `intent` | No | `targetEnvironment`, `skipEnvironments` |
 

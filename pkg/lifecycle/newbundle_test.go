@@ -101,6 +101,17 @@ func TestInferBundleType(t *testing.T) {
 			}
 		})
 	}
+	// #1728 QA: a chart Bundle with a configRef, the type set or inferred
+	// from chart, is refused: the configRef would be dropped.
+	for _, s := range []v1alpha1.BundleSpec{
+		{Pipeline: "app", Chart: chart, ConfigRef: cfg},
+		{Pipeline: "app", Type: "chart", Chart: chart, ConfigRef: cfg},
+		{Pipeline: "app", Chart: chart, Images: img, ConfigRef: cfg},
+	} {
+		err := lifecycle.ValidateNewBundle(&s)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `type "chart" does not use configRef`)
+	}
 	// A type that is set is kept, and a mismatch is an error, not overridden.
 	spec := v1alpha1.BundleSpec{Pipeline: "app", Type: "image", ConfigRef: cfg}
 	require.Error(t, lifecycle.ValidateNewBundle(&spec))

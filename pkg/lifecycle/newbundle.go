@@ -17,10 +17,11 @@ import (
 // so the two accept the same Bundles (#1285):
 //
 //   - spec.pipeline is a valid object name that also fits in a label value;
-//   - spec.type is image, config or mixed; an empty type is set to image;
+//   - spec.type is image, config, mixed or chart; an empty type is inferred
+//     from the fields (InferBundleType);
 //   - the type has the artifacts it needs (graph.ValidateBundleArtifacts):
 //     images for image and mixed, configRef.commitSHA for config and mixed;
-//   - an image Bundle has no configRef, which it would ignore;
+//   - an image or chart Bundle has no configRef, which it would ignore;
 //   - provenance.ciRunURL passes graph.ValidateCIRunURL.
 //
 // It does not check that the Pipeline exists: each caller does that with its
@@ -47,6 +48,12 @@ func ValidateNewBundle(spec *v1alpha1.BundleSpec) error {
 	// ignored without a word (#1353).
 	if spec.Type == "image" && spec.ConfigRef != nil {
 		return fmt.Errorf("type \"image\" does not use configRef; set type config or mixed with configRef.commitSHA, or drop configRef")
+	}
+	// A chart Bundle promotes its chart version only (update.strategy helm):
+	// a configRef would be dropped without a word, whether the type was set
+	// or inferred from chart.
+	if spec.Type == "chart" && spec.ConfigRef != nil {
+		return fmt.Errorf("type \"chart\" does not use configRef; drop configRef, or create a separate config Bundle for configRef.commitSHA")
 	}
 	if spec.Provenance != nil {
 		// The PR body and the UI link it (E2E-R22).
