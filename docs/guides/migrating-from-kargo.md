@@ -268,20 +268,9 @@ spec:
 
 ### Step 6: Install kardinal and verify
 
+Install kro and kardinal-promoter first ([Install](../installation.md)), then:
+
 ```bash
-# Install kro with the Graph feature gate (from a kardinal-promoter checkout)
-bash hack/install-kro.sh
-
-# Create the SCM token secret and install kardinal
-kubectl create namespace kardinal-system
-kubectl create secret generic github-token \
-  --namespace kardinal-system \
-  --from-literal=token=$GITHUB_PAT
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
-  --namespace kardinal-system \
-  --create-namespace \
-  --set scm.secretRef.name=github-token
-
 # Apply your Pipeline
 kubectl apply -f pipeline.yaml
 

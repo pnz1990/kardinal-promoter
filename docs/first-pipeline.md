@@ -39,36 +39,8 @@ graph LR
 
 ## Install kardinal-promoter
 
-kardinal-promoter runs on the upstream [kro](https://github.com/kubernetes-sigs/kro) Graph controller. Install kro v0.10.0-rc.0 with the `GraphKind` feature gate first:
-
-```bash
-# From a kardinal-promoter checkout
-bash hack/install-kro.sh
-```
-
-Then install kardinal-promoter:
-
-```bash
-# Option A: reference an existing Secret (recommended for production)
-# The controller watches this Secret and reloads the token automatically on rotation —
-# no controller restart needed. See "Credential rotation" in docs/scm-providers.md.
-kubectl create namespace kardinal-system --dry-run=client -o yaml | kubectl apply -f -
-kubectl create secret generic github-token \
-  --namespace kardinal-system \
-  --from-literal=token=$GITHUB_PAT \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
-  --namespace kardinal-system --create-namespace \
-  --set scm.secretRef.name=github-token
-
-# Option B: pass the token directly (development/testing only)
-# The chart stores it in Secret kardinal-promoter-github-token, but the token
-# also stays in the Helm release history.
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
-  --namespace kardinal-system --create-namespace \
-  --set scm.token=$GITHUB_PAT
-```
+Follow [Install](installation.md): install kro, create the SCM token Secret, install the chart and
+the CLI.
 
 Verify the installation:
 
