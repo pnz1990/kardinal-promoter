@@ -83,10 +83,10 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
   }
   await expectShown(page, newer, older)
 
-  // UI-BUNDLETYPE-01: the Bundle card names the type; image Bundles, the
+  // UI-BUNDLETYPE-01: the Bundle card names the type; image versions, the
   // common case, carry no badge in the timeline.
-  await expect(page.getByRole('img', { name: 'image Bundle' })).toBeVisible()
-  const bar = page.getByRole('toolbar', { name: /Bundle history/ })
+  await expect(page.getByRole('img', { name: 'image version' })).toBeVisible()
+  const bar = page.getByRole('toolbar', { name: /^Versions/ })
   await expect(bar.getByRole('img')).toHaveCount(0)
   // UI-KEYBOARD-01: the timeline is one Tab stop, the arrow keys move in it.
   await expect(bar.locator('.bundle-chip[tabindex="0"]')).toHaveCount(1)

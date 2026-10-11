@@ -309,3 +309,12 @@
   box-shadow: var(--k-elev-1);
 }
 .k-menu__panel[hidden] { display: none; }
+
+/* ── KubernetesDetails ── */
+.k-k8s { margin-block-start: var(--k-space-3); color: var(--k-ink-2); font-size: var(--k-text-sm); }
+.k-k8s__summary { cursor: pointer; color: var(--k-ink-3); }
+.k-k8s__summary:hover { color: var(--k-ink); }
+.k-k8s__list { display: grid; gap: var(--k-space-1); margin: var(--k-space-2) 0 0; }
+.k-k8s__row { display: flex; gap: var(--k-space-2); }
+.k-k8s__row dt { min-inline-size: var(--k-space-24); color: var(--k-ink-3); }
+.k-k8s__row dd { margin: 0; font-family: var(--k-font-mono); overflow-wrap: anywhere; }

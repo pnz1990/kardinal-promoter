@@ -69,8 +69,8 @@ describe('StatusChip, Badge, Tag', () => {
 
   it('a tag names the Bundle type for screen readers', async () => {
     const { container } = render(<div><Tag kind="image" /><Tag kind="mixed" /><Tag kind="chart" /><Tag kind="config" /></div>)
-    expect(screen.getByRole('img', { name: 'image Bundle' })).toHaveTextContent('■ IMG')
-    expect(screen.getByRole('img', { name: 'image and config Bundle' })).toHaveTextContent('■◆ MIX')
+    expect(screen.getByRole('img', { name: 'image version' })).toHaveTextContent('■ IMG')
+    expect(screen.getByRole('img', { name: 'image and config version' })).toHaveTextContent('■◆ MIX')
     await expectAccessible(container)
   })
 })

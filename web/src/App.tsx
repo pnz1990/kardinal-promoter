@@ -436,6 +436,12 @@ export function App() {
     return ids
   }, [graph])
 
+  // The environments those gates guard, in the order the graph lists them.
+  const blockedEnvironments = useMemo(
+    () => (graph?.nodes ?? []).filter(n => blockedGateIds.has(n.id)).map(n => n.environment),
+    [graph, blockedGateIds],
+  )
+
   // When showBlockedOnly is active, pass the blocked IDs to DAGView for highlight.
   const highlightIds = showBlockedOnly ? blockedGateIds : undefined
 
@@ -716,9 +722,10 @@ export function App() {
             {pipelineTab === 'map' && (
               <TabPanel id="map" className="app-tab app-tab--map">
                 <div className="app-map-head">
-                  {/* Blocked PolicyGate banner */}
+                  {/* Gates holding the version back */}
                   <BlockedBanner
                     blockedCount={blockedGateIds.size}
+                    environments={blockedEnvironments}
                     highlightActive={showBlockedOnly}
                     onToggleHighlight={() => setShowBlockedOnly(v => !v)}
                     onOpenGates={() => setUrlState({ tab: 'gates' })}

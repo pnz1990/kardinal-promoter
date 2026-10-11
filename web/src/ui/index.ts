@@ -10,6 +10,7 @@ export { Dialog, ConfirmDialog, Drawer, type DialogProps, type ConfirmDialogProp
 export { Tabs, TabPanel, tabId, panelId, type TabsProps, type TabItem } from './Tabs'
 export { MenuButton, type MenuButtonProps } from './MenuButton'
 export { Icon, ICON_NAMES, type IconName, type IconProps } from './Icon'
+export { KubernetesDetails, type KubernetesDetailsProps } from './KubernetesDetails'
 export { CodeInline, CodeBlock, Kbd, Stack, type CodeBlockProps, type StackProps, type Space } from './Text'
 export { TONES, toneVars, type Tone } from './tone'
 export { cx } from './cx'

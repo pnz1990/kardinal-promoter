@@ -24,7 +24,7 @@ test.describe('Journey 016 — Routes and the command palette', () => {
     await expect(page.getByTestId('node-detail')).toHaveCount(0)
 
     // A version from the history is its own route.
-    await page.getByRole('toolbar', { name: /Bundle history/ }).locator('.bundle-chip').nth(1).click()
+    await page.getByRole('toolbar', { name: /^Versions/ }).locator('.bundle-chip').nth(1).click()
     await expect(page).toHaveURL(/#\/p\/default\/kardinal-test-app\/v\/[\w-]+$/)
     const url = page.url()
     await page.reload()

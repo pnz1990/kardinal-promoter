@@ -62,10 +62,10 @@ interface Column {
 const COLUMNS: Column[] = [
   { key: 'name', label: 'Pipeline' },
   { key: 'phase', label: 'Status' },
-  { key: 'blockerCount', label: 'Blockers', title: 'PolicyGates currently blocking this pipeline' },
-  { key: 'failedStepCount', label: 'Failed Steps', title: 'PromotionSteps in Failed state' },
-  { key: 'inventoryAgeDays', label: 'Inventory Age', title: 'Days since latest bundle was created' },
-  { key: 'lastMergedAt', label: 'Last Merge', title: 'When the last environment reached Verified' },
+  { key: 'blockerCount', label: 'Blocking gates', title: 'Gates holding a version back right now' },
+  { key: 'failedStepCount', label: 'Failed stages', title: 'Stages whose promotion failed' },
+  { key: 'inventoryAgeDays', label: 'Version age', title: 'Days since the newest version was shipped' },
+  { key: 'lastMergedAt', label: 'Last merge', title: 'When an environment last reached Verified' },
 ]
 
 export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSelect, loading, error }: Props) {

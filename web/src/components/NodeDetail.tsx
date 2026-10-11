@@ -28,6 +28,7 @@ import { PipelineActionDialog, type PipelineActionKind } from './PipelineActionD
 import { formatElapsedSince } from '../timeFormat'
 import { isHttpURL } from '../prLink'
 import { canPromote, canRollback } from '../pipelineActions'
+import { KubernetesDetails } from '../ui'
 import '../styles/NodeDetail.css'
 
 interface Props {
@@ -417,9 +418,6 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
       </div>
 
       <div className="node-detail__field">
-        <strong className="node-detail__label">Type:</strong> {node.type}
-      </div>
-      <div className="node-detail__field">
         <strong className="node-detail__label">Environment:</strong> {node.environment}
       </div>
 
@@ -687,6 +685,9 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
           namespace={stepNs}
         />
       )}
+
+      {/* The glossary says stage and gate; the kind and object name live here (U4). */}
+      <KubernetesDetails kind={node.type} name={stepDetail?.name ?? node.id} namespace={stepNs} />
     </div>
   )
 }

@@ -552,7 +552,7 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
     gateCase(false)
     render(<App />)
     await flush()
-    expect(screen.queryByText(/blocking promotion/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/gates\? \(is\|are\) blocking/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Show blocked' })).not.toBeInTheDocument()
     expect(screen.getByLabelText('soak — Not ready')).toBeInTheDocument()
     await openGates()
@@ -565,7 +565,7 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
     gateCase(false)
     render(<App />)
     await flush()
-    expect(screen.queryByText(/blocking promotion/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/gates\? \(is\|are\) blocking/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Show blocked' })).not.toBeInTheDocument()
     expect(screen.queryByText(/\d+ blocked/)).not.toBeInTheDocument()
   })
@@ -597,7 +597,7 @@ describe('App keyboard access', () => {
     render(<App />)
     await flush()
     // The Bundle card and its timeline chip.
-    expect(screen.getAllByRole('img', { name: 'config Bundle' }).length).toBe(2)
+    expect(screen.getAllByRole('img', { name: 'config version' }).length).toBe(2)
   })
 })
 
