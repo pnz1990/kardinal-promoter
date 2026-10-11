@@ -2,8 +2,19 @@
 
 Resume a paused pipeline
 
+### Synopsis
+
+Resume <pipeline> after kardinal pause: its held steps continue and new
+promotions start again.
+
 ```
 kardinal resume <pipeline> [flags]
+```
+
+### Examples
+
+```
+  kardinal resume my-app
 ```
 
 ### Options

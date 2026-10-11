@@ -4,8 +4,13 @@ kardinal manages promotion pipelines on Kubernetes
 
 ### Synopsis
 
-kardinal is the CLI for kardinal-promoter.
-It communicates with the Kubernetes API server to read and write CRDs.
+kardinal promotes versions of your application through environments, with
+gates, pull requests and health checks, on Kubernetes.
+
+Getting started:
+  kardinal init                                   write a Pipeline for your repository
+  kardinal create bundle my-app --image app:1.4   start a promotion
+  kardinal status my-app                          see where each version is, and why
 
 ### Options
 
