@@ -203,7 +203,7 @@ name under **Kubernetes details**, for `kubectl`.
   and CI run. Below that are four tabs:
   - **Map**: the station map, and the version rail to pick the version shown and compare two.
     The rail's ticks run oldest to newest; hovering one draws its route on the map as a faint
-    line, `[` and `]` follow an older or newer version, `f` the newest, and `c` on a focused tick
+    line, `[` and `]` follow an older or newer version, `f` the active version, and `c` on a focused tick
     (or Shift-click) compares it: the comparison has the map's marks and a row per environment.
     On a narrow map the zoom level control gives way to zoom buttons.
     **Map | Table | Matrix** shows the same pipeline three ways. The **Table** has one row per

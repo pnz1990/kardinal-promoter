@@ -105,7 +105,7 @@ test('keyboard shortcuts: / focuses the filter, ? shows the help, r refreshes, E
     ['?', 'Show / hide this help panel'],
     ['r', 'Refresh data now'],
     ['[ / ]', 'Follow an older / newer version'],
-    ['f', 'Follow the newest version'],
+    ['f', 'Follow the active version'],
     ['c', 'Compare the focused version with the followed one'],
     ['Esc', 'Close the open side panel'],
   ]

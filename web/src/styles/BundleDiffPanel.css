@@ -3,7 +3,8 @@
  * Licensed under the Apache License, Version 2.0
  *
  * BundleDiffPanel.css — the two-Bundle comparison (components/BundleDiffPanel.tsx), on the
- * dialog primitive. A changed field is marked blocked-ochre. Tokens only.
+ * dialog primitive. A changed field is marked with ≠ and a neutral sunken wash
+ * (--k-surface-sunken, never the hold tone). Tokens only.
  */
 
 .bundle-diff {

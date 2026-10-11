@@ -29,7 +29,7 @@ const SHORTCUTS: ShortcutRow[] = [
   { key: '?', description: 'Show / hide this help panel' },
   { key: 'r', description: 'Refresh data now' },
   { key: '[ / ]', description: 'Follow an older / newer version' },
-  { key: 'f', description: 'Follow the newest version' },
+  { key: 'f', description: 'Follow the active version' },
   { key: 'c', description: 'Compare the focused version with the followed one' },
   { key: 'Esc', description: 'Close the open side panel' },
 ]

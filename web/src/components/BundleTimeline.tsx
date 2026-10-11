@@ -6,8 +6,8 @@
 // state; the followed version carries the thread's red, the compared one an ink dash,
 // a rejected one is struck. Hover previews a version's route on the map (a ghost thread);
 // click follows it; Shift-click (or c on a focused tick) compares it. [ and ] step to an
-// older or newer version, f back to the newest. The 10 newest are shown, and the
-// followed and compared versions always stay.
+// older or newer version, f back to the active one. The 10 newest are shown, and the
+// followed and compared versions always stay; the followed tick is scrolled into view.
 //
 // Bundles are passed as a prop (managed by App) rather than fetched independently,
 // avoiding duplicate requests and stale-state races (issue #321).
@@ -44,7 +44,7 @@ interface Props {
   onCompare?: (bundleName?: string) => void
   /** Hover or focus on a tick: preview its route on the map; null when it ends. */
   onPreview?: (bundleName: string | null) => void
-  /** The newest version (the pipeline's active Bundle): where f goes back to. */
+  /** The pipeline's active version: where f goes back to. */
   activeBundle?: string
   /** [ / ] / f anywhere on the page (not in a text field or a dialog). */
   globalKeys?: boolean
@@ -79,10 +79,24 @@ function typing(e: KeyboardEvent): boolean {
 }
 
 export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundle, compareBundle, onCompareBundle, onCompare, onPreview, activeBundle, globalKeys }: Props) {
+  const bar = useRef<HTMLDivElement>(null)
   const chips = useRef<HTMLDivElement>(null)
   const roving = useRovingFocus(chips, '.bundle-chip')
 
-  // [ older, ] newer, f the newest: the followed version moves along the rail.
+  // The followed tick stays on screen: on a narrow rail the newest versions are past the right
+  // edge. Only the rail scrolls (never the page), at mount and when the versions or the
+  // followed one change.
+  const shownKey = loading ? '' : visibleBundles(bundles, [selectedBundle, compareBundle]).map(b => b.name).join(' ')
+  useEffect(() => {
+    const el = bar.current
+    const on = chips.current?.querySelector<HTMLElement>('.bundle-chip[aria-pressed="true"]')
+    if (!el || !on) return
+    const r = on.getBoundingClientRect(), c = el.getBoundingClientRect()
+    if (r.right > c.right) el.scrollLeft += r.right - c.right
+    else if (r.left < c.left) el.scrollLeft -= c.left - r.left
+  }, [shownKey, selectedBundle])
+
+  // [ older, ] newer, f the active version: the followed version moves along the rail.
   useEffect(() => {
     if (!globalKeys) return
     const onKey = (e: KeyboardEvent) => {
@@ -127,7 +141,7 @@ export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundl
     <div className="bundle-timeline-bar">
       <div className="bundle-timeline__head">
         <span className="bundle-timeline__title">Versions (oldest → newest)</span>
-        <span className="bundle-timeline__keys" aria-hidden="true"><kbd>[</kbd> <kbd>]</kbd> older / newer · <kbd>f</kbd> newest · <kbd>c</kbd> compare</span>
+        <span className="bundle-timeline__keys" aria-hidden="true"><kbd>[</kbd> <kbd>]</kbd> older / newer · <kbd>f</kbd> active · <kbd>c</kbd> compare</span>
         {/* #338: Compare button appears when two bundles are selected */}
         {showCompare && (
           <button onClick={() => onCompare?.()} className="bundle-timeline__compare" title="Compare the two selected versions">Compare ↔</button>
@@ -136,6 +150,8 @@ export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundl
           <button onClick={() => onCompareBundle?.(null)} className="bundle-timeline__clear" title="Clear comparison selection">× clear</button>
         )}
       </div>
+      {/* Only the ticks scroll; the head stays put. */}
+      <div className="bundle-timeline__scroll" ref={bar}>
       <div
         ref={chips}
         role="toolbar"
@@ -176,11 +192,15 @@ export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundl
               <span className="bundle-chip__dot" aria-hidden="true">{phase.glyph}</span>
               <span className="bundle-chip__name">{bundleVersion(b)}</span>
               <BundleTypeBadge type={b.type} compact />
-              <span className={isSelected ? 'bundle-chip__phase' : 'bundle-chip__phase sr-only'}>{phase.label}</span>
+              {/* The followed tick says so in words, not only in the thread's red. */}
+              {isSelected
+                ? <span className="bundle-chip__phase">Following · {phase.label}</span>
+                : <span className="bundle-chip__phase sr-only">{phase.label}</span>}
               {isCompare && <span className="bundle-chip__compare-badge" aria-hidden="true">≠</span>}
             </button>
           )
         })}
+      </div>
       </div>
     </div>
   )

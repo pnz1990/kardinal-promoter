@@ -49,6 +49,17 @@ describe('BundleTimeline — empty state', () => {
 })
 
 describe('BundleTimeline — bundle rendering', () => {
+  it('says Following on the followed tick, in words, and only there', () => {
+    const bundles = [makeBundle({ name: 'a', phase: 'Verified', createdAt: '2026-04-15T10:00:00Z' }),
+      makeBundle({ name: 'b', phase: 'Promoting', createdAt: '2026-04-15T11:00:00Z' })]
+    const { container } = render(<BundleTimeline bundles={bundles} selectedBundle="b" />)
+    expect(container.querySelector('.bundle-chip[aria-pressed="true"] .bundle-chip__phase')?.textContent).toBe('Following · Promoting')
+    expect(container.querySelector('.bundle-chip[aria-pressed="false"] .bundle-chip__phase')?.textContent).toBe('Verified')
+    expect(screen.getAllByText(/^Following/)).toHaveLength(1)
+    // f goes to the active version, and the hint says so.
+    expect(container.querySelector('.bundle-timeline__keys')?.textContent).toContain('f active')
+  })
+
   it('renders bundle phase label', () => {
     const bundles = [makeBundle({ phase: 'Verified' })]
     render(<BundleTimeline bundles={bundles} />)
@@ -288,7 +299,7 @@ describe('BundleTimeline — the version rail keys', () => {
   const a = makeBundle({ name: 'app-aaaaa', createdAt: '2026-04-15T01:00:00Z' })
   const b = makeBundle({ name: 'app-bbbbb', createdAt: '2026-04-15T02:00:00Z' })
   const c = makeBundle({ name: 'app-ccccc', createdAt: '2026-04-15T03:00:00Z' })
-  it('[ and ] step to an older and a newer version, f to the newest', () => {
+  it('[ and ] step to an older and a newer version, f to the active one', () => {
     const onSelect = vi.fn()
     render(<BundleTimeline bundles={[a, b, c]} selectedBundle="app-bbbbb" activeBundle="app-ccccc" onSelectBundle={onSelect} globalKeys />)
     fireEvent.keyDown(document.body, { key: '[' })

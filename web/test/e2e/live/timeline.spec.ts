@@ -69,7 +69,11 @@ async function expectComparison(panel: Locator, a: Entry, b: Entry) {
     const differs = ea.get(env) !== eb.get(env)
     const r = panel.locator('.bundle-diff__row--env').filter({ hasText: new RegExp(`^(≠ )?${env}`) })
     await expect(r.locator('.bundle-diff__env')).toHaveText(differs ? `≠ ${env}` : env)
-    if (ea.get(env)) await expect(r.locator('.k-chip').nth(0)).toContainText(displayState('step', ea.get(env)!).label)
+    // The row is [environment, Following, Compared]: each side its state's chip, or — when absent.
+    const side = (i: number) => r.locator(':scope > *').nth(i)
+    for (const [i, st] of [[1, ea.get(env)], [2, eb.get(env)]] as const) {
+      await expect(side(i)).toHaveText(st ? new RegExp(displayState('step', st).label) : '—')
+    }
   }
   if ([...ea].some(([k, v]) => eb.get(k) !== v) || ea.size !== eb.size) changed++
   // Created is shown, and never counts as a difference.
@@ -163,7 +167,7 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
   expect((route(page).compare ?? null)).toBeNull()
   await expectShown(page, older, newer)
 
-  // UI-RAIL-01: ] follows the newer version, [ the older, f the newest.
+  // UI-RAIL-01: ] follows the newer version, [ the older, f the active one.
   await page.locator('body').click({ position: { x: 1, y: 1 } })
   await page.keyboard.press(']')
   await expectShown(page, newer, older)
@@ -171,6 +175,26 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
   await expectShown(page, older, newer)
   await page.keyboard.press('f')
   await expectShown(page, newer, older)
+  // The followed tick says so in words.
+  await expect(chip(page, newer).locator('.bundle-chip__phase')).toHaveText(`Following · ${displayState('bundle', newer.phase).label}`)
+
+  // Hovering the other tick previews its route on the map as a ghost thread; leaving clears it.
+  const ghost = page.locator('.station-map__thread--ghost path')
+  await expect(ghost).toHaveCount(0)
+  await chip(page, older).hover()
+  await expect(ghost.first()).toBeAttached()
+  await page.mouse.move(0, 0)
+  await expect(ghost).toHaveCount(0)
+
+  // c on a focused tick compares it with the followed one at once.
+  await chip(page, older).focus()
+  await page.keyboard.press('c')
+  const cpanel = comparison(page)
+  await expect(cpanel).toBeVisible()
+  await expect.poll(() => (route(page).compare ?? null)).toBe(older.name)
+  await expectComparison(cpanel, newer, older)
+  await page.keyboard.press('Escape')
+  await expect(cpanel).toHaveCount(0)
 })
 
 test('a link with compare= opens the comparison with the Bundle on screen', async ({ page }) => {

@@ -3,7 +3,7 @@
 //
 // Journey 021: the version rail (DESIGN-SYSTEM §3.3). Versions are ticks on a time axis,
 // newest on the right. Hovering a tick previews its route on the map as a ghost thread;
-// [ and ] follow an older or newer version and f the newest; c on a focused tick
+// [ and ] follow an older or newer version and f the active one; c on a focused tick
 // compares it, and the comparison panel carries the map's marks, a row per environment.
 // On a narrow map the zoom level control gives way to zoom buttons.
 
@@ -32,7 +32,7 @@ test.describe('Journey 021 — Version rail', () => {
     await expect(page.locator('.station-map__thread--ghost')).toHaveCount(0)
   })
 
-  test('[ and ] follow an older and a newer version, f the newest', async ({ page }) => {
+  test('[ and ] follow an older and a newer version, f the active one', async ({ page }) => {
     await page.locator('body').click({ position: { x: 1, y: 1 } })
     await page.keyboard.press('[')
     await expect(tick(page, 'checkout-30-6')).toHaveAttribute('aria-pressed', 'true')
@@ -56,6 +56,59 @@ test.describe('Journey 021 — Version rail', () => {
     expect(axe.violations.map(v => `${v.id}: ${v.nodes[0]?.target[0]}`)).toEqual([])
     await page.keyboard.press('Escape')
     await expect(panel).toHaveCount(0)
+  })
+
+  test('every tick shares the glyph line, and the axis runs under the glyphs, never through a name', async ({ page }) => {
+    await page.goto('/ui/#/p/scale/large-300')
+    await expect(rail(page).locator('.bundle-chip')).toHaveCount(10)
+    const boxes = await rail(page).evaluate(el => {
+      const axis = el.querySelector('.bundle-timeline__axis')!.getBoundingClientRect()
+      return {
+        axis: axis.top,
+        ticks: [...el.querySelectorAll('.bundle-chip')].map(c => ({
+          dot: c.querySelector('.bundle-chip__dot')!.getBoundingClientRect(),
+          name: c.querySelector('.bundle-chip__name')!.getBoundingClientRect(),
+          tick: c.getBoundingClientRect(),
+        })),
+      }
+    })
+    const first = boxes.ticks[0]
+    for (const t of boxes.ticks) {
+      expect(Math.abs(t.dot.top - first.dot.top)).toBeLessThan(1)
+      expect(Math.abs(t.tick.bottom - first.tick.bottom)).toBeLessThan(1)
+      expect(boxes.axis).toBeGreaterThanOrEqual(t.dot.bottom - 0.5)
+      expect(boxes.axis).toBeLessThanOrEqual(t.name.top + 0.5)
+    }
+    // The followed tick says so in words.
+    await expect(rail(page).locator('.bundle-chip[aria-pressed="true"] .bundle-chip__phase')).toHaveText(/^Following · /)
+  })
+
+  test('at 390 px with 10 versions the followed tick is on screen, at load and after f', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.goto('/ui/#/p/scale/large-300?as=map')
+    const bar = page.locator('.bundle-timeline__scroll')
+    await expect(rail(page).locator('.bundle-chip')).toHaveCount(10)
+    // The rail is wider than the screen: the newest versions start past its right edge.
+    expect(await bar.evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true)
+    const title = page.getByText('Versions (oldest → newest)')
+    const inView = (sel: string) => bar.evaluate((el, sel) => {
+      const c = el.getBoundingClientRect(), r = el.querySelector(sel)!.getBoundingClientRect()
+      return r.left >= c.left - 0.5 && r.right <= c.right + 0.5
+    }, sel)
+    const followed = '.bundle-chip[aria-pressed="true"]'
+    await expect(tick(page, 'large-300-7')).toHaveAttribute('aria-pressed', 'true')
+    await expect.poll(() => inView(followed)).toBe(true)
+    // Only the ticks scroll: the title stays on screen.
+    await expect(title).toBeInViewport()
+    // Follow the oldest shown (scrolled to it), then f: the active version comes back into view.
+    await bar.evaluate(el => { el.scrollLeft = 0 })
+    await rail(page).locator('.bundle-chip').first().click()
+    await expect(rail(page).locator('.bundle-chip').first()).toHaveAttribute('aria-pressed', 'true')
+    await expect.poll(() => inView(followed)).toBe(true)
+    await page.locator('body').click({ position: { x: 1, y: 1 } })
+    await page.keyboard.press('f')
+    await expect(tick(page, 'large-300-7')).toHaveAttribute('aria-pressed', 'true')
+    await expect.poll(() => inView(followed)).toBe(true)
   })
 
   test('a narrow map has zoom buttons in place of the level control', async ({ page }) => {

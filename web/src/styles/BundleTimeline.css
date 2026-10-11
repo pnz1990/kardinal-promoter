@@ -6,7 +6,8 @@
  * right. A tick is its state's glyph and the version's name; the followed one is the
  * thread's red with its state, the compared one an ink dash, a rejected one struck.
  */
-.bundle-timeline-bar { padding-block: var(--k-space-1); overflow-x: auto; }
+.bundle-timeline-bar { padding-block: var(--k-space-1); }
+.bundle-timeline__scroll { overflow-x: auto; }
 .bundle-timeline__head { display: flex; align-items: baseline; gap: var(--k-space-3); }
 .bundle-timeline__title {
   font-family: var(--k-font-display);
@@ -29,8 +30,25 @@
   text-decoration: underline;
   text-underline-offset: var(--k-space-0_5);
 }
-.bundle-timeline__chips { position: relative; display: flex; align-items: flex-end; gap: var(--k-space-1); padding-block-start: var(--k-space-1); }
-.bundle-timeline__axis { position: absolute; inset-inline: 0; inset-block-end: var(--k-space-3); border-block-end: var(--k-border-hairline) solid var(--k-line); }
+/* Every tick has the same rows (glyph, name, state) and the same height, so the glyphs share
+   a line and the underlines align. The axis runs in the gap under the glyph row: never through
+   a name, where it would read as the rejected strike-through. */
+.bundle-timeline__chips {
+  --bundle-glyph-row: var(--k-space-4);
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: var(--k-space-1);
+  padding-block-start: var(--k-space-1);
+  inline-size: max-content;
+  min-inline-size: 100%;
+}
+.bundle-timeline__axis {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: calc(var(--k-space-1) * 2 + var(--bundle-glyph-row) + var(--k-space-0_5));
+  border-block-start: var(--k-border-hairline) solid var(--k-line);
+}
 
 .bundle-chip {
   position: relative;
@@ -38,7 +56,8 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--k-space-0_5);
+  justify-content: flex-start;
+  gap: var(--k-space-1);
   padding: var(--k-space-1) var(--k-space-2);
   font: inherit;
   font-size: var(--k-text-2xs);
@@ -50,7 +69,7 @@
 }
 .bundle-chip:hover { color: var(--k-ink); border-block-end-color: var(--k-thread-ghost); }
 .bundle-chip:focus-visible { outline: var(--k-focus-ring); outline-offset: var(--k-focus-offset); }
-.bundle-chip__dot { font-size: var(--k-text-sm); line-height: 1; color: var(--k-ink-node); }
+.bundle-chip__dot { display: flex; align-items: center; block-size: var(--bundle-glyph-row); font-size: var(--k-text-sm); line-height: 1; color: var(--k-ink-node); }
 .bundle-chip[data-tone="promoting"] .bundle-chip__dot { color: var(--k-thread-text); }
 .bundle-chip[data-tone="failed"] .bundle-chip__dot { color: var(--k-status-failed-fg); }
 .bundle-chip[data-tone="superseded"] .bundle-chip__dot, .bundle-chip[data-tone="pending"] .bundle-chip__dot { color: var(--k-ink-3); }

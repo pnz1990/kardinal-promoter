@@ -53,23 +53,34 @@ export interface PipelineMapProps {
   previewBundle?: Bundle
 }
 
-/** The graphs read for the compared and previewed versions, by namespace/name. */
+/** The graphs read for the compared and previewed versions, by namespace/name: the most
+ *  recently used GRAPH_CACHE of them (a Map keeps insertion order; a read moves it last). */
 const GRAPHS = new Map<string, GraphResponse>()
+const GRAPH_CACHE = 20
+function remember(key: string, graph: GraphResponse) {
+  GRAPHS.delete(key)
+  GRAPHS.set(key, graph)
+  while (GRAPHS.size > GRAPH_CACHE) GRAPHS.delete(GRAPHS.keys().next().value!)
+}
 
-/** The graph of a Bundle, read once per Bundle (the compared and the previewed version). */
+/** The graph of a Bundle (the compared and the previewed version). It is read again only
+ *  when the version or its state changes, not on every poll, which hands a new object. */
 function useBundleGraph(b: Bundle | undefined): { bundle: Bundle; graph: GraphResponse } | undefined {
   const [g, setG] = useState<{ name: string; graph: GraphResponse } | undefined>()
+  const key = b ? `${b.namespace}/${b.name}` : ''
+  const phase = b?.phase
   useEffect(() => {
-    if (!b) { setG(undefined); return }
+    if (!key) { setG(undefined); return }
+    const [ns, name] = [key.slice(0, key.indexOf('/')), key.slice(key.indexOf('/') + 1)]
     // A version hovered again shows its last route at once, then the fresh one.
-    const seen = GRAPHS.get(`${b.namespace}/${b.name}`)
-    if (seen) setG({ name: b.name, graph: seen })
+    const seen = GRAPHS.get(key)
+    if (seen) { remember(key, seen); setG({ name, graph: seen }) }
     let live = true
-    api.getGraph(b.name, b.namespace)
-      .then(graph => { GRAPHS.set(`${b.namespace}/${b.name}`, graph); if (live) setG({ name: b.name, graph }) })
+    api.getGraph(name, ns)
+      .then(graph => { remember(key, graph); if (live) setG({ name, graph }) })
       .catch(() => { if (live) setG(undefined) })
     return () => { live = false }
-  }, [b])
+  }, [key, phase])
   return useMemo(() => (b && g?.name === b.name ? { bundle: b, graph: g.graph } : undefined), [b, g])
 }
 
