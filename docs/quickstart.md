@@ -237,7 +237,8 @@ kardinal init --name kardinal-test-app --repo https://github.com/pnz1990/kardina
 ```
 
 Add `--create-secret` to create the git Secret of the step above from `$GITHUB_TOKEN` (or `gh auth
-token`). Or apply the same Pipeline by hand, which also gives prod a longer health timeout:
+token`). Or apply the same Pipeline by hand, which also gives prod a longer health timeout. It is
+`examples/quickstart/pipeline.yaml` (`kubectl apply -f examples/quickstart/pipeline.yaml` from a checkout) with the Application names written out:
 
 ```bash
 cat <<EOF | kubectl apply -f -

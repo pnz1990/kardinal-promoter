@@ -90,7 +90,7 @@ type initOptions struct {
 
 // initClient is the client init detects health targets, creates the Secret
 // and applies the Pipeline with; a test replaces it.
-var initClient = func() (sigs_client.Client, string, error) { return buildClient() }
+var initClient = buildClient
 
 // ghToken is the token of "gh auth token"; a test replaces it.
 var ghToken = func() (string, error) {

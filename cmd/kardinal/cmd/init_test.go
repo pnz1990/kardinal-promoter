@@ -166,9 +166,9 @@ func TestInitCmd_DetectSecretApply(t *testing.T) {
 	var p v1alpha1.Pipeline
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "team-a", Name: "web"}, &p))
 	require.Len(t, p.Spec.Environments, 3)
-	assert.Equal(t, "flux", string(p.Spec.Environments[0].Health.Type))
+	assert.Equal(t, "flux", p.Spec.Environments[0].Health.Type)
 	assert.Empty(t, p.Spec.Environments[1].Health.Type)
-	assert.Equal(t, "argocd", string(p.Spec.Environments[2].Health.Type))
+	assert.Equal(t, "argocd", p.Spec.Environments[2].Health.Type)
 	var s corev1.Secret
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "team-a", Name: "github-token"}, &s))
 	assert.Equal(t, "true", s.Labels[v1alpha1.LabelSecretReferenceable])
