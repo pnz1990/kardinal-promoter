@@ -439,9 +439,9 @@ release name other than `kardinal-promoter`, the Service is named
 - **Step timings.** Selecting an environment step lists the steps of that promotion
   (`git-clone` … `health-check`) with their durations, and a bar for each that shows where it
   ran in the promotion's time. A slow health check or push stands out at once.
-- **Bundle types.** The Bundle card names what the shown Bundle changes: `image`, `config`,
-  `image + config` (a mixed Bundle) or `chart`. In the Bundle history only the Bundles that are
-  not image Bundles carry the tag.
+- **Bundle types.** A version that is not an image Bundle carries a tag that names what it
+  changes: `config`, `image + config` (a mixed Bundle) or `chart`, on the version line under the
+  header and in the Bundle history. Image Bundles, the common case, carry none.
 - **Keyboard.** The first Tab stop skips to the main content. Each fleet line, and the Bundle
   history, is a single Tab stop: the arrow keys move between its stations or Bundles (Home and
   End to the ends, Up and Down between fleet lines), and Enter opens the one in focus. `?` lists

@@ -84,6 +84,8 @@ test('a failed promotion shows in the Promotion Errors panel, whose link opens i
   await openPipeline(page, base, failedNs)
   await expect(blockedBanner(page)).toHaveCount(0)
 
+  // Promotion errors are on the Activity tab (U1).
+  await page.getByRole('tab', { name: /^Activity/ }).click()
   const panel = page.getByTestId('promotion-errors-panel')
   await expect(panel).toContainText('1 environment failed')
   await expect(panel).toContainText('1 distinct failure pattern')
