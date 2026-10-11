@@ -108,6 +108,7 @@ nav:
     - Quickstart: quickstart.md
     - Install: installation.md
   - How-to:
+    - Use the UI: ui.md
     - Ship versions from CI: ci-integration.md
     - Ship automatically on new images:
       - Subscriptions: subscription.md
