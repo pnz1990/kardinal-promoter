@@ -226,3 +226,45 @@ func TestHoldOf_Expired(t *testing.T) {
 	require.Len(t, got.Spec.Holds, 1, "one entry per environment")
 	assert.Equal(t, h.Bundle, got.Spec.Holds[0].Bundle)
 }
+
+// TestHoldCurrent (C5): kardinal hold holds the environment on the Bundle
+// that runs there, creating nothing; a held environment, one that runs
+// nothing, a fleet and a missing reason are refused.
+//
+// Covers CLI-VERBS-01.
+func TestHoldCurrent(t *testing.T) {
+	c := newClient(t, holdObjects()...)
+	req := lifecycle.HoldCurrentRequest{Namespace: ns, Pipeline: "app", Environment: "prod", Reason: "freeze for the audit",
+		Actor: "alice", Now: t0.Add(time.Hour)}
+	h, err := lifecycle.HoldCurrent(context.Background(), c, req)
+	require.NoError(t, err)
+	assert.Equal(t, "v2", h.Bundle, "the Bundle prod runs")
+	assert.Equal(t, "alice", h.CreatedBy)
+	assert.Nil(t, h.ExpiresAt)
+	got := getPipeline(t, c)
+	require.Len(t, got.Spec.Holds, 1)
+	assert.Equal(t, []string{"prod", "v2", "freeze for the audit", h.Artifacts},
+		[]string{got.Spec.Holds[0].Environment, got.Spec.Holds[0].Bundle, got.Spec.Holds[0].Reason, got.Spec.Holds[0].Artifacts})
+
+	exp := req
+	exp.ExpiresIn = 2 * time.Hour
+	h, err = lifecycle.HoldCurrent(context.Background(), newClient(t, holdObjects()...), exp)
+	require.NoError(t, err)
+	require.NotNil(t, h.ExpiresAt)
+	assert.True(t, h.ExpiresAt.Time.Equal(t0.Add(3*time.Hour)))
+	var bundles v1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundles))
+	assert.Len(t, bundles.Items, 2, "no Bundle is created")
+
+	_, err = lifecycle.HoldCurrent(context.Background(), c, req)
+	require.ErrorIs(t, err, lifecycle.ErrConflict, "held already")
+	for name, r := range map[string]lifecycle.HoldCurrentRequest{
+		"nothing runs there": {Namespace: ns, Pipeline: "app", Environment: "test", Reason: "r"},
+		"no reason":          {Namespace: ns, Pipeline: "app", Environment: "uat"},
+		"no such env":        {Namespace: ns, Pipeline: "app", Environment: "staging", Reason: "r"},
+		"no such pipeline":   {Namespace: ns, Pipeline: "nope", Environment: "prod", Reason: "r"},
+	} {
+		_, err := lifecycle.HoldCurrent(context.Background(), c, r)
+		assert.Error(t, err, name)
+	}
+}

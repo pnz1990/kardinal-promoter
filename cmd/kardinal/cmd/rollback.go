@@ -27,7 +27,9 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func newRollbackCmd() *cobra.Command {
@@ -236,6 +238,82 @@ func releaseHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env string) 
 		return fmt.Errorf("write output: %w", err)
 	}
 	return nil
+}
+
+func newHoldCmd() *cobra.Command {
+	var (
+		envFlag, reason string
+		expiresIn       time.Duration
+	)
+	cmd := &cobra.Command{
+		Use:   "hold <pipeline> <env> --reason <text>",
+		Short: "Keep an environment on what runs there now",
+		Long: `Hold <env> on the Bundle that runs there now: no other Bundle promotes into
+it until kardinal unhold (or --expires-in). Nothing is rolled back and no
+Bundle is created; to go back to an earlier version and keep it, use
+kardinal rollback <pipeline> <env> --hold.`,
+		Example: `  kardinal hold my-app prod --reason "freeze during the audit"
+  kardinal hold my-app prod --reason "INC-4521" --expires-in 4h
+  kardinal unhold my-app prod`,
+		Args: cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			pipeline, env, err := requireEnv(cmd, args, envFlag)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(reason) == "" {
+				return fmt.Errorf("hold needs --reason: say why the environment is held")
+			}
+			c, ns, err := buildClient()
+			if err != nil {
+				return fmt.Errorf("hold: %w", err)
+			}
+			// The admission policy accepts a hold only with createdBy set
+			// to the requesting Kubernetes user.
+			actor, err := kubeUser(cmd.Context(), c)
+			if err != nil {
+				_, _ = fmt.Fprintf(errOut, "warning: %v; recording %s as the hold's createdBy\n", err, currentUser())
+				actor = currentUser()
+			}
+			return holdFn(cmd.OutOrStdout(), c, ns, pipeline, env, reason, actor, expiresIn)
+		},
+	}
+	addEnvFlag(cmd, &envFlag, "Environment to hold (or give it after the pipeline)")
+	cmd.Flags().StringVar(&reason, "reason", "", "Why the environment is held (required)")
+	cmd.Flags().Var(durationValue{&expiresIn}, "expires-in", "End the hold this long after it is made (30m, 4h, 2d); default: until kardinal unhold")
+	return withStructuredOutput(cmd)
+}
+
+// heldEnvironment is hold -o json|yaml: the hold it made.
+type heldEnvironment struct {
+	Pipeline    string `json:"pipeline"`
+	Namespace   string `json:"namespace"`
+	Environment string `json:"environment"`
+	// Bundle is the Bundle the environment is held on: what runs there.
+	Bundle    string       `json:"bundle"`
+	Reason    string       `json:"reason"`
+	CreatedBy string       `json:"createdBy,omitempty"`
+	ExpiresAt *metav1.Time `json:"expiresAt,omitempty"`
+}
+
+// holdFn is the testable implementation of hold (lifecycle.HoldCurrent).
+func holdFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, reason, actor string, expiresIn time.Duration) error {
+	h, err := lifecycle.HoldCurrent(context.Background(), c, lifecycle.HoldCurrentRequest{
+		Namespace: ns, Pipeline: pipeline, Environment: env, Reason: reason, Actor: actor, ExpiresIn: expiresIn, Now: time.Now(),
+	})
+	if err != nil {
+		return err
+	}
+	if structured() {
+		return writeStructured(w, heldEnvironment{Pipeline: pipeline, Namespace: ns, Environment: env, Bundle: h.Bundle,
+			Reason: h.Reason, CreatedBy: h.CreatedBy, ExpiresAt: h.ExpiresAt})
+	}
+	until := "kardinal unhold " + pipeline + " " + env
+	if h.ExpiresAt != nil {
+		until += " (or " + h.ExpiresAt.UTC().Format(time.RFC3339) + ")"
+	}
+	return writef(w, "%s %s of %s on %s: no other Bundle promotes there until %s\n",
+		sty.Paint(display.ToneHeld, "Held"), env, pipeline, h.Bundle, until)
 }
 
 // releasedHold is release-hold -o json|yaml: the hold it released.

@@ -85,6 +85,15 @@ needs --image; a config Bundle --config-commit; a mixed one both. --commit,
 		},
 	}
 
+	addBundleFlags(cmd, &opts, &dryRun)
+
+	withReference(cmd, createBundleReference)
+	return withStructuredOutput(cmd)
+}
+
+// addBundleFlags registers the flags of a Bundle (create bundle, ship) on
+// cmd, into opts and dryRun.
+func addBundleFlags(cmd *cobra.Command, opts *createBundleOptions, dryRun *bool) {
 	cmd.Flags().StringArrayVar(&opts.Images, "image", nil,
 		"Container image reference (can be specified multiple times); required for image and mixed Bundles")
 	cmd.Flags().StringVar(&opts.Type, "type", "image", "Bundle type: image, config, or mixed")
@@ -96,15 +105,12 @@ needs --image; a config Bundle --config-commit; a mixed one both. --commit,
 	cmd.Flags().StringVar(&opts.Author, "author", "", "Author or CI actor of the build (provenance)")
 	cmd.Flags().StringVar(&opts.CIRunURL, "ci-run-url", "",
 		"Absolute http(s) URL of the CI run that built the Bundle (provenance)")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false,
+	cmd.Flags().BoolVar(dryRun, "dry-run", false,
 		"Preview the promotion graph without creating any cluster resources")
 	compactAbove := graph.DefaultCompactAbove
 	opts.CompactAbove = &compactAbove
 	cmd.Flags().IntVar(&compactAbove, "graph-compact-above", graph.DefaultCompactAbove,
 		"With --dry-run: the controller's --graph-compact-above (chart graph.compactAbove), the environment count above which the Graph is compact")
-
-	withReference(cmd, createBundleReference)
-	return withStructuredOutput(cmd)
 }
 
 // createBundleOptions are the flags of kardinal create bundle.
@@ -164,13 +170,32 @@ func flagMessage(err error) error {
 // createBundleFn is the testable implementation of create bundle. It checks
 // the flags and that the Pipeline exists before it creates anything.
 func createBundleFn(w io.Writer, c sigs_client.Client, ns, pipeline string, opts createBundleOptions) error {
-	spec, err := opts.bundleSpec(pipeline)
+	bundle, err := newBundle(context.Background(), c, ns, pipeline, opts)
 	if err != nil {
 		return err
 	}
-	ctx := context.Background()
+	if structured() {
+		return writeStructured(w, createdOf(bundle))
+	}
+	if _, err := fmt.Fprintf(w,
+		"Bundle %s created for pipeline %s\n"+
+			"Track with: kardinal get bundles %s\n",
+		bundle.Name, pipeline, pipeline,
+	); err != nil {
+		return fmt.Errorf("write output: %w", err)
+	}
+	return nil
+}
+
+// newBundle creates the Bundle opts describe for pipeline, after checking
+// the flags and that the Pipeline exists.
+func newBundle(ctx context.Context, c sigs_client.Client, ns, pipeline string, opts createBundleOptions) (*v1alpha1.Bundle, error) {
+	spec, err := opts.bundleSpec(pipeline)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := getPipeline(ctx, c, ns, pipeline); err != nil {
-		return err
+		return nil, err
 	}
 
 	bundle := &v1alpha1.Bundle{
@@ -186,21 +211,9 @@ func createBundleFn(w io.Writer, c sigs_client.Client, ns, pipeline string, opts
 	stampCreator(ctx, c, bundle)
 
 	if err := c.Create(ctx, bundle); err != nil {
-		return fmt.Errorf("create bundle for pipeline %s: %w", pipeline, err)
+		return nil, fmt.Errorf("create bundle for pipeline %s: %w", pipeline, err)
 	}
-
-	if structured() {
-		return writeStructured(w, createdOf(bundle))
-	}
-	if _, err := fmt.Fprintf(w,
-		"Bundle %s created for pipeline %s\n"+
-			"Track with: kardinal get bundles %s\n",
-		bundle.Name, pipeline, pipeline,
-	); err != nil {
-		return fmt.Errorf("write output: %w", err)
-	}
-
-	return nil
+	return bundle, nil
 }
 
 // createBundleDryRun previews the promotion graph that would be created for a Bundle,

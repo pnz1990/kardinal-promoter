@@ -89,9 +89,9 @@ Getting started:
 		}
 	}
 	add(groupStart, newInitCmd(), newDoctorCmd(), newDashboardCmd(), newVersionCmd())
-	add(groupShip, newCreateCmd(), newStatusCmd(), newExplainCmd(), newHistoryCmd(), newLogsCmd(), newDiffCmd(), newGetCmd())
+	add(groupShip, newShipCmd(), newCreateCmd(), newStatusCmd(), newExplainCmd(), newHistoryCmd(), newLogsCmd(), newDiffCmd(), newGetCmd())
 	add(groupGate, newApproveCmd(), newOverrideCmd(), newPromoteCmd(), newPolicyCmd())
-	add(groupIncident, newPauseCmd(), newResumeCmd(), newRollbackCmd(), newReleaseHoldCmd(), newRejectCmd())
+	add(groupIncident, newPauseCmd(), newResumeCmd(), newRollbackCmd(), newHoldCmd(), newReleaseHoldCmd(), newRejectCmd())
 	add(groupAdmin, newValidateCmd(), newAuditCmd(), newMetricsCmd(), newRefreshCmd(), newDeleteCmd(), newCompletionCmd())
 	root.SetHelpCommandGroupID(groupAdmin)
 	root.SetCompletionCommandGroupID(groupAdmin)

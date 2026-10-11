@@ -53,7 +53,9 @@ Bundle's step and the gates it waits on, gates that are not ready first, with
 each gate's expression, state and reason, and what is deployed there now when
 the change has not landed yet. -w refreshes every 3 seconds.`,
 		Example: `  kardinal explain my-app
+  kardinal why my-app prod
   kardinal explain my-app prod -w`,
+		Aliases:     []string{"why"},
 		Annotations: map[string]string{ReferenceAnnotation: explainReference, outputAnnotation: "true"},
 		Args:        cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -165,6 +167,7 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	}
 
 	var rows []explainRow
+	var unblock []string // next-step hints, for stderr
 	for _, s := range steps.Items {
 		env := s.Spec.Environment
 		if envFilter != "" && env != envFilter {
@@ -215,6 +218,16 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 			expression:  expr,
 			notReady:    !g.Status.Ready,
 		})
+		// How to get past a gate that was evaluated and does not pass.
+		if !g.Status.Ready && g.Status.LastEvaluatedAt != nil {
+			hint := fmt.Sprintf("Override: kardinal override %s %s --gate %s --reason <why>", pipeline, env, gateDisplayName(g))
+			if g.Spec.Approval != nil {
+				hint = fmt.Sprintf("Approve: kardinal approve %s %s", pipeline, env)
+			}
+			if !slices.Contains(unblock, hint) {
+				unblock = append(unblock, hint)
+			}
+		}
 	}
 
 	// Sort by environment, then kind (PolicyGate before Step), then gates
@@ -288,7 +301,15 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	if err := writeExplainDeployed(w, pipeline, envNames, envFilter, current, steps.Items, bundleByName); err != nil {
 		return err
 	}
-	return writeExplainHolds(w, pipe, envFilter)
+	if err := writeExplainHolds(w, pipe, envFilter); err != nil {
+		return err
+	}
+	// Hints go to stderr: stdout stays the table.
+	for _, h := range unblock {
+		label, cmdline, _ := strings.Cut(h, ": ")
+		_, _ = fmt.Fprintf(errOut, "%s %s\n", sty.Dim(label+":"), cmdline)
+	}
+	return nil
 }
 
 // explainOutput is kardinal explain -o json|yaml: the rows of the table, with
