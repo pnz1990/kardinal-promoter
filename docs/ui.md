@@ -81,15 +81,15 @@ The map draws the pipeline as a station map:
 - **Waves and fleets.** Five or more environments promoted in parallel are one band, and a fleet
   is one platform. Each counts its environments by state; expand it to a grid, a row per state.
 
-    <figure class="k-demo" data-demo="fleet" hidden>
-      <picture>
-        <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/fleet-dark.png">
-        <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/fleet.png">
-        <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/fleet-dark.webp">
-        <img src="../assets/demos/fleet.webp" alt="A fleet of fifty clusters on the map: a platform that expands to a grid of targets by state" width="1280" height="800" loading="lazy">
-      </picture>
-      <figcaption>A fleet · <code>kardinal status my-app</code></figcaption>
-    </figure>
+<figure class="k-demo" data-demo="fleet" hidden>
+  <picture>
+    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/fleet-dark.png">
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/fleet.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/fleet-dark.webp">
+    <img src="../assets/demos/fleet.webp" alt="A fleet of fifty clusters on the map: a platform that expands to a grid of targets by state" width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>A fleet · <code>kardinal status my-app</code></figcaption>
+</figure>
 
 - **Needs attention.** A strip above the map counts what needs a look: failed environments,
   environments blocked by each gate, held environments and environments that wait. Select an item to go to it.
@@ -125,15 +125,15 @@ as a sheet over it on a narrow one:
   needed, the pull request to merge, the health check in progress. When nothing waits, this is
   the environment's status.
 
-    <figure class="k-demo" data-demo="why-waiting" hidden>
-      <picture>
-        <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/why-waiting-dark.png">
-        <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/why-waiting.png">
-        <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/why-waiting-dark.webp">
-        <img src="../assets/demos/why-waiting.webp" alt="An environment's details open at Why it's waiting: a gate blocks prod on the weekend" width="1280" height="800" loading="lazy">
-      </picture>
-      <figcaption>Why it's waiting · <code>kardinal explain my-app prod</code></figcaption>
-    </figure>
+<figure class="k-demo" data-demo="why-waiting" hidden>
+  <picture>
+    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/why-waiting-dark.png">
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/why-waiting.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/why-waiting-dark.webp">
+    <img src="../assets/demos/why-waiting.webp" alt="An environment's details open at Why it's waiting: a gate blocks prod on the weekend" width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>Why it's waiting · <code>kardinal explain my-app prod</code></figcaption>
+</figure>
 
 - **Actions** for that environment. Each one asks before it acts, and the button, the question
   and the result use the same verb:
@@ -148,25 +148,25 @@ as a sheet over it on a narrow one:
     | Pause pipeline, Resume pipeline | a confirmation |
     | Reject version | a reason |
 
-    <figure class="k-demo" data-demo="approve-override" hidden>
-      <picture>
-        <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/approve-override-dark.png">
-        <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/approve-override.png">
-        <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/approve-override-dark.webp">
-        <img src="../assets/demos/approve-override.webp" alt="Approving a version for prod, then overriding a gate with a reason and an expiry" width="1280" height="800" loading="lazy">
-      </picture>
-      <figcaption>Approve and override · <code>kardinal approve</code>, <code>kardinal override</code></figcaption>
-    </figure>
+<figure class="k-demo" data-demo="approve-override" hidden>
+  <picture>
+    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/approve-override-dark.png">
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/approve-override.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/approve-override-dark.webp">
+    <img src="../assets/demos/approve-override.webp" alt="Approving a version for prod, then overriding a gate with a reason and an expiry" width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>Approve and override · <code>kardinal approve</code>, <code>kardinal override</code></figcaption>
+</figure>
 
-    <figure class="k-demo" data-demo="rollback-hold" hidden>
-      <picture>
-        <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/rollback-hold-dark.png">
-        <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/rollback-hold.png">
-        <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/rollback-hold-dark.webp">
-        <img src="../assets/demos/rollback-hold.webp" alt="Rolling prod back to the previous version and holding it there" width="1280" height="800" loading="lazy">
-      </picture>
-      <figcaption>Roll back and hold · <code>kardinal rollback my-app prod --hold --reason "…"</code></figcaption>
-    </figure>
+<figure class="k-demo" data-demo="rollback-hold" hidden>
+  <picture>
+    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/rollback-hold-dark.png">
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/rollback-hold.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/rollback-hold-dark.webp">
+    <img src="../assets/demos/rollback-hold.webp" alt="Rolling prod back to the previous version and holding it there" width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>Roll back and hold · <code>kardinal rollback my-app prod --hold --reason "…"</code></figcaption>
+</figure>
 
 
 - **Evidence**: the images of the version on its way, the steps the promotion ran with their
