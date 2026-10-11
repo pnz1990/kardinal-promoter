@@ -32,7 +32,7 @@ import { PipelineConditions } from './components/PipelineConditions'
 import { NARROW_QUERY, useMediaQuery } from './useMediaQuery'
 import { useModalFocus } from './useModalFocus'
 import { displayState } from './displayStates.gen'
-import { versionName } from './versionName'
+import { VersionLabel } from './components/VersionLabel'
 import { BundleTimeline } from './components/BundleTimeline'
 import { BundleDiffPanel } from './components/BundleDiffPanel'
 import { BundleTypeBadge } from './components/BundleTypeBadge'
@@ -777,8 +777,9 @@ export function App() {
                   {activeBundle && !versionMissing && (
                     <span className="app-provenance">
                       <span className="app-sep" aria-hidden="true">·</span>
-                      <span title={activeBundle.name}>
-                        Version <span className="app-provenance__bundle">{versionName(activeBundle.name, activePipeline.name)}</span>
+                      <span>
+                        {/* The summary already names the tag; the Bundle name is the title and the copy. */}
+                        Version <VersionLabel bundle={activeBundle} compact />
                       </span>
                       <CopyButton text={activeBundle.name} title={`Copy version name "${activeBundle.name}"`} />
                       <BundleTypeBadge type={activeBundle.type} compact />
@@ -950,7 +951,7 @@ export function App() {
                     {bundles.map(b => (
                       <li key={b.name} className="app-history__item">
                         <HealthChip state={b.phase} kind="bundle" size="sm" />
-                        <a className="app-history__name" title={b.name} href={serializeHash({ ...urlState, version: b.name, env: undefined, node: undefined, tab: undefined })}>{versionName(b.name, activePipeline.name)}</a>
+                        <a className="app-history__name" href={serializeHash({ ...urlState, version: b.name, env: undefined, node: undefined, tab: undefined })}><VersionLabel bundle={b} /></a>
                         {b.provenance?.commitSHA && (
                           <span className="app-sha">
                             {b.provenance.commitSHA.slice(0, 8)}

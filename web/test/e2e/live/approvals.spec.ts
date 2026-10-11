@@ -11,11 +11,10 @@
 // Bundle's creator, approved but excludeAuthor does not count it.
 
 import { test, expect } from '@playwright/test'
-import { need, openPipeline } from './live'
+import { need, openPipeline, PIPELINE } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
-const bundle = need('KARDINAL_UI_BUNDLE')
 const approver = need('KARDINAL_UI_APPROVER')
 const outsider = need('KARDINAL_UI_OUTSIDER')
 
@@ -37,5 +36,5 @@ test('an approval gate shows its quorum and who approved', async ({ page }) => {
   const notCounted = rows.filter({ hasText: outsider })
   await expect(notCounted).toHaveAttribute('data-counted', 'false')
   await expect(notCounted).toContainText('not counted')
-  await expect(page.getByText(`kardinal approve ${bundle} --env prod -n ${ns}`)).toBeVisible()
+  await expect(page.getByText(`kardinal approve ${PIPELINE} prod -n ${ns}`)).toBeVisible()
 })

@@ -13,12 +13,15 @@ import CopyButton from './CopyButton'
 import { ApprovalActions } from './ApprovalActions'
 import { formatRelativeAge } from './approvalAge'
 import '../styles/ApprovalQuorum.css'
+import { cliCommand } from '../stage/StageDrawer'
 
 /** Pips drawn; a larger quorum is shown as text only. */
 const MAX_PIPS = 10
 
 interface Props {
   approval: GateApproval
+  /** The gate's Pipeline: the CLI command names it (kardinal approve <pipeline> <env>). */
+  pipeline?: string
   bundle?: string
   environment?: string
   /** Namespace of the gate; with bundle and environment it enables the actions. */
@@ -61,12 +64,12 @@ function DecisionRow({ d, now }: { d: GateDecision; now: number }) {
   )
 }
 
-export function ApprovalQuorum({ approval: a, bundle, environment, namespace, onDecided, now = Date.now() }: Props) {
+export function ApprovalQuorum({ approval: a, pipeline, bundle, environment, namespace, onDecided, now = Date.now() }: Props) {
   const pips = a.required <= MAX_PIPS ? a.required : 0
   const state = a.rejected ? 'rejected' : a.approved >= a.required ? 'approved' : 'waiting'
-  // The namespace makes the copied command work from any kubeconfig context.
-  const command = bundle && environment
-    ? `kardinal approve ${bundle} --env ${environment}${namespace ? ` -n ${namespace}` : ''}` : ''
+  // The command the stage drawer shows (C5: kardinal approve <pipeline> <env>, -n outside default).
+  const command = pipeline && environment
+    ? cliCommand({ kind: 'approval', title: '' }, pipeline, environment, namespace ?? 'default') ?? '' : ''
   const decisions = a.decisions ?? []
   return (
     <div className="approval-quorum" data-state={state}>

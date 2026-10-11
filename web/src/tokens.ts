@@ -63,6 +63,7 @@ export const layout = {
     expanded: "15rem",
   },
   drawer: "min(32rem, 92vw)",
+  topbar: "3.25rem",
   dialog: "min(28rem, 100%)",
   measure: "72ch",
   page: "80rem",

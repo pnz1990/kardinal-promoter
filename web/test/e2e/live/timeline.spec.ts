@@ -13,7 +13,6 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { need, needJSON, openPipeline, route, station, PIPELINE } from './live'
 import { displayState } from '../../../src/displayStates.gen'
-import { versionName } from '../../../src/versionName'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -85,7 +84,8 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
     await expect(c).toHaveAttribute('title', `${b.name}: ${displayState('bundle', b.phase).label}${b === newer ? '' : '\nShift-click to compare'}`)
     await expect(c).toHaveAttribute('data-bundle-phase', b.phase)
     await expect(c).toHaveClass(new RegExp(`bundle-chip--${b.phase.toLowerCase()}`))
-    await expect(c.locator('.bundle-chip__name')).toHaveText(versionName(b.name, PIPELINE))
+    // A chip names the version by what it ships: the image's tag.
+    await expect(c.locator('.bundle-chip__name')).toHaveText(b.image.split(':').pop()!)
   }
   await expectShown(page, newer, older)
 

@@ -7,6 +7,7 @@
 import { useState, useEffect } from 'react'
 import type { GateState, PolicyGate } from '../types'
 import { HealthChip, type HealthState } from './HealthChip'
+import { gateDisplay, gateLabel } from '../stage/stageModel'
 import '../styles/PolicyGatesPanel.css'
 import { ApprovalQuorum } from './ApprovalQuorum'
 
@@ -123,13 +124,16 @@ export function PolicyGatesPanel({ gates, loading, onDecided, collapsed }: Props
               className="gates-panel__gate"
             >
               <div className="gates-panel__gate-head">
+                {/* The stage model's words (gateDisplay): an approval still collecting its quorum
+                    reads "Waiting for approval", as on the map and in the drawer. */}
                 <HealthChip
-                  state={gateState(gate)}
+                  state={gateDisplay(gate).value}
                   nodeType="PolicyGate"
                   size="sm"
+                  label={gateDisplay(gate).label}
                 />
-                <span className="gates-panel__name">
-                  {gate.name}
+                <span className="gates-panel__name" title={gate.name}>
+                  {gateLabel(gate)}
                 </span>
                 <span className="gates-panel__meta">
                   {gate.namespace} · {formatAge(gate.lastEvaluatedAt)}
@@ -146,7 +150,7 @@ export function PolicyGatesPanel({ gates, loading, onDecided, collapsed }: Props
                 </div>
               )}
               {gate.approval && (
-                <ApprovalQuorum approval={gate.approval} bundle={gate.bundle} environment={gate.environment}
+                <ApprovalQuorum approval={gate.approval} pipeline={gate.pipeline} bundle={gate.bundle} environment={gate.environment}
                   namespace={gate.namespace} onDecided={onDecided} />
               )}
             </div>
