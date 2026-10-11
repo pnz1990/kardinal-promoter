@@ -1113,7 +1113,7 @@ export function App() {
                   }}
                 />
                 {/* #340: the shown version's gates, their conditions and approvals. */}
-                <PolicyGatesPanel currentBundle={activePipeline?.activeBundleName} gates={shownGates} loading={gatesLoading} onDecided={() => { void manualRefresh() }} />
+                <PolicyGatesPanel incomingFor={env => activePipeline?.environments?.find(e => e.name === env)?.incomingBundle ?? activePipeline?.activeBundleName} gates={shownGates} loading={gatesLoading} onDecided={() => { void manualRefresh() }} />
               </Suspense>)}
             </TabPanel>
 
