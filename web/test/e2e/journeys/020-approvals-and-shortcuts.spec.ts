@@ -80,6 +80,8 @@ test.describe('Journey 020 — Approvals, access and shortcuts', () => {
     await expect(page).toHaveURL(/\/env\/prod$/)
     await page.keyboard.press('j')
     await expect(page.getByRole('status').filter({ hasText: 'last environment' })).toHaveText('prod is the last environment.')
+    // The drawer loads with its route (#1751): wait for it before its keys.
+    await expect(page.getByTestId('stage-drawer').locator('[data-section="why"] [data-action="approve"]')).toBeVisible()
     await page.keyboard.press('a')
     const approve = page.getByRole('dialog', { name: 'Approve 6.14.1 for prod?' })
     await expect(approve).toBeVisible()
