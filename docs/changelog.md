@@ -26,8 +26,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **The kardinal palette and fonts in the UI and the docs** (#1698) — the UI and this site now share one set of design tokens (`web/tokens/tokens.json`). Neutrals are spruce-tinted greys in equal light and dark themes. Cardinal red marks the followed release, the selection, links and focus. Status colours are distinct from it: failure is garnet, blocked is ochre, waiting is dusk blue, verified is spruce. Text is set in Atkinson Hyperlegible Next and Mono, headings in Archivo. The fonts are served by the UI and the site themselves (SIL Open Font License), so neither loads a font CDN. The UI's theme button cycles System, Light and Dark: System follows the operating system, and a saved choice applies before the page draws. Every colour pair is checked against WCAG 2.1 AA in both themes
-
-### Fixed
 - **One message for a cancelled stale promotion** — a step the push guard (#1681) refuses because its Bundle was superseded or rejected now says only why, `bundle <name> was superseded — promotion cancelled` (or `bundle <name> was rejected`), as a step the Bundle reconciler cancels does, without `step git-push: stale promotion: refusing to push:`.
 - **Release notes reach the GitHub release** — v0.10.0's release was created with an empty notes section: its changelog section (about 99 KB) went from the workflow's preflight job to the release job as a job output, and did not arrive. The notes now travel as the `release-notes` artifact, the release job writes the body to a file the release step reads, and the release fails when the notes in the finished body are empty. The body's CRD apply command uses `--force-conflicts`, as the upgrade guides do
 
