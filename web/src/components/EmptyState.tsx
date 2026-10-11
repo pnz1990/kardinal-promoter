@@ -80,7 +80,7 @@ export default function EmptyState() {
               flex: 1,
               fontSize: '0.75rem',
               color: 'var(--color-text-muted)',
-              fontFamily: 'monospace',
+              fontFamily: 'var(--k-font-mono)',
               wordBreak: 'break-all',
               lineHeight: 1.5,
             }}
@@ -94,7 +94,7 @@ export default function EmptyState() {
       {/* Expected output */}
       <div style={{ marginBottom: '1.5rem' }}>
         <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.4rem', fontWeight: 600 }}>
-          Then run <code style={{ color: 'var(--color-code)', fontFamily: 'monospace' }}>kubectl get pipelines</code>:
+          Then run <code style={{ color: 'var(--color-code)', fontFamily: 'var(--k-font-mono)' }}>kubectl get pipelines</code>:
         </div>
         <pre style={{
           background: 'var(--color-bg)',
@@ -103,7 +103,7 @@ export default function EmptyState() {
           padding: '8px 12px',
           fontSize: '0.75rem',
           color: 'var(--color-text-muted)',
-          fontFamily: 'monospace',
+          fontFamily: 'var(--k-font-mono)',
           margin: 0,
           lineHeight: 1.5,
           overflow: 'auto',

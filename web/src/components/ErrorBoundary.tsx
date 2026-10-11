@@ -79,7 +79,7 @@ export class ErrorBoundary extends Component<Props, State> {
             justifyContent: 'center',
             padding: '2rem',
             gap: '1rem',
-            color: 'var(--color-text-secondary, #888)',
+            color: 'var(--color-text-secondary)',
             fontSize: '0.875rem',
           }}
         >
@@ -89,7 +89,7 @@ export class ErrorBoundary extends Component<Props, State> {
             style={{
               padding: '0.375rem 0.75rem',
               borderRadius: '4px',
-              border: '1px solid var(--color-border, #444)',
+              border: '1px solid var(--color-border)',
               background: 'transparent',
               color: 'var(--color-text, inherit)',
               cursor: 'pointer',

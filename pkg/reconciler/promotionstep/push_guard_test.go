@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -194,9 +193,12 @@ func TestPushGuard(t *testing.T) {
 			// A stale promotion the guard cancels is the expected end of a
 			// superseded, rejected or deleted Bundle's step, not an error:
 			// the scale suite's controller-logs invariant failed on it.
-			if strings.Contains(got.Status.Message, "stale promotion") {
+			if tt.wantState == "Failed" {
 				assert.NotContains(t, logs.String(), `"level":"error"`, "logs: %s", logs.String())
 				assert.Contains(t, logs.String(), "stale promotion cancelled before its push")
+				// The step says why and nothing else, as a step cancelled
+				// before its run does: no engine or guard prefix.
+				assert.Equal(t, tt.wantMsg, got.Status.Message)
 			}
 			if tt.wantMsg != "" {
 				assert.Contains(t, got.Status.Message, tt.wantMsg)
