@@ -194,8 +194,14 @@ test.describe('Journey 018 — Table and Matrix', () => {
         await expect(matrix.locator('thead button[aria-expanded="false"]').filter({ hasText: name })).toHaveCount(0)
         continue
       }
-      const moved = await matrix.evaluate(el => { const before = el.scrollLeft; el.scrollLeft += el.clientWidth / 2; return el.scrollLeft !== before })
-      if (!moved) break
+      const moved = await matrix.evaluate(async el => {
+        const before = el.scrollLeft
+        el.scrollLeft += el.clientWidth / 2
+        // Let the virtualizer draw the columns now in view before looking for heads.
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+        return el.scrollLeft !== before
+      })
+      if (!moved && await matrix.locator('thead button[aria-expanded="false"]').count() === 0) break
     }
     await expect(matrix.locator('thead [aria-expanded="false"]')).toHaveCount(0)
     // The version column and all 300 environments.
