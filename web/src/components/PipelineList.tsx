@@ -12,6 +12,7 @@ import { useState, useCallback, useRef, type RefObject } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { Pipeline } from '../types'
 import { HealthChip } from './HealthChip'
+import { displayState } from '../displayStates.gen'
 import CopyButton from './CopyButton'
 import '../styles/PipelineList.css'
 
@@ -305,12 +306,8 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
                       for (const phase of Object.values(p.environmentStates!)) {
                         counts[phase] = (counts[phase] ?? 0) + 1
                       }
-                      const phaseTone: Record<string, string> = {
-                        Verified: 'verified', Promoting: 'promoting', WaitingForMerge: 'promoting',
-                        HealthChecking: 'waiting', Verifying: 'waiting', Failed: 'failed', Pending: 'pending',
-                      }
                       return Object.entries(counts).map(([phase, count]) => (
-                        <span key={phase} className="pipeline-list__state" data-tone={phaseTone[phase]} title={`${count} env${count !== 1 ? 's' : ''} in ${phase}`}>
+                        <span key={phase} className="pipeline-list__state k-tone-text" data-tone={displayState('step', phase).tone} title={`${count} env${count !== 1 ? 's' : ''}: ${displayState('step', phase).label}`}>
                           {count} {phase === 'WaitingForMerge' ? 'PR' : phase === 'HealthChecking' ? 'health' : phase.toLowerCase()}
                         </span>
                       ))

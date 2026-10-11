@@ -14,6 +14,7 @@
 // components/CopyButton.tsx — Reusable copy-to-clipboard button.
 // Extracted from NodeDetail.tsx for use in EmptyState and other components (#530).
 import { useState, useCallback, useEffect, useRef } from 'react'
+import { Icon } from '../ui/Icon'
 
 interface Props {
   /** The text to copy (also accepted as `value`). */
@@ -96,7 +97,7 @@ export default function CopyButton({ text: textProp, value, title: titleProp, la
       className="k-copy"
       data-state={state}
     >
-      {state === 'copied' ? '✓' : state === 'failed' ? '✕' : '📋'}
+      <Icon name={state === 'copied' ? 'check' : state === 'failed' ? 'cross' : 'copy'} />
     </button>
   )
 }

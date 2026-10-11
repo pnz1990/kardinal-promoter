@@ -200,3 +200,33 @@ describe('Code, Kbd, Stack', () => {
     await expectAccessible(container)
   })
 })
+
+describe('forwarded refs', () => {
+  it('Dialog, Drawer, Tabs, TabPanel and Icon pass their ref to their element', () => {
+    const refs = {
+      dialog: { current: null as HTMLDivElement | null },
+      drawer: { current: null as HTMLElement | null },
+      tabs: { current: null as HTMLDivElement | null },
+      panel: { current: null as HTMLDivElement | null },
+      icon: { current: null as SVGSVGElement | null },
+    }
+    render(
+      <>
+        <Tabs ref={refs.tabs} label="Views" value="a" onChange={() => {}} items={[{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }]} />
+        <TabPanel ref={refs.panel} id="a">A</TabPanel>
+        <TabPanel id="b" hidden>B</TabPanel>
+        <Icon ref={refs.icon} name="gate" />
+        <Drawer ref={refs.drawer} open title="Details" onClose={() => {}}>body</Drawer>
+        <Dialog ref={refs.dialog} open title="Ask" onClose={() => {}}><button>ok</button></Dialog>
+      </>,
+    )
+    expect(refs.dialog.current).toBe(screen.getByRole('dialog'))
+    expect(refs.drawer.current).toBe(screen.getByRole('complementary'))
+    expect(refs.tabs.current).toBe(screen.getByRole('tablist'))
+    expect(refs.panel.current).toBe(screen.getByRole('tabpanel'))
+    expect(refs.icon.current?.tagName).toBe('svg')
+    // A hidden panel stays in the DOM, so the B tab's aria-controls resolves.
+    const b = screen.getByRole('tab', { name: 'B' })
+    expect(document.getElementById(b.getAttribute('aria-controls')!)).toHaveAttribute('hidden')
+  })
+})
