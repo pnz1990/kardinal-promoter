@@ -64,7 +64,7 @@ kardinal ship <pipeline> --image <ref> [flags]
       --image stringArray         Container image reference (can be specified multiple times); required for image and mixed Bundles
       --stop-at-gate              With --wait: stop (exit 3) at any gate that does not pass, also one that opens by itself (a soak, a schedule)
       --timeout duration          With --wait: give up after this long (exit 6) (default 30m)
-      --type string               Bundle type: image, config, or mixed (default "image")
+      --type string               Bundle type: image, config or mixed (chart Bundles come from POST /api/v1/bundles or a Helm Subscription: this command has no chart flags) (default "image")
       --wait                      Follow the Bundle until it is live, fails, stops at a gate, a hold or a PR, or is replaced
 ```
 
