@@ -39,40 +39,13 @@ func newValidateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "validate",
 		Short: "Validate Pipeline and PolicyGate YAML before applying to the cluster",
-		Long: `Validate Pipeline and PolicyGate YAML without connecting to the cluster.
-The file may hold several documents; each kardinal.io Pipeline and PolicyGate
-is checked. Other objects (a Namespace, another API group's Pipeline) are
-skipped with a note.
-
-Checks:
-  - Pipeline: at least one environment, every environment named, spec.git.url
-    set, the environment dependencies form a valid graph (no cycles, no
-    unknown dependsOn), and no reserved field that is not implemented is set
-    (steps, promotionTemplate, autoRollback, two or more regions,
-    layout: branch, health.cluster, a health.resource.kind other than
-    Deployment). The controller reports the same fields as
-    Ready=False/NotImplemented on the Pipeline. With metadata.namespace set,
-    a git.secretRef in another namespace is an error too (the controller
-    reports it as Ready=False/ValidationFailed). With
-    --allowed-repositories (the controller's scm.allowedRepositories), a
-    Pipeline must point spec.git.url at one of them unless it never needs
-    the controller's SCM token: a git.secretRef and no pr-review
-    environment (the controller reports Ready=False/RepositoryNotAllowed);
-    with --scm-provider bitbucket-datacenter a URL is matched as KEY/slug,
-    as the controller does. spec.policyGates is an
-    error (the API server rejects it); spec.git.provider is a warning (the
-    controller ignores it).
-  - PolicyGate: spec.expression set and compiles with the controller's
-    PolicyGate CEL environment; no spec.selector and a name of at most 63
-    characters (the API server rejects both); spec.when is a warning (it has
-    no effect)
-
-This is not full CRD schema validation; 'kubectl apply --dry-run=server'
-checks the schema.
-
-Exit codes:
-  0 — file is valid
-  1 — validation failed (actionable errors printed)`,
+		Long: `Check Pipeline and PolicyGate YAML offline: environments, the dependency
+graph, fields the controller does not implement, and every gate expression
+compiles. It exits 1 with the errors when the file is not valid; kubectl apply
+--dry-run=server checks the full schema.`,
+		Example: `  kardinal validate -f pipeline.yaml
+  kardinal validate -f examples/ --allowed-repositories github.com/acme/*`,
+		Annotations: map[string]string{ReferenceAnnotation: validateReference},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runValidate(cmd, file, allowedRepos, scmProviderType)
 		},
@@ -405,3 +378,39 @@ func validateCELExpression(expr string) error {
 	}
 	return nil
 }
+
+// validateReference is the detail of the command for its reference page.
+const validateReference = `Validate Pipeline and PolicyGate YAML without connecting to the cluster.
+The file may hold several documents; each kardinal.io Pipeline and PolicyGate
+is checked. Other objects (a Namespace, another API group's Pipeline) are
+skipped with a note.
+
+Checks:
+  - Pipeline: at least one environment, every environment named, spec.git.url
+    set, the environment dependencies form a valid graph (no cycles, no
+    unknown dependsOn), and no reserved field that is not implemented is set
+    (steps, promotionTemplate, autoRollback, two or more regions,
+    layout: branch, health.cluster, a health.resource.kind other than
+    Deployment). The controller reports the same fields as
+    Ready=False/NotImplemented on the Pipeline. With metadata.namespace set,
+    a git.secretRef in another namespace is an error too (the controller
+    reports it as Ready=False/ValidationFailed). With
+    --allowed-repositories (the controller's scm.allowedRepositories), a
+    Pipeline must point spec.git.url at one of them unless it never needs
+    the controller's SCM token: a git.secretRef and no pr-review
+    environment (the controller reports Ready=False/RepositoryNotAllowed);
+    with --scm-provider bitbucket-datacenter a URL is matched as KEY/slug,
+    as the controller does. spec.policyGates is an
+    error (the API server rejects it); spec.git.provider is a warning (the
+    controller ignores it).
+  - PolicyGate: spec.expression set and compiles with the controller's
+    PolicyGate CEL environment; no spec.selector and a name of at most 63
+    characters (the API server rejects both); spec.when is a warning (it has
+    no effect)
+
+This is not full CRD schema validation; 'kubectl apply --dry-run=server'
+checks the schema.
+
+Exit codes:
+  0 — file is valid
+  1 — validation failed (actionable errors printed)`

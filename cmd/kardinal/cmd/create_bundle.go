@@ -64,22 +64,10 @@ func newCreateBundleCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "bundle <pipeline>",
 		Short: "Create a Bundle to trigger promotion through a Pipeline",
-		Long: `Create a Bundle to trigger promotion through a Pipeline.
-
-The pipeline name is a required positional argument; the Pipeline must exist.
-An image or mixed Bundle needs at least one --image. A config or mixed Bundle
-needs --config-commit, the commit of the config repository to promote;
---config-repo names that repository and defaults to the Pipeline's git.url.
-An image Bundle with --config-repo or --config-commit is refused: it would
-deploy only its images and ignore them.
-
---commit, --author and --ci-run-url set the Bundle's provenance, shown in the
-PR body and the UI. kardinal records them as given: they are what the caller
-asserts, as with the Bundle API.
-
-The Bundle API (POST /api/v1/bundles) applies the same checks.
-
-Use --dry-run to preview the promotion graph without creating any resources.`,
+		Long: `Create a Bundle: the version to promote through <pipeline>. An image Bundle
+needs --image; a config Bundle --config-commit; a mixed one both. --commit,
+--author and --ci-run-url record its provenance for the PR body and the UI.
+--dry-run shows the promotion graph and creates nothing.`,
 		Example: `  kardinal create bundle my-app --image ghcr.io/org/my-app:sha-abc1234 \
     --commit abc1234 --author "$GITHUB_ACTOR" --ci-run-url "$RUN_URL"
   kardinal create bundle my-app --type config --config-commit 9f8e7d6`,
@@ -114,6 +102,7 @@ Use --dry-run to preview the promotion graph without creating any resources.`,
 	cmd.Flags().IntVar(&compactAbove, "graph-compact-above", graph.DefaultCompactAbove,
 		"With --dry-run: the controller's --graph-compact-above (chart graph.compactAbove), the environment count above which the Graph is compact")
 
+	withReference(cmd, createBundleReference)
 	return cmd
 }
 
@@ -323,3 +312,19 @@ func splitImageRef(img string) (repo, tag, digest string) {
 	}
 	return img, "", digest
 }
+
+// createBundleReference is the detail of the command for its reference page.
+const createBundleReference = `The pipeline name is a required positional argument; the Pipeline must exist.
+An image or mixed Bundle needs at least one --image. A config or mixed Bundle
+needs --config-commit, the commit of the config repository to promote;
+--config-repo names that repository and defaults to the Pipeline's git.url.
+An image Bundle with --config-repo or --config-commit is refused: it would
+deploy only its images and ignore them.
+
+--commit, --author and --ci-run-url set the Bundle's provenance, shown in the
+PR body and the UI. kardinal records them as given: they are what the caller
+asserts, as with the Bundle API.
+
+The Bundle API (POST /api/v1/bundles) applies the same checks.
+
+Use --dry-run to preview the promotion graph without creating any resources.`

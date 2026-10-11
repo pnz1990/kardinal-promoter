@@ -33,57 +33,40 @@ import (
 )
 
 func newStatusCmd() *cobra.Command {
-	var controllerNS string
+	var (
+		controllerNS string
+		watchFlag    bool
+	)
 	cmd := &cobra.Command{
-		Use:   "status [pipeline]",
+		Use:   "status [<pipeline>]",
 		Short: "Show controller health or per-pipeline in-flight promotion details",
-		Long: `Show the health of the kardinal controller and cluster resource summary.
-
-When called without arguments: displays the controller version (the
-kardinal-version ConfigMap in --controller-namespace), the pipeline count with
-any Degraded pipelines, and the bundle count (active = Available or Promoting).
-
-When called with a pipeline name: shows in-flight promotion details for that
-pipeline — the current bundle per environment (the newest bundle that is not
-Superseded and has a PromotionStep there, or a gate instance there and has not
-failed; see kardinal explain), its PromotionSteps (one row per environment it
-has a step in, ▶ marking a step that is Promoting, WaitingForMerge,
-HealthChecking or Verifying, with the Bundle each row belongs to, the step it is on, and the
-last 40 characters of the step's PR URL, open or merged; REGION is the
-step's deprecated spec.region, - when empty), the Bundle deployed in every environment (the
-one whose change landed there last, as kardinal rollback judges it, with its
-image tags or config commit, and, as in kardinal explain, the config or
-image Bundle the rest of what runs there came from; "none" when no change has
-landed yet), and the
-PolicyGates holding it back (with their CEL expression cut to 40 characters,
-current reason and when each was last checked). A gate is listed as blocking only while it holds the bundle back: it
-is not ready and either every upstream environment is Verified for that bundle
-and the bundle has no PromotionStep in the gate's environment yet, or the
-bundle's Pending PromotionStep there waits on it. A gate of an environment the
-bundle has not reached yet is not listed. This is the first command to run
-when a promotion is stuck.
-
-Examples:
-  # Cluster-level summary
-  kardinal status
-
-  # Per-pipeline in-flight view
-  kardinal status nginx-demo
-
-For detailed gate diagnostics, use 'kardinal explain <pipeline>'.
-For step-level log output, use 'kardinal logs <pipeline>'.`,
-		Args: cobra.MaximumNArgs(1),
+		Long: `Without a pipeline: the controller version and how many pipelines and
+bundles there are. With one: per environment, the Bundle promoting and the one
+deployed, the step each is on with its PR, and the gates holding it back. This
+is the first command to run when a promotion is stuck; -w refreshes it.`,
+		Example: `  kardinal status
+  kardinal status my-app -w`,
+		Annotations: map[string]string{ReferenceAnnotation: statusReference},
+		Args:        cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
 				return err // buildClient already provides actionable message
 			}
-			if len(args) == 1 {
-				return statusPipelineWriter(cmd.OutOrStdout(), c, ns, args[0])
+			w := cmd.OutOrStdout()
+			render := func() error {
+				if len(args) == 1 {
+					return statusPipelineWriter(w, c, ns, args[0])
+				}
+				return statusSummaryFn(w, c, controllerNS)
 			}
-			return statusSummaryFn(cmd.OutOrStdout(), c, controllerNS)
+			if !watchFlag {
+				return render()
+			}
+			return watchLoop(cmd.Context(), w, getPipelinesWatchInterval, render)
 		},
 	}
+	cmd.Flags().BoolVarP(&watchFlag, "watch", "w", false, "Refresh every 2 seconds (Ctrl-C to quit)")
 	cmd.Flags().StringVar(&controllerNS, "controller-namespace", defaultControllerNamespace,
 		"Namespace kardinal-promoter is installed in")
 	return cmd
@@ -364,3 +347,28 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 
 	return nil
 }
+
+// statusReference is the detail of status for its reference page.
+const statusReference = `When called without arguments: displays the controller version (the
+kardinal-version ConfigMap in --controller-namespace), the pipeline count with
+any Degraded pipelines, and the bundle count (active = Available or Promoting).
+
+When called with a pipeline name: shows in-flight promotion details for that
+pipeline — the current bundle per environment (the newest bundle that is not
+Superseded and has a PromotionStep there, or a gate instance there and has not
+failed; see kardinal explain), its PromotionSteps (one row per environment it
+has a step in, ▶ marking a step that is Promoting, WaitingForMerge,
+HealthChecking or Verifying, with the Bundle each row belongs to, the step it is on, and the
+last 40 characters of the step's PR URL, open or merged; REGION is the
+step's deprecated spec.region, - when empty), the Bundle deployed in every environment (the
+one whose change landed there last, as kardinal rollback judges it, with its
+image tags or config commit, and, as in kardinal explain, the config or
+image Bundle the rest of what runs there came from; "none" when no change has
+landed yet), and the
+PolicyGates holding it back (with their CEL expression cut to 40 characters,
+current reason and when each was last checked). A gate is listed as blocking only while it holds the bundle back: it
+is not ready and either every upstream environment is Verified for that bundle
+and the bundle has no PromotionStep in the gate's environment yet, or the
+bundle's Pending PromotionStep there waits on it. A gate of an environment the
+bundle has not reached yet is not listed. This is the first command to run
+when a promotion is stuck.`
