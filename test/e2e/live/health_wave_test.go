@@ -76,10 +76,14 @@ func TestHealth_ArgoCDWaveOnSharedBranch(t *testing.T) {
 		Spec: v1alpha1.PipelineSpec{Git: v1alpha1.PipelineGit{URL: repo.CloneURL, Branch: repo.Branch,
 			SecretRef: &v1alpha1.SecretRef{Name: framework.GitSecretName}}},
 	}
+	// health.refresh: false, so Argo CD finds the wave's commits on its own
+	// poll, as #1575 saw: a refresh at each step's push would have most
+	// Applications sync their step's own commit.
+	noRefresh := false
 	for i, env := range envs {
 		es := v1alpha1.EnvironmentSpec{Name: env, Path: fixtures.Path(env), Approval: "auto",
 			Update: v1alpha1.UpdateConfig{Strategy: "kustomize"},
-			Health: v1alpha1.HealthConfig{Type: "argocd", Timeout: "10m",
+			Health: v1alpha1.HealthConfig{Type: "argocd", Timeout: "10m", Refresh: &noRefresh,
 				ArgoCD: &v1alpha1.HealthTargetRef{Name: ns + "-" + env, Namespace: framework.ArgoCDNamespace}}}
 		if i > 0 {
 			es.Wave = 1
@@ -138,7 +142,13 @@ func TestHealth_ArgoImagesFallback(t *testing.T) {
 		t.Fatalf("%s git server cannot create branches", e.Git.Kind())
 	}
 	require.NoError(t, b.CreateBranch(ctx, a.repo, "rewrite", a.repo.Branch))
-	a.apply(t, a.pipeline(nil))
+	// health.refresh: false: a refresh at the push would have Argo CD
+	// resolve the branch to test's own commit before the force-push, and
+	// sync that once auto-sync is back on.
+	p := a.pipeline(nil)
+	noRefresh := false
+	p.Spec.Environments[0].Health.Refresh = &noRefresh
+	a.apply(t, p)
 	e.SetArgoAutoSync(t, a.argoApp("test"), false)
 
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
