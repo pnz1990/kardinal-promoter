@@ -253,7 +253,7 @@ func chartDigestHex(version string) string {
 // creates a chart Bundle that carries the chart, version and index digest,
 // and semverConstraint keeps a Subscription on its major version.
 //
-// Covers SUB-HELM-01.
+// Covers SUB-HELM-01, CLI-GET-SUBS-01.
 func TestSub_HelmHTTP(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -302,6 +302,12 @@ func TestSub_HelmHTTP(t *testing.T) {
 	assert.Equal(t, "chart", b.Spec.Type)
 	assert.Equal(t, &v1alpha1.ChartRef{RepoURL: repoURL, Name: "podinfo", Version: "6.15.0", Digest: digest}, b.Spec.Chart)
 	assert.Equal(t, "six", b.Labels["kardinal.io/subscription"])
+	// kardinal get subscriptions: LAST-VERSION is the chart version, one
+	// token; -o wide shows the chart and version.
+	out := e.MustKardinal(t, a.ns, "get", "subscriptions", "six")
+	assert.Regexp(t, `(?m)^six\s+helm\s+\S+\s+\S+\s+\S+ ago\s+6\.15\.0\s+\S+$`, out)
+	out = e.MustKardinal(t, a.ns, "get", "subscriptions", "six", "-o", "wide")
+	assert.Regexp(t, `(?m)^six\s+helm\s+\S+\s+\S+\s+\S+ ago\s+podinfo 6\.15\.0\s+`+want+`\s+\S+$`, out)
 	poke(t, e, a.ns, "latest")
 	s := getSub(t, e, a.ns, "latest")
 	waitSub(t, e, a.ns, "latest", "a poll after 6.15.0", func(st v1alpha1.SubscriptionStatus) bool {

@@ -124,8 +124,38 @@ func TestWhy_Golden(t *testing.T) {
 				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", BlockedBy: []string{"cab"}}}
 			g := explainGateInstance("demo", "demo-b", "prod", "cab", "true", false, true, "waiting for approvals: 1 of 2")
 			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 2}
+			// As the Graph copies them: alice's counts, eve's is for another version.
+			g.Spec.Approvals = []v1alpha1.GateApproval{{User: "alice", Decision: "approve", Bundle: "demo-b", Environment: "prod"},
+				{User: "eve", Decision: "approve", Bundle: "demo-a", Environment: "prod"}}
 			g.Status.Approvals = []v1alpha1.GateApprovalStatus{{User: "alice", Decision: "approve", Counted: true}, {User: "eve", Decision: "approve"}}
 			return []sigs_client.Object{g}
+		}, false},
+		{"approval, the caller approved already (the server's tally)", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
+				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", BlockedBy: []string{"cab"}}}
+			g := explainGateInstance("demo", "demo-b", "prod", "cab", "true", false, true, "waiting for approvals: 1 of 2")
+			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 2}
+			g.Spec.Approvals = []v1alpha1.GateApproval{{User: "kubernetes-admin", Decision: "approve", Bundle: "demo-b", Environment: "prod"}}
+			return []sigs_client.Object{g}
+		}, false},
+		{"approval, rejected by two", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
+				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", BlockedBy: []string{"cab"}}}
+			g := explainGateInstance("demo", "demo-b", "prod", "cab", "true", false, true, "rejected")
+			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1}
+			g.Spec.Approvals = []v1alpha1.GateApproval{{User: "bob", Decision: "reject", Bundle: "demo-b", Environment: "prod"},
+				{User: "alice", Decision: "reject", Bundle: "demo-b", Environment: "prod"}}
+			return []sigs_client.Object{g}
+		}, false},
+		{"approval, too many Approvals", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
+				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", BlockedBy: []string{"cab"}}}
+			g := explainGateInstance("demo", "demo-b", "prod", "cab", "true", false, true, "more than 100 Approvals")
+			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1}
+			for i := 0; i <= 100; i++ {
+				g.Spec.Approvals = append(g.Spec.Approvals, v1alpha1.GateApproval{User: fmt.Sprintf("u%d", i), Decision: "approve", Bundle: "demo-b", Environment: "prod"})
+			}
+			return []sigs_client.Object{g, whyBundle("demo-b", "1.5.0")}
 		}, false},
 		{"a gate that opens by itself", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",

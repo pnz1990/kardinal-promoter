@@ -469,9 +469,11 @@ func (r *inboxReader) environment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvir
 		it := base
 		name := gateDisplayName(*g)
 		if g.Spec.Approval != nil {
-			creator := ""
+			creator, unread := "", false
 			if b := r.bundle(p.Namespace, bundle); b != nil {
 				creator = b.Annotations[lifecycle.AnnotationCreatedBy]
+			} else {
+				unread = true // its creator is unknown, not absent
 			}
 			st := lifecycle.ApprovalStandingOf(g, creator, r.me)
 			if len(st.RejectedBy) > 0 {
@@ -485,6 +487,11 @@ func (r *inboxReader) environment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvir
 			switch {
 			case st.AlreadyCounted:
 				it.Waiting += " (you approved; it needs someone else)"
+				it.Who = []string{"someone else who may approve"}
+			case st.Reason != "" && !st.CanApprove && strings.HasPrefix(st.Reason, "excludeAuthor cannot be enforced") && unread:
+				it.Waiting = fmt.Sprintf("approval at %s · %d of %d (could not read the version %s to see who created it)", name, st.Approved, st.Required, bundle)
+				it.Reason = "could not read Bundle " + p.Namespace + "/" + bundle
+				it.OnYou = false
 			case st.Reason != "" && !st.CanApprove && strings.HasPrefix(st.Reason, "excludeAuthor cannot be enforced"):
 				short := "no verified creator"
 				if creator != "" {

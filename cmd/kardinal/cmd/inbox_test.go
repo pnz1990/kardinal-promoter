@@ -90,6 +90,9 @@ func inboxObjects() []sigs_client.Object {
 		wait("prod", "auth-b", "5.0.0", 15, "cab"),
 		wait("dr", "auth-b", "5.0.0", 12, "author"))
 	sub := pipe("feed", "default", wait("prod", "feed-b", "0.1.0", 8, "cab"))
+	// A version inbox cannot read (deleted, or no get on Bundles): who
+	// created it is unknown, not absent.
+	ghost := pipe("ghost", "default", wait("prod", "ghost-b", "", 7, "cab"))
 	web := pipe("web", "default",
 		v1alpha1.PipelineEnvironmentStatus{Name: "prod", Bundle: "web-a", Version: "1.4.0", IncomingBundle: "web-b", IncomingVersion: "1.5.0",
 			State: "WaitingForMerge", PRURL: "https://github.com/acme/gitops/pull/42", Since: ago(60)},
@@ -118,6 +121,7 @@ func inboxObjects() []sigs_client.Object {
 		gate("default", "auth", "auth-b", "prod", "cab", "true", &v1alpha1.GateApprovalPolicy{Required: 1, AllowedUsers: []string{"dave", "erin"}}),
 		gate("default", "auth", "auth-b", "dr", "author", "true", &v1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}),
 		gate("default", "feed", "feed-b", "prod", "cab", "true", &v1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}),
+		ghost, gate("default", "ghost", "ghost-b", "prod", "cab", "true", &v1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}),
 	}
 }
 
