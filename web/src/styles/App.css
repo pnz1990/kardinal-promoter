@@ -255,3 +255,4 @@
   background: var(--k-surface-base);
 }
 .app-dag[data-split] { border-start-end-radius: 0; border-end-end-radius: 0; }
+.app-tab .promotion-errors { margin-inline: 0; }

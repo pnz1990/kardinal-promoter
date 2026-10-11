@@ -717,8 +717,8 @@ export function App() {
                 <p className="app-pipeline-head__summary">
                   {/* P1's status.summary sentence; the shown version's state when there is none. */}
                   <span>{activePipeline.summary ?? (activeBundle ? displayState('bundle', activeBundle.phase).label : 'No version yet')}</span>
-                  {/* #329/#763: the shown version's provenance, quiet. */}
-                  {activeBundle && (
+                  {/* #329/#763: the shown version's provenance, quiet; none for a version that is not found. */}
+                  {activeBundle && !versionMissing && (
                     <span className="app-provenance">
                       <span className="app-sep" aria-hidden="true">·</span>
                       <span title={activeBundle.name}>
@@ -754,8 +754,8 @@ export function App() {
                   )}
                 </p>
               )}
-              {activeBundle && <RejectedLiveBanner bundle={activeBundle} />}
-              {activeBundle?.rejected && (
+              {activeBundle && !versionMissing && <RejectedLiveBanner bundle={activeBundle} />}
+              {activeBundle?.rejected && !versionMissing && (
                 <p className="bundle-rejected" role="note">
                   Rejected by <strong>{activeBundle.rejected.by}</strong>
                   {activeBundle.rejected.at && <> {formatRelativeAge(activeBundle.rejected.at)}</>}: {activeBundle.rejected.reason}

@@ -288,6 +288,7 @@
 .k-tabs__tab:hover { color: var(--k-ink); }
 .k-tabs__tab[aria-selected="true"] { color: var(--k-ink); border-block-end-color: var(--k-thread); }
 .k-tabpanel:focus-visible { outline-offset: var(--k-focus-offset); }
+.k-tabpanel[hidden] { display: none; }
 
 /* ── MenuButton ── */
 .k-menu { position: relative; display: inline-flex; }
