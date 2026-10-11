@@ -35,7 +35,7 @@ It names the version on stderr and, at a terminal, asks before it records anythi
 version may have arrived since you reviewed it:
 
 ```text
-Bundle: 1.29.0 (my-app-v1-29-0)
+Version: 1.29.0 (my-app-v1-29-0)
 Approve 1.29.0 (my-app-v1-29-0) for prod? [y/N]
 ```
 

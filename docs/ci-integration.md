@@ -214,12 +214,24 @@ kardinal ship my-app --image "ghcr.io/myorg/my-app:${GITHUB_SHA}" --wait --timeo
 The codes are stable: a new outcome gets a new code. A stop at a gate, a hold or a pull request
 counts once two reads agree, and a gate that has not been evaluated yet never stops the wait.
 
-`ship` waits through what ends by itself: a gate whose expression reads something that changes
-with time (`schedule.`, `soakMinutes`, `upstream.`, `metrics` or `changewindow`), and a pull
-request the SCM merges by itself (`pr.merge.auto`). Give `--timeout` room for them, so a job can
-wait through a soak. A gate on anything else, such as a version's labels or provenance, needs a
-person: exit 3, as for an approval, a hold or a pause. With `--stop-at-gate`, it stops with 3 at
-any gate that does not pass.
+A gate that does not pass ends the wait with 3 only when it needs a person. A gate that opens by
+itself keeps the job waiting until `--timeout`: one whose expression contains any of these texts,
+which name the [gate variables](policy-gates.md) that change with time (text inside a string
+literal does not count):
+
+| Text in the expression | Variables |
+|---|---|
+| `schedule.` | `schedule.isWeekend`, `schedule.hour`, `schedule.dayOfWeek` |
+| `soakMinutes` | `upstream.<env>.soakMinutes`, `bundle.upstreamSoakMinutes` |
+| `upstream.` | anything else of `upstream.<env>` |
+| `metrics` | `metrics.<name>.value`, `metrics.<name>.result` |
+| `changewindow` | `changewindow.<name>` |
+
+So a job can wait through a soak or a deploy window. Any other gate that does not pass (on a
+version's labels or its provenance) exits 3, as do an approval gate, a hold and a
+paused pipeline. A pull request the SCM merges by itself (`pr.merge.auto`) is waited for while
+its auto-merge has not failed. `--stop-at-gate` exits 3 at any gate that does not pass, also one
+that would open by itself.
 
 Stopping does not stop the promotion: `kardinal status my-app -w` goes on following it.
 
