@@ -50,14 +50,14 @@ Setting up the kardinal demo in kind-kardinal
   ✓ PolicyGate default/prod-approval (prod waits for your approval, as kubernetes-admin): applied
   ✓ Pipeline default/demo: applied
   ✓ First version: shipped as demo-7xk2p
-Following demo-7xk2p through test, uat and prod (Ctrl-C stops following, the promotion goes on)
+Following version sha-9349a3f (demo-7xk2p) through test, uat and prod (Ctrl-C stops following, the promotion goes on)
   test: Checking health
   test: Live
   uat: Promoting
   uat: Checking health
   uat: Live
   prod: Held by gate prod-approval
-Version demo-7xk2p stopped: prod waits for approval at gate prod-approval (kardinal approve demo prod)
+Version sha-9349a3f (demo-7xk2p) stopped: prod waits for approval at gate prod-approval (kardinal approve demo prod)
 
 Next:
   Approve prod:    kardinal approve demo prod
@@ -99,7 +99,7 @@ Run the **Ship the next** line from the quickstart's output. It ships a newer ve
 `kardinal-test-app`, which supersedes the first one, and `--wait` follows it:
 
 ```text
-Shipped main as demo-q8m4t; following it (Ctrl-C stops following, the promotion goes on)
+Shipped main as demo-zhxk2; following it (Ctrl-C stops following, the promotion goes on)
   test: Promoting
   test: Checking health
   test: Live
@@ -107,7 +107,7 @@ Shipped main as demo-q8m4t; following it (Ctrl-C stops following, the promotion 
   uat: Checking health
   uat: Live
   prod: Held by gate prod-approval
-Version demo-q8m4t stopped: prod waits for approval at gate prod-approval (kardinal approve demo prod)
+Version main (demo-zhxk2) stopped: prod waits for approval at gate prod-approval (kardinal approve demo prod)
 ```
 
 ## 6. Watch it stop at the gate
@@ -127,10 +127,13 @@ kardinal why demo prod
 ```
 
 ```text
-<#1736: kardinal why output for the prod-approval gate>
+prod is waiting for your approval.
+  Version  main (demo-zhxk2)
+  Gate     prod-approval · 0 of 1 approvals
+  Next     kardinal approve demo prod
 ```
 
-The last line is the command that gets past the gate.
+**Next** is the command that gets past the gate.
 
 ## 7. Approve
 
@@ -139,9 +142,9 @@ kardinal approve demo prod
 ```
 
 ```text
-Bundle: main (demo-q8m4t)
-Approve main (demo-q8m4t) for prod? [y/N] y
-Recorded: kubernetes-admin approves demo-q8m4t for prod (Approval …)
+Version: main (demo-zhxk2)
+Approve main (demo-zhxk2) for prod? [y/N] y
+Recorded: kubernetes-admin approves demo-zhxk2 for prod (Approval demo-zhxk2-prod-…)
 ```
 
 The gate passes, and the version goes live in prod within a minute or two, with no pull request:
@@ -151,7 +154,13 @@ kardinal status demo
 ```
 
 ```text
-<C7: kardinal status demo with prod Live>
+Pipeline: demo   Namespace: default
+main live in test, uat, prod
+
+ENVIRONMENT  RUNNING            INCOMING  STATE  SINCE  PR
+test         demo-zhxk2 (main)  -         Live   35s    -
+uat          demo-zhxk2 (main)  -         Live   15s    -
+prod         demo-zhxk2 (main)  -         Live   1s     -
 ```
 
 ## Clean up
