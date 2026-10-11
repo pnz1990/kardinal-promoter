@@ -106,6 +106,12 @@ func getStepsOnceNS(w io.Writer, c sigs_client.Client, ns, pipeline string, show
 		activeBundles[s.Spec.BundleName] = true
 	}
 
+	if len(steps.Items) == 0 && ns != "" {
+		// A typo would look like an idle pipeline: say so.
+		if err := checkPipelineEnv(ctx, c, ns, pipeline, ""); err != nil {
+			return err
+		}
+	}
 	switch OutputFormat() {
 	case "json":
 		return WriteJSON(w, activeSteps)

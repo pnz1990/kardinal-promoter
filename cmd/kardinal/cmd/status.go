@@ -123,7 +123,7 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 	var pl v1alpha1.Pipeline
 	if err := c.Get(ctx, types.NamespacedName{Name: pipeline, Namespace: ns}, &pl); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("pipeline %q not found in namespace %q", pipeline, ns)
+			return pipelineNotFound(ctx, c, ns, pipeline)
 		}
 		return fmt.Errorf("get pipeline: %w", err)
 	}

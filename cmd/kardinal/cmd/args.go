@@ -68,7 +68,11 @@ func envArgs(args []string, flagEnv string) (pipeline, env string, err error) {
 func requireEnv(cmdPath string, args []string, flagEnv string) (pipeline, env string, err error) {
 	pipeline, env, err = envArgs(args, flagEnv)
 	if err == nil && env == "" {
-		err = fmt.Errorf("which environment? Give it after the pipeline: %s %s <env>", cmdPath, pipeline)
+		if envs := envHint(pipeline); envs != "" {
+			err = fmt.Errorf("which environment? %s has: %s. Give it after the pipeline: %s %s <env>", pipeline, envs, cmdPath, pipeline)
+		} else {
+			err = fmt.Errorf("which environment? Give it after the pipeline: %s %s <env>", cmdPath, pipeline)
+		}
 	}
 	return pipeline, env, err
 }

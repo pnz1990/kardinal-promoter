@@ -427,7 +427,7 @@ func TestCLI_Init(t *testing.T) {
 	assert.Contains(t, r.Stdout, "  - name: uat\n")
 	r = init(t.TempDir(), "\n\n\n\n", "--stdout")
 	assert.Equal(t, 1, r.Code)
-	assert.Contains(t, r.Stderr, "init wizard: Git repository URL: an https:// repository URL is required\n")
+	assert.Contains(t, r.Stderr, `kardinal init asks its questions on a terminal, and its input ended at "Git repository URL" (an https:// repository URL is required)`)
 	assert.Empty(t, r.Stdout)
 }
 

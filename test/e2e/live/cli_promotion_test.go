@@ -204,7 +204,7 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 		{[]string{pipelineName, "--image", fixtures.Image + ":" + fixtures.V2, "--type", "helm"},
 			`create bundle: type must be one of image, config, mixed, chart (got "helm")`},
 		{[]string{"nope", "--image", fixtures.Image + ":" + fixtures.V2},
-			fmt.Sprintf("pipeline %q not found in namespace %q", "nope", a.ns)},
+			fmt.Sprintf("pipeline %q not found in namespace %q; pipelines here: %s. Other namespaces: kardinal get pipelines -A", "nope", a.ns, pipelineName)},
 	} {
 		r := c.Fail(a.ns, append([]string{"create", "bundle"}, tc.args...)...)
 		assert.Equal(t, 1, r.Code)
@@ -240,8 +240,8 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	assert.Equal(t, "WaitingForMerge", row["PROD"])
 	assert.Equal(t, "0", row["SUB"])
 	sameTable(t, tables, c.Must(a.ns, "get", "pipelines", pipelineName), "the name filter keeps the only pipeline")
-	assert.Equal(t, "No pipelines found.\n  To get started, apply a Pipeline CRD:\n    kubectl apply -f examples/quickstart/pipeline.yaml\n  Or check CRD installation with: kardinal doctor\n",
-		c.Must(a.ns, "get", "pipelines", "nope"))
+	refuses(t, c, a.ns, fmt.Sprintf("pipeline %q not found in namespace %q; pipelines here: %s. Other namespaces: kardinal get pipelines -A",
+		"nope", a.ns, pipelineName), "get", "pipelines", "nope")
 	all := c.Must("", "get", "pipelines", "-A")
 	header := cliCellGap.Split(strings.SplitN(all, "\n", 2)[0], -1)
 	row = framework.TableRow(all, "NAMESPACE", a.ns)
@@ -754,7 +754,7 @@ func TestCLI_Reports(t *testing.T) {
 		want string
 	}{
 		{[]string{"--pipeline", pipelineName, "--days", "0"}, "--days must be positive, got 0"},
-		{[]string{"--pipeline", "nope"}, fmt.Sprintf("pipeline %q not found in namespace %q", "nope", a.ns)},
+		{[]string{"--pipeline", "nope"}, fmt.Sprintf("pipeline %q not found in namespace %q; pipelines here: %s. Other namespaces: kardinal get pipelines -A", "nope", a.ns, pipelineName)},
 		{nil, "which pipeline? kardinal metrics <pipeline> [<env>]"},
 	} {
 		r := c.Fail(a.ns, append([]string{"metrics"}, tc.args...)...)

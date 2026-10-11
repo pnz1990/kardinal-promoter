@@ -104,6 +104,9 @@ func logsFollowFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pi
 		}
 
 		if len(filtered) == 0 {
+			if err := checkPipelineEnv(ctx, c, ns, pipeline, envFilter); err != nil {
+				return err
+			}
 			_, _ = fmt.Fprintf(w, "No promotion steps found for pipeline %s\n", pipeline)
 		}
 
@@ -238,6 +241,9 @@ func logsFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, bundleFi
 	}
 
 	if len(filtered) == 0 {
+		if err := checkPipelineEnv(ctx, c, ns, pipeline, envFilter); err != nil {
+			return err
+		}
 		_, _ = fmt.Fprintf(w, "No promotion steps found for pipeline %s", pipeline)
 		if envFilter != "" {
 			_, _ = fmt.Fprintf(w, " (env=%s)", envFilter)

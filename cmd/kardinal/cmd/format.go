@@ -475,9 +475,9 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, env
 	subCount map[string]int, showNamespace bool) error {
 	if len(pipelines) == 0 {
 		_, _ = fmt.Fprintln(w, "No pipelines found.")
-		_, _ = fmt.Fprintln(w, "  To get started, apply a Pipeline CRD:")
-		_, _ = fmt.Fprintln(w, "    kubectl apply -f examples/quickstart/pipeline.yaml")
-		_, _ = fmt.Fprintln(w, "  Or check CRD installation with: kardinal doctor")
+		_, _ = fmt.Fprintln(w, "  Write one with: kardinal init")
+		_, _ = fmt.Fprintln(w, "  Or follow the quickstart: https://pnz1990.github.io/kardinal-promoter/quickstart/")
+		_, _ = fmt.Fprintln(w, "  Check the installation with: kardinal doctor")
 		return nil
 	}
 

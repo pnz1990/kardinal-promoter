@@ -130,6 +130,13 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 			}
 		}
 		items = filtered
+		// A name that matches nothing is a typo, not an empty cluster.
+		if len(items) == 0 && (OutputFormat() == "" || OutputFormat() == "table") {
+			if allNamespaces {
+				return fmt.Errorf("pipeline %q not found in any namespace", name)
+			}
+			return pipelineNotFound(ctx, c, ns, name)
+		}
 	}
 
 	switch OutputFormat() {
