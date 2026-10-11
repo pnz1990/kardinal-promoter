@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A missing git credential shows on the Pipeline when it is applied** — a Pipeline whose HTTPS remote needs a token and whose `spec.git.secretRef` is not set, names a Secret that does not exist, or a Secret with no `token` key is `Ready=False` with reason `GitCredentialMissing`, before any Bundle. Until now this showed only when the first step failed. The message is the command that fixes it (`kubectl create secret generic <name> -n <ns> --from-literal=token=<TOKEN> && kubectl label secret <name> -n <ns> kardinal.io/referenceable=true`, or a `kubectl patch` that adds the token). It is checked again every minute, and `kardinal doctor` points at the command. A spec error is still reported first. An ssh remote, a URL with a password and a GitHub App Secret are not affected. An unlabelled Secret with a token still works in v0.10, so it keeps the `SecretReferenceable` warning, whose message now includes `-n <namespace>`. See [Troubleshooting](troubleshooting.md#symptom-pipeline-readyfalse-with-reason-gitcredentialmissing)
+
 ### Fixed
 - **One message for a cancelled stale promotion** — a step the push guard (#1681) refuses because its Bundle was superseded or rejected now says only why, `bundle <name> was superseded — promotion cancelled` (or `bundle <name> was rejected`), as a step the Bundle reconciler cancels does, without `step git-push: stale promotion: refusing to push:`.
 - **Release notes reach the GitHub release** — v0.10.0's release was created with an empty notes section: its changelog section (about 99 KB) went from the workflow's preflight job to the release job as a job output, and did not arrive. The notes now travel as the `release-notes` artifact, the release job writes the body to a file the release step reads, and the release fails when the notes in the finished body are empty. The body's CRD apply command uses `--force-conflicts`, as the upgrade guides do
