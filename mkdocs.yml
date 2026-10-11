@@ -179,6 +179,7 @@ nav:
         - kardinal policy simulate: reference/cli/kardinal-policy-simulate.md
         - kardinal policy test: reference/cli/kardinal-policy-test.md
       - kardinal promote: reference/cli/kardinal-promote.md
+      - kardinal quickstart: reference/cli/kardinal-quickstart.md
       - kardinal refresh: reference/cli/kardinal-refresh.md
       - kardinal reject: reference/cli/kardinal-reject.md
       - kardinal release-hold: reference/cli/kardinal-release-hold.md

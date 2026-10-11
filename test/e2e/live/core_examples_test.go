@@ -199,9 +199,12 @@ images:
 // soak is shortened for the second Bundle; the image is podinfo, not
 // kardinal-test-app.
 //
+// It holds demoNames: kardinal quickstart uses the same names.
+//
 // Covers EX-QUICKSTART-01.
 func TestCore_QuickstartExample(t *testing.T) {
 	t.Parallel()
+	lockDemoNames(t)
 	e := framework.New(t)
 	ctx := context.Background()
 	ns := e.Namespace(t)

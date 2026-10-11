@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
 }))
 vi.mock('../api/client', () => ({ api }))
 
-import { StageDrawer } from './StageDrawer'
+import { StageDrawer, cliCommand } from './StageDrawer'
 import type { Bundle, Pipeline, PolicyGate, PromotionStep } from '../types'
 
 const now = Date.parse('2026-10-11T09:03:00Z')
@@ -72,6 +72,21 @@ describe('StageDrawer (U3)', () => {
     expect(screen.getByText('Held by gate no-weekend')).toBeInTheDocument()
     expect(screen.getByText('1.4.0')).toBeInTheDocument()
     expect(screen.getByText('1.5.0')).toBeInTheDocument()
+  })
+
+  it('an approval wait shows the CLI command that approves, with -n outside default, and a copy button', () => {
+    renderDrawer([approvalGate, freeze])
+    const why = within(screen.getByTestId('stage-drawer').querySelector('[data-section="why"]') as HTMLElement)
+    expect(why.getByText('kardinal approve web prod -n team')).toBeInTheDocument()
+    expect(why.getByRole('button', { name: 'Copy kardinal approve web prod -n team' })).toBeInTheDocument()
+    // Only the approval: a CEL gate is not something approve moves on.
+    expect(why.getAllByText(/^kardinal /)).toHaveLength(1)
+  })
+
+  it('the CLI command has no -n in default', () => {
+    expect(cliCommand({ kind: 'approval', title: '' }, 'demo', 'prod', 'default')).toBe('kardinal approve demo prod')
+    expect(cliCommand({ kind: 'approval', title: '' }, 'demo', 'prod', 'team')).toBe('kardinal approve demo prod -n team')
+    expect(cliCommand({ kind: 'gate', title: '' }, 'demo', 'prod', 'default')).toBeUndefined()
   })
 
   it('an approval gate collecting its quorum reads as waiting, not blocked', () => {
