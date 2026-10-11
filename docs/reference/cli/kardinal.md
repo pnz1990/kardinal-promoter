@@ -103,7 +103,7 @@ names the new Bundle.
 * [kardinal get](kardinal-get.md)	 - Display one or more kardinal resources
 * [kardinal history](kardinal-history.md)	 - Show Bundle promotion history for a pipeline
 * [kardinal hold](kardinal-hold.md)	 - Keep an environment on what runs there now
-* [kardinal init](kardinal-init.md)	 - Interactive wizard to generate a Pipeline YAML and scaffold the GitOps repo
+* [kardinal init](kardinal-init.md)	 - Write a Pipeline for your GitOps repository, from flags or a few questions
 * [kardinal logs](kardinal-logs.md)	 - Show promotion step execution logs for a pipeline
 * [kardinal metrics](kardinal-metrics.md)	 - Show promotion metrics (DORA-style) for a pipeline
 * [kardinal override](kardinal-override.md)	 - Force-pass a PolicyGate with a mandatory audit record
