@@ -54,6 +54,11 @@ func unsupportedConfig(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec
 // environment opens a PR (scm.RepositoryAllowlist.CheckPipeline). The
 // Pipeline reconciler reports the same as Ready=False/RepositoryNotAllowed.
 func (r *Reconciler) repositoryNotAllowed(ctx context.Context, pipeline *v1alpha1.Pipeline) (string, error) {
+	// The controller's own token Secret is never a Pipeline's git Secret;
+	// the Pipeline reconciler reports the same as Ready=False/ValidationFailed.
+	if err := r.ControllerSecret.Refuses(pipeline); err != nil {
+		return err.Error(), nil
+	}
 	if r.AllowedRepositories.Allows(pipeline.Spec.Git.URL) {
 		return "", nil
 	}

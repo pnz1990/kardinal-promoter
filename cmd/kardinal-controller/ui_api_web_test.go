@@ -136,7 +136,21 @@ func TestUIAPI_Gates_LabelFields(t *testing.T) {
 			},
 			want: uiGateResponse{
 				Name: "g", Namespace: "default", Expression: "true",
-				Pipeline: "app", Bundle: "app-1", Environment: "prod", State: "Pending",
+				Pipeline: "app", Bundle: "app-1", Environment: "prod", GateTemplate: "no-weekend", MaxOverrideMinutes: 24 * 60, State: "Pending",
+			},
+		},
+		{
+			// The instance name is generated; the template's is the user's.
+			name: "approval instance",
+			labels: map[string]string{
+				"kardinal.io/pipeline":      "app",
+				"kardinal.io/bundle":        "app-1",
+				"kardinal.io/environment":   "prod",
+				"kardinal.io/gate-template": "release-approval",
+			},
+			want: uiGateResponse{
+				Name: "g", Namespace: "default", Expression: "true",
+				Pipeline: "app", Bundle: "app-1", Environment: "prod", GateTemplate: "release-approval", MaxOverrideMinutes: 24 * 60, State: "Pending",
 			},
 		},
 	}

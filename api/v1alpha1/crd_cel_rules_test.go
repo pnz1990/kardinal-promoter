@@ -241,6 +241,9 @@ func TestBundleCRDRejectsConfigRefOnImage(t *testing.T) {
 		"set type config or mixed, or remove configRef"
 	ref := map[string]interface{}{"commitSHA": "abc"}
 	img := []interface{}{map[string]interface{}{"repository": "r/app", "tag": "1"}}
+	chart := map[string]interface{}{"name": "app", "version": "1.2.3"}
+	const chartMsg = "spec.configRef is used only by config and mixed Bundles: a chart Bundle deploys only its chart version; " +
+		"remove configRef, or create a separate config Bundle"
 	tests := []struct {
 		name string
 		self map[string]interface{}
@@ -252,6 +255,10 @@ func TestBundleCRDRejectsConfigRefOnImage(t *testing.T) {
 		{"image", map[string]interface{}{"type": "image", "pipeline": "p", "images": img}, nil},
 		{"config", map[string]interface{}{"type": "config", "pipeline": "p", "configRef": ref}, nil},
 		{"mixed", map[string]interface{}{"type": "mixed", "pipeline": "p", "images": img, "configRef": ref}, nil},
+		// #1728 QA: kubectl apply refuses a chart Bundle with a configRef as
+		// the Bundle API does.
+		{"chart with configRef", map[string]interface{}{"type": "chart", "pipeline": "p", "chart": chart, "configRef": ref}, []string{chartMsg}},
+		{"chart", map[string]interface{}{"type": "chart", "pipeline": "p", "chart": chart}, nil},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

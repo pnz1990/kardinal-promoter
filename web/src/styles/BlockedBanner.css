@@ -1,0 +1,55 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * BlockedBanner.css — the "PolicyGates blocking promotion" banner
+ * (components/BlockedBanner.tsx). Design tokens only (noLiterals.test.ts).
+ */
+
+.blocked-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--k-space-3);
+  background: var(--k-status-blocked-wash);
+  border: var(--k-border-hairline) solid var(--k-status-blocked-fg);
+  border-radius: var(--k-radius-3);
+  padding: var(--k-space-2) var(--k-space-3);
+  margin-bottom: var(--k-space-3);
+}
+
+.blocked-banner__message {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-2);
+  color: var(--k-status-blocked-fg);
+}
+
+.blocked-banner__icon {
+  font-size: var(--k-text-md);
+}
+
+.blocked-banner__label {
+  font-size: var(--k-text-sm);
+  font-weight: var(--k-weight-semibold);
+}
+
+.blocked-banner__toggle {
+  background: none;
+  border: var(--k-border-hairline) solid var(--k-status-blocked-fg);
+  border-radius: var(--k-radius-2);
+  color: var(--k-status-blocked-fg);
+  cursor: pointer;
+  font-size: var(--k-text-xs);
+  font-weight: var(--k-weight-semibold);
+  padding: var(--k-space-0_5) var(--k-space-2);
+  white-space: nowrap;
+  transition: background var(--k-dur-quick) var(--k-ease-out);
+}
+
+.blocked-banner__toggle[aria-pressed="true"] {
+  background: var(--k-status-blocked-fg);
+  color: var(--k-surface-canvas);
+}
+
+.blocked-banner__actions { display: flex; gap: var(--k-space-2); }

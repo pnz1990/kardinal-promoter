@@ -69,7 +69,7 @@ export function ApprovalActions({ bundle, environment, namespace, onDone }: Prop
       {confirmReject && (
         <ConfirmDialog
           title={`Reject ${bundle} for ${environment}?`}
-          description={`Your rejection blocks the approval gates of ${environment} for this bundle until you revoke it.`}
+          description={`Your rejection blocks the approval gates of ${environment} for this version until you revoke it.`}
           confirmLabel="Reject"
           danger
           loading={busy}

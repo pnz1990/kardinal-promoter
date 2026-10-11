@@ -204,7 +204,7 @@ func listedPipeline(t *testing.T, c framework.UIClient, ns, name string) (uiPipe
 // with three Pipelines in one namespace: podinfo, whose Bundle a gate holds
 // before prod (Blocked); a paused one (PAUSED); and one whose only step
 // failed (Degraded, 1 failed). The filter narrows the list by namespace and
-// name; the fleet bar counts what the API lists, and its Blocked, CI Red and
+// name; the fleet bar counts what the API lists, and its Blocked, Failed and
 // Healthy badges filter the list. Selecting a row opens that pipeline.
 //
 // It also checks the fleet board drawn from the same pipelines.
@@ -256,7 +256,7 @@ func TestUI_BrowserPipelineList(t *testing.T) {
 // TestUI_BrowserGates checks the gate and failure views of the pipeline page.
 // A Bundle that passed gate check-test into test and that the false gate
 // hold-prod holds before prod shows the blocking banner, whose toggle
-// highlights the holding gate in the DAG, and the Policy Gates panel with
+// highlights the holding gate in the DAG, and the gates panel with
 // each gate instance's state, expression and reason. A Bundle that failed in
 // its only environment shows the Promotion Errors panel, whose environment
 // link opens that step's details.
@@ -321,7 +321,7 @@ func TestUI_BrowserGates(t *testing.T) {
 // is made with `kardinal override` (the UI API's approve endpoint stays, see
 // UIAPI-APPROVE-01). The scripts the controller serves are the whole app
 // (no lazily loaded chunk) and never name the approve endpoint. In a
-// browser, while gate hold-prod holds a Bundle, neither the Policy Gates
+// browser, while gate hold-prod holds a Bundle, neither the gates
 // panel nor the gate's node details offers an approve or override control,
 // and the page sends no request but GETs and the node details' CEL check
 // (POST validate-cel, which writes nothing). Afterwards the gate instance has
@@ -577,7 +577,7 @@ func TestUI_BrowserActions(t *testing.T) {
 	})
 }
 
-// TestUI_BrowserCreateBundle checks the Create Bundle dialog. It asks for an
+// TestUI_BrowserCreateBundle checks the Ship a version dialog. It asks for an
 // image before it sends anything, shows the API's reason when the Bundle is
 // refused and stays open, and Cancel closes it; none of these creates a
 // Bundle. The Bundle created with an image, a commit SHA and an author shows

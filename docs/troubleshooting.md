@@ -181,7 +181,7 @@ Kubernetes 1.30 or later, [kro](installation.md#install-kro) with the Graph cont
 SCM token (for GitHub, `repo` scope; for GitLab, `api` scope; see
 [SCM providers](scm-providers.md)). The chart creates its RBAC; every permission is listed in
 [Security](guides/security.md#every-permission-the-chart-grants). Put the token in a Secret and
-name it in `github.secretRef` ([Install](installation.md#1-create-the-github-token-secret)).
+name it in `scm.secretRef` ([Install](installation.md#1-create-the-github-token-secret)).
 
 ### How many replicas should I run?
 

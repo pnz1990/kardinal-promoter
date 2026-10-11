@@ -19,6 +19,8 @@
 import { useState, useCallback } from 'react'
 import { api } from '../api/client'
 import { ConfirmDialog, actionErrorMessage } from './ConfirmDialog'
+import { Button } from '../ui/Button'
+import '../styles/ActionBar.css'
 
 // ─── ActionBar ────────────────────────────────────────────────────────────────
 
@@ -69,55 +71,34 @@ export function ActionBar({ pipelineName, namespace, paused, onRefresh }: Action
       <div
         role="toolbar"
         aria-label="Pipeline actions"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.5rem',
-          marginBottom: '0.75rem',
-          flexWrap: 'wrap',
-        }}
+        className="action-bar"
       >
         {paused ? (
-          <button
+          // While paused, Resume is the page's primary action.
+          <Button
+            variant="primary"
+            icon="play"
             onClick={() => { setActionError(undefined); setPendingAction('resume') }}
             aria-label="Resume pipeline"
-            style={{
-              padding: '0.35rem 0.85rem',
-              background: 'var(--color-success-bg)',
-              border: '1px solid var(--color-success)',
-              borderRadius: '6px',
-              color: 'var(--color-success)',
-              cursor: 'pointer',
-              fontSize: '0.8rem',
-              fontWeight: 600,
-            }}
           >
-            ▶ Resume
-          </button>
+            Resume
+          </Button>
         ) : (
-          <button
+          <Button
+            variant="secondary"
+            icon="pause"
             onClick={() => { setActionError(undefined); setPendingAction('pause') }}
             aria-label="Pause pipeline"
-            style={{
-              padding: '0.35rem 0.85rem',
-              background: 'var(--color-warning-bg)',
-              border: '1px solid var(--color-warning)',
-              borderRadius: '6px',
-              color: 'var(--color-warning)',
-              cursor: 'pointer',
-              fontSize: '0.8rem',
-              fontWeight: 600,
-            }}
           >
-            ⏸ Pause
-          </button>
+            Pause
+          </Button>
         )}
 
         {/* While a dialog is open the error shows inside it; one alert, not two. */}
         {actionError && pendingAction === null && (
           <span
             role="alert"
-            style={{ fontSize: '0.75rem', color: 'var(--color-error)', background: 'var(--color-error-bg)', border: '1px solid var(--color-error)', borderRadius: '4px', padding: '0.25rem 0.5rem' }}
+            className="action-bar__error"
           >
             {actionError}
           </span>

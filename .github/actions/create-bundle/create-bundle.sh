@@ -15,7 +15,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/parse.sh"
 
 PIPELINE="${INPUT_PIPELINE:-}"
-BUNDLE_TYPE="${INPUT_TYPE:-image}"
+BUNDLE_TYPE="${INPUT_TYPE:-}" # empty: the controller infers the type
 NAMESPACE="${INPUT_NAMESPACE:-default}"
 KARDINAL_URL="${INPUT_KARDINAL_URL:-}"
 KARDINAL_URL="${KARDINAL_URL%/}"
