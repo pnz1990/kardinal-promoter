@@ -170,7 +170,7 @@ instead, which this check does not see. */ -}}
 Each Secret the controller container reads with a secretKeyRef must exist,
 with its key, in the release namespace. Else the Pod waits in
 CreateContainerConfigError and `helm install --wait` times out without saying
-why (#1581). Only when Helm talks to a cluster (install, upgrade,
+why. Only when Helm talks to a cluster (install, upgrade,
 --dry-run=server): `helm template` and client-side dry runs have no cluster,
 lookup returns nothing for kube-system too, and the check is skipped. The
 chart's own <fullname>-github-token (github.token) is not checked.
