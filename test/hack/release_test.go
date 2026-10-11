@@ -622,7 +622,7 @@ func TestReleaseBody(t *testing.T) {
 	t.Run("notes, then install", func(t *testing.T) {
 		// Big, with code blocks, "##" lines and characters a template
 		// could eat (|, &, \, @VERSION@-like text).
-		notes := "### Highlights\n\n- a | b & c \\ d\n\n```bash\n## not a heading\nkubectl apply -f x\n```\n" +
+		notes := "### Highlights\n\n- a | b & c \\ d, and a literal @VERSION@ and @CHART_VERSION@\n\n```bash\n## not a heading\nkubectl apply -f x\n```\n" +
 			strings.Repeat("- **item** — a long line of notes text\n", 3000)
 		out, body, got, err := run(t, &notes)
 		require.NoError(t, err, out)
@@ -634,8 +634,8 @@ func TestReleaseBody(t *testing.T) {
 		assert.Contains(t, install, "--version 0.11.0")
 		assert.Contains(t, install, "| kubectl apply --server-side --force-conflicts -f -")
 		assert.Contains(t, install, "releases/download/v0.11.0/kardinal-linux-amd64")
-		assert.NotContains(t, body, "@VERSION@")
-		assert.NotContains(t, body, "@CHART_VERSION@")
+		assert.NotContains(t, install, "@VERSION@", "the template's placeholders are filled")
+		assert.NotContains(t, install, "@CHART_VERSION@")
 		assert.NotContains(t, body, "@NOTES@")
 		assert.NotContains(t, body, "${{")
 	})

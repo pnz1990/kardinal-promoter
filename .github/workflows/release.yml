@@ -396,11 +396,14 @@ jobs:
           | `ghcr.io/pnz1990/kardinal-promoter/controller` | `@VERSION@` | linux/amd64, linux/arm64 |
           | `ghcr.io/pnz1990/kardinal-promoter/render` | `@VERSION@` | linux/amd64, linux/arm64 |
           BODY_EOF
+          # The placeholders are filled in the template only; the notes go in
+          # between unchanged.
+          fill() { sed -e "s|@VERSION@|${VERSION}|g" -e "s|@CHART_VERSION@|${CHART_VERSION}|g"; }
           {
-            sed -n '1,/^@NOTES@$/p' release-body.template.md | sed '$d'
+            sed -n '1,/^@NOTES@$/p' release-body.template.md | sed '$d' | fill
             cat "$NOTES_FILE"
-            sed -n '/^@NOTES@$/,$p' release-body.template.md | sed '1d'
-          } | sed -e "s|@VERSION@|${VERSION}|g" -e "s|@CHART_VERSION@|${CHART_VERSION}|g" > release-body.md
+            sed -n '/^@NOTES@$/,$p' release-body.template.md | sed '1d' | fill
+          } > release-body.md
           # The notes between the title and the install section must not be
           # empty in the finished body.
           NOTES_IN_BODY=$(awk '/^## kardinal-promoter /{f=1; next} /^### Install$/{exit} f' release-body.md)
