@@ -14,6 +14,8 @@
 package scm_test
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -212,4 +214,32 @@ func TestRepoFromURL_ParseErrorRedacted(t *testing.T) {
 		assert.NotContains(t, err.Error(), "SECRET")
 		assert.Contains(t, err.Error(), "parse repository URL")
 	}
+}
+
+// TestRedactURL_HardCases (#1721 QA): an "@" in the password, a URL that does
+// not parse because of whitespace, and tokens in the query are all removed;
+// RedactErr keeps errors.Is working.
+func TestRedactURL_HardCases(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://u:p@ss@SECRET@github.com/o/r":                "https://github.com/o/r",
+		"https://u:SECRET word@github.com/o/r":                "https://github.com/o/r",
+		"https://github.com/o/r?access_token=SECRET&x=1":      "https://github.com/o/r?access_token=REDACTED&x=1",
+		"https://gitlab.example/o/r.git?private_token=SECRET": "https://gitlab.example/o/r.git?private_token=REDACTED",
+	} {
+		got := scm.RedactURL(in)
+		assert.Equal(t, want, got, in)
+		assert.NotContains(t, got, "SECRET", in)
+	}
+	for _, in := range []string{
+		`Get "https://u:p@ss@SECRET@host/o": refused`,
+		`fetch https://host/o?token=SECRET failed`,
+		`call https://host/api?PASSWORD=SECRET&a=b`,
+	} {
+		assert.NotContains(t, scm.RedactText(in), "SECRET", in)
+	}
+	base := context.DeadlineExceeded
+	err := scm.RedactErr(fmt.Errorf(`Get "https://SECRET@h/x": %w`, base))
+	assert.NotContains(t, err.Error(), "SECRET")
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.NoError(t, scm.RedactErr(nil))
 }

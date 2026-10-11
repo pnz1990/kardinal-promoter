@@ -187,6 +187,7 @@ func (w *HelmWatcher) watchIndex(ctx context.Context, filters *compiledFilters) 
 		client = credentialRedirects(client, false)
 	}
 	resp, err := client.Do(req)
+	err = scm.RedactErr(err) // a *url.Error quotes the URL
 	if err != nil {
 		return "", "", fmt.Errorf("GET index.yaml: %w", err)
 	}

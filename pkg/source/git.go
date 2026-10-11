@@ -190,9 +190,17 @@ func (w *GitWatcher) fetchLatestSHA(ctx context.Context, branch string) (string,
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, refsURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
+		return "", fmt.Errorf("build request: %s", scm.RedactText(err.Error()))
 	}
 	req.Header.Set("User-Agent", userAgent)
+	// Credentials in the URL itself are sent as basic auth, not as part of
+	// the URL: net/http errors quote the request URL, user name included.
+	if u := req.URL.User; u != nil {
+		if pass, ok := u.Password(); ok || u.Username() != "" {
+			req.SetBasicAuth(u.Username(), pass)
+		}
+		req.URL.User = nil
+	}
 	w.setHTTPAuth(req)
 
 	httpClient := w.httpClient
@@ -204,6 +212,7 @@ func (w *GitWatcher) fetchLatestSHA(ctx context.Context, branch string) (string,
 	}
 
 	resp, err := httpClient.Do(req)
+	err = scm.RedactErr(err) // a *url.Error quotes the URL
 	if err != nil {
 		return "", fmt.Errorf("GET info/refs: %w", err)
 	}

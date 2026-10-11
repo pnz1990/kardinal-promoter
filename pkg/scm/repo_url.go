@@ -27,8 +27,21 @@ import (
 // scpLikeURL matches the scp-like git remote syntax "user@host:path".
 var scpLikeURL = regexp.MustCompile(`^([A-Za-z0-9._~-]+)@([A-Za-z0-9.-]+):(.+)$`)
 
-// userinfoInURL matches the userinfo part of a URL-looking string ("//user:pass@").
-var userinfoInURL = regexp.MustCompile(`//[^/@\s]+@`)
+// userinfoInURL matches the userinfo part of a URL-looking string
+// ("//user:pass@"), up to the last "@" before the path, so a password with an
+// "@" in it is removed whole.
+var userinfoInURL = regexp.MustCompile(`//[^/\s]*@`)
+
+// userinfoLoose is userinfoInURL across whitespace, for a URL that does not
+// parse (a password with a space in it): everything from "//" to the last "@"
+// before the next "/".
+var userinfoLoose = regexp.MustCompile(`//[^/]*@`)
+
+// secretQueryParams are query parameters that carry credentials in URLs.
+var secretQueryParams = []string{"access_token", "token", "private_token", "password"}
+
+// secretQueryInText matches one of secretQueryParams with its value in text.
+var secretQueryInText = regexp.MustCompile(`(?i)([?&](?:access_token|token|private_token|password)=)[^&\s#"']*`)
 
 // splitRemoteURL returns the host and the path (without a leading slash) of a
 // git remote URL. It accepts https://, http://, ssh://, git:// and the
@@ -214,20 +227,56 @@ func ParsePRURL(prURL string) (repo string, number int, err error) {
 // URLs, such as an error message, use RedactText.
 func RedactURL(raw string) string {
 	if strings.Contains(raw, "://") {
-		if u, err := url.Parse(raw); err == nil {
-			u.User = nil
-			return u.String()
+		u, err := url.Parse(raw)
+		if err != nil {
+			return redactQuery(userinfoLoose.ReplaceAllString(raw, "//"))
 		}
+		u.User = nil
+		if u.RawQuery != "" {
+			q, changed := u.Query(), false
+			for k := range q {
+				for _, name := range secretQueryParams {
+					if strings.EqualFold(k, name) {
+						q[k], changed = []string{"REDACTED"}, true
+					}
+				}
+			}
+			if changed {
+				u.RawQuery = q.Encode()
+			}
+		}
+		return u.String()
 	}
 	return RedactText(raw)
 }
+
+// redactQuery replaces the values of secretQueryParams in s.
+func redactQuery(s string) string {
+	return secretQueryInText.ReplaceAllString(s, "${1}REDACTED")
+}
+
+// RedactErr is err with RedactText applied to its message. errors.Is and
+// errors.As still see err, so a timeout or a context error is still one.
+// Nil stays nil. Use it on an HTTP client's error: a *url.Error quotes the
+// request URL, userinfo and query included.
+func RedactErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	return redactedError{err}
+}
+
+type redactedError struct{ err error }
+
+func (e redactedError) Error() string { return RedactText(e.err.Error()) }
+func (e redactedError) Unwrap() error { return e.err }
 
 // RedactText removes the userinfo of every URL in s, a text such as an error
 // message or an HTTP response body. It never parses s as a URL: url.Parse
 // takes many texts for a relative URL and returns them percent-encoded, with
 // the credentials kept.
 func RedactText(s string) string {
-	return userinfoInURL.ReplaceAllString(s, "//")
+	return redactQuery(userinfoInURL.ReplaceAllString(s, "//"))
 }
 
 // webhookSignatureHeaders lists the webhook authentication headers of the
