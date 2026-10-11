@@ -29,7 +29,8 @@
   padding: var(--k-space-1) 0;
   border: 0;
   background: none;
-  color: var(--k-thread-text);
+  color: var(--k-ink);
+  font-family: var(--k-font-display);
   font-size: var(--k-text-sm);
   font-weight: var(--k-weight-semibold);
   cursor: pointer;

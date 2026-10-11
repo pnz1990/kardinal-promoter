@@ -2,13 +2,13 @@
 // Licensed under the Apache License, Version 2.0
 
 // Button.tsx — buttons. A button's label is the action's verb, the same in its dialog and
-// toast. primary is ink-filled; destructive (Roll back, Reject) is a garnet outline; red is
-// never a button colour (red is the thread).
+// toast. primary is ink-filled, secondary a quiet outline, ghost borderless, destructive (Roll
+// back, Reject) a garnet outline. Cardinal red is never a button colour: red is the thread.
 import { forwardRef, type ButtonHTMLAttributes } from 'react'
 import { Icon, type IconName } from './Icon'
 import { cx } from './cx'
 
-export type ButtonVariant = 'primary' | 'secondary' | 'quiet' | 'destructive'
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'destructive'
 export type ButtonSize = 'sm' | 'md' | 'lg'
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
