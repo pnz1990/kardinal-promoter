@@ -26,17 +26,24 @@ DEMO_REPO=https://github.com/<your-user>/kardinal-demo
 # 1. Install kro (from a kardinal-promoter checkout)
 bash hack/install-kro.sh
 
-# 2. Store the token in a Secret, then install with demo mode
+# 2. Store the token in two Secrets: the controller's (never labelled, no
+#    Pipeline may use it) and the demo Pipeline's own git Secret, labelled so
+#    a Pipeline may name it. Then install with demo mode.
 kubectl create namespace kardinal-system
-kubectl create secret generic github-token \
+kubectl create secret generic scm-token \
   --namespace kardinal-system \
   --from-literal=token=$GITHUB_PAT
+kubectl create secret generic demo-git-token \
+  --namespace kardinal-system \
+  --from-literal=token=$GITHUB_PAT
+kubectl label secret demo-git-token --namespace kardinal-system kardinal.io/referenceable=true
 
 helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
   --namespace kardinal-system \
   --set demo.enabled=true \
   --set demo.git.url=$DEMO_REPO \
-  --set github.secretRef.name=github-token
+  --set scm.secretRef.name=scm-token \
+  --set demo.secretRef.name=demo-git-token
 
 # 3. Check the demo Pipeline (it lives in the release namespace)
 kardinal get pipelines -n kardinal-system
@@ -120,14 +127,14 @@ kubectl create secret generic github-token \
 
 helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
   --namespace kardinal-system --create-namespace \
-  --set github.secretRef.name=github-token
+  --set scm.secretRef.name=github-token
 
 # Option B: pass the token directly (development/testing only)
 # The chart stores it in Secret kardinal-promoter-github-token, but the token
 # also stays in the Helm release history.
 helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
   --namespace kardinal-system --create-namespace \
-  --set github.token=$GITHUB_PAT
+  --set scm.token=$GITHUB_PAT
 ```
 
 Verify the installation:

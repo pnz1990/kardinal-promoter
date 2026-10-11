@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,10 +19,17 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
@@ -462,4 +470,98 @@ func TestWaitingForMerge_OwnMergeIsNoRebuild(t *testing.T) {
 	assert.Contains(t, got.Status.Message, "already has this change")
 	assert.Contains(t, got.Status.Message, "no longer in the base branch history (force-pushed)")
 	assert.NotEqual(t, "true", got.Status.Outputs["noChanges"])
+}
+
+// readCountingGit is the go-git client, counting every remote read (ls-remote,
+// history and graph reads) per URL.
+type readCountingGit struct {
+	*scm.GoGitClient
+	mu    sync.Mutex
+	reads map[string]int
+}
+
+func (g *readCountingGit) count(url string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.reads == nil {
+		g.reads = map[string]int{}
+	}
+	g.reads[url]++
+}
+
+func (g *readCountingGit) RemoteHeads(ctx context.Context, url string, auth scm.GitAuth) (map[string]string, error) {
+	g.count(url)
+	return g.GoGitClient.RemoteHeads(ctx, url, auth)
+}
+
+func (g *readCountingGit) BranchGraph(ctx context.Context, url, branch string, auth scm.GitAuth, maxCommits int) (string, map[string]scm.GraphCommit, error) {
+	g.count(url)
+	return g.GoGitClient.BranchGraph(ctx, url, branch, auth, maxCommits)
+}
+
+// TestWaitingForMerge_ControllerSecretRefused (#1725 QA): a step whose PR
+// waits for its merge refreshes the PR branch from the live Pipeline. When the
+// author then points git.secretRef at the controller's own SCM token Secret
+// and git.url at a host of their own, no remote read is made with it (the
+// token would go out with the ls-remote), and the Pipeline is
+// Ready=False/ValidationFailed.
+//
+// Covers CHART-SCM-ALIAS-02.
+func TestWaitingForMerge_ControllerSecretRefused(t *testing.T) {
+	remote := newGitRemote(t)
+	pl, b := makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo")
+	pl.Spec.Git.URL = remote.url()
+	pl.Spec.Environments[1].Path = "environments/prod"
+	b.Spec.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/test/app", Tag: "1.2.3"}}
+	step := builtStep(t, pl, b, "prod")
+	step.Status.State = "Promoting"
+	controller := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter-github-token", Namespace: "default"},
+		Data: map[string][]byte{"token": []byte("controller-token")}}
+	c := newClient(t, step, pl, b, controller, openPRStatus(step.Spec.PRStatusRef, "", 0))
+	m := &mockSCM{open: true, prURL: "https://github.com/test/repo/pull/5", prNumber: 5}
+	git := &readCountingGit{GoGitClient: scm.NewGoGitClient()}
+	own := &scm.ControllerTokenSecret{Namespace: "default", Name: "kardinal-promoter-github-token"}
+	now := time.Now()
+	r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: git, ControllerSecret: own,
+		NowFn:     func() time.Time { return now },
+		WorkDirFn: func(_, _ string) string { return filepath.Join(t.TempDir(), "w") }}
+	reconcileStep(t, r, step.Name) // records the step list
+	reconcileStep(t, r, step.Name) // runs it, opens the PR
+	require.Equal(t, "WaitingForMerge", getStep(t, c, step.Name).Status.State)
+
+	// The author repoints the Pipeline.
+	attacker := newGitRemote(t)
+	var live v1alpha1.Pipeline
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(pl), &live))
+	live.Spec.Git.URL = attacker.url()
+	live.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "kardinal-promoter-github-token"}
+	require.NoError(t, c.Update(context.Background(), &live))
+
+	for range 3 {
+		now = now.Add(31 * time.Second)
+		reconcileStep(t, r, step.Name)
+	}
+	git.mu.Lock()
+	reads := git.reads[attacker.url()]
+	git.mu.Unlock()
+	assert.Zero(t, reads, "no remote read of the author's host with the controller's token")
+
+	// The Pipeline reconciler, on a client with the indexes it registers,
+	// reports the live Pipeline.
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(pl), &live))
+	live.ResourceVersion = ""
+	pc := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(&live, controller).
+		WithStatusSubresource(&v1alpha1.Pipeline{}).
+		WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
+		WithIndex(&v1alpha1.PromotionStep{}, "spec.pipelineName", func(o client.Object) []string {
+			return []string{o.(*v1alpha1.PromotionStep).Spec.PipelineName}
+		}).Build()
+	pr := &pipelinereconciler.Reconciler{Client: pc, ControllerSecret: own}
+	_, err := pr.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pl)})
+	require.NoError(t, err)
+	require.NoError(t, pc.Get(context.Background(), client.ObjectKeyFromObject(pl), &live))
+	ready := meta.FindStatusCondition(live.Status.Conditions, "Ready")
+	require.NotNil(t, ready)
+	assert.Equal(t, "ValidationFailed", ready.Reason)
+	assert.Contains(t, ready.Message, "is the controller's own SCM token Secret")
 }

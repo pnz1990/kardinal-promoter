@@ -25,13 +25,13 @@ const failedEnv = need('KARDINAL_UI_FAILED_ENV')
 const failedMessage = need('KARDINAL_UI_FAILED_MESSAGE')
 
 /** The banner about gates holding the bundle (the page has other alerts). */
-const blockedBanner = (page: Page) => page.getByRole('alert').filter({ hasText: /PolicyGates? blocking promotion/ })
+const blockedBanner = (page: Page) => page.getByRole('alert').filter({ hasText: /gates? blocking/ })
 
 test('a gate that holds the bundle shows in the banner, the DAG and the Policy Gates panel', async ({ page }) => {
   await openPipeline(page, base, ns)
 
   const banner = blockedBanner(page)
-  await expect(banner).toContainText('1 PolicyGate blocking promotion')
+  await expect(banner).toContainText('1 gate blocking ')
   const highlight = banner.getByRole('button')
   await expect(highlight).toHaveText('Show blocked')
   await expect(highlight).toHaveAttribute('aria-pressed', 'false')
@@ -48,6 +48,8 @@ test('a gate that holds the bundle shows in the banner, the DAG and the Policy G
   await expect(highlight).toHaveText('Show blocked')
   await expect(dagNode(page, holdGate)).not.toHaveClass(/dag-node--highlighted/)
 
+  // The version's gates are on the Activity tab.
+  await page.getByRole('tab', { name: /^Activity/ }).click()
   // The panel opens by itself while a gate holds the bundle.
   const toggle = page.getByRole('button', { name: /Policy Gates \(2\)/ })
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
