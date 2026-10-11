@@ -69,8 +69,14 @@ returns `{"user": {"username": "alice", "groups": [...]}, "results": [{"allowed"
 "grantedBy": "approver or admin"}, {"allowed": false, "grantedBy": "promoter or admin"}]}`. In
 TokenReview mode each check is a SubjectAccessReview for the verified caller, cached for 30
 seconds like every other check, and a denial is `allowed: false`, not a `403`. Without TokenReview
-every check is allowed and no `user` is named (the UI then cannot record an approval). At most 32
-checks per request.
+every check is allowed and no `user` is named, except `create approvals`: an approval names who
+decided, so it answers `allowed: false` with a `reason`. It answers only for the UI's actions
+(`create bundles`, `create approvals`, `update` on `policygates/override`, `pipelines/pause`,
+`pipelines/hold` and `bundles/reject`), in a namespace that is a DNS-1123 label (the
+`--watch-namespace` one when it is set), for names that are DNS-1123 subdomains: anything else is
+a `400`. A request holds at most 32 checks in 16 KiB, and the same check twice is reviewed once.
+SubjectAccessReviews are limited to 300 a minute per user (3,000 for everyone), counted after
+the cache, as TokenReviews are per client address; past it the answer is `429`.
 
 ## API tokens for automation: ServiceAccount tokens
 

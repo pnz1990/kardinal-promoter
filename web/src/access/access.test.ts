@@ -64,4 +64,20 @@ describe('useAccess (U7)', () => {
     const { result } = renderHook(() => useAccess('team', [pause]))
     await waitFor(() => expect(result.current.identity).toBeNull())
   })
+
+  it('a new token forgets every answer and who the caller was, also one still in flight (QA #1748)', async () => {
+    const { result } = renderHook(() => useAccess('team', [pause]))
+    await waitFor(() => expect(result.current.identity).toEqual({ username: 'alice', groups: ['release-managers'] }))
+    let answer!: (v: unknown) => void
+    api.checkAccess.mockImplementationOnce(() => new Promise(r => { answer = r }))
+    clock += ACCESS_TTL_MS + 1
+    renderHook(() => useAccess('team', [ship]))
+    await waitFor(() => expect(answer).toBeDefined())
+    act(() => { window.dispatchEvent(new Event('kardinal:token-change')) })
+    expect(result.current.identity).toBeUndefined()
+    expect(result.current.can(pause)).toEqual({ allowed: true, known: false })
+    await act(async () => { answer({ user: { username: 'mallory', groups: [] }, results: [{ allowed: true }] }) })
+    expect(result.current.identity).toBeUndefined()
+  })
 })
+

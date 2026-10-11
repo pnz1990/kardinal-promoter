@@ -309,10 +309,13 @@ const server = http.createServer(async (req, res) => {
           'update bundles/reject': 'promoter, approver or admin', 'update policygates/override': 'approver or admin',
           'create bundles': 'promoter or admin', 'create approvals': 'approver or admin',
         }
-        const results = (body.checks ?? []).map(c => ({
-          allowed: !viewer || c.verb === 'get' || c.verb === 'list',
-          grantedBy: roles[`${c.verb} ${c.resource}${c.subresource ? `/${c.subresource}` : ''}`],
-        }))
+        const results = (body.checks ?? []).map(c => {
+          const approving = c.verb === 'create' && c.resource === 'approvals'
+          // Without TokenReview an approval cannot name who decided (ui_access.go).
+          if (open && approving) return { allowed: false, grantedBy: roles['create approvals'],
+            reason: 'approving needs sign-in with your Kubernetes identity (the UI\'s TokenReview mode); kardinal approve works without it' }
+          return { allowed: !viewer || c.verb === 'get' || c.verb === 'list', grantedBy: roles[`${c.verb} ${c.resource}${c.subresource ? `/${c.subresource}` : ''}`] }
+        })
         const user = open ? undefined : viewer ? { username: 'victor', groups: ['viewers'] } : { username: 'carol', groups: ['release-managers'] }
         return json(res, { ...(user ? { user } : {}), results })
       }

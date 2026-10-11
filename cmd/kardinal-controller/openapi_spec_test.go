@@ -140,9 +140,12 @@ var apiRoutes = []apiRoute{
 		request: uiPipelineActionRequest{}, status: 200, response: uiMessageResponse{}, errors: []int{400, 401, 403, 404, 500}, security: "uiAuth"},
 	{method: "POST", path: "/api/v1/ui/access", server: serverUI, tag: "UI", id: "checkAccess",
 		summary: "Which of the given actions the caller may take, and which role grants each",
-		desc: "In TokenReview mode each check is a SubjectAccessReview for the verified caller, cached for 30s; a denial is an answer " +
-			"(allowed: false), not a 403. Without TokenReview every check is allowed and no user is named. At most 32 checks.",
-		request: uiAccessRequest{}, status: 200, response: uiAccessResponse{}, errors: []int{400, 401, 503}, security: "uiAuth"},
+		desc: "Answers only for the UI's actions (create bundles, create approvals, update policygates/override, pipelines/pause, " +
+			"pipelines/hold, bundles/reject), in a DNS-1123 namespace (the --watch-namespace one when set) with DNS-1123 names; at most " +
+			"32 checks in 16 KiB, each distinct check reviewed once. In TokenReview mode each check is a SubjectAccessReview for the " +
+			"verified caller, cached for 30s and limited per user (429 past it); a denial is an answer (allowed: false), not a 403. " +
+			"Without TokenReview every check is allowed and no user is named, except create approvals (an approval names who decided).",
+		request: uiAccessRequest{}, status: 200, response: uiAccessResponse{}, errors: []int{400, 401, 429, 503}, security: "uiAuth"},
 	{method: "POST", path: "/api/v1/ui/validate-cel", server: serverUI, tag: "UI", id: "validateCEL",
 		summary: "Compile a PolicyGate CEL expression",
 		request: uiValidateCELRequest{}, status: 200, response: uiValidateCELResponse{}, errors: []int{400, 401}, security: "uiAuth"},

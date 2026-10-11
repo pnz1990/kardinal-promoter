@@ -597,14 +597,15 @@ export function App() {
 
   // U7: what the person at the UI may do here (POST /access, cached), and how many
   // approvals wait on them.
-  const approvalNs = gates.find(g => g.approval && !g.template)?.namespace
+  // Every namespace with an approval gate: approving there needs create approvals.
+  const approvalNamespaces = [...new Set(gates.filter(g => g.approval && !g.template).map(g => g.namespace))]
   const shipCheck = actionCheck('ship', {})!
   const pauseCheck = actionCheck('pause', { pipeline: activePipeline?.name })!
   const access = useAccessIn([
-    ...(approvalNs ? [[approvalNs, actionCheck('approve', {})!] as [string, AccessCheck]] : []),
+    ...approvalNamespaces.map(ns => [ns, actionCheck('approve', {})!] as [string, AccessCheck]),
     ...(activePipeline ? [[activePipeline.namespace, shipCheck], [activePipeline.namespace, pauseCheck]] as [string, AccessCheck][] : []),
   ])
-  const waitingOnMe = approvalsWaiting(gates, access.identity)
+  const waitingOnMe = approvalsWaiting(gates, access.identity, ns => access.can(ns, actionCheck('approve', {})!))
   const shipRestricted = activePipeline ? restriction('ship', access.can(activePipeline.namespace, shipCheck), access.identity) : undefined
   const pauseRestricted = activePipeline
     ? restriction(activePipeline.paused ? 'resume' : 'pause', access.can(activePipeline.namespace, pauseCheck), access.identity) : undefined

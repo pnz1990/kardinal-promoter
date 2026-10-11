@@ -8,7 +8,7 @@
  */
 
 [data-changed="true"] {
-  animation: k-change-halo var(--k-dur-slow) var(--k-ease-out) 2;
+  animation: k-change-halo var(--k-dur-slow) var(--k-ease-out) 1;
 }
 
 @keyframes k-change-halo {

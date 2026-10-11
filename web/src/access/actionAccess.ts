@@ -63,6 +63,7 @@ export function restriction(action: UIAction, perm: Permission | undefined, iden
     return `${DOING[action]} from the UI names who decided, so it needs sign-in with your Kubernetes token (TokenReview mode). kardinal approve works without it.`
   }
   if (perm && perm.known && !perm.allowed) {
+    if (perm.reason) return `${perm.reason.charAt(0).toUpperCase()}${perm.reason.slice(1)}.`
     return `${DOING[action]} needs the ${perm.grantedBy ?? 'matching'} role.`
   }
   if (decides && identity && gate && !mayDecide(gate, identity)) {

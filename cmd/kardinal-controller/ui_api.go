@@ -534,6 +534,8 @@ type uiAPIServer struct {
 	// generation: the list is polled every few seconds and a Pipeline's
 	// ordering changes only with its spec.
 	upstreams upstreamCache
+	// scopeNamespace is --watch-namespace: POST /access answers only for it when set.
+	scopeNamespace string
 }
 
 // upstreamCache memoizes graph.AllEnvironmentUpstreams per Pipeline UID and

@@ -25,12 +25,14 @@ export interface Permission {
   known: boolean
   /** The chart roles that grant it ("approver or admin"). */
   grantedBy?: string
+  /** Why it is not allowed, when that is not a missing role (from the controller). */
+  reason?: string
 }
 
 /** Who the caller is: a user when TokenReview identified them, null when the UI API does not identify callers. */
 export type Identity = { username: string; groups: string[] } | null
 
-interface Entry { at: number; allowed: boolean; grantedBy?: string }
+interface Entry { at: number; allowed: boolean; grantedBy?: string; reason?: string }
 
 const answers = new Map<string, Entry>()
 const queued = new Map<string, Map<string, AccessCheck>>()
@@ -39,6 +41,8 @@ let identity: Identity | undefined
 let version = 0
 const listeners = new Set<() => void>()
 let flushScheduled = false
+// Bumped when the token changes: an answer that arrives for an older token is dropped.
+let generation = 0
 let now = () => Date.now()
 
 function emit() {
@@ -73,6 +77,7 @@ function flush() {
   flushScheduled = false
   const batches = [...queued.entries()]
   queued.clear()
+  const gen = generation
   for (const [namespace, q] of batches) {
     const entries = [...q.entries()]
     for (let i = 0; i < entries.length; i += MAX_CHECKS) {
@@ -81,14 +86,16 @@ function flush() {
       void Promise.resolve()
         .then(() => api.checkAccess(namespace, chunk.map(([, c]) => c)))
         .then((res: AccessResponse) => {
+          if (gen !== generation) return
           const at = now()
           chunk.forEach(([k], j) => {
             const r = res.results?.[j]
-            answers.set(k, { at, allowed: r ? r.allowed : true, grantedBy: r?.grantedBy })
+            answers.set(k, { at, allowed: r ? r.allowed : true, grantedBy: r?.grantedBy, reason: r?.reason })
           })
           identity = res.user ? { username: res.user.username, groups: res.user.groups ?? [] } : null
         })
         .catch(() => {
+          if (gen !== generation) return
           // An older controller (no /access) or a failed review: offer the
           // action and let the controller decide, and ask again after the TTL.
           const at = now()
@@ -111,7 +118,7 @@ function subscribe(l: () => void) {
 export function permission(namespace: string, c: AccessCheck): Permission {
   const e = answers.get(accessKey(namespace, c))
   if (!e) return { allowed: true, known: false }
-  return { allowed: e.allowed, known: true, grantedBy: e.grantedBy }
+  return { allowed: e.allowed, known: true, grantedBy: e.grantedBy, reason: e.reason }
 }
 
 /**
@@ -145,13 +152,23 @@ export function useAccess(namespace: string | undefined, checks: AccessCheck[]):
   }
 }
 
-/** For tests: forget every answer and set the clock. */
-export function resetAccessForTests(clock?: () => number) {
+/** resetAccess forgets every answer and who the caller is: the token changed, so they are
+ *  another user's. Requests in flight are dropped when they answer. */
+export function resetAccess() {
+  generation++
   answers.clear()
   queued.clear()
   inflight.clear()
   identity = undefined
   flushScheduled = false
-  now = clock ?? (() => Date.now())
   emit()
+}
+// The token changed (api/client.ts sends this event; its name is repeated here so a test
+// that mocks the client keeps it).
+if (typeof window !== 'undefined') window.addEventListener('kardinal:token-change', resetAccess)
+
+/** For tests: forget every answer and set the clock. */
+export function resetAccessForTests(clock?: () => number) {
+  resetAccess()
+  now = clock ?? (() => Date.now())
 }

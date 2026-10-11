@@ -365,6 +365,8 @@ export interface AccessResult {
   allowed: boolean
   /** The chart roles that grant it ("approver or admin"). */
   grantedBy?: string
+  /** Why it is not allowed, when that is not a missing role (an approval without TokenReview). */
+  reason?: string
 }
 
 /** POST /access: who the caller is (TokenReview mode only) and what they may do. */

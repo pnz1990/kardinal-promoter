@@ -121,7 +121,8 @@ func newReviewers(cfg *rest.Config, opts reviewOptions) (uiauth.TokenReviewer, u
 	}
 	limited := uiauth.NewRateLimitedTokenReviewer(tokens, uiauth.DefaultReviewsPerClientPerMinute, uiauth.DefaultReviewsPerMinute)
 	return uiauth.NewCachedTokenReviewer(limited, uiauth.DefaultCacheTTL),
-		uiauth.NewCachedAccessReviewer(access, uiauth.DefaultCacheTTL), nil
+		uiauth.NewCachedAccessReviewer(uiauth.NewRateLimitedAccessReviewer(access,
+			uiauth.DefaultAccessReviewsPerUserPerMinute, uiauth.DefaultAccessReviewsPerMinute), uiauth.DefaultCacheTTL), nil
 }
 
 // newUIHandler builds the UI server handler: the /api/v1/ui/* API, the
@@ -138,7 +139,9 @@ func newUIHandler(k8s client.Client, assets fs.FS, auth uiAuthConfig, corsAllowe
 		apiClient = uiauth.NewAuthorizingClient(k8s, auth.access, auth.scopeNamespace)
 	}
 	uiMux := http.NewServeMux()
-	newUIAPIServer(apiClient, log).RegisterRoutes(uiMux)
+	apiServer := newUIAPIServer(apiClient, log)
+	apiServer.scopeNamespace = auth.scopeNamespace
+	apiServer.RegisterRoutes(uiMux)
 	if assets != nil {
 		uiMux.Handle("/ui/", http.StripPrefix("/ui/", http.FileServer(http.FS(noDirListingFS{assets}))))
 	}

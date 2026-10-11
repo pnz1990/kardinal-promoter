@@ -5,6 +5,7 @@ package uiauth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -179,8 +180,7 @@ func (c *AuthorizingClient) authorize(ctx context.Context, verb string, obj runt
 	}
 	allowed, reason, err := c.access.Allowed(ctx, user, attrs)
 	if err != nil {
-		return fail(denial{code: 503, msg: "auth unavailable"},
-			apierrors.NewServiceUnavailable(err.Error()))
+		return fail(reviewFailure(err), apierrors.NewServiceUnavailable(err.Error()))
 	}
 	if !allowed {
 		where := "all namespaces"
@@ -335,7 +335,7 @@ func (c *AuthorizingClient) AuthorizeAction(ctx context.Context, verb, group, re
 		Namespace: namespace, Verb: verb, Group: group, Resource: resource, Subresource: subresource, Name: name,
 	})
 	if err != nil {
-		return fail(denial{code: 503, msg: "auth unavailable"}, apierrors.NewServiceUnavailable(err.Error()))
+		return fail(reviewFailure(err), apierrors.NewServiceUnavailable(err.Error()))
 	}
 	if !allowed {
 		msg := fmt.Sprintf("forbidden: user %q cannot %s %s/%s.%s %q in namespace %s",
@@ -462,4 +462,14 @@ func (refusedSubResource) Patch(context.Context, client.Object, client.Patch, ..
 }
 func (refusedSubResource) Apply(context.Context, runtime.ApplyConfiguration, ...client.SubResourceApplyOption) error {
 	return errNotSupported
+}
+
+// reviewFailure is the answer to a request whose SubjectAccessReview could
+// not be made: 429 when the user used their reviews for this minute, else
+// 503 (the review API fails closed).
+func reviewFailure(err error) denial {
+	if errors.Is(err, ErrAccessRateLimited) {
+		return denial{code: 429, msg: "too many authorization checks for this user; try again in a minute"}
+	}
+	return denial{code: 503, msg: "auth unavailable"}
 }

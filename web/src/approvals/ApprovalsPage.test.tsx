@@ -63,20 +63,34 @@ describe('ApprovalsPage (U7)', () => {
     expect(onChanged).toHaveBeenCalledOnce()
   })
 
-  it('disables Approve and Decline with the reason when the role is missing, or nobody is signed in', async () => {
+  it('an approval the caller lacks the role for waits on someone else, with the role (QA #1748)', async () => {
     answer({ username: 'alice', groups: ['release-managers'] }, false)
-    const { unmount } = render(<ApprovalsPage gates={[gates[0]]} pipelines={pipelines} now={now} />)
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' })).toHaveAttribute('aria-disabled', 'true'))
-    expect(screen.getByRole('button', { name: 'Approve' })).toHaveAccessibleDescription('Approving needs the approver or admin role.')
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Approve' }))
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    unmount()
+    render(<ApprovalsPage gates={[gates[0]]} pipelines={pipelines} now={now} />)
+    expect(await screen.findByRole('heading', { name: 'Nothing waits on you' })).toBeInTheDocument()
+    expect(screen.getByText('1 waiting on someone else')).toBeInTheDocument()
+    expect(screen.getByText('Approving needs the approver or admin role.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
+  })
 
-    resetAccessForTests()
-    answer(undefined)
+  it('without sign-in it lists the approvals, says it cannot record one, and keeps the buttons inert', async () => {
+    api.checkAccess.mockImplementation(async (_ns: string, checks: AccessCheck[]) => ({
+      results: checks.map(() => ({ allowed: false, reason: 'approving needs sign-in with your Kubernetes identity' })),
+    }))
     render(<ApprovalsPage gates={[gates[0]]} pipelines={pipelines} now={now} />)
     expect(await screen.findByText(/The UI does not know who you are/)).toBeInTheDocument()
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Decline' })).toHaveAttribute('aria-disabled', 'true'))
+    expect(screen.getByRole('heading', { name: '1 waiting for approval' })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' })).toHaveAttribute('aria-disabled', 'true'))
+    expect(screen.getByRole('button', { name: 'Decline' })).toHaveAttribute('aria-disabled', 'true')
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Approve' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('a gate that does not say since when it waits goes last', async () => {
+    const undated = { ...gate('d', 'dr', ''), createdAt: undefined, lastEvaluatedAt: undefined }
+    render(<ApprovalsPage gates={[undated, gates[0]]} pipelines={pipelines} now={now} />)
+    await screen.findByRole('heading', { name: '2 waiting on you' })
+    const rows = within(screen.getByRole('list', { name: 'Waiting on you' })).getAllByRole('listitem')
+    expect(rows.map(r => within(r).getByRole('link').textContent)).toEqual(['web › prod', 'web › dr'])
   })
 
   it('j and k move between rows; a approves the row in focus', async () => {

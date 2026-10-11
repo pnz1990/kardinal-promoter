@@ -55,7 +55,7 @@ export const ApprovalsPage = forwardRef<ApprovalsHandle, ApprovalsPageProps>(fun
   // One check per namespace: creating an Approval is what approving and declining need.
   const decide = actionCheck('approve', {})!
   const { can, identity } = useAccessIn(namespaces.map(ns => [ns, decide] as [string, AccessCheck]))
-  const { mine, others } = useMemo(() => approvalItems(gates, pipelines, identity), [gates, pipelines, identity])
+  const { mine, others } = approvalItems(gates, pipelines, identity, ns => can(ns, decide))
   const [open, setOpen] = useState<Open>()
   const [result, setResult] = useState<string>()
   const listRef = useRef<HTMLOListElement>(null)

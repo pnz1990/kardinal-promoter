@@ -44,13 +44,19 @@ function readToken(): string | null {
   }
 }
 
+/** The window event sent after the stored token changes: answers cached for the old token's
+ *  user (access/access.ts) are void. */
+export const TOKEN_CHANGE_EVENT = 'kardinal:token-change'
+
 function writeToken(token: string | null): void {
+  const before = readToken()
   try {
     if (token) sessionStorage.setItem(TOKEN_STORAGE_KEY, token)
     else sessionStorage.removeItem(TOKEN_STORAGE_KEY)
   } catch {
     // storage disabled: the token is not kept and the prompt reappears
   }
+  if (before !== token && typeof window !== 'undefined') window.dispatchEvent(new Event(TOKEN_CHANGE_EVENT))
 }
 
 function askForToken(reason: TokenPromptReason): Promise<string> | null {

@@ -6,10 +6,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
 	authzv1 "k8s.io/api/authorization/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 )
@@ -18,8 +20,24 @@ import (
 // actions of one screen at a time.
 const maxAccessChecks = 32
 
-// accessVerbs are the verbs a check may name.
-var accessVerbs = map[string]bool{"get": true, "list": true, "create": true, "update": true, "patch": true, "delete": true}
+// maxAccessBody bounds its body: 32 checks with DNS-1123 names fit in 16 KiB.
+const maxAccessBody = 16 << 10
+
+// accessActions are the only checks POST /access answers: the actions the UI
+// offers ("verb resource[/subresource]"). Anything else is refused, so a
+// caller cannot turn the endpoint into a SubjectAccessReview proxy.
+var accessActions = map[string]bool{
+	"create bundles":              true, // ship, promote, roll back
+	"create approvals":            true, // approve, decline
+	"update policygates/override": true,
+	"update pipelines/pause":      true, // pause, resume
+	"update pipelines/hold":       true, // release a hold, roll back and hold
+	"update bundles/reject":       true,
+}
+
+// approvalNeedsIdentity is the answer for an approval without TokenReview: an
+// approval names who decided, so POST /approvals refuses it (ui_lifecycle.go).
+const approvalNeedsIdentity = "approving needs sign-in with your Kubernetes identity (the UI's TokenReview mode); kardinal approve works without it"
 
 // accessChecker is the TokenReview-mode client: it answers a check for the
 // request's user without recording a denial (uiauth.AuthorizingClient.Can).
@@ -30,7 +48,9 @@ type accessChecker interface {
 // uiAccessCheck is one action the UI asks about: verb on a kardinal.io
 // resource (or virtual subresource) in the request's namespace.
 type uiAccessCheck struct {
-	// Verb is get, list, create, update, patch or delete.
+	// Verb and Resource (with Subresource) name one of the UI's actions:
+	// create bundles, create approvals, update policygates/override,
+	// update pipelines/pause, update pipelines/hold or update bundles/reject.
 	Verb string `json:"verb"`
 	// Resource is a kardinal.io resource, plural: bundles, pipelines, approvals, policygates.
 	Resource string `json:"resource"`
@@ -55,6 +75,9 @@ type uiAccessResult struct {
 	// GrantedBy names the chart's user roles that grant it ("approver or
 	// admin"), when the chart grants it to particular roles.
 	GrantedBy string `json:"grantedBy,omitempty"`
+	// Reason says why it is not allowed when that is not a missing role
+	// (an approval without TokenReview).
+	Reason string `json:"reason,omitempty"`
 }
 
 // uiAccessUser is who the caller is, as TokenReview verified.
@@ -70,7 +93,8 @@ type uiAccessResponse struct {
 	// approval) cannot be taken from the UI.
 	User *uiAccessUser `json:"user,omitempty"`
 	// Results answer Checks, in order. Without TokenReview every check is
-	// allowed: the UI API then acts as the controller for anyone who reaches it.
+	// allowed (the UI API then acts as the controller for anyone who reaches
+	// it) except create approvals, which needs the caller's identity.
 	Results []uiAccessResult `json:"results"`
 }
 
@@ -86,7 +110,7 @@ func (s *uiAPIServer) handleAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req uiAccessRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAccessBody)).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -94,16 +118,33 @@ func (s *uiAPIServer) handleAccess(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("checks must hold 1 to %d entries", maxAccessChecks), http.StatusBadRequest)
 		return
 	}
-	for i, c := range req.Checks {
-		if !accessVerbs[c.Verb] || c.Resource == "" {
-			http.Error(w, fmt.Sprintf("checks[%d]: verb must be one of get, list, create, update, patch, delete, and resource is required", i),
-				http.StatusBadRequest)
-			return
-		}
-	}
 	ns := req.Namespace
 	if ns == "" {
 		ns = "default"
+	}
+	if errs := validation.IsDNS1123Label(ns); len(errs) > 0 {
+		http.Error(w, "namespace must be a DNS-1123 label", http.StatusBadRequest)
+		return
+	}
+	if s.scopeNamespace != "" && ns != s.scopeNamespace {
+		http.Error(w, fmt.Sprintf("the controller watches namespace %s only", s.scopeNamespace), http.StatusBadRequest)
+		return
+	}
+	for i, c := range req.Checks {
+		action := c.Verb + " " + c.Resource
+		if c.Subresource != "" {
+			action += "/" + c.Subresource
+		}
+		if !accessActions[action] {
+			http.Error(w, fmt.Sprintf("checks[%d]: %q is not an action the UI offers", i, action), http.StatusBadRequest)
+			return
+		}
+		if c.Name != "" {
+			if errs := validation.IsDNS1123Subdomain(c.Name); len(errs) > 0 {
+				http.Error(w, fmt.Sprintf("checks[%d]: name must be a DNS-1123 subdomain", i), http.StatusBadRequest)
+				return
+			}
+		}
 	}
 	resp := uiAccessResponse{Results: make([]uiAccessResult, len(req.Checks))}
 	checker, tokenReview := s.client.(accessChecker)
@@ -112,19 +153,33 @@ func (s *uiAPIServer) handleAccess(w http.ResponseWriter, r *http.Request) {
 			resp.User = &uiAccessUser{Username: u.Username, Groups: u.Groups}
 		}
 	}
+	// The same check twice is reviewed once.
+	answered := map[uiAccessCheck]uiAccessResult{}
 	for i, c := range req.Checks {
+		if res, ok := answered[c]; ok {
+			resp.Results[i] = res
+			continue
+		}
 		res := uiAccessResult{Allowed: true, GrantedBy: uiauth.RolesFor(c.Verb, c.Resource, c.Subresource)}
-		if tokenReview {
+		switch {
+		case tokenReview:
 			allowed, err := checker.Can(r.Context(), authzv1.ResourceAttributes{
 				Namespace: ns, Verb: c.Verb, Group: "kardinal.io", Resource: c.Resource, Subresource: c.Subresource, Name: c.Name,
 			})
+			if errors.Is(err, uiauth.ErrAccessRateLimited) {
+				http.Error(w, "too many authorization checks for this user; try again in a minute", http.StatusTooManyRequests)
+				return
+			}
 			if err != nil {
 				s.log.Error().Err(err).Msg("ui: access")
 				http.Error(w, "access review unavailable", http.StatusServiceUnavailable)
 				return
 			}
 			res.Allowed = allowed
+		case c.Verb == "create" && c.Resource == "approvals":
+			res.Allowed, res.Reason = false, approvalNeedsIdentity
 		}
+		answered[c] = res
 		resp.Results[i] = res
 	}
 	writeJSON(w, resp)

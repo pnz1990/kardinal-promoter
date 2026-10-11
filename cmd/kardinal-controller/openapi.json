@@ -1508,7 +1508,7 @@
             "type": "string"
           },
           "verb": {
-            "description": "Verb is get, list, create, update, patch or delete.",
+            "description": "Verb and Resource (with Subresource) name one of the UI's actions: create bundles, create approvals, update policygates/override, update pipelines/pause, update pipelines/hold or update bundles/reject.",
             "type": "string"
           }
         },
@@ -1547,7 +1547,7 @@
         "description": "uiAccessResponse is the body of a POST /api/v1/ui/access answer.",
         "properties": {
           "results": {
-            "description": "Results answer Checks, in order. Without TokenReview every check is allowed: the UI API then acts as the controller for anyone who reaches it.",
+            "description": "Results answer Checks, in order. Without TokenReview every check is allowed (the UI API then acts as the controller for anyone who reaches it) except create approvals, which needs the caller's identity.",
             "items": {
               "$ref": "#/components/schemas/uiAccessResult"
             },
@@ -1580,6 +1580,10 @@
           },
           "grantedBy": {
             "description": "GrantedBy names the chart's user roles that grant it (\"approver or admin\"), when the chart grants it to particular roles.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Reason says why it is not allowed when that is not a missing role (an approval without TokenReview).",
             "type": "string"
           }
         },
@@ -2155,7 +2159,7 @@
     },
     "/api/v1/ui/access": {
       "post": {
-        "description": "In TokenReview mode each check is a SubjectAccessReview for the verified caller, cached for 30s; a denial is an answer (allowed: false), not a 403. Without TokenReview every check is allowed and no user is named. At most 32 checks.",
+        "description": "Answers only for the UI's actions (create bundles, create approvals, update policygates/override, pipelines/pause, pipelines/hold, bundles/reject), in a DNS-1123 namespace (the --watch-namespace one when set) with DNS-1123 names; at most 32 checks in 16 KiB, each distinct check reviewed once. In TokenReview mode each check is a SubjectAccessReview for the verified caller, cached for 30s and limited per user (429 past it); a denial is an answer (allowed: false), not a 403. Without TokenReview every check is allowed and no user is named, except create approvals (an approval names who decided).",
         "operationId": "checkAccess",
         "requestBody": {
           "content": {
@@ -2189,6 +2193,9 @@
           },
           "405": {
             "$ref": "#/components/responses/Error405"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
           },
           "503": {
             "$ref": "#/components/responses/Error503"
