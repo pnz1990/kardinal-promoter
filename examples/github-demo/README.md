@@ -70,15 +70,15 @@ kardinal create bundle github-demo --image "$TEST_IMAGE"
 
 # 2. Watch test auto-promote
 kardinal get pipelines
-# PIPELINE      BUNDLE              TEST       UAT              PROD      SUB   AGE
-# github-demo   github-demo-9tptr   Verified   HealthChecking   Waiting   0     5m
+# PIPELINE      BUNDLE              TEST   UAT               PROD          SUB   AGE
+# github-demo   github-demo-9tptr   Live   Checking health   Not reached   0     5m
 
 # 3. Check what's gating prod
 kardinal explain github-demo --env prod
-# ENVIRONMENT   BUNDLE              TYPE         NAME                 STATE   EXPRESSION                                      REASON
-# prod          github-demo-9tptr   PolicyGate   no-bot-deploys       Pass    bundle.provenance.author != "dependabot[bot]"   bundle.version=sha-9349a3f: bundle.provenance.author != "dependabot[bot]" = true
-# prod          github-demo-9tptr   PolicyGate   no-weekend-deploys   Pass    !schedule.isWeekend                             bundle.version=sha-9349a3f: !schedule.isWeekend = true
-# prod          github-demo-9tptr   PolicyGate   uat-soak-gate        Block   upstream.uat.soakMinutes >= 30                  UAT must have been Verified for at least 30 minutes (bundle.version=sha-9349a3f: upstream.uat.soakMinutes >= 30 = false)
+# ENVIRONMENT   BUNDLE              TYPE         NAME                 STATE      EXPRESSION                                      REASON
+# prod          github-demo-9tptr   PolicyGate   no-bot-deploys       Passing    bundle.provenance.author != "dependabot[bot]"   bundle.version=sha-9349a3f: bundle.provenance.author != "dependabot[bot]" = true
+# prod          github-demo-9tptr   PolicyGate   no-weekend-deploys   Passing    !schedule.isWeekend                             bundle.version=sha-9349a3f: !schedule.isWeekend = true
+# prod          github-demo-9tptr   PolicyGate   uat-soak-gate        Blocking   upstream.uat.soakMinutes >= 30                  UAT must have been Verified for at least 30 minutes (bundle.version=sha-9349a3f: upstream.uat.soakMinutes >= 30 = false)
 #
 # prod   deployed: none
 

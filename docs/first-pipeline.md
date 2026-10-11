@@ -242,17 +242,17 @@ The promotion starts immediately. kardinal-promoter generates a Graph and begins
 ```bash
 # Watch the pipeline status
 kardinal get pipelines
-# PIPELINE            BUNDLE                    TEST       UAT              PROD      SUB   AGE
+# PIPELINE            BUNDLE                    TEST   UAT               PROD          SUB   AGE
 # kardinal-test-app   kardinal-test-app-x7k2p   Live   Checking health   Not reached   0     2m
 
 # See the steps of the active Bundle
 kardinal get steps kardinal-test-app
-# ENVIRONMENT   STEP           STATE        DURATION   MESSAGE
-# test          git-clone      Completed    812ms      -
+# ENVIRONMENT   STEP           STATE         DURATION   MESSAGE
+# test          git-clone      Done          812ms      -
 #               ...
-# uat           git-clone      Completed    790ms      -
+# uat           git-clone      Done          790ms      -
 #               ...
-#               health-check   InProgress   -          -
+#               health-check   In progress   -          -
 
 # Check why prod hasn't started: prod gets a PromotionStep only after uat is
 # Verified (and, with gates, after every gate passes)
@@ -261,7 +261,7 @@ kardinal explain kardinal-test-app --env prod
 ```
 
 !!! tip "Troubleshooting: Test stuck in Checking health"
-    If the test environment stays in `HealthChecking` for more than a few minutes:
+    If the test environment stays in Checking health (`HealthChecking`) for more than a few minutes:
     ```bash
     kubectl get deployment kardinal-test-app -n kardinal-test-app-test
     kubectl describe application kardinal-test-app-test -n argocd
@@ -272,11 +272,11 @@ Once uat is verified, the prod PromotionStep is created. Since prod uses `approv
 
 ```bash
 kardinal get steps kardinal-test-app
-# ENVIRONMENT   STEP             STATE        DURATION   MESSAGE
+# ENVIRONMENT   STEP             STATE         DURATION   MESSAGE
 # ...
-# prod          git-clone        Completed    790ms      -
+# prod          git-clone        Done          790ms      -
 #               ...
-#               wait-for-merge   InProgress   -          -
+#               wait-for-merge   In progress   -          -
 ```
 
 Go to your fork of kardinal-demo. You will see a PR titled:
@@ -295,7 +295,7 @@ The PR body contains:
 
 ```bash
 kardinal get pipelines
-# PIPELINE            BUNDLE                    TEST       UAT        PROD       SUB   AGE
+# PIPELINE            BUNDLE                    TEST   UAT    PROD   SUB   AGE
 # kardinal-test-app   kardinal-test-app-x7k2p   Live   Live   Live   0     8m
 ```
 
@@ -328,8 +328,8 @@ The next Bundle promoted to prod will have this gate injected into its Graph. If
 
 ```bash
 kardinal explain kardinal-test-app --env prod
-# ENVIRONMENT   BUNDLE                    TYPE         NAME                 STATE   EXPRESSION            REASON
-# prod          kardinal-test-app-9tptr   PolicyGate   no-weekend-deploys   Block   !schedule.isWeekend   Production deployments are blocked on weekends (bundle.version=sha-abc1234: !schedule.isWeekend = false)
+# ENVIRONMENT   BUNDLE                    TYPE         NAME                 STATE      EXPRESSION            REASON
+# prod          kardinal-test-app-9tptr   PolicyGate   no-weekend-deploys   Blocking   !schedule.isWeekend   Production deployments are blocked on weekends (bundle.version=sha-abc1234: !schedule.isWeekend = false)
 #
 # prod   deployed: kardinal-test-app-7qvsr (sha-1a2b3c4)
 ```
