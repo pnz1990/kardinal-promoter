@@ -17,8 +17,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -45,26 +43,24 @@ func newAuditSummaryCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "summary",
+		Use:   "summary [<pipeline>]",
 		Short: "Aggregate promotion metrics from AuditEvent records",
-		Long: `Show a summary of promotion activity from the AuditEvent log.
-
-Includes: promotion counts, success rate, average duration, gate block rate, and rollbacks.
-Rollbacks counts the rollback Bundles created in the window, from kardinal
-rollback, the UI, a RollbackPolicy or onHealthFailure=rollback, and how many
-of them succeeded: wrote RollbackSucceeded in the window in the environment
-they roll back.
-The success rate is succeeded / (succeeded + failed + superseded + rejected)
-among the promotions that finished inside the window; rejected (PromotionRejected,
-kardinal reject) is printed only when there are any. A rollback Bundle that reaches
-Verified in an environment writes PromotionSucceeded, counted as a succeeded
-promotion, and RollbackSucceeded, counted only as a succeeded rollback.`,
+		Long: `Summarise promotions from the AuditEvent log over --since: how many, the
+success rate, the average duration, the gate block rate and the rollbacks.`,
+		Annotations: map[string]string{ReferenceAnnotation: auditSummaryReference},
+		Example: `  kardinal audit summary
+  kardinal audit summary my-app --since 7d`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuditSummary(cmd, pipeline, since)
+			p, err := pipelineArg(args, pipeline)
+			if err != nil {
+				return err
+			}
+			return runAuditSummary(cmd, p, since)
 		},
 	}
 
-	cmd.Flags().StringVar(&pipeline, "pipeline", "", "Filter by pipeline name (default: all pipelines)")
+	cmd.Flags().StringVar(&pipeline, "pipeline", "", "Only this pipeline (or give it as the argument; default: all pipelines)")
 	cmd.Flags().StringVar(&since, "since", "24h", "Time window for events: a positive duration (e.g. 90m, 24h, 7d)")
 
 	return cmd
@@ -255,26 +251,9 @@ func auditSummaryFn(out io.Writer, client sigs_client.Client, ns, pipeline, sinc
 	return nil
 }
 
-// parseSinceDuration parses a positive window like "24h", "90m" or "7d".
-func parseSinceDuration(s string) (time.Duration, error) {
-	var d time.Duration
-	if days, ok := strings.CutSuffix(s, "d"); ok {
-		n, err := strconv.Atoi(days)
-		if err != nil {
-			return 0, fmt.Errorf("invalid days %q: want a whole number such as 7d", days)
-		}
-		d = time.Duration(n) * 24 * time.Hour
-	} else {
-		var err error
-		if d, err = time.ParseDuration(s); err != nil {
-			return 0, fmt.Errorf("parse duration: %w", err)
-		}
-	}
-	if d <= 0 {
-		return 0, fmt.Errorf("must be positive")
-	}
-	return d, nil
-}
+// parseSinceDuration parses a positive window like "24h", "90m" or "7d"
+// (parseDuration).
+func parseSinceDuration(s string) (time.Duration, error) { return parseDuration(s) }
 
 // formatAuditDuration formats a duration as "Xm Ys" for display.
 func formatAuditDuration(d time.Duration) string {
@@ -288,3 +267,15 @@ func formatAuditDuration(d time.Duration) string {
 	}
 	return fmt.Sprintf("%dm %ds", mins, secs)
 }
+
+// auditSummaryReference is the detail of the command for its reference page.
+const auditSummaryReference = `Includes: promotion counts, success rate, average duration, gate block rate, and rollbacks.
+Rollbacks counts the rollback Bundles created in the window, from kardinal
+rollback, the UI, a RollbackPolicy or onHealthFailure=rollback, and how many
+of them succeeded: wrote RollbackSucceeded in the window in the environment
+they roll back.
+The success rate is succeeded / (succeeded + failed + superseded + rejected)
+among the promotions that finished inside the window; rejected (PromotionRejected,
+kardinal reject) is printed only when there are any. A rollback Bundle that reaches
+Verified in an environment writes PromotionSucceeded, counted as a succeeded
+promotion, and RollbackSucceeded, counted only as a succeeded rollback.`

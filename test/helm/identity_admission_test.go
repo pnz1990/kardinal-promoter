@@ -164,6 +164,18 @@ func TestIdentityAdmission_BundleRejection(t *testing.T) {
 		{name: "reject in someone else's name", old: bundle(""), cur: bundle("alice"), user: "mallory", want: false},
 		{name: "controller updates a rejected Bundle", old: bundle("alice"), cur: bundle("alice"),
 			user: "system:serviceaccount:kardinal-system:kardinal-promoter", want: true},
+		// The UI writes a rejection as the controller, in the name of the
+		// caller its review verified (the gate-overrides exception).
+		{name: "the controller rejects for a UI caller", old: bundle(""), cur: bundle("alice"),
+			user: "system:serviceaccount:" + releaseNS + ":kardinal-promoter", want: true},
+		// The exception is the controller's exact identity: a tenant
+		// ServiceAccount with the same name in another namespace, or a
+		// lookalike user, still cannot forge someone else's rejection.
+		{name: "a same-named ServiceAccount elsewhere cannot forge", old: bundle(""), cur: bundle("alice"),
+			user: "system:serviceaccount:team-a:kardinal-promoter", want: false},
+		{name: "a lookalike user cannot forge", old: bundle(""), cur: bundle("alice"),
+			user: "system:serviceaccount:" + releaseNS + ":kardinal-promoter-x", want: false},
+		{name: "a tenant cannot forge", old: bundle(""), cur: bundle("alice"), user: "mallory", want: false},
 		{name: "unrelated update", old: bundle(""), cur: bundle(""), user: "bob", want: true},
 	}
 	for _, tc := range tests {

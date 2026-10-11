@@ -358,8 +358,8 @@ func TestShellWordsAndParseCatchKnownMistakes(t *testing.T) {
 			wantErr: "unknown flag: --sha",
 		},
 		{
-			line:    `kardinal override app --env prod --reason "fix"`,
-			wantErr: "unknown flag: --env",
+			line:    `kardinal promote app --environment prod`,
+			wantErr: "unknown flag: --environment",
 		},
 	}
 	for _, tt := range tests {

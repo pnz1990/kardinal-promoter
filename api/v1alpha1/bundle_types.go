@@ -220,6 +220,12 @@ type BundleStatus struct {
 	// +kubebuilder:validation:Enum=Available;Promoting;Verified;Failed;Superseded;Rejected
 	Phase string `json:"phase,omitempty"`
 
+	// Version is what the Bundle ships, for display: the image tag (the
+	// images, when several), "config <sha>", or the chart name and version.
+	// Written by the BundleReconciler from spec.
+	// +optional
+	Version string `json:"version,omitempty"`
+
 	// Conditions holds status conditions.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
@@ -287,6 +293,14 @@ type BundleStatus struct {
 	// final; the GraphRetired condition only shows the retirement's progress.
 	// +optional
 	RetiredAt *metav1.Time `json:"retiredAt,omitempty"`
+
+	// PendingAuditEvents are the BundleRejected AuditEvents the Bundle
+	// reconciler has recorded but not written yet (the audit outbox, #1552):
+	// the entry is stored in the same status write that sets phase
+	// Rejected, and removed once its AuditEvent exists.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	PendingAuditEvents []PendingAuditEvent `json:"pendingAuditEvents,omitempty"`
 }
 
 // RetiredStep is what a retired Bundle keeps of one of its PromotionSteps.
@@ -407,7 +421,8 @@ type GateResult struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=bnd
+// +kubebuilder:resource:scope=Namespaced,shortName=bnd,categories=kardinal;kardinal-all
+// +kubebuilder:printcolumn:name="Version",type=string,JSONPath=`.status.version`
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
 // +kubebuilder:printcolumn:name="Pipeline",type=string,JSONPath=`.spec.pipeline`
 // +kubebuilder:selectablefield:JSONPath=`.spec.pipeline`

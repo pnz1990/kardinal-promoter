@@ -36,10 +36,10 @@ func newGetSubscriptionsCmd() *cobra.Command {
 		Annotations: map[string]string{outputAnnotation: "true"},
 		Aliases:     []string{"subscription", "sub"},
 		Short:       "List Subscriptions (passive artifact watchers)",
-		Long: `List Subscriptions and their watching status.
-
-Subscriptions passively watch OCI registries or Git repositories and
-automatically create Bundles when new artifacts are detected.`,
+		Long: `List Subscriptions: watchers of an OCI registry or a git repository that create
+a Bundle when a new artifact appears.`,
+		Example: `  kardinal get subscriptions
+  kardinal get subscriptions -A`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runGetSubscriptions(cmd, args, allNamespaces)
@@ -47,6 +47,7 @@ automatically create Bundles when new artifacts are detected.`,
 	}
 	cmd.Flags().BoolVarP(&allNamespaces, "all-namespaces", "A", false,
 		"List subscriptions across all namespaces (adds NAMESPACE column)")
+	withReference(cmd, getSubscriptionsReference)
 	return cmd
 }
 
@@ -148,3 +149,7 @@ func FormatSubscriptionTable(w io.Writer, subs []v1alpha1.Subscription, showName
 	}
 	return nil
 }
+
+// getSubscriptionsReference is the detail of the command for its reference page.
+const getSubscriptionsReference = `Subscriptions passively watch OCI registries or Git repositories and
+automatically create Bundles when new artifacts are detected.`

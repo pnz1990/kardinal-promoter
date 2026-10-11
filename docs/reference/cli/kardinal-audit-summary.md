@@ -4,7 +4,8 @@ Aggregate promotion metrics from AuditEvent records
 
 ### Synopsis
 
-Show a summary of promotion activity from the AuditEvent log.
+Summarise promotions from the AuditEvent log over --since: how many, the
+success rate, the average duration, the gate block rate and the rollbacks.
 
 Includes: promotion counts, success rate, average duration, gate block rate, and rollbacks.
 Rollbacks counts the rollback Bundles created in the window, from kardinal
@@ -18,14 +19,21 @@ Verified in an environment writes PromotionSucceeded, counted as a succeeded
 promotion, and RollbackSucceeded, counted only as a succeeded rollback.
 
 ```
-kardinal audit summary [flags]
+kardinal audit summary [<pipeline>] [flags]
+```
+
+### Examples
+
+```
+  kardinal audit summary
+  kardinal audit summary my-app --since 7d
 ```
 
 ### Options
 
 ```
   -h, --help              help for summary
-      --pipeline string   Filter by pipeline name (default: all pipelines)
+      --pipeline string   Only this pipeline (or give it as the argument; default: all pipelines)
       --since string      Time window for events: a positive duration (e.g. 90m, 24h, 7d) (default "24h")
 ```
 
