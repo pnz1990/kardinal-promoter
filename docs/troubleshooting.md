@@ -56,9 +56,14 @@ The PromotionStep exists but has not started. Its `status.message` says why: `wa
 # Show all steps and gates
 kardinal get steps my-app
 
-# Check which gate is blocking
-kardinal explain my-app --env prod
+# Check which gate is blocking, and what gets past it
+kardinal why my-app prod
 ```
+
+`kardinal why` is `kardinal explain`. For each gate that was evaluated and does not pass, it
+prints on stderr the command that gets past it: `Approve: kardinal approve my-app prod` for an
+approval gate, `Override: kardinal override my-app prod --gate <gate> --reason <why>` for any
+other.
 
 If the output shows a gate in Block state, the gate's CEL expression has not been satisfied; REASON shows what it evaluated to. Common causes:
 - `no-weekend-deploys`: it is a weekend. Wait for Monday, or record a break-glass override with `kardinal override <pipeline> --stage prod --gate no-weekend-deploys --reason "..."` (see [Emergency Overrides](overrides.md)).

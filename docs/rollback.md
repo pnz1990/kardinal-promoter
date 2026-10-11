@@ -92,6 +92,21 @@ kardinal rollback my-app --env prod --to my-app-v1-27-0
 
 The `--to` flag names the version to roll back to. It must exist in the version history (within `historyLimit`), belong to the pipeline, carry images or a config ref, differ from what is deployed now, and have been Verified in the environment; otherwise the command fails and creates nothing. `--to` can name a version that an earlier rollback rolled back from. Images the deployed version changed and the `--to` version does not name are filled in the same way as without `--to`.
 
+### Hold an environment
+
+To keep an environment on what it runs now, with no rollback:
+
+```bash
+kardinal hold my-app prod --reason "INC-4521: freeze prod while we investigate" [--expires-in 24h]
+kardinal unhold my-app prod
+```
+
+`hold` writes the same `spec.holds` entry a rollback hold writes, naming the version deployed in
+prod; nothing is rolled back and no version is created. To go back to an earlier version and keep
+it there, roll back with `--hold` (below). It refuses a fleet environment (its targets can run different
+versions), an environment that runs nothing yet, and one that is already held. `unhold` is
+`release-hold`.
+
 ### Roll back and hold
 
 ```bash

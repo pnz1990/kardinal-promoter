@@ -193,6 +193,39 @@ kardinal create bundle my-app --type config \
 `--commit`, `--author` and `--ci-run-url` set `spec.provenance`. See
 [`kardinal create bundle`](reference/cli/kardinal-create-bundle.md) for every flag.
 
+#### Wait for the outcome in CI
+
+`kardinal ship` creates the same version as `kardinal create bundle`, with the same flags. With
+`--wait` it follows the version and exits with a code a CI job can act on:
+
+```bash
+kardinal ship my-app --image "ghcr.io/myorg/my-app:${GITHUB_SHA}" --wait --timeout 1h
+```
+
+| Exit code | Result | When |
+|---|---|---|
+| 0 | Verified | live in every environment it promotes to |
+| 1 | Failed | the promotion failed, or the command itself failed |
+| 3 | Held | a gate that was evaluated and does not pass, or a rollback hold, keeps it out of an environment, and nothing else of it is moving |
+| 4 | WaitingForMerge | its pull request waits for a person to merge it, and nothing else of it is moving |
+| 5 | Superseded or Rejected | a newer version replaced it, or it was rejected |
+| 6 | Timeout | `--timeout` (default 30m) passed, or following was interrupted |
+
+The codes are stable: a new outcome gets a new code. A stop at a gate, a hold or a pull request
+counts once two reads agree, and a gate that has not been evaluated yet never stops the wait.
+Stopping does not stop the promotion: `kardinal status my-app -w` goes on following it.
+
+While it waits, `ship` prints each environment's new state on stderr; at the end it prints one
+line on stdout, or with `-o json` an object with `bundle`, `pipeline`, `namespace`, `type`,
+`version`, `url`, `result`, `exitCode`, `message` and `environments`:
+
+```bash
+result=$(kardinal ship my-app --image "$IMAGE" --wait -o json | jq -r .result)
+```
+
+A job that ships to test and leaves prod to people can treat 3 and 4 as success: the version is
+where it should be, waiting for a gate or a review.
+
 ### kubectl (declarative)
 
 For teams that prefer a fully declarative approach, the version can be created via kubectl in CI:
