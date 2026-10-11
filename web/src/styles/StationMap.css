@@ -78,25 +78,32 @@
 .station-map__search input:focus-visible { outline: var(--k-focus-ring); outline-offset: var(--k-focus-offset); }
 .station-map__count { font-size: var(--k-text-xs); color: var(--k-ink-3); font-variant-numeric: tabular-nums; }
 
-.station-map__levels {
-  display: inline-flex;
-  border: var(--k-border-hairline) solid var(--k-line);
-  border-radius: var(--k-radius-2);
-  overflow: hidden;
+.segmented { display: inline-flex; align-items: center; gap: var(--k-space-1_5); }
+.segmented__label {
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-2xs);
+  font-stretch: var(--k-stretch-label);
+  letter-spacing: var(--k-tracking-caps);
+  text-transform: uppercase;
+  color: var(--k-ink-3);
 }
-.station-map__level {
+.segmented__item {
   font-family: var(--k-font-display);
   font-size: var(--k-text-xs);
   font-stretch: var(--k-stretch-label);
-  background: none;
-  border: none;
+  background: var(--k-surface-raised);
+  border: var(--k-border-hairline) solid var(--k-line);
   padding: var(--k-space-1) var(--k-space-2);
   color: var(--k-ink-2);
   cursor: pointer;
 }
-.station-map__level + .station-map__level { border-left: var(--k-border-hairline) solid var(--k-line); }
-.station-map__level[aria-checked="true"] { background: var(--k-surface-sunken); color: var(--k-ink); font-weight: var(--k-weight-semibold); }
-.station-map__level:focus-visible { outline: var(--k-focus-ring); outline-offset: calc(var(--k-focus-offset) * -1); }
+.segmented__item + .segmented__item { border-inline-start: 0; }
+.segmented__label + .segmented__item { border-start-start-radius: var(--k-radius-2); border-end-start-radius: var(--k-radius-2); }
+.segmented__item:last-child { border-start-end-radius: var(--k-radius-2); border-end-end-radius: var(--k-radius-2); }
+.segmented__item[aria-checked="true"] { background: var(--k-surface-sunken); color: var(--k-ink); font-weight: var(--k-weight-semibold); }
+.segmented__item:focus-visible { outline: var(--k-focus-ring); outline-offset: calc(var(--k-focus-offset) * -1); }
+/* The view switch above the Table or the Matrix (on the map it sits in the map's bar). */
+.pipeline-map__views { display: flex; justify-content: flex-end; padding-block-end: var(--k-space-2); }
 
 .station-map__paused-band {
   background: var(--k-hatch);

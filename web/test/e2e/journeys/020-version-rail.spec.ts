@@ -60,10 +60,10 @@ test.describe('Journey 020 — Version rail', () => {
 
   test('a narrow map has zoom buttons in place of the level control', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 })
-    await page.getByRole('radiogroup', { name: 'Show the pipeline as' }).getByRole('radio', { name: 'Map' }).click()
-    const zoom = page.getByRole('group', { name: 'Zoom' })
+    await page.getByRole('radio', { name: 'View: Map' }).click()
+    const zoom = page.getByRole('group', { name: 'Zoom in or out' })
     await expect(zoom).toBeVisible()
-    await expect(page.locator('.station-map').getByRole('radiogroup', { name: 'Zoom level' })).toBeHidden()
+    await expect(page.locator('.station-map').getByRole('radiogroup', { name: 'Zoom' })).toBeHidden()
     const svg = page.locator('.station-map__svg')
     const before = await svg.getAttribute('viewBox')
     await zoom.getByRole('button', { name: 'Zoom in' }).click()

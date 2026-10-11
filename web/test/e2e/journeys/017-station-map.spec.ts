@@ -29,7 +29,7 @@ test.describe('Journey 017 — Station map', () => {
     await page.setViewportSize({ width: 1366, height: 768 })
     await open(page, 'kardinal-test-app', 'default')
     const map = page.locator('.station-map')
-    await expect(map.getByRole('radio', { name: 'Detail' })).toHaveAttribute('aria-checked', 'true')
+    await expect(map.getByRole('radio', { name: 'Zoom: Detail' })).toHaveAttribute('aria-checked', 'true')
     // prod runs its own version while a newer one is on its way, its PR open but held by a gate
     // (the PipelineLaneView.tsx:207 bug).
     const prod = page.locator('[data-station="prod"]')
@@ -112,7 +112,7 @@ test.describe('Journey 017 — Station map', () => {
     await page.setViewportSize({ width: 1366, height: 768 })
     await open(page, 'checkout-30', 'scale')
     const map = page.locator('.station-map')
-    await expect(map.getByRole('radiogroup', { name: 'Zoom level' }).getByRole('radio', { name: 'Map' })).toHaveAttribute('aria-checked', 'true')
+    await expect(map.getByRole('radio', { name: 'Zoom: Map' })).toHaveAttribute('aria-checked', 'true')
     await expect(map.getByRole('button', { name: /^WAVE 1 · 6: / })).toBeVisible()
     const edge = map.getByRole('button', { name: /^edge · 12 targets, 2 at a time · stop at 2 failed: / })
     await expect(edge).toHaveAttribute('aria-expanded', 'false')
@@ -150,7 +150,7 @@ test.describe('Journey 017 — Station map', () => {
     const started = Date.now()
     await open(page, 'large-300', 'scale')
     const map = page.locator('.station-map')
-    await expect(map.getByRole('radio', { name: 'Overview' })).toHaveAttribute('aria-checked', 'true')
+    await expect(map.getByRole('radio', { name: 'Zoom: Overview' })).toHaveAttribute('aria-checked', 'true')
     // Dagre lays out the collapsed graph: stations, 3 bands, 2 platforms, the held audit.
     await expect(map.getByRole('button', { name: /^prod · 149 targets, 8 at a time · stop at 5 failed: 3 failed/ })).toBeVisible()
     await expect(map.getByRole('button', { name: /^WAVE 2 · 48: / })).toBeVisible()
@@ -169,8 +169,8 @@ test.describe('Journey 017 — Station map', () => {
     expect(Date.now() - started).toBeLessThan(10_000) // the whole flow; the drawer itself opens at once
     // Zoom levels can be set (with the drawer closed, the map has the width for them).
     await page.getByLabel('Close').click()
-    await map.getByRole('radiogroup', { name: 'Zoom level' }).getByRole('radio', { name: 'Map' }).click()
-    await expect(map.getByRole('radiogroup', { name: 'Zoom level' }).getByRole('radio', { name: 'Map' })).toHaveAttribute('aria-checked', 'true')
+    await map.getByRole('radio', { name: 'Zoom: Map' }).click()
+    await expect(map.getByRole('radio', { name: 'Zoom: Map' })).toHaveAttribute('aria-checked', 'true')
   })
 
   test('reduced motion: no running animation; dark theme; no overflow at 390×844', async ({ page }) => {
@@ -212,7 +212,7 @@ test.describe('Journey 017 — Station map', () => {
       await page.setViewportSize({ width: 390, height: 844 })
       // A narrow screen opens on the Table; the map is one choice away.
       await page.goto(`/ui/#/p/${ns}/${pipeline}`)
-      await page.getByRole('radiogroup', { name: 'Show the pipeline as' }).getByRole('radio', { name: 'Map' }).click()
+      await page.getByRole('radio', { name: 'View: Map' }).click()
       await expect(page.locator('.station-map__svg [data-station]').first()).toBeVisible()
       await page.waitForTimeout(400)
       expect(await overlappingLabels(page)).toEqual([])
@@ -231,7 +231,7 @@ test.describe('Journey 017 — Station map', () => {
   test('keyboard: / from the zoom control searches the map; Esc on a gate closes its popover, then the drawer', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 })
     await open(page, 'kardinal-test-app', 'default')
-    await page.locator('.station-map').getByRole('radiogroup', { name: 'Zoom level' }).getByRole('radio', { name: 'Map' }).focus()
+    await page.locator('.station-map').getByRole('radio', { name: 'Zoom: Map' }).focus()
     await page.keyboard.press('/')
     await expect(page.getByRole('searchbox', { name: /Search environments/ })).toBeFocused()
     await page.locator('[data-station="uat"]').click()

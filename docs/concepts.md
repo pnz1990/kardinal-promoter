@@ -276,11 +276,11 @@ Referencing an attribute that does not exist blocks the gate. See the
 kardinal explain my-app --env prod
 
 # Output:
-# ENVIRONMENT   VERSION        TYPE         NAME                 STATE      EXPRESSION                         REASON
-# prod          my-app-9tptr   PolicyGate   staging-soak         Blocking   bundle.upstreamSoakMinutes >= 30   bundle.version=1.29.0: bundle.upstreamSoakMinutes >= 30 = false
-# prod          my-app-9tptr   PolicyGate   no-weekend-deploys   Passing    !schedule.isWeekend                bundle.version=1.29.0: !schedule.isWeekend = true
+# ENVIRONMENT   VERSION                 TYPE         NAME                 STATE      EXPRESSION                         REASON
+# prod          1.29.0 (my-app-9tptr)   PolicyGate   staging-soak         Blocking   bundle.upstreamSoakMinutes >= 30   bundle.upstreamSoakMinutes >= 30 = false (version 1.29.0)
+# prod          1.29.0 (my-app-9tptr)   PolicyGate   no-weekend-deploys   Passing    !schedule.isWeekend                !schedule.isWeekend = true (version 1.29.0)
 #
-# prod   deployed: my-app-7qvsr (1.28.0)
+# prod   deployed: 1.28.0 (my-app-7qvsr)
 ```
 
 Gates that are not ready come first. STATE is Passing, Blocking (holding the version),

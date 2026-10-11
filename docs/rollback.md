@@ -92,11 +92,32 @@ kardinal rollback my-app --env prod --to my-app-v1-27-0
 
 The `--to` flag names the version to roll back to. It must exist in the version history (within `historyLimit`), belong to the pipeline, carry images or a config ref, differ from what is deployed now, and have been Verified in the environment; otherwise the command fails and creates nothing. `--to` can name a version that an earlier rollback rolled back from. Images the deployed version changed and the `--to` version does not name are filled in the same way as without `--to`.
 
+### Hold an environment
+
+To keep an environment on what it runs now, with no rollback:
+
+```bash
+kardinal hold my-app prod --reason "INC-4521: freeze prod while we investigate"
+kardinal unhold my-app prod
+```
+
+Add `--expires-in 24h` to end the hold after 24 hours.
+
+[`hold`](reference/cli/kardinal-hold.md) writes the same `spec.holds` entry a rollback hold writes, naming the version deployed in
+prod; nothing is rolled back and no version is created. To go back to an earlier version and
+keep it there, roll back with `--hold` (below).
+
+Running `hold` again with the same reason changes nothing. It refuses a fleet environment (its
+targets can run different versions), an environment that runs nothing yet, and one already held
+on another version or for another reason: release that hold first. `unhold` is `release-hold`.
+
 ### Roll back and hold
 
 ```bash
-kardinal rollback my-app --env prod --hold --reason "INC-4521: v1.29.0 leaks connections" [--hold-expires-in 24h]
+kardinal rollback my-app prod --hold --reason "INC-4521: v1.29.0 leaks connections"
 ```
+
+Add `--hold-expires-in 24h` to end the hold after 24 hours.
 
 Output:
 ```
@@ -343,10 +364,10 @@ kardinal history my-app
 ```
 
 ```
-VERSION                 ACTION     ENV    PR     DURATION   TIMESTAMP
-my-app-rollback-x7k2p   rollback   prod   #145   5m         2026-04-09 11:00
-my-app-v1-29-0          promote    prod   #144   15m        2026-04-09 10:20
-my-app-v1-28-0          promote    prod   #138   12m        2026-04-07 14:00
+VERSION                          ACTION     ENV    PR     DURATION   TIMESTAMP
+1.28.0 (my-app-rollback-x7k2p)   rollback   prod   #145   5m         2026-04-09 11:00
+1.29.0 (my-app-v1-29-0)          promote    prod   #144   15m        2026-04-09 10:20
+1.28.0 (my-app-v1-28-0)          promote    prod   #138   12m        2026-04-07 14:00
 ```
 
 There is one row per PromotionStep, newest first; steps created in the same second are in name order. `--limit` sets how many rows it prints (default 20), and `--env` keeps the rows of one environment. ACTION is `rollback` for a rollback version. PR is `--` in an environment that opened no PR (`approval: auto`). DURATION is the time from the step's creation to Verified, or for a step that stopped (Failed, AbortedByAlarm, RollingBack) to its last completed step, rounded down to whole seconds, minutes, hours or days (`45s`, `5m`, `2h`, `3d`). It is `...` while the step is in flight and `--` when no end time is recorded. TIMESTAMP is when the step was created, in UTC. The history ends at the versions `historyLimit` keeps (see below): a deleted version's rows are gone too.

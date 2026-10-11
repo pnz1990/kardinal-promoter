@@ -1359,7 +1359,7 @@ func TestCheckRequiredGates(t *testing.T) {
 			name:      "gate blocked by its expression names its message",
 			gateNames: []string{"soak"},
 			gates: []*v1alpha1.PolicyGate{messageGate("soak", "uat must soak for 30 minutes",
-				"uat must soak for 30 minutes (bundle.version=1.2.0: upstream.uat.soakMinutes >= 30 = false)")},
+				"uat must soak for 30 minutes (upstream.uat.soakMinutes >= 30 = false; version 1.2.0)")},
 			wantMsg: "waiting for gate soak: uat must soak for 30 minutes",
 		},
 		{

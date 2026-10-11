@@ -143,7 +143,7 @@ func TestStatusPipelineWriter_BlockingGateMessage(t *testing.T) {
 	recent := time.Now().Add(-time.Hour)
 	const msg = "Production deployments are blocked on weekends"
 	weekend := explainGateInstance("demo", "bundle-abc", "prod", "no-weekend-deploys", "!schedule.isWeekend",
-		false, true, msg+" (bundle.version=1.2.0: !schedule.isWeekend = false)")
+		false, true, msg+" (!schedule.isWeekend = false; version 1.2.0)")
 	weekend.Spec.Message = msg
 	broken := explainGateInstance("demo", "bundle-abc", "prod", "broken", "metrics.x.value > 1",
 		false, true, "CEL evaluation error: no such key: x")
@@ -158,7 +158,7 @@ func TestStatusPipelineWriter_BlockingGateMessage(t *testing.T) {
 	gateSection := blockingGates(out)
 	require.NotEmpty(t, gateSection, out)
 	assert.Contains(t, gateSection, msg+"  ", "the whole message is the REASON")
-	assert.NotContains(t, gateSection, "bundle.version=1.2.0", "the CEL detail is left to kardinal explain")
+	assert.NotContains(t, gateSection, "version 1.2.0", "the CEL detail is left to kardinal explain")
 	assert.Contains(t, gateSection, "CEL evaluation error: no such ke...", "cut to 35 characters")
 	assert.NotContains(t, gateSection, "x must be above 1")
 }

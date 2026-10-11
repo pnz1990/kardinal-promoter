@@ -63,7 +63,7 @@ describe('VersionMatrix', () => {
       onSelect={onSelect} onCompare={onCompare} onToggleGroup={vi.fn()} />)
     const row = screen.getByRole('row', { name: /^2/ })
     expect(row.getAttribute('data-followed')).toBe('true')
-    expect(within(row).getAllByRole('cell').map(c => c.getAttribute('title'))).toEqual(['test: Live', 'uat: Live', 'prod: Failed'])
+    expect(within(row).getAllByRole('gridcell').map(c => c.getAttribute('aria-label'))).toEqual(['test: Live', 'uat: Live', 'prod: Failed'])
     fireEvent.click(screen.getByRole('button', { name: '1' }))
     expect(onSelect).toHaveBeenCalledWith('app-1')
     fireEvent.click(screen.getByRole('button', { name: '1' }), { shiftKey: true })
@@ -77,7 +77,7 @@ describe('VersionMatrix', () => {
     const b = [bundle('app-2', 'Promoting', { test: 'Verified', p1: 'Verified', p2: 'Failed' })]
     const onToggleGroup = vi.fn()
     const { rerender } = render(<VersionMatrix model={buildModel(p, undefined)} pipeline="app" bundles={b} onSelect={vi.fn()} onCompare={vi.fn()} onToggleGroup={onToggleGroup} />)
-    expect(screen.getByRole('cell', { name: /1\/3/ }).getAttribute('data-tone')).toBe('failed')
+    expect(screen.getByRole('gridcell', { name: /^prod · 3: 1 of 3 live/ }).getAttribute('data-tone')).toBe('failed')
     fireEvent.click(screen.getByRole('button', { name: /^prod · 3/ }))
     expect(onToggleGroup).toHaveBeenCalledWith('platform:prod')
     const expanded = buildModel(p, undefined, { expanded: new Set(['platform:prod']) })
@@ -93,4 +93,37 @@ describe('VersionMatrix', () => {
     expect(rows).toBeGreaterThan(0)
     expect(rows).toBeLessThan(60)
   })
+
+  it('arrow keys move a roving focus between cells; Enter follows, Shift+Enter compares; the cell shows in words', () => {
+    const onSelect = vi.fn()
+    const onCompare = vi.fn()
+    const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(cb => { cb(0); return 0 })
+    render(<VersionMatrix model={buildModel(chain(), followed)} pipeline="app" bundles={bundles} followed="app-2"
+      onSelect={onSelect} onCompare={onCompare} onToggleGroup={vi.fn()} />)
+    const cells = () => screen.getAllByRole('gridcell')
+    expect(cells().filter(c => c.getAttribute('tabindex') === '0')).toHaveLength(1)
+    cells()[0].focus()
+    fireEvent.keyDown(cells()[0], { key: 'ArrowRight' })
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('uat: Live')
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
+    expect(document.activeElement?.getAttribute('data-cell')).toBe('1:1')
+    expect(screen.getByText('1 in uat: Live')).toBeTruthy()
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter' })
+    expect(onSelect).toHaveBeenCalledWith('app-1')
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter', shiftKey: true })
+    expect(onCompare).toHaveBeenCalledWith('app-1')
+    raf.mockRestore()
+  })
+
+  it('renders only a window of columns when 300 are shown', () => {
+    const targets = Array.from({ length: 300 }, (_, i) => `t${i}`)
+    const p: Pipeline = { name: 'app', namespace: 'default', phase: 'Ready', environmentCount: 300, activeBundleName: 'app-2',
+      environmentTopology: [{ name: 'prod', fleet: { targets } }] }
+    const m = buildModel(p, undefined, { expanded: new Set(['platform:prod']) })
+    render(<VersionMatrix model={m} pipeline="app" bundles={bundles} onSelect={vi.fn()} onCompare={vi.fn()} onToggleGroup={vi.fn()} />)
+    const heads = screen.getAllByRole('columnheader').length
+    expect(heads).toBeGreaterThan(5)
+    expect(heads).toBeLessThan(60)
+  })
 })
+

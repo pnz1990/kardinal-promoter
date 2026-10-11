@@ -20,6 +20,7 @@ import { useMapViewport } from './useMapViewport'
 import { ageOf } from '../fleetModel'
 import { prNumberFromURL } from '../prLink'
 import { Icon } from '../ui'
+import { Segmented } from './Segmented'
 import '../styles/StationMap.css'
 
 export interface StationMapProps {
@@ -423,17 +424,13 @@ export default function StationMap(props: StationMapProps) {
         </label>
         {views}
         {/* On a narrow map the level control gives way to zoom buttons (touch also pinches). */}
-        <div className="station-map__zoom" role="group" aria-label="Zoom">
+        <div className="station-map__zoom" role="group" aria-label="Zoom in or out">
           <button type="button" aria-label="Zoom out" onClick={() => vp.zoomBy(ZOOM_STEP_OUT)}>−</button>
           <button type="button" aria-label="Zoom in" onClick={() => vp.zoomBy(ZOOM_STEP_IN)}>+</button>
           <button type="button" aria-label="Fit the map" onClick={() => vp.fit()}>⤢</button>
         </div>
-        <div className="station-map__levels" role="radiogroup" aria-label="Zoom level">
-          {LEVELS.map(l => (
-            <button key={l} type="button" role="radio" aria-checked={level === l} className="station-map__level"
-              onClick={() => vp.setLevel(l)}>{LEVEL_LABEL[l]}</button>
-          ))}
-        </div>
+        <Segmented label="Zoom" className="station-map__levels" value={level} onChange={l => vp.setLevel(l)}
+          items={LEVELS.map(l => ({ id: l, text: LEVEL_LABEL[l] }))} />
       </div>
       {paused && <div className="station-map__paused-band" role="status">Paused · no new promotions</div>}
       <p id={descId} className="sr-only">

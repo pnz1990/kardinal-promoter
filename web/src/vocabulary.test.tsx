@@ -110,7 +110,8 @@ import { App } from './App'
 // The lazily loaded views: load their code first, as the page prefetches it.
 beforeAll(async () => {
   await Promise.all([import('./stage/StageDrawer'), import('./components/BundleDiffPanel'), import('./components/CommandPalette'),
-    import('./components/KeyboardShortcutsPanel'), import('./stationMap/StageTable'), import('./stationMap/VersionMatrix')])
+    import('./components/KeyboardShortcutsPanel'), import('./stationMap/StageTable'), import('./stationMap/VersionMatrix'),
+    import('./components/PolicyGatesPanel'), import('./components/PromotionErrorsPanel'), import('./components/ReleaseMetricsBar'), import('./components/PipelineOpsTable')])
 })
 
 /** The raw API values that have a different display label in every kind: they must not show. */

@@ -356,7 +356,9 @@ func TestUI_BrowserGateOverride(t *testing.T) {
 	require.NotEmpty(t, scripts, "index.html names no script: %s", index.Body)
 	// The entry script and every chunk it loads (the lazy views are their own chunks):
 	// none calls the per-gate approve endpoint.
-	chunk := regexp.MustCompile(`assets/[A-Za-z0-9_.-]+\.js`)
+	// Chunks are named in the preload map ("assets/X.js") and imported relatively, statically
+	// (from"./X.js") and lazily (import("./X.js")): follow all three.
+	chunk := regexp.MustCompile(`assets/([A-Za-z0-9_.-]+\.js)|(?:from|import\()\s*["'\x60]\./([A-Za-z0-9_.-]+\.js)`)
 	queue := []string{}
 	for _, m := range scripts {
 		queue = append(queue, m[1])
@@ -372,8 +374,12 @@ func TestUI_BrowserGateOverride(t *testing.T) {
 		r := c.Get(t, path)
 		require.Equal(t, http.StatusOK, r.Status, "GET %s: %s", path, r)
 		assert.NotContains(t, r.Body, "/approve", "%s calls the per-gate approve endpoint", path)
-		for _, f := range chunk.FindAllString(r.Body, -1) {
-			queue = append(queue, "/ui/"+f)
+		for _, m := range chunk.FindAllStringSubmatch(r.Body, -1) {
+			f := m[1]
+			if f == "" {
+				f = m[2]
+			}
+			queue = append(queue, "/ui/assets/"+f)
 		}
 	}
 	assert.Greater(t, len(seen), len(scripts), "the lazy chunks were read too")

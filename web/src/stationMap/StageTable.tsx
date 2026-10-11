@@ -13,6 +13,9 @@ import { TONE_ORDER } from './model'
 import { StatusChip } from '../ui'
 import { ageOf } from '../fleetModel'
 import { prNumberFromURL } from '../prLink'
+import type { Bundle, Pipeline, PolicyGate, PromotionStep } from '../types'
+import { stageView, type StageActionKind } from '../stage/stageModel'
+import { StageActions } from '../stage/StageActions'
 import '../styles/StageTable.css'
 
 type SortKey = 'env' | 'state' | 'age'
@@ -23,8 +26,9 @@ export interface StageTableProps {
   /** The environment whose stage drawer is open. */
   focused?: string
   onOpenStage: (env: string) => void
-  /** The actions of an environment (Promote, Roll back, Release hold). */
-  actionsFor?: (env: string) => React.ReactNode
+  /** What the stage drawer reads: each row offers the drawer's own actions and dialogs
+   *  (the same buttons, the destructive Roll back with its version picker, the same errors). */
+  stage?: { pipeline: Pipeline; bundles: Bundle[]; steps: PromotionStep[]; gates: PolicyGate[]; onChanged?: () => void }
 }
 
 const COLUMNS: Array<{ key: SortKey | undefined; label: string }> = [
@@ -36,8 +40,18 @@ const COLUMNS: Array<{ key: SortKey | undefined; label: string }> = [
   { key: undefined, label: 'Actions' },
 ]
 
-export default function StageTable({ model, focused, onOpenStage, actionsFor }: StageTableProps) {
+export default function StageTable({ model, focused, onOpenStage, stage }: StageTableProps) {
   const [sort, setSort] = useState<{ key: SortKey; dir: Dir }>({ key: 'env', dir: 'ascending' })
+  // The one open action dialog, on one row.
+  const [active, setActive] = useState<{ env: string; kind: StageActionKind; gate?: PolicyGate }>()
+  const actionsFor = stage && ((env: string) => {
+    const view = stageView({ env, pipeline: stage.pipeline, bundles: stage.bundles, steps: stage.steps, gates: stage.gates })
+    return (
+      <StageActions view={view} pipeline={stage.pipeline.name} namespace={stage.pipeline.namespace} envOnly
+        active={active?.env === env ? active.kind : undefined} activeGate={active?.env === env ? active.gate : undefined}
+        onOpen={(kind, gate) => setActive(kind ? { env, kind, gate } : undefined)} onChanged={stage.onChanged} />
+    )
+  })
   const rows = useMemo(() => sortStations(model, sort.key, sort.dir), [model, sort])
   const by = (key: SortKey) => setSort(s => ({ key, dir: s.key === key && s.dir === 'ascending' ? 'descending' : 'ascending' }))
 

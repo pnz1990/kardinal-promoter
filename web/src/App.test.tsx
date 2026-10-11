@@ -65,7 +65,8 @@ import { App } from './App'
 // The comparison panel and the palette load lazily: load their code before the tests,
 // so a click opens them within one flush as it does once the page has prefetched them.
 beforeAll(async () => {
-  await Promise.all([import('./components/BundleDiffPanel'), import('./components/CommandPalette'), import('./stage/StageDrawer'), import('./components/KeyboardShortcutsPanel'), import('./stationMap/StageTable'), import('./stationMap/VersionMatrix')])
+  await Promise.all([import('./components/BundleDiffPanel'), import('./components/CommandPalette'), import('./stage/StageDrawer'), import('./components/KeyboardShortcutsPanel'), import('./stationMap/StageTable'), import('./stationMap/VersionMatrix'),
+    import('./components/PolicyGatesPanel'), import('./components/PromotionErrorsPanel'), import('./components/ReleaseMetricsBar'), import('./components/PipelineOpsTable')])
 })
 
 const day = 86_400_000

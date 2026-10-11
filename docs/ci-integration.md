@@ -197,17 +197,27 @@ kardinal create bundle my-app --type config \
 `--commit`, `--author` and `--ci-run-url` set `spec.provenance`. See
 [`kardinal create bundle`](reference/cli/kardinal-create-bundle.md) for every flag.
 
-### Waiting for the result: `kardinal ship --wait`
+#### Wait for the outcome in CI
 
-`kardinal ship` takes the flags of `kardinal create bundle` and creates the same Bundle. With
-`--wait` it follows the Bundle and exits with a code the CI job can act on: `0` live everywhere,
-`1` failed, `3` a person is needed, `4` its PR waits for a person to merge it, `5` replaced,
-rejected or deleted, `6` timed out or interrupted (see
-[`kardinal ship`](reference/cli/kardinal-ship.md) for the full table).
+[`kardinal ship`](reference/cli/kardinal-ship.md) creates the same version as `kardinal create
+bundle`, with the same flags. With `--wait` it follows the version and exits with a code a CI job
+can act on:
 
 ```bash
-kardinal ship my-app -n my-team --image "ghcr.io/myorg/my-app:${GITHUB_SHA}" --wait --timeout 45m
+kardinal ship my-app --image "ghcr.io/myorg/my-app:${GITHUB_SHA}" --wait --timeout 1h
 ```
+
+| Exit code | Result | When |
+|---|---|---|
+| 0 | Verified | live in every environment it promotes to |
+| 1 | Failed, Error | the promotion failed, the version could not be read three times in a row, or the command itself failed |
+| 3 | Held | a person is needed and nothing else of it is moving: an approval gate, a hold, a paused pipeline, or a gate that does not pass and does not open by itself |
+| 4 | WaitingForMerge | its pull request waits for a person to merge it, and nothing else of it is moving |
+| 5 | Superseded, Rejected, Deleted | a newer version replaced it, it was rejected, or it was deleted |
+| 6 | Timeout, Interrupted | `--timeout` (default 30m) passed, or Ctrl-C or SIGTERM stopped the wait; the result is printed first |
+
+The codes are stable: a new outcome gets a new code. A stop at a gate, a hold or a pull request
+counts once two reads agree, and a gate that has not been evaluated yet never stops the wait.
 
 A gate that does not pass ends the wait with exit `3` only when it needs a person. A gate that
 opens by itself keeps the job waiting, until `--timeout`: one whose expression, outside its string
@@ -228,9 +238,23 @@ something else (`!schedule.isWeekend && bundle.labels.approved == "yes"`) waits,
 open by itself.
 
 So a job can wait through a soak or a deploy window. Any other gate that does not pass (on a
-Bundle label, its provenance or its version) exits `3`, as do an approval gate, a hold and a
-paused pipeline. `--stop-at-gate` exits `3` at any gate that does not pass, also one that would
-open by itself. A PR the SCM merges by itself (`pr.merge.auto`) is waited for.
+version's labels or its provenance) exits 3, as do an approval gate, a hold and a
+paused pipeline. A pull request the SCM merges by itself (`pr.merge.auto`) is waited for while
+its auto-merge has not failed. `--stop-at-gate` exits 3 at any gate that does not pass, also one
+that would open by itself.
+
+Ctrl-C stops following; the promotion carries on. `kardinal status my-app -w` follows it again.
+
+While it waits, `ship` prints each environment's new state on stderr; at the end it prints one
+line on stdout, or with `-o json` an object with `bundle`, `pipeline`, `namespace`, `type`,
+`version`, `url`, `result`, `exitCode`, `message` and `environments`:
+
+```bash
+result=$(kardinal ship my-app --image "$IMAGE" --wait -o json | jq -r .result)
+```
+
+A job that ships to test and leaves prod to people can treat 3 and 4 as success: the version is
+where it should be, waiting for a gate or a review.
 
 ### kubectl (declarative)
 

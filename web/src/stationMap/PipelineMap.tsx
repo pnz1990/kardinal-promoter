@@ -6,9 +6,10 @@
 // and platforms kept per pipeline. It replaces the lane cards and the DAG.
 
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
-import type { Bundle, GraphResponse, Pipeline, PolicyGate } from '../types'
+import type { Bundle, GraphResponse, Pipeline, PolicyGate, PromotionStep } from '../types'
 import { api } from '../api/client'
 import StationMap from './StationMap'
+import { Segmented } from './Segmented'
 import { Skeleton } from '../ui'
 // The Table and the Matrix load when first shown: they are not part of the initial load.
 const StageTable = lazy(() => import('./StageTable'))
@@ -42,10 +43,12 @@ export interface PipelineMapProps {
   onRetry?: () => void
   /** How to show the pipeline: the station map (undefined), a table or a matrix. */
   as?: MapView
-  onAs?: (as: MapView | undefined) => void
+  onAs?: (as: MapView) => void
   /** The Matrix: follow a version, or compare one with the followed version. */
   onSelectVersion?: (bundle: string) => void
   onCompareVersion?: (bundle: string) => void
+  /** What the stage drawer reads (steps and all gates): the Table's rows offer the drawer's actions. */
+  stageData?: { steps: PromotionStep[]; gates: PolicyGate[] }
   /** A version the rail previews: its route is a ghost thread on the map. */
   previewBundle?: Bundle
 }
@@ -70,11 +73,11 @@ function useBundleGraph(b: Bundle | undefined): { bundle: Bundle; graph: GraphRe
   return useMemo(() => (b && g?.name === b.name ? { bundle: b, graph: g.graph } : undefined), [b, g])
 }
 
-const VIEWS: Array<{ id: MapView | undefined; label: string }> = [
-  { id: undefined, label: 'Map' }, { id: 'table', label: 'Table' }, { id: 'matrix', label: 'Matrix' },
+const VIEWS: Array<{ id: MapView; label: string }> = [
+  { id: 'map', label: 'Map' }, { id: 'table', label: 'Table' }, { id: 'matrix', label: 'Matrix' },
 ]
 
-export default function PipelineMap({ pipeline, bundle, graph, compareBundle, loading, error, focused, onOpenStage, onActionDone, onOpenGate, gates, bundles, onRetry, as, onAs, onSelectVersion, onCompareVersion, previewBundle }: PipelineMapProps) {
+export default function PipelineMap({ pipeline, bundle, graph, compareBundle, loading, error, focused, onOpenStage, onActionDone, onOpenGate, gates, bundles, onRetry, as, onAs, onSelectVersion, onCompareVersion, stageData, previewBundle }: PipelineMapProps) {
   const [pending, setPending] = useState<{ kind: PipelineActionKind; env: string } | null>(null)
   const [result, setResult] = useState<string | null>(null)
   const key = `${pipeline.namespace}/${pipeline.name}`
@@ -122,11 +125,8 @@ export default function PipelineMap({ pipeline, bundle, graph, compareBundle, lo
 
   // Map | Table | Matrix: in the map's own bar on the map, above the table or the matrix.
   const views = onAs && (
-    <div className="map-views" role="radiogroup" aria-label="Show the pipeline as">
-      {VIEWS.map(v => (
-        <button key={v.label} type="button" role="radio" aria-checked={as === v.id} onClick={() => onAs(v.id)}>{v.label}</button>
-      ))}
-    </div>
+    <Segmented label="View" className="map-views" value={as ?? 'map'} onChange={v => onAs(v)}
+      items={VIEWS.map(v => ({ id: v.id, text: v.label }))} />
   )
 
   if (error) {
@@ -144,10 +144,11 @@ export default function PipelineMap({ pipeline, bundle, graph, compareBundle, lo
         onDone={message => { setPending(null); setResult(message); onActionDone?.() }}
         onCancel={() => setPending(null)} />
     )}
-    {as && views && <div className="pipeline-map__views">{views}</div>}
+    {as !== 'map' && views && <div className="pipeline-map__views">{views}</div>}
     {as === 'table' ? (
       <Suspense fallback={<Skeleton label="Loading the table…" />}>
-        <StageTable model={model} focused={focused} onOpenStage={env => onOpenStage(env)} actionsFor={actionsFor} />
+        <StageTable model={model} focused={focused} onOpenStage={env => onOpenStage(env)}
+          stage={stageData && { pipeline, bundles: bundles ?? [], steps: stageData.steps, gates: stageData.gates, onChanged: onActionDone }} />
       </Suspense>
     ) : as === 'matrix' ? (
       <Suspense fallback={<Skeleton label="Loading the matrix…" />}>
