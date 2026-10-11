@@ -52,6 +52,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+
 	"github.com/rs/zerolog"
 
 	corev1 "k8s.io/api/core/v1"
@@ -666,9 +668,9 @@ func (r *Reconciler) deliver(ctx context.Context, hook *v1alpha1.NotificationHoo
 			if uerr.Timeout() {
 				return errors.New("webhook request timed out")
 			}
-			return fmt.Errorf("webhook request failed: %w", uerr.Err)
+			return fmt.Errorf("webhook request failed: %w", scm.RedactErr(uerr.Err))
 		}
-		return fmt.Errorf("webhook request failed: %w", err)
+		return fmt.Errorf("webhook request failed: %w", scm.RedactErr(err))
 	}
 	defer resp.Body.Close() //nolint:errcheck
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))

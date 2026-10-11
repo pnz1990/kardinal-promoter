@@ -4,7 +4,10 @@ Pause a pipeline: no new promotion steps start, in-flight ones hold at the next 
 
 ### Synopsis
 
-Pause a pipeline.
+Hold <pipeline>: no step starts, and a step still preparing its change holds
+before its next step. A step waiting for its PR merge or running its health
+check finishes, so a merged change is always verified. Resume with
+kardinal resume <pipeline>.
 
 Sets spec.paused on the Pipeline and creates the freeze PolicyGate
 freeze-<pipeline>. While the pipeline is paused, no PromotionStep leaves
@@ -15,6 +18,13 @@ left unverified. Resume with: kardinal resume <pipeline>.
 
 ```
 kardinal pause <pipeline> [flags]
+```
+
+### Examples
+
+```
+  kardinal pause my-app
+  kardinal resume my-app
 ```
 
 ### Options
