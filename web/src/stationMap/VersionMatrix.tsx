@@ -15,7 +15,8 @@ import type { Group, StationMapModel } from './model'
 import { TONE_ORDER } from './model'
 import { displayState, type DisplayState } from './display'
 import { StatusChip } from '../ui'
-import { versionName } from '../versionName'
+import { VersionLabel } from '../components/VersionLabel'
+import { bundleVersion } from '../stage/stageModel'
 import '../styles/StageTable.css'
 
 /** A row's height: --k-space-8 at the default density. */
@@ -130,7 +131,7 @@ export default function VersionMatrix({ model, pipeline, bundles, followed, comp
   const stop = shown || !rows.length || !cols.length ? cursor : { r: rows[0].index, c: cols[0].index }
   const at = bundles[cursor.r]
   const atCol = columns[cursor.c]
-  const status = at && atCol ? `${versionName(at.name, pipeline)} in ${atCol.label}: ${cellText(atCol, states[cursor.r])}` : ''
+  const status = at && atCol ? `${bundleVersion(at)} in ${atCol.label}: ${cellText(atCol, states[cursor.r])}` : ''
 
   return (
     <div className="version-matrix-wrap">
@@ -172,9 +173,9 @@ export default function VersionMatrix({ model, pipeline, bundles, followed, comp
               <tr key={b.name} className="version-matrix__row" data-bundle={b.name} aria-rowindex={item.index + 2}
                 data-followed={b.name === followed || undefined} data-compared={b.name === compared || undefined}>
                 <th scope="row" className="version-matrix__version">
-                  <button type="button" title={b.name} aria-current={b.name === followed ? 'true' : undefined}
+                  <button type="button" aria-current={b.name === followed ? 'true' : undefined}
                     onClick={e => (e.shiftKey ? onCompare(b.name) : onSelect(b.name))}>
-                    {versionName(b.name, pipeline)}
+                    <VersionLabel bundle={b} compact />
                   </button>
                   <StatusChip tone={phase.tone} label={phase.label} glyph={phase.glyph} compact />
                 </th>

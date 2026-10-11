@@ -253,13 +253,13 @@ How a fleet is promoted:
 - **Rollback.** `kardinal rollback <pipeline> --env <fleet>-<target>` rolls one target back.
   Its rollback version does not supersede the fleet's version, which goes on promoting the other
   targets. Add `--hold` to keep the fleet's version (and later ones) off that target until
-  `kardinal release-hold`. `kardinal rollback <pipeline> --env <fleet>` rolls the whole fleet
+  `kardinal unhold`. `kardinal rollback <pipeline> --env <fleet>` rolls the whole fleet
   back. When every target that has something deployed runs the same version, the version to go
   back to is chosen as for that version, and one rollback version promotes it to every target;
   targets that already run it are Verified at once. When the targets run different versions (a
   rollout part way, or a target rolled back alone), the rollback is refused and the message
   lists what each target runs: name the version to go back to with `--to`, or roll back targets
-  one by one. `--hold` on a fleet holds every target, and `kardinal release-hold
+  one by one. `--hold` on a fleet holds every target, and `kardinal unhold
   --env <fleet>` releases them. A target held through its fleet cannot be released alone.
 - **Targets on one branch.** Targets in flight together push to the same branch. Argo CD (or
   Flux) can then deploy a later commit, another target's, before the target's own commit. The

@@ -192,15 +192,15 @@ func TestFormatDiffTable_EdgeCases(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, FormatDiffTable(&buf, a, b))
 	want := "" +
-		"ARTIFACT              BUNDLE-A (a)         BUNDLE-B (b)   CHANGED\n" +
-		"ghcr.io/org/app       -                    v2             *\n" +
-		"  digest              sha256:11111111...   --             *\n" +
+		"ARTIFACT              A: a                 B: b       CHANGED\n" +
+		"ghcr.io/org/app       -                    v2         *\n" +
+		"  digest              sha256:11111111...   --         *\n" +
 		"ghcr.io/org/sidecar   v1                   v1\n" +
-		"ghcr.io/org/sidecar   v7                   v8             *\n" +
-		"ghcr.io/org/new       (absent)             v1             *\n" +
+		"ghcr.io/org/sidecar   v7                   v8         *\n" +
+		"ghcr.io/org/new       (absent)             v1         *\n" +
 		"PROVENANCE\n" +
 		"  commit              abcdef01             abcdef01\n" +
-		"  author              alice                bob            *\n"
+		"  author              alice                bob        *\n"
 	assert.Equal(t, want, buf.String())
 }
 
@@ -209,5 +209,5 @@ func TestFormatDiffTable_NoProvenance(t *testing.T) {
 		Spec: v1alpha1.BundleSpec{Images: []v1alpha1.ImageRef{{Repository: "nginx", Tag: "1.25"}}}}
 	var buf bytes.Buffer
 	require.NoError(t, FormatDiffTable(&buf, a, a))
-	assert.Equal(t, "ARTIFACT   BUNDLE-A (a)   BUNDLE-B (a)   CHANGED\nnginx      1.25           1.25\n", buf.String())
+	assert.Equal(t, "ARTIFACT   A: 1.25 (a)   B: 1.25 (a)   CHANGED\nnginx      1.25          1.25\n", buf.String())
 }

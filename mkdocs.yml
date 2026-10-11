@@ -188,6 +188,7 @@ nav:
         - kardinal get subscriptions: reference/cli/kardinal-get-subscriptions.md
       - kardinal history: reference/cli/kardinal-history.md
       - kardinal hold: reference/cli/kardinal-hold.md
+      - kardinal inbox: reference/cli/kardinal-inbox.md
       - kardinal init: reference/cli/kardinal-init.md
       - kardinal logs: reference/cli/kardinal-logs.md
       - kardinal metrics: reference/cli/kardinal-metrics.md
@@ -202,11 +203,11 @@ nav:
       - kardinal quickstart: reference/cli/kardinal-quickstart.md
       - kardinal refresh: reference/cli/kardinal-refresh.md
       - kardinal reject: reference/cli/kardinal-reject.md
-      - kardinal release-hold: reference/cli/kardinal-release-hold.md
       - kardinal resume: reference/cli/kardinal-resume.md
       - kardinal rollback: reference/cli/kardinal-rollback.md
       - kardinal ship: reference/cli/kardinal-ship.md
       - kardinal status: reference/cli/kardinal-status.md
+      - kardinal unhold: reference/cli/kardinal-unhold.md
       - kardinal validate: reference/cli/kardinal-validate.md
       - kardinal version: reference/cli/kardinal-version.md
       - kardinal why: reference/cli/kardinal-why.md

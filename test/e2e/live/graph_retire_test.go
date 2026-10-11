@@ -105,9 +105,10 @@ func TestGraph_RetiresFinishedBundles(t *testing.T) {
 	})
 	var got []string
 	for _, r := range rbHistory(t, a) {
-		got = append(got, framework.BundleOf(r["VERSION"])+"/"+r["ENV"])
+		got = append(got, r["VERSION"]+"/"+r["ENV"])
 	}
-	assert.ElementsMatch(t, []string{b2 + "/prod", b2 + "/test", b1 + "/prod", b1 + "/test"}, got)
+	v1, v2 := framework.VersionCell(fixtures.V2, b1), framework.VersionCell(fixtures.V3, b2)
+	assert.ElementsMatch(t, []string{v2 + "/prod", v2 + "/test", v1 + "/prod", v1 + "/test"}, got)
 
 	// Rollback reads which Bundle is deployed, and which was Verified before,
 	// from the records.

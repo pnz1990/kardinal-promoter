@@ -2,60 +2,61 @@ kardinal promotes versions of your application through environments, with
 gates, pull requests and health checks, on Kubernetes.
 
 Getting started:
-  kardinal quickstart --repo <your fork>          try it on a local cluster
-  kardinal init                                   write a Pipeline for your repository
-  kardinal create bundle my-app --image app:1.4   start a promotion
-  kardinal status my-app                          see where each version is, and why
+  kardinal quickstart --repo <your fork>                 try it on a local cluster
+  kardinal init --name my-app --repo <gitops repo>       write a Pipeline for your repository
+  kardinal ship my-app --image app:1.4 --wait            ship a version and follow it
+  kardinal why my-app prod                               why it waits, and what moves it on
 
 Usage:
   kardinal [command]
 
 Get started:
-  dashboard    Open the kardinal UI dashboard in a browser
-  doctor       Run pre-flight checks to verify the cluster is correctly configured
-  init         Write a Pipeline for your GitOps repository, from flags or a few questions
-  quickstart   Install kardinal on a local cluster and promote a first version
-  version      Print the CLI, controller, and kro (Graph) versions
+  dashboard   Open the kardinal UI dashboard in a browser
+  doctor      Run pre-flight checks to verify the cluster is correctly configured
+  init        Write a Pipeline for your GitOps repository, from flags or a few questions
+  quickstart  Install kardinal on a local cluster and promote a first version
+  version     Print the CLI, controller, and kro (Graph) versions
 
 Ship and observe:
-  create       Create kardinal resources
-  diff         Show artifact differences between two Bundles
-  explain      Explain the current state of a promotion pipeline
-  get          Display one or more kardinal resources
-  history      Show Bundle promotion history for a pipeline
-  logs         Show promotion step execution logs for a pipeline
-  ship         Ship a version: create a Bundle, and with --wait follow it
-  status       Show controller health or per-pipeline in-flight promotion details
-  why          Say why an environment waits, and what moves it on
+  create      Create kardinal resources
+  diff        Show what changes between two versions (Bundles)
+  explain     Explain the current state of a promotion pipeline
+  get         Display one or more kardinal resources
+  history     Show a pipeline's promotion history, newest first
+  logs        Show promotion step execution logs for a pipeline
+  ship        Ship a version: create a Bundle, and with --wait follow it
+  status      Show controller health or per-pipeline in-flight promotion details
+  why         Say why an environment waits, and what moves it on
 
 Approve and gate:
-  approve      Approve (or reject) the version waiting for an environment's approval gates
-  override     Force-pass a PolicyGate with a mandatory audit record
-  policy       Manage and evaluate promotion policy gates
-  promote      Promote the Bundle verified upstream into an environment
+  approve     Approve (or reject) the version waiting for an environment's approval gates
+  inbox       List what waits for a person: on you first, then on others
+  override    Force-pass a PolicyGate with a mandatory audit record
+  policy      Manage and evaluate promotion policy gates
+  promote     Promote the version verified upstream into an environment
 
 Incident:
-  hold         Keep an environment on what runs there now
-  pause        Pause a pipeline: no new promotion steps start, in-flight ones hold at the next safe point
-  reject       Reject a Bundle: it is never promoted again, and rollback never picks it
-  release-hold Release the hold of a rollback on an environment
-  resume       Resume a paused pipeline
-  rollback     Roll back a pipeline environment to a previous Bundle
+  hold        Keep an environment on what runs there now
+  pause       Pause a pipeline: no new promotion steps start, in-flight ones hold at the next safe point
+  reject      Reject a version: it is never promoted again, and rollback never picks it
+  resume      Resume a paused pipeline
+  rollback    Roll back an environment to the version before
+  unhold      Release an environment's hold (kardinal hold, or rollback --hold)
 
 Admin and debug:
-  audit        Audit log commands: view and summarize promotion events
-  completion   Generate shell completion scripts
-  delete       Delete kardinal resources
-  help         Help about any command
-  metrics      Show promotion metrics (DORA-style) for a pipeline
-  refresh      Force re-reconciliation of a Pipeline
-  validate     Validate Pipeline and PolicyGate YAML before applying to the cluster
+  audit       Audit log commands: view and summarize promotion events
+  completion  Generate shell completion scripts
+  delete      Delete kardinal resources
+  help        Help about any command
+  metrics     Show promotion metrics (DORA-style) for a pipeline
+  refresh     Force re-reconciliation of a Pipeline
+  validate    Validate Pipeline and PolicyGate YAML before applying to the cluster
 
 Flags:
       --context string      Kubeconfig context override
   -h, --help                help for kardinal
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, why; wide: get subscriptions, status, why)
 
 Use "kardinal [command] --help" for more information about a command.

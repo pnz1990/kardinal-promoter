@@ -25,6 +25,7 @@ import (
 	"github.com/spf13/cobra"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -44,11 +45,11 @@ func newRollbackCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "rollback <pipeline> <env>",
-		Short: "Roll back a pipeline environment to a previous Bundle",
-		Long: `Roll back <env> to the last Bundle Verified there that deploys something else
-(or --to a named Bundle), as a new Bundle that goes through the gates, the PR
-flow and every upstream environment first. With --hold and --reason, <env>
-stays on the rollback until kardinal release-hold (or --hold-expires-in); its
+		Short: "Roll back an environment to the version before",
+		Long: `Roll back <env> to the last version Verified there that deploys something
+else (or --to a named Bundle), as a new Bundle that goes through the gates,
+the PR flow and every upstream environment first. With --hold and --reason,
+<env> stays on the rollback until kardinal unhold (or --hold-expires-in); its
 blocking gates pass as audited exemptions meanwhile. See docs/rollback.md.`,
 		Example: `  # roll prod back to the previous verified version
   kardinal rollback my-app prod
@@ -94,11 +95,11 @@ blocking gates pass as audited exemptions meanwhile. See docs/rollback.md.`,
 	}
 
 	addEnvFlag(cmd, &envFlag, "Environment to roll back (or give it after the pipeline)")
-	cmd.Flags().StringVar(&toFlag, "to", "", "Specific Bundle name to roll back to")
+	cmd.Flags().StringVar(&toFlag, "to", "", "The Bundle to roll back to (default: the version Verified there before)")
 	cmd.Flags().BoolVar(&holdFlag, "hold", false,
-		"Keep the environment on the rollback until kardinal release-hold; the rollback passes blocking gates, each pass audited")
+		"Keep the environment on the rollback until kardinal unhold; the rollback passes blocking gates, each pass audited")
 	cmd.Flags().StringVar(&reasonFlag, "reason", "", "Why the environment is held (required with --hold)")
-	cmd.Flags().Var(durationValue{&expiresFlag}, "hold-expires-in", "End the hold this long after it is made (30m, 24h, 2d); default: until kardinal release-hold")
+	cmd.Flags().Var(durationValue{&expiresFlag}, "hold-expires-in", "End the hold this long after it is made (30m, 24h, 2d); default: until kardinal unhold")
 	// Deprecated: --emergency never bypassed a gate and has no effect; use
 	// `kardinal override` to pass a blocking gate. Deleted in the next minor
 	// release (#1288).
@@ -186,7 +187,7 @@ func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBund
 	}
 	if _, err := fmt.Fprintf(w,
 		"Rolling back %s in %s from %s to %s (%s)\nBundle %s created (rollbackOf=%s)\n"+
-			"Environment %s held on %s: no other version promotes there until: kardinal release-hold %s --env %s\n"+
+			"Environment %s held on %s: no other version promotes there until: kardinal unhold %s %s\n"+
 			"Gates of %s that would block the rollback pass as EXEMPT (audited) while the controller verifies it restores what was Verified there.\n"+
 			"Track with: kardinal explain %s --env %s\n",
 		pipeline, env, from, plan.Target.Name, artifactSummary(plan.Bundle),
@@ -205,13 +206,14 @@ func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBund
 func newReleaseHoldCmd() *cobra.Command {
 	var envFlag string
 	cmd := &cobra.Command{
-		Use:     "release-hold <pipeline> <env>",
-		Aliases: []string{"unhold"},
-		Short:   "Release the hold of a rollback on an environment",
-		Long: `Release the hold kardinal rollback --hold put on <env>. The newest Bundle
-held back then promotes into <env> through its normal gates.`,
-		Example: `  kardinal release-hold my-app prod
-  kardinal unhold my-app prod`,
+		Use:     "unhold <pipeline> <env>",
+		Aliases: []string{"release-hold"},
+		Short:   "Release an environment's hold (kardinal hold, or rollback --hold)",
+		Long: `Release the hold on <env>, whether kardinal hold or kardinal rollback --hold
+put it there. The newest version held back then promotes into <env> through
+its normal gates. release-hold is the same command.`,
+		Example: `  kardinal unhold my-app prod
+  kardinal release-hold my-app prod`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pipeline, env, err := requireEnv(cmd, args, envFlag)
@@ -220,7 +222,7 @@ held back then promotes into <env> through its normal gates.`,
 			}
 			c, ns, err := buildClient()
 			if err != nil {
-				return fmt.Errorf("release-hold: %w", err)
+				return fmt.Errorf("unhold: %w", err)
 			}
 			return releaseHoldFn(cmd.OutOrStdout(), c, ns, pipeline, env)
 		},
@@ -229,7 +231,7 @@ held back then promotes into <env> through its normal gates.`,
 	return withStructuredOutput(cmd)
 }
 
-// releaseHoldFn is the testable implementation of release-hold.
+// releaseHoldFn is the testable implementation of unhold (release-hold).
 func releaseHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env string) error {
 	h, err := lifecycle.ReleaseHold(context.Background(), c, ns, pipeline, env)
 	if err != nil {
@@ -239,8 +241,13 @@ func releaseHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env string) 
 		return writeStructured(w, releasedHold{Pipeline: pipeline, Namespace: ns, Environment: env,
 			Bundle: h.Bundle, CreatedBy: h.CreatedBy, Reason: h.Reason, URL: uiURL(ns, pipeline)})
 	}
-	if _, err := fmt.Fprintf(w, "Released the hold of %s on %s (rollback %s, held by %s: %s).\n",
-		pipeline, env, h.Bundle, orUnknown(h.CreatedBy), h.Reason); err != nil {
+	held := h.Bundle
+	var b v1alpha1.Bundle
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: h.Bundle}, &b); err == nil {
+		held = versionLabel(createdOf(&b).Version, h.Bundle)
+	}
+	if _, err := fmt.Fprintf(w, "Released the hold of %s on %s (held on %s by %s: %s).\n",
+		pipeline, env, held, orUnknown(h.CreatedBy), h.Reason); err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
 	return nil

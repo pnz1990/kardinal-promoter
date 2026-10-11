@@ -69,9 +69,10 @@ describe('BundleTimeline — bundle rendering', () => {
     expect(screen.queryByText('Sup')).toBeNull()
   })
 
-  it('names chips by version: the Bundle name without the pipeline prefix', () => {
-    render(<BundleTimeline bundles={[makeBundle({ name: 'my-app-1-4-2', pipeline: 'my-app' })]} />)
-    expect(screen.getByText('1-4-2')).toBeInTheDocument()
+  it('names chips by the version they ship (the image tag), with the Bundle name in the tooltip', () => {
+    render(<BundleTimeline bundles={[makeBundle({ name: 'my-app-1-4-2', pipeline: 'my-app', images: [{ repository: 'ghcr.io/o/my-app', tag: '1.4.2' }] })]} />)
+    expect(screen.getByText('1.4.2')).toBeInTheDocument()
+    expect(screen.getByTitle(/^my-app-1-4-2: /)).toBeInTheDocument()
   })
 
   it('shows the versions header and no shift-click helper copy', () => {

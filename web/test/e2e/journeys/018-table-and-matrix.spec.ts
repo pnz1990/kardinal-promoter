@@ -142,7 +142,7 @@ test.describe('Journey 018 — Table and Matrix', () => {
     await page.keyboard.press('ArrowRight')
     await expect(matrix.locator('[data-cell="0:1"]')).toBeFocused()
     await expect(matrix.locator('[data-cell="0:1"]')).toHaveAttribute('aria-label', /^uat-\w: Live$/)
-    await expect(page.locator('.version-matrix__status')).toHaveText(/^7 in uat-\w: Live$/)
+    await expect(page.locator('.version-matrix__status')).toHaveText(/^1\.4\.2 in uat-\w: Live$/)
     await page.keyboard.press('ArrowDown')
     await expect(matrix.locator('[data-cell="1:1"]')).toBeFocused()
   })
