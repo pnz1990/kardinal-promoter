@@ -60,6 +60,46 @@ func argKindOf(cmdName, token string) argKind {
 	return argNone
 }
 
+// completionDirective is every name completion's: no file names, and the
+// order given (promotion order for environments, newest first for Bundles).
+const completionDirective = cobra.ShellCompDirectiveNoFileComp | cobra.ShellCompDirectiveKeepOrder
+
+// completionClient is the client name completion reads with: from the
+// persistent flags and the kubeconfig, with every request (discovery
+// included) bounded by completionTimeout. A test replaces it.
+var completionClient = func() (sigs_client.Client, string, error) {
+	cfg, ns, err := buildRestConfig()
+	if err != nil {
+		return nil, "", err
+	}
+	cfg.Timeout = completionTimeout
+	c, err := sigs_client.New(cfg, sigs_client.Options{Scheme: rootScheme})
+	if err != nil {
+		return nil, "", err
+	}
+	return c, ns, nil
+}
+
+// boundedNames is completeNames with the names that start with toComplete,
+// given up after completionTimeout (and a little) whatever blocks: a half-
+// open API server must not freeze the shell.
+func boundedNames(cmd *cobra.Command, kind argKind, args []string, toComplete string) []string {
+	done := make(chan []string, 1)
+	go func() { done <- completeNames(cmd, kind, args) }()
+	select {
+	case names := <-done:
+		out := names[:0]
+		for _, n := range names {
+			if strings.HasPrefix(n, toComplete) {
+				out = append(out, n)
+			}
+		}
+		return out
+	case <-time.After(completionTimeout + 500*time.Millisecond):
+		return nil
+	}
+}
+
 // flagKinds are the flags that name something completion can list.
 var flagKinds = map[string]argKind{
 	"pipeline": argPipeline,
@@ -93,11 +133,11 @@ func addNameCompletion(root *cobra.Command) {
 			kinds = append(kinds, argKindOf(c.Name(), tok))
 		}
 		if c.ValidArgsFunction == nil && slices.ContainsFunc(kinds, func(k argKind) bool { return k != argNone }) {
-			c.ValidArgsFunction = func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+			c.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 				if len(args) >= len(kinds) {
-					return nil, cobra.ShellCompDirectiveNoFileComp
+					return nil, completionDirective
 				}
-				return completeNames(cmd, kinds[len(args)], args), cobra.ShellCompDirectiveNoFileComp
+				return boundedNames(cmd, kinds[len(args)], args, toComplete), completionDirective
 			}
 		}
 		for name, kind := range flagKinds {
@@ -105,8 +145,8 @@ func addNameCompletion(root *cobra.Command) {
 				continue
 			}
 			k := kind
-			_ = c.RegisterFlagCompletionFunc(name, func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
-				return completeNames(cmd, k, args), cobra.ShellCompDirectiveNoFileComp
+			_ = c.RegisterFlagCompletionFunc(name, func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+				return boundedNames(cmd, k, args, toComplete), completionDirective
 			})
 		}
 	}
@@ -147,7 +187,7 @@ func completeNames(cmd *cobra.Command, kind argKind, args []string) []string {
 	if kind == argNone {
 		return nil
 	}
-	c, ns, err := buildClient()
+	c, ns, err := completionClient()
 	if err != nil {
 		return nil
 	}
@@ -187,6 +227,9 @@ func completeNames(cmd *cobra.Command, kind argKind, args []string) []string {
 			b := &bundles[i]
 			if pipeline != "" && b.Spec.Pipeline != pipeline {
 				continue
+			}
+			if cmd.Name() == "rollback" && b.Status.Phase == "Rejected" {
+				continue // rollback never picks a rejected version
 			}
 			version := createdOf(b).Version
 			if kind == argVersion {

@@ -18,6 +18,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,15 +57,18 @@ func TestCompletion_Names_Golden(t *testing.T) {
 	b1.CreationTimestamp.Time = created
 	b2 := whyBundle("demo-b", "1.5.0")
 	b2.CreationTimestamp.Time = created.Add(time.Minute)
+	rejected := whyBundle("demo-r", "1.4.9")
+	rejected.Status.Phase = "Rejected"
+	rejected.CreationTimestamp.Time = created.Add(-time.Minute)
 	other := whyBundle("web-x", "9.9.9")
 	other.Spec.Pipeline = "web"
 	gate := explainGateInstance("demo", "demo-b", "prod", "no-weekend", "!schedule.isWeekend", false, true, "")
 	uatGate := explainGateInstance("demo", "demo-b", "uat", "soak", "upstream.test.soakMinutes > 1", false, true, "")
 	template := policyGate("no-weekend", "default", "prod", "!schedule.isWeekend")
-	c := policyClient(t, policyPipeline("demo", "test", "uat", "prod"), policyPipeline("web", "dev", "live"), b1, b2, other, gate, uatGate, template)
-	prev := buildClient
-	buildClient = func() (sigs_client.Client, string, error) { return c, "default", nil }
-	t.Cleanup(func() { buildClient = prev })
+	c := policyClient(t, policyPipeline("demo", "test", "uat", "prod"), policyPipeline("web", "dev", "live"), b1, b2, rejected, other, gate, uatGate, template)
+	prev := completionClient
+	completionClient = func() (sigs_client.Client, string, error) { return c, "default", nil }
+	t.Cleanup(func() { completionClient = prev })
 
 	cases := [][]string{
 		{"why", ""},
@@ -83,6 +88,9 @@ func TestCompletion_Names_Golden(t *testing.T) {
 		{"get", "steps", ""},
 		{"metrics", "--pipeline", ""},
 		{"why", "demo", "prod", ""},
+		{"why", "de"},
+		{"why", "demo", "u"},
+		{"approve", "demo", "prod", "--version", "1.4"},
 	}
 	var golden strings.Builder
 	for _, args := range cases {
@@ -97,11 +105,38 @@ func TestCompletion_Names_Golden(t *testing.T) {
 	assert.Equal(t, string(want), golden.String())
 }
 
+// TestCompletion_HungServer (QA #1762): an API server that accepts the
+// connection and never answers (discovery included) does not freeze the
+// shell: Tab gives up after the completion timeout with no names.
+func TestCompletion_HungServer(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
+	t.Cleanup(func() { close(release); srv.Close() })
+	path := filepath.Join(t.TempDir(), "config")
+	require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+- {name: hung, cluster: {server: %q, insecure-skip-tls-verify: true}}
+contexts:
+- {name: hung, context: {cluster: hung, user: u}}
+users:
+- {name: u, user: {token: t}}
+current-context: hung
+`, srv.URL)), 0o600))
+	oldK := globalKubeconfig
+	globalKubeconfig = path
+	t.Cleanup(func() { globalKubeconfig = oldK })
+	start := time.Now()
+	out := complete(t, "--kubeconfig", path, "why", "")
+	assert.Less(t, time.Since(start), 4*time.Second, "Tab gives up in time")
+	assert.Equal(t, ":36\n", out, "no names; no file names, order kept")
+}
+
 // TestCompletion_NoCluster: without a cluster, Tab completes nothing and
 // does not offer file names; it never fails.
 func TestCompletion_NoCluster(t *testing.T) {
-	prev := buildClient
-	buildClient = func() (sigs_client.Client, string, error) { return nil, "", errors.New("no cluster") }
-	t.Cleanup(func() { buildClient = prev })
-	assert.Equal(t, ":4\n", complete(t, "why", ""), "nothing, and no file names (directive 4)")
+	prev := completionClient
+	completionClient = func() (sigs_client.Client, string, error) { return nil, "", errors.New("no cluster") }
+	t.Cleanup(func() { completionClient = prev })
+	assert.Equal(t, ":36\n", complete(t, "why", ""), "nothing, no file names, order kept (directives 4|32)")
 }

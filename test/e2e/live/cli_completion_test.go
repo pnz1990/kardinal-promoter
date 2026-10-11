@@ -50,7 +50,7 @@ func TestCLI_CompleteNames(t *testing.T) {
 		require.Equal(t, 0, r.Code, r.Output())
 		out := r.Stdout
 		lines := strings.Split(strings.TrimSpace(out), "\n")
-		require.Equal(t, ":4", lines[len(lines)-1], "no file names: %s", out)
+		require.Equal(t, ":36", lines[len(lines)-1], "no file names, order kept: %s", out)
 		var names []string
 		for _, l := range lines[:len(lines)-1] {
 			names = append(names, strings.SplitN(l, "\t", 2)[0])
@@ -58,7 +58,8 @@ func TestCLI_CompleteNames(t *testing.T) {
 		return names
 	}
 	assert.Equal(t, []string{pipelineName}, tab("why", ""))
-	assert.Equal(t, []string{"test", "prod"}, tab("why", pipelineName, ""))
+	assert.Equal(t, []string{"test", "prod"}, tab("why", pipelineName, ""), "promotion order")
+	assert.Equal(t, []string{"prod"}, tab("why", pipelineName, "p"), "the prefix typed")
 	assert.Equal(t, []string{"test", "prod"}, tab("history", pipelineName, "--env", ""))
 	assert.Equal(t, []string{fixtures.V2}, tab("approve", pipelineName, "prod", "--version", ""))
 	assert.Equal(t, []string{b}, tab("rollback", pipelineName, "prod", "--to", ""))
@@ -70,5 +71,5 @@ func TestCLI_CompleteNames(t *testing.T) {
 
 	r := c.Exec(framework.CLIOptions{Kubeconfig: "/dev/null"}, "__complete", "why", "")
 	require.Equal(t, 0, r.Code, r.Output())
-	assert.Equal(t, ":4\n", r.Stdout, "no cluster: nothing, and no file names")
+	assert.Equal(t, ":36\n", r.Stdout, "no cluster: nothing, and no file names")
 }

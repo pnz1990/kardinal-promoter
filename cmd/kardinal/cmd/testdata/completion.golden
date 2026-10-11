@@ -1,86 +1,104 @@
 $ kardinal why <TAB>
 demo	test, uat, prod
 web	dev, live
-:4
+:36
 
 $ kardinal why demo <TAB>
 test
 uat
 prod
-:4
+:36
 
 $ kardinal approve demo <TAB>
 test
 uat
 prod
-:4
+:36
 
 $ kardinal approve demo prod --version <TAB>
 1.5.0	demo-b, Promoting
 1.4.0	demo-a, Verified
-:4
+1.4.9	demo-r, Rejected
+:36
 
 $ kardinal rollback demo prod --to <TAB>
 demo-b	1.5.0, Promoting
 demo-a	1.4.0, Verified
-:4
+:36
 
 $ kardinal override demo prod --gate <TAB>
 no-weekend
-:4
+:36
 
 $ kardinal override demo --gate <TAB>
 no-weekend
 soak
-:4
+:36
 
 $ kardinal history --env <TAB>
-:4
+:36
 
 $ kardinal history web --env <TAB>
 dev
 live
-:4
+:36
 
 $ kardinal logs demo --bundle <TAB>
 demo-b	1.5.0, Promoting
 demo-a	1.4.0, Verified
-:4
+demo-r	1.4.9, Rejected
+:36
 
 $ kardinal reject <TAB>
 --reason	Why the Bundle is rejected (required)
 demo-b	1.5.0, Promoting
 web-x	9.9.9, Promoting
 demo-a	1.4.0, Verified
-:4
+demo-r	1.4.9, Rejected
+:36
 
 $ kardinal diff demo-a <TAB>
 demo-b	1.5.0, Promoting
 web-x	9.9.9, Promoting
 demo-a	1.4.0, Verified
-:4
+demo-r	1.4.9, Rejected
+:36
 
 $ kardinal delete bundle <TAB>
 demo-b	1.5.0, Promoting
 web-x	9.9.9, Promoting
 demo-a	1.4.0, Verified
-:4
+demo-r	1.4.9, Rejected
+:36
 
 $ kardinal get pipelines <TAB>
 demo	test, uat, prod
 web	dev, live
-:4
+:36
 
 $ kardinal get steps <TAB>
 demo	test, uat, prod
 web	dev, live
-:4
+:36
 
 $ kardinal metrics --pipeline <TAB>
 demo	test, uat, prod
 web	dev, live
-:4
+:36
 
 $ kardinal why demo prod <TAB>
-:4
+:36
+
+$ kardinal why de<TAB>
+demo	test, uat, prod
+:36
+
+$ kardinal why demo u<TAB>
+uat
+:36
+
+$ kardinal approve demo prod --version 1.4<TAB>
+1.4.0	demo-a, Verified
+1.4.9	demo-r, Rejected
+:36
 
