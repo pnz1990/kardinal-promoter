@@ -41,7 +41,7 @@ interface ThemeContextValue {
 }
 
 export const ThemeContext = createContext<ThemeContextValue>({
-  theme: 'dark',
+  theme: 'light',
   preference: 'system',
   setPreference: () => {},
   toggleTheme: () => {},
@@ -76,10 +76,13 @@ function storedDensity(): Density {
   return read(DENSITY_KEY) === 'compact' ? 'compact' : 'comfortable'
 }
 
-/** The OS setting; dark when the browser reports none. */
+/** The OS setting. Light unless the OS asks for dark, as styles/tokens.css does (light is
+ * its default; dark comes from the prefers-color-scheme: dark media query). */
+const DARK_QUERY = '(prefers-color-scheme: dark)'
+
 function systemTheme(): Theme {
-  if (typeof window === 'undefined' || !window.matchMedia) return 'dark'
-  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+  if (typeof window === 'undefined' || !window.matchMedia) return 'light'
+  return window.matchMedia(DARK_QUERY).matches ? 'dark' : 'light'
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -99,8 +102,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // Follow OS changes while the tab is open (used while the preference is System).
   useEffect(() => {
     if (!window.matchMedia) return
-    const mq = window.matchMedia('(prefers-color-scheme: light)')
-    const handler = (e: MediaQueryListEvent) => setSystem(e.matches ? 'light' : 'dark')
+    const mq = window.matchMedia(DARK_QUERY)
+    const handler = (e: MediaQueryListEvent) => setSystem(e.matches ? 'dark' : 'light')
     mq.addEventListener('change', handler)
     return () => mq.removeEventListener('change', handler)
   }, [])

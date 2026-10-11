@@ -20,11 +20,12 @@ const localStorageMock = (() => {
 Object.defineProperty(window, 'localStorage', { value: localStorageMock })
 
 // Mock matchMedia.
-let systemPreference: 'dark' | 'light' = 'dark'
+// 'none': the browser reports no preference (neither query matches).
+let systemPreference: 'dark' | 'light' | 'none' = 'dark'
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
   value: (query: string) => ({
-    matches: query === '(prefers-color-scheme: light)' && systemPreference === 'light',
+    matches: query === `(prefers-color-scheme: ${systemPreference})`,
     media: query,
     onchange: null,
     addEventListener: vi.fn(),
@@ -40,11 +41,18 @@ describe('ThemeProvider', () => {
     document.documentElement.removeAttribute('data-theme')
   })
 
-  it('defaults to dark theme when no localStorage or system preference', () => {
+  it('follows a dark OS setting when nothing is saved', () => {
     const { result } = renderHook(() => useTheme(), {
       wrapper: ThemeProvider,
     })
     expect(result.current.theme).toBe('dark')
+  })
+
+  it('is light when the OS reports no preference, as the CSS is', () => {
+    systemPreference = 'none'
+    const { result } = renderHook(() => useTheme(), { wrapper: ThemeProvider })
+    expect(result.current.theme).toBe('light')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light')
   })
 
   it('reads system preference for light when no localStorage value', () => {
@@ -198,7 +206,41 @@ describe('ThemeProvider — following the OS setting', () => {
   ])('$name', ({ stored, want }) => {
     if (stored) localStorageMock.setItem('kardinal-theme', stored)
     const { result } = renderHook(() => useTheme(), { wrapper: ThemeProvider })
-    act(() => osChange?.({ matches: true } as MediaQueryListEvent))
+    act(() => osChange?.({ matches: false } as MediaQueryListEvent)) // the dark query stops matching
     expect(result.current.theme).toBe(want)
+  })
+
+  it('follows a change event of the dark-scheme query, and stops listening on unmount', () => {
+    window.matchMedia = realMatchMedia
+    systemPreference = 'light'
+    // A MediaQueryList the test can fire: an EventTarget per query.
+    const lists = new Map<string, EventTarget & { matches: boolean; media: string }>()
+    const original = window.matchMedia
+    window.matchMedia = ((query: string) => {
+      let mql = lists.get(query)
+      if (!mql) {
+        mql = Object.assign(new EventTarget(), { matches: query === '(prefers-color-scheme: light)', media: query })
+        lists.set(query, mql)
+      }
+      return mql as unknown as MediaQueryList
+    }) as typeof window.matchMedia
+    try {
+      const { result, unmount } = renderHook(() => useTheme(), { wrapper: ThemeProvider })
+      expect(result.current.theme).toBe('light')
+      const dark = lists.get('(prefers-color-scheme: dark)')
+      expect(dark, 'the provider listens to the dark-scheme query').toBeDefined()
+      act(() => {
+        dark!.matches = true
+        dark!.dispatchEvent(Object.assign(new Event('change'), { matches: true }))
+      })
+      expect(result.current.theme).toBe('dark')
+      expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
+      act(() => { dark!.dispatchEvent(Object.assign(new Event('change'), { matches: false })) })
+      expect(result.current.theme).toBe('light')
+      unmount()
+      act(() => { dark!.dispatchEvent(Object.assign(new Event('change'), { matches: true })) })
+    } finally {
+      window.matchMedia = original
+    }
   })
 })
