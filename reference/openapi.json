@@ -156,6 +156,10 @@
           },
           "type": {
             "type": "string"
+          },
+          "version": {
+            "description": "Version is what the Bundle ships, for display: status.version, else scm.BundleVersion of its spec (a Bundle the reconciler has not seen yet).",
+            "type": "string"
           }
         },
         "required": [
@@ -936,12 +940,21 @@
           "expression": {
             "type": "string"
           },
+          "gateTemplate": {
+            "description": "GateTemplate is the template an instance was made from (its kardinal.io/gate-template label): the gate's name as the user wrote it, which the UI shows and POST /override takes. Empty on templates.",
+            "type": "string"
+          },
           "holding": {
             "description": "Holding is true when this gate instance holds its bundle back (graph.GateHolds, the rule blockerCount uses). A not-ready gate that is not holding is waiting for the bundle, not blocking it.",
             "type": "boolean"
           },
           "lastEvaluatedAt": {
             "type": "string"
+          },
+          "maxOverrideMinutes": {
+            "description": "MaxOverrideMinutes is the longest override the controller accepts for an instance (--gate-override-max-minutes). Unset on templates.",
+            "format": "int32",
+            "type": "integer"
           },
           "name": {
             "type": "string"
