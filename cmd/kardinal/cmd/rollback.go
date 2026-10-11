@@ -55,7 +55,7 @@ blocking gates pass as audited exemptions meanwhile. See docs/rollback.md.`,
   kardinal rollback my-app prod --to my-app-v1-4 --hold --reason "incident 4521" --hold-expires-in 1d`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			pipeline, env, err := requireEnv(cmd.CommandPath(), args, envFlag)
+			pipeline, env, err := requireEnv(cmd, args, envFlag)
 			if err != nil {
 				return err
 			}
@@ -206,7 +206,7 @@ held back then promotes into <env> through its normal gates.`,
   kardinal unhold my-app prod`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			pipeline, env, err := requireEnv(cmd.CommandPath(), args, envFlag)
+			pipeline, env, err := requireEnv(cmd, args, envFlag)
 			if err != nil {
 				return err
 			}

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
@@ -44,7 +46,11 @@ func pipelineObj(name string, envs ...string) *v1alpha1.Pipeline {
 //
 // Covers CLI-FIXIT-01.
 func TestHumanError(t *testing.T) {
-	c := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithObjects(pipelineObj("api", "test", "prod"), pipelineObj("web")).Build()
+	// The API server serves Pipelines.
+	mapper := meta.NewDefaultRESTMapper(nil)
+	mapper.Add(v1alpha1.GroupVersion.WithKind("Pipeline"), meta.RESTScopeNamespace)
+	c := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithRESTMapper(mapper).
+		WithObjects(pipelineObj("api", "test", "prod"), pipelineObj("web")).Build()
 	withHintClient(t, c)
 	globalContext = "kind-dev"
 	t.Cleanup(func() { globalContext = "" })
@@ -61,8 +67,16 @@ func TestHumanError(t *testing.T) {
 			`kardinal is not installed in cluster "kind-dev"`},
 		{"unreachable", fmt.Errorf("list pipelines: %w", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect: connection refused")}),
 			`cannot reach the API server for context "kind-dev"`},
-		{"forbidden", apierrors.NewForbidden(gr, "", errors.New(`User "alice" cannot list resource "pipelines" in API group "kardinal.io" in the namespace "team-a"`)),
-			"you (alice) cannot list pipelines in namespace team-a.\nAsk your cluster admin for the kardinal-promoter-viewer role"},
+		{"forbidden read", apierrors.NewForbidden(gr, "", errors.New(`User "alice" cannot list resource "pipelines" in API group "kardinal.io" in the namespace "team-a"`)),
+			"you (alice) cannot list pipelines in namespace team-a.\nAsk your cluster admin to bind you the kardinal-promoter-viewer role (read) there"},
+		{"forbidden ship", forbidden("create", "bundles"), "bind you the kardinal-promoter-promoter role (ship, promote, roll back) there"},
+		{"forbidden pause", forbidden("patch", "pipelines"), "the kardinal-promoter-promoter role (with rbac.userRoles.directWrites) (pause, resume, hold, release a hold)"},
+		{"forbidden approve", forbidden("create", "approvals"), "the kardinal-promoter-approver role (approve)"},
+		{"forbidden override", forbidden("update", "policygates"), "the kardinal-promoter-approver role (with rbac.userRoles.directWrites) (override)"},
+		{"forbidden other write", forbidden("delete", "bundles"), "the kardinal-promoter-admin role"},
+		{"one CRD missing", fmt.Errorf("list imageverifications: %w", &meta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "kardinal.io", Kind: "ImageVerification"}}),
+			`CRD ImageVerification is missing or outdated in cluster "kind-dev": apply the chart's CRDs:` + "\n  " + crdHint + "\n(list imageverifications: no matches for kind"},
+		{"one CRD missing, raw text", errors.New(`no matches for kind "HookRun" in version "kardinal.io/v1alpha1"`), "CRD HookRun is missing or outdated"},
 		{"pipeline not found", fmt.Errorf("get: %w", apierrors.NewNotFound(gr, "apo")),
 			`pipeline "apo" not found in namespace "default"; pipelines here: api, web. Other namespaces: kardinal get pipelines -A`},
 		{"lifecycle not found", fmt.Errorf("pause apo: pipeline default/apo: %w", lifecycle.ErrNotFound),
@@ -77,6 +91,25 @@ func TestHumanError(t *testing.T) {
 		})
 	}
 	assert.NoError(t, HumanError(nil))
+
+	// Without the Pipeline kind, any kardinal kind missing means kardinal
+	// is not installed.
+	withHintClient(t, fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithRESTMapper(meta.NewDefaultRESTMapper(nil)).Build())
+	got := HumanError(&meta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "kardinal.io", Kind: "HookRun"}})
+	assert.ErrorContains(t, got, `kardinal is not installed in cluster "kind-dev"`)
+
+	// The unreachable hint keeps the --kubeconfig the user passed.
+	globalKubeconfig = "/tmp/dev.yaml"
+	t.Cleanup(func() { globalKubeconfig = "" })
+	got = HumanError(&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect: connection refused")})
+	assert.ErrorContains(t, got, "Check: kubectl cluster-info --kubeconfig /tmp/dev.yaml --context kind-dev, or pass --context")
+}
+
+// forbidden is the API server's Forbidden error for alice doing verb on
+// resource in namespace team-a.
+func forbidden(verb, resource string) error {
+	return apierrors.NewForbidden(schema.GroupResource{Group: "kardinal.io", Resource: resource}, "",
+		fmt.Errorf(`User "alice" cannot %s resource %q in API group "kardinal.io" in the namespace "team-a"`, verb, resource))
 }
 
 // TestFixitHints (C3): a missing environment lists the pipeline's
@@ -96,7 +129,9 @@ func TestFixitHints(t *testing.T) {
 		WithStatusSubresource(gate, done, b0).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	withHintClient(t, c)
 
-	_, _, err := requireEnv("kardinal rollback", []string{"api"}, "")
+	rb, _, ferr := NewRootCmd().Find([]string{"rollback"})
+	require.NoError(t, ferr)
+	_, _, err := requireEnv(rb, []string{"api"}, "")
 	assert.EqualError(t, err, "which environment? api has: test, prod. Give it after the pipeline: kardinal rollback api <env>")
 
 	err = checkPipelineEnv(context.Background(), c, "default", "api", "staging")
@@ -111,6 +146,26 @@ func TestFixitHints(t *testing.T) {
 	assert.EqualError(t, missingGateError("api", "prod"), "which gate? Gates not passing for api in prod: no-weekend. Pass --gate <name>",
 		"the gate of a finished Bundle is not listed")
 	assert.EqualError(t, missingGateError("api", "test"), "--gate is required: no gate of api in test is holding a promotion back now")
+
+	// A namespace whose pipelines cannot be listed gets no list, rather
+	// than "has no pipelines".
+	noList := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(context.Context, sigs_client.WithWatch, sigs_client.ObjectKey, sigs_client.Object, ...sigs_client.GetOption) error {
+			return forbidden("get", "pipelines")
+		},
+		List: func(context.Context, sigs_client.WithWatch, sigs_client.ObjectList, ...sigs_client.ListOption) error {
+			return forbidden("list", "pipelines")
+		},
+	}).Build()
+	assert.EqualError(t, pipelineNotFound(context.Background(), noList, "default", "x"),
+		`pipeline "x" not found in namespace "default". Other namespaces: kardinal get pipelines -A`)
+
+	// explain -w prints an error the way the command does.
+	var watched fmtBuf
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.NoError(t, explainWatch(ctx, &watched, noList, "team-a", "api", "", false, time.Millisecond))
+	assert.Contains(t, string(watched.b), "error: you (alice) cannot get pipelines in namespace team-a.", "explain -w explains a forbidden error")
 
 	empty := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).Build()
 	assert.EqualError(t, pipelineNotFound(context.Background(), empty, "default", "x"),

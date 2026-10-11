@@ -45,7 +45,7 @@ The first environment has nothing upstream: use kardinal ship there.`,
   kardinal promote my-app --env prod`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			pipeline, env, err := requireEnv(cmd.CommandPath(), args, envFlag)
+			pipeline, env, err := requireEnv(cmd, args, envFlag)
 			if err != nil {
 				return err
 			}

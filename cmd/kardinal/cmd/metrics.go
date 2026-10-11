@@ -47,7 +47,7 @@ Pipeline's status are shown when present.`,
 			}
 			env := envFlag
 			if len(args) > 1 {
-				if _, env, err = envArgs(args, envFlag); err != nil {
+				if _, env, err = envArgs(cmd, args, envFlag); err != nil {
 					return err
 				}
 			}

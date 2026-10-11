@@ -48,7 +48,7 @@ A gate's STATE is the one the UI shows, the first that applies:
                 not reached the environment, or it failed (it can retry)
 
 ```
-kardinal explain <pipeline> [flags]
+kardinal explain <pipeline> [<env>] [flags]
 ```
 
 ### Examples

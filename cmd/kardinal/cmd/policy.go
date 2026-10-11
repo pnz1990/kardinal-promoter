@@ -311,7 +311,7 @@ would pass; it exits 0 either way.`,
 			}
 			env := opts.Env
 			if len(args) > 1 {
-				if _, env, err = envArgs(args, opts.Env); err != nil {
+				if _, env, err = envArgs(cmd, args, opts.Env); err != nil {
 					return err
 				}
 			}
