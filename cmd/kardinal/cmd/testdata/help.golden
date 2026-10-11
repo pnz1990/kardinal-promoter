@@ -22,15 +22,17 @@ Ship and observe:
   get          Display one or more kardinal resources
   history      Show Bundle promotion history for a pipeline
   logs         Show promotion step execution logs for a pipeline
+  ship         Ship a version: create a Bundle, and with --wait follow it
   status       Show controller health or per-pipeline in-flight promotion details
 
 Approve and gate:
-  approve      Approve (or reject) a Bundle for an environment's approval gates
+  approve      Approve (or reject) the version waiting for an environment's approval gates
   override     Force-pass a PolicyGate with a mandatory audit record
   policy       Manage and evaluate promotion policy gates
   promote      Promote the Bundle verified upstream into an environment
 
 Incident:
+  hold         Keep an environment on what runs there now
   pause        Pause a pipeline: no new promotion steps start, in-flight ones hold at the next safe point
   reject       Reject a Bundle: it is never promoted again, and rollback never picks it
   release-hold Release the hold of a rollback on an environment

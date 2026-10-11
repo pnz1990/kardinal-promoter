@@ -41,6 +41,7 @@ kardinal reject <bundle> [flags]
 ```
   -h, --help            help for reject
       --reason string   Why the Bundle is rejected (required)
+      --yes             Do not ask for confirmation on a terminal
 ```
 
 ### Options inherited from parent commands

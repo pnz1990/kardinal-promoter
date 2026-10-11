@@ -77,7 +77,7 @@ names the new Bundle.
 
 ### SEE ALSO
 
-* [kardinal approve](kardinal-approve.md)	 - Approve (or reject) a Bundle for an environment's approval gates
+* [kardinal approve](kardinal-approve.md)	 - Approve (or reject) the version waiting for an environment's approval gates
 * [kardinal audit](kardinal-audit.md)	 - Audit log commands: view and summarize promotion events
 * [kardinal completion](kardinal-completion.md)	 - Generate shell completion scripts
 * [kardinal create](kardinal-create.md)	 - Create kardinal resources
@@ -88,6 +88,7 @@ names the new Bundle.
 * [kardinal explain](kardinal-explain.md)	 - Explain the current state of a promotion pipeline
 * [kardinal get](kardinal-get.md)	 - Display one or more kardinal resources
 * [kardinal history](kardinal-history.md)	 - Show Bundle promotion history for a pipeline
+* [kardinal hold](kardinal-hold.md)	 - Keep an environment on what runs there now
 * [kardinal init](kardinal-init.md)	 - Interactive wizard to generate a Pipeline YAML and scaffold the GitOps repo
 * [kardinal logs](kardinal-logs.md)	 - Show promotion step execution logs for a pipeline
 * [kardinal metrics](kardinal-metrics.md)	 - Show promotion metrics (DORA-style) for a pipeline
@@ -100,6 +101,7 @@ names the new Bundle.
 * [kardinal release-hold](kardinal-release-hold.md)	 - Release the hold of a rollback on an environment
 * [kardinal resume](kardinal-resume.md)	 - Resume a paused pipeline
 * [kardinal rollback](kardinal-rollback.md)	 - Roll back a pipeline environment to a previous Bundle
+* [kardinal ship](kardinal-ship.md)	 - Ship a version: create a Bundle, and with --wait follow it
 * [kardinal status](kardinal-status.md)	 - Show controller health or per-pipeline in-flight promotion details
 * [kardinal validate](kardinal-validate.md)	 - Validate Pipeline and PolicyGate YAML before applying to the cluster
 * [kardinal version](kardinal-version.md)	 - Print the CLI, controller, and kro (Graph) versions
