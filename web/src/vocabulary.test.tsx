@@ -178,14 +178,20 @@ describe('vocabulary', () => {
     await click(screen.getByRole('button', { name: 'Switch to List View' }))
 
     await go('#/p/default/app')
-    // A stage's and a gate's tooltip on the map.
-    for (const name of ['uat', 'soak']) {
-      const node = document.querySelector<SVGGElement>(`g.dag-node[aria-label^="${name} — "]`)!
-      fireEvent.mouseEnter(node)
-      await flush(400)
-      expect(screen.getByTestId('dag-tooltip')).toBeInTheDocument()
-      check(`tooltip ${name}`)
-      fireEvent.mouseLeave(node)
+    // Each station's name (its tooltip on the map) and each gate's popover.
+    for (const env of ['test', 'uat', 'stage', 'prod', 'dr']) {
+      const station = document.querySelector<SVGGElement>(`.station-map [data-station="${env}"]`)!
+      fireEvent.focus(station)
+      await flush()
+      check(`station ${env}`)
+    }
+    for (const gate of ['soak', 'release-approval', 'business-hours']) {
+      const mark = document.querySelector<SVGGElement>(`.station-map__gate[data-gate="${gate}"]`)!
+      fireEvent.focus(mark)
+      await flush()
+      expect(screen.getByRole('tooltip')).toBeInTheDocument()
+      check(`gate popover ${gate}`)
+      fireEvent.blur(mark)
       await flush(400)
     }
     for (const tab of ['Map', 'Versions', 'Activity', 'Metrics']) {
@@ -214,7 +220,9 @@ describe('vocabulary', () => {
     render(<App />)
     await flush()
 
-    // Roll back (a Verified stage), then its message.
+    // Roll back (a Verified stage), then its message: the map offers it under the station in focus.
+    fireEvent.focus(document.querySelector<SVGGElement>('.station-map [data-station="test"]')!)
+    await flush()
     await click(screen.getAllByRole('button', { name: 'Roll back test' })[0])
     check('roll back dialog')
     await click(within(screen.getByRole('dialog')).getByRole('checkbox', { name: /^Hold test/ }))
@@ -224,6 +232,8 @@ describe('vocabulary', () => {
     check('after roll back')
 
     // Promote (a stage stopped by an alarm whose upstream is live), then its message.
+    fireEvent.focus(document.querySelector<SVGGElement>('.station-map [data-station="dr"]')!)
+    await flush()
     await click(screen.getAllByRole('button', { name: 'Promote to dr' })[0])
     check('promote dialog')
     await click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Promote to dr' }))

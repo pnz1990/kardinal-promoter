@@ -11,7 +11,7 @@
 // and the name of their test step.
 
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { need, needJSON, openPipeline, route, dagNode, PIPELINE } from './live'
+import { need, needJSON, openPipeline, route, station, PIPELINE } from './live'
 import { displayState } from '../../../src/displayStates.gen'
 import { versionName } from '../../../src/versionName'
 
@@ -25,13 +25,13 @@ const chips = (page: Page) => page.locator('.bundle-chip')
 const chip = (page: Page, b: Entry) => page.locator(`.bundle-chip[title^="${b.name}: "]`)
 const comparison = (page: Page) => page.getByRole('dialog', { name: 'Version comparison' })
 
-/** expectShown checks that b is the Bundle on screen: chip, provenance, DAG. */
+/** expectShown checks that b is the Bundle on screen: chip, provenance, map. */
 async function expectShown(page: Page, b: Entry, other: Entry) {
   await expect(chip(page, b)).toHaveAttribute('aria-pressed', 'true')
   await expect(chip(page, other)).toHaveAttribute('aria-pressed', 'false')
   await expect(page.getByRole('button', { name: `Copy version name "${b.name}"` })).toBeVisible()
   await expect(page.getByTitle('Author', { exact: true })).toHaveText(b.author)
-  await expect(dagNode(page, 'test')).toHaveAttribute('data-node-id', b.step)
+  await expect(station(page, 'test')).toHaveAttribute('data-node-id', b.step)
 }
 
 /** "test: Verified\nprod: Pending" as the panel prints it, with each state's display label. */

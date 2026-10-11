@@ -138,6 +138,7 @@ test('selecting a row opens its pipeline, with its paused state', async ({ page 
   await pausedRow.click()
   await expect(pausedRow).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByRole('heading', { level: 1, name: paused })).toBeVisible()
+  // The header says Paused and the map carries the paused band (U2).
   await expect(page.getByText('⏸ PAUSED — no new promotions')).toBeVisible()
   expect(route(page).pipeline).toBe(paused)
   expect(route(page).ns).toBe(ns)
@@ -147,7 +148,7 @@ test('selecting a row opens its pipeline, with its paused state', async ({ page 
   await expect(held).toHaveAttribute('aria-pressed', 'true')
   await expect(pausedRow).toHaveAttribute('aria-pressed', 'false')
   await expect(page.getByRole('heading', { level: 1, name: PIPELINE })).toBeVisible()
-  await expect(page.getByText('⏸ PAUSED — no new promotions')).toHaveCount(0)
+  await expect(page.getByRole('status').filter({ hasText: 'Paused · no new promotions' })).toHaveCount(0)
 })
 
 // UI-FLEET-01: with no pipeline selected, the fleet board draws each pipeline
