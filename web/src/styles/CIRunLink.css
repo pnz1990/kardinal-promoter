@@ -1,0 +1,9 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * CIRunLink.css — the Bundle's CI run link (components/CIRunLink.tsx).
+ */
+
+.ci-run-link { color: var(--k-thread-text); font-size: var(--k-text-xs); }
+.ci-run-link--none { color: var(--k-ink-2); }

@@ -46,11 +46,13 @@ export interface StackProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 export const Stack = forwardRef<HTMLDivElement, StackProps>(function Stack(
-  { gap = '2', direction = 'column', align, justify, wrap, as: As = 'div', className, ...rest }, ref,
+  { gap = '2', direction = 'column', align, justify, wrap, as = 'div', className, ...rest }, ref,
 ) {
+  // Every allowed element takes a div's attributes for layout purposes.
+  const As = as as 'div'
   return (
     <As
-      ref={ref as never}
+      ref={ref}
       className={cx(
         'k-stack', `k-stack--${direction}`, `k-stack--gap-${gap}`,
         align && `k-stack--align-${align}`, justify && `k-stack--justify-${justify}`, wrap && 'k-stack--wrap', className,

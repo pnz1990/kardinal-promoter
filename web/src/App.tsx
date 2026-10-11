@@ -45,6 +45,7 @@ import { api } from './api/client'
 import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
 import { useTheme, themeControlLabel } from './ThemeContext'
+import './styles/App.css'
 import { useUrlState } from './useUrlState'
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
 import { resolveShownBundle } from './bundleSelection'
@@ -362,14 +363,14 @@ export function App() {
     [gates, activeBundle],
   )
 
-  // Determine staleness indicator color — escalates at 15s (amber) and 30s (red).
+  // How fresh the data is — late at 15s (ochre), stale at 30s (garnet, pulsing).
   // A failing poll is what makes data that old, so the error does not hold it amber.
   const staleness = elapsedSeconds ?? 0
-  const indicatorColor = staleness > 30
-    ? 'var(--color-error)'     // red when critically stale > 30s (#766)
+  const freshness: 'fresh' | 'late' | 'stale' = staleness > 30
+    ? 'stale'                  // garnet and pulsing when critically stale > 30s (#766)
     : pipelinesError || staleness > 15
-    ? 'var(--color-warning)'   // amber on error, or when stale > 15s
-    : 'var(--color-text-secondary)'
+    ? 'late'                   // ochre on error, or when stale > 15s
+    : 'fresh'
 
   // PolicyGate nodes that hold the bundle back. The UI API decides (holding),
   // with the rule the sidebar's blockerCount uses; a not-ready gate the bundle
@@ -421,12 +422,12 @@ export function App() {
     <InsecureConnectionBanner
       dismissed={insecureBannerDismissed}
       onDismiss={() => setInsecureBannerDismissed(true)}
-      margin="1rem 1.5rem 0"
+      className="app-insecure-banner"
     />
   )
 
   return (
-    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'var(--color-bg)', color: 'var(--color-text)' }}>
+    <div className="app">
       {/* The first Tab stop: past the sidebar to the main content. */}
       <a className="skip-link" href="#main-content"
         onClick={e => { e.preventDefault(); document.getElementById('main-content')?.focus() }}>
@@ -437,134 +438,79 @@ export function App() {
         <KeyboardShortcutsPanel onClose={() => setShowShortcutsPanel(false)} />
       )}
       {/* Sidebar */}
-      <aside style={{
-        width: '240px',
-        minWidth: '200px',
-        background: 'var(--color-bg)',
-        borderRight: '1px solid var(--color-border-muted)',
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-      }}>
-        <div style={{
-          padding: '1rem',
-          borderBottom: '1px solid var(--color-border-muted)',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}>
+      <aside className="app-sidebar">
+        <div className="app-sidebar__brandbar">
           {/* Brand: logo + wordmark; it opens the fleet board. */}
           <button
             type="button"
             onClick={() => { setSelectedNodeLocal(null); setUrlState({ pipeline: undefined, ns: undefined, node: undefined, bundle: undefined }); setViewMode('list') }}
             title="Show the fleet"
             aria-label="Show the fleet"
-            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'none', border: 'none', padding: 0, cursor: 'pointer', borderRadius: '4px' }}
+            className="app-brand"
           >
             <img
               src={`${import.meta.env.BASE_URL}logo.png`}
               alt="Kardinal"
-              style={{ width: '32px', height: '32px', objectFit: 'contain' }}
+              className="app-brand__logo"
             />
-            <span style={{
-              fontWeight: 700,
-              fontSize: '0.9rem',
-              color: 'var(--color-text)',
-              letterSpacing: '0.05em',
-            }}>
+            <span className="app-brand__word">
               KARDINAL
             </span>
           </button>
           {/* Staleness indicator with manual refresh button (#362) */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <div className="app-status">
           <button
             onClick={manualRefresh}
             title="Refresh now"
             aria-label="Refresh data"
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '3px',
-              padding: 0,
-            }}
+            className="app-refresh"
           >
             <span
               title={pipelinesError ? `Error: ${pipelinesError}` : staleness > 30 ? 'Data is stale — click to refresh' : 'Last updated'}
-              style={{
-                fontSize: '0.65rem',
-                color: indicatorColor,
-                fontVariantNumeric: 'tabular-nums',
-                animation: staleness > 30 ? 'stalePulse 1.5s ease-in-out infinite' : undefined,
-              }}
+              className="app-refresh__age"
+              data-level={freshness}
               aria-live="polite"
               aria-label={`Data ${formatElapsed(elapsedSeconds)}`}
             >
               {pipelinesError ? '⚠' : staleness > 30 ? '⚠' : '●'} {formatElapsed(elapsedSeconds)}
             </span>
-            <span style={{ fontSize: '0.6rem', color: 'var(--color-text-faint)' }} title="Click to refresh">↺</span>
+            <span className="app-refresh__icon" title="Click to refresh">↺</span>
           </button>
           {/* Theme toggle button (#722) */}
           <button
             onClick={toggleTheme}
             title={themeControlLabel(preference, theme)}
             aria-label={themeControlLabel(preference, theme)}
-            style={{
-              background: 'none',
-              border: '1px solid var(--color-border)',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '0.7rem',
-              padding: '1px 4px',
-              color: 'var(--color-text-muted)',
-              lineHeight: 1,
-            }}
+            className="app-theme"
           >
             <span aria-hidden="true">{preference === 'system' ? '◐' : preference === 'light' ? '☀' : '☾'}</span>
           </button>
           </div>
         </div>
-        <div style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: 'var(--color-text-secondary)', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div className="app-sidebar__heading">
           <span>PIPELINES</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <div className="app-sidebar__tools">
             {/* #462: view mode toggle — list sidebar vs ops table */}
             <button
               onClick={() => setViewMode(v => v === 'list' ? 'ops-table' : 'list')}
               title={viewMode === 'list' ? 'Switch to Operations Table' : 'Switch to List View'}
               aria-label={viewMode === 'list' ? 'Switch to Operations Table' : 'Switch to List View'}
-              style={{
-                background: viewMode === 'ops-table' ? 'var(--color-surface)' : 'none',
-                border: '1px solid ' + (viewMode === 'ops-table' ? 'var(--color-accent)' : 'var(--color-border)'),
-                borderRadius: '4px',
-                cursor: 'pointer',
-                padding: '1px 5px',
-                fontSize: '0.65rem',
-                color: viewMode === 'ops-table' ? 'var(--color-accent)' : 'var(--color-text-secondary)',
-              }}
+              className="app-view-toggle"
+              data-active={viewMode === 'ops-table' || undefined}
             >
               {viewMode === 'list' ? '⊞ Ops' : '☰ List'}
             </button>
             {currentNamespace && (
-              <span style={{
-                fontSize: '0.65rem',
-                color: 'var(--color-text-secondary)',
-                background: 'var(--color-surface)',
-                borderRadius: '4px',
-                padding: '1px 5px',
-                fontWeight: 400,
-                fontFamily: 'var(--k-font-mono)',
-              }} title={`Namespace: ${currentNamespace}`}>
+              <span className="app-namespace" title={`Namespace: ${currentNamespace}`}>
                 {currentNamespace}
               </span>
             )}
           </div>
         </div>
-        <div style={{ overflowY: 'auto', flex: 1 }}>
+        <div className="app-sidebar__scroll">
           {/* #505: Fleet health bar — above pipeline list in sidebar */}
           {pipelines.length > 0 && (
-            <div style={{ padding: '0.5rem 0.75rem 0' }}>
+            <div className="app-sidebar__fleet">
               <FleetHealthBar
                 pipelines={pipelines}
                 activeFilter={fleetFilter}
@@ -589,7 +535,7 @@ export function App() {
 
       {/* Ops table mode — full-width table replaces the main content area */}
       {viewMode === 'ops-table' ? (
-        <main id="main-content" tabIndex={-1} style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--color-bg-deep)' }}>
+        <main id="main-content" tabIndex={-1} className="app-main app-main--ops">
           {insecureBanner}
           <PipelineOpsTable
             pipelines={pipelines}
@@ -602,12 +548,10 @@ export function App() {
         </main>
       ) : (
         <>{/* Main area — column layout for header + content row */}
-        <main id="main-content" tabIndex={-1} style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--color-bg)' }}>
+        <main id="main-content" tabIndex={-1} className="app-main">
         {insecureBanner}
         {!selectedPipeline ? (
-          <div style={pipelines.length > 0
-            ? { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }
-            : { color: 'var(--color-text-faint)', padding: '3rem 2rem', textAlign: 'center' }}>
+          <div className={pipelines.length > 0 ? 'app-fleet' : 'app-empty'}>
             {pipelines.length > 0 ? (
               <FleetBoard pipelines={filteredPipelines} total={pipelines.length} onSelect={handleSelectPipeline} />
             ) : (
@@ -618,52 +562,36 @@ export function App() {
         ) : (
           <>
             {/* Header area (fixed height) */}
-            <div style={{ padding: '1.5rem 1.5rem 0', flexShrink: 0 }}>
+            <div className="app-pipeline-head">
               {/* Pipeline header */}
-              <div style={{ marginBottom: '1rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
-                  <h1 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0 }}>
+              <div className="app-pipeline-head__title-block">
+                <div className="app-pipeline-head__title-row">
+                  <h1 className="app-pipeline-head__title">
                     {activePipeline?.name}
                   </h1>
                   {/* Paused banner in main panel (#328) */}
                   {activePipeline?.paused && (
-                    <span style={{
-                      fontSize: '0.7rem',
-                      background: 'var(--color-accent-bg)',
-                      color: 'var(--color-accent)',
-                      border: '1px solid var(--color-accent)',
-                      borderRadius: '4px',
-                      padding: '2px 8px',
-                      fontWeight: 700,
-                      letterSpacing: '0.05em',
-                    }}>
+                    <span className="app-paused">
                       ⏸ PAUSED — no new promotions
                     </span>
                   )}
                 </div>
                 {/* Bundle provenance card (#329) */}
                 {activeBundle && (
-                  <div style={{
-                    display: 'flex',
-                    flexWrap: 'wrap',
-                    gap: '0.5rem',
-                    alignItems: 'center',
-                    fontSize: '0.82rem',
-                    color: 'var(--color-text-muted)',
-                  }}>
+                  <div className="app-provenance">
                     <span>
-                      Bundle: <span style={{ color: 'var(--color-code)', fontFamily: 'var(--k-font-mono)' }}>{activeBundle.name}</span>
+                      Bundle: <span className="app-provenance__bundle">{activeBundle.name}</span>
                       {/* #763: copy bundle name */}
                       <CopyButton text={activeBundle.name} title={`Copy bundle name "${activeBundle.name}"`} />
                     </span>
                     <BundleTypeBadge type={activeBundle.type} />
-                    <span style={{ color: 'var(--color-text-faint)' }}>·</span>
+                    <span className="app-sep">·</span>
                     <HealthChip state={activeBundle.phase} size="sm" />
                     <RejectedLiveBanner bundle={activeBundle} />
                     {activeBundle.provenance?.commitSHA && (
                       <>
-                        <span style={{ color: 'var(--color-text-faint)' }}>·</span>
-                        <span style={{ fontFamily: 'var(--k-font-mono)', color: 'var(--color-text-muted)' }}
+                        <span className="app-sep">·</span>
+                        <span className="app-sha"
                               title="Commit SHA">
                           {activeBundle.provenance.commitSHA.slice(0, 8)}
                         </span>
@@ -673,13 +601,13 @@ export function App() {
                     )}
                     {activeBundle.provenance?.author && (
                       <>
-                        <span style={{ color: 'var(--color-text-faint)' }}>·</span>
+                        <span className="app-sep">·</span>
                         <span title="Author">{activeBundle.provenance.author}</span>
                       </>
                     )}
                     {activeBundle.provenance?.ciRunURL && (
                       <>
-                        <span style={{ color: 'var(--color-text-faint)' }}>·</span>
+                        <span className="app-sep">·</span>
                         <CIRunLink url={activeBundle.provenance.ciRunURL} />
                       </>
                     )}
@@ -724,43 +652,22 @@ export function App() {
 
               {/* Bundle history (collapsible) */}
               {bundles.length > 0 && (
-                <div style={{ marginBottom: '1rem' }}>
+                <div className="app-history">
                   <button
                     onClick={() => setBundleHistoryOpen(o => !o)}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: 'var(--color-accent)',
-                      cursor: 'pointer',
-                      fontSize: '0.8rem',
-                      padding: '0.25rem 0',
-                      fontWeight: 600,
-                    }}
+                    className="app-history__toggle"
                     aria-expanded={bundleHistoryOpen}
                   >
                     {bundleHistoryOpen ? '▾' : '▸'} Bundle history ({bundles.length})
                   </button>
                   {bundleHistoryOpen && (
-                    <ul style={{
-                      listStyle: 'none',
-                      padding: '0.5rem 0',
-                      margin: 0,
-                      borderLeft: '2px solid var(--color-border-muted)',
-                      paddingLeft: '0.75rem',
-                    }}>
+                    <ul className="app-history__list">
                       {bundles.map(b => (
-                        <li key={b.name} style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.5rem',
-                          marginBottom: '0.35rem',
-                          fontSize: '0.8rem',
-                          color: 'var(--color-text-muted)',
-                        }}>
+                        <li key={b.name} className="app-history__item">
                           <HealthChip state={b.phase} size="sm" />
-                          <span style={{ fontFamily: 'var(--k-font-mono)', color: 'var(--color-text)' }}>{b.name}</span>
+                          <span className="app-history__name">{b.name}</span>
                           {b.provenance?.commitSHA && (
-                            <span style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--k-font-mono)' }}>
+                            <span className="app-sha">
                               {b.provenance.commitSHA.slice(0, 8)}
                             </span>
                           )}
@@ -834,16 +741,9 @@ export function App() {
 
             {/* #326: Content row — DAG + NodeDetail split panel side by side.
                 NodeDetail is a flex sibling, not position:fixed overlay. */}
-            <div style={{ flex: 1, display: 'flex', overflow: 'hidden', padding: '0 1.5rem 1.5rem' }}>
+            <div className="app-content">
               {/* DAG area */}
-              <div style={{
-                flex: 1,
-                background: 'var(--color-surface)',
-                borderRadius: selectedNode ? '8px 0 0 8px' : '8px',
-                padding: '1rem',
-                minHeight: '300px',
-                overflow: 'auto',
-              }}>
+              <div className="app-dag" data-split={selectedNode ? true : undefined}>
                 <ErrorBoundary fallbackMessage="Graph failed to load">
                   <DAGView
                     nodes={displayGraph?.nodes ?? []}

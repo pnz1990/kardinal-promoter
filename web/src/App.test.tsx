@@ -480,22 +480,21 @@ describe('App header', () => {
   // #766, docs/changelog.md: the indicator is amber after 15 s and red after
   // 30 s. A failing API is how data gets that old, so an error does not keep
   // it amber.
-  it('turns the stale-data indicator red after 30 s, also while the polls fail', async () => {
+  it('marks the data stale after 30 s (late after 15 s), also while the polls fail', async () => {
     render(<App />)
     await flush()
     const indicator = () => screen.getByRole('button', { name: 'Refresh data' }).querySelector<HTMLElement>('span[aria-live="polite"]')!
-    expect(indicator().style.color).toBe('var(--color-text-secondary)')
+    expect(indicator()).toHaveAttribute('data-level', 'fresh')
 
     h.state.pipelinesError = 'API error 503: Service Unavailable'
     await flush(5_100)
-    expect(indicator().style.color).toBe('var(--color-warning)')
+    expect(indicator()).toHaveAttribute('data-level', 'late')
     await flush(11_000)
     expect(indicator().textContent).toMatch(/^⚠ 1\ds ago$/)
-    expect(indicator().style.color).toBe('var(--color-warning)')
+    expect(indicator()).toHaveAttribute('data-level', 'late')
     await flush(15_000)
     expect(indicator().textContent).toMatch(/^⚠ 3\ds ago$/)
-    expect(indicator().style.color).toBe('var(--color-error)')
-    expect(indicator().style.animation).toContain('stalePulse')
+    expect(indicator()).toHaveAttribute('data-level', 'stale')
     expect(indicator()).toHaveAttribute('title', 'Error: API error 503: Service Unavailable')
   })
 })
