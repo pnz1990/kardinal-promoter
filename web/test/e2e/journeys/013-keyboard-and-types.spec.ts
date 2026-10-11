@@ -76,12 +76,11 @@ test.describe('Journey 013 — Keyboard and Bundle types', () => {
     await expect(page.getByRole('toolbar', { name: /Bundle history/ })).toBeVisible()
     await expectNoViolations(page, 'light pipeline view')
 
-    await page.locator('[role=button][tabindex="0"]').filter({ hasText: 'prod' }).first().click()
+    await page.locator('.station-map [data-station="prod"]').click()
     await expect(page.getByTestId('node-detail')).toBeVisible()
-    // The hover tooltip fades in over 80 ms; axe would measure it half
-    // transparent. Move the pointer off the graph first.
+    // A gate's popover shows on hover; move the pointer off the map first.
     await page.mouse.move(0, 0)
-    await expect(page.getByTestId('dag-tooltip')).toHaveCount(0)
+    await expect(page.locator('.gate-popover')).toHaveCount(0)
     await expectNoViolations(page, 'light node details')
 
     await page.keyboard.press('Escape')

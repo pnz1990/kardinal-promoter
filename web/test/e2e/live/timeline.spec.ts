@@ -11,7 +11,7 @@
 // and the name of their test step.
 
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { need, needJSON, openPipeline, dagNode, PIPELINE } from './live'
+import { need, needJSON, openPipeline, station, PIPELINE } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -24,13 +24,13 @@ const chip = (page: Page, b: Entry) => page.locator(`.bundle-chip[title^="${b.na
 const comparison = (page: Page) => page.getByRole('dialog', { name: 'Bundle comparison' })
 const hashParams = (page: Page) => new URLSearchParams(new URL(page.url()).hash.slice(1))
 
-/** expectShown checks that b is the Bundle on screen: chip, provenance, DAG. */
+/** expectShown checks that b is the Bundle on screen: chip, provenance, map. */
 async function expectShown(page: Page, b: Entry, other: Entry) {
   await expect(chip(page, b)).toHaveAttribute('aria-pressed', 'true')
   await expect(chip(page, other)).toHaveAttribute('aria-pressed', 'false')
   await expect(page.getByRole('button', { name: `Copy bundle name "${b.name}"` })).toBeVisible()
   await expect(page.getByTitle('Author', { exact: true })).toHaveText(b.author)
-  await expect(dagNode(page, 'test')).toHaveAttribute('data-node-id', b.step)
+  await expect(station(page, 'test')).toHaveAttribute('data-node-id', b.step)
 }
 
 /** expectComparison checks the panel for Bundle A a and Bundle B b. */

@@ -226,7 +226,8 @@ describe('App pipeline selection', () => {
     expect(buttons[1]).toHaveAttribute('aria-pressed', 'true')
     expect(buttons[0]).toHaveAttribute('aria-pressed', 'false')
     expect(lastGraphCall()).toBe('app-b')
-    expect(screen.getByText(/PAUSED/, { selector: 'main span' })).toBeInTheDocument()
+    // The one-line header says Paused (U2).
+    expect(screen.getByText('Paused', { selector: 'main .pipeline-head__state' })).toBeInTheDocument()
     expect(screen.getByTitle('Namespace: team-b')).toBeInTheDocument()
     // The timeline only lists bundles from the selected namespace.
     expect(screen.queryByTitle(/^app-a:/)).not.toBeInTheDocument()
@@ -509,6 +510,9 @@ describe('App policy gates panel', () => {
     ] as PolicyGate[]
     render(<App />)
     await flush()
+    // The gates are in the pipeline's Gates tab (U2).
+    fireEvent.click(screen.getByRole('tab', { name: /^Gates/ }))
+    await flush()
     expect(screen.queryByText('1 blocked')).not.toBeInTheDocument()
     expect(screen.getByText('1 passing')).toBeInTheDocument()
     expect(screen.queryByText('other-gate')).not.toBeInTheDocument()
@@ -516,10 +520,10 @@ describe('App policy gates panel', () => {
 })
 
 
-// E2E-R19: the banner, "Show blocked" and the gates-panel chip count only the
+// E2E-R19: the map's attention strip and the gates-panel chip count only the
 // gates the UI API marks holding (graph.GateHolds, the rule blockerCount uses).
 // A not-ready gate that does not hold the bundle is shown as Waiting.
-describe('App blocked banner counts only holding gates (E2E-R19)', () => {
+describe('App counts only holding gates as blocked (E2E-R19)', () => {
   // The bundle is health-checking in test; the prod soak gate was evaluated
   // not ready. The graph and gates handlers return it as they do on a cluster.
   function gateCase(holding: boolean) {
@@ -532,8 +536,10 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
       nodes: [
         { id: 'b-new-test', type: 'PromotionStep', label: 'test', environment: 'test', state: 'HealthChecking' },
         gateNode,
+        // The UI API sends a NotStarted step for an environment not reached yet.
+        { id: 'b-new-prod', type: 'PromotionStep', label: 'prod', environment: 'prod', state: 'NotStarted' },
       ],
-      edges: [{ from: 'b-new-test', to: 'soak-b-new-prod' }],
+      edges: [{ from: 'b-new-test', to: 'soak-b-new-prod' }, { from: 'soak-b-new-prod', to: 'b-new-prod' }],
     } as GraphResponse
     h.state.gates = [{
       name: 'soak-b-new-prod', namespace: 'default', expression: 'upstream.test.soakMinutes >= 30',
@@ -546,11 +552,16 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
     gateCase(false)
     render(<App />)
     await flush()
-    expect(screen.queryByText(/blocking promotion/)).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Show blocked' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/blocked by/)).not.toBeInTheDocument()
     expect(screen.queryByText(/\d+ blocked/)).not.toBeInTheDocument()
+    // The map mounts the gate on the edge into prod, not ready, not blocking;
+    // the attention strip does not count it (the bundle has not reached it).
+    expect(screen.getByRole('img', { name: 'gate soak, Not ready' })).toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Needs attention' })).not.toBeInTheDocument()
+    // The Gates tab lists it as waiting.
+    fireEvent.click(screen.getByRole('tab', { name: /^Gates/ }))
+    await flush()
     expect(screen.getByText('1 waiting')).toBeInTheDocument()
-    expect(screen.getByLabelText('soak — Not ready')).toBeInTheDocument()
   })
 
   it('shows 0 blocked for a Failed bundle', async () => {
@@ -558,8 +569,7 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
     gateCase(false)
     render(<App />)
     await flush()
-    expect(screen.queryByText(/blocking promotion/)).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Show blocked' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/blocked by/)).not.toBeInTheDocument()
     expect(screen.queryByText(/\d+ blocked/)).not.toBeInTheDocument()
   })
 
@@ -567,8 +577,9 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
     gateCase(true)
     render(<App />)
     await flush()
-    expect(screen.getByText('1 PolicyGate blocking promotion')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Show blocked' })).toBeInTheDocument()
+    // The map's attention strip names the gate; the gates panel counts it.
+    expect(screen.getByRole('button', { name: '1 blocked by soak' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'gate soak, Blocking' })).toBeInTheDocument()
     expect(screen.getByText('1 blocked')).toBeInTheDocument()
   })
 })

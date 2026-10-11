@@ -8,7 +8,7 @@
 // after it. Bundle KARDINAL_UI_BUNDLE is Verified in all seven.
 
 import { test, expect } from '@playwright/test'
-import { need, openPipeline, dagNode, filterSidebar, PIPELINE } from './live'
+import { need, openPipeline, station, filterSidebar, PIPELINE } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -29,25 +29,34 @@ test('the fleet board shows the wave as one plate', async ({ page }) => {
   await expect(line.locator('.fleet-station')).toHaveCount(2)
 })
 
-test('the lane counts the wave, the DAG keeps spec order, the metrics count the final wave', async ({ page }) => {
+test('the map draws the wave as a band, its grid keeps spec order, the metrics count the final wave', async ({ page }) => {
   await openPipeline(page, base, ns)
-  const lane = page.getByRole('group', { name: 'Pipeline stages' })
-  const wave = lane.getByRole('group', { name: '6 environments: w1 to w6' })
-  await expect(wave).toContainText('6 verified')
-  await expect(lane.getByRole('button', { name: /^Select / })).toHaveCount(1)
-  await wave.getByRole('button', { name: 'Show environments' }).click()
-  for (const env of WAVE) await expect(wave.getByRole('button', { name: `Select ${env}` })).toBeVisible()
-  // A real click reaches the card's select button (#1580 QA): no force.
-  await wave.getByRole('button', { name: 'Select w3' }).click()
-  await expect(wave.getByRole('button', { name: 'Deselect w3' })).toHaveAttribute('aria-pressed', 'true')
+  const map = page.locator('.station-map')
+  // The station map (U2): six parallel environments are one band.
+  const band = map.getByRole('button', { name: /^WAVE 1 · 6: 6 verified$/ })
+  await expect(band).toHaveAttribute('aria-expanded', 'false')
+  await expect(map.locator('[data-station]')).toHaveCount(1) // test; the wave is the band
+  await band.click()
+  await expect(band).toHaveAttribute('aria-expanded', 'true')
+  for (const env of WAVE) await expect(station(page, env).or(map.locator(`.cell[data-station="${env}"]`))).toBeVisible()
+  // A real click on a cell opens its environment (no force).
+  await map.locator('.cell[data-station="w3"]').click()
+  await expect(page.getByTestId('node-detail')).toContainText('Environment: w3')
+  await page.getByTestId('node-detail').getByRole('button', { name: 'Close' }).click()
 
-  const ys: number[] = []
+  // The grid reads in spec order: w1 first, w6 last.
+  const order: Array<{ x: number; y: number }> = []
   for (const env of WAVE) {
-    await expect(dagNode(page, env)).toHaveAttribute('aria-label', `${env} — Live`)
-    ys.push((await dagNode(page, env).boundingBox())!.y)
+    const cell = map.locator(`.cell[data-station="${env}"]`)
+    await expect(cell).toHaveAttribute('aria-label', new RegExp(`^${env} — Live, `))
+    order.push((await cell.boundingBox())!)
   }
-  expect(ys, 'w1 at the top, w6 at the bottom').toEqual([...ys].sort((a, b) => a - b))
+  for (let i = 1; i < order.length; i++) {
+    const [p, q] = [order[i - 1], order[i]]
+    expect(p.y < q.y - 1 || (Math.abs(p.y - q.y) <= 1 && p.x < q.x), `${WAVE[i - 1]} before ${WAVE[i]}`).toBe(true)
+  }
 
+  await page.getByRole('tab', { name: 'Metrics' }).click()
   const metrics = page.getByRole('region', { name: 'Release metrics' })
   await expect(metrics).toContainText('Time to all 6 final envs')
   await expect(metrics).toContainText(/Deploys to all 6 final envs\s*1/)

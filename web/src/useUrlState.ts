@@ -26,6 +26,8 @@ export interface UrlState {
   node: string | undefined
   /** Name of the bundle selected for diff comparison (opens BundleDiffPanel). */
   bundle: string | undefined
+  /** The pipeline page's tab (map, gates, history, metrics); unset is the map. */
+  tab?: string | undefined
 }
 
 /** Parse the URL hash fragment into a UrlState. */
@@ -37,6 +39,7 @@ function parseHash(hash: string): UrlState {
     ns: params.get('ns') ?? undefined,
     node: params.get('node') ?? undefined,
     bundle: params.get('bundle') ?? undefined,
+    tab: params.get('tab') ?? undefined,
   }
 }
 
@@ -47,6 +50,7 @@ function serializeHash(state: UrlState): string {
   if (state.ns) params.set('ns', state.ns)
   if (state.node) params.set('node', state.node)
   if (state.bundle) params.set('bundle', state.bundle)
+  if (state.tab) params.set('tab', state.tab)
   const s = params.toString()
   return s ? `#${s}` : ''
 }

@@ -399,11 +399,16 @@ release name other than `kardinal-promoter`, the Service is named
   is one station with a bar of its targets (Verified, in flight, Failed) and a count such as
   `20/50 verified, 5 in flight (max 5)`; it says `stopped` once `maxUnavailable` targets
   failed. A station opens its Pipeline. The board follows the sidebar's health filter.
-- **Pipeline view.** The lane, the promotion graph, policy gates with their CEL expressions,
-  the Bundle history and comparison, and pause, resume, promote, roll back and create bundle.
-  The lane has one column per depth: parallel environments share a column, and a wave of five
-  or more is one card that counts its environments by state and expands to the list. The graph
-  lists the environments of a column in the Pipeline's order.
+- **Pipeline view.** One line names the pipeline, its state and where the newest version is,
+  with Pause and New bundle. Below it, the **map**: each environment is a station that shows the
+  version it runs and the version on its way, gates sit on the edge into the environment they
+  guard, and the version you follow is one red line through the stations it reached. A wave of
+  five or more environments is one band, and a fleet one platform; each counts its environments
+  by state and expands to a grid in the Pipeline's order. The map opens at Detail, Map or
+  Overview by the pipeline's size, and has search, a minimap and a strip that lists what needs a
+  person. Promote, Roll back and Release hold are under each station; shift-click a second
+  Bundle on the rail to compare its route. The Gates, History and Metrics tabs hold the policy
+  gates with their CEL expressions, the Bundle history and the release metrics.
 - **Release metrics.** Time to the final environments and the deploys that reached them, over
   the last 10 Bundles. The final environments are those no other environment waits for: `prod`
   in test, uat, prod; every environment of a last wave, which a Bundle reaches when all of

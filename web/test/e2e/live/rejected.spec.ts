@@ -20,5 +20,6 @@ test('a rejected Bundle says who rejected it and why', async ({ page }) => {
   await expect(chip).toHaveClass(/bundle-chip--rejected/)
   await expect(page.getByRole('note')).toHaveText(new RegExp(`^Rejected by ${rejecter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} (just now|\\d+m ago): ${reason}$`))
   // A rejected Bundle is never promoted: the approval gate no longer holds it.
+  await page.getByRole('tab', { name: /^Gates/ }).click()
   await expect(page.getByRole('meter', { name: 'Approvals' })).toHaveCount(0)
 })

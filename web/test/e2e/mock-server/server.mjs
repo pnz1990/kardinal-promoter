@@ -124,7 +124,7 @@ const GRAPHS = {
       { id: 'step-uat', type: 'PromotionStep', label: 'uat', environment: 'uat', state: 'Verified', startedAt: new Date(Date.now() - 400_000).toISOString() },
       // holding: the UI API sets it with graph.GateHolds; the UI counts only
       // holding gates as blocked (E2E-R19). The mock states it, not the rule.
-      { id: 'gate-no-weekend', type: 'PolicyGate', label: 'no-weekend-deploys', environment: 'no-weekend-deploys', state: 'Block', holding: true, expression: '!schedule.isWeekend', lastEvaluatedAt: new Date(Date.now() - 30_000).toISOString() },
+      { id: 'gate-no-weekend', type: 'PolicyGate', label: 'no-weekend-deploys', environment: 'prod', state: 'Block', holding: true, expression: '!schedule.isWeekend', lastEvaluatedAt: new Date(Date.now() - 30_000).toISOString() },
       { id: 'step-prod', type: 'PromotionStep', label: 'prod', environment: 'prod', state: 'WaitingForMerge', prURL: 'https://github.com/org/repo/pull/42', startedAt: new Date(Date.now() - 200_000).toISOString() },
     ],
     edges: [

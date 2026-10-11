@@ -2,9 +2,9 @@
 // Licensed under the Apache License, Version 2.0
 //
 // Journey 014: a Pipeline with a wave of 149 environments after env-000
-// (#1580). The fleet board shows the wave as one plate, the stage lane as one
-// wave card that expands, the DAG lists the wave top to bottom in spec order,
-// and the release metrics count the final wave, not its last entry.
+// (#1580). The fleet board shows the wave as one plate, the station map as one
+// band that expands into a grid in spec order, and the release metrics count
+// the final wave, not its last entry.
 
 import { test, expect, type Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
@@ -87,37 +87,45 @@ test.describe('Journey 014 — Waves', () => {
     expect(axe.violations.map(v => `${v.id}: ${v.nodes[0]?.target[0]}`)).toEqual([])
   })
 
-  test('the lane groups the wave, the DAG keeps spec order, the metrics count the final wave', async ({ page }) => {
+  test('the map groups the wave into a band, keeps spec order, the metrics count the final wave', async ({ page }) => {
     await serveWave(page)
     await page.goto('/')
     await page.locator('aside').getByText('fleet', { exact: true }).click()
     await expect(page.getByRole('heading', { level: 1, name: 'fleet' })).toBeVisible()
 
-    const lane = page.getByRole('group', { name: 'Pipeline stages' })
-    const wave = lane.getByRole('group', { name: '149 environments: env-001 to env-149' })
-    await expect(wave).toContainText('149 verified')
-    await expect(lane.getByRole('button', { name: /^Select env-/ })).toHaveCount(1)
-    await wave.getByRole('button', { name: 'Show environments' }).click()
-    await expect(wave.getByRole('button', { name: /^Select env-/ })).toHaveCount(149)
-    // A real click on a card reaches its select button: the card's content
-    // does not intercept it (#1580 QA), so no force is needed.
-    await wave.getByRole('button', { name: 'Select env-005' }).click()
-    await expect(wave.getByRole('button', { name: 'Deselect env-005' })).toHaveAttribute('aria-pressed', 'true')
+    // The station map draws the wave of 149 as one band (U2).
+    const map = page.locator('.station-map')
+    const band = map.getByRole('button', { name: /^WAVE 1 · 149: 149 verified$/ })
+    await expect(band).toHaveAttribute('aria-expanded', 'false')
+    await expect(map.locator('[data-station^="env-"]').and(map.locator('.cell'))).toHaveCount(0)
+    await band.click()
+    await expect(band).toHaveAttribute('aria-expanded', 'true')
+    const cells = map.locator('.cell[data-station]')
+    await expect(cells).toHaveCount(149)
+    // A cell opens its environment's stage drawer.
+    await map.locator('[data-station="env-005"]').click()
+    await expect(page.getByLabel('Close')).toBeVisible()
+    await page.getByLabel('Close').click()
 
-    // DAG nodes of the wave run top to bottom from env-001.
-    const y = async (env: string) => (await page.locator(`[data-node-id="step-${env}"]`).boundingBox())!.y
-    expect(await y('env-001')).toBeLessThan(await y('env-002'))
-    expect(await y('env-002')).toBeLessThan(await y('env-149'))
+    // The grid reads in spec order from env-001 (all are Verified).
+    const at = async (env: string) => (await map.locator(`[data-station="${env}"]`).boundingBox())!
+    const before = async (a: string, b: string) => {
+      const [p, q] = [await at(a), await at(b)]
+      return p.y < q.y - 1 || (Math.abs(p.y - q.y) <= 1 && p.x < q.x)
+    }
+    expect(await before('env-001', 'env-002')).toBe(true)
+    expect(await before('env-002', 'env-149')).toBe(true)
 
+    // The band and its grid pass the WCAG 2.1 AA checks.
+    const axe = await new AxeBuilder({ page }).include('.station-map').withTags(['wcag2a', 'wcag2aa']).analyze()
+    expect(axe.violations.map(v => `${v.id}: ${v.nodes[0]?.target[0]}`)).toEqual([])
+
+    await page.getByRole('tab', { name: 'Metrics' }).click()
     const metrics = page.getByRole('region', { name: 'Release metrics' })
     await expect(metrics).toContainText('Time to all 149 final envs')
     // The release ended when the slowest of the wave (env-001, 2h) verified.
     await expect(metrics).toContainText('2h')
     await expect(metrics).not.toContainText('env-149')
-
-    // The wave card and its expanded list pass the WCAG 2.1 AA checks.
-    const axe = await new AxeBuilder({ page }).include('[aria-label="Pipeline stages"]').withTags(['wcag2a', 'wcag2aa']).analyze()
-    expect(axe.violations.map(v => `${v.id}: ${v.nodes[0]?.target[0]}`)).toEqual([])
   })
 
   test('an all-wave-1 Pipeline is drawn as parallel roots, not a chain', async ({ page }) => {
@@ -129,15 +137,16 @@ test.describe('Journey 014 — Waves', () => {
     await expect(line.locator('.fleet-stop')).toHaveCount(1)
     await expect(line.locator('.fleet-station')).toHaveCount(3)
 
-    // With no Bundle the DAG is the static topology: three roots in one column, no edges.
+    // With no Bundle the map is the topology: three roots in one column, no edges.
     await page.locator('aside').getByText('regions', { exact: true }).click()
     await expect(page.getByRole('heading', { level: 1, name: 'regions' })).toBeVisible()
-    const xs = await Promise.all(REGIONS.map(async env => (await page.locator(`[data-node-id="${env}"]`).boundingBox())!.x))
+    const xs = await Promise.all(REGIONS.map(async env => Math.round((await page.locator(`.station-map [data-station="${env}"]`).boundingBox())!.x)))
     expect(new Set(xs).size, 'one column').toBe(1)
-    await expect(page.locator('svg path[marker-end]')).toHaveCount(0)
+    await expect(page.locator('.station-map__edge')).toHaveCount(0)
 
     // With a Bundle the metrics count all three as final environments.
     await page.locator('aside').getByText('regions-live', { exact: true }).click()
+    await page.getByRole('tab', { name: 'Metrics' }).click()
     const metrics = page.getByRole('region', { name: 'Release metrics' })
     await expect(metrics).toContainText('Time to all 3 final envs')
     // The last of them (ap) was Verified 3h after creation.

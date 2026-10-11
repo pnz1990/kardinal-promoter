@@ -42,7 +42,9 @@ test.describe('Journey 006 — Pause and Resume pipeline', () => {
     expect(req.postDataJSON()).toEqual({ pipeline: 'kardinal-test-app', namespace: 'default' })
 
     await expect(dialog).toBeHidden()
-    await expect(page.getByText(/PAUSED — no new promotions/)).toBeVisible()
+    // The header says Paused; the map carries a hatched band (U2).
+    await expect(page.locator('.pipeline-head__state')).toHaveText('Paused')
+    await expect(page.getByRole('status').filter({ hasText: 'Paused · no new promotions' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Resume pipeline' })).toBeVisible()
   })
 

@@ -11,7 +11,7 @@
 // through the API, and the Go test checks it is paused.
 
 import { test, expect, type Page, type Request, type Route } from '@playwright/test'
-import { need, openPipeline, pipelineHash, filterSidebar, sidebarRows, sidebarRow, dagNode, PIPELINE } from './live'
+import { need, openPipeline, pipelineHash, filterSidebar, sidebarRows, sidebarRow, station, PIPELINE } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -127,7 +127,7 @@ test('keyboard shortcuts: / focuses the filter, ? shows the help, r refreshes, E
   await expect(help).toHaveCount(0)
 
   // Esc closes the node details, and the link loses the node.
-  await dagNode(page, 'test').click()
+  await station(page, 'test').click()
   await expect(details(page)).toContainText('Environment: test')
   expect(hashParams(page).get('node')).toBe(testStep)
   await page.keyboard.press('Escape')
@@ -190,7 +190,7 @@ test('the theme follows the system until the user picks one, which the next visi
 test('a link opens the pipeline and node it names, and Back and Forward walk the selections', async ({ page }) => {
   await openPipeline(page, base, ns, PIPELINE, { node: testStep })
   await expect(details(page)).toContainText('Environment: test')
-  await expect(dagNode(page, 'test')).toHaveAttribute('aria-pressed', 'true')
+  await expect(station(page, 'test')).toHaveAttribute('aria-current', 'true')
 
   // Closing the details is one history entry.
   await details(page).getByRole('button', { name: 'Close' }).click()
@@ -209,11 +209,11 @@ test('a link opens the pipeline and node it names, and Back and Forward walk the
   await expect(heading(page)).toHaveText(idle)
   expect(hashParams(page).get('pipeline')).toBe(idle)
   expect(hashParams(page).get('ns')).toBe(ns)
-  // No Bundle: the DAG is the pipeline's environments, not started.
-  await expect(dagNode(page, 'test')).toHaveAttribute('aria-label', 'test — Not reached')
+  // No Bundle: the map is the pipeline's environments, not reached.
+  await expect(station(page, 'test')).toHaveAttribute('aria-label', /^test — Not reached, /)
   await page.goBack()
   await expect(heading(page)).toHaveText(PIPELINE)
-  await expect(dagNode(page, 'test')).toHaveAttribute('aria-label', 'test — Live')
+  await expect(station(page, 'test')).toHaveAttribute('aria-label', /^test — Live, /)
   await expect(details(page)).toHaveCount(0)
   await page.goForward()
   await expect(heading(page)).toHaveText(idle)

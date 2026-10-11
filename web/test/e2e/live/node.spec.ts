@@ -12,7 +12,7 @@
 // status.steps, as the controller wrote them.
 
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { need, needJSON, openPipeline, dagNode } from './live'
+import { need, needJSON, openPipeline, station, gateMark } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -47,7 +47,7 @@ test('a step shows its sub-steps, elapsed time, merge link and events', async ({
   await openPipeline(page, base, ns)
   await expect(details(page)).toHaveCount(0)
 
-  await dagNode(page, 'prod').click()
+  await station(page, 'prod').click()
   const detail = details(page)
   await expect(detail.getByRole('heading', { level: 3 })).toHaveText('prod')
   await expect(detail).toContainText('Type: PromotionStep')
@@ -73,7 +73,7 @@ test('a step shows its sub-steps, elapsed time, merge link and events', async ({
   await expect(waiting.first().getByTestId('event-type')).toHaveText('Normal')
 
   // A finished step: every sub-step done, no elapsed time, no merge link.
-  await dagNode(page, 'test').click()
+  await station(page, 'test').click()
   await expect(detail).toContainText('Environment: test')
   await expect(detail.locator('.health-chip').first()).toHaveAttribute('data-health-state', 'Ready')
   await expectSubSteps(detail, testSteps)
@@ -98,7 +98,7 @@ test('a step shows its sub-steps, elapsed time, merge link and events', async ({
 
 test('a gate shows its CEL expression, checked by the controller', async ({ page }) => {
   await openPipeline(page, base, ns)
-  await dagNode(page, gate).click()
+  await gateMark(page, gate).click() // a gate on the map opens its own details
   const detail = details(page)
   await expect(detail).toContainText('Type: PolicyGate')
   await expect(detail.getByRole('heading', { level: 4, name: 'CEL Expression' })).toBeVisible()
@@ -108,7 +108,7 @@ test('a gate shows its CEL expression, checked by the controller', async ({ page
 
   // An expression that does not compile: the chip and the compile error.
   await openPipeline(page, base, ns, celPipeline)
-  await dagNode(page, badGate).click()
+  await gateMark(page, badGate).click()
   await expect(detail).toContainText('Type: PolicyGate')
   await expect(detail).toContainText(badExpression)
   const chip = detail.getByText('✗ error', { exact: true })

@@ -42,6 +42,31 @@ export interface Pipeline {
   deployed?: Record<string, DeployedRelease>
   /** Pipeline.status.deploymentMetrics, computed by the controller (DORA). */
   deploymentMetrics?: DeploymentMetrics
+  /** Pipeline.status.environments (P1, #1707): per environment, fleets expanded
+   *  to their targets, what runs there and what is on its way. */
+  environments?: PipelineEnvironment[]
+  /** Pipeline.status.summary: one sentence, "1.5.0 live in test, uat; waiting for PR merge in prod (#42)". */
+  summary?: string
+}
+
+/** One entry of Pipeline.status.environments (P1). States go through displayState. */
+export interface PipelineEnvironment {
+  name: string
+  /** What runs there. */
+  bundle?: string
+  version?: string
+  /** A newer Bundle on its way in. */
+  incomingBundle?: string
+  incomingVersion?: string
+  /** The newest Bundle's step state there (Pending when gates hold it; "" when not reached). */
+  state?: string
+  /** RFC 3339: Verified time, else when this state was first recorded. */
+  since?: string
+  /** Gates holding it. */
+  blockedBy?: string[]
+  prURL?: string
+  /** A rollback hold keeps it on bundle. */
+  held?: boolean
 }
 
 /** What one environment runs: the newest PromotionStep there that landed its change. */
