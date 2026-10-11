@@ -40,6 +40,10 @@ interface Props {
    * empty cluster.
    */
   total?: number
+  /** The search the list starts with (the URL's q=). */
+  initialQuery?: string
+  /** Called with the search once typing settles, so it can go in the URL. */
+  onQueryChange?: (query: string) => void
 }
 
 /** Shorten a long bundle name for the sidebar: names over 14 characters keep
@@ -66,14 +70,16 @@ function matchesQuery(p: Pipeline, query: string): boolean {
     `${p.namespace}/${p.name}`.toLowerCase().includes(query)
 }
 
-export function PipelineList({ pipelines, selected, selectedNamespace, onSelect, loading, error, searchInputRef, total }: Props) {
+export function PipelineList({ pipelines, selected, selectedNamespace, onSelect, loading, error, searchInputRef, total, initialQuery = '', onQueryChange }: Props) {
   const isSelected = (p: Pipeline) =>
     selected === p.name && (selectedNamespace === undefined || selectedNamespace === p.namespace)
 
   // #345: search/filter state with debounce
-  const [searchQuery, setSearchQuery] = useState('')
+  const [searchQuery, setSearchQuery] = useState(initialQuery)
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState(initialQuery.trim().toLowerCase())
+  const onQueryChangeRef = useRef(onQueryChange)
+  onQueryChangeRef.current = onQueryChange
 
   // #815: container ref for virtual scrolling
   const listContainerRef = useRef<HTMLDivElement>(null)
@@ -83,6 +89,7 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
     if (debounceTimer.current) clearTimeout(debounceTimer.current)
     debounceTimer.current = setTimeout(() => {
       setDebouncedQuery(value.trim().toLowerCase())
+      onQueryChangeRef.current?.(value.trim())
     }, 150)
   }, [])
 

@@ -25,12 +25,15 @@ import { HealthChip } from './components/HealthChip'
 import { RejectedLiveBanner } from './components/RejectedLiveBanner'
 import { BlockedBanner } from './components/BlockedBanner'
 import { InsecureConnectionBanner } from './components/InsecureConnectionBanner'
+import { Breadcrumb } from './components/Breadcrumb'
+import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
+import { IconButton } from './ui'
 import { BundleTimeline } from './components/BundleTimeline'
 import { BundleDiffPanel } from './components/BundleDiffPanel'
 import { BundleTypeBadge } from './components/BundleTypeBadge'
 import { PolicyGatesPanel } from './components/PolicyGatesPanel'
 import { PipelineLaneView } from './components/PipelineLaneView'
-import { FleetHealthBar, filterPipelines, type FleetFilter } from './components/FleetHealthBar'
+import { FleetHealthBar, filterPipelines, isFleetFilter, type FleetFilter } from './components/FleetHealthBar'
 import { FleetBoard } from './components/FleetBoard'
 import { ReleaseMetricsBar } from './components/ReleaseMetricsBar'
 import { ActionBar } from './components/ActionBar'
@@ -46,7 +49,7 @@ import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
 import { useTheme, themeControlLabel } from './ThemeContext'
 import './styles/App.css'
-import { useUrlState } from './useUrlState'
+import { EMPTY_URL_STATE, useUrlState } from './useUrlState'
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
 import { resolveShownBundle } from './bundleSelection'
 import { environmentUpstreams, terminalEnvironments } from './fleetModel'
@@ -72,7 +75,7 @@ function formatElapsed(seconds: number | null): string {
 }
 
 export function App() {
-  const { theme, preference, toggleTheme } = useTheme()
+  const { theme, preference, toggleTheme, density, setDensity } = useTheme()
   // #740: URL routing — pipeline and node selection backed by hash fragment.
   const [urlState, setUrlState] = useUrlState()
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
@@ -101,35 +104,38 @@ export function App() {
   // #740: selectedNode ID is persisted in URL hash (node= param); full GraphNode object in local state.
   const [selectedNode, setSelectedNodeLocal] = useState<GraphNode | null>(null)
 
-  /** Update both local state and URL hash when a node is selected. */
+  /** Update both local state and the URL when a node is selected: an environment's step is
+   *  the …/env/<env> route, any other node (a gate) is ?node=<id>. */
   const setSelectedNode = useCallback((node: GraphNode | null) => {
     setSelectedNodeLocal(node)
-    setUrlState({ node: node?.id ?? undefined })
+    if (node?.type === 'PromotionStep' && node.environment) setUrlState({ env: node.environment, node: undefined })
+    else setUrlState({ node: node?.id ?? undefined, env: undefined })
   }, [setUrlState])
 
   // #740: When graph data changes, restore selectedNode from URL if a node= param is present
   // and the current selectedNode doesn't already match. With no node= (Back to an entry
   // before the node was opened), the details close.
   useEffect(() => {
-    const nodeId = urlState.node
-    if (!nodeId) {
-      if (selectedNode?.id) setSelectedNodeLocal(null)
+    const { env, node: nodeId } = urlState
+    if (!env && !nodeId) {
+      if (selectedNode) setSelectedNodeLocal(null)
       return
     }
     if (!graph) return
-    if (selectedNode?.id === nodeId) return
-    const node = graph.nodes?.find(n => n.id === nodeId)
+    const matches = (n: GraphNode) => env ? n.type === 'PromotionStep' && n.environment === env : n.id === nodeId
+    if (selectedNode && matches(selectedNode)) return
+    const node = graph.nodes?.find(matches)
     if (node) setSelectedNodeLocal(node)
-  }, [graph, urlState.node, selectedNode?.id])
+  }, [graph, urlState, selectedNode])
 
   // #338: Bundle diff comparison state. Shift-click picks the bundle to
   // compare (compareTarget); the timeline then offers Compare and clear.
   // #740: the comparison is open while the URL has bundle=, so a link opens it.
   // Closing it keeps the pick, so Compare and clear are where focus returns.
   const [compareTarget, setCompareTarget] = useState<string | undefined>()
-  const showDiffPanel = !!urlState.bundle
+  const showDiffPanel = !!urlState.compare
   const closeDiffPanel = useCallback(() => {
-    setUrlState({ bundle: undefined })
+    setUrlState({ compare: undefined })
   }, [setUrlState])
 
   // Refresh indicator: tracks last successful poll for the staleness indicator.
@@ -141,15 +147,27 @@ export function App() {
   // #913: insecure connection banner — dismissed state for the current session.
   const [insecureBannerDismissed, setInsecureBannerDismissed] = useState(false)
 
-  // #462: view mode toggle — 'list' (sidebar) | 'ops-table' (full-width operations table).
-  const [viewMode, setViewMode] = useState<'list' | 'ops-table'>('list')
+  // #462: view mode — 'list' (sidebar) | 'ops-table' (full-width operations table), in the
+  // URL as view=ops.
+  type ViewMode = 'list' | 'ops-table'
+  const viewMode: ViewMode = urlState.view === 'ops' ? 'ops-table' : 'list'
+  const setViewMode = useCallback((v: ViewMode | ((prev: ViewMode) => ViewMode)) => {
+    const next = typeof v === 'function' ? v(viewMode) : v
+    setUrlState({ view: next === 'ops-table' ? 'ops' : undefined })
+  }, [viewMode, setUrlState])
 
-  // #505: Fleet filter — drives which pipelines are visible in the sidebar list.
-  const [fleetFilter, setFleetFilter] = useState<FleetFilter>('all')
+  // #505: Fleet filter — drives which pipelines are visible in the sidebar list; in the URL
+  // as filter=.
+  const fleetFilter: FleetFilter = isFleetFilter(urlState.filter) ? urlState.filter : 'all'
+  const setFleetFilter = useCallback((f: FleetFilter) => {
+    setUrlState({ filter: f === 'all' ? undefined : f })
+  }, [setUrlState])
   const filteredPipelines = filterPipelines(pipelines, fleetFilter)
 
   // #746: Keyboard shortcuts help panel visibility.
   const [showShortcutsPanel, setShowShortcutsPanel] = useState(false)
+  // ⌘K / Ctrl+K: the command palette.
+  const [paletteOpen, setPaletteOpen] = useState(false)
 
   // #800: Ref for the pipeline search input — used by the / keyboard shortcut.
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -245,7 +263,8 @@ export function App() {
   // deep link). Everything tied to the previous pipeline is cleared first.
   useEffect(() => {
     const seq = ++viewSeq.current
-    userBundleRef.current = undefined
+    // The version the URL names (…/v/<bundle>), if any, is the pick.
+    userBundleRef.current = urlState.version
     setShownBundleName(undefined)
     setGraph(undefined)
     setGraphError(undefined)
@@ -265,12 +284,22 @@ export function App() {
     void loadPipeline(selectedPipeline, urlState.ns, seq)
   }, [selectedPipeline, urlState.ns, loadPipeline])
 
-  // An open comparison (bundle=, from Compare, a link or Back) is also the
+  // An open comparison (compare=, from Compare, a link or Back) is also the
   // pick. This runs after the reset above, so a link that names a pipeline
-  // and a bundle= keeps the pick when the comparison closes.
+  // and a compare= keeps the pick when the comparison closes.
   useEffect(() => {
-    if (urlState.bundle) setCompareTarget(urlState.bundle)
-  }, [urlState.bundle, selectedPipeline, urlState.ns])
+    if (urlState.compare) setCompareTarget(urlState.compare)
+  }, [urlState.compare, selectedPipeline, urlState.ns])
+
+  // With exactly one pipeline, a first visit (no route in the URL) opens it directly.
+  const openSingle = useRef(window.location.hash === '' || window.location.hash === '#')
+  useEffect(() => {
+    if (!openSingle.current || pipelinesLoading) return
+    openSingle.current = false
+    if (!selectedPipeline && pipelines.length === 1) {
+      setUrlState({ pipeline: pipelines[0].name, ns: pipelines[0].namespace }, { replace: true })
+    }
+  }, [pipelines, pipelinesLoading, selectedPipeline, setUrlState])
 
   // Poll pipeline list every 5 seconds.
   usePolling(doFetchAll, POLL_INTERVAL_MS)
@@ -306,13 +335,14 @@ export function App() {
     onSearch: useCallback(() => {
       searchInputRef.current?.focus()
     }, []),
+    onPalette: useCallback(() => setPaletteOpen(true), []),
   })
 
   // One history entry per switch: the new pipeline, with no node or diff open.
   // The load effect above does the fetching.
-  const handleSelectPipeline = useCallback((name: string, namespace: string) => {
+  const handleSelectPipeline = useCallback((name: string, namespace: string, env?: string) => {
     setSelectedNodeLocal(null)
-    setUrlState({ pipeline: name, ns: namespace, node: undefined, bundle: undefined })
+    setUrlState({ pipeline: name, ns: namespace, env, node: undefined, version: undefined, compare: undefined, view: undefined })
   }, [setUrlState])
 
   const activePipeline = selectedPipeline
@@ -326,9 +356,8 @@ export function App() {
     ? compareTarget
     : undefined
 
-  // Handler for timeline bundle selection — shows that bundle until the user
-  // picks another one or it disappears.
-  const handleTimelineBundleSelect = useCallback((bundleName: string) => {
+  // Shows a bundle's graph and steps until the user picks another one or it disappears.
+  const showBundle = useCallback((bundleName: string) => {
     const seq = ++viewSeq.current
     const stale = () => seq !== viewSeq.current
     // The timeline lists the selected pipeline's bundles, so the picked one is
@@ -340,7 +369,7 @@ export function App() {
     setCompareTarget(t => t === bundleName ? undefined : t)
     setGraphLoading(true)
     setGraphError(undefined)
-    setSelectedNode(null) // close detail panel when switching bundles
+    setSelectedNodeLocal(null)
     void track(seq, Promise.all([api.getGraph(bundleName, namespace), api.getSteps(bundleName, namespace)])
       .then(([g, steps]) => {
         if (stale()) return
@@ -349,7 +378,28 @@ export function App() {
       })
       .catch(e => { if (!stale()) setGraphError(errorText(e)) })
       .finally(() => { if (!stale()) setGraphLoading(false) }))
-  }, [setSelectedNode, bundles, selectedNamespace])
+  }, [bundles, selectedNamespace])
+
+  // A timeline pick is the …/v/<bundle> route (one history entry, details closed).
+  const handleTimelineBundleSelect = useCallback((bundleName: string) => {
+    showBundle(bundleName)
+    setUrlState({ version: bundleName, env: undefined, node: undefined })
+  }, [setUrlState, showBundle])
+
+  // The URL's version, from a pick, a link, Back or Forward: show it once the pipeline's
+  // bundles are loaded. Without one, the pipeline's own choice (resolveShownBundle) applies.
+  useEffect(() => {
+    if (!selectedPipeline || bundlesLoading) return
+    const v = urlState.version
+    if (v) {
+      if (v !== shownBundleName && bundles.some(b => b.name === v)) showBundle(v)
+      return
+    }
+    if (userBundleRef.current) {
+      userBundleRef.current = undefined
+      void loadPipeline(selectedPipeline, urlState.ns, ++viewSeq.current)
+    }
+  }, [urlState.version, urlState.ns, selectedPipeline, bundles, bundlesLoading, shownBundleName, showBundle, loadPipeline])
 
   // Namespace chip: the selected pipeline's namespace, or the only namespace.
   const currentNamespace = activePipeline?.namespace
@@ -426,6 +476,45 @@ export function App() {
     />
   )
 
+  const paletteCommands = useMemo<PaletteCommand[]>(() => {
+    const go: PaletteCommand[] = [{
+      id: 'go:fleet', group: 'Go to', label: 'Pipelines', hint: 'fleet',
+      run: () => setUrlState({ ...EMPTY_URL_STATE, filter: urlState.filter, q: urlState.q }),
+    }]
+    for (const p of pipelines) {
+      go.push({ id: `go:p:${p.namespace}/${p.name}`, group: 'Go to', label: p.name, hint: p.namespace, run: () => handleSelectPipeline(p.name, p.namespace) })
+    }
+    for (const p of pipelines) {
+      for (const e of p.environmentTopology ?? []) {
+        go.push({
+          id: `go:e:${p.namespace}/${p.name}/${e.name}`, group: 'Go to', label: `${p.name} › ${e.name}`, hint: p.namespace,
+          run: () => handleSelectPipeline(p.name, p.namespace, e.name),
+        })
+      }
+    }
+    if (activePipeline) {
+      for (const b of bundles) {
+        go.push({
+          id: `go:v:${b.name}`, group: 'Go to', label: `Version ${b.name}`, hint: activePipeline.name, keywords: b.provenance?.commitSHA,
+          run: () => handleTimelineBundleSelect(b.name),
+        })
+      }
+    }
+    const next = preference === 'system' ? 'Light' : preference === 'light' ? 'Dark' : 'System'
+    const act: PaletteCommand[] = [
+      { id: 'do:theme', group: 'Do', label: `Switch the theme to ${next}`, hint: 'theme', run: toggleTheme },
+      {
+        id: 'do:density', group: 'Do', label: density === 'compact' ? 'Use comfortable density' : 'Use compact density', hint: 'density',
+        run: () => setDensity(density === 'compact' ? 'comfortable' : 'compact'),
+      },
+      { id: 'do:refresh', group: 'Do', label: 'Refresh now', hint: 'r', run: () => { void manualRefresh() } },
+      { id: 'do:ops', group: 'Do', label: viewMode === 'ops-table' ? 'Show the fleet board' : 'Show the operations table', run: () => setViewMode(v => v === 'list' ? 'ops-table' : 'list') },
+      { id: 'do:shortcuts', group: 'Do', label: 'Show keyboard shortcuts', hint: '?', run: () => setShowShortcutsPanel(true) },
+    ]
+    return [...go, ...act]
+  }, [pipelines, activePipeline, bundles, preference, density, viewMode, urlState.filter, urlState.q, setUrlState,
+    handleSelectPipeline, handleTimelineBundleSelect, toggleTheme, setDensity, manualRefresh, setViewMode])
+
   return (
     <div className="app">
       {/* The first Tab stop: past the sidebar to the main content. */}
@@ -437,13 +526,14 @@ export function App() {
       {showShortcutsPanel && (
         <KeyboardShortcutsPanel onClose={() => setShowShortcutsPanel(false)} />
       )}
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={paletteCommands} />
       {/* Sidebar */}
       <aside className="app-sidebar">
         <div className="app-sidebar__brandbar">
           {/* Brand: logo + wordmark; it opens the fleet board. */}
           <button
             type="button"
-            onClick={() => { setSelectedNodeLocal(null); setUrlState({ pipeline: undefined, ns: undefined, node: undefined, bundle: undefined }); setViewMode('list') }}
+            onClick={() => { setSelectedNodeLocal(null); setUrlState({ ...EMPTY_URL_STATE, filter: urlState.filter, q: urlState.q }) }}
             title="Show the fleet"
             aria-label="Show the fleet"
             className="app-brand"
@@ -459,6 +549,7 @@ export function App() {
           </button>
           {/* Staleness indicator with manual refresh button (#362) */}
           <div className="app-status">
+          <IconButton icon="search" size="sm" label="Go to or do (⌘K)" onClick={() => setPaletteOpen(true)} />
           <button
             onClick={manualRefresh}
             title="Refresh now"
@@ -523,11 +614,13 @@ export function App() {
               pipelines={filteredPipelines}
               selected={selectedPipeline}
               selectedNamespace={selectedNamespace}
-              onSelect={(name, ns) => { handleSelectPipeline(name, ns); if (viewMode === 'ops-table') setViewMode('list') }}
+              onSelect={(name, ns) => handleSelectPipeline(name, ns)}
               loading={pipelinesLoading}
               error={pipelinesError}
               searchInputRef={searchInputRef}
               total={pipelines.length}
+              initialQuery={urlState.q}
+              onQueryChange={q => setUrlState({ q: q || undefined }, { replace: true })}
             />
           </ErrorBoundary>
         </div>
@@ -541,7 +634,7 @@ export function App() {
             pipelines={pipelines}
             selected={selectedPipeline}
             selectedNamespace={selectedNamespace}
-            onSelect={(name, ns) => { handleSelectPipeline(name, ns); setViewMode('list') }}
+            onSelect={(name, ns) => handleSelectPipeline(name, ns)}
             loading={pipelinesLoading}
             error={pipelinesError}
           />
@@ -563,6 +656,7 @@ export function App() {
           <>
             {/* Header area (fixed height) */}
             <div className="app-pipeline-head">
+              <Breadcrumb route={urlState} namespace={activePipeline?.namespace} />
               {/* Pipeline header */}
               <div className="app-pipeline-head__title-block">
                 <div className="app-pipeline-head__title-row">
@@ -695,15 +789,15 @@ export function App() {
                   onSelectBundle={handleTimelineBundleSelect}
                   compareBundle={compareBundle}
                   onCompareBundle={(name) => setCompareTarget(name ?? undefined)}
-                  onCompare={() => setUrlState({ bundle: compareBundle })}
+                  onCompare={() => setUrlState({ compare: compareBundle })}
                 />
               </ErrorBoundary>
             </div>
 
             {/* #338: Bundle diff panel — shows when two bundles are selected for comparison */}
-            {showDiffPanel && activeBundle && urlState.bundle !== activeBundle.name && (
+            {showDiffPanel && activeBundle && urlState.compare !== activeBundle.name && (
               (() => {
-                const compareBundleObj = bundles.find(b => b.name === urlState.bundle)
+                const compareBundleObj = bundles.find(b => b.name === urlState.compare)
                 if (!compareBundleObj) return null
                 return (
                   <BundleDiffPanel

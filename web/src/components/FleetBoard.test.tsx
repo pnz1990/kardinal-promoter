@@ -70,12 +70,12 @@ describe('FleetBoard', () => {
     expect(names).toEqual(['fresh', 'search', 'payments'])
   })
 
-  it('opens a pipeline from its name or a station', () => {
+  it('opens a pipeline from its name, or a station with its environment', () => {
     const onSelect = vi.fn()
     render(<FleetBoard pipelines={pipelines} total={3} onSelect={onSelect} now={now} />)
     fireEvent.click(screen.getByRole('button', { name: 'payments' }))
     fireEvent.click(screen.getByRole('button', { name: /^search prod:/ }))
-    expect(onSelect.mock.calls).toEqual([['payments', 'team-b'], ['search', 'team-a']])
+    expect(onSelect.mock.calls).toEqual([['payments', 'team-b'], ['search', 'team-a', 'prod']])
   })
 
   it('says when the sidebar filter hides everything', () => {
