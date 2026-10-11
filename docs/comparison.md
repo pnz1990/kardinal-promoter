@@ -114,7 +114,7 @@ Every PR kardinal opens (environments with `approval: pr-review`) has a body lik
 
 | Gate | Namespace | Result | Reason | Last Evaluated |
 |---|---|---|---|---|
-| no-weekend-deploys | my-app | Pass | bundle.version=1.29.0: !schedule.isWeekend = true | 2026-04-14T14:00Z |
+| no-weekend-deploys | my-app | Pass | !schedule.isWeekend = true (version 1.29.0) | 2026-04-14T14:00Z |
 
 ### Upstream Verification
 

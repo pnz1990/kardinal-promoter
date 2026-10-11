@@ -19,6 +19,7 @@ Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/ka
 3. **Scripts read `-o json`, not the CLI's tables.** The tables show display labels ("Waiting for PR merge"), and `kardinal status` shows one row per environment; `-o json` keeps the API values (see Changed).
 4. **Roles you wrote for the UI** need `update` on `bundles/reject` to reject a version; the chart's promoter, approver and admin roles have it.
 5. **Chart values:** `scm.secretRef` and `scm.token` set the controller's token; setting one of them and its `github.*` name to different values fails the install.
+6. **Scripts that read a gate's version read `status.bundleVersion`.** A gate's `status.reason` is a sentence for people that ends with the version, `(version <v>)` or `; version <v>)` after the gate's message; `status.bundleVersion` holds the version (see Changed).
 
 ### Added
 
@@ -43,6 +44,7 @@ Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/ka
 
 ### Changed
 
+- **A gate's reason is a sentence that ends with the version** — a gate instance's `status.reason`, which the CLI's REASON column, the UI, PR evidence and notifications show, reads `waiting for approvals: 0 of 1 (version 1.5.0)`, `!schedule.isWeekend = false (version 1.5.0)`, or with the gate's message `Production deployments are blocked on weekends (!schedule.isWeekend = false; version 1.5.0)`. Evaluation and context errors and overrides keep their prefixes (`CEL evaluation error: …`, `context error: …`, `OVERRIDDEN by …`). The version is also in the new `status.bundleVersion`, for scripts ([Policy gates](policy-gates.md))
 - **Tables name versions, not Bundles** — `get pipelines`, `get bundles`, `explain`, `history` and `get auditevents` have a `VERSION` column where they had `BUNDLE`, showing the tag and then the Bundle (`1.5.0 (my-app-x7k2p)`; the name alone when there is no tag), and `status` and explain's `deployed:` line put the tag first the same way. `-o json` and `yaml` keep their keys (`bundle`)
 - **`kardinal dashboard` port-forwards to the controller** — without `--address` (or `KARDINAL_UI_URL`) it forwards `127.0.0.1:8082` (another free port when 8082 is taken) to a ready controller Pod's `ui` port in `--controller-namespace` (default `kardinal-system`), opens the UI and keeps forwarding until Ctrl-C, and prints `http://127.0.0.1:<port>/ui/`, the address it binds; `--no-open` only prints the URL. With `--address` it opens that URL. It needs `create` on `pods/portforward` there
 - **CLI messages name the version, not the Bundle** — `ship --wait` ends with `Version 1.5.0 (my-app-x7k2p) stopped: …` (the tag, then the Bundle), `approve` prints `Version: 1.5.0 (my-app-x7k2p)`, and holds, prompts, `explain` and `doctor` say "version" where they said "Bundle" in a sentence. The lines that report an object by kind and name (`Bundle my-app-x7k2p created …`, `deleted`, `rejected`), which scripts parse, and the JSON keys are unchanged

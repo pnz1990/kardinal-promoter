@@ -819,6 +819,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.approvals[].firstSeenAt` | string (date-time) |  | FirstSeenAt is when the gate first saw the decision. |
 | `status.approvals[].reason` | string |  | Reason says why a decision does not count. |
 | `status.approvals[].user` | string | yes | User is the approver. |
+| `status.bundleVersion` | string |  | BundleVersion is the version of the Bundle a gate instance was last evaluated for (bundle.version in its expression). Empty on a template and when the Bundle could not be read. |
 | `status.conditions` | []object |  | Conditions holds status conditions. |
 | `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
 | `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
@@ -846,7 +847,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.pendingAuditEvents[].spec.pipelineName` | string | yes | PipelineName is the name of the Pipeline the Bundle is promoting through. |
 | `status.pendingAuditEvents[].spec.timestamp` | string (date-time) | yes | Timestamp is when the event occurred (RFC 3339 format). |
 | `status.ready` | boolean | yes | Ready indicates whether the gate is currently allowing promotion. The kro Graph gates downstream nodes on status.ready == true. Default: `false`. |
-| `status.reason` | string |  | Reason explains the current ready state in human-readable form. |
+| `status.reason` | string |  | Reason explains the current ready state in a sentence: the gate's message when its expression blocks, what the expression evaluated to, and the version it was evaluated for, for example "waiting for approvals: 0 of 1 (version 1.5.0)". It is for people; read BundleVersion for the version. |
 
 ## PromotionStep
 
