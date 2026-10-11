@@ -369,9 +369,11 @@ func NotAllowedMessage(err error) string {
 }
 
 // PipelineSecretExists reports whether the Pipeline's git.secretRef names a
-// Secret that exists in the Pipeline's namespace, the token git clone and
-// push use instead of none (CheckPipeline's ownSecret). A secretRef in another
-// namespace does not count. Secrets are read uncached (get only).
+// Secret that exists in the Pipeline's namespace and is labeled
+// kardinal.io/referenceable=true, the token git clone and push use instead of
+// none (CheckPipeline's ownSecret). A secretRef in another namespace, or an
+// unlabeled Secret git does not use, does not count. Secrets are read
+// uncached (get only).
 func PipelineSecretExists(ctx context.Context, reader client.Reader, p *v1alpha1.Pipeline) (bool, error) {
 	ref := p.Spec.Git.SecretRef
 	if ref == nil || ref.Name == "" || (ref.Namespace != "" && ref.Namespace != p.Namespace) {
@@ -381,7 +383,7 @@ func PipelineSecretExists(ctx context.Context, reader client.Reader, p *v1alpha1
 	err := reader.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: ref.Name}, &s)
 	switch {
 	case err == nil:
-		return true, nil
+		return s.Labels[LabelReferenceable] == "true", nil
 	case apierrors.IsNotFound(err):
 		return false, nil
 	default:

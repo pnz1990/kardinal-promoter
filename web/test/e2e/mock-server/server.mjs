@@ -90,11 +90,10 @@ const PIPELINES = [
     failedStepCount: 0,
     activeBundleVersion: '6.14.1',
     environmentTopology: [{ name: 'staging' }, { name: 'prod', upstreams: ['staging'] }],
-    // status.conditions (#1727): its git Secret works but is not labelled referenceable.
+    // status.conditions (#1727, #1506): its git Secret is not labelled referenceable.
     conditions: [
-      { type: 'Ready', status: 'True', reason: 'Ready' },
-      { type: 'SecretReferenceable', status: 'False', reason: 'SecretNotReferenceable',
-        message: 'git Secret github-token is not labeled kardinal.io/referenceable=true; it is still used in v0.10 but will be refused in v0.11: label it (kubectl label secret github-token -n default kardinal.io/referenceable=true)' },
+      { type: 'Ready', status: 'False', reason: 'SecretNotReferenceable',
+        message: 'git Secret github-token is not labeled kardinal.io/referenceable=true, so git does not use it; label it: kubectl label secret github-token -n default kardinal.io/referenceable=true' },
     ],
   },
 ]

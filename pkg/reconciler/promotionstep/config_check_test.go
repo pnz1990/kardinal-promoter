@@ -70,7 +70,7 @@ func TestSecretRefNamespace(t *testing.T) {
 			var objs []client.Object
 			for _, ns := range []string{"default", "team-b", "kardinal-system"} {
 				objs = append(objs, &corev1.Secret{
-					ObjectMeta: metav1.ObjectMeta{Name: "github-token", Namespace: ns},
+					ObjectMeta: metav1.ObjectMeta{Name: "github-token", Namespace: ns, Labels: map[string]string{"kardinal.io/referenceable": "true"}},
 					Data:       map[string][]byte{"token": []byte("token-of-" + ns)},
 				})
 			}
@@ -194,7 +194,7 @@ func TestRepositoryNotAllowed(t *testing.T) {
 				pipeline.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "team-token"}
 			}
 			if tt.secret {
-				objs = append(objs, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "team-token", Namespace: "default"},
+				objs = append(objs, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "team-token", Namespace: "default", Labels: map[string]string{"kardinal.io/referenceable": "true"}},
 					Data: map[string][]byte{"token": []byte("t")}})
 			}
 			ps := makeStep("step-repo", "nginx-demo", "b1", "test")

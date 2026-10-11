@@ -382,15 +382,14 @@ kubectl label secret alerting-webhook -n team-a kardinal.io/referenceable=true
 | Reference | With an unlabeled Secret |
 |-----------|--------------------------|
 | NotificationHook `spec.webhook.secretRef` | Not used: `Ready=False`, reason `SecretNotReferenceable`, nothing is sent |
+| Pipeline `spec.git.secretRef` | Not used: the Pipeline is `Ready=False`, reason `SecretNotReferenceable`, with the `kubectl label` command; every git step and render waits, without a git call, until the Secret is labeled |
 
 Other Secret references adopt the rule as they are added. A resource that refuses a Secret
 reports reason `SecretNotReferenceable` where it reports errors. Labeling the Secret takes
 effect at the next reconcile; removing the label stops its use again. Whoever may `update` or
 `patch` Secrets in the namespace may set the label, so grant that as narrowly as reading them.
 
-Pipeline `spec.git.secretRef` has the same exposure (its token goes to the Pipeline's git URL).
-An unlabeled git Secret is deprecated: it still works with `SecretReferenceable=False`, and v0.11
-refuses it. Label your git Secrets.
+Pipeline `spec.git.secretRef` has the same exposure: its token goes to the Pipeline's git URL.
 
 ### The controller's own SCM token
 

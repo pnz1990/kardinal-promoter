@@ -568,6 +568,7 @@ spec:
 	assert.NotContains(t, values, "krocodile")
 	assert.Contains(t, values, "name: git-token")
 	assert.Contains(t, values, "validatingAdmissionPolicy:", "kardinal-v081.sh set it, so step 8 drops it")
+	e.MustShell(t, framework.GuideBlock(t, "kardinal.io/referenceable=true --overwrite"))
 
 	// ── 3. Stop both v0.8.1 controllers ─────────────────────────────────
 	e.MustShell(t, framework.GuideBlock(t, "scale deploy/kardinal-promoter"))

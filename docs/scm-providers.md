@@ -432,6 +432,7 @@ ssh-keyscan -p 22 github.com > known_hosts               # check the keys agains
 kubectl create secret generic git-ssh -n <pipeline-namespace> \
   --from-file=sshPrivateKey=kardinal-deploy-key \
   --from-file=knownHosts=known_hosts
+kubectl label secret git-ssh -n <pipeline-namespace> kardinal.io/referenceable=true
 ```
 
 | Key | Purpose |

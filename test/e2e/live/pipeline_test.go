@@ -454,11 +454,12 @@ func leadMinutes(t *testing.T, a *app, bundle string) int64 {
 	return int64(c.LastTransitionTime.Sub(a.bundle(t, bundle).CreationTimestamp.Time).Minutes())
 }
 
-// TestPipeline_GitSecretNotReferenceable checks the v0.10.0 deprecation of
-// unlabeled git Secrets: a Pipeline whose spec.git.secretRef names a Secret
-// without kardinal.io/referenceable=true still promotes, and has
-// SecretReferenceable=False (reason SecretNotReferenceable); labeling the
-// Secret removes the warning.
+// TestPipeline_GitSecretNotReferenceable checks #1506: a git Secret without
+// kardinal.io/referenceable=true is not used. The Pipeline is Ready=False
+// with reason SecretNotReferenceable and the kubectl label command, and its
+// Bundle's step waits (Promoting, not Failed) with the same command and no
+// commit. Labeling the Secret makes the Pipeline Ready and lets the step
+// promote.
 //
 // Covers PIPE-GITSECRET-LABEL-01.
 func TestPipeline_GitSecretNotReferenceable(t *testing.T) {
@@ -474,25 +475,32 @@ func TestPipeline_GitSecretNotReferenceable(t *testing.T) {
 	p.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "unlabeled-git"}
 	a.apply(t, p)
 
-	waitPipeline(t, e, a.ns, pipelineName, time.Minute, "the SecretReferenceable warning", func(p *v1alpha1.Pipeline) (bool, string) {
-		c := meta.FindStatusCondition(p.Status.Conditions, "SecretReferenceable")
-		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "SecretNotReferenceable", fmt.Sprintf("%+v", c)
+	label := "kubectl label secret unlabeled-git -n " + a.ns + " kardinal.io/referenceable=true"
+	waitPipeline(t, e, a.ns, pipelineName, time.Minute, "Ready=False SecretNotReferenceable", func(p *v1alpha1.Pipeline) (bool, string) {
+		c := meta.FindStatusCondition(p.Status.Conditions, "Ready")
+		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "SecretNotReferenceable" && strings.Contains(c.Message, label),
+			fmt.Sprintf("%+v", c)
 	})
+	before, err := gitserver.Commits(ctx, e.Git, a.repo, a.repo.Branch, 10)
+	require.NoError(t, err)
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
-	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
-	a.running(t, "test", imageV2, "the unlabeled Secret still works in v0.10.0")
+	ps := e.WaitStep(t, a.ns, pipelineName, bundle, "test", time.Minute, "waiting for its git Secret", func(ps *v1alpha1.PromotionStep) (bool, string) {
+		return ps.Status.State == "Promoting" && strings.Contains(ps.Status.Message, label), ps.Status.State + ": " + ps.Status.Message
+	})
+	assert.Equal(t, "waiting for the git Secret: git Secret "+a.ns+"/unlabeled-git is not labeled kardinal.io/referenceable=true, "+
+		"so git does not use it; label it: "+label, ps.Status.Message)
+	after, err := gitserver.Commits(ctx, e.Git, a.repo, a.repo.Branch, 10)
+	require.NoError(t, err)
+	assert.Equal(t, len(before), len(after), "nothing is committed with an unlabeled Secret")
 
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: "unlabeled-git"}, unlabeled))
 	unlabeled.Labels = map[string]string{"kardinal.io/referenceable": "true"}
 	require.NoError(t, e.Client.Update(ctx, unlabeled))
-	// The Secret is not watched; a Pipeline edit (an annotation) reconciles at once.
-	var cur v1alpha1.Pipeline
-	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &cur))
-	patch := client.MergeFrom(cur.DeepCopy())
-	cur.Annotations = map[string]string{"e2e.kardinal.io/poke": time.Now().Format(time.RFC3339Nano)}
-	require.NoError(t, e.Client.Patch(ctx, &cur, patch))
-	waitPipeline(t, e, a.ns, pipelineName, time.Minute, "the warning to clear", func(p *v1alpha1.Pipeline) (bool, string) {
-		c := meta.FindStatusCondition(p.Status.Conditions, "SecretReferenceable")
-		return c == nil, fmt.Sprintf("%+v", c)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	a.running(t, "test", imageV2, "the labeled Secret is used")
+	// The Secret is not watched; the Pipeline is re-checked every minute.
+	waitPipeline(t, e, a.ns, pipelineName, 2*time.Minute, "Ready once labeled", func(p *v1alpha1.Pipeline) (bool, string) {
+		c := meta.FindStatusCondition(p.Status.Conditions, "Ready")
+		return c != nil && c.Status == metav1.ConditionTrue, fmt.Sprintf("%+v", c)
 	})
 }

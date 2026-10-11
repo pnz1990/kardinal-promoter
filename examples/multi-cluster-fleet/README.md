@@ -70,6 +70,7 @@ no cross-cluster API calls and needs no credentials for the workload clusters. S
 kubectl create secret generic github-token \
   --namespace=default \
   --from-literal=token="$GITHUB_PAT"
+kubectl label secret github-token --namespace=default kardinal.io/referenceable=true
 ```
 
 ### 2. Create Argo CD Applications for each cluster

@@ -39,12 +39,15 @@ const guideChartV0100 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --versio
 // that is Verified in test with its prod PR open: in flight; Pipeline "done"
 // has a Bundle that is Verified. The controller's SCM token Secret carries
 // kardinal.io/referenceable, as a user who labelled it for the demo
-// Pipeline left it. NotificationHook "plain" sets the removed
-// spec.webhook.authorizationHeader.
+// Pipeline left it. The Pipelines' git Secret is not labeled referenceable,
+// which v0.10.0 accepted with a warning. NotificationHook "plain" sets the
+// removed spec.webhook.authorizationHeader.
 //
-// After the guide's steps (remove that label, move the hook's header into a
-// Secret, apply the new CRDs, helm upgrade --reset-then-reuse-values,
-// kardinal doctor):
+// After the guide's steps (remove the controller Secret's label, move the
+// hook's header into a Secret, apply the new CRDs, helm upgrade
+// --reset-then-reuse-values) the git Secret is still unlabeled, as when a
+// user skipped step 2: both Pipelines are Ready=False SecretNotReferenceable
+// with the label command. Then step 2 labels it, and kardinal doctor passes:
 //   - the controller's Secret has no referenceable label;
 //   - hook "plain" reads its header from Secret plain-auth (key
 //     authorization, labeled referenceable) through spec.webhook.secretRef,
@@ -79,6 +82,13 @@ func TestUpgradeV0100_FromV0100(t *testing.T) {
 	}
 	ctrlSecret.Labels["kardinal.io/referenceable"] = "true"
 	require.NoError(t, e.Client.Update(ctx, &ctrlSecret))
+
+	// v0.10.0 used an unlabeled git Secret, with a warning.
+	var gitSecret corev1.Secret
+	gitKey := types.NamespacedName{Namespace: ns, Name: framework.GitSecretName}
+	require.NoError(t, e.Client.Get(ctx, gitKey, &gitSecret))
+	delete(gitSecret.Labels, "kardinal.io/referenceable")
+	require.NoError(t, e.Client.Update(ctx, &gitSecret))
 
 	// ── v0.10.0 ─────────────────────────────────────────────────────────
 	all := a.pipeline(map[string]string{"prod": "pr-review"})
@@ -147,14 +157,14 @@ func TestUpgradeV0100_FromV0100(t *testing.T) {
 	doneSteps, err := e.Steps(ctx, ns, "done", bDone)
 	require.NoError(t, err)
 
-	// ── 2. Take the label off the controller's SCM token Secret ─────────
+	// ── 3. Take the label off the controller's SCM token Secret ─────────
 	e.MustShell(t, framework.GuideBlockFrom(t, "0.10.0", "kardinal.io/referenceable-"))
 	require.NoError(t, e.Client.Get(ctx, ctrlKey, &ctrlSecret))
 	assert.NotContains(t, ctrlSecret.Labels, "kardinal.io/referenceable", "the guide takes the label off the controller's Secret")
 	// The step is safe to run again, with the label already gone.
 	e.MustShell(t, framework.GuideBlockFrom(t, "0.10.0", "kardinal.io/referenceable-"))
 
-	// ── 3. Move the hook's Authorization header into a Secret ───────────
+	// ── 4. Move the hook's Authorization header into a Secret ───────────
 	e.MustShell(t, framework.GuideBlockFrom(t, "0.10.0", "authorizationHeader"))
 	var authSecret corev1.Secret
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: "plain-auth"}, &authSecret))
@@ -166,10 +176,10 @@ func TestUpgradeV0100_FromV0100(t *testing.T) {
 	// With nothing left to move, the step changes nothing.
 	assert.Empty(t, strings.TrimSpace(e.MustShell(t, framework.GuideBlockFrom(t, "0.10.0", "authorizationHeader"))))
 
-	// ── 4. Apply the new CRDs ───────────────────────────────────────────
+	// ── 5. Apply the new CRDs ───────────────────────────────────────────
 	e.MustShell(t, framework.Fill(t, framework.GuideBlockFrom(t, "0.10.0", "helm show crds"), guideChartV0100, `"$KARDINAL_E2E_CHART"`))
 
-	// ── 5. Upgrade the chart ────────────────────────────────────────────
+	// ── 6. Upgrade the chart ────────────────────────────────────────────
 	rel := e.ExistingRelease(t, upgradeRelease, framework.ControllerNamespace)
 	upgradeCmd := strings.TrimRight(framework.Fill(t, framework.GuideBlockFrom(t, "0.10.0", "helm upgrade"), guideChartV0100, `"$KARDINAL_E2E_CHART"`), "\n") + ` \
   --set image.repository="${KARDINAL_E2E_IMAGE%:*}" --set image.tag="${KARDINAL_E2E_IMAGE##*:}" --set image.pullPolicy=Never
@@ -178,7 +188,27 @@ func TestUpgradeV0100_FromV0100(t *testing.T) {
 	require.Zero(t, up.Code, up.Output)
 	rel.WaitRolledOut(t, 3*time.Minute)
 
-	// ── 6. Check the result ─────────────────────────────────────────────
+	// The git Secret is still unlabeled: this release does not use it.
+	for _, name := range []string{"promote", "done"} {
+		framework.Eventually(t, 2*time.Minute, "Pipeline "+name+" Ready=False SecretNotReferenceable", func(ctx context.Context) (bool, string) {
+			var got v1alpha1.Pipeline
+			if err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &got); err != nil {
+				return false, err.Error()
+			}
+			c := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "SecretNotReferenceable" &&
+					strings.Contains(c.Message, "kubectl label secret "+framework.GitSecretName+" -n "+ns+" kardinal.io/referenceable=true") &&
+					meta.FindStatusCondition(got.Status.Conditions, "SecretReferenceable") == nil,
+				fmt.Sprintf("conditions %v", got.Status.Conditions)
+		})
+	}
+
+	// ── 2. Label the Pipelines' git Secrets (skipped before the upgrade) ─
+	e.MustShell(t, framework.GuideBlockFrom(t, "0.10.0", "kardinal.io/referenceable=true --overwrite"))
+	require.NoError(t, e.Client.Get(ctx, gitKey, &gitSecret))
+	assert.Equal(t, "true", gitSecret.Labels["kardinal.io/referenceable"], "the guide labels the git Secret")
+
+	// ── 7. Check the result ─────────────────────────────────────────────
 	check := e.MustShell(t, framework.GuideBlockFrom(t, "0.10.0", "kardinal doctor"))
 	assert.Regexp(t, `(?m)^\d+ check\(s\) passed$`, check, "kardinal doctor passes every check")
 
@@ -192,10 +222,11 @@ func TestUpgradeV0100_FromV0100(t *testing.T) {
 			fmt.Sprintf("conditions %v", h.Status.Conditions)
 	})
 
-	// Within a minute every Pipeline is Ready and has the status projection.
+	// Within a minute of the label every Pipeline is Ready and has the
+	// status projection.
 	for _, p := range []*v1alpha1.Pipeline{promote, done} {
 		name, envs := p.Name, len(p.Spec.Environments)
-		framework.Eventually(t, time.Minute, "Pipeline "+name+" Ready with status.environments and summary", func(ctx context.Context) (bool, string) {
+		framework.Eventually(t, 2*time.Minute, "Pipeline "+name+" Ready with status.environments and summary", func(ctx context.Context) (bool, string) {
 			var got v1alpha1.Pipeline
 			if err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &got); err != nil {
 				return false, err.Error()

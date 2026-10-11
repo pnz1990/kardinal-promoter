@@ -42,8 +42,8 @@ const guideChartV090 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version
 // After the guide's steps (label the git Secrets, apply the new CRDs,
 // re-run install-kro.sh, helm upgrade --reset-then-reuse-values, kardinal
 // doctor):
-//   - the git Secret is labeled and the Pipelines are Ready, with no
-//     SecretReferenceable=False condition;
+//   - the git Secret is labeled and the Pipelines are Ready (not
+//     SecretNotReferenceable);
 //   - the Verified Bundle stays Verified;
 //   - the in-flight Bundle keeps its Graph, PromotionSteps and PRStatus
 //     (same uid), and finishes once its prod PR is merged;
@@ -164,8 +164,7 @@ func TestUpgradeV090_FromV090(t *testing.T) {
 				return false, err.Error()
 			}
 			ready := meta.FindStatusCondition(p.Status.Conditions, "Ready")
-			ref := meta.FindStatusCondition(p.Status.Conditions, "SecretReferenceable")
-			return ready != nil && ready.Status == metav1.ConditionTrue && (ref == nil || ref.Status != metav1.ConditionFalse),
+			return ready != nil && ready.Status == metav1.ConditionTrue,
 				fmt.Sprintf("conditions %v", p.Status.Conditions)
 		})
 	}

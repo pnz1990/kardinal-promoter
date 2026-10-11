@@ -53,7 +53,19 @@ the chart version you upgrade to.
 **1. Read the upgrade notes.** The changelog's [From v0.10.0](changelog.md#from-v0100) lists
 every change for existing objects and clients.
 
-**2. Take the `kardinal.io/referenceable` label off the controller's SCM token Secret.** No
+**2. Label the Pipelines' git Secrets.** A Secret named by `spec.git.secretRef` must carry
+`kardinal.io/referenceable: "true"`: this release does not use an unlabeled one. Its Pipeline is
+`Ready=False` with reason `SecretNotReferenceable`, and its git steps wait until it is labeled.
+This labels the git Secret of every Pipeline:
+
+```bash
+kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.spec.git.secretRef.name}{"\n"}{end}' |
+  sort -u | while read -r ns name; do
+    [ -z "$name" ] || kubectl -n "$ns" label secret "$name" kardinal.io/referenceable=true --overwrite
+  done
+```
+
+**3. Take the `kardinal.io/referenceable` label off the controller's SCM token Secret.** No
 Pipeline may use the controller's own token Secret, and the controller warns while that Secret
 carries the label. This removes it, if it is there:
 
@@ -68,7 +80,7 @@ A Pipeline whose `spec.git.secretRef` names that Secret is `Ready=False` with re
 `kardinal.io/referenceable=true`, before you upgrade. The chart's demo Pipeline uses
 `demo.secretRef.name`.
 
-**3. Move NotificationHook Authorization headers into Secrets.** This release has no
+**4. Move NotificationHook Authorization headers into Secrets.** This release has no
 `spec.webhook.authorizationHeader`: the API server drops it, and the hook then posts without the
 header. This moves each one into a Secret `<hook>-auth` (key `authorization`, labeled
 `kardinal.io/referenceable=true`) and points the hook's `spec.webhook.secretRef` at it. It prints
@@ -85,7 +97,7 @@ kubectl get notificationhooks -A -o json \
     done
 ```
 
-**4. Apply the new CRDs.** Helm never upgrades CRDs. The v0.10.0 chart installed them, so Helm
+**5. Apply the new CRDs.** Helm never upgrades CRDs. The v0.10.0 chart installed them, so Helm
 owns their fields: `--force-conflicts` is required, or the apply stops with
 `conflict with "helm" ... .spec.versions`.
 
@@ -93,7 +105,7 @@ owns their fields: `--force-conflicts` is required, or the apply stops with
 helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> | kubectl apply --server-side --force-conflicts -f -
 ```
 
-**5. Upgrade the chart.** Use `--reset-then-reuse-values`, which keeps the values you set and
+**6. Upgrade the chart.** Use `--reset-then-reuse-values`, which keeps the values you set and
 takes every new default from the new chart.
 
 ```bash
@@ -106,7 +118,7 @@ If `helm get values kardinal-promoter -n kardinal-system` shows `validatingAdmis
 `--set rbac.integrationTestJobs=null`: the chart has neither, and `--reset-then-reuse-values`
 would keep the value you set, which the schema rejects.
 
-**6. Check the result.**
+**7. Check the result.**
 
 ```bash
 kardinal doctor
@@ -133,9 +145,10 @@ lists every change for existing objects and clients.
 **2. Rename any environment named `time`.** The Pipeline CRD rejects it: `time` is reserved for
 a kro Graph node ID. Renaming gives the environment new PromotionSteps and PR branches.
 
-**3. Label the Pipelines' git Secrets.** A Secret named by `spec.git.secretRef` should carry
-`kardinal.io/referenceable: "true"`. This release still uses an unlabeled one but sets the
-Pipeline's `SecretReferenceable=False` condition; a later release refuses it.
+**3. Label the Pipelines' git Secrets.** A Secret named by `spec.git.secretRef` must carry
+`kardinal.io/referenceable: "true"`: this release does not use an unlabeled one. Its Pipeline is
+`Ready=False` with reason `SecretNotReferenceable`, and its git steps wait until it is labeled.
+This labels the git Secret of every Pipeline:
 
 ```bash
 kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.spec.git.secretRef.name}{"\n"}{end}' |
@@ -265,6 +278,17 @@ helm get values kardinal-promoter -n kardinal-system -o yaml
 ```
 
 The new chart has no `krocodile`, `validatingAdmissionPolicy` or `rbac.integrationTestJobs` key, and its schema rejects them. If your values contain one, see [Helm values](#helm-values) before step 8.
+
+Then label the Pipelines' git Secrets: this release uses a Secret named by `spec.git.secretRef`
+only when it carries `kardinal.io/referenceable: "true"`. Without it the Pipeline is
+`Ready=False` with reason `SecretNotReferenceable`, and its git steps wait.
+
+```bash
+kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.spec.git.secretRef.name}{"\n"}{end}' |
+  sort -u | while read -r ns name; do
+    [ -z "$name" ] || kubectl -n "$ns" label secret "$name" kardinal.io/referenceable=true --overwrite
+  done
+```
 
 **3. Stop both v0.8.1 controllers.** Promotions pause from here until the end of step 8.
 
