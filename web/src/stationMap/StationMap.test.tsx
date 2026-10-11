@@ -47,9 +47,52 @@ describe('StationMap', () => {
     const onOpenGate = vi.fn()
     const { container } = renderMap(chain(), { nodes: [gate, step('test', 'Verified')], edges: [{ from: 'gate-check-test', to: 'step-test' }] }, { onOpenGate })
     expect(container.querySelectorAll('.station-map__lead')).toHaveLength(1)
-    const mark = screen.getByRole('img', { name: 'gate check-test, Passing' })
+    const mark = screen.getByRole('button', { name: 'gate check-test, Passing' })
     fireEvent.click(mark.querySelector('.station-map__gate-hit')!)
     expect(onOpenGate).toHaveBeenCalledWith('gate-check-test')
+  })
+
+  it('a gate takes focus and shows its popover; Enter opens it', () => {
+    const gate = { id: 'gate-check-test', type: 'PolicyGate' as const, label: 'check-test', environment: 'test', state: 'Pass' }
+    const onOpenGate = vi.fn()
+    renderMap(chain(), { nodes: [gate, step('test', 'Verified')], edges: [{ from: 'gate-check-test', to: 'step-test' }] }, { onOpenGate })
+    const mark = screen.getByRole('button', { name: 'gate check-test, Passing' })
+    expect(mark.getAttribute('tabindex')).toBe('0')
+    fireEvent.focus(mark)
+    expect(screen.getByRole('tooltip').textContent).toContain('check-test')
+    fireEvent.keyDown(mark, { key: 'Enter' })
+    expect(onOpenGate).toHaveBeenCalledWith('gate-check-test')
+    fireEvent.blur(mark)
+    expect(screen.queryByRole('tooltip')).toBeNull()
+  })
+
+  it('offers actions only under the station in focus', () => {
+    const actionsFor = (env: string) => <button type="button">Roll back {env}</button>
+    const { container } = renderMap(chain(), { nodes: [step('test', 'Verified'), step('uat', 'Verified')], edges: [] }, { actionsFor })
+    expect(screen.queryByRole('button', { name: /^Roll back/ })).toBeNull()
+    fireEvent.focus(container.querySelector('[data-station="uat"]')!)
+    expect(screen.getAllByRole('button', { name: /^Roll back/ }).map(b => b.textContent)).toEqual(['Roll back uat'])
+  })
+
+  it('arrow keys move by row and column inside an expanded grid', () => {
+    const targets = Array.from({ length: 12 }, (_, i) => `t${String(i).padStart(2, '0')}`)
+    const p: Pipeline = { name: 'f', namespace: 'default', phase: 'Ready', environmentCount: 12, activeBundleName: 'b2',
+      environmentTopology: [{ name: 'prod', fleet: { targets } }] }
+    const graph = { nodes: targets.map(t => step(t, 'Verified')), edges: [] }
+    const { container } = renderMap(p, graph, { expanded: new Set(['platform:prod']) })
+    const cell = (env: string) => container.querySelector<SVGElement>(`.cell[data-station="${env}"]`)!
+    const svg = container.querySelector('svg')!
+    const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(cb => { cb(0); return 0 })
+    fireEvent.focus(cell('t00'))
+    fireEvent.keyDown(svg, { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(cell('t01'))
+    // 12 cells, 6 columns: down is the next row.
+    fireEvent.keyDown(svg, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(cell('t07'))
+    fireEvent.keyDown(svg, { key: 'ArrowUp' })
+    fireEvent.keyDown(svg, { key: 'ArrowUp' })
+    expect(document.activeElement?.getAttribute('data-focus-id')).toBe('platform:prod')
+    raf.mockRestore()
   })
 
   it('a click on a station opens its stage', () => {
@@ -64,7 +107,7 @@ describe('StationMap', () => {
       environmentTopology: [{ name: 'test' }, ...wave] }
     const graph = { nodes: [step('test', 'Verified'), step('w0', 'Failed'), ...wave.slice(1).map(w => step(w.name, 'Verified'))], edges: [] }
     const { onToggleGroup, onSetExpanded } = renderMap(p, graph)
-    const band = screen.getByRole('button', { name: /^WAVE 1 · 6: 1 failed, 5 verified$/ })
+    const band = screen.getByRole('button', { name: /^WAVE 1 · 6: 1 failed, 5 live$/ })
     expect(band.getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(band)
     expect(onToggleGroup).toHaveBeenCalledWith('band:1')

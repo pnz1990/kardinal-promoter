@@ -95,7 +95,7 @@ test.describe('Journey 014 — Waves', () => {
 
     // The station map draws the wave of 149 as one band (U2).
     const map = page.locator('.station-map')
-    const band = map.getByRole('button', { name: /^WAVE 1 · 149: 149 verified$/ })
+    const band = map.getByRole('button', { name: /^WAVE 1 · 149: 149 live$/ })
     await expect(band).toHaveAttribute('aria-expanded', 'false')
     await expect(map.locator('[data-station^="env-"]').and(map.locator('.cell'))).toHaveCount(0)
     await band.click()

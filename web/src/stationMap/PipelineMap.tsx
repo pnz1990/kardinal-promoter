@@ -6,7 +6,7 @@
 // and platforms kept per pipeline. It replaces the lane cards and the DAG.
 
 import { useEffect, useMemo, useState } from 'react'
-import type { Bundle, GraphResponse, Pipeline } from '../types'
+import type { Bundle, GraphResponse, Pipeline, PolicyGate } from '../types'
 import { api } from '../api/client'
 import StationMap from './StationMap'
 import { canPromote, canRollback } from '../pipelineActions'
@@ -28,9 +28,13 @@ export interface PipelineMapProps {
   onActionDone?: () => void
   /** Open a gate's details (until the U3 drawer shows gates under "why"). */
   onOpenGate?: (gateNodeId: string) => void
+  /** The PolicyGates: approval gates show their quorum on the map. */
+  gates?: PolicyGate[]
+  /** The Pipeline's Bundles: an older followed Bundle is not shown as incoming. */
+  bundles?: Bundle[]
 }
 
-export default function PipelineMap({ pipeline, bundle, graph, compareBundle, loading, error, focused, onOpenStage, onActionDone, onOpenGate }: PipelineMapProps) {
+export default function PipelineMap({ pipeline, bundle, graph, compareBundle, loading, error, focused, onOpenStage, onActionDone, onOpenGate, gates, bundles }: PipelineMapProps) {
   const [pending, setPending] = useState<{ kind: PipelineActionKind; env: string } | null>(null)
   const [result, setResult] = useState<string | null>(null)
   const key = `${pipeline.namespace}/${pipeline.name}`
@@ -52,11 +56,11 @@ export default function PipelineMap({ pipeline, bundle, graph, compareBundle, lo
     ? { bundle: compareBundle, graph: compareGraph.graph } : undefined, [compareBundle, compareGraph])
 
   const followed = bundle ? { bundle, graph } : undefined
-  const model = useMemo(() => buildModel(pipeline, followed, { expanded }),
+  const model = useMemo(() => buildModel(pipeline, followed, { expanded, gates, bundles }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [pipeline, bundle, graph, expanded])
-  const compareModel = useMemo(() => compare ? buildModel(pipeline, compare, { expanded }) : undefined,
-    [pipeline, compare, expanded])
+    [pipeline, bundle, graph, expanded, gates, bundles])
+  const compareModel = useMemo(() => compare ? buildModel(pipeline, compare, { expanded, gates, bundles }) : undefined,
+    [pipeline, compare, expanded, gates, bundles])
 
   // The lane's quick actions, under each station at Detail: Promote where the
   // upstreams are Verified, Roll back where the step landed, Release hold.

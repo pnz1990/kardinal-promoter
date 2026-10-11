@@ -3,8 +3,8 @@
 
 import { describe, expect, it } from 'vitest'
 import type { Bundle, GraphResponse, Pipeline } from '../types'
-import { buildModel, gridOrder, stationLabel } from './model'
-import { octilinear, layout, levelAt, initialLevel, trimEnd, lengthOf } from './geometry'
+import { buildModel, gridOrder, groupSummary, stationLabel } from './model'
+import { octilinear, layout, levelAt, initialLevel, trimEnd, lengthOf, gridCells, gridRows, pointBeforeEnd } from './geometry'
 
 const bundle = (name: string, tag: string): Bundle => ({
   name, namespace: 'default', phase: 'Promoting', type: 'image', pipeline: 'app', images: [{ repository: 'ghcr.io/acme/app', tag }],
@@ -122,6 +122,80 @@ describe('buildModel', () => {
     expect(gridOrder(m.groups.get('platform:prod')!, m.stations)).toEqual(['prod-b', 'prod-c', 'prod-a'])
   })
 
+  it('a holding gate stops the thread and counts as blocked whatever the step does (a PR may be open)', () => {
+    const graph: GraphResponse = {
+      nodes: [step('test', 'Verified'), step('uat', 'Verified'), gate('g1', 'no-weekend-deploys', 'Block', true), step('prod', 'WaitingForMerge')],
+      edges: [{ from: 'step-test', to: 'step-uat' }, { from: 'step-uat', to: 'g1' }, { from: 'g1', to: 'step-prod' }],
+    }
+    const m = buildModel(threeEnvs(), { bundle: bundle('app-v2', '1.4.2'), graph })
+    expect(m.thread.find(t => t.to === 'prod')?.kind).toBe('stopped')
+    expect(m.attention.blocked).toEqual([{ env: 'prod', gate: 'no-weekend-deploys' }])
+    expect(m.stations.get('prod')!.display.label).toBe('Held by gate no-weekend-deploys')
+  })
+
+  it('a thread into a PR waiting for its merge holds still; into a held environment it is ink', () => {
+    const waiting = buildModel(threeEnvs(), { bundle: bundle('app-v2', '1.4.2'), graph: {
+      nodes: [step('test', 'Verified'), step('uat', 'Verified'), step('prod', 'WaitingForMerge')], edges: [] } })
+    expect(waiting.thread.find(t => t.to === 'prod')?.kind).toBe('wait')
+    const p = threeEnvs({ environmentTopology: [{ name: 'test' }, { name: 'uat', upstreams: ['test'] },
+      { name: 'prod', upstreams: ['uat'], hold: { bundle: 'app-rollback-x', reason: 'bad release' } }] })
+    const held = buildModel(p, { bundle: bundle('app-v2', '1.4.2'), graph: { nodes: [step('test', 'Verified'), step('uat', 'Verified')], edges: [] } })
+    expect(held.thread.find(t => t.to === 'prod')?.kind).toBe('held')
+  })
+
+  it('following an older Bundle does not show it as incoming where a newer one runs', () => {
+    const older = { ...bundle('app-v0', '1.4.0'), createdAt: '2026-10-01T00:00:00Z' }
+    const runs = { ...bundle('app-v1', '1.4.1'), createdAt: '2026-10-05T00:00:00Z' }
+    const m = buildModel(threeEnvs(), { bundle: older, graph: { nodes: [step('test', 'Verified'), step('uat', 'Verified'), step('prod', 'Failed')], edges: [] } },
+      { bundles: [older, runs] })
+    expect(m.stations.get('prod')!.incoming).toBeUndefined()
+    expect(m.stations.get('test')!.incoming, 'test runs app-v2; app-v0 verified there long ago').toBeUndefined()
+  })
+
+  it('joins an approval gate to its PolicyGate: quorum on the mark, and the environment waits for a person', () => {
+    const graph: GraphResponse = {
+      nodes: [step('test', 'Verified'), step('uat', 'Verified'), { ...gate('gate-release-approval-app-v2-prod', 'release-approval', 'Waiting'), environment: 'prod' }, step('prod', 'NotStarted')],
+      edges: [{ from: 'gate-release-approval-app-v2-prod', to: 'step-prod' }],
+    }
+    const m = buildModel(threeEnvs(), { bundle: bundle('app-v2', '1.4.2'), graph }, {
+      gates: [{ name: 'release-approval-app-v2-prod', namespace: 'default', expression: 'true', ready: false, state: 'Waiting', environment: 'prod', bundle: 'app-v2',
+        approval: { required: 2, approved: 1 } }],
+    })
+    expect(m.stations.get('prod')!.gates[0].approval).toMatchObject({ required: 2, approved: 1 })
+    expect(m.attention.waiting).toEqual(['prod'])
+    expect(stationLabel(m.stations.get('prod')!, () => '')).toContain('release-approval has 1 of 2 approvals')
+  })
+
+  it('a fleet with a minority of failures keeps its thread; it snaps only when the fleet halted', () => {
+    const targets = ['p1', 'p2', 'p3', 'p4', 'p5']
+    const p: Pipeline = { name: 'f', namespace: 'default', phase: 'Ready', environmentCount: 6, activeBundleName: 'b2', topologyResolved: true,
+      environmentTopology: [{ name: 'test' }, { name: 'prod', upstreams: ['test'], fleet: { targets, maxConcurrent: 2, maxUnavailable: 2 } }] }
+    const at = (failed: number) => buildModel(p, { bundle: bundle('b2', '2'), graph: { nodes: [step('test', 'Verified'),
+      ...targets.map((t, i) => step(t, i < failed ? 'Failed' : i < 3 ? 'Verified' : 'Promoting'))], edges: [] } })
+    const one = at(1)
+    expect(one.thread.find(t => t.to === 'platform:prod')?.kind).toBe('flow')
+    expect(one.groups.get('platform:prod')).toMatchObject({ failed: 1, halted: false })
+    expect(groupSummary(one.groups.get('platform:prod')!)).toBe('1 failed, 2 promoting, 2 live')
+    const two = at(2)
+    expect(two.thread.find(t => t.to === 'platform:prod')?.kind).toBe('snap')
+    expect(two.groups.get('platform:prod')!.halted).toBe(true)
+  })
+
+  it('an expanded grid starts a row per state, and every cell has its row and column', () => {
+    const targets = Array.from({ length: 30 }, (_, i) => `t${String(i).padStart(2, '0')}`)
+    const p: Pipeline = { name: 'f', namespace: 'default', phase: 'Ready', environmentCount: 30, activeBundleName: 'b2',
+      environmentTopology: [{ name: 'prod', fleet: { targets } }] }
+    const m = buildModel(p, { bundle: bundle('b2', '2'), graph: { nodes: targets.map((t, i) => step(t, i < 3 ? 'Failed' : 'Verified')), edges: [] } },
+      { expanded: new Set(['platform:prod']) })
+    const g = m.groups.get('platform:prod')!
+    const rows = gridRows(g)
+    expect(rows[0]).toMatchObject({ start: 0, count: 3, label: { text: '3 failed' } })
+    expect(rows[1].label?.text).toBe('27 live')
+    const cells = gridCells(g, gridOrder(g, m.stations), { x: 0, y: 0, w: 0, h: 0 })
+    expect(cells.filter(c => c.row === 0).map(c => c.env)).toEqual(['t00', 't01', 't02'])
+    expect(cells[3]).toMatchObject({ row: 1, col: 0 })
+  })
+
   it('names a station for a screen reader', () => {
     const m = buildModel(threeEnvs(), { bundle: bundle('app-v2', '1.4.2'), graph: { nodes: [step('test', 'Verified'), step('uat', 'Verified')], edges: [] } })
     expect(stationLabel(m.stations.get('prod')!, () => '2d')).toBe('prod — Not reached, runs 1.4.1, 2d ago')
@@ -141,6 +215,14 @@ describe('geometry', () => {
         const ok = dy < 0.01 || dx < 0.01 || Math.abs(dx - dy) < 0.01
         expect(ok, `segment ${i} of ${JSON.stringify(pts)}`).toBe(true)
       }
+    }
+  })
+
+  it('keeps a straight run into a node long enough for its gates (never a gate on the chamfer)', () => {
+    for (const b of [[160, 40], [160, -90], [90, 30]] as Array<[number, number]>) {
+      const pts = octilinear([0, 0], b, 12, 46)
+      const p = pointBeforeEnd(pts, 30)
+      expect(Math.abs(p.dy), JSON.stringify(pts)).toBeLessThan(0.01)
     }
   })
 

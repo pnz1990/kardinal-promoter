@@ -53,6 +53,14 @@ const PIPELINES = [
       uat: { bundle: 'kardinal-test-app-abc123', version: 'sha-abc1234', verifiedAt: new Date(Date.now() - 240_000).toISOString(), configFrom: 'kardinal-test-app-cfg9', configVersion: 'config 77aa001' },
       prod: { bundle: 'kardinal-test-app-prev111', version: 'sha-9f8e7d6', verifiedAt: new Date(Date.now() - 7_000_000).toISOString() },
     },
+    // Pipeline status.environments and status.summary (P1, served since #1727).
+    environments: [
+      { name: 'test', bundle: 'kardinal-test-app-abc123', version: 'sha-abc1234', state: 'Verified', since: new Date(Date.now() - 420_000).toISOString() },
+      { name: 'uat', bundle: 'kardinal-test-app-abc123', version: 'sha-abc1234', state: 'Verified', since: new Date(Date.now() - 240_000).toISOString() },
+      { name: 'prod', bundle: 'kardinal-test-app-prev111', version: 'sha-9f8e7d6', incomingBundle: 'kardinal-test-app-abc123', incomingVersion: 'sha-abc1234',
+        state: 'WaitingForMerge', since: new Date(Date.now() - 300_000).toISOString(), blockedBy: ['no-weekend-deploys'], prURL: 'https://github.com/pnz1990/kardinal-demo/pull/42' },
+    ],
+    summary: 'sha-abc1234 live in test, uat; held by gate no-weekend-deploys in prod (#42)',
   },
   {
     name: 'payments-service',

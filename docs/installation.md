@@ -404,9 +404,9 @@ release name other than `kardinal-promoter`, the Service is named
   version it runs and the version on its way, gates sit on the edge into the environment they
   guard, and the version you follow is one red line through the stations it reached. A wave of
   five or more environments is one band, and a fleet one platform; each counts its environments
-  by state and expands to a grid in the Pipeline's order. The map opens at Detail, Map or
+  by state and expands to a grid, a row per state, in spec order. The map opens at Detail, Map or
   Overview by the pipeline's size, and has search, a minimap and a strip that lists what needs a
-  person. Promote, Roll back and Release hold are under each station; shift-click a second
+  person. Promote, Roll back and Release hold are under the station in focus; shift-click a second
   Bundle on the rail to compare its route. The Gates, History and Metrics tabs hold the policy
   gates with their CEL expressions, the Bundle history and the release metrics.
 - **Release metrics.** Time to the final environments and the deploys that reached them, over

@@ -12,7 +12,7 @@
 // shows prod's version while a newer one is in uat (UX-AUDIT U2, the
 // PipelineLaneView bug). The followed Bundle is the incoming version.
 
-import type { Bundle, EnvironmentHold, GraphNode, GraphResponse, Pipeline, GateApproval } from '../types'
+import type { Bundle, EnvironmentHold, GraphNode, GraphResponse, Pipeline, GateApproval, PolicyGate } from '../types'
 import { displayState, heldByGate, heldByRollback, type DisplayState, type Tone } from './display'
 import { environmentUpstreams, groupByDepth } from '../fleetModel'
 import { GRAPH } from './geometry'
@@ -85,6 +85,14 @@ export interface Group {
   depth: number
   /** Stations per tone, most urgent first. */
   counts: Array<{ tone: Tone; count: number }>
+  /** Stations per state as people read it ("3 failed", "26 not reached"), most urgent first: the
+   *  summary's words and the expanded grid's rows. */
+  states: Array<{ tone: Tone; label: string; count: number }>
+  /** Members that failed. */
+  failed: number
+  /** The rollout stopped: a fleet's maxUnavailable failed, or every member the
+   *  Bundle reached failed. Only then does the thread snap at the entrance. */
+  halted: boolean
   /** The version most members run, '' when none runs one. */
   version: string
   /** Members on the followed Bundle that are verified, for the thread's fill. */
@@ -104,8 +112,11 @@ export interface MapEdge {
   to: string
 }
 
-/** The kind of one segment of the thread. */
-export type ThreadKind = 'solid' | 'flow' | 'stopped' | 'snap'
+/** The kind of one segment of the thread: solid into a verified station,
+ *  flowing into one in progress, wait (static) into one waiting for a person
+ *  (its PR merge), stopped before a gate that holds it, snapped at a failure,
+ *  held (ink, not red) into an environment a rollback holds. */
+export type ThreadKind = 'solid' | 'flow' | 'wait' | 'stopped' | 'snap' | 'held'
 
 export interface ThreadSegment {
   from: string
@@ -223,7 +234,22 @@ export interface BuildOptions {
   expanded?: Set<string>
   /** Collapse waves of this many stations or more (graph.waveCollapseAt). */
   waveCollapseAt?: number
+  /** The PolicyGates (GET /gates): an approval gate's quorum joins its graph node. */
+  gates?: PolicyGate[]
+  /** The Pipeline's Bundles: a followed Bundle older than what runs is not incoming. */
+  bundles?: Bundle[]
 }
+
+/** The PolicyGate behind a graph gate node: the UI API's id is "gate-<PolicyGate name>". */
+function gateOf(node: GraphNode, gates: PolicyGate[] | undefined, bundle: Bundle | undefined): PolicyGate | undefined {
+  if (!gates || gates.length === 0) return undefined
+  return gates.find(g => `gate-${g.name}` === node.id) ??
+    gates.find(g => !g.template && g.environment === node.environment && (g.name === node.label || g.name.startsWith(`${node.label}-`)) &&
+      (!bundle || !g.bundle || g.bundle === bundle.name))
+}
+
+/** Step states the Bundle has finished with: a holding gate no longer decides them. */
+const SETTLED = new Set(['Verified', 'Failed', 'AbortedByAlarm', 'RollingBack', 'Superseded'])
 
 /** buildModel builds the station map of p, following followed. */
 export function buildModel(p: Pipeline, followed: Followed | undefined, opts: BuildOptions = {}): StationMapModel {
@@ -265,26 +291,38 @@ export function buildModel(p: Pipeline, followed: Followed | undefined, opts: Bu
     const gates: GateMark[] = (gatesInto.get(e.name) ?? []).map(g => ({
       id: g.id, name: g.label, state: g.state, display: displayState('gate', g.state),
       holding: !!g.holding, expression: g.expression, lastEvaluatedAt: g.lastEvaluatedAt, message: g.message,
+      approval: gateOf(g, opts.gates, followed?.bundle)?.approval,
     }))
-    const stepState = step?.state ?? ''
-    const reached = !!step && stepState !== 'NotStarted' && stepState !== ''
+    // Without the followed Bundle's graph, P1 says where the newest Bundle stands.
+    // (P1's state is the newest Bundle's: what is incoming, else what runs.)
+    const p1State = !step && pe && followedName && (pe.incomingBundle ? pe.incomingBundle === followedName : pe.bundle === followedName) ? pe.state ?? '' : ''
+    const stepState = step?.state ?? p1State
+    const reached = stepState !== 'NotStarted' && stepState !== ''
     let display: DisplayState
-    const holding = gates.find(g => g.holding)
-    if (e.hold && e.hold.bundle !== followedName) display = heldByRollback(stepState)
-    else if (holding && (!reached || stepState === 'Pending')) display = heldByGate(stepState, holding.name)
+    // A gate that holds the Bundle stops it here whatever its step is doing
+    // (a PR may be open when the gate turns): the thread stops at the bar.
+    const holding = gates.find(g => g.holding) ??
+      (!step && p1State && pe?.blockedBy?.length ? { name: pe.blockedBy[0] } as GateMark : undefined)
+    if ((e.hold && e.hold.bundle !== followedName) || (pe?.held && pe.bundle !== followedName && !e.hold)) display = heldByRollback(stepState)
+    else if (holding && !SETTLED.has(stepState)) display = heldByGate(stepState, holding.name)
     else if (followed) display = displayState('step', reached ? stepState : 'NotStarted')
     else display = displayState('step', running ? 'Verified' : 'NotStarted')
 
-    // The followed Bundle is incoming here unless it is what runs here.
+    // The followed Bundle is incoming here unless it is what runs here, or it
+    // is older than what runs here (following an earlier Bundle).
     const runsFollowed = !!running && running.bundle === followedName && stepState === 'Verified'
+    const runningBundle = running && opts.bundles?.find(b => b.name === running.bundle)
+    const olderThanRunning = !!running && running.bundle !== followedName && (
+      (!!runningBundle?.createdAt && !!followed?.bundle.createdAt && followed.bundle.createdAt < runningBundle.createdAt) ||
+      stepState === 'Verified' || stepState === 'Superseded')
     // P1's incoming version names the newest Bundle's own version text.
     const p1Incoming = pe?.incomingBundle && pe.incomingBundle === followedName ? pe.incomingVersion : undefined
-    const incoming: Incoming | undefined = followed && !runsFollowed && (reached || holding) ? {
+    const incoming: Incoming | undefined = followed && !runsFollowed && !olderThanRunning && (reached || holding) ? {
       bundle: followed.bundle.name,
       version: p1Incoming || followedVersion,
       state: stepState,
       display,
-      prURL: step?.prURL ?? pe?.prURL,
+      prURL: step?.prURL ?? (pe?.incomingBundle === followedName ? pe?.prURL : undefined),
       startedAt: step?.startedAt,
       message: step?.message,
     } : undefined
@@ -296,7 +334,7 @@ export function buildModel(p: Pipeline, followed: Followed | undefined, opts: Bu
     if (display.tone === 'failed') attention.failed.push(e.name)
     else if (display.tone === 'blocked' && holding) attention.blocked.push({ env: e.name, gate: holding.name })
     else if (display.tone === 'held') attention.held.push(e.name)
-    else if (display.tone === 'waiting' || gates.some(g => g.approval && !g.holding && g.state !== 'Pass')) attention.waiting.push(e.name)
+    else if (display.tone === 'waiting' || gates.some(g => g.approval && !g.holding && g.state !== 'Pass' && g.state !== 'Superseded')) attention.waiting.push(e.name)
   }
   const order = depthGroups.flat()
 
@@ -359,11 +397,18 @@ export function buildModel(p: Pipeline, followed: Followed | undefined, opts: Bu
 function summarize(id: string, kind: Group['kind'], label: string, members: string[], stations: Map<string, Station>,
   followedName: string | undefined, maxConcurrent?: number, maxUnavailable?: number): Group {
   const byTone = new Map<Tone, number>()
+  const byLabel = new Map<string, { tone: Tone; label: string; count: number }>()
   const versions = new Map<string, number>()
   let verified = 0
+  let reached = 0
   for (const m of members) {
     const st = stations.get(m)!
     byTone.set(st.display.tone, (byTone.get(st.display.tone) ?? 0) + 1)
+    const lk = `${st.display.tone}/${st.display.label}`
+    const prev = byLabel.get(lk)
+    if (prev) prev.count++
+    else byLabel.set(lk, { tone: st.display.tone, label: st.display.label, count: 1 })
+    if (st.reached) reached++
     if (st.running) versions.set(st.running.version, (versions.get(st.running.version) ?? 0) + 1)
     if (followedName && st.reached && st.display.tone === 'verified') verified++
   }
@@ -371,9 +416,13 @@ function summarize(id: string, kind: Group['kind'], label: string, members: stri
   let most = 0
   for (const [v, n] of versions) if (n > most) { version = v; most = n }
   const depth = Math.min(...members.map(m => stations.get(m)!.depth))
+  const failed = byTone.get('failed') ?? 0
+  const rank = new Map(TONE_ORDER.map((t, i) => [t, i]))
   return {
-    id, kind, label, members, depth, version, verified, maxConcurrent, maxUnavailable,
+    id, kind, label, members, depth, version, verified, maxConcurrent, maxUnavailable, failed,
+    halted: failed > 0 && (maxUnavailable ? failed >= maxUnavailable : failed >= reached),
     counts: TONE_ORDER.filter(t => byTone.has(t)).map(t => ({ tone: t, count: byTone.get(t)! })),
+    states: [...byLabel.values()].sort((a, b) => (rank.get(a.tone)! - rank.get(b.tone)!) || a.label.localeCompare(b.label)),
   }
 }
 
@@ -383,8 +432,17 @@ function nodeTone(id: string, stations: Map<string, Station>, groups: Map<string
   if (st) return { tone: st.display.tone, reached: st.reached, done: st.reached && st.display.tone === 'verified' }
   const g = groups.get(id)!
   const reached = g.members.some(m => stations.get(m)!.reached)
-  const urgent = g.counts.find(c => c.tone !== 'verified' && c.tone !== 'pending' && c.tone !== 'superseded')
-  return { tone: urgent?.tone ?? (g.verified === g.members.length ? 'verified' : 'pending'), reached, done: g.verified === g.members.length }
+  const done = g.verified === g.members.length
+  // A group snaps only when its rollout stopped; a minority of failures is a
+  // mark on the band while the thread fills by the share that is verified.
+  if (g.halted) return { tone: 'failed', reached, done }
+  const has = (t: Tone) => g.counts.some(c => c.tone === t)
+  if (has('blocked') && !g.members.some(m => { const t = stations.get(m)!.display.tone; return t === 'promoting' || t === 'verified' || t === 'failed' })) {
+    return { tone: 'blocked', reached, done }
+  }
+  if (has('promoting') || (has('failed') && reached)) return { tone: 'promoting', reached, done }
+  if (has('waiting')) return { tone: 'waiting', reached, done }
+  return { tone: done ? 'verified' : reached ? 'promoting' : 'pending', reached, done }
 }
 
 /**
@@ -400,11 +458,13 @@ export function threadOf(edges: MapEdge[], stations: Map<string, Station>, group
     const from = nodeTone(e.from, stations, groups)
     const to = nodeTone(e.to, stations, groups)
     if (!from.done) continue
-    if (to.tone === 'blocked') out.push({ ...e, kind: 'stopped' })
+    if (to.tone === 'held') out.push({ ...e, kind: 'held' })
+    else if (to.tone === 'blocked') out.push({ ...e, kind: 'stopped' })
     else if (!to.reached) continue
     else if (to.tone === 'failed') out.push({ ...e, kind: 'snap' })
     else if (to.tone === 'verified' && to.done) out.push({ ...e, kind: 'solid' })
     else if (to.tone === 'superseded') continue
+    else if (to.tone === 'waiting') out.push({ ...e, kind: 'wait' })
     else out.push({ ...e, kind: 'flow' })
   }
   return out
@@ -418,14 +478,27 @@ export function threadRoots(model: StationMapModel): string[] {
     .map(n => n.id)
 }
 
-/** The environments of a band or platform, sorted for its grid: most urgent first, then by name. */
+/** The environments of a band or platform, sorted for its grid: most urgent
+ *  state first (the order of group.states), then in spec order. */
 export function gridOrder(g: Group, stations: Map<string, Station>): string[] {
-  const rank = new Map(TONE_ORDER.map((t, i) => [t, i]))
-  return [...g.members].sort((a, b) => {
-    const ta = rank.get(stations.get(a)!.display.tone) ?? 99
-    const tb = rank.get(stations.get(b)!.display.tone) ?? 99
-    return ta !== tb ? ta - tb : a.localeCompare(b)
-  })
+  const rank = new Map(g.states.map((s, i) => [`${s.tone}/${s.label}`, i]))
+  const spec = new Map(g.members.map((m, i) => [m, i]))
+  const key = (env: string) => { const d = stations.get(env)!.display; return rank.get(`${d.tone}/${d.label}`) ?? 99 }
+  return [...g.members].sort((a, b) => (key(a) - key(b)) || (spec.get(a)! - spec.get(b)!))
+}
+
+/** "3 failed", "26 not reached": a state count as words. */
+export function stateCount(s: { label: string; count: number }): string {
+  return `${s.count} ${lowerFirst(s.label)}`
+}
+
+/** A group's summary in words: "1 failed, 5 live". */
+export function groupSummary(g: Group): string {
+  return g.states.map(stateCount).join(', ')
+}
+
+function lowerFirst(s: string): string {
+  return s.length > 1 && s[1] === s[1].toLowerCase() ? s[0].toLowerCase() + s.slice(1) : s
 }
 
 /** The station's accessible name: "uat — Live, runs 1.4.2, 3h ago, 1 of 1 gate passing". */
@@ -441,6 +514,9 @@ export function stationLabel(st: Station, age: (iso?: string) => string): string
     const block = st.gates.filter(g => g.holding)
     if (block.length > 0) parts.push(`blocked by ${block.map(g => g.name).join(', ')}`)
     else parts.push(`${pass} of ${st.gates.length} gate${st.gates.length === 1 ? '' : 's'} passing`)
+    for (const g of st.gates) {
+      if (g.approval && g.state !== 'Pass' && g.state !== 'Superseded') parts.push(`${g.name} has ${g.approval.approved} of ${g.approval.required} approvals`)
+    }
   }
   return `${st.env} — ${parts.join(', ')}`
 }

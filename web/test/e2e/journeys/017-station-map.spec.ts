@@ -30,19 +30,23 @@ test.describe('Journey 017 — Station map', () => {
     await open(page, 'kardinal-test-app', 'default')
     const map = page.locator('.station-map')
     await expect(map.getByRole('radio', { name: 'Detail' })).toHaveAttribute('aria-checked', 'true')
-    // prod runs its own version while a newer one waits for its PR (the PipelineLaneView.tsx:207 bug).
+    // prod runs its own version while a newer one is on its way, its PR open but held by a gate
+    // (the PipelineLaneView.tsx:207 bug).
     const prod = page.locator('[data-station="prod"]')
-    await expect(prod).toHaveAttribute('aria-label', /^prod — Waiting for PR merge, runs sha-9f8e7d6, .* ago, incoming sha-abc1234, blocked by no-weekend-deploys$/)
+    await expect(prod).toHaveAttribute('aria-label', /^prod — Held by gate no-weekend-deploys, runs sha-9f8e7d6, .* ago, incoming sha-abc1234, blocked by no-weekend-deploys$/)
     await expect(prod).toContainText('sha-9f8e7d6')
-    await expect(prod).toContainText('→ sha-abc1234 · Waiting for PR merge · #42')
+    await expect(prod).toContainText('→ sha-abc1234 · Held by gate no-weekend-deploys · #42')
     await expect(page.locator('[data-station="uat"]')).toContainText('sha-abc1234')
-    const gate = page.getByRole('img', { name: 'gate no-weekend-deploys, Blocking' })
+    const gate = page.getByRole('button', { name: 'gate no-weekend-deploys, Blocking' })
     await expect(gate).toBeVisible()
     // The gate takes the pointer over its whole label, even where the label reaches over uat's column.
     await gate.hover()
     await expect(page.locator('.gate-popover')).toBeVisible()
     await page.mouse.move(0, 0)
     await expect(page.locator('.station-map__thread [data-kind="solid"]')).toHaveCount(1)
+    // The gate holds prod: the thread stops before its bar, and prod counts as blocked.
+    await expect(page.locator('.station-map__thread [data-kind="stopped"]')).toHaveCount(1)
+    await expect(map.getByRole('group', { name: 'Needs attention' })).toContainText('1 blocked by no-weekend-deploys')
     // The map gets most of the page at 1366×768.
     const box = (await page.locator('.station-map').boundingBox())!
     expect(box.height / 768).toBeGreaterThanOrEqual(0.6)
@@ -69,8 +73,15 @@ test.describe('Journey 017 — Station map', () => {
     await expect(page.locator('[data-station="prod"]')).toBeFocused()
     await page.keyboard.press('ArrowLeft')
     await expect(page.locator('[data-station="uat"]')).toBeFocused()
+    // Only the station in focus offers its actions.
+    await expect(page.getByRole('button', { name: 'Roll back uat' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Roll back test' })).toHaveCount(0)
     await page.keyboard.press('Enter')
     await expect(page.getByLabel('Close')).toBeVisible()
+    await page.getByLabel('Close').click()
+    // A gate takes focus and shows why it holds.
+    await page.getByRole('button', { name: 'gate no-weekend-deploys, Blocking' }).focus()
+    await expect(page.locator('.gate-popover')).toContainText('!schedule.isWeekend')
   })
 
   test('30 environments: Map zoom, a wave band, a fleet platform, the attention strip', async ({ page }) => {
@@ -84,6 +95,11 @@ test.describe('Journey 017 — Station map', () => {
     await expect(edge).toHaveAttribute('aria-expanded', 'false')
     await expect(map.getByRole('group', { name: 'Needs attention' })).toContainText('1 failed')
     await expect(map.getByRole('button', { name: '1 blocked by change-freeze' })).toBeVisible()
+    // One of 12 edge targets failed (the fleet stops at 2): the thread keeps going into the fleet,
+    // and the failure is a mark on the platform.
+    await expect(page.locator('.station-map__thread [data-kind="snap"]')).toHaveCount(0)
+    await expect(page.locator('.station-map__thread [data-kind="flow"]')).toHaveCount(1)
+    await expect(page.locator('[data-group="platform:edge"] .group__fail')).toHaveText('✕ 1')
     await shot(page, '30-envs-map')
     // The attention strip expands the fleet and focuses the failed target.
     await map.getByRole('button', { name: '1 failed', exact: true }).click()
@@ -134,9 +150,10 @@ test.describe('Journey 017 — Station map', () => {
   })
 
   test('reduced motion: no running animation; dark theme; no overflow at 390×844', async ({ page }) => {
+    await serveScale(page)
     await page.emulateMedia({ reducedMotion: 'reduce' })
-    await open(page, 'kardinal-test-app', 'default')
-    // The thread flowing into prod and the promoting arc stop.
+    await open(page, 'checkout-30', 'scale')
+    // The thread flowing into the edge fleet stops.
     await expect(page.locator('.station-map__thread [data-kind="flow"]')).toHaveCount(1)
     // Animations (the thread's flow, the promoting arc), not the theme's colour transitions.
     const running = await page.evaluate(() => document.getAnimations().filter(a => a instanceof CSSAnimation && a.playState === 'running' &&
@@ -149,8 +166,9 @@ test.describe('Journey 017 — Station map', () => {
     await page.reload()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
     await expect(page.locator('.station-map__svg [data-station]').first()).toBeVisible()
-    // With motion allowed, the thread into prod does flow.
+    // With motion allowed, the thread into the fleet does flow.
     expect(await page.evaluate(() => document.getAnimations().filter(a => a instanceof CSSAnimation && a.animationName === 'thread-flow').length)).toBeGreaterThan(0)
+    await open(page, 'kardinal-test-app', 'default')
     await shot(page, '3-envs-dark')
     const axe = await new AxeBuilder({ page }).include('.station-map').withTags(['wcag2a', 'wcag2aa']).analyze()
     expect(axe.violations.map(v => `${v.id}: ${v.nodes[0]?.target[0]}`)).toEqual([])

@@ -119,6 +119,11 @@
   display: block;
 }
 .station-map__svg:active { cursor: grabbing; }
+/* Map text never reads below --k-text-2xs on screen: each label sets --fs,
+   and at Map and Overview zoom (--map-k < 1) the size is counter-scaled. */
+.station-map__svg text {
+  font-size: max(var(--fs, var(--k-text-xs)), calc(var(--k-text-2xs) / var(--map-k, 1)));
+}
 
 /* Edges: fine ink lines, octilinear. */
 .station-map__edge {
@@ -155,6 +160,10 @@
 }
 @keyframes thread-flow { to { stroke-dashoffset: -10; } }
 .station-map__fray { stroke-width: var(--k-stroke-edge); }
+/* Waiting for a person (a PR merge): the thread holds still. */
+.station-map__thread-path--wait { stroke-dasharray: 6 4; }
+/* Into an environment a rollback holds: ink, not red. */
+.station-map__thread .station-map__thread-path--held { stroke: var(--k-ink); stroke-width: var(--k-stroke-edge); }
 .station-map--paused .station-map__thread-path--flow { animation: none; }
 .station-map__thread--compare path {
   stroke: var(--k-ink);
@@ -169,13 +178,16 @@
   vector-effect: non-scaling-stroke;
   stroke-linecap: square;
 }
-.station-map__gate { cursor: pointer; }
+.station-map__gate { cursor: pointer; outline: none; }
+.station-map__gate:focus-visible .station-map__gate-hit { stroke: var(--k-thread); stroke-width: var(--k-stroke-ring); vector-effect: non-scaling-stroke; }
+.station-map__gate-quorum circle, .station-map__gate-quorum path { fill: none; stroke: var(--k-ink-2); stroke-width: var(--k-border-hairline); vector-effect: non-scaling-stroke; }
+.station-map__gate-quorum text { font-family: var(--k-font-mono); --fs: var(--k-text-2xs); fill: var(--k-ink-2); }
 .station-map__gate[data-tone="waiting"] line { stroke: var(--k-status-waiting-fg); }
 .station-map__gate[data-tone="blocked"] line { stroke: var(--k-status-blocked-fg); stroke-width: calc(var(--k-stroke-thread-focus) * 1.2); }
 .station-map__gate[data-tone="superseded"] line { stroke: var(--k-ink-3); stroke-dasharray: 2 2; }
 .station-map__gate-label {
   font-family: var(--k-font-display);
-  font-size: var(--k-text-2xs);
+  --fs: var(--k-text-2xs);
   font-stretch: var(--k-stretch-dense);
   fill: var(--k-ink-3);
 }
@@ -214,15 +226,19 @@
 
 .station__name {
   font-family: var(--k-font-display);
-  font-size: var(--k-text-sm);
+  --fs: var(--k-text-sm);
   font-weight: var(--k-weight-semibold);
   fill: var(--k-ink);
 }
 .station-map[data-level="map"] .station__name { font-stretch: var(--k-stretch-label); }
-.station-map[data-level="overview"] .station__name { font-stretch: var(--k-stretch-dense); font-size: var(--k-text-xs); }
-.station__sub { font-family: var(--k-font-mono); font-size: var(--k-text-xs); fill: var(--k-ink-3); font-variant-numeric: var(--k-numeric, tabular-nums); }
+.station-map[data-level="overview"] .station__name { font-stretch: var(--k-stretch-dense); --fs: var(--k-text-xs); }
+/* Detail: the station name at the display size, versions in mono a step up. */
+.station-map[data-level="detail"] .station__name { --fs: var(--k-text-lg); font-weight: var(--k-weight-semibold); }
+.station-map[data-level="detail"] .station__sub,
+.station-map[data-level="detail"] .station__incoming { --fs: var(--k-text-sm); }
+.station__sub { font-family: var(--k-font-mono); --fs: var(--k-text-xs); fill: var(--k-ink-3); font-variant-numeric: var(--k-numeric, tabular-nums); }
 .station__version { fill: var(--k-ink-2); }
-.station__incoming { font-family: var(--k-font-mono); font-size: var(--k-text-xs); fill: var(--k-ink-2); }
+.station__incoming { font-family: var(--k-font-mono); --fs: var(--k-text-xs); fill: var(--k-ink-2); }
 .station__incoming[data-tone="promoting"] { fill: var(--k-thread-text); }
 .station__incoming[data-tone="waiting"] { fill: var(--k-status-waiting-fg); }
 .station__incoming[data-tone="blocked"] { fill: var(--k-status-blocked-fg); }
@@ -234,15 +250,19 @@
 .group__head:focus-visible .group__frame { stroke: var(--k-thread); stroke-width: var(--k-stroke-ring); }
 .group__label {
   font-family: var(--k-font-display);
-  font-size: var(--k-text-2xs);
+  --fs: var(--k-text-2xs);
   font-stretch: var(--k-stretch-label);
   font-weight: var(--k-weight-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   fill: var(--k-ink-2);
 }
-.group__chevron { font-size: var(--k-text-xs); fill: var(--k-ink-3); }
-.group__sub { font-family: var(--k-font-mono); font-size: var(--k-text-2xs); fill: var(--k-ink-3); }
+.group__chevron { --fs: var(--k-text-xs); fill: var(--k-ink-3); }
+.group__sub { font-family: var(--k-font-mono); --fs: var(--k-text-2xs); fill: var(--k-ink-3); }
+.group__row { font-family: var(--k-font-body); --fs: var(--k-text-2xs); fill: var(--k-ink-2); font-variant-numeric: tabular-nums; }
+.group__row[data-tone="failed"] { fill: var(--k-status-failed-fg); font-weight: var(--k-weight-semibold); }
+.group__row[data-tone="blocked"] { fill: var(--k-status-blocked-fg); }
+.group__fail { --fs: var(--k-text-2xs); fill: var(--k-status-failed-fg); font-weight: var(--k-weight-semibold); }
 .group__seg { fill: var(--k-line); }
 .group__seg[data-tone="verified"] { fill: var(--k-ink-node); }
 .group__seg[data-tone="promoting"] { fill: var(--k-thread); }
@@ -252,16 +272,22 @@
 .group__seg[data-tone="held"] { fill: var(--k-ink); }
 .group__thread { fill: var(--k-thread); }
 
-.cell { fill: var(--k-surface-base); stroke: var(--k-status-pending-ring); stroke-width: var(--k-border-hairline); vector-effect: non-scaling-stroke; cursor: pointer; outline: none; }
-.cell[data-tone="verified"] { fill: var(--k-ink-node); stroke: var(--k-ink-node); }
-.cell[data-tone="promoting"] { fill: var(--k-thread-wash); stroke: var(--k-thread); }
-.cell[data-tone="waiting"] { stroke: var(--k-status-waiting-fg); }
-.cell[data-tone="blocked"] { fill: var(--k-status-blocked-wash); stroke: var(--k-status-blocked-fg); }
-.cell[data-tone="failed"] { fill: var(--k-status-failed-fill); stroke: var(--k-status-failed-fill); }
-.cell[data-tone="held"] { stroke: var(--k-ink); stroke-width: var(--k-border-strong); }
-.cell[data-tone="superseded"] { opacity: 0.5; stroke-dasharray: 2 2; }
+.cell { cursor: pointer; outline: none; }
+.cell__box { fill: var(--k-surface-base); stroke: var(--k-status-pending-ring); stroke-width: var(--k-border-hairline); vector-effect: non-scaling-stroke; }
+.cell[data-tone="verified"] .cell__box { fill: var(--k-ink-node); stroke: var(--k-ink-node); }
+.cell[data-tone="promoting"] .cell__box { fill: var(--k-thread-wash); stroke: var(--k-thread); }
+.cell[data-tone="waiting"] .cell__box { stroke: var(--k-status-waiting-fg); }
+.cell[data-tone="blocked"] .cell__box { fill: var(--k-status-blocked-wash); stroke: var(--k-status-blocked-fg); }
+.cell[data-tone="failed"] .cell__box { fill: var(--k-status-failed-fill); stroke: var(--k-status-failed-fill); }
+.cell[data-tone="held"] .cell__box { stroke: var(--k-ink); stroke-width: var(--k-border-strong); }
+.cell[data-tone="superseded"] { opacity: 0.5; }
+.cell[data-tone="superseded"] .cell__box { stroke-dasharray: 2 2; }
+.cell__mark { fill: none; stroke: var(--k-status-failed-on-fill); stroke-width: var(--k-border-strong); stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.cell[data-tone="blocked"] .cell__mark { stroke: var(--k-status-blocked-fg); }
+.cell__dot { fill: var(--k-thread); }
+.cell__hatch { stroke: var(--k-ink); stroke-width: var(--k-border-hairline); }
 .cell[data-dim] { opacity: 0.25; }
-.cell:focus-visible, .cell[data-focused] { stroke: var(--k-thread); stroke-width: var(--k-stroke-ring); }
+.cell:focus-visible .cell__box, .cell[data-focused] .cell__box { stroke: var(--k-thread); stroke-width: var(--k-stroke-ring); }
 
 /* Gate popover. */
 .gate-popover {
@@ -304,7 +330,7 @@
 .minimap__node[data-tone="blocked"] { fill: var(--k-status-blocked-fg); }
 .minimap__node[data-tone="promoting"] { fill: var(--k-thread); }
 .minimap__thread-hint { fill: var(--k-thread); }
-.minimap__view { fill: none; stroke: var(--k-thread); stroke-width: var(--k-stroke-ring); }
+.minimap__view { fill: none; stroke: var(--k-ink); stroke-width: var(--k-stroke-ring); }
 
 @container map (max-width: 720px) {
   .station-map__levels { display: none; }
@@ -364,7 +390,7 @@
 }
 .stage-hold__release:focus-visible { outline: var(--k-focus-ring); outline-offset: var(--k-focus-offset); }
 
-.station__differs { font-family: var(--k-font-mono); font-size: var(--k-text-xs); fill: var(--k-ink); font-weight: var(--k-weight-bold); }
+.station__differs { font-family: var(--k-font-mono); --fs: var(--k-text-xs); fill: var(--k-ink); font-weight: var(--k-weight-bold); }
 
 /* Quiet actions under a station at Detail: the lane's quick actions. */
 .station-actions { overflow: visible; }

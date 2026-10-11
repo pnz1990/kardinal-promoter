@@ -87,11 +87,13 @@ const steps: Record<string, () => void> = {
     await detail.getByRole('button', { name: 'Close' }).click()
     await expect(detail).toHaveCount(0)
 
-    // Cancel creates nothing (the Go test checks).
+    // Cancel creates nothing (the Go test checks). The map offers the action under the station in focus.
+    await station(page, 'prod').focus()
     await lane(page).getByRole('button', { name: 'Promote to prod' }).click()
     await page.getByRole('dialog', { name: `Promote ${PIPELINE} to prod?` }).getByRole('button', { name: 'Cancel' }).click()
     await expect(page.getByRole('dialog')).toHaveCount(0)
 
+    await station(page, 'prod').focus()
     await lane(page).getByRole('button', { name: 'Promote to prod' }).click()
     const dialog = page.getByRole('dialog', { name: `Promote ${PIPELINE} to prod?` })
     await expect(dialog).toHaveAccessibleDescription(`Creates a new bundle for ${PIPELINE} that targets prod. Its progress shows in the bundle timeline.`)
@@ -103,7 +105,8 @@ const steps: Record<string, () => void> = {
   rollback: () => test('Roll back in the node details asks first, then rolls prod back', async ({ page }) => {
     await openPipeline(page, base, ns)
     await expect(station(page, 'prod')).toHaveAttribute('aria-label', /^prod — Live, /)
-    // The map offers the same action under the station.
+    // The map offers the same action under the station in focus.
+    await station(page, 'prod').focus()
     await expect(lane(page).getByRole('button', { name: 'Roll back prod' })).toBeVisible()
 
     await station(page, 'prod').click()

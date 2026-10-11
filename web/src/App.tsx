@@ -734,6 +734,8 @@ export function App() {
                       onOpenStage={openStage}
                       onActionDone={() => { void manualRefresh() }}
                       onOpenGate={id => { const n = graph?.nodes.find(x => x.id === id); if (n) setSelectedNode(n) }}
+                      gates={shownGates}
+                      bundles={bundles}
                     />
                   )}
                 </ErrorBoundary>

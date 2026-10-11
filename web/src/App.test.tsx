@@ -556,7 +556,7 @@ describe('App counts only holding gates as blocked (E2E-R19)', () => {
     expect(screen.queryByText(/\d+ blocked/)).not.toBeInTheDocument()
     // The map mounts the gate on the edge into prod, not ready, not blocking;
     // the attention strip does not count it (the bundle has not reached it).
-    expect(screen.getByRole('img', { name: 'gate soak, Not ready' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'gate soak, Not ready' })).toBeInTheDocument()
     expect(screen.queryByRole('group', { name: 'Needs attention' })).not.toBeInTheDocument()
     // The Gates tab lists it as waiting.
     fireEvent.click(screen.getByRole('tab', { name: /^Gates/ }))
@@ -579,7 +579,7 @@ describe('App counts only holding gates as blocked (E2E-R19)', () => {
     await flush()
     // The map's attention strip names the gate; the gates panel counts it.
     expect(screen.getByRole('button', { name: '1 blocked by soak' })).toBeInTheDocument()
-    expect(screen.getByRole('img', { name: 'gate soak, Blocking' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'gate soak, Blocking' })).toBeInTheDocument()
     expect(screen.getByText('1 blocked')).toBeInTheDocument()
   })
 })

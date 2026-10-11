@@ -48,6 +48,9 @@ export interface MapViewport {
  * element `ref`. initial is the level the map opens at: Detail and Map fit
  * the map when it is smaller than the view, Overview fits it whole.
  */
+/** How far past Detail's zoom a small pipeline may be fitted. */
+const DETAIL_FILL = 4 / 3
+
 export function useMapViewport(ref: React.RefObject<SVGSVGElement | null>, bounds: Box, initial: ZoomLevel): MapViewport {
   const [size, setSize] = useState({ w: 800, h: 480 })
   // The first fit waits for the element's measured size (jsdom never measures).
@@ -87,7 +90,8 @@ export function useMapViewport(ref: React.RefObject<SVGSVGElement | null>, bound
     // is shown whole (it opens a level lower if it must).
     // The level the map opens at is its size's (a collapsed 300-environment
     // graph is small); the zoom only fits it, at most at Detail's.
-    const k0 = initial === 'detail' ? zoomFor('detail') : GRAPH.zoom.detail
+    // A small pipeline fills the canvas at Detail, up to a third above Detail's zoom.
+    const k0 = initial === 'detail' ? zoomFor('detail') * DETAIL_FILL : GRAPH.zoom.detail
     setView(fitView(bounds, size, k0))
   }, [bounds, size, initial, fitView, measured])
 

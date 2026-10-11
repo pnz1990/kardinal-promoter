@@ -12,7 +12,7 @@ import { graph } from '../tokens'
 import type { MapEdge, MapNode, Station, Group } from './model'
 
 /** The graph.* design tokens (DESIGN-SYSTEM §2.4). */
-export const GRAPH = graph
+export const GRAPH = { ...graph, /** --k-text-2xs in px: no map label reads smaller on screen. */ labelMin: 11 } as const
 
 /** A band's segmented bar, the thread's fill under it, and the minimap's thread hint: from the grid tokens. */
 export const BAR = {
@@ -46,13 +46,13 @@ export function initialLevel(n: number): ZoomLevel {
 /** The width of a station's label column at a level, in map units. */
 const LABEL_W: Record<ZoomLevel, number> = { overview: 44, map: 120, detail: 272 }
 /** A station's height: the dot and its label lines. */
-const STATION_H: Record<ZoomLevel, number> = { overview: 28, map: 44, detail: 70 + GRAPH.rankSep / 2 }
+const STATION_H: Record<ZoomLevel, number> = { overview: 28, map: 44, detail: 84 + GRAPH.rankSep / 2 }
 /** The dot sits this far below a station's top: its name goes above the line
  *  the edges run on, its version and state below (a metro map's labels). */
-const DOT_TOP = 18
+const DOT_TOP = 22
 
 /** A band or platform's summary size; Overview is denser so 300 environments read at once. */
-const GROUP_W: Record<ZoomLevel, number> = { overview: 150, map: 196, detail: 196 }
+const GROUP_W: Record<ZoomLevel, number> = { overview: 180, map: 210, detail: 210 }
 const GROUP_H: Record<ZoomLevel, number> = { overview: 40, map: 52, detail: 52 }
 /** Rank spacing per level: Overview packs the columns. */
 const RANK_SEP: Record<ZoomLevel, number> = { overview: GRAPH.rankSep / 2, map: GRAPH.rankSep, detail: GRAPH.rankSep }
@@ -62,12 +62,46 @@ export function gridColumns(n: number): number {
   return Math.max(4, Math.min(24, Math.ceil(Math.sqrt(n * 3))))
 }
 
-/** The size of an expanded group's grid, header and footer included. */
-export function gridSize(n: number): { w: number; h: number; cols: number } {
-  const cols = gridColumns(n)
-  const rows = Math.ceil(n / cols)
+/** The row labels' column of an expanded grid ("112 live"), and the space
+ *  above the cells (the head) and below them (the footer). */
+export const GRID_LABEL_W = 132
+const GRID_HEAD = 28
+const GRID_FOOT = 20
+const GRID_PAD = 12
+/** The space between two states' rows: room for a row label that is
+ *  counter-scaled to stay readable at Map and Overview zoom. */
+const GRID_BLOCK_GAP = 10
+
+/** The rows of an expanded group's grid: each state starts a row, labelled
+ *  with its count ("3 failed"); a state wider than the grid wraps. */
+export function gridRows(g: Group): Array<{ label?: { tone: string; text: string }; start: number; count: number; y: number }> {
+  const cols = gridColumns(g.members.length)
   const step = GRAPH.grid.cell + GRAPH.grid.gap
-  return { cols, w: Math.max(GROUP_W.map, cols * step + 24), h: rows * step + 44 }
+  const rows: Array<{ label?: { tone: string; text: string }; start: number; count: number; y: number }> = []
+  let at = 0
+  let y = 0
+  g.states.forEach((st, b) => {
+    if (b > 0) y += GRID_BLOCK_GAP
+    for (let i = 0; i < st.count; i += cols) {
+      rows.push({ y, start: at + i, count: Math.min(cols, st.count - i), label: i === 0 ? { tone: st.tone, text: `${st.count} ${lowerFirst(st.label)}` } : undefined })
+      y += step
+    }
+    at += st.count
+  })
+  return rows
+}
+
+/** The size of an expanded group's grid, head, row labels and footer included. */
+export function gridSize(g: Group): { w: number; h: number; cols: number } {
+  const cols = gridColumns(g.members.length)
+  const rows = gridRows(g)
+  const step = GRAPH.grid.cell + GRAPH.grid.gap
+  const height = rows.length ? rows[rows.length - 1].y + step : step
+  return { cols, w: Math.max(GROUP_W.map, GRID_LABEL_W + cols * step + GRID_PAD * 2), h: GRID_HEAD + height + GRID_FOOT }
+}
+
+function lowerFirst(s: string): string {
+  return s.length > 1 && s[1] === s[1].toLowerCase() ? s[0].toLowerCase() + s.slice(1) : s
 }
 
 export interface Box {
@@ -99,20 +133,31 @@ export interface Layout {
 }
 
 /** The length of a lead-in line: room for two gate marks before a first station. */
-export const LEAD = GRAPH.gateTick * 3 + GRAPH.gateTick / 2 + 1
+export const LEAD = GRAPH.gateTick * 4 + GRAPH.gateTick / 2 + 1
 
-/** About how wide a line of mono text of n characters is (--k-text-xs). */
-const MONO_CH = 7.3
+/** About how wide a character is at Detail: mono at --k-text-sm, the name in
+ *  the display face at --k-text-lg. */
+const MONO_CH = 7.9
+const NAME_CH = 9.5
 
-/** The longest label line of a station at Detail: its incoming line, or its version line. */
+/** The longest label line of a station at Detail: its name, its incoming line, or its version line. */
 function detailTextWidth(st: Station): number {
   const lines = [
-    st.env.length * 8,
+    st.env.length * NAME_CH,
     ((st.running?.version.length ?? 16) + 8) * MONO_CH,
     st.incoming ? (st.incoming.version.length + st.incoming.display.label.length + 12) * MONO_CH : 0,
   ]
   return Math.max(...lines)
 }
+
+/** The straight run an edge keeps before a node with n gates: the gate marks
+ *  sit on it, never on a chamfer. */
+export function gateRun(n: number): number {
+  return n > 0 ? GRAPH.gateTick * 4 + (n - 1) * GATE_STEP : 0
+}
+
+/** The spacing of gate marks on one edge (a comb). */
+export const GATE_STEP = 6
 
 /** The size dagre gives a node at a level. */
 export function nodeSize(n: MapNode, level: ZoomLevel): { w: number; h: number } {
@@ -121,7 +166,7 @@ export function nodeSize(n: MapNode, level: ZoomLevel): { w: number; h: number }
     return { w: GRAPH.station.r * 2 + GRAPH.labelGap + label, h: STATION_H[level] }
   }
   if (n.expanded) {
-    const s = gridSize(n.group.members.length)
+    const s = gridSize(n.group)
     return { w: s.w, h: s.h }
   }
   return { w: GROUP_W[level], h: GROUP_H[level] }
@@ -132,7 +177,7 @@ export function nodeSize(n: MapNode, level: ZoomLevel): { w: number; h: number }
  * model's depth so a station never jumps between columns as states change;
  * dagre orders nodes within a rank.
  */
-export function layout(nodes: MapNode[], edges: MapEdge[], level: ZoomLevel): Layout {
+export function layout(nodes: MapNode[], edges: MapEdge[], level: ZoomLevel, gatesInto: (id: string) => number = () => 0): Layout {
   const g = new dagre.graphlib.Graph()
   g.setGraph({ rankdir: 'LR', nodesep: GRAPH.nodeSep, ranksep: RANK_SEP[level], marginx: 24 + LEAD, marginy: 24 })
   g.setDefaultEdgeLabel(() => ({}))
@@ -169,12 +214,15 @@ export function layout(nodes: MapNode[], edges: MapEdge[], level: ZoomLevel): La
     const a = placed.get(e.from)
     const b = placed.get(e.to)
     if (!a || !b) continue
-    out.push({ edge: e, points: octilinear([a.outX, a.portY], [b.inX, b.portY], GRAPH.chamfer) })
+    out.push({ edge: e, points: octilinear([a.outX, a.portY], [b.inX, b.portY], GRAPH.chamfer, gateRun(gatesInto(e.to))) })
   }
   const reached = new Set(out.map(e => e.edge.to))
   const leads = new Map<string, Array<[number, number]>>()
   for (const [id, p] of placed) {
-    if (p.node.kind === 'station' && !reached.has(id)) leads.set(id, [[p.inX - LEAD, p.portY], [p.inX, p.portY]])
+    if (p.node.kind === 'station' && !reached.has(id)) {
+      const len = Math.max(LEAD, gateRun(gatesInto(id)) + GRAPH.gateTick / 2)
+      leads.set(id, [[p.inX - len, p.portY], [p.inX, p.portY]])
+    }
   }
   return { placed, edges: out, leads, bounds: { x: 0, y: 0, w: maxX + 24, h: maxY + 24 } }
 }
@@ -185,7 +233,7 @@ export function layout(nodes: MapNode[], edges: MapEdge[], level: ZoomLevel): La
  * horizontally. When the horizontal room is shorter than the offset, the
  * diagonal legs are chamfer long and a vertical run covers the rest.
  */
-export function octilinear(a: [number, number], b: [number, number], chamfer: number): Array<[number, number]> {
+export function octilinear(a: [number, number], b: [number, number], chamfer: number, tail = 0): Array<[number, number]> {
   const [x1, y1] = a
   const [x2, y2] = b
   const dy = y2 - y1
@@ -194,14 +242,16 @@ export function octilinear(a: [number, number], b: [number, number], chamfer: nu
   const dx = x2 - x1
   const ady = Math.abs(dy)
   const lead = Math.min(chamfer, Math.max(0, dx / 4))
-  if (dx - 2 * lead >= ady) {
-    // Room for one diagonal: run, diagonal, run (the diagonal ends a lead before b).
-    const xd = x2 - lead - ady
+  // The run into b: at least tail long (its gates sit there) when there is room.
+  const end = Math.max(lead, Math.min(tail, dx - lead - 2 * Math.min(chamfer, ady / 2)))
+  if (dx - lead - end >= ady) {
+    // Room for one diagonal: run, diagonal, run (the diagonal ends `end` before b).
+    const xd = x2 - end - ady
     return [a, [xd, y1], [xd + ady, y2], b]
   }
-  // Steep: chamfer down, vertical, chamfer in.
-  const leg = Math.max(0, Math.min(chamfer, (dx - 2 * lead) / 2, ady / 2))
-  const xm = x1 + lead
+  // Steep: run, chamfer, vertical, chamfer, then the run into b.
+  const leg = Math.max(0, Math.min(chamfer, (dx - lead - end) / 2, ady / 2))
+  const xm = x2 - end - 2 * leg
   return [a, [xm, y1], [xm + leg, y1 + sign * leg], [xm + leg, y2 - sign * leg], [xm + 2 * leg, y2], b]
 }
 
@@ -255,15 +305,24 @@ function round(n: number): number {
   return Math.round(n * 10) / 10
 }
 
-/** Members of a group by grid cell, for an expanded group. */
-export function gridCells(g: Group, order: string[], box: Box): Array<{ env: string; x: number; y: number }> {
-  const { cols } = gridSize(g.members.length)
+/** Members of a group by grid cell, for an expanded group: rows by state
+ *  (gridRows), with the row and column of each cell for the arrow keys. */
+export function gridCells(g: Group, order: string[], box: Box): Array<{ env: string; x: number; y: number; row: number; col: number }> {
   const step = GRAPH.grid.cell + GRAPH.grid.gap
-  return order.map((env, i) => ({
-    env,
-    x: box.x + 12 + (i % cols) * step,
-    y: box.y + 28 + Math.floor(i / cols) * step,
-  }))
+  const out: Array<{ env: string; x: number; y: number; row: number; col: number }> = []
+  gridRows(g).forEach((r, row) => {
+    for (let col = 0; col < r.count; col++) {
+      const env = order[r.start + col]
+      if (env) out.push({ env, row, col, x: box.x + GRID_PAD + GRID_LABEL_W + col * step, y: box.y + GRID_HEAD + r.y })
+    }
+  })
+  return out
+}
+
+/** Where an expanded grid's row labels and footer go. */
+export function gridText(g: Group, box: Box): { rows: Array<{ x: number; y: number; tone: string; text: string }>; foot: { x: number; y: number; w: number } } {
+  const rows = gridRows(g).flatMap(r => r.label ? [{ ...r.label, x: box.x + GRID_PAD, y: box.y + GRID_HEAD + r.y + GRAPH.grid.cell - 1 }] : [])
+  return { rows, foot: { x: box.x + GRID_PAD, y: box.y + box.h - GRID_FOOT / 2 + 3, w: box.w - GRID_PAD * 2 } }
 }
 
 /** A station's dot centre within its placed box. */

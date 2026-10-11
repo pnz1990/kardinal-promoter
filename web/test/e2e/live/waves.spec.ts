@@ -33,7 +33,7 @@ test('the map draws the wave as a band, its grid keeps spec order, the metrics c
   await openPipeline(page, base, ns)
   const map = page.locator('.station-map')
   // The station map (U2): six parallel environments are one band.
-  const band = map.getByRole('button', { name: /^WAVE 1 · 6: 6 verified$/ })
+  const band = map.getByRole('button', { name: /^WAVE 1 · 6: 6 live$/ })
   await expect(band).toHaveAttribute('aria-expanded', 'false')
   await expect(map.locator('[data-station]')).toHaveCount(1) // test; the wave is the band
   await band.click()
