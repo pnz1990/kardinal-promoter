@@ -18,10 +18,7 @@ func deployedLabel(name string, byName map[string]*v1alpha1.Bundle) string {
 	if name == "" {
 		return "none"
 	}
-	if v := bundleVersion(byName[name]); v != "" {
-		return name + " (" + v + ")"
-	}
-	return name
+	return versionLabel(bundleVersion(byName[name]), name)
 }
 
 // bundleVersion names what a Bundle ships: its image tags (a digest when an

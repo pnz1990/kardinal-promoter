@@ -8,6 +8,7 @@ kardinal promotes versions of your application through environments, with
 gates, pull requests and health checks, on Kubernetes.
 
 Getting started:
+  kardinal quickstart --repo <your fork>          try it on a local cluster
   kardinal init                                   write a Pipeline for your repository
   kardinal create bundle my-app --image app:1.4   start a promotion
   kardinal status my-app                          see where each version is, and why
@@ -103,13 +104,14 @@ names the new Bundle.
 * [kardinal get](kardinal-get.md)	 - Display one or more kardinal resources
 * [kardinal history](kardinal-history.md)	 - Show Bundle promotion history for a pipeline
 * [kardinal hold](kardinal-hold.md)	 - Keep an environment on what runs there now
-* [kardinal init](kardinal-init.md)	 - Interactive wizard to generate a Pipeline YAML and scaffold the GitOps repo
+* [kardinal init](kardinal-init.md)	 - Write a Pipeline for your GitOps repository, from flags or a few questions
 * [kardinal logs](kardinal-logs.md)	 - Show promotion step execution logs for a pipeline
 * [kardinal metrics](kardinal-metrics.md)	 - Show promotion metrics (DORA-style) for a pipeline
 * [kardinal override](kardinal-override.md)	 - Force-pass a PolicyGate with a mandatory audit record
 * [kardinal pause](kardinal-pause.md)	 - Pause a pipeline: no new promotion steps start, in-flight ones hold at the next safe point
 * [kardinal policy](kardinal-policy.md)	 - Manage and evaluate promotion policy gates
 * [kardinal promote](kardinal-promote.md)	 - Promote the Bundle verified upstream into an environment
+* [kardinal quickstart](kardinal-quickstart.md)	 - Install kardinal on a local cluster and promote a first version
 * [kardinal refresh](kardinal-refresh.md)	 - Force re-reconciliation of a Pipeline
 * [kardinal reject](kardinal-reject.md)	 - Reject a Bundle: it is never promoted again, and rollback never picks it
 * [kardinal release-hold](kardinal-release-hold.md)	 - Release the hold of a rollback on an environment
@@ -119,4 +121,5 @@ names the new Bundle.
 * [kardinal status](kardinal-status.md)	 - Show controller health or per-pipeline in-flight promotion details
 * [kardinal validate](kardinal-validate.md)	 - Validate Pipeline and PolicyGate YAML before applying to the cluster
 * [kardinal version](kardinal-version.md)	 - Print the CLI, controller, and kro (Graph) versions
+* [kardinal why](kardinal-why.md)	 - Say why an environment waits, and what moves it on
 

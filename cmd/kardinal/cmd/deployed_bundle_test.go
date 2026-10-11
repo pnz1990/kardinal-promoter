@@ -80,17 +80,17 @@ func TestExplain_BundleColumnAndDeployed(t *testing.T) {
 
 	lines := strings.Split(strings.TrimSpace(table), "\n")
 	require.Len(t, lines, 5, out)
-	assert.Regexp(t, `^ENVIRONMENT +BUNDLE +TYPE +NAME +STATE +EXPRESSION +REASON$`, lines[0])
+	assert.Regexp(t, `^ENVIRONMENT +VERSION +TYPE +NAME +STATE +EXPRESSION +REASON$`, lines[0])
 	for _, l := range lines[1:] {
-		assert.Equal(t, "b2", strings.Fields(l)[1], "row names the current Bundle: %q", l)
+		assert.Equal(t, []string{"2.0", "(b2)"}, strings.Fields(l)[1:3], "row names the current version and its Bundle: %q", l)
 	}
 
 	// test: b2 landed, no line. uat: b2 waits for merge, b1 still runs.
 	// prod: b2 has not reached it. canary: nothing landed yet.
 	assert.Equal(t, []string{
 		"canary   deployed: none",
-		"prod     deployed: b1 (1.0)",
-		"uat      deployed: b1 (1.0)",
+		"prod     deployed: 1.0 (b1)",
+		"uat      deployed: 1.0 (b1)",
 	}, strings.Split(strings.TrimSpace(deployed), "\n"))
 
 	out, err = runExplain(t, policyClient(t, deployedFixture()...), "demo", "test", false)
@@ -98,13 +98,13 @@ func TestExplain_BundleColumnAndDeployed(t *testing.T) {
 	assert.NotContains(t, out, "deployed:", "b2 landed in test")
 	out, err = runExplain(t, policyClient(t, deployedFixture()...), "demo", "prod", false)
 	require.NoError(t, err)
-	assert.Contains(t, out, "\n\nprod   deployed: b1 (1.0)\n")
+	assert.Contains(t, out, "\n\nprod   deployed: 1.0 (b1)\n")
 	assert.NotContains(t, out, "uat")
 
-	// Color only touches the STATE cell; the BUNDLE column does not shift it.
+	// Color only touches the STATE cell; the VERSION column does not shift it.
 	out, err = runExplain(t, policyClient(t, deployedFixture()...), "demo", "prod", true)
 	require.NoError(t, err)
-	assert.Regexp(t, regexp.MustCompile(`prod +b2 +PolicyGate +no-weekend-deploys +\x1b\[[0-9;]*mNot ready\x1b\[0m`), out)
+	assert.Regexp(t, regexp.MustCompile(`prod +2\.0 \(b2\) +PolicyGate +no-weekend-deploys +\x1b\[[0-9;]*mNot ready\x1b\[0m`), out)
 }
 
 // status lists what runs in every environment, including ones the newest
@@ -112,9 +112,9 @@ func TestExplain_BundleColumnAndDeployed(t *testing.T) {
 func TestStatusPipelineWriter_RunningAndIncoming(t *testing.T) {
 	out := runStatusPipeline(t, deployedFixture()...)
 	assert.Equal(t, []map[string]string{
-		{"ENVIRONMENT": "test", "RUNNING": "b2 (2.0)", "INCOMING": "-", "STATE": "Live", "SINCE": "-", "PR": "-"},
-		{"ENVIRONMENT": "uat", "RUNNING": "b1 (1.0)", "INCOMING": "b2 (2.0)", "STATE": "Waiting for PR merge", "SINCE": "-", "PR": "-"},
-		{"ENVIRONMENT": "prod", "RUNNING": "b1 (1.0)", "INCOMING": "-", "STATE": "Live", "SINCE": "-", "PR": "-"},
+		{"ENVIRONMENT": "test", "RUNNING": "2.0 (b2)", "INCOMING": "-", "STATE": "Live", "SINCE": "-", "PR": "-"},
+		{"ENVIRONMENT": "uat", "RUNNING": "1.0 (b1)", "INCOMING": "2.0 (b2)", "STATE": "Waiting for PR merge", "SINCE": "-", "PR": "-"},
+		{"ENVIRONMENT": "prod", "RUNNING": "1.0 (b1)", "INCOMING": "-", "STATE": "Live", "SINCE": "-", "PR": "-"},
 		{"ENVIRONMENT": "canary", "RUNNING": "-", "INCOMING": "-", "STATE": "-", "SINCE": "-", "PR": "-"},
 	}, statusRows(t, out), out)
 	assertNoRawStates(t, out)
@@ -158,12 +158,12 @@ func TestDeployed_ImageAndConfigBundles(t *testing.T) {
 	out := runStatusPipeline(t, mixedDeployedFixture()...)
 	rows := statusRows(t, out)
 	require.Len(t, rows, 3, out)
-	assert.Equal(t, "i2 (2.0)", rows[2]["RUNNING"], out)
-	assert.Equal(t, "i3 (3.0)", rows[2]["INCOMING"], out)
+	assert.Equal(t, "2.0 (i2)", rows[2]["RUNNING"], out)
+	assert.Equal(t, "3.0 (i3)", rows[2]["INCOMING"], out)
 
 	out, err := runExplain(t, policyClient(t, mixedDeployedFixture()...), "demo", "prod", false)
 	require.NoError(t, err)
-	assert.Contains(t, out, "\n\nprod   deployed: i2 (2.0); config abcdef0 from c1\n")
+	assert.Contains(t, out, "\n\nprod   deployed: 2.0 (i2); config abcdef0 from c1\n")
 }
 
 // A config Bundle that landed last names the image Bundle whose images still
@@ -175,8 +175,8 @@ func TestDeployedLabel_ConfigOverImages(t *testing.T) {
 	cfg := &v1alpha1.Bundle{Spec: v1alpha1.BundleSpec{Type: "config",
 		ConfigRef: &v1alpha1.ConfigRef{CommitSHA: "1111111bbbb"}}}
 	byName := map[string]*v1alpha1.Bundle{"m1": mixed, "c2": cfg}
-	assert.Equal(t, "c2 (config 1111111); images 1.5 from m1",
+	assert.Equal(t, "config 1111111 (c2); images 1.5 from m1",
 		deployedLabelOf(deployedEnv{bundle: "c2", imagesFrom: "m1"}, byName))
-	assert.Equal(t, "m1 (1.5, config 0000000)", deployedLabelOf(deployedEnv{bundle: "m1"}, byName))
+	assert.Equal(t, "1.5, config 0000000 (m1)", deployedLabelOf(deployedEnv{bundle: "m1"}, byName))
 	assert.Equal(t, "none", deployedLabelOf(deployedEnv{}, byName))
 }

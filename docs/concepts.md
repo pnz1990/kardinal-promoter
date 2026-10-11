@@ -276,7 +276,7 @@ Referencing an attribute that does not exist blocks the gate. See the
 kardinal explain my-app --env prod
 
 # Output:
-# ENVIRONMENT   BUNDLE         TYPE         NAME                 STATE      EXPRESSION                         REASON
+# ENVIRONMENT   VERSION        TYPE         NAME                 STATE      EXPRESSION                         REASON
 # prod          my-app-9tptr   PolicyGate   staging-soak         Blocking   bundle.upstreamSoakMinutes >= 30   bundle.version=1.29.0: bundle.upstreamSoakMinutes >= 30 = false
 # prod          my-app-9tptr   PolicyGate   no-weekend-deploys   Passing    !schedule.isWeekend                bundle.version=1.29.0: !schedule.isWeekend = true
 #

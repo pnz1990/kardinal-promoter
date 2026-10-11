@@ -99,7 +99,7 @@ func stepStatePriority(state string) int {
 	}
 }
 
-// FormatPipelineTableFull writes a table of pipelines to w. BUNDLE is each
+// FormatPipelineTableFull writes a table of pipelines to w. VERSION is each
 // pipeline's current Bundle (lifecycle.CurrentBundle, the UI's
 // activeBundleName) and every environment column describes that Bundle
 // (pipelineEnvStates). bundles and steps may span namespaces and pipelines.
@@ -249,7 +249,7 @@ func formatPipelineSummary(w io.Writer, pipelines []v1alpha1.Pipeline, orders []
 	if showNamespace {
 		header = "NAMESPACE\t"
 	}
-	header += "PIPELINE\tBUNDLE\tENVS\tPROGRESS\tFURTHEST"
+	header += "PIPELINE\tVERSION\tENVS\tPROGRESS\tFURTHEST"
 	if subCount != nil {
 		header += "\tSUB"
 	}
@@ -341,7 +341,7 @@ type pipelineRow struct {
 	hints []string
 }
 
-// pipelineEnvStates returns, per namespace/pipeline, the BUNDLE and
+// pipelineEnvStates returns, per namespace/pipeline, the VERSION and
 // per-environment states of the pipeline table, all about one Bundle: the
 // pipeline's current Bundle, lifecycle.CurrentBundle (E2E-R17). An
 // environment whose newest Bundle is that one (the Pipeline's
@@ -386,11 +386,12 @@ func pipelineEnvStates(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
 		if b == nil {
 			continue
 		}
-		row := pipelineRow{bundle: b.Name, envs: make(map[string]string, len(p.Spec.Environments))}
+		version := createdOf(b).Version
+		row := pipelineRow{bundle: versionLabel(version, b.Name), envs: make(map[string]string, len(p.Spec.Environments))}
 		if lifecycle.Rejected(b) {
 			// Current only because its change is live somewhere
 			// (lifecycle.CurrentBundle): say so.
-			row.bundle = b.Name + "(Rejected)"
+			row.bundle = versionLabel(version, b.Name) + " Rejected"
 			for _, env := range lifecycle.RejectedLiveEnvs(b, own) {
 				row.hints = append(row.hints, fmt.Sprintf("WARNING: pipeline %s: bundle %s is Rejected in %s: %s (kardinal rollback %s --env %s)",
 					p.Name, b.Name, env, lifecycle.RejectedLiveHint, p.Name, env))
@@ -500,12 +501,12 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, env
 
 	tw := style.NewTable(w, 3)
 
-	// Build header: [NAMESPACE] PIPELINE BUNDLE <ENV1> <ENV2> ... [SUB] AGE
+	// Build header: [NAMESPACE] PIPELINE VERSION <ENV1> <ENV2> ... [SUB] AGE
 	header := ""
 	if showNamespace {
 		header = "NAMESPACE\t"
 	}
-	header += "PIPELINE\tBUNDLE"
+	header += "PIPELINE\tVERSION"
 	for _, env := range envOrder {
 		header += "\t" + strings.ToUpper(env)
 	}
@@ -643,12 +644,12 @@ func FormatBundleTable(w io.Writer, bundles []v1alpha1.Bundle) error {
 // (--all-namespaces).
 func formatBundleTable(w io.Writer, bundles []v1alpha1.Bundle, showNS bool) error {
 	tw := style.NewTable(w, 3)
-	if _, err := fmt.Fprintln(tw, nsCol(showNS, "NAMESPACE")+"BUNDLE\tTYPE\tPHASE\tAGE"); err != nil {
+	if _, err := fmt.Fprintln(tw, nsCol(showNS, "NAMESPACE")+"VERSION\tTYPE\tPHASE\tAGE"); err != nil {
 		return fmt.Errorf("write bundle table header: %w", err)
 	}
 	for _, b := range bundles {
 		if _, err := fmt.Fprintf(tw, nsCol(showNS, b.Namespace)+"%s\t%s\t%s\t%s\n",
-			b.Name,
+			versionLabel(createdOf(&b).Version, b.Name),
 			b.Spec.Type,
 			styledBundle(b.Status.Phase),
 			HumanAge(b.CreationTimestamp.Time),

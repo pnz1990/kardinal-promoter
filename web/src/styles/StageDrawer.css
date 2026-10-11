@@ -235,6 +235,23 @@
   font-size: var(--k-text-xs);
 }
 
+.stage-why__cli {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--k-space-2);
+  margin: var(--k-space-2) 0 0;
+}
+
+.stage-cli {
+  padding: 0 var(--k-space-1);
+  background: var(--k-surface-sunken);
+  border-radius: var(--k-radius-1);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-xs);
+  overflow-wrap: anywhere;
+}
+
 .stage-code {
   margin: var(--k-space-2) 0 0;
   padding: var(--k-space-2) var(--k-space-3);

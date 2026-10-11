@@ -20,6 +20,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -479,43 +480,52 @@ func heldForAPerson(pipeline, name string, envs []v1alpha1.PipelineEnvironmentSt
 }
 
 // timeVariables are the PolicyGate context variables that change with
-// time, by the text that names them in an expression: a gate whose
-// expression contains one opens by itself, so ship --wait waits for it.
-// The ship reference and docs/ci-integration.md list them from here.
-var timeVariables = []struct{ match, vars string }{
-	{"schedule.", "schedule.isWeekend, schedule.hour, schedule.dayOfWeek"},
-	{"soakMinutes", "upstream.<env>.soakMinutes, bundle.upstreamSoakMinutes"},
-	{"upstream.", "anything else of upstream.<env>"},
-	{"metrics", "metrics.<name>.value, metrics.<name>.result"},
-	{"changewindow", "changewindow.<name>"},
+// time: a gate whose expression reads one opens by itself, so ship --wait
+// waits for it. match is how the reference names it, vars what it covers,
+// and re finds it in an expression whose string literals are removed (so
+// author != "metrics-bot" is not one), as a root variable (not a field of
+// another, so bundle.labels.schedule is not one), with . or [ after it
+// (schedule.hour, schedule["hour"], schedule . hour). The ship reference and
+// docs/ci-integration.md list them from here.
+var timeVariables = []struct {
+	match, vars string
+	re          *regexp.Regexp
+}{
+	{"schedule", "schedule.isWeekend, schedule.hour, schedule.dayOfWeek", rootVariable("schedule")},
+	{"upstream", "upstream.<env>.soakMinutes and every other field of upstream.<env>", rootVariable("upstream")},
+	{"bundle.upstreamSoakMinutes", "the soak of the environment before this one", regexp.MustCompile(`(?:^|[^\w.])bundle\s*\.\s*upstreamSoakMinutes\b`)},
+	{"metrics", "metrics.<name>.value, metrics.<name>.result", rootVariable("metrics")},
+	{"changewindow", "changewindow.<name>", rootVariable("changewindow")},
 }
 
-// timeExpressions are timeVariables' match texts.
-var timeExpressions = func() []string {
-	out := make([]string, 0, len(timeVariables))
-	for _, v := range timeVariables {
-		out = append(out, v.match)
-	}
-	return out
-}()
+// rootVariable matches name as a root variable with a field or an index
+// after it.
+func rootVariable(name string) *regexp.Regexp {
+	return regexp.MustCompile(`(?:^|[^\w.])` + name + `\s*[.\[]`)
+}
+
+// celStringLiteral is a CEL string or bytes literal: triple-quoted, quoted
+// with escapes, with an r (raw) or b prefix.
+var celStringLiteral = regexp.MustCompile(`(?s)[rRbB]{0,2}(?:""".*?"""|'''.*?'''|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')`)
 
 // timeVariableList is timeVariables for the reference page, one per line.
 func timeVariableList() string {
 	var b strings.Builder
 	for _, v := range timeVariables {
-		fmt.Fprintf(&b, "  %-14s %s\n", v.match, v.vars)
+		fmt.Fprintf(&b, "  %-27s %s\n", v.match, v.vars)
 	}
 	return b.String()
 }
 
-// rechecks reports whether gate g opens by itself: its expression reads what
-// changes with time (a schedule, a soak, an upstream environment, a metric,
-// a change window). Its recheckInterval says nothing: the CRD defaults it to
+// rechecks reports whether gate g opens by itself: its expression, without
+// its string literals, reads a variable that changes with time
+// (timeVariables). Its recheckInterval says nothing: the CRD defaults it to
 // 5m, so every gate has one. A gate on anything else (a Bundle label, its
 // provenance) waits for a person.
 func rechecks(g *v1alpha1.PolicyGate) bool {
-	for _, s := range timeExpressions {
-		if strings.Contains(g.Spec.Expression, s) {
+	expr := celStringLiteral.ReplaceAllString(g.Spec.Expression, `""`)
+	for _, v := range timeVariables {
+		if v.re.MatchString(expr) {
 			return true
 		}
 	}
@@ -559,8 +569,9 @@ and the Bundle's environments from status.environments). Exit codes:
 ` + shipExitCodeTable() + `
 A stop at a gate, a hold or a PR counts once two reads agree, and a gate not
 evaluated yet never stops it. A gate that does not pass is waited for, until
---timeout, when it opens by itself: its expression contains one of these
-texts, which name the variables that change with time:
+--timeout, when it opens by itself: its expression, outside its string
+literals, reads one of these variables that change with time (with a . or
+[ after it: schedule.hour, schedule["hour"]):
 
 ` + timeVariableList() + `
 So CI can wait through a soak or a schedule. A PR the SCM merges by itself
