@@ -27,10 +27,10 @@ describe('kardinalStateToHealth', () => {
   it.each<[string, HealthState]>([
     // PromotionStep states (api/v1alpha1) and the graph API's NotStarted.
     ['Pending', 'Pending'],
-    ['Promoting', 'Reconciling'],
-    ['WaitingForMerge', 'Reconciling'],
-    ['HealthChecking', 'Reconciling'],
-    ['Verifying', 'Reconciling'],      // post-deploy hooks running
+    ['Promoting', 'InProgress'],
+    ['WaitingForMerge', 'InProgress'],
+    ['HealthChecking', 'InProgress'],
+    ['Verifying', 'InProgress'],      // post-deploy hooks running
     ['Verified', 'Ready'],
     ['Failed', 'Error'],
     ['AbortedByAlarm', 'Error'],
@@ -71,11 +71,11 @@ describe('kardinalStateToHealth', () => {
 // ─── healthChipColors (retained for SVG use) ──────────────────────────────────
 
 describe('healthChipColors', () => {
-  const ALL: HealthState[] = ['Ready', 'Reconciling', 'Error', 'Pending', 'Degraded', 'Paused', 'Unknown']
+  const ALL: HealthState[] = ['Ready', 'InProgress', 'Error', 'Pending', 'Degraded', 'Paused', 'Unknown']
 
   it.each<[HealthState, string, string]>([
     ['Ready', 'var(--color-success-bg)', 'var(--color-success)'],
-    ['Reconciling', 'var(--color-warning-bg)', 'var(--color-warning)'],
+    ['InProgress', 'var(--color-warning-bg)', 'var(--color-warning)'],
     ['Error', 'var(--color-error-bg)', 'var(--color-error)'],
     ['Pending', 'var(--color-surface)', 'var(--color-text-muted)'],
     ['Degraded', 'var(--color-degraded-bg)', 'var(--color-degraded)'],
@@ -106,7 +106,7 @@ describe('healthChipColors', () => {
 describe('healthStateClass (#532)', () => {
   it.each<[HealthState, string]>([
     ['Ready', 'health-chip--ready'],
-    ['Reconciling', 'health-chip--reconciling'],
+    ['InProgress', 'health-chip--in-progress'],
     ['Error', 'health-chip--error'],
     ['Pending', 'health-chip--pending'],
     ['Degraded', 'health-chip--degraded'],
@@ -120,9 +120,24 @@ describe('healthStateClass (#532)', () => {
 // ─── HealthChip component — CSS class assertions (#532) ──────────────────────
 
 describe('HealthChip component', () => {
-  it('renders the state label', () => {
-    const { getByText } = render(<HealthChip state="Verified" />)
+  it('renders the display-state label, not the raw value (P2)', () => {
+    const { getByText, queryByText, rerender } = render(<HealthChip state="Verified" />)
+    expect(getByText('Live')).toBeInTheDocument()
+    rerender(<HealthChip state="WaitingForMerge" />)
+    expect(getByText('Waiting for PR merge')).toBeInTheDocument()
+    expect(queryByText('WaitingForMerge')).toBeNull()
+    rerender(<HealthChip state="Verified" kind="bundle" />)
     expect(getByText('Verified')).toBeInTheDocument()
+    rerender(<HealthChip state="Ready" kind="pipeline" />)
+    expect(getByText('Up to date')).toBeInTheDocument()
+  })
+
+  it('never shows "Reconciling" (P2)', () => {
+    for (const state of ['Promoting', 'WaitingForMerge', 'HealthChecking', 'Verifying']) {
+      const { container, unmount } = render(<HealthChip state={state} />)
+      expect(container.innerHTML).not.toMatch(/Reconciling/)
+      unmount()
+    }
   })
 
   it('renders custom label when provided', () => {
@@ -132,61 +147,62 @@ describe('HealthChip component', () => {
 
   it('sets aria-label for screen readers', () => {
     const { getByLabelText } = render(<HealthChip state="Failed" />)
-    expect(getByLabelText('Failed — Error')).toBeInTheDocument()
+    expect(getByLabelText('Failed — failed')).toBeInTheDocument()
   })
 
   it('sets title attribute for hover tooltip', () => {
     const { getByTitle } = render(<HealthChip state="WaitingForMerge" />)
-    expect(getByTitle('WaitingForMerge (Reconciling)')).toBeInTheDocument()
+    expect(getByTitle('Waiting for PR merge (waiting)')).toBeInTheDocument()
   })
 
   // #532: Assert CSS classes, NOT hex color strings
   it('Ready state has health-chip--ready CSS class', () => {
     const { getByLabelText } = render(<HealthChip state="Verified" />)
-    const chip = getByLabelText('Verified — Ready')
+    const chip = getByLabelText('Live — verified')
     expect(chip).toHaveClass('health-chip')
     expect(chip).toHaveClass('health-chip--ready')
   })
 
-  it('Reconciling state has health-chip--reconciling CSS class', () => {
+  it('InProgress state has health-chip--in-progress CSS class', () => {
     const { getByLabelText } = render(<HealthChip state="Promoting" />)
-    const chip = getByLabelText('Promoting — Reconciling')
-    expect(chip).toHaveClass('health-chip--reconciling')
+    const chip = getByLabelText('Promoting — promoting')
+    expect(chip).toHaveClass('health-chip--in-progress')
   })
 
   it('Error state has health-chip--error CSS class', () => {
     const { getByLabelText } = render(<HealthChip state="Failed" />)
-    expect(getByLabelText('Failed — Error')).toHaveClass('health-chip--error')
+    expect(getByLabelText('Failed — failed')).toHaveClass('health-chip--error')
   })
 
   it('Pending state has health-chip--pending CSS class', () => {
     const { getByLabelText } = render(<HealthChip state="Pending" />)
-    expect(getByLabelText('Pending — Pending')).toHaveClass('health-chip--pending')
+    expect(getByLabelText('Queued — pending')).toHaveClass('health-chip--pending')
   })
 
   it('Paused state has health-chip--paused CSS class', () => {
-    const { getByLabelText } = render(<HealthChip state="Paused" />)
-    expect(getByLabelText('Paused — Paused')).toHaveClass('health-chip--paused')
+    const { getByLabelText } = render(<HealthChip state="Paused" kind="pipeline" />)
+    expect(getByLabelText('Paused — paused')).toHaveClass('health-chip--paused')
   })
 
   it('Unknown state has health-chip--unknown CSS class', () => {
     const { getByLabelText } = render(<HealthChip state="Superseded" />)
-    expect(getByLabelText('Superseded — Unknown')).toHaveClass('health-chip--unknown')
+    expect(getByLabelText('Replaced by newer version — superseded')).toHaveClass('health-chip--unknown')
   })
 
   it('sm size has health-chip--sm CSS class', () => {
     const { getByText } = render(<HealthChip state="Verified" size="sm" />)
-    expect(getByText('Verified')).toHaveClass('health-chip--sm')
+    expect(getByText('Live')).toHaveClass('health-chip--sm')
   })
 
   it('md size has health-chip--md CSS class', () => {
     const { getByText } = render(<HealthChip state="Verified" size="md" />)
-    expect(getByText('Verified')).toHaveClass('health-chip--md')
+    expect(getByText('Live')).toHaveClass('health-chip--md')
   })
 
   it('has data-health-state attribute for testing/automation', () => {
     const { getByText } = render(<HealthChip state="Verified" />)
-    expect(getByText('Verified')).toHaveAttribute('data-health-state', 'Ready')
+    expect(getByText('Live')).toHaveAttribute('data-health-state', 'Ready')
+    expect(getByText('Live')).toHaveAttribute('data-tone', 'verified')
   })
 
   it('PAUSED badge renders for paused state', () => {
@@ -198,16 +214,16 @@ describe('HealthChip component', () => {
 
   it('PolicyGate Waiting is read as what it means, not "Waiting — Pending"', () => {
     const { getByLabelText, queryByLabelText } = render(<HealthChip state="Waiting" nodeType="PolicyGate" />)
-    const chip = getByLabelText('Waiting — not ready, not holding the bundle')
+    const chip = getByLabelText('Not ready — not ready, not holding the bundle')
     expect(chip).toHaveClass('health-chip--pending')
     // Also as text, since not every screen reader reads aria-label on a span.
     expect(chip.querySelector('.sr-only')).toHaveTextContent('not ready, not holding the bundle')
-    expect(queryByLabelText('Waiting — Pending')).toBeNull()
+    expect(queryByLabelText('Not ready — waiting')).toBeNull()
   })
 
   it('PolicyGate Blocked renders as Error chip', () => {
     const { getByLabelText } = render(<HealthChip state="Block" nodeType="PolicyGate" />)
-    const chip = getByLabelText('Block — Error')
+    const chip = getByLabelText('Blocking — blocked')
     expect(chip).toHaveClass('health-chip--error')
   })
 })

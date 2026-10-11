@@ -75,9 +75,9 @@ func newGetPipelinesCmd() *cobra.Command {
 BUNDLE is the pipeline's current bundle: the newest bundle that is not
 Superseded, whatever its phase (the newest one when all are Superseded), the
 same bundle the UI shows. Every environment column describes that bundle: its
-PromotionStep state there; Waiting when it has no PromotionStep there yet and
-is still promoting (held by a PolicyGate, or an upstream environment is not
-Verified yet). A dash means the bundle has no PromotionStep there and is
+step state there, in words ("Live", "Waiting for PR merge"); "Not reached"
+when it has no step there yet and is still promoting (held by a gate, or an
+upstream environment is not live yet). A dash means the bundle has no PromotionStep there and is
 finished (Verified, Failed or Superseded) or skips the environment or stops
 before it (skipEnvironments or targetEnvironment). kardinal status and kardinal
 explain instead pick the current bundle per environment, so for an
@@ -88,13 +88,14 @@ Environment columns follow the pipeline's DAG (waves and dependsOn), merged
 across the pipelines listed. With more than 8 environment columns (one wide
 pipeline, or several with different environments), each pipeline gets one
 summary row instead: ENVS, the environment count, and PROGRESS, the current
-bundle's states with counts, most advanced first ("42 Verified, 108
-HealthChecking"), and FURTHEST, the last environment in DAG order where the
-bundle is Verified (in a wave, the last one in spec order). kardinal get
+bundle's states with counts, most advanced first ("42 Live, 108 Checking
+health"), and FURTHEST, the last environment in DAG order where the
+bundle is live (in a wave, the last one in spec order). kardinal get
 pipelines <name> shows every environment of that pipeline.
 
 -o json and -o yaml print the Pipeline objects as the API server lists them
-(by namespace, then name), without the table's columns.
+(by namespace, then name), without the table's columns, with the API's state
+values (Verified, WaitingForMerge).
 
 The table needs list permission on bundles and promotionsteps; without it the
 command fails instead of showing dashes.
@@ -189,8 +190,14 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 		if err := c.List(ctx, &subsList, opts...); err == nil {
 			subsItems = subsList.Items
 		}
+		// Gate instances name the gates that hold an environment. On error
+		// the cells say "Not reached" instead.
+		var gates v1alpha1.PolicyGateList
+		if err := c.List(ctx, &gates, opts...); err != nil {
+			gates.Items = nil
+		}
 		// kardinal get pipelines <name> shows every environment of it.
-		if err := formatPipelines(w, items, bundles.Items, steps.Items, subsItems, allNamespaces, len(args) == 1); err != nil {
+		if err := formatPipelines(w, items, bundles.Items, steps.Items, gates.Items, subsItems, allNamespaces, len(args) == 1); err != nil {
 			return err
 		}
 		// Bundle errors are listed for the shown pipelines only.

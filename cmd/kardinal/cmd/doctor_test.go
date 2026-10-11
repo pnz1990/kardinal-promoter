@@ -304,7 +304,7 @@ func TestCheckPipelineHealth(t *testing.T) {
 		wantIcon   string
 		wantDetail string
 	}{
-		{name: "ready", client: doctorClient(pipe("Ready")), wantIcon: doctorPass, wantDetail: "status: Ready"},
+		{name: "ready", client: doctorClient(pipe("Ready")), wantIcon: doctorPass, wantDetail: "status: Up to date"},
 		{name: "degraded", client: doctorClient(pipe("Degraded")), wantIcon: doctorWarn, wantDetail: "status: Degraded"},
 		// E2E-R05: a Bundle in flight or held by a gate.
 		{name: "promoting", client: doctorClient(pipe("Promoting")), wantIcon: doctorPass, wantDetail: "status: Promoting"},
