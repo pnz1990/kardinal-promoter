@@ -24,9 +24,6 @@ func stepLabel(state string) string {
 // bundleLabel is the label of a Bundle phase ("" is Unknown).
 func bundleLabel(phase string) string { return display.Bundle(phase).Label }
 
-// subStepLabel is the label of a PromotionStep's sub-step state.
-func subStepLabel(state string) string { return display.SubStep(state).Label }
-
 // gateLabel is the label of a gate instance state (graph.GateState).
 func gateLabel(state string) string { return display.Gate(state).Label }
 
@@ -36,22 +33,26 @@ func pipelineLabel(phase string, paused bool) string { return display.Pipeline(p
 // envCellLabel is the label of a pipeline-table environment cell: a step
 // state, "Waiting" (the Bundle will still come here: not reached yet), or a
 // fleet cell (fleetCell), which is already words.
-func envCellLabel(cell string) string {
+func envCellLabel(cell string) string { return envCellState(cell).Label }
+
+// envCellState is the display state of a pipeline-table environment cell
+// (envCellLabel); a dash and a fleet cell have no glyph and no tone.
+func envCellState(cell string) display.State {
 	switch cell {
 	case "", "-":
-		return "-"
+		return display.State{Label: "-"}
 	case "Waiting":
-		return display.Step("NotStarted").Label
+		return display.Step("NotStarted")
 	case cellHeld:
-		return display.Held("Pending").Label
+		return display.Held("Pending")
 	}
 	if gates, ok := strings.CutPrefix(cell, cellHeldByGate); ok {
-		return display.HeldByGate("Pending", gates).Label
+		return display.HeldByGate("Pending", gates)
 	}
 	if st := display.Step(cell); st.Tone != display.ToneUnknown {
-		return st.Label
+		return st
 	}
-	return cell
+	return display.State{Label: cell}
 }
 
 // Pipeline-table cells of an environment the current Bundle has not entered
@@ -77,21 +78,4 @@ func heldCell(cell string, held bool, gates []string) string {
 		return cellHeldByGate + strings.Join(gates, ", ")
 	}
 	return cell
-}
-
-// stepRowLabel is the STATE label of a step row of kardinal status: a
-// Pending step that a rollback hold or gates keep waiting says so.
-func stepRowLabel(state string, held bool, gates []string) string {
-	if state == "" {
-		state = "Pending"
-	}
-	if state == "Pending" {
-		switch {
-		case held:
-			return display.Held(state).Label
-		case len(gates) > 0:
-			return display.HeldByGate(state, strings.Join(gates, ", ")).Label
-		}
-	}
-	return stepLabel(state)
 }

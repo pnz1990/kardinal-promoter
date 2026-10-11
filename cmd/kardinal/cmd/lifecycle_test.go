@@ -6,6 +6,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -321,4 +322,54 @@ func TestRollbackCmd_HoldFlags(t *testing.T) {
 	rel.SetOut(&out)
 	rel.SetErr(&out)
 	require.ErrorContains(t, rel.Execute(), "which environment? Give it after the pipeline")
+}
+
+// TestMutations_JSON (C4): promote, rollback (also with --hold) and
+// release-hold print what they did as JSON with -o json, with the created
+// Bundle's name and the pipeline's UI URL.
+//
+// Covers CLI-STYLE-01.
+func TestMutations_JSON(t *testing.T) {
+	t.Setenv("KARDINAL_UI_URL", "https://kardinal.example/ui/")
+	globalOutput = "json"
+	t.Cleanup(func() { globalOutput = "" })
+	history := func() []client.Object {
+		return []client.Object{lcPipeline(),
+			lcBundle("app-v1", "app", "1", 0), lcBundle("app-v2", "app", "2", 10),
+			lcStep("app-v1", "uat", "Verified", 5), lcStep("app-v1", "prod", "Verified", 5), lcStep("app-v2", "prod", "Verified", 15)}
+	}
+	const url = "https://kardinal.example/ui/#pipeline=app&ns=default"
+
+	var buf bytes.Buffer
+	c := lcClient(t, lcPipeline(), lcBundle("app-v1", "app", "1", 0), lcBundle("app-v2", "app", "2", 10),
+		lcStep("app-v1", "prod", "Verified", 5), lcStep("app-v2", "uat", "Verified", 15))
+	require.NoError(t, promoteFn(&buf, c, "default", "app", "prod"))
+	var promoted createdBundle
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &promoted), buf.String())
+	assert.Equal(t, createdBundle{Bundle: newBundles(t, c, "app-v1", "app-v2")[0].Name, Pipeline: "app", Namespace: "default",
+		Type: "image", Version: "2", Environment: "prod", From: "app-v2", URL: url}, promoted)
+
+	buf.Reset()
+	c = lcClient(t, history()...)
+	require.NoError(t, rollbackFn(&buf, c, "default", "app", "prod", ""))
+	var rolled createdBundle
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &rolled), buf.String())
+	assert.Equal(t, createdBundle{Bundle: newBundles(t, c, "app-v1", "app-v2")[0].Name, Pipeline: "app", Namespace: "default",
+		Type: "image", Version: "1", Environment: "prod", RollbackOf: "app-v1", Replaces: "app-v2", URL: url}, rolled)
+
+	buf.Reset()
+	c = lcClient(t, history()...)
+	require.NoError(t, rollbackHoldFn(&buf, c, "default", "app", "prod", "", "INC-42", "alice", 0))
+	var held createdBundle
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &held), buf.String())
+	require.NotNil(t, held.Hold)
+	assert.Equal(t, createdHold{Environment: "prod", Bundle: held.Bundle, Reason: "INC-42"}, *held.Hold)
+	assert.Equal(t, []string{"app-v1", "app-v2", url}, []string{held.RollbackOf, held.Replaces, held.URL})
+
+	buf.Reset()
+	require.NoError(t, releaseHoldFn(&buf, c, "default", "app", "prod"))
+	var released releasedHold
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &released), buf.String())
+	assert.Equal(t, releasedHold{Pipeline: "app", Namespace: "default", Environment: "prod", Bundle: held.Bundle,
+		CreatedBy: "alice", Reason: "INC-42", URL: url}, released)
 }
