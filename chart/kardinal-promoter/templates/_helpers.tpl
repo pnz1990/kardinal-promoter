@@ -106,11 +106,18 @@ Install-mode checks. Rendered from deployment.yaml so a bad combination fails
 {{- if and $w .Values.controller.namespaceShard -}}
 {{- fail "controller.namespaceShard cannot be combined with controller.watchNamespace: a namespace-scoped controller already owns exactly one namespace" -}}
 {{- end -}}
-{{- if and .Values.github.token .Values.github.secretRef.name -}}
-{{- fail "set github.token or github.secretRef.name, not both" -}}
+{{- range $f := list "token" "secretRef.name" "secretRef.namespace" "secretRef.key" -}}
+{{- $scm := include "kardinal-promoter.scmAliasValue" (list $.Values.scm $f) -}}
+{{- $gh := include "kardinal-promoter.scmAliasValue" (list $.Values.github $f) -}}
+{{- if and $scm $gh (ne $scm $gh) -}}
+{{- fail (printf "scm.%s and github.%s are the same setting (github.* is the old name): set one of them" $f $f) -}}
 {{- end -}}
-{{- if and .Values.github.app.enabled (not .Values.github.secretRef.name) -}}
-{{- fail "github.app.enabled needs github.secretRef.name: the Secret that holds githubAppID, githubAppInstallationID and githubAppPrivateKey" -}}
+{{- end -}}
+{{- if and (include "kardinal-promoter.scmToken" .) (include "kardinal-promoter.scmSecretRefName" .) -}}
+{{- fail (printf "set %s or %s.name, not both" (ternary "scm.token" "github.token" (not (empty (include "kardinal-promoter.scmAliasValue" (list .Values.scm "token"))))) (include "kardinal-promoter.scmSecretRefValue" .)) -}}
+{{- end -}}
+{{- if and .Values.github.app.enabled (not (include "kardinal-promoter.scmSecretRefName" .)) -}}
+{{- fail "github.app.enabled needs github.secretRef.name (or scm.secretRef.name): the Secret that holds githubAppID, githubAppInstallationID and githubAppPrivateKey" -}}
 {{- end -}}
 {{- $cert := .Values.controller.tlsCertFile -}}
 {{- $key := .Values.controller.tlsKeyFile -}}
@@ -150,9 +157,9 @@ instead, which this check does not see. */ -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
-{{- with .Values.github.secretRef.namespace -}}
+{{- with (include "kardinal-promoter.scmSecretRefNamespace" .) -}}
 {{- if ne . $.Release.Namespace -}}
-{{- fail (printf "github.secretRef.namespace (%s) must be empty or the release namespace (%s): GITHUB_TOKEN is read with a secretKeyRef, which only reads the Pod's namespace, so the startup token and the rotation watcher would read different Secrets." . $.Release.Namespace) -}}
+{{- fail (printf "%s.namespace (%s) must be empty or the release namespace (%s): GITHUB_TOKEN is read with a secretKeyRef, which only reads the Pod's namespace, so the startup token and the rotation watcher would read different Secrets." (ternary "scm.secretRef" "github.secretRef" (not (empty (include "kardinal-promoter.scmAliasValue" (list $.Values.scm "secretRef.namespace"))))) . $.Release.Namespace) -}}
 {{- end -}}
 {{- end -}}
 {{- include "kardinal-promoter.validateSecrets" . -}}
@@ -170,8 +177,8 @@ chart's own <fullname>-github-token (github.token) is not checked.
 {{- define "kardinal-promoter.validateSecrets" -}}
 {{- if lookup "v1" "Namespace" "" "kube-system" -}}
 {{- $refs := list -}}
-{{- if and .Values.github.secretRef.name (not .Values.github.token) -}}
-{{- $refs = append $refs (list "github.secretRef" .Values.github.secretRef.name (include "kardinal-promoter.githubSecretKey" .)) -}}
+{{- if and (include "kardinal-promoter.scmSecretRefName" .) (not (include "kardinal-promoter.scmToken" .)) -}}
+{{- $refs = append $refs (list (include "kardinal-promoter.scmSecretRefValue" .) (include "kardinal-promoter.scmSecretRefName" .) (include "kardinal-promoter.githubSecretKey" .)) -}}
 {{- end -}}
 {{- with .Values.webhook.secretRef.name -}}
 {{- $refs = append $refs (list "webhook.secretRef" . ($.Values.webhook.secretRef.key | default "secret")) -}}
@@ -214,10 +221,10 @@ Name of the Secret holding the SCM token: the chart-owned Secret when
 github.token is set, else github.secretRef.name.
 */}}
 {{- define "kardinal-promoter.githubSecretName" -}}
-{{- if .Values.github.token -}}
+{{- if (include "kardinal-promoter.scmToken" .) -}}
 {{- printf "%s-github-token" (include "kardinal-promoter.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
-{{- .Values.github.secretRef.name -}}
+{{- (include "kardinal-promoter.scmSecretRefName" .) -}}
 {{- end -}}
 {{- end }}
 
@@ -225,10 +232,10 @@ github.token is set, else github.secretRef.name.
 Key of the SCM token in that Secret.
 */}}
 {{- define "kardinal-promoter.githubSecretKey" -}}
-{{- if .Values.github.token -}}
+{{- if (include "kardinal-promoter.scmToken" .) -}}
 token
 {{- else -}}
-{{- .Values.github.secretRef.key | default "token" -}}
+{{- (include "kardinal-promoter.scmSecretRefKey" .) | default "token" -}}
 {{- end -}}
 {{- end }}
 
@@ -284,4 +291,40 @@ repository:tag (the chart's appVersion by default).
 {{- else -}}
 {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
 {{- end }}
+{{- end }}
+
+{{/*
+The controller's SCM token settings. scm.token and scm.secretRef are the
+names for every scm.provider; github.token and github.secretRef are the old
+names and keep working. Setting both to different values fails (validate).
+*/}}
+{{- define "kardinal-promoter.scmAliasValue" -}}
+{{- $v := index . 0 | default (dict) -}}
+{{- $f := index . 1 -}}
+{{- if eq $f "token" -}}{{- $v.token | default "" -}}
+{{- else -}}{{- $ref := $v.secretRef | default (dict) -}}{{- index $ref (trimPrefix "secretRef." $f) | default "" -}}
+{{- end -}}
+{{- end }}
+
+{{- define "kardinal-promoter.scmToken" -}}
+{{- (.Values.scm | default (dict)).token | default .Values.github.token | default "" -}}
+{{- end }}
+
+{{- define "kardinal-promoter.scmSecretRefName" -}}
+{{- include "kardinal-promoter.scmAliasValue" (list .Values.scm "secretRef.name") | default .Values.github.secretRef.name | default "" -}}
+{{- end }}
+
+{{- define "kardinal-promoter.scmSecretRefNamespace" -}}
+{{- include "kardinal-promoter.scmAliasValue" (list .Values.scm "secretRef.namespace") | default .Values.github.secretRef.namespace | default "" -}}
+{{- end }}
+
+{{- define "kardinal-promoter.scmSecretRefKey" -}}
+{{- include "kardinal-promoter.scmAliasValue" (list .Values.scm "secretRef.key") | default .Values.github.secretRef.key | default "token" -}}
+{{- end }}
+
+{{/*
+The values key that names the SCM token Secret, for error messages.
+*/}}
+{{- define "kardinal-promoter.scmSecretRefValue" -}}
+{{- if include "kardinal-promoter.scmAliasValue" (list .Values.scm "secretRef.name") -}}scm.secretRef{{- else -}}github.secretRef{{- end -}}
 {{- end }}

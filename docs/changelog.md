@@ -10,6 +10,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`scm.token` and `scm.secretRef` chart values** — the controller's SCM token is set with `scm.secretRef.name` (or `scm.token`) whatever `scm.provider` is; `github.secretRef` and `github.token` are the old names and keep working, and setting an old and a new name to different values fails the install. The chart's own token Secret (`scm.token`) is labelled `kardinal.io/referenceable=true`, so the demo Pipeline uses the controller's Secret for git as well: one Secret for both. `github.secretRef.key` now defaults to empty, which still means `token`
+
 - **kubectl shows what runs where** — the Pipeline reconciler writes `status.environments[]` (per environment: the Bundle and version that run there, a newer one on its way in, its state and since when, the gates or rollback hold that keep it waiting, the PR waiting for its merge), `status.summary` ("1.5.0 live in test, uat; waiting for PR merge in prod (#42)") and `status.environmentSummary`. `kubectl get pipelines` shows the summary first, `-o wide` adds `ENVS`, and `kubectl get bundles` a `VERSION` column (from the new `status.version`; Bundles that finished before the upgrade leave it empty). Every kind is in the `kardinal-all` category and the kinds users write also in `kardinal`, so `kubectl get kardinal` lists Pipelines, Bundles, PolicyGates and the other user-written objects. The fields are display only: nothing decides on them. See [Pipeline status](pipeline-reference.md#status)
 
 ### Changed

@@ -21,6 +21,8 @@ import (
 	"strings"
 	"testing"
 
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1557,5 +1559,67 @@ func TestChartPprofAddress(t *testing.T) {
 	assert.Equal(t, ":6060", argValues(c)["pprof-address"])
 	for _, p := range c.Ports {
 		assert.NotEqual(t, int32(6060), p.ContainerPort, "pprof gets no container port")
+	}
+}
+
+// TestChartSCMTokenAliases (P5): scm.token and scm.secretRef are the
+// provider-neutral names of github.token and github.secretRef: each renders
+// exactly what its old name renders, both names with different values fail,
+// and the chart's own token Secret is labelled kardinal.io/referenceable, so
+// the demo Pipeline uses the controller's Secret for git as well.
+//
+// Covers CHART-SCM-ALIAS-01.
+func TestChartSCMTokenAliases(t *testing.T) {
+	for _, tc := range []struct{ scm, github []string }{
+		{[]string{"scm.secretRef.name=git-token"}, []string{"github.secretRef.name=git-token"}},
+		{[]string{"scm.secretRef.name=git-token", "scm.secretRef.key=pat"},
+			[]string{"github.secretRef.name=git-token", "github.secretRef.key=pat"}},
+		{[]string{"scm.token=t0ken", "demo.enabled=true"}, []string{"github.token=t0ken", "demo.enabled=true"}},
+		{[]string{"scm.secretRef.name=git-token", "demo.enabled=true"}, []string{"github.secretRef.name=git-token", "demo.enabled=true"}},
+	} {
+		set := func(vals []string) []string {
+			var args []string
+			for _, v := range vals {
+				args = append(args, "--set", v)
+			}
+			return args
+		}
+		got, err := helmTemplate(t, "kardinal-promoter", set(tc.scm)...)
+		require.NoError(t, err, got)
+		want, err := helmTemplate(t, "kardinal-promoter", set(tc.github)...)
+		require.NoError(t, err, want)
+		assert.Equal(t, want, got, "%v renders as %v", tc.scm, tc.github)
+	}
+
+	docs := render(t, "kardinal-promoter", "--set", "scm.token=t0ken", "--set", "demo.enabled=true")
+	secrets := docsOfKind(docs, "Secret")
+	require.Len(t, secrets, 1)
+	var s corev1.Secret
+	decodeStrict(t, secrets[0], &s)
+	assert.Equal(t, "true", s.Labels["kardinal.io/referenceable"], "the demo Pipeline may use it")
+	assert.Equal(t, s.Name, envByName(controllerContainer(t, docs))["KARDINAL_SCM_TOKEN_SECRET_NAME"].Value)
+	pipelines := docsOfKind(docs, "Pipeline")
+	require.Len(t, pipelines, 1)
+	var p v1alpha1.Pipeline
+	decodeStrict(t, pipelines[0], &p)
+	require.NotNil(t, p.Spec.Git.SecretRef)
+	assert.Equal(t, s.Name, p.Spec.Git.SecretRef.Name, "one Secret for the controller and the demo Pipeline")
+
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"scm.token=a", "github.token=b"}, "scm.token and github.token are the same setting"},
+		{[]string{"scm.secretRef.name=a", "github.secretRef.name=b"}, "scm.secretRef.name and github.secretRef.name are the same setting"},
+		{[]string{"scm.token=a", "scm.secretRef.name=b"}, "set scm.token or scm.secretRef.name, not both"},
+		{[]string{"scm.secretRef.name=a", "scm.secretRef.namespace=other"}, "scm.secretRef.namespace (other) must be empty or the release namespace"},
+	} {
+		var args []string
+		for _, v := range tc.args {
+			args = append(args, "--set", v)
+		}
+		out, err := helmTemplate(t, "kardinal-promoter", args...)
+		require.Error(t, err, tc.args)
+		assert.Contains(t, out, tc.want)
 	}
 }

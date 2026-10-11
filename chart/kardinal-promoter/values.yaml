@@ -217,38 +217,28 @@ tolerations: []
 # -- Affinity rules for the controller Pod
 affinity: {}
 
-# -- SCM token for the provider in scm.provider, for opening PRs and detecting
-# merges. Set one of:
-#   github.secretRef.name  an existing Secret in the release namespace
-#                          (recommended; the token stays out of Helm values)
-#   github.token           the chart creates Secret <fullname>-github-token
-#                          (the token is kept in the Helm release history)
-# Either way the controller reads GITHUB_TOKEN from the Secret and watches it,
-# reloading the SCM provider when the token changes (no restart).
-#
-#   kubectl create secret generic github-token -n kardinal-system \
-#     --from-literal=token=$GITHUB_PAT
-#   helm install ... --set github.secretRef.name=github-token
+# -- github.token and github.secretRef are the old names of scm.token and
+# scm.secretRef (below) and keep working, for every scm.provider. Setting
+# both names to different values fails the install.
 github:
-  # -- Token value; the chart stores it in a Secret. Prefer secretRef.
+  # -- Old name of scm.token.
   token: ""
-  # -- Existing Secret holding the token.
+  # -- Old name of scm.secretRef.
   secretRef:
     name: ""
-    # -- Must be empty or the release namespace: GITHUB_TOKEN is read with a
-    # secretKeyRef, which only reads the Pod's namespace.
     namespace: ""
-    key: "token"
-  # -- Authenticate as a GitHub App: the github.secretRef Secret holds
+    # -- Empty is "token".
+    key: ""
+  # -- Authenticate as a GitHub App: the scm.secretRef Secret holds
   # githubAppID, githubAppInstallationID and githubAppPrivateKey instead of a
   # token. The controller mints installation tokens, refreshes them before
   # they expire, and reloads the App credentials when the Secret changes.
-  # Needs scm.provider github (or empty) and github.secretRef.name.
+  # Needs scm.provider github (or empty) and scm.secretRef.name.
   #
   #   kubectl create secret generic github-app -n kardinal-system \
   #     --from-literal=githubAppID=123456 --from-literal=githubAppInstallationID=7890123 \
   #     --from-file=githubAppPrivateKey=app.private-key.pem
-  #   helm install ... --set github.secretRef.name=github-app --set github.app.enabled=true
+  #   helm install ... --set scm.secretRef.name=github-app --set github.app.enabled=true
   app:
     enabled: false
 
@@ -271,6 +261,31 @@ admission:
 scm:
   provider: ""
   apiURL: ""
+  # -- SCM token for scm.provider, for opening PRs and detecting merges.
+  # Set one of:
+  #   scm.secretRef.name  an existing Secret in the release namespace
+  #                       (recommended; the token stays out of Helm values)
+  #   scm.token           the chart creates Secret <fullname>-github-token,
+  #                       labelled kardinal.io/referenceable=true (the token is
+  #                       kept in the Helm release history)
+  # Either way the controller reads GITHUB_TOKEN from the Secret and watches
+  # it, reloading the SCM provider when the token changes (no restart). The
+  # demo Pipeline (demo.enabled) uses the same Secret for git, so one Secret
+  # serves both: label your own one kardinal.io/referenceable=true.
+  #
+  #   kubectl create secret generic git-token -n kardinal-system \
+  #     --from-literal=token=$GITHUB_PAT
+  #   kubectl label secret git-token -n kardinal-system kardinal.io/referenceable=true
+  #   helm install ... --set scm.secretRef.name=git-token
+  token: ""
+  # -- Existing Secret holding the token.
+  secretRef:
+    name: ""
+    # -- Must be empty or the release namespace: GITHUB_TOKEN is read with a
+    # secretKeyRef, which only reads the Pod's namespace.
+    namespace: ""
+    # -- Key of the token in the Secret. Empty is "token".
+    key: ""
   # -- Repositories the controller's SCM token may act on
   # (--scm-allowed-repositories), as host/repository globs: "github.com/acme/*",
   # "gitlab.example.com/platform/**" for every subgroup,
@@ -644,8 +659,8 @@ demo:
   # Run `kardinal create bundle demo --image <real-image>` to start a promotion.
   image: "ghcr.io/pnz1990/kardinal-test-app:sha-DEMO"
   # -- Secret the demo Pipeline uses for git (spec.git.secretRef).
-  # Defaults to the chart's SCM token Secret (github.secretRef.name, or
-  # <fullname>-github-token when github.token is set), else "github-token".
+  # Defaults to the chart's SCM token Secret (scm.secretRef.name, or
+  # <fullname>-github-token when scm.token is set), else "github-token".
   secretRef:
     name: ""
   git:
