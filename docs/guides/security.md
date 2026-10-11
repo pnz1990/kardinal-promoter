@@ -30,7 +30,7 @@ What the namespaced rules grant:
 | `auditevents` | get, list, watch, create; delete with `audit.retention.enabled: true` (the default) | Records are never changed; retention (on by default) deletes old ones |
 | `graphs.kro.run` | full CRUD; get on `graphs/status` | One Graph per Bundle |
 | `serviceaccounts`; `rolebindings`; `clusterroles` (bind, limited to the two Graph ClusterRoles) | get, create; get, list, create, update, delete; bind | The Graph identity. `list` is for the sweep that deletes reader bindings no Graph reads through; it runs in cluster mode only and touches only RoleBindings labeled `app.kubernetes.io/managed-by=kardinal-promoter` |
-| `deployments`, `argoproj.io` `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch | Health adapters. `rbac.argocdApplicationsWrite=true` adds `patch` on Applications for `update.strategy: argocd` |
+| `deployments`, `argoproj.io` `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch | Health adapters. `health.refresh.enabled: true` (the default) adds `patch` on Applications and Kustomizations, and on `source.toolkit.fluxcd.io` `gitrepositories`, to set the refresh annotation when a promotion's commit lands ([Sync on promotion](../health-adapters.md#sync-on-promotion)); the patches change only `metadata.annotations`, but RBAC cannot limit `patch` to them. `rbac.argocdApplicationsWrite=true` adds `patch` on Applications for `update.strategy: argocd` |
 | `replicasets` | get | The `resource` and `flux` health adapters read, by name, the ReplicaSet a Deployment's `ProgressDeadlineExceeded` names, to tell whether the rollout of the current pod template stalled |
 | `pods` | list | While a Deployment's replicas are unavailable, the `resource` health adapter lists, uncached, the pods of its new ReplicaSet (by label selector) to name why one is not ready (`ErrImagePull`, `CrashLoopBackOff`). In cluster mode `list` reaches **every pod in the cluster**, which includes pod specs and their literal `env` values (not Secret contents). Use `controller.watchNamespace` to limit it, or remove the rule in RBAC of your own: the health messages then leave the pod out and nothing else changes |
 
@@ -116,7 +116,8 @@ The controller's RBAC, in summary:
 | `leases` | Leader election, through a Role in the release namespace |
 | `events` | get, list, watch, create, patch |
 
-Optional rules: `rbac.argocdApplicationsWrite` (patch Applications) and `ui.auth.tokenReview`
+Optional rules: `health.refresh.enabled` (on by default: patch Applications, Kustomizations
+and GitRepositories to ask for a sync), `rbac.argocdApplicationsWrite` (patch Applications) and `ui.auth.tokenReview`
 (create TokenReviews and SubjectAccessReviews). The full list of objects and rules is in
 [Security: Controller RBAC](security.md#controller-rbac). Set `controller.watchNamespace`
 to turn the namespaced rules into a Role in one namespace.

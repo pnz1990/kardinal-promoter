@@ -375,3 +375,30 @@ When sub-fields are omitted, the controller applies these defaults:
 | flagger.name / flagger.namespace | Pipeline.metadata.name / environment name |
 | timeout | 10m |
 | cluster | not supported (must be empty) |
+
+## Sync on promotion
+
+Argo CD and Flux poll git: Argo CD every 3 minutes plus up to 1 minute of jitter by default (`timeout.reconciliation`), Flux at each GitRepository's `spec.interval`. Without a webhook from your git server to the tool, a promoted commit would wait for that poll in every environment. So when a step's commit is in git (pushed straight to the branch, or its PR merged), the step asks the object its health check names to sync now, once, as it starts checking health:
+
+| `health.type` | What the step sets |
+|---|---|
+| `argocd` | `argocd.argoproj.io/refresh: normal` on the Application (`health.argocd`). Argo CD refreshes it at once, removes the annotation, and an Application with automated sync then syncs the new commit |
+| `flux` | `reconcile.fluxcd.io/requestedAt: <time>` on the Kustomization's source GitRepository (`spec.sourceRef`, when it is a GitRepository) and on the Kustomization (`health.flux`), what `flux reconcile kustomization --with-source` sets. The source fetches the commit, then the Kustomization applies it |
+
+The step records the request on its own status: `status.refreshRequestedAt` (the `requestedAt` value sent to Flux), `status.refreshRevision` (the commit) and `status.refreshMessage` (which objects, or why the request failed), and emits a `GitOpsRefreshRequested` Event. It records the request before it sends it, so a controller restart never asks twice; a restart between the two sends nothing, and that step waits for the poll. A step with no changes, a step whose PR merge commit is still being looked up (it asks once the commit is known, or once the PRStatus gives up on it), and `update.strategy: argocd`, which writes no commit, do not ask.
+
+**A failed request is not a failure.** When the patch is refused (no RBAC, the object is missing) the step writes `refresh request failed (...); waiting for Argo CD to poll git` (or Flux) to `status.refreshMessage`, emits a `GitOpsRefreshFailed` Warning Event, and checks health as before: the tool's own poll syncs the commit, within `health.timeout`.
+
+**What it does not do.** It does not sync an Application without automated sync, so `health.timeout` still applies to one you sync by hand. It does not refresh a Flux source that is an OCIRepository or a Bucket, only the Kustomization. Other health types (`resource`, `argoRollouts`, `flagger`) name no GitOps object and ask nothing. With [`health.kubeconfigSecretRef`](#remote-clusters) the request goes to the remote cluster, with the kubeconfig's identity, which needs `patch` there.
+
+**Turning it off.** It is on by default. `health.refresh: false` on an environment turns it off there; the chart's `health.refresh.enabled: false` (`--health-refresh=false`) turns it off everywhere and drops the `patch` grants it needs: on `argoproj.io` Applications, Flux Kustomizations and `source.toolkit.fluxcd.io` GitRepositories (`patch` on Applications stays with `rbac.argocdApplicationsWrite=true`).
+
+```yaml
+environments:
+  - name: prod
+    health:
+      type: argocd
+      refresh: false   # wait for Argo CD's own poll in prod
+```
+
+A git webhook from your git server to Argo CD or Flux syncs as fast and needs neither; the request then only repeats it.

@@ -30,9 +30,10 @@ import (
 const ControllerServiceAccount = "kardinal-promoter"
 
 // GrantArgoPatch lets the controller patch only the named Argo CD
-// Applications, the RBAC the argocd update strategy needs (the chart grants
-// get/list/watch; rbac.argocdApplicationsWrite adds patch on every
-// Application). name names the Role and RoleBinding in ArgoCDNamespace; both
+// Applications, the RBAC the argocd update strategy needs (with
+// health.refresh.enabled=false the chart grants get/list/watch;
+// health.refresh.enabled, the default, and rbac.argocdApplicationsWrite add
+// patch on every Application). name names the Role and RoleBinding in ArgoCDNamespace; both
 // are deleted when the test ends.
 func (e *Env) GrantArgoPatch(t *testing.T, name string, apps ...string) {
 	t.Helper()

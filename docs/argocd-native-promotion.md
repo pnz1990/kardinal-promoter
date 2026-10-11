@@ -111,7 +111,8 @@ config version past an `argocd` environment, list that environment in `intent.sk
 
 The kardinal controller's ServiceAccount must have permission to `get` and `patch`
 `applications.argoproj.io` in the namespace where your ArgoCD Applications live. The chart
-grants read access by default; enable `patch` with:
+grants `patch` by default, for the refresh request ([Sync on promotion](health-adapters.md#sync-on-promotion));
+with `health.refresh.enabled: false` it grants read access only, and you enable `patch` with:
 
 ```bash
 helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
