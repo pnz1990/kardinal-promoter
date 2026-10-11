@@ -30,9 +30,9 @@ See [Health Adapters](health-adapters.md) for configuration.
 ### Does it work with GitLab?
 
 Yes. Start the controller with `--scm-provider gitlab`
-(Helm value `scm.provider: gitlab`). One controller serves one SCM for every Pipeline;
-`spec.git.provider` is deprecated and ignored. Forgejo, Gitea, Bitbucket Cloud and Azure DevOps
-are also supported. See [SCM Providers](scm-providers.md).
+(Helm value `scm.provider: gitlab`). A Pipeline can name another SCM with `spec.git.providerRef`
+(an ScmProvider or ClusterScmProvider); `spec.git.provider` is deprecated and ignored. Forgejo,
+Gitea, Bitbucket Cloud, Bitbucket Data Center and Azure DevOps are also supported. See [SCM Providers](scm-providers.md).
 
 ### Can I use it with Helm?
 
@@ -243,23 +243,10 @@ transitions from blocked to allowed, the Graph controller immediately advances.
 
 ### Can I test a gate without deploying?
 
-```bash
-kardinal policy simulate --pipeline my-app --env prod --time "Saturday 3pm"
-# RESULT: BLOCKED
-# Blocked by: no-weekend-deploys
-# Message: "Production deployments are blocked on weekends"
-# Next window: Monday 00:00 UTC
-#
-# no-weekend-deploys:   BLOCK   (!schedule.isWeekend = false)
-
-kardinal policy test my-gate.yaml
-# PolicyGate "no-weekend-deploys" (my-gate.yaml):
-#   Expression: !schedule.isWeekend
-#   Syntax: valid
-#   Result: PASS (!schedule.isWeekend = true)
-#
-# All gates valid and pass current context (1 gate(s))
-```
+Yes. `kardinal policy simulate --pipeline my-app --env prod --time "Saturday 3pm"` evaluates the
+gates of an environment at a given time, and `kardinal policy test my-gate.yaml` checks a gate file.
+See [Simulating Expressions](reference/cel-context.md#simulating-expressions) and
+[Testing Expressions](reference/cel-context.md#testing-expressions).
 
 ---
 
@@ -280,7 +267,7 @@ and can be deleted and recreated without data loss.
 ### Is kardinal-promoter production-ready?
 
 kardinal-promoter is pre-1.0 and under active development. The CRD API may change
-between minor versions. Recommended for early adopters who can tolerate migration.
+between minor versions. Recommended for early adopters who can absorb API changes between minor versions.
 Follow releases at [GitHub Releases](https://github.com/pnz1990/kardinal-promoter/releases).
 
 ---

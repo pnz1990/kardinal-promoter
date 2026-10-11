@@ -140,7 +140,7 @@ function TokenForm({ reason, onSubmit }: TokenFormProps) {
               <a href="http://localhost:8082/ui/" style={{ color: 'var(--color-warning)' }}>http://localhost:8082/ui/</a>:
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.25rem' }}>
-              <code style={{ flex: 1, fontFamily: 'monospace', fontSize: '0.72rem', overflowWrap: 'anywhere' }}>
+              <code style={{ flex: 1, fontFamily: 'var(--k-font-mono)', fontSize: '0.72rem', overflowWrap: 'anywhere' }}>
                 {PORT_FORWARD_COMMAND}
               </code>
               <CopyButton text={PORT_FORWARD_COMMAND} title="Copy port-forward command" />
@@ -158,7 +158,7 @@ function TokenForm({ reason, onSubmit }: TokenFormProps) {
             borderRadius: '6px', padding: '0.4rem 0.6rem', marginBottom: '1rem',
           }}
         >
-          <code style={{ flex: 1, fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--color-code)', overflowWrap: 'anywhere' }}>
+          <code style={{ flex: 1, fontFamily: 'var(--k-font-mono)', fontSize: '0.75rem', color: 'var(--color-code)', overflowWrap: 'anywhere' }}>
             {TOKEN_COMMAND}
           </code>
           <CopyButton text={TOKEN_COMMAND} title="Copy command" />
@@ -187,7 +187,7 @@ function TokenForm({ reason, onSubmit }: TokenFormProps) {
               border: `1px solid ${errorId ? 'var(--color-error)' : 'var(--color-border)'}`,
               borderRadius: '6px', padding: '0.5rem 0.75rem',
               color: 'var(--color-text)', fontSize: '0.875rem',
-              fontFamily: 'monospace',
+              fontFamily: 'var(--k-font-mono)',
               marginBottom: errorId ? '0.25rem' : '0.75rem',
             }}
           />

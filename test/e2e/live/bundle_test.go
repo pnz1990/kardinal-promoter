@@ -360,6 +360,9 @@ func TestBundle_SupersededBackToBack(t *testing.T) {
 				return false, err.Error()
 			}
 			for _, ps := range steps {
+				// The same message whether the Bundle reconciler cancels the
+				// step or the push guard refuses its push (#1681): it says why
+				// and nothing else.
 				cancelled := ps.Status.Message == fmt.Sprintf("bundle %s was superseded — promotion cancelled", name) ||
 					ps.Status.Message == fmt.Sprintf("bundle %s was superseded before this step started", name)
 				if ps.Spec.Environment != "test" || ps.Status.State != "Failed" || !cancelled {

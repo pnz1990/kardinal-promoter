@@ -181,7 +181,7 @@ export function PolicyGatesPanel({ gates, loading, onDecided }: Props) {
                   border: '1px solid var(--color-border-muted)',
                   borderRadius: '3px',
                   padding: '2px 6px',
-                  fontFamily: 'monospace',
+                  fontFamily: 'var(--k-font-mono)',
                   wordBreak: 'break-all',
                 }}>
                   {gate.expression}

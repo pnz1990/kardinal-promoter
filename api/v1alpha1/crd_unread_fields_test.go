@@ -250,7 +250,7 @@ func TestCRDGitProviderHasNoDefault(t *testing.T) {
 	provider, ok := git.Properties["provider"]
 	require.True(t, ok, "provider stays in the schema so stored Pipelines keep validating")
 	assert.Nil(t, provider.Default.Object, "provider must not be defaulted")
-	assert.Contains(t, provider.Description, "Deprecated: ignored; the controller's --scm-provider flag selects the provider.")
+	assert.Contains(t, provider.Description, "Deprecated: ignored; the controller's --scm-provider flag, or spec.git.providerRef,\nselects the provider.")
 	assert.NotContains(t, git.ValueValidation.Required, "provider")
 }
 

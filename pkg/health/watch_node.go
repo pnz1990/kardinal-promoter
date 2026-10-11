@@ -23,7 +23,7 @@ import (
 //
 // The translator uses this struct to emit a ref node in the Graph spec instead of
 // calling the Go health adapter at reconcile time. This moves health verification
-// into the Graph layer (HE-1, HE-2, HE-3 from docs/design/11-graph-purity-tech-debt.md).
+// into the Graph layer.
 //
 // The node variable name in ReadyWhen is always "healthNode" — the translator assigns
 // a unique Graph node ID (e.g. "healthProd") and must substitute "healthNode" with
@@ -127,7 +127,6 @@ func deploymentReadyWhen(condition string) string {
 // watchNodeResource builds a Watch node spec for a single named Kubernetes Deployment.
 //
 // readyWhen: see deploymentReadyWhen.
-// HE-1 in docs/design/11-graph-purity-tech-debt.md.
 func watchNodeResource(cfg ResourceConfig) WatchNodeSpec {
 	condition := cfg.Condition
 	if condition == "" {
@@ -172,7 +171,6 @@ func watchNodeResourceWatchKind(cfg ResourceConfig) WatchNodeSpec {
 // readyWhen: health=Healthy AND sync=Synced AND no sync operation is running
 // or has failed, as ArgoCDAdapter.Check decides it. status.operationState is
 // absent until the first sync operation.
-// HE-2 in docs/design/11-graph-purity-tech-debt.md.
 func watchNodeArgoCD(cfg ArgoCDConfig) WatchNodeSpec {
 	ns := cfg.Namespace
 	if ns == "" {
@@ -195,7 +193,6 @@ func watchNodeArgoCD(cfg ArgoCDConfig) WatchNodeSpec {
 //
 // readyWhen: the Ready condition is True AND observedGeneration matches generation
 // (confirming the latest revision has been reconciled).
-// HE-3 in docs/design/11-graph-purity-tech-debt.md.
 func watchNodeFlux(cfg FluxConfig) WatchNodeSpec {
 	ns := cfg.Namespace
 	if ns == "" {

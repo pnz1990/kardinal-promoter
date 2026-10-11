@@ -567,7 +567,7 @@ metadata:
 spec:
   git:
     url: https://gitlab.example.com/platform/my-app-deploy
-    secretRef: { name: team-gitlab-git }   # git clone and push, as before
+    secretRef: { name: team-gitlab-git }   # git clone and push
     providerRef:
       name: team-gitlab                    # kind defaults to ScmProvider
   environments:

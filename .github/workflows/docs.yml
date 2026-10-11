@@ -6,6 +6,9 @@ on:
     paths:
       - "docs/**"
       - "mkdocs.yml"
+      - "web/tokens/**"
+      - "web/src/assets/fonts/**"
+      - "scripts/gen-tokens.mjs"
       - "api/v1alpha1/**"
       - "cmd/kardinal/**"
       - "hack/gen-cli-docs/**"
@@ -16,6 +19,9 @@ on:
     paths:
       - "docs/**"
       - "mkdocs.yml"
+      - "web/tokens/**"
+      - "web/src/assets/fonts/**"
+      - "scripts/gen-tokens.mjs"
       - "api/v1alpha1/**"
       - "cmd/kardinal/**"
       - "hack/gen-cli-docs/**"
@@ -77,6 +83,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+
+      - name: Design tokens are generated from tokens.json
+        # docs/stylesheets/tokens.css and docs/assets/fonts come from web/tokens/tokens.json.
+        run: node scripts/gen-tokens.mjs --check
 
       - name: Install MkDocs and plugins
         run: pip install -r docs/requirements.txt

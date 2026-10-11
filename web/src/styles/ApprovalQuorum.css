@@ -38,7 +38,7 @@
 
 .approval-quorum__decisions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.2rem; }
 .approval-decision { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem; color: var(--color-text); }
-.approval-decision__user { font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace; }
+.approval-decision__user { font-family: var(--k-font-mono); }
 .approval-decision[data-decision='approve'][data-counted='true'] .approval-decision__verb { color: var(--color-success); }
 .approval-decision[data-decision='reject'][data-counted='true'] .approval-decision__verb { color: var(--color-error); }
 .approval-decision[data-counted='false'] { color: var(--color-text-muted); }

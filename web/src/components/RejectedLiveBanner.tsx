@@ -16,11 +16,11 @@ export function RejectedLiveBanner({ bundle }: { bundle: Bundle }) {
       role="alert"
       data-testid="rejected-live-banner"
       style={{
-        border: '1px solid var(--color-error, #d33)',
+        border: '1px solid var(--color-error)',
         borderRadius: 4,
         padding: '0.35rem 0.6rem',
         fontSize: '0.82rem',
-        color: 'var(--color-error, #d33)',
+        color: 'var(--color-error)',
       }}
     >
       Rejected change is live in {envs.join(', ')}; roll back:{' '}
