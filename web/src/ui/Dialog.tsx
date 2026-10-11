@@ -124,7 +124,7 @@ function DrawerPanel({ title, label, onClose, className, children, width, modal 
       aria-labelledby={label ? undefined : titleId}
       aria-label={label}
       className={cx('k-drawer', className)}
-      style={width ? ({ '--k-drawer-width': width } as CSSProperties) : undefined}
+      style={width ? ({ '--drawer-width': width } as CSSProperties) : undefined}
     >
       <header className="k-drawer__header">
         <h2 id={titleId} className="k-drawer__title">{title}</h2>

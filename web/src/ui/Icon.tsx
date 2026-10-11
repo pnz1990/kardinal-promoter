@@ -49,9 +49,6 @@ export function Icon({ name, size = 16, label, className, ...rest }: IconProps) 
       className={['k-icon', className].filter(Boolean).join(' ')}
       fill={filled ? 'currentColor' : 'none'}
       stroke="currentColor"
-      strokeWidth={1.5}
-      strokeLinecap="round"
-      strokeLinejoin="round"
       {...(label ? { role: 'img', 'aria-label': label } : { 'aria-hidden': true, focusable: false })}
       {...rest}
     >

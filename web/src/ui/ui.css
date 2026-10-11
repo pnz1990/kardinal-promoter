@@ -7,7 +7,7 @@
  */
 
 /* ── Icon ── */
-.k-icon { flex: none; vertical-align: middle; }
+.k-icon { flex: none; vertical-align: middle; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ── Button ── */
 .k-button {
@@ -246,7 +246,7 @@
 .k-drawer {
   display: flex;
   flex-direction: column;
-  inline-size: var(--k-drawer-width, var(--k-layout-drawer));
+  inline-size: var(--drawer-width, var(--k-layout-drawer));
   max-inline-size: 100%;
   block-size: 100%;
   border-inline-start: var(--k-border-hairline) solid var(--k-line);
