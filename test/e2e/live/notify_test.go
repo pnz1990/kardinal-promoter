@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -97,16 +98,24 @@ func gateKey(g *v1alpha1.PolicyGate) string {
 }
 
 // newHook creates NotificationHook ns/name posting events to url, with the
-// authorizationHeader auth and pipelineSelector selector when set.
+// Authorization header auth (from the Secret <name>-auth, labelled
+// referenceable) and pipelineSelector selector when set.
 func newHook(t *testing.T, e *framework.Env, ns, name, url, auth, selector string, events ...v1alpha1.NotificationHookEventType) {
 	t.Helper()
 	h := &v1alpha1.NotificationHook{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: v1alpha1.NotificationHookSpec{
-			Webhook:          v1alpha1.NotificationWebhookConfig{URL: url, AuthorizationHeader: auth},
+			Webhook:          v1alpha1.NotificationWebhookConfig{URL: url},
 			Events:           events,
 			PipelineSelector: selector,
 		},
+	}
+	if auth != "" {
+		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name + "-auth", Namespace: ns,
+			Labels: map[string]string{"kardinal.io/referenceable": "true"}},
+			StringData: map[string]string{"authorization": auth}}
+		require.NoError(t, e.Client.Create(context.Background(), secret), "create Secret %s-auth", name)
+		h.Spec.Webhook.SecretRef = &v1alpha1.NotificationSecretRef{Name: secret.Name}
 	}
 	require.NoError(t, e.Client.Create(context.Background(), h), "create NotificationHook %s", name)
 }

@@ -110,15 +110,6 @@ type PromotionStepSpec struct {
 	// Do not set it.
 	// +optional
 	Admitted *bool `json:"admitted,omitempty"`
-
-	// Region is deprecated and not set by kardinal; the reconciler fails a
-	// step that has one with "regions is not supported".
-	//
-	// Deprecated: declare one environment per region (prod-us, prod-eu) and
-	// use wave.
-	// It is removed in v0.11.
-	// +optional
-	Region string `json:"region,omitempty"`
 }
 
 // LiveGate is one gate instance's current result.

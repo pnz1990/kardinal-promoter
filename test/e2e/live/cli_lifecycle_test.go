@@ -32,9 +32,6 @@ import (
 // promote, delete bundle, config Bundles, create bundle --dry-run, pause and
 // resume.
 
-// emergencyNotice is what the deprecated rollback --emergency prints.
-const emergencyNotice = "Flag --emergency has been deprecated, it has no effect and is removed in v0.11; use kardinal override to pass a blocking gate\n"
-
 // refuses runs a kardinal command that must fail: exit 1, want on stderr,
 // nothing on stdout.
 func refuses(t *testing.T, c *framework.CLI, ns, want string, args ...string) {
@@ -115,8 +112,8 @@ func waitBundleGone(t *testing.T, e *framework.Env, ns, name string) {
 // and the target's provenance, goes through test again and redeploys the old
 // version in both environments. history marks its rows as rollbacks. A
 // second rollback has nothing older to restore, and --to restores a newer
-// Bundle. --emergency prints a deprecation notice and changes nothing.
-// Covers CLI-ROLLBACK-01, CLI-EMERGENCY-01, RB-PREV-01, RB-TO-01.
+// Bundle.
+// Covers CLI-ROLLBACK-01, RB-PREV-01, RB-TO-01.
 func TestCLI_Rollback(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -161,9 +158,9 @@ func TestCLI_Rollback(t *testing.T) {
 	assert.Len(t, bundles(t, e, a.ns), 3, "a refused rollback creates nothing")
 
 	// The default target is A, the newest other Bundle Verified in prod.
-	r := c.Run(a.ns, "rollback", pipelineName, "--env", "prod", "--emergency")
+	r := c.Run(a.ns, "rollback", pipelineName, "--env", "prod")
 	require.Equal(t, 0, r.Code, r.Output())
-	assert.Equal(t, emergencyNotice, r.Stderr)
+	assert.Empty(t, r.Stderr)
 	m := regexp.MustCompile(`^Rolling back podinfo in prod from ` + bB + ` to ` + bA + ` \(` + regexp.QuoteMeta(fixtures.Image+":"+fixtures.V2) + `\)\n` +
 		`Bundle (podinfo-rollback-[a-z0-9]{5}) created \(rollbackOf=` + bA + `\)\n` +
 		`Track with: kardinal explain podinfo --env prod\n$`).FindStringSubmatch(r.Stdout)
@@ -172,7 +169,6 @@ func TestCLI_Rollback(t *testing.T) {
 	rb := getBundle(t, e, a.ns, bR)
 	assert.Equal(t, "true", rb.Labels["kardinal.io/rollback"])
 	assert.Equal(t, pipelineName, rb.Labels["kardinal.io/pipeline"])
-	assert.NotContains(t, rb.Labels, "kardinal.io/emergency", "--emergency has no effect")
 	assert.Equal(t, bB, rb.Annotations["kardinal.io/rollback-from"])
 	assert.Equal(t, cliUser(t), rb.Annotations["kardinal.io/requested-by"])
 	assert.NotEmpty(t, rb.Annotations["kardinal.io/created-at"])
@@ -204,8 +200,6 @@ func TestCLI_Rollback(t *testing.T) {
 	// deploys what prod runs now.
 	noTarget := "rollback: no earlier Bundle with artifacts, not already rolled back from, was Verified in prod (deployed now: " + bR + "); pick one with --to: conflict"
 	refuses(t, c, a.ns, noTarget, "rollback", pipelineName, "--env", "prod")
-	r = c.Fail(a.ns, "rollback", pipelineName, "--env", "prod", "--emergency")
-	assert.Equal(t, emergencyNotice+noTarget+"\n", r.Stderr, "--emergency does not lift a refusal")
 	refuses(t, c, a.ns, "rollback: bundle "+bA+" deploys the same artifacts as the deployed bundle "+bR+": conflict",
 		"rollback", pipelineName, "--env", "prod", "--to", bA)
 	assert.Len(t, bundles(t, e, a.ns), 4, "a refused rollback creates nothing")

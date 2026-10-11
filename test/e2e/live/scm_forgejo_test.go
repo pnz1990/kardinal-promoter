@@ -41,18 +41,15 @@ import (
 // TestForgejo_PromotionPR checks the PR a pr-review environment opens on
 // Forgejo: title, head and base, labels and the evidence body with the gate
 // and upstream tables. Rerunning open-pr finds that PR instead of opening a
-// second one. The Pipeline sets the deprecated spec.git.provider to gitlab;
-// the controller ignores it and uses its --scm-provider=forgejo.
+// second one. The controller's --scm-provider=forgejo selects the provider.
 //
-// Covers SCM-FJ-01, SCM-FJ-08, SCM-PROVIDERFLAG-01, DEP-GITPROVIDER-01.
+// Covers SCM-FJ-01, SCM-FJ-08, SCM-PROVIDERFLAG-01.
 func TestForgejo_PromotionPR(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	requireKind(t, e, "forgejo")
 	assert.Contains(t, controllerArgs(t, e), "--scm-provider=forgejo")
-	scmPromotionPR(t, e, func(p *v1alpha1.Pipeline) {
-		p.Spec.Git.Provider = "gitlab" //nolint:staticcheck // SA1019: the deprecated field is what this test checks
-	})
+	scmPromotionPR(t, e, nil)
 }
 
 // TestForgejo_MergeByPolling checks that without a webhook the PRStatus poll

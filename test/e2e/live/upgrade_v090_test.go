@@ -128,19 +128,23 @@ func TestUpgradeV090_FromV090(t *testing.T) {
 	doneSteps, err := e.Steps(ctx, ns, "done", bDone)
 	require.NoError(t, err)
 
-	// ── 2. Label the Pipelines' git Secrets ─────────────────────────────
+	// ── 3. Label the Pipelines' git Secrets ─────────────────────────────
 	e.MustShell(t, framework.GuideBlockFrom(t, "0.9.0", "kardinal.io/referenceable=true"))
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: framework.GitSecretName}, &secret))
 	assert.Equal(t, "true", secret.Labels["kardinal.io/referenceable"], "the guide labels the git Secret")
 
-	// ── 3. Apply the new CRDs ───────────────────────────────────────────
+	// ── 4. Move NotificationHook Authorization headers into Secrets ─────
+	// No hook here sets one, so the step changes nothing.
+	assert.Empty(t, strings.TrimSpace(e.MustShell(t, framework.GuideBlockFrom(t, "0.9.0", "authorizationHeader"))))
+
+	// ── 5. Apply the new CRDs ───────────────────────────────────────────
 	crds := framework.Fill(t, framework.GuideBlockFrom(t, "0.9.0", "helm show crds"), guideChartV090, `"$KARDINAL_E2E_CHART"`)
 	e.MustShell(t, crds)
 
-	// ── 4. Upgrade kro ──────────────────────────────────────────────────
+	// ── 6. Upgrade kro ──────────────────────────────────────────────────
 	e.MustShell(t, framework.Fill(t, framework.GuideBlockFrom(t, "0.9.0", "install-kro.sh"), "<your-context>", e.Context))
 
-	// ── 5. Upgrade the chart ────────────────────────────────────────────
+	// ── 7. Upgrade the chart ────────────────────────────────────────────
 	rel := e.ExistingRelease(t, upgradeRelease, framework.ControllerNamespace)
 	upgradeCmd := strings.TrimRight(framework.Fill(t, framework.GuideBlockFrom(t, "0.9.0", "helm upgrade"), guideChartV090, `"$KARDINAL_E2E_CHART"`), "\n") + ` \
   --set image.repository="${KARDINAL_E2E_IMAGE%:*}" --set image.tag="${KARDINAL_E2E_IMAGE##*:}" --set image.pullPolicy=Never
@@ -149,7 +153,7 @@ func TestUpgradeV090_FromV090(t *testing.T) {
 	require.Zero(t, up.Code, up.Output)
 	rel.WaitRolledOut(t, 3*time.Minute)
 
-	// ── 6. Check the result ─────────────────────────────────────────────
+	// ── 8. Check the result ─────────────────────────────────────────────
 	check := e.MustShell(t, framework.GuideBlockFrom(t, "0.9.0", "kardinal doctor"))
 	assert.Regexp(t, `(?m)^\d+ check\(s\) passed$`, check, "kardinal doctor passes every check")
 

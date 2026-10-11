@@ -899,9 +899,8 @@ The CRDs do not check that `spec.expression` is valid CEL. Run `kardinal validat
 before you apply: it compiles each PolicyGate expression with the controller's CEL environment.
 After you apply a gate, the controller compiles it and writes the result to `status.reason`.
 
-The chart's only `ValidatingAdmissionPolicy` objects are the identity policies below. The
-`validatingAdmissionPolicy.enabled` value is deprecated and has no effect: the identity
-policies are always installed.
+The chart's only `ValidatingAdmissionPolicy` objects are the identity policies below. They are
+always installed.
 
 ### Verified identity
 

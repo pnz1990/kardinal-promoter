@@ -162,9 +162,6 @@ var allFeatures = []string{
 	"--set", "replicaCount=2",
 	"--set", "ui.auth.tokenReview=true",
 	"--set", "rbac.argocdApplicationsWrite=true",
-	// Deprecated no-op (#1278): kept so the schema still accepts it and
-	// TestChartRBACLeastPrivilege proves it grants nothing.
-	"--set", "rbac.integrationTestJobs=true",
 }
 
 // ── C08-api-config-04, -16, -21: only the identity and hold admission policies ─
@@ -175,14 +172,9 @@ var allFeatures = []string{
 // in the CRD schema (api/v1alpha1/crd_schema_test.go). The only admission
 // objects are the identity policies (identity-admission.yaml) and the
 // hold-writes policy (hold-admission.yaml, #1528), named per release and
-// shipped whatever validatingAdmissionPolicy.enabled says, which stays a
-// deprecated no-op so existing --set values keep working.
+// always shipped.
 func TestChartRendersOnlyIdentityAdmissionPolicies(t *testing.T) {
-	for _, args := range [][]string{
-		nil,
-		{"--set", "validatingAdmissionPolicy.enabled=true"},
-		{"--set", "validatingAdmissionPolicy.enabled=false"},
-	} {
+	for _, args := range [][]string{nil} {
 		var got []string
 		for _, d := range render(t, "kardinal-promoter", args...) {
 			if strings.HasPrefix(d.APIVersion, "admissionregistration.k8s.io") {
@@ -1074,7 +1066,6 @@ func TestChartAcceptsRepoSetKeys(t *testing.T) {
 		"image.tag=dev",
 		"image.pullPolicy=Never",
 		"github.secretRef.name=github-token",
-		"validatingAdmissionPolicy.enabled=false",
 		"networkPolicy.enabled=true",
 		"demo.enabled=true",
 		"controller.watchNamespace=" + releaseNS,

@@ -370,7 +370,6 @@ func TestExplain_GateStates(t *testing.T) {
 			ready, evaluated, "bundle.upstreamSoakMinutes >= 30")
 	}
 	postDeploy := gate(false, true)
-	postDeploy.Spec.When = "post-deploy" //nolint:staticcheck // SA1019: when has no effect (#1323)
 	started := gate(false, true)
 	failed := gate(false, true)
 	superseded := gate(false, true)

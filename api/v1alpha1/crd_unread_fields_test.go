@@ -3,8 +3,8 @@
 
 package v1alpha1_test
 
-// Admission tests for fields that nothing reads (#1269, #1276) and for the
-// argocd + pr-review combination the argocd strategy refuses (#1281).
+// Admission tests for the fields v0.11.0 removed and for the argocd +
+// pr-review combination the argocd strategy refuses (#1281).
 //
 // celAdmission runs the API server's own CEL validator
 // (k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel), not the cel-go
@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel/model"
 	celconfig "k8s.io/apiserver/pkg/apis/cel"
@@ -57,29 +58,6 @@ func crFromYAML(t *testing.T, doc string) map[string]interface{} {
 	return toUnstructured(t, []byte(strings.TrimSpace(doc)))
 }
 
-const pipelineWithPolicyGates = `
-apiVersion: kardinal.io/v1alpha1
-kind: Pipeline
-metadata: {name: app, namespace: default}
-spec:
-  git: {url: "https://github.com/example/gitops"}
-  environments:
-  - name: test
-  - name: prod
-  policyGates:
-  - name: org-freeze
-`
-
-const policyGateWithSelector = `
-apiVersion: kardinal.io/v1alpha1
-kind: PolicyGate
-metadata: {name: freeze, namespace: platform-policies}
-spec:
-  expression: "!schedule.isWeekend"
-  selector:
-    matchLabels: {tier: prod}
-`
-
 const pipelineArgoCDPRReview = `
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
@@ -101,25 +79,32 @@ func assertRejectedWith(t *testing.T, errs []string, want string) {
 	assert.Contains(t, errs[0], want)
 }
 
-// TestCRDRejectsUnreadFields: Pipeline.spec.policyGates and
-// PolicyGate.spec.selector gate nothing, so the CRD refuses them on create
-// (#1269).
-func TestCRDRejectsUnreadFields(t *testing.T) {
+// TestCRDDropsRemovedFields: the fields v0.10.0 deprecated and v0.11.0
+// removed are not in the schemas, so the API server refuses them with
+// strict field validation and prunes them from stored objects.
+func TestCRDDropsRemovedFields(t *testing.T) {
 	crds := loadCRDs(t)
-
-	p := crFromYAML(t, pipelineWithPolicyGates)
-	assertRejectedWith(t, celAdmission(t, crds, p, nil, false), "spec.policyGates is not implemented")
-	setPath(p, []string{"spec", "policyGates"}, []interface{}{})
-	assert.Empty(t, celAdmission(t, crds, p, nil, false), "an empty policyGates list gates nothing and is accepted")
-	delete(p["spec"].(map[string]interface{}), "policyGates")
-	assert.Empty(t, celAdmission(t, crds, p, nil, false))
-
-	g := crFromYAML(t, policyGateWithSelector)
-	assertRejectedWith(t, celAdmission(t, crds, g, nil, false), "spec.selector is not implemented; use the kardinal.io/applies-to label")
-	setPath(g, []string{"spec", "selector"}, map[string]interface{}{})
-	assertRejectedWith(t, celAdmission(t, crds, g, nil, false), "spec.selector is not implemented")
-	delete(g["spec"].(map[string]interface{}), "selector")
-	assert.Empty(t, celAdmission(t, crds, g, nil, false))
+	pipeline := crds["Pipeline"].structural.Properties["spec"]
+	env := pipeline.Properties["environments"].Items
+	for _, c := range []struct {
+		where  string
+		props  map[string]structuralschema.Structural
+		fields []string
+	}{
+		{"Pipeline spec", pipeline.Properties, []string{"policyGates"}},
+		{"Pipeline spec.git", pipeline.Properties["git"].Properties, []string{"provider"}},
+		{"Pipeline environments[]", env.Properties, []string{"shard", "steps", "promotionTemplate", "regions"}},
+		{"Pipeline environments[].health", env.Properties["health"].Properties, []string{"cluster"}},
+		{"PolicyGate spec", crds["PolicyGate"].structural.Properties["spec"].Properties, []string{"selector", "when"}},
+		{"NotificationHook spec.webhook", crds["NotificationHook"].structural.Properties["spec"].Properties["webhook"].Properties,
+			[]string{"authorizationHeader"}},
+		{"PromotionStep spec", crds["PromotionStep"].structural.Properties["spec"].Properties, []string{"region"}},
+	} {
+		for _, f := range c.fields {
+			_, ok := c.props[f]
+			assert.False(t, ok, "%s still has %s", c.where, f)
+		}
+	}
 }
 
 // TestCRDRejectsArgoCDWithPRReview: update.strategy argocd patches the
@@ -168,42 +153,6 @@ func TestCRDNewRulesRatchet(t *testing.T) {
 		want   string // "" = accepted with ratcheting
 	}{
 		{
-			name:   "pipeline with policyGates: pause",
-			stored: pipelineWithPolicyGates,
-			edit:   func(o map[string]interface{}) { setPath(o, []string{"spec", "paused"}, true) },
-		},
-		{
-			name:   "pipeline with policyGates: status write",
-			stored: pipelineWithPolicyGates,
-			edit:   func(o map[string]interface{}) { setPath(o, []string{"status", "phase"}, "Ready") },
-		},
-		{
-			name:   "pipeline with policyGates: edit policyGates",
-			stored: pipelineWithPolicyGates,
-			edit: func(o map[string]interface{}) {
-				setPath(o, []string{"spec", "policyGates"}, []interface{}{map[string]interface{}{"name": "other"}})
-			},
-			want: "spec.policyGates is not implemented",
-		},
-		{
-			name:   "policygate with selector: edit expression",
-			stored: policyGateWithSelector,
-			edit:   func(o map[string]interface{}) { setPath(o, []string{"spec", "expression"}, "true") },
-		},
-		{
-			name:   "policygate with selector: status write",
-			stored: policyGateWithSelector,
-			edit:   func(o map[string]interface{}) { setPath(o, []string{"status", "ready"}, true) },
-		},
-		{
-			name:   "policygate with selector: edit selector",
-			stored: policyGateWithSelector,
-			edit: func(o map[string]interface{}) {
-				setPath(o, []string{"spec", "selector", "matchLabels"}, map[string]interface{}{"tier": "staging"})
-			},
-			want: "spec.selector is not implemented",
-		},
-		{
 			name:   "argocd + pr-review: pause",
 			stored: pipelineArgoCDPRReview,
 			edit:   func(o map[string]interface{}) { setPath(o, []string{"spec", "paused"}, true) },
@@ -241,17 +190,6 @@ func TestCRDNewRulesRatchet(t *testing.T) {
 				"without ratcheting the stored value fails every update")
 		})
 	}
-}
-
-// TestCRDGitProviderHasNoDefault: spec.git.provider is ignored (#1276), so the
-// CRD no longer stores a default for it, and it stays optional.
-func TestCRDGitProviderHasNoDefault(t *testing.T) {
-	git := loadCRDs(t)["Pipeline"].structural.Properties["spec"].Properties["git"]
-	provider, ok := git.Properties["provider"]
-	require.True(t, ok, "provider stays in the schema so stored Pipelines keep validating")
-	assert.Nil(t, provider.Default.Object, "provider must not be defaulted")
-	assert.Contains(t, provider.Description, "Deprecated: ignored; the controller's --scm-provider flag, or spec.git.providerRef,\nselects the provider.")
-	assert.NotContains(t, git.ValueValidation.Required, "provider")
 }
 
 // TestCRDAuditEventDropsActorAndBundleImage: actor and bundleImage were never

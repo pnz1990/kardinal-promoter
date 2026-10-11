@@ -161,17 +161,6 @@ spec:
                 description: Webhook defines the HTTP endpoint to deliver notifications
                   to.
                 properties:
-                  authorizationHeader:
-                    description: |-
-                      AuthorizationHeader is the value of the Authorization header to include in the POST.
-                      Typically "Bearer <token>" or "Token <secret>".
-
-                      Deprecated: use secretRef. The value is stored in plain text in the spec
-                      and sent as is: anyone who can read this NotificationHook can read it.
-                      A hook that sets it still delivers, and has the condition
-                      PlaintextCredential=True.
-                      It is removed in v0.11.
-                    type: string
                   secretRef:
                     description: |-
                       SecretRef names a Secret in the hook's namespace holding the
@@ -200,10 +189,6 @@ spec:
                 x-kubernetes-validations:
                 - message: 'webhook: set url, or secretRef with a url key'
                   rule: (has(self.url) && size(self.url) > 0) || has(self.secretRef)
-                - message: 'webhook: authorizationHeader and secretRef are mutually
-                    exclusive; move the header into the Secret''s authorization key'
-                  rule: '!(has(self.authorizationHeader) && size(self.authorizationHeader)
-                    > 0 && has(self.secretRef))'
             required:
             - events
             - webhook
@@ -219,8 +204,7 @@ spec:
                 description: |-
                   Conditions: Ready is False when the hook cannot deliver (its Secret is
                   missing or lacks a key, or its template does not parse); events wait
-                  until it is fixed. PlaintextCredential is True while
-                  spec.webhook.authorizationHeader is set.
+                  until it is fixed.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

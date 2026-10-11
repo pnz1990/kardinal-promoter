@@ -294,11 +294,11 @@ func (u *upgrade) assertRatchets(t *testing.T, minor int) {
 	pipelineWrites := []string{"label", "spec", "status", "env0"}
 	gateWrites := []string{"label", "spec", "status"}
 	cases := []ratchetCase{
-		{"pipeline", "legacy-steps", []string{"env0"}, true},
+		{"pipeline", "legacy-steps", nil, false},
 		{"pipeline", "legacy-autorollback", []string{"env0"}, true},
 		{"pipeline", "legacy-reserved", []string{"env0"}, true},
-		{"pipeline", "legacy-policygates", nil, true},
-		{"policygate", "legacy-selector", nil, true},
+		{"pipeline", "legacy-policygates", nil, false},
+		{"policygate", "legacy-selector", nil, false},
 		{"pipeline", "legacy-badname", nil, false},
 		{"policygate", legacyLongGate, gateWrites, false},
 		{"pipeline", "legacy-dupenv", nil, false},
@@ -559,18 +559,15 @@ spec:
 		"pipeline " + ns + "/legacy-autorollback env test: autoRollback",
 		"pipeline " + ns + "/legacy-badname env Test: invalid or reserved name",
 		"pipeline " + ns + "/legacy-dupenv: duplicate environment name test",
-		"pipeline " + ns + "/legacy-policygates: spec.policyGates",
 		"pipeline " + ns + "/legacy-reserved env graph: invalid or reserved name",
-		"pipeline " + ns + "/legacy-shard env test: shard",
-		"pipeline " + ns + "/legacy-steps env test: steps",
 		"policygate " + ns + "/" + legacyLongGate + ": name longer than 63 characters",
-		"policygate " + ns + "/legacy-selector: spec.selector",
 	}, u.findings(t, finder), "the finder reports each legacy object once, and no gate instance or freeze gate")
 
 	// ── 2. Check your Helm values ───────────────────────────────────────
 	values := e.MustShell(t, framework.GuideBlock(t, "helm get values"))
 	assert.NotContains(t, values, "krocodile")
 	assert.Contains(t, values, "name: git-token")
+	assert.Contains(t, values, "validatingAdmissionPolicy:", "kardinal-v081.sh set it, so step 8 drops it")
 
 	// ── 3. Stop both v0.8.1 controllers ─────────────────────────────────
 	e.MustShell(t, framework.GuideBlock(t, "scale deploy/kardinal-promoter"))
@@ -634,11 +631,17 @@ spec:
 		t.Helper()
 		e.MustShell(t, framework.Fill(t, framework.GuideFix(t, finding), append([]string{"<ns>", ns}, pairs...)...))
 	}
-	fix("`steps`", "<name>", "legacy-steps", "<i>", "0")
 	fix("`autoRollback`", "<name>", "legacy-autorollback", "<i>", "0")
-	fix("`shard`", "<name>", "legacy-shard", "<i>", "0")
-	fix("`spec.policyGates`", "<name>", "legacy-policygates")
-	fix("PolicyGate `spec.selector`", "<name>", "legacy-selector")
+	// The new CRDs drop the fields this release removed from stored objects.
+	for name, field := range map[string]string{
+		"pipeline/legacy-steps":       "{.spec.environments[0].steps}",
+		"pipeline/legacy-shard":       "{.spec.environments[0].shard}",
+		"pipeline/legacy-policygates": "{.spec.policyGates}",
+		"policygate/legacy-selector":  "{.spec.selector}",
+	} {
+		got := e.MustShell(t, fmt.Sprintf("kubectl -n %s get %s -o jsonpath='%s'", ns, name, field))
+		assert.Empty(t, strings.TrimSpace(got), "%s: %s is dropped", name, field)
+	}
 	const rename = "Invalid, reserved or duplicate environment name"
 	fix(rename, "<name>", "legacy-reserved", "<i>", "0", "<new-name>", "preview")
 	fix(rename, "<name>", "legacy-badname", "<i>", "0", "<new-name>", "test")
@@ -654,7 +657,8 @@ spec:
 	// ── 8. Upgrade the chart ────────────────────────────────────────────
 	upgradeCmd := strings.TrimRight(framework.Fill(t, framework.GuideBlock(t, "helm upgrade"), guideChart, `"$KARDINAL_E2E_CHART"`), "\n") + ` \
   --set image.repository="${KARDINAL_E2E_IMAGE%:*}" --set image.tag="${KARDINAL_E2E_IMAGE##*:}" --set image.pullPolicy=Never \
-  --set scm.provider="$KARDINAL_E2E_SCM_PROVIDER" --set scm.apiURL="$KARDINAL_E2E_SCM_API"
+  --set scm.provider="$KARDINAL_E2E_SCM_PROVIDER" --set scm.apiURL="$KARDINAL_E2E_SCM_API" \
+  --set validatingAdmissionPolicy=null
 `
 	reuse := e.Shell(t, framework.Fill(t, upgradeCmd, "--reset-then-reuse-values", "--reuse-values"))
 	assert.NotZero(t, reuse.Code, reuse.Output)

@@ -17,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -38,11 +39,16 @@ const guideChartV0100 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --versio
 // that is Verified in test with its prod PR open: in flight; Pipeline "done"
 // has a Bundle that is Verified. The controller's SCM token Secret carries
 // kardinal.io/referenceable, as a user who labelled it for the demo
-// Pipeline left it.
+// Pipeline left it. NotificationHook "plain" sets the removed
+// spec.webhook.authorizationHeader.
 //
-// After the guide's steps (remove that label, apply the new CRDs, helm
-// upgrade --reset-then-reuse-values, kardinal doctor):
+// After the guide's steps (remove that label, move the hook's header into a
+// Secret, apply the new CRDs, helm upgrade --reset-then-reuse-values,
+// kardinal doctor):
 //   - the controller's Secret has no referenceable label;
+//   - hook "plain" reads its header from Secret plain-auth (key
+//     authorization, labeled referenceable) through spec.webhook.secretRef,
+//     and is Ready after the upgrade;
 //   - the Pipelines are Ready and get status.environments and
 //     status.summary, which kubectl get pipelines shows as SUMMARY;
 //   - the Verified Bundle stays Verified with the same steps, and has no
@@ -86,7 +92,17 @@ func TestUpgradeV0100_FromV0100(t *testing.T) {
 	gate := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "always", Namespace: ns,
 		Labels: map[string]string{"kardinal.io/applies-to": "prod"}},
 		Spec: v1alpha1.PolicyGateSpec{Expression: "true", Message: "a gate v0.10.0 stored"}}
-	for _, o := range []client.Object{promote, done, gate} {
+	// v0.10.0's NotificationHook still has authorizationHeader; this
+	// checkout's type does not, so the hook is written as unstructured.
+	hook := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "kardinal.io/v1alpha1", "kind": "NotificationHook",
+		"metadata": map[string]interface{}{"name": "plain", "namespace": ns},
+		"spec": map[string]interface{}{
+			"webhook": map[string]interface{}{"url": "https://hooks.example.invalid/plain", "authorizationHeader": "Bearer PLAINTOKEN"},
+			"events":  []interface{}{"Bundle.Failed"},
+		},
+	}}
+	for _, o := range []client.Object{promote, done, gate, hook} {
 		require.NoError(t, e.Client.Create(ctx, o), "%T %s under v0.10.0", o, o.GetName())
 	}
 
@@ -138,10 +154,22 @@ func TestUpgradeV0100_FromV0100(t *testing.T) {
 	// The step is safe to run again, with the label already gone.
 	e.MustShell(t, framework.GuideBlockFrom(t, "0.10.0", "kardinal.io/referenceable-"))
 
-	// ── 3. Apply the new CRDs ───────────────────────────────────────────
+	// ── 3. Move the hook's Authorization header into a Secret ───────────
+	e.MustShell(t, framework.GuideBlockFrom(t, "0.10.0", "authorizationHeader"))
+	var authSecret corev1.Secret
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: "plain-auth"}, &authSecret))
+	assert.Equal(t, "Bearer PLAINTOKEN", string(authSecret.Data["authorization"]))
+	assert.Equal(t, "true", authSecret.Labels["kardinal.io/referenceable"])
+	migrated := e.Kubectl(t, ns, "", "get", "notificationhook", "plain", "-o", "jsonpath={.spec.webhook}")
+	assert.Contains(t, migrated, `"secretRef":{"name":"plain-auth"}`)
+	assert.NotContains(t, migrated, "authorizationHeader")
+	// With nothing left to move, the step changes nothing.
+	assert.Empty(t, strings.TrimSpace(e.MustShell(t, framework.GuideBlockFrom(t, "0.10.0", "authorizationHeader"))))
+
+	// ── 4. Apply the new CRDs ───────────────────────────────────────────
 	e.MustShell(t, framework.Fill(t, framework.GuideBlockFrom(t, "0.10.0", "helm show crds"), guideChartV0100, `"$KARDINAL_E2E_CHART"`))
 
-	// ── 4. Upgrade the chart ────────────────────────────────────────────
+	// ── 5. Upgrade the chart ────────────────────────────────────────────
 	rel := e.ExistingRelease(t, upgradeRelease, framework.ControllerNamespace)
 	upgradeCmd := strings.TrimRight(framework.Fill(t, framework.GuideBlockFrom(t, "0.10.0", "helm upgrade"), guideChartV0100, `"$KARDINAL_E2E_CHART"`), "\n") + ` \
   --set image.repository="${KARDINAL_E2E_IMAGE%:*}" --set image.tag="${KARDINAL_E2E_IMAGE##*:}" --set image.pullPolicy=Never
@@ -150,9 +178,19 @@ func TestUpgradeV0100_FromV0100(t *testing.T) {
 	require.Zero(t, up.Code, up.Output)
 	rel.WaitRolledOut(t, 3*time.Minute)
 
-	// ── 5. Check the result ─────────────────────────────────────────────
+	// ── 6. Check the result ─────────────────────────────────────────────
 	check := e.MustShell(t, framework.GuideBlockFrom(t, "0.10.0", "kardinal doctor"))
 	assert.Regexp(t, `(?m)^\d+ check\(s\) passed$`, check, "kardinal doctor passes every check")
+
+	framework.Eventually(t, time.Minute, "hook plain Ready with its Secret", func(ctx context.Context) (bool, string) {
+		var h v1alpha1.NotificationHook
+		if err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: "plain"}, &h); err != nil {
+			return false, err.Error()
+		}
+		c := meta.FindStatusCondition(h.Status.Conditions, "Ready")
+		return c != nil && c.Status == metav1.ConditionTrue && meta.FindStatusCondition(h.Status.Conditions, "PlaintextCredential") == nil,
+			fmt.Sprintf("conditions %v", h.Status.Conditions)
+	})
 
 	// Within a minute every Pipeline is Ready and has the status projection.
 	for _, p := range []*v1alpha1.Pipeline{promote, done} {

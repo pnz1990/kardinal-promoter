@@ -191,20 +191,6 @@ func TestRollbackCmd_RestoresPreviousVerifiedBundle(t *testing.T) {
 	}
 }
 
-// TestRollbackCmd_EmergencyDeprecated is #1288: --emergency still parses, so
-// a runbook that passes it keeps working, prints a deprecation warning that
-// points to kardinal override, and is hidden from the help.
-func TestRollbackCmd_EmergencyDeprecated(t *testing.T) {
-	cmd := newRollbackCmd()
-	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
-	require.NoError(t, cmd.ParseFlags([]string{"--env", "prod", "--emergency"}))
-	assert.Contains(t, out.String(),
-		"Flag --emergency has been deprecated, it has no effect and is removed in v0.11; use kardinal override to pass a blocking gate")
-	assert.NotContains(t, cmd.Flags().FlagUsages(), "emergency", "a deprecated flag is not in the help")
-}
-
 // TestPromoteCmd_CopiesBundleVerifiedUpstream covers C09b-cli-04: promote
 // copies the artifacts of the Bundle verified upstream and never creates an
 // image-less Bundle.

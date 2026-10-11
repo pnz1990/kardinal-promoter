@@ -34,12 +34,11 @@ import (
 
 func newRollbackCmd() *cobra.Command {
 	var (
-		envFlag       string
-		toFlag        string
-		emergencyFlag bool // deprecated, ignored (#1288)
-		holdFlag      bool
-		reasonFlag    string
-		expiresFlag   time.Duration
+		envFlag     string
+		toFlag      string
+		holdFlag    bool
+		reasonFlag  string
+		expiresFlag time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -99,11 +98,6 @@ blocking gates pass as audited exemptions meanwhile. See docs/rollback.md.`,
 		"Keep the environment on the rollback until kardinal release-hold; the rollback passes blocking gates, each pass audited")
 	cmd.Flags().StringVar(&reasonFlag, "reason", "", "Why the environment is held (required with --hold)")
 	cmd.Flags().Var(durationValue{&expiresFlag}, "hold-expires-in", "End the hold this long after it is made (30m, 24h, 2d); default: until kardinal release-hold")
-	// Deprecated: --emergency never bypassed a gate and has no effect; use
-	// `kardinal override` to pass a blocking gate. Deleted in the next minor
-	// release (#1288).
-	cmd.Flags().BoolVar(&emergencyFlag, "emergency", false, "Deprecated: has no effect")
-	_ = cmd.Flags().MarkDeprecated("emergency", "it has no effect and is removed in v0.11; use kardinal override to pass a blocking gate")
 	addYesFlag(cmd)
 
 	return withStructuredOutput(cmd)

@@ -248,7 +248,7 @@ rules:
     verbs: ["get", "list", "create"]
 ```
 
-`--emergency` is deprecated and has no effect. It never bypassed a gate. It prints a warning, the rollback runs as without it, and the flag will be removed in the next minor release. To let a rollback through a blocking gate, use [`kardinal override`](#rollback-and-gates).
+To let a rollback through a blocking gate, use [`kardinal override`](#rollback-and-gates).
 
 ## Automatic Rollback
 

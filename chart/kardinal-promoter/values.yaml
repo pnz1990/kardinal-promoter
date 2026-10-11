@@ -399,10 +399,6 @@ rbac:
   # -- patch on argoproj.io Applications, for the argocd update strategy
   # (update.strategy: argocd).
   argocdApplicationsWrite: false
-  # -- Deprecated, no effect, removed in v0.11. The chart grants Job access
-  # for hooks (hooks.serviceAccounts) whatever this says. Kept so existing --set rbac.integrationTestJobs=...
-  # keeps passing the values schema.
-  integrationTestJobs: false
   userRoles:
     # -- ClusterRoles for users and automation: <fullname>-viewer, -promoter,
     # -approver and -admin (templates/user-roles.yaml). Bind them per namespace
@@ -529,14 +525,6 @@ render:
     # -- Egress rules (NetworkPolicyPeer lists with ports) for the git host,
     # e.g. [{to: [{ipBlock: {cidr: 140.82.112.0/20}}], ports: [{port: 443, protocol: TCP}]}].
     gitEgress: []
-
-# -- Deprecated, no effect, removed in v0.11. The CRD schemas validate the kardinal fields. The
-# chart always ships the identity ValidatingAdmissionPolicies
-# (templates/identity-admission.yaml), which pin the user a record names
-# (spec.rejected.by) to the requesting user; they cannot be turned off. Kept
-# so existing --set validatingAdmissionPolicy.enabled=... keeps working.
-validatingAdmissionPolicy:
-  enabled: true
 
 tracing:
   # -- Export OpenTelemetry traces over OTLP/HTTP (--tracing-enabled): spans for

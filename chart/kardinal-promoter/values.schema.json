@@ -461,10 +461,6 @@
         "argocdApplicationsWrite": {
           "type": "boolean"
         },
-        "integrationTestJobs": {
-          "type": "boolean",
-          "description": "Deprecated, no effect, removed in v0.11."
-        },
         "userRoles": {
           "type": "object",
           "additionalProperties": false,
@@ -561,16 +557,6 @@
           "description": "Pod Security Standard a hook's Pod must meet (--hook-pod-security-level)."
         }
       }
-    },
-    "validatingAdmissionPolicy": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        }
-      },
-      "description": "Deprecated, no effect."
     },
     "admission": {
       "type": "object",

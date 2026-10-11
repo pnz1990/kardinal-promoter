@@ -601,36 +601,6 @@ func TestLifecycle_TargetEnvironmentBundleFinishes(t *testing.T) {
 	assert.Zero(t, res.RequeueAfter)
 }
 
-// C02-bundle-07: a multi-region environment is Verified only when every
-// region is.
-func TestLifecycle_MultiRegionNeedsEveryRegion(t *testing.T) {
-	p := lcPipeline("app",
-		kardinalv1alpha1.EnvironmentSpec{Name: "test"},
-		kardinalv1alpha1.EnvironmentSpec{Name: "prod", Regions: []string{"us-east-1", "eu-west-1"}})
-	c := lcClient(p, lcBundle("app-v1", "image", "Promoting", time.Now().UTC().Add(-time.Hour)),
-		lcStep("app-v1", "test", "app-v1-test", "Verified"),
-		lcStep("app-v1", "prod", "app-v1-prod-us-east-1", "Verified"),
-		lcStep("app-v1", "prod", "app-v1-prod-eu-west-1", "WaitingForMerge"))
-	r := &bundle.Reconciler{Client: c}
-	lcReconcile(t, r, "app-v1")
-	got := lcGet(t, c, "app-v1")
-	assert.Equal(t, "Promoting", got.Status.Phase)
-	assert.Nil(t, got.Status.Metrics)
-	var prod *kardinalv1alpha1.EnvironmentStatus
-	for i := range got.Status.Environments {
-		if got.Status.Environments[i].Name == "prod" {
-			prod = &got.Status.Environments[i]
-		}
-	}
-	require.NotNil(t, prod)
-	assert.Equal(t, "WaitingForMerge", prod.Phase)
-	assert.Nil(t, prod.HealthCheckedAt)
-
-	lcSetStepState(t, c, "app-v1-prod-eu-west-1", "Verified")
-	lcReconcile(t, r, "app-v1")
-	assert.Equal(t, "Verified", lcGet(t, c, "app-v1").Status.Phase)
-}
-
 // C02-bundle-12: status.environments is written in promotion order.
 func TestLifecycle_EnvironmentsInPromotionOrder(t *testing.T) {
 	names := []string{"dev", "test", "qa", "uat", "staging", "perf", "canary", "prod"}

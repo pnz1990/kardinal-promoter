@@ -1276,10 +1276,10 @@ var gateStepCreated = metav1.NewTime(time.Date(2026, 3, 10, 12, 0, 0, 0, time.UT
 
 // requiredGate returns a PolicyGate with the given result, last evaluated at
 // evaluatedAt (nil: never evaluated).
-func requiredGate(name, when string, ready bool, evaluatedAt *metav1.Time) *v1alpha1.PolicyGate {
+func requiredGate(name, _ string, ready bool, evaluatedAt *metav1.Time) *v1alpha1.PolicyGate {
 	return &v1alpha1.PolicyGate{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Spec:       v1alpha1.PolicyGateSpec{Expression: "upstream.uat.soakMinutes >= 30", When: when}, //nolint:staticcheck // SA1019: when has no effect (#1323)
+		Spec:       v1alpha1.PolicyGateSpec{Expression: "upstream.uat.soakMinutes >= 30"},
 		Status:     v1alpha1.PolicyGateStatus{Ready: ready, LastEvaluatedAt: evaluatedAt},
 	}
 }

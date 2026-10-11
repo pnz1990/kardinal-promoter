@@ -227,62 +227,6 @@ spec:
                   value is raised to 10s, and "0" or an invalid value means the default.
                 pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                 type: string
-              selector:
-                description: |-
-                  Selector is not implemented: nothing reads it, and the API server rejects
-                  a PolicyGate that sets it. An org gate applies to the environments named
-                  in its kardinal.io/applies-to label.
-
-                  Deprecated: remove the field; use the kardinal.io/applies-to label.
-                  It is removed in v0.11.
-                properties:
-                  matchExpressions:
-                    description: matchExpressions is a list of label selector requirements.
-                      The requirements are ANDed.
-                    items:
-                      description: |-
-                        A label selector requirement is a selector that contains values, a key, and an operator that
-                        relates the key and values.
-                      properties:
-                        key:
-                          description: key is the label key that the selector applies
-                            to.
-                          type: string
-                        operator:
-                          description: |-
-                            operator represents a key's relationship to a set of values.
-                            Valid operators are In, NotIn, Exists and DoesNotExist.
-                          type: string
-                        values:
-                          description: |-
-                            values is an array of string values. If the operator is In or NotIn,
-                            the values array must be non-empty. If the operator is Exists or DoesNotExist,
-                            the values array must be empty. This array is replaced during a strategic
-                            merge patch.
-                          items:
-                            type: string
-                          type: array
-                          x-kubernetes-list-type: atomic
-                      required:
-                      - key
-                      - operator
-                      type: object
-                    type: array
-                    x-kubernetes-list-type: atomic
-                  matchLabels:
-                    additionalProperties:
-                      type: string
-                    description: |-
-                      matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
-                      map is equivalent to an element of matchExpressions, whose key field is "key", the
-                      operator is "In", and the values array contains only "value". The requirements are ANDed.
-                    type: object
-                type: object
-                x-kubernetes-map-type: atomic
-                x-kubernetes-validations:
-                - message: spec.selector is not implemented; use the kardinal.io/applies-to
-                    label
-                  rule: "false"
               skipPermission:
                 default: false
                 description: |-
@@ -295,23 +239,6 @@ spec:
                   environment the Bundle promotes, so that environment waits until it is true.
                   On any other gate this field has no effect.
                 type: boolean
-              when:
-                default: post-deploy
-                description: |-
-                  When has no effect. Every gate on an environment is re-checked right
-                  before that environment's PromotionStep starts: the step stays in
-                  Pending, with no git operation, until each gate it requires exists, is
-                  ready, and was evaluated at or after the step was created. A step that
-                  has started is not stopped by a gate that turns false later.
-
-                  Deprecated: remove this field. Every gate is re-checked before its
-                  PromotionStep starts, whatever the value; pre-deploy and post-deploy
-                  behave the same.
-                  It is removed in v0.11.
-                enum:
-                - pre-deploy
-                - post-deploy
-                type: string
             required:
             - expression
             type: object

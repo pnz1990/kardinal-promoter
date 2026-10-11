@@ -370,7 +370,7 @@ func TestDelivery_NoRetryBeforeNextRetryAt(t *testing.T) {
 	// API server does.
 	h := f.hook()
 	require.Equal(t, int64(1), h.Status.ObservedGeneration)
-	h.Spec.Webhook.AuthorizationHeader = "Bearer fixed" //nolint:staticcheck // SA1019: tests the deprecated field
+	h.Spec.Webhook.URL += "?fixed=1"
 	h.Generation = 2
 	require.NoError(t, f.c.Update(context.Background(), &h))
 	require.Equal(t, int64(2), f.hook().Generation)
@@ -511,8 +511,9 @@ func TestDelivery_URLTokenNotInStatusOrLogs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			hook := newHook(tt.url, v1alpha1.NotificationEventBundleFailed)
-			hook.Spec.Webhook.AuthorizationHeader = "Bearer SECRETHEADER" //nolint:staticcheck // SA1019: tests the deprecated field
-			f := newFixture(t, hook, failedBundle("app-v0", saturday))
+			hook.Spec.Webhook.SecretRef = &v1alpha1.NotificationSecretRef{Name: "hook-auth"}
+			f := newFixture(t, hook, failedBundle("app-v0", saturday),
+				webhookSecret("hook-auth", map[string]string{"authorization": "Bearer SECRETHEADER"}))
 
 			var logs bytes.Buffer
 			ctx := zerolog.New(&logs).WithContext(context.Background())

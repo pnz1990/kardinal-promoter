@@ -401,9 +401,7 @@ Webhook: **Repository settings → Webhooks → Create webhook**, URL
 A Pipeline without `spec.git.providerRef` uses the controller's SCM provider, chosen by
 `--scm-provider` (or `KARDINAL_SCM_PROVIDER`). To use another SCM, or another token, set
 `spec.git.providerRef` to a [ScmProvider or ClusterScmProvider](#several-scm-providers-scmprovider-and-clusterscmprovider).
-`spec.git.provider` is **deprecated and ignored**: it does not select a provider, and the
-CRD accepts only `github` or `gitlab` there. Leave it unset. The repository comes from
-`spec.git.url`.
+The repository comes from `spec.git.url`.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1

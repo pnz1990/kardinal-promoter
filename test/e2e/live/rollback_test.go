@@ -383,8 +383,8 @@ func TestRollback_PullRequest(t *testing.T) {
 
 // TestRollback_PolicyGates checks that a rollback Bundle passes through the
 // environment's PolicyGates like any Bundle: a gate that blocks rollbacks
-// holds it, with the gate's message, and the deprecated --emergency flag only
-// warns. A break-glass override lets the rollback through.
+// holds it, with the gate's message. A break-glass override lets the rollback
+// through.
 //
 // Covers RB-GATES-01.
 func TestRollback_PolicyGates(t *testing.T) {
@@ -406,9 +406,8 @@ func TestRollback_PolicyGates(t *testing.T) {
 	b2 := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
 	rbVerified(t, a, b2, "test")
 
-	out, rb := rbRollback(t, a, "test", "--emergency")
-	assert.Equal(t, "Flag --emergency has been deprecated, it has no effect and is removed in v0.11; use kardinal override to pass a blocking gate\n"+
-		rbOutput("test", b2, b1, imageV2, rb), out)
+	out, rb := rbRollback(t, a, "test")
+	assert.Equal(t, rbOutput("test", b2, b1, imageV2, rb), out)
 	gate := e.WaitGateReady(t, a.ns, rb, "test", "no-rollbacks", false, expr+" = false", gateTimeout)
 	assert.Equal(t, msg+" ("+expr+" = false; version "+fixtures.V2+")", gate.Status.Reason)
 	e.NoStep(t, a.ns, pipelineName, rb, "test", holdFor)

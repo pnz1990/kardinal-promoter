@@ -29,16 +29,6 @@ type PipelineSpec struct {
 	// +listMapKey=name
 	Environments []EnvironmentSpec `json:"environments"`
 
-	// PolicyGates is not implemented, and the API server rejects a non-empty
-	// list. Org gates apply through the kardinal.io/applies-to label.
-	//
-	// Deprecated: remove the field; label org PolicyGates with
-	// kardinal.io/applies-to instead.
-	// It is removed in v0.11.
-	// +kubebuilder:validation:XValidation:rule="size(self) == 0",message="spec.policyGates is not implemented; remove it (org gates use the kardinal.io/applies-to label)"
-	// +optional
-	PolicyGates []PipelinePolicyGateRef `json:"policyGates,omitempty"`
-
 	// Paused suspends all promotions in this pipeline when true.
 	// +kubebuilder:default=false
 	// +optional
@@ -119,16 +109,6 @@ type PipelineGit struct {
 	// +optional
 	Layout string `json:"layout,omitempty"`
 
-	// Provider is ignored: the controller's --scm-provider flag, or
-	// spec.git.providerRef, selects the provider.
-	//
-	// Deprecated: ignored; the controller's --scm-provider flag, or spec.git.providerRef,
-	// selects the provider.
-	// It is removed in v0.11.
-	// +kubebuilder:validation:Enum=github;gitlab
-	// +optional
-	Provider string `json:"provider,omitempty"`
-
 	// SecretRef references a Kubernetes Secret containing the SCM token.
 	// +optional
 	SecretRef *SecretRef `json:"secretRef,omitempty"`
@@ -159,8 +139,6 @@ type SecretRef struct {
 // EnvironmentSpec defines one environment in a Pipeline.
 // +kubebuilder:validation:XValidation:rule="!(has(self.update) && has(self.update.strategy) && self.update.strategy == 'argocd' && has(self.approval) && self.approval == 'pr-review')",message="environments[]: update.strategy argocd patches the Application directly and cannot honour approval: pr-review; use approval: auto with a PolicyGate, or a git-based strategy (kustomize or helm) for a reviewed promotion"
 // +kubebuilder:validation:XValidation:rule="!has(self.autoRollback)",message="environments[].autoRollback is not implemented; remove it (automatic rollback is configured with onHealthFailure, see docs/rollback.md)"
-// +kubebuilder:validation:XValidation:rule="!has(self.steps) || size(self.steps) == 0",message="environments[].steps is not supported: kardinal has no custom step engine and every environment runs the default step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)"
-// +kubebuilder:validation:XValidation:rule="!has(self.promotionTemplate)",message="environments[].promotionTemplate is deprecated and not supported: every environment runs the default step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)"
 // +kubebuilder:validation:XValidation:rule="!(self.name in ['api-version','kind','metadata','namespace','spec','status','graph','graphengine','kro','each','item','items','object','self','this','context','true','false','null','in','as','break','const','continue','else','for','function','if','import','let','loop','package','return','var','void','while','bundle','time'])",message="reserved environment name: the name becomes a kro Graph node ID; bundle, time, kro reserved IDs (spec, status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed; rename the environment"
 // +kubebuilder:validation:XValidation:rule="!has(self.pr) || (has(self.approval) && self.approval == 'pr-review')",message="environments[].pr configures the promotion pull request and needs approval: pr-review"
 type EnvironmentSpec struct {
@@ -225,17 +203,6 @@ type EnvironmentSpec struct {
 	// +optional
 	Fleet *FleetSpec `json:"fleet,omitempty"`
 
-	// Shard is deprecated and not supported. A non-empty value sets the
-	// Pipeline Ready=False (reason NotImplemented) and fails the environment's
-	// PromotionSteps with "shard is not supported".
-	//
-	// Deprecated: remove shard; the controller reconciles every environment.
-	// For workloads in other clusters, use health.kubeconfigSecretRef or the
-	// Argo CD or Flux hub (see docs/health-adapters.md#remote-clusters).
-	// It is removed in v0.11.
-	// +optional
-	Shard string `json:"shard,omitempty"`
-
 	// AutoRollback is reserved, and the API server rejects it: to roll back on
 	// a failed health check use onHealthFailure: rollback, and to roll back
 	// after consecutive failures create a RollbackPolicy.
@@ -273,28 +240,6 @@ type EnvironmentSpec struct {
 	// Render configures layout: branch.
 	// +optional
 	Render *RenderConfig `json:"render,omitempty"`
-
-	// Steps is not supported. kardinal has no custom step engine: every
-	// environment runs the default step sequence (see DefaultSequenceForBundle).
-	// The API server rejects a Pipeline that sets it, and so do Graph
-	// translation and "kardinal validate".
-	//
-	// Deprecated: remove it; the step sequence follows the Bundle type,
-	// update.strategy, approval and layout. See docs/pipeline-reference.md#promotion-steps.
-	// It is removed in v0.11.
-	//
-	// +optional
-	Steps []StepSpec `json:"steps,omitempty"`
-
-	// PromotionTemplate is deprecated and not supported. The API server rejects a Pipeline that sets it, and so do Graph
-	// translation and "kardinal validate".
-	//
-	// Deprecated: remove it; every environment runs the default step sequence.
-	// See docs/pipeline-reference.md#promotion-steps.
-	// It is removed in v0.11.
-	//
-	// +optional
-	PromotionTemplate *PromotionTemplateRef `json:"promotionTemplate,omitempty"`
 
 	// WaitForMergeTimeout is the maximum duration a PromotionStep will wait
 	// in the WaitingForMerge state before transitioning to Failed. When not set
@@ -346,17 +291,6 @@ type EnvironmentSpec struct {
 	// the Bundle fails (it never promotes unverified). See docs/analysis.md.
 	// +optional
 	Verification *VerificationSpec `json:"verification,omitempty"`
-
-	// Regions is not supported: every region would edit the same path and push
-	// the same branch. With two or more regions the Pipeline is Ready=False
-	// (reason NotImplemented) and every Bundle fails when its Graph is built
-	// with "regions is not supported". One region has no effect.
-	//
-	// Deprecated: declare one environment per region (prod-us, prod-eu) and
-	// use wave.
-	// It is removed in v0.11.
-	// +optional
-	Regions []string `json:"regions,omitempty"`
 }
 
 // PRConfig configures the pull request of a pr-review environment.
@@ -502,19 +436,6 @@ type AnalysisArg struct {
 	Value string `json:"value"`
 }
 
-// PromotionTemplateRef is the shape of the deprecated
-// spec.environments[].promotionTemplate field. A Pipeline that sets the field
-// is rejected.
-type PromotionTemplateRef struct {
-	// Name is the name of a PromotionTemplate.
-	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
-
-	// Namespace is the namespace of the PromotionTemplate.
-	// +optional
-	Namespace string `json:"namespace,omitempty"`
-}
-
 // AutoRollbackSpec is reserved for a consecutive-failure rollback policy. It is
 // not implemented, and EnvironmentSpec rejects it; see OnHealthFailure.
 type AutoRollbackSpec struct {
@@ -575,18 +496,6 @@ type WebhookConfig struct {
 	// sent as the Authorization header.
 	// +optional
 	SecretRef *SecretRef `json:"secretRef,omitempty"`
-}
-
-// StepSpec is the shape of the deprecated spec.environments[].steps field. A
-// Pipeline that sets steps is rejected; see EnvironmentSpec.Steps.
-type StepSpec struct {
-	// Uses names a step.
-	// +kubebuilder:validation:MinLength=1
-	Uses string `json:"uses"`
-
-	// Webhook is deprecated: nothing reads this field.
-	// +optional
-	Webhook *WebhookConfig `json:"webhook,omitempty"`
 }
 
 // UpdateConfig holds manifest update strategy configuration.
@@ -905,18 +814,6 @@ type HealthConfig struct {
 	// +optional
 	Timeout string `json:"timeout,omitempty"`
 
-	// Cluster is not supported: use kubeconfigSecretRef. A non-empty value sets
-	// the Pipeline Ready=False (reason NotImplemented) and fails the
-	// PromotionStep with "health.cluster is not supported".
-	//
-	// Deprecated: remove cluster. To verify a workload in another cluster,
-	// set kubeconfigSecretRef, or check its Argo CD Application
-	// (health.type: argocd) or Flux Kustomization (health.type: flux) in the
-	// hub cluster kardinal runs in; see docs/health-adapters.md#remote-clusters.
-	// It is removed in v0.11.
-	// +optional
-	Cluster string `json:"cluster,omitempty"`
-
 	// KubeconfigSecretRef runs the health check against another cluster: the
 	// one the kubeconfig in this Secret key selects (its current context).
 	// The Secret must be in the Pipeline's namespace. Every health type reads
@@ -1141,18 +1038,6 @@ type EnvironmentHold struct {
 	// The gate exemption applies only while the Bundle still has them.
 	// +optional
 	Artifacts string `json:"artifacts,omitempty"`
-}
-
-// PipelinePolicyGateRef is a reference to a PolicyGate that must pass before
-// any promotion in this pipeline can proceed.
-type PipelinePolicyGateRef struct {
-	// Name is the PolicyGate resource name.
-	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
-
-	// Namespace is the PolicyGate resource namespace.
-	// +optional
-	Namespace string `json:"namespace,omitempty"`
 }
 
 // PipelineStatus defines the observed state of a Pipeline.

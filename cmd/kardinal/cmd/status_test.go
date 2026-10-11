@@ -174,7 +174,6 @@ func TestStatusPipelineWriter_BlockingOnlyWhenReached(t *testing.T) {
 	}
 	postDeploy := func() *v1alpha1.PolicyGate {
 		g := soak()
-		g.Spec.When = "post-deploy" //nolint:staticcheck // SA1019: when has no effect (#1323)
 		return g
 	}
 	// prodStep is the prod step waiting on the soak gate, the way the Graph

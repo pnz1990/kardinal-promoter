@@ -175,9 +175,8 @@ type pipelineStatus struct {
 	// Warnings are the WARNING: lines after the table (a Rejected Bundle
 	// whose change is live).
 	Warnings []string `json:"warnings,omitempty"`
-	// Regions is, per environment that has one, its region (spec regions)
-	// or the cluster its health check reads (health.kubeconfigSecretRef,
-	// or the deprecated health.cluster).
+	// Regions is, per environment that has one, the cluster its health
+	// check reads (the health.kubeconfigSecretRef Secret).
 	Regions map[string]string `json:"regions,omitempty"`
 	// activeSteps is, with -o wide, the sub-step each environment's newest
 	// step is on.
@@ -304,21 +303,14 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 	return view, nil
 }
 
-// environmentRegions is, per environment of p that has one, its region
-// (spec regions, deprecated) or the cluster its health check reads: the
-// kubeconfig Secret of health.kubeconfigSecretRef, or the deprecated
-// health.cluster. nil when no environment has one: the REGION column is
-// then hidden.
+// environmentRegions is, per environment of p that has one, the cluster its
+// health check reads: the kubeconfig Secret of health.kubeconfigSecretRef.
+// nil when no environment has one: the REGION column is then hidden.
 func environmentRegions(p *v1alpha1.Pipeline) map[string]string {
 	out := map[string]string{}
 	for _, e := range p.Spec.Environments {
-		switch {
-		case len(e.Regions) > 0: //nolint:staticcheck // SA1019: shows the deprecated regions of an old Pipeline
-			out[e.Name] = strings.Join(e.Regions, ", ") //nolint:staticcheck // SA1019: as above
-		case e.Health.KubeconfigSecretRef != nil:
+		if e.Health.KubeconfigSecretRef != nil {
 			out[e.Name] = e.Health.KubeconfigSecretRef.Name
-		case e.Health.Cluster != "": //nolint:staticcheck // SA1019: shows the deprecated cluster of an old Pipeline
-			out[e.Name] = e.Health.Cluster //nolint:staticcheck // SA1019: as above
 		}
 	}
 	if len(out) == 0 {
@@ -494,8 +486,7 @@ status.environments, which the controller writes:
   PR        the pull request it waits for, while it waits for its merge
 
 REGION, after ENVIRONMENT, shows where each environment runs when one of
-them says: its region (spec regions) or the cluster its health check reads
-(the health.kubeconfigSecretRef Secret). -o wide adds ACTIVE STEP, the step
+them health-checks another cluster: the health.kubeconfigSecretRef Secret. -o wide adds ACTIVE STEP, the step
 the newest Bundle there is on (git-clone, open-pr, health-check, ...).
 
 Then the gates holding a version back, with their CEL expression cut to 40

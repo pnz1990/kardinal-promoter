@@ -15,13 +15,14 @@ is checked. Other objects (a Namespace, another API group's Pipeline) are
 skipped with a note.
 
 Checks:
+  - Every document: no field the CRD does not define (kubectl apply's strict
+    field validation refuses it), named with its path.
   - Pipeline: at least one environment, every environment named, spec.git.url
     set, the environment dependencies form a valid graph (no cycles, no
     unknown dependsOn), and no reserved field that is not implemented is set
-    (steps, promotionTemplate, autoRollback, two or more regions,
-    layout: branch, health.cluster, a health.resource.kind other than
-    Deployment). The controller reports the same fields as
-    Ready=False/NotImplemented on the Pipeline. With metadata.namespace set,
+    (autoRollback, a health.resource.kind other than Deployment). The
+    controller reports the same fields as Ready=False/NotImplemented on the
+    Pipeline. With metadata.namespace set,
     a git.secretRef in another namespace is an error too (the controller
     reports it as Ready=False/ValidationFailed). With
     --allowed-repositories (the controller's scm.allowedRepositories), a
@@ -29,13 +30,10 @@ Checks:
     the controller's SCM token: a git.secretRef and no pr-review
     environment (the controller reports Ready=False/RepositoryNotAllowed);
     with --scm-provider bitbucket-datacenter a URL is matched as KEY/slug,
-    as the controller does. spec.policyGates is an
-    error (the API server rejects it); spec.git.provider is a warning (the
-    controller ignores it).
+    as the controller does.
   - PolicyGate: spec.expression set and compiles with the controller's
-    PolicyGate CEL environment; no spec.selector and a name of at most 63
-    characters (the API server rejects both); spec.when is a warning (it has
-    no effect)
+    PolicyGate CEL environment, and a name of at most 63 characters (the API
+    server rejects a longer one)
 
 This is not full CRD schema validation; 'kubectl apply --dry-run=server'
 checks the schema.

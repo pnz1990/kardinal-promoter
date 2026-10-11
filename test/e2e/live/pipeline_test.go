@@ -123,14 +123,10 @@ func TestPipeline_ValidationFailed(t *testing.T) {
 	assert.Equal(t, len(before), len(after), "nothing is committed")
 }
 
-// TestPipeline_NotImplemented checks the fields the controller accepts but
-// does not implement. Each Pipeline sets one of shard, health.cluster and
-// two regions. Each gets Ready=False NotImplemented with the documented
-// message, and its Bundle fails with it: the step for shard and
-// health.cluster, the Graph build (InvalidSpec) for regions.
-// Nothing is committed. A health.resource.kind other than Deployment fails
-// the same way, before any git change: docs/pipeline-reference.md said it
-// failed the step after the change merged, during the health check.
+// TestPipeline_NotImplemented checks a value the controller accepts but does
+// not implement: a health.resource.kind other than Deployment. The Pipeline
+// gets Ready=False NotImplemented with the documented message, and its
+// Bundle's step fails with it before any git change: nothing is committed.
 //
 // Covers PIPE-NOTIMPL-01.
 func TestPipeline_NotImplemented(t *testing.T) {
@@ -143,39 +139,14 @@ func TestPipeline_NotImplemented(t *testing.T) {
 	before, err := gitserver.Commits(ctx, e.Git, a.repo, a.repo.Branch, 10)
 	require.NoError(t, err)
 
-	const prefix = "not implemented or not supported, so a Bundle fails when it reaches an environment that uses one " +
-		"(steps, promotionTemplate and two or more regions fail it when its Graph is built): "
+	const prefix = "not implemented or not supported, so a Bundle fails when it reaches an environment that uses one: "
 	const kindMsg = `health.resource.kind "StatefulSet" is not supported: only Deployment is checked`
 	cases := []struct {
 		name string
 		set  func(p *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec)
-		// ready is in the Ready message; step is the failed step's message,
-		// or bundle the Bundle's InvalidSpec message when no step runs.
-		ready, step, bundle string
+		// ready is in the Ready message; step is the failed step's message.
+		ready, step string
 	}{{
-		name: "shard",
-		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
-			env.Shard = "eu" //nolint:staticcheck // SA1019: set to check it is refused
-		},
-		ready: `environment "test": shard is not supported; remove shard`,
-		step: "shard is not supported; remove shard from the environment and the controller reconciles it " +
-			"(to split work between controllers use --namespace-shard, see docs/sharding.md; for other clusters " +
-			"see docs/health-adapters.md#remote-clusters)",
-	}, {
-		name: "cluster",
-		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
-			env.Health.Cluster = "remote" //nolint:staticcheck // SA1019: set to check it is refused
-		},
-		ready: `environment "test": health.cluster is not supported: to check a workload in another cluster set health.kubeconfigSecretRef`,
-		step:  "health.cluster is not supported: to check a workload in another cluster set health.kubeconfigSecretRef to a kubeconfig Secret",
-	}, {
-		name: "regions",
-		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
-			env.Regions = []string{"us", "eu"} //nolint:staticcheck // SA1019: set to check it is refused
-		},
-		ready:  `environment "test": regions is not supported; declare one environment per region (prod-us, prod-eu) and use wave`,
-		bundle: "regions is not supported; declare one environment per region (prod-us, prod-eu) and use wave",
-	}, {
 		name: "kind",
 		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
 			env.Health = v1alpha1.HealthConfig{Type: "resource",
@@ -197,14 +168,6 @@ func TestPipeline_NotImplemented(t *testing.T) {
 		assert.Contains(t, msg, c.ready, c.name)
 
 		bundle := e.CreateBundle(t, ns, c.name, "--image", imageV2)
-		if c.bundle != "" {
-			b := e.WaitBundle(t, ns, bundle, time.Minute, "Failed with InvalidSpec", failedWith("", c.bundle))
-			assert.Empty(t, b.Status.GraphRef, "%s: no Graph is built", c.name)
-			steps, err := e.Steps(ctx, ns, c.name, bundle)
-			require.NoError(t, err)
-			assert.Empty(t, steps, "%s: no step", c.name)
-			continue
-		}
 		ps := e.WaitStepState(t, ns, c.name, bundle, "test", "Failed", time.Minute)
 		assert.Contains(t, ps.Status.Message, c.step, c.name)
 		e.WaitBundlePhase(t, ns, bundle, "Failed", time.Minute)
@@ -215,9 +178,9 @@ func TestPipeline_NotImplemented(t *testing.T) {
 }
 
 // TestPipeline_RejectedFields checks what the API server refuses at apply
-// time, each with a message that says what to do: a non-empty steps list,
-// promotionTemplate, autoRollback, update.strategy argocd with approval
-// pr-review, a non-empty spec.policyGates, and reserved environment names.
+// time, each with a message that says what to do: autoRollback,
+// update.strategy argocd with approval pr-review, and reserved environment
+// names.
 //
 // Covers PIPE-REJECT-01.
 func TestPipeline_RejectedFields(t *testing.T) {
@@ -232,20 +195,6 @@ func TestPipeline_RejectedFields(t *testing.T) {
 		set  func(p *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec)
 		want string
 	}{{
-		name: "steps",
-		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
-			env.Steps = []v1alpha1.StepSpec{{Uses: "git-clone"}} //nolint:staticcheck // SA1019: set to check it is rejected
-		},
-		want: "environments[].steps is not supported: kardinal has no custom step engine and every environment runs the " +
-			"default step sequence; remove it",
-	}, {
-		name: "promotionTemplate",
-		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
-			env.PromotionTemplate = &v1alpha1.PromotionTemplateRef{Name: "default"} //nolint:staticcheck // SA1019: set to check it is rejected
-		},
-		want: "environments[].promotionTemplate is deprecated and not supported: every " +
-			"environment runs the default step sequence; remove it",
-	}, {
 		name: "autoRollback",
 		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
 			env.AutoRollback = &v1alpha1.AutoRollbackSpec{FailureThreshold: 3} //nolint:staticcheck // SA1019: set to check it is rejected
@@ -260,12 +209,6 @@ func TestPipeline_RejectedFields(t *testing.T) {
 		},
 		want: "environments[]: update.strategy argocd patches the Application directly and cannot honour approval: " +
 			"pr-review; use approval: auto with a PolicyGate, or a git-based strategy (kustomize or helm) for a reviewed promotion",
-	}, {
-		name: "policyGates",
-		set: func(p *v1alpha1.Pipeline, _ *v1alpha1.EnvironmentSpec) {
-			p.Spec.PolicyGates = []v1alpha1.PipelinePolicyGateRef{{Name: "no-weekend-deploys"}} //nolint:staticcheck // SA1019: set to check it is rejected
-		},
-		want: "spec.policyGates is not implemented; remove it (org gates use the kardinal.io/applies-to label)",
 	}}
 	for _, name := range []string{"bundle", "time", "spec", "self", "true", "kro"} {
 		cases = append(cases, struct {

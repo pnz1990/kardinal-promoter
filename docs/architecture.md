@@ -121,9 +121,7 @@ Built-in step implementations:
 | `wait-for-merge` | Polls `PRStatus` until the PR is merged or closed |
 | `health-check` | Queries Kubernetes Deployment readiness or ArgoCD/Flux/Rollouts/Flagger sync status |
 
-There is no custom step engine: every environment runs one of these sequences, and the API
-server rejects a Pipeline that sets the deprecated `spec.environments[].steps` or
-`promotionTemplate`. For image signature
+There is no custom step engine: every environment runs one of these sequences. For image signature
 checks and tests, see [Pipeline Reference: Image signatures and tests](pipeline-reference.md#image-signatures-and-tests).
 
 ### PolicyGate Evaluator (`pkg/reconciler/policygate`)

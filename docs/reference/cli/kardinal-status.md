@@ -31,8 +31,7 @@ status.environments, which the controller writes:
   PR        the pull request it waits for, while it waits for its merge
 
 REGION, after ENVIRONMENT, shows where each environment runs when one of
-them says: its region (spec regions) or the cluster its health check reads
-(the health.kubeconfigSecretRef Secret). -o wide adds ACTIVE STEP, the step
+them health-checks another cluster: the health.kubeconfigSecretRef Secret. -o wide adds ACTIVE STEP, the step
 the newest Bundle there is on (git-clone, open-pr, health-check, ...).
 
 Then the gates holding a version back, with their CEL expression cut to 40

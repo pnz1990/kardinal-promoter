@@ -150,27 +150,10 @@ func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
 		mutate  func(p *kardinalv1alpha1.Pipeline)
 		wantMsg string
 	}{
-		{name: "steps", wantMsg: "spec.environments[].steps is not supported",
-			mutate: func(p *kardinalv1alpha1.Pipeline) {
-				p.Spec.Environments[0].Steps = []kardinalv1alpha1.StepSpec{{Uses: "git-clone"}} //nolint:staticcheck // SA1019: the test sets the deprecated field
-			}},
-		{name: "promotionTemplate", wantMsg: "spec.environments[].promotionTemplate is not supported",
-			mutate: func(p *kardinalv1alpha1.Pipeline) {
-				p.Spec.Environments[0].PromotionTemplate = &kardinalv1alpha1.PromotionTemplateRef{Name: "t"} //nolint:staticcheck // SA1019: the test sets the deprecated field
-			}},
-		{name: "two regions", wantMsg: `environment "test": regions is not supported; declare one environment per region`,
-			mutate: func(p *kardinalv1alpha1.Pipeline) {
-				p.Spec.Environments[0].Regions = []string{"us-east-1", "eu-west-1"} //nolint:staticcheck // SA1019: tests the rejection
-			}},
-		// #1321: distributed mode was removed, so a shard is rejected.
-		{name: "shard", wantMsg: `environment "test": shard is not supported; remove shard`,
-			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Shard = "eu" }}, //nolint:staticcheck // SA1019: tests the rejection
 		{name: "autoRollback", wantMsg: "autoRollback is not implemented",
 			mutate: func(p *kardinalv1alpha1.Pipeline) {
 				p.Spec.Environments[0].AutoRollback = &kardinalv1alpha1.AutoRollbackSpec{}
 			}},
-		{name: "health.cluster", wantMsg: `environment "test": health.cluster is not supported`,
-			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Health.Cluster = "prod-eu" }}, //nolint:staticcheck // SA1019: tests the rejection
 		{name: "health.resource.kind", wantMsg: `environment "test": health.resource.kind "StatefulSet" is not supported`,
 			mutate: func(p *kardinalv1alpha1.Pipeline) {
 				p.Spec.Environments[0].Health.Resource = &kardinalv1alpha1.ResourceRef{Kind: "StatefulSet"}
@@ -197,8 +180,7 @@ func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
 			// Most fields fail a Bundle only in the environment that sets them.
 			assert.NotContains(t, cond.Message, "every Bundle")
 			assert.True(t, strings.HasPrefix(cond.Message, "not implemented or not supported, so a Bundle fails "+
-				"when it reaches an environment that uses one (steps, promotionTemplate and two or more regions "+
-				"fail it when its Graph is built): "),
+				"when it reaches an environment that uses one: "),
 				cond.Message)
 		})
 	}
