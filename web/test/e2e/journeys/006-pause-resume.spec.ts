@@ -43,7 +43,7 @@ test.describe('Journey 006 — Pause and Resume pipeline', () => {
 
     await expect(dialog).toBeHidden()
     // The header says Paused; the map carries a hatched band (U2).
-    await expect(page.locator('.pipeline-head__state')).toHaveText('Paused')
+    await expect(page.getByText(/PAUSED — no new promotions/)).toBeVisible()
     await expect(page.getByRole('status').filter({ hasText: 'Paused · no new promotions' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Resume pipeline' })).toBeVisible()
   })

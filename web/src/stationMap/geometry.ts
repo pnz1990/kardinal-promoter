@@ -187,7 +187,7 @@ function detailTextWidth(st: Station): number {
     st.env.length * NAME_CH,
     ((st.running?.version.length ?? 16) + 8) * MONO_CH,
     st.incoming ? (st.incoming.version.length + 2) * MONO_CH : 0,
-    st.incoming ? (st.incoming.display.label.length + 6) * MONO_CH : 0,
+    st.incoming ? (st.incoming.display.label.length + 10) * MONO_CH : 0,
   ]
   return Math.max(...lines)
 }

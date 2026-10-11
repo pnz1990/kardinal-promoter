@@ -221,6 +221,11 @@ function expandedTopology(p: Pipeline, graph?: GraphResponse) {
       if (n.type !== 'PromotionStep') continue
       ups.set(n.environment, new Set(stepUps(n.id)))
     }
+    // An environment with gates but no step yet (an older controller sends none) is a station too.
+    for (const n of graph.nodes) {
+      if (n.type !== 'PolicyGate' || !n.environment || ups.has(n.environment)) continue
+      ups.set(n.environment, new Set(stepUps(n.id)))
+    }
     for (const [name, u] of ups) out.push({ name, upstreams: [...u] })
   }
   if (out.length === 0) {

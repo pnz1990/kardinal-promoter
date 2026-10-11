@@ -36,7 +36,7 @@ test.describe('Journey 017 — Station map', () => {
     await expect(prod).toHaveAttribute('aria-label', /^prod — Held by gate no-weekend-deploys, runs sha-9f8e7d6, .* ago, incoming sha-abc1234, blocked by no-weekend-deploys$/)
     await expect(prod).toContainText('sha-9f8e7d6')
     await expect(prod.locator('.station__incoming').nth(0)).toHaveText('→ sha-abc1234')
-    await expect(prod.locator('.station__incoming').nth(1)).toHaveText('Held by gate no-weekend-deploys · #42')
+    await expect(prod.locator('.station__incoming').nth(1)).toHaveText('Held by gate no-weekend-deploys · PR #42')
     await expect(page.locator('[data-station="uat"]')).toContainText('sha-abc1234')
     const gate = page.getByRole('button', { name: 'gate no-weekend-deploys, Blocking' })
     await expect(gate).toBeVisible()
@@ -62,6 +62,27 @@ test.describe('Journey 017 — Station map', () => {
     await page.getByLabel('Close').click()
     await expect(page.getByLabel('Close')).toBeHidden()
     await expect(uat).toBeFocused()
+  })
+
+  test('keyboard: / searches the map, not the page; Esc clears the map first, then closes the drawer', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await open(page, 'kardinal-test-app', 'default')
+    await page.locator('[data-station="uat"]').click()
+    const drawer = page.getByTestId('stage-drawer')
+    await expect(drawer).toBeVisible()
+    await page.locator('[data-station="uat"]').focus()
+    await page.keyboard.press('/')
+    const search = page.getByRole('searchbox', { name: /Search environments/ })
+    await expect(search).toBeFocused()
+    await search.fill('prod')
+    await page.locator('[data-station="uat"]').focus()
+    // The first Esc clears the map's search; the drawer stays open.
+    await page.keyboard.press('Escape')
+    await expect(search).toHaveValue('')
+    await expect(drawer).toBeVisible()
+    // The next Esc is the page's: it closes the drawer.
+    await page.keyboard.press('Escape')
+    await expect(drawer).toBeHidden()
   })
 
   test('keyboard: arrows move between stations, Enter opens one', async ({ page }) => {

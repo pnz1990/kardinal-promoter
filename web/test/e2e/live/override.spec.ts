@@ -40,14 +40,19 @@ test('a gate that holds the bundle offers no approve or override control', async
   await openPipeline(page, base, ns)
   await expect(gateMark(page, holdGate)).toHaveAttribute('data-tone', 'blocked')
 
-  // The Policy Gates panel (Gates tab) opens by itself while the gate holds the bundle.
-  await page.getByRole('tab', { name: /^Gates/ }).click()
+  // The version's gates are on the Activity tab.
+  await page.getByRole('tab', { name: /^Activity/ }).click()
+  // The Policy Gates panel opens by itself while the gate holds the bundle.
   const toggle = page.getByRole('button', { name: /Policy Gates \(1\)/ })
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
   await expect(toggle).toContainText('1 blocked')
   const panel = toggle.locator('..')
   const hold = panel.locator(':scope > div > div').filter({ has: page.getByText(holdInstance, { exact: true }) })
   await expect(hold.locator('.health-chip')).toContainText('Block')
+  await expectNoOverrideControl(page)
+
+  await page.getByRole('tab', { name: 'Map' }).click()
+  await expect(gateMark(page, holdGate)).toHaveAttribute('data-tone', 'blocked')
   await expectNoOverrideControl(page)
 
   await page.getByRole('tab', { name: 'Map' }).click()

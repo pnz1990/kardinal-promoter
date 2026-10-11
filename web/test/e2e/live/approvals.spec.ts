@@ -21,7 +21,7 @@ const outsider = need('KARDINAL_UI_OUTSIDER')
 
 test('an approval gate shows its quorum and who approved', async ({ page }) => {
   await openPipeline(page, base, ns)
-  await page.getByRole('tab', { name: /^Gates/ }).click() // the gates are in the Gates tab (U2)
+  await page.getByRole('tab', { name: /^Activity/ }).click() // the version's gates are on the Activity tab
   const meter = page.getByRole('meter', { name: 'Approvals' })
   await expect(meter).toBeVisible() // the gate holds the Bundle: the panel is open
   await expect(meter).toHaveAttribute('aria-valuetext', '1 of 2 approvals')

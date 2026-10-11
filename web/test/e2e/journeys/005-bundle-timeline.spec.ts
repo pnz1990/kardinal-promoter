@@ -13,12 +13,10 @@ test.describe('Journey 005 — Bundle timeline interaction', () => {
     await page.waitForTimeout(800) // wait for bundle data
   })
 
-  test('Step 1: Bundle timeline shows bundle history header', async ({ page }) => {
-    // The bundle list lives in the History tab (U2), which counts the bundles.
-    const history = page.getByRole('tab', { name: /^History 3$/ })
-    await expect(history).toBeVisible()
-    await history.click()
-    await expect(page.getByRole('button', { name: /Bundle history/i })).toBeVisible()
+  test('Step 1: Bundle timeline shows bundle history header, and the History tab lists them', async ({ page }) => {
+    await expect(page.getByText(/Bundle history \(newest/i)).toBeVisible()
+    await page.getByRole('tab', { name: /^Versions/ }).click()
+    await expect(page.getByRole('list', { name: 'Versions' }).getByRole('listitem')).toHaveCount(3)
   })
 
   test('Step 2: Bundle timeline shows bundle phase', async ({ page }) => {

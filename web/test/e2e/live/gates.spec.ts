@@ -39,9 +39,9 @@ test('a gate that holds the bundle shows in the attention strip, on the map and 
   await blockedItem(page).click()
   await expect(station(page, 'prod')).toBeFocused()
 
-  // The Gates tab says how many block; its panel opens by itself while one does.
-  await expect(page.getByRole('tab', { name: /^Gates 1 blocked$/ })).toBeVisible()
-  await page.getByRole('tab', { name: /^Gates/ }).click()
+  // The version's gates are on the Activity tab.
+  await page.getByRole('tab', { name: /^Activity/ }).click()
+  // The panel opens by itself while a gate holds the bundle.
   const toggle = page.getByRole('button', { name: /Policy Gates \(2\)/ })
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
   await expect(toggle).toContainText('1 blocked')

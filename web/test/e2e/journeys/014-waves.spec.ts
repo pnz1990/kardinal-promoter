@@ -120,6 +120,7 @@ test.describe('Journey 014 — Waves', () => {
     const axe = await new AxeBuilder({ page }).include('.station-map').withTags(['wcag2a', 'wcag2aa']).analyze()
     expect(axe.violations.map(v => `${v.id}: ${v.nodes[0]?.target[0]}`)).toEqual([])
 
+    // The release metrics are the Metrics tab.
     await page.getByRole('tab', { name: 'Metrics' }).click()
     const metrics = page.getByRole('region', { name: 'Release metrics' })
     await expect(metrics).toContainText('Time to all 149 final envs')

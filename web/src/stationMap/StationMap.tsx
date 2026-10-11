@@ -18,6 +18,7 @@ import {
 import { useMapViewport } from './useMapViewport'
 import { ageOf } from '../fleetModel'
 import { prNumberFromURL } from '../prLink'
+import { Icon } from '../ui'
 import '../styles/StationMap.css'
 
 export interface StationMapProps {
@@ -49,6 +50,9 @@ const GATE_LABEL_H = 16
 /** The minimap's width and its inset from the map's corner (--k-space-3). */
 const MINIMAP_W = 160
 const MINIMAP_INSET = 12
+/** How long a gate's popover stays after the pointer leaves, so it can be reached (ms). */
+const POPOVER_HIDE_MS = 150
+
 /** The leader from a gate's label down to its bar. */
 const GATE_LEADER = 8
 
@@ -65,6 +69,18 @@ export default function StationMap(props: StationMapProps) {
   const [hit, setHit] = useState(0)
   const [cursor, setCursor] = useState<string | undefined>(undefined)
   const [popover, setPopover] = useState<{ gate: GateMark; env: string; x: number; y: number } | null>(null)
+  // The popover hides a moment after the pointer leaves the gate (or the popover), so it can be
+  // reached. Every hover end replaces the pending timer: two in a row never orphan one.
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const cancelHide = useCallback(() => {
+    if (hideTimer.current !== null) { clearTimeout(hideTimer.current); hideTimer.current = null }
+  }, [])
+  const showPopover = useCallback((p: { gate: GateMark; env: string; x: number; y: number }) => { cancelHide(); setPopover(p) }, [cancelHide])
+  const hidePopover = useCallback(() => {
+    cancelHide()
+    hideTimer.current = setTimeout(() => { hideTimer.current = null; setPopover(null) }, POPOVER_HIDE_MS)
+  }, [cancelHide])
+  useEffect(() => cancelHide, [cancelHide])
   const patternId = useId().replace(/:/g, '')
   const [announce, setAnnounce] = useState('')
 
@@ -84,6 +100,8 @@ export default function StationMap(props: StationMapProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [topoKey, layoutLevel])
   const vp = useMapViewport(svgRef, lay.bounds, level0)
+  // Map text is counter-scaled by the zoom (StationMap.css reads --map-k).
+  useEffect(() => { svgRef.current?.style.setProperty('--map-k', String(vp.view.k)) }, [vp.view.k])
   useEffect(() => {
     if (vp.level !== layoutLevel) {
       setLayoutLevel(vp.level)
@@ -204,6 +222,8 @@ export default function StationMap(props: StationMapProps) {
     return gridCells(g, gridOrder(g, model.stations), boxOf(gp), level)
   }
 
+  // A first Esc on the map was the map's; the next one is the page's.
+  const escArmed = useRef(false)
   const onKeyDown = (e: React.KeyboardEvent<SVGSVGElement>) => {
     const id = active
     if (!id) return
@@ -273,11 +293,19 @@ export default function StationMap(props: StationMapProps) {
       case '+': case '=': e.preventDefault(); vp.zoomBy(1.25); break
       case '-': case '_': e.preventDefault(); vp.zoomBy(0.8); break
       case '0': e.preventDefault(); vp.fit(); break
-      case '/': e.preventDefault(); searchRef.current?.focus(); break
+      // The map's own search, not the page's: the event stops here (the page's
+      // shortcuts listen on the document).
+      case '/': e.preventDefault(); e.stopPropagation(); searchRef.current?.focus(); break
       case 'Escape':
-        if (query) { setQuery(''); e.preventDefault() } else vp.fit()
-        break
+        // Esc first clears what the map holds (its search, a popover, the zoom);
+        // only the next Esc goes on to the page (it closes the stage drawer).
+        if (query) { setQuery(''); e.preventDefault(); e.stopPropagation(); escArmed.current = true }
+        else if (popover) { cancelHide(); setPopover(null); e.stopPropagation(); escArmed.current = true }
+        else if (!escArmed.current) { vp.fit(); e.stopPropagation(); escArmed.current = true }
+        else escArmed.current = false
+        return
     }
+    escArmed.current = false
   }
 
   const att = model.attention
@@ -334,7 +362,7 @@ export default function StationMap(props: StationMapProps) {
       </p>
       <svg ref={svgRef} className="station-map__svg" viewBox={vp.viewBox} role="group" aria-roledescription="pipeline map"
         aria-describedby={descId} tabIndex={-1} onKeyDown={onKeyDown} {...vp.handlers}
-        style={{ ['--map-k' as string]: vp.view.k } as React.CSSProperties}>
+>
         <defs>
           {/* A held cell is hatched: its state reads by shape as well as colour. */}
           <pattern id={`${patternId}-hatch`} width={GRAPH.grid.cell / 2} height={GRAPH.grid.cell / 2} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
@@ -421,15 +449,15 @@ export default function StationMap(props: StationMapProps) {
               return (
                 <g key={`${to}:${g.id}`} className="station-map__gate" data-tone={g.display.tone} data-gate={g.name}
                   tabIndex={0} role="button" aria-label={`gate ${g.name}, ${g.display.label}${g.approval ? `, ${g.approval.approved} of ${g.approval.required} approvals` : ''}`}
-                  onPointerEnter={() => setPopover({ gate: g, env, x: p.x, y: p.y })}
-                  onPointerLeave={() => setPopover(null)}
-                  onFocus={() => setPopover({ gate: g, env, x: p.x, y: p.y })}
-                  onBlur={() => setPopover(null)}
+                  onPointerEnter={() => showPopover({ gate: g, env, x: p.x, y: p.y })}
+                  onPointerLeave={hidePopover}
+                  onFocus={() => showPopover({ gate: g, env, x: p.x, y: p.y })}
+                  onBlur={() => { cancelHide(); setPopover(null) }}
                   onKeyDown={e => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault(); e.stopPropagation()
                       if (onOpenGate) onOpenGate(g.id); else onOpenStage(env, 'why')
-                    } else if (e.key === 'Escape') { e.stopPropagation(); setPopover(null) }
+                    } else if (e.key === 'Escape') { e.stopPropagation(); cancelHide(); setPopover(null) }
                   }}
                   onClick={e => { e.stopPropagation(); if (onOpenGate) onOpenGate(g.id); else onOpenStage(env, 'why') }}>
                   {/* The hit area covers the mark and its label, so a click anywhere on the gate lands. */}
@@ -475,7 +503,8 @@ export default function StationMap(props: StationMapProps) {
           </g>
         )}
       </svg>
-      {popover && <GatePopover {...popover} view={vp.view} />}
+      {popover && <GatePopover {...popover} view={vp.view} onPointerEnter={cancelHide} onPointerLeave={hidePopover} />}
+      <MapLegend />
       <Minimap lay={lay} view={vp.view} size={vp.size} model={model} onCentre={vp.centre} show={level !== 'detail' || total > 8} />
       <div className="sr-only" aria-live="polite">{announce}</div>
     </div>
@@ -586,7 +615,7 @@ function StationGlyph({ p, st, level, model, focusable, focused, dim, chain, onO
         <>
           <text x={x - r} y={y + r + line * 2} className="station__incoming" data-tone={tone}>{clip(`→ ${st.incoming.version}`, detailChars(p))}</text>
           <text x={x - r} y={y + r + line * 3} className="station__incoming" data-tone={tone}>
-            {clip(`${st.display.label}${pr ? ` · ${pr}` : ''}`, detailChars(p))}
+            {clip(`${st.display.label}${pr ? ` · PR ${pr}` : ''}`, detailChars(p))}
           </text>
         </>
       )}
@@ -688,19 +717,54 @@ function GroupGlyph({ p, g, expanded, model, level, active, focusedEnv, matchSet
   )
 }
 
-function GatePopover({ gate, env, x, y, view }: { gate: GateMark; env: string; x: number; y: number; view: { x: number; y: number; k: number } }) {
+function GatePopover({ gate, env, x, y, view, onPointerEnter, onPointerLeave }: {
+  gate: GateMark; env: string; x: number; y: number; view: { x: number; y: number; k: number }
+  onPointerEnter: () => void; onPointerLeave: () => void
+}) {
   const left = (x - view.x) * view.k
   const top = (y - view.y) * view.k
   const age = gate.lastEvaluatedAt ? ageOf(gate.lastEvaluatedAt) : ''
+  // Its place is computed from the zoom, so it is set on the element, not as an inline style.
+  const place = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return
+    el.style.setProperty('left', `${left}px`)
+    el.style.setProperty('top', `${top}px`)
+  }, [left, top])
   return (
-    <div className="gate-popover" role="tooltip" style={{ left, top }}>
-      <div className="gate-popover__name">{gate.name}</div>
+    <div ref={place} className="gate-popover" role="tooltip" onPointerEnter={onPointerEnter} onPointerLeave={onPointerLeave}>
+      <div className="gate-popover__name"><Icon name="gate" className="gate-popover__icon" /> {gate.name}</div>
       <div className="gate-popover__state" data-tone={gate.display.tone}>{gate.display.label} · into {env}</div>
+      {gate.approval && <div className="gate-popover__quorum">{`${gate.approval.approved} of ${gate.approval.required} approvals`}</div>}
       {gate.expression && <code className="gate-popover__cel">{gate.expression}</code>}
       {gate.message && <div className="gate-popover__reason">{gate.message}</div>}
       {age && <div className="gate-popover__age">evaluated {age === 'now' ? 'just now' : `${age} ago`}</div>}
       <div className="gate-popover__hint">Click the gate to see why in the stage drawer</div>
     </div>
+  )
+}
+
+/** What the map's marks mean (the DAG legend's wording, for the map). */
+const LEGEND: Array<{ tone: string; label: string; desc: string }> = [
+  { tone: 'verified', label: 'Live', desc: 'Deployed and healthy' },
+  { tone: 'promoting', label: 'In progress', desc: 'Promoting, waiting for the PR to merge, or checking health' },
+  { tone: 'failed', label: 'Failed', desc: 'Failed, or stopped by an alarm' },
+  { tone: 'blocked', label: 'Held', desc: 'A policy gate or a rollback holds it' },
+  { tone: 'pending', label: 'Not reached', desc: 'Not reached yet, or waiting its turn' },
+]
+
+function MapLegend() {
+  return (
+    <details className="station-map__legend">
+      <summary>Legend</summary>
+      <ul>
+        <li><span className="legend__dot" data-tone="verified" aria-hidden="true" /> Environment</li>
+        <li><Icon name="gate" className="legend__icon" /> Policy gate, on the edge into the environment it guards</li>
+        <li><span className="legend__thread" aria-hidden="true" /> The version you follow</li>
+        {LEGEND.map(l => (
+          <li key={l.label} title={l.desc}><span className="legend__dot" data-tone={l.tone} aria-hidden="true" /> {l.label}: {l.desc.toLowerCase()}</li>
+        ))}
+      </ul>
+    </details>
   )
 }
 

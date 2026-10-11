@@ -42,11 +42,12 @@ export interface Pipeline {
   deployed?: Record<string, DeployedRelease>
   /** Pipeline.status.deploymentMetrics, computed by the controller (DORA). */
   deploymentMetrics?: DeploymentMetrics
-  /** Pipeline.status.environments (P1, #1707): per environment, fleets expanded
-   *  to their targets, what runs there and what is on its way. */
-  environments?: PipelineEnvironment[]
-  /** Pipeline.status.summary: one sentence, "1.5.0 live in test, uat; waiting for PR merge in prod (#42)". */
+  /** Pipeline.status.summary: one sentence on where its versions are (P1, #1707), e.g.
+   *  "1.5.0 live in test, uat; waiting for PR merge in prod (#42)". */
   summary?: string
+  /** Pipeline.status.environments (P1, #1707; served since #1727): per environment, fleets
+   *  expanded, what runs there and where the newest version stands. States go through displayState. */
+  environments?: PipelineEnvironment[]
 }
 
 /** One entry of Pipeline.status.environments (P1). States go through displayState. */

@@ -176,13 +176,15 @@ interface CreateBundleButtonProps {
   namespace: string
   /** Called after a Bundle is successfully created — triggers a re-poll. */
   onRefresh: () => void
+  /** primary, the page's main action; secondary while the pipeline is paused (Resume is). */
+  variant?: 'primary' | 'secondary'
 }
 
 /**
- * CreateBundleButton renders a "+ Bundle" button in the pipeline header.
+ * CreateBundleButton renders the "Ship a version" button (the primary action) in the pipeline header.
  * Clicking opens the CreateBundleDialog.
  */
-export function CreateBundleButton({ pipelineName, namespace, onRefresh }: CreateBundleButtonProps) {
+export function CreateBundleButton({ pipelineName, namespace, onRefresh, variant = 'primary' }: CreateBundleButtonProps) {
   const [showDialog, setShowDialog] = useState(false)
 
   return (
@@ -190,10 +192,10 @@ export function CreateBundleButton({ pipelineName, namespace, onRefresh }: Creat
       <button
         type="button"
         onClick={() => setShowDialog(true)}
-        aria-label={`Create bundle for ${pipelineName}`}
-        className="k-button k-button--secondary k-button--sm"
+        aria-label={`Ship a version of ${pipelineName}`}
+        className={`k-button k-button--${variant} k-button--md`}
       >
-        + Bundle
+        Ship a version
       </button>
 
       {showDialog && (

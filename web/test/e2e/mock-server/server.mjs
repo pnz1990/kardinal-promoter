@@ -44,6 +44,8 @@ const PIPELINES = [
     phase: 'Ready',
     environmentCount: 3,
     activeBundleName: 'kardinal-test-app-abc123',
+    // status.summary (P1), as the PipelineReconciler writes it.
+    summary: 'abc123 Verified in test, uat; Waiting for PR merge in prod (#42)',
     environmentStates: { test: 'Verified', uat: 'Verified', prod: 'WaitingForMerge' },
     blockerCount: 0,
     failedStepCount: 0,

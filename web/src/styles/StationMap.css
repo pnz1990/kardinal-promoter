@@ -347,53 +347,17 @@
 [data-motion="reduce"] .station-map__thread-path--flow,
 [data-motion="reduce"] .station__arc { animation: none; }
 
-/* The pipeline page's map row: the map and, beside it, the stage drawer. */
-.pipeline-map-row {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-  gap: var(--k-space-3);
-  padding: 0 var(--k-space-6) var(--k-space-6);
-}
+/* The map's column on the pipeline page's Map tab: the map fills it (no padding, no scroll). */
+.app-dag.app-map { display: flex; padding: 0; overflow: hidden; }
+/* The map takes the page's height: its row keeps a small bottom margin only. */
+.app-tab--map .app-content { padding-block-end: var(--k-space-3); }
+.app-map > .pipeline-map, .app-map > .station-map { flex: 1; min-inline-size: 0; }
 .station-map--message {
   align-items: center;
   justify-content: center;
   color: var(--k-ink-3);
   padding: var(--k-space-8);
 }
-
-/* The stage drawer's hold (NodeDetail until U3). */
-.stage-hold {
-  margin-bottom: var(--k-space-3);
-  padding: var(--k-space-2) var(--k-space-3);
-  background: var(--k-hatch);
-  border: var(--k-border-hairline) solid var(--k-line);
-  border-radius: var(--k-radius-2);
-  font-size: var(--k-text-sm);
-  color: var(--k-ink);
-}
-.stage-hold__badge {
-  font-family: var(--k-font-display);
-  font-size: var(--k-text-2xs);
-  font-stretch: var(--k-stretch-label);
-  font-weight: var(--k-weight-semibold);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-.stage-hold__missing { color: var(--k-status-failed-fg); margin-top: var(--k-space-1); }
-.stage-hold__release {
-  display: block;
-  margin-top: var(--k-space-2);
-  font: inherit;
-  font-size: var(--k-text-sm);
-  padding: var(--k-space-1) var(--k-space-3);
-  background: var(--k-surface-raised);
-  color: var(--k-ink);
-  border: var(--k-border-hairline) solid var(--k-line-strong);
-  border-radius: var(--k-radius-2);
-  cursor: pointer;
-}
-.stage-hold__release:focus-visible { outline: var(--k-focus-ring); outline-offset: var(--k-focus-offset); }
 
 .station__differs { font-family: var(--k-font-mono); --fs: var(--k-text-xs); fill: var(--k-ink); font-weight: var(--k-weight-bold); }
 
@@ -416,3 +380,33 @@
 .station-map__result { padding: var(--k-space-1) var(--k-space-3); font-size: var(--k-text-sm); color: var(--k-status-verified-fg); }
 .pipeline-map { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .station-map__gate-hit { fill: transparent; }
+
+/* The legend: what the map's marks mean, folded in the map's corner. */
+.station-map__legend {
+  position: absolute;
+  left: var(--k-space-3);
+  bottom: var(--k-space-3);
+  z-index: var(--k-z-map-overlay);
+  font-size: var(--k-text-xs);
+  color: var(--k-ink-2);
+  background: var(--k-surface-raised);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-2);
+  padding: var(--k-space-1) var(--k-space-2);
+}
+.station-map__legend summary { cursor: pointer; font-family: var(--k-font-display); }
+.station-map__legend summary:focus-visible { outline: var(--k-focus-ring); outline-offset: var(--k-focus-offset); }
+.station-map__legend ul { list-style: none; margin: var(--k-space-1) 0 0; padding: 0; display: grid; gap: var(--k-space-1); }
+.station-map__legend li { display: flex; align-items: center; gap: var(--k-space-1_5); }
+.legend__dot {
+  inline-size: var(--k-space-2); block-size: var(--k-space-2); border-radius: 50%;
+  border: var(--k-border-strong) solid var(--k-status-pending-ring); background: var(--k-surface-base);
+}
+.legend__dot[data-tone="verified"] { background: var(--k-ink-node); border-color: var(--k-ink-node); }
+.legend__dot[data-tone="promoting"] { border-color: var(--k-thread); }
+.legend__dot[data-tone="failed"] { background: var(--k-status-failed-fill); border-color: var(--k-status-failed-fill); }
+.legend__dot[data-tone="blocked"] { border-color: var(--k-status-blocked-fg); }
+.legend__thread { inline-size: var(--k-space-4); block-size: var(--k-border-strong); background: var(--k-thread); }
+.legend__icon { color: var(--k-status-blocked-fg); }
+.gate-popover__icon { vertical-align: -0.125em; }
+.gate-popover__quorum { color: var(--k-ink-2); }

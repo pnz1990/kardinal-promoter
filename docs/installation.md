@@ -402,17 +402,28 @@ release name other than `kardinal-promoter`, the Service is named
   while a PolicyGate holds it; red where it failed. A [fleet](pipeline-reference.md#fleets)
   is one station with a bar of its targets (Verified, in flight, Failed) and a count such as
   `20/50 verified, 5 in flight (max 5)`; it says `stopped` once `maxUnavailable` targets
-  failed. A station opens its Pipeline. The board follows the sidebar's health filter.
-- **Pipeline view.** One line names the pipeline, its state and where the newest version is,
-  with Pause and New bundle. Below it, the **map**: each environment is a station that shows the
-  version it runs and the version on its way, gates sit on the edge into the environment they
-  guard, and the version you follow is one red line through the stations it reached. A wave of
-  five or more environments is one band, and a fleet one platform; each counts its environments
-  by state and expands to a grid, a row per state, in spec order. The map opens at Detail, Map or
-  Overview by the pipeline's size, and has search, a minimap and a strip that lists what needs a
-  person. Promote, Roll back and Release hold are under the station in focus; shift-click a second
-  Bundle on the rail to compare its route. The Gates, History and Metrics tabs hold the policy
-  gates with their CEL expressions, the Bundle history and the release metrics.
+  failed. A station opens its Pipeline at that environment. The board follows the sidebar's
+  health filter.
+- **Pipeline view.** The header has the Pipeline's name, Paused when it is paused, **Pause**
+  (or **Resume**, the main action while paused) and **Ship a version** (create a Bundle). Under
+  it, one line: the Pipeline's summary sentence, then the shown version's name, commit, author
+  and CI run. Below that are four tabs:
+  - **Map**: the station map, and the Bundle history to pick the version shown and compare two.
+  - **Versions**: every Bundle of the Pipeline.
+  - **Activity**: failed promotions grouped across environments, and the shown Bundle's policy
+    gates with their CEL expressions and approvals.
+  - **Metrics**: the release metrics.
+
+  On the **map** each environment is a station that shows the version it runs and the version on
+  its way; gates sit on the edge into the environment they guard, an approval gate with its
+  quorum; the version you follow is one red line through the stations it reached, and it stops
+  at a gate that holds it. A wave of five or more environments is one band, and a fleet one
+  platform; each counts its environments by state and expands to a grid, a row per state, in
+  spec order. The map opens at Detail, Map or Overview by the pipeline's size, and has search, a
+  minimap and a strip that lists what needs a person (`1 blocked by no-weekend-deploys`). Promote,
+  Roll back and Release hold are under the station in focus; shift-click a second Bundle on the
+  rail to compare its route. An address with a Pipeline or a version the cluster does not have
+  says it is not found and links back; it does not show another one.
 - **Release metrics.** Time to the final environments and the deploys that reached them, over
   the last 10 Bundles. The final environments are those no other environment waits for: `prod`
   in test, uat, prod; every environment of a last wave, which a Bundle reaches when all of
@@ -428,6 +439,31 @@ release name other than `kardinal-promoter`, the Service is named
   End to the ends, Up and Down between fleet lines), and Enter opens the one in focus. `?` lists
   the shortcuts (`/` filter, `r` refresh, `Esc` close a panel). Every view is checked against
   WCAG 2.1 AA, colour contrast included, in both themes.
+- **Narrow screens.** Below 960 px wide (a phone or a split window) the pipeline list is a
+  drawer: the button at the start of the top bar opens it, and Esc, a pick or a click outside
+  closes it. The page then takes the full width.
+- **Go to anything (⌘K).** ⌘K, Ctrl+K or the **Go to or do…** box in the top bar opens one list
+  of pipelines, environments (`pipeline › env`) and the shown pipeline's versions, and of actions:
+  switch the theme or the density, refresh, the operations table, the shortcuts. Type to filter,
+  and use the arrow keys and Enter. It never promotes, pauses or rolls back by itself.
+- **Links.** Every screen has its own address, so a link opens it, a reload keeps it, and Back
+  and Forward walk it. The breadcrumb in the top bar leads back:
+
+  | Address | Opens |
+  |---|---|
+  | `/ui/#/` | the fleet |
+  | `/ui/#/p/<namespace>/<pipeline>` | a Pipeline |
+  | `/ui/#/p/<namespace>/<pipeline>/env/<environment>` | an environment's details |
+  | `/ui/#/p/<namespace>/<pipeline>/v/<bundle>` | the Pipeline at that version |
+
+  These options go after `?`:
+  - `tab=versions|activity|metrics` picks a tab (`tab=history` opens Versions, `tab=gates` the map);
+  - `compare=<bundle>` opens the comparison;
+  - `view=ops` shows the operations table;
+  - `filter=` and `q=` keep the sidebar's health filter and search.
+
+  Links from before these addresses (`#pipeline=…&ns=…`) still open the same screen. With
+  exactly one Pipeline, a first visit opens it directly.
 - **Themes.** The theme button next to the refresh indicator cycles through System (◐),
   Light (☀) and Dark (☾). System follows the operating system's setting, also when it changes.
   Light or Dark is kept in the browser and applied before the page draws. The UI and these docs
