@@ -471,14 +471,19 @@ and turn it on after the export.
 | `PromotionStarted` | Bundle begins promoting through an environment |
 | `PromotionSucceeded` | Health check passed; PromotionStep reached Verified |
 | `PromotionFailed` | PromotionStep reached Failed or AbortedByAlarm |
-| `PromotionSuperseded` | A newer Bundle superseded an in-flight promotion |
-| `PromotionRejected` | `kardinal reject` cancelled an in-flight promotion (its Bundle was [rejected](../rollback.md#reject-a-bundle)) |
+| `PromotionSuperseded` | A newer Bundle superseded an in-flight promotion (a step that had not started writes none) |
+| `PromotionRejected` | `kardinal reject` cancelled an in-flight promotion (its Bundle was [rejected](../rollback.md#reject-a-bundle); a step that had not started writes none) |
+| `BundleRejected` | A Bundle is rejected (`kardinal reject` or the UI), once, naming who rejected it and why; its environment is `*` (the whole Bundle) |
 | `GateOverridden` | An entry in a gate instance's `spec.overrides[]` (`kardinal override` or the UI), written once per entry with its verified `createdBy`, stage, expiry and reason |
 | `ApprovalRecorded` / `ApprovalRevoked` | An approval gate saw a decision (`kardinal approve`) appear, or its Approval deleted, with the approver, the decision and whether it counts |
 | `HoldCreated` / `HoldReleased` / `HoldBundleMissing` | A hold (`kardinal rollback --hold`) appeared in, or left, `spec.holds`; or its rollback Bundle has been missing for `--hold-bundle-grace` (the hold stays in effect: [A hold whose rollback Bundle does not exist](../rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |
 | `GateEvaluated` | PolicyGate instance first evaluated, and every later change of readiness (blocked or unblocked); one record per change |
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
 | `RollbackSucceeded` | A PromotionStep of a rollback Bundle (from `kardinal rollback`, the UI, a RollbackPolicy or `onHealthFailure: rollback`) reached Verified; written besides `PromotionSucceeded`, one record per step |
+
+The CRD also accepts the actions `HealthCheckFailed` and `GateBlocked`, but kardinal never writes
+them: a failed health check records `PromotionFailed` (or `RollbackStarted` with
+`onHealthFailure: rollback`), and a blocked gate records `GateEvaluated` with outcome `Failure`.
 
 ### Audit outbox
 
@@ -567,6 +572,9 @@ kubectl get auditevents -n my-team -o wide
 kubectl get auditevents -n my-team \
   -l kardinal.io/pipeline=my-app \
   --watch
+
+# Filter by action, across namespaces
+kubectl get auditevent -A -l kardinal.io/action=PromotionFailed
 ```
 
 ### SIEM integration
