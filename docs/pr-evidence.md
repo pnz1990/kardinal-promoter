@@ -81,8 +81,8 @@ version, and for a mixed version "It reverts environment prod to the state of bu
 An image or config rollback can target a mixed version and leave its other half as deployed (see
 [Rollback](rollback.md#images-the-target-does-not-name)).
 
-FROM is the version the rollback replaces (the `kardinal.io/rollback-from` annotation) and the
-version it deploys; the version is left out when that version was deleted, and the line says
+FROM is the Bundle the rollback replaces (the `kardinal.io/rollback-from` annotation) and the
+version it deploys; the version is left out when that Bundle was deleted, and the line says
 "the bundle deployed in prod now" when the annotation is not set. TO is the rollback's target
 (`spec.provenance.rollbackOf`) and the version the rollback deploys.
 "Rolled back by" is the rollback version's verified creator, the `kardinal.io/created-by`

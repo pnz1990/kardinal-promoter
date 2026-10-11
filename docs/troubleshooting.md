@@ -13,10 +13,10 @@ Common cases:
 | `spec.environments` | Add at least one environment to your Pipeline spec |
 | `spec.environments[].name` | Use a non-empty, valid environment name; the error names the rule it broke |
 | `spec.environments[].update.strategy` | Only `kustomize`, `helm`, `argocd` are valid |
-| Version `spec.type` | Only `image`, `config`, `mixed` are valid |
-| Version `spec.pipeline` | Add `pipeline: <name>` to your Bundle spec |
-| Gate `spec.expression` | Add a CEL expression to your PolicyGate spec |
-| Gate `spec.recheckInterval` | Use Go duration format: `5m`, `30s`, `1h` (not `5 minutes`) |
+| Bundle `spec.type` | Only `image`, `config`, `mixed` are valid |
+| Bundle `spec.pipeline` | Add `pipeline: <name>` to your Bundle spec |
+| PolicyGate `spec.expression` | Add a CEL expression to your PolicyGate spec |
+| PolicyGate `spec.recheckInterval` | Use Go duration format: `5m`, `30s`, `1h` (not `5 minutes`) |
 
 These checks are part of the CRDs and cannot be turned off. The chart's only
 ValidatingAdmissionPolicies are the identity policies (a rejection, an override or an approval
@@ -591,7 +591,7 @@ helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --
 
 ### Symptom: Team cannot create PolicyGates in another team's namespace
 
-kardinal does not create RBAC for users. Your cluster's Roles decide who may write gates in each namespace. Check with:
+kardinal does not create RBAC for users. Your cluster's Roles decide who may write PolicyGates in each namespace. Check with:
 ```bash
 kubectl auth can-i create policygates.kardinal.io -n platform-policies --as <user>
 ```

@@ -45,7 +45,7 @@ How it works:
 - The expression can read the count: `approvals.count`, `approvals.required`, `approvals.users` and `approvals.rejected` ([CEL context](reference/cel-context.md#approvals)).
 - `kardinal override` still force-passes an approval gate, with its own audit record.
 
-Who may approve: bind the chart's `<release>-approvals` ClusterRole (create, delete and read `approvals`, read versions, Pipelines and gates) with a RoleBinding in the Pipeline namespace. The Graph ServiceAccount needs `list` and `watch` on `approvals`, which the chart's `graph-applier` role has.
+Who may approve: bind the chart's `<release>-approvals` ClusterRole (create, delete and read `approvals`, read Bundles, Pipelines and PolicyGates) with a RoleBinding in the Pipeline namespace. The Graph ServiceAccount needs `list` and `watch` on `approvals`, which the chart's `graph-applier` role has.
 
 Trust: anyone allowed to impersonate users or groups (`impersonate` RBAC) can approve as anyone. The identity checks rely on the API server's authentication, so treat `impersonate` as full trust for approvals, overrides and rejections.
 

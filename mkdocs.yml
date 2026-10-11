@@ -114,7 +114,7 @@ nav:
     - Your first pipeline: first-pipeline.md
   - How-to:
     - Ship versions from CI: ci-integration.md
-    - Ship automatically on new images: subscription.md
+    - Ship automatically from images, charts and Git: subscription.md
     - Design a pipeline:
       - Design a pipeline: pipeline-reference.md
       - Rendered manifests: rendered-manifests.md

@@ -171,7 +171,7 @@ the flags are given or not), the command prints the controller's own figures fro
 
 ### Change failure rate and time to restore
 
-The PipelineReconciler computes the two DORA stability metrics from PromotionStep and version
+The PipelineReconciler computes the two DORA stability metrics from PromotionStep and Bundle
 status into `Pipeline.status.deploymentMetrics`, over the Pipeline's final environments: every
 environment nothing depends on (one for a chain, several for a fan-out such as `prod-eu` and
 `prod-us`):
@@ -228,9 +228,9 @@ helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-p
 |---|---|---|---|
 | `KardinalControllerDown` | `up{job="kardinal-promoter"}` is 0 or absent for 5m | critical | Controller unreachable; promotions stalled |
 | `KardinalHighReconcileErrors` | reconcile error rate > 0.1/s for 5m | warning | Reconciler failing; promotions may be stuck |
-| `KardinalBundleReconcilerStalled` | Versions queued but none reconciled for 10m | warning | Controller stuck; possible leader election issue |
+| `KardinalBundleReconcilerStalled` | Bundles queued but none reconciled for 10m | warning | Controller stuck; possible leader election issue |
 | `KardinalWorkQueueBacklog` | work queue depth > 100 for 5m | warning | Controller overloaded or starved of CPU |
-| `KardinalPolicyGateReconcileSlow` | Gate P99 latency > 10s | warning | Gate evaluations stale; promotions blocked late |
+| `KardinalPolicyGateReconcileSlow` | PolicyGate P99 latency > 10s | warning | Gate evaluations stale; promotions blocked late |
 
 Every alert includes a `runbook_url` annotation pointing to the relevant section in [troubleshooting.md](../troubleshooting.md).
 

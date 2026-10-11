@@ -283,9 +283,9 @@ kardinal explain my-app --env prod
 # prod   deployed: my-app-7qvsr (1.28.0)
 ```
 
-Gates that are not ready come first. STATE is Passing, Blocking (holding the
-version), Replaced by newer version, Version rejected, Not evaluated yet or Not ready; REASON is the controller's latest
-evaluation. See [Inspecting PolicyGates](policy-gates.md#inspecting-gates).
+Gates that are not ready come first. STATE is Passing, Blocking (holding the version),
+Replaced by newer version, Version rejected, Not evaluated yet or Not ready; REASON is the
+controller's latest evaluation. See [Inspecting gates](policy-gates.md#inspecting-gates).
 
 ### Skip permissions
 

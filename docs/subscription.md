@@ -1,7 +1,7 @@
-# Ship automatically on new images
+# Ship automatically from images, charts and Git
 
 A `Subscription` watches an OCI registry, a Git repository or a Helm chart repository and
-creates a version for each new artifact it finds, so a new image is promoted without a CI step.
+creates a version for each new artifact it finds, so it is promoted without a CI step.
 
 ## Overview
 
@@ -12,7 +12,7 @@ posts a [webhook](#webhooks).
 
 ## Supported Sources
 
-| Type | Source | Trigger | Version |
+| Type | Source | Trigger | Version type |
 |---|---|---|---|
 | `image` | OCI registry repository: Docker Hub, GHCR, Quay, Harbor, ECR, GCR/Artifact Registry, ACR, Artifactory, any distribution registry, a plain-HTTP in-cluster registry; public or private | A new artifact among the tags that pass the [tag filters](#tag-selection) | `image` |
 | `git` | Git repository over HTTP(S) or SSH, public or private | A new commit on the watched branch, optionally only one that changes [`pathGlob`](#path-filtering-pathglob) | `config` |

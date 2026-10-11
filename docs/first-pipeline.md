@@ -198,7 +198,7 @@ kardinal get pipelines
     kubectl logs -n kardinal-system deployment/kardinal-promoter | tail -20
     ```
 
-## Create your first Bundle
+## Create your first version
 
 In a real setup, your CI pipeline creates Bundles after building and pushing images.
 For this quickstart, promote the `kardinal-test-app` image `sha-9349a3f` with its digest pinned.
@@ -245,7 +245,7 @@ kardinal get pipelines
 # PIPELINE            BUNDLE                    TEST   UAT               PROD          SUB   AGE
 # kardinal-test-app   kardinal-test-app-x7k2p   Live   Checking health   Not reached   0     2m
 
-# See the steps of the active Bundle
+# See the steps of the version being promoted
 kardinal get steps kardinal-test-app
 # ENVIRONMENT   STEP           STATE         DURATION   MESSAGE
 # test          git-clone      Done          812ms      -

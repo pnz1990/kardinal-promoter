@@ -106,7 +106,7 @@ commit would render different manifests, every promotion would commit a change, 
 would not restore what ran. Set `render.allowNondeterministic: true` to allow them. `env` and
 `expandenv` are not available, as in Helm.
 
-A `chart` version (a chart version from a [Helm Subscription](subscription.md#promoting-a-chart-version))
+A version of type `chart` (a Helm chart version from a [Helm Subscription](subscription.md#promoting-a-chart-version))
 cannot promote a `layout: branch` environment yet: the version fails at build. Both Graph shapes
 render: in the compact shape (`kardinal.io/graph-shape: compact`, or more environments than
 `--graph-compact-above`, and every Pipeline with a fleet) the RenderRuns come from one

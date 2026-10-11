@@ -137,7 +137,7 @@ spec:
 
 ### Team-level gates
 
-Created in the team's own namespace. Team gates are additive: they are injected alongside org gates. A team Pipeline can add restrictions but cannot remove or weaken org gates. The escape hatch is [`kardinal override`](overrides.md): it patches the gate instances in the Pipeline namespace, so anyone with `patch` on gates there can force-pass an org gate for a limited time, with the reason recorded. Grant that verb only to the people allowed to break glass.
+Created in the team's own namespace. Team gates are additive: they are injected alongside org gates. A team Pipeline can add restrictions but cannot remove or weaken org gates. The escape hatch is [`kardinal override`](overrides.md): it patches the gate instances in the Pipeline namespace, so anyone with `patch` on PolicyGates there can force-pass an org gate for a limited time, with the reason recorded. Grant that verb only to the people allowed to break glass.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -204,7 +204,7 @@ review state in `bundle.pr`), the time (`schedule.*`), the target environment
 
 `metrics.<name>` reads the MetricCheck named `<name>` in the gate's [metrics namespace](#matching)
 (the org policy namespace for an org gate, the Pipeline namespace otherwise).
-MetricChecks query Prometheus, Datadog, CloudWatch, New Relic or any JSON web API, with credentials from Secrets; a `perPromotion` MetricCheck is instantiated for each version and environment with the version's tag in its query, and the gate of that version reads its own instance as `metrics.<name>` (see [Metric Checks](metric-checks.md)).
+MetricChecks query Prometheus, Datadog, CloudWatch, New Relic or any JSON web API, with credentials from Secrets; a `perPromotion` MetricCheck is instantiated for each version and environment with its `bundle.version` (the image tag, or the config commit of a config version) in its query, and the gate of that version reads its own instance as `metrics.<name>` (see [Metric Checks](metric-checks.md)).
 
 The controller does not query a MetricCheck URL on a loopback, link-local or cloud metadata address: the MetricCheck's `status.reason` then reads `destination address is not allowed` (see [Outbound requests to user URLs](guides/security.md#outbound-requests-to-user-urls)).
 
