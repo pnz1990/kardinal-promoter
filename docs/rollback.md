@@ -102,7 +102,7 @@ Output:
 ```
 Rolling back my-app in prod from my-app-v1-29-0 to my-app-v1-28-0 (ghcr.io/myorg/my-app:v1.28.0)
 Bundle my-app-rollback-3f9a1c created (rollbackOf=my-app-v1-28-0)
-Environment prod held on my-app-rollback-3f9a1c: no other version promotes there until: kardinal release-hold my-app --env prod
+Environment prod held on my-app-rollback-3f9a1c: no other version promotes there until: kardinal unhold my-app prod
 Gates of prod that would block the rollback pass as EXEMPT (audited) while the controller verifies it restores what was Verified there.
 Track with: kardinal explain my-app --env prod
 ```
@@ -171,7 +171,7 @@ To recover, release the hold, then roll back and hold again if you still want th
 environment held:
 
 ```bash
-kardinal release-hold my-app --env prod
+kardinal unhold my-app prod
 kardinal rollback my-app --env prod --hold --reason "INC-4521: v1.29.0 leaks connections"
 ```
 
@@ -189,7 +189,7 @@ kubectl get pipeline my-app -o jsonpath='{range .status.holdStates[*]}{.environm
 Release the hold when the fix is ready:
 
 ```bash
-kardinal release-hold my-app --env prod
+kardinal unhold my-app prod
 ```
 
 The newest version that was held back then promotes into the environment through its gates as
@@ -343,10 +343,10 @@ kardinal history my-app
 ```
 
 ```
-VERSION                 ACTION     ENV    PR     DURATION   TIMESTAMP
-my-app-rollback-x7k2p   rollback   prod   #145   5m         2026-04-09 11:00
-my-app-v1-29-0          promote    prod   #144   15m        2026-04-09 10:20
-my-app-v1-28-0          promote    prod   #138   12m        2026-04-07 14:00
+VERSION                          ACTION     ENV    PR     DURATION   TIMESTAMP
+1.28.0 (my-app-rollback-x7k2p)   rollback   prod   #145   5m         2026-04-09 11:00
+1.29.0 (my-app-v1-29-0)          promote    prod   #144   15m        2026-04-09 10:20
+1.28.0 (my-app-v1-28-0)          promote    prod   #138   12m        2026-04-07 14:00
 ```
 
 There is one row per PromotionStep, newest first; steps created in the same second are in name order. `--limit` sets how many rows it prints (default 20), and `--env` keeps the rows of one environment. ACTION is `rollback` for a rollback version. PR is `--` in an environment that opened no PR (`approval: auto`). DURATION is the time from the step's creation to Verified, or for a step that stopped (Failed, AbortedByAlarm, RollingBack) to its last completed step, rounded down to whole seconds, minutes, hours or days (`45s`, `5m`, `2h`, `3d`). It is `...` while the step is in flight and `--` when no end time is recorded. TIMESTAMP is when the step was created, in UTC. The history ends at the versions `historyLimit` keeps (see below): a deleted version's rows are gone too.

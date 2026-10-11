@@ -322,7 +322,7 @@ func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter st
 	if err := writeExplainDeployed(w, pipeline, envNames, envFilter, current, steps.Items, bundleByName); err != nil {
 		return err
 	}
-	if err := writeExplainHolds(w, pipe, envFilter); err != nil {
+	if err := writeExplainHolds(w, pipe, envFilter, bundleByName); err != nil {
 		return err
 	}
 	// Hints go to stderr: stdout stays the table.
@@ -400,7 +400,7 @@ func explainHolds(p *v1alpha1.Pipeline, envFilter string) []explainHold {
 // writeExplainHolds prints the holds (spec.holds, kardinal rollback --hold)
 // of the shown environments: the rollback each is held on, who held it and
 // why, and how to release it.
-func writeExplainHolds(w io.Writer, p *v1alpha1.Pipeline, envFilter string) error {
+func writeExplainHolds(w io.Writer, p *v1alpha1.Pipeline, envFilter string, byName map[string]*v1alpha1.Bundle) error {
 	var buf strings.Builder
 	for _, h := range p.Spec.Holds {
 		if (envFilter != "" && h.Environment != envFilter) || h.Expired(time.Now()) {
@@ -415,12 +415,18 @@ func writeExplainHolds(w io.Writer, p *v1alpha1.Pipeline, envFilter string) erro
 			if st.BundleMissingSince != nil {
 				since = " since " + st.BundleMissingSince.UTC().Format(time.RFC3339)
 			}
-			fmt.Fprintf(&buf, "%s: held on rollback %s by %s (%s), but the rollback version does not exist%s. The hold stays in effect: no other version promotes here. Release with: kardinal release-hold %s --env %s, then roll back with --hold again if wanted\n",
+			fmt.Fprintf(&buf, "%s: held on %s by %s (%s), but that version does not exist%s. The hold stays in effect: no other version promotes here. Release with: kardinal unhold %s %s, then hold again if wanted\n",
 				h.Environment, h.Bundle, by, h.Reason, since, p.Name, h.Environment)
 			continue
 		}
-		fmt.Fprintf(&buf, "%s: held on rollback %s by %s (%s); other versions do not promote here, and its gates here pass as EXEMPT while the controller verifies it. Release with: kardinal release-hold %s --env %s\n",
-			h.Environment, h.Bundle, by, h.Reason, p.Name, h.Environment)
+		b := byName[h.Bundle]
+		if b != nil && isRollbackBundle(*b) {
+			fmt.Fprintf(&buf, "%s: held on rollback %s by %s (%s); other versions do not promote here, and its gates here pass as EXEMPT while the controller verifies it. Release with: kardinal unhold %s %s\n",
+				h.Environment, versionLabel(versionOf(byName, h.Bundle), h.Bundle), by, h.Reason, p.Name, h.Environment)
+			continue
+		}
+		fmt.Fprintf(&buf, "%s: held on %s by %s (%s); other versions do not promote here. Release with: kardinal unhold %s %s\n",
+			h.Environment, versionLabel(versionOf(byName, h.Bundle), h.Bundle), by, h.Reason, p.Name, h.Environment)
 	}
 	if buf.Len() == 0 {
 		return nil

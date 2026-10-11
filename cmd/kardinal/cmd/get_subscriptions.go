@@ -93,16 +93,31 @@ func getSubscriptionsFn(w io.Writer, c sigs_client.Client, ns string, args []str
 	case "yaml":
 		return WriteYAML(w, items)
 	default:
-		return FormatSubscriptionTable(w, items, allNamespaces)
+		// The table names each last Bundle by its version.
+		versions := map[string]string{}
+		var bundles v1alpha1.BundleList
+		if err := c.List(context.Background(), &bundles, opts...); err == nil {
+			for i := range bundles.Items {
+				b := &bundles.Items[i]
+				versions[b.Namespace+"/"+b.Name] = createdOf(b).Version
+			}
+		}
+		return formatSubscriptionTable(w, items, allNamespaces, versions)
 	}
 }
 
 // FormatSubscriptionTable writes a tabwriter-formatted table of subscriptions to w.
 // When showNamespace is true, a NAMESPACE column is prepended.
 func FormatSubscriptionTable(w io.Writer, subs []v1alpha1.Subscription, showNamespace bool) error {
+	return formatSubscriptionTable(w, subs, showNamespace, nil)
+}
+
+// formatSubscriptionTable is FormatSubscriptionTable; versions maps
+// namespace/name to a Bundle's version for LAST-VERSION.
+func formatSubscriptionTable(w io.Writer, subs []v1alpha1.Subscription, showNamespace bool, versions map[string]string) error {
 	tw := style.NewTable(w, 3)
 
-	header := "NAME\tTYPE\tPIPELINE\tPHASE\tLAST-CHECK\tLAST-BUNDLE\tAGE"
+	header := "NAME\tTYPE\tPIPELINE\tPHASE\tLAST-CHECK\tLAST-VERSION\tAGE"
 	if showNamespace {
 		header = "NAMESPACE\t" + header
 	}
@@ -123,9 +138,9 @@ func FormatSubscriptionTable(w io.Writer, subs []v1alpha1.Subscription, showName
 				lastCheck = s.Status.LastCheckedAt
 			}
 		}
-		lastBundle := s.Status.LastBundleCreated
-		if lastBundle == "" {
-			lastBundle = "-"
+		lastBundle := "-"
+		if n := s.Status.LastBundleCreated; n != "" {
+			lastBundle = versionLabel(versions[s.Namespace+"/"+n], n)
 		}
 
 		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s",

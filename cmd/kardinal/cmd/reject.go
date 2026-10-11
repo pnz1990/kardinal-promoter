@@ -23,7 +23,7 @@ func newRejectCmd() *cobra.Command {
 	var reason string
 	cmd := &cobra.Command{
 		Use:   "reject <bundle>",
-		Short: "Reject a Bundle: it is never promoted again, and rollback never picks it",
+		Short: "Reject a version: it is never promoted again, and rollback never picks it",
 		Long: `Reject a Bundle for good, with --reason, in your Kubernetes name. Steps that
 have not delivered it yet fail and their PRs close; steps whose change is live
 finish their health check. Rollback, promote and Subscriptions never pick it

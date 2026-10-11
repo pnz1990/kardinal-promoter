@@ -1,6 +1,6 @@
 ## kardinal history
 
-Show Bundle promotion history for a pipeline
+Show a pipeline's promotion history, newest first
 
 ### Synopsis
 
@@ -33,7 +33,7 @@ kardinal history <pipeline> [<env>] [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, promote, rollback, ship, status, unhold, why; wide: status, why)
 ```
 
 ### SEE ALSO

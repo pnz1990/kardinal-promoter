@@ -8,10 +8,10 @@ kardinal promotes versions of your application through environments, with
 gates, pull requests and health checks, on Kubernetes.
 
 Getting started:
-  kardinal quickstart --repo <your fork>          try it on a local cluster
-  kardinal init                                   write a Pipeline for your repository
-  kardinal create bundle my-app --image app:1.4   start a promotion
-  kardinal status my-app                          see where each version is, and why
+  kardinal quickstart --repo <your fork>                 try it on a local cluster
+  kardinal init --name my-app --repo <gitops repo>       write a Pipeline for your repository
+  kardinal ship my-app --image app:1.4 --wait            ship a version and follow it
+  kardinal why my-app prod                               why it waits, and what moves it on
 
 Output follows where it goes. On a terminal, each state reads as a glyph and
 its label in the status colours of the UI, from its design tokens
@@ -50,8 +50,8 @@ when empty):
   create bundle --dry-run:
     pipeline, namespace, nodes, environments [{name, [gates]}] in promotion
     order, [type, version, compact]
-  release-hold:
-    pipeline, namespace, environment, bundle (the rollback it was held on),
+  unhold (release-hold):
+    pipeline, namespace, environment, bundle (the version it was held on),
     url, [createdBy, reason]
   status:
     controller, pipelines, bundles, activeBundles, [degraded]
@@ -87,7 +87,7 @@ names the new Bundle.
   -h, --help                help for kardinal
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, promote, rollback, ship, status, unhold, why; wide: status, why)
 ```
 
 ### SEE ALSO
@@ -98,11 +98,11 @@ names the new Bundle.
 * [kardinal create](kardinal-create.md)	 - Create kardinal resources
 * [kardinal dashboard](kardinal-dashboard.md)	 - Open the kardinal UI dashboard in a browser
 * [kardinal delete](kardinal-delete.md)	 - Delete kardinal resources
-* [kardinal diff](kardinal-diff.md)	 - Show artifact differences between two Bundles
+* [kardinal diff](kardinal-diff.md)	 - Show what changes between two versions (Bundles)
 * [kardinal doctor](kardinal-doctor.md)	 - Run pre-flight checks to verify the cluster is correctly configured
 * [kardinal explain](kardinal-explain.md)	 - Explain the current state of a promotion pipeline
 * [kardinal get](kardinal-get.md)	 - Display one or more kardinal resources
-* [kardinal history](kardinal-history.md)	 - Show Bundle promotion history for a pipeline
+* [kardinal history](kardinal-history.md)	 - Show a pipeline's promotion history, newest first
 * [kardinal hold](kardinal-hold.md)	 - Keep an environment on what runs there now
 * [kardinal init](kardinal-init.md)	 - Write a Pipeline for your GitOps repository, from flags or a few questions
 * [kardinal logs](kardinal-logs.md)	 - Show promotion step execution logs for a pipeline
@@ -110,15 +110,15 @@ names the new Bundle.
 * [kardinal override](kardinal-override.md)	 - Force-pass a PolicyGate with a mandatory audit record
 * [kardinal pause](kardinal-pause.md)	 - Pause a pipeline: no new promotion steps start, in-flight ones hold at the next safe point
 * [kardinal policy](kardinal-policy.md)	 - Manage and evaluate promotion policy gates
-* [kardinal promote](kardinal-promote.md)	 - Promote the Bundle verified upstream into an environment
+* [kardinal promote](kardinal-promote.md)	 - Promote the version verified upstream into an environment
 * [kardinal quickstart](kardinal-quickstart.md)	 - Install kardinal on a local cluster and promote a first version
 * [kardinal refresh](kardinal-refresh.md)	 - Force re-reconciliation of a Pipeline
-* [kardinal reject](kardinal-reject.md)	 - Reject a Bundle: it is never promoted again, and rollback never picks it
-* [kardinal release-hold](kardinal-release-hold.md)	 - Release the hold of a rollback on an environment
+* [kardinal reject](kardinal-reject.md)	 - Reject a version: it is never promoted again, and rollback never picks it
 * [kardinal resume](kardinal-resume.md)	 - Resume a paused pipeline
-* [kardinal rollback](kardinal-rollback.md)	 - Roll back a pipeline environment to a previous Bundle
+* [kardinal rollback](kardinal-rollback.md)	 - Roll back an environment to the version before
 * [kardinal ship](kardinal-ship.md)	 - Ship a version: create a Bundle, and with --wait follow it
 * [kardinal status](kardinal-status.md)	 - Show controller health or per-pipeline in-flight promotion details
+* [kardinal unhold](kardinal-unhold.md)	 - Release an environment's hold (kardinal hold, or rollback --hold)
 * [kardinal validate](kardinal-validate.md)	 - Validate Pipeline and PolicyGate YAML before applying to the cluster
 * [kardinal version](kardinal-version.md)	 - Print the CLI, controller, and kro (Graph) versions
 * [kardinal why](kardinal-why.md)	 - Say why an environment waits, and what moves it on

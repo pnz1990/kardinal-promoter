@@ -605,5 +605,5 @@ An exempt gate has the `status.reason`
 The flip is a `GateEvaluated` AuditEvent, and the gate gets a `GateExempted` Warning Event, so
 `kardinal explain`, `kardinal audit` and `kubectl get events` all show it (the Event is best
 effort; the AuditEvent and `status.reason` are the durable record: [Kubernetes Events](operate.md#kubernetes-events)).
-`kardinal release-hold` ends the exemption, and the gates are evaluated again at once. See
+`kardinal unhold` ends the exemption, and the gates are evaluated again at once. See
 [Roll back and hold](rollback.md#roll-back-and-hold).

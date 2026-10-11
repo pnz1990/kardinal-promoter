@@ -633,14 +633,14 @@ func TestCLI_Reports(t *testing.T) {
 
 	// diff: images by repository, then provenance; * marks a change.
 	assert.Equal(t, [][]string{
-		{"ARTIFACT", "BUNDLE-A (" + bA + ")", "BUNDLE-B (" + bB + ")", "CHANGED"},
+		{"ARTIFACT", "A: " + framework.VersionCell(fixtures.V2, bA), "B: " + framework.VersionCell(fixtures.V3, bB), "CHANGED"},
 		{fixtures.Image, fixtures.V2, fixtures.V3, "*"},
 		{"PROVENANCE"},
 		{"commit", "aaaa1111", "bbbb2222", "*"},
 		{"author", "alice", "bob", "*"},
 	}, cells(c.Must(a.ns, "diff", bA, bB)))
 	assert.Equal(t, [][]string{
-		{"ARTIFACT", "BUNDLE-A (" + bA + ")", "BUNDLE-B (" + bA + ")", "CHANGED"},
+		{"ARTIFACT", "A: " + framework.VersionCell(fixtures.V2, bA), "B: " + framework.VersionCell(fixtures.V2, bA), "CHANGED"},
 		{fixtures.Image, fixtures.V2, fixtures.V2},
 		{"PROVENANCE"},
 		{"commit", "aaaa1111", "aaaa1111"},

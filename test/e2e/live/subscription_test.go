@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -682,7 +683,7 @@ func TestSub_Status(t *testing.T) {
 
 	out = e.MustKardinal(t, "", "get", "subscriptions", "-A")
 	lines = strings.Split(strings.TrimSpace(out), "\n")
-	assert.Equal(t, []string{"NAMESPACE", "NAME", "TYPE", "PIPELINE", "PHASE", "LAST-CHECK", "LAST-BUNDLE", "AGE"},
+	assert.Equal(t, []string{"NAMESPACE", "NAME", "TYPE", "PIPELINE", "PHASE", "LAST-CHECK", "LAST-VERSION", "AGE"},
 		strings.Fields(lines[0]))
 	mine := map[string]string{}
 	for _, l := range lines[1:] {
@@ -691,7 +692,7 @@ func TestSub_Status(t *testing.T) {
 		}
 	}
 	require.Len(t, mine, 2, "both Subscriptions of %s are listed:\n%s", a.ns, out)
-	assert.Regexp(t, `^`+a.ns+`\s+ok\s+image\s+`+pipelineName+`\s+Watching\s+\S+ ago\s+`+bundle+`\s+\S+$`, mine["ok"])
+	assert.Regexp(t, `^`+a.ns+`\s+ok\s+image\s+`+pipelineName+`\s+Watching\s+\S+ ago\s+`+regexp.QuoteMeta(framework.VersionCell("6.14.0", bundle))+`\s+\S+$`, mine["ok"])
 	assert.Regexp(t, `^`+a.ns+`\s+broken\s+image\s+`+pipelineName+`\s+Error\s+\S+ ago\s+-\s+\S+$`, mine["broken"])
 }
 
