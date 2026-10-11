@@ -17,6 +17,7 @@ package live
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -60,7 +62,7 @@ func lockDemoNames(t *testing.T) {
 // version and follows it until prod waits for the approval, and prints the
 // next steps. kardinal approve demo prod ships it to prod. A re-run changes
 // nothing and ships nothing.
-// Covers CLI-QUICKSTART-01.
+// Covers CLI-QUICKSTART-01, CLI-QUICKSTART-02.
 func TestCLI_Quickstart(t *testing.T) {
 	t.Parallel()
 	lockDemoNames(t)
@@ -112,6 +114,7 @@ func TestCLI_Quickstart(t *testing.T) {
 	for _, args := range [][]string{
 		{"quickstart", "--repo", repo.CloneURL},
 		{"quickstart", "--repo", repo.CloneURL, "--context", "prod"},
+		{"quickstart", "--delete", "--yes"},
 	} {
 		r := cli.Exec(framework.CLIOptions{Kubeconfig: remote, Env: withToken.Env}, args...)
 		assert.Equal(t, 1, r.Code, r.Output())
@@ -215,4 +218,51 @@ func TestCLI_Quickstart(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, n, "the re-run ships nothing")
+
+	// --delete removes the demo, and only it: the versions first, then what
+	// quickstart applied, then the git Secret.
+	r = cli.Exec(framework.CLIOptions{}, "quickstart", "--delete", "--yes")
+	t.Logf("quickstart --delete:\n%s", r.Output())
+	require.Equal(t, 0, r.Code, r.Output())
+	assert.Regexp(t, `(?m)^  \S Versions of default/demo: deleted 1 \(`+regexp.QuoteMeta(fixtures.V2)+` \(`+bundle+`\)\)$`, r.Stdout)
+	for _, line := range []string{
+		"Pipeline default/demo: deleted\n",
+		"PolicyGate default/prod-approval: deleted\n",
+		"Argo CD ApplicationSet argocd/kardinal-test-app: deleted (Argo CD deletes its Applications)\n",
+		"Secret default/github-token: deleted\n",
+		"  kubectl delete namespace kardinal-test-app-test kardinal-test-app-uat kardinal-test-app-prod\n",
+	} {
+		assert.Contains(t, r.Stdout, line)
+	}
+	for _, obj := range []sigs_client.Object{&v1alpha1.Pipeline{}, &v1alpha1.PolicyGate{}, &corev1.Secret{}, &v1alpha1.Bundle{}} {
+		name := map[string]string{"*v1alpha1.Pipeline": "demo", "*v1alpha1.PolicyGate": "prod-approval",
+			"*v1.Secret": "github-token", "*v1alpha1.Bundle": bundle}[fmt.Sprintf("%T", obj)]
+		err := e.Client.Get(ctx, types.NamespacedName{Namespace: "default", Name: name}, obj)
+		assert.True(t, apierrors.IsNotFound(err), "%T %s is deleted: %v", obj, name, err)
+	}
+	framework.Eventually(t, 2*time.Minute, "Argo CD deletes the ApplicationSet's Applications", func(ctx context.Context) (bool, string) {
+		for _, env := range envs {
+			a := objectRef("argoproj.io/v1alpha1", "Application", framework.ArgoCDNamespace, app+"-"+env)
+			if err := e.Client.Get(ctx, types.NamespacedName{Namespace: a.GetNamespace(), Name: a.GetName()}, a); !apierrors.IsNotFound(err) {
+				return false, fmt.Sprintf("Application %s-%s: %v", app, env, err)
+			}
+		}
+		return true, ""
+	})
+	var nsObj corev1.Namespace
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Name: workloadNS("prod")}, &nsObj), "the workload namespaces are kept")
+	var demoSteps v1alpha1.PromotionStepList
+	require.NoError(t, e.Client.List(ctx, &demoSteps, sigs_client.InNamespace("default"), sigs_client.MatchingLabels{"kardinal.io/pipeline": "demo"}))
+	assert.Empty(t, demoSteps.Items, "the versions' steps are gone before the Pipeline")
+	var ctrl appsv1.Deployment
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: framework.ControllerNamespace, Name: framework.ControllerDeployment}, &ctrl),
+		"kardinal-promoter is kept")
+
+	// A re-run deletes nothing.
+	r = cli.Exec(framework.CLIOptions{}, "quickstart", "--delete", "--yes")
+	require.Equal(t, 0, r.Code, r.Output())
+	for _, what := range []string{"Versions of default/demo", "Pipeline default/demo", "PolicyGate default/prod-approval",
+		"Argo CD ApplicationSet argocd/kardinal-test-app", "Secret default/github-token"} {
+		assert.Contains(t, r.Stdout, what+": already gone\n")
+	}
 }

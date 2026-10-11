@@ -95,6 +95,34 @@ To get a pull request with evidence for prod, as in the full setup below, set pr
 waits for your approval at prod, opens a PR on your fork with the promotion evidence, and is
 live in prod once you merge it.
 
+### Remove the demo
+
+```bash
+kardinal quickstart --delete
+```
+
+It runs only on a local context, as `kardinal quickstart` does, and asks first on a terminal
+(`--yes` skips the question). It deletes the demo's versions first and waits up to 2 minutes
+for the controller to close their open PRs. If they are not gone by then, it stops and deletes
+nothing else; run it again. Then it deletes the Pipeline `demo`, the gate `prod-approval`, the
+ApplicationSet `kardinal-test-app` (Argo CD deletes its Applications) and the Secret
+`github-token`. It deletes each of those only if quickstart applied it, and keeps the Secret
+while another Pipeline uses it. It prints one line per object:
+
+```
+Removing the kardinal demo from kind-kardinal
+  ✓ Versions of default/demo: deleted 1 (sha-9349a3f (demo-7xk2p))
+  ✓ Pipeline default/demo: deleted
+  ✓ PolicyGate default/prod-approval: deleted
+  ✓ Argo CD ApplicationSet argocd/kardinal-test-app: deleted (Argo CD deletes its Applications)
+  ✓ Secret default/github-token: deleted
+```
+
+It keeps kro, Argo CD, kardinal-promoter with its token Secret, and the
+`kardinal-test-app-<env>` namespaces, and prints the `kubectl delete namespace` command that
+removes those. Running it again deletes nothing. `kind delete cluster --name kardinal` removes
+everything.
+
 ## Fast Start — about 10 minutes
 
 Install with `demo.enabled=true` and you get a pre-configured

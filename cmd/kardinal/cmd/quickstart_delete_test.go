@@ -42,6 +42,8 @@ func quickstartDemo(t *testing.T, objs ...sigs_client.Object) sigs_client.Client
 	writeKubeconfig(t, "kind-kardinal", "https://127.0.0.1:41234")
 	noCluster(t)
 	c := quickstartCluster(t, objs...)
+	prev := quickstartClient
+	t.Cleanup(func() { quickstartClient = prev })
 	quickstartClient = func(*clientcmdapi.Config) (sigs_client.Client, error) { return c, nil }
 	StubIdentity(t, "kubernetes-admin")
 	t.Setenv("GITHUB_TOKEN", "s3cr3t-token")
@@ -131,6 +133,8 @@ func TestQuickstartDelete_KeepsWhatIsNotQuickstarts(t *testing.T) {
 	gate := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "prod-approval"}}
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "github-token"}}
 	c := quickstartCluster(t, mine, user, b, gate, sec)
+	prev := quickstartClient
+	t.Cleanup(func() { quickstartClient = prev })
 	quickstartClient = func(*clientcmdapi.Config) (sigs_client.Client, error) { return c, nil }
 
 	var out bytes.Buffer
@@ -154,6 +158,8 @@ func TestQuickstartDelete_WaitsForTheVersions(t *testing.T) {
 	step := &v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "demo-1-prod",
 		Labels: map[string]string{"kardinal.io/pipeline": "demo"}, Finalizers: []string{"kardinal.io/close-pr"}}}
 	c := quickstartDemo(t, step)
+	// Its Bundle is going: garbage collection deletes it, the finalizer holds it.
+	require.NoError(t, c.Delete(context.Background(), step.DeepCopy()))
 	old, oldPoll := quickstartDeleteWait, shipPollInterval
 	quickstartDeleteWait, shipPollInterval = 20*time.Millisecond, time.Millisecond
 	t.Cleanup(func() { quickstartDeleteWait, shipPollInterval = old, oldPoll })
@@ -190,6 +196,8 @@ func TestQuickstartDelete_Refuses(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := quickstartDemo(t)
 			tc.setup(t)
+			prevRun := quickstartRun
+			t.Cleanup(func() { quickstartRun = prevRun })
 			quickstartRun = func(context.Context, string, ...string) (string, error) {
 				t.Error("--delete runs no tool")
 				return "", nil
