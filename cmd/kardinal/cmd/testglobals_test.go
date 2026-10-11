@@ -62,8 +62,11 @@ func keepStyle(t testing.TB) {
 // variable of the same name is not the package's. "v = prev" is a restore
 // only when prev was saved from v. Helpers are followed one call deep at a
 // time (their own calls included). TestMain is exempt: it sets up the whole
-// run. Not seen: writes through a pointer or a method of another package
-// (other than Execute).
+// run. Not seen (#1778): writes through a pointer or a method of another
+// package (other than Execute); a function passed by name (t.Run("s", sub));
+// what a helper whose restore is registered (t.Cleanup(stub())) changes and
+// does not restore; helpers that are methods, function values or in non-test
+// files.
 func TestPackageVariablesAreRestored(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	require.NoError(t, err)

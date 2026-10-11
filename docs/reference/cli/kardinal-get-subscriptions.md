@@ -10,6 +10,12 @@ a Bundle when a new artifact appears.
 Subscriptions passively watch OCI registries or Git repositories and
 automatically create Bundles when new artifacts are detected.
 
+LAST-VERSION is the version of the last Bundle a Subscription created, as
+one token: an image's tag, a git Subscription's commit (7 characters), a
+helm Subscription's chart version, else the Bundle's name; so the columns
+after it stay where a script reads them. -o wide shows the whole version
+("config abc1234", "podinfo 6.15.0") and adds LAST-BUNDLE.
+
 ```
 kardinal get subscriptions [name] [flags]
 ```
