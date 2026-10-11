@@ -31,14 +31,12 @@ func newDiffCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "diff <bundle-a> <bundle-b>",
 		Short: "Show artifact differences between two Bundles",
-		Long: `Diff compares the images and provenance of two Bundles in the namespace.
-
-Images are matched by repository. A tag cell reads "(absent)" when the Bundle
-has no image for that repository, and "-" when the image is pinned by digest
-only. CHANGED is "*" on rows that differ. Commit and author are listed under
-PROVENANCE.`,
-		Example: `  kardinal diff my-app-sha-abc1234 my-app-sha-def5678`,
-		Args:    cobra.ExactArgs(2),
+		Long: `Compare the images (by repository) and the provenance of two Bundles. A tag
+reads (absent) when a Bundle has no image for the repository and - when it is
+pinned by digest only; CHANGED marks the rows that differ.`,
+		Annotations: map[string]string{ReferenceAnnotation: diffReference},
+		Example:     `  kardinal diff my-app-sha-abc1234 my-app-sha-def5678`,
+		Args:        cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
@@ -209,3 +207,9 @@ func bundleAuthor(b *v1alpha1.Bundle) string {
 	}
 	return ""
 }
+
+// diffReference is the detail of the command for its reference page.
+const diffReference = `Images are matched by repository. A tag cell reads "(absent)" when the Bundle
+has no image for that repository, and "-" when the image is pinned by digest
+only. CHANGED is "*" on rows that differ. Commit and author are listed under
+PROVENANCE.`

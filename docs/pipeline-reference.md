@@ -520,23 +520,29 @@ Checks that must hold for the running workload belong where it runs, not in the 
 
 ## Examples
 
-### Minimal (3 lines per environment, all defaults)
+### Minimal (all defaults)
+
+[examples/minimal/pipeline.yaml](https://github.com/pnz1990/kardinal-promoter/blob/main/examples/minimal/pipeline.yaml), 12 lines:
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
-metadata:
-  name: my-app
+metadata: { name: my-app }
 spec:
   git:
-    url: https://github.com/myorg/gitops-repo
+    url: https://github.com/myorg/gitops
     secretRef: { name: github-token }
   environments:
-    - name: dev
-    - name: staging
+    - name: test
+    - name: uat
     - name: prod
       approval: pr-review
 ```
+
+Each environment follows the one before it, lives at `environments/<name>` on `main`, is
+updated with kustomize and promotes on its own, except prod, whose PR waits for a merge. The
+health check waits for Deployment `my-app` in the namespace of the environment's name to be
+Available (see [Health Check Defaults](#health-check-defaults)).
 
 ### Multi-cluster with Argo Rollouts
 

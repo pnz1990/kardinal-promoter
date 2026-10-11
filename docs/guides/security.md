@@ -542,6 +542,7 @@ and turn it on after the export.
 | `PromotionFailed` | PromotionStep reached Failed or AbortedByAlarm |
 | `PromotionSuperseded` | A newer Bundle superseded an in-flight promotion (a step that had not started writes none) |
 | `PromotionRejected` | `kardinal reject` cancelled an in-flight promotion (its Bundle was [rejected](../reject.md); a step that had not started writes none) |
+| `BundleRejected` | A Bundle is rejected (`kardinal reject` or the UI), once, naming who rejected it and why; its environment is `*` (the whole Bundle) |
 | `GateOverridden` | An entry in a gate instance's `spec.overrides[]` (`kardinal override` or the UI), written once per entry with its verified `createdBy`, stage, expiry and reason |
 | `ApprovalRecorded` / `ApprovalRevoked` | An approval gate saw a decision (`kardinal approve`) appear, or its Approval deleted, with the approver, the decision and whether it counts |
 | `HoldCreated` / `HoldReleased` / `HoldBundleMissing` | A hold (`kardinal rollback --hold`) appeared in, or left, `spec.holds`; or its rollback Bundle has been missing for `--hold-bundle-grace` (the hold stays in effect: [A hold whose rollback Bundle does not exist](../rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |
@@ -1089,15 +1090,21 @@ The user needs these permissions:
 | Pause, resume | `get` on `pipelines`; `update` on `pipelines/pause` |
 | Roll back and hold, release a hold | as roll back; `update` on `pipelines/hold` |
 | Approve a gate | `get` on `policygates`; `update` on `policygates/override` |
+| Override a gate in an environment (`/api/v1/ui/override`) | `get` on `pipelines` and `policygates`; `list` on `policygates` and `bundles`; `update` on `policygates/override` |
+| Reject a Bundle | `update` on `bundles/reject` |
 
 Each action is checked call by call, so it needs every verb in its row. Promote and roll
 back read the Pipeline and the environment's history before they create the Bundle. The
 reads are the view permissions, so a user who can view needs only the write verbs on top.
-Pause, resume and gate approval are authorized on a virtual subresource
-(`pipelines/pause`, `policygates/override`) instead of `update` on the object: the API server
-serves no such endpoint, but RBAC grants it and a `SubjectAccessReview` checks it. The
-controller then makes the one change (`spec.paused`, or one `spec.overrides` entry whose
-`createdBy` is the caller) with its own identity. A user who may pause cannot edit the
+Pause, resume, gate approval and rejecting a Bundle are authorized on a virtual subresource
+(`pipelines/pause`, `policygates/override`, `bundles/reject`) instead of `update` on the object:
+the API server serves no such endpoint, but RBAC grants it and a `SubjectAccessReview` checks it.
+The controller then makes the one change (`spec.paused`, one `spec.overrides` entry whose
+`createdBy` is the caller, or `spec.rejected` whose `by` is the caller) with its own identity. The
+bundle-rejection and gate-overrides admission policies admit a record in another user's name only
+from the controller's own ServiceAccount (and `admission.controllerUsernames`). An override of a
+gate in an environment checks `policygates/override` on every instance it writes, before it
+writes any. A user who may pause cannot edit the
 Pipeline, and one who may approve cannot change the gate's expression. The controller
 manages the freeze gate itself, so the user needs no rights on `policygates` to pause.
 
@@ -1119,9 +1126,9 @@ API and the Bundle API, and they work the same for `kubectl` and the `kardinal` 
 | ClusterRole | Grants | For |
 |-------------|--------|-----|
 | `<fullname>-viewer` | `get`, `list`, `watch` on every kardinal kind; `get`, `list`, `watch` on `events` | Dashboards, read-only users |
-| `<fullname>-promoter` | viewer, `create` on `bundles`, `update` on `pipelines/pause` and `pipelines/hold` | CI (Bundle API, `kardinal create bundle`), promote, roll back (and hold), pause and resume in the UI |
-| `<fullname>-approver` | viewer, `update` on `policygates/override`, `create` and `delete` on `approvals` | Gate overrides in the UI, approvals |
-| `<fullname>-admin` | every verb on every kardinal kind, `update` on `pipelines/pause`, `pipelines/hold`, `pipelines/edit`, `policygates/override` and `policygates/edit`; aggregates the three above | Pipeline owners |
+| `<fullname>-promoter` | viewer, `create` on `bundles`, `update` on `pipelines/pause`, `pipelines/hold` and `bundles/reject` | CI (Bundle API, `kardinal create bundle`), promote, roll back (and hold), pause and resume, and reject a Bundle in the UI |
+| `<fullname>-approver` | viewer, `update` on `policygates/override` and `bundles/reject`, `create` and `delete` on `approvals` | Gate overrides and Bundle rejection in the UI, approvals |
+| `<fullname>-admin` | every verb on every kardinal kind, `update` on `pipelines/pause`, `pipelines/hold`, `pipelines/edit`, `policygates/override`, `policygates/edit` and `bundles/reject`; aggregates the three above | Pipeline owners |
 
 `<fullname>` is the release's full name: `kardinal-promoter` for the default release, so
 `kardinal-promoter-viewer` and so on. Bind these roles explicitly; that is the only way to
