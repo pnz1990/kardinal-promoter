@@ -491,9 +491,7 @@ in flight keep running: their PromotionSteps, PRStatuses and gate instances are 
 Graph of every Bundle that is still promoting is rebuilt in place by the new controller.
 
 **1. Read the upgrade notes.** The changelog's [Before you upgrade](changelog.md#from-v090)
-lists what changes for existing objects: Bundle fields the Bundle CRD now refuses (check your
-CI first), the Bundle spec becoming immutable, the AuditEvent retention, and the environment
-name `time` becoming reserved.
+lists every change for existing objects and clients.
 
 **2. Label the Pipelines' git Secrets.** A Secret named by `spec.git.secretRef` should carry
 `kardinal.io/referenceable: "true"`. This release still uses an unlabeled one but sets the

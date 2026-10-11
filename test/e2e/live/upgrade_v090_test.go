@@ -170,10 +170,9 @@ func TestUpgradeV090_FromV090(t *testing.T) {
 	e.WaitBundlePhase(t, ns, bDone, "Verified", time.Minute)
 	for _, s := range doneSteps {
 		var now v1alpha1.PromotionStep
-		if err := e.Client.Get(ctx, client.ObjectKeyFromObject(&s), &now); err == nil {
-			assert.Equal(t, "Verified", now.Status.State, "%s stays Verified", s.Name)
-			assert.Equal(t, s.UID, now.UID, "%s is the same step", s.Name)
-		}
+		require.NoError(t, e.Client.Get(ctx, client.ObjectKeyFromObject(&s), &now), "%s survives the upgrade", s.Name)
+		assert.Equal(t, "Verified", now.Status.State, "%s stays Verified", s.Name)
+		assert.Equal(t, s.UID, now.UID, "%s is the same step", s.Name)
 	}
 
 	// The in-flight Bundle keeps its Graph (rebuilt in place, same uid) and
