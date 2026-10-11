@@ -89,7 +89,7 @@ func TestQuickstart_LocalContextOnly(t *testing.T) {
 		local                 bool
 	}{
 		{"kind", "kind-kardinal", "https://127.0.0.1:41234", true},
-		{"k3d", "k3d-dev", "https://0.0.0.0:6443", false},
+		{"k3d", "k3d-dev", "https://0.0.0.0:6443", true},
 		{"k3d on loopback", "k3d-dev", "https://127.0.0.1:6443", true},
 		{"minikube", "minikube", "https://192.168.49.2:8443", true},
 		{"docker desktop", "docker-desktop", "https://kubernetes.docker.internal:6443", true},
@@ -100,6 +100,9 @@ func TestQuickstart_LocalContextOnly(t *testing.T) {
 		{"local server, other name", "prod", "https://127.0.0.1:6443", false},
 		{"kind- prefix only", "kindly-prod", "https://127.0.0.1:6443", false},
 		{"public address", "kind-x", "https://203.0.113.7:6443", false},
+		{"kind name, private address", "kind-x", "https://10.0.12.7:6443", false},
+		{"minikube, public address", "minikube", "https://203.0.113.7:8443", false},
+		{"no server", "kind-x", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

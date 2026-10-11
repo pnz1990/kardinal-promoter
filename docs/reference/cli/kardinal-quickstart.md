@@ -12,9 +12,10 @@ follows until prod waits for your approval. A re-run changes nothing.
 
 quickstart refuses, before it sends anything to a cluster, a kubeconfig
 context whose name is not kind-*, k3d-*, minikube, docker-desktop or
-rancher-desktop, or whose API server is not on this machine (loopback, a
-private address, Docker Desktop's kubernetes.docker.internal). There is no
-flag to override it. Use --context to pick a local context.
+rancher-desktop, or whose API server is not on this machine (loopback,
+0.0.0.0, Docker Desktop's kubernetes.docker.internal; for minikube also a
+private address). There is no flag to override it. Use --context to pick a
+local context.
 
 On a local cluster it installs, each only when it is not there yet:
   kro (the version hack/install-kro.sh pins), with the Graph controller

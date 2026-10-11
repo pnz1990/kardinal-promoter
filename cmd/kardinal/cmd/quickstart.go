@@ -158,10 +158,11 @@ func localContextName(name string) bool {
 	return false
 }
 
-// localServer reports whether server (an API server URL) is on this machine
-// or a local network: loopback, a private address, or Docker Desktop's
-// names.
-func localServer(server string) bool {
+// localServer reports whether server, the API server URL of context name,
+// is on this machine: loopback, 0.0.0.0 (k3d's default), localhost or
+// Docker Desktop's names; for minikube also a private address (its VM or
+// container network).
+func localServer(name, server string) bool {
 	u, err := url.Parse(server)
 	if err != nil || u.Hostname() == "" {
 		return false
@@ -172,7 +173,13 @@ func localServer(server string) bool {
 		return true
 	}
 	ip := net.ParseIP(host)
-	return ip != nil && (ip.IsLoopback() || ip.IsPrivate())
+	switch {
+	case ip == nil:
+		return false
+	case ip.IsLoopback(), ip.IsUnspecified():
+		return true
+	}
+	return name == "minikube" && ip.IsPrivate()
 }
 
 // currentContext is the kubeconfig context the CLI uses (--context, else
@@ -206,14 +213,14 @@ var errNotLocal = errors.New("not a local cluster")
 
 // requireLocalContext refuses a context that is not a local cluster: its
 // name is not kind-*, k3d-*, minikube, docker-desktop or rancher-desktop, or
-// its server is not on this machine or a local network. It reads only the
+// its server is not on this machine (localServer). It reads only the
 // kubeconfig: nothing is sent to any cluster before it passes.
 func requireLocalContext() (string, error) {
 	name, server, err := currentContext()
 	if err != nil {
 		return "", err
 	}
-	if !localContextName(name) || !localServer(server) {
+	if !localContextName(name) || !localServer(name, server) {
 		return "", fmt.Errorf("kardinal quickstart installs a demo into a local cluster only (kind, k3d, minikube, Docker Desktop, Rancher Desktop); "+
 			"the context %q (server %s) is not one, and nothing was changed. Create a local cluster and use it: "+
 			"kind create cluster --name kardinal: %w", name, server, errNotLocal)
@@ -668,9 +675,10 @@ Next:
 // quickstartReference is the detail of quickstart for its reference page.
 const quickstartReference = `quickstart refuses, before it sends anything to a cluster, a kubeconfig
 context whose name is not kind-*, k3d-*, minikube, docker-desktop or
-rancher-desktop, or whose API server is not on this machine (loopback, a
-private address, Docker Desktop's kubernetes.docker.internal). There is no
-flag to override it. Use --context to pick a local context.
+rancher-desktop, or whose API server is not on this machine (loopback,
+0.0.0.0, Docker Desktop's kubernetes.docker.internal; for minikube also a
+private address). There is no flag to override it. Use --context to pick a
+local context.
 
 On a local cluster it installs, each only when it is not there yet:
   kro (the version hack/install-kro.sh pins), with the Graph controller

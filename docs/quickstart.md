@@ -29,7 +29,13 @@ Setting up the kardinal demo in kind-kardinal
   ✓ Pipeline default/demo: applied
   ✓ First version: shipped as demo-7xk2p
 Following demo-7xk2p through test, uat and prod (Ctrl-C stops following, the promotion goes on)
-prod waits for approval at gate prod-approval (kardinal approve demo prod)
+  test: Checking health
+  test: Live
+  uat: Promoting
+  uat: Checking health
+  uat: Live
+  prod: Held by gate prod-approval
+Bundle demo-7xk2p stopped: prod waits for approval at gate prod-approval (kardinal approve demo prod)
 
 Next:
   Approve prod:    kardinal approve demo prod
@@ -38,11 +44,12 @@ Next:
   Ship the next:   kardinal ship demo --image ghcr.io/pnz1990/kardinal-test-app:main@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0 --wait
 ```
 
-What it does, each step only when it is not done yet:
+The indented state lines go to stderr; the rest goes to stdout. What it does, each step only
+when it is not done yet:
 
 - It refuses any kubeconfig context that is not a local cluster (by name: `kind-*`, `k3d-*`,
-  `minikube`, `docker-desktop`, `rancher-desktop`; and by API server: this machine or a
-  private address) before it sends anything to it. There is no flag to override that. It
+  `minikube`, `docker-desktop`, `rancher-desktop`; and by API server: this machine, or for
+  minikube a private address) before it sends anything to it. There is no flag to override that. It
   never changes your kubeconfig; `--context` picks another local context.
 - It installs kro (the version `hack/install-kro.sh` pins), Argo CD, and the kardinal-promoter
   chart in `kardinal-system` (`--chart-version` and `--set` change it; `--no-argocd` skips
