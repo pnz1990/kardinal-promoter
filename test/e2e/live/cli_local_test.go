@@ -944,6 +944,20 @@ func TestCLI_Dashboard(t *testing.T) {
 		return opened() == before, opened()
 	})
 
+	// Not a UI address (an app, a javascript: link, an opener's option):
+	// refused before the opener runs.
+	before = opened()
+	for _, bad := range []string{"javascript:alert(1)//", "/Applications/Calculator.app", "-a Terminal"} {
+		r = cli.Exec(noKube, "dashboard", "--address="+bad)
+		assert.Equal(t, 1, r.Code, r.Output())
+		assert.Empty(t, r.Stdout)
+		assert.Contains(t, r.Stderr, fmt.Sprintf("dashboard: --address %q is not an http(s) URL with a host", bad))
+		r = cli.Exec(framework.CLIOptions{Kubeconfig: "/dev/null", Env: append([]string{"KARDINAL_UI_URL=" + bad}, path...)}, "dashboard")
+		assert.Equal(t, 1, r.Code, r.Output())
+		assert.Contains(t, r.Stderr, fmt.Sprintf("dashboard: KARDINAL_UI_URL %q is not an http(s) URL with a host", bad))
+	}
+	assert.Equal(t, before, opened(), "the opener never got one")
+
 	// No cluster and no --address: nothing to forward to.
 	r = cli.Exec(noKube, "dashboard")
 	assert.Equal(t, 1, r.Code)

@@ -25,6 +25,12 @@ namespace from -n or the kubeconfig context), with <env> that stage's
 drawer (/env/<env>). kardinal why and kardinal status <pipeline> print the
 same link on stderr when KARDINAL_UI_URL says where the UI is.
 
+--address and KARDINAL_UI_URL must be http or https URLs with a host, and
+without spaces or control characters: dashboard refuses another value
+before it opens anything, and why and status print a warning instead of the
+link. The url of -o json (create bundle, promote, rollback) is the same
+#/p/<namespace>/<pipeline> page, empty when KARDINAL_UI_URL is not one.
+
 ```
 kardinal dashboard [<pipeline> [<env>]] [flags]
 ```

@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"unicode"
 
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -124,8 +125,14 @@ func contextOf(cmd *cobra.Command) context.Context {
 // port-forward to the controller in controllerNS, which it keeps until ctx
 // is done.
 func dashboardFn(ctx context.Context, w io.Writer, address, controllerNS string, noOpen bool, route string) error {
+	source := "--address"
 	if address == "" {
-		address = os.Getenv("KARDINAL_UI_URL")
+		address, source = os.Getenv("KARDINAL_UI_URL"), "KARDINAL_UI_URL"
+	}
+	if address != "" {
+		if err := checkUIAddress(address); err != nil {
+			return fmt.Errorf("dashboard: %s %w", source, err)
+		}
 	}
 	var done <-chan error
 	if address == "" {
@@ -168,7 +175,6 @@ func dashboardFn(ctx context.Context, w io.Writer, address, controllerNS string,
 	}
 }
 
-// openBrowser opens the given URL in the default system browser.
 // defaultUIAddress is where kardinal dashboard opens the UI without
 // --address: the controller's UI port, forwarded to localhost.
 const defaultUIAddress = "http://localhost:8082/ui/"
@@ -197,20 +203,52 @@ func withRoute(address, route string) string {
 	return address + route
 }
 
-// uiLink is the UI's page of pipeline (and env) in ns when the UI's address
-// is known (KARDINAL_UI_URL), else "": a port-forward may not be running.
-func uiLink(ns, pipeline, env string) string {
+// checkUIAddress is why address is not a UI address kardinal links to or
+// hands to the system's opener (open, xdg-open, rundll32), or nil: it must be
+// an http or https URL with a host, without control characters or spaces.
+// So it never starts with "-" (an opener's option) and is never a file, an
+// app or a javascript: link.
+func checkUIAddress(address string) error {
+	bad := strings.IndexFunc(address, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }) >= 0
+	u, err := url.Parse(address)
+	if bad || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || strings.HasPrefix(address, "-") {
+		return fmt.Errorf("%q is not an http(s) URL with a host: set it to the UI's address, e.g. https://kardinal.example.com/ui/", address)
+	}
+	return nil
+}
+
+// uiBase is KARDINAL_UI_URL when it is a UI address (checkUIAddress), and
+// why it is not.
+func uiBase() (string, error) {
 	base := os.Getenv("KARDINAL_UI_URL")
 	if base == "" {
-		return ""
+		return "", nil
 	}
-	return withRoute(base, uiRoute(ns, pipeline, env))
+	if err := checkUIAddress(base); err != nil {
+		return "", fmt.Errorf("KARDINAL_UI_URL %w", err)
+	}
+	return base, nil
+}
+
+// uiLink is the UI's page of pipeline (and env) in ns when the UI's address
+// is known (KARDINAL_UI_URL), else "": a port-forward may not be running.
+func uiLink(ns, pipeline, env string) (string, error) {
+	base, err := uiBase()
+	if base == "" {
+		return "", err
+	}
+	return withRoute(base, uiRoute(ns, pipeline, env)), nil
 }
 
 // printUILink prints, on stderr, the UI page of pipeline (and env) in ns
-// when the UI's address is known (KARDINAL_UI_URL).
+// when the UI's address is known (KARDINAL_UI_URL), or a warning when it is
+// not a UI address.
 func printUILink(ns, pipeline, env string) {
-	if link := uiLink(ns, pipeline, env); link != "" {
+	link, err := uiLink(ns, pipeline, env)
+	switch {
+	case err != nil:
+		_, _ = fmt.Fprintf(errOut, "%s no UI link: %v\n", sty.Warning("warning:"), err)
+	case link != "":
 		_, _ = fmt.Fprintf(errOut, "%s %s\n", sty.Dim("UI:"), link)
 	}
 }
@@ -227,17 +265,26 @@ func linkNamespace() string {
 	return "default"
 }
 
-// uiURL is the UI's page of pipeline in ns: KARDINAL_UI_URL (else
-// defaultUIAddress) with the pipeline's hash route.
+// uiURL is the UI's page of pipeline in ns (uiRoute): on KARDINAL_UI_URL,
+// else defaultUIAddress; "" when KARDINAL_UI_URL is not a UI address.
 func uiURL(ns, pipeline string) string {
-	base := os.Getenv("KARDINAL_UI_URL")
-	if base == "" {
+	base, err := uiBase()
+	switch {
+	case err != nil:
+		return ""
+	case base == "":
 		base = defaultUIAddress
 	}
-	return strings.TrimSuffix(base, "#") + "#pipeline=" + url.QueryEscape(pipeline) + "&ns=" + url.QueryEscape(ns)
+	return withRoute(base, uiRoute(ns, pipeline, ""))
 }
 
+// openBrowser opens url, a UI address (checked again here: nothing else
+// reaches the opener), in the system's browser. The check keeps a leading
+// "-" out, so no "--" is needed (xdg-open refuses one).
 func openBrowser(url string) error {
+	if err := checkUIAddress(url); err != nil {
+		return fmt.Errorf("open a browser: %w", err)
+	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
@@ -275,4 +322,10 @@ the UI" in docs/installation.md).
 With <pipeline> it opens the UI's page of it (#/p/<namespace>/<pipeline>, the
 namespace from -n or the kubeconfig context), with <env> that stage's
 drawer (/env/<env>). kardinal why and kardinal status <pipeline> print the
-same link on stderr when KARDINAL_UI_URL says where the UI is.`
+same link on stderr when KARDINAL_UI_URL says where the UI is.
+
+--address and KARDINAL_UI_URL must be http or https URLs with a host, and
+without spaces or control characters: dashboard refuses another value
+before it opens anything, and why and status print a warning instead of the
+link. The url of -o json (create bundle, promote, rollback) is the same
+#/p/<namespace>/<pipeline> page, empty when KARDINAL_UI_URL is not one.`

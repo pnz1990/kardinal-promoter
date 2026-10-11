@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -149,15 +150,20 @@ func TestUILink(t *testing.T) {
 	prev := buildClient
 	buildClient = func() (sigs_client.Client, string, error) { return c, "default", nil }
 	t.Cleanup(func() { buildClient, globalOutput, globalNamespace = prev, "", "" })
+	var stdout bytes.Buffer
 	run := func(args ...string) string {
 		var errb bytes.Buffer
 		prevErr := errOut
 		t.Cleanup(func() { errOut = prevErr })
+		stdout.Reset()
 		root := NewRootCmd()
-		root.SetOut(&bytes.Buffer{})
+		root.SetOut(&stdout)
 		root.SetErr(&errb)
 		root.SetArgs(args)
-		require.NoError(t, root.Execute())
+		// -w runs until its context ends.
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		require.NoError(t, root.ExecuteContext(ctx))
 		return errb.String()
 	}
 	t.Setenv("KARDINAL_UI_URL", "")
@@ -166,5 +172,66 @@ func TestUILink(t *testing.T) {
 	assert.Contains(t, run("why", "demo", "prod"), "UI: https://kardinal.example.com/ui/#/p/default/demo/env/prod\n")
 	assert.Contains(t, run("status", "demo"), "UI: https://kardinal.example.com/ui/#/p/default/demo\n")
 	assert.NotContains(t, run("status", "demo", "-o", "json"), "UI:", "not with -o json")
+	for _, args := range [][]string{{"why", "demo", "prod", "-o", "json"}, {"why", "demo", "prod", "-w"}, {"status", "demo", "-w"}} {
+		assert.NotContains(t, run(args...), "UI:", "not with %v", args)
+		assert.NotContains(t, stdout.String(), "kardinal.example.com", "not with %v", args)
+	}
+	// Not a UI address: no link, a warning that says why.
+	t.Setenv("KARDINAL_UI_URL", "javascript:alert(1)//")
+	got := run("why", "demo", "prod")
+	assert.NotContains(t, got, "UI:")
+	assert.Contains(t, got, `warning: no UI link: KARDINAL_UI_URL "javascript:alert(1)//" is not an http(s) URL with a host`)
+	assert.Empty(t, uiURL("default", "demo"), "-o json has no url for it")
+	t.Setenv("KARDINAL_UI_URL", "")
+	assert.Equal(t, "http://localhost:8082/ui/#/p/default/demo", uiURL("default", "demo"), "the one route form")
 	assert.Equal(t, "#/p/team%20a/my-app/env/prod", uiRoute("team a", "my-app", "prod"))
+}
+
+func TestCheckUIAddress(t *testing.T) {
+	cases := []struct {
+		address string
+		ok      bool
+	}{
+		{"https://kardinal.example.com/ui/", true},
+		{"http://127.0.0.1:8082/ui/", true},
+		{"http://[::1]:8082/ui/#old", true},
+		{"javascript:alert(1)//", false},
+		{"file:///etc/passwd", false},
+		{"/Applications/Calculator.app", false},
+		{"-a Terminal", false},
+		{"--help", false},
+		{"https://", false},
+		{"https:///ui/", false},
+		{"kardinal.example.com/ui/", false},
+		{"https://kardinal.example.com/ui/\x1b[2J", false},
+		{"https://kardinal.example.com/ui/\nfake: line", false},
+		{"https://kardinal.example.com/a b", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.address, func(t *testing.T) {
+			err := checkUIAddress(tc.address)
+			if tc.ok {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "is not an http(s) URL with a host: set it to the UI's address, e.g. https://kardinal.example.com/ui/")
+			assert.ErrorContains(t, openBrowser(tc.address), "open a browser:", "nothing unchecked reaches the opener")
+		})
+	}
+}
+
+// TestDashboard_RefusesABadAddress: dashboard refuses an --address or
+// KARDINAL_UI_URL that is not a UI address, before it opens anything.
+func TestDashboard_RefusesABadAddress(t *testing.T) {
+	t.Setenv("KARDINAL_UI_URL", "")
+	err := dashboardFn(context.Background(), &bytes.Buffer{}, "-a Terminal", "kardinal-system", false, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `dashboard: --address "-a Terminal" is not an http(s) URL with a host`)
+	t.Setenv("KARDINAL_UI_URL", "file:///etc/passwd")
+	var out bytes.Buffer
+	err = dashboardFn(context.Background(), &out, "", "kardinal-system", false, "#/p/default/demo")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `dashboard: KARDINAL_UI_URL "file:///etc/passwd" is not an http(s) URL with a host`)
+	assert.Empty(t, out.String(), "nothing printed or opened")
 }
