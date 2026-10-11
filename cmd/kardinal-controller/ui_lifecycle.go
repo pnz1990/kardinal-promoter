@@ -16,8 +16,10 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 )
@@ -441,4 +443,143 @@ func (s *uiAPIServer) actionClient(ctx context.Context, resource, action, namesp
 		return nil, err
 	}
 	return az.Privileged(), nil
+}
+
+// handleReject handles POST /api/v1/ui/reject: it sets spec.rejected on the
+// Bundle, as kardinal reject does, with the caller as the rejecting user.
+// In TokenReview mode the caller needs the reject action (bundles/reject),
+// not update on the Bundle: the controller writes it, recording the
+// requester the review verified (the bundle-rejection admission policy lets
+// only the controller write a rejection in another user's name). The Bundle
+// reconciler then records the BundleRejected AuditEvent.
+func (s *uiAPIServer) handleReject(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req uiRejectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Bundle == "" {
+		http.Error(w, "bundle is required", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Reason) == "" {
+		http.Error(w, "reason is required", http.StatusBadRequest)
+		return
+	}
+	ns := req.Namespace
+	if ns == "" {
+		ns = "default"
+	}
+	writer, err := s.actionClient(r.Context(), "bundles", "reject", ns, req.Bundle)
+	if err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	by := uiRequester(r.Context())
+	b, err := lifecycle.Reject(r.Context(), writer, ns, req.Bundle, req.Reason, by, time.Now())
+	if err != nil {
+		s.writeLifecycleError(w, "reject bundle", err)
+		return
+	}
+	s.log.Info().Str("bundle", req.Bundle).Str("namespace", ns).Str("reason", req.Reason).
+		Str("requestedBy", by).Msg("ui: bundle rejected")
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(uiMessageResponse{Message: fmt.Sprintf(
+		"bundle %s rejected by %s: it is never promoted again; an environment that runs it keeps it until rolled back",
+		b.Name, by)})
+}
+
+// handlePipelineOverride handles POST /api/v1/ui/override: it overrides a
+// gate template in one environment of a Pipeline, as kardinal override
+// --stage does, on the gate instances its in-progress Bundles have
+// (lifecycle.OverrideTargets). In TokenReview mode the caller needs the
+// override action (policygates/override) on every one of them, checked
+// before any is written; the controller writes the overrides, recording the
+// requester the review verified. The PolicyGate reconciler records one
+// GateOverridden AuditEvent per override.
+func (s *uiAPIServer) handlePipelineOverride(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req uiPipelineOverrideRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	switch {
+	case req.Pipeline == "":
+		http.Error(w, "pipeline is required", http.StatusBadRequest)
+		return
+	case req.Gate == "":
+		http.Error(w, "gate is required", http.StatusBadRequest)
+		return
+	case req.Environment == "":
+		http.Error(w, "environment is required", http.StatusBadRequest)
+		return
+	case strings.TrimSpace(req.Reason) == "":
+		http.Error(w, "reason is required", http.StatusBadRequest)
+		return
+	}
+	expiresMins := req.ExpiresInMinutes
+	if expiresMins == 0 {
+		expiresMins = 60
+	}
+	if expiresMins < 1 || expiresMins > maxGateOverrideMinutes {
+		http.Error(w, fmt.Sprintf("expiresInMinutes must be between 1 and %d", maxGateOverrideMinutes), http.StatusBadRequest)
+		return
+	}
+	ns := req.Namespace
+	if ns == "" {
+		ns = "default"
+	}
+	var pl v1alpha1.Pipeline
+	if err := s.client.Get(r.Context(), client.ObjectKey{Namespace: ns, Name: req.Pipeline}, &pl); err != nil {
+		if apierrors.IsNotFound(err) {
+			http.Error(w, fmt.Sprintf("pipeline %s not found in namespace %s", req.Pipeline, ns), http.StatusNotFound)
+			return
+		}
+		s.writeLifecycleError(w, "override gate", err)
+		return
+	}
+	targets, err := lifecycle.OverrideTargets(r.Context(), s.client, ns, req.Pipeline, req.Environment, req.Gate)
+	if err != nil {
+		s.writeLifecycleError(w, "override gate", err)
+		return
+	}
+	// Every instance is authorized before any is written.
+	writers := make([]client.Client, len(targets))
+	for i := range targets {
+		if writers[i], err = s.actionClient(r.Context(), "policygates", "override", ns, targets[i].Name); err != nil {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	}
+	by := uiRequester(r.Context())
+	now := time.Now().UTC()
+	createdAt := metav1.NewTime(now)
+	override := v1alpha1.PolicyGateOverride{Reason: req.Reason, Stage: req.Environment,
+		ExpiresAt: metav1.NewTime(now.Add(time.Duration(expiresMins) * time.Minute)), CreatedAt: &createdAt, CreatedBy: by}
+	names := make([]string, 0, len(targets))
+	for i := range targets {
+		if err := lifecycle.AppendOverride(r.Context(), writers[i], &targets[i], override); err != nil {
+			s.writeLifecycleError(w, "override gate "+targets[i].Name, err)
+			return
+		}
+		names = append(names, targets[i].Name)
+	}
+	s.log.Info().Str("pipeline", req.Pipeline).Str("gate", req.Gate).Str("environment", req.Environment).
+		Strs("instances", names).Str("reason", req.Reason).Str("createdBy", by).
+		Time("expiresAt", override.ExpiresAt.Time).Msg("ui: gate overridden")
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(uiPipelineOverrideResponse{
+		Message: fmt.Sprintf("gate %s overridden in %s for %d in-progress Bundle(s) until %s", req.Gate,
+			req.Environment, len(names), override.ExpiresAt.UTC().Format(time.RFC3339)),
+		Gates:     names,
+		ExpiresAt: override.ExpiresAt.UTC().Format(time.RFC3339),
+	})
 }

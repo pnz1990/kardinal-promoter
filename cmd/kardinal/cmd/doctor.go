@@ -76,23 +76,12 @@ func newDoctorCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Run pre-flight checks to verify the cluster is correctly configured",
-		Long: `Run pre-flight checks for kardinal-promoter:
-
-  ✅ Controller reachable      kardinal-version ConfigMap in the controller namespace
-  ✅ CRDs installed            every kardinal.io/v1alpha1 resource served
-  ✅ kro running               kro controller pod in kro-system
-  ✅ kro Graph CRD installed   kro.run/v1alpha1 graphs registered
-  ✅ GitHub token              GITHUB_TOKEN set on the controller Deployment
-
-The token check is named after the controller's --scm-provider (GitHub token,
-GitLab token, Forgejo token, Gitea token, Bitbucket token or Azure DevOps
-token), and is "SCM token" when doctor finds no controller Deployment.
-
-Use --controller-namespace when kardinal-promoter is installed in a namespace
-other than kardinal-system. --pipeline checks a Pipeline in the current
-namespace (-n, else the kubeconfig context's namespace).
-
-Use 'kardinal doctor' as the first troubleshooting step.`,
+		Long: `Check that kardinal can work in this cluster: the controller answers, the
+CRDs are installed, kro and its Graph CRD run, and the controller has an SCM
+token. --pipeline also checks one Pipeline. Run it first when something is
+wrong.`,
+		Example: `  kardinal doctor
+  kardinal doctor --pipeline my-app -n team-a`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runDoctor(cmd.OutOrStdout(), pipeline, controllerNS)
 		},
@@ -100,6 +89,7 @@ Use 'kardinal doctor' as the first troubleshooting step.`,
 	cmd.Flags().StringVar(&pipeline, "pipeline", "", "Also check health of this Pipeline (optional)")
 	cmd.Flags().StringVar(&controllerNS, "controller-namespace", defaultControllerNamespace,
 		"Namespace kardinal-promoter is installed in")
+	withReference(cmd, doctorReference)
 	return cmd
 }
 
@@ -513,3 +503,20 @@ func checkPipelineHealth(ctx context.Context, client sigs_client.Client, ns, nam
 	}
 	return r
 }
+
+// doctorReference is the detail of the command for its reference page.
+const doctorReference = `  ✅ Controller reachable      kardinal-version ConfigMap in the controller namespace
+  ✅ CRDs installed            every kardinal.io/v1alpha1 resource served
+  ✅ kro running               kro controller pod in kro-system
+  ✅ kro Graph CRD installed   kro.run/v1alpha1 graphs registered
+  ✅ GitHub token              GITHUB_TOKEN set on the controller Deployment
+
+The token check is named after the controller's --scm-provider (GitHub token,
+GitLab token, Forgejo token, Gitea token, Bitbucket token or Azure DevOps
+token), and is "SCM token" when doctor finds no controller Deployment.
+
+Use --controller-namespace when kardinal-promoter is installed in a namespace
+other than kardinal-system. --pipeline checks a Pipeline in the current
+namespace (-n, else the kubeconfig context's namespace).
+
+Use 'kardinal doctor' as the first troubleshooting step.`

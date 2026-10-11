@@ -4,13 +4,21 @@ List Subscriptions (passive artifact watchers)
 
 ### Synopsis
 
-List Subscriptions and their watching status.
+List Subscriptions: watchers of an OCI registry or a git repository that create
+a Bundle when a new artifact appears.
 
 Subscriptions passively watch OCI registries or Git repositories and
 automatically create Bundles when new artifacts are detected.
 
 ```
 kardinal get subscriptions [name] [flags]
+```
+
+### Examples
+
+```
+  kardinal get subscriptions
+  kardinal get subscriptions -A
 ```
 
 ### Options

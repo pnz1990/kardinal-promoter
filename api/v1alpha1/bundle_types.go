@@ -293,6 +293,14 @@ type BundleStatus struct {
 	// final; the GraphRetired condition only shows the retirement's progress.
 	// +optional
 	RetiredAt *metav1.Time `json:"retiredAt,omitempty"`
+
+	// PendingAuditEvents are the BundleRejected AuditEvents the Bundle
+	// reconciler has recorded but not written yet (the audit outbox, #1552):
+	// the entry is stored in the same status write that sets phase
+	// Rejected, and removed once its AuditEvent exists.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	PendingAuditEvents []PendingAuditEvent `json:"pendingAuditEvents,omitempty"`
 }
 
 // RetiredStep is what a retired Bundle keeps of one of its PromotionSteps.
