@@ -102,6 +102,11 @@ type Reconciler struct {
 
 	client.Client
 
+	// ControllerSecret is the Secret holding the controller's own SCM token:
+	// a Pipeline whose git.secretRef names it is Ready=False/ValidationFailed.
+	// Nil refuses nothing.
+	ControllerSecret *scm.ControllerTokenSecret
+
 	// AllowedRepositories is --scm-allowed-repositories: a Pipeline that
 	// would need the shared SCM token for a spec.git.url it does not allow is
 	// Ready=False/RepositoryNotAllowed (#1332). Nil allows every repository.
@@ -668,6 +673,9 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline, ownSecret bool) meta
 	// A git.secretRef in another namespace is refused on purpose (confused
 	// deputy), so it is a validation error, not an unimplemented field.
 	if err := graph.ValidateSecretRef(p); err != nil {
+		return invalid(err.Error())
+	}
+	if err := r.ControllerSecret.Refuses(p); err != nil {
 		return invalid(err.Error())
 	}
 	// The Pipeline would have the controller's shared SCM token act on a
