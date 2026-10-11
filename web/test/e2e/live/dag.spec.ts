@@ -56,7 +56,7 @@ test('the DAG shows each environment and gate with its state, the PR badge and t
   await expect(prodNode.locator('.dag-node__elapsed')).toHaveText(/\d/)
 
   const gateNode = dagNode(page, gate)
-  await expect(gateNode).toHaveAttribute('aria-label', `${gate} — Pass`)
+  await expect(gateNode).toHaveAttribute('aria-label', `${gate} — Passing`)
   await expect(gateNode).toHaveAttribute('data-health-state', 'Ready')
   await expect(gateNode).toContainText(gate)
   await expect(gateNode.locator('svg.dag-node__icon')).toHaveCount(1)

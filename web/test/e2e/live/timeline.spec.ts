@@ -35,7 +35,7 @@ async function expectShown(page: Page, b: Entry, other: Entry) {
 /** expectComparison checks the panel for Bundle A a and Bundle B b. */
 async function expectComparison(panel: Locator, a: Entry, b: Entry) {
   await expect(panel.getByRole('heading', { name: 'Bundle Comparison' })).toBeVisible()
-  const rows = panel.locator('div[style*="grid-template-columns"]')
+  const rows = panel.locator('.bundle-diff__row')
   const row = (label: string) => rows.filter({ hasText: new RegExp(`^(▸ )?${label}`) })
   const cells = (label: string) => row(label).locator(':scope > span')
 
