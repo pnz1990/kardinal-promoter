@@ -12,7 +12,7 @@ NodePort), turn on a UI auth mode first: see [Accessing the UI](installation.md#
 The UI reads and acts with your Kubernetes identity when an auth mode is on, so it shows and
 changes what your RBAC allows, as `kubectl` does.
 
-<figure class="k-demo" data-demo="first-look" hidden markdown="0">
+<figure class="k-demo" data-demo="first-look" hidden>
   <picture>
     <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/first-look-dark.png">
     <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/first-look.png">
@@ -90,7 +90,7 @@ The map draws the pipeline as a station map:
 a second, then **Compare**: the second version's route is drawn as a dashed ink thread, and the
 comparison lists what differs (images, environments, provenance).
 
-<figure class="k-demo" data-demo="compare" hidden markdown="0">
+<figure class="k-demo" data-demo="compare" hidden>
   <picture>
     <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/compare-dark.png">
     <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/compare.png">
@@ -100,7 +100,7 @@ comparison lists what differs (images, environments, provenance).
   <figcaption>Compare · <code>kardinal diff my-app-a my-app-b</code></figcaption>
 </figure>
 
-<figure class="k-demo" data-demo="fleet" hidden markdown="0">
+<figure class="k-demo" data-demo="fleet" hidden>
   <picture>
     <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/fleet-dark.png">
     <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/fleet.png">
@@ -135,7 +135,7 @@ as a sheet over it on a narrow one:
   durations, its bake time and its gates.
 - **History**: the promotion's Kubernetes events in this environment.
 
-<figure class="k-demo" data-demo="why-waiting" hidden markdown="0">
+<figure class="k-demo" data-demo="why-waiting" hidden>
   <picture>
     <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/why-waiting-dark.png">
     <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/why-waiting.png">
@@ -145,7 +145,7 @@ as a sheet over it on a narrow one:
   <figcaption>Why it's waiting · <code>kardinal explain my-app prod</code></figcaption>
 </figure>
 
-<figure class="k-demo" data-demo="approve-override" hidden markdown="0">
+<figure class="k-demo" data-demo="approve-override" hidden>
   <picture>
     <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/approve-override-dark.png">
     <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/approve-override.png">
@@ -155,7 +155,7 @@ as a sheet over it on a narrow one:
   <figcaption>Approve and override · <code>kardinal approve</code>, <code>kardinal override</code></figcaption>
 </figure>
 
-<figure class="k-demo" data-demo="rollback-hold" hidden markdown="0">
+<figure class="k-demo" data-demo="rollback-hold" hidden>
   <picture>
     <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/rollback-hold-dark.png">
     <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/rollback-hold.png">
@@ -195,7 +195,7 @@ closes.
 The palette never changes a promotion by itself: Promote, Roll back and Pause keep their own
 confirmation.
 
-<figure class="k-demo" data-demo="palette" hidden markdown="0">
+<figure class="k-demo" data-demo="palette" hidden>
   <picture>
     <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/palette-dark.png">
     <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/palette.png">
