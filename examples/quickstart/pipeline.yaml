@@ -5,8 +5,8 @@ metadata:
   namespace: default
 spec:
   git:
-    # To promote into your own copy, fork pnz1990/kardinal-demo and put the
-    # fork here and in argocd-applications.yaml: https://github.com/<you>/kardinal-demo
+    # Replace with your fork: fork pnz1990/kardinal-demo and put
+    # https://github.com/<you>/kardinal-demo here and in argocd-applications.yaml.
     url: https://github.com/pnz1990/kardinal-demo
     secretRef:
       name: github-token
