@@ -453,3 +453,27 @@ func TestStatusSummary_ListError(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, "list bundles: bundles.kardinal.io is forbidden", err.Error())
 }
+
+// TestStatusPipelineWriter_PipelineNotices (P4): kardinal status shows the
+// Pipeline's own problems first, before any promotion: an ERROR for
+// Ready=False (GitCredentialMissing with the fix command) and a WARNING for
+// an unlabelled git Secret that still works.
+//
+// Covers PIPE-GITCRED-02.
+func TestStatusPipelineWriter_PipelineNotices(t *testing.T) {
+	p := policyPipeline("demo", "test", "prod")
+	p.Status.Conditions = []metav1.Condition{
+		{Type: "Ready", Status: metav1.ConditionFalse, Reason: "GitCredentialMissing",
+			Message: "git Secret t not found in namespace default, so git has no token for https://x; create it: kubectl create secret generic t"},
+		{Type: "SecretReferenceable", Status: metav1.ConditionFalse, Reason: "SecretNotReferenceable",
+			Message: "git Secret t is not labeled kardinal.io/referenceable=true; label it (kubectl label secret t -n default kardinal.io/referenceable=true)"},
+	}
+	out := runStatusPipeline(t, p)
+	assert.Contains(t, out, "ERROR: pipeline demo is not Ready (GitCredentialMissing): git Secret t not found in namespace default")
+	assert.Contains(t, out, "WARNING: pipeline demo: git Secret t is not labeled kardinal.io/referenceable=true")
+	assert.Less(t, strings.Index(out, "ERROR:"), strings.Index(out, "No active promotions."), out)
+
+	ok := policyPipeline("demo", "test", "prod")
+	ok.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Valid"}}
+	assert.NotContains(t, runStatusPipeline(t, ok), "ERROR:")
+}

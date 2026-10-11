@@ -24,6 +24,8 @@ import (
 
 	"github.com/spf13/cobra"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -43,7 +45,10 @@ When called without arguments: displays the controller version (the
 kardinal-version ConfigMap in --controller-namespace), the pipeline count with
 any Degraded pipelines, and the bundle count (active = Available or Promoting).
 
-When called with a pipeline name: shows in-flight promotion details for that
+When called with a pipeline name: first the Pipeline's own problems, an
+ERROR when it is not Ready (such as GitCredentialMissing, with the command
+that creates the git Secret) and a WARNING when its git Secret is not
+labelled kardinal.io/referenceable=true; then in-flight promotion details for that
 pipeline — the current bundle per environment (the newest bundle that is not
 Superseded and has a PromotionStep there, or a gate instance there and has not
 failed; see kardinal explain), its PromotionSteps (one row per environment it
@@ -147,6 +152,12 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 	}
 
 	_, _ = fmt.Fprintf(w, "Pipeline: %s   Namespace: %s\n\n", pipeline, ns)
+	if notices := pipelineNotices(&pl); len(notices) > 0 {
+		for _, n := range notices {
+			_, _ = fmt.Fprintln(w, n)
+		}
+		_, _ = fmt.Fprintln(w)
+	}
 
 	// List PromotionSteps for this pipeline.
 	var steps v1alpha1.PromotionStepList
@@ -353,4 +364,20 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 	}
 
 	return nil
+}
+
+// pipelineNotices are the Pipeline's own problems, shown before its
+// promotions: an ERROR when it is not Ready (an invalid spec, or
+// GitCredentialMissing with the command that fixes it), and a WARNING for a
+// git Secret that works today but is not labelled referenceable, so it is
+// fixed before v0.11 refuses it.
+func pipelineNotices(p *v1alpha1.Pipeline) []string {
+	var out []string
+	if c := meta.FindStatusCondition(p.Status.Conditions, "Ready"); c != nil && c.Status == metav1.ConditionFalse {
+		out = append(out, fmt.Sprintf("ERROR: pipeline %s is not Ready (%s): %s", p.Name, c.Reason, c.Message))
+	}
+	if c := meta.FindStatusCondition(p.Status.Conditions, "SecretReferenceable"); c != nil && c.Status == metav1.ConditionFalse {
+		out = append(out, fmt.Sprintf("WARNING: pipeline %s: %s", p.Name, c.Message))
+	}
+	return out
 }
