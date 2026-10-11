@@ -7,7 +7,7 @@ import { forwardRef, type SVGProps } from 'react'
 
 export type IconName =
   | 'close' | 'chevron' | 'check' | 'cross' | 'clock' | 'gate' | 'pin' | 'pause' | 'play'
-  | 'rollback' | 'promote' | 'copy' | 'external' | 'search' | 'person' | 'pr' | 'warning'
+  | 'rollback' | 'promote' | 'copy' | 'external' | 'search' | 'person' | 'pr' | 'warning' | 'menu'
 
 /** 16×16 drawings; strokes unless noted. */
 const PATHS: Record<IconName, string[]> = {
@@ -28,6 +28,7 @@ const PATHS: Record<IconName, string[]> = {
   person: ['M8 2.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 1 0 0-5z', 'M3 13.5c.6-2.5 2.6-4 5-4s4.4 1.5 5 4'],
   pr: ['M4.5 2.5v11', 'M11.5 7v6.5', 'M11.5 7a2.5 2.5 0 0 0-2.5-2.5H6.5', 'M8 3l-1.5 1.5L8 6'],
   warning: ['M8 2.5l6 11H2z', 'M8 6.5v3', 'M8 11.5v.01'],
+  menu: ['M2.5 4.5h11', 'M2.5 8h11', 'M2.5 11.5h11'],
 }
 
 const FILLED: ReadonlySet<IconName> = new Set(['play'])

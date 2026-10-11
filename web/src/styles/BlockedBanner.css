@@ -51,3 +51,5 @@
   background: var(--k-status-blocked-fg);
   color: var(--k-surface-canvas);
 }
+
+.blocked-banner__actions { display: flex; gap: var(--k-space-2); }

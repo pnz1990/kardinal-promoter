@@ -44,6 +44,8 @@ const PIPELINES = [
     phase: 'Ready',
     environmentCount: 3,
     activeBundleName: 'kardinal-test-app-abc123',
+    // status.summary (P1), as the PipelineReconciler writes it.
+    summary: 'abc123 Verified in test, uat; Waiting for PR merge in prod (#42)',
     environmentStates: { test: 'Verified', uat: 'Verified', prod: 'WaitingForMerge' },
     blockerCount: 0,
     failedStepCount: 0,
@@ -66,6 +68,12 @@ const PIPELINES = [
     failedStepCount: 0,
     activeBundleVersion: 'v2.4.0 with config 1a2b3c4',
     environmentTopology: [{ name: 'staging' }, { name: 'prod', upstreams: ['staging'] }],
+    // status.conditions (#1727): its git Secret works but is not labelled referenceable.
+    conditions: [
+      { type: 'Ready', status: 'True', reason: 'Ready' },
+      { type: 'SecretReferenceable', status: 'False', reason: 'SecretNotReferenceable',
+        message: 'git Secret github-token is not labeled kardinal.io/referenceable=true; it is still used in v0.10 but will be refused in v0.11: label it (kubectl label secret github-token -n default kardinal.io/referenceable=true)' },
+    ],
   },
 ]
 
@@ -127,7 +135,7 @@ const GRAPHS = {
       { id: 'step-uat', type: 'PromotionStep', label: 'uat', environment: 'uat', state: 'Verified', startedAt: new Date(Date.now() - 400_000).toISOString() },
       // holding: the UI API sets it with graph.GateHolds; the UI counts only
       // holding gates as blocked (E2E-R19). The mock states it, not the rule.
-      { id: 'gate-no-weekend', type: 'PolicyGate', label: 'no-weekend-deploys', environment: 'no-weekend-deploys', state: 'Block', holding: true, expression: '!schedule.isWeekend', lastEvaluatedAt: new Date(Date.now() - 30_000).toISOString() },
+      { id: 'gate-no-weekend', type: 'PolicyGate', label: 'no-weekend-deploys', environment: 'prod', state: 'Block', holding: true, expression: '!schedule.isWeekend', lastEvaluatedAt: new Date(Date.now() - 30_000).toISOString() },
       { id: 'step-prod', type: 'PromotionStep', label: 'prod', environment: 'prod', state: 'WaitingForMerge', prURL: 'https://github.com/org/repo/pull/42', startedAt: new Date(Date.now() - 200_000).toISOString() },
     ],
     edges: [
@@ -171,7 +179,7 @@ const GATES = [
       required: 2, allowedGroups: ['release-managers'], excludeAuthor: true, approved: 1,
       decisions: [
         { user: 'alice', decision: 'approve', counted: true, comment: 'canary looks clean', firstSeenAt: new Date(Date.now() - 3_600_000).toISOString() },
-        { user: 'ci-bot', decision: 'approve', counted: false, reason: 'the Bundle\'s creator (excludeAuthor)', firstSeenAt: new Date(Date.now() - 600_000).toISOString() },
+        { user: 'ci-bot', decision: 'approve', counted: false, reason: 'the version\'s author (approval.excludeAuthor)', firstSeenAt: new Date(Date.now() - 600_000).toISOString() },
       ],
     },
   },

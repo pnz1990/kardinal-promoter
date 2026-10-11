@@ -42,7 +42,7 @@ export function approverRule(a: GateApproval): string {
   if (a.allowedUsers?.length) who.push(a.allowedUsers.join(', '))
   if (a.allowedGroups?.length) who.push(`members of ${a.allowedGroups.join(', ')}`)
   const base = who.length ? `From ${who.join(' or ')}` : 'From anyone allowed to create Approvals'
-  return a.excludeAuthor ? `${base}; not the Bundle's creator` : base
+  return a.excludeAuthor ? `${base}; not the person who shipped the version` : base
 }
 
 function DecisionRow({ d, now }: { d: GateDecision; now: number }) {

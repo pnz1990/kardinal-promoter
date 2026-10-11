@@ -22,23 +22,23 @@ describe('BundleTypeBadge', () => {
       <BundleTypeBadge type="chart" />
       <BundleTypeBadge type="rendered" />
     </>)
-    expect(screen.getByRole('img', { name: 'config Bundle' })).toHaveTextContent('config')
-    expect(screen.getByRole('img', { name: 'image and config Bundle' })).toHaveTextContent('image + config')
-    expect(screen.getByRole('img', { name: 'Helm chart Bundle' })).toHaveAttribute('data-bundle-type', 'chart')
-    expect(screen.getByRole('img', { name: 'rendered Bundle' })).toHaveAttribute('data-bundle-type', 'other')
+    expect(screen.getByRole('img', { name: 'config version' })).toHaveTextContent('config')
+    expect(screen.getByRole('img', { name: 'image and config version' })).toHaveTextContent('image + config')
+    expect(screen.getByRole('img', { name: 'Helm chart version' })).toHaveAttribute('data-bundle-type', 'chart')
+    expect(screen.getByRole('img', { name: 'rendered version' })).toHaveAttribute('data-bundle-type', 'other')
     // The accessible name is the aria-label alone: no title repeating it as a tooltip.
     for (const badge of screen.getAllByRole('img')) expect(badge).not.toHaveAttribute('title')
   })
 
-  it('compact: image Bundles, the common case, show no badge', () => {
+  it('compact: image versions, the common case, show no badge', () => {
     const { container } = render(<BundleTypeBadge type="image" compact />)
     expect(container).toBeEmptyDOMElement()
     render(<BundleTypeBadge type="config" compact />)
-    expect(screen.getByRole('img', { name: 'config Bundle' })).toHaveClass('bundle-type--compact')
+    expect(screen.getByRole('img', { name: 'config version' })).toHaveClass('bundle-type--compact')
   })
 
-  it('full: an image Bundle is labelled too', () => {
+  it('full: an image version is labelled too', () => {
     render(<BundleTypeBadge type="image" />)
-    expect(screen.getByRole('img', { name: 'image Bundle' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'image version' })).toBeInTheDocument()
   })
 })

@@ -26,6 +26,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/renderrun"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/renderjob"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	stepsimpl "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
 
@@ -523,4 +524,34 @@ func TestRenderRun_GitSecretKeys(t *testing.T) {
 			assert.Equal(t, renderjob.GitSecretDir, pod.Containers[0].VolumeMounts[len(pod.Containers[0].VolumeMounts)-1].MountPath)
 		})
 	}
+}
+
+// TestRenderRun_ControllerSecretRefused (#1725 follow-up): a RenderRun whose
+// git Secret is the controller's own SCM token Secret fails with
+// ValidationFailed before its Job is created: no render Pod ever mounts the
+// controller's token.
+//
+// Covers CHART-SCM-ALIAS-02.
+func TestRenderRun_ControllerSecretRefused(t *testing.T) {
+	rr := run("rr")
+	rr.Spec.Git.SecretName = "kardinal-promoter-github-token"
+	e := newEnv(t, rr)
+	e.r.ControllerSecret = &scm.ControllerTokenSecret{Namespace: "team", Name: "kardinal-promoter-github-token"}
+	e.reconcile(t, "rr") // start
+	_, got := e.reconcile(t, "rr")
+	assert.Equal(t, "Failed", got.Status.Phase)
+	assert.Contains(t, got.Status.Message, "ValidationFailed: ")
+	assert.Contains(t, got.Status.Message, "is the controller's own SCM token Secret")
+	var jobs batchv1.JobList
+	require.NoError(t, e.c.List(context.Background(), &jobs, client.InNamespace("team")))
+	assert.Empty(t, jobs.Items, "no render Job")
+
+	// Another Secret renders as before.
+	other := run("rr2")
+	other.Spec.Git.SecretName = "team-git"
+	e = newEnv(t, other)
+	e.r.ControllerSecret = &scm.ControllerTokenSecret{Namespace: "team", Name: "kardinal-promoter-github-token"}
+	e.reconcile(t, "rr2")
+	_, got = e.reconcile(t, "rr2")
+	assert.NotEqual(t, "Failed", got.Status.Phase, got.Status.Message)
 }

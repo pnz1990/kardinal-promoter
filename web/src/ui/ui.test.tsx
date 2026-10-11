@@ -9,7 +9,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import axe from 'axe-core'
 import {
-  Badge, Button, CodeBlock, CodeInline, ConfirmDialog, Dialog, Drawer, Icon, ICON_NAMES, IconButton, Kbd, Stack,
+  Badge, Button, CodeBlock, CodeInline, ConfirmDialog, Dialog, Drawer, Icon, ICON_NAMES, IconButton, Kbd, MenuButton, Stack,
   StatusChip, TabPanel, Tabs, Tag, TONES, toneVars,
 } from '.'
 
@@ -69,8 +69,8 @@ describe('StatusChip, Badge, Tag', () => {
 
   it('a tag names the Bundle type for screen readers', async () => {
     const { container } = render(<div><Tag kind="image" /><Tag kind="mixed" /><Tag kind="chart" /><Tag kind="config" /></div>)
-    expect(screen.getByRole('img', { name: 'image Bundle' })).toHaveTextContent('■ IMG')
-    expect(screen.getByRole('img', { name: 'image and config Bundle' })).toHaveTextContent('■◆ MIX')
+    expect(screen.getByRole('img', { name: 'image version' })).toHaveTextContent('■ IMG')
+    expect(screen.getByRole('img', { name: 'image and config version' })).toHaveTextContent('■◆ MIX')
     await expectAccessible(container)
   })
 })
@@ -198,6 +198,34 @@ describe('Code, Kbd, Stack', () => {
     expect(screen.getByText('!schedule.isWeekend').closest('pre')).toHaveAttribute('data-language', 'cel')
     expect(screen.getByRole('button', { name: 'Copy cel' })).toBeInTheDocument()
     await expectAccessible(container)
+  })
+})
+
+describe('MenuButton', () => {
+  it('opens on click, focuses the first control, and closes on Esc with focus back', async () => {
+    const user = userEvent.setup()
+    const { container } = render(
+      <MenuButton label="More actions"><button>Pause pipeline</button><button>Copy link</button></MenuButton>,
+    )
+    const toggle = screen.getByRole('button', { name: 'More actions' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('button', { name: 'Pause pipeline' })).toBeNull()
+    await user.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('group', { name: 'More actions' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Pause pipeline' })).toHaveFocus()
+    await expectAccessible(container)
+    await user.keyboard('{Escape}')
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(toggle).toHaveFocus()
+  })
+
+  it('closes on a click outside', async () => {
+    const user = userEvent.setup()
+    render(<div><MenuButton label="More actions"><button>Pause pipeline</button></MenuButton><p>outside</p></div>)
+    await user.click(screen.getByRole('button', { name: 'More actions' }))
+    await user.click(screen.getByText('outside'))
+    expect(screen.getByRole('button', { name: 'More actions' })).toHaveAttribute('aria-expanded', 'false')
   })
 })
 
