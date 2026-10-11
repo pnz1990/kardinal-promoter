@@ -52,7 +52,10 @@ when it is not done yet:
   minikube its drivers' networks 192.168.49.0/24, 192.168.39.0/24 and 192.168.59.0/24) before
   it sends anything to it, and refuses to run while `HELM_KUBE*` (such as `HELM_KUBECONTEXT`) or
   `KUBERNETES_MASTER` is set, since helm or kubectl would follow them instead, or when the
-  context's cluster has a `proxy-url`. There is no flag
+  context's cluster has a `proxy-url`, or when `HTTPS_PROXY` (`HTTP_PROXY` for an `http` server)
+  applies to its API server: the proxy would decide where requests go. Go never proxies
+  `localhost` and `127.0.0.1`; for `0.0.0.0` (k3d), `host.docker.internal` or a minikube address,
+  add the host to `NO_PROXY`. There is no flag
   to override that, on purpose. helm and kubectl run on a kubeconfig file with only the checked
   context. It never changes your kubeconfig; `--context` picks another local context. One thing
   it cannot tell: a loopback port that tunnels to a remote cluster (`kubectl port-forward`,

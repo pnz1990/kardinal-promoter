@@ -10,6 +10,32 @@ prod is waiting for your approval.
   Gate     prod-approval · 0 of 1 approvals
   Next     kardinal approve demo prod
 
+== approval, the caller is in an allowed group (kardinal why demo prod)
+prod is waiting for your approval.
+  Version  sha-9349a3f (demo-zhxk2)
+  Gate     cab · 0 of 1 approvals
+  Next     kardinal approve demo prod
+
+== approval, the caller is unknown (SelfSubjectReview failed) (kardinal why demo prod)
+prod is waiting for approval by group rm.
+  Version  sha-9349a3f (demo-zhxk2)
+  Gate     cab · 0 of 1 approvals
+  Next     kardinal approve demo prod
+
+== approval, the version has no creator (excludeAuthor) (kardinal why demo prod)
+prod is held by gate cab: nobody can approve this version.
+  Version  sha-9349a3f (demo-zhxk2)
+  Why      the gate excludes the version's author, and the version has no verified creator (kardinal.io/created-by)
+  Next     ship it again as yourself: kardinal ship demo --image <ref>
+  Or       kardinal override demo prod --gate cab --reason <why>
+
+== approval, a component created the version (excludeAuthor) (kardinal why demo prod)
+prod is held by gate cab: nobody can approve this version.
+  Version  sha-9349a3f (demo-zhxk2)
+  Why      the gate excludes the version's author, and the version was created by the kardinal component subscription:demo-images, not a person
+  Next     ship it again as yourself: kardinal ship demo --image <ref>
+  Or       kardinal override demo prod --gate cab --reason <why>
+
 == approval by others (kardinal why demo prod)
 prod is waiting for approval by alice, bob or group release-managers.
   Version  sha-9349a3f (demo-zhxk2)

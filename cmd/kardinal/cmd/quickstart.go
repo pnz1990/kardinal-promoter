@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/net/http/httpproxy"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -341,7 +342,57 @@ func requireLocalContext() (string, *clientcmdapi.Config, error) {
 				"so it may not be the local cluster it names, and nothing was changed. Use a local context without proxy-url: %w", name, cl.ProxyURL, errNotLocal)
 		}
 	}
+	// So could a proxy of the environment (HTTPS_PROXY, HTTP_PROXY): client-go,
+	// helm and kubectl use it for any server NO_PROXY does not exclude.
+	if v, proxy := envProxy(server); proxy != "" {
+		noProxy := server
+		if u, err := url.Parse(server); err == nil {
+			noProxy = u.Hostname()
+		}
+		if cur := httpproxy.FromEnvironment().NoProxy; cur != "" {
+			noProxy = cur + "," + noProxy
+		}
+		return "", nil, fmt.Errorf("kardinal quickstart does not send its requests through a proxy: %s=%s applies to the server %s of the context %q, "+
+			"so it may not be the local cluster it names, and nothing was changed. Exclude the server from the proxy: "+
+			"export NO_PROXY=%s (or unset %s): %w", v, proxy, server, name, noProxy, v, errNotLocal)
+	}
 	return name, only, nil
+}
+
+// envProxy is the proxy variable of the environment, and its value, that a
+// request to server would go through (httpproxy.FromEnvironment, as Go's
+// net/http reads it); "" when none applies, NO_PROXY or the loopback
+// exception included.
+func envProxy(server string) (variable, proxy string) {
+	u, err := url.Parse(server)
+	if err != nil {
+		return "", ""
+	}
+	p, err := httpproxy.FromEnvironment().ProxyFunc()(u)
+	if err != nil || p == nil {
+		return "", ""
+	}
+	names := []string{"HTTPS_PROXY", "https_proxy"}
+	if u.Scheme == "http" {
+		names = []string{"HTTP_PROXY", "http_proxy"}
+	}
+	for _, n := range names {
+		if os.Getenv(n) != "" {
+			return n, redactProxy(os.Getenv(n))
+		}
+	}
+	return names[0], redactProxy(p.String())
+}
+
+// redactProxy is a proxy URL without its password.
+func redactProxy(raw string) string {
+	if u, err := url.Parse(raw); err == nil && u.User != nil {
+		if _, ok := u.User.Password(); ok {
+			u.User = url.UserPassword(u.User.Username(), "xxxxx")
+			return u.String()
+		}
+	}
+	return raw
 }
 
 // quickstartClient is the cluster client of quickstart, from the kubeconfig
@@ -833,8 +884,11 @@ rancher-desktop, or whose API server is not on this machine (loopback,
 drivers' networks 192.168.49.0/24, 192.168.39.0/24 and 192.168.59.0/24). It
 also refuses to run while a variable is set that points helm, kubectl or
 client-go elsewhere (HELM_KUBE*, such as HELM_KUBECONTEXT, and
-KUBERNETES_MASTER), and refuses a context whose cluster has a proxy-url (the
-proxy decides where requests go). There is no flag to override it, on purpose. Use
+KUBERNETES_MASTER), and refuses a context whose cluster has a proxy-url, or
+whose server an environment proxy (HTTPS_PROXY, HTTP_PROXY) applies to: the
+proxy decides where requests go. Go never proxies localhost and 127.0.0.1;
+for 0.0.0.0, host.docker.internal or a minikube address, add the host to
+NO_PROXY. There is no flag to override it, on purpose. Use
 --context to pick a local context. helm and kubectl run on a kubeconfig file
 with only that context, without KUBECONFIG or those variables, and kubectl
 with KUBERC=off. Ctrl-C or SIGTERM stops the step that runs and removes

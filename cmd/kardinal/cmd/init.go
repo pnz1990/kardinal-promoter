@@ -313,7 +313,7 @@ func initConfig(cmd *cobra.Command, o initOptions) (*InitConfig, error) {
 			"create the Secret yourself and run init without --create-secret: "+
 			"kubectl create secret generic %[1]s -n %[2]s --from-file=sshPrivateKey=$HOME/.ssh/id_ed25519 "+
 			"--from-literal=knownHosts=\"$(ssh-keyscan %[3]s)\" && kubectl label secret %[1]s -n %[2]s %[4]s=true",
-			cfg.Secret, ns, sshHost(cfg.GitURL), v1alpha1.LabelSecretReferenceable)
+			cfg.Secret, ns, sshKeyscanArgs(cfg.GitURL), v1alpha1.LabelSecretReferenceable)
 	case cfg.UpdateStrategy != "" && cfg.UpdateStrategy != "kustomize" && cfg.UpdateStrategy != "helm":
 		return nil, fmt.Errorf("init: --strategy must be kustomize or helm, got %q", cfg.UpdateStrategy)
 	case cfg.ProdApproval != "" && cfg.ProdApproval != "pr-review" && cfg.ProdApproval != "auto":
@@ -356,10 +356,15 @@ func checkInitNames(cfg *InitConfig) error {
 	return nil
 }
 
-// sshHost is the host of ssh remote v (ssh://user@host/path or
-// user@host:path), for ssh-keyscan.
-func sshHost(v string) string {
+// sshKeyscanArgs are the ssh-keyscan arguments that read the host key of
+// ssh remote v (ssh://user@host[:port]/path or user@host:path): the host,
+// with -p before it for a port other than 22 (ssh-keyscan then writes the
+// known_hosts entry as [host]:port).
+func sshKeyscanArgs(v string) string {
 	if u, err := url.Parse(v); err == nil && u.Scheme == "ssh" {
+		if p := u.Port(); p != "" && p != "22" {
+			return "-p " + p + " " + u.Hostname()
+		}
 		return u.Hostname()
 	}
 	if _, rest, ok := strings.Cut(v, "@"); ok {

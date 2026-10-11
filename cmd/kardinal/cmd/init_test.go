@@ -575,14 +575,15 @@ func TestInitCmd_NamespaceAndSSH(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "metadata: { name: web }\n")
 
-	for _, repo := range []string{"git@github.com:o/r.git", "ssh://git@git.example.com/o/r"} {
+	for repo, host := range map[string]string{
+		"git@github.com:o/r.git":             "github.com",
+		"ssh://git@git.example.com/o/r":      "git.example.com",
+		"ssh://git@git.example.com:22/o/r":   "git.example.com",
+		"ssh://git@git.example.com:2222/o/r": "-p 2222 git.example.com", // the port is kept
+	} {
 		dir := t.TempDir()
 		out, _, err := runInitCmd(t, dir, "", "--name", "web", "--repo", repo, "-n", "team-a", "--secret", "deploy-key", "--create-secret")
 		require.Error(t, err, repo)
-		host := "github.com"
-		if strings.HasPrefix(repo, "ssh://") {
-			host = "git.example.com"
-		}
 		assert.Contains(t, err.Error(), "an ssh --repo needs an ssh key instead")
 		assert.Contains(t, err.Error(), "kubectl create secret generic deploy-key -n team-a --from-file=sshPrivateKey=$HOME/.ssh/id_ed25519 "+
 			`--from-literal=knownHosts="$(ssh-keyscan `+host+`)" && kubectl label secret deploy-key -n team-a kardinal.io/referenceable=true`)

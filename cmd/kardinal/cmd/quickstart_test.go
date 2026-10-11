@@ -82,7 +82,8 @@ func noCluster(t *testing.T) {
 	}
 	quickstartLookPath = func(string) (string, error) { return "/bin/true", nil }
 	t.Cleanup(func() { quickstartClient, quickstartRun, quickstartLookPath = oldB, oldR, oldL })
-	for _, k := range []string{"HELM_KUBECONTEXT", "HELM_KUBEAPISERVER", "HELM_KUBETOKEN", "KUBERNETES_MASTER"} {
+	for _, k := range []string{"HELM_KUBECONTEXT", "HELM_KUBEAPISERVER", "HELM_KUBETOKEN", "KUBERNETES_MASTER",
+		"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"} {
 		t.Setenv(k, "")
 	}
 }
@@ -498,6 +499,57 @@ current-context: kind-kardinal
 	require.ErrorIs(t, err, errNotLocal)
 	assert.Contains(t, err.Error(), "through socks5://127.0.0.1:1080")
 	assert.Contains(t, err.Error(), "nothing was changed")
+}
+
+// TestQuickstart_NoEnvironmentProxy: a proxy of the environment that applies
+// to the local server (Go bypasses it only for localhost and 127.0.0.1) is
+// refused before anything is sent, with the variable and the NO_PROXY that
+// excludes the server; NO_PROXY naming the server lets it pass.
+func TestQuickstart_NoEnvironmentProxy(t *testing.T) {
+	cases := []struct {
+		name, context, server, variable, noProxy string
+		refused                                  bool
+	}{
+		{"k3d on 0.0.0.0", "k3d-demo", "https://0.0.0.0:6443", "HTTPS_PROXY", "", true},
+		{"docker desktop host", "docker-desktop", "https://host.docker.internal:6443", "HTTPS_PROXY", "", true},
+		{"minikube network", "minikube", "https://192.168.49.2:8443", "https_proxy", "", true},
+		{"http server and HTTP_PROXY", "kind-kardinal", "http://0.0.0.0:8080", "HTTP_PROXY", "", true},
+		{"NO_PROXY names other hosts", "k3d-demo", "https://0.0.0.0:6443", "HTTPS_PROXY", ".corp.example", true},
+		{"NO_PROXY names the host", "minikube", "https://192.168.49.2:8443", "HTTPS_PROXY", "192.168.49.2", false},
+		{"NO_PROXY names the network", "minikube", "https://192.168.49.2:8443", "HTTPS_PROXY", "192.168.49.0/24", false},
+		{"loopback is never proxied", "kind-kardinal", "https://127.0.0.1:41234", "HTTPS_PROXY", "", false},
+		{"HTTP_PROXY does not apply to https", "k3d-demo", "https://0.0.0.0:6443", "HTTP_PROXY", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			writeKubeconfig(t, tc.context, tc.server)
+			noCluster(t)
+			t.Setenv(tc.variable, "http://user:secret@proxy.corp.example:3128")
+			t.Setenv("NO_PROXY", tc.noProxy)
+			_, _, err := requireLocalContext()
+			if !tc.refused {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, errNotLocal)
+			host := tc.server[strings.Index(tc.server, "//")+2 : strings.LastIndex(tc.server, ":")]
+			assert.Contains(t, err.Error(), tc.variable+"=http://user:xxxxx@proxy.corp.example:3128 applies to the server "+tc.server)
+			want := host
+			if tc.noProxy != "" {
+				want = tc.noProxy + "," + host // the NO_PROXY set is kept
+			}
+			assert.Contains(t, err.Error(), "export NO_PROXY="+want+" (or unset "+tc.variable+")")
+			assert.Contains(t, err.Error(), "nothing was changed")
+			assert.NotContains(t, err.Error(), "secret", "the proxy password is not printed")
+		})
+	}
+	// quickstartFn stops there too, before any cluster call or tool.
+	writeKubeconfig(t, "k3d-demo", "https://0.0.0.0:6443")
+	noCluster(t)
+	t.Setenv("GITHUB_TOKEN", "tok")
+	t.Setenv("HTTPS_PROXY", "http://proxy.corp.example:3128")
+	err := quickstartFn(context.Background(), &bytes.Buffer{}, quickstartOptions{repo: "https://github.com/me/kardinal-demo"})
+	require.ErrorIs(t, err, errNotLocal)
 }
 
 // TestQuickstart_InterruptRemovesKubeconfig: when the run is cancelled

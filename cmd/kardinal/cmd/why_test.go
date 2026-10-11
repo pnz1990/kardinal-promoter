@@ -56,6 +56,8 @@ func TestWhy_Golden(t *testing.T) {
 		name  string
 		env   string
 		setup func(p *v1alpha1.Pipeline) []sigs_client.Object
+		// whoamiFails: the SelfSubjectReview fails, the caller is unknown.
+		whoamiFails bool
 	}{
 		{"approval", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", IncomingBundle: "demo-zhxk2", IncomingVersion: "sha-9349a3f",
@@ -63,21 +65,51 @@ func TestWhy_Golden(t *testing.T) {
 			g := explainGateInstance("demo", "demo-zhxk2", "prod", "prod-approval", "true", false, true, "prod waits for your approval (bundle.version=sha-9349a3f: waiting for approvals: 0 of 1)")
 			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1}
 			return []sigs_client.Object{g}
-		}},
+		}, false},
 		{"approval, the caller is allowed", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", IncomingBundle: "demo-zhxk2", IncomingVersion: "sha-9349a3f",
 				State: "Pending", BlockedBy: []string{"prod-approval"}}}
 			g := explainGateInstance("demo", "demo-zhxk2", "prod", "prod-approval", "true", false, true, "waiting for approvals: 0 of 1")
 			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1, AllowedUsers: []string{"kubernetes-admin"}}
 			return []sigs_client.Object{g}
-		}},
+		}, false},
+		{"approval, the caller is in an allowed group", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", IncomingBundle: "demo-zhxk2", IncomingVersion: "sha-9349a3f",
+				State: "Pending", BlockedBy: []string{"cab"}}}
+			g := explainGateInstance("demo", "demo-zhxk2", "prod", "cab", "true", false, true, "waiting for approvals: 0 of 1")
+			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1, AllowedUsers: []string{"alice"}, AllowedGroups: []string{"system:authenticated"}}
+			return []sigs_client.Object{g}
+		}, false},
+		{"approval, the caller is unknown (SelfSubjectReview failed)", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", IncomingBundle: "demo-zhxk2", IncomingVersion: "sha-9349a3f",
+				State: "Pending", BlockedBy: []string{"cab"}}}
+			g := explainGateInstance("demo", "demo-zhxk2", "prod", "cab", "true", false, true, "waiting for approvals: 0 of 1")
+			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1, AllowedGroups: []string{"rm"}}
+			return []sigs_client.Object{g}
+		}, true},
+		{"approval, the version has no creator (excludeAuthor)", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", IncomingBundle: "demo-zhxk2", IncomingVersion: "sha-9349a3f",
+				State: "Pending", BlockedBy: []string{"cab"}}}
+			g := explainGateInstance("demo", "demo-zhxk2", "prod", "cab", "true", false, true, "excludeAuthor cannot be enforced")
+			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}
+			return []sigs_client.Object{g, whyBundle("demo-zhxk2", "sha-9349a3f")}
+		}, false},
+		{"approval, a component created the version (excludeAuthor)", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", IncomingBundle: "demo-zhxk2", IncomingVersion: "sha-9349a3f",
+				State: "Pending", BlockedBy: []string{"cab"}}}
+			g := explainGateInstance("demo", "demo-zhxk2", "prod", "cab", "true", false, true, "excludeAuthor cannot be enforced")
+			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}
+			b := whyBundle("demo-zhxk2", "sha-9349a3f")
+			b.Annotations = map[string]string{"kardinal.io/created-by": "subscription:demo-images"}
+			return []sigs_client.Object{g, b}
+		}, false},
 		{"approval by others", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", IncomingBundle: "demo-zhxk2", IncomingVersion: "sha-9349a3f",
 				State: "Pending", BlockedBy: []string{"cab"}}}
 			g := explainGateInstance("demo", "demo-zhxk2", "prod", "cab", "true", false, true, "waiting for approvals: 0 of 1")
 			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1, AllowedUsers: []string{"alice", "bob"}, AllowedGroups: []string{"release-managers"}}
 			return []sigs_client.Object{g}
-		}},
+		}, false},
 		{"approval, the caller created the version", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", IncomingBundle: "demo-zhxk2", IncomingVersion: "sha-9349a3f",
 				State: "Pending", BlockedBy: []string{"cab"}}}
@@ -86,7 +118,7 @@ func TestWhy_Golden(t *testing.T) {
 			b := whyBundle("demo-zhxk2", "sha-9349a3f")
 			b.Annotations = map[string]string{"kardinal.io/created-by": "kubernetes-admin"}
 			return []sigs_client.Object{g, b}
-		}},
+		}, false},
 		{"approval with one of two", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
 				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", BlockedBy: []string{"cab"}}}
@@ -94,7 +126,7 @@ func TestWhy_Golden(t *testing.T) {
 			g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 2}
 			g.Status.Approvals = []v1alpha1.GateApprovalStatus{{User: "alice", Decision: "approve", Counted: true}, {User: "eve", Decision: "approve"}}
 			return []sigs_client.Object{g}
-		}},
+		}, false},
 		{"a gate that opens by itself", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
 				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", BlockedBy: []string{"no-weekend-deploys"}}}
@@ -102,7 +134,7 @@ func TestWhy_Golden(t *testing.T) {
 				"Production deployments are blocked on weekends (bundle.version=1.5.0: !schedule.isWeekend = false)")
 			g.Spec.Message = "Production deployments are blocked on weekends"
 			return []sigs_client.Object{g}
-		}},
+		}, false},
 		{"a gate that needs a person", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
 				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", BlockedBy: []string{"label"}}}
@@ -110,49 +142,49 @@ func TestWhy_Golden(t *testing.T) {
 				`(bundle.version=1.5.0: bundle.labels.approved == "yes" = false)`)
 			g.Spec.RecheckInterval = "1m"
 			return []sigs_client.Object{g}
-		}},
+		}, false},
 		{"held", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Spec.Holds = []v1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "demo-a", Reason: "INC-42", CreatedBy: "alice"}}
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
 				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", Held: true}}
 			return []sigs_client.Object{whyBundle("demo-a", "1.4.0")}
-		}},
+		}, false},
 		{"paused", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Spec.Paused = true
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
 				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending"}}
 			return nil
-		}},
+		}, false},
 		{"its PR", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
 				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "WaitingForMerge", PRURL: "https://github.com/acme/gitops/pull/42"}}
 			return nil
-		}},
+		}, false},
 		{"failed", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
 				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Failed"}}
 			return []sigs_client.Object{explainStep("demo", "demo-b", "prod", "Failed", "health check timed out after 10m", time.Now())}
-		}},
+		}, false},
 		{"promoting", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
 				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "HealthChecking", Since: &since}}
 			return nil
-		}},
+		}, false},
 		{"waits for upstream", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{
 				{Name: "test", Bundle: "demo-b", Version: "1.5.0", State: "Verified"},
 				{Name: "uat", Bundle: "demo-a", Version: "1.4.0", IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Promoting"},
 				{Name: "prod", Bundle: "demo-a", Version: "1.4.0", IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending"}}
 			return nil
-		}},
+		}, false},
 		{"nothing waits", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-b", Version: "1.5.0", State: "Verified"}}
 			return nil
-		}},
+		}, false},
 		{"no version yet", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod"}}
 			return nil
-		}},
+		}, false},
 		{"every environment", "", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{
 				{Name: "test", Bundle: "demo-b", Version: "1.5.0", State: "Verified"},
@@ -160,11 +192,18 @@ func TestWhy_Golden(t *testing.T) {
 				{Name: "prod", Bundle: "demo-a", Version: "1.4.0", IncomingBundle: "demo-b", IncomingVersion: "1.5.0",
 					State: "WaitingForMerge", PRURL: "https://github.com/acme/gitops/pull/7"}}
 			return nil
-		}},
+		}, false},
 	}
 	var golden strings.Builder
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.whoamiFails {
+				old := identityOf
+				identityOf = func(context.Context, sigs_client.Client) (Identity, error) {
+					return Identity{}, fmt.Errorf("selfsubjectreviews is forbidden")
+				}
+				t.Cleanup(func() { identityOf = old })
+			}
 			p := policyPipeline("demo", "test", "uat", "prod")
 			objs := append([]sigs_client.Object{p}, tc.setup(p)...)
 			c := policyClient(t, objs...)

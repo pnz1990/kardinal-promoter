@@ -281,11 +281,11 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 			return strings.Compare(gateDisplayName(a), gateDisplayName(b))
 		})
 		if len(mine) > 0 {
-			creator := ""
+			creator, known := "", false
 			if b := byName[incoming]; b != nil {
-				creator = b.Annotations[lifecycle.AnnotationCreatedBy]
+				creator, known = b.Annotations[lifecycle.AnnotationCreatedBy], true
 			}
-			return whyGate(p, e.Name, version, mine, me, creator)
+			return whyGate(p, e.Name, version, mine, me, creator, known)
 		}
 		return whyAnswer{sentence: fmt.Sprintf("%s is held by gate %s.", e.Name, strings.Join(e.BlockedBy, ", ")),
 			lines: []whyLine{version, {"Next", fmt.Sprintf("kardinal explain %s %s", p.Name, e.Name)}}}
@@ -335,12 +335,22 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 }
 
 // whyGate is why's answer for gates that hold an environment: the first
-// says what it waits for, the others follow as more lines.
-func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1.PolicyGate, me *Identity, creator string) whyAnswer {
+// says what it waits for, the others follow as more lines. creator is the
+// version's kardinal.io/created-by; known is false when the version was not
+// read, and then nothing is said about its creator.
+func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1.PolicyGate, me *Identity, creator string, known bool) whyAnswer {
 	g := gates[0]
 	name := gateDisplayName(g)
 	var a whyAnswer
-	if g.Spec.Approval != nil {
+	if g.Spec.Approval != nil && known && unapprovable(g.Spec.Approval, creator) != "" {
+		// The gate holds whatever approvals it gets (as tallyApprovals
+		// in pkg/reconciler/policygate/approvals.go decides).
+		a.sentence = fmt.Sprintf("%s is held by gate %s: nobody can approve this version.", env, name)
+		a.lines = []whyLine{version,
+			{"Why", unapprovable(g.Spec.Approval, creator)},
+			{"Next", fmt.Sprintf("ship it again as yourself: kardinal ship %s --image <ref>", p.Name)},
+			{"Or", fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>", p.Name, env, name)}}
+	} else if g.Spec.Approval != nil {
 		approved, rejectedBy := approvalCount(g)
 		required := max(g.Spec.Approval.Required, 1)
 		by, mine := approvalBy(g.Spec.Approval, me, creator)
@@ -384,6 +394,23 @@ func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1
 		a.lines = append(a.lines, whyLine{"Also", "gate " + gateDisplayName(other)})
 	}
 	return a
+}
+
+// unapprovable says why no approval can open approval gate a, or "": with
+// excludeAuthor, a version with no verified creator (kardinal.io/created-by)
+// or one a kardinal component created (the UI, the Bundle API, a
+// Subscription) has no author to exclude, and the gate holds. It mirrors
+// tallyApprovals in pkg/reconciler/policygate/approvals.go.
+func unapprovable(a *v1alpha1.GateApprovalPolicy, creator string) string {
+	switch {
+	case !a.ExcludeAuthor:
+		return ""
+	case creator == "":
+		return "the gate excludes the version's author, and the version has no verified creator (kardinal.io/created-by)"
+	case lifecycle.ComponentCreator(creator):
+		return fmt.Sprintf("the gate excludes the version's author, and the version was created by the kardinal component %s, not a person", creator)
+	}
+	return ""
 }
 
 // approvalBy is who an approval gate waits for, and whether the caller may
