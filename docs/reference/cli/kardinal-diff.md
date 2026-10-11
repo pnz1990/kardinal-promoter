@@ -4,7 +4,9 @@ Show artifact differences between two Bundles
 
 ### Synopsis
 
-Diff compares the images and provenance of two Bundles in the namespace.
+Compare the images (by repository) and the provenance of two Bundles. A tag
+reads (absent) when a Bundle has no image for the repository and - when it is
+pinned by digest only; CHANGED marks the rows that differ.
 
 Images are matched by repository. A tag cell reads "(absent)" when the Bundle
 has no image for that repository, and "-" when the image is pinned by digest

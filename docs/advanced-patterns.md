@@ -314,18 +314,8 @@ removes the Pipeline and its Bundles are garbage-collected.
 
 ## Bundle Supersession
 
-A newer Bundle of the same type supersedes an older one still in flight: the older Bundle's
-steps stop, its open PRs are closed and the new Bundle promotes from the beginning. Image and
-config Bundles are tracked separately. See [Bundle supersession](concepts.md#bundle-supersession)
-for the details.
-
-```bash
-# Check which Bundles were superseded
-kardinal get bundles my-app
-# BUNDLE         TYPE    PHASE        AGE
-# my-app-7f3k2   image   Superseded   5m
-# my-app-9x8q1   image   Promoting    2m
-```
+A newer Bundle of the same type supersedes an older one still in flight; image and config
+Bundles are tracked separately. See [Bundle supersession](architecture.md#bundle-supersession).
 
 ## Webhook Responsiveness
 

@@ -4,7 +4,10 @@ Reject a Bundle: it is never promoted again, and rollback never picks it
 
 ### Synopsis
 
-Reject a Bundle.
+Reject a Bundle for good, with --reason, in your Kubernetes name. Steps that
+have not delivered it yet fail and their PRs close; steps whose change is live
+finish their health check. Rollback, promote and Subscriptions never pick it
+again. It does not revert an environment: use kardinal rollback for that.
 
 Sets spec.rejected on the Bundle with your Kubernetes username (read from the
 API server with a SelfSubjectReview, as kubectl auth whoami does) and the
@@ -25,6 +28,12 @@ back with kardinal rollback. See docs/rollback.md.
 
 ```
 kardinal reject <bundle> [flags]
+```
+
+### Examples
+
+```
+  kardinal reject my-app-v1-5 --reason "CVE-2026-1234 in the base image"
 ```
 
 ### Options

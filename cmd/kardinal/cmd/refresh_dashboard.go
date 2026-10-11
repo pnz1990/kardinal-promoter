@@ -23,19 +23,11 @@ func newRefreshCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "refresh <pipeline>",
 		Short: "Force re-reconciliation of a Pipeline",
-		Long: `Force the controller to re-reconcile a Pipeline immediately.
-
-Sets the kardinal.io/refresh annotation on the Pipeline to the current time.
-The change requeues the Pipeline reconciler, which re-derives the Pipeline's
-status (phase, Ready condition, deployment metrics) and its pause freeze gate.
-Bundle reconcilers follow Pipeline spec changes only, so this does not retry
-a Bundle. PolicyGates and PromotionSteps do not watch Pipelines, so this
-does not re-evaluate gates or re-run health checks; they re-check on their
-own intervals.
-
-Example:
-  kardinal refresh nginx-demo`,
-		Args: cobra.ExactArgs(1),
+		Long: `Make the controller re-read <pipeline> now (status, Ready condition, metrics,
+pause gate). It does not retry a Bundle, re-evaluate gates or re-run health
+checks: those re-check on their own intervals.`,
+		Example: `  kardinal refresh my-app`,
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
@@ -80,15 +72,11 @@ func newDashboardCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "dashboard",
 		Short: "Open the kardinal UI dashboard in a browser",
-		Long: `Open the embedded kardinal UI in the default system browser.
+		Long: `Open the kardinal UI (served by the controller at /ui/, port 8082) in your
+browser. It does not port-forward: for an in-cluster controller, start one
+first and pass its URL with --address.`,
+		Example: `  kardinal dashboard
 
-The UI is served by the controller at /ui/ (default port 8082). This command
-only prints and opens the URL (default http://localhost:8082/ui/); it does not
-port-forward. For an in-cluster controller, start a kubectl port-forward to
-port 8082 first (see "Accessing the UI" in docs/installation.md).
-
-Example:
-  kardinal dashboard
   kubectl -n kardinal-system port-forward svc/kardinal-promoter 9090:8082 &
   kardinal dashboard --address http://localhost:9090/ui/`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -99,6 +87,8 @@ Example:
 	cmd.Flags().StringVar(&uiAddress, "address", "", "URL of the kardinal UI (default http://localhost:8082/ui/)")
 	cmd.Flags().BoolVar(&noOpen, "no-open", false, "Print the URL without opening browser")
 
+	withReference(cmd, refreshReference)
+	withReference(cmd, dashboardReference)
 	return cmd
 }
 
@@ -137,3 +127,18 @@ func openBrowser(url string) error {
 	}
 	return cmd.Start()
 }
+
+// refreshReference is the detail of the command for its reference page.
+const refreshReference = `Sets the kardinal.io/refresh annotation on the Pipeline to the current time.
+The change requeues the Pipeline reconciler, which re-derives the Pipeline's
+status (phase, Ready condition, deployment metrics) and its pause freeze gate.
+Bundle reconcilers follow Pipeline spec changes only, so this does not retry
+a Bundle. PolicyGates and PromotionSteps do not watch Pipelines, so this
+does not re-evaluate gates or re-run health checks; they re-check on their
+own intervals.`
+
+// dashboardReference is the detail of the command for its reference page.
+const dashboardReference = `The UI is served by the controller at /ui/ (default port 8082). This command
+only prints and opens the URL (default http://localhost:8082/ui/); it does not
+port-forward. For an in-cluster controller, start a kubectl port-forward to
+port 8082 first (see "Accessing the UI" in docs/installation.md).`

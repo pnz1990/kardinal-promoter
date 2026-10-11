@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -136,9 +138,9 @@ func doLimit(hc *http.Client, req *http.Request, what string, limit int64) (int,
 			if uerr.Timeout() {
 				return 0, nil, fmt.Errorf("%s %s timed out", what, req.Method)
 			}
-			return 0, nil, fmt.Errorf("%s %s: %w", what, req.Method, uerr.Err)
+			return 0, nil, fmt.Errorf("%s %s: %w", what, req.Method, scm.RedactErr(uerr.Err))
 		}
-		return 0, nil, fmt.Errorf("%s %s: %w", what, req.Method, err)
+		return 0, nil, fmt.Errorf("%s %s: %w", what, req.Method, scm.RedactErr(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))

@@ -446,6 +446,7 @@ func (b *BitbucketDCProvider) do(ctx context.Context, method, path string, body,
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := b.client.Do(req)
+	err = RedactErr(err) // a *url.Error quotes the URL
 	// Arguments are taken now; the circuit states are read at return, after Record.
 	defer call.done(resp, err, b.circuits, owner)
 	if err != nil {

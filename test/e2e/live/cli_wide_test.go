@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
@@ -51,7 +52,7 @@ func TestCLI_GetPipelinesWide(t *testing.T) {
 	require.NotNil(t, row, out)
 	assert.Equal(t, b1, row["BUNDLE"])
 	assert.Equal(t, "10", row["ENVS"])
-	assert.Equal(t, "10 Verified", row["PROGRESS"])
+	assert.Equal(t, "10 "+display.Step("Verified").Label, row["PROGRESS"])
 	assert.Equal(t, "r9", row["FURTHEST"], "the wave's last environment in spec order")
 	assert.Contains(t, out, "More than 8 environments: one row per Pipeline. Every environment of one: kardinal get pipelines <name>")
 
@@ -62,7 +63,7 @@ func TestCLI_GetPipelinesWide(t *testing.T) {
 	row = framework.TableRow(one, "PIPELINE", pipelineName)
 	require.NotNil(t, row, one)
 	for _, env := range envs {
-		assert.Equal(t, "Verified", row[strings.ToUpper(env)], env)
+		assert.Equal(t, display.Step("Verified").Label, row[strings.ToUpper(env)], env)
 	}
 
 	// A newer Bundle is listed first, by the table and by -o json.

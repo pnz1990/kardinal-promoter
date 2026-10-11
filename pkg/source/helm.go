@@ -25,6 +25,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+
 	"sigs.k8s.io/yaml"
 )
 
@@ -96,7 +98,7 @@ func (w *HelmWatcher) Watch(ctx context.Context, lastDigest string) (*WatchResul
 		version, digest, err = w.watchIndex(ctx, compiled)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("HelmWatcher: chart %s in %s: %w", w.Chart, redactURL(w.RepoURL), err)
+		return nil, fmt.Errorf("HelmWatcher: chart %s in %s: %w", w.Chart, scm.RedactURL(w.RepoURL), err)
 	}
 	return &WatchResult{Digest: digest, Tag: version, Changed: lastDigest != "" && digest != lastDigest}, nil
 }
@@ -185,6 +187,7 @@ func (w *HelmWatcher) watchIndex(ctx context.Context, filters *compiledFilters) 
 		client = credentialRedirects(client, false)
 	}
 	resp, err := client.Do(req)
+	err = scm.RedactErr(err) // a *url.Error quotes the URL
 	if err != nil {
 		return "", "", fmt.Errorf("GET index.yaml: %w", err)
 	}

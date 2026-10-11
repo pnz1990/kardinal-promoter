@@ -29,7 +29,7 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.rejected) || !has(self.rejected) || self.rejected == oldSelf.rejected",message="spec.rejected is immutable once set"
 type BundleSpec struct {
 	// Type classifies the bundle content.
-	// Supersession rule (BU-4): each bundle type supersedes only bundles of the same type.
+	// Supersession rule: each bundle type supersedes only bundles of the same type.
 	// An image bundle does NOT supersede a config bundle and vice versa.
 	// This allows image and config promotions to coexist independently in the same pipeline.
 	// A chart Bundle promotes a Helm chart version (spec.chart) with
@@ -293,6 +293,14 @@ type BundleStatus struct {
 	// final; the GraphRetired condition only shows the retirement's progress.
 	// +optional
 	RetiredAt *metav1.Time `json:"retiredAt,omitempty"`
+
+	// PendingAuditEvents are the BundleRejected AuditEvents the Bundle
+	// reconciler has recorded but not written yet (the audit outbox, #1552):
+	// the entry is stored in the same status write that sets phase
+	// Rejected, and removed once its AuditEvent exists.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	PendingAuditEvents []PendingAuditEvent `json:"pendingAuditEvents,omitempty"`
 }
 
 // RetiredStep is what a retired Bundle keeps of one of its PromotionSteps.
@@ -385,8 +393,8 @@ type EnvironmentStatus struct {
 	// SoakMinutes is the number of minutes that have elapsed since HealthCheckedAt.
 	// Written by the BundleReconciler as part of its own CRD status write.
 	// The PolicyGate reconciler reads this field from Bundle.status.environments
-	// to populate bundle.upstreamSoakMinutes in the CEL context. This eliminates
-	// the time.Since() call from the PolicyGate reconciler hot path (PG-3 fix).
+	// to populate bundle.upstreamSoakMinutes in the CEL context, so the gate
+	// does not read the clock.
 	// +optional
 	SoakMinutes int64 `json:"soakMinutes,omitempty"`
 }

@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -97,7 +96,7 @@ func (r *Reconciler) resolveGitCredential(ctx context.Context, log zerolog.Logge
 	if err := r.ControllerSecret.Refuses(pipeline); err != nil {
 		return gitCredential{refused: err}
 	}
-	needsToken := remoteNeedsToken(pipeline.Spec.Git.URL)
+	needsToken := scm.RemoteNeedsToken(pipeline.Spec.Git.URL)
 	ref := pipeline.Spec.Git.SecretRef
 	if ref == nil || ref.Name == "" {
 		if needsToken {
@@ -157,21 +156,6 @@ func (r *Reconciler) githubAppTokens() *scm.AppTokenCache {
 		}
 	})
 	return r.GitHubAppTokens
-}
-
-// remoteNeedsToken reports whether git needs the Pipeline token for remote:
-// an HTTP(S) URL without a password. ssh and file remotes use their own
-// transports, and go-git sends a password in the URL itself.
-func remoteNeedsToken(remote string) bool {
-	u, err := url.Parse(strings.TrimSpace(remote))
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
-		return false
-	}
-	if u.User == nil {
-		return true
-	}
-	_, hasPassword := u.User.Password()
-	return !hasPassword
 }
 
 // gitAuthText matches go-git's words for a refusal where the git client puts

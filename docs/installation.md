@@ -101,7 +101,7 @@ the controller catches up; size for the burst. A kro that
 runs out of memory restarts and stops promoting every Pipeline until it has compiled every Graph
 again. `kubectl get graphs -A --no-headers | wc -l` shows the live count. Shorter retirement delays
 (chart `graph.retire.*`, or a Pipeline's `kardinal.io/graph-retire-after` annotation) hold fewer
-Graphs; see [Bundle history](concepts.md#graph-retirement) for what a retired Bundle keeps.
+Graphs; see [Bundle history](architecture.md#graph-retirement) for what a retired Bundle keeps.
 
 !!! warning "Version compatibility"
     The kro version kardinal-promoter is tested against is pinned in `hack/install-kro.sh`.
@@ -340,7 +340,7 @@ The monitoring values (`serviceMonitor`, `prometheusRule`, `grafanaDashboard`) a
 | `graph.kroNamespace` | `kro-system` | Namespace kro runs in (NetworkPolicy egress; `""` drops the rule) |
 | `graph.aggregateToKro` | `true` | Ship a ClusterRole aggregated into kro's controller role (kro with `rbac.mode=aggregation`) |
 | `graph.readerNamespaces` | `[argocd, flux-system]` | `--graph-reader-namespaces`: namespaces, besides a Graph's own, where the Graph identity may be bound to the reader role for health `ref` nodes. A health ref into any other namespace is dropped from the Graph with a warning (health refs are observational; the PromotionStep reconciler still checks health). Add the namespaces your `health.resource` targets live in. `["*"]` allows every namespace; use it only when every Pipeline author may read every namespace. `kube-system`, `kube-public` and `kube-node-lease` are never allowed |
-| `graph.retire.superseded` | `""` | How long the Graph of a Superseded Bundle, or of a Verified one a newer Bundle replaced in every environment, is kept before it is retired (`--graph-retire-superseded-after`; default `1m`; `0s` keeps it). See [Graph retirement](concepts.md#graph-retirement) |
+| `graph.retire.superseded` | `""` | How long the Graph of a Superseded Bundle, or of a Verified one a newer Bundle replaced in every environment, is kept before it is retired (`--graph-retire-superseded-after`; default `1m`; `0s` keeps it). See [Graph retirement](architecture.md#graph-retirement) |
 | `graph.retire.verified` | `""` | The same for a Verified Bundle still deployed in an environment (`--graph-retire-verified-after`; default `1h`) |
 | `graph.retire.failed` | `""` | The same for a Failed Bundle, which no longer recovers once retired (`--graph-retire-failed-after`; default `24h`) |
 
