@@ -280,7 +280,7 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
                       <div style={{
                         fontSize: '0.68rem',
                         color: 'var(--color-text-faint)',
-                        fontFamily: 'monospace',
+                        fontFamily: 'var(--k-font-mono)',
                         marginTop: '0.15rem',
                       }}>
                         {p.activeBundleName.length > 20

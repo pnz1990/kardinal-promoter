@@ -2,96 +2,70 @@
  * Copyright 2026 The kardinal-promoter Authors.
  * Licensed under the Apache License, Version 2.0
  *
- * theme.css — CSS custom properties for kardinal UI dark/light mode.
+ * theme.css — base styles and the legacy --color-* names.
  *
- * Applied to :root for dark (default) and [data-theme="light"] for light mode.
- * New component colors should use these variables. Some older components and
- * stylesheets still hard-code dark-mode colors; move them here when touched.
+ * Colours, type, space and motion are the design tokens in styles/tokens.css
+ * (generated from web/tokens/tokens.json; their WCAG contrast is checked by
+ * contrast.test.ts). The light, dark and system themes are set there: html's
+ * data-theme, or the OS setting when it has none.
  *
- * Color contrast (#757): the text tokens below are checked against WCAG 2.1 AA
- * (4.5:1) on --color-bg and --color-surface of their own theme. Ratios are noted
- * next to each value where they were measured.
+ * The --color-* names below are aliases of the tokens, kept for one release so
+ * every component keeps working while it moves to --k-* names. New code uses
+ * --k-* directly.
  */
 
 :root {
-  /* ── Dark theme (default) ─────────────────────────────────────── */
-  --color-bg:          #0f172a;
-  --color-bg-deep:     #050d1a;
-  --color-surface:     #1e293b;
-  --color-surface-2:   #263449;
-  --color-border:      #334155;
-  --color-border-muted: #1e293b;
+  --color-bg:             var(--k-surface-canvas);
+  --color-bg-deep:        var(--k-surface-sunken);
+  --color-surface:        var(--k-surface-base);
+  --color-surface-2:      var(--k-surface-raised);
+  --color-border:         var(--k-line);
+  --color-border-muted:   var(--k-line-subtle);
 
-  --color-text:        #e2e8f0;
-  --color-text-muted:  #94a3b8;   /* 7.05:1 on #0c1628, 5.71:1 on #1e293b ✓ */
-  --color-text-faint:  #8594a8;   /* 5.3:1 on #0f172a ✓ (was #7c8da4) */
-  --color-text-secondary: #94a3b8;  /* alias for muted — WCAG AA on dark bg */
+  --color-text:           var(--k-ink);
+  --color-text-muted:     var(--k-ink-2);
+  --color-text-faint:     var(--k-ink-3);
+  --color-text-secondary: var(--k-ink-2);
 
-  --color-accent:      #a5b4fc;
-  --color-accent-bg:   #312e81;
-  --color-accent-hover: #818cf8;
+  /* The old accent marked links, the selection and the promoting bundle: the thread. */
+  --color-accent:         var(--k-thread-text);
+  --color-accent-bg:      var(--k-thread-wash);
+  --color-accent-hover:   var(--k-thread);
 
-  --color-success:     #4ade80;
-  --color-success-bg:  #14532d;
-  --color-warning:     #fbbf24;
-  --color-warning-bg:  #78350f;
-  --color-error:       #f87171;
-  --color-error-bg:    #450a0a;   /* red-950: error text 5.8:1 on it ✓ (was #7f1d1d = 3.6:1 ✗) */
-  --color-degraded:    #fdba74;   /* orange-300: 5.5:1 on --color-degraded-bg ✓ */
-  --color-degraded-bg: #7c2d12;
-  --color-info:        #67e8f9;
+  --color-success:        var(--k-status-verified-fg);
+  --color-success-bg:     var(--k-status-verified-wash);
+  --color-warning:        var(--k-status-blocked-fg);
+  --color-warning-bg:     var(--k-status-blocked-wash);
+  --color-error:          var(--k-status-failed-fg);
+  --color-error-bg:       var(--k-status-failed-wash);
+  --color-degraded:       var(--k-status-failed-fg);
+  --color-degraded-bg:    var(--k-status-failed-wash);
+  --color-info:           var(--k-status-waiting-fg);
 
-  /* Bundle types (BundleTypeBadge): outlined text on --color-surface and --color-bg */
-  --color-type-image:  #94a3b8;   /* slate-400: 5.7:1 on #1e293b, 4.9:1 on #263449 ✓ */
-  --color-type-config: #67e8f9;   /* cyan-300: 10.1:1 on #1e293b ✓ */
-  --color-type-mixed:  #a5b4fc;   /* indigo-300: 7.3:1 on #1e293b ✓ */
-  --color-type-chart:  #f0abfc;   /* fuchsia-300: 8.3:1 on #1e293b ✓ */
+  /* Bundle types are monochrome tags. */
+  --color-type-image:     var(--k-ink-2);
+  --color-type-config:    var(--k-ink-2);
+  --color-type-mixed:     var(--k-ink-2);
+  --color-type-chart:     var(--k-ink-2);
 
-  /* Code/monospace inline text — sky-300 in dark mode (visible on dark bg) */
-  --color-code:        #7dd3fc;   /* sky-300: passes on #0f172a, #1e293b, #0c1628 dark bgs */
-
-  /* Scrollbar */
-  color-scheme: dark;
+  --color-code:           var(--k-syntax-ident);
 }
 
-[data-theme="light"] {
-  /* ── Light theme ──────────────────────────────────────────────── */
-  --color-bg:          #f1f5f9;
-  --color-bg-deep:     #e2e8f0;
-  --color-surface:     #ffffff;
-  --color-surface-2:   #f8fafc;
-  --color-border:      #cbd5e1;
-  --color-border-muted: #e2e8f0;
-
-  --color-text:        #1e293b;
-  --color-text-muted:  #475569;   /* slate-600: 5.74:1 on #f1f5f9 ✓ */
-  --color-text-faint:  #4b5563;   /* gray-600: 6.35:1 on #f1f5f9 ✓ (was #6b7280 which failed at 4.38:1) */
-  --color-text-secondary: #475569;  /* alias for muted — WCAG AA on light bg */
-
-  --color-accent:      #4f46e5;   /* 5.74:1 on #f1f5f9 ✓ (was #6366f1 = 4.08:1 ✗) */
-  --color-accent-bg:   #eef2ff;
-  --color-accent-hover: #4338ca;  /* 7.86:1 on #f1f5f9 ✓ */
-
-  --color-success:     #166534;  /* green-800: 6.5:1 on #f1f5f9 ✓ (was #15803d = 4.58:1) */
-  --color-success-bg:  #dcfce7;
-  --color-warning:     #b45309;  /* amber-700: 5.0:1 on #ffffff, 4.6:1 on #f1f5f9 ✓ (was #d97706 = 3.2:1 / 2.9:1 ✗) */
-  --color-warning-bg:  #fef3c7;
-  --color-error:       #b91c1c;  /* red-700: 6.3:1 on #f1f5f9 ✓ (was #dc2626 = 4.4:1 fail) */
-  --color-error-bg:    #fee2e2;
-  --color-degraded:    #9a3412;  /* orange-800: 6.4:1 on --color-degraded-bg ✓ */
-  --color-degraded-bg: #ffedd5;
-  --color-info:        #0369a1;  /* sky-700: 5.4:1 on #f1f5f9 ✓ (was #0891b2 = 3.4:1 fail) */
-
-  /* Bundle types (BundleTypeBadge) */
-  --color-type-image:  #475569;   /* slate-600: 6.9:1 on #f1f5f9 ✓ */
-  --color-type-config: #155e75;   /* cyan-800: 6.6:1 on #f1f5f9, 5.9:1 on #e2e8f0 ✓ */
-  --color-type-mixed:  #4f46e5;   /* indigo-600: 5.7:1 on #f1f5f9 ✓ */
-  --color-type-chart:  #a21caf;   /* fuchsia-700: 5.8:1 on #f1f5f9, 5.1:1 on #e2e8f0 ✓ */
-
-  /* Code/monospace inline text — sky-700 in light mode (5.4:1 on #f1f5f9) */
-  --color-code:        #0369a1;  /* sky-700: 5.4:1 on #f1f5f9 ✓ */
-
-  color-scheme: light;
+/* ── Type ────────────────────────────────────────────────────────────────────
+ * Body text in Atkinson Hyperlegible Next, headings in Archivo, code in
+ * Atkinson Hyperlegible Mono.
+ */
+body {
+  font-family: var(--k-font-body);
+  background: var(--k-surface-canvas);
+  color: var(--k-ink);
+}
+h1, h2, h3, h4 {
+  font-family: var(--k-font-display);
+  font-stretch: var(--k-stretch-normal);
+}
+code, kbd, pre, samp {
+  font-family: var(--k-font-mono);
 }
 
 /* ── Keyboard focus ──────────────────────────────────────────────────────────
@@ -99,8 +73,8 @@
  * focus ring visible on all of them. :focus-visible leaves mouse clicks alone.
  */
 :focus-visible {
-  outline: 2px solid var(--color-accent) !important;
-  outline-offset: 2px;
+  outline: var(--k-focus-ring) !important;
+  outline-offset: var(--k-focus-offset);
 }
 
 /* ── Skip link ───────────────────────────────────────────────────────────────

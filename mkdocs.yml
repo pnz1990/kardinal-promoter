@@ -23,22 +23,28 @@ validation:
 
 theme:
   name: material
+  # Colours and fonts are the kardinal design tokens (docs/stylesheets/tokens.css, generated
+  # from web/tokens/tokens.json, and kardinal.css). The fonts are self-hosted: no font CDN.
   palette:
-    - scheme: default
-      primary: indigo
-      accent: indigo
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
-    - scheme: slate
-      primary: indigo
-      accent: indigo
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-4
-        name: Switch to light mode
-  font:
-    text: Inter
-    code: JetBrains Mono
+        name: Follow the system theme
+  font: false
   icon:
     repo: fontawesome/brands/github
   logo: assets/logo.png
@@ -59,6 +65,10 @@ theme:
     - content.action.edit
     - content.action.view
     - toc.follow
+
+extra_css:
+  - stylesheets/tokens.css
+  - stylesheets/kardinal.css
 
 plugins:
   - search:

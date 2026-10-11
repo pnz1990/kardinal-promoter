@@ -4,7 +4,7 @@
 // ThemeContext.test.tsx — unit tests for ThemeProvider and useTheme.
 import { renderHook, act } from '@testing-library/react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { ThemeProvider, useTheme, type Theme } from './ThemeContext'
+import { ThemeProvider, useTheme, themeControlLabel, type Theme } from './ThemeContext'
 
 // Mock localStorage.
 const localStorageMock = (() => {
@@ -97,13 +97,38 @@ describe('ThemeProvider', () => {
     expect(document.documentElement.getAttribute('data-theme')).toBe('light')
   })
 
-  it('removes data-theme attribute when dark', () => {
+  it('applies data-theme="dark" when dark', () => {
     localStorageMock.setItem('kardinal-theme', 'light')
     const { result } = renderHook(() => useTheme(), {
       wrapper: ThemeProvider,
     })
     act(() => result.current.toggleTheme())
-    expect(document.documentElement.getAttribute('data-theme')).toBeNull()
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
+  })
+
+  it('cycles System → Light → Dark → System, saving only Light and Dark', () => {
+    systemPreference = 'light'
+    const { result } = renderHook(() => useTheme(), { wrapper: ThemeProvider })
+    expect(result.current.preference).toBe('system')
+    expect(result.current.theme).toBe('light')
+    act(() => result.current.toggleTheme())
+    expect(result.current.preference).toBe('light')
+    expect(localStorageMock.getItem('kardinal-theme')).toBe('light')
+    act(() => result.current.toggleTheme())
+    expect(result.current.preference).toBe('dark')
+    expect(result.current.theme).toBe('dark')
+    expect(localStorageMock.getItem('kardinal-theme')).toBe('dark')
+    act(() => result.current.toggleTheme())
+    expect(result.current.preference).toBe('system')
+    expect(result.current.theme).toBe('light')
+    expect(localStorageMock.getItem('kardinal-theme')).toBeNull()
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light')
+  })
+
+  it('names the control by its setting and what a click does', () => {
+    expect(themeControlLabel('system', 'dark')).toBe('Theme: System (dark). Switch to Light')
+    expect(themeControlLabel('light', 'light')).toBe('Theme: Light. Switch to Dark')
+    expect(themeControlLabel('dark', 'dark')).toBe('Theme: Dark. Switch to System')
   })
 
   it.each([
@@ -117,6 +142,32 @@ describe('ThemeProvider', () => {
     })
     expect(result.current.theme).toBe(want)
   })
+})
+
+describe('ThemeProvider — density', () => {
+  beforeEach(() => {
+    localStorageMock.clear()
+    document.documentElement.removeAttribute('data-density')
+  })
+
+  it('defaults to comfortable and sets data-density', () => {
+    const { result } = renderHook(() => useTheme(), { wrapper: ThemeProvider })
+    expect(result.current.density).toBe('comfortable')
+    expect(document.documentElement.getAttribute('data-density')).toBe('comfortable')
+  })
+
+  it('saves compact and restores it', () => {
+    const first = renderHook(() => useTheme(), { wrapper: ThemeProvider })
+    act(() => first.result.current.setDensity('compact'))
+    expect(document.documentElement.getAttribute('data-density')).toBe('compact')
+    expect(localStorageMock.getItem('kardinal-density')).toBe('compact')
+    first.unmount()
+    const again = renderHook(() => useTheme(), { wrapper: ThemeProvider })
+    expect(again.result.current.density).toBe('compact')
+    act(() => again.result.current.setDensity('comfortable'))
+    expect(localStorageMock.getItem('kardinal-density')).toBeNull()
+  })
+
 })
 
 // Audit C10b-web-20: the theme follows the OS until the user picks one.

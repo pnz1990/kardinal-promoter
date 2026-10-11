@@ -242,7 +242,7 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
                     borderTop: '1px solid var(--color-border-muted)',
-                    fontFamily: 'monospace',
+                    fontFamily: 'var(--k-font-mono)',
                     background: 'var(--color-bg-deep)',
                   }}>
                     {ns}
@@ -423,7 +423,7 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
                       <>
                         {envCount > 0 && <span>·</span>}
                         <span
-                          style={{ fontFamily: 'monospace', color: 'var(--color-text-muted)' }}
+                          style={{ fontFamily: 'var(--k-font-mono)', color: 'var(--color-text-muted)' }}
                           title={p.activeBundleName}
                         >
                           {bundle}
@@ -434,7 +434,7 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
                 )}
                 {/* Bundle name shown below the health bar when env states are shown */}
                 {p.environmentStates && bundle && (
-                  <span style={{ fontFamily: 'monospace', color: 'var(--color-text-muted)' }} title={p.activeBundleName}>
+                  <span style={{ fontFamily: 'var(--k-font-mono)', color: 'var(--color-text-muted)' }} title={p.activeBundleName}>
                     {bundle}
                   </span>
                 )}

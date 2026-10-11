@@ -120,7 +120,7 @@ export function KeyboardShortcutsPanel({ onClose }: KeyboardShortcutsPanelProps)
                     borderRadius: '4px',
                     padding: '1px 6px',
                     fontSize: '0.75rem',
-                    fontFamily: 'monospace',
+                    fontFamily: 'var(--k-font-mono)',
                     color: 'var(--color-text)',
                     minWidth: '1.5rem',
                     textAlign: 'center',
@@ -149,8 +149,8 @@ export function KeyboardShortcutsPanel({ onClose }: KeyboardShortcutsPanelProps)
           fontSize: '0.7rem',
           color: 'var(--color-text-faint)',
         }}>
-          Press <kbd style={{ fontFamily: 'monospace' }}>?</kbd> or{' '}
-          <kbd style={{ fontFamily: 'monospace' }}>Esc</kbd> to close
+          Press <kbd style={{ fontFamily: 'var(--k-font-mono)' }}>?</kbd> or{' '}
+          <kbd style={{ fontFamily: 'var(--k-font-mono)' }}>Esc</kbd> to close
         </div>
       </div>
     </div>
