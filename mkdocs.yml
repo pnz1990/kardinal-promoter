@@ -214,6 +214,7 @@ nav:
     - REST API: reference/rest-api.md
     - CEL context: reference/cel-context.md
     - Helm values: reference/helm-values.md
+    - Controller flags: reference/controller-flags.md
     - Metrics: reference/metrics.md
     - Glossary: reference/glossary.md
   - Project:
