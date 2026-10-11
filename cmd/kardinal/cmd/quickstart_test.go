@@ -216,12 +216,12 @@ func TestQuickstart_Preconditions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			writeKubeconfig(t, "kind-kardinal", "https://127.0.0.1:41234")
 			noCluster(t)
-			quickstartLookPath = func(name string) (string, error) {
+			setForTest(t, &quickstartLookPath, func(name string) (string, error) {
 				if name == tc.noTool {
 					return "", errors.New("not found")
 				}
 				return "/bin/" + name, nil
-			}
+			})
 			t.Setenv("GITHUB_TOKEN", tc.token)
 			oldGH := ghToken
 			ghToken = func() (string, error) { return "", errors.New("not logged in") }
@@ -361,7 +361,7 @@ func TestQuickstart_Demo(t *testing.T) {
 	writeKubeconfig(t, "kind-kardinal", "https://127.0.0.1:41234")
 	noCluster(t)
 	c := quickstartCluster(t)
-	quickstartClient = func(*clientcmdapi.Config) (sigs_client.Client, error) { return c, nil }
+	setForTest(t, &quickstartClient, func(*clientcmdapi.Config) (sigs_client.Client, error) { return c, nil })
 	StubIdentity(t, "kubernetes-admin")
 	t.Setenv("GITHUB_TOKEN", "s3cr3t-token")
 	o := quickstartOptions{repo: "https://github.com/me/kardinal-demo", image: quickstartImage, noWait: true}
@@ -442,12 +442,12 @@ func TestQuickstart_Installs(t *testing.T) {
 	// Nothing runs yet: every install step runs its commands.
 	c := fake.NewClientBuilder().WithScheme(rootScheme).Build()
 	var ran []string
-	quickstartRun = func(_ context.Context, name string, args ...string) (string, error) {
+	setForTest(t, &quickstartRun, func(_ context.Context, name string, args ...string) (string, error) {
 		line := name + " " + strings.Join(args, " ")
 		assert.NotContains(t, line, "s3cr3t-token")
 		ran = append(ran, line)
 		return "", nil
-	}
+	})
 	q := &quickstart{ctx: context.Background(), w: &bytes.Buffer{}, c: c, kctx: "kind-kardinal", kubeconfig: "/tmp/qs-kubeconfig",
 		o: quickstartOptions{chartVersion: "9.9.9", sets: []string{"ui.enabled=true"}}}
 	require.NoError(t, q.kro())
@@ -581,11 +581,11 @@ func TestQuickstart_InterruptRemovesKubeconfig(t *testing.T) {
 	noCluster(t)
 	t.Setenv("GITHUB_TOKEN", "tok")
 	c := fake.NewClientBuilder().WithScheme(rootScheme).Build() // nothing installed
-	quickstartClient = func(*clientcmdapi.Config) (sigs_client.Client, error) { return c, nil }
+	setForTest(t, &quickstartClient, func(*clientcmdapi.Config) (sigs_client.Client, error) { return c, nil })
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var file string
-	quickstartRun = func(ctx context.Context, name string, args ...string) (string, error) {
+	setForTest(t, &quickstartRun, func(ctx context.Context, name string, args ...string) (string, error) {
 		for i, a := range args {
 			if a == "--kubeconfig" {
 				file = args[i+1]
@@ -594,7 +594,7 @@ func TestQuickstart_InterruptRemovesKubeconfig(t *testing.T) {
 		require.FileExists(t, file, "helm and kubectl get the kubeconfig file")
 		cancel() // Ctrl-C while helm runs
 		return "", ctx.Err()
-	}
+	})
 	err := quickstartFn(ctx, &bytes.Buffer{}, quickstartOptions{repo: "https://github.com/me/kardinal-demo"})
 	require.Error(t, err)
 	require.NotEmpty(t, file)

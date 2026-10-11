@@ -51,6 +51,7 @@ func complete(t *testing.T, args ...string) string {
 // gates, from the cluster, for arguments and flags alike (the live side is
 // TestCLI_CompleteNames).
 func TestCompletion_Names_Golden(t *testing.T) {
+	keepStyle(t)
 	created := time.Now().Add(-time.Hour)
 	b1 := whyBundle("demo-a", "1.4.0")
 	b1.Status.Phase = "Verified"
@@ -109,6 +110,7 @@ func TestCompletion_Names_Golden(t *testing.T) {
 // connection and never answers (discovery included) does not freeze the
 // shell: Tab gives up after the completion timeout with no names.
 func TestCompletion_HungServer(t *testing.T) {
+	keepStyle(t)
 	release := make(chan struct{})
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
 	t.Cleanup(func() { close(release); srv.Close() })
@@ -135,6 +137,7 @@ current-context: hung
 // TestCompletion_NoCluster: without a cluster, Tab completes nothing and
 // does not offer file names; it never fails.
 func TestCompletion_NoCluster(t *testing.T) {
+	keepStyle(t)
 	prev := completionClient
 	completionClient = func() (sigs_client.Client, string, error) { return nil, "", errors.New("no cluster") }
 	t.Cleanup(func() { completionClient = prev })

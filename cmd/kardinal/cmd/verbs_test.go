@@ -603,6 +603,7 @@ func TestShipWait_Interrupt(t *testing.T) {
 //
 // Covers CLI-VERBS-01.
 func TestApprove_PinAndConfirm(t *testing.T) {
+	keepStyle(t)
 	stubIdentity(t, Identity{Username: "alice"})
 	b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v2", Namespace: "default"},
 		Spec:   v1alpha1.BundleSpec{Type: "image", Pipeline: "app", Images: []v1alpha1.ImageRef{{Repository: "r/app", Tag: "2.0"}}},
