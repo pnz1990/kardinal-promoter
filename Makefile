@@ -40,9 +40,6 @@ build-cli:
 	$(GO) build -o $(BINARY_CLI) ./cmd/kardinal/
 
 ## UI
-reference-docs: ## Regenerate docs/reference/helm-values.md and controller-flags.md
-	$(GO) run ./hack/gen-reference-docs
-
 tokens: ## Regenerate the design tokens (web/tokens/tokens.json -> web/src/styles/tokens.css, web/src/tokens.ts, docs/stylesheets/tokens.css)
 	node scripts/gen-tokens.mjs
 
@@ -101,6 +98,11 @@ manifests: $(CONTROLLER_GEN)
 ## TestAPIReferenceIsUpToDate (hack/gen-api-docs, run by "go test ./...") fails when it is stale.
 api-docs: ## Regenerate docs/reference/api.md from the CRDs in config/crd/bases
 	$(GO) run ./hack/gen-api-docs --crds config/crd/bases --output docs/reference/api.md
+
+## docs/reference/helm-values.md and controller-flags.md come from values.yaml and the
+## controller's flags. TestReferencePagesAreUpToDate (hack/gen-reference-docs) fails when stale.
+reference-docs: ## Regenerate docs/reference/helm-values.md and controller-flags.md
+	$(GO) run ./hack/gen-reference-docs
 
 ## Install CRDs and chart into the CURRENT kube context, running $(IMG) (build and load it first)
 install: manifests ## Install CRDs and chart into the current kube context (image $(IMG_REPO):$(IMG_TAG))

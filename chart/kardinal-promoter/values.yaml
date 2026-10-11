@@ -234,10 +234,13 @@ github:
   token: ""
   # -- Existing Secret holding the token.
   secretRef:
+    # -- Name of an existing Secret in the release namespace that holds the
+    # SCM token (or the GitHub App credentials with github.app.enabled).
     name: ""
     # -- Must be empty or the release namespace: GITHUB_TOKEN is read with a
     # secretKeyRef, which only reads the Pod's namespace.
     namespace: ""
+    # -- Key of the token in that Secret.
     key: "token"
   # -- Authenticate as a GitHub App: the github.secretRef Secret holds
   # githubAppID, githubAppInstallationID and githubAppPrivateKey instead of a
@@ -252,10 +255,6 @@ github:
   app:
     enabled: false
 
-# -- SCM provider (--scm-provider): github (default when empty), gitlab,
-# forgejo, gitea, bitbucket, azuredevops or bitbucket-datacenter, and its API base URL
-# (--scm-api-url) for self-hosted instances. See docs/scm-providers.md.
-
 # Identity admission policies (templates/identity-admission.yaml,
 # docs/guides/security.md#verified-identity).
 admission:
@@ -269,7 +268,12 @@ admission:
   # these checks.
   controllerUsernames: []
 scm:
+  # -- SCM provider (--scm-provider): github (default when empty), gitlab,
+  # forgejo, gitea, bitbucket, azuredevops or bitbucket-datacenter. A Pipeline
+  # can name another with spec.git.providerRef. See docs/scm-providers.md.
   provider: ""
+  # -- API base URL of a self-hosted SCM (--scm-api-url); empty: the
+  # provider's public API.
   apiURL: ""
   # -- Repositories the controller's SCM token may act on
   # (--scm-allowed-repositories), as host/repository globs: "github.com/acme/*",
@@ -313,7 +317,11 @@ webhook:
 # (KARDINAL_BUNDLE_TOKEN). The Bundle API is off until this is set.
 bundleAPI:
   tokenSecretRef:
+    # -- Name of a Secret in the release namespace holding the Bundle API bearer
+    # token (KARDINAL_BUNDLE_TOKEN). The Bundle API is off until a token or
+    # tokenReview is set.
     name: ""
+    # -- Key of the token in that Secret.
     key: "token"
   # -- Accept Kubernetes tokens on POST /api/v1/bundles (--bundle-api-tokenreview-auth):
   # each caller is authenticated with a TokenReview and needs create on
@@ -495,6 +503,7 @@ render:
   # host. Needs a CNI that enforces NetworkPolicy. It is created in each of
   # namespaces (the Pipeline namespaces that use layout: branch).
   networkPolicy:
+    # -- Create the render NetworkPolicy.
     enabled: false
     # -- Namespaces to create the render NetworkPolicy in.
     namespaces: []
@@ -540,6 +549,7 @@ egress:
 # NetworkPolicy. Egress: DNS, :443/:6443 (API server, SCM, git, registries),
 # graph.kroNamespace and extraEgress. Ingress: the four Service ports.
 networkPolicy:
+  # -- Create the controller NetworkPolicy.
   enabled: false
   # -- Peers allowed per ingress port (NetworkPolicyPeer list). Empty admits
   # any source on that port. Example:
@@ -564,6 +574,8 @@ networkPolicy:
 # them. See docs/guides/security.md (Retention).
 audit:
   retention:
+    # -- Delete AuditEvents past maxAge and maxPerPipeline (--audit-retention).
+    # false keeps every record.
     enabled: true
     # -- Delete records created longer ago than this
     # (--audit-retention-max-age, a Go duration). "0s" keeps records of any
@@ -608,6 +620,7 @@ scheduleClock:
 # Only created when replicaCount > 1 to ensure at least one replica is
 # available during node maintenance or rolling updates.
 pdb:
+  # -- Create the PodDisruptionBudget (only when replicaCount > 1).
   enabled: true
   # -- Minimum number of pods that must be available during disruption.
   minAvailable: 1

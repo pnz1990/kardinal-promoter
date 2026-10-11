@@ -47,7 +47,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("%s: %v", *values, err)
 	}
-	help, err := controllerHelp()
+	help, err := controllerHelp(".")
 	if err != nil {
 		log.Fatalf("controller -help: %v", err)
 	}
@@ -84,8 +84,8 @@ type valueRow struct{ key, def, desc string }
 // HelmValuesPage renders values.yaml as a table. A key with a "# --" comment
 // is one row, its whole value the default (a map is shown as JSON), unless
 // values below it have comments of their own: then it is a section row and
-// its values follow. A map without a comment is walked into; a leaf without
-// one is a row with no description.
+// its values follow. A map without a comment is walked into; a value without
+// one is an error, so every value is documented.
 func HelmValuesPage(src []byte) (string, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(src, &doc); err != nil {
@@ -95,8 +95,12 @@ func HelmValuesPage(src []byte) (string, error) {
 		return "", fmt.Errorf("values.yaml is not a mapping")
 	}
 	var rows []valueRow
-	if err := walkValues(doc.Content[0], "", &rows); err != nil {
+	var undocumented []string
+	if err := walkValues(doc.Content[0], "", &rows, &undocumented); err != nil {
 		return "", err
+	}
+	if len(undocumented) > 0 {
+		return "", fmt.Errorf("these values have no \"# --\" comment; describe them in values.yaml: %s", strings.Join(undocumented, ", "))
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, header, "chart/kardinal-promoter/values.yaml")
@@ -112,7 +116,7 @@ func HelmValuesPage(src []byte) (string, error) {
 	return b.String(), nil
 }
 
-func walkValues(m *yaml.Node, prefix string, rows *[]valueRow) error {
+func walkValues(m *yaml.Node, prefix string, rows *[]valueRow, undocumented *[]string) error {
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		k, v := m.Content[i], m.Content[i+1]
 		key := k.Value
@@ -125,9 +129,13 @@ func walkValues(m *yaml.Node, prefix string, rows *[]valueRow) error {
 			if documented {
 				*rows = append(*rows, valueRow{key: key, def: "", desc: desc})
 			}
-			if err := walkValues(v, key, rows); err != nil {
+			if err := walkValues(v, key, rows, undocumented); err != nil {
 				return err
 			}
+			continue
+		}
+		if !documented {
+			*undocumented = append(*undocumented, key)
 			continue
 		}
 		def, err := defaultValue(v)
@@ -212,13 +220,17 @@ func cell(s string) string {
 
 // ---- Controller flags ------------------------------------------------------
 
-// controllerHelp runs the controller with -help in an empty environment (its
-// flags read KARDINAL_* variables as defaults) and returns what it printed.
-func controllerHelp() (string, error) {
+// controllerHelp runs the controller in dir with -help, with only the
+// variables go needs, and returns what it printed.
+func controllerHelp(dir string) (string, error) {
 	cmd := exec.Command("go", "run", "./cmd/kardinal-controller", "-help")
+	cmd.Dir = dir
+	// Only what go needs: a flag's default can come from any variable
+	// (KARDINAL_*, GITHUB_APP_*, ...), and the page shows the built-in ones.
 	env := []string{}
 	for _, kv := range os.Environ() {
-		if name, _, _ := strings.Cut(kv, "="); !strings.HasPrefix(name, "KARDINAL_") && name != "GITHUB_TOKEN" && name != "KUBECONFIG" {
+		name, _, _ := strings.Cut(kv, "=")
+		if name == "PATH" || name == "HOME" || name == "TMPDIR" || strings.HasPrefix(name, "GO") || name == "CGO_ENABLED" {
 			env = append(env, kv)
 		}
 	}
