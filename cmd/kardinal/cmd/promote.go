@@ -32,8 +32,8 @@ func newPromoteCmd() *cobra.Command {
 	var envFlag string
 	cmd := &cobra.Command{
 		Use:   "promote <pipeline> <env>",
-		Short: "Promote the Bundle verified upstream into an environment",
-		Long: `Promote the newest Bundle that is Verified in every upstream environment
+		Short: "Promote the version verified upstream into an environment",
+		Long: `Promote the newest version that is Verified in every upstream environment
 into <env>, as a new Bundle that targets it; gates and approval apply.
 It refuses, creating nothing, when nothing is Verified upstream yet, when
 that Bundle is already in <env>, or when a newer Bundle is still promoting.

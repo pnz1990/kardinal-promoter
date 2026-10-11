@@ -101,7 +101,7 @@ func TestOutputFlag_Validated(t *testing.T) {
 		args    []string
 		wantErr string
 	}{
-		{"unknown format", []string{"version", "-o", "xml"}, `invalid -o "xml": must be table, json or yaml`},
+		{"unknown format", []string{"version", "-o", "xml"}, `invalid -o "xml": must be table, json, yaml or wide`},
 		{"json on a table command", []string{"completion", "zsh", "-o", "json"},
 			`-o json is not supported by "kardinal completion"`},
 		{"yaml on logs", []string{"logs", "demo", "-o", "yaml"},
