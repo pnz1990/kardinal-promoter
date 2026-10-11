@@ -96,8 +96,9 @@ func TestCLI_ShipWait(t *testing.T) {
 	approver := userKubeconfig(t, e, b.ns, "carol@example.com", "release-managers")
 	r = c.Exec(framework.CLIOptions{Kubeconfig: approver}, c.Args(b.ns, "hold", pipelineName, "test", "--reason", "freeze")...)
 	assert.Equal(t, 1, r.Code, r.Output())
-	assert.Contains(t, r.Stderr, "you (carol@example.com) cannot update pipelines in namespace "+b.ns)
-	assert.Contains(t, r.Stderr, "kardinal-promoter-promoter role")
+	// Refused by RBAC where it first lacks a right (reading the steps, or
+	// writing the hold), with the role that grants it named.
+	assert.Regexp(t, `^you \(carol@example\.com\) cannot (list promotionsteps|update pipelines) in namespace `+b.ns+`\.\nAsk your cluster admin to bind you the kardinal-promoter-(viewer|promoter) role`, r.Stderr)
 	var p v1alpha1.Pipeline
 	require.NoError(t, e.Client.Get(context.Background(), types.NamespacedName{Namespace: b.ns, Name: pipelineName}, &p))
 	assert.Empty(t, p.Spec.Holds, "a refused hold changes nothing")
