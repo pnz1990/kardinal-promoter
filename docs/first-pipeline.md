@@ -191,8 +191,8 @@ Verify the Pipeline was created:
 
 ```bash
 kardinal get pipelines
-# PIPELINE            VERSION  TEST   UAT   PROD   SUB   AGE
-# kardinal-test-app   -        -      -     -      0     10s
+# PIPELINE            VERSION   TEST   UAT   PROD   SUB   AGE
+# kardinal-test-app   -         -      -     -      0     10s
 ```
 
 !!! tip "Troubleshooting: Pipeline not appearing"
@@ -333,7 +333,7 @@ The next Bundle promoted to prod will have this gate injected into its Graph. If
 ```bash
 kardinal explain kardinal-test-app --env prod
 # ENVIRONMENT   VERSION                                 TYPE         NAME                 STATE      EXPRESSION            REASON
-# prod          sha-9349a3f (kardinal-test-app-9tptr)   PolicyGate   no-weekend-deploys   Blocking   !schedule.isWeekend   Production deployments are blocked on weekends (bundle.version=sha-abc1234: !schedule.isWeekend = false)
+# prod          sha-abc1234 (kardinal-test-app-9tptr)   PolicyGate   no-weekend-deploys   Blocking   !schedule.isWeekend   Production deployments are blocked on weekends (bundle.version=sha-abc1234: !schedule.isWeekend = false)
 #
 # prod   deployed: sha-1a2b3c4 (kardinal-test-app-7qvsr)
 ```
