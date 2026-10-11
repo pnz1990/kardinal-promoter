@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -274,7 +276,7 @@ func sameRefsAs(b, target *v1alpha1.Bundle) string {
 	if tc := target.Spec.ConfigRef; tc != nil && tc.CommitSHA != "" {
 		bc := b.Spec.ConfigRef
 		if bc == nil || bc.GitRepo != tc.GitRepo || bc.CommitSHA != tc.CommitSHA {
-			return fmt.Sprintf("config %s is not at rollbackOf %s's commit %s", tc.GitRepo, target.Name, tc.CommitSHA)
+			return fmt.Sprintf("config %s is not at rollbackOf %s's commit %s", scm.RedactURL(tc.GitRepo), target.Name, tc.CommitSHA)
 		}
 	}
 	if tch := target.Spec.Chart; tch != nil {

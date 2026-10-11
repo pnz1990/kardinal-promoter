@@ -14,7 +14,10 @@
 package scm_test
 
 import (
+	"context"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -200,4 +203,108 @@ func TestWebhookSignature(t *testing.T) {
 		assert.Empty(t, scm.WebhookSignature(http.Header{}))
 		assert.Empty(t, scm.WebhookSignatureHeader(http.Header{}))
 	})
+}
+
+// TestRepoFromURL_ParseErrorRedacted: a URL that does not parse is not
+// echoed with its userinfo: a *url.Error quotes the raw URL, so a token used
+// as the user name would reach the step message and the Pipeline status.
+func TestRepoFromURL_ParseErrorRedacted(t *testing.T) {
+	for _, raw := range []string{"https://ghp_SECRET@github.com/o/%zz", "https://x:ghp_SECRET@github.com/o/r\x7f"} {
+		_, err := scm.RepoFromURL(raw)
+		require.Error(t, err, raw)
+		assert.NotContains(t, err.Error(), "SECRET")
+		assert.Contains(t, err.Error(), "parse repository URL")
+	}
+}
+
+// TestRedactURL_HardCases (#1721 QA): an "@" in the password, a URL that does
+// not parse because of whitespace, and tokens in the query are all removed;
+// RedactErr keeps errors.Is working.
+func TestRedactURL_HardCases(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://u:p@ss@SECRET@github.com/o/r":                "https://github.com/o/r",
+		"https://u:SECRET word@github.com/o/r":                "https://github.com/o/r",
+		"https://github.com/o/r?access_token=SECRET&x=1":      "https://github.com/o/r?access_token=REDACTED&x=1",
+		"https://gitlab.example/o/r.git?private_token=SECRET": "https://gitlab.example/o/r.git?private_token=REDACTED",
+	} {
+		got := scm.RedactURL(in)
+		assert.Equal(t, want, got, in)
+		assert.NotContains(t, got, "SECRET", in)
+	}
+	for _, in := range []string{
+		`Get "https://u:p@ss@SECRET@host/o": refused`,
+		`fetch https://host/o?token=SECRET failed`,
+		`call https://host/api?PASSWORD=SECRET&a=b`,
+	} {
+		assert.NotContains(t, scm.RedactText(in), "SECRET", in)
+	}
+	base := context.DeadlineExceeded
+	err := scm.RedactErr(fmt.Errorf(`Get "https://SECRET@h/x": %w`, base))
+	assert.NotContains(t, err.Error(), "SECRET")
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.NoError(t, scm.RedactErr(nil))
+}
+
+// TestRedactText_QAPatterns (#1721 QA round 2): an "@" in the query is not
+// userinfo; credentials in a fragment, in ";"-separated pairs, under
+// percent-encoded keys and in api_key, client_secret and X-Amz-* parameters
+// are redacted; a password with a space or a "/" is removed from a quoted URL
+// (a *url.Error) and from a URL that does not parse.
+func TestRedactText_QAPatterns(t *testing.T) {
+	assert.Equal(t, "https://host?email=a@b.com", scm.RedactText("https://host?email=a@b.com"), "an @ in the query is kept")
+	assert.Equal(t, "https://host/x#email=a@b", scm.RedactText("https://host/x#email=a@b"))
+	for _, in := range []string{
+		"https://host/cb#access_token=SECRET&state=x",
+		"https://host/x?a=1;token=SECRET",
+		"https://host/x?access%5Ftoken=SECRET",
+		"https://host/x?api_key=SECRET",
+		"https://host/x?client_secret=SECRET",
+		"https://bucket.s3.example/o?X-Amz-Credential=SECRET&X-Amz-Signature=SECRET",
+		`Get "https://u:pa ss/SECRET@host/repo/info/refs": refused`,
+		`Get "https://u:pa/SECRET@host/repo": refused`,
+	} {
+		got := scm.RedactText(in)
+		assert.NotContains(t, got, "SECRET", in)
+	}
+	for _, in := range []string{"https://u:pa/SECRET@host/repo", "https://u:pa SECRET@host/repo"} {
+		got := scm.RedactURL(in)
+		assert.NotContains(t, got, "SECRET", in)
+		assert.Contains(t, got, "host/repo", in)
+	}
+}
+
+// TestRedactText_QuotedPathAt (#1721 QA round 3): a quoted URL whose path has
+// an "@" (npm scopes, @types, the Go module proxy) keeps its host; its
+// userinfo is still removed; the new credential keys are redacted, and "key"
+// only as the whole parameter name.
+func TestRedactText_QuotedPathAt(t *testing.T) {
+	for _, u := range []string{
+		"https://registry.npmjs.org/@scope/pkg",
+		"https://registry.npmjs.org/@types/node",
+		"https://proxy.golang.org/github.com/x/y/@v/list",
+	} {
+		in := `Get "` + u + `": EOF`
+		assert.Equal(t, in, scm.RedactText(in), "the path's @ is not userinfo")
+		withUser := `Get "` + strings.Replace(u, "https://", "https://u:SECRET@", 1) + `": EOF`
+		assert.Equal(t, in, scm.RedactText(withUser))
+	}
+	for _, in := range []string{
+		"https://s3.example/o?X-Amz-Security-Token=SECRET",
+		"https://acct.blob.core.windows.net/c/b?sv=1&sig=SECRET",
+		"https://idp.example/t?refresh_token=SECRET",
+		"https://api.example/x?apikey=SECRET",
+		"https://maps.example/x?key=SECRET",
+	} {
+		assert.NotContains(t, scm.RedactText(in), "SECRET", in)
+	}
+	assert.Equal(t, "https://zoo.example/x?monkey=banana", scm.RedactText("https://zoo.example/x?monkey=banana"))
+}
+
+// TestRedactText_EscapedQuote (#1721 QA): a quoted URL with an escaped quote
+// in its password, as strconv.Quote writes it, is redacted whole.
+func TestRedactText_EscapedQuote(t *testing.T) {
+	in := `parse "https://u:p\" wSECRET@host/x": invalid character " " in host name`
+	got := scm.RedactText(in)
+	assert.NotContains(t, got, "SECRET")
+	assert.Contains(t, got, "host/x")
 }
