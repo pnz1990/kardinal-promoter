@@ -410,9 +410,16 @@ func TestCLI_Init(t *testing.T) {
 	// A re-run keeps an edited overlay.
 	edited := filepath.Join(dir, "gitops", "environments", "test", "kustomization.yaml")
 	require.NoError(t, os.WriteFile(edited, []byte("# mine\n"), 0o600))
+	// The same Pipeline again is unchanged; another one is not written
+	// without --force.
 	r = init(dir, answers("kustomize"), "--file", "deploy/pipeline.yaml", "--scaffold-gitops", "--gitops-dir", "gitops")
+	require.Equal(t, 0, r.Code, r.Stderr)
+	assert.Contains(t, r.Stdout, "Pipeline YAML in deploy/pipeline.yaml unchanged\n")
+	assert.Equal(t, yaml, readFile(t, filepath.Join(dir, "deploy", "pipeline.yaml")))
+	r = init(dir, answers("helm"), "--file", "deploy/pipeline.yaml")
 	assert.Equal(t, 1, r.Code, "an existing file is not overwritten")
-	assert.Equal(t, "init: deploy/pipeline.yaml exists; overwrite it with --force, or write another file with -f\n", r.Stderr[strings.LastIndex(r.Stderr, "init: "):])
+	assert.Equal(t, "init: deploy/pipeline.yaml exists with another Pipeline; overwrite it with --force, or write another file with -f\n", r.Stderr[strings.LastIndex(r.Stderr, "init: "):])
+	assert.Equal(t, yaml, readFile(t, filepath.Join(dir, "deploy", "pipeline.yaml")))
 	r = init(dir, answers("kustomize"), "--file", "deploy/pipeline.yaml", "--scaffold-gitops", "--gitops-dir", "gitops", "--force")
 	require.Equal(t, 0, r.Code, r.Stderr)
 	assert.Contains(t, r.Stdout, "  skipped (already exists): gitops/environments/test/kustomization.yaml\n")
@@ -437,14 +444,14 @@ func TestCLI_Init(t *testing.T) {
 	assert.NoDirExists(t, filepath.Join(helm, ".gitops"))
 
 	// Validation: re-prompt, then fail at end of input.
-	r = init(t.TempDir(), "\n\n\ngit@example.com:o/r.git\nhttps://git.example/o/r\n\n\n", "--stdout")
+	r = init(t.TempDir(), "\n\n\nhttps://git.example/o/r #x\nhttps://git.example/o/r\n\n\n", "--stdout")
 	require.Equal(t, 0, r.Code, r.Stderr)
-	assert.Equal(t, 1, strings.Count(r.Stderr, "  an https:// repository URL is required\n"))
-	assert.Contains(t, r.Stdout, "metadata: { name: my-app, namespace: default }\n", "empty answers take the defaults")
+	assert.Equal(t, 1, strings.Count(r.Stderr, "  a git repository URL is required (https://host/owner/repo or git@host:owner/repo.git)\n"))
+	assert.Contains(t, r.Stdout, "metadata: { name: my-app }\n", "empty answers take the defaults, and default is left out")
 	assert.Contains(t, r.Stdout, "    - name: uat\n")
 	r = init(t.TempDir(), "\n\n\n\n", "--stdout")
 	assert.Equal(t, 1, r.Code)
-	assert.Contains(t, r.Stderr, `kardinal init asks its questions on a terminal, and its input ended at "Git repository URL" (an https:// repository URL is required)`)
+	assert.Contains(t, r.Stderr, `kardinal init asks its questions on a terminal, and its input ended at "Git repository URL" (a git repository URL is required (https://host/owner/repo or git@host:owner/repo.git))`)
 	assert.Contains(t, r.Stderr, "give the answers as flags: kardinal init --name my-app --repo https://github.com/myorg/gitops")
 	assert.Empty(t, r.Stdout)
 
@@ -470,9 +477,15 @@ func TestCLI_Init(t *testing.T) {
 	assert.Equal(t, "true", sec.Labels[v1alpha1.LabelSecretReferenceable])
 	assert.Equal(t, "e2e-t0ken-init", string(sec.Data["token"]))
 	waitPipelineValid(t, e, a.ns, a.ns)
+	// The same again is unchanged; another Pipeline is not replaced
+	// without --force.
+	r = cli.Exec(framework.CLIOptions{Dir: t.TempDir()}, cli.Args(a.ns, "init", "--name", a.ns, "--repo", "https://git.example/o/r", "--envs", "test",
+		"--secret", "init-token", "--apply", "--stdout")...)
+	require.Equal(t, 0, r.Code, r.Output())
+	assert.Contains(t, r.Stderr, "Pipeline "+a.ns+"/"+a.ns+" unchanged\n")
 	r = cli.Exec(framework.CLIOptions{Dir: t.TempDir()}, cli.Args(a.ns, "init", "--name", a.ns, "--repo", "https://git.example/o/r", "--apply", "--stdout")...)
 	assert.Equal(t, 1, r.Code)
-	assert.Contains(t, r.Stderr, "init: Pipeline "+a.ns+"/"+a.ns+" exists; replace it with --force\n")
+	assert.Contains(t, r.Stderr, "init: Pipeline "+a.ns+"/"+a.ns+" exists with another spec; replace it with --force\n")
 }
 
 // validateCase is one file for TestCLI_Validate.

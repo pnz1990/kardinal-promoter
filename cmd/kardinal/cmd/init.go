@@ -20,18 +20,24 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
@@ -189,7 +195,13 @@ func runInit(cmd *cobra.Command, o initOptions) error {
 		return fmt.Errorf("init: %w", err)
 	}
 	if err := validatePipeline(&check, "the Pipeline", buf.Bytes(), allowed); err != nil {
-		return fmt.Errorf("init: the Pipeline it would write is not valid:\n%s", check.String())
+		detail := strings.TrimSpace(check.String())
+		if detail == "" {
+			detail = err.Error()
+		} else {
+			detail += "\n" + err.Error()
+		}
+		return fmt.Errorf("init: the Pipeline it would write is not valid:\n%s", detail)
 	}
 
 	if o.stdout {
@@ -197,17 +209,23 @@ func runInit(cmd *cobra.Command, o initOptions) error {
 			return err
 		}
 	} else {
-		if _, err := os.Stat(o.file); err == nil && !o.force {
-			return fmt.Errorf("init: %s exists; overwrite it with --force, or write another file with -f", o.file)
+		existing, rerr := os.ReadFile(o.file)
+		switch {
+		case rerr == nil && bytes.Equal(existing, buf.Bytes()):
+			_, _ = fmt.Fprintf(progress, "Pipeline YAML in %s unchanged\n", o.file)
+		case rerr == nil && !o.force:
+			return fmt.Errorf("init: %s exists with another Pipeline; overwrite it with --force, or write another file with -f", o.file)
 		}
-		// --file may name a directory that does not exist yet.
-		if err := os.MkdirAll(filepath.Dir(o.file), 0o755); err != nil {
-			return fmt.Errorf("create directory for %s: %w", o.file, err)
+		if rerr != nil || !bytes.Equal(existing, buf.Bytes()) {
+			// --file may name a directory that does not exist yet.
+			if err := os.MkdirAll(filepath.Dir(o.file), 0o755); err != nil {
+				return fmt.Errorf("create directory for %s: %w", o.file, err)
+			}
+			if err := os.WriteFile(o.file, buf.Bytes(), 0o644); err != nil {
+				return fmt.Errorf("write %s: %w", o.file, err)
+			}
+			_, _ = fmt.Fprintf(progress, "Pipeline YAML written to %s\n", o.file)
 		}
-		if err := os.WriteFile(o.file, buf.Bytes(), 0o644); err != nil {
-			return fmt.Errorf("write %s: %w", o.file, err)
-		}
-		_, _ = fmt.Fprintf(progress, "Pipeline YAML written to %s\n", o.file)
 		if !o.apply {
 			_, _ = fmt.Fprintf(progress, "Apply with: kubectl apply -f %s\n", o.file)
 		}
@@ -271,15 +289,91 @@ func initConfig(cmd *cobra.Command, o initOptions) (*InitConfig, error) {
 	if cfg.Secret == "" {
 		cfg.Secret = "github-token"
 	}
+	if err := checkInitNames(cfg); err != nil {
+		return nil, err
+	}
 	switch {
-	case !strings.HasPrefix(cfg.GitURL, "https://") || len(cfg.GitURL) == len("https://"):
-		return nil, fmt.Errorf("init: --repo needs an https:// repository URL, got %q", cfg.GitURL)
+	case !validRepoURL(cfg.GitURL):
+		return nil, fmt.Errorf("init: --repo needs a git repository URL, https://host/owner/repo or ssh (ssh://git@host/owner/repo, git@host:owner/repo.git), "+
+			"with no spaces, query or fragment; got %q", cfg.GitURL)
+	case cfg.Branch != "" && !validBranch(cfg.Branch):
+		return nil, fmt.Errorf("init: --branch %q is not a git branch name", cfg.Branch)
 	case cfg.UpdateStrategy != "" && cfg.UpdateStrategy != "kustomize" && cfg.UpdateStrategy != "helm":
 		return nil, fmt.Errorf("init: --strategy must be kustomize or helm, got %q", cfg.UpdateStrategy)
 	case cfg.ProdApproval != "" && cfg.ProdApproval != "pr-review" && cfg.ProdApproval != "auto":
 		return nil, fmt.Errorf("init: --prod-approval must be pr-review or auto, got %q", cfg.ProdApproval)
 	}
 	return cfg, nil
+}
+
+// checkInitNames checks the names init writes into the Pipeline: the
+// Pipeline, its namespace and its environments are DNS-1123 labels, and the
+// Secret a DNS-1123 subdomain, as Kubernetes needs them.
+func checkInitNames(cfg *InitConfig) error {
+	label := func(what, v string) error {
+		if errs := validation.IsDNS1123Label(v); len(errs) > 0 {
+			return fmt.Errorf("init: %s %q is not a valid name: %s", what, v, strings.Join(errs, "; "))
+		}
+		return nil
+	}
+	if err := label("the Pipeline name (--name)", cfg.AppName); err != nil {
+		return err
+	}
+	if cfg.Namespace != "" {
+		if err := label("the namespace (-n)", cfg.Namespace); err != nil {
+			return err
+		}
+	}
+	seen := map[string]bool{}
+	for _, env := range cfg.Environments {
+		if err := label("the environment (--envs)", env); err != nil {
+			return err
+		}
+		if seen[env] {
+			return fmt.Errorf("init: the environment %q is given twice (--envs)", env)
+		}
+		seen[env] = true
+	}
+	if errs := validation.IsDNS1123Subdomain(cfg.Secret); len(errs) > 0 {
+		return fmt.Errorf("init: the Secret name (--secret) %q is not a valid name: %s", cfg.Secret, strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// scpLikeRepo is git's scp-like ssh remote, user@host:path.
+var scpLikeRepo = regexp.MustCompile(`^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[A-Za-z0-9._~/-]+$`)
+
+// validRepoURL reports whether v is a git remote init may write: an https or
+// ssh URL with a host and a path, no query, fragment or password, or an
+// scp-like ssh remote; never with whitespace or control characters.
+func validRepoURL(v string) bool {
+	if strings.IndexFunc(v, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+		return false
+	}
+	if scpLikeRepo.MatchString(v) {
+		return true
+	}
+	u, err := url.Parse(v)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "ssh") || u.Host == "" || u.Opaque != "" {
+		return false
+	}
+	if _, hasPassword := u.User.Password(); hasPassword || u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(v, "#?") {
+		return false
+	}
+	return strings.Trim(u.Path, "/") != ""
+}
+
+// validBranch reports whether v is a branch name git accepts (the rules of
+// git check-ref-format that matter for a name typed on a command line).
+func validBranch(v string) bool {
+	if strings.HasPrefix(v, "-") || strings.HasPrefix(v, "/") || strings.HasSuffix(v, "/") ||
+		strings.HasSuffix(v, ".") || strings.HasSuffix(v, ".lock") || strings.Contains(v, "..") ||
+		strings.Contains(v, "//") || strings.Contains(v, "@{") || v == "@" {
+		return false
+	}
+	return strings.IndexFunc(v, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r) || strings.ContainsRune("~^:?*[\\", r) || r > unicode.MaxASCII
+	}) < 0
 }
 
 // The health types init can find in the cluster: an Argo CD Application or
@@ -394,8 +488,20 @@ func applyPipeline(ctx context.Context, c sigs_client.Client, ns string, data []
 		return nil
 	case err != nil:
 		return fmt.Errorf("init: get Pipeline %s/%s: %w", p.Namespace, p.Name, HumanError(err))
-	case !force:
-		return fmt.Errorf("init: Pipeline %s/%s exists; replace it with --force", p.Namespace, p.Name)
+	}
+	// What the API server would store (its defaults applied) tells an
+	// identical Pipeline from a change.
+	want := existing.DeepCopy()
+	want.Spec = p.Spec
+	if err := c.Update(ctx, want, sigs_client.DryRunAll); err != nil {
+		return fmt.Errorf("init: check Pipeline %s/%s: %w", p.Namespace, p.Name, HumanError(err))
+	}
+	if equality.Semantic.DeepEqual(want.Spec, existing.Spec) {
+		_, _ = fmt.Fprintf(out, "Pipeline %s/%s unchanged\n", p.Namespace, p.Name)
+		return nil
+	}
+	if !force {
+		return fmt.Errorf("init: Pipeline %s/%s exists with another spec; replace it with --force", p.Namespace, p.Name)
 	}
 	existing.Spec = p.Spec
 	if err := c.Update(ctx, &existing); err != nil {
@@ -519,8 +625,8 @@ func runInitWizard(in io.Reader, out io.Writer, cfg *InitConfig, changed func(st
 		cfg.Environments = splitTrimmed(envs, ",")
 	}
 	if cfg.GitURL, err = prompt("Git repository URL", "", func(v string) error {
-		if !strings.HasPrefix(v, "https://") || len(v) == len("https://") {
-			return fmt.Errorf("an https:// repository URL is required")
+		if !validRepoURL(v) {
+			return fmt.Errorf("a git repository URL is required (https://host/owner/repo or git@host:owner/repo.git)")
 		}
 		return nil
 	}); err != nil {
@@ -544,45 +650,94 @@ func runInitWizard(in io.Reader, out io.Writer, cfg *InitConfig, changed func(st
 	return nil
 }
 
-// initFn renders cfg as the smallest Pipeline YAML that says it: every
-// default is left out (branch main, strategy kustomize, approval auto but
-// the last environment's pr-review, the default health check), in the
-// layout of examples/minimal/pipeline.yaml.
-func initFn(w io.Writer, cfg *InitConfig) error {
-	var b strings.Builder
-	b.WriteString("apiVersion: kardinal.io/v1alpha1\nkind: Pipeline\n")
-	if cfg.Namespace != "" {
-		fmt.Fprintf(&b, "metadata: { name: %s, namespace: %s }\n", cfg.AppName, cfg.Namespace)
-	} else {
-		fmt.Fprintf(&b, "metadata: { name: %s }\n", cfg.AppName)
+// initPipeline is the Pipeline cfg describes, with only what differs from
+// the defaults set (the smallest Pipeline that says it).
+func initPipeline(cfg *InitConfig) *v1alpha1.Pipeline {
+	p := &v1alpha1.Pipeline{}
+	p.APIVersion, p.Kind = v1alpha1.GroupVersion.String(), "Pipeline"
+	p.Name = cfg.AppName
+	if cfg.Namespace != "default" {
+		p.Namespace = cfg.Namespace
 	}
 	secret := cfg.Secret
 	if secret == "" {
 		secret = "github-token"
 	}
-	b.WriteString("spec:\n  git:\n")
-	fmt.Fprintf(&b, "    url: %s\n", cfg.GitURL)
-	if cfg.Branch != "" && cfg.Branch != "main" {
-		fmt.Fprintf(&b, "    branch: %s\n", cfg.Branch)
+	p.Spec.Git.URL = cfg.GitURL
+	if cfg.Branch != "main" {
+		p.Spec.Git.Branch = cfg.Branch
 	}
-	fmt.Fprintf(&b, "    secretRef: { name: %s }\n", secret)
-	b.WriteString("  environments:\n")
-	for i, env := range cfg.Environments {
-		fmt.Fprintf(&b, "    - name: %s\n", env)
+	p.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: secret}
+	for i, name := range cfg.Environments {
+		env := v1alpha1.EnvironmentSpec{Name: name}
 		if i == len(cfg.Environments)-1 && cfg.ProdApproval != "auto" {
-			b.WriteString("      approval: pr-review\n")
+			env.Approval = "pr-review"
 		}
 		if cfg.UpdateStrategy == "helm" {
-			b.WriteString("      update: { strategy: helm }\n")
+			env.Update.Strategy = "helm"
 		}
-		if h := cfg.Health[env]; h != "" {
-			fmt.Fprintf(&b, "      health: { type: %s }\n", h)
+		env.Health.Type = cfg.Health[name]
+		p.Spec.Environments = append(p.Spec.Environments, env)
+	}
+	return p
+}
+
+// initFn writes the Pipeline cfg describes (initPipeline) as YAML in the
+// layout of examples/minimal. Every value is a YAML scalar encoded by the
+// YAML library, and the YAML is decoded back and compared with the Pipeline
+// before it is written: no input can add or change a field.
+func initFn(w io.Writer, cfg *InitConfig) error {
+	p := initPipeline(cfg)
+	var b strings.Builder
+	b.WriteString("apiVersion: kardinal.io/v1alpha1\nkind: Pipeline\n")
+	if p.Namespace != "" {
+		fmt.Fprintf(&b, "metadata: { name: %s, namespace: %s }\n", yamlFlowScalar(p.Name), yamlFlowScalar(p.Namespace))
+	} else {
+		fmt.Fprintf(&b, "metadata: { name: %s }\n", yamlFlowScalar(p.Name))
+	}
+	b.WriteString("spec:\n  git:\n")
+	fmt.Fprintf(&b, "    url: %s\n", yamlFlowScalar(p.Spec.Git.URL))
+	if p.Spec.Git.Branch != "" {
+		fmt.Fprintf(&b, "    branch: %s\n", yamlFlowScalar(p.Spec.Git.Branch))
+	}
+	fmt.Fprintf(&b, "    secretRef: { name: %s }\n", yamlFlowScalar(p.Spec.Git.SecretRef.Name))
+	b.WriteString("  environments:\n")
+	for _, env := range p.Spec.Environments {
+		fmt.Fprintf(&b, "    - name: %s\n", yamlFlowScalar(env.Name))
+		if env.Approval != "" {
+			fmt.Fprintf(&b, "      approval: %s\n", yamlFlowScalar(env.Approval))
 		}
+		if env.Update.Strategy != "" {
+			fmt.Fprintf(&b, "      update: { strategy: %s }\n", yamlFlowScalar(env.Update.Strategy))
+		}
+		if env.Health.Type != "" {
+			fmt.Fprintf(&b, "      health: { type: %s }\n", yamlFlowScalar(env.Health.Type))
+		}
+	}
+	var back v1alpha1.Pipeline
+	if err := yaml.UnmarshalStrict([]byte(b.String()), &back); err != nil {
+		return fmt.Errorf("render pipeline YAML: it does not parse: %w", err)
+	}
+	if !equality.Semantic.DeepEqual(back.ObjectMeta, p.ObjectMeta) || !equality.Semantic.DeepEqual(back.Spec, p.Spec) {
+		return fmt.Errorf("render pipeline YAML: it does not say what was asked; a value is not valid YAML here")
 	}
 	if _, err := io.WriteString(w, b.String()); err != nil {
 		return fmt.Errorf("render pipeline YAML: %w", err)
 	}
 	return nil
+}
+
+// yamlFlowScalar is v as a YAML scalar that is safe anywhere, also inside a
+// flow mapping: plain when the YAML library writes it plain (it quotes what
+// would read as another type or starts with an indicator) and it has no flow
+// indicator, space or quote, else double-quoted.
+func yamlFlowScalar(v string) string {
+	plain, err := yaml.Marshal(v)
+	out := strings.TrimSuffix(string(plain), "\n")
+	if err == nil && out == v && !strings.ContainsAny(v, ",[]{}#'\"` \t") {
+		return v
+	}
+	return strconv.Quote(v)
 }
 
 // splitTrimmed splits s by sep and trims spaces from each element.
@@ -609,17 +764,24 @@ pipe.
 
 It writes the smallest Pipeline that says it, as examples/minimal does: a
 default (branch main, kustomize, approval auto, the default health check) is
-left out. When a cluster can be reached it looks, for each environment, for
+left out (also namespace default). The name, namespace and environments must
+be DNS-1123 labels, --repo an https or ssh git URL (https://host/owner/repo,
+ssh://git@host/owner/repo or git@host:owner/repo.git) with no spaces, query
+or fragment, and --branch a git branch name; every value is written as a
+YAML scalar and the YAML is decoded back and compared, so no value can add
+a field. When a cluster can be reached it looks, for each environment, for
 an Argo CD Application <name>-<env> in argocd or a Flux Kustomization
 <name>-<env> in flux-system, and sets health type argocd or flux where it
 finds one (--no-detect skips this). The Pipeline is checked as kardinal
-validate checks it before anything is written. An existing file is not
-overwritten without --force.
+validate checks it before anything is written. Running init again with the
+same answers changes nothing ("unchanged") and succeeds; a file with
+another Pipeline is not overwritten without --force.
 
 --create-secret creates the git Secret (key token) from $GITHUB_TOKEN, else
 from gh auth token, labelled kardinal.io/referenceable=true so the Pipeline
 may use it; an existing Secret is kept (and labelled). --apply creates the
-Pipeline; one of the same name is replaced only with --force.
+Pipeline; one of the same name and spec is unchanged, one with another spec
+is replaced only with --force.
 
 Use --scaffold-gitops to also create the GitOps repository structure:
   environments/<env>/kustomization.yaml for each environment.

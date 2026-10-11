@@ -20,17 +20,24 @@ pipe.
 
 It writes the smallest Pipeline that says it, as examples/minimal does: a
 default (branch main, kustomize, approval auto, the default health check) is
-left out. When a cluster can be reached it looks, for each environment, for
+left out (also namespace default). The name, namespace and environments must
+be DNS-1123 labels, --repo an https or ssh git URL (https://host/owner/repo,
+ssh://git@host/owner/repo or git@host:owner/repo.git) with no spaces, query
+or fragment, and --branch a git branch name; every value is written as a
+YAML scalar and the YAML is decoded back and compared, so no value can add
+a field. When a cluster can be reached it looks, for each environment, for
 an Argo CD Application <name>-<env> in argocd or a Flux Kustomization
 <name>-<env> in flux-system, and sets health type argocd or flux where it
 finds one (--no-detect skips this). The Pipeline is checked as kardinal
-validate checks it before anything is written. An existing file is not
-overwritten without --force.
+validate checks it before anything is written. Running init again with the
+same answers changes nothing ("unchanged") and succeeds; a file with
+another Pipeline is not overwritten without --force.
 
 --create-secret creates the git Secret (key token) from $GITHUB_TOKEN, else
 from gh auth token, labelled kardinal.io/referenceable=true so the Pipeline
 may use it; an existing Secret is kept (and labelled). --apply creates the
-Pipeline; one of the same name is replaced only with --force.
+Pipeline; one of the same name and spec is unchanged, one with another spec
+is replaced only with --force.
 
 Use --scaffold-gitops to also create the GitOps repository structure:
   environments/<env>/kustomization.yaml for each environment.
