@@ -28,7 +28,7 @@ Running approve again with the same decision does nothing; with another
 decision it replaces yours. Your Approval is found by its labels and
 spec.user, not by its name; if the name it would get is taken, the API
 server generates one. An Approval belongs to its Bundle and is deleted
-with it. See docs/policy-gates.md (Approval gates).
+with it. See docs/approvals.md.
 
 ```
 kardinal approve <bundle> --env <environment> [flags]
@@ -62,7 +62,7 @@ kardinal approve <bundle> --env <environment> [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: get auditevents, bundles, pipelines, steps, subscriptions)
+  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
 ```
 
 ### SEE ALSO

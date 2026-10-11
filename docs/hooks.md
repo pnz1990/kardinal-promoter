@@ -122,7 +122,7 @@ Pending ──pre hooks succeeded──▶ Promoting ─▶ (WaitingForMerge) �
   not count until `kardinal resume`; it starts as soon as the Pipeline is resumed. A hook that is
   already running finishes. Post hooks are not held: their step has merged and the change is
   deployed, as a paused Pipeline still finishes steps that are `HealthChecking`
-  ([Pause and Resume](rollback.md#pause-and-resume)).
+  ([Pause and Resume](pause.md)).
 - **A held environment starts no other Bundle's pre hook.** While an environment is held for a
   rollback Bundle (`spec.holds`), another Bundle's pre hook for it waits in `Pending` ("not
   started: environment ... is held for Bundle ..."), without its timeout counting, and runs if

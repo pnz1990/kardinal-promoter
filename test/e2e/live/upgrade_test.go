@@ -415,7 +415,7 @@ func serverMinor(t *testing.T, e *framework.Env) int {
 }
 
 // TestUpgrade_FromV081 follows the upgrade guide ("Upgrading from v0.8.1" in
-// docs/installation.md) step by step on a cluster running v0.8.1 as released,
+// docs/upgrade.md) step by step on a cluster running v0.8.1 as released,
 // running the guide's own commands, and checks what each step says happens.
 //
 // Under v0.8.1 it builds: a Pipeline whose Bundle is Verified in test and held
@@ -755,7 +755,7 @@ spec:
 		}
 		warnings = append(warnings, l.Level+": "+l.Message)
 	}
-	// The three the guide lists (docs/installation.md, step 9): the upgrade
+	// The three the guide lists (docs/upgrade.md, step 9): the upgrade
 	// keeps the v0.8.1 values, which set none of these (#1560).
 	if assert.Len(t, warnings, 3, "the controller logs three warnings: %q", warnings) {
 		sort.Strings(warnings)

@@ -128,7 +128,7 @@ target, create a new version (or use `kardinal promote`, which creates one).
 | Verified | Verified in every environment it targets |
 | Failed | A promotion or health check failed, or the Pipeline, the version or a gate is invalid: the version's `InvalidSpec` condition then gives the reason. It promotes again when the failed promotion is retried or the invalid object is fixed ([details](architecture.md#when-a-failed-bundle-promotes-again)) |
 | Superseded | A newer version of the same type replaced it before it finished |
-| Rejected | Rejected with `kardinal reject`: never promoted again, and rollback never picks it. See [Reject a version](rollback.md#reject-a-bundle) |
+| Rejected | Rejected with `kardinal reject`: never promoted again, and rollback never picks it. See [Reject a version](reject.md) |
 
 ## Pipeline and environments
 
@@ -202,7 +202,7 @@ An environment's `approval` decides how a version's change lands in Git:
 
 `approval: auto` does not mean "nobody approves". To require named people to approve a version
 before an environment, with a quorum and no self-approval, add an
-[approval gate](policy-gates.md#approval-gates): it works with either mode.
+[approval gate](approvals.md): it works with either mode.
 
 ### Health checks
 
@@ -312,8 +312,14 @@ When the skip is allowed, the permission's expression is evaluated in front of t
 For each version, kardinal translates the Pipeline into a [kro Graph](https://kro.run/next/docs/concepts/graph/overview/):
 one node per gate and per promotion step, in dependency order. kro's Graph controller creates
 them, and kardinal's controllers run the steps and evaluate the gates. You never write a Graph;
-the Pipeline is the interface. [Architecture](architecture.md) has the details, including
-supersession and when a finished version's Graph is retired.
+the Pipeline is the interface. kardinal uses kro because its Graph controller already creates
+objects in dependency order and waits for them to be ready, so kardinal does not reimplement DAG
+orchestration.
+
+There is no database and no extra service: all state is in Kubernetes objects, the UI is served
+by the controller, and the controller can restart at any time without losing a promotion.
+[Architecture](architecture.md) has the details, including supersession and when a finished
+version's Graph is retired.
 
 ## Where next
 

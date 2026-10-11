@@ -746,7 +746,7 @@ restart in static mode.
 When `scm.secretRef.name` or `scm.token` is set in the Helm chart, these three environment
 variables are injected into the controller Deployment automatically. With `scm.token` the
 Secret is the chart-managed `<release>-github-token`; rotate it with
-the `helm upgrade` in [Upgrade](installation.md#upgrade) with `--set scm.token=<NEW_TOKEN>` added.
+the `helm upgrade` in [Upgrade](upgrade.md) with `--set scm.token=<NEW_TOKEN>` added.
 
 ### Rotating a PAT (zero-downtime procedure)
 
