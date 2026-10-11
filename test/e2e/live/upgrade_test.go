@@ -37,7 +37,7 @@ var v081BundleCreated = regexp.MustCompile(`Bundle (\S+) created for pipeline`)
 const (
 	// guideChart is the chart the upgrade guide's commands name; the test runs
 	// them on the checkout's chart (KARDINAL_E2E_CHART).
-	guideChart = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0"
+	guideChart = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0"
 	// legacyLongGate is a PolicyGate a user created under v0.8.1 with a name
 	// the new CRD rejects; legacyShortGate is the name the guide's copy gives it.
 	legacyLongGate  = "legacy-gate-name-longer-than-the-sixty-three-character-name-limit"
@@ -602,11 +602,8 @@ spec:
 
 	// ── 7. Apply the new kardinal CRDs ──────────────────────────────────
 	crds := framework.Fill(t, framework.GuideBlock(t, "helm show crds"), guideChart, `"$KARDINAL_E2E_CHART"`)
+	assert.Contains(t, crds, "--force-conflicts", "the guide takes over fields other managers set")
 	run := e.Shell(t, crds)
-	if run.Code != 0 && strings.Contains(run.Output, "conflict") {
-		t.Logf("the CRD apply reported field-manager conflicts; adding --force-conflicts as the guide says")
-		run = e.Shell(t, framework.Fill(t, crds, "--server-side", "--server-side --force-conflicts"))
-	}
 	require.Zero(t, run.Code, run.Output)
 	var applied []string
 	for _, m := range regexp.MustCompile(`(?m)^customresourcedefinition\.apiextensions\.k8s\.io/(\S+) serverside-applied$`).FindAllStringSubmatch(run.Output, -1) {

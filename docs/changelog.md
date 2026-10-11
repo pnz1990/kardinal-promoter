@@ -8,6 +8,39 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [v0.10.0] — 2026-10-11
+
+**The features teams moving from Kargo or GitOps Promoter look for first, 500-environment Pipelines and 200-Pipeline clusters, and every recorded identity verified against the Kubernetes user who made the request. Read [Before you upgrade](#before-you-upgrade) first: some changes refuse objects v0.9.0 accepted.**
+
+Requires Kubernetes 1.30 or later and kro v0.10.0-rc.0 or later with the `GraphKind` feature gate (`hack/install-kro.sh` installs it, now with 8 Graph workers and a 2Gi memory limit). The CLI is on the release page (`kardinal-<os>-<arch>`), and the chart now also publishes the `kardinal-render` image for rendered manifests.
+
+### Highlights since v0.9.0
+
+- **Approvals, rejections and holds** — approval gates with quorum, allowed users and groups and no self-approval, from the CLI and the UI; `kardinal reject` stops a Bundle everywhere; `kardinal rollback --hold` keeps an environment on its rollback until `kardinal release-hold`
+- **Pull requests and verification** — per-environment PR templates, labels, reviewers, assignees and SCM auto-merge; gate results as the `kardinal/gates` commit status; pre- and post-deploy hook Jobs; Argo Rollouts AnalysisTemplates; Datadog, CloudWatch, New Relic and web MetricChecks with per-promotion queries; cosign and Sigstore image signature verification
+- **Rendered manifests and fleets** — `layout: branch` renders each environment in a sandboxed RenderRun Job and commits plain manifests to its branch, in both Graph shapes; a fleet environment expands to N targets with `maxConcurrent` pacing
+- **Discovery, SCM and health** — private registries and repositories, Helm charts, Kargo-style tag filters, `pathGlob` and push webhooks for Subscriptions; GitHub App and SSH git authentication, Bitbucket Data Center, and several SCM providers per controller (ScmProvider, ClusterScmProvider); remote-cluster health through a kubeconfig Secret
+- **Scale** — up to 500 environments per Pipeline (compact Graphs), controllers that reconcile in parallel and share their workers fairly between namespaces, Graph retirement for finished Bundles, many Pipelines on one branch, and namespace sharding. The scale suite's 9,000-Bundle soak passes every invariant with step p50/p99 of 1/3 s and a controller peak of 434 MiB
+- **Security** — verified identity for overrides, approvals, rejections, holds and Bundle creators, enforced by the chart's ValidatingAdmissionPolicies; only kardinal writes the objects a promotion Graph makes; `scm.allowedRepositories`; user roles with per-action authorization in the UI and Bundle API, Kubernetes tokens for CI; referenceable Secrets, an egress allowlist, an API access log, and AuditEvents that are never lost and retained within limits
+- **Notifications and observability** — Slack, Teams, CloudEvents and templated NotificationHook bodies with HMAC signing; OpenTelemetry tracing, SCM API and git metrics, DORA change failure rate and time to restore, and an OpenAPI description of the REST API
+
+### Before you upgrade
+
+#### From v0.9.0
+
+Follow the tested steps in [Upgrading from v0.9.0](https://pnz1990.github.io/kardinal-promoter/installation/#upgrading-from-v090): label the Pipelines' git Secrets, apply the new CRDs (with `kubectl apply --server-side --force-conflicts`: the v0.9.0 chart installed them, so without it the apply stops on a conflict with Helm), re-run `hack/install-kro.sh` and `helm upgrade --reset-then-reuse-values`. Before that, check these changes for existing objects and clients (each is under Changed or Fixed below):
+
+1. **A Bundle's spec is immutable.** A script that `kubectl apply`s a changed image or intent onto an existing Bundle must create a new Bundle instead (see Changed).
+2. **Bundle artifact fields are validated.** `images[].tag` follows the OCI tag grammar, `images[].digest` is an OCI digest, and the commit SHAs are hex. Check your CI first; stored Bundles keep working under CRD validation ratcheting (see Changed for the query that finds them).
+3. **`time` is a reserved environment name.** Rename such an environment before upgrading.
+4. **New ValidatingAdmissionPolicies, always on:** `<release>-gate-overrides`, `-approvals`, `-bundle-rejection`, `-bundle-creator`, `-hold-writes`, `-graph-objects` and the scoped-writes policy. Anything else that writes gate instances, PromotionSteps or PRStatuses, or a record in another user's name, is refused; another controller that legitimately writes them goes in `admission.controllerUsernames`.
+5. **Label the git Secrets** your Pipelines name: `kubectl label secret <name> kardinal.io/referenceable=true`. An unlabelled one still works in v0.10.0 (`SecretReferenceable=False`); v0.11 refuses it.
+6. **Sizing:** re-run `hack/install-kro.sh` (or set the same kro values: 8 Graph workers, QPS 300/burst 500, 2Gi limit). The controller's defaults are now a 256Mi request and a 1Gi limit; raise yours if you pinned the old 128Mi.
+7. **Cluster-scoped objects:** the chart creates a leader-election FlowSchema by default (`leaderElectionFlowSchema.enabled`); GitOps installs that cannot manage cluster resources set it to `false`.
+8. **Graph retirement:** a finished Bundle's Graph is deleted after 1 minute (superseded), 1 hour (verified) or 24 hours (failed), and with it its gate instances, PRStatuses, step detail and Events; AuditEvents and `status.retiredSteps` stay. `graph.retire.*: 0s` keeps the old behaviour.
+9. **AuditEvent retention is on by default** (90 days, per-Pipeline count limit); `audit.retention.enabled: false` turns it off.
+10. **Deprecations:** see Deprecated. Every deprecated field, value and flag still works in v0.10.0 and is removed in v0.11.
+
 ### Added
 - **Compact Graphs render to branches** — a `layout: branch` environment works in the compact Graph shape (more environments than `--graph-compact-above`, the `kardinal.io/graph-shape: compact` annotation, or a fleet): the `RenderRuns` collection creates its RenderRun once the step asks for the render, keeps it once kro created it for this Bundle, and the step reads it back through its own `spec.live.renders`; fleet targets render to their own branches, `env/<fleet>-<target>`, as pacing starts them; a fleet environment takes no `render.branch`, and a target's branch that another environment's `render.branch` names is refused (validation, and `RenderedBranchConflict` across Pipelines). Pipelines with more than 100 environments can use rendered manifests (#1515).
 
@@ -635,7 +668,8 @@ kardinal-promoter now executes the [AWS Platform Engineering on EKS workshop](ht
 
 ---
 
-[Unreleased]: https://github.com/pnz1990/kardinal-promoter/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/pnz1990/kardinal-promoter/compare/v0.10.0...HEAD
+[v0.10.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.9.0...v0.10.0
 [v0.9.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.8.1...v0.9.0
 [v0.9.0-rc.1]: https://github.com/pnz1990/kardinal-promoter/compare/v0.8.1...v0.9.0-rc.1
 [v0.8.1]: https://github.com/pnz1990/kardinal-promoter/compare/v0.8.0...v0.8.1

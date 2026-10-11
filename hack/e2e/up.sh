@@ -24,6 +24,9 @@
 #   upgrade Forgejo + Argo CD + kardinal-promoter v0.8.1 (kardinal-v081.sh) and
 #           no kro: the TestUpgrade_ test upgrades v0.8.1 to this checkout,
 #           so the cluster serves one run; delete it before the next
+#   upgrade-v090  Forgejo + Argo CD + kro and kardinal-promoter v0.9.0 as
+#           released (kardinal-v090.sh): the TestUpgradeV090_ test follows
+#           "Upgrading from v0.9.0"; one run per cluster too
 #   shard   Forgejo + Argo CD and two controllers that split the namespaces
 #           (--namespace-shard): the main release is shard "default",
 #           components/shard.sh installs shard "b"
@@ -98,6 +101,10 @@ case "$SUITE" in
   # installs it as the upgrade guide's step 6. kardinal.sh only builds and
   # loads the image and the CLI; the test applies the CRDs and upgrades.
   upgrade) COMPONENTS=("giteafamily.sh forgejo" argocd.sh kardinal-v081.sh) RUN='^TestUpgrade_'
+    export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
+  # kardinal-v090.sh installs v0.9.0's kro and release; kardinal.sh only
+  # builds and loads this checkout's image and CLI for the test's upgrade.
+  upgrade-v090) COMPONENTS=("giteafamily.sh forgejo" argocd.sh kardinal-v090.sh) RUN='^TestUpgradeV090_'
     export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
   # Argo Rollouts runs in the hub too, so a Rollout the hub's argoRollouts
   # check cannot find is missing from the hub, not from its API.

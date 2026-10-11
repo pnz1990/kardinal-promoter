@@ -243,7 +243,7 @@ Backend API tests (Go):
 
 ## Present (✅)
 
-The following capabilities are implemented and shipped as of v0.9.0:
+The following capabilities are implemented and shipped as of v0.10.0:
 
 - ✅ Embedded React UI served by controller binary (`go:embed`) — PR #19
 - ✅ DAG view: PromotionStep and PolicyGate nodes with per-node state colors — PR #19
