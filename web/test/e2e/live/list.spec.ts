@@ -139,7 +139,7 @@ test('selecting a row opens its pipeline, with its paused state', async ({ page 
   await expect(pausedRow).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByRole('heading', { level: 1, name: paused })).toBeVisible()
   // The header says Paused and the map carries the paused band (U2).
-  await expect(page.locator('.pipeline-head__state')).toHaveText('Paused')
+  await expect(page.getByText('⏸ PAUSED — no new promotions')).toBeVisible()
   await expect(page.getByRole('status').filter({ hasText: 'Paused · no new promotions' })).toBeVisible()
   expect(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('pipeline')).toBe(paused)
   expect(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('ns')).toBe(ns)
