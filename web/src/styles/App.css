@@ -125,7 +125,8 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--k-space-4);
-  min-block-size: var(--k-control-lg);
+  box-sizing: border-box;
+  block-size: var(--k-layout-topbar);
   padding: var(--k-space-2) var(--k-space-6);
   border-block-end: var(--k-border-hairline) solid var(--k-line-subtle);
 }

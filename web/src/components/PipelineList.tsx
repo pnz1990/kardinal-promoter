@@ -16,11 +16,8 @@ import { displayState } from '../displayStates.gen'
 import CopyButton from './CopyButton'
 import { ErrorNotice } from '../ui/ErrorNotice'
 import '../styles/PipelineList.css'
+import { lowerFirst } from '../sentence'
 
-/** A display label (P2) as a count's noun: "Live" reads "live", "Waiting for PR merge" keeps "PR". */
-function lowerFirst(label: string): string {
-  return /^[A-Z][a-z]/.test(label) ? label[0].toLowerCase() + label.slice(1) : label
-}
 
 /** Number of pipelines above which virtual scrolling is enabled (flat list only). */
 const VIRTUAL_THRESHOLD = 50
@@ -251,7 +248,9 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
   // #815: renderPipelineItemContent returns just the inner row content (no <li> wrapper)
   //       so the virtual scrolling path can provide its own <li> with positioning.
   function renderPipelineItemContent(p: Pipeline) {
-        const bundle = shortBundleName(p.activeBundleName)
+        // The active version as people know it (its tag); the Bundle name is in the title.
+        const bundle = p.activeBundleVersion || shortBundleName(p.activeBundleName)
+        const bundleTitle = p.activeBundleName && p.activeBundleVersion ? `${p.activeBundleVersion} (${p.activeBundleName})` : p.activeBundleName
         const envCount = p.environmentCount
         const selectedRow = isSelected(p)
 
@@ -328,7 +327,7 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
                         {envCount > 0 && <span>·</span>}
                         <span
                           className="pipeline-list__bundle"
-                          title={p.activeBundleName}
+                          title={bundleTitle}
                         >
                           {bundle}
                         </span>
@@ -338,7 +337,7 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
                 )}
                 {/* Bundle name shown below the health bar when env states are shown */}
                 {p.environmentStates && bundle && (
-                  <span className="pipeline-list__bundle" title={p.activeBundleName}>
+                  <span className="pipeline-list__bundle" title={bundleTitle}>
                     {bundle}
                   </span>
                 )}
