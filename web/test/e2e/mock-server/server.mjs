@@ -60,8 +60,6 @@ const PIPELINES = [
     phase: 'Ready',
     environmentCount: 3,
     activeBundleName: 'kardinal-test-app-abc123',
-    // status.summary (P1), as the PipelineReconciler writes it.
-    summary: 'abc123 Verified in test, uat; Waiting for PR merge in prod (#42)',
     environmentStates: { test: 'Verified', uat: 'Verified', prod: 'WaitingForMerge' },
     blockerCount: 0,
     failedStepCount: 0,
@@ -90,7 +88,7 @@ const PIPELINES = [
     environmentStates: { staging: 'Promoting', prod: 'Pending' },
     blockerCount: 2,
     failedStepCount: 0,
-    activeBundleVersion: 'v2.4.0 with config 1a2b3c4',
+    activeBundleVersion: '6.14.1',
     environmentTopology: [{ name: 'staging' }, { name: 'prod', upstreams: ['staging'] }],
     // status.conditions (#1727): its git Secret works but is not labelled referenceable.
     conditions: [
@@ -118,6 +116,7 @@ const BUNDLES = {
       namespace: 'default',
       phase: 'Superseded',
       type: 'image',
+      version: 'sha-9f8e7d6',
       pipeline: 'kardinal-test-app',
       createdAt: ago(7_200_000),
     },
@@ -126,6 +125,7 @@ const BUNDLES = {
       namespace: 'default',
       phase: 'Verified',
       type: 'config',
+      version: 'config 77aa001',
       pipeline: 'kardinal-test-app',
       createdAt: ago(3_600_000),
     },

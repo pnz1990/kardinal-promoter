@@ -51,13 +51,13 @@ describe('ApprovalQuorum', () => {
   })
 
   it('shows the CLI command to approve until the quorum is met', () => {
-    const { rerender } = render(<ApprovalQuorum approval={waiting} bundle="app-1" environment="prod" now={now} />)
-    expect(screen.getByText('kardinal approve app-1 --env prod')).toBeInTheDocument()
-    // With the namespace, the copied command names it: it works from any kubeconfig context.
-    rerender(<ApprovalQuorum approval={waiting} bundle="app-1" environment="prod" namespace="team-a" now={now} />)
-    expect(screen.getByText('kardinal approve app-1 --env prod -n team-a')).toBeInTheDocument()
+    // The stage drawer's command (C5): kardinal approve <pipeline> <env>, -n outside default.
+    const { rerender } = render(<ApprovalQuorum approval={waiting} pipeline="app" bundle="app-1" environment="prod" now={now} />)
+    expect(screen.getByText('kardinal approve app prod')).toBeInTheDocument()
+    rerender(<ApprovalQuorum approval={waiting} pipeline="app" bundle="app-1" environment="prod" namespace="team-a" now={now} />)
+    expect(screen.getByText('kardinal approve app prod -n team-a')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Copy the approve command/ })).toBeInTheDocument()
-    rerender(<ApprovalQuorum approval={{ ...waiting, approved: 2 }} bundle="app-1" environment="prod" now={now} />)
+    rerender(<ApprovalQuorum approval={{ ...waiting, approved: 2 }} pipeline="app" bundle="app-1" environment="prod" now={now} />)
     expect(screen.queryByText(/kardinal approve/)).not.toBeInTheDocument()
     expect(screen.getByRole('meter')).toHaveAttribute('aria-valuetext', 'Approved (2 of 2)')
   })
@@ -67,5 +67,13 @@ describe('ApprovalQuorum', () => {
     expect(container.querySelectorAll('.approval-quorum__pip')).toHaveLength(0)
     expect(screen.getByText('3 of 25 approvals')).toBeInTheDocument()
     expect(screen.getByText('No decisions yet.')).toBeInTheDocument()
+  })
+})
+
+describe('ApprovalQuorum — a gate of a version that is not on its way in', () => {
+  it('names the Bundle in the CLI line, so the command approves that version', () => {
+    const waiting = { required: 2, approved: 1, decisions: [] }
+    render(<ApprovalQuorum approval={waiting} pipeline="app" bundle="app-1" environment="prod" current={false} />)
+    expect(screen.getByText('kardinal approve app-1 --env prod')).toBeInTheDocument()
   })
 })
