@@ -101,7 +101,7 @@ kardinal hold my-app prod --reason "INC-4521: freeze prod while we investigate"
 kardinal unhold my-app prod
 ```
 
-Add `--expires-in 24h` to end the hold by itself.
+Add `--expires-in 24h` to end the hold after 24 hours.
 
 [`hold`](reference/cli/kardinal-hold.md) writes the same `spec.holds` entry a rollback hold writes, naming the version deployed in
 prod; nothing is rolled back and no version is created. To go back to an earlier version and
@@ -117,7 +117,7 @@ on another version or for another reason: release that hold first. `unhold` is `
 kardinal rollback my-app prod --hold --reason "INC-4521: v1.29.0 leaks connections"
 ```
 
-Add `--hold-expires-in 24h` to end the hold by itself.
+Add `--hold-expires-in 24h` to end the hold after 24 hours.
 
 Output:
 ```
