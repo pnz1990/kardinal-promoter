@@ -44,10 +44,10 @@ test.describe('Journey 016 — Routes and the command palette', () => {
 
     await page.goto('/ui/#/p/default/kardinal-test-app/v/no-such-version')
     await expect(page.getByRole('heading', { name: 'No version no-such-version in kardinal-test-app' })).toBeVisible()
-    await expect(page.locator('svg.dag-view__svg')).toHaveCount(0)
+    await expect(page.locator('svg.station-map__svg')).toHaveCount(0)
     await page.getByRole('link', { name: 'Show the current version of kardinal-test-app' }).click()
     await expect(page).toHaveURL(/#\/p\/default\/kardinal-test-app$/)
-    await expect(page.locator('svg.dag-view__svg')).toBeVisible()
+    await expect(page.locator('svg.station-map__svg')).toBeVisible()
   })
 
   test('the pipeline tabs are Map, Versions, Activity and Metrics, and an old tab link still opens', async ({ page }) => {

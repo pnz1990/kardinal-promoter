@@ -86,7 +86,10 @@ test.describe('Journey 019 — Stage drawer', () => {
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))
     // Let the theme's colour transitions finish: axe mid-transition reads a colour between
     // the two themes (a flaky contrast failure on the fleet health total, not a real one).
-    await page.evaluate(() => Promise.all(document.getAnimations().map(a => a.finished.catch(() => undefined))))
+    // Only the finite ones: the map's thread and promoting arc run forever.
+    await page.evaluate(() => Promise.all(document.getAnimations()
+      .filter(a => a.effect?.getTiming().iterations !== Infinity)
+      .map(a => a.finished.catch(() => undefined))))
     await axe(page)
 
     await page.setViewportSize({ width: 390, height: 844 })
