@@ -851,7 +851,8 @@ function GatePopover({ gate, env, x, y, view, onPointerEnter, onPointerLeave }: 
 
 /** What the map's marks mean (the DAG legend's wording, for the map). */
 const LEGEND: Array<{ tone: string; label: string; desc: string }> = [
-  { tone: 'verified', label: 'Live', desc: 'Deployed and healthy' },
+  // The map stays quiet: Live is ink here, the verified green is for chips and lists (DESIGN-SYSTEM §2.2).
+  { tone: 'verified', label: 'Live (ink)', desc: 'Deployed and healthy' },
   { tone: 'promoting', label: 'In progress', desc: 'Promoting, waiting for the PR to merge, or checking health' },
   { tone: 'failed', label: 'Failed', desc: 'Failed, or stopped by an alarm' },
   { tone: 'waiting', label: 'Waiting for PR merge', desc: 'A person is next: a PR to merge, or an approval' },
