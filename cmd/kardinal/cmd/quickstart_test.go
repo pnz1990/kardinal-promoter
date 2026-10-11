@@ -36,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -70,17 +71,20 @@ current-context: %q
 // noCluster makes any cluster or tool access fail the test.
 func noCluster(t *testing.T) {
 	t.Helper()
-	oldB, oldR, oldL := buildClient, quickstartRun, quickstartLookPath
-	buildClient = func() (sigs_client.Client, string, error) {
+	oldB, oldR, oldL := quickstartClient, quickstartRun, quickstartLookPath
+	quickstartClient = func(*clientcmdapi.Config) (sigs_client.Client, error) {
 		t.Error("quickstart reached a cluster")
-		return nil, "", errors.New("no cluster in this test")
+		return nil, errors.New("no cluster in this test")
 	}
 	quickstartRun = func(_ context.Context, name string, args ...string) (string, error) {
 		t.Errorf("quickstart ran %s %v", name, args)
 		return "", errors.New("no tools in this test")
 	}
 	quickstartLookPath = func(string) (string, error) { return "/bin/true", nil }
-	t.Cleanup(func() { buildClient, quickstartRun, quickstartLookPath = oldB, oldR, oldL })
+	t.Cleanup(func() { quickstartClient, quickstartRun, quickstartLookPath = oldB, oldR, oldL })
+	for _, k := range []string{"HELM_KUBECONTEXT", "HELM_KUBEAPISERVER", "HELM_KUBETOKEN", "KUBERNETES_MASTER"} {
+		t.Setenv(k, "")
+	}
 }
 
 func TestQuickstart_LocalContextOnly(t *testing.T) {
@@ -91,7 +95,12 @@ func TestQuickstart_LocalContextOnly(t *testing.T) {
 		{"kind", "kind-kardinal", "https://127.0.0.1:41234", true},
 		{"k3d", "k3d-dev", "https://0.0.0.0:6443", true},
 		{"k3d on loopback", "k3d-dev", "https://127.0.0.1:6443", true},
-		{"minikube", "minikube", "https://192.168.49.2:8443", true},
+		{"minikube docker", "minikube", "https://192.168.49.2:8443", true},
+		{"minikube kvm2", "minikube", "https://192.168.39.10:8443", true},
+		{"minikube virtualbox", "minikube", "https://192.168.59.100:8443", true},
+		{"minikube, other private network", "minikube", "https://10.0.0.5:8443", false},
+		{"minikube, another 192.168 network", "minikube", "https://192.168.1.20:8443", false},
+		{"minikube, ULA", "minikube", "https://[fd00::1]:8443", false},
 		{"docker desktop", "docker-desktop", "https://kubernetes.docker.internal:6443", true},
 		{"rancher desktop", "rancher-desktop", "https://127.0.0.1:6443", true},
 		{"ipv6 loopback", "kind-x", "https://[::1]:6443", true},
@@ -107,10 +116,12 @@ func TestQuickstart_LocalContextOnly(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			writeKubeconfig(t, tc.context, tc.server)
-			got, err := requireLocalContext()
+			got, only, err := requireLocalContext()
 			if tc.local {
 				require.NoError(t, err)
 				assert.Equal(t, tc.context, got)
+				require.Len(t, only.Contexts, 1, "only the checked context")
+				assert.Equal(t, tc.context, only.CurrentContext)
 				return
 			}
 			require.ErrorIs(t, err, errNotLocal)
@@ -126,6 +137,65 @@ func TestQuickstart_LocalContextOnly(t *testing.T) {
 			require.ErrorIs(t, err, errNotLocal)
 		})
 	}
+}
+
+// TestQuickstart_Kubeconfig: helm and kubectl get a kubeconfig file with
+// only the checked context, readable only by the user, with its
+// credentials in it.
+func TestQuickstart_Kubeconfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config")
+	require.NoError(t, os.WriteFile(path, []byte(`apiVersion: v1
+kind: Config
+clusters:
+- {name: local, cluster: {server: "https://127.0.0.1:6443"}}
+- {name: prod, cluster: {server: "https://prod.example.com"}}
+contexts:
+- {name: kind-kardinal, context: {cluster: local, user: me}}
+- {name: prod, context: {cluster: prod, user: admin}}
+users:
+- {name: me, user: {token: local-token}}
+- {name: admin, user: {token: prod-token}}
+current-context: prod
+`), 0o600))
+	oldK, oldC := globalKubeconfig, globalContext
+	globalKubeconfig, globalContext = path, "kind-kardinal"
+	t.Cleanup(func() { globalKubeconfig, globalContext = oldK, oldC })
+	name, only, err := requireLocalContext()
+	require.NoError(t, err)
+	assert.Equal(t, "kind-kardinal", name)
+	file, err := writeHelmKubeconfig(only)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Remove(file) })
+	info, err := os.Stat(file)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	data, err := os.ReadFile(file)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "https://127.0.0.1:6443")
+	assert.Contains(t, string(data), "current-context: kind-kardinal")
+	assert.NotContains(t, string(data), "prod", "no other context, cluster or user")
+}
+
+// TestQuickstart_NoTargetOverrides: a variable that points helm, kubectl or
+// client-go at another cluster stops quickstart before anything is sent,
+// and helm and kubectl run without them, on a kubeconfig with only the
+// checked context.
+func TestQuickstart_NoTargetOverrides(t *testing.T) {
+	for _, k := range []string{"HELM_KUBECONTEXT", "HELM_KUBEAPISERVER", "HELM_KUBETOKEN", "HELM_KUBECAFILE", "HELM_KUBEASUSER", "KUBERNETES_MASTER"} {
+		t.Run(k, func(t *testing.T) {
+			writeKubeconfig(t, "kind-kardinal", "https://127.0.0.1:41234")
+			noCluster(t)
+			t.Setenv("GITHUB_TOKEN", "tok")
+			t.Setenv(k, "https://prod.example.com")
+			err := quickstartFn(context.Background(), &bytes.Buffer{}, quickstartOptions{repo: "https://github.com/me/kardinal-demo"})
+			require.ErrorIs(t, err, errNotLocal)
+			assert.Contains(t, err.Error(), "does not run with "+k+" set")
+			assert.Contains(t, err.Error(), "unset "+k)
+		})
+	}
+	env := []string{"PATH=/bin", "KUBECONFIG=/home/me/.kube/prod", "HELM_KUBECONTEXT=prod", "HELM_KUBETOKEN=x", "KUBERNETES_MASTER=https://p", "HELM_DEBUG=1"}
+	assert.Equal(t, []string{"PATH=/bin", "HELM_DEBUG=1"}, scrubbedEnv(env))
+	assert.Equal(t, []string{"HELM_KUBECONTEXT", "HELM_KUBETOKEN", "KUBERNETES_MASTER"}, targetOverrides(env))
 }
 
 func TestQuickstart_Preconditions(t *testing.T) {
@@ -290,7 +360,7 @@ func TestQuickstart_Demo(t *testing.T) {
 	writeKubeconfig(t, "kind-kardinal", "https://127.0.0.1:41234")
 	noCluster(t)
 	c := quickstartCluster(t)
-	buildClient = func() (sigs_client.Client, string, error) { return c, "default", nil }
+	quickstartClient = func(*clientcmdapi.Config) (sigs_client.Client, error) { return c, nil }
 	StubIdentity(t, "kubernetes-admin")
 	t.Setenv("GITHUB_TOKEN", "s3cr3t-token")
 	o := quickstartOptions{repo: "https://github.com/me/kardinal-demo", image: quickstartImage, noWait: true}
@@ -377,7 +447,7 @@ func TestQuickstart_Installs(t *testing.T) {
 		ran = append(ran, line)
 		return "", nil
 	}
-	q := &quickstart{ctx: context.Background(), w: &bytes.Buffer{}, c: c, kctx: "kind-kardinal",
+	q := &quickstart{ctx: context.Background(), w: &bytes.Buffer{}, c: c, kctx: "kind-kardinal", kubeconfig: "/tmp/qs-kubeconfig",
 		o: quickstartOptions{chartVersion: "0.10.1", sets: []string{"ui.enabled=true"}}}
 	require.NoError(t, q.kro())
 	require.NoError(t, q.argoCD())
@@ -392,9 +462,9 @@ func TestQuickstart_Installs(t *testing.T) {
 		"--set scm.provider=github --set scm.secretRef.name=kardinal-scm-token --wait --timeout 300s --version 0.10.1 --set ui.enabled=true")
 	for _, line := range ran {
 		if strings.HasPrefix(line, "helm ") {
-			assert.Contains(t, line, "--kube-context kind-kardinal", line)
+			assert.Contains(t, line, "--kubeconfig /tmp/qs-kubeconfig --kube-context kind-kardinal", line)
 		} else {
-			assert.Contains(t, line, "--context kind-kardinal", line)
+			assert.Contains(t, line, "--kubeconfig /tmp/qs-kubeconfig --context kind-kardinal", line)
 		}
 	}
 

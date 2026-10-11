@@ -44,7 +44,7 @@ func TestDashboard(t *testing.T) {
 		{name: "KARDINAL_UI_URL", envURL: "http://env.example/ui/", noOpen: true,
 			want: "kardinal UI: http://env.example/ui/\n"},
 		{name: "port-forward", noOpen: true, forwards: true,
-			want: "kardinal UI: http://localhost:8082/ui/\nForwarding to the controller in kardinal-system; Ctrl-C stops.\n"},
+			want: "kardinal UI: http://127.0.0.1:8082/ui/\nForwarding to the controller in kardinal-system; Ctrl-C stops.\n"},
 		{name: "no controller", forward: errors.New("no kardinal-promoter Service with a ui port in kardinal-system"),
 			wantErr: "dashboard: no kardinal-promoter Service with a ui port in kardinal-system"},
 	}
@@ -62,7 +62,7 @@ func TestDashboard(t *testing.T) {
 				}
 				done := make(chan error, 1)
 				go func() { <-ctx.Done(); done <- nil }()
-				return "http://localhost:8082/ui/", done, nil
+				return "http://127.0.0.1:8082/ui/", done, nil
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			if tc.forwards {

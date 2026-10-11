@@ -20,6 +20,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -34,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -109,10 +111,12 @@ const quickstartSCMSecret = "kardinal-scm-token"
 // quickstartEnvs are kardinal-demo's environments, in promotion order.
 var quickstartEnvs = []string{"test", "uat", "prod"}
 
-// quickstartRun runs helm or kubectl for quickstart and returns its output;
-// a test replaces it.
+// quickstartRun runs helm or kubectl for quickstart, with scrubbedEnv, and
+// returns its output; a test replaces it.
 var quickstartRun = func(ctx context.Context, name string, args ...string) (string, error) {
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = scrubbedEnv(os.Environ())
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, out)
 	}
@@ -176,8 +180,9 @@ func localContextName(name string) bool {
 
 // localServer reports whether server, the API server URL of context name,
 // is on this machine: loopback, 0.0.0.0 (k3d's default), localhost or
-// Docker Desktop's names; for minikube also a private address (its VM or
-// container network).
+// Docker Desktop's names; for minikube also an address in its drivers'
+// networks (minikubeNetworks). A tunnel from a loopback port to a remote
+// cluster looks local: that cannot be told from the kubeconfig.
 func localServer(name, server string) bool {
 	u, err := url.Parse(server)
 	if err != nil || u.Hostname() == "" {
@@ -195,19 +200,44 @@ func localServer(name, server string) bool {
 	case ip.IsLoopback(), ip.IsUnspecified():
 		return true
 	}
-	return name == "minikube" && ip.IsPrivate()
+	if name != "minikube" {
+		return false
+	}
+	for _, r := range minikubeNetworks {
+		if r.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
+// minikubeNetworks are the networks minikube's drivers put its API server
+// on: docker and podman (192.168.49.0/24), kvm2 (192.168.39.0/24) and
+// hyperkit, hyperv, virtualbox, qemu (192.168.59.0/24). Any other private
+// address may be a remote cluster.
+var minikubeNetworks = func() []*net.IPNet {
+	var out []*net.IPNet
+	for _, cidr := range []string{"192.168.49.0/24", "192.168.39.0/24", "192.168.59.0/24"} {
+		_, n, err := net.ParseCIDR(cidr)
+		if err != nil {
+			panic(err)
+		}
+		out = append(out, n)
+	}
+	return out
+}()
+
 // currentContext is the kubeconfig context the CLI uses (--context, else
-// the current one) and its API server URL, read from the kubeconfig only.
-func currentContext() (name, server string, err error) {
+// the current one), its API server URL, and the kubeconfig with only that
+// context, read from the kubeconfig only.
+func currentContext() (name, server string, only *clientcmdapi.Config, err error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if globalKubeconfig != "" {
 		rules.ExplicitPath = globalKubeconfig
 	}
 	raw, err := rules.Load()
 	if err != nil {
-		return "", "", fmt.Errorf("read the kubeconfig: %w", err)
+		return "", "", nil, fmt.Errorf("read the kubeconfig: %w", err)
 	}
 	name = globalContext
 	if name == "" {
@@ -215,12 +245,55 @@ func currentContext() (name, server string, err error) {
 	}
 	kc, ok := raw.Contexts[name]
 	if name == "" || !ok {
-		return name, "", fmt.Errorf("no kubeconfig context to install into; create a local cluster: kind create cluster --name kardinal")
+		return name, "", nil, fmt.Errorf("no kubeconfig context to install into; create a local cluster: kind create cluster --name kardinal")
 	}
 	if cl, ok := raw.Clusters[kc.Cluster]; ok {
 		server = cl.Server
 	}
-	return name, server, nil
+	only = raw.DeepCopy()
+	only.CurrentContext = name
+	if err := clientcmdapi.MinifyConfig(only); err != nil {
+		return "", "", nil, fmt.Errorf("read the kubeconfig: %w", err)
+	}
+	if err := clientcmdapi.FlattenConfig(only); err != nil {
+		return "", "", nil, fmt.Errorf("read the kubeconfig: %w", err)
+	}
+	return name, server, only, nil
+}
+
+// targetOverrides are the environment variables that point helm, kubectl or
+// client-go at another cluster than the kubeconfig context: helm's
+// HELM_KUBE* (HELM_KUBECONTEXT, HELM_KUBEAPISERVER, HELM_KUBETOKEN, ...),
+// HELM_KUBECONFIG-like names, and KUBERNETES_MASTER. quickstart refuses to
+// run with one set (it checks the context, not them) and clears them for
+// helm and kubectl.
+func targetOverrides(environ []string) []string {
+	var out []string
+	for _, kv := range environ {
+		k, v, _ := strings.Cut(kv, "=")
+		if v == "" {
+			continue
+		}
+		if strings.HasPrefix(k, "HELM_KUBE") || k == "KUBERNETES_MASTER" {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// scrubbedEnv is environ without what could point helm or kubectl at
+// another cluster: the targetOverrides and KUBECONFIG (quickstart passes
+// --kubeconfig).
+func scrubbedEnv(environ []string) []string {
+	out := make([]string, 0, len(environ))
+	for _, kv := range environ {
+		k, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(k, "HELM_KUBE") || k == "KUBERNETES_MASTER" || k == "KUBECONFIG" {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // errNotLocal is quickstart's refusal of a context that is not a local
@@ -229,19 +302,40 @@ var errNotLocal = errors.New("not a local cluster")
 
 // requireLocalContext refuses a context that is not a local cluster: its
 // name is not kind-*, k3d-*, minikube, docker-desktop or rancher-desktop, or
-// its server is not on this machine (localServer). It reads only the
-// kubeconfig: nothing is sent to any cluster before it passes.
-func requireLocalContext() (string, error) {
-	name, server, err := currentContext()
+// its server is not on this machine (localServer), and refuses to run with
+// a variable set that could point helm or kubectl elsewhere
+// (targetOverrides). It reads only the kubeconfig and the environment:
+// nothing is sent to any cluster before it passes. It returns the context and
+// the kubeconfig with only it, which every later step uses.
+func requireLocalContext() (string, *clientcmdapi.Config, error) {
+	if set := targetOverrides(os.Environ()); len(set) > 0 {
+		return "", nil, fmt.Errorf("kardinal quickstart does not run with %s set: helm or kubectl would use it instead of the kubeconfig context it checks, "+
+			"and nothing was changed. Unset it: unset %s: %w", strings.Join(set, ", "), strings.Join(set, " "), errNotLocal)
+	}
+	name, server, only, err := currentContext()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if !localContextName(name) || !localServer(name, server) {
-		return "", fmt.Errorf("kardinal quickstart installs a demo into a local cluster only (kind, k3d, minikube, Docker Desktop, Rancher Desktop); "+
+		return "", nil, fmt.Errorf("kardinal quickstart installs a demo into a local cluster only (kind, k3d, minikube, Docker Desktop, Rancher Desktop); "+
 			"the context %q (server %s) is not one, and nothing was changed. Create a local cluster and use it: "+
 			"kind create cluster --name kardinal: %w", name, server, errNotLocal)
 	}
-	return name, nil
+	return name, only, nil
+}
+
+// quickstartClient is the cluster client of quickstart, from the kubeconfig
+// with only the checked context; a test replaces it.
+var quickstartClient = func(only *clientcmdapi.Config) (sigs_client.Client, error) {
+	cfg, err := clientcmd.NewDefaultClientConfig(*only, &clientcmd.ConfigOverrides{}).ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("load the kubeconfig: %w", err)
+	}
+	c, err := sigs_client.New(cfg, sigs_client.Options{Scheme: rootScheme})
+	if err != nil {
+		return nil, fmt.Errorf("create the Kubernetes client: %w", err)
+	}
+	return c, nil
 }
 
 // quickstartFn is kardinal quickstart.
@@ -250,7 +344,7 @@ func quickstartFn(ctx context.Context, w io.Writer, o quickstartOptions) error {
 		ctx = context.Background()
 	}
 	// 1. Before anything else: a local cluster only.
-	kctx, err := requireLocalContext()
+	kctx, only, err := requireLocalContext()
 	if err != nil {
 		return err
 	}
@@ -266,11 +360,18 @@ func quickstartFn(ctx context.Context, w io.Writer, o quickstartOptions) error {
 		return fmt.Errorf("quickstart needs a GitHub token with contents and pull requests read and write on %s: "+
 			"export GITHUB_TOKEN=<token>, or log in with gh auth login", o.repo)
 	}
-	c, _, err := buildClient()
+	c, err := quickstartClient(only)
 	if err != nil {
 		return fmt.Errorf("quickstart: %w", err)
 	}
-	q := &quickstart{ctx: ctx, w: w, c: c, kctx: kctx, o: o}
+	// helm and kubectl get the checked context alone, in a file of their
+	// own (0600, removed at the end), and an environment without overrides.
+	kubeconfig, err := writeHelmKubeconfig(only)
+	if err != nil {
+		return fmt.Errorf("quickstart: %w", err)
+	}
+	defer func() { _ = os.Remove(kubeconfig) }()
+	q := &quickstart{ctx: ctx, w: w, c: c, kctx: kctx, kubeconfig: kubeconfig, o: o}
 	_, _ = fmt.Fprintf(w, "Setting up the kardinal demo in %s\n", kctx)
 
 	// 2. kro, Argo CD, kardinal: each only when it is not there.
@@ -302,7 +403,9 @@ type quickstart struct {
 	w    io.Writer
 	c    sigs_client.Client
 	kctx string
-	o    quickstartOptions
+	// kubeconfig is the file with only kctx that helm and kubectl use.
+	kubeconfig string
+	o          quickstartOptions
 }
 
 // say writes one line of quickstart's progress: what, and what happened.
@@ -318,21 +421,34 @@ func toneOf(done string) display.Tone {
 	return display.ToneVerified
 }
 
-// kubectlFlags point kubectl at the context; helmFlags point helm at it.
+// kubectlFlags point kubectl at the checked context; helmFlags point helm
+// at it.
 func (q *quickstart) kubectlFlags() []string {
-	f := []string{"--context", q.kctx}
-	if globalKubeconfig != "" {
-		f = append(f, "--kubeconfig", globalKubeconfig)
-	}
-	return f
+	return []string{"--kubeconfig", q.kubeconfig, "--context", q.kctx}
 }
 
 func (q *quickstart) helmFlags() []string {
-	f := []string{"--kube-context", q.kctx}
-	if globalKubeconfig != "" {
-		f = append(f, "--kubeconfig", globalKubeconfig)
+	return []string{"--kubeconfig", q.kubeconfig, "--kube-context", q.kctx}
+}
+
+// writeHelmKubeconfig writes cfg to a new file only the user can read, for helm
+// and kubectl.
+func writeHelmKubeconfig(cfg *clientcmdapi.Config) (string, error) {
+	f, err := os.CreateTemp("", "kardinal-quickstart-kubeconfig-*")
+	if err != nil {
+		return "", fmt.Errorf("write a kubeconfig for helm and kubectl: %w", err)
 	}
-	return f
+	path := f.Name()
+	_ = f.Close()
+	if err := clientcmd.WriteToFile(*cfg, path); err != nil {
+		_ = os.Remove(path)
+		return "", fmt.Errorf("write a kubeconfig for helm and kubectl: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = os.Remove(path)
+		return "", fmt.Errorf("write a kubeconfig for helm and kubectl: %w", err)
+	}
+	return path, nil
 }
 
 // deploymentReady reports whether a Deployment ns/name exists and has a
@@ -693,9 +809,15 @@ Next:
 const quickstartReference = `quickstart refuses, before it sends anything to a cluster, a kubeconfig
 context whose name is not kind-*, k3d-*, minikube, docker-desktop or
 rancher-desktop, or whose API server is not on this machine (loopback,
-0.0.0.0, Docker Desktop's kubernetes.docker.internal; for minikube also a
-private address). There is no flag to override it. Use --context to pick a
-local context.
+0.0.0.0, Docker Desktop's kubernetes.docker.internal; for minikube also its
+drivers' networks 192.168.49.0/24, 192.168.39.0/24 and 192.168.59.0/24). It
+also refuses to run while a variable is set that points helm, kubectl or
+client-go elsewhere (HELM_KUBE*, such as HELM_KUBECONTEXT, and
+KUBERNETES_MASTER). There is no flag to override it, on purpose. Use
+--context to pick a local context. helm and kubectl run on a kubeconfig file
+with only that context, without KUBECONFIG or those variables. What it
+cannot see: a loopback port that tunnels to a remote cluster (kubectl
+port-forward, ssh -L) looks local; do not point a local context at one.
 
 On a local cluster it installs, each only when it is not there yet:
   kro (the version hack/install-kro.sh pins), with the Graph controller

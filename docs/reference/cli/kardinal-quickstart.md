@@ -13,9 +13,15 @@ follows until prod waits for your approval. A re-run changes nothing.
 quickstart refuses, before it sends anything to a cluster, a kubeconfig
 context whose name is not kind-*, k3d-*, minikube, docker-desktop or
 rancher-desktop, or whose API server is not on this machine (loopback,
-0.0.0.0, Docker Desktop's kubernetes.docker.internal; for minikube also a
-private address). There is no flag to override it. Use --context to pick a
-local context.
+0.0.0.0, Docker Desktop's kubernetes.docker.internal; for minikube also its
+drivers' networks 192.168.49.0/24, 192.168.39.0/24 and 192.168.59.0/24). It
+also refuses to run while a variable is set that points helm, kubectl or
+client-go elsewhere (HELM_KUBE*, such as HELM_KUBECONTEXT, and
+KUBERNETES_MASTER). There is no flag to override it, on purpose. Use
+--context to pick a local context. helm and kubectl run on a kubeconfig file
+with only that context, without KUBECONFIG or those variables. What it
+cannot see: a loopback port that tunnels to a remote cluster (kubectl
+port-forward, ssh -L) looks local; do not point a local context at one.
 
 On a local cluster it installs, each only when it is not there yet:
   kro (the version hack/install-kro.sh pins), with the Graph controller

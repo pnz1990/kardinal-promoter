@@ -153,6 +153,6 @@ var forwardUI = func(ctx context.Context, ns string) (string, <-chan error, erro
 	if err != nil || len(got) == 0 {
 		return "", nil, fmt.Errorf("port-forward to %s/%s: no local port: %w", ns, target.Pod, err)
 	}
-	u := url.URL{Scheme: "http", Host: net.JoinHostPort("localhost", strconv.Itoa(int(got[0].Local))), Path: "/ui/"}
+	u := url.URL{Scheme: "http", Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(int(got[0].Local))), Path: "/ui/"}
 	return u.String(), done, nil
 }

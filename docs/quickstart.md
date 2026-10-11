@@ -49,8 +49,13 @@ when it is not done yet:
 
 - It refuses any kubeconfig context that is not a local cluster (by name: `kind-*`, `k3d-*`,
   `minikube`, `docker-desktop`, `rancher-desktop`; and by API server: this machine, or for
-  minikube a private address) before it sends anything to it. There is no flag to override that. It
-  never changes your kubeconfig; `--context` picks another local context.
+  minikube its drivers' networks 192.168.49.0/24, 192.168.39.0/24 and 192.168.59.0/24) before
+  it sends anything to it, and refuses to run while `HELM_KUBE*` (such as `HELM_KUBECONTEXT`) or
+  `KUBERNETES_MASTER` is set, since helm or kubectl would follow them instead. There is no flag
+  to override that, on purpose. helm and kubectl run on a kubeconfig file with only the checked
+  context. It never changes your kubeconfig; `--context` picks another local context. One thing
+  it cannot tell: a loopback port that tunnels to a remote cluster (`kubectl port-forward`,
+  `ssh -L`) looks local, so do not point a local context at such a tunnel.
 - It installs kro (the version `hack/install-kro.sh` pins), Argo CD, and the kardinal-promoter
   chart in `kardinal-system` (`--chart-version` and `--set` change it; `--no-argocd` skips
   Argo CD when the cluster has one).

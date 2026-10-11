@@ -867,7 +867,7 @@ func TestCLI_Dashboard(t *testing.T) {
 		assert.Equal(t, http.StatusOK, resp.StatusCode, "%s serves the UI: %s", address, body[:n])
 		assert.Contains(t, string(body[:n]), "<title>Kardinal Promoter</title>")
 	}
-	forwarding := regexp.MustCompile(`^kardinal UI: (http://localhost:\d+/ui/)\nForwarding to the controller in kardinal-system; Ctrl-C stops\.\n`)
+	forwarding := regexp.MustCompile(`^kardinal UI: (http://127\.0\.0\.1:\d+/ui/)\nForwarding to the controller in kardinal-system; Ctrl-C stops\.\n`)
 
 	// The port-forward: printed, opened, served, until Ctrl-C.
 	p := cli.Start(withOpener, "dashboard")

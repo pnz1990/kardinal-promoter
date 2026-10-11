@@ -210,16 +210,22 @@ kardinal ship my-app -n my-team --image "ghcr.io/myorg/my-app:${GITHUB_SHA}" --w
 ```
 
 A gate that does not pass ends the wait with exit `3` only when it needs a person. A gate that
-opens by itself keeps the job waiting, until `--timeout`: one whose expression contains any of
-these texts, which name the [PolicyGate variables](policy-gates.md) that change with time:
+opens by itself keeps the job waiting, until `--timeout`: one whose expression, outside its string
+literals, reads one of these [PolicyGate variables](policy-gates.md) that change with time, with a
+`.` or `[` after it (`schedule.hour`, `schedule["hour"]`):
 
-| Text in the expression | Variables |
+| Variable | What it covers |
 |---|---|
-| `schedule.` | `schedule.isWeekend`, `schedule.hour`, `schedule.dayOfWeek` |
-| `soakMinutes` | `upstream.<env>.soakMinutes`, `bundle.upstreamSoakMinutes` |
-| `upstream.` | anything else of `upstream.<env>` |
+| `schedule` | `schedule.isWeekend`, `schedule.hour`, `schedule.dayOfWeek` |
+| `upstream` | `upstream.<env>.soakMinutes` and every other field of `upstream.<env>` |
+| `bundle.upstreamSoakMinutes` | the soak of the environment before this one |
 | `metrics` | `metrics.<name>.value`, `metrics.<name>.result` |
 | `changewindow` | `changewindow.<name>` |
+
+A name inside a string (`author != "metrics-bot"`) or as a field of something else
+(`bundle.labels.soakMinutes`) does not count. An expression that reads one of them and also
+something else (`!schedule.isWeekend && bundle.labels.approved == "yes"`) waits, since it may
+open by itself.
 
 So a job can wait through a soak or a deploy window. Any other gate that does not pass (on a
 Bundle label, its provenance or its version) exits `3`, as do an approval gate, a hold and a
