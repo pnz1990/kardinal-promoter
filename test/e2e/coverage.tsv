@@ -474,7 +474,7 @@ CIAPI-ACTION-02	live	core	covered	ci-api	GitHub Action type config or mixed	docs
 CIAPI-GITLAB-01	live	core	covered	ci-api	GitLab CI example payload creates a Bundle	docs/ci-integration.md:133-171; cmd/kardinal-controller/bundle_api.go:211-219
 CHART-DEFAULT-01	live	chart	covered	chart	default helm install: controller Deployment becomes Ready	docs/installation.md:69-112; chart/kardinal-promoter/templates/deployment.yaml:298-303
 CHART-IMAGE-01	live	chart	covered	chart	image.repository/tag/pullPolicy	chart/kardinal-promoter/values.yaml:19-25
-CHART-HA-01	live	chart	covered	chart	replicaCount > 1 with leaderElect, pdb and topologySpread: one leader reconciles, failover works	chart/kardinal-promoter/values.yaml:5; chart/kardinal-promoter/values.yaml:71; chart/kardinal-promoter/values.yaml:607-620
+CHART-HA-01	live	chart	covered	chart	replicaCount > 1 with leaderElect, pdb and topologySpread: one leader reconciles, failover works	chart/kardinal-promoter/values.yaml:5; chart/kardinal-promoter/values.yaml:71; chart/kardinal-promoter/values.yaml:619-633
 CHART-LEADER-RELEASE-01	live	chart	covered	chart	a leader that shuts down (a rollout, a drain) releases its leader Lease, so the next replica takes it without waiting the 15-second lease duration	docs/operate.md:252-253; docs/troubleshooting.md:762-764; cmd/kardinal-controller/manager_options.go:114
 CHART-GRACE-01	live	chart	covered	chart	terminationGracePeriodSeconds	chart/kardinal-promoter/values.yaml:11; chart/kardinal-promoter/templates/deployment.yaml:34-35
 CHART-SHUTDOWN-DELAY-01	live	chart	covered	chart	shutdownDelaySeconds (a preStop sleep; 0 removes the hook)	chart/kardinal-promoter/values.yaml:13-17; chart/kardinal-promoter/templates/deployment.yaml:284-291; docs/operate.md:264-273
@@ -486,16 +486,16 @@ CHART-EXTRA-01	live	chart	covered	chart	extraArgs, extraEnv, volumes, volumeMoun
 CHART-TLS-01	live	chart	covered	chart	controller.tlsCertFile/tlsKeyFile with a mounted cert-manager Secret	chart/kardinal-promoter/values.yaml:93-105; docs/guides/security.md:1296-1344
 CHART-TLS-02	live	chart	covered	chart	a partial TLS config (controller.tlsCertFile or tlsKeyFile alone) fails helm install with a clear message; one TLS flag reaching the controller stops it with a clear error	chart/kardinal-promoter/templates/_helpers.tpl:115-119; chart/kardinal-promoter/values.yaml:94; cmd/kardinal-controller/http_server.go:31-33; docs/guides/security.md:1294
 CHART-TLS-03	live	chart	covered	chart	TLS paths (controller.tlsCertFile and tlsKeyFile) not in a mounted secret, projected or csi volume fail helm install with a message naming the value; the same paths reaching the controller another way stop it with an error naming the file	chart/kardinal-promoter/templates/_helpers.tpl:120-152; chart/kardinal-promoter/values.yaml:97-99; docs/guides/security.md:1340-1344; docs/guides/security.md:1346-1359; cmd/kardinal-controller/http_server.go:85-89
-CHART-SCM-01	live	chart	covered	chart	github.token, github.secretRef, scm.provider, scm.apiURL	chart/kardinal-promoter/values.yaml:220-273
+CHART-SCM-01	live	chart	covered	chart	github.token, github.secretRef, scm.provider, scm.apiURL	chart/kardinal-promoter/values.yaml:220-277
 CHART-WEBHOOK-01	live	chart	covered	chart	webhook.secretRef	chart/kardinal-promoter/values.yaml:309-314
 CHART-SECRETS-01	live	chart	covered	chart	install with a missing Secret or key in github.secretRef, webhook.secretRef, bundleAPI.tokenSecretRef or ui.auth.tokenSecretRef fails at once naming it; helm template skips the check	docs/installation.md:88-100; chart/kardinal-promoter/templates/_helpers.tpl:162-198
-CHART-BUNDLEAPI-01	live	chart	covered	chart	bundleAPI.tokenSecretRef mounts POST /api/v1/bundles	chart/kardinal-promoter/values.yaml:312-317
+CHART-BUNDLEAPI-01	live	chart	covered	chart	bundleAPI.tokenSecretRef mounts POST /api/v1/bundles	chart/kardinal-promoter/values.yaml:316-325
 CHART-UIAUTH-01	live	chart	covered	chart	ui.corsAllowedOrigins, ui.allowedHosts, ui.auth.tokenSecretRef, ui.auth.tokenReview	chart/kardinal-promoter/values.yaml:346-371
 CHART-UIEXPOSE-01	live	chart	covered	chart	exposing the UI beyond port-forward	docs/installation.md:132-171
 CHART-RBAC-01	live	chart	covered	chart	ClusterRole/Role grants match what the controller reads and writes	chart/kardinal-promoter/templates/_rbac.tpl; docs/guides/security.md:7-58
 CHART-ARGOCDWRITE-01	live	core	covered	chart	rbac.argocdApplicationsWrite lets the argocd strategy patch Applications (checked on the rules helm template renders, bound in a test Role, not on the installed chart's RBAC)	chart/kardinal-promoter/values.yaml:380-382; chart/kardinal-promoter/templates/_rbac.tpl:151-159
 CHART-GRAPH-01	live	chart	covered	chart	graph.serviceAccountName, kroNamespace, readerNamespaces, aggregateToKro	chart/kardinal-promoter/values.yaml:406-431
-CHART-NETPOL-01	live	chart	covered	chart	networkPolicy allows metrics/UI/webhook ingress and API/SCM egress only	chart/kardinal-promoter/values.yaml:539-554; docs/guides/security.md:746-764
+CHART-NETPOL-01	live	chart	covered	chart	networkPolicy allows metrics/UI/webhook ingress and API/SCM egress only	chart/kardinal-promoter/values.yaml:548-564; docs/guides/security.md:746-764
 CHART-CLOCK-01	live	chart	covered	chart	scheduleClock creates kardinal-clock	chart/kardinal-promoter/values.yaml:611-617
 CHART-DEMO-01	live	chart	covered	chart	demo values	chart/kardinal-promoter/values.yaml:635-668
 CHART-MON-01	live	flux	covered	chart	serviceMonitor and prometheusRule are picked up by Prometheus Operator: the controller target is up and the alerts are loaded	chart/kardinal-promoter/values.yaml:670-695; docs/guides/monitoring.md:22-43; docs/guides/monitoring.md:202-235
