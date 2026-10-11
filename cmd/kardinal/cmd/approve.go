@@ -207,7 +207,7 @@ func approvalVersion(ctx context.Context, c sigs_client.Client, ns, name string)
 		return "", fmt.Errorf("approve: get bundle %s: %w", name, err)
 	}
 	version := createdOf(&b).Version
-	_, _ = fmt.Fprintf(errOut, "%s %s (%s)\n", sty.Dim("Bundle:"), versionOr(version, name), name)
+	_, _ = fmt.Fprintf(errOut, "%s %s (%s)\n", sty.Dim("Version:"), versionOr(version, name), name)
 	return version, nil
 }
 

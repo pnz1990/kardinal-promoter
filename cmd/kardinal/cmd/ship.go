@@ -187,6 +187,16 @@ func versionOr(version, name string) string {
 	return version
 }
 
+// versionRef names a shipped version in a sentence: "version 1.5.0
+// (app-x7k2p)", its tag and its Bundle, or "version app-x7k2p" when it has no
+// other name. upperFirst starts a sentence with it.
+func versionRef(version, name string) string {
+	if version == "" || version == name {
+		return "version " + name
+	}
+	return "version " + version + " (" + name + ")"
+}
+
 // waitShip follows Bundle name until it ends (shipOutcome), timeout passes
 // or ctx is done (Ctrl-C, SIGTERM), printing each new state of its
 // environments on stderr. A read that fails is tried again, after a longer
@@ -204,7 +214,7 @@ func waitShip(ctx context.Context, c sigs_client.Client, ns, pipeline, name stri
 			failures++
 			if failures >= 3 {
 				res.Result, res.ExitCode = "Error", ExitFailed
-				res.Message = fmt.Sprintf("cannot follow Bundle %s: %v", name, HumanError(err))
+				res.Message = fmt.Sprintf("cannot follow %s: %v", versionRef(res.Version, name), HumanError(err))
 				return res
 			}
 			pause = min(pause*2, 16*shipPollInterval)
@@ -232,13 +242,13 @@ func waitShip(ctx context.Context, c sigs_client.Client, ns, pipeline, name stri
 		}
 		if !time.Now().Before(deadline) {
 			res.Result, res.ExitCode = "Timeout", ExitTimeout
-			res.Message = fmt.Sprintf("Bundle %s is still promoting after %s: kardinal status %s -w follows it", name, durationText(timeout), pipeline)
+			res.Message = fmt.Sprintf("%s is still promoting after %s: kardinal status %s -w follows it", upperFirst(versionRef(res.Version, name)), durationText(timeout), pipeline)
 			return res
 		}
 		select {
 		case <-ctx.Done():
 			res.Result, res.ExitCode = "Interrupted", ExitTimeout
-			res.Message = fmt.Sprintf("stopped following Bundle %s (interrupted); the promotion goes on: kardinal status %s -w", name, pipeline)
+			res.Message = fmt.Sprintf("Stopped following %s (interrupted); the promotion goes on: kardinal status %s -w", versionRef(res.Version, name), pipeline)
 			return res
 		case <-time.After(pause):
 		}
@@ -269,7 +279,7 @@ func shipOutcome(ctx context.Context, c sigs_client.Client, ns, pipeline, name s
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &b); err != nil {
 		if apierrors.IsNotFound(err) {
 			return &shipOutcomeResult{result: "Deleted", code: ExitReplaced, final: true,
-				message: fmt.Sprintf("Bundle %s was deleted: kardinal status %s", name, pipeline)}, nil, nil
+				message: fmt.Sprintf("%s was deleted: kardinal status %s", upperFirst(versionRef("", name)), pipeline)}, nil, nil
 		}
 		return nil, nil, fmt.Errorf("get bundle %s: %w", name, err)
 	}
@@ -299,7 +309,7 @@ func shipOutcome(ctx context.Context, c sigs_client.Client, ns, pipeline, name s
 		}
 		return &shipOutcomeResult{result: "Verified", code: ExitVerified, final: true, message: msg}, envs, nil
 	case "Failed":
-		msg := fmt.Sprintf("Bundle %s failed", name)
+		msg := fmt.Sprintf("%s failed", upperFirst(versionRef(scmVersion(&b), name)))
 		if failed := where(func(e v1alpha1.PipelineEnvironmentStatus) bool {
 			return display.Step(e.State).Tone == display.ToneFailed
 		}); len(failed) > 0 {
@@ -309,14 +319,14 @@ func shipOutcome(ctx context.Context, c sigs_client.Client, ns, pipeline, name s
 			message: msg + fmt.Sprintf(": kardinal why %s explains it", pipeline)}, envs, nil
 	case "Superseded":
 		return &shipOutcomeResult{result: "Superseded", code: ExitReplaced, final: true,
-			message: fmt.Sprintf("Bundle %s was replaced by a newer version: kardinal status %s", name, pipeline)}, envs, nil
+			message: fmt.Sprintf("%s was replaced by a newer version: kardinal status %s", upperFirst(versionRef(scmVersion(&b), name)), pipeline)}, envs, nil
 	case "Rejected":
 		return &shipOutcomeResult{result: "Rejected", code: ExitReplaced, final: true,
-			message: fmt.Sprintf("Bundle %s was rejected: kardinal history %s", name, pipeline)}, envs, nil
+			message: fmt.Sprintf("%s was rejected: kardinal history %s", upperFirst(versionRef(scmVersion(&b), name)), pipeline)}, envs, nil
 	}
 	if p.Spec.Paused {
 		return &shipOutcomeResult{result: "Held", code: ExitHeld,
-			message: fmt.Sprintf("Bundle %s stopped: pipeline %s is paused (kardinal resume %s)", name, pipeline, pipeline)}, envs, nil
+			message: fmt.Sprintf("%s stopped: pipeline %s is paused (kardinal resume %s)", upperFirst(versionRef(scmVersion(&b), name)), pipeline, pipeline)}, envs, nil
 	}
 
 	var steps v1alpha1.PromotionStepList
@@ -357,7 +367,7 @@ func shipOutcome(ctx context.Context, c sigs_client.Client, ns, pipeline, name s
 	}
 	if held := heldForAPerson(pipeline, name, envs, gates.Items, stopAtGate); len(held) > 0 {
 		return &shipOutcomeResult{result: "Held", code: ExitHeld,
-			message: fmt.Sprintf("Bundle %s stopped: %s", name, strings.Join(held, "; "))}, envs, nil
+			message: fmt.Sprintf("%s stopped: %s", upperFirst(versionRef(scmVersion(&b), name)), strings.Join(held, "; "))}, envs, nil
 	}
 	if merge := where(func(e v1alpha1.PipelineEnvironmentStatus) bool { return e.State == "WaitingForMerge" }); len(merge) > 0 {
 		var prs []string
@@ -366,7 +376,7 @@ func shipOutcome(ctx context.Context, c sigs_client.Client, ns, pipeline, name s
 				prs = append(prs, e.PRURL)
 			}
 		}
-		msg := fmt.Sprintf("Bundle %s waits for its PR to be merged in %s", name, strings.Join(merge, ", "))
+		msg := fmt.Sprintf("%s waits for its PR to be merged in %s", upperFirst(versionRef(scmVersion(&b), name)), strings.Join(merge, ", "))
 		if len(prs) > 0 {
 			msg += ": " + strings.Join(prs, " ")
 		}
@@ -468,9 +478,35 @@ func heldForAPerson(pipeline, name string, envs []v1alpha1.PipelineEnvironmentSt
 	return out
 }
 
-// timeExpressions are the PolicyGate context variables that change with
-// time: a gate on them opens by itself.
-var timeExpressions = []string{"schedule.", "soakMinutes", "upstream.", "metrics", "changewindow"}
+// timeVariables are the PolicyGate context variables that change with
+// time, by the text that names them in an expression: a gate whose
+// expression contains one opens by itself, so ship --wait waits for it.
+// The ship reference and docs/ci-integration.md list them from here.
+var timeVariables = []struct{ match, vars string }{
+	{"schedule.", "schedule.isWeekend, schedule.hour, schedule.dayOfWeek"},
+	{"soakMinutes", "upstream.<env>.soakMinutes, bundle.upstreamSoakMinutes"},
+	{"upstream.", "anything else of upstream.<env>"},
+	{"metrics", "metrics.<name>.value, metrics.<name>.result"},
+	{"changewindow", "changewindow.<name>"},
+}
+
+// timeExpressions are timeVariables' match texts.
+var timeExpressions = func() []string {
+	out := make([]string, 0, len(timeVariables))
+	for _, v := range timeVariables {
+		out = append(out, v.match)
+	}
+	return out
+}()
+
+// timeVariableList is timeVariables for the reference page, one per line.
+func timeVariableList() string {
+	var b strings.Builder
+	for _, v := range timeVariables {
+		fmt.Fprintf(&b, "  %-14s %s\n", v.match, v.vars)
+	}
+	return b.String()
+}
 
 // rechecks reports whether gate g opens by itself: its expression reads what
 // changes with time (a schedule, a soak, an upstream environment, a metric,
@@ -522,11 +558,15 @@ and the Bundle's environments from status.environments). Exit codes:
 
 ` + shipExitCodeTable() + `
 A stop at a gate, a hold or a PR counts once two reads agree, and a gate not
-evaluated yet never stops it. A gate that opens by itself (its expression
-reads a schedule, a soak, an upstream environment, a metric or a change
-window) and a PR the SCM merges by itself (pr.merge.auto) are waited for,
-until --timeout: CI can wait through a soak. A gate on anything else (a
-Bundle label, its provenance) needs a person: exit 3. --stop-at-gate stops
-at any gate that does not pass. Stopping to follow does not stop the promotion:
+evaluated yet never stops it. A gate that does not pass is waited for, until
+--timeout, when it opens by itself: its expression contains one of these
+texts, which name the variables that change with time:
+
+` + timeVariableList() + `
+So CI can wait through a soak or a schedule. A PR the SCM merges by itself
+(pr.merge.auto) is waited for too. Any other gate that does not pass (on a
+Bundle label, its provenance, its version) needs a person: exit 3, as do an
+approval gate, a hold and a paused pipeline. --stop-at-gate stops at any
+gate that does not pass. Stopping to follow does not stop the promotion:
 kardinal status <pipeline> -w goes on following it. The codes
 are stable: a new outcome gets a new code.`
