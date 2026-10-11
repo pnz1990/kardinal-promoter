@@ -22,7 +22,7 @@ Setting up the kardinal demo in kind-kardinal
   ✓ kro 0.10.0-rc.0: installed
   ✓ Argo CD v3.5.3: installed
   ✓ Secret kardinal-system/kardinal-scm-token: created from $GITHUB_TOKEN (the controller's token for PRs)
-  ✓ kardinal-promoter 0.10.1: installed
+  ✓ kardinal-promoter 0.11.0: installed
   ✓ Secret default/github-token: created from $GITHUB_TOKEN
   ✓ Argo CD ApplicationSet argocd/kardinal-test-app (https://github.com/<you>/kardinal-demo): applied
   ✓ PolicyGate default/prod-approval (prod waits for your approval, as kubernetes-admin): applied
