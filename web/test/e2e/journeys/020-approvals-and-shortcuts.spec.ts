@@ -72,6 +72,8 @@ test.describe('Journey 020 — Approvals, access and shortcuts', () => {
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto('/ui/#/p/default/payments-service')
     await expect(page.getByRole('heading', { level: 1, name: 'payments-service' })).toBeVisible()
+    // The keys act on what is loaded: wait for the graph.
+    await expect(page.locator('svg.dag-view__svg')).toBeVisible()
     await page.keyboard.press('j')
     await expect(page).toHaveURL(/\/env\/staging$/)
     await page.keyboard.press('j')
