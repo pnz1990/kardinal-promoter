@@ -39,3 +39,5 @@ upgrade       1.30        -
 upgrade       1.37        -
 upgrade-v090  1.30        -
 upgrade-v090  1.37        -
+upgrade-v0100 1.30        -
+upgrade-v0100 1.37        -
