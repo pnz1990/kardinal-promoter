@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -205,4 +206,15 @@ func pushedOrPushing(s *v1alpha1.PromotionStep) bool {
 		return false
 	}
 	return true
+}
+
+// staleReason is why the push guard refused a push (err wraps
+// steps.ErrStalePush), without the step engine's and the guard's prefixes:
+// "bundle X was superseded — promotion cancelled".
+func staleReason(err error) string {
+	msg := err.Error()
+	if i := strings.LastIndex(msg, steps.ErrStalePush.Error()+": "); i >= 0 {
+		return msg[i+len(steps.ErrStalePush.Error())+2:]
+	}
+	return msg
 }

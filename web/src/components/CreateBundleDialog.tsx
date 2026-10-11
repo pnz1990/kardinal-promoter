@@ -127,7 +127,7 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
             borderRadius: '6px', padding: '0.5rem 0.75rem',
             color: 'var(--color-text)', fontSize: '0.875rem',
             marginBottom: imageError ? '0.25rem' : '0.75rem',
-            fontFamily: 'monospace',
+            fontFamily: 'var(--k-font-mono)',
           }}
         />
         {imageError && (
@@ -159,7 +159,7 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
             borderRadius: '6px', padding: '0.5rem 0.75rem',
             color: 'var(--color-text)', fontSize: '0.875rem',
             marginBottom: '0.75rem',
-            fontFamily: 'monospace',
+            fontFamily: 'var(--k-font-mono)',
           }}
         />
 
