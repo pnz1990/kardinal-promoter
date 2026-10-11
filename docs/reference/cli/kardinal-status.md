@@ -10,9 +10,9 @@ running there, a newer one on its way in, its state and since when, its PR,
 and the gates holding it back. Run it first when a promotion is stuck; -w
 refreshes it and -o json prints it for scripts.
 
-When called without arguments, across every namespace (-n for one; -A says
-every namespace explicitly; when you may not list every namespace it shows
-the kubeconfig's, with a note on stderr):
+When called without arguments, across every namespace (-n for one). When you
+may not list every namespace it shows the kubeconfig's, with a note on
+stderr; with -A, which asks for every namespace, it fails and says to use -n:
 
   Controller:  v0.10.1 in kardinal-system, 1/1 ready
   Pipelines:   3 (1 degraded: team-b/api)
@@ -28,7 +28,7 @@ the kubeconfig's, with a note on stderr):
 the controller version (the kardinal-version ConfigMap in
 --controller-namespace) and how many replicas of its Deployment are ready
 (else "no controller Deployment found there: kardinal doctor", or "can't
-read the controller Deployment (needs get on deployments in <ns>)": the
+read the controller Deployment (needs list on deployments in <ns>)": the
 chart's user roles do not grant it; fewer ready than desired is a warning), the pipeline count with any Degraded pipelines,
 the version count (in flight = Available or Promoting), and one line per
 pipeline (at most 50; then kardinal get pipelines -A) with its

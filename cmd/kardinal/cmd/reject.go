@@ -20,7 +20,7 @@ import (
 )
 
 func newRejectCmd() *cobra.Command {
-	var reason, pipeline string
+	var reason, pipeline, exactName string
 	cmd := &cobra.Command{
 		Use:   "reject <bundle|version>",
 		Short: "Reject a version: it is never promoted again, and rollback never picks it",
@@ -31,13 +31,17 @@ again. It does not revert an environment: use kardinal rollback for that.`,
 		Example: `  kardinal reject my-app-v1-5 --reason "CVE-2026-1234 in the base image"
   kardinal reject 1.5.0 --reason "CVE-2026-1234 in the base image"`,
 		Annotations: map[string]string{ReferenceAnnotation: rejectReference},
-		Args:        cobra.ExactArgs(1),
+		Args:        bundleArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("reject: %w", err)
 			}
-			name, _, err := resolveBundleRefIn(contextOf(cmd), c, refScope{ns: ns, pipeline: pipeline, strict: true}, args[0])
+			ref, err := bundleArg(args, exactName)
+			if err != nil {
+				return fmt.Errorf("reject: %w", err)
+			}
+			name, _, err := resolveBundleRefIn(contextOf(cmd), c, refScope{ns: ns, pipeline: pipeline, strict: true, exact: exactName != ""}, ref)
 			if err != nil {
 				return fmt.Errorf("reject: %w", err)
 			}
@@ -50,6 +54,8 @@ again. It does not revert an environment: use kardinal rollback for that.`,
 	cmd.Flags().StringVar(&reason, "reason", "", "Why the version is rejected (required)")
 	_ = cmd.MarkFlagRequired("reason")
 	cmd.Flags().StringVar(&pipeline, "pipeline", "", "Look for a version given as <bundle> in this pipeline only")
+	cmd.Flags().StringVar(&exactName, "name", "", "The Bundle of this name, never a version (when a name is also another Bundle's version)")
+	cmd.MarkFlagsMutuallyExclusive("name", "pipeline")
 	addYesFlag(cmd)
 	return cmd
 }

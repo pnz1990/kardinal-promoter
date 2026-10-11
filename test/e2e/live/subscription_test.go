@@ -421,7 +421,7 @@ func createSecret(t *testing.T, e *framework.Env, ns, name string, typ corev1.Se
 // creates config Bundle <subscription>-<first 8 SHA chars> whose configRef
 // is the Subscription's repoURL at that commit.
 //
-// Covers SUB-GIT-01.
+// Covers SUB-GIT-01, CLI-GET-SUBS-01.
 func TestSub_GitNewCommit(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -456,6 +456,13 @@ func TestSub_GitNewCommit(t *testing.T) {
 	require.NotNil(t, b.Spec.Provenance)
 	assert.Equal(t, sha, b.Spec.Provenance.CommitSHA)
 	assert.Len(t, bundles(t, e, a.ns), 1)
+
+	// kardinal get subscriptions: LAST-VERSION is the commit, one token;
+	// -o wide shows the whole version and the Bundle.
+	out := e.MustKardinal(t, a.ns, "get", "subscriptions", "config")
+	assert.Regexp(t, `(?m)^config\s+git\s+\S+\s+\S+\s+\S+ ago\s+`+sha[:7]+`\s+\S+$`, out)
+	out = e.MustKardinal(t, a.ns, "get", "subscriptions", "config", "-o", "wide")
+	assert.Regexp(t, `(?m)^config\s+git\s+\S+\s+\S+\s+\S+ ago\s+config `+sha[:7]+`\s+`+want+`\s+\S+$`, out)
 }
 
 // committer is the git server's commit API.
