@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -146,6 +148,9 @@ func TestUIHandler_PipelineOverride(t *testing.T) {
 					overridden[g.Name] = o
 				}
 			}
+			if tt.want == http.StatusForbidden {
+				assert.Contains(t, rec.Body.String(), "approver or admin role grants it", "a refusal names the role")
+			}
 			if tt.want != http.StatusOK {
 				assert.Empty(t, overridden, "nothing written")
 				return
@@ -163,4 +168,39 @@ func TestUIHandler_PipelineOverride(t *testing.T) {
 			assert.Equal(t, []string{"no-weekend--app-v2-prod"}, resp.Gates)
 		})
 	}
+}
+
+// TestUIHandler_PipelineOverride_PartialFailure: when one instance cannot be
+// written, the others still are, and the answer names each gate that was and
+// was not overridden.
+func TestUIHandler_PipelineOverride_PartialFailure(t *testing.T) {
+	instance := func(bundle string) *v1alpha1.PolicyGate {
+		return &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "no-weekend--" + bundle + "-prod", Namespace: "team-a",
+			Labels: map[string]string{"kardinal.io/pipeline": "app", "kardinal.io/gate-template": "no-weekend",
+				"kardinal.io/environment": "prod", "kardinal.io/bundle": bundle}}}
+	}
+	bundle := func(name string) *v1alpha1.Bundle {
+		return &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a"},
+			Spec: v1alpha1.BundleSpec{Pipeline: "app"}, Status: v1alpha1.BundleStatus{Phase: "Promoting"}}
+	}
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
+		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"}},
+		bundle("app-v2"), bundle("app-v3"), instance("app-v2"), instance("app-v3"),
+	).WithInterceptorFuncs(interceptor.Funcs{
+		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if obj.GetName() == "no-weekend--app-v3-prod" {
+				return errors.New("etcd unavailable")
+			}
+			return cl.Patch(ctx, obj, patch, opts...)
+		},
+	}).Build()
+	h := newUIHandler(c, nil, uiAuthConfig{}, "", nil, zerolog.Nop())
+	rec := uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/override", "",
+		`{"pipeline":"app","namespace":"team-a","gate":"no-weekend","environment":"prod","reason":"P0 hotfix"}`)
+	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "overridden on no-weekend--app-v2-prod")
+	assert.Contains(t, rec.Body.String(), "not overridden on no-weekend--app-v3-prod (failed to override gate no-weekend--app-v3-prod)")
+	var g v1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "no-weekend--app-v2-prod"}, &g))
+	assert.Len(t, g.Spec.Overrides, 1, "the gate that could be written was")
 }

@@ -26,17 +26,20 @@ export interface UrlState {
   node: string | undefined
   /** Name of the bundle selected for diff comparison (opens BundleDiffPanel). */
   bundle: string | undefined
+  /** The stage drawer section to scroll to (why, actions, evidence, history). */
+  section?: string | undefined
 }
 
 /** Parse the URL hash fragment into a UrlState. */
 function parseHash(hash: string): UrlState {
-  if (!hash || hash === '#') return { pipeline: undefined, ns: undefined, node: undefined, bundle: undefined }
+  if (!hash || hash === '#') return { pipeline: undefined, ns: undefined, node: undefined, bundle: undefined, section: undefined }
   const params = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash)
   return {
     pipeline: params.get('pipeline') ?? undefined,
     ns: params.get('ns') ?? undefined,
     node: params.get('node') ?? undefined,
     bundle: params.get('bundle') ?? undefined,
+    section: params.get('section') ?? undefined,
   }
 }
 
@@ -47,6 +50,7 @@ function serializeHash(state: UrlState): string {
   if (state.ns) params.set('ns', state.ns)
   if (state.node) params.set('node', state.node)
   if (state.bundle) params.set('bundle', state.bundle)
+  if (state.section) params.set('section', state.section)
   const s = params.toString()
   return s ? `#${s}` : ''
 }

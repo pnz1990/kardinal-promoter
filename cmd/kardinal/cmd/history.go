@@ -84,6 +84,10 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 	steps := v1alpha1.PromotionStepList{Items: items}
 
 	if len(steps.Items) == 0 {
+		// A typo would look like an idle pipeline: say so.
+		if err := checkPipelineEnv(ctx, c, ns, pipeline, envFilter); err != nil {
+			return err
+		}
 		if _, err := fmt.Fprintf(w, "No promotion history found for pipeline %q\n", pipeline); err != nil {
 			return fmt.Errorf("write empty: %w", err)
 		}
@@ -106,6 +110,9 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 	rows := buildHistoryRows(steps.Items, rollbacks, envFilter, limit)
 
 	if len(rows) == 0 {
+		if err := checkPipelineEnv(ctx, c, ns, pipeline, envFilter); err != nil {
+			return err
+		}
 		if envFilter != "" {
 			if _, err := fmt.Fprintf(w, "No promotion history found for pipeline %q env %q\n", pipeline, envFilter); err != nil {
 				return fmt.Errorf("write empty: %w", err)

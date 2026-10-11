@@ -242,7 +242,7 @@ func TestCreateBundle_SharesBundleAPIRules(t *testing.T) {
 	}{
 		{name: "unknown pipeline", pipeline: "ghost",
 			opts:    createBundleOptions{Images: []string{img}, Type: "image"},
-			wantErr: `pipeline "ghost" not found in namespace "default"`},
+			wantErr: `pipeline "ghost" not found in namespace "default"; pipelines here: demo. Other namespaces: kardinal get pipelines -A`},
 		{name: "image bundle without an image",
 			opts:    createBundleOptions{Type: "image"},
 			wantErr: `create bundle: type "image" requires at least one --image`},
