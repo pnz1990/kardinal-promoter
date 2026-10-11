@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Release notes reach the GitHub release** — v0.10.0's release was created with an empty notes section: its changelog section (about 99 KB) went from the workflow's preflight job to the release job as a job output, and did not arrive. The notes now travel as the `release-notes` artifact, the release job writes the body to a file the release step reads, and the release fails when the notes in the finished body are empty. The body's CRD apply command uses `--force-conflicts`, as the upgrade guides do
+
 ## [v0.10.0] — 2026-10-11
 
 **The features teams moving from Kargo or GitOps Promoter look for first, 500-environment Pipelines and 200-Pipeline clusters, and every recorded identity verified against the Kubernetes user who made the request. Read [Before you upgrade](#before-you-upgrade) first: some changes refuse objects v0.9.0 accepted.**
