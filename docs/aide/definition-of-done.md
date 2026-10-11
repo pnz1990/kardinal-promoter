@@ -325,7 +325,7 @@ kardinal policy simulate                  # gate simulation with result
 
 ## Journey 6: Rendered Manifests — Pre-Rendered GitOps
 
-Implemented in v0.10.0 (#1515): the render runs in a sandboxed RenderRun Job, never in the
+Implemented: the render runs in a sandboxed RenderRun Job, never in the
 controller (docs/rendered-manifests.md).
 
 **Source**: `docs/rendered-manifests.md`, `examples/rendered-manifests/`

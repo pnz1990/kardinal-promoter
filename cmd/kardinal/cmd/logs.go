@@ -122,14 +122,14 @@ func logsFollowFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pi
 						dur = fmt.Sprintf("%.1fs", float64(step.DurationMs)/1000.0)
 					}
 					_, _ = fmt.Fprintf(w, "[%s/%s] %-25s %-15s %s %s\n",
-						pipeline, label, step.Name, string(step.State), dur, step.Message)
+						pipeline, label, step.Name, subStepLabel(string(step.State)), dur, step.Message)
 				}
 				cursor[s.Name] = len(newSteps)
 			}
 
 			// Print each state change once.
 			if state := stepState(s); state != lastState[s.Name] {
-				_, _ = fmt.Fprintf(w, "[%s/%s] → %s\n", pipeline, label, state)
+				_, _ = fmt.Fprintf(w, "[%s/%s] → %s\n", pipeline, label, stepLabel(state))
 				lastState[s.Name] = state
 			}
 		}
@@ -255,7 +255,7 @@ func logsFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, bundleFi
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	for _, s := range filtered {
 		_, _ = fmt.Fprintf(tw, "=== %s/%s (%s) [%s] ===\n",
-			pipeline, s.Spec.Environment, s.Spec.BundleName, s.Status.State)
+			pipeline, s.Spec.Environment, s.Spec.BundleName, stepLabel(s.Status.State))
 
 		// Message (execution log)
 		if s.Status.Message != "" {
@@ -300,7 +300,7 @@ func logsFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, bundleFi
 				}
 				msg := truncateRunes(step.Message, 83)
 				_, _ = fmt.Fprintf(tw, "    %s\t%s\t%s\t%s\n",
-					step.Name, string(step.State), dur, msg)
+					step.Name, subStepLabel(string(step.State)), dur, msg)
 			}
 		}
 

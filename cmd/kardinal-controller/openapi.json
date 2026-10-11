@@ -847,6 +847,74 @@
         },
         "type": "object"
       },
+      "PipelineOverrideRequest": {
+        "additionalProperties": false,
+        "description": "uiPipelineOverrideRequest is the body of POST /api/v1/ui/override: the override of a gate template in one environment of a Pipeline, recorded on the instances its in-progress Bundles have (kardinal override).",
+        "properties": {
+          "environment": {
+            "description": "Environment is the environment the override applies to. Required.",
+            "type": "string"
+          },
+          "expiresInMinutes": {
+            "description": "ExpiresInMinutes is how long the override lasts, 1 to the cap (--gate-override-max-minutes). Defaults to 60.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "gate": {
+            "description": "Gate is the gate template name (or the name of one gate instance).",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "Namespace of the Pipeline. Defaults to \"default\".",
+            "type": "string"
+          },
+          "pipeline": {
+            "description": "Pipeline whose in-progress Bundles' gate instances get the override.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Reason is recorded on the override and in the audit trail. Required.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment",
+          "gate",
+          "pipeline",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "PipelineOverrideResponse": {
+        "additionalProperties": false,
+        "description": "uiPipelineOverrideResponse is the response of POST /api/v1/ui/override.",
+        "properties": {
+          "expiresAt": {
+            "description": "ExpiresAt is when the override expires (RFC 3339).",
+            "type": "string"
+          },
+          "gates": {
+            "description": "Gates are the gate instances that got the override.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "message": {
+            "description": "Message describes what was done.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expiresAt",
+          "gates",
+          "message"
+        ],
+        "type": "object"
+      },
       "PolicyGate": {
         "additionalProperties": false,
         "description": "uiGateResponse is the JSON shape for a PolicyGate.",
@@ -921,7 +989,7 @@
       },
       "PolicyGateOverride": {
         "additionalProperties": false,
-        "description": "uiGateOverride is the JSON shape for a PolicyGateOverride (K-09 audit record).",
+        "description": "uiGateOverride is the JSON shape for a PolicyGateOverride (an audit record).",
         "properties": {
           "createdAt": {
             "type": "string"
@@ -1086,6 +1154,29 @@
           "pipeline",
           "state",
           "stepType"
+        ],
+        "type": "object"
+      },
+      "RejectRequest": {
+        "additionalProperties": false,
+        "description": "uiRejectRequest is the body of POST /api/v1/ui/reject.",
+        "properties": {
+          "bundle": {
+            "description": "Bundle is the Bundle to reject.",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "Namespace of the Bundle. Defaults to \"default\".",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Reason is recorded in spec.rejected and the audit trail. Required.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bundle",
+          "reason"
         ],
         "type": "object"
       },
@@ -1418,6 +1509,122 @@
         ],
         "type": "object"
       },
+      "uiDisplayState": {
+        "additionalProperties": false,
+        "description": "uiDisplayState is how one API state is shown (pkg/display): the same labels as the CLI.",
+        "properties": {
+          "ascii": {
+            "description": "ASCII is the glyph for a surface without Unicode.",
+            "type": "string"
+          },
+          "glyph": {
+            "description": "Glyph is a one-character Unicode symbol for the state.",
+            "type": "string"
+          },
+          "label": {
+            "description": "Label is the text a person reads, for example \"Waiting for PR merge\".",
+            "type": "string"
+          },
+          "tone": {
+            "description": "Tone is the status bucket that picks colour and shape: verified, promoting, waiting, blocked, failed, superseded, paused, held, pending, degraded or unknown.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Value is the API value, unchanged, for example WaitingForMerge.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ascii",
+          "glyph",
+          "label",
+          "tone",
+          "value"
+        ],
+        "type": "object"
+      },
+      "uiDisplayStates": {
+        "additionalProperties": false,
+        "description": "uiDisplayStates is the response of GET /api/v1/ui/display-states: every known state of each kind, keyed by API value. A value not listed is shown with its CamelCase split into words and tone unknown.",
+        "properties": {
+          "bundle": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/uiDisplayState"
+            },
+            "description": "Bundle maps Bundle status.phase values.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "gate": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/uiDisplayState"
+            },
+            "description": "Gate maps the state of a gate instance (Pass, Block, Waiting, Pending, Superseded, Rejected).",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "held": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/uiDisplayState"
+              }
+            ],
+            "description": "Held is the label of an environment held by a rollback (rollback --hold)."
+          },
+          "heldByGate": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/uiDisplayState"
+              }
+            ],
+            "description": "HeldByGate is the label of an environment a gate holds; {gate} is the gate's name. Its tone is blocked."
+          },
+          "pipeline": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/uiDisplayState"
+            },
+            "description": "Pipeline maps Pipeline status.phase values, and Paused.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "step": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/uiDisplayState"
+            },
+            "description": "Step maps PromotionStep status.state values, and NotStarted (an environment not reached yet).",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "substep": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/uiDisplayState"
+            },
+            "description": "SubStep maps the state of a PromotionStep's status.steps[].",
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "bundle",
+          "gate",
+          "held",
+          "heldByGate",
+          "pipeline",
+          "step",
+          "substep"
+        ],
+        "type": "object"
+      },
       "uiFleet": {
         "additionalProperties": false,
         "description": "uiFleet is a fleet environment's targets and pacing (spec.fleet).",
@@ -1546,7 +1753,7 @@
             "type": "string"
           },
           "bundleMissing": {
-            "description": "BundleMissing is true when the controller found the rollback Bundle missing (status.holdStates, #1629). The hold stays in effect.",
+            "description": "BundleMissing is true when the controller found the rollback Bundle missing (status.holdStates). The hold stays in effect.",
             "type": "boolean"
           },
           "createdAt": {
@@ -1993,6 +2200,45 @@
         ]
       }
     },
+    "/api/v1/ui/display-states": {
+      "get": {
+        "operationId": "getDisplayStates",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/uiDisplayStates"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "The labels, glyphs and tones of every state, the words the CLI uses",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
     "/api/v1/ui/gates": {
       "get": {
         "operationId": "listGates",
@@ -2184,6 +2430,68 @@
           {}
         ],
         "summary": "Override a PolicyGate in a namespace for a while",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/override": {
+      "post": {
+        "description": "Records the override on the instances of the gate that the Pipeline's in-progress Bundles have in the environment. Needs update on policygates/override for each of them (TokenReview mode), checked before any is written.",
+        "operationId": "overridePipelineGate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PipelineOverrideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineOverrideResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "Override a gate in one environment of a Pipeline for a while (kardinal override --stage)",
         "tags": [
           "UI"
         ]
@@ -2419,6 +2727,68 @@
           {}
         ],
         "summary": "Promote the Bundle Verified upstream into an environment (kardinal promote)",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/reject": {
+      "post": {
+        "description": "Needs update on the virtual subresource bundles/reject in the Bundle's namespace (TokenReview mode). The controller writes spec.rejected with the caller as the rejecting user.",
+        "operationId": "rejectBundle",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "Reject a Bundle: it is never promoted again (kardinal reject)",
         "tags": [
           "UI"
         ]

@@ -259,7 +259,7 @@ jobs:
           bash hack/check-license-headers.sh
           ':(glob)web/src/**/*.ts' ':(glob)web/src/**/*.tsx' ':(glob)web/src/**/*.mjs'
           ':(glob)web/test/**/*.ts' ':(glob)web/test/**/*.tsx' ':(glob)web/test/**/*.mjs'
-          ':(glob)web/*.ts'
+          ':(glob)web/*.ts' ':(glob)web/scripts/*.mjs' 'scripts/gen-tokens.mjs'
       # npm and web/package-lock.json are the only package manager and lockfile:
       # the Dockerfile, `make ui` and dependabot use them too. Node matches the
       # Dockerfile's node image.
@@ -271,6 +271,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
         working-directory: web
+      - name: Design tokens are generated from tokens.json
+        run: npm run tokens:check
+        working-directory: web
       - name: Type check
         # tsc -b checks src (tsconfig.app.json) and the Vite/Playwright configs
         # (tsconfig.node.json).
@@ -278,6 +281,9 @@ jobs:
         working-directory: web
       - name: Build
         run: npm run build
+        working-directory: web
+      - name: Bundle size budget
+        run: npm run size
         working-directory: web
       - name: Check web/dist is up to date
         # go:embed ships the committed web/dist, so it must match a fresh build.

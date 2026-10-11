@@ -116,7 +116,7 @@ func TestValidate_Documents(t *testing.T) {
 		{
 			name:    "shard",
 			content: validPipelineDoc + "    shard: eu\n",
-			wantOut: []string{"✗ f.yaml is invalid:", `environment "prod": shard is not supported: distributed mode was removed`},
+			wantOut: []string{"✗ f.yaml is invalid:", `environment "prod": shard is not supported; remove shard`},
 			wantErr: true,
 		},
 		{

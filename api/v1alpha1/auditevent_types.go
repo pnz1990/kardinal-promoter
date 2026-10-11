@@ -33,17 +33,20 @@ type AuditEventSpec struct {
 	//               "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
 	//               "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden",
 	//               "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
-	//               "HoldBundleMissing".
+	//               "HoldBundleMissing", "BundleRejected".
 	// ApprovalRecorded and ApprovalRevoked are written by an approval gate
 	// when a decision (kardinal approve) appears in or leaves its
 	// spec.approvals.
+	// BundleRejected is written once when a Bundle's spec.rejected is set
+	// (kardinal reject or the UI), naming who rejected it and why; its
+	// environment is "*" (the whole Bundle).
 	// GateOverridden is written once per spec.overrides entry of a gate
 	// instance, naming who created it (kardinal override or the UI).
 	// HealthCheckFailed and GateBlocked are accepted but never written: a
 	// failed health check records PromotionFailed (RollbackStarted when
 	// onHealthFailure is rollback), and a blocked gate records GateEvaluated
 	// with outcome Failure.
-	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing
+	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing;BundleRejected
 	Action string `json:"action"`
 
 	// Outcome describes the result of the action.
@@ -62,7 +65,7 @@ type AuditEventSpec struct {
 // all pipelines.
 //
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:scope=Namespaced,shortName=ae;audit
+// +kubebuilder:resource:scope=Namespaced,shortName=ae;audit,categories=kardinal-all
 // +kubebuilder:printcolumn:name="Pipeline",type="string",JSONPath=".spec.pipelineName"
 // +kubebuilder:printcolumn:name="Bundle",type="string",JSONPath=".spec.bundleName"
 // +kubebuilder:printcolumn:name="Environment",type="string",JSONPath=".spec.environment"
@@ -94,6 +97,7 @@ var AuditActions = []string{
 	"PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected",
 	"RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated",
 	"GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased", "HoldBundleMissing",
+	"BundleRejected",
 }
 
 // AuditOutcomes are the values spec.outcome accepts.
@@ -108,7 +112,7 @@ const MaxPendingAuditEvents = 32
 // the same patch as the transition it records. It creates the AuditEvent on
 // that reconcile or a later one, then removes the entry. The name is fixed
 // when the entry is stored, so a retried create that the API server already
-// applied returns AlreadyExists, which counts as written (#1552).
+// applied returns AlreadyExists, which counts as written.
 type PendingAuditEvent struct {
 	// Name is the AuditEvent's name.
 	// +kubebuilder:validation:MinLength=1

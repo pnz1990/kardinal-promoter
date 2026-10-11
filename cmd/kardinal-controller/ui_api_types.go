@@ -109,6 +109,45 @@ type uiPipelineActionRequest struct {
 	Namespace string `json:"namespace,omitempty"`
 }
 
+// uiRejectRequest is the body of POST /api/v1/ui/reject.
+type uiRejectRequest struct {
+	// Bundle is the Bundle to reject.
+	Bundle string `json:"bundle"`
+	// Namespace of the Bundle. Defaults to "default".
+	Namespace string `json:"namespace,omitempty"`
+	// Reason is recorded in spec.rejected and the audit trail. Required.
+	Reason string `json:"reason"`
+}
+
+// uiPipelineOverrideRequest is the body of POST /api/v1/ui/override: the
+// override of a gate template in one environment of a Pipeline, recorded on
+// the instances its in-progress Bundles have (kardinal override).
+type uiPipelineOverrideRequest struct {
+	// Pipeline whose in-progress Bundles' gate instances get the override.
+	Pipeline string `json:"pipeline"`
+	// Namespace of the Pipeline. Defaults to "default".
+	Namespace string `json:"namespace,omitempty"`
+	// Gate is the gate template name (or the name of one gate instance).
+	Gate string `json:"gate"`
+	// Environment is the environment the override applies to. Required.
+	Environment string `json:"environment"`
+	// Reason is recorded on the override and in the audit trail. Required.
+	Reason string `json:"reason"`
+	// ExpiresInMinutes is how long the override lasts, 1 to the cap
+	// (--gate-override-max-minutes). Defaults to 60.
+	ExpiresInMinutes int `json:"expiresInMinutes,omitempty"`
+}
+
+// uiPipelineOverrideResponse is the response of POST /api/v1/ui/override.
+type uiPipelineOverrideResponse struct {
+	// Message describes what was done.
+	Message string `json:"message"`
+	// Gates are the gate instances that got the override.
+	Gates []string `json:"gates"`
+	// ExpiresAt is when the override expires (RFC 3339).
+	ExpiresAt string `json:"expiresAt"`
+}
+
 // uiMessageResponse is the response of an action that creates nothing.
 type uiMessageResponse struct {
 	// Message describes what was done.
@@ -163,4 +202,44 @@ type uiCreateBundleResponse struct {
 	Bundle string `json:"bundle"`
 	// Message describes how to follow it.
 	Message string `json:"message"`
+}
+
+// uiDisplayState is how one API state is shown (pkg/display): the same
+// labels as the CLI.
+type uiDisplayState struct {
+	// Value is the API value, unchanged, for example WaitingForMerge.
+	Value string `json:"value"`
+	// Label is the text a person reads, for example "Waiting for PR merge".
+	Label string `json:"label"`
+	// Glyph is a one-character Unicode symbol for the state.
+	Glyph string `json:"glyph"`
+	// ASCII is the glyph for a surface without Unicode.
+	ASCII string `json:"ascii"`
+	// Tone is the status bucket that picks colour and shape: verified,
+	// promoting, waiting, blocked, failed, superseded, paused, held,
+	// pending, degraded or unknown.
+	Tone string `json:"tone"`
+}
+
+// uiDisplayStates is the response of GET /api/v1/ui/display-states: every
+// known state of each kind, keyed by API value. A value not listed is shown
+// with its CamelCase split into words and tone unknown.
+type uiDisplayStates struct {
+	// Pipeline maps Pipeline status.phase values, and Paused.
+	Pipeline map[string]uiDisplayState `json:"pipeline"`
+	// Bundle maps Bundle status.phase values.
+	Bundle map[string]uiDisplayState `json:"bundle"`
+	// Step maps PromotionStep status.state values, and NotStarted (an
+	// environment not reached yet).
+	Step map[string]uiDisplayState `json:"step"`
+	// SubStep maps the state of a PromotionStep's status.steps[].
+	SubStep map[string]uiDisplayState `json:"substep"`
+	// Gate maps the state of a gate instance (Pass, Block, Waiting, Pending,
+	// Superseded, Rejected).
+	Gate map[string]uiDisplayState `json:"gate"`
+	// HeldByGate is the label of an environment a gate holds; {gate} is the
+	// gate's name. Its tone is blocked.
+	HeldByGate uiDisplayState `json:"heldByGate"`
+	// Held is the label of an environment held by a rollback (rollback --hold).
+	Held uiDisplayState `json:"held"`
 }

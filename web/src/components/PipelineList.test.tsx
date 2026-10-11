@@ -155,10 +155,10 @@ describe('PipelineList — pipeline items', () => {
   // pipeline that a PolicyGate holds reads "Blocked", in the amber of the
   // fleet bar's Blocked badge.
   it.each<[string, Partial<Pipeline>, string, string]>([
-    ['no bundle yet', { phase: 'Unknown' }, 'Idle', 'Unknown'],
-    ['a bundle promoting', { phase: 'Promoting' }, 'Promoting', 'Reconciling'],
-    ['a bundle held by a gate', { phase: 'Promoting', blockerCount: 1 }, 'Blocked', 'Reconciling'],
-    ['every environment verified', { phase: 'Ready' }, 'Ready', 'Ready'],
+    ['no bundle yet', { phase: 'Unknown' }, 'No version yet', 'Unknown'],
+    ['a bundle promoting', { phase: 'Promoting' }, 'Promoting', 'InProgress'],
+    ['a bundle held by a gate', { phase: 'Promoting', blockerCount: 1 }, 'Blocked by a gate', 'InProgress'],
+    ['every environment verified', { phase: 'Ready' }, 'Up to date', 'Ready'],
     ['paused with a bundle held by a gate', { phase: 'Promoting', blockerCount: 1, paused: true }, 'Paused', 'Paused'],
   ])('phase chip for %s', (_, overrides, label, health) => {
     const { container } = render(<PipelineList pipelines={[makePipeline(overrides)]} onSelect={vi.fn()} />)

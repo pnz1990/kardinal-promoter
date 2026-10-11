@@ -235,7 +235,7 @@ kardinal init
 # Apply with: kubectl apply -f pipeline.yaml
 ```
 
-`kardinal init` sets no health check. Without one, kardinal waits for a Deployment named after the Pipeline in a namespace named after the environment (`test`, `uat`, `prod`). The Applications above deploy to `kardinal-test-app-<env>`, so apply the Pipeline below instead. It checks the Argo CD Applications. It is `examples/quickstart/pipeline.yaml` (`kubectl apply -f examples/quickstart/pipeline.yaml` from a checkout) with the Application names written out:
+`kardinal init` sets no health check. Without one, kardinal waits for a Deployment named after the Pipeline in a namespace named after the environment (`test`, `uat`, `prod`). The Applications above deploy to `kardinal-test-app-<env>`, so apply the Pipeline below instead. It checks the Argo CD Applications. It is `examples/quickstart/pipeline.yaml` (`kubectl apply -f examples/quickstart/pipeline.yaml` from a checkout) with the Application names written out. Everything else is a default: each environment follows the one before it, at `environments/<name>` on `main`, updated with kustomize, with `approval: auto` unless set:
 
 ```bash
 cat <<EOF | kubectl apply -f -
@@ -247,40 +247,26 @@ metadata:
 spec:
   git:
     url: https://github.com/pnz1990/kardinal-demo
-    branch: main
-    layout: directory
     secretRef:
       name: github-token
   environments:
     - name: test
-      path: environments/test
-      update:
-        strategy: kustomize
-      approval: auto
       health:
         type: argocd
         argocd:
           name: kardinal-test-app-test
     - name: uat
-      path: environments/uat
-      update:
-        strategy: kustomize
-      approval: auto
       health:
         type: argocd
         argocd:
           name: kardinal-test-app-uat
     - name: prod
-      path: environments/prod
-      update:
-        strategy: kustomize
       approval: pr-review
       health:
         type: argocd
         argocd:
           name: kardinal-test-app-prod
         timeout: 15m
-  historyLimit: 20
 EOF
 ```
 
@@ -344,7 +330,7 @@ The promotion starts immediately. kardinal-promoter generates a Graph and begins
 # Watch the pipeline status
 kardinal get pipelines
 # PIPELINE            BUNDLE                    TEST       UAT              PROD      SUB   AGE
-# kardinal-test-app   kardinal-test-app-x7k2p   Verified   HealthChecking   Waiting   0     2m
+# kardinal-test-app   kardinal-test-app-x7k2p   Live   Checking health   Not reached   0     2m
 
 # See the steps of the active Bundle
 kardinal get steps kardinal-test-app
@@ -361,7 +347,7 @@ kardinal explain kardinal-test-app --env prod
 # No promotion for "prod" in pipeline "kardinal-test-app" yet
 ```
 
-!!! tip "Troubleshooting: Test stuck in HealthChecking"
+!!! tip "Troubleshooting: Test stuck in Checking health"
     If the test environment stays in `HealthChecking` for more than a few minutes:
     ```bash
     kubectl get deployment kardinal-test-app -n kardinal-test-app-test
@@ -397,7 +383,7 @@ The PR body contains:
 ```bash
 kardinal get pipelines
 # PIPELINE            BUNDLE                    TEST       UAT        PROD       SUB   AGE
-# kardinal-test-app   kardinal-test-app-x7k2p   Verified   Verified   Verified   0     8m
+# kardinal-test-app   kardinal-test-app-x7k2p   Live   Live   Live   0     8m
 ```
 
 The promotion is complete.
@@ -418,7 +404,6 @@ metadata:
   labels:
     kardinal.io/scope: org
     kardinal.io/applies-to: prod
-    kardinal.io/type: gate
 spec:
   expression: "!schedule.isWeekend"
   message: "Production deployments are blocked on weekends"

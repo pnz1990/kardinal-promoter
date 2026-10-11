@@ -248,9 +248,15 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	if _, err := fmt.Fprintln(tw, "ENVIRONMENT\tBUNDLE\tTYPE\tNAME\tSTATE\tEXPRESSION\tREASON"); err != nil {
 		return fmt.Errorf("write explain header: %w", err)
 	}
+	label := func(row explainRow) string {
+		if row.kind == "PolicyGate" {
+			return gateLabel(row.state)
+		}
+		return stepLabel(row.state)
+	}
 	for _, row := range rows {
 		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			row.environment, row.bundle, row.kind, row.name, row.state, row.expression, row.reason,
+			row.environment, row.bundle, row.kind, row.name, label(row), row.expression, row.reason,
 		); err != nil {
 			return fmt.Errorf("write explain row: %w", err)
 		}
@@ -267,8 +273,9 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		col := strings.Index(lines[0], "STATE")
 		for i, row := range rows {
 			line := lines[i+1]
-			if col >= 0 && len(line) > col && strings.HasPrefix(line[col:], row.state) {
-				lines[i+1] = line[:col] + cr.colorState(row.state) + line[col+len(row.state):]
+			text := label(row)
+			if col >= 0 && len(line) > col && strings.HasPrefix(line[col:], text) {
+				lines[i+1] = line[:col] + cr.colorStateText(row.state, text) + line[col+len(text):]
 			}
 		}
 		output = strings.Join(lines, "")

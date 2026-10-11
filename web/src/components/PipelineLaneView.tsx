@@ -62,7 +62,7 @@ function stageAccentColor(state: string): string {
     case 'Ready':       return 'var(--color-success)'
     case 'Error':       return 'var(--color-error)'
     case 'Degraded':    return 'var(--color-degraded)'
-    case 'Reconciling': return 'var(--color-warning)'
+    case 'InProgress': return 'var(--color-warning)'
     default:            return 'var(--color-text-muted)'
   }
 }
@@ -81,9 +81,9 @@ export function laneStages(nodes: GraphNode[], edges: GraphEdge[]): GraphNode[][
 }
 
 /** Health states in the order a wave card lists them, most urgent first. */
-const WAVE_HEALTH_ORDER = ['Error', 'Degraded', 'Reconciling', 'Pending', 'Ready', 'Unknown'] as const
+const WAVE_HEALTH_ORDER = ['Error', 'Degraded', 'InProgress', 'Pending', 'Ready', 'Unknown'] as const
 const WAVE_HEALTH_LABEL: Record<string, string> = {
-  Error: 'failed', Degraded: 'degraded', Reconciling: 'in progress', Pending: 'not started', Ready: 'verified', Unknown: 'unknown',
+  Error: 'failed', Degraded: 'degraded', InProgress: 'in progress', Pending: 'not started', Ready: 'verified', Unknown: 'unknown',
 }
 
 /** Counts of a wave's nodes by health state, most urgent first. */
@@ -207,7 +207,7 @@ export function PipelineLaneView({
         {activeBundleName && (
           <div style={{
             fontSize: '0.65rem',
-            fontFamily: 'monospace',
+            fontFamily: 'var(--k-font-mono)',
             color: 'var(--color-text-muted)',
             overflow: 'hidden',
             textOverflow: 'ellipsis',

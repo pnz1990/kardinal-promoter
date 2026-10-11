@@ -160,7 +160,7 @@ func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
 				p.Spec.Environments[0].Regions = []string{"us-east-1", "eu-west-1"} //nolint:staticcheck // SA1019: tests the rejection
 			}},
 		// #1321: distributed mode was removed, so a shard is rejected.
-		{name: "shard", wantMsg: `environment "test": shard is not supported: distributed mode was removed`,
+		{name: "shard", wantMsg: `environment "test": shard is not supported; remove shard`,
 			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Shard = "eu" }}, //nolint:staticcheck // SA1019: tests the rejection
 		{name: "autoRollback", wantMsg: "autoRollback is not implemented",
 			mutate: func(p *kardinalv1alpha1.Pipeline) {
