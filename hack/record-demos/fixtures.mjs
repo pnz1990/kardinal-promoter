@@ -51,6 +51,20 @@ function sha(seed) {
   return (h.toString(16).padStart(8, '0') + 'c0ffee5e1ec7ab1e5eed0123456789abcdef').slice(0, 40)
 }
 
+/**
+ * status.summary as pkg/reconciler/pipeline Summarize writes it: one clause per version and
+ * state ("<version> <label, lowercased> in <envs>"), the version said once while it repeats,
+ * clauses joined by "; ".
+ */
+function summarize(clauses) {
+  let last = ''
+  return clauses.map(([version, what, envs]) => {
+    const s = `${version === last ? '' : `${version} `}${what} in ${envs.join(', ')}`
+    last = version
+    return s
+  }).join('; ')
+}
+
 const deployed = (bundleName, version, minutesAgo) => ({ bundle: bundleName, version, verifiedAt: ago(minutesAgo * MIN) })
 
 /** Edge points-of-presence for the big fleet. */
@@ -117,7 +131,7 @@ export function createFixtures({ big = false } = {}) {
     pipelines: [
       pipeline('checkout', {
         phase: 'Promoting', environmentCount: 4, activeBundleName: co180.name, activeBundleVersion: '1.8.0', blockerCount: 2,
-        summary: '1.8.0 Live in test, uat; held by a gate in prod-eu, prod-us',
+        summary: summarize([['1.8.0', 'live', ['test', 'uat']], ['1.8.0', 'held by gate release-approval', ['prod-eu']], ['1.8.0', 'held by gate uat-soak', ['prod-us']]]),
         environmentStates: { test: 'Verified', uat: 'Verified', 'prod-eu': 'Pending', 'prod-us': 'Pending' },
         environmentTopology: [env('test', []), env('uat', ['test']), env('prod-eu', ['uat']), env('prod-us', ['uat'])],
         deployed: {
@@ -128,7 +142,7 @@ export function createFixtures({ big = false } = {}) {
       }),
       pipeline('storefront', {
         environmentCount: 3, activeBundleName: sf230.name, activeBundleVersion: '2.3.0',
-        summary: '2.3.0 Live in test, staging, prod',
+        summary: summarize([['2.3.0', 'live', ['test', 'staging', 'prod']]]),
         environmentStates: { test: 'Verified', staging: 'Verified', prod: 'Verified' },
         environmentTopology: [env('test', []), env('staging', ['test']), env('prod', ['staging'])],
         deployed: { test: deployed(sf230.name, '2.3.0', 170), staging: deployed(sf230.name, '2.3.0', 150), prod: deployed(sf230.name, '2.3.0', 120) },
@@ -136,7 +150,7 @@ export function createFixtures({ big = false } = {}) {
       }),
       pipeline('search', {
         phase: 'Degraded', environmentCount: 2, activeBundleName: se410.name, activeBundleVersion: '4.1.0', failedStepCount: 1,
-        summary: '4.1.0 Live in test; Failed in prod',
+        summary: summarize([['4.1.0', 'live', ['test']], ['4.1.0', 'failed', ['prod']]]),
         environmentStates: { test: 'Verified', prod: 'Failed' },
         environmentTopology: [env('test', []), env('prod', ['test'])],
         deployed: { test: deployed(se410.name, '4.1.0', 70), prod: deployed('search-4-0-3', '4.0.3', 4 * 24 * 60) },
@@ -207,7 +221,7 @@ export function createFixtures({ big = false } = {}) {
   if (big) {
     state.pipelines.push(pipeline('edge-cdn', {
       phase: 'Promoting', environmentCount: 2, activeBundleName: edge.name, activeBundleVersion: '7.2.0',
-      summary: `7.2.0 Live in canary and 27 of ${targets.length} points of presence; 5 promoting`,
+      summary: summarize([['7.2.0', 'live', ['canary', ...targets.slice(0, 27)]], ['7.2.0', 'promoting', targets.slice(27, 32)], ['7.2.0', 'queued', targets.slice(32)]]),
       environmentStates: edgeStates,
       environmentTopology: [env('canary', []), env('pops', ['canary'], { fleet: { targets, maxConcurrent: 5, maxUnavailable: 2 } })],
       deployed: Object.fromEntries(Object.entries(edgeStates).filter(([, s]) => s === 'Verified').map(([e], i) => [e, deployed(edge.name, '7.2.0', 30 - (i % 25))])),
@@ -218,7 +232,7 @@ export function createFixtures({ big = false } = {}) {
       state.bundles[name] = [b]
       state.pipelines.push(pipeline(name, {
         environmentCount: 3, activeBundleName: b.name, activeBundleVersion: version,
-        summary: `${version} Live in test, staging, prod`,
+        summary: summarize([[version, 'live', ['test', 'staging', 'prod']]]),
         environmentStates: { test: 'Verified', staging: 'Verified', prod: i % 5 === 2 ? 'WaitingForMerge' : 'Verified' },
         environmentTopology: [env('test', []), env('staging', ['test']), env('prod', ['staging'])],
         deployed: { test: deployed(b.name, version, 50 + i * 40), staging: deployed(b.name, version, 40 + i * 40), prod: deployed(b.name, version, 30 + i * 40) },
@@ -280,7 +294,7 @@ function approve(state, { bundle: bundleName, environment, decision = 'approve' 
       if (p) {
         p.blockerCount = Math.max(0, (p.blockerCount ?? 1) - 1)
         p.environmentStates = { ...p.environmentStates, [environment]: 'Promoting' }
-        p.summary = '1.8.0 Live in test, uat; Promoting in prod-eu; held by a gate in prod-us'
+        p.summary = summarize([['1.8.0', 'live', ['test', 'uat']], ['1.8.0', 'promoting', ['prod-eu']], ['1.8.0', 'held by gate uat-soak', ['prod-us']]])
       }
     }
   }
