@@ -32,7 +32,7 @@ kardinal rollback <pipeline> <env> [flags]
       --hold                       Keep the environment on the rollback until kardinal unhold; the rollback passes blocking gates, each pass audited
       --hold-expires-in duration   End the hold this long after it is made (30m, 24h, 2d); default: until kardinal unhold
       --reason string              Why the environment is held (required with --hold)
-      --to string                  The Bundle to roll back to (default: the version Verified there before)
+      --to string                  The Bundle, or version (image tag), to roll back to (default: the version Verified there before)
       --yes                        Do not ask for confirmation on a terminal
 ```
 
