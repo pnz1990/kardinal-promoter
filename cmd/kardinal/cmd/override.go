@@ -41,7 +41,7 @@ func newOverrideCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "override <pipeline> [<env>] --gate <gate> --reason <text>",
 		Short: "Force-pass a PolicyGate with a mandatory audit record",
-		Long: `Make --gate pass for the in-progress Bundles of <pipeline> (in <env>, or every
+		Long: `Make --gate pass for the in-progress versions of <pipeline> (in <env>, or every
 environment), until --expires-in (default 1h). The override is recorded in the
 gate's spec.overrides[] under your Kubernetes username, with a GateOverridden
 AuditEvent; it applies to the gate instances that exist now, so run it while

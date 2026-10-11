@@ -30,7 +30,7 @@ kardinal rollback <pipeline> <env> [flags]
   -e, --env string                 Environment to roll back (or give it after the pipeline)
   -h, --help                       help for rollback
       --hold                       Keep the environment on the rollback until kardinal unhold; the rollback passes blocking gates, each pass audited
-      --hold-expires-in duration   End the hold this long after it is made (30m, 24h, 2d); default: until kardinal release-hold
+      --hold-expires-in duration   End the hold this long after it is made (30m, 24h, 2d); default: until kardinal unhold
       --reason string              Why the environment is held (required with --hold)
       --to string                  The Bundle to roll back to (default: the version Verified there before)
       --yes                        Do not ask for confirmation on a terminal
@@ -42,7 +42,7 @@ kardinal rollback <pipeline> <env> [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, promote, rollback, ship, status, unhold, why; wide: status, why)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, promote, rollback, ship, status, unhold, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO

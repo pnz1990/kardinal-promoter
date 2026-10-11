@@ -692,8 +692,14 @@ func TestSub_Status(t *testing.T) {
 		}
 	}
 	require.Len(t, mine, 2, "both Subscriptions of %s are listed:\n%s", a.ns, out)
-	assert.Regexp(t, `^`+a.ns+`\s+ok\s+image\s+`+pipelineName+`\s+Watching\s+\S+ ago\s+`+regexp.QuoteMeta(framework.VersionCell("6.14.0", bundle))+`\s+\S+$`, mine["ok"])
+	assert.Regexp(t, `^`+a.ns+`\s+ok\s+image\s+`+pipelineName+`\s+Watching\s+\S+ ago\s+6\.14\.0\s+\S+$`, mine["ok"])
 	assert.Regexp(t, `^`+a.ns+`\s+broken\s+image\s+`+pipelineName+`\s+Error\s+\S+ ago\s+-\s+\S+$`, mine["broken"])
+
+	// -o wide adds the Bundle's name.
+	wide := e.MustKardinal(t, a.ns, "get", "subscriptions", "-o", "wide")
+	assert.Equal(t, []string{"NAME", "TYPE", "PIPELINE", "PHASE", "LAST-CHECK", "LAST-VERSION", "LAST-BUNDLE", "AGE"},
+		strings.Fields(strings.SplitN(wide, "\n", 2)[0]))
+	assert.Regexp(t, `(?m)^ok\s+image\s+`+pipelineName+`\s+Watching\s+\S+ ago\s+6\.14\.0\s+`+regexp.QuoteMeta(bundle)+`\s+\S+$`, wide)
 }
 
 // TestSub_Namespace checks that spec.namespace naming another namespace

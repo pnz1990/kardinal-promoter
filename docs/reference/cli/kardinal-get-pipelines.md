@@ -4,7 +4,7 @@ List Pipelines
 
 ### Synopsis
 
-List Pipelines with the state of their current Bundle in each environment, in
+List Pipelines with the state of their current version in each environment, in
 DAG order (wide pipelines get one summary row each: kardinal get pipelines
 <name> shows every environment). A failed build prints an ERROR: line with its
 cause after the table. -w refreshes it.
@@ -74,7 +74,7 @@ kardinal get pipelines [name] [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, promote, rollback, ship, status, unhold, why; wide: status, why)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, promote, rollback, ship, status, unhold, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO

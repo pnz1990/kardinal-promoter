@@ -4,7 +4,7 @@ Reject a version: it is never promoted again, and rollback never picks it
 
 ### Synopsis
 
-Reject a Bundle for good, with --reason, in your Kubernetes name. Steps that
+Reject a version for good, with --reason, in your Kubernetes name. Steps that
 have not delivered it yet fail and their PRs close; steps whose change is live
 finish their health check. Rollback, promote and Subscriptions never pick it
 again. It does not revert an environment: use kardinal rollback for that.
@@ -40,7 +40,7 @@ kardinal reject <bundle> [flags]
 
 ```
   -h, --help            help for reject
-      --reason string   Why the Bundle is rejected (required)
+      --reason string   Why the version is rejected (required)
       --yes             Do not ask for confirmation on a terminal
 ```
 
@@ -50,7 +50,7 @@ kardinal reject <bundle> [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, promote, rollback, ship, status, unhold, why; wide: status, why)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, promote, rollback, ship, status, unhold, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO

@@ -4,7 +4,7 @@ Force-pass a PolicyGate with a mandatory audit record
 
 ### Synopsis
 
-Make --gate pass for the in-progress Bundles of <pipeline> (in <env>, or every
+Make --gate pass for the in-progress versions of <pipeline> (in <env>, or every
 environment), until --expires-in (default 1h). The override is recorded in the
 gate's spec.overrides[] under your Kubernetes username, with a GateOverridden
 AuditEvent; it applies to the gate instances that exist now, so run it while
@@ -40,7 +40,7 @@ kardinal override <pipeline> [<env>] --gate <gate> --reason <text> [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, promote, rollback, ship, status, unhold, why; wide: status, why)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, promote, rollback, ship, status, unhold, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO

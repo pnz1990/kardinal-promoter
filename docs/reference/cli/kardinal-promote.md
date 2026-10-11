@@ -4,7 +4,7 @@ Promote the version verified upstream into an environment
 
 ### Synopsis
 
-Promote the newest Bundle that is Verified in every upstream environment
+Promote the newest version that is Verified in every upstream environment
 into <env>, as a new Bundle that targets it; gates and approval apply.
 It refuses, creating nothing, when nothing is Verified upstream yet, when
 that Bundle is already in <env>, or when a newer Bundle is still promoting.
@@ -37,7 +37,7 @@ kardinal promote <pipeline> <env> [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, promote, rollback, ship, status, unhold, why; wide: status, why)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, promote, rollback, ship, status, unhold, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO

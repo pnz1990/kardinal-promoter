@@ -170,7 +170,7 @@ func checkOutputFlag(cmd *cobra.Command) error {
 		}
 		return fmt.Errorf("-o %s is not supported by %q; it prints a table", globalOutput, cmd.CommandPath())
 	default:
-		return fmt.Errorf("invalid -o %q: must be table, json or yaml", globalOutput)
+		return fmt.Errorf("invalid -o %q: must be table, json, yaml or wide", globalOutput)
 	}
 }
 

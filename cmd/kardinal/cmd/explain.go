@@ -499,8 +499,8 @@ image Bundle and a config commit landed before it, the line adds
 "; images <tags> from <bundle>". "deployed: none" means no change has landed
 there yet.
 
-    prod   deployed: app-v1 (sha-1a2b3c4)
-    uat    deployed: app-v2 (sha-5d6e7f8); config 9f8e7d6 from app-cfg1
+    prod   deployed: sha-1a2b3c4 (app-v1)
+    uat    deployed: sha-5d6e7f8 (app-v2); config 9f8e7d6 from app-cfg1
 
 A gate's STATE is the one the UI shows, the first that applies:
 

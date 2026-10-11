@@ -351,7 +351,7 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 		assert.Equal(t, b1, en.Bundle, "explain -o json: %+v", en)
 	}
 	r = c.Fail(a.ns, "get", "bundles", "-o", "xml")
-	assert.Equal(t, "invalid -o \"xml\": must be table, json or yaml\n", r.Stderr)
+	assert.Equal(t, "invalid -o \"xml\": must be table, json, yaml or wide\n", r.Stderr)
 	sameTable(t, bt, c.Must(a.ns, "get", "bundles", "-o", "table"), "-o table is the default")
 
 	// A newer Bundle supersedes the first. create bundle -o json names it

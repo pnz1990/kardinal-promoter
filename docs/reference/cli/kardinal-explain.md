@@ -33,8 +33,8 @@ image Bundle and a config commit landed before it, the line adds
 "; images <tags> from <bundle>". "deployed: none" means no change has landed
 there yet.
 
-    prod   deployed: app-v1 (sha-1a2b3c4)
-    uat    deployed: app-v2 (sha-5d6e7f8); config 9f8e7d6 from app-cfg1
+    prod   deployed: sha-1a2b3c4 (app-v1)
+    uat    deployed: sha-5d6e7f8 (app-v2); config 9f8e7d6 from app-cfg1
 
 A gate's STATE is the one the UI shows, the first that applies:
 
@@ -74,7 +74,7 @@ kardinal explain <pipeline> [<env>] [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, promote, rollback, ship, status, unhold, why; wide: status, why)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, promote, rollback, ship, status, unhold, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO

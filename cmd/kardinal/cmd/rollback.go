@@ -99,7 +99,7 @@ blocking gates pass as audited exemptions meanwhile. See docs/rollback.md.`,
 	cmd.Flags().BoolVar(&holdFlag, "hold", false,
 		"Keep the environment on the rollback until kardinal unhold; the rollback passes blocking gates, each pass audited")
 	cmd.Flags().StringVar(&reasonFlag, "reason", "", "Why the environment is held (required with --hold)")
-	cmd.Flags().Var(durationValue{&expiresFlag}, "hold-expires-in", "End the hold this long after it is made (30m, 24h, 2d); default: until kardinal release-hold")
+	cmd.Flags().Var(durationValue{&expiresFlag}, "hold-expires-in", "End the hold this long after it is made (30m, 24h, 2d); default: until kardinal unhold")
 	// Deprecated: --emergency never bypassed a gate and has no effect; use
 	// `kardinal override` to pass a blocking gate. Deleted in the next minor
 	// release (#1288).

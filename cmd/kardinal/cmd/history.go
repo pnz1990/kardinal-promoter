@@ -38,8 +38,8 @@ func newHistoryCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "history <pipeline> [<env>]",
 		Short: "Show a pipeline's promotion history, newest first",
-		Long: `Show which Bundles were promoted to (or rolled back in) each environment of
-<pipeline>, newest first: the Bundle, promote or rollback, the environment,
+		Long: `Show which versions were promoted to (or rolled back in) each environment of
+<pipeline>, newest first: the version, promote or rollback, the environment,
 the PR, how long it took, and when it started.`,
 		Example: `  kardinal history my-app
   kardinal history my-app prod --limit 5`,
