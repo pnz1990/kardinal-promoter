@@ -231,11 +231,11 @@ describe('PolicyGatesPanel — the approve command names the version', () => {
   const gate = makeGate({ name: 'ok--app-1-prod', gateTemplate: 'ok', pipeline: 'app', bundle: 'app-1', environment: 'prod', state: 'Block', holding: true,
     ready: false, approval: { required: 2, approved: 1, decisions: [] } })
   it('uses kardinal approve <pipeline> <env> for the Bundle on its way in', () => {
-    render(<PolicyGatesPanel gates={[gate]} incomingFor={() => 'app-1'} />)
+    render(<PolicyGatesPanel gates={[gate]} currentBundle="app-1" />)
     expect(screen.getByText('kardinal approve app prod')).toBeInTheDocument()
   })
   it('names the Bundle when another one is on its way in', () => {
-    render(<PolicyGatesPanel gates={[gate]} incomingFor={() => 'app-2'} />)
+    render(<PolicyGatesPanel gates={[gate]} currentBundle="app-2" />)
     expect(screen.getByText('kardinal approve app-1 --env prod')).toBeInTheDocument()
   })
 })
