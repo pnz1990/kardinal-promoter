@@ -108,7 +108,7 @@ export function PipelineActionDialog({ kind, pipelineName, environment, namespac
           {hold && (
             <>
               <p className="hold-option__note">
-                No other bundle promotes into {environment} until the hold is released. Gates of {environment} that
+                No other version promotes into {environment} until the hold is released. Gates of {environment} that
                 would block the rollback pass as EXEMPT while the controller verifies it restores what was
                 verified there, each pass recorded with your name and reason.
               </p>
