@@ -144,7 +144,7 @@ func main() {
 	// Workers per controller: one object is never reconciled twice at once
 	// (the work queue serializes it), so these only let different objects
 	// run side by side. The defaults are measured with the scale suite
-	// (docs/installation.md, Controller concurrency).
+	// (docs/operate.md, Controller concurrency).
 	for _, w := range []struct {
 		name string
 		def  int
@@ -196,7 +196,7 @@ func main() {
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081",
 		"The address the probe endpoint binds to.")
 	flag.Float64Var(&eventLimit.QPS, "event-qps", kubeevent.DefaultQPS,
-		"Most Normal Kubernetes Events the controller writes a second (one bucket for all namespaces); Events over the rate are dropped and counted in kardinal_events_dropped_total. Events are best effort: docs/installation.md (Kubernetes Events) lists each Warning's durable record. 0 removes the limit.")
+		"Most Normal Kubernetes Events the controller writes a second (one bucket for all namespaces); Events over the rate are dropped and counted in kardinal_events_dropped_total. Events are best effort: docs/operate.md (Kubernetes Events) lists each Warning's durable record. 0 removes the limit.")
 	flag.IntVar(&eventLimit.Burst, "event-burst", kubeevent.DefaultBurst,
 		"Most Normal Kubernetes Events the controller writes at once, above --event-qps.")
 	flag.Float64Var(&eventWarningLimit.QPS, "event-warning-qps", kubeevent.DefaultWarningQPS,

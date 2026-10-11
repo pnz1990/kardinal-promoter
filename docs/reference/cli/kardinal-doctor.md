@@ -9,11 +9,14 @@ CRDs are installed, kro and its Graph CRD run, and the controller has an SCM
 token. --pipeline also checks one Pipeline. Run it first when something is
 wrong.
 
-✅ Controller reachable      kardinal-version ConfigMap in the controller namespace
-  ✅ CRDs installed            every kardinal.io/v1alpha1 resource served
-  ✅ kro running               kro controller pod in kro-system
-  ✅ kro Graph CRD installed   kro.run/v1alpha1 graphs registered
-  ✅ GitHub token              GITHUB_TOKEN set on the controller Deployment
+PASS  Controller reachable      kardinal-version ConfigMap in the controller namespace
+  PASS  CRDs installed            every kardinal.io/v1alpha1 resource served
+  PASS  kro running               kro controller pod in kro-system
+  PASS  kro Graph CRD installed   kro.run/v1alpha1 graphs registered
+  PASS  GitHub token              GITHUB_TOKEN set on the controller Deployment
+
+Each check is PASS, WARN or FAIL (on a terminal a green ✓, an ochre ! or a
+garnet ✕).
 
 The token check is named after the controller's --scm-provider (GitHub token,
 GitLab token, Forgejo token, Gitea token, Bitbucket token or Azure DevOps
@@ -50,7 +53,7 @@ kardinal doctor [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: get auditevents, bundles, pipelines, steps, subscriptions)
+  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
 ```
 
 ### SEE ALSO

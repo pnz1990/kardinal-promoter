@@ -18,10 +18,10 @@ const LABELS: Record<string, string> = {
 
 /** What a screen reader hears. */
 const SPOKEN: Record<string, string> = {
-  image: 'image Bundle',
-  config: 'config Bundle',
-  mixed: 'image and config Bundle',
-  chart: 'Helm chart Bundle',
+  image: 'image version',
+  config: 'config version',
+  mixed: 'image and config version',
+  chart: 'Helm chart version',
 }
 
 export function bundleTypeLabel(type: string | undefined): string {
@@ -43,7 +43,7 @@ export function BundleTypeBadge({ type, compact }: Props) {
       className={`bundle-type${compact ? ' bundle-type--compact' : ''}`}
       data-bundle-type={LABELS[t] ? t : 'other'}
       role="img"
-      aria-label={SPOKEN[t] ?? `${t} Bundle`}
+      aria-label={SPOKEN[t] ?? `${t} version`}
     >
       {bundleTypeLabel(t)}
     </span>

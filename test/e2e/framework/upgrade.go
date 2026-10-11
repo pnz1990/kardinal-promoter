@@ -80,47 +80,33 @@ func ManifestObjects(t *testing.T, manifest string) map[string]bool {
 	return objs
 }
 
-// UpgradeGuide is the "Upgrading from v0.8.1" section of docs/installation.md
-// in the checkout, up to the next level-2 heading.
+// UpgradeGuide is the "Upgrading from v0.8.1" section of docs/upgrade.md in
+// the checkout, up to the next heading of its level or above.
 func UpgradeGuide(t *testing.T) string {
 	t.Helper()
-	doc, err := os.ReadFile(filepath.Join(RepoRoot(t), "docs", "installation.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	const heading = "### Upgrading from v0.8.1"
-	s := string(doc)
-	i := strings.Index(s, heading)
-	if i < 0 {
-		t.Fatalf("docs/installation.md has no %q", heading)
-	}
-	s = s[i:]
-	if j := strings.Index(s, "\n## "); j >= 0 {
-		s = s[:j]
-	}
-	return s
+	return UpgradeGuideFrom(t, "0.8.1")
 }
 
 // UpgradeGuideFrom is the "Upgrading from v<version>" section of
-// docs/installation.md in the checkout, up to the next heading of its level
+// docs/upgrade.md in the checkout, up to the next heading of its level
 // or above.
 func UpgradeGuideFrom(t *testing.T, version string) string {
 	t.Helper()
-	doc, err := os.ReadFile(filepath.Join(RepoRoot(t), "docs", "installation.md"))
+	doc, err := os.ReadFile(filepath.Join(RepoRoot(t), "docs", "upgrade.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	heading := "### Upgrading from v" + version
+	heading := "## Upgrading from v" + version
 	s := string(doc)
 	i := strings.Index(s, heading+"\n")
 	if i < 0 {
-		t.Fatalf("docs/installation.md has no %q", heading)
+		t.Fatalf("docs/upgrade.md has no %q", heading)
 	}
 	s = s[i+len(heading):]
-	for _, next := range []string{"\n### ", "\n## "} {
-		if j := strings.Index(s, next); j >= 0 {
-			s = s[:j]
-		}
+	// The page's only level-1 heading is its title, and "# " starts shell
+	// comments in the code blocks, so a section ends at the next "## ".
+	if j := strings.Index(s, "\n## "); j >= 0 {
+		s = s[:j]
 	}
 	return heading + s
 }

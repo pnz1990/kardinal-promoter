@@ -33,8 +33,11 @@ test('Override gate in the stage drawer asks first, then overrides the gate in p
   await expect(drawerHeading(page)).toHaveText('prod')
   const why = drawer.locator('[data-section="why"] .stage-why__item').filter({ hasText: `Held by gate ${holdGate}.` })
   await expect(why).toBeVisible()
-  await why.getByText('Details', { exact: true }).click()
-  await expect(why).toContainText(`Gate instance ${holdInstance} in ${ns}`)
+  // The gate's object, for kubectl, is under Kubernetes details (U4).
+  const k8s = why.locator('details.k-k8s')
+  await expect(k8s).toContainText('KindPolicyGate')
+  await expect(k8s).toContainText(holdInstance)
+  await expect(k8s).toContainText(ns)
 
   // Cancel writes nothing.
   await why.getByRole('button', { name: 'Override gate' }).click()

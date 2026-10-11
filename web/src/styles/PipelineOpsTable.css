@@ -18,11 +18,7 @@
   font-size: var(--k-text-md);
 }
 
-.ops-table__error {
-  padding: var(--k-space-4);
-  color: var(--k-status-failed-fg);
-  font-size: var(--k-text-sm);
-}
+.ops-table__error { margin: var(--k-space-4); }
 
 .ops-table__filter-bar {
   display: flex;

@@ -54,7 +54,6 @@
 .dag-view__edge { fill: none; stroke: var(--k-ink-3); stroke-width: var(--k-border-strong); }
 .dag-view__arrowhead { fill: var(--k-ink-3); }
 .dag-view__message { padding: var(--k-space-8); color: var(--k-ink-2); }
-.dag-view__message--error { color: var(--k-status-failed-fg); }
 
 /* #335: loading skeleton */
 .dag-view__skeleton { padding: var(--k-space-8); }

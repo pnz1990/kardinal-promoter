@@ -24,7 +24,7 @@ reason. The Bundle turns Rejected, whatever its phase:
 
 Rejecting is final: spec.rejected cannot be changed or removed. It does not
 revert an environment that already runs the Bundle; roll that environment
-back with kardinal rollback. See docs/rollback.md.
+back with kardinal rollback. See docs/reject.md.
 
 ```
 kardinal reject <bundle> [flags]
@@ -49,7 +49,7 @@ kardinal reject <bundle> [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: get auditevents, bundles, pipelines, steps, subscriptions)
+  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
 ```
 
 ### SEE ALSO

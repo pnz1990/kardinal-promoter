@@ -267,5 +267,5 @@ you don't need.
 - [Concepts](concepts.md) — kardinal-promoter's core model
 - [Policy Gates](policy-gates.md) — CEL expression reference
 - [Architecture](architecture.md) — system design
-- [FAQ](faq.md) — common questions
+- [FAQ](troubleshooting.md#common-questions) — common questions
 - [Migrating from Kargo](guides/migrating-from-kargo.md) — concept mapping and a migration walkthrough

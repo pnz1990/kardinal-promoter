@@ -9,6 +9,7 @@
 // two bundles are always created at different times.
 //
 // Adapted from kro-ui InstanceTable.tsx SpecDiffPanel pattern.
+import { displayState } from '../displayStates.gen'
 import { useRef } from 'react'
 import type { Bundle, ImageRef } from '../types'
 import { useModalFocus } from '../useModalFocus'
@@ -42,7 +43,7 @@ function imagesOf(b: Bundle): string | null {
 }
 
 function environmentsOf(b: Bundle): string | null {
-  const envs = (b.environments ?? []).map(e => `${e.name}: ${e.phase || 'Pending'}`)
+  const envs = (b.environments ?? []).map(e => `${e.name}: ${displayState('step', e.phase || 'Pending').label}`)
   return envs.length ? envs.join('\n') : null
 }
 
@@ -60,9 +61,9 @@ export function buildRows(a: Bundle, b: Bundle): FieldRow[] {
     { label: 'Images', valueA: imagesA, valueB: imagesB, changed: imagesA !== imagesB, full: true },
     { label: 'Environments', valueA: envsA, valueB: envsB, changed: envsA !== envsB, full: true },
     {
-      label: 'Phase',
-      valueA: a.phase ?? null,
-      valueB: b.phase ?? null,
+      label: 'State',
+      valueA: a.phase ? displayState('bundle', a.phase).label : null,
+      valueB: b.phase ? displayState('bundle', b.phase).label : null,
       changed: a.phase !== b.phase,
     },
     {
@@ -111,15 +112,15 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label="Bundle comparison"
+      aria-label="Version comparison"
     >
       <div ref={panelRef} onClick={e => e.stopPropagation()} className="k-dialog bundle-diff">
         {/* Header */}
         <div className="bundle-diff__header">
           <div>
-            <h2 className="bundle-diff__title">Bundle Comparison</h2>
+            <h2 className="bundle-diff__title">Compare versions</h2>
             <p className="bundle-diff__summary">
-              {changedCount === 1 ? '1 field differs' : `${changedCount} fields differ`} between these bundles
+              {changedCount === 1 ? '1 field differs' : `${changedCount} fields differ`} between these versions
             </p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close comparison" className="k-icon-button k-icon-button--sm">×</button>
@@ -128,8 +129,8 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
         {/* Column headers */}
         <div className="bundle-diff__row bundle-diff__row--heads">
           <div />
-          <div className="bundle-diff__col-head">Bundle A</div>
-          <div className="bundle-diff__col-head">Bundle B</div>
+          <div className="bundle-diff__col-head">Version A</div>
+          <div className="bundle-diff__col-head">Version B</div>
         </div>
 
         {/* Bundle names */}
@@ -152,7 +153,7 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
 
         {changedCount === 0 && (
           <p className="bundle-diff__same">
-            ✓ No differences found between these bundles.
+            ✓ No differences found between these versions.
           </p>
         )}
 

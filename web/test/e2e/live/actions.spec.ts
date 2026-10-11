@@ -94,10 +94,10 @@ const steps: Record<string, () => void> = {
 
     await lane(page).getByRole('button', { name: 'Promote to prod' }).click()
     const dialog = page.getByRole('dialog', { name: `Promote ${PIPELINE} to prod?` })
-    await expect(dialog).toHaveAccessibleDescription(`Creates a new bundle for ${PIPELINE} that targets prod. Its progress shows in the bundle timeline.`)
+    await expect(dialog).toHaveAccessibleDescription(`Starts a new promotion of ${PIPELINE} to prod. Its progress shows on the map.`)
     await dialog.getByRole('button', { name: 'Promote to prod' }).click()
     await expect(dialog).toHaveCount(0)
-    await expect(page.getByRole('status').filter({ hasText: 'Promotion started' })).toHaveText(/^Promotion started: bundle podinfo-[a-z0-9-]+$/)
+    await expect(page.getByRole('status').filter({ hasText: 'Promotion started' })).toHaveText(/^Promotion started: version podinfo-[a-z0-9-]+$/)
   }),
 
   rollback: () => test('Roll back in the stage drawer asks first, then rolls prod back', async ({ page }) => {

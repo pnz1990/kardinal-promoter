@@ -54,7 +54,7 @@ describe('PolicyGatesPanel — collapsed by default when all pass', () => {
   it('starts collapsed when no gates are blocked', () => {
     const gates = [makeGate({ ready: true })]
     render(<PolicyGatesPanel gates={gates} />)
-    const btn = screen.getByRole('button', { name: /Policy Gates/i })
+    const btn = screen.getByRole('button', { name: /Gates \(\d/ })
     expect(btn).toHaveAttribute('aria-expanded', 'false')
     // Gate expression should not be visible
     expect(screen.queryByText('!schedule.isWeekend')).not.toBeInTheDocument()
@@ -65,7 +65,7 @@ describe('PolicyGatesPanel — auto-expand when blocked (#524)', () => {
   it('starts expanded when any gate is blocked', () => {
     const gates = [makeGate(blocked)]
     render(<PolicyGatesPanel gates={gates} />)
-    const btn = screen.getByRole('button', { name: /Policy Gates/i })
+    const btn = screen.getByRole('button', { name: /Gates \(\d/ })
     expect(btn).toHaveAttribute('aria-expanded', 'true')
   })
 
@@ -87,7 +87,7 @@ describe('PolicyGatesPanel — toggle and content', () => {
     const user = userEvent.setup()
     const gates = [makeGate({ ready: true, expression: '!schedule.isWeekend' })]
     render(<PolicyGatesPanel gates={gates} />)
-    const btn = screen.getByRole('button', { name: /Policy Gates/i })
+    const btn = screen.getByRole('button', { name: /Gates \(\d/ })
     await user.click(btn)
     expect(screen.getByText('!schedule.isWeekend')).toBeInTheDocument()
     expect(btn).toHaveAttribute('aria-expanded', 'true')
@@ -97,7 +97,7 @@ describe('PolicyGatesPanel — toggle and content', () => {
     const user = userEvent.setup()
     const gates = [makeGate(blocked)]
     render(<PolicyGatesPanel gates={gates} />)
-    const btn = screen.getByRole('button', { name: /Policy Gates/i })
+    const btn = screen.getByRole('button', { name: /Gates \(\d/ })
     // initially expanded (blocked gate)
     await user.click(btn)
     expect(btn).toHaveAttribute('aria-expanded', 'false')
@@ -106,7 +106,7 @@ describe('PolicyGatesPanel — toggle and content', () => {
   it('shows gate count in button label', () => {
     const gates = [makeGate(), makeGate({ name: 'gate-2' })]
     render(<PolicyGatesPanel gates={gates} />)
-    expect(screen.getByText(/Policy Gates \(2\)/i)).toBeInTheDocument()
+    expect(screen.getByText(/Gates \(2\)/)).toBeInTheDocument()
   })
 
   it('shows "X blocked" in summary chip', () => {
@@ -135,7 +135,7 @@ describe('PolicyGatesPanel — waiting gates (E2E-R19)', () => {
   it('does not auto-expand for a waiting gate', () => {
     const gates = [makeGate({ ...waiting, reason: 'soak 0m < 30m' })]
     render(<PolicyGatesPanel gates={gates} />)
-    const btn = screen.getByRole('button', { name: /Policy Gates/i })
+    const btn = screen.getByRole('button', { name: /Gates \(\d/ })
     expect(btn).toHaveAttribute('aria-expanded', 'false')
   })
 
@@ -143,8 +143,8 @@ describe('PolicyGatesPanel — waiting gates (E2E-R19)', () => {
     const user = userEvent.setup()
     const gates = [makeGate({ ...waiting, reason: 'soak 0m < 30m' })]
     render(<PolicyGatesPanel gates={gates} />)
-    await user.click(screen.getByRole('button', { name: /Policy Gates/i }))
-    expect(screen.getByLabelText('Not ready — not ready, not holding the bundle')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Gates \(\d/ }))
+    expect(screen.getByLabelText('Not ready — not ready, not holding the version')).toBeInTheDocument()
     expect(screen.queryByLabelText('Waiting — Pending')).not.toBeInTheDocument()
     expect(screen.queryByText('Block')).not.toBeInTheDocument()
     expect(screen.getByText('soak 0m < 30m')).toBeInTheDocument()
@@ -164,10 +164,10 @@ describe('PolicyGatesPanel — state from the UI API', () => {
     render(<PolicyGatesPanel gates={gates} />)
     expect(screen.getByText('1 superseded')).toBeInTheDocument()
     expect(screen.queryByText(/waiting|blocked/)).not.toBeInTheDocument()
-    const btn = screen.getByRole('button', { name: /Policy Gates/i })
+    const btn = screen.getByRole('button', { name: /Gates \(\d/ })
     expect(btn).toHaveAttribute('aria-expanded', 'false')
     await user.click(btn)
-    expect(screen.getByLabelText('Replaced by newer version — bundle superseded, not evaluated again')).toBeInTheDocument()
+    expect(screen.getByLabelText('Replaced by newer version — version replaced by a newer one, not evaluated again')).toBeInTheDocument()
   })
 
   it('counts a holding gate not evaluated yet as blocked', () => {
@@ -175,12 +175,12 @@ describe('PolicyGatesPanel — state from the UI API', () => {
     const gates = [makeGate({ ...blocked, lastEvaluatedAt: undefined })]
     render(<PolicyGatesPanel gates={gates} />)
     expect(screen.getByText('1 blocked')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Policy Gates/i })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('button', { name: /Gates \(\d/ })).toHaveAttribute('aria-expanded', 'true')
   })
 
   it('tells screen readers what "waiting" means, not only on hover', () => {
     render(<PolicyGatesPanel gates={[makeGate(waiting)]} />)
-    expect(screen.getByRole('button', { name: /1 waiting, not ready, not holding the bundle/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /1 waiting, not ready, not holding the version/ })).toBeInTheDocument()
   })
 })
 

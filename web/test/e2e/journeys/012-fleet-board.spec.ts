@@ -19,7 +19,7 @@ test.describe('Journey 012 — Fleet board', () => {
     await expect(board.locator('.fleet-rail__version', { hasText: 'sha-abc1234' })).toBeVisible()
     const uat = board.getByRole('button', { name: /^kardinal-test-app uat:/ })
     await expect(uat).toContainText(/verified \d+m ago/)
-    // An image Bundle runs with the config of the last config Bundle (#1353).
+    // An image version runs with the config of the last config version (#1353).
     await expect(uat).toContainText('+ config 77aa001')
     await expect(uat).toHaveAccessibleName(/with config 77aa001 from kardinal-test-app-cfg9/)
   })

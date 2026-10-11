@@ -52,6 +52,7 @@ test('a step shows its sub-steps, elapsed time, merge link and events', async ({
   const detail = details(page)
   await expect(drawerHeading(page)).toHaveText('prod')
   await expect(detail.locator('.stage-drawer__status .stage-chip')).toHaveText(/Waiting for PR merge/)
+  await expect(detail.locator('details.k-k8s').last()).toContainText('KindPromotionStep')
   await expectSubSteps(detail, prodSteps)
   await expect(detail.locator('li[data-step-state="InProgress"]')).toContainText('waiting for merge')
 
@@ -117,6 +118,7 @@ test('a gate shows its CEL expression, checked by the controller', async ({ page
   const why = section(detail, 'why').locator('.stage-why__item').filter({ hasText: badGate })
   // When the controller last evaluated it: the Go test waits until it has.
   await expect(why).toContainText(/evaluated (\d+s|\d+m \d+s|\d+h \d+m) ago/)
+  await expect(why.locator('details.k-k8s')).toContainText('KindPolicyGate')
   await why.getByText('Details', { exact: true }).click()
   await expect(why).toContainText(badExpression)
   const chip = why.locator('[data-cel-check="error"]')
