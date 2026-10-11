@@ -5,12 +5,14 @@
 // station map of a Pipeline, following one Bundle, with the expanded bands
 // and platforms kept per pipeline. It replaces the lane cards and the DAG.
 
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import type { Bundle, GraphResponse, Pipeline, PolicyGate } from '../types'
 import { api } from '../api/client'
 import StationMap from './StationMap'
-import StageTable from './StageTable'
-import VersionMatrix from './VersionMatrix'
+import { Skeleton } from '../ui'
+// The Table and the Matrix load when first shown: they are not part of the initial load.
+const StageTable = lazy(() => import('./StageTable'))
+const VersionMatrix = lazy(() => import('./VersionMatrix'))
 import type { MapView } from '../useUrlState'
 import { canPromote, canRollback } from '../pipelineActions'
 import { PipelineActionDialog, type PipelineActionKind } from '../components/PipelineActionDialog'
@@ -130,10 +132,14 @@ export default function PipelineMap({ pipeline, bundle, graph, compareBundle, lo
     )}
     {as && views && <div className="pipeline-map__views">{views}</div>}
     {as === 'table' ? (
-      <StageTable model={model} focused={focused} onOpenStage={env => onOpenStage(env)} actionsFor={actionsFor} />
+      <Suspense fallback={<Skeleton label="Loading the table…" />}>
+        <StageTable model={model} focused={focused} onOpenStage={env => onOpenStage(env)} actionsFor={actionsFor} />
+      </Suspense>
     ) : as === 'matrix' ? (
-      <VersionMatrix model={model} pipeline={pipeline.name} bundles={bundles ?? []} followed={bundle?.name} compared={compareBundle?.name}
-        onSelect={b => onSelectVersion?.(b)} onCompare={b => onCompareVersion?.(b)} onToggleGroup={toggleGroup} />
+      <Suspense fallback={<Skeleton label="Loading the matrix…" />}>
+        <VersionMatrix model={model} pipeline={pipeline.name} bundles={bundles ?? []} followed={bundle?.name} compared={compareBundle?.name}
+          onSelect={b => onSelectVersion?.(b)} onCompare={b => onCompareVersion?.(b)} onToggleGroup={toggleGroup} />
+      </Suspense>
     ) : (
     <StationMap
       views={views || undefined}

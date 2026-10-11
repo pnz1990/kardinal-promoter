@@ -3,7 +3,12 @@
 // Licensed under the Apache License, Version 2.0
 //
 // check-size.mjs — fails when the built UI (web/dist) is over its budget, gzip sizes:
-// JavaScript 145 KB, CSS 18 KB, and the woff2 fonts 180 KB (already compressed).
+//   initial JS  145 KB  the entry chunk and the chunks it imports statically (what the
+//                       first page load waits for: index.html's module script and its
+//                       modulepreload links);
+//   total JS    200 KB  every chunk, the lazy ones (Table, Matrix, comparison, palette) too;
+//   CSS          18 KB  every stylesheet;
+//   fonts       180 KB  the woff2 fonts (already compressed).
 // Run after `npm run build`: `npm run size`.
 import fs from 'node:fs'
 import path from 'node:path'
@@ -11,20 +16,34 @@ import zlib from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 
 const KB = 1024
-const BUDGET = { js: 145 * KB, css: 18 * KB, font: 180 * KB }
-const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'assets')
+const BUDGET = { 'initial js': 145 * KB, 'total js': 200 * KB, css: 18 * KB, font: 180 * KB }
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist')
+const dist = path.join(root, 'assets')
+const gz = (f) => zlib.gzipSync(fs.readFileSync(path.join(dist, f)), { level: 9 }).length
 
-const total = { js: 0, css: 0, font: 0 }
+// The initial load: the module script and the modulepreload links of index.html.
+const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8')
+const initial = new Set(
+  [...html.matchAll(/<(?:script[^>]*type="module"[^>]*src|link[^>]*rel="modulepreload"[^>]*href)="[^"]*\/assets\/([^"]+\.js)"/g)].map((m) => m[1]),
+)
+if (initial.size === 0) {
+  console.error('index.html names no module script')
+  process.exit(1)
+}
+
+const total = { 'initial js': 0, 'total js': 0, css: 0, font: 0 }
 for (const f of fs.readdirSync(dist)) {
-  const buf = fs.readFileSync(path.join(dist, f))
-  if (f.endsWith('.js')) total.js += zlib.gzipSync(buf, { level: 9 }).length
-  else if (f.endsWith('.css')) total.css += zlib.gzipSync(buf, { level: 9 }).length
-  else if (f.endsWith('.woff2')) total.font += buf.length
+  if (f.endsWith('.js')) {
+    const n = gz(f)
+    total['total js'] += n
+    if (initial.has(f)) total['initial js'] += n
+  } else if (f.endsWith('.css')) total.css += gz(f)
+  else if (f.endsWith('.woff2')) total.font += fs.statSync(path.join(dist, f)).size
 }
 let over = false
 for (const k of Object.keys(BUDGET)) {
   const ok = total[k] <= BUDGET[k]
   over ||= !ok
-  console.log(`${ok ? 'ok  ' : 'OVER'} ${k.padEnd(4)} ${(total[k] / KB).toFixed(1).padStart(6)} KB  (budget ${BUDGET[k] / KB} KB)`)
+  console.log(`${ok ? 'ok  ' : 'OVER'} ${k.padEnd(10)} ${(total[k] / KB).toFixed(1).padStart(6)} KB  (budget ${BUDGET[k] / KB} KB)`)
 }
 process.exit(over ? 1 : 0)

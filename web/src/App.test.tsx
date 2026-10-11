@@ -4,7 +4,7 @@
 // App.test.tsx — App-level orchestration: which bundle is shown, how polls and
 // pipeline switches interact, and what the header and gates panel show.
 // The API client is mocked with the shapes the Go handlers return.
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { beforeAll, describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, act, fireEvent, within } from '@testing-library/react'
 import type { Bundle, GraphResponse, Pipeline, PolicyGate } from './types'
 
@@ -61,6 +61,12 @@ const h = vi.hoisted(() => {
 vi.mock('./api/client', () => ({ api: h.api }))
 
 import { App } from './App'
+
+// The comparison panel and the palette load lazily: load their code before the tests,
+// so a click opens them within one flush as it does once the page has prefetched them.
+beforeAll(async () => {
+  await Promise.all([import('./components/BundleDiffPanel'), import('./components/CommandPalette'), import('./stationMap/StageTable'), import('./stationMap/VersionMatrix')])
+})
 
 const day = 86_400_000
 function bundle(name: string, phase: string, ageDays: number, extra: Partial<Bundle> = {}): Bundle {

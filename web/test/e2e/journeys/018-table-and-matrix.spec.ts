@@ -82,4 +82,16 @@ test.describe('Journey 018 — Table and Matrix', () => {
     await views(page).getByRole('radio', { name: 'Map' }).click()
     await expect(page.locator('.station-map__svg')).toBeVisible()
   })
+
+  test('the Table and the Matrix load their code only when first shown', async ({ page }) => {
+    const chunks: string[] = []
+    page.on('request', r => { const m = r.url().match(/\/assets\/(StageTable|VersionMatrix)-[^/]+\.js$/); if (m) chunks.push(m[1]) })
+    await open(page, 'kardinal-test-app', 'default')
+    await expect(page.locator('.station-map__svg')).toBeVisible()
+    expect(chunks).toEqual([])
+    await views(page).getByRole('radio', { name: 'Matrix' }).click()
+    await expect(page.getByRole('region', { name: 'Versions by environment' })).toBeVisible()
+    expect(chunks).toEqual(['VersionMatrix'])
+  })
 })
+

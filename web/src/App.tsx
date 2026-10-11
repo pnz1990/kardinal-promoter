@@ -16,7 +16,7 @@
 // #746: Global keyboard shortcuts — ?, r, Esc.
 // #747: ErrorBoundary wraps async components to prevent white-screen crashes.
 // #800: / shortcut to focus pipeline search input.
-import { useState, useCallback, useMemo, useRef, useEffect, type RefObject } from 'react'
+import { lazy, Suspense, useState, useCallback, useMemo, useRef, useEffect, type RefObject } from 'react'
 import { PipelineList } from './components/PipelineList'
 import { PipelineOpsTable } from './components/PipelineOpsTable'
 import PipelineMap from './stationMap/PipelineMap'
@@ -25,8 +25,8 @@ import { HealthChip } from './components/HealthChip'
 import { RejectedLiveBanner } from './components/RejectedLiveBanner'
 import { InsecureConnectionBanner } from './components/InsecureConnectionBanner'
 import { Breadcrumb } from './components/Breadcrumb'
-import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
-import { ErrorNotice, Icon, Kbd, TabPanel, Tabs } from './ui'
+import type { PaletteCommand } from './components/CommandPalette'
+import { ErrorNotice, Icon, Kbd, Skeleton, TabPanel, Tabs } from './ui'
 import { NotFound } from './components/NotFound'
 import { PipelineConditions } from './components/PipelineConditions'
 import { NARROW_QUERY, useMediaQuery } from './useMediaQuery'
@@ -34,7 +34,11 @@ import { useModalFocus } from './useModalFocus'
 import { displayState } from './displayStates.gen'
 import { versionName } from './versionName'
 import { BundleTimeline } from './components/BundleTimeline'
-import { BundleDiffPanel } from './components/BundleDiffPanel'
+// The palette and the comparison panel load when first opened: not part of the initial load.
+const CommandPalette = lazy(() => import('./components/CommandPalette').then(m => ({ default: m.CommandPalette })))
+/** When the page is idle enough to fetch the palette's code (ms after the first render). */
+const PREFETCH_MS = 1500
+const BundleDiffPanel = lazy(() => import('./components/BundleDiffPanel').then(m => ({ default: m.BundleDiffPanel })))
 import { BundleTypeBadge } from './components/BundleTypeBadge'
 import { PolicyGatesPanel } from './components/PolicyGatesPanel'
 import { FleetHealthBar, filterPipelines, isFleetFilter, type FleetFilter } from './components/FleetHealthBar'
@@ -161,6 +165,12 @@ export function App() {
   // The user picked the Map tab's view (Map, Table or Matrix): a narrow screen
   // then keeps the Map instead of opening on the Table.
   const [mapChosen, setMapChosen] = useState(false)
+
+  // The palette's code loads while the page is idle, so the first ⌘K opens at once.
+  useEffect(() => {
+    const t = setTimeout(() => { void import('./components/CommandPalette') }, PREFETCH_MS)
+    return () => clearTimeout(t)
+  }, [])
 
   // U3: the environment whose stage drawer is open (the …/env/<env> route).
   const stageEnv = urlState.env
@@ -596,7 +606,11 @@ export function App() {
       {showShortcutsPanel && (
         <KeyboardShortcutsPanel onClose={() => setShowShortcutsPanel(false)} />
       )}
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={paletteCommands} />
+      {paletteOpen && (
+        <Suspense fallback={<Skeleton label="Loading the command palette…" rows={3} className="app-palette-loading" />}>
+          <CommandPalette open onClose={() => setPaletteOpen(false)} commands={paletteCommands} />
+        </Suspense>
+      )}
       {/* Sidebar; below the md breakpoint a drawer over the page, opened from the top bar. */}
       {narrow && navOpen && <SidebarFocus sidebarRef={sidebarRef} onClose={closeNav} />}
       {narrow && navOpen && <div className="app-sidebar-scrim" aria-hidden="true" onClick={closeNav} />}
@@ -893,11 +907,13 @@ export function App() {
                     const compareBundleObj = bundles.find(b => b.name === urlState.compare)
                     if (!compareBundleObj) return null
                     return (
-                      <BundleDiffPanel
-                        bundleA={activeBundle}
-                        bundleB={compareBundleObj}
-                        onClose={closeDiffPanel}
-                      />
+                      <Suspense fallback={<Skeleton label="Loading the comparison…" />}>
+                        <BundleDiffPanel
+                          bundleA={activeBundle}
+                          bundleB={compareBundleObj}
+                          onClose={closeDiffPanel}
+                        />
+                      </Suspense>
                     )
                   })()
                 )}
