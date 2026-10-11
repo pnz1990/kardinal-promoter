@@ -3,134 +3,134 @@
 
 import { renderHook, act } from '@testing-library/react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { useUrlState } from './useUrlState'
+import { EMPTY_URL_STATE, isLegacyHash, parseHash, serializeHash, useUrlState, type UrlState } from './useUrlState'
+
+const state = (s: Partial<UrlState>): UrlState => ({ ...EMPTY_URL_STATE, ...s })
+
+describe('routes', () => {
+  it.each<[string, Partial<UrlState>]>([
+    ['#/', {}],
+    ['#/p/team-a/checkout', { ns: 'team-a', pipeline: 'checkout' }],
+    ['#/p/team-a/checkout/env/prod', { ns: 'team-a', pipeline: 'checkout', env: 'prod' }],
+    ['#/p/team-a/checkout/v/checkout-1-4-2', { ns: 'team-a', pipeline: 'checkout', version: 'checkout-1-4-2' }],
+    ['#/p/team-a/checkout/env/prod?v=checkout-1-4-2', { ns: 'team-a', pipeline: 'checkout', env: 'prod', version: 'checkout-1-4-2' }],
+    ['#/p/team-a/checkout?compare=checkout-1-4-1', { ns: 'team-a', pipeline: 'checkout', compare: 'checkout-1-4-1' }],
+    ['#/p/team-a/checkout?node=gate-1', { ns: 'team-a', pipeline: 'checkout', node: 'gate-1' }],
+    ['#/?view=ops&filter=blocked&q=pay', { view: 'ops', filter: 'blocked', q: 'pay' }],
+    ['#/p/*/checkout', { pipeline: 'checkout' }],
+    ['#/approvals', { approvals: true }],
+  ])('%s round-trips', (hash, want) => {
+    expect(parseHash(hash)).toEqual(state(want))
+    expect(serializeHash(state(want))).toBe(hash)
+  })
+
+  it('encodes names that need it', () => {
+    const s = state({ ns: 'a b', pipeline: 'x/y', env: 'eu west' })
+    expect(serializeHash(s)).toBe('#/p/a%20b/x%2Fy/env/eu%20west')
+    expect(parseHash(serializeHash(s))).toEqual(s)
+  })
+
+  it('ignores an unknown view and empty values', () => {
+    expect(parseHash('#/?view=table&q=')).toEqual(state({}))
+  })
+
+  it.each<[string, Partial<UrlState>]>([
+    ['#pipeline=app', { pipeline: 'app' }],
+    ['#pipeline=app&ns=team-b', { pipeline: 'app', ns: 'team-b' }],
+    ['#pipeline=app&ns=default&node=app-v1-prod', { pipeline: 'app', ns: 'default', node: 'app-v1-prod' }],
+    ['#pipeline=app&bundle=app-v0', { pipeline: 'app', compare: 'app-v0' }],
+  ])('reads the old link %s', (hash, want) => {
+    expect(isLegacyHash(hash)).toBe(true)
+    expect(parseHash(hash)).toEqual(state(want))
+  })
+
+  it('tells old links from the routes', () => {
+    expect(isLegacyHash('#/p/a/b')).toBe(false)
+    expect(isLegacyHash('')).toBe(false)
+    expect(isLegacyHash('#main-content')).toBe(false)
+  })
+})
 
 describe('useUrlState', () => {
   beforeEach(() => {
-    // Reset hash before each test
     window.history.replaceState(null, '', window.location.pathname)
   })
-
-  // A failed assertion must not leave a pushState spy behind for the next test.
   afterEach(() => {
     vi.restoreAllMocks()
   })
 
-  it('initializes with empty state when hash is empty', () => {
+  it('starts empty with no hash, and writes nothing until something is set', () => {
     const { result } = renderHook(() => useUrlState())
-    expect(result.current[0].pipeline).toBeUndefined()
-    expect(result.current[0].node).toBeUndefined()
-    expect(result.current[0].bundle).toBeUndefined()
-  })
-
-  it('initializes from existing hash', () => {
-    window.history.replaceState(null, '', '#pipeline=nginx-demo')
-    const { result } = renderHook(() => useUrlState())
-    expect(result.current[0].pipeline).toBe('nginx-demo')
-    expect(result.current[0].node).toBeUndefined()
-  })
-
-  it('updates the hash when pipeline is set', () => {
-    const { result } = renderHook(() => useUrlState())
-    act(() => result.current[1]({ pipeline: 'my-app' }))
-    expect(result.current[0].pipeline).toBe('my-app')
-    expect(window.location.hash).toBe('#pipeline=my-app')
-  })
-
-  it('updates the hash when node is set', () => {
-    const { result } = renderHook(() => useUrlState())
-    act(() => result.current[1]({ pipeline: 'my-app' }))
-    act(() => result.current[1]({ node: 'prod-step' }))
-    expect(result.current[0].pipeline).toBe('my-app')
-    expect(result.current[0].node).toBe('prod-step')
-    expect(window.location.hash).toContain('pipeline=my-app')
-    expect(window.location.hash).toContain('node=prod-step')
-  })
-
-  it('updates the hash when bundle is set for diff comparison', () => {
-    const { result } = renderHook(() => useUrlState())
-    act(() => result.current[1]({ pipeline: 'my-app', bundle: 'bundle-abc' }))
-    expect(result.current[0].pipeline).toBe('my-app')
-    expect(result.current[0].bundle).toBe('bundle-abc')
-    expect(window.location.hash).toContain('bundle=bundle-abc')
-  })
-
-  it('clears bundle without clearing pipeline', () => {
-    const { result } = renderHook(() => useUrlState())
-    act(() => result.current[1]({ pipeline: 'my-app', bundle: 'bundle-abc' }))
-    act(() => result.current[1]({ bundle: undefined }))
-    expect(result.current[0].pipeline).toBe('my-app')
-    expect(result.current[0].bundle).toBeUndefined()
-    expect(window.location.hash).toBe('#pipeline=my-app')
-  })
-
-  it('initializes bundle from existing hash', () => {
-    window.history.replaceState(null, '', '#pipeline=my-app&bundle=bundle-xyz')
-    const { result } = renderHook(() => useUrlState())
-    expect(result.current[0].pipeline).toBe('my-app')
-    expect(result.current[0].bundle).toBe('bundle-xyz')
-  })
-
-  it('clears node independently without clearing pipeline', () => {
-    const { result } = renderHook(() => useUrlState())
-    act(() => result.current[1]({ pipeline: 'my-app', node: 'prod-step' }))
-    act(() => result.current[1]({ node: undefined }))
-    expect(result.current[0].pipeline).toBe('my-app')
-    expect(result.current[0].node).toBeUndefined()
-    expect(window.location.hash).toBe('#pipeline=my-app')
-  })
-
-  it('responds to popstate events (back/forward navigation)', () => {
-    const { result } = renderHook(() => useUrlState())
-    act(() => result.current[1]({ pipeline: 'first' }))
-    act(() => result.current[1]({ pipeline: 'second' }))
-
-    // Simulate back navigation by changing hash and firing popstate
-    act(() => {
-      window.history.replaceState(null, '', '#pipeline=first')
-      window.dispatchEvent(new PopStateEvent('popstate'))
-    })
-    expect(result.current[0].pipeline).toBe('first')
-  })
-
-  it('produces empty hash when state is cleared', () => {
-    const { result } = renderHook(() => useUrlState())
-    act(() => result.current[1]({ pipeline: 'my-app' }))
-    act(() => result.current[1]({ pipeline: undefined }))
-    expect(result.current[0].pipeline).toBeUndefined()
-    // Hash should be empty or just the pathname
+    expect(result.current[0]).toEqual(EMPTY_URL_STATE)
     expect(window.location.hash).toBe('')
   })
-  it('pushes one history entry when several fields change together', () => {
-    window.history.replaceState(null, '', '#pipeline=a&node=n1')
+
+  it('reads the route it starts on', () => {
+    window.history.replaceState(null, '', '#/p/default/nginx-demo/env/prod')
     const { result } = renderHook(() => useUrlState())
-    const push = vi.spyOn(window.history, 'pushState')
-    act(() => result.current[1]({ pipeline: 'b', ns: 'team-b', node: undefined }))
-    expect(push).toHaveBeenCalledTimes(1)
-    expect(window.location.hash).toBe('#pipeline=b&ns=team-b')
+    expect(result.current[0]).toEqual(state({ ns: 'default', pipeline: 'nginx-demo', env: 'prod' }))
   })
 
-  it('merges consecutive calls made in the same event', () => {
-    const { result } = renderHook(() => useUrlState())
-    act(() => {
-      result.current[1]({ pipeline: 'my-app' })
-      result.current[1]({ node: 'prod-step' })
-    })
-    expect(result.current[0]).toMatchObject({ pipeline: 'my-app', node: 'prod-step' })
-    expect(window.location.hash).toBe('#pipeline=my-app&node=prod-step')
-  })
-
-  it('does not push when nothing changes', () => {
-    window.history.replaceState(null, '', '#pipeline=my-app')
-    const { result } = renderHook(() => useUrlState())
+  it('rewrites an old link to its route without a history entry', () => {
+    window.history.replaceState(null, '', '#pipeline=app&ns=team-b&bundle=app-v0')
     const push = vi.spyOn(window.history, 'pushState')
-    act(() => result.current[1]({ node: undefined }))
+    const { result } = renderHook(() => useUrlState())
+    expect(result.current[0]).toEqual(state({ pipeline: 'app', ns: 'team-b', compare: 'app-v0' }))
+    expect(window.location.hash).toBe('#/p/team-b/app?compare=app-v0')
     expect(push).not.toHaveBeenCalled()
   })
 
-  it('reads the namespace from the hash', () => {
-    window.history.replaceState(null, '', '#pipeline=app&ns=team-b')
+  it('merges fields and pushes one history entry per change', () => {
+    const push = vi.spyOn(window.history, 'pushState')
     const { result } = renderHook(() => useUrlState())
-    expect(result.current[0].ns).toBe('team-b')
+    act(() => result.current[1]({ pipeline: 'my-app', ns: 'default' }))
+    act(() => result.current[1]({ env: 'prod' }))
+    expect(window.location.hash).toBe('#/p/default/my-app/env/prod')
+    expect(push).toHaveBeenCalledTimes(2)
+    act(() => result.current[1]({ env: undefined, compare: 'b-1' }))
+    expect(window.location.hash).toBe('#/p/default/my-app?compare=b-1')
+  })
+
+  it('merges consecutive calls in one event into one entry each', () => {
+    const push = vi.spyOn(window.history, 'pushState')
+    const { result } = renderHook(() => useUrlState())
+    act(() => {
+      result.current[1]({ pipeline: 'my-app', ns: 'default' })
+      result.current[1]({ version: 'b-2' })
+    })
+    expect(result.current[0]).toEqual(state({ pipeline: 'my-app', ns: 'default', version: 'b-2' }))
+    expect(window.location.hash).toBe('#/p/default/my-app/v/b-2')
+    expect(push).toHaveBeenCalledTimes(2)
+  })
+
+  it('replaces the entry when asked', () => {
+    const push = vi.spyOn(window.history, 'pushState')
+    const { result } = renderHook(() => useUrlState())
+    act(() => result.current[1]({ q: 'pay' }, { replace: true }))
+    expect(window.location.hash).toBe('#/?q=pay')
+    expect(push).not.toHaveBeenCalled()
+  })
+
+  it('does not push when the hash would not change', () => {
+    window.history.replaceState(null, '', '#/p/default/my-app')
+    const push = vi.spyOn(window.history, 'pushState')
+    const { result } = renderHook(() => useUrlState())
+    act(() => result.current[1]({ pipeline: 'my-app' }))
+    expect(push).not.toHaveBeenCalled()
+  })
+
+  it('follows Back and Forward (popstate) and a hash typed by hand (hashchange)', () => {
+    const { result } = renderHook(() => useUrlState())
+    act(() => {
+      window.history.replaceState(null, '', '#/p/default/other')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    expect(result.current[0].pipeline).toBe('other')
+    act(() => {
+      window.history.replaceState(null, '', '#pipeline=legacy')
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    expect(result.current[0].pipeline).toBe('legacy')
+    expect(window.location.hash).toBe('#/p/*/legacy')
   })
 })

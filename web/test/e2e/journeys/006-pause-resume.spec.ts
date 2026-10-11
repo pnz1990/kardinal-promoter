@@ -20,6 +20,8 @@ test.describe('Journey 006 — Pause and Resume pipeline', () => {
   test('Step 1: ActionBar shows Pause for a running pipeline', async ({ page }) => {
     await page.goto('/')
     await page.getByText('kardinal-test-app').first().click()
+    // Pause and Resume are under More actions in the header.
+    await page.getByRole('button', { name: 'More actions' }).click()
     const toolbar = page.getByRole('toolbar', { name: 'Pipeline actions' })
     await expect(toolbar.getByRole('button', { name: 'Pause pipeline' })).toBeVisible()
     await expect(toolbar.getByRole('button', { name: 'Resume pipeline' })).toHaveCount(0)
@@ -31,6 +33,7 @@ test.describe('Journey 006 — Pause and Resume pipeline', () => {
     await page.goto('/')
     await page.getByText('kardinal-test-app').first().click()
 
+    await page.getByRole('button', { name: 'More actions' }).click()
     await page.getByRole('toolbar', { name: 'Pipeline actions' }).getByRole('button', { name: 'Pause pipeline' }).click()
     const dialog = page.getByRole('dialog', { name: 'Pause pipeline?' })
     await expect(dialog).toBeVisible()
@@ -52,6 +55,7 @@ test.describe('Journey 006 — Pause and Resume pipeline', () => {
     await page.goto('/')
     await page.getByText('kardinal-test-app').first().click()
 
+    await page.getByRole('button', { name: 'More actions' }).click()
     const toolbar = page.getByRole('toolbar', { name: 'Pipeline actions' })
     await expect(toolbar.getByRole('button', { name: 'Pause pipeline' })).toHaveCount(0)
     await toolbar.getByRole('button', { name: 'Resume pipeline' }).click()

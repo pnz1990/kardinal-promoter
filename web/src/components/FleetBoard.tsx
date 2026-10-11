@@ -7,7 +7,7 @@
 // no Pipeline is selected. The data comes from GET /api/v1/ui/pipelines
 // (deployed, activeBundleVersion, environmentStates, environmentTopology).
 
-import { Fragment, useRef } from 'react'
+import { Fragment, useRef, type CSSProperties } from 'react'
 import '../styles/FleetBoard.css'
 import { hasCommandModifier, rovingFocus, rovingItems, useRovingFocus } from '../useRovingFocus'
 import type { Pipeline } from '../types'
@@ -17,7 +17,7 @@ interface FleetBoardProps {
   pipelines: Pipeline[]
   /** Total before the sidebar filter, for the "showing N of M" note. */
   total: number
-  /** Opens a pipeline; with env, its stage drawer for that environment. */
+  /** Opens a pipeline; a station passes its environment, which opens that environment's details. */
   onSelect: (name: string, namespace: string, env?: string) => void
   now?: number
 }
@@ -87,11 +87,20 @@ function Rail({ row, index }: { row: FleetRow; index: number }) {
 function FleetBar({ f }: { f: NonNullable<Station['fleet']> }) {
   const pct = (n: number) => `${(100 * n) / f.total}%`
   return (
-    <span className="fleet-station__bar" aria-hidden="true">
-      <span data-part="verified" style={{ width: pct(f.verified) }} />
-      <span data-part="inflight" style={{ width: pct(f.inFlight) }} />
-      <span data-part="failed" style={{ width: pct(f.failed) }} />
-      <span data-part="superseded" style={{ width: pct(f.superseded) }} />
+    <span
+      className="fleet-station__bar"
+      aria-hidden="true"
+      style={{
+        '--fleet-verified': pct(f.verified),
+        '--fleet-inflight': pct(f.inFlight),
+        '--fleet-failed': pct(f.failed),
+        '--fleet-superseded': pct(f.superseded),
+      } as CSSProperties}
+    >
+      <span data-part="verified" />
+      <span data-part="inflight" />
+      <span data-part="failed" />
+      <span data-part="superseded" />
     </span>
   )
 }

@@ -28,6 +28,7 @@ import { createPortal } from 'react-dom'
 import type { GraphNode } from '../types'
 import { healthChipColors, kardinalStateToHealth } from './HealthChip'
 import { isHttpURL } from '../prLink'
+import '../styles/DAGTooltip.css'
 
 export interface DAGTooltipTarget {
   node: GraphNode
@@ -131,32 +132,19 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
       role="tooltip"
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
-      style={{
-        position: 'fixed',
-        left: pos?.left ?? 0,
-        top: pos?.top ?? 0,
-        zIndex: 9999,
-        background: 'var(--color-bg)',
-        border: '1px solid var(--color-border)',
-        borderRadius: '6px',
-        padding: '10px 14px',
-        minWidth: '200px',
-        maxWidth: '340px',
-        boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
-        opacity: visible ? 1 : 0,
-        transition: 'opacity 80ms ease-in',
-        pointerEvents: visible ? 'auto' : 'none',
-      }}
+      className="dag-tooltip"
+      data-visible={visible}
+      style={{ left: pos?.left ?? 0, top: pos?.top ?? 0 }}
     >
       {/* Header: environment/gate name */}
-      <div style={{ fontWeight: 700, fontSize: '13px', color: 'var(--color-text)', marginBottom: '6px' }}>
+      <div className="dag-tooltip__title">
         {isPolicyGate ? `🔒 ${node.label}` : node.environment}
       </div>
 
       {/* State */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-        <span style={{ fontSize: '11px', color: 'var(--color-text-faint)' }}>State:</span>
-        <span style={{ fontSize: '12px', fontWeight: 600, color: stateColor }}>
+      <div className="dag-tooltip__state">
+        <span className="dag-tooltip__caption">State:</span>
+        <span className="dag-tooltip__state-value" style={{ color: stateColor }}>
           {node.state ? displayState(node.type === 'PolicyGate' ? 'gate' : 'step', node.state).label : '—'}
         </span>
       </div>
@@ -165,18 +153,18 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
       {!isPolicyGate && (
         <>
           {node.message && (
-            <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginBottom: '6px', lineHeight: 1.4, wordBreak: 'break-word' }}>
+            <div className="dag-tooltip__message">
               {node.message}
             </div>
           )}
           {isHttpURL(node.prURL) && (
-            <div style={{ marginBottom: '4px' }}>
+            <div className="dag-tooltip__link-row">
               <a
                 href={node.prURL}
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={e => e.stopPropagation()}
-                style={{ color: 'var(--color-accent)', fontSize: '12px', textDecoration: 'underline' }}
+                className="dag-tooltip__link"
               >
                 View Pull Request ↗
               </a>
@@ -189,27 +177,17 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
       {isPolicyGate && (
         <>
           {node.expression && (
-            <div style={{
-              marginBottom: '6px',
-              background: 'var(--color-surface)',
-              border: '1px solid var(--color-border)',
-              borderRadius: '4px',
-              padding: '6px 8px',
-              fontFamily: 'var(--k-font-mono)',
-              fontSize: '11px',
-              color: 'var(--color-text-muted)',
-              wordBreak: 'break-word',
-            }}>
+            <div className="dag-tooltip__expression">
               {node.expression}
             </div>
           )}
           {node.lastEvaluatedAt && (
-            <div style={{ fontSize: '11px', color: 'var(--color-text-faint)' }}>
+            <div className="dag-tooltip__caption">
               Evaluated {relativeTime(node.lastEvaluatedAt)}
             </div>
           )}
           {node.message && (
-            <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '4px', lineHeight: 1.4 }}>
+            <div className="dag-tooltip__message dag-tooltip__message--after">
               {node.message}
             </div>
           )}

@@ -1,0 +1,53 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * ReleaseMetricsBar.css — the release metrics strip (components/ReleaseMetricsBar.tsx).
+ * Design tokens only (noLiterals.test.ts).
+ */
+
+.release-metrics {
+  display: flex;
+  overflow: hidden;
+  margin-bottom: var(--k-space-4);
+  background: var(--k-surface-base);
+  border: var(--k-border-hairline) solid var(--k-line-subtle);
+  border-radius: var(--k-radius-3);
+}
+
+.release-metrics__cell {
+  flex: 1;
+  padding: var(--k-space-2) var(--k-space-3);
+  border-right: var(--k-border-hairline) solid var(--k-line-subtle);
+}
+
+.release-metrics__cell--last {
+  border-right: 0;
+}
+
+.release-metrics__label {
+  margin-bottom: var(--k-space-0_5);
+  font-size: var(--k-text-2xs);
+  color: var(--k-ink-2);
+  text-transform: uppercase;
+  letter-spacing: var(--k-tracking-caps);
+}
+
+.release-metrics__value {
+  font-size: var(--k-text-lg);
+  font-weight: var(--k-weight-bold);
+  color: var(--k-ink);
+  font-variant-numeric: var(--k-numeric);
+}
+
+.release-metrics__value[data-tone="verified"] { color: var(--k-status-verified-fg); }
+.release-metrics__value[data-tone="blocked"] { color: var(--k-status-blocked-fg); }
+.release-metrics__value[data-tone="failed"] { color: var(--k-status-failed-fg); }
+.release-metrics__value[data-tone="code"] { color: var(--k-syntax-ident); }
+.release-metrics__value[data-tone="accent"] { color: var(--k-ink); }
+
+.release-metrics__sub {
+  margin-top: var(--k-space-0_5);
+  font-size: var(--k-text-2xs);
+  color: var(--k-ink-2);
+}

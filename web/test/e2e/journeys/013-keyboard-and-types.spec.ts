@@ -85,7 +85,7 @@ test.describe('Journey 013 — Keyboard and Bundle types', () => {
     await expectNoViolations(page, 'light node details')
 
     await page.keyboard.press('Escape')
-    await page.getByRole('button', { name: 'Create bundle for kardinal-test-app' }).click()
+    await page.getByRole('button', { name: 'Ship a version of kardinal-test-app' }).click()
     await expect(page.getByRole('dialog')).toBeVisible()
     await expectNoViolations(page, 'light create bundle dialog')
   })

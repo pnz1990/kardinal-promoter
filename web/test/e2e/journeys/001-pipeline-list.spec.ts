@@ -20,7 +20,7 @@ test.describe('Journey 001 — Pipeline list', () => {
   test('Step 2: Click pipeline shows DAG view', async ({ page }) => {
     await page.getByText('kardinal-test-app').first().click()
     // DAG SVG should become visible
-    await expect(page.locator('svg')).toBeVisible()
+    await expect(page.locator('svg.dag-view__svg')).toBeVisible()
   })
 
   test('Step 3: Selected pipeline is highlighted in sidebar', async ({ page }) => {

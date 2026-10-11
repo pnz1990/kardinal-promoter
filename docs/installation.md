@@ -398,10 +398,18 @@ release name other than `kardinal-promoter`, the Service is named
   while a PolicyGate holds it; red where it failed. A [fleet](pipeline-reference.md#fleets)
   is one station with a bar of its targets (Verified, in flight, Failed) and a count such as
   `20/50 verified, 5 in flight (max 5)`; it says `stopped` once `maxUnavailable` targets
-  failed. A station opens its Pipeline. The board follows the sidebar's health filter.
-- **Pipeline view.** The lane, the promotion graph, policy gates with their CEL expressions,
-  the Bundle history and comparison, and pause, resume, promote, roll back and create bundle.
-  The lane has one column per depth: parallel environments share a column, and a wave of five
+  failed. A station opens its Pipeline at that environment. The board follows the sidebar's
+  health filter.
+- **Pipeline view.** One header line: the Pipeline's name, Paused when it is paused, its
+  summary, **Ship a version** (create a Bundle) and **More actions** (pause and resume). Below it
+  are four tabs:
+  - **Map**: the lane, the promotion graph, and the Bundle history to pick the version shown and
+    compare two. Promote and roll back are on the environments.
+  - **History**: every Bundle of the Pipeline.
+  - **Gates**: the policy gates with their CEL expressions and approvals.
+  - **Metrics**: the release metrics.
+
+  When a gate holds the shown Bundle, a banner on the map says so and opens the Gates tab. The lane has one column per depth: parallel environments share a column, and a wave of five
   or more is one card that counts its environments by state and expands to the list. The graph
   lists the environments of a column in the Pipeline's order.
 - **Release metrics.** Time to the final environments and the deploys that reached them, over
@@ -419,6 +427,28 @@ release name other than `kardinal-promoter`, the Service is named
   End to the ends, Up and Down between fleet lines), and Enter opens the one in focus. `?` lists
   the shortcuts (`/` filter, `r` refresh, `Esc` close a panel). Every view is checked against
   WCAG 2.1 AA, colour contrast included, in both themes.
+- **Go to anything (⌘K).** ⌘K, Ctrl+K or the **Go to or do…** box in the top bar opens one list
+  of pipelines, environments (`pipeline › env`) and the shown pipeline's versions, and of actions:
+  switch the theme or the density, refresh, the operations table, the shortcuts. Type to filter,
+  and use the arrow keys and Enter. It never promotes, pauses or rolls back by itself.
+- **Links.** Every screen has its own address, so a link opens it, a reload keeps it, and Back
+  and Forward walk it. The breadcrumb in the top bar leads back:
+
+  | Address | Opens |
+  |---|---|
+  | `/ui/#/` | the fleet |
+  | `/ui/#/p/<namespace>/<pipeline>` | a Pipeline |
+  | `/ui/#/p/<namespace>/<pipeline>/env/<environment>` | an environment's details |
+  | `/ui/#/p/<namespace>/<pipeline>/v/<bundle>` | the Pipeline at that version |
+
+  These options go after `?`:
+  - `tab=history|gates|metrics` picks a tab;
+  - `compare=<bundle>` opens the comparison;
+  - `view=ops` shows the operations table;
+  - `filter=` and `q=` keep the sidebar's health filter and search.
+
+  Links from before these addresses (`#pipeline=…&ns=…`) still open the same screen. With
+  exactly one Pipeline, a first visit opens it directly.
 - **Themes.** The theme button next to the refresh indicator cycles through System (◐),
   Light (☀) and Dark (☾). System follows the operating system's setting, also when it changes.
   Light or Dark is kept in the browser and applied before the page draws. The UI and these docs

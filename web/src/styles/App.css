@@ -1,0 +1,249 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * App.css — the app shell (App.tsx): the sidebar, the header of a pipeline, and the content
+ * row. Design tokens only (noLiterals.test.ts).
+ */
+
+.app {
+  display: flex;
+  block-size: 100vh;
+  overflow: hidden;
+  background: var(--k-surface-canvas);
+  color: var(--k-ink);
+}
+
+/* ── Sidebar ── */
+.app-sidebar {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  inline-size: var(--k-layout-rail-expanded);
+  overflow: hidden;
+  background: var(--k-surface-canvas);
+  border-inline-end: var(--k-border-hairline) solid var(--k-line-subtle);
+}
+.app-sidebar__brandbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--k-space-4);
+  border-block-end: var(--k-border-hairline) solid var(--k-line-subtle);
+}
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-2);
+  padding: 0;
+  border: 0;
+  border-radius: var(--k-radius-2);
+  background: none;
+  cursor: pointer;
+}
+.app-brand__logo { inline-size: var(--k-space-8); block-size: var(--k-space-8); object-fit: contain; }
+.app-brand__word {
+  color: var(--k-ink);
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-md);
+  font-weight: var(--k-weight-bold);
+  letter-spacing: var(--k-tracking-caps);
+}
+.app-status { display: flex; align-items: center; gap: var(--k-space-1_5); }
+.app-refresh {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-0_5);
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.app-refresh__age {
+  color: var(--k-ink-2);
+  font-size: var(--k-text-2xs);
+  font-variant-numeric: var(--k-numeric);
+}
+.app-refresh__age[data-level="late"] { color: var(--k-status-blocked-fg); }
+.app-refresh__age[data-level="stale"] {
+  color: var(--k-status-failed-fg);
+  animation: stalePulse var(--k-dur-pulse) var(--k-ease-in-out) infinite;
+}
+.app-refresh__icon { color: var(--k-ink-3); font-size: var(--k-text-2xs); }
+.app-theme {
+  padding: var(--k-space-px) var(--k-space-1);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-2);
+  background: none;
+  color: var(--k-ink-2);
+  font-size: var(--k-text-2xs);
+  line-height: 1;
+  cursor: pointer;
+}
+.app-sidebar__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--k-space-3) var(--k-space-4);
+  color: var(--k-ink-2);
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-xs);
+  font-weight: var(--k-weight-semibold);
+  letter-spacing: var(--k-tracking-caps);
+}
+.app-sidebar__tools { display: flex; align-items: center; gap: var(--k-space-2); }
+.app-view-toggle {
+  padding: var(--k-space-px) var(--k-space-1);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-2);
+  background: none;
+  color: var(--k-ink-2);
+  font-family: var(--k-font-body);
+  font-size: var(--k-text-2xs);
+  letter-spacing: normal;
+  cursor: pointer;
+}
+.app-view-toggle[data-active] { border-color: var(--k-ink); background: var(--k-surface-base); color: var(--k-ink); }
+.app-namespace {
+  padding: var(--k-space-px) var(--k-space-1);
+  border-radius: var(--k-radius-2);
+  background: var(--k-surface-base);
+  color: var(--k-ink-2);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-2xs);
+  font-weight: var(--k-weight-regular);
+  letter-spacing: normal;
+}
+.app-sidebar__scroll { flex: 1; overflow-y: auto; }
+.app-sidebar__fleet { padding: var(--k-space-2) var(--k-space-3) 0; }
+
+/* ── Main ── */
+/* The top bar: where you are, and the way to go anywhere (⌘K). */
+.app-topbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--k-space-4);
+  min-block-size: var(--k-control-lg);
+  padding: var(--k-space-2) var(--k-space-6);
+  border-block-end: var(--k-border-hairline) solid var(--k-line-subtle);
+}
+.app-topbar .breadcrumb { margin: 0; }
+.app-topbar__search {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--k-space-2);
+  min-inline-size: calc(var(--k-space-24) * 2.5);
+  min-block-size: var(--k-control-sm);
+  padding: 0 var(--k-space-2);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-2);
+  background: var(--k-surface-base);
+  color: var(--k-ink-3);
+  font: inherit;
+  font-size: var(--k-text-sm);
+  cursor: pointer;
+}
+.app-topbar__search > span { flex: 1; text-align: start; }
+.app-topbar__search:hover { border-color: var(--k-line-strong); color: var(--k-ink-2); }
+
+.app-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--k-surface-canvas);
+}
+.app-main--ops { background: var(--k-surface-sunken); }
+.app-insecure-banner { margin: var(--k-space-4) var(--k-space-6) 0; }
+.app-fleet { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.app-empty { padding: var(--k-space-12) var(--k-space-8); color: var(--k-ink-3); text-align: center; }
+
+/* ── Pipeline header ── */
+.app-pipeline-head { flex-shrink: 0; padding: var(--k-space-4) var(--k-space-6) 0; }
+/* One line: the name, its state, its summary, and the pipeline's actions on the right. */
+.app-pipeline-head__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--k-space-2) var(--k-space-3);
+  margin-block-end: var(--k-space-3);
+}
+.app-pipeline-head__title {
+  margin: 0;
+  font-size: var(--k-text-2xl);
+  font-weight: var(--k-weight-bold);
+  line-height: var(--k-leading-2xl);
+}
+.app-pipeline-head__summary { flex: 1 1 auto; min-inline-size: 0; margin: 0; color: var(--k-ink-2); font-size: var(--k-text-md); }
+.app-pipeline-head__actions { display: flex; align-items: center; gap: var(--k-space-2); margin-inline-start: auto; }
+
+/* Tab panels: the map takes the rest of the page; the others scroll. */
+.app-tab { flex: 1; min-block-size: 0; overflow: auto; padding: var(--k-space-4) var(--k-space-6) var(--k-space-6); }
+.app-tab--map { display: flex; flex-direction: column; padding: 0; }
+.app-map-head { flex-shrink: 0; padding: var(--k-space-3) var(--k-space-6) 0; }
+.app-map-head .app-provenance { margin-block-end: var(--k-space-3); }
+.app-tab__empty { margin: 0; color: var(--k-ink-3); }
+/* Paused is an operator state: monochrome hatch, not a colour (DESIGN-SYSTEM §2.2). */
+.app-paused {
+  padding: var(--k-space-0_5) var(--k-space-2);
+  border: var(--k-border-hairline) solid var(--k-line-strong);
+  border-radius: var(--k-radius-1);
+  background: var(--k-hatch), var(--k-surface-base);
+  color: var(--k-status-paused-fg);
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-2xs);
+  font-weight: var(--k-weight-bold);
+  letter-spacing: var(--k-tracking-caps);
+}
+.app-provenance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--k-space-2);
+  color: var(--k-ink-2);
+  font-size: var(--k-text-sm);
+}
+.app-provenance__bundle { color: var(--k-syntax-ident); font-family: var(--k-font-mono); }
+.app-sep { color: var(--k-ink-3); }
+.app-sha { color: var(--k-ink-2); font-family: var(--k-font-mono); font-variant-numeric: var(--k-numeric-mono); }
+
+.app-history { margin-block-end: var(--k-space-4); }
+.app-history__toggle {
+  padding: var(--k-space-1) 0;
+  border: 0;
+  background: none;
+  color: var(--k-ink);
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-sm);
+  font-weight: var(--k-weight-semibold);
+  cursor: pointer;
+}
+.app-history__list {
+  margin: 0;
+  padding: var(--k-space-2) 0 var(--k-space-2) var(--k-space-3);
+  list-style: none;
+  border-inline-start: var(--k-stroke-ring) solid var(--k-line-subtle);
+}
+.app-history__item {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-2);
+  margin-block-end: var(--k-space-1_5);
+  color: var(--k-ink-2);
+  font-size: var(--k-text-sm);
+}
+.app-history__name { color: var(--k-ink); font-family: var(--k-font-mono); }
+
+/* ── Content row: the DAG and the node detail ── */
+.app-content { flex: 1; display: flex; overflow: hidden; padding: 0 var(--k-space-6) var(--k-space-6); }
+.app-dag {
+  flex: 1;
+  min-block-size: calc(var(--k-space-24) * 3.125);
+  overflow: auto;
+  padding: var(--k-space-4);
+  border-radius: var(--k-radius-3);
+  background: var(--k-surface-base);
+}
+.app-dag[data-split] { border-start-end-radius: 0; border-end-end-radius: 0; }

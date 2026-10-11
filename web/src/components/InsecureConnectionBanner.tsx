@@ -6,13 +6,15 @@
 //
 // Design doc: docs/design/06-kardinal-ui.md §Future — port-forward UX (#913)
 
+import '../styles/InsecureConnectionBanner.css'
+
 interface InsecureConnectionBannerProps {
   /** Whether the banner has been dismissed by the user. */
   dismissed: boolean
   /** Callback to dismiss the banner. */
   onDismiss: () => void
-  /** CSS margin around the banner (default: space below it only). */
-  margin?: string
+  /** A class from the page that places it, for its margins (default: space below it only). */
+  className?: string
 }
 
 /** The command that reaches the UI on a default install (release kardinal-promoter). */
@@ -38,57 +40,35 @@ export function isInsecureNonLocalConnection(): boolean {
  * App shows it at the top of every view, including the empty and error states:
  * the connection is insecure before any pipeline loads.
  */
-export function InsecureConnectionBanner({ dismissed, onDismiss, margin = '0 0 0.75rem' }: InsecureConnectionBannerProps) {
+export function InsecureConnectionBanner({ dismissed, onDismiss, className }: InsecureConnectionBannerProps) {
   if (dismissed) return null
   if (!isInsecureNonLocalConnection()) return null
 
   return (
     <div
       role="alert"
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        background: 'var(--color-warning-bg)',
-        border: '1px solid var(--color-warning)',
-        borderRadius: '6px',
-        padding: '0.5rem 0.75rem',
-        margin,
-        gap: '0.75rem',
-        flexShrink: 0,
-      }}
+      className={className ? `insecure-banner ${className}` : 'insecure-banner'}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        <span style={{ color: 'var(--color-warning)', fontSize: '0.9rem' }} aria-hidden="true">⚠</span>
-        <span style={{ fontSize: '0.82rem', color: 'var(--color-warning)', fontWeight: 600 }}>
+      <div className="insecure-banner__message">
+        <span className="insecure-banner__icon" aria-hidden="true">⚠</span>
+        <span className="insecure-banner__text">
           Insecure connection — kardinal UI is accessed over plain HTTP.{' '}
           Use{' '}
-          <code style={{ fontFamily: 'var(--k-font-mono)', fontSize: '0.78rem' }}>
+          <code className="insecure-banner__code">
             {PORT_FORWARD_COMMAND}
           </code>{' '}
           and open{' '}
-          <a href="http://localhost:8082/ui/" style={{ color: 'var(--color-warning)' }}>
+          <a href="http://localhost:8082/ui/" className="insecure-banner__link">
             http://localhost:8082/ui/
           </a>
           {' '}for secure in-cluster access.
         </span>
       </div>
       <button
+        type="button"
         onClick={onDismiss}
         aria-label="Dismiss insecure connection warning"
-        style={{
-          background: 'none',
-          border: '1px solid var(--color-warning)',
-          borderRadius: '4px',
-          color: 'var(--color-warning)',
-          cursor: 'pointer',
-          fontSize: '0.75rem',
-          fontWeight: 600,
-          padding: '2px 8px',
-          whiteSpace: 'nowrap',
-          transition: 'background 0.15s',
-          flexShrink: 0,
-        }}
+        className="insecure-banner__dismiss"
       >
         Dismiss
       </button>

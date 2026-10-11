@@ -27,10 +27,11 @@
   --color-text-faint:     var(--k-ink-3);
   --color-text-secondary: var(--k-ink-2);
 
-  /* The old accent marked links, the selection and the promoting bundle: the thread. */
-  --color-accent:         var(--k-thread-text);
-  --color-accent-bg:      var(--k-thread-wash);
-  --color-accent-hover:   var(--k-thread);
+  /* The old accent coloured chrome (buttons, headings, links): ink. Red is only the thread,
+     the selection and focus (DESIGN-SYSTEM §2.2). */
+  --color-accent:         var(--k-ink);
+  --color-accent-bg:      var(--k-surface-sunken);
+  --color-accent-hover:   var(--k-ink-2);
 
   --color-success:        var(--k-status-verified-fg);
   --color-success-bg:     var(--k-status-verified-wash);
@@ -66,6 +67,12 @@ h1, h2, h3, h4 {
 }
 code, kbd, pre, samp {
   font-family: var(--k-font-mono);
+}
+/* Links: ink text, a thread underline. */
+a {
+  color: var(--k-ink);
+  text-decoration-color: var(--k-thread-text);
+  text-underline-offset: 0.2em;
 }
 
 /* ── Keyboard focus ──────────────────────────────────────────────────────────

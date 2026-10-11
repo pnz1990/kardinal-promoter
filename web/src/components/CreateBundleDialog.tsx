@@ -18,6 +18,8 @@ import { useState, useCallback, useRef, type FormEvent } from 'react'
 import { api } from '../api/client'
 import { useModalFocus } from '../useModalFocus'
 import { actionErrorMessage } from './ConfirmDialog'
+import '../ui'
+import '../styles/CreateBundleDialog.css'
 
 interface CreateBundleDialogProps {
   /** Pipeline name to create the Bundle for. */
@@ -78,41 +80,19 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
       role="dialog"
       aria-modal="true"
       aria-labelledby="create-bundle-title"
-      style={{
-        position: 'fixed', inset: 0,
-        background: 'rgba(0,0,0,0.7)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        zIndex: 1000,
-      }}
+      className="k-scrim"
     >
-      <form
-        ref={formRef}
-        onSubmit={handleSubmit}
-        style={{
-          background: 'var(--color-surface)',
-          border: '1px solid var(--color-border)',
-          borderRadius: '8px',
-          padding: '1.5rem',
-          maxWidth: '460px',
-          width: '90%',
-        }}
-      >
-        <h2
-          id="create-bundle-title"
-          style={{ margin: '0 0 0.25rem', fontSize: '1rem', fontWeight: 700, color: 'var(--color-text)' }}
-        >
+      <form ref={formRef} onSubmit={handleSubmit} className="k-dialog create-bundle">
+        <h2 id="create-bundle-title" className="k-dialog__title">
           Create Bundle — {pipelineName}
         </h2>
-        <p style={{ color: 'var(--color-text-muted)', fontSize: '0.8rem', margin: '0 0 1rem' }}>
+        <p className="k-dialog__description">
           Creates a new Bundle to start a promotion through all pipeline environments.
         </p>
 
         {/* Image input — required */}
-        <label
-          htmlFor="bundle-image"
-          style={{ display: 'block', fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.25rem' }}
-        >
-          Container image <span style={{ color: 'var(--color-error)' }}>*</span>
+        <label htmlFor="bundle-image" className="create-bundle__label">
+          Container image <span className="create-bundle__required">*</span>
         </label>
         <input
           id="bundle-image"
@@ -121,31 +101,18 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
           onChange={e => { setImage(e.target.value); setImageError(undefined) }}
           placeholder="ghcr.io/example/app:sha-abc1234"
           aria-describedby={imageError ? 'bundle-image-error' : undefined}
-          style={{
-            width: '100%', boxSizing: 'border-box',
-            background: 'var(--color-bg)', border: `1px solid ${imageError ? 'var(--color-error)' : 'var(--color-border)'}`,
-            borderRadius: '6px', padding: '0.5rem 0.75rem',
-            color: 'var(--color-text)', fontSize: '0.875rem',
-            marginBottom: imageError ? '0.25rem' : '0.75rem',
-            fontFamily: 'var(--k-font-mono)',
-          }}
+          aria-invalid={imageError ? true : undefined}
+          className="create-bundle__input create-bundle__input--mono"
         />
         {imageError && (
-          <div
-            id="bundle-image-error"
-            role="alert"
-            style={{ color: 'var(--color-error)', fontSize: '0.75rem', marginBottom: '0.75rem' }}
-          >
+          <div id="bundle-image-error" role="alert" className="create-bundle__field-error">
             {imageError}
           </div>
         )}
 
         {/* Commit SHA — optional */}
-        <label
-          htmlFor="bundle-commit-sha"
-          style={{ display: 'block', fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.25rem' }}
-        >
-          Commit SHA <span style={{ color: 'var(--color-text-muted)', fontStyle: 'italic' }}>(optional)</span>
+        <label htmlFor="bundle-commit-sha" className="create-bundle__label">
+          Commit SHA <span className="create-bundle__optional">(optional)</span>
         </label>
         <input
           id="bundle-commit-sha"
@@ -153,22 +120,12 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
           value={commitSHA}
           onChange={e => setCommitSHA(e.target.value)}
           placeholder="abc1234"
-          style={{
-            width: '100%', boxSizing: 'border-box',
-            background: 'var(--color-bg)', border: '1px solid var(--color-border)',
-            borderRadius: '6px', padding: '0.5rem 0.75rem',
-            color: 'var(--color-text)', fontSize: '0.875rem',
-            marginBottom: '0.75rem',
-            fontFamily: 'var(--k-font-mono)',
-          }}
+          className="create-bundle__input create-bundle__input--mono"
         />
 
         {/* Author — optional */}
-        <label
-          htmlFor="bundle-author"
-          style={{ display: 'block', fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.25rem' }}
-        >
-          Author <span style={{ color: 'var(--color-text-muted)', fontStyle: 'italic' }}>(optional)</span>
+        <label htmlFor="bundle-author" className="create-bundle__label">
+          Author <span className="create-bundle__optional">(optional)</span>
         </label>
         <input
           id="bundle-author"
@@ -176,63 +133,33 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
           value={author}
           onChange={e => setAuthor(e.target.value)}
           placeholder="alice"
-          style={{
-            width: '100%', boxSizing: 'border-box',
-            background: 'var(--color-bg)', border: '1px solid var(--color-border)',
-            borderRadius: '6px', padding: '0.5rem 0.75rem',
-            color: 'var(--color-text)', fontSize: '0.875rem',
-            marginBottom: '1rem',
-          }}
+          className="create-bundle__input"
         />
 
         {/* API error */}
         {error && (
-          <div
-            role="alert"
-            style={{
-              color: 'var(--color-error)', fontSize: '0.8rem', marginBottom: '0.75rem',
-              background: 'var(--color-error-bg)', border: '1px solid var(--color-error)', borderRadius: '4px',
-              padding: '0.5rem 0.75rem',
-            }}
-          >
+          <div role="alert" className="k-alert k-alert--failed create-bundle__error">
             {error}
           </div>
         )}
 
         {/* Buttons */}
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+        <div className="k-dialog__footer">
           <button
             type="button"
             onClick={onCancel}
             disabled={loading}
             aria-label="Cancel bundle creation"
-            style={{
-              padding: '0.45rem 1rem',
-              background: 'transparent',
-              border: '1px solid var(--color-border)',
-              borderRadius: '6px',
-              color: 'var(--color-text-muted)',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              fontSize: '0.875rem',
-            }}
+            className="k-button k-button--ghost k-button--md"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={loading}
+            aria-busy={loading || undefined}
             aria-label="Create bundle"
-            style={{
-              padding: '0.45rem 1rem',
-              background: 'var(--color-accent-bg)',
-              border: '1px solid var(--color-accent)',
-              borderRadius: '6px',
-              color: 'var(--color-accent)',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              fontSize: '0.875rem',
-              fontWeight: 600,
-              opacity: loading ? 0.6 : 1,
-            }}
+            className="k-button k-button--primary k-button--md"
           >
             {loading ? 'Creating…' : 'Create Bundle'}
           </button>
@@ -241,8 +168,6 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
     </div>
   )
 }
-
-// ─── CreateBundleButton ───────────────────────────────────────────────────────
 
 interface CreateBundleButtonProps {
   /** Pipeline name. */
@@ -254,7 +179,7 @@ interface CreateBundleButtonProps {
 }
 
 /**
- * CreateBundleButton renders a "+ Bundle" button in the pipeline header.
+ * CreateBundleButton renders the "Ship a version" button (the primary action) in the pipeline header.
  * Clicking opens the CreateBundleDialog.
  */
 export function CreateBundleButton({ pipelineName, namespace, onRefresh }: CreateBundleButtonProps) {
@@ -263,20 +188,12 @@ export function CreateBundleButton({ pipelineName, namespace, onRefresh }: Creat
   return (
     <>
       <button
+        type="button"
         onClick={() => setShowDialog(true)}
-        aria-label={`Create bundle for ${pipelineName}`}
-        style={{
-          padding: '0.35rem 0.85rem',
-          background: 'var(--color-accent-bg)',
-          border: '1px solid var(--color-accent)',
-          borderRadius: '6px',
-          color: 'var(--color-accent)',
-          cursor: 'pointer',
-          fontSize: '0.8rem',
-          fontWeight: 600,
-        }}
+        aria-label={`Ship a version of ${pipelineName}`}
+        className="k-button k-button--primary k-button--md"
       >
-        + Bundle
+        Ship a version
       </button>
 
       {showDialog && (

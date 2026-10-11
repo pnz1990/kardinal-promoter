@@ -16,7 +16,7 @@ import { displayState } from '../displayStates.gen'
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import dagre from '@dagrejs/dagre'
 import type { GraphNode, GraphEdge } from '../types'
-import { kardinalStateToHealth, healthChipColors, healthStateClass } from './HealthChip'
+import { kardinalStateToHealth, healthStateClass } from './HealthChip'
 import DAGTooltip, { type DAGTooltipTarget } from './DAGTooltip'
 import { formatElapsedSince } from '../timeFormat'
 import { isHttpURL, prNumberFromURL } from '../prLink'
@@ -55,6 +55,16 @@ interface Props {
 const NODE_WIDTH = 180
 const NODE_HEIGHT = 76  // taller to fit PR badge + elapsed timer row (#330)
 const MARGIN = 40
+
+/** Text baselines inside a node, as fractions of its height: name, state, elapsed
+ * timer, and the PR badge (below the timer when one shows). */
+const LINE = {
+  name: NODE_HEIGHT * 0.28,
+  state: NODE_HEIGHT * 0.51,
+  elapsed: NODE_HEIGHT * 0.71,
+  prUnderTimer: NODE_HEIGHT * 0.89,
+  pr: NODE_HEIGHT * 0.74,
+}
 
 /** Node label prefix for PolicyGate type. */
 /** The display-state label of a node (P2): the CLI's words, never the raw value. */
@@ -153,7 +163,7 @@ function topologyKey(nodes: GraphNode[], edges: GraphEdge[]): string {
  * Shown at the bottom of the DAG view so new users understand the visualization.
  */
 function DAGLegend() {
-  // Colors come from healthChipColors, the same function the nodes use, so the
+  // Colors come from the same per-health rules as the nodes (DAGView.css), so the
   // legend always matches what the graph shows.
   const legendItems: Array<{ label: string; state: string; desc: string }> = [
     { label: 'Verified', state: 'Verified', desc: 'Deployed and healthy' },
@@ -163,51 +173,31 @@ function DAGLegend() {
   ]
 
   return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: '0.75rem',
-      flexWrap: 'wrap',
-      marginTop: '0.75rem',
-      padding: '0.5rem 0.25rem',
-      borderTop: '1px solid var(--color-border-muted)',
-      fontSize: '0.65rem',
-      color: 'var(--color-text-faint)',
-    }}>
-      <span style={{ fontWeight: 600, color: 'var(--color-text-faint)', marginRight: '0.25rem' }}>Legend:</span>
+    <div className="dag-legend">
+      <span className="dag-legend__title">Legend:</span>
       {/* Node type icons */}
       <span title="PromotionStep — environment node (rounded rect)">
-        <span style={{ fontSize: '0.6rem', border: '1px solid var(--color-border)', borderRadius: '2px', padding: '0 3px', marginRight: '3px', color: 'var(--color-text-faint)' }}>▭</span>
+        <span className="dag-legend__shape">▭</span>
         Environment step
       </span>
       <span title="PolicyGate — CEL policy check (🔒 prefix)">
-        <span style={{ marginRight: '3px' }}>🔒</span>
+        <span className="dag-legend__icon">🔒</span>
         Policy gate
       </span>
-      <span aria-hidden="true" style={{ color: 'var(--color-border)' }}>│</span>
+      <span aria-hidden="true" className="dag-legend__divider">│</span>
       {/* State color chips */}
-      {legendItems.map(item => {
-        const { bg, border, text } = healthChipColors(kardinalStateToHealth(item.state))
-        return (
-          <span
-            key={item.label}
-            title={item.desc}
-            style={{
-              background: bg,
-              border: `1px solid ${border}`,
-              borderRadius: '3px',
-              padding: '1px 5px',
-              color: text,
-              fontSize: '0.6rem',
-              cursor: 'default',
-            }}
-          >
-            {item.label}
-          </span>
-        )
-      })}
-      <span title="Highlighted nodes indicate blocked PolicyGates when filter is active" style={{ marginLeft: 'auto', color: 'var(--color-text-faint)' }}>
-        <span style={{ color: 'var(--color-warning)', marginRight: '3px' }}>◆</span>highlighted = blocked gate
+      {legendItems.map(item => (
+        <span
+          key={item.label}
+          title={item.desc}
+          className="dag-legend__chip"
+          data-health={kardinalStateToHealth(item.state).toLowerCase()}
+        >
+          {item.label}
+        </span>
+      ))}
+      <span title="Highlighted nodes indicate blocked PolicyGates when filter is active" className="dag-legend__highlight">
+        <span className="dag-legend__highlight-mark">◆</span>highlighted = blocked gate
       </span>
     </div>
   )
@@ -230,12 +220,8 @@ function DAGNode({
   onHoverEnd?: () => void
 }) {
   const health = kardinalStateToHealth(node.state, node.type)
-  const { bg, border, text } = healthChipColors(health)
   const isActive = node.type === 'PromotionStep' && ACTIVE_STATES.has(node.state)
   const elapsed = useElapsedTick(node.startedAt, isActive)
-
-  const strokeColor = isHighlighted ? 'var(--color-warning)' : border
-  const strokeWidth = isSelected ? 2.5 : isHighlighted ? 2.5 : 1.5
 
   const prNumber = node.prURL ? extractPRNumber(node.prURL) : null
   const showPRBadge = prNumber !== null
@@ -252,7 +238,6 @@ function DAGNode({
     <g
       transform={`translate(${node.x - NODE_WIDTH / 2}, ${node.y - NODE_HEIGHT / 2})`}
       onClick={() => onSelectNode?.(isSelected ? null : node)}
-      style={{ cursor: 'pointer', outline: 'none' }}
       className={nodeClass}
       data-node-id={node.id}
       data-health-state={health}
@@ -272,65 +257,42 @@ function DAGNode({
         }
       }}
       onFocus={e => {
-        // #346: visible focus ring for keyboard navigation
-        const rect = (e.currentTarget as SVGGElement).querySelector('rect')
-        if (rect) {
-          rect.setAttribute('stroke', 'var(--color-accent)')
-          rect.setAttribute('stroke-width', '2.5')
-        }
+        // #346: the focus ring is the box's stroke (DAGView.css, .dag-node:focus)
         // Keyboard users get the same tooltip as mouse users.
         onHoverStart?.(node, (e.currentTarget as SVGGElement).getBoundingClientRect())
       }}
-      onBlur={e => {
-        // #346: restore normal stroke on blur
-        const rect = (e.currentTarget as SVGGElement).querySelector('rect')
-        if (rect) {
-          rect.setAttribute('stroke', strokeColor)
-          rect.setAttribute('stroke-width', String(strokeWidth))
-        }
-        onHoverEnd?.()
-      }}
+      onBlur={() => onHoverEnd?.()}
     >
       {/* Portal tooltip replaces native SVG <title> (#526). 
           See DAGTooltip rendered by DAGView parent. */}
       <rect
+        className="dag-node__box"
         width={NODE_WIDTH}
         height={NODE_HEIGHT}
-        rx={6}
-        fill={bg}
-        stroke={strokeColor}
-        strokeWidth={strokeWidth}
       />
       <text
+        className="dag-node__name"
         x={NODE_WIDTH / 2}
-        y={21}
+        y={LINE.name}
         textAnchor="middle"
-        fill="var(--color-text)"
-        fontSize="11"
-        fontWeight="600"
-        style={{ pointerEvents: 'none' }}
       >
         {nodeTypePrefix(node)}{nodeName(node)}
       </text>
       <text
+        className="dag-node__state"
         x={NODE_WIDTH / 2}
-        y={39}
+        y={LINE.state}
         textAnchor="middle"
-        fill={text}
-        fontSize="10"
-        style={{ pointerEvents: 'none' }}
       >
         {stateLabel(node)}
       </text>
       {/* #330: Elapsed timer — shown for active PromotionStep nodes */}
       {isActive && elapsed && (
         <text
+          className="dag-node__elapsed"
           x={NODE_WIDTH / 2}
-          y={54}
+          y={LINE.elapsed}
           textAnchor="middle"
-          fill="var(--color-warning)"
-          fontSize="9"
-          style={{ pointerEvents: 'none' }}
         >
           ⏱ {elapsed}
         </text>
@@ -343,12 +305,10 @@ function DAGNode({
           (Enter on the node) and in the tooltip, which opens on focus. */}
       {showPRBadge && node.prURL && (
         <text
+          className="dag-node__pr"
           x={NODE_WIDTH / 2}
-          y={isActive && elapsed ? 68 : 56}
+          y={isActive && elapsed ? LINE.prUnderTimer : LINE.pr}
           textAnchor="middle"
-          fill="var(--color-accent)"
-          fontSize="9"
-          style={{ cursor: 'pointer', textDecoration: 'underline' }}
           onClick={e => {
             e.stopPropagation()
             if (isHttpURL(node.prURL)) window.open(node.prURL, '_blank', 'noopener,noreferrer')
@@ -402,36 +362,19 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
     return (
       <div>
         {/* #335: skeleton loading state */}
-        <div style={{ padding: '2rem' }}>
+        <div className="dag-view__skeleton">
           {[1, 2, 3].map(i => (
-            <div
-              key={i}
-              style={{
-                height: '64px',
-                borderRadius: '6px',
-                background: 'linear-gradient(90deg, var(--color-surface) 25%, var(--color-surface-2) 50%, var(--color-surface) 75%)',
-                backgroundSize: '200% 100%',
-                animation: 'shimmer 1.5s infinite',
-                marginBottom: '0.75rem',
-                width: `${60 + i * 15}%`,
-              }}
-            />
+            <div key={i} className="dag-view__skeleton-row" />
           ))}
         </div>
-        <style>{`
-          @keyframes shimmer {
-            0% { background-position: 200% 0; }
-            100% { background-position: -200% 0; }
-          }
-        `}</style>
       </div>
     )
   }
   if (error) {
-    return <div role="alert" style={{ padding: '2rem', color: 'var(--color-error)' }}>Error: {error}</div>
+    return <div role="alert" className="dag-view__message dag-view__message--error">Error: {error}</div>
   }
   if (nodes.length === 0) {
-    return <div style={{ padding: '2rem', color: 'var(--color-text-muted)' }}>No active promotion found.</div>
+    return <div className="dag-view__message">No active promotion found.</div>
   }
   const maxX = Math.max(...layout.map(n => n.x + NODE_WIDTH / 2)) + MARGIN
   const maxY = Math.max(...layout.map(n => n.y + NODE_HEIGHT / 2)) + MARGIN
@@ -443,19 +386,19 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
       {/* #532: Static topology banner — uses .dag-static-banner CSS class */}
       {isStaticTopology && (
         <div className="dag-static-banner" data-testid="dag-static-banner">
-          <span style={{ color: 'var(--color-text-faint)' }}>◦</span>
+          <span className="dag-static-banner__mark">◦</span>
           Pipeline topology — no active bundle. Create one to start promoting.
         </div>
       )}
-      <div style={{ overflow: 'auto' }}>
+      <div className="dag-view__scroll">
         <svg
+          className="dag-view__svg"
           width={svgW}
           height={svgH}
-          style={{ display: 'block', minWidth: '100%' }}
         >
           <defs>
             <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-              <polygon points="0 0, 8 3, 0 6" fill="var(--color-text-faint)" />
+              <polygon className="dag-view__arrowhead" points="0 0, 8 3, 0 6" />
             </marker>
           </defs>
 
@@ -475,9 +418,7 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
                 <path
                   key={`${i}-${j}`}
                   d={`M ${x1} ${y1} C ${cx1} ${y1}, ${cx2} ${y2}, ${x2} ${y2}`}
-                  fill="none"
-                  stroke="var(--color-text-faint)"
-                  strokeWidth={1.5}
+                  className="dag-view__edge"
                   markerEnd="url(#arrowhead)"
                 />
               )
