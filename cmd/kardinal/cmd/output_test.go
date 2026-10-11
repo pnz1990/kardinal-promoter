@@ -232,6 +232,7 @@ func TestOutput_JSONHasNoPlaceholders(t *testing.T) {
 		{"get", "steps", "demo", "-o", "json"},
 		{"create", "bundle", "demo", "--image", "ghcr.io/o/app:1.6.0", "--dry-run", "-o", "json"},
 		{"create", "bundle", "demo", "--image", "ghcr.io/o/app:1.6.0", "-o", "json"},
+		{"ship", "demo", "--image", "ghcr.io/o/app:1.7.0", "-o", "json"},
 	} {
 		out, _, err := runOutput(t, c, args...)
 		require.NoError(t, err, args)
