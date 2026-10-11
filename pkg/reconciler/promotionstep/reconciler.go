@@ -176,6 +176,11 @@ type Reconciler struct {
 	// every SCM call is checked too. Nil allows every repository.
 	AllowedRepositories *scm.RepositoryAllowlist
 
+	// ControllerSecret is the Secret holding the controller's own SCM token:
+	// a step whose Pipeline names it as git.secretRef is refused before any
+	// git step. Nil refuses nothing.
+	ControllerSecret *scm.ControllerTokenSecret
+
 	// GitClient is the Git operations client.
 	GitClient scm.GitClient
 
