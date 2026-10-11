@@ -71,15 +71,16 @@ The top line names the pipeline, its state and where its newest version is, with
 The map draws the pipeline as a station map:
 
 - **Stations** are the environments. Each shows the version it runs and, under it, the version on
-  its way, with its state in words (Live, Checking health, Waiting for PR merge, ...;
-  [the labels](reference/glossary.md)).
+  its way, with its state in words (Live, Checking health, Waiting for PR merge,
+  Waiting for approval at *gate*, ...; [the labels](reference/glossary.md)). The **Legend** under
+  the map says what each mark and colour means.
 - **The thread** is the version you follow: one red line through every environment it has
   reached. Where it stops, something holds it.
 - **Gates** sit on the edge into the environment they guard. A blocking gate is a bar across the
   edge, and an approval gate counts its approvals. Select a gate for its expression and its last
   result.
-- **Waves and fleets.** Five or more environments promoted in parallel are one band, and a fleet
-  is one platform. Each counts its environments by state; expand it to a grid, a row per state.
+- **Waves and fleets.** Five or more environments at the same step of the order are one band,
+  and a fleet is one platform. Each counts its environments by state; expand it to a grid, a row per state.
 
 <figure class="k-demo" data-demo="fleet" hidden>
   <picture>
@@ -95,12 +96,19 @@ The map draws the pipeline as a station map:
   environments blocked by each gate, held environments and environments that wait. Select an item to go to it.
 - **Search** matches environment and target names, versions, version (Bundle) names, gate names
   and gate expressions; Enter and Shift+Enter move through the matches.
-- **Zoom.** The map has three levels: **Detail** (every station with its versions, and
-  Promote, Roll back and Release hold under the station in focus),
-  **Map** (names and states) and **Overview** (the shape, with names only on the stations the thread
-  passes, the one in focus and those that need a person). It opens at Detail for up to 8 environments, at Map up to 40, and at Overview above
-  that. Drag to pan; zoom with the wheel, a pinch, or the level buttons. A **minimap** in the
-  corner shows where you are on a large map; select a point to move there.
+- **Zoom.** The map has three levels:
+    - **Detail**: every station with its version, what is on its way and its state, and Promote,
+      Roll back and Release hold under the station in focus.
+    - **Map**: names, and a version only where it differs from the environment before.
+    - **Overview**: the shape, with names only on the stations the thread passes, the one in
+      focus, and those that failed or are held.
+
+    It opens at Detail for up to 8 environments, at Map up to 40, and at Overview above that. On a
+    narrow map (below 720 pixels) that does not fit at its level, it opens a level lower. A label
+    that would overlap a more important one is hidden until you point at or focus its station.
+    Drag to pan; zoom with the wheel, a pinch, or the level buttons. A **minimap** in the corner
+    shows where you are on a large map (it hides while part of the map is under it); select a
+    point to move there.
 
 **Compare two versions.** On the version rail above the map, select one version and Shift-select
 a second, then **Compare**: the second version's route is drawn as a dashed ink thread, and the
@@ -231,8 +239,8 @@ confirmation.
 | Shift+E | Collapse every group |
 | `+`, `-` | Zoom in, out |
 | `0` | Fit the map |
-| `/` | Focus the map search |
-| Esc | Clear the search, or fit the map; it also closes the open details |
+| `/` | Focus the map search (not the pipeline search) |
+| Esc | Clear the search; else close the open popover; else fit the map. The next Esc closes the environment's details |
 
 Shortcuts do nothing while you type in a field or while a dialog is open.
 
