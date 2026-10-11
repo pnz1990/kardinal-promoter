@@ -36,7 +36,12 @@ test.describe('Journey 017 — Station map', () => {
     await expect(prod).toContainText('sha-9f8e7d6')
     await expect(prod).toContainText('→ sha-abc1234 · Waiting for PR merge · #42')
     await expect(page.locator('[data-station="uat"]')).toContainText('sha-abc1234')
-    await expect(page.getByRole('img', { name: 'gate no-weekend-deploys, Blocking' })).toBeVisible()
+    const gate = page.getByRole('img', { name: 'gate no-weekend-deploys, Blocking' })
+    await expect(gate).toBeVisible()
+    // The gate takes the pointer over its whole label, even where the label reaches over uat's column.
+    await gate.hover()
+    await expect(page.locator('.gate-popover')).toBeVisible()
+    await page.mouse.move(0, 0)
     await expect(page.locator('.station-map__thread [data-kind="solid"]')).toHaveCount(1)
     // The map gets most of the page at 1366×768.
     const box = (await page.locator('.station-map').boundingBox())!

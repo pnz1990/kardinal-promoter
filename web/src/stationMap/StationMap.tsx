@@ -44,7 +44,7 @@ export interface StationMapProps {
 }
 
 /** About how wide a character of a gate label is, and the label's line height (--k-text-xs). */
-const GATE_CH = 7
+const GATE_CH = 6
 const GATE_LABEL_H = 16
 
 const LEVELS: ZoomLevel[] = ['overview', 'map', 'detail']
@@ -332,6 +332,24 @@ export default function StationMap(props: StationMapProps) {
             )
           })}
         </g>
+        <g className="station-map__nodes">
+          {model.nodes.map(node => {
+            // The layout gives positions only; the data is the current model's
+            // (the layout is reused while the topology stays the same).
+            const placed = lay.placed.get(node.id)
+            return placed ? { ...placed, node } : undefined
+          }).filter((p): p is Placed => !!p).map(p => p.node.kind === 'station'
+            ? <StationGlyph key={p.node.id} p={p} st={p.node.station} level={level} model={model}
+                differs={!!compare && differs(p.node.station, compare.stations.get(p.node.id))}
+                focusable={active === p.node.id} focused={focusedId === p.node.id}
+                dim={matches.length > 0 && !matchSet.has(p.node.id)}
+                chain={upIds.has(p.node.id) ? 'up' : downIds.has(p.node.id) ? 'down' : undefined}
+                onOpen={() => onOpenStage(p.node.id)} onFocus={() => setCursor(p.node.id)} />
+            : <GroupGlyph key={p.node.id} p={p} g={p.node.group} expanded={p.node.expanded} model={model} level={level}
+                active={active} focusedEnv={focused} matchSet={matchSet} searching={matches.length > 0}
+                onToggle={() => onToggleGroup(p.node.id)} onOpen={onOpenStage} onFocusItem={setCursor} />)}
+        </g>
+        {/* Gates above the stations: a gate label that reaches over a station's label column still takes its own clicks. */}
         <g className="station-map__gates">
           {[...lay.edges.map(({ edge, points }) => ({ to: edge.to, points })), ...[...lay.leads].map(([to, points]) => ({ to, points }))].map(({ to, points }) => {
             const node = model.nodes.find(n => n.id === to)
@@ -350,7 +368,7 @@ export default function StationMap(props: StationMapProps) {
               const labelled = level === 'detail' && i === 0
               const label = gates.length > 1 ? `${g.name} +${gates.length - 1}` : g.name
               const hit = GRAPH.gateTick + GRAPH.grid.gap
-              const labelW = label.length * GATE_CH + hit
+              const labelW = label.length * GATE_CH
               return (
                 <g key={`${to}:${g.id}`} className="station-map__gate" data-tone={g.display.tone}
                   tabIndex={-1} role="img" aria-label={`gate ${g.name}, ${g.display.label}`}
@@ -368,23 +386,6 @@ export default function StationMap(props: StationMapProps) {
               )
             })
           })}
-        </g>
-        <g className="station-map__nodes">
-          {model.nodes.map(node => {
-            // The layout gives positions only; the data is the current model's
-            // (the layout is reused while the topology stays the same).
-            const placed = lay.placed.get(node.id)
-            return placed ? { ...placed, node } : undefined
-          }).filter((p): p is Placed => !!p).map(p => p.node.kind === 'station'
-            ? <StationGlyph key={p.node.id} p={p} st={p.node.station} level={level} model={model}
-                differs={!!compare && differs(p.node.station, compare.stations.get(p.node.id))}
-                focusable={active === p.node.id} focused={focusedId === p.node.id}
-                dim={matches.length > 0 && !matchSet.has(p.node.id)}
-                chain={upIds.has(p.node.id) ? 'up' : downIds.has(p.node.id) ? 'down' : undefined}
-                onOpen={() => onOpenStage(p.node.id)} onFocus={() => setCursor(p.node.id)} />
-            : <GroupGlyph key={p.node.id} p={p} g={p.node.group} expanded={p.node.expanded} model={model} level={level}
-                active={active} focusedEnv={focused} matchSet={matchSet} searching={matches.length > 0}
-                onToggle={() => onToggleGroup(p.node.id)} onOpen={onOpenStage} onFocusItem={setCursor} />)}
         </g>
         {level === 'detail' && actionsFor && (
           <g className="station-map__actions">
