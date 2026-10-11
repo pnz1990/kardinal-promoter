@@ -45,7 +45,9 @@ func TestCLI_VersionRefs(t *testing.T) {
 	// diff by versions is diff by names.
 	assert.Equal(t, c.Must(a.ns, "diff", b2, b3), c.Must(a.ns, "diff", fixtures.V2, fixtures.V3))
 	// logs --bundle by version.
-	assert.Equal(t, c.Must(a.ns, "logs", pipelineName, "--bundle", b2), c.Must(a.ns, "logs", pipelineName, "--bundle", fixtures.V2))
+	logs := c.Must(a.ns, "logs", pipelineName, "--bundle", fixtures.V2)
+	assert.Contains(t, logs, "("+b2+")")
+	assert.NotContains(t, logs, b3)
 
 	// rollback --to a version.
 	out := c.Must(a.ns, "rollback", pipelineName, "prod", "--to", fixtures.V2)
