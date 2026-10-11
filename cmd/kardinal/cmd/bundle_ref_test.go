@@ -73,9 +73,11 @@ func TestResolveBundleRef_Golden(t *testing.T) {
 		{ns: "default", pipeline: "demo"}, {ns: "default", pipeline: "demo"}, {ns: "default", pipeline: "other"},
 		{ns: "default"}, {ns: "default", strict: true}, {ns: "default", pipeline: "demo"},
 		{ns: "default", pipeline: "demo"}, {ns: "default", pipeline: "demo"}, {ns: ""}, {ns: ""},
+		// --name: the Bundle of that name, never a version.
+		{ns: "default", strict: true, exact: true}, {ns: "default", strict: true, exact: true},
 	}
 	refs := []string{"demo-a", "1.4.0", "1.4.0", "1.5.0", "sidecar-7", "3.0.0", "1.4.0",
-		"web-a", "web-a", "web-a", "7.7.7", "abc1234", "x-a", "1.4.0"}
+		"web-a", "web-a", "web-a", "7.7.7", "abc1234", "x-a", "1.4.0", "web-a", "1.4.0"}
 	var golden strings.Builder
 	for i, sc := range cases {
 		got, ns, err := resolveBundleRefIn(context.Background(), c, sc, refs[i])
@@ -85,7 +87,7 @@ func TestResolveBundleRef_Golden(t *testing.T) {
 		} else {
 			got = ns + "/" + got
 		}
-		fmt.Fprintf(&golden, "ns=%q pipeline=%q strict=%v ref=%q\n  %s\n", sc.ns, sc.pipeline, sc.strict, refs[i], got)
+		fmt.Fprintf(&golden, "ns=%q pipeline=%q strict=%v exact=%v ref=%q\n  %s\n", sc.ns, sc.pipeline, sc.strict, sc.exact, refs[i], got)
 	}
 
 	// May get but not list Bundles: a missing name is not found, not
@@ -98,6 +100,21 @@ func TestResolveBundleRef_Golden(t *testing.T) {
 	_, _, err := resolveBundleRefIn(context.Background(), forbidden, refScope{ns: "default"}, "nope")
 	require.Error(t, err)
 	fmt.Fprintf(&golden, "list forbidden, ref=\"nope\"\n  error: %s\n", err)
+
+	// Strict, and the List fails: a name that may also be a version is
+	// refused, not guessed.
+	getOnly := fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(refBundle("web-a", "web", "Verified", 10, "1.4.0")).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(context.Context, sigs_client.WithWatch, sigs_client.ObjectList, ...sigs_client.ListOption) error {
+				return apierrors.NewForbidden(schema.GroupResource{Group: "kardinal.io", Resource: "bundles"}, "", errors.New("no list"))
+			},
+		}).Build()
+	_, _, err = resolveBundleRefIn(context.Background(), getOnly, refScope{ns: "default", strict: true}, "web-a")
+	require.ErrorIs(t, err, errBundleRef)
+	fmt.Fprintf(&golden, "strict, list forbidden, ref=\"web-a\"\n  error: %s\n", err)
+	got, _, err := resolveBundleRefIn(context.Background(), getOnly, refScope{ns: "default", strict: true, exact: true}, "web-a")
+	require.NoError(t, err)
+	fmt.Fprintf(&golden, "strict, list forbidden, --name web-a\n  default/%s\n", got)
 	path := filepath.Join("testdata", "bundle-ref.golden")
 	if *updateBundleRef {
 		require.NoError(t, os.WriteFile(path, []byte(golden.String()), 0o644))
