@@ -78,6 +78,9 @@ const steps: Record<string, () => void> = {
     await dagNode(page, 'test').click()
     await expect(drawerHeading(page)).toHaveText('test')
     await expect(detail.locator('[data-action="promote"]')).toHaveCount(0)
+    // The drawer takes its column, so the graph moved under the pointer: test's tooltip
+    // would cover prod. Move the pointer away first.
+    await page.mouse.move(0, 0)
     await dagNode(page, 'prod').click()
     await expect(drawerHeading(page)).toHaveText('prod')
     await expect(detail.locator('[data-action="promote"]')).toHaveText('Promote')
