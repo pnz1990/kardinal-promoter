@@ -44,7 +44,7 @@ func newExplainCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "explain <pipeline>",
+		Use:   "explain <pipeline> [<env>]",
 		Short: "Explain the current state of a promotion pipeline",
 		Long: `For each environment of <pipeline> (or just <env>), show the current
 Bundle's step and the gates it waits on, gates that are not ready first, with
@@ -55,7 +55,7 @@ the change has not landed yet. -w refreshes every 3 seconds.`,
 		Annotations: map[string]string{ReferenceAnnotation: explainReference},
 		Args:        cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			pipeline, env, err := envArgs(args, envFlag)
+			pipeline, env, err := envArgs(cmd, args, envFlag)
 			if err != nil {
 				return err
 			}
@@ -95,7 +95,7 @@ func explainWatch(ctx context.Context, w io.Writer, c sigs_client.Client,
 			_, _ = fmt.Fprint(w, "\033[H\033[2J")
 		}
 		if err := explainOnce(w, c, ns, pipeline, envFilter, forceColor); err != nil {
-			_, _ = fmt.Fprintf(w, "error: %v\n", err)
+			_, _ = fmt.Fprintf(w, "error: %v\n", HumanError(err))
 		}
 		_, _ = fmt.Fprintln(w, "\n(watching — press Ctrl-C to quit)")
 		select {

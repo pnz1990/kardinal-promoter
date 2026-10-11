@@ -25,6 +25,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/clientcmd"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -43,6 +44,13 @@ var hintClient = buildClient
 // installHint is the command that installs kardinal-promoter.
 const installHint = "helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter -n kardinal-system --create-namespace"
 
+// crdHint is the command that applies the chart's CRDs: helm does not
+// upgrade CRDs.
+const crdHint = "helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter | kubectl apply --server-side --force-conflicts -f -"
+
+// pipelineGK is the kind whose absence means kardinal is not installed.
+var pipelineGK = schema.GroupKind{Group: v1alpha1.GroupVersion.Group, Kind: "Pipeline"}
+
 // HumanError rewrites err, the error a command returned, into one that says
 // how to fix it when it is one of the common failures: kardinal not
 // installed, the API server unreachable, a forbidden request, or a pipeline
@@ -53,8 +61,7 @@ func HumanError(err error) error {
 	}
 	switch {
 	case isNoMatch(err):
-		return fmt.Errorf("kardinal is not installed in cluster %s (the kardinal.io API is not served).\n"+
-			"Install it: %s\nor run: kardinal doctor", contextLabel(), installHint)
+		return noMatchError(err)
 	case apierrors.IsForbidden(err):
 		return forbiddenError(err)
 	case isUnreachable(err):
@@ -86,6 +93,39 @@ func isNoMatch(err error) bool {
 	return meta.IsNoMatchError(err) || strings.Contains(err.Error(), "no matches for kind")
 }
 
+// noMatchKindRE parses the kind of a raw "no matches for kind" message.
+var noMatchKindRE = regexp.MustCompile(`no matches for kind "([^"]+)"`)
+
+// noMatchError is the error for a kind the API server does not serve: when
+// it does not serve Pipelines either (or cannot say), kardinal is not
+// installed; otherwise the CRD of that one kind is missing or older than the
+// CLI, and err follows as the detail.
+func noMatchError(err error) error {
+	kind := ""
+	var nk *meta.NoKindMatchError
+	if errors.As(err, &nk) {
+		kind = nk.GroupKind.Kind
+	} else if m := noMatchKindRE.FindStringSubmatch(err.Error()); m != nil {
+		kind = m[1]
+	}
+	if kind != "" && kind != pipelineGK.Kind && pipelinesServed() {
+		return fmt.Errorf("CRD %s is missing or outdated in cluster %s: apply the chart's CRDs:\n  %s\n(%w)",
+			kind, contextLabel(), crdHint, err)
+	}
+	return fmt.Errorf("kardinal is not installed in cluster %s (the kardinal.io API is not served).\n"+
+		"Install it: %s\nor run: kardinal doctor", contextLabel(), installHint)
+}
+
+// pipelinesServed reports whether the API server serves the Pipeline kind.
+func pipelinesServed() bool {
+	c, _, err := hintClient()
+	if err != nil {
+		return false
+	}
+	_, err = c.RESTMapper().RESTMapping(pipelineGK, v1alpha1.GroupVersion.Version)
+	return err == nil
+}
+
 // isUnreachable reports whether err is a failure to reach the API server.
 func isUnreachable(err error) bool {
 	var op *net.OpError
@@ -104,19 +144,43 @@ func isUnreachable(err error) bool {
 // forbiddenRE parses the API server's Forbidden message.
 var forbiddenRE = regexp.MustCompile(`User "([^"]*)" cannot (\w+) resource "([^"]+)"(?: in API group "([^"]*)")?(?: in the namespace "([^"]+)")?`)
 
-// forbiddenError says who cannot do what where, and the roles that allow it.
+// forbiddenError says who cannot do what where, and the role that allows it.
 func forbiddenError(err error) error {
 	m := forbiddenRE.FindStringSubmatch(err.Error())
 	if m == nil {
-		return fmt.Errorf("%w\nAsk your cluster admin for the kardinal-promoter-viewer (read) or kardinal-promoter-promoter (act) role, or pass -n", err)
+		return fmt.Errorf("%w\nAsk your cluster admin for the kardinal-promoter-viewer (read), -promoter (ship, promote, roll back, pause) or -approver (approve, override) role, or pass -n", err)
 	}
 	where := "the cluster"
 	if m[5] != "" {
 		where = "namespace " + m[5]
 	}
 	return fmt.Errorf("you (%s) cannot %s %s in %s.\n"+
-		"Ask your cluster admin for the kardinal-promoter-viewer role (read) or the kardinal-promoter-promoter role (ship, approve, roll back) there, or pass -n for another namespace",
-		m[1], m[2], m[3], where)
+		"Ask your cluster admin to bind you %s there, or pass -n for another namespace",
+		m[1], m[2], m[3], where, roleFor(m[2], m[3]))
+}
+
+// roleFor names the chart's user role (chart/kardinal-promoter/templates/
+// user-roles.yaml) that grants verb on resource, as forbiddenError says it.
+func roleFor(verb, resource string) string {
+	resource, _, _ = strings.Cut(resource, "/")
+	switch verb {
+	case "get", "list", "watch":
+		return "the kardinal-promoter-viewer role (read)"
+	}
+	// Writes that the promoter and approver roles grant from a kubeconfig
+	// only with rbac.userRoles.directWrites.
+	direct := " (with rbac.userRoles.directWrites)"
+	switch {
+	case resource == "bundles" && verb == "create":
+		return "the kardinal-promoter-promoter role (ship, promote, roll back)"
+	case resource == "pipelines" && (verb == "update" || verb == "patch"):
+		return "the kardinal-promoter-promoter role" + direct + " (pause, resume, hold, release a hold)"
+	case resource == "approvals" && (verb == "create" || verb == "delete"):
+		return "the kardinal-promoter-approver role (approve)"
+	case resource == "policygates" && (verb == "update" || verb == "patch"):
+		return "the kardinal-promoter-approver role" + direct + " (override)"
+	}
+	return "the kardinal-promoter-admin role"
 }
 
 // notFoundPipeline returns the name of the Pipeline a NotFound err is about.
@@ -135,12 +199,16 @@ func notFoundPipeline(err error) (string, bool) {
 // errPipelineNotFound is the error of a pipeline that does not exist.
 type errPipelineNotFound struct {
 	name, ns string
-	others   []string
+	// listed is whether the namespace's pipelines could be listed: others
+	// is empty and says nothing when they could not.
+	listed bool
+	others []string
 }
 
 func (e *errPipelineNotFound) Error() string {
 	msg := fmt.Sprintf("pipeline %q not found in namespace %q", e.name, e.ns)
 	switch {
+	case !e.listed:
 	case len(e.others) == 0:
 		msg += fmt.Sprintf("; namespace %s has no pipelines", e.ns)
 	default:
@@ -153,8 +221,11 @@ func (e *errPipelineNotFound) Error() string {
 // the pipelines ns has.
 func pipelineNotFound(ctx context.Context, c sigs_client.Reader, ns, name string) error {
 	e := &errPipelineNotFound{name: name, ns: ns}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	var list v1alpha1.PipelineList
 	if err := c.List(ctx, &list, sigs_client.InNamespace(ns)); err == nil {
+		e.listed = true
 		for _, p := range list.Items {
 			e.others = append(e.others, p.Name)
 		}
@@ -227,12 +298,17 @@ func serverLabel() string {
 	return " (" + cfg.Host + ")"
 }
 
-// contextFlag is the --context of the kubectl command a message suggests.
+// contextFlag is the --kubeconfig and --context the user passed, for the
+// kubectl command a message suggests.
 func contextFlag() string {
-	if globalContext == "" {
-		return ""
+	s := ""
+	if globalKubeconfig != "" {
+		s += " --kubeconfig " + globalKubeconfig
 	}
-	return " --context " + globalContext
+	if globalContext != "" {
+		s += " --context " + globalContext
+	}
+	return s
 }
 
 // checkPipelineEnv returns pipelineNotFound when pipeline does not exist in

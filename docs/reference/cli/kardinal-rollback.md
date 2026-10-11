@@ -30,7 +30,7 @@ kardinal rollback <pipeline> <env> [flags]
   -e, --env string                 Environment to roll back (or give it after the pipeline)
   -h, --help                       help for rollback
       --hold                       Keep the environment on the rollback until kardinal release-hold; the rollback passes blocking gates, each pass audited
-      --hold-expires-in duration   End the hold this long after it is made (30m, 24h, 2d); default: until kardinal release-hold (default 0s)
+      --hold-expires-in duration   End the hold this long after it is made (30m, 24h, 2d); default: until kardinal release-hold
       --reason string              Why the environment is held (required with --hold)
       --to string                  Specific Bundle name to roll back to
 ```

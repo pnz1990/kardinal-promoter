@@ -288,7 +288,7 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	refuses(t, c, ns, `required flag(s) "reason" not set`, "override", pipelineName)
 	refuses(t, c, ns, `required flag(s) "reason" not set`, "override", pipelineName, "--gate", "entry")
 	for d, why := range map[string]string{"soon": "want 30m, 4h or 2d", "-1h": "must be positive", "0s": "must be positive"} {
-		refuses(t, c, ns, fmt.Sprintf("invalid --expires-in %q: %s", d, why),
+		refuses(t, c, ns, fmt.Sprintf(`invalid argument %q for "--expires-in" flag: %s`, d, why),
 			"override", pipelineName, "--gate", "entry", "--reason", "r", "--expires-in", d)
 	}
 	refuses(t, c, ns, fmt.Sprintf("get policygate nope: no gate instance or template of that name for pipeline podinfo in namespace %s: "+
