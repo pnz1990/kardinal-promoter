@@ -2,7 +2,7 @@
  * Copyright 2026 The kardinal-promoter Authors.
  * Licensed under the Apache License, Version 2.0
  *
- * ActionBar.css — the pipeline's Pause / Resume toolbar (components/ActionBar.tsx).
+ * ActionBar.css — the pipeline header's Pause / Resume toolbar (components/ActionBar.tsx).
  * Design tokens only (noLiterals.test.ts).
  */
 
@@ -10,27 +10,7 @@
   display: flex;
   align-items: center;
   gap: var(--k-space-2);
-  margin-bottom: var(--k-space-3);
   flex-wrap: wrap;
-}
-
-.action-bar__button {
-  padding: var(--k-space-1_5) var(--k-space-3);
-  border: var(--k-border-hairline) solid currentColor;
-  border-radius: var(--k-radius-3);
-  cursor: pointer;
-  font-size: var(--k-text-sm);
-  font-weight: var(--k-weight-semibold);
-}
-
-.action-bar__button--resume {
-  background: var(--k-status-verified-wash);
-  color: var(--k-status-verified-fg);
-}
-
-.action-bar__button--pause {
-  background: var(--k-status-blocked-wash);
-  color: var(--k-status-blocked-fg);
 }
 
 .action-bar__error {

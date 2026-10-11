@@ -176,6 +176,8 @@ interface CreateBundleButtonProps {
   namespace: string
   /** Called after a Bundle is successfully created — triggers a re-poll. */
   onRefresh: () => void
+  /** primary, the page's main action; secondary while the pipeline is paused (Resume is). */
+  variant?: 'primary' | 'secondary'
   /** Why the caller may not ship (U7: the role that grants it); the button is then inert. */
   restricted?: string
   /** Opens the dialog when it changes (the s shortcut); 0 does nothing. */
@@ -186,7 +188,7 @@ interface CreateBundleButtonProps {
  * CreateBundleButton renders the "Ship a version" button (the primary action) in the pipeline header.
  * Clicking opens the CreateBundleDialog.
  */
-export function CreateBundleButton({ pipelineName, namespace, onRefresh, restricted, openSignal = 0 }: CreateBundleButtonProps) {
+export function CreateBundleButton({ pipelineName, namespace, onRefresh, variant = 'primary', restricted, openSignal = 0 }: CreateBundleButtonProps) {
   const [showDialog, setShowDialog] = useState(false)
   const restrictedId = useId()
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -208,7 +210,7 @@ export function CreateBundleButton({ pipelineName, namespace, onRefresh, restric
         aria-describedby={restricted ? restrictedId : undefined}
         title={restricted}
         aria-label={`Ship a version of ${pipelineName}`}
-        className="k-button k-button--primary k-button--md"
+        className={`k-button k-button--${variant} k-button--md`}
       >
         Ship a version
       </button>

@@ -20,6 +20,7 @@ import { kardinalStateToHealth, healthStateClass } from './HealthChip'
 import DAGTooltip, { type DAGTooltipTarget } from './DAGTooltip'
 import { formatElapsedSince } from '../timeFormat'
 import { isHttpURL, prNumberFromURL } from '../prLink'
+import { Icon } from '../ui/Icon'
 import '../styles/DAGView.css'
 
 /** Active states that warrant an elapsed-time display (#330). */
@@ -54,6 +55,8 @@ interface Props {
 
 const NODE_WIDTH = 180
 const NODE_HEIGHT = 76  // taller to fit PR badge + elapsed timer row (#330)
+/** Where a gate node's icon sits, from its top-left corner. */
+const GATE_ICON_INSET = 6
 const MARGIN = 40
 
 /** Text baselines inside a node, as fractions of its height: name, state, elapsed
@@ -66,14 +69,9 @@ const LINE = {
   pr: NODE_HEIGHT * 0.74,
 }
 
-/** Node label prefix for PolicyGate type. */
 /** The display-state label of a node (P2): the CLI's words, never the raw value. */
 function stateLabel(node: GraphNode): string {
   return displayState(node.type === 'PolicyGate' ? 'gate' : 'step', node.state).label
-}
-
-function nodeTypePrefix(node: GraphNode): string {
-  return node.type === 'PolicyGate' ? '🔒 ' : ''
 }
 
 /** Display name: the gate name for PolicyGate nodes, else the environment. */
@@ -180,8 +178,8 @@ function DAGLegend() {
         <span className="dag-legend__shape">▭</span>
         Environment step
       </span>
-      <span title="PolicyGate — CEL policy check (🔒 prefix)">
-        <span className="dag-legend__icon">🔒</span>
+      <span title="PolicyGate — CEL policy check (gate icon)">
+        <Icon name="gate" className="dag-legend__icon" />
         Policy gate
       </span>
       <span aria-hidden="true" className="dag-legend__divider">│</span>
@@ -276,8 +274,10 @@ function DAGNode({
         y={LINE.name}
         textAnchor="middle"
       >
-        {nodeTypePrefix(node)}{nodeName(node)}
+        {nodeName(node)}
       </text>
+      {/* A gate carries the gate icon in its corner (inline SVG renders on every OS). */}
+      {node.type === 'PolicyGate' && <Icon name="gate" className="dag-node__icon" x={GATE_ICON_INSET} y={GATE_ICON_INSET} />}
       <text
         className="dag-node__state"
         x={NODE_WIDTH / 2}
@@ -294,7 +294,7 @@ function DAGNode({
           y={LINE.elapsed}
           textAnchor="middle"
         >
-          ⏱ {elapsed}
+          {elapsed}
         </text>
       )}
       {/* PR badge — shown when a PR exists; clicking opens the PR in a new tab (#361)
@@ -315,7 +315,7 @@ function DAGNode({
           }}
           aria-hidden="true"
         >
-          🔗 {prNumber}
+          PR {prNumber}
         </text>
       )}
     </g>

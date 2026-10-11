@@ -10,7 +10,8 @@
 //   #/p/<ns>/<pipeline>/v/<bundle>        … showing that version (Bundle)
 //   #/approvals                           approvals (reserved; shows the fleet for now)
 //
-// and the query after `?`: `tab=history|gates|metrics` (the pipeline page's tab), `view=ops`
+// and the query after `?`: `tab=versions|activity|metrics` (the pipeline page's tab; the
+// older `tab=history` reads as versions and `tab=gates` as the map), `view=ops`
 // (the operations table), `filter=` (a fleet filter),
 // `q=` (the pipeline search), `compare=<bundle>` (the comparison panel), `node=<id>` (a gate's
 // details), `v=<bundle>` (the version shown while an environment is open), `section=` (the
@@ -38,8 +39,8 @@ export interface UrlState {
   filter: string | undefined
   /** The pipeline search. */
   q: string | undefined
-  /** The pipeline page's tab: history, gates or metrics (the map when unset). */
-  tab: 'history' | 'gates' | 'metrics' | undefined
+  /** The pipeline page's tab: versions, activity or metrics (the map when unset). */
+  tab: PipelineTab | undefined
   /** #/approvals (reserved). */
   approvals: boolean | undefined
   /** The stage drawer section to scroll to (why, actions, evidence, history; #1701). */
@@ -56,7 +57,10 @@ export const EMPTY_URL_STATE: UrlState = {
 const ANY_NS = '*'
 
 const QUERY_KEYS = ['tab', 'view', 'filter', 'q', 'compare', 'node', 'section'] as const
-const TABS: readonly string[] = ['history', 'gates', 'metrics']
+export type PipelineTab = 'versions' | 'activity' | 'metrics'
+const TABS: readonly string[] = ['versions', 'activity', 'metrics']
+/** Tabs from before Map | Versions | Activity | Metrics: what each now opens (undefined: the map). */
+const OLD_TABS: Record<string, PipelineTab | undefined> = { history: 'versions', gates: undefined }
 
 /** Whether a hash uses the routes from before #/…: `#pipeline=…&ns=…`. */
 export function isLegacyHash(hash: string): boolean {
@@ -90,7 +94,7 @@ export function parseHash(hash: string): UrlState {
     const v = params.get(k)
     if (!v) continue
     if (k === 'view') out.view = v === 'ops' ? 'ops' : undefined
-    else if (k === 'tab') out.tab = TABS.includes(v) ? (v as UrlState['tab']) : undefined
+    else if (k === 'tab') out.tab = TABS.includes(v) ? (v as PipelineTab) : OLD_TABS[v]
     else out[k] = v
   }
   if (seg[0] === 'p' && seg[2]) {

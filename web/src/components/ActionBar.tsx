@@ -19,6 +19,7 @@
 import { useId, useState, useCallback } from 'react'
 import { api } from '../api/client'
 import { ConfirmDialog, actionErrorMessage } from './ConfirmDialog'
+import { Button } from '../ui/Button'
 import '../styles/ActionBar.css'
 
 // ─── ActionBar ────────────────────────────────────────────────────────────────
@@ -76,27 +77,30 @@ export function ActionBar({ pipelineName, namespace, paused, onRefresh, restrict
         className="action-bar"
       >
         {paused ? (
-          <button
+          // While paused, Resume is the page's primary action.
+          <Button
+            variant="primary"
+            icon="play"
             onClick={() => { if (restricted) return; setActionError(undefined); setPendingAction('resume') }}
             aria-disabled={restricted ? true : undefined}
             title={restricted}
             aria-describedby={restricted ? restrictedId : undefined}
             aria-label="Resume pipeline"
-            className="action-bar__button action-bar__button--resume"
           >
-            ▶ Resume
-          </button>
+            Resume
+          </Button>
         ) : (
-          <button
+          <Button
+            variant="secondary"
+            icon="pause"
             onClick={() => { if (restricted) return; setActionError(undefined); setPendingAction('pause') }}
             aria-disabled={restricted ? true : undefined}
             title={restricted}
             aria-describedby={restricted ? restrictedId : undefined}
             aria-label="Pause pipeline"
-            className="action-bar__button action-bar__button--pause"
           >
-            ⏸ Pause
-          </button>
+            Pause
+          </Button>
         )}
 
         {restricted && <span id={restrictedId} className="sr-only">{restricted}</span>}

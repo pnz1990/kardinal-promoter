@@ -8,6 +8,7 @@
 import { useState, useMemo } from 'react'
 import type { Pipeline } from '../types'
 import { HealthChip } from './HealthChip'
+import { Icon } from '../ui/Icon'
 import '../styles/PipelineOpsTable.css'
 
 type SortColumn =
@@ -242,7 +243,7 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
                   <td className="ops-table__td" data-tone={hasBlockers ? 'failed' : 'verified'}>
                     {hasBlockers ? (
                       <span title={`${p.blockerCount} gate${p.blockerCount === 1 ? '' : 's'} blocking`}>
-                        ⛔ {p.blockerCount}
+                        <Icon name="gate" className="ops-table__icon" /> {p.blockerCount}
                       </span>
                     ) : (
                       <span title="No blockers">0</span>

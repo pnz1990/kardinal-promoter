@@ -221,11 +221,6 @@
   font-weight: var(--k-weight-semibold);
 }
 
-.pipeline-list__state[data-tone="verified"] { color: var(--k-status-verified-fg); }
-.pipeline-list__state[data-tone="promoting"] { color: var(--k-thread-text); }
-.pipeline-list__state[data-tone="waiting"] { color: var(--k-status-waiting-fg); }
-.pipeline-list__state[data-tone="failed"] { color: var(--k-status-failed-fg); }
-.pipeline-list__state[data-tone="pending"] { color: var(--k-ink-3); }
 
 .pipeline-list__meta {
   display: flex;

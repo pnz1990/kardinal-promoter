@@ -28,6 +28,7 @@ import { createPortal } from 'react-dom'
 import type { GraphNode } from '../types'
 import { healthChipColors, kardinalStateToHealth } from './HealthChip'
 import { isHttpURL } from '../prLink'
+import { Icon } from '../ui/Icon'
 import '../styles/DAGTooltip.css'
 
 export interface DAGTooltipTarget {
@@ -138,7 +139,7 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
     >
       {/* Header: environment/gate name */}
       <div className="dag-tooltip__title">
-        {isPolicyGate ? `🔒 ${node.label}` : node.environment}
+        {isPolicyGate ? <><Icon name="gate" className="dag-tooltip__gate-icon" /> {node.label}</> : node.environment}
       </div>
 
       {/* State */}

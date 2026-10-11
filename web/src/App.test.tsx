@@ -86,9 +86,9 @@ async function flush(ms = 50) {
   await act(async () => { await vi.advanceTimersByTimeAsync(ms) })
 }
 const lastGraphCall = () => h.api.getGraph.mock.calls.at(-1)?.[0]
-/** Opens the pipeline page's Gates tab. */
+/** Opens the pipeline page's Activity tab (the version's gates and failures). */
 async function openGates() {
-  fireEvent.click(screen.getByRole('tab', { name: /^Gates/ }))
+  fireEvent.click(screen.getByRole('tab', { name: /^Activity/ }))
   await flush()
 }
 
@@ -133,7 +133,7 @@ describe('App bundle selection', () => {
     expect(screen.getByTitle(/^b-new: Promoting/).className).not.toContain('bundle-chip--selected')
   })
 
-  it('falls back to the default bundle when the selected bundle disappears', async () => {
+  it('says the selected version is gone, never showing another one silently, and links to the current one', async () => {
     render(<App />)
     await flush()
     fireEvent.click(screen.getByTitle(/^b-old: Superseded/))
@@ -142,9 +142,35 @@ describe('App bundle selection', () => {
 
     h.state.bundles = { app: [bundle('b-new', 'Promoting', 1)] }
     await flush(5_100)
+    expect(screen.getByRole('heading', { name: 'No version b-old in app' })).toBeInTheDocument()
+    expect(screen.queryByText('env-of-b-new')).not.toBeInTheDocument()
+    expect(screen.queryByRole('tablist', { name: 'Pipeline views' })).not.toBeInTheDocument()
+
+    const back = screen.getByRole('link', { name: 'Show the current version of app' })
+    expect(back).toHaveAttribute('href', '#/p/default/app')
+    await act(async () => {
+      window.history.pushState(null, '', back.getAttribute('href')!)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    await flush()
     expect(lastGraphCall()).toBe('b-new')
     expect(screen.getAllByText('env-of-b-new').length).toBeGreaterThan(0)
-    expect(screen.getByTitle(/^b-new: Promoting/).className).toContain('bundle-chip--selected')
+  })
+
+  it('says a pipeline the cluster does not have is not found, with a link to all pipelines', async () => {
+    window.history.replaceState(null, '', '/ui/#/p/default/nope')
+    render(<App />)
+    await flush()
+    expect(screen.getByRole('heading', { name: 'No pipeline named nope in default' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Back to all pipelines' })).toHaveAttribute('href', '#/')
+  })
+
+  it('says a version link to a version the pipeline does not have is not found', async () => {
+    window.history.replaceState(null, '', '/ui/#/p/default/app/v/b-gone')
+    render(<App />)
+    await flush()
+    expect(screen.getByRole('heading', { name: 'No version b-gone in app' })).toBeInTheDocument()
+    expect(screen.queryByRole('tablist', { name: 'Pipeline views' })).not.toBeInTheDocument()
   })
 
   it('shows the pipeline active bundle, not the first bundle in API order', async () => {
@@ -198,6 +224,43 @@ describe('App bundle selection', () => {
     expect(h.api.getGraph.mock.calls.length).toBe(before + 1)
     release()
     await flush()
+  })
+})
+
+describe('App pipeline header', () => {
+  it('puts Pause next to Ship a version, and makes Resume the primary action while paused', async () => {
+    render(<App />)
+    await flush()
+    const pause = screen.getByRole('button', { name: 'Pause pipeline' })
+    const ship = screen.getByRole('button', { name: 'Ship a version of app' })
+    expect(pause.closest('.app-pipeline-head__actions')).toBe(ship.closest('.app-pipeline-head__actions'))
+    expect(ship.className).toContain('k-button--primary')
+    expect(pause.className).toContain('k-button--secondary')
+  })
+
+  it('while paused, Resume is primary and Ship a version is secondary', async () => {
+    h.state.pipelines = [pipeline('app', { phase: 'Ready', activeBundleName: 'b-new', paused: true })]
+    render(<App />)
+    await flush()
+    expect(screen.getByRole('button', { name: 'Resume pipeline' }).className).toContain('k-button--primary')
+    expect(screen.getByRole('button', { name: 'Ship a version of app' }).className).toContain('k-button--secondary')
+  })
+
+  it('shows Map, Versions, Activity and Metrics, and every tab controls a panel in the page', async () => {
+    render(<App />)
+    await flush()
+    const tabs = screen.getAllByRole('tab')
+    expect(tabs.map(t => t.textContent?.replace(/\d+$/, ''))).toEqual(['Map', 'Versions', 'Activity', 'Metrics'])
+    for (const t of tabs) expect(document.getElementById(t.getAttribute('aria-controls')!)).not.toBeNull()
+  })
+
+  it('reads the summary sentence, with the version and its provenance as one line under the title', async () => {
+    h.state.pipelines = [pipeline('app', { phase: 'Ready', activeBundleName: 'b-new', summary: 'b-new is promoting to prod.' })]
+    render(<App />)
+    await flush()
+    const line = screen.getByText('b-new is promoting to prod.').closest('p')!
+    expect(line).toHaveClass('app-pipeline-head__summary')
+    expect(line).toHaveTextContent(/Version b-new/)
   })
 })
 
@@ -563,7 +626,7 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
     gateCase(false)
     render(<App />)
     await flush()
-    expect(screen.queryByText(/blocking promotion/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/gates? blocking/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Show blocked' })).not.toBeInTheDocument()
     expect(screen.getByLabelText('soak — Not ready')).toBeInTheDocument()
     await openGates()
@@ -576,7 +639,7 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
     gateCase(false)
     render(<App />)
     await flush()
-    expect(screen.queryByText(/blocking promotion/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/gates? blocking/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Show blocked' })).not.toBeInTheDocument()
     expect(screen.queryByText(/\d+ blocked/)).not.toBeInTheDocument()
   })
@@ -585,7 +648,7 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
     gateCase(true)
     render(<App />)
     await flush()
-    expect(screen.getByText('1 PolicyGate blocking promotion')).toBeInTheDocument()
+    expect(screen.getByText('1 gate blocking prod')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Show blocked' })).toBeInTheDocument()
     await openGates()
     expect(screen.getByText('1 blocked')).toBeInTheDocument()

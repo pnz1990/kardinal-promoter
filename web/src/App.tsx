@@ -27,7 +27,10 @@ import { BlockedBanner } from './components/BlockedBanner'
 import { InsecureConnectionBanner } from './components/InsecureConnectionBanner'
 import { Breadcrumb } from './components/Breadcrumb'
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
-import { Badge, Icon, Kbd, MenuButton, TabPanel, Tabs } from './ui'
+import { Badge, Icon, Kbd, TabPanel, Tabs } from './ui'
+import { NotFound } from './components/NotFound'
+import { displayState } from './displayStates.gen'
+import { versionName } from './versionName'
 import { useAccessIn } from './access/access'
 import { actionCheck, restriction } from './access/actionAccess'
 import { ApprovalsPage, type ApprovalsHandle } from './approvals/ApprovalsPage'
@@ -54,7 +57,7 @@ import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
 import { useTheme, themeControlLabel } from './ThemeContext'
 import './styles/App.css'
-import { EMPTY_URL_STATE, serializeHash, useUrlState, type UrlState } from './useUrlState'
+import { EMPTY_URL_STATE, serializeHash, useUrlState, type PipelineTab } from './useUrlState'
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
 import { resolveShownBundle } from './bundleSelection'
 import { environmentUpstreams, terminalEnvironments } from './fleetModel'
@@ -465,6 +468,20 @@ export function App() {
     return ids
   }, [graph])
 
+  // The environments those gates guard, in the order the graph lists them.
+  const blockedEnvironments = useMemo(
+    () => (graph?.nodes ?? []).filter(n => blockedGateIds.has(n.id)).map(n => n.environment),
+    [graph, blockedGateIds],
+  )
+  // Stages of the shown version whose promotion failed (the Activity tab groups them).
+  const failedStepCount = activeSteps.filter(st => st.state === 'Failed').length
+
+  // A route naming a pipeline or a version the cluster does not have says so (NotFound),
+  // and never shows another one in its place.
+  const pipelineMissing = !!selectedPipeline && !pipelinesLoading && !pipelinesError && !activePipeline
+  const versionMissing = !!activePipeline && !!urlState.version && !bundlesLoading
+    && !bundles.some(b => b.name === urlState.version)
+
   // When showBlockedOnly is active, pass the blocked IDs to DAGView for highlight.
   const highlightIds = showBlockedOnly ? blockedGateIds : undefined
 
@@ -777,106 +794,126 @@ export function App() {
           )
         ) : (
           <>
-            {/* Header: one line (name, paused, summary, Ship a version, More). */}
+            {/* Header: the name and the pipeline's actions, then one summary line. */}
             <div className="app-pipeline-head">
               <div className="app-pipeline-head__bar">
-                <h1 className="app-pipeline-head__title">{activePipeline?.name}</h1>
+                <h1 className="app-pipeline-head__title">{activePipeline?.name ?? selectedPipeline}</h1>
                 {/* Paused banner in main panel (#328) */}
                 {activePipeline?.paused && (
                   <span className="app-paused">⏸ PAUSED — no new promotions</span>
                 )}
-                {activePipeline?.summary && (
-                  <p className="app-pipeline-head__summary">{activePipeline.summary}</p>
-                )}
                 {activePipeline && (
                   <div className="app-pipeline-head__actions">
+                    {/* #506: pause / resume; while paused, Resume is the primary action. */}
+                    <ActionBar
+                      pipelineName={activePipeline.name}
+                      namespace={activePipeline.namespace ?? 'default'}
+                      paused={activePipeline.paused ?? false}
+                      onRefresh={manualRefresh}
+                      restricted={pauseRestricted}
+                    />
                     {/* #917: ship a version from the UI. */}
                     <CreateBundleButton
                       pipelineName={activePipeline.name}
                       namespace={activePipeline.namespace ?? 'default'}
                       onRefresh={manualRefresh}
+                      variant={activePipeline.paused ? 'secondary' : 'primary'}
                       restricted={shipRestricted}
                       openSignal={shipSignal}
                     />
-                    <MenuButton label="More actions" icon="chevron">
-                      {/* #506: pause / resume the pipeline. */}
-                      <ActionBar
-                        pipelineName={activePipeline.name}
-                        namespace={activePipeline.namespace ?? 'default'}
-                        paused={activePipeline.paused ?? false}
-                        onRefresh={manualRefresh}
-                        restricted={pauseRestricted}
-                      />
-                    </MenuButton>
                   </div>
                 )}
               </div>
-              <Tabs
-                label="Pipeline views"
-                value={pipelineTab}
-                onChange={(t) => setUrlState({ tab: t === 'map' ? undefined : (t as UrlState['tab']) })}
-                items={[
-                  { id: 'map', label: 'Map' },
-                  { id: 'history', label: 'History', count: bundles.length || undefined },
-                  { id: 'gates', label: 'Gates', count: shownGates.length || undefined },
-                  { id: 'metrics', label: 'Metrics' },
-                ]}
-              />
-            </div>
-
-            {pipelineTab === 'map' && (
-              <TabPanel id="map" className="app-tab app-tab--map">
-                <div className="app-map-head">
-                  {/* Blocked PolicyGate banner */}
-                  <BlockedBanner
-                    blockedCount={blockedGateIds.size}
-                    highlightActive={showBlockedOnly}
-                    onToggleHighlight={() => setShowBlockedOnly(v => !v)}
-                    onOpenGates={() => setUrlState({ tab: 'gates' })}
-                  />
-                  {/* Bundle provenance card (#329) */}
-                  {activeBundle && (
-                    <div className="app-provenance">
-                      <span>
-                        Bundle: <span className="app-provenance__bundle">{activeBundle.name}</span>
-                        {/* #763: copy bundle name */}
-                        <CopyButton text={activeBundle.name} title={`Copy bundle name "${activeBundle.name}"`} />
+              {activePipeline && (
+                <p className="app-pipeline-head__summary">
+                  {/* P1's status.summary sentence; the shown version's state when there is none. */}
+                  <span>{activePipeline.summary ?? (activeBundle ? displayState('bundle', activeBundle.phase).label : 'No version yet')}</span>
+                  {/* #329/#763: the shown version's provenance, quiet; none for a version that is not found. */}
+                  {activeBundle && !versionMissing && (
+                    <span className="app-provenance">
+                      <span className="app-sep" aria-hidden="true">·</span>
+                      <span title={activeBundle.name}>
+                        Version <span className="app-provenance__bundle">{versionName(activeBundle.name, activePipeline.name)}</span>
                       </span>
-                      <BundleTypeBadge type={activeBundle.type} />
-                      <span className="app-sep">·</span>
-                      <HealthChip state={activeBundle.phase} kind="bundle" size="sm" />
-                      <RejectedLiveBanner bundle={activeBundle} />
+                      <CopyButton text={activeBundle.name} title={`Copy version name "${activeBundle.name}"`} />
+                      <BundleTypeBadge type={activeBundle.type} compact />
+                      {urlState.version && (
+                        <span>({displayState('bundle', activeBundle.phase).label})</span>
+                      )}
                       {activeBundle.provenance?.commitSHA && (
                         <>
-                          <span className="app-sep">·</span>
-                          <span className="app-sha"
-                                title="Commit SHA">
+                          <span className="app-sep" aria-hidden="true">·</span>
+                          <span className="app-sha" title="Commit SHA">
                             {activeBundle.provenance.commitSHA.slice(0, 8)}
                           </span>
-                          {/* #763: copy full commit SHA */}
                           <CopyButton text={activeBundle.provenance.commitSHA} title="Copy commit SHA" />
                         </>
                       )}
                       {activeBundle.provenance?.author && (
                         <>
-                          <span className="app-sep">·</span>
+                          <span className="app-sep" aria-hidden="true">·</span>
                           <span title="Author">{activeBundle.provenance.author}</span>
                         </>
                       )}
                       {activeBundle.provenance?.ciRunURL && (
                         <>
-                          <span className="app-sep">·</span>
+                          <span className="app-sep" aria-hidden="true">·</span>
                           <CIRunLink url={activeBundle.provenance.ciRunURL} />
                         </>
                       )}
-                      {activeBundle.rejected && (
-                        <span className="bundle-rejected" role="note">
-                          Rejected by <strong>{activeBundle.rejected.by}</strong>
-                          {activeBundle.rejected.at && <> {formatRelativeAge(activeBundle.rejected.at)}</>}: {activeBundle.rejected.reason}
-                        </span>
-                      )}
-                    </div>
+                    </span>
                   )}
+                </p>
+              )}
+              {activeBundle && !versionMissing && <RejectedLiveBanner bundle={activeBundle} />}
+              {activeBundle?.rejected && !versionMissing && (
+                <p className="bundle-rejected" role="note">
+                  Rejected by <strong>{activeBundle.rejected.by}</strong>
+                  {activeBundle.rejected.at && <> {formatRelativeAge(activeBundle.rejected.at)}</>}: {activeBundle.rejected.reason}
+                </p>
+              )}
+              {activePipeline && !versionMissing && (
+                <Tabs
+                  label="Pipeline views"
+                  value={pipelineTab}
+                  onChange={(t) => setUrlState({ tab: t === 'map' ? undefined : (t as PipelineTab) })}
+                  items={[
+                    { id: 'map', label: 'Map' },
+                    { id: 'versions', label: 'Versions', count: bundles.length || undefined },
+                    { id: 'activity', label: 'Activity', count: (blockedGateIds.size + failedStepCount) || undefined },
+                    { id: 'metrics', label: 'Metrics' },
+                  ]}
+                />
+              )}
+            </div>
+
+            {pipelineMissing ? (
+              <NotFound
+                title={`No pipeline named ${selectedPipeline}${urlState.ns ? ` in ${urlState.ns}` : ''}`}
+                detail="It may have been deleted, or the link has a typo."
+                href={serializeHash(EMPTY_URL_STATE)}
+                linkText="Back to all pipelines"
+              />
+            ) : versionMissing ? (
+              <NotFound
+                title={`No version ${urlState.version} in ${activePipeline?.name}`}
+                detail="It may have been cleaned up after newer versions shipped, or the link has a typo."
+                href={serializeHash({ ...EMPTY_URL_STATE, pipeline: activePipeline?.name, ns: activePipeline?.namespace })}
+                linkText={`Show the current version of ${activePipeline?.name}`}
+              />
+            ) : activePipeline ? (
+            <>
+            {/* Every tab's panel is in the page (hidden when not shown), so each tab's aria-controls resolves. */}
+            <TabPanel id="map" hidden={pipelineTab !== 'map'} className="app-tab app-tab--map">
+              {pipelineTab === 'map' && (<>
+                <div className="app-map-head">
+                  {/* Gates holding the version back: one button, Show blocked. */}
+                  <BlockedBanner
+                    blockedCount={blockedGateIds.size}
+                    environments={blockedEnvironments}
+                    highlightActive={showBlockedOnly}
+                    onToggleHighlight={() => setShowBlockedOnly(v => !v)}
+                  />
                   {/* Bundle Timeline — horizontal strip showing bundle history (Kargo freight timeline parity).
                       Receives bundles from parent state — no independent fetch (#321). */}
                   <ErrorBoundary fallbackMessage="Timeline unavailable">
@@ -907,16 +944,6 @@ export function App() {
                   })()
                 )}
 
-                {/* #332: Pipeline lane view — horizontal stage cards (Kargo-parity).
-                    Shows each PromotionStep environment as a card with state chip, bundle, and actions. */}
-                {/* #528: Cross-environment error aggregation — shown above lane view when steps fail */}
-                <PromotionErrorsPanel
-                  steps={activeSteps}
-                  onSelectEnvironment={(env) => {
-                    const node = graph?.nodes.find(n => n.environment === env && n.type === 'PromotionStep')
-                    if (node) setSelectedNode(node)
-                  }}
-                />
                 <PipelineLaneView
                   nodes={graph?.nodes ?? []}
                   edges={graph?.edges ?? []}
@@ -966,49 +993,56 @@ export function App() {
                     </ErrorBoundary>
                   )}
                 </div>
-              </TabPanel>
-            )}
+              </>)}
+            </TabPanel>
 
-            {pipelineTab === 'history' && (
-              <TabPanel id="history" className="app-tab">
-                {bundles.length === 0
-                  ? <p className="app-tab__empty">No version of this pipeline yet.</p>
-                  : (
-                    <ul className="app-history__list" aria-label="Bundle history">
-                      {bundles.map(b => (
-                        <li key={b.name} className="app-history__item">
-                          <HealthChip state={b.phase} kind="bundle" size="sm" />
-                          <a className="app-history__name" href={serializeHash({ ...urlState, version: b.name, env: undefined, node: undefined, tab: undefined })}>{b.name}</a>
-                          {b.provenance?.commitSHA && (
-                            <span className="app-sha">
-                              {b.provenance.commitSHA.slice(0, 8)}
-                            </span>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-              </TabPanel>
-            )}
+            <TabPanel id="versions" hidden={pipelineTab !== 'versions'} className="app-tab">
+              {pipelineTab === 'versions' && (bundles.length === 0
+                ? <p className="app-tab__empty">No version of this pipeline yet.</p>
+                : (
+                  <ul className="app-history__list" aria-label="Versions">
+                    {bundles.map(b => (
+                      <li key={b.name} className="app-history__item">
+                        <HealthChip state={b.phase} kind="bundle" size="sm" />
+                        <a className="app-history__name" title={b.name} href={serializeHash({ ...urlState, version: b.name, env: undefined, node: undefined, tab: undefined })}>{versionName(b.name, activePipeline.name)}</a>
+                        {b.provenance?.commitSHA && (
+                          <span className="app-sha">
+                            {b.provenance.commitSHA.slice(0, 8)}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                ))}
+            </TabPanel>
 
-            {pipelineTab === 'gates' && (
-              <TabPanel id="gates" className="app-tab">
-                {/* #340: PolicyGates panel — shows all active gates with CEL expressions */}
+            <TabPanel id="activity" hidden={pipelineTab !== 'activity'} className="app-tab">
+              {pipelineTab === 'activity' && (<>
+                {/* #528: failures grouped across environments; a click opens the environment on the map. */}
+                <PromotionErrorsPanel
+                  steps={activeSteps}
+                  onSelectEnvironment={(env) => {
+                    const node = graph?.nodes.find(n => n.environment === env && n.type === 'PromotionStep')
+                    if (node) { setUrlState({ tab: undefined }); setSelectedNode(node) }
+                  }}
+                />
+                {/* #340: the shown version's gates, their conditions and approvals. */}
                 <PolicyGatesPanel gates={shownGates} loading={gatesLoading} onDecided={() => { void manualRefresh() }} />
-              </TabPanel>
-            )}
+              </>)}
+            </TabPanel>
 
-            {pipelineTab === 'metrics' && (
-              <TabPanel id="metrics" className="app-tab">
+            <TabPanel id="metrics" hidden={pipelineTab !== 'metrics'} className="app-tab">
+              {pipelineTab === 'metrics' && (<>
                 {/* #504: Release efficiency metrics bar — inline metrics for the pipeline. */}
                 <ReleaseMetricsBar
                   bundles={bundles}
                   finalEnvironments={terminalEnvironments(activePipeline?.environmentTopology, activePipeline?.topologyResolved)}
                   deploymentMetrics={activePipeline?.deploymentMetrics}
                 />
-
-              </TabPanel>
-            )}
+              </>)}
+            </TabPanel>
+            </>
+            ) : null}
           </>
         )}
       </main>

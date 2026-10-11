@@ -400,16 +400,21 @@ release name other than `kardinal-promoter`, the Service is named
   `20/50 verified, 5 in flight (max 5)`; it says `stopped` once `maxUnavailable` targets
   failed. A station opens its Pipeline at that environment. The board follows the sidebar's
   health filter.
-- **Pipeline view.** One header line: the Pipeline's name, Paused when it is paused, its
-  summary, **Ship a version** (create a Bundle) and **More actions** (pause and resume). Below it
-  are four tabs:
+- **Pipeline view.** The header has the Pipeline's name, Paused when it is paused, **Pause**
+  (or **Resume**, the main action while paused) and **Ship a version** (create a Bundle). Under
+  it, one line: the Pipeline's summary sentence, then the shown version's name, commit, author
+  and CI run. Below that are four tabs:
   - **Map**: the lane, the promotion graph, and the Bundle history to pick the version shown and
     compare two. Promote and roll back are on the environments.
-  - **History**: every Bundle of the Pipeline.
-  - **Gates**: the policy gates with their CEL expressions and approvals.
+  - **Versions**: every Bundle of the Pipeline.
+  - **Activity**: failed promotions grouped across environments, and the shown Bundle's policy
+    gates with their CEL expressions and approvals.
   - **Metrics**: the release metrics.
 
-  When a gate holds the shown Bundle, a banner on the map says so and opens the Gates tab. The lane has one column per depth: parallel environments share a column, and a wave of five
+  When gates hold the shown Bundle, a banner on the map names them and the environments they
+  block (`1 gate blocking prod`); **Show blocked** highlights them in the graph. An address with a
+  Pipeline or a version the cluster does not have says it is not found and links back; it does
+  not show another one. The lane has one column per depth: parallel environments share a column, and a wave of five
   or more is one card that counts its environments by state and expands to the list. The graph
   lists the environments of a column in the Pipeline's order.
 - **Environment details.** Selecting an environment (a fleet station, a lane card or a graph
@@ -471,7 +476,7 @@ release name other than `kardinal-promoter`, the Service is named
   | `/ui/#/approvals` | the approvals waiting on you |
 
   These options go after `?`:
-  - `tab=history|gates|metrics` picks a tab;
+  - `tab=versions|activity|metrics` picks a tab (`tab=history` opens Versions, `tab=gates` the map);
   - `compare=<bundle>` opens the comparison;
   - `section=why|actions|evidence|history` scrolls an environment's details to that part;
   - `view=ops` shows the operations table;

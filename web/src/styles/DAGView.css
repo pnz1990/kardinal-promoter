@@ -38,6 +38,7 @@
 .dag-node__state,
 .dag-node__elapsed { pointer-events: none; }
 .dag-node__name { fill: var(--k-ink); font-size: var(--k-text-2xs); font-weight: var(--k-weight-semibold); }
+.dag-node__icon { color: var(--k-ink-3); pointer-events: none; }
 .dag-node__state { fill: var(--dag-text); font-size: calc(var(--k-text-2xs) * 0.9); }
 .dag-node__elapsed { fill: var(--k-status-blocked-fg); font-size: calc(var(--k-text-2xs) * 0.82); }
 .dag-node__pr {
