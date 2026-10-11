@@ -299,3 +299,12 @@ func TestRedactText_QuotedPathAt(t *testing.T) {
 	}
 	assert.Equal(t, "https://zoo.example/x?monkey=banana", scm.RedactText("https://zoo.example/x?monkey=banana"))
 }
+
+// TestRedactText_EscapedQuote (#1721 QA): a quoted URL with an escaped quote
+// in its password, as strconv.Quote writes it, is redacted whole.
+func TestRedactText_EscapedQuote(t *testing.T) {
+	in := `parse "https://u:p\" wSECRET@host/x": invalid character " " in host name`
+	got := scm.RedactText(in)
+	assert.NotContains(t, got, "SECRET")
+	assert.Contains(t, got, "host/x")
+}

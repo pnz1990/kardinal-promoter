@@ -38,7 +38,13 @@ var userinfoInURL = regexp.MustCompile(`//[^/?#\s]*@`)
 // RedactURL: parsed when it parses, so an "@" in its path ("/@scope/pkg",
 // "/@v/list") is kept, and cut to its last "@" when it does not (a password
 // with a space or a "/").
-var quotedURL = regexp.MustCompile(`"([A-Za-z][A-Za-z0-9+.-]*://[^"]*)"`)
+// A quoted string may hold escaped quotes (strconv.Quote writes \"), so the
+// match runs to the first unescaped quote, and only a string that starts
+// with a scheme is a URL.
+var quotedURL = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
+
+// urlScheme matches the start of a URL.
+var urlScheme = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
 
 // secretParams are the URL parameter names (compared lower-cased, after
 // percent-decoding) whose values are credentials.
@@ -302,7 +308,7 @@ func (e redactedError) Unwrap() error { return e.err }
 func RedactText(s string) string {
 	s = quotedURL.ReplaceAllStringFunc(s, func(m string) string {
 		inner := m[1 : len(m)-1]
-		if !strings.Contains(inner, "@") {
+		if !urlScheme.MatchString(inner) || !strings.Contains(inner, "@") {
 			return m
 		}
 		return `"` + RedactURL(inner) + `"`
