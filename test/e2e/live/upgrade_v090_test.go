@@ -22,6 +22,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
 )
 
 // guideChartV090 is the chart reference of the "Upgrading from v0.9.0"
@@ -97,7 +98,11 @@ func TestUpgradeV090_FromV090(t *testing.T) {
 	b1 := v090Bundle("promote", imageV2)
 	e.WaitStepState(t, ns, "promote", b1, "test", "Verified", promoteTimeout)
 	e.WaitStepState(t, ns, "promote", b1, "prod", "WaitingForMerge", promoteTimeout)
-	pr := a.openPR(t, b1, "prod")
+	// v0.9.0 named the PR branch kardinal/<bundle>/<env>, without the
+	// namespace hash this release adds.
+	pr := e.WaitPR(t, a.repo, time.Minute, "the open prod PR of "+b1+" (v0.9.0)", func(pr gitserver.PR) bool {
+		return pr.State == "open" && pr.Head == "kardinal/"+b1+"/prod"
+	})
 	t.Logf("v0.9.0 Bundles: %s (Verified), %s (in flight, prod PR #%d)", bDone, b1, pr.Number)
 
 	graphOf := func(bundle string) (name string, uid types.UID) {
