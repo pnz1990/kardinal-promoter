@@ -8,6 +8,7 @@ package live
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -82,8 +83,11 @@ func applyExamplePipeline(t *testing.T, e *framework.Env, p *unstructured.Unstru
 	require.Equal(t, "Pipeline", p.GetKind())
 	secret, _, _ := unstructured.NestedString(p.Object, "spec", "git", "secretRef", "name")
 	require.Equal(t, exampleTokenSecret, secret, "the example reads the README's token Secret")
-	branch, _, _ := unstructured.NestedString(p.Object, "spec", "git", "branch")
-	require.Equal(t, exampleBranch, branch, "the example promotes the repo's main")
+	// The example promotes the repo's main: it says so, or leaves the
+	// default (main).
+	if branch, _, _ := unstructured.NestedString(p.Object, "spec", "git", "branch"); branch != "" {
+		require.Equal(t, exampleBranch, branch, "the example promotes the repo's main")
+	}
 	p.SetNamespace(ns)
 	require.NoError(t, unstructured.SetNestedField(p.Object, repo.CloneURL, "spec", "git", "url"))
 	require.NoError(t, unstructured.SetNestedField(p.Object, repo.Branch, "spec", "git", "branch"))
@@ -327,6 +331,62 @@ func weekendGate(t *testing.T, e *framework.Env, ns, bundle, message string) boo
 		assert.True(t, strings.HasPrefix(g.Status.Reason, message+" ("), "blocked reason %q", g.Status.Reason)
 	}
 	return weekend
+}
+
+// TestCore_MinimalExample runs examples/minimal/pipeline.yaml, the 12-line
+// Pipeline the docs lead with: kardinal validate -f passes it unchanged, and
+// with every other field defaulted (order, branch main, layout, path
+// environments/<name>, kustomize, approval auto, the resource health check
+// of Deployment my-app in namespace <env>) a Bundle goes live in test and
+// uat on its own, prod opens a PR, and after the merge prod runs the
+// Bundle's image too.
+//
+// Changes to the example: the namespace, Git URL and branch. Argo CD
+// Application <ns>-<env> deploys each overlay into the namespace of the
+// environment's name, where the default health check looks.
+//
+// Covers EX-MINIMAL-01.
+func TestCore_MinimalExample(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ns := e.Namespace(t)
+	const pipeline = "my-app"
+	envs := []string{"test", "uat", "prod"}
+
+	r := e.CLI(t).Exec(framework.CLIOptions{Kubeconfig: "/dev/null", Dir: "../../../examples/minimal"}, "validate", "-f", "pipeline.yaml")
+	require.Equal(t, 0, r.Code, r.Stdout+r.Stderr)
+	assert.Contains(t, r.Stdout, "✓ pipeline.yaml is valid\n")
+	raw, err := os.ReadFile("../../../examples/minimal/pipeline.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, 12, strings.Count(string(raw), "\n"), "the minimal Pipeline is 12 lines")
+
+	a := &app{e: e, ns: ns, envs: envs, repo: e.Repo(t, ns, fixtures.KustomizeRepoFor(envs,
+		func(string) string { return pipeline }, func(env string) string { return env }))}
+	for _, env := range envs {
+		e.EnsureNamespace(t, env)
+		exampleArgoApp(t, e, ns+"-"+env, a.repo, env, env)
+	}
+	for _, env := range envs {
+		e.WaitArgoApp(t, ns+"-"+env, syncTimeout)
+		e.WaitDeploymentImage(t, env, pipeline, imageV1, syncTimeout)
+	}
+
+	createExampleToken(t, e, ns)
+	p := applyExamplePipeline(t, e, exampleManifest(t, "minimal/pipeline.yaml"), ns, a.repo, nil)
+	require.Len(t, p.Spec.Environments, 3)
+	assert.Equal(t, "pr-review", p.Spec.Environments[2].Approval)
+
+	bundle := e.CreateBundle(t, ns, pipeline, "--image", imageV2)
+	for _, env := range []string{"test", "uat"} {
+		ps := e.WaitStepState(t, ns, pipeline, bundle, env, "Verified", promoteTimeout)
+		assert.True(t, strings.HasPrefix(ps.Status.Message, "health check passed via resource: "),
+			"%s: the default resource health check: %s", env, ps.Status.Message)
+		e.WaitDeploymentImage(t, env, pipeline, imageV2, syncTimeout)
+	}
+	e.WaitStepState(t, ns, pipeline, bundle, "prod", "WaitingForMerge", promoteTimeout)
+	a.merge(t, a.openPR(t, bundle, "prod"))
+	e.WaitStepState(t, ns, pipeline, bundle, "prod", "Verified", promoteTimeout)
+	e.WaitDeploymentImage(t, "prod", pipeline, imageV2, syncTimeout)
 }
 
 // TestCore_ConfigPromotionExample promotes the config Bundle of
