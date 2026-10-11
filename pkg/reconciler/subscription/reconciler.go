@@ -44,6 +44,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -506,6 +508,9 @@ func (r *Reconciler) writeError(ctx context.Context, sub *kardinalv1alpha1.Subsc
 // writeErrorReason is writeError with the Ready condition's reason.
 func (r *Reconciler) writeErrorReason(ctx context.Context, sub *kardinalv1alpha1.Subscription, now time.Time,
 	reason, msg string) (ctrl.Result, error) {
+	// Backstop: no URL credentials in the status, the condition or the log,
+	// whichever watcher wrote the message.
+	msg = scm.RedactText(msg)
 	zerolog.Ctx(ctx).Warn().Str("subscription", sub.Name).Str("reason", reason).Str("error", msg).Msg("subscription watch error")
 	patchErr := r.patchStatus(ctx, sub, func(s *kardinalv1alpha1.SubscriptionStatus) {
 		s.Phase = "Error"

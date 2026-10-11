@@ -38,7 +38,7 @@ func gitHostPort(raw string) (scheme, hostPort string, err error) {
 	if scm.IsSSHRemote(raw) {
 		ep, err := transport.NewEndpoint(strings.TrimSpace(raw))
 		if err != nil {
-			return "", "", fmt.Errorf("parse spec.git.url: %w", err)
+			return "", "", fmt.Errorf("parse spec.git.url: %s", scm.RedactText(err.Error()))
 		}
 		port := ep.Port
 		if port == 0 {
@@ -48,7 +48,7 @@ func gitHostPort(raw string) (scheme, hostPort string, err error) {
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", "", fmt.Errorf("parse spec.git.url: %w", err)
+		return "", "", fmt.Errorf("parse spec.git.url: %s", scm.RedactText(err.Error()))
 	}
 	switch u.Scheme {
 	case "https", "http":
