@@ -55,21 +55,10 @@
 .stage-table__quiet { color: var(--k-ink-3); }
 .stage-table__gates { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--k-space-1); }
 .stage-table__actions { display: flex; flex-wrap: wrap; gap: var(--k-space-1); }
-.stage-table__actions button {
-  font: inherit;
-  font-size: var(--k-text-xs);
-  color: var(--k-ink);
-  background: var(--k-surface-raised);
-  border: var(--k-border-hairline) solid var(--k-line-strong);
-  border-radius: var(--k-radius-2);
-  padding: var(--k-space-0_5) var(--k-space-2);
-  cursor: pointer;
-}
-.stage-table__actions button:focus-visible { outline: var(--k-focus-ring); outline-offset: var(--k-focus-offset); }
 
 /* Matrix: Bundles × environments. A sticky header row and version column; one glyph per cell. */
 .version-matrix { position: relative; }
-.version-matrix__table { border-collapse: collapse; min-inline-size: 100%; }
+.version-matrix__table { border-collapse: collapse; table-layout: fixed; }
 .version-matrix__head, .version-matrix__version, .version-matrix__cell {
   block-size: var(--k-space-8);
   vertical-align: middle;
@@ -114,18 +103,8 @@
 .version-matrix__cell[data-tone="failed"] { color: var(--k-status-failed-fg); font-weight: var(--k-weight-bold); }
 .version-matrix__count { margin-inline-start: var(--k-space-1); color: var(--k-ink-3); }
 
-/* The Map tab's view switch: Map | Table | Matrix. */
-.map-views { display: inline-flex; border: var(--k-border-hairline) solid var(--k-line); border-radius: var(--k-radius-2); overflow: hidden; }
-.map-views button {
-  font-family: var(--k-font-display);
-  font-size: var(--k-text-xs);
-  color: var(--k-ink-2);
-  background: var(--k-surface-raised);
-  border: 0;
-  padding: var(--k-space-1) var(--k-space-3);
-  cursor: pointer;
-}
-.map-views button + button { border-inline-start: var(--k-border-hairline) solid var(--k-line); }
-.map-views button[aria-checked="true"] { background: var(--k-surface-sunken); color: var(--k-ink); font-weight: var(--k-weight-semibold); }
-.map-views button:focus-visible { outline: var(--k-focus-ring); outline-offset: calc(var(--k-focus-offset) * -1); }
-.pipeline-map__views { display: flex; justify-content: flex-end; padding-block-end: var(--k-space-2); }
+.version-matrix-wrap { flex: 1; min-block-size: 0; display: flex; flex-direction: column; }
+.version-matrix__cell:focus-visible { outline: var(--k-focus-ring); outline-offset: calc(var(--k-focus-offset) * -1); }
+.version-matrix__gap { padding: 0; border: 0; }
+/* The focused cell in words, for a sighted keyboard user (screen readers read the cell's name). */
+.version-matrix__status { margin: 0; padding: var(--k-space-1) var(--k-space-2); min-block-size: var(--k-space-6); font-family: var(--k-font-mono); font-size: var(--k-text-xs); color: var(--k-ink-2); }

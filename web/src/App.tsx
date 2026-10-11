@@ -18,7 +18,6 @@
 // #800: / shortcut to focus pipeline search input.
 import { lazy, Suspense, useState, useCallback, useMemo, useRef, useEffect, type RefObject } from 'react'
 import { PipelineList } from './components/PipelineList'
-import { PipelineOpsTable } from './components/PipelineOpsTable'
 import PipelineMap from './stationMap/PipelineMap'
 import { HealthChip } from './components/HealthChip'
 import { RejectedLiveBanner } from './components/RejectedLiveBanner'
@@ -39,18 +38,20 @@ const CommandPalette = lazy(() => import('./components/CommandPalette').then(m =
 // prefetched with the palette's, so a click on a station opens it at once).
 const StageDrawer = lazy(() => import('./stage/StageDrawer').then(m => ({ default: m.StageDrawer })))
 const KeyboardShortcutsPanel = lazy(() => import('./components/KeyboardShortcutsPanel').then(m => ({ default: m.KeyboardShortcutsPanel })))
+// The Activity and Metrics tabs and the operations table load when first shown.
+const PipelineOpsTable = lazy(() => import('./components/PipelineOpsTable').then(m => ({ default: m.PipelineOpsTable })))
+const PolicyGatesPanel = lazy(() => import('./components/PolicyGatesPanel').then(m => ({ default: m.PolicyGatesPanel })))
+const ReleaseMetricsBar = lazy(() => import('./components/ReleaseMetricsBar').then(m => ({ default: m.ReleaseMetricsBar })))
+const PromotionErrorsPanel = lazy(() => import('./components/PromotionErrorsPanel'))
 /** When the page is idle enough to fetch the palette's code (ms after the first render). */
 const PREFETCH_MS = 1500
 const BundleDiffPanel = lazy(() => import('./components/BundleDiffPanel').then(m => ({ default: m.BundleDiffPanel })))
 import { BundleTypeBadge } from './components/BundleTypeBadge'
-import { PolicyGatesPanel } from './components/PolicyGatesPanel'
 import { FleetHealthBar, filterPipelines, isFleetFilter, type FleetFilter } from './components/FleetHealthBar'
 import { FleetBoard } from './components/FleetBoard'
-import { ReleaseMetricsBar } from './components/ReleaseMetricsBar'
 import { ActionBar } from './components/ActionBar'
 import { CreateBundleButton } from './components/CreateBundleDialog'
 import EmptyState from './components/EmptyState'
-import PromotionErrorsPanel from './components/PromotionErrorsPanel'
 import CopyButton from './components/CopyButton'
 import { formatRelativeAge } from './components/approvalAge'
 import { CIRunLink } from './components/CIRunLink'
@@ -164,9 +165,6 @@ export function App() {
     if (node) setSelectedNodeLocal(node)
   }, [graph, urlState, selectedNode, setUrlState])
 
-  // The user picked the Map tab's view (Map, Table or Matrix): a narrow screen
-  // then keeps the Map instead of opening on the Table.
-  const [mapChosen, setMapChosen] = useState(false)
 
   // The palette's code loads while the page is idle, so the first ⌘K opens at once.
   useEffect(() => {
@@ -731,6 +729,7 @@ export function App() {
             {topbarTools}
           </div>
           {insecureBanner}
+          <Suspense fallback={<Skeleton label="Loading the operations table…" />}>
           <PipelineOpsTable
             pipelines={pipelines}
             selected={selectedPipeline}
@@ -740,6 +739,7 @@ export function App() {
             error={pipelinesError}
             onRetry={() => { void manualRefresh() }}
           />
+          </Suspense>
         </main>
       ) : (
         <>{/* Main area — column layout for header + content row */}
@@ -943,10 +943,12 @@ export function App() {
                         gates={shownGates}
                         bundles={bundles}
                         // Narrow screens open on the Table, the map's linear equivalent (DESIGN-SYSTEM §3.5).
-                        as={urlState.as ?? (narrow && !mapChosen ? 'table' : undefined)}
-                        onAs={v => { setMapChosen(true); setUrlState({ as: v }) }}
+                        as={urlState.as ?? (narrow ? 'table' : 'map')}
+                        // A choice is kept in the link, Map included (a narrow screen would open on the Table).
+                        onAs={v => setUrlState({ as: v === 'map' && !narrow ? undefined : v })}
                         onSelectVersion={handleTimelineBundleSelect}
                         onCompareVersion={b => { setCompareTarget(b); setUrlState({ compare: b }) }}
+                        stageData={{ steps: activeSteps, gates }}
                       />
                     </ErrorBoundary>
                   </div>
@@ -994,7 +996,7 @@ export function App() {
             </TabPanel>
 
             <TabPanel id="activity" hidden={pipelineTab !== 'activity'} className="app-tab">
-              {pipelineTab === 'activity' && (<>
+              {pipelineTab === 'activity' && (<Suspense fallback={<Skeleton label="Loading the activity…" />}>
                 {/* #528: failures grouped across environments; a click opens the environment on the map. */}
                 <PromotionErrorsPanel
                   steps={activeSteps}
@@ -1005,18 +1007,18 @@ export function App() {
                 />
                 {/* #340: the shown version's gates, their conditions and approvals. */}
                 <PolicyGatesPanel gates={shownGates} loading={gatesLoading} onDecided={() => { void manualRefresh() }} />
-              </>)}
+              </Suspense>)}
             </TabPanel>
 
             <TabPanel id="metrics" hidden={pipelineTab !== 'metrics'} className="app-tab">
-              {pipelineTab === 'metrics' && (<>
+              {pipelineTab === 'metrics' && (<Suspense fallback={<Skeleton label="Loading the metrics…" rows={2} />}>
                 {/* #504: Release efficiency metrics bar — inline metrics for the pipeline. */}
                 <ReleaseMetricsBar
                   bundles={bundles}
                   finalEnvironments={terminalEnvironments(activePipeline?.environmentTopology, activePipeline?.topologyResolved)}
                   deploymentMetrics={activePipeline?.deploymentMetrics}
                 />
-              </>)}
+              </Suspense>)}
             </TabPanel>
             </>
             ) : null}

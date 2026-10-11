@@ -20,6 +20,7 @@ import { useMapViewport } from './useMapViewport'
 import { ageOf } from '../fleetModel'
 import { prNumberFromURL } from '../prLink'
 import { Icon } from '../ui'
+import { Segmented } from './Segmented'
 import '../styles/StationMap.css'
 
 export interface StationMapProps {
@@ -416,12 +417,8 @@ export default function StationMap(props: StationMapProps) {
           {query && <span className="station-map__count" aria-live="polite">{matches.length} {matches.length === 1 ? 'match' : 'matches'}</span>}
         </label>
         {views}
-        <div className="station-map__levels" role="radiogroup" aria-label="Zoom level">
-          {LEVELS.map(l => (
-            <button key={l} type="button" role="radio" aria-checked={level === l} className="station-map__level"
-              onClick={() => vp.setLevel(l)}>{LEVEL_LABEL[l]}</button>
-          ))}
-        </div>
+        <Segmented label="Zoom" className="station-map__levels" value={level} onChange={l => vp.setLevel(l)}
+          items={LEVELS.map(l => ({ id: l, text: LEVEL_LABEL[l] }))} />
       </div>
       {paused && <div className="station-map__paused-band" role="status">Paused · no new promotions</div>}
       <p id={descId} className="sr-only">
