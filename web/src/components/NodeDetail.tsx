@@ -28,6 +28,7 @@ import { PipelineActionDialog, type PipelineActionKind } from './PipelineActionD
 import { formatElapsedSince } from '../timeFormat'
 import { isHttpURL } from '../prLink'
 import { canPromote, canRollback } from '../pipelineActions'
+import { KubernetesDetails } from '../ui'
 import '../styles/NodeDetail.css'
 
 interface Props {
@@ -239,7 +240,7 @@ function StepProgress({ step }: { step: PromotionStep }) {
   return (
     <div className="node-detail__section">
       <h4 className="node-detail__heading node-detail__heading--spaced">
-        Promotion Steps
+        Steps
       </h4>
       {list.length === 0 ? (
         <div className="node-detail__hint node-detail__hint--flush">
@@ -416,9 +417,6 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
         <HealthChip state={node.state} nodeType={node.type} size="md" />
       </div>
 
-      <div className="node-detail__field">
-        <strong className="node-detail__label">Type:</strong> {node.type}
-      </div>
       <div className="node-detail__field">
         <strong className="node-detail__label">Environment:</strong> {node.environment}
       </div>
@@ -687,6 +685,9 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
           namespace={stepNs}
         />
       )}
+
+      {/* The glossary says stage and gate; the kind and object name live here (U4). */}
+      <KubernetesDetails kind={node.type} name={stepDetail?.name ?? node.id} namespace={stepNs} />
     </div>
   )
 }

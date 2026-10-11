@@ -435,8 +435,8 @@ describe('NodeDetail — promote and rollback ask first (C10b-web-08)', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it.each([
-    { action: 'promote', prod: 'NotStarted', opener: /^Promote to prod$/, title: 'Promote my-app to prod?', confirm: 'Promote to prod', done: 'Promotion started: bundle b' },
-    { action: 'rollback', prod: 'Verified', opener: /^Roll back prod$/, title: 'Roll back prod?', confirm: 'Roll back prod', done: 'Rollback started: bundle b' },
+    { action: 'promote', prod: 'NotStarted', opener: /^Promote to prod$/, title: 'Promote my-app to prod?', confirm: 'Promote to prod', done: 'Promotion started: version b' },
+    { action: 'rollback', prod: 'Verified', opener: /^Roll back prod$/, title: 'Roll back prod?', confirm: 'Roll back prod', done: 'Rollback started: version b' },
   ] as const)('$action: opens a dialog, calls the API only on confirm, then refreshes', async ({ action, prod, opener, title, confirm, done }) => {
     const { api } = await import('../api/client')
     const { onActionDone, rerender, nodes, edges } = renderProd('Verified', prod)
