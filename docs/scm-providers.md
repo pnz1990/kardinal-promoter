@@ -262,7 +262,7 @@ The startup token check cannot see these scopes; see [Token check at startup](#t
 
 Deleting a branch on Forgejo and Gitea also closes every open pull request from it, from a queue,
 shortly after the delete call returns. kardinal deletes the head branch of a PR it closed. It keeps
-the branch of a PromotionStep deleted on its own while its Bundle is `Promoting` or `Failed`, its
+the branch of a PromotionStep deleted on its own while its version is `Promoting` or `Failed`, its
 Graph is still there, and the new step pushes at once. kro creates that step again, and the new
 step opens its PR from the same branch name about a second later, so deleting the branch would
 close that PR too. When the new step would wait (a gate is not ready, the Pipeline is paused, or an
@@ -445,7 +445,7 @@ Connecting and the ssh handshake are bounded (30s), and a push waits at most a m
 server's post-receive hooks before it closes the connection. A step that is cancelled or times
 out closes its ssh connection at once. A wrong or missing host key fails the step with a `knownhosts:` error, and a Secret with an ssh
 URL but no `sshPrivateKey` or `knownHosts` fails it with a message naming the missing key. The
-config source of a config Bundle on the same ssh host uses the same key, and so do the
+config source of a config version on the same ssh host uses the same key, and so do the
 controller's reads of the branch while a PR waits: its heads (`ls-remote`) and recent history,
 which it uses to follow or rebuild the PR branch and to check a later synced commit in health.
 With the chart's
@@ -593,11 +593,11 @@ spec:
 How it works:
 
 - **The provider is set when the Graph is built.** When the controller translates a
-  Bundle, it resolves `providerRef` and writes the provider's kind, name and UID into
+  version, it resolves `providerRef` and writes the provider's kind, name and UID into
   each PromotionStep's `spec.scmProvider`. The PromotionStep copies it into the PRStatus
   of its PR. Opening the PR, labels, polling, comments and branch cleanup all use that
   provider's client. If the provider is missing, does not allow the namespace or the
-  repository, or uses an `http://` API without the opt-in, the Bundle stays `Available`
+  repository, or uses an `http://` API without the opt-in, the version stays `Available`
   with a `TranslationError` that gives the reason. It is retried every 15 seconds and goes
   ahead once the provider is created or fixed.
 - **A step keeps the provider it started with.** If the provider is deleted, or deleted
@@ -746,7 +746,7 @@ restart in static mode.
 When `scm.secretRef.name` or `scm.token` is set in the Helm chart, these three environment
 variables are injected into the controller Deployment automatically. With `scm.token` the
 Secret is the chart-managed `<release>-github-token`; rotate it with
-the `helm upgrade` in [Upgrade](installation.md#upgrade) with `--set scm.token=<NEW_TOKEN>` added.
+the `helm upgrade` in [Upgrade](upgrade.md) with `--set scm.token=<NEW_TOKEN>` added.
 
 ### Rotating a PAT (zero-downtime procedure)
 

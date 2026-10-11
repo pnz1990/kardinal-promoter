@@ -1,0 +1,102 @@
+$ kardinal get pipelines
+PIPELINE   VERSION           TEST   UAT                    PROD                      SUB   AGE
+demo       1.5.0 (demo-b3)   Live   Waiting for PR merge   Held by gate no-weekend   0     10h
+
+$ kardinal get pipelines -A
+NAMESPACE   PIPELINE   VERSION           TEST   UAT                    PROD                      SUB   AGE
+default     demo       1.5.0 (demo-b3)   Live   Waiting for PR merge   Held by gate no-weekend   0     10h
+
+$ kardinal get pipelines demo
+PIPELINE   VERSION           TEST   UAT                    PROD                      SUB   AGE
+demo       1.5.0 (demo-b3)   Live   Waiting for PR merge   Held by gate no-weekend   0     10h
+
+$ kardinal get bundles demo
+VERSION           TYPE    PHASE                       AGE
+1.5.0 (demo-b3)   image   Promoting                   1h
+1.4.1 (demo-b2)   image   Failed                      3h
+1.4.0 (demo-b1)   image   Verified                    5h
+demo-b0           image   Replaced by newer version   6h
+
+$ kardinal get bundles -A
+NAMESPACE   VERSION           TYPE    PHASE                       AGE
+default     1.5.0 (demo-b3)   image   Promoting                   1h
+default     1.4.1 (demo-b2)   image   Failed                      3h
+default     1.4.0 (demo-b1)   image   Verified                    5h
+default     demo-b0           image   Replaced by newer version   6h
+
+$ kardinal get steps demo
+ENVIRONMENT   STEP               STATE         DURATION   MESSAGE
+prod          (no step detail)   Live          -          -
+test          (no step detail)   Live          -          -
+uat           git-clone          Done          -          -
+              open-pr            In progress   -          -
+
+$ kardinal status demo
+Pipeline: demo   Namespace: default
+1.5.0 live in test; waiting for PR merge in uat (#42); held by gate no-weekend in prod
+
+ENVIRONMENT  RUNNING          INCOMING         STATE                    SINCE  PR
+test         1.5.0 (demo-b3)  -                Live                     30m    -
+uat          1.4.0 (demo-b1)  1.5.0 (demo-b3)  Waiting for PR merge     30m    https://github.com/o/r/pull/42
+prod         1.4.0 (demo-b1)  1.5.0 (demo-b3)  Held by gate no-weekend  30m    -
+
+Blocking gates
+------------------------------------------------------------------------
+GATE        ENV   EXPRESSION           REASON                  LAST CHECKED
+no-weekend  prod  !schedule.isWeekend  No deploys on weekends  <time>
+
+$ kardinal explain demo
+ENVIRONMENT   VERSION           TYPE         NAME         STATE                  EXPRESSION            REASON
+prod          1.5.0 (demo-b3)   PolicyGate   no-weekend   Not ready              !schedule.isWeekend   No deploys on weekends (!schedule.isWeekend = false)
+test          1.5.0 (demo-b3)   Step         pr-review    Live                   -                     -
+uat           1.5.0 (demo-b3)   PolicyGate   soak         Passing                true                  true = true
+uat           1.5.0 (demo-b3)   Step         pr-review    Waiting for PR merge   -                     waiting for the PR
+
+prod   deployed: 1.4.0 (demo-b1)
+uat    deployed: 1.4.0 (demo-b1)
+
+$ kardinal explain demo prod
+ENVIRONMENT   VERSION           TYPE         NAME         STATE       EXPRESSION            REASON
+prod          1.5.0 (demo-b3)   PolicyGate   no-weekend   Not ready   !schedule.isWeekend   No deploys on weekends (!schedule.isWeekend = false)
+
+prod   deployed: 1.4.0 (demo-b1)
+
+$ kardinal history demo
+VERSION           ACTION    ENV    PR    DURATION   TIMESTAMP
+1.5.0 (demo-b3)   promote   uat    #42   ...        <time>
+1.5.0 (demo-b3)   promote   test   --    --         <time>
+1.4.1 (demo-b2)   promote   test   --    --         <time>
+1.4.0 (demo-b1)   promote   prod   --    --         <time>
+1.4.0 (demo-b1)   promote   uat    --    --         <time>
+1.4.0 (demo-b1)   promote   test   --    --         <time>
+demo-b0           promote   test   --    --         <time>
+
+$ kardinal logs demo
+=== demo/prod (demo-b1) [Live] ===
+
+=== demo/test (demo-b1) [Live] ===
+
+=== demo/test (demo-b2) [Failed] ===
+  message:  health alarm - rollback Bundle demo-b2 -> demo-b1 created
+
+=== demo/test (demo-b3) [Live] ===
+
+=== demo/uat (demo-b1) [Live] ===
+
+=== demo/uat (demo-b3) [Waiting for PR merge] ===
+  message:  waiting for the PR
+  pr_url:   https://github.com/o/r/pull/42
+  steps:
+    STEP       STATE        DURATION  MESSAGE
+    ----       -----        --------  -------
+    git-clone  Done         -         
+    open-pr    In progress  -         
+
+
+$ kardinal policy list
+NAME   NAMESPACE   SCOPE   APPLIES-TO   RECHECK   CEL   LAST-EVALUATED
+
+$ kardinal policy simulate demo prod --time Saturday 3pm
+RESULT: PASS
+No PolicyGates found for pipeline "demo" environment "prod"
+

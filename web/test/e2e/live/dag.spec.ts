@@ -1,8 +1,8 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 //
-// UI-DAG-01: the promotion DAG with per-environment state, the PR badge and
-// the tooltip. Go test: TestUI_BrowserDAG (test/e2e/live/ui_browser_test.go).
+// UI-DAG-01: the station map (U2) with per-environment state, the gate on the
+// edge into prod and its popover, and the PR in the stage drawer. Go test: TestUI_BrowserDAG (test/e2e/live/ui_browser_test.go).
 //
 // The Go test made Bundle KARDINAL_UI_BUNDLE in two namespaces: in
 // KARDINAL_UI_NAMESPACE it is Verified in test and waits on its prod PR behind
@@ -10,7 +10,7 @@
 // in the only environment, solo.
 
 import { test, expect, type Page } from '@playwright/test'
-import { need, openPipeline, dagNode } from './live'
+import { need, openPipeline, station, gateMark, stageDrawer, drawerHeading } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -39,66 +39,63 @@ function expectScoped(reads: URL[], namespace: string) {
   }
 }
 
-test('the DAG shows each environment and gate with its state, the PR badge and tooltips', async ({ page }) => {
+test('the station map shows each environment and gate with its state, the PR, and the drawer', async ({ page }) => {
   const reads = recordBundleReads(page)
   await openPipeline(page, base, ns)
 
-  const testNode = dagNode(page, 'test')
-  await expect(testNode).toHaveAttribute('aria-label', 'test — Live')
-  await expect(testNode).toHaveAttribute('data-health-state', 'Ready')
-  await expect(testNode).toHaveClass(/\bdag-node--ready\b/)
-  await expect(testNode).not.toContainText('PR #')
+  const testNode = station(page, 'test')
+  await expect(testNode).toHaveAttribute('aria-label', /^test — Live, runs /)
+  await expect(testNode).toHaveAttribute('data-tone', 'verified')
 
-  const prodNode = dagNode(page, 'prod')
-  await expect(prodNode).toHaveAttribute('aria-label', 'prod — Waiting for PR merge')
-  await expect(prodNode).toHaveAttribute('data-health-state', 'InProgress')
-  await expect(prodNode).toContainText(`PR #${prNumber}`)
-  await expect(prodNode.locator('.dag-node__elapsed')).toHaveText(/\d/)
+  const prodNode = station(page, 'prod')
+  await expect(prodNode).toHaveAttribute('aria-label', /^prod — Waiting for PR merge, /)
+  await expect(prodNode).toHaveAttribute('data-tone', 'waiting')
+  await expect(prodNode).toContainText(`#${prNumber}`)
 
-  const gateNode = dagNode(page, gate)
-  await expect(gateNode).toHaveAttribute('aria-label', `${gate} — Pass`)
-  await expect(gateNode).toHaveAttribute('data-health-state', 'Ready')
-  await expect(gateNode).toContainText(gate)
-  await expect(gateNode.locator('svg.dag-node__icon')).toHaveCount(1)
+  // The gate sits on the edge into prod, passing.
+  const gateNode = gateMark(page, gate)
+  await expect(gateNode).toHaveAttribute('aria-label', `gate ${gate}, Passing`)
+  await expect(gateNode).toHaveAttribute('data-tone', 'verified')
 
-  // Only this namespace's Bundle: no solo node from the other namespace.
-  await expect(page.locator('g.dag-node')).toHaveCount(3)
-  await expect(page.getByTestId('dag-static-banner')).toHaveCount(0)
+  // Only this namespace's Bundle: no solo station from the other namespace.
+  await expect(page.locator('.station-map [data-station]')).toHaveCount(2)
 
-  const tooltip = page.getByTestId('dag-tooltip')
-  await prodNode.hover()
-  await expect(tooltip).toBeVisible()
-  await expect(tooltip).toHaveAttribute('role', 'tooltip')
-  await expect(tooltip).toContainText('prod')
-  await expect(tooltip).toContainText('State:')
-  await expect(tooltip).toContainText('Waiting for PR merge')
-  await expect(tooltip.getByRole('link', { name: 'View Pull Request ↗' })).toHaveAttribute('href', prURL)
-
+  // The gate's popover names it, its state and its expression.
+  const popover = page.locator('.gate-popover')
   await gateNode.hover()
-  await expect(tooltip).toContainText(gate)
-  await expect(tooltip).toContainText('Pass')
-  await expect(tooltip).toContainText('true') // the expression
-  await expect(tooltip).toContainText(/Evaluated /)
-  await expect(tooltip.getByRole('link')).toHaveCount(0)
+  await expect(popover).toBeVisible()
+  await expect(popover).toHaveAttribute('role', 'tooltip')
+  await expect(popover).toContainText(gate)
+  await expect(popover).toContainText('Passing')
+  await expect(popover).toContainText('true') // the expression
+  await expect(popover).toContainText(/evaluated /)
+  await page.mouse.move(0, 0)
+
+  // prod's stage drawer links its PR.
+  await prodNode.click()
+  const detail = stageDrawer(page)
+  await expect(drawerHeading(page)).toHaveText('prod')
+  await expect(detail.locator(`a[href="${prURL}"]`).first()).toBeVisible()
+  await detail.getByRole('button', { name: 'Close prod' }).click()
 
   // Picking the Bundle in the timeline reads its graph again.
   const reread = page.waitForRequest(r => new URL(r.url()).pathname.endsWith(`/bundles/${bundle}/graph`))
   await page.locator(`button.bundle-chip[title^="${bundle}:"]`).click()
   await reread
-  await expect(page.locator('g.dag-node')).toHaveCount(3)
+  await expect(page.locator('.station-map [data-station]')).toHaveCount(2)
   expectScoped(reads, ns)
 })
 
-test('the same Bundle name in another namespace shows that namespace’s DAG', async ({ page }) => {
+test('the same Bundle name in another namespace shows that namespace’s map', async ({ page }) => {
   const reads = recordBundleReads(page)
   await openPipeline(page, base, other)
-  const solo = dagNode(page, 'solo')
-  await expect(solo).toHaveAttribute('aria-label', 'solo — Failed')
-  await expect(solo).toHaveAttribute('data-health-state', 'Error')
-  await expect(page.locator('g.dag-node')).toHaveCount(1)
+  const solo = station(page, 'solo')
+  await expect(solo).toHaveAttribute('aria-label', /^solo — Failed/)
+  await expect(solo).toHaveAttribute('data-tone', 'failed')
+  await expect(page.locator('.station-map [data-station]')).toHaveCount(1)
   // Past one 5 s poll: still the other namespace's graph.
   await page.waitForRequest(r => new URL(r.url()).pathname.endsWith(`/bundles/${bundle}/graph`))
-  await expect(page.locator('g.dag-node')).toHaveCount(1)
+  await expect(page.locator('.station-map [data-station]')).toHaveCount(1)
   await expect(solo).toBeVisible()
   expectScoped(reads, other)
 })

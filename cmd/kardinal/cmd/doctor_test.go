@@ -311,9 +311,9 @@ func TestCheckPipelineHealth(t *testing.T) {
 		{name: "promoting", client: doctorClient(pipe("Promoting")), wantIcon: doctorPass, wantDetail: "status: Promoting"},
 		// Unknown is the phase before the first Bundle.
 		{name: "unknown", client: doctorClient(pipe("Unknown")), wantIcon: doctorPass,
-			wantDetail: "status: Unknown (spec valid, no Bundle yet)"},
+			wantDetail: "status: Unknown (spec valid, no version shipped yet)"},
 		{name: "unset", client: doctorClient(pipe("")), wantIcon: doctorPass,
-			wantDetail: "status: Unknown (spec valid, no Bundle yet)"},
+			wantDetail: "status: Unknown (spec valid, no version shipped yet)"},
 		{name: "no Ready condition", client: doctorClient(noCondition), wantIcon: doctorWarn,
 			wantDetail: "not yet reconciled by the controller"},
 		{name: "condition of an older generation",
@@ -433,9 +433,8 @@ func TestBuildRestConfig_ExplicitMissingKubeconfig(t *testing.T) {
 	assert.NotContains(t, err.Error(), "KUBERNETES_SERVICE_HOST")
 }
 
-// C09a-cli-23: doctorWarn has no trailing space, so columns line up.
-func TestDoctorIcons_NoTrailingSpace(t *testing.T) {
-	for _, icon := range []string{doctorPass, doctorWarn, doctorFail} {
-		assert.Equal(t, strings.TrimSpace(icon), icon)
-	}
+// C09a-cli-23, C4: every mark of a result has one width, so columns line
+// up: PASS, WARN and FAIL in plain output, ✓ ! ✕ on a terminal.
+func TestDoctorIcons_OneWidth(t *testing.T) {
+	assert.Equal(t, []string{"PASS", "WARN", "FAIL"}, []string{doctorIcon(doctorPass), doctorIcon(doctorWarn), doctorIcon(doctorFail)})
 }

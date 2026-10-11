@@ -35,7 +35,7 @@
 # finished Bundle (#1492), so the live Graphs are about the Bundles in flight
 # plus the recently finished ones. KRO_MEMORY_LIMIT (default 2Gi, twice kro's chart
 # default) sets the kro container's memory limit; size it with
-# docs/installation.md#sizing-kro. Ledger gap G15.
+# docs/operate.md#sizing-kro. Ledger gap G15.
 
 set -euo pipefail
 

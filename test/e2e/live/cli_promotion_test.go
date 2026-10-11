@@ -42,7 +42,7 @@ var cliCellGap = regexp.MustCompile(`\s{2,}`)
 
 // watchFooter ends each table frame of a --watch command whose stdout is not
 // a terminal; the screen is not cleared between frames.
-const watchFooter = "\n(watching — press Ctrl-C to quit)\n"
+const watchFooter = "\n(watching; press Ctrl-C to quit)\n"
 
 // frames splits a --watch table stream into its complete frames.
 func frames(out string) []string {
@@ -185,9 +185,9 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	// Before the first Bundle.
 	row := framework.TableRow(c.Must(a.ns, "get", "pipelines"), "PIPELINE", pipelineName)
 	require.NotNil(t, row)
-	assert.Equal(t, map[string]string{"PIPELINE": pipelineName, "BUNDLE": "-", "TEST": "-", "PROD": "-", "SUB": "0", "AGE": row["AGE"]}, row)
-	assert.True(t, strings.HasPrefix(c.Must(a.ns, "get", "pipelines"), "PIPELINE   BUNDLE   TEST   PROD   SUB   AGE\n"))
-	assert.Equal(t, "BUNDLE   TYPE   PHASE   AGE\n", c.Must(a.ns, "get", "bundles"))
+	assert.Equal(t, map[string]string{"PIPELINE": pipelineName, "VERSION": "-", "TEST": "-", "PROD": "-", "SUB": "0", "AGE": row["AGE"]}, row)
+	assert.True(t, strings.HasPrefix(c.Must(a.ns, "get", "pipelines"), "PIPELINE   VERSION   TEST   PROD   SUB   AGE\n"))
+	assert.Equal(t, "VERSION   TYPE   PHASE   AGE\n", c.Must(a.ns, "get", "bundles"))
 	assert.Equal(t, "No active bundles for pipeline \"podinfo\".\n", c.Must(a.ns, "get", "steps", pipelineName))
 	for _, args := range [][]string{{"get", "bundles"}, {"get", "steps", pipelineName}, {"get", "subscriptions"}} {
 		assert.Equal(t, "[]\n", c.Must(a.ns, append(args, "-o", "json")...), "%v -o json with nothing to list", args)
@@ -264,7 +264,7 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	tables := c.Must(a.ns, "get", "pipelines")
 	row = framework.TableRow(tables, "PIPELINE", pipelineName)
 	require.NotNil(t, row, tables)
-	assert.Equal(t, b1, row["BUNDLE"])
+	assert.Equal(t, b1, framework.BundleOf(row["VERSION"]))
 	assert.Equal(t, display.Step("Verified").Label, row["TEST"])
 	assert.Equal(t, display.Step("WaitingForMerge").Label, row["PROD"])
 	assert.Equal(t, "0", row["SUB"])
@@ -276,18 +276,18 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	row = framework.TableRow(all, "NAMESPACE", a.ns)
 	require.NotNil(t, row, "-A lists the test's namespace:\n%s", all)
 	assert.Equal(t, pipelineName, row["PIPELINE"])
-	assert.Equal(t, b1, row["BUNDLE"])
+	assert.Equal(t, b1, framework.BundleOf(row["VERSION"]))
 	if slices.Contains(header, "PROGRESS") {
 		// Another test's Pipeline in the cluster has more than 8
 		// environments: one summary row per Pipeline (CLI-GET-PIPELINES-02).
-		assert.Equal(t, []string{"NAMESPACE", "PIPELINE", "BUNDLE", "ENVS", "PROGRESS", "FURTHEST", "SUB", "AGE"}, header)
+		assert.Equal(t, []string{"NAMESPACE", "PIPELINE", "VERSION", "ENVS", "PROGRESS", "FURTHEST", "SUB", "AGE"}, header)
 		assert.Equal(t, "2", row["ENVS"])
 		assert.Equal(t, "1 Live, 1 Waiting for PR merge", row["PROGRESS"])
 		assert.Equal(t, "test", row["FURTHEST"])
 	} else {
 		// The environment columns are the union over every namespace's Pipelines.
 		require.GreaterOrEqual(t, len(header), 7, all)
-		assert.Equal(t, []string{"NAMESPACE", "PIPELINE", "BUNDLE"}, header[:3])
+		assert.Equal(t, []string{"NAMESPACE", "PIPELINE", "VERSION"}, header[:3])
 		assert.Equal(t, []string{"SUB", "AGE"}, header[len(header)-2:])
 		assert.Subset(t, header, []string{"TEST", "PROD"})
 	}
@@ -303,7 +303,7 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	assert.Equal(t, a.repo.CloneURL, pipelines[0].Spec.Git.URL)
 
 	bt := c.Must(a.ns, "get", "bundles")
-	row = framework.TableRow(bt, "BUNDLE", b1)
+	row = framework.BundleRow(bt, b1)
 	require.NotNil(t, row, bt)
 	assert.Equal(t, "image", row["TYPE"])
 	assert.Equal(t, "Promoting", row["PHASE"])
@@ -340,22 +340,38 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	assert.Len(t, sl, 2)
 
 	// -o: json and yaml where a command supports them, else an error.
-	r := c.Fail(a.ns, "explain", pipelineName, "-o", "json")
-	assert.Equal(t, "-o json is not supported by \"kardinal explain\"; it prints a table\n", r.Stderr)
+	r := c.Fail(a.ns, "logs", pipelineName, "-o", "json")
+	assert.Equal(t, "-o json is not supported by \"kardinal logs\"; it prints a table\n", r.Stderr)
+	var ex struct {
+		Entries []struct{ Environment, Bundle, Type, State string } `json:"entries"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(c.Must(a.ns, "explain", pipelineName, "-o", "json")), &ex))
+	require.NotEmpty(t, ex.Entries)
+	for _, en := range ex.Entries {
+		assert.Equal(t, b1, en.Bundle, "explain -o json: %+v", en)
+	}
 	r = c.Fail(a.ns, "get", "bundles", "-o", "xml")
 	assert.Equal(t, "invalid -o \"xml\": must be table, json or yaml\n", r.Stderr)
 	sameTable(t, bt, c.Must(a.ns, "get", "bundles", "-o", "table"), "-o table is the default")
 
-	// A newer Bundle supersedes the first.
-	b2 := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
+	// A newer Bundle supersedes the first. create bundle -o json names it
+	// for a script (kardinal create bundle ... -o json | jq -r .bundle).
+	cr := c.Run(a.ns, "create", "bundle", pipelineName, "--image", fixtures.Image+":"+fixtures.V3, "-o", "json")
+	require.Equal(t, 0, cr.Code, cr.Output())
+	var created struct{ Bundle, Pipeline, Namespace, Type, Version string }
+	require.NoError(t, json.Unmarshal([]byte(cr.Stdout), &created), "stdout is JSON only:\n%s", cr.Stdout)
+	assert.Equal(t, []string{pipelineName, a.ns, "image", fixtures.V3}, []string{created.Pipeline, created.Namespace, created.Type, created.Version})
+	b2 := created.Bundle
+	var made v1alpha1.Bundle
+	require.NoError(t, e.Client.Get(context.Background(), types.NamespacedName{Namespace: a.ns, Name: b2}, &made), "the Bundle .bundle names exists")
 	e.WaitBundlePhase(t, a.ns, b1, "Superseded", promoteTimeout)
 	e.WaitPRState(t, a.repo, pr1.Number, "closed", time.Minute)
 	bt = c.Must(a.ns, "get", "bundles")
-	assert.Equal(t, display.Bundle("Superseded").Label, framework.TableRow(bt, "BUNDLE", b1)["PHASE"], bt)
-	require.NotNil(t, framework.TableRow(bt, "BUNDLE", b2), bt)
+	assert.Equal(t, display.Bundle("Superseded").Label, framework.BundleRow(bt, b1)["PHASE"], bt)
+	require.NotNil(t, framework.BundleRow(bt, b2), bt)
 	active := c.Must(a.ns, "get", "bundles", "--active")
-	assert.Nil(t, framework.TableRow(active, "BUNDLE", b1), "--active hides the Superseded Bundle:\n%s", active)
-	assert.NotNil(t, framework.TableRow(active, "BUNDLE", b2), active)
+	assert.Nil(t, framework.BundleRow(active, b1), "--active hides the Superseded Bundle:\n%s", active)
+	assert.NotNil(t, framework.BundleRow(active, b2), active)
 	// b2's prod step exists only once its test step is Verified: Argo CD's
 	// sync and the health check come first, which can take minutes on a
 	// loaded cluster (#1547), so this waits as long as a promotion.
@@ -382,14 +398,14 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	jw := c.Start(framework.CLIOptions{}, c.Args(a.ns, "get", "pipelines", "-w", "-o", "json")...)
 	pw.WaitStdout(time.Minute, "a pipelines frame with prod waiting", func(out string) bool {
 		r := framework.TableRow(lastFrame(out), "PIPELINE", pipelineName)
-		return r != nil && r["BUNDLE"] == b2 && r["PROD"] == display.Step("WaitingForMerge").Label
+		return r != nil && framework.BundleOf(r["VERSION"]) == b2 && r["PROD"] == display.Step("WaitingForMerge").Label
 	})
 	sw.WaitStdout(time.Minute, "a steps frame", func(out string) bool { return lastFrame(out) != "" })
 	require.NoError(t, e.Git.MergePR(ctx, a.repo, pr2.Number))
 	e.WaitStepState(t, a.ns, pipelineName, b2, "prod", "Verified", promoteTimeout)
 	out = pw.WaitStdout(time.Minute, "a pipelines frame with prod Verified", func(out string) bool {
 		r := framework.TableRow(lastFrame(out), "PIPELINE", pipelineName)
-		return r != nil && r["BUNDLE"] == b2 && r["TEST"] == display.Step("Verified").Label && r["PROD"] == display.Step("Verified").Label
+		return r != nil && framework.BundleOf(r["VERSION"]) == b2 && r["TEST"] == display.Step("Verified").Label && r["PROD"] == display.Step("Verified").Label
 	})
 	assert.GreaterOrEqual(t, len(frames(out)), 2, "the watch redraws")
 	sw.WaitStdout(time.Minute, "a steps frame with wait-for-merge Completed", func(out string) bool {
@@ -538,7 +554,7 @@ func TestCLI_Reports(t *testing.T) {
 	lf := c.Start(framework.CLIOptions{}, c.Args(a.ns, "logs", pipelineName, "--follow", "--bundle", bB)...)
 	e.WaitStepState(t, a.ns, pipelineName, bB, "prod", "WaitingForMerge", promoteTimeout)
 	lf.WaitStdout(time.Minute, "logs --follow to show prod waiting", func(out string) bool {
-		return strings.Contains(out, "[podinfo/prod] → "+display.Step("WaitingForMerge").Label+"\n")
+		return strings.Contains(out, "[podinfo/prod] -> "+display.Step("WaitingForMerge").Label+"\n")
 	})
 	assert.False(t, lf.Exited(), "logs --follow runs while prod waits for its PR")
 	prB := openPR(t, e, a.repo, fixtures.V3)
@@ -548,9 +564,9 @@ func TestCLI_Reports(t *testing.T) {
 	res := lf.Wait(time.Minute)
 	assert.Equal(t, 0, res.Code)
 	assert.True(t, strings.HasPrefix(res.Stdout, "Following logs for pipeline podinfo (Ctrl+C to stop)...\n"), res.Stdout)
-	assert.True(t, strings.HasSuffix(res.Stdout, "[podinfo/prod] → Live\nAll steps reached terminal state.\n"), res.Stdout)
+	assert.True(t, strings.HasSuffix(res.Stdout, "[podinfo/prod] -> Live\nAll steps reached terminal state.\n"), res.Stdout)
 	for _, env := range []string{"test", "prod"} {
-		assert.Equal(t, 1, strings.Count(res.Stdout, "[podinfo/"+env+"] → Live\n"), "each state change once:\n%s", res.Stdout)
+		assert.Equal(t, 1, strings.Count(res.Stdout, "[podinfo/"+env+"] -> Live\n"), "each state change once:\n%s", res.Stdout)
 	}
 	assert.Regexp(t, `(?m)^\[podinfo/prod\] wait-for-merge\s+\S+`, res.Stdout, "--follow prints the steps it runs")
 	assert.NotContains(t, res.Stdout, bA, "--bundle follows only B")
@@ -600,7 +616,7 @@ func TestCLI_Reports(t *testing.T) {
 	type histRow struct{ bundle, action, env, pr string }
 	var rows []histRow
 	for _, r := range hist {
-		rows = append(rows, histRow{r["BUNDLE"], r["ACTION"], r["ENV"], r["PR"]})
+		rows = append(rows, histRow{framework.BundleOf(r["VERSION"]), r["ACTION"], r["ENV"], r["PR"]})
 		assert.Regexp(t, `^\d+(s|m)$`, r["DURATION"], "a finished step's duration")
 		assert.Regexp(t, `^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$`, r["TIMESTAMP"])
 	}
@@ -650,7 +666,7 @@ func TestCLI_Reports(t *testing.T) {
 	type aeRow struct{ pipeline, bundle, env, action, outcome string }
 	var aes []aeRow
 	for i, ev := range events {
-		aes = append(aes, aeRow{ev["PIPELINE"], ev["BUNDLE"], ev["ENV"], ev["ACTION"], ev["OUTCOME"]})
+		aes = append(aes, aeRow{ev["PIPELINE"], framework.BundleOf(ev["VERSION"]), ev["ENV"], ev["ACTION"], ev["OUTCOME"]})
 		assert.Regexp(t, `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z$`, ev["TIMESTAMP"])
 		if i > 0 {
 			assert.LessOrEqual(t, ev["TIMESTAMP"], events[i-1]["TIMESTAMP"], "newest first")
@@ -682,7 +698,7 @@ func TestCLI_Reports(t *testing.T) {
 			}
 		}
 		for _, ev := range framework.ParseTable(c.Must(a.ns, "get", "auditevents", tc.flag, tc.value)) {
-			got = append(got, aeRow{ev["PIPELINE"], ev["BUNDLE"], ev["ENV"], ev["ACTION"], ev["OUTCOME"]})
+			got = append(got, aeRow{ev["PIPELINE"], framework.BundleOf(ev["VERSION"]), ev["ENV"], ev["ACTION"], ev["OUTCOME"]})
 		}
 		assert.Equal(t, want, got, "get auditevents %s %s", tc.flag, tc.value)
 	}
@@ -770,7 +786,7 @@ func TestCLI_Reports(t *testing.T) {
 		{"target_env", "prod"},
 		{"bundles_total", "2"},
 		{"deployment_frequency", "0.29/day", "(2 verified in target env)"},
-		{"lead_time_avg", "<lead>", "(creation → prod verified, 2 samples)"},
+		{"lead_time_avg", "<lead>", "(creation to prod verified, 2 samples)"},
 		{"change_fail_rate", "0.0%", "(0 failed / 2 total)"},
 		{"rollback_count", "0"},
 	}, mc)
@@ -778,7 +794,7 @@ func TestCLI_Reports(t *testing.T) {
 	require.Len(t, mc, 8, "%v", mc)
 	assert.Equal(t, []string{"pipeline", "podinfo", "(last 30 days)"}, mc[1])
 	assert.Equal(t, []string{"deployment_frequency", "0.07/day", "(2 verified in target env)"}, mc[4])
-	assert.Equal(t, "(creation → test verified, 2 samples)", mc[5][2])
+	assert.Equal(t, "(creation to test verified, 2 samples)", mc[5][2])
 	for _, tc := range []struct {
 		args []string
 		want string

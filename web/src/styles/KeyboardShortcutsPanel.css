@@ -42,3 +42,4 @@
   font-size: var(--k-text-xs);
 }
 .shortcuts__hint-key { font-family: var(--k-font-mono); }
+.shortcuts__docs { margin: var(--k-space-3) 0 0; color: var(--k-ink-2); font-size: var(--k-text-sm); }

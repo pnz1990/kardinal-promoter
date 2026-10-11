@@ -515,3 +515,35 @@ func TableRow(out, col, value string) map[string]string {
 	}
 	return nil
 }
+
+// versionCellRE is a table's VERSION cell: "<version> (<bundle>)".
+var versionCellRE = regexp.MustCompile(`^(.*) \(([^()]+)\)$`)
+
+// BundleOf is the Bundle a VERSION cell names: "1.5.0 (app-x7k2p)" is
+// app-x7k2p; a cell with no version is the Bundle's name itself.
+func BundleOf(cell string) string {
+	if m := versionCellRE.FindStringSubmatch(cell); m != nil {
+		return m[2]
+	}
+	return cell
+}
+
+// VersionCell is how the CLI's tables name version of Bundle bundle: the
+// version, then the Bundle, or the Bundle alone when it has no version.
+func VersionCell(version, bundle string) string {
+	if version == "" || version == bundle {
+		return bundle
+	}
+	return version + " (" + bundle + ")"
+}
+
+// BundleRow is the row of the table out whose VERSION cell names Bundle
+// bundle, or nil.
+func BundleRow(out, bundle string) map[string]string {
+	for _, r := range ParseTable(out) {
+		if BundleOf(r["VERSION"]) == bundle {
+			return r
+		}
+	}
+	return nil
+}

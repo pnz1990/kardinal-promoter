@@ -30,7 +30,7 @@ import (
 func newAuditCmd() *cobra.Command {
 	audit := &cobra.Command{
 		Use:   "audit",
-		Short: "Audit log commands — view and summarize promotion events",
+		Short: "Audit log commands: view and summarize promotion events",
 	}
 	audit.AddCommand(newAuditSummaryCmd())
 	return audit

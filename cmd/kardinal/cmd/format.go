@@ -21,7 +21,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,6 +29,9 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	pipelinerec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
+
+	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 )
 
 // HumanAge returns a human-readable age string for the given creation time.
@@ -97,7 +99,7 @@ func stepStatePriority(state string) int {
 	}
 }
 
-// FormatPipelineTableFull writes a table of pipelines to w. BUNDLE is each
+// FormatPipelineTableFull writes a table of pipelines to w. VERSION is each
 // pipeline's current Bundle (lifecycle.CurrentBundle, the UI's
 // activeBundleName) and every environment column describes that Bundle
 // (pipelineEnvStates). bundles and steps may span namespaces and pipelines.
@@ -242,12 +244,12 @@ func envColumnOrder(pipelines []v1alpha1.Pipeline, orders []pipelineOrder) []str
 // 108 HealthChecking"). A footnote says how to see every environment.
 func formatPipelineSummary(w io.Writer, pipelines []v1alpha1.Pipeline, orders []pipelineOrder, rows map[string]pipelineRow,
 	subCount map[string]int, showNamespace bool) error {
-	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+	tw := style.NewTable(w, 3)
 	header := ""
 	if showNamespace {
 		header = "NAMESPACE\t"
 	}
-	header += "PIPELINE\tBUNDLE\tENVS\tPROGRESS\tFURTHEST"
+	header += "PIPELINE\tVERSION\tENVS\tPROGRESS\tFURTHEST"
 	if subCount != nil {
 		header += "\tSUB"
 	}
@@ -339,25 +341,25 @@ type pipelineRow struct {
 	hints []string
 }
 
-// pipelineEnvStates returns, per namespace/pipeline, the BUNDLE and
+// pipelineEnvStates returns, per namespace/pipeline, the VERSION and
 // per-environment states of the pipeline table, all about one Bundle: the
 // pipeline's current Bundle, lifecycle.CurrentBundle (E2E-R17). An
-// environment shows that Bundle's step state there, the highest
-// stepStatePriority over its region steps (an unstarted step is Pending).
-// Without a step it shows "Waiting" while the Bundle is in flight and will
-// still come (held by a gate, or upstream not Verified yet), and nothing
-// ("-") when the Bundle is terminal or does not promote the environment
-// (skipped, or past its target). Another Bundle's state is never shown, so a
-// row cannot pair a Bundle with a state it does not have.
+// environment whose newest Bundle is that one (the Pipeline's
+// status.environments) shows its state there, held by a rollback hold or by
+// gates when it is. Otherwise it shows "Waiting" while the Bundle is in
+// flight and will still come (upstream not live yet), and nothing ("-") when
+// the Bundle is terminal or does not promote the environment (skipped, or
+// past its target). Another Bundle's state is never shown, so a row cannot
+// pair a Bundle with a state it does not have.
 func pipelineEnvStates(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
 	steps []v1alpha1.PromotionStep, gates []v1alpha1.PolicyGate) map[string]pipelineRow {
-	// Gate instances by namespace/bundle: a not-ready one that holds the
-	// current Bundle (graph.GateHolds) names the environment's cell.
-	gatesByBundle := make(map[string][]*v1alpha1.PolicyGate)
+	// Gate instances by namespace/pipeline, for the projection of a
+	// Pipeline whose controller predates status.environments.
+	gatesByPipeline := make(map[string][]v1alpha1.PolicyGate)
 	for i := range gates {
-		if b := gates[i].Labels["kardinal.io/bundle"]; b != "" && !gates[i].Status.Ready {
-			key := gates[i].Namespace + "/" + b
-			gatesByBundle[key] = append(gatesByBundle[key], &gates[i])
+		if p := gates[i].Labels["kardinal.io/pipeline"]; p != "" {
+			key := gates[i].Namespace + "/" + p
+			gatesByPipeline[key] = append(gatesByPipeline[key], gates[i])
 		}
 	}
 	bundlesByPipeline := make(map[string][]v1alpha1.Bundle)
@@ -384,11 +386,12 @@ func pipelineEnvStates(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
 		if b == nil {
 			continue
 		}
-		row := pipelineRow{bundle: b.Name, envs: make(map[string]string, len(p.Spec.Environments))}
+		version := createdOf(b).Version
+		row := pipelineRow{bundle: versionLabel(version, b.Name), envs: make(map[string]string, len(p.Spec.Environments))}
 		if lifecycle.Rejected(b) {
 			// Current only because its change is live somewhere
 			// (lifecycle.CurrentBundle): say so.
-			row.bundle = b.Name + "(Rejected)"
+			row.bundle = versionLabel(version, b.Name) + " Rejected"
 			for _, env := range lifecycle.RejectedLiveEnvs(b, own) {
 				row.hints = append(row.hints, fmt.Sprintf("WARNING: pipeline %s: bundle %s is Rejected in %s: %s (kardinal rollback %s --env %s)",
 					p.Name, b.Name, env, lifecycle.RejectedLiveHint, p.Name, env))
@@ -404,31 +407,26 @@ func pipelineEnvStates(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
 				}
 			}
 		}
-		best := make(map[string]int)
-		for j := range own {
-			s := &own[j]
-			if s.Spec.BundleName != b.Name {
-				continue
-			}
-			env, state := s.Spec.Environment, s.Status.State
-			if state == "" {
-				state = "Pending"
-			}
-			if prio, seen := best[env]; !seen || stepStatePriority(state) > prio {
-				best[env] = stepStatePriority(state)
-				row.envs[env] = state
-			}
+		// The current Bundle's state in each environment it has reached,
+		// from status.environments (computed here with the controller's
+		// code when the controller predates it). An environment whose newest
+		// Bundle is another one keeps "Waiting" or nothing: a row never pairs
+		// its Bundle with another Bundle's state.
+		envs := p.Status.Environments
+		if len(envs) == 0 {
+			envs = pipelinerec.ProjectEnvironments(p, bundlesByPipeline[key], own, gatesByPipeline[key], nil, time.Time{})
 		}
-		// An environment the Bundle waits for says what holds it.
-		for env, cell := range row.envs {
-			var holding []string
-			for _, g := range gatesByBundle[p.Namespace+"/"+b.Name] {
-				if g.Labels["kardinal.io/environment"] == env && graph.GateHolds(p, b, g, own) {
-					holding = append(holding, gateDisplayName(*g))
-				}
+		for _, e := range envs {
+			newest := e.Bundle
+			if e.IncomingBundle != "" {
+				newest = e.IncomingBundle
 			}
-			slices.Sort(holding)
-			row.envs[env] = heldCell(cell, lifecycle.HeldFrom(p, env, b.Name) != nil, slices.Compact(holding))
+			switch {
+			case newest == b.Name && e.State != "":
+				row.envs[e.Name] = heldCell(e.State, e.Held, e.BlockedBy)
+			case row.envs[e.Name] == "Waiting" && lifecycle.HeldFrom(p, e.Name, b.Name) != nil:
+				row.envs[e.Name] = cellHeld
+			}
 		}
 		// A fleet environment's column counts its targets.
 		fleets, _ := graph.FleetTargetEnvironments(p)
@@ -501,14 +499,14 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, env
 		return nil
 	}
 
-	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+	tw := style.NewTable(w, 3)
 
-	// Build header: [NAMESPACE] PIPELINE BUNDLE <ENV1> <ENV2> ... [SUB] AGE
+	// Build header: [NAMESPACE] PIPELINE VERSION <ENV1> <ENV2> ... [SUB] AGE
 	header := ""
 	if showNamespace {
 		header = "NAMESPACE\t"
 	}
-	header += "PIPELINE\tBUNDLE"
+	header += "PIPELINE\tVERSION"
 	for _, env := range envOrder {
 		header += "\t" + strings.ToUpper(env)
 	}
@@ -536,7 +534,7 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, env
 			row = fmt.Sprintf("%s\t%s\t%s", p.Namespace, pipelineDisplay, bundleDisplay)
 		}
 		for _, env := range envOrder {
-			row += "\t" + envCellLabel(pr.envs[env])
+			row += "\t" + sty.State(envCellState(pr.envs[env]))
 		}
 		if subCount != nil {
 			row += "\t" + fmt.Sprintf("%d", subCount[pipelineKey])
@@ -553,7 +551,7 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, env
 	}
 	for _, p := range pipelines {
 		for _, h := range rows[p.Namespace+"/"+p.Name].hints {
-			if _, err := fmt.Fprintln(w, h); err != nil {
+			if _, err := fmt.Fprintln(w, notice(h)); err != nil {
 				return fmt.Errorf("write pipeline hint: %w", err)
 			}
 		}
@@ -623,14 +621,14 @@ func FormatBundleErrors(w io.Writer, bundles []v1alpha1.Bundle, showNamespace bo
 			}
 		}
 		if msg == "" {
-			msg = "promotion failed — run `kubectl describe bundle " + b.Name + "` for details"
+			msg = "promotion failed; run `kubectl describe bundle " + b.Name + "` for details"
 		}
 		errs = append(errs, pipelineError{pipeline: pipeline, message: msg})
 	}
 	sort.SliceStable(errs, func(i, j int) bool { return errs[i].pipeline < errs[j].pipeline })
 
 	for _, e := range errs {
-		if _, err := fmt.Fprintf(w, "ERROR: pipeline %s: %s\n", e.pipeline, e.message); err != nil {
+		if _, err := fmt.Fprintf(w, "%s pipeline %s: %s\n", sty.Error("ERROR:"), e.pipeline, e.message); err != nil {
 			return fmt.Errorf("write bundle error: %w", err)
 		}
 	}
@@ -645,15 +643,15 @@ func FormatBundleTable(w io.Writer, bundles []v1alpha1.Bundle) error {
 // formatBundleTable is FormatBundleTable; showNS prepends a NAMESPACE column
 // (--all-namespaces).
 func formatBundleTable(w io.Writer, bundles []v1alpha1.Bundle, showNS bool) error {
-	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
-	if _, err := fmt.Fprintln(tw, nsCol(showNS, "NAMESPACE")+"BUNDLE\tTYPE\tPHASE\tAGE"); err != nil {
+	tw := style.NewTable(w, 3)
+	if _, err := fmt.Fprintln(tw, nsCol(showNS, "NAMESPACE")+"VERSION\tTYPE\tPHASE\tAGE"); err != nil {
 		return fmt.Errorf("write bundle table header: %w", err)
 	}
 	for _, b := range bundles {
 		if _, err := fmt.Fprintf(tw, nsCol(showNS, b.Namespace)+"%s\t%s\t%s\t%s\n",
-			b.Name,
+			versionLabel(createdOf(&b).Version, b.Name),
 			b.Spec.Type,
-			bundleLabel(b.Status.Phase),
+			styledBundle(b.Status.Phase),
 			HumanAge(b.CreationTimestamp.Time),
 		); err != nil {
 			return fmt.Errorf("write bundle row: %w", err)
@@ -724,7 +722,7 @@ func formatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep, showNS bool) 
 		}
 	}
 
-	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+	tw := style.NewTable(w, 3)
 	if hasSubSteps {
 		if _, err := fmt.Fprintln(tw, nsCol(showNS, "NAMESPACE")+"ENVIRONMENT\tSTEP\tSTATE\tDURATION\tMESSAGE"); err != nil {
 			return fmt.Errorf("write steps table header: %w", err)
@@ -741,7 +739,7 @@ func formatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep, showNS bool) 
 				if msg == "" {
 					msg = "-"
 				}
-				if _, err := fmt.Fprintf(tw, nsCol(showNS, s.Namespace)+"%s\t(no step detail)\t%s\t-\t%s\n", env, stepLabel(state), msg); err != nil {
+				if _, err := fmt.Fprintf(tw, nsCol(showNS, s.Namespace)+"%s\t(no step detail)\t%s\t-\t%s\n", env, styledStep(state), msg); err != nil {
 					return fmt.Errorf("write step row: %w", err)
 				}
 				continue
@@ -764,7 +762,7 @@ func formatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep, showNS bool) 
 					nsCell = ""
 				}
 				if _, err := fmt.Fprintf(tw, nsCol(showNS, nsCell)+"%s\t%s\t%s\t%s\t%s\n",
-					envCol, ss.Name, subStepLabel(string(ss.State)), dur, msg,
+					envCol, ss.Name, styledSubStep(string(ss.State)), dur, msg,
 				); err != nil {
 					return fmt.Errorf("write sub-step row: %w", err)
 				}
@@ -787,7 +785,7 @@ func formatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep, showNS bool) 
 			if _, err := fmt.Fprintf(tw, nsCol(showNS, s.Namespace)+"%s\t%s\t%s\t%s\n",
 				s.Spec.Environment,
 				s.Spec.StepType,
-				stepLabel(state),
+				styledStep(state),
 				msg,
 			); err != nil {
 				return fmt.Errorf("write step row: %w", err)

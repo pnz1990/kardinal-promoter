@@ -39,8 +39,12 @@ describe('PipelineList — empty and loading states', () => {
   })
 
   it('renders error message when error prop is provided', () => {
-    render(<PipelineList pipelines={[]} error="API unavailable" onSelect={vi.fn()} />)
-    expect(screen.getByText(/Error: API unavailable/i)).toBeInTheDocument()
+    const onRetry = vi.fn()
+    render(<PipelineList pipelines={[]} error="Failed to fetch" onSelect={vi.fn()} onRetry={onRetry} />)
+    expect(screen.getByRole('alert')).toHaveTextContent(/Can't reach the kardinal controller/)
+    expect(screen.getByText('Failed to fetch')).toBeInTheDocument()
+    screen.getByRole('button', { name: 'Retry' }).click()
+    expect(onRetry).toHaveBeenCalledOnce()
   })
 
   // A failed poll keeps the last pipelines App read: the list, its filter and
@@ -53,7 +57,7 @@ describe('PipelineList — empty and loading states', () => {
     await user.type(screen.getByRole('textbox', { name: 'Filter pipelines by name or namespace' }), 'alp')
 
     rerender(<PipelineList pipelines={pipelines} error="API error 503: unavailable" onSelect={vi.fn()} searchInputRef={ref} />)
-    expect(screen.getByRole('alert')).toHaveTextContent(/^Error: API error 503: unavailable$/)
+    expect(screen.getByRole('alert')).toHaveTextContent(/may be restarting.*API error 503: unavailable$/)
     const filter = screen.getByRole('textbox', { name: 'Filter pipelines by name or namespace' })
     expect(ref.current).toBe(filter)
     expect(filter).toHaveValue('alp')
@@ -285,4 +289,18 @@ describe('PipelineList — virtual scrolling (#815)', () => {
 
   // O4 (aria-pressed on the selected row in virtual mode, #819) is in
   // PipelineList.virtual.test.tsx, which stubs the virtualizer so rows render in jsdom.
+})
+
+describe('PipelineList — two namespaces', () => {
+  it('groups each namespace in a list named by it, with no axe violations', async () => {
+    const { default: axe } = await import('axe-core')
+    const { container } = render(
+      <PipelineList pipelines={[makePipeline({ name: 'alpha' }), makePipeline({ name: 'alpha', namespace: 'team-b' })]} onSelect={vi.fn()} />,
+    )
+    const teamB = screen.getByRole('list', { name: 'team-b' })
+    expect(teamB.querySelectorAll(':scope > li')).toHaveLength(1)
+    expect(screen.getByRole('list', { name: 'default' })).toBeInTheDocument()
+    const result = await axe.run(container, { runOnly: ['wcag2a', 'wcag2aa'], rules: { 'color-contrast': { enabled: false } } })
+    expect(result.violations.map((v) => v.id)).toEqual([])
+  })
 })

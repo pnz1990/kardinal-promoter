@@ -11,7 +11,7 @@
 // through the API, and the Go test checks it is paused.
 
 import { test, expect, type Page, type Request, type Route } from '@playwright/test'
-import { need, openPipeline, pipelineHash, route, filterSidebar, sidebarRows, sidebarRow, dagNode, PIPELINE } from './live'
+import { need, openPipeline, pipelineHash, route, filterSidebar, sidebarRows, sidebarRow, station, PIPELINE, stageDrawer, drawerHeading } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -23,7 +23,7 @@ const isPipelinesPoll = (url: URL | string) => new URL(url.toString()).pathname 
 
 const filter = (page: Page) => page.getByRole('textbox', { name: 'Filter pipelines by name or namespace' })
 const shortcuts = (page: Page) => page.getByRole('dialog', { name: 'Keyboard shortcuts' })
-const details = (page: Page) => page.getByTestId('node-detail')
+const details = (page: Page) => stageDrawer(page)
 const heading = (page: Page) => page.getByRole('heading', { level: 1 })
 /** The "refreshed ago" indicator inside the Refresh data button. */
 const indicator = (page: Page) => page.getByRole('button', { name: 'Refresh data' }).locator('span[aria-live="polite"]')
@@ -100,6 +100,7 @@ test('keyboard shortcuts: / focuses the filter, ? shows the help, r refreshes, E
   await expect(help).toHaveAttribute('aria-modal', 'true')
   const rows = help.getByRole('row')
   const want: [string, string][] = [
+    ['⌘K / Ctrl+K', 'Go to a pipeline, environment or version, or run an action'],
     ['/', 'Focus pipeline search'],
     ['?', 'Show / hide this help panel'],
     ['r', 'Refresh data now'],
@@ -125,10 +126,13 @@ test('keyboard shortcuts: / focuses the filter, ? shows the help, r refreshes, E
   await help.click({ position: { x: 5, y: 5 } })
   await expect(help).toHaveCount(0)
 
-  // Esc closes the node details, and the link loses the node.
-  await dagNode(page, 'test').click()
-  await expect(details(page)).toContainText('Environment: test')
+  // Esc closes the stage drawer, and the link loses the environment.
+  await station(page, 'test').click()
+  await expect(drawerHeading(page)).toHaveText('test')
   expect(route(page).env).toBe('test')
+  // Focus is on the map's station: the first Esc is the map's (it resets the zoom), the next closes the drawer.
+  await page.keyboard.press('Escape')
+  await expect(details(page)).toHaveCount(1)
   await page.keyboard.press('Escape')
   await expect(details(page)).toHaveCount(0)
   await expect.poll(() => route(page).env ?? route(page).node ?? null).toBeNull()
@@ -188,15 +192,15 @@ test('the theme follows the system until the user picks one, which the next visi
 
 test('a link opens the pipeline and node it names, and Back and Forward walk the selections', async ({ page }) => {
   await openPipeline(page, base, ns, PIPELINE, { node: testStep })
-  await expect(details(page)).toContainText('Environment: test')
-  await expect(dagNode(page, 'test')).toHaveAttribute('aria-pressed', 'true')
+  await expect(drawerHeading(page)).toHaveText('test')
+  await expect(station(page, 'test')).toHaveAttribute('aria-current', 'true')
 
   // Closing the details is one history entry.
-  await details(page).getByRole('button', { name: 'Close' }).click()
+  await details(page).getByRole('button', { name: 'Close test' }).click()
   await expect(details(page)).toHaveCount(0)
   await expect.poll(() => route(page).env ?? route(page).node ?? null).toBeNull()
   await page.goBack()
-  await expect(details(page)).toContainText('Environment: test')
+  await expect(drawerHeading(page)).toHaveText('test')
   expect(route(page).env).toBe('test')
   await page.goForward()
   await expect.poll(() => route(page).env ?? route(page).node ?? null).toBeNull()
@@ -208,11 +212,11 @@ test('a link opens the pipeline and node it names, and Back and Forward walk the
   await expect(heading(page)).toHaveText(idle)
   expect(route(page).pipeline).toBe(idle)
   expect(route(page).ns).toBe(ns)
-  // No Bundle: the DAG is the pipeline's environments, not started.
-  await expect(dagNode(page, 'test')).toHaveAttribute('aria-label', 'test — Not reached')
+  // No Bundle: the map is the pipeline's environments, not reached.
+  await expect(station(page, 'test')).toHaveAttribute('aria-label', /^test — Not reached, /)
   await page.goBack()
   await expect(heading(page)).toHaveText(PIPELINE)
-  await expect(dagNode(page, 'test')).toHaveAttribute('aria-label', 'test — Live')
+  await expect(station(page, 'test')).toHaveAttribute('aria-label', /^test — Live, /)
   await expect(details(page)).toHaveCount(0)
   await page.goForward()
   await expect(heading(page)).toHaveText(idle)
@@ -251,21 +255,27 @@ test('the data refreshes every 5 s, and the indicator tells how old it is and wh
   await page.route(isPipelinesPoll, hold)
   await expect(indicator(page)).toHaveAttribute('title', noAnswer, { timeout: 20_000 })
   await expect(indicator(page)).toHaveText(/^⚠ \d+s ago$/)
-  await expect(page.getByText(noAnswer, { exact: true })).toBeVisible()
+  // The sidebar says what it means, with the client's message under it (U4).
+  const notice = (meaning: string) => page.getByRole('alert').filter({ hasText: meaning })
+  const noAnswerNotice = notice("The controller didn't answer in time.")
+  await expect(noAnswerNotice).toBeVisible()
+  await expect(noAnswerNotice.locator('.k-error__detail')).toContainText(`GET ${PIPELINES_PATH} got no answer within 10 s`)
   await expect(pausedBadge).toHaveText('PAUSED')
   await expect(page.getByRole('textbox', { name: 'Filter pipelines by name or namespace' })).toHaveValue(ns)
   await expect.poll(() => held.length, { timeout: 20_000 }).toBeGreaterThanOrEqual(2)
   await expect(heading(page)).toHaveText(PIPELINE)
   await page.unroute(isPipelinesPoll, hold)
   await expectFresh(page)
-  await expect(page.getByText(noAnswer, { exact: true })).toHaveCount(0)
+  await expect(noAnswerNotice).toHaveCount(0)
   await expect(pausedBadge).toHaveText('PAUSED')
 
   // An API that fails: the error and the growing age; a click retries at once.
   const fail = (route: Route) => route.fulfill({ status: 503, contentType: 'text/plain', body: 'unavailable' })
   await page.route(isPipelinesPoll, fail)
   await expect(indicator(page)).toHaveAttribute('title', /^Error: API error 503/)
-  await expect(page.getByText(/^Error: API error 503/)).toBeVisible()
+  const failedNotice = notice('The controller had a problem. It may be restarting; try again.')
+  await expect(failedNotice).toBeVisible()
+  await expect(failedNotice.locator('.k-error__detail')).toContainText('API error 503')
   await expect(pausedBadge).toHaveText('PAUSED')
   await expect(indicator(page)).toHaveText(/^⚠ (just now|\d+s ago)$/)
   await expect.poll(() => secondsAgo(page), { timeout: 15_000 }).toBeGreaterThanOrEqual(6)

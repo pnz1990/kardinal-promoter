@@ -47,25 +47,32 @@ func TestNoConflictMarkers(t *testing.T) {
 	require.Empty(t, found, "merge conflict markers in tracked files")
 }
 
-// TestChangelogNoDuplicateEntries fails when a section of docs/changelog.md
-// (a ### heading under one release, however often the heading repeats) lists
-// the same entry twice: two bullets with the same bold title. Merges that kept both sides of a changelog
-// conflict did that more than once.
+// TestChangelogNoDuplicateEntries fails when a release of docs/changelog.md
+// repeats a ### heading (two "### Fixed" sections), or when a section lists
+// the same entry twice: two bullets with the same bold title. Merges that
+// kept both sides of a changelog conflict did both more than once.
 func TestChangelogNoDuplicateEntries(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "changelog.md"))
 	require.NoError(t, err)
 	title := regexp.MustCompile(`^- \*\*(.+?)\*\*`)
 	var dups []string
 	release, section := "", ""
-	// Keyed by the section's heading text, not its position: a release with
-	// two "### Added" headings is one Added section.
+	// Keyed by the section's heading text, not its position. A release may
+	// not repeat a ### heading (two "### Fixed" sections are a merge left
+	// over): headings records each one's first line.
 	seen := map[string]int{}
+	headings := map[string]int{}
 	for i, line := range strings.Split(string(data), "\n") {
 		switch {
 		case strings.HasPrefix(line, "## "):
-			release, section, seen = line, "", map[string]int{}
+			release, section, seen, headings = line, "", map[string]int{}, map[string]int{}
 		case strings.HasPrefix(line, "### "):
 			section = line
+			if first, ok := headings[line]; ok {
+				dups = append(dups, fmt.Sprintf("%s: %q at lines %d and %d: fold them into one section", release, line, first, i+1))
+			} else {
+				headings[line] = i + 1
+			}
 		}
 		m := title.FindStringSubmatch(line)
 		if m == nil {
@@ -79,4 +86,25 @@ func TestChangelogNoDuplicateEntries(t *testing.T) {
 		seen[key] = i + 1
 	}
 	require.Empty(t, dups, "duplicate changelog entries")
+}
+
+// TestDocsNoStrayFiles fails on a patch or editor leftover under docs/
+// (*.orig, *.rej, *~): mkdocs publishes every file there, so one would ship
+// on the site.
+func TestDocsNoStrayFiles(t *testing.T) {
+	var stray []string
+	root := filepath.Join(repoRoot(t), "docs")
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		name := d.Name()
+		if !d.IsDir() && (strings.HasSuffix(name, ".orig") || strings.HasSuffix(name, ".rej") || strings.HasSuffix(name, "~")) {
+			rel, _ := filepath.Rel(root, p)
+			stray = append(stray, filepath.Join("docs", rel))
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Empty(t, stray, "patch or editor leftovers under docs/: delete them")
 }

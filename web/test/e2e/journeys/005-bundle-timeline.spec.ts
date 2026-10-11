@@ -14,7 +14,7 @@ test.describe('Journey 005 — Bundle timeline interaction', () => {
   })
 
   test('Step 1: Bundle timeline shows bundle history header, and the History tab lists them', async ({ page }) => {
-    await expect(page.getByText(/Bundle history \(newest/i)).toBeVisible()
+    await expect(page.getByText(/Versions \(newest/)).toBeVisible()
     await page.getByRole('tab', { name: /^Versions/ }).click()
     await expect(page.getByRole('list', { name: 'Versions' }).getByRole('listitem')).toHaveCount(3)
   })
@@ -28,9 +28,9 @@ test.describe('Journey 005 — Bundle timeline interaction', () => {
     await expect(page.getByText(/newest → oldest/i)).toBeVisible()
   })
 
-  test('Step 4: Previous bundle (Superseded) shows abbreviated label', async ({ page }) => {
-    // Superseded bundles show "Sup" abbreviation
-    await expect(page.getByText('Sup')).toBeVisible()
+  test('Step 4: Previous bundle (Superseded) shows its display label, not a truncated value', async ({ page }) => {
+    await expect(page.locator('.bundle-chip__phase', { hasText: 'Replaced by newer version' })).toBeVisible()
+    await expect(page.getByText('Sup', { exact: true })).toHaveCount(0)
   })
 
   test('Step 5: Clicking an older bundle shows its graph and keeps it after the next poll', async ({ page }) => {
@@ -38,13 +38,14 @@ test.describe('Journey 005 — Bundle timeline interaction', () => {
     const current = page.locator('button[data-bundle-phase]', { hasText: 'abc123' })
     const older = page.locator('button[data-bundle-phase]', { hasText: 'prev111' })
     await expect(current).toHaveAttribute('aria-pressed', 'true')
-    await expect(page.getByRole('button', { name: 'prod — Waiting for PR merge' })).toBeVisible()
+    // The station map labels each stage: under abc123 a gate holds prod (its PR is open).
+    await expect(page.getByRole('button', { name: /^prod — Held by gate no-weekend-deploys/ })).toBeVisible()
 
     await older.click()
     await expect(older).toHaveAttribute('aria-pressed', 'true')
     await expect(current).toHaveAttribute('aria-pressed', 'false')
-    // The mock has no graph for prev111, so the abc123 nodes go away.
-    await expect(page.getByRole('button', { name: 'prod — Waiting for PR merge' })).toHaveCount(0)
+    // The mock has no graph for prev111, so abc123's states go away.
+    await expect(page.getByRole('button', { name: /^prod — Held by gate no-weekend-deploys/ })).toHaveCount(0)
 
     // Wait past one 5 s poll of the bundle list.
     await page.waitForResponse(res => res.url().includes('/pipelines/kardinal-test-app/bundles'), { timeout: 8_000 })

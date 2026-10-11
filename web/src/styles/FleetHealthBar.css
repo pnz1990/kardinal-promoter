@@ -28,7 +28,7 @@
   border: var(--k-border-hairline) solid var(--k-surface-base);
   border-radius: var(--k-radius-3);
   cursor: pointer;
-  transition: background var(--k-dur-instant) var(--k-ease-out), border-color var(--k-dur-instant) var(--k-ease-out);
+  transition: background var(--k-dur-quick) var(--k-ease-out), border-color var(--k-dur-quick) var(--k-ease-out);
 }
 
 .fleet-health__total[aria-pressed="true"] {

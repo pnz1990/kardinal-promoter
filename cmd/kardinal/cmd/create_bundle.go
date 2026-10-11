@@ -31,6 +31,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 )
 
@@ -84,9 +85,18 @@ needs --image; a config Bundle --config-commit; a mixed one both. --commit,
 		},
 	}
 
+	addBundleFlags(cmd, &opts, &dryRun)
+
+	withReference(cmd, createBundleReference)
+	return withStructuredOutput(cmd)
+}
+
+// addBundleFlags registers the flags of a Bundle (create bundle, ship) on
+// cmd, into opts and dryRun.
+func addBundleFlags(cmd *cobra.Command, opts *createBundleOptions, dryRun *bool) {
 	cmd.Flags().StringArrayVar(&opts.Images, "image", nil,
 		"Container image reference (can be specified multiple times); required for image and mixed Bundles")
-	cmd.Flags().StringVar(&opts.Type, "type", "image", "Bundle type: image, config, or mixed")
+	cmd.Flags().StringVar(&opts.Type, "type", "image", "Bundle type: image, config or mixed (chart Bundles come from POST /api/v1/bundles or a Helm Subscription: this command has no chart flags)")
 	cmd.Flags().StringVar(&opts.ConfigCommit, "config-commit", "",
 		"Commit SHA of the config repository to promote; required for config and mixed Bundles")
 	cmd.Flags().StringVar(&opts.ConfigRepo, "config-repo", "",
@@ -95,15 +105,12 @@ needs --image; a config Bundle --config-commit; a mixed one both. --commit,
 	cmd.Flags().StringVar(&opts.Author, "author", "", "Author or CI actor of the build (provenance)")
 	cmd.Flags().StringVar(&opts.CIRunURL, "ci-run-url", "",
 		"Absolute http(s) URL of the CI run that built the Bundle (provenance)")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false,
+	cmd.Flags().BoolVar(dryRun, "dry-run", false,
 		"Preview the promotion graph without creating any cluster resources")
 	compactAbove := graph.DefaultCompactAbove
 	opts.CompactAbove = &compactAbove
 	cmd.Flags().IntVar(&compactAbove, "graph-compact-above", graph.DefaultCompactAbove,
 		"With --dry-run: the controller's --graph-compact-above (chart graph.compactAbove), the environment count above which the Graph is compact")
-
-	withReference(cmd, createBundleReference)
-	return cmd
 }
 
 // createBundleOptions are the flags of kardinal create bundle.
@@ -163,13 +170,32 @@ func flagMessage(err error) error {
 // createBundleFn is the testable implementation of create bundle. It checks
 // the flags and that the Pipeline exists before it creates anything.
 func createBundleFn(w io.Writer, c sigs_client.Client, ns, pipeline string, opts createBundleOptions) error {
-	spec, err := opts.bundleSpec(pipeline)
+	bundle, err := newBundle(context.Background(), c, ns, pipeline, opts)
 	if err != nil {
 		return err
 	}
-	ctx := context.Background()
+	if structured() {
+		return writeStructured(w, createdOf(bundle))
+	}
+	if _, err := fmt.Fprintf(w,
+		"Bundle %s created for pipeline %s\n"+
+			"Track with: kardinal get bundles %s\n",
+		bundle.Name, pipeline, pipeline,
+	); err != nil {
+		return fmt.Errorf("write output: %w", err)
+	}
+	return nil
+}
+
+// newBundle creates the Bundle opts describe for pipeline, after checking
+// the flags and that the Pipeline exists.
+func newBundle(ctx context.Context, c sigs_client.Client, ns, pipeline string, opts createBundleOptions) (*v1alpha1.Bundle, error) {
+	spec, err := opts.bundleSpec(pipeline)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := getPipeline(ctx, c, ns, pipeline); err != nil {
-		return err
+		return nil, err
 	}
 
 	bundle := &v1alpha1.Bundle{
@@ -182,21 +208,12 @@ func createBundleFn(w io.Writer, c sigs_client.Client, ns, pipeline string, opts
 	// Record sub-second creation order so supersession picks the newer of two
 	// Bundles created in the same second.
 	lifecycle.StampCreatedAt(bundle, time.Now())
-	stampCreator(ctx, w, c, bundle)
+	stampCreator(ctx, c, bundle)
 
 	if err := c.Create(ctx, bundle); err != nil {
-		return fmt.Errorf("create bundle for pipeline %s: %w", pipeline, err)
+		return nil, fmt.Errorf("create bundle for pipeline %s: %w", pipeline, err)
 	}
-
-	if _, err := fmt.Fprintf(w,
-		"Bundle %s created for pipeline %s\n"+
-			"Track with: kardinal get bundles %s\n",
-		bundle.Name, pipeline, pipeline,
-	); err != nil {
-		return fmt.Errorf("write output: %w", err)
-	}
-
-	return nil
+	return bundle, nil
 }
 
 // createBundleDryRun previews the promotion graph that would be created for a Bundle,
@@ -246,15 +263,6 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 		return fmt.Errorf("dry-run: %w", err) // Build errors start with "build: "
 	}
 
-	// Print a human-readable summary
-	_, _ = fmt.Fprintf(w, "[DRY-RUN] Bundle %q for pipeline %q\n", bundle.Name, pipelineName)
-	if result.Compact {
-		_, _ = fmt.Fprintf(w, "\nPromotion graph: %d node(s), compact shape\n", result.NodeCount)
-	} else {
-		_, _ = fmt.Fprintf(w, "\nPromotion graph: %d node(s)\n", result.NodeCount)
-	}
-	_, _ = fmt.Fprintf(w, "\nEnvironments in promotion order:\n")
-
 	// The gate instances the Graph would create, per environment.
 	gatesByEnv := map[string][]string{}
 	for _, g := range result.GateInstances {
@@ -267,8 +275,27 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 	if err != nil {
 		return fmt.Errorf("dry-run: environment order: %w", err)
 	}
+	if structured() {
+		out := dryRunResult{Pipeline: pipelineName, Namespace: ns, Type: spec.Type, Version: scm.BundleVersion(spec),
+			Nodes: result.NodeCount, Compact: result.Compact, Environments: []dryRunEnvironment{}}
+		for _, env := range order {
+			g := gatesByEnv[env]
+			sort.Strings(g)
+			out.Environments = append(out.Environments, dryRunEnvironment{Name: env, Gates: g})
+		}
+		return writeStructured(w, out)
+	}
+
+	// Print a human-readable summary
+	_, _ = fmt.Fprintf(w, "[DRY-RUN] Bundle %q for pipeline %q\n", bundle.Name, pipelineName)
+	if result.Compact {
+		_, _ = fmt.Fprintf(w, "\nPromotion graph: %d node(s), compact shape\n", result.NodeCount)
+	} else {
+		_, _ = fmt.Fprintf(w, "\nPromotion graph: %d node(s)\n", result.NodeCount)
+	}
+	_, _ = fmt.Fprintf(w, "\nEnvironments in promotion order:\n")
 	for _, env := range order {
-		line := "  \u2022 " + env
+		line := "  " + sty.Sym("\u2022", "*") + " " + env
 		if g := gatesByEnv[env]; len(g) > 0 {
 			sort.Strings(g)
 			line += " (gates: " + strings.Join(g, ", ") + ")"
@@ -278,6 +305,28 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 
 	_, _ = fmt.Fprintf(w, "\nNo resources were created. Remove --dry-run to apply.\n")
 	return nil
+}
+
+// dryRunResult is create bundle --dry-run -o json|yaml: the Graph a Bundle
+// would get, created nowhere.
+type dryRunResult struct {
+	Pipeline  string `json:"pipeline"`
+	Namespace string `json:"namespace"`
+	Type      string `json:"type,omitempty"`
+	Version   string `json:"version,omitempty"`
+	// Nodes is the Graph's node count, and Compact whether it has the
+	// compact shape.
+	Nodes   int  `json:"nodes"`
+	Compact bool `json:"compact,omitempty"`
+	// Environments are in promotion order, each with the gates the Graph
+	// would create there.
+	Environments []dryRunEnvironment `json:"environments"`
+}
+
+// dryRunEnvironment is one environment of a dry-run Graph.
+type dryRunEnvironment struct {
+	Name  string   `json:"name"`
+	Gates []string `json:"gates,omitempty"`
 }
 
 // parseImageRefs turns --image values into ImageRefs. "repo@sha256:..." sets

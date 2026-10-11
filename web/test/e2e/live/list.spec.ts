@@ -13,7 +13,7 @@
 // against the pipeline list the page last read.
 
 import { test, expect, type Page } from '@playwright/test'
-import { need, filterSidebar, sidebarRows, sidebarRow, PIPELINE } from './live'
+import { need, filterSidebar, sidebarRows, sidebarRow, PIPELINE, route } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -55,7 +55,7 @@ test('the sidebar shows each pipeline’s state, and the filters narrow it', asy
   await expect(held.locator('.health-chip')).toHaveText('Blocked by a gate')
   await expect(held.locator('.health-chip')).toHaveAttribute('data-health-state', 'InProgress')
   await expect(held).toContainText('2 envs')
-  await expect(held).toContainText('1 verified')
+  await expect(held).toContainText('1 live')
   await expect(held).not.toContainText('PAUSED')
 
   const pausedRow = sidebarRow(page, paused)
@@ -93,14 +93,14 @@ test('the sidebar shows each pipeline’s state, and the filters narrow it', asy
     await expect(fleet.getByRole('button', { name: 'Show all pipelines' })).toHaveText(`Pipelines${list!.length}`, { timeout: 500 })
     await expect(fleet.getByRole('button', { name: pipelines(healthy, 'healthy pipeline'), exact: true })).toBeVisible({ timeout: 500 })
     await expect(fleet.getByRole('button', { name: pipelines(blocked, 'blocked pipeline'), exact: true })).toBeVisible({ timeout: 500 })
-    await expect(fleet.getByRole('button', { name: `${pipelines(ciRed)} with CI failures`, exact: true })).toBeVisible({ timeout: 500 })
+    await expect(fleet.getByRole('button', { name: `${pipelines(ciRed)} with a failed promotion`, exact: true })).toBeVisible({ timeout: 500 })
     await expect(fleet.getByRole('button', { name: `${pipelines(promoting)} currently promoting`, exact: true })).toBeVisible({ timeout: 500 })
   }).toPass({ timeout: 30_000 })
 
   // Each badge filters the list, and a second click clears the filter.
   const all = fleet.getByRole('button', { name: 'Show all pipelines' })
   const blockedBadge = fleet.getByRole('button', { name: /^\d+ blocked pipelines?$/ })
-  const ciRedBadge = fleet.getByRole('button', { name: /^\d+ pipelines? with CI failures$/ })
+  const ciRedBadge = fleet.getByRole('button', { name: /^\d+ pipelines? with a failed promotion$/ })
   const healthyBadge = fleet.getByRole('button', { name: /^\d+ healthy pipelines?$/ })
   await expect(all).toHaveAttribute('aria-pressed', 'true')
 
@@ -138,16 +138,17 @@ test('selecting a row opens its pipeline, with its paused state', async ({ page 
   await pausedRow.click()
   await expect(pausedRow).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByRole('heading', { level: 1, name: paused })).toBeVisible()
+  // The header says Paused and the map carries the paused band (U2).
   await expect(page.getByText('⏸ PAUSED — no new promotions')).toBeVisible()
-  expect(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('pipeline')).toBe(paused)
-  expect(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('ns')).toBe(ns)
+  expect(route(page).pipeline).toBe(paused)
+  expect(route(page).ns).toBe(ns)
 
   const held = sidebarRow(page, PIPELINE)
   await held.click()
   await expect(held).toHaveAttribute('aria-pressed', 'true')
   await expect(pausedRow).toHaveAttribute('aria-pressed', 'false')
   await expect(page.getByRole('heading', { level: 1, name: PIPELINE })).toBeVisible()
-  await expect(page.getByText('⏸ PAUSED — no new promotions')).toHaveCount(0)
+  await expect(page.getByRole('status').filter({ hasText: 'Paused · no new promotions' })).toHaveCount(0)
 })
 
 // UI-FLEET-01: with no pipeline selected, the fleet board draws each pipeline
@@ -182,7 +183,7 @@ test('the fleet board shows what each environment runs and where releases are', 
 
   await testStation.click()
   await expect(page.getByRole('heading', { level: 1, name: PIPELINE })).toBeVisible()
-  expect(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('ns')).toBe(ns)
+  expect(route(page).ns).toBe(ns)
   await page.getByRole('button', { name: 'Show the fleet' }).click()
   await expect(board).toBeVisible()
 })

@@ -127,7 +127,7 @@ describe('ReleaseMetricsBar', () => {
     const bar = screen.getByRole('region', { name: 'Release metrics' })
     expect(bar).toHaveTextContent('Time to prod3h')
     expect(bar).toHaveTextContent('Rollback rate33%1 rollback')
-    expect(bar).toHaveTextContent('Deploys to prod2last 3 bundles')
+    expect(bar).toHaveTextContent('Deploys to prod2last 3 versions')
   })
 
   it('counts a final wave instead of naming one of its environments', () => {

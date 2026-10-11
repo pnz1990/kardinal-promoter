@@ -19,7 +19,7 @@ const author = need('KARDINAL_UI_AUTHOR')
 
 const openDialog = async (page: Page) => {
   await page.getByRole('button', { name: `Ship a version of ${PIPELINE}` }).click()
-  const dialog = page.getByRole('dialog', { name: `Create Bundle — ${PIPELINE}` })
+  const dialog = page.getByRole('dialog', { name: `Ship a version of ${PIPELINE}` })
   await expect(dialog).toBeVisible()
   return dialog
 }
@@ -34,7 +34,7 @@ test('Create Bundle checks the image, reports a refusal, and creates a Bundle th
   await expect(imageInput).toBeFocused()
 
   // No image: the dialog says so and sends nothing.
-  await dialog.getByRole('button', { name: 'Create bundle' }).click()
+  await dialog.getByRole('button', { name: 'Ship version' }).click()
   await expect(dialog.getByRole('alert')).toHaveText('Image reference is required.')
   await expect(imageInput).toHaveAccessibleDescription('Image reference is required.')
 
@@ -42,12 +42,12 @@ test('Create Bundle checks the image, reports a refusal, and creates a Bundle th
   // why and stays open.
   await imageInput.fill(':' + image.split(':').pop())
   await expect(dialog.getByRole('alert')).toHaveCount(0)
-  await dialog.getByRole('button', { name: 'Create bundle' }).click()
-  await expect(dialog.getByRole('alert')).toContainText('Could not create the bundle: API error 400: bundle rejected by validation: ')
+  await dialog.getByRole('button', { name: 'Ship version' }).click()
+  await expect(dialog.getByRole('alert')).toContainText('Could not ship the version: API error 400: bundle rejected by validation: ')
   await expect(dialog).toBeVisible()
 
   // Cancel closes it; the next one starts empty.
-  await dialog.getByRole('button', { name: 'Cancel bundle creation' }).click()
+  await dialog.getByRole('button', { name: 'Cancel shipping a version' }).click()
   await expect(dialog).toHaveCount(0)
   dialog = await openDialog(page)
   await expect(dialog.getByLabel('Container image')).toHaveValue('')
@@ -55,12 +55,12 @@ test('Create Bundle checks the image, reports a refusal, and creates a Bundle th
   await dialog.getByLabel('Container image').fill(image)
   await dialog.getByLabel('Commit SHA').fill(commitSHA)
   await dialog.getByLabel('Author').fill(author)
-  await dialog.getByRole('button', { name: 'Create bundle' }).click()
+  await dialog.getByRole('button', { name: 'Ship version' }).click()
   await expect(dialog).toHaveCount(0)
 
   // The new Bundle is on screen, with its provenance.
   await expect(chips).toHaveCount(1)
-  await expect(page.getByRole('button', { name: /^Copy bundle name "podinfo-[a-z0-9]+"$/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Copy version name "podinfo-[a-z0-9]+"$/ })).toBeVisible()
   await expect(page.getByTitle('Commit SHA', { exact: true })).toHaveText(commitSHA.slice(0, 8))
   await expect(page.getByTitle('Author', { exact: true })).toHaveText(author)
 })
