@@ -4,10 +4,13 @@
 package display_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"unicode"
@@ -114,4 +117,125 @@ func TestUnknownValue(t *testing.T) {
 	assert.Equal(t, "Unknown", display.Bundle("").Label)
 	assert.Equal(t, "Waiting for PR merge", display.Words("Waiting for PR merge"))
 	assert.Equal(t, "PR open", display.Words("PROpen"), "an acronym stays together")
+}
+
+// tsPath is the UI's copy of the table, generated from this one.
+const tsPath = "web/src/displayStates.gen.ts"
+
+// TestTypeScriptTable (P2): web/src/displayStates.gen.ts is generated from
+// the Go table, so the UI cannot drift from the CLI. Regenerate with
+// KARDINAL_UPDATE_DISPLAY=1 go test ./pkg/display -run TestTypeScriptTable.
+func TestTypeScriptTable(t *testing.T) {
+	want := typeScript()
+	path := filepath.Join(repoRoot(t), tsPath)
+	if os.Getenv("KARDINAL_UPDATE_DISPLAY") == "1" {
+		require.NoError(t, os.WriteFile(path, []byte(want), 0o644))
+		return
+	}
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, want, string(got),
+		"%s is stale: run KARDINAL_UPDATE_DISPLAY=1 go test ./pkg/display -run TestTypeScriptTable", tsPath)
+}
+
+func typeScript() string {
+	var b strings.Builder
+	b.WriteString(`// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
+// Code generated from pkg/display (TestTypeScriptTable). DO NOT EDIT.
+// Regenerate: KARDINAL_UPDATE_DISPLAY=1 go test ./pkg/display -run TestTypeScriptTable
+//
+// The display-state table (P2): the label, glyph and tone of every API state,
+// the same words as the CLI. The API values are unchanged; this is display only.
+
+/** The design-system status bucket of a state: picks colour and shape. */
+export type Tone =
+  | 'verified' | 'promoting' | 'waiting' | 'blocked' | 'failed' | 'superseded'
+  | 'paused' | 'held' | 'pending' | 'degraded' | 'unknown'
+
+/** The object a state belongs to. */
+export type DisplayKind = 'pipeline' | 'bundle' | 'step' | 'substep' | 'gate'
+
+/** How one API value is shown. */
+export interface DisplayState {
+  /** The API value, unchanged (e.g. 'WaitingForMerge'). */
+  value: string
+  /** What a person reads (e.g. 'Waiting for PR merge'). */
+  label: string
+  /** A one-character Unicode symbol. */
+  glyph: string
+  /** The glyph without Unicode. */
+  ascii: string
+  tone: Tone
+}
+
+export const DISPLAY_STATES: Record<DisplayKind, Record<string, DisplayState>> = {
+`)
+	table := display.Table()
+	for _, kind := range []display.Kind{display.KindPipeline, display.KindBundle, display.KindStep, display.KindSubStep, display.KindGate} {
+		fmt.Fprintf(&b, "  %s: {\n", kind)
+		values := make([]string, 0, len(table[kind]))
+		for v := range table[kind] {
+			values = append(values, v)
+		}
+		sort.Strings(values)
+		for _, v := range values {
+			fmt.Fprintf(&b, "    %s: %s,\n", v, tsState(table[kind][v]))
+		}
+		b.WriteString("  },\n")
+	}
+	b.WriteString("}\n\n")
+	hg := display.HeldByGate("Pending", "{gate}")
+	fmt.Fprintf(&b, `/** Splits a CamelCase value into words, like Go's display.Words ('WaitingForMerge' → 'Waiting for merge'). */
+export function words(value: string): string {
+  if (/[ \-_]/.test(value)) return value
+  let out = ''
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i]
+    const upper = c >= 'A' && c <= 'Z'
+    const prevLower = i > 0 && value[i - 1] >= 'a' && value[i - 1] <= 'z'
+    const nextLower = i + 1 < value.length && value[i + 1] >= 'a' && value[i + 1] <= 'z'
+    if (i > 0 && upper && (prevLower || nextLower)) {
+      out += ' ' + c.toLowerCase()
+    } else {
+      out += c
+    }
+  }
+  return out
+}
+
+/** How value of kind is shown; an unknown value reads as words, tone 'unknown' (Go: display.Of). */
+export function displayState(kind: DisplayKind, value: string): DisplayState {
+  const known = DISPLAY_STATES[kind][value]
+  if (known) return known
+  return { value, label: words(value) || 'Unknown', glyph: '?', ascii: '?', tone: 'unknown' }
+}
+
+/** An environment whose step a gate holds (Go: display.HeldByGate). */
+export function heldByGate(stepState: string, gate: string): DisplayState {
+  return { value: stepState, label: %s.replace("{gate}", gate), glyph: %s, ascii: %s, tone: %s }
+}
+
+/** An environment held by a rollback (Go: display.Held). */
+export function held(stepState: string): DisplayState {
+  const h: DisplayState = %s
+  return { ...h, value: stepState }
+}
+`, tsString(hg.Label), tsString(hg.Glyph), tsString(hg.ASCII), tsString(string(hg.Tone)), tsState(display.Held("")))
+	return b.String()
+}
+
+// tsString quotes s for TypeScript: a JSON string, without HTML escaping.
+func tsString(s string) string {
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(s)
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
+func tsState(st display.State) string {
+	return fmt.Sprintf("{ value: %s, label: %s, glyph: %s, ascii: %s, tone: %s }",
+		tsString(st.Value), tsString(st.Label), tsString(st.Glyph), tsString(st.ASCII), tsString(string(st.Tone)))
 }

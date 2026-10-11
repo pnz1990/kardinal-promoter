@@ -28,6 +28,7 @@ With controller TLS set (`controller.tlsCertFile`), both listeners use `https://
 | `POST` | `/api/v1/ui/bundles` | Create an image Bundle |
 | `GET` | `/api/v1/ui/bundles/{bundle}/graph` | The promotion DAG of a Bundle |
 | `GET` | `/api/v1/ui/bundles/{bundle}/steps` | The PromotionSteps of a Bundle, with per-step timings |
+| `GET` | `/api/v1/ui/display-states` | The label, glyph and tone of every Pipeline, Bundle, step and gate state (the words the CLI uses) |
 | `GET` | `/api/v1/ui/gates` | List PolicyGates |
 | `POST` | `/api/v1/ui/gates/{gate}/approve` | Override a PolicyGate for a while |
 | `POST` | `/api/v1/ui/gates/{namespace}/{gate}/approve` | Override a PolicyGate in a namespace for a while |

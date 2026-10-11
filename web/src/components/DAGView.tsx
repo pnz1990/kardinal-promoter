@@ -12,6 +12,7 @@
 // #532: DAG node state is expressed via CSS classes (dag-node--{state}).
 // #526: Portal tooltip replaces native SVG <title> tooltips. It opens on hover
 //       and on keyboard focus.
+import { displayState } from '../displayStates.gen'
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import dagre from '@dagrejs/dagre'
 import type { GraphNode, GraphEdge } from '../types'
@@ -56,6 +57,11 @@ const NODE_HEIGHT = 76  // taller to fit PR badge + elapsed timer row (#330)
 const MARGIN = 40
 
 /** Node label prefix for PolicyGate type. */
+/** The display-state label of a node (P2): the CLI's words, never the raw value. */
+function stateLabel(node: GraphNode): string {
+  return displayState(node.type === 'PolicyGate' ? 'gate' : 'step', node.state).label
+}
+
 function nodeTypePrefix(node: GraphNode): string {
   return node.type === 'PolicyGate' ? '🔒 ' : ''
 }
@@ -252,7 +258,7 @@ function DAGNode({
       data-health-state={health}
       role="button"
       tabIndex={0}
-      aria-label={`${nodeName(node)} — ${node.state}`}
+      aria-label={`${nodeName(node)} — ${stateLabel(node)}`}
       aria-pressed={isSelected}
       onMouseEnter={e => {
         const rect = (e.currentTarget as SVGGElement).getBoundingClientRect()
@@ -314,7 +320,7 @@ function DAGNode({
         fontSize="10"
         style={{ pointerEvents: 'none' }}
       >
-        {node.state}
+        {stateLabel(node)}
       </text>
       {/* #330: Elapsed timer — shown for active PromotionStep nodes */}
       {isActive && elapsed && (

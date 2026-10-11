@@ -592,6 +592,7 @@ func (s *uiAPIServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/ui/resume", s.handleResume)
 	mux.HandleFunc("/api/v1/ui/validate-cel", s.handleValidateCEL)
 	mux.HandleFunc("/api/v1/ui/steps/", s.handleStepsSubpath)
+	mux.HandleFunc("/api/v1/ui/display-states", s.handleDisplayStates)
 	mux.HandleFunc(openAPIPath, handleOpenAPI)
 }
 
