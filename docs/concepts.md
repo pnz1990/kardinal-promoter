@@ -5,6 +5,7 @@ and **gates** decide when the version may enter the next environment. Those four
 all you need to start; the [glossary](reference/glossary.md) maps every other term to them.
 
 ```mermaid
+%%{init: {'flowchart': {'curve': 'linear'}}}%%
 flowchart LR
     CI["Your CI"] -->|creates| V["Version"]
     V --> test["test<br/>commit, health check"]

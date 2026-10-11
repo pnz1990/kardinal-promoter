@@ -19,6 +19,11 @@
 //     `strokeWidth={1.5}`): geometry comes from tokens.ts.
 // A px value inside an @container prelude is allowed when it is one of the container
 // thresholds in tokens.json. Generated files and tests are not scanned.
+//
+// The docs are held to the same rule with no allowance: every hand-written stylesheet in
+// docs/stylesheets (tokens.css is generated) has no literal, and the theme templates in
+// overrides/ have no colour literal (SVG geometry there is in the SVG's own user units,
+// and its colours and stroke widths come from the stylesheets).
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, it, expect } from 'vitest'
@@ -139,5 +144,20 @@ describe('hard-coded colours and lengths (ratchet)', () => {
     const max = allowed[file] ?? 0
     expect(n, `${file} has ${n} hard-coded colours/lengths, more than the ${max} allowed: use the --k-* tokens`).toBeLessThanOrEqual(max)
     expect(n, `${file} is down to ${n}: lower its entry in noLiterals.allow.json to ${n}${n === 0 ? ' (remove it)' : ''}`).toBe(max)
+  })
+
+  const REPO = path.resolve(SRC, '../..')
+  const docsCSS = fs.readdirSync(path.join(REPO, 'docs/stylesheets')).filter((f) => f.endsWith('.css') && f !== 'tokens.css')
+  it.each(docsCSS)('docs/stylesheets/%s has no literal', (f) => {
+    expect(countLiterals(f, fs.readFileSync(path.join(REPO, 'docs/stylesheets', f), 'utf8'))).toBe(0)
+  })
+
+  const templates = fs.readdirSync(path.join(REPO, 'overrides')).filter((f) => f.endsWith('.html'))
+  it.each(templates)('overrides/%s has no colour literal', (f) => {
+    const html = fs.readFileSync(path.join(REPO, 'overrides', f), 'utf8').replace(/<!--[\s\S]*?-->|\{#[\s\S]*?#\}/g, ' ')
+    expect(html.match(COLOR) ?? []).toEqual([])
+    for (const m of html.matchAll(/\b(?:fill|stroke|color|stop-color|style)="([^"]*)"/g)) {
+      expect(m[1].match(NAMED_RE) ?? [], m[0]).toEqual([])
+    }
   })
 })

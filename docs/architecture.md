@@ -7,6 +7,7 @@ kardinal-promoter is a Kubernetes-native controller. All state lives in etcd as 
 ## System Overview
 
 ```mermaid
+%%{init: {'flowchart': {'curve': 'linear'}}}%%
 graph TD
     CI["CI/CD Pipeline<br/>(GitHub Actions, etc.)"] -->|"POST /api/v1/bundles<br/>or kubectl apply"| Bundle
 
@@ -165,6 +166,7 @@ Checks whether a promotion is healthy after merging:
 ## Data Flow: Bundle → Verified
 
 ```mermaid
+%%{init: {'flowchart': {'curve': 'linear'}}}%%
 sequenceDiagram
     participant CI
     participant API as kardinal API

@@ -6,6 +6,7 @@ on:
     paths:
       - "docs/**"
       - "mkdocs.yml"
+      - "overrides/**"
       - "web/tokens/**"
       - "web/src/assets/fonts/**"
       - "scripts/gen-tokens.mjs"
@@ -19,6 +20,7 @@ on:
     paths:
       - "docs/**"
       - "mkdocs.yml"
+      - "overrides/**"
       - "web/tokens/**"
       - "web/src/assets/fonts/**"
       - "scripts/gen-tokens.mjs"
