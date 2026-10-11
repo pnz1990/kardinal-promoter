@@ -441,3 +441,28 @@ func TestAuthorizingClient_ListErrorLeavesNoItems(t *testing.T) {
 		})
 	}
 }
+
+// TestAuthorizeAction_DenialNamesRole: a refused UI action says which of the
+// chart's user roles grants it, so the person knows what to ask for.
+func TestAuthorizeAction_DenialNamesRole(t *testing.T) {
+	tests := []struct {
+		resource, subresource, want string
+	}{
+		{"policygates", "override", "the chart's approver or admin role grants it"},
+		{"bundles", "reject", "the chart's promoter, approver or admin role grants it"},
+		{"pipelines", "pause", "the chart's promoter or admin role grants it"},
+		{"pipelines", "hold", "the chart's promoter or admin role grants it"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.resource+"/"+tt.subresource, func(t *testing.T) {
+			base := fake.NewClientBuilder().WithScheme(uiauthScheme(t)).Build()
+			authz := uiauth.NewAuthorizingClient(base, &fakeAccess{}, "")
+			ctx := uiauth.WithUser(context.Background(), authv1.UserInfo{Username: "alice"})
+			err := authz.AuthorizeAction(ctx, "update", "kardinal.io", tt.resource, tt.subresource, "team-a", "x")
+			require.Error(t, err)
+			assert.True(t, apierrors.IsForbidden(err))
+			assert.Contains(t, err.Error(), `user "alice" cannot update`)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}

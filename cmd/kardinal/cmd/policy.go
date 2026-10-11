@@ -254,7 +254,7 @@ func getPipeline(ctx context.Context, c sigs_client.Reader, ns, name string) (*v
 	var pipe v1alpha1.Pipeline
 	if err := c.Get(ctx, sigs_client.ObjectKey{Namespace: ns, Name: name}, &pipe); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("pipeline %q not found in namespace %q", name, ns)
+			return nil, pipelineNotFound(ctx, c, ns, name)
 		}
 		return nil, fmt.Errorf("get pipeline %q: %w", name, err)
 	}
