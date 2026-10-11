@@ -249,7 +249,7 @@ var (
 )
 
 // flagRow is one flag.
-type flagRow struct{ name, typ, def, help string }
+type flagRow struct{ name, typ, help string }
 
 // ControllerFlagsPage renders the flag package's -help output as a table.
 func ControllerFlagsPage(help string) string {
