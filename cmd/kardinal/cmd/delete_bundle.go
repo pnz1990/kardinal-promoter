@@ -37,7 +37,7 @@ func newDeleteCmd() *cobra.Command {
 }
 
 func newDeleteBundleCmd() *cobra.Command {
-	var pipeline string
+	var pipeline, exactName string
 	cmd := &cobra.Command{
 		Use:     "bundle <name|version>",
 		Aliases: []string{"bundles"},
@@ -48,13 +48,17 @@ Nothing is written to git. Old finished Bundles are deleted automatically
 past the Pipeline's spec.historyLimit (default 50).`,
 		Example:     `  kardinal delete bundle my-app-v1-5`,
 		Annotations: map[string]string{ReferenceAnnotation: deleteBundleReference},
-		Args:        cobra.ExactArgs(1),
+		Args:        bundleArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("delete bundle: %w", err)
 			}
-			name, _, err := resolveBundleRefIn(contextOf(cmd), c, refScope{ns: ns, pipeline: pipeline, strict: true}, args[0])
+			ref, err := bundleArg(args, exactName)
+			if err != nil {
+				return fmt.Errorf("delete bundle: %w", err)
+			}
+			name, _, err := resolveBundleRefIn(contextOf(cmd), c, refScope{ns: ns, pipeline: pipeline, strict: true, exact: exactName != ""}, ref)
 			if err != nil {
 				return fmt.Errorf("delete bundle: %w", err)
 			}
@@ -65,6 +69,8 @@ past the Pipeline's spec.historyLimit (default 50).`,
 		},
 	}
 	cmd.Flags().StringVar(&pipeline, "pipeline", "", "Look for a version given as <name> in this pipeline only")
+	cmd.Flags().StringVar(&exactName, "name", "", "The Bundle of this name, never a version (when a name is also another Bundle's version)")
+	cmd.MarkFlagsMutuallyExclusive("name", "pipeline")
 	addYesFlag(cmd)
 	return cmd
 }

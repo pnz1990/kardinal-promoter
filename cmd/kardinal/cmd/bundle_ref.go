@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/spf13/cobra"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -56,6 +57,34 @@ type refScope struct {
 	// strict refuses a ref that is one Bundle's name and another's version:
 	// for a command that rejects or deletes, the user must say which.
 	strict bool
+	// exact takes ref as a Bundle's name only (--name): no version lookup.
+	exact bool
+}
+
+// bundleArgs checks the arguments of a command that takes a Bundle as its
+// argument or with --name: one argument, or none with --name.
+func bundleArgs(cmd *cobra.Command, args []string) error {
+	if f := cmd.Flags().Lookup("name"); f != nil && f.Changed {
+		if len(args) > 0 {
+			return fmt.Errorf("give the Bundle as the argument or with --name, not both")
+		}
+		return nil
+	}
+	return cobra.ExactArgs(1)(cmd, args)
+}
+
+// bundleArg is the Bundle a reject or delete names: its argument, or
+// --name (exact), not both.
+func bundleArg(args []string, exact string) (string, error) {
+	switch {
+	case len(args) == 1 && exact != "":
+		return "", fmt.Errorf("give the Bundle as the argument or with --name, not both")
+	case len(args) == 1:
+		return args[0], nil
+	case exact == "":
+		return "", fmt.Errorf("give the version or the Bundle's name (or --name <bundle>)")
+	}
+	return exact, nil
 }
 
 // resolveBundleRef is the Bundle ref names in ns (refScope{ns, pipeline}).
@@ -74,6 +103,16 @@ func resolveBundleRef(ctx context.Context, c sigs_client.Client, ns, pipeline, r
 func resolveBundleRefIn(ctx context.Context, c sigs_client.Client, s refScope, ref string) (string, string, error) {
 	if ref == "" {
 		return "", s.ns, nil
+	}
+	if s.exact {
+		var b v1alpha1.Bundle
+		if err := c.Get(ctx, types.NamespacedName{Namespace: s.ns, Name: ref}, &b); err != nil {
+			if apierrors.IsNotFound(err) {
+				return "", "", refErrorf("no Bundle named %q in namespace %s (for a version, give it without --name)", ref, s.ns)
+			}
+			return "", "", fmt.Errorf("get bundle %q: %w", ref, HumanError(err))
+		}
+		return b.Name, b.Namespace, nil
 	}
 	var named *v1alpha1.Bundle
 	if s.ns != "" {
@@ -94,6 +133,15 @@ func resolveBundleRefIn(ctx context.Context, c sigs_client.Client, s refScope, r
 	}
 	var list v1alpha1.BundleList
 	if err := c.List(ctx, &list, opts...); err != nil {
+		if named != nil && s.strict {
+			// It may also be another Bundle's version: refuse rather than guess.
+			why := fmt.Sprintf("list bundles: %v", err)
+			if apierrors.IsForbidden(err) {
+				why = "you may not list Bundles in " + s.ns
+			}
+			return "", "", refErrorf("could not check that %q is not also another Bundle's version: %s; "+
+				"to mean the Bundle named %s, give --name %s", ref, why, ref, ref)
+		}
 		if named != nil {
 			return named.Name, named.Namespace, nil
 		}
@@ -127,8 +175,9 @@ func resolveBundleRefIn(ctx context.Context, c sigs_client.Client, s refScope, r
 	withPipeline := s.pipeline == ""
 	if named != nil {
 		if s.strict && len(matches) > 0 {
-			return "", "", refErrorf("%q is the name of %s and a version of %s; say which with --pipeline, or give the other's Bundle name",
-				ref, candidateList([]v1alpha1.Bundle{*named}, withPipeline), candidateList(matches, withPipeline))
+			return "", "", refErrorf("%q is the name of %s and a version of %s; say which: --name %s for the Bundle of that name, "+
+				"--pipeline, or the other's Bundle name",
+				ref, candidateList([]v1alpha1.Bundle{*named}, withPipeline), candidateList(matches, withPipeline), ref)
 		}
 		return named.Name, named.Namespace, nil
 	}
