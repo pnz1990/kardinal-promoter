@@ -33,7 +33,7 @@ import (
 // override, policy list and policy simulate.
 
 // explainHeader is the header of kardinal explain's table.
-var explainHeader = []string{"ENVIRONMENT", "BUNDLE", "TYPE", "NAME", "STATE", "EXPRESSION", "REASON"}
+var explainHeader = []string{"ENVIRONMENT", "VERSION", "TYPE", "NAME", "STATE", "EXPRESSION", "REASON"}
 
 // ansi matches an ANSI color code.
 var ansi = regexp.MustCompile("\x1b\\[[0-9;]*m")
@@ -43,11 +43,17 @@ func header(out string) []string {
 	return cliCellGap.Split(strings.TrimSpace(strings.SplitN(out, "\n", 2)[0]), -1)
 }
 
-// explainTable asserts kardinal explain's header and returns its rows.
+// explainTable asserts kardinal explain's header and returns its rows, each
+// with BUNDLE, the Bundle its VERSION cell names, in place of VERSION.
 func explainTable(t *testing.T, out string) []map[string]string {
 	t.Helper()
 	require.Equal(t, explainHeader, header(out), "explain header in:\n%s", out)
-	return framework.ParseTable(out)
+	rows := framework.ParseTable(out)
+	for _, r := range rows {
+		r["BUNDLE"] = framework.BundleOf(r["VERSION"])
+		delete(r, "VERSION")
+	}
+	return rows
 }
 
 // explainDeployed is what explain prints after its table: the "deployed:"
@@ -298,7 +304,7 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	// status: test's gate holds B1 there; prod is not reached yet.
 	v1 := fixtures.V2
 	sv := waitStatus(t, c, ns, []map[string]string{
-		{"ENVIRONMENT": "test", "RUNNING": "-", "INCOMING": b1 + " (" + v1 + ")", "STATE": "Held by gate entry", "PR": "-"},
+		{"ENVIRONMENT": "test", "RUNNING": "-", "INCOMING": v1 + " (" + b1 + ")", "STATE": "Held by gate entry", "PR": "-"},
 		{"ENVIRONMENT": "prod", "RUNNING": "-", "INCOMING": "-", "STATE": "-", "PR": "-"},
 	})
 	assert.Contains(t, sv.summary, "held by gate entry in test")
@@ -423,8 +429,8 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	assert.Equal(t, "prod   deployed: none\n", explainDeployed(out), "test runs B1, so only prod gets a deployed line")
 
 	sv = waitStatus(t, c, ns, []map[string]string{
-		{"ENVIRONMENT": "test", "RUNNING": b1 + " (" + v1 + ")", "INCOMING": "-", "STATE": "Live", "PR": "-"},
-		{"ENVIRONMENT": "prod", "RUNNING": "-", "INCOMING": b1 + " (" + v1 + ")", "STATE": "Held by gate hold", "PR": "-"},
+		{"ENVIRONMENT": "test", "RUNNING": v1 + " (" + b1 + ")", "INCOMING": "-", "STATE": "Live", "PR": "-"},
+		{"ENVIRONMENT": "prod", "RUNNING": "-", "INCOMING": v1 + " (" + b1 + ")", "STATE": "Held by gate hold", "PR": "-"},
 	})
 	assert.Equal(t, []map[string]string{{"GATE": "hold", "ENV": "prod", "EXPRESSION": openExpr, "REASON": holdMsg}},
 		sv.gates, "the gate's message, whole")
@@ -457,8 +463,8 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	pr := openPR(t, e, a.repo, fixtures.V2)
 	assert.Equal(t, pr.URL, prodStep.Status.PRURL)
 	sv = waitStatus(t, c, ns, []map[string]string{
-		{"ENVIRONMENT": "test", "RUNNING": b1 + " (" + v1 + ")", "INCOMING": "-", "STATE": "Live", "PR": "-"},
-		{"ENVIRONMENT": "prod", "RUNNING": "-", "INCOMING": b1 + " (" + v1 + ")", "STATE": display.Step("WaitingForMerge").Label, "PR": pr.URL},
+		{"ENVIRONMENT": "test", "RUNNING": v1 + " (" + b1 + ")", "INCOMING": "-", "STATE": "Live", "PR": "-"},
+		{"ENVIRONMENT": "prod", "RUNNING": "-", "INCOMING": v1 + " (" + b1 + ")", "STATE": display.Step("WaitingForMerge").Label, "PR": pr.URL},
 	})
 	assert.Nil(t, sv.gates, "no gate holds prod now")
 	assert.Contains(t, sv.summary, "waiting for PR merge in prod (#", "the summary names the PR")

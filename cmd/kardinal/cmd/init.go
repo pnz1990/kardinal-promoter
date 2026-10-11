@@ -444,14 +444,9 @@ func createGitSecret(ctx context.Context, c sigs_client.Client, ns, name string,
 	case !apierrors.IsNotFound(err):
 		return fmt.Errorf("init: get Secret %s/%s: %w", ns, name, HumanError(err))
 	}
-	token := os.Getenv("GITHUB_TOKEN")
-	from := "$GITHUB_TOKEN"
-	if token == "" {
-		t, err := ghToken()
-		if err != nil || t == "" {
-			return fmt.Errorf("init: --create-secret needs a git token: set GITHUB_TOKEN, or log in with gh auth login")
-		}
-		token, from = t, "gh auth token"
+	token, from, err := gitToken()
+	if err != nil {
+		return fmt.Errorf("init: --create-secret needs a git token: set GITHUB_TOKEN, or log in with gh auth login")
 	}
 	s := &corev1.Secret{}
 	s.Name, s.Namespace = name, ns
@@ -462,6 +457,22 @@ func createGitSecret(ctx context.Context, c sigs_client.Client, ns, name string,
 	}
 	_, _ = fmt.Fprintf(out, "Secret %s/%s created from %s\n", ns, name, from)
 	return nil
+}
+
+// errNoGitToken is gitToken's error when there is no token.
+var errNoGitToken = errors.New("no git token: GITHUB_TOKEN is not set and gh auth token gave none")
+
+// gitToken is the git token for a Secret: $GITHUB_TOKEN, else gh auth
+// token. from says which; the token itself is never printed.
+func gitToken() (token, from string, err error) {
+	if t := os.Getenv("GITHUB_TOKEN"); t != "" {
+		return t, "$GITHUB_TOKEN", nil
+	}
+	t, err := ghToken()
+	if err != nil || t == "" {
+		return "", "", errNoGitToken
+	}
+	return t, "gh auth token", nil
 }
 
 // applyPipeline creates the Pipeline of data in ns; one of the same name is

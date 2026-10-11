@@ -850,10 +850,10 @@ func TestCLI_Doctor(t *testing.T) {
 const fakeOpener = "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$(dirname \"$0\")/opened\"\n"
 
 // TestCLI_Dashboard runs kardinal dashboard with a stand-in browser opener.
-// It prints the UI URL (http://localhost:8082/ui/ by default) and opens it,
-// --address changes the URL, and --no-open only prints it. The address in
-// the help's example serves the UI once kubectl port-forwards to the
-// controller's port 8082. Without an opener the command fails.
+// Without --address it port-forwards a local port to the controller's ui
+// port, prints the URL, opens it and serves the UI there until Ctrl-C;
+// --no-open only prints it. --address opens that URL and forwards nothing.
+// Without a cluster it fails, and without an opener --address fails.
 // Covers CLI-DASHBOARD-01.
 func TestCLI_Dashboard(t *testing.T) {
 	t.Parallel()
@@ -861,7 +861,8 @@ func TestCLI_Dashboard(t *testing.T) {
 	cli := e.CLI(t)
 	bin := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "xdg-open"), []byte(fakeOpener), 0o755))
-	withOpener := framework.CLIOptions{Kubeconfig: "/dev/null", Env: []string{"PATH=" + bin + ":" + os.Getenv("PATH")}}
+	path := []string{"PATH=" + bin + ":" + os.Getenv("PATH")}
+	withOpener := framework.CLIOptions{Env: path}
 	opened := func() string {
 		b, err := os.ReadFile(filepath.Join(bin, "opened"))
 		if err != nil {
@@ -869,15 +870,45 @@ func TestCLI_Dashboard(t *testing.T) {
 		}
 		return string(b)
 	}
+	serves := func(address string) {
+		t.Helper()
+		resp, err := http.Get(address)
+		require.NoError(t, err)
+		body := make([]byte, 4096)
+		n, _ := resp.Body.Read(body)
+		_ = resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode, "%s serves the UI: %s", address, body[:n])
+		assert.Contains(t, string(body[:n]), "<title>Kardinal Promoter</title>")
+	}
+	forwarding := regexp.MustCompile(`^kardinal UI: (http://127\.0\.0\.1:\d+/ui/)\nForwarding to the controller in kardinal-system; Ctrl-C stops\.\n`)
 
-	r := cli.Exec(withOpener, "dashboard")
-	require.Equal(t, 0, r.Code, r.Stderr)
-	assert.Equal(t, "kardinal UI: http://localhost:8082/ui/\nOpening in browser...\n", r.Stdout)
-	framework.Eventually(t, 30*time.Second, "the opener runs", func(context.Context) (bool, string) {
-		return opened() == "http://localhost:8082/ui/\n", opened()
+	// The port-forward: printed, opened, served, until Ctrl-C.
+	p := cli.Start(withOpener, "dashboard")
+	out := p.WaitStdout(60*time.Second, "dashboard forwards and opens the UI", func(s string) bool {
+		return forwarding.MatchString(s) && strings.HasSuffix(s, "Opening in browser...\n")
 	})
+	address := forwarding.FindStringSubmatch(out)[1]
+	framework.Eventually(t, 30*time.Second, "the opener gets the forwarded URL", func(context.Context) (bool, string) {
+		return opened() == address+"\n", opened()
+	})
+	serves(address)
+	p.Interrupt()
+	framework.Eventually(t, 15*time.Second, "Ctrl-C stops dashboard", func(context.Context) (bool, string) {
+		return p.Exited(), p.Stdout()
+	})
+	_, err := http.Get(address)
+	assert.Error(t, err, "the forward ends with dashboard")
 
-	// The help's --address example, on the port kubectl forwards to.
+	// --no-open forwards and prints, and opens nothing.
+	before := opened()
+	p = cli.Start(withOpener, "dashboard", "--no-open")
+	out = p.WaitStdout(60*time.Second, "dashboard --no-open forwards", forwarding.MatchString)
+	assert.NotContains(t, out, "Opening in browser")
+	serves(forwarding.FindStringSubmatch(out)[1])
+	assert.Equal(t, before, opened(), "--no-open opens nothing")
+	p.Interrupt()
+
+	// The help's --address example, on a port kubectl forwards to.
 	help := cli.Exec(noCluster, "dashboard", "--help").Stdout
 	m := regexp.MustCompile(`(?m)^\s+kardinal dashboard --address (\S+)$`).FindStringSubmatch(help)
 	require.NotNil(t, m, "the help has an --address example:\n%s", help)
@@ -885,34 +916,35 @@ func TestCLI_Dashboard(t *testing.T) {
 	require.NoError(t, err)
 	forwarded, err := url.Parse(cli.PortForward(framework.ControllerNamespace, "svc/kardinal-promoter", 8082))
 	require.NoError(t, err)
-	example.Host = forwarded.Host
-	address := example.String()
+	example.Scheme, example.Host = forwarded.Scheme, forwarded.Host
+	address = example.String()
 
-	r = cli.Exec(withOpener, "dashboard", "--address", address)
+	noKube := framework.CLIOptions{Kubeconfig: "/dev/null", Env: path}
+	r := cli.Exec(noKube, "dashboard", "--address", address)
 	require.Equal(t, 0, r.Code, r.Stderr)
 	assert.Equal(t, "kardinal UI: "+address+"\nOpening in browser...\n", r.Stdout)
 	framework.Eventually(t, 30*time.Second, "the opener gets --address", func(context.Context) (bool, string) {
 		return strings.HasSuffix(opened(), "\n"+address+"\n"), opened()
 	})
-	resp, err := http.Get(address)
-	require.NoError(t, err)
-	body := make([]byte, 4096)
-	n, _ := resp.Body.Read(body)
-	_ = resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode, "the opened address serves the UI: %s", body[:n])
-	assert.Contains(t, string(body[:n]), "<title>Kardinal Promoter</title>")
+	serves(address)
 
-	before := opened()
-	r = cli.Exec(withOpener, "dashboard", "--no-open", "--address", address)
+	before = opened()
+	r = cli.Exec(noKube, "dashboard", "--no-open", "--address", address)
 	require.Equal(t, 0, r.Code)
 	assert.Equal(t, "kardinal UI: "+address+"\n", r.Stdout)
 	framework.Consistently(t, 3*time.Second, "--no-open opens nothing", func(context.Context) (bool, string) {
 		return opened() == before, opened()
 	})
 
-	r = cli.Exec(framework.CLIOptions{Kubeconfig: "/dev/null", Env: []string{"PATH=" + t.TempDir()}}, "dashboard")
+	// No cluster and no --address: nothing to forward to.
+	r = cli.Exec(noKube, "dashboard")
 	assert.Equal(t, 1, r.Code)
-	assert.Equal(t, "kardinal UI: http://localhost:8082/ui/\nOpening in browser...\n", r.Stdout)
+	assert.Empty(t, r.Stdout)
+	assert.Contains(t, r.Stderr, "dashboard: ")
+
+	r = cli.Exec(framework.CLIOptions{Kubeconfig: "/dev/null", Env: []string{"PATH=" + t.TempDir()}}, "dashboard", "--address", address)
+	assert.Equal(t, 1, r.Code)
+	assert.Equal(t, "kardinal UI: "+address+"\nOpening in browser...\n", r.Stdout)
 	assert.Contains(t, r.Stderr, `exec: "xdg-open": executable file not found in $PATH`)
 }
 

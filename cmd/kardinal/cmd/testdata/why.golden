@@ -1,0 +1,74 @@
+== approval (kardinal why demo prod)
+prod is waiting for your approval.
+  Version  sha-9349a3f (demo-zhxk2)
+  Gate     prod-approval · 0 of 1 approvals
+  Next     kardinal approve demo prod
+
+== approval with one of two (kardinal why demo prod)
+prod is waiting for your approval.
+  Version  1.5.0 (demo-b)
+  Gate     cab · 1 of 2 approvals
+  Next     kardinal approve demo prod
+
+== a gate that opens by itself (kardinal why demo prod)
+prod is held by gate no-weekend-deploys.
+  Version  1.5.0 (demo-b)
+  Why      Production deployments are blocked on weekends
+  Rule     !schedule.isWeekend
+  Now      !schedule.isWeekend = false
+  Opens    when the expression passes; rechecked every 5m
+  Next     kardinal override demo prod --gate no-weekend-deploys --reason <why>
+
+== a gate that needs a person (kardinal why demo prod)
+prod is held by gate label.
+  Version  1.5.0 (demo-b)
+  Rule     bundle.labels.approved == "yes"
+  Now      bundle.labels.approved == "yes" = false
+  Opens    when what it reads changes (nothing in it changes with time); rechecked every 1m
+  Next     kardinal override demo prod --gate label --reason <why>
+
+== held (kardinal why demo prod)
+prod is held on 1.4.0 by alice (INC-42).
+  Waiting  1.5.0 (demo-b)
+  Next     kardinal unhold demo prod
+
+== paused (kardinal why demo prod)
+prod is paused with pipeline demo: nothing new promotes until it is resumed.
+  Version  1.5.0 (demo-b)
+  Next     kardinal resume demo
+
+== its PR (kardinal why demo prod)
+prod waits for PR #42 to merge.
+  Version  1.5.0 (demo-b)
+  PR       https://github.com/acme/gitops/pull/42
+
+== failed (kardinal why demo prod)
+prod did not promote 1.5.0 (demo-b): failed.
+  Why   health check timed out after 10m
+  Next  kardinal logs demo prod
+  Or    kardinal rollback demo prod, back to 1.4.0
+
+== promoting (kardinal why demo prod)
+prod is promoting 1.5.0 (demo-b): checking health.
+  Since  1m30s ago
+
+== waits for upstream (kardinal why demo prod)
+prod waits for uat to be live first.
+  Version  1.5.0 (demo-b)
+
+== nothing waits (kardinal why demo prod)
+prod runs 1.5.0 and nothing is waiting.
+
+== no version yet (kardinal why demo prod)
+prod has no version yet.
+  Next  kardinal ship demo --image <ref>
+
+== every environment (kardinal why demo)
+test runs 1.5.0 and nothing is waiting.
+
+uat runs 1.5.0 and nothing is waiting.
+
+prod waits for PR #7 to merge.
+  Version  1.5.0 (demo-b)
+  PR       https://github.com/acme/gitops/pull/7
+

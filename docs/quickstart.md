@@ -2,6 +2,92 @@
 
 This guide walks you through setting up your first promotion pipeline with kardinal-promoter. By the end, you will have a working pipeline that promotes the `kardinal-test-app` through test, uat, and prod environments using Git pull requests.
 
+## One command: `kardinal quickstart`
+
+On a local cluster (kind, k3d, minikube, Docker Desktop or Rancher Desktop),
+`kardinal quickstart` installs everything and promotes a first version. You
+need `helm`, `kubectl`, a fork of
+[`pnz1990/kardinal-demo`](https://github.com/pnz1990/kardinal-demo), and a
+GitHub token with **contents** and **pull requests** read and write on the
+fork: `GITHUB_TOKEN`, or the token of `gh auth login`.
+
+```bash
+gh repo fork pnz1990/kardinal-demo --clone=false
+kind create cluster --name kardinal
+kardinal quickstart --repo https://github.com/<you>/kardinal-demo
+```
+
+```
+Setting up the kardinal demo in kind-kardinal
+  ✓ kro 0.10.0-rc.0: installed
+  ✓ Argo CD v3.5.3: installed
+  ✓ Secret kardinal-system/kardinal-scm-token: created from $GITHUB_TOKEN (the controller's token for PRs)
+  ✓ kardinal-promoter 0.10.1: installed
+  ✓ Secret default/github-token: created from $GITHUB_TOKEN
+  ✓ Argo CD ApplicationSet argocd/kardinal-test-app (https://github.com/<you>/kardinal-demo): applied
+  ✓ PolicyGate default/prod-approval (prod waits for your approval, as kubernetes-admin): applied
+  ✓ Pipeline default/demo: applied
+  ✓ First version: shipped as demo-7xk2p
+Following version sha-9349a3f (demo-7xk2p) through test, uat and prod (Ctrl-C stops following, the promotion goes on)
+  test: Checking health
+  test: Live
+  uat: Promoting
+  uat: Checking health
+  uat: Live
+  prod: Held by gate prod-approval
+Version sha-9349a3f (demo-7xk2p) stopped: prod waits for approval at gate prod-approval (kardinal approve demo prod)
+
+Next:
+  Approve prod:    kardinal approve demo prod
+  Watch:           kardinal status demo -w
+  Open the UI:     kardinal dashboard
+  Ship the next:   kardinal ship demo --image ghcr.io/pnz1990/kardinal-test-app:main@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0 --wait
+```
+
+The indented state lines go to stderr; the rest goes to stdout. What it does, each step only
+when it is not done yet:
+
+- It refuses any kubeconfig context that is not a local cluster (by name: `kind-*`, `k3d-*`,
+  `minikube`, `docker-desktop`, `rancher-desktop`; and by API server: this machine, or for
+  minikube its drivers' networks 192.168.49.0/24, 192.168.39.0/24 and 192.168.59.0/24) before
+  it sends anything to it, and refuses to run while `HELM_KUBE*` (such as `HELM_KUBECONTEXT`) or
+  `KUBERNETES_MASTER` is set, since helm or kubectl would follow them instead. There is no flag
+  to override that, on purpose. helm and kubectl run on a kubeconfig file with only the checked
+  context. It never changes your kubeconfig; `--context` picks another local context. One thing
+  it cannot tell: a loopback port that tunnels to a remote cluster (`kubectl port-forward`,
+  `ssh -L`) looks local, so do not point a local context at such a tunnel.
+- It installs kro (the version `hack/install-kro.sh` pins), Argo CD, and the kardinal-promoter
+  chart in `kardinal-system` (`--chart-version` and `--set` change it; `--no-argocd` skips
+  Argo CD when the cluster has one).
+- It creates in `default`, so no command needs `-n`:
+  - the Pipeline's git Secret `github-token`;
+  - an Argo CD ApplicationSet that deploys `environments/<env>` of your fork as the
+    Applications `kardinal-test-app-<env>`;
+  - a PolicyGate `prod-approval`: prod waits for your approval, and only yours (the user
+    the cluster says you are);
+  - the Pipeline `demo`: test, uat and prod, all `approval: auto`, with prod behind the
+    gate and health checked through the Applications.
+- It ships the first version, then follows it until prod waits for you.
+
+`kardinal why demo prod` says what prod waits for and the command that moves it on:
+
+```
+prod is waiting for your approval.
+  Version  sha-9349a3f (demo-7xk2p)
+  Gate     prod-approval · 0 of 1 approvals
+  Next     kardinal approve demo prod
+```
+
+`kardinal approve demo prod` ships the version to prod. `kardinal dashboard` port-forwards to
+the controller and opens the UI. A held stage there shows the same `kardinal approve demo prod`
+command with a copy button: the quickstart UI does not authenticate you, so it cannot record
+an approval for you. Running `kardinal quickstart` again changes nothing.
+
+To get a pull request with evidence for prod, as in the full setup below, set prod's
+`approval: pr-review` in the Pipeline (`kubectl edit pipeline demo`). The next version then
+waits for your approval at prod, opens a PR on your fork with the promotion evidence, and is
+live in prod once you merge it.
+
 ## Fast Start — about 10 minutes
 
 Install with `demo.enabled=true` and you get a pre-configured
@@ -47,7 +133,7 @@ helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --
 
 # 3. Check the demo Pipeline (it lives in the release namespace)
 kardinal get pipelines -n kardinal-system
-# PIPELINE   BUNDLE   TEST   UAT   PROD   SUB   AGE
+# PIPELINE   VERSION  TEST   UAT   PROD   SUB   AGE
 # demo       -        -      -     -      0     10s
 
 # 4. Trigger the first promotion. The kardinal-demo overlays already run

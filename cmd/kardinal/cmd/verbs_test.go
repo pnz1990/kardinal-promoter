@@ -330,7 +330,7 @@ func TestHoldAndWhy(t *testing.T) {
 
 	why, _, err := NewRootCmd().Find([]string{"why"})
 	require.NoError(t, err)
-	assert.Equal(t, "explain", why.Name())
+	assert.Equal(t, "why", why.Name(), "why is its own command: a sentence first; -o wide is explain's table")
 	for _, verb := range []string{"ship", "hold", "unhold"} {
 		cmd, _, err := NewRootCmd().Find([]string{verb})
 		require.NoError(t, err, verb)
@@ -369,27 +369,62 @@ func TestShipTimeVariables(t *testing.T) {
 	assert.Contains(t, ship.Annotations[ReferenceAnnotation], timeVariableList())
 	doc, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "ci-integration.md"))
 	require.NoError(t, err)
-	var rows []string
+	// The docs' table, without its code quotes, is the reference's list.
+	plain := strings.ReplaceAll(string(doc), "`", "")
 	for _, v := range timeVariables {
-		vars := strings.Split(v.vars, ", ")
-		for i, x := range vars {
-			if strings.HasPrefix(x, "anything else of ") {
-				vars[i] = "anything else of `" + strings.TrimPrefix(x, "anything else of ") + "`"
-			} else {
-				vars[i] = "`" + x + "`"
-			}
-		}
-		rows = append(rows, "| `"+v.match+"` | "+strings.Join(vars, ", ")+" |")
+		assert.Contains(t, plain, "| "+v.match+" | "+v.vars+" |", "docs/ci-integration.md lists %s", v.match)
 	}
-	assert.Contains(t, string(doc), strings.Join(rows, "\n"), "docs/ci-integration.md lists the time variables")
+}
 
-	// Each text makes a gate that does not pass one ship waits for; a gate
-	// on a Bundle label does not.
-	for _, v := range timeVariables {
-		g := &v1alpha1.PolicyGate{Spec: v1alpha1.PolicyGateSpec{Expression: "x." + v.match + "y > 0"}}
-		assert.True(t, rechecks(g), v.match)
+var updateShipRechecks = flag.Bool("update-ship-rechecks", false, "rewrite testdata/ship-rechecks.golden")
+
+// TestRechecks_Golden (C5 QA): which gate expressions ship --wait waits for
+// (it opens by itself) and which need a person: QA's false positives (a
+// string literal or a label that names a variable) need a person, QA's false
+// negatives (an index, spaces) wait.
+//
+// Covers CLI-VERBS-01.
+func TestRechecks_Golden(t *testing.T) {
+	exprs := []string{
+		// Read a variable that changes with time: waits.
+		`!schedule.isWeekend && schedule.hour >= 9 && schedule.hour < 17`,
+		`schedule["hour"] >= 9`,
+		`schedule . hour >= 9`,
+		`upstream.uat.soakMinutes >= 30`,
+		`upstream["uat"]["verified"]`,
+		`bundle.upstreamSoakMinutes >= 30`,
+		`metrics["error-rate"].result == "Pass"`,
+		`metrics.latency.value < "200"`,
+		`!changewindow.freeze`,
+		`!schedule.isWeekend && bundle.labels.approved == "yes"`,
+		`(schedule.dayOfWeek != "Friday")`,
+		// Do not: a person is needed.
+		`bundle.labels.soakMinutes == "30"`,
+		`bundle.labels.team == "schedule.ops"`,
+		`bundle.provenance.author != "metrics-bot"`,
+		`bundle.provenance.author != 'upstream.bot'`,
+		`bundle.labels.schedule.x == "y"`,
+		`bundle.labels["metrics"] == "on"`,
+		`bundle.version.startsWith("changewindow.")`,
+		`"""schedule.hour""" != ""`,
+		`bundle.provenance.author != "dependabot[bot]"`,
+		`true`,
 	}
-	assert.False(t, rechecks(&v1alpha1.PolicyGate{Spec: v1alpha1.PolicyGateSpec{Expression: `bundle.provenance.author != "bot"`}}))
+	var b strings.Builder
+	for _, e := range exprs {
+		what := "a person"
+		if rechecks(&v1alpha1.PolicyGate{Spec: v1alpha1.PolicyGateSpec{Expression: e}}) {
+			what = "waits"
+		}
+		fmt.Fprintf(&b, "%-9s %s\n", what, e)
+	}
+	path := filepath.Join("testdata", "ship-rechecks.golden")
+	if *updateShipRechecks {
+		require.NoError(t, os.WriteFile(path, []byte(b.String()), 0o644))
+	}
+	want, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, string(want), b.String())
 }
 
 // TestExplainHints (C5): explain and why print, on stderr, the command that

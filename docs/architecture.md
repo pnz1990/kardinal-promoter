@@ -240,7 +240,7 @@ supersede an in-flight `config` Bundle, and vice versa.
 
 ```bash
 kardinal get bundles my-app
-# BUNDLE         TYPE    PHASE                       AGE
+# VERSION        TYPE    PHASE                       AGE
 # my-app-7xk2p   image   Replaced by newer version   10m
 # my-app-9qd4s   image   Promoting                   3m
 ```
