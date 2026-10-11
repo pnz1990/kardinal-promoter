@@ -358,7 +358,8 @@ func TestCore_MinimalExample(t *testing.T) {
 
 	r := e.CLI(t).Exec(framework.CLIOptions{Kubeconfig: "/dev/null", Dir: "../../../examples/minimal"}, "validate", "-f", "pipeline.yaml")
 	require.Equal(t, 0, r.Code, r.Stdout+r.Stderr)
-	assert.Contains(t, r.Stdout, "✓ pipeline.yaml is valid\n")
+	// The ✓ is printed only on a terminal (C4); the words are always there.
+	assert.Contains(t, r.Stdout, "pipeline.yaml is valid\n")
 	raw, err := os.ReadFile("../../../examples/minimal/pipeline.yaml")
 	require.NoError(t, err)
 	assert.Equal(t, 12, strings.Count(string(raw), "\n"), "the minimal Pipeline is 12 lines")
