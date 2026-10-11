@@ -1,16 +1,14 @@
-<div align="center" markdown>
-  ![Kardinal Promoter](assets/logo.png){ width="200" }
-</div>
+---
+template: home.html
+hide:
+  - navigation
+  - toc
+---
 
-# kardinal-promoter
+## What you write
 
-**Promote every version of your app through test, uat and prod, with gates you can read.**
-
-Your CI builds a version. kardinal moves it through your environments by writing to Git, and
-gates decide when it may go further: no deploys on weekends, 30 minutes in uat first, two
-approvers for prod. With `approval: pr-review`, each prod change is a pull request that shows what
-is shipping, which gates passed and how the earlier environments did. It works with Argo CD, Flux or plain
-Kubernetes. No database or extra services: the UI ships inside the controller.
+One Pipeline per application. This one promotes through test and uat on its own, and opens a
+pull request for prod:
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -30,11 +28,6 @@ spec:
 
 By default each environment deploys the `environments/<name>` directory of the repository, and
 kardinal checks the Deployment `my-app` in the namespace `<name>`.
-
-```bash
-kardinal create bundle my-app --image ghcr.io/myorg/my-app:1.29.0   # ship a version
-kardinal explain my-app --env prod                                   # why is it not in prod yet?
-```
 
 <div class="grid cards" markdown>
 
@@ -74,15 +67,6 @@ kardinal explain my-app --env prod                                   # why is it
 </div>
 
 ## How it works
-
-```mermaid
-graph LR
-    CI["CI builds a version"] --> Test["test<br/>commit, health check"]
-    Test --> UAT["uat<br/>commit, health check"]
-    UAT --> Gate{"gates"}
-    Gate --> Prod["prod<br/>pull request, merge, health check"]
-    Prod --> Done["Verified"]
-```
 
 1. **CI creates a version** with the new image and where it came from.
 2. **Each environment in turn** gets the version written to Git (directly, or through a pull

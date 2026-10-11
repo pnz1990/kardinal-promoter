@@ -87,3 +87,24 @@ func TestChangelogNoDuplicateEntries(t *testing.T) {
 	}
 	require.Empty(t, dups, "duplicate changelog entries")
 }
+
+// TestDocsNoStrayFiles fails on a patch or editor leftover under docs/
+// (*.orig, *.rej, *~): mkdocs publishes every file there, so one would ship
+// on the site.
+func TestDocsNoStrayFiles(t *testing.T) {
+	var stray []string
+	root := filepath.Join(repoRoot(t), "docs")
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		name := d.Name()
+		if !d.IsDir() && (strings.HasSuffix(name, ".orig") || strings.HasSuffix(name, ".rej") || strings.HasSuffix(name, "~")) {
+			rel, _ := filepath.Rel(root, p)
+			stray = append(stray, filepath.Join("docs", rel))
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Empty(t, stray, "patch or editor leftovers under docs/: delete them")
+}

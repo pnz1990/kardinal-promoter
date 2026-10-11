@@ -19,6 +19,7 @@ validation:
 
 theme:
   name: material
+  custom_dir: overrides
   # Colours and fonts are the kardinal design tokens (docs/stylesheets/tokens.css, generated
   # from web/tokens/tokens.json, and kardinal.css). The fonts are self-hosted: no font CDN.
   palette:
@@ -66,10 +67,12 @@ theme:
 # loads it from unpkg.com otherwise. Pinned; docs/assets/vendor/mermaid/LICENSE.
 extra_javascript:
   - assets/vendor/mermaid/mermaid-11.17.2.min.js
+  - javascripts/scrollwrap.js
 
 extra_css:
   - stylesheets/tokens.css
   - stylesheets/kardinal.css
+  - stylesheets/home.css
 
 plugins:
   - search:

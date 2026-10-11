@@ -8,6 +8,7 @@ promoted to prod by your CI. For a demo against a sample repository, see the
 ## What you will build
 
 ```mermaid
+%%{init: {'flowchart': {'curve': 'linear'}}}%%
 graph LR
     CI["CI pushes image<br/>kardinal-test-app:sha-abc1234"] --> Bundle["Bundle created"]
     Bundle --> Test["test\n(auto-promote)"]
