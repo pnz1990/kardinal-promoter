@@ -330,7 +330,7 @@ func TestHoldAndWhy(t *testing.T) {
 
 	why, _, err := NewRootCmd().Find([]string{"why"})
 	require.NoError(t, err)
-	assert.Equal(t, "explain", why.Name())
+	assert.Equal(t, "why", why.Name(), "why is its own command: a sentence first; -o wide is explain's table")
 	for _, verb := range []string{"ship", "hold", "unhold"} {
 		cmd, _, err := NewRootCmd().Find([]string{verb})
 		require.NoError(t, err, verb)

@@ -47,10 +47,10 @@ func TestCLI_GetPipelinesWide(t *testing.T) {
 
 	out := c.Must(a.ns, "get", "pipelines")
 	header := cliCellGap.Split(strings.SplitN(out, "\n", 2)[0], -1)
-	assert.Equal(t, []string{"PIPELINE", "BUNDLE", "ENVS", "PROGRESS", "FURTHEST", "SUB", "AGE"}, header, out)
+	assert.Equal(t, []string{"PIPELINE", "VERSION", "ENVS", "PROGRESS", "FURTHEST", "SUB", "AGE"}, header, out)
 	row := framework.TableRow(out, "PIPELINE", pipelineName)
 	require.NotNil(t, row, out)
-	assert.Equal(t, b1, row["BUNDLE"])
+	assert.Equal(t, b1, framework.BundleOf(row["VERSION"]))
 	assert.Equal(t, "10", row["ENVS"])
 	assert.Equal(t, "10 "+display.Step("Verified").Label, row["PROGRESS"])
 	assert.Equal(t, "r9", row["FURTHEST"], "the wave's last environment in spec order")
@@ -58,7 +58,7 @@ func TestCLI_GetPipelinesWide(t *testing.T) {
 
 	one := c.Must(a.ns, "get", "pipelines", pipelineName)
 	header = cliCellGap.Split(strings.SplitN(one, "\n", 2)[0], -1)
-	assert.Equal(t, []string{"PIPELINE", "BUNDLE", "TEST", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "SUB", "AGE"}, header,
+	assert.Equal(t, []string{"PIPELINE", "VERSION", "TEST", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "SUB", "AGE"}, header,
 		"every environment, in DAG order")
 	row = framework.TableRow(one, "PIPELINE", pipelineName)
 	require.NotNil(t, row, one)

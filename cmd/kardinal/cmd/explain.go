@@ -53,9 +53,7 @@ Bundle's step and the gates it waits on, gates that are not ready first, with
 each gate's expression, state and reason, and what is deployed there now when
 the change has not landed yet. -w refreshes every 3 seconds.`,
 		Example: `  kardinal explain my-app
-  kardinal why my-app prod
   kardinal explain my-app prod -w`,
-		Aliases:     []string{"why"},
 		Annotations: map[string]string{ReferenceAnnotation: explainReference, outputAnnotation: "true"},
 		Args:        cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -296,7 +294,7 @@ func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter st
 		st = st.ForceColor()
 	}
 	tw := style.NewTable(w, 3)
-	if _, err := fmt.Fprintln(tw, "ENVIRONMENT\tBUNDLE\tTYPE\tNAME\tSTATE\tEXPRESSION\tREASON"); err != nil {
+	if _, err := fmt.Fprintln(tw, "ENVIRONMENT\tVERSION\tTYPE\tNAME\tSTATE\tEXPRESSION\tREASON"); err != nil {
 		return fmt.Errorf("write explain header: %w", err)
 	}
 	for _, row := range rows {
@@ -308,7 +306,7 @@ func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter st
 			state = display.Gate(row.state)
 		}
 		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			row.environment, row.bundle, row.kind, row.name, st.State(state), row.expression, row.reason,
+			row.environment, versionLabel(versionOf(bundleByName, row.bundle), row.bundle), row.kind, row.name, st.State(state), row.expression, row.reason,
 		); err != nil {
 			return fmt.Errorf("write explain row: %w", err)
 		}
@@ -481,8 +479,9 @@ every Bundle there is Superseded, the newest one with a PromotionStep there is
 shown. Gates include org
 gates from the policy namespaces and skip-permission gates: they are the
 instances the Graph created for that Bundle, with the controller's latest
-evaluation. Gates that are not ready are listed first. BUNDLE names the
-Bundle each row belongs to.
+evaluation. Gates that are not ready are listed first. VERSION names the
+version each row belongs to: its tag, then its Bundle ("1.5.0 (app-x7k2p)").
+kardinal why says the same in a sentence per environment.
 
 An environment where that Bundle's change has not landed yet (it has not
 reached the environment, or its PR is not merged) also gets a line after the

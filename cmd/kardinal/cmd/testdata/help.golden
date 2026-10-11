@@ -26,6 +26,7 @@ Ship and observe:
   logs         Show promotion step execution logs for a pipeline
   ship         Ship a version: create a Bundle, and with --wait follow it
   status       Show controller health or per-pipeline in-flight promotion details
+  why          Say why an environment waits, and what moves it on
 
 Approve and gate:
   approve      Approve (or reject) the version waiting for an environment's approval gates
