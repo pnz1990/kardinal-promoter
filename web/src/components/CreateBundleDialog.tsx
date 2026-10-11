@@ -179,7 +179,7 @@ interface CreateBundleButtonProps {
 }
 
 /**
- * CreateBundleButton renders a "+ Bundle" button in the pipeline header.
+ * CreateBundleButton renders the "Ship a version" button (the primary action) in the pipeline header.
  * Clicking opens the CreateBundleDialog.
  */
 export function CreateBundleButton({ pipelineName, namespace, onRefresh }: CreateBundleButtonProps) {
@@ -190,10 +190,10 @@ export function CreateBundleButton({ pipelineName, namespace, onRefresh }: Creat
       <button
         type="button"
         onClick={() => setShowDialog(true)}
-        aria-label={`Create bundle for ${pipelineName}`}
-        className="k-button k-button--secondary k-button--sm"
+        aria-label={`Ship a version of ${pipelineName}`}
+        className="k-button k-button--primary k-button--md"
       >
-        + Bundle
+        Ship a version
       </button>
 
       {showDialog && (

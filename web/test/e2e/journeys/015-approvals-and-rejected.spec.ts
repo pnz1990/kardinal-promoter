@@ -13,6 +13,7 @@ test.describe('Journey 015 — Approvals and rejected Bundles', () => {
   test('an approval gate shows its quorum and decisions', async ({ page }) => {
     await page.goto('/')
     await page.locator('aside').getByText('payments-service').first().click()
+    await page.getByRole('tab', { name: /^Gates/ }).click()
     const meter = page.getByRole('meter', { name: 'Approvals' })
     await expect(meter).toBeVisible() // a holding gate opens the panel
     await expect(meter).toHaveAttribute('aria-valuetext', '1 of 2 approvals')
@@ -32,6 +33,7 @@ test.describe('Journey 015 — Approvals and rejected Bundles', () => {
   test('approves from the UI, and asks before rejecting', async ({ page }) => {
     await page.goto('/')
     await page.locator('aside').getByText('payments-service').first().click()
+    await page.getByRole('tab', { name: /^Gates/ }).click()
     await page.getByLabel('Comment (optional)').fill('checked the dashboards')
     await page.getByRole('button', { name: 'Approve', exact: true }).click()
     await expect(page.getByRole('status').filter({ hasText: 'Recorded: carol approves payments-service-def456 for prod' }))

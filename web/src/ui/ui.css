@@ -288,3 +288,24 @@
 .k-tabs__tab:hover { color: var(--k-ink); }
 .k-tabs__tab[aria-selected="true"] { color: var(--k-ink); border-block-end-color: var(--k-thread); }
 .k-tabpanel:focus-visible { outline-offset: var(--k-focus-offset); }
+
+/* ── MenuButton ── */
+.k-menu { position: relative; display: inline-flex; }
+.k-menu__caret { transform: rotate(90deg); }
+.k-menu button[aria-expanded="true"] .k-menu__caret { transform: rotate(-90deg); }
+.k-menu__panel {
+  position: absolute;
+  inset-block-start: calc(100% + var(--k-space-1));
+  inset-inline-end: 0;
+  z-index: var(--k-z-popover);
+  display: flex;
+  flex-direction: column;
+  gap: var(--k-space-1);
+  min-inline-size: calc(var(--k-space-24) * 2);
+  padding: var(--k-space-2);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-3);
+  background: var(--k-surface-raised);
+  box-shadow: var(--k-elev-1);
+}
+.k-menu__panel[hidden] { display: none; }

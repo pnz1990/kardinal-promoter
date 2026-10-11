@@ -118,6 +118,36 @@
 .app-sidebar__fleet { padding: var(--k-space-2) var(--k-space-3) 0; }
 
 /* ── Main ── */
+/* The top bar: where you are, and the way to go anywhere (⌘K). */
+.app-topbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--k-space-4);
+  min-block-size: var(--k-control-lg);
+  padding: var(--k-space-2) var(--k-space-6);
+  border-block-end: var(--k-border-hairline) solid var(--k-line-subtle);
+}
+.app-topbar .breadcrumb { margin: 0; }
+.app-topbar__search {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--k-space-2);
+  min-inline-size: calc(var(--k-space-24) * 2.5);
+  min-block-size: var(--k-control-sm);
+  padding: 0 var(--k-space-2);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-2);
+  background: var(--k-surface-base);
+  color: var(--k-ink-3);
+  font: inherit;
+  font-size: var(--k-text-sm);
+  cursor: pointer;
+}
+.app-topbar__search > span { flex: 1; text-align: start; }
+.app-topbar__search:hover { border-color: var(--k-line-strong); color: var(--k-ink-2); }
+
 .app-main {
   flex: 1;
   display: flex;
@@ -131,15 +161,30 @@
 .app-empty { padding: var(--k-space-12) var(--k-space-8); color: var(--k-ink-3); text-align: center; }
 
 /* ── Pipeline header ── */
-.app-pipeline-head { flex-shrink: 0; padding: var(--k-space-6) var(--k-space-6) 0; }
-.app-pipeline-head__title-block { margin-block-end: var(--k-space-4); }
-.app-pipeline-head__title-row { display: flex; align-items: center; gap: var(--k-space-2); margin-block-end: var(--k-space-1); }
+.app-pipeline-head { flex-shrink: 0; padding: var(--k-space-4) var(--k-space-6) 0; }
+/* One line: the name, its state, its summary, and the pipeline's actions on the right. */
+.app-pipeline-head__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--k-space-2) var(--k-space-3);
+  margin-block-end: var(--k-space-3);
+}
 .app-pipeline-head__title {
   margin: 0;
   font-size: var(--k-text-2xl);
   font-weight: var(--k-weight-bold);
   line-height: var(--k-leading-2xl);
 }
+.app-pipeline-head__summary { flex: 1 1 auto; min-inline-size: 0; margin: 0; color: var(--k-ink-2); font-size: var(--k-text-md); }
+.app-pipeline-head__actions { display: flex; align-items: center; gap: var(--k-space-2); margin-inline-start: auto; }
+
+/* Tab panels: the map takes the rest of the page; the others scroll. */
+.app-tab { flex: 1; min-block-size: 0; overflow: auto; padding: var(--k-space-4) var(--k-space-6) var(--k-space-6); }
+.app-tab--map { display: flex; flex-direction: column; padding: 0; }
+.app-map-head { flex-shrink: 0; padding: var(--k-space-3) var(--k-space-6) 0; }
+.app-map-head .app-provenance { margin-block-end: var(--k-space-3); }
+.app-tab__empty { margin: 0; color: var(--k-ink-3); }
 /* Paused is an operator state: monochrome hatch, not a colour (DESIGN-SYSTEM §2.2). */
 .app-paused {
   padding: var(--k-space-0_5) var(--k-space-2);

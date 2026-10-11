@@ -15,13 +15,15 @@ interface BlockedBannerProps {
   highlightActive: boolean
   /** Toggle the highlight filter. */
   onToggleHighlight: () => void
+  /** Opens the gates (the pipeline page's Gates tab), when given. */
+  onOpenGates?: () => void
 }
 
 /**
  * BlockedBanner renders an amber warning banner when one or more PolicyGates
  * are in a blocked state. It includes a toggle to highlight the blocked nodes in the DAG.
  */
-export function BlockedBanner({ blockedCount, highlightActive, onToggleHighlight }: BlockedBannerProps) {
+export function BlockedBanner({ blockedCount, highlightActive, onToggleHighlight, onOpenGates }: BlockedBannerProps) {
   if (blockedCount === 0) return null
 
   const label = blockedCount === 1
@@ -39,13 +41,21 @@ export function BlockedBanner({ blockedCount, highlightActive, onToggleHighlight
           {label}
         </span>
       </div>
-      <button
-        onClick={onToggleHighlight}
-        aria-pressed={highlightActive}
-        className="blocked-banner__toggle"
-      >
-        {highlightActive ? 'Show all' : 'Show blocked'}
-      </button>
+      <div className="blocked-banner__actions">
+        {onOpenGates && (
+          <button type="button" onClick={onOpenGates} className="blocked-banner__toggle">
+            Open gates
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onToggleHighlight}
+          aria-pressed={highlightActive}
+          className="blocked-banner__toggle"
+        >
+          {highlightActive ? 'Show all' : 'Show blocked'}
+        </button>
+      </div>
     </div>
   )
 }

@@ -10,7 +10,8 @@
 //   #/p/<ns>/<pipeline>/v/<bundle>        … showing that version (Bundle)
 //   #/approvals                           approvals (reserved; shows the fleet for now)
 //
-// and the query after `?`: `view=ops` (the operations table), `filter=` (a fleet filter),
+// and the query after `?`: `tab=history|gates|metrics` (the pipeline page's tab), `view=ops`
+// (the operations table), `filter=` (a fleet filter),
 // `q=` (the pipeline search), `compare=<bundle>` (the comparison panel), `node=<id>` (a gate's
 // details), `v=<bundle>` (the version shown while an environment is open). Links from before
 // these routes (`#pipeline=…&ns=…&node=…&bundle=…`) are rewritten in place, so they keep
@@ -36,19 +37,22 @@ export interface UrlState {
   filter: string | undefined
   /** The pipeline search. */
   q: string | undefined
+  /** The pipeline page's tab: history, gates or metrics (the map when unset). */
+  tab: 'history' | 'gates' | 'metrics' | undefined
   /** #/approvals (reserved). */
   approvals: boolean | undefined
 }
 
 export const EMPTY_URL_STATE: UrlState = {
   pipeline: undefined, ns: undefined, env: undefined, version: undefined, compare: undefined,
-  node: undefined, view: undefined, filter: undefined, q: undefined, approvals: undefined,
+  node: undefined, view: undefined, filter: undefined, q: undefined, tab: undefined, approvals: undefined,
 }
 
 /** The namespace segment of a link that does not know it. */
 const ANY_NS = '*'
 
-const QUERY_KEYS = ['view', 'filter', 'q', 'compare', 'node'] as const
+const QUERY_KEYS = ['tab', 'view', 'filter', 'q', 'compare', 'node'] as const
+const TABS: readonly string[] = ['history', 'gates', 'metrics']
 
 /** Whether a hash uses the routes from before #/…: `#pipeline=…&ns=…`. */
 export function isLegacyHash(hash: string): boolean {
@@ -82,6 +86,7 @@ export function parseHash(hash: string): UrlState {
     const v = params.get(k)
     if (!v) continue
     if (k === 'view') out.view = v === 'ops' ? 'ops' : undefined
+    else if (k === 'tab') out.tab = TABS.includes(v) ? (v as UrlState['tab']) : undefined
     else out[k] = v
   }
   if (seg[0] === 'p' && seg[2]) {

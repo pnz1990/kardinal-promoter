@@ -71,7 +71,7 @@ test.describe('Journey 016 — Routes and the command palette', () => {
     await expect(page.getByTestId('node-detail')).toContainText('uat')
 
     // The visible button opens it too, and Esc closes it.
-    await page.getByRole('button', { name: 'Go to or do (⌘K)' }).click()
+    await page.getByRole('button', { name: /^Go to or do/ }).click()
     await expect(palette).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(palette).toHaveCount(0)

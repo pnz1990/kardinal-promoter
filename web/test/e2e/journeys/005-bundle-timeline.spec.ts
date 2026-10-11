@@ -13,9 +13,10 @@ test.describe('Journey 005 — Bundle timeline interaction', () => {
     await page.waitForTimeout(800) // wait for bundle data
   })
 
-  test('Step 1: Bundle timeline shows bundle history header', async ({ page }) => {
-    // Use the collapsible button which contains "Bundle history" text
-    await expect(page.getByRole('button', { name: /Bundle history/i })).toBeVisible()
+  test('Step 1: Bundle timeline shows bundle history header, and the History tab lists them', async ({ page }) => {
+    await expect(page.getByText(/Bundle history \(newest/i)).toBeVisible()
+    await page.getByRole('tab', { name: /^History/ }).click()
+    await expect(page.getByRole('list', { name: 'Bundle history' }).getByRole('listitem')).toHaveCount(3)
   })
 
   test('Step 2: Bundle timeline shows bundle phase', async ({ page }) => {

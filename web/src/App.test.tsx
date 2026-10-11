@@ -77,6 +77,11 @@ async function flush(ms = 50) {
   await act(async () => { await vi.advanceTimersByTimeAsync(ms) })
 }
 const lastGraphCall = () => h.api.getGraph.mock.calls.at(-1)?.[0]
+/** Opens the pipeline page's Gates tab. */
+async function openGates() {
+  fireEvent.click(screen.getByRole('tab', { name: /^Gates/ }))
+  await flush()
+}
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true })
@@ -509,6 +514,7 @@ describe('App policy gates panel', () => {
     ] as PolicyGate[]
     render(<App />)
     await flush()
+    await openGates()
     expect(screen.queryByText('1 blocked')).not.toBeInTheDocument()
     expect(screen.getByText('1 passing')).toBeInTheDocument()
     expect(screen.queryByText('other-gate')).not.toBeInTheDocument()
@@ -548,9 +554,10 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
     await flush()
     expect(screen.queryByText(/blocking promotion/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Show blocked' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('soak — Waiting')).toBeInTheDocument()
+    await openGates()
     expect(screen.queryByText(/\d+ blocked/)).not.toBeInTheDocument()
     expect(screen.getByText('1 waiting')).toBeInTheDocument()
-    expect(screen.getByLabelText('soak — Waiting')).toBeInTheDocument()
   })
 
   it('shows 0 blocked for a Failed bundle', async () => {
@@ -569,6 +576,7 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
     await flush()
     expect(screen.getByText('1 PolicyGate blocking promotion')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Show blocked' })).toBeInTheDocument()
+    await openGates()
     expect(screen.getByText('1 blocked')).toBeInTheDocument()
   })
 })
@@ -679,6 +687,21 @@ describe('App routes', () => {
     const crumbs = screen.getByRole('navigation', { name: 'Breadcrumb' })
     expect(within(crumbs).getByRole('link', { name: 'Pipelines' })).toHaveAttribute('href', '#/')
     expect(within(crumbs).getByText('app')).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('keeps the pipeline page tab in the URL, and the blocked banner opens the gates', async () => {
+    window.history.replaceState(null, '', '/ui/#/p/default/app')
+    const { unmount } = render(<App />)
+    await flush()
+    expect(screen.getByRole('tab', { name: 'Map' })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(screen.getByRole('tab', { name: 'Metrics' }))
+    await flush()
+    expect(window.location.hash).toBe('#/p/default/app?tab=metrics')
+    expect(screen.getByRole('tabpanel', { name: 'Metrics' })).toBeInTheDocument()
+    unmount()
+    render(<App />)
+    await flush()
+    expect(screen.getByRole('tab', { name: 'Metrics' })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('opens the palette with Ctrl+K and goes where it is told', async () => {

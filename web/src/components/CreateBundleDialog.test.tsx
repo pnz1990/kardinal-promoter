@@ -186,7 +186,7 @@ describe('CreateBundleDialog', () => {
 describe('CreateBundleDialog keyboard', () => {
   it('focuses the image field on open, closes on Escape and returns focus to the opener', () => {
     render(<CreateBundleButton pipelineName="nginx-demo" namespace="default" onRefresh={() => {}} />)
-    const opener = screen.getByRole('button', { name: /create bundle for nginx-demo/i })
+    const opener = screen.getByRole('button', { name: /ship a version of nginx-demo/i })
     opener.focus()
     fireEvent.click(opener)
     expect(screen.getByLabelText(/container image/i)).toHaveFocus()
@@ -210,7 +210,7 @@ describe('CreateBundleButton', () => {
         onRefresh={() => {}}
       />
     )
-    expect(screen.getByRole('button', { name: /create bundle for nginx-demo/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /ship a version of nginx-demo/i })).toBeInTheDocument()
   })
 
   it('opens the CreateBundleDialog when clicked', () => {
@@ -222,7 +222,7 @@ describe('CreateBundleButton', () => {
       />
     )
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /create bundle for nginx-demo/i }))
+    fireEvent.click(screen.getByRole('button', { name: /ship a version of nginx-demo/i }))
     expect(screen.getByRole('dialog')).toBeInTheDocument()
   })
 
@@ -238,7 +238,7 @@ describe('CreateBundleButton', () => {
       />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: /create bundle for nginx-demo/i }))
+    fireEvent.click(screen.getByRole('button', { name: /ship a version of nginx-demo/i }))
     fireEvent.change(screen.getByLabelText(/container image/i), {
       target: { value: 'ghcr.io/example/app:v1.0' },
     })
