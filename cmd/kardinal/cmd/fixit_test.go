@@ -176,3 +176,49 @@ func TestFixitHints(t *testing.T) {
 type fmtBuf struct{ b []byte }
 
 func (f *fmtBuf) Write(p []byte) (int, error) { f.b = append(f.b, p...); return len(p), nil }
+
+// TestFixitFollowups (#1706 QA): the server label never shows a password, an
+// admission policy's refusal shows its message instead of a role hint, an
+// unreachable server says why, and override without --gate says when the
+// gates could not be listed.
+//
+// Covers CLI-FIXIT-01.
+func TestFixitFollowups(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://admin:pw@k8s.example:6443":   "https://admin:xxxxx@k8s.example:6443",
+		"https://k8s.example:6443":            "https://k8s.example:6443",
+		"admin:pw@10.0.0.1:6443":              "10.0.0.1:6443",
+		"10.0.0.1:6443":                       "10.0.0.1:6443",
+		"https://user@k8s.example/prefix?x=1": "https://user@k8s.example/prefix?x=1",
+	} {
+		assert.Equal(t, want, redactedHost(in), in)
+		assert.NotContains(t, redactedHost(in), "pw", in)
+	}
+
+	gr := schema.GroupResource{Group: "kardinal.io", Resource: "pipelines"}
+	vap := apierrors.NewForbidden(gr, "app", errors.New(`ValidatingAdmissionPolicy 'kardinal-promoter-hold-writes' with binding 'kardinal-promoter-hold-writes' denied request: every new spec.holds entry must have createdBy "alice"`))
+	assert.EqualError(t, HumanError(vap),
+		`the cluster's admission policy kardinal-promoter-hold-writes refused the request: every new spec.holds entry must have createdBy "alice"`)
+	hook := apierrors.NewForbidden(gr, "app", errors.New(`admission webhook "validate.example.com" denied the request: frozen`))
+	assert.EqualError(t, HumanError(hook), `the cluster's admission policy validate.example.com refused the request: frozen`)
+	assert.Contains(t, HumanError(forbidden("list", "pipelines")).Error(), "kardinal-promoter-viewer", "RBAC keeps the role hint")
+
+	globalContext = "kind-dev"
+	t.Cleanup(func() { globalContext = "" })
+	for cause, err := range map[string]error{
+		"connect: connection refused": &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect: connection refused")},
+		"no such host":                errors.New("dial tcp: lookup k8s.example: no such host"),
+		"i/o timeout":                 errors.New("Get https://k8s.example/api: dial tcp 10.0.0.1:443: i/o timeout"),
+	} {
+		assert.Contains(t, HumanError(err).Error(), ": "+cause+".\nCheck: kubectl cluster-info --context kind-dev", cause)
+	}
+
+	noList := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(context.Context, sigs_client.WithWatch, sigs_client.ObjectList, ...sigs_client.ListOption) error {
+			return forbidden("list", "policygates")
+		},
+	}).Build()
+	withHintClient(t, noList)
+	assert.EqualError(t, missingGateError("api", "prod"), "--gate is required; the gates of api in prod could not be listed to suggest one: "+
+		"you (alice) cannot list policygates in namespace team-a.\nAsk your cluster admin to bind you the kardinal-promoter-viewer role (read) there, or pass -n for another namespace")
+}
