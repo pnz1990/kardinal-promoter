@@ -20,7 +20,9 @@ import { useMapViewport } from './useMapViewport'
 import { ageOf } from '../fleetModel'
 import { prNumberFromURL } from '../prLink'
 import { Icon } from '../ui'
+import { Segmented } from './Segmented'
 import '../styles/StationMap.css'
+import { lowerFirst } from '../sentence'
 
 export interface StationMapProps {
   model: StationMapModel
@@ -43,6 +45,8 @@ export interface StationMapProps {
   /** Open a gate's own details (its graph node id); without it a gate opens
    *  its environment's stage drawer at "why" (U3, #1701). */
   onOpenGate?: (gateNodeId: string) => void
+  /** The view switch (Map | Table | Matrix), shown in the map's bar. */
+  views?: React.ReactNode
 }
 
 /** About how wide a character of a gate label is, and the label's line height (--k-text-xs). */
@@ -67,7 +71,7 @@ const LEVELS: ZoomLevel[] = ['overview', 'map', 'detail']
 const LEVEL_LABEL: Record<ZoomLevel, string> = { overview: 'Overview', map: 'Map', detail: 'Detail' }
 
 export default function StationMap(props: StationMapProps) {
-  const { model, compare, focused, onOpenStage, expanded, onToggleGroup, onSetExpanded, paused, followedVersion, actionsFor, onOpenGate } = props
+  const { model, compare, focused, onOpenStage, expanded, onToggleGroup, onSetExpanded, paused, followedVersion, actionsFor, onOpenGate, views } = props
   const svgRef = useRef<SVGSVGElement | null>(null)
   const searchRef = useRef<HTMLInputElement | null>(null)
   const descId = useId()
@@ -193,7 +197,7 @@ export default function StationMap(props: StationMapProps) {
     for (const st of model.stations.values()) {
       const before = prevTones.current.get(st.env)
       if (before && before !== st.display.label && st.reached) {
-        changed.push(`${followedVersion ?? 'The version'} ${st.display.label.toLowerCase()} in ${st.env}`)
+        changed.push(`${followedVersion ?? 'The version'} ${lowerFirst(st.display.label)} in ${st.env}`)
       }
       prevTones.current.set(st.env, st.display.label)
     }
@@ -413,12 +417,9 @@ export default function StationMap(props: StationMapProps) {
             }} />
           {query && <span className="station-map__count" aria-live="polite">{matches.length} {matches.length === 1 ? 'match' : 'matches'}</span>}
         </label>
-        <div className="station-map__levels" role="radiogroup" aria-label="Zoom level">
-          {LEVELS.map(l => (
-            <button key={l} type="button" role="radio" aria-checked={level === l} className="station-map__level"
-              onClick={() => vp.setLevel(l)}>{LEVEL_LABEL[l]}</button>
-          ))}
-        </div>
+        {views}
+        <Segmented label="Zoom" className="station-map__levels" value={level} onChange={l => vp.setLevel(l)}
+          items={LEVELS.map(l => ({ id: l, text: LEVEL_LABEL[l] }))} />
       </div>
       {paused && <div className="station-map__paused-band" role="status">Paused · no new promotions</div>}
       <p id={descId} className="sr-only">
@@ -848,7 +849,8 @@ function GatePopover({ gate, env, x, y, view, onPointerEnter, onPointerLeave }: 
 
 /** What the map's marks mean (the DAG legend's wording, for the map). */
 const LEGEND: Array<{ tone: string; label: string; desc: string }> = [
-  { tone: 'verified', label: 'Live', desc: 'Deployed and healthy' },
+  // The map stays quiet: Live is ink here, the verified green is for chips and lists (DESIGN-SYSTEM §2.2).
+  { tone: 'verified', label: 'Live (ink)', desc: 'Deployed and healthy' },
   { tone: 'promoting', label: 'In progress', desc: 'Promoting, waiting for the PR to merge, or checking health' },
   { tone: 'failed', label: 'Failed', desc: 'Failed, or stopped by an alarm' },
   { tone: 'waiting', label: 'Waiting for PR merge', desc: 'A person is next: a PR to merge, or an approval' },

@@ -52,7 +52,7 @@ and rollback transition, most recent first (at most --limit).`,
 	}
 
 	cmd.Flags().StringVar(&pipeline, "pipeline", "", "Filter by pipeline name")
-	cmd.Flags().StringVar(&bundle, "bundle", "", "Filter by bundle name")
+	cmd.Flags().StringVar(&bundle, "bundle", "", "Filter by Bundle, by name or version")
 	cmd.Flags().StringVarP(&env, "env", "e", "", "Filter by environment name")
 	cmd.Flags().IntVar(&limit, "limit", 20, "Maximum number of results to show (0 = unlimited)")
 	cmd.Flags().BoolVarP(&allNamespaces, "all-namespaces", "A", false,
@@ -65,6 +65,13 @@ func runGetAuditEvents(cmd *cobra.Command, pipeline, bundle, env string, limit i
 	c, ns, err := buildClient()
 	if err != nil {
 		return fmt.Errorf("get auditevents: %w", err)
+	}
+	scope := refScope{ns: ns, pipeline: pipeline}
+	if allNamespaces {
+		scope.ns = ""
+	}
+	if bundle, _, err = resolveBundleRefIn(contextOf(cmd), c, scope, bundle); err != nil {
+		return fmt.Errorf("get auditevents: --bundle: %w", err)
 	}
 	if allNamespaces {
 		ns = ""

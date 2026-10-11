@@ -38,7 +38,7 @@ describe('FleetBoard', () => {
     const prod = screen.getByRole('button', { name: /^payments prod:/ })
     expect(prod).toHaveAttribute('data-state', 'arriving')
     expect(within(prod).getByText('3.0.9')).toBeInTheDocument()
-    expect(within(prod).getByText('waiting for merge')).toBeInTheDocument()
+    expect(within(prod).getByText('waiting for PR merge')).toBeInTheDocument()
     const test = screen.getByRole('button', { name: /^payments test:/ })
     expect(within(test).getByText('verified 1h ago')).toBeInTheDocument()
     // The release on its way sits on the rail into prod.

@@ -24,7 +24,7 @@ kardinal logs <pipeline> [<env>] [flags]
 ### Options
 
 ```
-      --bundle string   Show logs for one bundle (default: every bundle that is not Superseded)
+      --bundle string   Show logs for one Bundle, by name or version (default: every Bundle that is not Superseded)
   -e, --env string      Only this environment (or give it after the pipeline)
   -f, --follow          Stream step progress, polling every 2s until the promotion ends
   -h, --help            help for logs

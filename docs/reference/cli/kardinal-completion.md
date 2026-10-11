@@ -8,6 +8,15 @@ Print the completion script of kardinal for bash, zsh, fish or powershell.
 Load it in the current shell, or install it permanently (examples below).
 The bash script needs the bash-completion package.
 
+Tab completes commands and flags, and the names they take, read from the
+cluster of the current context (-n and --context apply): Pipelines, their
+environments (the argument after the Pipeline, --env), Bundles with their
+version and phase (reject, diff, delete bundle, rollback --to, logs
+--bundle), version tags (approve --version) and gate names (override
+--gate), in promotion order or newest first, those that start with what is
+typed. A cluster that cannot be read in 3s (discovery included) completes no
+names. rollback --to leaves out rejected versions.
+
 The bash script needs the bash-completion package (it calls
 _get_comp_words_by_ref); install it with your OS package manager first.
 

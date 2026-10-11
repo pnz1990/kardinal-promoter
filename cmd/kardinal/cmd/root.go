@@ -99,6 +99,7 @@ Getting started:
 	root.SetCompletionCommandGroupID(groupAdmin)
 
 	requireSubcommand(root)
+	addNameCompletion(root)
 	root.PersistentFlags().Lookup("output").Usage = outputUsage(root)
 	return root
 }
