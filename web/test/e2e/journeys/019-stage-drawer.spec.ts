@@ -26,15 +26,14 @@ test.describe('Journey 019 — Stage drawer', () => {
     const drawer = page.getByTestId('stage-drawer')
     await expect(drawer).toBeVisible()
     await expect(page).toHaveURL(/\/env\/prod/)
-    // At lg and wider the drawer sits beside the page: the page gives up its column.
+    // At lg and wider the drawer sits beside the page, below the full-width top bar: the
+    // page's content (not the top bar) gives up its column.
     const reserved = await page.evaluate(() => {
-      const main = document.getElementById('main-content') as HTMLElement
       const d = document.querySelector('[data-testid="stage-drawer"]') as HTMLElement
-      return { pad: parseFloat(getComputedStyle(main).paddingRight), drawer: d.getBoundingClientRect().width,
-        mainEnd: main.getBoundingClientRect().right - parseFloat(getComputedStyle(main).paddingRight), drawerStart: d.getBoundingClientRect().left }
+      const content = [...document.getElementById('main-content')!.children].filter(c => !c.classList.contains('app-topbar'))
+      return { drawerStart: d.getBoundingClientRect().left, contentEnd: Math.max(...content.map(c => c.getBoundingClientRect().right)) }
     })
-    expect(Math.abs(reserved.pad - reserved.drawer)).toBeLessThan(2)
-    expect(reserved.mainEnd).toBeLessThanOrEqual(reserved.drawerStart + 1)
+    expect(reserved.contentEnd).toBeLessThanOrEqual(reserved.drawerStart + 1)
     const why = drawer.locator('[data-section="why"]')
     await expect(why.getByRole('heading', { name: 'Why it’s waiting' })).toBeVisible()
     await expect(why).toContainText('Needs 1 more approval (1 of 2) in release-approval.')
