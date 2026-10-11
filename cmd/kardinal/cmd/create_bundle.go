@@ -86,7 +86,7 @@ needs --image; a config Bundle --config-commit; a mixed one both. --commit,
 
 	cmd.Flags().StringArrayVar(&opts.Images, "image", nil,
 		"Container image reference (can be specified multiple times); required for image and mixed Bundles")
-	cmd.Flags().StringVar(&opts.Type, "type", "image", "Bundle type: image, config, mixed or chart")
+	cmd.Flags().StringVar(&opts.Type, "type", "image", "Bundle type: image, config or mixed (chart Bundles come from POST /api/v1/bundles or a Helm Subscription: this command has no chart flags)")
 	cmd.Flags().StringVar(&opts.ConfigCommit, "config-commit", "",
 		"Commit SHA of the config repository to promote; required for config and mixed Bundles")
 	cmd.Flags().StringVar(&opts.ConfigRepo, "config-repo", "",

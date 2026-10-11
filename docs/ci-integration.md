@@ -30,6 +30,10 @@ curl -X POST https://kardinal.example.com/api/v1/bundles \
   }'
 ```
 
+`type` may be omitted: it is inferred from the fields, `chart` when `chart` is set, `mixed` for
+`images` and `configRef`, `config` for `configRef` alone, else `image`. A `type` you set is kept
+and checked against the fields.
+
 The endpoint creates a Bundle CRD in the cluster. Authentication is a Bearer token compared
 with the controller's `--bundle-api-token` (one token for the whole controller, not one per
 Pipeline). The Pipeline named in the request must exist in the target namespace.

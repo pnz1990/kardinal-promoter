@@ -37,8 +37,13 @@ func TestValidateNewBundle(t *testing.T) {
 		{name: "mixed without a commit", spec: v1alpha1.BundleSpec{Pipeline: "app", Type: "mixed", Images: images},
 			wantErr: `type "mixed" requires configRef.commitSHA`},
 		{name: "image with a configRef (#1353)",
-			spec:    v1alpha1.BundleSpec{Pipeline: "app", Images: images, ConfigRef: &v1alpha1.ConfigRef{GitRepo: "https://x"}},
+			spec:    v1alpha1.BundleSpec{Pipeline: "app", Type: "image", Images: images, ConfigRef: &v1alpha1.ConfigRef{GitRepo: "https://x"}},
 			wantErr: `type "image" does not use configRef; set type config or mixed with configRef.commitSHA, or drop configRef`},
+		// P6: with no type, images and a configRef are a mixed Bundle,
+		// which needs the commit.
+		{name: "no type, images and a configRef without a commit",
+			spec:    v1alpha1.BundleSpec{Pipeline: "app", Images: images, ConfigRef: &v1alpha1.ConfigRef{GitRepo: "https://x"}},
+			wantErr: `type "mixed" requires configRef.commitSHA`},
 		{name: "config", spec: v1alpha1.BundleSpec{Pipeline: "app", Type: "config", ConfigRef: commit}, wantType: "config"},
 		{name: "bad ciRunURL",
 			spec: v1alpha1.BundleSpec{Pipeline: "app", Images: images,
@@ -62,4 +67,42 @@ func TestValidateNewBundle(t *testing.T) {
 			assert.Equal(t, tc.wantType, spec.Type)
 		})
 	}
+}
+
+// TestInferBundleType (P6): a Bundle created without spec.type gets the
+// type its fields say; a type that is set is kept and checked.
+//
+// Covers BUNDLE-API-TYPE-01.
+func TestInferBundleType(t *testing.T) {
+	img := []v1alpha1.ImageRef{{Repository: "ghcr.io/o/app", Tag: "1.0.0"}}
+	cfg := &v1alpha1.ConfigRef{GitRepo: "https://github.com/o/config", CommitSHA: "abc1234"}
+	chart := &v1alpha1.ChartRef{Name: "app", Version: "1.2.3", RepoURL: "oci://ghcr.io/o/charts"}
+	for _, tc := range []struct {
+		name string
+		spec v1alpha1.BundleSpec
+		want string
+	}{
+		{"images", v1alpha1.BundleSpec{Images: img}, "image"},
+		{"configRef", v1alpha1.BundleSpec{ConfigRef: cfg}, "config"},
+		{"images and configRef", v1alpha1.BundleSpec{Images: img, ConfigRef: cfg}, "mixed"},
+		{"chart", v1alpha1.BundleSpec{Chart: chart}, "chart"},
+		{"nothing", v1alpha1.BundleSpec{}, "image"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := tc.spec
+			assert.Equal(t, tc.want, lifecycle.InferBundleType(&spec))
+			spec.Pipeline = "app"
+			err := lifecycle.ValidateNewBundle(&spec)
+			assert.Equal(t, tc.want, spec.Type, "ValidateNewBundle sets the inferred type")
+			if tc.name == "nothing" {
+				assert.Error(t, err, "an image Bundle needs images")
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+	// A type that is set is kept, and a mismatch is an error, not overridden.
+	spec := v1alpha1.BundleSpec{Pipeline: "app", Type: "image", ConfigRef: cfg}
+	require.Error(t, lifecycle.ValidateNewBundle(&spec))
+	assert.Equal(t, "image", spec.Type)
 }

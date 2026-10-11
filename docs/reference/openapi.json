@@ -365,13 +365,12 @@
             "description": "Provenance carries build metadata."
           },
           "type": {
-            "description": "Type is the bundle type: \"image\", \"config\", \"mixed\" or \"chart\".",
+            "description": "Type is the bundle type: \"image\", \"config\", \"mixed\" or \"chart\". When omitted it is inferred (lifecycle.InferBundleType): chart from chart, mixed from images and configRef, config from configRef, else image.",
             "type": "string"
           }
         },
         "required": [
-          "pipeline",
-          "type"
+          "pipeline"
         ],
         "type": "object"
       },
