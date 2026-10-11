@@ -11,7 +11,7 @@
 // its template; the gates panel lists the Bundle's gate instances.
 
 import { test, expect, type Page } from '@playwright/test'
-import { need, openPipeline, dagNode } from './live'
+import { need, openPipeline, dagNode, stageDrawer, drawerHeading } from './live'
 
 const base = need('KARDINAL_UI_URL')
 const ns = need('KARDINAL_UI_NAMESPACE')
@@ -84,6 +84,8 @@ test('a failed promotion shows in the Promotion Errors panel, whose link opens i
   await openPipeline(page, base, failedNs)
   await expect(blockedBanner(page)).toHaveCount(0)
 
+  // Promotion errors are on the Activity tab (U1).
+  await page.getByRole('tab', { name: /^Activity/ }).click()
   const panel = page.getByTestId('promotion-errors-panel')
   await expect(panel).toContainText('1 environment failed')
   await expect(panel).toContainText('1 distinct failure pattern')
@@ -104,11 +106,12 @@ test('a failed promotion shows in the Promotion Errors panel, whose link opens i
   await expect(link).toContainText(failedEnv)
   await expect(link).toContainText(`(${failedNs})`)
 
-  const detail = page.getByTestId('node-detail')
+  // The link opens the environment's stage drawer: why it's waiting is the failure.
+  const detail = stageDrawer(page)
   await expect(detail).toHaveCount(0)
   await link.click()
-  await expect(detail).toContainText(`Environment: ${failedEnv}`)
-  await expect(detail.locator('details.k-k8s')).toContainText('KindPromotionStep')
-  await expect(detail.locator('.health-chip').first()).toHaveAttribute('data-health-state', 'Error')
-  await expect(detail).toContainText(`Message: ${failedMessage}`)
+  await expect(drawerHeading(page)).toHaveText(failedEnv)
+  await expect(detail.locator('.stage-drawer__status .stage-chip')).toHaveText(/Failed/)
+  await expect(detail.locator('[data-section="why"] .stage-why__item--failed')).toContainText(failedMessage)
+  await expect(detail.locator('details.k-k8s').last()).toContainText('KindPromotionStep')
 })
