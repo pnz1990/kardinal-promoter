@@ -44,14 +44,14 @@ test('the DAG shows each environment and gate with its state, the PR badge and t
   await openPipeline(page, base, ns)
 
   const testNode = dagNode(page, 'test')
-  await expect(testNode).toHaveAttribute('aria-label', 'test — Verified')
+  await expect(testNode).toHaveAttribute('aria-label', 'test — Live')
   await expect(testNode).toHaveAttribute('data-health-state', 'Ready')
   await expect(testNode).toHaveClass(/\bdag-node--ready\b/)
   await expect(testNode).not.toContainText('🔗')
 
   const prodNode = dagNode(page, 'prod')
-  await expect(prodNode).toHaveAttribute('aria-label', 'prod — WaitingForMerge')
-  await expect(prodNode).toHaveAttribute('data-health-state', 'Reconciling')
+  await expect(prodNode).toHaveAttribute('aria-label', 'prod — Waiting for PR merge')
+  await expect(prodNode).toHaveAttribute('data-health-state', 'InProgress')
   await expect(prodNode).toContainText(`🔗 #${prNumber}`)
   await expect(prodNode).toContainText('⏱ ')
 
@@ -70,7 +70,7 @@ test('the DAG shows each environment and gate with its state, the PR badge and t
   await expect(tooltip).toHaveAttribute('role', 'tooltip')
   await expect(tooltip).toContainText('prod')
   await expect(tooltip).toContainText('State:')
-  await expect(tooltip).toContainText('WaitingForMerge')
+  await expect(tooltip).toContainText('Waiting for PR merge')
   await expect(tooltip.getByRole('link', { name: 'View Pull Request ↗' })).toHaveAttribute('href', prURL)
 
   await gateNode.hover()

@@ -113,7 +113,7 @@ describe('DAGView — node rendering', () => {
       state: 'Block',
     }]
     render(<DAGView nodes={nodes} edges={[]} />)
-    expect(screen.getByRole('button', { name: 'no-weekend — Block' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'no-weekend — Blocking' })).toBeInTheDocument()
     expect(screen.getByText(/no-weekend/, { selector: 'text' })).toBeInTheDocument()
   })
 })
@@ -124,7 +124,7 @@ describe('DAGView — node interaction', () => {
     const onSelect = vi.fn()
     const nodes = [makeNode({ id: 'step-env', environment: 'my-env', state: 'Pending' })]
     render(<DAGView nodes={nodes} edges={[]} onSelectNode={onSelect} />)
-    const btn = screen.getByRole('button', { name: /my-env — Pending/i })
+    const btn = screen.getByRole('button', { name: /my-env — Queued/i })
     await user.click(btn)
     expect(onSelect).toHaveBeenCalledTimes(1)
   })
@@ -134,7 +134,7 @@ describe('DAGView — node interaction', () => {
     const onSelect = vi.fn()
     const node = makeNode({ id: 'step-env', environment: 'my-env', state: 'Pending' })
     render(<DAGView nodes={[node]} edges={[]} selectedNode={node} onSelectNode={onSelect} />)
-    const btn = screen.getByRole('button', { name: /my-env — Pending/i })
+    const btn = screen.getByRole('button', { name: /my-env — Queued/i })
     await user.click(btn)
     expect(onSelect).toHaveBeenCalledWith(null)
   })
@@ -142,7 +142,7 @@ describe('DAGView — node interaction', () => {
   it('sets aria-pressed=true on selected node', () => {
     const node = makeNode({ id: 'step-env', environment: 'my-env', state: 'Pending' })
     render(<DAGView nodes={[node]} edges={[]} selectedNode={node} />)
-    const btn = screen.getByRole('button', { name: /my-env — Pending/i })
+    const btn = screen.getByRole('button', { name: /my-env — Queued/i })
     expect(btn).toHaveAttribute('aria-pressed', 'true')
   })
 })
@@ -230,7 +230,7 @@ describe('DAGView — layout only re-runs when the topology changes (C10a-web-15
     const next = topology()
     next.nodes[0] = { ...next.nodes[0], state: 'Verified' }
     rerender(<DAGView nodes={next.nodes} edges={next.edges} />)
-    expect(screen.getByRole('button', { name: 'a — Verified' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'a — Live' })).toBeInTheDocument()
   })
 
   it('re-runs the layout when a node is added', () => {
@@ -250,7 +250,7 @@ describe('DAGView — tooltip on keyboard focus (C10a-web-18)', () => {
     vi.useFakeTimers()
     try {
       render(<DAGView nodes={[makeNode({ environment: 'uat', state: 'WaitingForMerge', prURL: 'https://github.com/o/r/pull/5' })]} edges={[]} />)
-      const node = screen.getByRole('button', { name: 'uat — WaitingForMerge' })
+      const node = screen.getByRole('button', { name: 'uat — Waiting for PR merge' })
       act(() => { node.focus() })
       const tooltip = screen.getByRole('tooltip')
       expect(tooltip).toHaveTextContent('uat')
