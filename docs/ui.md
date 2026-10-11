@@ -9,8 +9,10 @@ kubectl port-forward svc/kardinal-promoter -n kardinal-system 8082:8082
 and browse to <http://localhost:8082/ui/>. To serve it to other clients (an Ingress, a
 NodePort), turn on a UI auth mode first: see [Accessing the UI](installation.md#accessing-the-ui).
 
-The UI reads and acts with your Kubernetes identity when an auth mode is on, so it shows and
-changes what your RBAC allows, as `kubectl` does.
+With `ui.auth.tokenReview` on, the UI reads and acts with your Kubernetes identity, so it shows
+and changes what your RBAC allows, as `kubectl` does. A static token (`ui.auth.tokenSecretRef`,
+the controller's `--ui-auth-token`) is one token shared by everyone who has it, with no per-user
+RBAC.
 
 <figure class="k-demo" data-demo="first-look" hidden>
   <picture>
@@ -25,8 +27,8 @@ changes what your RBAC allows, as `kubectl` does.
 ## Where you are: routes and links
 
 Every screen has its own address, so you can bookmark it, paste it into a ticket, and go Back
-and Forward through it. The breadcrumb at the top (Pipelines › namespace › pipeline ›
-environment or version) links each level.
+and Forward through it. The breadcrumb at the top shows Pipelines › namespace › pipeline ›
+environment or version; Pipelines and, below it, the pipeline are links.
 
 | Address | Opens |
 |---|---|
@@ -34,6 +36,8 @@ environment or version) links each level.
 | `#/p/<namespace>/<pipeline>` | A pipeline's map |
 | `#/p/<namespace>/<pipeline>/env/<environment>` | The same, with that environment's details open |
 | `#/p/<namespace>/<pipeline>/v/<version>` | The same, showing that version (a Bundle name) |
+
+With an environment open, `?v=<version>` gives the version shown.
 
 And after a `?`:
 
@@ -54,13 +58,13 @@ reason it is waiting.
 The start page shows each pipeline as a line of stations, one per environment in promotion
 order. Each station names the version it runs and when it was Verified. A pipeline that needs a
 person (a failed promotion, a blocking gate, a hold) says so on its line, and the filter at the
-top narrows the board to those. **Show the operations table** (in the palette) lists the same
+top narrows the board to those. **⊞ Ops** in the sidebar (or **Show the operations table** in the palette) lists the same
 pipelines as a sortable table.
 
 ## The pipeline page
 
 The top line names the pipeline, its state and where its newest version is, with **Pause** and
-**New bundle**. Below it are four tabs: **Map**, **Versions**, **Activity** and **Metrics**.
+**Ship a version**. Below it are four tabs: **Map**, **Versions**, **Activity** and **Metrics**.
 
 ### Map
 
@@ -76,13 +80,25 @@ The map draws the pipeline as a station map:
   result.
 - **Waves and fleets.** Five or more environments promoted in parallel are one band, and a fleet
   is one platform. Each counts its environments by state; expand it to a grid, a row per state.
+
+    <figure class="k-demo" data-demo="fleet" hidden>
+      <picture>
+        <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/fleet-dark.png">
+        <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/fleet.png">
+        <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/fleet-dark.webp">
+        <img src="../assets/demos/fleet.webp" alt="A fleet of fifty clusters on the map: a platform that expands to a grid of targets by state" width="1280" height="800" loading="lazy">
+      </picture>
+      <figcaption>A fleet · <code>kardinal status my-app</code></figcaption>
+    </figure>
+
 - **Needs attention.** A strip above the map counts what needs a look: failed environments,
   environments blocked by each gate, held environments and environments that wait. Select an item to go to it.
-- **Search** finds an environment by name; Enter and Shift+Enter move through the matches.
+- **Search** matches environment and target names, versions, version (Bundle) names, gate names
+  and gate expressions; Enter and Shift+Enter move through the matches.
 - **Zoom.** The map has three levels: **Detail** (every station with its versions, and
   Promote, Roll back and Release hold under the station in focus),
-  **Map** (names and states) and **Overview** (the shape, with names only where something needs
-  a person). It opens at Detail for up to 8 environments, at Map up to 40, and at Overview above
+  **Map** (names and states) and **Overview** (the shape, with names only on the stations the thread
+  passes, the one in focus and those that need a person). It opens at Detail for up to 8 environments, at Map up to 40, and at Overview above
   that. Drag to pan; zoom with the wheel, a pinch, or the level buttons. A **minimap** in the
   corner shows where you are on a large map; select a point to move there.
 
@@ -100,16 +116,6 @@ comparison lists what differs (images, environments, provenance).
   <figcaption>Compare · <code>kardinal diff my-app-a my-app-b</code></figcaption>
 </figure>
 
-<figure class="k-demo" data-demo="fleet" hidden>
-  <picture>
-    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/fleet-dark.png">
-    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/fleet.png">
-    <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/fleet-dark.webp">
-    <img src="../assets/demos/fleet.webp" alt="A fleet of fifty clusters on the map: a platform that expands to a grid of targets by state" width="1280" height="800" loading="lazy">
-  </picture>
-  <figcaption>A fleet · <code>kardinal status my-app</code></figcaption>
-</figure>
-
 ### An environment's details
 
 Select a station (or press Enter on it) to open its details, beside the map on a wide screen and
@@ -118,6 +124,17 @@ as a sheet over it on a narrow one:
 - **Why it's waiting** comes first: the gate that blocks and its reason, the approvals still
   needed, the pull request to merge, the health check in progress. When nothing waits, this is
   the environment's status.
+
+    <figure class="k-demo" data-demo="why-waiting" hidden>
+      <picture>
+        <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/why-waiting-dark.png">
+        <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/why-waiting.png">
+        <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/why-waiting-dark.webp">
+        <img src="../assets/demos/why-waiting.webp" alt="An environment's details open at Why it's waiting: a gate blocks prod on the weekend" width="1280" height="800" loading="lazy">
+      </picture>
+      <figcaption>Why it's waiting · <code>kardinal explain my-app prod</code></figcaption>
+    </figure>
+
 - **Actions** for that environment. Each one asks before it acts, and the button, the question
   and the result use the same verb:
 
@@ -131,39 +148,30 @@ as a sheet over it on a narrow one:
     | Pause pipeline, Resume pipeline | a confirmation |
     | Reject version | a reason |
 
+    <figure class="k-demo" data-demo="approve-override" hidden>
+      <picture>
+        <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/approve-override-dark.png">
+        <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/approve-override.png">
+        <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/approve-override-dark.webp">
+        <img src="../assets/demos/approve-override.webp" alt="Approving a version for prod, then overriding a gate with a reason and an expiry" width="1280" height="800" loading="lazy">
+      </picture>
+      <figcaption>Approve and override · <code>kardinal approve</code>, <code>kardinal override</code></figcaption>
+    </figure>
+
+    <figure class="k-demo" data-demo="rollback-hold" hidden>
+      <picture>
+        <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/rollback-hold-dark.png">
+        <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/rollback-hold.png">
+        <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/rollback-hold-dark.webp">
+        <img src="../assets/demos/rollback-hold.webp" alt="Rolling prod back to the previous version and holding it there" width="1280" height="800" loading="lazy">
+      </picture>
+      <figcaption>Roll back and hold · <code>kardinal rollback my-app prod --hold --reason "…"</code></figcaption>
+    </figure>
+
+
 - **Evidence**: the images of the version on its way, the steps the promotion ran with their
   durations, its bake time and its gates.
 - **History**: the promotion's Kubernetes events in this environment.
-
-<figure class="k-demo" data-demo="why-waiting" hidden>
-  <picture>
-    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/why-waiting-dark.png">
-    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/why-waiting.png">
-    <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/why-waiting-dark.webp">
-    <img src="../assets/demos/why-waiting.webp" alt="An environment's details open at Why it's waiting: a gate blocks prod on the weekend" width="1280" height="800" loading="lazy">
-  </picture>
-  <figcaption>Why it's waiting · <code>kardinal explain my-app prod</code></figcaption>
-</figure>
-
-<figure class="k-demo" data-demo="approve-override" hidden>
-  <picture>
-    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/approve-override-dark.png">
-    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/approve-override.png">
-    <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/approve-override-dark.webp">
-    <img src="../assets/demos/approve-override.webp" alt="Approving a version for prod, then overriding a gate with a reason and an expiry" width="1280" height="800" loading="lazy">
-  </picture>
-  <figcaption>Approve and override · <code>kardinal approve</code>, <code>kardinal override</code></figcaption>
-</figure>
-
-<figure class="k-demo" data-demo="rollback-hold" hidden>
-  <picture>
-    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/rollback-hold-dark.png">
-    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/rollback-hold.png">
-    <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/rollback-hold-dark.webp">
-    <img src="../assets/demos/rollback-hold.webp" alt="Rolling prod back to the previous version and holding it there" width="1280" height="800" loading="lazy">
-  </picture>
-  <figcaption>Roll back and hold · <code>kardinal rollback my-app prod --hold</code></figcaption>
-</figure>
 
 ### Versions
 
@@ -223,8 +231,8 @@ confirmation.
 | Shift+E | Collapse every group |
 | `+`, `-` | Zoom in, out |
 | `0` | Fit the map |
-| `/` | Search the map |
-| Esc | Clear the search, or fit the map |
+| `/` | Focus the map search |
+| Esc | Clear the search, or fit the map; it also closes the open details |
 
 Shortcuts do nothing while you type in a field or while a dialog is open.
 
