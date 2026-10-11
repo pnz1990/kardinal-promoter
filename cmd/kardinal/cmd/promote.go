@@ -58,7 +58,7 @@ The first environment has nothing upstream: use kardinal ship there.`,
 	}
 
 	addEnvFlag(cmd, &envFlag, "Target environment (or give it after the pipeline)")
-	return cmd
+	return withStructuredOutput(cmd)
 }
 
 // promoteFn is the testable implementation of the promote command. The
@@ -77,11 +77,16 @@ func promoteFn(w io.Writer, c sigs_client.Client, ns, pipeline, env string) erro
 	if err != nil {
 		return err
 	}
-	stampCreator(ctx, w, c, plan.Bundle)
+	stampCreator(ctx, c, plan.Bundle)
 	if err := c.Create(ctx, plan.Bundle); err != nil {
 		return fmt.Errorf("create promote bundle for pipeline %s env %s: %w", pipeline, env, err)
 	}
 
+	if structured() {
+		out := createdOf(plan.Bundle)
+		out.Environment, out.From = env, plan.Source.Name
+		return writeStructured(w, out)
+	}
 	if _, err := fmt.Fprintf(w,
 		"Promoting %s to %s: bundle %s created from %s (Verified in %s; %s)\n"+
 			"Track with: kardinal get bundles %s\n",

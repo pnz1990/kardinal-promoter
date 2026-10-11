@@ -98,7 +98,7 @@ blocking gates pass as audited exemptions meanwhile. See docs/rollback.md.`,
 	cmd.Flags().BoolVar(&emergencyFlag, "emergency", false, "Deprecated: has no effect")
 	_ = cmd.Flags().MarkDeprecated("emergency", "it has no effect and is removed in v0.11; use kardinal override to pass a blocking gate")
 
-	return cmd
+	return withStructuredOutput(cmd)
 }
 
 // rollbackFn is the testable implementation of rollback. The target and the
@@ -118,11 +118,16 @@ func rollbackFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, toBu
 	if err != nil {
 		return err
 	}
-	stampCreator(ctx, w, c, plan.Bundle)
+	stampCreator(ctx, c, plan.Bundle)
 	if createErr := c.Create(ctx, plan.Bundle); createErr != nil {
 		return fmt.Errorf("create rollback bundle: %w", createErr)
 	}
 
+	if structured() {
+		out := createdOf(plan.Bundle)
+		out.Environment, out.RollbackOf, out.Replaces = envFilter, plan.Target.Name, plan.CurrentName
+		return writeStructured(w, out)
+	}
 	from := plan.CurrentName
 	if from == "" {
 		from = "(unknown)"
@@ -156,10 +161,16 @@ func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBund
 		},
 		HoldReason: reason,
 		ExpiresIn:  expiresIn,
-		Creator:    creatorOf(context.Background(), w, c),
+		Creator:    creatorOf(context.Background(), c),
 	})
 	if err != nil {
 		return err
+	}
+	if structured() {
+		out := createdOf(plan.Bundle)
+		out.Environment, out.RollbackOf, out.Replaces = env, plan.Target.Name, plan.CurrentName
+		out.Hold = &createdHold{Environment: env, Bundle: hold.Bundle, Reason: hold.Reason, ExpiresAt: hold.ExpiresAt}
+		return writeStructured(w, out)
 	}
 	from := plan.CurrentName
 	if from == "" {
@@ -207,7 +218,7 @@ held back then promotes into <env> through its normal gates.`,
 		},
 	}
 	addEnvFlag(cmd, &envFlag, "Held environment to release (or give it after the pipeline)")
-	return cmd
+	return withStructuredOutput(cmd)
 }
 
 // releaseHoldFn is the testable implementation of release-hold.
@@ -216,11 +227,26 @@ func releaseHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env string) 
 	if err != nil {
 		return err
 	}
+	if structured() {
+		return writeStructured(w, releasedHold{Pipeline: pipeline, Namespace: ns, Environment: env,
+			Bundle: h.Bundle, CreatedBy: h.CreatedBy, Reason: h.Reason})
+	}
 	if _, err := fmt.Fprintf(w, "Released the hold of %s on %s (rollback %s, held by %s: %s).\n",
 		pipeline, env, h.Bundle, orUnknown(h.CreatedBy), h.Reason); err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
 	return nil
+}
+
+// releasedHold is release-hold -o json|yaml: the hold it released.
+type releasedHold struct {
+	Pipeline    string `json:"pipeline"`
+	Namespace   string `json:"namespace"`
+	Environment string `json:"environment"`
+	// Bundle is the rollback the environment was held on.
+	Bundle    string `json:"bundle"`
+	CreatedBy string `json:"createdBy,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 func orUnknown(s string) string {

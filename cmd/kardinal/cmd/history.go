@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -28,6 +27,8 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+
+	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 )
 
 func newHistoryCmd() *cobra.Command {
@@ -58,7 +59,7 @@ the PR, how long it took, and when it started.`,
 
 	addEnvFlag(cmd, &envFlag, "Only this environment (or give it after the pipeline)")
 	cmd.Flags().IntVar(&limitFlag, "limit", 20, "Maximum number of entries to show")
-	return cmd
+	return withStructuredOutput(cmd)
 }
 
 // HistoryRow represents one row in the history output.
@@ -69,6 +70,35 @@ type HistoryRow struct {
 	PR        string
 	Duration  string
 	Timestamp string
+	// State, PRURL and Created are the step's, for -o json|yaml.
+	State   string
+	PRURL   string
+	Created time.Time
+}
+
+// historyEntry is one entry of kardinal history -o json|yaml.
+type historyEntry struct {
+	Bundle string `json:"bundle"`
+	// Action is promote or rollback.
+	Action      string `json:"action"`
+	Environment string `json:"environment"`
+	// State is the step's state, as the API has it.
+	State string `json:"state"`
+	PRURL string `json:"prURL,omitempty"`
+	// Duration is how long the step took ("..." while it runs, "--" when no
+	// end is recorded).
+	Duration  string    `json:"duration"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// writeHistoryStructured writes rows as -o json|yaml asks.
+func writeHistoryStructured(w io.Writer, rows []HistoryRow) error {
+	out := make([]historyEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, historyEntry{Bundle: r.Bundle, Action: r.Action, Environment: r.Env, State: r.State,
+			PRURL: r.PRURL, Duration: r.Duration, CreatedAt: r.Created.UTC()})
+	}
+	return writeStructured(w, out)
 }
 
 // historyFn is the testable implementation of history.
@@ -87,6 +117,9 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 		// A typo would look like an idle pipeline: say so.
 		if err := checkPipelineEnv(ctx, c, ns, pipeline, envFilter); err != nil {
 			return err
+		}
+		if structured() {
+			return writeHistoryStructured(w, nil)
 		}
 		if _, err := fmt.Fprintf(w, "No promotion history found for pipeline %q\n", pipeline); err != nil {
 			return fmt.Errorf("write empty: %w", err)
@@ -113,6 +146,9 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 		if err := checkPipelineEnv(ctx, c, ns, pipeline, envFilter); err != nil {
 			return err
 		}
+		if structured() {
+			return writeHistoryStructured(w, nil)
+		}
 		if envFilter != "" {
 			if _, err := fmt.Fprintf(w, "No promotion history found for pipeline %q env %q\n", pipeline, envFilter); err != nil {
 				return fmt.Errorf("write empty: %w", err)
@@ -125,6 +161,9 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 		return nil
 	}
 
+	if structured() {
+		return writeHistoryStructured(w, rows)
+	}
 	return formatHistoryTable(w, rows)
 }
 
@@ -170,6 +209,9 @@ func buildHistoryRows(steps []v1alpha1.PromotionStep, rollbacks map[string]bool,
 			PR:        pr,
 			Duration:  duration,
 			Timestamp: ts,
+			State:     s.Status.State,
+			PRURL:     s.Status.PRURL,
+			Created:   s.CreationTimestamp.Time,
 		})
 	}
 	return rows
@@ -247,7 +289,7 @@ func deriveDuration(s v1alpha1.PromotionStep) string {
 
 // formatHistoryTable writes the history table to w.
 func formatHistoryTable(w io.Writer, rows []HistoryRow) error {
-	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+	tw := style.NewTable(w, 3)
 	if _, err := fmt.Fprintln(tw, "BUNDLE\tACTION\tENV\tPR\tDURATION\tTIMESTAMP"); err != nil {
 		return fmt.Errorf("write history header: %w", err)
 	}

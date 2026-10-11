@@ -20,16 +20,22 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	pipelinerec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
+
+	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 )
 
 func newStatusCmd() *cobra.Command {
@@ -41,12 +47,14 @@ func newStatusCmd() *cobra.Command {
 		Use:   "status [<pipeline>]",
 		Short: "Show controller health or per-pipeline in-flight promotion details",
 		Long: `Without a pipeline: the controller version and how many pipelines and
-bundles there are. With one: per environment, the Bundle promoting and the one
-deployed, the step each is on with its PR, and the gates holding it back. This
-is the first command to run when a promotion is stuck; -w refreshes it.`,
+bundles there are. With one: per environment, the version running there, a
+newer one on its way in, its state in words and since when, its PR, and the
+gates holding it back. Run it first when a promotion is stuck; -w refreshes
+it and -o json prints it for scripts.`,
 		Example: `  kardinal status
-  kardinal status my-app -w`,
-		Annotations: map[string]string{ReferenceAnnotation: statusReference},
+  kardinal status my-app -w
+  kardinal status my-app -o json | jq -r '.environments[] | .name + "=" + .version'`,
+		Annotations: map[string]string{ReferenceAnnotation: statusReference, outputAnnotation: "true"},
 		Args:        cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
@@ -70,6 +78,18 @@ is the first command to run when a promotion is stuck; -w refreshes it.`,
 	cmd.Flags().StringVar(&controllerNS, "controller-namespace", defaultControllerNamespace,
 		"Namespace kardinal-promoter is installed in")
 	return cmd
+}
+
+// statusSummary is kardinal status (no pipeline) -o json|yaml.
+type statusSummary struct {
+	// Controller is the controller version, "unknown" without its
+	// kardinal-version ConfigMap.
+	Controller string `json:"controller"`
+	Pipelines  int    `json:"pipelines"`
+	// Degraded is the namespace/name of every Degraded pipeline.
+	Degraded      []string `json:"degraded,omitempty"`
+	Bundles       int      `json:"bundles"`
+	ActiveBundles int      `json:"activeBundles"`
 }
 
 // statusSummaryFn writes the cluster-level controller summary.
@@ -100,6 +120,10 @@ func statusSummaryFn(out io.Writer, c sigs_client.Reader, controllerNS string) e
 	}
 	sort.Strings(degraded)
 
+	if structured() {
+		return writeStructured(out, statusSummary{Controller: ctrlVersion, Pipelines: len(pipelines.Items),
+			Degraded: degraded, Bundles: len(bundles.Items), ActiveBundles: activeBundles})
+	}
 	_, _ = fmt.Fprintf(out, "Controller:  %s\n", ctrlVersion)
 	_, _ = fmt.Fprintf(out, "Pipelines:   %d", len(pipelines.Items))
 	if len(degraded) > 0 {
@@ -109,7 +133,7 @@ func statusSummaryFn(out io.Writer, c sigs_client.Reader, controllerNS string) e
 	_, _ = fmt.Fprintf(out, "Bundles:     %d (%d active)\n", len(bundles.Items), activeBundles)
 	if len(degraded) > 0 {
 		_, _ = fmt.Fprintf(out,
-			"\nWarning: %d pipeline(s) Degraded — run 'kardinal get pipelines' for details\n", len(degraded))
+			"\n%s %d pipeline(s) Degraded: run 'kardinal get pipelines' for details\n", sty.Warning("Warning:"), len(degraded))
 	}
 	return nil
 }
@@ -118,233 +142,228 @@ func statusSummaryFn(out io.Writer, c sigs_client.Reader, controllerNS string) e
 // It is separate from the command so tests can pass a fake client.
 func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string) error {
 	ctx := context.Background()
+	view, err := pipelineStatusOf(ctx, c, ns, pipeline)
+	if err != nil {
+		return err
+	}
+	if structured() {
+		return writeStructured(w, view)
+	}
+	return writePipelineStatus(w, view)
+}
 
-	// Verify the pipeline exists.
+// pipelineStatus is kardinal status <pipeline>: per environment what runs
+// there and where the newest version stands (the Pipeline's
+// status.environments), the summary sentence, and the gates holding a
+// version back. -o json|yaml prints it with the API's state values.
+type pipelineStatus struct {
+	Pipeline  string `json:"pipeline"`
+	Namespace string `json:"namespace"`
+	Phase     string `json:"phase,omitempty"`
+	Paused    bool   `json:"paused,omitempty"`
+	Summary   string `json:"summary,omitempty"`
+	// Source is "controller" when Environments and Summary are the
+	// Pipeline's status (written by the controller), "cli" when the CLI
+	// computed them because the controller predates them.
+	Source        string                               `json:"source"`
+	Environments  []v1alpha1.PipelineEnvironmentStatus `json:"environments"`
+	BlockingGates []statusGate                         `json:"blockingGates"`
+	// Warnings are the WARNING: lines after the table (a Rejected Bundle
+	// whose change is live).
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// statusGate is a gate instance that holds the newest Bundle of an
+// environment back.
+type statusGate struct {
+	Name        string `json:"name"`
+	Instance    string `json:"instance"`
+	Environment string `json:"environment"`
+	Bundle      string `json:"bundle"`
+	Expression  string `json:"expression"`
+	// Message is the gate's spec.message when it explains the block
+	// (graph.BlockedMessage).
+	Message string `json:"message,omitempty"`
+	// Reason is the gate's status.reason: its evaluation.
+	Reason          string       `json:"reason,omitempty"`
+	LastEvaluatedAt *metav1.Time `json:"lastEvaluatedAt,omitempty"`
+}
+
+// pipelineStatusOf reads the status of pipeline in ns: status.environments
+// and status.summary as the controller wrote them, or, from a controller
+// that predates them, the same projection computed here by the
+// controller's own functions (pipelinerec.ProjectEnvironments, Summarize).
+// The gates listed are the instances status.environments names in
+// blockedBy.
+func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline string) (*pipelineStatus, error) {
 	var pl v1alpha1.Pipeline
 	if err := c.Get(ctx, types.NamespacedName{Name: pipeline, Namespace: ns}, &pl); err != nil {
 		if apierrors.IsNotFound(err) {
-			return pipelineNotFound(ctx, c, ns, pipeline)
+			return nil, pipelineNotFound(ctx, c, ns, pipeline)
 		}
-		return fmt.Errorf("get pipeline: %w", err)
+		return nil, fmt.Errorf("get pipeline: %w", err)
 	}
-
-	_, _ = fmt.Fprintf(w, "Pipeline: %s   Namespace: %s\n\n", pipeline, ns)
-
-	// List PromotionSteps for this pipeline.
-	var steps v1alpha1.PromotionStepList
-	if err := c.List(ctx, &steps,
-		sigs_client.InNamespace(ns),
-		sigs_client.MatchingLabels{"kardinal.io/pipeline": pipeline},
-	); err != nil {
-		return fmt.Errorf("list promotion steps: %w", err)
-	}
-
-	// List PolicyGates for this pipeline.
-	var gates v1alpha1.PolicyGateList
-	if err := c.List(ctx, &gates,
-		sigs_client.InNamespace(ns),
-		sigs_client.MatchingLabels{"kardinal.io/pipeline": pipeline},
-	); err != nil {
-		return fmt.Errorf("list policy gates: %w", err)
-	}
+	view := &pipelineStatus{Pipeline: pipeline, Namespace: ns, Phase: pl.Status.Phase, Paused: pl.Spec.Paused,
+		Source: "controller", Environments: pl.Status.Environments, Summary: pl.Status.Summary, BlockingGates: []statusGate{}}
 
 	var bundles v1alpha1.BundleList
 	if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err != nil {
-		return fmt.Errorf("list bundles: %w", err)
+		return nil, fmt.Errorf("list bundles: %w", err)
 	}
-	// Retired Bundles (#1492) keep their steps in status.retiredSteps.
-	steps.Items = lifecycle.AddRetiredSteps(steps.Items, bundles.Items, map[string]string{"kardinal.io/pipeline": pipeline})
-
-	active := currentBundleByEnv(bundles.Items, steps.Items, gates.Items)
-
-	// One row per PromotionStep of the active Bundle, so the regions of a
-	// multi-region environment each get a row.
-	type stepRow struct {
-		env        string
-		region     string
-		bundle     string
-		state      string
-		activeStep string // currently executing step (from status.steps[])
-		prURL      string
-		age        string
-	}
-	var rows []stepRow
-	stepped := make(map[string]bool) // env with a step of its active Bundle
-	for i := range steps.Items {
-		s := &steps.Items[i]
-		env := s.Spec.Environment
-		if s.Spec.BundleName != active[env] {
-			continue
+	var gates v1alpha1.PolicyGateList
+	listGates := func() error {
+		if err := c.List(ctx, &gates, sigs_client.InNamespace(ns),
+			sigs_client.MatchingLabels{"kardinal.io/pipeline": pipeline}); err != nil {
+			return fmt.Errorf("list policy gates: %w", err)
 		}
-		stepped[env] = true
-
-		// Find the currently executing step (first non-terminal step in status.steps).
-		activeStep := "-"
-		for _, ss := range s.Status.Steps {
-			if ss.State != "Completed" && ss.State != "Failed" && ss.State != "" {
-				activeStep = ss.Name
-				break
+		return nil
+	}
+	if len(view.Environments) == 0 {
+		// A controller that predates status.environments (#1707).
+		var steps v1alpha1.PromotionStepList
+		if err := c.List(ctx, &steps, sigs_client.InNamespace(ns),
+			sigs_client.MatchingLabels{"kardinal.io/pipeline": pipeline}); err != nil {
+			return nil, fmt.Errorf("list promotion steps: %w", err)
+		}
+		if err := listGates(); err != nil {
+			return nil, err
+		}
+		// Retired Bundles (#1492) keep their steps in status.retiredSteps.
+		items := lifecycle.AddRetiredSteps(steps.Items, bundles.Items, map[string]string{"kardinal.io/pipeline": pipeline})
+		view.Source = "cli"
+		view.Environments = pipelinerec.ProjectEnvironments(&pl, bundles.Items, items, gates.Items, nil, time.Time{})
+		for i := range view.Environments {
+			// Since is known only for a Verified state without the
+			// controller's record of when a state began.
+			if e := &view.Environments[i]; e.State != "Verified" {
+				e.Since = nil
 			}
 		}
-		age := "-"
-		if !s.CreationTimestamp.IsZero() {
-			age = HumanAge(s.CreationTimestamp.Time)
+		ready := metav1.Condition{}
+		if cond := meta.FindStatusCondition(pl.Status.Conditions, "Ready"); cond != nil {
+			ready = *cond
 		}
-		rows = append(rows, stepRow{
-			env:        env,
-			region:     orDash(s.Spec.Region), //nolint:staticcheck // SA1019: shows steps from a Graph built before regions were removed
-			bundle:     s.Spec.BundleName,
-			state:      stepState(*s),
-			activeStep: activeStep,
-			prURL:      orDash(s.Status.PRURL),
-			age:        age,
-		})
+		view.Summary = pipelinerec.Summarize(&pl, ready, view.Environments)
+	} else if slices.ContainsFunc(view.Environments, func(e v1alpha1.PipelineEnvironmentStatus) bool { return len(e.BlockedBy) > 0 }) {
+		if err := listGates(); err != nil {
+			return nil, err
+		}
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].env != rows[j].env {
-			return rows[i].env < rows[j].env
-		}
-		return rows[i].region < rows[j].region
-	})
+	if view.Environments == nil {
+		view.Environments = []v1alpha1.PipelineEnvironmentStatus{}
+	}
 
-	// A gate blocks when it belongs to the current Bundle of its environment
-	// and holds that Bundle back there (graph.GateHolds, the rule the UI's
-	// blockerCount uses): it is not ready, and either the Bundle has no step
-	// there yet and every upstream step is Verified, or a Pending step there
-	// waits on it (E2E-R18).
 	byName := make(map[string]*v1alpha1.Bundle, len(bundles.Items))
 	for i := range bundles.Items {
 		byName[bundles.Items[i].Name] = &bundles.Items[i]
 	}
-	var blockingGates []v1alpha1.PolicyGate
-	for i := range gates.Items {
-		g := &gates.Items[i]
-		env, bundle := g.Labels["kardinal.io/environment"], g.Labels["kardinal.io/bundle"]
-		if bundle == "" || bundle != active[env] {
-			continue
+	for _, e := range view.Environments {
+		newest := e.Bundle
+		if e.IncomingBundle != "" {
+			newest = e.IncomingBundle
 		}
-		if b := byName[bundle]; b != nil && graph.GateHolds(&pl, b, g, steps.Items) {
-			blockingGates = append(blockingGates, *g)
+		for i := range gates.Items {
+			g := &gates.Items[i]
+			if g.Labels["kardinal.io/environment"] != e.Name || g.Labels["kardinal.io/bundle"] != newest ||
+				!slices.Contains(e.BlockedBy, gateDisplayName(*g)) {
+				continue
+			}
+			view.BlockingGates = append(view.BlockingGates, statusGate{
+				Name: gateDisplayName(*g), Instance: g.Name, Environment: e.Name, Bundle: newest,
+				Expression: g.Spec.Expression, Message: graph.BlockedMessage(g), Reason: g.Status.Reason,
+				LastEvaluatedAt: g.Status.LastEvaluatedAt,
+			})
+		}
+		// A Rejected Bundle whose change runs here (lifecycle.RejectedLiveStep).
+		if b := byName[e.Bundle]; b != nil && lifecycle.Rejected(b) {
+			view.Warnings = append(view.Warnings, fmt.Sprintf("WARNING: bundle %s is Rejected in %s: %s (kardinal rollback %s --env %s)",
+				b.Name, e.Name, lifecycle.RejectedLiveHint, pipeline, e.Name))
 		}
 	}
-	sort.Slice(blockingGates, func(i, j int) bool {
-		ei, ej := blockingGates[i].Labels["kardinal.io/environment"], blockingGates[j].Labels["kardinal.io/environment"]
-		if ei != ej {
-			return ei < ej
-		}
-		return gateDisplayName(blockingGates[i]) < gateDisplayName(blockingGates[j])
-	})
+	return view, nil
+}
 
-	if len(rows) == 0 && len(blockingGates) == 0 {
-		_, _ = fmt.Fprintln(w, "No active promotions.")
+// envState is the display state of an environment of status.environments:
+// held by a rollback hold or by gates when it says so.
+func envState(e v1alpha1.PipelineEnvironmentStatus) display.State {
+	switch {
+	case e.State == "":
+		return display.State{Label: "-"}
+	case e.Held:
+		return display.Held(e.State)
+	case len(e.BlockedBy) > 0:
+		return display.HeldByGate(e.State, strings.Join(e.BlockedBy, ", "))
+	}
+	return display.Step(e.State)
+}
+
+// versionCell is "bundle (version)" for a cell of the status table, "-"
+// without a bundle.
+func versionCell(bundle, version string) string {
+	switch {
+	case bundle == "":
+		return "-"
+	case version == "":
+		return bundle
+	}
+	return bundle + " (" + version + ")"
+}
+
+// writePipelineStatus writes view as kardinal status <pipeline> prints it.
+func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
+	_, _ = fmt.Fprintf(w, "Pipeline: %s   Namespace: %s\n", view.Pipeline, view.Namespace)
+	running := slices.ContainsFunc(view.Environments, func(e v1alpha1.PipelineEnvironmentStatus) bool {
+		return e.Bundle != "" || e.IncomingBundle != "" || e.State != ""
+	})
+	if !running {
+		_, _ = fmt.Fprintf(w, "\nNo versions yet. Ship one: kardinal create bundle %s --image <ref>\n", view.Pipeline)
 		return nil
 	}
-
-	// Print active bundle summary.
-	bundleNames := map[string]struct{}{}
-	for _, b := range active {
-		bundleNames[b] = struct{}{}
+	if view.Summary != "" {
+		_, _ = fmt.Fprintln(w, view.Summary)
 	}
-	bnames := make([]string, 0, len(bundleNames))
-	for b := range bundleNames {
-		bnames = append(bnames, b)
-	}
-	sort.Strings(bnames)
-	_, _ = fmt.Fprintf(w, "Active bundle(s): %s\n\n", strings.Join(bnames, ", "))
-
-	// Print PromotionSteps table.
-	_, _ = fmt.Fprintln(w, "Promotion Steps")
-	_, _ = fmt.Fprintln(w, strings.Repeat("─", 72))
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "ENVIRONMENT\tREGION\tBUNDLE\tSTATE\tACTIVE STEP\tPR\tAGE")
-	// A Pending step that a rollback hold or a blocking gate keeps waiting
-	// says so in STATE.
-	gatesByEnv := map[string][]string{}
-	for i := range blockingGates {
-		env := blockingGates[i].Labels["kardinal.io/environment"]
-		if n := gateDisplayName(blockingGates[i]); !slices.Contains(gatesByEnv[env], n) {
-			gatesByEnv[env] = append(gatesByEnv[env], n)
-		}
-	}
-	for _, r := range rows {
-		// Mark in-progress states with a pointer.
-		marker := "  "
-		switch r.state {
-		case "Promoting", "WaitingForMerge", "HealthChecking", "Verifying":
-			marker = "▶ "
-		}
-		prDisplay := r.prURL
-		if len(prDisplay) > 40 {
-			prDisplay = prDisplay[len(prDisplay)-40:]
-		}
-		_, _ = fmt.Fprintf(tw, "%s%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			marker, r.env, r.region, r.bundle,
-			stepRowLabel(r.state, lifecycle.HeldFrom(&pl, r.env, r.bundle) != nil, gatesByEnv[r.env]),
-			r.activeStep, prDisplay, r.age)
-	}
-	_ = tw.Flush()
-	for _, h := range rejectedLiveHints(pipeline, active, bundles.Items, steps.Items, "") {
-		_, _ = fmt.Fprintln(w, h)
-	}
-
-	// What runs in each environment now, whether or not the active Bundle
-	// has reached it (lifecycle.DeployedBundle, the Bundle rollback starts
-	// from).
-	envs := slices.Sorted(slices.Values(pipelineEnvNames(&pl)))
-	deployed := deployedBundles(steps.Items, pipeline, envs, byName)
 	_, _ = fmt.Fprintln(w)
-	_, _ = fmt.Fprintln(w, "Deployed")
-	_, _ = fmt.Fprintln(w, strings.Repeat("─", 72))
-	dtw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(dtw, "ENVIRONMENT\tBUNDLE")
-	for _, env := range envs {
-		_, _ = fmt.Fprintf(dtw, "%s\t%s\n", env, deployedLabelOf(deployed[env], byName))
+	tw := style.NewTable(w, 2)
+	_, _ = fmt.Fprintln(tw, "ENVIRONMENT\tRUNNING\tINCOMING\tSTATE\tSINCE\tPR")
+	for _, e := range view.Environments {
+		since := "-"
+		if e.Since != nil && !e.Since.IsZero() {
+			since = HumanAge(e.Since.Time)
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", e.Name, versionCell(e.Bundle, e.Version),
+			versionCell(e.IncomingBundle, e.IncomingVersion), sty.State(envState(e)), since, orDash(e.PRURL))
 	}
-	_ = dtw.Flush()
+	if err := tw.Flush(); err != nil {
+		return fmt.Errorf("write status table: %w", err)
+	}
+	for _, h := range view.Warnings {
+		_, _ = fmt.Fprintln(w, notice(h))
+	}
 
-	if len(blockingGates) > 0 {
+	if len(view.BlockingGates) > 0 {
 		_, _ = fmt.Fprintln(w)
-		_, _ = fmt.Fprintln(w, "Blocking Policy Gates")
-		_, _ = fmt.Fprintln(w, strings.Repeat("─", 72))
-		gtw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		_, _ = fmt.Fprintln(w, "Blocking gates")
+		_, _ = fmt.Fprintln(w, sty.Rule(72))
+		gtw := style.NewTable(w, 2)
 		_, _ = fmt.Fprintln(gtw, "GATE\tENV\tEXPRESSION\tREASON\tLAST CHECKED")
-		for i := range blockingGates {
-			g := &blockingGates[i]
+		for _, g := range view.BlockingGates {
 			lastChecked := "-"
-			if g.Status.LastEvaluatedAt != nil && !g.Status.LastEvaluatedAt.IsZero() {
-				lastChecked = HumanAge(g.Status.LastEvaluatedAt.Time) + " ago"
+			if g.LastEvaluatedAt != nil && !g.LastEvaluatedAt.IsZero() {
+				lastChecked = HumanAge(g.LastEvaluatedAt.Time) + " ago"
 			}
 			// The gate's message is shown whole: it is what its author wrote
 			// for this table. The CEL detail is in kardinal explain.
-			reason := graph.BlockedMessage(g)
+			reason := g.Message
 			if reason == "" {
-				reason = truncateRunes(orDash(g.Status.Reason), 35)
+				reason = truncateRunes(orDash(g.Reason), 35)
 			}
-			_, _ = fmt.Fprintf(gtw, "%s\t%s\t%s\t%s\t%s\n",
-				gateDisplayName(*g), g.Labels["kardinal.io/environment"],
-				truncateRunes(g.Spec.Expression, 40), reason, lastChecked)
+			_, _ = fmt.Fprintf(gtw, "%s\t%s\t%s\t%s\t%s\n", sty.Paint(display.ToneBlocked, g.Name), g.Environment,
+				truncateRunes(orDash(g.Expression), 40), reason, lastChecked)
 		}
-		_ = gtw.Flush()
-	}
-
-	// Show a hint if everything is terminal. An environment whose current
-	// Bundle has not started there yet (only its gate instances exist) is
-	// still to come, so the promotion is not over.
-	allTerminal := len(blockingGates) == 0
-	for _, r := range rows {
-		if !terminalStates[r.state] {
-			allTerminal = false
+		if err := gtw.Flush(); err != nil {
+			return fmt.Errorf("write blocking gates: %w", err)
 		}
 	}
-	for env := range active {
-		if !stepped[env] {
-			allTerminal = false
-		}
-	}
-	if allTerminal && len(rows) > 0 {
-		_, _ = fmt.Fprintln(w, "\n(all steps are in a terminal state — no active promotion)")
-	}
-
 	return nil
 }
 
@@ -353,23 +372,27 @@ const statusReference = `When called without arguments: displays the controller 
 kardinal-version ConfigMap in --controller-namespace), the pipeline count with
 any Degraded pipelines, and the bundle count (active = Available or Promoting).
 
-When called with a pipeline name: shows in-flight promotion details for that
-pipeline — the current bundle per environment (the newest bundle that is not
-Superseded and has a PromotionStep there, or a gate instance there and has not
-failed; see kardinal explain), its PromotionSteps (one row per environment it
-has a step in, ▶ marking a step that is Promoting, WaitingForMerge,
-HealthChecking or Verifying, with the Bundle each row belongs to, the step it is on, and the
-last 40 characters of the step's PR URL, open or merged; REGION is - unless the
-step was created by a Graph built before multi-region fan-out was removed;
-spec.regions is deprecated), the Bundle deployed in every environment (the
-one whose change landed there last, as kardinal rollback judges it, with its
-image tags or config commit, and, as in kardinal explain, the config or
-image Bundle the rest of what runs there came from; "none" when no change has
-landed yet), and the
-PolicyGates holding it back (with their CEL expression cut to 40 characters,
-current reason and when each was last checked). A gate is listed as blocking only while it holds the bundle back: it
-is not ready and either every upstream environment is Verified for that bundle
-and the bundle has no PromotionStep in the gate's environment yet, or the
-bundle's Pending PromotionStep there waits on it. A gate of an environment the
-bundle has not reached yet is not listed. This is the first command to run
-when a promotion is stuck.`
+When called with a pipeline name: the Pipeline's summary sentence ("1.5.0 live
+in test; waiting for PR merge in prod (#42)"), then one row per environment
+(a fleet environment expands to its targets) from the Pipeline's
+status.environments, which the controller writes:
+
+  RUNNING   the Bundle whose change runs there, with its version
+  INCOMING  a newer Bundle on its way in, with its version
+  STATE     where the newest Bundle there stands, in words ("Live",
+            "Waiting for PR merge", "Held by gate no-weekend-deploys",
+            "Held by rollback")
+  SINCE     how long it has been in that state
+  PR        the pull request it waits for, while it waits for its merge
+
+Then the gates holding a version back, with their CEL expression cut to 40
+characters, their message and when each was last checked; and a WARNING: line
+for a Rejected Bundle whose change still runs somewhere, with the rollback
+that removes it. A pipeline nothing was shipped to yet says so, with the
+command that ships the first version.
+
+With a controller older than status.environments, the CLI computes the same
+rows itself, with the controller's code; SINCE is then known only for live
+environments. -o json and -o yaml print the same data with the API's state
+values (Verified, WaitingForMerge) and "source": "controller" or "cli".
+kardinal explain shows the steps and every gate of the current Bundle.`

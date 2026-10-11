@@ -128,7 +128,7 @@ func getStepsOnceNS(w io.Writer, c sigs_client.Client, ns, pipeline string, show
 			return err
 		}
 		for _, h := range hints {
-			if _, err := fmt.Fprintln(w, h); err != nil {
+			if _, err := fmt.Fprintln(w, notice(h)); err != nil {
 				return fmt.Errorf("write: %w", err)
 			}
 		}

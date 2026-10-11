@@ -31,6 +31,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 )
 
@@ -103,7 +104,7 @@ needs --image; a config Bundle --config-commit; a mixed one both. --commit,
 		"With --dry-run: the controller's --graph-compact-above (chart graph.compactAbove), the environment count above which the Graph is compact")
 
 	withReference(cmd, createBundleReference)
-	return cmd
+	return withStructuredOutput(cmd)
 }
 
 // createBundleOptions are the flags of kardinal create bundle.
@@ -182,12 +183,15 @@ func createBundleFn(w io.Writer, c sigs_client.Client, ns, pipeline string, opts
 	// Record sub-second creation order so supersession picks the newer of two
 	// Bundles created in the same second.
 	lifecycle.StampCreatedAt(bundle, time.Now())
-	stampCreator(ctx, w, c, bundle)
+	stampCreator(ctx, c, bundle)
 
 	if err := c.Create(ctx, bundle); err != nil {
 		return fmt.Errorf("create bundle for pipeline %s: %w", pipeline, err)
 	}
 
+	if structured() {
+		return writeStructured(w, createdOf(bundle))
+	}
 	if _, err := fmt.Fprintf(w,
 		"Bundle %s created for pipeline %s\n"+
 			"Track with: kardinal get bundles %s\n",
@@ -246,15 +250,6 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 		return fmt.Errorf("dry-run: %w", err) // Build errors start with "build: "
 	}
 
-	// Print a human-readable summary
-	_, _ = fmt.Fprintf(w, "[DRY-RUN] Bundle %q for pipeline %q\n", bundle.Name, pipelineName)
-	if result.Compact {
-		_, _ = fmt.Fprintf(w, "\nPromotion graph: %d node(s), compact shape\n", result.NodeCount)
-	} else {
-		_, _ = fmt.Fprintf(w, "\nPromotion graph: %d node(s)\n", result.NodeCount)
-	}
-	_, _ = fmt.Fprintf(w, "\nEnvironments in promotion order:\n")
-
 	// The gate instances the Graph would create, per environment.
 	gatesByEnv := map[string][]string{}
 	for _, g := range result.GateInstances {
@@ -267,8 +262,27 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 	if err != nil {
 		return fmt.Errorf("dry-run: environment order: %w", err)
 	}
+	if structured() {
+		out := dryRunResult{Pipeline: pipelineName, Namespace: ns, Type: spec.Type, Version: scm.BundleVersion(spec),
+			Nodes: result.NodeCount, Compact: result.Compact, Environments: []dryRunEnvironment{}}
+		for _, env := range order {
+			g := gatesByEnv[env]
+			sort.Strings(g)
+			out.Environments = append(out.Environments, dryRunEnvironment{Name: env, Gates: g})
+		}
+		return writeStructured(w, out)
+	}
+
+	// Print a human-readable summary
+	_, _ = fmt.Fprintf(w, "[DRY-RUN] Bundle %q for pipeline %q\n", bundle.Name, pipelineName)
+	if result.Compact {
+		_, _ = fmt.Fprintf(w, "\nPromotion graph: %d node(s), compact shape\n", result.NodeCount)
+	} else {
+		_, _ = fmt.Fprintf(w, "\nPromotion graph: %d node(s)\n", result.NodeCount)
+	}
+	_, _ = fmt.Fprintf(w, "\nEnvironments in promotion order:\n")
 	for _, env := range order {
-		line := "  \u2022 " + env
+		line := "  " + sty.Sym("\u2022", "*") + " " + env
 		if g := gatesByEnv[env]; len(g) > 0 {
 			sort.Strings(g)
 			line += " (gates: " + strings.Join(g, ", ") + ")"
@@ -278,6 +292,28 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 
 	_, _ = fmt.Fprintf(w, "\nNo resources were created. Remove --dry-run to apply.\n")
 	return nil
+}
+
+// dryRunResult is create bundle --dry-run -o json|yaml: the Graph a Bundle
+// would get, created nowhere.
+type dryRunResult struct {
+	Pipeline  string `json:"pipeline"`
+	Namespace string `json:"namespace"`
+	Type      string `json:"type,omitempty"`
+	Version   string `json:"version,omitempty"`
+	// Nodes is the Graph's node count, and Compact whether it has the
+	// compact shape.
+	Nodes   int  `json:"nodes"`
+	Compact bool `json:"compact,omitempty"`
+	// Environments are in promotion order, each with the gates the Graph
+	// would create there.
+	Environments []dryRunEnvironment `json:"environments"`
+}
+
+// dryRunEnvironment is one environment of a dry-run Graph.
+type dryRunEnvironment struct {
+	Name  string   `json:"name"`
+	Gates []string `json:"gates,omitempty"`
 }
 
 // parseImageRefs turns --image values into ImageRefs. "repo@sha256:..." sets

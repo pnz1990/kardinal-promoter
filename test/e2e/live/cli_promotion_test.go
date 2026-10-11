@@ -42,7 +42,7 @@ var cliCellGap = regexp.MustCompile(`\s{2,}`)
 
 // watchFooter ends each table frame of a --watch command whose stdout is not
 // a terminal; the screen is not cleared between frames.
-const watchFooter = "\n(watching — press Ctrl-C to quit)\n"
+const watchFooter = "\n(watching; press Ctrl-C to quit)\n"
 
 // frames splits a --watch table stream into its complete frames.
 func frames(out string) []string {
@@ -770,7 +770,7 @@ func TestCLI_Reports(t *testing.T) {
 		{"target_env", "prod"},
 		{"bundles_total", "2"},
 		{"deployment_frequency", "0.29/day", "(2 verified in target env)"},
-		{"lead_time_avg", "<lead>", "(creation → prod verified, 2 samples)"},
+		{"lead_time_avg", "<lead>", "(creation to prod verified, 2 samples)"},
 		{"change_fail_rate", "0.0%", "(0 failed / 2 total)"},
 		{"rollback_count", "0"},
 	}, mc)
@@ -778,7 +778,7 @@ func TestCLI_Reports(t *testing.T) {
 	require.Len(t, mc, 8, "%v", mc)
 	assert.Equal(t, []string{"pipeline", "podinfo", "(last 30 days)"}, mc[1])
 	assert.Equal(t, []string{"deployment_frequency", "0.07/day", "(2 verified in target env)"}, mc[4])
-	assert.Equal(t, "(creation → test verified, 2 samples)", mc[5][2])
+	assert.Equal(t, "(creation to test verified, 2 samples)", mc[5][2])
 	for _, tc := range []struct {
 		args []string
 		want string

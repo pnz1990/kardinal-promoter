@@ -58,6 +58,7 @@ Getting started:
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			useStyle(cmd)
 			return checkOutputFlag(cmd)
 		},
 	}
@@ -150,9 +151,13 @@ func requireSubcommand(cmd *cobra.Command) {
 	}
 }
 
-// buildClient constructs a controller-runtime client from the persistent flags.
+// buildClient constructs a controller-runtime client from the persistent
+// flags (clusterClient); a test replaces it with a fake one.
+var buildClient = clusterClient
+
+// clusterClient constructs a controller-runtime client from the persistent flags.
 // Returns actionable error messages with hints for common failures (#688).
-func buildClient() (sigs_client.Client, string, error) {
+func clusterClient() (sigs_client.Client, string, error) {
 	cfg, ns, err := buildRestConfig()
 	if err != nil {
 		return nil, "", err
@@ -160,7 +165,7 @@ func buildClient() (sigs_client.Client, string, error) {
 	c, err := sigs_client.New(cfg, sigs_client.Options{Scheme: rootScheme})
 	if err != nil {
 		return nil, "", fmt.Errorf(
-			"failed to create Kubernetes client — check cluster connectivity: %w", err)
+			"failed to create Kubernetes client (check cluster connectivity): %w", err)
 	}
 	return c, ns, nil
 }
@@ -188,12 +193,12 @@ func resolveRestConfig(clientConfig clientcmd.ClientConfig, explicitKubeconfig b
 		// A broken file or an unknown context is reported as is; only a
 		// missing kubeconfig falls back to the pod's service account.
 		if explicitKubeconfig || !clientcmd.IsEmptyConfig(err) {
-			return nil, "", fmt.Errorf("load kubeconfig — run 'kardinal doctor' to diagnose: %w", err)
+			return nil, "", fmt.Errorf("load kubeconfig (run 'kardinal doctor' to diagnose): %w", err)
 		}
 		cfg, err = rest.InClusterConfig()
 		if err != nil {
 			return nil, "", fmt.Errorf(
-				"cannot connect to cluster: no kubeconfig and not running in a pod — run 'kardinal doctor' to diagnose\n"+
+				"cannot connect to cluster: no kubeconfig and not running in a pod; run 'kardinal doctor' to diagnose\n"+
 					"  (underlying error: %w)", err)
 		}
 	}

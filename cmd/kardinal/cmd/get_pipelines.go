@@ -27,6 +27,8 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+
+	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 )
 
 // getPipelinesWatchInterval is the polling interval of get --watch: fast
@@ -40,7 +42,7 @@ func watchLoop(ctx context.Context, w io.Writer, interval time.Duration, render 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	table := OutputFormat() == "" || OutputFormat() == "table"
-	clearScreen := table && isTerminal(w)
+	clearScreen := table && style.IsTerminal(w)
 	for {
 		if clearScreen {
 			_, _ = fmt.Fprint(w, "\033[H\033[2J")
@@ -49,7 +51,7 @@ func watchLoop(ctx context.Context, w io.Writer, interval time.Duration, render 
 			return err
 		}
 		if table {
-			_, _ = fmt.Fprintln(w, "\n(watching — press Ctrl-C to quit)")
+			_, _ = fmt.Fprintln(w, watchFooter)
 		}
 		select {
 		case <-ctx.Done():

@@ -459,8 +459,8 @@ func TestCLI_CreateBundleDryRun(t *testing.T) {
 	want := "[DRY-RUN] Bundle \"podinfo-dry-run\" for pipeline \"podinfo\"\n\n" +
 		"Promotion graph: 7 node(s)\n\n" +
 		"Environments in promotion order:\n" +
-		"  • test\n" +
-		"  • prod (gates: change-freeze)\n\n" +
+		"  * test\n" +
+		"  * prod (gates: change-freeze)\n\n" +
 		"No resources were created. Remove --dry-run to apply.\n"
 	head := e.BranchHead(t, a.repo)
 	r := c.Run(a.ns, "create", "bundle", pipelineName, "--image", fixtures.Image+":"+fixtures.V2, "--dry-run")

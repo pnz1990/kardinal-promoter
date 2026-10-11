@@ -123,7 +123,7 @@ func openBrowser(url string) error {
 	case "windows":
 		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
 	default:
-		return fmt.Errorf("unsupported OS: %s — navigate manually to %s", runtime.GOOS, url)
+		return fmt.Errorf("unsupported OS: %s; open %s in a browser", runtime.GOOS, url)
 	}
 	return cmd.Start()
 }

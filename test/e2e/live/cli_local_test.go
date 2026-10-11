@@ -215,7 +215,7 @@ func TestCLI_GlobalFlags(t *testing.T) {
 	assert.Equal(t, 1, r.Code)
 	assert.Contains(t, r.Stdout, `Pipeline "alpha" not found in namespace "default"`, "no namespace means default")
 
-	const doctorHint = "load kubeconfig — run 'kardinal doctor' to diagnose: "
+	const doctorHint = "load kubeconfig (run 'kardinal doctor' to diagnose): "
 	r = cli.Exec(framework.CLIOptions{Kubeconfig: kcA}, "--context", "nope", "get", "pipelines")
 	assert.Equal(t, 1, r.Code)
 	assert.Equal(t, "get pipelines: "+doctorHint+`context "nope" does not exist`+"\n", r.Stderr)
@@ -509,7 +509,7 @@ func TestCLI_Validate(t *testing.T) {
 				"rename the environment\n",
 			apiRejects: true, apiSays: reservedMsg},
 		{name: "environment named bundle", doc: pipeline("bundle", "", "  - name: test\n  - name: bundle\n"),
-			want: "✗ environment-named-bundle.yaml is invalid:\n" +
+			want: "environment-named-bundle.yaml is invalid:\n" +
 				`  - environment "bundle": reserved environment name: the name becomes a kro Graph node ID; bundle, time, kro ` +
 				`reserved IDs (spec, status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed; ` +
 				"rename the environment\n",
@@ -552,10 +552,10 @@ func TestCLI_Validate(t *testing.T) {
 		r := cli.Exec(framework.CLIOptions{Kubeconfig: "/dev/null", Dir: dir}, "validate", "-f", file)
 		if c.valid {
 			assert.Equal(t, 0, r.Code, "%s: validate passes", c.name)
-			assert.Contains(t, r.Stdout, "✓ "+file+" is valid\n", c.name)
+			assert.Contains(t, r.Stdout, file+" is valid\n", c.name)
 		} else {
 			assert.Equal(t, 1, r.Code, "%s: validate fails", c.name)
-			assert.Contains(t, r.Stdout, "✗ "+file+" is invalid:\n", c.name)
+			assert.Contains(t, r.Stdout, file+" is invalid:\n", c.name)
 			assert.Equal(t, "validation failed\n", r.Stderr, c.name)
 		}
 		assert.Contains(t, r.Stdout, c.want, c.name)
@@ -682,7 +682,7 @@ Some gates would BLOCK with current context (see FAIL results above) (3 gate(s))
 	r = run("bad.yaml")
 	assert.Equal(t, 1, r.Code)
 	assert.Equal(t, "CEL syntax errors in 1 of 2 gate(s)\n", r.Stderr)
-	m := regexp.MustCompile(`(?s)\n  Syntax: INVALID — (.+?)\n\n`).FindStringSubmatch(r.Stdout)
+	m := regexp.MustCompile(`(?s)\n  Syntax: INVALID: (.+?)\n\n`).FindStringSubmatch(r.Stdout)
 	require.NotNil(t, m, r.Stdout)
 	assert.True(t, strings.HasSuffix(r.Stdout, "CEL syntax errors found (2 gate(s))\n"), r.Stdout)
 

@@ -16,7 +16,9 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -38,9 +40,47 @@ func runStatusPipeline(t *testing.T, objs ...sigs_client.Object) string {
 	return buf.String()
 }
 
+// statusRows parses the environment table of kardinal status <pipeline>.
+func statusRows(t *testing.T, out string) []map[string]string {
+	t.Helper()
+	_, table, ok := strings.Cut(out, "\nENVIRONMENT ")
+	require.True(t, ok, out)
+	table, _, _ = strings.Cut("ENVIRONMENT "+table, "\n\n")
+	return parseTable(table)
+}
+
+// parseTable parses a table whose cells are separated by two or more
+// spaces.
+func parseTable(table string) []map[string]string {
+	lines := strings.Split(strings.TrimRight(table, "\n"), "\n")
+	split := func(l string) []string { return regexp.MustCompile(`  +`).Split(strings.TrimSpace(l), -1) }
+	header := split(lines[0])
+	var rows []map[string]string
+	for _, l := range lines[1:] {
+		if !strings.Contains(l, "  ") {
+			break
+		}
+		row := map[string]string{}
+		for i, c := range split(l) {
+			if i < len(header) {
+				row[header[i]] = c
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// blockingGates is the gates section of kardinal status <pipeline>, "" when
+// it has none.
+func blockingGates(out string) string {
+	_, section, _ := strings.Cut(out, "\nBlocking gates\n")
+	return section
+}
+
 func TestStatusPipelineWriter_NoSteps(t *testing.T) {
 	out := runStatusPipeline(t, policyPipeline("demo", "test", "prod"))
-	assert.Contains(t, out, "No active promotions.")
+	assert.Equal(t, "Pipeline: demo   Namespace: default\n\nNo versions yet. Ship one: kardinal create bundle demo --image <ref>\n", out)
 }
 
 func TestStatusPipelineWriter_NotFound(t *testing.T) {
@@ -50,25 +90,23 @@ func TestStatusPipelineWriter_NotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), `pipeline "missing-pipeline" not found`)
 }
 
-// An in-flight PromotionStep is shown with a ▶ marker and the active step name.
+// A step waiting for its PR: the environment's newest version is incoming,
+// in words, with its PR; the summary sentence leads.
 func TestStatusPipelineWriter_ActiveStep(t *testing.T) {
 	step := explainStep("demo", "bundle-abc", "prod", "WaitingForMerge", "waiting for PR merge",
 		time.Now().Add(-5*time.Minute))
 	step.Status.PRURL = "https://github.com/org/repo/pull/42"
-	step.Status.Steps = []v1alpha1.StepStatus{
-		{Name: "git-clone", State: "Completed"},
-		{Name: "open-pr", State: "Running"},
-	}
-	out := runStatusPipeline(t, policyPipeline("demo", "test", "prod"),
-		explainBundle("bundle-abc", "Promoting", time.Now().Add(-5*time.Minute)), step)
+	b := explainBundle("bundle-abc", "Promoting", time.Now().Add(-5*time.Minute))
+	b.Spec.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/o/app", Tag: "1.5.0"}}
+	out := runStatusPipeline(t, policyPipeline("demo", "test", "prod"), b, step)
 
-	assert.Contains(t, out, "Pipeline: demo")
-	assert.Contains(t, out, "Active bundle(s): bundle-abc")
-	assert.Contains(t, out, "▶ prod")
-	assert.Contains(t, out, "Waiting for PR merge")
+	assert.True(t, strings.HasPrefix(out, "Pipeline: demo   Namespace: default\n1.5.0 waiting for PR merge in prod (#42)\n\n"), out)
+	assert.Equal(t, []map[string]string{
+		{"ENVIRONMENT": "test", "RUNNING": "-", "INCOMING": "-", "STATE": "-", "SINCE": "-", "PR": "-"},
+		{"ENVIRONMENT": "prod", "RUNNING": "-", "INCOMING": "bundle-abc (1.5.0)", "STATE": "Waiting for PR merge", "SINCE": "-",
+			"PR": "https://github.com/org/repo/pull/42"},
+	}, statusRows(t, out), out)
 	assertNoRawStates(t, out)
-	assert.Contains(t, out, "open-pr")
-	assert.Contains(t, out, "pull/42")
 }
 
 // C09b-cli-18: a gate blocks when it is an instance of the Bundle waiting at
@@ -85,13 +123,16 @@ func TestStatusPipelineWriter_BlockingGate(t *testing.T) {
 		gate,
 	)
 
-	_, gateSection, found := strings.Cut(out, "Blocking Policy Gates")
-	require.True(t, found, out)
-	assert.Contains(t, gateSection, "no-weekend-deploys")
-	assert.NotContains(t, gateSection, "bundle-abc-prod-no-weekend-deploys", "rows use the gate name")
-	assert.Contains(t, gateSection, "prod")
-	assert.Contains(t, gateSection, "!schedule.isWeekend = false")
-	assert.NotContains(t, out, "terminal state", "a Bundle held at a gate is not idle")
+	rows := statusRows(t, out)
+	require.Len(t, rows, 2, out)
+	assert.Equal(t, "Held by gate no-weekend-deploys", rows[1]["STATE"], out)
+	assert.Equal(t, "bundle-abc", rows[1]["INCOMING"], out)
+	section := blockingGates(out)
+	require.NotEmpty(t, section, out)
+	assert.Contains(t, section, "no-weekend-deploys")
+	assert.NotContains(t, section, "bundle-abc-prod-no-weekend-deploys", "rows use the gate name")
+	assert.Contains(t, section, "prod")
+	assert.Contains(t, section, "!schedule.isWeekend = false")
 }
 
 // GATE-MESSAGE-01: the REASON of a gate its expression blocks is the gate's
@@ -114,8 +155,8 @@ func TestStatusPipelineWriter_BlockingGateMessage(t *testing.T) {
 		weekend, broken,
 	)
 
-	_, gateSection, found := strings.Cut(out, "Blocking Policy Gates")
-	require.True(t, found, out)
+	gateSection := blockingGates(out)
+	require.NotEmpty(t, gateSection, out)
 	assert.Contains(t, gateSection, msg+"  ", "the whole message is the REASON")
 	assert.NotContains(t, gateSection, "bundle.version=1.2.0", "the CEL detail is left to kardinal explain")
 	assert.Contains(t, gateSection, "CEL evaluation error: no such ke...", "cut to 35 characters")
@@ -219,17 +260,16 @@ func TestStatusPipelineWriter_BlockingOnlyWhenReached(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			out := runStatusPipeline(t, append(tt.objs, policyPipeline("demo", "test", "uat", "prod"))...)
-			assert.Contains(t, out, "Active bundle(s):", out)
-			assert.NotContains(t, out, "terminal state", "a bundle still to reach prod is not finished:\n%s", out)
 			if !tt.wantBlocking {
-				assert.NotContains(t, out, "Blocking Policy Gates", out)
+				assert.Empty(t, blockingGates(out), out)
 				assert.NotContains(t, out, "require-uat-soak", out)
 				return
 			}
-			_, gateSection, found := strings.Cut(out, "Blocking Policy Gates")
-			require.True(t, found, out)
-			assert.Contains(t, gateSection, "require-uat-soak")
-			assert.Contains(t, gateSection, "prod")
+			section := blockingGates(out)
+			require.NotEmpty(t, section, out)
+			assert.Contains(t, section, "require-uat-soak")
+			assert.Contains(t, section, "prod")
+			assert.Equal(t, "Held by gate require-uat-soak", statusRows(t, out)[2]["STATE"], out)
 		})
 	}
 }
@@ -277,43 +317,86 @@ func TestStatusPipelineWriter_NotBlocking(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			objs := append([]sigs_client.Object{policyPipeline("demo", "test", "prod")}, tc.objs...)
 			out := runStatusPipeline(t, objs...)
-			assert.NotContains(t, out, "Blocking Policy Gates", out)
+			assert.Empty(t, blockingGates(out), out)
 		})
 	}
 }
 
-// C09b-cli-18: only the active Bundle's steps are listed, one row per region.
-func TestStatusPipelineWriter_ActiveBundleAndRegions(t *testing.T) {
-	old := time.Now().Add(-3 * time.Hour)
-	recent := time.Now().Add(-time.Hour)
-	east := explainStep("demo", "b2", "prod", "Promoting", "", recent)
-	east.Name += "-us-east-1"
-	east.Spec.Region = "us-east-1" //nolint:staticcheck // SA1019: a step from a Graph built before regions were removed
-	west := explainStep("demo", "b2", "prod", "Verified", "", recent)
-	west.Name += "-eu-west-1"
-	west.Spec.Region = "eu-west-1" //nolint:staticcheck // SA1019: a step from a Graph built before regions were removed
-	out := runStatusPipeline(t,
-		policyPipeline("demo", "test", "prod"),
-		explainBundle("b1", "Verified", old),
-		explainBundle("b2", "Promoting", recent),
-		explainStep("demo", "b1", "prod", "Verified", "", old),
-		explainStep("demo", "b1", "test", "Verified", "", old),
-		explainStep("demo", "b2", "test", "Verified", "", recent),
-		east, west,
-	)
+// P1: status reads the Pipeline's status.environments and summary as the
+// controller wrote them, and computes nothing itself when they are there:
+// the steps, which say something else here, are not read. -o json prints the
+// same data with the API's state values.
+func TestStatusPipelineWriter_FromStatusEnvironments(t *testing.T) {
+	since := metav1.NewTime(time.Now().Add(-90 * time.Minute).Truncate(time.Second))
+	p := policyPipeline("demo", "test", "prod")
+	p.Status.Summary = "1.5.0 live in test; held by gate no-weekend in prod"
+	p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{
+		{Name: "test", Bundle: "b2", Version: "1.5.0", State: "Verified", Since: &since},
+		{Name: "prod", Bundle: "b1", Version: "1.4.0", IncomingBundle: "b2", IncomingVersion: "1.5.0",
+			State: "Pending", BlockedBy: []string{"no-weekend"}, Since: &since},
+	}
+	gate := explainGateInstance("demo", "b2", "prod", "no-weekend", "!schedule.isWeekend", false, true,
+		"No deploys on weekends (!schedule.isWeekend = false)")
+	gate.Spec.Message = "No deploys on weekends"
+	other := explainGateInstance("demo", "b1", "prod", "no-weekend", "!schedule.isWeekend", false, true, "old")
+	objs := []sigs_client.Object{p, gate, other,
+		explainBundle("b1", "Verified", since.Time), explainBundle("b2", "Promoting", since.Time),
+		explainStep("demo", "b2", "test", "Failed", "", since.Time)}
 
-	assert.Contains(t, out, "Active bundle(s): b2\n")
-	assert.Contains(t, out, "REGION")
-	assert.Regexp(t, `\n  prod +eu-west-1 +b2 +Live`, out)
-	assert.Regexp(t, `\n▶ prod +us-east-1 +b2 +Promoting`, out)
-	assert.Regexp(t, `\n  test +- +b2 +Live`, out)
-	assert.Equal(t, 3, strings.Count(out, "\n  prod")+strings.Count(out, "\n▶ prod")+strings.Count(out, "\n  test"),
-		"b1's steps are not listed:\n%s", out)
+	out := runStatusPipeline(t, objs...)
+	assert.True(t, strings.HasPrefix(out, "Pipeline: demo   Namespace: default\n"+p.Status.Summary+"\n\n"), out)
+	assert.Equal(t, []map[string]string{
+		{"ENVIRONMENT": "test", "RUNNING": "b2 (1.5.0)", "INCOMING": "-", "STATE": "Live", "SINCE": "1h", "PR": "-"},
+		{"ENVIRONMENT": "prod", "RUNNING": "b1 (1.4.0)", "INCOMING": "b2 (1.5.0)", "STATE": "Held by gate no-weekend", "SINCE": "1h", "PR": "-"},
+	}, statusRows(t, out), out)
+	gates := parseTable(strings.SplitN(blockingGates(out), "\n", 2)[1])
+	require.Len(t, gates, 1, "only the incoming Bundle's gate:\n%s", out)
+	assert.Equal(t, "No deploys on weekends", gates[0]["REASON"])
+
+	globalOutput = "json"
+	t.Cleanup(func() { globalOutput = "" })
+	var view pipelineStatus
+	require.NoError(t, json.Unmarshal([]byte(runStatusPipeline(t, objs...)), &view))
+	assert.Equal(t, "controller", view.Source)
+	assert.Equal(t, p.Status.Environments, view.Environments)
+	assert.Equal(t, "Pending", view.Environments[1].State, "API values")
+	require.Len(t, view.BlockingGates, 1)
+	view.BlockingGates[0].LastEvaluatedAt = nil
+	assert.Equal(t, statusGate{Name: "no-weekend", Instance: gate.Name, Environment: "prod", Bundle: "b2",
+		Expression: "!schedule.isWeekend", Message: "No deploys on weekends",
+		Reason: "No deploys on weekends (!schedule.isWeekend = false)"}, view.BlockingGates[0])
 }
 
-// E2E-R02, E2E-R11: status describes the same current Bundle as explain. A
-// Superseded Bundle's gate instances never hide the newest Bundle's steps,
-// and a Bundle held at a skip-permission gate shows that gate as blocking.
+// Without status.environments (a controller that predates them), status
+// computes them with the controller's projection; SINCE is known only for a
+// live environment, and -o json says the CLI computed them.
+func TestStatusPipelineWriter_OlderController(t *testing.T) {
+	recent := time.Now().Add(-time.Hour)
+	verified := explainStep("demo", "b1", "test", "Verified", "", recent)
+	verified.Status.Conditions = []metav1.Condition{{Type: "Verified", Status: metav1.ConditionTrue, LastTransitionTime: metav1.NewTime(recent)}}
+	objs := []sigs_client.Object{policyPipeline("demo", "test", "prod"), explainBundle("b1", "Promoting", recent),
+		verified, explainStep("demo", "b1", "prod", "HealthChecking", "", recent)}
+	out := runStatusPipeline(t, objs...)
+	assert.Equal(t, []map[string]string{
+		{"ENVIRONMENT": "test", "RUNNING": "b1", "INCOMING": "-", "STATE": "Live", "SINCE": "1h", "PR": "-"},
+		// Its change landed in prod: it runs there while its health is checked.
+		{"ENVIRONMENT": "prod", "RUNNING": "b1", "INCOMING": "-", "STATE": "Checking health", "SINCE": "-", "PR": "-"},
+	}, statusRows(t, out), out)
+	assert.Contains(t, out, "Live in test; checking health in prod\n")
+
+	globalOutput = "json"
+	t.Cleanup(func() { globalOutput = "" })
+	var view pipelineStatus
+	require.NoError(t, json.Unmarshal([]byte(runStatusPipeline(t, objs...)), &view))
+	assert.Equal(t, "cli", view.Source)
+	require.Len(t, view.Environments, 2)
+	assert.Nil(t, view.Environments[1].Since)
+	assert.Empty(t, view.BlockingGates)
+}
+
+// E2E-R02, E2E-R11: status describes the environments as the UI does. A
+// Superseded Bundle's gate instances never hide the newest Bundle, and a
+// Bundle held at a skip-permission gate shows that gate as blocking.
 func TestStatusPipelineWriter_CurrentBundle(t *testing.T) {
 	old := time.Now().Add(-18 * time.Hour)
 	recent := time.Now().Add(-17 * time.Minute)
@@ -331,10 +414,12 @@ func TestStatusPipelineWriter_CurrentBundle(t *testing.T) {
 			explainStep("demo", "kardinal-test-app-9tptr", "prod", "Verified", "", recent),
 			explainGateInstance("demo", "kardinal-test-app-9tptr", "prod", "require-uat-soak", "true", true, true, "x"),
 		)
-		assert.Contains(t, out, "Active bundle(s): kardinal-test-app-9tptr\n")
-		assert.Regexp(t, `\n  prod +- +kardinal-test-app-9tptr +Live`, out)
-		assert.Regexp(t, `\n  uat +- +kardinal-test-app-9tptr +Live`, out)
-		assert.Regexp(t, `\n  test +- +kardinal-test-app-9tptr +Live`, out)
+		for _, r := range statusRows(t, out) {
+			assert.Equal(t, "kardinal-test-app-9tptr", r["RUNNING"], out)
+			assert.Equal(t, "-", r["INCOMING"], out)
+			assert.Equal(t, "Live", r["STATE"], out)
+		}
+		assert.Empty(t, blockingGates(out))
 	})
 
 	// The Graph creates every gate instance when the Bundle starts: b2 failed
@@ -351,11 +436,11 @@ func TestStatusPipelineWriter_CurrentBundle(t *testing.T) {
 			explainGateInstance("demo", "b2", "prod", "no-weekend-deploys", "!schedule.isWeekend", false, true,
 				"!schedule.isWeekend = false"),
 		)
-		assert.Contains(t, out, "Active bundle(s): b1, b2\n")
-		assert.Regexp(t, `\n  test +- +b2 +Failed`, out)
-		assert.Regexp(t, `\n  uat +- +b1 +Live`, out)
-		assert.Regexp(t, `\n  prod +- +b1 +Live`, out)
-		assert.NotContains(t, out, "Blocking Policy Gates")
+		rows := statusRows(t, out)
+		assert.Equal(t, map[string]string{"ENVIRONMENT": "test", "RUNNING": "b1", "INCOMING": "b2", "STATE": "Failed", "SINCE": "-", "PR": "-"}, rows[0], out)
+		assert.Equal(t, "Live", rows[1]["STATE"], out)
+		assert.Equal(t, "Live", rows[2]["STATE"], out)
+		assert.Empty(t, blockingGates(out))
 		assert.NotContains(t, out, "no-weekend-deploys")
 	})
 
@@ -375,33 +460,26 @@ func TestStatusPipelineWriter_CurrentBundle(t *testing.T) {
 			skip,
 			explainGateInstance("demo", "gapa-e2e2-wbptb", "prod", "gapa-predeploy-freeze", "true", true, true, "ok"),
 		)
-		assert.Contains(t, out, "Active bundle(s): gapa-e2e2-wbptb\n")
-		_, gateSection, found := strings.Cut(out, "Blocking Policy Gates")
-		require.True(t, found, out)
+		gateSection := blockingGates(out)
+		require.NotEmpty(t, gateSection, out)
 		assert.Contains(t, gateSection, "gapa-allow-stage-skip")
 		assert.NotContains(t, gateSection, "gapa-predeploy-freeze", "a passing gate does not block")
-		assert.NotContains(t, out, "terminal state")
 	})
 }
 
-func TestStatusPipelineWriter_TerminalSteps(t *testing.T) {
-	for _, state := range []string{"Verified", "Failed", "AbortedByAlarm", "RollingBack"} {
+// Every step state reads as words in STATE.
+func TestStatusPipelineWriter_StepStates(t *testing.T) {
+	for _, state := range []string{"Verified", "Failed", "AbortedByAlarm", "RollingBack", "HealthChecking", "Promoting"} {
 		t.Run(state, func(t *testing.T) {
 			out := runStatusPipeline(t,
 				policyPipeline("demo", "test", "prod"),
 				explainBundle("b1", "Promoting", time.Now().Add(-time.Hour)),
 				explainStep("demo", "b1", "prod", state, "", time.Now().Add(-time.Hour)),
 			)
-			assert.Contains(t, out, stepLabel(state))
-			assert.Contains(t, out, "terminal state")
+			assert.Equal(t, stepLabel(state), statusRows(t, out)[1]["STATE"], out)
+			assertNoRawStates(t, out)
 		})
 	}
-	out := runStatusPipeline(t,
-		policyPipeline("demo", "test", "prod"),
-		explainBundle("b1", "Promoting", time.Now().Add(-time.Hour)),
-		explainStep("demo", "b1", "prod", "HealthChecking", "", time.Now().Add(-time.Hour)),
-	)
-	assert.NotContains(t, out, "terminal state")
 }
 
 // C09b-cli-19: the summary reads the version from --controller-namespace,

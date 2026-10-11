@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -92,8 +91,7 @@ func TestHeldEnvironments(t *testing.T) {
 		out := runStatusPipeline(t, policyPipeline("demo", "uat", "prod"),
 			explainBundle("b2", "Promoting", recent),
 			explainStep("demo", "b2", "uat", "Verified", "", recent), step, gate)
-		steps, _, _ := strings.Cut(out, "Deployed")
-		assert.Contains(t, steps, "Held by gate no-weekend-deploys", out)
+		assert.Equal(t, "Held by gate no-weekend-deploys", statusRows(t, out)[1]["STATE"], out)
 		assertNoRawStates(t, out)
 	})
 
@@ -106,8 +104,6 @@ func TestHeldEnvironments(t *testing.T) {
 			explainStep("demo", "b2", "uat", "Verified", "", recent),
 			explainStep("demo", "b2", "prod", "Pending", "", recent)}
 		out := runStatusPipeline(t, objs...)
-		steps, _, found := strings.Cut(out, "Deployed")
-		require.True(t, found, out)
-		assert.Contains(t, steps, "Held by rollback", out)
+		assert.Equal(t, "Held by rollback", statusRows(t, out)[1]["STATE"], out)
 	})
 }

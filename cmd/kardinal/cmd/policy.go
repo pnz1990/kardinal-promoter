@@ -24,7 +24,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -36,6 +35,8 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
+
+	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 )
 
 func newPolicyCmd() *cobra.Command {
@@ -200,7 +201,7 @@ func isGateInstance(g v1alpha1.PolicyGate) bool {
 // formatPolicyGateTable writes the policy list table of the templates gates;
 // instances are the gate instances their LAST-EVALUATED is read from.
 func formatPolicyGateTable(w io.Writer, gates, instances []v1alpha1.PolicyGate) error {
-	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+	tw := style.NewTable(w, 3)
 	if _, err := fmt.Fprintln(tw, "NAME\tNAMESPACE\tSCOPE\tAPPLIES-TO\tRECHECK\tCEL\tLAST-EVALUATED"); err != nil {
 		return fmt.Errorf("write policy list header: %w", err)
 	}
@@ -466,7 +467,7 @@ func policySimulateFn(w io.Writer, c sigs_client.Client, ns string, opts simulat
 		return fmt.Errorf("write result: %w", err)
 	}
 
-	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+	tw := style.NewTable(w, 3)
 	for _, r := range results {
 		status := "PASS"
 		if !r.pass {
@@ -682,7 +683,7 @@ func policyTestFn(w io.Writer, filename string, now time.Time) error {
 			return err
 		} else if invalid {
 			syntaxErrors++
-			fmt.Fprintf(&out, "  Syntax: INVALID — %s\n\n", msg)
+			fmt.Fprintf(&out, "  Syntax: INVALID: %s\n\n", msg)
 			continue
 		}
 		out.WriteString("  Syntax: valid\n")

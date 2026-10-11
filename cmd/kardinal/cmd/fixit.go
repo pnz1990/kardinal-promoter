@@ -38,7 +38,7 @@ import (
 
 // hintClient is the client the error hints read the cluster with
 // (buildClient); a test replaces it.
-var hintClient = buildClient
+var hintClient = func() (sigs_client.Client, string, error) { return buildClient() }
 
 // installHint is the command that installs kardinal-promoter.
 const installHint = "helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter -n kardinal-system --create-namespace"
