@@ -12,7 +12,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 #### From v0.10.0
 
-Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/kardinal-promoter/upgrade/#upgrading-from-v0100): take the `kardinal.io/referenceable` label off the controller's SCM token Secret, apply the new CRDs with `kubectl apply --server-side --force-conflicts` (they add the Pipeline and Bundle printer columns and status fields), then `helm upgrade --reset-then-reuse-values`. kro is unchanged.
+Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/kardinal-promoter/upgrade/#upgrading-from-v0100): take the `kardinal.io/referenceable` label off the controller's SCM token Secret, move NotificationHook Authorization headers into Secrets, apply the new CRDs with `kubectl apply --server-side --force-conflicts` (they add the Pipeline and Bundle printer columns and status fields), then `helm upgrade --reset-then-reuse-values`. kro is unchanged.
 
 1. **The controller's SCM token Secret is not referenceable.** A Pipeline whose `git.secretRef` names it is `Ready=False` (`ValidationFailed`); give it a Secret of its own (see Added).
 2. **A chart Bundle with a `configRef` is refused.** Create a separate config Bundle for the config (see Changed).
@@ -20,6 +20,19 @@ Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/ka
 4. **Roles you wrote for the UI** need `update` on `bundles/reject` to reject a version; the chart's promoter, approver and admin roles have it.
 5. **Chart values:** `scm.secretRef` and `scm.token` set the controller's token; setting one of them and its `github.*` name to different values fails the install.
 6. **Scripts that read a gate's version read `status.bundleVersion`.** A gate's `status.reason` is a sentence for people that ends with the version, `(version <v>)` or `; version <v>)` after the gate's message; `status.bundleVersion` holds the version (see Changed).
+7. **NotificationHook `spec.webhook.authorizationHeader` is removed.** The API server drops it, and the hook posts without the header. Before you upgrade, move each value into a Secret: `kubectl -n <ns> create secret generic <hook>-auth --from-literal=authorization='<value>'`, `kubectl -n <ns> label secret <hook>-auth kardinal.io/referenceable=true`, then `kubectl -n <ns> patch notificationhook <hook> --type json -p '[{"op":"remove","path":"/spec/webhook/authorizationHeader"},{"op":"add","path":"/spec/webhook/secretRef","value":{"name":"<hook>-auth"}}]'`. The guide's step 3 does this for every hook.
+8. **The fields v0.10.0 deprecated are removed.** The API server drops them from stored objects and refuses them in new ones (`kubectl apply` reports `unknown field`); `kardinal validate` names each with its path. Each and its replacement:
+    - Pipeline `spec.policyGates`: label org PolicyGates with `kardinal.io/applies-to`.
+    - Pipeline `spec.git.provider`: the controller's `--scm-provider`, or `spec.git.providerRef`.
+    - `environments[].shard`: none; split controllers by namespace with `controller.namespaceShard`.
+    - `environments[].steps` and `environments[].promotionTemplate`: none; the step sequence follows the Bundle type, and `environments[].hooks` run your own Jobs around it.
+    - `environments[].regions`: one environment per region (`prod-us`, `prod-eu`) with `wave`, or a fleet.
+    - `health.cluster` (environments and fleet targets): `health.kubeconfigSecretRef`, or the Argo CD or Flux Application in the hub.
+    - PolicyGate `spec.selector`: the `kardinal.io/applies-to` label.
+    - PolicyGate `spec.when`: none; every gate is re-checked before its step starts.
+    - PromotionStep `spec.region`: none (kardinal never set it).
+9. **`kardinal rollback --emergency` is removed.** Use `kardinal override` to pass a blocking gate; the flag is an unknown flag.
+10. **Chart values `validatingAdmissionPolicy` and `rbac.integrationTestJobs` are removed**, and the values schema refuses them. If `helm get values` shows one, add `--set validatingAdmissionPolicy=null` or `--set rbac.integrationTestJobs=null` to the `helm upgrade --reset-then-reuse-values` command. The chart always ships its admission policies and grants the hooks' Job access.
 
 ### Added
 
@@ -65,6 +78,10 @@ Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/ka
 - **CLI output fits where it goes** — on a terminal every state shows its glyph and the UI's status colour, read from the design tokens: Live in spruce, Promoting in thread red, Waiting for PR merge in dusk blue, Held by gate in ochre, Failed on garnet (the only filled state). The exact token colours need `COLORTERM=truecolor` and a `COLORFGBG` that names the background; otherwise the nearest ANSI colours, which the terminal theme adapts. Piped output, `NO_COLOR` and `TERM=dumb` get plain words: no colour, no glyphs. The cluster's messages pass through as they are with a UTF-8 locale; without one, or with `TERM=dumb`, output is ASCII only (dashes and arrows fold to `-` and `->`). `kardinal status` shows a REGION column when an environment has a region or a remote cluster, and `-o wide` adds ACTIVE STEP. On Windows colour needs a console with virtual-terminal processing. `ERROR:` and `WARNING:` notices are coloured too. `doctor` marks checks `PASS`, `WARN` or `FAIL` (✓ ! ✕ on a terminal), `validate` prints `<file> is valid`, and `logs -f` prints `->`
 - **`kardinal status <pipeline>` shows one row per environment** — what runs there, a newer version on its way in, its state in words and since when, and its PR, after the Pipeline's summary sentence; then the gates holding a version back. Its columns are ENVIRONMENT, RUNNING, INCOMING, STATE, SINCE and PR; REGION, after ENVIRONMENT, appears for a multi-cluster pipeline (an environment with a region or a remote cluster), and `-o wide` adds ACTIVE STEP. It reads the Pipeline's `status.environments` and `status.summary`, the projection the UI shows, and computes them with the controller's code only for a controller that predates them. `kardinal explain` shows the steps, what is deployed, the gates and where the rest of a mixed image and config environment came from. `kardinal get pipelines` reads the same projection for its environment cells, so an environment shows its own state, not the cancelled step of a Rejected Bundle
 - **A refused UI action names the role that grants it** — the UI API's `403` for an action on a virtual subresource (`pipelines/pause`, `pipelines/hold`, `bundles/reject`, `policygates/override`) ends with the chart role that grants it, for example `; the chart's approver or admin role grants it` ([User roles](guides/security.md#user-roles)). `POST /api/v1/ui/override` writes every instance it can when one fails, and its error names each instance that was overridden and each that was not, with why
+
+### Removed
+
+- **The v0.10.0 deprecations** — the API fields Pipeline `spec.policyGates` and `spec.git.provider`; `environments[].shard`, `steps`, `promotionTemplate`, `regions` and `health.cluster`; PolicyGate `spec.selector` and `spec.when`; NotificationHook `spec.webhook.authorizationHeader`; PromotionStep `spec.region`; the chart values `validatingAdmissionPolicy` and `rbac.integrationTestJobs`; and `kardinal rollback --emergency`. `kardinal validate` reports a removed field as an unknown field with its path, as `kubectl apply` does. Each replacement is in [Before you upgrade](#from-v0100), items 7 to 10 (#1352)
 
 ### Fixed
 

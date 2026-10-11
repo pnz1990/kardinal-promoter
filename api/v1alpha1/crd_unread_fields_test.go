@@ -82,6 +82,7 @@ func assertRejectedWith(t *testing.T, errs []string, want string) {
 // TestCRDDropsRemovedFields: the fields v0.10.0 deprecated and v0.11.0
 // removed are not in the schemas, so the API server refuses them with
 // strict field validation and prunes them from stored objects.
+// Covers API-REMOVED-01.
 func TestCRDDropsRemovedFields(t *testing.T) {
 	crds := loadCRDs(t)
 	pipeline := crds["Pipeline"].structural.Properties["spec"]
