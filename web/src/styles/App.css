@@ -256,3 +256,29 @@
 }
 .app-dag[data-split] { border-start-end-radius: 0; border-end-end-radius: 0; }
 .app-tab .promotion-errors { margin-inline: 0; }
+
+/* ── Narrow screens (below the md breakpoint; App sets data-narrow from tokens.ts) ──
+   The pipeline list is a drawer over the page, opened from the top bar; the main
+   panel takes the full width. */
+.app[data-narrow] .app-sidebar {
+  position: fixed;
+  inset-block: 0;
+  inset-inline-start: 0;
+  z-index: var(--k-z-drawer);
+  inline-size: min(var(--k-layout-rail-expanded), 85vw);
+  box-shadow: var(--k-elev-2);
+}
+.app[data-narrow] .app-sidebar[hidden] { display: none; }
+.app-sidebar-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--k-z-drawer);
+  background: color-mix(in oklab, var(--k-surface-sunken) 72%, transparent);
+}
+.app[data-narrow] .app-topbar { padding-inline: var(--k-space-3); gap: var(--k-space-2); }
+.app[data-narrow] .app-topbar__search { min-inline-size: 0; }
+.app[data-narrow] .app-topbar__search > span,
+.app[data-narrow] .app-topbar__search kbd { display: none; }
+.app[data-narrow] .app-pipeline-head,
+.app[data-narrow] .app-map-head { padding-inline: var(--k-space-3); }
+.app[data-narrow] .app-content { padding-inline: var(--k-space-3); }

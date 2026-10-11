@@ -16,7 +16,7 @@
 // #746: Global keyboard shortcuts — ?, r, Esc.
 // #747: ErrorBoundary wraps async components to prevent white-screen crashes.
 // #800: / shortcut to focus pipeline search input.
-import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect, type RefObject } from 'react'
 import { PipelineList } from './components/PipelineList'
 import { PipelineOpsTable } from './components/PipelineOpsTable'
 import { DAGView } from './components/DAGView'
@@ -29,6 +29,8 @@ import { Breadcrumb } from './components/Breadcrumb'
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
 import { Icon, Kbd, TabPanel, Tabs } from './ui'
 import { NotFound } from './components/NotFound'
+import { NARROW_QUERY, useMediaQuery } from './useMediaQuery'
+import { useModalFocus } from './useModalFocus'
 import { displayState } from './displayStates.gen'
 import { versionName } from './versionName'
 import { BundleTimeline } from './components/BundleTimeline'
@@ -82,6 +84,12 @@ function gatedEnvironment(node: GraphNode, graph: { nodes?: GraphNode[]; edges?:
   const to = graph?.edges?.filter(e => e.from === node.id).map(e => graph.nodes?.find(n => n.id === e.to))
     .find(n => n?.type === 'PromotionStep')
   return to?.environment
+}
+
+/** Focus handling for the pipeline drawer while it is open (Esc closes it). */
+function SidebarFocus({ sidebarRef, onClose }: { sidebarRef: RefObject<HTMLElement | null>; onClose: () => void }) {
+  useModalFocus(sidebarRef, onClose)
+  return null
 }
 
 export function App() {
@@ -502,6 +510,32 @@ export function App() {
   // Use the bundle graph when available; fall back to static topology (#525).
   const displayGraph = graph ?? staticGraph
 
+  // Below the md breakpoint the pipeline list is a drawer, so the page gets the full width.
+  const narrow = useMediaQuery(NARROW_QUERY)
+  const [navOpen, setNavOpen] = useState(false)
+  const sidebarRef = useRef<HTMLElement>(null)
+  const navButtonRef = useRef<HTMLButtonElement>(null)
+  const closeNav = useCallback(() => {
+    setNavOpen(false)
+    navButtonRef.current?.focus()
+  }, [])
+  // Going somewhere closes the drawer.
+  useEffect(() => { setNavOpen(false) }, [urlState.pipeline, urlState.ns, urlState.env, urlState.view, viewMode])
+  const navButton = narrow ? (
+    <button
+      ref={navButtonRef}
+      type="button"
+      className="k-icon-button k-icon-button--md app-topbar__nav"
+      aria-label="Pipelines"
+      title="Pipelines"
+      aria-expanded={navOpen}
+      aria-controls="app-sidebar"
+      onClick={() => setNavOpen(o => !o)}
+    >
+      <Icon name="menu" />
+    </button>
+  ) : null
+
   // #913: Insecure connection warning — plain HTTP from a non-loopback address.
   // It heads every main view, so it shows before any pipeline loads (the API
   // may refuse the page's requests outright).
@@ -553,7 +587,7 @@ export function App() {
     handleSelectPipeline, handleTimelineBundleSelect, toggleTheme, setDensity, manualRefresh, setViewMode])
 
   return (
-    <div className="app">
+    <div className="app" data-narrow={narrow ? '' : undefined}>
       {/* The first Tab stop: past the sidebar to the main content. */}
       <a className="skip-link" href="#main-content"
         onClick={e => { e.preventDefault(); document.getElementById('main-content')?.focus() }}>
@@ -564,8 +598,16 @@ export function App() {
         <KeyboardShortcutsPanel onClose={() => setShowShortcutsPanel(false)} />
       )}
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={paletteCommands} />
-      {/* Sidebar */}
-      <aside className="app-sidebar">
+      {/* Sidebar; below the md breakpoint a drawer over the page, opened from the top bar. */}
+      {narrow && navOpen && <SidebarFocus sidebarRef={sidebarRef} onClose={closeNav} />}
+      {narrow && navOpen && <div className="app-sidebar-scrim" aria-hidden="true" onClick={closeNav} />}
+      <aside
+        ref={sidebarRef}
+        id="app-sidebar"
+        className="app-sidebar"
+        data-open={narrow && navOpen ? '' : undefined}
+        {...(narrow ? { role: 'dialog', 'aria-modal': navOpen || undefined, 'aria-label': 'Pipelines', hidden: !navOpen } : {})}
+      >
         <div className="app-sidebar__brandbar">
           {/* Brand: logo + wordmark; it opens the fleet board. */}
           <button
@@ -666,8 +708,9 @@ export function App() {
       {viewMode === 'ops-table' ? (
         <main id="main-content" tabIndex={-1} className="app-main app-main--ops">
           <div className="app-topbar">
+            {navButton}
             <Breadcrumb route={urlState} namespace={activePipeline?.namespace} />
-            <button type="button" className="app-topbar__search" onClick={() => setPaletteOpen(true)}>
+            <button type="button" className="app-topbar__search" aria-label="Go to or do… ⌘K" onClick={() => setPaletteOpen(true)}>
               <Icon name="search" />
               <span>Go to or do…</span>
               <Kbd>⌘K</Kbd>
@@ -687,8 +730,9 @@ export function App() {
         <>{/* Main area — column layout for header + content row */}
         <main id="main-content" tabIndex={-1} className="app-main">
           <div className="app-topbar">
+            {navButton}
             <Breadcrumb route={urlState} namespace={activePipeline?.namespace} />
-            <button type="button" className="app-topbar__search" onClick={() => setPaletteOpen(true)}>
+            <button type="button" className="app-topbar__search" aria-label="Go to or do… ⌘K" onClick={() => setPaletteOpen(true)}>
               <Icon name="search" />
               <span>Go to or do…</span>
               <Kbd>⌘K</Kbd>
