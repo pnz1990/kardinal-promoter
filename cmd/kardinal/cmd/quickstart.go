@@ -378,21 +378,25 @@ func envProxy(server string) (variable, proxy string) {
 	}
 	for _, n := range names {
 		if os.Getenv(n) != "" {
-			return n, redactProxy(os.Getenv(n))
+			return n, redactProxy(p)
 		}
 	}
-	return names[0], redactProxy(p.String())
+	return names[0], redactProxy(p)
 }
 
-// redactProxy is a proxy URL without its password.
-func redactProxy(raw string) string {
-	if u, err := url.Parse(raw); err == nil && u.User != nil {
-		if _, ok := u.User.Password(); ok {
-			u.User = url.UserPassword(u.User.Username(), "xxxxx")
-			return u.String()
+// redactProxy is proxy URL p, as Go parsed it from the environment (a
+// schemeless value gets http://), with its credentials masked: the password
+// of user:password, or a username alone, which may be a token.
+func redactProxy(p *url.URL) string {
+	cp := *p
+	if cp.User != nil {
+		if _, ok := cp.User.Password(); ok {
+			cp.User = url.UserPassword(cp.User.Username(), "xxxxx")
+		} else {
+			cp.User = url.User("xxxxx")
 		}
 	}
-	return raw
+	return cp.String()
 }
 
 // quickstartClient is the cluster client of quickstart, from the kubeconfig

@@ -548,6 +548,22 @@ func TestQuickstart_NoEnvironmentProxy(t *testing.T) {
 			assert.NotContains(t, err.Error(), "secret", "the proxy password is not printed")
 		})
 	}
+	// The credentials are masked in the proxy Go parsed, also for a value
+	// without a scheme and for a username alone (a token).
+	for value, want := range map[string]string{
+		"user:p4ss@proxy.corp:3128": "HTTPS_PROXY=http://user:xxxxx@proxy.corp:3128 applies",
+		"http://tok3n@proxy":        "HTTPS_PROXY=http://xxxxx@proxy applies",
+	} {
+		writeKubeconfig(t, "k3d-demo", "https://0.0.0.0:6443")
+		noCluster(t)
+		t.Setenv("HTTPS_PROXY", value)
+		_, _, err := requireLocalContext()
+		require.ErrorIs(t, err, errNotLocal, value)
+		assert.Contains(t, err.Error(), want)
+		assert.NotContains(t, err.Error(), "p4ss")
+		assert.NotContains(t, err.Error(), "tok3n")
+	}
+
 	// quickstartFn stops there too, before any cluster call or tool.
 	writeKubeconfig(t, "k3d-demo", "https://0.0.0.0:6443")
 	noCluster(t)
