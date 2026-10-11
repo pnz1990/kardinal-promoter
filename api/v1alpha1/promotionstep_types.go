@@ -497,7 +497,7 @@ type PromotionStepStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=ps
+// +kubebuilder:resource:scope=Namespaced,shortName=ps,categories=kardinal-all
 // +kubebuilder:printcolumn:name="Pipeline",type=string,JSONPath=`.spec.pipelineName`
 // +kubebuilder:printcolumn:name="Env",type=string,JSONPath=`.spec.environment`
 // +kubebuilder:printcolumn:name="Bundle",type=string,JSONPath=`.spec.bundleName`

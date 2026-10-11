@@ -129,7 +129,7 @@ type PRStatusStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=prs
+// +kubebuilder:resource:scope=Namespaced,shortName=prs,categories=kardinal-all
 // +kubebuilder:printcolumn:name="Merged",type=boolean,JSONPath=`.status.merged`
 // +kubebuilder:printcolumn:name="Open",type=boolean,JSONPath=`.status.open`
 // +kubebuilder:printcolumn:name="Approved",type=boolean,JSONPath=`.status.approved`

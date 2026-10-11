@@ -236,7 +236,7 @@ type NotificationHookStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=nhook
+// +kubebuilder:resource:scope=Namespaced,shortName=nhook,categories=kardinal;kardinal-all
 // +kubebuilder:printcolumn:name="URL",type=string,JSONPath=`.spec.webhook.url`
 // +kubebuilder:printcolumn:name="Format",type=string,JSONPath=`.spec.format`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`

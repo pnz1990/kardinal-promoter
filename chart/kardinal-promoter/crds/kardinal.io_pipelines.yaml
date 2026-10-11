@@ -8,6 +8,9 @@ metadata:
 spec:
   group: kardinal.io
   names:
+    categories:
+    - kardinal
+    - kardinal-all
     kind: Pipeline
     listKind: PipelineList
     plural: pipelines
@@ -17,12 +20,19 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .status.summary
+      name: Summary
+      type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
     - jsonPath: .spec.paused
       name: Paused
       type: boolean
+    - jsonPath: .status.environmentSummary
+      name: Envs
+      priority: 1
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -1852,6 +1862,84 @@ spec:
                       Until a Bundle is Verified there, deploymentMetrics is not set at all.
                     type: integer
                 type: object
+              environmentSummary:
+                description: |-
+                  EnvironmentSummary is Environments as one line, environment=version
+                  ("test=1.5.0 uat=1.5.0 prod=1.4.0"; "-" where nothing runs yet), for
+                  the wide printer column. Display only.
+                type: string
+              environments:
+                description: |-
+                  Environments is, per environment in spec order (a fleet environment
+                  expands to its targets), what runs there and where the newest version
+                  stands. Written by the PipelineReconciler from the Bundles,
+                  PromotionSteps and gate instances of the Pipeline. It is a display
+                  projection: no controller decision reads it.
+                items:
+                  description: |-
+                    PipelineEnvironmentStatus is what one environment of a Pipeline runs, and
+                    where the newest version that reached it stands.
+                  properties:
+                    blockedBy:
+                      description: |-
+                        BlockedBy names the gates that hold the newest Bundle back in the
+                        environment, sorted.
+                      items:
+                        type: string
+                      type: array
+                    bundle:
+                      description: |-
+                        Bundle is the Bundle whose change runs in the environment: the newest
+                        one whose change landed there. Empty when none has.
+                      type: string
+                    held:
+                      description: |-
+                        Held is true when a rollback hold (spec.holds) keeps the environment
+                        on Bundle, so the newest Bundle waits.
+                      type: boolean
+                    incomingBundle:
+                      description: |-
+                        IncomingBundle is a newer Bundle on its way into the environment (its
+                        step there is not yet live, or gates hold it before its step exists).
+                        Empty when the newest Bundle there is Bundle.
+                      type: string
+                    incomingVersion:
+                      description: IncomingVersion is what IncomingBundle ships.
+                      type: string
+                    name:
+                      description: Name is the environment name.
+                      type: string
+                    prURL:
+                      description: |-
+                        PRURL is the pull request of the newest Bundle's step while it waits
+                        for its merge.
+                      type: string
+                    since:
+                      description: |-
+                        Since is when State began: the Verified time for Verified, otherwise
+                        when the controller first recorded this Bundle in this State.
+                      format: date-time
+                      type: string
+                    state:
+                      description: |-
+                        State is the PromotionStep state of the newest Bundle in the
+                        environment (IncomingBundle when set, else Bundle), an API value such
+                        as Verified or WaitingForMerge. Pending with BlockedBy set when gates
+                        hold the Bundle before its step exists. Empty when no Bundle reached
+                        the environment.
+                      type: string
+                    version:
+                      description: |-
+                        Version is what Bundle ships: the image tag, "config <sha>" or the
+                        chart version.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               fleets:
                 description: |-
                   Fleets are the resolved targets of each fleet environment that uses a
@@ -2313,6 +2401,12 @@ spec:
                 - Degraded
                 - Promoting
                 - Unknown
+                type: string
+              summary:
+                description: |-
+                  Summary is one sentence on where the Pipeline's versions are, for
+                  example "1.5.0 live in test, uat; waiting for PR merge in prod (#42)".
+                  Written with Environments; display only.
                 type: string
             type: object
         type: object

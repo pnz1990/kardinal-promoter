@@ -104,7 +104,7 @@ func TestExplain_BundleColumnAndDeployed(t *testing.T) {
 	// Color only touches the STATE cell; the BUNDLE column does not shift it.
 	out, err = runExplain(t, policyClient(t, deployedFixture()...), "demo", "prod", true)
 	require.NoError(t, err)
-	assert.Regexp(t, regexp.MustCompile(`prod +b2 +PolicyGate +no-weekend-deploys +\x1b\[[0-9;]*mWaiting\x1b\[0m`), out)
+	assert.Regexp(t, regexp.MustCompile(`prod +b2 +PolicyGate +no-weekend-deploys +\x1b\[[0-9;]*mNot ready\x1b\[0m`), out)
 }
 
 // status names the Bundle of every step row and lists the Bundle deployed in
@@ -112,8 +112,9 @@ func TestExplain_BundleColumnAndDeployed(t *testing.T) {
 func TestStatusPipelineWriter_BundleColumnAndDeployed(t *testing.T) {
 	out := runStatusPipeline(t, deployedFixture()...)
 	assert.Regexp(t, `\nENVIRONMENT +REGION +BUNDLE +STATE +ACTIVE STEP +PR +AGE\n`, out)
-	assert.Regexp(t, `\n  test +- +b2 +Verified`, out)
-	assert.Regexp(t, `\n▶ uat +- +b2 +WaitingForMerge`, out)
+	assert.Regexp(t, `\n  test +- +b2 +Live`, out)
+	assert.Regexp(t, `\n▶ uat +- +b2 +Waiting for PR merge`, out)
+	assertNoRawStates(t, out)
 
 	_, deployed, ok := strings.Cut(out, "\nDeployed\n")
 	require.True(t, ok, out)

@@ -162,8 +162,8 @@ func TestExplain_Rows(t *testing.T) {
 				explainStep("demo", "b1", "prod", "WaitingForMerge", "PR #7 open", recent),
 			},
 			env:      "prod",
-			contains: []string{"prod", "WaitingForMerge", "PR #7 open"},
-			excludes: []string{"Verified", "test "},
+			contains: []string{"prod", "Waiting for PR merge", "PR #7 open"},
+			excludes: []string{"Live", "Verified", "test "},
 		},
 		{
 			name: "unevaluated gate of an environment not reached is Pending",
@@ -172,7 +172,7 @@ func TestExplain_Rows(t *testing.T) {
 				explainStep("demo", "b1", "uat", "Promoting", "", recent),
 				explainGateInstance("demo", "b1", "prod", "uat-soak", "upstream.uat.soakMinutes >= 30", false, false, ""),
 			},
-			contains: []string{"uat-soak", "upstream.uat.soakMinutes >= 30", "Pending"},
+			contains: []string{"uat-soak", "upstream.uat.soakMinutes >= 30", "Not evaluated yet"},
 		},
 		{
 			name: "only the current bundle",
@@ -291,7 +291,7 @@ func TestExplain_Rows(t *testing.T) {
 					"!schedule.isWeekend = false"),
 			},
 			env:      "prod",
-			contains: []string{"no-weekend-deploys", "Waiting"},
+			contains: []string{"no-weekend-deploys", "Not ready"},
 			excludes: []string{"b1 verified", "Block"},
 		},
 		{
@@ -409,11 +409,11 @@ func TestExplain_GateStates(t *testing.T) {
 			require.NoError(t, err)
 			var state string
 			for _, l := range strings.Split(out, "\n") {
-				if f := strings.Fields(l); len(f) > 4 && f[2] == "PolicyGate" {
+				if f := tableCells(l); len(f) > 4 && f[2] == "PolicyGate" {
 					state = f[4]
 				}
 			}
-			assert.Equal(t, tt.want, state, "gate STATE:\n%s", out)
+			assert.Equal(t, gateLabel(tt.want), state, "gate STATE:\n%s", out)
 		})
 	}
 }
@@ -537,8 +537,8 @@ func TestExplain_ColorOnlyStateColumn(t *testing.T) {
 	out, err := runExplain(t, c, "demo", "", true)
 	require.NoError(t, err)
 	assert.Contains(t, out, ansiYellow+"Promoting"+ansiReset)
-	assert.Contains(t, out, ansiGreen+"Verified"+ansiReset)
-	assert.Contains(t, out, ansiGreen+"Pass"+ansiReset)
+	assert.Contains(t, out, ansiGreen+"Live"+ansiReset)
+	assert.Contains(t, out, ansiGreen+"Passing"+ansiReset)
 	assert.Equal(t, 3, strings.Count(out, ansiReset), "exactly the three STATE cells are colored:\n%q", out)
 	assert.Contains(t, out, "push Failed once, retrying")
 	assert.Contains(t, out, "bundle.type != 'Block'")
