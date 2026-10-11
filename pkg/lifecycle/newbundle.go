@@ -33,7 +33,7 @@ func ValidateNewBundle(spec *v1alpha1.BundleSpec) error {
 		return fmt.Errorf("pipeline must be a valid Kubernetes object name of at most 63 characters")
 	}
 	if spec.Type == "" {
-		spec.Type = "image"
+		spec.Type = InferBundleType(spec)
 	}
 	switch spec.Type {
 	case "image", "config", "mixed", "chart":
@@ -55,4 +55,21 @@ func ValidateNewBundle(spec *v1alpha1.BundleSpec) error {
 		}
 	}
 	return nil
+}
+
+// InferBundleType is the type of a Bundle whose spec.type is unset, from
+// what it carries: chart for spec.chart, mixed for images and a configRef,
+// config for a configRef alone, else image (POST /api/v1/bundles; the CRD
+// still requires the field, so it is set before the Bundle is created).
+func InferBundleType(spec *v1alpha1.BundleSpec) string {
+	switch {
+	case spec.Chart != nil:
+		return "chart"
+	case spec.ConfigRef != nil && len(spec.Images) > 0:
+		return "mixed"
+	case spec.ConfigRef != nil:
+		return "config"
+	default:
+		return "image"
+	}
 }
