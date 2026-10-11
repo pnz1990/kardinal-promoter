@@ -652,11 +652,13 @@ func TestFormatPipelineTable_CurrentBundleState(t *testing.T) {
 		},
 		{
 			// QA #1489: a Rejected bundle whose change is live stays current,
-			// marked Rejected, with a roll-back hint.
+			// marked Rejected, with a roll-back hint. Its cancelled step in
+			// stage is not stage's state (status.environments: b1 runs
+			// there), so the row shows nothing there.
 			name:    "a rejected change that is live stays current, marked Rejected",
 			bundles: []v1alpha1.Bundle{bundle("app-b1", "Verified", old), rejectedB(bundle("app-b2", "Rejected", recent))},
 			steps:   b1Everywhere(step("app-b2", "dev", "Verified", recent), step("app-b2", "stage", "Failed", recent)),
-			want:    map[string]string{"BUNDLE": "app-b2(Rejected)", "DEV": "Verified", "STAGE": "Failed", "PROD": "-"},
+			want:    map[string]string{"BUNDLE": "app-b2(Rejected)", "DEV": "Verified", "STAGE": "-", "PROD": "-"},
 			hint:    "WARNING: pipeline app: bundle app-b2 is Rejected in dev: rejected change is live; roll back (kardinal rollback app --env dev)",
 		},
 		{
@@ -975,7 +977,7 @@ func TestFormatBundleErrors_OnlyCauseConditions(t *testing.T) {
 		}, `pipeline "web" not found`},
 		{"no cause condition", []metav1.Condition{
 			cond("GraphSynced", "Synced", "graph is current"),
-		}, "promotion failed — run `kubectl describe bundle web-1` for details"},
+		}, "promotion failed; run `kubectl describe bundle web-1` for details"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -20,7 +20,7 @@ test.describe('Journey 001 — Pipeline list', () => {
   test('Step 2: Click pipeline shows DAG view', async ({ page }) => {
     await page.getByText('kardinal-test-app').first().click()
     // DAG SVG should become visible
-    await expect(page.locator('svg')).toBeVisible()
+    await expect(page.locator('svg.dag-view__svg')).toBeVisible()
   })
 
   test('Step 3: Selected pipeline is highlighted in sidebar', async ({ page }) => {
@@ -66,7 +66,7 @@ test.describe('Journey 001 — UI security headers', () => {
 
     await page.getByText('kardinal-test-app').first().click()
     await page.getByRole('button', { name: /test — /i }).click()
-    await expect(page.locator('[data-testid="node-detail"]').first()).toBeVisible()
+    await expect(page.getByTestId('stage-drawer')).toBeVisible()
 
     const violations = await page.evaluate(() => (window as unknown as { cspViolations: string[] }).cspViolations)
     expect(violations).toEqual([])

@@ -7,7 +7,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -16,6 +15,8 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+
+	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 )
 
 func newMetricsCmd() *cobra.Command {
@@ -77,7 +78,7 @@ func metricsFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 	var p v1alpha1.Pipeline
 	if err := c.Get(ctx, sigs_client.ObjectKey{Name: pipeline, Namespace: ns}, &p); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("pipeline %q not found in namespace %q", pipeline, ns)
+			return pipelineNotFound(ctx, c, ns, pipeline)
 		}
 		return fmt.Errorf("get pipeline %q: %w", pipeline, err)
 	}
@@ -208,7 +209,7 @@ func metricsFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 		avgLead = totalLeadTime / time.Duration(leadTimeSamples)
 	}
 
-	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+	tw := style.NewTable(w, 3)
 	_, _ = fmt.Fprintf(tw, "METRIC\tVALUE\tNOTES\n")
 	_, _ = fmt.Fprintf(tw, "pipeline\t%s\t(last %d days)\n", pipeline, days)
 	_, _ = fmt.Fprintf(tw, "target_env\t%s\t\n", env)
@@ -216,7 +217,7 @@ func metricsFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 	_, _ = fmt.Fprintf(tw, "deployment_frequency\t%.2f/day\t(%d verified in target env)\n", deployFreq, deployCount)
 
 	if leadTimeSamples > 0 {
-		_, _ = fmt.Fprintf(tw, "lead_time_avg\t%s\t(creation → %s verified, %d samples)\n",
+		_, _ = fmt.Fprintf(tw, "lead_time_avg\t%s\t(creation to %s verified, %d samples)\n",
 			formatDuration(avgLead), env, leadTimeSamples)
 	} else {
 		_, _ = fmt.Fprintf(tw, "lead_time_avg\t-\t(no completed promotions to %s in window)\n", env)
@@ -248,7 +249,7 @@ func formatDuration(d time.Duration) string {
 // Used when Pipeline.status.deploymentMetrics is populated by the PipelineReconciler.
 func renderFromCRD(w interface{ Write([]byte) (int, error) }, pipelineName, env string,
 	dm *v1alpha1.PipelineDeploymentMetrics, now time.Time) error {
-	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+	tw := style.NewTable(w, 3)
 	_, _ = fmt.Fprintf(tw, "METRIC\tVALUE\tNOTES\n")
 	_, _ = fmt.Fprintf(tw, "pipeline\t%s\t(controller: last %d bundles verified in %s)\n",
 		pipelineName, dm.SampleSize, env)

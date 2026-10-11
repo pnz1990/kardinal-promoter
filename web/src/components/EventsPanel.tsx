@@ -7,6 +7,7 @@
 // #527
 
 import type { StepEvent } from '../types'
+import '../styles/EventsPanel.css'
 
 export type { StepEvent }
 
@@ -41,73 +42,42 @@ export default function EventsPanel({ events, stepName, namespace }: EventsPanel
   const kubectlCmd = `kubectl get events ${kubectlNs} ${kubectlResource}`.trim().replace(/\s+/g, ' ')
 
   return (
-    <div data-testid="events-panel" style={{ marginBottom: '0.75rem' }}>
-      <h4 style={{ fontSize: '0.8rem', color: 'var(--color-text)', marginBottom: '0.4rem' }}>
-        Events {items.length > 0 && <span style={{ color: 'var(--color-text-muted)', fontWeight: 400 }}>({items.length})</span>}
+    <div data-testid="events-panel" className="events-panel">
+      <h4 className="events-panel__title">
+        Events {items.length > 0 && <span className="events-panel__count">({items.length})</span>}
       </h4>
       {items.length === 0 ? (
-        <div
-          data-testid="events-panel-empty"
-          style={{
-            fontSize: '0.75rem',
-            color: 'var(--color-text-faint)',
-            background: 'var(--color-bg)',
-            border: '1px solid var(--color-border-muted)',
-            borderRadius: '4px',
-            padding: '0.5rem 0.75rem',
-            fontStyle: 'italic',
-          }}
-        >
+        <div data-testid="events-panel-empty" className="events-panel__empty">
           No events recorded yet.{' '}
-          <code style={{ fontStyle: 'normal', color: 'var(--color-text-muted)', fontFamily: 'var(--k-font-mono)' }}>{kubectlCmd}</code>
+          <code className="events-panel__cmd">{kubectlCmd}</code>
         </div>
       ) : (
-        <div style={{
-          background: 'var(--color-bg)',
-          border: '1px solid var(--color-border-muted)',
-          borderRadius: '4px',
-          overflow: 'hidden',
-        }}>
+        <div className="events-panel__list">
           {items.map((ev, i) => (
             <div
               key={`${ev.reason}-${i}`}
               data-testid="event-row"
-              style={{
-                padding: '8px 12px',
-                borderBottom: i < items.length - 1 ? '1px solid var(--color-border-muted)' : undefined,
-                borderLeft: ev.type === 'Warning' ? '2px solid var(--color-warning)' : '2px solid transparent',
-              }}
+              className="events-panel__row"
+              data-type={ev.type === 'Warning' ? 'warning' : 'normal'}
             >
               {/* Header row: type badge + reason + count + timestamp */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                <span
-                  data-testid="event-type"
-                  style={{
-                    fontSize: '10px',
-                    fontWeight: 600,
-                    padding: '1px 5px',
-                    borderRadius: '3px',
-                    border: '1px solid',
-                    background: ev.type === 'Warning' ? 'var(--color-warning-bg)' : 'var(--color-success-bg)',
-                    borderColor: ev.type === 'Warning' ? 'var(--color-warning)' : 'var(--color-success)',
-                    color: ev.type === 'Warning' ? 'var(--color-warning)' : 'var(--color-success)',
-                  }}
-                >
+              <div className="events-panel__head">
+                <span data-testid="event-type" className="events-panel__type">
                   {ev.type}
                 </span>
-                <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-text)' }}>
+                <span className="events-panel__reason">
                   {ev.reason}
                 </span>
                 {ev.count > 1 && (
-                  <span style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>×{ev.count}</span>
+                  <span className="events-panel__repeat">×{ev.count}</span>
                 )}
-                <span style={{ fontSize: '11px', color: 'var(--color-text-faint)', fontFamily: 'var(--k-font-mono)', marginLeft: 'auto' }}>
+                <span className="events-panel__time">
                   {relativeTime(ev.lastTimestamp)}
                 </span>
               </div>
               {/* Message row */}
               {ev.message && (
-                <div style={{ fontSize: '12px', color: 'var(--color-text-muted)', marginTop: '3px', lineHeight: 1.4 }}>
+                <div className="events-panel__message">
                   {ev.message}
                 </div>
               )}

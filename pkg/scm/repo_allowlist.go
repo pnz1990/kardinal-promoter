@@ -388,3 +388,18 @@ func PipelineSecretExists(ctx context.Context, reader client.Reader, p *v1alpha1
 		return false, fmt.Errorf("get git.secretRef Secret %s/%s: %w", p.Namespace, ref.Name, err)
 	}
 }
+
+// RemoteNeedsToken reports whether git needs the Pipeline token for remote:
+// an HTTP(S) URL without a password. ssh and file remotes use their own
+// transports, and go-git sends a password in the URL itself.
+func RemoteNeedsToken(remote string) bool {
+	u, err := url.Parse(strings.TrimSpace(remote))
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return false
+	}
+	if u.User == nil {
+		return true
+	}
+	_, hasPassword := u.User.Password()
+	return !hasPassword
+}

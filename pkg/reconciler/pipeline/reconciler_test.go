@@ -44,6 +44,9 @@ func newPipeline(name string, envs []kardinalv1alpha1.EnvironmentSpec) *kardinal
 		Spec: kardinalv1alpha1.PipelineSpec{
 			Git: kardinalv1alpha1.PipelineGit{
 				URL: "https://github.com/myorg/gitops.git",
+				// newClientWithIndex adds this Secret, so git has a
+				// credential unless a test says otherwise.
+				SecretRef: &kardinalv1alpha1.SecretRef{Name: defaultGitSecret},
 			},
 			Environments: envs,
 		},
@@ -223,7 +226,7 @@ func TestPipelineReconciler_SecretRefNamespaceInvalid(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}})
 			p.Spec.Git.SecretRef = &kardinalv1alpha1.SecretRef{Name: "github-token", Namespace: tc.secretNS}
-			c := newClientWithIndex(newScheme(), p)
+			c := newClientWithIndex(newScheme(), p, gitTokenSecret("github-token"))
 			key := types.NamespacedName{Name: "app", Namespace: "default"}
 			_, err := (&pipeline.Reconciler{Client: c}).Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
 			require.NoError(t, err)
@@ -265,8 +268,10 @@ func TestPipelineReconciler_RepositoryNotAllowed(t *testing.T) {
 		{name: "not allowed", allow: allow, url: "https://github.com/other/gitops.git",
 			wantStatus: metav1.ConditionFalse, wantReason: "RepositoryNotAllowed",
 			wantMsg: `spec.git.url "https://github.com/other/gitops.git" is not in the controller's allowed repositories (github.com/myorg/*)`},
+		// The allowlist accepts it; with no git.secretRef git has no token
+		// (P4: GitCredentialMissing, re-checked every minute).
 		{name: "allowed", allow: allow, url: "https://github.com/myorg/gitops.git", prReview: true,
-			wantStatus: metav1.ConditionTrue, wantReason: "Valid"},
+			wantStatus: metav1.ConditionFalse, wantReason: "GitCredentialMissing", wantRequeue: time.Minute},
 		{name: "own Secret, auto only", allow: allow, url: "https://github.com/other/gitops.git", secretRef: true, secret: true,
 			wantStatus: metav1.ConditionTrue, wantReason: "Valid"},
 		{name: "own Secret, pr-review", allow: allow, url: "https://github.com/other/gitops.git", secretRef: true, secret: true,
@@ -276,6 +281,8 @@ func TestPipelineReconciler_RepositoryNotAllowed(t *testing.T) {
 			wantStatus: metav1.ConditionFalse, wantReason: "RepositoryNotAllowed",
 			wantMsg: "no git.secretRef to a Secret that exists", wantRequeue: time.Minute},
 		{name: "unset", url: "https://github.com/other/gitops.git", prReview: true,
+			wantStatus: metav1.ConditionFalse, wantReason: "GitCredentialMissing", wantRequeue: time.Minute},
+		{name: "unset, own Secret", url: "https://github.com/other/gitops.git", prReview: true, secretRef: true, secret: true,
 			wantStatus: metav1.ConditionTrue, wantReason: "Valid"},
 	}
 	for _, tc := range tests {
@@ -285,6 +292,7 @@ func TestPipelineReconciler_RepositoryNotAllowed(t *testing.T) {
 			if tc.prReview {
 				p.Spec.Environments[0].Approval = "pr-review"
 			}
+			p.Spec.Git.SecretRef = nil
 			if tc.secretRef {
 				p.Spec.Git.SecretRef = &kardinalv1alpha1.SecretRef{Name: "team-token"}
 			}
@@ -293,8 +301,7 @@ func TestPipelineReconciler_RepositoryNotAllowed(t *testing.T) {
 			objs := []client.Object{p}
 			if tc.secret {
 				// Labelled, so the SecretReferenceable warning (and its re-check) stays out of this test.
-				objs = append(objs, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "team-token", Namespace: "default",
-					Labels: map[string]string{"kardinal.io/referenceable": "true"}}})
+				objs = append(objs, gitTokenSecret("team-token"))
 			}
 			c := newClientWithIndex(scheme, objs...)
 			key := types.NamespacedName{Name: "app", Namespace: "default"}
@@ -585,7 +592,8 @@ func TestPipelineReconciler_DeletedBeforeStatusWrite(t *testing.T) {
 // the Secret removes the warning; reconciling again changes nothing.
 func TestPipelineReconciler_GitSecretReferenceable(t *testing.T) {
 	secret := func(labels map[string]string) *corev1.Secret {
-		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-token", Namespace: "default", Labels: labels}}
+		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "team-git", Namespace: "default", Labels: labels},
+			Data: map[string][]byte{"token": []byte("t0ken")}}
 	}
 	tests := []struct {
 		name     string
@@ -602,8 +610,12 @@ func TestPipelineReconciler_GitSecretReferenceable(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}})
+			// An ssh remote needs no token, so a missing Secret is not
+			// GitCredentialMissing here: this test is about the label.
+			p.Spec.Git.URL = "ssh://git@github.com/myorg/gitops.git"
+			p.Spec.Git.SecretRef = nil
 			if tc.ref {
-				p.Spec.Git.SecretRef = &kardinalv1alpha1.SecretRef{Name: "git-token"}
+				p.Spec.Git.SecretRef = &kardinalv1alpha1.SecretRef{Name: "team-git"}
 			}
 			objs := []client.Object{p}
 			if tc.secret != nil {
@@ -625,7 +637,8 @@ func TestPipelineReconciler_GitSecretReferenceable(t *testing.T) {
 			require.NotNil(t, cond)
 			assert.Equal(t, metav1.ConditionFalse, cond.Status)
 			assert.Equal(t, "SecretNotReferenceable", cond.Reason)
-			assert.Contains(t, cond.Message, "git Secret git-token is not labeled kardinal.io/referenceable=true")
+			assert.Contains(t, cond.Message, "git Secret team-git is not labeled kardinal.io/referenceable=true")
+			assert.Contains(t, cond.Message, "kubectl label secret team-git -n default kardinal.io/referenceable=true")
 			assert.Equal(t, 5*time.Minute, res.RequeueAfter, "recheck: Secrets are not watched")
 			ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
 			require.NotNil(t, ready)
@@ -638,7 +651,7 @@ func TestPipelineReconciler_GitSecretReferenceable(t *testing.T) {
 			assert.Equal(t, rv, got.ResourceVersion, "idempotent")
 
 			var s corev1.Secret
-			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "git-token", Namespace: "default"}, &s))
+			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "team-git", Namespace: "default"}, &s))
 			s.Labels = map[string]string{"kardinal.io/referenceable": "true"}
 			require.NoError(t, c.Update(context.Background(), &s))
 			res, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
@@ -704,4 +717,27 @@ func TestDerivePhase_RejectedLive(t *testing.T) {
 	bundles := []kardinalv1alpha1.Bundle{phaseBundle("v1", "Verified", t0), retired}
 	steps := lifecycle.AddRetiredSteps([]kardinalv1alpha1.PromotionStep{st("v1", "prod", "Verified")}, bundles, nil)
 	assert.Equal(t, "Degraded", pipeline.DerivePhase("app", bundles, steps), "a retired rejected change that is live")
+}
+
+// TestPipelineReconciler_ControllerSecretRefused (#1725 QA): naming the
+// controller's own SCM token Secret as git.secretRef is a validation error.
+//
+// Covers CHART-SCM-ALIAS-02.
+func TestPipelineReconciler_ControllerSecretRefused(t *testing.T) {
+	p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}})
+	p.Spec.Git.SecretRef = &kardinalv1alpha1.SecretRef{Name: "kardinal-promoter-github-token"}
+	c := newClientWithIndex(newScheme(), p, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name: "kardinal-promoter-github-token", Namespace: "default"}, Data: map[string][]byte{"token": []byte("t")}})
+	r := &pipeline.Reconciler{Client: c,
+		ControllerSecret: &scm.ControllerTokenSecret{Namespace: "default", Name: "kardinal-promoter-github-token"}}
+	key := types.NamespacedName{Name: "app", Namespace: "default"}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+	require.NoError(t, err)
+	var got kardinalv1alpha1.Pipeline
+	require.NoError(t, c.Get(context.Background(), key, &got))
+	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+	require.NotNil(t, ready)
+	assert.Equal(t, metav1.ConditionFalse, ready.Status)
+	assert.Equal(t, "ValidationFailed", ready.Reason)
+	assert.Contains(t, ready.Message, "is the controller's own SCM token Secret")
 }

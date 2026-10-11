@@ -45,10 +45,10 @@ test.describe('Journey 013 — Keyboard and Bundle types', () => {
   test('the Bundle history is one Tab stop with type badges', async ({ page }) => {
     await page.goto('/')
     await page.locator('aside').getByText('kardinal-test-app').first().click()
-    const bar = page.getByRole('toolbar', { name: /Bundle history/ })
+    const bar = page.getByRole('toolbar', { name: /^Versions/ })
     await expect(bar).toBeVisible()
-    await expect(bar.getByRole('img', { name: 'config Bundle' })).toHaveText('config')
-    await expect(bar.getByRole('img', { name: 'image Bundle' })).toHaveCount(0)
+    await expect(bar.getByRole('img', { name: 'config version' })).toHaveText('config')
+    await expect(bar.getByRole('img', { name: 'image version' })).toHaveCount(0)
     const chips = bar.locator('.bundle-chip')
     await expect(chips).toHaveCount(3)
     await expect(bar.locator('.bundle-chip[tabindex="0"]')).toHaveCount(1)
@@ -57,11 +57,11 @@ test.describe('Journey 013 — Keyboard and Bundle types', () => {
     await expect(chips.last()).toBeFocused()
     await page.keyboard.press('Home')
     await expect(chips.first()).toBeFocused()
-    // The Bundle card names the type of the shown Bundle.
-    await expect(page.getByRole('img', { name: 'image Bundle' })).toBeVisible()
+    // The header names the shown Bundle's type unless it is an image version (the common case).
+    await expect(page.locator('.app-pipeline-head').getByRole('img', { name: 'image version' })).toHaveCount(0)
 
     await page.locator('aside').getByText('payments-service').first().click()
-    await expect(page.getByRole('img', { name: 'image and config Bundle' }).first()).toHaveText('image + config')
+    await expect(page.locator('.app-pipeline-head').getByRole('img', { name: 'image and config version' })).toHaveText('image + config')
   })
 
   test('WCAG 2.1 AA in the light theme, with node details and a dialog open', async ({ page }) => {
@@ -73,11 +73,11 @@ test.describe('Journey 013 — Keyboard and Bundle types', () => {
     await expectNoViolations(page, 'light fleet board')
 
     await page.locator('aside').getByText('kardinal-test-app').first().click()
-    await expect(page.getByRole('toolbar', { name: /Bundle history/ })).toBeVisible()
+    await expect(page.getByRole('toolbar', { name: /^Versions/ })).toBeVisible()
     await expectNoViolations(page, 'light pipeline view')
 
     await page.locator('[role=button][tabindex="0"]').filter({ hasText: 'prod' }).first().click()
-    await expect(page.getByTestId('node-detail')).toBeVisible()
+    await expect(page.getByTestId('stage-drawer')).toBeVisible()
     // The hover tooltip fades in over 80 ms; axe would measure it half
     // transparent. Move the pointer off the graph first.
     await page.mouse.move(0, 0)
@@ -85,7 +85,7 @@ test.describe('Journey 013 — Keyboard and Bundle types', () => {
     await expectNoViolations(page, 'light node details')
 
     await page.keyboard.press('Escape')
-    await page.getByRole('button', { name: 'Create bundle for kardinal-test-app' }).click()
+    await page.getByRole('button', { name: 'Ship a version of kardinal-test-app' }).click()
     await expect(page.getByRole('dialog')).toBeVisible()
     await expectNoViolations(page, 'light create bundle dialog')
   })

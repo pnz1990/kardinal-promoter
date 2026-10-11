@@ -1,0 +1,15 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * RejectedLiveBanner.css — "Rejected change is live" (components/RejectedLiveBanner.tsx).
+ */
+
+.rejected-live-banner {
+  padding: var(--k-space-1_5) var(--k-space-2);
+  border: var(--k-border-hairline) solid var(--k-status-failed-fg);
+  border-radius: var(--k-radius-2);
+  background: var(--k-status-failed-wash);
+  color: var(--k-status-failed-fg);
+  font-size: var(--k-text-sm);
+}

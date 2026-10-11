@@ -90,7 +90,7 @@ before any Application is patched:
 | Case | Where it is rejected | What you see |
 |---|---|---|
 | `approval: pr-review` with `update.strategy: argocd` | The API server, when you apply the Pipeline (CRD validation rule) | `kubectl apply` fails: `environments[]: update.strategy argocd patches the Application directly and cannot honour approval: pr-review; ...` |
-| The same, in a file | `kardinal validate -f pipeline.yaml` | `✗ pipeline.yaml is invalid:` followed by the same message |
+| The same, in a file | `kardinal validate -f pipeline.yaml` | `pipeline.yaml is invalid:` followed by the same message |
 | A config or mixed version (`type: config` or `type: mixed`) when an environment it promotes uses `argocd` | Graph build, before the first environment | The version is `Failed`, with an `InvalidSpec` condition, reason `GraphBuildFailed` |
 
 The `argocd-set-image` step checks both cases again as a last guard. It fails without patching

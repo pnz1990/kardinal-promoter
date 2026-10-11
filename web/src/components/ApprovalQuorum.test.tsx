@@ -22,7 +22,7 @@ describe('ApprovalQuorum', () => {
     expect(quorumSummary({ required: 1, approved: 0 })).toBe('0 of 1 approval')
     expect(quorumSummary({ required: 2, approved: 2 })).toBe('Approved (2 of 2)')
     expect(quorumSummary({ required: 2, approved: 2, rejected: true, decisions: [{ user: 'bob', decision: 'reject', counted: true }] })).toBe('Rejected by bob')
-    expect(approverRule(waiting)).toBe("From members of release-managers; not the Bundle's creator")
+    expect(approverRule(waiting)).toBe("From members of release-managers; not the person who shipped the version")
     expect(approverRule({ required: 1, approved: 0, allowedUsers: ['alice', 'bob'] })).toBe('From alice, bob')
     expect(approverRule({ required: 1, approved: 0 })).toBe('From anyone allowed to create Approvals')
   })

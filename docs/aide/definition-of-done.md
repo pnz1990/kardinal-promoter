@@ -27,7 +27,7 @@ kubectl create secret generic github-token \
   --from-literal=token=$GITHUB_PAT
 helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
   --namespace kardinal-system \
-  --set github.secretRef.name=github-token
+  --set scm.secretRef.name=github-token
 
 # 2. Verify
 kardinal version

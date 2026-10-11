@@ -43,7 +43,9 @@ func TestPipelineReconciler_RenderedBranchConflict(t *testing.T) {
 	sameRepoOtherSpelling := at(newPipeline("dup", branch("env/prod")), "team-d", base.Add(2*time.Hour))
 	sameRepoOtherSpelling.Spec.Git.URL = "https://github.com/MyOrg/gitops"
 
-	c := newClientWithIndex(newScheme(), old, newer, other, elsewhere, sameRepoOtherSpelling)
+	c := newClientWithIndex(newScheme(), old, newer, other, elsewhere, sameRepoOtherSpelling,
+		gitTokenSecretIn("team-a", defaultGitSecret), gitTokenSecretIn("team-b", defaultGitSecret),
+		gitTokenSecretIn("team-c", defaultGitSecret), gitTokenSecretIn("team-d", defaultGitSecret))
 	r := &pipeline.Reconciler{Client: c}
 	ready := func(p *kardinalv1alpha1.Pipeline) *metav1.Condition {
 		t.Helper()

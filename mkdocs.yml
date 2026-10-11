@@ -63,7 +63,10 @@ theme:
     - content.action.view
     - toc.follow
 
+# Mermaid is self-hosted: Material uses window.mermaid when it is defined and
+# loads it from unpkg.com otherwise. Pinned; docs/assets/vendor/mermaid/LICENSE.
 extra_javascript:
+  - assets/vendor/mermaid/mermaid-11.17.2.min.js
   - javascripts/scrollwrap.js
 
 extra_css:
@@ -145,7 +148,10 @@ nav:
       - Sharding controllers: sharding.md
     - Upgrade: upgrade.md
     - Migrate from Kargo: guides/migrating-from-kargo.md
-    - Troubleshoot: troubleshooting.md
+    - Troubleshoot:
+      - Troubleshoot: troubleshooting.md
+      - Promotion stuck or failed: troubleshoot-promotions.md
+      - Git and SCM problems: troubleshoot-git.md
   - Concepts:
     - Concepts: concepts.md
     - Architecture: architecture.md
