@@ -82,6 +82,7 @@ func TestDeleteBundle_NotFound(t *testing.T) {
 
 // TestDeleteBundleCmd_ArgsRequired verifies the command requires exactly one arg.
 func TestDeleteBundleCmd_ArgsRequired(t *testing.T) {
+	keepStyle(t)
 	for _, args := range [][]string{{"delete", "bundle"}, {"delete", "bundle", "a", "b"}} {
 		_, err := executeRoot(t, args...)
 		require.Error(t, err, args)

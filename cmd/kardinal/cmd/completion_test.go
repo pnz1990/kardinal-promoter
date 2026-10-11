@@ -31,6 +31,7 @@ var coreSubcommands = []string{"get", "explain", "logs", "status", "rollback", "
 // C09a-cli-22: each script starts with its shell's header and defines the
 // kardinal entry point.
 func TestCompletion_Scripts(t *testing.T) {
+	keepStyle(t)
 	cases := []struct {
 		shell, header, entry string
 	}{
@@ -54,6 +55,7 @@ func TestCompletion_Scripts(t *testing.T) {
 // mis-wiring that would silently break power-user tab completion
 // (design doc 15 §Future — kardinal completion CI test).
 func TestCompletion_CoreSubcommandsComplete(t *testing.T) {
+	keepStyle(t)
 	// __complete with an empty word lists one "name\tdescription" per line,
 	// then a ":<directive>" line.
 	out, err := executeRoot(t, "__complete", "")
@@ -69,6 +71,7 @@ func TestCompletion_CoreSubcommandsComplete(t *testing.T) {
 }
 
 func TestCompletion_ArgErrors(t *testing.T) {
+	keepStyle(t)
 	_, err := executeRoot(t, "completion", "tcsh")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `invalid argument "tcsh" for "kardinal completion"`)
@@ -79,6 +82,7 @@ func TestCompletion_ArgErrors(t *testing.T) {
 }
 
 func TestCompletion_HelpIncludesInstallInstructions(t *testing.T) {
+	keepStyle(t)
 	out, err := executeRoot(t, "completion", "--help")
 	require.NoError(t, err)
 	for _, want := range []string{

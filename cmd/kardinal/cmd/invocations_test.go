@@ -33,6 +33,7 @@ var skipInvocation = map[string]bool{"dashboard": true, "init": true, "completio
 //
 // Covers CLI-MODEL-01.
 func TestInvocations_Compatible(t *testing.T) {
+	keepStyle(t)
 	t.Setenv("KUBECONFIG", "/dev/null")
 	legacy := []string{
 		"promote my-app --env prod",
@@ -105,6 +106,7 @@ func TestInvocations_Compatible(t *testing.T) {
 //
 // Covers CLI-MODEL-01.
 func TestInvocations_Conflicts(t *testing.T) {
+	keepStyle(t)
 	t.Setenv("KUBECONFIG", "/dev/null")
 	cases := map[string]string{
 		"promote my-app prod --env uat":                            `the environment is given twice: "prod" as an argument and "uat" with --env`,
@@ -244,6 +246,7 @@ func splitWords(t *testing.T, s string) []string {
 //
 // Covers CLI-MODEL-01.
 func TestDurationFlag(t *testing.T) {
+	keepStyle(t)
 	for in, want := range map[string]string{"1h": "1h", "90m": "1h30m", "2d": "2d", "45s": "45s", "30m": "30m", "36h": "36h"} {
 		var d time.Duration
 		require.NoError(t, durationValue{&d}.Set(in), in)
