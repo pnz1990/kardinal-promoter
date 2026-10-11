@@ -1,9 +1,9 @@
 # Image Signature Verification
 
-A Pipeline can require every Bundle's images to be signed, and a config Bundle's commit to be
-signed, before the Bundle is promoted anywhere. kardinal checks the signatures in the registry
+A Pipeline can require every version's images to be signed, and a config version's commit to be
+signed, before the version is promoted anywhere. kardinal checks the signatures in the registry
 with [sigstore-go](https://github.com/sigstore/sigstore-go): a key (`cosign sign --key`) or a
-Sigstore keyless identity (`cosign sign` from CI with OIDC). A Bundle that does not pass is never
+Sigstore keyless identity (`cosign sign` from CI with OIDC). A version that does not pass is never
 promoted.
 
 ```yaml
@@ -50,14 +50,14 @@ with `status.reason: SecretNotReferenceable` until the label is added or the tim
 
 | Field | Default | Description |
 |---|---|---|
-| `images[]` | all | Repository patterns of the Bundle images to verify; `*` matches any characters. Patterns and Bundle images are compared in normalized form: the registry host lowercased and without `:443`, `docker.io` for Docker Hub (`index.docker.io`, `registry-1.docker.io` or no host) and `library/` for official images (`nginx` is `docker.io/library/nginx`). A Bundle image that does not parse as a reference fails the Bundle. |
+| `images[]` | all | Repository patterns of the version images to verify; `*` matches any characters. Patterns and version images are compared in normalized form: the registry host lowercased and without `:443`, `docker.io` for Docker Hub (`index.docker.io`, `registry-1.docker.io` or no host) and `library/` for official images (`nginx` is `docker.io/library/nginx`). A version image that does not parse as a reference fails the version. |
 | `authorities[]` | | Accepted signers, up to 10. An image is verified when one of its signatures verifies against any one authority. Each has a `name` and exactly one of `key` and `keyless`. |
 | `authorities[].key.secretRef` | | `{name, key}`: a Secret in the Pipeline namespace with the PEM public key (`cosign.pub`). |
 | `authorities[].key.requireTransparencyLog` | `false` | Require a Rekor entry, checked against the Sigstore public-good log. Without it a key signature is checked against the key alone (`cosign verify --insecure-ignore-tlog`). |
 | `authorities[].keyless.issuer` | | OIDC issuer of the signing certificate. |
 | `authorities[].keyless.subject` / `subjectRegExp` | | The certificate's subject (exactly one of the two). `subjectRegExp` must match the whole subject: it is anchored as `^(?:...)$`. |
 | `authorities[].keyless.trustedRootRef` | public good | `{name, key}`: a Secret with a Sigstore `trusted_root.json`, for a private Sigstore. Without it the controller fetches the public-good trusted root through TUF (from `tuf-repo-cdn.sigstore.dev`) on first use and again once a day; a failed refresh keeps the previous root and is retried after 5 minutes. Each TUF request times out after 20s. |
-| `commits.requireSigned` | `false` | A config or mixed Bundle's `configRef.commitSHA` must be signed with a signature the SCM verified (GitHub, GitLab, Forgejo and Gitea report it; Bitbucket and Azure DevOps do not, and such a Bundle fails). See [Signed commits](#signed-commits). |
+| `commits.requireSigned` | `false` | A config or mixed version's `configRef.commitSHA` must be signed with a signature the SCM verified (GitHub, GitLab, Forgejo and Gitea report it; Bitbucket and Azure DevOps do not, and such a version fails). See [Signed commits](#signed-commits). |
 | `commits.allowedSigners[]` | any person | Also require the signer to be one of these SCM logins or emails. Platform signatures (`web-flow`, `gitlab-system`, `forgejo-instance`) are accepted only when listed. |
 | `signatureRepository` | next to the image | Where the signatures are, when they are not next to the images (cosign's `COSIGN_REPOSITORY`). |
 | `registrySecretRef.name` | anonymous | A `kubernetes.io/dockerconfigjson` Secret in the Pipeline namespace for private registries. |
@@ -81,10 +81,10 @@ controller does not query Rekor, so an entry that the log no longer serves is no
 ## How it runs
 
 1. **Digests are required.** Verifying a tag and then promoting the tag would let a different
-   image be pushed under the tag in between. When the policy selects an image that the Bundle names
-   by tag, the Bundle fails before any environment, with condition `InvalidSpec` (reason
+   image be pushed under the tag in between. When the policy selects an image that the version names
+   by tag, the version fails before any environment, with condition `InvalidSpec` (reason
    `GraphBuildFailed`): `image ... is not pinned by digest`. A [Subscription](subscription.md)
-   creates Bundles by digest; from CI, pass `--image repo@sha256:...`.
+   creates versions by digest; from CI, pass `--image repo@sha256:...`.
 2. The Bundle's Graph creates one `ImageVerification` (`kubectl get imageverifications`) with the
    selected images and the policy. Its controller reads the signatures from the registry and the
    commit's signature from the SCM, and records a result per image in `status.images`.
@@ -93,7 +93,7 @@ controller does not query Rekor, so an entry that the log no longer serves is no
    [pre-deploy hooks](hooks.md). Nothing is committed or deployed.
 4. **Verified**: the environments start. Later environments need nothing more: their upstream
    already waited.
-   **Failed**: the waiting steps fail, and the Bundle with them. A signature that does not verify
+   **Failed**: the waiting steps fail, and the version with them. A signature that does not verify
    against an authority (another signer's, an attestation, one that is malformed) is not a
    verdict: an image can carry other signatures before CI's arrives, so the verification keeps
    waiting for one that verifies, and fails at the `timeout` (`status.reason:
@@ -102,9 +102,9 @@ controller does not query Rekor, so an entry that the log no longer serves is no
    required. A registry or SCM outage is retried, never treated as verified, until the timeout.
    Each registry fetch times out after 45s and each check after 2 minutes; up to 4
    ImageVerifications are checked at once.
-5. Before it promotes, the step compares the Bundle's images with the images the
+5. Before it promotes, the step compares the version's images with the images the
    ImageVerification verified (both normalized) and refuses to promote when a digest differs or a
-   verified image is missing. The Bundle's images cannot change anyway: the Bundle CRD refuses an
+   verified image is missing. The version's images cannot change anyway: the Bundle CRD refuses an
    update of `spec.images`.
 
 `status.reason` is one of `SecretNotReferenceable`, `SecretNotFound`, `InvalidPublicKey`,
@@ -113,7 +113,7 @@ and `Timeout`. A key, trusted root or `.dockerconfigjson` that does not parse is
 and key name only; nothing of its content is copied to the status.
 
 **Policy changes.** An ImageVerification's spec is immutable, and its name carries a hash of it.
-Editing `spec.imageVerification` gives each Bundle a new ImageVerification; the first
+Editing `spec.imageVerification` gives each version a new ImageVerification; the first
 environments that have not started yet wait for the new verdict. Environments that already
 started are not checked again.
 
@@ -123,8 +123,8 @@ was verified is the one deployed. The kustomize and Helm strategies write the di
 
 ## Signed commits
 
-With `commits.requireSigned`, the config Bundle's `configRef.commitSHA` must be the full 40- or
-64-character SHA (a short one fails the Bundle). The commit is checked with the Pipeline's SCM
+With `commits.requireSigned`, the config version's `configRef.commitSHA` must be the full 40- or
+64-character SHA (a short one fails the version). The commit is checked with the Pipeline's SCM
 provider: the ScmProvider or ClusterScmProvider of its `spec.git.providerRef`
 ([several SCM providers](scm-providers.md#several-scm-providers-scmprovider-and-clusterscmprovider)),
 otherwise the controller's `--scm-provider`. The repository must be on that provider's host
@@ -176,8 +176,8 @@ ImageVerification and wait for it, and so do their pre-deploy hooks.
   A change pushed to the GitOps repository outside kardinal is not verified by kardinal.
 - A verified image is not checked again: a key revoked after the verification is not seen.
 - Images that arrive through a config commit (a `configRef` whose files change an image) are not
-  image-verified: only the Bundle's `spec.images` are. Use `commits.requireSigned` for config
-  Bundles, and admission-time verification for images in config changes.
+  image-verified: only the version's `spec.images` are. Use `commits.requireSigned` for config
+  versions, and admission-time verification for images in config changes.
 - Commit signatures are taken from the SCM's own verification (the keys its users registered),
   not checked against a key in the policy.
 

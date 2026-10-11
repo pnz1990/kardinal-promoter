@@ -10,11 +10,11 @@ This guide walks through migrating a Kargo-managed delivery pipeline to kardinal
 |---|---|---|
 | `Warehouse` | `Subscription` CRD | OCI watcher polls registries; creates `Bundle` on new digest |
 | `Stage` | Environment in `Pipeline.spec.environments[]` | One Pipeline holds all environments |
-| `Freight` | `Bundle` CRD | One Bundle per artifact version; carries provenance |
+| `Freight` | `Bundle` CRD | One version per artifact version; carries provenance |
 | `FreightRequest` | `Bundle.spec.intent` | Targets a specific environment; can skip others |
 | `Promotion` | `PromotionStep` CRD | Created automatically by the Graph controller |
 | `VerifiedIn` / approval required | `approval: pr-review` on environment | PR approval required before HealthChecking |
-| `AnalysisTemplate` (verification) | `spec.environments[].verification` | The same AnalysisTemplates, run as AnalysisRuns after the health check; needs Argo Rollouts ([Analysis](../analysis.md)). Without it, a `MetricCheck` (Prometheus, Datadog, CloudWatch, New Relic or a JSON web query with a threshold; `perPromotion: true` with `{{ bundle.version }}` replaces AnalysisRun arguments, [Metric Checks](../metric-checks.md)) read by a PolicyGate |
+| `AnalysisTemplate` (verification) | `spec.environments[].verification` | The same AnalysisTemplates, run as AnalysisRuns after the health check; needs Argo Rollouts ([Analysis](../analysis.md)). Without it, a `MetricCheck` (Prometheus, Datadog, CloudWatch, New Relic or a JSON web query with a threshold; `perPromotion: true` with `{{ bundle.version }}` replaces AnalysisRun arguments, [Metric Checks](../metric-checks.md)) read by a gate |
 | Stage that updates an Argo CD Application in another cluster | Environment with `health.type: argocd` on that Application in the hub | Multi-cluster through an Argo CD or Flux hub, or `health.kubeconfigSecretRef` to a kubeconfig Secret |
 | `Project` | Kubernetes Namespace | RBAC isolation is namespace-scoped |
 | Argo Rollouts integration | `health.type: argoRollouts` on environment | Reads Rollout `.status.phase` |
@@ -187,7 +187,7 @@ kardinal creates `PromotionStep` objects automatically via the Graph controller.
 ### Step 4: Keep your AnalysisTemplates
 
 Name them in the environment's `verification`; kardinal runs each as an AnalysisRun after the
-health check, with the Bundle's `tag`, `image` and `environment` as args, and the environment is
+health check, with the version's `tag`, `image` and `environment` as args, and the environment is
 Verified only when they all succeed ([Analysis](../analysis.md)):
 
 ```yaml
@@ -247,7 +247,7 @@ Secret refs.
 
 ### Step 5: Convert AnalysisRunArguments to PolicyGate CEL expressions
 
-Kargo AnalysisRun arguments map to CEL expressions in PolicyGates:
+Kargo AnalysisRun arguments map to CEL expressions in gates:
 
 ```yaml
 # kardinal: PolicyGate using MetricCheck result
@@ -310,17 +310,17 @@ helm uninstall kargo -n kargo
 | Rollback | Manual re-promotion of older Freight (pins the Stage since v1.11); auto-rollback in Kargo Enterprise (beta) | `kardinal rollback my-app --env prod`, or `onHealthFailure: rollback` |
 | Evidence / audit | Promotion objects and Kubernetes Events; `record-audit-event` in Kargo Enterprise (v1.12) | PR body with structured evidence, `AuditEvent` CRD, `kardinal history` |
 | DAG visualization | Kargo UI | Built-in React UI (embedded in the controller) |
-| Promotion steps | A Stage's `promotionTemplate` composes built-in steps and PromotionTasks | Fixed sequence per environment, chosen by the Bundle type, `update.strategy` and `approval`; no custom steps |
+| Promotion steps | A Stage's `promotionTemplate` composes built-in steps and PromotionTasks | Fixed sequence per environment, chosen by the version type, `update.strategy` and `approval`; no custom steps |
 | Multi-cluster | Stages that update each cluster's Argo CD Application | Argo CD or Flux hub: `health.type: argocd` or `flux` reads each Application or Kustomization in the hub, or `health.kubeconfigSecretRef` for a cluster with no hub |
 
 ---
 
 ## Common differences to be aware of
 
-**Bundle supersession:** When a new Bundle of the same type is created while an older one is still Promoting, kardinal supersedes the older Bundle (marks it `Superseded`). Kargo allows several Freight in flight at once. kardinal has no setting to turn supersession off; `spec.maxConcurrentPromotions` only caps how many Bundles promote at the same time.
+**version supersession:** When a new version of the same type is created while an older one is still Promoting, kardinal supersedes the older version (marks it `Superseded`). Kargo allows several Freight in flight at once. kardinal has no setting to turn supersession off; `spec.maxConcurrentPromotions` only caps how many versions promote at the same time.
 
-**Namespace model:** Kargo Projects map to Kubernetes Namespaces in both systems. In kardinal, the Pipeline, its Bundles and the Subscriptions that feed it live in the same namespace: a Subscription creates Bundles only in its own namespace, for a Pipeline there (a different `spec.namespace` sets the Subscription to phase `Error`).
+**Namespace model:** Kargo Projects map to Kubernetes Namespaces in both systems. In kardinal, the Pipeline, its versions and the Subscriptions that feed it live in the same namespace: a Subscription creates versions only in its own namespace, for a Pipeline there (a different `spec.namespace` sets the Subscription to phase `Error`).
 
 **GitOps repo structure:** kardinal's `kustomize` update strategy edits `kustomization.yaml` the way Kargo's `kustomize-set-image` step does. Kargo's `kustomize-build` and `helm-template` steps map to `layout: branch`, which renders in a sandboxed Job per promotion (Kargo runs these steps in its controller) and commits plain YAML to the environment's branch ([Rendered Manifests](../rendered-manifests.md)).
 
-**Policy gates:** Kargo's AnalysisTemplates run as verification after a promotion. kardinal's PolicyGates are separate CRDs that evaluate independently and are wired into the Graph. This means gates are cluster-reusable and visible to all pipelines that reference the same PolicyGate namespace.
+**Policy gates:** Kargo's AnalysisTemplates run as verification after a promotion. kardinal's gates are separate CRDs that evaluate independently and are wired into the Graph. This means gates are cluster-reusable and visible to all pipelines that reference the same gate namespace.

@@ -285,7 +285,7 @@ kardinal explain my-app --env prod
 
 Gates that are not ready come first. STATE is Pass, Block (holding the
 version), Superseded, Rejected, Pending or Waiting; REASON is the controller's latest
-evaluation. See [Inspecting PolicyGates](policy-gates.md#inspecting-policygates).
+evaluation. See [Inspecting PolicyGates](policy-gates.md#inspecting-gates).
 
 ### Skip permissions
 

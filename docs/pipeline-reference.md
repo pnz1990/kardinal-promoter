@@ -7,30 +7,30 @@ This page shows how to shape it. Every field is listed in the
 
 ## Large Pipelines
 
-Each Bundle is promoted by one kro Graph, and a Graph is one Kubernetes object, which etcd stores
+Each version is promoted by one kro Graph, and a Graph is one Kubernetes object, which etcd stores
 only up to 1.5 MiB. Two Graph shapes keep it in bounds:
 
 - **nodes** (Pipelines with up to 100 environments): one Graph node per environment. `kubectl get
   graph -o yaml` shows each environment's PromotionStep as a node.
 - **compact** (above 100 environments): the promotion order is data in the Graph, and one node
   creates every PromotionStep the order allows (upstream environments Verified, gates ready, the
-  Bundle not superseded, rejected or waiting for a `maxConcurrentPromotions` slot). A step that exists is not removed when a gate later closes or
-  the Bundle is superseded. The Graph has about a dozen nodes whatever the number of environments,
+  version not superseded, rejected or waiting for a `maxConcurrentPromotions` slot). A step that exists is not removed when a gate later closes or
+  the version is superseded. The Graph has about a dozen nodes whatever the number of environments,
   and no health ref nodes (health is checked by the PromotionStep as in the nodes shape).
 
-Both shapes promote the same way: the same PromotionSteps, PolicyGate instances and PRStatuses,
+Both shapes promote the same way: the same PromotionSteps, gate instances and PRStatuses,
 with the same names. Choose one for a Pipeline with the annotation `kardinal.io/graph-shape:
 compact` or `nodes`; the controller's `--graph-compact-above` (chart `graph.compactAbove`) moves
-the threshold. A Bundle keeps the shape its Graph was created with: a later Pipeline edit, a changed
-annotation or threshold applies to new Bundles only, because switching the shape of a Graph in
+the threshold. A version keeps the shape its Graph was created with: a later Pipeline edit, a changed
+annotation or threshold applies to new versions only, because switching the shape of a Graph in
 flight would delete its PromotionSteps. The shape is read from the Graph's nodes; the Graph's
 `kardinal.io/graph-shape` label only shows it.
 
-In the compact shape every PromotionStep comes from one collection, so a PolicyGate instance or a
-PromotionStep that kro cannot apply holds every environment of the Bundle, not only its own (the
-Bundle's `GatesCreated` condition names a gate that cannot be created). A feature the compact shape
-does not carry yet fails the Bundle with `GraphBuildFailed` naming the feature, and sets the
-Pipeline `Ready=False` while its new Bundles would get a compact Graph. Per-promotion MetricChecks
+In the compact shape every PromotionStep comes from one collection, so a gate instance or a
+PromotionStep that kro cannot apply holds every environment of the version, not only its own (the
+version's `GatesCreated` condition names a gate that cannot be created). A feature the compact shape
+does not carry yet fails the version with `GraphBuildFailed` naming the feature, and sets the
+Pipeline `Ready=False` while its new versions would get a compact Graph. Per-promotion MetricChecks
 (`spec.perPromotion`) are carried: the `MetricChecks` collection creates an environment's instances
 once its upstream environments are Verified, as the nodes shape does. One difference in pruning: if
 an upstream leaves Verified before the environment's step starts, the compact shape deletes that
@@ -43,21 +43,21 @@ the `GateMirror` patch collection writes `spec.live.gates` onto the step by its 
 [Hooks](hooks.md) and [analysis](analysis.md) are carried too. HookRuns and AnalysisRuns are
 collections created under the conditions the node shape gates them on, even once the
 environment's step exists: see [Hooks](hooks.md) for the list. A run is kept once kro has
-created it for this Bundle. A run that kro cannot create holds only its own environment, and
-the Bundle's `RunsCreated` condition names it.
+created it for this version. A run that kro cannot create holds only its own environment, and
+the version's `RunsCreated` condition names it.
 So is [image verification](image-verification.md): the root steps and their pre hooks wait for
-the Bundle's ImageVerification.
+the version's ImageVerification.
 So are [rendered manifests](rendered-manifests.md) (`layout: branch`): the `RenderRuns`
 collection creates an environment's RenderRun once its step asks for the render, as the node
-shape does, keeps it once kro has created it for this Bundle, and the step reads it back through
+shape does, keeps it once kro has created it for this version, and the step reads it back through
 its own `spec.live.renders`. In a fleet, each target renders to its own branch,
 `env/<fleet>-<target>`, once pacing starts it; a fleet environment takes no `render.branch`. A RenderRun that kro cannot create holds only its own environment (`RunsCreated`).
 
-The Graph's size grows with environments, PolicyGates, hooks and analyses: every gate instance,
+The Graph's size grows with environments, gates, hooks and analyses: every gate instance,
 HookRun and AnalysisRun is one more object the Graph creates and tracks, and its data is in the
 Graph. Measured: 300 environments with one gate each, fully promoted, 0.47 MB; 300 with three
 gates each about 0.9 MB; 150 environments with a gate, a pre hook, a post hook and an analysis
-each (750 objects) 0.67 MB. A Bundle whose Graph would be
+each (750 objects) 0.67 MB. A version whose Graph would be
 over 1.2 MB, or create more than 4,500 objects, fails with `GraphBuildFailed` and the size in the
 message.
 
@@ -157,7 +157,7 @@ The rules, in full:
 
 Only the first environment in the list is a root, unless `dependsOn` says otherwise.
 
-List the waves in ascending order. If a higher wave comes before a lower one with an environment without a wave between them (`test`, `a` in wave 2, `staging`, `b` in wave 1), the list-order edges and the wave edges form a cycle. The Pipeline is then `Ready=False` (reason `ValidationFailed`), `kardinal validate` fails, and every Bundle fails; the message names each edge in the cycle.
+List the waves in ascending order. If a higher wave comes before a lower one with an environment without a wave between them (`test`, `a` in wave 2, `staging`, `b` in wave 1), the list-order edges and the wave edges form a cycle. The Pipeline is then `Ready=False` (reason `ValidationFailed`), `kardinal validate` fails, and every version fails; the message names each edge in the cycle.
 
 See `examples/wave-topology/pipeline.yaml` for a complete example.
 
@@ -165,7 +165,7 @@ See `examples/wave-topology/pipeline.yaml` for a complete example.
 
 A **fleet** environment promotes the same release to many targets, such as clusters, regions or
 tenants, a few at a time. Each target becomes an environment of its own, named
-`<environment>-<target>`. It has its own PromotionStep, PR, PolicyGate instances and health check,
+`<environment>-<target>`. It has its own PromotionStep, PR, gate instances and health check,
 and the steps carry the label `kardinal.io/fleet: <environment>`.
 
 ```yaml
@@ -202,7 +202,7 @@ How a fleet is promoted:
   depends on are Verified, its own gates are ready and the fleet has a free place. A target is
   known by its name: renaming one (or its Application) removes a target and adds another, and
   the new one is promoted.
-- **Gates.** A PolicyGate that applies to the fleet environment (`kardinal.io/applies-to: prod`)
+- **Gates.** A gate that applies to the fleet environment (`kardinal.io/applies-to: prod`)
   applies to each target, which gets its own instance. A gate can also name one target
   (`prod-eu-west`). A per-promotion MetricCheck that such a gate reads gets one instance per
   target. Each instance starts once the fleet's upstreams are Verified. An approval gate is
@@ -210,26 +210,26 @@ How a fleet is promoted:
   each target's PR carries the `kardinal/gates` check for its own gate instances.
 - **After the fleet.** An environment that depends on the fleet waits for every target to be
   Verified. A failed target holds it until that target is Verified. With `maxUnavailable` unset,
-  the Bundle is `Failed` while the other targets keep promoting. A fleet that depends on
+  the version is `Failed` while the other targets keep promoting. A fleet that depends on
   another fleet waits for all of it: each of its N targets lists the M targets of the first as
   upstreams, so the Graph carries N×M upstream entries (50×50 is 2,500), which count toward its
   size limit.
 - **A target rolled back on its own.** `kardinal rollback --env <fleet>-<target>` rolls one
-  target back without stopping the fleet's Bundle. If the rollback pushes to that target before
-  the fleet's Bundle does, the fleet's step there does not push over it and ends `Superseded`.
+  target back without stopping the fleet's version. If the rollback pushes to that target before
+  the fleet's version does, the fleet's step there does not push over it and ends `Superseded`.
   That target is settled: it frees its `maxConcurrent` place, it is neither Verified nor a
   failure (it does not count toward `maxUnavailable`), an environment after the fleet waits only
-  for the other targets, and the Bundle is Verified once they are. A fleet needs at least one
-  Verified target: when every target is `Superseded`, newer Bundles replaced this one there, the
-  environments after the fleet do not start, and the Bundle ends `Superseded`.
+  for the other targets, and the version is Verified once they are. A fleet needs at least one
+  Verified target: when every target is `Superseded`, newer versions replaced this one there, the
+  environments after the fleet do not start, and the version ends `Superseded`.
 - **Selector membership.** The controller resolves an `Application` or `ClusterProfile` selector
   into the Pipeline's `status.fleets`, and reads it again every minute. An Application qualifies
   only if it deploys from the Pipeline's `spec.git.url` and has a `spec.source.path`, and any
   object needs a name that can be a target. Selected objects that do not qualify are skipped and
   named in `status.fleets[].message`; the others are the targets. When the selector cannot be read
   (an API error, the CRD not served, a namespace the controller does not read), the fleet keeps
-  the targets it resolved to last and the message says why, so a Bundle in flight goes on; a fleet
-  that never resolved has no targets, and its Bundles fail with `GraphBuildFailed`. A selector
+  the targets it resolved to last and the message says why, so a version in flight goes on; a fleet
+  that never resolved has no targets, and its versions fail with `GraphBuildFailed`. A selector
   that matches more than 500 objects is refused the same way, without saying how many. The
   controller reads ClusterProfiles with the `get` and `list` the chart grants. Argo CD
   Applications are covered by the controller's existing read access.
@@ -244,38 +244,38 @@ How a fleet is promoted:
   selector it cannot read the cluster, so it checks the rest of the Pipeline with a
   stand-in target and prints a warning.
 - **Targets changed mid-rollout.** An edit to `fleet.targets`, or a change in what a selector
-  selects, updates the Graph of a Bundle in flight in place. An added target takes its place in
+  selects, updates the Graph of a version in flight in place. An added target takes its place in
   the target order (its list position, or its name for a selector), not the end of the queue:
   it can start before targets that were already waiting. A removed target's PromotionStep is deleted: an open PR is closed and its
   branch deleted, and a Verified target's change stays in git. Its step's record (state,
-  message, PR) is kept in the Bundle's `status.retiredSteps`. Targets already Verified are not
+  message, PR) is kept in the version's `status.retiredSteps`. Targets already Verified are not
   promoted again.
 - **Rollback.** `kardinal rollback <pipeline> --env <fleet>-<target>` rolls one target back.
-  Its rollback Bundle does not supersede the fleet's Bundle, which goes on promoting the other
-  targets. Add `--hold` to keep the fleet's Bundle (and later ones) off that target until
+  Its rollback version does not supersede the fleet's version, which goes on promoting the other
+  targets. Add `--hold` to keep the fleet's version (and later ones) off that target until
   `kardinal release-hold`. `kardinal rollback <pipeline> --env <fleet>` rolls the whole fleet
-  back. When every target that has something deployed runs the same Bundle, the version to go
-  back to is chosen as for that Bundle, and one rollback Bundle promotes it to every target;
-  targets that already run it are Verified at once. When the targets run different Bundles (a
+  back. When every target that has something deployed runs the same version, the version to go
+  back to is chosen as for that version, and one rollback version promotes it to every target;
+  targets that already run it are Verified at once. When the targets run different versions (a
   rollout part way, or a target rolled back alone), the rollback is refused and the message
-  lists what each target runs: name the Bundle to go back to with `--to`, or roll back targets
+  lists what each target runs: name the version to go back to with `--to`, or roll back targets
   one by one. `--hold` on a fleet holds every target, and `kardinal release-hold
   --env <fleet>` releases them. A target held through its fleet cannot be released alone.
 - **Targets on one branch.** Targets in flight together push to the same branch. Argo CD (or
   Flux) can then deploy a later commit, another target's, before the target's own commit. The
   `argocd` and `flux` health checks accept a later commit only when the workloads run the
-  Bundle images ([Health Adapters](health-adapters.md)). A target whose manifests run none of
-  the Bundle images, such as a config Bundle or a directory of ConfigMaps, can wait for its own
+  version images ([Health Adapters](health-adapters.md)). A target whose manifests run none of
+  the version images, such as a config version or a directory of ConfigMaps, can wait for its own
   commit until `health.timeout`. For such targets use `maxConcurrent: 1`, or `resource` health.
   Each target writes its own path, and every target path counts for the Pipeline's
   `PathConflict` condition.
-- **Intent.** `intent.targetEnvironment` may name the fleet: the Bundle stops after every
+- **Intent.** `intent.targetEnvironment` may name the fleet: the version stops after every
   target. `intent.skipEnvironments` cannot name a fleet or a target.
 - **Graph shape.** A Pipeline with a fleet always uses the compact Graph shape (see
   [Large Pipelines](#large-pipelines)). Every target counts toward the environment and Graph
-  size limits. The annotation `kardinal.io/graph-shape: nodes` is refused on it, and a Bundle
+  size limits. The annotation `kardinal.io/graph-shape: nodes` is refused on it, and a version
   whose Graph already has the nodes shape fails if a fleet is added to its Pipeline. The fleet
-  applies to new Bundles. Hooks, image verification and `verification` AnalysisTemplates work
+  applies to new versions. Hooks, image verification and `verification` AnalysisTemplates work
   with a fleet. Each target runs the fleet's hooks and analyses. A pre hook runs only once
   pacing has admitted the target's step, so no migration runs for a target still waiting for a
   place. Post hooks and analyses start when the target's step enters Verifying.
@@ -332,7 +332,7 @@ force-pushes the base branch, so no writer's commit is lost:
   probably force-pushed or rewritten.
 - **pr-review environments**: each promotion pushes its own branch
   `kardinal/<namespace hash>/<bundle>/<environment>` (the hash is the first 8 hex digits of
-  the SHA-256 of the namespace, so Bundles of the same name in two namespaces get separate
+  the SHA-256 of the namespace, so versions of the same name in two namespaces get separate
   branches). The branch starts at the base head of its clone. While the PR waits for its merge,
   the controller reads the base head every 30 seconds (one `git ls-remote` per repository,
   shared by every waiting PR). When the base moved, it reads the commits since the PR's base
@@ -376,24 +376,24 @@ kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.m
 
 ## Promotion Steps
 
-Every environment runs a fixed step sequence. The controller picks it from the Bundle type,
+Every environment runs a fixed step sequence. The controller picks it from the version type,
 `update.strategy`, `approval` and `layout` (`pkg/steps/defaults.go`) when the environment's step
 starts, records it in the step's `status.steps`, and runs that list to the end: an `approval`
-edit made while the step runs applies from the next Bundle. The Bundle in flight still
+edit made while the step runs applies from the next version. The version in flight still
 finishes, and its Graph turns Ready once its steps are Verified and its gates pass, with or without a PR.
 
 | Case | Steps |
 |---|---|
-| Image Bundle, `update.strategy: kustomize` (default) | `git-clone`, `kustomize-set-image`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
-| Image Bundle, `update.strategy: helm` | `git-clone`, `helm-set-image`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
-| Config Bundle | `git-clone`, `config-merge`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
-| Mixed Bundle | `git-clone`, `config-merge`, then the image Bundle's update step (`kustomize-set-image`, `helm-set-image` or `yaml-update`), `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
-| Image Bundle, `update.strategy: yaml` | `git-clone`, `yaml-update`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
-| `layout: branch` | `render` (waits for the environment's RenderRun, a Job that runs `git-clone`, the image update step (none for a config Bundle), `render-manifests`, `git-commit` and `git-push`), [`open-pr`, `wait-for-merge`,] `health-check` |
+| Image version, `update.strategy: kustomize` (default) | `git-clone`, `kustomize-set-image`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| Image version, `update.strategy: helm` | `git-clone`, `helm-set-image`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| Config version | `git-clone`, `config-merge`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| Mixed version | `git-clone`, `config-merge`, then the image version's update step (`kustomize-set-image`, `helm-set-image` or `yaml-update`), `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| Image version, `update.strategy: yaml` | `git-clone`, `yaml-update`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| `layout: branch` | `render` (waits for the environment's RenderRun, a Job that runs `git-clone`, the image update step (none for a config version), `render-manifests`, `git-commit` and `git-push`), [`open-pr`, `wait-for-merge`,] `health-check` |
 | `update.strategy: argocd` | `argocd-set-image`, `health-check` |
 
 `open-pr` and `wait-for-merge` run only with `approval: pr-review`. When the files in git
-already have the Bundle's change, `git-commit` finds nothing to commit: `git-push`, `open-pr`
+already have the version's change, `git-commit` finds nothing to commit: `git-push`, `open-pr`
 and `wait-for-merge` then do nothing, no PR is opened, and the step goes on to the health check.
 [Architecture: Steps Engine](architecture.md#steps-engine-pkgsteps)
 describes each step.
@@ -416,14 +416,14 @@ manifests that use that name keep promoting:
 
 - an entry whose `newName` is the repository (for example `name: app`,
   `newName: ghcr.io/org/app`, as older kardinal versions wrote it);
-- an older short-name entry (`name: app`, no `newName`), when only one Bundle image has that
+- an older short-name entry (`name: app`, no `newName`), when only one version image has that
   short name. It also gets `newName: ghcr.io/org/app`.
 
 A short-name entry whose `newName` points at another repository is left alone.
 
 ### The yaml update strategy
 
-`update.strategy: yaml` writes values of the Bundle's images into any YAML paths of any files
+`update.strategy: yaml` writes values of the version's images into any YAML paths of any files
 in the environment directory: plain manifests, Helm values, a Kustomize `images` entry, a
 custom resource. Each `update.yaml.updates[]` entry sets one scalar:
 
@@ -456,7 +456,7 @@ update:
 - `path` uses the [YAML path](#yaml-paths) grammar, as `update.helm.chartVersionPath` does.
   Missing mapping keys are created; list elements are not.
 - The step computes every edit before it writes anything. An edit that cannot be applied (a
-  Bundle without the named image, a value the image does not have such as the digest of a
+  version without the named image, a value the image does not have such as the digest of a
   tag-only image, a missing list element, a path through a scalar, a path that would replace a
   mapping or list, a file outside the repository) fails the step for good and no file is
   changed.
@@ -470,7 +470,7 @@ update:
   (`&`, `*`) or a merge key (`<<`) on the edited path, a key that appears twice in one mapping, a
   symbolic link anywhere on the path (the environment directory, a directory in `file`, or the
   file), a file over 4 MiB, and a `file` that is absolute or contains `..`.
-- A Bundle without images (a config Bundle) changes nothing.
+- A version without images (a config version) changes nothing.
 
 ### YAML paths
 
@@ -497,7 +497,7 @@ The API server checks the grammar: a Pipeline with a path outside it is refused.
 Checks that must hold for the running workload belong where it runs, not in the promoter:
 
 - **Image signatures.** `spec.imageVerification` verifies cosign and Sigstore signatures
-  before a Bundle is promoted ([Image Signature Verification](image-verification.md)). Also
+  before a version is promoted ([Image Signature Verification](image-verification.md)). Also
   enforce them at admission in the cluster that runs the pods, with
   [Sigstore policy-controller](https://docs.sigstore.dev/policy-controller/overview/) or
   [Kyverno `verifyImages`](https://kyverno.io/docs/policy-types/cluster-policy/verify-images/):
@@ -514,7 +514,7 @@ Checks that must hold for the running workload belong where it runs, not in the 
   operation on that revision is a health failure and applies `onHealthFailure`.
 - **Analysis.** Name Argo Rollouts AnalysisTemplates in `verification` (any Rollouts
   provider: Prometheus, Datadog, CloudWatch, New Relic, web, Job); see [Analysis](analysis.md).
-- **Metric checks.** Create a `MetricCheck` and read it from a PolicyGate on the next
+- **Metric checks.** Create a `MetricCheck` and read it from a gate on the next
   environment, for example `metrics["error-rate"].result == "Pass"`. See
   [Policy Gates: Metric-based](policy-gates.md#metric-based).
 

@@ -13,10 +13,10 @@ Common cases:
 | `spec.environments` | Add at least one environment to your Pipeline spec |
 | `spec.environments[].name` | Use a non-empty, valid environment name; the error names the rule it broke |
 | `spec.environments[].update.strategy` | Only `kustomize`, `helm`, `argocd` are valid |
-| Bundle `spec.type` | Only `image`, `config`, `mixed` are valid |
-| Bundle `spec.pipeline` | Add `pipeline: <name>` to your Bundle spec |
-| PolicyGate `spec.expression` | Add a CEL expression to your PolicyGate spec |
-| PolicyGate `spec.recheckInterval` | Use Go duration format: `5m`, `30s`, `1h` (not `5 minutes`) |
+| Version `spec.type` | Only `image`, `config`, `mixed` are valid |
+| Version `spec.pipeline` | Add `pipeline: <name>` to your Bundle spec |
+| Gate `spec.expression` | Add a CEL expression to your PolicyGate spec |
+| Gate `spec.recheckInterval` | Use Go duration format: `5m`, `30s`, `1h` (not `5 minutes`) |
 
 These checks are part of the CRDs and cannot be turned off. The chart's only
 ValidatingAdmissionPolicies are the identity policies (a rejection, an override or an approval
@@ -60,7 +60,7 @@ kardinal get steps my-app
 kardinal explain my-app --env prod
 ```
 
-If the output shows a PolicyGate in Block state, the gate's CEL expression has not been satisfied; REASON shows what it evaluated to. Common causes:
+If the output shows a gate in Block state, the gate's CEL expression has not been satisfied; REASON shows what it evaluated to. Common causes:
 - `no-weekend-deploys`: it is a weekend. Wait for Monday, or record a break-glass override with `kardinal override <pipeline> --stage prod --gate no-weekend-deploys --reason "..."` (see [Emergency Overrides](overrides.md)).
 - `staging-soak`: the upstream environment was verified recently. Wait for the soak time to pass.
 - CEL error: the expression uses a variable or key that is not in the [CEL context](reference/cel-context.md). Check `kardinal policy test <file>`.
@@ -88,7 +88,7 @@ Common causes:
 - CI checks failing on the PR
 - The PR was closed without merging. The message then reads `PR #<n> is closed; the step fails 5m0s after closing unless it is reopened`. Reopen the PR within 5 minutes and the step keeps waiting for the merge. The controller never reopens a PR itself.
 
-After those 5 minutes the controller comments on the PR that it no longer tracks it and stops polling it. The step then fails with `PR #<n> was closed without merging and not reopened within 5m0s`. Reopening or merging the PR after that does not resume the promotion, and a merge changes the environment with no PromotionStep tracking it. To promote again, create a new Bundle. The PRStatus shows the state:
+After those 5 minutes the controller comments on the PR that it no longer tracks it and stops polling it. The step then fails with `PR #<n> was closed without merging and not reopened within 5m0s`. Reopening or merging the PR after that does not resume the promotion, and a merge changes the environment with no PromotionStep tracking it. To promote again, create a new version. The PRStatus shows the state:
 
 ```bash
 kubectl get prstatus -o custom-columns=NAME:.metadata.name,OPEN:.status.open,CLOSED_AT:.status.closedAt,FINAL:.status.closedFinal
@@ -163,23 +163,23 @@ Common causes:
 
 ### Symptom: Bundle stays in "Available"
 
-The Bundle was created but no Graph was generated. Check that `spec.pipeline` names a Pipeline in the Bundle's namespace, and read the Bundle's conditions:
+The version was created but no Graph was generated. Check that `spec.pipeline` names a Pipeline in the version's namespace, and read the version's conditions:
 
 ```bash
 kubectl get bundle <name> -o jsonpath='{.spec.pipeline}{"\n"}{range .status.conditions[*]}{.type} {.reason}: {.message}{"\n"}{end}'
 ```
 
-Reason `PipelineNotFound` means no such Pipeline exists. Reason `WaitingForSlot` means the Pipeline's `maxConcurrentPromotions` Bundles are already promoting; the Bundle starts when one of them finishes. A `Failed` Bundle waits the same way before it recovers: see [spec.maxConcurrentPromotions](reference/pipeline.md#specmaxconcurrentpromotions).
+Reason `PipelineNotFound` means no such Pipeline exists. Reason `WaitingForSlot` means the Pipeline's `maxConcurrentPromotions` versions are already promoting; the version starts when one of them finishes. A `Failed` version waits the same way before it recovers: see [spec.maxConcurrentPromotions](reference/pipeline.md#specmaxconcurrentpromotions).
 
 ### Symptom: Bundle is Failed with "skip denied"
 
-The Bundle's `intent.skipEnvironments` lists an environment that an org gate applies to, and no skip-permission gate allows the skip. The Bundle's phase is `Failed` and its status conditions say `skip denied for environment "<env>": ...`.
+The version's `intent.skipEnvironments` lists an environment that an org gate applies to, and no skip-permission gate allows the skip. The version's phase is `Failed` and its status conditions say `skip denied for environment "<env>": ...`.
 
 ```bash
 kubectl get bundle <name> -o jsonpath='{.status.conditions[*].message}'
 ```
 
-Either remove the environment from `intent.skipEnvironments`, or have the platform team create a skip-permission gate for it (the Failed Bundle is then retried; it promotes unless a newer Bundle of the Pipeline is in flight or Verified): a PolicyGate in an org policy namespace (`--policy-namespaces`, default `platform-policies`) labelled `kardinal.io/type: skip-permission` and `kardinal.io/applies-to: <env>`, with `spec.skipPermission: true`. A gate in the Pipeline's namespace or in `spec.policyNamespaces` cannot grant a skip. See [Skip Permissions](policy-gates.md#skip-permissions).
+Either remove the environment from `intent.skipEnvironments`, or have the platform team create a skip-permission gate for it (the Failed version is then retried; it promotes unless a newer version of the Pipeline is in flight or Verified): a gate in an org policy namespace (`--policy-namespaces`, default `platform-policies`) labelled `kardinal.io/type: skip-permission` and `kardinal.io/applies-to: <env>`, with `spec.skipPermission: true`. A gate in the Pipeline's namespace or in `spec.policyNamespaces` cannot grant a skip. See [Skip Permissions](policy-gates.md#skip-permissions).
 
 ## Git errors
 
@@ -275,13 +275,13 @@ Merges are also found by polling: each PRStatus checks its PR every 30 seconds, 
 
 The Bundle API allows 60 requests per minute. There is one token, so every CI job and every Pipeline shares that limit, and every request with the right token counts, including ones rejected with `400`. The window is a fixed minute kept in the controller process.
 
-The limit cannot be changed. Create fewer Bundles (for example one per merge to main rather than one per push), or retry after the minute is over. The create-bundle GitHub Action does not retry a `429`.
+The limit cannot be changed. Create fewer versions (for example one per merge to main rather than one per push), or retry after the minute is over. The create-bundle GitHub Action does not retry a `429`.
 
 ## Graph controller issues
 
 ### Symptom: Graph shows `Accepted: False` with a CEL compile error
 
-kardinal generates the Graph, so a rejected Graph is a bug in kardinal. The Bundle is `Failed` with reason `GraphRejected` and kro's message: `kubectl describe bundle <name>`. Please open an issue with that message and the Pipeline.
+kardinal generates the Graph, so a rejected Graph is a bug in kardinal. The version is `Failed` with reason `GraphRejected` and kro's message: `kubectl describe bundle <name>`. Please open an issue with that message and the Pipeline.
 
 ### Symptom: Graph exists but its Ready condition stays False
 
@@ -311,21 +311,21 @@ The Graph controller creates a PromotionStep only after the nodes it depends on 
 kubectl get graph -l kardinal.io/bundle=my-app-v1 -o jsonpath='{.items[0].status.conditions}'
 ```
 
-If a PolicyGate node is not ready, downstream PromotionSteps will not be created until it passes.
+If a gate node is not ready, downstream PromotionSteps will not be created until it passes.
 
 ### Symptom: Bundle condition "GatesCreated" is False
 
-kro creates a Bundle's PolicyGate instances from one collection and makes them available to the
+kro creates a version's gate instances from one collection and makes them available to the
 promotion only when every instance was created. One instance the API server refuses (a
 `ResourceQuota` on `count/policygates.kardinal.io`, an admission policy, throttling) holds every
-gated environment of the Bundle. The condition names the missing instances and kro's error:
+gated environment of the version. The condition names the missing instances and kro's error:
 
 ```bash
 kubectl get bundle <name> -o jsonpath='{.status.conditions[?(@.type=="GatesCreated")].message}'
 ```
 
 Fix what refuses the instance (raise the quota, allow it in the policy); kro retries on its own and
-the Bundle continues. A PRStatus that cannot be created holds only its own environment: its
+the version continues. A PRStatus that cannot be created holds only its own environment: its
 PromotionStep waits in `WaitingForMerge` with `waiting for PRStatus <name>: the Graph has not
 created it yet`.
 
@@ -390,7 +390,7 @@ kubectl get policygates -A -l kardinal.io/gate-template=my-gate -o custom-column
 kardinal explain my-app --env prod
 ```
 
-**Unknown attribute:** `kardinal policy test my-gate.yaml` names the attribute that is missing. Only the attributes in the [CEL context reference](reference/cel-context.md) exist; anything else (for example `delegation.status`, `externalApproval.*`, `previousBundle.*` or `bundle.metadata.*`) is an error and the gate blocks. `metrics.<name>` exists only when a `MetricCheck` named `<name>` exists in the gate's metrics namespace (the org policy namespace for an org gate, the Pipeline namespace otherwise), and `upstream.<env>` only when that environment appears in the Bundle's status or recent history.
+**Unknown attribute:** `kardinal policy test my-gate.yaml` names the attribute that is missing. Only the attributes in the [CEL context reference](reference/cel-context.md) exist; anything else (for example `delegation.status`, `externalApproval.*`, `previousBundle.*` or `bundle.metadata.*`) is an error and the gate blocks. `metrics.<name>` exists only when a `MetricCheck` named `<name>` exists in the gate's metrics namespace (the org policy namespace for an org gate, the Pipeline namespace otherwise), and `upstream.<env>` only when that environment appears in the version's status or recent history.
 
 **CEL syntax error:** The expression failed to compile. Common mistakes:
 - Calling a field as a function: `!schedule.isWeekend` (correct) vs `!schedule.isWeekend()` (fails with `undeclared reference to 'isWeekend'`: it is a map field, not a function)
@@ -425,7 +425,7 @@ kubectl annotate scheduleclock kardinal-clock \
   kardinal.io/manual-tick=$(date +%s) -n kardinal-system --overwrite
 ```
 
-Any annotation change on a PolicyGate or ScheduleClock triggers a reconcile; the two keys
+Any annotation change on a gate or ScheduleClock triggers a reconcile; the two keys
 above are conventions. A status-only write does not.
 
 ---
@@ -456,7 +456,7 @@ kubectl create secret generic github-token \
 kubectl label secret github-token kardinal.io/referenceable=true --overwrite
 ```
 
-A step that returns an error is retried with backoff (10s, 20s, 40s, 80s, then 2m) up to 5 times; `status.message` shows `retrying in <d> (<n>/5)` and `status.nextRetryAt` when the retry runs. The step waits for it even when something else reconciles it first, such as a gate re-evaluation or a PR status change. Rotate the token within that window and the step continues. After the last retry the PromotionStep is Failed; create a new Bundle to promote again.
+A step that returns an error is retried with backoff (10s, 20s, 40s, 80s, then 2m) up to 5 times; `status.message` shows `retrying in <d> (<n>/5)` and `status.nextRetryAt` when the retry runs. The step waits for it even when something else reconciles it first, such as a gate re-evaluation or a PR status change. Rotate the token within that window and the step continues. After the last retry the PromotionStep is Failed; create a new version to promote again.
 
 ### Symptom: "authentication required" with "git Secret ... not found" or "spec.git.secretRef is not set"
 
@@ -486,7 +486,7 @@ retrying in 20s (2/5) after error: step git-push: git push origin main: authenti
 The `GitCredentialMissing` condition is `True` with reason `SecretUnreadable`, with one `Warning`
 Event. Creating the Secret does not fix this, so the step keeps the limit of 5 retries and then
 fails. Fix the read error (for `forbidden`, the controller's RBAC: the chart grants `get` on
-Secrets in every namespace the controller reconciles), then create a new Bundle to promote again.
+Secrets in every namespace the controller reconciles), then create a new version to promote again.
 
 ### Symptom: "get PR status failed: HTTP 401", "HTTP 403" or "HTTP 404" on a PromotionStep
 
@@ -510,7 +510,7 @@ kubectl get prstatus -o custom-columns=NAME:.metadata.name,PR:.spec.prNumber,ERR
 ```
 
 The PRStatus keeps polling every 5 minutes and clears `pollError` once a poll succeeds, but the
-failed step does not resume. Fix the token or the repository, then create a new Bundle.
+failed step does not resume. Fix the token or the repository, then create a new version.
 
 ### Symptom: "403 rate limit exceeded" or "429 Too Many Requests" in controller logs
 
@@ -591,7 +591,7 @@ helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --
 
 ### Symptom: Team cannot create PolicyGates in another team's namespace
 
-kardinal does not create RBAC for users. Your cluster's Roles decide who may write PolicyGates in each namespace. Check with:
+kardinal does not create RBAC for users. Your cluster's Roles decide who may write gates in each namespace. Check with:
 ```bash
 kubectl auth can-i create policygates.kardinal.io -n platform-policies --as <user>
 ```
@@ -610,7 +610,7 @@ the PR is still open, closes it with a comment if it is, and deletes its head br
 and a closed one only loses its branch. The branch is kept when the step comes back and pushes it
 again at once (the PromotionStep alone, below). Then it removes the finalizer. What happens to the PR depends on what was deleted:
 
-- **The Bundle.** The PR is closed with the comment `kardinal closed this PR: bundle <bundle>
+- **The version.** The PR is closed with the comment `kardinal closed this PR: bundle <bundle>
   was deleted. ...`.
 - **The namespace.** The PR is closed with the comment `kardinal closed this PR: namespace
   <namespace> was deleted. ...`.
@@ -619,7 +619,7 @@ again at once (the PromotionStep alone, below). Then it removes the finalizer. W
   PromotionStep <name> was deleted. ...`), and the new step opens a new PR. The step's PRStatus
   then names the new PR (`spec.prNumber`), and the old PR's status is cleared before the new PR
   is polled (`status.observedGeneration` catches up with `metadata.generation`).
-  The old PR keeps its branch while the Bundle is `Promoting` or `Failed`, its Graph is still
+  The old PR keeps its branch while the version is `Promoting` or `Failed`, its Graph is still
   there, and the new step pushes at once. The controller logs `kept the head branch of the
   closed PR`. The new step pushes the same branch about a second later. Forgejo and Gitea close
   every open PR of a deleted branch from a queue after the delete returns, so deleting the
@@ -627,12 +627,12 @@ again at once (the PromotionStep alone, below). Then it removes the finalizer. W
   required gate of the step is ready, the Pipeline is not paused, the upstream steps are
   `Verified`, and the controller supports the step's configuration. Otherwise the new step would
   wait or not come, so the controller deletes the branch. On GitHub the closed old PR can still
-  be merged through the API while its branch is kept, with the same Bundle's change for the same
+  be merged through the API while its branch is kept, with the same version's change for the same
   environment. The branch goes when the controller closes the new step's PR. If the new step ends
-  before it opens a PR (its Bundle is superseded, the step fails, or it is deleted after it
+  before it opens a PR (its version is superseded, the step fails, or it is deleted after it
   started and no step after it pushes at once), the controller deletes the branch then; **A
   branch left with no PR** below lists when it stays.
-- **The Graph, while the Bundle is `Promoting`.** The PR stays open: the controller recreates the
+- **The Graph, while the version is `Promoting`.** The PR stays open: the controller recreates the
   Graph, and the new step reuses the PR. The controller logs `left the PR of a step deleted with
   its Graph open` with the `env` and `prURL`.
 
@@ -649,7 +649,7 @@ refuses new Events there, and the step is gone, so the controller log is the onl
 case below) counts these PRs, so alert on it: Warning Events are rate-limited and best effort
 ([Kubernetes Events](operate.md#kubernetes-events)).
 
-Before it closes the PR, the controller reads the Bundle, its namespace, its Pipeline and its
+Before it closes the PR, the controller reads the version, its namespace, its Pipeline and its
 Graph to tell whether the step comes back (the Graph case above). If one of those reads keeps
 failing, it retries for about 5 minutes, then removes the finalizer without closing or
 commenting on the PR: a new step may still come back and reuse it, and leaking an open PR is
@@ -659,7 +659,7 @@ PromotionStep comes back; left its PR open and removed its finalizer` with the `
 as above). If no PromotionStep uses that PR, close it by hand, as below.
 
 **A PR left open with no PromotionStep.** In the Graph case above, the PR stays open on the
-promise that a new step reuses it. If the Bundle is deleted or stops `Promoting`, or its
+promise that a new step reuses it. If the version is deleted or stops `Promoting`, or its
 namespace is deleted, before the new step exists, nothing tracks the PR and the controller never
 closes it. (A Graph that fails to translate leaves the PR open only until the translation works
 again; the new step then reuses it.) Such a PR has the `kardinal/promotion` label and the branch
@@ -670,7 +670,7 @@ kubectl get promotionsteps -n <namespace> -l kardinal.io/bundle=<bundle>,kardina
 ```
 
 Close it by hand. The `left the PR of a step deleted with its Graph open` log line names it.
-If a new step for that Bundle and environment ends before it opens a PR, it deletes the branch
+If a new step for that version and environment ends before it opens a PR, it deletes the branch
 (below), and the SCM closes such a PR with no comment from kardinal.
 
 **A branch left with no PR.** A step that opens a PR but ends before it opens one (it is
@@ -681,16 +681,16 @@ still be left in a few cases:
 - The Pipeline is gone, so nothing names the repository.
 - A gate stopped being ready, or the Pipeline was paused, in the second between the delete of a
   step that kept the branch and kro creating the step again. The new step then waits in
-  `Pending`, and a `Pending` step holds no finalizer, so deleting it (or its Bundle) leaves the
+  `Pending`, and a `Pending` step holds no finalizer, so deleting it (or its version) leaves the
   branch.
 - The environment changed from `pr-review` to `auto` before that new step started.
 
-Such a branch has no open PR, and no PromotionStep for its Bundle and environment is
+Such a branch has no open PR, and no PromotionStep for its version and environment is
 `Promoting` or `WaitingForMerge` (use the `kubectl get promotionsteps` command above). It holds
-only that Bundle's change for that environment, so deleting it by hand changes nothing deployed.
+only that version's change for that environment, so deleting it by hand changes nothing deployed.
 
 The step stays only while the controller is not running, for example after `helm uninstall`
-without deleting the Bundles first. The controller did not close its PR: close the PR by hand,
+without deleting the versions first. The controller did not close its PR: close the PR by hand,
 then remove the finalizer (to remove it from every step at once, see
 [Uninstall](installation.md#uninstall)):
 
@@ -707,7 +707,7 @@ kubectl patch promotionstep <name> -n <namespace> --type=json -p \
 resources as the Graph ServiceAccount, which the applier RoleBinding authorizes. Deleting the
 namespace deletes that RoleBinding too, after which every delete kro makes is forbidden and it
 keeps its finalizer. The controller removes kro's finalizer from its own Graphs (the
-`kardinal.io/bundle` label and a Bundle owner) once the namespace is Terminating and the applier
+`kardinal.io/bundle` label and a version owner) once the namespace is Terminating and the applier
 RoleBinding is gone; the namespace deletion then deletes the resources. It logs `removed kro's
 finalizer from a Graph in a terminating namespace`. A Graph whose teardown was already stuck
 before the namespace deletion started is found within 30 seconds of it: the controller checks a
@@ -743,8 +743,8 @@ Gitea, Bitbucket Cloud, Bitbucket Data Center and Azure DevOps are also supporte
 
 For Helm, set `update: {strategy: helm}` on the Pipeline environment. kardinal
 will update the `image.tag` (or a custom path) in `values.yaml` instead of Kustomize
-overlays. It writes one image per Bundle: a Bundle with more than one tagged image
-fails the step. Use one Bundle per chart image, or kustomize.
+overlays. It writes one image per version: a version with more than one tagged image
+fails the step. Use one version per chart image, or kustomize.
 
 
 ### What does the controller need?
@@ -787,19 +787,19 @@ kardinal override <pipeline> --stage prod --gate <gate-name> \
 
 Rollbacks are triggered:
 
-1. **Manual**: `kardinal rollback <pipeline> --env prod` — creates a rollback Bundle. In a
+1. **Manual**: `kardinal rollback <pipeline> --env prod` — creates a rollback version. In a
    `pr-review` environment it opens a PR labelled `kardinal/rollback`; in an `auto` environment
    it commits and pushes straight to the branch, the same as any promotion there, with no PR
    (with `update.strategy: argocd` it sets the image on the Argo CD Application instead)
 2. **Automatic**: the environment sets `onHealthFailure: rollback` and its health check fails.
    That means a terminal result (a Deployment `ProgressDeadlineExceeded` from this promotion's
    rollout, a failed Flagger canary), no healthy result before `health.timeout`, or an unhealthy
-   check during a `bake` window with `policy: fail-on-alarm`. A rollback Bundle that fails its own
+   check during a `bake` window with `policy: fail-on-alarm`. A rollback version that fails its own
    health check is not rolled back again; its step ends `AbortedByAlarm`.
    See [Rollback](rollback.md#automatic-rollback).
    (`environments[].autoRollback` is not implemented and is rejected by the API server.)
 
-A rollback is a forward promotion of the previously-verified Bundle image through the
+A rollback is a forward promotion of the previously-verified version image through the
 same pipeline, same gates, same audit trail.
 
 ### How do I see what changed between two versions?
@@ -808,8 +808,8 @@ same pipeline, same gates, same audit trail.
 kardinal diff <bundle-a> <bundle-b>
 ```
 
-Compares the images (matched by repository) and provenance of two Bundles.
-`kardinal get bundles <pipeline>` lists the Bundle names.
+Compares the images (matched by repository) and provenance of two versions.
+`kardinal get bundles <pipeline>` lists the version names.
 
 
 ### Can a gate let hotfixes through the weekend block?
@@ -823,7 +823,7 @@ spec:
     ("kardinal.io/hotfix" in bundle.labels && bundle.labels["kardinal.io/hotfix"] == "true")
 ```
 
-Create the Bundle with `kubectl apply` and set `kardinal.io/hotfix: "true"` in `metadata.labels`.
+Create the version with `kubectl apply` and set `kardinal.io/hotfix: "true"` in `metadata.labels`.
 `kardinal create bundle` and the Bundle API do not set custom labels.
 Bundle annotations are not in the CEL context; labels are (`bundle.labels`).
 

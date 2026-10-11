@@ -74,7 +74,7 @@ spec:
 
 `layout: branch` on `spec.git` applies to every environment. Each environment needs its own
 rendered branch, different from `spec.git.branch`; otherwise the Pipeline is `Ready=False`
-(reason `ValidationFailed`) and its Bundles fail. `update.strategy: argocd` cannot be combined with
+(reason `ValidationFailed`) and its versions fail. `update.strategy: argocd` cannot be combined with
 `layout: branch`.
 
 ### Helm charts
@@ -106,8 +106,8 @@ commit would render different manifests, every promotion would commit a change, 
 would not restore what ran. Set `render.allowNondeterministic: true` to allow them. `env` and
 `expandenv` are not available, as in Helm.
 
-A `chart` Bundle (a chart version from a [Helm Subscription](subscription.md#promoting-a-chart-version))
-cannot promote a `layout: branch` environment yet: the Bundle fails at build. Both Graph shapes
+A `chart` version (a chart version from a [Helm Subscription](subscription.md#promoting-a-chart-version))
+cannot promote a `layout: branch` environment yet: the version fails at build. Both Graph shapes
 render: in the compact shape (`kardinal.io/graph-shape: compact`, or more environments than
 `--graph-compact-above`, and every Pipeline with a fleet) the RenderRuns come from one
 collection, created under the same condition. A fleet environment with `layout: branch` renders
@@ -134,7 +134,7 @@ commit and the push:
 
 The RenderRun's `status.result` (and the step's `status.outputs`) record the commit pushed, the
 DRY commit rendered, the renderer, the object count and the marker digest. A failed render fails
-the step and the Bundle with the RenderRun's message; promote a new Bundle to render again.
+the step and the version with the RenderRun's message; promote a new version to render again.
 
 ### The render Job
 
@@ -184,12 +184,12 @@ applied it. A finished RenderRun never runs again; a RenderRun is never run in
 the controller's own namespace.
 
 A render whose Job pushed but whose result was lost (its Pod gone, or a result that could not be
-read) fails, and the next render of the environment knows that Bundle as unconfirmed
+read) fails, and the next render of the environment knows that version as unconfirmed
 (`status.unconfirmedBundles`, only the newest such render): if the rendered branch's marker names
 it and its files are unchanged, the marker is accepted as kardinal's instead of failing as drift,
-and a rollback to that Bundle trusts its render. A Job Pod that pushed and was retried before it
+and a rollback to that version trusts its render. A Job Pod that pushed and was retried before it
 wrote its result (its node drained, say) finds its own marker in the same way: the marker of the
-same Bundle and DRY commit, with its files unchanged, is accepted, and the retry reports the commit
+same version and DRY commit, with its files unchanged, is accepted, and the retry reports the commit
 the first attempt pushed.
 
 The rendered commit's message ends with:
@@ -202,15 +202,15 @@ Kardinal-Bundle: my-app-v1-29-0
 
 ### Which DRY commit is rendered
 
-- A Bundle with `configRef.commitSHA` (a config or mixed Bundle, or an image Bundle that pins its
+- A version with `configRef.commitSHA` (a config or mixed version, or an image version that pins its
   DRY commit) renders that commit. `configRef.gitRepo` must be empty or the Pipeline's repository.
-- A rollback Bundle renders the DRY commit its target was rendered from in this environment. The
+- A rollback version renders the DRY commit its target was rendered from in this environment. The
   render Job looks through the last 500 commits of the rendered branch for a render kardinal made
-  of the target Bundle: a commit whose `Kardinal-Bundle` trailer names it and whose
+  of the target version: a commit whose `Kardinal-Bundle` trailer names it and whose
   `Kardinal-Dry-Commit` is a full 40-character commit id, and whose tree holds a render marker for
-  this Pipeline, environment, Bundle and DRY commit with every file it lists unchanged, and, when
+  this Pipeline, environment, version and DRY commit with every file it lists unchanged, and, when
   the environment has a record of its renders, a marker digest in it. Other
-  commits that name the Bundle are skipped. The DRY commit must also be on `spec.git.branch`: one
+  commits that name the version are skipped. The DRY commit must also be on `spec.git.branch`: one
   that is not (a commit on another branch, pushed by someone who can write to the rendered branch)
   is refused. If no such render is there, the step fails (pin the commit with
   `configRef.commitSHA`). `kardinal rollback` therefore restores the old manifests, not the old
@@ -247,14 +247,14 @@ memory limit and deadline bound everything else. A render that cannot succeed fa
 ## Drift
 
 `.kardinal/rendered.yaml` records the Pipeline, its namespace, the environment, the DRY commit,
-the Bundle and the sha256 of every file the last render wrote. Before writing, `render-manifests`
+the version and the sha256 of every file the last render wrote. Before writing, `render-manifests`
 compares the branch with it:
 
 - a rendered branch whose marker names another Pipeline, namespace or environment is refused for
   good: `rendered branch env/prod is not this environment's: it was rendered for Pipeline
   team-a/web environment prod; set render.branch to a branch of its own`. Two Pipelines (in any
   namespace) that render to the same branch of one repository also get `Ready=False` with reason
-  `RenderedBranchConflict` on the newer one, before a Bundle reaches it (a Pipeline of another
+  `RenderedBranchConflict` on the newer one, before a version reaches it (a Pipeline of another
   namespace is not named, in either message);
 - drift is a file kardinal wrote that was edited or deleted, any YAML or JSON file anywhere on the
   branch that kardinal did not write (Argo CD or Flux would apply it with the render), or a branch
@@ -262,10 +262,10 @@ compares the branch with it:
 - the marker itself is anchored: the RenderRun passes the render Job the marker digests of the
   environment's last 50 successful renders (`status.knownMarkerDigests`), and a marker that is not
   one of them is drift, so a push that edits a file and rewrites the marker to match is caught
-  too. A finished Bundle's RenderRuns are deleted with its Graph when the Graph is retired
+  too. A finished version's RenderRuns are deleted with its Graph when the Graph is retired
   ([Graph retirement](architecture.md#graph-retirement)); its steps keep their render's
-  marker digest in the Bundle's `status.retiredSteps`, which later renders read too. An
-  environment whose earlier Bundles are all gone (deleted, or pruned by `spec.historyLimit`) has
+  marker digest in the version's `status.retiredSteps`, which later renders read too. An
+  environment whose earlier versions are all gone (deleted, or pruned by `spec.historyLimit`) has
   none, and its branch's marker is used as it is.
 
 What happens on drift:

@@ -1,12 +1,12 @@
 # Policy Gates
 
-PolicyGates are CEL-powered policy checks that block promotions until their conditions are met. They are represented as nodes in the promotion DAG, visible in the UI and inspectable via `kardinal explain`.
+Gates are CEL-powered policy checks that block promotions until their conditions are met. They are represented as nodes in the promotion DAG, visible in the UI and inspectable via `kardinal explain`.
 
-## How PolicyGates Work
+## How gates work
 
 1. A platform team defines PolicyGate CRDs in the `platform-policies` namespace (org-level) or in a team namespace (team-level).
-2. When a Bundle is created and a Graph is generated from the Pipeline, the controller collects all matching PolicyGates and injects them as nodes in the Graph between the upstream environment and the target environment.
-3. The Graph controller creates per-Bundle PolicyGate instances.
+2. When a version is created and a Graph is generated from the Pipeline, the controller collects all matching gates and injects them as nodes in the Graph between the upstream environment and the target environment.
+3. The Graph controller creates per-version gate instances.
 4. The kardinal-controller evaluates each instance's CEL expression against the current promotion context.
 5. If the expression evaluates to `true`, the gate passes and Graph advances. If `false`, the gate blocks and downstream PromotionSteps wait.
 
@@ -31,7 +31,7 @@ spec:
 
 A gate's name is at most 63 characters, because kardinal copies it into the
 `kardinal.io/gate-template` label of every gate instance. The API server rejects a longer name.
-Only the PolicyGates kardinal creates can have longer names: the per-Bundle gate instances and the
+Only the gates kardinal creates can have longer names: the per-version gate instances and the
 `freeze-<pipeline>` gate of a paused Pipeline. Kardinal sets `spec.generated: true` on them. Do not
 set it on a gate you write: kardinal never uses a gate with `spec.generated` as a template, so the
 gate would not apply to any environment.
@@ -137,7 +137,7 @@ spec:
 
 ### Team-level gates
 
-Created in the team's own namespace. Team gates are additive: they are injected alongside org gates. A team Pipeline can add restrictions but cannot remove or weaken org gates. The escape hatch is [`kardinal override`](overrides.md): it patches the gate instances in the Pipeline namespace, so anyone with `patch` on PolicyGates there can force-pass an org gate for a limited time, with the reason recorded. Grant that verb only to the people allowed to break glass.
+Created in the team's own namespace. Team gates are additive: they are injected alongside org gates. A team Pipeline can add restrictions but cannot remove or weaken org gates. The escape hatch is [`kardinal override`](overrides.md): it patches the gate instances in the Pipeline namespace, so anyone with `patch` on gates there can force-pass an org gate for a limited time, with the reason recorded. Grant that verb only to the people allowed to break glass.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -165,7 +165,7 @@ labels:
 ```
 
 A label value cannot contain a comma, so the API server rejects a list such as
-`prod-us,prod-eu`. To block several environments, create one PolicyGate per environment,
+`prod-us,prod-eu`. To block several environments, create one gate per environment,
 each with its own `kardinal.io/applies-to` value.
 
 The controller reads gates from these places:
@@ -173,7 +173,7 @@ The controller reads gates from these places:
 2. The Pipeline's own namespace.
 3. Any namespaces listed in the Pipeline's `spec.policyNamespaces`.
 
-Every matching PolicyGate from all three is added to the Graph. `spec.policyNamespaces` can only add namespaces; the org policy namespaces are read whatever it says. A gate from the Pipeline's namespace or from `spec.policyNamespaces` is a team gate, unless it is labelled `kardinal.io/scope: org`. Either way, it can never grant a skip (see [Skip Permissions](#skip-permissions)).
+Every matching gate from all three is added to the Graph. `spec.policyNamespaces` can only add namespaces; the org policy namespaces are read whatever it says. A gate from the Pipeline's namespace or from `spec.policyNamespaces` is a team gate, unless it is labelled `kardinal.io/scope: org`. Either way, it can never grant a skip (see [Skip Permissions](#skip-permissions)).
 
 The Graph creates every gate instance in the Pipeline namespace and labels it
 `kardinal.io/gate-template-namespace` with its template's namespace. A gate from an org policy
@@ -182,20 +182,20 @@ the MetricChecks its gates use and a team MetricCheck of the same name cannot de
 other gate reads the MetricChecks of the Pipeline namespace.
 
 A team can edit the labels of the instances in its namespace, so the controller trusts the label
-only when the namespace it names is an org policy namespace and holds the PolicyGate that the
+only when the namespace it names is an org policy namespace and holds the gate that the
 instance's `kardinal.io/gate-template` label names. Otherwise the instance reads the Pipeline
 namespace, where a metric it names but cannot find still blocks it. If the controller cannot read
 the template, the gate evaluates with no metrics, so an expression that reads `metrics.*` blocks.
 
 ## CEL Context
 
-All PolicyGate expressions are evaluated against the same context. The
+All gate expressions are evaluated against the same context. The
 [CEL context reference](reference/cel-context.md) lists every attribute with its type; a test
 evaluates every attribute and example on these pages against the controller's real context.
 Referencing an attribute or map key that does not exist is an evaluation error, and the gate
 blocks (fail-closed).
 
-The context has the Bundle (`bundle.*`, with `bundle.upstreamSoakMinutes` and the stage PRs'
+The context has the version (`bundle.*`, with `bundle.upstreamSoakMinutes` and the stage PRs'
 review state in `bundle.pr`), the time (`schedule.*`), the target environment
 (`environment.name`), per-environment soak and history (`upstream.*`), MetricCheck results
 (`metrics.*`), change windows (`changewindow`) and approvals (`approvals.*`).
@@ -204,7 +204,7 @@ review state in `bundle.pr`), the time (`schedule.*`), the target environment
 
 `metrics.<name>` reads the MetricCheck named `<name>` in the gate's [metrics namespace](#matching)
 (the org policy namespace for an org gate, the Pipeline namespace otherwise).
-MetricChecks query Prometheus, Datadog, CloudWatch, New Relic or any JSON web API, with credentials from Secrets; a `perPromotion` MetricCheck is instantiated for each Bundle and environment with the Bundle's version in its query, and the gate of that Bundle reads its own instance as `metrics.<name>` (see [Metric Checks](metric-checks.md)).
+MetricChecks query Prometheus, Datadog, CloudWatch, New Relic or any JSON web API, with credentials from Secrets; a `perPromotion` MetricCheck is instantiated for each version and environment with the version's tag in its query, and the gate of that version reads its own instance as `metrics.<name>` (see [Metric Checks](metric-checks.md)).
 
 The controller does not query a MetricCheck URL on a loopback, link-local or cloud metadata address: the MetricCheck's `status.reason` then reads `destination address is not allowed` (see [Outbound requests to user URLs](guides/security.md#outbound-requests-to-user-urls)).
 
@@ -234,7 +234,7 @@ The controller evaluates every MetricCheck when it starts.
 
 Available for all gates. The history is computed from Bundle CRD status across the last 10
 promotions for the pipeline — no external API calls. The lookup is scoped to the last 10
-Bundles by creation time. `upstream` has an entry for every environment in this Bundle's
+versions by creation time. `upstream` has an entry for every environment in this version's
 status or in that history (not only the gated environment's upstreams); any other name is an
 evaluation error and the gate blocks.
 
@@ -280,7 +280,7 @@ error, write `"staging" in bundle.pr && bundle.pr["staging"].isApproved`.
 ### ChangeWindow attributes
 
 A `ChangeWindow` is a cluster-scoped object that describes when promotions are blocked.
-It blocks nothing by itself: a PolicyGate blocks while a window it references is active.
+It blocks nothing by itself: a gate blocks while a window it references is active.
 Reference windows from an org-level gate to freeze every pipeline with one object.
 
 ```yaml
@@ -370,7 +370,7 @@ expression: "schedule.hour >= 9 && schedule.hour < 17"
 expression: '!(schedule.dayOfWeek == "Friday" && schedule.hour >= 15)'
 ```
 
-### Bundle-based
+### Version-based
 
 ```yaml
 # Require a minimum soak time in the upstream environment
@@ -415,7 +415,7 @@ expression: |
 
 ## Skip Permissions
 
-A Bundle can skip environments with `intent.skipEnvironments`. When an org-level gate applies to a skipped environment, the skip needs a skip-permission gate. The permission counts only if it meets all of these conditions:
+A version can skip environments with `intent.skipEnvironments`. When an org-level gate applies to a skipped environment, the skip needs a skip-permission gate. The permission counts only if it meets all of these conditions:
 
 - it is labelled `kardinal.io/type: skip-permission`;
 - it sets `spec.skipPermission: true`;
@@ -439,20 +439,20 @@ spec:
   message: "Only hotfix bundles may skip staging"
 ```
 
-The controller checks for the permission when it builds the Bundle's Graph. If no permission exists, the Bundle goes to phase `Failed`, and its status conditions give the reason: `skip denied for environment "staging": ...`. The Bundle does not promote.
+The controller checks for the permission when it builds the Bundle's Graph. If no permission exists, the version goes to phase `Failed`, and its status conditions give the reason: `skip denied for environment "staging": ...`. The version does not promote.
 
-If a permission exists, the controller evaluates its expression like any other gate. It creates an instance of the permission gate in front of the next environment the Bundle promotes. That environment, `prod` in a `test → staging → prod` pipeline, waits until the expression is true. It never starts for a Bundle the permission does not cover. `kardinal explain` shows the instance with the other gates of that environment. The instance is annotated `kardinal.io/skipped-environments: staging`. If the skipped environment is the last one, nothing comes after it, so nothing waits on the permission.
+If a permission exists, the controller evaluates its expression like any other gate. It creates an instance of the permission gate in front of the next environment the version promotes. That environment, `prod` in a `test → staging → prod` pipeline, waits until the expression is true. It never starts for a version the permission does not cover. `kardinal explain` shows the instance with the other gates of that environment. The instance is annotated `kardinal.io/skipped-environments: staging`. If the skipped environment is the last one, nothing comes after it, so nothing waits on the permission.
 
 Without a skip-permission gate, skipping an environment that has org gates is always denied. An environment that only team gates apply to can be skipped without a permission.
 
 ## Re-evaluation
 
-PolicyGates are re-evaluated when any of the following occurs:
+Gates are re-evaluated when any of the following occurs:
 
 1. **ScheduleClock tick** (primary mechanism) — A `ScheduleClock` object in `kardinal-system`
    writes `status.tick` every minute by default. The PolicyGate reconciler watches all `ScheduleClock`
-   objects; each tick triggers re-evaluation of all active PolicyGate instances cluster-wide
-   (not those of [finished Bundles](#gates-of-finished-bundles)). Creating, editing or deleting a clock does not.
+   objects; each tick triggers re-evaluation of all active gate instances cluster-wide
+   (not those of [finished versions](#gates-of-finished-versions)). Creating, editing or deleting a clock does not.
    This is the recommended pattern for time-based gates (`schedule.isWeekend`, `schedule.hour`, etc.).
 
 2. **`recheckInterval`** — Each gate is also re-evaluated every `recheckInterval`, whether or not
@@ -478,19 +478,19 @@ reason changes, when a PromotionStep that has not started waits for a result new
 one, when the gate's spec changed, and otherwise at least every 10 minutes (the chart's
 `controller.gateStatusHeartbeat`, `--gate-status-heartbeat`; `0s` writes on every evaluation). A
 re-evaluation that changes nothing writes nothing: every status write makes kro re-check the
-Bundle's whole Graph. So `lastEvaluatedAt` can be up to 10 minutes older than the last evaluation.
+version's whole Graph. So `lastEvaluatedAt` can be up to 10 minutes older than the last evaluation.
 The Graph reads only
 `status.ready`; the PromotionStep also checks that the result is not older than the step before it
 starts (see [When a gate holds a step](#when-a-gate-holds-a-step)). While the controller is down,
 every gate keeps its last result and no step starts. The controller re-evaluates every gate when it
 starts. A result from before an outage still counts for a step created before that result.
-The controller evaluates the per-Bundle instances of a gate, never the gate you wrote, so
+The controller evaluates the per-version instances of a gate, never the gate you wrote, so
 `kardinal policy list` shows in LAST-EVALUATED the newest evaluation of the gate's instances (with
 `--pipeline`, of that pipeline's instances), or `-` when none has been evaluated. An instance
 records its gate's name and namespace (the `kardinal.io/gate-template` and
 `kardinal.io/gate-template-namespace` labels), so a gate in an org policy namespace or in
-`spec.policyNamespaces` counts its instances in every Pipeline's namespace. `kardinal status` shows when each gate holding a Bundle was last checked, and the UI
-when each gate of the Bundle on screen was last evaluated, so a stale result is visible.
+`spec.policyNamespaces` counts its instances in every Pipeline's namespace. `kardinal status` shows when each gate holding a version was last checked, and the UI
+when each gate of the version on screen was last evaluated, so a stale result is visible.
 
 ### ScheduleClock setup
 
@@ -516,28 +516,28 @@ kubectl get scheduleclock kardinal-clock -n kardinal-system
 
 ### Editing a gate
 
-Each Bundle's gate instances are copied from the PolicyGate templates when the controller builds
+Each version's gate instances are copied from the gate templates when the controller builds
 the Bundle's Graph. Editing a template, for example to fix its expression, does not change the
-instances of Bundles already in flight; Bundles created after the edit use the new expression. To
-release an in-flight Bundle that the old expression holds, use
-[`kardinal override`](overrides.md) or create a new Bundle.
+instances of versions already in flight; versions created after the edit use the new expression. To
+release an in-flight version that the old expression holds, use
+[`kardinal override`](overrides.md) or create a new version.
 
-### Gates of finished Bundles
+### Gates of finished versions
 
-The gate instances of a finished Bundle keep their last result: they are not evaluated or written
-again, and `status.lastEvaluatedAt` stops moving. A Bundle is finished when it is **Superseded**,
+The gate instances of a finished version keep their last result: they are not evaluated or written
+again, and `status.lastEvaluatedAt` stops moving. A version is finished when it is **Superseded**,
 or when it is **Verified** and its `GraphReady` condition is `True` (the Graph has seen every
 environment verified; nothing reads the gates after that). So the number of gate writes per
-ScheduleClock tick follows the number of Bundles in flight, not the Bundle history. The gates of a
-**Failed** Bundle are still evaluated, because the Bundle can recover.
+ScheduleClock tick follows the number of versions in flight, not the version history. The gates of a
+**Failed** version are still evaluated, because the version can recover.
 
 ## Mid-Flight Policy Changes
 
-PolicyGates are injected into the Graph at Graph creation time (when the Bundle starts promoting). If a new org-level PolicyGate is added while a Bundle is mid-flight, it does not apply to that Bundle's existing Graph. It applies to all subsequent Bundles.
+Gates are injected into the Graph at Graph creation time (when the version starts promoting). If a new org-level gate is added while a version is mid-flight, it does not apply to that version's existing Graph. It applies to all subsequent versions.
 
 To stop promotions at once, use `kardinal pause <pipeline>`. No new step starts, and in-flight steps hold at the next safe point (steps waiting for a PR merge or running health checks finish). See [Pause and Resume](pause.md).
 
-## Inspecting PolicyGates
+## Inspecting gates
 
 ```bash
 # List all PolicyGates
@@ -554,17 +554,17 @@ kardinal policy simulate --pipeline my-app --env prod --time "Saturday 3pm"
 ```
 
 In the UI, the pipeline page's "PolicyGate blocking promotion" banner, its **Show blocked** filter
-and the "blocked" count on the Policy Gates panel include only gates that hold the Bundle back, the
-same rule as the Blocked label and the Blockers column: the Bundle has reached the gate's
+and the "blocked" count on the Policy Gates panel include only gates that hold the version back, the
+same rule as the Blocked label and the Blockers column: the version has reached the gate's
 environment (every upstream environment is Verified and the environment has no step yet), or the
-environment's `Pending` step requires the gate. A gate that is not ready but does not hold the Bundle,
-because its environment is not reached yet or the Bundle failed (it can still retry), is shown as
-**Waiting** (grey) instead of **Block** (red). A superseded Bundle's gates that are not ready are
+environment's `Pending` step requires the gate. A gate that is not ready but does not hold the version,
+because its environment is not reached yet or the version failed (it can still retry), is shown as
+**Waiting** (grey) instead of **Block** (red). A superseded version's gates that are not ready are
 shown as **Superseded**: they are not evaluated again.
 
 `kardinal explain` gives each gate the same state in its STATE column: **Pass** (ready), **Block**
-(holding the Bundle), **Superseded**, **Pending** (not evaluated yet) or **Waiting** (evaluated not
-ready, not holding the Bundle).
+(holding the version), **Superseded**, **Pending** (not evaluated yet) or **Waiting** (evaluated not
+ready, not holding the version).
 
 ## Rollback hold exemption
 
@@ -572,32 +572,32 @@ A rollback created with `kardinal rollback --hold` can pass gates that would blo
 long as the hold lasts. This is exactly what is exempt:
 
 - **Exempt:** the gate instances of the held environment (`kardinal.io/environment` equals the
-  hold's environment) for the Bundle the hold names.
+  hold's environment) for the version the hold names.
 - **Not exempt:**
     - gates of every other environment, including the ones the rollback crosses before the
       held one;
     - the freeze gate of a paused Pipeline, which holds steps on its own;
     - approval gates (an `approval` policy, or an expression on `approvals.*`), met or not: a
       hold never stands in for the people a quorum requires;
-    - any Bundle but the one the hold names.
+    - any version but the one the hold names.
 
 The exemption applies only to a rollback the controller verifies, at every evaluation:
 
-1. The Bundle is a rollback Bundle (`kardinal.io/rollback=true`) of the Pipeline.
-2. Its `spec.provenance.rollbackOf` names a Bundle that was Verified in the held environment.
+1. The version is a rollback version (`kardinal.io/rollback=true`) of the Pipeline.
+2. Its `spec.provenance.rollbackOf` names a version that was Verified in the held environment.
 3. The combination of artifacts is checked per repository. For every image repository, config
    repository and chart that `rollbackOf` deploys, the rollback deploys exactly `rollbackOf`'s
    ref. Only repositories `rollbackOf` does not name (the ones `kardinal rollback` fills from
-   earlier Bundles) may come from another Bundle Verified in that environment. The rollback
+   earlier versions) may come from another version Verified in that environment. The rollback
    therefore never mixes a version of one repository with another version of the same repository
    than the target ran.
 4. Its artifacts still have the digest the hold recorded when it was made
    (`spec.holds[].artifacts`: SHA-256 of the JSON of its type, images, configRef and chart). A
-   Bundle edited after the hold is not exempt.
+   version edited after the hold is not exempt.
 5. The hold has not expired. A hold past its `expiresAt` counts as absent at once, also before
    the controller removes it from the spec.
 
-When a hold names the Bundle but the checks fail, the gate blocks as usual, and its reason ends
+When a hold names the version but the checks fail, the gate blocks as usual, and its reason ends
 with `(hold exemption refused: <why>)`.
 
 An exempt gate has the `status.reason`
