@@ -66,7 +66,7 @@ spec:
               environments:
                 description: |-
                   Environments lists the promotion path.
-                  Sequential ordering (GB-1): when an environment does not specify dependsOn,
+                  Sequential ordering: when an environment does not specify dependsOn,
                   it implicitly depends on the previous entry in this list. The first environment
                   has no upstream dependency. This sequential default means a list of N environments
                   without dependsOn fields produces a linear chain. Override with dependsOn to

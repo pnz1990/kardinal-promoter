@@ -365,7 +365,6 @@ func main() {
 			"both the UI and webhook servers use HTTPS instead of plain HTTP. "+
 			"Also readable from KARDINAL_TLS_KEY_FILE environment variable.")
 
-
 	// SCM credential rotation — watch a Kubernetes Secret and reload the SCM
 	// provider on change without restarting the controller. When
 	// --scm-token-secret-name is set, the --github-token flag is used only as
