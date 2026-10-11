@@ -107,6 +107,9 @@ test('keyboard shortcuts: / focuses the filter, ? shows the help, r refreshes, E
     ['j / k', 'Next / previous environment; on Approvals, next / previous approval'],
     ['a', 'Approve: the open environment, or the approval in focus'],
     ['s', 'Ship a version of the open pipeline'],
+    ['[ / ]', 'Follow an older / newer version'],
+    ['f', 'Follow the active version'],
+    ['c', 'Compare the focused version with the followed one'],
     ['Esc', 'Close the open side panel'],
   ]
   await expect(rows).toHaveCount(want.length)

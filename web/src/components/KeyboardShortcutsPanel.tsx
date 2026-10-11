@@ -31,6 +31,9 @@ const SHORTCUTS: ShortcutRow[] = [
   { key: 'j / k', description: 'Next / previous environment; on Approvals, next / previous approval' },
   { key: 'a', description: 'Approve: the open environment, or the approval in focus' },
   { key: 's', description: 'Ship a version of the open pipeline' },
+  { key: '[ / ]', description: 'Follow an older / newer version' },
+  { key: 'f', description: 'Follow the active version' },
+  { key: 'c', description: 'Compare the focused version with the followed one' },
   { key: 'Esc', description: 'Close the open side panel' },
 ]
 
