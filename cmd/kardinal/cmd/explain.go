@@ -69,7 +69,7 @@ the change has not landed yet. -w refreshes every 3 seconds.`,
 			}
 			w := cmd.OutOrStdout()
 			if !watchFlag {
-				return explainOnce(w, c, ns, pipeline, env, colorFlag)
+				return explainHinted(w, c, ns, pipeline, env, colorFlag)
 			}
 			return explainWatch(cmd.Context(), w, c, ns, pipeline, env, colorFlag, 3*time.Second)
 		},
@@ -119,7 +119,20 @@ func explainWatch(ctx context.Context, w io.Writer, c sigs_client.Client,
 	}
 }
 
+// explainHinted is explainOnce followed, on stderr, by the command that gets
+// past each gate that blocks: kardinal explain and why without -w (a watch
+// would repeat them every frame).
+func explainHinted(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter string, forceColor bool) error {
+	return explainRender(w, c, ns, pipeline, envFilter, forceColor, true)
+}
+
 func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter string, forceColor bool) error {
+	return explainRender(w, c, ns, pipeline, envFilter, forceColor, false)
+}
+
+// explainRender renders explain to w, and with hints the unblock commands
+// on stderr.
+func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter string, forceColor, hints bool) error {
 	ctx := context.Background()
 
 	pipe, err := getPipeline(ctx, c, ns, pipeline)
@@ -314,6 +327,9 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		return err
 	}
 	// Hints go to stderr: stdout stays the table.
+	if !hints {
+		unblock = nil
+	}
 	for _, h := range unblock {
 		label, cmdline, _ := strings.Cut(h, ": ")
 		_, _ = fmt.Fprintf(errOut, "%s %s\n", sty.Dim(label+":"), cmdline)

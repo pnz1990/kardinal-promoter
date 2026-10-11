@@ -8,6 +8,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -252,4 +255,51 @@ func TestHoldAndWhy(t *testing.T) {
 		require.NoError(t, err, verb)
 		assert.NotEmpty(t, cmd.Example, verb)
 	}
+}
+
+var updateShipCodes = flag.Bool("update-ship-codes", false, "rewrite testdata/ship-exit-codes.golden")
+
+// TestShipExitCodes_Golden (C5): ship --wait's exit codes, as the reference
+// page lists them, are pinned: a change to them shows here.
+//
+// Covers CLI-VERBS-01.
+func TestShipExitCodes_Golden(t *testing.T) {
+	got := shipExitCodeTable()
+	path := filepath.Join("testdata", "ship-exit-codes.golden")
+	if *updateShipCodes {
+		require.NoError(t, os.WriteFile(path, []byte(got), 0o644))
+	}
+	want, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, string(want), got, "the exit codes of ship --wait are a contract")
+	ship, _, err := NewRootCmd().Find([]string{"ship"})
+	require.NoError(t, err)
+	assert.Contains(t, ship.Annotations[ReferenceAnnotation], got, "the reference page shows them")
+}
+
+// TestExplainHints (C5): explain and why print, on stderr, the command that
+// gets past an evaluated gate that blocks; explain -w does not repeat them.
+//
+// Covers CLI-VERBS-01.
+func TestExplainHints(t *testing.T) {
+	var errb bytes.Buffer
+	prev := errOut
+	errOut = &errb
+	t.Cleanup(func() { errOut = prev })
+	at := time.Now().Add(-time.Hour)
+	approval := explainGateInstance("demo", "b1", "prod", "cab", "true", false, true, "waiting for approvals: 0 of 1")
+	approval.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1}
+	c := policyClient(t, policyPipeline("demo", "test", "prod"), explainBundle("b1", "Promoting", at),
+		explainStep("demo", "b1", "test", "Verified", "", at),
+		explainGateInstance("demo", "b1", "prod", "freeze", "false", false, true, "false = false"), approval,
+		explainGateInstance("demo", "b1", "prod", "fresh", "false", false, false, ""))
+	var out bytes.Buffer
+	require.NoError(t, explainHinted(&out, c, "default", "demo", "", false))
+	assert.Equal(t, "Approve: kardinal approve demo prod\nOverride: kardinal override demo prod --gate freeze --reason <why>\n", errb.String(),
+		"a gate not evaluated yet gets no hint")
+	assert.NotContains(t, out.String(), "Override:", "hints are not on stdout")
+
+	errb.Reset()
+	require.NoError(t, explainOnce(&out, c, "default", "demo", "", false))
+	assert.Empty(t, errb.String())
 }

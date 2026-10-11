@@ -15,17 +15,16 @@ follow it.
 
 --wait follows the Bundle, printing each new state of its environments on
 stderr, and ends with one line on stdout (or, with -o json, an object with
-bundle, pipeline, namespace, type, version, result, exitCode, message and the
-Bundle's environments from status.environments). Exit codes:
+bundle, pipeline, namespace, type, version, url, result, exitCode, message
+and the Bundle's environments from status.environments). Exit codes:
 
-  0  Verified: live in every environment it promotes
-  1  Failed (or the command itself failed)
-  3  Held: a gate that was evaluated and does not pass, or a rollback hold,
-     keeps it out of an environment, and nothing else of it is moving
-  4  WaitingForMerge: its PR waits for a person to merge it, and nothing
-     else of it is moving
-  5  Superseded or Rejected: a newer version replaced it, or it was rejected
-  6  Timeout: --timeout (default 30m) passed, or following was interrupted
+  CODE  RESULT                WHEN
+  0     Verified              live in every environment it promotes
+  1     Failed                it failed (or the command itself failed)
+  3     Held                  a gate that was evaluated and does not pass, or a rollback hold, keeps it out of an environment, and nothing else of it is moving
+  4     WaitingForMerge       its PR waits for a person to merge it, and nothing else of it is moving
+  5     Superseded, Rejected  a newer version replaced it, or it was rejected
+  6     Timeout               --timeout (default 30m) passed, or following was interrupted
 
 A stop at a gate, a hold or a PR counts once two reads agree, and a gate not
 evaluated yet never stops it. Stopping to follow does not stop the

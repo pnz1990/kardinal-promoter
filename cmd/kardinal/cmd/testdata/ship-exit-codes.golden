@@ -1,0 +1,7 @@
+  CODE  RESULT                WHEN
+  0     Verified              live in every environment it promotes
+  1     Failed                it failed (or the command itself failed)
+  3     Held                  a gate that was evaluated and does not pass, or a rollback hold, keeps it out of an environment, and nothing else of it is moving
+  4     WaitingForMerge       its PR waits for a person to merge it, and nothing else of it is moving
+  5     Superseded, Rejected  a newer version replaced it, or it was rejected
+  6     Timeout               --timeout (default 30m) passed, or following was interrupted
