@@ -144,5 +144,4 @@
   font-size: var(--k-text-2xs);
   cursor: pointer;
 }
-.bundle-timeline__hint { color: var(--k-ink-2); font-size: var(--k-text-2xs); }
 .bundle-timeline__chips { display: flex; align-items: stretch; gap: var(--k-space-1_5); }

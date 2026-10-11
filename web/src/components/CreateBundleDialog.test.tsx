@@ -56,8 +56,8 @@ describe('CreateBundleDialog', () => {
     expect(screen.getByLabelText(/container image/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/commit sha/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/author/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /create bundle/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /cancel bundle creation/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ship version' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Cancel shipping a version' })).toBeInTheDocument()
   })
 
   it('shows validation error and does not call API when image is empty on submit', async () => {
@@ -69,7 +69,7 @@ describe('CreateBundleDialog', () => {
         onCancel={() => {}}
       />
     )
-    fireEvent.click(screen.getByRole('button', { name: /create bundle/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ship version' }))
     await waitFor(() => {
       expect(screen.getByRole('alert')).toBeInTheDocument()
     })
@@ -98,7 +98,7 @@ describe('CreateBundleDialog', () => {
     fireEvent.change(screen.getByLabelText(/author/i), {
       target: { value: 'alice' },
     })
-    fireEvent.click(screen.getByRole('button', { name: /create bundle/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ship version' }))
 
     await waitFor(() => {
       expect(mockApi.createBundle).toHaveBeenCalledOnce()
@@ -129,12 +129,12 @@ describe('CreateBundleDialog', () => {
     fireEvent.change(screen.getByLabelText(/container image/i), {
       target: { value: 'ghcr.io/example/app:sha-abc1234' },
     })
-    fireEvent.click(screen.getByRole('button', { name: /create bundle/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ship version' }))
 
     await waitFor(() => {
       expect(screen.getByRole('alert')).toBeInTheDocument()
     })
-    expect(screen.getByRole('alert')).toHaveTextContent('Could not create the bundle: API error 500')
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not ship the version: API error 500')
     expect(onDone).not.toHaveBeenCalled()
     // Dialog remains open
     expect(screen.getByRole('dialog')).toBeInTheDocument()
@@ -157,11 +157,11 @@ describe('CreateBundleDialog', () => {
     fireEvent.change(screen.getByLabelText(/container image/i), {
       target: { value: 'ghcr.io/example/app:sha-abc1234' },
     })
-    fireEvent.click(screen.getByRole('button', { name: /create bundle/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ship version' }))
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /create bundle/i })).toBeDisabled()
-      expect(screen.getByRole('button', { name: /cancel bundle creation/i })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Ship version' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Cancel shipping a version' })).toBeDisabled()
     })
 
     // Resolve to clean up
@@ -178,7 +178,7 @@ describe('CreateBundleDialog', () => {
         onCancel={onCancel}
       />
     )
-    fireEvent.click(screen.getByRole('button', { name: /cancel bundle creation/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel shipping a version' }))
     expect(onCancel).toHaveBeenCalledOnce()
   })
 })
@@ -192,7 +192,7 @@ describe('CreateBundleDialog keyboard', () => {
     expect(screen.getByLabelText(/container image/i)).toHaveFocus()
     // Shift+Tab from the first field wraps to the last button.
     fireEvent.keyDown(document.activeElement!, { key: 'Tab', shiftKey: true })
-    expect(screen.getByRole('button', { name: 'Create bundle' })).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Ship version' })).toHaveFocus()
     fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(opener).toHaveFocus()
@@ -243,7 +243,7 @@ describe('CreateBundleButton', () => {
       target: { value: 'ghcr.io/example/app:v1.0' },
     })
     // Click the dialog submit button (aria-label="Create bundle")
-    fireEvent.click(screen.getByRole('button', { name: 'Create bundle' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ship version' }))
 
     await waitFor(() => {
       expect(onRefresh).toHaveBeenCalledOnce()

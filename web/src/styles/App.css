@@ -257,6 +257,22 @@
 .app-dag[data-split] { border-start-end-radius: 0; border-end-end-radius: 0; }
 .app-tab .promotion-errors { margin-inline: 0; }
 
+/* An empty pipeline's call to action (U4). */
+.app-first-version {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--k-space-3);
+  margin-block-end: var(--k-space-3);
+  padding: var(--k-space-4);
+  border: var(--k-border-hairline) dashed var(--k-line-strong);
+  border-radius: var(--k-radius-3);
+}
+.app-first-version__text { margin: 0; color: var(--k-ink-2); }
+.app-topbar__tools { display: flex; align-items: center; gap: var(--k-space-2); }
+.app-topbar__help { font-family: var(--k-font-display); font-weight: var(--k-weight-bold); }
+.app-empty__error { max-inline-size: calc(var(--k-space-24) * 6); margin-inline: auto; text-align: start; }
+
 /* ── Narrow screens (below the md breakpoint; App sets data-narrow from tokens.ts) ──
    The pipeline list is a drawer over the page, opened from the top bar; the main
    panel takes the full width. */

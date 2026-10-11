@@ -17,6 +17,7 @@ import { formatElapsedSince } from '../timeFormat'
 import { breakpoint } from '../tokens'
 import type { Bundle, Pipeline, PolicyGate, PromotionStep, StepEvent } from '../types'
 import { useModalFocus } from '../useModalFocus'
+import { KubernetesDetails } from '../ui/KubernetesDetails'
 import { ACTION_LABEL, DESTRUCTIVE, StageActions } from './StageActions'
 import { gateDisplay, gateLabel, stageView, type StageActionKind, type WaitReason } from './stageModel'
 import '../styles/StageDrawer.css'
@@ -170,6 +171,9 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
             <h3 id={`${headingId}-history`} className="stage-section__title">History</h3>
             <History namespace={namespace} step={view.step} now={now} />
           </section>
+
+          {/* The stage's object, for kubectl, collapsed at the bottom (U4 glossary). */}
+          {view.step && <KubernetesDetails kind="PromotionStep" name={view.step.name} namespace={view.step.namespace ?? namespace} />}
         </>
       )}
     </>
@@ -237,10 +241,11 @@ function WhyItem({ reason: w, now, primary, cli, onAct, onUpstream, upstreams }:
       {w.gate && (
         <details className="stage-details">
           <summary>Details</summary>
-          <p className="stage-muted">Gate instance {w.gate.name} in {w.gate.namespace}</p>
           <pre className="stage-code"><code>{w.gate.expression}</code></pre>
         </details>
       )}
+      {/* The gate's object, for kubectl: the only place the drawer names the kind. */}
+      {w.gate && <KubernetesDetails kind="PolicyGate" name={w.gate.name} namespace={w.gate.namespace} />}
     </li>
   )
 }

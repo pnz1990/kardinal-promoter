@@ -190,7 +190,7 @@ export function ReleaseMetricsBar({ bundles, finalEnvironments, deploymentMetric
   const target = finalEnvironments.length === 1 ? finalEnvironments[0] : `all ${finalEnvironments.length} final envs`
   const targetTitle = finalEnvironments.length === 1 ? undefined : `Final environments: ${finalEnvironments.join(', ')}`
 
-  const scope = `last ${metrics.totalBundles} bundle${metrics.totalBundles === 1 ? '' : 's'}`
+  const scope = `last ${metrics.totalBundles} version${metrics.totalBundles === 1 ? '' : 's'}`
   const dm = deploymentMetrics
   const stability = dm && (dm.deployments ?? 0) > 0 ? dm : undefined
   const cfrMillis = stability?.changeFailureRateMillis ?? 0

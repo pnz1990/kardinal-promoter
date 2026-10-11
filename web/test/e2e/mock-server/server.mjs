@@ -68,6 +68,12 @@ const PIPELINES = [
     failedStepCount: 0,
     activeBundleVersion: 'v2.4.0 with config 1a2b3c4',
     environmentTopology: [{ name: 'staging' }, { name: 'prod', upstreams: ['staging'] }],
+    // status.conditions (#1727): its git Secret works but is not labelled referenceable.
+    conditions: [
+      { type: 'Ready', status: 'True', reason: 'Ready' },
+      { type: 'SecretReferenceable', status: 'False', reason: 'SecretNotReferenceable',
+        message: 'git Secret github-token is not labeled kardinal.io/referenceable=true; it is still used in v0.10 but will be refused in v0.11: label it (kubectl label secret github-token -n default kardinal.io/referenceable=true)' },
+    ],
   },
 ]
 
@@ -173,7 +179,7 @@ const GATES = [
       required: 2, allowedGroups: ['release-managers'], excludeAuthor: true, approved: 1,
       decisions: [
         { user: 'alice', decision: 'approve', counted: true, comment: 'canary looks clean', firstSeenAt: new Date(Date.now() - 3_600_000).toISOString() },
-        { user: 'ci-bot', decision: 'approve', counted: false, reason: 'the Bundle\'s creator (excludeAuthor)', firstSeenAt: new Date(Date.now() - 600_000).toISOString() },
+        { user: 'ci-bot', decision: 'approve', counted: false, reason: 'the version\'s author (approval.excludeAuthor)', firstSeenAt: new Date(Date.now() - 600_000).toISOString() },
       ],
     },
   },

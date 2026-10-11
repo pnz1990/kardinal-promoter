@@ -21,6 +21,7 @@ import DAGTooltip, { type DAGTooltipTarget } from './DAGTooltip'
 import { formatElapsedSince } from '../timeFormat'
 import { isHttpURL, prNumberFromURL } from '../prLink'
 import { Icon } from '../ui/Icon'
+import { ErrorNotice } from '../ui/ErrorNotice'
 import '../styles/DAGView.css'
 
 /** Active states that warrant an elapsed-time display (#330). */
@@ -51,6 +52,8 @@ interface Props {
   onSelectNode?: (node: GraphNode | null) => void
   /** #532: When true, shows a .dag-static-banner indicating no active bundle. */
   isStaticTopology?: boolean
+  /** Read the graph again (the error's Retry). */
+  onRetry?: () => void
 }
 
 const NODE_WIDTH = 180
@@ -174,13 +177,13 @@ function DAGLegend() {
     <div className="dag-legend">
       <span className="dag-legend__title">Legend:</span>
       {/* Node type icons */}
-      <span title="PromotionStep — environment node (rounded rect)">
+      <span title="A stage: one environment's promotion (rounded box)">
         <span className="dag-legend__shape">▭</span>
-        Environment step
+        Stage
       </span>
-      <span title="PolicyGate — CEL policy check (gate icon)">
+      <span title="A gate: a policy check before an environment (gate icon)">
         <Icon name="gate" className="dag-legend__icon" />
-        Policy gate
+        Gate
       </span>
       <span aria-hidden="true" className="dag-legend__divider">│</span>
       {/* State color chips */}
@@ -194,7 +197,7 @@ function DAGLegend() {
           {item.label}
         </span>
       ))}
-      <span title="Highlighted nodes indicate blocked PolicyGates when filter is active" className="dag-legend__highlight">
+      <span title="With Show blocked on, the gates blocking a version are highlighted" className="dag-legend__highlight">
         <span className="dag-legend__highlight-mark">◆</span>highlighted = blocked gate
       </span>
     </div>
@@ -322,7 +325,7 @@ function DAGNode({
   )
 }
 
-export function DAGView({ nodes, edges, loading, error, highlightNodeIds, selectedNode, onSelectNode, isStaticTopology }: Props) {
+export function DAGView({ nodes, edges, loading, error, onRetry, highlightNodeIds, selectedNode, onSelectNode, isStaticTopology }: Props) {
   // #526: Portal tooltip state — shared across all DAGNode instances.
   const [tooltipTarget, setTooltipTarget] = useState<DAGTooltipTarget | null>(null)
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -336,6 +339,9 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
   }, [])
 
   const handleHoverEnd = useCallback(() => {
+    // Mouse leave and blur can both end a hover: keep one timer, or the first would
+    // hide the next node's tooltip.
+    if (hideTimerRef.current !== null) clearTimeout(hideTimerRef.current)
     hideTimerRef.current = setTimeout(() => {
       setTooltipTarget(null)
       hideTimerRef.current = null
@@ -371,7 +377,7 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
     )
   }
   if (error) {
-    return <div role="alert" className="dag-view__message dag-view__message--error">Error: {error}</div>
+    return <div className="dag-view__message"><ErrorNotice error={error} onRetry={onRetry} /></div>
   }
   if (nodes.length === 0) {
     return <div className="dag-view__message">No active promotion found.</div>
@@ -387,7 +393,7 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
       {isStaticTopology && (
         <div className="dag-static-banner" data-testid="dag-static-banner">
           <span className="dag-static-banner__mark">◦</span>
-          Pipeline topology — no active bundle. Create one to start promoting.
+          The pipeline's environments. No version has shipped yet.
         </div>
       )}
       <div className="dag-view__scroll">
