@@ -98,7 +98,7 @@ the Application if the approval is `pr-review` or the Bundle is config or mixed.
 
 The CRD rule applies only after the new CRDs are installed. Helm installs the chart's `crds/`
 directory on first install and never upgrades it, so apply the new CRDs as described in
-[Installation: Upgrade](installation.md#upgrade). Until you do, the API server accepts the
+[Installation: Upgrade](upgrade.md). Until you do, the API server accepts the
 combination, and the Pipeline reconciler, `kardinal validate` and the step still reject it.
 
 For a gated promotion, use `approval: auto` with a PolicyGate to control when the patch happens.
