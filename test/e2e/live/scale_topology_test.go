@@ -57,6 +57,9 @@ func TestScale_TopologyLongChain(t *testing.T) {
 	p := applyBig(t, r, "longchain", envs)
 	r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
 	r.Note("stages", len(envs))
+	// 120 stages, each waiting for the one before: on a GitHub runner they
+	// took 11m12s, past the flat ci Settle.
+	r.SettleSerial(len(envs))
 	r.Finish(scale.AllVerified)
 }
 
