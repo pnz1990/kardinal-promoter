@@ -48,9 +48,12 @@ type authGit struct {
 	failPush bool
 	cloneErr error
 	pushErr  error
+	// clones counts the Clone calls.
+	clones int
 }
 
 func (g *authGit) Clone(_ context.Context, url, _, _ string, auth scm.GitAuth) error {
+	g.clones++
 	token := auth.Token
 	if g.cloneErr != nil {
 		return g.cloneErr
@@ -157,7 +160,7 @@ func TestGitCredentialMissing(t *testing.T) {
 			// Create the Secret (and the secretRef when it was not set): the
 			// next retry has a token and the git steps go through.
 			require.NoError(t, c.Create(ctx, &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{Name: "git-creds", Namespace: "default"},
+				ObjectMeta: metav1.ObjectMeta{Name: "git-creds", Namespace: "default", Labels: map[string]string{"kardinal.io/referenceable": "true"}},
 				Data:       map[string][]byte{"token": []byte("a-token")},
 			}))
 			if tt.secretRef == nil {
@@ -223,7 +226,7 @@ func TestGitCredentialRetries_LeaveTheRetryLimit(t *testing.T) {
 
 			if createSecret {
 				require.NoError(t, c.Create(ctx, &corev1.Secret{
-					ObjectMeta: metav1.ObjectMeta{Name: "git-creds", Namespace: "default"},
+					ObjectMeta: metav1.ObjectMeta{Name: "git-creds", Namespace: "default", Labels: map[string]string{"kardinal.io/referenceable": "true"}},
 					Data:       map[string][]byte{"token": []byte("a-token")},
 				}))
 			}
@@ -426,7 +429,7 @@ func TestGitCredentialPresent_KeepsTheRetryLimit(t *testing.T) {
 			if tt.secret {
 				pipeline.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "git-creds"}
 				objs = append(objs, &corev1.Secret{
-					ObjectMeta: metav1.ObjectMeta{Name: "git-creds", Namespace: "default"},
+					ObjectMeta: metav1.ObjectMeta{Name: "git-creds", Namespace: "default", Labels: map[string]string{"kardinal.io/referenceable": "true"}},
 					Data:       map[string][]byte{"token": []byte("a-token")},
 				})
 			}
@@ -498,4 +501,53 @@ func TestGitCredentialMissing_StaleReadEmitsOneEvent(t *testing.T) {
 	got := getStep(t, c, "step-cred")
 	assert.Equal(t, 1, got.Status.GitCredentialRetries, "the stale reconcile wrote nothing")
 	assert.Equal(t, after.Status.NextRetryAt, got.Status.NextRetryAt)
+}
+
+// TestGitSecretNotReferenceable_Waits covers #1506: a git Secret without
+// kardinal.io/referenceable=true is not used. The step makes no git call and
+// waits (not Failed, no retry spent), its message and GitCredentialMissing
+// condition (reason SecretNotReferenceable) give the command that labels the
+// Secret, with one Warning Event; labeling it lets the next reconcile go
+// through.
+func TestGitSecretNotReferenceable_Waits(t *testing.T) {
+	ctx := context.Background()
+	pipeline := makePipeline("nginx-demo")
+	pipeline.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "git-creds"}
+	ps := asPromoting(makeStep("step-cred", "nginx-demo", "b1", "test"), pipeline)
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-creds", Namespace: "default"},
+		Data: map[string][]byte{"token": []byte("a-token")}}
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+		WithObjects(ps, pipeline, makeBundle("b1", "nginx-demo"), secret).Build()
+	rec := events.NewFakeRecorder(50)
+	git := &authGit{}
+	workDir := filepath.Join(t.TempDir(), "w")
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: git,
+		Recorder: rec, WorkDirFn: func(_, _ string) string { return workDir }, NowFn: pastBackoff()}
+
+	const want = "git Secret default/git-creds is not labeled kardinal.io/referenceable=true, so git does not use it; " +
+		"label it: kubectl label secret git-creds -n default kardinal.io/referenceable=true"
+	for i := 0; i < 3; i++ {
+		res, err := r.Reconcile(ctx, reqFor("step-cred"))
+		require.NoError(t, err)
+		assert.Equal(t, 30*time.Second, res.RequeueAfter)
+		got := getStep(t, c, "step-cred")
+		require.Equal(t, "Promoting", got.Status.State, got.Status.Message)
+		assert.Equal(t, "waiting for the git Secret: "+want, got.Status.Message)
+		assert.Zero(t, got.Status.RetryCount)
+		cond := meta.FindStatusCondition(got.Status.Conditions, promotionstep.ConditionGitCredentialMissing)
+		require.NotNil(t, cond)
+		assert.Equal(t, "SecretNotReferenceable", cond.Reason)
+	}
+	assert.Len(t, credentialWarnings(rec), 1, "one Warning Event")
+	assert.Zero(t, git.clones, "no git call with an unlabeled Secret")
+
+	secret.Labels = map[string]string{"kardinal.io/referenceable": "true"}
+	require.NoError(t, c.Update(ctx, secret))
+	reconcileStep(t, r, "step-cred")
+	got := getStep(t, c, "step-cred")
+	assert.Equal(t, "HealthChecking", got.Status.State, "the git steps went through: %s", got.Status.Message)
+	cond := meta.FindStatusCondition(got.Status.Conditions, promotionstep.ConditionGitCredentialMissing)
+	require.NotNil(t, cond)
+	assert.Equal(t, metav1.ConditionFalse, cond.Status)
 }

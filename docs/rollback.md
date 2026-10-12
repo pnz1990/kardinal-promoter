@@ -115,6 +115,15 @@ on another version or for another reason: release that hold first. `unhold` is `
 
 ### Roll back and hold
 
+<figure class="k-demo" id="demo-rollback-hold">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/rollback-hold.png">
+    <img src="../assets/demos/rollback-hold.webp" alt="The UI: the search pipeline's failed prod promotion, Roll back, ticking Hold with a reason, and confirming." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>Roll back and hold, from the UI · <code>kardinal rollback search prod --hold --reason …</code></figcaption>
+</figure>
+
+
 ```bash
 kardinal rollback my-app prod --hold --reason "INC-4521: v1.29.0 leaks connections"
 ```
@@ -250,7 +259,7 @@ rules:
     verbs: ["get", "list", "create"]
 ```
 
-`--emergency` is deprecated and has no effect. It never bypassed a gate. It prints a warning, the rollback runs as without it, and the flag will be removed in the next minor release. To let a rollback through a blocking gate, use [`kardinal override`](#rollback-and-gates).
+To let a rollback through a blocking gate, use [`kardinal override`](#rollback-and-gates).
 
 ## Automatic Rollback
 

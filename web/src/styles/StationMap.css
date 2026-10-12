@@ -322,7 +322,7 @@
 .gate-popover__state[data-tone="verified"] { color: var(--k-status-verified-fg); }
 .gate-popover__cel { display: block; font-family: var(--k-font-mono); color: var(--k-syntax-function); margin: var(--k-space-1) 0; }
 .gate-popover__reason { color: var(--k-ink-2); }
-.gate-popover__age, .gate-popover__hint { color: var(--k-ink-3); font-size: var(--k-text-xs); }
+.gate-popover__edge, .gate-popover__age, .gate-popover__hint { color: var(--k-ink-3); font-size: var(--k-text-xs); }
 
 /* Minimap. */
 .station-map__minimap {

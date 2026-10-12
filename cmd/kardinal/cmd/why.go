@@ -160,9 +160,11 @@ func whyFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline,
 		return fmt.Errorf("list policy gates: %w", err)
 	}
 	envs := p.Status.Environments
+	failed := p.Status.FailedVersion
 	if len(envs) == 0 {
-		// A controller that predates status.environments.
+		// A controller that predates status.environments (and failedVersion).
 		envs = pipelinerec.ProjectEnvironments(p, bundles.Items, steps.Items, gates.Items, nil, time.Time{})
+		failed = pipelinerec.FailedVersion(p.Name, bundles.Items)
 	}
 	byName := map[string]*v1alpha1.Bundle{}
 	for i := range bundles.Items {
@@ -175,6 +177,11 @@ func whyFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline,
 		me = &id
 	}
 	var answers []whyAnswer
+	// The newest version failed: that comes first, for every environment
+	// when it failed before any step, else for the one whose step failed.
+	if failed != nil && (envFilter == "" || failed.Environment == "" || failed.Environment == envFilter) {
+		answers = append(answers, whyFailed(p, failed))
+	}
 	for _, e := range envs {
 		if envFilter != "" && e.Name != envFilter {
 			continue
@@ -289,7 +296,7 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 			if b := byName[incoming]; b != nil {
 				creator, known = b.Annotations[lifecycle.AnnotationCreatedBy], true
 			}
-			return whyGate(p, e.Name, version, mine, me, creator, known)
+			return whyGate(p, e.Name, version, mine, me, creator, known, byName[incoming], now)
 		}
 		return whyAnswer{sentence: fmt.Sprintf("%s is held by gate %s.", e.Name, strings.Join(e.BlockedBy, ", ")),
 			lines: []whyLine{version, {"Next", fmt.Sprintf("kardinal explain %s %s", p.Name, e.Name)}}}
@@ -341,8 +348,10 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 // whyGate is why's answer for gates that hold an environment: the first
 // says what it waits for, the others follow as more lines. creator is the
 // version's kardinal.io/created-by; known is false when the version was not
-// read, and then nothing is said about its creator.
-func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1.PolicyGate, me *Identity, creator string, known bool) whyAnswer {
+// read, and then nothing is said about its creator. b is the version's
+// Bundle (nil when not read): a soak gate's progress is read from it at now.
+func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1.PolicyGate, me *Identity, creator string, known bool,
+	b *v1alpha1.Bundle, now time.Time) whyAnswer {
 	g := gates[0]
 	name := gateDisplayName(g)
 	var a whyAnswer
@@ -394,22 +403,44 @@ func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1
 			a.lines = append(a.lines, whyLine{"Why", g.Spec.Message})
 		}
 		a.lines = append(a.lines, whyLine{"Rule", g.Spec.Expression})
-		if now := graph.GateDetail(&g); now != "" {
-			a.lines = append(a.lines, whyLine{"Now", now})
+		soak, isSoak := soakOf(p, b, &g, now)
+		if isSoak {
+			a.lines = append(a.lines, whyLine{"Now", soak.now()})
+		} else if detail := graph.GateDetail(&g); detail != "" {
+			a.lines = append(a.lines, whyLine{"Now", detail})
 		}
 		every := g.Spec.RecheckInterval
 		if every == "" {
 			every = "5m"
 		}
-		opens := "when the expression passes; rechecked every " + every
-		if !rechecks(&g) {
-			opens = "when what it reads changes (nothing in it changes with time); rechecked every " + every
+		override := fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>", p.Name, env, name)
+		follow := fmt.Sprintf("kardinal status %s -w follows it", p.Name)
+		// A gate that opens by itself is waited for; the override (a
+		// recorded bypass) is only the alternative.
+		switch {
+		case isSoak && soak.opens() != "":
+			a.lines = append(a.lines, whyLine{"Opens", "by itself " + soak.opens() + "; rechecked every " + every},
+				whyLine{"Next", fmt.Sprintf("wait: it opens by itself %s (%s)", soak.opens(), follow)},
+				whyLine{"Or", override})
+		case rechecks(&g):
+			a.lines = append(a.lines, whyLine{"Opens", "by itself when the expression passes; rechecked every " + every},
+				whyLine{"Next", fmt.Sprintf("wait: it opens by itself when the expression passes (%s)", follow)},
+				whyLine{"Or", override})
+		default:
+			a.lines = append(a.lines,
+				whyLine{"Opens", "when what it reads changes (nothing in it changes with time); rechecked every " + every},
+				whyLine{"Next", override})
 		}
-		a.lines = append(a.lines, whyLine{"Opens", opens},
-			whyLine{"Next", fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>", p.Name, env, name)})
 	}
 	for _, other := range gates[1:] {
-		a.lines = append(a.lines, whyLine{"Also", "gate " + gateDisplayName(other)})
+		also := "gate " + gateDisplayName(other)
+		if soak, ok := soakOf(p, b, &other, now); ok {
+			also += ": " + soak.now()
+			if _, live := soak.opensIn(); live && soak.opens() != "" {
+				also += ", opens by itself " + soak.opens()
+			}
+		}
+		a.lines = append(a.lines, whyLine{"Also", also})
 	}
 	return a
 }
@@ -521,13 +552,63 @@ not create the version, and yours is not counted yet ("approval by someone
 else (you approved)" once it is); else who may, "approval by alice or group
 release-managers"; who rejected it, when someone did; nobody, when the
 policy cannot be met. These come from the server's own tally of the gate's
-Approvals, so why and the controller agree; any other gate: its message, Rule its expression, Now its last evaluation,
-Opens when it opens and how often it is rechecked; Next: kardinal approve or
-kardinal override); its PR waits to be merged (PR and its URL); the version
+Approvals, so why and the controller agree; any other gate: its message, Rule its expression, Now its last evaluation
+(for a soak gate, how far the version soaked: "soak 0.4 of 3 min in uat"),
+Opens when it opens and how often it is rechecked ("by itself in about
+2m36s" for a soak gate); Next: kardinal approve; for a gate that opens by
+itself, wait, with kardinal override only as Or; else kardinal override); its PR waits to be merged (PR and its URL); the version
 failed (Why the step's message; Next: kardinal logs, or roll back); it is
 promoting; it waits for an upstream environment; it has no version yet; or
 nothing is waiting ("prod runs 1.5.0 and nothing is waiting.").
 
+why shows the gates the version started with. A version gets its gates when
+it starts promoting, so a gate created or edited later applies to the
+versions shipped after it, not to one already waiting (Policy Gates, "When a
+new or edited gate takes effect").
+
 -o wide prints kardinal explain's table (every step and gate of the current
 version, with kinds and expressions), with the commands that get past a
 gate on stderr; -o json and yaml print explain's entries.`
+
+// whyFailed is why's answer when the Pipeline's newest version failed
+// (status.failedVersion): what failed, the reason, what fixes it where
+// known, and where the whole record is.
+func whyFailed(p *v1alpha1.Pipeline, f *v1alpha1.PipelineFailedVersion) whyAnswer {
+	where := "failed before it started"
+	if f.Environment != "" {
+		where = "failed in " + f.Environment
+	}
+	detail, fix, _ := strings.Cut(f.Message, " — ")
+	if own := failureFix(p, f); own != "" {
+		fix = own
+	}
+	a := whyAnswer{sentence: fmt.Sprintf("The newest version %s %s: %s", versionLabel(f.Version, f.Bundle), where, detail)}
+	a.lines = append(a.lines, whyLine{"Reason", f.Reason})
+	if fix != "" {
+		a.lines = append(a.lines, whyLine{"Fix", fix})
+	}
+	a.lines = append(a.lines, whyLine{"See", fmt.Sprintf("kubectl get bundle %s -n %s -o yaml", f.Bundle, p.Namespace)})
+	return a
+}
+
+// failureFix says what to do about a failure, in the CLI's words (the
+// controller's message names the kinds); "" leaves the message's own hint.
+func failureFix(p *v1alpha1.Pipeline, f *v1alpha1.PipelineFailedVersion) string {
+	switch f.Reason {
+	case "GraphBuildFailed":
+		return "fix the pipeline, version or gate the message names; changing the pipeline or its gates retries this version"
+	case "InvalidIntent", "InvalidPipeline", "CircularDependency":
+		return "fix the pipeline (kubectl edit pipeline " + p.Name + " -n " + p.Namespace + "); the change retries this version"
+	case "GraphRejected":
+		return "kro could not run the Graph kardinal built for this version: check that the installed kro is at least the " +
+			"version the chart's kro.version annotation names (helm show chart kardinal-promoter; " +
+			"https://pnz1990.github.io/kardinal-promoter/installation/#install-kro), upgrade kardinal if a release fixes it, " +
+			"or report it with this message; then ship the version again (kardinal ship " + p.Name + " ...)"
+	case "StepFailed":
+		if f.Environment != "" {
+			return fmt.Sprintf("fix what %s reports, then ship the version again, or roll it back: kardinal rollback %s --env %s",
+				f.Environment, p.Name, f.Environment)
+		}
+	}
+	return ""
+}

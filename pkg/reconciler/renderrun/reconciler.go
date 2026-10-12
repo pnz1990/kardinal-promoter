@@ -480,6 +480,20 @@ func (r *Reconciler) createJob(ctx context.Context, log zerolog.Logger, base, ru
 		r.finish(run, v1alpha1.RenderRunFailed, "ValidationFailed: "+err.Error(), nil)
 		return ctrl.Result{}, r.patch(ctx, base, run)
 	}
+	// The render Job mounts the git Secret only once its owner marked it
+	// referenceable (#1506); until then the RenderRun waits, up to its
+	// deadline.
+	if wait, err := r.gitSecretNotReferenceable(ctx, run); err != nil {
+		return ctrl.Result{}, err
+	} else if wait != "" {
+		if run.Status.Message != wait {
+			run.Status.Message = wait
+			if err := r.patch(ctx, base, run); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{RequeueAfter: min(r.untilDeadline(run), 30*time.Second)}, nil
+	}
 	if err := r.ensureServiceAccount(ctx, run.Namespace); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -779,6 +793,29 @@ func (r *Reconciler) untilDeadline(run *v1alpha1.RenderRun) time.Duration {
 }
 
 // patch writes run's status, optimistic-locked on base's resourceVersion.
+// gitSecretNotReferenceable returns why the render Job may not mount the
+// RenderRun's git Secret yet ("" when it may, or when there is none or it
+// does not exist: the Job then reports that).
+func (r *Reconciler) gitSecretNotReferenceable(ctx context.Context, run *v1alpha1.RenderRun) (string, error) {
+	name := run.Spec.Git.SecretName
+	if name == "" {
+		return "", nil
+	}
+	var secret corev1.Secret
+	if err := r.Get(ctx, types.NamespacedName{Namespace: run.Namespace, Name: name}, &secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("get git secret %s/%s: %w", run.Namespace, name, err)
+	}
+	if secret.Labels[v1alpha1.LabelSecretReferenceable] == "true" {
+		return "", nil
+	}
+	return fmt.Sprintf("%s: git Secret %s/%s is not labeled %s=true; label it: kubectl label secret %s -n %s %s=true",
+		v1alpha1.ReasonSecretNotReferenceable, run.Namespace, name, v1alpha1.LabelSecretReferenceable,
+		name, run.Namespace, v1alpha1.LabelSecretReferenceable), nil
+}
+
 func (r *Reconciler) patch(ctx context.Context, base, run *v1alpha1.RenderRun) error {
 	if err := r.Status().Patch(ctx, run, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 		return fmt.Errorf("patch renderrun %s status: %w", run.Name, err)

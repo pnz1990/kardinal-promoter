@@ -49,7 +49,7 @@ func TestUIHandler_Access(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newUIHandler(fake.NewClientBuilder().WithScheme(uiScheme()).Build(), nil, tt.auth, "", nil, zerolog.Nop())
+			h := newUIHandler(fake.NewClientBuilder().WithScheme(uiScheme()).Build(), nil, nil, tt.auth, "", nil, zerolog.Nop())
 			token := ""
 			if tt.token != "" {
 				token = "Bearer " + tt.token
@@ -115,7 +115,7 @@ func TestUIHandler_Access_Errors(t *testing.T) {
 			if tt.access != nil {
 				acc = tt.access
 			}
-			h := newUIHandler(fake.NewClientBuilder().WithScheme(uiScheme()).Build(), nil,
+			h := newUIHandler(fake.NewClientBuilder().WithScheme(uiScheme()).Build(), nil, nil,
 				uiAuthConfig{tokens: tokens, access: acc, scopeNamespace: tt.scope}, "", nil, zerolog.Nop())
 			rec := uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/access", "Bearer a", tt.body)
 			assert.Equal(t, tt.want, rec.Code, rec.Body.String())
@@ -141,7 +141,7 @@ func TestUIHandler_Access_Bounded(t *testing.T) {
 	})
 	access := uiauth.NewCachedAccessReviewer(uiauth.NewRateLimitedAccessReviewer(inner,
 		uiauth.DefaultAccessReviewsPerUserPerMinute, uiauth.DefaultAccessReviewsPerMinute), uiauth.DefaultCacheTTL)
-	h := newUIHandler(fake.NewClientBuilder().WithScheme(uiScheme()).Build(), nil,
+	h := newUIHandler(fake.NewClientBuilder().WithScheme(uiScheme()).Build(), nil, nil,
 		uiAuthConfig{tokens: tokens, access: uiauth.NewCachedAccessReviewer(inner, uiauth.DefaultCacheTTL), accessCheck: access},
 		"", nil, zerolog.Nop())
 

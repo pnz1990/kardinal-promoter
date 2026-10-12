@@ -1,6 +1,61 @@
 # Policy Gates
 
-Gates are CEL-powered policy checks that block promotions until their conditions are met. They are represented as nodes in the promotion DAG, visible in the UI and inspectable via `kardinal explain`.
+A gate holds a version before an environment until its rule passes: a time window, a soak in the
+environment before, a metric, an approval. The rule is a CEL expression, and
+[`kardinal why`](reference/cli/kardinal-why.md) shows what a gate waits for.
+
+## Add a gate
+
+This gate holds prod until the version has been live in uat for 5 minutes. Create it in the
+Pipeline's namespace (`default` for the [quickstart](quickstart.md)'s `demo`):
+
+```bash
+cat <<'EOF' | kubectl apply -f -
+apiVersion: kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: uat-soak
+  namespace: default
+  labels:
+    kardinal.io/applies-to: prod
+spec:
+  expression: "upstream.uat.soakMinutes >= 5"
+  message: "prod waits until the version has been live in uat for 5 minutes"
+  recheckInterval: 1m
+EOF
+```
+
+`kardinal.io/applies-to` names the environment it holds. Ship a version: once uat is live,
+`kardinal why demo prod` shows the gate while it holds, for example:
+
+```text
+prod is held by gate uat-soak.
+  Version  main (demo-q8m4t)
+  Why      prod waits until the version has been live in uat for 5 minutes
+  Rule     upstream.uat.soakMinutes >= 5
+  Now      upstream.uat.soakMinutes >= 5 = false
+  Opens    when the expression passes; rechecked every 1m
+  Next     kardinal override demo prod --gate uat-soak --reason <why>
+```
+
+After 5 minutes the gate passes and prod promotes (in the quickstart's `demo`, prod then still
+waits for your approval at `prod-approval`). [CEL Context](#cel-context) lists what an expression
+can read, and [CEL Expression Examples](#cel-expression-examples) has more rules.
+
+## When a new or edited gate takes effect
+
+A version gets its gates when it starts promoting: kardinal copies every gate that applies to its
+environments into the version then. So:
+
+- **A new gate** applies to the versions shipped after you create it. A version that is already
+  promoting or waiting keeps the gates it started with, and `kardinal why` shows only those.
+- **An edited gate** (its expression, message or recheck interval) applies to the versions shipped
+  after the edit. A version already in flight keeps its copy of the old gate.
+
+To act on a version already in flight: `kardinal pause <pipeline>` stops new steps at once (see
+[Pause and Resume](pause.md)), `kardinal hold <pipeline> <env>` keeps an environment on what it
+runs, and [`kardinal override`](overrides.md) releases a version that an old gate holds. Or ship
+a new version, which gets the gates as they are now.
 
 ## How gates work
 
@@ -95,13 +150,6 @@ Limits:
   older than the step, and the step waits for a later evaluation (the next ScheduleClock tick or
   `recheckInterval` after the skew has passed). If the controller's clock is ahead, a result up to
   the skew old is accepted. Keep node clocks synchronized. This effect is not covered by tests.
-
-### `when` field (deprecated)
-
-`spec.when` has no effect and is deprecated: `pre-deploy` and `post-deploy` behave the same, and
-every gate is re-checked before its step starts, as described above. The field keeps its values and
-its default (`post-deploy`), so existing manifests still apply. `kardinal validate` warns when it is
-set. Remove it from your gates.
 
 **Example: block prod deployments when staging error rate is high**
 
@@ -389,6 +437,24 @@ expression: 'has(bundle.labels.hotfix) && bundle.labels.hotfix == "true"'
 expression: 'bundle.version.startsWith("1.")'
 ```
 
+While a soak gate (`bundle.upstreamSoakMinutes` or `upstream.<env>.soakMinutes` compared with
+`>=` or `>`) holds a version, `kardinal why`, `kardinal explain` and `kardinal status` show how far
+it soaked and, when the comparison is the whole expression, when it opens:
+
+```
+$ kardinal why demo prod
+prod is held by gate uat-soak-before-prod.
+  Version  sha-9349a3f (demo-kzwhs)
+  Rule     bundle.upstreamSoakMinutes >= 3
+  Now      soak 0.4 of 3 min in uat
+  Opens    by itself in about 2m36s; rechecked every 30s
+  Next     wait: it opens by itself in about 2m36s (kardinal status demo -w follows it)
+  Or       kardinal override demo prod --gate uat-soak-before-prod --reason <why>
+```
+
+The soak is counted from the upstream's `status.environments[].healthCheckedAt` on the Bundle,
+the same field the controller's `soakMinutes` counts from; the gate itself decides on whole minutes.
+
 ### Metric-based
 
 ```yaml
@@ -517,14 +583,6 @@ kubectl get scheduleclock kardinal-clock -n kardinal-system
 # kardinal-clock   1m         2026-04-14T12:00:00Z         5m
 ```
 
-### Editing a gate
-
-Each version's gate instances are copied from the gate templates when the controller builds
-the Bundle's Graph. Editing a template, for example to fix its expression, does not change the
-instances of versions already in flight; versions created after the edit use the new expression. To
-release an in-flight version that the old expression holds, use
-[`kardinal override`](overrides.md) or create a new version.
-
 ### Gates of finished versions
 
 The gate instances of a finished version keep their last result: they are not evaluated or written
@@ -533,12 +591,6 @@ or when it is **Verified** and its `GraphReady` condition is `True` (the Graph h
 environment verified; nothing reads the gates after that). So the number of gate writes per
 ScheduleClock tick follows the number of versions in flight, not the version history. The gates of a
 **Failed** version are still evaluated, because the version can recover.
-
-## Mid-Flight Policy Changes
-
-Gates are injected into the Graph at Graph creation time (when the version starts promoting). If a new org-level gate is added while a version is mid-flight, it does not apply to that version's existing Graph. It applies to all subsequent versions.
-
-To stop promotions at once, use `kardinal pause <pipeline>`. No new step starts, and in-flight steps hold at the next safe point (steps waiting for a PR merge or running health checks finish). See [Pause and Resume](pause.md).
 
 ## Inspecting gates
 

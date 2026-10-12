@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0
 
 import { describe, it, expect } from 'vitest'
-import { actionCheck, mayDecide, restriction } from './actionAccess'
+import { actionCheck, approveCommand, mayDecide, restriction } from './actionAccess'
 import type { PolicyGate } from '../types'
 
 const gate = (allowedUsers?: string[], allowedGroups?: string[]): PolicyGate => ({
@@ -27,7 +27,13 @@ describe('actionAccess (U7)', () => {
     expect(restriction('pause', no, alice)).toBe('Pausing the pipeline needs the promoter or admin role.')
     expect(restriction('pause', { allowed: true, known: true }, alice)).toBeUndefined()
     expect(restriction('pause', { allowed: false, known: false }, alice)).toBeUndefined()
-    expect(restriction('approve', { allowed: true, known: true }, null)).toMatch(/^Approving from the UI names who decided, so it needs sign-in/)
+    expect(restriction('approve', { allowed: true, known: true }, null)).toBe('Approving needs sign-in with your Kubernetes identity — run kardinal approve <pipeline> <env>')
+    const waiting = { ...gate(), pipeline: 'web', environment: 'prod', namespace: 'team' }
+    expect(restriction('approve', { allowed: false, known: true }, null, waiting))
+      .toBe('Approving needs sign-in with your Kubernetes identity — run kardinal approve web prod -n team')
+    expect(restriction('reject', { allowed: false, known: true }, null, waiting))
+      .toBe('Declining needs sign-in with your Kubernetes identity — run kardinal approve web prod -n team --decision reject')
+    expect(approveCommand('web', 'prod', 'default', 'revoke')).toBe('kardinal approve web prod --revoke')
     expect(restriction('approve', { allowed: true, known: true }, alice, gate(['bob'], ['release-managers']), 'release-approval'))
       .toBe('Only members of release-managers or bob can decide on release-approval.')
     expect(restriction('reject', { allowed: true, known: true }, alice, gate(undefined, ['sre']))).toBeUndefined()

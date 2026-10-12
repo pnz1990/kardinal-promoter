@@ -35,6 +35,11 @@ chmod +x kardinal && sudo mv kardinal /usr/local/bin/
 
 ## 2. Create a cluster and fork the demo repository
 
+quickstart supports forks on github.com. A `--repo` on another git host is refused before
+anything is installed; install kardinal by hand for it ([Installation](installation.md),
+[SCM providers](scm-providers.md)), or pass `--set scm.provider=<provider> --set scm.apiURL=<url>`
+so that quickstart installs the controller for that host.
+
 ```bash
 kind create cluster --name kardinal
 gh repo fork pnz1990/kardinal-demo --clone=false
@@ -48,6 +53,11 @@ writes to, with one directory per environment. Your fork receives its commits.
 ```bash
 kardinal quickstart --repo https://github.com/<you>/kardinal-demo
 ```
+
+The quickstart supports forks on github.com. A `--repo` on another git host is refused before
+anything is installed; install kardinal by hand for it ([Installation](installation.md),
+[SCM providers](scm-providers.md)), or pass `--set scm.provider=<provider> --set scm.apiURL=<url>`
+so that the quickstart installs the controller for that host.
 
 It sets up the demo in the current kubectl context, then ships a first version and follows it.
 This is its output in a log or a pipe; on a terminal the `-` marks are ✓ and each state has its
@@ -126,6 +136,14 @@ prod is waiting for your approval.
 ```
 
 **Next** is the command that gets past the gate.
+
+<figure class="k-demo" id="demo-why-waiting">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/why-waiting.png">
+    <img src="../assets/demos/why-waiting.webp" alt="The UI: selecting a waiting stage, then its gate, to read why the promotion waits." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>Why a stage is waiting, in the UI · <code>kardinal why demo prod</code></figcaption>
+</figure>
 
 ## 5. Approve
 

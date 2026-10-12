@@ -27,6 +27,21 @@ describe('ApprovalActions (E6)', () => {
     expect(onDone).toHaveBeenCalledOnce()
   })
 
+  it('restricted: every button stays in place but inert, its reason the description; nothing is sent', async () => {
+    const user = userEvent.setup()
+    const why = { approve: 'Approving needs sign-in.', reject: 'Declining needs sign-in.', revoke: 'Revoking needs sign-in.' }
+    render(<ApprovalActions bundle="app-v2" environment="prod" namespace="team-a" reasonFor={a => why[a]} />)
+    for (const [name, a] of [['Approve', 'approve'], ['Reject', 'reject'], ['Revoke mine', 'revoke']] as const) {
+      const b = screen.getByRole('button', { name })
+      expect(b).toHaveAttribute('aria-disabled', 'true')
+      expect(b).toHaveAccessibleDescription(why[a])
+      await user.click(b)
+    }
+    expect(screen.getByLabelText('Comment (optional)')).toBeDisabled()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(api.recordApproval).not.toHaveBeenCalled()
+  })
+
   it('asks before rejecting, and Cancel sends nothing', async () => {
     const user = userEvent.setup()
     api.recordApproval.mockResolvedValue({ outcome: 'Recorded', approval: 'a1', user: 'alice', message: 'Recorded: alice rejects app-v2 for prod' })

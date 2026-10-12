@@ -1,7 +1,7 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 //
-// UI-LIST-01: the pipeline sidebar (PAUSED, Blocked, Degraded) and the fleet
+// UI-LIST-01: the pipeline sidebar (Paused, Blocked, Degraded) and the fleet
 // health bar with its filters. Go test: TestUI_BrowserPipelineList
 // (test/e2e/live/ui_browser_test.go).
 //
@@ -23,9 +23,12 @@ const broken = need('KARDINAL_UI_BROKEN')
 /** The fields of GET /api/v1/ui/pipelines the fleet bar counts. */
 interface ListedPipeline {
   paused?: boolean
+  phase?: string
+  activeBundleName?: string
   blockerCount?: number
   failedStepCount?: number
   environmentStates?: Record<string, string>
+  environments?: { state?: string; blockedBy?: string[] }[]
 }
 
 /** lastPipelineList is the pipeline list the page read last. */
@@ -38,7 +41,23 @@ function lastPipelineList(page: Page): () => ListedPipeline[] | undefined {
   return () => last
 }
 
-const inFlight = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'RollingBack'])
+const inFlight = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'Verifying'])
+const failedStates = new Set(['Failed', 'AbortedByAlarm'])
+
+/**
+ * The one bucket the fleet bar counts a pipeline in (#1793), first match wins: paused, a failed
+ * version, held by a gate, promoting, no version yet (total only), else healthy. Other tests'
+ * pipelines are listed too, mid-promotion or with no version, so the buckets must not overlap.
+ */
+function bucket(p: ListedPipeline): 'paused' | 'failed' | 'blocked' | 'promoting' | 'empty' | 'healthy' {
+  const states = p.environments?.length ? p.environments.map(e => e.state ?? '') : Object.values(p.environmentStates ?? {})
+  if (p.paused) return 'paused'
+  if ((p.failedStepCount ?? 0) > 0 || p.phase === 'Degraded' || states.some(s => failedStates.has(s))) return 'failed'
+  if ((p.blockerCount ?? 0) > 0 || (p.environments ?? []).some(e => (e.blockedBy?.length ?? 0) > 0)) return 'blocked'
+  if (states.some(s => inFlight.has(s)) || p.phase === 'Promoting') return 'promoting'
+  if (!p.activeBundleName && (p.phase === 'Unknown' || !p.phase)) return 'empty'
+  return 'healthy'
+}
 
 /** pipelines is "1 pipeline" or "N pipelines", as the fleet bar badges say. */
 function pipelines(n: number, word = 'pipeline'): string {
@@ -52,23 +71,27 @@ test('the sidebar shows each pipeline’s state, and the filters narrow it', asy
   await expect(sidebarRows(page)).toHaveCount(3)
 
   const held = sidebarRow(page, PIPELINE)
-  await expect(held.locator('.health-chip')).toHaveText('Blocked by a gate')
-  await expect(held.locator('.health-chip')).toHaveAttribute('data-health-state', 'InProgress')
+  // Its one state (pipelineState): held, named from status.environments.
+  await expect(held.locator('[data-category]')).toHaveAttribute('data-category', 'blocked')
+  // Compact in the row (Blocked · N, the gates); the whole state is its title.
+  await expect(held.locator('[data-category]')).toContainText(/^.?\s*Blocked · \d+$/)
+  await expect(held.locator('[data-category]')).toHaveAttribute('title', /^(Held by gates? .+ in |Blocked by)/)
   await expect(held).toContainText('2 envs')
   await expect(held).toContainText('1 live')
-  await expect(held).not.toContainText('PAUSED')
+  await expect(held).not.toContainText('Paused')
 
   const pausedRow = sidebarRow(page, paused)
-  await expect(pausedRow.getByTitle('Pipeline is paused — no new promotions will start')).toHaveText('PAUSED')
-  await expect(pausedRow.locator('.health-chip')).toHaveText('Paused')
-  await expect(pausedRow.locator('.health-chip')).toHaveAttribute('data-health-state', 'Paused')
+  // Paused once: the state chip, titled with what it means (no second PAUSED badge).
+  await expect(pausedRow.getByTitle('Pipeline is paused — no new promotions will start')).toHaveText(/Paused$/)
+  await expect(pausedRow.locator('[data-category]')).toHaveCount(1)
+  await expect(pausedRow.locator('[data-category]')).toHaveAttribute('data-category', 'paused')
   await expect(pausedRow).toContainText('1 env')
 
   const brokenRow = sidebarRow(page, broken)
-  await expect(brokenRow.locator('.health-chip')).toHaveText('A version failed')
-  await expect(brokenRow.locator('.health-chip')).toHaveAttribute('data-health-state', 'Degraded')
+  await expect(brokenRow.locator('[data-category]')).toContainText('A version failed')
+  await expect(brokenRow.locator('[data-category]')).toHaveAttribute('data-category', 'failed')
   await expect(brokenRow).toContainText('1 failed')
-  await expect(brokenRow).not.toContainText('PAUSED')
+  await expect(brokenRow).not.toContainText('Paused')
 
   // The name filter matches namespace/name too.
   await filterSidebar(page, `${ns}/${PIPELINE}-`)
@@ -85,11 +108,11 @@ test('the sidebar shows each pipeline’s state, and the filters narrow it', asy
   await expect(async () => {
     const list = listed()
     expect(list, 'the page read the pipeline list').toBeDefined()
-    const count = (f: (p: ListedPipeline) => boolean) => list!.filter(f).length
-    const blocked = count(p => (p.blockerCount ?? 0) > 0)
-    const ciRed = count(p => (p.failedStepCount ?? 0) > 0)
-    const healthy = count(p => !p.paused && (p.blockerCount ?? 0) === 0 && (p.failedStepCount ?? 0) === 0)
-    const promoting = count(p => Object.values(p.environmentStates ?? {}).some(s => inFlight.has(s)))
+    const count = (b: ReturnType<typeof bucket>) => list!.filter(p => bucket(p) === b).length
+    const blocked = count('blocked')
+    const ciRed = count('failed')
+    const healthy = count('healthy')
+    const promoting = count('promoting')
     await expect(fleet.getByRole('button', { name: 'Show all pipelines' })).toHaveText(`Pipelines${list!.length}`, { timeout: 500 })
     await expect(fleet.getByRole('button', { name: pipelines(healthy, 'healthy pipeline'), exact: true })).toBeVisible({ timeout: 500 })
     await expect(fleet.getByRole('button', { name: pipelines(blocked, 'blocked pipeline'), exact: true })).toBeVisible({ timeout: 500 })
@@ -169,14 +192,14 @@ test('the fleet board shows what each environment runs and where releases are', 
   await expect(testStation).toContainText(/verified (just now|\d+[mhd] ago)/)
   await expect(held.getByRole('button', { name: new RegExp(`^${PIPELINE} prod:`) })).toHaveAttribute('data-state', 'held')
   await expect(held).toHaveAttribute('data-live', 'held')
-  await expect(held.locator('.fleet-flag[data-kind="held"]')).toBeVisible()
+  await expect(held.locator('[data-category="blocked"]')).toBeVisible()
 
   const failed = line(broken)
   await expect(failed.getByRole('button', { name: new RegExp(`^${broken} \\S+:`) })).toHaveAttribute('data-state', 'failed')
   await expect(failed).toHaveAttribute('data-live', 'failed')
 
   const idle = line(paused)
-  await expect(idle.locator('.fleet-flag[data-kind="paused"]')).toHaveText('paused')
+  await expect(idle.locator('[data-category="paused"]')).toContainText('Paused')
   for (const station of await idle.locator('.fleet-station').all()) {
     await expect(station).toHaveAttribute('data-state', 'empty')
   }

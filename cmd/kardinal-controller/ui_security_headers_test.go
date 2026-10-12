@@ -122,7 +122,7 @@ func TestNewUIHandler_SecurityHeaders(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(uiScheme()).Build()
-			h := newUIHandler(c, uiTestAssets, tt.auth, "", nil, zerolog.Nop())
+			h := newUIHandler(c, nil, uiTestAssets, tt.auth, "", nil, zerolog.Nop())
 
 			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
 			req.Host = "localhost:8082"

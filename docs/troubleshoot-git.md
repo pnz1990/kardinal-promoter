@@ -84,6 +84,21 @@ the Pipeline becomes `Ready=True`. `kardinal doctor` reports the same. A Bundle 
 that waits as the next section describes. An ssh remote, or a URL with a password, needs no token
 key, so it does not get this reason.
 
+### Symptom: Pipeline Ready=False with reason SecretNotReferenceable
+
+The Secret `spec.git.secretRef` names exists but is not labeled `kardinal.io/referenceable: "true"`,
+so git does not use it ([the rule](guides/security.md#secrets-referenced-by-custom-resources)). The
+message ends with the command that labels it:
+
+```
+git Secret github-token is not labeled kardinal.io/referenceable=true, so git does not use it; label it: kubectl label secret github-token -n team-a kardinal.io/referenceable=true
+```
+
+A Bundle's step waits before any git call, with `waiting for the git Secret: ...` and the same
+command in its message, and the `GitCredentialMissing` condition with reason
+`SecretNotReferenceable`. Run the command: the step continues within 30 seconds, and the Pipeline
+is `Ready=True` within a minute.
+
 ### Symptom: "authentication required" with "git Secret ... not found" or "spec.git.secretRef is not set"
 
 git has no token for the Pipeline's HTTPS remote: `spec.git.secretRef` names a Secret that does not exist (or has no `token` key), or is not set. The git error is followed by what is missing:

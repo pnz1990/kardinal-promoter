@@ -416,10 +416,6 @@ rbac:
   # change an Application's spec past the gitops-writes admission policy,
   # which otherwise allows only the refresh annotation (health.refresh).
   argocdApplicationsWrite: false
-  # -- Deprecated, no effect, removed in v0.11. The chart grants Job access
-  # for hooks (hooks.serviceAccounts) whatever this says. Kept so existing --set rbac.integrationTestJobs=...
-  # keeps passing the values schema.
-  integrationTestJobs: false
   userRoles:
     # -- ClusterRoles for users and automation: <fullname>-viewer, -promoter,
     # -approver and -admin (templates/user-roles.yaml). Bind them per namespace
@@ -547,14 +543,6 @@ render:
     # e.g. [{to: [{ipBlock: {cidr: 140.82.112.0/20}}], ports: [{port: 443, protocol: TCP}]}].
     gitEgress: []
 
-# -- Deprecated, no effect, removed in v0.11. The CRD schemas validate the kardinal fields. The
-# chart always ships the identity ValidatingAdmissionPolicies
-# (templates/identity-admission.yaml), which pin the user a record names
-# (spec.rejected.by) to the requesting user; they cannot be turned off. Kept
-# so existing --set validatingAdmissionPolicy.enabled=... keeps working.
-validatingAdmissionPolicy:
-  enabled: true
-
 tracing:
   # -- Export OpenTelemetry traces over OTLP/HTTP (--tracing-enabled): spans for
   # reconciles, promotion steps, git clone/push, SCM API calls and
@@ -680,7 +668,7 @@ topologySpread:
 # -prod; see docs/quickstart.md.
 #
 # Example:
-#   helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
+#   helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 \
 #     --namespace kardinal-system --create-namespace \
 #     --set demo.enabled=true \
 #     --set demo.git.url=https://github.com/<your-user>/kardinal-demo \
@@ -738,7 +726,7 @@ serviceMonitor:
 # with the configured label (default: grafana_dashboard=1) and loads dashboards automatically.
 #
 # Example (kube-prometheus-stack):
-#   helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
+#   helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 \
 #     --namespace kardinal-system --create-namespace --set scm.secretRef.name=github-token \
 #     --set grafanaDashboard.enabled=true \
 #     --set 'grafanaDashboard.sidecarLabel.grafana_dashboard=1'

@@ -87,9 +87,12 @@
   color: var(--color-text);
   cursor: pointer;
 }
-.approval-actions__buttons button:disabled { cursor: not-allowed; opacity: 0.6; }
+.approval-actions__buttons button:disabled,
+.approval-actions__buttons button[aria-disabled="true"] { cursor: not-allowed; opacity: 0.6; }
 .approval-actions__buttons button:focus-visible { outline: var(--k-focus-ring); outline-offset: var(--k-focus-offset); }
 .approval-actions__buttons .approval-actions__approve { border-color: var(--color-success); color: var(--color-success); }
 .approval-actions__buttons .approval-actions__reject { border-color: var(--color-error); color: var(--color-error); }
 .approval-actions__result { color: var(--color-success); }
 .approval-actions__error { color: var(--color-error); overflow-wrap: anywhere; }
+/* U7: why the person may not decide here, once, under the inert buttons. */
+.approval-quorum__restricted { margin: var(--k-space-1) 0 0; color: var(--k-ink-2); font-size: var(--k-text-sm); }

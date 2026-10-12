@@ -63,7 +63,6 @@ func TestPipelineRoundtrip(t *testing.T) {
 					Health:    v1alpha1.HealthConfig{Type: "argocd", Timeout: "60m"},
 					Delivery:  v1alpha1.DeliveryConfig{Delegate: "argoRollouts"},
 					DependsOn: []string{"uat"},
-					Shard:     "prod-cluster",
 				},
 			},
 			Paused:       false,
@@ -103,7 +102,6 @@ func TestPipelineRoundtrip(t *testing.T) {
 	assert.Equal(t, "60m", e2.Health.Timeout)
 	assert.Equal(t, "argoRollouts", e2.Delivery.Delegate)
 	assert.Equal(t, []string{"uat"}, e2.DependsOn)
-	assert.Equal(t, "prod-cluster", e2.Shard)
 
 	assert.False(t, got.Spec.Paused)
 	assert.Equal(t, 20, got.Spec.HistoryLimit)

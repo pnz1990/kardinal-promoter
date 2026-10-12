@@ -609,7 +609,6 @@ func gateHoldCases() (*v1alpha1.Pipeline, []gateHoldCase) {
 	}
 	soak := uiGateInstance("default", "app-b2-prod-soak", "app-b2", "require-uat-soak", "prod", false)
 	postDeploy := uiGateInstance("default", "app-b2-prod-soak", "app-b2", "require-uat-soak", "prod", false)
-	postDeploy.Spec.When = "post-deploy" //nolint:staticcheck // SA1019: when has no effect (#1323)
 	// prodStep is the prod step waiting on the soak gate, the way the Graph
 	// builder lists gate instances in spec.requiredGates.
 	prodStep := func(state string) *v1alpha1.PromotionStep {

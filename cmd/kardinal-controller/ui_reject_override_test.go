@@ -63,7 +63,7 @@ func TestUIHandler_Reject(t *testing.T) {
 				&v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v2", Namespace: "team-b"}, Spec: v1alpha1.BundleSpec{Pipeline: "app"}},
 				rejected(),
 			).Build()
-			h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: access}, "", nil, zerolog.Nop())
+			h := newUIHandler(c, nil, nil, uiAuthConfig{tokens: tokens, access: access}, "", nil, zerolog.Nop())
 			rec := uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/reject", "Bearer "+tt.token, tt.body)
 			require.Equal(t, tt.want, rec.Code, rec.Body.String())
 			for _, ns := range []string{"team-a", "team-b"} {
@@ -137,7 +137,7 @@ func TestUIHandler_PipelineOverride(t *testing.T) {
 				bundle("app-v2", "Promoting"), bundle("app-v1", "Verified"),
 				instance("app-v2", "prod"), instance("app-v2", "test"), instance("app-v1", "prod"), instance("app-v1", "uat"),
 			).Build()
-			h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: access}, "", nil, zerolog.Nop())
+			h := newUIHandler(c, nil, nil, uiAuthConfig{tokens: tokens, access: access}, "", nil, zerolog.Nop())
 			rec := uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/override", "Bearer "+tt.token, tt.body)
 			require.Equal(t, tt.want, rec.Code, rec.Body.String())
 			overridden := map[string]v1alpha1.PolicyGateOverride{}
@@ -166,7 +166,16 @@ func TestUIHandler_PipelineOverride(t *testing.T) {
 			var resp uiPipelineOverrideResponse
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 			assert.Equal(t, []string{"no-weekend--app-v2-prod"}, resp.Gates)
+			assert.Equal(t, "gate no-weekend overridden in prod for 1 version in progress until "+resp.ExpiresAt, resp.Message)
 		})
+	}
+}
+
+// TestVersionsInProgress: the override reply counts versions in words, not
+// the kind name with "(s)".
+func TestVersionsInProgress(t *testing.T) {
+	for n, want := range map[int]string{0: "0 versions in progress", 1: "1 version in progress", 2: "2 versions in progress"} {
+		assert.Equal(t, want, versionsInProgress(n))
 	}
 }
 
@@ -194,7 +203,7 @@ func TestUIHandler_PipelineOverride_PartialFailure(t *testing.T) {
 			return cl.Patch(ctx, obj, patch, opts...)
 		},
 	}).Build()
-	h := newUIHandler(c, nil, uiAuthConfig{}, "", nil, zerolog.Nop())
+	h := newUIHandler(c, nil, nil, uiAuthConfig{}, "", nil, zerolog.Nop())
 	rec := uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/override", "",
 		`{"pipeline":"app","namespace":"team-a","gate":"no-weekend","environment":"prod","reason":"P0 hotfix"}`)
 	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())

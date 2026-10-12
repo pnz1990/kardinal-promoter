@@ -101,7 +101,7 @@ in environment variables, as the chart does for the SCM, UI and Bundle API token
 flags (`controller.extraArgs`). Only an empty `pprofAddress` turns it off.
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 --reset-then-reuse-values --set pprofAddress=:6060
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 --reset-then-reuse-values --set pprofAddress=:6060
 kubectl -n kardinal-system port-forward deploy/kardinal-promoter 6060:6060
 go tool pprof -sample_index=inuse_space http://localhost:6060/debug/pprof/heap
 # Compare two snapshots: what grew between them.
@@ -309,7 +309,7 @@ resources:
 **3. Reduce ScheduleClock tick frequency** if no gate needs minute-level `schedule.*`
 re-evaluation. The chart owns the `kardinal-clock` ScheduleClock, so set it through Helm:
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 \
   -n kardinal-system --reset-then-reuse-values --set scheduleClock.interval=5m
 ```
 

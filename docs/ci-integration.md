@@ -68,7 +68,7 @@ jobs:
 
       - name: Create Bundle
         id: bundle
-        uses: pnz1990/kardinal-promoter/.github/actions/create-bundle@v0.10.0
+        uses: pnz1990/kardinal-promoter/.github/actions/create-bundle@v0.11.0
         env:
           KARDINAL_TOKEN: ${{ secrets.KARDINAL_TOKEN }}
         with:
@@ -86,7 +86,7 @@ jobs:
 
 ```yaml
       - name: Create Bundle
-        uses: pnz1990/kardinal-promoter/.github/actions/create-bundle@v0.10.0
+        uses: pnz1990/kardinal-promoter/.github/actions/create-bundle@v0.11.0
         env:
           KARDINAL_TOKEN: ${{ secrets.KARDINAL_TOKEN }}
         with:
@@ -220,7 +220,9 @@ The codes are stable: a new outcome gets a new code. A stop at a gate, a hold or
 counts once two reads agree, and a gate that has not been evaluated yet never stops the wait.
 
 On stderr it prints each new state with the time since the start, the URL of each PR it opens,
-and a summary at the end; stdout is the last line only:
+and a summary at the end: per environment, how long its own promotion took (`took`, from its
+first step's start, else from its upstream going live), or how long it has waited in its state
+(`for`); stdout is the last line only:
 
 ```
 Shipped 1.5.0 as my-app-x7k2p; following it (Ctrl-C stops following, the promotion goes on)
@@ -329,7 +331,7 @@ kubectl create secret generic kardinal-ci-token \
   --namespace=kardinal-system \
   --from-literal=token=$(openssl rand -hex 32)
 
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 \
   -n kardinal-system --reset-then-reuse-values \
   --set bundleAPI.tokenSecretRef.name=kardinal-ci-token
 ```

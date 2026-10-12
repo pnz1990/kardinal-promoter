@@ -260,6 +260,7 @@ jobs:
           ':(glob)web/src/**/*.ts' ':(glob)web/src/**/*.tsx' ':(glob)web/src/**/*.mjs'
           ':(glob)web/test/**/*.ts' ':(glob)web/test/**/*.tsx' ':(glob)web/test/**/*.mjs'
           ':(glob)web/*.ts' ':(glob)web/scripts/*.mjs' 'scripts/gen-tokens.mjs'
+          ':(glob)hack/record-demos/*.mjs' ':(glob)docs/javascripts/*.js'
       # npm and web/package-lock.json are the only package manager and lockfile:
       # the Dockerfile, `make ui` and dependabot use them too. Node matches the
       # Dockerfile's node image.

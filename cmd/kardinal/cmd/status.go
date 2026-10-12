@@ -320,17 +320,22 @@ type pipelineStatus struct {
 	// ERROR: line when it is not Ready, a WARNING: line when its git Secret
 	// is not referenceable.
 	Notices []string `json:"notices,omitempty"`
+	// FailedVersion is the Pipeline's status.failedVersion: why its newest
+	// version failed.
+	FailedVersion *v1alpha1.PipelineFailedVersion `json:"failedVersion,omitempty"`
 	// Warnings are the WARNING: lines after the table (a Rejected Bundle
 	// whose change is live).
 	Warnings []string `json:"warnings,omitempty"`
-	// Regions is, per environment that has one, its region (spec regions)
-	// or the cluster its health check reads (health.kubeconfigSecretRef,
-	// or the deprecated health.cluster).
+	// Regions is, per environment that has one, the cluster its health
+	// check reads (the health.kubeconfigSecretRef Secret).
 	Regions map[string]string `json:"regions,omitempty"`
 	// activeSteps is, with -o wide, the sub-step each environment's newest
 	// step is on.
 	activeSteps map[string]string
 }
+
+// statusNow is status's clock (a soak gate's progress); a test replaces it.
+var statusNow = time.Now
 
 // statusGate is a gate instance that holds the newest Bundle of an
 // environment back.
@@ -340,6 +345,13 @@ type statusGate struct {
 	Environment string `json:"environment"`
 	Bundle      string `json:"bundle"`
 	Expression  string `json:"expression"`
+	// Approval is an approval gate's tally ("approval 0 of 1"), shown in
+	// place of its expression, which says nothing about why it holds.
+	Approval string `json:"approval,omitempty"`
+	// Progress is a soak gate's progress and when it opens ("soak 0.4 of 3
+	// min in uat, opens in about 2m36s"), from the Bundle's
+	// status.environments[].healthCheckedAt.
+	Progress string `json:"progress,omitempty"`
 	// Message is the gate's spec.message when it explains the block
 	// (graph.BlockedMessage).
 	Message string `json:"message,omitempty"`
@@ -364,7 +376,7 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 	}
 	view := &pipelineStatus{Pipeline: pipeline, Namespace: ns, Phase: pl.Status.Phase, Paused: pl.Spec.Paused,
 		Source: "controller", Environments: pl.Status.Environments, Summary: pl.Status.Summary, BlockingGates: []statusGate{},
-		Notices: pipelineNotices(&pl)}
+		Notices: pipelineNotices(&pl), FailedVersion: pl.Status.FailedVersion}
 
 	var bundles v1alpha1.BundleList
 	if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err != nil {
@@ -403,7 +415,8 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 		if cond := meta.FindStatusCondition(pl.Status.Conditions, "Ready"); cond != nil {
 			ready = *cond
 		}
-		view.Summary = pipelinerec.Summarize(&pl, ready, view.Environments)
+		view.FailedVersion = pipelinerec.FailedVersion(pipeline, bundles.Items)
+		view.Summary = pipelinerec.WithFailure(pipelinerec.Summarize(&pl, ready, view.Environments), view.FailedVersion, view.Environments)
 	} else if slices.ContainsFunc(view.Environments, func(e v1alpha1.PipelineEnvironmentStatus) bool { return len(e.BlockedBy) > 0 }) {
 		if err := listGates(); err != nil {
 			return nil, err
@@ -411,6 +424,9 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 	}
 	if view.Environments == nil {
 		view.Environments = []v1alpha1.PipelineEnvironmentStatus{}
+	}
+	if f := view.FailedVersion; f != nil {
+		view.Notices = append(view.Notices, failedNotice(pipeline, f))
 	}
 	view.Regions = environmentRegions(&pl)
 	if OutputFormat() == "wide" {
@@ -437,11 +453,27 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 				!slices.Contains(e.BlockedBy, gateDisplayName(*g)) {
 				continue
 			}
-			view.BlockingGates = append(view.BlockingGates, statusGate{
+			sg := statusGate{
 				Name: gateDisplayName(*g), Instance: g.Name, Environment: e.Name, Bundle: newest,
 				Expression: g.Spec.Expression, Message: graph.BlockedMessage(g), Reason: g.Status.Reason,
 				LastEvaluatedAt: g.Status.LastEvaluatedAt,
-			})
+			}
+			// A soak gate says how far the version soaked and when it opens.
+			if soak, ok := soakOf(&pl, byName[newest], g, statusNow()); ok {
+				sg.Progress = soak.now()
+				if opens := soak.opens(); opens != "" {
+					sg.Progress += ", opens " + opens
+				}
+			}
+			if g.Spec.Approval != nil {
+				creator := ""
+				if b := byName[newest]; b != nil {
+					creator = b.Annotations[lifecycle.AnnotationCreatedBy]
+				}
+				t := lifecycle.TallyApprovals(g, creator)
+				sg.Approval = fmt.Sprintf("approval %d of %d", len(t.Approvers), t.Required)
+			}
+			view.BlockingGates = append(view.BlockingGates, sg)
 		}
 		// A Rejected Bundle whose change runs here (lifecycle.RejectedLiveStep).
 		if b := byName[e.Bundle]; b != nil && lifecycle.Rejected(b) {
@@ -452,21 +484,14 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 	return view, nil
 }
 
-// environmentRegions is, per environment of p that has one, its region
-// (spec regions, deprecated) or the cluster its health check reads: the
-// kubeconfig Secret of health.kubeconfigSecretRef, or the deprecated
-// health.cluster. nil when no environment has one: the REGION column is
-// then hidden.
+// environmentRegions is, per environment of p that has one, the cluster its
+// health check reads: the kubeconfig Secret of health.kubeconfigSecretRef.
+// nil when no environment has one: the REGION column is then hidden.
 func environmentRegions(p *v1alpha1.Pipeline) map[string]string {
 	out := map[string]string{}
 	for _, e := range p.Spec.Environments {
-		switch {
-		case len(e.Regions) > 0: //nolint:staticcheck // SA1019: shows the deprecated regions of an old Pipeline
-			out[e.Name] = strings.Join(e.Regions, ", ") //nolint:staticcheck // SA1019: as above
-		case e.Health.KubeconfigSecretRef != nil:
+		if e.Health.KubeconfigSecretRef != nil {
 			out[e.Name] = e.Health.KubeconfigSecretRef.Name
-		case e.Health.Cluster != "": //nolint:staticcheck // SA1019: shows the deprecated cluster of an old Pipeline
-			out[e.Name] = e.Health.Cluster //nolint:staticcheck // SA1019: as above
 		}
 	}
 	if len(out) == 0 {
@@ -582,7 +607,15 @@ func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
 		_, _ = fmt.Fprintln(w, "Blocking gates")
 		_, _ = fmt.Fprintln(w, sty.Rule(72))
 		gtw := style.NewTable(w, 2)
-		_, _ = fmt.Fprintln(gtw, "GATE\tENV\tEXPRESSION\tREASON\tLAST CHECKED")
+		// The column holds an approval gate's tally in place of its
+		// expression: then it is the gate's RULE.
+		column := "EXPRESSION"
+		for _, g := range view.BlockingGates {
+			if g.Approval != "" {
+				column = "RULE"
+			}
+		}
+		_, _ = fmt.Fprintln(gtw, "GATE\tENV\t"+column+"\tREASON\tLAST CHECKED")
 		for _, g := range view.BlockingGates {
 			lastChecked := "-"
 			if g.LastEvaluatedAt != nil && !g.LastEvaluatedAt.IsZero() {
@@ -591,11 +624,20 @@ func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
 			// The gate's message is shown whole: it is what its author wrote
 			// for this table. The CEL detail is in kardinal explain.
 			reason := g.Message
-			if reason == "" {
+			switch {
+			case reason != "" && g.Progress != "":
+				reason += "; " + g.Progress
+			case g.Progress != "":
+				reason = g.Progress
+			case reason == "":
 				reason = truncateRunes(orDash(g.Reason), 35)
 			}
+			cell := truncateRunes(orDash(g.Expression), 40)
+			if g.Approval != "" {
+				cell = g.Approval
+			}
 			_, _ = fmt.Fprintf(gtw, "%s\t%s\t%s\t%s\t%s\n", sty.Paint(display.ToneBlocked, g.Name), g.Environment,
-				truncateRunes(orDash(g.Expression), 40), reason, lastChecked)
+				cell, reason, lastChecked)
 		}
 		if err := gtw.Flush(); err != nil {
 			return fmt.Errorf("write blocking gates: %w", err)
@@ -605,17 +647,13 @@ func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
 }
 
 // pipelineNotices are the Pipeline's own problems, shown before its
-// promotions: an ERROR when it is not Ready (an invalid spec, or
-// GitCredentialMissing with the command that fixes it), and a WARNING for a
-// git Secret that works today but is not labelled referenceable, so it is
-// fixed before v0.11 refuses it.
+// promotions: an ERROR when it is not Ready (an invalid spec,
+// GitCredentialMissing or SecretNotReferenceable with the command that fixes
+// it).
 func pipelineNotices(p *v1alpha1.Pipeline) []string {
 	var out []string
 	if c := meta.FindStatusCondition(p.Status.Conditions, "Ready"); c != nil && c.Status == metav1.ConditionFalse {
 		out = append(out, fmt.Sprintf("ERROR: pipeline %s is not Ready (%s): %s", p.Name, c.Reason, c.Message))
-	}
-	if c := meta.FindStatusCondition(p.Status.Conditions, "SecretReferenceable"); c != nil && c.Status == metav1.ConditionFalse {
-		out = append(out, fmt.Sprintf("WARNING: pipeline %s: %s", p.Name, c.Message))
 	}
 	return out
 }
@@ -651,8 +689,8 @@ activeBundles.
 
 When called with a pipeline name: first the Pipeline's own problems, an
 ERROR when it is not Ready (such as GitCredentialMissing, with the command
-that creates the git Secret) and a WARNING when its git Secret is not
-labelled kardinal.io/referenceable=true; then the Pipeline's summary sentence
+that creates the git Secret, or SecretNotReferenceable, with the command that
+labels it kardinal.io/referenceable=true); then the Pipeline's summary sentence
 ("1.5.0 live in test; waiting for PR merge in prod (#42)"), then one row per environment
 (a fleet environment expands to its targets) from the Pipeline's
 status.environments, which the controller writes:
@@ -666,8 +704,7 @@ status.environments, which the controller writes:
   PR        the pull request it waits for, while it waits for its merge
 
 REGION, after ENVIRONMENT, shows where each environment runs when one of
-them says: its region (spec regions) or the cluster its health check reads
-(the health.kubeconfigSecretRef Secret). -o wide adds ACTIVE STEP, the step
+them health-checks another cluster: the health.kubeconfigSecretRef Secret. -o wide adds ACTIVE STEP, the step
 the newest Bundle there is on (git-clone, open-pr, health-check, ...).
 
 Then the gates holding a version back, with their CEL expression cut to 40
@@ -681,3 +718,14 @@ rows itself, with the controller's code; SINCE is then known only for live
 environments. -o json and -o yaml print the same data with the API's state
 values (Verified, WaitingForMerge) and "source": "controller" or "cli".
 kardinal explain shows the steps and every gate of the current Bundle.`
+
+// failedNotice is status's ERROR line for a failed newest version.
+func failedNotice(pipeline string, f *v1alpha1.PipelineFailedVersion) string {
+	where := "failed before it started"
+	if f.Environment != "" {
+		where = "failed in " + f.Environment
+	}
+	detail, _, _ := strings.Cut(f.Message, " — ")
+	return fmt.Sprintf("ERROR: the newest version %s %s (%s): %s; kardinal why %s says what fixes it",
+		versionLabel(f.Version, f.Bundle), where, f.Reason, detail, pipeline)
+}

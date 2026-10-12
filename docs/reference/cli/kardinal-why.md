@@ -26,12 +26,19 @@ not create the version, and yours is not counted yet ("approval by someone
 else (you approved)" once it is); else who may, "approval by alice or group
 release-managers"; who rejected it, when someone did; nobody, when the
 policy cannot be met. These come from the server's own tally of the gate's
-Approvals, so why and the controller agree; any other gate: its message, Rule its expression, Now its last evaluation,
-Opens when it opens and how often it is rechecked; Next: kardinal approve or
-kardinal override); its PR waits to be merged (PR and its URL); the version
+Approvals, so why and the controller agree; any other gate: its message, Rule its expression, Now its last evaluation
+(for a soak gate, how far the version soaked: "soak 0.4 of 3 min in uat"),
+Opens when it opens and how often it is rechecked ("by itself in about
+2m36s" for a soak gate); Next: kardinal approve; for a gate that opens by
+itself, wait, with kardinal override only as Or; else kardinal override); its PR waits to be merged (PR and its URL); the version
 failed (Why the step's message; Next: kardinal logs, or roll back); it is
 promoting; it waits for an upstream environment; it has no version yet; or
 nothing is waiting ("prod runs 1.5.0 and nothing is waiting.").
+
+why shows the gates the version started with. A version gets its gates when
+it starts promoting, so a gate created or edited later applies to the
+versions shipped after it, not to one already waiting (Policy Gates, "When a
+new or edited gate takes effect").
 
 -o wide prints kardinal explain's table (every step and gate of the current
 version, with kinds and expressions), with the commands that get past a

@@ -69,7 +69,7 @@ kubectl create secret generic github-token \
 ### 2. Install with Helm
 
 ```bash
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 \
   --namespace kardinal-system \
   --create-namespace \
   --set scm.secretRef.name=github-token
@@ -122,11 +122,11 @@ macOS (`amd64`, `arm64`) and `kardinal-windows-amd64.exe`.
 ```bash
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
-curl -Lo kardinal "https://github.com/pnz1990/kardinal-promoter/releases/download/v0.10.0/kardinal-${OS}-${ARCH}"
+curl -Lo kardinal "https://github.com/pnz1990/kardinal-promoter/releases/download/v0.11.0/kardinal-${OS}-${ARCH}"
 chmod +x kardinal && sudo mv kardinal /usr/local/bin/
 kardinal version
-# CLI:        v0.10.0
-# Controller: v0.10.0
+# CLI:        v0.11.0
+# Controller: v0.11.0
 # Graph:      kro v0.10.0-rc.0
 ```
 
@@ -182,6 +182,16 @@ sidebar and the stage drawer; the Bundle name follows it in muted monospace, or 
 where space is short. An environment's or gate's panel has the Kubernetes kind and object
 name under **Kubernetes details**, for `kubectl`.
 
+Each Pipeline has one state, the same in the page header, the sidebar badge, the operations
+table, the fleet board and the health counters: paused, a failed version, held by a gate
+(`Held by gate prod-approval in prod`, from `status.environments`; the sidebar badge reads
+`Blocked · 1`, the number of gates holding it, with the whole state as its tooltip), promoting, no version yet, or up to
+date. Each Pipeline counts in exactly one of Healthy, Blocked, Failed, Promoting and
+Paused (Failed and Paused show when there is one); one with no version yet counts only in the
+total. On the map, the label on an edge names the gate that holds the version first, with its
+state glyph and how many more (`▮ uat-soak +1`); its popover and accessible name say it in
+words (`uat-soak (blocking) · +1 passing`). Durations read `42s`, `4m`, `2h 15m`, `1d 3h` or `4d`.
+
 - **Fleet board** (the start page, and the kardinal logo from anywhere). Each Pipeline is a
   line of stations, one per environment in promotion order; environments promoted in parallel
   are stacked, and five or more of them (a wave) are one plate that names the range, the version
@@ -233,6 +243,15 @@ name under **Kubernetes details**, for `kubectl`.
   Roll back and Release hold are under the station in focus; shift-click a second Bundle on the
   rail to compare its route. An address with a Pipeline or a version the cluster does not have
   says it is not found and links back; it does not show another one.
+
+<figure class="k-demo" id="demo-compare">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/compare.png">
+    <img src="../assets/demos/compare.webp" alt="The UI: shift-clicking an older version and pressing Compare to see the two field by field." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>Compare two versions · <code>kardinal diff</code></figcaption>
+</figure>
+
 - **Environment details.** Selecting an environment (a fleet station, a station or a grid cell on
   the map, or a row of the Table; a gate opens the environment it holds) opens its details beside the page, or as a sheet
   on a narrow screen. They say first why the environment is waiting: paused, held by a rollback,
@@ -251,10 +270,22 @@ name under **Kubernetes details**, for `kubectl`.
   why: you approved already, your approval does not count, or only some groups may approve. An
   approval names who decided, so without TokenReview (`ui.auth.tokenReview`) the UI cannot
   record one; use `kardinal approve`.
+
+<figure class="k-demo" id="demo-approvals-inbox">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/approvals-inbox.png">
+    <img src="../assets/demos/approvals-inbox.webp" alt="The UI: the Approvals badge in the top bar, the inbox with the release waiting on you, Approve, and the badge counting down." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>The approvals inbox (#/approvals)</figcaption>
+</figure>
+
 - **What you may do.** With TokenReview the UI asks the controller which actions you may take
   (`POST /api/v1/ui/access`, cached for 30 seconds). An action you may not take stays in place
   but does nothing, and says which of the chart's roles grants it; the controller checks every
-  action again when it is taken.
+  action again when it is taken. Without TokenReview, Approve, Decline and Revoke mine are inert
+  wherever they appear (the drawer, the Table, the Activity tab and ⌘K), with one line under
+  them: "Approving needs sign-in with your Kubernetes identity — run `kardinal approve <pipeline>
+  <env>`" (Decline: `--decision reject`; Revoke mine: `--revoke`), and a button that copies it.
 - **Changes as they happen.** When a poll changes an environment's state or version, or an
   approval's count, its card gets a brief halo; with reduced motion, an outline until the next
   poll.
@@ -278,7 +309,7 @@ name under **Kubernetes details**, for `kubectl`.
   End to the ends, Up and Down between fleet lines), and Enter opens the one in focus. `?` lists
   the shortcuts: `/` filter, `r` refresh, `Esc` close a panel, `j` and `k` the next and previous
   environment of the open pipeline (on Approvals, the next and previous approval), `a` approve
-  (the open environment's approval, or the approval in focus), and `s` ship a version. A key with
+  (the open environment's, the one in focus, or the only one waiting), and `s` ship. A key with
   nothing to act on says why. Every view is checked against
   WCAG 2.1 AA, colour contrast included, in both themes.
 - **Narrow screens.** Below 960 px wide (a phone or a split window) the pipeline list is a
@@ -286,8 +317,18 @@ name under **Kubernetes details**, for `kubectl`.
   closes it. The page then takes the full width.
 - **Go to anything (⌘K).** ⌘K, Ctrl+K or the **Go to or do…** box in the top bar opens one list
   of pipelines, environments (`pipeline › env`) and the shown pipeline's versions, and of actions:
-  switch the theme or the density, refresh, the operations table, the shortcuts. Type to filter,
+  switch the theme or the density, refresh, the operations table, the shortcuts, and "Approve
+  <version> for <env>" for each approval waiting on you, which opens its dialog. Type to filter,
   and use the arrow keys and Enter. It never promotes, pauses or rolls back by itself.
+
+<figure class="k-demo" id="demo-palette">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/palette.png">
+    <img src="../assets/demos/palette.webp" alt="The UI: pressing Ctrl+K, typing storefront prod and opening that environment." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>Go anywhere with ⌘K or Ctrl+K</figcaption>
+</figure>
+
 - **Links.** Every screen has its own address, so a link opens it, a reload keeps it, and Back
   and Forward walk it. The breadcrumb in the top bar leads back:
 

@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -164,7 +165,7 @@ follows until prod waits for your approval. A re-run changes nothing.`,
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&o.repo, "repo", "", "Your fork of github.com/pnz1990/kardinal-demo (the token needs contents and pull requests read and write on it)")
+	f.StringVar(&o.repo, "repo", "", "Your GitHub fork of github.com/pnz1990/kardinal-demo (the token needs contents and pull requests read and write on it); another git host needs --set scm.provider")
 	f.StringVar(&o.image, "image", quickstartImage, "The first version to ship")
 	f.StringVar(&o.chart, "chart", "", "The kardinal-promoter Helm chart, an OCI reference or a directory (default: the published chart, ghcr.io/pnz1990/charts)")
 	f.StringVar(&o.chartVersion, "chart-version", "", "Chart version (default: this CLI's version; the newest for a development build)")
@@ -453,6 +454,17 @@ func quickstartFn(ctx context.Context, w io.Writer, o quickstartOptions) error {
 	if err != nil {
 		return fmt.Errorf("quickstart: %w", err)
 	}
+	// quickstart installs kardinal for GitHub; a fork elsewhere needs the
+	// provider set by hand (or a kardinal already installed for it).
+	if !githubRepo(o.repo) && !setsValue(o.sets, "scm.provider") {
+		if _, installed := kardinalInstalled(ctx, c); !installed {
+			return fmt.Errorf("quickstart supports GitHub forks of kardinal-demo, and %s is not on github.com, so nothing was changed: "+
+				"fork https://github.com/pnz1990/kardinal-demo on GitHub and pass --repo https://github.com/<you>/kardinal-demo, "+
+				"or install kardinal for your git host by hand (%s, %s); "+
+				"to try quickstart with it anyway, pass --set scm.provider=<gitlab|forgejo|gitea|bitbucket|...> --set scm.apiURL=<its API URL>",
+				o.repo, docsURL+"installation/", docsURL+"scm-providers/")
+		}
+	}
 	// helm and kubectl get the checked context alone, in a file of their
 	// own (0600, removed at the end), and an environment without overrides.
 	kubeconfig, err := writeHelmKubeconfig(only)
@@ -643,15 +655,9 @@ func (q *quickstart) kardinal() error {
 	if version != "" {
 		what += " " + version
 	}
-	var list appsv1.DeploymentList
-	if err := q.c.List(q.ctx, &list, sigs_client.InNamespace(quickstartControllerNS),
-		sigs_client.MatchingLabels{"app.kubernetes.io/name": "kardinal-promoter"}); err == nil {
-		for _, d := range list.Items {
-			if d.Status.ReadyReplicas > 0 {
-				q.say("kardinal-promoter", "already installed ("+quickstartControllerNS+"/"+d.Name+")")
-				return nil
-			}
-		}
+	if name, ok := kardinalInstalled(q.ctx, q.c); ok {
+		q.say("kardinal-promoter", "already installed ("+quickstartControllerNS+"/"+name+")")
+		return nil
 	}
 	if err := q.scmSecret(); err != nil {
 		return err
@@ -668,11 +674,104 @@ func (q *quickstart) kardinal() error {
 	for _, s := range q.o.sets {
 		args = append(args, "--set", s)
 	}
-	if _, err := quickstartRun(q.ctx, "helm", append(args, q.helmFlags()...)...); err != nil {
+	if out, err := quickstartRun(q.ctx, "helm", append(args, q.helmFlags()...)...); err != nil {
+		if fix := chartSchemaFixIt(out, chart, version); fix != "" {
+			return fmt.Errorf("quickstart: install kardinal-promoter: %s", fix)
+		}
 		return fmt.Errorf("quickstart: install kardinal-promoter: %w", err)
 	}
 	q.say(what, "installed")
 	return nil
+}
+
+// docsURL is the documentation site.
+const docsURL = "https://pnz1990.github.io/kardinal-promoter/"
+
+// kardinalInstalled is the name of a ready kardinal-promoter controller
+// Deployment in the controller namespace, and whether there is one.
+func kardinalInstalled(ctx context.Context, c sigs_client.Client) (string, bool) {
+	var list appsv1.DeploymentList
+	if err := c.List(ctx, &list, sigs_client.InNamespace(quickstartControllerNS),
+		sigs_client.MatchingLabels{"app.kubernetes.io/name": "kardinal-promoter"}); err != nil {
+		return "", false
+	}
+	for _, d := range list.Items {
+		if d.Status.ReadyReplicas > 0 {
+			return d.Name, true
+		}
+	}
+	return "", false
+}
+
+// githubRepo reports whether repo is a repository on github.com.
+func githubRepo(repo string) bool {
+	u, err := url.Parse(repo)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "github.com" || host == "www.github.com"
+}
+
+// setsValue reports whether a --set (key=value[,key=value]) sets key.
+func setsValue(sets []string, key string) bool {
+	for _, s := range sets {
+		for _, kv := range strings.Split(s, ",") {
+			if k, _, ok := strings.Cut(kv, "="); ok && strings.TrimSpace(k) == key {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// chartSchemaFixIt is, when helm refused the values because of the chart's
+// values schema (a chart older than this CLI, such as the newest published
+// chart for a development build), what to do; "" for any other failure.
+// out is helm's output, chart and version what quickstart installed.
+func chartSchemaFixIt(out, chart, version string) string {
+	const schemaError = "values don't meet the specifications of the schema"
+	lines := strings.Split(out, "\n")
+	at := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(l, schemaError) })
+	if at < 0 {
+		return ""
+	}
+	pulled := chart
+	if version != "" {
+		pulled += " " + version
+	}
+	for _, line := range lines[:at] {
+		if ref, ok := strings.CutPrefix(strings.TrimSpace(line), "Pulled: "); ok {
+			pulled = ref
+		}
+	}
+	// The problems are the "- " lines under the error, each chart's under
+	// its "<chart>:" line; the first other line ends them.
+	var problems []string
+	for _, line := range lines[at+1:] {
+		line = strings.TrimSpace(line)
+		if p, ok := strings.CutPrefix(line, "- "); ok {
+			if p != "" {
+				problems = append(problems, p)
+			}
+			continue
+		}
+		if line == "" || !strings.HasSuffix(line, ":") || strings.Contains(line, " ") {
+			break
+		}
+	}
+	why := ""
+	if len(problems) > 0 {
+		why = " (" + strings.Join(problems, "; ") + ")"
+	}
+	if strings.Contains(CLIVersion, "dev") {
+		return fmt.Sprintf("the chart %s does not accept the values this development CLI (%s) sets%s: this CLI needs the chart "+
+			"of the checkout it was built from, or a later release; pass --chart <checkout>/chart/kardinal-promoter, or --chart-version <version>",
+			pulled, CLIVersion, why)
+	}
+	v := strings.TrimPrefix(CLIVersion, "v")
+	return fmt.Sprintf("the chart %s does not accept the values this CLI (%s) sets%s: this CLI needs chart %s or later; "+
+		"pass --chart-version %s (or leave --chart-version out), or --chart <a chart directory>", pulled, CLIVersion, why, v, v)
 }
 
 // scmSecret creates the controller's SCM token Secret, unlabelled (no

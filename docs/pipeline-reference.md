@@ -168,6 +168,17 @@ tenants, a few at a time. Each target becomes an environment of its own, named
 `<environment>-<target>`. It has its own PromotionStep, PR, gate instances and health check,
 and the steps carry the label `kardinal.io/fleet: <environment>`.
 
+<figure class="k-demo" id="demo-fleet">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/fleet-dark.png">
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/fleet.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/fleet-dark.webp">
+    <img src="../assets/demos/fleet.webp" alt="The UI: a board of sixteen pipelines, then an edge pipeline whose fleet of 42 points of presence promotes five at a time, at the overview, map and detail zoom levels, with the minimap." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>A big fleet: zoom levels and the minimap</figcaption>
+</figure>
+
+
 ```yaml
 environments:
   - name: staging
@@ -398,11 +409,9 @@ and `wait-for-merge` then do nothing, no PR is opened, and the step goes on to t
 [Architecture: Steps Engine](architecture.md#steps-engine-pkgsteps)
 describes each step.
 
-kardinal has no custom step engine. `spec.environments[].steps` and
-`spec.environments[].promotionTemplate` are deprecated and cannot change the sequence: the
-API server rejects a Pipeline that sets either, and `kardinal validate` reports it. To run
-your own work around the sequence, use [hooks](hooks.md): Jobs before the step starts and
-after its health check.
+kardinal has no custom step engine: nothing in a Pipeline changes the sequence. To run your own
+work around the sequence, use [hooks](hooks.md): Jobs before the step starts and after its
+health check.
 
 ### How `kustomize-set-image` matches images
 

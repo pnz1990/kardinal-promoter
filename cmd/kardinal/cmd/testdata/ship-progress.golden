@@ -10,5 +10,5 @@
     +3m0s  prod: Held by gate cab
 Summary after 4m15s:
   test   Live               took 1m9s
-  uat    Live               took 3m4s
+  uat    Live               took 1m55s
   prod   Held by gate cab   for 1m16s

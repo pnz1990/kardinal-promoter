@@ -82,9 +82,12 @@ type uiPipelineResponse struct {
 	// Summary is the Pipeline's status.summary, one sentence on where its
 	// versions are.
 	Summary string `json:"summary,omitempty"`
+	// FailedVersion is the Pipeline's status.failedVersion: why its newest
+	// version failed (the Bundle's reason and message), absent otherwise.
+	FailedVersion *v1alpha1.PipelineFailedVersion `json:"failedVersion,omitempty"`
 	// Conditions are the Pipeline's status.conditions: Ready (with reasons
-	// such as ValidationFailed and GitCredentialMissing), Paused,
-	// PathConflict and the SecretReferenceable warning.
+	// such as ValidationFailed, GitCredentialMissing and
+	// SecretNotReferenceable), Paused and PathConflict.
 	Conditions []uiCondition `json:"conditions,omitempty"`
 
 	// #525: static pipeline topology from spec — rendered even when no Bundle is promoting.
@@ -540,6 +543,10 @@ type uiAPIServer struct {
 	accessCheck uiauth.AccessReviewer
 	// scopeNamespace is --watch-namespace: POST /access answers only for it when set.
 	scopeNamespace string
+	// apiReader reads the API server uncached (mgr.GetAPIReader()): the
+	// lifecycle actions read the object they write through it (fresh).
+	// Nil in tests reads through client.
+	apiReader client.Reader
 }
 
 // upstreamCache memoizes graph.AllEnvironmentUpstreams per Pipeline UID and
@@ -807,6 +814,7 @@ func pipelineListResponse(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bund
 		resp.DeploymentMetrics = p.Status.DeploymentMetrics
 		resp.Environments = p.Status.Environments
 		resp.Summary = p.Status.Summary
+		resp.FailedVersion = p.Status.FailedVersion
 		resp.Conditions = buildUIConditions(p.Status.Conditions)
 		if ab := activeBundles[key]; ab != nil {
 			resp.ActiveBundleName = ab.name

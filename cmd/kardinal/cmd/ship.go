@@ -34,6 +34,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	pipelinerec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 )
 
@@ -178,6 +179,7 @@ func shipFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline
 			versionOr(res.Version, b.Name), b.Name)
 	}
 	res = followShip(ctx, c, ns, pipeline, b.Name, res, timeout, stopAtGate, progress)
+	progress.timing(ctx, c, b)
 	progress.summary(res.Environments)
 	if structured() {
 		if err := writeStructured(w, res); err != nil {
@@ -238,6 +240,10 @@ type shipProgress struct {
 	seen    map[string]string
 	changed map[string]time.Time
 	pr      map[string]string
+	// started is when the Bundle's promotion began in each environment;
+	// upstreams each environment's direct upstreams (timing fills both).
+	started   map[string]time.Time
+	upstreams map[string][]string
 }
 
 // observe prints what changed in envs since the last read.
@@ -274,41 +280,126 @@ func (p *shipProgress) printf(format string, args ...any) {
 }
 
 // summary prints, when timed, how long the follow took and each
-// environment's last state: how long after the Bundle was created it was
-// live there ("took"), or how long it has been in its state ("for"), both
-// from the controller's status.environments[].since; from what this
-// follow saw when the controller does not write it.
+// environment's last state: how long its own promotion took ("took"), or
+// how long it has been in its state ("for"). An environment's state began at
+// the controller's status.environments[].since; at what this follow saw when
+// the controller does not write it (nil or zero), and is unknown when this
+// follow did not see it either. Its own promotion began when its
+// PromotionStep's first step started (started), else when its last upstream
+// went live (upstreams; the environment before it when not known), else when
+// the Bundle was created. Every time is clamped to [created, now], so a
+// clock skew or a stale since never prints a negative or enormous duration.
 func (p *shipProgress) summary(envs []v1alpha1.PipelineEnvironmentStatus) {
 	if p.w == nil || !p.timed || len(envs) == 0 {
 		return
 	}
 	now := shipNow()
 	created := p.created
-	if created.IsZero() {
+	if created.IsZero() || created.After(now) {
 		created = p.start
+	}
+	clamp := func(t time.Time) time.Time {
+		switch {
+		case t.Before(created):
+			return created
+		case t.After(now):
+			return now
+		}
+		return t
+	}
+	since := map[string]time.Time{}
+	for _, e := range envs {
+		if e.Since != nil && !e.Since.IsZero() {
+			since[e.Name] = clamp(e.Since.Time)
+		} else if t, ok := p.changed[e.Name]; ok && !t.IsZero() {
+			since[e.Name] = clamp(t)
+		}
+	}
+	live := func(name string) (time.Time, bool) {
+		for _, e := range envs {
+			if e.Name == name && e.State == "Verified" {
+				t, ok := since[name]
+				return t, ok
+			}
+		}
+		return time.Time{}, false
+	}
+	began := func(i int) time.Time {
+		e := envs[i]
+		if t, ok := p.started[e.Name]; ok && !t.IsZero() {
+			return clamp(t)
+		}
+		ups, known := p.upstreams[e.Name]
+		if !known && i > 0 {
+			ups = []string{envs[i-1].Name}
+		}
+		start := created
+		for _, up := range ups {
+			if t, ok := live(up); ok && t.After(start) {
+				start = t
+			}
+		}
+		return start
 	}
 	_, _ = fmt.Fprintf(p.w, "%s after %s:\n", sty.Dim("Summary"), shortDuration(now.Sub(p.start)))
 	tw := style.NewTable(p.w, 3)
-	for _, e := range envs {
-		since, known := time.Time{}, false
-		if e.Since != nil {
-			since, known = e.Since.Time, true
-		} else if t, ok := p.changed[e.Name]; ok {
-			since, known = t, true
-		}
+	for i, e := range envs {
+		t, known := since[e.Name]
 		when := ""
 		switch {
 		case !known:
-		case e.State == "Verified" && !since.Before(created):
-			when = "took " + shortDuration(since.Sub(created))
-		case e.State == "Verified":
+		case e.State == "Verified" && e.Since != nil && !e.Since.IsZero() && e.Since.Time.Before(created):
 			when = "already live"
+		case e.State == "Verified":
+			when = "took " + shortDuration(t.Sub(began(i)))
 		default:
-			when = "for " + shortDuration(now.Sub(since))
+			when = "for " + shortDuration(now.Sub(t))
+		}
+		if when == "" {
+			_, _ = fmt.Fprintf(tw, "  %s\t%s\n", e.Name, sty.State(envState(e)))
+			continue
 		}
 		_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\n", e.Name, sty.State(envState(e)), when)
 	}
 	_ = tw.Flush()
+}
+
+// timing records, for the summary, when Bundle b's promotion began in each
+// environment (the earliest startedAt in its PromotionStep's status.steps)
+// and each environment's direct upstreams in the Pipeline's DAG. It is best
+// effort: what it cannot read, the summary estimates.
+func (p *shipProgress) timing(ctx context.Context, c sigs_client.Client, b *v1alpha1.Bundle) {
+	if p.w == nil || !p.timed || b == nil {
+		return
+	}
+	var pl v1alpha1.Pipeline
+	if err := c.Get(ctx, types.NamespacedName{Namespace: b.Namespace, Name: b.Spec.Pipeline}, &pl); err == nil {
+		p.upstreams = map[string][]string{}
+		for _, e := range pl.Spec.Environments {
+			if ups, err := graph.DirectUpstreams(&pl, b, e.Name); err == nil {
+				p.upstreams[e.Name] = ups
+			}
+		}
+	}
+	var steps v1alpha1.PromotionStepList
+	if err := c.List(ctx, &steps, sigs_client.InNamespace(b.Namespace), sigs_client.MatchingLabels{"kardinal.io/bundle": b.Name}); err != nil {
+		return
+	}
+	p.started = map[string]time.Time{}
+	for i := range steps.Items {
+		s := &steps.Items[i]
+		if s.Spec.BundleName != b.Name {
+			continue
+		}
+		for _, st := range s.Status.Steps {
+			if st.StartedAt == nil || st.StartedAt.IsZero() {
+				continue
+			}
+			if t, ok := p.started[s.Spec.Environment]; !ok || st.StartedAt.Time.Before(t) {
+				p.started[s.Spec.Environment] = st.StartedAt.Time
+			}
+		}
+	}
 }
 
 // shortDuration is d to the second, as Go writes it (1m5s), 0s under one.
@@ -674,7 +765,9 @@ follow it.
 --wait follows the Bundle, printing on stderr each new state of its
 environments after the time since the start (+1m5s), the URL of each PR it
 opens, and at the end a summary: each environment's last state and how long
-it took, or how long it has waited in it. --quiet (-q) prints none of that.
+its own promotion there took ("took": from its first step's start, else from
+its upstream going live, else from the Bundle's creation), or how long it has
+waited in it ("for"). --quiet (-q) prints none of that.
 It ends with one line on stdout (or, with -o json, an object with
 bundle, pipeline, namespace, type, version, url, result, exitCode, message
 and the Bundle's environments from status.environments). Exit codes:

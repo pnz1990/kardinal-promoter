@@ -140,7 +140,10 @@ func newReviewers(cfg *rest.Config, opts reviewOptions) (tokens uiauth.TokenRevi
 // the security headers.
 // assets may be nil when the embedded filesystem is unavailable. hosts is
 // --ui-allowed-hosts; nil allows loopback only.
-func newUIHandler(k8s client.Client, assets fs.FS, auth uiAuthConfig, corsAllowedOrigins string,
+//
+// apiReader, when not nil, is the uncached reader the lifecycle actions read
+// the objects they write through (freshGets).
+func newUIHandler(k8s client.Client, apiReader client.Reader, assets fs.FS, auth uiAuthConfig, corsAllowedOrigins string,
 	hosts uiHostAllowlist, log zerolog.Logger) http.Handler {
 	tokenReview := auth.staticToken == "" && auth.tokens != nil && auth.access != nil
 
@@ -151,6 +154,7 @@ func newUIHandler(k8s client.Client, assets fs.FS, auth uiAuthConfig, corsAllowe
 	uiMux := http.NewServeMux()
 	apiServer := newUIAPIServer(apiClient, log)
 	apiServer.scopeNamespace = auth.scopeNamespace
+	apiServer.apiReader = apiReader
 	if tokenReview {
 		apiServer.accessCheck = auth.accessCheck
 	}

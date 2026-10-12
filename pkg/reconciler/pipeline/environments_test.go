@@ -167,6 +167,31 @@ func TestProjectEnvironments(t *testing.T) {
 		summary: "1.5.0 live in test; failed in uat",
 		line:    "test=1.5.0 uat=- prod=-",
 	}, {
+		// A tag is a name: "sha-9349a3f live …", not "Sha-9349a3f live …".
+		name:    "a version that starts the sentence keeps its case",
+		p:       appPipeline,
+		bundles: []kardinalv1alpha1.Bundle{envBundle("b1", "sha-9349a3f", "Verified", envT0)},
+		steps:   v1,
+		ready:   validReady,
+		want: []want{{env: "test", bundle: "b1", version: "sha-9349a3f", state: "Verified"},
+			{env: "uat", bundle: "b1", version: "sha-9349a3f", state: "Verified"},
+			{env: "prod", bundle: "b1", version: "sha-9349a3f", state: "Verified"}},
+		summary: "sha-9349a3f live in test, uat, prod", line: "test=sha-9349a3f uat=sha-9349a3f prod=sha-9349a3f",
+	}, {
+		name: "a paused Pipeline still starts with a capital before a version",
+		p: func() *kardinalv1alpha1.Pipeline {
+			p := appPipeline()
+			p.Spec.Paused = true
+			return p
+		},
+		bundles: []kardinalv1alpha1.Bundle{envBundle("b1", "main", "Verified", envT0)},
+		steps:   v1,
+		ready:   validReady,
+		want: []want{{env: "test", bundle: "b1", version: "main", state: "Verified"},
+			{env: "uat", bundle: "b1", version: "main", state: "Verified"},
+			{env: "prod", bundle: "b1", version: "main", state: "Verified"}},
+		summary: "Paused; main live in test, uat, prod", line: "test=main uat=main prod=main",
+	}, {
 		name: "an invalid, paused Pipeline says so first",
 		p: func() *kardinalv1alpha1.Pipeline {
 			p := appPipeline()
@@ -318,6 +343,14 @@ func TestSummarizeGroups(t *testing.T) {
 		st   []kardinalv1alpha1.PipelineEnvironmentStatus
 		want string
 	}{
+		{name: "a version tag is not capitalised at the start",
+			envs: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "prod"}},
+			st:   []kardinalv1alpha1.PipelineEnvironmentStatus{st("test", "sha-9349a3f", "Verified"), st("prod", "sha-9349a3f", "Verified")},
+			want: "sha-9349a3f live in test, prod"},
+		{name: "nor is a branch name",
+			envs: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+			st:   []kardinalv1alpha1.PipelineEnvironmentStatus{st("test", "main", "Verified")},
+			want: "main live in test"},
 		{name: "a fleet is counted under its name",
 			envs: []kardinalv1alpha1.EnvironmentSpec{{Name: "canary"}, fleet("pops", 42)},
 			st: cat([]kardinalv1alpha1.PipelineEnvironmentStatus{st("canary", "7.2.0", "Verified")},
@@ -368,5 +401,37 @@ func TestSummarizeGroups(t *testing.T) {
 			p := newPipeline("app", tt.envs)
 			assert.Equal(t, tt.want, pipeline.Summarize(p, validReady, tt.st))
 		})
+	}
+}
+
+// TestProjectEnvironments_ZeroNow: a reader without the controller's clock
+// (the CLI passes a zero now) gets no Since for a state that began now, never
+// a zero time (which ship --wait printed as 2562047h47m16s); a Verified
+// environment keeps its step's Verified time.
+//
+// Covers PIPE-ENVSTATUS-02.
+func TestProjectEnvironments_ZeroNow(t *testing.T) {
+	t2 := envT0.Add(time.Hour)
+	bundles := []kardinalv1alpha1.Bundle{envBundle("b2", "1.5.0", "Promoting", t2)}
+	p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "uat"}, {Name: "prod"}, {Name: "dr"}})
+	steps := []kardinalv1alpha1.PromotionStep{projStep("b2", "test", "Verified", t2, t2), projStep("b2", "uat", "Verified", t2, t2),
+		projStep("b2", "dr", "Promoting", t2, time.Time{})}
+	gates := []kardinalv1alpha1.PolicyGate{envGate("b2", "prod", "cab")}
+	got := pipeline.ProjectEnvironments(p, bundles, steps, gates, nil, time.Time{})
+	require.Len(t, got, 4)
+	require.NotNil(t, got[0].Since, "Verified: the step's time")
+	assert.False(t, got[0].Since.IsZero())
+	assert.Equal(t, []string{"cab"}, got[2].BlockedBy)
+	assert.Nil(t, got[2].Since, "a gate's hold that began now has no Since without a clock")
+	assert.Equal(t, "Promoting", got[3].State)
+	assert.Nil(t, got[3].Since, "nor a promotion")
+
+	// The same input with the controller's clock: every state has a Since.
+	now := t2.Add(time.Minute)
+	got = pipeline.ProjectEnvironments(p, bundles, steps, gates, nil, now)
+	for _, e := range got {
+		require.NotEmpty(t, e.State, e.Name)
+		require.NotNil(t, e.Since, e.Name)
+		assert.False(t, e.Since.IsZero(), e.Name)
 	}
 }

@@ -63,32 +63,29 @@ const (
 	reasonFreezeGateNameConflict = "FreezeGateNameConflict"
 )
 
-// The SecretReferenceable condition warns that the git Secret
-// (spec.git.secretRef) lacks the kardinal.io/referenceable: "true" label
-// (docs/guides/security.md#secrets-referenced-by-custom-resources). In
-// v0.10.0 the Secret is still used; v0.11 refuses it (#1506). The condition is
-// absent when no Secret is named, when the Secret does not exist (the steps
-// report that), and when it is labeled.
+// A git Secret (spec.git.secretRef) without the kardinal.io/referenceable:
+// "true" label is not used (docs/guides/security.md#secrets-referenced-by-custom-resources,
+// #1506): the Pipeline is Ready=False with reason SecretNotReferenceable and
+// the command that labels it, and every git step waits until it is labeled.
+// conditionSecretReferenceable is the warning condition of older
+// controllers, removed from every Pipeline.
 const (
 	conditionSecretReferenceable = "SecretReferenceable"
-	reasonSecretNotReferenceable = "SecretNotReferenceable"
-	labelReferenceable           = "kardinal.io/referenceable"
-	// secretRecheck re-reads an unlabeled git Secret: Secrets are not
-	// watched, so labeling one is seen at the next recheck or Pipeline event.
-	secretRecheck = 5 * time.Minute
+	reasonSecretNotReferenceable = kardinalv1alpha1.ReasonSecretNotReferenceable
+	labelReferenceable           = kardinalv1alpha1.LabelSecretReferenceable
 )
 
-// gitSecretCondition returns the SecretReferenceable warning for p, or nil,
-// from its git Secret as readGitSecret read it.
-func gitSecretCondition(p *kardinalv1alpha1.Pipeline, gs gitSecret) *metav1.Condition {
+// secretNotReferenceable returns the Ready=False/SecretNotReferenceable
+// condition of p, or nil, from its git Secret as readGitSecret read it.
+func secretNotReferenceable(p *kardinalv1alpha1.Pipeline, gs gitSecret) *metav1.Condition {
 	if gs.secret == nil || gs.secret.Labels[labelReferenceable] == "true" {
 		return nil
 	}
 	return &metav1.Condition{
-		Type: conditionSecretReferenceable, Status: metav1.ConditionFalse, Reason: reasonSecretNotReferenceable,
+		Type: "Ready", Status: metav1.ConditionFalse, Reason: reasonSecretNotReferenceable,
 		ObservedGeneration: p.Generation,
-		Message: fmt.Sprintf("git Secret %s is not labeled %s=true; it is still used in v0.10 but will be refused "+
-			"in v0.11: label it (kubectl label secret %s -n %s %s=true)", gs.name, labelReferenceable, gs.name, p.Namespace, labelReferenceable),
+		Message: fmt.Sprintf("git Secret %s is not labeled %s=true, so git does not use it; label it: "+
+			"kubectl label secret %s -n %s %s=true", gs.name, labelReferenceable, gs.name, p.Namespace, labelReferenceable),
 	}
 }
 
@@ -197,11 +194,16 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// ownSecret is read only when the allowlist would refuse the URL (#1332).
+	// A git Secret that exists but is not labelled, and that would make the
+	// URL allowed once labelled, is reported as SecretNotReferenceable below,
+	// with the label command, not as RepositoryNotAllowed.
 	ownSecret := false
 	if !r.AllowedRepositories.Allows(p.Spec.Git.URL) {
-		if ownSecret, err = scm.PipelineSecretExists(ctx, r.Client, &p); err != nil {
+		state, err := scm.PipelineSecretState(ctx, r.Client, &p)
+		if err != nil {
 			return ctrl.Result{}, err
 		}
+		ownSecret = state != scm.PipelineSecretNone
 	}
 	// The fleets are resolved first: validate checks them as the Graph
 	// builder will see them.
@@ -213,14 +215,10 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	desiredSecret := gitSecretCondition(&p, gs)
 	// Nothing watches Secrets: a git.secretRef Secret created later, or a
-	// label added to one, is seen by these periodic re-checks. A selector
-	// fleet is re-resolved as often.
+	// label added to one, is seen by the periodic re-checks below. A
+	// selector fleet is re-resolved as often.
 	var result ctrl.Result
-	if desiredSecret != nil {
-		result.RequeueAfter = secretRecheck
-	}
 	if holdRecheck > 0 && (result.RequeueAfter == 0 || holdRecheck < result.RequeueAfter) {
 		result.RequeueAfter = holdRecheck
 	}
@@ -242,7 +240,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// command that fixes it. Re-checked every minute: Secrets are not
 	// watched.
 	if desired.Status == metav1.ConditionTrue {
-		if c := gitCredentialMissing(&p, gs); c != nil {
+		c := gitCredentialMissing(&p, gs)
+		if c == nil {
+			c = secretNotReferenceable(&p, gs)
+		}
+		if c != nil {
 			desired = *c
 			if result.RequeueAfter == 0 || secretRecheckInterval < result.RequeueAfter {
 				result.RequeueAfter = secretRecheckInterval
@@ -302,7 +304,8 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// validated carries the fleets just resolved, as the Graph builder will
 	// see them.
 	desiredEnvs := ProjectEnvironments(validated, bundleList.Items, steps, gates, p.Status.Environments, r.now())
-	desiredSummary := Summarize(&p, desired, desiredEnvs)
+	desiredFailed := FailedVersion(p.Name, bundleList.Items)
+	desiredSummary := WithFailure(Summarize(&p, desired, desiredEnvs), desiredFailed, desiredEnvs)
 	desiredEnvLine := EnvironmentLine(desiredEnvs)
 	desiredMetrics := ComputeDeploymentMetrics(&p, bundleList.Items, steps, time.Now().UTC())
 
@@ -319,12 +322,10 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		conflictMatch = conditionMatches(p.Status.Conditions, *desiredConflict)
 	}
 	secretMatch := meta.FindStatusCondition(p.Status.Conditions, conditionSecretReferenceable) == nil
-	if desiredSecret != nil {
-		secretMatch = conditionMatches(p.Status.Conditions, *desiredSecret)
-	}
 	fleetsMatch := fleetsEqual(p.Status.Fleets, desiredFleets)
 	envsMatch := environmentsEqual(p.Status.Environments, desiredEnvs) &&
-		p.Status.Summary == desiredSummary && p.Status.EnvironmentSummary == desiredEnvLine
+		p.Status.Summary == desiredSummary && p.Status.EnvironmentSummary == desiredEnvLine &&
+		failedVersionEqual(p.Status.FailedVersion, desiredFailed)
 	if condMatch && phaseMatch && metricsMatch && pausedMatch && conflictMatch && secretMatch && fleetsMatch && envsMatch {
 		log.Debug().
 			Str("reason", desired.Reason).
@@ -348,19 +349,13 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	} else {
 		meta.RemoveStatusCondition(&p.Status.Conditions, conditionPathConflict)
 	}
-	if desiredSecret != nil {
-		if meta.FindStatusCondition(p.Status.Conditions, conditionSecretReferenceable) == nil {
-			log.Warn().Str("secret", p.Spec.Git.SecretRef.Name).Msg(desiredSecret.Message)
-		}
-		meta.SetStatusCondition(&p.Status.Conditions, *desiredSecret)
-	} else {
-		meta.RemoveStatusCondition(&p.Status.Conditions, conditionSecretReferenceable)
-	}
+	meta.RemoveStatusCondition(&p.Status.Conditions, conditionSecretReferenceable)
 	p.Status.DeploymentMetrics = desiredMetrics
 	p.Status.Fleets = desiredFleets
 	p.Status.Environments = desiredEnvs
 	p.Status.Summary = desiredSummary
 	p.Status.EnvironmentSummary = desiredEnvLine
+	p.Status.FailedVersion = desiredFailed
 
 	if err := r.Status().Patch(ctx, &p, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch pipeline status: %w", err)
@@ -707,8 +702,7 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline, ownSecret bool) meta
 		return metav1.Condition{
 			Type: "Ready", Status: metav1.ConditionFalse, Reason: reasonNotImplemented,
 			Message: "not implemented or not supported, so a Bundle fails when it reaches an environment " +
-				"that uses one (steps, promotionTemplate and two or more regions fail it when its Graph is " +
-				"built): " + strings.Join(msgs, "; "),
+				"that uses one: " + strings.Join(msgs, "; "),
 			ObservedGeneration: p.Generation,
 		}
 	}

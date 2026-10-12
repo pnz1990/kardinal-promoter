@@ -19,6 +19,7 @@ import { Stack } from '../ui'
 import { serializeHash, EMPTY_URL_STATE } from '../useUrlState'
 import { approvalItems, type ApprovalItem } from './approvalsModel'
 import './ApprovalsPage.css'
+import { humanDuration } from '../timeFormat'
 
 export interface ApprovalsPageProps {
   gates: PolicyGate[]
@@ -33,8 +34,8 @@ export interface ApprovalsPageProps {
 export interface ApprovalsHandle {
   /** Moves focus to the next (1) or previous (-1) row. */
   move: (dir: 1 | -1) => void
-  /** Opens Approve for the row in focus, else the first; false when there is none it can. */
-  approve: () => boolean
+  /** Opens Approve for the row in focus (or the only row): true, or what to say instead. */
+  approve: () => true | string
 }
 
 /** How long the environment has waited: "40s", "12m", "3h 5m", "2d 4h". */
@@ -42,10 +43,7 @@ export function waited(iso: string | undefined, now: number): string {
   const t = iso ? Date.parse(iso) : NaN
   if (isNaN(t)) return '—'
   const s = Math.max(0, Math.floor((now - t) / 1000))
-  if (s < 60) return `${s}s`
-  if (s < 3600) return `${Math.floor(s / 60)}m`
-  if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`
-  return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`
+  return humanDuration(s)
 }
 
 type Open = { item: ApprovalItem; decision: 'approve' | 'reject' }
@@ -75,10 +73,14 @@ export const ApprovalsPage = forwardRef<ApprovalsHandle, ApprovalsPageProps>(fun
       r[next].focus()
     },
     approve: () => {
-      const r = rows()
-      const at = r.findIndex(el => el.closest('.appr-item')?.contains(document.activeElement))
+      if (mine.length === 0) {
+        return others.length > 0 ? `${others.length} waiting on someone else; none on you.` : 'Nothing here waits on your approval.'
+      }
+      const at = rows().findIndex(el => el.closest('.appr-item')?.contains(document.activeElement))
+      if (at < 0 && mine.length > 1) return `${mine.length} wait on you: select one first (j / k).`
       const item = mine[at < 0 ? 0 : at]
-      if (!item || reasonFor(item, 'approve')) return false
+      const why = reasonFor(item, 'approve')
+      if (why) return why
       setResult(undefined)
       setOpen({ item, decision: 'approve' })
       return true

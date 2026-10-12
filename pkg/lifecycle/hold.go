@@ -317,9 +317,16 @@ func RollbackAndHold(ctx context.Context, c client.Client, req HoldRequest) (*Ro
 		req.Name = req.Pipeline + "-rollback-" + hex.EncodeToString(suffix)
 	}
 	// Refuse a held environment before planning: what is deployed there is
-	// the held rollback, so the plan would fail for a less useful reason.
+	// the held rollback, so the plan would fail for a less useful reason. The
+	// hold writer reads it when there is one: it is the client that writes
+	// the hold, and the UI gives it fresh (uncached) reads, so a hold made
+	// a moment ago is seen.
+	reader := client.Reader(c)
+	if req.HoldWriter != nil {
+		reader = req.HoldWriter
+	}
 	var p v1alpha1.Pipeline
-	if err := c.Get(ctx, types.NamespacedName{Namespace: req.Namespace, Name: req.Pipeline}, &p); err == nil {
+	if err := reader.Get(ctx, types.NamespacedName{Namespace: req.Namespace, Name: req.Pipeline}, &p); err == nil {
 		if h := HoldOf(&p, req.Environment); h != nil {
 			return nil, nil, heldConflict(req.Pipeline, h)
 		}
