@@ -353,10 +353,9 @@ func TestRollouts_AnalysisTemplateEditedMidFlight(t *testing.T) {
 	require.NoError(t, unstructured.SetNestedSlice(tmpl.Object, []interface{}{jobMetric("m", `exit 0`)}, "spec", "metrics"))
 	_, err = e.Dynamic.Resource(analysisTemplateGVR).Namespace(a.ns).Update(ctx, tmpl, metav1.UpdateOptions{})
 	require.NoError(t, err)
-	var live v1alpha1.Pipeline
-	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &live))
-	live.Spec.Environments[0].Verification.Args = []v1alpha1.AnalysisArg{{Name: "unused", Value: "x"}}
-	require.NoError(t, e.Client.Update(ctx, &live))
+	a.updatePipeline(t, pipelineName, func(live *v1alpha1.Pipeline) {
+		live.Spec.Environments[0].Verification.Args = []v1alpha1.AnalysisArg{{Name: "unused", Value: "x"}}
+	})
 
 	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 	c := meta.FindStatusCondition(ps.Status.Conditions, "Verified")
@@ -487,11 +486,10 @@ func TestRollouts_AnalysisInCompactGraph(t *testing.T) {
 	slow["interval"] = "10s"
 	slow["count"] = int64(60)
 	createAnalysisTemplate(t, e, a.ns, "slow", nil, slow)
-	var live v1alpha1.Pipeline
-	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &live))
-	live.Spec.Environments[1].Verification = &v1alpha1.VerificationSpec{
-		AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "fails"}, {Name: "slow"}}}
-	require.NoError(t, e.Client.Update(ctx, &live))
+	a.updatePipeline(t, pipelineName, func(live *v1alpha1.Pipeline) {
+		live.Spec.Environments[1].Verification = &v1alpha1.VerificationSpec{
+			AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "fails"}, {Name: "slow"}}}
+	})
 	second := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV3)
 	e.WaitStepState(t, a.ns, pipelineName, second, "prod", "Failed", promoteTimeout)
 	framework.Eventually(t, 2*time.Minute, "the slow run to be terminated", func(ctx context.Context) (bool, string) {

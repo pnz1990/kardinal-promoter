@@ -342,10 +342,9 @@ func TestStep_HookEditAndSupersede(t *testing.T) {
 	waitHookRun(t, e, a.ns, firstHook, v1alpha1.HookRunRunning)
 
 	// Edit the hook while it runs.
-	var live v1alpha1.Pipeline
-	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &live))
-	live.Spec.Environments[0].Hooks[0].Job = hookJob(t, `echo edited`, "")
-	require.NoError(t, e.Client.Update(ctx, &live))
+	a.updatePipeline(t, pipelineName, func(live *v1alpha1.Pipeline) {
+		live.Spec.Environments[0].Hooks[0].Job = hookJob(t, `echo edited`, "")
+	})
 	framework.Eventually(t, time.Minute, "the running HookRun reports the edit", func(ctx context.Context) (bool, string) {
 		hr, ok, err := hookRun(ctx, e, a.ns, firstHook)
 		if err != nil || !ok {
@@ -421,11 +420,10 @@ func TestStep_HookRenamedMidFlight(t *testing.T) {
 	oldName := graph.HookRunName(pipelineName, bundle, "prod", "pre", "migrate")
 	waitHookRun(t, e, a.ns, oldName, v1alpha1.HookRunRunning)
 
-	var live v1alpha1.Pipeline
-	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &live))
-	live.Spec.Environments[0].Hooks[0].Name = "migrate-v2"
-	live.Spec.Environments[0].Hooks[0].Job = hookJob(t, `echo new-done`, "")
-	require.NoError(t, e.Client.Update(ctx, &live))
+	a.updatePipeline(t, pipelineName, func(live *v1alpha1.Pipeline) {
+		live.Spec.Environments[0].Hooks[0].Name = "migrate-v2"
+		live.Spec.Environments[0].Hooks[0].Job = hookJob(t, `echo new-done`, "")
+	})
 	newName := graph.HookRunName(pipelineName, bundle, "prod", "pre", "migrate-v2")
 
 	newRun := waitHookRun(t, e, a.ns, newName, v1alpha1.HookRunSucceeded)
@@ -468,10 +466,9 @@ func TestStep_HookAddedAfterStart(t *testing.T) {
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "WaitingForMerge", promoteTimeout)
 
-	var live v1alpha1.Pipeline
-	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &live))
-	live.Spec.Environments[0].Hooks = []v1alpha1.HookSpec{{Name: "late", Phase: "pre", Job: hookJob(t, `echo late`, "")}}
-	require.NoError(t, e.Client.Update(ctx, &live))
+	a.updatePipeline(t, pipelineName, func(p *v1alpha1.Pipeline) {
+		p.Spec.Environments[0].Hooks = []v1alpha1.HookSpec{{Name: "late", Phase: "pre", Job: hookJob(t, `echo late`, "")}}
+	})
 	name := graph.HookRunName(pipelineName, bundle, "prod", "pre", "late")
 	hr := waitHookRun(t, e, a.ns, name, v1alpha1.HookRunSkipped)
 	assert.Contains(t, hr.Status.Message, "after the step had already started")
