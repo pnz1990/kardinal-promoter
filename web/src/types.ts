@@ -51,6 +51,22 @@ export interface Pipeline {
   /** Pipeline.status.conditions (#1727): Ready (reasons such as ValidationFailed and
    *  GitCredentialMissing), Paused, PathConflict and the SecretReferenceable warning. */
   conditions?: Condition[]
+  /** Pipeline.status.failedVersion: why its newest version failed. Absent otherwise. */
+  failedVersion?: FailedVersion
+}
+
+/** Pipeline.status.failedVersion: the newest version's Bundle failed, before any step
+ *  (environment absent: the Graph could not be built, the spec is invalid) or in an environment. */
+export interface FailedVersion {
+  bundle: string
+  version?: string
+  /** The Bundle condition's reason: GraphRejected, GraphBuildFailed, InvalidIntent, StepFailed… */
+  reason: string
+  /** What failed and, where known, what fixes it (after " — "). */
+  message?: string
+  environment?: string
+  /** RFC 3339. */
+  since?: string
 }
 
 /** One entry of Pipeline.status.environments (P1). States go through displayState. */

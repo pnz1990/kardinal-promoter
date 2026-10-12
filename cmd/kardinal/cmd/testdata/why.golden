@@ -153,6 +153,27 @@ prod did not promote 1.5.0 (demo-b): failed.
   Next  kardinal logs demo prod
   Or    kardinal rollback demo prod, back to 1.4.0
 
+== the newest version failed before it started (the walkthrough's GateMirror) (kardinal why demo)
+The newest version sha-9349a3f (demo-bj579) failed before it started: kro rejected the Graph: compile node "GateMirror": variable at "spec.live.gates" ("(PolicyGates + ApprovalGates).filter(...)"): ERROR: <input>:1:14: found no matching overload for '_+_' applied to '(list(__type_PolicyGates.@idx), list(__type_ApprovalGates.@idx))'
+  Reason  GraphRejected
+  Fix     kro could not run the Graph kardinal built for this version: check that the installed kro is at least the version the chart's kro.version annotation names (helm show chart kardinal-promoter; https://pnz1990.github.io/kardinal-promoter/installation/#install-kro), upgrade kardinal if a release fixes it, or report it with this message; then ship the version again (kardinal ship demo ...)
+  See     kubectl get bundle demo-bj579 -n default -o yaml
+
+test runs sha-9349a3f and nothing is waiting.
+
+prod runs sha-9349a3f and nothing is waiting.
+
+== the newest version's Graph could not be built (kardinal why demo prod)
+The newest version 1.5.0 (demo-b) failed before it started: build: gate "soak": unknown variable x
+  Reason  GraphBuildFailed
+  Fix     fix the pipeline, version or gate the message names; changing the pipeline or its gates retries this version
+  See     kubectl get bundle demo-b -n default -o yaml
+
+prod runs 1.4.0 and nothing is waiting.
+
+== the newest version failed in uat; why prod (kardinal why demo prod)
+prod runs 1.4.0 and nothing is waiting.
+
 == promoting (kardinal why demo prod)
 prod is promoting 1.5.0 (demo-b): checking health.
   Since  1m30s ago

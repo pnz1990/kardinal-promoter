@@ -81,3 +81,39 @@ func TestBuilder_GateMirror(t *testing.T) {
 	assert.NotContains(t, nodes, graph.NodeGateMirror, "no pr-review environment with gates")
 	assert.NotContains(t, nodes, graph.NodeGateMirrorData)
 }
+
+// TestBuilder_GateMirrorTypesInKroCEL: kro types each gate collection as a
+// list of its own object type, so the mirror of a pr-review environment
+// with both a rule gate and an approval gate must not add the two lists
+// (kro rejected "PolicyGates + ApprovalGates" with "no matching overload
+// for '_+_'", and every Bundle failed at Graph build). Checked with kro's
+// typing of the PolicyGate CRD.
+func TestBuilder_GateMirrorTypesInKroCEL(t *testing.T) {
+	p := makeLinearPipeline("app", "test", "prod")
+	p.Spec.Environments[1].Approval = "pr-review"
+	rule := makePolicyGate("soak", "platform-policies", "prod", "true")
+	approval := makePolicyGate("two", "platform-policies", "prod", "true")
+	approval.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 1}
+	// The harness types as kro does: adding the two collections is refused.
+	both := map[string]string{graph.NodePolicyGates: "kardinal.io_policygates.yaml", graph.NodeApprovalGates: "kardinal.io_policygates.yaml"}
+	err := checkKroTypes(t, "(PolicyGates + ApprovalGates).size()", both)
+	require.ErrorContains(t, err, "found no matching overload for '_+_'")
+
+	for _, gates := range [][]kardinalv1alpha1.PolicyGate{{rule, approval}, {rule}, {approval}} {
+		res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-v1", "app"), PolicyGates: gates})
+		require.NoError(t, err)
+		nodes := nodeByID(res.Graph.Spec.Nodes)
+		mirror, ok := nodes[graph.NodeGateMirror]
+		require.True(t, ok)
+		expr := mirror.Patch["spec"].(map[string]interface{})["live"].(map[string]interface{})["gates"].(string)
+		m := reWholeExpr.FindStringSubmatch(expr)
+		require.NotNil(t, m, expr)
+		collections := map[string]string{}
+		for _, id := range []string{graph.NodePolicyGates, graph.NodeApprovalGates} {
+			if _, ok := nodes[id]; ok {
+				collections[id] = "kardinal.io_policygates.yaml"
+			}
+		}
+		require.NoError(t, checkKroTypes(t, m[1], collections, "Mirror"), "%d gates: %s", len(gates), m[1])
+	}
+}

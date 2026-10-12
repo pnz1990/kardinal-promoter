@@ -160,9 +160,11 @@ func whyFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline,
 		return fmt.Errorf("list policy gates: %w", err)
 	}
 	envs := p.Status.Environments
+	failed := p.Status.FailedVersion
 	if len(envs) == 0 {
-		// A controller that predates status.environments.
+		// A controller that predates status.environments (and failedVersion).
 		envs = pipelinerec.ProjectEnvironments(p, bundles.Items, steps.Items, gates.Items, nil, time.Time{})
+		failed = pipelinerec.FailedVersion(p.Name, bundles.Items)
 	}
 	byName := map[string]*v1alpha1.Bundle{}
 	for i := range bundles.Items {
@@ -175,6 +177,11 @@ func whyFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline,
 		me = &id
 	}
 	var answers []whyAnswer
+	// The newest version failed: that comes first, for every environment
+	// when it failed before any step, else for the one whose step failed.
+	if failed != nil && (envFilter == "" || failed.Environment == "" || failed.Environment == envFilter) {
+		answers = append(answers, whyFailed(p, failed))
+	}
 	for _, e := range envs {
 		if envFilter != "" && e.Name != envFilter {
 			continue
@@ -562,3 +569,46 @@ new or edited gate takes effect").
 -o wide prints kardinal explain's table (every step and gate of the current
 version, with kinds and expressions), with the commands that get past a
 gate on stderr; -o json and yaml print explain's entries.`
+
+// whyFailed is why's answer when the Pipeline's newest version failed
+// (status.failedVersion): what failed, the reason, what fixes it where
+// known, and where the whole record is.
+func whyFailed(p *v1alpha1.Pipeline, f *v1alpha1.PipelineFailedVersion) whyAnswer {
+	where := "failed before it started"
+	if f.Environment != "" {
+		where = "failed in " + f.Environment
+	}
+	detail, fix, _ := strings.Cut(f.Message, " — ")
+	if own := failureFix(p, f); own != "" {
+		fix = own
+	}
+	a := whyAnswer{sentence: fmt.Sprintf("The newest version %s %s: %s", versionLabel(f.Version, f.Bundle), where, detail)}
+	a.lines = append(a.lines, whyLine{"Reason", f.Reason})
+	if fix != "" {
+		a.lines = append(a.lines, whyLine{"Fix", fix})
+	}
+	a.lines = append(a.lines, whyLine{"See", fmt.Sprintf("kubectl get bundle %s -n %s -o yaml", f.Bundle, p.Namespace)})
+	return a
+}
+
+// failureFix says what to do about a failure, in the CLI's words (the
+// controller's message names the kinds); "" leaves the message's own hint.
+func failureFix(p *v1alpha1.Pipeline, f *v1alpha1.PipelineFailedVersion) string {
+	switch f.Reason {
+	case "GraphBuildFailed":
+		return "fix the pipeline, version or gate the message names; changing the pipeline or its gates retries this version"
+	case "InvalidIntent", "InvalidPipeline", "CircularDependency":
+		return "fix the pipeline (kubectl edit pipeline " + p.Name + " -n " + p.Namespace + "); the change retries this version"
+	case "GraphRejected":
+		return "kro could not run the Graph kardinal built for this version: check that the installed kro is at least the " +
+			"version the chart's kro.version annotation names (helm show chart kardinal-promoter; " +
+			"https://pnz1990.github.io/kardinal-promoter/installation/#install-kro), upgrade kardinal if a release fixes it, " +
+			"or report it with this message; then ship the version again (kardinal ship " + p.Name + " ...)"
+	case "StepFailed":
+		if f.Environment != "" {
+			return fmt.Sprintf("fix what %s reports, then ship the version again, or roll it back: kardinal rollback %s --env %s",
+				f.Environment, p.Name, f.Environment)
+		}
+	}
+	return ""
+}
