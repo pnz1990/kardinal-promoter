@@ -57,6 +57,7 @@ test('Override gate in the stage drawer asks first, then overrides the gate in p
   await expect(dialog).toHaveCount(0)
   await expect(drawer.getByRole('status').filter({ hasText: 'Overridden' }))
     // The gate's own name, not the instance the controller echoes (#1796).
-    .toHaveText(new RegExp(`^Overridden\\. gate ${holdGate} overridden in prod for 1 in-progress Bundle\\(s\\) until `))
+    // The whole reply: the version count in words since #1810, and the expiry in RFC 3339.
+    .toHaveText(new RegExp(`^Overridden\\. gate ${holdGate} overridden in prod for 1 version in progress until \\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ$`))
   expect(writes).toEqual(['POST /api/v1/ui/override'])
 })

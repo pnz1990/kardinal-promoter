@@ -39,9 +39,32 @@ import (
 )
 
 // secretRecheckInterval is how often a Pipeline refused for a missing
-// git.secretRef Secret, or reported GitCredentialMissing, is checked again:
-// the reconciler watches no Secrets.
+// git.secretRef Secret, or reported GitCredentialMissing or
+// SecretNotReferenceable, is checked again once it has been so for a while
+// (secretRecheck): the reconciler watches no Secrets. The controller may
+// only get Secrets by name, never list or watch them (#1266), so a Secret
+// created or labelled to follow the fix-it is seen by these re-checks.
 const secretRecheckInterval = time.Minute
+
+// secretRecheck is when to check a Pipeline's git Secret again while Ready
+// says the Secret is missing or not usable (reason, since the condition's
+// lastTransitionTime when it already says so). Right after the problem is
+// reported someone is likely following the fix-it, so the Secret is read
+// every 2s for 2 minutes, then every 15s for 15 minutes, then every
+// secretRecheckInterval. Each check is one uncached Get of one Secret.
+func secretRecheck(current *metav1.Condition, reason string, now time.Time) time.Duration {
+	age := time.Duration(0)
+	if current != nil && current.Reason == reason && !current.LastTransitionTime.IsZero() {
+		age = now.Sub(current.LastTransitionTime.Time)
+	}
+	switch {
+	case age < 2*time.Minute:
+		return 2 * time.Second
+	case age < 15*time.Minute:
+		return 15 * time.Second
+	}
+	return secretRecheckInterval
+}
 
 // Ready condition reasons.
 const (
@@ -222,8 +245,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if holdRecheck > 0 && (result.RequeueAfter == 0 || holdRecheck < result.RequeueAfter) {
 		result.RequeueAfter = holdRecheck
 	}
+	readyNow := meta.FindStatusCondition(p.Status.Conditions, "Ready")
 	if desired.Reason == scm.ReasonRepositoryNotAllowed && p.Spec.Git.SecretRef != nil && !ownSecret {
-		result.RequeueAfter = secretRecheckInterval
+		result.RequeueAfter = secretRecheck(readyNow, desired.Reason, r.now())
 	}
 	if desired.Status == metav1.ConditionTrue {
 		conflict, err := r.renderedBranchConflict(ctx, &p)
@@ -237,8 +261,8 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	// A valid spec whose git has no credential: every git step of a Bundle
 	// would wait for it, so Ready says so before the first Bundle, with the
-	// command that fixes it. Re-checked every minute: Secrets are not
-	// watched.
+	// command that fixes it. Re-checked soon (secretRecheck): Secrets are
+	// not watched.
 	if desired.Status == metav1.ConditionTrue {
 		c := gitCredentialMissing(&p, gs)
 		if c == nil {
@@ -246,8 +270,8 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 		if c != nil {
 			desired = *c
-			if result.RequeueAfter == 0 || secretRecheckInterval < result.RequeueAfter {
-				result.RequeueAfter = secretRecheckInterval
+			if d := secretRecheck(readyNow, c.Reason, r.now()); result.RequeueAfter == 0 || d < result.RequeueAfter {
+				result.RequeueAfter = d
 			}
 		}
 	}

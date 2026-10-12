@@ -296,7 +296,7 @@ nothing is cloned, pushed or opened. That is every Pipeline whose `spec.git.url`
 except one that never uses the controller's token: its `git.secretRef` names a Secret that
 exists in its namespace (git clone and push use that token) and no environment uses
 `approval: pr-review` (whose PR the controller's token opens). A Pipeline refused because its
-Secret is missing is checked again every minute. `kardinal validate --allowed-repositories
+Secret is missing is checked again every 2 seconds at first, then every 15 seconds and every minute. `kardinal validate --allowed-repositories
 <list>` reports the same before you apply the file (offline it takes the Secret to exist); add
 `--scm-provider bitbucket-datacenter` for a Data Center controller, so URLs are matched as
 `KEY/slug` too. When
