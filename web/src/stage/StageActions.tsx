@@ -158,7 +158,8 @@ function ActionDialog({ kind, view, pipeline, namespace, gate: openedFor, onCanc
           description={`${env} passes ${gateName || 'the gate'} for ${shown || 'the version on its way in'} until the override ends. Your name and reason are recorded.`}
           confirmLabel="Override gate" confirmDisabled={!gate || text.trim() === ''}
           onConfirm={() => void run(`override ${gateName} in ${env}`, () => api.overrideGate({ pipeline, namespace, gate, environment: env,
-            reason: text.trim(), expiresInMinutes: duration }), 'Overridden')}>
+            // The controller echoes the gate it was sent (the instance); say the name the user gave it.
+            reason: text.trim(), expiresInMinutes: duration }).then(r => ({ ...r, message: r.message.replace(`gate ${gate} `, `gate ${gateName} `) })), 'Overridden')}>
           {plainGates.length > 1 && (
             <div className="stage-field">
               <label htmlFor={ids.gate}>Gate</label>
