@@ -458,7 +458,8 @@ func leadMinutes(t *testing.T, a *app, bundle string) int64 {
 // kardinal.io/referenceable=true is not used. The Pipeline is Ready=False
 // with reason SecretNotReferenceable and the kubectl label command, and its
 // Bundle's step waits (Promoting, not Failed) with the same command and no
-// commit. Labeling the Secret makes the Pipeline Ready and lets the step
+// commit. Labeling the Secret makes the Pipeline Ready within seconds (it
+// is read again every 2s while the condition is new) and lets the step
 // promote.
 //
 // Covers PIPE-GITSECRET-LABEL-01.
@@ -498,13 +499,17 @@ func TestPipeline_GitSecretNotReferenceable(t *testing.T) {
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: "unlabeled-git"}, unlabeled))
 	unlabeled.Labels = map[string]string{"kardinal.io/referenceable": "true"}
 	require.NoError(t, e.Client.Update(ctx, unlabeled))
-	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
-	a.running(t, "test", imageV2, "the labeled Secret is used")
-	// The Secret is not watched; the Pipeline is re-checked every minute.
-	waitPipeline(t, e, a.ns, pipelineName, 2*time.Minute, "Ready once labeled", func(p *v1alpha1.Pipeline) (bool, string) {
+	labelled := time.Now()
+	// The controller does not watch Secrets (#1266); a Pipeline that reports
+	// its Secret unusable reads it again every 2s at first, so following the
+	// fix-it makes it Ready within seconds (10s here for a loaded host).
+	waitPipeline(t, e, a.ns, pipelineName, 10*time.Second, "Ready within seconds of the label", func(p *v1alpha1.Pipeline) (bool, string) {
 		c := meta.FindStatusCondition(p.Status.Conditions, "Ready")
 		return c != nil && c.Status == metav1.ConditionTrue, fmt.Sprintf("%+v", c)
 	})
+	t.Logf("Ready %s after the label", time.Since(labelled).Round(100*time.Millisecond))
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	a.running(t, "test", imageV2, "the labeled Secret is used")
 }
 
 // TestPipeline_FailedVersionIsVisible: when the newest version fails before

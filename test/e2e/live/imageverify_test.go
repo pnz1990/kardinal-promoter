@@ -317,10 +317,9 @@ func TestGiteaFamily_SignedCommitPerson(t *testing.T) {
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 
 	// Another allowed signer: the same commit is refused.
-	var live v1alpha1.Pipeline
-	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: pipelineName}, &live))
-	live.Spec.ImageVerification.Commits.AllowedSigners = []string{"someone-else"}
-	require.NoError(t, e.Client.Update(ctx, &live))
+	a.updatePipeline(t, pipelineName, func(live *v1alpha1.Pipeline) {
+		live.Spec.ImageVerification.Commits.AllowedSigners = []string{"someone-else"}
+	})
 	second := e.CreateBundle(t, a.ns, pipelineName, "--type", "config", "--config-commit", sha, "--config-repo", cfg.CloneURL)
 	iv = waitImageVerification(t, e, a.ns, second, "Failed")
 	assert.Contains(t, iv.Status.Message, "who is not in commits.allowedSigners")
@@ -353,10 +352,9 @@ func TestGiteaFamily_SignedCommitInstance(t *testing.T) {
 	assert.Contains(t, iv.Status.Message, "signed by the SCM platform (forgejo-instance")
 	a.fileHas(t, "test", fixtures.V1, "test in git")
 
-	var live v1alpha1.Pipeline
-	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: pipelineName}, &live))
-	live.Spec.ImageVerification.Commits.AllowedSigners = []string{"forgejo-instance"}
-	require.NoError(t, e.Client.Update(ctx, &live))
+	a.updatePipeline(t, pipelineName, func(live *v1alpha1.Pipeline) {
+		live.Spec.ImageVerification.Commits.AllowedSigners = []string{"forgejo-instance"}
+	})
 	second := e.CreateBundle(t, a.ns, pipelineName, "--type", "config", "--config-commit", sha, "--config-repo", cfg.CloneURL)
 	iv = waitImageVerification(t, e, a.ns, second, "Verified")
 	assert.Equal(t, "forgejo-instance", iv.Status.Commit.Signer)
@@ -471,10 +469,9 @@ func TestStep_ImageVerificationPolicyChangeReverifies(t *testing.T) {
 	require.NoError(t, e.Client.Create(ctx, &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "cosign-2026", Namespace: a.ns, Labels: map[string]string{"kardinal.io/referenceable": "true"}},
 		Data:       map[string][]byte{"cosign.pub": newPEM}}))
-	var live v1alpha1.Pipeline
-	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: pipelineName}, &live))
-	live.Spec.ImageVerification.Authorities[0].Key.SecretRef.Name = "cosign-2026"
-	require.NoError(t, e.Client.Update(ctx, &live))
+	a.updatePipeline(t, pipelineName, func(live *v1alpha1.Pipeline) {
+		live.Spec.ImageVerification.Authorities[0].Key.SecretRef.Name = "cosign-2026"
+	})
 
 	iv := waitImageVerification(t, e, a.ns, bundle, "Verified")
 	assert.NotEqual(t, first, iv.Name, "a new ImageVerification for the new policy")

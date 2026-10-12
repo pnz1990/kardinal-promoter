@@ -302,12 +302,9 @@ func TestStep_YAMLUpdate(t *testing.T) {
 	a.running(t, "test", imageV2, "test after the promotion")
 
 	// A path that cannot be applied fails the step, with nothing pushed.
-	var live v1alpha1.Pipeline
-	require.NoError(t, e.Client.Get(context.Background(), types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &live))
 	broken := append([]v1alpha1.YAMLUpdate{}, updates...)
 	broken = append(broken, v1alpha1.YAMLUpdate{File: "deployment.yaml", Path: "spec.template.spec.containers[3].image"})
-	envSpec(t, &live, "test").Update.YAML.Updates = broken
-	require.NoError(t, e.Client.Update(context.Background(), &live))
+	a.updatePipeline(t, pipelineName, func(live *v1alpha1.Pipeline) { envSpec(t, live, "test").Update.YAML.Updates = broken })
 	bad := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
 	ps = e.WaitStepState(t, a.ns, pipelineName, bad, "test", "Failed", promoteTimeout)
 	assert.Contains(t, ps.Status.Message, "containers has 1 elements, no [3]")

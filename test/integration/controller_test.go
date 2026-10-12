@@ -247,7 +247,7 @@ func TestControllerIntegration(t *testing.T) {
 		r := &pipelinereconciler.Reconciler{Client: fakeClient}
 		result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: noCred.Name, Namespace: namespace}})
 		require.NoError(t, err)
-		assert.Equal(t, time.Minute, result.RequeueAfter)
+		assert.Equal(t, 2*time.Second, result.RequeueAfter, "a new condition: the Secret is read again soon")
 		var got kardinalv1alpha1.Pipeline
 		require.NoError(t, fakeClient.Get(ctx, client.ObjectKey{Name: noCred.Name, Namespace: namespace}, &got))
 		require.NotEmpty(t, got.Status.Conditions)

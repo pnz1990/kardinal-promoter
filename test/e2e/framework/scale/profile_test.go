@@ -109,3 +109,36 @@ func TestKnownBugMessage(t *testing.T) {
 	assert.Equal(t, "KNOWN BUG #1473 https://github.com/pnz1990/kardinal-promoter/issues/1473: too many",
 		KnownBugMessage(1473, "too many"))
 }
+
+// TestSettleSerial: a test whose Bundle makes N promotions in a row (a
+// chain's stages, N environments taking turns on one branch) settles within
+// max(Settle, N x SerialStep). The ci LongChain (120 stages) and BigWaves
+// (151 environments on one branch) failed the flat 10-minute Settle while
+// still promoting a stage every ~5.6 s on a GitHub runner.
+func TestSettleSerial(t *testing.T) {
+	p, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "ci", p.Name)
+	assert.Equal(t, 12*time.Second, p.SerialStep)
+	cases := []struct {
+		n    int
+		want time.Duration
+	}{
+		{n: 10, want: p.Settle},                      // short: the profile's Settle
+		{n: 120, want: 24 * time.Minute},             // TestScale_TopologyLongChain
+		{n: 1 + 10*15, want: 151 * 12 * time.Second}, // TestScale_TopologyBigWaves
+	}
+	for _, tc := range cases {
+		r := &Run{T: t, P: p, Extra: map[string]interface{}{}}
+		r.SettleSerial(tc.n)
+		assert.Equal(t, tc.want, r.settle, "%d serial promotions", tc.n)
+		// Measured: 120 stages took 11m12s, so the chain fits with margin.
+		if tc.n == 120 {
+			assert.Greater(t, r.settle, 11*time.Minute+12*time.Second)
+		}
+	}
+	t.Setenv("KARDINAL_E2E_SCALE_SERIAL_STEP", "3s")
+	p, err = Load()
+	require.NoError(t, err)
+	assert.Equal(t, 3*time.Second, p.SerialStep, "overridable")
+}
