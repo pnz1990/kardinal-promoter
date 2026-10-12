@@ -304,7 +304,8 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// validated carries the fleets just resolved, as the Graph builder will
 	// see them.
 	desiredEnvs := ProjectEnvironments(validated, bundleList.Items, steps, gates, p.Status.Environments, r.now())
-	desiredSummary := Summarize(&p, desired, desiredEnvs)
+	desiredFailed := FailedVersion(p.Name, bundleList.Items)
+	desiredSummary := WithFailure(Summarize(&p, desired, desiredEnvs), desiredFailed, desiredEnvs)
 	desiredEnvLine := EnvironmentLine(desiredEnvs)
 	desiredMetrics := ComputeDeploymentMetrics(&p, bundleList.Items, steps, time.Now().UTC())
 
@@ -323,7 +324,8 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	secretMatch := meta.FindStatusCondition(p.Status.Conditions, conditionSecretReferenceable) == nil
 	fleetsMatch := fleetsEqual(p.Status.Fleets, desiredFleets)
 	envsMatch := environmentsEqual(p.Status.Environments, desiredEnvs) &&
-		p.Status.Summary == desiredSummary && p.Status.EnvironmentSummary == desiredEnvLine
+		p.Status.Summary == desiredSummary && p.Status.EnvironmentSummary == desiredEnvLine &&
+		failedVersionEqual(p.Status.FailedVersion, desiredFailed)
 	if condMatch && phaseMatch && metricsMatch && pausedMatch && conflictMatch && secretMatch && fleetsMatch && envsMatch {
 		log.Debug().
 			Str("reason", desired.Reason).
@@ -353,6 +355,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	p.Status.Environments = desiredEnvs
 	p.Status.Summary = desiredSummary
 	p.Status.EnvironmentSummary = desiredEnvLine
+	p.Status.FailedVersion = desiredFailed
 
 	if err := r.Status().Patch(ctx, &p, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch pipeline status: %w", err)
