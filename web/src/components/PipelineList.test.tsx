@@ -162,7 +162,10 @@ describe('PipelineList — pipeline items', () => {
   it.each<[string, Partial<Pipeline>, string, string]>([
     ['no bundle yet', { phase: 'Unknown', activeBundleName: undefined }, 'No version yet', 'empty'],
     ['a bundle promoting', { phase: 'Promoting' }, 'Promoting', 'promoting'],
-    ['a bundle held by a gate', { phase: 'Promoting', blockerCount: 1 }, 'Blocked by a gate', 'blocked'],
+    // Compact in the row; the whole state is the title.
+    ['a bundle held by a gate', { phase: 'Promoting', blockerCount: 1 }, 'Blocked · 1 gate', 'blocked'],
+    ['a bundle held by two named gates', { phase: 'Promoting', blockerCount: 2, environments: [{ name: 'prod', blockedBy: ['a', 'b'] }] } as Partial<Pipeline>,
+      'Blocked · 2 gates', 'blocked'],
     ['every environment verified', { phase: 'Ready' }, 'Up to date', 'healthy'],
     ['paused with a bundle held by a gate', { phase: 'Promoting', blockerCount: 1, paused: true }, 'Paused', 'paused'],
   ])('state chip for %s (pipelineState)', (_, overrides, label, category) => {
@@ -170,6 +173,12 @@ describe('PipelineList — pipeline items', () => {
     const chip = container.querySelector('[data-category]')
     expect(chip).toHaveTextContent(label)
     expect(chip).toHaveAttribute('data-category', category)
+  })
+
+  it('a held pipeline\'s chip has its whole state as the title', () => {
+    const p = makePipeline({ phase: 'Promoting', blockerCount: 2, environments: [{ name: 'prod', blockedBy: ['a', 'b'] }] } as Partial<Pipeline>)
+    const { container } = render(<PipelineList pipelines={[p]} onSelect={vi.fn()} />)
+    expect(container.querySelector('[data-category]')).toHaveAttribute('title', 'Held by gates a and b in prod')
   })
 })
 

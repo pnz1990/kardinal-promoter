@@ -15,6 +15,8 @@ export type PipelineCategory = 'paused' | 'failed' | 'blocked' | 'promoting' | '
 
 export interface PipelineState extends DisplayState {
   category: PipelineCategory
+  /** A form that fits a compact chip (the sidebar), when the label is long: "Blocked · 2 gates". */
+  short?: string
 }
 
 /** Step states in which a promotion is running (RollingBack ends; its rollback Bundle's step runs). */
@@ -45,7 +47,8 @@ export function pipelineState(p: Pipeline): PipelineState {
     const n = p.blockerCount ?? 0
     const label = held.length === 0 ? (n > 1 ? `Blocked by ${n} gates` : 'Blocked by a gate')
       : `${gates.length === 1 ? `Held by gate ${gates[0]}` : `Held by gates ${listOf(gates)}`} in ${listOf(where)}`
-    return { ...base, label, category: 'blocked' }
+    const k = gates.length || n || 1
+    return { ...base, label, short: `Blocked · ${k} gate${k === 1 ? '' : 's'}`, category: 'blocked' }
   }
   if (st.some(s => IN_FLIGHT.has(s)) || p.phase === 'Promoting') return { ...displayState('pipeline', 'Promoting'), category: 'promoting' }
   if (!p.activeBundleName && (p.phase === 'Unknown' || !p.phase)) return { ...displayState('pipeline', 'Unknown'), category: 'empty' }

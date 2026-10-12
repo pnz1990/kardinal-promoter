@@ -102,6 +102,7 @@ Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/ka
 
 ### Fixed
 
+- **The UI names versions in two more places** — an environment held by a rollback said `Held on search-rollback-3f9a1c by a rollback`; it now names the version (`Held on 4.0.3 by a rollback`), with the Bundle name as the tooltip. The sidebar badge of a Pipeline held by gates, cut to `Blocked by 2…`, reads `Blocked · 2 gates`, with the whole state as its tooltip.
 - **`ship --wait` gives each environment its own time** — a held environment whose `since` is unset or zero printed `for 2562047h47m16.854775807s`; it is now unknown there, and the time this follow saw the state stands in. "took" is how long the environment's own promotion took (from its PromotionStep's first step, else from its upstream going live), not the time since the Bundle was created, and every time is clamped between the Bundle's creation and now
 - **A version that starts a sentence keeps its case** — `status.summary` (and so `kardinal status` and the UI) reads `sha-9349a3f live in test, uat`, not `Sha-9349a3f live …`
 - **A soak gate says how far it soaked and when it opens** — `kardinal why`, `explain` and `status` show `soak 0.4 of 3 min in uat, opens in about 2m36s` for a `bundle.upstreamSoakMinutes` or `upstream.<env>.soakMinutes` gate, from the Bundle's `status.environments[].healthCheckedAt`. For a gate that opens by itself, `why`'s Next is to wait, and `kardinal override` comes only as **Or**

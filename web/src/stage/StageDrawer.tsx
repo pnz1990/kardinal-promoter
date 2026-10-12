@@ -253,7 +253,7 @@ function WhyItem({ reason: w, now, primary, cli, onAct, onUpstream, upstreams, r
   const signInNote = signIn && w.kind === 'approval' && cli && (w.next === 'approve' || w.next === 'reject') ? cli : undefined
   return (
     <li className={`stage-why__item stage-why__item--${w.kind}`}>
-      <p className="stage-why__title">{w.title}</p>
+      <p className="stage-why__title" title={w.tip}>{w.title}</p>
       {w.detail && <p className="stage-why__detail">{w.detail}</p>}
       {w.kind === 'approval' && w.gate?.approval?.decisions && w.gate.approval.decisions.length > 0 && (
         <ul className="stage-decisions">{w.gate.approval.decisions.map((d, i) => (
