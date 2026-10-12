@@ -6,6 +6,7 @@
 // Bundle is on its way. Pure functions; FleetBoard draws the result.
 
 import type { EnvironmentFleet, EnvironmentNode, Pipeline } from './types'
+import { humanDuration, secondsSince } from './timeFormat'
 
 /** Where the active Bundle is relative to one environment. */
 export type StationState =
@@ -244,17 +245,11 @@ export function fleetRow(p: Pipeline): FleetRow {
   }
 }
 
-/** "now", "5m", "3h", "2d": how long ago an RFC 3339 time was, coarse. */
+/** "now", "5m", "2h 15m", "4d": how long ago an RFC 3339 time was (timeFormat humanDuration). */
 export function ageOf(iso: string | undefined, now: number = Date.now()): string {
-  if (!iso) return ''
-  const t = new Date(iso).getTime()
-  if (isNaN(t)) return ''
-  const min = Math.floor((now - t) / 60000)
-  if (min < 1) return 'now'
-  if (min < 60) return `${min}m`
-  const h = Math.floor(min / 60)
-  if (h < 48) return `${h}h`
-  return `${Math.floor(h / 24)}d`
+  const sec = secondsSince(iso, now)
+  if (sec === undefined) return ''
+  return sec < 60 ? 'now' : humanDuration(sec)
 }
 
 /** This many stations or more at one depth are drawn as one wave plate (and one lane card). */

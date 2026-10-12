@@ -19,6 +19,7 @@ import { Stack } from '../ui'
 import { serializeHash, EMPTY_URL_STATE } from '../useUrlState'
 import { approvalItems, type ApprovalItem } from './approvalsModel'
 import './ApprovalsPage.css'
+import { humanDuration } from '../timeFormat'
 
 export interface ApprovalsPageProps {
   gates: PolicyGate[]
@@ -42,10 +43,7 @@ export function waited(iso: string | undefined, now: number): string {
   const t = iso ? Date.parse(iso) : NaN
   if (isNaN(t)) return '—'
   const s = Math.max(0, Math.floor((now - t) / 1000))
-  if (s < 60) return `${s}s`
-  if (s < 3600) return `${Math.floor(s / 60)}m`
-  if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`
-  return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`
+  return humanDuration(s)
 }
 
 type Open = { item: ApprovalItem; decision: 'approve' | 'reject' }

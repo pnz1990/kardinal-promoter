@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { GateMark, Group, Station, StationMapModel, ThreadSegment } from './model'
-import { gatesOn, gridOrder, groupSummary, stationLabel } from './model'
+import { edgeGateLabel, edgeGateSummary, gatesOn, gridOrder, groupSummary, stationLabel } from './model'
 import {
   BAR, CH_EM, GRAPH, TEXT_ASCENT, GRID_PAD_X, TEXT_PX, gridSpace, groupHead, cullLabels, detailChars, dotOf, gateOffset, gridCells, gridText, groupPacing, groupSub, groupTitle, initialLevel, layout,
   pathOf, pointBeforeEnd, threadPoints, wrapWords,
@@ -85,14 +85,14 @@ export default function StationMap(props: StationMapProps) {
   const [query, setQuery] = useState('')
   const [hit, setHit] = useState(0)
   const [cursor, setCursor] = useState<string | undefined>(undefined)
-  const [popover, setPopover] = useState<{ gate: GateMark; env: string; x: number; y: number } | null>(null)
+  const [popover, setPopover] = useState<{ gate: GateMark; env: string; x: number; y: number; edge?: string } | null>(null)
   // The popover hides a moment after the pointer leaves the gate (or the popover), so it can be
   // reached. Every hover end replaces the pending timer: two in a row never orphan one.
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const cancelHide = useCallback(() => {
     if (hideTimer.current !== null) { clearTimeout(hideTimer.current); hideTimer.current = null }
   }, [])
-  const showPopover = useCallback((p: { gate: GateMark; env: string; x: number; y: number }) => { cancelHide(); setPopover(p) }, [cancelHide])
+  const showPopover = useCallback((p: { gate: GateMark; env: string; x: number; y: number; edge?: string }) => { cancelHide(); setPopover(p) }, [cancelHide])
   const hidePopover = useCallback(() => {
     cancelHide()
     hideTimer.current = setTimeout(() => { hideTimer.current = null; setPopover(null) }, POPOVER_HIDE_MS)
@@ -345,7 +345,7 @@ export default function StationMap(props: StationMapProps) {
 
   // Labels that would overlap more important ones, or a dot or a group frame, are
   // hidden at the current zoom: the focused station's first, then the ones that need
-  // a person, the gates' names, the thread's, and the rest in spec order.
+  // a person, the thread's, the rest in spec order, and the gates' names last.
   const plan = useMemo(() => {
     const k = vp.view.k
     const labels: Array<{ id: string; priority: number; boxes: Rect[] }> = []
@@ -367,7 +367,7 @@ export default function StationMap(props: StationMapProps) {
         boxes = boxes.map(b => ({ ...b, x: x + r - b.w }))
       }
       const tone = n.station.display.tone
-      const priority = focusedId === n.id ? 0 : tone === 'failed' || tone === 'blocked' || tone === 'held' ? 1 : onThread.has(n.id) ? 3 : 4
+      const priority = focusedId === n.id ? 0 : tone === 'failed' || tone === 'blocked' || tone === 'held' ? 1 : onThread.has(n.id) ? 2 : 3
       labels.push({ id: n.id, priority, boxes })
     }
     if (level === 'detail') {
@@ -379,10 +379,12 @@ export default function StationMap(props: StationMapProps) {
         const g = gates[0]
         const p = pointBeforeEnd(points, gateOffset(0))
         const half = g.holding ? GRAPH.gateTick : GRAPH.gateTick / 2
-        const label = gates.length > 1 ? `${g.name} +${gates.length - 1}` : g.name
-        const w = label.length * CH_EM * units
+        const label = edgeGateLabel(gates)
+        // The width the label is drawn at (its condensed face, GATE_CH a character), as its hit area.
+        const w = label.length * GATE_CH * (units / GRAPH.labelMin)
         const top = p.y - half - GATE_LEADER - 4 - units
-        labels.push({ id: `${to}:${g.id}`, priority: 2, boxes: [{ x: p.x + 3 - w, y: top, w, h: units }] })
+        // A gate's label gives way to every station's: a station is never a bare dot for it.
+        labels.push({ id: `${to}:${g.id}`, priority: 4, boxes: [{ x: p.x + 3 - w, y: top, w, h: units }] })
       }
     }
     const kept = cullLabels(labels, marks)
@@ -532,17 +534,19 @@ export default function StationMap(props: StationMapProps) {
               const ny = p.dx * half
               const env = target.node.kind === 'station' ? target.node.id : target.node.group.members[0]
               const labelled = level === 'detail' && i === 0 && plan.gates.has(`${to}:${g.id}`)
-              const label = gates.length > 1 ? `${g.name} +${gates.length - 1}` : g.name
+              const label = edgeGateLabel(gates)
+              // The edge's gates in words, when there are more than this one.
+              const edge = gates.length > 1 ? edgeGateSummary(gates) : undefined
               const hit = GRAPH.gateTick + GRAPH.grid.gap
               const labelW = label.length * GATE_CH
               // The label stands above the edge, clear of the thread, with a hairline down to the bar.
               const labelY = p.y - half - GATE_LEADER - 4
               return (
                 <g key={`${to}:${g.id}`} className="station-map__gate" data-tone={g.display.tone} data-gate={g.name}
-                  tabIndex={0} role="button" aria-label={`gate ${g.name}, ${g.display.label}${g.approval ? `, ${g.approval.approved} of ${g.approval.required} approvals` : ''}`}
-                  onPointerEnter={() => showPopover({ gate: g, env, x: p.x, y: p.y })}
+                  tabIndex={0} role="button" aria-label={`gate ${g.name}, ${g.display.label}${g.approval ? `, ${g.approval.approved} of ${g.approval.required} approvals` : ''}${edge ? `; on this edge: ${edge}` : ''}`}
+                  onPointerEnter={() => showPopover({ gate: g, env, x: p.x, y: p.y, edge })}
                   onPointerLeave={hidePopover}
-                  onFocus={() => showPopover({ gate: g, env, x: p.x, y: p.y })}
+                  onFocus={() => showPopover({ gate: g, env, x: p.x, y: p.y, edge })}
                   onBlur={() => { cancelHide(); setPopover(null) }}
                   onKeyDown={e => {
                     if (e.key === 'Enter' || e.key === ' ') {
@@ -847,8 +851,8 @@ function GroupGlyph({ p, g, expanded, model, level, active, focusedEnv, matchSet
   )
 }
 
-function GatePopover({ gate, env, x, y, view, onPointerEnter, onPointerLeave }: {
-  gate: GateMark; env: string; x: number; y: number; view: { x: number; y: number; k: number }
+function GatePopover({ gate, env, x, y, edge, view, onPointerEnter, onPointerLeave }: {
+  gate: GateMark; env: string; x: number; y: number; edge?: string; view: { x: number; y: number; k: number }
   onPointerEnter: () => void; onPointerLeave: () => void
 }) {
   const left = (x - view.x) * view.k
@@ -867,6 +871,7 @@ function GatePopover({ gate, env, x, y, view, onPointerEnter, onPointerLeave }: 
       {gate.approval && <div className="gate-popover__quorum">{`${gate.approval.approved} of ${gate.approval.required} approvals`}</div>}
       {gate.expression && <code className="gate-popover__cel">{gate.expression}</code>}
       {gate.message && <div className="gate-popover__reason">{gate.message}</div>}
+      {edge && <div className="gate-popover__edge">On this edge: {edge}</div>}
       {age && <div className="gate-popover__age">evaluated {age === 'now' ? 'just now' : `${age} ago`}</div>}
       <div className="gate-popover__hint">Click the gate to see why in the stage drawer</div>
     </div>

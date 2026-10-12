@@ -14,6 +14,8 @@ import { hasCommandModifier, rovingFocus, rovingItems, useRovingFocus } from '..
 import type { Pipeline } from '../types'
 import { ageOf, fleetRow, wavePlate, WAVE_PLATE_MIN, type FleetRow, type Station, type StationState } from '../fleetModel'
 import { stateWords } from '../sentence'
+import { pipelineState } from '../pipelineState'
+import { StatusChip } from '../ui/Chips'
 
 interface FleetBoardProps {
   pipelines: Pipeline[]
@@ -168,8 +170,7 @@ function FleetLine({ row, now, onSelect }: { row: FleetRow; now: number; onSelec
   const p = row.pipeline
   const track = useRef<HTMLDivElement>(null)
   const roving = useRovingFocus(track, STATION)
-  const blockers = p.blockerCount ?? 0
-  const failed = p.failedStepCount ?? 0
+  const state = pipelineState(p)
   return (
     <li className="fleet-line" data-live={row.live ?? 'none'}>
       <div className="fleet-line__head">
@@ -177,11 +178,12 @@ function FleetLine({ row, now, onSelect }: { row: FleetRow; now: number; onSelec
           {p.name}
         </button>
         <span className="fleet-line__ns">{p.namespace}</span>
-        <span className="fleet-line__flags">
-          {p.paused && <span className="fleet-flag" data-kind="paused">paused</span>}
-          {blockers > 0 && <span className="fleet-flag" data-kind="held">{blockers} {blockers === 1 ? 'gate' : 'gates'} holding</span>}
-          {failed > 0 && <span className="fleet-flag" data-kind="failed">{failed} failed</span>}
-        </span>
+        {/* The pipeline's one state (pipelineState), when it is not simply up to date. */}
+        {state.category !== 'healthy' && (
+          <span className="fleet-line__flags">
+            <StatusChip tone={state.tone} label={state.label} glyph={state.glyph} compact data-category={state.category} />
+          </span>
+        )}
       </div>
       <div
         className="fleet-line__track"

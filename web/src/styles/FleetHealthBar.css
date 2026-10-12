@@ -67,6 +67,7 @@
 .fleet-health__badge[data-tone="blocked"] { --fleet-health-fg: var(--k-status-blocked-fg); --fleet-health-bg: var(--k-status-blocked-wash); }
 .fleet-health__badge[data-tone="failed"] { --fleet-health-fg: var(--k-status-failed-fg); --fleet-health-bg: var(--k-status-failed-wash); }
 .fleet-health__badge[data-tone="code"] { --fleet-health-fg: var(--k-syntax-ident); --fleet-health-bg: var(--k-surface-raised); }
+.fleet-health__badge[data-tone="paused"] { --fleet-health-fg: var(--k-status-paused-fg); --fleet-health-bg: var(--k-hatch), var(--k-surface-base); }
 
 .fleet-health__badge .fleet-health__count { color: var(--fleet-health-fg); }
 
