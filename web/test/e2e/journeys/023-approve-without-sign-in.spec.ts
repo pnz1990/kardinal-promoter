@@ -1,13 +1,14 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 //
-// Journey 022: without sign-in (no TokenReview) an approval from the UI cannot
+// Journey 023: without sign-in (no TokenReview) an approval from the UI cannot
 // name who decided, so POST /access answers create approvals with
 // allowed:false. Every surface that offers Approve (the drawer, the Table and
 // the Activity tab) shows it inert, with one line under it that says why and
 // gives the command that works, with a copy button: once per surface, not
-// again in a list further down. The mock server's "open" token is a UI
-// without TokenReview.
+// again in a list further down. The tooltips, the a key and ⌘K use the same
+// words. The mock server's "open" token is a UI without TokenReview; no token
+// is carol, an approver, for whom a and ⌘K open the approval.
 
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
@@ -33,7 +34,7 @@ async function honest(page: Page, surface: Locator, approve: Locator) {
   await expect(page.getByRole('status').filter({ hasText: /Recorded|Approved/ })).toHaveCount(0)
 }
 
-test.describe('Journey 022 — Approve without sign-in', () => {
+test.describe('Journey 023 — Approve without sign-in', () => {
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => sessionStorage.setItem('kardinal-ui-token', 'open'))
     await page.setViewportSize({ width: 1440, height: 900 })
@@ -48,6 +49,10 @@ test.describe('Journey 022 — Approve without sign-in', () => {
     await expect(why.getByText('From a terminal:')).toHaveCount(0)
     // No second, visible explanation further down (the buttons' screen-reader descriptions stay).
     await expect(drawer.getByRole('list', { name: 'Not available to you' })).toHaveCount(0)
+    // The tooltips say the same words, each with its own command.
+    await expect(why.locator('[data-action="approve"]')).toHaveAttribute('title', note)
+    await expect(drawer.locator('[data-section="actions"] [data-action="reject"]')).toHaveAttribute('title',
+      `Declining needs sign-in with your Kubernetes identity — run ${command} --decision reject`)
     await axe(page)
   })
 
@@ -69,5 +74,53 @@ test.describe('Journey 022 — Approve without sign-in', () => {
     }
     await expect(quorum.getByText('Or from the CLI:')).toHaveCount(0)
     await axe(page)
+  })
+
+  test('a with no environment open, and on Approvals, says the same words; ⌘K lists Approve inert', async ({ page }) => {
+    await page.goto('/ui/#/p/default/payments-service')
+    await page.getByRole('radio', { name: 'View: Table' }).click()
+    await expect(page.getByRole('table')).toBeVisible()
+    await page.locator('body').press('a')
+    await expect(page.locator('.app-shortcut-note')).toHaveText(note)
+    await expect(page.getByTestId('stage-drawer')).toHaveCount(0)
+
+    await page.keyboard.press('Control+k')
+    const palette = page.getByRole('dialog', { name: 'Go to or do' })
+    await palette.getByRole('combobox').fill('approve 6.14')
+    const option = palette.getByRole('option', { name: /Approve 6\.14\.1 for prod/ })
+    await expect(option).toHaveAttribute('aria-disabled', 'true')
+    await expect(option).toContainText(note)
+    await page.keyboard.press('Enter')
+    await expect(palette).toBeVisible()
+    await page.keyboard.press('Escape')
+
+    await page.goto('/ui/#/approvals')
+    await expect(page.getByRole('heading', { level: 1, name: '1 waiting for approval' })).toBeVisible()
+    await page.locator('body').press('a')
+    await expect(page.locator('.app-shortcut-note')).toHaveText(note)
+  })
+})
+
+test.describe('Journey 023 — Approve from the keyboard and ⌘K, signed in', () => {
+  test.beforeEach(async ({ page }) => { await page.setViewportSize({ width: 1440, height: 900 }) })
+
+  test('a in the Table with no environment open opens the one waiting approval', async ({ page }) => {
+    await page.goto('/ui/#/p/default/payments-service')
+    await page.getByRole('radio', { name: 'View: Table' }).click()
+    await expect(page.getByRole('table')).toBeVisible()
+    await page.locator('body').press('a')
+    await expect(page).toHaveURL(/\/env\/prod/)
+    await expect(page.getByRole('dialog', { name: 'Approve 6.14.1 for prod?' })).toBeVisible()
+  })
+
+  test('⌘K: Approve 6.14.1 for prod opens the same dialog', async ({ page }) => {
+    await page.goto('/ui/#/p/default/payments-service')
+    await expect(page.getByRole('heading', { level: 1, name: 'payments-service' })).toBeVisible()
+    await page.keyboard.press('Control+k')
+    const palette = page.getByRole('dialog', { name: 'Go to or do' })
+    await palette.getByRole('combobox').fill('approve 6.14')
+    await expect(palette.getByRole('option', { name: /Approve 6\.14\.1 for prod/ })).not.toHaveAttribute('aria-disabled', 'true')
+    await page.keyboard.press('Enter')
+    await expect(page.getByRole('dialog', { name: 'Approve 6.14.1 for prod?' })).toBeVisible()
   })
 })

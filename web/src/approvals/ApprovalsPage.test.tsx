@@ -106,6 +106,20 @@ describe('ApprovalsPage (U7)', () => {
     expect(screen.getByRole('dialog', { name: 'Approve 1.5.0 for prod?' })).toBeInTheDocument()
   })
 
+  it('a with several waiting and none in focus asks to select one; without sign-in it says why, never "nothing waits"', async () => {
+    const ref = createRef<ApprovalsHandle>()
+    const { unmount } = render(<ApprovalsPage ref={ref} gates={gates} pipelines={pipelines} now={now} />)
+    await screen.findByRole('heading', { name: '2 waiting on you' })
+    act(() => { expect(ref.current!.approve()).toBe('2 wait on you: select one first (j / k).') })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    unmount()
+    resetAccessForTests()
+    api.checkAccess.mockImplementation(async (_ns: string, checks: AccessCheck[]) => ({ results: checks.map(() => ({ allowed: false })) }))
+    render(<ApprovalsPage ref={ref} gates={[gates[0]]} pipelines={pipelines} now={now} />)
+    await screen.findByRole('heading', { name: '1 waiting for approval' })
+    act(() => { expect(ref.current!.approve()).toBe('Approving needs sign-in with your Kubernetes identity — run kardinal approve web prod -n team') })
+  })
+
   it('says nothing waits, and how an approval arrives', () => {
     render(<ApprovalsPage gates={[]} pipelines={pipelines} now={now} />)
     expect(screen.getByRole('heading', { name: 'Nothing waits on you' })).toBeInTheDocument()

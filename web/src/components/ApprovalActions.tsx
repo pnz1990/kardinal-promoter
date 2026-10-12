@@ -19,13 +19,13 @@ interface Props {
   namespace: string
   /** Called after a decision is recorded, so the parent can refresh. */
   onDone?: () => void
-  /** Why the person may not decide here (U7), or undefined when they may. */
-  restricted?: string
+  /** Why the person may not take a decision here (U7), or undefined when they may. */
+  reasonFor?: (decision: Action) => string | undefined
 }
 
-type Action = 'approve' | 'reject' | 'revoke'
+export type Action = 'approve' | 'reject' | 'revoke'
 
-export function ApprovalActions({ bundle, environment, namespace, onDone, restricted }: Props) {
+export function ApprovalActions({ bundle, environment, namespace, onDone, reasonFor }: Props) {
   const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string>()
@@ -33,11 +33,12 @@ export function ApprovalActions({ bundle, environment, namespace, onDone, restri
   const [confirmReject, setConfirmReject] = useState(false)
   const commentId = useId()
   const reasonId = useId()
+  const reasons = { approve: reasonFor?.('approve'), reject: reasonFor?.('reject'), revoke: reasonFor?.('revoke') }
   // An inert button: focusable, does nothing, says why.
-  const inert = restricted
-    ? { 'aria-disabled': true, 'aria-describedby': reasonId, title: restricted }
+  const inert = (a: Action) => reasons[a]
+    ? { 'aria-disabled': true, 'aria-describedby': `${reasonId}-${a}`, title: reasons[a] }
     : {}
-  const act = (f: () => void) => () => { if (!restricted) f() }
+  const act = (a: Action, f: () => void) => () => { if (!reasons[a]) f() }
 
   async function run(action: Action) {
     setBusy(true)
@@ -62,19 +63,20 @@ export function ApprovalActions({ bundle, environment, namespace, onDone, restri
     <div className="approval-actions">
       <label htmlFor={commentId} className="approval-actions__label">Comment (optional)</label>
       <input id={commentId} className="approval-actions__comment" type="text" value={comment} maxLength={1024}
-        disabled={busy || !!restricted} placeholder="e.g. checked the canary dashboards" onChange={e => setComment(e.target.value)} />
+        disabled={busy || (!!reasons.approve && !!reasons.reject)} placeholder="e.g. checked the canary dashboards" onChange={e => setComment(e.target.value)} />
       <div className="approval-actions__buttons">
-        <button type="button" className="approval-actions__approve" disabled={busy} {...inert} onClick={act(() => { void run('approve') })}>
+        <button type="button" className="approval-actions__approve" disabled={busy} {...inert('approve')} onClick={act('approve', () => { void run('approve') })}>
           Approve
         </button>
-        <button type="button" className="approval-actions__reject" disabled={busy} {...inert} onClick={act(() => setConfirmReject(true))}>
+        <button type="button" className="approval-actions__reject" disabled={busy} {...inert('reject')} onClick={act('reject', () => setConfirmReject(true))}>
           Reject
         </button>
-        <button type="button" className="approval-actions__revoke" disabled={busy} {...inert} onClick={act(() => { void run('revoke') })}>
+        <button type="button" className="approval-actions__revoke" disabled={busy} {...inert('revoke')} onClick={act('revoke', () => { void run('revoke') })}>
           Revoke mine
         </button>
       </div>
-      {restricted && <span id={reasonId} className="sr-only">{restricted}</span>}
+      {(['approve', 'reject', 'revoke'] as const).map(a => reasons[a] &&
+        <span key={a} id={`${reasonId}-${a}`} className="sr-only">{reasons[a]}</span>)}
       {result && <div role="status" className="approval-actions__result">{result}</div>}
       {error && <div role="alert" className="approval-actions__error">{error}</div>}
       {confirmReject && (

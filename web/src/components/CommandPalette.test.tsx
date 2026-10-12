@@ -63,6 +63,19 @@ describe('CommandPalette', () => {
     expect(trigger).toHaveFocus()
   })
 
+  it('a command the person may not run is listed, inert, with why; Enter does not run it', async () => {
+    const user = userEvent.setup()
+    const approve = { ...cmd('a', 'Approve 1.5.0 for prod', 'Do'), disabledReason: 'Approving needs sign-in with your Kubernetes identity — run kardinal approve web prod' }
+    render(<Harness commands={[approve]} />)
+    await user.click(screen.getByRole('button', { name: 'Open palette' }))
+    const option = screen.getByRole('option', { name: /Approve 1.5.0 for prod/ })
+    expect(option).toHaveAttribute('aria-disabled', 'true')
+    expect(option).toHaveTextContent('Approving needs sign-in')
+    await user.keyboard('{Enter}')
+    expect(approve.run).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
   it('says when nothing matches, and Esc closes it without running anything', async () => {
     const user = userEvent.setup()
     const c = cmd('c', 'checkout')
