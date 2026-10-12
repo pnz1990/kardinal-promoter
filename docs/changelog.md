@@ -102,6 +102,7 @@ Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/ka
 
 ### Fixed
 
+- **A Pipeline is Ready within seconds of fixing its git Secret** — after `GitCredentialMissing` or `SecretNotReferenceable`, creating or labelling the Secret as the message says left the Pipeline not ready for up to a minute: the controller may only get Secrets by name, never watch them, and re-checked every minute. It now reads the Secret again every 2s for the first 2 minutes of the condition, every 15s until 15 minutes, then every minute
 - **A UI resume right after a pause resumes** — the UI's pause, resume, release-hold, reject and override read the object they change through the controller's informer cache, which can lag the write before: a resume sent right after a pause read the Pipeline as not paused, wrote nothing and left it paused. Those actions now read the object from the API server before they change it
 - **An override's reply counts versions in words** — `POST /api/v1/ui/override` (the UI's **Override gate**) said `for 1 in-progress Bundle(s)`; it says `for 1 version in progress` or `for 2 versions in progress`.
 - **The UI names versions in two more places** — an environment held by a rollback said `Held on search-rollback-3f9a1c by a rollback`; it now names the version (`Held on 4.0.3 by a rollback`), with the Bundle name as the tooltip. The sidebar badge of a Pipeline held by gates, cut to `Blocked by 2…`, reads `Blocked · 2` (the gates holding it), with the whole state as its tooltip.

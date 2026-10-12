@@ -123,7 +123,7 @@ func TestPipelineReconciler_GitCredentialMissing(t *testing.T) {
 				assert.Equal(t, metav1.ConditionFalse, ready.Status)
 				assert.Equal(t, reason, ready.Reason)
 				assert.Equal(t, tc.want, ready.Message)
-				assert.Equal(t, time.Minute, res.RequeueAfter, "re-checked: Secrets are not watched")
+				assert.Equal(t, 2*time.Second, res.RequeueAfter, "re-checked soon: Secrets are not watched")
 			}
 			assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "SecretReferenceable"))
 
@@ -196,4 +196,43 @@ func TestPipelineReconciler_GitCredentialAfterSpecErrors(t *testing.T) {
 	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
 	require.NotNil(t, ready)
 	assert.Equal(t, "ValidationFailed", ready.Reason)
+}
+
+// TestPipelineReconciler_SecretRecheckSchedule: the controller may not watch
+// or list Secrets (#1266), so a Pipeline whose git Secret is missing or not
+// labelled reads it again soon: every 2s for the first 2 minutes of the
+// condition (someone is likely following its fix-it), every 15s until 15
+// minutes, then every minute. Once the Secret is created the next reconcile
+// makes the Pipeline Ready and stops the rechecks.
+func TestPipelineReconciler_SecretRecheckSchedule(t *testing.T) {
+	t0 := time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
+	p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}})
+	p.Spec.Git.SecretRef = &kardinalv1alpha1.SecretRef{Name: "team-token"}
+	c := newClientWithIndex(newScheme(), p)
+	now := t0
+	r := &pipeline.Reconciler{Client: c, Now: func() time.Time { return now }}
+	key := types.NamespacedName{Name: "app", Namespace: "default"}
+	reconcileAt := func(at time.Time) ctrl.Result {
+		t.Helper()
+		now = at
+		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+		require.NoError(t, err)
+		return res
+	}
+	assert.Equal(t, 2*time.Second, reconcileAt(t0).RequeueAfter, "just reported")
+	// The condition's lastTransitionTime is the fake client's clock; age it.
+	var got kardinalv1alpha1.Pipeline
+	require.NoError(t, c.Get(context.Background(), key, &got))
+	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+	require.NotNil(t, ready)
+	require.Equal(t, "GitCredentialMissing", ready.Reason)
+	since := ready.LastTransitionTime.Time
+	assert.Equal(t, 2*time.Second, reconcileAt(since.Add(90*time.Second)).RequeueAfter)
+	assert.Equal(t, 15*time.Second, reconcileAt(since.Add(5*time.Minute)).RequeueAfter)
+	assert.Equal(t, time.Minute, reconcileAt(since.Add(20*time.Minute)).RequeueAfter)
+
+	require.NoError(t, c.Create(context.Background(), gitTokenSecret("team-token")))
+	assert.Zero(t, reconcileAt(since.Add(21*time.Minute)).RequeueAfter, "Ready: no more rechecks")
+	require.NoError(t, c.Get(context.Background(), key, &got))
+	assert.Equal(t, metav1.ConditionTrue, meta.FindStatusCondition(got.Status.Conditions, "Ready").Status)
 }

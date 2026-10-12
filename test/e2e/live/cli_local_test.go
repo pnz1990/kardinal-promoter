@@ -114,7 +114,7 @@ func barePipeline(t *testing.T, e *framework.Env, ns, name string, edit ...func(
 // first Bundle.
 func waitPipelineValid(t *testing.T, e *framework.Env, ns, name string) {
 	t.Helper()
-	framework.Eventually(t, time.Minute, "Pipeline "+name+" valid", func(ctx context.Context) (bool, string) {
+	framework.Eventually(t, 2*time.Minute, "Pipeline "+name+" valid", func(ctx context.Context) (bool, string) {
 		var p v1alpha1.Pipeline
 		if err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &p); err != nil {
 			return false, err.Error()

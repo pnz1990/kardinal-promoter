@@ -79,8 +79,9 @@ $ kubectl get pipeline my-app -o jsonpath='{.status.conditions[?(@.type=="Ready"
 git Secret github-token not found in namespace team-a, so git has no token for https://github.com/me/gitops; create it: kubectl create secret generic github-token -n team-a --from-literal=token=<TOKEN> && kubectl label secret github-token -n team-a kardinal.io/referenceable=true
 ```
 
-Run it with your token. The controller checks again every minute (it does not watch Secrets), and
-the Pipeline becomes `Ready=True`. `kardinal doctor` reports the same. A Bundle created before
+Run it with your token. The controller reads the Secret again every 2 seconds for the
+first 2 minutes of the condition, then less often (it may not watch Secrets), so within seconds the
+Pipeline becomes `Ready=True`. `kardinal doctor` reports the same. A Bundle created before
 that waits as the next section describes. An ssh remote, or a URL with a password, needs no token
 key, so it does not get this reason.
 
