@@ -55,8 +55,8 @@ kubectl get pods -n kro-system
 # kro-7d4b8f9f5-xk2pq               1/1     Running   0          30s
 
 kardinal version
-# CLI:        v0.10.0
-# Controller: v0.10.0
+# CLI:        v0.11.0
+# Controller: v0.11.0
 # Graph:      kro v0.10.0-rc.0
 ```
 

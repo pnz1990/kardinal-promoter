@@ -22,13 +22,13 @@ Every controller of a sharded cluster needs a shard name, and exactly one of the
 
 ```bash
 # The default shard, in kardinal-system (unlabelled)
-helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
+helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 \
   -n kardinal-system --set controller.namespaceShard=default ...
 
 # A second shard in its own namespace, labelled with its shard
 kubectl create namespace kardinal-payments
 kubectl label namespace kardinal-payments kardinal.io/shard=payments
-helm upgrade --install kardinal-payments oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
+helm upgrade --install kardinal-payments oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 \
   -n kardinal-payments --set controller.namespaceShard=payments --skip-crds ...
 ```
 

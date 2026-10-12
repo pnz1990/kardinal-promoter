@@ -177,7 +177,7 @@ kubectl create secret generic demo-git-token \
   --from-literal=token=$GITHUB_PAT
 kubectl label secret demo-git-token --namespace kardinal-system kardinal.io/referenceable=true
 
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 \
   --namespace kardinal-system \
   --set demo.enabled=true \
   --set demo.git.url=$DEMO_REPO \
