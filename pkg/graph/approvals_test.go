@@ -66,7 +66,7 @@ func TestBuilder_ApprovalGate(t *testing.T) {
 		"allowedUsers": []interface{}(nil), "excludeAuthor": true}, spec["approval"])
 	assert.Equal(t, "true", spec["expression"])
 	assert.Equal(t, true, spec["generated"])
-	assert.Equal(t, "post-deploy", spec["when"])
+	assert.NotContains(t, spec, "when", "instances do not copy the ignored spec.when")
 	users := []string{}
 	for _, a := range spec["approvals"].([]interface{}) {
 		users = append(users, a.(map[string]interface{})["user"].(string))

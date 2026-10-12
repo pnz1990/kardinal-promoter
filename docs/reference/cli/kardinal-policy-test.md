@@ -17,8 +17,8 @@ gate's kardinal.io/applies-to label. The file is -f <file>, as kardinal
 validate takes it, or the argument.
 
 With no cluster there is no upstream environment: bundle.upstreamSoakMinutes
-and upstream.<env>.soakMinutes are 0, as for a version that just reached the
-upstream, and the result says so in a Note. kardinal policy simulate
+is 0, as for a version that just reached the upstream, and the result says
+so in a Note (upstream.<env>.* has no entry, so such a gate is UNKNOWN). kardinal policy simulate
 <pipeline> <env> --soak-minutes <n> evaluates the gate with a soak.
 
 Results:

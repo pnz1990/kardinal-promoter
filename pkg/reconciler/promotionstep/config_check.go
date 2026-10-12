@@ -25,21 +25,6 @@ func unsupportedConfig(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec
 	if err := graph.ValidateSecretRef(pipeline); err != nil {
 		return err.Error()
 	}
-	// Distributed mode was removed. The Pipeline reconciler reports the same
-	// field as Ready=False/NotImplemented; this fails a step left over from a
-	// Graph built before the upgrade instead of leaving it Pending.
-	if env.Shard != "" { //nolint:staticcheck // SA1019: read to reject it
-		return graph.ShardNotSupported
-	}
-	if env.Health.Cluster != "" { //nolint:staticcheck // SA1019: read to reject it
-		return graph.HealthClusterNotSupported
-	}
-	// Build rejects two or more regions, but a Graph built before the upgrade
-	// is not rebuilt until the Pipeline spec changes, so its region steps can
-	// still run.
-	if ps.Spec.Region != "" { //nolint:staticcheck // SA1019: read to reject it
-		return graph.RegionsNotSupported
-	}
 	if res := env.Health.Resource; res != nil && res.Kind != "" && res.Kind != "Deployment" &&
 		health.EffectiveType(env) == health.DefaultType {
 		return fmt.Sprintf("health.resource.kind %q is not supported: only Deployment is checked", res.Kind)
@@ -62,11 +47,14 @@ func (r *Reconciler) repositoryNotAllowed(ctx context.Context, pipeline *v1alpha
 	if r.AllowedRepositories.Allows(pipeline.Spec.Git.URL) {
 		return "", nil
 	}
-	own, err := scm.PipelineSecretExists(ctx, r.Client, pipeline)
+	state, err := scm.PipelineSecretState(ctx, r.Client, pipeline)
 	if err != nil {
 		return "", err
 	}
-	if err := r.AllowedRepositories.CheckPipeline(pipeline, own); err != nil {
+	// An unlabelled git Secret counts as the Pipeline's own: when that is
+	// what allows the repository, the step goes on to wait for the label
+	// (waitForReferenceableSecret) instead of failing here.
+	if err := r.AllowedRepositories.CheckPipeline(pipeline, state != scm.PipelineSecretNone); err != nil {
 		return err.Error(), nil
 	}
 	return "", nil

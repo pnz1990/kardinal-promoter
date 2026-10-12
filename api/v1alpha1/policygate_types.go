@@ -38,28 +38,12 @@ type PolicyGateSpec struct {
 	// +optional
 	SkipPermission bool `json:"skipPermission,omitempty"`
 
-	// Selector is not implemented: nothing reads it, and the API server rejects
-	// a PolicyGate that sets it. An org gate applies to the environments named
-	// in its kardinal.io/applies-to label.
-	//
-	// Deprecated: remove the field; use the kardinal.io/applies-to label.
-	// It is removed in v0.11.
-	// +kubebuilder:validation:XValidation:rule="false",message="spec.selector is not implemented; use the kardinal.io/applies-to label"
-	// +optional
-	Selector *metav1.LabelSelector `json:"selector,omitempty"`
-
-	// When has no effect. Every gate on an environment is re-checked right
-	// before that environment's PromotionStep starts: the step stays in
-	// Pending, with no git operation, until each gate it requires exists, is
-	// ready, and was evaluated at or after the step was created. A step that
-	// has started is not stopped by a gate that turns false later.
-	//
-	// Deprecated: remove this field. Every gate is re-checked before its
-	// PromotionStep starts, whatever the value; pre-deploy and post-deploy
-	// behave the same.
-	// It is removed in v0.11.
+	// When is ignored: every gate on an environment is re-checked right
+	// before that environment's PromotionStep starts. It stays in the
+	// schema only so that a Graph built by an earlier release, whose gate
+	// instances carry it, still compiles while its Bundle finishes; gate
+	// instances do not copy it. Leave it unset.
 	// +kubebuilder:validation:Enum=pre-deploy;post-deploy
-	// +kubebuilder:default=post-deploy
 	// +optional
 	When string `json:"when,omitempty"`
 

@@ -32,6 +32,7 @@ kardinal checks Kustomization.status.conditions[Ready]
 kubectl create secret generic github-token \
   --namespace default \
   --from-literal=token=$GITHUB_TOKEN
+kubectl label secret github-token --namespace default kardinal.io/referenceable=true
 
 # 2. Create the target namespaces. Flux does not create a Kustomization's
 #    targetNamespace, and kardinal-demo has no Namespace manifest.

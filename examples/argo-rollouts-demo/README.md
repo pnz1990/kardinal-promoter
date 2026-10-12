@@ -57,6 +57,7 @@ kubectl create namespace prod
 kubectl create secret generic github-token \
   --namespace default \
   --from-literal=token=$GITHUB_TOKEN
+kubectl label secret github-token --namespace default kardinal.io/referenceable=true
 
 # 3. Create one ArgoCD Application per environment. Set repoURL to your fork.
 #    The kardinal-demo overlays set namespace "default"; kustomize.namespace
