@@ -1,7 +1,7 @@
 # Dependencies
 node_modules/
 vendor/
-# The docs self-host third-party assets (Mermaid) here.
+# The docs self-host any third-party asset here (none today).
 !docs/assets/vendor/
 
 # Build outputs

@@ -6,35 +6,26 @@ kardinal-promoter is a Kubernetes-native controller. All state lives in etcd as 
 
 ## System Overview
 
-```mermaid
-%%{init: {'flowchart': {'curve': 'linear'}}}%%
-graph TD
-    CI["CI/CD Pipeline<br/>(GitHub Actions, etc.)"] -->|"POST /api/v1/bundles<br/>or kubectl apply"| Bundle
-
-    subgraph "Kubernetes Cluster"
-        Bundle["Bundle CRD<br/>image ref + provenance"]
-        Pipeline["Pipeline CRD<br/>environments + update strategy"]
-        PolicyGate["PolicyGate CRDs<br/>CEL expressions"]
-
-        Bundle -->|"translates to"| Graph["kro Graph<br/>(per-Bundle DAG)"]
-        Pipeline -->|"read by translator"| Graph
-        PolicyGate -->|"injected as DAG nodes"| Graph
-
-        Graph -->|"creates"| PS["PromotionStep CRs<br/>(per environment)"]
-        Graph -->|"creates"| PGI["PolicyGate instances"]
-
-        PS -->|"executes"| Steps["Steps Engine<br/>image update → PR → health-check"]
-        PGI -->|"evaluates CEL"| PGR["status.ready = true/false"]
-
-        PGR -->|"readyWhen"| GraphAdv["Graph advances<br/>to next environment"]
-        Steps -->|"Verified"| GraphAdv
-
-        Steps -->|"Failed, with onHealthFailure: rollback"| Rollback["Rollback Bundle<br/>(PR labelled kardinal/rollback)"]
-    end
-
-    kubectl["kubectl / kardinal CLI / UI"] -->|"reads/writes"| Bundle
-    kubectl -->|"reads"| PS
-    kubectl -->|"reads"| PGI
+```station-map
+title: What the controller does with a Bundle
+caption: Each station is a Kubernetes object; CI creates the Bundle through the API (POST /api/v1/bundles) or kubectl. kubectl, the kardinal CLI and the UI only read and write these objects.
+lead: {into: Bundle, label: CI, note: creates it}
+stations:
+  Pipeline: {notes: [environments, update strategy]}
+  Bundle: {notes: [image ref, provenance]}
+  PolicyGate: {notes: [CEL expressions]}
+  Graph: {name: kro Graph, notes: [one per Bundle, the promotion DAG]}
+  PromotionStep: {notes: [one per environment, runs the steps]}
+  gate instance: {name: PolicyGate instance, notes: [one per gate, CEL → status.ready]}
+  next: {name: next PromotionStep, notes: [upstream Verified, and gates ready], lane: 0}
+  rollback: {name: rollback Bundle, state: pending, notes: [on failure, onHealthFailure], lane: -1.5}
+edges:
+  - Pipeline -> Graph
+  - Bundle -> Graph
+  - PolicyGate -> Graph
+  - Graph -> PromotionStep, gate instance
+  - PromotionStep -> next, rollback
+  - gate instance -> next
 ```
 
 ---
@@ -92,8 +83,24 @@ kardinal-promoter does **not** implement graph coordination itself. It delegates
 
 The `PromotionStepReconciler` runs a sequence of built-in steps for each environment:
 
-```
-git-clone  →  kustomize-set-image  →  git-commit  →  git-push  →  [open-pr  →  wait-for-merge]  →  health-check
+```station-map
+title: The steps of a promotion
+caption: The upper line runs only for approval pr-review.
+stations:
+  git-clone: {}
+  kustomize-set-image: {}
+  git-commit: {}
+  git-push: {}
+  open-pr: {notes: [pr-review only], lane: -1}
+  wait-for-merge: {notes: [pr-review only], lane: -1}
+  health-check: {lane: 0}
+edges:
+  - git-clone -> kustomize-set-image
+  - kustomize-set-image -> git-commit
+  - git-commit -> git-push
+  - git-push -> open-pr, health-check
+  - open-pr -> wait-for-merge
+  - wait-for-merge -> health-check
 ```
 
 `open-pr` and `wait-for-merge` run only for `approval: pr-review`. `update.strategy: helm`
@@ -163,32 +170,20 @@ Checks whether a promotion is healthy after merging:
 
 ## Data Flow: Bundle → Verified
 
-```mermaid
-%%{init: {'flowchart': {'curve': 'linear'}}}%%
-sequenceDiagram
-    participant CI
-    participant API as kardinal API
-    participant K8s as Kubernetes API Server
-    participant Bundle as BundleReconciler
-    participant kro as kro Graph
-    participant PS as PromotionStepReconciler
-    participant PG as PolicyGateReconciler
+A Bundle's way to Verified, in order. Every step is a write to, or a watch on, the Kubernetes
+API server; nothing passes between the components in memory.
 
-    CI->>API: create Bundle (image + pipeline)
-    API->>K8s: create Bundle CR
-    K8s->>Bundle: reconcile event
-    Bundle->>K8s: create Graph CR (DAG spec)
-    kro->>K8s: create PolicyGate[test] instances
-    K8s->>PG: reconcile PolicyGate[test]
-    PG->>K8s: status.ready = true (CEL passed)
-    kro->>K8s: every gate ready → create PromotionStep[test]
-    K8s->>PS: reconcile PromotionStep[test]
-    PS->>PS: image update → commit → open PR → wait merge → health check
-    PS->>K8s: status.state = Verified
-    kro->>kro: uat nodes resolve → advance to uat
-    Note over kro,PS: Repeat for uat → prod
-    Bundle->>K8s: every PromotionStep Verified → status.phase = Verified
-```
+1. CI asks the kardinal API to create a Bundle (image and pipeline), and the API creates the
+   Bundle object.
+2. The BundleReconciler is notified and creates the Bundle's kro Graph (the DAG spec).
+3. kro creates the PolicyGate instances of the first environment, test.
+4. The PolicyGateReconciler evaluates each one's CEL expression and writes `status.ready = true`
+   when it passes.
+5. Once every gate of test is ready, the PromotionStep for test resolves and kro creates it.
+6. The PromotionStepReconciler runs its steps (image update, commit, PR when the environment
+   reviews by PR, merge, health check) and writes `status.state = Verified`.
+7. uat's nodes resolve and kro advances to uat. Steps 3 to 6 repeat for uat, and then for prod.
+8. When every PromotionStep is Verified, the Bundle's `status.phase` is Verified.
 
 ---
 

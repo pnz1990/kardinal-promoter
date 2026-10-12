@@ -173,11 +173,8 @@ environments:
 
 Because org-level PolicyGates in `platform-policies` are automatically injected into
 every Pipeline targeting matching environments, the new team's Pipeline inherits
-production controls with zero configuration:
-
-```
-New service Pipeline created → controller injects no-weekend-deploys gate → prod is gated
-```
+production controls with zero configuration: when the new service's Pipeline is created, the
+controller injects the `no-weekend-deploys` gate into its prod environment, and prod is gated.
 
 Teams cannot remove org gates. They can add their own team-level gates in their namespace.
 

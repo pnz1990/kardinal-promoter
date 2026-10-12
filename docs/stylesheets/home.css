@@ -5,11 +5,9 @@
  * home.css — the docs home page hero (overrides/home.html): the thesis on the
  * left, the thread on the right. Tokens only (web/src/noLiterals.test.ts).
  *
- * The thread map plays once: the version passes test and uat, waits at the
- * gate, the gate lifts, and the version runs into both prod targets. Each
- * element's resting style is its final frame; the animations only run from an
- * earlier state, so with reduced motion (durations are 0ms, and animation is
- * off below) the map shows the finished promotion.
+ * The map is the docs station map (hack/docs-station-map, k-map.css), played
+ * once: the version passes test and uat, waits at the gate, the gate opens, and
+ * the version runs into both prod targets.
  */
 
 .k-hero {
@@ -110,135 +108,11 @@
 .k-hero__figure {
   margin: 0;
 }
-.k-hero__caption {
+.k-hero__figure .k-map__caption {
   margin-block-start: var(--k-space-3);
-  font-family: var(--k-font-mono);
-  font-size: var(--k-text-xs);
-  line-height: var(--k-leading-xs);
-  color: var(--k-ink-3);
 }
 
-/* The thread map. */
-.k-thread-map {
-  display: block;
-  inline-size: 100%;
-  block-size: auto;
-}
-.k-thread-map path,
-.k-thread-map line,
-.k-thread-map circle {
-  vector-effect: non-scaling-stroke;
-}
-
-.k-edge {
-  fill: none;
-  stroke: var(--k-line-strong);
-  stroke-width: var(--k-stroke-edge);
-  stroke-linejoin: round;
-}
-
-.k-thread {
-  fill: none;
-  stroke: var(--k-thread);
-  stroke-width: var(--k-stroke-thread);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-dasharray: 1;
-  stroke-dashoffset: 0;
-  animation: k-draw var(--k-dur-thread) var(--k-ease-flight) backwards;
-}
-.k-thread--1 { animation-delay: calc(var(--k-dur-thread) * 0.5); }
-.k-thread--2 { animation-delay: calc(var(--k-dur-thread) * 1.5); }
-.k-thread--3 { animation-delay: calc(var(--k-dur-thread) * 6.5); animation-duration: calc(var(--k-dur-thread) * 0.5); }
-.k-thread--eu,
-.k-thread--us { animation-delay: calc(var(--k-dur-thread) * 7); animation-duration: calc(var(--k-dur-thread) * 1.5); }
-
-/* The first frame hides the path, so a round cap does not show before it draws. */
-@keyframes k-draw {
-  0% { stroke-dashoffset: 1; stroke-opacity: 0; }
-  1% { stroke-dashoffset: 1; stroke-opacity: 1; }
-}
-
-.k-station circle {
-  r: var(--k-graph-station-r);
-  fill: var(--k-ink-node);
-  stroke: var(--k-ink-node);
-  stroke-width: var(--k-stroke-ring);
-  animation: k-reach var(--k-dur-quick) var(--k-ease-out) backwards;
-}
-.k-station text,
-.k-gate__label {
-  font-family: var(--k-font-display);
-  font-size: var(--k-text-md);
-  font-weight: var(--k-weight-semibold);
-  font-stretch: var(--k-stretch-label);
-  fill: var(--k-ink);
-}
-.k-station--test circle { animation-delay: calc(var(--k-dur-thread) * 0.5); }
-.k-station--uat circle { animation-delay: calc(var(--k-dur-thread) * 1.5); }
-.k-station--eu circle,
-.k-station--us circle { animation-delay: calc(var(--k-dur-thread) * 8.5); }
-
-/* Not reached: a hollow ring. */
-@keyframes k-reach {
-  from { fill: var(--k-surface-canvas); stroke: var(--k-status-pending-ring); }
-}
-
-/* The gate holds the thread, then lifts and goes quiet. */
-.k-gate__bar {
-  stroke: var(--k-ink-3);
-  stroke-width: var(--k-stroke-thread);
-  stroke-linecap: round;
-  transform: rotate(90deg);
-  animation: k-lift var(--k-dur-base) var(--k-ease-out) backwards;
-  animation-delay: calc(var(--k-dur-thread) * 6);
-}
-.k-gate__post {
-  r: var(--k-stroke-thread);
-  fill: var(--k-ink-3);
-}
-.k-gate__label {
-  font-family: var(--k-font-mono);
-  font-size: var(--k-text-xs);
-  font-weight: var(--k-weight-regular);
-  font-stretch: var(--k-stretch-normal);
-  fill: var(--k-ink-3);
-  animation: k-hold var(--k-dur-base) var(--k-ease-out) backwards;
-  animation-delay: calc(var(--k-dur-thread) * 6);
-}
-@keyframes k-lift {
-  from { transform: rotate(0deg); stroke: var(--k-status-blocked-fg); }
-}
-@keyframes k-hold {
-  from { fill: var(--k-status-blocked-fg); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .k-thread,
-  .k-station circle,
-  .k-gate__bar,
-  .k-gate__label {
-    animation: none;
-  }
-}
-[data-motion="reduce"] .k-thread-map * {
-  animation: none;
-}
-
-/* On a phone the map is drawn at about half size: set its labels larger in
-   the SVG's own units so they read at text-xs. */
-@media (max-width: 40em) {
-  .k-station text {
-    font-size: var(--k-text-2xl);
-  }
-  .k-gate__label {
-    font-size: var(--k-text-sm);
-  }
-}
-
-/* A print shows the finished promotion, not a frame of the animation. */
-@media print {
-  .k-thread-map * {
-    animation: none;
-  }
+/* The hero's map fills its column, up to half again its size. */
+.k-hero__figure .k-map .station-map__svg {
+  max-inline-size: calc(var(--map-w) * 1.5);
 }
