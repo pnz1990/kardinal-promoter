@@ -82,6 +82,8 @@ import { terminalEnvironments } from './fleetModel'
 
 import type { AccessCheck, Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep, PolicyGate } from './types'
 import { bundleVersion, failedVersionTitle } from './stage/stageModel'
+import { pipelineState } from './pipelineState'
+import { StatusChip } from './ui'
 
 const POLL_INTERVAL_MS = 5000
 
@@ -427,6 +429,9 @@ export function App() {
     : undefined
   const selectedNamespace = urlState.ns ?? activePipeline?.namespace
   const activeBundle = shownBundleName ? bundles.find(b => b.name === shownBundleName) : undefined
+  // The route's version as people know it (its tag), for the breadcrumb.
+  const routeVersion = urlState.version ? bundles.find(b => b.name === urlState.version) : undefined
+  const routeVersionLabel = routeVersion ? bundleVersion(routeVersion) : undefined
   // The picked comparison bundle, while the pipeline still has it and it is
   // not the bundle on screen (which is the one it is compared against).
   const compareBundle = compareTarget && compareTarget !== activeBundle?.name && bundles.some(b => b.name === compareTarget)
@@ -820,7 +825,7 @@ export function App() {
         <main id="main-content" tabIndex={-1} className="app-main app-main--ops">
           <div className="app-topbar">
             {navButton}
-            <Breadcrumb route={urlState} namespace={activePipeline?.namespace} />
+            <Breadcrumb route={urlState} namespace={activePipeline?.namespace} versionLabel={routeVersionLabel} />
             {approvalsLink}
             {topbarTools}
           </div>
@@ -842,7 +847,7 @@ export function App() {
         <main id="main-content" tabIndex={-1} className="app-main">
           <div className="app-topbar">
             {navButton}
-            <Breadcrumb route={urlState} namespace={activePipeline?.namespace} />
+            <Breadcrumb route={urlState} namespace={activePipeline?.namespace} versionLabel={routeVersionLabel} />
             {approvalsLink}
             {topbarTools}
           </div>
@@ -876,6 +881,11 @@ export function App() {
                 {activePipeline?.paused && (
                   <span className="app-paused">⏸ PAUSED — no new promotions</span>
                 )}
+                {/* The pipeline's one state, as the sidebar, the counters and the fleet board say it. */}
+                {activePipeline && !activePipeline.paused && (() => {
+                  const st = pipelineState(activePipeline)
+                  return <StatusChip tone={st.tone} label={st.label} glyph={st.glyph} data-testid="pipeline-state" />
+                })()}
                 {activePipeline && (
                   <div className="app-pipeline-head__actions">
                     {/* #506: pause / resume; while paused, Resume is the primary action. */}
@@ -900,12 +910,12 @@ export function App() {
               </div>
               {activePipeline && (
                 <p className="app-pipeline-head__summary">
-                  {/* P1's status.summary sentence; the shown version's state when there is none. */}
-                  <span>{activePipeline.summary ?? (activeBundle ? displayState('bundle', activeBundle.phase).label : 'No version yet')}</span>
+                  {/* P1's status.summary sentence. Without one, the state chip above says it once. */}
+                  {activePipeline.summary && <span>{activePipeline.summary}</span>}
                   {/* #329/#763: the shown version's provenance, quiet; none for a version that is not found. */}
                   {activeBundle && !versionMissing && (
                     <span className="app-provenance">
-                      <span className="app-sep" aria-hidden="true">·</span>
+                      {activePipeline.summary && <span className="app-sep" aria-hidden="true">·</span>}
                       <span>
                         {/* The summary already names the tag; the Bundle name is the title and the copy. */}
                         Version <VersionLabel bundle={activeBundle} compact />

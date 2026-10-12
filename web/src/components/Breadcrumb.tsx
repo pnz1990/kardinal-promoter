@@ -10,9 +10,11 @@ export interface BreadcrumbProps {
   route: UrlState
   /** The namespace when the route does not name it (old links). */
   namespace?: string
+  /** How the route's version reads (its tag, bundleVersion); the Bundle name when unknown. */
+  versionLabel?: string
 }
 
-export function Breadcrumb({ route, namespace }: BreadcrumbProps) {
+export function Breadcrumb({ route, namespace, versionLabel }: BreadcrumbProps) {
   const ns = route.ns ?? namespace
   const keep = { filter: route.filter, q: route.q }
   const crumbs: { label: string; href?: string; kind?: string }[] = [
@@ -23,7 +25,7 @@ export function Breadcrumb({ route, namespace }: BreadcrumbProps) {
     const pipelineHref = serializeHash({ ...EMPTY_URL_STATE, ...keep, pipeline: route.pipeline, ns })
     crumbs.push({ label: route.pipeline, href: route.env || route.version ? pipelineHref : undefined })
     if (route.env) crumbs.push({ label: route.env, kind: 'environment' })
-    else if (route.version) crumbs.push({ label: route.version, kind: 'version' })
+    else if (route.version) crumbs.push({ label: versionLabel ?? route.version, kind: 'version' })
   }
   if (!route.pipeline && route.approvals) crumbs.push({ label: 'Approvals' })
   return (

@@ -20,6 +20,16 @@ test.describe('Journey 002 — DAG node click opens NodeDetail', () => {
     await expect(page.locator('svg text').filter({ hasText: /^prod$/ })).toBeVisible()
   })
 
+  test('Step 1b: a gate label never hides a station: no station label is culled, at 1280 or 1440', async ({ page }) => {
+    for (const size of [{ width: 1280, height: 720 }, { width: 1440, height: 900 }]) {
+      await page.setViewportSize(size)
+      await expect(page.locator('svg text').filter({ hasText: /^uat$/ })).toBeVisible()
+      await expect(page.locator('.station [data-culled]')).toHaveCount(0)
+      // The gate's label is short (glyph and name); its words are in the accessible name.
+      await expect(page.locator('.station-map__gate-label').first()).toHaveText(/^\S+ no-weekend-deploys$/)
+    }
+  })
+
   test('Step 2: Clicking a DAG node opens NodeDetail panel', async ({ page }) => {
     const testNode = page.getByRole('button', { name: /test — /i })
     await testNode.click()
