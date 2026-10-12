@@ -624,20 +624,33 @@ func parseHour(s string) (int, error) {
 // ─── policy test ─────────────────────────────────────────────────────────────
 
 func newPolicyTestCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "test <file>",
+	var file string
+	cmd := &cobra.Command{
+		Use:   "test -f <file>",
 		Short: "Validate PolicyGate YAML syntax and dry-run CEL expressions",
 		Long: `Check every PolicyGate in a YAML file offline: each expression is compiled and
 evaluated as the controller would, now, for a Bundle with no images, metrics or
 history. PASS or FAIL per gate, UNKNOWN when it needs cluster data (use policy
 simulate). It exits non-zero only when an expression does not compile.`,
-		Example:     `  kardinal policy test policy-gates.yaml`,
+		Example: `  kardinal policy test -f policy-gates.yaml
+  kardinal policy test policy-gates.yaml`,
 		Annotations: map[string]string{ReferenceAnnotation: policyTestReference},
-		Args:        cobra.ExactArgs(1),
+		Args:        cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return policyTestFn(cmd.OutOrStdout(), args[0], time.Now().UTC())
+			// -f as kardinal validate takes it, or the file as the argument.
+			switch {
+			case file != "" && len(args) == 1 && args[0] != file:
+				return fmt.Errorf("policy test takes one file: -f %s or %s, not both", file, args[0])
+			case file == "" && len(args) == 1:
+				file = args[0]
+			case file == "":
+				return fmt.Errorf("policy test needs a PolicyGate file: kardinal policy test -f <file>")
+			}
+			return policyTestFn(cmd.OutOrStdout(), file, time.Now().UTC())
 		},
 	}
+	cmd.Flags().StringVarP(&file, "file", "f", "", "Path to the PolicyGate YAML file (or give it as the argument)")
+	return cmd
 }
 
 // policyTestFn reads a PolicyGate YAML file, compiles each gate's CEL
@@ -706,7 +719,14 @@ func policyTestFn(w io.Writer, filename string, now time.Time) error {
 			failed++
 			result = "FAIL"
 		}
-		fmt.Fprintf(&out, "  Result: %s (%s)\n\n", result, reason)
+		fmt.Fprintf(&out, "  Result: %s (%s)\n", result, reason)
+		if decides, err := soakDecides(ctx, g, env, now, pass); err != nil {
+			return err
+		} else if decides {
+			fmt.Fprintf(&out, "  Note: offline there is no upstream environment, so its soak is 0; "+
+				"kardinal policy simulate <pipeline> %s --soak-minutes <n> evaluates it with a soak\n", env)
+		}
+		out.WriteString("\n")
 	}
 
 	var summary string
@@ -809,7 +829,14 @@ const policyTestReference = `Each expression is compiled with the controller's P
 then evaluated by the controller's reconciler against a local context: the
 current time, a Bundle with no images or provenance, no metrics, no upstream
 history and no change windows. The environment is the first entry of the
-gate's kardinal.io/applies-to label.
+gate's kardinal.io/applies-to label. The file is -f <file>, as kardinal
+validate takes it, or the argument.
+
+With no cluster there is no upstream environment: bundle.upstreamSoakMinutes
+is 0, as for a version that just reached the upstream, and when that decides the result (the gate
+would pass, or fail, once soaked) a Note says so (upstream.<env>.* has no
+entry, so such a gate is UNKNOWN). kardinal policy simulate
+<pipeline> <env> --soak-minutes <n> evaluates the gate with a soak.
 
 Results:
   PASS     the gate would allow promotion in that context
