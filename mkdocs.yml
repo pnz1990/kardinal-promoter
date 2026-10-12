@@ -63,10 +63,7 @@ theme:
     - content.action.view
     - toc.follow
 
-# Mermaid is self-hosted: Material uses window.mermaid when it is defined and
-# loads it from unpkg.com otherwise. Pinned; docs/assets/vendor/mermaid/LICENSE.
 extra_javascript:
-  - assets/vendor/mermaid/mermaid-11.17.2.min.js
   - javascripts/scrollwrap.js
   - javascripts/k-demo.js
 
@@ -75,6 +72,13 @@ extra_css:
   - stylesheets/kardinal.css
   - stylesheets/home.css
   - stylesheets/k-demo.css
+  # Every diagram is the UI's station map, drawn at build time by the hook below:
+  # station-map.css is web/src/styles/StationMap.css, copied in by the hook.
+  - stylesheets/station-map.css
+  - stylesheets/k-map.css
+
+hooks:
+  - hack/docs-station-map/station_map.py
 
 plugins:
   - search:
@@ -93,11 +97,7 @@ plugins:
 markdown_extensions:
   - admonition
   - pymdownx.details
-  - pymdownx.superfences:
-      custom_fences:
-        - name: mermaid
-          class: mermaid
-          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.superfences
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.highlight:

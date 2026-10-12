@@ -7,20 +7,18 @@ promoted to prod by your CI. For a demo against a sample repository, see the
 
 ## What you will build
 
-```mermaid
-%%{init: {'flowchart': {'curve': 'linear'}}}%%
-graph LR
-    CI["CI pushes image<br/>kardinal-test-app:sha-abc1234"] --> Bundle["Bundle created"]
-    Bundle --> Test["test\n(auto-promote)"]
-    Test --> UAT["uat\n(auto-promote)"]
-    UAT --> Gate["no-weekend-deploys\nCEL gate"]
-    Gate --> Prod["prod\n(PR review required)"]
-    Prod --> Verified["All Verified ✅"]
-
-    style Test fill:#22c55e,color:#fff
-    style UAT fill:#22c55e,color:#fff
-    style Gate fill:#f59e0b,color:#fff
-    style Prod fill:#3b82f6,color:#fff
+```station-map
+title: The pipeline you will build
+caption: CI pushes an image and creates a Bundle. Test and uat promote it on their own; the no-weekend-deploys gate guards prod, and prod waits for you to merge its pull request.
+lead: {into: test, label: CI, note: kardinal-test-app:sha-abc1234}
+stations:
+  test: {state: verified, notes: [auto-promote], status: Verified}
+  uat: {state: verified, notes: [auto-promote], status: Verified}
+  prod: {state: waiting, notes: [PR review required], status: Waiting for PR merge}
+edges:
+  - test -> uat
+  - {from: uat, to: prod, gates: [no-weekend-deploys]}
+thread: [test, uat, prod]
 ```
 
 - Test and uat promote automatically when the upstream environment is verified.

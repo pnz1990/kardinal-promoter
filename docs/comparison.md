@@ -184,9 +184,20 @@ triggered when verification fails.
 
 ### Fan-out DAG topology
 
-```
-test ──► uat ──► staging ──┬──► prod-us ──┐
-                           └──► prod-eu ──┴──► verified
+```station-map
+title: A fan-out pipeline
+caption: Staging fans out to two prod regions. The version is Verified once both are.
+stations:
+  test: verified
+  uat: verified
+  staging: verified
+  prod-us: {state: verified, status: Verified}
+  prod-eu: {state: promoting, status: Promoting}
+edges:
+  - test -> uat
+  - uat -> staging
+  - staging -> prod-us, prod-eu
+thread: [test, uat, staging, prod-us, prod-eu]
 ```
 
 All three tools can run this. kardinal models it natively, and `wave:` can generate the edges.

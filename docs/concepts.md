@@ -4,19 +4,23 @@ kardinal moves a **version** of your application through a **pipeline** of **env
 and **gates** decide when the version may enter the next environment. Those four words are
 all you need to start; the [glossary](reference/glossary.md) maps every other term to them.
 
-```mermaid
-%%{init: {'flowchart': {'curve': 'linear'}}}%%
-flowchart LR
-    CI["Your CI"] -->|creates| V["Version"]
-    V --> test["test<br/>commit, health check"]
-    test --> uat["uat<br/>commit, health check"]
-    uat --> G{"Gates"}
-    G -->|all pass| prod["prod<br/>pull request, merge, health check"]
+```station-map
+title: A version moving through a pipeline of three environments
+caption: The red thread is the version. Test and uat verified it; its gates into prod passed; prod waits for its pull request to merge.
+lead: {into: test, label: Your CI, note: creates a version}
+stations:
+  test: {state: verified, notes: [commit · health check], status: Verified}
+  uat: {state: verified, notes: [commit · health check], status: Verified}
+  prod: {state: waiting, notes: [pull request · merge, health check], status: Waiting for PR merge}
+edges:
+  - test -> uat
+  - {from: uat, to: prod, gates: [no-weekend-deploys, uat-soak]}
+thread: [test, uat, prod]
 ```
 
-Your CI creates a version when it has built one. Each box on the right is an **environment** of
-the **pipeline**. A version enters an environment once the environment before it has verified it
-and the environment's gates pass. kardinal then writes the version to the environment's directory
+Your CI creates a version when it has built one. Each station on the line is an **environment**
+of the **pipeline**, and the bars on the line into prod are its **gates**. A version enters an
+environment once the environment before it has verified it and the environment's gates pass. kardinal then writes the version to the environment's directory
 in your GitOps repository (directly, or through a pull request you review), waits for Argo CD,
 Flux or Kubernetes to roll it out, and checks its health. A healthy environment is **Verified**,
 and the version moves on.

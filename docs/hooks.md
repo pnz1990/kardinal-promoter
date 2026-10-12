@@ -82,11 +82,22 @@ the shell in the container, not by kardinal or kro.
       stops it for a human, `rollback` rolls the environment back). The change is already
       deployed when a post hook runs; a failed post hook does not revert it by itself.
 
-```
-Pending ──pre hooks succeeded──▶ Promoting ─▶ (WaitingForMerge) ─▶ HealthChecking
-                                                                      │ healthy
-                                                                      ▼
-                                       Verified ◀──post hooks succeeded── Verifying
+```station-map
+title: The states of a step with pre and post hooks
+caption: Each station is a state of the step, in the tone the UI gives it. The pre hooks hold the step in Pending; the post hooks hold it in Verifying.
+stations:
+  Pending: {state: pending, notes: [pre hooks run]}
+  Promoting: {state: promoting, notes: [commit · push]}
+  WaitingForMerge: {state: waiting, notes: [pr-review only], lane: -1}
+  HealthChecking: {state: promoting, notes: [health check, bake], lane: 0}
+  Verifying: {state: promoting, notes: [post hooks, analyses]}
+  Verified: {state: verified}
+edges:
+  - {from: Pending, to: Promoting, gates: [pre hooks]}
+  - Promoting -> WaitingForMerge, HealthChecking
+  - WaitingForMerge -> HealthChecking
+  - HealthChecking -> Verifying
+  - {from: Verifying, to: Verified, gates: [post hooks]}
 ```
 
 ## Guarantees

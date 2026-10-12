@@ -1,0 +1,151 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * k-map.css — the docs station map (hack/docs-station-map). The map itself is the
+ * product UI's: its markup is StationMap.tsx's at Detail zoom and its stylesheet is
+ * web/src/styles/StationMap.css, shipped as stylesheets/station-map.css. This file
+ * adds only what a static page needs: the figure, a map that scrolls rather than
+ * shrinks its labels below --k-text-2xs, no pointer affordances (nothing is
+ * clickable), the source label of a lead, and the home page's one-time play.
+ * Tokens only (web/src/noLiterals.test.ts).
+ */
+
+.md-typeset .k-map {
+  display: block;
+  inline-size: auto;
+  max-inline-size: 100%;
+  margin: var(--k-space-6) 0;
+}
+
+.k-map__scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.k-map .station-map {
+  display: block;
+  /* The map scrolls before its smallest label would read below --k-text-2xs. */
+  min-inline-size: var(--map-min-w);
+}
+
+.k-map .station-map__svg {
+  display: block;
+  inline-size: 100%;
+  max-inline-size: var(--map-w);
+  block-size: auto;
+  margin-inline: auto;
+  cursor: auto;
+  touch-action: auto;
+}
+
+.k-map .station,
+.k-map .station-map__gate {
+  cursor: auto;
+}
+
+/* Where the version comes from: the start of the lead into the first station. */
+.k-map__source {
+  font-family: var(--k-font-display);
+  --fs: var(--k-text-xs);
+  font-weight: var(--k-weight-semibold);
+  font-stretch: var(--k-stretch-label);
+  fill: var(--k-ink-2);
+}
+.k-map__source-note {
+  font-family: var(--k-font-mono);
+  --fs: var(--k-text-xs);
+  fill: var(--k-ink-3);
+}
+
+.k-map__caption,
+.md-typeset .k-map__caption {
+  max-inline-size: none;
+  margin: var(--k-space-2) 0 0;
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-xs);
+  line-height: var(--k-leading-xs);
+  color: var(--k-ink-3);
+  font-style: normal;
+  text-align: start;
+}
+
+/* A played map may be drawn larger than its size (the hero fills its column): its
+   strokes scale with it, so the thread's dashes, which draw it, stay in its units. */
+.k-map[data-play] .station-map__svg * {
+  vector-effect: none;
+}
+
+/* No frame: the home page's hero draws the map on the page itself. */
+.k-map--bare .station-map {
+  min-inline-size: 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+.md-typeset .k-map--bare,
+.k-map--bare {
+  margin: 0;
+}
+
+/*
+ * Play (the home page): the thread is drawn edge by edge (--map-at, --map-for in
+ * --k-dur-thread units, from the renderer), a station fills when the thread
+ * reaches it, and a gate the version waits at opens. Each element's resting
+ * style is its final frame; the animations only run from an earlier state, so
+ * with reduced motion the map shows the finished promotion.
+ */
+.k-map[data-play] .k-map__draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: k-map-draw calc(var(--k-dur-thread) * var(--map-for)) var(--k-ease-flight) backwards;
+  animation-delay: calc(var(--k-dur-thread) * var(--map-at));
+}
+/* The first frame hides the path, so a round cap does not show before it draws. */
+@keyframes k-map-draw {
+  0% { stroke-dashoffset: 1; stroke-opacity: 0; }
+  1% { stroke-dashoffset: 1; stroke-opacity: 1; }
+}
+
+.k-map[data-play] .k-map__reach {
+  animation: k-map-reach var(--k-dur-quick) var(--k-ease-out) backwards;
+  animation-delay: calc(var(--k-dur-thread) * var(--map-at));
+}
+/* Not reached: a hollow ring. */
+@keyframes k-map-reach {
+  from { fill: var(--k-surface-base); stroke: var(--k-status-pending-ring); }
+}
+
+/* The gate holds the version (the UI's blocking bar: longer, amber), then opens. */
+.k-map[data-play] .station-map__gate[data-opens] .station-map__gate-bar {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: k-map-open var(--k-dur-base) var(--k-ease-out) backwards;
+  animation-delay: calc(var(--k-dur-thread) * var(--map-at));
+}
+.k-map[data-play] .station-map__gate[data-opens] .station-map__gate-label {
+  animation: k-map-hold var(--k-dur-base) var(--k-ease-out) backwards;
+  animation-delay: calc(var(--k-dur-thread) * var(--map-at));
+}
+@keyframes k-map-open {
+  from { transform: scale(1, 2); stroke: var(--k-status-blocked-fg); }
+}
+@keyframes k-map-hold {
+  from { fill: var(--k-status-blocked-fg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .k-map * {
+    animation: none;
+  }
+}
+[data-motion="reduce"] .k-map * {
+  animation: none;
+}
+
+/* A print shows the finished promotion, not a frame of the animation. */
+@media print {
+  .k-map * {
+    animation: none;
+  }
+}

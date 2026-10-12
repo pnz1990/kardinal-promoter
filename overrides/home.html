@@ -4,7 +4,7 @@
 
   The docs home page: the hero (the thesis and the thread), then index.md.
   Styles are in docs/stylesheets/home.css; colours and lengths come from the
-  design tokens only. Geometry is in the SVG's own user units (viewBox).
+  design tokens only. The map is the docs station map (hack/docs-station-map).
 -#}
 {% extends "main.html" %}
 
@@ -32,38 +32,26 @@
         </div>
       </div>
 
-      <figure class="k-hero__figure">
-        <svg class="k-thread-map" viewBox="20 60 600 220" role="img" aria-labelledby="k-map-title k-map-desc">
-          <title id="k-map-title">A version moving through a pipeline</title>
-          <desc id="k-map-desc">The version passes test and uat, waits at the gate !schedule.isWeekend
-            before prod, and continues into prod-eu and prod-us once the gate opens.</desc>
-
-          <!-- The pipeline, in ink. -->
-          <path class="k-edge" d="M60 170 H340 M340 170 L410 100 H520 M340 170 L410 240 H520"/>
-
-          <!-- The thread: the followed version, drawn edge by edge. -->
-          <path class="k-thread k-thread--1" pathLength="1" d="M60 170 H170"/>
-          <path class="k-thread k-thread--2" pathLength="1" d="M170 170 H288"/>
-          <path class="k-thread k-thread--3" pathLength="1" d="M284 170 H340"/>
-          <path class="k-thread k-thread--eu" pathLength="1" d="M340 170 L410 100 H520"/>
-          <path class="k-thread k-thread--us" pathLength="1" d="M340 170 L410 240 H520"/>
-
-          <!-- The gate, mounted on the edge it guards: an arm across the edge that
-               swings open about its post, below the edge, and stays there. -->
-          <g class="k-gate">
-            <line class="k-gate__bar" x1="300" y1="182" x2="300" y2="146" transform-origin="300 182"/>
-            <circle class="k-gate__post" cx="300" cy="182"/>
-            <text class="k-gate__label" x="330" y="234" text-anchor="end">!schedule.isWeekend</text>
-          </g>
-
-          <!-- Stations. -->
-          <g class="k-station k-station--test"><circle cx="60" cy="170"/><text x="60" y="206" text-anchor="middle">test</text></g>
-          <g class="k-station k-station--uat"><circle cx="170" cy="170"/><text x="170" y="206" text-anchor="middle">uat</text></g>
-          <g class="k-station k-station--eu"><circle cx="520" cy="100"/><text x="538" y="105">prod-eu</text></g>
-          <g class="k-station k-station--us"><circle cx="520" cy="240"/><text x="538" y="245">prod-us</text></g>
-        </svg>
-        <figcaption class="k-hero__caption">The thread is the version you follow. It stops where a gate holds it.</figcaption>
-      </figure>
+      <div class="k-hero__figure">
+        {#- The station map of the docs and the UI (hack/docs-station-map), played once. -#}
+        {% set spec %}
+title: A version moving through a pipeline
+desc: The version passes test and uat, waits at the gate !schedule.isWeekend before prod, and continues into prod-eu and prod-us once the gate opens.
+caption: The thread is the version you follow. It stops where a gate holds it.
+bare: true
+play: true
+stations:
+  test: verified
+  uat: verified
+  prod-eu: verified
+  prod-us: verified
+edges:
+  - test -> uat
+  - {from: uat, to: [prod-eu, prod-us], gates: [{name: "!schedule.isWeekend", opens: true}]}
+thread: [test, uat, prod-eu, prod-us]
+        {% endset %}
+        {{ station_map(spec) }}
+      </div>
     </div>
   </section>
 {% endblock %}
