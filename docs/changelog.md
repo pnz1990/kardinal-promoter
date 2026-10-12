@@ -117,6 +117,7 @@ Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/ka
 
 ### Fixed
 
+- **The UI guide's dark recordings exist** — the docs named dark variants of five UI recordings that had none, so a dark-themed page showed broken media. Every recording now has a light and a dark variant. The docs build now fails when a page names an image or a `<picture>` source (`src` or `srcset`, raw-HTML figures included) that the site does not have.
 - **A Pipeline is Ready within seconds of fixing its git Secret** — after `GitCredentialMissing` or `SecretNotReferenceable`, creating or labelling the Secret as the message says left the Pipeline not ready for up to a minute: the controller may only get Secrets by name, never watch them, and re-checked every minute. It now reads the Secret again every 2s for the first 2 minutes of the condition, every 15s until 15 minutes, then every minute
 - **A UI resume right after a pause resumes** — the UI's pause, resume, release-hold, reject and override read the object they change through the controller's informer cache, which can lag the write before: a resume sent right after a pause read the Pipeline as not paused, wrote nothing and left it paused. Those actions now read the object from the API server before they change it
 - **An override's reply counts versions in words** — `POST /api/v1/ui/override` (the UI's **Override gate**) said `for 1 in-progress Bundle(s)`; it says `for 1 version in progress` or `for 2 versions in progress`.
