@@ -15,6 +15,8 @@ export interface WaitReason {
   kind: 'paused' | 'held' | 'gate' | 'approval' | 'pr' | 'upstream' | 'failed'
   /** One sentence a person can act on. */
   title: string
+  /** The sentence's tooltip: the Bundle name behind a version it names. */
+  tip?: string
   /** The gate's or step's own message, when there is one. */
   detail?: string
   /** RFC 3339: when the gate was last evaluated (gates only). */
@@ -158,7 +160,10 @@ export function stageView(input: StageInput): StageView {
     why.push({ kind: 'paused', title: 'The pipeline is paused: nothing new starts until it is resumed.', next: 'resume' })
   }
   if (hold) {
-    why.push({ kind: 'held', title: `Held on ${hold.bundle} by a rollback${hold.createdBy ? `, by ${hold.createdBy}` : ''}: no other version promotes here until it is released.`,
+    // The version it is held on, as everywhere; the Bundle name is the tooltip.
+    const held = bundles.find(b => b.name === hold.bundle)
+    const on = held ? bundleVersion(held) : running?.bundle === hold.bundle ? running.version : hold.bundle
+    why.push({ kind: 'held', tip: hold.bundle, title: `Held on ${on} by a rollback${hold.createdBy ? `, by ${hold.createdBy}` : ''}: no other version promotes here until it is released.`,
       detail: hold.reason, next: 'release' })
   }
   for (const g of blocking) {
