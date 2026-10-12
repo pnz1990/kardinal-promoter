@@ -3,7 +3,7 @@
 A Kubernetes-native promotion controller: Go 1.26+ backend and a React 19 UI embedded with
 go:embed. All state is in Kubernetes CRDs; there is no external database.
 
-Status: Latest release: v0.10.0. It runs on upstream kro's `kro.run/v1alpha1` Graph
+Status: Latest release: v0.11.0. It runs on upstream kro's `kro.run/v1alpha1` Graph
 (kro v0.10.0-rc.0, GraphKind feature gate). Journey status: docs/aide/definition-of-done.md §Journey Status.
 
 Claude Code sessions load this file as instructions. It changes only through a reviewed PR.
