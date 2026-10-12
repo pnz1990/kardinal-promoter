@@ -282,6 +282,10 @@ export function apiHandler(state) {
       case 'rollback': return json(route, rollback(state, body))
       case 'validate-cel': return json(route, { valid: true, expression: body.expression })
       case 'override': return json(route, override(state, body))
+      // Who the viewer is and what they may do (ui_access.go): an approver who may do everything.
+      case 'access': return json(route, { user: { username: 'you', groups: ['release-managers'] },
+        results: (body.checks ?? []).map(() => ({ allowed: true })) })
+      case 'release-hold': return json(route, { message: 'hold released' })
       case 'pause': return json(route, { message: `paused ${body.pipeline}` })
       case 'resume': return json(route, { message: `resumed ${body.pipeline}` })
       case 'promote': return json(route, { bundle: 'promote-bundle', message: `promoting ${body.pipeline} to ${body.environment}` })

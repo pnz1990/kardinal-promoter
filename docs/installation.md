@@ -200,6 +200,15 @@ name under **Kubernetes details**, for `kubectl`.
 </figure>
 
 
+<figure class="k-demo" id="demo-approvals-inbox">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/approvals-inbox.png">
+    <img src="../assets/demos/approvals-inbox.webp" alt="The UI: the Approvals badge in the top bar, the inbox with the release waiting on you, Approve, and the badge counting down." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>The approvals inbox (#/approvals)</figcaption>
+</figure>
+
+
 - **Fleet board** (the start page, and the kardinal logo from anywhere). Each Pipeline is a
   line of stations, one per environment in promotion order; environments promoted in parallel
   are stacked, and five or more of them (a wave) are one plate that names the range, the version

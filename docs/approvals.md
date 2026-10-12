@@ -11,6 +11,15 @@ An approval gate waits for people. Put `spec.approval` on a gate template; the g
 </figure>
 
 
+<figure class="k-demo" id="demo-approvals-inbox">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/approvals-inbox.png">
+    <img src="../assets/demos/approvals-inbox.webp" alt="The UI: the Approvals badge in the top bar, the inbox with the release waiting on you, Approve, and the badge counting down." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>Approve from the inbox · the top bar's Approvals badge counts what waits on you</figcaption>
+</figure>
+
+
 ```yaml
 apiVersion: kardinal.io/v1alpha1
 kind: PolicyGate

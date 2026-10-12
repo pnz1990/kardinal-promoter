@@ -81,6 +81,32 @@ export const FLOWS = [
     },
   },
   {
+    name: 'approvals-inbox',
+    title: 'Approve from the inbox: the release you are waited on for, and the badge counts down',
+    themes: ['light'],
+    start: '#/p/shop/checkout',
+    async run(d, page) {
+      await d.pause(1200)
+      const badge = page.getByRole('link', { name: /^Approvals, 1 waiting on you/ })
+      await expect(badge).toBeVisible()
+      await d.click(badge, { after: 1400 })
+      const inbox = page.getByRole('list', { name: 'Waiting on you' })
+      await expect(inbox.getByRole('listitem')).toHaveCount(1)
+      await d.move(inbox.getByRole('listitem').first())
+      await d.pause(900)
+      await d.click(inbox.getByRole('button', { name: 'Approve' }), { after: 900 })
+      const dialog = page.getByRole('dialog', { name: /^Approve / })
+      await expect(dialog).toBeVisible()
+      d.poster()
+      await d.pause(700)
+      await d.click(dialog.getByRole('button', { name: 'Approve' }), { after: 1600 })
+      // The quorum is met: the item leaves the inbox and the badge no longer counts it.
+      await expect(page.getByRole('link', { name: /^Approvals/ })).not.toHaveAccessibleName(/1 waiting on you/, { timeout: 8000 })
+      await d.move(page.getByRole('link', { name: /^Approvals/ }))
+      await d.pause(1600)
+    },
+  },
+  {
     name: 'rollback-hold',
     title: 'Why a stage failed, then roll it back and hold it there',
     themes: ['light'],
