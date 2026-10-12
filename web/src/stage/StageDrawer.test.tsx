@@ -197,6 +197,19 @@ describe('StageDrawer (U3)', () => {
       reason: 'P0 hotfix', expiresInMinutes: 240 })
   })
 
+  it('override says it by the gate\'s own name, not the instance the controller echoes', async () => {
+    const user = userEvent.setup()
+    api.overrideGate.mockResolvedValue({ message: `gate ${freeze.name} overridden in prod for 1 in-progress Bundle(s) until 2026-10-11T10:03:00Z`,
+      gates: [freeze.name], expiresAt: '2026-10-11T10:03:00Z' })
+    renderDrawer([freeze])
+    await user.click(reasonButton('Override gate'))
+    const dialog = screen.getByRole('dialog', { name: 'Override no-weekend in prod?' })
+    await user.type(within(dialog).getByLabelText('Reason'), 'P0 hotfix')
+    await user.click(within(dialog).getByRole('button', { name: 'Override gate' }))
+    const done = await screen.findByText(/^Overridden\. gate no-weekend overridden in prod for 1 in-progress Bundle\(s\) until/)
+    expect(done).not.toHaveTextContent(freeze.name)
+  })
+
   it('override opens on the gate whose reason was clicked, with the controller\'s cap', async () => {
     const user = userEvent.setup()
     const hours: PolicyGate = { ...freeze, name: 'business-hours--web-3-prod', gateTemplate: 'business-hours', reason: 'outside 9-17',
