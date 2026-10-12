@@ -409,7 +409,7 @@ export default function StationMap(props: StationMapProps) {
             <span className="station-map__eyebrow">Attention</span>
             {attentionItems.map(a => (
               <button key={a.key} type="button" className="station-map__attention-item" data-tone={a.key.split(':')[0]}
-                onClick={() => showAttention(a.envs)}>{a.text}</button>
+                title={a.text} onClick={() => showAttention(a.envs)}>{a.text}</button>
             ))}
           </div>
         ) : <div className="station-map__attention" />}
@@ -426,9 +426,15 @@ export default function StationMap(props: StationMapProps) {
         {views}
         {/* On a narrow map the level control gives way to zoom buttons (touch also pinches). */}
         <div className="station-map__zoom" role="group" aria-label="Zoom in or out">
-          <button type="button" aria-label="Zoom out" onClick={() => vp.zoomBy(ZOOM_STEP_OUT)}>−</button>
-          <button type="button" aria-label="Zoom in" onClick={() => vp.zoomBy(ZOOM_STEP_IN)}>+</button>
-          <button type="button" aria-label="Fit the map" onClick={() => vp.fit()}>⤢</button>
+          <span className="station-map__zoom-label" aria-hidden="true">Zoom</span>
+          <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => vp.zoomBy(ZOOM_STEP_OUT)}>−</button>
+          <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => vp.zoomBy(ZOOM_STEP_IN)}>+</button>
+          {/* An icon, not a glyph the type may lack (⤢ drew an empty box). */}
+          <button type="button" aria-label="Fit the map" title="Fit the map" onClick={() => vp.fit()}>
+            <svg className="station-map__zoom-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" />
+            </svg>
+          </button>
         </div>
         <Segmented label="Zoom" className="station-map__levels" value={level} onChange={l => vp.setLevel(l)}
           items={LEVELS.map(l => ({ id: l, text: LEVEL_LABEL[l] }))} />
