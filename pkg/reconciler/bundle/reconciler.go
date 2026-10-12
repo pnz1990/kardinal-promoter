@@ -1914,21 +1914,14 @@ func failedState(state string) bool {
 }
 
 // environmentStatuses aggregates the Bundle's PromotionSteps into one entry
-// per environment. An environment with several regions has one step per
-// region: it is Verified only when every region is Verified, and a failed
-// region fails it. Entries for environments without a current step are kept
+// per environment. An environment with several steps is Verified only when
+// every step is Verified, and a failed step fails it. Entries for environments without a current step are kept
 // as evidence. The order is the Pipeline's promotion order, then by name, so
 // the status does not change between reconciles.
 func environmentStatuses(b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipeline,
 	steps []kardinalv1alpha1.PromotionStep, now time.Time) []kardinalv1alpha1.EnvironmentStatus {
-	regions := map[string]int{}
 	var order []string
 	if pipeline != nil {
-		for _, e := range pipeline.Spec.Environments {
-			if len(e.Regions) >= 2 { //nolint:staticcheck // SA1019: aggregates steps from a Graph built before regions were removed
-				regions[e.Name] = len(e.Regions) //nolint:staticcheck // SA1019: aggregates steps from a Graph built before regions were removed
-			}
-		}
 		order, _ = graph.PromotedEnvironments(pipeline, b)
 	}
 
@@ -1945,7 +1938,7 @@ func environmentStatuses(b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.
 		slices.SortFunc(group, func(x, y *kardinalv1alpha1.PromotionStep) int { return strings.Compare(x.Name, y.Name) })
 		st := out[env]
 		st.Name = env
-		st.Phase = environmentPhase(group, max(regions[env], 1))
+		st.Phase = environmentPhase(group)
 		for _, s := range group {
 			if u := s.Status.Outputs["prURL"]; u != "" {
 				st.PRURL = u
@@ -2003,10 +1996,9 @@ func environmentStatuses(b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.
 	return envs
 }
 
-// environmentPhase is the phase of an environment promoted by the given steps,
-// one per region: the first failure, else the first step still in progress,
-// else Promoting while regions have no step yet, else Verified.
-func environmentPhase(group []*kardinalv1alpha1.PromotionStep, regions int) string {
+// environmentPhase is the phase of an environment promoted by the given steps:
+// the first failure, else the first step still in progress, else Verified.
+func environmentPhase(group []*kardinalv1alpha1.PromotionStep) string {
 	for _, s := range group {
 		if failedState(s.Status.State) {
 			return s.Status.State
@@ -2020,9 +2012,6 @@ func environmentPhase(group []*kardinalv1alpha1.PromotionStep, regions int) stri
 		default:
 			return s.Status.State
 		}
-	}
-	if len(group) < regions {
-		return phasePromoting
 	}
 	return phaseVerified
 }

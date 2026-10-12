@@ -58,7 +58,8 @@ func exampleManifest(t *testing.T, file string) *unstructured.Unstructured {
 }
 
 // createExampleToken creates the github-token Secret the README's kubectl
-// create secret makes (key token) in ns, holding the suite's Git token.
+// create secret and kubectl label make (key token, labeled referenceable)
+// in ns, holding the suite's Git token.
 func createExampleToken(t *testing.T, e *framework.Env, ns string) {
 	t.Helper()
 	ctx := context.Background()
@@ -67,7 +68,7 @@ func createExampleToken(t *testing.T, e *framework.Env, ns string) {
 	token := src.Data["token"]
 	require.True(t, len(token) > 0, "the %s Secret has a token key", framework.GitSecretName)
 	_, err = e.Kube.CoreV1().Secrets(ns).Create(ctx, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: exampleTokenSecret, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: exampleTokenSecret, Namespace: ns, Labels: map[string]string{"kardinal.io/referenceable": "true"}},
 		Data:       map[string][]byte{"token": token},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err, "create the %s Secret", exampleTokenSecret)

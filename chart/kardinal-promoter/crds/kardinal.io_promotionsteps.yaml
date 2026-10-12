@@ -324,15 +324,6 @@ spec:
                 items:
                   type: string
                 type: array
-              region:
-                description: |-
-                  Region is deprecated and not set by kardinal; the reconciler fails a
-                  step that has one with "regions is not supported".
-
-                  Deprecated: declare one environment per region (prod-us, prod-eu) and
-                  use wave.
-                  It is removed in v0.11.
-                type: string
               requiredGates:
                 description: |-
                   RequiredGates holds the names of PolicyGate instances that must be ready

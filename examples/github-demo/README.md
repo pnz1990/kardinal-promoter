@@ -35,6 +35,7 @@ kubectl create namespace kardinal-test-app-prod
 kubectl create secret generic github-token \
   --namespace default \
   --from-literal=token=$GITHUB_TOKEN
+kubectl label secret github-token --namespace default kardinal.io/referenceable=true
 
 # 2. Apply the quickstart's Argo CD Applications (kardinal-test-app-{test,uat,prod}).
 #    They sync the kardinal-demo paths this Pipeline promotes into, and

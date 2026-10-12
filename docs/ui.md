@@ -250,6 +250,12 @@ Below 960 pixels the pipeline list moves behind the menu button at the top left,
 environment's details open as a sheet over the map below 1280 pixels. The map keeps its zoom and
 search; pinch to zoom.
 
+The map's toolbar follows the map's own width, not the window's. On a map narrower than 720 pixels
+(a phone, or the stage drawer open beside it) the attention items get a row of their own, each on
+one line: a long one is cut with an ellipsis, and pointing at it shows the full text. Search and
+the View and Zoom controls follow on the next row. The Zoom levels give way to Zoom out, Zoom in
+and Fit the map buttons.
+
 ## Themes and density
 
 The theme follows your system until you pick Light or Dark (the theme button or the palette), and

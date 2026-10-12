@@ -368,24 +368,45 @@ func NotAllowedMessage(err error) string {
 	return strings.TrimPrefix(err.Error(), ErrRepositoryNotAllowed.Error()+": ")
 }
 
-// PipelineSecretExists reports whether the Pipeline's git.secretRef names a
-// Secret that exists in the Pipeline's namespace, the token git clone and
-// push use instead of none (CheckPipeline's ownSecret). A secretRef in another
-// namespace does not count. Secrets are read uncached (get only).
-func PipelineSecretExists(ctx context.Context, reader client.Reader, p *v1alpha1.Pipeline) (bool, error) {
+// PipelineSecret is the Pipeline's git.secretRef Secret as the allowlist
+// sees it.
+type PipelineSecret int
+
+const (
+	// PipelineSecretNone: no git.secretRef, one in another namespace, or a
+	// Secret that does not exist.
+	PipelineSecretNone PipelineSecret = iota
+	// PipelineSecretUnlabelled: the Secret exists but is not labeled
+	// kardinal.io/referenceable=true, so git does not use it until it is
+	// (the Pipeline is Ready=False/SecretNotReferenceable and its steps wait).
+	PipelineSecretUnlabelled
+	// PipelineSecretUsable: the Secret exists and is labeled; git clone and
+	// push use its token instead of the controller's.
+	PipelineSecretUsable
+)
+
+// PipelineSecretState reads the Pipeline's git.secretRef Secret in the
+// Pipeline's namespace (uncached, get only). A state other than
+// PipelineSecretNone is CheckPipeline's ownSecret: an unlabelled Secret is
+// the Pipeline's own once it is labelled, so a Pipeline it would make
+// allowed waits for the label (SecretNotReferenceable) instead of being
+// refused, and one it would not is refused for the real reason.
+func PipelineSecretState(ctx context.Context, reader client.Reader, p *v1alpha1.Pipeline) (PipelineSecret, error) {
 	ref := p.Spec.Git.SecretRef
 	if ref == nil || ref.Name == "" || (ref.Namespace != "" && ref.Namespace != p.Namespace) {
-		return false, nil
+		return PipelineSecretNone, nil
 	}
 	var s corev1.Secret
 	err := reader.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: ref.Name}, &s)
 	switch {
+	case err == nil && s.Labels[LabelReferenceable] == "true":
+		return PipelineSecretUsable, nil
 	case err == nil:
-		return true, nil
+		return PipelineSecretUnlabelled, nil
 	case apierrors.IsNotFound(err):
-		return false, nil
+		return PipelineSecretNone, nil
 	default:
-		return false, fmt.Errorf("get git.secretRef Secret %s/%s: %w", p.Namespace, ref.Name, err)
+		return PipelineSecretNone, fmt.Errorf("get git.secretRef Secret %s/%s: %w", p.Namespace, ref.Name, err)
 	}
 }
 

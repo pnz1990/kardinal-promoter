@@ -16,8 +16,8 @@ import (
 
 // TestPipelineListServesStatus: GET /api/v1/ui/pipelines serves the
 // Pipeline's status.environments and status.summary (P1) as they are, and
-// its conditions (the Ready reason, such as GitCredentialMissing, and the
-// SecretReferenceable warning) for the UI's badges.
+// its conditions (the Ready reason, such as GitCredentialMissing, and
+// Paused) for the UI's badges.
 //
 // Covers PIPE-ENVSTATUS-02.
 func TestPipelineListServesStatus(t *testing.T) {
@@ -32,7 +32,7 @@ func TestPipelineListServesStatus(t *testing.T) {
 	p.Status.Summary = "1.5.0 live in test; held by gate no-weekend-deploys in prod"
 	p.Status.Conditions = []metav1.Condition{
 		{Type: "Ready", Status: metav1.ConditionFalse, Reason: "GitCredentialMissing", Message: "create it: kubectl create secret ..."},
-		{Type: "SecretReferenceable", Status: metav1.ConditionFalse, Reason: "SecretNotReferenceable", Message: "label it"},
+		{Type: "Paused", Status: metav1.ConditionTrue, Reason: "FreezeGateActive", Message: "paused"},
 	}
 	got := pipelineListResponse([]v1alpha1.Pipeline{p}, nil, nil, nil, time.Now(), nil)
 	require.Len(t, got, 1)
@@ -44,7 +44,7 @@ func TestPipelineListServesStatus(t *testing.T) {
 		reasons[c.Type] = c.Status + "/" + c.Reason
 	}
 	assert.Equal(t, "False/GitCredentialMissing", reasons["Ready"])
-	assert.Equal(t, "False/SecretNotReferenceable", reasons["SecretReferenceable"])
+	assert.Equal(t, "True/FreezeGateActive", reasons["Paused"])
 
 	empty := pipelineListResponse([]v1alpha1.Pipeline{{ObjectMeta: metav1.ObjectMeta{Name: "new", Namespace: "team"}}},
 		nil, nil, nil, time.Now(), nil)

@@ -31,6 +31,7 @@
 #   # in the namespace the ApplicationSet created. kubectl reads the token from
 #   # a file, so it is not in the shell history or the process list:
 #   kubectl -n my-service create secret generic github-token --from-file=token=<file with the token>
+#   kubectl -n my-service label secret github-token kardinal.io/referenceable=true
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:

@@ -555,3 +555,32 @@ func TestRenderRun_ControllerSecretRefused(t *testing.T) {
 	_, got = e.reconcile(t, "rr2")
 	assert.NotEqual(t, "Failed", got.Status.Phase, got.Status.Message)
 }
+
+// TestRenderRun_WaitsForReferenceableGitSecret (#1506): the render Job mounts
+// the git Secret only once it is labeled kardinal.io/referenceable=true.
+// Until then the RenderRun creates no Job, says which Secret and the label
+// command, and checks again within 30 seconds; labeling the Secret lets the
+// next reconcile create the Job.
+func TestRenderRun_WaitsForReferenceableGitSecret(t *testing.T) {
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-creds", Namespace: "team"},
+		Data: map[string][]byte{"token": []byte("t")}}
+	e := newEnv(t, run("rr"), secret)
+	e.reconcile(t, "rr") // start
+	for i := 0; i < 2; i++ {
+		res, got := e.reconcile(t, "rr")
+		assert.NotEqual(t, "Failed", got.Status.Phase, got.Status.Message)
+		assert.Equal(t, "SecretNotReferenceable: git Secret team/git-creds is not labeled kardinal.io/referenceable=true; "+
+			"label it: kubectl label secret git-creds -n team kardinal.io/referenceable=true", got.Status.Message)
+		assert.Greater(t, res.RequeueAfter, time.Duration(0))
+		assert.LessOrEqual(t, res.RequeueAfter, 30*time.Second)
+	}
+	var jobs batchv1.JobList
+	require.NoError(t, e.c.List(context.Background(), &jobs, client.InNamespace("team")))
+	assert.Empty(t, jobs.Items, "no render Job with an unlabeled Secret")
+
+	secret.Labels = map[string]string{"kardinal.io/referenceable": "true"}
+	require.NoError(t, e.c.Update(context.Background(), secret))
+	_, got := e.reconcile(t, "rr")
+	require.NotEmpty(t, got.Status.JobName)
+	e.job(t, got.Status.JobName)
+}

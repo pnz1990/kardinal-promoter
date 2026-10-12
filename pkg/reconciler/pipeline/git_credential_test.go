@@ -26,8 +26,8 @@ import (
 // that does not exist, or a Secret with no token is Ready=False with reason
 // GitCredentialMissing right after it is applied, before any Bundle, and
 // the message is the command that fixes it. An unlabelled Secret with a
-// token still works in v0.10, so it is not GitCredentialMissing: the
-// SecretReferenceable warning names the label command. A GitHub App Secret,
+// token is not used: Ready=False with reason SecretNotReferenceable and the
+// label command (#1506). A GitHub App Secret,
 // an ssh remote or a password in the URL need no token key. The condition is
 // re-checked every minute (Secrets are not watched), a second reconcile
 // writes nothing, and creating the Secret makes the Pipeline Ready.
@@ -50,7 +50,7 @@ func TestPipelineReconciler_GitCredentialMissing(t *testing.T) {
 		secret  *corev1.Secret
 		missing bool
 		want    string // the Ready message, or "" for Ready=True
-		warn    string // the SecretReferenceable message, when warned
+		reason  string // the Ready reason when want is set; "" is GitCredentialMissing
 	}{{
 		name:    "secretRef unset",
 		missing: true,
@@ -73,11 +73,12 @@ func TestPipelineReconciler_GitCredentialMissing(t *testing.T) {
 		want: "git Secret team-git has no token key, so git has no token for https://github.com/myorg/gitops.git; add it: " +
 			`kubectl patch secret team-git -n default --type merge -p '{"stringData":{"token":"<TOKEN>"}}' && ` +
 			"kubectl label secret team-git -n default kardinal.io/referenceable=true",
-		warn: "kubectl label secret team-git -n default kardinal.io/referenceable=true",
 	}, {
 		name: "unreferenceable Secret with a token", ref: "team-git",
 		secret: secret(nil, map[string]string{"token": "t0ken"}),
-		warn:   "kubectl label secret team-git -n default kardinal.io/referenceable=true",
+		want: "git Secret team-git is not labeled kardinal.io/referenceable=true, so git does not use it; " +
+			"label it: kubectl label secret team-git -n default kardinal.io/referenceable=true",
+		reason: "SecretNotReferenceable",
 	}, {
 		name: "GitHub App Secret", ref: "team-git",
 		secret: secret(labelled, map[string]string{"githubAppPrivateKey": "-----BEGIN RSA PRIVATE KEY-----", "githubAppID": "1", "githubAppInstallationID": "2"}),
@@ -115,18 +116,16 @@ func TestPipelineReconciler_GitCredentialMissing(t *testing.T) {
 				assert.Equal(t, metav1.ConditionTrue, ready.Status, ready.Message)
 				assert.Equal(t, "Valid", ready.Reason)
 			} else {
+				reason := tc.reason
+				if reason == "" {
+					reason = "GitCredentialMissing"
+				}
 				assert.Equal(t, metav1.ConditionFalse, ready.Status)
-				assert.Equal(t, "GitCredentialMissing", ready.Reason)
+				assert.Equal(t, reason, ready.Reason)
 				assert.Equal(t, tc.want, ready.Message)
 				assert.Equal(t, time.Minute, res.RequeueAfter, "re-checked: Secrets are not watched")
 			}
-			warn := meta.FindStatusCondition(got.Status.Conditions, "SecretReferenceable")
-			if tc.warn == "" {
-				assert.Nil(t, warn)
-			} else {
-				require.NotNil(t, warn)
-				assert.Contains(t, warn.Message, tc.warn)
-			}
+			assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "SecretReferenceable"))
 
 			rv := got.ResourceVersion
 			_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})

@@ -291,18 +291,6 @@ spec:
                                         description: Namespace is the object namespace.
                                         type: string
                                     type: object
-                                  cluster:
-                                    description: |-
-                                      Cluster is not supported: use kubeconfigSecretRef. A non-empty value sets
-                                      the Pipeline Ready=False (reason NotImplemented) and fails the
-                                      PromotionStep with "health.cluster is not supported".
-
-                                      Deprecated: remove cluster. To verify a workload in another cluster,
-                                      set kubeconfigSecretRef, or check its Argo CD Application
-                                      (health.type: argocd) or Flux Kustomization (health.type: flux) in the
-                                      hub cluster kardinal runs in; see docs/health-adapters.md#remote-clusters.
-                                      It is removed in v0.11.
-                                    type: string
                                   flagger:
                                     description: |-
                                       Flagger overrides the Canary checked by health.type=flagger
@@ -514,18 +502,6 @@ spec:
                               description: Namespace is the object namespace.
                               type: string
                           type: object
-                        cluster:
-                          description: |-
-                            Cluster is not supported: use kubeconfigSecretRef. A non-empty value sets
-                            the Pipeline Ready=False (reason NotImplemented) and fails the
-                            PromotionStep with "health.cluster is not supported".
-
-                            Deprecated: remove cluster. To verify a workload in another cluster,
-                            set kubeconfigSecretRef, or check its Argo CD Application
-                            (health.type: argocd) or Flux Kustomization (health.type: flux) in the
-                            hub cluster kardinal runs in; see docs/health-adapters.md#remote-clusters.
-                            It is removed in v0.11.
-                          type: string
                         flagger:
                           description: |-
                             Flagger overrides the Canary checked by health.type=flagger
@@ -869,38 +845,6 @@ spec:
                           maxLength: 1024
                           type: string
                       type: object
-                    promotionTemplate:
-                      description: |-
-                        PromotionTemplate is deprecated and not supported. The API server rejects a Pipeline that sets it, and so do Graph
-                        translation and "kardinal validate".
-
-                        Deprecated: remove it; every environment runs the default step sequence.
-                        See docs/pipeline-reference.md#promotion-steps.
-                        It is removed in v0.11.
-                      properties:
-                        name:
-                          description: Name is the name of a PromotionTemplate.
-                          minLength: 1
-                          type: string
-                        namespace:
-                          description: Namespace is the namespace of the PromotionTemplate.
-                          type: string
-                      required:
-                      - name
-                      type: object
-                    regions:
-                      description: |-
-                        Regions is not supported: every region would edit the same path and push
-                        the same branch. With two or more regions the Pipeline is Ready=False
-                        (reason NotImplemented) and every Bundle fails when its Graph is built
-                        with "regions is not supported". One region has no effect.
-
-                        Deprecated: declare one environment per region (prod-us, prod-eu) and
-                        use wave.
-                        It is removed in v0.11.
-                      items:
-                        type: string
-                      type: array
                     render:
                       description: 'Render configures layout: branch.'
                       properties:
@@ -954,17 +898,6 @@ spec:
                           - overwrite
                           type: string
                       type: object
-                    shard:
-                      description: |-
-                        Shard is deprecated and not supported. A non-empty value sets the
-                        Pipeline Ready=False (reason NotImplemented) and fails the environment's
-                        PromotionSteps with "shard is not supported".
-
-                        Deprecated: remove shard; the controller reconciles every environment.
-                        For workloads in other clusters, use health.kubeconfigSecretRef or the
-                        Argo CD or Flux hub (see docs/health-adapters.md#remote-clusters).
-                        It is removed in v0.11.
-                      type: string
                     stepTimeoutSeconds:
                       description: |-
                         StepTimeoutSeconds is the maximum number of seconds a single promotion
@@ -978,65 +911,6 @@ spec:
                         git-clone against a slow SCM host can block the reconciler indefinitely.
                       minimum: 1
                       type: integer
-                    steps:
-                      description: |-
-                        Steps is not supported. kardinal has no custom step engine: every
-                        environment runs the default step sequence (see DefaultSequenceForBundle).
-                        The API server rejects a Pipeline that sets it, and so do Graph
-                        translation and "kardinal validate".
-
-                        Deprecated: remove it; the step sequence follows the Bundle type,
-                        update.strategy, approval and layout. See docs/pipeline-reference.md#promotion-steps.
-                        It is removed in v0.11.
-                      items:
-                        description: |-
-                          StepSpec is the shape of the deprecated spec.environments[].steps field. A
-                          Pipeline that sets steps is rejected; see EnvironmentSpec.Steps.
-                        properties:
-                          uses:
-                            description: Uses names a step.
-                            minLength: 1
-                            type: string
-                          webhook:
-                            description: 'Webhook is deprecated: nothing reads this
-                              field.'
-                            properties:
-                              secretRef:
-                                description: |-
-                                  SecretRef references a Kubernetes Secret whose "Authorization" key is
-                                  sent as the Authorization header.
-                                properties:
-                                  name:
-                                    description: Name is the Secret name.
-                                    minLength: 1
-                                    type: string
-                                  namespace:
-                                    description: |-
-                                      Namespace is the Secret namespace. If empty, the Pipeline's namespace is used.
-                                      For spec.git.secretRef it must be empty or equal to the Pipeline's namespace:
-                                      the controller refuses to read a Secret from another namespace and fails the
-                                      PromotionStep with a clear message, so a Pipeline author cannot borrow another
-                                      team's credentials.
-                                    type: string
-                                required:
-                                - name
-                                type: object
-                              timeoutSeconds:
-                                default: 300
-                                description: TimeoutSeconds is the per-call timeout.
-                                  Defaults to 300.
-                                type: integer
-                              url:
-                                description: URL is the HTTP(S) endpoint to POST to.
-                                minLength: 1
-                                type: string
-                            required:
-                            - url
-                            type: object
-                        required:
-                        - uses
-                        type: object
-                      type: array
                     update:
                       description: Update holds the manifest update configuration
                         for this environment.
@@ -1307,14 +1181,6 @@ spec:
                       it (automatic rollback is configured with onHealthFailure, see
                       docs/rollback.md)
                     rule: '!has(self.autoRollback)'
-                  - message: 'environments[].steps is not supported: kardinal has
-                      no custom step engine and every environment runs the default
-                      step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)'
-                    rule: '!has(self.steps) || size(self.steps) == 0'
-                  - message: 'environments[].promotionTemplate is deprecated and not
-                      supported: every environment runs the default step sequence;
-                      remove it (see docs/pipeline-reference.md#promotion-steps)'
-                    rule: '!has(self.promotionTemplate)'
                   - message: 'reserved environment name: the name becomes a kro Graph
                       node ID; bundle, time, kro reserved IDs (spec, status, metadata,
                       graph, self, each, item, ...) and CEL keywords are not allowed;
@@ -1350,18 +1216,6 @@ spec:
                     enum:
                     - directory
                     - branch
-                    type: string
-                  provider:
-                    description: |-
-                      Provider is ignored: the controller's --scm-provider flag, or
-                      spec.git.providerRef, selects the provider.
-
-                      Deprecated: ignored; the controller's --scm-provider flag, or spec.git.providerRef,
-                      selects the provider.
-                      It is removed in v0.11.
-                    enum:
-                    - github
-                    - gitlab
                     type: string
                   providerRef:
                     description: |-
@@ -1693,34 +1547,6 @@ spec:
                 description: Paused suspends all promotions in this pipeline when
                   true.
                 type: boolean
-              policyGates:
-                description: |-
-                  PolicyGates is not implemented, and the API server rejects a non-empty
-                  list. Org gates apply through the kardinal.io/applies-to label.
-
-                  Deprecated: remove the field; label org PolicyGates with
-                  kardinal.io/applies-to instead.
-                  It is removed in v0.11.
-                items:
-                  description: |-
-                    PipelinePolicyGateRef is a reference to a PolicyGate that must pass before
-                    any promotion in this pipeline can proceed.
-                  properties:
-                    name:
-                      description: Name is the PolicyGate resource name.
-                      minLength: 1
-                      type: string
-                    namespace:
-                      description: Namespace is the PolicyGate resource namespace.
-                      type: string
-                  required:
-                  - name
-                  type: object
-                type: array
-                x-kubernetes-validations:
-                - message: spec.policyGates is not implemented; remove it (org gates
-                    use the kardinal.io/applies-to label)
-                  rule: size(self) == 0
               policyNamespaces:
                 description: |-
                   PolicyNamespaces lists extra namespaces to read PolicyGates from. It only
@@ -2013,18 +1839,6 @@ spec:
                                     description: Namespace is the object namespace.
                                     type: string
                                 type: object
-                              cluster:
-                                description: |-
-                                  Cluster is not supported: use kubeconfigSecretRef. A non-empty value sets
-                                  the Pipeline Ready=False (reason NotImplemented) and fails the
-                                  PromotionStep with "health.cluster is not supported".
-
-                                  Deprecated: remove cluster. To verify a workload in another cluster,
-                                  set kubeconfigSecretRef, or check its Argo CD Application
-                                  (health.type: argocd) or Flux Kustomization (health.type: flux) in the
-                                  hub cluster kardinal runs in; see docs/health-adapters.md#remote-clusters.
-                                  It is removed in v0.11.
-                                type: string
                               flagger:
                                 description: |-
                                   Flagger overrides the Canary checked by health.type=flagger

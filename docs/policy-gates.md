@@ -151,13 +151,6 @@ Limits:
   `recheckInterval` after the skew has passed). If the controller's clock is ahead, a result up to
   the skew old is accepted. Keep node clocks synchronized. This effect is not covered by tests.
 
-### `when` field (deprecated)
-
-`spec.when` has no effect and is deprecated: `pre-deploy` and `post-deploy` behave the same, and
-every gate is re-checked before its step starts, as described above. The field keeps its values and
-its default (`post-deploy`), so existing manifests still apply. `kardinal validate` warns when it is
-set. Remove it from your gates.
-
 **Example: block prod deployments when staging error rate is high**
 
 ```yaml
