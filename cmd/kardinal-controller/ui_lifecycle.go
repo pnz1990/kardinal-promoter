@@ -437,22 +437,30 @@ type actionAuthorizer interface {
 	Privileged() client.Client
 }
 
-// actionClient returns the client to write the named object with for an
+// actionClient returns the client, with fresh Gets (freshGets), to write the named object with for an
 // action the caller asked for. In TokenReview mode it checks that the
 // caller may perform the action, the virtual subresource resource/action
 // (pipelines/pause, policygates/override), and returns the controller's
 // client: the caller does not need update on the whole object, and the
 // handler records the caller as the requester. Otherwise (no auth mode, the
 // shared token) it returns the handler's client.
+//
+// With --watch-namespace an action outside that namespace is refused before
+// any read: the client returned reads the API server uncached and, in
+// TokenReview mode, as the controller, so it must not reach beyond the
+// namespace the controller watches.
 func (s *uiAPIServer) actionClient(ctx context.Context, resource, action, namespace, name string) (client.Client, error) {
+	if s.scopeNamespace != "" && namespace != s.scopeNamespace {
+		return nil, fmt.Errorf("the controller watches namespace %s only, not %q: %w", s.scopeNamespace, namespace, lifecycle.ErrInvalid)
+	}
 	az, ok := s.client.(actionAuthorizer)
 	if !ok {
-		return s.client, nil
+		return s.fresh(s.client), nil
 	}
 	if err := az.AuthorizeAction(ctx, "update", "kardinal.io", resource, action, namespace, name); err != nil {
 		return nil, err
 	}
-	return az.Privileged(), nil
+	return s.fresh(az.Privileged()), nil
 }
 
 // handleReject handles POST /api/v1/ui/reject: it sets spec.rejected on the

@@ -521,16 +521,15 @@ func TestPipeline_GitSecretNotReferenceable(t *testing.T) {
 func TestPipeline_FailedVersionIsVisible(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
-	ctx := context.Background()
 	a := newArgoApp(t, e, "test")
 	a.apply(t, a.pipeline(nil))
 	first := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	e.WaitBundlePhase(t, a.ns, first, "Verified", promoteTimeout)
 
-	var p v1alpha1.Pipeline
-	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &p))
-	p.Spec.Environments[0].Verification = &v1alpha1.VerificationSpec{AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "smoke"}}}
-	require.NoError(t, e.Client.Update(ctx, &p))
+	// Retried on conflicts: the controller writes the Pipeline's status.
+	a.updatePipeline(t, pipelineName, func(p *v1alpha1.Pipeline) {
+		p.Spec.Environments[0].Verification = &v1alpha1.VerificationSpec{AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "smoke"}}}
+	})
 	failed := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
 	e.WaitBundle(t, a.ns, failed, time.Minute, "Failed with GraphBuildFailed", failedWith("GraphBuildFailed", "AnalysisRun is not served"))
 
@@ -558,9 +557,7 @@ func TestPipeline_FailedVersionIsVisible(t *testing.T) {
 
 	// Fix the Pipeline: the version is retried, goes live, and the failure
 	// is gone.
-	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &p))
-	p.Spec.Environments[0].Verification = nil
-	require.NoError(t, e.Client.Update(ctx, &p))
+	a.updatePipeline(t, pipelineName, func(p *v1alpha1.Pipeline) { p.Spec.Environments[0].Verification = nil })
 	e.WaitBundlePhase(t, a.ns, failed, "Verified", promoteTimeout)
 	waitPipeline(t, e, a.ns, pipelineName, time.Minute, "status.failedVersion cleared", func(p *v1alpha1.Pipeline) (bool, string) {
 		return p.Status.FailedVersion == nil && p.Status.Summary == fixtures.V3+" live in test", fmt.Sprintf("failedVersion %+v, summary %q", p.Status.FailedVersion, p.Status.Summary)

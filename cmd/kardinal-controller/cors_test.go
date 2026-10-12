@@ -193,7 +193,7 @@ func TestUIHandler_DNSRebinding(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
 		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"}},
 	).Build()
-	h := newUIHandler(c, nil, uiAuthConfig{}, "", nil, zerolog.Nop())
+	h := newUIHandler(c, nil, nil, uiAuthConfig{}, "", nil, zerolog.Nop())
 
 	req := httptest.NewRequest(http.MethodPost, "http://evil.example:8082/api/v1/ui/pause",
 		strings.NewReader(`{"pipeline":"app"}`))
@@ -222,7 +222,7 @@ func TestUIHandler_DNSRebindingReads(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
 		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"}},
 	).Build()
-	h := newUIHandler(c, nil, uiAuthConfig{}, "", nil, zerolog.Nop())
+	h := newUIHandler(c, nil, nil, uiAuthConfig{}, "", nil, zerolog.Nop())
 
 	tests := []struct {
 		name     string

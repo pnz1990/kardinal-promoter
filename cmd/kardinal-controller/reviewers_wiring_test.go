@@ -54,7 +54,7 @@ func TestReviewers_RateLimitIsWiredAndShared(t *testing.T) {
 	review := reviewOptions{audiences: []string{uiauth.DefaultAudience}, shared: &sharedReviewers{}}
 	auth, err := buildUIAuth(cfg, uiAuthFlags{tokenReview: true, review: review})
 	require.NoError(t, err)
-	ui := newUIHandler(bundleAPIClient(), nil, auth, "", nil, zerolog.Nop())
+	ui := newUIHandler(bundleAPIClient(), nil, nil, auth, "", nil, zerolog.Nop())
 	tokens, access, _, err := newReviewers(cfg, review)
 	require.NoError(t, err)
 	assert.Same(t, auth.tokens, tokens, "one reviewer for both APIs")
@@ -135,7 +135,7 @@ func TestReviewers_AccessFloodLeavesOthersAlone(t *testing.T) {
 	review := reviewOptions{audiences: []string{uiauth.DefaultAudience}, shared: &sharedReviewers{}}
 	auth, err := buildUIAuth(cfg, uiAuthFlags{tokenReview: true, review: review})
 	require.NoError(t, err)
-	ui := newUIHandler(bundleAPIClient(), nil, auth, "", nil, zerolog.Nop())
+	ui := newUIHandler(bundleAPIClient(), nil, nil, auth, "", nil, zerolog.Nop())
 	tokens, access, _, err := newReviewers(cfg, review)
 	require.NoError(t, err)
 	bundles := newBundleAPIServer(bundleAPIClient(), "", "default")

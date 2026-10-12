@@ -52,7 +52,7 @@ func TestAccessLog_UIAPI(t *testing.T) {
 	}}
 	var buf bytes.Buffer
 	log := accesslog.New(accesslog.Config{}, zerolog.New(&buf))
-	h := log.Middleware("ui", newUIHandler(c, nil, uiAuthConfig{
+	h := log.Middleware("ui", newUIHandler(c, nil, nil, uiAuthConfig{
 		tokens: uiauth.NewCachedTokenReviewer(tokens, time.Minute), access: access}, "", nil, zerolog.Nop()))
 
 	require.Equal(t, http.StatusOK, uiAuthDo(t, h, http.MethodGet, "/api/v1/ui/pipelines", "Bearer deployer-s3cret", "").Code)
