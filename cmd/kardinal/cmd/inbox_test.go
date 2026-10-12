@@ -93,7 +93,7 @@ func inboxObjects() []sigs_client.Object {
 	sub := pipe("feed", "default", wait("prod", "feed-b", "0.1.0", 8, "cab"))
 	// A version inbox cannot read (deleted, or no get on Bundles): who
 	// created it is unknown, not absent.
-	ghost := pipe("ghost", "default", wait("prod", "ghost-b", "", 7, "cab"))
+	ghost := pipe("ghost", "default", wait("prod", "ghost-b", "", 7, "cab"), wait("dr", "ghost-b", "", 7, "cab"))
 	// More than 100 Approvals, and excludeAuthor held with a reject: no one
 	// can give them (held wins over rejected, as the reconciler decides).
 	many := pipe("many", "default", wait("prod", "many-b", "4.0.0", 6, "cab"), wait("dr", "many-b", "4.0.0", 4, "author"))
@@ -130,6 +130,8 @@ func inboxObjects() []sigs_client.Object {
 		gate("default", "auth", "auth-b", "dr", "author", "true", &v1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}),
 		gate("default", "feed", "feed-b", "prod", "cab", "true", &v1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}),
 		ghost, gate("default", "ghost", "ghost-b", "prod", "cab", "true", &v1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}),
+		// Not read, and rejected: left out, as a rejected gate is.
+		gate("default", "ghost", "ghost-b", "dr", "cab", "true", &v1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}, reject("carol")),
 		many, bundle("many-b", "default", "4.0.0", ""),
 		gate("default", "many", "many-b", "prod", "cab", "true", &v1alpha1.GateApprovalPolicy{Required: 1}, flood...),
 		gate("default", "many", "many-b", "dr", "author", "true", &v1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}, reject("carol")),

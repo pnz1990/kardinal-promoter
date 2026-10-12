@@ -109,7 +109,8 @@ applied it; without it, only the version quickstart shipped (label `kardinal.io/
 Then it deletes the Pipeline `demo`, the gate `prod-approval` and the ApplicationSet
 `kardinal-test-app` (Argo CD deletes its Applications), each only if quickstart applied it, and
 the Secret `github-token` only if quickstart created it (label `kardinal.io/quickstart`; a
-`github-token` you made yourself is kept) and no other Pipeline uses it. It prints one line per
+`github-token` you made yourself is kept) and no other Pipeline uses it. Do not add the
+`kardinal.io/quickstart` label to anything by hand: `--delete` deletes what carries it. It prints one line per
 object:
 
 ```
