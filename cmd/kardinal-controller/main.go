@@ -1059,7 +1059,7 @@ func main() {
 		bundleAPI.onlyNamespace = watchNamespace
 		bundleAPI.reader = mgr.GetAPIReader()
 		if bundleTokenReviewAuth {
-			tokens, access, err := newReviewers(mgr.GetConfig(), review)
+			tokens, access, _, err := newReviewers(mgr.GetConfig(), review)
 			if err != nil {
 				logger.Fatal().Err(err).Msg("bundle API TokenReview auth")
 			}

@@ -138,6 +138,15 @@ var apiRoutes = []apiRoute{
 	{method: "POST", path: "/api/v1/ui/resume", server: serverUI, tag: "UI", id: "resumePipeline",
 		summary: "Resume a paused Pipeline (kardinal resume)",
 		request: uiPipelineActionRequest{}, status: 200, response: uiMessageResponse{}, errors: []int{400, 401, 403, 404, 500}, security: "uiAuth"},
+	{method: "POST", path: "/api/v1/ui/access", server: serverUI, tag: "UI", id: "checkAccess",
+		summary: "Which of the given actions the caller may take, and which role grants each",
+		desc: "Answers only for the UI's actions (create bundles, create approvals, update policygates/override, pipelines/pause, " +
+			"pipelines/hold, bundles/reject), in a DNS-1123 namespace (the --watch-namespace one when set) with DNS-1123 names; at most " +
+			"32 checks in 16 KiB, each distinct check reviewed once. In TokenReview mode each check is a SubjectAccessReview for the " +
+			"verified caller, cached for 30s and limited per user and in total, for this endpoint only (429 past either, saying which); " +
+			"a denial is an answer (allowed: false), not a 403. " +
+			"Without TokenReview every check is allowed and no user is named, except create approvals (an approval names who decided).",
+		request: uiAccessRequest{}, status: 200, response: uiAccessResponse{}, errors: []int{400, 401, 429, 503}, security: "uiAuth"},
 	{method: "POST", path: "/api/v1/ui/validate-cel", server: serverUI, tag: "UI", id: "validateCEL",
 		summary: "Compile a PolicyGate CEL expression",
 		request: uiValidateCELRequest{}, status: 200, response: uiValidateCELResponse{}, errors: []int{400, 401}, security: "uiAuth"},
@@ -588,6 +597,7 @@ func TestOpenAPIRoutesSucceed(t *testing.T) {
 		"releaseHold":             {"/api/v1/ui/release-hold", `{"pipeline":"app","environment":"test"}`},
 		"resumePipeline":          {"/api/v1/ui/resume", `{"pipeline":"app"}`},
 		"validateCEL":             {"/api/v1/ui/validate-cel", `{"expression":"true"}`},
+		"checkAccess":             {"/api/v1/ui/access", `{"checks":[{"verb":"create","resource":"bundles"}]}`},
 		"listStepEvents":          {"/api/v1/ui/steps/default/app-v1-prod/events", ""},
 		"createBundle":            {"/api/v1/bundles", `{"pipeline":"app","type":"image","images":[{"repository":"r","tag":"1"}]}`},
 		"webhookHealth":           {"/webhook/scm/health", ""},

@@ -16,7 +16,7 @@
 // FR-506-04: Confirmation dialog before the action runs.
 // FR-506-05: Inline error display (not just a toast).
 // Rollback lives on the lane and in NodeDetail, next to the environment it acts on.
-import { useState, useCallback } from 'react'
+import { useId, useState, useCallback } from 'react'
 import { api } from '../api/client'
 import { ConfirmDialog, actionErrorMessage } from './ConfirmDialog'
 import { Button } from '../ui/Button'
@@ -33,6 +33,8 @@ interface ActionBarProps {
   paused: boolean
   /** Called after a successful pause/resume — triggers a re-poll. */
   onRefresh: () => void
+  /** Why the caller may not pause or resume (U7: the role that grants it); the button is then inert. */
+  restricted?: string
 }
 
 type PendingAction = 'pause' | 'resume' | null
@@ -42,7 +44,8 @@ type PendingAction = 'pause' | 'resume' | null
  * Confirmation dialogs are shown for destructive actions.
  * Inline error messages are shown next to the button on failure.
  */
-export function ActionBar({ pipelineName, namespace, paused, onRefresh }: ActionBarProps) {
+export function ActionBar({ pipelineName, namespace, paused, onRefresh, restricted }: ActionBarProps) {
+  const restrictedId = useId()
   const [pendingAction, setPendingAction] = useState<PendingAction>(null)
   const [actionLoading, setActionLoading] = useState(false)
   const [actionError, setActionError] = useState<string | undefined>()
@@ -78,7 +81,10 @@ export function ActionBar({ pipelineName, namespace, paused, onRefresh }: Action
           <Button
             variant="primary"
             icon="play"
-            onClick={() => { setActionError(undefined); setPendingAction('resume') }}
+            onClick={() => { if (restricted) return; setActionError(undefined); setPendingAction('resume') }}
+            aria-disabled={restricted ? true : undefined}
+            title={restricted}
+            aria-describedby={restricted ? restrictedId : undefined}
             aria-label="Resume pipeline"
           >
             Resume
@@ -87,13 +93,17 @@ export function ActionBar({ pipelineName, namespace, paused, onRefresh }: Action
           <Button
             variant="secondary"
             icon="pause"
-            onClick={() => { setActionError(undefined); setPendingAction('pause') }}
+            onClick={() => { if (restricted) return; setActionError(undefined); setPendingAction('pause') }}
+            aria-disabled={restricted ? true : undefined}
+            title={restricted}
+            aria-describedby={restricted ? restrictedId : undefined}
             aria-label="Pause pipeline"
           >
             Pause
           </Button>
         )}
 
+        {restricted && <span id={restrictedId} className="sr-only">{restricted}</span>}
         {/* While a dialog is open the error shows inside it; one alert, not two. */}
         {actionError && pendingAction === null && (
           <span

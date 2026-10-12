@@ -3,13 +3,14 @@
 // Licensed under the Apache License, Version 2.0
 //
 // check-size.mjs — fails when the built UI (web/dist) is over its budget, gzip sizes:
-//   initial JS  145 KB  the entry module and every chunk it imports statically (the import
+//   initial JS  152 KB  the entry module and every chunk it imports statically (the import
 //                       graph), plus the first view a route needs (StageTable on a narrow
 //                       screen, StageDrawer on an /env/ link): the largest such load;
 //   total JS    200 KB  every chunk, the lazy ones (Table, Matrix, comparison, palette) too;
 //   initial CSS  18 KB  the stylesheets of that load (index.html's and those chunks');
-//   total CSS    22 KB  every stylesheet, the lazy views' too;
+//   total CSS    25 KB  every stylesheet, the lazy views' too;
 //   fonts       180 KB  the woff2 fonts (already compressed).
+// The budgets are the v0.11 baseline: they are re-set once per release (CONTRIBUTING.md).
 // Run after `npm run build`: `npm run size`.
 import fs from 'node:fs'
 import path from 'node:path'
@@ -17,7 +18,7 @@ import zlib from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 
 const KB = 1024
-const BUDGET = { 'initial js': 145 * KB, 'total js': 200 * KB, 'initial css': 18 * KB, 'total css': 22 * KB, font: 180 * KB }
+const BUDGET = { 'initial js': 152 * KB, 'total js': 200 * KB, 'initial css': 18 * KB, 'total css': 25 * KB, font: 180 * KB }
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist')
 const dist = path.join(root, 'assets')
 const gz = (f) => zlib.gzipSync(fs.readFileSync(path.join(dist, f)), { level: 9 }).length

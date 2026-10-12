@@ -14,7 +14,7 @@
 // Regression tests for C07-controller-06 / C10a-web-03 / C10b-web-03: the
 // client never sent Authorization, so enabling UI auth broke every call.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api, setTokenPrompt, TOKEN_STORAGE_KEY, type TokenPromptReason } from './client'
+import { api, setTokenPrompt, TOKEN_CHANGE_EVENT, TOKEN_STORAGE_KEY, type TokenPromptReason } from './client'
 
 /** A fake controller: accepts only `valid` tokens (all tokens when `valid` is empty). */
 function fakeServer(valid: string[], status401 = 401) {
@@ -69,6 +69,17 @@ describe('api client auth', () => {
     expect(prompt).toHaveBeenCalledWith('required')
     expect(calls.map(c => c.auth)).toEqual([undefined, 'Bearer good'])
     expect(sessionStorage.getItem(TOKEN_STORAGE_KEY)).toBe('good')
+  })
+
+  it('tells the page when the token changes, so answers for the old user are dropped (U7)', async () => {
+    sessionStorage.setItem(TOKEN_STORAGE_KEY, 'expired')
+    fakeServer(['fresh'])
+    const changed = vi.fn()
+    window.addEventListener(TOKEN_CHANGE_EVENT, changed)
+    unregister = setTokenPrompt(async () => 'fresh')
+    await api.listPipelines()
+    window.removeEventListener(TOKEN_CHANGE_EVENT, changed)
+    expect(changed).toHaveBeenCalled()
   })
 
   it('drops a rejected token and asks again with reason "rejected"', async () => {

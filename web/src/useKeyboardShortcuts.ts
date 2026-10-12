@@ -8,6 +8,9 @@
 //   r    trigger a manual data refresh
 //   Esc  close the currently open side panel (node detail or bundle diff)
 //   /    focus the pipeline search input (#800)
+//   j k  next / previous environment (on #/approvals: next / previous approval) (U7)
+//   a    approve: the open environment's approval, or the approval in focus (U7)
+//   s    ship a version of the open pipeline (U7)
 //
 // All shortcuts are suppressed when an input, textarea, select or
 // contenteditable element has focus, when Ctrl/Cmd/Alt is held (so browser
@@ -17,7 +20,7 @@
 import { useEffect, useCallback } from 'react'
 
 /** Returns true when the event target is a form field or editable element. */
-function isInputFocused(e: KeyboardEvent): boolean {
+export function isInputFocused(e: KeyboardEvent): boolean {
   const target = e.target as HTMLElement | null
   if (!target) return false
   const tag = (target.tagName ?? '').toLowerCase()
@@ -27,7 +30,7 @@ function isInputFocused(e: KeyboardEvent): boolean {
 }
 
 /** Returns true while an aria-modal dialog is on screen. */
-function isModalOpen(): boolean {
+export function isModalOpen(): boolean {
   return document.querySelector('[aria-modal="true"]') !== null
 }
 
@@ -42,6 +45,14 @@ export interface KeyboardShortcutHandlers {
   onSearch?: () => void
   /** Called on ⌘K / Ctrl+K (open the command palette), also from a form field. */
   onPalette?: () => void
+  /** j: the next environment (or approval). U7 */
+  onNext?: () => void
+  /** k: the previous environment (or approval). U7 */
+  onPrevious?: () => void
+  /** a: approve. U7 */
+  onApprove?: () => void
+  /** s: ship a version. U7 */
+  onShip?: () => void
 }
 
 /**
@@ -52,7 +63,7 @@ export interface KeyboardShortcutHandlers {
  * handles its own Esc (PipelineList's search box clears its filter).
  */
 export function useKeyboardShortcuts(handlers: KeyboardShortcutHandlers): void {
-  const { onHelp, onRefresh, onEscape, onSearch, onPalette } = handlers
+  const { onHelp, onRefresh, onEscape, onSearch, onPalette, onNext, onPrevious, onApprove, onShip } = handlers
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -80,6 +91,17 @@ export function useKeyboardShortcuts(handlers: KeyboardShortcutHandlers): void {
         case 'Escape':
           onEscape()
           break
+        case 'j':
+        case 'k':
+        case 'a':
+        case 's': {
+          const run = { j: onNext, k: onPrevious, a: onApprove, s: onShip }[e.key]
+          if (run) {
+            e.preventDefault()
+            run()
+          }
+          break
+        }
         case '/':
           // #800: focus the pipeline search input
           if (onSearch) {
@@ -89,7 +111,7 @@ export function useKeyboardShortcuts(handlers: KeyboardShortcutHandlers): void {
           break
       }
     },
-    [onHelp, onRefresh, onEscape, onSearch, onPalette],
+    [onHelp, onRefresh, onEscape, onSearch, onPalette, onNext, onPrevious, onApprove, onShip],
   )
 
   useEffect(() => {
