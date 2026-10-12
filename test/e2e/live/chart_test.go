@@ -608,43 +608,41 @@ func TestChart_ScheduleClock(t *testing.T) {
 	assert.True(t, apierrors.IsNotFound(err), "scheduleClock.enabled=false removes kardinal-clock: %v", err)
 }
 
-// TestChart_DeprecatedValues checks the two deprecated values do nothing:
-// setting them renders the same manifest, the release has exactly the
-// ValidatingAdmissionPolicies and bindings the chart always ships (none from
-// validatingAdmissionPolicy.enabled), and the controller's Job permissions
-// are the hooks' (create, get, delete; never patch), whatever
-// rbac.integrationTestJobs says.
+// TestChart_RemovedValues checks the values v0.11.0 removed:
+// validatingAdmissionPolicy.enabled and rbac.integrationTestJobs fail the
+// values schema, so an upgrade that still sets them stops before it changes
+// anything. Without them the release has exactly the
+// ValidatingAdmissionPolicies and bindings the chart always ships, and the
+// controller's Job permissions are the hooks' (create, get, delete; never
+// patch).
 //
-// Covers CHART-INTEGJOBS-01, CHART-VAP-01.
-func TestChart_DeprecatedValues(t *testing.T) {
+// Covers CHART-REMOVED-VALUES-01.
+func TestChart_RemovedValues(t *testing.T) {
 	t.Parallel()
 	namespaceScoped(t)
 	e := framework.New(t)
 	ns := e.Namespace(t)
 	ctx := context.Background()
 
-	r := e.InstallChart(t, releaseName(ns), ns, nsValues(ns, framework.Values{
-		"validatingAdmissionPolicy": framework.Values{"enabled": true},
-		"rbac":                      framework.Values{"integrationTestJobs": false},
-	}))
-	before := r.Deployment(t).Generation
-	r.Upgrade(t, nsValues(ns, framework.Values{
-		"validatingAdmissionPolicy": framework.Values{"enabled": false},
-		"rbac":                      framework.Values{"integrationTestJobs": true},
-	}))
-	assert.Equal(t, r.Manifest(t, 1), r.Manifest(t, 2), "the values change nothing the chart renders")
-	assert.Equal(t, before, r.Deployment(t).Generation, "the controller is not restarted")
+	for key, values := range map[string]framework.Values{
+		"validatingAdmissionPolicy": {"validatingAdmissionPolicy": framework.Values{"enabled": true}},
+		"integrationTestJobs":       {"rbac": framework.Values{"integrationTestJobs": true}},
+	} {
+		_, out, err := e.TryInstallChart(t, releaseName(ns), ns, nsValues(ns, values), false)
+		require.Error(t, err, "%s: the values schema refuses it", key)
+		assert.Regexp(t, `additional properties '`+key+`' not allowed|Additional property `+key+` is not allowed`, out, key)
+	}
+
+	r := e.InstallChart(t, releaseName(ns), ns, nsValues(ns, nil))
 	runningPod(t, r)
 
 	sel := metav1.ListOptions{LabelSelector: "app.kubernetes.io/instance=" + r.Name}
-	// The removed value controlled the CRD validation policies only. The
-	// chart always ships its own policies (identity, graph-objects,
+	// The chart ships its own policies (identity, graph-objects,
 	// hold-writes; #1503, #1510, #1528, #1544): the release's policies and
-	// bindings are exactly those its manifest renders, the same with the
-	// value on and off (#1595).
+	// bindings are exactly those its manifest renders (#1595).
 	shipped := func(kind string) []string {
 		var names []string
-		for _, doc := range strings.Split(r.Manifest(t, 2), "\n---") {
+		for _, doc := range strings.Split(r.Manifest(t, 1), "\n---") {
 			var o struct {
 				Kind     string `json:"kind"`
 				Metadata struct {
@@ -663,8 +661,7 @@ func TestChart_DeprecatedValues(t *testing.T) {
 	for _, v := range vaps.Items {
 		vapNames = append(vapNames, v.Name)
 	}
-	assert.ElementsMatch(t, shipped("ValidatingAdmissionPolicy"), vapNames,
-		"validatingAdmissionPolicy.enabled creates no policy beyond the ones the chart always ships")
+	assert.ElementsMatch(t, shipped("ValidatingAdmissionPolicy"), vapNames, "no policy beyond the ones the chart ships")
 	bindings, err := e.Kube.AdmissionregistrationV1().ValidatingAdmissionPolicyBindings().List(ctx, sel)
 	require.NoError(t, err)
 	var bindingNames []string
@@ -672,8 +669,8 @@ func TestChart_DeprecatedValues(t *testing.T) {
 		bindingNames = append(bindingNames, b.Name)
 	}
 	assert.ElementsMatch(t, shipped("ValidatingAdmissionPolicyBinding"), bindingNames)
-	// The names the removed template gave its policies and bindings, in
-	// case one is created without the instance label.
+	// The CRD validation policies of v0.8.1's chart are not created, in case
+	// one is made without the instance label.
 	for _, name := range []string{"kardinal-policygate-validation", "kardinal-pipeline-validation", "kardinal-bundle-validation"} {
 		_, err := e.Kube.AdmissionregistrationV1().ValidatingAdmissionPolicies().Get(ctx, name, metav1.GetOptions{})
 		assert.True(t, apierrors.IsNotFound(err), "ValidatingAdmissionPolicy %s: %v", name, err)
@@ -2380,7 +2377,8 @@ func TestChart_Demo(t *testing.T) {
 
 	// demo.secretRef: a Secret whose token the git server refuses stops the
 	// push; the real token in the same Secret lets the same Bundle land.
-	secret(t, e, ns, "demo-git", "token", randomHex(t, 20))
+	require.NoError(t, e.Client.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "demo-git",
+		Labels: map[string]string{"kardinal.io/referenceable": "true"}}, Data: map[string][]byte{"token": []byte(randomHex(t, 20))}}))
 	r.Upgrade(t, demo(framework.Values{"secretRef": framework.Values{"name": "demo-git"}}))
 	require.NoError(t, e.Client.Get(ctx, key, &p))
 	require.NotNil(t, p.Spec.Git.SecretRef)

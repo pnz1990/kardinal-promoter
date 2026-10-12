@@ -182,6 +182,15 @@ sidebar and the stage drawer; the Bundle name follows it in muted monospace, or 
 where space is short. An environment's or gate's panel has the Kubernetes kind and object
 name under **Kubernetes details**, for `kubectl`.
 
+Each Pipeline has one state, the same in the page header, the sidebar badge, the operations
+table, the fleet board and the health counters: paused, a failed version, held by a gate
+(`Held by gate prod-approval in prod`, from `status.environments`), promoting, no version yet,
+or up to date. Each Pipeline counts in exactly one of Healthy, Blocked, Failed, Promoting and
+Paused (Failed and Paused show when there is one); one with no version yet counts only in the
+total. On the map, the label on an edge names the gate that holds the version first, with its
+state glyph and how many more (`▮ uat-soak +1`); its popover and accessible name say it in
+words (`uat-soak (blocking) · +1 passing`). Durations read `42s`, `4m`, `2h 15m`, `1d 3h` or `4d`.
+
 - **Fleet board** (the start page, and the kardinal logo from anywhere). Each Pipeline is a
   line of stations, one per environment in promotion order; environments promoted in parallel
   are stacked, and five or more of them (a wave) are one plate that names the range, the version

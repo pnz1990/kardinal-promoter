@@ -29,6 +29,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
@@ -52,6 +54,10 @@ const (
 	// no installation token could be minted with them.
 	reasonGitHubAppToken  = "GitHubAppTokenFailed"
 	reasonCredentialFound = "CredentialFound"
+	// reasonSecretNotReferenceable: the git Secret is not labeled
+	// kardinal.io/referenceable=true, so git does not use it (#1506): the
+	// step waits, before any git call, until it is labeled.
+	reasonSecretNotReferenceable = v1alpha1.ReasonSecretNotReferenceable
 )
 
 // gitStepOps names what each step that uses the git token does with it.
@@ -115,6 +121,12 @@ func (r *Reconciler) resolveGitCredential(ctx context.Context, log zerolog.Logge
 				cred.reason = reasonSecretNotFound
 			}
 		}
+		return cred
+	}
+	// Only a Secret its owner marked referenceable is used: a Pipeline
+	// author must not be able to point git at any Secret of the namespace.
+	if secret.Labels[v1alpha1.LabelSecretReferenceable] != "true" {
+		cred.reason = reasonSecretNotReferenceable
 		return cred
 	}
 	cred.sshKey, cred.knownHosts = secret.Data[secretKeySSHPrivateKey], secret.Data[secretKeyKnownHosts]
@@ -196,8 +208,19 @@ func (c gitCredential) note(step string) string {
 		return fmt.Sprintf("git Secret %s could not be read: %v", c.secret, c.readErr)
 	case reasonGitHubAppToken:
 		return fmt.Sprintf("git Secret %s has GitHub App credentials, and no installation token could be minted: %v", c.secret, c.readErr)
+	case reasonSecretNotReferenceable:
+		return c.notReferenceable()
 	}
 	return ""
+}
+
+// notReferenceable says that git does not use c's Secret, and the command
+// that labels it.
+func (c gitCredential) notReferenceable() string {
+	ns, name, _ := strings.Cut(c.secret, "/")
+	return fmt.Sprintf("git Secret %s is not labeled %s=true, so git does not use it; label it: "+
+		"kubectl label secret %s -n %s %s=true", c.secret, v1alpha1.LabelSecretReferenceable, name, ns,
+		v1alpha1.LabelSecretReferenceable)
 }
 
 // waitsForSecret reports whether the step should wait for the credential
@@ -207,10 +230,34 @@ func (c gitCredential) note(step string) string {
 // fixed that way, so its step keeps the retry limit.
 func (c gitCredential) waitsForSecret() bool {
 	switch c.reason {
-	case reasonSecretRefNotSet, reasonSecretNotFound, reasonSecretHasNoToken:
+	case reasonSecretRefNotSet, reasonSecretNotFound, reasonSecretHasNoToken, reasonSecretNotReferenceable:
 		return true
 	}
 	return false
+}
+
+// notReferenceableRecheck is how often a step waiting for its git Secret's
+// label reads the Secret again: Secrets are not watched.
+const notReferenceableRecheck = 30 * time.Second
+
+// waitForReferenceableSecret holds ps, before any git call, while its git
+// Secret is not labeled referenceable: the step's message and
+// ConditionGitCredentialMissing (reason SecretNotReferenceable) say which
+// Secret and the command that labels it, with one Warning Event. The step
+// continues at the first reconcile after the label is added.
+func (r *Reconciler) waitForReferenceableSecret(ctx context.Context, base, ps *v1alpha1.PromotionStep,
+	cred gitCredential) (ctrl.Result, error) {
+	note := cred.notReferenceable()
+	emit := markGitCredentialMissing(ps, cred.reason, note)
+	ps.Status.Message = "waiting for the git Secret: " + note
+	if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("patch step status (git Secret not referenceable): %w", err)
+	}
+	if emit {
+		kubeevent.Emit(r.Recorder, ps, corev1.EventTypeWarning, ConditionGitCredentialMissing, "Promote",
+			fmt.Sprintf("env %s: %s", ps.Spec.Environment, note))
+	}
+	return ctrl.Result{RequeueAfter: notReferenceableRecheck}, nil
 }
 
 // markGitCredentialMissing sets ConditionGitCredentialMissing to True with

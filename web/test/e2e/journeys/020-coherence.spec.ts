@@ -69,4 +69,17 @@ test.describe('Journey 020 — Coherence', () => {
     await page.goto('/ui/#/?view=ops')
     await expect(page.getByRole('row', { name: /kardinal-test-app/ }).locator('.ops-table__bundle')).toHaveText('sha-abc1234')
   })
+
+  test('one state per pipeline: the header, the sidebar badge and the counters agree', async ({ page }) => {
+    await page.goto('/ui/#/p/default/kardinal-test-app')
+    const header = page.getByTestId('pipeline-state')
+    await expect(header).toHaveText(/Held by gate no-weekend-deploys in prod/)
+    const sidebar = page.locator('.app-sidebar [data-category]').first()
+    await expect(sidebar).toHaveAttribute('data-category', 'blocked')
+    await expect(sidebar).toHaveAttribute('title', (await header.textContent())!.replace(/^\W+/, '').trim())
+    await expect(page.getByRole('button', { name: /^0 pipelines currently promoting/ })).toBeVisible()
+    // Following an older version names it by its tag in the breadcrumb.
+    await page.getByRole('toolbar', { name: /^Versions/ }).locator('.bundle-chip').first().click()
+    await expect(page.getByRole('navigation', { name: 'Breadcrumb' })).toContainText('sha-9f8e7d6')
+  })
 })

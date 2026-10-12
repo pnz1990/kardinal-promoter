@@ -13,21 +13,18 @@ test.describe('Journey 003 — Health chip CSS class regression guard (#532)', (
     await expect(page.getByRole('complementary').getByText('kardinal-test-app')).toBeVisible()
   })
 
-  test('Step 1: Ready pipeline shows health-chip--ready class', async ({ page }) => {
-    // kardinal-test-app is in "Ready" phase (all verified)
-    // Find its health chip
-    const chip = page.locator('.health-chip.health-chip--ready').first()
+  // The sidebar shows each pipeline's one state (pipelineState) as a StatusChip whose tone is a
+  // class (k-chip--<tone>), never an inline colour.
+  test('Step 1: a pipeline held by a gate shows the blocked tone class', async ({ page }) => {
+    const chip = page.locator('.app-sidebar [data-category="blocked"]').first()
     await expect(chip).toBeVisible()
+    await expect(chip).toHaveClass(/k-chip--blocked/)
   })
 
-  test('Step 2: Active pipeline shows a health-chip state class', async ({ page }) => {
-    // payments-service has "Unknown" phase → mapped to "Promoting" → InProgress
-    // Or has active env states showing Promoting
-    const chip = page.locator('.health-chip').first()
-    await expect(chip).toBeVisible()
-    // At least one chip has a state class
-    const chipClass = await chip.getAttribute('class')
-    expect(chipClass).toContain('health-chip--')
+  test('Step 2: every sidebar state chip carries a tone class', async ({ page }) => {
+    const chips = page.locator('.app-sidebar .k-chip')
+    await expect(chips.first()).toBeVisible()
+    for (const chip of await chips.all()) expect(await chip.getAttribute('class')).toMatch(/k-chip--\w+/)
   })
 
   test('Step 3: Bundle timeline chips carry their phase as a class and data attribute', async ({ page }) => {
@@ -38,8 +35,9 @@ test.describe('Journey 003 — Health chip CSS class regression guard (#532)', (
     await expect(page.locator('[data-bundle-phase="Superseded"]')).toHaveClass(/bundle-chip--superseded/)
   })
 
-  test('Step 4: HealthChip has no inline background-color (CSS class instead)', async ({ page }) => {
-    const chip = page.locator('.health-chip--ready').first()
+  test('Step 4: the sidebar state chip has no inline background-color (CSS class instead)', async ({ page }) => {
+    // The sidebar shows each pipeline's one state (pipelineState) as a StatusChip.
+    const chip = page.locator('.app-sidebar .k-chip').first()
     await expect(chip).toBeVisible()
     // The chip should NOT have background-color inline style (using CSS class instead)
     const style = await chip.getAttribute('style')

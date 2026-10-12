@@ -322,7 +322,7 @@
 .gate-popover__state[data-tone="verified"] { color: var(--k-status-verified-fg); }
 .gate-popover__cel { display: block; font-family: var(--k-font-mono); color: var(--k-syntax-function); margin: var(--k-space-1) 0; }
 .gate-popover__reason { color: var(--k-ink-2); }
-.gate-popover__age, .gate-popover__hint { color: var(--k-ink-3); font-size: var(--k-text-xs); }
+.gate-popover__edge, .gate-popover__age, .gate-popover__hint { color: var(--k-ink-3); font-size: var(--k-text-xs); }
 
 /* Minimap. */
 .station-map__minimap {
@@ -346,20 +346,44 @@
 .minimap__view { fill: none; stroke: var(--k-ink); stroke-width: var(--k-stroke-ring); }
 
 .station-map__zoom { display: none; }
+/* A narrow map (the drawer open at 1280, a phone): the bar responds to the map's own width.
+   Attention takes a row of its own, its items one line each, cut with an ellipsis (the full
+   text is the title); search, View and Zoom follow, each group whole, wrapping as groups. */
 @container map (max-width: 720px) {
+  .station-map__attention { flex: 1 1 100%; flex-wrap: nowrap; overflow: hidden; }
+  .station-map__attention:empty { display: none; }
+  .station-map__eyebrow { flex-shrink: 0; }
+  .station-map__attention-item { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .station-map__search { flex: 1 1 calc(var(--k-space-24) * 1.25); min-width: 0; }
+  .station-map__search input { width: 100%; min-width: 0; }
+  .station-map__bar .segmented { flex-shrink: 0; }
   .station-map__levels { display: none; }
-  .station-map__zoom { display: inline-flex; border: var(--k-border-hairline) solid var(--k-line); border-radius: var(--k-radius-2); overflow: hidden; }
+  .station-map__zoom { display: inline-flex; align-items: center; gap: var(--k-space-1_5); flex-shrink: 0; }
+  .station-map__zoom-label {
+    font-family: var(--k-font-display);
+    font-size: var(--k-text-2xs);
+    font-stretch: var(--k-stretch-label);
+    letter-spacing: var(--k-tracking-caps);
+    text-transform: uppercase;
+    color: var(--k-ink-3);
+  }
   .station-map__zoom button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     min-inline-size: var(--k-space-8);
     min-block-size: var(--k-space-8);
     font: inherit;
     color: var(--k-ink);
     background: var(--k-surface-raised);
-    border: 0;
+    border: var(--k-border-hairline) solid var(--k-line);
     cursor: pointer;
   }
-  .station-map__zoom button + button { border-inline-start: var(--k-border-hairline) solid var(--k-line); }
+  .station-map__zoom-label + button { border-start-start-radius: var(--k-radius-2); border-end-start-radius: var(--k-radius-2); }
+  .station-map__zoom button:last-child { border-start-end-radius: var(--k-radius-2); border-end-end-radius: var(--k-radius-2); }
+  .station-map__zoom button + button { border-inline-start: 0; }
   .station-map__zoom button:focus-visible { outline: var(--k-focus-ring); outline-offset: calc(var(--k-focus-offset) * -1); }
+  .station-map__zoom-icon { inline-size: var(--k-space-4); block-size: var(--k-space-4); fill: none; stroke: currentColor; stroke-width: var(--k-stroke-ring); }
 }
 
 @media (prefers-reduced-motion: reduce) {

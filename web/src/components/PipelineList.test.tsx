@@ -143,10 +143,11 @@ describe('PipelineList — pipeline items', () => {
     expect(item).toHaveAttribute('aria-pressed', 'true')
   })
 
-  it('shows PAUSED badge when pipeline is paused', () => {
+  it('says Paused once for a paused pipeline: its state chip, titled with what it means', () => {
     const pipelines = [makePipeline({ paused: true })]
-    render(<PipelineList pipelines={pipelines} onSelect={vi.fn()} />)
-    expect(screen.getByText('PAUSED')).toBeInTheDocument()
+    const { container } = render(<PipelineList pipelines={pipelines} onSelect={vi.fn()} />)
+    expect(screen.getByTitle('Pipeline is paused — no new promotions will start')).toHaveTextContent(/Paused$/)
+    expect(container.textContent?.match(/paused/gi)).toHaveLength(1)
   })
 
   it('shows environment count', () => {
@@ -159,16 +160,16 @@ describe('PipelineList — pipeline items', () => {
   // pipeline that a PolicyGate holds reads "Blocked", in the amber of the
   // fleet bar's Blocked badge.
   it.each<[string, Partial<Pipeline>, string, string]>([
-    ['no bundle yet', { phase: 'Unknown' }, 'No version yet', 'Unknown'],
-    ['a bundle promoting', { phase: 'Promoting' }, 'Promoting', 'InProgress'],
-    ['a bundle held by a gate', { phase: 'Promoting', blockerCount: 1 }, 'Blocked by a gate', 'InProgress'],
-    ['every environment verified', { phase: 'Ready' }, 'Up to date', 'Ready'],
-    ['paused with a bundle held by a gate', { phase: 'Promoting', blockerCount: 1, paused: true }, 'Paused', 'Paused'],
-  ])('phase chip for %s', (_, overrides, label, health) => {
+    ['no bundle yet', { phase: 'Unknown', activeBundleName: undefined }, 'No version yet', 'empty'],
+    ['a bundle promoting', { phase: 'Promoting' }, 'Promoting', 'promoting'],
+    ['a bundle held by a gate', { phase: 'Promoting', blockerCount: 1 }, 'Blocked by a gate', 'blocked'],
+    ['every environment verified', { phase: 'Ready' }, 'Up to date', 'healthy'],
+    ['paused with a bundle held by a gate', { phase: 'Promoting', blockerCount: 1, paused: true }, 'Paused', 'paused'],
+  ])('state chip for %s (pipelineState)', (_, overrides, label, category) => {
     const { container } = render(<PipelineList pipelines={[makePipeline(overrides)]} onSelect={vi.fn()} />)
-    const chip = container.querySelector('.health-chip')
-    expect(chip?.textContent).toBe(label)
-    expect(chip).toHaveAttribute('data-health-state', health)
+    const chip = container.querySelector('[data-category]')
+    expect(chip).toHaveTextContent(label)
+    expect(chip).toHaveAttribute('data-category', category)
   })
 })
 
