@@ -5,6 +5,12 @@ In about 10 minutes, on a kind cluster, you ship a version of
 see it stop at an approval gate before prod, and approve it. Then you ship the next version and
 watch it move on the UI's map.
 
+A **version** is one build of your app that kardinal promotes, here an image tag. A **gate** is a
+rule that holds a version before an environment until it passes, here your approval.
+
+This page uses a demo repository on a local cluster. To set kardinal up on your own GitOps
+repository instead, follow [Your first pipeline](first-pipeline.md): choose one of the two.
+
 You need:
 
 - Docker and [kind](https://kind.sigs.k8s.io/)
@@ -76,7 +82,8 @@ Next:
 
 What it set up:
 
-- **kro, Argo CD and kardinal**, each installed once: running the quickstart again keeps what is
+- **kro** (the Kubernetes engine kardinal runs each promotion on), **Argo CD and kardinal**, each
+  installed once: running the quickstart again keeps what is
   there.
 - **Your token** in two Secrets: the controller's, for pull requests, and the `demo` Pipeline's,
   for git.
@@ -84,11 +91,13 @@ What it set up:
 - **The `demo` Pipeline** in the `default` namespace: test, uat and prod. Prod promotes without
   a pull request, behind the `prod-approval` gate, which you may approve.
 
-It runs only when the kubectl context is a local cluster (kind, k3d, minikube, Docker Desktop or
-Rancher Desktop, with its API server on this machine). With any other context it stops before it
-sends anything, and prints `kind create cluster --name kardinal` to create one. It never changes
-your kubeconfig; `--context` picks another local context. The environment state lines
-(`test: Live`) go to stderr, the rest to stdout.
+The environment state lines (`test: Live`) go to stderr, the rest to stdout.
+
+??? note "Which clusters it runs on"
+    It runs only when the kubectl context is a local cluster (kind, k3d, minikube, Docker Desktop
+    or Rancher Desktop, with its API server on this machine). With any other context it stops
+    before it sends anything, and prints `kind create cluster --name kardinal` to create one. It
+    never changes your kubeconfig; `--context` picks another local context.
 
 The first version, `sha-9349a3f`, went to test and uat on its own and now waits at prod's gate.
 
