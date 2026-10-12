@@ -16,6 +16,8 @@ import { prNumberFromURL } from '../prLink'
 import type { Bundle, Pipeline, PolicyGate, PromotionStep } from '../types'
 import { stageView, type StageActionKind, type StageView } from '../stage/stageModel'
 import { StageActions } from '../stage/StageActions'
+import { useStageAccess } from '../stage/useStageAccess'
+import { approveCommand, useSignInNeeded } from '../stage/signIn'
 import '../styles/StageTable.css'
 
 type SortKey = 'env' | 'state' | 'age'
@@ -88,6 +90,9 @@ const Row = memo(function Row({ st, model, focused, onOpenStage, view, stage, ac
   onOpen: (env: string, kind: StageActionKind | undefined, gate?: PolicyGate) => void
 }) {
   const age = ageOf(st.running?.verifiedAt)
+  // What the person may do here, as in the drawer: inert actions say why (U7).
+  const reasonFor = useStageAccess(view, stage?.pipeline.name ?? '', stage?.pipeline.namespace ?? '')
+  const signIn = useSignInNeeded(view && stage ? stage.pipeline.namespace : undefined)
   const pr = st.incoming?.prURL ? prNumberFromURL(st.incoming.prURL) : null
   const group = model.groupOf.get(st.env)
   const groupLabel = group ? model.groups.get(group)?.label : undefined
@@ -120,7 +125,8 @@ const Row = memo(function Row({ st, model, focused, onOpenStage, view, stage, ac
         {view && stage && (
           <div className="stage-table__actions">
             <StageActions view={view} pipeline={stage.pipeline.name} namespace={stage.pipeline.namespace} envOnly
-              active={active?.kind} activeGate={active?.gate} onOpen={(kind, gate) => onOpen(st.env, kind, gate)} onChanged={stage.onChanged} />
+              active={active?.kind} activeGate={active?.gate} onOpen={(kind, gate) => onOpen(st.env, kind, gate)} onChanged={stage.onChanged}
+              reasonFor={reasonFor} signInNote={signIn ? approveCommand(stage.pipeline.name, st.env, stage.pipeline.namespace) : undefined} />
           </div>
         )}
       </td>

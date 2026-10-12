@@ -52,6 +52,10 @@
 }
 .palette__section + .palette__section { margin-block-start: var(--k-space-2); }
 .palette__options { margin: 0; padding: 0; list-style: none; }
+/* U7: a command the person may not run: listed, inert, with why under it. */
+.palette__option[aria-disabled="true"] { cursor: not-allowed; }
+.palette__option[aria-disabled="true"] .palette__label { color: var(--k-ink-3); }
+.palette__why { grid-column: 1 / -1; color: var(--k-ink-2); font-size: var(--k-text-xs); }
 .palette__option[aria-selected="true"] {
   background: var(--k-surface-sunken);
   box-shadow: inset var(--k-stroke-ring) 0 0 var(--k-thread);
