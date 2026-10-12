@@ -173,8 +173,9 @@ var allFeatures = []string{
 // every Pipeline (spec.gitRepo does not exist), denied promote/rollback
 // Bundles and valid durations, and collided across releases. Validation lives
 // in the CRD schema (api/v1alpha1/crd_schema_test.go). The only admission
-// objects are the identity policies (identity-admission.yaml) and the
-// hold-writes policy (hold-admission.yaml, #1528), named per release and
+// objects are the identity policies (identity-admission.yaml), the
+// hold-writes policy (hold-admission.yaml, #1528) and the gitops-writes
+// policy (gitops-admission.yaml, health.refresh), named per release and
 // shipped whatever validatingAdmissionPolicy.enabled says, which stays a
 // deprecated no-op so existing --set values keep working.
 func TestChartRendersOnlyIdentityAdmissionPolicies(t *testing.T) {
@@ -192,6 +193,8 @@ func TestChartRendersOnlyIdentityAdmissionPolicies(t *testing.T) {
 		assert.ElementsMatch(t, append(identityAdmissionObjects("kardinal-promoter"),
 			"ValidatingAdmissionPolicy/kardinal-promoter-hold-writes",
 			"ValidatingAdmissionPolicyBinding/kardinal-promoter-hold-writes",
+			"ValidatingAdmissionPolicy/kardinal-promoter-gitops-writes",
+			"ValidatingAdmissionPolicyBinding/kardinal-promoter-gitops-writes",
 		), got, "args %v", args)
 	}
 }
@@ -425,6 +428,10 @@ func controllerAccess() []apiAccess {
 		{"argoproj.io", "analysistemplates", []string{"get"}, inWatched, "", "translator analysis.go collectAnalyses (uncached Get)"},
 		{"argoproj.io", "clusteranalysistemplates", []string{"get"}, inCluster, "", "translator analysis.go collectAnalyses (uncached Get)"},
 		{"kustomize.toolkit.fluxcd.io", "kustomizations", readVerbs, inWatched, "", "health adapter flux"},
+		// health.refresh.enabled (the default): pkg/health/refresh.go RequestRefresh.
+		{"argoproj.io", "applications", []string{"patch"}, inWatched, "", "health refresh.go RequestRefresh (argocd.argoproj.io/refresh); steps argocd_set_image.go"},
+		{"kustomize.toolkit.fluxcd.io", "kustomizations", []string{"patch"}, inWatched, "", "health refresh.go RequestRefresh (reconcile.fluxcd.io/requestedAt)"},
+		{"source.toolkit.fluxcd.io", "gitrepositories", []string{"patch"}, inWatched, "", "health refresh.go RequestRefresh (reconcile.fluxcd.io/requestedAt)"},
 		{"flagger.app", "canaries", readVerbs, inWatched, "", "health adapter flagger"},
 		{"multicluster.x-k8s.io", "clusterprofiles", []string{"get", "list"}, inWatched, "", "pipeline fleets.go: fleet selector kind ClusterProfile (uncached List)"},
 		{"batch", "jobs", []string{"get", "list", "watch", "create", "delete"}, inWatched, "", "hookrun reconciler.go: hook Jobs (Owns, create, delete on timeout)"},
@@ -466,9 +473,36 @@ var optionalAccess = []struct {
 		{"coordination.k8s.io", "leases", []string{"create"}, inCluster, "", "pkg/shard Gate.take (first token of a namespace)"},
 		{"coordination.k8s.io", "leases", []string{"get", "list"}, inCluster, "kardinal-shard-heartbeat-b", "pkg/shard Gate.heartbeatStopped/warnUnrunShards"},
 	}, true},
+	// update: what the gitops-writes admission policy checks before the
+	// argocd strategy's patch may change the Application's spec.
 	{"rbac.argocdApplicationsWrite=true", []apiAccess{
-		{"argoproj.io", "applications", []string{"patch"}, inWatched, "", "steps argocd_set_image.go"},
+		{"argoproj.io", "applications", []string{"update"}, inWatched, "", "steps argocd_set_image.go (gitops-admission.yaml)"},
 	}, false},
+}
+
+// TestChartRBACHealthRefreshOff: health.refresh.enabled=false drops the
+// patch grants of the refresh request, and rbac.argocdApplicationsWrite
+// still grants patch on Applications for the argocd update strategy.
+func TestChartRBACHealthRefreshOff(t *testing.T) {
+	off := []string{"--set", "health.refresh.enabled=false"}
+	v := newRBACView(t, render(t, "kardinal-promoter", off...))
+	watched := []string{"team-a", "argocd"}
+	for _, acc := range []apiAccess{
+		{"argoproj.io", "applications", []string{"patch"}, inWatched, "", "health refresh.go"},
+		{"kustomize.toolkit.fluxcd.io", "kustomizations", []string{"patch"}, inWatched, "", "health refresh.go"},
+		{"source.toolkit.fluxcd.io", "gitrepositories", []string{"patch"}, inWatched, "", "health refresh.go"},
+	} {
+		checkAccess(t, v, "health.refresh.enabled=false", watched, acc, false)
+	}
+	checkAccess(t, v, "health.refresh.enabled=false", watched,
+		apiAccess{"kustomize.toolkit.fluxcd.io", "kustomizations", readVerbs, inWatched, "", "health adapter flux"}, true)
+	w := newRBACView(t, render(t, "kardinal-promoter", append(off, "--set", "rbac.argocdApplicationsWrite=true")...))
+	checkAccess(t, w, "rbac.argocdApplicationsWrite=true", watched,
+		apiAccess{"argoproj.io", "applications", []string{"patch", "update"}, inWatched, "", "steps argocd_set_image.go"}, true)
+	assert.Equal(t, "false", argValues(controllerContainer(t, render(t, "kardinal-promoter", off...)))["health-refresh"])
+	assert.NotContains(t, argValues(controllerContainer(t, render(t, "kardinal-promoter"))), "health-refresh")
+	// A release upgraded with --reuse-values from a chart without the value.
+	assert.NotContains(t, argValues(controllerContainer(t, render(t, "kardinal-promoter", "--set", "health=null"))), "health-refresh")
 }
 
 func checkAccess(t *testing.T, v rbacView, mode string, watched []string, acc apiAccess, want bool) {
@@ -870,6 +904,7 @@ func controllerEnvReads(t *testing.T) map[string]bool {
 
 // everyValue sets every value that renders a flag or env var.
 var everyValue = []string{
+	"--set", "health.refresh.enabled=false",
 	"--set", "controller.tlsCertFile=/tls/tls.crt",
 	"--set", "controller.tlsKeyFile=/tls/tls.key",
 	"--set", "controller.extraVolumes[0].name=tls",
@@ -922,6 +957,7 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 		"scm-api-url":                           "https://gitlab.example.com",
 		"scm-allowed-repositories":              "gitlab.example.com/acme/*,gitlab.example.com/platform/**",
 		"gates-commit-status":                   "false",
+		"health-refresh":                        "false",
 		"gates-status-context":                  "acme/gates",
 		"ui-tokenreview-auth":                   "true",
 		"cors-allowed-origins":                  "https://a.example.com,https://b.example.com",

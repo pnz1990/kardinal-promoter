@@ -14,7 +14,7 @@
 // components/CreateBundleDialog.tsx — UI Bundle creation dialog (#917).
 // Allows platform engineers to create a Bundle directly from the UI
 // without CLI access — Kargo parity for competitive evaluations.
-import { useState, useCallback, useRef, type FormEvent } from 'react'
+import { useState, useCallback, useEffect, useId, useRef, type FormEvent } from 'react'
 import { api } from '../api/client'
 import { useModalFocus } from '../useModalFocus'
 import { actionErrorMessage } from './ConfirmDialog'
@@ -180,25 +180,43 @@ interface CreateBundleButtonProps {
   variant?: 'primary' | 'secondary'
   /** The button's words (default "Ship a version"); its name adds "of <pipeline>". */
   label?: string
+  /** Why the caller may not ship (U7: the role that grants it); the button is then inert. */
+  restricted?: string
+  /** Opens the dialog when it changes (the s shortcut); 0 does nothing. */
+  openSignal?: number
 }
 
 /**
  * CreateBundleButton renders the "Ship a version" button (the primary action) in the pipeline header.
  * Clicking opens the CreateBundleDialog.
  */
-export function CreateBundleButton({ pipelineName, namespace, onRefresh, variant = 'primary', label = 'Ship a version' }: CreateBundleButtonProps) {
+export function CreateBundleButton({ pipelineName, namespace, onRefresh, variant = 'primary', label = 'Ship a version', restricted, openSignal = 0 }: CreateBundleButtonProps) {
   const [showDialog, setShowDialog] = useState(false)
+  const restrictedId = useId()
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (openSignal > 0 && !restricted) {
+      // Focus returns to the button when the dialog closes, as after a click.
+      buttonRef.current?.focus()
+      setShowDialog(true)
+    }
+  }, [openSignal]) // restricted is read when the signal changes
 
   return (
     <>
       <button
+        ref={buttonRef}
         type="button"
-        onClick={() => setShowDialog(true)}
+        onClick={() => { if (!restricted) setShowDialog(true) }}
+        aria-disabled={restricted ? true : undefined}
+        aria-describedby={restricted ? restrictedId : undefined}
+        title={restricted}
         aria-label={`${label} of ${pipelineName}`}
         className={`k-button k-button--${variant} k-button--md`}
       >
         {label}
       </button>
+      {restricted && <span id={restrictedId} className="sr-only">{restricted}</span>}
 
       {showDialog && (
         <CreateBundleDialog

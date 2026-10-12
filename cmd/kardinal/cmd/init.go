@@ -455,6 +455,12 @@ func detectHealth(ctx context.Context, c sigs_client.Reader, ns string, cfg *Ini
 // the Pipeline may use it. An existing Secret is kept, and labelled when it
 // is not. The token is never printed.
 func createGitSecret(ctx context.Context, c sigs_client.Client, ns, name string, out io.Writer) error {
+	return createGitSecretLabelled(ctx, c, ns, name, out, nil)
+}
+
+// createGitSecretLabelled is createGitSecret that puts labels on a Secret it
+// creates (not on one that exists): quickstart marks its own.
+func createGitSecretLabelled(ctx context.Context, c sigs_client.Client, ns, name string, out io.Writer, labels map[string]string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -485,6 +491,9 @@ func createGitSecret(ctx context.Context, c sigs_client.Client, ns, name string,
 	s := &corev1.Secret{}
 	s.Name, s.Namespace = name, ns
 	s.Labels = map[string]string{v1alpha1.LabelSecretReferenceable: "true"}
+	for k, v := range labels {
+		s.Labels[k] = v
+	}
 	s.StringData = map[string]string{"token": token}
 	if err := c.Create(ctx, s); err != nil {
 		return fmt.Errorf("init: create Secret %s/%s: %w", ns, name, HumanError(err))

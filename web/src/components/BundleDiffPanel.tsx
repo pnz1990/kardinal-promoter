@@ -8,13 +8,16 @@
 // plus its provenance. Created is shown but never counts as a difference:
 // two bundles are always created at different times.
 //
-// Adapted from kro-ui InstanceTable.tsx SpecDiffPanel pattern.
+// Adapted from kro-ui InstanceTable.tsx SpecDiffPanel pattern. Restyled for the station map
+// (U2): the columns carry the map's marks (the followed version's red thread, the compared
+// one's ink dash), a field that differs is marked ≠ as on the map, and the environments are
+// one row each, the version's state there as a chip on both sides.
 import { displayState } from '../displayStates.gen'
 import { useRef } from 'react'
 import type { Bundle, ImageRef } from '../types'
 import { useModalFocus } from '../useModalFocus'
 import { isCIRunURL } from '../prLink'
-import '../ui'
+import { StatusChip } from '../ui'
 import '../styles/BundleDiffPanel.css'
 import { VersionLabel } from './VersionLabel'
 
@@ -127,11 +130,11 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
           <button type="button" onClick={onClose} aria-label="Close comparison" className="k-icon-button k-icon-button--sm">×</button>
         </div>
 
-        {/* Column headers */}
+        {/* Column headers: the map's marks for the two versions. */}
         <div className="bundle-diff__row bundle-diff__row--heads">
           <div />
-          <div className="bundle-diff__col-head">Version A</div>
-          <div className="bundle-diff__col-head">Version B</div>
+          <div className="bundle-diff__col-head"><span className="bundle-diff__mark bundle-diff__mark--followed" aria-hidden="true" />Following</div>
+          <div className="bundle-diff__col-head"><span className="bundle-diff__mark bundle-diff__mark--compared" aria-hidden="true" />Compared</div>
         </div>
 
         {/* The versions: what each ships (its tag), the Bundle name after it */}
@@ -142,10 +145,12 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
         </div>
 
         {/* Diff rows */}
-        {rows.map(row => (
+        {rows.map(row => row.label === 'Environments' ? (
+          <EnvironmentRows key={row.label} a={bundleA} b={bundleB} changed={row.changed} />
+        ) : (
           <div key={row.label} className="bundle-diff__row bundle-diff__row--field" data-changed={row.changed || undefined}>
             <span className="bundle-diff__label">
-              {row.changed ? '▸ ' : ''}{row.label}
+              {row.changed ? '≠ ' : ''}{row.label}
             </span>
             <DiffCell value={row.valueA} changed={row.changed} full={row.full} isLink={row.label === 'CI Run'} />
             <DiffCell value={row.valueB} changed={row.changed} full={row.full} isLink={row.label === 'CI Run'} />
@@ -164,6 +169,34 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+/** The environments, one row each: the two versions' states there, ≠ where they differ. */
+function EnvironmentRows({ a, b, changed }: { a: Bundle; b: Bundle; changed: boolean }) {
+  const at = (x: Bundle) => new Map((x.environments ?? []).map(e => [e.name, e.phase || 'Pending']))
+  const [pa, pb] = [at(a), at(b)]
+  const names = [...new Set([...pa.keys(), ...pb.keys()])]
+  if (names.length === 0) return null
+  const chip = (phase: string | undefined) => {
+    if (!phase) return <span className="bundle-diff__value bundle-diff__value--none">—</span>
+    const d = displayState('step', phase)
+    return <StatusChip tone={d.tone} label={d.label} glyph={d.glyph} compact />
+  }
+  return (
+    <div className="bundle-diff__envs" data-changed={changed || undefined}>
+      <span className="bundle-diff__label">{changed ? '≠ ' : ''}Environments</span>
+      {names.map(env => {
+        const differs = pa.get(env) !== pb.get(env)
+        return (
+          <div key={env} className="bundle-diff__row bundle-diff__row--env" data-changed={differs || undefined}>
+            <span className="bundle-diff__env">{differs ? '≠ ' : ''}{env}</span>
+            {chip(pa.get(env))}
+            {chip(pb.get(env))}
+          </div>
+        )
+      })}
     </div>
   )
 }

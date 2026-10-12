@@ -7,6 +7,7 @@
 // no Pipeline is selected. The data comes from GET /api/v1/ui/pipelines
 // (deployed, activeBundleVersion, environmentStates, environmentTopology).
 
+import { useChangeHalo } from '../useChangeHalo'
 import { Fragment, useRef, type CSSProperties } from 'react'
 import '../styles/FleetBoard.css'
 import { hasCommandModifier, rovingFocus, rovingItems, useRovingFocus } from '../useRovingFocus'
@@ -108,11 +109,14 @@ function FleetBar({ f }: { f: NonNullable<Station['fleet']> }) {
 function StationPlate({ s, pipeline, now, onSelect }: {
   s: Station; pipeline: Pipeline; now: number; onSelect: FleetBoardProps['onSelect']
 }) {
+  // U7: a station whose state or version changed on a poll gets one halo.
+  const changed = useChangeHalo(`${s.state}|${s.version ?? ''}|${s.bundle ?? ''}`)
   return (
     <button
       type="button"
       className="fleet-station"
       data-state={s.state}
+      data-changed={changed || undefined}
       data-fleet={s.fleet ? true : undefined}
       onClick={() => onSelect(pipeline.name, pipeline.namespace, s.env)}
       aria-label={`${pipeline.name} ${s.env}: ${s.version ? `${s.version}, ` : ''}${s.alsoRuns ? `with ${s.alsoRuns} from ${s.alsoFrom}, ` : ''}${stationNote(s, now)}`}

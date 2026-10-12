@@ -21,6 +21,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -30,16 +31,21 @@ import (
 const ControllerServiceAccount = "kardinal-promoter"
 
 // GrantArgoPatch lets the controller patch only the named Argo CD
-// Applications, the RBAC the argocd update strategy needs (the chart grants
-// get/list/watch; rbac.argocdApplicationsWrite adds patch on every
-// Application). name names the Role and RoleBinding in ArgoCDNamespace; both
-// are deleted when the test ends.
+// Applications, the RBAC the argocd update strategy needs: patch, and update,
+// which the chart's gitops-writes admission policy checks before it lets the
+// controller change more than the refresh annotation (the chart grants patch
+// with health.refresh.enabled, the default, and patch and update on every
+// Application with rbac.argocdApplicationsWrite). name names the Role and
+// RoleBinding in ArgoCDNamespace; both are deleted when the test ends.
 func (e *Env) GrantArgoPatch(t *testing.T, name string, apps ...string) {
 	t.Helper()
 	e.BindArgoRules(t, name, []rbacv1.PolicyRule{{
 		APIGroups: []string{"argoproj.io"}, Resources: []string{"applications"},
-		ResourceNames: apps, Verbs: []string{"get", "patch"},
+		ResourceNames: apps, Verbs: []string{"get", "patch", "update"},
 	}})
+	for _, app := range apps {
+		e.WaitControllerCan(t, "update", app, time.Minute)
+	}
 }
 
 // BindArgoRules binds rules on Argo CD Applications to the controller in
@@ -153,6 +159,19 @@ func ChartApplicationRules(t *testing.T, set ...string) []rbacv1.PolicyRule {
 		}
 	}
 	return rules
+}
+
+// AsControllerDynamic is AsController as a dynamic client.
+func (e *Env) AsControllerDynamic(t *testing.T) dynamic.Interface {
+	t.Helper()
+	cfg := rest.CopyConfig(e.Config)
+	cfg.Impersonate = rest.ImpersonationConfig{UserName: "system:serviceaccount:" + ControllerNamespace + ":" + ControllerServiceAccount,
+		Groups: []string{"system:serviceaccounts", "system:serviceaccounts:" + ControllerNamespace, "system:authenticated"}}
+	d, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		t.Fatalf("controller dynamic client: %v", err)
+	}
+	return d
 }
 
 // AsController returns a client that acts as the controller's ServiceAccount

@@ -344,3 +344,11 @@ else, with scm.token, the chart's separate <fullname>-demo-git-token
 github-token
 {{- end -}}
 {{- end }}
+
+{{/*
+health.refresh.enabled, true when unset: a release upgraded with
+--reuse-values from a chart without the value has no health key.
+*/}}
+{{- define "kardinal-promoter.healthRefresh" -}}
+{{- ne (toString (dig "health" "refresh" "enabled" true .Values.AsMap)) "false" -}}
+{{- end }}

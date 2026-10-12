@@ -29,6 +29,8 @@ const h = vi.hoisted(() => {
     pipelinesError: undefined as string | undefined,
     // When set, getGraph fails with this error.
     graphError: undefined as string | undefined,
+    // Checks ("create bundles") checkAccess refuses (U7).
+    denied: [] as string[],
   }
   const graphFor = (b: string) => ({
     nodes: [{ id: `${b}-step`, type: 'PromotionStep', label: `env-of-${b}`, environment: `env-of-${b}`, state: 'Verified' }],
@@ -54,6 +56,12 @@ const h = vi.hoisted(() => {
     pause: vi.fn(async () => ({ message: 'ok' })),
     resume: vi.fn(async () => ({ message: 'ok' })),
     createBundle: vi.fn(async () => ({ bundle: 'x', message: 'ok' })),
+    recordApproval: vi.fn(async () => ({ outcome: 'Recorded', approval: 'a', user: 'alice', message: 'ok' })),
+    // U7: alice may do everything unless a test sets state.denied.
+    checkAccess: vi.fn(async (_ns: string, checks: { verb: string; resource: string }[]) => ({
+      user: { username: 'alice', groups: ['release-managers'] },
+      results: checks.map(c => ({ allowed: !state.denied.includes(`${c.verb} ${c.resource}`), grantedBy: 'promoter or admin' })),
+    })),
   }
   return { state, api }
 })
@@ -61,6 +69,7 @@ const h = vi.hoisted(() => {
 vi.mock('./api/client', () => ({ api: h.api }))
 
 import { App } from './App'
+import { resetAccessForTests } from './access/access'
 
 // The comparison panel and the palette load lazily: load their code before the tests,
 // so a click opens them within one flush as it does once the page has prefetched them.
@@ -99,6 +108,8 @@ beforeEach(() => {
   h.state.graph = undefined
   h.state.pipelinesError = undefined
   h.state.graphError = undefined
+  h.state.denied = []
+  resetAccessForTests()
   for (const fn of Object.values(h.api)) fn.mockClear()
   localStorage.clear()
   window.history.replaceState(null, '', '/ui/#pipeline=app')
@@ -430,7 +441,7 @@ describe('App bundle comparison', () => {
     await flush()
     expect(oldChip().className).not.toContain('bundle-chip--compare')
     expect(screen.queryByRole('button', { name: 'Compare ↔' })).not.toBeInTheDocument()
-    expect(oldChip().title).toContain('Shift-click to compare')
+    expect(oldChip().title).toContain('Shift-click or c to compare')
   })
 
   it('opens the comparison from an old bundle= link (now compare=)', async () => {
@@ -459,7 +470,7 @@ describe('App bundle comparison', () => {
     await flush()
     expect(picked()).toHaveLength(0)
     expect(screen.queryByRole('button', { name: '× clear' })).not.toBeInTheDocument()
-    expect(oldChip().title).toContain('Shift-click to compare')
+    expect(oldChip().title).toContain('Shift-click or c to compare')
     expect(newChip().getAttribute('title')).toBe('b-new: Promoting')
 
     // Showing Bundle B makes it Bundle A, and drops it as B.
@@ -846,3 +857,69 @@ describe('App routes', () => {
     expect(screen.queryByRole('dialog', { name: 'Go to or do' })).not.toBeInTheDocument()
   })
 })
+
+// U7: the approvals inbox, role-aware controls and the j/k/a/s shortcuts.
+describe('App approvals, access and shortcuts (U7)', () => {
+  const approval = (env: string) => ({
+    name: `release-approval--b-new-${env}`, namespace: 'default', pipeline: 'app', bundle: 'b-new', environment: env,
+    gateTemplate: 'release-approval', expression: 'true', ready: false, holding: true, state: 'Block',
+    createdAt: new Date(Date.now() - 600_000).toISOString(), approval: { required: 2, approved: 0 },
+  })
+
+  it('#/approvals lists what waits on me; the top bar counts it and links there', async () => {
+    h.state.gates = [approval('prod'), approval('uat')]
+    window.history.replaceState(null, '', '/ui/#/')
+    render(<App />)
+    await flush()
+    const link = screen.getByRole('link', { name: /^Approvals, 2 waiting on you$/ })
+    fireEvent.click(link)
+    await flush()
+    expect(window.location.hash).toBe('#/approvals')
+    // The inbox's code loads when the route opens (React.lazy).
+    expect(await screen.findByRole('heading', { name: '2 waiting on you' })).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent('Approvals')
+  })
+
+  it('s opens Ship a version; without the role it says which role, and the button is inert', async () => {
+    window.history.replaceState(null, '', '/ui/#/p/default/app')
+    const { unmount } = render(<App />)
+    await flush()
+    fireEvent.keyDown(document, { key: 's' })
+    await flush()
+    expect(screen.getByRole('dialog', { name: /^Ship a version of / })).toBeInTheDocument()
+    unmount()
+
+    resetAccessForTests()
+    h.state.denied = ['create bundles']
+    render(<App />)
+    await flush()
+    const ship = screen.getByRole('button', { name: 'Ship a version of app' })
+    expect(ship).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.keyDown(document, { key: 's' })
+    await flush()
+    expect(screen.queryByRole('dialog', { name: /^Ship a version of / })).not.toBeInTheDocument()
+    expect(document.querySelector('.app-shortcut-note')).toHaveTextContent('Shipping a version needs the promoter or admin role.')
+  })
+
+  it('j and k walk the environments in order, and say so at the end', async () => {
+    // A wide screen: the drawer is a column, not a modal sheet (which keeps the keys to itself).
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: true, media: q, addEventListener: () => {}, removeEventListener: () => {} }))
+    h.state.pipelines = [pipeline('app', { activeBundleName: 'b-new', environmentTopology: [{ name: 'test' }, { name: 'uat' }, { name: 'prod' }] } as Partial<Pipeline>)]
+    window.history.replaceState(null, '', '/ui/#/p/default/app')
+    render(<App />)
+    await flush()
+    fireEvent.keyDown(document, { key: 'j' })
+    await flush()
+    expect(window.location.hash).toBe('#/p/default/app/env/test')
+    fireEvent.keyDown(document, { key: 'j' })
+    await flush()
+    expect(window.location.hash).toBe('#/p/default/app/env/uat')
+    fireEvent.keyDown(document, { key: 'k' })
+    fireEvent.keyDown(document, { key: 'k' })
+    await flush()
+    expect(window.location.hash).toBe('#/p/default/app/env/test')
+    expect(document.querySelector('.app-shortcut-note')).toHaveTextContent('test is the first environment.')
+    vi.unstubAllGlobals()
+  })
+})
+
