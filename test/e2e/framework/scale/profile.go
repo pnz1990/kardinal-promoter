@@ -81,6 +81,14 @@ type Profile struct {
 	// Settle bounds how long every Bundle of a test may take to reach a
 	// terminal phase once the test stops creating them.
 	Settle time.Duration
+	// SerialStep is the time one promotion on a test's critical path may
+	// take: a stage of a chain (its step, then the Graph creating the next
+	// one), or a turn on a branch that every environment of the test pushes
+	// to, one at a time (#1578). A test whose Bundle has N such promotions
+	// in a row settles within max(Settle, N x SerialStep) (Run.SettleSerial):
+	// TestScale_TopologyLongChain's 120 stages at the ~5.6 s a stage took on
+	// a GitHub runner need 11 minutes, past the ci Settle of 10.
+	SerialStep time.Duration
 
 	// TenantWave is the width of the one-branch wave tenant A promotes in
 	// TestScale_TwoTenants while tenant B, in another namespace, promotes a
@@ -119,7 +127,10 @@ var profiles = map[string]Profile{
 		SustainedRate: 0.5, SustainedFor: 2 * time.Minute, SustainedPipelines: 8,
 		RapidFire: 10, ChaosFor: 3 * time.Minute, ChaosPipelines: 8,
 		TenantWave: 30, TenantStartWithin: 20 * time.Second, TenantBBundles: 3, TenantStepP99: 20 * time.Second, TenantBundleP99: 90 * time.Second,
-		Settle:       10 * time.Minute,
+		Settle: 10 * time.Minute,
+		// Twice the stage time measured on a GitHub runner with the -race
+		// controller (LongChain 2026-10-12: 120 stages in 11m12s, ~5.6 s).
+		SerialStep:   12 * time.Second,
 		SLOPipelines: 20,
 		// Measured on GitHub runners with the -race controller (nightly
 		// and v0.10.0 tag, 2026-10-10/11): auto step p50 8-10 s, p99 13 s,
@@ -136,6 +147,7 @@ var profiles = map[string]Profile{
 		RapidFire: 40, ChaosFor: 10 * time.Minute, ChaosPipelines: 40,
 		TenantWave: 149, TenantStartWithin: 20 * time.Second, TenantBBundles: 5, TenantStepP99: 10 * time.Second, TenantBundleP99: 35 * time.Second,
 		Settle:       45 * time.Minute,
+		SerialStep:   12 * time.Second,
 		SLOPipelines: 200,
 		SLO:          invariants.SLO{StepP50: 10 * time.Second, StepP99: 30 * time.Second, BundleP99: 2 * time.Minute},
 	},
@@ -190,7 +202,7 @@ func overrides(p *Profile) []override {
 		"CHAOS_PIPELINES": &p.ChaosPipelines, "SLO_PIPELINES": &p.SLOPipelines, "TENANT_WAVE": &p.TenantWave,
 	}
 	durations := map[string]*time.Duration{
-		"SUSTAINED_FOR": &p.SustainedFor, "CHAOS_FOR": &p.ChaosFor, "SETTLE": &p.Settle,
+		"SUSTAINED_FOR": &p.SustainedFor, "CHAOS_FOR": &p.ChaosFor, "SETTLE": &p.Settle, "SERIAL_STEP": &p.SerialStep,
 		"TENANT_START_WITHIN": &p.TenantStartWithin,
 		"SLO_STEP_P50":        &p.SLO.StepP50, "SLO_STEP_P99": &p.SLO.StepP99, "SLO_BUNDLE_P99": &p.SLO.BundleP99,
 	}

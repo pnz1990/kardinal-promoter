@@ -30,6 +30,8 @@ func TestScale_TopologyChain(t *testing.T) {
 	p := r.Fleet.Pipeline(t, "chain", envs)
 	r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
 	r.Note("stages", len(envs))
+	// Every stage waits for the one before: the settle grows with the chain.
+	r.SettleSerial(len(envs))
 	r.Finish(scale.AllVerified)
 }
 
@@ -82,6 +84,8 @@ func TestScale_TopologyBigWaves(t *testing.T) {
 	r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
 	r.Note("environments", len(envs))
 	r.Note("edges", scale.Edges(envs))
+	// Every environment pushes to the one branch, one turn at a time.
+	r.SettleSerial(len(envs))
 	r.Finish(scale.AllVerified)
 }
 

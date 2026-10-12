@@ -33,6 +33,18 @@ type Run struct {
 	Extra map[string]interface{}
 
 	shared bool
+	// settle, when set (SettleSerial), replaces P.Settle for Finish.
+	settle time.Duration
+}
+
+// SettleSerial sizes the test's settle for a Bundle that makes n promotions
+// one after the other (a chain's stages, or n environments pushing to one
+// branch, which take turns): max(P.Settle, n x P.SerialStep). Without it a
+// long chain failed the ci profile while still promoting a stage every few
+// seconds (#1578 serializes one branch's pushes by design).
+func (r *Run) SettleSerial(n int) {
+	r.settle = max(r.P.Settle, time.Duration(n)*r.P.SerialStep)
+	r.Note("settleLimitSeconds", int(r.settle.Seconds()))
 }
 
 // Begin loads the profile, connects to the cluster, creates the test's
@@ -85,7 +97,11 @@ func (r *Run) Note(key string, v interface{}) {
 func (r *Run) Finish(edit ...func(*invariants.Options)) *invariants.Report {
 	r.T.Helper()
 	settleStart := time.Now()
-	r.Fleet.WaitSettled(r.T, r.P.Settle)
+	settle := r.P.Settle
+	if r.settle > 0 {
+		settle = r.settle
+	}
+	r.Fleet.WaitSettled(r.T, settle)
 	r.Note("settleSeconds", int(time.Since(settleStart).Seconds()))
 	o := invariants.Options{
 		Namespace: r.Fleet.NS, Targets: r.Fleet.Targets(), Image: ImageRepo, SeedTag: SeedTag,
