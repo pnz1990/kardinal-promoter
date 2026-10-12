@@ -343,6 +343,14 @@ func TestSummarizeGroups(t *testing.T) {
 		st   []kardinalv1alpha1.PipelineEnvironmentStatus
 		want string
 	}{
+		{name: "a version tag is not capitalised at the start",
+			envs: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "prod"}},
+			st:   []kardinalv1alpha1.PipelineEnvironmentStatus{st("test", "sha-9349a3f", "Verified"), st("prod", "sha-9349a3f", "Verified")},
+			want: "sha-9349a3f live in test, prod"},
+		{name: "nor is a branch name",
+			envs: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+			st:   []kardinalv1alpha1.PipelineEnvironmentStatus{st("test", "main", "Verified")},
+			want: "main live in test"},
 		{name: "a fleet is counted under its name",
 			envs: []kardinalv1alpha1.EnvironmentSpec{{Name: "canary"}, fleet("pops", 42)},
 			st: cat([]kardinalv1alpha1.PipelineEnvironmentStatus{st("canary", "7.2.0", "Verified")},

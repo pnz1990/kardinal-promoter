@@ -111,17 +111,6 @@
 }
 .fleet-line__flags:empty { display: none; }
 
-.fleet-flag {
-  font-size: 0.68rem;
-  font-weight: 600;
-  padding: 0 0.4rem;
-  border-radius: 999px;
-  border: 1px solid currentColor;
-  line-height: 1.5;
-}
-.fleet-flag[data-kind='paused'] { color: var(--color-accent); }
-.fleet-flag[data-kind='held'] { color: var(--color-warning); }
-.fleet-flag[data-kind='failed'] { color: var(--color-error); }
 
 .fleet-line__track {
   display: flex;

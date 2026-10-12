@@ -401,6 +401,11 @@ func Summarize(p *kardinalv1alpha1.Pipeline, ready metav1.Condition, envs []kard
 	if versionFirst {
 		return sentence
 	}
+	// A version reads as it is written ("sha-9349a3f", "main"): only a sentence
+	// that starts with words is capitalised.
+	if len(clauses) > 0 && clauses[0].version != "" && strings.HasPrefix(sentence, clauses[0].version+" ") {
+		return sentence
+	}
 	return upperFirst(sentence)
 }
 

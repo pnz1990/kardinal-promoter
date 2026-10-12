@@ -65,9 +65,21 @@ describe('computeFleetHealth', () => {
     expect(s.healthy).toBe(0)
   })
 
-  it('counts paused pipeline as not healthy', () => {
+  it('counts a paused pipeline as Paused, not healthy', () => {
     const s = computeFleetHealth([makePipeline({ paused: true })])
     expect(s.healthy).toBe(0)
+    expect(s.paused).toBe(1)
+  })
+
+  it('shows a Paused counter that filters to the paused pipelines, only when there is one', () => {
+    const pipelines = [makePipeline({ name: 'a', paused: true }), makePipeline({ name: 'b' })]
+    expect(filterPipelines(pipelines, 'paused').map(p => p.name)).toEqual(['a'])
+    const onChange = vi.fn()
+    const { rerender } = render(<FleetHealthBar pipelines={pipelines} activeFilter="all" onFilterChange={onChange} />)
+    fireEvent.click(screen.getByRole('button', { name: '1 paused pipeline' }))
+    expect(onChange).toHaveBeenCalledWith('paused')
+    rerender(<FleetHealthBar pipelines={[makePipeline({ name: 'b' })]} activeFilter="all" onFilterChange={onChange} />)
+    expect(screen.queryByRole('button', { name: /paused pipeline/ })).toBeNull()
   })
 
   // "promoting" comes from the per-environment states of the active bundle,
@@ -85,8 +97,12 @@ describe('computeFleetHealth', () => {
     expect(s.promoting).toBe(want)
   })
 
-  it('does not count phase "Promoting" alone (a gate may hold the bundle)', () => {
-    expect(computeFleetHealth([makePipeline({ phase: 'Promoting' })]).promoting).toBe(0)
+  // One state per pipeline: a Promoting phase is promoting, as the sidebar and the header say it;
+  // a gate that holds the version makes it blocked instead (pipelineState).
+  it('counts phase "Promoting" as promoting, and a held one as blocked, never both', () => {
+    expect(computeFleetHealth([makePipeline({ phase: 'Promoting' })]).promoting).toBe(1)
+    const held = computeFleetHealth([makePipeline({ phase: 'Promoting', blockerCount: 1 })])
+    expect([held.promoting, held.blocked]).toEqual([0, 1])
   })
 
   it('handles mixed fleet correctly', () => {
@@ -98,11 +114,11 @@ describe('computeFleetHealth', () => {
     ]
     const s = computeFleetHealth(pipelines)
     expect(s.total).toBe(4)
-    // healthy: 'a' and 'd' (no blockers, no failures, not paused)
-    expect(s.healthy).toBe(2)
+    // One bucket per pipeline (pipelineState): 'b' is held by a gate, not also promoting.
+    expect(s.healthy).toBe(1) // 'a'
     expect(s.blocked).toBe(1) // 'b'
     expect(s.ciRed).toBe(1)   // 'c'
-    expect(s.promoting).toBe(2) // 'b' and 'd'
+    expect(s.promoting).toBe(1) // 'd'
   })
 })
 
@@ -226,14 +242,14 @@ describe('FleetHealthBar', () => {
           makePipeline({ name: 'ok' }),
           makePipeline({ name: 'gated', blockerCount: 1 }),
           makePipeline({ name: 'red', failedStepCount: 1 }),
-          makePipeline({ name: 'moving', blockerCount: 1, ...promoting }),
+          makePipeline({ name: 'moving', ...promoting }),
         ]}
         activeFilter="all"
         onFilterChange={() => {}}
       />
     )
     expect(screen.getByRole('button', { name: '1 healthy pipeline' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '2 blocked pipelines' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '1 blocked pipeline' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '1 pipeline with a failed promotion' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '1 pipeline currently promoting' })).toBeInTheDocument()
     unmount()
@@ -241,8 +257,12 @@ describe('FleetHealthBar', () => {
     render(
       <FleetHealthBar
         pipelines={[
-          makePipeline({ name: 'a', blockerCount: 1, failedStepCount: 1, ...promoting }),
-          makePipeline({ name: 'b', blockerCount: 1, failedStepCount: 1, ...promoting }),
+          makePipeline({ name: 'a', blockerCount: 1 }),
+          makePipeline({ name: 'b', blockerCount: 1 }),
+          makePipeline({ name: 'c', failedStepCount: 1 }),
+          makePipeline({ name: 'd', failedStepCount: 1 }),
+          makePipeline({ name: 'e', ...promoting }),
+          makePipeline({ name: 'f', ...promoting }),
         ]}
         activeFilter="all"
         onFilterChange={() => {}}

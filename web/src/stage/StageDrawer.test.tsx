@@ -73,7 +73,7 @@ describe('StageDrawer (U3)', () => {
     expect(why.getByText('Needs 1 more approval (1 of 2) in two-approvers.')).toBeInTheDocument()
     expect(why.getByText('Held by gate no-weekend.')).toBeInTheDocument()
     expect(why.getByText('weekend deploys are frozen')).toBeInTheDocument()
-    expect(why.getByText('evaluated 2m 0s ago')).toBeInTheDocument()
+    expect(why.getByText('evaluated 2m ago')).toBeInTheDocument()
     const gateK8s = [...why.getByText('Needs 1 more approval (1 of 2) in two-approvers.').closest('li')!.querySelectorAll('details.k-k8s')]
     expect(gateK8s).toHaveLength(1)
     expect(gateK8s[0]).not.toHaveAttribute('open')
@@ -323,7 +323,7 @@ describe('StageDrawer (U3)', () => {
     const items = within(screen.getByRole('list', { name: 'Promotion steps' })).getAllByRole('listitem')
     expect(items.map(i => i.getAttribute('data-step-state'))).toEqual(['Completed', 'InProgress'])
     expect(items[1]).toHaveTextContent('waiting for merge')
-    expect(screen.getByTestId('stage-elapsed')).toHaveTextContent('Running for 3m 0s')
+    expect(screen.getByTestId('stage-elapsed')).toHaveTextContent('Running for 3m')
     expect(await screen.findByTestId('events-panel')).toHaveTextContent('PR opened')
   })
 })
