@@ -532,9 +532,10 @@ export function stationLabel(st: Station, age: (iso?: string) => string): string
   return `${st.env} — ${parts.join(', ')}`
 }
 
-/** The gates on the edge into a node: a station's, or a group's worst per name. */
 /** A gate's rank on an edge: the ones holding the version first, passing ones last. */
 const gateRank = (g: GateMark) => (g.holding ? 0 : g.display.tone === 'waiting' ? 1 : g.state === 'Pass' ? 3 : 2)
+
+/** The gates on the edge into a node: a station's, or a group's worst per name. */
 
 export function gatesOn(node: MapNode, model: StationMapModel): GateMark[] {
   // The gate that holds the version comes first, so it is the one the edge names.

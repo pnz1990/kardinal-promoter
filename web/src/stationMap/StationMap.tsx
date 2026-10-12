@@ -380,7 +380,8 @@ export default function StationMap(props: StationMapProps) {
         const p = pointBeforeEnd(points, gateOffset(0))
         const half = g.holding ? GRAPH.gateTick : GRAPH.gateTick / 2
         const label = edgeGateLabel(gates)
-        const w = label.length * CH_EM * units
+        // The width the label is drawn at (its condensed face, GATE_CH a character), as its hit area.
+        const w = label.length * GATE_CH * (units / GRAPH.labelMin)
         const top = p.y - half - GATE_LEADER - 4 - units
         labels.push({ id: `${to}:${g.id}`, priority: 2, boxes: [{ x: p.x + 3 - w, y: top, w, h: units }] })
       }
