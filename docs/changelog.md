@@ -8,6 +8,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [v0.11.0] — 2026-10-12
+
+**The UX release: one station map of each pipeline with a stage drawer that says why an environment waits and what moves it on, `kardinal quickstart`, `kardinal ship --wait` for CI, and one vocabulary (version, stage, gate) across the UI, the CLI and the docs. It removes what v0.10.0 deprecated and uses a git Secret only when it is labelled. Read [Before you upgrade](#from-v0100) first: some changes refuse objects v0.10.0 accepted.**
+
+Requires Kubernetes 1.30 or later and kro v0.10.0-rc.0 or later with the `GraphKind` feature gate, as v0.10.0 did. The CLI is on the release page (`kardinal-<os>-<arch>`).
+
+### Highlights since v0.10.0
+
+- **The pipeline page** — one station map of the pipeline, with Table and Matrix views; the stage drawer says why an environment waits and offers the action that moves it on; an approvals inbox; a link for every screen and a ⌘K palette; actions offered by the caller's role
+- **The CLI** — `kardinal quickstart` (and `--delete`), `ship --wait` with stable exit codes, `why`, `inbox`, `hold`/`unhold`, `approve <pipeline> <env>`, `dashboard <pipeline> [<env>]`, versions where Bundle names go, Tab completion, grouped help and errors that name the fix
+- **What runs where, in kubectl** — the Pipeline's `status.environments`, `status.summary` and `status.failedVersion`, printer columns and the `kardinal` category; a missing or unlabelled git Secret shows on the Pipeline as soon as it is applied
+- **Faster promotions** — Argo CD and Flux are asked to sync a promotion's commit at once, instead of at their next poll
+- **One design system** — the UI and the docs share the kardinal tokens, fonts and controls, with equal light and dark themes checked against WCAG 2.1 AA; the docs are organised by job, with demo recordings
+- **Security** — no credentials from a URL in an error, a status or a log; no Pipeline may use the controller's SCM token Secret; git Secrets must be labelled `kardinal.io/referenceable=true`
+
 ### Before you upgrade
 
 #### From v0.10.0
@@ -34,7 +49,7 @@ Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/ka
 9. **`kardinal rollback --emergency` is removed.** Use `kardinal override` to pass a blocking gate; the flag is an unknown flag.
 10. **Chart values `validatingAdmissionPolicy` and `rbac.integrationTestJobs` are removed**, and the values schema refuses them. If `helm get values` shows one, add `--set validatingAdmissionPolicy=null` or `--set rbac.integrationTestJobs=null` to the `helm upgrade --reset-then-reuse-values` command. The chart always ships its admission policies and grants the hooks' Job access.
 11. **A Pipeline uses its git Secret only when the Secret is labelled `kardinal.io/referenceable=true`.** An unlabelled one makes the Pipeline `Ready=False` (`SecretNotReferenceable`) and its git steps and renders wait. Label every Pipeline's git Secret before you upgrade: `kubectl label secret <name> -n <ns> kardinal.io/referenceable=true` (the guide's step 2 labels them all).
-7. **A Role you wrote for `update.strategy: argocd`** needs `update` as well as `patch` on the Applications it patches: the new `<fullname>-gitops-writes` admission policy lets the controller change only the refresh annotation of an Application it may not update. `rbac.argocdApplicationsWrite=true` grants both (see Added).
+12. **A Role you wrote for `update.strategy: argocd`** needs `update` as well as `patch` on the Applications it patches: the new `<fullname>-gitops-writes` admission policy lets the controller change only the refresh annotation of an Application it may not update. `rbac.argocdApplicationsWrite=true` grants both (see Added).
 
 ### Added
 
@@ -132,7 +147,7 @@ Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/ka
 
 ## [v0.10.0] — 2026-10-11
 
-**The features teams moving from Kargo or GitOps Promoter look for first, 500-environment Pipelines and 200-Pipeline clusters, and every recorded identity verified against the Kubernetes user who made the request. Read [Before you upgrade](#before-you-upgrade) first: some changes refuse objects v0.9.0 accepted.**
+**The features teams moving from Kargo or GitOps Promoter look for first, 500-environment Pipelines and 200-Pipeline clusters, and every recorded identity verified against the Kubernetes user who made the request. Read [Before you upgrade](#from-v090) first: some changes refuse objects v0.9.0 accepted.**
 
 Requires Kubernetes 1.30 or later and kro v0.10.0-rc.0 or later with the `GraphKind` feature gate (`hack/install-kro.sh` installs it, now with 8 Graph workers and a 2Gi memory limit). The CLI is on the release page (`kardinal-<os>-<arch>`), and the chart now also publishes the `kardinal-render` image for rendered manifests.
 
@@ -790,7 +805,8 @@ kardinal-promoter now executes the [AWS Platform Engineering on EKS workshop](ht
 
 ---
 
-[Unreleased]: https://github.com/pnz1990/kardinal-promoter/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/pnz1990/kardinal-promoter/compare/v0.11.0...HEAD
+[v0.11.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.10.0...v0.11.0
 [v0.10.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.9.0...v0.10.0
 [v0.9.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.8.1...v0.9.0
 [v0.9.0-rc.1]: https://github.com/pnz1990/kardinal-promoter/compare/v0.8.1...v0.9.0-rc.1

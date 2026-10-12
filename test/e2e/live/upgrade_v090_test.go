@@ -27,7 +27,7 @@ import (
 
 // guideChartV090 is the chart reference of the "Upgrading from v0.9.0"
 // guide: the test replaces it with the checkout's chart.
-const guideChartV090 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0"
+const guideChartV090 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0"
 
 // TestUpgradeV090_FromV090 follows "Upgrading from v0.9.0" in
 // docs/upgrade.md, running the guide's own commands, on a cluster that
