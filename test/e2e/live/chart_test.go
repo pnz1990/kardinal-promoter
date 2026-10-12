@@ -312,6 +312,11 @@ func TestChart_DefaultInstall(t *testing.T) {
 		{Verb: "list", Group: "apps", Resource: "deployments"},
 		{Verb: "get", Group: "apps", Resource: "replicasets", Namespace: a.ns},
 		{Verb: "get", Group: "argoproj.io", Resource: "applications", Namespace: framework.ArgoCDNamespace},
+		// health.refresh.enabled (the default): the refresh annotation, which
+		// the gitops-writes admission policy confines the patch to.
+		{Verb: "patch", Group: "argoproj.io", Resource: "applications", Namespace: framework.ArgoCDNamespace},
+		{Verb: "patch", Group: "kustomize.toolkit.fluxcd.io", Resource: "kustomizations", Namespace: "flux-system"},
+		{Verb: "patch", Group: "source.toolkit.fluxcd.io", Resource: "gitrepositories", Namespace: "flux-system"},
 		{Verb: "create", Group: "coordination.k8s.io", Resource: "leases", Namespace: framework.ControllerNamespace},
 		{Verb: "create", Resource: "serviceaccounts", Namespace: a.ns},
 		{Verb: "create", Group: "rbac.authorization.k8s.io", Resource: "rolebindings", Namespace: a.ns},
@@ -324,7 +329,8 @@ func TestChart_DefaultInstall(t *testing.T) {
 		{Verb: "create", Group: "apps", Resource: "deployments", Namespace: a.ns},
 		{Verb: "patch", Group: "apps", Resource: "deployments", Namespace: a.ns},
 		{Verb: "list", Group: "apps", Resource: "replicasets", Namespace: a.ns},
-		{Verb: "patch", Group: "argoproj.io", Resource: "applications", Namespace: framework.ArgoCDNamespace},
+		{Verb: "update", Group: "argoproj.io", Resource: "applications", Namespace: framework.ArgoCDNamespace},
+		{Verb: "patch", Group: "helm.toolkit.fluxcd.io", Resource: "helmreleases", Namespace: "flux-system"},
 		{Verb: "patch", Group: "batch", Resource: "jobs", Namespace: a.ns},
 		{Verb: "list", Resource: "configmaps", Namespace: a.ns},
 		{Verb: "bind", Group: "rbac.authorization.k8s.io", Resource: "clusterroles", Name: "cluster-admin"},

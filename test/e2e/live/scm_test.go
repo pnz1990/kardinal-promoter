@@ -332,6 +332,7 @@ func scmPromotionPR(t *testing.T, e *framework.Env, edit func(*v1alpha1.Pipeline
 	assert.True(t, strings.HasPrefix(body, "<!-- kardinal-promoter auto-generated PR -->\n## Promotion: "+bundle+" -> podinfo/prod\n"),
 		"body starts with the promotion heading:\n%s", body)
 	assert.Contains(t, body, "| "+fixtures.Image+" | "+fixtures.V2+" | — | — | — | — |", "artifact row")
+	// The reason is the expression, its value and the version (#1763).
 	assert.Regexp(t, `\| always \| `+regexp.QuoteMeta(a.ns)+` \| Pass \| true = true \(version `+regexp.QuoteMeta(fixtures.V2)+
 		`\) \| `+evaluatedAt+` \|`, body, "gate row")
 	assert.Regexp(t, upstreamRow, body, "upstream row")

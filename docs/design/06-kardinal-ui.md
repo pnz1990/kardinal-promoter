@@ -207,7 +207,8 @@ The UI provides both read and write operations:
 - Promote an environment, or roll it back to its previous verified version (stage lane and node detail panel, one shared confirmation dialog)
 
 - Override a gate in one environment, approve or decline an approval gate, release a hold and
-  reject a version (the stage drawer).
+  reject a version (the stage drawer; the approvals inbox at `#/approvals` for
+  approvals). The UI offers only the actions `POST /api/v1/ui/access` says the caller may take.
 
 All mutations go through the backend API proxy which calls the Kubernetes API server.
 Direct CRD mutation via CLI (`kardinal pause`, `kardinal rollback`) and kubectl also remain available.

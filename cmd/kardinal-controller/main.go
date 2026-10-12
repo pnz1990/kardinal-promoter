@@ -241,6 +241,11 @@ func main() {
 	flag.BoolVar(&gatesCommitStatus, "gates-commit-status", true,
 		"Post the gate results of a waiting pr-review step as a commit status on its PR (Helm "+
 			"scm.gatesCommitStatus.enabled). false posts none, for a token without the commit-status permission.")
+	healthRefresh := true
+	flag.BoolVar(&healthRefresh, "health-refresh", true,
+		"Ask Argo CD (argocd.argoproj.io/refresh) or Flux (reconcile.fluxcd.io/requestedAt) to sync a "+
+			"promotion's commit as soon as it is in git, once per step, instead of waiting for their poll "+
+			"(Helm health.refresh.enabled). An environment's health.refresh: false turns it off there.")
 	var gatesStatusContext string
 	flag.StringVar(&gatesStatusContext, "gates-status-context", scm.GatesStatusContext,
 		"Commit status context (GitLab name, Bitbucket key, Azure DevOps genre/name) the gate results are "+
@@ -857,6 +862,7 @@ func main() {
 		Providers:           providers,
 		GitClient:           gitClient,
 		GatesStatusDisabled: !gatesCommitStatus,
+		RefreshDisabled:     !healthRefresh,
 		GatesStatusContext:  gatesStatusContext,
 		HealthDetector:      newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
 		RemoteClusters:      &healthpkg.RemoteClusters{},
@@ -1059,7 +1065,7 @@ func main() {
 		bundleAPI.onlyNamespace = watchNamespace
 		bundleAPI.reader = mgr.GetAPIReader()
 		if bundleTokenReviewAuth {
-			tokens, access, err := newReviewers(mgr.GetConfig(), review)
+			tokens, access, _, err := newReviewers(mgr.GetConfig(), review)
 			if err != nil {
 				logger.Fatal().Err(err).Msg("bundle API TokenReview auth")
 			}

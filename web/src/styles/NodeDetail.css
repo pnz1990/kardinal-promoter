@@ -2,7 +2,8 @@
  * Copyright 2026 The kardinal-promoter Authors.
  * Licensed under the Apache License, Version 2.0
  *
- * NodeDetail.css — the detail panel of a selected DAG node (components/NodeDetail.tsx).
+ * NodeDetail.css — the steps, CEL and events of the stage drawer (StepProgress, CELBlock, EventsPanel);
+ * the node details panel that named it is gone.
  * Every value is a design token. Only the waterfall bars' position is set inline.
  */
 
@@ -29,12 +30,6 @@
   font-style: italic;
 }
 .node-detail__hint--flush { margin-block-end: 0; }
-
-/* Loading skeleton */
-@keyframes node-detail-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
 
 /* Promotion steps, with the waterfall */
 .node-detail__steps {
@@ -93,11 +88,11 @@
   white-space: pre-wrap;
   word-break: break-all;
 }
-.cel-token--keyword, .cel-token--boolean { color: var(--k-syntax-number); }
+.cel-token--keyword,
+.cel-token--boolean { color: var(--k-syntax-number); }
 .cel-token--function { color: var(--k-syntax-function); }
 .cel-token--string { color: var(--k-syntax-string); }
 .cel-token--number { color: var(--k-syntax-number); }
 .cel-token--operator { color: var(--k-syntax-punct); }
 .cel-token--identifier { color: var(--k-syntax-ident); }
 .cel-token--plain { color: var(--k-ink-2); }
-

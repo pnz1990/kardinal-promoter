@@ -454,6 +454,22 @@
         }
       }
     },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "refresh": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "--health-refresh: ask Argo CD or Flux to sync a promotion's commit at once, and grant patch on Applications, Kustomizations and GitRepositories."
+            }
+          }
+        }
+      }
+    },
     "rbac": {
       "type": "object",
       "additionalProperties": false,

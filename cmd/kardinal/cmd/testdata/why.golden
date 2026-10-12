@@ -81,6 +81,13 @@ prod is held by gate cab: nobody can approve this version.
   Next     ship it again as yourself: kardinal ship demo --image <ref>
   Or       kardinal override demo prod --gate cab --reason <why>
 
+== approval, the version not read, rejected (kardinal why demo prod)
+prod was rejected by bob.
+  Version  1.6.0 (demo-gone)
+  Gate     cab · 0 of 1 approvals
+  Next     ship a fixed version: kardinal ship demo --image <ref>
+  Or       kardinal override demo prod --gate cab --reason <why>
+
 == a gate that opens by itself (kardinal why demo prod)
 prod is held by gate no-weekend-deploys.
   Version  1.5.0 (demo-b)

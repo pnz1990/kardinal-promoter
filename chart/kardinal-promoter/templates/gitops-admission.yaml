@@ -1,0 +1,106 @@
+{{/*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+
+Admission policy that confines the controller's writes to Argo CD and Flux
+objects (docs/health-adapters.md#sync-on-promotion). health.refresh.enabled
+grants the controller patch on every Application, Kustomization and
+GitRepository, for one annotation: argocd.argoproj.io/refresh or
+reconcile.fluxcd.io/requestedAt. RBAC cannot limit a patch to an annotation,
+so this policy denies any other change the controller makes to them (any
+field but metadata, any metadata but the annotation and resourceVersion,
+managedFields and generation) unless
+the controller may also update the object: rbac.argocdApplicationsWrite
+grants update on Applications for the argocd update strategy, and a Role of
+your own can grant it per object. Kubernetes 1.30+ serves
+admissionregistration.k8s.io/v1 (the chart's kubeVersion).
+*/}}
+{{- $fullname := include "kardinal-promoter.fullname" . }}
+{{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kardinal-promoter.serviceAccountName" .) }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $fullname }}-gitops-writes
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["argoproj.io"]
+        apiVersions: ["*"]
+        operations: ["UPDATE"]
+        resources: ["applications"]
+      - apiGroups: ["kustomize.toolkit.fluxcd.io"]
+        apiVersions: ["*"]
+        operations: ["UPDATE"]
+        resources: ["kustomizations"]
+      - apiGroups: ["helm.toolkit.fluxcd.io"]
+        apiVersions: ["*"]
+        operations: ["UPDATE"]
+        resources: ["helmreleases"]
+      - apiGroups: ["source.toolkit.fluxcd.io"]
+        apiVersions: ["*"]
+        operations: ["UPDATE"]
+        resources: ["gitrepositories"]
+  # Only kardinal's controllers: this release's, and the exact usernames in
+  # admission.controllerUsernames (other shards' controllers).
+  matchConditions:
+    - name: controller
+      expression: >-
+        request.userInfo.username in {{ prepend (.Values.admission.controllerUsernames | default list) $controller | toJson }}
+  variables:
+    # The one annotation the refresh request sets on this kind.
+    - name: key
+      expression: >-
+        request.resource.group == 'argoproj.io' ? 'argocd.argoproj.io/refresh' : 'reconcile.fluxcd.io/requestedAt'
+    - name: newAnnotations
+      expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
+    - name: oldAnnotations
+      expression: "has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}"
+    # Every annotation but the refresh key is unchanged, added or removed.
+    - name: annotationsKept
+      expression: >-
+        variables.newAnnotations.all(k, k == variables.key ||
+          (k in variables.oldAnnotations && variables.newAnnotations[k] == variables.oldAnnotations[k])) &&
+        variables.oldAnnotations.all(k, k == variables.key || k in variables.newAnnotations)
+    # Nothing else the controller could change is changed.
+    # Nothing else changes: every top-level field but metadata (spec,
+    # status, an Application's operation, any other), and every metadata
+    # field but the annotations (above) and what the API server maintains
+    # itself (resourceVersion, managedFields, generation).
+    - name: serverFields
+      expression: "['annotations', 'resourceVersion', 'managedFields', 'generation']"
+    - name: onlyRefresh
+      expression: >-
+        variables.annotationsKept &&
+        object.all(k, k == 'metadata' || (k in oldObject && object[k] == oldObject[k])) &&
+        oldObject.all(k, k == 'metadata' || k in object) &&
+        object.metadata.all(k, k in variables.serverFields ||
+          (k in oldObject.metadata && object.metadata[k] == oldObject.metadata[k])) &&
+        oldObject.metadata.all(k, k in variables.serverFields || k in object.metadata)
+    # Wider writes need update on the object, which RBAC grants:
+    # rbac.argocdApplicationsWrite on every Application, or a Role of yours.
+    - name: mayUpdate
+      expression: >-
+        authorizer.group(request.resource.group).resource(request.resource.resource)
+        .namespace(request.namespace).name(request.name).check('update').allowed()
+  validations:
+    - expression: variables.onlyRefresh || variables.mayUpdate
+      messageExpression: >-
+        'the kardinal controller may change only the ' + variables.key + ' annotation of ' +
+        request.resource.resource + ' ' + request.namespace + '/' + request.name +
+        ' unless it may update it (rbac.argocdApplicationsWrite grants update on Applications)'
+      reason: Forbidden
+---
+# Cluster-wide: the objects are in the GitOps tools' namespaces (argocd,
+# flux-system), not the Pipelines'. The policy matches only the controller.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $fullname }}-gitops-writes
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: {{ $fullname }}-gitops-writes
+  validationActions: ["Deny"]

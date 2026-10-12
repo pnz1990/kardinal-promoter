@@ -10,7 +10,7 @@ test.describe('Journey 020 — Coherence', () => {
   test('a version reads as its tag on the rail, in the header, the Versions tab and the sidebar', async ({ page }) => {
     await page.goto('/ui/#/p/default/kardinal-test-app')
     const rail = page.getByRole('toolbar', { name: /^Versions/ })
-    await expect(rail.locator('.bundle-chip__name')).toHaveText(['sha-abc1234', 'config 77aa001', 'sha-9f8e7d6'])
+    await expect(rail.locator('.bundle-chip__name')).toHaveText(['sha-9f8e7d6', 'config 77aa001', 'sha-abc1234']) // oldest to newest (Journey 021)
     const header = page.locator('.app-pipeline-head__summary')
     await expect(header.locator('.version-label__tag')).toHaveText('sha-abc1234')
     await expect(header.locator('.version-label')).toHaveAttribute('title', 'kardinal-test-app-abc123')

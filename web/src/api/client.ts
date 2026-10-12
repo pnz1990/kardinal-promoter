@@ -3,7 +3,7 @@
 //
 // api/client.ts — Typed fetch wrappers for the kardinal UI backend API.
 
-import type { Pipeline, Bundle, GraphResponse, PromotionStep, PolicyGate, StepEvent } from '../types'
+import type { AccessCheck, AccessResponse, Pipeline, Bundle, GraphResponse, PromotionStep, PolicyGate, StepEvent } from '../types'
 
 const BASE = '/api/v1/ui'
 
@@ -44,13 +44,19 @@ function readToken(): string | null {
   }
 }
 
+/** The window event sent after the stored token changes: answers cached for the old token's
+ *  user (access/access.ts) are void. */
+export const TOKEN_CHANGE_EVENT = 'kardinal:token-change'
+
 function writeToken(token: string | null): void {
+  const before = readToken()
   try {
     if (token) sessionStorage.setItem(TOKEN_STORAGE_KEY, token)
     else sessionStorage.removeItem(TOKEN_STORAGE_KEY)
   } catch {
     // storage disabled: the token is not kept and the prompt reappears
   }
+  if (before !== token && typeof window !== 'undefined') window.dispatchEvent(new Event(TOKEN_CHANGE_EVENT))
 }
 
 function askForToken(reason: TokenPromptReason): Promise<string> | null {
@@ -214,6 +220,10 @@ export const api = {
   /** Validate a CEL expression using the server-side kro CEL environment. */
   validateCEL: (expression: string) =>
     post<{ valid: boolean; error?: string }>('/validate-cel', { expression }),
+  /** Which of the given actions the caller may take, and the role that grants each
+   *  (POST /access; a SubjectAccessReview per check in TokenReview mode). */
+  checkAccess: (namespace: string, checks: AccessCheck[]) =>
+    post<AccessResponse>('/access', { namespace, checks }),
   /** Create a Bundle from the UI "Create Bundle" dialog (#917). */
   createBundle: (pipeline: string, image: string, commitSHA?: string, author?: string, namespace = 'default') =>
     post<{ bundle: string; message: string }>('/bundles', { pipeline, image, commitSHA, author, namespace }),

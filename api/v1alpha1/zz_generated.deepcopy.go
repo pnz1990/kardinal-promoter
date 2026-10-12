@@ -1147,6 +1147,11 @@ func (in *HealthConfig) DeepCopyInto(out *HealthConfig) {
 		*out = new(KubeconfigSecretRef)
 		**out = **in
 	}
+	if in.Refresh != nil {
+		in, out := &in.Refresh, &out.Refresh
+		*out = new(bool)
+		**out = **in
+	}
 	if in.LabelSelector != nil {
 		in, out := &in.LabelSelector, &out.LabelSelector
 		*out = make(map[string]string, len(*in))
@@ -2963,6 +2968,10 @@ func (in *PromotionStepStatus) DeepCopyInto(out *PromotionStepStatus) {
 	}
 	if in.TargetUpdatedAt != nil {
 		in, out := &in.TargetUpdatedAt, &out.TargetUpdatedAt
+		*out = (*in).DeepCopy()
+	}
+	if in.RefreshRequestedAt != nil {
+		in, out := &in.RefreshRequestedAt, &out.RefreshRequestedAt
 		*out = (*in).DeepCopy()
 	}
 	if in.RenderRequestedAt != nil {

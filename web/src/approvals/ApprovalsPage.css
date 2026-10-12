@@ -1,0 +1,83 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * ApprovalsPage.css — the approvals inbox (U7). Layout comes from the ui Stack primitive;
+ * this sheet holds only what is the inbox's own: the ledger rows ruled by hairlines, the
+ * wait in large tabular numerals, and the quorum as seats drawn like the map's stations.
+ */
+
+.appr {
+  container: appr / inline-size;
+  max-inline-size: var(--k-layout-measure);
+  padding: var(--k-space-8) min(var(--k-space-6), 4vw) var(--k-space-12);
+}
+
+.appr__head { margin-block-end: var(--k-space-6); }
+
+.appr__eyebrow {
+  margin: 0;
+  font: var(--k-weight-semibold) var(--k-text-2xs) / var(--k-leading-2xs) var(--k-font-display);
+  letter-spacing: var(--k-tracking-caps);
+  text-transform: uppercase;
+  color: var(--k-ink-3);
+}
+
+.appr__title {
+  margin: 0;
+  font: var(--k-weight-title) var(--k-text-2xl) / var(--k-leading-2xl) var(--k-font-display);
+  letter-spacing: var(--k-tracking-display);
+}
+
+.appr__muted {
+  margin: 0;
+  color: var(--k-ink-2);
+  font-size: var(--k-text-sm);
+}
+
+.appr__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-block-start: var(--k-border-hairline) solid var(--k-line);
+}
+
+.appr-item {
+  display: grid;
+  grid-template-columns: minmax(var(--k-space-24), auto) 1fr auto;
+  gap: var(--k-space-2) var(--k-space-6);
+  padding: var(--k-space-4) var(--k-space-2);
+  border-block-end: var(--k-border-hairline) solid var(--k-line);
+}
+
+.appr-item__waited {
+  font: var(--k-weight-medium) var(--k-text-xl) / var(--k-leading-xl) var(--k-font-mono);
+  font-variant-numeric: var(--k-numeric-mono);
+}
+
+.appr-item__where {
+  inline-size: fit-content;
+  color: var(--k-ink);
+  font: var(--k-weight-section) var(--k-text-md) / var(--k-leading-md) var(--k-font-display);
+  text-decoration: none;
+}
+
+.appr-item__where:hover { text-decoration: underline; }
+.appr-item__where:focus-visible { outline: var(--k-focus-ring); outline-offset: var(--k-focus-offset); }
+
+.appr-seat {
+  display: inline-block;
+  inline-size: calc(var(--k-graph-station-r) * 2);
+  block-size: calc(var(--k-graph-station-r) * 2);
+  border-radius: var(--k-radius-dot);
+  border: var(--k-border-strong) solid var(--k-status-waiting-fg);
+}
+
+.appr-seat--filled { background: var(--k-status-waiting-fg); }
+
+.appr__others { margin-block-start: var(--k-space-8); }
+.appr__others summary { cursor: pointer; color: var(--k-ink-2); }
+
+@container appr (max-width: 480px) {
+  .appr-item { grid-template-columns: 1fr; }
+}

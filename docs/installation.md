@@ -201,7 +201,11 @@ name under **Kubernetes details**, for `kubectl`.
   (or **Resume**, the main action while paused) and **Ship a version** (create a Bundle). Under
   it, one line: the Pipeline's summary sentence, then the shown version's name, commit, author
   and CI run. Below that are four tabs:
-  - **Map**: the station map, and the Bundle history to pick the version shown and compare two.
+  - **Map**: the station map, and the version rail to pick the version shown and compare two.
+    The rail's ticks run oldest to newest; hovering one draws its route on the map as a faint
+    line, `[` and `]` follow an older or newer version, `f` the active version, and `c` on a focused tick
+    (or Shift-click) compares it: the comparison has the map's marks and a row per environment.
+    On a narrow map the zoom level control gives way to zoom buttons.
     **Map | Table | Matrix** shows the same pipeline three ways. The **Table** has one row per
     environment (fleet targets included): its state, what it runs, what is on its way with its
     PR, its gates and its actions, sortable by environment, state and age; a narrow screen opens
@@ -240,6 +244,20 @@ name under **Kubernetes details**, for `kubectl`.
   Then its evidence (the steps with their timings, the bake, the gates) and its events. A gate's
   CEL and the step's conditions are behind **Details**; opening a gate's Details checks its CEL
   with the controller.
+- **Approvals.** **Approvals** in the top bar counts the approvals waiting on you and opens
+  `#/approvals`: every approval gate still collecting its quorum, the one waiting longest first,
+  with the version, the gate, the approvals so far and who gave them, and Approve and Decline
+  (the same dialog as the environment's). Below are the approvals waiting on someone else, and
+  why: you approved already, your approval does not count, or only some groups may approve. An
+  approval names who decided, so without TokenReview (`ui.auth.tokenReview`) the UI cannot
+  record one; use `kardinal approve`.
+- **What you may do.** With TokenReview the UI asks the controller which actions you may take
+  (`POST /api/v1/ui/access`, cached for 30 seconds). An action you may not take stays in place
+  but does nothing, and says which of the chart's roles grants it; the controller checks every
+  action again when it is taken.
+- **Changes as they happen.** When a poll changes an environment's state or version, or an
+  approval's count, its card gets a brief halo; with reduced motion, an outline until the next
+  poll.
 - **Release metrics.** Time to the final environments and the deploys that reached them, over
   the last 10 Bundles. The final environments are those no other environment waits for: `prod`
   in test, uat, prod; every environment of a last wave, which a Bundle reaches when all of
@@ -258,7 +276,10 @@ name under **Kubernetes details**, for `kubectl`.
 - **Keyboard.** The first Tab stop skips to the main content. Each fleet line, and the Bundle
   history, is a single Tab stop: the arrow keys move between its stations or Bundles (Home and
   End to the ends, Up and Down between fleet lines), and Enter opens the one in focus. `?` lists
-  the shortcuts (`/` filter, `r` refresh, `Esc` close a panel). Every view is checked against
+  the shortcuts: `/` filter, `r` refresh, `Esc` close a panel, `j` and `k` the next and previous
+  environment of the open pipeline (on Approvals, the next and previous approval), `a` approve
+  (the open environment's approval, or the approval in focus), and `s` ship a version. A key with
+  nothing to act on says why. Every view is checked against
   WCAG 2.1 AA, colour contrast included, in both themes.
 - **Narrow screens.** Below 960 px wide (a phone or a split window) the pipeline list is a
   drawer: the button at the start of the top bar opens it, and Esc, a pick or a click outside
@@ -276,10 +297,12 @@ name under **Kubernetes details**, for `kubectl`.
   | `/ui/#/p/<namespace>/<pipeline>` | a Pipeline |
   | `/ui/#/p/<namespace>/<pipeline>/env/<environment>` | an environment's details |
   | `/ui/#/p/<namespace>/<pipeline>/v/<bundle>` | the Pipeline at that version |
+  | `/ui/#/approvals` | the approvals waiting on you |
 
   These options go after `?`:
   - `tab=versions|activity|metrics` picks a tab (`tab=history` opens Versions, `tab=gates` the map);
   - `compare=<bundle>` opens the comparison;
+  - `section=why|actions|evidence|history` scrolls an environment's details to that part;
   - `view=ops` shows the operations table;
   - `filter=` and `q=` keep the sidebar's health filter and search.
 

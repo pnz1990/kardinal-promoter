@@ -374,9 +374,16 @@ func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1
 		a.lines = []whyLine{version,
 			{"Gate", fmt.Sprintf("%s · %d of %d approvals", name, st.Approved, st.Required)},
 			{"Next", next}}
-		if st.Block == lifecycle.ApprovalRejected {
+		// Rejected; or, the version not read (so whether excludeAuthor holds
+		// it is unknown), a known rejection is what to say.
+		if st.Block == lifecycle.ApprovalRejected || (creatorHeld && !known && len(st.RejectedBy) > 0) {
 			// A counted reject blocks it: no approval opens it.
-			a.sentence = fmt.Sprintf("%s was %s.", env, st.Reason)
+			by := st.RejectedBy
+			who := by[len(by)-1]
+			if len(by) > 1 {
+				who = strings.Join(by[:len(by)-1], ", ") + " and " + who
+			}
+			a.sentence = fmt.Sprintf("%s was rejected by %s.", env, who)
 			a.lines[2].value = fmt.Sprintf("ship a fixed version: kardinal ship %s --image <ref>", p.Name)
 			a.lines = append(a.lines, whyLine{"Or", fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>", p.Name, env, name)})
 		}

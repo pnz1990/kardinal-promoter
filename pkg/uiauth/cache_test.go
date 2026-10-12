@@ -261,3 +261,29 @@ func TestTTLCache_OlderResultNotStoredAfterExpiry(t *testing.T) {
 	_, ok := c.get("k")
 	assert.False(t, ok, "nothing cached: the next request asks again")
 }
+
+// TestTTLCache_EvictsLeastRecentlyUsed: a full cache drops its least recently
+// used entries, not everything: an entry read since keeps its answer while one
+// caller fills the cache with new keys (QA #1748).
+//
+// Covers UI-ACCESS-02.
+func TestTTLCache_EvictsLeastRecentlyUsed(t *testing.T) {
+	c := newTTLCache[int](time.Minute)
+	c.put("hot", 1, c.start())
+	for i := 0; i < maxCacheEntries-1; i++ {
+		c.put(fmt.Sprint(i), i, c.start())
+	}
+	_, _ = c.get("hot")
+	for i := 0; i < 3*maxCacheEntries; i++ {
+		c.put(fmt.Sprint("flood-", i), i, c.start())
+		if i%100 == 0 {
+			_, _ = c.get("hot")
+		}
+	}
+	assert.LessOrEqual(t, len(c.entries), maxCacheEntries)
+	v, ok := c.get("hot")
+	assert.True(t, ok, "an entry in use survives the flood")
+	assert.Equal(t, 1, v)
+	_, ok = c.get("0")
+	assert.False(t, ok, "the least recently used went first")
+}

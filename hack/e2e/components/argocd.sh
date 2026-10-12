@@ -3,7 +3,10 @@
 #
 # Installs Argo CD ARGOCD_RELEASE (release manifests) in namespace argocd and
 # makes it poll git every 10s without jitter, so a merged commit syncs within
-# a test timeout. Dex is scaled to zero: tests use Applications, not SSO.
+# a test timeout. KARDINAL_E2E_ARGOCD_RECONCILIATION=180s restores Argo CD's
+# default poll interval (and its default 60s jitter), to measure what a
+# stock install sees (TestHealth_ArgoCDRefresh logs the commit-to-Verified
+# times). Dex is scaled to zero: tests use Applications, not SSO.
 # Idempotent.
 #
 # Copyright 2026 The kardinal-promoter Authors.
@@ -18,7 +21,10 @@ NS=argocd
 # The controllers read the reconciliation settings at start, so they go in
 # before the install. The install's argocd-cm does not set these two keys, so
 # its server-side apply leaves them to our field manager.
-cm=(--from-literal=timeout.reconciliation=10s --from-literal=timeout.reconciliation.jitter=0s)
+RECONCILIATION=${KARDINAL_E2E_ARGOCD_RECONCILIATION:-10s}
+JITTER=0s
+[ "$RECONCILIATION" = 10s ] || JITTER=60s
+cm=(--from-literal=timeout.reconciliation="$RECONCILIATION" --from-literal=timeout.reconciliation.jitter="$JITTER")
 apply_cm() {
   "${KUBECTL[@]}" -n "$NS" create configmap argocd-cm "$@" \
     --dry-run=client -o yaml | "${KUBECTL[@]}" apply --server-side --force-conflicts \

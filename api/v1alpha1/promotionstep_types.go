@@ -446,6 +446,27 @@ type PromotionStepStatus struct {
 	// +optional
 	TargetUpdatedAt *metav1.Time `json:"targetUpdatedAt,omitempty"`
 
+	// RefreshRequestedAt is when the step asked the GitOps tool its health
+	// check names (an Argo CD Application, or a Flux Kustomization and its
+	// GitRepository) to sync the promoted commit now (health.refresh). Set
+	// once, before the request is sent: a step asks at most once, also
+	// after a controller restart. For Flux it is the
+	// reconcile.fluxcd.io/requestedAt value sent.
+	// +optional
+	RefreshRequestedAt *metav1.Time `json:"refreshRequestedAt,omitempty"`
+
+	// RefreshRevision is the commit the refresh was requested for: the
+	// pushed commit or the PR merge commit, empty when the SCM did not
+	// report the merge commit.
+	// +optional
+	RefreshRevision string `json:"refreshRevision,omitempty"`
+
+	// RefreshMessage says which objects the refresh was requested on, or why
+	// the request failed (the step then waits for the GitOps tool's own
+	// poll; a failed refresh never fails the step).
+	// +optional
+	RefreshMessage string `json:"refreshMessage,omitempty"`
+
 	// RenderRequestedAt is when the step reached its render step (layout:
 	// branch). Set once; the Graph creates the environment's RenderRun once
 	// it is set.

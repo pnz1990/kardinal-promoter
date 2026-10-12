@@ -25,6 +25,7 @@ export function Breadcrumb({ route, namespace }: BreadcrumbProps) {
     if (route.env) crumbs.push({ label: route.env, kind: 'environment' })
     else if (route.version) crumbs.push({ label: route.version, kind: 'version' })
   }
+  if (!route.pipeline && route.approvals) crumbs.push({ label: 'Approvals' })
   return (
     <nav aria-label="Breadcrumb" className="breadcrumb">
       <ol className="breadcrumb__list">

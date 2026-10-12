@@ -834,6 +834,19 @@ type HealthConfig struct {
 	// +optional
 	KubeconfigSecretRef *KubeconfigSecretRef `json:"kubeconfigSecretRef,omitempty"`
 
+	// Refresh asks the GitOps tool to sync as soon as the promotion's commit
+	// is in git, instead of waiting for its poll interval: when health.type
+	// (or delivery.delegate) is argocd or flux, the step entering
+	// HealthChecking sets argocd.argoproj.io/refresh: normal on the
+	// Application, or reconcile.fluxcd.io/requestedAt on the Kustomization
+	// and its source GitRepository, once (status.refreshRequestedAt). A
+	// failed request is not a failure: the tool syncs on its own poll.
+	// Default true; false turns it off for this environment. The
+	// controller's --health-refresh=false (Helm health.refresh.enabled)
+	// turns it off everywhere.
+	// +optional
+	Refresh *bool `json:"refresh,omitempty"`
+
 	// LabelSelector enables WatchKind mode for health.type=resource.
 	// When set, the health node watches ALL Deployments in the environment namespace
 	// that match the given labels (a kro Graph collection ref node).
