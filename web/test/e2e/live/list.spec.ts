@@ -52,21 +52,22 @@ test('the sidebar shows each pipeline’s state, and the filters narrow it', asy
   await expect(sidebarRows(page)).toHaveCount(3)
 
   const held = sidebarRow(page, PIPELINE)
-  await expect(held.locator('.health-chip')).toHaveText('Blocked by a gate')
-  await expect(held.locator('.health-chip')).toHaveAttribute('data-health-state', 'InProgress')
+  // Its one state (pipelineState): held, named from status.environments.
+  await expect(held.locator('[data-category]')).toHaveAttribute('data-category', 'blocked')
+  await expect(held.locator('[data-category]')).toContainText(/^.?\s*(Held by gate .+ in |Blocked by a gate)/)
   await expect(held).toContainText('2 envs')
   await expect(held).toContainText('1 live')
   await expect(held).not.toContainText('PAUSED')
 
   const pausedRow = sidebarRow(page, paused)
   await expect(pausedRow.getByTitle('Pipeline is paused — no new promotions will start')).toHaveText('PAUSED')
-  await expect(pausedRow.locator('.health-chip')).toHaveText('Paused')
-  await expect(pausedRow.locator('.health-chip')).toHaveAttribute('data-health-state', 'Paused')
+  await expect(pausedRow.locator('[data-category]')).toHaveText('Paused')
+  await expect(pausedRow.locator('[data-category]')).toHaveAttribute('data-category', 'paused')
   await expect(pausedRow).toContainText('1 env')
 
   const brokenRow = sidebarRow(page, broken)
-  await expect(brokenRow.locator('.health-chip')).toHaveText('A version failed')
-  await expect(brokenRow.locator('.health-chip')).toHaveAttribute('data-health-state', 'Degraded')
+  await expect(brokenRow.locator('[data-category]')).toContainText('A version failed')
+  await expect(brokenRow.locator('[data-category]')).toHaveAttribute('data-category', 'failed')
   await expect(brokenRow).toContainText('1 failed')
   await expect(brokenRow).not.toContainText('PAUSED')
 

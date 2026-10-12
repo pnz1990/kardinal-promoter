@@ -83,6 +83,8 @@ Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/ka
 
 ### Fixed
 
+- **One state per Pipeline in the UI** — the page header, the sidebar badge, the fleet board and the health counters showed different states for one Pipeline ("Promoting", "Blocked by a gate", "0 Promoting"). They now read one state (paused, a failed version, held by a gate, named from `status.environments` as `Held by gate prod-approval in prod`, promoting, no version yet, up to date), and each Pipeline counts in exactly one of Healthy, Blocked, Failed and Promoting. The map's edge label names the gate that holds the version first (`prod-approval (waiting) · +1 passing`), the breadcrumb names a followed version by its tag, and durations read `4d` or `2h 15m` instead of `96h 0m`. `status.summary` no longer capitalises a version at its start (`sha-9349a3f live in test`, not `Sha-9349a3f`)
+
 - **`ship --wait` times never go negative** — with the controller's clock ahead of this one, a summary's "for" is `0s`, not `-3s`
 - **A rejected version says rejected when the CLI cannot read it** — `kardinal why` says who rejected it, and `kardinal inbox` leaves it out as it does every rejected gate, instead of "could not read the version" when the gate excludes the author
 - **The stage drawer shows step timings, events and the CEL check** — an environment's drawer shows the steps' timing bars and the running time in its evidence, the step's events in its history, and the controller's CEL check when a gate's **Details** opens ([Installation](installation.md))

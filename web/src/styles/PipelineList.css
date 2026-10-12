@@ -170,6 +170,15 @@
   display: flex;
   align-items: center;
   gap: var(--k-space-1);
+  min-width: 0;
+}
+/* The name keeps its room; a long state ("Held by gate … in prod") ellipsises, whole in its title. */
+.pipeline-list__name-wrap { flex-shrink: 0; }
+.pipeline-list__badges .k-chip {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pipeline-list__paused {

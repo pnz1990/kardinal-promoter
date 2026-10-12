@@ -429,6 +429,9 @@ export function App() {
     : undefined
   const selectedNamespace = urlState.ns ?? activePipeline?.namespace
   const activeBundle = shownBundleName ? bundles.find(b => b.name === shownBundleName) : undefined
+  // The route's version as people know it (its tag), for the breadcrumb.
+  const routeVersion = urlState.version ? bundles.find(b => b.name === urlState.version) : undefined
+  const routeVersionLabel = routeVersion ? bundleVersion(routeVersion) : undefined
   // The picked comparison bundle, while the pipeline still has it and it is
   // not the bundle on screen (which is the one it is compared against).
   const compareBundle = compareTarget && compareTarget !== activeBundle?.name && bundles.some(b => b.name === compareTarget)
@@ -822,7 +825,7 @@ export function App() {
         <main id="main-content" tabIndex={-1} className="app-main app-main--ops">
           <div className="app-topbar">
             {navButton}
-            <Breadcrumb route={urlState} namespace={activePipeline?.namespace} />
+            <Breadcrumb route={urlState} namespace={activePipeline?.namespace} versionLabel={routeVersionLabel} />
             {approvalsLink}
             {topbarTools}
           </div>
@@ -844,7 +847,7 @@ export function App() {
         <main id="main-content" tabIndex={-1} className="app-main">
           <div className="app-topbar">
             {navButton}
-            <Breadcrumb route={urlState} namespace={activePipeline?.namespace} />
+            <Breadcrumb route={urlState} namespace={activePipeline?.namespace} versionLabel={routeVersionLabel} />
             {approvalsLink}
             {topbarTools}
           </div>

@@ -80,7 +80,7 @@ function matchesQuery(p: Pipeline, query: string): boolean {
 /** A pipeline's state chip: pipelineState, the same words the header and the fleet use. */
 function PipelineStateChip({ pipeline }: { pipeline: Pipeline }) {
   const st = pipelineState(pipeline)
-  return <StatusChip tone={st.tone} label={st.label} glyph={st.glyph} compact data-category={st.category} />
+  return <StatusChip tone={st.tone} label={st.label} glyph={st.glyph} compact data-category={st.category} title={st.label} />
 }
 
 export function PipelineList({ pipelines, selected, selectedNamespace, onSelect, loading, error, onRetry, searchInputRef, total, initialQuery = '', onQueryChange }: Props) {
