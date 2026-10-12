@@ -9,7 +9,7 @@ prod         main (demo-r48zm)         sha-9349a3f (demo-kzwhs)  Held by gate pr
 
 Blocking gates
 ------------------------------------------------------------------------
-GATE                  ENV   EXPRESSION                       REASON                                          LAST CHECKED
+GATE                  ENV   RULE                             REASON                                          LAST CHECKED
 prod-approval         prod  approval 0 of 1                  prod waits for your approval (wa...             <time>
 uat-soak-before-prod  prod  bundle.upstreamSoakMinutes >= 3  soak 0.4 of 3 min in uat, opens in about 2m36s  <time>
 

@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"flag"
 	"os"
 	"path/filepath"
@@ -85,6 +86,25 @@ func TestWalkGates_Golden(t *testing.T) {
 		}
 		golden.WriteString("\n")
 	}
+	// -o json: the tally and the progress in fields of their own; message is
+	// the gate's spec.message only.
+	out, _, err := runOutput(t, c, "status", "demo", "-o", "json")
+	require.NoError(t, err)
+	var view struct {
+		BlockingGates []statusGate `json:"blockingGates"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &view), out)
+	require.Len(t, view.BlockingGates, 2)
+	byName := map[string]statusGate{}
+	for _, g := range view.BlockingGates {
+		byName[g.Name] = g
+	}
+	assert.Equal(t, "approval 0 of 1", byName["prod-approval"].Approval)
+	assert.Equal(t, "true", byName["prod-approval"].Expression)
+	assert.Empty(t, byName["prod-approval"].Progress)
+	assert.Equal(t, "soak 0.4 of 3 min in uat, opens in about 2m36s", byName["uat-soak-before-prod"].Progress)
+	assert.Empty(t, byName["uat-soak-before-prod"].Message, "no spec.message: the progress is not folded into it")
+
 	got := golden.String()
 	assert.Contains(t, got, "approval 0 of 1")
 	assert.Contains(t, got, "soak 0.4 of 3 min in uat")

@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -16,9 +17,18 @@ import (
 
 // soakComparison is a soak threshold in a gate's expression:
 // bundle.upstreamSoakMinutes or upstream.<env>.soakMinutes compared with >=
-// or > to a whole number of minutes. whole is when the comparison is the
-// entire expression (so the gate opens when it passes).
-var soakComparison = regexp.MustCompile(`(?:^|[^\w.])(bundle\s*\.\s*upstreamSoakMinutes|upstream\s*\.\s*([A-Za-z0-9_]+)\s*\.\s*soakMinutes)\s*(>=|>)\s*(\d+)\b`)
+// or > to a number of minutes (3, 3.5). A number that runs on into a name or
+// another number (3e2, 3.5.1, 3x) does not match.
+var soakComparison = regexp.MustCompile(`(?:^|[^\w.])(bundle\s*\.\s*upstreamSoakMinutes|upstream\s*\.\s*([A-Za-z0-9_]+)\s*\.\s*soakMinutes)\s*(>=|>)\s*(\d+(?:\.\d+)?)(?:$|[^\w.])`)
+
+// maxSoakMinutes is the largest threshold soakOf reads: a year. A larger one
+// would overflow a time.Duration in opensIn; such a gate is shown as it is.
+const maxSoakMinutes = 366 * 24 * 60
+
+// negated finds a ! right before a comparison (after any opening
+// parentheses): such a gate passes while the soak is short, and does not
+// open by soaking.
+var negated = regexp.MustCompile(`!\s*[(\s]*$`)
 
 // gateSoak is how far a soak gate's version has soaked, computed from what
 // the controller records: the Bundle's status.environments[].healthCheckedAt
@@ -29,7 +39,7 @@ type gateSoak struct {
 	// envs are the environments whose soak the expression reads.
 	envs []string
 	// need is the threshold in minutes; strict when the comparison is >.
-	need   int64
+	need   float64
 	strict bool
 	// live is false while an environment it reads is not live yet; elapsed
 	// is then 0.
@@ -52,8 +62,11 @@ func soakOf(p *v1alpha1.Pipeline, b *v1alpha1.Bundle, g *v1alpha1.PolicyGate, no
 		return gateSoak{}, false
 	}
 	m := all[0]
-	need, err := strconv.ParseInt(expr[m[8]:m[9]], 10, 64)
-	if err != nil {
+	if negated.MatchString(expr[:m[2]]) {
+		return gateSoak{}, false
+	}
+	need, err := strconv.ParseFloat(expr[m[8]:m[9]], 64)
+	if err != nil || need < 0 || need > maxSoakMinutes {
 		return gateSoak{}, false
 	}
 	s := gateSoak{need: need, strict: expr[m[6]:m[7]] == ">"}
@@ -90,12 +103,14 @@ func soakOf(p *v1alpha1.Pipeline, b *v1alpha1.Bundle, g *v1alpha1.PolicyGate, no
 	return s, true
 }
 
-// minutes is how many whole minutes of soak open the gate (> n needs n+1).
+// minutes is how many whole minutes of soak open the gate: soakMinutes is
+// whole minutes, so >= 3.5 needs 4, > 3 needs 4 and > 3.5 needs 4.
 func (s gateSoak) minutes() int64 {
-	if s.strict {
-		return s.need + 1
+	n := int64(math.Ceil(s.need))
+	if s.strict && float64(n) == s.need {
+		n++
 	}
-	return s.need
+	return n
 }
 
 // opensIn is how long until the soak reaches its threshold, and false

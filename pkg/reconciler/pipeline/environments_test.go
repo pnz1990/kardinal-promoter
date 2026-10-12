@@ -395,3 +395,35 @@ func TestSummarizeGroups(t *testing.T) {
 		})
 	}
 }
+
+// TestProjectEnvironments_ZeroNow: a reader without the controller's clock
+// (the CLI passes a zero now) gets no Since for a state that began now, never
+// a zero time (which ship --wait printed as 2562047h47m16s); a Verified
+// environment keeps its step's Verified time.
+//
+// Covers PIPE-ENVSTATUS-02.
+func TestProjectEnvironments_ZeroNow(t *testing.T) {
+	t2 := envT0.Add(time.Hour)
+	bundles := []kardinalv1alpha1.Bundle{envBundle("b2", "1.5.0", "Promoting", t2)}
+	p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "uat"}, {Name: "prod"}, {Name: "dr"}})
+	steps := []kardinalv1alpha1.PromotionStep{projStep("b2", "test", "Verified", t2, t2), projStep("b2", "uat", "Verified", t2, t2),
+		projStep("b2", "dr", "Promoting", t2, time.Time{})}
+	gates := []kardinalv1alpha1.PolicyGate{envGate("b2", "prod", "cab")}
+	got := pipeline.ProjectEnvironments(p, bundles, steps, gates, nil, time.Time{})
+	require.Len(t, got, 4)
+	require.NotNil(t, got[0].Since, "Verified: the step's time")
+	assert.False(t, got[0].Since.IsZero())
+	assert.Equal(t, []string{"cab"}, got[2].BlockedBy)
+	assert.Nil(t, got[2].Since, "a gate's hold that began now has no Since without a clock")
+	assert.Equal(t, "Promoting", got[3].State)
+	assert.Nil(t, got[3].Since, "nor a promotion")
+
+	// The same input with the controller's clock: every state has a Since.
+	now := t2.Add(time.Minute)
+	got = pipeline.ProjectEnvironments(p, bundles, steps, gates, nil, now)
+	for _, e := range got {
+		require.NotEmpty(t, e.State, e.Name)
+		require.NotNil(t, e.Since, e.Name)
+		assert.False(t, e.Since.IsZero(), e.Name)
+	}
+}

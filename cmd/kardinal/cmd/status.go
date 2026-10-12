@@ -345,6 +345,10 @@ type statusGate struct {
 	// Approval is an approval gate's tally ("approval 0 of 1"), shown in
 	// place of its expression, which says nothing about why it holds.
 	Approval string `json:"approval,omitempty"`
+	// Progress is a soak gate's progress and when it opens ("soak 0.4 of 3
+	// min in uat, opens in about 2m36s"), from the Bundle's
+	// status.environments[].healthCheckedAt.
+	Progress string `json:"progress,omitempty"`
 	// Message is the gate's spec.message when it explains the block
 	// (graph.BlockedMessage).
 	Message string `json:"message,omitempty"`
@@ -449,14 +453,10 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 			}
 			// A soak gate says how far the version soaked and when it opens.
 			if soak, ok := soakOf(&pl, byName[newest], g, statusNow()); ok {
-				progress := soak.now()
+				sg.Progress = soak.now()
 				if opens := soak.opens(); opens != "" {
-					progress += ", opens " + opens
+					sg.Progress += ", opens " + opens
 				}
-				if sg.Message != "" {
-					progress = sg.Message + "; " + progress
-				}
-				sg.Message = progress
 			}
 			if g.Spec.Approval != nil {
 				creator := ""
@@ -600,7 +600,15 @@ func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
 		_, _ = fmt.Fprintln(w, "Blocking gates")
 		_, _ = fmt.Fprintln(w, sty.Rule(72))
 		gtw := style.NewTable(w, 2)
-		_, _ = fmt.Fprintln(gtw, "GATE\tENV\tEXPRESSION\tREASON\tLAST CHECKED")
+		// The column holds an approval gate's tally in place of its
+		// expression: then it is the gate's RULE.
+		column := "EXPRESSION"
+		for _, g := range view.BlockingGates {
+			if g.Approval != "" {
+				column = "RULE"
+			}
+		}
+		_, _ = fmt.Fprintln(gtw, "GATE\tENV\t"+column+"\tREASON\tLAST CHECKED")
 		for _, g := range view.BlockingGates {
 			lastChecked := "-"
 			if g.LastEvaluatedAt != nil && !g.LastEvaluatedAt.IsZero() {
@@ -609,15 +617,20 @@ func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
 			// The gate's message is shown whole: it is what its author wrote
 			// for this table. The CEL detail is in kardinal explain.
 			reason := g.Message
-			if reason == "" {
+			switch {
+			case reason != "" && g.Progress != "":
+				reason += "; " + g.Progress
+			case g.Progress != "":
+				reason = g.Progress
+			case reason == "":
 				reason = truncateRunes(orDash(g.Reason), 35)
 			}
-			rule := truncateRunes(orDash(g.Expression), 40)
+			cell := truncateRunes(orDash(g.Expression), 40)
 			if g.Approval != "" {
-				rule = g.Approval
+				cell = g.Approval
 			}
 			_, _ = fmt.Fprintf(gtw, "%s\t%s\t%s\t%s\t%s\n", sty.Paint(display.ToneBlocked, g.Name), g.Environment,
-				rule, reason, lastChecked)
+				cell, reason, lastChecked)
 		}
 		if err := gtw.Flush(); err != nil {
 			return fmt.Errorf("write blocking gates: %w", err)
