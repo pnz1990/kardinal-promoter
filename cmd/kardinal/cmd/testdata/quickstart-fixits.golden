@@ -1,0 +1,12 @@
+== a Forgejo fork
+quickstart supports GitHub forks of kardinal-demo, and http://forgejo.forgejo.svc.cluster.local:3000/kardinal/kardinal-demo is not on github.com, so nothing was changed: fork https://github.com/pnz1990/kardinal-demo on GitHub and pass --repo https://github.com/<you>/kardinal-demo, or install kardinal for your git host by hand (https://pnz1990.github.io/kardinal-promoter/installation/, https://pnz1990.github.io/kardinal-promoter/scm-providers/); to try quickstart with it anyway, pass --set scm.provider=<gitlab|forgejo|gitea|bitbucket|...> --set scm.apiURL=<its API URL>
+
+== a GitLab fork
+quickstart supports GitHub forks of kardinal-demo, and https://gitlab.com/me/kardinal-demo is not on github.com, so nothing was changed: fork https://github.com/pnz1990/kardinal-demo on GitHub and pass --repo https://github.com/<you>/kardinal-demo, or install kardinal for your git host by hand (https://pnz1990.github.io/kardinal-promoter/installation/, https://pnz1990.github.io/kardinal-promoter/scm-providers/); to try quickstart with it anyway, pass --set scm.provider=<gitlab|forgejo|gitea|bitbucket|...> --set scm.apiURL=<its API URL>
+
+== a development CLI and the newest published chart
+the chart ghcr.io/pnz1990/charts/kardinal-promoter:0.10.0 does not accept the values this development CLI (v0.1.0-dev) sets (scm: Additional property secretRef is not allowed): this CLI needs the chart of the checkout it was built from, or a later release; pass --chart <checkout>/chart/kardinal-promoter, or --chart-version <version>
+
+== a release CLI and an older --chart-version
+the chart ghcr.io/pnz1990/charts/kardinal-promoter:0.10.0 does not accept the values this CLI (v0.11.0) sets (scm: Additional property secretRef is not allowed): this CLI needs chart 0.11.0 or later; pass --chart-version 0.11.0 (or leave --chart-version out), or --chart <a chart directory>
+

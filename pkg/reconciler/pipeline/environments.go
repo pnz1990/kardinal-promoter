@@ -48,7 +48,8 @@ func EnvironmentNames(p *kardinalv1alpha1.Pipeline) []string {
 // p's (other pipelines' are skipped); gates are its gate instances. prev is
 // the current status.environments: an entry whose Bundle and State did not
 // change keeps its Since, so a second call with the same input returns the
-// same value. now is the Since of a new state.
+// same value. now is the Since of a new state; a zero now (a reader without
+// the controller's clock, such as the CLI) leaves it unknown (nil).
 func ProjectEnvironments(p *kardinalv1alpha1.Pipeline, bundles []kardinalv1alpha1.Bundle,
 	steps []kardinalv1alpha1.PromotionStep, gates []kardinalv1alpha1.PolicyGate,
 	prev []kardinalv1alpha1.PipelineEnvironmentStatus, now time.Time) []kardinalv1alpha1.PipelineEnvironmentStatus {
@@ -156,6 +157,7 @@ func ProjectEnvironments(p *kardinalv1alpha1.Pipeline, bundles []kardinalv1alpha
 		case old[name] != nil && old[name].Since != nil && old[name].State == e.State &&
 			stateBundle(old[name]) == curBundle:
 			e.Since = old[name].Since.DeepCopy()
+		case now.IsZero():
 		default:
 			t := metav1.NewTime(now.UTC().Truncate(time.Second))
 			e.Since = &t
@@ -330,6 +332,9 @@ func Summarize(p *kardinalv1alpha1.Pipeline, ready metav1.Condition, envs []kard
 	}
 	parts := make([]string, 0, len(clauses))
 	last := ""
+	// A version that starts the sentence keeps its case ("sha-9349a3f live
+	// in test", "main live in test"): a tag is a name, not a word.
+	versionFirst := len(clauses) > 0 && clauses[0].version != ""
 	sized := map[string]bool{}
 	for _, c := range clauses {
 		var items []string
@@ -387,9 +392,14 @@ func Summarize(p *kardinalv1alpha1.Pipeline, ready metav1.Condition, envs []kard
 	}
 	if p.Spec.Paused {
 		sentence = "paused; " + sentence
+		versionFirst = false
 	}
 	if ready.Type != "" && ready.Status != metav1.ConditionTrue && ready.Reason != "" {
 		sentence = fmt.Sprintf("not ready (%s); %s", ready.Reason, sentence)
+		versionFirst = false
+	}
+	if versionFirst {
+		return sentence
 	}
 	// A version reads as it is written ("sha-9349a3f", "main"): only a sentence
 	// that starts with words is capitalised.

@@ -45,4 +45,11 @@ describe('pipelineState', () => {
     expect(filterPipelines(fleet, 'blocked').map(x => x.name)).toEqual(['held'])
     expect(filterPipelines(fleet, 'promoting').map(x => x.name)).toEqual(['moving'])
   })
+
+  it('a held pipeline has a compact form for the sidebar: Blocked · N gates', () => {
+    expect(pipelineState(p({ phase: 'Promoting', blockerCount: 1 })).short).toBe('Blocked · 1 gate')
+    expect(pipelineState(p({ phase: 'Promoting', blockerCount: 3 })).short).toBe('Blocked · 3 gates')
+    expect(pipelineState(p({ phase: 'Promoting', blockerCount: 2, environments: [{ name: 'prod', blockedBy: ['a', 'b'] }] } as never)).short).toBe('Blocked · 2 gates')
+    expect(pipelineState(p({ phase: 'Promoting' })).short).toBeUndefined()
+  })
 })

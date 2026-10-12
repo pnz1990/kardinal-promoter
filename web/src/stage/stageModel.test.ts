@@ -51,10 +51,20 @@ describe('stageView', () => {
       { name: 'prod', hold: { bundle: 'web-1', reason: 'bad 1.4.0', createdBy: 'alice' } }] })
     const v = stageView(input({ pipeline: p, gates: [gate({})] }))
     expect(v.why.map(w => w.kind)).toEqual(['paused', 'held', 'gate'])
+    // It names the version it is held on; the Bundle name is the tooltip.
+    expect(v.why[1]).toMatchObject({ title: 'Held on 1.3.0 by a rollback, by alice: no other version promotes here until it is released.',
+      tip: 'web-1', detail: 'bad 1.4.0' })
     expect(v.state.label).toBe('Held by rollback')
     expect(v.actions.has('release')).toBe(true)
     expect(v.actions.has('resume')).toBe(true)
     expect(v.actions.has('pause')).toBe(false)
+  })
+
+  it('a hold on a Bundle not in the list names the running version, else the Bundle', () => {
+    const held = (b: string) => stageView(input({ pipeline: pipeline({ environmentTopology: [{ name: 'test' }, { name: 'uat' },
+      { name: 'prod', hold: { bundle: b, reason: 'r' } }] }), bundles: [] })).why[0].title
+    expect(held('web-2')).toBe('Held on 1.4.0 by a rollback: no other version promotes here until it is released.')
+    expect(held('web-rollback-gone')).toBe('Held on web-rollback-gone by a rollback: no other version promotes here until it is released.')
   })
 
   it('waiting for the PR: a link to it', () => {

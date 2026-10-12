@@ -34,7 +34,7 @@ import { VersionLabel } from './components/VersionLabel'
 import { useAccessIn } from './access/access'
 import { actionCheck, restriction } from './access/actionAccess'
 import type { ApprovalsHandle } from './approvals/ApprovalsPage'
-import { approvalsWaiting } from './approvals/approvalsModel'
+import { approvalItems, approvalsWaiting, type ApprovalItem } from './approvals/approvalsModel'
 
 // The approvals inbox is not on the first screen: it loads when #/approvals opens. The
 // badge count (approvalsModel) stays in the first bundle.
@@ -81,7 +81,7 @@ import { resolveShownBundle } from './bundleSelection'
 import { terminalEnvironments } from './fleetModel'
 
 import type { AccessCheck, Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep, PolicyGate } from './types'
-import { bundleVersion } from './stage/stageModel'
+import { bundleVersion, failedVersionTitle } from './stage/stageModel'
 import { pipelineState } from './pipelineState'
 import { StatusChip } from './ui'
 
@@ -625,9 +625,20 @@ export function App() {
     setSelectedNodeLocal(null)
     setUrlState({ env: envs[next], node: undefined, section: undefined, tab: undefined })
   }
+  // The approvals waiting now, for the a key and ⌘K; each opens its environment's Approve.
+  const decideCheck = actionCheck('approve', {})!
+  const approvalsNow = approvalItems(gates, pipelines, access.identity, ns => access.can(ns, decideCheck))
+  const approveRestriction = (i: ApprovalItem) =>
+    restriction('approve', access.can(i.namespace, decideCheck), access.identity, i.gate, i.gateName)
+  const openApproval = (i: ApprovalItem) => {
+    setSelectedNodeLocal(null)
+    pendingApprove.current = i.env
+    setUrlState({ pipeline: i.pipeline, ns: i.namespace, env: i.env, node: undefined, section: 'why', tab: undefined, approvals: undefined })
+  }
   const approveShortcut = () => {
     if (urlState.approvals) {
-      if (!approvalsRef.current?.approve()) setShortcutNote('Nothing here waits on your approval.')
+      const r = approvalsRef.current?.approve()
+      if (r !== true) setShortcutNote(r ?? 'Nothing here waits on your approval.')
       return
     }
     if (stageEnv) {
@@ -635,8 +646,50 @@ export function App() {
       if (r !== true) setShortcutNote(typeof r === 'string' ? r : `Nothing in ${stageEnv} waits on an approval.`)
       return
     }
-    setShortcutNote(waitingOnMe > 0 ? `${waitingOnMe} waiting on you: open Approvals, or an environment, to approve.` : 'Nothing waits on your approval.')
+    // No environment open (the Map, the Table, the fleet board): the one approval waiting
+    // here opens; several are named; never "nothing waits" when one does.
+    const { mine, others } = approvalsNow
+    const here = (i: { pipeline: string; namespace: string }) =>
+      !activePipeline || (i.pipeline === activePipeline.name && i.namespace === activePipeline.namespace)
+    const where = (i: { pipeline: string; env: string }) => activePipeline ? i.env : `${i.pipeline} › ${i.env}`
+    const minesHere = mine.filter(here)
+    if (minesHere.length === 1) {
+      const i = minesHere[0]
+      const why = approveRestriction(i)
+      if (why) { setShortcutNote(why); return }
+      openApproval(i)
+      return
+    }
+    if (minesHere.length > 1) {
+      setShortcutNote(`${minesHere.length} wait on you: ${minesHere.map(where).join(', ')}. Open one (j / k), or Approvals.`)
+      return
+    }
+    const othersHere = others.filter(here)
+    if (othersHere.length > 0) {
+      setShortcutNote(othersHere.length === 1
+        ? `${where(othersHere[0])} waits on someone else: ${othersHere[0].notMine}`
+        : `${othersHere.length} approvals wait here, on someone else: ${othersHere.map(where).join(', ')}.`)
+      return
+    }
+    setShortcutNote(activePipeline && waitingOnMe > 0
+      ? `Nothing in ${activePipeline.name} waits on you; ${waitingOnMe} elsewhere: open Approvals.`
+      : 'Nothing waits on your approval.')
   }
+  // a with no environment open opened the one waiting: approve once its drawer has loaded.
+  const pendingApprove = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    const env = pendingApprove.current
+    if (!env || stageEnv !== env) return
+    let tries = 0
+    const t = window.setInterval(() => {
+      const r = drawerCommand.current?.('approve')
+      if (r !== true && typeof r !== 'string' && ++tries < 40) return
+      window.clearInterval(t)
+      pendingApprove.current = undefined
+      if (r !== true) setShortcutNote(typeof r === 'string' ? r : `Nothing in ${env} waits on an approval.`)
+    }, 50)
+    return () => window.clearInterval(t)
+  }, [stageEnv])
   const shipShortcut = () => {
     if (!activePipeline) { setShortcutNote('Open a pipeline to ship a version of it.'); return }
     if (shipRestricted) { setShortcutNote(shipRestricted); return }
@@ -680,7 +733,12 @@ export function App() {
       }
     }
     const next = preference === 'system' ? 'Light' : preference === 'light' ? 'Dark' : 'System'
-    const act: PaletteCommand[] = [
+    // U7: approve what waits on you, through its environment's dialog; inert, with why, when you may not.
+    const approve: PaletteCommand[] = approvalsNow.mine.map(i => ({
+      id: `do:approve:${i.namespace}/${i.gate.name}`, group: 'Do', label: `Approve ${i.version} for ${i.env}`, hint: i.pipeline,
+      keywords: `approve approval ${i.gateName} ${i.bundle}`, disabledReason: approveRestriction(i), run: () => openApproval(i),
+    }))
+    const act: PaletteCommand[] = [...approve,
       { id: 'do:theme', group: 'Do', label: `Switch the theme to ${next}`, hint: 'theme', run: toggleTheme },
       {
         id: 'do:density', group: 'Do', label: density === 'compact' ? 'Use comfortable density' : 'Use compact density', hint: 'density',
@@ -691,7 +749,7 @@ export function App() {
       { id: 'do:shortcuts', group: 'Do', label: 'Show keyboard shortcuts', hint: '?', run: () => setShowShortcutsPanel(true) },
     ]
     return [...go, ...act]
-  }, [pipelines, activePipeline, bundles, preference, density, viewMode, urlState.filter, urlState.q, setUrlState,
+  }, [pipelines, activePipeline, bundles, preference, density, viewMode, urlState.filter, urlState.q, setUrlState, approvalsNow,
     handleSelectPipeline, handleTimelineBundleSelect, toggleTheme, setDensity, manualRefresh, setViewMode])
 
   return (
@@ -1112,6 +1170,13 @@ export function App() {
                           <span className="app-sha">
                             {b.provenance.commitSHA.slice(0, 8)}
                           </span>
+                        )}
+                        {activePipeline?.failedVersion?.bundle === b.name && (
+                          // status.failedVersion: why the newest version failed, in the controller's words.
+                          <p className="app-history__failure" role="note">
+                            <strong>{failedVersionTitle(activePipeline.failedVersion)}</strong>{' '}
+                            {activePipeline.failedVersion.message}
+                          </p>
                         )}
                       </li>
                     ))}

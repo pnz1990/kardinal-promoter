@@ -27,6 +27,10 @@ import (
 
 type countingRecorder struct{ normal, warning atomic.Int64 }
 
+// frozen is a clock that never moves: the buckets never refill, so what
+// passes is exactly each burst however slowly a loaded host runs the test.
+func frozen() time.Time { return time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC) }
+
 func (c *countingRecorder) Eventf(_, _ runtime.Object, eventtype, _, _, _ string, _ ...interface{}) {
 	if eventtype == corev1.EventTypeWarning {
 		c.warning.Add(1)
@@ -46,7 +50,7 @@ func dropped(name, typ string) float64 {
 // Covers PERF-EVENTS-01.
 func TestLimited(t *testing.T) {
 	next := &countingRecorder{}
-	rec := kubeevent.Limited(next, "test-limited", kubeevent.Limit{QPS: 1, Burst: 5}, kubeevent.Limit{QPS: 1, Burst: 2})
+	rec := kubeevent.LimitedAt(next, "test-limited", kubeevent.Limit{QPS: 1, Burst: 5}, kubeevent.Limit{QPS: 1, Burst: 2}, frozen)
 	n0, w0 := dropped("test-limited", "Normal"), dropped("test-limited", "Warning")
 	for i := 0; i < 20; i++ {
 		rec.Eventf(&corev1.Pod{}, nil, corev1.EventTypeNormal, "R", "A", "n %d", i)
@@ -62,7 +66,7 @@ func TestLimited(t *testing.T) {
 
 	// One type unlimited: only the other is bounded.
 	next = &countingRecorder{}
-	rec = kubeevent.Limited(next, "test-limited-one", kubeevent.Limit{QPS: 1, Burst: 1}, kubeevent.Limit{})
+	rec = kubeevent.LimitedAt(next, "test-limited-one", kubeevent.Limit{QPS: 1, Burst: 1}, kubeevent.Limit{}, frozen)
 	for i := 0; i < 10; i++ {
 		rec.Eventf(&corev1.Pod{}, nil, corev1.EventTypeNormal, "R", "A", "n %d", i)
 		rec.Eventf(&corev1.Pod{}, nil, corev1.EventTypeWarning, "W", "A", "w %d", i)
@@ -78,14 +82,14 @@ func TestLimited(t *testing.T) {
 // Covers PERF-EVENTS-01.
 func TestLimited_WarningAfterNormalFlood(t *testing.T) {
 	next := &countingRecorder{}
-	rec := kubeevent.Limited(next, "test-flood",
+	rec := kubeevent.LimitedAt(next, "test-flood",
 		kubeevent.Limit{QPS: kubeevent.DefaultQPS, Burst: kubeevent.DefaultBurst},
-		kubeevent.Limit{QPS: kubeevent.DefaultWarningQPS, Burst: kubeevent.DefaultWarningBurst})
+		kubeevent.Limit{QPS: kubeevent.DefaultWarningQPS, Burst: kubeevent.DefaultWarningBurst}, frozen)
 	w0 := dropped("test-flood", "Warning")
 	for i := 0; i < 5000; i++ {
 		rec.Eventf(&corev1.Pod{}, nil, corev1.EventTypeNormal, "Superseded", "Supersede", "bundle %d", i)
 	}
-	require.Less(t, next.normal.Load(), int64(5000), "the Normal bucket is empty")
+	require.EqualValues(t, kubeevent.DefaultBurst, next.normal.Load(), "the Normal bucket is empty")
 	rec.Eventf(&corev1.Pod{}, nil, corev1.EventTypeWarning, "HoldBundleMissing", "CheckHold", "hold of prod")
 	assert.EqualValues(t, 1, next.warning.Load(), "the Warning is written")
 	assert.Zero(t, dropped("test-flood", "Warning")-w0)
@@ -102,8 +106,8 @@ func pod(ns, name string) *corev1.Pod {
 // Covers PERF-EVENTS-01.
 func TestLimited_WarningsPerNamespace(t *testing.T) {
 	next := &countingRecorder{}
-	rec := kubeevent.Limited(next, "test-tenants", kubeevent.Limit{QPS: kubeevent.DefaultQPS, Burst: kubeevent.DefaultBurst},
-		kubeevent.Limit{QPS: kubeevent.DefaultWarningQPS, Burst: kubeevent.DefaultWarningBurst})
+	rec := kubeevent.LimitedAt(next, "test-tenants", kubeevent.Limit{QPS: kubeevent.DefaultQPS, Burst: kubeevent.DefaultBurst},
+		kubeevent.Limit{QPS: kubeevent.DefaultWarningQPS, Burst: kubeevent.DefaultWarningBurst}, frozen)
 	for i := 0; i < 1000; i++ {
 		rec.Eventf(pod("tenant-a", fmt.Sprintf("step-%d", i)), nil, corev1.EventTypeWarning, "PromotionFailed", "Promote", "step %d failed", i)
 	}
@@ -127,18 +131,16 @@ func TestLimited_RepeatsPayTokens(t *testing.T) {
 	defer cancel()
 	require.NoError(t, b.StartRecordingToSinkWithContext(ctx))
 	defer b.Shutdown()
-	frozen := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	rec := kubeevent.LimitedAt(b.NewRecorder(scheme.Scheme, "kardinal-test"), "test-repeats",
-		kubeevent.Limit{QPS: 1, Burst: 5}, kubeevent.Limit{QPS: 1, Burst: 5}, func() time.Time { return frozen })
+		kubeevent.Limit{QPS: 1, Burst: 5}, kubeevent.Limit{QPS: 1, Burst: 5}, frozen)
 	for i := 0; i < 500; i++ {
 		obj := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "gate", UID: "u", ResourceVersion: fmt.Sprint(i + 1)}}
 		rec.Eventf(obj, nil, corev1.EventTypeWarning, "Blocked", "Evaluate", "gate %s blocking", "weekend")
 		rec.Eventf(obj, nil, corev1.EventTypeNormal, "Evaluated", "Evaluate", "gate evaluated")
 	}
 	// The clock does not move, so exactly each bucket's burst is written.
-	require.Eventually(t, func() bool { return sink.inFlight.Load() >= 5+5 }, 30*time.Second, 10*time.Millisecond)
-	close(sink.gate)
-	require.Eventually(t, func() bool { return sink.inFlight.Load() == 0 }, 30*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return sink.inFlight.Load() >= 5+5 }, 30*time.Second, time.Millisecond)
+	sink.settle(t)
 	assert.EqualValues(t, 5+5, sink.writes.Load(), "each bucket's burst, the repeats included")
 	assert.EqualValues(t, 5+5, sink.peak.Load())
 }
@@ -172,17 +174,30 @@ type slowSink struct {
 	// broadcaster starts are in flight at once.
 	gate           chan struct{}
 	inFlight, peak atomic.Int64
-	writes         atomic.Int64
+	// started counts the writes begun, writes those finished. A write counts
+	// as finished before it leaves inFlight, so inFlight 0 means writes is
+	// final: a write preempted between the two can no longer be missed (#1794).
+	started, writes atomic.Int64
 }
 
 func (s *slowSink) write(e *eventsv1.Event) (*eventsv1.Event, error) {
+	s.started.Add(1)
 	n := s.inFlight.Add(1)
 	for p := s.peak.Load(); n > p && !s.peak.CompareAndSwap(p, n); p = s.peak.Load() {
 	}
 	<-s.gate
-	s.inFlight.Add(-1)
 	s.writes.Add(1)
+	s.inFlight.Add(-1)
 	return e, nil
+}
+
+// settle releases the held writes and waits until every write started has
+// finished: a count, polled, never a sleep.
+func (s *slowSink) settle(t *testing.T) {
+	t.Helper()
+	close(s.gate)
+	require.Eventually(t, func() bool { return s.inFlight.Load() == 0 && s.writes.Load() == s.started.Load() },
+		30*time.Second, time.Millisecond, "every write started finishes")
 }
 func (s *slowSink) Create(_ context.Context, e *eventsv1.Event) (*eventsv1.Event, error) {
 	return s.write(e)
@@ -238,10 +253,8 @@ func TestLimited_BurstShape(t *testing.T) {
 		defer b.Shutdown()
 		var rec events.EventRecorder = b.NewRecorder(scheme.Scheme, "kardinal-test")
 		if limit {
-			frozen := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 			rec = kubeevent.LimitedAt(rec, "test-burst", kubeevent.Limit{QPS: kubeevent.DefaultQPS, Burst: kubeevent.DefaultBurst},
-				kubeevent.Limit{QPS: kubeevent.DefaultWarningQPS, Burst: kubeevent.DefaultWarningBurst},
-				func() time.Time { return frozen })
+				kubeevent.Limit{QPS: kubeevent.DefaultWarningQPS, Burst: kubeevent.DefaultWarningBurst}, frozen)
 		}
 		done := make(chan struct{})
 		go func() { burst(rec); close(done) }()
@@ -257,10 +270,9 @@ func TestLimited_BurstShape(t *testing.T) {
 			want = kubeevent.DefaultBurst + kubeevent.DefaultWarningBurst
 		}
 		// The broadcaster hands Events to its sink goroutines asynchronously.
-		require.Eventually(t, func() bool { return sink.inFlight.Load() >= want }, 30*time.Second, 10*time.Millisecond,
+		require.Eventually(t, func() bool { return sink.inFlight.Load() >= want }, 30*time.Second, time.Millisecond,
 			"in flight reaches %d", want)
-		close(sink.gate)
-		require.Eventually(t, func() bool { return sink.inFlight.Load() == 0 }, 30*time.Second, 10*time.Millisecond)
+		sink.settle(t)
 		return sink.peak.Load(), sink.writes.Load()
 	}
 	peak, writes := run(false)

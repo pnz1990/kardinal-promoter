@@ -19,6 +19,7 @@ import { ApprovalDialog } from './ApprovalDialog'
 import { StageDialog } from './StageDialog'
 import { stageErrorMessage } from './stageErrors'
 import type { ReasonFor } from './useStageAccess'
+import { SignInNote } from './signIn'
 
 interface Props {
   view: StageView
@@ -38,6 +39,9 @@ interface Props {
   /** Only this environment's actions (the Table's row): no "Whole pipeline" group, no
    *  "nothing to do" note. */
   envOnly?: boolean
+  /** Approving needs sign-in (no TokenReview): the command for the one line that says so
+   *  under the inert Approve, or null when the surface says it elsewhere. Undefined: it does not. */
+  signInNote?: string | null
 }
 
 /** The button label of each action; the dialog and the result use the same verb. */
@@ -54,16 +58,20 @@ const PIPELINE_ORDER: StageActionKind[] = ['resume', 'pause', 'rejectVersion']
 /** Actions that undo or refuse something here: garnet outline, never the thread's red. */
 export const DESTRUCTIVE = new Set<StageActionKind>(['reject', 'rollback'])
 
-export function StageActions({ view, pipeline, namespace, active, activeGate, onOpen, onChanged, inline, envOnly, reasonFor }: Props) {
+export function StageActions({ view, pipeline, namespace, active, activeGate, onOpen, onChanged, inline, envOnly, reasonFor, signInNote }: Props) {
   const [result, setResult] = useState<string>()
   const envKinds = ENV_ORDER.filter(k => view.actions.has(k) && !inline?.has(k))
   const primary = view.primary && envKinds.includes(view.primary) ? view.primary : undefined
   const ordered = primary ? [primary, ...envKinds.filter(k => k !== primary)] : envKinds
   const pipelineKinds = envOnly ? [] : PIPELINE_ORDER.filter(k => view.actions.has(k))
   const prURL = view.step?.prURL
-  // What the person may not do here, once each (U7).
+  // What the person may not do here, once each (U7). Without sign-in, approving and
+  // declining are explained once, by the sign-in line, not here too.
+  const deciding = (k: StageActionKind) => k === 'approve' || k === 'reject'
   const restrictions = [...new Set([...(inline ?? []), ...ordered, ...pipelineKinds]
+    .filter(k => signInNote === undefined || !deciding(k))
     .map(k => reasonFor?.(k)).filter((r): r is string => !!r))]
+  const signInLine = typeof signInNote === 'string' && ordered.some(deciding) ? signInNote : undefined
   const button = (k: StageActionKind, style: 'primary' | 'secondary' | 'destructive' | 'quiet') => k === 'openPR' && prURL
     ? <a key={k} data-action={k} className={`stage-button stage-button--${style}`} href={prURL} target="_blank" rel="noreferrer">
         {ACTION_LABEL[k]}
@@ -77,6 +85,7 @@ export function StageActions({ view, pipeline, namespace, active, activeGate, on
         : envOnly ? null : <p className="stage-muted">{inline && inline.size > 0
             ? 'Use the button next to each reason above.'
             : `Nothing to do in ${view.env} right now.`}</p>}
+      {signInLine && <SignInNote command={signInLine} />}
       {pipelineKinds.length > 0 && (
         <div className="stage-pipeline-actions">
           <p className="stage-eyebrow">Whole pipeline</p>
@@ -158,7 +167,8 @@ function ActionDialog({ kind, view, pipeline, namespace, gate: openedFor, onCanc
           description={`${env} passes ${gateName || 'the gate'} for ${shown || 'the version on its way in'} until the override ends. Your name and reason are recorded.`}
           confirmLabel="Override gate" confirmDisabled={!gate || text.trim() === ''}
           onConfirm={() => void run(`override ${gateName} in ${env}`, () => api.overrideGate({ pipeline, namespace, gate, environment: env,
-            reason: text.trim(), expiresInMinutes: duration }), 'Overridden')}>
+            // The controller echoes the gate it was sent (the instance); say the name the user gave it.
+            reason: text.trim(), expiresInMinutes: duration }).then(r => ({ ...r, message: r.message.replace(`gate ${gate} `, `gate ${gateName} `) })), 'Overridden')}>
           {plainGates.length > 1 && (
             <div className="stage-field">
               <label htmlFor={ids.gate}>Gate</label>

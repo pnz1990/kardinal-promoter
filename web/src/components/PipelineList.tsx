@@ -82,7 +82,8 @@ function PipelineStateChip({ pipeline }: { pipeline: Pipeline }) {
   const st = pipelineState(pipeline)
   // Paused is this chip (#328): the title says what it means.
   const title = st.category === 'paused' ? 'Pipeline is paused — no new promotions will start' : st.label
-  return <StatusChip tone={st.tone} label={st.label} glyph={st.glyph} compact data-category={st.category} title={title} />
+  // The compact form fits the row ("Blocked · 2 gates"); the whole state is the title.
+  return <StatusChip tone={st.tone} label={st.short ?? st.label} glyph={st.glyph} compact data-category={st.category} title={title} />
 }
 
 export function PipelineList({ pipelines, selected, selectedNamespace, onSelect, loading, error, onRetry, searchInputRef, total, initialQuery = '', onQueryChange }: Props) {

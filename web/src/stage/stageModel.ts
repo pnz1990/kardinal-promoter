@@ -8,13 +8,15 @@
 // display-state table (displayStates.gen.ts), never from raw API values.
 
 import { displayState, held as heldState, heldByGate, type DisplayState } from '../displayStates.gen'
-import type { Bundle, EnvironmentNode, GraphEdge, GraphNode, Pipeline, PolicyGate, PromotionStep } from '../types'
+import type { Bundle, EnvironmentNode, FailedVersion, GraphEdge, GraphNode, Pipeline, PolicyGate, PromotionStep } from '../types'
 
 /** One reason the environment is not moving, most urgent first. */
 export interface WaitReason {
   kind: 'paused' | 'held' | 'gate' | 'approval' | 'pr' | 'upstream' | 'failed'
   /** One sentence a person can act on. */
   title: string
+  /** The sentence's tooltip: the Bundle name behind a version it names. */
+  tip?: string
   /** The gate's or step's own message, when there is one. */
   detail?: string
   /** RFC 3339: when the gate was last evaluated (gates only). */
@@ -121,6 +123,12 @@ export function failureMessage(step: PromotionStep | undefined): string | undefi
     || undefined
 }
 
+/** One sentence for a failed newest version: "The newest version 1.5.0 (app-b) failed before it started (GraphRejected)." */
+export function failedVersionTitle(f: FailedVersion): string {
+  const label = f.version && f.version !== f.bundle ? `${f.version} (${f.bundle})` : f.bundle
+  return `The newest version ${label} ${f.environment ? `failed in ${f.environment}` : 'failed before it started'} (${f.reason}).`
+}
+
 /** The version a Bundle ships: status.version, else its image tag(s), else its name. */
 export function bundleVersion(b: Bundle): string {
   if (b.version) return b.version
@@ -158,7 +166,10 @@ export function stageView(input: StageInput): StageView {
     why.push({ kind: 'paused', title: 'The pipeline is paused: nothing new starts until it is resumed.', next: 'resume' })
   }
   if (hold) {
-    why.push({ kind: 'held', title: `Held on ${hold.bundle} by a rollback${hold.createdBy ? `, by ${hold.createdBy}` : ''}: no other version promotes here until it is released.`,
+    // The version it is held on, as everywhere; the Bundle name is the tooltip.
+    const held = bundles.find(b => b.name === hold.bundle)
+    const on = held ? bundleVersion(held) : running?.bundle === hold.bundle ? running.version : hold.bundle
+    why.push({ kind: 'held', tip: hold.bundle, title: `Held on ${on} by a rollback${hold.createdBy ? `, by ${hold.createdBy}` : ''}: no other version promotes here until it is released.`,
       detail: hold.reason, next: 'release' })
   }
   for (const g of blocking) {
@@ -175,6 +186,12 @@ export function stageView(input: StageInput): StageView {
   }
   if (stepState === 'WaitingForMerge' && step?.prURL) {
     why.push({ kind: 'pr', title: 'Waiting for its pull request to be merged.', prURL: step.prURL, next: 'openPR' })
+  }
+  // The newest version failed before any step (every environment), or in this
+  // environment before its step recorded why (status.failedVersion).
+  const f = p.failedVersion
+  if (f && (!f.environment || (f.environment === env && stepState !== 'Failed' && stepState !== 'AbortedByAlarm'))) {
+    why.push({ kind: 'failed', title: failedVersionTitle(f), detail: f.message })
   }
   if (stepState === 'Failed' || stepState === 'AbortedByAlarm') {
     why.push({ kind: 'failed', title: `${displayState('step', stepState).label}.`,

@@ -184,8 +184,9 @@ name under **Kubernetes details**, for `kubectl`.
 
 Each Pipeline has one state, the same in the page header, the sidebar badge, the operations
 table, the fleet board and the health counters: paused, a failed version, held by a gate
-(`Held by gate prod-approval in prod`, from `status.environments`), promoting, no version yet,
-or up to date. Each Pipeline counts in exactly one of Healthy, Blocked, Failed, Promoting and
+(`Held by gate prod-approval in prod`, from `status.environments`; the sidebar badge reads
+`Blocked · 1 gate`, with the whole state as its tooltip), promoting, no version yet, or up to
+date. Each Pipeline counts in exactly one of Healthy, Blocked, Failed, Promoting and
 Paused (Failed and Paused show when there is one); one with no version yet counts only in the
 total. On the map, the label on an edge names the gate that holds the version first, with its
 state glyph and how many more (`▮ uat-soak +1`); its popover and accessible name say it in
@@ -281,7 +282,10 @@ words (`uat-soak (blocking) · +1 passing`). Durations read `42s`, `4m`, `2h 15m
 - **What you may do.** With TokenReview the UI asks the controller which actions you may take
   (`POST /api/v1/ui/access`, cached for 30 seconds). An action you may not take stays in place
   but does nothing, and says which of the chart's roles grants it; the controller checks every
-  action again when it is taken.
+  action again when it is taken. Without TokenReview, Approve, Decline and Revoke mine are inert
+  wherever they appear (the drawer, the Table, the Activity tab and ⌘K), with one line under
+  them: "Approving needs sign-in with your Kubernetes identity — run `kardinal approve <pipeline>
+  <env>`" (Decline: `--decision reject`; Revoke mine: `--revoke`), and a button that copies it.
 - **Changes as they happen.** When a poll changes an environment's state or version, or an
   approval's count, its card gets a brief halo; with reduced motion, an outline until the next
   poll.
@@ -305,7 +309,7 @@ words (`uat-soak (blocking) · +1 passing`). Durations read `42s`, `4m`, `2h 15m
   End to the ends, Up and Down between fleet lines), and Enter opens the one in focus. `?` lists
   the shortcuts: `/` filter, `r` refresh, `Esc` close a panel, `j` and `k` the next and previous
   environment of the open pipeline (on Approvals, the next and previous approval), `a` approve
-  (the open environment's approval, or the approval in focus), and `s` ship a version. A key with
+  (the open environment's, the one in focus, or the only one waiting), and `s` ship. A key with
   nothing to act on says why. Every view is checked against
   WCAG 2.1 AA, colour contrast included, in both themes.
 - **Narrow screens.** Below 960 px wide (a phone or a split window) the pipeline list is a
@@ -313,7 +317,8 @@ words (`uat-soak (blocking) · +1 passing`). Durations read `42s`, `4m`, `2h 15m
   closes it. The page then takes the full width.
 - **Go to anything (⌘K).** ⌘K, Ctrl+K or the **Go to or do…** box in the top bar opens one list
   of pipelines, environments (`pipeline › env`) and the shown pipeline's versions, and of actions:
-  switch the theme or the density, refresh, the operations table, the shortcuts. Type to filter,
+  switch the theme or the density, refresh, the operations table, the shortcuts, and "Approve
+  <version> for <env>" for each approval waiting on you, which opens its dialog. Type to filter,
   and use the arrow keys and Enter. It never promotes, pauses or rolls back by itself.
 
 <figure class="k-demo" id="demo-palette">

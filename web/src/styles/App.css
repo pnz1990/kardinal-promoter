@@ -286,6 +286,17 @@
   font-size: var(--k-text-sm);
 }
 .app-history__name { color: var(--k-ink); font-family: var(--k-font-mono); }
+/* Why the newest version failed (status.failedVersion), under it. */
+.app-history__item:has(.app-history__failure) { flex-wrap: wrap; }
+.app-history__failure {
+  flex-basis: 100%;
+  margin: 0;
+  padding: var(--k-space-1_5) var(--k-space-2);
+  border-inline-start: var(--k-stroke-ring) solid var(--k-status-failed-fg);
+  background: var(--k-status-failed-wash);
+  color: var(--k-ink);
+  overflow-wrap: anywhere;
+}
 
 /* ── Content row: the DAG and the node detail ── */
 .app-content { flex: 1; display: flex; overflow: hidden; padding: 0 var(--k-space-6) var(--k-space-6); }

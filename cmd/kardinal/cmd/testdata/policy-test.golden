@@ -1,0 +1,42 @@
+$ kardinal policy test -f <dir>/soak.yaml
+PolicyGate "uat-soak-before-prod" (<dir>/soak.yaml):
+  Expression: bundle.upstreamSoakMinutes >= 3
+  Syntax: valid
+  Result: FAIL (bundle.upstreamSoakMinutes >= 3 = false)
+  Note: offline there is no upstream environment, so its soak is 0; kardinal policy simulate <pipeline> prod --soak-minutes <n> evaluates it with a soak
+
+Some gates would BLOCK with current context (see FAIL results above) (1 gate(s))
+
+$ kardinal policy test --file <dir>/soak.yaml
+PolicyGate "uat-soak-before-prod" (<dir>/soak.yaml):
+  Expression: bundle.upstreamSoakMinutes >= 3
+  Syntax: valid
+  Result: FAIL (bundle.upstreamSoakMinutes >= 3 = false)
+  Note: offline there is no upstream environment, so its soak is 0; kardinal policy simulate <pipeline> prod --soak-minutes <n> evaluates it with a soak
+
+Some gates would BLOCK with current context (see FAIL results above) (1 gate(s))
+
+$ kardinal policy test <dir>/soak.yaml
+PolicyGate "uat-soak-before-prod" (<dir>/soak.yaml):
+  Expression: bundle.upstreamSoakMinutes >= 3
+  Syntax: valid
+  Result: FAIL (bundle.upstreamSoakMinutes >= 3 = false)
+  Note: offline there is no upstream environment, so its soak is 0; kardinal policy simulate <pipeline> prod --soak-minutes <n> evaluates it with a soak
+
+Some gates would BLOCK with current context (see FAIL results above) (1 gate(s))
+
+$ kardinal policy test -f <dir>/soak.yaml <dir>/soak.yaml
+PolicyGate "uat-soak-before-prod" (<dir>/soak.yaml):
+  Expression: bundle.upstreamSoakMinutes >= 3
+  Syntax: valid
+  Result: FAIL (bundle.upstreamSoakMinutes >= 3 = false)
+  Note: offline there is no upstream environment, so its soak is 0; kardinal policy simulate <pipeline> prod --soak-minutes <n> evaluates it with a soak
+
+Some gates would BLOCK with current context (see FAIL results above) (1 gate(s))
+
+$ kardinal policy test -f <dir>/soak.yaml <dir>/other.yaml
+error: policy test takes one file: -f <dir>/soak.yaml or <dir>/other.yaml, not both
+
+$ kardinal policy test
+error: policy test needs a PolicyGate file: kardinal policy test -f <file>
+

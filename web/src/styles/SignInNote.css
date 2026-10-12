@@ -1,0 +1,23 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * SignInNote.css — the one line under an inert Approve without sign-in (stage/signIn.tsx).
+ */
+.sign-in-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--k-space-2);
+  margin: var(--k-space-2) 0 0;
+  color: var(--k-ink-2);
+  font-size: var(--k-text-sm);
+}
+.sign-in-note__cli {
+  padding: 0 var(--k-space-1);
+  background: var(--k-surface-sunken);
+  border-radius: var(--k-radius-1);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-xs);
+  overflow-wrap: anywhere;
+}

@@ -9,7 +9,7 @@ import { render, screen, within } from '@testing-library/react'
 vi.mock('../api/client', () => ({ api: { getStepEvents: vi.fn(async () => []), validateCEL: vi.fn(async () => ({ valid: true })) } }))
 
 import { StageDrawer } from './StageDrawer'
-import { failureMessage } from './stageModel'
+import { failureMessage, stageView } from './stageModel'
 import type { Bundle, Pipeline, PromotionStep } from '../types'
 
 const pipeline: Pipeline = {
@@ -55,5 +55,31 @@ describe('a failed stage', () => {
     render(<StageDrawer namespace="shop" pipeline="search" env="prod" onClose={vi.fn()} onNavigate={vi.fn()} onChanged={vi.fn()}
       data={{ pipeline, bundles, steps: [step({ message: 'boom' })], gates: [gate] }} />)
     expect(screen.getByRole('region', { name: 'Why it’s waiting' })).toBeInTheDocument()
+  })
+})
+
+describe('a failed newest version (status.failedVersion)', () => {
+  const failed = { bundle: 'search-3', version: '4.2.0', reason: 'GraphRejected',
+    message: 'kro rejected the Graph: compile node "GateMirror": found no matching overload' }
+  const p: Pipeline = { ...pipeline, phase: 'Degraded', environmentStates: { test: 'Verified', prod: 'Verified' }, failedVersion: failed }
+  it('says it in every environment when it failed before any step', () => {
+    for (const env of ['test', 'prod']) {
+      const v = stageView({ env, pipeline: p, bundles, steps: [], gates: [] })
+      expect(v.why[0]).toMatchObject({ kind: 'failed', detail: failed.message,
+        title: 'The newest version 4.2.0 (search-3) failed before it started (GraphRejected).' })
+    }
+  })
+  it('says it only in the environment it failed in', () => {
+    const inProd = { ...p, failedVersion: { ...failed, reason: 'StepFailed', environment: 'prod', message: 'environment prod: timed out' } }
+    expect(stageView({ env: 'test', pipeline: inProd, bundles, steps: [], gates: [] }).why).toEqual([])
+    expect(stageView({ env: 'prod', pipeline: inProd, bundles, steps: [], gates: [] }).why[0]).toMatchObject({ kind: 'failed',
+      title: 'The newest version 4.2.0 (search-3) failed in prod (StepFailed).' })
+  })
+  it('is shown in the drawer', () => {
+    render(<StageDrawer namespace="shop" pipeline="search" env="test" onClose={vi.fn()} onNavigate={vi.fn()} onChanged={vi.fn()}
+      data={{ pipeline: p, bundles, steps: [], gates: [] }} />)
+    const why = screen.getByRole('region', { name: 'Why it failed' })
+    expect(within(why).getByText('The newest version 4.2.0 (search-3) failed before it started (GraphRejected).')).toBeInTheDocument()
+    expect(within(why).getByText(failed.message)).toBeInTheDocument()
   })
 })

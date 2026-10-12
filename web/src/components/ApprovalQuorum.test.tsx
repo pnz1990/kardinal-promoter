@@ -1,10 +1,15 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 
-import { describe, expect, it } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { render, screen, waitFor, within } from '@testing-library/react'
+
+const api = vi.hoisted(() => ({ checkAccess: vi.fn(), recordApproval: vi.fn() }))
+vi.mock('../api/client', () => ({ api }))
+
+import { resetAccessForTests } from '../access/access'
 import { ApprovalQuorum, approverRule, quorumSummary } from './ApprovalQuorum'
-import type { GateApproval } from '../types'
+import type { AccessCheck, GateApproval } from '../types'
 
 const now = Date.parse('2026-10-09T12:00:00Z')
 
@@ -17,6 +22,12 @@ const waiting: GateApproval = {
 }
 
 describe('ApprovalQuorum', () => {
+  beforeEach(() => {
+    resetAccessForTests()
+    api.checkAccess.mockReset()
+    api.checkAccess.mockImplementation(async (_ns: string, checks: AccessCheck[]) => ({
+      user: { username: 'alice', groups: ['release-managers'] }, results: checks.map(() => ({ allowed: true })) }))
+  })
   it('says how far the quorum is, and who may approve', () => {
     expect(quorumSummary(waiting)).toBe('1 of 2 approvals')
     expect(quorumSummary({ required: 1, approved: 0 })).toBe('0 of 1 approval')
@@ -60,6 +71,20 @@ describe('ApprovalQuorum', () => {
     rerender(<ApprovalQuorum approval={{ ...waiting, approved: 2 }} pipeline="app" bundle="app-1" environment="prod" now={now} />)
     expect(screen.queryByText(/kardinal approve/)).not.toBeInTheDocument()
     expect(screen.getByRole('meter')).toHaveAttribute('aria-valuetext', 'Approved (2 of 2)')
+  })
+
+  it('without sign-in the buttons are inert, with one line naming the command; on an approved gate, the revoke command', async () => {
+    api.checkAccess.mockImplementation(async (_ns: string, checks: AccessCheck[]) => ({ results: checks.map(() => ({ allowed: false })) }))
+    const { rerender } = render(<ApprovalQuorum approval={waiting} pipeline="app" bundle="app-1" environment="prod" namespace="team-a" now={now} />)
+    await waitFor(() => expect(document.querySelector('.sign-in-note')).not.toBeNull())
+    expect(document.querySelector('.sign-in-note')).toHaveTextContent('Approving needs sign-in with your Kubernetes identity — run kardinal approve app prod -n team-a')
+    expect(screen.queryByText('Or from the CLI:')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reject' })).toHaveAccessibleDescription(
+      'Declining needs sign-in with your Kubernetes identity — run kardinal approve app prod -n team-a --decision reject')
+    rerender(<ApprovalQuorum approval={{ ...waiting, approved: 2 }} pipeline="app" bundle="app-1" environment="prod" namespace="team-a" now={now} />)
+    expect(document.querySelector('.sign-in-note')).toHaveTextContent(
+      'Revoking your decision needs sign-in with your Kubernetes identity — run kardinal approve app prod -n team-a --revoke')
+    expect(screen.getByRole('button', { name: 'Revoke mine' })).toHaveAttribute('aria-disabled', 'true')
   })
 
   it('a large quorum is text only, and no decisions says so', () => {
