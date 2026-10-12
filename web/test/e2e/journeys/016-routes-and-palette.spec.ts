@@ -61,10 +61,10 @@ test.describe('Journey 016 — Routes and the command palette', () => {
 
   test("a pipeline's own problems show under its header with the command that fixes them", async ({ page }) => {
     await page.goto('/ui/#/p/default/payments-service')
-    const warning = page.locator('.pipeline-conditions__notice[data-tone="warning"]')
-    await expect(warning).toContainText('Label the git Secret before upgrading to v0.11')
-    await expect(warning.locator('pre')).toHaveText('kubectl label secret github-token -n default kardinal.io/referenceable=true')
-    await expect(warning.getByRole('button', { name: 'Copy shell' })).toBeVisible()
+    const error = page.locator('.pipeline-conditions__notice[data-tone="failed"]')
+    await expect(error).toContainText('Git does not use the git Secret until it is labelled, so nothing can be promoted')
+    await expect(error.locator('pre')).toHaveText('kubectl label secret github-token -n default kardinal.io/referenceable=true')
+    await expect(error.getByRole('button', { name: 'Copy shell' })).toBeVisible()
   })
 
   test('a long fix command wraps instead of widening the page', async ({ page }) => {

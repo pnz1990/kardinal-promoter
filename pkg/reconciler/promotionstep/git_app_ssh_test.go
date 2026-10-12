@@ -97,7 +97,7 @@ func TestGitCredential_GitHubApp(t *testing.T) {
 		srv, mints := appMintServer(t, 0)
 		pipeline := makePipeline("nginx-demo")
 		pipeline.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "git-app"}
-		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-app", Namespace: "default"}, Data: appSecretData(t)}
+		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-app", Namespace: "default", Labels: map[string]string{"kardinal.io/referenceable": "true"}}, Data: appSecretData(t)}
 		ps := asPromoting(makeStep("step-app", "nginx-demo", "b1", "test"), pipeline)
 		c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
 			WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
@@ -123,7 +123,7 @@ func TestGitCredential_GitHubApp(t *testing.T) {
 		srv, _ := appMintServer(t, http.StatusUnauthorized)
 		pipeline := makePipeline("nginx-demo")
 		pipeline.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "git-app"}
-		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-app", Namespace: "default"}, Data: appSecretData(t)}
+		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-app", Namespace: "default", Labels: map[string]string{"kardinal.io/referenceable": "true"}}, Data: appSecretData(t)}
 		ps := asPromoting(makeStep("step-app", "nginx-demo", "b1", "test"), pipeline)
 		c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
 			WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
@@ -152,7 +152,7 @@ func TestGitCredential_SSH(t *testing.T) {
 	pipeline := makePipeline("nginx-demo")
 	pipeline.Spec.Git.URL = "ssh://git@git.example.com:2222/test/repo.git"
 	pipeline.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "git-ssh"}
-	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-ssh", Namespace: "default"},
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-ssh", Namespace: "default", Labels: map[string]string{"kardinal.io/referenceable": "true"}},
 		Data: map[string][]byte{"sshPrivateKey": []byte("KEY"), "knownHosts": []byte("[git.example.com]:2222 ssh-ed25519 AAAA")}}
 	ps := asPromoting(makeStep("step-ssh", "nginx-demo", "b1", "test"), pipeline)
 	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).

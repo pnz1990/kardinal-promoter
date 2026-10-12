@@ -52,6 +52,7 @@ kubectl create namespace prod
 kubectl create secret generic github-token \
   --namespace default \
   --from-literal=token=$GITHUB_TOKEN
+kubectl label secret github-token --namespace default kardinal.io/referenceable=true
 
 # 2. Deploy test and uat. The quickstart's ApplicationSet syncs environments/test
 #    and environments/uat into kardinal-test-app-test and kardinal-test-app-uat,

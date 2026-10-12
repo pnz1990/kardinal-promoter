@@ -286,30 +286,15 @@ func TestDelivery_SecretRef(t *testing.T) {
 	assert.Equal(t, "Bearer rotated", reqs[1].header.Get("Authorization"))
 }
 
-// TestDelivery_PlaintextCredentialCondition: the deprecated
-// authorizationHeader still delivers, with PlaintextCredential=True; the
-// condition goes away when the field is removed.
-func TestDelivery_PlaintextCredentialCondition(t *testing.T) {
-	srv, url := newRecorder(t)
+// TestDelivery_StalePlaintextCredentialRemoved: a hook an older controller
+// marked PlaintextCredential (its removed authorizationHeader field) loses
+// the condition at the next reconcile.
+func TestDelivery_StalePlaintextCredentialRemoved(t *testing.T) {
+	_, url := newRecorder(t)
 	hook := newHook(url, v1alpha1.NotificationEventBundleFailed)
-	hook.Spec.Webhook.AuthorizationHeader = "Bearer plain" //nolint:staticcheck // SA1019: tests the deprecated field
+	hook.Status.Conditions = []metav1.Condition{{Type: "PlaintextCredential", Status: metav1.ConditionTrue,
+		Reason: "AuthorizationHeaderInSpec", LastTransitionTime: metav1.NewTime(saturday)}}
 	f := newFixture(t, hook, failedBundle("app-v0", saturday))
-	f.reconcileHook()
-	reqs := srv.all()
-	require.Len(t, reqs, 1)
-	assert.Equal(t, "Bearer plain", reqs[0].header.Get("Authorization"))
-	h := f.hook()
-	assert.Equal(t, metav1.ConditionTrue, readyCondition(t, h).Status)
-	pc := meta.FindStatusCondition(h.Status.Conditions, "PlaintextCredential")
-	require.NotNil(t, pc)
-	assert.Equal(t, metav1.ConditionTrue, pc.Status)
-	assert.Equal(t, "AuthorizationHeaderInSpec", pc.Reason)
-	assert.Contains(t, pc.Message, "deprecated")
-	assert.NotContains(t, pc.Message, "plain\"")
-
-	orig := h.DeepCopy()
-	h.Spec.Webhook.AuthorizationHeader = "" //nolint:staticcheck // SA1019: tests the deprecated field
-	require.NoError(t, f.c.Patch(context.Background(), &h, client.MergeFrom(orig)))
 	f.reconcileHook()
 	assert.Nil(t, meta.FindStatusCondition(f.hook().Status.Conditions, "PlaintextCredential"))
 }

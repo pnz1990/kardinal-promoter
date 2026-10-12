@@ -128,6 +128,9 @@ func (r *Reconciler) revisionContains(ctx context.Context, log zerolog.Logger, p
 		if cred.refused != nil {
 			return false, cred.refused
 		}
+		if cred.reason == reasonSecretNotReferenceable {
+			return false, errors.New(cred.notReferenceable())
+		}
 		return r.descends(ctx, rh, gr, pipeline.Spec.Git.URL, baseBranch(pipeline), cred.auth(), rev, want, prPaths(env))
 	}
 }
@@ -222,6 +225,11 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 		// No ls-remote with the controller's token (the Pipeline reconciler
 		// reports the refusal as Ready=False/ValidationFailed).
 		log.Debug().Err(cred.refused).Msg("the PR branch is not refreshed")
+		return false, nil
+	}
+	if cred.reason == reasonSecretNotReferenceable {
+		// The Pipeline reports Ready=False/SecretNotReferenceable.
+		log.Debug().Msg("the PR branch is not refreshed: " + cred.notReferenceable())
 		return false, nil
 	}
 	branch := baseBranch(pipeline)
