@@ -13,7 +13,7 @@
 
 // BundleTimeline.test.tsx — Tests for the bundle timeline component (#533).
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BundleTimeline } from './BundleTimeline'
 import type { Bundle } from '../types'
@@ -49,6 +49,17 @@ describe('BundleTimeline — empty state', () => {
 })
 
 describe('BundleTimeline — bundle rendering', () => {
+  it('says Following on the followed tick, in words, and only there', () => {
+    const bundles = [makeBundle({ name: 'a', phase: 'Verified', createdAt: '2026-04-15T10:00:00Z' }),
+      makeBundle({ name: 'b', phase: 'Promoting', createdAt: '2026-04-15T11:00:00Z' })]
+    const { container } = render(<BundleTimeline bundles={bundles} selectedBundle="b" />)
+    expect(container.querySelector('.bundle-chip[aria-pressed="true"] .bundle-chip__phase')?.textContent).toBe('Following · Promoting')
+    expect(container.querySelector('.bundle-chip[aria-pressed="false"] .bundle-chip__phase')?.textContent).toBe('Verified')
+    expect(screen.getAllByText(/^Following/)).toHaveLength(1)
+    // f goes to the active version, and the hint says so.
+    expect(container.querySelector('.bundle-timeline__keys')?.textContent).toContain('f active')
+  })
+
   it('renders bundle phase label', () => {
     const bundles = [makeBundle({ phase: 'Verified' })]
     render(<BundleTimeline bundles={bundles} />)
@@ -78,7 +89,7 @@ describe('BundleTimeline — bundle rendering', () => {
   it('shows the versions header and no shift-click helper copy', () => {
     const bundles = [makeBundle(), makeBundle({ name: 'my-app-def456' })]
     render(<BundleTimeline bundles={bundles} />)
-    expect(screen.getByText(/Versions \(newest/)).toBeInTheDocument()
+    expect(screen.getByText(/Versions \(oldest → newest\)/)).toBeInTheDocument()
     expect(screen.queryByText(/Shift-click to compare/i)).toBeNull()
   })
 })
@@ -141,7 +152,7 @@ describe('BundleTimeline — selection', () => {
     )
     const chipOf = (name: string) => screen.getAllByRole('button').find(b => b.title.startsWith(`${name}: `))!
     expect(chipOf('bundle-a').title).toBe('bundle-a: Promoting')
-    expect(chipOf('bundle-b').title).toBe('bundle-b: Promoting\nShift-click to compare')
+    expect(chipOf('bundle-b').title).toBe('bundle-b: Promoting\nShift-click or c to compare')
 
     await user.keyboard('{Shift>}')
     await user.click(chipOf('bundle-a'))
@@ -191,9 +202,9 @@ describe('BundleTimeline — ordering and visibility', () => {
   it.each([
     { name: 'oldest first input', input: [a, b, c] },
     { name: 'newest first input', input: [c, b, a] },
-  ])('shows newest first, undated last, for $name', ({ input }) => {
+  ])('shows newest on the right (undated oldest, on the left), for $name', ({ input }) => {
     render(<BundleTimeline bundles={input} />)
-    expect(chipNames()).toEqual(['app-bbbbb', 'app-aaaaa', 'app-ccccc'])
+    expect(chipNames()).toEqual(['app-ccccc', 'app-aaaaa', 'app-bbbbb'])
   })
 
   it('keeps the selected and comparison bundles visible when they are older than the 10 newest', () => {
@@ -202,8 +213,9 @@ describe('BundleTimeline — ordering and visibility', () => {
     render(<BundleTimeline bundles={many} selectedBundle="app-00000" compareBundle="app-00001" />)
     const names = chipNames()
     expect(names).toHaveLength(12)
-    expect(names.slice(0, 10)).toEqual(many.slice(4).reverse().map(x => x.name))
-    expect(names.slice(10)).toEqual(['app-00001', 'app-00000'])
+    // Oldest on the left: the kept older ones first, then the 10 newest.
+    expect(names.slice(0, 2)).toEqual(['app-00000', 'app-00001'])
+    expect(names.slice(2)).toEqual(many.slice(4).map(x => x.name))
   })
 
   it('marks only the selected chip as pressed', () => {
@@ -280,5 +292,34 @@ describe('BundleTimeline — keyboard and type badges', () => {
     expect(screen.queryByRole('img', { name: 'image version' })).not.toBeInTheDocument()
     const chip = screen.getAllByRole('button').find(b => b.title.startsWith('app-bbbbb: '))!
     expect(chip.title).toContain('config version')
+  })
+})
+
+describe('BundleTimeline — the version rail keys', () => {
+  const a = makeBundle({ name: 'app-aaaaa', createdAt: '2026-04-15T01:00:00Z' })
+  const b = makeBundle({ name: 'app-bbbbb', createdAt: '2026-04-15T02:00:00Z' })
+  const c = makeBundle({ name: 'app-ccccc', createdAt: '2026-04-15T03:00:00Z' })
+  it('[ and ] step to an older and a newer version, f to the active one', () => {
+    const onSelect = vi.fn()
+    render(<BundleTimeline bundles={[a, b, c]} selectedBundle="app-bbbbb" activeBundle="app-ccccc" onSelectBundle={onSelect} globalKeys />)
+    fireEvent.keyDown(document.body, { key: '[' })
+    expect(onSelect).toHaveBeenLastCalledWith('app-aaaaa')
+    fireEvent.keyDown(document.body, { key: ']' })
+    expect(onSelect).toHaveBeenLastCalledWith('app-ccccc')
+    fireEvent.keyDown(document.body, { key: 'f' })
+    expect(onSelect).toHaveBeenCalledTimes(3)
+  })
+
+  it('c on a focused tick compares it with the followed version; hover previews its route', () => {
+    const onCompareBundle = vi.fn()
+    const onCompare = vi.fn()
+    const onPreview = vi.fn()
+    render(<BundleTimeline bundles={[a, b, c]} selectedBundle="app-ccccc" onCompareBundle={onCompareBundle} onCompare={onCompare} onPreview={onPreview} />)
+    const tick = screen.getAllByRole('button').find(x => x.title.startsWith('app-aaaaa'))!
+    fireEvent.pointerEnter(tick)
+    expect(onPreview).toHaveBeenLastCalledWith('app-aaaaa')
+    fireEvent.keyDown(tick, { key: 'c' })
+    expect(onCompareBundle).toHaveBeenCalledWith('app-aaaaa')
+    expect(onCompare).toHaveBeenCalledWith('app-aaaaa')
   })
 })

@@ -430,7 +430,7 @@ describe('App bundle comparison', () => {
     await flush()
     expect(oldChip().className).not.toContain('bundle-chip--compare')
     expect(screen.queryByRole('button', { name: 'Compare ↔' })).not.toBeInTheDocument()
-    expect(oldChip().title).toContain('Shift-click to compare')
+    expect(oldChip().title).toContain('Shift-click or c to compare')
   })
 
   it('opens the comparison from an old bundle= link (now compare=)', async () => {
@@ -459,7 +459,7 @@ describe('App bundle comparison', () => {
     await flush()
     expect(picked()).toHaveLength(0)
     expect(screen.queryByRole('button', { name: '× clear' })).not.toBeInTheDocument()
-    expect(oldChip().title).toContain('Shift-click to compare')
+    expect(oldChip().title).toContain('Shift-click or c to compare')
     expect(newChip().getAttribute('title')).toBe('b-new: Promoting')
 
     // Showing Bundle B makes it Bundle A, and drops it as B.
