@@ -83,6 +83,7 @@ Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/ka
 
 ### Fixed
 
+- **The map's toolbar on a narrow map** — with the stage drawer open at 1280 (a map about 480 px wide) or on a phone, the attention items no longer wrap a word per line or sit under the search box: below a 720 px map they take a row of their own, each on one line with an ellipsis (the full text is its tooltip), and search, View and Zoom follow on the next row. The zoom buttons keep a visible Zoom label, and Fit the map is an icon, where it drew an empty box
 - **`ship --wait` times never go negative** — with the controller's clock ahead of this one, a summary's "for" is `0s`, not `-3s`
 - **A rejected version says rejected when the CLI cannot read it** — `kardinal why` says who rejected it, and `kardinal inbox` leaves it out as it does every rejected gate, instead of "could not read the version" when the gate excludes the author
 - **The stage drawer shows step timings, events and the CEL check** — an environment's drawer shows the steps' timing bars and the running time in its evidence, the step's events in its history, and the controller's CEL check when a gate's **Details** opens ([Installation](installation.md))
