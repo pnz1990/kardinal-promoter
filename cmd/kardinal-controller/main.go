@@ -1119,7 +1119,7 @@ func main() {
 		distFS = nil
 	}
 	uiServer, err := newHTTPServer("ui", uiListenAddress,
-		accessLog.Middleware("ui", newUIHandler(mgr.GetClient(), distFS, uiAuth, corsAllowedOrigins, uiHosts, logger)),
+		accessLog.Middleware("ui", newUIHandler(mgr.GetClient(), mgr.GetAPIReader(), distFS, uiAuth, corsAllowedOrigins, uiHosts, logger)),
 		tlsCertFile, tlsKeyFile, logger)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to configure UI server")

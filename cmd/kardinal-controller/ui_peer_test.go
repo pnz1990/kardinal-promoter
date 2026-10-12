@@ -75,7 +75,7 @@ func TestUIHandler_NoAuthServesLoopbackPeersOnly(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
 				&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"}},
 			).Build()
-			h := newUIHandler(c, uiTestAssets, uiAuthConfig{}, "", nil, zerolog.Nop())
+			h := newUIHandler(c, nil, uiTestAssets, uiAuthConfig{}, "", nil, zerolog.Nop())
 
 			method, path, body := tt.method, tt.path, ""
 			if method == "" {
@@ -127,7 +127,7 @@ func TestHasProxyHeader_Lowercase(t *testing.T) {
 // is off; authentication decides.
 func TestUIHandler_AuthModeServesAnyPeer(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(uiScheme()).Build()
-	h := newUIHandler(c, nil, uiAuthConfig{staticToken: "s3cret"}, "", nil, zerolog.Nop())
+	h := newUIHandler(c, nil, nil, uiAuthConfig{staticToken: "s3cret"}, "", nil, zerolog.Nop())
 
 	for token, want := range map[string]int{"Bearer s3cret": http.StatusOK, "": http.StatusUnauthorized} {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil)
@@ -148,7 +148,7 @@ func TestUIHandler_AuthModeServesAnyPeer(t *testing.T) {
 // served. A client on a non-loopback address of this host is refused.
 func TestUIHandler_NoAuthRealSockets(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(uiScheme()).Build()
-	srv := httptest.NewUnstartedServer(newUIHandler(c, nil, uiAuthConfig{}, "", nil, zerolog.Nop()))
+	srv := httptest.NewUnstartedServer(newUIHandler(c, nil, nil, uiAuthConfig{}, "", nil, zerolog.Nop()))
 	require.NoError(t, srv.Listener.Close())
 	ln, err := net.Listen("tcp4", "0.0.0.0:0")
 	require.NoError(t, err)

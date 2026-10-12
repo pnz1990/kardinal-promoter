@@ -437,7 +437,7 @@ type actionAuthorizer interface {
 	Privileged() client.Client
 }
 
-// actionClient returns the client to write the named object with for an
+// actionClient returns the client, with fresh Gets (freshGets), to write the named object with for an
 // action the caller asked for. In TokenReview mode it checks that the
 // caller may perform the action, the virtual subresource resource/action
 // (pipelines/pause, policygates/override), and returns the controller's
@@ -447,12 +447,12 @@ type actionAuthorizer interface {
 func (s *uiAPIServer) actionClient(ctx context.Context, resource, action, namespace, name string) (client.Client, error) {
 	az, ok := s.client.(actionAuthorizer)
 	if !ok {
-		return s.client, nil
+		return s.fresh(s.client), nil
 	}
 	if err := az.AuthorizeAction(ctx, "update", "kardinal.io", resource, action, namespace, name); err != nil {
 		return nil, err
 	}
-	return az.Privileged(), nil
+	return s.fresh(az.Privileged()), nil
 }
 
 // handleReject handles POST /api/v1/ui/reject: it sets spec.rejected on the

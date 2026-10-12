@@ -543,6 +543,10 @@ type uiAPIServer struct {
 	accessCheck uiauth.AccessReviewer
 	// scopeNamespace is --watch-namespace: POST /access answers only for it when set.
 	scopeNamespace string
+	// apiReader reads the API server uncached (mgr.GetAPIReader()): the
+	// lifecycle actions read the object they write through it (fresh).
+	// Nil in tests reads through client.
+	apiReader client.Reader
 }
 
 // upstreamCache memoizes graph.AllEnvironmentUpstreams per Pipeline UID and

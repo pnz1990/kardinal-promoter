@@ -580,17 +580,14 @@ func (a *app) exampleRollback(t *testing.T, p *v1alpha1.Pipeline, adapter, failu
 	e.WaitBundlePhase(t, a.ns, rollback, "Verified", time.Minute)
 
 	// The RollingBack step is over: history shows how long it took, not "...".
+	// VERSION is "<version> (<bundle>)": rows are found by the Bundle in it.
 	history := e.MustKardinal(t, a.ns, "history", pipelineName)
-	rows := map[string][]string{}
-	for _, line := range strings.Split(history, "\n") {
-		if f := strings.Fields(line); len(f) >= 5 {
-			rows[f[0]] = f
-		}
-	}
-	require.Contains(t, rows, broken, history)
-	require.Contains(t, rows, rollback, history)
-	assert.NotEqual(t, "...", rows[broken][4], "the RollingBack step has ended:\n%s", history)
-	assert.Equal(t, "rollback", rows[rollback][1], history)
+	brokenRow, rollbackRow := framework.BundleRow(history, broken), framework.BundleRow(history, rollback)
+	require.NotNil(t, brokenRow, history)
+	require.NotNil(t, rollbackRow, history)
+	assert.NotEqual(t, "...", brokenRow["DURATION"], "the RollingBack step has ended:\n%s", history)
+	assert.NotEmpty(t, brokenRow["DURATION"], history)
+	assert.Equal(t, "rollback", rollbackRow["ACTION"], history)
 	return broken, rollback
 }
 

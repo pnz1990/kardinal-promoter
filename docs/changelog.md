@@ -102,6 +102,7 @@ Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/ka
 
 ### Fixed
 
+- **A UI resume right after a pause resumes** — the UI's pause, resume, release-hold, reject and override read the object they change through the controller's informer cache, which can lag the write before: a resume sent right after a pause read the Pipeline as not paused, wrote nothing and left it paused. Those actions now read the object from the API server before they change it
 - **The UI names versions in two more places** — an environment held by a rollback said `Held on search-rollback-3f9a1c by a rollback`; it now names the version (`Held on 4.0.3 by a rollback`), with the Bundle name as the tooltip. The sidebar badge of a Pipeline held by gates, cut to `Blocked by 2…`, reads `Blocked · 2 gates`, with the whole state as its tooltip.
 - **`ship --wait` gives each environment its own time** — a held environment whose `since` is unset or zero printed `for 2562047h47m16.854775807s`; it is now unknown there, and the time this follow saw the state stands in. "took" is how long the environment's own promotion took (from its PromotionStep's first step, else from its upstream going live), not the time since the Bundle was created, and every time is clamped between the Bundle's creation and now
 - **A version that starts a sentence keeps its case** — `status.summary` (and so `kardinal status` and the UI) reads `sha-9349a3f live in test, uat`, not `Sha-9349a3f live …`

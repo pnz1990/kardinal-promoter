@@ -299,7 +299,7 @@ func TestUIHandler_ActionsRecordRequester(t *testing.T) {
 					cfg.tokens, cfg.access = tokens, &uiTestAccess{rules: rbac}
 				}
 				var logs bytes.Buffer
-				h := newUIHandler(c, nil, cfg, "", nil, zerolog.New(&logs))
+				h := newUIHandler(c, nil, nil, cfg, "", nil, zerolog.New(&logs))
 
 				rec := uiAuthDo(t, h, http.MethodPost, a.path, m.header, a.body)
 				require.Equal(t, a.wantCode, rec.Code, rec.Body.String())
