@@ -10,9 +10,13 @@
 # The UI bundle is the same on every platform.
 FROM --platform=$BUILDPLATFORM node:26-alpine AS ui-builder
 
-WORKDIR /web
+# The UI's type check reads scripts/gen-tokens.mjs and its type declaration
+# (the token tests import them), so the stage mirrors the repo layout:
+# /src/web and /src/scripts.
+WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --silent
+COPY scripts/gen-tokens.mjs scripts/gen-tokens.d.mts /src/scripts/
 COPY web/ ./
 RUN npm run build
 
@@ -35,7 +39,7 @@ RUN go mod download
 COPY . .
 
 # Copy compiled UI assets from ui-builder stage
-COPY --from=ui-builder /web/dist ./web/dist
+COPY --from=ui-builder /src/web/dist ./web/dist
 
 # CGO disabled for a fully static binary. .dockerignore excludes .git, so there
 # is no VCS information to stamp; VERSION carries the version instead.

@@ -606,9 +606,18 @@ func (s *uiAPIServer) handlePipelineOverride(w http.ResponseWriter, r *http.Requ
 		Time("expiresAt", override.ExpiresAt.Time).Msg("ui: gate overridden")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(uiPipelineOverrideResponse{
-		Message: fmt.Sprintf("gate %s overridden in %s for %d in-progress Bundle(s) until %s", req.Gate,
-			req.Environment, len(names), override.ExpiresAt.UTC().Format(time.RFC3339)),
+		Message: fmt.Sprintf("gate %s overridden in %s for %s until %s", req.Gate,
+			req.Environment, versionsInProgress(len(names)), override.ExpiresAt.UTC().Format(time.RFC3339)),
 		Gates:     names,
 		ExpiresAt: override.ExpiresAt.UTC().Format(time.RFC3339),
 	})
+}
+
+// versionsInProgress says how many in-progress Bundles an override covers, in
+// the UI's words: "1 version in progress", "2 versions in progress".
+func versionsInProgress(n int) string {
+	if n == 1 {
+		return "1 version in progress"
+	}
+	return fmt.Sprintf("%d versions in progress", n)
 }

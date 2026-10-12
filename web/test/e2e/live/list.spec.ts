@@ -73,8 +73,8 @@ test('the sidebar shows each pipeline’s state, and the filters narrow it', asy
   const held = sidebarRow(page, PIPELINE)
   // Its one state (pipelineState): held, named from status.environments.
   await expect(held.locator('[data-category]')).toHaveAttribute('data-category', 'blocked')
-  // Compact in the row (Blocked · N gates); the whole state is its title.
-  await expect(held.locator('[data-category]')).toContainText(/^.?\s*Blocked · \d+ gates?$/)
+  // Compact in the row (Blocked · N, the gates); the whole state is its title.
+  await expect(held.locator('[data-category]')).toContainText(/^.?\s*Blocked · \d+$/)
   await expect(held.locator('[data-category]')).toHaveAttribute('title', /^(Held by gates? .+ in |Blocked by)/)
   await expect(held).toContainText('2 envs')
   await expect(held).toContainText('1 live')

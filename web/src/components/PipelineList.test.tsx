@@ -163,9 +163,9 @@ describe('PipelineList — pipeline items', () => {
     ['no bundle yet', { phase: 'Unknown', activeBundleName: undefined }, 'No version yet', 'empty'],
     ['a bundle promoting', { phase: 'Promoting' }, 'Promoting', 'promoting'],
     // Compact in the row; the whole state is the title.
-    ['a bundle held by a gate', { phase: 'Promoting', blockerCount: 1 }, 'Blocked · 1 gate', 'blocked'],
+    ['a bundle held by a gate', { phase: 'Promoting', blockerCount: 1 }, 'Blocked · 1', 'blocked'],
     ['a bundle held by two named gates', { phase: 'Promoting', blockerCount: 2, environments: [{ name: 'prod', blockedBy: ['a', 'b'] }] } as Partial<Pipeline>,
-      'Blocked · 2 gates', 'blocked'],
+      'Blocked · 2', 'blocked'],
     ['every environment verified', { phase: 'Ready' }, 'Up to date', 'healthy'],
     ['paused with a bundle held by a gate', { phase: 'Promoting', blockerCount: 1, paused: true }, 'Paused', 'paused'],
   ])('state chip for %s (pipelineState)', (_, overrides, label, category) => {
