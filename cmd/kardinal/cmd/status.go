@@ -320,6 +320,9 @@ type pipelineStatus struct {
 	// ERROR: line when it is not Ready, a WARNING: line when its git Secret
 	// is not referenceable.
 	Notices []string `json:"notices,omitempty"`
+	// FailedVersion is the Pipeline's status.failedVersion: why its newest
+	// version failed.
+	FailedVersion *v1alpha1.PipelineFailedVersion `json:"failedVersion,omitempty"`
 	// Warnings are the WARNING: lines after the table (a Rejected Bundle
 	// whose change is live).
 	Warnings []string `json:"warnings,omitempty"`
@@ -364,7 +367,7 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 	}
 	view := &pipelineStatus{Pipeline: pipeline, Namespace: ns, Phase: pl.Status.Phase, Paused: pl.Spec.Paused,
 		Source: "controller", Environments: pl.Status.Environments, Summary: pl.Status.Summary, BlockingGates: []statusGate{},
-		Notices: pipelineNotices(&pl)}
+		Notices: pipelineNotices(&pl), FailedVersion: pl.Status.FailedVersion}
 
 	var bundles v1alpha1.BundleList
 	if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err != nil {
@@ -403,7 +406,8 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 		if cond := meta.FindStatusCondition(pl.Status.Conditions, "Ready"); cond != nil {
 			ready = *cond
 		}
-		view.Summary = pipelinerec.Summarize(&pl, ready, view.Environments)
+		view.FailedVersion = pipelinerec.FailedVersion(pipeline, bundles.Items)
+		view.Summary = pipelinerec.WithFailure(pipelinerec.Summarize(&pl, ready, view.Environments), view.FailedVersion, view.Environments)
 	} else if slices.ContainsFunc(view.Environments, func(e v1alpha1.PipelineEnvironmentStatus) bool { return len(e.BlockedBy) > 0 }) {
 		if err := listGates(); err != nil {
 			return nil, err
@@ -411,6 +415,9 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 	}
 	if view.Environments == nil {
 		view.Environments = []v1alpha1.PipelineEnvironmentStatus{}
+	}
+	if f := view.FailedVersion; f != nil {
+		view.Notices = append(view.Notices, failedNotice(pipeline, f))
 	}
 	view.Regions = environmentRegions(&pl)
 	if OutputFormat() == "wide" {
@@ -681,3 +688,14 @@ rows itself, with the controller's code; SINCE is then known only for live
 environments. -o json and -o yaml print the same data with the API's state
 values (Verified, WaitingForMerge) and "source": "controller" or "cli".
 kardinal explain shows the steps and every gate of the current Bundle.`
+
+// failedNotice is status's ERROR line for a failed newest version.
+func failedNotice(pipeline string, f *v1alpha1.PipelineFailedVersion) string {
+	where := "failed before it started"
+	if f.Environment != "" {
+		where = "failed in " + f.Environment
+	}
+	detail, _, _ := strings.Cut(f.Message, " — ")
+	return fmt.Sprintf("ERROR: the newest version %s %s (%s): %s; kardinal why %s says what fixes it",
+		versionLabel(f.Version, f.Bundle), where, f.Reason, detail, pipeline)
+}

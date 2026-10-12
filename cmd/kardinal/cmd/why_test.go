@@ -213,6 +213,25 @@ func TestWhy_Golden(t *testing.T) {
 				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Failed"}}
 			return []sigs_client.Object{explainStep("demo", "demo-b", "prod", "Failed", "health check timed out after 10m", time.Now())}
 		}, false},
+		{"the newest version failed before it started (the walkthrough's GateMirror)", "", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "test", Bundle: "demo-a", Version: "sha-9349a3f", State: "Verified"},
+				{Name: "prod", Bundle: "demo-a", Version: "sha-9349a3f", State: "Verified"}}
+			p.Status.FailedVersion = &v1alpha1.PipelineFailedVersion{Bundle: "demo-bj579", Version: "sha-9349a3f", Reason: "GraphRejected",
+				Message: `kro rejected the Graph: compile node "GateMirror": found no matching overload for '_+_'`}
+			return nil
+		}, false},
+		{"the newest version's Graph could not be built", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0", State: "Verified"}}
+			p.Status.FailedVersion = &v1alpha1.PipelineFailedVersion{Bundle: "demo-b", Version: "1.5.0", Reason: "GraphBuildFailed",
+				Message: `build: gate "soak": unknown variable x — fix the Pipeline, Bundle or PolicyGate it names; a change to the Pipeline or its PolicyGates retries this Bundle`}
+			return nil
+		}, false},
+		{"the newest version failed in uat; why prod", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0", State: "Verified"}}
+			p.Status.FailedVersion = &v1alpha1.PipelineFailedVersion{Bundle: "demo-b", Version: "1.5.0", Reason: "StepFailed",
+				Message: "environment uat: health check timeout", Environment: "uat"}
+			return nil
+		}, false},
 		{"promoting", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
 				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "HealthChecking", Since: &since}}

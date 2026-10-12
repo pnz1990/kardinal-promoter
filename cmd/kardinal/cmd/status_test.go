@@ -573,6 +573,29 @@ func TestStatusPipelineWriter_PipelineNotices(t *testing.T) {
 	assert.NotContains(t, runStatusPipeline(t, ok), "ERROR:")
 }
 
+// TestStatusPipelineWriter_FailedVersion: a newest version that failed
+// (status.failedVersion) is an ERROR line before the table, with the
+// reason, what failed and the why command that says what fixes it; -o json
+// carries failedVersion.
+func TestStatusPipelineWriter_FailedVersion(t *testing.T) {
+	p := policyPipeline("demo", "test", "prod")
+	p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "test", Bundle: "demo-a", Version: "1.4.0", State: "Verified"},
+		{Name: "prod", Bundle: "demo-a", Version: "1.4.0", State: "Verified"}}
+	p.Status.FailedVersion = &v1alpha1.PipelineFailedVersion{Bundle: "demo-b", Version: "1.5.0", Reason: "GraphRejected",
+		Message: `kro rejected the Graph: compile node "GateMirror": found no matching overload`}
+	out := runStatusPipeline(t, p)
+	assert.Contains(t, out, `ERROR: the newest version 1.5.0 (demo-b) failed before it started (GraphRejected): kro rejected the Graph: compile node "GateMirror": found no matching overload; kardinal why demo says what fixes it`)
+	assert.Less(t, strings.Index(out, "ERROR:"), strings.Index(out, "ENVIRONMENT"), out)
+
+	globalOutput = "json"
+	t.Cleanup(func() { globalOutput = "" })
+	var view struct {
+		FailedVersion *v1alpha1.PipelineFailedVersion `json:"failedVersion"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(runStatusPipeline(t, p)), &view))
+	assert.Equal(t, p.Status.FailedVersion, view.FailedVersion)
+}
+
 // TestStatusPipelineWriter_RegionAndWide (C4 QA): REGION shows where each
 // environment runs when one of them says (here the kubeconfig of a remote
 // cluster), and -o wide adds the step each newest Bundle is on.

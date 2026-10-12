@@ -710,6 +710,13 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `status.environments[].since` | string (date-time) |  | Since is when State began: the Verified time for Verified, otherwise when the controller first recorded this Bundle in this State. |
 | `status.environments[].state` | string |  | State is the PromotionStep state of the newest Bundle in the environment (IncomingBundle when set, else Bundle), an API value such as Verified or WaitingForMerge. Pending with BlockedBy set when gates hold the Bundle before its step exists. Empty when no Bundle reached the environment. |
 | `status.environments[].version` | string |  | Version is what Bundle ships: the image tag, "config &lt;sha&gt;" or the chart version. |
+| `status.failedVersion` | object |  | FailedVersion is the newest version of the Pipeline when it failed: its Bundle is the newest of the Pipeline and is Failed, before any step (the Graph could not be built, the spec is invalid) or in an environment. Cleared once a newer Bundle exists. Written with Environments from the Bundle's conditions; display only, so the CLI (why, status) and the UI can say why without reading the Bundle. |
+| `status.failedVersion.bundle` | string | yes | Bundle is the failed Bundle. |
+| `status.failedVersion.environment` | string |  | Environment is the environment whose step failed; empty when the Bundle failed before any step. |
+| `status.failedVersion.message` | string |  | Message is that condition's message: what failed and, where known, what fixes it. |
+| `status.failedVersion.reason` | string | yes | Reason is the reason of the Bundle's InvalidSpec condition (GraphBuildFailed, InvalidIntent, InvalidPipeline, ...) or of its Failed condition. |
+| `status.failedVersion.since` | string (date-time) |  | Since is when the Bundle failed (its Ready condition's transition). |
+| `status.failedVersion.version` | string |  | Version is what Bundle ships (the image tag, "config &lt;sha&gt;" or the chart version). |
 | `status.fleets` | []object |  | Fleets are the resolved targets of each fleet environment that uses a selector, written by the PipelineReconciler. A Bundle's Graph is built from them; a change rebuilds the Graph of a Bundle in flight. |
 | `status.fleets[].environment` | string | yes | Environment is the fleet environment. |
 | `status.fleets[].message` | string |  | Message says why the selector could not be resolved, when it could not. |
