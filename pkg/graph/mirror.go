@@ -42,14 +42,20 @@ func gateMirrorNodes(steps []interface{}, collections []string) []GraphNode {
 	if len(steps) == 0 {
 		return nil
 	}
-	gates := "[]"
+	// kro types each collection as a list of its own object type, so two
+	// collections cannot be added: each one is filtered and mapped to the
+	// same map(string, dyn) entries first, and the lists of entries are
+	// added and sorted.
+	live := "${[]}"
 	if len(collections) > 0 {
-		gates = "(" + strings.Join(collections, " + ") + ")"
+		parts := make([]string, len(collections))
+		for i, id := range collections {
+			parts[i] = fmt.Sprintf(`%s.filter(g, g.metadata.?labels[?"kardinal.io/environment"].orValue("") == %s.environment)`+
+				`.map(g, {"name": g.metadata.name, "ready": g.?status.?ready.orValue(false), "reason": g.?status.?reason.orValue("")})`,
+				id, iterMirror)
+		}
+		live = "${(" + strings.Join(parts, " + ") + ").sortBy(e, e.name)}"
 	}
-	live := fmt.Sprintf(`${%s.filter(g, g.metadata.?labels[?"kardinal.io/environment"].orValue("") == %s.environment)`+
-		`.sortBy(g, g.metadata.name)`+
-		`.map(g, {"name": g.metadata.name, "ready": g.?status.?ready.orValue(false), "reason": g.?status.?reason.orValue("")})}`,
-		gates, iterMirror)
 	return []GraphNode{
 		{ID: NodeGateMirrorData, Def: map[string]interface{}{"steps": steps}},
 		{
