@@ -385,5 +385,5 @@ function override(state, { pipeline: name, gate: gateName, environment, reason, 
     }
   }
   // The controller's words (cmd/kardinal-controller ui_lifecycle.go), RFC 3339 to the second.
-  return { message: `gate ${gateName} overridden in ${environment} for ${g ? 1 : 0} in-progress Bundle(s) until ${expiresAt.replace(/\.\d{3}Z$/, 'Z')}`, gates: g ? [g.name] : [], expiresAt }
+  return { message: `gate ${gateName} overridden in ${environment} for ${g ? '1 version' : '0 versions'} in progress until ${expiresAt.replace(/\.\d{3}Z$/, 'Z')}`, gates: g ? [g.name] : [], expiresAt }
 }
