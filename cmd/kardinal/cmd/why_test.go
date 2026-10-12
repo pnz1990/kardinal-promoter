@@ -30,6 +30,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	pipelinerec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 )
 
 var updateWhy = flag.Bool("update-why", false, "rewrite testdata/why.golden")
@@ -213,6 +214,33 @@ func TestWhy_Golden(t *testing.T) {
 				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Failed"}}
 			return []sigs_client.Object{explainStep("demo", "demo-b", "prod", "Failed", "health check timed out after 10m", time.Now())}
 		}, false},
+		{"the newest version failed before it started (the walkthrough's GateMirror)", "", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "test", Bundle: "demo-a", Version: "sha-9349a3f", State: "Verified"},
+				{Name: "prod", Bundle: "demo-a", Version: "sha-9349a3f", State: "Verified"}}
+			// The controller's record of the real Bundle: kro's error with the
+			// expression echoed and its caret line, which failedVersion drops.
+			b := whyBundle("demo-bj579", "sha-9349a3f")
+			b.Status.Phase = "Failed"
+			msg := `kro rejected the Graph: compile node "GateMirror": variable at "spec.live.gates" ("(PolicyGates + ApprovalGates).filter(...)"): ` +
+				`ERROR: <input>:1:14: found no matching overload for '_+_' applied to '(list(__type_PolicyGates.@idx), list(__type_ApprovalGates.@idx))'` +
+				"\n | (PolicyGates + ApprovalGates).filter(g, g.metadata.?labels[?\"kardinal.io/environment\"].orValue(\"\") == Mirror.environment)\n | .............^"
+			b.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: "False", Reason: "Failed", Message: "promotion failed: " + msg},
+				{Type: "Failed", Status: "True", Reason: "GraphRejected", Message: msg}}
+			p.Status.FailedVersion = pipelinerec.FailedVersion("demo", []v1alpha1.Bundle{*b})
+			return nil
+		}, false},
+		{"the newest version's Graph could not be built", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0", State: "Verified"}}
+			p.Status.FailedVersion = &v1alpha1.PipelineFailedVersion{Bundle: "demo-b", Version: "1.5.0", Reason: "GraphBuildFailed",
+				Message: `build: gate "soak": unknown variable x — fix the Pipeline, Bundle or PolicyGate it names; a change to the Pipeline or its PolicyGates retries this Bundle`}
+			return nil
+		}, false},
+		{"the newest version failed in uat; why prod", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0", State: "Verified"}}
+			p.Status.FailedVersion = &v1alpha1.PipelineFailedVersion{Bundle: "demo-b", Version: "1.5.0", Reason: "StepFailed",
+				Message: "environment uat: health check timeout", Environment: "uat"}
+			return nil
+		}, false},
 		{"promoting", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
 				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "HealthChecking", Since: &since}}
@@ -257,8 +285,16 @@ func TestWhy_Golden(t *testing.T) {
 			c := policyClient(t, objs...)
 			var out bytes.Buffer
 			require.NoError(t, whyFn(context.Background(), &out, c, "default", "demo", tc.env))
+			// The failed-version sentence quotes the controller's message,
+			// kinds and all; every other line is in the CLI's words.
+			var own []string
+			for _, l := range strings.Split(out.String(), "\n") {
+				if !strings.HasPrefix(l, "The newest version ") {
+					own = append(own, l)
+				}
+			}
 			for _, kind := range []string{"PolicyGate", "PromotionStep", "Bundle "} {
-				assert.NotContains(t, out.String(), kind, "no kind names")
+				assert.NotContains(t, strings.Join(own, "\n"), kind, "no kind names")
 			}
 			fmt.Fprintf(&golden, "== %s (kardinal why %s)\n%s\n", tc.name, strings.TrimSpace("demo "+tc.env), out.String())
 		})

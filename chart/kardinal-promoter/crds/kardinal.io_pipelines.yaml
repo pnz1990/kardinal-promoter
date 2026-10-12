@@ -1788,6 +1788,48 @@ spec:
                 x-kubernetes-list-map-keys:
                 - name
                 x-kubernetes-list-type: map
+              failedVersion:
+                description: |-
+                  FailedVersion is the newest version of the Pipeline when it failed: its
+                  Bundle is the newest of the Pipeline and is Failed, before any step
+                  (the Graph could not be built, the spec is invalid) or in an
+                  environment. Cleared once a newer Bundle exists. Written with
+                  Environments from the Bundle's conditions; display only, so the CLI
+                  (why, status) and the UI can say why without reading the Bundle.
+                properties:
+                  bundle:
+                    description: Bundle is the failed Bundle.
+                    type: string
+                  environment:
+                    description: |-
+                      Environment is the environment whose step failed; empty when the
+                      Bundle failed before any step.
+                    type: string
+                  message:
+                    description: |-
+                      Message is that condition's message: what failed and, where known,
+                      what fixes it.
+                    type: string
+                  reason:
+                    description: |-
+                      Reason is the reason of the Bundle's InvalidSpec condition
+                      (GraphBuildFailed, InvalidIntent, InvalidPipeline, ...) or of its
+                      Failed condition.
+                    type: string
+                  since:
+                    description: Since is when the Bundle failed (its Ready condition's
+                      transition).
+                    format: date-time
+                    type: string
+                  version:
+                    description: |-
+                      Version is what Bundle ships (the image tag, "config <sha>" or the
+                      chart version).
+                    type: string
+                required:
+                - bundle
+                - reason
+                type: object
               fleets:
                 description: |-
                   Fleets are the resolved targets of each fleet environment that uses a

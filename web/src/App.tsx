@@ -81,7 +81,7 @@ import { resolveShownBundle } from './bundleSelection'
 import { terminalEnvironments } from './fleetModel'
 
 import type { AccessCheck, Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep, PolicyGate } from './types'
-import { bundleVersion } from './stage/stageModel'
+import { bundleVersion, failedVersionTitle } from './stage/stageModel'
 import { pipelineState } from './pipelineState'
 import { StatusChip } from './ui'
 
@@ -1170,6 +1170,13 @@ export function App() {
                           <span className="app-sha">
                             {b.provenance.commitSHA.slice(0, 8)}
                           </span>
+                        )}
+                        {activePipeline?.failedVersion?.bundle === b.name && (
+                          // status.failedVersion: why the newest version failed, in the controller's words.
+                          <p className="app-history__failure" role="note">
+                            <strong>{failedVersionTitle(activePipeline.failedVersion)}</strong>{' '}
+                            {activePipeline.failedVersion.message}
+                          </p>
                         )}
                       </li>
                     ))}
