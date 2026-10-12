@@ -3,9 +3,9 @@
 
 // PipelineConditions.tsx — the Pipeline's own problems, under its header, as `kardinal
 // status <pipeline>` prints them: an error when it is not Ready (GitCredentialMissing says
-// which git Secret to create), and a warning when its git Secret is not labelled
-// kardinal.io/referenceable=true (still used in v0.10, refused in v0.11). The controller
-// puts the command that fixes each in the condition's message; it is shown to copy.
+// which git Secret to create, SecretNotReferenceable which Secret to label
+// kardinal.io/referenceable=true). The controller puts the command that fixes it in the
+// condition's message; it is shown to copy.
 import type { Condition } from '../types'
 import { CodeBlock } from '../ui/Text'
 import '../styles/PipelineConditions.css'
@@ -30,7 +30,7 @@ interface Notice {
   command?: string
 }
 
-/** The notices of a Pipeline's conditions: not Ready first, then the referenceable warning. */
+/** The notices of a Pipeline's conditions: an error when it is not Ready. */
 export function pipelineNotices(conditions: Condition[] = []): Notice[] {
   const out: Notice[] = []
   const ready = conditions.find(c => c.type === 'Ready')
@@ -40,19 +40,11 @@ export function pipelineNotices(conditions: Condition[] = []): Notice[] {
       tone: 'failed',
       title: ready.reason === 'GitCredentialMissing'
         ? 'Git has no token for this pipeline, so nothing can be promoted'
-        : `This pipeline is not ready${ready.reason ? ` (${ready.reason})` : ''}`,
+        : ready.reason === 'SecretNotReferenceable'
+          ? 'Git does not use the git Secret until it is labelled, so nothing can be promoted'
+          : `This pipeline is not ready${ready.reason ? ` (${ready.reason})` : ''}`,
       message: ready.message ?? '',
       command: fixCommand(ready.message),
-    })
-  }
-  const ref = conditions.find(c => c.type === 'SecretReferenceable')
-  if (ref && ref.status === 'False') {
-    out.push({
-      key: 'referenceable',
-      tone: 'warning',
-      title: 'Label the git Secret before upgrading to v0.11',
-      message: ref.message ?? '',
-      command: fixCommand(ref.message),
     })
   }
   return out

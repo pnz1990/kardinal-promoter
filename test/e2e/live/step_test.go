@@ -348,7 +348,7 @@ func TestStep_GitAuth(t *testing.T) {
 		"metadata": map[string]interface{}{"name": argoCreds.Name, "namespace": argoCreds.Namespace}}}, false)
 	require.NoError(t, gitserver.SetPrivate(ctx, e.Git, a.repo, true), "make the repo private")
 
-	auth := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-auth", Namespace: a.ns},
+	auth := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-auth", Namespace: a.ns, Labels: map[string]string{"kardinal.io/referenceable": "true"}},
 		Data: map[string][]byte{"token": []byte(wrong)}}
 	require.NoError(t, e.Client.Create(ctx, auth))
 	p := a.pipeline(nil)

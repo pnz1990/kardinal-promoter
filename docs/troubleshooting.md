@@ -66,7 +66,7 @@ These checks are part of the CRDs and cannot be turned off. The chart's only
 ValidatingAdmissionPolicies are the identity policies (a rejection, an override or an approval
 must name the requesting user, see [Verified identity](guides/security.md#verified-identity)); an
 `admission webhook "..." denied the request` or `ValidatingAdmissionPolicy '<release>-...' ... denied
-request` error names the rule. The `validatingAdmissionPolicy.enabled` value has no effect.
+request` error names the rule.
 
 ---
 
@@ -166,7 +166,7 @@ Rollouts Rollout or a Flagger Canary. No GitOps engine is required.
 
 Yes to both. For GitLab, start the controller with `--scm-provider gitlab`
 (Helm value `scm.provider: gitlab`). A Pipeline can name another SCM with `spec.git.providerRef`
-(an ScmProvider or ClusterScmProvider); `spec.git.provider` is deprecated and ignored. Forgejo,
+(an ScmProvider or ClusterScmProvider). Forgejo,
 Gitea, Bitbucket Cloud, Bitbucket Data Center and Azure DevOps are also supported. See [SCM Providers](scm-providers.md).
 
 For Helm, set `update: {strategy: helm}` on the Pipeline environment. kardinal

@@ -135,7 +135,7 @@ func TestStep_GitSecretMissing(t *testing.T) {
 	var token corev1.Secret
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: framework.GitSecretName}, &token))
 	require.NoError(t, e.Client.Create(ctx, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Namespace: a.ns, Name: "git-creds-missing"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: a.ns, Name: "git-creds-missing", Labels: map[string]string{"kardinal.io/referenceable": "true"}},
 		Data:       token.Data,
 	}))
 	ps = e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)

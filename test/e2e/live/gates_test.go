@@ -24,6 +24,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -1164,8 +1165,8 @@ func TestGate_AuditsEvaluations(t *testing.T) {
 }
 
 // TestGate_InvalidGatesRejected checks that the API server refuses the
-// PolicyGates the controller cannot honour and says what to do instead: a
-// spec.selector, and a name over 63 characters. A 63-character name is
+// PolicyGates the controller cannot honour: a spec.selector (not in the
+// CRD), and a name over 63 characters, saying what to do instead. A 63-character name is
 // accepted.
 //
 // Covers GATE-REJECT-01.
@@ -1175,20 +1176,20 @@ func TestGate_InvalidGatesRejected(t *testing.T) {
 	ctx := context.Background()
 	ns := e.Namespace(t)
 
-	for name, sel := range map[string]*metav1.LabelSelector{
-		"with-selector":  {MatchLabels: map[string]string{"app": "podinfo"}},
-		"empty-selector": {},
-	} {
-		g := framework.Gate(ns, name, "prod", "true", "")
-		g.Spec.Selector = sel //nolint:staticcheck // the test checks the CRD refuses the deprecated field
-		err := e.Client.Create(ctx, g)
-		require.Error(t, err, name)
-		assert.True(t, apierrors.IsInvalid(err), "%s: %v", name, err)
-		assert.Contains(t, err.Error(), "spec.selector is not implemented; use the kardinal.io/applies-to label", name)
-	}
+	// spec.selector is not in the CRD: strict field validation (kubectl
+	// apply's default) refuses it.
+	sel := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "kardinal.io/v1alpha1", "kind": "PolicyGate",
+		"metadata": map[string]interface{}{"name": "with-selector", "namespace": ns},
+		"spec": map[string]interface{}{"expression": "true", "selector": map[string]interface{}{
+			"matchLabels": map[string]interface{}{"app": "podinfo"}}},
+	}}
+	err := e.Client.Create(ctx, sel, client.FieldValidation("Strict"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown field "spec.selector"`)
 
 	long := framework.Gate(ns, strings.Repeat("g", 64), "prod", "true", "")
-	err := e.Client.Create(ctx, long)
+	err = e.Client.Create(ctx, long)
 	require.Error(t, err)
 	assert.True(t, apierrors.IsInvalid(err), "%v", err)
 	assert.Contains(t, err.Error(), "PolicyGate names are at most 63 characters")

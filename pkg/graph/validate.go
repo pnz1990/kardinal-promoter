@@ -297,7 +297,8 @@ func validateGateNames(envs []string, gatesByEnv map[string][]kardinalv1alpha1.P
 	return nil
 }
 
-// validateEnvironments checks the environment names, regions and steps.
+// validateEnvironments checks the environment names: set, usable as a label
+// value, and declared once.
 func validateEnvironments(envs []kardinalv1alpha1.EnvironmentSpec) error {
 	names := make(map[string]bool, len(envs))
 	for _, e := range envs {
@@ -312,16 +313,6 @@ func validateEnvironments(envs []kardinalv1alpha1.EnvironmentSpec) error {
 			return fmt.Errorf("build: environment %q is declared twice", e.Name)
 		}
 		names[e.Name] = true
-		// One region names nothing Build uses; two or more would push the same
-		// change to the same branch once per region.
-		if len(e.Regions) >= 2 { //nolint:staticcheck // SA1019: read to reject it
-			return fmt.Errorf("build: environment %q: %s", e.Name, RegionsNotSupported)
-		}
-		// Refuse a custom step sequence instead of silently ignoring the steps
-		// the author asked for.
-		if msg := customStepsUnimplemented(&e); msg != "" {
-			return fmt.Errorf("build: %s", msg)
-		}
 	}
 	return nil
 }

@@ -53,7 +53,19 @@ the chart version you upgrade to.
 **1. Read the upgrade notes.** The changelog's [From v0.10.0](changelog.md#from-v0100) lists
 every change for existing objects and clients.
 
-**2. Take the `kardinal.io/referenceable` label off the controller's SCM token Secret.** No
+**2. Label the Pipelines' git Secrets.** A Secret named by `spec.git.secretRef` must carry
+`kardinal.io/referenceable: "true"`: this release does not use an unlabeled one. Its Pipeline is
+`Ready=False` with reason `SecretNotReferenceable`, and its git steps wait until it is labeled.
+This labels the git Secret of every Pipeline:
+
+```bash
+kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.spec.git.secretRef.name}{"\n"}{end}' |
+  sort -u | while read -r ns name; do
+    [ -z "$name" ] || kubectl -n "$ns" label secret "$name" kardinal.io/referenceable=true --overwrite
+  done
+```
+
+**3. Take the `kardinal.io/referenceable` label off the controller's SCM token Secret.** No
 Pipeline may use the controller's own token Secret, and the controller warns while that Secret
 carries the label. This removes it, if it is there:
 
@@ -68,7 +80,24 @@ A Pipeline whose `spec.git.secretRef` names that Secret is `Ready=False` with re
 `kardinal.io/referenceable=true`, before you upgrade. The chart's demo Pipeline uses
 `demo.secretRef.name`.
 
-**3. Apply the new CRDs.** Helm never upgrades CRDs. The v0.10.0 chart installed them, so Helm
+**4. Move NotificationHook Authorization headers into Secrets.** This release has no
+`spec.webhook.authorizationHeader`: the API server drops it, and the hook then posts without the
+header. This moves each one into a Secret `<hook>-auth` (key `authorization`, labeled
+`kardinal.io/referenceable=true`) and points the hook's `spec.webhook.secretRef` at it. It prints
+nothing when no hook sets the field.
+
+```bash
+kubectl get notificationhooks -A -o json \
+  | jq -r '.items[] | select((.spec.webhook.authorizationHeader // "") != "") | "\(.metadata.namespace) \(.metadata.name)"' \
+  | while read -r ns hook; do
+      value=$(kubectl -n "$ns" get notificationhook "$hook" -o jsonpath='{.spec.webhook.authorizationHeader}')
+      kubectl -n "$ns" create secret generic "$hook-auth" --from-literal=authorization="$value"
+      kubectl -n "$ns" label secret "$hook-auth" kardinal.io/referenceable=true
+      kubectl -n "$ns" patch notificationhook "$hook" --type json -p '[{"op":"remove","path":"/spec/webhook/authorizationHeader"},{"op":"add","path":"/spec/webhook/secretRef","value":{"name":"'"$hook"'-auth"}}]'
+    done
+```
+
+**5. Apply the new CRDs.** Helm never upgrades CRDs. The v0.10.0 chart installed them, so Helm
 owns their fields: `--force-conflicts` is required, or the apply stops with
 `conflict with "helm" ... .spec.versions`.
 
@@ -76,7 +105,7 @@ owns their fields: `--force-conflicts` is required, or the apply stops with
 helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> | kubectl apply --server-side --force-conflicts -f -
 ```
 
-**4. Upgrade the chart.** Use `--reset-then-reuse-values`, which keeps the values you set and
+**6. Upgrade the chart.** Use `--reset-then-reuse-values`, which keeps the values you set and
 takes every new default from the new chart.
 
 ```bash
@@ -84,7 +113,12 @@ helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --
   --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
 ```
 
-**5. Check the result.**
+If `helm get values kardinal-promoter -n kardinal-system` shows `validatingAdmissionPolicy` or
+`rbac.integrationTestJobs`, add `--set validatingAdmissionPolicy=null` or
+`--set rbac.integrationTestJobs=null`: the chart has neither, and `--reset-then-reuse-values`
+would keep the value you set, which the schema rejects.
+
+**7. Check the result.**
 
 ```bash
 kardinal doctor
@@ -111,9 +145,10 @@ lists every change for existing objects and clients.
 **2. Rename any environment named `time`.** The Pipeline CRD rejects it: `time` is reserved for
 a kro Graph node ID. Renaming gives the environment new PromotionSteps and PR branches.
 
-**3. Label the Pipelines' git Secrets.** A Secret named by `spec.git.secretRef` should carry
-`kardinal.io/referenceable: "true"`. This release still uses an unlabeled one but sets the
-Pipeline's `SecretReferenceable=False` condition; a later release refuses it.
+**3. Label the Pipelines' git Secrets.** A Secret named by `spec.git.secretRef` must carry
+`kardinal.io/referenceable: "true"`: this release does not use an unlabeled one. Its Pipeline is
+`Ready=False` with reason `SecretNotReferenceable`, and its git steps wait until it is labeled.
+This labels the git Secret of every Pipeline:
 
 ```bash
 kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.spec.git.secretRef.name}{"\n"}{end}' |
@@ -122,7 +157,24 @@ kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "
   done
 ```
 
-**4. Apply the new CRDs.** Helm never upgrades CRDs. Apply them before the new controller starts.
+**4. Move NotificationHook Authorization headers into Secrets.** This release has no
+`spec.webhook.authorizationHeader`: the API server drops it, and the hook then posts without the
+header. This moves each one into a Secret `<hook>-auth` (key `authorization`, labeled
+`kardinal.io/referenceable=true`) and points the hook's `spec.webhook.secretRef` at it. It prints
+nothing when no hook sets the field.
+
+```bash
+kubectl get notificationhooks -A -o json \
+  | jq -r '.items[] | select((.spec.webhook.authorizationHeader // "") != "") | "\(.metadata.namespace) \(.metadata.name)"' \
+  | while read -r ns hook; do
+      value=$(kubectl -n "$ns" get notificationhook "$hook" -o jsonpath='{.spec.webhook.authorizationHeader}')
+      kubectl -n "$ns" create secret generic "$hook-auth" --from-literal=authorization="$value"
+      kubectl -n "$ns" label secret "$hook-auth" kardinal.io/referenceable=true
+      kubectl -n "$ns" patch notificationhook "$hook" --type json -p '[{"op":"remove","path":"/spec/webhook/authorizationHeader"},{"op":"add","path":"/spec/webhook/secretRef","value":{"name":"'"$hook"'-auth"}}]'
+    done
+```
+
+**5. Apply the new CRDs.** Helm never upgrades CRDs. Apply them before the new controller starts.
 The v0.9.0 chart installed them, so Helm owns their fields: `--force-conflicts` is required, or
 the apply stops with `conflict with "helm" ... .spec.versions`.
 
@@ -130,14 +182,14 @@ the apply stops with `conflict with "helm" ... .spec.versions`.
 helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 | kubectl apply --server-side --force-conflicts -f -
 ```
 
-**5. Upgrade kro.** Run this from a checkout of kardinal-promoter at this release; it installs
+**6. Upgrade kro.** Run this from a checkout of kardinal-promoter at this release; it installs
 the kro version the release targets, and leaves a kro that is already at it as it is.
 
 ```bash
 KUBE_CONTEXT=<your-context> bash hack/install-kro.sh
 ```
 
-**6. Upgrade the chart.** Use `--reset-then-reuse-values`, which keeps the values you set and
+**7. Upgrade the chart.** Use `--reset-then-reuse-values`, which keeps the values you set and
 takes every new default from the new chart.
 
 ```bash
@@ -145,7 +197,12 @@ helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --
   --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
 ```
 
-**7. Check the result.**
+If `helm get values kardinal-promoter -n kardinal-system` shows `validatingAdmissionPolicy` or
+`rbac.integrationTestJobs`, add `--set validatingAdmissionPolicy=null` or
+`--set rbac.integrationTestJobs=null`: the chart has neither, and `--reset-then-reuse-values`
+would keep the value you set, which the schema rejects.
+
+**8. Check the result.**
 
 ```bash
 kardinal doctor
@@ -182,20 +239,17 @@ kubectl version | grep Server
 kubectl get pipelines -A -o json | jq -r '
   ["api-version","kind","metadata","namespace","spec","status","graph","graphengine","kro","each","item","items","object","self","this","context","true","false","null","in","as","break","const","continue","else","for","function","if","import","let","loop","package","return","var","void","while","bundle","time"] as $reserved
   | .items[] | "pipeline \(.metadata.namespace)/\(.metadata.name)" as $p
-  | ( (select((.spec.policyGates // []) | length > 0) | "\($p): spec.policyGates"),
-      ((.spec.environments // []) | group_by(.name)[] | select(length > 1) | "\($p): duplicate environment name \(.[0].name)"),
+  | ( ((.spec.environments // []) | group_by(.name)[] | select(length > 1) | "\($p): duplicate environment name \(.[0].name)"),
       ((.spec.environments // [])[] |
-        (select((.steps // []) | length > 0) | "\($p) env \(.name): steps"),
-        (select(.promotionTemplate != null) | "\($p) env \(.name): promotionTemplate"),
         (select(.autoRollback != null) | "\($p) env \(.name): autoRollback"),
-        (select((.shard // "") != "") | "\($p) env \(.name): shard"),
         (select(.name as $n | ($reserved | index($n)) != null or ($n | test("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$") | not) or ($n | length) > 63) | "\($p) env \(.name): invalid or reserved name")) )'
 kubectl get policygates -A -o json | jq -r '.items[] | "policygate \(.metadata.namespace)/\(.metadata.name)" as $g
-  | (select(.spec.selector != null) | "\($g): spec.selector"),
-    (select((.metadata.name | length) > 63 and .spec.generated != true
+  | (select((.metadata.name | length) > 63 and .spec.generated != true
       and ((.metadata.labels // {}) | (has("kardinal.io/bundle") or has("kardinal.io/gate-template") or .["kardinal.io/freeze"] == "true") | not))
       | "\($g): name longer than 63 characters")'
 ```
+
+The new CRDs do not have Pipeline `spec.policyGates`, environment `steps`, `promotionTemplate` and `shard`, or PolicyGate `spec.selector`: the API server drops them from stored objects, and every environment runs the default step sequence. The finder does not list them, and they need no fix. Org gates apply through the `kardinal.io/applies-to` label.
 
 Gate instances and pause freeze gates can have longer names. Kardinal created them, and the new controller sets `spec.generated` on them, the field that exempts them from the name limit, before it writes their status. The finder skips them.
 
@@ -203,12 +257,7 @@ Fix each line it prints. In the commands below, `<i>` is the environment's posit
 
 | Finding | Fix |
 |---|---|
-| `steps` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/environments/<i>/steps"}]'`. Every environment runs the default step sequence. |
-| `promotionTemplate` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/environments/<i>/promotionTemplate"}]'`. Only clusters that ran a build from `main` have it. |
 | `autoRollback` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/environments/<i>/autoRollback"}]'`. Use `onHealthFailure` instead (see [Rollback](rollback.md)). |
-| `shard` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/environments/<i>/shard"}]'`. `shard` is not supported. |
-| `spec.policyGates` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/policyGates"}]'`. Label org gates with `kardinal.io/applies-to`. |
-| PolicyGate `spec.selector` | `kubectl -n <ns> patch policygate <name> --type json -p '[{"op":"remove","path":"/spec/selector"}]'`. Use the `kardinal.io/applies-to` label. |
 | Invalid, reserved or duplicate environment name | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"replace","path":"/spec/environments/<i>/name","value":"<new-name>"}]'`. Renaming gives the environment new PromotionSteps and PR branches. Do it when the Pipeline has no Bundle in flight, and update any `dependsOn` that names it. |
 | PolicyGate name longer than 63 characters | Copy the gate under a shorter name, then delete the old one (command below). |
 
@@ -228,7 +277,18 @@ Editing a Pipeline's spec makes v0.8.1 rebuild that Pipeline's in-flight Bundles
 helm get values kardinal-promoter -n kardinal-system -o yaml
 ```
 
-The new chart has no `krocodile` key, and its schema rejects it. If your values contain `krocodile`, see [Helm values](#helm-values) before step 8.
+The new chart has no `krocodile`, `validatingAdmissionPolicy` or `rbac.integrationTestJobs` key, and its schema rejects them. If your values contain one, see [Helm values](#helm-values) before step 8.
+
+Then label the Pipelines' git Secrets: this release uses a Secret named by `spec.git.secretRef`
+only when it carries `kardinal.io/referenceable: "true"`. Without it the Pipeline is
+`Ready=False` with reason `SecretNotReferenceable`, and its git steps wait.
+
+```bash
+kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.spec.git.secretRef.name}{"\n"}{end}' |
+  sort -u | while read -r ns name; do
+    [ -z "$name" ] || kubectl -n "$ns" label secret "$name" kardinal.io/referenceable=true --overwrite
+  done
+```
 
 **3. Stop both v0.8.1 controllers.** Promotions pause from here until the end of step 8.
 
@@ -360,17 +420,15 @@ From 1.30, CRD validation ratcheting lets most writes to a stored object through
 
 | Stored value | Kubernetes 1.30 to 1.32 | Kubernetes 1.33 and later |
 |---|---|---|
-| env `steps` / `autoRollback` | status writes and edits to that environment fail | only edits to that environment fail |
+| env `autoRollback` | status writes and edits to that environment fail | only edits to that environment fail |
 | reserved environment name (e.g. `graph`) | status writes and edits to that environment fail | only edits to that environment fail |
-| `spec.policyGates`, PolicyGate `spec.selector` | status writes fail; other writes succeed, with a warning | writes succeed, with a warning |
 | environment name that is not a DNS label (e.g. `Test`) | writes succeed | writes succeed |
 | PolicyGate name longer than 63 characters | **every write fails**, including labels and status | **every write fails**, including labels and status |
 | duplicate environment name | writes succeed; Pipeline `Ready=False` `ValidationFailed` | same |
-| `shard` | writes succeed; Pipeline `Ready=False` `NotImplemented` | same |
 
 If you already applied the CRDs, run the fixes from step 1 now. The patches and the gate copy succeed, and the objects recover.
 
-Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and `multi-cluster-fleet` sets `shard`. Pipelines copied from them need step 1.
+Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and `multi-cluster-fleet` sets `shard`; the new CRDs drop both.
 
 ### Helm values
 
@@ -380,9 +438,8 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
     yq 'del(.krocodile)' values.yaml > values-new.yaml
     ```
 
-- **`validatingAdmissionPolicy.*`.** Deprecated, with no effect. The CRD schemas validate the kardinal fields; the chart's only ValidatingAdmissionPolicies are the identity policies ([Verified identity](guides/security.md#verified-identity)) and the hold-writes policy (only `pipelines/hold` may change `spec.holds`), which are always installed.
-- **`rbac.integrationTestJobs`.** Deprecated, with no effect, and removed in v0.11. The chart grants `batch/jobs` (create, get, list, watch, delete) for [hooks](hooks.md) whatever it says.
-- **`--reuse-values`** fails with `additional properties 'krocodile' not allowed` (Helm before 3.18.5: `Additional property krocodile is not allowed`), even when you never set `krocodile`. Use `--reset-then-reuse-values`.
+- **`validatingAdmissionPolicy` and `rbac.integrationTestJobs`.** The chart has neither. If `helm get values` in step 2 shows one, `--reset-then-reuse-values` keeps it and the schema rejects it: add `--set validatingAdmissionPolicy=null` or `--set rbac.integrationTestJobs=null` to step 8's command, which drops the value. The chart always installs its ValidatingAdmissionPolicies: the identity policies ([Verified identity](guides/security.md#verified-identity)) and the hold-writes policy (only `pipelines/hold` may change `spec.holds`). It grants `batch/jobs` (create, get, list, watch, delete) for [hooks](hooks.md).
+- **`--reuse-values`** fails with `additional properties ... 'krocodile' not allowed` (Helm before 3.18.5: `Additional property krocodile is not allowed`), even when you never set `krocodile`. Use `--reset-then-reuse-values`.
 
 ### Other notes
 

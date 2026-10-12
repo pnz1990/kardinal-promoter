@@ -423,12 +423,8 @@ users who can read the hook cannot read the token. A missing Secret or key makes
 `Ready=False` with reason `SecretNotFound`, `SecretKeyMissing` or `URLMissing`; events wait
 (no attempt is counted) and the hook is checked again every 30 seconds.
 
-`spec.webhook.authorizationHeader` is **deprecated**. It still works: the value is sent as
-the `Authorization` header exactly as written. But it is stored in plain text in the spec,
-so anyone who can read the hook can read it, and the hook has the condition
-`PlaintextCredential=True` (reason `AuthorizationHeaderInSpec`) while it is set. Move the
-value to a Secret's `authorization` key and set `secretRef`; the API server refuses a hook
-that sets both.
+The `Authorization` header comes only from the Secret's `authorization` key: a hook has no
+field that holds a credential in its spec.
 
 The controller never writes the URL or the header to status or logs; logs show only the
 host. When the URL is in `spec.webhook.url`, `kubectl get notificationhooks` shows it in its
@@ -545,9 +541,6 @@ status:
     - type: Ready               # False when the hook cannot deliver as configured
       status: "True"
       reason: Configured
-    # - type: PlaintextCredential   # only while spec.webhook.authorizationHeader is set
-    #   status: "True"
-    #   reason: AuthorizationHeaderInSpec
   lastSentAt: "2026-04-21T10:05:00Z"
   lastEvent: "Bundle.Verified"
   lastEventKey: "Bundle.Verified/nginx-demo-abc123"
