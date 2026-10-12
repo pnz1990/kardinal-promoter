@@ -125,6 +125,9 @@ func explainHinted(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter st
 	return explainRender(w, c, ns, pipeline, envFilter, forceColor, true)
 }
 
+// explainNow is explain's clock (a soak gate's progress); a test replaces it.
+var explainNow = time.Now
+
 func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter string, forceColor bool) error {
 	return explainRender(w, c, ns, pipeline, envFilter, forceColor, false)
 }
@@ -178,6 +181,7 @@ func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter st
 		reason      string
 		expression  string // CEL expression for PolicyGate rows (empty for Step rows)
 		notReady    bool   // a PolicyGate that is not ready (Block, Waiting, Pending or Superseded)
+		progress    string // a soak gate's progress (gateSoak), when it does not pass
 	}
 
 	current := currentBundleByEnv(bundles.Items, steps.Items, gates.Items)
@@ -229,6 +233,13 @@ func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter st
 		if expr == "" {
 			expr = "-"
 		}
+		progress, opens := "", ""
+		if soak, ok := soakOf(pipe, bundleByName[bundle], &g, explainNow()); ok && !g.Status.Ready {
+			progress, opens = soak.now(), soak.opens()
+			if opens != "" {
+				progress += ", opens " + opens
+			}
+		}
 		rows = append(rows, explainRow{
 			environment: env,
 			bundle:      bundle,
@@ -238,15 +249,26 @@ func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter st
 			reason:      reason,
 			expression:  expr,
 			notReady:    !g.Status.Ready,
+			progress:    progress,
 		})
-		// How to get past a gate that was evaluated and does not pass.
+		// How to get past a gate that was evaluated and does not pass. A
+		// gate that opens by itself is waited for; its override comes as
+		// the alternative.
 		if !g.Status.Ready && g.Status.LastEvaluatedAt != nil {
-			hint := fmt.Sprintf("Override: kardinal override %s %s --gate %s --reason <why>", pipeline, env, gateDisplayName(g))
-			if g.Spec.Approval != nil {
-				hint = fmt.Sprintf("Approve: kardinal approve %s %s", pipeline, env)
+			override := fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>", pipeline, env, gateDisplayName(g))
+			hints := []string{"Override: " + override}
+			switch {
+			case g.Spec.Approval != nil:
+				hints = []string{fmt.Sprintf("Approve: kardinal approve %s %s", pipeline, env)}
+			case opens != "":
+				hints = []string{fmt.Sprintf("Wait: %s opens by itself %s (kardinal status %s -w)", gateDisplayName(g), opens, pipeline), "Or: " + override}
+			case rechecks(&g):
+				hints = []string{fmt.Sprintf("Wait: %s opens by itself when its expression passes (kardinal status %s -w)", gateDisplayName(g), pipeline), "Or: " + override}
 			}
-			if !slices.Contains(unblock, hint) {
-				unblock = append(unblock, hint)
+			for _, hint := range hints {
+				if !slices.Contains(unblock, hint) {
+					unblock = append(unblock, hint)
+				}
 			}
 		}
 	}
@@ -271,7 +293,7 @@ func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter st
 		for _, row := range rows {
 			out.Entries = append(out.Entries, explainEntry{
 				Environment: row.environment, Bundle: row.bundle, Type: row.kind, Name: row.name,
-				State: row.state, Expression: noDash(row.expression), Reason: noDash(row.reason),
+				State: row.state, Expression: noDash(row.expression), Reason: noDash(row.reason), Progress: row.progress,
 			})
 		}
 		return writeStructured(w, out)
@@ -305,8 +327,12 @@ func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter st
 		if row.kind == "PolicyGate" {
 			state = display.Gate(row.state)
 		}
+		reason := row.reason
+		if row.progress != "" {
+			reason += "; " + row.progress
+		}
 		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			row.environment, versionLabel(versionOf(bundleByName, row.bundle), row.bundle), row.kind, row.name, st.State(state), row.expression, row.reason,
+			row.environment, versionLabel(versionOf(bundleByName, row.bundle), row.bundle), row.kind, row.name, st.State(state), row.expression, reason,
 		); err != nil {
 			return fmt.Errorf("write explain row: %w", err)
 		}
@@ -361,6 +387,10 @@ type explainEntry struct {
 	// Reason is a step's message or a gate's status reason; omitted when
 	// there is none.
 	Reason string `json:"reason,omitempty"`
+	// Progress is, for a soak gate that does not pass, how far the version
+	// soaked and when the gate opens ("soak 0.4 of 3 min in uat, opens in
+	// about 2m36s"), from the Bundle's status.environments[].healthCheckedAt.
+	Progress string `json:"progress,omitempty"`
 }
 
 // noDash is s, or "" for the table's "-" placeholder: JSON carries no

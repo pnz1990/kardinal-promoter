@@ -334,6 +334,9 @@ type pipelineStatus struct {
 	activeSteps map[string]string
 }
 
+// statusNow is status's clock (a soak gate's progress); a test replaces it.
+var statusNow = time.Now
+
 // statusGate is a gate instance that holds the newest Bundle of an
 // environment back.
 type statusGate struct {
@@ -342,6 +345,13 @@ type statusGate struct {
 	Environment string `json:"environment"`
 	Bundle      string `json:"bundle"`
 	Expression  string `json:"expression"`
+	// Approval is an approval gate's tally ("approval 0 of 1"), shown in
+	// place of its expression, which says nothing about why it holds.
+	Approval string `json:"approval,omitempty"`
+	// Progress is a soak gate's progress and when it opens ("soak 0.4 of 3
+	// min in uat, opens in about 2m36s"), from the Bundle's
+	// status.environments[].healthCheckedAt.
+	Progress string `json:"progress,omitempty"`
 	// Message is the gate's spec.message when it explains the block
 	// (graph.BlockedMessage).
 	Message string `json:"message,omitempty"`
@@ -443,11 +453,27 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 				!slices.Contains(e.BlockedBy, gateDisplayName(*g)) {
 				continue
 			}
-			view.BlockingGates = append(view.BlockingGates, statusGate{
+			sg := statusGate{
 				Name: gateDisplayName(*g), Instance: g.Name, Environment: e.Name, Bundle: newest,
 				Expression: g.Spec.Expression, Message: graph.BlockedMessage(g), Reason: g.Status.Reason,
 				LastEvaluatedAt: g.Status.LastEvaluatedAt,
-			})
+			}
+			// A soak gate says how far the version soaked and when it opens.
+			if soak, ok := soakOf(&pl, byName[newest], g, statusNow()); ok {
+				sg.Progress = soak.now()
+				if opens := soak.opens(); opens != "" {
+					sg.Progress += ", opens " + opens
+				}
+			}
+			if g.Spec.Approval != nil {
+				creator := ""
+				if b := byName[newest]; b != nil {
+					creator = b.Annotations[lifecycle.AnnotationCreatedBy]
+				}
+				t := lifecycle.TallyApprovals(g, creator)
+				sg.Approval = fmt.Sprintf("approval %d of %d", len(t.Approvers), t.Required)
+			}
+			view.BlockingGates = append(view.BlockingGates, sg)
 		}
 		// A Rejected Bundle whose change runs here (lifecycle.RejectedLiveStep).
 		if b := byName[e.Bundle]; b != nil && lifecycle.Rejected(b) {
@@ -581,7 +607,15 @@ func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
 		_, _ = fmt.Fprintln(w, "Blocking gates")
 		_, _ = fmt.Fprintln(w, sty.Rule(72))
 		gtw := style.NewTable(w, 2)
-		_, _ = fmt.Fprintln(gtw, "GATE\tENV\tEXPRESSION\tREASON\tLAST CHECKED")
+		// The column holds an approval gate's tally in place of its
+		// expression: then it is the gate's RULE.
+		column := "EXPRESSION"
+		for _, g := range view.BlockingGates {
+			if g.Approval != "" {
+				column = "RULE"
+			}
+		}
+		_, _ = fmt.Fprintln(gtw, "GATE\tENV\t"+column+"\tREASON\tLAST CHECKED")
 		for _, g := range view.BlockingGates {
 			lastChecked := "-"
 			if g.LastEvaluatedAt != nil && !g.LastEvaluatedAt.IsZero() {
@@ -590,11 +624,20 @@ func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
 			// The gate's message is shown whole: it is what its author wrote
 			// for this table. The CEL detail is in kardinal explain.
 			reason := g.Message
-			if reason == "" {
+			switch {
+			case reason != "" && g.Progress != "":
+				reason += "; " + g.Progress
+			case g.Progress != "":
+				reason = g.Progress
+			case reason == "":
 				reason = truncateRunes(orDash(g.Reason), 35)
 			}
+			cell := truncateRunes(orDash(g.Expression), 40)
+			if g.Approval != "" {
+				cell = g.Approval
+			}
 			_, _ = fmt.Fprintf(gtw, "%s\t%s\t%s\t%s\t%s\n", sty.Paint(display.ToneBlocked, g.Name), g.Environment,
-				truncateRunes(orDash(g.Expression), 40), reason, lastChecked)
+				cell, reason, lastChecked)
 		}
 		if err := gtw.Flush(); err != nil {
 			return fmt.Errorf("write blocking gates: %w", err)

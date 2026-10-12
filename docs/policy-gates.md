@@ -437,6 +437,24 @@ expression: 'has(bundle.labels.hotfix) && bundle.labels.hotfix == "true"'
 expression: 'bundle.version.startsWith("1.")'
 ```
 
+While a soak gate (`bundle.upstreamSoakMinutes` or `upstream.<env>.soakMinutes` compared with
+`>=` or `>`) holds a version, `kardinal why`, `kardinal explain` and `kardinal status` show how far
+it soaked and, when the comparison is the whole expression, when it opens:
+
+```
+$ kardinal why demo prod
+prod is held by gate uat-soak-before-prod.
+  Version  sha-9349a3f (demo-kzwhs)
+  Rule     bundle.upstreamSoakMinutes >= 3
+  Now      soak 0.4 of 3 min in uat
+  Opens    by itself in about 2m36s; rechecked every 30s
+  Next     wait: it opens by itself in about 2m36s (kardinal status demo -w follows it)
+  Or       kardinal override demo prod --gate uat-soak-before-prod --reason <why>
+```
+
+The soak is counted from the upstream's `status.environments[].healthCheckedAt` on the Bundle,
+the same field the controller's `soakMinutes` counts from; the gate itself decides on whole minutes.
+
 ### Metric-based
 
 ```yaml

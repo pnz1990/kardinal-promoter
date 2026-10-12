@@ -1,0 +1,20 @@
+== each environment from the one before it; prod held since its since
+Summary after 4m58s:
+  test   Live                         took 11s
+  uat    Live                         took 22s
+  prod   Held by gate prod-approval   for 4m26s
+== a zero or unset since is unknown; this follow's clock stands in
+Summary after 4m58s:
+  test   Live                         took 4s
+  uat    Live                         took 5s
+  prod   Held by gate prod-approval   for 4m50s
+  dr     Queued
+== the step's own start, and parallel environments after the same upstream
+Summary after 4m58s:
+  test      Live   took 15s
+  prod-eu   Live   took 1m0s
+  prod-us   Live   took 1m40s
+== a since before the Bundle is already live; one after now is clamped
+Summary after 4m58s:
+  test   Live               already live
+  prod   Held by gate cab   for 0s

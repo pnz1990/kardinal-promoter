@@ -183,6 +183,34 @@ func TestWhy_Golden(t *testing.T) {
 			g.Status.BundleVersion = "1.5.0"
 			return []sigs_client.Object{g}
 		}, false},
+		{"a soak gate: how far it soaked and when it opens", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
+				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", BlockedBy: []string{"uat-soak"}}}
+			g := explainGateInstance("demo", "demo-b", "prod", "uat-soak", "bundle.upstreamSoakMinutes >= 3", false, true,
+				"bundle.upstreamSoakMinutes >= 3 = false; version 1.5.0")
+			g.Spec.Message = "A version must run in uat for 3 minutes before prod"
+			g.Spec.RecheckInterval = "30s"
+			b := whyBundle("demo-b", "1.5.0")
+			checked := metav1.NewTime(now.Add(-24 * time.Second))
+			b.Status.Environments = []v1alpha1.EnvironmentStatus{{Name: "uat", Phase: "Verified", HealthCheckedAt: &checked}}
+			return []sigs_client.Object{g, b}
+		}, false},
+		{"a soak gate before its upstream is live", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
+				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", BlockedBy: []string{"uat-soak"}}}
+			g := explainGateInstance("demo", "demo-b", "prod", "uat-soak", "upstream.uat.soakMinutes > 9", false, true,
+				"upstream.uat.soakMinutes > 9 = false; version 1.5.0")
+			return []sigs_client.Object{g, whyBundle("demo-b", "1.5.0")}
+		}, false},
+		{"a soak gate behind an approval", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
+				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", BlockedBy: []string{"prod-approval", "uat-soak"}}}
+			soak := explainGateInstance("demo", "demo-b", "prod", "uat-soak", "bundle.upstreamSoakMinutes >= 3", false, true,
+				"bundle.upstreamSoakMinutes >= 3 = false; version 1.5.0")
+			appr := explainGateInstance("demo", "demo-b", "prod", "prod-approval", "true", false, true, "waiting for approvals: 0 of 1")
+			appr.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1}
+			return []sigs_client.Object{soak, appr, whyBundle("demo-b", "1.5.0")}
+		}, false},
 		{"a gate that needs a person", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
 				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", BlockedBy: []string{"label"}}}
