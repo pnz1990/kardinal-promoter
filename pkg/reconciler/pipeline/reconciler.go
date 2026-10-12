@@ -194,11 +194,16 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// ownSecret is read only when the allowlist would refuse the URL (#1332).
+	// A git Secret that exists but is not labelled, and that would make the
+	// URL allowed once labelled, is reported as SecretNotReferenceable below,
+	// with the label command, not as RepositoryNotAllowed.
 	ownSecret := false
 	if !r.AllowedRepositories.Allows(p.Spec.Git.URL) {
-		if ownSecret, err = scm.PipelineSecretExists(ctx, r.Client, &p); err != nil {
+		state, err := scm.PipelineSecretState(ctx, r.Client, &p)
+		if err != nil {
 			return ctrl.Result{}, err
 		}
+		ownSecret = state != scm.PipelineSecretNone
 	}
 	// The fleets are resolved first: validate checks them as the Graph
 	// builder will see them.

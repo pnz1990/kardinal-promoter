@@ -481,17 +481,19 @@ func TestPipeline_GitSecretNotReferenceable(t *testing.T) {
 		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "SecretNotReferenceable" && strings.Contains(c.Message, label),
 			fmt.Sprintf("%+v", c)
 	})
-	before, err := gitserver.Commits(ctx, e.Git, a.repo, a.repo.Branch, 10)
+	before, err := gitserver.Commits(ctx, e.Git, a.repo, a.repo.Branch, 1)
 	require.NoError(t, err)
+	require.NotEmpty(t, before)
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	ps := e.WaitStep(t, a.ns, pipelineName, bundle, "test", time.Minute, "waiting for its git Secret", func(ps *v1alpha1.PromotionStep) (bool, string) {
 		return ps.Status.State == "Promoting" && strings.Contains(ps.Status.Message, label), ps.Status.State + ": " + ps.Status.Message
 	})
 	assert.Equal(t, "waiting for the git Secret: git Secret "+a.ns+"/unlabeled-git is not labeled kardinal.io/referenceable=true, "+
 		"so git does not use it; label it: "+label, ps.Status.Message)
-	after, err := gitserver.Commits(ctx, e.Git, a.repo, a.repo.Branch, 10)
+	after, err := gitserver.Commits(ctx, e.Git, a.repo, a.repo.Branch, 1)
 	require.NoError(t, err)
-	assert.Equal(t, len(before), len(after), "nothing is committed with an unlabeled Secret")
+	require.NotEmpty(t, after)
+	assert.Equal(t, before[0].SHA, after[0].SHA, "nothing is committed with an unlabeled Secret")
 
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: "unlabeled-git"}, unlabeled))
 	unlabeled.Labels = map[string]string{"kardinal.io/referenceable": "true"}

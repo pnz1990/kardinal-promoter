@@ -47,11 +47,14 @@ func (r *Reconciler) repositoryNotAllowed(ctx context.Context, pipeline *v1alpha
 	if r.AllowedRepositories.Allows(pipeline.Spec.Git.URL) {
 		return "", nil
 	}
-	own, err := scm.PipelineSecretExists(ctx, r.Client, pipeline)
+	state, err := scm.PipelineSecretState(ctx, r.Client, pipeline)
 	if err != nil {
 		return "", err
 	}
-	if err := r.AllowedRepositories.CheckPipeline(pipeline, own); err != nil {
+	// An unlabelled git Secret counts as the Pipeline's own: when that is
+	// what allows the repository, the step goes on to wait for the label
+	// (waitForReferenceableSecret) instead of failing here.
+	if err := r.AllowedRepositories.CheckPipeline(pipeline, state != scm.PipelineSecretNone); err != nil {
 		return err.Error(), nil
 	}
 	return "", nil

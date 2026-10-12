@@ -66,7 +66,6 @@ spec:
         flagger:                        # When type: flagger
           name: <string>                # Default: Pipeline metadata.name
           namespace: <string>           # Default: environment name
-        cluster: <string>               # Deprecated, not supported: must be empty (see Health Adapters)
         timeout: <duration>             # Health check timeout (default: "10m")
       bake:
         minutes: <int>                  # Contiguous healthy minutes before Verified, minimum 1

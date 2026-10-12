@@ -241,6 +241,7 @@ func TestPipelineReconciler_RepositoryNotAllowed(t *testing.T) {
 		url         string
 		secretRef   bool
 		secret      bool
+		unlabelled  bool
 		prReview    bool
 		wantStatus  metav1.ConditionStatus
 		wantReason  string
@@ -262,6 +263,15 @@ func TestPipelineReconciler_RepositoryNotAllowed(t *testing.T) {
 		{name: "secretRef to a missing Secret", allow: allow, url: "https://github.com/other/gitops.git", secretRef: true,
 			wantStatus: metav1.ConditionFalse, wantReason: "RepositoryNotAllowed",
 			wantMsg: "no git.secretRef to a Secret that exists", wantRequeue: time.Minute},
+		// The label would make the URL allowed: the Pipeline says to label the
+		// Secret, not RepositoryNotAllowed.
+		{name: "own Secret not labelled, auto only", allow: allow, url: "https://github.com/other/gitops.git", secretRef: true,
+			secret: true, unlabelled: true, wantStatus: metav1.ConditionFalse, wantReason: "SecretNotReferenceable",
+			wantMsg:     "git Secret team-token is not labeled kardinal.io/referenceable=true, so git does not use it; label it: kubectl label secret team-token -n default kardinal.io/referenceable=true",
+			wantRequeue: time.Minute},
+		{name: "own Secret not labelled, pr-review", allow: allow, url: "https://github.com/other/gitops.git", secretRef: true,
+			secret: true, unlabelled: true, prReview: true, wantStatus: metav1.ConditionFalse, wantReason: "RepositoryNotAllowed",
+			wantMsg: `environment "test" uses approval: pr-review`},
 		{name: "unset", url: "https://github.com/other/gitops.git", prReview: true,
 			wantStatus: metav1.ConditionFalse, wantReason: "GitCredentialMissing", wantRequeue: time.Minute},
 		{name: "unset, own Secret", url: "https://github.com/other/gitops.git", prReview: true, secretRef: true, secret: true,
@@ -282,8 +292,11 @@ func TestPipelineReconciler_RepositoryNotAllowed(t *testing.T) {
 			require.NoError(t, corev1.AddToScheme(scheme))
 			objs := []client.Object{p}
 			if tc.secret {
-				// Labelled, so the SecretReferenceable warning (and its re-check) stays out of this test.
-				objs = append(objs, gitTokenSecret("team-token"))
+				s := gitTokenSecret("team-token")
+				if tc.unlabelled {
+					s.Labels = nil
+				}
+				objs = append(objs, s)
 			}
 			c := newClientWithIndex(scheme, objs...)
 			key := types.NamespacedName{Name: "app", Namespace: "default"}

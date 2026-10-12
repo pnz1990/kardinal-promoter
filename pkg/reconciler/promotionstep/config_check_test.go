@@ -165,9 +165,11 @@ func TestRepositoryNotAllowed(t *testing.T) {
 		url        string
 		secretRef  bool // the Pipeline names git.secretRef team-token
 		secret     bool // the Secret exists
+		unlabelled bool // the Secret is not labeled referenceable
 		prReview   bool // prod uses approval: pr-review
 		promoting  bool
 		wantFailed string
+		wantWait   bool // the step waits for the Secret's label
 	}{
 		{name: "not allowed, Pending", allow: allow, url: "https://github.com/other/repo.git",
 			wantFailed: "the Pipeline has no git.secretRef to a Secret that exists"},
@@ -180,6 +182,13 @@ func TestRepositoryNotAllowed(t *testing.T) {
 			wantFailed: `environment "prod" uses approval: pr-review`},
 		{name: "secretRef to a missing Secret", allow: allow, url: "https://github.com/other/repo.git",
 			secretRef: true, promoting: true, wantFailed: "the Pipeline has no git.secretRef to a Secret that exists"},
+		// The label would make the repository allowed: the step waits for it
+		// (SecretNotReferenceable) instead of failing.
+		{name: "own Secret not labelled, no PR", allow: allow, url: "https://github.com/other/repo.git",
+			secretRef: true, secret: true, unlabelled: true, promoting: true, wantWait: true},
+		{name: "own Secret not labelled, a pr-review environment", allow: allow, url: "https://github.com/other/repo.git",
+			secretRef: true, secret: true, unlabelled: true, prReview: true, promoting: true,
+			wantFailed: `environment "prod" uses approval: pr-review`},
 		{name: "unset", url: "https://github.com/other/repo.git", prReview: true, promoting: true},
 	}
 	for _, tt := range tests {
@@ -194,7 +203,11 @@ func TestRepositoryNotAllowed(t *testing.T) {
 				pipeline.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "team-token"}
 			}
 			if tt.secret {
-				objs = append(objs, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "team-token", Namespace: "default", Labels: map[string]string{"kardinal.io/referenceable": "true"}},
+				labels := map[string]string{"kardinal.io/referenceable": "true"}
+				if tt.unlabelled {
+					labels = nil
+				}
+				objs = append(objs, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "team-token", Namespace: "default", Labels: labels},
 					Data: map[string][]byte{"token": []byte("t")}})
 			}
 			ps := makeStep("step-repo", "nginx-demo", "b1", "test")
@@ -211,6 +224,13 @@ func TestRepositoryNotAllowed(t *testing.T) {
 
 			reconcileStep(t, r, "step-repo")
 			got := getStep(t, c, "step-repo")
+			if tt.wantWait {
+				assert.Equal(t, "Promoting", got.Status.State, got.Status.Message)
+				assert.Equal(t, "waiting for the git Secret: git Secret default/team-token is not labeled kardinal.io/referenceable=true, "+
+					"so git does not use it; label it: kubectl label secret team-token -n default kardinal.io/referenceable=true", got.Status.Message)
+				assert.Zero(t, git.clones, "no git-clone")
+				return
+			}
 			if tt.wantFailed == "" {
 				assert.NotEqual(t, "Failed", got.Status.State, got.Status.Message)
 				return

@@ -297,7 +297,8 @@ func validateGateNames(envs []string, gatesByEnv map[string][]kardinalv1alpha1.P
 	return nil
 }
 
-// validateEnvironments checks the environment names, regions and steps.
+// validateEnvironments checks the environment names: set, usable as a label
+// value, and declared once.
 func validateEnvironments(envs []kardinalv1alpha1.EnvironmentSpec) error {
 	names := make(map[string]bool, len(envs))
 	for _, e := range envs {
