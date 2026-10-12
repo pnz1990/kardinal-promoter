@@ -24,6 +24,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -118,22 +119,44 @@ func newGateInstance(gate v1alpha1.PolicyGate, ns, pipeline, bundle, env string)
 }
 
 // localGateCheck evaluates a single gate expression with no cluster: an empty
-// bundle, no metrics, no upstream history, at time now.
+// bundle, no metrics, no upstream history, at time now. A local Pipeline
+// with one upstream environment before env, where the Bundle has not been,
+// gives bundle.upstreamSoakMinutes 0 (readsUpstreamSoak), as a version
+// that just reached env's upstream has.
 func localGateCheck(ctx context.Context, gate v1alpha1.PolicyGate, env string, now time.Time) (bool, string, error) {
 	const ns, bundleName = "default", "local-check"
+	upstream := "upstream"
+	if env == upstream {
+		upstream = "local-upstream"
+	}
+	pipe := &v1alpha1.Pipeline{}
+	pipe.Name, pipe.Namespace = bundleName, ns
+	pipe.Spec.Environments = []v1alpha1.EnvironmentSpec{{Name: upstream}, {Name: env}}
 	bundle := &v1alpha1.Bundle{}
 	bundle.Name, bundle.Namespace = bundleName, ns
 	bundle.Spec.Type = "image"
+	bundle.Spec.Pipeline = pipe.Name
 	inst := newGateInstance(gate, ns, "", bundleName, env)
 	if inst.Name == "" {
 		inst.Name = "gate"
 	}
-	sim := newSimulationClient(rootScheme, nil, bundle, inst)
+	sim := newSimulationClient(rootScheme, nil, bundle, inst, pipe)
 	ev, err := newGateEvaluator(sim)
 	if err != nil {
 		return false, "", err
 	}
 	return ev.evaluate(ctx, sigs_client.ObjectKeyFromObject(inst), now)
+}
+
+// upstreamSoak finds bundle.upstreamSoakMinutes in an expression whose
+// string literals are removed.
+var upstreamSoak = regexp.MustCompile(`(?:^|[^\w.])bundle\s*\.\s*upstreamSoakMinutes\b`)
+
+// readsUpstreamSoak reports whether expr reads bundle.upstreamSoakMinutes,
+// which policy test, with no cluster, evaluates as 0. (upstream.<env>.* has
+// no entry offline: such a gate is UNKNOWN.)
+func readsUpstreamSoak(expr string) bool {
+	return upstreamSoak.MatchString(celStringLiteral.ReplaceAllString(expr, `""`))
 }
 
 // celSyntaxCheck compiles expr the way the controller checks a template gate

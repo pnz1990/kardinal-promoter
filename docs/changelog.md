@@ -83,6 +83,9 @@ Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/ka
 
 ### Fixed
 
+- **`kardinal policy test` takes `-f`, and a soak gate tested offline says so** — `policy test -f <file>` works as `kardinal validate -f` does (the file as the argument still works). A gate that reads `bundle.upstreamSoakMinutes` no longer FAILs with `load pipeline : pipelines.kardinal.io "" not found`: offline its upstream soak is 0, and a Note says so and how `kardinal policy simulate --soak-minutes` evaluates it with a soak
+- **`kardinal quickstart` refuses a fork that is not on GitHub** — a `--repo` on another git host (Forgejo, GitLab, ...) was installed silently with `scm.provider=github`. quickstart now refuses it before installing anything and points to the installation and SCM provider guides, unless `--set scm.provider` says which host it is or kardinal is already installed
+- **`kardinal quickstart` explains a chart that refuses its values** — when helm refuses the values because the chart's schema is older than the CLI (a development CLI gets the newest published chart), quickstart says which chart this CLI needs and to pass `--chart` or `--chart-version`, instead of helm's raw schema error
 - **`ship --wait` times never go negative** — with the controller's clock ahead of this one, a summary's "for" is `0s`, not `-3s`
 - **A rejected version says rejected when the CLI cannot read it** — `kardinal why` says who rejected it, and `kardinal inbox` leaves it out as it does every rejected gate, instead of "could not read the version" when the gate excludes the author
 - **The stage drawer shows step timings, events and the CEL check** — an environment's drawer shows the steps' timing bars and the running time in its evidence, the step's events in its history, and the controller's CEL check when a gate's **Details** opens ([Installation](installation.md))
