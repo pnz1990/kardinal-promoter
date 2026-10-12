@@ -114,6 +114,28 @@ func TestRollbackAndHold_Refused(t *testing.T) {
 		require.NoError(t, c.List(context.Background(), &bundles))
 		assert.Len(t, bundles.Items, 3, "the refused rollback created no Bundle")
 	})
+	t.Run("already held, seen only by the hold writer (a stale cache)", func(t *testing.T) {
+		fresh := newClient(t, holdObjects()...)
+		plan, _, err := lifecycle.RollbackAndHold(context.Background(), fresh, holdRequest())
+		require.NoError(t, err)
+		require.NoError(t, fresh.Create(context.Background(), step(plan.Bundle.Name, "app", "prod", "Verified", 30)))
+		// The caller's client reads a cache that has not seen the hold yet.
+		stale := interceptor.NewClient(fresh.(client.WithWatch), interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if err := cl.Get(ctx, key, obj, opts...); err != nil {
+					return err
+				}
+				if p, ok := obj.(*v1alpha1.Pipeline); ok {
+					p.Spec.Holds = nil
+				}
+				return nil
+			}})
+		req := holdRequest()
+		req.HoldWriter = fresh
+		_, _, err = lifecycle.RollbackAndHold(context.Background(), stale, req)
+		require.ErrorIs(t, err, lifecycle.ErrConflict, "the hold writer's read sees the hold")
+		assert.Contains(t, err.Error(), "kardinal release-hold app --env prod")
+	})
 	t.Run("nothing to roll back to", func(t *testing.T) {
 		c := newClient(t, pipeline("app", "prod"), bundle("v1", "app", "1", 0), step("v1", "app", "prod", "Verified", 1))
 		_, _, err := lifecycle.RollbackAndHold(context.Background(), c, holdRequest())

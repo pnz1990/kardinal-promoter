@@ -444,7 +444,15 @@ type actionAuthorizer interface {
 // client: the caller does not need update on the whole object, and the
 // handler records the caller as the requester. Otherwise (no auth mode, the
 // shared token) it returns the handler's client.
+//
+// With --watch-namespace an action outside that namespace is refused before
+// any read: the client returned reads the API server uncached and, in
+// TokenReview mode, as the controller, so it must not reach beyond the
+// namespace the controller watches.
 func (s *uiAPIServer) actionClient(ctx context.Context, resource, action, namespace, name string) (client.Client, error) {
+	if s.scopeNamespace != "" && namespace != s.scopeNamespace {
+		return nil, fmt.Errorf("the controller watches namespace %s only, not %q: %w", s.scopeNamespace, namespace, lifecycle.ErrInvalid)
+	}
 	az, ok := s.client.(actionAuthorizer)
 	if !ok {
 		return s.fresh(s.client), nil
