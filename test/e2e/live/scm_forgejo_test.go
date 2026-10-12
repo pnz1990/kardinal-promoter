@@ -571,9 +571,9 @@ func TestForgejo_AllowedRepositories(t *testing.T) {
 		"nothing is pushed")
 
 	// Its own Secret, but the shared token would open the pr-review PR.
-	require.NoError(t, e.Client.Get(ctx, client.ObjectKeyFromObject(p), p))
-	p.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: framework.GitSecretName}
-	require.NoError(t, e.Client.Update(ctx, p))
+	p = updatePipeline(t, e, p.Namespace, p.Name, func(p *v1alpha1.Pipeline) {
+		p.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: framework.GitSecretName}
+	})
 	waitRefused(`environment "test" uses approval: pr-review`)
 
 	// A PRStatus for the repository is refused by the provider, not polled.
@@ -593,9 +593,7 @@ func TestForgejo_AllowedRepositories(t *testing.T) {
 
 	// Its own Secret and only auto environments: the shared token is never
 	// used, so the Pipeline is Valid and promotes.
-	require.NoError(t, e.Client.Get(ctx, client.ObjectKeyFromObject(p), p))
-	envSpec(t, p, "test").Approval = "auto"
-	require.NoError(t, e.Client.Update(ctx, p))
+	updatePipeline(t, e, p.Namespace, p.Name, func(p *v1alpha1.Pipeline) { envSpec(t, p, "test").Approval = "auto" })
 	waitPipeline(t, e, a.ns, pipelineName, time.Minute, "Ready=True", func(p *v1alpha1.Pipeline) (bool, string) {
 		c := meta.FindStatusCondition(p.Status.Conditions, "Ready")
 		return c != nil && c.Status == metav1.ConditionTrue && c.ObservedGeneration == p.Generation, fmt.Sprintf("%v", c)

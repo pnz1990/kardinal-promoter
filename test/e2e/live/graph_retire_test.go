@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -82,7 +81,6 @@ func waitRetired(t *testing.T, e *framework.Env, ns, bundle string, envs ...stri
 func TestGraph_RetiresFinishedBundles(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
-	ctx := context.Background()
 	a := newArgoApp(t, e, "test", "prod")
 	p := a.pipeline(nil)
 	p.Annotations = map[string]string{"kardinal.io/graph-retire-after": "20s"}
@@ -119,10 +117,7 @@ func TestGraph_RetiresFinishedBundles(t *testing.T) {
 	assertEnvAt(t, a, "prod", fixtures.V2)
 
 	// A retired Bundle is final: a Pipeline change does not rebuild its Graph.
-	var pl v1alpha1.Pipeline
-	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: pipelineName}, &pl))
-	pl.Spec.HistoryLimit = 40
-	require.NoError(t, e.Client.Update(ctx, &pl))
+	a.updatePipeline(t, pipelineName, func(pl *v1alpha1.Pipeline) { pl.Spec.HistoryLimit = 40 })
 	framework.Consistently(t, 15*time.Second, "no Graph rebuilt for "+b1, func(ctx context.Context) (bool, string) {
 		gl := graphList()
 		if err := e.Client.List(ctx, gl, client.InNamespace(a.ns), client.MatchingLabels{"kardinal.io/bundle": b1}); err != nil {

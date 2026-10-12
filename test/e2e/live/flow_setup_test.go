@@ -140,17 +140,27 @@ func startedAfter(t *testing.T, later *v1alpha1.PromotionStep, at time.Time, wha
 // conflicts with the controller's status writes.
 func (a *app) updatePipeline(t *testing.T, name string, change func(*v1alpha1.Pipeline)) {
 	t.Helper()
+	updatePipeline(t, a.e, a.ns, name, change)
+}
+
+// updatePipeline applies change to Pipeline ns/name: it reads the Pipeline
+// again and applies change on a conflict (the controller writes its status
+// and finalizers), so a bare Get and Update never fails a test. It returns
+// the Pipeline as updated.
+func updatePipeline(t *testing.T, e *framework.Env, ns, name string, change func(*v1alpha1.Pipeline)) *v1alpha1.Pipeline {
+	t.Helper()
+	var p v1alpha1.Pipeline
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var p v1alpha1.Pipeline
-		if err := a.e.Client.Get(context.Background(), types.NamespacedName{Namespace: a.ns, Name: name}, &p); err != nil {
+		if err := e.Client.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, &p); err != nil {
 			return err
 		}
 		change(&p)
-		return a.e.Client.Update(context.Background(), &p)
+		return e.Client.Update(context.Background(), &p)
 	})
 	if err != nil {
-		t.Fatalf("update Pipeline %s: %v", name, err)
+		t.Fatalf("update Pipeline %s/%s: %v", ns, name, err)
 	}
+	return &p
 }
 
 // prHead is the branch kardinal pushes a pr-review promotion of bundle to env

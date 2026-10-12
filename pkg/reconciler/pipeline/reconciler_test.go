@@ -254,7 +254,7 @@ func TestPipelineReconciler_RepositoryNotAllowed(t *testing.T) {
 		// The allowlist accepts it; with no git.secretRef git has no token
 		// (P4: GitCredentialMissing, re-checked every minute).
 		{name: "allowed", allow: allow, url: "https://github.com/myorg/gitops.git", prReview: true,
-			wantStatus: metav1.ConditionFalse, wantReason: "GitCredentialMissing", wantRequeue: time.Minute},
+			wantStatus: metav1.ConditionFalse, wantReason: "GitCredentialMissing", wantRequeue: 2 * time.Second},
 		{name: "own Secret, auto only", allow: allow, url: "https://github.com/other/gitops.git", secretRef: true, secret: true,
 			wantStatus: metav1.ConditionTrue, wantReason: "Valid"},
 		{name: "own Secret, pr-review", allow: allow, url: "https://github.com/other/gitops.git", secretRef: true, secret: true,
@@ -262,18 +262,18 @@ func TestPipelineReconciler_RepositoryNotAllowed(t *testing.T) {
 			wantMsg: `environment "test" uses approval: pr-review`},
 		{name: "secretRef to a missing Secret", allow: allow, url: "https://github.com/other/gitops.git", secretRef: true,
 			wantStatus: metav1.ConditionFalse, wantReason: "RepositoryNotAllowed",
-			wantMsg: "no git.secretRef to a Secret that exists", wantRequeue: time.Minute},
+			wantMsg: "no git.secretRef to a Secret that exists", wantRequeue: 2 * time.Second},
 		// The label would make the URL allowed: the Pipeline says to label the
 		// Secret, not RepositoryNotAllowed.
 		{name: "own Secret not labelled, auto only", allow: allow, url: "https://github.com/other/gitops.git", secretRef: true,
 			secret: true, unlabelled: true, wantStatus: metav1.ConditionFalse, wantReason: "SecretNotReferenceable",
 			wantMsg:     "git Secret team-token is not labeled kardinal.io/referenceable=true, so git does not use it; label it: kubectl label secret team-token -n default kardinal.io/referenceable=true",
-			wantRequeue: time.Minute},
+			wantRequeue: 2 * time.Second},
 		{name: "own Secret not labelled, pr-review", allow: allow, url: "https://github.com/other/gitops.git", secretRef: true,
 			secret: true, unlabelled: true, prReview: true, wantStatus: metav1.ConditionFalse, wantReason: "RepositoryNotAllowed",
 			wantMsg: `environment "test" uses approval: pr-review`},
 		{name: "unset", url: "https://github.com/other/gitops.git", prReview: true,
-			wantStatus: metav1.ConditionFalse, wantReason: "GitCredentialMissing", wantRequeue: time.Minute},
+			wantStatus: metav1.ConditionFalse, wantReason: "GitCredentialMissing", wantRequeue: 2 * time.Second},
 		{name: "unset, own Secret", url: "https://github.com/other/gitops.git", prReview: true, secretRef: true, secret: true,
 			wantStatus: metav1.ConditionTrue, wantReason: "Valid"},
 	}
@@ -640,7 +640,7 @@ func TestPipelineReconciler_GitSecretReferenceable(t *testing.T) {
 			assert.Equal(t, "SecretNotReferenceable", ready.Reason)
 			assert.Equal(t, "git Secret team-git is not labeled kardinal.io/referenceable=true, so git does not use it; "+
 				"label it: kubectl label secret team-git -n default kardinal.io/referenceable=true", ready.Message)
-			assert.Equal(t, time.Minute, res.RequeueAfter, "recheck: Secrets are not watched")
+			assert.Equal(t, 2*time.Second, res.RequeueAfter, "recheck soon: Secrets are not watched")
 
 			rv := got.ResourceVersion
 			_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})

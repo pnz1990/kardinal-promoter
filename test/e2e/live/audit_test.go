@@ -190,8 +190,9 @@ func kubeNote(note string) string {
 // TestAudit_Events reads the events.k8s.io/v1 Events kardinal records while a
 // Bundle promotes test and is blocked at prod by a gate whose message is
 // longer than an Event note may be. The test step's Events are Promoting
-// (action Promote), HealthChecking (CheckHealth) and Verified (Verify), with
-// notes naming the environment. The gate instance's Blocked Event (Warning,
+// (action Promote), HealthChecking (CheckHealth), GitOpsRefreshRequested
+// (Verify, naming its Application) and Verified (Verify), with notes naming
+// the environment. The gate instance's Blocked Event (Warning,
 // action Evaluate) carries the message cut to 1024 bytes ending in "...",
 // where the API server would reject a longer note and lose the Event; the
 // gate's status.reason keeps the whole message, and its GateEvaluated
@@ -222,12 +223,18 @@ func TestAudit_Events(t *testing.T) {
 		if err != nil {
 			return false, err.Error()
 		}
-		return len(eventsByReason(steps)) >= 3, fmt.Sprintf("reasons %v", eventReasons(steps))
+		// The Verified Event is the last the step emits; an Event count
+		// would change with every new Event (GitOpsRefreshRequested).
+		_, verified := eventsByReason(steps)["Verified"]
+		return verified, fmt.Sprintf("reasons %v", eventReasons(steps))
 	})
 	byReason := eventsByReason(steps)
 	for _, want := range []struct{ reason, action, note string }{
 		{"Promoting", "Promote", "env test: promotion started"},
 		{"HealthChecking", "CheckHealth", "env test: change delivered, running health check"},
+		// health.refresh (the default): the pushed commit's Application is
+		// asked to sync at once.
+		{"GitOpsRefreshRequested", "Verify", "refresh requested: Application " + framework.ArgoCDNamespace + "/" + a.argoApp("test")},
 		{"Verified", "Verify", "env test: step completed successfully"},
 	} {
 		ev, ok := byReason[want.reason]

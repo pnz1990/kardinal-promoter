@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
@@ -123,10 +122,9 @@ func scmPRControls(t *testing.T, e *framework.Env, scopes []string) {
 	}
 
 	// A template that does not render is caught before the next Bundle.
-	var cur v1alpha1.Pipeline
-	require.NoError(t, e.Client.Get(context.Background(), types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &cur))
-	cur.Spec.Environments[0].PR.TitleTemplate = "{{ .Bundle.Nope }}"
-	require.NoError(t, e.Client.Update(context.Background(), &cur))
+	a.updatePipeline(t, pipelineName, func(cur *v1alpha1.Pipeline) {
+		cur.Spec.Environments[0].PR.TitleTemplate = "{{ .Bundle.Nope }}"
+	})
 	waitPipeline(t, e, a.ns, pipelineName, time.Minute, "Ready=False ValidationFailed", func(p *v1alpha1.Pipeline) (bool, string) {
 		ok, seen := framework.CondIs(p.Status.Conditions, "Ready", metav1.ConditionFalse, "ValidationFailed")
 		return ok && strings.Contains(findCond(p.Status.Conditions, "Ready").Message, `environment "prod": pr.titleTemplate:`), seen
