@@ -4,7 +4,8 @@
 // CommandPalette.tsx — ⌘K / Ctrl+K: one list to go anywhere (pipelines, environments,
 // versions) or do something (theme, density, refresh, shortcuts, views). Type to filter;
 // ↑/↓ move, Enter runs, Esc closes. It never changes a promotion by itself: actions that
-// do (pause, promote, roll back) keep their own confirm dialogs.
+// do (pause, promote, roll back, approve) keep their own confirm dialogs. A command the
+// person may not run stays listed, inert, with why.
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { Dialog } from '../ui'
 import '../styles/CommandPalette.css'
@@ -19,6 +20,8 @@ export interface PaletteCommand {
   hint?: string
   /** Extra words the search matches (the namespace, a version). */
   keywords?: string
+  /** Why the command may not run for this person (U7): shown in place of running it. */
+  disabledReason?: string
   run: () => void
 }
 
@@ -79,7 +82,7 @@ function PaletteBody({ onClose, commands }: Omit<CommandPaletteProps, 'open'>) {
   }, [current])
 
   const run = (c: PaletteCommand | undefined) => {
-    if (!c) return
+    if (!c || c.disabledReason) return
     onClose()
     c.run()
   }
@@ -126,12 +129,14 @@ function PaletteBody({ onClose, commands }: Omit<CommandPaletteProps, 'open'>) {
                   data-index={i}
                   role="option"
                   aria-selected={i === current}
+                  aria-disabled={c.disabledReason ? true : undefined}
                   className="palette__option"
                   onMouseMove={() => setActive(i)}
                   onClick={() => run(c)}
                 >
                   <span className="palette__label">{c.label}</span>
                   {c.hint && <span className="palette__hint">{c.hint}</span>}
+                  {c.disabledReason && <span className="palette__why">{c.disabledReason}</span>}
                 </li>
               ))}
             </ul>
