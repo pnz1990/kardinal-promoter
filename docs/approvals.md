@@ -4,7 +4,9 @@ An approval gate waits for people. Put `spec.approval` on a gate template; the g
 
 <figure class="k-demo" id="demo-approve-override">
   <picture>
+    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/approve-override-dark.png">
     <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/approve-override.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/approve-override-dark.webp">
     <img src="../assets/demos/approve-override.webp" alt="The UI: approving prod-eu from its stage drawer, then overriding the soak gate of prod-us after its confirmation." width="1280" height="800" loading="lazy">
   </picture>
   <figcaption>Approve a release, then override a gate · <code>kardinal approve checkout prod-eu</code></figcaption>
@@ -13,7 +15,9 @@ An approval gate waits for people. Put `spec.approval` on a gate template; the g
 
 <figure class="k-demo" id="demo-approvals-inbox">
   <picture>
+    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/approvals-inbox-dark.png">
     <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/approvals-inbox.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/approvals-inbox-dark.webp">
     <img src="../assets/demos/approvals-inbox.webp" alt="The UI: the Approvals badge in the top bar, the inbox with the release waiting on you, Approve, and the badge counting down." width="1280" height="800" loading="lazy">
   </picture>
   <figcaption>Approve from the inbox · the top bar's Approvals badge counts what waits on you</figcaption>

@@ -246,7 +246,9 @@ words (`uat-soak (blocking) · +1 passing`). Durations read `42s`, `4m`, `2h 15m
 
 <figure class="k-demo" id="demo-compare">
   <picture>
+    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/compare-dark.png">
     <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/compare.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/compare-dark.webp">
     <img src="../assets/demos/compare.webp" alt="The UI: shift-clicking an older version and pressing Compare to see the two field by field." width="1280" height="800" loading="lazy">
   </picture>
   <figcaption>Compare two versions · <code>kardinal diff</code></figcaption>
@@ -273,7 +275,9 @@ words (`uat-soak (blocking) · +1 passing`). Durations read `42s`, `4m`, `2h 15m
 
 <figure class="k-demo" id="demo-approvals-inbox">
   <picture>
+    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/approvals-inbox-dark.png">
     <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/approvals-inbox.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/approvals-inbox-dark.webp">
     <img src="../assets/demos/approvals-inbox.webp" alt="The UI: the Approvals badge in the top bar, the inbox with the release waiting on you, Approve, and the badge counting down." width="1280" height="800" loading="lazy">
   </picture>
   <figcaption>The approvals inbox (#/approvals)</figcaption>
@@ -323,7 +327,9 @@ words (`uat-soak (blocking) · +1 passing`). Durations read `42s`, `4m`, `2h 15m
 
 <figure class="k-demo" id="demo-palette">
   <picture>
+    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/palette-dark.png">
     <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/palette.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/palette-dark.webp">
     <img src="../assets/demos/palette.webp" alt="The UI: pressing Ctrl+K, typing storefront prod and opening that environment." width="1280" height="800" loading="lazy">
   </picture>
   <figcaption>Go anywhere with ⌘K or Ctrl+K</figcaption>

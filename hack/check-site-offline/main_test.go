@@ -56,3 +56,31 @@ func TestCheckMissingLocalScript(t *testing.T) {
 	require.Len(t, found, 1)
 	assert.Contains(t, found[0], "mermaid.min.js is not in the site")
 }
+
+// TestCheckMissingMedia: an img or a <picture> source (src or srcset, as the
+// docs' raw-HTML figures write them) that is not in the site fails the check:
+// the docs once named -dark recordings that were never made.
+func TestCheckMissingMedia(t *testing.T) {
+	root := t.TempDir()
+	demos := filepath.Join(root, "assets", "demos")
+	require.NoError(t, os.MkdirAll(demos, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "ui"), 0o755))
+	for _, f := range []string{"compare.webp", "compare.png", "compare-dark.png", "logo.svg"} {
+		require.NoError(t, os.WriteFile(filepath.Join(demos, f), []byte("1"), 0o644))
+	}
+	page := `<figure class="k-demo"><picture>
+    <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="../assets/demos/compare-dark.png">
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/compare.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/compare-dark.webp">
+    <img src="../assets/demos/compare.webp" alt="x" data-src="nope.png">
+  </picture></figure>
+  <img src=/kardinal-promoter/assets/demos/logo.svg srcset="../assets/demos/logo.svg 1x, ../assets/demos/logo@2x.svg 2x">
+  <img src="https://example.com/badge.svg"><img src="data:image/png;base64,AA==">`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "ui", "index.html"), []byte(page), 0o644))
+	found, err := check(root)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"ui/index.html: the source ../assets/demos/compare-dark.webp is not in the site",
+		"ui/index.html: the img ../assets/demos/logo@2x.svg is not in the site",
+	}, found)
+}

@@ -113,7 +113,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: The site loads no external scripts, stylesheets or fonts
+      - name: The site loads no external scripts, stylesheets or fonts, and no missing local asset
         run: go run ./hack/check-site-offline site
 
       - name: Upload site artifact

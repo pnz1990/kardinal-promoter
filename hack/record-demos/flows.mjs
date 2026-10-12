@@ -37,7 +37,7 @@ export const FLOWS = [
   {
     name: 'why-waiting',
     title: 'Why a stage is waiting: the drawer opens on its reason',
-    themes: ['light'],
+    themes: ['light', 'dark'],
     start: '#/p/shop/checkout',
     async run(d, page) {
       await d.pause(1200)
@@ -56,7 +56,7 @@ export const FLOWS = [
   {
     name: 'approve-override',
     title: 'Approve a release, then override a gate after its confirmation',
-    themes: ['light'],
+    themes: ['light', 'dark'],
     start: '#/p/shop/checkout/env/prod-eu',
     async run(d, page) {
       await d.pause(1300)
@@ -86,7 +86,7 @@ export const FLOWS = [
   {
     name: 'approvals-inbox',
     title: 'Approve from the inbox: the release you are waited on for, and the badge counts down',
-    themes: ['light'],
+    themes: ['light', 'dark'],
     start: '#/p/shop/checkout',
     async run(d, page) {
       await d.pause(1200)
@@ -112,7 +112,7 @@ export const FLOWS = [
   {
     name: 'rollback-hold',
     title: 'Why a stage failed, then roll it back and hold it there',
-    themes: ['light'],
+    themes: ['light', 'dark'],
     start: '#/p/shop/search',
     async run(d, page) {
       await d.pause(1200)
@@ -138,7 +138,7 @@ export const FLOWS = [
   {
     name: 'compare',
     title: 'Compare two versions from the version rail',
-    themes: ['light'],
+    themes: ['light', 'dark'],
     start: '#/p/shop/checkout',
     async run(d, page) {
       await d.pause(1200)
@@ -194,7 +194,7 @@ export const FLOWS = [
   {
     name: 'palette',
     title: 'Go anywhere with ⌘K',
-    themes: ['light'],
+    themes: ['light', 'dark'],
     start: '#/p/shop/checkout',
     async run(d, page) {
       await d.pause(1200)
