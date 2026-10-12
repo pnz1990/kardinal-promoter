@@ -5,6 +5,7 @@ package pipeline
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -260,15 +261,33 @@ func verifiedSince(steps []*kardinalv1alpha1.PromotionStep, bundle string) *meta
 	return &t
 }
 
+// summaryMaxNamed is how many environments (and PRs) one clause of
+// status.summary names before "and N more".
+const summaryMaxNamed = 6
+
 // Summarize returns status.summary: one sentence on where p's versions are,
 // for example "1.5.0 live in test, uat; waiting for PR merge in prod (#42)".
 // An invalid spec (Ready=False) leads the sentence; a paused Pipeline says
 // so.
+//
+// A fleet's targets are counted under the fleet's name, and so are the
+// environments of a wave with more environments than a clause names
+// ("7 of 9 in wave 2"): "7.2.0 live in canary and 27 of 42 pops; promoting
+// in 5 pops".
+// The first clause that counts a group gives its size. Other environments
+// are named as they are, at most summaryMaxNamed per clause, then "and N
+// more"; so are a clause's PRs.
 func Summarize(p *kardinalv1alpha1.Pipeline, ready metav1.Condition, envs []kardinalv1alpha1.PipelineEnvironmentStatus) string {
 	type clause struct {
 		version, what string
-		envs, prs     []string
+		// places are the clause's environment names and groups, in the
+		// order they first appear; count is how many environments each
+		// group has in the clause.
+		places []string
+		count  map[string]int
+		prs    []string
 	}
+	groupOf, size := summaryGroups(p)
 	var clauses []*clause
 	for i := range envs {
 		e := &envs[i]
@@ -294,24 +313,71 @@ func Summarize(p *kardinalv1alpha1.Pipeline, ready metav1.Condition, envs []kard
 			}
 		}
 		if c == nil {
-			c = &clause{version: v, what: what}
+			c = &clause{version: v, what: what, count: map[string]int{}}
 			clauses = append(clauses, c)
 		}
-		c.envs = append(c.envs, e.Name)
+		if g, ok := groupOf[e.Name]; ok {
+			if c.count[g] == 0 {
+				c.places = append(c.places, g)
+			}
+			c.count[g]++
+		} else {
+			c.places = append(c.places, e.Name)
+		}
 		if e.PRURL != "" {
 			c.prs = append(c.prs, shortPR(e.PRURL))
 		}
 	}
 	parts := make([]string, 0, len(clauses))
 	last := ""
+	sized := map[string]bool{}
 	for _, c := range clauses {
-		s := c.what + " in " + strings.Join(c.envs, ", ")
+		var items []string
+		named, more, at, grouped := 0, 0, 0, false
+		for _, place := range c.places {
+			n, isGroup := c.count[place]
+			switch {
+			case !isGroup && named == summaryMaxNamed:
+				more++
+				continue
+			case !isGroup:
+				named++
+				items = append(items, place)
+				at = len(items)
+				continue
+			}
+			grouped = true
+			// A wave reads "7 of 9 in wave 2", a fleet "27 of 42 pops".
+			in := " "
+			if strings.HasPrefix(place, "wave ") {
+				in = " in "
+			}
+			switch {
+			case sized[place]:
+				items = append(items, fmt.Sprintf("%d%s%s", n, in, place))
+			case n == size[place]:
+				items = append(items, fmt.Sprintf("all %d%s%s", n, in, place))
+			default:
+				items = append(items, fmt.Sprintf("%d of %d%s%s", n, size[place], in, place))
+			}
+			sized[place] = true
+		}
+		if more > 0 {
+			// "N more" follows the named environments it stands for, before
+			// any group counted after them.
+			items = slices.Insert(items, at, fmt.Sprintf("%d more", more))
+		}
+		s := c.what + " in " + joinItems(items, more > 0 || grouped)
 		if c.version != "" && c.version != last {
 			s = c.version + " " + s
 		}
 		last = c.version
 		if len(c.prs) > 0 {
-			s += " (" + strings.Join(c.prs, ", ") + ")"
+			prs, more := capped(c.prs)
+			if more > 0 {
+				prs = append(prs, fmt.Sprintf("%d more", more))
+			}
+			s += " (" + strings.Join(prs, ", ") + ")"
 		}
 		parts = append(parts, s)
 	}
@@ -326,6 +392,58 @@ func Summarize(p *kardinalv1alpha1.Pipeline, ready metav1.Condition, envs []kard
 		sentence = fmt.Sprintf("not ready (%s); %s", ready.Reason, sentence)
 	}
 	return upperFirst(sentence)
+}
+
+// summaryGroups returns the group status.summary counts each grouped
+// environment under, and each group's size: a fleet target its fleet
+// environment, and an environment of a wave with more than summaryMaxNamed
+// environments (fleet targets aside) "wave <n>".
+func summaryGroups(p *kardinalv1alpha1.Pipeline) (groupOf map[string]string, size map[string]int) {
+	groupOf, size = map[string]string{}, map[string]int{}
+	fleets, _ := graph.FleetTargetEnvironments(p)
+	waves := map[int][]string{}
+	for _, env := range p.Spec.Environments {
+		if env.Fleet != nil {
+			for _, t := range fleets[env.Name] {
+				groupOf[t] = env.Name
+			}
+			size[env.Name] = len(fleets[env.Name])
+			continue
+		}
+		if env.Wave > 0 {
+			waves[env.Wave] = append(waves[env.Wave], env.Name)
+		}
+	}
+	for w, names := range waves {
+		if len(names) <= summaryMaxNamed {
+			continue
+		}
+		g := fmt.Sprintf("wave %d", w)
+		for _, n := range names {
+			groupOf[n] = g
+		}
+		size[g] = len(names)
+	}
+	return groupOf, size
+}
+
+// capped returns at most summaryMaxNamed of names and how many it left out.
+func capped(names []string) ([]string, int) {
+	if len(names) <= summaryMaxNamed {
+		return slices.Clone(names), 0
+	}
+	return slices.Clone(names[:summaryMaxNamed]), len(names) - summaryMaxNamed
+}
+
+// joinItems joins a clause's places. Named environments alone are a comma
+// list ("test, uat"); with "N more" or a group count (and) the last place is
+// joined with "and" ("canary and 27 of 42 pops", "a, b, c, d, e, f and 3
+// more", "a, b, c, d, e, f, 2 more and 4 of 10 pops").
+func joinItems(items []string, and bool) string {
+	if len(items) < 2 || !and {
+		return strings.Join(items, ", ")
+	}
+	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
 }
 
 // EnvironmentLine returns status.environmentSummary: env=version for each

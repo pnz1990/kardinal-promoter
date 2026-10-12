@@ -700,6 +700,28 @@ spec:
                   PRURL is the GitHub pull request URL opened for this promotion.
                   Set when the step enters WaitingForMerge state.
                 type: string
+              refreshMessage:
+                description: |-
+                  RefreshMessage says which objects the refresh was requested on, or why
+                  the request failed (the step then waits for the GitOps tool's own
+                  poll; a failed refresh never fails the step).
+                type: string
+              refreshRequestedAt:
+                description: |-
+                  RefreshRequestedAt is when the step asked the GitOps tool its health
+                  check names (an Argo CD Application, or a Flux Kustomization and its
+                  GitRepository) to sync the promoted commit now (health.refresh). Set
+                  once, before the request is sent: a step asks at most once, also
+                  after a controller restart. For Flux it is the
+                  reconcile.fluxcd.io/requestedAt value sent.
+                format: date-time
+                type: string
+              refreshRevision:
+                description: |-
+                  RefreshRevision is the commit the refresh was requested for: the
+                  pushed commit or the PR merge commit, empty when the SCM did not
+                  report the merge commit.
+                type: string
               renderRequestedAt:
                 description: |-
                   RenderRequestedAt is when the step reached its render step (layout:

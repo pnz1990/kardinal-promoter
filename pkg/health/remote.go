@@ -289,7 +289,9 @@ func ClassifyRemoteError(err error) string {
 	case errors.As(err, &ue):
 		return "request failed"
 	}
-	if st, ok := err.(apierrors.APIStatus); ok {
+	// errors.As: the status error is usually wrapped (a RefreshError, fmt.Errorf %w).
+	var st apierrors.APIStatus
+	if errors.As(err, &st) {
 		return fmt.Sprintf("API error (HTTP %d)", st.Status().Code)
 	}
 	return "request failed"

@@ -477,7 +477,15 @@ func TestRollback_History(t *testing.T) {
 		err := e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: b1}, &v1alpha1.Bundle{})
 		return apierrors.IsNotFound(err), fmt.Sprintf("get %s: %v", b1, err)
 	})
-	assert.Equal(t, fmt.Sprintf("rollback: bundle %s/%s: not found", a.ns, b1), rbRefused(t, a, "--env", "test", "--to", b1))
+	// --to takes a Bundle name or a version (#1764): the refusal says it is
+	// neither and lists the newest versions, which no longer include b1.
+	refused := rbRefused(t, a, "--env", "test", "--to", b1)
+	assert.True(t, strings.HasPrefix(refused, fmt.Sprintf("rollback: --to: no Bundle named %q, and no version %q of pipeline %s; the newest are: ",
+		b1, b1, pipelineName)), refused)
+	for _, b := range []string{b2, rb, b3} {
+		assert.Contains(t, refused, "("+b+")", "the newest versions list %s", b)
+	}
+	assert.NotContains(t, refused, "("+b1+")", "the deleted Bundle is not offered")
 	rbVerified(t, a, b3, "test")
 	rbOnlyBundles(t, e, a.ns, b2, rb, b3)
 
@@ -720,10 +728,12 @@ func TestRollback_OnHealthFailure(t *testing.T) {
 	out := e.MustKardinal(t, a.ns, "get", "auditevents", "--pipeline", pipelineName, "--bundle", b2, "--env", "test")
 	var actions []string
 	for _, l := range strings.Split(strings.TrimSpace(out), "\n")[1:] {
+		// TIMESTAMP PIPELINE VERSION ENV ACTION OUTCOME MESSAGE, the
+		// version as "<version> (<bundle>)".
 		f := strings.Fields(l)
-		require.GreaterOrEqual(t, len(f), 6, "auditevents row %q", l)
-		require.Equal(t, []string{pipelineName, b2, "test"}, f[1:4], "auditevents row %q", l)
-		actions = append(actions, f[4]+"/"+f[5])
+		require.GreaterOrEqual(t, len(f), 7, "auditevents row %q", l)
+		require.Equal(t, []string{pipelineName, fixtures.BrokenTag, "(" + b2 + ")", "test"}, f[1:5], "auditevents row %q", l)
+		actions = append(actions, f[5]+"/"+f[6])
 	}
 	assert.Contains(t, actions, "RollbackStarted/Pending", "kardinal get auditevents:\n%s", out)
 

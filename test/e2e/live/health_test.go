@@ -1377,44 +1377,46 @@ func TestHealth_ArgoStrategyRejectsConfigBundles(t *testing.T) {
 }
 
 // TestHealth_ArgoStrategyNeedsPatchRBAC checks the argocd strategy's RBAC.
-// The chart installed with defaults grants no patch on Applications, so the
-// step fails with the API server's forbidden error after its retries and
-// nothing changes. helm template shows rbac.argocdApplicationsWrite=true
-// adds patch to the chart's Applications rule. The test does not upgrade the
-// installed chart: it binds the rendered rule to the controller in a test
-// Role in the Application namespace, for this Application only, and the next
-// Bundle promotes. CHART-ARGOCDWRITE-01 is thus checked on the rules helm
-// template renders, not on an installed release's RBAC. Covers ARGOSTRAT-04,
+// The chart installed with defaults grants patch on Applications for the
+// refresh request (health.refresh.enabled), but its gitops-writes admission
+// policy lets the controller change only the refresh annotation unless it
+// may also update the Application. So the strategy's patch of the spec is
+// denied, retried and the step fails, and nothing changes. helm template
+// shows the Applications rule read-only with health.refresh.enabled=false,
+// patch by default, and patch and update with rbac.argocdApplicationsWrite.
+// The test does not upgrade the installed chart: it binds the rendered
+// rbac.argocdApplicationsWrite rule to the controller in a test Role in the
+// Application namespace, for this Application only, and the next Bundle
+// promotes. CHART-ARGOCDWRITE-01 is thus checked on the rules helm template
+// renders, not on an installed release's RBAC. Covers ARGOSTRAT-04,
 // CHART-ARGOCDWRITE-01.
 func TestHealth_ArgoStrategyNeedsPatchRBAC(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	ns, repo, app := argoStrategyApp(t, e, map[string]interface{}{
 		"app": map[string]interface{}{"image": map[string]interface{}{"tag": fixtures.V1}}})
-	require.False(t, e.ControllerCan(t, "patch", app), "the chart's default RBAC grants no patch on Applications")
-	require.True(t, e.ControllerCan(t, "get", app))
+	require.True(t, e.ControllerCan(t, "patch", app), "the chart grants patch for the refresh request")
+	require.False(t, e.ControllerCan(t, "update", app), "the chart's default RBAC grants no update on Applications")
 	require.NoError(t, e.Client.Create(context.Background(), argoStrategyPipeline(ns, repo, argoStrategyEnv("test", app, argoImageKey))))
 
 	denied := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
-	// The message is "step argocd-set-image: <what failed>: <API error>".
-	// What failed reads "argocd-set-image: patch Application" until B47 and
-	// "patch Application <namespace>/<name>" after, so the check is on the
-	// step, the action and the API server's error.
-	forbidden := fmt.Sprintf(`applications.argoproj.io %q is forbidden: `+
-		`User "system:serviceaccount:%s:%s" cannot patch resource "applications" in API group "argoproj.io" in the namespace %q`,
-		app, framework.ControllerNamespace, framework.ControllerServiceAccount, framework.ArgoCDNamespace)
-	isForbidden := func(msg, prefix, suffix string) bool {
+	// The message is "step argocd-set-image: patch Application <namespace>/<name>: <API error>",
+	// the API error the gitops-writes policy's denial.
+	isDenied := func(msg, prefix string) bool {
 		return strings.HasPrefix(msg, prefix+"step argocd-set-image: ") && strings.Contains(msg, "patch Application") &&
-			strings.HasSuffix(msg, forbidden+suffix)
+			strings.Contains(msg, "ValidatingAdmissionPolicy 'kardinal-promoter-gitops-writes'") &&
+			strings.Contains(msg, fmt.Sprintf("may change only the argocd.argoproj.io/refresh annotation of applications %s/%s",
+				framework.ArgoCDNamespace, app))
 	}
-	e.WaitStep(t, ns, pipelineName, denied, "test", promoteTimeout, "the forbidden patch to be retried",
+	e.WaitStep(t, ns, pipelineName, denied, "test", promoteTimeout, "the denied patch to be retried",
 		func(ps *v1alpha1.PromotionStep) (bool, string) {
-			return ps.Status.State == "Promoting" && isForbidden(ps.Status.Message, "retrying in 10s (1/5) after error: ", ""),
+			return ps.Status.State == "Promoting" && isDenied(ps.Status.Message, "retrying in 10s (1/5) after error: "),
 				framework.DescribeStep(ps)
 		})
 	// Retries back off 10s, 20s, 40s, 80s and 120s.
 	ps := e.WaitStepState(t, ns, pipelineName, denied, "test", "Failed", 7*time.Minute)
-	assert.True(t, isForbidden(ps.Status.Message, "", " (gave up after 5 retries)"), ps.Status.Message)
+	assert.True(t, isDenied(ps.Status.Message, "") && strings.HasSuffix(ps.Status.Message, " (gave up after 5 retries)"),
+		ps.Status.Message)
 	e.WaitBundlePhase(t, ns, denied, "Failed", time.Minute)
 	assert.Equal(t, fixtures.V1, valuesKey(t, e, app, argoImageKey))
 	assert.Equal(t, imageV1, e.DeploymentImage(t, ns, fixtures.Workload("test")))
@@ -1426,21 +1428,23 @@ func TestHealth_ArgoStrategyNeedsPatchRBAC(t *testing.T) {
 		}
 		return out
 	}
-	assert.Equal(t, [][]string{{"get", "list", "watch"}}, verbs(framework.ChartApplicationRules(t)))
+	assert.Equal(t, [][]string{{"get", "list", "watch"}}, verbs(framework.ChartApplicationRules(t, "health.refresh.enabled=false")))
+	assert.Equal(t, [][]string{{"get", "list", "watch", "patch"}}, verbs(framework.ChartApplicationRules(t)))
 	write := framework.ChartApplicationRules(t, "rbac.argocdApplicationsWrite=true")
-	require.Equal(t, [][]string{{"get", "list", "watch", "patch"}}, verbs(write))
+	require.Equal(t, [][]string{{"get", "list", "watch", "patch", "update"}}, verbs(write))
 	// Bound for this test's Application only: the tests running in parallel
 	// keep the chart's default RBAC on theirs.
 	for i := range write {
 		write[i].ResourceNames = []string{app}
 	}
 	e.BindArgoRules(t, ns, write)
-	e.WaitControllerCan(t, "patch", app, time.Minute)
-	require.False(t, e.ControllerCan(t, "patch", ""), "patch is granted on %s only", app)
+	e.WaitControllerCan(t, "update", app, time.Minute)
+	require.False(t, e.ControllerCan(t, "update", ""), "update is granted on %s only", app)
 
 	bundle := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
 	ps = e.WaitStepState(t, ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 	assert.Equal(t, argoVerified, ps.Status.Message)
+	assert.Nil(t, ps.Status.RefreshRequestedAt, "the argocd strategy writes no commit, so it asks for no refresh")
 	assert.Equal(t, fixtures.V2, valuesKey(t, e, app, argoImageKey))
 	assert.Equal(t, imageV2, e.DeploymentImage(t, ns, fixtures.Workload("test")))
 }

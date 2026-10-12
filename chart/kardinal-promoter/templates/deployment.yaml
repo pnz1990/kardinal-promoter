@@ -153,6 +153,9 @@ spec:
             {{- if .Values.scm.providersAllowInsecureHTTP }}
             - --scm-providers-allow-http=true
             {{- end }}
+            {{- if ne (include "kardinal-promoter.healthRefresh" .) "true" }}
+            - --health-refresh=false
+            {{- end }}
             {{- with .Values.scm.gatesCommitStatus }}
             {{- if eq (toString .enabled) "false" }}
             - --gates-commit-status=false
