@@ -18,6 +18,11 @@ updates:
           - "k8s.io/*"
           - "sigs.k8s.io/*"
           - "github.com/google/cel-go"
+    # kustomize >= 0.21.3 needs k8s.io v0.38 and Go 1.27, which have no
+    # controller-runtime release yet (#1819).
+    ignore:
+      - dependency-name: "sigs.k8s.io/kustomize/*"
+        versions: [">= 0.21.3"]
   # The embedded UI (web/package.json).
   - package-ecosystem: npm
     directory: /web
