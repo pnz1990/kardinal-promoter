@@ -910,12 +910,12 @@ export function App() {
               </div>
               {activePipeline && (
                 <p className="app-pipeline-head__summary">
-                  {/* P1's status.summary sentence; the shown version's state when there is none. */}
-                  <span>{activePipeline.summary ?? pipelineState(activePipeline).label}</span>
+                  {/* P1's status.summary sentence. Without one, the state chip above says it once. */}
+                  {activePipeline.summary && <span>{activePipeline.summary}</span>}
                   {/* #329/#763: the shown version's provenance, quiet; none for a version that is not found. */}
                   {activeBundle && !versionMissing && (
                     <span className="app-provenance">
-                      <span className="app-sep" aria-hidden="true">·</span>
+                      {activePipeline.summary && <span className="app-sep" aria-hidden="true">·</span>}
                       <span>
                         {/* The summary already names the tag; the Bundle name is the title and the copy. */}
                         Version <VersionLabel bundle={activeBundle} compact />

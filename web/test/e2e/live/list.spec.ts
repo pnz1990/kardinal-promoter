@@ -1,7 +1,7 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 //
-// UI-LIST-01: the pipeline sidebar (PAUSED, Blocked, Degraded) and the fleet
+// UI-LIST-01: the pipeline sidebar (Paused, Blocked, Degraded) and the fleet
 // health bar with its filters. Go test: TestUI_BrowserPipelineList
 // (test/e2e/live/ui_browser_test.go).
 //
@@ -57,11 +57,12 @@ test('the sidebar shows each pipeline’s state, and the filters narrow it', asy
   await expect(held.locator('[data-category]')).toContainText(/^.?\s*(Held by gate .+ in |Blocked by a gate)/)
   await expect(held).toContainText('2 envs')
   await expect(held).toContainText('1 live')
-  await expect(held).not.toContainText('PAUSED')
+  await expect(held).not.toContainText('Paused')
 
   const pausedRow = sidebarRow(page, paused)
-  await expect(pausedRow.getByTitle('Pipeline is paused — no new promotions will start')).toHaveText('PAUSED')
-  await expect(pausedRow.locator('[data-category]')).toHaveText('Paused')
+  // Paused once: the state chip, titled with what it means (no second PAUSED badge).
+  await expect(pausedRow.getByTitle('Pipeline is paused — no new promotions will start')).toHaveText(/Paused$/)
+  await expect(pausedRow.locator('[data-category]')).toHaveCount(1)
   await expect(pausedRow.locator('[data-category]')).toHaveAttribute('data-category', 'paused')
   await expect(pausedRow).toContainText('1 env')
 
@@ -69,7 +70,7 @@ test('the sidebar shows each pipeline’s state, and the filters narrow it', asy
   await expect(brokenRow.locator('[data-category]')).toContainText('A version failed')
   await expect(brokenRow.locator('[data-category]')).toHaveAttribute('data-category', 'failed')
   await expect(brokenRow).toContainText('1 failed')
-  await expect(brokenRow).not.toContainText('PAUSED')
+  await expect(brokenRow).not.toContainText('Paused')
 
   // The name filter matches namespace/name too.
   await filterSidebar(page, `${ns}/${PIPELINE}-`)

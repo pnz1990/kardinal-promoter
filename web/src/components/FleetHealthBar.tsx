@@ -30,22 +30,25 @@ export interface FleetHealthSummary {
   ciRed: number
   /** Pipelines with at least one environment in flight (see isPromoting). */
   promoting: number
+  /** Paused pipelines. */
+  paused: number
 }
 
 /**
  * Compute fleet health summary from the pipeline list: each pipeline in exactly one bucket,
  * its pipelineState category, so the counters agree with the sidebar badge and the header.
+ * A pipeline with no version yet is in the total only: there is nothing to count it as.
  * Pure function — no side effects.
  */
 export function computeFleetHealth(pipelines: Pipeline[]): FleetHealthSummary {
   const n = (c: PipelineCategory) => pipelines.filter(p => pipelineState(p).category === c).length
-  return { total: pipelines.length, healthy: n('healthy'), blocked: n('blocked'), ciRed: n('failed'), promoting: n('promoting') }
+  return { total: pipelines.length, healthy: n('healthy'), blocked: n('blocked'), ciRed: n('failed'), promoting: n('promoting'), paused: n('paused') }
 }
 
-export type FleetFilter = 'all' | 'healthy' | 'blocked' | 'ci-red' | 'promoting'
+export type FleetFilter = 'all' | 'healthy' | 'blocked' | 'ci-red' | 'promoting' | 'paused'
 
-const FLEET_FILTERS: readonly string[] = ['all', 'healthy', 'blocked', 'ci-red', 'promoting']
-const CATEGORY: Record<Exclude<FleetFilter, 'all'>, PipelineCategory> = { healthy: 'healthy', blocked: 'blocked', 'ci-red': 'failed', promoting: 'promoting' }
+const FLEET_FILTERS: readonly string[] = ['all', 'healthy', 'blocked', 'ci-red', 'promoting', 'paused']
+const CATEGORY: Record<Exclude<FleetFilter, 'all'>, PipelineCategory> = { healthy: 'healthy', blocked: 'blocked', 'ci-red': 'failed', promoting: 'promoting', paused: 'paused' }
 
 /** Whether value is a fleet filter (the URL's filter=). */
 export function isFleetFilter(value: string | undefined): value is FleetFilter {
@@ -61,7 +64,7 @@ export function filterPipelines(
 }
 
 /** The colour of a badge's count: a status bucket, or the code colour for promoting. */
-type BadgeTone = 'verified' | 'blocked' | 'failed' | 'code'
+type BadgeTone = 'verified' | 'blocked' | 'failed' | 'code' | 'paused'
 
 interface SummaryBadgeProps {
   label: string
@@ -177,6 +180,16 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
         onClick={toggle('promoting')}
         aria-label={`${s.promoting} pipeline${s.promoting === 1 ? '' : 's'} currently promoting`}
       />
+      {s.paused > 0 && (
+        <SummaryBadge
+          label="Paused"
+          count={s.paused}
+          tone="paused"
+          active={activeFilter === 'paused'}
+          onClick={toggle('paused')}
+          aria-label={`${s.paused} paused pipeline${s.paused === 1 ? '' : 's'}`}
+        />
+      )}
     </div>
   )
 }

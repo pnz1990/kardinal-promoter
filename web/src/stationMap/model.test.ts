@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { Bundle, GraphResponse, Pipeline } from '../types'
-import { buildModel, edgeGateLabel, gatesOn, gridOrder, groupSummary, stationLabel, type GateMark, type StationMapModel } from './model'
+import { buildModel, edgeGateLabel, edgeGateSummary, gatesOn, gridOrder, groupSummary, stationLabel, type GateMark, type StationMapModel } from './model'
 import { octilinear, layout, levelAt, initialLevel, trimEnd, lengthOf, gridCells, gridRows, pointBeforeEnd, threadPoints, gateOffset, wrapWords, THREAD_GAP_PX, gridSpace, gridSize, gridText, groupTitle, CH_EM, TEXT_ASCENT, type ZoomLevel } from './geometry'
 
 const bundle = (name: string, tag: string): Bundle => ({
@@ -359,16 +359,32 @@ describe('an expanded grid at every level', () => {
   }
 })
 
-describe('edgeGateLabel', () => {
+describe('edge gates', () => {
   const gate = (name: string, over: Partial<GateMark> = {}): GateMark =>
     ({ id: `gate-${name}`, name, state: 'Pass', holding: false, display: { value: 'Pass', label: 'Passing', glyph: '✓', ascii: '+', tone: 'verified' }, ...over })
   const blocking = { state: 'Block', holding: true, display: { value: 'Block', label: 'Blocking', glyph: '▮', ascii: '#', tone: 'blocked' as const } }
-  it.each<[string, GateMark[], string]>([
-    ['one gate', [gate('freeze')], 'freeze'],
-    ['a holding approval, then a passing gate', [gate('prod-approval', { ...blocking, approval: { required: 1, approved: 0 } }), gate('business-hours')],
-      'prod-approval (waiting) · +1 passing'],
-    ['a blocking gate, then others', [gate('uat-soak', blocking), gate('a', { state: 'Waiting' }), gate('b')], 'uat-soak (blocking) · +2 more'],
-  ])('%s', (_, gates, want) => {
-    expect(edgeGateLabel(gates)).toBe(want)
+  const waiting = { state: 'Waiting', holding: false, display: { value: 'Waiting', label: 'Not ready', glyph: '◷', ascii: '~', tone: 'waiting' as const } }
+  const approval = gate('prod-approval', { ...blocking, approval: { required: 1, approved: 0 } })
+
+  it.each<[string, GateMark[], string, string]>([
+    ['one gate', [gate('freeze')], 'freeze', 'freeze'],
+    ['a holding approval, then a passing gate', [approval, gate('business-hours')], '▮ prod-approval +1', 'prod-approval (waiting) · +1 passing'],
+    ['a blocking gate, then others', [gate('uat-soak', blocking), gate('a', { state: 'Waiting' }), gate('b')], '▮ uat-soak +2', 'uat-soak (blocking) · +2 more'],
+  ])('%s', (_, gates, label, summary) => {
+    // The map label stays short (glyph and name); the words are for the popover and the accessible name.
+    expect(edgeGateLabel(gates)).toBe(label)
+    expect(edgeGateSummary(gates)).toBe(summary)
+  })
+
+  it('gatesOn puts a station\'s holding gate first, then waiting, then the rest, passing last', () => {
+    const gates = [gate('business-hours'), gate('change-ticket', { state: 'Pending', display: { ...waiting.display, tone: 'pending' } }), gate('sign-off', waiting), gate('uat-soak', blocking)]
+    const node = { kind: 'station', id: 'prod', station: { gates } } as unknown as Parameters<typeof gatesOn>[0]
+    expect(gatesOn(node, {} as StationMapModel).map(g => g.name)).toEqual(['uat-soak', 'sign-off', 'change-ticket', 'business-hours'])
+    // The walkthrough's edge: a passing approval listed before the soak that holds it.
+    const walk = gatesOn({ kind: 'station', id: 'prod', station: { gates: [gate('prod-approval', { approval: { required: 1, approved: 1 } }), gate('uat-soak', blocking)] } } as unknown as Parameters<typeof gatesOn>[0], {} as StationMapModel)
+    expect(edgeGateLabel(walk)).toBe('▮ uat-soak +1')
+    expect(edgeGateSummary(walk)).toBe('uat-soak (blocking) · +1 passing')
+    // It sorts a copy: the station's own list keeps its order.
+    expect(gates.map(g => g.name)).toEqual(['business-hours', 'change-ticket', 'sign-off', 'uat-soak'])
   })
 })

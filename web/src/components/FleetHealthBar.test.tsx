@@ -65,9 +65,21 @@ describe('computeFleetHealth', () => {
     expect(s.healthy).toBe(0)
   })
 
-  it('counts paused pipeline as not healthy', () => {
+  it('counts a paused pipeline as Paused, not healthy', () => {
     const s = computeFleetHealth([makePipeline({ paused: true })])
     expect(s.healthy).toBe(0)
+    expect(s.paused).toBe(1)
+  })
+
+  it('shows a Paused counter that filters to the paused pipelines, only when there is one', () => {
+    const pipelines = [makePipeline({ name: 'a', paused: true }), makePipeline({ name: 'b' })]
+    expect(filterPipelines(pipelines, 'paused').map(p => p.name)).toEqual(['a'])
+    const onChange = vi.fn()
+    const { rerender } = render(<FleetHealthBar pipelines={pipelines} activeFilter="all" onFilterChange={onChange} />)
+    fireEvent.click(screen.getByRole('button', { name: '1 paused pipeline' }))
+    expect(onChange).toHaveBeenCalledWith('paused')
+    rerender(<FleetHealthBar pipelines={[makePipeline({ name: 'b' })]} activeFilter="all" onFilterChange={onChange} />)
+    expect(screen.queryByRole('button', { name: /paused pipeline/ })).toBeNull()
   })
 
   // "promoting" comes from the per-environment states of the active bundle,

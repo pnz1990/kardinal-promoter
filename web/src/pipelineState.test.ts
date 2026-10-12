@@ -14,6 +14,7 @@ describe('pipelineState', () => {
     ['a failed step', { failedStepCount: 1 }, 'failed', 'A version failed'],
     ['an environment that failed', { environments: [{ name: 'prod', state: 'Failed' }] }, 'failed', 'A version failed'],
     ['held, with no environment detail', { phase: 'Promoting', blockerCount: 1 }, 'blocked', 'Blocked by a gate'],
+    ['held by two gates, with no environment detail', { phase: 'Promoting', blockerCount: 2 }, 'blocked', 'Blocked by 2 gates'],
     ['held, named from status.environments', { phase: 'Promoting', blockerCount: 1, environments: [
       { name: 'test', state: 'Verified' }, { name: 'uat', state: 'Verified' }, { name: 'prod', state: 'Pending', blockedBy: ['prod-approval'] }] },
       'blocked', 'Held by gate prod-approval in prod'],
@@ -38,8 +39,9 @@ describe('pipelineState', () => {
       p({ name: 'moving', phase: 'Promoting', environmentStates: { test: 'Promoting' } }),
       p({ name: 'ok' }),
       p({ name: 'broken', failedStepCount: 1, environmentStates: { prod: 'Promoting' } }),
+      p({ name: 'stopped', paused: true, blockerCount: 1 }),
     ]
-    expect(computeFleetHealth(fleet)).toEqual({ total: 4, healthy: 1, blocked: 1, ciRed: 1, promoting: 1 })
+    expect(computeFleetHealth(fleet)).toEqual({ total: 5, healthy: 1, blocked: 1, ciRed: 1, promoting: 1, paused: 1 })
     expect(filterPipelines(fleet, 'blocked').map(x => x.name)).toEqual(['held'])
     expect(filterPipelines(fleet, 'promoting').map(x => x.name)).toEqual(['moving'])
   })

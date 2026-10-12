@@ -143,10 +143,11 @@ describe('PipelineList — pipeline items', () => {
     expect(item).toHaveAttribute('aria-pressed', 'true')
   })
 
-  it('shows PAUSED badge when pipeline is paused', () => {
+  it('says Paused once for a paused pipeline: its state chip, titled with what it means', () => {
     const pipelines = [makePipeline({ paused: true })]
-    render(<PipelineList pipelines={pipelines} onSelect={vi.fn()} />)
-    expect(screen.getByText('PAUSED')).toBeInTheDocument()
+    const { container } = render(<PipelineList pipelines={pipelines} onSelect={vi.fn()} />)
+    expect(screen.getByTitle('Pipeline is paused — no new promotions will start')).toHaveTextContent(/Paused$/)
+    expect(container.textContent?.match(/paused/gi)).toHaveLength(1)
   })
 
   it('shows environment count', () => {

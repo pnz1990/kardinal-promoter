@@ -180,17 +180,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
-.pipeline-list__paused {
-  padding: 0 var(--k-space-1);
-  background: var(--k-hatch), var(--k-surface-base);
-  color: var(--k-status-paused-fg);
-  border: var(--k-border-hairline) solid var(--k-line-strong);
-  border-radius: var(--k-radius-1);
-  font-size: var(--k-text-2xs);
-  font-weight: var(--k-weight-bold);
-  letter-spacing: var(--k-tracking-caps);
-}
+/* A block chip has no flex gap: the glyph keeps its space from the label. */
+.pipeline-list__badges .k-chip__glyph { margin-inline-end: var(--k-space-1); }
 
 .pipeline-list__sub {
   display: flex;

@@ -42,7 +42,8 @@ export function pipelineState(p: Pipeline): PipelineState {
     const gates = [...new Set(held.flatMap(e => e.blockedBy ?? []))]
     const where = held.map(e => e.name)
     const base = heldByGate(p.phase || 'Pending', gates.join(', '))
-    const label = held.length === 0 ? 'Blocked by a gate'
+    const n = p.blockerCount ?? 0
+    const label = held.length === 0 ? (n > 1 ? `Blocked by ${n} gates` : 'Blocked by a gate')
       : `${gates.length === 1 ? `Held by gate ${gates[0]}` : `Held by gates ${listOf(gates)}`} in ${listOf(where)}`
     return { ...base, label, category: 'blocked' }
   }

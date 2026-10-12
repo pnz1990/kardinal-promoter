@@ -552,11 +552,23 @@ export function gatesOn(node: MapNode, model: StationMapModel): GateMark[] {
 }
 
 /**
- * The label of an edge's gates: the first (the one holding, by gatesOn's order) by name, with
+ * The map label of an edge's gates, kept short: the first gate (the one holding, by gatesOn's
+ * order) by name, after its state glyph when it holds, and how many more: "▮ uat-soak +1",
+ * "freeze". The words are in edgeGateSummary.
+ */
+export function edgeGateLabel(gates: GateMark[]): string {
+  const [first, ...rest] = gates
+  if (!first) return ''
+  const glyph = first.holding && first.display.glyph ? `${first.display.glyph} ` : ''
+  return `${glyph}${first.name}${rest.length ? ` +${rest.length}` : ''}`
+}
+
+/**
+ * An edge's gates in words, for the gate's accessible name and popover: the first by name, with
  * what it does when it holds, then how many more and what they do:
  * "prod-approval (waiting) · +1 passing", "uat-soak (blocking) · +2 more", "freeze".
  */
-export function edgeGateLabel(gates: GateMark[]): string {
+export function edgeGateSummary(gates: GateMark[]): string {
   const [first, ...rest] = gates
   if (!first) return ''
   const doing = first.holding ? ` (${first.approval ? 'waiting' : 'blocking'})` : ''
