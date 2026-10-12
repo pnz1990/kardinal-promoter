@@ -15,12 +15,13 @@ may not list every namespace it shows the kubeconfig's, with a note on
 stderr; with -A, which asks for every namespace, it fails and says to use -n:
 
   Controller:  v0.10.1 in kardinal-system, 1/1 ready
-  Pipelines:   2 (1 degraded: team-b/api)
-  Versions:    4 (2 in flight)
+  Pipelines:   3 (1 degraded: team-b/api)
+  Versions:    5 (3 in flight)
 
   NAMESPACE   PIPELINE   SUMMARY
   team-a      web        1.5.0 live in test, prod
   team-b      api        A version failed
+  team-c      edge       7.2.0 live in canary and 27 of 42 pops; promoting in 5 pops; queued in 10 pops
 
   Details: kardinal status <pipeline> -n <namespace>
 
