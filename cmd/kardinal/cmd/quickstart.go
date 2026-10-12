@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -729,22 +730,34 @@ func setsValue(sets []string, key string) bool {
 // chart for a development build), what to do; "" for any other failure.
 // out is helm's output, chart and version what quickstart installed.
 func chartSchemaFixIt(out, chart, version string) string {
-	if !strings.Contains(out, "values don't meet the specifications of the schema") {
+	const schemaError = "values don't meet the specifications of the schema"
+	lines := strings.Split(out, "\n")
+	at := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(l, schemaError) })
+	if at < 0 {
 		return ""
 	}
 	pulled := chart
 	if version != "" {
 		pulled += " " + version
 	}
-	for _, line := range strings.Split(out, "\n") {
+	for _, line := range lines[:at] {
 		if ref, ok := strings.CutPrefix(strings.TrimSpace(line), "Pulled: "); ok {
 			pulled = ref
 		}
 	}
+	// The problems are the "- " lines under the error, each chart's under
+	// its "<chart>:" line; the first other line ends them.
 	var problems []string
-	for _, line := range strings.Split(out, "\n") {
-		if p, ok := strings.CutPrefix(strings.TrimSpace(line), "- "); ok && p != "" {
-			problems = append(problems, p)
+	for _, line := range lines[at+1:] {
+		line = strings.TrimSpace(line)
+		if p, ok := strings.CutPrefix(line, "- "); ok {
+			if p != "" {
+				problems = append(problems, p)
+			}
+			continue
+		}
+		if line == "" || !strings.HasSuffix(line, ":") || strings.Contains(line, " ") {
+			break
 		}
 	}
 	why := ""

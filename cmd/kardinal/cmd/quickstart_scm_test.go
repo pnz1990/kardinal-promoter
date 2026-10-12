@@ -20,6 +20,7 @@ import (
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 var updateQuickstartFixIts = flag.Bool("update-quickstart-fixits", false, "rewrite testdata/quickstart-fixits.golden")
@@ -42,6 +43,8 @@ func readyController() *appsv1.Deployment {
 // --set scm.provider says which git host it is or kardinal is already
 // installed; and a chart whose values schema refuses this CLI's values says
 // which chart this CLI needs instead of helm's raw error.
+//
+// Covers CLI-QUICKSTART-03.
 func TestQuickstart_FixIts_Golden(t *testing.T) {
 	const forgejo = "http://forgejo.forgejo.svc.cluster.local:3000/kardinal/kardinal-demo"
 	var golden strings.Builder
@@ -115,6 +118,8 @@ func TestQuickstart_FixIts_Golden(t *testing.T) {
 
 // TestQuickstart_KardinalSchemaError: a helm schema refusal of the
 // kardinal-promoter chart comes back as the fix-it, not helm's raw error.
+//
+// Covers CLI-QUICKSTART-03.
 func TestQuickstart_KardinalSchemaError(t *testing.T) {
 	noCluster(t)
 	t.Setenv("GITHUB_TOKEN", "tok")
@@ -133,4 +138,113 @@ func TestQuickstart_KardinalSchemaError(t *testing.T) {
 		"the values this development CLI (v0.1.0-dev) sets (scm: Additional property secretRef is not allowed): this CLI needs the chart "+
 		"of the checkout it was built from, or a later release; "+
 		"pass --chart <checkout>/chart/kardinal-promoter, or --chart-version <version>", err.Error())
+}
+
+// TestQuickstart_RefusesNonGitHubRepo: a --repo off github.com is refused
+// after the local-context, tool and token checks and before anything is
+// installed or printed: no helm or kubectl runs, no object is written, and
+// the error names the repo, says nothing was changed and links both guides.
+//
+// Covers CLI-QUICKSTART-03.
+func TestQuickstart_RefusesNonGitHubRepo(t *testing.T) {
+	for _, repo := range []string{
+		"http://forgejo.forgejo.svc.cluster.local:3000/kardinal/kardinal-demo",
+		"https://gitlab.com/me/kardinal-demo",
+		"https://github.example.com/me/kardinal-demo",
+		"https://notgithub.com/me/kardinal-demo",
+	} {
+		t.Run(repo, func(t *testing.T) {
+			writeKubeconfig(t, "kind-kardinal", "https://127.0.0.1:41234")
+			noCluster(t)
+			t.Setenv("GITHUB_TOKEN", "tok")
+			writes := 0
+			c := fake.NewClientBuilder().WithScheme(rootScheme).WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(context.Context, sigs_client.WithWatch, sigs_client.Object, ...sigs_client.CreateOption) error {
+					writes++
+					return nil
+				},
+				Patch: func(context.Context, sigs_client.WithWatch, sigs_client.Object, sigs_client.Patch, ...sigs_client.PatchOption) error {
+					writes++
+					return nil
+				},
+			}).Build()
+			setForTest(t, &quickstartClient, func(*clientcmdapi.Config) (sigs_client.Client, error) { return c, nil })
+			var out bytes.Buffer
+			err := quickstartFn(context.Background(), &out, quickstartOptions{repo: repo})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "quickstart supports GitHub forks of kardinal-demo, and "+repo+" is not on github.com, so nothing was changed")
+			assert.Contains(t, err.Error(), docsURL+"installation/")
+			assert.Contains(t, err.Error(), docsURL+"scm-providers/")
+			assert.Contains(t, err.Error(), "--set scm.provider=")
+			assert.Empty(t, out.String())
+			assert.Zero(t, writes, "nothing written")
+		})
+	}
+}
+
+// TestGithubRepo: only github.com (and www.github.com) is GitHub.
+//
+// Covers CLI-QUICKSTART-03.
+func TestGithubRepo(t *testing.T) {
+	for repo, want := range map[string]bool{
+		"https://github.com/me/kardinal-demo":         true,
+		"https://GitHub.com/me/kardinal-demo":         true,
+		"https://www.github.com/me/kardinal-demo":     true,
+		"http://github.com/me/kardinal-demo.git":      true,
+		"https://github.example.com/me/kardinal-demo": false,
+		"https://notgithub.com/me/kardinal-demo":      false,
+		"https://github.com.evil.io/me/kardinal-demo": false,
+		"http://forgejo:3000/kardinal/kardinal-demo":  false,
+		"://bad": false,
+	} {
+		assert.Equal(t, want, githubRepo(repo), repo)
+	}
+}
+
+// TestSetsValue: a --set names a key in any of its comma-separated pairs.
+//
+// Covers CLI-QUICKSTART-03.
+func TestSetsValue(t *testing.T) {
+	tests := []struct {
+		sets []string
+		want bool
+	}{
+		{nil, false},
+		{[]string{"scm.provider=forgejo"}, true},
+		{[]string{"ui.enabled=true", "image.tag=x,scm.provider=gitlab"}, true},
+		{[]string{" scm.provider =gitea"}, true},
+		{[]string{"scm.providersAllowInsecureHTTP=true"}, false},
+		{[]string{"scm.provider"}, false},
+		{[]string{"x.scm.provider=github"}, false},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, setsValue(tt.sets, "scm.provider"), "%v", tt.sets)
+	}
+}
+
+// TestChartSchemaFixIt_ProblemsUnderTheError: only the "- " lines under the
+// schema error are its problems; a "- " line before it (helm's own list of
+// what it pulled, a warning) is not, and the first other line ends them.
+//
+// Covers CLI-QUICKSTART-03.
+func TestChartSchemaFixIt_ProblemsUnderTheError(t *testing.T) {
+	setForTest(t, &CLIVersion, "v0.11.0")
+	out := "- a list item helm printed before\n" +
+		"Pulled: ghcr.io/pnz1990/charts/kardinal-promoter:0.10.0\n" +
+		"Error: values don't meet the specifications of the schema(s) in the following chart(s):\n" +
+		"kardinal-promoter:\n" +
+		"- scm: Additional property secretRef is not allowed\n" +
+		"- ui: Additional property sso is not allowed\n" +
+		"\n" +
+		"- not a problem: after the blank line\n"
+	got := chartSchemaFixIt(out, quickstartChart, "0.10.0")
+	assert.Contains(t, got, "(scm: Additional property secretRef is not allowed; ui: Additional property sso is not allowed)")
+	assert.NotContains(t, got, "a list item")
+	assert.NotContains(t, got, "after the blank line")
+	assert.Contains(t, got, "this CLI needs chart 0.11.0 or later; pass --chart-version 0.11.0")
+
+	// No Pulled line: the chart and version quickstart asked for.
+	got = chartSchemaFixIt("Error: values don't meet the specifications of the schema(s)\nkardinal-promoter:\n- x: bad\n", "./chart/kardinal-promoter", "")
+	assert.Contains(t, got, "the chart ./chart/kardinal-promoter does not accept")
+	assert.Contains(t, got, "(x: bad)")
 }

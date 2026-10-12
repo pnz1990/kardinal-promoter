@@ -720,7 +720,9 @@ func policyTestFn(w io.Writer, filename string, now time.Time) error {
 			result = "FAIL"
 		}
 		fmt.Fprintf(&out, "  Result: %s (%s)\n", result, reason)
-		if readsUpstreamSoak(expr) {
+		if decides, err := soakDecides(ctx, g, env, now, pass); err != nil {
+			return err
+		} else if decides {
 			fmt.Fprintf(&out, "  Note: offline there is no upstream environment, so its soak is 0; "+
 				"kardinal policy simulate <pipeline> %s --soak-minutes <n> evaluates it with a soak\n", env)
 		}
@@ -831,8 +833,9 @@ gate's kardinal.io/applies-to label. The file is -f <file>, as kardinal
 validate takes it, or the argument.
 
 With no cluster there is no upstream environment: bundle.upstreamSoakMinutes
-is 0, as for a version that just reached the upstream, and the result says
-so in a Note (upstream.<env>.* has no entry, so such a gate is UNKNOWN). kardinal policy simulate
+is 0, as for a version that just reached the upstream, and when that decides the result (the gate
+would pass, or fail, once soaked) a Note says so (upstream.<env>.* has no
+entry, so such a gate is UNKNOWN). kardinal policy simulate
 <pipeline> <env> --soak-minutes <n> evaluates the gate with a soak.
 
 Results:

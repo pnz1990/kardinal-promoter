@@ -601,9 +601,22 @@ func TestPolicyTest(t *testing.T) {
 			notWant: []string{"load pipeline", "context error"},
 		},
 		{
+			// The soak does not decide it: no note.
 			name:    "a soak gate offline that passes at 0",
 			content: gateYAML("soak", "bundle.upstreamSoakMinutes >= 0"),
-			want:    []string{"Result: PASS", "Note: offline"},
+			want:    []string{"Result: PASS"},
+			notWant: []string{"Note:"},
+		},
+		{
+			name:    "a soak gate that fails whatever the soak",
+			content: gateYAML("soak", "bundle.upstreamSoakMinutes >= 3 && false"),
+			want:    []string{"Result: FAIL"},
+			notWant: []string{"Note:"},
+		},
+		{
+			name:    "a soak gate that passes only before the soak",
+			content: gateYAML("soak", "bundle.upstreamSoakMinutes < 5"),
+			want:    []string{"Result: PASS", "Note: offline there is no upstream environment, so its soak is 0"},
 		},
 		{
 			name:    "upstream.<env> offline needs the cluster",
