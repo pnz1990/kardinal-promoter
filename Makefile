@@ -100,7 +100,8 @@ api-docs: ## Regenerate docs/reference/api.md from the CRDs in config/crd/bases
 	$(GO) run ./hack/gen-api-docs --crds config/crd/bases --output docs/reference/api.md
 
 ## docs/reference/helm-values.md and controller-flags.md come from values.yaml and the
-## controller's flags. TestReferencePagesAreUpToDate (hack/gen-reference-docs) fails when stale.
+## controller's flags. TestHelmValuesPageIsUpToDate (hack/gen-reference-docs/refdocs) and
+## TestControllerFlagsPageIsUpToDate (cmd/kardinal-controller) fail when stale.
 reference-docs: ## Regenerate docs/reference/helm-values.md and controller-flags.md
 	$(GO) run ./hack/gen-reference-docs
 

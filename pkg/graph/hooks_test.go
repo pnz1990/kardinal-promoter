@@ -136,19 +136,11 @@ func TestBuilder_NoHooksUnchanged(t *testing.T) {
 func celEval(t *testing.T, expr string, vars map[string]interface{}) (interface{}, error) {
 	t.Helper()
 	require.True(t, strings.HasPrefix(expr, "${") && strings.HasSuffix(expr, "}"), "expression %q", expr)
-	var opts []cel.EnvOption
 	// As kro's environment (pkg/cel/environment.go): optionals, lists and
 	// strings extensions.
-	opts = append(opts, cel.OptionalTypes(), ext.Lists(), ext.Strings())
-	for k := range vars {
-		opts = append(opts, cel.Variable(k, cel.DynType))
-	}
-	env, err := cel.NewEnv(opts...)
-	require.NoError(t, err)
-	ast, iss := env.Compile(expr[2 : len(expr)-1])
-	require.NoError(t, iss.Err(), "compile %q", expr)
-	prg, err := env.Program(ast)
-	require.NoError(t, err)
+	prg := cachedProgram(t, "hooks", func() []cel.EnvOption {
+		return []cel.EnvOption{cel.OptionalTypes(), ext.Lists(), ext.Strings()}
+	}, vars, expr[2:len(expr)-1])
 	out, _, err := prg.Eval(vars)
 	if err != nil {
 		return nil, err
