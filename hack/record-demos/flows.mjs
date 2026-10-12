@@ -24,7 +24,7 @@ export const FLOWS = [
       await d.pause(1400)
       await d.click(page.getByRole('button', { name: 'checkout', exact: true }), { after: 1600 })
       await expect(station(page, 'prod-eu')).toBeVisible()
-      d.poster()
+      await d.poster()
       await d.move(station(page, 'uat'))
       await d.pause(600)
       await d.move(station(page, 'prod-eu'))
@@ -45,7 +45,7 @@ export const FLOWS = [
       const why = drawer(page).getByRole('region', { name: 'Why it’s waiting' })
       await expect(why).toBeVisible()
       await d.move(why.getByRole('listitem').first())
-      d.poster()
+      await d.poster()
       await d.pause(1500)
       // The reason's rule, behind Details.
       await d.click(why.getByText('Details', { exact: true }).first(), { after: 1500 })
@@ -63,11 +63,12 @@ export const FLOWS = [
       const why = drawer(page).getByRole('region', { name: 'Why it’s waiting' })
       await d.move(why.getByText(/Needs 1 more approval/).first())
       await d.pause(700)
-      await d.click(why.getByRole('button', { name: 'Approve' }).first(), { after: 1200 })
-      const approve = page.getByRole('dialog')
-      if (await approve.isVisible().catch(() => false)) {
-        await d.click(approve.getByRole('button', { name: /^Approve/ }).last(), { after: 1500 })
-      }
+      await d.click(why.getByRole('button', { name: 'Approve', exact: true }), { after: 1200 })
+      const approve = page.getByRole('dialog', { name: /^Approve / })
+      await expect(approve).toBeVisible()
+      await d.click(approve.getByRole('button', { name: 'Approve', exact: true }), { after: 1500 })
+      // The approval counted: the quorum is met and prod-eu starts promoting.
+      await expect(station(page, 'prod-eu')).toHaveAccessibleName(/^prod-eu — Promoting/, { timeout: 8000 })
       // prod-us is held by a CEL gate: Override asks for a reason and a duration first.
       await d.click(station(page, 'prod-us'), { after: 1200 })
       await d.click(drawer(page).getByRole('button', { name: 'Override gate' }).first(), { after: 900 })
@@ -76,8 +77,10 @@ export const FLOWS = [
       await d.click(dialog.getByRole('textbox').first(), { after: 300 })
       await d.type('INC-4302: soak timer reset by the uat redeploy')
       await d.pause(500)
-      d.poster()
-      await d.click(dialog.getByRole('button', { name: 'Override gate' }), { after: 2000 })
+      await d.poster()
+      await d.click(dialog.getByRole('button', { name: 'Override gate', exact: true }), { after: 2000 })
+      // The override passed: prod-us is no longer held by uat-soak.
+      await expect(station(page, 'prod-us')).toHaveAccessibleName(/^prod-us — Promoting/, { timeout: 8000 })
     },
   },
   {
@@ -94,12 +97,12 @@ export const FLOWS = [
       await expect(inbox.getByRole('listitem')).toHaveCount(1)
       await d.move(inbox.getByRole('listitem').first())
       await d.pause(900)
-      await d.click(inbox.getByRole('button', { name: 'Approve' }), { after: 900 })
+      await d.click(inbox.getByRole('button', { name: 'Approve', exact: true }), { after: 900 })
       const dialog = page.getByRole('dialog', { name: /^Approve / })
       await expect(dialog).toBeVisible()
-      d.poster()
+      await d.poster()
       await d.pause(700)
-      await d.click(dialog.getByRole('button', { name: 'Approve' }), { after: 1600 })
+      await d.click(dialog.getByRole('button', { name: 'Approve', exact: true }), { after: 1600 })
       // The quorum is met: the item leaves the inbox and the badge no longer counts it.
       await expect(page.getByRole('link', { name: /^Approvals/ })).not.toHaveAccessibleName(/1 waiting on you/, { timeout: 8000 })
       await d.move(page.getByRole('link', { name: /^Approvals/ }))
@@ -128,7 +131,7 @@ export const FLOWS = [
       await d.click(dialog.getByRole('textbox', { name: /Why hold|Reason/ }), { after: 300 })
       await d.type('INC-4211: 4.1.0 cannot pull its image')
       await d.pause(500)
-      d.poster()
+      await d.poster()
       await d.click(dialog.getByRole('button', { name: /^Roll back/ }).last(), { after: 2400 })
     },
   },
@@ -145,7 +148,7 @@ export const FLOWS = [
       await d.click(page.getByRole('button', { name: /^Compare/ }).first(), { after: 1600 })
       const panel = page.getByRole('dialog', { name: /comparison/i })
       await expect(panel).toBeVisible()
-      d.poster()
+      await d.poster()
       await d.move(panel.getByText('Images').first())
       await d.pause(1200)
       await d.move(panel.getByText('Environments').first())
@@ -178,7 +181,7 @@ export const FLOWS = [
       await d.click(page.getByRole('button', { name: /^pops · 42 targets/ }), { after: 1000 })
       await d.press('0', ['0'])
       await d.pause(900)
-      d.poster()
+      await d.poster()
       // Zoom in on the grid with the wheel, then back to the whole map.
       const grid = page.getByRole('button', { name: /^pops-/ }).nth(12)
       await d.move(grid)
@@ -198,7 +201,7 @@ export const FLOWS = [
       await d.press('Control+K', ['Ctrl', 'K'])
       await d.type('storefront prod')
       await d.pause(800)
-      d.poster()
+      await d.poster()
       await d.press('ArrowDown')
       await d.press('ArrowUp')
       await d.press('Enter', ['Enter'])

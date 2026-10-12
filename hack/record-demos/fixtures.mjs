@@ -48,7 +48,12 @@ function bundle(pipelineName, version, phase, minutesAgo, extra = {}) {
 function sha(seed) {
   let h = 2166136261
   for (const c of seed) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0
-  return (h.toString(16).padStart(8, '0') + 'c0ffee5e1ec7ab1e5eed0123456789abcdef').slice(0, 40)
+  let out = ''
+  for (let i = 0; out.length < 40; i++) {
+    h = Math.imul(h ^ (i + 0x9e), 16777619) >>> 0
+    out += h.toString(16).padStart(8, '0')
+  }
+  return out.slice(0, 40)
 }
 
 /**
@@ -63,6 +68,21 @@ function summarize(clauses) {
     last = version
     return s
   }).join('; ')
+}
+
+/** A finished promotion of b to env: the steps that ran, their times. */
+function liveStep(b, environment, i) {
+  const start = Date.parse(b.createdAt) + (10 + i * 12) * MIN
+  return {
+    name: `${b.name}-${environment}`, namespace: NS, pipeline: b.pipeline, bundle: b.name, environment, stepType: 'kustomize-set-image',
+    state: 'Verified', currentStepIndex: 5,
+    steps: [['git-clone', 2200], ['kustomize-set-image', 300], ['git-commit', 200], ['open-pr', 1700], ['wait-for-merge', 80_000], ['health-check', 38_000]]
+      .reduce((acc, [name, ms]) => {
+        const from = acc.length ? Date.parse(acc[acc.length - 1].completedAt) : start
+        acc.push({ name, state: 'Completed', startedAt: new Date(from).toISOString(), completedAt: new Date(from + ms).toISOString(), durationMs: ms })
+        return acc
+      }, []),
+  }
 }
 
 const deployed = (bundleName, version, minutesAgo) => ({ bundle: bundleName, version, verifiedAt: ago(minutesAgo * MIN) })
@@ -106,7 +126,7 @@ export function createFixtures({ big = false } = {}) {
   const soak = {
     name: `uat-soak--${co180.name}-prod-us`, gateTemplate: 'uat-soak', namespace: NS, pipeline: 'checkout', bundle: co180.name, environment: 'prod-us',
     expression: 'upstream.uat.soakMinutes >= 30', ready: false, holding: true, state: 'Block',
-    reason: 'uat has soaked 12m of 30m', lastEvaluatedAt: ago(15_000),
+    reason: 'uat has soaked 14m of 30m', lastEvaluatedAt: ago(15_000),
   }
 
   // ── storefront: test → staging → prod, all live; prod can be rolled back ─────────
@@ -231,6 +251,10 @@ export function createFixtures({ big = false } = {}) {
     },
     gates: [approval, soak],
   }
+  // Every live environment has the steps that put its version there (the drawer's Evidence).
+  for (const [b, envs] of [[co172, ['prod-eu', 'prod-us']], [sf230, ['test', 'staging', 'prod']], [se410, ['test']]]) {
+    state.steps[b.name] = [...(state.steps[b.name] ?? []), ...envs.map((e, i) => liveStep(b, e, i))]
+  }
 
   if (big) {
     state.pipelines.push(pipeline('edge-cdn', {
@@ -325,7 +349,13 @@ function rollback(state, { pipeline: name, environment, holdReason }) {
   const p = state.pipelines.find((x) => x.name === name)
   const graph = p && state.graphs[p.activeBundleName]
   const node = graph?.nodes.find((n) => n.type === 'PromotionStep' && n.environment === environment)
-  const rollbackName = `${name}-rollback-${environment}`
+  // As the controller names it (<pipeline>-rollback-<suffix>), shipping the last version Verified there.
+  const rollbackName = `${name}-rollback-3f9a1c`
+  const target = (state.bundles[name] ?? []).find((b) => b.name !== p?.activeBundleName && b.environments?.some((e) => e.name === environment && e.phase === 'Verified'))
+  if (target && !(state.bundles[name] ?? []).some((b) => b.name === rollbackName)) {
+    state.bundles[name] = [{ ...target, name: rollbackName, phase: 'Promoting', createdAt: new Date(NOW).toISOString(),
+      provenance: { ...target.provenance, rollbackOf: p?.activeBundleName } }, ...state.bundles[name]]
+  }
   if (node) Object.assign(node, { state: 'Promoting', startedAt: new Date(NOW).toISOString() })
   if (p) {
     p.environmentStates = { ...p.environmentStates, [environment]: 'Promoting' }
@@ -354,5 +384,6 @@ function override(state, { pipeline: name, gate: gateName, environment, reason, 
       p.environmentStates = { ...p.environmentStates, [environment]: 'Promoting' }
     }
   }
-  return { message: `Overridden: ${environment} passes ${gateName} until ${expiresAt}`, gates: g ? [g.name] : [], expiresAt }
+  // The controller's words (cmd/kardinal-controller ui_lifecycle.go), RFC 3339 to the second.
+  return { message: `gate ${gateName} overridden in ${environment} for ${g ? 1 : 0} in-progress Bundle(s) until ${expiresAt.replace(/\.\d{3}Z$/, 'Z')}`, gates: g ? [g.name] : [], expiresAt }
 }

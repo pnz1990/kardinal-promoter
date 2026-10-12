@@ -118,9 +118,9 @@ on another version or for another reason: release that hold first. `unhold` is `
 <figure class="k-demo" id="demo-rollback-hold">
   <picture>
     <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/rollback-hold.png">
-    <img src="../assets/demos/rollback-hold.webp" alt="The UI: rolling back storefront prod, ticking Hold with a reason, and confirming." width="1280" height="800" loading="lazy">
+    <img src="../assets/demos/rollback-hold.webp" alt="The UI: the search pipeline's failed prod promotion, Roll back, ticking Hold with a reason, and confirming." width="1280" height="800" loading="lazy">
   </picture>
-  <figcaption>Roll back and hold, from the UI · <code>kardinal rollback storefront prod --hold --reason …</code></figcaption>
+  <figcaption>Roll back and hold, from the UI · <code>kardinal rollback search prod --hold --reason …</code></figcaption>
 </figure>
 
 

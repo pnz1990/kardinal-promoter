@@ -65,13 +65,6 @@ export async function encodeWebp(frames, { budget, width, holdMs = 1800 }) {
   return best
 }
 
-/** The frame on screen at time t (seconds, screencast clock), or the last. */
-export function frameAt(frames, t) {
-  let pick = frames[frames.length - 1]
-  for (const f of frames) if (f.t <= t) pick = f
-  return pick
-}
-
 /** A still poster PNG, palette-quantised to stay small. */
 export async function encodePoster(data, { width }) {
   return sharp(data).resize({ width, withoutEnlargement: true }).png({ palette: true, quality: 90, compressionLevel: 9, effort: 8 }).toBuffer()

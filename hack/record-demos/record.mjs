@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { apiHandler, createFixtures, NOW } from './fixtures.mjs'
 import { CURSOR_SCRIPT, Director } from './director.mjs'
-import { encodePoster, encodeWebp, frameAt, startCapture } from './capture.mjs'
+import { encodePoster, encodeWebp, startCapture } from './capture.mjs'
 import { FLOWS } from './flows.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -85,7 +85,8 @@ async function recordFlow(browser, base, flow, theme, opts) {
   await context.addInitScript((t) => { try { localStorage.setItem('kardinal-theme', t) } catch { /* private mode */ } }, theme)
   await context.addInitScript(CURSOR_SCRIPT)
   const page = await context.newPage()
-  await page.clock.install({ time: NOW })
+  // Date.now() is NOW for the whole clip (timers still run), so every age and poster is the same on every run.
+  await page.clock.setFixedTime(NOW)
   const errors = []
   page.on('pageerror', (e) => errors.push(e.message))
   await page.goto(`${base}/ui/${flow.start}`)
@@ -104,7 +105,7 @@ async function recordFlow(browser, base, flow, theme, opts) {
   if (frames.length < 2) throw new Error(`record-demos: ${flow.name} (${theme}): only ${frames.length} frames`)
 
   const clip = await encodeWebp(frames, { budget: BUDGET, width: VIEWPORT.width })
-  const poster = await encodePoster(frameAt(frames, d.posterAt ? d.posterAt / 1000 : Infinity).data, { width: VIEWPORT.width })
+  const poster = await encodePoster(d.posterShot ?? frames[frames.length - 1].data, { width: VIEWPORT.width })
   const file = `${flow.name}${theme === 'dark' ? '-dark' : ''}`
   fs.mkdirSync(opts.out, { recursive: true })
   fs.writeFileSync(path.join(opts.out, `${file}.webp`), clip.webp)
@@ -127,7 +128,10 @@ async function main() {
   }
 
   const server = await startMockServer()
-  const browser = await chromium.launch()
+  // Software raster, no LCD text or hinting: the same frames and posters on every run and machine.
+  const browser = await chromium.launch({
+    args: ['--disable-gpu', '--disable-lcd-text', '--font-render-hinting=none', '--force-color-profile=srgb', '--disable-partial-raster', '--disable-skia-runtime-opts'],
+  })
   const results = []
   let failed = false
   try {

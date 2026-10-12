@@ -16,6 +16,7 @@ on:
     branches: [main]
     paths:
       - "hack/record-demos/**"
+      - "web/test/e2e/mock-server/**"
       - ".github/workflows/demos.yml"
 
 permissions:

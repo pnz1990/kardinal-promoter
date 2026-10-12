@@ -182,33 +182,6 @@ sidebar and the stage drawer; the Bundle name follows it in muted monospace, or 
 where space is short. An environment's or gate's panel has the Kubernetes kind and object
 name under **Kubernetes details**, for `kubectl`.
 
-<figure class="k-demo" id="demo-compare">
-  <picture>
-    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/compare.png">
-    <img src="../assets/demos/compare.webp" alt="The UI: shift-clicking an older version and pressing Compare to see the two field by field." width="1280" height="800" loading="lazy">
-  </picture>
-  <figcaption>Compare two versions · <code>kardinal diff</code></figcaption>
-</figure>
-
-
-<figure class="k-demo" id="demo-palette">
-  <picture>
-    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/palette.png">
-    <img src="../assets/demos/palette.webp" alt="The UI: pressing Ctrl+K, typing storefront prod and opening that environment." width="1280" height="800" loading="lazy">
-  </picture>
-  <figcaption>Go anywhere with ⌘K or Ctrl+K</figcaption>
-</figure>
-
-
-<figure class="k-demo" id="demo-approvals-inbox">
-  <picture>
-    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/approvals-inbox.png">
-    <img src="../assets/demos/approvals-inbox.webp" alt="The UI: the Approvals badge in the top bar, the inbox with the release waiting on you, Approve, and the badge counting down." width="1280" height="800" loading="lazy">
-  </picture>
-  <figcaption>The approvals inbox (#/approvals)</figcaption>
-</figure>
-
-
 - **Fleet board** (the start page, and the kardinal logo from anywhere). Each Pipeline is a
   line of stations, one per environment in promotion order; environments promoted in parallel
   are stacked, and five or more of them (a wave) are one plate that names the range, the version
@@ -260,6 +233,15 @@ name under **Kubernetes details**, for `kubectl`.
   Roll back and Release hold are under the station in focus; shift-click a second Bundle on the
   rail to compare its route. An address with a Pipeline or a version the cluster does not have
   says it is not found and links back; it does not show another one.
+
+<figure class="k-demo" id="demo-compare">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/compare.png">
+    <img src="../assets/demos/compare.webp" alt="The UI: shift-clicking an older version and pressing Compare to see the two field by field." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>Compare two versions · <code>kardinal diff</code></figcaption>
+</figure>
+
 - **Environment details.** Selecting an environment (a fleet station, a station or a grid cell on
   the map, or a row of the Table; a gate opens the environment it holds) opens its details beside the page, or as a sheet
   on a narrow screen. They say first why the environment is waiting: paused, held by a rollback,
@@ -278,6 +260,15 @@ name under **Kubernetes details**, for `kubectl`.
   why: you approved already, your approval does not count, or only some groups may approve. An
   approval names who decided, so without TokenReview (`ui.auth.tokenReview`) the UI cannot
   record one; use `kardinal approve`.
+
+<figure class="k-demo" id="demo-approvals-inbox">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/approvals-inbox.png">
+    <img src="../assets/demos/approvals-inbox.webp" alt="The UI: the Approvals badge in the top bar, the inbox with the release waiting on you, Approve, and the badge counting down." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>The approvals inbox (#/approvals)</figcaption>
+</figure>
+
 - **What you may do.** With TokenReview the UI asks the controller which actions you may take
   (`POST /api/v1/ui/access`, cached for 30 seconds). An action you may not take stays in place
   but does nothing, and says which of the chart's roles grants it; the controller checks every
@@ -315,6 +306,15 @@ name under **Kubernetes details**, for `kubectl`.
   of pipelines, environments (`pipeline › env`) and the shown pipeline's versions, and of actions:
   switch the theme or the density, refresh, the operations table, the shortcuts. Type to filter,
   and use the arrow keys and Enter. It never promotes, pauses or rolls back by itself.
+
+<figure class="k-demo" id="demo-palette">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="../assets/demos/palette.png">
+    <img src="../assets/demos/palette.webp" alt="The UI: pressing Ctrl+K, typing storefront prod and opening that environment." width="1280" height="800" loading="lazy">
+  </picture>
+  <figcaption>Go anywhere with ⌘K or Ctrl+K</figcaption>
+</figure>
+
 - **Links.** Every screen has its own address, so a link opens it, a reload keeps it, and Back
   and Forward walk it. The breadcrumb in the top bar leads back:
 

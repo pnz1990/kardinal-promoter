@@ -66,7 +66,8 @@ export class Director {
   constructor(page, { speed = 1 } = {}) {
     this.page = page
     this.speed = speed
-    this.posterAt = undefined
+    /** The poster: a screenshot taken at poster(), once the page has settled. */
+    this.posterShot = undefined
   }
 
   /** Waits ms (scaled by speed), letting the page animate. */
@@ -74,9 +75,14 @@ export class Director {
     await this.page.waitForTimeout(Math.round(ms / this.speed))
   }
 
-  /** Marks the current moment as the clip's poster (the still for reduced motion). */
-  poster() {
-    this.posterAt = Date.now()
+  /**
+   * Takes the clip's poster (the still for reduced motion): a screenshot once the page has
+   * settled (the last ripple gone, animations stopped), so two runs give the same PNG.
+   */
+  async poster() {
+    await this.page.waitForTimeout(700)
+    await this.page.waitForLoadState('networkidle')
+    this.posterShot = await this.page.screenshot({ animations: 'disabled', caret: 'hide' })
   }
 
   /** The cursor's current position, after the page has (re)loaded the overlay. */
