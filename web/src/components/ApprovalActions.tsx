@@ -5,7 +5,9 @@
 // environment's approval gates from the UI (POST /api/v1/ui/approvals, the
 // UI's kardinal approve). The decision is recorded for the user the UI
 // authenticated (TokenReview mode); without it the server refuses and the
-// message says to use the CLI. Reject asks first: it blocks the gate.
+// message says to use the CLI. Reject asks first: it blocks the gate. When the
+// person may not decide (restricted: no sign-in, or not the role), the buttons
+// stay in place but inert, the reason their tooltip; the parent shows it once.
 
 import { useId, useState } from 'react'
 import { api } from '../api/client'
@@ -17,17 +19,25 @@ interface Props {
   namespace: string
   /** Called after a decision is recorded, so the parent can refresh. */
   onDone?: () => void
+  /** Why the person may not decide here (U7), or undefined when they may. */
+  restricted?: string
 }
 
 type Action = 'approve' | 'reject' | 'revoke'
 
-export function ApprovalActions({ bundle, environment, namespace, onDone }: Props) {
+export function ApprovalActions({ bundle, environment, namespace, onDone, restricted }: Props) {
   const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string>()
   const [error, setError] = useState<string>()
   const [confirmReject, setConfirmReject] = useState(false)
   const commentId = useId()
+  const reasonId = useId()
+  // An inert button: focusable, does nothing, says why.
+  const inert = restricted
+    ? { 'aria-disabled': true, 'aria-describedby': reasonId, title: restricted }
+    : {}
+  const act = (f: () => void) => () => { if (!restricted) f() }
 
   async function run(action: Action) {
     setBusy(true)
@@ -52,18 +62,19 @@ export function ApprovalActions({ bundle, environment, namespace, onDone }: Prop
     <div className="approval-actions">
       <label htmlFor={commentId} className="approval-actions__label">Comment (optional)</label>
       <input id={commentId} className="approval-actions__comment" type="text" value={comment} maxLength={1024}
-        disabled={busy} placeholder="e.g. checked the canary dashboards" onChange={e => setComment(e.target.value)} />
+        disabled={busy || !!restricted} placeholder="e.g. checked the canary dashboards" onChange={e => setComment(e.target.value)} />
       <div className="approval-actions__buttons">
-        <button type="button" className="approval-actions__approve" disabled={busy} onClick={() => { void run('approve') }}>
+        <button type="button" className="approval-actions__approve" disabled={busy} {...inert} onClick={act(() => { void run('approve') })}>
           Approve
         </button>
-        <button type="button" className="approval-actions__reject" disabled={busy} onClick={() => setConfirmReject(true)}>
+        <button type="button" className="approval-actions__reject" disabled={busy} {...inert} onClick={act(() => setConfirmReject(true))}>
           Reject
         </button>
-        <button type="button" className="approval-actions__revoke" disabled={busy} onClick={() => { void run('revoke') }}>
+        <button type="button" className="approval-actions__revoke" disabled={busy} {...inert} onClick={act(() => { void run('revoke') })}>
           Revoke mine
         </button>
       </div>
+      {restricted && <span id={reasonId} className="sr-only">{restricted}</span>}
       {result && <div role="status" className="approval-actions__result">{result}</div>}
       {error && <div role="alert" className="approval-actions__error">{error}</div>}
       {confirmReject && (

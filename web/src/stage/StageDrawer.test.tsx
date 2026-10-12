@@ -297,6 +297,28 @@ describe('StageDrawer (U3)', () => {
     expect(reasonButton('Approve')).not.toHaveAttribute('aria-disabled')
   })
 
+  it('without sign-in Approve is inert, with one line under it naming the command that works (no list below)', async () => {
+    const user = userEvent.setup()
+    api.checkAccess.mockImplementation(async (_ns: string, checks: { verb: string; resource: string }[]) => ({
+      results: checks.map(c => c.resource === 'approvals'
+        ? { allowed: false, grantedBy: 'approver or admin', reason: 'approving needs sign-in with your Kubernetes identity' }
+        : { allowed: true, grantedBy: 'promoter or admin' }),
+    }))
+    renderDrawer()
+    await waitFor(() => expect(reasonButton('Approve')).toHaveAttribute('aria-disabled', 'true'))
+    const why = document.querySelector('[data-section="why"]') as HTMLElement
+    const notes = document.querySelectorAll('.sign-in-note')
+    expect(notes).toHaveLength(1)
+    expect(why).toContainElement(notes[0] as HTMLElement)
+    expect(notes[0]).toHaveTextContent('Approving needs sign-in with your Kubernetes identity — run kardinal approve web prod -n team')
+    expect(within(notes[0] as HTMLElement).getByRole('button', { name: 'Copy kardinal approve web prod -n team' })).toBeInTheDocument()
+    // The why item does not also print the command, and the actions do not explain it again.
+    expect(within(why).queryByText('From a terminal:')).not.toBeInTheDocument()
+    expect(screen.queryByRole('list', { name: 'Not available to you' })).not.toBeInTheDocument()
+    await user.click(reasonButton('Approve'))
+    expect(screen.queryByRole('dialog', { name: /Approve/ })).not.toBeInTheDocument()
+  })
+
   it('the keyboard command opens an action the drawer offers, and says why it cannot otherwise (U7)', async () => {
     const commandRef = createRef<StageCommand | null>() as { current: StageCommand | null }
     renderDrawer([approvalGate], { commandRef })

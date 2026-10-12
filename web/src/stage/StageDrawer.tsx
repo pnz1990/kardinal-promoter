@@ -25,6 +25,7 @@ import { KubernetesDetails } from '../ui/KubernetesDetails'
 import { ActionButton } from './ActionButton'
 import { ACTION_LABEL, DESTRUCTIVE, StageActions } from './StageActions'
 import { useStageAccess, type ReasonFor } from './useStageAccess'
+import { approveCommand, SignInNote, useSignInNeeded } from './signIn'
 import { useChangeHalo } from '../useChangeHalo'
 import { gateDisplay, gateLabel, IN_FLIGHT, stageView, type StageActionKind, type WaitReason } from './stageModel'
 import '../styles/StageDrawer.css'
@@ -119,6 +120,8 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
   }, [nowProp, running])
   const now = nowProp ?? (running ? clock : Date.now())
   const reasonFor = useStageAccess(view, pipeline, namespace)
+  // Without sign-in Approve and Decline are inert; the approval's reason says why, once.
+  const signIn = useSignInNeeded(view ? namespace : undefined)
   // U7: the environment's state changed on a poll (not when another environment opens).
   const stateChanged = useChangeHalo(view?.state.label ?? '', env) && !!view
   useEffect(() => {
@@ -143,6 +146,7 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
   // Actions shown next to their reason; the action row does not repeat them.
   const inline = useMemo(() => new Set((view?.why ?? []).map(w => w.next).filter((k): k is StageActionKind => !!k)), [view])
   const fleet = p?.environmentTopology?.find(n => n.name === env)?.fleet
+  const noteInWhy = signIn && !!view?.why.some(w => w.kind === 'approval' && (w.next === 'approve' || w.next === 'reject'))
 
   return (
     <>
@@ -187,14 +191,15 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
             {view.why.length === 0
               ? <p className="stage-muted">{view.running && !view.incoming ? `Nothing is waiting: ${view.running.version} is live.` : `${view.state.label}.`}</p>
               : <ol className="stage-why">{view.why.map((w, i) => (
-                  <WhyItem key={i} reason={w} now={now} primary={view.primary} reasonFor={reasonFor} cli={cliCommand(w, pipeline, env, namespace)} onAct={k => open(k, w.gate)} onUpstream={u => onNavigate(u, 'why')}
+                  <WhyItem key={i} reason={w} now={now} primary={view.primary} reasonFor={reasonFor} signIn={signIn} cli={cliCommand(w, pipeline, env, namespace)} onAct={k => open(k, w.gate)} onUpstream={u => onNavigate(u, 'why')}
                     upstreams={view.spec?.upstreams ?? []} />))}
                 </ol>}
           </section>
 
           <section className="stage-section" data-section="actions" ref={el => { sectionRefs.current.actions = el }} aria-labelledby={`${headingId}-actions`}>
             <h3 id={`${headingId}-actions`} className="stage-section__title">Actions</h3>
-            <StageActions view={view} pipeline={pipeline} namespace={namespace} active={action} activeGate={actionGate} onOpen={open} onChanged={onChanged} inline={inline} reasonFor={reasonFor} />
+            <StageActions view={view} pipeline={pipeline} namespace={namespace} active={action} activeGate={actionGate} onOpen={open} onChanged={onChanged} inline={inline} reasonFor={reasonFor}
+              signInNote={signIn ? (noteInWhy ? null : approveCommand(pipeline, env, namespace)) : undefined} />
           </section>
 
           <section className="stage-section" data-section="evidence" ref={el => { sectionRefs.current.evidence = el }} aria-labelledby={`${headingId}-evidence`}>
@@ -237,14 +242,15 @@ function Version({ version, bundle }: { version: string; bundle: string }) {
  * the way to do it). -n only outside default.
  */
 export function cliCommand(w: WaitReason, pipeline: string, env: string, namespace: string): string | undefined {
-  if (w.kind !== 'approval') return undefined
-  const ns = namespace && namespace !== 'default' ? ` -n ${namespace}` : ''
-  return `kardinal approve ${pipeline} ${env}${ns}`
+  return w.kind === 'approval' ? approveCommand(pipeline, env, namespace) : undefined
 }
 
-function WhyItem({ reason: w, now, primary, cli, onAct, onUpstream, upstreams, reasonFor }: { reason: WaitReason; now: number; primary?: StageActionKind;
-  cli?: string; reasonFor: ReasonFor; onAct: (k: StageActionKind) => void; onUpstream: (env: string) => void; upstreams: string[] }) {
+function WhyItem({ reason: w, now, primary, cli, onAct, onUpstream, upstreams, reasonFor, signIn }: { reason: WaitReason; now: number; primary?: StageActionKind;
+  cli?: string; reasonFor: ReasonFor; onAct: (k: StageActionKind) => void; onUpstream: (env: string) => void; upstreams: string[]
+  /** Approving needs sign-in: the inert Approve gets the one line that says so, with the command. */
+  signIn?: boolean }) {
   const age = formatElapsedSince(w.evaluatedAt, now)
+  const signInNote = signIn && w.kind === 'approval' && cli && (w.next === 'approve' || w.next === 'reject') ? cli : undefined
   return (
     <li className={`stage-why__item stage-why__item--${w.kind}`}>
       <p className="stage-why__title">{w.title}</p>
@@ -254,7 +260,7 @@ function WhyItem({ reason: w, now, primary, cli, onAct, onUpstream, upstreams, r
           <li key={i}>{d.user} {d.decision === 'approve' ? 'approved' : 'rejected'}{d.counted ? '' : ` (not counted: ${d.reason ?? 'not allowed'})`}</li>
         ))}</ul>
       )}
-      {cli && (
+      {cli && !signInNote && (
         <p className="stage-why__cli">
           <span className="stage-muted">From a terminal: </span>
           <code className="stage-cli">{cli}</code>
@@ -273,6 +279,7 @@ function WhyItem({ reason: w, now, primary, cli, onAct, onUpstream, upstreams, r
         )}
         {w.next === 'openPR' && w.prURL && <a className="stage-link" href={w.prURL} target="_blank" rel="noreferrer">Open pull request</a>}
       </div>
+      {signInNote && <SignInNote command={signInNote} />}
       {w.gate && <GateDetails gate={w.gate} k8s />}
     </li>
   )

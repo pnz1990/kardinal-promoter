@@ -254,7 +254,10 @@ name under **Kubernetes details**, for `kubectl`.
 - **What you may do.** With TokenReview the UI asks the controller which actions you may take
   (`POST /api/v1/ui/access`, cached for 30 seconds). An action you may not take stays in place
   but does nothing, and says which of the chart's roles grants it; the controller checks every
-  action again when it is taken.
+  action again when it is taken. Without TokenReview, Approve and Decline are inert wherever
+  they appear (the drawer, the Table and the Activity tab), with one line under them:
+  "Approving needs sign-in with your Kubernetes identity — run `kardinal approve <pipeline>
+  <env>`", and a button that copies the command.
 - **Changes as they happen.** When a poll changes an environment's state or version, or an
   approval's count, its card gets a brief halo; with reduced motion, an outline until the next
   poll.
