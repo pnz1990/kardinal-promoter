@@ -11,12 +11,13 @@
 import { useState, useCallback, useRef, type RefObject } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { Pipeline } from '../types'
-import { HealthChip } from './HealthChip'
 import { displayState } from '../displayStates.gen'
 import CopyButton from './CopyButton'
 import { ErrorNotice } from '../ui/ErrorNotice'
 import '../styles/PipelineList.css'
 import { lowerFirst } from '../sentence'
+import { pipelineState } from '../pipelineState'
+import { StatusChip } from '../ui/Chips'
 
 
 /** Number of pipelines above which virtual scrolling is enabled (flat list only). */
@@ -74,6 +75,14 @@ function matchesQuery(p: Pipeline, query: string): boolean {
   return p.name.toLowerCase().includes(query) ||
     p.namespace.toLowerCase().includes(query) ||
     `${p.namespace}/${p.name}`.toLowerCase().includes(query)
+}
+
+/** A pipeline's state chip: pipelineState, the same words the header and the fleet use. */
+function PipelineStateChip({ pipeline }: { pipeline: Pipeline }) {
+  const st = pipelineState(pipeline)
+  // Paused is this chip (#328): the title says what it means.
+  const title = st.category === 'paused' ? 'Pipeline is paused — no new promotions will start' : st.label
+  return <StatusChip tone={st.tone} label={st.label} glyph={st.glyph} compact data-category={st.category} title={title} />
 }
 
 export function PipelineList({ pipelines, selected, selectedNamespace, onSelect, loading, error, onRetry, searchInputRef, total, initialQuery = '', onQueryChange }: Props) {
@@ -272,26 +281,13 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
                 </span>
               </div>
               <div className="pipeline-list__badges">
-                {/* Paused badge — visible accent when pipeline is paused (#328) */}
-                {p.paused && (
-                  <span
-                    title="Pipeline is paused — no new promotions will start"
-                    className="pipeline-list__paused"
-                  >
-                    PAUSED
-                  </span>
-                )}
-                {p.phase && (
+                {(p.phase || p.paused) && (
                   // #523: phase "Unknown" means no bundle yet: the display
                   // table says "No version yet".
                   // E2E-R05: a promoting pipeline held by a PolicyGate reads
                   // "Blocked" (amber, like the fleet bar's Blocked badge).
-                  <HealthChip
-                    state={p.paused ? 'Paused' : p.phase}
-                    kind="pipeline"
-                    label={!p.paused && p.phase === 'Promoting' && (p.blockerCount ?? 0) > 0 ? 'Blocked by a gate' : undefined}
-                    size="sm"
-                  />
+                  // The pipeline's one state (pipelineState), as the header and the fleet say it.
+                  <PipelineStateChip pipeline={p} />
                 )}
               </div>
             </div>

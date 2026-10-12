@@ -40,7 +40,7 @@ describe('ApprovalsPage (U7)', () => {
     const rows = within(screen.getByRole('list', { name: 'Waiting on you' })).getAllByRole('listitem')
     expect(rows.map(r => within(r).getByRole('link').textContent)).toEqual(['web › eu', 'web › prod'])
     expect(within(rows[1]).getByRole('link', { name: 'web, prod' })).toBeInTheDocument()
-    expect(rows[0]).toHaveTextContent('2h 0m')
+    expect(rows[0]).toHaveTextContent('2h')
     expect(rows[1]).toHaveTextContent('12m')
     expect(rows[1]).toHaveTextContent('1.5.0web-3·release-approval') // VersionLabel: the version, then the Bundle name
     expect(within(rows[1]).getByRole('img', { name: '1 of 2 approvals' })).toBeInTheDocument()

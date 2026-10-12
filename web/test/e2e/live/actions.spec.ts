@@ -25,10 +25,11 @@ const toolbar = (page: Page) => page.getByRole('toolbar', { name: 'Pipeline acti
 const lane = (page: Page) => page.locator('.station-map')
 /** The map's paused band (the header's state also says Paused). */
 const pausedHeader = (page: Page) => page.getByRole('status').filter({ hasText: 'Paused · no new promotions' })
-/** The sidebar's PAUSED badge on this test's pipeline. */
+/** The sidebar's Paused state chip on this test's pipeline. */
 async function sidebarBadge(page: Page) {
   await filterSidebar(page, ns)
-  return sidebarRow(page).getByTitle('Pipeline is paused — no new promotions will start')
+  // A paused pipeline's one state chip (pipelineState), titled with what paused means.
+  return sidebarRow(page).locator('[data-category="paused"]')
 }
 
 const steps: Record<string, () => void> = {
@@ -51,13 +52,13 @@ const steps: Record<string, () => void> = {
     await expect(pausedHeader(page)).toBeVisible()
     await expect(toolbar(page).getByRole('button', { name: 'Resume pipeline' })).toBeVisible()
     await expect(toolbar(page).getByRole('alert')).toHaveCount(0)
-    await expect(await sidebarBadge(page)).toHaveText('PAUSED')
+    await expect(await sidebarBadge(page)).toHaveText(/Paused$/)
   }),
 
   resume: () => test('Resume in the action bar asks first, then resumes the pipeline', async ({ page }) => {
     await openPipeline(page, base, ns)
     await expect(pausedHeader(page)).toBeVisible()
-    await expect(await sidebarBadge(page)).toHaveText('PAUSED')
+    await expect(await sidebarBadge(page)).toHaveText(/Paused$/)
     await toolbar(page).getByRole('button', { name: 'Resume pipeline' }).click()
     const dialog = page.getByRole('dialog', { name: 'Resume pipeline?' })
     await expect(dialog).toHaveAccessibleDescription('Held promotion steps for "podinfo" continue where they stopped.')
