@@ -644,3 +644,19 @@ func TestApprove_PinAndConfirm(t *testing.T) {
 	assert.Contains(t, out, "Recorded: alice approves app-v2 for prod")
 	assert.Len(t, approvals(t, c), 1)
 }
+
+// TestShortDuration: ship's times are to the second, and never negative: a
+// controller clock ahead of this one makes "for" 0s, not "-3s".
+func TestShortDuration(t *testing.T) {
+	for _, tc := range []struct {
+		d    time.Duration
+		want string
+	}{
+		{65*time.Second + 300*time.Millisecond, "1m5s"},
+		{400 * time.Millisecond, "0s"},
+		{0, "0s"},
+		{-3 * time.Second, "0s"},
+	} {
+		assert.Equal(t, tc.want, shortDuration(tc.d), "%v", tc.d)
+	}
+}

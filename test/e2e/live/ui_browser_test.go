@@ -807,9 +807,11 @@ func TestUI_BrowserStatic(t *testing.T) {
 // the group does too. The pipeline view shows 1 of 2, which decision counts
 // and which does not and why, and the approve command. The Bundle is then
 // rejected with the CLI: the view says who rejected it and why, its chip is
-// Rejected, and the gate no longer holds it.
+// Rejected, and the gate no longer holds it. Before that, the approvals
+// inbox lists the gate with its quorum; this UI runs without TokenReview, so
+// the inbox says it cannot record an approval and its Approve is inert.
 //
-// Covers UI-APPROVALS-01, UI-REJECTED-01.
+// Covers UI-APPROVALS-01, UI-REJECTED-01, UI-INBOX-01.
 func TestUI_BrowserApprovals(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -839,6 +841,7 @@ func TestUI_BrowserApprovals(t *testing.T) {
 	})
 	framework.Playwright(t, "approvals.spec.ts", browserEnv(mainUI(t, e), a.ns,
 		"KARDINAL_UI_BUNDLE", bundle, "KARDINAL_UI_APPROVER", approver, "KARDINAL_UI_OUTSIDER", outsider))
+	framework.Playwright(t, "inbox.spec.ts", browserEnv(mainUI(t, e), a.ns, "KARDINAL_UI_APPROVER", approver))
 
 	const reason = "e2e: CVE in the base image"
 	e.MustKardinal(t, a.ns, "reject", bundle, "--reason", reason)

@@ -41,6 +41,9 @@
 .k-button--destructive { background: transparent; border-color: var(--k-status-failed-fg); color: var(--k-status-failed-fg); }
 .k-button--destructive:hover:not(:disabled) { background: var(--k-status-failed-wash); }
 .k-button:disabled { cursor: not-allowed; opacity: 0.6; }
+/* An action the person may not take (U7): focusable, inert, its reason in the tooltip. */
+.k-button[aria-disabled="true"] { cursor: not-allowed; opacity: 0.6; }
+.k-button--primary[aria-disabled="true"]:hover { background: var(--k-ink); border-color: var(--k-ink); }
 .k-button[aria-busy="true"] { cursor: progress; }
 
 .k-icon-button {

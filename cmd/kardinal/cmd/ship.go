@@ -312,8 +312,9 @@ func (p *shipProgress) summary(envs []v1alpha1.PipelineEnvironmentStatus) {
 }
 
 // shortDuration is d to the second, as Go writes it (1m5s), 0s under one.
+// A negative d (the controller's clock ahead of this one) is 0s.
 func shortDuration(d time.Duration) string {
-	return d.Round(time.Second).String()
+	return max(d, 0).Round(time.Second).String()
 }
 
 // followShip is waitShip, printing its progress with p.
