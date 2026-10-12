@@ -54,6 +54,7 @@ var updateGolden = flag.Bool("update", false, "rewrite the golden files in testd
 //
 // Covers CLI-MODEL-01.
 func TestHelp_Golden(t *testing.T) {
+	keepStyle(t)
 	out, err := executeRoot(t, "--help")
 	require.NoError(t, err)
 	path := filepath.Join("testdata", "help.golden")

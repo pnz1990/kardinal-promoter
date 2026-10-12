@@ -228,3 +228,43 @@ func TestGetSubscriptionsFn(t *testing.T) {
 		assert.Equal(t, "list subscriptions: boom", err.Error())
 	})
 }
+
+// TestGetSubscriptions_LastVersionToken: LAST-VERSION is one token for
+// every kind of Subscription (a git one's commit, a helm one's chart
+// version), so the columns after it stay put; -o wide shows the whole
+// version.
+func TestGetSubscriptions_LastVersionToken(t *testing.T) {
+	sub := func(name string, typ v1alpha1.SubscriptionType, last string) *v1alpha1.Subscription {
+		s := makeTestSubscription(name, "default", "app", typ, "Watching", "")
+		s.Status.LastBundleCreated = last
+		return &s
+	}
+	config := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "cfg-b", Namespace: "default"},
+		Spec: v1alpha1.BundleSpec{Type: "config", Pipeline: "app", ConfigRef: &v1alpha1.ConfigRef{GitRepo: "https://github.com/acme/cfg", CommitSHA: "abc1234def5678"}}}
+	chart := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "chart-b", Namespace: "default"},
+		Spec: v1alpha1.BundleSpec{Type: "chart", Pipeline: "app", Chart: &v1alpha1.ChartRef{Name: "podinfo", Version: "6.5.0"}}}
+	image := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "img-b", Namespace: "default"},
+		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "app", Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/acme/app", Tag: "1.4.0"}}}}
+	c := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithObjects(
+		sub("git", v1alpha1.SubscriptionTypeGit, "cfg-b"), sub("helm", v1alpha1.SubscriptionTypeHelm, "chart-b"),
+		sub("img", v1alpha1.SubscriptionTypeImage, "img-b"), config, chart, image).Build()
+	cases := []struct {
+		output string
+		rows   map[string]string
+	}{
+		{"", map[string]string{"git": "abc1234", "helm": "6.5.0", "img": "1.4.0"}},
+		{"wide", map[string]string{"git": "config abc1234  +cfg-b", "helm": "podinfo 6.5.0  +chart-b", "img": "1.4.0  +img-b"}},
+	}
+	for _, tc := range cases {
+		t.Run("output="+tc.output, func(t *testing.T) {
+			prev := globalOutput
+			t.Cleanup(func() { globalOutput = prev })
+			globalOutput = tc.output
+			var buf bytes.Buffer
+			require.NoError(t, getSubscriptionsFn(&buf, c, "default", nil, false))
+			for name, want := range tc.rows {
+				assert.Regexp(t, `(?m)^`+name+` +\S+ +app +Watching +2m ago +`+want+` +\S+$`, buf.String())
+			}
+		})
+	}
+}

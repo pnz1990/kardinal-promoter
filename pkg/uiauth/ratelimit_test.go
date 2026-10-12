@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	authv1 "k8s.io/api/authentication/v1"
+	authzv1 "k8s.io/api/authorization/v1"
 )
 
 // guessReviewer authenticates the token "good" and counts reviews.
@@ -86,4 +87,50 @@ func TestRateLimitedReviewer_GlobalCap(t *testing.T) {
 	now = now.Add(time.Minute)
 	_, err = limited.Review(ctx("10.0.9.9:1"), "t")
 	assert.NoError(t, err)
+}
+
+// allowAll allows every check and counts them.
+type allowAll struct{ n int }
+
+func (a *allowAll) Allowed(context.Context, authv1.UserInfo, authzv1.ResourceAttributes) (bool, string, error) {
+	a.n++
+	return true, "", nil
+}
+
+// TestRateLimitedAccess: each user has a budget, everyone together another;
+// the error says which one ran out, both match ErrAccessRateLimited, no
+// review is sent past either, and both come back the next minute.
+func TestRateLimitedAccess(t *testing.T) {
+	inner := &allowAll{}
+	now := time.Unix(1_000_000, 0)
+	limited := NewRateLimitedAccessReviewer(inner, 2, 3).(*rateLimitedAccess)
+	limited.now = func() time.Time { return now }
+	check := func(user string) error {
+		_, _, err := limited.Allowed(context.Background(), authv1.UserInfo{Username: user}, authzv1.ResourceAttributes{Verb: "get"})
+		return err
+	}
+	tests := []struct {
+		name, user  string
+		want        error
+		wantReviews int
+	}{
+		{"alice 1", "alice", nil, 1},
+		{"alice 2", "alice", nil, 2},
+		{"alice is over her budget", "alice", ErrAccessUserRateLimited, 2},
+		{"bob 1", "bob", nil, 3},
+		{"bob is within his budget but everyone's is used", "bob", ErrAccessTotalRateLimited, 3},
+	}
+	for _, tt := range tests {
+		err := check(tt.user)
+		if tt.want == nil {
+			require.NoError(t, err, tt.name)
+		} else {
+			require.ErrorIs(t, err, tt.want, tt.name)
+			assert.ErrorIs(t, err, ErrAccessRateLimited, tt.name)
+		}
+		assert.Equal(t, tt.wantReviews, inner.n, tt.name)
+	}
+	assert.NotErrorIs(t, ErrAccessUserRateLimited, ErrAccessTotalRateLimited)
+	now = now.Add(time.Minute)
+	require.NoError(t, check("alice"), "the budgets come back the next minute")
 }

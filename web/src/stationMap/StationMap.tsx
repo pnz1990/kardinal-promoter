@@ -20,6 +20,7 @@ import { useMapViewport } from './useMapViewport'
 import { ageOf } from '../fleetModel'
 import { prNumberFromURL } from '../prLink'
 import { Icon } from '../ui'
+import { Segmented } from './Segmented'
 import '../styles/StationMap.css'
 import { lowerFirst } from '../sentence'
 
@@ -44,6 +45,10 @@ export interface StationMapProps {
   /** Open a gate's own details (its graph node id); without it a gate opens
    *  its environment's stage drawer at "why" (U3, #1701). */
   onOpenGate?: (gateNodeId: string) => void
+  /** The view switch (Map | Table | Matrix), shown in the map's bar. */
+  views?: React.ReactNode
+  /** A version the rail previews: its route as a ghost thread (--k-thread-ghost). */
+  ghost?: StationMapModel
 }
 
 /** About how wide a character of a gate label is, and the label's line height (--k-text-xs). */
@@ -58,6 +63,10 @@ const LABEL_PX = { sub: TEXT_PX.xs, name: TEXT_PX.sm, detailSub: TEXT_PX.sm, det
 const ROUNDING = 0.01
 const LINE_EM = 1.25
 
+/** One zoom step in and out (keys +/- and the narrow map's buttons). */
+const ZOOM_STEP_IN = 1.25
+const ZOOM_STEP_OUT = 0.8
+
 /** How long a gate's popover stays after the pointer leaves, so it can be reached (ms). */
 const POPOVER_HIDE_MS = 150
 
@@ -68,7 +77,7 @@ const LEVELS: ZoomLevel[] = ['overview', 'map', 'detail']
 const LEVEL_LABEL: Record<ZoomLevel, string> = { overview: 'Overview', map: 'Map', detail: 'Detail' }
 
 export default function StationMap(props: StationMapProps) {
-  const { model, compare, focused, onOpenStage, expanded, onToggleGroup, onSetExpanded, paused, followedVersion, actionsFor, onOpenGate } = props
+  const { model, compare, focused, onOpenStage, expanded, onToggleGroup, onSetExpanded, paused, followedVersion, actionsFor, onOpenGate, views, ghost } = props
   const svgRef = useRef<SVGSVGElement | null>(null)
   const searchRef = useRef<HTMLInputElement | null>(null)
   const descId = useId()
@@ -298,8 +307,8 @@ export default function StationMap(props: StationMapProps) {
         }
         break
       }
-      case '+': case '=': e.preventDefault(); vp.zoomBy(1.25); break
-      case '-': case '_': e.preventDefault(); vp.zoomBy(0.8); break
+      case '+': case '=': e.preventDefault(); vp.zoomBy(ZOOM_STEP_IN); break
+      case '-': case '_': e.preventDefault(); vp.zoomBy(ZOOM_STEP_OUT); break
       case '0': e.preventDefault(); vp.fit(); break
       // The map's own search, not the page's: the event stops here (the page's
       // shortcuts listen on the document).
@@ -414,12 +423,15 @@ export default function StationMap(props: StationMapProps) {
             }} />
           {query && <span className="station-map__count" aria-live="polite">{matches.length} {matches.length === 1 ? 'match' : 'matches'}</span>}
         </label>
-        <div className="station-map__levels" role="radiogroup" aria-label="Zoom level">
-          {LEVELS.map(l => (
-            <button key={l} type="button" role="radio" aria-checked={level === l} className="station-map__level"
-              onClick={() => vp.setLevel(l)}>{LEVEL_LABEL[l]}</button>
-          ))}
+        {views}
+        {/* On a narrow map the level control gives way to zoom buttons (touch also pinches). */}
+        <div className="station-map__zoom" role="group" aria-label="Zoom in or out">
+          <button type="button" aria-label="Zoom out" onClick={() => vp.zoomBy(ZOOM_STEP_OUT)}>−</button>
+          <button type="button" aria-label="Zoom in" onClick={() => vp.zoomBy(ZOOM_STEP_IN)}>+</button>
+          <button type="button" aria-label="Fit the map" onClick={() => vp.fit()}>⤢</button>
         </div>
+        <Segmented label="Zoom" className="station-map__levels" value={level} onChange={l => vp.setLevel(l)}
+          items={LEVELS.map(l => ({ id: l, text: LEVEL_LABEL[l] }))} />
       </div>
       {paused && <div className="station-map__paused-band" role="status">Paused · no new promotions</div>}
       <p id={descId} className="sr-only">
@@ -445,6 +457,14 @@ export default function StationMap(props: StationMapProps) {
             <path key={`lead>${to}`} d={pathOf(points)} className="station-map__lead" />
           ))}
         </g>
+        {ghost && (
+          <g className="station-map__thread station-map__thread--ghost" aria-hidden="true">
+            {ghost.thread.map(seg => {
+              const e = threadEdge(seg)
+              return e ? <path key={`${seg.from}>${seg.to}`} d={pathOf(e.points)} /> : null
+            })}
+          </g>
+        )}
         {compare && (
           <g className="station-map__thread station-map__thread--compare" aria-hidden="true">
             {compare.thread.map(seg => {
@@ -849,7 +869,8 @@ function GatePopover({ gate, env, x, y, view, onPointerEnter, onPointerLeave }: 
 
 /** What the map's marks mean (the DAG legend's wording, for the map). */
 const LEGEND: Array<{ tone: string; label: string; desc: string }> = [
-  { tone: 'verified', label: 'Live', desc: 'Deployed and healthy' },
+  // The map stays quiet: Live is ink here, the verified green is for chips and lists (DESIGN-SYSTEM §2.2).
+  { tone: 'verified', label: 'Live (ink)', desc: 'Deployed and healthy' },
   { tone: 'promoting', label: 'In progress', desc: 'Promoting, waiting for the PR to merge, or checking health' },
   { tone: 'failed', label: 'Failed', desc: 'Failed, or stopped by an alarm' },
   { tone: 'waiting', label: 'Waiting for PR merge', desc: 'A person is next: a PR to merge, or an approval' },

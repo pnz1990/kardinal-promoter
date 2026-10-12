@@ -88,6 +88,8 @@ Track with: kardinal explain my-app --env prod
 
 ```bash
 kardinal rollback my-app --env prod --to my-app-v1-27-0
+# or by version: the one Bundle of my-app that ships 1.27.0
+kardinal rollback my-app --env prod --to 1.27.0
 ```
 
 The `--to` flag names the version to roll back to. It must exist in the version history (within `historyLimit`), belong to the pipeline, carry images or a config ref, differ from what is deployed now, and have been Verified in the environment; otherwise the command fails and creates nothing. `--to` can name a version that an earlier rollback rolled back from. Images the deployed version changed and the `--to` version does not name are filled in the same way as without `--to`.
@@ -383,7 +385,7 @@ There is one row per PromotionStep, newest first; steps created in the same seco
 
 ## How Far Back Can You Roll Back
 
-The `historyLimit` field on the Pipeline (default: 50) determines how many versions are retained. `kardinal rollback --to <bundle>` can target any version within the history. Versions beyond the limit are garbage-collected, but the Git PRs remain as the permanent audit trail.
+The `historyLimit` field on the Pipeline (default: 50) determines how many versions are retained. `kardinal rollback --to <bundle|version>` can target any version within the history. Versions beyond the limit are garbage-collected, but the Git PRs remain as the permanent audit trail.
 
 ## Multi-Environment Rollback
 

@@ -38,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -216,12 +217,12 @@ func TestQuickstart_Preconditions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			writeKubeconfig(t, "kind-kardinal", "https://127.0.0.1:41234")
 			noCluster(t)
-			quickstartLookPath = func(name string) (string, error) {
+			setForTest(t, &quickstartLookPath, func(name string) (string, error) {
 				if name == tc.noTool {
 					return "", errors.New("not found")
 				}
 				return "/bin/" + name, nil
-			}
+			})
 			t.Setenv("GITHUB_TOKEN", tc.token)
 			oldGH := ghToken
 			ghToken = func() (string, error) { return "", errors.New("not logged in") }
@@ -286,6 +287,7 @@ func quickstartCluster(t *testing.T, objs ...sigs_client.Object) sigs_client.Cli
 		v1alpha1.GroupVersion.WithKind("Pipeline"),
 		v1alpha1.GroupVersion.WithKind("PolicyGate"),
 		v1alpha1.GroupVersion.WithKind("Bundle"),
+		v1alpha1.GroupVersion.WithKind("PromotionStep"),
 		corev1.SchemeGroupVersion.WithKind("Secret"),
 		corev1.SchemeGroupVersion.WithKind("Namespace"),
 		appsv1.SchemeGroupVersion.WithKind("Deployment"),
@@ -305,9 +307,31 @@ func quickstartCluster(t *testing.T, objs ...sigs_client.Object) sigs_client.Cli
 	}
 	all := append([]sigs_client.Object{ready("kro-system/kro"), ready("argocd/argocd-repo-server"),
 		ready("kardinal-system/kardinal-promoter")}, objs...)
+	// applied are the objects quickstart applied: Get gives them the field
+	// manager the API server records (the fake client keeps none).
+	applied := map[string]bool{}
 	c := fake.NewClientBuilder().WithScheme(rootScheme).WithRESTMapper(mapper).WithObjects(all...).
 		WithStatusSubresource(&appsv1.Deployment{}).
 		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl sigs_client.WithWatch, key sigs_client.ObjectKey, obj sigs_client.Object, opts ...sigs_client.GetOption) error {
+				if err := cl.Get(ctx, key, obj, opts...); err != nil {
+					return err
+				}
+				gvk, err := apiutil.GVKForObject(obj, cl.Scheme())
+				if err == nil && applied[gvk.Kind+"/"+key.Namespace+"/"+key.Name] {
+					obj.SetManagedFields([]metav1.ManagedFieldsEntry{{Manager: quickstartFieldManager, Operation: metav1.ManagedFieldsOperationApply}})
+				}
+				return nil
+			},
+			Delete: func(ctx context.Context, cl sigs_client.WithWatch, obj sigs_client.Object, opts ...sigs_client.DeleteOption) error {
+				if err := cl.Delete(ctx, obj, opts...); err != nil {
+					return err
+				}
+				if gvk, err := apiutil.GVKForObject(obj, cl.Scheme()); err == nil {
+					delete(applied, gvk.Kind+"/"+obj.GetNamespace()+"/"+obj.GetName())
+				}
+				return nil
+			},
 			Apply: func(ctx context.Context, cl sigs_client.WithWatch, obj runtime.ApplyConfiguration, _ ...sigs_client.ApplyOption) error {
 				content := obj.(interface{ UnstructuredContent() map[string]any }).UnstructuredContent()
 				u := &unstructured.Unstructured{Object: runtime.DeepCopyJSON(content)}
@@ -316,6 +340,7 @@ func quickstartCluster(t *testing.T, objs ...sigs_client.Object) sigs_client.Cli
 						"type": "Ready", "status": "True", "reason": "Valid", "message": "",
 						"lastTransitionTime": "2026-01-01T00:00:00Z"}}, "status", "conditions")
 				}
+				applied[u.GroupVersionKind().Kind+"/"+u.GetNamespace()+"/"+u.GetName()] = true
 				cur := &unstructured.Unstructured{}
 				cur.SetGroupVersionKind(u.GroupVersionKind())
 				err := cl.Get(ctx, sigs_client.ObjectKeyFromObject(u), cur)
@@ -361,7 +386,7 @@ func TestQuickstart_Demo(t *testing.T) {
 	writeKubeconfig(t, "kind-kardinal", "https://127.0.0.1:41234")
 	noCluster(t)
 	c := quickstartCluster(t)
-	quickstartClient = func(*clientcmdapi.Config) (sigs_client.Client, error) { return c, nil }
+	setForTest(t, &quickstartClient, func(*clientcmdapi.Config) (sigs_client.Client, error) { return c, nil })
 	StubIdentity(t, "kubernetes-admin")
 	t.Setenv("GITHUB_TOKEN", "s3cr3t-token")
 	o := quickstartOptions{repo: "https://github.com/me/kardinal-demo", image: quickstartImage, noWait: true}
@@ -442,12 +467,12 @@ func TestQuickstart_Installs(t *testing.T) {
 	// Nothing runs yet: every install step runs its commands.
 	c := fake.NewClientBuilder().WithScheme(rootScheme).Build()
 	var ran []string
-	quickstartRun = func(_ context.Context, name string, args ...string) (string, error) {
+	setForTest(t, &quickstartRun, func(_ context.Context, name string, args ...string) (string, error) {
 		line := name + " " + strings.Join(args, " ")
 		assert.NotContains(t, line, "s3cr3t-token")
 		ran = append(ran, line)
 		return "", nil
-	}
+	})
 	q := &quickstart{ctx: context.Background(), w: &bytes.Buffer{}, c: c, kctx: "kind-kardinal", kubeconfig: "/tmp/qs-kubeconfig",
 		o: quickstartOptions{chartVersion: "9.9.9", sets: []string{"ui.enabled=true"}}}
 	require.NoError(t, q.kro())
@@ -581,11 +606,11 @@ func TestQuickstart_InterruptRemovesKubeconfig(t *testing.T) {
 	noCluster(t)
 	t.Setenv("GITHUB_TOKEN", "tok")
 	c := fake.NewClientBuilder().WithScheme(rootScheme).Build() // nothing installed
-	quickstartClient = func(*clientcmdapi.Config) (sigs_client.Client, error) { return c, nil }
+	setForTest(t, &quickstartClient, func(*clientcmdapi.Config) (sigs_client.Client, error) { return c, nil })
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var file string
-	quickstartRun = func(ctx context.Context, name string, args ...string) (string, error) {
+	setForTest(t, &quickstartRun, func(ctx context.Context, name string, args ...string) (string, error) {
 		for i, a := range args {
 			if a == "--kubeconfig" {
 				file = args[i+1]
@@ -594,7 +619,7 @@ func TestQuickstart_InterruptRemovesKubeconfig(t *testing.T) {
 		require.FileExists(t, file, "helm and kubectl get the kubeconfig file")
 		cancel() // Ctrl-C while helm runs
 		return "", ctx.Err()
-	}
+	})
 	err := quickstartFn(ctx, &bytes.Buffer{}, quickstartOptions{repo: "https://github.com/me/kardinal-demo"})
 	require.Error(t, err)
 	require.NotEmpty(t, file)

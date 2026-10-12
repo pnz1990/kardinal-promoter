@@ -7,11 +7,13 @@ import userEvent from '@testing-library/user-event'
 
 const api = vi.hoisted(() => ({
   recordApproval: vi.fn(), overrideGate: vi.fn(), rollback: vi.fn(), releaseHold: vi.fn(), pause: vi.fn(),
-  resume: vi.fn(), rejectBundle: vi.fn(), getStepEvents: vi.fn(), validateCEL: vi.fn(),
+  resume: vi.fn(), rejectBundle: vi.fn(), getStepEvents: vi.fn(), checkAccess: vi.fn(), validateCEL: vi.fn(),
 }))
 vi.mock('../api/client', () => ({ api }))
 
-import { StageDrawer, cliCommand } from './StageDrawer'
+import { createRef } from 'react'
+import { resetAccessForTests } from '../access/access'
+import { StageDrawer, cliCommand, type StageCommand } from './StageDrawer'
 import type { Bundle, Pipeline, PolicyGate, PromotionStep } from '../types'
 
 const now = Date.parse('2026-10-11T09:03:00Z')
@@ -54,6 +56,10 @@ describe('StageDrawer (U3)', () => {
     Object.values(api).forEach(f => f.mockReset())
     api.getStepEvents.mockResolvedValue([])
     api.validateCEL.mockResolvedValue({ valid: true })
+    resetAccessForTests()
+    api.checkAccess.mockImplementation(async (_ns: string, checks: { resource: string }[]) => ({
+      user: { username: 'alice', groups: [] }, results: checks.map(() => ({ allowed: true })),
+    }))
   })
 
   it('puts why it is waiting first: the gate, its message and its age, before the actions', () => {
@@ -272,6 +278,32 @@ describe('StageDrawer (U3)', () => {
     await user.click(screen.getByRole('button', { name: 'Close prod' }))
     expect(props.onClose).toHaveBeenCalledOnce()
     await act(async () => {})
+  })
+
+  it('an action the person may not take stays in place, inert, with the role that grants it (U7)', async () => {
+    const user = userEvent.setup()
+    api.checkAccess.mockImplementation(async (_ns: string, checks: { verb: string; resource: string; subresource?: string }[]) => ({
+      user: { username: 'alice', groups: [] },
+      results: checks.map(c => c.resource === 'pipelines'
+        ? { allowed: false, grantedBy: 'promoter or admin' } : { allowed: true, grantedBy: 'approver or admin' }),
+    }))
+    renderDrawer()
+    const pause = await screen.findByRole('button', { name: 'Pause pipeline' })
+    await waitFor(() => expect(pause).toHaveAttribute('aria-disabled', 'true'))
+    expect(pause).toHaveAccessibleDescription('Pausing the pipeline needs the promoter or admin role.')
+    expect(screen.getByRole('list', { name: 'Not available to you' })).toHaveTextContent('Pausing the pipeline needs the promoter or admin role.')
+    await user.click(pause)
+    expect(screen.queryByRole('dialog', { name: 'Pause web?' })).not.toBeInTheDocument()
+    expect(reasonButton('Approve')).not.toHaveAttribute('aria-disabled')
+  })
+
+  it('the keyboard command opens an action the drawer offers, and says why it cannot otherwise (U7)', async () => {
+    const commandRef = createRef<StageCommand | null>() as { current: StageCommand | null }
+    renderDrawer([approvalGate], { commandRef })
+    await waitFor(() => expect(api.checkAccess).toHaveBeenCalled())
+    expect(commandRef.current?.('promote')).toBe(false)
+    act(() => { expect(commandRef.current?.('approve')).toBe(true) })
+    expect(screen.getByRole('dialog', { name: 'Approve 1.5.0 for prod?' })).toBeInTheDocument()
   })
 
   it('Details checks the gate\'s CEL with the controller; the step shows its sub-steps, running time and events (UI-NODE-01)', async () => {

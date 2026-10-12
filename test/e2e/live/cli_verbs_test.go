@@ -88,8 +88,16 @@ func TestCLI_ShipWait(t *testing.T) {
 	require.Equal(t, 0, r.Code, r.Output())
 	assert.Equal(t, fixtures.V2+" is live in test\n", r.Stdout)
 	assert.Contains(t, r.Stderr, "following it")
-	assert.Contains(t, r.Stderr, "test: Live")
+	assert.Regexp(t, `(?m)^ +\+\S+  test: Live$`, r.Stderr, "each state after the time since the start")
+	assert.Regexp(t, `(?m)^Summary after \S+:\n  test +Live +took \S+$`, r.Stderr, "a summary at the end")
 	assertEnvAt(t, b, "test", fixtures.V2)
+
+	// --quiet: only the last line, nothing on stderr.
+	r = c.Run(b.ns, "ship", pipelineName, "--image", fixtures.Image+":"+fixtures.V3, "--wait", "--quiet", "--timeout", "10m")
+	require.Equal(t, 0, r.Code, r.Output())
+	assert.Equal(t, fixtures.V3+" is live in test\n", r.Stdout)
+	assert.Empty(t, r.Stderr, "--quiet")
+	assertEnvAt(t, b, "test", fixtures.V3)
 
 	// hold: refused to someone without hold rights (an approver), then made,
 	// made again (a no-op), and released.
@@ -112,8 +120,8 @@ func TestCLI_ShipWait(t *testing.T) {
 	require.Equal(t, 0, r.Code, r.Output())
 
 	// Without --wait: the name on stdout, the watch hint on stderr.
-	r = c.Run(b.ns, "ship", pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
+	r = c.Run(b.ns, "ship", pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
 	require.Equal(t, 0, r.Code, r.Output())
-	assert.Regexp(t, `^Shipped `+fixtures.V3+` as podinfo-[a-z0-9]+\n$`, r.Stdout)
+	assert.Regexp(t, `^Shipped `+fixtures.V2+` as podinfo-[a-z0-9]+\n$`, r.Stdout)
 	assert.Equal(t, "Watch: kardinal status podinfo -w\n", r.Stderr)
 }

@@ -3,7 +3,8 @@
  * Licensed under the Apache License, Version 2.0
  *
  * BundleDiffPanel.css — the two-Bundle comparison (components/BundleDiffPanel.tsx), on the
- * dialog primitive. A changed field is marked blocked-ochre. Tokens only.
+ * dialog primitive. A changed field is marked with ≠ and a neutral sunken wash
+ * (--k-surface-sunken, never the hold tone). Tokens only.
  */
 
 .bundle-diff {
@@ -76,4 +77,14 @@
   text-align: center;
 }
 .bundle-diff__footer { margin-block-start: var(--k-space-4); text-align: end; }
+
+/* The two versions' marks, as on the map: the followed one's thread, the compared one's ink dash. */
+.bundle-diff__mark { display: inline-block; inline-size: var(--k-space-4); margin-inline-end: var(--k-space-1_5); vertical-align: middle; border-block-start: var(--k-stroke-thread) solid var(--k-thread); }
+.bundle-diff__mark--compared { border-block-start: var(--k-stroke-edge) dashed var(--k-ink); }
+/* One row per environment; a row where the states differ is marked. */
+.bundle-diff__envs { margin-block-end: var(--k-space-1); padding: var(--k-space-1_5) var(--k-space-2); border-radius: var(--k-radius-2); }
+.bundle-diff__envs[data-changed] { background: var(--k-surface-sunken); }
+.bundle-diff__row--env { padding-block: var(--k-space-0_5); }
+.bundle-diff__row--env[data-changed] .bundle-diff__env { color: var(--k-ink); font-weight: var(--k-weight-semibold); }
+.bundle-diff__env { font-family: var(--k-font-mono); font-size: var(--k-text-xs); color: var(--k-ink-2); }
 .bundle-diff__version { flex-wrap: wrap; overflow-wrap: anywhere; }

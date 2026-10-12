@@ -11,11 +11,14 @@
 // use the same verb.
 import { useId, useState } from 'react'
 import { api } from '../api/client'
-import { actionErrorMessage } from '../components/ConfirmDialog'
 import type { PolicyGate } from '../types'
 import { overrideChoices } from './overrideLimits'
 import { gateLabel, type StageActionKind, type StageView } from './stageModel'
+import { ActionButton } from './ActionButton'
+import { ApprovalDialog } from './ApprovalDialog'
 import { StageDialog } from './StageDialog'
+import { stageErrorMessage } from './stageErrors'
+import type { ReasonFor } from './useStageAccess'
 
 interface Props {
   view: StageView
@@ -30,6 +33,11 @@ interface Props {
   onChanged?: () => void
   /** Actions already offered next to their reason: not repeated in the row. */
   inline?: Set<StageActionKind>
+  /** Why an action is not available to the person at the UI (U7), or undefined. */
+  reasonFor?: ReasonFor
+  /** Only this environment's actions (the Table's row): no "Whole pipeline" group, no
+   *  "nothing to do" note. */
+  envOnly?: boolean
 }
 
 /** The button label of each action; the dialog and the result use the same verb. */
@@ -46,26 +54,27 @@ const PIPELINE_ORDER: StageActionKind[] = ['resume', 'pause', 'rejectVersion']
 /** Actions that undo or refuse something here: garnet outline, never the thread's red. */
 export const DESTRUCTIVE = new Set<StageActionKind>(['reject', 'rollback'])
 
-export function StageActions({ view, pipeline, namespace, active, activeGate, onOpen, onChanged, inline }: Props) {
+export function StageActions({ view, pipeline, namespace, active, activeGate, onOpen, onChanged, inline, envOnly, reasonFor }: Props) {
   const [result, setResult] = useState<string>()
   const envKinds = ENV_ORDER.filter(k => view.actions.has(k) && !inline?.has(k))
   const primary = view.primary && envKinds.includes(view.primary) ? view.primary : undefined
   const ordered = primary ? [primary, ...envKinds.filter(k => k !== primary)] : envKinds
-  const pipelineKinds = PIPELINE_ORDER.filter(k => view.actions.has(k))
+  const pipelineKinds = envOnly ? [] : PIPELINE_ORDER.filter(k => view.actions.has(k))
   const prURL = view.step?.prURL
+  // What the person may not do here, once each (U7).
+  const restrictions = [...new Set([...(inline ?? []), ...ordered, ...pipelineKinds]
+    .map(k => reasonFor?.(k)).filter((r): r is string => !!r))]
   const button = (k: StageActionKind, style: 'primary' | 'secondary' | 'destructive' | 'quiet') => k === 'openPR' && prURL
     ? <a key={k} data-action={k} className={`stage-button stage-button--${style}`} href={prURL} target="_blank" rel="noreferrer">
         {ACTION_LABEL[k]}
       </a>
-    : <button key={k} type="button" data-action={k} className={`stage-button stage-button--${style}`}
-        onClick={() => { setResult(undefined); onOpen(k) }}>
-        {ACTION_LABEL[k]}
-      </button>
+    : <ActionButton key={k} kind={k} label={ACTION_LABEL[k]} className={`stage-button stage-button--${style}`}
+        restricted={reasonFor?.(k)} onClick={() => { setResult(undefined); onOpen(k) }} />
   return (
     <>
       {ordered.length > 0
         ? <div className="stage-actions">{ordered.map(k => button(k, k === primary ? 'primary' : DESTRUCTIVE.has(k) ? 'destructive' : 'secondary'))}</div>
-        : <p className="stage-muted">{inline && inline.size > 0
+        : envOnly ? null : <p className="stage-muted">{inline && inline.size > 0
             ? 'Use the button next to each reason above.'
             : `Nothing to do in ${view.env} right now.`}</p>}
       {pipelineKinds.length > 0 && (
@@ -73,6 +82,11 @@ export function StageActions({ view, pipeline, namespace, active, activeGate, on
           <p className="stage-eyebrow">Whole pipeline</p>
           <div className="stage-actions">{pipelineKinds.map(k => button(k, 'quiet'))}</div>
         </div>
+      )}
+      {restrictions.length > 0 && (
+        <ul className="stage-restricted" aria-label="Not available to you">
+          {restrictions.map(r => <li key={r}>{r}</li>)}
+        </ul>
       )}
       {result && <p role="status" className="stage-result">{result}</p>}
       {active && active !== 'openPR' && (
@@ -82,31 +96,6 @@ export function StageActions({ view, pipeline, namespace, active, activeGate, on
       )}
     </>
   )
-}
-
-/**
- * What a failed action says: how to fix it. A 403 carries the controller's
- * text, which names the permission and the role that grants it; a 409 the
- * conflict as the server put it.
- */
-export function stageErrorMessage(action: string, err: unknown): string {
-  const text = err instanceof Error ? err.message : String(err)
-  const m = /^API error (\d+): ([\s\S]*)$/.exec(text)
-  if (!m) return actionErrorMessage(action, err)
-  const [, code, body] = m
-  const detail = body.trim()
-  switch (code) {
-    case '403':
-      return /role/.test(detail)
-        ? `You are not allowed to ${action}: ${detail}`
-        : `You are not allowed to ${action}${detail ? ` (${detail})` : ''}. Ask an admin for the kardinal role that grants it (promoter, approver or admin).`
-    case '409':
-      return `Could not ${action}: ${detail}. Refresh to see the current state, then try again.`
-    case '401':
-      return `Could not ${action}: your session ended. Sign in again, then retry.`
-    default:
-      return `Could not ${action}: ${detail}`
-  }
 }
 
 interface DialogProps {
@@ -160,22 +149,9 @@ function ActionDialog({ kind, view, pipeline, namespace, gate: openedFor, onCanc
   )
   switch (kind) {
     case 'approve':
-    case 'reject': {
-      const g = openedFor?.approval ? openedFor : approvalGates[0]
-      const a = g?.approval
-      const approve = kind === 'approve'
-      return (
-        <StageDialog {...common} title={`${approve ? 'Approve' : 'Decline'} ${shown} for ${env}?`}
-          description={approve
-            ? `Your approval counts toward ${g ? gateLabel(g) : 'the approval gate'}${a ? `: ${a.approved} of ${a.required} so far` : ''}. ${env} starts once the quorum is met and the other gates pass.`
-            : `Your decline holds ${g ? gateLabel(g) : 'the approval gate'}: ${shown} does not reach ${env} while it counts. It does not reject the version elsewhere.`}
-          confirmLabel={approve ? 'Approve' : 'Decline'} tone={approve ? 'default' : 'destructive'}
-          onConfirm={() => void run(`${approve ? 'approve' : 'decline'} ${shown} for ${env}`, () => api.recordApproval({ bundle: incoming, environment: env, namespace,
-            decision: kind, comment: text.trim() || undefined }), approve ? 'Approved' : 'Declined')}>
-          {reason('Comment', false, approve ? 'e.g. checked the canary dashboards' : 'e.g. error rate up in uat')}
-        </StageDialog>
-      )
-    }
+    case 'reject':
+      return <ApprovalDialog decision={kind} gate={openedFor?.approval ? openedFor : approvalGates[0]} bundle={incoming} version={shown}
+        env={env} namespace={namespace} onCancel={onCancel} onDone={onDone} />
     case 'override':
       return (
         <StageDialog {...common} title={`Override ${gateName || 'the gate'} in ${env}?`}

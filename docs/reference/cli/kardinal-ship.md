@@ -13,8 +13,11 @@ ship takes create bundle's flags and creates the same Bundle; create bundle
 stays. Without --wait it prints the Bundle's name and, on stderr, how to
 follow it.
 
---wait follows the Bundle, printing each new state of its environments on
-stderr, and ends with one line on stdout (or, with -o json, an object with
+--wait follows the Bundle, printing on stderr each new state of its
+environments after the time since the start (+1m5s), the URL of each PR it
+opens, and at the end a summary: each environment's last state and how long
+it took, or how long it has waited in it. --quiet (-q) prints none of that.
+It ends with one line on stdout (or, with -o json, an object with
 bundle, pipeline, namespace, type, version, url, result, exitCode, message
 and the Bundle's environments from status.environments). Exit codes:
 
@@ -72,6 +75,7 @@ kardinal ship <pipeline> --image <ref> [flags]
       --graph-compact-above int   With --dry-run: the controller's --graph-compact-above (chart graph.compactAbove), the environment count above which the Graph is compact (default 100)
   -h, --help                      help for ship
       --image stringArray         Container image reference (can be specified multiple times); required for image and mixed Bundles
+  -q, --quiet                     With --wait: print only the last line (or -o's document); no progress, PR links or summary on stderr
       --stop-at-gate              With --wait: stop (exit 3) at any gate that does not pass, also one that opens by itself (a soak, a schedule)
       --timeout duration          With --wait: give up after this long (exit 6) (default 30m)
       --type string               Bundle type: image, config or mixed (chart Bundles come from POST /api/v1/bundles or a Helm Subscription: this command has no chart flags) (default "image")

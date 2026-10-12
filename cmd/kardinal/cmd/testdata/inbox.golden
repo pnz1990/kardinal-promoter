@@ -4,15 +4,18 @@ Waiting on you (2):
   api        prod   3.2.0 (api-b)    held on 3.1.0 (api-a) by bob (INC-42)   kardinal unhold api prod
   shop       prod   2.0.0 (shop-b)   approval at cab · 0 of 2                kardinal approve shop prod
 
-Waiting on someone else (7):
+Waiting on someone else (10):
   PIPELINE   ENV      VERSION          WAITING FOR                                                                                    WHO
   web        prod     1.5.0 (web-b)    its PR to be merged                                                                            the PR's reviewers
   shop       canary   2.0.0 (shop-b)   approval at release-managers · 0 of 1                                                          someone other than you (you created this version)
   shop       eu       2.0.0 (shop-b)   gate labels, which does not open by itself                                                     someone who may override it
   auth       prod     5.0.0 (auth-b)   approval at cab · 0 of 1                                                                       dave, erin
   auth       dr       5.0.0 (auth-b)   approval at author, which no one can give (excludeAuthor, no verified creator)                 no one: ship it again as a person
-  shop       us       2.0.0 (shop-b)   approval at two · 1 of 2 (you approved; it needs someone else)                                 anyone who may create Approvals
+  shop       us       2.0.0 (shop-b)   approval at two · 1 of 2 (you approved; it needs someone else)                                 someone else who may approve
   feed       prod     0.1.0 (feed-b)   approval at cab, which no one can give (excludeAuthor, created by subscription:default/feed)   no one: ship it again as a person
+  ghost      prod     ghost-b          approval at cab · 0 of 1 (could not read the version ghost-b to see who created it)            anyone who may create Approvals
+  many       prod     4.0.0 (many-b)   approval at cab, which no one can give (more than 100 Approvals)                               someone who deletes the stale ones (kubectl get approvals)
+  many       dr       4.0.0 (many-b)   approval at author, which no one can give (excludeAuthor, no verified creator)                 no one: ship it again as a person
 
 $ kardinal inbox -n team-b
 Waiting on someone else (1):
@@ -25,40 +28,26 @@ Waiting on you (2):
   default/api    prod   3.2.0 (api-b)    held on 3.1.0 (api-a) by bob (INC-42)   kardinal unhold api prod
   default/shop   prod   2.0.0 (shop-b)   approval at cab · 0 of 2                kardinal approve shop prod
 
-Waiting on someone else (8):
-  PIPELINE       ENV      VERSION          WAITING FOR                                                                                    WHO
-  default/web    prod     1.5.0 (web-b)    its PR to be merged                                                                            the PR's reviewers
-  default/shop   canary   2.0.0 (shop-b)   approval at release-managers · 0 of 1                                                          someone other than you (you created this version)
-  default/shop   eu       2.0.0 (shop-b)   gate labels, which does not open by itself                                                     someone who may override it
-  default/auth   prod     5.0.0 (auth-b)   approval at cab · 0 of 1                                                                       dave, erin
-  default/auth   dr       5.0.0 (auth-b)   approval at author, which no one can give (excludeAuthor, no verified creator)                 no one: ship it again as a person
-  default/shop   us       2.0.0 (shop-b)   approval at two · 1 of 2 (you approved; it needs someone else)                                 anyone who may create Approvals
-  default/feed   prod     0.1.0 (feed-b)   approval at cab, which no one can give (excludeAuthor, created by subscription:default/feed)   no one: ship it again as a person
-  team-b/batch   -        -                the pipeline is paused                                                                         someone who may resume it
-
-$ kardinal inbox -A (namespaced rights only)
-Waiting on you (2):
-  PIPELINE       ENV    VERSION          WAITING FOR                             NEXT
-  default/api    prod   3.2.0 (api-b)    held on 3.1.0 (api-a) by bob (INC-42)   kardinal unhold api prod
-  default/shop   prod   2.0.0 (shop-b)   approval at cab · 0 of 2                kardinal approve shop prod
-
-Waiting on someone else (7):
-  PIPELINE       ENV      VERSION          WAITING FOR                                                                                    WHO
-  default/web    prod     1.5.0 (web-b)    its PR to be merged                                                                            the PR's reviewers
-  default/shop   canary   2.0.0 (shop-b)   approval at release-managers · 0 of 1                                                          someone other than you (you created this version)
-  default/shop   eu       2.0.0 (shop-b)   gate labels, which does not open by itself                                                     someone who may override it
-  default/auth   prod     5.0.0 (auth-b)   approval at cab · 0 of 1                                                                       dave, erin
-  default/auth   dr       5.0.0 (auth-b)   approval at author, which no one can give (excludeAuthor, no verified creator)                 no one: ship it again as a person
-  default/shop   us       2.0.0 (shop-b)   approval at two · 1 of 2 (you approved; it needs someone else)                                 anyone who may create Approvals
-  default/feed   prod     0.1.0 (feed-b)   approval at cab, which no one can give (excludeAuthor, created by subscription:default/feed)   no one: ship it again as a person
-stderr: note: skipped what you may not read: team-b
+Waiting on someone else (11):
+  PIPELINE        ENV      VERSION          WAITING FOR                                                                                    WHO
+  default/web     prod     1.5.0 (web-b)    its PR to be merged                                                                            the PR's reviewers
+  default/shop    canary   2.0.0 (shop-b)   approval at release-managers · 0 of 1                                                          someone other than you (you created this version)
+  default/shop    eu       2.0.0 (shop-b)   gate labels, which does not open by itself                                                     someone who may override it
+  default/auth    prod     5.0.0 (auth-b)   approval at cab · 0 of 1                                                                       dave, erin
+  default/auth    dr       5.0.0 (auth-b)   approval at author, which no one can give (excludeAuthor, no verified creator)                 no one: ship it again as a person
+  default/shop    us       2.0.0 (shop-b)   approval at two · 1 of 2 (you approved; it needs someone else)                                 someone else who may approve
+  default/feed    prod     0.1.0 (feed-b)   approval at cab, which no one can give (excludeAuthor, created by subscription:default/feed)   no one: ship it again as a person
+  default/ghost   prod     ghost-b          approval at cab · 0 of 1 (could not read the version ghost-b to see who created it)            anyone who may create Approvals
+  default/many    prod     4.0.0 (many-b)   approval at cab, which no one can give (more than 100 Approvals)                               someone who deletes the stale ones (kubectl get approvals)
+  default/many    dr       4.0.0 (many-b)   approval at author, which no one can give (excludeAuthor, no verified creator)                 no one: ship it again as a person
+  team-b/batch    -        -                the pipeline is paused                                                                         someone who may resume it
 
 $ kardinal inbox (SelfSubjectReview fails)
 Waiting on you (1):
   PIPELINE   ENV    VERSION         WAITING FOR                             NEXT
   api        prod   3.2.0 (api-b)   held on 3.1.0 (api-a) by bob (INC-42)   kardinal unhold api prod
 
-Waiting on someone else (8):
+Waiting on someone else (11):
   PIPELINE   ENV      VERSION          WAITING FOR                                                                                    WHO
   web        prod     1.5.0 (web-b)    its PR to be merged                                                                            the PR's reviewers
   shop       prod     2.0.0 (shop-b)   approval at cab · 0 of 2                                                                       group release-managers
@@ -68,5 +57,8 @@ Waiting on someone else (8):
   auth       dr       5.0.0 (auth-b)   approval at author, which no one can give (excludeAuthor, no verified creator)                 no one: ship it again as a person
   shop       us       2.0.0 (shop-b)   approval at two · 1 of 2                                                                       anyone who may create Approvals
   feed       prod     0.1.0 (feed-b)   approval at cab, which no one can give (excludeAuthor, created by subscription:default/feed)   no one: ship it again as a person
+  ghost      prod     ghost-b          approval at cab · 0 of 1 (could not read the version ghost-b to see who created it)            anyone who may create Approvals
+  many       prod     4.0.0 (many-b)   approval at cab, which no one can give (more than 100 Approvals)                               someone who deletes the stale ones (kubectl get approvals)
+  many       dr       4.0.0 (many-b)   approval at author, which no one can give (excludeAuthor, no verified creator)                 no one: ship it again as a person
 stderr: note: could not tell who you are (selfsubjectreviews is forbidden): approvals are listed under someone else
 

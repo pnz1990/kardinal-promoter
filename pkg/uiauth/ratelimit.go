@@ -6,11 +6,13 @@ package uiauth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"time"
 
 	authv1 "k8s.io/api/authentication/v1"
+	authzv1 "k8s.io/api/authorization/v1"
 )
 
 // DefaultReviewsPerClientPerMinute bounds the TokenReviews one client address
@@ -85,4 +87,73 @@ func (r *rateLimitedReviewer) allow(addr string) bool {
 	r.counts[addr]++
 	r.all++
 	return true
+}
+
+// DefaultAccessReviewsPerUserPerMinute bounds the SubjectAccessReviews one
+// user can cause through POST /api/v1/ui/access, the only caller limited:
+// request authorization does not share the budget. Reviews come after the cache, so a UI that asks about the
+// same objects costs one review each per DefaultCacheTTL; only a caller that
+// keeps naming new objects (POST /api/v1/ui/access with fresh names) reaches it.
+const DefaultAccessReviewsPerUserPerMinute = 300
+
+// DefaultAccessReviewsPerMinute bounds the SubjectAccessReviews all users
+// together can cause.
+const DefaultAccessReviewsPerMinute = 3000
+
+// ErrAccessRateLimited is returned by a rate-limited access reviewer when
+// its budget for the current minute is used: errors.Is matches both
+// ErrAccessUserRateLimited and ErrAccessTotalRateLimited. Callers answer 429.
+var ErrAccessRateLimited = errors.New("uiauth: too many authorization checks")
+
+// ErrAccessUserRateLimited is the user's own per-minute budget being used.
+var ErrAccessUserRateLimited = fmt.Errorf("%w for this user", ErrAccessRateLimited)
+
+// ErrAccessTotalRateLimited is the budget for all users together being used.
+var ErrAccessTotalRateLimited = fmt.Errorf("%w for all users", ErrAccessRateLimited)
+
+// rateLimitedAccess allows perMinute SubjectAccessReviews per user (by
+// username) and total for everyone in each one-minute window, as
+// rateLimitedReviewer does for TokenReviews per client address.
+type rateLimitedAccess struct {
+	inner     AccessReviewer
+	perMinute int
+	total     int
+	now       func() time.Time
+
+	mu      sync.Mutex
+	counts  map[string]int
+	all     int
+	resetAt time.Time
+}
+
+// NewRateLimitedAccessReviewer limits the reviews inner performs to perMinute
+// per user and total per minute for all users. Wrap it in
+// NewCachedAccessReviewer so cached decisions do not count.
+func NewRateLimitedAccessReviewer(inner AccessReviewer, perMinute, total int) AccessReviewer {
+	return &rateLimitedAccess{inner: inner, perMinute: perMinute, total: total, now: time.Now, counts: map[string]int{}}
+}
+
+func (r *rateLimitedAccess) Allowed(ctx context.Context, user authv1.UserInfo, attrs authzv1.ResourceAttributes) (bool, string, error) {
+	r.mu.Lock()
+	now := r.now()
+	if !now.Before(r.resetAt) {
+		r.counts = map[string]int{}
+		r.all = 0
+		r.resetAt = now.Add(time.Minute)
+	}
+	var limited error
+	switch {
+	case r.counts[user.Username] >= r.perMinute:
+		limited = ErrAccessUserRateLimited
+	case r.total > 0 && r.all >= r.total:
+		limited = ErrAccessTotalRateLimited
+	default:
+		r.counts[user.Username]++
+		r.all++
+	}
+	r.mu.Unlock()
+	if limited != nil {
+		return false, "", limited
+	}
+	return r.inner.Allowed(ctx, user, attrs)
 }
