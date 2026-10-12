@@ -35,7 +35,7 @@ test('the inbox lists the approval waiting in prod; without sign-in it cannot re
   await expect(row).toContainText(`1 of 2 · ${approver} approved`)
   const approve = row.getByRole('button', { name: 'Approve' })
   await expect(approve).toHaveAttribute('aria-disabled', 'true')
-  await expect(approve).toHaveAttribute('title', /^Approving from the UI names who decided/)
+  await expect(approve).toHaveAttribute('title', `Approving needs sign-in with your Kubernetes identity — run kardinal approve ${PIPELINE} prod -n ${ns}`)
   await approve.click({ force: true })
   await expect(page.getByRole('dialog')).toHaveCount(0)
 

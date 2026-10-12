@@ -17,6 +17,29 @@ const DOING: Record<UIAction, string> = {
   openPR: 'Opening the pull request', ship: 'Shipping a version',
 }
 
+/** A decision on an approval gate: approve, decline (--decision reject) or revoke one's own. */
+export type Decision = 'approve' | 'reject' | 'revoke'
+
+const DECIDING: Record<Decision, string> = { approve: 'Approving', reject: 'Declining', revoke: 'Revoking your decision' }
+
+/** kardinal approve for an environment's incoming version (-n outside default), for decision. */
+export function approveCommand(pipeline: string, env: string, namespace: string, decision: Decision = 'approve'): string {
+  const ns = namespace && namespace !== 'default' ? ` -n ${namespace}` : ''
+  const flag = decision === 'reject' ? ' --decision reject' : decision === 'revoke' ? ' --revoke' : ''
+  return `kardinal approve ${pipeline} ${env}${ns}${flag}`
+}
+
+/** The words before the command, without sign-in: "Approving needs sign-in … — run". */
+export function signInLead(decision: Decision): string {
+  return `${DECIDING[decision]} needs sign-in with your Kubernetes identity — run`
+}
+
+/** Why a decision needs sign-in, with the command that works without it: the one wording
+ *  for the visible line, the tooltip, the screen-reader text and the a key's note. */
+export function signInReason(decision: Decision, command?: string): string {
+  return `${signInLead(decision)} ${command ?? `kardinal approve <pipeline> <env>${decision === 'reject' ? ' --decision reject' : decision === 'revoke' ? ' --revoke' : ''}`}`
+}
+
 /** The check that decides whether action may be taken, or undefined when none does. */
 export function actionCheck(action: UIAction, ctx: { pipeline?: string; gate?: string; bundle?: string }): AccessCheck | undefined {
   switch (action) {
@@ -60,7 +83,9 @@ export function restriction(action: UIAction, perm: Permission | undefined, iden
   gate?: PolicyGate, gateName?: string): string | undefined {
   const decides = action === 'approve' || action === 'reject'
   if (decides && identity === null) {
-    return `${DOING[action]} from the UI names who decided, so it needs sign-in with your Kubernetes token (TokenReview mode). kardinal approve works without it.`
+    const decision = action === 'reject' ? 'reject' : 'approve'
+    return signInReason(decision, gate?.pipeline && gate.environment
+      ? approveCommand(gate.pipeline, gate.environment, gate.namespace, decision) : undefined)
   }
   if (perm && perm.known && !perm.allowed) {
     if (perm.reason) return `${perm.reason.charAt(0).toUpperCase()}${perm.reason.slice(1)}.`

@@ -36,5 +36,6 @@ test('an approval gate shows its quorum and who approved', async ({ page }) => {
   const notCounted = rows.filter({ hasText: outsider })
   await expect(notCounted).toHaveAttribute('data-counted', 'false')
   await expect(notCounted).toContainText('not counted')
-  await expect(page.getByText(`kardinal approve ${PIPELINE} prod -n ${ns}`)).toBeVisible()
+  // The command, as the CLI hint or (without sign-in) the sign-in line; the buttons' descriptions hold it too.
+  await expect(page.getByText(`kardinal approve ${PIPELINE} prod -n ${ns}`, { exact: true })).toBeVisible()
 })

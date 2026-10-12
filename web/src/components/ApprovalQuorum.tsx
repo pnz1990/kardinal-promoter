@@ -13,7 +13,11 @@ import CopyButton from './CopyButton'
 import { ApprovalActions } from './ApprovalActions'
 import { formatRelativeAge } from './approvalAge'
 import '../styles/ApprovalQuorum.css'
-import { cliCommand } from '../stage/StageDrawer'
+import { useAccess } from '../access/access'
+import { restriction, signInReason, type Decision } from '../access/actionAccess'
+import { approveCommand, SignInNote } from '../stage/signIn'
+
+const APPROVE = { verb: 'create', resource: 'approvals' } as const
 
 /** Pips drawn; a larger quorum is shown as text only. */
 const MAX_PIPS = 10
@@ -72,11 +76,22 @@ export function ApprovalQuorum({ approval: a, pipeline, bundle, environment, nam
   const state = a.rejected ? 'rejected' : a.approved >= a.required ? 'approved' : 'waiting'
   // The command the stage drawer shows (C5: kardinal approve <pipeline> <env>, -n outside default).
   const ns = namespace && namespace !== 'default' ? ` -n ${namespace}` : ''
-  const command = !environment ? ''
-    : current && pipeline ? cliCommand({ kind: 'approval', title: '' }, pipeline, environment, namespace ?? 'default') ?? ''
+  const commandFor = (d: Decision) => !environment ? ''
+    : current && pipeline ? approveCommand(pipeline, environment, namespace ?? 'default', d)
       // Not the version on its way in: name it, or the CLI would approve the incoming one.
-      : bundle ? `kardinal approve ${bundle} --env ${environment}${ns}` : ''
+      : bundle ? `kardinal approve ${bundle} --env ${environment}${ns}${d === 'reject' ? ' --decision reject' : d === 'revoke' ? ' --revoke' : ''}` : ''
+  const command = commandFor('approve')
   const decisions = a.decisions ?? []
+  // U7: whether the person may decide here. Without sign-in the one line under the
+  // inert buttons says so, with the command; a missing role is said once below them.
+  const { can, identity } = useAccess(bundle && environment ? namespace : undefined, [APPROVE])
+  const signIn = identity === null
+  // Without sign-in every decision says the same words, with its own command.
+  const reasonFor = (d: Decision) => signIn ? signInReason(d, commandFor(d) || undefined)
+    : restriction(d === 'revoke' ? 'approve' : d, can(APPROVE), identity)
+  const restricted = reasonFor('approve')
+  // An approved gate leaves Revoke mine: its line names the revoke command.
+  const noteDecision: Decision = state === 'approved' ? 'revoke' : 'approve'
   return (
     <div className="approval-quorum" data-state={state}>
       <div className="approval-quorum__head">
@@ -104,9 +119,12 @@ export function ApprovalQuorum({ approval: a, pipeline, bundle, environment, nam
         <div className="approval-quorum__none">No decisions yet.</div>
       )}
       {bundle && environment && namespace && (
-        <ApprovalActions bundle={bundle} environment={environment} namespace={namespace} onDone={onDecided} />
+        <ApprovalActions bundle={bundle} environment={environment} namespace={namespace} onDone={onDecided} reasonFor={reasonFor} />
       )}
-      {command && state !== 'approved' && (
+      {signIn && bundle && environment && namespace && commandFor(noteDecision) &&
+        <SignInNote command={commandFor(noteDecision)} decision={noteDecision} />}
+      {!signIn && restricted && bundle && environment && namespace && <p className="approval-quorum__restricted">{restricted}</p>}
+      {!signIn && command && state !== 'approved' && (
         <div className="approval-quorum__how">
           <span>Or from the CLI:</span>
           <code>{command}</code>
