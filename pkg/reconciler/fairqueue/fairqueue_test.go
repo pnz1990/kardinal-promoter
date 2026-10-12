@@ -145,10 +145,11 @@ func TestQueue_StarvationSimulation(t *testing.T) {
 	plain := simulate(t, false)
 	fair := simulate(t, true)
 	t.Logf("a's items handed out before b's: %d with the plain priority queue, %d with the fair queue", plain, fair)
-	// Items already on their way to a worker when b's arrives (the queue
-	// hands items over asynchronously) may still go first: at most one per
-	// worker.
-	assert.LessOrEqual(t, fair, int64(16), "b's item is served within one round of the workers")
+	// The count is loose by up to a round on each side of b's item: a
+	// worker that got its item just before b's was added may read bAdded
+	// after it was set, and workers keep counting between the Get that
+	// hands out b's item and the store of bAt. So at most two rounds.
+	assert.LessOrEqual(t, fair, int64(2*16), "b's item is served within a round or two of the workers")
 	assert.Greater(t, plain, int64(200), "the plain queue serves a's backlog first")
 }
 
