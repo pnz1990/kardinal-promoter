@@ -67,7 +67,7 @@ jobs:
         run: go run ./hack/gen-cli-docs/main.go --output docs/reference/cli/ --quickref docs/cli-reference.md --nav ""
 
       - name: Upload generated CLI docs
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: generated-cli-docs
           path: docs/reference/cli/
@@ -117,7 +117,7 @@ jobs:
         run: go run ./hack/check-site-offline site
 
       - name: Upload site artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: docs-site
           path: site/
