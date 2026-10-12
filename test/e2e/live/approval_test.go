@@ -259,9 +259,9 @@ func approvalAndRuleOnPRReview(t *testing.T, shape string) {
 	require.Equal(t, 0, r.Code, r.Output())
 	e.WaitGateReady(t, a.ns, bundle, "prod", "prod-approval", true, "", gateTimeout)
 
-	ps, pr := a.waitOpenPR(t, bundle, "prod")
+	_, pr := a.waitOpenPR(t, bundle, "prod")
 	assert.Equal(t, "open", pr.State)
-	ps = e.WaitStep(t, a.ns, pipelineName, bundle, "prod", gateTimeout, "both gates mirrored onto the prod step",
+	ps := e.WaitStep(t, a.ns, pipelineName, bundle, "prod", gateTimeout, "both gates mirrored onto the prod step",
 		func(ps *v1alpha1.PromotionStep) (bool, string) {
 			if ps.Spec.Live == nil {
 				return false, "no spec.live"
