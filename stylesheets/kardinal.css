@@ -67,13 +67,6 @@
   --md-footer-fg-color--lighter: var(--k-ink-3);
   --md-footer-bg-color: var(--k-surface-sunken);
   --md-footer-bg-color--dark: var(--k-surface-sunken);
-
-  --md-mermaid-font-family: var(--k-font-body);
-  --md-mermaid-edge-color: var(--k-ink-node);
-  --md-mermaid-node-bg-color: var(--k-surface-base);
-  --md-mermaid-node-fg-color: var(--k-ink);
-  --md-mermaid-label-bg-color: var(--k-surface-canvas);
-  --md-mermaid-label-fg-color: var(--k-ink-2);
 }
 
 .md-typeset a {
