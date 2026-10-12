@@ -528,6 +528,11 @@ failed (Why the step's message; Next: kardinal logs, or roll back); it is
 promoting; it waits for an upstream environment; it has no version yet; or
 nothing is waiting ("prod runs 1.5.0 and nothing is waiting.").
 
+why shows the gates the version started with. A version gets its gates when
+it starts promoting, so a gate created or edited later applies to the
+versions shipped after it, not to one already waiting (Policy Gates, "When a
+new or edited gate takes effect").
+
 -o wide prints kardinal explain's table (every step and gate of the current
 version, with kinds and expressions), with the commands that get past a
 gate on stderr; -o json and yaml print explain's entries.`
