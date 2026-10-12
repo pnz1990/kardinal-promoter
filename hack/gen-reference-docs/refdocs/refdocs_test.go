@@ -1,7 +1,7 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 
-package main
+package refdocs
 
 import (
 	"os"
@@ -84,26 +84,17 @@ func TestControllerFlagsPage(t *testing.T) {
 	}
 }
 
-// TestReferencePagesAreUpToDate fails when docs/reference/helm-values.md or
-// controller-flags.md does not match values.yaml and the controller's flags;
-// run: make reference-docs. It runs in "go test ./...", so a flag change in
-// any package the controller imports is caught.
-func TestReferencePagesAreUpToDate(t *testing.T) {
-	if testing.Short() {
-		t.Skip("builds the controller")
-	}
-	src, err := os.ReadFile("../../chart/kardinal-promoter/values.yaml")
+// TestHelmValuesPageIsUpToDate fails when docs/reference/helm-values.md does
+// not match values.yaml; run: make reference-docs. The controller flags page
+// is checked by TestControllerFlagsPageIsUpToDate in cmd/kardinal-controller,
+// whose test binary already has the controller's flags, so no test builds the
+// controller a second time.
+func TestHelmValuesPageIsUpToDate(t *testing.T) {
+	src, err := os.ReadFile("../../../chart/kardinal-promoter/values.yaml")
 	require.NoError(t, err)
-	helm, err := HelmValuesPage(src)
+	want, err := HelmValuesPage(src)
 	require.NoError(t, err)
-	help, err := controllerHelp("../..")
+	got, err := os.ReadFile("../../../docs/reference/helm-values.md")
 	require.NoError(t, err)
-	for path, want := range map[string]string{
-		"../../docs/reference/helm-values.md":      helm,
-		"../../docs/reference/controller-flags.md": ControllerFlagsPage(help),
-	} {
-		got, err := os.ReadFile(path)
-		require.NoError(t, err)
-		assert.Equal(t, want, string(got), "%s is stale; run: make reference-docs", path)
-	}
+	assert.Equal(t, want, string(got), "docs/reference/helm-values.md is stale; run: make reference-docs")
 }
