@@ -166,7 +166,16 @@ func TestUIHandler_PipelineOverride(t *testing.T) {
 			var resp uiPipelineOverrideResponse
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 			assert.Equal(t, []string{"no-weekend--app-v2-prod"}, resp.Gates)
+			assert.Equal(t, "gate no-weekend overridden in prod for 1 version in progress until "+resp.ExpiresAt, resp.Message)
 		})
+	}
+}
+
+// TestVersionsInProgress: the override reply counts versions in words, not
+// the kind name with "(s)".
+func TestVersionsInProgress(t *testing.T) {
+	for n, want := range map[int]string{0: "0 versions in progress", 1: "1 version in progress", 2: "2 versions in progress"} {
+		assert.Equal(t, want, versionsInProgress(n))
 	}
 }
 

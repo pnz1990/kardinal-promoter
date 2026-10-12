@@ -185,7 +185,7 @@ name under **Kubernetes details**, for `kubectl`.
 Each Pipeline has one state, the same in the page header, the sidebar badge, the operations
 table, the fleet board and the health counters: paused, a failed version, held by a gate
 (`Held by gate prod-approval in prod`, from `status.environments`; the sidebar badge reads
-`Blocked · 1 gate`, with the whole state as its tooltip), promoting, no version yet, or up to
+`Blocked · 1`, the number of gates holding it, with the whole state as its tooltip), promoting, no version yet, or up to
 date. Each Pipeline counts in exactly one of Healthy, Blocked, Failed, Promoting and
 Paused (Failed and Paused show when there is one); one with no version yet counts only in the
 total. On the map, the label on an edge names the gate that holds the version first, with its
