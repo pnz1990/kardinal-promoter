@@ -222,6 +222,10 @@ kardinal picks the adapter in this order: `delivery.delegate` (set it to `argoRo
 `flagger` when a progressive-delivery controller rolls the workload out), then `health.type`,
 then `resource`. See [Health checks](health-adapters.md).
 
+With `argocd` and `flux`, a step whose commit is in git asks the Application, or the Kustomization
+and its GitRepository, to sync it now, once, instead of waiting for the tool's poll (every 3
+minutes by default for Argo CD). See [Sync on promotion](health-adapters.md#sync-on-promotion).
+
 ### Several clusters
 
 kardinal runs in one cluster. If an Argo CD or Flux installation (a **hub**) manages your
