@@ -331,14 +331,6 @@ health:
 
   With a hub, kardinal sees only what the hub reports: while a managed spoke is unreachable, the hub's status is what Argo CD or Flux last recorded. A cluster that runs its own Argo CD or Flux and is not managed from the hub needs `kubeconfigSecretRef`.
 
-`spec.environments[].shard` is deprecated and not supported (removed in v0.11): a non-empty value sets the Pipeline `Ready=False` (reason `NotImplemented`) and `kardinal validate` fails. Leave it unset; the controller reconciles every environment.
-
-`health.cluster` is deprecated and not supported (removed in v0.11); use `health.kubeconfigSecretRef` or the Argo CD or Flux hub. The Pipeline is `Ready=False` (reason `NotImplemented`), `kardinal validate` fails, and a PromotionStep whose environment sets it fails with:
-
-```
-health.cluster is not supported: to check a workload in another cluster set health.kubeconfigSecretRef to a kubeconfig Secret, or check its Argo CD Application or Flux Kustomization in this cluster (health.type: argocd or flux, see docs/health-adapters.md#remote-clusters)
-```
-
 ## Timings and failures
 
 | Setting | Value | Effect |

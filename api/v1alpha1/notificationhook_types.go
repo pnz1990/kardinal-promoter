@@ -78,23 +78,11 @@ type NotificationSecretRef struct {
 
 // NotificationWebhookConfig describes a single HTTP webhook endpoint.
 // +kubebuilder:validation:XValidation:rule="(has(self.url) && size(self.url) > 0) || has(self.secretRef)",message="webhook: set url, or secretRef with a url key"
-// +kubebuilder:validation:XValidation:rule="!(has(self.authorizationHeader) && size(self.authorizationHeader) > 0 && has(self.secretRef))",message="webhook: authorizationHeader and secretRef are mutually exclusive; move the header into the Secret's authorization key"
 type NotificationWebhookConfig struct {
 	// URL is the HTTPS URL to POST the notification payload to. Optional when
 	// secretRef names a Secret with a url key, which takes precedence.
 	// +optional
 	URL string `json:"url,omitempty"`
-
-	// AuthorizationHeader is the value of the Authorization header to include in the POST.
-	// Typically "Bearer <token>" or "Token <secret>".
-	//
-	// Deprecated: use secretRef. The value is stored in plain text in the spec
-	// and sent as is: anyone who can read this NotificationHook can read it.
-	// A hook that sets it still delivers, and has the condition
-	// PlaintextCredential=True.
-	// It is removed in v0.11.
-	// +optional
-	AuthorizationHeader string `json:"authorizationHeader,omitempty"`
 
 	// SecretRef names a Secret in the hook's namespace holding the
 	// Authorization header value (key authorization) and/or the webhook URL
@@ -226,8 +214,7 @@ type NotificationHookStatus struct {
 
 	// Conditions: Ready is False when the hook cannot deliver (its Secret is
 	// missing or lacks a key, or its template does not parse); events wait
-	// until it is fixed. PlaintextCredential is True while
-	// spec.webhook.authorizationHeader is set.
+	// until it is fixed.
 	// +optional
 	// +listType=map
 	// +listMapKey=type

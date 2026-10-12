@@ -207,13 +207,6 @@ func TestBuild_RejectsInvalidInput(t *testing.T) {
 		{"duplicate environment", func(p *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) {
 			p.Spec.Environments[1].Name = "test"
 		}, "declared twice"},
-		// #1304: two or more regions fail at Graph build, before any step.
-		{"two regions", func(p *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) {
-			p.Spec.Environments[1].Regions = []string{"us-east-1", "eu-west-1"} //nolint:staticcheck // SA1019: tests the rejection
-		}, `environment "prod": regions is not supported; declare one environment per region (prod-us, prod-eu) and use wave`},
-		{"two invalid regions", func(p *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) {
-			p.Spec.Environments[1].Regions = []string{"US_EAST", "US_EAST"} //nolint:staticcheck // SA1019: tests the rejection
-		}, "regions is not supported"},
 		{"unknown skipped environment", func(_ *kardinalv1alpha1.Pipeline, b *kardinalv1alpha1.Bundle) {
 			b.Spec.Intent = &kardinalv1alpha1.BundleIntent{SkipEnvironments: []string{"stagign"}}
 		}, "unknown environments [stagign]"},
@@ -355,24 +348,15 @@ func TestBuild_LabelValuesValid(t *testing.T) {
 }
 
 // TestBuild_GateInstanceSpec verifies what a gate instance copies from its
-// template: expression, message, recheckInterval, and when only if set.
+// template: expression, message and recheckInterval.
 // spec.overrides is not copied, because kro would own the field and revert
 // overrides the CLI records on the instance (C01-graph-05, C01-graph-29).
 // spec.generated is set, so the instance may have a name over 63 characters
 // and is never collected as a template (GATE-REJECT-02).
 func TestBuild_GateInstanceSpec(t *testing.T) {
-	tests := []struct {
-		name     string
-		when     string
-		wantWhen bool
-	}{
-		{name: "when set", when: "pre-deploy", wantWhen: true},
-		{name: "when unset"},
-	}
-	for _, tt := range tests {
+	for _, tt := range []struct{ name string }{{name: "instance"}} {
 		t.Run(tt.name, func(t *testing.T) {
 			tpl := makePolicyGate("no-weekend-deploy", "platform-policies", "prod", "!schedule.isWeekend")
-			tpl.Spec.When = tt.when //nolint:staticcheck // SA1019: the deprecated field is still copied
 			tpl.Spec.Overrides = []kardinalv1alpha1.PolicyGateOverride{{Reason: "P0 hotfix", Stage: "prod"}}
 			res, err := graph.NewBuilder().Build(graph.BuildInput{
 				Pipeline:    makeLinearPipeline("app", "prod"),
@@ -387,11 +371,7 @@ func TestBuild_GateInstanceSpec(t *testing.T) {
 			assert.Equal(t, "5m", spec["recheckInterval"])
 			assert.Equal(t, true, spec["generated"])
 			assert.NotContains(t, spec, "overrides")
-			if tt.wantWhen {
-				assert.Equal(t, tt.when, spec["when"])
-			} else {
-				assert.NotContains(t, spec, "when")
-			}
+			assert.NotContains(t, spec, "when")
 		})
 	}
 }
@@ -455,8 +435,6 @@ func TestBuild_ErrorsAreErrInvalid(t *testing.T) {
 		{"nil pipeline", graph.BuildInput{Bundle: makeBundle("app-x7k2m", "app")}},
 		{"invalid name", graph.BuildInput{Pipeline: pipelineOf("app", kardinalv1alpha1.EnvironmentSpec{Name: "prod eu"}),
 			Bundle: makeBundle("app-x7k2m", "app")}},
-		{"steps", graph.BuildInput{Pipeline: pipelineOf("app", kardinalv1alpha1.EnvironmentSpec{Name: "prod",
-			Steps: []kardinalv1alpha1.StepSpec{{Uses: "git-clone"}}}), Bundle: makeBundle("app-x7k2m", "app")}},
 		{"cycle", graph.BuildInput{Pipeline: pipelineOf("app",
 			kardinalv1alpha1.EnvironmentSpec{Name: "a", DependsOn: []string{"b"}},
 			kardinalv1alpha1.EnvironmentSpec{Name: "b", DependsOn: []string{"a"}}), Bundle: makeBundle("app-x7k2m", "app")}},

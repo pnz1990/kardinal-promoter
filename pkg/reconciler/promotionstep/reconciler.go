@@ -1083,6 +1083,9 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	if cred.refused != nil {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, cred.refused.Error())
 	}
+	if cred.reason == reasonSecretNotReferenceable {
+		return r.waitForReferenceableSecret(ctx, base, ps, cred)
+	}
 
 	// spec.scmProvider: the provider the translator resolved for this step;
 	// without it the controller's --scm-provider. A provider that is gone, or

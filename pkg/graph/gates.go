@@ -132,12 +132,6 @@ func gateTemplateData(gate kardinalv1alpha1.PolicyGate) map[string]interface{} {
 		"recheckInterval": gate.Spec.RecheckInterval,
 		"generated":       true,
 	}
-	// when is copied only when set: the CRD defaults it to post-deploy, and an
-	// empty string would fail the enum. It is deprecated and has no effect
-	// (#1323); the copy keeps the instance a faithful copy of the template.
-	if gate.Spec.When != "" { //nolint:staticcheck // SA1019: copied unchanged, no behaviour depends on it
-		spec["when"] = gate.Spec.When //nolint:staticcheck // SA1019: as above
-	}
 	if p := approvalPolicyData(gate); p != nil {
 		spec["approval"] = p
 	}
@@ -191,9 +185,6 @@ func (c *gateCollections) instance(tmpl, item map[string]interface{}, skip bool)
 			RecheckInterval: spec["recheckInterval"].(string),
 			Generated:       true,
 		},
-	}
-	if w, ok := spec["when"].(string); ok {
-		g.Spec.When = w //nolint:staticcheck // SA1019: copied unchanged
 	}
 	if p, ok := spec["approval"].(map[string]interface{}); ok {
 		g.Spec.Approval = approvalPolicyFromData(p)
@@ -364,7 +355,6 @@ func (c *gateCollections) approvalCollectionNode(id, field string) GraphNode {
 		"message":         tmpl("message"),
 		"recheckInterval": tmpl("recheckInterval"),
 		"generated":       true,
-		"when":            fmt.Sprintf(`${%s.templates[%s.t].spec.?when.orValue("post-deploy")}`, NodePolicyGateData, iterGate),
 		"approvals":       approvalsOfItem(),
 	}
 	// A gate that only reads approvals.* in its expression has no policy: a

@@ -187,10 +187,14 @@ func TestChart_Tracing(t *testing.T) {
 		}
 		return ops["notificationhook.Reconcile"] && ops["HTTP POST"], fmt.Sprintf("%v", ops)
 	})
+	// One reconcile may deliver two events (the promoted Bundle's and the
+	// Subscription's Bundle.Verified), each with its own client span: the
+	// traceparent names one of them.
+	named := false
 	for _, s := range hookTrace.Spans {
 		switch s.Name {
 		case "HTTP POST":
-			assert.Equal(t, spanID, s.SpanID, "the traceparent names the client span")
+			named = named || s.SpanID == spanID
 			assert.Equal(t, "receiver.webhook-receiver.svc.cluster.local", s.tag("server.address"))
 			assert.Equal(t, "200", s.tag("http.response.status_code"))
 		case "notificationhook.Reconcile":
@@ -198,6 +202,7 @@ func TestChart_Tracing(t *testing.T) {
 			assert.Equal(t, "traced", s.tag("kardinal.object.name"))
 		}
 	}
+	assert.True(t, named, "the traceparent names a client span of the hook's reconcile")
 
 	scmAPI, err := url.Parse(framework.MustEnv(t, framework.EnvSCMAPI))
 	require.NoError(t, err)

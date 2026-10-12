@@ -123,14 +123,10 @@ func TestPipeline_ValidationFailed(t *testing.T) {
 	assert.Equal(t, len(before), len(after), "nothing is committed")
 }
 
-// TestPipeline_NotImplemented checks the fields the controller accepts but
-// does not implement. Each Pipeline sets one of shard, health.cluster and
-// two regions. Each gets Ready=False NotImplemented with the documented
-// message, and its Bundle fails with it: the step for shard and
-// health.cluster, the Graph build (InvalidSpec) for regions.
-// Nothing is committed. A health.resource.kind other than Deployment fails
-// the same way, before any git change: docs/pipeline-reference.md said it
-// failed the step after the change merged, during the health check.
+// TestPipeline_NotImplemented checks a value the controller accepts but does
+// not implement: a health.resource.kind other than Deployment. The Pipeline
+// gets Ready=False NotImplemented with the documented message, and its
+// Bundle's step fails with it before any git change: nothing is committed.
 //
 // Covers PIPE-NOTIMPL-01.
 func TestPipeline_NotImplemented(t *testing.T) {
@@ -143,39 +139,14 @@ func TestPipeline_NotImplemented(t *testing.T) {
 	before, err := gitserver.Commits(ctx, e.Git, a.repo, a.repo.Branch, 10)
 	require.NoError(t, err)
 
-	const prefix = "not implemented or not supported, so a Bundle fails when it reaches an environment that uses one " +
-		"(steps, promotionTemplate and two or more regions fail it when its Graph is built): "
+	const prefix = "not implemented or not supported, so a Bundle fails when it reaches an environment that uses one: "
 	const kindMsg = `health.resource.kind "StatefulSet" is not supported: only Deployment is checked`
 	cases := []struct {
 		name string
 		set  func(p *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec)
-		// ready is in the Ready message; step is the failed step's message,
-		// or bundle the Bundle's InvalidSpec message when no step runs.
-		ready, step, bundle string
+		// ready is in the Ready message; step is the failed step's message.
+		ready, step string
 	}{{
-		name: "shard",
-		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
-			env.Shard = "eu" //nolint:staticcheck // SA1019: set to check it is refused
-		},
-		ready: `environment "test": shard is not supported; remove shard`,
-		step: "shard is not supported; remove shard from the environment and the controller reconciles it " +
-			"(to split work between controllers use --namespace-shard, see docs/sharding.md; for other clusters " +
-			"see docs/health-adapters.md#remote-clusters)",
-	}, {
-		name: "cluster",
-		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
-			env.Health.Cluster = "remote" //nolint:staticcheck // SA1019: set to check it is refused
-		},
-		ready: `environment "test": health.cluster is not supported: to check a workload in another cluster set health.kubeconfigSecretRef`,
-		step:  "health.cluster is not supported: to check a workload in another cluster set health.kubeconfigSecretRef to a kubeconfig Secret",
-	}, {
-		name: "regions",
-		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
-			env.Regions = []string{"us", "eu"} //nolint:staticcheck // SA1019: set to check it is refused
-		},
-		ready:  `environment "test": regions is not supported; declare one environment per region (prod-us, prod-eu) and use wave`,
-		bundle: "regions is not supported; declare one environment per region (prod-us, prod-eu) and use wave",
-	}, {
 		name: "kind",
 		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
 			env.Health = v1alpha1.HealthConfig{Type: "resource",
@@ -197,14 +168,6 @@ func TestPipeline_NotImplemented(t *testing.T) {
 		assert.Contains(t, msg, c.ready, c.name)
 
 		bundle := e.CreateBundle(t, ns, c.name, "--image", imageV2)
-		if c.bundle != "" {
-			b := e.WaitBundle(t, ns, bundle, time.Minute, "Failed with InvalidSpec", failedWith("", c.bundle))
-			assert.Empty(t, b.Status.GraphRef, "%s: no Graph is built", c.name)
-			steps, err := e.Steps(ctx, ns, c.name, bundle)
-			require.NoError(t, err)
-			assert.Empty(t, steps, "%s: no step", c.name)
-			continue
-		}
 		ps := e.WaitStepState(t, ns, c.name, bundle, "test", "Failed", time.Minute)
 		assert.Contains(t, ps.Status.Message, c.step, c.name)
 		e.WaitBundlePhase(t, ns, bundle, "Failed", time.Minute)
@@ -215,9 +178,9 @@ func TestPipeline_NotImplemented(t *testing.T) {
 }
 
 // TestPipeline_RejectedFields checks what the API server refuses at apply
-// time, each with a message that says what to do: a non-empty steps list,
-// promotionTemplate, autoRollback, update.strategy argocd with approval
-// pr-review, a non-empty spec.policyGates, and reserved environment names.
+// time, each with a message that says what to do: autoRollback,
+// update.strategy argocd with approval pr-review, and reserved environment
+// names.
 //
 // Covers PIPE-REJECT-01.
 func TestPipeline_RejectedFields(t *testing.T) {
@@ -232,20 +195,6 @@ func TestPipeline_RejectedFields(t *testing.T) {
 		set  func(p *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec)
 		want string
 	}{{
-		name: "steps",
-		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
-			env.Steps = []v1alpha1.StepSpec{{Uses: "git-clone"}} //nolint:staticcheck // SA1019: set to check it is rejected
-		},
-		want: "environments[].steps is not supported: kardinal has no custom step engine and every environment runs the " +
-			"default step sequence; remove it",
-	}, {
-		name: "promotionTemplate",
-		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
-			env.PromotionTemplate = &v1alpha1.PromotionTemplateRef{Name: "default"} //nolint:staticcheck // SA1019: set to check it is rejected
-		},
-		want: "environments[].promotionTemplate is deprecated and not supported: every " +
-			"environment runs the default step sequence; remove it",
-	}, {
 		name: "autoRollback",
 		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
 			env.AutoRollback = &v1alpha1.AutoRollbackSpec{FailureThreshold: 3} //nolint:staticcheck // SA1019: set to check it is rejected
@@ -260,12 +209,6 @@ func TestPipeline_RejectedFields(t *testing.T) {
 		},
 		want: "environments[]: update.strategy argocd patches the Application directly and cannot honour approval: " +
 			"pr-review; use approval: auto with a PolicyGate, or a git-based strategy (kustomize or helm) for a reviewed promotion",
-	}, {
-		name: "policyGates",
-		set: func(p *v1alpha1.Pipeline, _ *v1alpha1.EnvironmentSpec) {
-			p.Spec.PolicyGates = []v1alpha1.PipelinePolicyGateRef{{Name: "no-weekend-deploys"}} //nolint:staticcheck // SA1019: set to check it is rejected
-		},
-		want: "spec.policyGates is not implemented; remove it (org gates use the kardinal.io/applies-to label)",
 	}}
 	for _, name := range []string{"bundle", "time", "spec", "self", "true", "kro"} {
 		cases = append(cases, struct {
@@ -511,11 +454,12 @@ func leadMinutes(t *testing.T, a *app, bundle string) int64 {
 	return int64(c.LastTransitionTime.Sub(a.bundle(t, bundle).CreationTimestamp.Time).Minutes())
 }
 
-// TestPipeline_GitSecretNotReferenceable checks the v0.10.0 deprecation of
-// unlabeled git Secrets: a Pipeline whose spec.git.secretRef names a Secret
-// without kardinal.io/referenceable=true still promotes, and has
-// SecretReferenceable=False (reason SecretNotReferenceable); labeling the
-// Secret removes the warning.
+// TestPipeline_GitSecretNotReferenceable checks #1506: a git Secret without
+// kardinal.io/referenceable=true is not used. The Pipeline is Ready=False
+// with reason SecretNotReferenceable and the kubectl label command, and its
+// Bundle's step waits (Promoting, not Failed) with the same command and no
+// commit. Labeling the Secret makes the Pipeline Ready and lets the step
+// promote.
 //
 // Covers PIPE-GITSECRET-LABEL-01.
 func TestPipeline_GitSecretNotReferenceable(t *testing.T) {
@@ -531,25 +475,34 @@ func TestPipeline_GitSecretNotReferenceable(t *testing.T) {
 	p.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "unlabeled-git"}
 	a.apply(t, p)
 
-	waitPipeline(t, e, a.ns, pipelineName, time.Minute, "the SecretReferenceable warning", func(p *v1alpha1.Pipeline) (bool, string) {
-		c := meta.FindStatusCondition(p.Status.Conditions, "SecretReferenceable")
-		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "SecretNotReferenceable", fmt.Sprintf("%+v", c)
+	label := "kubectl label secret unlabeled-git -n " + a.ns + " kardinal.io/referenceable=true"
+	waitPipeline(t, e, a.ns, pipelineName, time.Minute, "Ready=False SecretNotReferenceable", func(p *v1alpha1.Pipeline) (bool, string) {
+		c := meta.FindStatusCondition(p.Status.Conditions, "Ready")
+		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "SecretNotReferenceable" && strings.Contains(c.Message, label),
+			fmt.Sprintf("%+v", c)
 	})
+	before, err := gitserver.Commits(ctx, e.Git, a.repo, a.repo.Branch, 1)
+	require.NoError(t, err)
+	require.NotEmpty(t, before)
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
-	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
-	a.running(t, "test", imageV2, "the unlabeled Secret still works in v0.10.0")
+	ps := e.WaitStep(t, a.ns, pipelineName, bundle, "test", time.Minute, "waiting for its git Secret", func(ps *v1alpha1.PromotionStep) (bool, string) {
+		return ps.Status.State == "Promoting" && strings.Contains(ps.Status.Message, label), ps.Status.State + ": " + ps.Status.Message
+	})
+	assert.Equal(t, "waiting for the git Secret: git Secret "+a.ns+"/unlabeled-git is not labeled kardinal.io/referenceable=true, "+
+		"so git does not use it; label it: "+label, ps.Status.Message)
+	after, err := gitserver.Commits(ctx, e.Git, a.repo, a.repo.Branch, 1)
+	require.NoError(t, err)
+	require.NotEmpty(t, after)
+	assert.Equal(t, before[0].SHA, after[0].SHA, "nothing is committed with an unlabeled Secret")
 
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: "unlabeled-git"}, unlabeled))
 	unlabeled.Labels = map[string]string{"kardinal.io/referenceable": "true"}
 	require.NoError(t, e.Client.Update(ctx, unlabeled))
-	// The Secret is not watched; a Pipeline edit (an annotation) reconciles at once.
-	var cur v1alpha1.Pipeline
-	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &cur))
-	patch := client.MergeFrom(cur.DeepCopy())
-	cur.Annotations = map[string]string{"e2e.kardinal.io/poke": time.Now().Format(time.RFC3339Nano)}
-	require.NoError(t, e.Client.Patch(ctx, &cur, patch))
-	waitPipeline(t, e, a.ns, pipelineName, time.Minute, "the warning to clear", func(p *v1alpha1.Pipeline) (bool, string) {
-		c := meta.FindStatusCondition(p.Status.Conditions, "SecretReferenceable")
-		return c == nil, fmt.Sprintf("%+v", c)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	a.running(t, "test", imageV2, "the labeled Secret is used")
+	// The Secret is not watched; the Pipeline is re-checked every minute.
+	waitPipeline(t, e, a.ns, pipelineName, 2*time.Minute, "Ready once labeled", func(p *v1alpha1.Pipeline) (bool, string) {
+		c := meta.FindStatusCondition(p.Status.Conditions, "Ready")
+		return c != nil && c.Status == metav1.ConditionTrue, fmt.Sprintf("%+v", c)
 	})
 }

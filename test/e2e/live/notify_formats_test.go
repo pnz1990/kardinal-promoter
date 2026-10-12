@@ -153,10 +153,9 @@ func TestNotify_SlackTeamsTemplate(t *testing.T) {
 // missing is Ready=False SecretNotFound and sends nothing; once the Secret
 // exists the waiting event is delivered. A Secret without the
 // kardinal.io/referenceable=true label is not used (Ready=False
-// SecretNotReferenceable, nothing sent) until it is labeled. The deprecated
-// authorizationHeader still delivers, with PlaintextCredential=True.
+// SecretNotReferenceable, nothing sent) until it is labeled.
 //
-// Covers NOTIF-SECRET-01, NOTIF-SECRET-LABEL-01, NOTIF-PLAINTEXT-01.
+// Covers NOTIF-SECRET-01, NOTIF-SECRET-LABEL-01.
 func TestNotify_SecretRef(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -181,9 +180,6 @@ func TestNotify_SecretRef(t *testing.T) {
 	require.NoError(t, e.Client.Create(ctx, unlabeled))
 	createHook(t, e, a.ns, "unlabeled", v1alpha1.NotificationHookSpec{
 		Webhook: v1alpha1.NotificationWebhookConfig{SecretRef: &v1alpha1.NotificationSecretRef{Name: "unlabeled-creds"}}, Events: ev})
-	createHook(t, e, a.ns, "plaintext", v1alpha1.NotificationHookSpec{
-		Webhook: v1alpha1.NotificationWebhookConfig{URL: rcv.URL(a.ns+"-plain", "hook"), AuthorizationHeader: "Bearer PLAINTOKEN"},
-		Events:  ev})
 
 	_, gate := holdBundle(t, a, pipelineName)
 	key := gateKey(gate)
@@ -193,15 +189,6 @@ func TestNotify_SecretRef(t *testing.T) {
 	assert.Equal(t, "Bearer SECRETTOKEN-creds", r.Header("Authorization"))
 	p, _ := decode(t, r)
 	assert.Equal(t, "PolicyGate.Blocked", p.Event)
-
-	plain := waitRecords(t, rcv, a.ns+"-plain", 1, time.Minute)[0]
-	assert.Equal(t, "Bearer PLAINTOKEN", plain.Header("Authorization"), "the deprecated field still works")
-	waitHook(t, e, a.ns, "plaintext", "the delivery recorded", func(s v1alpha1.NotificationHookStatus) bool { return s.LastEventKey == key })
-	pc := hookCondition(t, e, a.ns, "plaintext", "PlaintextCredential")
-	require.NotNil(t, pc, "PlaintextCredential condition")
-	assert.Equal(t, metav1.ConditionTrue, pc.Status)
-	assert.Equal(t, "AuthorizationHeaderInSpec", pc.Reason)
-	assert.Nil(t, hookCondition(t, e, a.ns, "secret", "PlaintextCredential"))
 
 	framework.Eventually(t, time.Minute, "hook late to report its missing Secret", func(context.Context) (bool, string) {
 		c := hookCondition(t, e, a.ns, "late", "Ready")
@@ -234,10 +221,10 @@ func TestNotify_SecretRef(t *testing.T) {
 	assert.Equal(t, "Bearer SECRETTOKEN-unlabeled-creds", ur.Header("Authorization"), "sent once labeled")
 	waitHook(t, e, a.ns, "unlabeled", "the waiting event delivered", func(s v1alpha1.NotificationHookStatus) bool { return s.LastEventKey == key })
 
-	for _, name := range []string{"secret", "late", "plaintext", "unlabeled"} {
+	for _, name := range []string{"secret", "late", "unlabeled"} {
 		status, err := json.Marshal(getHook(t, e, a.ns, name).Status)
 		require.NoError(t, err)
-		for _, s := range []string{"SECRETTOKEN", "SECRETPATH", "B0E2E", "PLAINTOKEN"} {
+		for _, s := range []string{"SECRETTOKEN", "SECRETPATH", "B0E2E"} {
 			assert.NotContains(t, string(status), s, "%s: status", name)
 		}
 	}

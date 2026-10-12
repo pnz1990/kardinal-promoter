@@ -323,9 +323,8 @@ type pipelineStatus struct {
 	// Warnings are the WARNING: lines after the table (a Rejected Bundle
 	// whose change is live).
 	Warnings []string `json:"warnings,omitempty"`
-	// Regions is, per environment that has one, its region (spec regions)
-	// or the cluster its health check reads (health.kubeconfigSecretRef,
-	// or the deprecated health.cluster).
+	// Regions is, per environment that has one, the cluster its health
+	// check reads (the health.kubeconfigSecretRef Secret).
 	Regions map[string]string `json:"regions,omitempty"`
 	// activeSteps is, with -o wide, the sub-step each environment's newest
 	// step is on.
@@ -478,21 +477,14 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 	return view, nil
 }
 
-// environmentRegions is, per environment of p that has one, its region
-// (spec regions, deprecated) or the cluster its health check reads: the
-// kubeconfig Secret of health.kubeconfigSecretRef, or the deprecated
-// health.cluster. nil when no environment has one: the REGION column is
-// then hidden.
+// environmentRegions is, per environment of p that has one, the cluster its
+// health check reads: the kubeconfig Secret of health.kubeconfigSecretRef.
+// nil when no environment has one: the REGION column is then hidden.
 func environmentRegions(p *v1alpha1.Pipeline) map[string]string {
 	out := map[string]string{}
 	for _, e := range p.Spec.Environments {
-		switch {
-		case len(e.Regions) > 0: //nolint:staticcheck // SA1019: shows the deprecated regions of an old Pipeline
-			out[e.Name] = strings.Join(e.Regions, ", ") //nolint:staticcheck // SA1019: as above
-		case e.Health.KubeconfigSecretRef != nil:
+		if e.Health.KubeconfigSecretRef != nil {
 			out[e.Name] = e.Health.KubeconfigSecretRef.Name
-		case e.Health.Cluster != "": //nolint:staticcheck // SA1019: shows the deprecated cluster of an old Pipeline
-			out[e.Name] = e.Health.Cluster //nolint:staticcheck // SA1019: as above
 		}
 	}
 	if len(out) == 0 {
@@ -635,17 +627,13 @@ func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
 }
 
 // pipelineNotices are the Pipeline's own problems, shown before its
-// promotions: an ERROR when it is not Ready (an invalid spec, or
-// GitCredentialMissing with the command that fixes it), and a WARNING for a
-// git Secret that works today but is not labelled referenceable, so it is
-// fixed before v0.11 refuses it.
+// promotions: an ERROR when it is not Ready (an invalid spec,
+// GitCredentialMissing or SecretNotReferenceable with the command that fixes
+// it).
 func pipelineNotices(p *v1alpha1.Pipeline) []string {
 	var out []string
 	if c := meta.FindStatusCondition(p.Status.Conditions, "Ready"); c != nil && c.Status == metav1.ConditionFalse {
 		out = append(out, fmt.Sprintf("ERROR: pipeline %s is not Ready (%s): %s", p.Name, c.Reason, c.Message))
-	}
-	if c := meta.FindStatusCondition(p.Status.Conditions, "SecretReferenceable"); c != nil && c.Status == metav1.ConditionFalse {
-		out = append(out, fmt.Sprintf("WARNING: pipeline %s: %s", p.Name, c.Message))
 	}
 	return out
 }
@@ -681,8 +669,8 @@ activeBundles.
 
 When called with a pipeline name: first the Pipeline's own problems, an
 ERROR when it is not Ready (such as GitCredentialMissing, with the command
-that creates the git Secret) and a WARNING when its git Secret is not
-labelled kardinal.io/referenceable=true; then the Pipeline's summary sentence
+that creates the git Secret, or SecretNotReferenceable, with the command that
+labels it kardinal.io/referenceable=true); then the Pipeline's summary sentence
 ("1.5.0 live in test; waiting for PR merge in prod (#42)"), then one row per environment
 (a fleet environment expands to its targets) from the Pipeline's
 status.environments, which the controller writes:
@@ -696,8 +684,7 @@ status.environments, which the controller writes:
   PR        the pull request it waits for, while it waits for its merge
 
 REGION, after ENVIRONMENT, shows where each environment runs when one of
-them says: its region (spec regions) or the cluster its health check reads
-(the health.kubeconfigSecretRef Secret). -o wide adds ACTIVE STEP, the step
+them health-checks another cluster: the health.kubeconfigSecretRef Secret. -o wide adds ACTIVE STEP, the step
 the newest Bundle there is on (git-clone, open-pr, health-check, ...).
 
 Then the gates holding a version back, with their CEL expression cut to 40
