@@ -506,3 +506,64 @@ func TestPipeline_GitSecretNotReferenceable(t *testing.T) {
 		return c != nil && c.Status == metav1.ConditionTrue, fmt.Sprintf("%+v", c)
 	})
 }
+
+// TestPipeline_FailedVersionIsVisible: when the newest version fails before
+// any step (here its Graph cannot be built: a verification needs Argo
+// Rollouts, which the core suite does not install), the reason is where a
+// user looks, not only on the Bundle. The Pipeline's status.failedVersion
+// names the Bundle, its reason and message; status.summary says the version
+// failed before it started; kardinal why leads with it, with the fix and the
+// command that shows the whole record; kardinal status prints an ERROR line.
+// Fixing the Pipeline retries the version, and once it is live the
+// failure is gone everywhere.
+//
+// Covers PIPE-FAILEDVERSION-01.
+func TestPipeline_FailedVersionIsVisible(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	a.apply(t, a.pipeline(nil))
+	first := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitBundlePhase(t, a.ns, first, "Verified", promoteTimeout)
+
+	var p v1alpha1.Pipeline
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &p))
+	p.Spec.Environments[0].Verification = &v1alpha1.VerificationSpec{AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "smoke"}}}
+	require.NoError(t, e.Client.Update(ctx, &p))
+	failed := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
+	e.WaitBundle(t, a.ns, failed, time.Minute, "Failed with GraphBuildFailed", failedWith("GraphBuildFailed", "AnalysisRun is not served"))
+
+	label := fixtures.V3 + " (" + failed + ")"
+	got := waitPipeline(t, e, a.ns, pipelineName, time.Minute, "status.failedVersion names "+failed, func(p *v1alpha1.Pipeline) (bool, string) {
+		f := p.Status.FailedVersion
+		return f != nil && f.Bundle == failed && f.Reason == "GraphBuildFailed", fmt.Sprintf("failedVersion %+v", f)
+	})
+	f := got.Status.FailedVersion
+	assert.Equal(t, fixtures.V3, f.Version)
+	assert.Contains(t, f.Message, "AnalysisRun is not served")
+	assert.Empty(t, f.Environment, "it failed before any step")
+	assert.NotNil(t, f.Since)
+	assert.Equal(t, fixtures.V2+" live in test; "+label+" failed before it started (GraphBuildFailed)", got.Status.Summary)
+
+	why := e.MustKardinal(t, a.ns, "why", pipelineName)
+	assert.True(t, strings.HasPrefix(why, "The newest version "+label+" failed before it started: "), why)
+	assert.Contains(t, why, "AnalysisRun is not served")
+	assert.Regexp(t, `(?m)^  Reason\s+GraphBuildFailed$`, why)
+	assert.Regexp(t, `(?m)^  Fix\s+fix the pipeline, version or gate the message names; changing the pipeline or its gates retries this version$`, why)
+	assert.Regexp(t, `(?m)^  See\s+kubectl get bundle `+failed+` -n `+a.ns+` -o yaml$`, why)
+	status := e.MustKardinal(t, a.ns, "status", pipelineName)
+	assert.Contains(t, status, "ERROR: the newest version "+label+" failed before it started (GraphBuildFailed): ")
+	assert.Contains(t, status, "kardinal why "+pipelineName+" says what fixes it")
+
+	// Fix the Pipeline: the version is retried, goes live, and the failure
+	// is gone.
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &p))
+	p.Spec.Environments[0].Verification = nil
+	require.NoError(t, e.Client.Update(ctx, &p))
+	e.WaitBundlePhase(t, a.ns, failed, "Verified", promoteTimeout)
+	waitPipeline(t, e, a.ns, pipelineName, time.Minute, "status.failedVersion cleared", func(p *v1alpha1.Pipeline) (bool, string) {
+		return p.Status.FailedVersion == nil && p.Status.Summary == fixtures.V3+" live in test", fmt.Sprintf("failedVersion %+v, summary %q", p.Status.FailedVersion, p.Status.Summary)
+	})
+	assert.NotContains(t, e.MustKardinal(t, a.ns, "why", pipelineName), "failed")
+}

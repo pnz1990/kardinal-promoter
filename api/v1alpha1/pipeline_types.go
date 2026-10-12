@@ -1127,6 +1127,40 @@ type PipelineStatus struct {
 	// the wide printer column. Display only.
 	// +optional
 	EnvironmentSummary string `json:"environmentSummary,omitempty"`
+
+	// FailedVersion is the newest version of the Pipeline when it failed: its
+	// Bundle is the newest of the Pipeline and is Failed, before any step
+	// (the Graph could not be built, the spec is invalid) or in an
+	// environment. Cleared once a newer Bundle exists. Written with
+	// Environments from the Bundle's conditions; display only, so the CLI
+	// (why, status) and the UI can say why without reading the Bundle.
+	// +optional
+	FailedVersion *PipelineFailedVersion `json:"failedVersion,omitempty"`
+}
+
+// PipelineFailedVersion is why the newest version of a Pipeline failed.
+type PipelineFailedVersion struct {
+	// Bundle is the failed Bundle.
+	Bundle string `json:"bundle"`
+	// Version is what Bundle ships (the image tag, "config <sha>" or the
+	// chart version).
+	// +optional
+	Version string `json:"version,omitempty"`
+	// Reason is the reason of the Bundle's InvalidSpec condition
+	// (GraphBuildFailed, InvalidIntent, InvalidPipeline, ...) or of its
+	// Failed condition.
+	Reason string `json:"reason"`
+	// Message is that condition's message: what failed and, where known,
+	// what fixes it.
+	// +optional
+	Message string `json:"message,omitempty"`
+	// Environment is the environment whose step failed; empty when the
+	// Bundle failed before any step.
+	// +optional
+	Environment string `json:"environment,omitempty"`
+	// Since is when the Bundle failed (its Ready condition's transition).
+	// +optional
+	Since *metav1.Time `json:"since,omitempty"`
 }
 
 // PipelineEnvironmentStatus is what one environment of a Pipeline runs, and

@@ -261,6 +261,18 @@ describe('App pipeline header', () => {
     for (const t of tabs) expect(document.getElementById(t.getAttribute('aria-controls')!)).not.toBeNull()
   })
 
+  it('the Versions tab says why the newest version failed (status.failedVersion)', async () => {
+    h.state.pipelines = [pipeline('app', { phase: 'Degraded', activeBundleName: 'b-new',
+      failedVersion: { bundle: 'b-new', version: '2.0', reason: 'GraphRejected', message: 'kro rejected the Graph: no matching overload' } })]
+    render(<App />)
+    await flush()
+    fireEvent.click(screen.getByRole('tab', { name: /^Versions/ }))
+    await flush()
+    const note = screen.getByRole('note')
+    expect(note.textContent).toBe('The newest version 2.0 (b-new) failed before it started (GraphRejected). kro rejected the Graph: no matching overload')
+    expect(note.closest('li')?.querySelector('.app-history__name')?.getAttribute('title')).toBe('b-new')
+  })
+
   it('has a visible ? control that opens help and the keyboard shortcuts', async () => {
     render(<App />)
     await flush()
