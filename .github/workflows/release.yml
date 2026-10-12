@@ -153,8 +153,16 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # A tag starts on a cold build cache. Compile first, as ci.yml's go vet
+      # does, so a test that builds a binary (gen-reference-docs runs the
+      # controller's -help) does not spend its timeout compiling, and give
+      # each package the time a cold runner needs: the tests already passed
+      # on main for this commit.
+      - name: go vet
+        run: go vet ./...
+
       - name: Run tests
-        run: go test ./... -race -count=1 -timeout 120s
+        run: go test ./... -race -count=1 -timeout 300s
 
   release:
     name: release
