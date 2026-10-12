@@ -113,16 +113,6 @@
   font-weight: var(--k-weight-semibold);
 }
 
-.ops-table__paused {
-  padding: 0 var(--k-space-1);
-  background: var(--k-hatch), var(--k-surface-base);
-  color: var(--k-status-paused-fg);
-  border: var(--k-border-hairline) solid var(--k-line-strong);
-  border-radius: var(--k-radius-1);
-  font-size: var(--k-text-2xs);
-  font-weight: var(--k-weight-bold);
-}
-
 .ops-table__bundle {
   margin-top: var(--k-space-0_5);
   font-family: var(--k-font-mono);
