@@ -150,27 +150,10 @@ func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
 		mutate  func(p *kardinalv1alpha1.Pipeline)
 		wantMsg string
 	}{
-		{name: "steps", wantMsg: "spec.environments[].steps is not supported",
-			mutate: func(p *kardinalv1alpha1.Pipeline) {
-				p.Spec.Environments[0].Steps = []kardinalv1alpha1.StepSpec{{Uses: "git-clone"}} //nolint:staticcheck // SA1019: the test sets the deprecated field
-			}},
-		{name: "promotionTemplate", wantMsg: "spec.environments[].promotionTemplate is not supported",
-			mutate: func(p *kardinalv1alpha1.Pipeline) {
-				p.Spec.Environments[0].PromotionTemplate = &kardinalv1alpha1.PromotionTemplateRef{Name: "t"} //nolint:staticcheck // SA1019: the test sets the deprecated field
-			}},
-		{name: "two regions", wantMsg: `environment "test": regions is not supported; declare one environment per region`,
-			mutate: func(p *kardinalv1alpha1.Pipeline) {
-				p.Spec.Environments[0].Regions = []string{"us-east-1", "eu-west-1"} //nolint:staticcheck // SA1019: tests the rejection
-			}},
-		// #1321: distributed mode was removed, so a shard is rejected.
-		{name: "shard", wantMsg: `environment "test": shard is not supported; remove shard`,
-			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Shard = "eu" }}, //nolint:staticcheck // SA1019: tests the rejection
 		{name: "autoRollback", wantMsg: "autoRollback is not implemented",
 			mutate: func(p *kardinalv1alpha1.Pipeline) {
 				p.Spec.Environments[0].AutoRollback = &kardinalv1alpha1.AutoRollbackSpec{}
 			}},
-		{name: "health.cluster", wantMsg: `environment "test": health.cluster is not supported`,
-			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Health.Cluster = "prod-eu" }}, //nolint:staticcheck // SA1019: tests the rejection
 		{name: "health.resource.kind", wantMsg: `environment "test": health.resource.kind "StatefulSet" is not supported`,
 			mutate: func(p *kardinalv1alpha1.Pipeline) {
 				p.Spec.Environments[0].Health.Resource = &kardinalv1alpha1.ResourceRef{Kind: "StatefulSet"}
@@ -197,8 +180,7 @@ func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
 			// Most fields fail a Bundle only in the environment that sets them.
 			assert.NotContains(t, cond.Message, "every Bundle")
 			assert.True(t, strings.HasPrefix(cond.Message, "not implemented or not supported, so a Bundle fails "+
-				"when it reaches an environment that uses one (steps, promotionTemplate and two or more regions "+
-				"fail it when its Graph is built): "),
+				"when it reaches an environment that uses one: "),
 				cond.Message)
 		})
 	}
@@ -259,6 +241,7 @@ func TestPipelineReconciler_RepositoryNotAllowed(t *testing.T) {
 		url         string
 		secretRef   bool
 		secret      bool
+		unlabelled  bool
 		prReview    bool
 		wantStatus  metav1.ConditionStatus
 		wantReason  string
@@ -280,6 +263,15 @@ func TestPipelineReconciler_RepositoryNotAllowed(t *testing.T) {
 		{name: "secretRef to a missing Secret", allow: allow, url: "https://github.com/other/gitops.git", secretRef: true,
 			wantStatus: metav1.ConditionFalse, wantReason: "RepositoryNotAllowed",
 			wantMsg: "no git.secretRef to a Secret that exists", wantRequeue: time.Minute},
+		// The label would make the URL allowed: the Pipeline says to label the
+		// Secret, not RepositoryNotAllowed.
+		{name: "own Secret not labelled, auto only", allow: allow, url: "https://github.com/other/gitops.git", secretRef: true,
+			secret: true, unlabelled: true, wantStatus: metav1.ConditionFalse, wantReason: "SecretNotReferenceable",
+			wantMsg:     "git Secret team-token is not labeled kardinal.io/referenceable=true, so git does not use it; label it: kubectl label secret team-token -n default kardinal.io/referenceable=true",
+			wantRequeue: time.Minute},
+		{name: "own Secret not labelled, pr-review", allow: allow, url: "https://github.com/other/gitops.git", secretRef: true,
+			secret: true, unlabelled: true, prReview: true, wantStatus: metav1.ConditionFalse, wantReason: "RepositoryNotAllowed",
+			wantMsg: `environment "test" uses approval: pr-review`},
 		{name: "unset", url: "https://github.com/other/gitops.git", prReview: true,
 			wantStatus: metav1.ConditionFalse, wantReason: "GitCredentialMissing", wantRequeue: time.Minute},
 		{name: "unset, own Secret", url: "https://github.com/other/gitops.git", prReview: true, secretRef: true, secret: true,
@@ -300,8 +292,11 @@ func TestPipelineReconciler_RepositoryNotAllowed(t *testing.T) {
 			require.NoError(t, corev1.AddToScheme(scheme))
 			objs := []client.Object{p}
 			if tc.secret {
-				// Labelled, so the SecretReferenceable warning (and its re-check) stays out of this test.
-				objs = append(objs, gitTokenSecret("team-token"))
+				s := gitTokenSecret("team-token")
+				if tc.unlabelled {
+					s.Labels = nil
+				}
+				objs = append(objs, s)
 			}
 			c := newClientWithIndex(scheme, objs...)
 			key := types.NamespacedName{Name: "app", Namespace: "default"}
@@ -585,24 +580,26 @@ func TestPipelineReconciler_DeletedBeforeStatusWrite(t *testing.T) {
 	objectgonetest.AssertQuiet(t, res, err, &logs)
 }
 
-// TestPipelineReconciler_GitSecretReferenceable: a git Secret without
-// kardinal.io/referenceable=true sets the SecretReferenceable=False warning
-// (the Secret is still used in v0.10.0, #1506) and requeues so a label added
-// later is seen; a labeled, missing or unnamed Secret sets nothing. Labeling
-// the Secret removes the warning; reconciling again changes nothing.
+// TestPipelineReconciler_GitSecretReferenceable (#1506): a git Secret
+// without kardinal.io/referenceable=true is not used, so the Pipeline is
+// Ready=False with reason SecretNotReferenceable and the command that labels
+// it, and requeues so a label added later is seen; a labeled, missing or
+// unnamed Secret sets nothing. Labeling the Secret makes the Pipeline Ready;
+// reconciling again changes nothing. An older controller's
+// SecretReferenceable warning is removed.
 func TestPipelineReconciler_GitSecretReferenceable(t *testing.T) {
 	secret := func(labels map[string]string) *corev1.Secret {
 		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "team-git", Namespace: "default", Labels: labels},
 			Data: map[string][]byte{"token": []byte("t0ken")}}
 	}
 	tests := []struct {
-		name     string
-		ref      bool
-		secret   *corev1.Secret
-		wantWarn bool
+		name    string
+		ref     bool
+		secret  *corev1.Secret
+		refused bool
 	}{
-		{name: "unlabeled Secret", ref: true, secret: secret(nil), wantWarn: true},
-		{name: "label with another value", ref: true, secret: secret(map[string]string{"kardinal.io/referenceable": "yes"}), wantWarn: true},
+		{name: "unlabeled Secret", ref: true, secret: secret(nil), refused: true},
+		{name: "label with another value", ref: true, secret: secret(map[string]string{"kardinal.io/referenceable": "yes"}), refused: true},
 		{name: "labeled Secret", ref: true, secret: secret(map[string]string{"kardinal.io/referenceable": "true"})},
 		{name: "missing Secret", ref: true},
 		{name: "no secretRef", secret: secret(nil)},
@@ -617,6 +614,9 @@ func TestPipelineReconciler_GitSecretReferenceable(t *testing.T) {
 			if tc.ref {
 				p.Spec.Git.SecretRef = &kardinalv1alpha1.SecretRef{Name: "team-git"}
 			}
+			// The warning an older controller wrote.
+			p.Status.Conditions = []metav1.Condition{{Type: "SecretReferenceable", Status: metav1.ConditionFalse,
+				Reason: "SecretNotReferenceable", Message: "old", LastTransitionTime: metav1.Now()}}
 			objs := []client.Object{p}
 			if tc.secret != nil {
 				objs = append(objs, tc.secret)
@@ -628,21 +628,19 @@ func TestPipelineReconciler_GitSecretReferenceable(t *testing.T) {
 			require.NoError(t, err)
 			var got kardinalv1alpha1.Pipeline
 			require.NoError(t, c.Get(context.Background(), key, &got))
-			cond := meta.FindStatusCondition(got.Status.Conditions, "SecretReferenceable")
-			if !tc.wantWarn {
-				assert.Nil(t, cond)
+			assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "SecretReferenceable"), "the old warning is removed")
+			ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			require.NotNil(t, ready)
+			if !tc.refused {
+				assert.Equal(t, metav1.ConditionTrue, ready.Status, ready.Message)
 				assert.Zero(t, res.RequeueAfter)
 				return
 			}
-			require.NotNil(t, cond)
-			assert.Equal(t, metav1.ConditionFalse, cond.Status)
-			assert.Equal(t, "SecretNotReferenceable", cond.Reason)
-			assert.Contains(t, cond.Message, "git Secret team-git is not labeled kardinal.io/referenceable=true")
-			assert.Contains(t, cond.Message, "kubectl label secret team-git -n default kardinal.io/referenceable=true")
-			assert.Equal(t, 5*time.Minute, res.RequeueAfter, "recheck: Secrets are not watched")
-			ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
-			require.NotNil(t, ready)
-			assert.Equal(t, metav1.ConditionTrue, ready.Status, "a warning, not a failure")
+			assert.Equal(t, metav1.ConditionFalse, ready.Status)
+			assert.Equal(t, "SecretNotReferenceable", ready.Reason)
+			assert.Equal(t, "git Secret team-git is not labeled kardinal.io/referenceable=true, so git does not use it; "+
+				"label it: kubectl label secret team-git -n default kardinal.io/referenceable=true", ready.Message)
+			assert.Equal(t, time.Minute, res.RequeueAfter, "recheck: Secrets are not watched")
 
 			rv := got.ResourceVersion
 			_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
@@ -657,7 +655,7 @@ func TestPipelineReconciler_GitSecretReferenceable(t *testing.T) {
 			res, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
 			require.NoError(t, err)
 			require.NoError(t, c.Get(context.Background(), key, &got))
-			assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "SecretReferenceable"), "labeled: warning removed")
+			assert.True(t, meta.IsStatusConditionTrue(got.Status.Conditions, "Ready"), "labeled: Ready")
 			assert.Zero(t, res.RequeueAfter)
 		})
 	}

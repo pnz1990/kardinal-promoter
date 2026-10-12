@@ -12,8 +12,8 @@ const MISSING = 'git Secret git-token not found in namespace team-a, so git has 
 const UNSET = 'spec.git.secretRef is not set, so git has no token for https://github.com/o/r; create the Secret '
   + '(kubectl create secret generic git-token -n team-a --from-literal=token=<TOKEN> && kubectl label secret git-token -n team-a kardinal.io/referenceable=true) '
   + 'and set spec.git.secretRef.name: git-token'
-const UNLABELLED = 'git Secret gh is not labeled kardinal.io/referenceable=true; it is still used in v0.10 but will be refused '
-  + 'in v0.11: label it (kubectl label secret gh -n team-a kardinal.io/referenceable=true)'
+const UNLABELLED = 'git Secret gh is not labeled kardinal.io/referenceable=true, so git does not use it; label it: '
+  + 'kubectl label secret gh -n team-a kardinal.io/referenceable=true'
 
 describe('fixCommand', () => {
   it.each<[string, string]>([
@@ -31,26 +31,29 @@ describe('fixCommand', () => {
 
 describe('PipelineConditions', () => {
   it('shows nothing for a Ready pipeline with a labelled Secret', () => {
-    const { container } = render(<PipelineConditions conditions={[{ type: 'Ready', status: 'True' }, { type: 'SecretReferenceable', status: 'True' }]} />)
+    const { container } = render(<PipelineConditions conditions={[{ type: 'Ready', status: 'True' }]} />)
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('shows GitCredentialMissing as an error with the command to copy, and the unlabelled Secret as a warning', async () => {
+  it('shows GitCredentialMissing as an error with the command to copy', async () => {
     const { container } = render(<PipelineConditions conditions={[
       { type: 'Ready', status: 'False', reason: 'GitCredentialMissing', message: MISSING },
-      { type: 'SecretReferenceable', status: 'False', reason: 'SecretNotReferenceable', message: UNLABELLED },
     ]} />)
     const error = screen.getByRole('alert')
     expect(error).toHaveTextContent('ErrorGit has no token for this pipeline, so nothing can be promoted')
     expect(within(error).getByRole('button', { name: 'Copy shell' })).toBeInTheDocument()
     expect(error.querySelector('pre')).toHaveTextContent(/^kubectl create secret generic git-token/)
 
-    const warning = screen.getByRole('status')
-    expect(warning).toHaveTextContent('WarningLabel the git Secret before upgrading to v0.11')
-    expect(warning.querySelector('pre')).toHaveTextContent('kubectl label secret gh -n team-a kardinal.io/referenceable=true')
-
     const result = await axe.run(container, { runOnly: ['wcag2a', 'wcag2aa'], rules: { 'color-contrast': { enabled: false } } })
     expect(result.violations.map(v => v.id)).toEqual([])
+  })
+
+  it('shows an unlabelled git Secret as an error with the label command', () => {
+    render(<PipelineConditions conditions={[{ type: 'Ready', status: 'False', reason: 'SecretNotReferenceable', message: UNLABELLED }]} />)
+    const error = screen.getByRole('alert')
+    expect(error).toHaveTextContent('ErrorGit does not use the git Secret until it is labelled, so nothing can be promoted')
+    expect(error.querySelector('pre')).toHaveTextContent('kubectl label secret gh -n team-a kardinal.io/referenceable=true')
+    expect(screen.queryByRole('status')).toBeNull()
   })
 
   it('names any other reason a pipeline is not ready', () => {

@@ -981,9 +981,6 @@ func verifiedCond(upstreamID string) string {
 // resolvableWhen). Until then kro does not create this PromotionStep.
 // spec.bundleName holds every step, roots included, once the Bundle is
 // Superseded or Rejected.
-//
-// There is no per-region fan-out: Build rejects two or more
-// spec.environments[].regions (see RegionsNotSupported) and ignores one.
 func buildPromotionStepNode(
 	pipelineName, envName, nodeID string,
 	bundle *kardinalv1alpha1.Bundle,

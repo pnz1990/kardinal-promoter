@@ -86,7 +86,7 @@ func TestForgejo_SSHGitPRBranchRefresh(t *testing.T) {
 	t.Cleanup(func() { _ = remove(context.Background()) })
 	sshURL, err := gitserver.SSHCloneURL(a.repo)
 	require.NoError(t, err)
-	require.NoError(t, e.Client.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-ssh", Namespace: a.ns},
+	require.NoError(t, e.Client.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-ssh", Namespace: a.ns, Labels: map[string]string{"kardinal.io/referenceable": "true"}},
 		Data: map[string][]byte{"sshPrivateKey": privPEM, "knownHosts": []byte(knownHostsLine(t, sshURL, serverHostKey(t)))}}))
 	p := a.pipeline(map[string]string{"prod": "pr-review"})
 	p.Spec.Git.URL = sshURL
@@ -145,7 +145,7 @@ func scmSSHGit(t *testing.T, e *framework.Env) {
 	require.NoError(t, err)
 	hostKey := serverHostKey(t)
 	otherHost := otherHostKey(t, hostKey)
-	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-ssh", Namespace: a.ns}, Data: map[string][]byte{
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-ssh", Namespace: a.ns, Labels: map[string]string{"kardinal.io/referenceable": "true"}}, Data: map[string][]byte{
 		"sshPrivateKey": privPEM,
 		"knownHosts":    []byte(knownHostsLine(t, sshURL, otherHost)),
 	}}
@@ -301,7 +301,7 @@ func renderedOverSSH(t *testing.T, e *framework.Env) {
 	t.Cleanup(func() { _ = remove(context.Background()) })
 	sshURL, err := gitserver.SSHCloneURL(a.repo)
 	require.NoError(t, err)
-	require.NoError(t, e.Client.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-ssh", Namespace: a.ns},
+	require.NoError(t, e.Client.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-ssh", Namespace: a.ns, Labels: map[string]string{"kardinal.io/referenceable": "true"}},
 		Data: map[string][]byte{"sshPrivateKey": privPEM, "knownHosts": []byte(knownHostsLine(t, sshURL, serverHostKey(t)))}}))
 
 	p := a.renderedPipeline(nil)
