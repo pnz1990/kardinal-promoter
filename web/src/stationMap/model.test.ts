@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { Bundle, GraphResponse, Pipeline } from '../types'
-import { buildModel, gatesOn, gridOrder, groupSummary, stationLabel, type StationMapModel } from './model'
+import { buildModel, edgeGateLabel, gatesOn, gridOrder, groupSummary, stationLabel, type GateMark, type StationMapModel } from './model'
 import { octilinear, layout, levelAt, initialLevel, trimEnd, lengthOf, gridCells, gridRows, pointBeforeEnd, threadPoints, gateOffset, wrapWords, THREAD_GAP_PX, gridSpace, gridSize, gridText, groupTitle, CH_EM, TEXT_ASCENT, type ZoomLevel } from './geometry'
 
 const bundle = (name: string, tag: string): Bundle => ({
@@ -357,4 +357,18 @@ describe('an expanded grid at every level', () => {
       })
     }
   }
+})
+
+describe('edgeGateLabel', () => {
+  const gate = (name: string, over: Partial<GateMark> = {}): GateMark =>
+    ({ id: `gate-${name}`, name, state: 'Pass', holding: false, display: { value: 'Pass', label: 'Passing', glyph: '✓', ascii: '+', tone: 'verified' }, ...over })
+  const blocking = { state: 'Block', holding: true, display: { value: 'Block', label: 'Blocking', glyph: '▮', ascii: '#', tone: 'blocked' as const } }
+  it.each<[string, GateMark[], string]>([
+    ['one gate', [gate('freeze')], 'freeze'],
+    ['a holding approval, then a passing gate', [gate('prod-approval', { ...blocking, approval: { required: 1, approved: 0 } }), gate('business-hours')],
+      'prod-approval (waiting) · +1 passing'],
+    ['a blocking gate, then others', [gate('uat-soak', blocking), gate('a', { state: 'Waiting' }), gate('b')], 'uat-soak (blocking) · +2 more'],
+  ])('%s', (_, gates, want) => {
+    expect(edgeGateLabel(gates)).toBe(want)
+  })
 })

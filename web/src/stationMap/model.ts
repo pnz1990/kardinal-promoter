@@ -533,10 +533,14 @@ export function stationLabel(st: Station, age: (iso?: string) => string): string
 }
 
 /** The gates on the edge into a node: a station's, or a group's worst per name. */
+/** A gate's rank on an edge: the ones holding the version first, passing ones last. */
+const gateRank = (g: GateMark) => (g.holding ? 0 : g.display.tone === 'waiting' ? 1 : g.state === 'Pass' ? 3 : 2)
+
 export function gatesOn(node: MapNode, model: StationMapModel): GateMark[] {
-  if (node.kind === 'station') return node.station.gates
+  // The gate that holds the version comes first, so it is the one the edge names.
+  if (node.kind === 'station') return [...node.station.gates].sort((a, b) => gateRank(a) - gateRank(b))
   const byName = new Map<string, GateMark>()
-  const rank = (g: GateMark) => (g.holding ? 0 : g.display.tone === 'waiting' ? 1 : g.state === 'Pass' ? 3 : 2)
+  const rank = gateRank
   for (const m of node.group.members) {
     for (const g of model.stations.get(m)!.gates) {
       const prev = byName.get(g.name)
@@ -544,4 +548,18 @@ export function gatesOn(node: MapNode, model: StationMapModel): GateMark[] {
     }
   }
   return [...byName.values()].sort((a, b) => rank(a) - rank(b))
+}
+
+/**
+ * The label of an edge's gates: the first (the one holding, by gatesOn's order) by name, with
+ * what it does when it holds, then how many more and what they do:
+ * "prod-approval (waiting) · +1 passing", "uat-soak (blocking) · +2 more", "freeze".
+ */
+export function edgeGateLabel(gates: GateMark[]): string {
+  const [first, ...rest] = gates
+  if (!first) return ''
+  const doing = first.holding ? ` (${first.approval ? 'waiting' : 'blocking'})` : ''
+  if (rest.length === 0) return `${first.name}${doing}`
+  const more = rest.every(g => g.state === 'Pass') ? 'passing' : 'more'
+  return `${first.name}${doing} · +${rest.length} ${more}`
 }

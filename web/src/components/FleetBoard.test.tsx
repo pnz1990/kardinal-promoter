@@ -46,8 +46,9 @@ describe('FleetBoard', () => {
 
     const failed = screen.getByRole('button', { name: /^search test:/ })
     expect(failed).toHaveAttribute('data-state', 'failed')
-    expect(screen.getByText('paused')).toBeInTheDocument()
-    expect(screen.getByText('1 failed')).toBeInTheDocument()
+    // Each line's one state (pipelineState), as the sidebar and the header say it: paused
+    // comes first, and the failed station still shows on the line.
+    expect(screen.getByText('Paused', { selector: '[data-category="paused"] *, [data-category="paused"]' })).toBeInTheDocument()
 
     const empty = screen.getByRole('button', { name: /^fresh prod:/ })
     expect(empty).toHaveAttribute('data-state', 'empty')

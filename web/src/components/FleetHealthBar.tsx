@@ -16,6 +16,7 @@
 // FR-505-02: Clickable filter badges that drive the pipeline list filter.
 // FR-505-04: Empty state when zero pipelines loaded.
 import type { Pipeline } from '../types'
+import { pipelineState, type PipelineCategory } from '../pipelineState'
 import '../styles/FleetHealthBar.css'
 
 /** Derived fleet health summary computed from the pipeline list. */
@@ -32,82 +33,31 @@ export interface FleetHealthSummary {
 }
 
 /**
- * PromotionStep states that mean a promotion is in flight. RollingBack is an
- * end state: the rollback Bundle's own step is the one in flight.
- */
-const IN_FLIGHT_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'Verifying'])
-
-/**
- * A pipeline is promoting when any environment of its active bundle is in
- * flight. Pipeline.phase is not used: it is also "Promoting" while a
- * PolicyGate holds a bundle before any environment starts, which the Blocked
- * count already shows.
- */
-export function isPromoting(p: Pipeline): boolean {
-  return Object.values(p.environmentStates ?? {}).some(s => IN_FLIGHT_STATES.has(s))
-}
-
-/** Healthy: nothing blocked, no failed or alarm-aborted step, not paused. */
-function isHealthy(p: Pipeline): boolean {
-  return (p.blockerCount ?? 0) === 0 && (p.failedStepCount ?? 0) === 0 && !p.paused
-}
-
-/**
- * Compute fleet health summary from the pipeline list.
+ * Compute fleet health summary from the pipeline list: each pipeline in exactly one bucket,
+ * its pipelineState category, so the counters agree with the sidebar badge and the header.
  * Pure function — no side effects.
  */
 export function computeFleetHealth(pipelines: Pipeline[]): FleetHealthSummary {
-  let healthy = 0
-  let blocked = 0
-  let ciRed = 0
-  let promoting = 0
-
-  for (const p of pipelines) {
-    if (isHealthy(p)) healthy++
-    if ((p.blockerCount ?? 0) > 0) blocked++
-    if ((p.failedStepCount ?? 0) > 0) ciRed++
-    if (isPromoting(p)) promoting++
-  }
-
-  return {
-    total: pipelines.length,
-    healthy,
-    blocked,
-    ciRed,
-    promoting,
-  }
+  const n = (c: PipelineCategory) => pipelines.filter(p => pipelineState(p).category === c).length
+  return { total: pipelines.length, healthy: n('healthy'), blocked: n('blocked'), ciRed: n('failed'), promoting: n('promoting') }
 }
 
-/** Filter category that maps to a UI badge. */
 export type FleetFilter = 'all' | 'healthy' | 'blocked' | 'ci-red' | 'promoting'
 
 const FLEET_FILTERS: readonly string[] = ['all', 'healthy', 'blocked', 'ci-red', 'promoting']
+const CATEGORY: Record<Exclude<FleetFilter, 'all'>, PipelineCategory> = { healthy: 'healthy', blocked: 'blocked', 'ci-red': 'failed', promoting: 'promoting' }
 
-/** Whether a value (the URL's filter=) is a fleet filter. */
-export function isFleetFilter(v: string | undefined): v is FleetFilter {
-  return v !== undefined && FLEET_FILTERS.includes(v)
+/** Whether value is a fleet filter (the URL's filter=). */
+export function isFleetFilter(value: string | undefined): value is FleetFilter {
+  return !!value && FLEET_FILTERS.includes(value)
 }
 
-/**
- * Filter a pipeline list by the given fleet filter.
- * Returns a new array — does not mutate input.
- */
+/** The pipelines in a filter's bucket (pipelineState category). */
 export function filterPipelines(
   pipelines: Pipeline[],
   filter: FleetFilter,
 ): Pipeline[] {
-  switch (filter) {
-    case 'all':
-      return pipelines
-    case 'healthy':
-      return pipelines.filter(isHealthy)
-    case 'blocked':
-      return pipelines.filter(p => (p.blockerCount ?? 0) > 0)
-    case 'ci-red':
-      return pipelines.filter(p => (p.failedStepCount ?? 0) > 0)
-    case 'promoting':
-      return pipelines.filter(isPromoting)
-  }
+  return filter === 'all' ? pipelines : pipelines.filter(p => pipelineState(p).category === CATEGORY[filter])
 }
 
 /** The colour of a badge's count: a status bucket, or the code colour for promoting. */

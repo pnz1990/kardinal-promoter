@@ -169,14 +169,14 @@ test('the fleet board shows what each environment runs and where releases are', 
   await expect(testStation).toContainText(/verified (just now|\d+[mhd] ago)/)
   await expect(held.getByRole('button', { name: new RegExp(`^${PIPELINE} prod:`) })).toHaveAttribute('data-state', 'held')
   await expect(held).toHaveAttribute('data-live', 'held')
-  await expect(held.locator('.fleet-flag[data-kind="held"]')).toBeVisible()
+  await expect(held.locator('[data-category="blocked"]')).toBeVisible()
 
   const failed = line(broken)
   await expect(failed.getByRole('button', { name: new RegExp(`^${broken} \\S+:`) })).toHaveAttribute('data-state', 'failed')
   await expect(failed).toHaveAttribute('data-live', 'failed')
 
   const idle = line(paused)
-  await expect(idle.locator('.fleet-flag[data-kind="paused"]')).toHaveText('paused')
+  await expect(idle.locator('[data-category="paused"]')).toContainText('Paused')
   for (const station of await idle.locator('.fleet-station').all()) {
     await expect(station).toHaveAttribute('data-state', 'empty')
   }

@@ -82,6 +82,8 @@ import { terminalEnvironments } from './fleetModel'
 
 import type { AccessCheck, Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep, PolicyGate } from './types'
 import { bundleVersion } from './stage/stageModel'
+import { pipelineState } from './pipelineState'
+import { StatusChip } from './ui'
 
 const POLL_INTERVAL_MS = 5000
 
@@ -876,6 +878,11 @@ export function App() {
                 {activePipeline?.paused && (
                   <span className="app-paused">⏸ PAUSED — no new promotions</span>
                 )}
+                {/* The pipeline's one state, as the sidebar, the counters and the fleet board say it. */}
+                {activePipeline && !activePipeline.paused && (() => {
+                  const st = pipelineState(activePipeline)
+                  return <StatusChip tone={st.tone} label={st.label} glyph={st.glyph} data-testid="pipeline-state" />
+                })()}
                 {activePipeline && (
                   <div className="app-pipeline-head__actions">
                     {/* #506: pause / resume; while paused, Resume is the primary action. */}
@@ -901,7 +908,7 @@ export function App() {
               {activePipeline && (
                 <p className="app-pipeline-head__summary">
                   {/* P1's status.summary sentence; the shown version's state when there is none. */}
-                  <span>{activePipeline.summary ?? (activeBundle ? displayState('bundle', activeBundle.phase).label : 'No version yet')}</span>
+                  <span>{activePipeline.summary ?? pipelineState(activePipeline).label}</span>
                   {/* #329/#763: the shown version's provenance, quiet; none for a version that is not found. */}
                   {activeBundle && !versionMissing && (
                     <span className="app-provenance">

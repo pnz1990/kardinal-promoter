@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { GateMark, Group, Station, StationMapModel, ThreadSegment } from './model'
-import { gatesOn, gridOrder, groupSummary, stationLabel } from './model'
+import { edgeGateLabel, gatesOn, gridOrder, groupSummary, stationLabel } from './model'
 import {
   BAR, CH_EM, GRAPH, TEXT_ASCENT, GRID_PAD_X, TEXT_PX, gridSpace, groupHead, cullLabels, detailChars, dotOf, gateOffset, gridCells, gridText, groupPacing, groupSub, groupTitle, initialLevel, layout,
   pathOf, pointBeforeEnd, threadPoints, wrapWords,
@@ -379,7 +379,7 @@ export default function StationMap(props: StationMapProps) {
         const g = gates[0]
         const p = pointBeforeEnd(points, gateOffset(0))
         const half = g.holding ? GRAPH.gateTick : GRAPH.gateTick / 2
-        const label = gates.length > 1 ? `${g.name} +${gates.length - 1}` : g.name
+        const label = edgeGateLabel(gates)
         const w = label.length * CH_EM * units
         const top = p.y - half - GATE_LEADER - 4 - units
         labels.push({ id: `${to}:${g.id}`, priority: 2, boxes: [{ x: p.x + 3 - w, y: top, w, h: units }] })
@@ -526,7 +526,7 @@ export default function StationMap(props: StationMapProps) {
               const ny = p.dx * half
               const env = target.node.kind === 'station' ? target.node.id : target.node.group.members[0]
               const labelled = level === 'detail' && i === 0 && plan.gates.has(`${to}:${g.id}`)
-              const label = gates.length > 1 ? `${g.name} +${gates.length - 1}` : g.name
+              const label = edgeGateLabel(gates)
               const hit = GRAPH.gateTick + GRAPH.grid.gap
               const labelW = label.length * GATE_CH
               // The label stands above the edge, clear of the thread, with a hairline down to the bar.
