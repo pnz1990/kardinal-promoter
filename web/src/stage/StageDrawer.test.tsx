@@ -73,7 +73,7 @@ describe('StageDrawer (U3)', () => {
     expect(why.getByText('Needs 1 more approval (1 of 2) in two-approvers.')).toBeInTheDocument()
     expect(why.getByText('Held by gate no-weekend.')).toBeInTheDocument()
     expect(why.getByText('weekend deploys are frozen')).toBeInTheDocument()
-    expect(why.getByText('evaluated 2m 0s ago')).toBeInTheDocument()
+    expect(why.getByText('evaluated 2m ago')).toBeInTheDocument()
     const gateK8s = [...why.getByText('Needs 1 more approval (1 of 2) in two-approvers.').closest('li')!.querySelectorAll('details.k-k8s')]
     expect(gateK8s).toHaveLength(1)
     expect(gateK8s[0]).not.toHaveAttribute('open')
@@ -297,6 +297,28 @@ describe('StageDrawer (U3)', () => {
     expect(reasonButton('Approve')).not.toHaveAttribute('aria-disabled')
   })
 
+  it('without sign-in Approve is inert, with one line under it naming the command that works (no list below)', async () => {
+    const user = userEvent.setup()
+    api.checkAccess.mockImplementation(async (_ns: string, checks: { verb: string; resource: string }[]) => ({
+      results: checks.map(c => c.resource === 'approvals'
+        ? { allowed: false, grantedBy: 'approver or admin', reason: 'approving needs sign-in with your Kubernetes identity' }
+        : { allowed: true, grantedBy: 'promoter or admin' }),
+    }))
+    renderDrawer()
+    await waitFor(() => expect(reasonButton('Approve')).toHaveAttribute('aria-disabled', 'true'))
+    const why = document.querySelector('[data-section="why"]') as HTMLElement
+    const notes = document.querySelectorAll('.sign-in-note')
+    expect(notes).toHaveLength(1)
+    expect(why).toContainElement(notes[0] as HTMLElement)
+    expect(notes[0]).toHaveTextContent('Approving needs sign-in with your Kubernetes identity — run kardinal approve web prod -n team')
+    expect(within(notes[0] as HTMLElement).getByRole('button', { name: 'Copy kardinal approve web prod -n team' })).toBeInTheDocument()
+    // The why item does not also print the command, and the actions do not explain it again.
+    expect(within(why).queryByText('From a terminal:')).not.toBeInTheDocument()
+    expect(screen.queryByRole('list', { name: 'Not available to you' })).not.toBeInTheDocument()
+    await user.click(reasonButton('Approve'))
+    expect(screen.queryByRole('dialog', { name: /Approve/ })).not.toBeInTheDocument()
+  })
+
   it('the keyboard command opens an action the drawer offers, and says why it cannot otherwise (U7)', async () => {
     const commandRef = createRef<StageCommand | null>() as { current: StageCommand | null }
     renderDrawer([approvalGate], { commandRef })
@@ -323,7 +345,7 @@ describe('StageDrawer (U3)', () => {
     const items = within(screen.getByRole('list', { name: 'Promotion steps' })).getAllByRole('listitem')
     expect(items.map(i => i.getAttribute('data-step-state'))).toEqual(['Completed', 'InProgress'])
     expect(items[1]).toHaveTextContent('waiting for merge')
-    expect(screen.getByTestId('stage-elapsed')).toHaveTextContent('Running for 3m 0s')
+    expect(screen.getByTestId('stage-elapsed')).toHaveTextContent('Running for 3m')
     expect(await screen.findByTestId('events-panel')).toHaveTextContent('PR opened')
   })
 })

@@ -105,7 +105,7 @@ test('keyboard shortcuts: / focuses the filter, ? shows the help, r refreshes, E
     ['?', 'Show / hide this help panel'],
     ['r', 'Refresh data now'],
     ['j / k', 'Next / previous environment; on Approvals, next / previous approval'],
-    ['a', 'Approve: the open environment, or the approval in focus'],
+    ['a', 'Approve: the open environment, the approval in focus, or the only one waiting'],
     ['s', 'Ship a version of the open pipeline'],
     ['[ / ]', 'Follow an older / newer version'],
     ['f', 'Follow the active version'],
@@ -238,7 +238,7 @@ test('the data refreshes every 5 s, and the indicator tells how old it is and wh
 
   // A change made elsewhere shows without a reload.
   await filterSidebar(page, ns)
-  const pausedBadge = sidebarRow(page, idle).getByTitle('Pipeline is paused — no new promotions will start')
+  const pausedBadge = sidebarRow(page, idle).locator('[data-category="paused"]')
   await expect(pausedBadge).toHaveCount(0)
   const status = await page.evaluate(async ([pipeline, namespace]) => {
     const resp = await fetch('/api/v1/ui/pause', {
@@ -249,7 +249,7 @@ test('the data refreshes every 5 s, and the indicator tells how old it is and wh
     return resp.status
   }, [idle, ns])
   expect(status).toBe(200)
-  await expect(pausedBadge).toHaveText('PAUSED', { timeout: 10_000 })
+  await expect(pausedBadge).toHaveText(/Paused$/, { timeout: 10_000 })
 
   // An API that never answers: the read gives up after 10 s and says so,
   // and the polling goes on.
@@ -266,14 +266,14 @@ test('the data refreshes every 5 s, and the indicator tells how old it is and wh
   const noAnswerNotice = notice("The controller didn't answer in time.")
   await expect(noAnswerNotice).toBeVisible()
   await expect(noAnswerNotice.locator('.k-error__detail')).toContainText(`GET ${PIPELINES_PATH} got no answer within 10 s`)
-  await expect(pausedBadge).toHaveText('PAUSED')
+  await expect(pausedBadge).toHaveText(/Paused$/)
   await expect(page.getByRole('textbox', { name: 'Filter pipelines by name or namespace' })).toHaveValue(ns)
   await expect.poll(() => held.length, { timeout: 20_000 }).toBeGreaterThanOrEqual(2)
   await expect(heading(page)).toHaveText(PIPELINE)
   await page.unroute(isPipelinesPoll, hold)
   await expectFresh(page)
   await expect(noAnswerNotice).toHaveCount(0)
-  await expect(pausedBadge).toHaveText('PAUSED')
+  await expect(pausedBadge).toHaveText(/Paused$/)
 
   // An API that fails: the error and the growing age; a click retries at once.
   const fail = (route: Route) => route.fulfill({ status: 503, contentType: 'text/plain', body: 'unavailable' })
@@ -282,7 +282,7 @@ test('the data refreshes every 5 s, and the indicator tells how old it is and wh
   const failedNotice = notice('The controller had a problem. It may be restarting; try again.')
   await expect(failedNotice).toBeVisible()
   await expect(failedNotice.locator('.k-error__detail')).toContainText('API error 503')
-  await expect(pausedBadge).toHaveText('PAUSED')
+  await expect(pausedBadge).toHaveText(/Paused$/)
   await expect(indicator(page)).toHaveText(/^⚠ (just now|\d+s ago)$/)
   await expect.poll(() => secondsAgo(page), { timeout: 15_000 }).toBeGreaterThanOrEqual(6)
   const refresh = page.getByRole('button', { name: 'Refresh data' })

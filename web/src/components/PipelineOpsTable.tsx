@@ -7,11 +7,14 @@
 
 import { useState, useMemo } from 'react'
 import type { Pipeline } from '../types'
-import { HealthChip } from './HealthChip'
-import { displayState } from '../displayStates.gen'
+import { StatusChip } from '../ui/Chips'
+import { pipelineState, type PipelineCategory } from '../pipelineState'
 import { Icon } from '../ui/Icon'
 import { ErrorNotice } from '../ui/ErrorNotice'
 import '../styles/PipelineOpsTable.css'
+
+/** The state column's order: what needs a person first. */
+const STATE_ORDER: Record<PipelineCategory, number> = { failed: 0, blocked: 1, promoting: 2, paused: 3, empty: 4, healthy: 5 }
 
 type SortColumn =
   | 'name'
@@ -99,7 +102,7 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
           p.name.toLowerCase().includes(q) ||
           p.namespace.toLowerCase().includes(q) ||
           p.phase.toLowerCase().includes(q) ||
-          displayState('pipeline', p.paused ? 'Paused' : p.phase).label.toLowerCase().includes(q)
+          pipelineState(p).label.toLowerCase().includes(q)
         )
       : pipelines
   }, [pipelines, filter])
@@ -111,9 +114,12 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
         case 'name':
           cmp = a.name.localeCompare(b.name)
           break
-        case 'phase':
-          cmp = (a.phase ?? '').localeCompare(b.phase ?? '')
+        case 'phase': {
+          // By the pipeline's one state (the sidebar's and the counters'), then its words.
+          const sa = pipelineState(a), sb = pipelineState(b)
+          cmp = STATE_ORDER[sa.category] - STATE_ORDER[sb.category] || sa.label.localeCompare(sb.label)
           break
+        }
         case 'blockerCount':
           cmp = (a.blockerCount ?? 0) - (b.blockerCount ?? 0)
           break
@@ -243,7 +249,11 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
 
                   {/* Status */}
                   <td className="ops-table__td">
-                    <HealthChip state={p.paused ? 'Paused' : p.phase} kind="pipeline" size="sm" />
+                    {(() => {
+                      // The pipeline's one state, as the sidebar, the header and the counters say it.
+                      const st = pipelineState(p)
+                      return <StatusChip tone={st.tone} label={st.label} glyph={st.glyph} compact data-category={st.category} title={st.label} />
+                    })()}
                   </td>
 
                   {/* Blockers */}

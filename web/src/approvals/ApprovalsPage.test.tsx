@@ -40,7 +40,7 @@ describe('ApprovalsPage (U7)', () => {
     const rows = within(screen.getByRole('list', { name: 'Waiting on you' })).getAllByRole('listitem')
     expect(rows.map(r => within(r).getByRole('link').textContent)).toEqual(['web › eu', 'web › prod'])
     expect(within(rows[1]).getByRole('link', { name: 'web, prod' })).toBeInTheDocument()
-    expect(rows[0]).toHaveTextContent('2h 0m')
+    expect(rows[0]).toHaveTextContent('2h')
     expect(rows[1]).toHaveTextContent('12m')
     expect(rows[1]).toHaveTextContent('1.5.0web-3·release-approval') // VersionLabel: the version, then the Bundle name
     expect(within(rows[1]).getByRole('img', { name: '1 of 2 approvals' })).toBeInTheDocument()
@@ -104,6 +104,20 @@ describe('ApprovalsPage (U7)', () => {
     expect(screen.getByRole('link', { name: /web.*prod/ })).toHaveFocus()
     act(() => { expect(ref.current!.approve()).toBe(true) })
     expect(screen.getByRole('dialog', { name: 'Approve 1.5.0 for prod?' })).toBeInTheDocument()
+  })
+
+  it('a with several waiting and none in focus asks to select one; without sign-in it says why, never "nothing waits"', async () => {
+    const ref = createRef<ApprovalsHandle>()
+    const { unmount } = render(<ApprovalsPage ref={ref} gates={gates} pipelines={pipelines} now={now} />)
+    await screen.findByRole('heading', { name: '2 waiting on you' })
+    act(() => { expect(ref.current!.approve()).toBe('2 wait on you: select one first (j / k).') })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    unmount()
+    resetAccessForTests()
+    api.checkAccess.mockImplementation(async (_ns: string, checks: AccessCheck[]) => ({ results: checks.map(() => ({ allowed: false })) }))
+    render(<ApprovalsPage ref={ref} gates={[gates[0]]} pipelines={pipelines} now={now} />)
+    await screen.findByRole('heading', { name: '1 waiting for approval' })
+    act(() => { expect(ref.current!.approve()).toBe('Approving needs sign-in with your Kubernetes identity — run kardinal approve web prod -n team') })
   })
 
   it('says nothing waits, and how an approval arrives', () => {
