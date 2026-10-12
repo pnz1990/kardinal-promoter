@@ -8,6 +8,7 @@
 
 import type { StepEvent } from '../types'
 import '../styles/EventsPanel.css'
+import { humanDuration } from '../timeFormat'
 
 export type { StepEvent }
 
@@ -26,9 +27,7 @@ function relativeTime(iso: string): string {
     const d = new Date(iso)
     if (isNaN(d.getTime())) return iso
     const diffSec = Math.floor((Date.now() - d.getTime()) / 1000)
-    if (diffSec < 60) return `${diffSec}s ago`
-    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`
-    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`
+    if (diffSec < 86400) return `${humanDuration(diffSec)} ago`
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
   } catch {
     return iso

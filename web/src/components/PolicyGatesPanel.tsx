@@ -10,6 +10,7 @@ import { HealthChip, type HealthState } from './HealthChip'
 import { gateDisplay, gateLabel } from '../stage/stageModel'
 import '../styles/PolicyGatesPanel.css'
 import { ApprovalQuorum } from './ApprovalQuorum'
+import { ago } from '../timeFormat'
 
 interface Props {
   gates: PolicyGate[]
@@ -26,17 +27,7 @@ interface Props {
 }
 
 function formatAge(iso: string | undefined): string {
-  if (!iso) return '—'
-  try {
-    const d = new Date(iso)
-    if (isNaN(d.getTime())) return '—'
-    const diffSec = Math.floor((Date.now() - d.getTime()) / 1000)
-    if (diffSec < 60) return `${diffSec}s ago`
-    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`
-    return `${Math.floor(diffSec / 3600)}h ago`
-  } catch {
-    return '—'
-  }
+  return ago(iso) || '—'
 }
 
 /**
