@@ -83,6 +83,10 @@ Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/ka
 
 ### Fixed
 
+- **`ship --wait` gives each environment its own time** — a held environment whose `since` is unset or zero printed `for 2562047h47m16.854775807s`; it is now unknown there, and the time this follow saw the state stands in. "took" is how long the environment's own promotion took (from its PromotionStep's first step, else from its upstream going live), not the time since the Bundle was created, and every time is clamped between the Bundle's creation and now
+- **A version that starts a sentence keeps its case** — `status.summary` (and so `kardinal status` and the UI) reads `sha-9349a3f live in test, uat`, not `Sha-9349a3f live …`
+- **A soak gate says how far it soaked and when it opens** — `kardinal why`, `explain` and `status` show `soak 0.4 of 3 min in uat, opens in about 2m36s` for a `bundle.upstreamSoakMinutes` or `upstream.<env>.soakMinutes` gate, from the Bundle's `status.environments[].healthCheckedAt`. For a gate that opens by itself, `why`'s Next is to wait, and `kardinal override` comes only as **Or**
+- **`kardinal status` shows an approval gate's tally** — the Blocking gates table reads `approval 0 of 1` for an approval gate, not its expression `true`
 - **`ship --wait` times never go negative** — with the controller's clock ahead of this one, a summary's "for" is `0s`, not `-3s`
 - **A rejected version says rejected when the CLI cannot read it** — `kardinal why` says who rejected it, and `kardinal inbox` leaves it out as it does every rejected gate, instead of "could not read the version" when the gate excludes the author
 - **The stage drawer shows step timings, events and the CEL check** — an environment's drawer shows the steps' timing bars and the running time in its evidence, the step's events in its history, and the controller's CEL check when a gate's **Details** opens ([Installation](installation.md))

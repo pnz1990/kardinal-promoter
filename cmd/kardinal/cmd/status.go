@@ -332,6 +332,9 @@ type pipelineStatus struct {
 	activeSteps map[string]string
 }
 
+// statusNow is status's clock (a soak gate's progress); a test replaces it.
+var statusNow = time.Now
+
 // statusGate is a gate instance that holds the newest Bundle of an
 // environment back.
 type statusGate struct {
@@ -340,6 +343,9 @@ type statusGate struct {
 	Environment string `json:"environment"`
 	Bundle      string `json:"bundle"`
 	Expression  string `json:"expression"`
+	// Approval is an approval gate's tally ("approval 0 of 1"), shown in
+	// place of its expression, which says nothing about why it holds.
+	Approval string `json:"approval,omitempty"`
 	// Message is the gate's spec.message when it explains the block
 	// (graph.BlockedMessage).
 	Message string `json:"message,omitempty"`
@@ -437,11 +443,31 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 				!slices.Contains(e.BlockedBy, gateDisplayName(*g)) {
 				continue
 			}
-			view.BlockingGates = append(view.BlockingGates, statusGate{
+			sg := statusGate{
 				Name: gateDisplayName(*g), Instance: g.Name, Environment: e.Name, Bundle: newest,
 				Expression: g.Spec.Expression, Message: graph.BlockedMessage(g), Reason: g.Status.Reason,
 				LastEvaluatedAt: g.Status.LastEvaluatedAt,
-			})
+			}
+			// A soak gate says how far the version soaked and when it opens.
+			if soak, ok := soakOf(&pl, byName[newest], g, statusNow()); ok {
+				progress := soak.now()
+				if opens := soak.opens(); opens != "" {
+					progress += ", opens " + opens
+				}
+				if sg.Message != "" {
+					progress = sg.Message + "; " + progress
+				}
+				sg.Message = progress
+			}
+			if g.Spec.Approval != nil {
+				creator := ""
+				if b := byName[newest]; b != nil {
+					creator = b.Annotations[lifecycle.AnnotationCreatedBy]
+				}
+				t := lifecycle.TallyApprovals(g, creator)
+				sg.Approval = fmt.Sprintf("approval %d of %d", len(t.Approvers), t.Required)
+			}
+			view.BlockingGates = append(view.BlockingGates, sg)
 		}
 		// A Rejected Bundle whose change runs here (lifecycle.RejectedLiveStep).
 		if b := byName[e.Bundle]; b != nil && lifecycle.Rejected(b) {
@@ -594,8 +620,12 @@ func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
 			if reason == "" {
 				reason = truncateRunes(orDash(g.Reason), 35)
 			}
+			rule := truncateRunes(orDash(g.Expression), 40)
+			if g.Approval != "" {
+				rule = g.Approval
+			}
 			_, _ = fmt.Fprintf(gtw, "%s\t%s\t%s\t%s\t%s\n", sty.Paint(display.ToneBlocked, g.Name), g.Environment,
-				truncateRunes(orDash(g.Expression), 40), reason, lastChecked)
+				rule, reason, lastChecked)
 		}
 		if err := gtw.Flush(); err != nil {
 			return fmt.Errorf("write blocking gates: %w", err)

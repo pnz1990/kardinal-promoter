@@ -167,6 +167,31 @@ func TestProjectEnvironments(t *testing.T) {
 		summary: "1.5.0 live in test; failed in uat",
 		line:    "test=1.5.0 uat=- prod=-",
 	}, {
+		// A tag is a name: "sha-9349a3f live …", not "Sha-9349a3f live …".
+		name:    "a version that starts the sentence keeps its case",
+		p:       appPipeline,
+		bundles: []kardinalv1alpha1.Bundle{envBundle("b1", "sha-9349a3f", "Verified", envT0)},
+		steps:   v1,
+		ready:   validReady,
+		want: []want{{env: "test", bundle: "b1", version: "sha-9349a3f", state: "Verified"},
+			{env: "uat", bundle: "b1", version: "sha-9349a3f", state: "Verified"},
+			{env: "prod", bundle: "b1", version: "sha-9349a3f", state: "Verified"}},
+		summary: "sha-9349a3f live in test, uat, prod", line: "test=sha-9349a3f uat=sha-9349a3f prod=sha-9349a3f",
+	}, {
+		name: "a paused Pipeline still starts with a capital before a version",
+		p: func() *kardinalv1alpha1.Pipeline {
+			p := appPipeline()
+			p.Spec.Paused = true
+			return p
+		},
+		bundles: []kardinalv1alpha1.Bundle{envBundle("b1", "main", "Verified", envT0)},
+		steps:   v1,
+		ready:   validReady,
+		want: []want{{env: "test", bundle: "b1", version: "main", state: "Verified"},
+			{env: "uat", bundle: "b1", version: "main", state: "Verified"},
+			{env: "prod", bundle: "b1", version: "main", state: "Verified"}},
+		summary: "Paused; main live in test, uat, prod", line: "test=main uat=main prod=main",
+	}, {
 		name: "an invalid, paused Pipeline says so first",
 		p: func() *kardinalv1alpha1.Pipeline {
 			p := appPipeline()
