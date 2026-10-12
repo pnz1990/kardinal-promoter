@@ -29,15 +29,16 @@
    (.k-stage-drawer-open), so the drawer sits beside the page, not over it. */
 .stage-drawer:not(.stage-drawer--sheet) {
   position: fixed;
-  inset-block: 0;
+  /* Below the top bar, which keeps the full width (breadcrumb and Go to or do… never squeeze). */
+  inset-block: var(--k-layout-topbar) 0;
   inset-inline-end: 0;
   max-block-size: none;
   z-index: var(--k-z-drawer);
   box-shadow: var(--k-elev-2);
 }
 
-.k-stage-drawer-open #main-content {
-  padding-inline-end: var(--k-layout-drawer);
+.k-stage-drawer-open #main-content > :not(.app-topbar) {
+  margin-inline-end: var(--k-layout-drawer);
 }
 
 .stage-drawer__scrim {
@@ -155,30 +156,7 @@
   color: var(--k-ink-3);
 }
 
-.stage-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--k-space-1);
-  align-self: flex-start;
-  padding: var(--k-space-px) var(--k-space-2);
-  border-radius: var(--k-radius-1);
-  font-size: var(--k-text-xs);
-  line-height: var(--k-leading-xs);
-  font-weight: var(--k-weight-medium);
-  border: var(--k-border-hairline) solid transparent;
-}
-
-.stage-chip--verified { color: var(--k-status-verified-fg); background: var(--k-status-verified-wash); }
-.stage-chip--promoting { color: var(--k-status-promoting-fg); background: var(--k-status-promoting-wash); }
-.stage-chip--waiting { color: var(--k-status-waiting-fg); background: var(--k-status-waiting-wash); }
-.stage-chip--blocked { color: var(--k-status-blocked-fg); background: var(--k-status-blocked-wash); }
-.stage-chip--failed { color: var(--k-status-failed-on-fill); background: var(--k-status-failed-fill); }
-.stage-chip--superseded { color: var(--k-status-superseded-fg); border: var(--k-border-hairline) dashed var(--k-line-strong); }
-.stage-chip--paused { color: var(--k-status-paused-fg); background: var(--k-hatch); }
-.stage-chip--held { color: var(--k-status-held-fg); background: var(--k-hatch); }
-.stage-chip--pending,
-.stage-chip--unknown { color: var(--k-ink-3); border-color: var(--k-status-pending-ring); }
-.stage-chip--degraded { color: var(--k-status-failed-fg); border-color: var(--k-status-failed-fg); }
+/* The state chip is ui's StatusChip (.k-chip). */
 
 .stage-why {
   margin: 0;

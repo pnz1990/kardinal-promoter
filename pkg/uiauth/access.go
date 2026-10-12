@@ -5,6 +5,7 @@ package uiauth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -179,8 +180,7 @@ func (c *AuthorizingClient) authorize(ctx context.Context, verb string, obj runt
 	}
 	allowed, reason, err := c.access.Allowed(ctx, user, attrs)
 	if err != nil {
-		return fail(denial{code: 503, msg: "auth unavailable"},
-			apierrors.NewServiceUnavailable(err.Error()))
+		return fail(reviewFailure(err), apierrors.NewServiceUnavailable(err.Error()))
 	}
 	if !allowed {
 		where := "all namespaces"
@@ -275,6 +275,40 @@ var actionRoles = map[string]string{
 	"policygates/edit":     "admin",
 }
 
+// grantRoles names the chart roles that grant the verbs the UI's actions
+// need on whole kinds (create a Bundle to promote, roll back or ship; create
+// an Approval to approve or decline).
+var grantRoles = map[string]string{
+	"create bundles":   "promoter or admin",
+	"create approvals": "approver or admin",
+}
+
+// RolesFor names the chart's user roles that grant verb on resource (with
+// subresource, a virtual one such as pipelines/pause), or "" when the chart
+// grants it to no user role in particular.
+func RolesFor(verb, resource, subresource string) string {
+	if subresource != "" {
+		return actionRoles[resource+"/"+subresource]
+	}
+	return grantRoles[verb+" "+resource]
+}
+
+// Can reports whether the request's user may perform attrs, without
+// recording a denial: the UI asks it to decide which actions to offer, and a
+// "no" must not turn the answer into a 403. The access reviewer caches the
+// result (DefaultCacheTTL).
+func (c *AuthorizingClient) Can(ctx context.Context, attrs authzv1.ResourceAttributes) (bool, error) {
+	user, ok := UserFrom(ctx)
+	if !ok || user.Username == "" {
+		return false, apierrors.NewUnauthorized("no authenticated user")
+	}
+	allowed, _, err := c.access.Allowed(ctx, user, attrs)
+	if err != nil {
+		return false, fmt.Errorf("access review: %w", err)
+	}
+	return allowed, nil
+}
+
 // AuthorizeAction checks that the request's user may perform verb on
 // group/resource/subresource (a virtual subresource such as pipelines/pause or
 // policygates/override) for the named object, recording a denial like any
@@ -301,7 +335,7 @@ func (c *AuthorizingClient) AuthorizeAction(ctx context.Context, verb, group, re
 		Namespace: namespace, Verb: verb, Group: group, Resource: resource, Subresource: subresource, Name: name,
 	})
 	if err != nil {
-		return fail(denial{code: 503, msg: "auth unavailable"}, apierrors.NewServiceUnavailable(err.Error()))
+		return fail(reviewFailure(err), apierrors.NewServiceUnavailable(err.Error()))
 	}
 	if !allowed {
 		msg := fmt.Sprintf("forbidden: user %q cannot %s %s/%s.%s %q in namespace %s",
@@ -428,4 +462,14 @@ func (refusedSubResource) Patch(context.Context, client.Object, client.Patch, ..
 }
 func (refusedSubResource) Apply(context.Context, runtime.ApplyConfiguration, ...client.SubResourceApplyOption) error {
 	return errNotSupported
+}
+
+// reviewFailure is the answer to a request whose SubjectAccessReview could
+// not be made: 429 when the user used their reviews for this minute, else
+// 503 (the review API fails closed).
+func reviewFailure(err error) denial {
+	if errors.Is(err, ErrAccessRateLimited) {
+		return denial{code: 429, msg: "too many authorization checks for this user; try again in a minute"}
+	}
+	return denial{code: 503, msg: "auth unavailable"}
 }

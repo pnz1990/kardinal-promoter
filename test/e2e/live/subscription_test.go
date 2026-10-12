@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -420,7 +421,7 @@ func createSecret(t *testing.T, e *framework.Env, ns, name string, typ corev1.Se
 // creates config Bundle <subscription>-<first 8 SHA chars> whose configRef
 // is the Subscription's repoURL at that commit.
 //
-// Covers SUB-GIT-01.
+// Covers SUB-GIT-01, CLI-GET-SUBS-01.
 func TestSub_GitNewCommit(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -455,6 +456,13 @@ func TestSub_GitNewCommit(t *testing.T) {
 	require.NotNil(t, b.Spec.Provenance)
 	assert.Equal(t, sha, b.Spec.Provenance.CommitSHA)
 	assert.Len(t, bundles(t, e, a.ns), 1)
+
+	// kardinal get subscriptions: LAST-VERSION is the commit, one token;
+	// -o wide shows the whole version and the Bundle.
+	out := e.MustKardinal(t, a.ns, "get", "subscriptions", "config")
+	assert.Regexp(t, `(?m)^config\s+git\s+\S+\s+\S+\s+\S+ ago\s+`+sha[:7]+`\s+\S+$`, out)
+	out = e.MustKardinal(t, a.ns, "get", "subscriptions", "config", "-o", "wide")
+	assert.Regexp(t, `(?m)^config\s+git\s+\S+\s+\S+\s+\S+ ago\s+config `+sha[:7]+`\s+`+want+`\s+\S+$`, out)
 }
 
 // committer is the git server's commit API.
@@ -682,7 +690,7 @@ func TestSub_Status(t *testing.T) {
 
 	out = e.MustKardinal(t, "", "get", "subscriptions", "-A")
 	lines = strings.Split(strings.TrimSpace(out), "\n")
-	assert.Equal(t, []string{"NAMESPACE", "NAME", "TYPE", "PIPELINE", "PHASE", "LAST-CHECK", "LAST-BUNDLE", "AGE"},
+	assert.Equal(t, []string{"NAMESPACE", "NAME", "TYPE", "PIPELINE", "PHASE", "LAST-CHECK", "LAST-VERSION", "AGE"},
 		strings.Fields(lines[0]))
 	mine := map[string]string{}
 	for _, l := range lines[1:] {
@@ -691,8 +699,14 @@ func TestSub_Status(t *testing.T) {
 		}
 	}
 	require.Len(t, mine, 2, "both Subscriptions of %s are listed:\n%s", a.ns, out)
-	assert.Regexp(t, `^`+a.ns+`\s+ok\s+image\s+`+pipelineName+`\s+Watching\s+\S+ ago\s+`+bundle+`\s+\S+$`, mine["ok"])
+	assert.Regexp(t, `^`+a.ns+`\s+ok\s+image\s+`+pipelineName+`\s+Watching\s+\S+ ago\s+6\.14\.0\s+\S+$`, mine["ok"])
 	assert.Regexp(t, `^`+a.ns+`\s+broken\s+image\s+`+pipelineName+`\s+Error\s+\S+ ago\s+-\s+\S+$`, mine["broken"])
+
+	// -o wide adds the Bundle's name.
+	wide := e.MustKardinal(t, a.ns, "get", "subscriptions", "-o", "wide")
+	assert.Equal(t, []string{"NAME", "TYPE", "PIPELINE", "PHASE", "LAST-CHECK", "LAST-VERSION", "LAST-BUNDLE", "AGE"},
+		strings.Fields(strings.SplitN(wide, "\n", 2)[0]))
+	assert.Regexp(t, `(?m)^ok\s+image\s+`+pipelineName+`\s+Watching\s+\S+ ago\s+6\.14\.0\s+`+regexp.QuoteMeta(bundle)+`\s+\S+$`, wide)
 }
 
 // TestSub_Namespace checks that spec.namespace naming another namespace

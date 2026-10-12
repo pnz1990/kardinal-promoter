@@ -236,6 +236,9 @@ func TestShipWait(t *testing.T) {
 			_ = c.List(ctx, &bl)
 			for i := range bl.Items {
 				b := bl.Items[i]
+				if b.Status.Phase == "Verified" {
+					continue // only the Bundle being shipped moves
+				}
 				var pl = p.DeepCopy()
 				_ = c.Get(ctx, types.NamespacedName{Namespace: "default", Name: "demo"}, pl)
 				pl.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "test", Bundle: b.Name, State: "Verified"},
@@ -248,9 +251,31 @@ func TestShipWait(t *testing.T) {
 		}
 	}()
 	var out bytes.Buffer
-	require.NoError(t, shipFn(context.Background(), &out, c, "default", "demo", opts, true, time.Minute, false))
+	require.NoError(t, shipFn(context.Background(), &out, c, "default", "demo", opts, true, time.Minute, false, false))
 	assert.Equal(t, "1.5.0 is live in test, prod\n", out.String())
 	assert.Contains(t, progress.String(), "following it")
+	assert.Contains(t, progress.String(), "Summary after ", "a summary at the end")
+
+	// --quiet: the last line only, nothing on stderr.
+	progress.Reset()
+	out.Reset()
+	require.NoError(t, shipFn(context.Background(), &out, c, "default", "demo", opts, true, time.Minute, false, true))
+	assert.Equal(t, "1.5.0 is live in test, prod\n", out.String())
+	assert.Empty(t, progress.String(), "--quiet prints nothing on stderr")
+
+	// --quiet with -o json: the JSON document only, its schema unchanged.
+	progress.Reset()
+	out.Reset()
+	globalOutput = "json"
+	require.NoError(t, shipFn(context.Background(), &out, c, "default", "demo", opts, true, time.Minute, false, true))
+	globalOutput = ""
+	assert.Empty(t, progress.String(), "--quiet -o json prints nothing on stderr")
+	var quietJSON map[string]any
+	require.NoError(t, json.Unmarshal(out.Bytes(), &quietJSON), out.String())
+	for _, k := range []string{"bundle", "pipeline", "namespace", "type", "version", "url", "result", "exitCode", "message", "environments"} {
+		assert.Contains(t, quietJSON, k)
+	}
+	assert.Equal(t, "Verified", quietJSON["result"])
 
 	// Held at an evaluated gate: exit 3, JSON.
 	cancel()
@@ -467,6 +492,80 @@ func (s *syncBuffer) Write(p []byte) (int, error) {
 }
 func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
 
+// TestShip_QuietNeedsWait: --quiet without --wait is refused, also with
+// --dry-run, before anything is read.
+func TestShip_QuietNeedsWait(t *testing.T) {
+	keepStyle(t)
+	for _, args := range [][]string{{"ship", "demo", "--image", "app:1", "-q"}, {"ship", "demo", "--image", "app:1", "--dry-run", "--quiet"}} {
+		root := NewRootCmd()
+		root.SetOut(&bytes.Buffer{})
+		root.SetErr(&bytes.Buffer{})
+		root.SetArgs(args)
+		assert.EqualError(t, root.Execute(), "ship: --quiet quiets --wait's progress; add --wait", "%v", args)
+	}
+}
+
+var updateShipProgress = flag.Bool("update-ship-progress", false, "rewrite testdata/ship-progress.golden")
+
+// TestShipProgress_Golden (CLI UX 10): ship --wait's stderr: each new state
+// after the time since the start, each PR's URL once, and a summary of how
+// long each environment took, or has waited.
+//
+// Covers CLI-VERBS-01.
+func TestShipProgress_Golden(t *testing.T) {
+	start := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
+	now := start
+	prev := shipNow
+	shipNow = func() time.Time { return now }
+	t.Cleanup(func() { shipNow = prev })
+	var buf bytes.Buffer
+	p := &shipProgress{w: &buf, timed: true, start: start, created: start.Add(-5 * time.Second)}
+	env := func(name, state string, more ...func(*v1alpha1.PipelineEnvironmentStatus)) v1alpha1.PipelineEnvironmentStatus {
+		e := v1alpha1.PipelineEnvironmentStatus{Name: name, State: state, IncomingBundle: "b2"}
+		for _, f := range more {
+			f(&e)
+		}
+		return e
+	}
+	pr := func(e *v1alpha1.PipelineEnvironmentStatus) { e.PRURL = "https://github.com/acme/gitops/pull/42" }
+	gate := func(e *v1alpha1.PipelineEnvironmentStatus) { e.BlockedBy = []string{"cab"} }
+	steps := []struct {
+		at   time.Duration
+		envs []v1alpha1.PipelineEnvironmentStatus
+	}{
+		{0, []v1alpha1.PipelineEnvironmentStatus{env("test", "Promoting"), env("uat", "Pending"), env("prod", "Pending")}},
+		{40 * time.Second, []v1alpha1.PipelineEnvironmentStatus{env("test", "HealthChecking"), env("uat", "Pending"), env("prod", "Pending")}},
+		{65 * time.Second, []v1alpha1.PipelineEnvironmentStatus{env("test", "Verified"), env("uat", "Promoting"), env("prod", "Pending")}},
+		{2 * time.Minute, []v1alpha1.PipelineEnvironmentStatus{env("test", "Verified"), env("uat", "WaitingForMerge", pr), env("prod", "Pending")}},
+		{2*time.Minute + 2*time.Second, []v1alpha1.PipelineEnvironmentStatus{env("test", "Verified"), env("uat", "WaitingForMerge", pr), env("prod", "Pending")}},
+		{3 * time.Minute, []v1alpha1.PipelineEnvironmentStatus{env("test", "Verified"), env("uat", "Verified"), env("prod", "Pending", gate)}},
+	}
+	// The controller's since: when each environment's state began.
+	state, began := map[string]string{}, map[string]*metav1.Time{}
+	for _, s := range steps {
+		now = start.Add(s.at)
+		for i := range s.envs {
+			e := &s.envs[i]
+			if state[e.Name] != e.State+strings.Join(e.BlockedBy, ",") {
+				state[e.Name] = e.State + strings.Join(e.BlockedBy, ",")
+				t := metav1.NewTime(now.Add(-time.Second)) // a second before the poll saw it
+				began[e.Name] = &t
+			}
+			e.Since = began[e.Name]
+		}
+		p.observe(s.envs)
+	}
+	now = start.Add(4*time.Minute + 15*time.Second)
+	p.summary(steps[len(steps)-1].envs)
+	path := filepath.Join("testdata", "ship-progress.golden")
+	if *updateShipProgress {
+		require.NoError(t, os.WriteFile(path, buf.Bytes(), 0o644))
+	}
+	want, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, string(want), buf.String())
+}
+
 // TestShipWait_Interrupt (C5): SIGINT during ship --wait ends the wait, not
 // the process: the JSON result is printed and the exit code is 6.
 //
@@ -490,7 +589,7 @@ func TestShipWait_Interrupt(t *testing.T) {
 	}()
 	var out bytes.Buffer
 	err := shipFn(context.Background(), &out, c, "default", "demo",
-		createBundleOptions{Images: []string{"ghcr.io/o/app:1.5.0"}, Type: "image"}, true, time.Minute, false)
+		createBundleOptions{Images: []string{"ghcr.io/o/app:1.5.0"}, Type: "image"}, true, time.Minute, false, false)
 	require.Error(t, err)
 	assert.Equal(t, ExitTimeout, ExitCode(err))
 	var res shipResult
@@ -505,6 +604,7 @@ func TestShipWait_Interrupt(t *testing.T) {
 //
 // Covers CLI-VERBS-01.
 func TestApprove_PinAndConfirm(t *testing.T) {
+	keepStyle(t)
 	stubIdentity(t, Identity{Username: "alice"})
 	b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v2", Namespace: "default"},
 		Spec:   v1alpha1.BundleSpec{Type: "image", Pipeline: "app", Images: []v1alpha1.ImageRef{{Repository: "r/app", Tag: "2.0"}}},
@@ -543,4 +643,20 @@ func TestApprove_PinAndConfirm(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "Recorded: alice approves app-v2 for prod")
 	assert.Len(t, approvals(t, c), 1)
+}
+
+// TestShortDuration: ship's times are to the second, and never negative: a
+// controller clock ahead of this one makes "for" 0s, not "-3s".
+func TestShortDuration(t *testing.T) {
+	for _, tc := range []struct {
+		d    time.Duration
+		want string
+	}{
+		{65*time.Second + 300*time.Millisecond, "1m5s"},
+		{400 * time.Millisecond, "0s"},
+		{0, "0s"},
+		{-3 * time.Second, "0s"},
+	} {
+		assert.Equal(t, tc.want, shortDuration(tc.d), "%v", tc.d)
+	}
 }

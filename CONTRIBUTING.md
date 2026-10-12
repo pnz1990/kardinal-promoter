@@ -28,8 +28,31 @@ embeds the committed `web/dist`, so after changing `web/` run `make ui` and comm
 `web/dist`; CI fails when it differs from a fresh build.
 
 ```bash
-cd web && npm ci && npm run typecheck && npm test && npm run build
+cd web && npm ci && npm run typecheck && npm test && npm run build && npm run size
 ```
+
+`npm run size` (CI runs it too) holds the UI to its gzip budgets: **initial JS ≤ 152 KB** (the
+import graph from the entry module, its static imports followed transitively, plus the first view
+a route needs: the Table on a narrow screen and the stage drawer on an `/env/` link; the largest of
+those loads counts), **total JS
+≤ 200 KB** (every chunk, the lazily loaded views included), the same pair for CSS (initial
+≤ 18 KB, the stylesheets of that load; total ≤ 25 KB) and fonts ≤ 180 KB. A
+large view that only some pages need (the Matrix, the comparison panel, the command palette, the
+Activity and Metrics tabs, the operations table) is loaded with `React.lazy`, so it counts toward
+the total but not the initial load.
+
+The budgets are re-baselined once per release, in `web/scripts/check-size.mjs` (the numbers above
+are the v0.11 baseline); between releases they do not move. Every UI PR states its size delta in
+its description: the five lines `npm run size` prints on `main` and on the branch.
+
+The `@perf` Playwright journeys (`npm run test:e2e` runs them after the others, on one worker)
+scroll the 200-version Matrix diagonally. On every run, CI included, they assert what the page
+controls: the cells drawn in any frame (under 600 in the default view, under 1,200 with every
+wave and fleet expanded, of 60,200) and no long task over 200 ms. A shared runner cannot hold a
+frame budget, so the frame-time p95 (20 ms by default, 33 ms expanded) and the 100 ms long-task
+bound are asserted only with `KARDINAL_PERF_STRICT=1`: the UI perf workflow (`.github/workflows/ui-perf.yml`) runs that
+nightly and on a dispatch (`gh workflow run ui-perf.yml --ref <branch>`), and locally
+`cd web && KARDINAL_PERF_STRICT=1 npx playwright test --grep @perf --workers=1` on an idle machine.
 
 ### Run Locally
 

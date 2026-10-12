@@ -37,8 +37,9 @@ func newDeleteCmd() *cobra.Command {
 }
 
 func newDeleteBundleCmd() *cobra.Command {
+	var pipeline, exactName string
 	cmd := &cobra.Command{
-		Use:     "bundle <name>",
+		Use:     "bundle <name|version>",
 		Aliases: []string{"bundles"},
 		Short:   "Delete a Bundle by name",
 		Long: `Delete a Bundle and stop its promotion: its Graph, steps and gate instances
@@ -47,18 +48,29 @@ Nothing is written to git. Old finished Bundles are deleted automatically
 past the Pipeline's spec.historyLimit (default 50).`,
 		Example:     `  kardinal delete bundle my-app-v1-5`,
 		Annotations: map[string]string{ReferenceAnnotation: deleteBundleReference},
-		Args:        cobra.ExactArgs(1),
+		Args:        bundleArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("delete bundle: %w", err)
 			}
-			if err := confirm(cmd, fmt.Sprintf("Delete %s? Its promotion stops and its open PRs are closed.", args[0])); err != nil {
+			ref, err := bundleArg(args, exactName)
+			if err != nil {
+				return fmt.Errorf("delete bundle: %w", err)
+			}
+			name, _, err := resolveBundleRefIn(contextOf(cmd), c, refScope{ns: ns, pipeline: pipeline, strict: true, exact: exactName != ""}, ref)
+			if err != nil {
+				return fmt.Errorf("delete bundle: %w", err)
+			}
+			if err := confirm(cmd, fmt.Sprintf("Delete %s? Its promotion stops and its open PRs are closed.", bundleRefLabel(contextOf(cmd), c, ns, name))); err != nil {
 				return err
 			}
-			return deleteBundleFn(cmd.OutOrStdout(), c, ns, args[0])
+			return deleteBundleFn(cmd.OutOrStdout(), c, ns, name)
 		},
 	}
+	cmd.Flags().StringVar(&pipeline, "pipeline", "", "Look for a version given as <name> in this pipeline only")
+	cmd.Flags().StringVar(&exactName, "name", "", "The Bundle of this name, never a version (when a name is also another Bundle's version)")
+	cmd.MarkFlagsMutuallyExclusive("name", "pipeline")
 	addYesFlag(cmd)
 	return cmd
 }

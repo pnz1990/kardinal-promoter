@@ -119,7 +119,7 @@ Built-in step implementations:
 | `git-push` | A sequence with `open-pr` (`pr-review` when the step started): force-pushes `kardinal/<namespace hash>/<bundle>/<env>`, so a re-run after a restart replaces the earlier push. Otherwise (`auto`): pushes the base branch; if it moved, replays the promotion's files onto the new head and pushes again (up to 6 times, no wait), then restarts the sequence from a fresh clone (at most 3 times per reconcile), then retries the step with jittered backoff. While a PR waits for its merge, a moved base branch rebuilds the PR branch on the new head |
 | `open-pr` | Opens a pull request via the SCM provider with promotion evidence |
 | `wait-for-merge` | Polls `PRStatus` until the PR is merged or closed |
-| `health-check` | Queries Kubernetes Deployment readiness or ArgoCD/Flux/Rollouts/Flagger sync status |
+| `health-check` | Queries Kubernetes Deployment readiness or ArgoCD/Flux/Rollouts/Flagger sync status. For `argocd` and `flux` it first asks the Application, or the Kustomization and its GitRepository, to sync the commit now, once ([Sync on promotion](health-adapters.md#sync-on-promotion)) |
 
 There is no custom step engine: every environment runs one of these sequences, and the API
 server rejects a Pipeline that sets the deprecated `spec.environments[].steps` or
@@ -240,9 +240,9 @@ supersede an in-flight `config` Bundle, and vice versa.
 
 ```bash
 kardinal get bundles my-app
-# VERSION        TYPE    PHASE                       AGE
-# my-app-7xk2p   image   Replaced by newer version   10m
-# my-app-9qd4s   image   Promoting                   3m
+# VERSION                 TYPE    PHASE                       AGE
+# 1.29.0 (my-app-7xk2p)   image   Replaced by newer version   10m
+# 1.30.0 (my-app-9qd4s)   image   Promoting                   3m
 ```
 
 ### Graph retirement
@@ -298,7 +298,10 @@ it only writes to Git. Instead of talking to Argo CD or Flux:
 
 1. `PromotionStepReconciler` opens a Git pull request with the updated image reference.
 2. A human (or automated process) merges the PR.
-3. ArgoCD or Flux detects the Git change and syncs the cluster.
+3. kardinal asks ArgoCD or Flux to sync the commit now (an annotation on the Application, or
+   on the Kustomization and its GitRepository, once per step;
+   [Sync on promotion](health-adapters.md#sync-on-promotion)); without that request, or when
+   it fails, they find the change at their next poll. They sync the cluster.
 4. kardinal's **health check** then queries ArgoCD or Flux to confirm sync is complete
    before advancing the DAG.
 

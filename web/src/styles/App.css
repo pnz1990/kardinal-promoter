@@ -122,14 +122,57 @@
 .app-topbar {
   flex-shrink: 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--k-space-4);
-  min-block-size: var(--k-control-lg);
+  box-sizing: border-box;
+  block-size: var(--k-layout-topbar);
   padding: var(--k-space-2) var(--k-space-6);
   border-block-end: var(--k-border-hairline) solid var(--k-line-subtle);
 }
-.app-topbar .breadcrumb { margin: 0; }
+.app-topbar .breadcrumb { margin: 0; flex: 1; min-inline-size: 0; }
+/* U7: the approvals inbox, with how many approvals wait on you. */
+.app-topbar__approvals {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--k-space-2);
+  min-block-size: var(--k-control-sm);
+  padding: 0 var(--k-space-2);
+  border-radius: var(--k-radius-2);
+  color: var(--k-ink-2);
+  font-size: var(--k-text-sm);
+  font-weight: var(--k-weight-medium);
+  text-decoration: none;
+}
+.app-topbar__approvals:hover { background: var(--k-surface-sunken); color: var(--k-ink); }
+.app-topbar__approvals[aria-current="page"] { color: var(--k-ink); box-shadow: inset 0 calc(var(--k-border-strong) * -1) 0 var(--k-thread); }
+.app-topbar__approvals:focus-visible { outline: var(--k-focus-ring); outline-offset: var(--k-focus-offset); }
+/* U7: what a keyboard shortcut could not do, for a few seconds. */
+.app-shortcut-note {
+  position: fixed;
+  inset-block-end: var(--k-space-6);
+  inset-inline-start: 50%;
+  transform: translateX(-50%);
+  z-index: var(--k-z-popover);
+  margin: 0;
+  max-inline-size: var(--k-layout-measure);
+  padding: var(--k-space-2) var(--k-space-4);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-2);
+  background: var(--k-surface-raised);
+  box-shadow: var(--k-elev-2);
+  color: var(--k-ink);
+  font-size: var(--k-text-sm);
+}
+.app-shortcut-note:not([data-shown]) {
+  clip-path: inset(50%);
+  inline-size: var(--k-space-px);
+  block-size: var(--k-space-px);
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+}
 .app-topbar__search {
   display: inline-flex;
   align-items: center;
@@ -298,3 +341,22 @@
 .app[data-narrow] .app-pipeline-head,
 .app[data-narrow] .app-map-head { padding-inline: var(--k-space-3); }
 .app[data-narrow] .app-content { padding-inline: var(--k-space-3); }
+
+/* U7: the approvals inbox's frame while its code arrives (the Skeleton inside). */
+.app-lazy { max-inline-size: var(--k-layout-measure); padding: var(--k-space-8) var(--k-space-6); }
+
+/* The command palette's place while its code loads (first ⌘K): where the palette opens. */
+.app-palette-loading {
+  position: fixed;
+  z-index: var(--k-z-palette);
+  inset-block-start: var(--k-space-12);
+  inset-inline: 0;
+  margin-inline: auto;
+  inline-size: var(--k-layout-drawer);
+  background: var(--k-surface-raised);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-3);
+  box-shadow: var(--k-elev-2);
+}
+/* The stage drawer's place while its code loads: its column. */
+.app-drawer-loading { inline-size: var(--k-layout-drawer); flex-shrink: 0; background: var(--k-surface-raised); border-inline-start: var(--k-border-hairline) solid var(--k-line); }

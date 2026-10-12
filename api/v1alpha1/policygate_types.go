@@ -204,9 +204,19 @@ type PolicyGateStatus struct {
 	// +kubebuilder:default=false
 	Ready bool `json:"ready"`
 
-	// Reason explains the current ready state in human-readable form.
+	// Reason explains the current ready state in a sentence: the gate's
+	// message when its expression blocks, what the expression evaluated to,
+	// and the version it was evaluated for, for example "waiting for
+	// approvals: 0 of 1 (version 1.5.0)". It is for people; read BundleVersion
+	// for the version.
 	// +optional
 	Reason string `json:"reason,omitempty"`
+
+	// BundleVersion is the version of the Bundle a gate instance was last
+	// evaluated for (bundle.version in its expression). Empty on a template
+	// and when the Bundle could not be read.
+	// +optional
+	BundleVersion string `json:"bundleVersion,omitempty"`
 
 	// LastEvaluatedAt is when the gate's result was last written. The
 	// controller re-evaluates more often, but writes the status only when the

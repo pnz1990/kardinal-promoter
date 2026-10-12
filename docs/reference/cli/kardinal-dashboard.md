@@ -8,7 +8,7 @@ Open the kardinal UI (served by the controller at /ui/) in your browser.
 Without --address it port-forwards a local port (8082 when it is free) to the
 controller in --controller-namespace, opens the UI and keeps forwarding until
 Ctrl-C. With --address (or KARDINAL_UI_URL) it opens that URL and forwards
-nothing.
+nothing. With <pipeline> it opens that pipeline, with <env> its stage.
 
 The UI is served by the controller at /ui/ (port 8082, the Service port named
 ui). Without --address or KARDINAL_UI_URL, dashboard finds the
@@ -20,15 +20,26 @@ endpointslices and create on pods/portforward in that namespace. With
 --address it prints and opens that URL, and forwards nothing (see "Accessing
 the UI" in docs/installation.md).
 
+With <pipeline> it opens the UI's page of it (#/p/<namespace>/<pipeline>, the
+namespace from -n or the kubeconfig context), with <env> that stage's
+drawer (/env/<env>). kardinal why and kardinal status <pipeline> print the
+same link on stderr when KARDINAL_UI_URL says where the UI is.
+
+--address and KARDINAL_UI_URL must be http or https URLs with a host, in
+printable ASCII (punycode a non-ASCII host) and without user@: dashboard refuses another value
+before it opens anything, and why and status print a warning instead of the
+link. The url of -o json (create bundle, promote, rollback) is the same
+#/p/<namespace>/<pipeline> page, empty when KARDINAL_UI_URL is not one.
+
 ```
-kardinal dashboard [flags]
+kardinal dashboard [<pipeline> [<env>]] [flags]
 ```
 
 ### Examples
 
 ```
   kardinal dashboard
-  kardinal dashboard --no-open
+  kardinal dashboard my-app prod
   kardinal dashboard --address https://kardinal.example.com/ui/
 ```
 
@@ -47,7 +58,7 @@ kardinal dashboard [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO

@@ -56,8 +56,13 @@ type InitConfig struct {
 	AppName string
 
 	// Namespace is the Pipeline's namespace; empty leaves it out (the
-	// namespace it is applied in).
+	// namespace it is applied in), and so does default unless
+	// NamespaceGiven.
 	Namespace string
+
+	// NamespaceGiven is true when -n/--namespace was given: the namespace
+	// is written even when it is default.
+	NamespaceGiven bool
 
 	// Environments is the ordered list of environment names.
 	Environments []string
@@ -267,6 +272,7 @@ func initConfig(cmd *cobra.Command, o initOptions) (*InitConfig, error) {
 		UpdateStrategy: o.strategy, ProdApproval: o.prodApproval, Secret: o.secret}
 	if globalNamespace != "" {
 		cfg.Namespace = globalNamespace
+		cfg.NamespaceGiven = true
 	}
 	if o.repo == "" {
 		var eof *initEOFError
@@ -298,6 +304,16 @@ func initConfig(cmd *cobra.Command, o initOptions) (*InitConfig, error) {
 			"with no spaces, query or fragment; got %q", cfg.GitURL)
 	case cfg.Branch != "" && !validBranch(cfg.Branch):
 		return nil, fmt.Errorf("init: --branch %q is not a git branch name", cfg.Branch)
+	case o.createSecret && scm.IsSSHRemote(cfg.GitURL):
+		ns := cfg.Namespace
+		if ns == "" {
+			ns = "<namespace>"
+		}
+		return nil, fmt.Errorf("init: --create-secret creates a token Secret, and an ssh --repo needs an ssh key instead; "+
+			"create the Secret yourself and run init without --create-secret: "+
+			"kubectl create secret generic %[1]s -n %[2]s --from-file=sshPrivateKey=$HOME/.ssh/id_ed25519 "+
+			"--from-literal=knownHosts=\"$(ssh-keyscan %[3]s)\" && kubectl label secret %[1]s -n %[2]s %[4]s=true",
+			cfg.Secret, ns, sshKeyscanArgs(cfg.GitURL), v1alpha1.LabelSecretReferenceable)
 	case cfg.UpdateStrategy != "" && cfg.UpdateStrategy != "kustomize" && cfg.UpdateStrategy != "helm":
 		return nil, fmt.Errorf("init: --strategy must be kustomize or helm, got %q", cfg.UpdateStrategy)
 	case cfg.ProdApproval != "" && cfg.ProdApproval != "pr-review" && cfg.ProdApproval != "auto":
@@ -338,6 +354,24 @@ func checkInitNames(cfg *InitConfig) error {
 		return fmt.Errorf("init: the Secret name (--secret) %q is not a valid name: %s", cfg.Secret, strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+// sshKeyscanArgs are the ssh-keyscan arguments that read the host key of
+// ssh remote v (ssh://user@host[:port]/path or user@host:path): the host,
+// with -p before it for a port other than 22 (ssh-keyscan then writes the
+// known_hosts entry as [host]:port).
+func sshKeyscanArgs(v string) string {
+	if u, err := url.Parse(v); err == nil && u.Scheme == "ssh" {
+		if p := u.Port(); p != "" && p != "22" {
+			return "-p " + p + " " + u.Hostname()
+		}
+		return u.Hostname()
+	}
+	if _, rest, ok := strings.Cut(v, "@"); ok {
+		host, _, _ := strings.Cut(rest, ":")
+		return host
+	}
+	return "<host>"
 }
 
 // scpLikeRepo is git's scp-like ssh remote, user@host:path.
@@ -421,6 +455,12 @@ func detectHealth(ctx context.Context, c sigs_client.Reader, ns string, cfg *Ini
 // the Pipeline may use it. An existing Secret is kept, and labelled when it
 // is not. The token is never printed.
 func createGitSecret(ctx context.Context, c sigs_client.Client, ns, name string, out io.Writer) error {
+	return createGitSecretLabelled(ctx, c, ns, name, out, nil)
+}
+
+// createGitSecretLabelled is createGitSecret that puts labels on a Secret it
+// creates (not on one that exists): quickstart marks its own.
+func createGitSecretLabelled(ctx context.Context, c sigs_client.Client, ns, name string, out io.Writer, labels map[string]string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -451,6 +491,9 @@ func createGitSecret(ctx context.Context, c sigs_client.Client, ns, name string,
 	s := &corev1.Secret{}
 	s.Name, s.Namespace = name, ns
 	s.Labels = map[string]string{v1alpha1.LabelSecretReferenceable: "true"}
+	for k, v := range labels {
+		s.Labels[k] = v
+	}
 	s.StringData = map[string]string{"token": token}
 	if err := c.Create(ctx, s); err != nil {
 		return fmt.Errorf("init: create Secret %s/%s: %w", ns, name, HumanError(err))
@@ -667,7 +710,7 @@ func initPipeline(cfg *InitConfig) *v1alpha1.Pipeline {
 	p := &v1alpha1.Pipeline{}
 	p.APIVersion, p.Kind = v1alpha1.GroupVersion.String(), "Pipeline"
 	p.Name = cfg.AppName
-	if cfg.Namespace != "default" {
+	if cfg.Namespace != "default" || cfg.NamespaceGiven {
 		p.Namespace = cfg.Namespace
 	}
 	secret := cfg.Secret
@@ -775,7 +818,7 @@ pipe.
 
 It writes the smallest Pipeline that says it, as examples/minimal does: a
 default (branch main, kustomize, approval auto, the default health check) is
-left out (also namespace default). The name, namespace and environments must
+left out (also namespace default, unless -n gives it). The name, namespace and environments must
 be DNS-1123 labels, --repo an https or ssh git URL (https://host/owner/repo,
 ssh://git@host/owner/repo or git@host:owner/repo.git) with no spaces, query
 or fragment, and --branch a git branch name; every value is written as a

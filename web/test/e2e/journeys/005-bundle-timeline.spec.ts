@@ -14,7 +14,7 @@ test.describe('Journey 005 — Bundle timeline interaction', () => {
   })
 
   test('Step 1: Bundle timeline shows bundle history header, and the History tab lists them', async ({ page }) => {
-    await expect(page.getByText(/Versions \(newest/)).toBeVisible()
+    await expect(page.getByText(/Versions \(oldest → newest\)/)).toBeVisible()
     await page.getByRole('tab', { name: /^Versions/ }).click()
     await expect(page.getByRole('list', { name: 'Versions' }).getByRole('listitem')).toHaveCount(3)
   })
@@ -24,8 +24,8 @@ test.describe('Journey 005 — Bundle timeline interaction', () => {
     await expect(page.getByText(/Promoting/i).first()).toBeVisible()
   })
 
-  test('Step 3: Bundle timeline shows "newest → oldest" direction', async ({ page }) => {
-    await expect(page.getByText(/newest → oldest/i)).toBeVisible()
+  test('Step 3: the version rail reads oldest → newest (a time axis, newest on the right)', async ({ page }) => {
+    await expect(page.getByText(/oldest → newest/i)).toBeVisible()
   })
 
   test('Step 4: Previous bundle (Superseded) shows its display label, not a truncated value', async ({ page }) => {
@@ -36,7 +36,7 @@ test.describe('Journey 005 — Bundle timeline interaction', () => {
   test('Step 5: Clicking an older bundle shows its graph and keeps it after the next poll', async ({ page }) => {
     // The timeline chips carry data-bundle-phase; the header's copy button also names the bundle.
     const current = page.locator('button[data-bundle-phase]', { hasText: 'abc123' })
-    const older = page.locator('button[data-bundle-phase]', { hasText: 'prev111' })
+    const older = page.locator('button[data-bundle-phase]', { hasText: 'sha-9f8e7d6' })
     await expect(current).toHaveAttribute('aria-pressed', 'true')
     // The station map labels each stage: under abc123 a gate holds prod (its PR is open).
     await expect(page.getByRole('button', { name: /^prod — Held by gate no-weekend-deploys/ })).toBeVisible()

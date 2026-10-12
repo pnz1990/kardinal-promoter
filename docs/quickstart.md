@@ -58,7 +58,7 @@ Setting up the kardinal demo in kind-kardinal
   - kro 0.10.0-rc.0: installed
   - Argo CD v3.5.3: installed
   - Secret kardinal-system/kardinal-scm-token: created from $GITHUB_TOKEN (the controller's token for PRs)
-  - kardinal-promoter 0.10.1: installed
+  - kardinal-promoter 0.11.0: installed
   - Secret default/github-token: created from $GITHUB_TOKEN
   - Argo CD ApplicationSet argocd/kardinal-test-app (https://github.com/<you>/kardinal-demo): applied
   - PolicyGate default/prod-approval (prod waits for your approval, as kubernetes-admin): applied
@@ -87,7 +87,9 @@ What it set up:
   there.
 - **Your token** in two Secrets: the controller's, for pull requests, and the `demo` Pipeline's,
   for git.
-- **Argo CD Applications** for test, uat and prod, from your fork.
+- **Argo CD Applications** for test, uat and prod, from your fork. The Argo CD it installs checks
+  git every 10 seconds, so each environment deploys within seconds of its commit; an Argo CD that
+  was already there keeps its own settings.
 - **The `demo` Pipeline** in the `default` namespace: test, uat and prod. Prod promotes without
   a pull request, behind the `prod-approval` gate, which you may approve.
 
@@ -97,7 +99,11 @@ The environment state lines (`test: Live`) go to stderr, the rest to stdout.
     It runs only when the kubectl context is a local cluster (kind, k3d, minikube, Docker Desktop
     or Rancher Desktop, with its API server on this machine). With any other context it stops
     before it sends anything, and prints `kind create cluster --name kardinal` to create one. It
-    never changes your kubeconfig; `--context` picks another local context.
+    also refuses while a proxy would decide where its requests go: a `proxy-url` on the context's
+    cluster, `HTTPS_PROXY` (`HTTP_PROXY` for an `http` server) that applies to the API server, or
+    `HELM_KUBE*` and `KUBERNETES_MASTER` set. `localhost` and `127.0.0.1` are never proxied; for
+    `0.0.0.0` (k3d), `host.docker.internal` or a minikube address, add the host to `NO_PROXY`.
+    It never changes your kubeconfig; `--context` picks another local context.
 
 The first version, `sha-9349a3f`, went to test and uat on its own and now waits at prod's gate.
 
@@ -218,7 +224,10 @@ it live in every environment.
 kind delete cluster --name kardinal
 ```
 
-Your fork keeps the commits; delete it on GitHub when you are done.
+To keep the cluster and remove only the demo, run `kardinal quickstart --delete`: it deletes the
+demo's versions, the `demo` Pipeline, the `prod-approval` gate, the ApplicationSet and the
+Secret it created, and keeps kro, Argo CD and kardinal. Your fork keeps the commits; delete it on
+GitHub when you are done.
 
 ## Next steps
 

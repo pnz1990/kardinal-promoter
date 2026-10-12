@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,11 +39,16 @@ func TestDashboard(t *testing.T) {
 		want     string
 		wantErr  string
 		forwards bool
+		route    string
 	}{
 		{name: "address", address: "http://ui.example/ui/", noOpen: true,
 			want: "kardinal UI: http://ui.example/ui/\n"},
 		{name: "KARDINAL_UI_URL", envURL: "http://env.example/ui/", noOpen: true,
 			want: "kardinal UI: http://env.example/ui/\n"},
+		{name: "a pipeline's stage", address: "http://ui.example/ui/#old", noOpen: true, route: uiRoute("team-a", "my-app", "prod"),
+			want: "kardinal UI: http://ui.example/ui/#/p/team-a/my-app/env/prod\n"},
+		{name: "a pipeline, forwarded", noOpen: true, forwards: true, route: uiRoute("default", "demo", ""),
+			want: "kardinal UI: http://127.0.0.1:8082/ui/#/p/default/demo\nForwarding to the controller in kardinal-system; Ctrl-C stops.\n"},
 		{name: "port-forward", noOpen: true, forwards: true,
 			want: "kardinal UI: http://127.0.0.1:8082/ui/\nForwarding to the controller in kardinal-system; Ctrl-C stops.\n"},
 		{name: "no controller", forward: errors.New("no kardinal-promoter Service with a ui port in kardinal-system"),
@@ -71,7 +77,7 @@ func TestDashboard(t *testing.T) {
 			}
 			defer cancel()
 			var out bytes.Buffer
-			err := dashboardFn(ctx, &out, tc.address, "kardinal-system", tc.noOpen)
+			err := dashboardFn(ctx, &out, tc.address, "kardinal-system", tc.noOpen, tc.route)
 			if tc.wantErr != "" {
 				require.EqualError(t, err, tc.wantErr)
 				return
@@ -134,4 +140,102 @@ func TestFindUITarget(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+// TestUILink (CLI UX 7): why and status print the UI page of what they show
+// on stderr when the UI's address is known (KARDINAL_UI_URL), and nothing
+// otherwise (a port-forward may not be running).
+func TestUILink(t *testing.T) {
+	c := policyClient(t, policyPipeline("demo", "test", "prod"))
+	prev := buildClient
+	buildClient = func() (sigs_client.Client, string, error) { return c, "default", nil }
+	t.Cleanup(func() { buildClient, globalOutput, globalNamespace = prev, "", "" })
+	var stdout bytes.Buffer
+	run := func(args ...string) string {
+		var errb bytes.Buffer
+		keepStyle(t)
+		stdout.Reset()
+		root := NewRootCmd()
+		root.SetOut(&stdout)
+		root.SetErr(&errb)
+		root.SetArgs(args)
+		// -w runs until its context ends.
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		require.NoError(t, root.ExecuteContext(ctx))
+		return errb.String()
+	}
+	t.Setenv("KARDINAL_UI_URL", "")
+	assert.NotContains(t, run("why", "demo", "prod"), "UI:")
+	t.Setenv("KARDINAL_UI_URL", "https://kardinal.example.com/ui/")
+	assert.Contains(t, run("why", "demo", "prod"), "UI: https://kardinal.example.com/ui/#/p/default/demo/env/prod\n")
+	assert.Contains(t, run("status", "demo"), "UI: https://kardinal.example.com/ui/#/p/default/demo\n")
+	assert.NotContains(t, run("status", "demo", "-o", "json"), "UI:", "not with -o json")
+	for _, args := range [][]string{{"why", "demo", "prod", "-o", "json"}, {"why", "demo", "prod", "-w"}, {"status", "demo", "-w"}} {
+		assert.NotContains(t, run(args...), "UI:", "not with %v", args)
+		assert.NotContains(t, stdout.String(), "kardinal.example.com", "not with %v", args)
+	}
+	// Not a UI address: no link, a warning that says why.
+	t.Setenv("KARDINAL_UI_URL", "javascript:alert(1)//")
+	got := run("why", "demo", "prod")
+	assert.NotContains(t, got, "UI:")
+	assert.Contains(t, got, `warning: no UI link: KARDINAL_UI_URL "javascript:alert(1)//" is not an http(s) URL with a host`)
+	assert.Empty(t, uiURL("default", "demo"), "-o json has no url for it")
+	t.Setenv("KARDINAL_UI_URL", "")
+	assert.Equal(t, "http://localhost:8082/ui/#/p/default/demo", uiURL("default", "demo"), "the one route form")
+	assert.Equal(t, "#/p/team%20a/my-app/env/prod", uiRoute("team a", "my-app", "prod"))
+}
+
+func TestCheckUIAddress(t *testing.T) {
+	cases := []struct {
+		address string
+		ok      bool
+	}{
+		{"https://kardinal.example.com/ui/", true},
+		{"http://127.0.0.1:8082/ui/", true},
+		{"http://[::1]:8082/ui/#old", true},
+		{"javascript:alert(1)//", false},
+		{"file:///etc/passwd", false},
+		{"/Applications/Calculator.app", false},
+		{"-a Terminal", false},
+		{"--help", false},
+		{"https://", false},
+		{"https:///ui/", false},
+		{"kardinal.example.com/ui/", false},
+		{"https://kardinal.example.com/ui/\x1b[2J", false},
+		{"https://kardinal.example.com/ui/\nfake: line", false},
+		{"https://kardinal.example.com/a b", false},
+		{"https://kardinal.example.com/ui/\u202e/lmth.exe", false}, // a bidi override (format character)
+		{"https://kardinal.exämple.com/ui/", false},                // not ASCII: punycode it
+		{"https://admin@kardinal.example.com/ui/", false},          // userinfo
+		{"https://kardinal.example.com@evil.example/ui/", false},   // userinfo that looks like a host
+		{"https://xn--krdinal-cua.example/ui/", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.address, func(t *testing.T) {
+			err := checkUIAddress(tc.address)
+			if tc.ok {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "is not an http(s) URL with a host, in ASCII and without user@: set it to the UI's address, e.g. https://kardinal.example.com/ui/")
+			assert.ErrorContains(t, openBrowser(tc.address), "open a browser:", "nothing unchecked reaches the opener")
+		})
+	}
+}
+
+// TestDashboard_RefusesABadAddress: dashboard refuses an --address or
+// KARDINAL_UI_URL that is not a UI address, before it opens anything.
+func TestDashboard_RefusesABadAddress(t *testing.T) {
+	t.Setenv("KARDINAL_UI_URL", "")
+	err := dashboardFn(context.Background(), &bytes.Buffer{}, "-a Terminal", "kardinal-system", false, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `dashboard: --address "-a Terminal" is not an http(s) URL with a host`)
+	t.Setenv("KARDINAL_UI_URL", "file:///etc/passwd")
+	var out bytes.Buffer
+	err = dashboardFn(context.Background(), &out, "", "kardinal-system", false, "#/p/default/demo")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `dashboard: KARDINAL_UI_URL "file:///etc/passwd" is not an http(s) URL with a host`)
+	assert.Empty(t, out.String(), "nothing printed or opened")
 }

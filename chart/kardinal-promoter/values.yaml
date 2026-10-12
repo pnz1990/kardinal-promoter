@@ -394,10 +394,27 @@ ui:
     # fails the install.
     allowStaticTokenWithTokenReview: false
 
+# -- Health checks of the PromotionSteps.
+health:
+  refresh:
+    # -- Ask the GitOps tool to sync a promotion's commit as soon as it is in
+    # git (--health-refresh), once per step, instead of waiting for its poll
+    # (Argo CD: 3 minutes by default): argocd.argoproj.io/refresh on the
+    # Application of health.type argocd, reconcile.fluxcd.io/requestedAt on
+    # the Kustomization of health.type flux and its GitRepository. Grants
+    # patch on argoproj.io Applications, Flux Kustomizations and
+    # GitRepositories; the <fullname>-gitops-writes admission policy denies
+    # the controller any change to them but that annotation unless it may
+    # update the object. An environment's health.refresh: false turns it off
+    # there. See docs/health-adapters.md#sync-on-promotion.
+    enabled: true
+
 # -- Optional controller permissions, off by default.
 rbac:
-  # -- patch on argoproj.io Applications, for the argocd update strategy
-  # (update.strategy: argocd).
+  # -- patch and update on argoproj.io Applications, for the argocd update
+  # strategy (update.strategy: argocd). update is what lets the controller
+  # change an Application's spec past the gitops-writes admission policy,
+  # which otherwise allows only the refresh annotation (health.refresh).
   argocdApplicationsWrite: false
   # -- Deprecated, no effect, removed in v0.11. The chart grants Job access
   # for hooks (hooks.serviceAccounts) whatever this says. Kept so existing --set rbac.integrationTestJobs=...
@@ -414,7 +431,7 @@ rbac:
     aggregateToDefaultRoles: false
     # -- Also grant the promoter update on Pipelines and the approver update
     # on PolicyGates, so kardinal pause, kardinal rollback --hold, kardinal
-    # release-hold and kardinal override work from their kubeconfigs. An
+    # unhold and kardinal override work from their kubeconfigs. An
     # admission policy limits those writes to spec.paused and spec.holds
     # (Pipelines; the hold-writes policy checks each hold entry) and
     # spec.overrides (PolicyGates). Off: they act through the UI API only. On weakens the

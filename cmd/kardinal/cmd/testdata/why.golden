@@ -4,11 +4,89 @@ prod is waiting for your approval.
   Gate     prod-approval · 0 of 1 approvals
   Next     kardinal approve demo prod
 
+== approval, the caller is allowed (kardinal why demo prod)
+prod is waiting for your approval.
+  Version  sha-9349a3f (demo-zhxk2)
+  Gate     prod-approval · 0 of 1 approvals
+  Next     kardinal approve demo prod
+
+== approval, the caller is in an allowed group (kardinal why demo prod)
+prod is waiting for your approval.
+  Version  sha-9349a3f (demo-zhxk2)
+  Gate     cab · 0 of 1 approvals
+  Next     kardinal approve demo prod
+
+== approval, the caller is unknown (SelfSubjectReview failed) (kardinal why demo prod)
+prod is waiting for approval by group rm.
+  Version  sha-9349a3f (demo-zhxk2)
+  Gate     cab · 0 of 1 approvals
+  Next     kardinal approve demo prod
+
+== approval, the version has no creator (excludeAuthor) (kardinal why demo prod)
+prod is held by gate cab: nobody can approve this version.
+  Version  sha-9349a3f (demo-zhxk2)
+  Why      the gate excludes the version's author, and the version has no verified creator (kardinal.io/created-by)
+  Next     ship it again as yourself: kardinal ship demo --image <ref>
+  Or       kardinal override demo prod --gate cab --reason <why>
+
+== approval, a component created the version (excludeAuthor) (kardinal why demo prod)
+prod is held by gate cab: nobody can approve this version.
+  Version  sha-9349a3f (demo-zhxk2)
+  Why      the gate excludes the version's author, and the version was created by the kardinal component subscription:demo-images, not a person
+  Next     ship it again as yourself: kardinal ship demo --image <ref>
+  Or       kardinal override demo prod --gate cab --reason <why>
+
+== approval by others (kardinal why demo prod)
+prod is waiting for approval by alice, bob or group release-managers.
+  Version  sha-9349a3f (demo-zhxk2)
+  Gate     cab · 0 of 1 approvals
+  Next     one of them runs: kardinal approve demo prod
+
+== approval, the caller created the version (kardinal why demo prod)
+prod is waiting for approval by someone other than you (you created this version).
+  Version  sha-9349a3f (demo-zhxk2)
+  Gate     cab · 0 of 1 approvals
+  Next     someone else runs: kardinal approve demo prod
+
 == approval with one of two (kardinal why demo prod)
 prod is waiting for your approval.
   Version  1.5.0 (demo-b)
   Gate     cab · 1 of 2 approvals
   Next     kardinal approve demo prod
+
+== approval, the caller approved already (the server's tally) (kardinal why demo prod)
+prod is waiting for approval by someone else (you approved).
+  Version  1.5.0 (demo-b)
+  Gate     cab · 1 of 2 approvals
+  Next     someone else runs: kardinal approve demo prod
+
+== approval, rejected by two (kardinal why demo prod)
+prod was rejected by alice and bob.
+  Version  1.5.0 (demo-b)
+  Gate     cab · 0 of 1 approvals
+  Next     ship a fixed version: kardinal ship demo --image <ref>
+  Or       kardinal override demo prod --gate cab --reason <why>
+
+== approval, too many Approvals (kardinal why demo prod)
+prod is held by gate cab: nobody can approve this version.
+  Version  1.5.0 (demo-b)
+  Why      more than 100 Approvals for this version; delete the stale ones (kubectl get approvals)
+  Next     delete the stale Approvals: kubectl get approvals -n default
+  Or       kardinal override demo prod --gate cab --reason <why>
+
+== approval, held and rejected (held wins) (kardinal why demo prod)
+prod is held by gate cab: nobody can approve this version.
+  Version  1.5.0 (demo-b)
+  Why      the gate excludes the version's author, and the version has no verified creator (kardinal.io/created-by)
+  Next     ship it again as yourself: kardinal ship demo --image <ref>
+  Or       kardinal override demo prod --gate cab --reason <why>
+
+== approval, the version not read, rejected (kardinal why demo prod)
+prod was rejected by bob.
+  Version  1.6.0 (demo-gone)
+  Gate     cab · 0 of 1 approvals
+  Next     ship a fixed version: kardinal ship demo --image <ref>
+  Or       kardinal override demo prod --gate cab --reason <why>
 
 == a gate that opens by itself (kardinal why demo prod)
 prod is held by gate no-weekend-deploys.

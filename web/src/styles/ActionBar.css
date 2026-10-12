@@ -21,3 +21,9 @@
   border-radius: var(--k-radius-2);
   padding: var(--k-space-1) var(--k-space-2);
 }
+
+/* U7: a pause or resume the person may not take. */
+.action-bar__button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.6;
+}

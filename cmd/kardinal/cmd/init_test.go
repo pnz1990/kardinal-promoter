@@ -99,6 +99,7 @@ func runInitCmd(t *testing.T, dir, stdin string, args ...string) (string, string
 //
 // Covers CLI-INIT-02.
 func TestInitCmd_Flags(t *testing.T) {
+	keepStyle(t)
 	want, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", "minimal", "pipeline.yaml"))
 	require.NoError(t, err)
 	dir := t.TempDir()
@@ -145,6 +146,7 @@ func TestInitCmd_Flags(t *testing.T) {
 //
 // Covers CLI-INIT-02.
 func TestInitCmd_NoInjection(t *testing.T) {
+	keepStyle(t)
 	cases := []struct {
 		name string
 		args []string
@@ -220,6 +222,7 @@ func TestInitFn_NoNamespaceDefault(t *testing.T) {
 //
 // Covers CLI-INIT-02.
 func TestInitCmd_DetectSecretApply(t *testing.T) {
+	keepStyle(t)
 	app := &unstructured.Unstructured{}
 	app.SetGroupVersionKind(schema.GroupVersionKind{Group: "argoproj.io", Version: "v1alpha1", Kind: "Application"})
 	app.SetName("web-prod")
@@ -481,6 +484,7 @@ func TestRunInitWizard_Validation(t *testing.T) {
 // C09b-cli-15: --file names the output file, -o is the global format flag,
 // and the Kustomize scaffold is skipped for helm.
 func TestInitCmd_FileFlagAndHelmScaffold(t *testing.T) {
+	keepStyle(t)
 	dir := t.TempDir()
 	t.Chdir(dir)
 	t.Cleanup(func() { globalOutput = "" })
@@ -516,6 +520,7 @@ func TestInitCmd_FileFlagAndHelmScaffold(t *testing.T) {
 // --file creates the directories it names, as in the help's
 // "kardinal init --file deploy/pipeline.yaml".
 func TestInitCmd_FileInNewDirectory(t *testing.T) {
+	keepStyle(t)
 	dir := t.TempDir()
 	t.Chdir(dir)
 	t.Cleanup(func() { globalOutput = "" })
@@ -536,6 +541,7 @@ func TestInitCmd_FileInNewDirectory(t *testing.T) {
 // --stdout replaces the Pipeline file only. --scaffold-gitops and
 // --demo still write the scaffold, and stdout stays the bare YAML.
 func TestInitCmd_StdoutKeepsScaffold(t *testing.T) {
+	keepStyle(t)
 	dir := t.TempDir()
 	t.Chdir(dir)
 	t.Cleanup(func() { globalOutput = "" })
@@ -559,4 +565,36 @@ func TestInitCmd_StdoutKeepsScaffold(t *testing.T) {
 	assert.Contains(t, stderr.String(), "GitOps scaffold written to gitops\n")
 	_, err := os.Stat(filepath.Join(dir, "pipeline.yaml"))
 	assert.True(t, os.IsNotExist(err), "--stdout writes no Pipeline file")
+}
+
+// TestInitCmd_NamespaceAndSSH (C6 follow-up): -n default is written when it
+// is given (left out only when it is the wizard's default), and
+// --create-secret with an ssh --repo is refused with the command that
+// creates an ssh-key Secret, before anything is written.
+//
+// Covers CLI-INIT-02.
+func TestInitCmd_NamespaceAndSSH(t *testing.T) {
+	keepStyle(t)
+	out, _, err := runInitCmd(t, t.TempDir(), "", "--name", "web", "--repo", "https://github.com/o/r", "-n", "default", "--stdout")
+	require.NoError(t, err)
+	assert.Contains(t, out, "metadata: { name: web, namespace: default }\n")
+	out, _, err = runInitCmd(t, t.TempDir(), "", "--name", "web", "--repo", "https://github.com/o/r", "--stdout")
+	require.NoError(t, err)
+	assert.Contains(t, out, "metadata: { name: web }\n")
+
+	for repo, host := range map[string]string{
+		"git@github.com:o/r.git":             "github.com",
+		"ssh://git@git.example.com/o/r":      "git.example.com",
+		"ssh://git@git.example.com:22/o/r":   "git.example.com",
+		"ssh://git@git.example.com:2222/o/r": "-p 2222 git.example.com", // the port is kept
+	} {
+		dir := t.TempDir()
+		out, _, err := runInitCmd(t, dir, "", "--name", "web", "--repo", repo, "-n", "team-a", "--secret", "deploy-key", "--create-secret")
+		require.Error(t, err, repo)
+		assert.Contains(t, err.Error(), "an ssh --repo needs an ssh key instead")
+		assert.Contains(t, err.Error(), "kubectl create secret generic deploy-key -n team-a --from-file=sshPrivateKey=$HOME/.ssh/id_ed25519 "+
+			`--from-literal=knownHosts="$(ssh-keyscan `+host+`)" && kubectl label secret deploy-key -n team-a kardinal.io/referenceable=true`)
+		assert.Empty(t, out)
+		assert.NoFileExists(t, filepath.Join(dir, "pipeline.yaml"), "nothing written")
+	}
 }

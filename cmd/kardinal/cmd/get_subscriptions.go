@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -34,7 +35,7 @@ func newGetSubscriptionsCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:         "subscriptions [name]",
-		Annotations: map[string]string{outputAnnotation: "true"},
+		Annotations: map[string]string{outputAnnotation: "true", wideAnnotation: "true"},
 		Aliases:     []string{"subscription", "sub"},
 		Short:       "List Subscriptions (passive artifact watchers)",
 		Long: `List Subscriptions: watchers of an OCI registry or a git repository that create
@@ -93,16 +94,58 @@ func getSubscriptionsFn(w io.Writer, c sigs_client.Client, ns string, args []str
 	case "yaml":
 		return WriteYAML(w, items)
 	default:
-		return FormatSubscriptionTable(w, items, allNamespaces)
+		// The table names each last Bundle by its version: one token, or
+		// with -o wide the whole version.
+		versions := map[string]string{}
+		var bundles v1alpha1.BundleList
+		if err := c.List(context.Background(), &bundles, opts...); err == nil {
+			for i := range bundles.Items {
+				b := &bundles.Items[i]
+				v := subscriptionVersion(b)
+				if OutputFormat() == "wide" {
+					v = createdOf(b).Version
+				}
+				versions[b.Namespace+"/"+b.Name] = v
+			}
+		}
+		return formatSubscriptionTable(w, items, allNamespaces, versions)
 	}
+}
+
+// subscriptionVersion is b's version as one token, for LAST-VERSION: a
+// chart's version (not "name 1.2.3"), a config Bundle's commit (not "config
+// abc1234"), else its version when that is one word, else "" (the Bundle's
+// name is shown).
+func subscriptionVersion(b *v1alpha1.Bundle) string {
+	switch {
+	case b.Spec.Type == "chart" && b.Spec.Chart != nil && b.Spec.Chart.Version != "":
+		return b.Spec.Chart.Version
+	case (b.Spec.Type == "config" || len(b.Spec.Images) == 0) && b.Spec.ConfigRef != nil && b.Spec.ConfigRef.CommitSHA != "":
+		sha := b.Spec.ConfigRef.CommitSHA
+		return sha[:min(7, len(sha))]
+	}
+	if v := createdOf(b).Version; len(strings.Fields(v)) == 1 {
+		return v
+	}
+	return ""
 }
 
 // FormatSubscriptionTable writes a tabwriter-formatted table of subscriptions to w.
 // When showNamespace is true, a NAMESPACE column is prepended.
 func FormatSubscriptionTable(w io.Writer, subs []v1alpha1.Subscription, showNamespace bool) error {
+	return formatSubscriptionTable(w, subs, showNamespace, nil)
+}
+
+// formatSubscriptionTable is FormatSubscriptionTable; versions maps
+// namespace/name to a Bundle's version for LAST-VERSION.
+func formatSubscriptionTable(w io.Writer, subs []v1alpha1.Subscription, showNamespace bool, versions map[string]string) error {
 	tw := style.NewTable(w, 3)
 
-	header := "NAME\tTYPE\tPIPELINE\tPHASE\tLAST-CHECK\tLAST-BUNDLE\tAGE"
+	wide := OutputFormat() == "wide"
+	header := "NAME\tTYPE\tPIPELINE\tPHASE\tLAST-CHECK\tLAST-VERSION\tAGE"
+	if wide {
+		header = "NAME\tTYPE\tPIPELINE\tPHASE\tLAST-CHECK\tLAST-VERSION\tLAST-BUNDLE\tAGE"
+	}
 	if showNamespace {
 		header = "NAMESPACE\t" + header
 	}
@@ -123,20 +166,20 @@ func FormatSubscriptionTable(w io.Writer, subs []v1alpha1.Subscription, showName
 				lastCheck = s.Status.LastCheckedAt
 			}
 		}
-		lastBundle := s.Status.LastBundleCreated
-		if lastBundle == "" {
-			lastBundle = "-"
+		// LAST-VERSION is one token (the tag, the chart version or the
+		// config commit, else the Bundle's name), so the columns after it
+		// stay where scripts read them; -o wide shows the whole version and
+		// adds LAST-BUNDLE.
+		lastVersion, lastBundle := "-", "-"
+		if n := s.Status.LastBundleCreated; n != "" {
+			lastVersion, lastBundle = versionOr(versions[s.Namespace+"/"+n], n), n
 		}
 
-		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s",
-			s.Name,
-			string(s.Spec.Type),
-			s.Spec.Pipeline,
-			phase,
-			lastCheck,
-			lastBundle,
-			HumanAge(s.CreationTimestamp.Time),
-		)
+		cells := []string{s.Name, string(s.Spec.Type), s.Spec.Pipeline, phase, lastCheck, lastVersion}
+		if wide {
+			cells = append(cells, lastBundle)
+		}
+		row := strings.Join(append(cells, HumanAge(s.CreationTimestamp.Time)), "\t")
 		if showNamespace {
 			row = s.Namespace + "\t" + row
 		}
@@ -153,4 +196,10 @@ func FormatSubscriptionTable(w io.Writer, subs []v1alpha1.Subscription, showName
 
 // getSubscriptionsReference is the detail of the command for its reference page.
 const getSubscriptionsReference = `Subscriptions passively watch OCI registries or Git repositories and
-automatically create Bundles when new artifacts are detected.`
+automatically create Bundles when new artifacts are detected.
+
+LAST-VERSION is the version of the last Bundle a Subscription created, as
+one token: an image's tag, a git Subscription's commit (7 characters), a
+helm Subscription's chart version, else the Bundle's name; so the columns
+after it stay where a script reads them. -o wide shows the whole version
+("config abc1234", "podinfo 6.15.0") and adds LAST-BUNDLE.`

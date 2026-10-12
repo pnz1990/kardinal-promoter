@@ -1,0 +1,38 @@
+ns="default" pipeline="" strict=false exact=false ref="demo-a"
+  default/demo-a
+ns="default" pipeline="demo" strict=false exact=false ref="1.4.0"
+  default/demo-a
+ns="default" pipeline="" strict=false exact=false ref="1.4.0"
+  error: version "1.4.0" names 2 Bundles in default: 1.4.0 (web-a) of web [Verified]; app0:1.4.0, app1:web-a (demo-a) of demo [Verified]; give the Bundle's name
+ns="default" pipeline="demo" strict=false exact=false ref="1.5.0"
+  error: version "1.5.0" names 2 Bundles of pipeline demo: 1.5.0 (demo-c) [Promoting]; 1.5.0 (demo-b) [Superseded]; give the Bundle's name
+ns="default" pipeline="demo" strict=false exact=false ref="sidecar-7"
+  default/demo-d
+ns="default" pipeline="demo" strict=false exact=false ref="3.0.0"
+  error: no Bundle named "3.0.0", and no version "3.0.0" of pipeline demo; the newest are: config abc1234 (demo-cfg) [Verified]; mychart 7.7.7 (demo-chart) [Verified]; app0:2.0.0, app1:sidecar-7 (demo-d) [Verified]; 1.5.0 (demo-c) [Promoting]; 1.5.0 (demo-b) [Superseded]; and 1 more (kardinal get bundles)
+ns="default" pipeline="other" strict=false exact=false ref="1.4.0"
+  error: no Bundle named "1.4.0", and no version "1.4.0" of pipeline other: there are no Bundles of pipeline other
+ns="default" pipeline="" strict=false exact=false ref="web-a"
+  default/web-a
+ns="default" pipeline="" strict=true exact=false ref="web-a"
+  error: "web-a" is the name of 1.4.0 (web-a) of web [Verified] and a version of app0:1.4.0, app1:web-a (demo-a) of demo [Verified]; say which: --name web-a for the Bundle of that name, --pipeline, or the other's Bundle name
+ns="default" pipeline="demo" strict=false exact=false ref="web-a"
+  default/demo-a
+ns="default" pipeline="demo" strict=false exact=false ref="7.7.7"
+  default/demo-chart
+ns="default" pipeline="demo" strict=false exact=false ref="abc1234"
+  default/demo-cfg
+ns="" pipeline="" strict=false exact=false ref="x-a"
+  team-b/x-a
+ns="" pipeline="" strict=false exact=false ref="1.4.0"
+  error: version "1.4.0" names 3 Bundles in any namespace: 1.4.0 (x-a) of x [Verified]; 1.4.0 (web-a) of web [Verified]; app0:1.4.0, app1:web-a (demo-a) of demo [Verified]; give the Bundle's name
+ns="default" pipeline="" strict=true exact=true ref="web-a"
+  default/web-a
+ns="default" pipeline="" strict=true exact=true ref="1.4.0"
+  error: no Bundle named "1.4.0" in namespace default (for a version, give it without --name)
+list forbidden, ref="nope"
+  error: bundle "nope" not found in namespace default (and you may not list Bundles there to look for a version "nope")
+strict, list forbidden, ref="web-a"
+  error: could not check that "web-a" is not also another Bundle's version: you may not list Bundles in default; to mean the Bundle named web-a, give --name web-a
+strict, list forbidden, --name web-a
+  default/web-a

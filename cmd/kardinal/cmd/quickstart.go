@@ -22,10 +22,13 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/net/http/httpproxy"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -115,7 +118,7 @@ var quickstartEnvs = []string{"test", "uat", "prod"}
 // returns its output; a test replaces it.
 var quickstartRun = func(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = scrubbedEnv(os.Environ())
+	cmd.Env = toolEnv(os.Environ())
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, out)
@@ -130,7 +133,7 @@ var quickstartLookPath = exec.LookPath
 type quickstartOptions struct {
 	repo, image, chart, chartVersion string
 	sets                             []string
-	noArgoCD, noWait                 bool
+	noArgoCD, noWait, delete         bool
 	timeout                          time.Duration
 }
 
@@ -146,10 +149,18 @@ fork, a Pipeline with an approval gate on prod, and a first version, which it
 follows until prod waits for your approval. A re-run changes nothing.`,
 		Example: `  kind create cluster --name kardinal
   kardinal quickstart --repo https://github.com/<you>/kardinal-demo
-  kardinal approve demo prod`,
+  kardinal approve demo prod
+  kardinal quickstart --delete`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return quickstartFn(cmd.Context(), cmd.OutOrStdout(), o)
+			// Ctrl-C or SIGTERM cancels the step that runs (helm, kubectl or
+			// the follow) and quickstart returns, removing its kubeconfig file.
+			ctx, stop := signal.NotifyContext(contextOf(cmd), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			if o.delete {
+				return quickstartDeleteFn(ctx, cmd.OutOrStdout(), func(q string) error { return confirm(cmd, q) })
+			}
+			return quickstartFn(ctx, cmd.OutOrStdout(), o)
 		},
 	}
 	f := cmd.Flags()
@@ -161,6 +172,16 @@ follows until prod waits for your approval. A re-run changes nothing.`,
 	f.BoolVar(&o.noArgoCD, "no-argocd", false, "Do not install Argo CD (the cluster has one)")
 	f.BoolVar(&o.noWait, "no-wait", false, "Do not follow the first version")
 	f.Var(durationValue{&o.timeout}, "timeout", "How long to follow the first version")
+	f.BoolVar(&o.delete, "delete", false, "Delete the demo quickstart applied (its versions, Pipeline, gate, ApplicationSet and git Secret); keep kro, Argo CD and kardinal")
+	addYesFlag(cmd)
+	cmd.MarkFlagsMutuallyExclusive("delete", "repo")
+	cmd.MarkFlagsMutuallyExclusive("delete", "image")
+	cmd.MarkFlagsMutuallyExclusive("delete", "chart")
+	cmd.MarkFlagsMutuallyExclusive("delete", "chart-version")
+	cmd.MarkFlagsMutuallyExclusive("delete", "set")
+	cmd.MarkFlagsMutuallyExclusive("delete", "no-argocd")
+	cmd.MarkFlagsMutuallyExclusive("delete", "no-wait")
+	cmd.MarkFlagsMutuallyExclusive("delete", "timeout")
 	withReference(cmd, quickstartReference)
 	return cmd
 }
@@ -281,14 +302,20 @@ func targetOverrides(environ []string) []string {
 	return out
 }
 
+// toolEnv is the environment helm and kubectl run with: scrubbedEnv, and
+// KUBERC=off, so no kuberc alias or default changes what kubectl runs.
+func toolEnv(environ []string) []string {
+	return append(scrubbedEnv(environ), "KUBERC=off")
+}
+
 // scrubbedEnv is environ without what could point helm or kubectl at
-// another cluster: the targetOverrides and KUBECONFIG (quickstart passes
-// --kubeconfig).
+// another cluster or change their commands: the targetOverrides, KUBECONFIG
+// (quickstart passes --kubeconfig) and KUBERC (quickstartRun sets it off).
 func scrubbedEnv(environ []string) []string {
 	out := make([]string, 0, len(environ))
 	for _, kv := range environ {
 		k, _, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(k, "HELM_KUBE") || k == "KUBERNETES_MASTER" || k == "KUBECONFIG" {
+		if strings.HasPrefix(k, "HELM_KUBE") || k == "KUBERNETES_MASTER" || k == "KUBECONFIG" || k == "KUBERC" {
 			continue
 		}
 		out = append(out, kv)
@@ -321,7 +348,69 @@ func requireLocalContext() (string, *clientcmdapi.Config, error) {
 			"the context %q (server %s) is not one, and nothing was changed. Create a local cluster and use it: "+
 			"kind create cluster --name kardinal: %w", name, server, errNotLocal)
 	}
+	// A proxy (proxy-url) could send the requests to any cluster, wherever
+	// the server URL points.
+	if kc := only.Contexts[name]; kc != nil {
+		if cl := only.Clusters[kc.Cluster]; cl != nil && cl.ProxyURL != "" {
+			return "", nil, fmt.Errorf("kardinal quickstart does not use a kubeconfig context with a proxy: the context %q sends its requests through %s, "+
+				"so it may not be the local cluster it names, and nothing was changed. Use a local context without proxy-url: %w", name, cl.ProxyURL, errNotLocal)
+		}
+	}
+	// So could a proxy of the environment (HTTPS_PROXY, HTTP_PROXY): client-go,
+	// helm and kubectl use it for any server NO_PROXY does not exclude.
+	if v, proxy := envProxy(server); proxy != "" {
+		noProxy := server
+		if u, err := url.Parse(server); err == nil {
+			noProxy = u.Hostname()
+		}
+		if cur := httpproxy.FromEnvironment().NoProxy; cur != "" {
+			noProxy = cur + "," + noProxy
+		}
+		return "", nil, fmt.Errorf("kardinal quickstart does not send its requests through a proxy: %s=%s applies to the server %s of the context %q, "+
+			"so it may not be the local cluster it names, and nothing was changed. Exclude the server from the proxy: "+
+			"export NO_PROXY=%s (or unset %s): %w", v, proxy, server, name, noProxy, v, errNotLocal)
+	}
 	return name, only, nil
+}
+
+// envProxy is the proxy variable of the environment, and its value, that a
+// request to server would go through (httpproxy.FromEnvironment, as Go's
+// net/http reads it); "" when none applies, NO_PROXY or the loopback
+// exception included.
+func envProxy(server string) (variable, proxy string) {
+	u, err := url.Parse(server)
+	if err != nil {
+		return "", ""
+	}
+	p, err := httpproxy.FromEnvironment().ProxyFunc()(u)
+	if err != nil || p == nil {
+		return "", ""
+	}
+	names := []string{"HTTPS_PROXY", "https_proxy"}
+	if u.Scheme == "http" {
+		names = []string{"HTTP_PROXY", "http_proxy"}
+	}
+	for _, n := range names {
+		if os.Getenv(n) != "" {
+			return n, redactProxy(p)
+		}
+	}
+	return names[0], redactProxy(p)
+}
+
+// redactProxy is proxy URL p, as Go parsed it from the environment (a
+// schemeless value gets http://), with its credentials masked: the password
+// of user:password, or a username alone, which may be a token.
+func redactProxy(p *url.URL) string {
+	cp := *p
+	if cp.User != nil {
+		if _, ok := cp.User.Password(); ok {
+			cp.User = url.UserPassword(cp.User.Username(), "xxxxx")
+		} else {
+			cp.User = url.User("xxxxx")
+		}
+	}
+	return cp.String()
 }
 
 // quickstartClient is the cluster client of quickstart, from the kubeconfig
@@ -511,6 +600,14 @@ func (q *quickstart) argoCD() error {
 		!strings.Contains(err.Error(), "AlreadyExists") {
 		return fmt.Errorf("quickstart: install Argo CD: %w", err)
 	}
+	// The Argo CD quickstart installs polls git every 10s instead of its
+	// default 2m plus up to 1m of jitter, so each environment of the demo
+	// syncs its merged commit within seconds, not minutes; the controllers
+	// read it at start, so it goes in before them. The release's argocd-cm
+	// does not set these keys, so its server-side apply below leaves them.
+	if _, err := q.apply(argoCDPolling()); err != nil {
+		return fmt.Errorf("quickstart: install Argo CD: %w", err)
+	}
 	manifests := "https://raw.githubusercontent.com/argoproj/argo-cd/" + argoCDRelease + "/manifests/install.yaml"
 	if _, err := quickstartRun(q.ctx, "kubectl", append([]string{"apply", "-n", "argocd", "--server-side", "--force-conflicts", "-f", manifests}, q.kubectlFlags()...)...); err != nil {
 		return fmt.Errorf("quickstart: install Argo CD: %w", err)
@@ -522,6 +619,18 @@ func (q *quickstart) argoCD() error {
 	}
 	q.say(what, "installed")
 	return nil
+}
+
+// argoCDPolling is the argocd-cm quickstart applies to an Argo CD it
+// installs: git polled every 10s, with no jitter. Argo CD installed by
+// someone else keeps its settings.
+func argoCDPolling() *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "ConfigMap",
+		"metadata": map[string]any{"name": "argocd-cm", "namespace": "argocd",
+			"labels": map[string]any{"app.kubernetes.io/name": "argocd-cm", "app.kubernetes.io/part-of": "argocd"}},
+		"data": map[string]any{"timeout.reconciliation": "10s", "timeout.reconciliation.jitter": "0s"},
+	}}
 }
 
 // kardinal installs the kardinal-promoter chart.
@@ -601,8 +710,12 @@ func (q *quickstart) scmSecret() error {
 // secret creates the git Secret of the demo Pipeline (createGitSecret: kept
 // when it exists, labelled referenceable when it is not).
 func (q *quickstart) secret() error {
+	// One it creates is marked as quickstart's, in the Create itself, so
+	// quickstart --delete deletes it and never a Secret of the same name
+	// someone else made.
 	var out strings.Builder
-	if err := createGitSecret(q.ctx, q.c, quickstartNS, quickstartSecret, &out); err != nil {
+	if err := createGitSecretLabelled(q.ctx, q.c, quickstartNS, quickstartSecret, &out,
+		map[string]string{quickstartMark: quickstartMarkValue}); err != nil {
 		return fmt.Errorf("quickstart: %w", err)
 	}
 	msg := strings.TrimSpace(out.String())
@@ -636,7 +749,7 @@ func (q *quickstart) apply(u *unstructured.Unstructured) (bool, error) {
 		return false, fmt.Errorf("get %s %s/%s: %w", u.GetKind(), u.GetNamespace(), u.GetName(), HumanError(err))
 	}
 	if err := q.c.Apply(q.ctx, sigs_client.ApplyConfigurationFromUnstructured(u),
-		sigs_client.FieldOwner("kardinal-quickstart"), sigs_client.ForceOwnership); err != nil {
+		sigs_client.FieldOwner(quickstartFieldManager), sigs_client.ForceOwnership); err != nil {
 		return false, fmt.Errorf("apply %s %s/%s: %w", u.GetKind(), u.GetNamespace(), u.GetName(), HumanError(err))
 	}
 	after, err := version()
@@ -774,7 +887,8 @@ func (q *quickstart) ship() error {
 			return nil
 		}
 	}
-	b, err := newBundle(q.ctx, q.c, quickstartNS, quickstartPipeline, createBundleOptions{Images: []string{q.o.image}, Type: "image"})
+	b, err := newBundle(q.ctx, q.c, quickstartNS, quickstartPipeline, createBundleOptions{Images: []string{q.o.image}, Type: "image",
+		Labels: map[string]string{quickstartMark: quickstartMarkValue}})
 	if err != nil {
 		return fmt.Errorf("quickstart: ship: %w", err)
 	}
@@ -813,15 +927,22 @@ rancher-desktop, or whose API server is not on this machine (loopback,
 drivers' networks 192.168.49.0/24, 192.168.39.0/24 and 192.168.59.0/24). It
 also refuses to run while a variable is set that points helm, kubectl or
 client-go elsewhere (HELM_KUBE*, such as HELM_KUBECONTEXT, and
-KUBERNETES_MASTER). There is no flag to override it, on purpose. Use
+KUBERNETES_MASTER), and refuses a context whose cluster has a proxy-url, or
+whose server an environment proxy (HTTPS_PROXY, HTTP_PROXY) applies to: the
+proxy decides where requests go. Go never proxies localhost and 127.0.0.1;
+for 0.0.0.0, host.docker.internal or a minikube address, add the host to
+NO_PROXY. There is no flag to override it, on purpose. Use
 --context to pick a local context. helm and kubectl run on a kubeconfig file
-with only that context, without KUBECONFIG or those variables. What it
+with only that context, without KUBECONFIG or those variables, and kubectl
+with KUBERC=off. Ctrl-C or SIGTERM stops the step that runs and removes
+that file. What it
 cannot see: a loopback port that tunnels to a remote cluster (kubectl
 port-forward, ssh -L) looks local; do not point a local context at one.
 
 On a local cluster it installs, each only when it is not there yet:
   kro (the version hack/install-kro.sh pins), with the Graph controller
-  Argo CD (its release manifests; --no-argocd when the cluster has one)
+  Argo CD (its release manifests, polling git every 10s instead of 2-3m;
+    --no-argocd when the cluster has one, which keeps its own settings)
   kardinal-promoter (the chart of this CLI's version, in kardinal-system;
     --chart, --chart-version and --set for another)
 Then it applies, in default (so no command needs -n):
@@ -839,4 +960,17 @@ change your kubeconfig. A re-run changes nothing.
 
 Then: kardinal approve demo prod ships it to prod; kardinal dashboard opens
 the UI; the Next lines show the command that ships the next version. To get
-PR evidence for prod, set its approval to pr-review in the Pipeline.`
+PR evidence for prod, set its approval to pr-review in the Pipeline.
+
+kardinal quickstart --delete, behind the same local-context check, deletes
+the demo and nothing else: the demo's versions first (it waits up to 2m for
+the controller to close their open PRs, and stops there if they are not
+gone), then the Pipeline demo, the gate prod-approval and the ApplicationSet
+(Argo CD deletes its Applications), each only when quickstart applied it
+(field manager kardinal-quickstart), and the Secret github-token only when
+quickstart created it (label kardinal.io/quickstart) and no other Pipeline
+uses it. Without a Pipeline demo, only versions with that label go. Do
+not add the label by hand: --delete deletes what carries it. It keeps kro, Argo CD, kardinal-promoter with its
+token Secret, and the kardinal-test-app-<env> namespaces, and prints the
+command that deletes those. It asks first on a terminal (--yes does not).
+A re-run deletes nothing.`

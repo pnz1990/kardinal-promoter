@@ -222,6 +222,10 @@ kardinal picks the adapter in this order: `delivery.delegate` (set it to `argoRo
 `flagger` when a progressive-delivery controller rolls the workload out), then `health.type`,
 then `resource`. See [Health checks](health-adapters.md).
 
+With `argocd` and `flux`, a step whose commit is in git asks the Application, or the Kustomization
+and its GitRepository, to sync it now, once, instead of waiting for the tool's poll (every 3
+minutes by default for Argo CD). See [Sync on promotion](health-adapters.md#sync-on-promotion).
+
 ### Several clusters
 
 kardinal runs in one cluster. If an Argo CD or Flux installation (a **hub**) manages your
@@ -276,11 +280,11 @@ Referencing an attribute that does not exist blocks the gate. See the
 kardinal explain my-app --env prod
 
 # Output:
-# ENVIRONMENT   VERSION        TYPE         NAME                 STATE      EXPRESSION                         REASON
-# prod          my-app-9tptr   PolicyGate   staging-soak         Blocking   bundle.upstreamSoakMinutes >= 30   bundle.version=1.29.0: bundle.upstreamSoakMinutes >= 30 = false
-# prod          my-app-9tptr   PolicyGate   no-weekend-deploys   Passing    !schedule.isWeekend                bundle.version=1.29.0: !schedule.isWeekend = true
+# ENVIRONMENT   VERSION                 TYPE         NAME                 STATE      EXPRESSION                         REASON
+# prod          1.29.0 (my-app-9tptr)   PolicyGate   staging-soak         Blocking   bundle.upstreamSoakMinutes >= 30   bundle.upstreamSoakMinutes >= 30 = false (version 1.29.0)
+# prod          1.29.0 (my-app-9tptr)   PolicyGate   no-weekend-deploys   Passing    !schedule.isWeekend                !schedule.isWeekend = true (version 1.29.0)
 #
-# prod   deployed: my-app-7qvsr (1.28.0)
+# prod   deployed: 1.28.0 (my-app-7qvsr)
 ```
 
 Gates that are not ready come first. STATE is Passing, Blocking (holding the version),

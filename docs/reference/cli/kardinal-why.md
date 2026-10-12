@@ -19,8 +19,14 @@ details and the command that moves it on:
 
 The cases, in the order it checks them: the pipeline is paused (Next:
 kardinal resume); the environment is held (on what, by whom, why; Next:
-kardinal unhold); a gate holds it (an approval: how many of how many; any
-other gate: its message, Rule its expression, Now its last evaluation,
+kardinal unhold); a gate holds it (an approval: how many of how many, and
+"your approval" only when your approval would count: you are in
+allowedUsers or allowedGroups, or both are empty, with excludeAuthor you did
+not create the version, and yours is not counted yet ("approval by someone
+else (you approved)" once it is); else who may, "approval by alice or group
+release-managers"; who rejected it, when someone did; nobody, when the
+policy cannot be met. These come from the server's own tally of the gate's
+Approvals, so why and the controller agree; any other gate: its message, Rule its expression, Now its last evaluation,
 Opens when it opens and how often it is rechecked; Next: kardinal approve or
 kardinal override); its PR waits to be merged (PR and its URL); the version
 failed (Why the step's message; Next: kardinal logs, or roll back); it is
@@ -58,7 +64,7 @@ kardinal why <pipeline> [<env>] [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: create bundle, explain, get, history, promote, release-hold, rollback, status)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO

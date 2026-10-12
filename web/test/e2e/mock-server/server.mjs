@@ -60,8 +60,6 @@ const PIPELINES = [
     phase: 'Ready',
     environmentCount: 3,
     activeBundleName: 'kardinal-test-app-abc123',
-    // status.summary (P1), as the PipelineReconciler writes it.
-    summary: 'abc123 Verified in test, uat; Waiting for PR merge in prod (#42)',
     environmentStates: { test: 'Verified', uat: 'Verified', prod: 'WaitingForMerge' },
     blockerCount: 0,
     failedStepCount: 0,
@@ -90,7 +88,7 @@ const PIPELINES = [
     environmentStates: { staging: 'Promoting', prod: 'Pending' },
     blockerCount: 2,
     failedStepCount: 0,
-    activeBundleVersion: 'v2.4.0 with config 1a2b3c4',
+    activeBundleVersion: '6.14.1',
     environmentTopology: [{ name: 'staging' }, { name: 'prod', upstreams: ['staging'] }],
     // status.conditions (#1727): its git Secret works but is not labelled referenceable.
     conditions: [
@@ -118,6 +116,7 @@ const BUNDLES = {
       namespace: 'default',
       phase: 'Superseded',
       type: 'image',
+      version: 'sha-9f8e7d6',
       pipeline: 'kardinal-test-app',
       createdAt: ago(7_200_000),
     },
@@ -126,6 +125,7 @@ const BUNDLES = {
       namespace: 'default',
       phase: 'Verified',
       type: 'config',
+      version: 'config 77aa001',
       pipeline: 'kardinal-test-app',
       createdAt: ago(3_600_000),
     },
@@ -198,7 +198,7 @@ const GATES = [
   { name: 'no-weekend-deploys', namespace: 'default', expression: '!schedule.isWeekend', ready: false, template: true, state: 'Pending' },
   {
     name: 'release-approval-payments-service-def456-prod', namespace: 'default', pipeline: 'payments-service', bundle: 'payments-service-def456', environment: 'prod',
-    gateTemplate: 'release-approval', maxOverrideMinutes: 1440, expression: 'true', ready: false, holding: true, state: 'Block', reason: 'waiting for approvals: 1 of 2 (alice)', lastEvaluatedAt: ago(20_000),
+    gateTemplate: 'release-approval', maxOverrideMinutes: 1440, createdAt: ago(1_500_000), expression: 'true', ready: false, holding: true, state: 'Block', reason: 'waiting for approvals: 1 of 2 (alice)', lastEvaluatedAt: ago(20_000),
     approval: {
       required: 2, allowedGroups: ['release-managers'], excludeAuthor: true, approved: 1,
       decisions: [
@@ -304,6 +304,29 @@ const server = http.createServer(async (req, res) => {
       case 'override': return json(res, { message: `gate ${body.gate} overridden in ${body.environment}`, gates: [body.gate],
         expiresAt: new Date(Date.now() + (body.expiresInMinutes ?? 60) * 60_000).toISOString() })
       case 'release-hold': return json(res, { message: 'hold released' })
+      // U7: who the caller is and what they may do (ui_access.go). The bearer token picks
+      // the caller: none is carol, an approver in release-managers who may do everything;
+      // "viewer" is victor, who may only read; "open" is a UI without TokenReview (no user,
+      // everything allowed). Read from the request, so parallel journeys do not share state.
+      case 'access': {
+        const auth = req.headers.authorization ?? ''
+        const viewer = auth === 'Bearer viewer'
+        const open = auth === 'Bearer open'
+        const roles = {
+          'update pipelines/pause': 'promoter or admin', 'update pipelines/hold': 'promoter or admin',
+          'update bundles/reject': 'promoter, approver or admin', 'update policygates/override': 'approver or admin',
+          'create bundles': 'promoter or admin', 'create approvals': 'approver or admin',
+        }
+        const results = (body.checks ?? []).map(c => {
+          const approving = c.verb === 'create' && c.resource === 'approvals'
+          // Without TokenReview an approval cannot name who decided (ui_access.go).
+          if (open && approving) return { allowed: false, grantedBy: roles['create approvals'],
+            reason: 'approving needs sign-in with your Kubernetes identity (the UI\'s TokenReview mode); kardinal approve works without it' }
+          return { allowed: !viewer || c.verb === 'get' || c.verb === 'list', grantedBy: roles[`${c.verb} ${c.resource}${c.subresource ? `/${c.subresource}` : ''}`] }
+        })
+        const user = open ? undefined : viewer ? { username: 'victor', groups: ['viewers'] } : { username: 'carol', groups: ['release-managers'] }
+        return json(res, { ...(user ? { user } : {}), results })
+      }
     }
   }
   if (api) return json(res, { error: `no mock for ${method} ${url}` }, 404)

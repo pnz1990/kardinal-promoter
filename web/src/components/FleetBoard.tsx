@@ -7,11 +7,13 @@
 // no Pipeline is selected. The data comes from GET /api/v1/ui/pipelines
 // (deployed, activeBundleVersion, environmentStates, environmentTopology).
 
+import { useChangeHalo } from '../useChangeHalo'
 import { Fragment, useRef, type CSSProperties } from 'react'
 import '../styles/FleetBoard.css'
 import { hasCommandModifier, rovingFocus, rovingItems, useRovingFocus } from '../useRovingFocus'
 import type { Pipeline } from '../types'
 import { ageOf, fleetRow, wavePlate, WAVE_PLATE_MIN, type FleetRow, type Station, type StationState } from '../fleetModel'
+import { stateWords } from '../sentence'
 
 interface FleetBoardProps {
   pipelines: Pipeline[]
@@ -50,11 +52,10 @@ function stationNote(s: Station, now: number): string {
   if (s.fleet) return fleetNote(s)
   switch (s.state) {
     case 'arriving':
-      if (s.incomingState === 'WaitingForMerge') return 'waiting for merge'
-      if (s.incomingState === 'HealthChecking') return 'checking health'
-      return 'promoting'
+      // The display labels (P2), as the map and the drawer read them.
+      return stateWords('step', s.incomingState === 'WaitingForMerge' || s.incomingState === 'HealthChecking' ? s.incomingState : 'Promoting')
     case 'failed':
-      return s.incomingState === 'RollingBack' ? 'rolling back' : 'release failed'
+      return s.incomingState === 'RollingBack' ? stateWords('step', 'RollingBack') : 'release failed'
     case 'held':
       return 'held by a gate'
     case 'empty':
@@ -108,11 +109,14 @@ function FleetBar({ f }: { f: NonNullable<Station['fleet']> }) {
 function StationPlate({ s, pipeline, now, onSelect }: {
   s: Station; pipeline: Pipeline; now: number; onSelect: FleetBoardProps['onSelect']
 }) {
+  // U7: a station whose state or version changed on a poll gets one halo.
+  const changed = useChangeHalo(`${s.state}|${s.version ?? ''}|${s.bundle ?? ''}`)
   return (
     <button
       type="button"
       className="fleet-station"
       data-state={s.state}
+      data-changed={changed || undefined}
       data-fleet={s.fleet ? true : undefined}
       onClick={() => onSelect(pipeline.name, pipeline.namespace, s.env)}
       aria-label={`${pipeline.name} ${s.env}: ${s.version ? `${s.version}, ` : ''}${s.alsoRuns ? `with ${s.alsoRuns} from ${s.alsoFrom}, ` : ''}${stationNote(s, now)}`}

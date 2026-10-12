@@ -109,9 +109,12 @@ config version past an `argocd` environment, list that environment in `intent.sk
 
 ## Required RBAC
 
-The kardinal controller's ServiceAccount must have permission to `get` and `patch`
+The kardinal controller's ServiceAccount must have permission to `get`, `patch` and `update`
 `applications.argoproj.io` in the namespace where your ArgoCD Applications live. The chart
-grants read access by default; enable `patch` with:
+grants `patch` by default, for the refresh request, but its `<fullname>-gitops-writes` admission
+policy then lets the controller change only the `argocd.argoproj.io/refresh` annotation of an
+Application it may not `update` ([Sync on promotion](health-adapters.md#sync-on-promotion)), so the
+strategy's patch is denied. Grant `patch` and `update` on every Application with:
 
 ```bash
 helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.10.0 \
@@ -127,8 +130,13 @@ there and bind it to the controller's ServiceAccount:
 rules:
   - apiGroups: ["argoproj.io"]
     resources: ["applications"]
-    verbs: ["get", "list", "watch", "patch"]
+    verbs: ["get", "list", "watch", "patch", "update"]
 ```
+
+A Role like this one, with `resourceNames`, also grants `update` on only the Applications the
+strategy patches, instead of `rbac.argocdApplicationsWrite` on every one. Without `update` the
+step retries the denied patch and fails (`ValidatingAdmissionPolicy '<fullname>-gitops-writes' ...
+denied request`).
 
 ---
 

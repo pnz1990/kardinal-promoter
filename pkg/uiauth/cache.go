@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"sort"
 	"sync"
 	"time"
 
@@ -25,7 +26,8 @@ const DefaultCacheTTL = 30 * time.Second
 
 // maxCacheEntries bounds memory use. A caller sending many distinct invalid
 // tokens can fill the cache; when full, expired entries are dropped and, if
-// that frees nothing, the cache is cleared.
+// that frees nothing, the least recently used entries are evicted (an eighth
+// of the cache), so one caller filling it does not evict everyone's answers.
 const maxCacheEntries = 4096
 
 type cacheEntry[V any] struct {
@@ -33,6 +35,8 @@ type cacheEntry[V any] struct {
 	expires time.Time
 	// started orders the reviews behind the entries (see ttlCache.start).
 	started uint64
+	// used is the last get or put of the entry: the least recently used go first.
+	used uint64
 }
 
 // ttlCache caches review results. Each review takes a ticket from start
@@ -46,6 +50,8 @@ type ttlCache[V any] struct {
 	now     func() time.Time
 	entries map[string]cacheEntry[V]
 	tickets uint64
+	// clock orders uses (get and put) for the LRU eviction.
+	clock uint64
 }
 
 func newTTLCache[V any](ttl time.Duration) *ttlCache[V] {
@@ -60,6 +66,9 @@ func (c *ttlCache[V]) get(key string) (V, bool) {
 		var zero V
 		return zero, false
 	}
+	c.clock++
+	e.used = c.clock
+	c.entries[key] = e
 	return e.value, true
 }
 
@@ -89,10 +98,27 @@ func (c *ttlCache[V]) put(key string, v V, started uint64) {
 			}
 		}
 		if len(c.entries) >= maxCacheEntries {
-			c.entries = map[string]cacheEntry[V]{}
+			c.evictLRU(maxCacheEntries / 8)
 		}
 	}
-	c.entries[key] = cacheEntry[V]{value: v, expires: now.Add(c.ttl), started: started}
+	c.clock++
+	c.entries[key] = cacheEntry[V]{value: v, expires: now.Add(c.ttl), started: started, used: c.clock}
+}
+
+// evictLRU deletes the n least recently used entries. Called with mu held.
+func (c *ttlCache[V]) evictLRU(n int) {
+	type use struct {
+		key  string
+		used uint64
+	}
+	uses := make([]use, 0, len(c.entries))
+	for k, e := range c.entries {
+		uses = append(uses, use{k, e.used})
+	}
+	sort.Slice(uses, func(i, j int) bool { return uses[i].used < uses[j].used })
+	for i := 0; i < n && i < len(uses); i++ {
+		delete(c.entries, uses[i].key)
+	}
 }
 
 func hashKey(parts ...any) string {

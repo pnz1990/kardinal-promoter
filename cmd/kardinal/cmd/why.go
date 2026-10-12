@@ -71,7 +71,11 @@ explain's entries. -w refreshes every 3 seconds.`,
 				return explainHinted(w, c, ns, pipeline, env, colorFlag)
 			}
 			if !watchFlag {
-				return whyFn(cmd.Context(), w, c, ns, pipeline, env)
+				if err := whyFn(cmd.Context(), w, c, ns, pipeline, env); err != nil {
+					return err
+				}
+				printUILink(ns, pipeline, env)
+				return nil
 			}
 			return whyWatch(cmd.Context(), w, c, ns, pipeline, env, 3*time.Second)
 		},
@@ -164,12 +168,18 @@ func whyFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline,
 	for i := range bundles.Items {
 		byName[bundles.Items[i].Name] = &bundles.Items[i]
 	}
+	// Who asks, to tell "your approval" from someone else's; unknown (nil)
+	// when the API server does not say.
+	var me *Identity
+	if id, err := identityOf(ctx, c); err == nil {
+		me = &id
+	}
 	var answers []whyAnswer
 	for _, e := range envs {
 		if envFilter != "" && e.Name != envFilter {
 			continue
 		}
-		answers = append(answers, whyEnvironment(p, e, envs, gates.Items, steps.Items, byName, whyNow()))
+		answers = append(answers, whyEnvironment(p, e, envs, gates.Items, steps.Items, byName, me, whyNow()))
 	}
 	for i, a := range answers {
 		if i > 0 {
@@ -217,7 +227,7 @@ func versionLabel(version, bundle string) string {
 // gate (an approval, or another gate), waiting for a PR, failed, promoting,
 // waiting for an upstream environment, or nothing to wait for.
 func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, envs []v1alpha1.PipelineEnvironmentStatus,
-	gates []v1alpha1.PolicyGate, steps []v1alpha1.PromotionStep, byName map[string]*v1alpha1.Bundle, now time.Time) whyAnswer {
+	gates []v1alpha1.PolicyGate, steps []v1alpha1.PromotionStep, byName map[string]*v1alpha1.Bundle, me *Identity, now time.Time) whyAnswer {
 	incoming := e.IncomingBundle
 	incomingVersion := e.IncomingVersion
 	if incoming == "" && e.State != "" && e.State != "Verified" {
@@ -275,7 +285,11 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 			return strings.Compare(gateDisplayName(a), gateDisplayName(b))
 		})
 		if len(mine) > 0 {
-			return whyGate(p, e.Name, version, mine)
+			creator, known := "", false
+			if b := byName[incoming]; b != nil {
+				creator, known = b.Annotations[lifecycle.AnnotationCreatedBy], true
+			}
+			return whyGate(p, e.Name, version, mine, me, creator, known)
 		}
 		return whyAnswer{sentence: fmt.Sprintf("%s is held by gate %s.", e.Name, strings.Join(e.BlockedBy, ", ")),
 			lines: []whyLine{version, {"Next", fmt.Sprintf("kardinal explain %s %s", p.Name, e.Name)}}}
@@ -325,29 +339,62 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 }
 
 // whyGate is why's answer for gates that hold an environment: the first
-// says what it waits for, the others follow as more lines.
-func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1.PolicyGate) whyAnswer {
+// says what it waits for, the others follow as more lines. creator is the
+// version's kardinal.io/created-by; known is false when the version was not
+// read, and then nothing is said about its creator.
+func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1.PolicyGate, me *Identity, creator string, known bool) whyAnswer {
 	g := gates[0]
 	name := gateDisplayName(g)
 	var a whyAnswer
-	if g.Spec.Approval != nil {
-		approved, rejectedBy := approvalCount(g)
-		required := max(g.Spec.Approval.Required, 1)
-		a.sentence = fmt.Sprintf("%s is waiting for your approval.", env)
-		if rejectedBy != "" {
-			a.sentence = fmt.Sprintf("%s was rejected by %s.", env, rejectedBy)
+	switch {
+	case g.Spec.Approval != nil:
+		var id *lifecycle.ApproverIdentity
+		if me != nil {
+			id = &lifecycle.ApproverIdentity{User: me.Username, Groups: me.Groups}
 		}
+		st := lifecycle.ApprovalStandingOf(&g, creator, id)
+		// A version not read has an unknown creator, not none: nothing is
+		// said about excludeAuthor then.
+		creatorHeld := st.Block == lifecycle.ApprovalNoCreator || st.Block == lifecycle.ApprovalComponentCreator
+		if st.Block.Held() && (known || !creatorHeld) {
+			// The gate holds whatever approvals it gets: the server's own
+			// decision, said in the CLI's words.
+			a.sentence = fmt.Sprintf("%s is held by gate %s: nobody can approve this version.", env, name)
+			a.lines = []whyLine{version,
+				{"Why", unapprovable(st.Block, creator)},
+				{"Next", fmt.Sprintf("ship it again as yourself: kardinal ship %s --image <ref>", p.Name)},
+				{"Or", fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>", p.Name, env, name)}}
+			if st.Block == lifecycle.ApprovalTooMany {
+				a.lines[2].value = fmt.Sprintf("delete the stale Approvals: kubectl get approvals -n %s", p.Namespace)
+			}
+			break
+		}
+		by, next := approvalBy(st, me != nil && !creatorHeld, fmt.Sprintf("kardinal approve %s %s", p.Name, env))
+		a.sentence = fmt.Sprintf("%s is waiting for %s.", env, by)
 		a.lines = []whyLine{version,
-			{"Gate", fmt.Sprintf("%s · %d of %d approvals", name, approved, required)},
-			{"Next", fmt.Sprintf("kardinal approve %s %s", p.Name, env)}}
-	} else {
+			{"Gate", fmt.Sprintf("%s · %d of %d approvals", name, st.Approved, st.Required)},
+			{"Next", next}}
+		// Rejected; or, the version not read (so whether excludeAuthor holds
+		// it is unknown), a known rejection is what to say.
+		if st.Block == lifecycle.ApprovalRejected || (creatorHeld && !known && len(st.RejectedBy) > 0) {
+			// A counted reject blocks it: no approval opens it.
+			by := st.RejectedBy
+			who := by[len(by)-1]
+			if len(by) > 1 {
+				who = strings.Join(by[:len(by)-1], ", ") + " and " + who
+			}
+			a.sentence = fmt.Sprintf("%s was rejected by %s.", env, who)
+			a.lines[2].value = fmt.Sprintf("ship a fixed version: kardinal ship %s --image <ref>", p.Name)
+			a.lines = append(a.lines, whyLine{"Or", fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>", p.Name, env, name)})
+		}
+	default:
 		a.sentence = fmt.Sprintf("%s is held by gate %s.", env, name)
 		a.lines = []whyLine{version}
 		if g.Spec.Message != "" {
 			a.lines = append(a.lines, whyLine{"Why", g.Spec.Message})
 		}
 		a.lines = append(a.lines, whyLine{"Rule", g.Spec.Expression})
-		if now := gateEvaluation(g.Status.Reason); now != "" {
+		if now := graph.GateDetail(&g); now != "" {
 			a.lines = append(a.lines, whyLine{"Now", now})
 		}
 		every := g.Spec.RecheckInterval
@@ -367,37 +414,57 @@ func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1
 	return a
 }
 
-// approvalCount is the counted approvals of approval gate g, and who
-// rejected it (a counted reject blocks it).
-func approvalCount(g v1alpha1.PolicyGate) (approved int, rejectedBy string) {
-	for _, s := range g.Status.Approvals {
-		if !s.Counted {
-			continue
-		}
-		switch s.Decision {
-		case "approve":
-			approved++
-		case "reject":
-			if rejectedBy == "" {
-				rejectedBy = s.User
-			}
-		}
+// unapprovable says, in the CLI's words, why no approval can open an
+// approval gate held by block (lifecycle.ApprovalBlock.Held) for a version
+// created by creator. With excludeAuthor, a version with no verified creator
+// (kardinal.io/created-by), or one a kardinal component created (the UI, the
+// Bundle API, a Subscription), has no author to exclude.
+func unapprovable(block lifecycle.ApprovalBlock, creator string) string {
+	switch block {
+	case lifecycle.ApprovalTooMany:
+		return fmt.Sprintf("more than %d Approvals for this version; delete the stale ones (kubectl get approvals)", lifecycle.MaxGateApprovals)
+	case lifecycle.ApprovalNoCreator:
+		return "the gate excludes the version's author, and the version has no verified creator (kardinal.io/created-by)"
+	case lifecycle.ApprovalComponentCreator:
+		return fmt.Sprintf("the gate excludes the version's author, and the version was created by the kardinal component %s, not a person", creator)
 	}
-	return approved, rejectedBy
+	return ""
 }
 
-// gateEvaluation is the evaluation in a gate's status reason, which ends
-// "(<context>: <expression> = <result>)": the part after the context.
-func gateEvaluation(reason string) string {
-	open := strings.LastIndex(reason, "(")
-	if open < 0 || !strings.HasSuffix(reason, ")") {
-		return ""
+// approvalBy is who an approval gate waits for, from the caller's standing
+// with it (lifecycle.ApprovalStandingOf, the server's tally), and the Next
+// line: "your approval" when the caller's approval would count; "approval by
+// someone else" once it is counted; for the version's author, "someone other
+// than you"; else who may ("alice, bob or group release-managers"). An
+// unknown caller gets who may, or "approval".
+func approvalBy(st lifecycle.ApprovalStanding, known bool, approve string) (by, next string) {
+	list := ""
+	switch n := len(st.Who); n {
+	case 0:
+	case 1:
+		list = st.Who[0]
+	default:
+		list = strings.Join(st.Who[:n-1], ", ") + " or " + st.Who[n-1]
 	}
-	inner := reason[open+1 : len(reason)-1]
-	if _, after, ok := strings.Cut(inner, ": "); ok {
-		inner = after
+	switch {
+	case !known:
+		if list != "" {
+			return "approval by " + list, approve
+		}
+		return "approval", approve
+	case st.CanApprove:
+		return "your approval", approve
+	case st.Block == lifecycle.ApprovalCounted:
+		return "approval by someone else (you approved)", "someone else runs: " + approve
+	case st.Block == lifecycle.ApprovalAuthor:
+		if list != "" {
+			return "approval by " + list + ", someone other than you (you created this version)", "someone else runs: " + approve
+		}
+		return "approval by someone other than you (you created this version)", "someone else runs: " + approve
+	case list != "":
+		return "approval by " + list, "one of them runs: " + approve
 	}
-	return inner
+	return "approval", approve
 }
 
 // waitingUpstreams are the environments env follows that do not run bundle
@@ -447,8 +514,14 @@ details and the command that moves it on:
 
 The cases, in the order it checks them: the pipeline is paused (Next:
 kardinal resume); the environment is held (on what, by whom, why; Next:
-kardinal unhold); a gate holds it (an approval: how many of how many; any
-other gate: its message, Rule its expression, Now its last evaluation,
+kardinal unhold); a gate holds it (an approval: how many of how many, and
+"your approval" only when your approval would count: you are in
+allowedUsers or allowedGroups, or both are empty, with excludeAuthor you did
+not create the version, and yours is not counted yet ("approval by someone
+else (you approved)" once it is); else who may, "approval by alice or group
+release-managers"; who rejected it, when someone did; nobody, when the
+policy cannot be met. These come from the server's own tally of the gate's
+Approvals, so why and the controller agree; any other gate: its message, Rule its expression, Now its last evaluation,
 Opens when it opens and how often it is rechecked; Next: kardinal approve or
 kardinal override); its PR waits to be merged (PR and its URL); the version
 failed (Why the step's message; Next: kardinal logs, or roll back); it is

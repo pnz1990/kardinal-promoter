@@ -1,8 +1,8 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 //
-// UI-OVERRIDE-01: overriding a gate from the stage drawer (v0.10.1; #1245 had
-// removed the old Override gate dialog). Go test: TestUI_BrowserGateOverride
+// UI-OVERRIDE-01: overriding a gate from the stage drawer. Go test:
+// TestUI_BrowserGateOverride
 // (test/e2e/live/ui_browser_test.go).
 //
 // In KARDINAL_UI_NAMESPACE, podinfo's Bundle is Verified in test and held
@@ -25,7 +25,9 @@ test('Override gate in the stage drawer asks first, then overrides the gate in p
   page.on('request', r => {
     // Reads, and the drawer's CEL check (POST validate-cel, which writes nothing).
     const path = new URL(r.url()).pathname
-    if (r.method() !== 'GET' && !(r.method() === 'POST' && path === '/api/v1/ui/validate-cel')) writes.push(`${r.method()} ${path}`)
+    // POST access (U7) asks what the caller may do: a read too.
+    const reads = ['/api/v1/ui/validate-cel', '/api/v1/ui/access']
+    if (r.method() !== 'GET' && !(r.method() === 'POST' && reads.includes(path))) writes.push(`${r.method()} ${path}`)
   })
   await openPipeline(page, base, ns)
   await gateMark(page, holdGate).click()

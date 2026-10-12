@@ -51,10 +51,10 @@ describe('BundleDiffPanel — rendering', () => {
     { field: 'Commit SHA', a: { provenance: { commitSHA: 'aaaaaa000000' } }, b: { provenance: { commitSHA: 'bbbbbb111111' } } },
   ])('marks $field as the one changed field', ({ field, a, b }) => {
     render(<BundleDiffPanel bundleA={makeBundle(a)} bundleB={makeBundle(b)} onClose={vi.fn()} />)
-    expect(screen.getByText(`▸ ${field}`)).toBeInTheDocument()
+    expect(screen.getByText(`≠ ${field}`)).toBeInTheDocument()
     expect(screen.getByText(/1 field differs/)).toBeInTheDocument()
     for (const other of ['State', 'Author', 'Commit SHA'].filter(f => f !== field)) {
-      expect(screen.queryByText(`▸ ${other}`)).not.toBeInTheDocument()
+      expect(screen.queryByText(`≠ ${other}`)).not.toBeInTheDocument()
     }
   })
 })
@@ -82,7 +82,7 @@ describe('BundleDiffPanel — what counts as a difference (C10a-web-07)', () => 
     {
       name: 'different environment states are a difference',
       a: { environments: [{ name: 'prod', phase: 'Verified' }] }, b: { environments: [{ name: 'prod', phase: 'Failed' }] },
-      summary: '1 field differs between these versions', shown: ['prod: Failed'],
+      summary: '1 field differs between these versions', shown: ['≠ prod', 'Failed'],
     },
     {
       name: 'only the creation time differs: no difference',
@@ -123,5 +123,17 @@ describe('BundleDiffPanel — CI Run link', () => {
     expect(container.querySelector('a')).toBeNull()
     expect(container.innerHTML).not.toContain(url.slice(0, 12))
     expect(container.innerHTML).not.toContain('s3cret')
+  })
+})
+
+describe('BundleDiffPanel — versions by tag', () => {
+  it('names each version by what it ships, with its Bundle name after it', () => {
+    const a = makeBundle({ name: 'app-cfg9', type: 'config', version: 'config 77aa001' })
+    const b = makeBundle({ name: 'app-prev', images: [{ repository: 'ghcr.io/o/app', tag: 'sha-9f8e7d6' }] })
+    const { container } = render(<BundleDiffPanel bundleA={a} bundleB={b} onClose={vi.fn()} />)
+    const tags = [...container.querySelectorAll('.bundle-diff__row--names .version-label__tag')].map((e) => e.textContent)
+    expect(tags).toEqual(['config 77aa001', 'sha-9f8e7d6'])
+    const names = [...container.querySelectorAll('.bundle-diff__row--names .version-label__name')].map((e) => e.textContent)
+    expect(names).toEqual(['app-cfg9', 'app-prev'])
   })
 })

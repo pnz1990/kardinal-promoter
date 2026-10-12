@@ -151,7 +151,10 @@ func TestUI_BrowserInsecureBanner(t *testing.T) {
 // with other environments, must not leak into it: the UI asks for the graph
 // and steps of the namespace on screen.
 //
-// Covers UI-DAG-01.
+// The same spec checks the Map tab's Table (one row per environment, its
+// state, PR and gates) and Matrix (the Bundle's state in each environment).
+//
+// Covers UI-DAG-01, UI-TABLE-01, UI-MATRIX-01.
 func TestUI_BrowserDAG(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -316,10 +319,9 @@ func TestUI_BrowserGates(t *testing.T) {
 	assert.False(t, exists, "the gate still holds prod")
 }
 
-// TestUI_BrowserGateOverride checks overriding a gate from the stage drawer
-// (v0.10.1; #1245 had removed the old dialog). While gate hold-prod holds a
-// Bundle, prod's drawer names it under "why it's waiting" with Override gate
-// next to it; its dialog needs a reason, Cancel sends nothing, and confirming
+// TestUI_BrowserGateOverride checks overriding a gate from the stage drawer.
+// While gate hold-prod holds a Bundle, prod's drawer names it under "why it's
+// waiting" with Override gate next to it; its dialog needs a reason, Cancel sends nothing, and confirming
 // sends one POST /api/v1/ui/override. The instance then has one override for
 // prod, recorded with the UI's requester (kardinal-ui: this UI does not run
 // TokenReview), lasting the 15 minutes chosen; the gate stops holding and
@@ -351,12 +353,35 @@ func TestUI_BrowserGateOverride(t *testing.T) {
 	require.Equal(t, http.StatusOK, index.Status, "GET /ui/: %s", index)
 	scripts := regexp.MustCompile(`<script[^>]*\ssrc="(/ui/[^"]+\.js)"`).FindAllStringSubmatch(index.Body, -1)
 	require.NotEmpty(t, scripts, "index.html names no script: %s", index.Body)
+	// The entry script and every chunk it loads (the lazy views are their own chunks):
+	// none calls the per-gate approve endpoint.
+	// Chunks are named in the preload map ("assets/X.js") and imported relatively, statically
+	// (from"./X.js") and lazily (import("./X.js")): follow all three.
+	chunk := regexp.MustCompile(`assets/([A-Za-z0-9_.-]+\.js)|(?:from|import\()\s*["'\x60]\./([A-Za-z0-9_.-]+\.js)`)
+	queue := []string{}
 	for _, m := range scripts {
-		r := c.Get(t, m[1])
-		require.Equal(t, http.StatusOK, r.Status, "GET %s: %s", m[1], r)
-		assert.NotContains(t, r.Body, "import(", "%s loads a chunk this test does not read", m[1])
-		assert.NotContains(t, r.Body, "/approve", "%s calls the per-gate approve endpoint", m[1])
+		queue = append(queue, m[1])
 	}
+	seen := map[string]bool{}
+	for len(queue) > 0 {
+		path := queue[0]
+		queue = queue[1:]
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		r := c.Get(t, path)
+		require.Equal(t, http.StatusOK, r.Status, "GET %s: %s", path, r)
+		assert.NotContains(t, r.Body, "/approve", "%s calls the per-gate approve endpoint", path)
+		for _, m := range chunk.FindAllStringSubmatch(r.Body, -1) {
+			f := m[1]
+			if f == "" {
+				f = m[2]
+			}
+			queue = append(queue, "/ui/assets/"+f)
+		}
+	}
+	assert.Greater(t, len(seen), len(scripts), "the lazy chunks were read too")
 
 	framework.Playwright(t, "override.spec.ts", browserEnv(c, a.ns,
 		"KARDINAL_UI_HOLD_GATE", hold.Name,
@@ -639,7 +664,7 @@ type timelineEntry struct {
 // bundle= opens it. The Bundle card names the Bundle type, and the timeline
 // is one Tab stop moved through with the arrow keys.
 //
-// Covers UI-TIMELINE-01, UI-BUNDLETYPE-01, UI-KEYBOARD-01.
+// Covers UI-TIMELINE-01, UI-BUNDLETYPE-01, UI-KEYBOARD-01, UI-RAIL-01.
 func TestUI_BrowserTimeline(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -782,9 +807,11 @@ func TestUI_BrowserStatic(t *testing.T) {
 // the group does too. The pipeline view shows 1 of 2, which decision counts
 // and which does not and why, and the approve command. The Bundle is then
 // rejected with the CLI: the view says who rejected it and why, its chip is
-// Rejected, and the gate no longer holds it.
+// Rejected, and the gate no longer holds it. Before that, the approvals
+// inbox lists the gate with its quorum; this UI runs without TokenReview, so
+// the inbox says it cannot record an approval and its Approve is inert.
 //
-// Covers UI-APPROVALS-01, UI-REJECTED-01.
+// Covers UI-APPROVALS-01, UI-REJECTED-01, UI-INBOX-01.
 func TestUI_BrowserApprovals(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -814,6 +841,7 @@ func TestUI_BrowserApprovals(t *testing.T) {
 	})
 	framework.Playwright(t, "approvals.spec.ts", browserEnv(mainUI(t, e), a.ns,
 		"KARDINAL_UI_BUNDLE", bundle, "KARDINAL_UI_APPROVER", approver, "KARDINAL_UI_OUTSIDER", outsider))
+	framework.Playwright(t, "inbox.spec.ts", browserEnv(mainUI(t, e), a.ns, "KARDINAL_UI_APPROVER", approver))
 
 	const reason = "e2e: CVE in the base image"
 	e.MustKardinal(t, a.ns, "reject", bundle, "--reason", reason)

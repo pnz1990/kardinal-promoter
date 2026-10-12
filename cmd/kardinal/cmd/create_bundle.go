@@ -125,6 +125,8 @@ type createBundleOptions struct {
 	// CompactAbove is the controller's --graph-compact-above, for --dry-run;
 	// nil means graph.DefaultCompactAbove.
 	CompactAbove *int
+	// Labels go on the new Bundle (quickstart marks its own).
+	Labels map[string]string
 }
 
 // bundleSpec turns the flags into a Bundle spec for pipeline and checks it
@@ -202,6 +204,7 @@ func newBundle(ctx context.Context, c sigs_client.Client, ns, pipeline string, o
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: pipeline + "-",
 			Namespace:    ns,
+			Labels:       opts.Labels,
 		},
 		Spec: spec,
 	}
