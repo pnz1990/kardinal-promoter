@@ -77,6 +77,6 @@
 /* Unknown — gray (default) */
 .health-chip--unknown {
   background: var(--color-surface);
-  color: var(--color-text-faint);       /* #8594a8 dark / #4b5563 light (see theme.css) */
+  color: var(--color-text-faint);       /* ink.3 (web/tokens/tokens.json) */
   border-color: var(--color-border);
 }
