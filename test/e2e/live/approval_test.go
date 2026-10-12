@@ -211,3 +211,72 @@ func approvalQuorum(t *testing.T, shape string) {
 	// The Bundle the CLI created names its creator, which excludeAuthor reads.
 	assert.Equal(t, whoAmI(t, e), b.Annotations["kardinal.io/created-by"])
 }
+
+// TestGate_ApprovalAndRuleGateOnPRReview is the quickstart's day-2 step: prod
+// switched to approval: pr-review, with the quickstart's approval gate (one
+// approval, from an allowed user) and a rule gate on it. The Bundle's Graph
+// builds (the gate mirror once added the two gate collections, which kro's
+// typed CEL refuses, and every Bundle failed at Graph build), prod waits for
+// the approval, the approval opens the PR, prod's step mirrors both gates'
+// live results (spec.live.gates), and the merge makes prod live. It runs in
+// both Graph shapes.
+//
+// Covers GATE-MIRROR-TYPES-01.
+func TestGate_ApprovalAndRuleGateOnPRReview(t *testing.T) {
+	t.Parallel()
+	for _, shape := range []string{"nodes", "compact"} {
+		t.Run(shape, func(t *testing.T) {
+			t.Parallel()
+			approvalAndRuleOnPRReview(t, shape)
+		})
+	}
+}
+
+func approvalAndRuleOnPRReview(t *testing.T, shape string) {
+	e := framework.New(t)
+	c := e.CLI(t)
+	a := newArgoApp(t, e, "test", "prod")
+	approver := "alice@example.com"
+	approval := framework.Gate(a.ns, "prod-approval", "prod", "true", recheck)
+	approval.Spec.Message = "prod waits for your approval"
+	approval.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1, AllowedUsers: []string{approver}}
+	e.CreateGate(t, approval)
+	e.CreateGate(t, framework.Gate(a.ns, "soak", "prod", "bundle.upstreamSoakMinutes >= 0", recheck))
+	p := a.pipeline(map[string]string{"prod": "pr-review"})
+	p.Annotations = map[string]string{"kardinal.io/graph-shape": shape}
+	a.apply(t, p)
+
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	e.WaitGateReady(t, a.ns, bundle, "prod", "soak", true, "", gateTimeout)
+	e.WaitGateReady(t, a.ns, bundle, "prod", "prod-approval", false, "waiting for approvals: 0 of 1", gateTimeout)
+	b := getBundle(t, e, a.ns, bundle)
+	require.NotEqual(t, "Failed", b.Status.Phase, "the Graph builds: %+v", b.Status.Conditions)
+	a.noStep(t, bundle, "prod", 10*time.Second)
+
+	alice := userKubeconfig(t, e, a.ns, approver)
+	r := c.Exec(framework.CLIOptions{Kubeconfig: alice}, c.Args(a.ns, "approve", pipelineName, "prod")...)
+	require.Equal(t, 0, r.Code, r.Output())
+	e.WaitGateReady(t, a.ns, bundle, "prod", "prod-approval", true, "", gateTimeout)
+
+	ps, pr := a.waitOpenPR(t, bundle, "prod")
+	assert.Equal(t, "open", pr.State)
+	ps = e.WaitStep(t, a.ns, pipelineName, bundle, "prod", gateTimeout, "both gates mirrored onto the prod step",
+		func(ps *v1alpha1.PromotionStep) (bool, string) {
+			if ps.Spec.Live == nil {
+				return false, "no spec.live"
+			}
+			ready := 0
+			for _, g := range ps.Spec.Live.Gates {
+				if g.Ready {
+					ready++
+				}
+			}
+			return len(ps.Spec.Live.Gates) == 2 && ready == 2, fmt.Sprintf("spec.live.gates %+v", ps.Spec.Live.Gates)
+		})
+	assert.Equal(t, "WaitingForMerge", ps.Status.State)
+	a.merge(t, pr)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "prod", fixtures.V2)
+	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
+}

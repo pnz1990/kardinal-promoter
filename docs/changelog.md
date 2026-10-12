@@ -83,6 +83,7 @@ Follow the tested steps in [Upgrading from v0.10.0](https://pnz1990.github.io/ka
 
 ### Fixed
 
+- **A pr-review environment with an approval gate and a rule gate builds its Graph** — every new version of such a Pipeline (the quickstart with prod switched to `approval: pr-review` and a gate of your own added) failed at once: kro rejected the Graph (`compile node "GateMirror": ... found no matching overload for '_+_'`), because the gate mirror added the two gate collections, which kro types as lists of different types. The mirror now maps each collection to the same entries first, then joins and sorts them
 - **`ship --wait` times never go negative** — with the controller's clock ahead of this one, a summary's "for" is `0s`, not `-3s`
 - **A rejected version says rejected when the CLI cannot read it** — `kardinal why` says who rejected it, and `kardinal inbox` leaves it out as it does every rejected gate, instead of "could not read the version" when the gate excludes the author
 - **The stage drawer shows step timings, events and the CEL check** — an environment's drawer shows the steps' timing bars and the running time in its evidence, the step's events in its history, and the controller's CEL check when a gate's **Details** opens ([Installation](installation.md))
