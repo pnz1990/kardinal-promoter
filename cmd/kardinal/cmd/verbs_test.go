@@ -566,6 +566,102 @@ func TestShipProgress_Golden(t *testing.T) {
 	assert.Equal(t, string(want), buf.String())
 }
 
+var updateShipSummary = flag.Bool("update-ship-summary", false, "rewrite testdata/ship-summary.golden")
+
+// TestShipSummary_Golden (walkthrough v0.11): ship --wait's summary gives
+// each environment its own time, not the time since the Bundle was created:
+// from its PromotionStep's first step start when status records it, else
+// from when its last upstream went live (the DAG's, else the environment
+// before it). A since that is unset or zero is unknown, never
+// "for 2562047h47m16.854775807s"; one before the Bundle or after now is
+// clamped.
+//
+// Covers CLI-VERBS-01.
+func TestShipSummary_Golden(t *testing.T) {
+	created := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
+	start := created.Add(2 * time.Second)
+	now := created.Add(5 * time.Minute)
+	prev := shipNow
+	shipNow = func() time.Time { return now }
+	t.Cleanup(func() { shipNow = prev })
+	at := func(d time.Duration) *metav1.Time { m := metav1.NewTime(created.Add(d)); return &m }
+	env := func(name, state string, since *metav1.Time, blockedBy ...string) v1alpha1.PipelineEnvironmentStatus {
+		return v1alpha1.PipelineEnvironmentStatus{Name: name, State: state, Since: since, IncomingBundle: "b2", BlockedBy: blockedBy}
+	}
+	tests := []struct {
+		name      string
+		envs      []v1alpha1.PipelineEnvironmentStatus
+		started   map[string]time.Time
+		upstreams map[string][]string
+		changed   map[string]time.Time
+	}{{
+		name: "each environment from the one before it; prod held since its since",
+		envs: []v1alpha1.PipelineEnvironmentStatus{env("test", "Verified", at(11*time.Second)),
+			env("uat", "Verified", at(33*time.Second)), env("prod", "Pending", at(34*time.Second), "prod-approval")},
+	}, {
+		name: "a zero or unset since is unknown; this follow's clock stands in",
+		envs: []v1alpha1.PipelineEnvironmentStatus{env("test", "Verified", &metav1.Time{}),
+			env("uat", "Verified", nil), env("prod", "Pending", &metav1.Time{}, "prod-approval"), env("dr", "Pending", nil)},
+		changed: map[string]time.Time{"test": created.Add(4 * time.Second), "uat": created.Add(9 * time.Second),
+			"prod": created.Add(10 * time.Second)},
+	}, {
+		name: "the step's own start, and parallel environments after the same upstream",
+		envs: []v1alpha1.PipelineEnvironmentStatus{env("test", "Verified", at(20*time.Second)),
+			env("prod-eu", "Verified", at(80*time.Second)), env("prod-us", "Verified", at(2*time.Minute))},
+		started:   map[string]time.Time{"test": created.Add(5 * time.Second)},
+		upstreams: map[string][]string{"test": nil, "prod-eu": {"test"}, "prod-us": {"test"}},
+	}, {
+		name: "a since before the Bundle is already live; one after now is clamped",
+		envs: []v1alpha1.PipelineEnvironmentStatus{env("test", "Verified", at(-time.Hour)),
+			env("prod", "Pending", at(time.Hour), "cab")},
+	}}
+	var buf bytes.Buffer
+	for _, tt := range tests {
+		_, _ = fmt.Fprintf(&buf, "== %s\n", tt.name)
+		p := &shipProgress{w: &buf, timed: true, start: start, created: created, changed: tt.changed,
+			started: tt.started, upstreams: tt.upstreams}
+		p.summary(tt.envs)
+	}
+	assert.NotContains(t, buf.String(), "2562047h")
+	path := filepath.Join("testdata", "ship-summary.golden")
+	if *updateShipSummary {
+		require.NoError(t, os.WriteFile(path, buf.Bytes(), 0o644))
+	}
+	want, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, string(want), buf.String())
+}
+
+// TestShipTiming: timing reads each environment's first step start from its
+// PromotionStep and its direct upstreams from the Pipeline.
+//
+// Covers CLI-VERBS-01.
+func TestShipTiming(t *testing.T) {
+	t0 := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
+	m := func(d time.Duration) *metav1.Time { x := metav1.NewTime(t0.Add(d)); return &x }
+	p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "uat"}, {Name: "prod"}}}}
+	b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-b2", Namespace: "default"},
+		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "app"}}
+	step := &v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Name: "app-b2-uat", Namespace: "default",
+		Labels: map[string]string{"kardinal.io/bundle": "app-b2"}},
+		Spec: v1alpha1.PromotionStepSpec{BundleName: "app-b2", Environment: "uat"},
+		Status: v1alpha1.PromotionStepStatus{Steps: []v1alpha1.StepStatus{
+			{Name: "git-commit", StartedAt: m(30 * time.Second)}, {Name: "git-clone", StartedAt: m(20 * time.Second)}, {Name: "open-pr"}}}}
+	c := fake.NewClientBuilder().WithScheme(rejectScheme(t)).WithObjects(p, b, step).Build()
+	pr := &shipProgress{w: &bytes.Buffer{}, timed: true}
+	pr.timing(context.Background(), c, b)
+	require.Len(t, pr.started, 1)
+	assert.True(t, t0.Add(20*time.Second).Equal(pr.started["uat"]), "earliest started step: %v", pr.started)
+	assert.Equal(t, []string{"test"}, pr.upstreams["uat"])
+	assert.Equal(t, []string{"uat"}, pr.upstreams["prod"])
+	assert.Empty(t, pr.upstreams["test"])
+
+	quiet := &shipProgress{}
+	quiet.timing(context.Background(), c, b)
+	assert.Nil(t, quiet.started, "--quiet reads nothing")
+}
+
 // TestShipWait_Interrupt (C5): SIGINT during ship --wait ends the wait, not
 // the process: the JSON result is printed and the exit code is 6.
 //

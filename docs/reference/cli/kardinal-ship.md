@@ -16,7 +16,9 @@ follow it.
 --wait follows the Bundle, printing on stderr each new state of its
 environments after the time since the start (+1m5s), the URL of each PR it
 opens, and at the end a summary: each environment's last state and how long
-it took, or how long it has waited in it. --quiet (-q) prints none of that.
+its own promotion there took ("took": from its first step's start, else from
+its upstream going live, else from the Bundle's creation), or how long it has
+waited in it ("for"). --quiet (-q) prints none of that.
 It ends with one line on stdout (or, with -o json, an object with
 bundle, pipeline, namespace, type, version, url, result, exitCode, message
 and the Bundle's environments from status.environments). Exit codes:

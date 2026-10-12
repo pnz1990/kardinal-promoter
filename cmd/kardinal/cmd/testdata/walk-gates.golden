@@ -1,0 +1,33 @@
+$ kardinal status demo
+Pipeline: demo   Namespace: default
+sha-9349a3f live in test, uat; held by gate prod-approval, uat-soak-before-prod in prod
+
+ENVIRONMENT  RUNNING                   INCOMING                  STATE                                             SINCE  PR
+test         sha-9349a3f (demo-kzwhs)  -                         Live                                              1m     -
+uat          sha-9349a3f (demo-kzwhs)  -                         Live                                              1m     -
+prod         main (demo-r48zm)         sha-9349a3f (demo-kzwhs)  Held by gate prod-approval, uat-soak-before-prod  1m     -
+
+Blocking gates
+------------------------------------------------------------------------
+GATE                  ENV   RULE                             REASON                                          LAST CHECKED
+prod-approval         prod  approval 0 of 1                  prod waits for your approval (wa...             <time>
+uat-soak-before-prod  prod  bundle.upstreamSoakMinutes >= 3  soak 0.4 of 3 min in uat, opens in about 2m36s  <time>
+
+$ kardinal explain demo prod
+ENVIRONMENT   VERSION                    TYPE         NAME                   STATE      EXPRESSION                        REASON
+prod          sha-9349a3f (demo-kzwhs)   PolicyGate   prod-approval          Blocking   true                              prod waits for your approval (waiting for approvals: 0 of 1; version sha-9349a3f)
+prod          sha-9349a3f (demo-kzwhs)   PolicyGate   uat-soak-before-prod   Blocking   bundle.upstreamSoakMinutes >= 3   bundle.upstreamSoakMinutes >= 3 = false; version sha-9349a3f; soak 0.4 of 3 min in uat, opens in about 2m36s
+
+prod   deployed: none
+(stderr)
+Approve: kardinal approve demo prod
+Wait: uat-soak-before-prod opens by itself in about 2m36s (kardinal status demo -w)
+Or: kardinal override demo prod --gate uat-soak-before-prod --reason <why>
+
+$ kardinal why demo prod
+prod is waiting for your approval.
+  Version  sha-9349a3f (demo-kzwhs)
+  Gate     prod-approval · 0 of 1 approvals
+  Next     kardinal approve demo prod
+  Also     gate uat-soak-before-prod: soak 0.4 of 3 min in uat, opens by itself in about 2m36s
+

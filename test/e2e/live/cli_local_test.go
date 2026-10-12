@@ -730,6 +730,22 @@ Some gates would BLOCK with current context (see FAIL results above) (3 gate(s))
 	assert.True(t, strings.HasSuffix(r.Stdout, "All gates valid; some need cluster context to evaluate "+
 		"(see UNKNOWN results above) (2 gate(s))\n"), r.Stdout)
 
+	// -f as kardinal validate takes it; a soak gate with no cluster has no
+	// upstream, so its soak is 0, and the result says so instead of failing
+	// to load a Pipeline.
+	write("soak.yaml", gate("uat-soak-before-prod", `"bundle.upstreamSoakMinutes >= 3"`, "prod"))
+	r = cli.Exec(framework.CLIOptions{Kubeconfig: "/dev/null", Dir: dir}, "policy", "test", "-f", "soak.yaml")
+	require.Equal(t, 0, r.Code, r.Stderr)
+	assert.Equal(t, `PolicyGate "uat-soak-before-prod" (soak.yaml):
+  Expression: bundle.upstreamSoakMinutes >= 3
+  Syntax: valid
+  Result: FAIL (bundle.upstreamSoakMinutes >= 3 = false)
+  Note: offline there is no upstream environment, so its soak is 0; kardinal policy simulate <pipeline> prod --soak-minutes <n> evaluates it with a soak
+
+Some gates would BLOCK with current context (see FAIL results above) (1 gate(s))
+`, r.Stdout)
+	assert.NotContains(t, r.Output(), "load pipeline")
+
 	write("pass.yaml", gate("ok", `"true"`, ""))
 	r = run("pass.yaml")
 	require.Equal(t, 0, r.Code)
