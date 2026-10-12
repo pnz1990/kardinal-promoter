@@ -260,8 +260,7 @@ func TestTranslate_PermanentErrors(t *testing.T) {
 	}
 
 	t.Run("invalid pipeline", func(t *testing.T) {
-		p := teamPipeline(kardinalv1alpha1.EnvironmentSpec{Name: "prod",
-			Steps: []kardinalv1alpha1.StepSpec{{Uses: "git-clone"}}})
+		p := teamPipeline(kardinalv1alpha1.EnvironmentSpec{Name: "prod"}, kardinalv1alpha1.EnvironmentSpec{Name: "prod"})
 		_, err := newTranslator(nil).Translate(ctx, p, teamBundle(nil))
 		require.Error(t, err)
 		assert.ErrorIs(t, err, graph.ErrInvalid)

@@ -259,10 +259,6 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	r.setConditions(&hook, cfgErr)
 	// Log condition changes once, not on every reconcile: every Bundle,
 	// PolicyGate and PromotionStep change in the namespace reconciles the hook.
-	if meta.FindStatusCondition(base.Status.Conditions, conditionPlaintextCredential) == nil &&
-		meta.FindStatusCondition(hook.Status.Conditions, conditionPlaintextCredential) != nil {
-		log.Warn().Msg("notificationhook: spec.webhook.authorizationHeader is deprecated and stored in plain text; use spec.webhook.secretRef")
-	}
 	if cfgErr != nil {
 		if was := meta.FindStatusCondition(base.Status.Conditions, conditionReady); was == nil ||
 			was.Status != metav1.ConditionFalse || was.Reason != cfgErr.reason {
@@ -454,15 +450,14 @@ var errRedirect = errors.New("webhook redirects are not followed")
 // honours HTTP(S)_PROXY, as the default transport did.
 var guardedTransport = egress.NewTransport(http.ProxyFromEnvironment)
 
-// resolveConfig reads the hook's URL and Authorization header (from the
-// spec, or from the Secret spec.webhook.secretRef names) and parses its
+// resolveConfig reads the hook's URL (from the spec, or from the Secret
+// spec.webhook.secretRef names) and Authorization header (from that Secret) and parses its
 // template. A *configError means the hook cannot deliver as configured.
 func (r *Reconciler) resolveConfig(ctx context.Context, reader client.Reader, hook *v1alpha1.NotificationHook) (*deliveryConfig, *configError) {
 	cfg := &deliveryConfig{
-		url:           strings.TrimSpace(hook.Spec.Webhook.URL),
-		authorization: hook.Spec.Webhook.AuthorizationHeader, //nolint:staticcheck // SA1019: the deprecated field keeps working
-		format:        hook.Spec.Format,
-		contentType:   "application/json",
+		url:         strings.TrimSpace(hook.Spec.Webhook.URL),
+		format:      hook.Spec.Format,
+		contentType: "application/json",
 	}
 	if cfg.format == "" {
 		cfg.format = v1alpha1.NotificationFormatJSON
@@ -568,7 +563,7 @@ func signingKey(ctx context.Context, reader client.Reader, namespace string, ref
 	return key, nil
 }
 
-// setConditions writes the Ready and PlaintextCredential conditions.
+// setConditions writes the Ready condition.
 // time.Now() is read only for the condition transition times, inside the
 // status write.
 func (r *Reconciler) setConditions(hook *v1alpha1.NotificationHook, cfgErr *configError) {
@@ -579,16 +574,9 @@ func (r *Reconciler) setConditions(hook *v1alpha1.NotificationHook, cfgErr *conf
 		ready.Status, ready.Reason, ready.Message = metav1.ConditionFalse, cfgErr.reason, cfgErr.message
 	}
 	meta.SetStatusCondition(&hook.Status.Conditions, ready)
-	if hook.Spec.Webhook.AuthorizationHeader != "" { //nolint:staticcheck // SA1019: the deprecated field keeps working
-		meta.SetStatusCondition(&hook.Status.Conditions, metav1.Condition{
-			Type: conditionPlaintextCredential, Status: metav1.ConditionTrue, Reason: "AuthorizationHeaderInSpec",
-			Message: "spec.webhook.authorizationHeader is deprecated: it is stored in plain text in the hook. " +
-				"Move the value to a Secret's authorization key and set spec.webhook.secretRef",
-			ObservedGeneration: hook.Generation, LastTransitionTime: now,
-		})
-	} else {
-		meta.RemoveStatusCondition(&hook.Status.Conditions, conditionPlaintextCredential)
-	}
+	// A hook written by an older controller may still carry the
+	// PlaintextCredential condition of the removed authorizationHeader field.
+	meta.RemoveStatusCondition(&hook.Status.Conditions, conditionPlaintextCredential)
 }
 
 // templateData is the event as the slack, teams and template formats see it.

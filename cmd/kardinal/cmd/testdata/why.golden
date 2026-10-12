@@ -127,9 +127,9 @@ prod did not promote 1.5.0 (demo-b): failed.
   Or    kardinal rollback demo prod, back to 1.4.0
 
 == the newest version failed before it started (the walkthrough's GateMirror) (kardinal why demo)
-The newest version sha-9349a3f (demo-bj579) failed before it started: kro rejected the Graph: compile node "GateMirror": found no matching overload for '_+_'
+The newest version sha-9349a3f (demo-bj579) failed before it started: kro rejected the Graph: compile node "GateMirror": variable at "spec.live.gates" ("(PolicyGates + ApprovalGates).filter(...)"): ERROR: <input>:1:14: found no matching overload for '_+_' applied to '(list(__type_PolicyGates.@idx), list(__type_ApprovalGates.@idx))'
   Reason  GraphRejected
-  Fix     kro could not run the Graph kardinal built for this version: check that kro is the version kardinal pins (hack/install-kro.sh), upgrade kardinal if a release fixes it, or report it with this message; then ship the version again (kardinal ship demo ...)
+  Fix     kro could not run the Graph kardinal built for this version: check that the installed kro is at least the version the chart's kro.version annotation names (helm show chart kardinal-promoter; https://pnz1990.github.io/kardinal-promoter/installation/#install-kro), upgrade kardinal if a release fixes it, or report it with this message; then ship the version again (kardinal ship demo ...)
   See     kubectl get bundle demo-bj579 -n default -o yaml
 
 test runs sha-9349a3f and nothing is waiting.

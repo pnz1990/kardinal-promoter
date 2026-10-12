@@ -86,8 +86,8 @@ type uiPipelineResponse struct {
 	// version failed (the Bundle's reason and message), absent otherwise.
 	FailedVersion *v1alpha1.PipelineFailedVersion `json:"failedVersion,omitempty"`
 	// Conditions are the Pipeline's status.conditions: Ready (with reasons
-	// such as ValidationFailed and GitCredentialMissing), Paused,
-	// PathConflict and the SecretReferenceable warning.
+	// such as ValidationFailed, GitCredentialMissing and
+	// SecretNotReferenceable), Paused and PathConflict.
 	Conditions []uiCondition `json:"conditions,omitempty"`
 
 	// #525: static pipeline topology from spec — rendered even when no Bundle is promoting.

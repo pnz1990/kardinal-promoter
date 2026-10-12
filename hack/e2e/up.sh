@@ -98,7 +98,7 @@ case "$SUITE" in
   # ServiceMonitor, PrometheusRule and Grafana dashboard.
   flux) COMPONENTS=("giteafamily.sh forgejo" flux.sh prometheus.sh grafana.sh metrics-api.sh) RUN='^Test(Flux|Metric|Obs)_'
     HELM_ARGS='--set serviceMonitor.enabled=true --set prometheusRule.enabled=true --set grafanaDashboard.enabled=true' ;;
-  chart) COMPONENTS=("giteafamily.sh forgejo" argocd.sh cert-manager.sh podinfo.sh webhook-receiver.sh jaeger.sh) RUN='^Test(Chart|Deprecated)_'
+  chart) COMPONENTS=("giteafamily.sh forgejo" argocd.sh cert-manager.sh podinfo.sh webhook-receiver.sh jaeger.sh) RUN='^TestChart_'
     export KARDINAL_E2E_INSTALL=0 ;;
   # v0.8.1 ran its own Graph controller, so kro is not installed: the test
   # installs it as the upgrade guide's step 6. kardinal.sh only builds and

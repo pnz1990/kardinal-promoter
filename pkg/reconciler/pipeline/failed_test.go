@@ -4,6 +4,8 @@
 package pipeline_test
 
 import (
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,6 +90,39 @@ func TestFailedVersion(t *testing.T) {
 	// A version that failed in an environment the projection shows is in the
 	// summary already.
 	f := pipeline.FailedVersion("app", []kardinalv1alpha1.Bundle{live, stepFailed})
-	shown := append(envs, kardinalv1alpha1.PipelineEnvironmentStatus{Name: "uat", IncomingBundle: "b2", State: "Failed"})
+	shown := append(slices.Clone(envs), kardinalv1alpha1.PipelineEnvironmentStatus{Name: "uat", IncomingBundle: "b2", State: "Failed"})
 	assert.Equal(t, "1.4.0 live in test; failed in uat", pipeline.WithFailure("1.4.0 live in test; failed in uat", f, shown))
+}
+
+// kroGraphRejected is the Ready message the walkthrough's GateMirror failure
+// left on its Bundle: kro's CEL error with the expression echoed and a caret
+// line under it.
+const kroGraphRejected = `promotion failed: kro rejected the Graph: compile node "GateMirror": variable at "spec.live.gates" ` +
+	`("(PolicyGates + ApprovalGates).filter(...)"): ERROR: <input>:1:14: found no matching overload for '_+_' applied to ` +
+	`'(list(__type_PolicyGates.@idx), list(__type_ApprovalGates.@idx))'` + "\n" +
+	` | (PolicyGates + ApprovalGates).filter(g, g.metadata.?labels[?"kardinal.io/environment"].orValue("") == Mirror.environment)` + "\n" +
+	` | .............^`
+
+// TestFailedVersionMessageIsBounded: status.failedVersion.message keeps the
+// first line of the condition message, without kro's echo of the
+// expression and its caret line, and at most 300 characters, cut with "…".
+func TestFailedVersionMessageIsBounded(t *testing.T) {
+	cases := []struct {
+		name, msg, want string
+	}{
+		{name: "kro's GraphRejected", msg: kroGraphRejected,
+			want: `kro rejected the Graph: compile node "GateMirror": variable at "spec.live.gates" ("(PolicyGates + ApprovalGates).filter(...)"): ` +
+				`ERROR: <input>:1:14: found no matching overload for '_+_' applied to '(list(__type_PolicyGates.@idx), list(__type_ApprovalGates.@idx))'`},
+		{name: "long", msg: "promotion failed: " + strings.Repeat("ab ", 200),
+			want: strings.TrimSpace(strings.Repeat("ab ", 200)[:299]) + "…"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := failedBundle("b2", "1.5.0", envT0, metav1.Condition{Type: "Ready", Status: "False", Reason: "Failed", Message: tc.msg})
+			f := pipeline.FailedVersion("app", []kardinalv1alpha1.Bundle{b})
+			assert.Equal(t, tc.want, f.Message)
+			assert.LessOrEqual(t, len([]rune(f.Message)), 300)
+			assert.NotContains(t, f.Message, "\n")
+		})
+	}
 }

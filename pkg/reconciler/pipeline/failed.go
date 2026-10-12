@@ -44,6 +44,7 @@ func FailedVersion(pipeline string, bundles []kardinalv1alpha1.Bundle) *kardinal
 			f.Message = strings.TrimPrefix(c.Message, "promotion failed: ")
 		}
 	}
+	f.Message = failureLine(f.Message)
 	if c := meta.FindStatusCondition(conds, "Ready"); c != nil && !c.LastTransitionTime.IsZero() {
 		t := c.LastTransitionTime
 		f.Since = &t
@@ -104,4 +105,21 @@ func VersionLabel(version, bundle string) string {
 		return bundle
 	}
 	return version + " (" + bundle + ")"
+}
+
+// failureMessageMax bounds status.failedVersion.message (runes), so a
+// compiler error cannot fill the CLI, the UI and the Pipeline object.
+const failureMessageMax = 300
+
+// failureLine is a condition message as status.failedVersion keeps it: its
+// first line only (kro's CEL errors go on with the expression echoed and a
+// caret line under it, " | (A + B).filter(...)" and " | ....^"), trimmed,
+// and at most failureMessageMax runes, cut with "…".
+func failureLine(msg string) string {
+	line, _, _ := strings.Cut(msg, "\n")
+	line = strings.TrimSpace(line)
+	if r := []rune(line); len(r) > failureMessageMax {
+		line = strings.TrimSpace(string(r[:failureMessageMax-1])) + "…"
+	}
+	return line
 }

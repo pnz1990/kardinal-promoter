@@ -535,6 +535,11 @@ failed (Why the step's message; Next: kardinal logs, or roll back); it is
 promoting; it waits for an upstream environment; it has no version yet; or
 nothing is waiting ("prod runs 1.5.0 and nothing is waiting.").
 
+why shows the gates the version started with. A version gets its gates when
+it starts promoting, so a gate created or edited later applies to the
+versions shipped after it, not to one already waiting (Policy Gates, "When a
+new or edited gate takes effect").
+
 -o wide prints kardinal explain's table (every step and gate of the current
 version, with kinds and expressions), with the commands that get past a
 gate on stderr; -o json and yaml print explain's entries.`
@@ -569,9 +574,10 @@ func failureFix(p *v1alpha1.Pipeline, f *v1alpha1.PipelineFailedVersion) string 
 	case "InvalidIntent", "InvalidPipeline", "CircularDependency":
 		return "fix the pipeline (kubectl edit pipeline " + p.Name + " -n " + p.Namespace + "); the change retries this version"
 	case "GraphRejected":
-		return "kro could not run the Graph kardinal built for this version: check that kro is the version kardinal pins " +
-			"(hack/install-kro.sh), upgrade kardinal if a release fixes it, or report it with this message; " +
-			"then ship the version again (kardinal ship " + p.Name + " ...)"
+		return "kro could not run the Graph kardinal built for this version: check that the installed kro is at least the " +
+			"version the chart's kro.version annotation names (helm show chart kardinal-promoter; " +
+			"https://pnz1990.github.io/kardinal-promoter/installation/#install-kro), upgrade kardinal if a release fixes it, " +
+			"or report it with this message; then ship the version again (kardinal ship " + p.Name + " ...)"
 	case "StepFailed":
 		if f.Environment != "" {
 			return fmt.Sprintf("fix what %s reports, then ship the version again, or roll it back: kardinal rollback %s --env %s",

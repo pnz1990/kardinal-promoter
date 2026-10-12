@@ -57,8 +57,8 @@ func (e *Env) Namespace(t *testing.T) string {
 	case err != nil:
 		t.Fatalf("read %s/%s: %v", ControllerNamespace, GitSecretName, err)
 	default:
-		// Labeled kardinal.io/referenceable as docs/pipeline-reference.md asks,
-		// so a Pipeline using it has no SecretReferenceable warning.
+		// Labeled kardinal.io/referenceable: a Pipeline uses only a labeled
+		// git Secret (docs/guides/security.md).
 		cp := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Namespace: name, Name: GitSecretName,
 				Labels: map[string]string{"kardinal.io/referenceable": "true"}},
