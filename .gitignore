@@ -52,3 +52,7 @@ ITEM.md
 # Live e2e state: env file, generated credentials, failure diagnostics
 /test/e2e/results/
 test-results/
+
+# Python bytecode (hack/docs-station-map is a MkDocs hook)
+__pycache__/
+*.pyc
