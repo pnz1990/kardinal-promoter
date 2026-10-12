@@ -166,15 +166,15 @@ export const FLOWS = [
       await d.scroll(900)
       await d.scroll(-900)
       await d.click(page.getByRole('button', { name: 'edge-cdn', exact: true }), { after: 1500 })
-      const levels = page.getByRole('radiogroup', { name: 'Zoom level' })
+      const levels = page.getByRole('radiogroup', { name: /^Zoom/ })
       await expect(levels).toBeVisible()
       // Overview, with the minimap in the corner: a click there centres the view on that point.
       const minimap = page.locator('.station-map__minimap')
       await expect(minimap).toBeVisible()
       await d.click(minimap, { after: 1000 })
       // Map → Detail, then open the fleet's grid of targets and fit it on screen (0).
-      await d.click(levels.getByRole('radio', { name: 'Map' }), { after: 1100 })
-      await d.click(levels.getByRole('radio', { name: 'Detail' }), { after: 1100 })
+      await d.click(levels.getByRole('radio', { name: /Map$/ }), { after: 1100 })
+      await d.click(levels.getByRole('radio', { name: /Detail$/ }), { after: 1100 })
       await d.click(page.getByRole('button', { name: /^pops · 42 targets/ }), { after: 1000 })
       await d.press('0', ['0'])
       await d.pause(900)

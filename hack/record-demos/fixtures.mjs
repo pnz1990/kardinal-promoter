@@ -235,7 +235,8 @@ export function createFixtures({ big = false } = {}) {
   if (big) {
     state.pipelines.push(pipeline('edge-cdn', {
       phase: 'Promoting', environmentCount: 2, activeBundleName: edge.name, activeBundleVersion: '7.2.0',
-      summary: summarize([['7.2.0', 'live', ['canary', ...targets.slice(0, 27)]], ['7.2.0', 'promoting', targets.slice(27, 32)], ['7.2.0', 'queued', targets.slice(32)]]),
+      // A fleet's targets are counted under its name (#1779): the first count gives the size.
+      summary: summarize([['7.2.0', 'live', [`canary and 27 of ${targets.length} pops`]], ['7.2.0', 'promoting', ['5 pops']], ['7.2.0', 'queued', ['10 pops']]]),
       environmentStates: edgeStates,
       environmentTopology: [env('canary', []), env('pops', ['canary'], { fleet: { targets, maxConcurrent: 5, maxUnavailable: 2 } })],
       deployed: Object.fromEntries(Object.entries(edgeStates).filter(([, s]) => s === 'Verified').map(([e], i) => [e, deployed(edge.name, '7.2.0', 30 - (i % 25))])),
