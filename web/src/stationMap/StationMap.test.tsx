@@ -81,7 +81,7 @@ describe('StationMap', () => {
     const graph = { nodes: targets.map(t => step(t, 'Verified')), edges: [] }
     const { container } = renderMap(p, graph, { expanded: new Set(['platform:prod']) })
     const cell = (env: string) => container.querySelector<SVGElement>(`.cell[data-station="${env}"]`)!
-    const svg = container.querySelector('svg')!
+    const svg = container.querySelector<SVGSVGElement>('.station-map__svg')!
     const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(cb => { cb(0); return 0 })
     fireEvent.focus(cell('t00'))
     fireEvent.keyDown(svg, { key: 'ArrowRight' })

@@ -398,11 +398,9 @@ and `wait-for-merge` then do nothing, no PR is opened, and the step goes on to t
 [Architecture: Steps Engine](architecture.md#steps-engine-pkgsteps)
 describes each step.
 
-kardinal has no custom step engine. `spec.environments[].steps` and
-`spec.environments[].promotionTemplate` are deprecated and cannot change the sequence: the
-API server rejects a Pipeline that sets either, and `kardinal validate` reports it. To run
-your own work around the sequence, use [hooks](hooks.md): Jobs before the step starts and
-after its health check.
+kardinal has no custom step engine: nothing in a Pipeline changes the sequence. To run your own
+work around the sequence, use [hooks](hooks.md): Jobs before the step starts and after its
+health check.
 
 ### How `kustomize-set-image` matches images
 

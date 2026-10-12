@@ -24,6 +24,7 @@ import (
 
 	"github.com/spf13/cobra"
 	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
+	kjson "sigs.k8s.io/json"
 	"sigs.k8s.io/yaml"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -142,7 +143,9 @@ func validatePipeline(out io.Writer, file string, data []byte, allowed *scm.Repo
 		return fmt.Errorf("%s: YAML parse error: %w", file, err)
 	}
 
-	var errs []string
+	// The API server refuses a field the CRD does not define (kubectl
+	// apply's strict field validation), so the file would not apply.
+	errs := unknownFields(data, &kardinalv1alpha1.Pipeline{})
 
 	// Schema: at least one environment.
 	if len(pipeline.Spec.Environments) == 0 {
@@ -172,18 +175,8 @@ func validatePipeline(out io.Writer, file string, data []byte, allowed *scm.Repo
 	// the same list.
 	errs = append(errs, graph.UnimplementedFields(&pipeline)...)
 
-	// The API server rejects a non-empty spec.policyGates (CRD CEL rule), so
-	// the file would not apply.
-	if len(pipeline.Spec.PolicyGates) > 0 { //nolint:staticcheck // SA1019: read the deprecated field to reject it
-		errs = append(errs, "spec.policyGates is not implemented; remove it (org gates use the kardinal.io/applies-to label)")
-	}
-
 	// Warnings do not fail validation.
 	var warnings []string
-	if pipeline.Spec.Git.Provider != "" { //nolint:staticcheck // SA1019: warn that the deprecated field is set
-		warnings = append(warnings, "spec.git.provider is deprecated and ignored: the controller's "+
-			"--scm-provider flag selects the SCM provider; remove it")
-	}
 
 	// A git.secretRef in another namespace is refused (ValidationFailed). A file
 	// without metadata.namespace gets its namespace at apply time, so it is not
@@ -219,13 +212,8 @@ func validatePipeline(out io.Writer, file string, data []byte, allowed *scm.Repo
 		dummyBundle := &kardinalv1alpha1.Bundle{}
 		dummyBundle.Name = "validate-dummy"
 		dummyBundle.Namespace = "default"
-		// Build rejects custom steps and two or more regions too; they are
-		// reported above already.
 		buildable := pipeline.DeepCopy()
 		for i := range buildable.Spec.Environments {
-			buildable.Spec.Environments[i].Steps = nil             //nolint:staticcheck // SA1019: clear the deprecated field reported above
-			buildable.Spec.Environments[i].PromotionTemplate = nil //nolint:staticcheck // SA1019: clear the deprecated field reported above
-			buildable.Spec.Environments[i].Regions = nil           //nolint:staticcheck // SA1019: cleared because it is reported above
 			if renderedErr != nil {
 				buildable.Spec.Environments[i].Layout = "directory" // reported above
 			}
@@ -282,7 +270,7 @@ func validatePolicyGate(out io.Writer, file string, data []byte) error {
 		return fmt.Errorf("%s: YAML parse error: %w", file, err)
 	}
 
-	var errs []string
+	errs := unknownFields(data, &kardinalv1alpha1.PolicyGate{})
 
 	// Schema: expression required.
 	if gate.Spec.Expression == "" {
@@ -296,10 +284,6 @@ func validatePolicyGate(out io.Writer, file string, data []byte) error {
 		}
 	}
 
-	// The API server rejects both (CRD CEL rules), so the file would not apply.
-	if gate.Spec.Selector != nil { //nolint:staticcheck // SA1019: read the deprecated field to reject it
-		errs = append(errs, "spec.selector is not implemented; use the kardinal.io/applies-to label")
-	}
 	if !policyGateNameAllowed(&gate) {
 		errs = append(errs, fmt.Sprintf("metadata.name %q has %d characters: PolicyGate names are at most %d "+
 			"characters, because the name is copied into the kardinal.io/gate-template label of every gate instance; "+
@@ -309,9 +293,9 @@ func validatePolicyGate(out io.Writer, file string, data []byte) error {
 
 	// Warnings do not fail validation.
 	var warnings []string
-	if gate.Spec.When != "" { //nolint:staticcheck // SA1019: warn that the deprecated field is set (#1323)
-		warnings = append(warnings, "spec.when is deprecated and has no effect: every gate is re-checked "+
-			"right before its PromotionStep starts; remove it")
+	if gate.Spec.When != "" {
+		warnings = append(warnings, "spec.when is ignored: every gate is re-checked right before its PromotionStep "+
+			"starts; remove it")
 	}
 
 	if len(errs) > 0 {
@@ -387,13 +371,14 @@ is checked. Other objects (a Namespace, another API group's Pipeline) are
 skipped with a note.
 
 Checks:
+  - Every document: no field the CRD does not define (kubectl apply's strict
+    field validation refuses it), named with its path.
   - Pipeline: at least one environment, every environment named, spec.git.url
     set, the environment dependencies form a valid graph (no cycles, no
     unknown dependsOn), and no reserved field that is not implemented is set
-    (steps, promotionTemplate, autoRollback, two or more regions,
-    layout: branch, health.cluster, a health.resource.kind other than
-    Deployment). The controller reports the same fields as
-    Ready=False/NotImplemented on the Pipeline. With metadata.namespace set,
+    (autoRollback, a health.resource.kind other than Deployment). The
+    controller reports the same fields as Ready=False/NotImplemented on the
+    Pipeline. With metadata.namespace set,
     a git.secretRef in another namespace is an error too (the controller
     reports it as Ready=False/ValidationFailed). With
     --allowed-repositories (the controller's scm.allowedRepositories), a
@@ -401,13 +386,10 @@ Checks:
     the controller's SCM token: a git.secretRef and no pr-review
     environment (the controller reports Ready=False/RepositoryNotAllowed);
     with --scm-provider bitbucket-datacenter a URL is matched as KEY/slug,
-    as the controller does. spec.policyGates is an
-    error (the API server rejects it); spec.git.provider is a warning (the
-    controller ignores it).
+    as the controller does.
   - PolicyGate: spec.expression set and compiles with the controller's
-    PolicyGate CEL environment; no spec.selector and a name of at most 63
-    characters (the API server rejects both); spec.when is a warning (it has
-    no effect)
+    PolicyGate CEL environment, and a name of at most 63 characters (the API
+    server rejects a longer one); spec.when is a warning (it is ignored)
 
 This is not full CRD schema validation; 'kubectl apply --dry-run=server'
 checks the schema.
@@ -415,3 +397,24 @@ checks the schema.
 Exit codes:
   0: file is valid
   1: validation failed (actionable errors printed)`
+
+// unknownFields lists the fields of a YAML document that obj's type does not
+// define, with their paths, as kubectl apply's strict field validation
+// refuses them: `unknown field "spec.policyGates"`. It returns nil for a
+// document that decodes strictly, or that does not parse (the caller reports
+// that).
+func unknownFields(data []byte, obj interface{}) []string {
+	js, err := yaml.YAMLToJSON(data)
+	if err != nil {
+		return nil
+	}
+	strictErrs, err := kjson.UnmarshalStrict(js, obj)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range strictErrs {
+		out = append(out, e.Error()+": the API server refuses a field the CRD does not define; remove it")
+	}
+	return out
+}

@@ -177,7 +177,6 @@ func TestStatusPipelineWriter_BlockingOnlyWhenReached(t *testing.T) {
 	}
 	postDeploy := func() *v1alpha1.PolicyGate {
 		g := soak()
-		g.Spec.When = "post-deploy" //nolint:staticcheck // SA1019: when has no effect (#1323)
 		return g
 	}
 	// prodStep is the prod step waiting on the soak gate, the way the Graph
@@ -551,8 +550,8 @@ func TestStatusSummary_ListError(t *testing.T) {
 
 // TestStatusPipelineWriter_PipelineNotices (P4): kardinal status shows the
 // Pipeline's own problems first, before any promotion: an ERROR for
-// Ready=False (GitCredentialMissing with the fix command) and a WARNING for
-// an unlabelled git Secret that still works.
+// Ready=False (GitCredentialMissing or SecretNotReferenceable, with the fix
+// command).
 //
 // Covers PIPE-GITCRED-02.
 func TestStatusPipelineWriter_PipelineNotices(t *testing.T) {
@@ -560,12 +559,15 @@ func TestStatusPipelineWriter_PipelineNotices(t *testing.T) {
 	p.Status.Conditions = []metav1.Condition{
 		{Type: "Ready", Status: metav1.ConditionFalse, Reason: "GitCredentialMissing",
 			Message: "git Secret t not found in namespace default, so git has no token for https://x; create it: kubectl create secret generic t"},
-		{Type: "SecretReferenceable", Status: metav1.ConditionFalse, Reason: "SecretNotReferenceable",
-			Message: "git Secret t is not labeled kardinal.io/referenceable=true; label it (kubectl label secret t -n default kardinal.io/referenceable=true)"},
 	}
 	out := runStatusPipeline(t, p)
 	assert.Contains(t, out, "ERROR: pipeline demo is not Ready (GitCredentialMissing): git Secret t not found in namespace default")
-	assert.Contains(t, out, "WARNING: pipeline demo: git Secret t is not labeled kardinal.io/referenceable=true")
+
+	unlabelled := policyPipeline("demo", "test", "prod")
+	unlabelled.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: "SecretNotReferenceable",
+		Message: "git Secret t is not labeled kardinal.io/referenceable=true, so git does not use it; label it: kubectl label secret t -n default kardinal.io/referenceable=true"}}
+	assert.Contains(t, runStatusPipeline(t, unlabelled),
+		"ERROR: pipeline demo is not Ready (SecretNotReferenceable): git Secret t is not labeled kardinal.io/referenceable=true")
 	assert.Less(t, strings.Index(out, "ERROR:"), strings.Index(out, "No versions yet."), out)
 
 	ok := policyPipeline("demo", "test", "prod")

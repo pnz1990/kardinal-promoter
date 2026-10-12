@@ -80,13 +80,6 @@ func TestValidate_Documents(t *testing.T) {
 				"  namespace: platform-policies\nspec:\n  expression: \"!schedule.isWeekend\"\n",
 			wantOut: []string{"- skipped Namespace/platform-policies", "f.yaml is valid"},
 		},
-		// #1323: spec.when has no effect; setting it warns but is valid.
-		{
-			name: "PolicyGate with the deprecated when field warns",
-			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: g\n" +
-				"spec:\n  expression: \"!schedule.isWeekend\"\n  when: pre-deploy\n",
-			wantOut: []string{"f.yaml is valid", "  ! warning: spec.when is deprecated and has no effect"},
-		},
 		{
 			name:    "a Pipeline of another API group is skipped",
 			content: "apiVersion: tekton.dev/v1\nkind: Pipeline\nmetadata:\n  name: build\nspec: {}\n---\n" + validPipelineDoc,
@@ -104,24 +97,6 @@ func TestValidate_Documents(t *testing.T) {
 			name:    "autoRollback",
 			content: validPipelineDoc + "    autoRollback:\n      failureThreshold: 2\n",
 			wantOut: []string{"f.yaml is invalid:", `environment "prod": environments[].autoRollback is not implemented`},
-			wantErr: true,
-		},
-		{
-			name:    "two regions",
-			content: validPipelineDoc + "    regions: [us-east-1, eu-west-1]\n",
-			wantOut: []string{"f.yaml is invalid:", `environment "prod": regions is not supported; declare one environment per region`},
-			wantErr: true,
-		},
-		{
-			name:    "one region is accepted and ignored",
-			content: validPipelineDoc + "    regions: [us-east-1]\n",
-			wantOut: []string{"f.yaml is valid"},
-		},
-		// #1321: distributed mode was removed.
-		{
-			name:    "shard",
-			content: validPipelineDoc + "    shard: eu\n",
-			wantOut: []string{"f.yaml is invalid:", `environment "prod": shard is not supported; remove shard`},
 			wantErr: true,
 		},
 		{
@@ -187,20 +162,6 @@ func TestValidate_Documents(t *testing.T) {
 				"      assignees: [\"{{ .Bundle.Author }}\"]\n",
 			wantOut: []string{"f.yaml is valid"},
 		},
-		// E2E-R24: the API server rejects these, so validate must too.
-		{
-			name:    "spec.policyGates",
-			content: validPipelineDoc + "  policyGates:\n  - name: no-weekend-deploys\n",
-			wantOut: []string{"f.yaml is invalid:", "  - spec.policyGates is not implemented; remove it"},
-			wantErr: true,
-		},
-		{
-			name: "PolicyGate spec.selector",
-			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: g\n" +
-				"spec:\n  expression: \"true\"\n  selector: {}\n",
-			wantOut: []string{"f.yaml is invalid:", "  - spec.selector is not implemented; use the kardinal.io/applies-to label"},
-			wantErr: true,
-		},
 		{
 			name: "PolicyGate name over 63 characters",
 			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: " + strings.Repeat("g", 64) +
@@ -228,12 +189,6 @@ func TestValidate_Documents(t *testing.T) {
 				"metadata:\n  name: freeze-" + strings.Repeat("p", 60) + "\nspec:\n  expression: \"false\"\n",
 			wantOut: []string{"f.yaml is invalid:", "has 70 characters", "has 67 characters"},
 			wantErr: true,
-		},
-		{
-			name: "git.provider warns",
-			content: "apiVersion: kardinal.io/v1alpha1\nkind: Pipeline\nmetadata:\n  name: web\n" +
-				"spec:\n  git:\n    url: https://github.com/o/r\n    provider: gitlab\n  environments:\n  - name: test\n",
-			wantOut: []string{"f.yaml is valid", "  ! warning: spec.git.provider is deprecated and ignored"},
 		},
 		// #1358: a reserved environment name is reported the way the API
 		// server reports it, without the Bundle validate builds internally.
@@ -268,11 +223,37 @@ func TestValidate_Documents(t *testing.T) {
 			wantOut: []string{"; use a name of at most 63 characters\n"},
 			wantErr: true,
 		},
+		// The fields v0.11.0 removed are unknown fields, refused by the API
+		// server, with their paths.
 		{
-			name:    "steps are reported once",
-			content: validPipelineDoc + "    steps:\n    - uses: git-clone\n",
-			wantOut: []string{"f.yaml is invalid:\n  - environment \"prod\" declares 1 steps; spec.environments[].steps is not supported"},
+			name: "removed Pipeline fields",
+			content: validPipelineDoc + "    shard: eu\n    regions: [us-east-1]\n    steps:\n    - uses: git-clone\n" +
+				"    health:\n      cluster: prod-eu\n  policyGates:\n  - name: no-weekend-deploys\n",
+			wantOut: []string{"f.yaml is invalid:",
+				`  - unknown field "spec.environments[1].health.cluster": the API server refuses a field the CRD does not define; remove it`,
+				`unknown field "spec.environments[1].regions"`, `unknown field "spec.environments[1].shard"`,
+				`unknown field "spec.environments[1].steps"`, `unknown field "spec.policyGates"`},
 			wantErr: true,
+		},
+		{
+			name: "removed git.provider",
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: Pipeline\nmetadata:\n  name: web\n" +
+				"spec:\n  git:\n    url: https://github.com/o/r\n    provider: gitlab\n  environments:\n  - name: test\n",
+			wantOut: []string{"f.yaml is invalid:", `unknown field "spec.git.provider"`},
+			wantErr: true,
+		},
+		{
+			name: "removed PolicyGate selector",
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: g\n" +
+				"spec:\n  expression: \"true\"\n  selector: {}\n",
+			wantOut: []string{"f.yaml is invalid:", `unknown field "spec.selector"`},
+			wantErr: true,
+		},
+		{
+			name: "PolicyGate spec.when warns",
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: g\n" +
+				"spec:\n  expression: \"true\"\n  when: pre-deploy\n",
+			wantOut: []string{"f.yaml is valid", "  ! warning: spec.when is ignored"},
 		},
 	}
 	for _, tc := range cases {

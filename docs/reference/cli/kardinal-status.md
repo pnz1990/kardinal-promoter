@@ -40,8 +40,8 @@ activeBundles.
 
 When called with a pipeline name: first the Pipeline's own problems, an
 ERROR when it is not Ready (such as GitCredentialMissing, with the command
-that creates the git Secret) and a WARNING when its git Secret is not
-labelled kardinal.io/referenceable=true; then the Pipeline's summary sentence
+that creates the git Secret, or SecretNotReferenceable, with the command that
+labels it kardinal.io/referenceable=true); then the Pipeline's summary sentence
 ("1.5.0 live in test; waiting for PR merge in prod (#42)"), then one row per environment
 (a fleet environment expands to its targets) from the Pipeline's
 status.environments, which the controller writes:
@@ -55,8 +55,7 @@ status.environments, which the controller writes:
   PR        the pull request it waits for, while it waits for its merge
 
 REGION, after ENVIRONMENT, shows where each environment runs when one of
-them says: its region (spec regions) or the cluster its health check reads
-(the health.kubeconfigSecretRef Secret). -o wide adds ACTIVE STEP, the step
+them health-checks another cluster: the health.kubeconfigSecretRef Secret. -o wide adds ACTIVE STEP, the step
 the newest Bundle there is on (git-clone, open-pr, health-check, ...).
 
 Then the gates holding a version back, with their CEL expression cut to 40

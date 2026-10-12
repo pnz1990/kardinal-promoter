@@ -175,10 +175,6 @@ Common causes:
 
 Same as above but for Flux. Check `kubectl get kustomizations -n flux-system`.
 
-### Symptom: PromotionStep fails with "health.cluster is not supported"
-
-`health.cluster` is a deprecated string field, and an environment that sets it fails instead of checking the local cluster. Remove it. To verify a workload in another cluster, set `health.kubeconfigSecretRef` to a kubeconfig Secret for that cluster, or check its Argo CD Application or Flux Kustomization in the controller's cluster (`health.type: argocd` or `flux`). See [Health Adapters](health-adapters.md#remote-clusters).
-
 ## Webhook issues
 
 ### Symptom: PRs merged but PromotionStep not advancing
