@@ -88,7 +88,7 @@ kardinal quickstart --repo <your fork of kardinal-demo> [flags]
       --image string           The first version to ship (default "ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0")
       --no-argocd              Do not install Argo CD (the cluster has one)
       --no-wait                Do not follow the first version
-      --repo string            Your fork of github.com/pnz1990/kardinal-demo (the token needs contents and pull requests read and write on it)
+      --repo string            Your GitHub fork of github.com/pnz1990/kardinal-demo (the token needs contents and pull requests read and write on it); another git host needs --set scm.provider
       --set stringArray        A Helm value for the kardinal-promoter chart (key=value; repeatable)
       --timeout duration       How long to follow the first version (default 15m)
       --yes                    Do not ask for confirmation on a terminal

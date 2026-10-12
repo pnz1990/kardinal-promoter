@@ -13,7 +13,14 @@ Each expression is compiled with the controller's PolicyGate CEL environment,
 then evaluated by the controller's reconciler against a local context: the
 current time, a Bundle with no images or provenance, no metrics, no upstream
 history and no change windows. The environment is the first entry of the
-gate's kardinal.io/applies-to label.
+gate's kardinal.io/applies-to label. The file is -f <file>, as kardinal
+validate takes it, or the argument.
+
+With no cluster there is no upstream environment: bundle.upstreamSoakMinutes
+is 0, as for a version that just reached the upstream, and when that decides the result (the gate
+would pass, or fail, once soaked) a Note says so (upstream.<env>.* has no
+entry, so such a gate is UNKNOWN). kardinal policy simulate
+<pipeline> <env> --soak-minutes <n> evaluates the gate with a soak.
 
 Results:
   PASS     the gate would allow promotion in that context
@@ -25,19 +32,21 @@ No cluster access is required. The command exits non-zero only when an
 expression does not compile.
 
 ```
-kardinal policy test <file> [flags]
+kardinal policy test -f <file> [flags]
 ```
 
 ### Examples
 
 ```
+  kardinal policy test -f policy-gates.yaml
   kardinal policy test policy-gates.yaml
 ```
 
 ### Options
 
 ```
-  -h, --help   help for test
+  -f, --file string   Path to the PolicyGate YAML file (or give it as the argument)
+  -h, --help          help for test
 ```
 
 ### Options inherited from parent commands

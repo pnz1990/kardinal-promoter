@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -591,6 +592,45 @@ func TestPolicyTest(t *testing.T) {
 			notWant: []string{"Result: PASS", "INVALID"},
 		},
 		{
+			// No cluster, no upstream: the soak is 0 and the result says so,
+			// never "load pipeline : pipelines.kardinal.io \"\" not found".
+			name:    "a soak gate offline",
+			content: gateYAML("soak", "bundle.upstreamSoakMinutes >= 3"),
+			want: []string{"Syntax: valid", "Result: FAIL (bundle.upstreamSoakMinutes >= 3 = false)",
+				"Note: offline there is no upstream environment, so its soak is 0"},
+			notWant: []string{"load pipeline", "context error"},
+		},
+		{
+			// The soak does not decide it: no note.
+			name:    "a soak gate offline that passes at 0",
+			content: gateYAML("soak", "bundle.upstreamSoakMinutes >= 0"),
+			want:    []string{"Result: PASS"},
+			notWant: []string{"Note:"},
+		},
+		{
+			name:    "a soak gate that fails whatever the soak",
+			content: gateYAML("soak", "bundle.upstreamSoakMinutes >= 3 && false"),
+			want:    []string{"Result: FAIL"},
+			notWant: []string{"Note:"},
+		},
+		{
+			name:    "a soak gate that passes only before the soak",
+			content: gateYAML("soak", "bundle.upstreamSoakMinutes < 5"),
+			want:    []string{"Result: PASS", "Note: offline there is no upstream environment, so its soak is 0"},
+		},
+		{
+			name:    "upstream.<env> offline needs the cluster",
+			content: gateYAML("soak", "upstream.uat.soakMinutes >= 3"),
+			want:    []string{"Result: UNKNOWN"},
+			notWant: []string{"Note:"},
+		},
+		{
+			name:    "a string that names the soak is not a soak",
+			content: gateYAML("label", `bundle.version != "bundle.upstreamSoakMinutes"`),
+			want:    []string{"Result: PASS"},
+			notWant: []string{"Note:"},
+		},
+		{
 			name:    "syntax error",
 			content: gateYAML("bad", "schedule.hour >>> 9"),
 			wantErr: true,
@@ -888,4 +928,45 @@ func TestPolicyTest_MissingFile(t *testing.T) {
 	err := policyTestFn(&buf, "/nonexistent/path/gate.yaml", time.Now())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "nonexistent")
+}
+
+var updatePolicyTest = flag.Bool("update-policy-test", false, "rewrite testdata/policy-test.golden")
+
+// TestPolicyTest_FileFlag_Golden (walkthrough v0.11): policy test takes the
+// file as -f, as kardinal validate does, or as the argument; both naming
+// different files, or neither, is refused. A soak gate evaluates offline
+// with a soak of 0 and says so.
+func TestPolicyTest_FileFlag_Golden(t *testing.T) {
+	keepStyle(t)
+	t.Setenv("KUBECONFIG", "/dev/null")
+	dir := t.TempDir()
+	soak := filepath.Join(dir, "soak.yaml")
+	require.NoError(t, os.WriteFile(soak, []byte(gateYAML("uat-soak-before-prod", "bundle.upstreamSoakMinutes >= 3")), 0o600))
+	other := filepath.Join(dir, "other.yaml")
+	require.NoError(t, os.WriteFile(other, []byte(gateYAML("allow", "true")), 0o600))
+	c := policyClient(t)
+	var golden strings.Builder
+	for _, args := range [][]string{
+		{"policy", "test", "-f", soak},
+		{"policy", "test", "--file", soak},
+		{"policy", "test", soak},
+		{"policy", "test", "-f", soak, soak},
+		{"policy", "test", "-f", soak, other},
+		{"policy", "test"},
+	} {
+		out, _, err := runOutput(t, c, args...)
+		line := strings.ReplaceAll(strings.Join(args, " "), dir, "<dir>")
+		golden.WriteString("$ kardinal " + line + "\n" + strings.ReplaceAll(out, dir, "<dir>"))
+		if err != nil {
+			golden.WriteString("error: " + strings.ReplaceAll(err.Error(), dir, "<dir>") + "\n")
+		}
+		golden.WriteString("\n")
+	}
+	path := filepath.Join("testdata", "policy-test.golden")
+	if *updatePolicyTest {
+		require.NoError(t, os.WriteFile(path, []byte(golden.String()), 0o644))
+	}
+	want, err := os.ReadFile(path)
+	require.NoError(t, err, "run go test -run TestPolicyTest_FileFlag_Golden -update-policy-test")
+	assert.Equal(t, string(want), golden.String())
 }

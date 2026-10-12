@@ -6,10 +6,15 @@ This guide walks you through setting up your first promotion pipeline with kardi
 
 On a local cluster (kind, k3d, minikube, Docker Desktop or Rancher Desktop),
 `kardinal quickstart` installs everything and promotes a first version. You
-need `helm`, `kubectl`, a fork of
+need `helm`, `kubectl`, a GitHub fork of
 [`pnz1990/kardinal-demo`](https://github.com/pnz1990/kardinal-demo), and a
 GitHub token with **contents** and **pull requests** read and write on the
 fork: `GITHUB_TOKEN`, or the token of `gh auth login`.
+
+quickstart supports forks on github.com. A `--repo` on another git host is refused before
+anything is installed; install kardinal by hand for it ([Installation](installation.md),
+[SCM providers](scm-providers.md)), or pass `--set scm.provider=<provider> --set scm.apiURL=<url>`
+so that quickstart installs the controller for that host.
 
 ```bash
 gh repo fork pnz1990/kardinal-demo --clone=false
