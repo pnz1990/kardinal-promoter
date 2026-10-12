@@ -293,7 +293,8 @@
   text-underline-offset: var(--k-space-1);
 }
 
-.stage-button:disabled {
+.stage-button:disabled,
+.stage-button[aria-disabled="true"] {
   opacity: 0.5;
   cursor: not-allowed;
 }

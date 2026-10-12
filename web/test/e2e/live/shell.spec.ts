@@ -105,7 +105,7 @@ test('keyboard shortcuts: / focuses the filter, ? shows the help, r refreshes, E
     ['?', 'Show / hide this help panel'],
     ['r', 'Refresh data now'],
     ['j / k', 'Next / previous environment; on Approvals, next / previous approval'],
-    ['a', 'Approve: the open environment, or the approval in focus'],
+    ['a', 'Approve: the open environment, the approval in focus, or the only one waiting'],
     ['s', 'Ship a version of the open pipeline'],
     ['[ / ]', 'Follow an older / newer version'],
     ['f', 'Follow the active version'],
