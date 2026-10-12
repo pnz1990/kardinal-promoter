@@ -6,7 +6,9 @@ package graph_test
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/cel-go/cel"
@@ -133,19 +135,63 @@ func evalCEL(t *testing.T, expr string, vars map[string]interface{}) interface{}
 	t.Helper()
 	m := reWholeExpr.FindStringSubmatch(expr)
 	require.NotNil(t, m, "expression %q", expr)
-	opts := []cel.EnvOption{cel.OptionalTypes(), ext.Lists()}
-	for k := range vars {
-		opts = append(opts, cel.Variable(k, cel.DynType))
-	}
-	env, err := cel.NewEnv(opts...)
-	require.NoError(t, err)
-	ast, iss := env.Compile(m[1])
-	require.NoError(t, iss.Err(), "compile %q", m[1])
-	prg, err := env.Program(ast)
-	require.NoError(t, err)
+	prg := cachedProgram(t, "render", func() []cel.EnvOption {
+		return []cel.EnvOption{cel.OptionalTypes(), ext.Lists()}
+	}, vars, m[1])
 	val, _, err := prg.Eval(vars)
 	require.NoError(t, err, "eval %q", m[1])
 	return toGo(t, val)
+}
+
+// celPrograms caches the CEL environments and programs the test helpers
+// build. A Graph expression is evaluated once per collection item and per
+// simulation round with the same variable names, and building a cel.Env (with
+// optional types and the lists extension) and compiling dominate the
+// package's test time under -race. An environment depends only on its library
+// options and on the names of the variables (all declared dyn), so the cache
+// key is the helper's kind, the sorted variable names and the expression: a
+// cached program is the one the helper would build again. cel.Program is safe
+// for concurrent use.
+var celPrograms = struct {
+	sync.Mutex
+	envs map[string]*cel.Env
+	prgs map[string]cel.Program
+}{envs: map[string]*cel.Env{}, prgs: map[string]cel.Program{}}
+
+// cachedProgram returns the program of expr in the environment of the
+// options base returns plus vars' names declared dyn. kind names the base
+// options; each helper uses its own kind.
+func cachedProgram(t *testing.T, kind string, base func() []cel.EnvOption, vars map[string]interface{}, expr string) cel.Program {
+	t.Helper()
+	names := make([]string, 0, len(vars))
+	for k := range vars {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	envKey := kind + "\x00" + strings.Join(names, ",")
+	prgKey := envKey + "\x00" + expr
+	celPrograms.Lock()
+	defer celPrograms.Unlock()
+	if prg, ok := celPrograms.prgs[prgKey]; ok {
+		return prg
+	}
+	env, ok := celPrograms.envs[envKey]
+	if !ok {
+		opts := base()
+		for _, k := range names {
+			opts = append(opts, cel.Variable(k, cel.DynType))
+		}
+		var err error
+		env, err = cel.NewEnv(opts...)
+		require.NoError(t, err)
+		celPrograms.envs[envKey] = env
+	}
+	ast, iss := env.Compile(expr)
+	require.NoError(t, iss.Err(), "compile %q", expr)
+	prg, err := env.Program(ast)
+	require.NoError(t, err)
+	celPrograms.prgs[prgKey] = prg
+	return prg
 }
 
 func toGo(t *testing.T, v ref.Val) interface{} {
