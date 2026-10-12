@@ -233,11 +233,6 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
                   <td className="ops-table__td">
                     <div className="ops-table__name-row">
                       <span className="ops-table__name">{p.name}</span>
-                      {p.paused && (
-                        <span className="ops-table__paused">
-                          PAUSED
-                        </span>
-                      )}
                     </div>
                     {p.activeBundleName && (
                       // The active version by its tag, as everywhere; the Bundle name is the title.

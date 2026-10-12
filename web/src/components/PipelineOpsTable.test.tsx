@@ -203,14 +203,15 @@ describe('PipelineOpsTable', () => {
     expect(rows[0].textContent).toContain('two-blockers')
   })
 
-  it('shows PAUSED badge for paused pipelines', () => {
-    render(
+  it('says Paused once for a paused pipeline: its state chip', () => {
+    const { container } = render(
       <PipelineOpsTable
         pipelines={[makePipeline({ paused: true, name: 'paused-pipe' })]}
         onSelect={() => {}}
       />
     )
-    expect(screen.getByText('PAUSED')).toBeTruthy()
+    expect(container.querySelector('[data-category="paused"]')).toHaveTextContent(/Paused$/)
+    expect(container.querySelector('tbody')?.textContent?.match(/paused/gi)).toEqual(['paused', 'Paused'])
   })
 
   it('renders loading state', () => {

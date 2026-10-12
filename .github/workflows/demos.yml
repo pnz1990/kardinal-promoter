@@ -1,0 +1,59 @@
+# Copyright 2026 The kardinal-promoter Authors.
+# Licensed under the Apache License, Version 2.0
+#
+# Demos — checks that the docs' UI recordings (hack/record-demos) still record:
+# every flow runs against the mock server and the current UI, and every clip fits
+# its budget. It does not commit clips; run `node hack/record-demos/record.mjs` and
+# commit docs/assets/demos to update them. Gated: it runs when the harness changes,
+# weekly (to catch a UI change that breaks a flow), and by hand, not on every PR.
+name: Demos
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"
+  pull_request:
+    branches: [main]
+    paths:
+      - "hack/record-demos/**"
+      - "web/test/e2e/mock-server/**"
+      - ".github/workflows/demos.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  record:
+    name: record-demos --check
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            hack/record-demos/package-lock.json
+      - name: Build the UI the clips show
+        run: npm ci && npm run build
+        working-directory: web
+      - name: Install the recorder
+        run: npm ci --no-audit --no-fund && npx playwright install --with-deps chromium
+        working-directory: hack/record-demos
+      - name: Record every flow and check the budget
+        run: node record.mjs --check --out "$RUNNER_TEMP/demos"
+        working-directory: hack/record-demos
+      - name: Upload the clips
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: demos
+          path: ${{ runner.temp }}/demos
+          if-no-files-found: ignore
+          retention-days: 7
