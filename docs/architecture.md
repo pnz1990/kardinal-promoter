@@ -4,7 +4,86 @@ kardinal-promoter is a Kubernetes-native controller. All state lives in etcd as 
 
 ---
 
-## System Overview
+## Components
+
+```component-map
+title: kardinal's components and what they talk to
+caption: An arrow is a network call, from the caller. Inside the cluster the components talk to each other only through the Kubernetes API server, and Argo CD or Flux applies the workloads through it too.
+zones:
+  people: {name: Outside the cluster, kind: outside}
+  external: {name: Outside the cluster, kind: outside}
+  cluster: {name: Kubernetes cluster, kind: cluster}
+  system: {name: kardinal-system, in: cluster}
+  kro: {name: kro-system, in: cluster}
+  gitops: {name: argocd · flux-system, in: cluster}
+  apps: {name: your namespaces, in: cluster}
+components:
+  people: {name: People, at: [0, 0], span: 2, zone: people, role: [the UI in a browser · the kardinal CLI and kubectl]}
+  controller:
+    name: kardinal-controller
+    at: [0, 1]
+    zone: system
+    chip: Deployment
+    role: [":8082 UI", ":8083 Bundle API, webhooks", ":8080 metrics"]
+    items:
+      - promotion: [bundle · pipeline, promotionstep, prstatus]
+      - gates: [policygate, changewindow, scheduleclock]
+      - checks: [metriccheck, imageverification]
+      - jobs: [renderrun · hookrun]
+      - sources: [subscription, scmprovider]
+      - more: [rollbackpolicy, notificationhook, graphcleanup, auditretention]
+  api: {name: Kubernetes API server, at: [0, 2], span: 2, zone: cluster, role: [every object is a CRD, in etcd · 8 ValidatingAdmissionPolicies]}
+  kro: {name: kro, at: [0, 3], zone: kro, chip: Deployment, role: [the Graph controller]}
+  agent: {name: Argo CD or Flux, at: [1, 3], zone: gitops, role: [syncs env branches]}
+  workloads: {name: Workloads, at: [0, 4], zone: apps, role: [a namespace per env]}
+  pipelines: {name: Pipeline namespace, at: [1, 4], zone: apps, role: [Bundles · Graphs, steps · hook Jobs, "render Jobs: git only"]}
+  notify: {name: Notifications, at: [2, 0], zone: external, role: [Slack · Teams, webhooks]}
+  ci: {name: CI, at: [2, 1], zone: external, role: [create-bundle, action]}
+  metrics: {name: Metrics backends, at: [2, 2], zone: external, role: [Prometheus, Datadog · CloudWatch, New Relic]}
+  registries: {name: Registries, at: [2, 3], zone: external, role: [OCI images, Helm charts]}
+  git: {name: Git host, at: [2, 4], zone: external, role: [GitOps repo · PRs, GitHub · GitLab, Forgejo · Bitbucket, Azure DevOps]}
+edges:
+  - people -> controller: "HTTPS :8082"
+  - people -> api: kubeconfig
+  - ci -> controller: "HTTPS :8083 Bundle API"
+  - controller -> api: watch · write
+  - kro -> api: watch · create
+  - agent -> workloads: apply (API)
+  - controller -> notify: signed webhooks
+  - controller <-> metrics: query · scrape
+  - controller <-> registries: tags · signatures · webhooks
+  - controller <-> git: git · PR API · webhooks
+  - agent -> git: pull
+  - pipelines -> git: git push
+```
+
+- **kardinal-controller** is one Deployment, usually in `kardinal-system`. It runs every
+  reconciler in `pkg/reconciler` and serves four ports: the UI and its API on 8082; the Bundle
+  API (`POST /api/v1/bundles`), the SCM webhooks (`/webhook/scm`) and the Subscription webhooks
+  (`/webhook/subscriptions/`) on 8083; metrics on 8080; and the health probes on 8081.
+- **Everything it decides is written to the Kubernetes API server.** That includes the Graph
+  for each Bundle and the refresh annotation that asks Argo CD or Flux to sync now; with
+  `update.strategy: argocd`, it also writes the Application's image override. The chart's
+  ValidatingAdmissionPolicies run in the API server: they limit the controller's writes on
+  Argo CD and Flux objects and who may change a Pipeline's holds, and they make approvals,
+  overrides, rejections and new Bundles name their real author. There is no admission webhook.
+- **kro** turns each Graph into its objects in the Pipeline's namespace: PromotionSteps,
+  PolicyGate instances, PRStatuses, MetricChecks, HookRuns, RenderRuns, ImageVerifications
+  and Argo Rollouts AnalysisRuns. A Graph with an approval gate also reads the Bundle's
+  Approvals.
+- **The Jobs run in the Pipeline's namespace.** A RenderRun's Job (`layout: branch`) clones,
+  renders and pushes the rendered branch itself, and the render process refuses every request
+  except git to the Pipeline's repository. Hook Jobs run your image.
+- **The CLI talks to the Kubernetes API server**, with your kubeconfig; `kardinal dashboard`
+  port-forwards to the UI. CI calls the Bundle API, or creates the Bundle with kubectl or the CLI.
+- **Requests to addresses that namespace users write** go through an egress guard that refuses
+  loopback, link-local and cloud metadata addresses. These are ScmProvider API URLs,
+  Subscription sources, registries for signature checks, Prometheus and web MetricChecks,
+  NotificationHooks and remote health clusters. `--egress-allowlist` limits NotificationHook,
+  MetricCheck and Subscription requests to a list. Git runs in process (go-git); there is no
+  git binary.
+
+## What happens to a Bundle
 
 ```station-map
 title: What the controller does with a Bundle
@@ -47,7 +126,7 @@ The controller manager runs these reconcilers:
 | `RollbackPolicyReconciler` | `RollbackPolicy` | Reads one Bundle's PromotionSteps in one environment; creates a rollback Bundle at the failure threshold |
 | `ScheduleClockReconciler` | `ScheduleClock` | Writes `status.tick` on a configurable interval for time-based gates |
 | `ChangeWindowReconciler` | `ChangeWindow` | Writes `status.active` and requeues at the next window boundary |
-| `SubscriptionReconciler` | `Subscription` | Polls OCI/Git sources; creates Bundles on new artifacts |
+| `SubscriptionReconciler` | `Subscription` | Polls OCI registries, Git repositories and Helm chart repositories; creates Bundles on new artifacts |
 | `NotificationHookReconciler` | `NotificationHook` | Sends webhooks for the events it selects; writes delivery status |
 | `HookRunReconciler` | `HookRun` | Runs a Pipeline hook's Job and records its result ([Pipeline hooks](hooks.md)) |
 | `ImageVerificationReconciler` | `ImageVerification` | Checks the signatures of a Bundle's images (sigstore) and of a config Bundle's commit; writes the verdict to its status |
@@ -72,7 +151,7 @@ kardinal-promoter does **not** implement graph coordination itself. It delegates
 [kro](https://github.com/kubernetes-sigs/kro) Graph controller (`kro.run/v1alpha1` `Graph`,
 `GraphKind` feature gate), which manages the DAG lifecycle:
 
-- Creates owned resources (PromotionStep CRs, PolicyGate CRs) in topological order
+- Creates owned resources (PromotionSteps, PolicyGate instances, PRStatuses and the other node kinds listed under [Components](#components)) in topological order
 - Advances to the next node when `readyWhen` is satisfied
 - Stops the DAG on failure, preventing downstream promotions
 

@@ -26,6 +26,9 @@ animation). The geometry mirrors web/src/stationMap/geometry.ts (octilinear edge
 gates on the run into the environment they guard) and reads its lengths from the
 design tokens, web/tokens/tokens.json. No JavaScript runs in the browser.
 
+A ```component-map block draws a component architecture (zones, components, labelled
+edges) with the same parts: component_map.py.
+
 The overrides/ templates call the same renderer: {{ station_map(spec) }}, where
 spec is the YAML above as a string.
 
@@ -135,7 +138,7 @@ UI_CLASSES = (
     "station-map__fray", "station-map__nodes", "station", "station__dot", "station__ring2", "station__notch",
     "station__tick", "station__arc", "station__name", "station__sub", "station__incoming",
     "station-map__gates", "station-map__gate", "station-map__gate-bar", "station-map__gate-leader",
-    "station-map__gate-label", "station-map__gate-quorum",
+    "station-map__gate-label", "station-map__gate-quorum", "group__frame",
 )
 
 
@@ -718,6 +721,31 @@ class _Clock:
 FENCE = re.compile(r"^```station-map[ \t]*\n(.*?)\n```[ \t]*$", re.M | re.S)
 
 
+COMPONENT_FENCE = re.compile(r"^```component-map[ \t]*\n(.*?)\n```[ \t]*$", re.M | re.S)
+
+
+def _component_map() -> Any:
+    """component_map.py, next to this file (a hook is loaded by path, not as a package)."""
+    import importlib.util
+    import sys
+    name = "kardinal_docs_component_map"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, os.path.join(os.path.dirname(os.path.abspath(__file__)), "component_map.py"))
+        mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return sys.modules[name]
+
+
+def render_components(raw: Any) -> str:
+    cm = _component_map()
+    m = cm.Metrics(_T, _px, MONO_EM, DISPLAY_EM, R, CHAMFER, RANK_SEP, GATE_TICK)
+    try:
+        return cm.render(raw, m)
+    except cm.SpecError as err:
+        raise SpecError(str(err)) from err
+
+
 def render_markdown(markdown: str, where: str) -> str:
     n = [0]
 
@@ -729,7 +757,15 @@ def render_markdown(markdown: str, where: str) -> str:
         except (SpecError, yaml.YAMLError) as err:
             raise SpecError(f"{where}: station map {n[0]}: {err}") from err
 
-    return FENCE.sub(sub, markdown)
+    def sub_components(m: "re.Match[str]") -> str:
+        n[0] += 1
+        try:
+            raw = yaml.safe_load(m.group(1))
+            return "\n" + render_components(raw) + "\n"
+        except (SpecError, yaml.YAMLError) as err:
+            raise SpecError(f"{where}: component map {n[0]}: {err}") from err
+
+    return COMPONENT_FENCE.sub(sub_components, FENCE.sub(sub, markdown))
 
 
 def on_config(config: Any) -> Any:
@@ -754,7 +790,7 @@ def on_files(files: Any, config: Any) -> Any:
 
 
 def on_page_markdown(markdown: str, page: Any, config: Any, files: Any) -> str:
-    if "```station-map" not in markdown:
+    if "```station-map" not in markdown and "```component-map" not in markdown:
         return markdown
     try:
         return render_markdown(markdown, page.file.src_uri)
@@ -780,4 +816,5 @@ def on_env(env: Any, config: Any, files: Any) -> Any:
 def on_serve(server: Any, config: Any, builder: Any) -> Any:
     server.watch(UI_CSS)
     server.watch(os.path.abspath(__file__))
+    server.watch(os.path.join(os.path.dirname(os.path.abspath(__file__)), "component_map.py"))
     return server
