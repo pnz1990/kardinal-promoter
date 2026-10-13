@@ -23,7 +23,8 @@ of the **pipeline**, and the bars on the line into prod are its **gates**. A ver
 environment once the environment before it has verified it and the environment's gates pass. kardinal then writes the version to the environment's directory
 in your GitOps repository (directly, or through a pull request you review), waits for Argo CD,
 Flux or Kubernetes to roll it out, and checks its health. A healthy environment is **Verified**,
-and the version moves on.
+and the version moves on. [Architecture](architecture.md#components) shows the components that
+do this and what they talk to.
 
 ## Version
 
