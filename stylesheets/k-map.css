@@ -70,6 +70,83 @@
   text-align: start;
 }
 
+/*
+ * The component map (hack/docs-station-map/component_map.py): zones are the
+ * cluster, its namespaces and what is outside it; components are the UI's frames
+ * (group__frame) with a station dot and its labels; a chip is the UI's pending
+ * k-chip (outline, ink-3); edges are the map's ink lines, labelled in mono.
+ */
+.k-cmap__zone rect {
+  fill: none;
+  stroke: var(--k-line-strong);
+  stroke-width: var(--k-border-hairline);
+  vector-effect: non-scaling-stroke;
+  rx: var(--k-radius-3);
+}
+.k-cmap__zone[data-kind="outside"] rect {
+  stroke-dasharray: var(--k-space-1) var(--k-space-1);
+}
+.k-cmap__zone[data-kind="cluster"] rect {
+  fill: var(--k-surface-sunken);
+}
+.k-cmap__zone[data-kind="namespace"] rect {
+  fill: var(--k-surface-base);
+  stroke: var(--k-line);
+}
+.k-cmap__zone-label {
+  font-family: var(--k-font-display);
+  --fs: var(--k-text-2xs);
+  font-weight: var(--k-weight-semibold);
+  font-stretch: var(--k-stretch-label);
+  letter-spacing: var(--k-tracking-caps);
+  text-transform: uppercase;
+  fill: var(--k-ink-3);
+}
+.k-cmap .k-cmap__edge {
+  stroke-opacity: 1;
+  stroke: var(--k-line-strong);
+}
+.k-cmap__edge-label {
+  font-family: var(--k-font-mono);
+  --fs: var(--k-text-2xs);
+  fill: var(--k-ink-2);
+  paint-order: stroke;
+  stroke: var(--k-surface-base);
+  stroke-width: var(--k-space-1);
+  stroke-linejoin: round;
+}
+.k-cmap__edge-label[data-on="cluster"] {
+  stroke: var(--k-surface-sunken);
+}
+.k-cmap__group {
+  font-family: var(--k-font-display);
+  --fs: var(--k-text-xs);
+  font-weight: var(--k-weight-semibold);
+  font-stretch: var(--k-stretch-label);
+  fill: var(--k-ink-2);
+}
+.k-cmap__chip rect {
+  fill: none;
+  stroke: var(--k-status-pending-ring);
+  stroke-width: var(--k-border-hairline);
+  vector-effect: non-scaling-stroke;
+  rx: var(--k-radius-1);
+}
+.k-cmap__chip text {
+  font-family: var(--k-font-display);
+  --fs: var(--k-text-xs);
+  font-weight: var(--k-weight-semibold);
+  fill: var(--k-ink-3);
+}
+.k-cmap .station {
+  cursor: auto;
+}
+/* What kardinal runs: the cardinal-red dot, the station map's thread colour. */
+.k-cmap__box[data-kardinal] .station__dot {
+  fill: var(--k-thread);
+  stroke: var(--k-thread);
+}
+
 /* A played map may be drawn larger than its size (the hero fills its column): its
    strokes scale with it, so the thread's dashes, which draw it, stay in its units. */
 .k-map[data-play] .station-map__svg * {
