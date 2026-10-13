@@ -8,7 +8,7 @@ kardinal-promoter is a Kubernetes-native controller. All state lives in etcd as 
 
 ```component-map
 title: kardinal's components and what they talk to
-caption: An arrow is a network call, from the caller. Inside the cluster the components talk to each other only through the Kubernetes API server, and Argo CD or Flux applies the workloads through it too.
+caption: Red dots are what kardinal runs; grey ones are the cluster and the systems it talks to. An arrow is a network call, from the caller. Inside the cluster the components talk to each other only through the Kubernetes API server, and Argo CD or Flux applies the workloads through it too.
 zones:
   people: {name: Outside the cluster, kind: outside}
   external: {name: Outside the cluster, kind: outside}
@@ -24,6 +24,7 @@ components:
     at: [0, 1]
     zone: system
     chip: Deployment
+    kardinal: true
     role: [":8082 UI", ":8083 Bundle API, webhooks", ":8080 metrics"]
     items:
       - promotion: [bundle · pipeline, promotionstep, prstatus]
@@ -36,7 +37,7 @@ components:
   kro: {name: kro, at: [0, 3], zone: kro, chip: Deployment, role: [the Graph controller]}
   agent: {name: Argo CD or Flux, at: [1, 3], zone: gitops, role: [syncs env branches]}
   workloads: {name: Workloads, at: [0, 4], zone: apps, role: [a namespace per env]}
-  pipelines: {name: Pipeline namespace, at: [1, 4], zone: apps, role: [Bundles · Graphs, steps · hook Jobs, "render Jobs: git only"]}
+  pipelines: {name: Render and hook Jobs, at: [1, 4], zone: apps, kardinal: true, role: ["render: git only", "hooks: your image"]}
   notify: {name: Notifications, at: [2, 0], zone: external, role: [Slack · Teams, webhooks]}
   ci: {name: CI, at: [2, 1], zone: external, role: [create-bundle, action]}
   metrics: {name: Metrics backends, at: [2, 2], zone: external, role: [Prometheus, Datadog · CloudWatch, New Relic]}
@@ -51,7 +52,7 @@ edges:
   - agent -> workloads: apply (API)
   - controller -> notify: signed webhooks
   - controller <-> metrics: query · scrape
-  - controller <-> registries: tags · signatures · webhooks
+  - controller <-> registries: OCI API · webhooks
   - controller <-> git: git · PR API · webhooks
   - agent -> git: pull
   - pipelines -> git: git push

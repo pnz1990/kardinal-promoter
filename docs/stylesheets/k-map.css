@@ -141,6 +141,11 @@
 .k-cmap .station {
   cursor: auto;
 }
+/* What kardinal runs: the cardinal-red dot, the station map's thread colour. */
+.k-cmap__box[data-kardinal] .station__dot {
+  fill: var(--k-thread);
+  stroke: var(--k-thread);
+}
 
 /* A played map may be drawn larger than its size (the hero fills its column): its
    strokes scale with it, so the thread's dashes, which draw it, stay in its units. */

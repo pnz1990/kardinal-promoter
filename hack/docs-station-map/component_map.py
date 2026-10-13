@@ -14,7 +14,7 @@ its chips (k-chip), the design tokens and the fonts. A page declares:
       cluster: {name: Kubernetes cluster}
       system: {name: kardinal-system, in: cluster}
     components:
-      controller: {name: kardinal-controller, at: [1, 1], zone: system, chip: Deployment,
+      controller: {name: kardinal-controller, at: [1, 1], zone: system, chip: Deployment, kardinal: true,
                    role: [reconcilers, UI and API], items: [promotion: bundle · pipeline]}
       git: {name: Git repository, at: [3, 1], role: [env branches]}
     edges:
@@ -22,6 +22,7 @@ its chips (k-chip), the design tokens and the fonts. A page declares:
       - ui <-> api: HTTPS
     ```
 
+kardinal: true marks what kardinal itself runs: its dot is cardinal red.
 at: [column, row] places a component on a grid (span: n widens it over n columns).
 A zone is the box around its components and the zones in it (in:). Columns and rows
 take the size of what is in them; the gaps take the size of the edge labels that cross
@@ -113,7 +114,7 @@ class Box:
     def __init__(self, cid: str, raw: Any, m: Metrics):
         if not isinstance(raw, dict) or "at" not in raw:
             raise SpecError(f"component {cid}: {{name, at: [column, row], ...}}")
-        unknown = set(raw) - {"name", "at", "span", "zone", "role", "items", "chip", "rows"}
+        unknown = set(raw) - {"name", "at", "span", "zone", "role", "items", "chip", "rows", "kardinal"}
         if unknown:
             raise SpecError(f"component {cid}: unknown fields {sorted(unknown)}")
         self.id = cid
@@ -138,6 +139,8 @@ class Box:
             else:
                 raise SpecError(f"component {cid}: an item is 'group: members' or 'group: [members, ...]'")
         self.chip = str(raw["chip"]) if raw.get("chip") else None
+        # What kardinal itself runs: the cardinal-red dot, as the station map's thread.
+        self.kardinal = bool(raw.get("kardinal", False))
         self.m = m
         self.x = self.y = 0.0
         self.w, self.h = self.content()
@@ -277,12 +280,20 @@ def layout(spec: Spec, m: Metrics) -> None:
     # Edge labels: an edge's label sits in the first gap it crosses, beside the source,
     # clear of a bend that goes down by the target; that gap must hold it.
     need_x = [m.gap_x] * (cols + 1)
+    # The bends into a box's side each take a lane of the gap before it, and a straight
+    # edge's label into that box must clear them.
+    into: Dict[str, int] = {}
+    for e in spec.edges:
+        a, b = spec.boxes[e.a], spec.boxes[e.b]
+        if not _overlap(a.col, a.col + a.span, b.col, b.col + b.span):
+            into[b.id] = into.get(b.id, 0) + 1
     for e in spec.edges:
         a, b = spec.boxes[e.a], spec.boxes[e.b]
         adjacent = b.col == a.col + a.span or a.col == b.col + b.span
         if e.label and adjacent and _overlap(a.row, a.row + a.rows, b.row, b.row + b.rows):
             g = max(a.col, b.col)
-            need_x[g] = max(need_x[g], m.mono(e.label, m.label_px) + 2 * m.lane + m.bend)
+            lanes = into.get(b.id, 0) - 1
+            need_x[g] = max(need_x[g], m.mono(e.label, m.label_px) + 2 * m.lane + m.bend + lanes * m.lane * 2)
 
     xs = [0.0] * (cols + 1)  # the left edge of each column
     x = 0.0
@@ -353,7 +364,54 @@ def _route(spec: Spec, m: Metrics, xs: List[float], cw: List[float]) -> None:
         for p, (_, e, end) in zip(_ports(len(lst), lo, hi), lst):
             port[(id(e), end)] = p
 
-    bends: Dict[Tuple[str, str], int] = {}
+    # The lane of each bend: the bends into one side of a column share its gap. Of those
+    # that come down, the one entering highest runs closest to the target; of those that
+    # come up, the one entering lowest. So no bend's last run crosses another's vertical.
+    def straight(e: Edge) -> Optional[float]:
+        a, b = spec.boxes[e.a], spec.boxes[e.b]
+        pa, pb = port[(id(e), "a")], port[(id(e), "b")]
+        # Where both boxes span: as near the target's own port as that allows, so the
+        # target's other ports keep their room.
+        lo, hi = max(a.y, b.y) + m.pad, min(a.y + a.h, b.y + b.h) - m.pad
+        if lo > hi:
+            return None
+        return min(max(pb, lo), hi)
+
+    # Straight edges keep their height; the other ports on each side are spread again in
+    # the room between them, in the same order, so a bend never leaves on the far side
+    # of a straight edge and crosses it.
+    fixed = {id(e): straight(e) for e in spec.edges if plan[id(e)][0] in ("left", "right") and straight(e) is not None}
+    for (bid, side), lst in sides.items():
+        if side in ("top", "bottom"):
+            continue
+        bx = spec.boxes[bid]
+        lo = bx.y + m.pad
+        run: List[Tuple[Edge, str]] = []
+        for _, e, end in lst + [(0.0, None, "")]:  # type: ignore[list-item]
+            y = fixed.get(id(e)) if e is not None else bx.y + bx.h - m.pad
+            if y is None:
+                run.append((e, end))
+                continue
+            for p, (re_, rend) in zip(_ports(len(run), lo, y), run):
+                port[(id(re_), rend)] = p
+            if e is not None:
+                port[(id(e), end)] = y
+            lo, run = y, []
+
+    lane: Dict[int, int] = {}
+    groups: Dict[Tuple[str, str], List[Edge]] = {}
+    for e in spec.edges:
+        sa, sb = plan[id(e)]
+        if sa in ("left", "right") and straight(e) is None:
+            b = spec.boxes[e.b]
+            xb = b.x if sb == "left" else b.x + b.w
+            groups.setdefault((str(round(xb)), sb), []).append(e)
+    for lst in groups.values():
+        down = sorted([e for e in lst if port[(id(e), "a")] < port[(id(e), "b")]], key=lambda e: port[(id(e), "b")])
+        up = sorted([e for e in lst if port[(id(e), "a")] >= port[(id(e), "b")]], key=lambda e: -port[(id(e), "b")])
+        for k, e in enumerate(down + up):
+            lane[id(e)] = k
+
     gaps: Dict[int, Optional[Tuple[float, float]]] = {}
     for e in spec.edges:
         a, b = spec.boxes[e.a], spec.boxes[e.b]
@@ -362,17 +420,13 @@ def _route(spec: Spec, m: Metrics, xs: List[float], cw: List[float]) -> None:
         if sa in ("left", "right"):
             xa = a.x + a.w if sa == "right" else a.x
             xb = b.x if sb == "left" else b.x + b.w
-            # Straight when the other box spans this port.
-            if b.y + m.pad <= pa <= b.y + b.h - m.pad:
-                pts = [(xa, pa), (xb, pa)]
-            elif a.y + m.pad <= pb <= a.y + a.h - m.pad:
-                pts = [(xa, pb), (xb, pb)]
+            y = straight(e)
+            if y is not None:
+                # Straight, at the target's port when the source spans it: each edge
+                # keeps its own entry point.
+                pts = [(xa, y), (xb, y)]
             else:
-                # One bend, just before the target, a lane further out for each bend there.
-                key = (str(round(xb)), sb)
-                k = bends.get(key, 0)
-                bends[key] = k + 1
-                off = m.bend + k * m.lane * 2
+                off = m.bend + lane[id(e)] * m.lane * 2
                 gx = xb - off if sb == "left" else xb + off
                 pts = [(xa, pa), (gx, pa), (gx, pb), (xb, pb)]
         else:
@@ -398,6 +452,16 @@ def _route(spec: Spec, m: Metrics, xs: List[float], cw: List[float]) -> None:
 Rect = Tuple[float, float, float, float]
 
 
+def _outward(mid: float, room: float, step: float) -> List[float]:
+    """mid, then mid ± step, ± 2 step, ... out to ± room."""
+    out = [mid]
+    k = 1
+    while k * step <= room:
+        out += [mid - k * step, mid + k * step]
+        k += 1
+    return out
+
+
 def _label_candidates(e: Edge, m: Metrics, gap: Optional[Tuple[float, float]]) -> List[Tuple[Tuple[float, float, str], Rect]]:
     """Where an edge's label may go, best first: over the run out of the source (in the
     gap beside it), under it, over the run into the target, then beside a vertical run."""
@@ -414,11 +478,11 @@ def _label_candidates(e: Edge, m: Metrics, gap: Optional[Tuple[float, float]]) -
             lo, hi = max(lo, clip[0]), min(hi, clip[1])
         if hi - lo < w:
             return
-        cx = (lo + hi) / 2
-        top = y0 - m.label_gap - h
-        out.append(((cx, top + h * m.ascent, "middle"), (cx - w / 2, top, cx + w / 2, top + h)))
-        top = y0 + m.label_gap
-        out.append(((cx, top + h * m.ascent, "middle"), (cx - w / 2, top, cx + w / 2, top + h)))
+        # The middle first, then further out along the run, either way, a lane at a time.
+        mid, room = (lo + hi) / 2, (hi - lo - w) / 2
+        for cx in _outward(mid, room, m.label_gap):
+            for top in (y0 - m.label_gap - h, y0 + m.label_gap):
+                out.append(((cx, top + h * m.ascent, "middle"), (cx - w / 2, top, cx + w / 2, top + h)))
 
     horiz = [i for i in range(len(pts) - 1) if abs(pts[i + 1][1] - pts[i][1]) < 0.5 and abs(pts[i + 1][0] - pts[i][0]) > 0.5]
     if horiz and horiz[0] == 0:
@@ -429,20 +493,53 @@ def _label_candidates(e: Edge, m: Metrics, gap: Optional[Tuple[float, float]]) -
         (x0, y0), (x1, y1) = pts[i], pts[i + 1]
         if abs(x1 - x0) > 0.5 or abs(y1 - y0) < h + 2 * m.label_gap:
             continue
-        cy = (y0 + y1) / 2
-        lx = x0 + m.label_gap * 2
-        out.append(((lx, cy + h * m.ascent / 2, "start"), (lx, cy - h / 2, lx + w, cy + h / 2)))
-        rx = x0 - m.label_gap * 2
-        out.append(((rx, cy + h * m.ascent / 2, "end"), (rx - w, cy - h / 2, rx, cy + h / 2)))
+        lo, hi = sorted((y0, y1))
+        mid, room = (lo + hi) / 2, max(0.0, (hi - lo - h) / 2 - m.chamfer)
+        for cy in _outward(mid, room, m.label_gap):
+            lx = x0 + m.label_gap * 2
+            out.append(((lx, cy + h * m.ascent / 2, "start"), (lx, cy - h / 2, lx + w, cy + h / 2)))
+            rx = x0 - m.label_gap * 2
+            out.append(((rx, cy + h * m.ascent / 2, "end"), (rx - w, cy - h / 2, rx, cy + h / 2)))
     return out
 
 
+def _grow(r: Rect, d: float) -> Rect:
+    return r[0] - d, r[1] - d, r[2] + d, r[3] + d
+
+
+def _segments(e: Edge, m: Metrics) -> List[Tuple[Point, Point]]:
+    """The segments an edge is drawn with: its bends chamfered."""
+    pts = _chamfered(e.points, m.chamfer)
+    return list(zip(pts, pts[1:]))
+
+
+def _cross(p: Point, q: Point, r: Point, s: Point) -> bool:
+    """Whether segments pq and rs cross (touching at an end does not count)."""
+    def orient(a: Point, b: Point, c: Point) -> float:
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    d1, d2 = orient(r, s, p), orient(r, s, q)
+    d3, d4 = orient(p, q, r), orient(p, q, s)
+    return ((d1 > 0 > d2) or (d1 < 0 < d2)) and ((d3 > 0 > d4) or (d3 < 0 < d4))
+
+
 def _seg_rect(p: Point, q: Point, r: Rect) -> bool:
-    return _seg_hits(p, q, r, 0)
+    """Whether segment pq touches rectangle r."""
+    x0, y0, x1, y1 = r
+    inside = lambda pt: x0 <= pt[0] <= x1 and y0 <= pt[1] <= y1  # noqa: E731
+    if inside(p) or inside(q):
+        return True
+    corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    return any(_cross(p, q, corners[i], corners[(i + 1) % 4]) for i in range(4))
 
 
 def _place_labels(spec: Spec, m: Metrics, gaps: Dict[int, Optional[Tuple[float, float]]]) -> None:
     placed: List[Rect] = []
+    # Zone borders are lines too.
+    borders: List[Tuple[Point, Point]] = []
+    for z in spec.zones.values():
+        x0, y0, x1, y1 = z.rect
+        c = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+        borders += [(c[i], c[(i + 1) % 4]) for i in range(4)]
     for e in spec.edges:
         if not e.label:
             continue
@@ -450,21 +547,12 @@ def _place_labels(spec: Spec, m: Metrics, gaps: Dict[int, Optional[Tuple[float, 
         clear = [c for c in cands
                  if not any(_boxes_hit(c[1], b.rect) for b in spec.boxes.values())
                  and not any(_boxes_hit(c[1], r) for r in placed)]
-        # Prefer a place no other edge runs along (one that crosses it is fine: the
-        # label's halo breaks the line).
-        def along(c: Tuple[Tuple[float, float, str], Rect]) -> bool:
-            flat = c[0][2] == "middle"
-            for o in spec.edges:
-                if o is e:
-                    continue
-                for p, q in zip(o.points, o.points[1:]):
-                    if (abs(p[1] - q[1]) < 0.5) == flat and _seg_rect(p, q, c[1]):
-                        return True
-            return False
-        quiet = [c for c in clear if not along(c)]
-        pick = (quiet or clear or [None])[0]
+        # A label touches no line: not another edge's, crossing or along it, and not its own.
+        lines = [sg for o in spec.edges for sg in _segments(o, m)] + borders
+        clear = [c for c in clear if not any(_seg_rect(p, q, _grow(c[1], 1)) for p, q in lines)]
+        pick = (clear or [None])[0]
         if pick is None:
-            raise SpecError(f"the label of {e.a} -> {e.b} has no room: move a component or shorten it")
+            raise SpecError(f"the label of {e.a} -> {e.b} has no room clear of the lines: move a component or shorten it")
         e.label_at, e.label_box = pick
         placed.append(pick[1])
 
@@ -492,6 +580,12 @@ def _check(spec: Spec, m: Metrics) -> None:
                     raise SpecError(f"edge {e.a} -> {e.b} runs over {b.id}: move a component")
             if e.label and _boxes_hit(e.label_box, b.rect):
                 raise SpecError(f"the label of {e.a} -> {e.b} runs over {b.id}: move a component")
+    for i, e in enumerate(spec.edges):
+        for o in spec.edges[i + 1:]:
+            if not {e.a, e.b} & {o.a, o.b}:
+                continue
+            if any(_cross(p, q, r, t) for p, q in _segments(e, m) for r, t in _segments(o, m)):
+                raise SpecError(f"edges {e.a} -> {e.b} and {o.a} -> {o.b} share a component and cross: move a component")
     labelled = [e for e in spec.edges if e.label]
     for i, e in enumerate(labelled):
         for o in labelled[i + 1:]:
@@ -608,7 +702,8 @@ def render(raw: Any, m: Metrics) -> str:
                 if g:
                     parts.append(f'<text x="{_n(x + m.pad)}" y="{_n(ly - m.sub_px * 0.3)}" class="k-cmap__group">{_e(g)}</text>')
                 parts.append(f'<text x="{_n(x + m.pad + gw + m.chip_gap)}" y="{_n(ly - m.sub_px * 0.3)}" class="station__sub">{_e(v)}</text>')
-        boxes.append(f'<g class="station k-cmap__box" data-tone="verified" data-component="{_e(b.id)}">{"".join(parts)}</g>')
+        mine = ' data-kardinal=""' if b.kardinal else ""
+        boxes.append(f'<g class="station k-cmap__box" data-tone="verified" data-component="{_e(b.id)}"{mine}>{"".join(parts)}</g>')
 
     rects = [z.rect for z in spec.zones.values()] + [b.rect for b in spec.boxes.values()] + [e.label_box for e in spec.edges if e.label]
     x0 = min(r[0] for r in rects) - m.lane
