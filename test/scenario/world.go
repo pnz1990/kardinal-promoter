@@ -25,6 +25,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/meta/testrestmapper"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -127,6 +128,12 @@ type Options struct {
 	PolicyNamespaces []string
 	// Start is the clock's start (default: a Wednesday, 10:00 UTC).
 	Start time.Time
+	// Watch reconciles an object only when a watch would wake it: it, or
+	// any object of its namespace, a cluster-scoped object or an object of
+	// an org policy namespace, changed since its last reconcile, or its
+	// requeue time came. Without it, every object is reconciled every round,
+	// which also checks that every reconcile is idempotent.
+	Watch bool
 }
 
 // World is one kardinal controller and the cluster, git host and GitOps
@@ -172,9 +179,17 @@ type World struct {
 	uids       atomic.Int64
 	mu         sync.Mutex
 	reconciles map[string]int
+	// perObject counts the reconciles of each object (kind/namespace/name).
+	perObject  map[string]int
 	errors     map[string]int
 	lastErrors map[string]string
 	rounds     int
+	watch      bool
+	policyNS   map[string]bool
+	// keyWrites counts writes per watch key (emitKeys).
+	keyWrites map[string]int64
+	cache     *readCache
+	seen      map[string]reconcileState
 	// verified records, per namespace/environment, the image tag of the
 	// Bundle most recently seen Verified there, and the steps seen.
 	verified     map[string]string
@@ -189,8 +204,12 @@ func NewWorld(t testing.TB, opts Options) *World {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	w := &World{T: t, Scheme: s, Dir: dir, reconciles: map[string]int{}, errors: map[string]int{}, lastErrors: map[string]string{},
-		verified: map[string]string{}, seenVerified: map[string]bool{}}
+	w := &World{T: t, Scheme: s, Dir: dir, reconciles: map[string]int{}, perObject: map[string]int{}, errors: map[string]int{}, lastErrors: map[string]string{},
+		verified: map[string]string{}, seenVerified: map[string]bool{},
+		watch: opts.Watch, policyNS: map[string]bool{}, keyWrites: map[string]int64{}, seen: map[string]reconcileState{}}
+	for _, ns := range opts.PolicyNamespaces {
+		w.policyNS[ns] = true
+	}
 	w.Ctx = zerolog.Nop().WithContext(context.Background())
 	w.tick = opts.Tick
 	if w.tick == 0 {
@@ -200,7 +219,13 @@ func NewWorld(t testing.TB, opts Options) *World {
 	if w.clock.IsZero() {
 		w.clock = time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC) // a Wednesday
 	}
-	countWrite := func() { w.writes.Add(1) }
+	countWrite := func(o client.Object, created bool) {
+		w.writes.Add(1)
+		w.noteWrite(o)
+		if w.cache != nil {
+			w.cache.invalidate(objKind(o), o.GetNamespace(), o.GetName(), created)
+		}
+	}
 	statusObjs := []client.Object{
 		&v1alpha1.Pipeline{}, &v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}, &v1alpha1.PolicyGate{},
 		&v1alpha1.PRStatus{}, &v1alpha1.ChangeWindow{}, &v1alpha1.MetricCheck{}, &v1alpha1.RollbackPolicy{},
@@ -231,8 +256,12 @@ func NewWorld(t testing.TB, opts Options) *World {
 			// The API server sets a UID and generation 1 on create and
 			// moves the generation when the spec changes; the fake client
 			// does neither.
-			Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) error {
-				countWrite()
+			Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) (err error) {
+				defer func() {
+					if err == nil {
+						countWrite(o, true)
+					}
+				}()
 				if o.GetUID() == "" {
 					o.SetUID(types.UID(fmt.Sprintf("uid-%d", w.uids.Add(1))))
 				}
@@ -241,39 +270,60 @@ func NewWorld(t testing.TB, opts Options) *World {
 				}
 				return c.Create(ctx, o, opts...)
 			},
-			Update: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.UpdateOption) error {
-				countWrite()
-				if err := bumpGeneration(ctx, c, o, nil); err != nil {
-					return err
+			Update: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.UpdateOption) (err error) {
+				defer func() {
+					if err == nil {
+						countWrite(o, false)
+					}
+				}()
+				if gerr := bumpGeneration(ctx, c, o, nil); gerr != nil {
+					return gerr
 				}
 				return c.Update(ctx, o, opts...)
 			},
-			Patch: func(ctx context.Context, c client.WithWatch, o client.Object, p client.Patch, opts ...client.PatchOption) error {
-				countWrite()
-				before, err := specOf(ctx, c, o)
-				if err != nil {
-					return err
+			Patch: func(ctx context.Context, c client.WithWatch, o client.Object, p client.Patch, opts ...client.PatchOption) (err error) {
+				defer func() {
+					if err == nil {
+						countWrite(o, false)
+					}
+				}()
+				before, serr := specOf(ctx, c, o)
+				if serr != nil {
+					return serr
 				}
-				if err := c.Patch(ctx, o, p, opts...); err != nil {
+				if err = c.Patch(ctx, o, p, opts...); err != nil {
 					return err
 				}
 				return bumpGeneration(ctx, c, o, before)
 			},
-			Delete: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.DeleteOption) error {
-				countWrite()
+			Delete: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.DeleteOption) (err error) {
+				defer func() {
+					if err == nil {
+						countWrite(o, true)
+					}
+				}()
 				return c.Delete(ctx, o, opts...)
 			},
-			SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, o client.Object, opts ...client.SubResourceUpdateOption) error {
-				countWrite()
+			SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, o client.Object, opts ...client.SubResourceUpdateOption) (err error) {
+				defer func() {
+					if err == nil {
+						countWrite(o, false)
+					}
+				}()
 				return c.SubResource(sub).Update(ctx, o, opts...)
 			},
-			SubResourcePatch: func(ctx context.Context, c client.Client, sub string, o client.Object, p client.Patch, opts ...client.SubResourcePatchOption) error {
-				countWrite()
+			SubResourcePatch: func(ctx context.Context, c client.Client, sub string, o client.Object, p client.Patch, opts ...client.SubResourcePatchOption) (err error) {
+				defer func() {
+					if err == nil {
+						countWrite(o, false)
+					}
+				}()
 				return c.SubResource(sub).Patch(ctx, o, p, opts...)
 			},
 		}).
 		Build()
-	w.Client = c
+	w.cache = newReadCache(c)
+	w.Client = w.cache
 	kinds := map[schema.GroupVersionResource]string{}
 	for gvr, gvk := range unstructuredKinds {
 		kinds[gvr] = gvk.Kind
@@ -281,6 +331,9 @@ func NewWorld(t testing.TB, opts Options) *World {
 	dyn := newDynClient(c, kinds)
 	w.Kro = NewKro(c)
 	w.Kro.Version = w.writes.Load
+	if opts.Watch {
+		w.Kro.Skip = w.graphQuiet
+	}
 	w.Git = NewGitServer(filepath.Join(dir, "git"))
 	if err := os.MkdirAll(filepath.Join(dir, "git"), 0o755); err != nil {
 		t.Fatal(err)
@@ -307,17 +360,20 @@ func NewWorld(t testing.TB, opts Options) *World {
 		builder.CompactAbove = opts.CompactAbove
 	}
 	compactAbove := builder.CompactAbove
-	tr := translator.New(graph.NewGraphClient(dyn, logger), builder, c, opts.PolicyNamespaces, logger)
+	// The reconcilers read through the cache, as from the manager's
+	// informers; APIReader and Reader read the store directly.
+	rc := w.Client
+	tr := translator.New(graph.NewGraphClient(dyn, logger), builder, rc, opts.PolicyNamespaces, logger)
 	now := w.Now
 	w.gitClient = &RewritingGit{GoGitClient: scm.NewGoGitClient(), Server: w.Git}
 	w.GitOps = &GitOps{w: w}
-	w.bundles = &bundlerec.Reconciler{Client: c, APIReader: c, Translator: tr, GraphChecker: graph.NewGraphClient(dyn, logger),
+	w.bundles = &bundlerec.Reconciler{Client: rc, APIReader: c, Translator: tr, GraphChecker: graph.NewGraphClient(dyn, logger),
 		PolicyNamespaces: opts.PolicyNamespaces, NowFn: now}
-	w.pipelines = &pipelinerec.Reconciler{Client: c, Reader: c, CompactAbove: &compactAbove, Now: now}
-	w.steps = &psrec.Reconciler{Client: c, APIReader: c, SCM: provider, GitClient: w.gitClient,
-		HealthDetector: health.NewAutoDetector(c, dyn), RemoteClusters: &health.RemoteClusters{},
+	w.pipelines = &pipelinerec.Reconciler{Client: rc, Reader: c, CompactAbove: &compactAbove, Now: now}
+	w.steps = &psrec.Reconciler{Client: rc, APIReader: c, SCM: provider, GitClient: w.gitClient,
+		HealthDetector: health.NewAutoDetector(rc, dyn), RemoteClusters: &health.RemoteClusters{},
 		WorkDirRoot: filepath.Join(dir, "work"), NowFn: now}
-	gates, err := pgrec.NewReconciler(c)
+	gates, err := pgrec.NewReconciler(rc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,11 +381,11 @@ func NewWorld(t testing.TB, opts Options) *World {
 	gates.MetricsNowFn = now
 	gates.PolicyNamespaces = opts.PolicyNamespaces
 	w.gates = gates
-	w.prs = &prsrec.Reconciler{Client: c, SCM: provider, NowFn: now}
-	w.windows = &cwrec.Reconciler{Client: c, NowFn: now}
-	w.metrics = &mcrec.Reconciler{Client: c, Backends: map[string]mcrec.Backend{"prometheus": w.Metrics}, NowFn: now}
-	w.rollbacks = &rbprec.Reconciler{Client: c, NowFn: now}
-	w.renders = &rrrec.Reconciler{Client: c, APIReader: c, Image: "kardinal-render:scenario", ControllerNamespace: "kardinal-system",
+	w.prs = &prsrec.Reconciler{Client: rc, SCM: provider, NowFn: now}
+	w.windows = &cwrec.Reconciler{Client: rc, NowFn: now}
+	w.metrics = &mcrec.Reconciler{Client: rc, Backends: map[string]mcrec.Backend{"prometheus": w.Metrics}, NowFn: now}
+	w.rollbacks = &rbprec.Reconciler{Client: rc, NowFn: now}
+	w.renders = &rrrec.Reconciler{Client: rc, APIReader: c, Image: "kardinal-render:scenario", ControllerNamespace: "kardinal-system",
 		AuthorName: "kardinal-promoter", AuthorEmail: "kardinal@kardinal.io", NowFn: now, Timeout: time.Hour}
 	return w
 }
@@ -425,11 +481,19 @@ func (w *World) Round() int64 {
 		if err := w.Client.List(w.Ctx, k.list); err != nil {
 			w.T.Fatalf("list %s: %v", k.name, err)
 		}
-		items, err := metaItems(k.list)
+		objs, err := apimetaExtract(k.list)
 		if err != nil {
 			w.T.Fatal(err)
 		}
-		for _, key := range items {
+		sort.Slice(objs, func(i, j int) bool {
+			return objs[i].GetNamespace()+"/"+objs[i].GetName() < objs[j].GetNamespace()+"/"+objs[j].GetName()
+		})
+		for _, o := range objs {
+			key := types.NamespacedName{Namespace: o.GetNamespace(), Name: o.GetName()}
+			skey := k.name + "/" + key.String()
+			if !w.wakes(skey, o) {
+				continue
+			}
 			// A reconcile that wrote and asks to run again at once runs
 			// again, as the watch event of its own write would make it.
 			for i := 0; i < maxImmediate; i++ {
@@ -437,11 +501,13 @@ func (w *World) Round() int64 {
 				res, err := k.rec(w.Ctx, ctrl.Request{NamespacedName: key})
 				w.mu.Lock()
 				w.reconciles[k.name]++
+				w.perObject[skey]++
 				if err != nil && !apierrors.IsConflict(err) {
 					w.errors[k.name]++
 					w.lastErrors[k.name] = err.Error()
 				}
 				w.mu.Unlock()
+				w.reconciled(skey, o, res, err)
 				if err != nil || w.writes.Load() == before || res.RequeueAfter > 0 {
 					break
 				}
@@ -468,17 +534,162 @@ func (w *World) syncKro() {
 	}
 }
 
-func metaItems(list client.ObjectList) ([]types.NamespacedName, error) {
-	objs, err := apimetaExtract(list)
-	if err != nil {
-		return nil, err
+// reconcileState is what a watch-mode World knows of one object's last
+// reconcile: its resourceVersion, the sum of the write counts of the keys it
+// listens to (listenKeys), and its requeue.
+type reconcileState struct {
+	rv         string
+	heard      int64
+	due        time.Time
+	hasDue     bool
+	reconciled bool
+}
+
+// The keys of watch mode: a write emits keys (emitKeys) and an object
+// listens to keys (listenKeys), the way kardinal's controllers map watch
+// events (SetupWithManager of each reconciler): a Bundle hears its steps,
+// its Graph, its Pipeline, its sibling Bundles and the gate templates; a
+// PromotionStep its Bundle, its Bundle's gate instances and PRStatuses and
+// its Pipeline; a gate instance its Bundle's steps, its Pipeline and the
+// gate inputs (MetricChecks, ChangeWindows, ScheduleClocks); a Pipeline its
+// Bundles, steps and gate instances.
+func emitKeys(o client.Object, policyNS map[string]bool) []string {
+	ns, l := o.GetNamespace(), o.GetLabels()
+	b, p := l["kardinal.io/bundle"], l["kardinal.io/pipeline"]
+	switch objKind(o) {
+	case "Bundle":
+		pl := pipelineOfBundle(o)
+		return []string{"B:" + ns + "/" + o.GetName(), "PB:" + ns + "/" + pl}
+	case "PromotionStep":
+		return []string{"S:" + ns + "/" + b, "SP:" + ns + "/" + p}
+	case "Pipeline":
+		return []string{"P:" + ns + "/" + o.GetName()}
+	case "PolicyGate":
+		if b == "" {
+			if policyNS[ns] {
+				return []string{"GT:*"}
+			}
+			return []string{"GT:" + ns}
+		}
+		return []string{"GI:" + ns + "/" + b, "GIP:" + ns + "/" + p}
+	case "PRStatus":
+		return []string{"PR:" + ns + "/" + b}
+	case "Approval":
+		return []string{"A:" + ns + "/" + b}
+	case "MetricCheck", "ChangeWindow", "ScheduleClock":
+		return []string{"IN:*"}
+	case "Job":
+		if owner := metav1.GetControllerOf(o); owner != nil {
+			return []string{"RR:" + ns + "/" + owner.Name}
+		}
 	}
-	out := make([]types.NamespacedName, 0, len(objs))
-	for _, o := range objs {
-		out = append(out, types.NamespacedName{Namespace: o.GetNamespace(), Name: o.GetName()})
+	if objKind(o) == "Graph" {
+		return []string{"G:" + ns + "/" + b}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
-	return out, nil
+	return nil
+}
+
+// objKind is o's kind: its Go type, or an unstructured object's kind.
+func objKind(o client.Object) string {
+	if u, ok := o.(*unstructured.Unstructured); ok {
+		return u.GetKind()
+	}
+	return kindOf(o)
+}
+
+func listenKeys(o client.Object) []string {
+	ns, l := o.GetNamespace(), o.GetLabels()
+	b, p := l["kardinal.io/bundle"], l["kardinal.io/pipeline"]
+	switch objKind(o) {
+	case "Bundle":
+		pl := pipelineOfBundle(o)
+		return []string{"B:" + ns + "/" + o.GetName(), "PB:" + ns + "/" + pl, "S:" + ns + "/" + o.GetName(),
+			"G:" + ns + "/" + o.GetName(), "P:" + ns + "/" + pl, "GT:" + ns, "GT:*"}
+	case "PromotionStep":
+		return []string{"B:" + ns + "/" + b, "GI:" + ns + "/" + b, "PR:" + ns + "/" + b, "P:" + ns + "/" + p}
+	case "PolicyGate":
+		if b == "" {
+			return nil
+		}
+		return []string{"S:" + ns + "/" + b, "P:" + ns + "/" + p, "IN:*"}
+	case "Pipeline":
+		return []string{"PB:" + ns + "/" + o.GetName(), "SP:" + ns + "/" + o.GetName(), "GIP:" + ns + "/" + o.GetName(),
+			"GT:" + ns, "GT:*"}
+	case "RenderRun":
+		return []string{"RR:" + ns + "/" + o.GetName()}
+	}
+	return nil
+}
+
+func pipelineOfBundle(o client.Object) string {
+	switch x := o.(type) {
+	case *v1alpha1.Bundle:
+		return x.Spec.Pipeline
+	case *unstructured.Unstructured:
+		p, _, _ := unstructured.NestedString(x.Object, "spec", "pipeline")
+		return p
+	}
+	return ""
+}
+
+// noteWrite counts a write of o under the keys it emits.
+func (w *World) noteWrite(o client.Object) {
+	keys := emitKeys(o, w.policyNS)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, k := range keys {
+		w.keyWrites[k]++
+	}
+}
+
+// heard is the sum of the write counts of the keys o listens to. Callers
+// hold w.mu.
+func (w *World) heard(o client.Object) int64 {
+	var n int64
+	for _, k := range listenKeys(o) {
+		n += w.keyWrites[k]
+	}
+	return n
+}
+
+// wakes reports whether a watch would reconcile o (as skey) now: it is
+// new, it changed, it heard a write, or its requeue time came.
+func (w *World) wakes(skey string, o client.Object) bool {
+	if !w.watch {
+		return true
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	st, ok := w.seen[skey]
+	if !ok || !st.reconciled || st.rv != o.GetResourceVersion() || st.heard != w.heard(o) {
+		return true
+	}
+	return st.hasDue && !w.Now().Before(st.due)
+}
+
+// reconciled records a reconcile of skey for wakes.
+func (w *World) reconciled(skey string, o client.Object, res ctrl.Result, err error) {
+	if !w.watch {
+		return
+	}
+	cur := o.DeepCopyObject().(client.Object)
+	rv := ""
+	if gerr := w.Client.Get(w.Ctx, client.ObjectKeyFromObject(o), cur); gerr == nil {
+		rv = cur.GetResourceVersion()
+		o = cur
+	}
+	now := w.Now()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	st := reconcileState{rv: rv, heard: w.heard(o), reconciled: true}
+	//nolint:staticcheck // Requeue is what the reconcilers still return
+	switch {
+	case err != nil, res.Requeue:
+		st.due, st.hasDue = now, true
+	case res.RequeueAfter > 0:
+		st.due, st.hasDue = now.Add(res.RequeueAfter), true
+	}
+	w.seen[skey] = st
 }
 
 // RunUntil runs rounds until done reports true or max rounds ran. It
@@ -500,6 +711,18 @@ func (w *World) Reconciles() map[string]int {
 	defer w.mu.Unlock()
 	out := map[string]int{}
 	for k, v := range w.reconciles {
+		out[k] = v
+	}
+	return out
+}
+
+// ReconcilesPerObject returns how many reconciles each object got, by
+// kind/namespace/name.
+func (w *World) ReconcilesPerObject() map[string]int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make(map[string]int, len(w.perObject))
+	for k, v := range w.perObject {
 		out[k] = v
 	}
 	return out
@@ -646,4 +869,26 @@ func (w *World) GateInstances(ns, bundle string) []v1alpha1.PolicyGate {
 		}
 	}
 	return out
+}
+
+// graphQuiet reports, in watch mode, whether g needs no pass: its spec and
+// status are as at its last pass and none of the objects it reads (its
+// Bundle, its Bundle's steps, gate instances, PRStatuses and Approvals)
+// changed since. kro reconciles a Graph only on such events.
+func (w *World) graphQuiet(g *graph.Graph) bool {
+	ns, b := g.Namespace, g.Labels["kardinal.io/bundle"]
+	key := "graph/" + ns + "/" + g.Name
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var heard int64
+	for _, k := range []string{"B:" + ns + "/" + b, "S:" + ns + "/" + b, "GI:" + ns + "/" + b, "PR:" + ns + "/" + b,
+		"A:" + ns + "/" + b, "G:" + ns + "/" + b, "GT:" + ns, "GT:*"} {
+		heard += w.keyWrites[k]
+	}
+	st, ok := w.seen[key]
+	quiet := ok && st.rv == g.ResourceVersion && st.heard == heard
+	if !quiet {
+		w.seen[key] = reconcileState{rv: g.ResourceVersion, heard: heard, reconciled: true}
+	}
+	return quiet
 }

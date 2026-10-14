@@ -331,6 +331,38 @@ jobs:
             echo "::endgroup::"
           done
 
+  # ── Enterprise scenario at full size ─────────────────────────────────────────
+  # test/scenario/enterprise at its full size: 20 team namespaces, 200
+  # Pipelines and 1,000 versions on one fake-client controller. go test ./...
+  # in the build job runs it at a fifth of that (with -race); this job runs
+  # the full size without -race, which would take it past ten minutes.
+  scenario-enterprise:
+    name: scenario enterprise (full size)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Restore the Go build cache
+        # Saved by the go-cache job on main; see there.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-build-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-build-${{ runner.os }}-
+      - name: 200 Pipelines, 1,000 versions, 20 tenants
+        env:
+          KARDINAL_SCENARIO_ENTERPRISE: full
+          KUBECONFIG: /dev/null
+        run: go test ./test/scenario/enterprise/ -count=1 -timeout 15m -v -run 'TestEnterprise_'
+
   # ── golangci-lint ────────────────────────────────────────────────────────────
   golangci-lint:
     name: golangci-lint
