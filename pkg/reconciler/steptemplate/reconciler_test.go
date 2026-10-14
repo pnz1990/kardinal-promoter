@@ -29,15 +29,15 @@ func TestStepTemplate(t *testing.T) {
 		ready         bool
 		reason        string
 	}{
-		{name: "valid", spec: v1alpha1.StepTemplateSpec{Image: "x@sha256:1", ServiceAccountName: "qa"}, ready: true},
-		{name: "tag allowed by default", spec: v1alpha1.StepTemplateSpec{Image: "x:1", ServiceAccountName: "qa"}, ready: true},
-		{name: "tag refused with requireDigest", spec: v1alpha1.StepTemplateSpec{Image: "x:1", ServiceAccountName: "qa"},
+		{name: "valid", spec: v1alpha1.StepTemplateSpec{Image: "x@sha256:1", Agent: "qa"}, ready: true},
+		{name: "tag allowed by default", spec: v1alpha1.StepTemplateSpec{Image: "x:1", Agent: "qa"}, ready: true},
+		{name: "tag refused with requireDigest", spec: v1alpha1.StepTemplateSpec{Image: "x:1", Agent: "qa"},
 			requireDigest: true, reason: "has no digest"},
-		{name: "timeout too long", spec: v1alpha1.StepTemplateSpec{Image: "x", ServiceAccountName: "qa", Timeout: "25h"},
+		{name: "timeout too long", spec: v1alpha1.StepTemplateSpec{Image: "x", Agent: "qa", Timeout: "25h"},
 			reason: "longer than 24h"},
-		{name: "reserved env", spec: v1alpha1.StepTemplateSpec{Image: "x", ServiceAccountName: "qa",
+		{name: "reserved env", spec: v1alpha1.StepTemplateSpec{Image: "x", Agent: "qa",
 			Env: []v1alpha1.StepTemplateEnv{{Name: "KARDINAL_RUN", Value: "1"}}}, reason: "KARDINAL_"},
-		{name: "bad egress", spec: v1alpha1.StepTemplateSpec{Image: "x", ServiceAccountName: "qa",
+		{name: "bad egress", spec: v1alpha1.StepTemplateSpec{Image: "x", Agent: "qa",
 			Egress: []v1alpha1.StepTemplateEgress{{CIDR: "nope"}}}, reason: "egress nope"},
 	}
 	for _, tc := range cases {

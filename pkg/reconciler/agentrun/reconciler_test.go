@@ -17,6 +17,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -28,28 +30,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentrun"
 )
 
 var runNow = time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
-
-const qaUser = "system:serviceaccount:payments:qa"
-
-// fakeAuthz allows exactly the listed "verb resource namespace" triples.
-type fakeAuthz map[string]bool
-
-func (f fakeAuthz) Allowed(_ context.Context, u actor.User, verb, _, resource, sub, ns string) (bool, error) {
-	if sub != "" {
-		resource += "/" + sub
-	}
-	return f[u.Username+" "+verb+" "+resource+" "+ns], nil
-}
-
-func readOnlyAgent() fakeAuthz {
-	return fakeAuthz{qaUser + " create verdicts payments": true}
-}
 
 func scheme(t *testing.T) *runtime.Scheme {
 	s := runtime.NewScheme()
@@ -62,8 +47,7 @@ type fixture struct {
 	run      *v1alpha1.AgentRun
 	bundle   *v1alpha1.Bundle
 	tmpl     *v1alpha1.StepTemplate
-	index    *v1alpha1.AgentIndex
-	authz    fakeAuthz
+	agent    *v1alpha1.AgentIdentity
 	extra    []client.Object
 	notKro   bool
 	recorded string
@@ -76,14 +60,13 @@ func newFixture() *fixture {
 	return &fixture{
 		bundle: bundle,
 		tmpl: &v1alpha1.StepTemplate{ObjectMeta: metav1.ObjectMeta{Name: "qa"},
-			Spec: v1alpha1.StepTemplateSpec{Image: "ghcr.io/x/qa@sha256:abc", ServiceAccountName: "qa", Timeout: "10m",
+			Spec: v1alpha1.StepTemplateSpec{Image: "ghcr.io/x/qa@sha256:abc", Agent: "qa", Timeout: "10m",
 				Egress: []v1alpha1.StepTemplateEgress{{CIDR: "10.20.0.0/16", Ports: []int32{443}}},
 				Env:    []v1alpha1.StepTemplateEnv{{Name: "MODEL", Value: "m"}}}},
-		index: &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal"},
-			Status: v1alpha1.AgentIndexStatus{Users: map[string]v1alpha1.AgentIndexEntry{
-				qaUser: {Agent: "qa", Sponsor: "bob", Namespaces: []string{"payments"}, Pipelines: []string{"*"}, Environments: []string{"*"}},
-			}}},
-		authz: readOnlyAgent(),
+		agent: &v1alpha1.AgentIdentity{ObjectMeta: metav1.ObjectMeta{Name: "qa"},
+			Spec: v1alpha1.AgentIdentitySpec{Sponsor: v1alpha1.AgentSponsor{User: "bob"},
+				Scope: v1alpha1.AgentScope{Namespaces: []string{"payments"}, Pipelines: []string{"*"}, Environments: []string{"*"}}},
+			Status: v1alpha1.AgentIdentityStatus{Ready: true}},
 		extra: []client.Object{&discoveryv1.EndpointSlice{
 			ObjectMeta:  metav1.ObjectMeta{Name: "kubernetes", Namespace: "default"},
 			AddressType: discoveryv1.AddressTypeIPv4,
@@ -105,7 +88,7 @@ func (f *fixture) build(t *testing.T) (*agentrun.Reconciler, client.Client, ctrl
 		delete(run.Labels, graph.LabelKRONodeID)
 	}
 	f.run = run
-	objs := append([]client.Object{run, f.bundle, f.tmpl, f.index}, f.extra...)
+	objs := append([]client.Object{run, f.bundle, f.tmpl, f.agent}, f.extra...)
 	// The API server sets a UID on create; the fake client does not.
 	uids := 0
 	c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(objs...).
@@ -117,7 +100,7 @@ func (f *fixture) build(t *testing.T) (*agentrun.Reconciler, client.Client, ctrl
 			}
 			return cl.Create(ctx, obj, opts...)
 		}}).Build()
-	r := &agentrun.Reconciler{Client: c, Agents: &actor.Source{Reader: c, Name: "kardinal"}, Authorizer: f.authz,
+	r := &agentrun.Reconciler{Client: c, WriterClusterRole: "kardinal-agentrun-writer", ReaderClusterRole: "kardinal-agentrun-reader",
 		ControllerNamespace: "kardinal-system", NowFn: func() time.Time { return runNow }}
 	return r, c, ctrl.Request{NamespacedName: types.NamespacedName{Name: run.Name, Namespace: run.Namespace}}
 }
@@ -139,9 +122,27 @@ func reconcileUntil(t *testing.T, r *agentrun.Reconciler, c client.Client, req c
 func TestAgentRun_RunsBounded(t *testing.T) {
 	f := newFixture()
 	r, c, req := f.build(t)
-	got := reconcileUntil(t, r, c, req, 3)
+	got := reconcileUntil(t, r, c, req, 4)
 	assert.Equal(t, v1alpha1.AgentRunRunning, got.Status.Phase, got.Status.Message)
 	assert.Equal(t, "qa", got.Status.Agent)
+	assert.Equal(t, "bob", got.Status.Sponsor)
+	sa := "kr-" + got.Name
+	assert.Equal(t, sa, got.Status.ServiceAccount)
+	assert.Contains(t, got.Finalizers, agentrun.FinalizerAccess)
+
+	// The run's own identity, owned by the run, bound only to the chart's
+	// AgentRun roles: the writer in the Pipeline's namespace, the reader in
+	// the namespace under test (labelled, as the run cannot own it).
+	var account corev1.ServiceAccount
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "payments", Name: sa}, &account))
+	assert.Equal(t, "run-uid", string(metav1.GetControllerOf(&account).UID))
+	var writer, reader rbacv1.RoleBinding
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "payments", Name: sa}, &writer))
+	assert.Equal(t, "kardinal-agentrun-writer", writer.RoleRef.Name)
+	assert.Equal(t, []rbacv1.Subject{{Kind: "ServiceAccount", Name: sa, Namespace: "payments"}}, writer.Subjects)
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "uat", Name: sa}, &reader))
+	assert.Equal(t, "kardinal-agentrun-reader", reader.RoleRef.Name)
+	assert.Equal(t, "run-uid", reader.Labels[agentrun.LabelAgentRunUID])
 	assert.True(t, meta.IsStatusConditionTrue(got.Status.Conditions, v1alpha1.AgentRunConditionBounded))
 	assert.True(t, runNow.Add(10*time.Minute).Equal(got.Status.Deadline.Time))
 
@@ -151,7 +152,7 @@ func TestAgentRun_RunsBounded(t *testing.T) {
 	assert.Equal(t, int64(600), *job.Spec.ActiveDeadlineSeconds)
 	assert.Equal(t, int32(0), *job.Spec.BackoffLimit)
 	pod := job.Spec.Template.Spec
-	assert.Equal(t, "qa", pod.ServiceAccountName)
+	assert.Equal(t, sa, pod.ServiceAccountName, "never one of the agent's own identities")
 	assert.False(t, *pod.AutomountServiceAccountToken, "the token is projected, short-lived")
 	assert.True(t, *pod.SecurityContext.RunAsNonRoot)
 	ctr := pod.Containers[0]
@@ -175,9 +176,8 @@ func TestAgentRun_RunsBounded(t *testing.T) {
 	md := verdict["metadata"].(map[string]interface{})
 	assert.Equal(t, got.Name, md["name"], "the Verdict is named after the run")
 	spec := verdict["spec"].(map[string]interface{})
-	assert.Equal(t, qaUser, spec["by"])
-	assert.Equal(t, "qa", spec["actor"].(map[string]interface{})["agent"])
-	assert.Equal(t, "bob", spec["actor"].(map[string]interface{})["sponsor"])
+	assert.Equal(t, "system:serviceaccount:payments:"+sa, spec["by"])
+	assert.NotContains(t, spec, "actor", "the Graph names the run's agent from the AgentRun")
 
 	var np networkingv1.NetworkPolicy
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: got.Name, Namespace: "payments"}, &np))
@@ -202,6 +202,11 @@ func TestAgentRun_RunsBounded(t *testing.T) {
 	assert.Equal(t, v1alpha1.AgentRunSucceeded, got.Status.Phase)
 	got = reconcileUntil(t, r, c, req, 1)
 	assert.Equal(t, v1alpha1.AgentRunSucceeded, got.Status.Phase, "terminal")
+	// A finished run keeps no access.
+	assert.NotContains(t, got.Finalizers, agentrun.FinalizerAccess)
+	assert.True(t, apierrors.IsNotFound(c.Get(context.Background(), types.NamespacedName{Namespace: "payments", Name: sa}, &account)))
+	assert.True(t, apierrors.IsNotFound(c.Get(context.Background(), types.NamespacedName{Namespace: "uat", Name: sa}, &reader)))
+	assert.True(t, apierrors.IsNotFound(c.Get(context.Background(), types.NamespacedName{Namespace: "payments", Name: sa}, &writer)))
 }
 
 // TestAgentRun_Refused: every bounds check refuses the run, Failed with
@@ -212,21 +217,12 @@ func TestAgentRun_Refused(t *testing.T) {
 		modify func(f *fixture)
 		want   string
 	}{
-		{"not an agent", func(f *fixture) { f.index.Status.Users = nil }, "is not a registered agent"},
-		{"blocked agent", func(f *fixture) {
-			e := f.index.Status.Users[qaUser]
-			e.Blocked = "suspended"
-			f.index.Status.Users[qaUser] = e
-		}, "suspended"},
-		{"out of scope", func(f *fixture) {
-			e := f.index.Status.Users[qaUser]
-			e.Pipelines = []string{"other"}
-			f.index.Status.Users[qaUser] = e
-		}, "may not act on pipeline app"},
-		{"may patch deployments", func(f *fixture) { f.authz[qaUser+" patch deployments uat"] = true }, "may patch deployments in uat"},
-		{"may read secrets", func(f *fixture) { f.authz[qaUser+" get secrets payments"] = true }, "may get secrets in payments"},
-		{"may create bundles", func(f *fixture) { f.authz[qaUser+" create bundles payments"] = true }, "may create bundles"},
-		{"may not write verdicts", func(f *fixture) { f.authz = fakeAuthz{} }, "may not create verdicts"},
+		{"not registered", func(f *fixture) { f.agent.Name = "other" }, "agent qa (StepTemplate qa) is not registered"},
+		{"suspended", func(f *fixture) { f.agent.Spec.Suspended = true }, "agent qa is suspended"},
+		{"not ready", func(f *fixture) { f.agent.Status = v1alpha1.AgentIdentityStatus{Reason: "SubjectConflict"} }, "is not ready: SubjectConflict"},
+		{"namespace out of scope", func(f *fixture) { f.agent.Spec.Scope.Namespaces = []string{"billing"} }, "may not act in namespace payments"},
+		{"pipeline out of scope", func(f *fixture) { f.agent.Spec.Scope.Pipelines = []string{"other"} }, "may not act on pipeline app"},
+		{"environment out of scope", func(f *fixture) { f.agent.Spec.Scope.Environments = []string{"test"} }, "may not act in environment uat"},
 		{"no template", func(f *fixture) { f.tmpl.Name = "other" }, "StepTemplate qa does not exist"},
 		{"unlabelled secret", func(f *fixture) {
 			f.tmpl.Spec.SecretEnv = []v1alpha1.StepTemplateSecretEnv{{Name: "KEY", Secret: "git", Key: "token"}}
@@ -274,7 +270,7 @@ func TestAgentRun_LabelledSecret(t *testing.T) {
 	f.extra = append(f.extra, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "model", Namespace: "payments",
 		Labels: map[string]string{agentrun.LabelStepTemplateSecret: "qa"}}})
 	r, c, req := f.build(t)
-	got := reconcileUntil(t, r, c, req, 3)
+	got := reconcileUntil(t, r, c, req, 4)
 	require.Equal(t, v1alpha1.AgentRunRunning, got.Status.Phase, got.Status.Message)
 	var job batchv1.Job
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: got.Name, Namespace: "payments"}, &job))
@@ -316,7 +312,7 @@ func TestAgentRun_NotRunAgain(t *testing.T) {
 func TestAgentRun_Deadline(t *testing.T) {
 	f := newFixture()
 	r, c, req := f.build(t)
-	reconcileUntil(t, r, c, req, 3)
+	reconcileUntil(t, r, c, req, 4)
 	r.NowFn = func() time.Time { return runNow.Add(11 * time.Minute) }
 	got := reconcileUntil(t, r, c, req, 1)
 	assert.Equal(t, v1alpha1.AgentRunFailed, got.Status.Phase)
@@ -324,7 +320,7 @@ func TestAgentRun_Deadline(t *testing.T) {
 
 	f = newFixture()
 	r, c, req = f.build(t)
-	got = reconcileUntil(t, r, c, req, 3)
+	got = reconcileUntil(t, r, c, req, 4)
 	require.NoError(t, c.Delete(context.Background(), &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: got.Name, Namespace: "payments"}}))
 	got = reconcileUntil(t, r, c, req, 1)
 	assert.Equal(t, v1alpha1.AgentRunFailed, got.Status.Phase)
@@ -332,3 +328,18 @@ func TestAgentRun_Deadline(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// TestAgentRun_DeletedMidRun: an AgentRun deleted while its Job runs gives
+// up its access (ServiceAccount, RoleBindings) before it goes.
+func TestAgentRun_DeletedMidRun(t *testing.T) {
+	f := newFixture()
+	r, c, req := f.build(t)
+	got := reconcileUntil(t, r, c, req, 4)
+	require.Equal(t, v1alpha1.AgentRunRunning, got.Status.Phase)
+	require.NoError(t, c.Delete(context.Background(), &got))
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	var reader rbacv1.RoleBinding
+	assert.True(t, apierrors.IsNotFound(c.Get(context.Background(), types.NamespacedName{Namespace: "uat", Name: "kr-" + got.Name}, &reader)))
+	assert.True(t, apierrors.IsNotFound(c.Get(context.Background(), req.NamespacedName, &got)), "the finalizer is gone, so is the run")
+}

@@ -103,6 +103,7 @@ func TestPolicyGateReconciler_Verify(t *testing.T) {
 			gate.Spec.Verify = &p
 			gate.Spec.Verdicts = tc.verdicts
 			bundle := makeBundle("nginx-demo-v1", "default")
+			bundle.UID = "uid"
 			bundle.Status.Phase = "Promoting"
 			bundle.Annotations = map[string]string{"kardinal.io/created-by": "alice"}
 			bundle.Spec.Actor = tc.author
@@ -145,6 +146,7 @@ func TestPolicyGateReconciler_VerdictAudit(t *testing.T) {
 		AllowedAgents: []string{"qa"}}
 	gate.Spec.Verdicts = []kardinalv1alpha1.GateVerdict{agentVerdict("r1", "qa", "bob", "pass", 1, 1, 0)}
 	bundle := makeBundle("nginx-demo-v1", "default")
+	bundle.UID = "uid"
 	bundle.Status.Phase = "Promoting"
 	bundle.Annotations = map[string]string{"kardinal.io/created-by": "alice"}
 	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(gate, bundle).WithStatusSubresource(gate, bundle).Build()

@@ -53,7 +53,7 @@ func tallyVerdicts(gate *kardinalv1alpha1.PolicyGate, bundle *kardinalv1alpha1.B
 	if p != nil {
 		deadline = lifecycle.VerifyDeadline(p, healthCheckedAt(bundle, p.Environment))
 	}
-	return lifecycle.TallyVerdicts(gate, bundleAuthor(bundle), deadline, now)
+	return lifecycle.TallyVerdicts(gate, bundleAuthor(bundle), string(bundle.UID), deadline, now)
 }
 
 // untilDeadline is how long until a waiting verify gate's deadline, so the

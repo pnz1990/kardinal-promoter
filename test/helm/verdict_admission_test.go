@@ -44,6 +44,7 @@ func TestIdentityAdmission_Verdicts(t *testing.T) {
 	agent := "system:serviceaccount:payments:qa"
 	sa := []interface{}{"system:serviceaccounts", "system:serviceaccounts:payments", "system:authenticated"}
 	run := "app-app-v1-uat-explore-r1-a1"
+	runSA := "system:serviceaccount:payments:kr-" + run
 	tests := []struct {
 		name     string
 		obj, old map[string]interface{}
@@ -61,14 +62,24 @@ func TestIdentityAdmission_Verdicts(t *testing.T) {
 			user: "alice", want: false},
 		{name: "owned by its Bundle", obj: withOwner(verdict("v", "alice", nil), "Bundle", "app-v1", "uid-1"), user: "alice", want: true},
 		{name: "owned by another Bundle", obj: withOwner(verdict("v", "alice", nil), "Bundle", "app-v0", "uid-0"), user: "alice", want: false},
-		{name: "a run's Verdict from its Pod", obj: withRun(verdict(run, agent, nil), run), user: agent, groups: sa,
+		{name: "a run's Verdict from its Pod, as the run's ServiceAccount", obj: withRun(verdict(run, runSA, nil), run), user: runSA, groups: sa,
 			request: []map[string]interface{}{pod(run + "-x7k2p")}, want: true},
-		{name: "a run's Verdict without a Pod (a minted token)", obj: withRun(verdict(run, agent, nil), run), user: agent, groups: sa,
+		{name: "a run's Verdict without a Pod (a minted token)", obj: withRun(verdict(run, runSA, nil), run), user: runSA, groups: sa,
 			want: false},
-		{name: "a run's Verdict from another run's Pod", obj: withRun(verdict(run, agent, nil), run), user: agent, groups: sa,
-			request: []map[string]interface{}{pod("app-app-v1-uat-explore-r2-a1-x7k2p")}, want: false},
-		{name: "a run's Verdict not named after the run", obj: withRun(verdict("extra-vote", agent, nil), run), user: agent, groups: sa,
+		{name: "a run's Verdict written by the agent's own ServiceAccount", obj: withRun(verdict(run, agent, nil), run), user: agent, groups: sa,
 			request: []map[string]interface{}{pod(run + "-x7k2p")}, want: false},
+		{name: "a run's Verdict from another run's Pod", obj: withRun(verdict(run, runSA, nil), run), user: runSA, groups: sa,
+			request: []map[string]interface{}{pod("app-app-v1-uat-explore-r2-a1-x7k2p")}, want: false},
+		{name: "run X's ServiceAccount claims run X-r2 (another run)",
+			obj: withRun(verdict(run+"-r2", runSA, nil), run+"-r2"), user: runSA, groups: sa,
+			request: []map[string]interface{}{pod(run + "-r2-x7k2p")}, want: false},
+		{name: "a Pod of run X-y… is not run X's Pod (no prefix match)", obj: withRun(verdict(run, runSA, nil), run), user: runSA, groups: sa,
+			request: []map[string]interface{}{pod(run + "-extra-x7k2p")}, want: false},
+		{name: "a run's Verdict not named after the run", obj: withRun(verdict("extra-vote", runSA, nil), run), user: runSA, groups: sa,
+			request: []map[string]interface{}{pod(run + "-x7k2p")}, want: false},
+		{name: "a run's ServiceAccount cannot write an unbound Verdict (a second vote)", obj: verdict("extra", runSA, nil), user: runSA,
+			groups: sa, request: []map[string]interface{}{pod(run + "-x7k2p")}, want: false},
+		{name: "an agent's own ServiceAccount writes an unbound Verdict", obj: verdict("v", agent, nil), user: agent, groups: sa, want: true},
 		{name: "the writer revokes", old: verdict("v", "alice", nil), user: "alice", want: true},
 		{name: "someone else revokes", old: verdict("v", "alice", nil), user: "mallory", want: false},
 		{name: "the garbage collector deletes with the Bundle", old: verdict("v", "alice", nil),

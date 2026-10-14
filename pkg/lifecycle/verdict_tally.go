@@ -173,9 +173,11 @@ func voterOf(v kardinalv1alpha1.GateVerdict, a kardinalv1alpha1.Actor) string {
 }
 
 // TallyVerdicts counts gate's spec.verdicts for its Bundle against
-// spec.verify. author is the version's author (its Bundle's actor), deadline
-// the end of the wait (VerifyDeadline) and now the evaluation time.
-func TallyVerdicts(gate *kardinalv1alpha1.PolicyGate, author kardinalv1alpha1.Actor,
+// spec.verify. author is the version's author (its Bundle's actor),
+// bundleUID the Bundle's UID (a verdict for another UID never counts, even
+// if the Graph copied it), deadline the end of the wait (VerifyDeadline) and
+// now the evaluation time.
+func TallyVerdicts(gate *kardinalv1alpha1.PolicyGate, author kardinalv1alpha1.Actor, bundleUID string,
 	deadline *time.Time, now time.Time) VerdictTally {
 	p := VerifyPolicyOf(gate)
 	t := VerdictTally{Policy: p, Deadline: deadline}
@@ -212,6 +214,8 @@ func TallyVerdicts(gate *kardinalv1alpha1.PolicyGate, author kardinalv1alpha1.Ac
 		switch {
 		case (bundle != "" && v.Bundle != bundle) || (env != "" && v.Environment != env) || v.Check != p.Check:
 			rec.Reason = fmt.Sprintf("for bundle %s, %s, check %s: not this gate's", v.Bundle, v.Environment, v.Check)
+		case v.BundleUID != bundleUID:
+			rec.Reason = "for another version of " + v.Bundle + " (UID " + v.BundleUID + ")"
 		default:
 			if ok, why := VerdictWriterAllowed(p, a, v.Groups); !ok {
 				rec.Reason = why

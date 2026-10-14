@@ -12,6 +12,8 @@ built-in ones: a flag whose help names a `KARDINAL_*` variable reads it as its d
 | `--access-log-source-ip` | bool | `false` | Add the client address to each access log line. Chart value: controller.accessLog.sourceIP. |
 | `--access-log-trusted-proxies` | string |  | Comma-separated CIDRs of proxies (an Ingress controller) whose X-Forwarded-For gives the client address in the access log. Chart value: controller.accessLog.trustedProxies. |
 | `--agent-index` | string |  | Name of the AgentIndex this controller builds from the AgentIdentities and stamps the UI API's and the Bundle API's writes from (the chart's actor admission policy reads it; Helm sets the release name). Empty: no agent registry, every caller is a person or a bot (docs/actors.md). |
+| `--agentrun-reader-clusterrole` | string | `"kardinal-agentrun-reader"` | ClusterRole bound to an AgentRun's own ServiceAccount in the namespace it tests (read it). |
+| `--agentrun-writer-clusterrole` | string | `"kardinal-agentrun-writer"` | ClusterRole bound to an AgentRun's own ServiceAccount in the Pipeline namespace (create its Verdict). |
 | `--api-audit-events` | bool | `true` | Write an AuditEvent (action APIWrite) naming the caller for every write through the UI API and the Bundle API. Chart value: controller.accessLog.auditEvents. |
 | `--audit-retention` | bool | `true` | Delete AuditEvents past their retention (--audit-retention-max-age, --audit-retention-max-per-pipeline). On by default: unbounded records fill etcd, which takes down the whole cluster. false keeps every record (export them first: docs/guides/security.md, Retention). |
 | `--audit-retention-interval` | duration | `10m0s` | How often the leader applies AuditEvent retention. |

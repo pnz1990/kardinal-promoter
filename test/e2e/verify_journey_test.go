@@ -16,6 +16,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -58,6 +59,7 @@ func newVerifyWorld(t *testing.T, policy v1alpha1.GateVerifyPolicy) *verifyWorld
 	require.NoError(t, batchv1.AddToScheme(s))
 	require.NoError(t, networkingv1.AddToScheme(s))
 	require.NoError(t, discoveryv1.AddToScheme(s))
+	require.NoError(t, rbacv1.AddToScheme(s))
 	agent := func(name, sponsor string) *v1alpha1.AgentIdentity {
 		return &v1alpha1.AgentIdentity{ObjectMeta: metav1.ObjectMeta{Name: name, Generation: 1},
 			Spec: v1alpha1.AgentIdentitySpec{
@@ -96,7 +98,7 @@ func newVerifyWorld(t *testing.T, policy v1alpha1.GateVerifyPolicy) *verifyWorld
 			&discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Name: "kubernetes", Namespace: "default"},
 				AddressType: discoveryv1.AddressTypeIPv4, Endpoints: []discoveryv1.Endpoint{{Addresses: []string{"172.18.0.2"}}}},
 			&v1alpha1.StepTemplate{ObjectMeta: metav1.ObjectMeta{Name: "qa-explorer"},
-				Spec: v1alpha1.StepTemplateSpec{Image: "kardinal-test-agent:e2e", ServiceAccountName: "qa-explorer", Timeout: "10m"}}).
+				Spec: v1alpha1.StepTemplateSpec{Image: "kardinal-test-agent:e2e", Agent: "qa-explorer", Timeout: "10m"}}).
 		WithStatusSubresource(&v1alpha1.AgentIdentity{}, &v1alpha1.AgentIndex{}, &v1alpha1.Bundle{}, &v1alpha1.PolicyGate{},
 			&v1alpha1.AgentRun{}, &batchv1.Job{}).
 		WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
@@ -127,7 +129,9 @@ func newVerifyWorld(t *testing.T, policy v1alpha1.GateVerifyPolicy) *verifyWorld
 func saUser(name string) string { return "system:serviceaccount:" + verifyNS + ":" + name }
 
 // verdict writes a Verdict as the agent (or person) by would, with the stamp
-// the index gives it; run > 0 binds it to an AgentRun.
+// the index gives it; run > 0 binds it to an AgentRun of agent by, and the
+// run's own ServiceAccount writes it (the Graph names agent by as its actor,
+// from the AgentRun).
 func (w *verifyWorld) verdict(by, result string, run, attempt int, mutate ...func(*v1alpha1.Verdict)) {
 	w.t.Helper()
 	r, err := w.agents.Resolve(w.ctx, actor.User{Username: by}, actor.Where{Namespace: verifyNS, Pipeline: "checkout", Environment: "uat"})
@@ -140,6 +144,10 @@ func (w *verifyWorld) verdict(by, result string, run, attempt int, mutate ...fun
 	if run > 0 {
 		v.Name = graph.AgentRunName("checkout", w.bundle.Name, "uat", "explore", run, attempt)
 		v.Spec.Run = &v1alpha1.VerdictRun{Name: v.Name, Index: run, Attempt: attempt}
+		v.Spec.By = graph.RunServiceAccountUser(verifyNS, v.Name)
+		agent := *actor.Stamp(r, nil)
+		agent.Principal = v.Spec.By
+		v.Spec.Actor = &agent // what the Graph copies: the AgentRun's agent
 	}
 	for _, m := range mutate {
 		m(v)
@@ -163,7 +171,9 @@ func (w *verifyWorld) copyVerdicts() {
 		agent := v.Spec.Actor != nil && v.Spec.Actor.Kind == v1alpha1.ActorAgent
 		allowed := (agent && contains(p.AllowedAgents, v.Spec.Actor.Agent)) ||
 			(!agent && (len(p.AllowedUsers) == 0 && len(p.AllowedGroups) == 0 || contains(p.AllowedUsers, v.Spec.By)))
-		if v.Spec.BundleUID != string(w.bundle.UID) || v.Spec.Pipeline != "checkout" || v.Spec.Environment != p.Environment ||
+		// The Bundle UID is not filtered here: the tally refuses another
+		// version's Verdict on its own (the Graph filters it too).
+		if v.Spec.Pipeline != "checkout" || v.Spec.Environment != p.Environment ||
 			v.Spec.Check != p.Check || !allowed {
 			continue
 		}
@@ -260,7 +270,9 @@ func TestJourney9AgentVerification(t *testing.T) {
 		w.verdict(saUser("qa-explorer"), "pass", 0, 0, func(v *v1alpha1.Verdict) { v.Spec.BundleUID = "uid-of-an-earlier-checkout-v2" })
 		g := w.evaluate()
 		assert.False(t, g.Status.Ready)
-		assert.Empty(t, g.Status.Verdicts)
+		require.Len(t, g.Status.Verdicts, 1)
+		assert.False(t, g.Status.Verdicts[0].Counted)
+		assert.Contains(t, g.Status.Verdicts[0].Reason, "for another version")
 	})
 
 	t.Run("a fail blocks", func(t *testing.T) {
@@ -291,14 +303,20 @@ func TestJourney9AgentVerification(t *testing.T) {
 }
 
 // TestJourney9AgentRun: the gate's AgentRun runs the registered agent
-// bounded: its Job is restricted, runs as the agent with the run's context,
-// and has a NetworkPolicy; an agent whose RBAC can write workloads is
-// refused.
+// bounded: its Job runs as the run's own ServiceAccount, bound only to the
+// chart's AgentRun roles, with the run's context and a NetworkPolicy, and
+// the run's access is gone once it finished; a suspended agent is refused.
 func TestJourney9AgentRun(t *testing.T) {
 	p := v1alpha1.GateVerifyPolicy{Check: "explore", AllowedAgents: []string{"qa-explorer"},
 		Run: &v1alpha1.GateVerifyRun{Template: "qa-explorer", Count: 1}}
-	for _, wide := range []bool{false, true} {
+	for _, suspended := range []bool{false, true} {
 		w := newVerifyWorld(t, p)
+		if suspended {
+			var id v1alpha1.AgentIdentity
+			require.NoError(t, w.c.Get(w.ctx, client.ObjectKey{Name: "qa-explorer"}, &id))
+			id.Spec.Suspended = true
+			require.NoError(t, w.c.Update(w.ctx, &id))
+		}
 		name := graph.AgentRunName("checkout", w.bundle.Name, "uat", "explore", 1, 1)
 		run := &v1alpha1.AgentRun{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: verifyNS,
 			Labels: map[string]string{graph.LabelKRONodeID: graph.NodeAgentRuns, graph.LabelBundleUID: string(w.bundle.UID)}},
@@ -307,12 +325,8 @@ func TestJourney9AgentRun(t *testing.T) {
 					Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "uat"}}}}, "uat"),
 				Check: "explore", Template: "qa-explorer", Run: 1, Attempt: 1}}
 		require.NoError(t, w.c.Create(w.ctx, run))
-		authz := journeyAuthz{saUser("qa-explorer") + " create verdicts " + verifyNS: true}
-		if wide {
-			authz[saUser("qa-explorer")+" patch deployments uat"] = true
-		}
-		r := &agentrun.Reconciler{Client: w.c, Agents: w.agents, Authorizer: authz, NowFn: func() time.Time { return w.now }}
-		for range 3 {
+		r := &agentrun.Reconciler{Client: w.c, WriterClusterRole: "w", ReaderClusterRole: "r", NowFn: func() time.Time { return w.now }}
+		for range 4 {
 			_, err := r.Reconcile(w.ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)})
 			require.NoError(t, err)
 		}
@@ -320,33 +334,27 @@ func TestJourney9AgentRun(t *testing.T) {
 		require.NoError(t, w.c.Get(w.ctx, client.ObjectKeyFromObject(run), &got))
 		var job batchv1.Job
 		jobErr := w.c.Get(w.ctx, client.ObjectKeyFromObject(run), &job)
-		if wide {
+		if suspended {
 			assert.Equal(t, v1alpha1.AgentRunFailed, got.Status.Phase)
-			assert.Contains(t, got.Status.Message, "may patch deployments in uat")
-			assert.Error(t, jobErr, "no Job for an unbounded agent")
+			assert.Contains(t, got.Status.Message, "agent qa-explorer is suspended")
+			assert.Error(t, jobErr, "no Job for a suspended agent")
 			continue
 		}
 		require.Equal(t, v1alpha1.AgentRunRunning, got.Status.Phase, got.Status.Message)
 		require.NoError(t, jobErr)
-		assert.Equal(t, "qa-explorer", job.Spec.Template.Spec.ServiceAccountName)
-		assert.Contains(t, job.Spec.Template.Annotations[agentrun.AnnotationContext], `"agent":"qa-explorer"`)
+		assert.Equal(t, "kr-"+name, job.Spec.Template.Spec.ServiceAccountName)
+		assert.Equal(t, "bob", got.Status.Sponsor)
 		var np networkingv1.NetworkPolicy
 		require.NoError(t, w.c.Get(w.ctx, client.ObjectKeyFromObject(run), &np))
 		job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
 		require.NoError(t, w.c.Status().Update(w.ctx, &job))
-		_, err := r.Reconcile(w.ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)})
-		require.NoError(t, err)
+		for range 2 {
+			_, err := r.Reconcile(w.ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)})
+			require.NoError(t, err)
+		}
 		require.NoError(t, w.c.Get(w.ctx, client.ObjectKeyFromObject(run), &got))
 		assert.Equal(t, v1alpha1.AgentRunSucceeded, got.Status.Phase)
+		var sa corev1.ServiceAccount
+		assert.Error(t, w.c.Get(w.ctx, client.ObjectKey{Namespace: verifyNS, Name: "kr-" + name}, &sa), "the run's identity is deleted")
 	}
-}
-
-// journeyAuthz allows exactly the listed "user verb resource namespace".
-type journeyAuthz map[string]bool
-
-func (a journeyAuthz) Allowed(_ context.Context, u actor.User, verb, _, resource, sub, ns string) (bool, error) {
-	if sub != "" {
-		resource += "/" + sub
-	}
-	return a[u.Username+" "+verb+" "+resource+" "+ns], nil
 }

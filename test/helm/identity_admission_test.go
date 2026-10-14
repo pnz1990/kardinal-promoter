@@ -608,7 +608,7 @@ func TestIdentityAdmission_GraphObjects(t *testing.T) {
 	assert.True(t, strings.HasPrefix(vap.Spec.Validations[0].Expression, "request.operation == 'DELETE' ||"),
 		"the create/change rule leaves deletes to the next")
 	assert.Contains(t, vap.Spec.Validations[1].Expression, "request.operation != 'DELETE'")
-	assert.Contains(t, vap.Spec.Validations[1].Message, "HookRuns and AgentRuns record that a hook or an agent ran; only kardinal deletes them")
+	assert.Contains(t, vap.Spec.Validations[1].Message, "HookRuns record that a hook ran; only kardinal deletes them")
 	assert.NotContains(t, vap.Spec.Validations[1].Message, "recreates it")
 	rules = append(rules[:1], rules[2:]...)
 	assert.ElementsMatch(t, []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update},

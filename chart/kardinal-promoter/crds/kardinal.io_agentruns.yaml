@@ -140,8 +140,10 @@ spec:
             description: AgentRunStatus is the observed state of an AgentRun.
             properties:
               agent:
-                description: Agent is the agent the run's ServiceAccount is (AgentIdentity
-                  name).
+                description: |-
+                  Agent and Sponsor are the agent the run verifies for (its
+                  StepTemplate's AgentIdentity) and that agent's sponsor, when the run
+                  started. The Graph names them as the actor of the run's Verdict.
                 type: string
               conditions:
                 description: 'Conditions: Bounded.'
@@ -236,6 +238,14 @@ spec:
                 - message: a finished AgentRun's phase cannot change
                   rule: '!(oldSelf in [''Succeeded'', ''Failed'', ''Skipped'']) ||
                     self == oldSelf'
+              serviceAccount:
+                description: |-
+                  ServiceAccount is the ServiceAccount kardinal created for the run
+                  (kr-<run>): the only identity that may write the run's Verdict. It is
+                  deleted, with its access, when the run ends.
+                type: string
+              sponsor:
+                type: string
               startedAt:
                 description: StartedAt is when the Job was created.
                 format: date-time

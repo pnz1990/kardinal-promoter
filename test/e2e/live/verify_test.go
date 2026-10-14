@@ -15,7 +15,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -27,47 +26,28 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
 
-// verifierRole is the chart's verifier ClusterRole (user-roles.yaml): read
-// and create Verdicts.
+// verifierRole is the chart's verifier ClusterRole (user-roles.yaml): read,
+// create and revoke Verdicts.
 const verifierRole = framework.ControllerDeployment + "-verifier"
 
 // agentRunTimeout bounds an AgentRun from its environment's Verified to its
 // Verdict: the Job's Pod starts from a loaded image and probes for seconds.
 const agentRunTimeout = 3 * time.Minute
 
-// registerAgent registers ServiceAccount name of ns as agent <name>-<ns>
-// sponsored by sponsor, binds it to the verifier role and lets it list the
-// namespace's Services (what the test agent probes), plus extra rules, and
-// registers the test agent image as StepTemplate <name>-<ns> running as it,
-// with env. It returns the agent's and the template's name. The cleanup
-// suspends the agent before deleting it, as admission requires.
-func registerAgent(t *testing.T, e *framework.Env, ns, name, sponsor string, env map[string]string, extra ...rbacv1.PolicyRule) string {
+// registerAgent registers agent <name>-<ns> sponsored by sponsor (its
+// subject is a placeholder user: an AgentRun runs as its own ServiceAccount,
+// not as one of the agent's), and the test agent image as StepTemplate
+// <name>-<ns> for it, with env. It returns the agent's (and the template's)
+// name. The cleanup suspends the agent before deleting it, as admission
+// requires.
+func registerAgent(t *testing.T, e *framework.Env, ns, name, sponsor string, env map[string]string) string {
 	t.Helper()
 	ctx := context.Background()
 	image := os.Getenv("KARDINAL_E2E_TEST_AGENT_IMAGE")
 	require.NotEmpty(t, image, "KARDINAL_E2E_TEST_AGENT_IMAGE: hack/e2e/components/test-agent.sh did not run")
 	agent := name + "-" + ns
-	_, err := e.Kube.CoreV1().ServiceAccounts(ns).Create(ctx, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: name}}, metav1.CreateOptions{})
-	require.NoError(t, err)
-	_, err = e.Kube.RbacV1().RoleBindings(ns).Create(ctx, &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: name + "-verifier", Namespace: ns},
-		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: verifierRole},
-		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: name, Namespace: ns}},
-	}, metav1.CreateOptions{})
-	require.NoError(t, err)
-	rules := append([]rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"services"}, Verbs: []string{"get", "list"}}}, extra...)
-	_, err = e.Kube.RbacV1().Roles(ns).Create(ctx, &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: name + "-probe", Namespace: ns},
-		Rules: rules}, metav1.CreateOptions{})
-	require.NoError(t, err)
-	_, err = e.Kube.RbacV1().RoleBindings(ns).Create(ctx, &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: name + "-probe", Namespace: ns},
-		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: name + "-probe"},
-		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: name, Namespace: ns}},
-	}, metav1.CreateOptions{})
-	require.NoError(t, err)
-
 	id := &v1alpha1.AgentIdentity{ObjectMeta: metav1.ObjectMeta{Name: agent},
-		Spec: v1alpha1.AgentIdentitySpec{Subjects: []v1alpha1.AgentSubject{{Kind: "ServiceAccount", Namespace: ns, Name: name}},
+		Spec: v1alpha1.AgentIdentitySpec{Subjects: []v1alpha1.AgentSubject{{Kind: "User", Name: agent + "@agents.example.com"}},
 			Sponsor: v1alpha1.AgentSponsor{User: sponsor}, Scope: v1alpha1.AgentScope{Namespaces: []string{ns}},
 			Autonomy: v1alpha1.AutonomyApprove}}
 	require.NoError(t, e.Client.Create(ctx, id))
@@ -85,7 +65,7 @@ func registerAgent(t *testing.T, e *framework.Env, ns, name, sponsor string, env
 		envs = append(envs, v1alpha1.StepTemplateEnv{Name: k, Value: v})
 	}
 	tmpl := &v1alpha1.StepTemplate{ObjectMeta: metav1.ObjectMeta{Name: agent},
-		Spec: v1alpha1.StepTemplateSpec{Image: image, ServiceAccountName: name, Timeout: "5m", Env: envs}}
+		Spec: v1alpha1.StepTemplateSpec{Image: image, Agent: agent, Timeout: "5m", Env: envs}}
 	require.NoError(t, e.Client.Create(ctx, tmpl))
 	t.Cleanup(func() { _ = e.Client.Delete(context.Background(), tmpl) })
 	framework.Eventually(t, time.Minute, "agent "+agent+" registered and its StepTemplate ready", func(ctx context.Context) (bool, string) {
@@ -97,14 +77,8 @@ func registerAgent(t *testing.T, e *framework.Env, ns, name, sponsor string, env
 		if err := e.Client.Get(ctx, client.ObjectKeyFromObject(tmpl), &st); err != nil {
 			return false, err.Error()
 		}
-		// The AgentRun reconciler reads the agent from the release's index.
-		var idx v1alpha1.AgentIndex
-		if err := e.Client.Get(ctx, client.ObjectKey{Name: framework.ControllerDeployment}, &idx); err != nil {
-			return false, err.Error()
-		}
-		_, indexed := idx.Status.Users["system:serviceaccount:"+ns+":"+name]
-		return got.Status.Ready && st.Status.Ready && indexed, fmt.Sprintf("agent ready=%v (%s), template ready=%v (%s), indexed=%v",
-			got.Status.Ready, got.Status.Reason, st.Status.Ready, st.Status.Reason, indexed)
+		return got.Status.Ready && st.Status.Ready, fmt.Sprintf("agent ready=%v (%s), template ready=%v (%s)",
+			got.Status.Ready, got.Status.Reason, st.Status.Ready, st.Status.Reason)
 	})
 	return agent
 }
@@ -118,43 +92,13 @@ func agentRuns(ctx context.Context, e *framework.Env, ns, bundle string) ([]v1al
 	return list.Items, nil
 }
 
-// verifyGate is a prod gate waiting for check explore in uat.
-func verifyGate(ns string, p v1alpha1.GateVerifyPolicy) *v1alpha1.PolicyGate {
-	g := framework.Gate(ns, "explore-qa", "prod", "true", recheck)
-	p.Check = "explore"
-	g.Spec.Verify = &p
-	return g
-}
-
-// TestGate_VerifyAgentRuns registers a test agent (hack/e2e/testagent) as an
-// agent and a StepTemplate, and puts a verify gate on prod that runs it twice
-// and needs both runs to pass. Once uat is Verified the Graph creates two
-// AgentRuns; each runs a restricted Job as the agent, with a NetworkPolicy
-// that blocks every address but DNS, the API server and the namespace under
-// test (the agent finds the webhook receiver unreachable); each run's Pod
-// writes one run-bound Verdict. The gate waits ("waiting for verdicts"), then
-// passes with "verified: 2 of 2", and prod promotes. The verdicts are in the
-// gate's status.verdicts, each written by the agent and bound to its run.
-//
-// Covers GATE-VERIFY-01, GATE-VERIFY-02, GATE-VERIFY-03.
-func TestGate_VerifyAgentRuns(t *testing.T) {
-	t.Parallel()
-	e := framework.New(t)
-	ctx := context.Background()
-	a := newArgoApp(t, e, "uat", "prod")
-	forbidden := strings.TrimRight(os.Getenv(framework.EnvReceiverURL), "/") + "/_healthz"
-	require.NotEqual(t, "/_healthz", forbidden, "the webhook receiver is installed in the core suite")
-	// kindnet enforces a NetworkPolicy for a new Pod about a second after it
-	// gets its IP (TestChart_NetworkPolicy): the agent waits before probing.
-	agent := registerAgent(t, e, a.ns, "qa", "bob@example.com", map[string]string{"PROBE_FORBIDDEN": forbidden, "PROBE_DELAY": "5s"})
-	e.CreateGate(t, verifyGate(a.ns, v1alpha1.GateVerifyPolicy{Required: 2, AllowedAgents: []string{agent},
-		Run: &v1alpha1.GateVerifyRun{Template: agent, Count: 2, Namespace: a.ns}}))
-	a.apply(t, a.pipeline(nil))
-	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
-	e.WaitStepState(t, a.ns, pipelineName, bundle, "uat", "Verified", promoteTimeout)
-
-	framework.Eventually(t, agentRunTimeout, "both AgentRuns finished", func(ctx context.Context) (bool, string) {
-		runs, err := agentRuns(ctx, e, a.ns, bundle)
+// waitRuns waits until n AgentRuns of bundle finished, every one Succeeded.
+func waitRuns(t *testing.T, e *framework.Env, ns, bundle string, n int) []v1alpha1.AgentRun {
+	t.Helper()
+	var runs []v1alpha1.AgentRun
+	framework.Eventually(t, agentRunTimeout, fmt.Sprintf("%d AgentRuns finished", n), func(ctx context.Context) (bool, string) {
+		var err error
+		runs, err = agentRuns(ctx, e, ns, bundle)
 		if err != nil {
 			return false, err.Error()
 		}
@@ -169,22 +113,61 @@ func TestGate_VerifyAgentRuns(t *testing.T) {
 				done++
 			}
 		}
-		return len(runs) == 2 && done == 2, strings.Join(states, ", ")
+		return len(runs) == n && done == n, strings.Join(states, ", ")
 	})
+	return runs
+}
+
+// verifyGate is a prod gate waiting for check explore in uat.
+func verifyGate(ns string, p v1alpha1.GateVerifyPolicy) *v1alpha1.PolicyGate {
+	g := framework.Gate(ns, "explore-qa", "prod", "true", recheck)
+	p.Check = "explore"
+	g.Spec.Verify = &p
+	return g
+}
+
+// TestGate_VerifyAgentRuns registers a test agent (hack/e2e/testagent) and a
+// StepTemplate for it, and puts a verify gate on prod that runs it twice and
+// needs both runs to pass. Once uat is Verified the Graph creates two
+// AgentRuns. Each runs its Job as its own ServiceAccount (kr-<run>), bound
+// only to the chart's AgentRun roles, with a NetworkPolicy that blocks every
+// address but DNS, the API server and the namespace under test (the agent
+// finds the webhook receiver unreachable). Each run's Pod writes one
+// run-bound Verdict; its attempt at a second, unbound Verdict is refused by
+// admission. The gate waits, then passes with "verified: 2 of 2", and prod
+// promotes. status.verdicts names the run's agent and sponsor, from the
+// AgentRun. Each run's ServiceAccount and RoleBindings are gone once it
+// finished.
+//
+// Covers GATE-VERIFY-01, GATE-VERIFY-02, GATE-VERIFY-03.
+func TestGate_VerifyAgentRuns(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "uat", "prod")
+	forbidden := strings.TrimRight(os.Getenv(framework.EnvReceiverURL), "/") + "/_healthz"
+	require.NotEqual(t, "/_healthz", forbidden, "the webhook receiver is installed in the core suite")
+	// kindnet enforces a NetworkPolicy for a new Pod about a second after it
+	// gets its IP (TestChart_NetworkPolicy): the agent waits before probing.
+	agent := registerAgent(t, e, a.ns, "qa", "bob@example.com",
+		map[string]string{"PROBE_FORBIDDEN": forbidden, "PROBE_DELAY": "5s", "PROBE_EXTRA": "1"})
+	e.CreateGate(t, verifyGate(a.ns, v1alpha1.GateVerifyPolicy{Required: 2, AllowedAgents: []string{agent},
+		Run: &v1alpha1.GateVerifyRun{Template: agent, Count: 2, Namespace: a.ns}}))
+	a.apply(t, a.pipeline(nil))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "uat", "Verified", promoteTimeout)
+	runs := waitRuns(t, e, a.ns, bundle, 2)
 	e.WaitGateReady(t, a.ns, bundle, "prod", "explore-qa", true, "verified: 2 of 2 ("+agent+" ×2)", gateTimeout)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 	e.WaitDeploymentImage(t, a.ns, fixtures.Workload("prod"), fixtures.Image+":"+fixtures.V2, syncTimeout)
 
-	// Each run: bounded, its Job run as the agent with the restricted Pod, its
-	// NetworkPolicy, and one Verdict bound to the run, written by the agent.
-	runs, err := agentRuns(ctx, e, a.ns, bundle)
-	require.NoError(t, err)
 	for _, r := range runs {
 		assert.True(t, meta.IsStatusConditionTrue(r.Status.Conditions, v1alpha1.AgentRunConditionBounded), r.Name)
 		assert.Equal(t, agent, r.Status.Agent)
+		assert.Equal(t, "kr-"+r.Name, r.Status.ServiceAccount)
 		job, err := e.Kube.BatchV1().Jobs(a.ns).Get(ctx, r.Name, metav1.GetOptions{})
 		require.NoError(t, err)
-		assert.Equal(t, "qa", job.Spec.Template.Spec.ServiceAccountName)
+		assert.Equal(t, "kr-"+r.Name, job.Spec.Template.Spec.ServiceAccountName)
 		assert.False(t, *job.Spec.Template.Spec.AutomountServiceAccountToken)
 		np, err := e.Kube.NetworkingV1().NetworkPolicies(a.ns).Get(ctx, r.Name, metav1.GetOptions{})
 		require.NoError(t, err)
@@ -192,16 +175,19 @@ func TestGate_VerifyAgentRuns(t *testing.T) {
 		var v v1alpha1.Verdict
 		require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: r.Name}, &v), "the run's Verdict is named after it")
 		assert.Equal(t, "pass", v.Spec.Result, v.Spec.Summary)
-		assert.Equal(t, "system:serviceaccount:"+a.ns+":qa", v.Spec.By)
-		require.NotNil(t, v.Spec.Actor)
-		assert.Equal(t, agent, v.Spec.Actor.Agent)
+		assert.Equal(t, "system:serviceaccount:"+a.ns+":kr-"+r.Name, v.Spec.By)
 		require.NotNil(t, v.Spec.Run)
-		assert.Equal(t, r.Spec.Run, v.Spec.Run.Index)
 		titles := []string{}
 		for _, f := range v.Spec.Findings {
 			titles = append(titles, f.Severity+": "+f.Title)
 		}
 		assert.Contains(t, titles, "info: egress blocked: "+forbidden, "the NetworkPolicy blocks the receiver")
+		assert.Contains(t, titles, "info: second vote refused", "admission refuses a run's second Verdict")
+		// Its access is gone.
+		framework.Eventually(t, time.Minute, "run "+r.Name+"'s ServiceAccount deleted", func(ctx context.Context) (bool, string) {
+			_, err := e.Kube.CoreV1().ServiceAccounts(a.ns).Get(ctx, "kr-"+r.Name, metav1.GetOptions{})
+			return apierrors.IsNotFound(err), fmt.Sprint(err)
+		})
 	}
 	gate, ok, err := e.GateInstance(ctx, a.ns, bundle, "prod", "explore-qa")
 	require.NoError(t, err)
@@ -213,39 +199,113 @@ func TestGate_VerifyAgentRuns(t *testing.T) {
 	}
 }
 
-// TestGate_VerifyRefusesWideAgent: an agent whose RBAC lets it patch
-// Deployments in the namespace under test is not run: its AgentRun fails
-// with Bounded=False naming the grant, no Job is created, and the gate keeps
-// waiting.
+// TestGate_VerifyRetryAndSuspend: with onInconclusive: retry, a run whose
+// first attempt is inconclusive gets a second attempt from the Graph, whose
+// pass verifies the gate; a suspended agent's AgentRun is refused
+// (Bounded=False) and creates no Job.
 //
-// Covers GATE-VERIFY-04.
-func TestGate_VerifyRefusesWideAgent(t *testing.T) {
+// Covers GATE-VERIFY-04, GATE-VERIFY-07.
+func TestGate_VerifyRetryAndSuspend(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	ctx := context.Background()
 	a := newArgoApp(t, e, "uat", "prod")
-	agent := registerAgent(t, e, a.ns, "wide", "bob@example.com", nil,
-		rbacv1.PolicyRule{APIGroups: []string{"apps"}, Resources: []string{"deployments"}, Verbs: []string{"patch"}})
+	agent := registerAgent(t, e, a.ns, "flaky", "bob@example.com", map[string]string{"PROBE_RESULTS": "inconclusive,pass"})
 	e.CreateGate(t, verifyGate(a.ns, v1alpha1.GateVerifyPolicy{Required: 1, AllowedAgents: []string{agent},
-		Run: &v1alpha1.GateVerifyRun{Template: agent, Count: 1, Namespace: a.ns}}))
+		OnInconclusive: "retry", Retries: 1, Run: &v1alpha1.GateVerifyRun{Template: agent, Count: 1, Namespace: a.ns}}))
 	a.apply(t, a.pipeline(nil))
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "uat", "Verified", promoteTimeout)
-	framework.Eventually(t, agentRunTimeout, "the AgentRun is refused", func(ctx context.Context) (bool, string) {
-		runs, err := agentRuns(ctx, e, a.ns, bundle)
+	runs := waitRuns(t, e, a.ns, bundle, 2)
+	attempts := map[int]bool{}
+	for _, r := range runs {
+		attempts[r.Spec.Attempt] = true
+	}
+	assert.Equal(t, map[int]bool{1: true, 2: true}, attempts, "attempt 2 after the inconclusive attempt 1")
+	e.WaitGateReady(t, a.ns, bundle, "prod", "explore-qa", true, "verified: 1 of 1 ("+agent+")", gateTimeout)
+
+	// The agent is suspended: the next version's run is refused.
+	var id v1alpha1.AgentIdentity
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Name: agent}, &id))
+	id.Spec.Suspended = true
+	require.NoError(t, e.Client.Update(ctx, &id))
+	next := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V1)
+	e.WaitStepState(t, a.ns, pipelineName, next, "uat", "Verified", promoteTimeout)
+	framework.Eventually(t, agentRunTimeout, "the suspended agent's AgentRun is refused", func(ctx context.Context) (bool, string) {
+		runs, err := agentRuns(ctx, e, a.ns, next)
 		if err != nil || len(runs) != 1 {
 			return false, fmt.Sprintf("%d AgentRuns (%v)", len(runs), err)
 		}
 		r := runs[0]
 		return r.Status.Phase == v1alpha1.AgentRunFailed &&
 			meta.IsStatusConditionFalse(r.Status.Conditions, v1alpha1.AgentRunConditionBounded) &&
-			strings.Contains(r.Status.Message, "may patch deployments in "+a.ns), r.Status.Phase + ": " + r.Status.Message
+			strings.Contains(r.Status.Message, "is suspended"), r.Status.Phase + ": " + r.Status.Message
 	})
-	runs, err := agentRuns(ctx, e, a.ns, bundle)
+	nextRuns, err := agentRuns(ctx, e, a.ns, next)
 	require.NoError(t, err)
-	_, err = e.Kube.BatchV1().Jobs(a.ns).Get(ctx, runs[0].Name, metav1.GetOptions{})
-	assert.True(t, apierrors.IsNotFound(err), "no Job for an agent that is not read-only: %v", err)
-	e.WaitGateReady(t, a.ns, bundle, "prod", "explore-qa", false, "waiting for verdicts: 0 of 1", gateTimeout)
+	_, err = e.Kube.BatchV1().Jobs(a.ns).Get(ctx, nextRuns[0].Name, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "no Job for a suspended agent: %v", err)
+}
+
+// TestGate_VerifyOnePartyUIDTimeout: the version is created by alice. The
+// AgentRun of an agent alice sponsors writes a pass that the gate records
+// as not counted (the author's party), a person's pass for another version
+// of the Bundle (another UID) is not counted either, and the gate times out
+// as configured ("verification timed out after 2m").
+//
+// Covers GATE-VERIFY-08.
+func TestGate_VerifyOnePartyUIDTimeout(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	c := e.CLI(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "uat", "prod")
+	agent := registerAgent(t, e, a.ns, "selfish", "alice@example.com", nil)
+	e.CreateGate(t, verifyGate(a.ns, v1alpha1.GateVerifyPolicy{Required: 1, AllowedAgents: []string{agent}, Timeout: "2m",
+		Run: &v1alpha1.GateVerifyRun{Template: agent, Count: 1, Namespace: a.ns}}))
+	a.apply(t, a.pipeline(nil))
+	alice := userKubeconfig(t, e, a.ns, "alice@example.com")
+	_, err := e.Kube.RbacV1().RoleBindings(a.ns).Create(ctx, &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice-promoter", Namespace: a.ns},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: framework.ControllerDeployment + "-promoter"},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: "alice@example.com"}},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	r := c.Exec(framework.CLIOptions{Kubeconfig: alice}, c.Args(a.ns, "create", "bundle", pipelineName, "--image", fixtures.Image+":"+fixtures.V2)...)
+	require.Equal(t, 0, r.Code, r.Output())
+	var bundle string
+	framework.Eventually(t, time.Minute, "alice's Bundle", func(ctx context.Context) (bool, string) {
+		var list v1alpha1.BundleList
+		if err := e.Client.List(ctx, &list, client.InNamespace(a.ns)); err != nil || len(list.Items) != 1 {
+			return false, fmt.Sprintf("%d Bundles (%v)", len(list.Items), err)
+		}
+		bundle = list.Items[0].Name
+		return true, ""
+	})
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "uat", "Verified", promoteTimeout)
+	waitRuns(t, e, a.ns, bundle, 1)
+
+	// carol's pass names this Bundle but another UID.
+	carol := impersonating(t, e, a.ns, "carol@example.com", nil, []string{"verdicts"}, "create")
+	require.NoError(t, carol.Create(ctx, &v1alpha1.Verdict{ObjectMeta: metav1.ObjectMeta{Name: "other-version", Namespace: a.ns,
+		Labels: map[string]string{"kardinal.io/bundle": bundle, "kardinal.io/environment": "uat", "kardinal.io/check": "explore"}},
+		Spec: v1alpha1.VerdictSpec{Pipeline: pipelineName, Bundle: bundle, BundleUID: "uid-of-an-earlier-" + bundle,
+			Environment: "uat", Check: "explore", Result: "pass", By: "carol@example.com"}}))
+
+	e.WaitGateReady(t, a.ns, bundle, "prod", "explore-qa", false, "verification timed out after 2m: 0 of 1", 4*time.Minute)
+	gate, ok, err := e.GateInstance(ctx, a.ns, bundle, "prod", "explore-qa")
+	require.NoError(t, err)
+	require.True(t, ok)
+	reasons := map[string]string{}
+	for _, rec := range gate.Status.Verdicts {
+		assert.False(t, rec.Counted, rec.Name)
+		reasons[rec.Name] = rec.Reason
+	}
+	assert.NotContains(t, reasons, "other-version", "the Graph does not copy another version's Verdict")
+	require.Len(t, reasons, 1)
+	for _, why := range reasons {
+		assert.Contains(t, why, "the author's party (alice@example.com)")
+	}
 	a.noStep(t, bundle, "prod", 15*time.Second)
 }
 

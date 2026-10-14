@@ -112,7 +112,7 @@ AgentRun is one attempt of an in-cluster verifier (a StepTemplate's agent image)
 | `spec.template` | string | yes | Template is the StepTemplate the run runs. |
 | `spec.version` | string |  | Version is the Bundle's version. |
 | `status` | object |  | AgentRunStatus is the observed state of an AgentRun. |
-| `status.agent` | string |  | Agent is the agent the run's ServiceAccount is (AgentIdentity name). |
+| `status.agent` | string |  | Agent and Sponsor are the agent the run verifies for (its StepTemplate's AgentIdentity) and that agent's sponsor, when the run started. The Graph names them as the actor of the run's Verdict. |
 | `status.conditions` | []object |  | Conditions: Bounded. |
 | `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
 | `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
@@ -126,6 +126,8 @@ AgentRun is one attempt of an in-cluster verifier (a StepTemplate's agent image)
 | `status.jobUID` | string |  | JobUID is the UID of that Job. A Job of that name with another UID, or none at all, while the run runs fails it: it is not run again. |
 | `status.message` | string |  | Message says why the AgentRun is in its phase. |
 | `status.phase` | string |  | Phase is Pending until the Job is created, Running while it runs, and Succeeded (the Job completed) or Failed (it failed, timed out, or the run was refused) once it finished, or Skipped. The verify result is the Verdict's, not the phase. One of: `Pending`, `Running`, `Succeeded`, `Failed`, `Skipped`. |
+| `status.serviceAccount` | string |  | ServiceAccount is the ServiceAccount kardinal created for the run (kr-&lt;run&gt;): the only identity that may write the run's Verdict. It is deleted, with its access, when the run ends. |
+| `status.sponsor` | string |  |  |
 | `status.startedAt` | string (date-time) |  | StartedAt is when the Job was created. |
 
 ## Approval
@@ -1380,6 +1382,7 @@ StepTemplate registers an image kardinal may run as a step: in this release, a v
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | StepTemplateSpec registers an image kardinal may run as a step (docs/design/19-verdicts.md, section 8.2). Only cluster admins write StepTemplates. In this release a StepTemplate is a verifier: AgentRuns run it, and its Pod writes one Verdict. |
+| `spec.agent` | string | yes | Agent is the AgentIdentity the step runs for: its verdicts count as that agent's, and the one-party rule uses its sponsor. It must be ready, not suspended, and its scope must cover the namespace, the Pipeline and the environment of each run. The Pod does not run as one of the agent's subjects: each AgentRun gets a ServiceAccount of its own that kardinal creates, with only the chart's AgentRun roles (create Verdicts; read the namespace under test), and deletes when the run ends. |
 | `spec.args` | []string |  | Args are the arguments. |
 | `spec.command` | []string |  | Command overrides the image's entrypoint. |
 | `spec.description` | string |  | Description says what the step does. |
@@ -1402,7 +1405,6 @@ StepTemplate registers an image kardinal may run as a step: in this release, a v
 | `spec.secretEnv[].key` | string | yes | Key is the key in the Secret. |
 | `spec.secretEnv[].name` | string | yes | Name is the variable's name. |
 | `spec.secretEnv[].secret` | string | yes | Secret is the Secret's name, in the Pipeline's namespace. |
-| `spec.serviceAccountName` | string | yes | ServiceAccountName is the ServiceAccount the Pod runs as, in the Pipeline's namespace. It must be a subject of a ready AgentIdentity whose scope covers the Pipeline, and its RBAC must be read-only (the AgentRun reconciler checks it before each run). |
 | `spec.timeout` | string |  | Timeout bounds each attempt. Default 30m, at most 24h. |
 | `status` | object |  | StepTemplateStatus is the observed state of a StepTemplate. |
 | `status.observedGeneration` | integer (int64) |  | ObservedGeneration is the generation Ready is for. |

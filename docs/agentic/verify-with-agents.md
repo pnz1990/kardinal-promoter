@@ -15,7 +15,7 @@ Verifiers run in one of two places:
 - **Outside the cluster.** An agent in CI, or a desktop agent, tests the environment and records
   its verdict with [`kardinal verify`](#record-a-verdict-from-anywhere).
 - **In the cluster.** The gate runs an admin-registered agent image as an
-  [AgentRun](#run-agents-in-the-cluster): a Job with no write access, no git credentials, a
+  [AgentRun](#run-agents-in-the-cluster): a Job that runs as its own ServiceAccount (create its Verdict; read the namespace under test), no git credentials, a
   network policy and a deadline, whose Pod writes one Verdict.
 
 The design, with the options considered, is in [Verdicts](../design/19-verdicts.md).
@@ -130,8 +130,8 @@ client are recorded as asserted, from `KARDINAL_ACTOR_MODEL`, `KARDINAL_ACTOR_SE
 
 ## Run agents in the cluster
 
-A cluster admin registers the agent image as a **StepTemplate**, and the agent's ServiceAccount
-as an [AgentIdentity](../actors.md#register-an-agent):
+A cluster admin registers the agent as an [AgentIdentity](../actors.md#register-an-agent) (its
+sponsor and scope), and its image as a **StepTemplate** that names it:
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -141,7 +141,7 @@ metadata:
 spec:
   description: Explores the web app like a QA engineer and reports.
   image: ghcr.io/acme/qa-explorer@sha256:4f1c...
-  serviceAccountName: qa-explorer    # in the Pipeline's namespace; a registered agent
+  agent: qa-explorer                 # the AgentIdentity its verdicts count for
   timeout: 45m                       # per attempt; default 30m, at most 24h
   env:
     - {name: MODEL_ENDPOINT, value: https://llm.internal.example.com}
@@ -160,20 +160,31 @@ When the verified environment's step is Verified, the promotion Graph creates `r
 **AgentRuns**, one per run. Before it runs anything, the AgentRun reconciler checks the run is
 **bounded**, and fails it with the condition `Bounded=False` and the reason otherwise:
 
-- the StepTemplate is ready, and its ServiceAccount is a registered, unsuspended agent whose
-  scope covers the namespace, the Pipeline and the environment;
-- the agent's RBAC is read-only: it may create Verdicts in the Pipeline's namespace, and
-  SubjectAccessReviews show it may not read Secrets, write Deployments, StatefulSets, DaemonSets,
-  Pods, Services or ConfigMaps, exec into Pods (in the Pipeline's and the tested namespace), write
-  Bundles, Approvals, PolicyGates or Pipelines, or mint tokens;
+- the StepTemplate is ready, and its agent is ready, not suspended, and its scope covers the
+  namespace, the Pipeline and the environment;
 - every `secretEnv` Secret is labelled `kardinal.io/step-template: <template>`, so a template
   cannot read a Pipeline's git credentials even by name.
 
+The run does not borrow anyone's RBAC. Kardinal **creates the run's own ServiceAccount**,
+`kr-<run>`, and binds it to the chart's two AgentRun ClusterRoles, and to nothing else:
+
+- `<release>-agentrun-writer` in the Pipeline's namespace: create Verdicts, read Bundles;
+- `<release>-agentrun-reader` in the namespace under test: read Pods (and their logs), Services,
+  Endpoints, EndpointSlices, Events, Deployments, ReplicaSets, StatefulSets, DaemonSets and
+  Ingresses. No Secrets, no ConfigMaps, no writes.
+
+When the run ends (or its AgentRun is deleted) kardinal deletes the ServiceAccount, whose tokens
+then stop working, and both RoleBindings. The chart's admission policy lets `kr-<run>` write one
+Verdict only: the run's own, named after the run, from the run's own Pod (the Pod name in its
+token, matched exactly). It cannot vote a second time, for another run, or for another version:
+the Graph counts a run's Verdict only for the AgentRun of this Bundle it names, and takes the
+run's agent, sponsor, index and attempt from that AgentRun.
+
 Then it creates, owned by the AgentRun:
 
-- a **NetworkPolicy**: no ingress; egress to DNS, the API server, every Pod of the namespace
-  under test and the template's `egress`, and nothing else. It needs a CNI that enforces
-  NetworkPolicy;
+- a **NetworkPolicy**: no ingress; egress to DNS (kube-dns in kube-system), the API server, every
+  Pod of the namespace under test and the template's `egress`, and nothing else. It needs a CNI
+  that enforces NetworkPolicy;
 - a **Job**: one Pod, never restarted, built by the controller (not from your YAML): the
   template's image, command, args, env and resources; restricted Pod security (non-root,
   read-only root filesystem, no capabilities, RuntimeDefault seccomp); a short-lived projected
@@ -240,5 +251,7 @@ the Graph admits after an attempt that finished without a pass or a fail.
 - **A CNI that does not enforce NetworkPolicy.** The policy is created but does nothing. A CNI that
   enforces it a moment after a Pod starts (kindnet: about a second) lets the agent's first
   connections through; the policy exists before the Pod, but the CNI decides when it applies.
-- **RBAC outside the checked list.** The read-only check covers the kinds above, not custom
-  resources the agent may write. The agent's RBAC is the admin's.
+- **NetworkPolicies add up.** Another policy in the Pipeline's namespace that allows more egress
+  to all its Pods (an allow-all egress policy) also applies to the run's Pod.
+- **Edit and admin holders in the Pipeline's namespace** can create Pods or tokens as any
+  ServiceAccount there, the run's included: the same trust boundary as for the Graph identity.

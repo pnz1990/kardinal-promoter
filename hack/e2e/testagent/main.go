@@ -13,7 +13,9 @@
 // NetworkPolicy blocks it). A Service that fails, or a forbidden URL that
 // answers, is a high finding and the verdict is fail; otherwise pass.
 // PROBE_RESULTS ("inconclusive,pass") overrides the result per attempt, for
-// tests of the retry rule. PROBE_DELAY (a duration) waits before probing:
+// tests of the retry rule. PROBE_EXTRA set makes the agent first try a
+// second, unbound Verdict, which admission must refuse (one vote per run),
+// and report what happened as a finding. PROBE_DELAY (a duration) waits before probing:
 // kindnet enforces a NetworkPolicy for a new Pod only about a second after
 // the Pod gets its IP.
 //
@@ -88,6 +90,13 @@ func main() {
 	spec["durationSeconds"] = int64(time.Since(start).Seconds())
 	md, _ := v["metadata"].(map[string]interface{})
 	ns, _ := md["namespace"].(string)
+	if os.Getenv("PROBE_EXTRA") != "" {
+		f := tryExtraVote(api, v, ns)
+		spec["findings"] = append(spec["findings"].([]finding), f)
+		if f.Severity == "high" {
+			spec["result"], spec["summary"] = "fail", "a second vote was admitted; "+summary
+		}
+	}
 	body, err := json.Marshal(v)
 	if err != nil {
 		log.Fatalf("marshal verdict: %v", err)
@@ -97,6 +106,25 @@ func main() {
 		log.Fatalf("write verdict: status %d: %v %s", status, err, out)
 	}
 	log.Printf("verdict %s: %s: %s", md["name"], result, summary)
+}
+
+// tryExtraVote tries to write a second Verdict, not bound to the run, and
+// says whether admission refused it.
+func tryExtraVote(api *apiClient, v map[string]interface{}, ns string) finding {
+	extra, _ := json.Marshal(v)
+	var cp map[string]interface{}
+	_ = json.Unmarshal(extra, &cp)
+	md := cp["metadata"].(map[string]interface{})
+	md["name"] = fmt.Sprint(md["name"]) + "-extra"
+	spec := cp["spec"].(map[string]interface{})
+	delete(spec, "run")
+	spec["result"], spec["summary"] = "pass", "a second vote"
+	body, _ := json.Marshal(cp)
+	status, out, err := api.do(http.MethodPost, "/apis/kardinal.io/v1alpha1/namespaces/"+ns+"/verdicts", body)
+	if err == nil && status == http.StatusForbidden {
+		return finding{Severity: "info", Title: "second vote refused"}
+	}
+	return finding{Severity: "high", Title: "second vote admitted", Detail: fmt.Sprintf("status %d %v %s", status, err, truncate(string(out), 200))}
 }
 
 // forced is the result PROBE_RESULTS names for attempt (1-based), or "".

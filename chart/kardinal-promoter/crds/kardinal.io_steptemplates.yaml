@@ -69,6 +69,19 @@ spec:
               StepTemplates. In this release a StepTemplate is a verifier: AgentRuns run
               it, and its Pod writes one Verdict.
             properties:
+              agent:
+                description: |-
+                  Agent is the AgentIdentity the step runs for: its verdicts count as
+                  that agent's, and the one-party rule uses its sponsor. It must be
+                  ready, not suspended, and its scope must cover the namespace, the
+                  Pipeline and the environment of each run. The Pod does not run as
+                  one of the agent's subjects: each AgentRun gets a ServiceAccount of
+                  its own that kardinal creates, with only the chart's AgentRun roles
+                  (create Verdicts; read the namespace under test), and deletes when the
+                  run ends.
+                maxLength: 253
+                minLength: 1
+                type: string
               args:
                 description: Args are the arguments.
                 items:
@@ -245,22 +258,13 @@ spec:
                   type: object
                 maxItems: 16
                 type: array
-              serviceAccountName:
-                description: |-
-                  ServiceAccountName is the ServiceAccount the Pod runs as, in the
-                  Pipeline's namespace. It must be a subject of a ready AgentIdentity
-                  whose scope covers the Pipeline, and its RBAC must be read-only (the
-                  AgentRun reconciler checks it before each run).
-                maxLength: 253
-                minLength: 1
-                type: string
               timeout:
                 description: Timeout bounds each attempt. Default 30m, at most 24h.
                 pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                 type: string
             required:
+            - agent
             - image
-            - serviceAccountName
             type: object
           status:
             description: StepTemplateStatus is the observed state of a StepTemplate.

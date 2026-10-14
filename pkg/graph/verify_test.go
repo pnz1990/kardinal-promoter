@@ -262,3 +262,59 @@ func TestBuilder_AgentRunAdmission(t *testing.T) {
 		[]interface{}{step}), "Superseded: kept, no new attempt")
 	assert.NotEqual(t, first, second)
 }
+
+// TestBuilder_RunVerdicts: a run-bound Verdict counts only when the run's
+// own ServiceAccount wrote it and it names an AgentRun of this Graph whose
+// agent is allowed; its actor and run index come from that AgentRun, not
+// from the Verdict. A Verdict claiming another run, written by anyone else,
+// or for an AgentRun someone else created, is not copied.
+func TestBuilder_RunVerdicts(t *testing.T) {
+	p := makeLinearPipeline("app", "uat", "prod")
+	g := verifyGateFor("prod", kardinalv1alpha1.GateVerifyPolicy{Check: "explore", Required: 2, AllowedAgents: []string{"qa"},
+		Run: &kardinalv1alpha1.GateVerifyRun{Template: "qa", Count: 2}})
+	bundle := makeBundle("app-v1", "app")
+	bundle.UID = "uid-app-v1"
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: bundle, PolicyGates: []kardinalv1alpha1.PolicyGate{g}})
+	require.NoError(t, err)
+	r1 := graph.AgentRunName("app", "app-v1", "uat", "explore", 1, 1)
+	r2 := graph.AgentRunName("app", "app-v1", "uat", "explore", 2, 1)
+	agentRun := func(name string, idx int, agent string, applied bool) map[string]interface{} {
+		labels := map[string]interface{}{"kardinal.io/bundle-uid": "uid-app-v1"}
+		if applied {
+			labels["kro.run/node-id"] = "AgentRuns"
+		}
+		return map[string]interface{}{"metadata": map[string]interface{}{"name": name, "labels": labels},
+			"spec":   map[string]interface{}{"check": "explore", "environment": "uat", "run": idx, "attempt": 1},
+			"status": map[string]interface{}{"agent": agent, "sponsor": "bob", "phase": "Succeeded"}}
+	}
+	runVerdict := func(name, run, by string) map[string]interface{} {
+		v := verdictObj(name, "uat", "explore", "pass", "uid-app-v1", nil)
+		spec := v["spec"].(map[string]interface{})
+		spec["by"] = by
+		spec["run"] = map[string]interface{}{"name": run, "index": 9, "attempt": 1}
+		return v
+	}
+	refs := map[string]interface{}{
+		"refAgentRuns": []interface{}{agentRun(r1, 1, "qa", true), agentRun(r2, 2, "intruder", true),
+			agentRun("forged", 1, "qa", false)},
+		graph.VerdictsNodeID: []interface{}{
+			runVerdict(r1, r1, graph.RunServiceAccountUser("default", r1)),                   // counts, as run 1 of agent qa
+			runVerdict(r2, r2, graph.RunServiceAccountUser("default", r2)),                   // run 2's agent is not allowed
+			runVerdict("claim-"+r1, r1, graph.RunServiceAccountUser("default", r1)),          // not named after its run
+			runVerdict("x", "x", "alice"),                                                    // a run claim by someone else
+			runVerdict("forged", "forged", graph.RunServiceAccountUser("default", "forged")), // not kro's AgentRun
+		},
+	}
+	var verdicts []interface{}
+	for _, o := range renderObjectsWith(t, res.Graph, refs) {
+		if o.Object["kind"] == "PolicyGate" {
+			verdicts = o.Object["spec"].(map[string]interface{})["verdicts"].([]interface{})
+		}
+	}
+	require.Len(t, verdicts, 1)
+	v := verdicts[0].(map[string]interface{})
+	assert.Equal(t, r1, v["name"])
+	assert.Equal(t, map[string]interface{}{"kind": "agent", "principal": graph.RunServiceAccountUser("default", r1),
+		"agent": "qa", "sponsor": "bob"}, v["actor"])
+	assert.EqualValues(t, 1, v["run"].(map[string]interface{})["index"], "the index is the AgentRun's, not the Verdict's 9")
+}

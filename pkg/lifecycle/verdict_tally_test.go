@@ -187,6 +187,14 @@ func TestTallyVerdicts(t *testing.T) {
 			reasons:  map[string]string{"v1": "superseded by v2"},
 		},
 		{
+			name:     "a verdict for another version's UID does not count",
+			policy:   v1.GateVerifyPolicy{Required: 1},
+			author:   alice,
+			verdicts: []v1.GateVerdict{func() v1.GateVerdict { v := verdict("v1", bob, "pass", 1, 0, 0); v.BundleUID = "uid-0"; return v }()},
+			outcome:  lifecycle.VerifyWaiting,
+			reasons:  map[string]string{"v1": "for another version of b1 (UID uid-0)"},
+		},
+		{
 			name:     "a verdict for another bundle does not count",
 			policy:   v1.GateVerifyPolicy{Required: 1},
 			author:   alice,
@@ -245,7 +253,7 @@ func TestTallyVerdicts(t *testing.T) {
 			if now.IsZero() {
 				now = vt0
 			}
-			tally := lifecycle.TallyVerdicts(verifyGate(tc.policy, tc.verdicts...), tc.author, tc.deadline, now)
+			tally := lifecycle.TallyVerdicts(verifyGate(tc.policy, tc.verdicts...), tc.author, "uid-1", tc.deadline, now)
 			assert.Equal(t, tc.outcome, tally.Outcome)
 			if tc.blocked != "" {
 				assert.Equal(t, tc.blocked, tally.Blocked())
@@ -269,7 +277,7 @@ func TestTallyVerdictsTooMany(t *testing.T) {
 	for i := range lifecycle.MaxGateVerdicts + 1 {
 		vs = append(vs, verdict(fmt.Sprintf("v%03d", i), bob, "pass", time.Duration(i), 0, 0))
 	}
-	tally := lifecycle.TallyVerdicts(verifyGate(v1.GateVerifyPolicy{Required: 1}, vs...), alice, nil, vt0)
+	tally := lifecycle.TallyVerdicts(verifyGate(v1.GateVerifyPolicy{Required: 1}, vs...), alice, "uid-1", nil, vt0)
 	assert.Contains(t, tally.Blocked(), "more than 100 verdicts")
 	assert.Empty(t, tally.Met())
 }
@@ -278,7 +286,7 @@ func TestTallyVerdictsTieOnCreatedAt(t *testing.T) {
 	// Same timestamp: the name orders them, so the vote is deterministic.
 	a, b := verdict("va", bob, "fail", 1, 0, 0), verdict("vb", bob, "pass", 1, 0, 0)
 	for _, order := range [][]v1.GateVerdict{{a, b}, {b, a}} {
-		tally := lifecycle.TallyVerdicts(verifyGate(v1.GateVerifyPolicy{Required: 1}, order...), alice, nil, vt0)
+		tally := lifecycle.TallyVerdicts(verifyGate(v1.GateVerifyPolicy{Required: 1}, order...), alice, "uid-1", nil, vt0)
 		assert.Equal(t, lifecycle.VerifyVerified, tally.Outcome)
 	}
 }
@@ -286,12 +294,12 @@ func TestTallyVerdictsTieOnCreatedAt(t *testing.T) {
 func TestVerdictContext(t *testing.T) {
 	v := verdict("v1", bob, "pass", 1, 0, 0)
 	v.HighFindings = 2
-	ctx := lifecycle.TallyVerdicts(verifyGate(v1.GateVerifyPolicy{Required: 2}, v), alice, nil, vt0).Context()
+	ctx := lifecycle.TallyVerdicts(verifyGate(v1.GateVerifyPolicy{Required: 2}, v), alice, "uid-1", nil, vt0).Context()
 	assert.Equal(t, int64(1), ctx["passed"])
 	assert.Equal(t, int64(2), ctx["required"])
 	assert.Equal(t, []interface{}{"bob"}, ctx["verifiers"])
 	assert.Equal(t, int64(2), ctx["findings"].(map[string]interface{})["high"])
-	none := lifecycle.TallyVerdicts(&v1.PolicyGate{}, alice, nil, vt0)
+	none := lifecycle.TallyVerdicts(&v1.PolicyGate{}, alice, "uid-1", nil, vt0)
 	assert.Equal(t, int64(0), none.Context()["required"])
 	assert.Empty(t, none.Blocked())
 }

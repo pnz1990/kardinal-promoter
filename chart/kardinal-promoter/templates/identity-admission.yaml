@@ -587,8 +587,8 @@ spec:
     - expression: >-
         request.operation != 'DELETE' || variables.graph || variables.controller || variables.cleanup
       message: >-
-        HookRuns and AgentRuns record that a hook or an agent ran; only kardinal deletes them (with
-        the garbage collector and the namespace controller). Promote a new Bundle to run it again
+        HookRuns record that a hook ran; only kardinal deletes them (with the garbage collector and
+        the namespace controller), and AgentRuns that an agent ran. Promote a new Bundle to run it again
       reason: Forbidden
     # As for gate instances: kro adopts an existing object of the name it
     # applies, so no one may turn an existing MetricCheck into a
