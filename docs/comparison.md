@@ -284,4 +284,5 @@ you don't need.
 - [Policy Gates](policy-gates.md) — CEL expression reference
 - [Architecture](architecture.md) — system design
 - [FAQ](troubleshooting.md#common-questions) — common questions
-- [Migrating from Kargo](guides/migrating-from-kargo.md) — concept mapping and a migration walkthrough
+- [Coming from Kargo](coming-from-kargo.md) — each Kargo concept beside its kardinal counterpart
+- [Migrating from Kargo](guides/migrating-from-kargo.md) — a migration walkthrough
