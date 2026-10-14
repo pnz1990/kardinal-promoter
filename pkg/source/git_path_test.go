@@ -6,7 +6,6 @@ package source_test
 import (
 	"context"
 	"net/http"
-	"net/http/cgi"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -17,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
+	"github.com/kardinal-promoter/kardinal-promoter/test/gitbackend"
 )
 
 // gitBackend is a work tree pushing to a bare repository that git
@@ -43,22 +43,19 @@ func newGitBackend(t *testing.T, user, pass string) *gitBackend {
 	runGit(t, bare, "config", "uploadpack.allowFilter", "true")
 	runGit(t, work, "remote", "add", "origin", bare)
 
-	backend := filepath.Join(runGit(t, root, "--exec-path"), "git-http-backend")
-	if _, err := os.Stat(backend); err != nil {
-		t.Skip("git-http-backend is not installed")
-	}
-	h := &cgi.Handler{Path: backend, Env: []string{"GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1"}}
-	b.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if user != "" {
-			if u, p, ok := r.BasicAuth(); !ok || u != user || p != pass {
-				w.Header().Set("WWW-Authenticate", `Basic realm="git"`)
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
+	// test/gitbackend: no backend outlives the test (#1875).
+	b.srv = gitbackend.Serve(t, root, func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if user != "" {
+				if u, p, ok := r.BasicAuth(); !ok || u != user || p != pass {
+					w.Header().Set("WWW-Authenticate", `Basic realm="git"`)
+					http.Error(w, "unauthorized", http.StatusUnauthorized)
+					return
+				}
 			}
-		}
-		h.ServeHTTP(w, r)
-	}))
-	t.Cleanup(b.srv.Close)
+			h.ServeHTTP(w, r)
+		})
+	})
 	b.url = b.srv.URL + "/repo.git"
 	return b
 }
