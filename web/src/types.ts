@@ -379,6 +379,46 @@ export interface PolicyGate {
   overrides?: PolicyGateOverride[]
   /** An approval gate's quorum and decisions (spec.approval, status.approvals). */
   approval?: GateApproval
+  /** A verify gate's quorum and verdicts (spec.verify, status.verdicts). */
+  verify?: GateVerify
+}
+
+/** A verify gate: the check it waits for, its quorum, and the verdicts it counted. */
+export interface GateVerify {
+  check: string
+  /** The environment verified: where the version runs. */
+  environment: string
+  /** Passing votes needed (at least 1). */
+  required: number
+  /** Failing votes tolerated. */
+  maxFailures?: number
+  /** Agents whose verdicts count (agent verification is opt-in). */
+  allowedAgents?: string[]
+  onInconclusive: 'hold' | 'retry' | 'fail' | string
+  timeout?: string
+  /** The StepTemplate its AgentRuns run, when it runs verifiers in the cluster. */
+  template?: string
+  passed: number
+  failed: number
+  verdicts?: GateVerdict[]
+}
+
+/** One Verdict as the verify gate counted it. */
+export interface GateVerdict {
+  name: string
+  /** Who wrote it, in a sentence ("agent qa-explorer for bob"). */
+  verifier: string
+  result: 'pass' | 'fail' | 'inconclusive' | string
+  counted: boolean
+  /** Why it does not count, or what it waits for. */
+  reason?: string
+  /** The AgentRun's run and attempt, for an in-cluster verifier. */
+  run?: number
+  attempt?: number
+  summary?: string
+  evidenceURL?: string
+  findings?: number
+  createdAt?: string
 }
 
 /** An approval gate: how many allowed people must approve, and who did. */

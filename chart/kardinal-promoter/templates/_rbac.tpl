@@ -90,11 +90,6 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["batch"]
   resources: ["jobs"]
   verbs: ["get", "list", "watch", "create", "delete"]
-# Verify gates (docs/agentic/verify-with-agents.md): the UI API lists a
-# Bundle's Verdicts; the controller never writes one (a verifier does).
-- apiGroups: ["kardinal.io"]
-  resources: ["verdicts"]
-  verbs: ["get", "list", "watch"]
 # AgentRuns: each run's NetworkPolicy, owned by the run, created before its
 # Job (pkg/reconciler/agentrun).
 - apiGroups: ["networking.k8s.io"]
