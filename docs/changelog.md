@@ -12,10 +12,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Fuzz and property tests** (#1837) — the Graph builder (every Graph it builds passes kro v0.10.0-rc.0's compiler rules: node IDs, node shapes, forEach, references, an acyclic dependency graph; and a Pipeline the CRD accepts builds when its environments form no cycle and no fleet target takes another environment's name), the PolicyGate CEL context (every documented variable with its documented type) and the YAML editors (an edit changes only its target, a refused one leaves the file as it was, a repeated one writes the same bytes) are fuzzed in CI.
 
-### Fixed
-
-- **YAML edits keep empty nulls in flow mappings** (#1842) — the yaml, helm and kustomize update strategies wrote a null with no text in a flow mapping (`{a: }`, `{a}`) back as an empty string (`{a: ''}`); it is now written as `null`.
-
 ### Documentation
 
 - **Coming from Kargo** ([page](coming-from-kargo.md)) — each Kargo concept (Warehouse, Freight, Stage, fan-in, `requiredSoakTime`, auto-promotion, verification, promotion steps) beside its kardinal counterpart, and the Kargo Enterprise features kardinal ships as open source: automatic rollback, approvals with verified identity and `excludeAuthor`, ChangeWindows with break-glass overrides, and NotificationHook. [Migrate from Kargo](guides/migrating-from-kargo.md) keeps the step-by-step walkthrough and links to it for the concepts.
@@ -23,6 +19,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **YAML edits keep empty nulls in flow mappings** (#1842) — the yaml, helm and kustomize update strategies wrote a null with no text in a flow mapping (`{a: }`, `{a}`) back as an empty string (`{a: ''}`); it is now written as `null`.
 - **A fleet with `update.strategy: argocd` is refused** (#1847) — every target inherited the fleet's `update.argocd.application`, so each target's promotion patched that one Application while its own health check read another. The Pipeline CRD refuses the combination, and the Pipeline's `Ready=False/ValidationFailed` and `kardinal validate` report a Pipeline stored before the rule. Promote a fleet with a git-based strategy ([Argo CD native promotion](argocd-native-promotion.md#what-the-argocd-strategy-rejects)).
 - **`layout: branch` pull requests get the `kardinal/gates` check** (#1854) — the render step recorded the PR branch but not the commit the render Job pushed to it, so the gate results were never posted on a rendered environment's PR, and a branch protection rule that requires the check blocked it.
 
