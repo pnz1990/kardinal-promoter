@@ -58,13 +58,17 @@ type StepTemplateSpec struct {
 	// +optional
 	SecretEnv []StepTemplateSecretEnv `json:"secretEnv,omitempty"`
 
-	// ServiceAccountName is the ServiceAccount the Pod runs as, in the
-	// Pipeline's namespace. It must be a subject of a ready AgentIdentity
-	// whose scope covers the Pipeline, and its RBAC must be read-only (the
-	// AgentRun reconciler checks it before each run).
+	// Agent is the AgentIdentity the step runs for: its verdicts count as
+	// that agent's, and the one-party rule uses its sponsor. It must be
+	// ready, not suspended, and its scope must cover the namespace, the
+	// Pipeline and the environment of each run. The Pod does not run as
+	// one of the agent's subjects: each AgentRun gets a ServiceAccount of
+	// its own that kardinal creates, with only the chart's AgentRun roles
+	// (create Verdicts; read the namespace under test), and deletes when the
+	// run ends.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
-	ServiceAccountName string `json:"serviceAccountName"`
+	Agent string `json:"agent"`
 
 	// Timeout bounds each attempt. Default 30m, at most 24h.
 	// +kubebuilder:validation:Pattern=`^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`

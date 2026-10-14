@@ -64,8 +64,11 @@ type gateCollections struct {
 	// instances.
 	items    map[string]map[string]interface{}
 	position map[string]int
-	// approvals is whether the Graph has the Approvals selector ref.
-	approvals bool
+	// approvals is whether the Graph has the Approvals selector ref, and
+	// agentRuns whether it has AgentRuns (refAgentRuns); namespace and
+	// bundleUID are the Bundle's.
+	approvals, agentRuns bool
+	namespace, bundleUID string
 	// approvalPolicies is whether a template has spec.approval. kro types
 	// the templates list from its data, so spec.?approval compiles only when
 	// one of them has the field.
@@ -410,7 +413,7 @@ func (c *gateCollections) verifyCollectionNode(id, field string) GraphNode {
 		spec["approvals"] = "${" + iterGate + ".readsApprovals ? (" + inner + ") : []}"
 	}
 	spec["verify"] = "${" + iterGate + ".verify}"
-	spec["verdicts"] = verdictsOfItem(c.pipeline)
+	spec["verdicts"] = verdictsOfItem(c.pipeline, c.namespace, c.bundleUID, c.agentRuns)
 	n.Template["spec"] = spec
 	return n
 }

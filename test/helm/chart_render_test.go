@@ -432,7 +432,9 @@ func controllerAccess() []apiAccess {
 		{"batch", "jobs", []string{"get", "list", "watch", "create", "delete"}, inWatched, "", "hookrun reconciler.go: hook Jobs (Owns, create, delete on timeout); agentrun reconciler.go: agent Jobs"},
 		{"networking.k8s.io", "networkpolicies", []string{"get", "create"}, inWatched, "", "agentrun reconciler.go networkPolicy (create, adopt check)"},
 		{"discovery.k8s.io", "endpointslices", []string{"get"}, inCluster, "kubernetes", "agentrun reconciler.go apiServerEgress (uncached Get of default/kubernetes)"},
-		{"authorization.k8s.io", "subjectaccessreviews", []string{"create"}, inCluster, "", "agentrun access.go: an AgentRun's agent is read-only; pkg/uiauth SubjectAccessReview"},
+		{"", "serviceaccounts", []string{"delete"}, inWatched, "", "agentrun reconciler.go revoke: a run's own ServiceAccount"},
+		{"rbac.authorization.k8s.io", "clusterroles", []string{"bind"}, inWatched, "kardinal-promoter-agentrun-writer", "agentrun reconciler.go ensureAccess"},
+		{"rbac.authorization.k8s.io", "clusterroles", []string{"bind"}, inWatched, "kardinal-promoter-agentrun-reader", "agentrun reconciler.go ensureAccess"},
 		{"kardinal.io", "steptemplates", readVerbs, inCluster, "", "agentrun and steptemplate reconcilers"},
 		{"kardinal.io", "steptemplates/status", []string{"get", "update", "patch"}, inCluster, "", "steptemplate reconciler Ready status"},
 		{"coordination.k8s.io", "leases", []string{"get", "list", "watch", "create", "update", "patch", "delete"}, inRelease, "", "leader election"},
@@ -469,6 +471,7 @@ var optionalAccess = []struct {
 }{
 	{"ui.auth.tokenReview=true", []apiAccess{
 		{"authentication.k8s.io", "tokenreviews", []string{"create"}, inCluster, "", "pkg/uiauth TokenReview"},
+		{"authorization.k8s.io", "subjectaccessreviews", []string{"create"}, inCluster, "", "pkg/uiauth SubjectAccessReview"},
 	}, false},
 	{"controller.namespaceShard=b", []apiAccess{
 		{"", "namespaces", []string{"list", "watch"}, inCluster, "", "pkg/shard Gate.Pass (Namespace informer)"},

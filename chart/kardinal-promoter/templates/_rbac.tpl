@@ -90,11 +90,22 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["batch"]
   resources: ["jobs"]
   verbs: ["get", "list", "watch", "create", "delete"]
-# AgentRuns: each run's NetworkPolicy, owned by the run, created before its
-# Job (pkg/reconciler/agentrun).
+# AgentRuns (pkg/reconciler/agentrun): each run's NetworkPolicy and its own
+# ServiceAccount, created before its Job and deleted with its RoleBindings
+# when the run ends. bind is limited to the two AgentRun ClusterRoles
+# (agentrun-rbac.yaml), so the controller grants a run nothing else.
 - apiGroups: ["networking.k8s.io"]
   resources: ["networkpolicies"]
   verbs: ["get", "create"]
+- apiGroups: [""]
+  resources: ["serviceaccounts"]
+  verbs: ["delete"]
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["clusterroles"]
+  verbs: ["bind"]
+  resourceNames:
+    - {{ include "kardinal-promoter.agentRunWriterRole" . }}
+    - {{ include "kardinal-promoter.agentRunReaderRole" . }}
 # Approvals: the UI records, replaces and revokes decisions for its
 # TokenReview user (POST /api/v1/ui/approvals). An Approval is immutable, so
 # there is no update; the approvals admission policy admits the controller's
@@ -246,13 +257,6 @@ rules exist for. A new client call needs a row there and a rule here.
   resources: ["endpointslices"]
   resourceNames: ["kubernetes"]
   verbs: ["get"]
-# An AgentRun's agent must be read-only: the controller checks its RBAC with
-# SubjectAccessReviews before each run. The UI API and the Bundle API
-# authorize TokenReview callers with them too (ui.auth.tokenReview,
-# bundleAPI.tokenReview).
-- apiGroups: ["authorization.k8s.io"]
-  resources: ["subjectaccessreviews"]
-  verbs: ["create"]
 # ClusterScmProviders, read like ScmProviders and their Ready condition
 # written.
 - apiGroups: ["kardinal.io"]
@@ -310,9 +314,12 @@ rules exist for. A new client call needs a row there and a rule here.
 {{- if or .Values.ui.auth.tokenReview .Values.bundleAPI.tokenReview }}
 # ui.auth.tokenReview, bundleAPI.tokenReview: the UI API and the Bundle API
 # validate each bearer token with a TokenReview and authorize it with a
-# SubjectAccessReview (the SubjectAccessReview rule above).
+# SubjectAccessReview.
 - apiGroups: ["authentication.k8s.io"]
   resources: ["tokenreviews"]
+  verbs: ["create"]
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
   verbs: ["create"]
 {{- end }}
 {{- end }}

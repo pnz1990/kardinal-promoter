@@ -7,14 +7,18 @@
 // records the Job's result in AgentRun.status. The run's Pod writes a
 // Verdict with its own credentials; the reconciler never reads it.
 //
-// Before the Job, the run must be bounded: a ready StepTemplate whose
-// ServiceAccount is a registered agent with a scope that covers the run,
-// whose RBAC is read-only (SubjectAccessReviews), and whose Secrets are
-// labelled for the template. The Pod is built here, never from user YAML:
-// restricted Pod security, a short-lived projected token, the run's context
-// as environment variables and a downward-API file, and a NetworkPolicy that
-// lets it reach only DNS, the API server, the namespace under test and the
-// template's egress.
+// Before the Job, the run must be bounded: a ready StepTemplate whose agent
+// (an AgentIdentity) is ready, not suspended and in scope, and whose Secrets
+// are labelled for the template. Kardinal does not borrow anyone's RBAC: each
+// run gets a ServiceAccount of its own (kr-<run>), bound only to the chart's
+// AgentRun roles (create Verdicts in the Pipeline's namespace; read the
+// namespace under test), which is deleted, with its bindings, when the run
+// ends. The chart's verdicts admission policy lets that ServiceAccount write
+// only the run's own Verdict, from the run's Pod. The Pod is built here,
+// never from user YAML: restricted Pod security, a short-lived projected
+// token, the run's context as environment variables and a downward-API file,
+// and a NetworkPolicy that lets it reach only DNS, the API server, the
+// namespace under test and the template's egress.
 //
 // Why a CRD that owns its Job, not a Job node in the Graph: ledger G12. The
 // Job and the NetworkPolicy have the AgentRun as controller owner, so
@@ -35,6 +39,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -66,6 +71,16 @@ const (
 	// LabelStepTemplateSecret on a Secret names the StepTemplate whose Pods
 	// may read it (secretEnv).
 	LabelStepTemplateSecret = "kardinal.io/step-template"
+	// LabelAgentRunUID is set on the RoleBinding a run gets in the namespace
+	// under test, which the AgentRun cannot own (another namespace): the
+	// run's UID, to find and delete it.
+	LabelAgentRunUID = "kardinal.io/agentrun-uid"
+	// RunServiceAccountPrefix starts the name of a run's own ServiceAccount:
+	// kr-<AgentRun name>. The verdicts admission policy keys on it.
+	RunServiceAccountPrefix = "kr-"
+	// FinalizerAccess holds an AgentRun until its access (ServiceAccount and
+	// RoleBindings) is deleted.
+	FinalizerAccess = "kardinal.io/agentrun-access"
 
 	// DefaultTimeout bounds an attempt whose template sets none.
 	DefaultTimeout = 30 * time.Minute
@@ -74,12 +89,6 @@ const (
 
 	requeueRunning = 30 * time.Second
 )
-
-// Authorizer answers whether user may do verb on a resource in a namespace
-// (a SubjectAccessReview).
-type Authorizer interface {
-	Allowed(ctx context.Context, user actor.User, verb, group, resource, subresource, namespace string) (bool, error)
-}
 
 // Reconciler runs AgentRuns.
 type Reconciler struct {
@@ -90,15 +99,11 @@ type Reconciler struct {
 	// means Client.
 	APIReader client.Reader
 
-	// Agents reads the AgentIndex (the controller's own).
-	Agents *actor.Source
-
-	// Authorizer checks the agent's RBAC.
-	Authorizer Authorizer
-
-	// GraphServiceAccount is the ServiceAccount kro impersonates for
-	// Graphs: an AgentRun may never run as it.
-	GraphServiceAccount string
+	// WriterClusterRole is the chart's ClusterRole a run's ServiceAccount
+	// is bound to in the Pipeline's namespace (create Verdicts), and
+	// ReaderClusterRole the one in the namespace under test (read it). The
+	// controller may bind only these two.
+	WriterClusterRole, ReaderClusterRole string
 
 	// ControllerNamespace is the controller's own namespace: no AgentRun
 	// runs there.
@@ -156,7 +161,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("get agentrun %s: %w", req.Name, err)
 	}
 	if !run.DeletionTimestamp.IsZero() || terminal(run.Status.Phase) {
-		return ctrl.Result{}, nil
+		// A finished or deleted run keeps no access: its ServiceAccount
+		// and RoleBindings go.
+		return ctrl.Result{}, r.revoke(ctx, &run)
 	}
 	bundle, why, err := r.genuine(ctx, &run)
 	if err != nil {
@@ -231,12 +238,24 @@ func (r *Reconciler) start(ctx context.Context, log zerolog.Logger, base, run *v
 		log.Warn().Str("reason", refused).Msg("AgentRun refused")
 		return ctrl.Result{}, r.patch(ctx, base, run)
 	}
+	// The finalizer first: the run's access is created only once the
+	// AgentRun is held until it is deleted.
+	if !controllerutil.ContainsFinalizer(run, FinalizerAccess) {
+		patch := client.MergeFrom(run.DeepCopy())
+		controllerutil.AddFinalizer(run, FinalizerAccess)
+		if err := r.Patch(ctx, run, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("add finalizer to agentrun %s: %w", run.Name, err)
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
 	now := metav1.NewTime(r.now())
 	deadline := metav1.NewTime(now.Add(timeout))
 	meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{Type: v1alpha1.AgentRunConditionBounded,
 		Status: metav1.ConditionTrue, Reason: "Bounded",
-		Message: fmt.Sprintf("agent %s, template %s: read-only RBAC, NetworkPolicy, %s timeout", agent.Agent, tmpl.Name, timeout)})
-	run.Status.Agent = agent.Agent
+		Message: fmt.Sprintf("agent %s, template %s: its own ServiceAccount, NetworkPolicy, %s timeout", agent.Name, tmpl.Name, timeout)})
+	run.Status.Agent = agent.Name
+	run.Status.Sponsor = agent.Spec.Sponsor.User
+	run.Status.ServiceAccount = RunServiceAccountPrefix + run.Name
 	run.Status.Phase = v1alpha1.AgentRunPending
 	run.Status.JobName = run.Name
 	run.Status.StartedAt = &now
@@ -264,74 +283,77 @@ func templateTimeout(tmpl *v1alpha1.StepTemplate) (time.Duration, error) {
 	return d, nil
 }
 
-// serviceAccountUser is the user a Pod of ServiceAccount sa in ns
-// authenticates as.
-func serviceAccountUser(ns, sa string) actor.User {
-	return actor.User{Username: actor.ServiceAccountPrefix + ns + ":" + sa,
-		Groups: []string{"system:serviceaccounts", "system:serviceaccounts:" + ns, "system:authenticated"}}
-}
-
 // bounds checks the run may start (docs/design/19-verdicts.md, section 8.4):
 // its template, timeout and agent, or why it is refused.
-func (r *Reconciler) bounds(ctx context.Context, run *v1alpha1.AgentRun) (*v1alpha1.StepTemplate, v1alpha1.Actor,
+func (r *Reconciler) bounds(ctx context.Context, run *v1alpha1.AgentRun) (*v1alpha1.StepTemplate, *v1alpha1.AgentIdentity,
 	time.Duration, string, error) {
-	var none v1alpha1.Actor
 	if r.ControllerNamespace != "" && (run.Namespace == r.ControllerNamespace || run.Spec.TargetNamespace == r.ControllerNamespace) {
-		return nil, none, 0, "AgentRuns may not run in, or test, the controller's namespace " + r.ControllerNamespace, nil
+		return nil, nil, 0, "AgentRuns may not run in, or test, the controller's namespace " + r.ControllerNamespace, nil
 	}
 	var tmpl v1alpha1.StepTemplate
 	if err := r.Get(ctx, types.NamespacedName{Name: run.Spec.Template}, &tmpl); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, none, 0, "StepTemplate " + run.Spec.Template + " does not exist", nil
+			return nil, nil, 0, "StepTemplate " + run.Spec.Template + " does not exist", nil
 		}
-		return nil, none, 0, "", fmt.Errorf("get steptemplate %s: %w", run.Spec.Template, err)
+		return nil, nil, 0, "", fmt.Errorf("get steptemplate %s: %w", run.Spec.Template, err)
 	}
 	if why := TemplateProblem(&tmpl, r.RequireDigest); why != "" {
-		return nil, none, 0, "StepTemplate " + tmpl.Name + ": " + why, nil
+		return nil, nil, 0, "StepTemplate " + tmpl.Name + ": " + why, nil
 	}
 	timeout, err := templateTimeout(&tmpl)
 	if err != nil {
-		return nil, none, 0, err.Error(), nil
+		return nil, nil, 0, err.Error(), nil
 	}
-	if r.GraphServiceAccount != "" && tmpl.Spec.ServiceAccountName == r.GraphServiceAccount {
-		return nil, none, 0, "the Graph ServiceAccount " + r.GraphServiceAccount + " cannot run an agent", nil
-	}
-	user := serviceAccountUser(run.Namespace, tmpl.Spec.ServiceAccountName)
-	if r.Agents == nil {
-		return nil, none, 0, "no agent index: run the controller with --agent-index", nil
-	}
-	resolved, err := r.Agents.Resolve(ctx, user, actor.Where{Namespace: run.Namespace, Pipeline: run.Spec.PipelineName,
-		Environment: run.Spec.Environment})
-	if err != nil {
-		if strings.Contains(err.Error(), "read agent index") {
-			return nil, none, 0, "", fmt.Errorf("agentrun %s: %w", run.Name, err)
+	var agent v1alpha1.AgentIdentity
+	if err := r.Get(ctx, types.NamespacedName{Name: tmpl.Spec.Agent}, &agent); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil, 0, "agent " + tmpl.Spec.Agent + " (StepTemplate " + tmpl.Name + ") is not registered (no AgentIdentity)", nil
 		}
-		return nil, none, 0, "ServiceAccount " + user.Username + ": " + err.Error(), nil
+		return nil, nil, 0, "", fmt.Errorf("get agentidentity %s: %w", tmpl.Spec.Agent, err)
 	}
-	if resolved.Entry == nil {
-		return nil, none, 0, "ServiceAccount " + user.Username + " is not a registered agent (no ready AgentIdentity lists it)", nil
-	}
-	if why, err := r.readOnly(ctx, user, run); err != nil || why != "" {
-		if err != nil {
-			return nil, none, 0, "", err
-		}
-		return nil, none, 0, "agent " + resolved.Actor.Agent + " " + why + "; an AgentRun's agent must be read-only", nil
+	if why := agentProblem(&agent, run); why != "" {
+		return nil, nil, 0, "agent " + agent.Name + " " + why, nil
 	}
 	for _, s := range tmpl.Spec.SecretEnv {
 		var sec corev1.Secret
 		err := r.reader().Get(ctx, types.NamespacedName{Namespace: run.Namespace, Name: s.Secret}, &sec)
 		if apierrors.IsNotFound(err) {
-			return nil, none, 0, fmt.Sprintf("Secret %s (secretEnv %s) does not exist", s.Secret, s.Name), nil
+			return nil, nil, 0, fmt.Sprintf("Secret %s (secretEnv %s) does not exist", s.Secret, s.Name), nil
 		}
 		if err != nil {
-			return nil, none, 0, "", fmt.Errorf("get secret %s: %w", s.Secret, err)
+			return nil, nil, 0, "", fmt.Errorf("get secret %s: %w", s.Secret, err)
 		}
 		if sec.Labels[LabelStepTemplateSecret] != tmpl.Name {
-			return nil, none, 0, fmt.Sprintf("Secret %s is not labelled %s=%s: a template reads only the Secrets labelled for it",
+			return nil, nil, 0, fmt.Sprintf("Secret %s is not labelled %s=%s: a template reads only the Secrets labelled for it",
 				s.Secret, LabelStepTemplateSecret, tmpl.Name), nil
 		}
 	}
-	return &tmpl, resolved.Actor, timeout, "", nil
+	return &tmpl, &agent, timeout, "", nil
+}
+
+// agentProblem is why agent may not verify run, or "": it must be ready,
+// not suspended, and its scope must cover the run's namespace, Pipeline and
+// environment (docs/design/17-actors.md, section 3).
+func agentProblem(agent *v1alpha1.AgentIdentity, run *v1alpha1.AgentRun) string {
+	orAll := func(l []string) []string {
+		if len(l) == 0 {
+			return []string{"*"}
+		}
+		return l
+	}
+	switch {
+	case agent.Spec.Suspended:
+		return "is suspended"
+	case !agent.Status.Ready:
+		return "is not ready: " + agent.Status.Reason
+	case !actor.Matches(agent.Spec.Scope.Namespaces, run.Namespace):
+		return "may not act in namespace " + run.Namespace + " (scope.namespaces)"
+	case !actor.Matches(orAll(agent.Spec.Scope.Pipelines), run.Spec.PipelineName):
+		return "may not act on pipeline " + run.Spec.PipelineName + " (scope.pipelines)"
+	case !actor.Matches(orAll(agent.Spec.Scope.Environments), run.Spec.Environment):
+		return "may not act in environment " + run.Spec.Environment + " (scope.environments)"
+	}
+	return ""
 }
 
 // TemplateProblem is why tmpl cannot be run, or "". The StepTemplate
@@ -363,71 +385,6 @@ func TemplateProblem(tmpl *v1alpha1.StepTemplate, requireDigest bool) string {
 		}
 	}
 	return ""
-}
-
-// access is one access an agent's RBAC must (allow) or must not have.
-type access struct {
-	verb, group, resource, subresource string
-	target                             bool // in the target namespace (else the Pipeline's)
-}
-
-// forbidden are the writes and reads an AgentRun's agent must not have
-// (docs/design/19-verdicts.md, section 8.4).
-var forbidden = func() []access {
-	var out []access
-	for _, target := range []bool{false, true} {
-		out = append(out, access{"get", "", "secrets", "", target}, access{"list", "", "secrets", "", target},
-			access{"create", "", "pods", "exec", target})
-		for _, gr := range [][2]string{{"apps", "deployments"}, {"apps", "statefulsets"}, {"apps", "daemonsets"},
-			{"", "pods"}, {"", "services"}, {"", "configmaps"}} {
-			for _, verb := range []string{"create", "patch", "delete"} {
-				out = append(out, access{verb, gr[0], gr[1], "", target})
-			}
-		}
-	}
-	for _, res := range []string{"bundles", "approvals", "policygates", "pipelines"} {
-		for _, verb := range []string{"create", "patch", "delete"} {
-			out = append(out, access{verb, "kardinal.io", res, "", false})
-		}
-	}
-	return append(out, access{"create", "", "serviceaccounts", "token", false})
-}()
-
-// readOnly returns how user's RBAC is wider than an AgentRun's agent may
-// have, or "": it must be able to create Verdicts in the run's namespace,
-// and none of forbidden.
-func (r *Reconciler) readOnly(ctx context.Context, user actor.User, run *v1alpha1.AgentRun) (string, error) {
-	if r.Authorizer == nil {
-		return "", fmt.Errorf("agentrun %s: no authorizer", run.Name)
-	}
-	ok, err := r.Authorizer.Allowed(ctx, user, "create", "kardinal.io", "verdicts", "", run.Namespace)
-	if err != nil {
-		return "", fmt.Errorf("check create verdicts for %s: %w", user.Username, err)
-	}
-	if !ok {
-		return "may not create verdicts in " + run.Namespace + " (bind the chart's verifier ClusterRole)", nil
-	}
-	for _, a := range forbidden {
-		ns := run.Namespace
-		if a.target {
-			ns = run.Spec.TargetNamespace
-		}
-		if a.target && ns == run.Namespace {
-			continue // the same namespace: checked as the Pipeline's
-		}
-		ok, err := r.Authorizer.Allowed(ctx, user, a.verb, a.group, a.resource, a.subresource, ns)
-		if err != nil {
-			return "", fmt.Errorf("check %s %s for %s: %w", a.verb, a.resource, user.Username, err)
-		}
-		if ok {
-			res := a.resource
-			if a.subresource != "" {
-				res += "/" + a.subresource
-			}
-			return fmt.Sprintf("may %s %s in %s", a.verb, res, ns), nil
-		}
-	}
-	return "", nil
 }
 
 // job returns the run's Job, from the cache and, when the cache does not
@@ -465,6 +422,9 @@ func (r *Reconciler) createJob(ctx context.Context, log zerolog.Logger, base, ru
 			return ctrl.Result{}, r.patch(ctx, base, run)
 		}
 		return ctrl.Result{}, fmt.Errorf("get steptemplate %s: %w", run.Spec.Template, err)
+	}
+	if err := r.ensureAccess(ctx, run); err != nil {
+		return ctrl.Result{}, err
 	}
 	policy, err := r.networkPolicy(ctx, run, &tmpl)
 	if err != nil {
@@ -509,25 +469,98 @@ func (r *Reconciler) createJob(ctx context.Context, log zerolog.Logger, base, ru
 	return ctrl.Result{RequeueAfter: r.untilDeadline(run)}, nil
 }
 
-// ensure creates obj, owned by run, unless an object of its name that run
-// owns exists. One owned by anything else is an error: it is not this run's.
-func (r *Reconciler) ensure(ctx context.Context, run *v1alpha1.AgentRun, obj *networkingv1.NetworkPolicy) error {
-	if err := controllerutil.SetControllerReference(run, obj, r.Scheme()); err != nil {
-		return fmt.Errorf("set owner of networkpolicy %s: %w", obj.Name, err)
+// ensure creates obj, owned by run when it is in run's namespace, unless an
+// object of its name that run owns (or, in another namespace, that carries
+// run's UID label) exists. One that is not run's is an error.
+func (r *Reconciler) ensure(ctx context.Context, run *v1alpha1.AgentRun, obj client.Object) error {
+	kind := fmt.Sprintf("%T", obj)
+	if obj.GetNamespace() == run.Namespace {
+		if err := controllerutil.SetControllerReference(run, obj, r.Scheme()); err != nil {
+			return fmt.Errorf("set owner of %s %s: %w", kind, obj.GetName(), err)
+		}
 	}
 	err := r.Create(ctx, obj)
-	if err == nil {
+	if err == nil || !apierrors.IsAlreadyExists(err) {
+		if err != nil {
+			return fmt.Errorf("create %s %s/%s: %w", kind, obj.GetNamespace(), obj.GetName(), err)
+		}
 		return nil
 	}
-	if !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create networkpolicy %s: %w", obj.Name, err)
+	existing := obj.DeepCopyObject().(client.Object)
+	if err := r.reader().Get(ctx, client.ObjectKeyFromObject(obj), existing); err != nil {
+		return fmt.Errorf("get %s %s/%s: %w", kind, obj.GetNamespace(), obj.GetName(), err)
 	}
-	var existing networkingv1.NetworkPolicy
-	if err := r.reader().Get(ctx, client.ObjectKeyFromObject(obj), &existing); err != nil {
-		return fmt.Errorf("get networkpolicy %s: %w", obj.Name, err)
+	owner := metav1.GetControllerOf(existing)
+	mine := owner != nil && owner.UID == run.UID
+	if obj.GetNamespace() != run.Namespace {
+		mine = existing.GetLabels()[LabelAgentRunUID] == string(run.UID)
 	}
-	if owner := metav1.GetControllerOf(&existing); owner == nil || owner.UID != run.UID {
-		return fmt.Errorf("a NetworkPolicy named %s exists and is not owned by AgentRun %s", obj.Name, run.Name)
+	if !mine {
+		return fmt.Errorf("a %s named %s/%s exists and is not AgentRun %s's", kind, obj.GetNamespace(), obj.GetName(), run.Name)
+	}
+	return nil
+}
+
+// ensureAccess creates the run's own ServiceAccount and binds it to the
+// chart's two AgentRun ClusterRoles: the writer in the Pipeline's namespace
+// (create Verdicts) and the reader in the namespace under test. Nothing else
+// is granted, and nothing is borrowed from the agent's own identities.
+func (r *Reconciler) ensureAccess(ctx context.Context, run *v1alpha1.AgentRun) error {
+	if r.WriterClusterRole == "" || r.ReaderClusterRole == "" {
+		return fmt.Errorf("agentrun %s: the AgentRun ClusterRoles are not configured (--agentrun-writer-clusterrole, --agentrun-reader-clusterrole)", run.Name)
+	}
+	sa := run.Status.ServiceAccount
+	labels := map[string]string{LabelAgentRun: run.Name, LabelAgentRunUID: string(run.UID)}
+	no := false
+	if err := r.ensure(ctx, run, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: sa, Namespace: run.Namespace, Labels: labels},
+		AutomountServiceAccountToken: &no}); err != nil {
+		return err
+	}
+	subject := []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: sa, Namespace: run.Namespace}}
+	for _, b := range []struct{ ns, role string }{{run.Namespace, r.WriterClusterRole}, {run.Spec.TargetNamespace, r.ReaderClusterRole}} {
+		name := sa
+		if b.ns == run.Namespace && b.role == r.ReaderClusterRole {
+			name = sa + "-read" // the namespace under test is the Pipeline's
+		}
+		rb := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: b.ns, Labels: labels},
+			RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: b.role},
+			Subjects: subject}
+		if err := r.ensure(ctx, run, rb); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// revoke deletes the run's ServiceAccount (its tokens stop working) and its
+// RoleBindings, then lets the AgentRun go. Idempotent: what is gone is
+// skipped.
+func (r *Reconciler) revoke(ctx context.Context, run *v1alpha1.AgentRun) error {
+	if !controllerutil.ContainsFinalizer(run, FinalizerAccess) {
+		return nil
+	}
+	sel := client.MatchingLabels{LabelAgentRunUID: string(run.UID)}
+	for _, ns := range []string{run.Spec.TargetNamespace, run.Namespace} {
+		var rbs rbacv1.RoleBindingList
+		if err := r.reader().List(ctx, &rbs, client.InNamespace(ns), sel); err != nil {
+			return fmt.Errorf("list rolebindings of agentrun %s: %w", run.Name, err)
+		}
+		for i := range rbs.Items {
+			if err := r.Delete(ctx, &rbs.Items[i]); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("delete rolebinding %s/%s: %w", ns, rbs.Items[i].Name, err)
+			}
+		}
+	}
+	if sa := run.Status.ServiceAccount; sa != "" {
+		obj := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: sa, Namespace: run.Namespace}}
+		if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete serviceaccount %s: %w", sa, err)
+		}
+	}
+	patch := client.MergeFrom(run.DeepCopy())
+	controllerutil.RemoveFinalizer(run, FinalizerAccess)
+	if err := r.Patch(ctx, run, patch); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("remove finalizer of agentrun %s: %w", run.Name, err)
 	}
 	return nil
 }
@@ -540,8 +573,9 @@ func (r *Reconciler) networkPolicy(ctx context.Context, run *v1alpha1.AgentRun, 
 	dns := intstr.FromInt32(53)
 	egress := []networkingv1.NetworkPolicyEgressRule{
 		{
-			To: []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{},
-				PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"k8s-app": "kube-dns"}}}},
+			To: []networkingv1.NetworkPolicyPeer{{
+				NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": "kube-system"}},
+				PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{"k8s-app": "kube-dns"}}}},
 			Ports: []networkingv1.NetworkPolicyPort{{Protocol: &udp, Port: &dns}, {Protocol: &tcp, Port: &dns}},
 		},
 		{To: []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{
@@ -628,8 +662,11 @@ type runContext struct {
 	Verdict map[string]interface{} `json:"verdict"`
 }
 
-// verdictTemplate is the Verdict a run's Pod writes, without its result.
-func verdictTemplate(run *v1alpha1.AgentRun, bundle *v1alpha1.Bundle, stamp v1alpha1.Actor, by string) map[string]interface{} {
+// verdictTemplate is the Verdict a run's Pod writes, without its result. It
+// has no actor stamp: the run's ServiceAccount is not an agent's subject,
+// and the Graph names the run's agent as the Verdict's actor (from the
+// AgentRun's status).
+func verdictTemplate(run *v1alpha1.AgentRun, bundle *v1alpha1.Bundle, by string) map[string]interface{} {
 	return map[string]interface{}{
 		"apiVersion": v1alpha1.GroupVersion.String(),
 		"kind":       "Verdict",
@@ -643,7 +680,7 @@ func verdictTemplate(run *v1alpha1.AgentRun, bundle *v1alpha1.Bundle, stamp v1al
 		},
 		"spec": map[string]interface{}{
 			"pipeline": run.Spec.PipelineName, "bundle": bundle.Name, "bundleUID": string(bundle.UID),
-			"environment": run.Spec.Environment, "check": run.Spec.Check, "by": by, "actor": stamp,
+			"environment": run.Spec.Environment, "check": run.Spec.Check, "by": by,
 			"run": map[string]interface{}{"name": run.Name, "index": run.Spec.Run, "attempt": run.Spec.Attempt},
 		},
 	}
@@ -654,19 +691,12 @@ func verdictTemplate(run *v1alpha1.AgentRun, bundle *v1alpha1.Bundle, stamp v1al
 func (r *Reconciler) jobFor(ctx context.Context, run *v1alpha1.AgentRun, tmpl *v1alpha1.StepTemplate,
 	bundle *v1alpha1.Bundle) (*batchv1.Job, error) {
 	timeout := run.Status.Deadline.Sub(run.Status.StartedAt.Time)
-	user := serviceAccountUser(run.Namespace, tmpl.Spec.ServiceAccountName)
-	stamp := v1alpha1.Actor{Kind: v1alpha1.ActorAgent, Principal: user.Username, Agent: run.Status.Agent}
-	if r.Agents != nil {
-		if res, err := r.Agents.Resolve(ctx, user, actor.Where{Namespace: run.Namespace,
-			Pipeline: run.Spec.PipelineName, Environment: run.Spec.Environment}); err == nil {
-			stamp = res.Actor
-		}
-	}
+	by := actor.ServiceAccountPrefix + run.Namespace + ":" + run.Status.ServiceAccount
 	rc := runContext{Pipeline: run.Spec.PipelineName, Bundle: bundle.Name, BundleUID: string(bundle.UID),
 		Version: run.Spec.Version, Environment: run.Spec.Environment, TargetNamespace: run.Spec.TargetNamespace,
 		Check: run.Spec.Check, Run: run.Spec.Run, Attempt: run.Spec.Attempt,
 		Deadline: run.Status.Deadline.UTC().Format(time.RFC3339), Images: bundle.Spec.Images,
-		Provenance: bundle.Spec.Provenance, Verdict: verdictTemplate(run, bundle, stamp, user.Username)}
+		Provenance: bundle.Spec.Provenance, Verdict: verdictTemplate(run, bundle, by)}
 	raw, err := json.Marshal(rc)
 	if err != nil {
 		return nil, fmt.Errorf("agentrun %s: context: %w", run.Name, err)
@@ -699,7 +729,7 @@ func (r *Reconciler) jobFor(ctx context.Context, run *v1alpha1.AgentRun, tmpl *v
 		"kardinal.io/pipeline": run.Spec.PipelineName, "kardinal.io/bundle": run.Spec.BundleName,
 		"kardinal.io/environment": run.Spec.Environment, graph.LabelCheck: run.Spec.Check}
 	pod := corev1.PodSpec{
-		ServiceAccountName:           tmpl.Spec.ServiceAccountName,
+		ServiceAccountName:           run.Status.ServiceAccount,
 		AutomountServiceAccountToken: &no,
 		RestartPolicy:                corev1.RestartPolicyNever,
 		EnableServiceLinks:           &no,
@@ -835,7 +865,8 @@ func (r *Reconciler) patch(ctx context.Context, base, run *v1alpha1.AgentRun) er
 }
 
 func statusEqual(a, b *v1alpha1.AgentRunStatus) bool {
-	return a.Phase == b.Phase && a.Message == b.Message && a.Agent == b.Agent && a.JobName == b.JobName &&
+	return a.Phase == b.Phase && a.Message == b.Message && a.Agent == b.Agent && a.Sponsor == b.Sponsor &&
+		a.ServiceAccount == b.ServiceAccount && a.JobName == b.JobName &&
 		a.JobUID == b.JobUID && a.StartedAt.Equal(b.StartedAt) && a.Deadline.Equal(b.Deadline) &&
 		a.FinishedAt.Equal(b.FinishedAt) && slices.EqualFunc(a.Conditions, b.Conditions, func(x, y metav1.Condition) bool {
 		return x.Type == y.Type && x.Status == y.Status && x.Reason == y.Reason && x.Message == y.Message

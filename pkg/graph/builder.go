@@ -854,8 +854,10 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		nodes = append(nodes, extras.nodes...)
 	}
 
+	runs := agentRuns.list(pipeline, bundle)
+	gates.agentRuns, gates.namespace, gates.bundleUID = len(runs) > 0, bundle.Namespace, string(bundle.UID)
 	nodes = append(nodes, gates.nodes()...)
-	nodes = append(nodes, agentRunNodes(pipeline, bundle, agentRuns.list(pipeline, bundle), compact)...)
+	nodes = append(nodes, agentRunNodes(pipeline, bundle, runs, compact)...)
 	nodes = append(nodes, gateMirrorNodes(mirrorSteps, gates.collectionIDs())...)
 	nodes = append(nodes, GraphNode{ID: NodePRStatusData, Def: map[string]interface{}{"items": prItems}},
 		prStatusesNode(pipelineName, bundle.Name))

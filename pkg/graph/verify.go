@@ -211,26 +211,53 @@ func verifyPolicyFromData(d map[string]interface{}) *kardinalv1alpha1.GateVerify
 
 // verdictsOfItem is the spec.verdicts of a verify gate instance: the
 // Verdicts of this very Bundle (spec.bundleUID == the Bundle's UID) and
-// Pipeline, for the item's verified environment and check, from writers the
-// policy allows (an agent only when it is in allowedAgents; anyone else when
-// listed, or when both people lists are empty), sorted by name, at most
-// maxCopiedVerdicts of them. Filtering before the cap means Verdicts that
-// cannot count cannot crowd out the ones that do.
-func verdictsOfItem(pipeline string) string {
+// Pipeline, for the item's verified environment and check, sorted by name,
+// at most maxCopiedVerdicts of them. Filtering before the cap means Verdicts
+// that cannot count cannot crowd out the ones that do.
+//
+// A Verdict without spec.run counts when its writer is allowed (an agent
+// only when it is in allowedAgents; anyone else when listed, or when both
+// people lists are empty). A run-bound Verdict counts only with runs (the
+// Graph has AgentRuns): it must be written by the run's own ServiceAccount
+// (kr-<run>, which admission lets write only that Verdict, from the run's
+// Pod), and name an AgentRun this Graph applied for this Bundle, environment
+// and check, whose agent is allowed. Its actor (the run's agent and sponsor)
+// and its run index and attempt are taken from that AgentRun, never from the
+// Verdict.
+func verdictsOfItem(pipeline, namespace, bundleUID string, runs bool) string {
 	p := iterGate + ".verify"
+	base := fmt.Sprintf(`v.spec.bundleUID == bundle.metadata.uid && v.spec.pipeline == %[1]s && `+
+		`v.spec.environment == %[2]s.environment && v.spec.check == %[2]s.check`, strconv.Quote(pipeline), p)
 	eligible := fmt.Sprintf(`(v.spec.?actor.?kind.orValue("") == "agent" ? v.spec.actor.agent in %[1]s.allowedAgents : `+
 		`((size(%[1]s.allowedUsers) == 0 && size(%[1]s.allowedGroups) == 0) || v.spec.by in %[1]s.allowedUsers || `+
 		`v.spec.?groups.orValue([]).exists(g, g in %[1]s.allowedGroups)))`, p)
-	list := fmt.Sprintf(`%[1]s.filter(v, v.spec.bundleUID == bundle.metadata.uid && v.spec.pipeline == %[2]s && `+
-		`v.spec.environment == %[3]s.environment && v.spec.check == %[3]s.check && %[4]s)`+
-		`.sortBy(v, v.metadata.name).map(v, {"name": v.metadata.name, "createdAt": string(v.metadata.creationTimestamp), `+
-		`"bundle": v.spec.bundle, "bundleUID": v.spec.bundleUID, "environment": v.spec.environment, "check": v.spec.check, `+
-		`"result": v.spec.result, "summary": v.spec.?summary.orValue(""), ?"evidenceURL": v.spec.?evidenceURL, `+
-		`"findings": size(v.spec.?findings.orValue([])), `+
-		`"highFindings": size(v.spec.?findings.orValue([]).filter(f, f.severity in ["high", "critical"])), `+
-		`"by": v.spec.by, ?"groups": v.spec.?groups, ?"actor": v.spec.?actor, ?"run": v.spec.?run})`,
-		VerdictsNodeID, strconv.Quote(pipeline), p, eligible)
+	common := `"name": v.metadata.name, "createdAt": string(v.metadata.creationTimestamp), ` +
+		`"bundle": v.spec.bundle, "bundleUID": v.spec.bundleUID, "environment": v.spec.environment, "check": v.spec.check, ` +
+		`"result": v.spec.result, "summary": v.spec.?summary.orValue(""), ?"evidenceURL": v.spec.?evidenceURL, ` +
+		`"findings": size(v.spec.?findings.orValue([])), ` +
+		`"highFindings": size(v.spec.?findings.orValue([]).filter(f, f.severity in ["high", "critical"])), "by": v.spec.by`
+	list := fmt.Sprintf(`%[1]s.filter(v, %[2]s && !v.spec.?run.hasValue() && %[3]s).map(v, {%[4]s, ?"groups": v.spec.?groups, ?"actor": v.spec.?actor})`,
+		VerdictsNodeID, base, eligible, common)
+	if runs {
+		owner := fmt.Sprintf(`r.metadata.?labels[?%q].hasValue() && r.metadata.?labels[?%q].orValue("") == %s && `+
+			`r.metadata.name == v.spec.run.name && r.spec.check == v.spec.check && r.spec.environment == v.spec.environment`,
+			LabelKRONodeID, LabelBundleUID, strconv.Quote(bundleUID))
+		runList := fmt.Sprintf(`%[1]s.filter(v, %[2]s && v.spec.?run.hasValue() && v.metadata.name == v.spec.run.name && `+
+			`v.spec.by == %[3]s + v.spec.run.name && %[4]s.exists(r, %[5]s && r.?status.?agent.orValue("") in %[6]s.allowedAgents))`+
+			`.map(v, %[4]s.filter(r, %[5]s).map(r, {%[7]s, `+
+			`"actor": {"kind": "agent", "principal": v.spec.by, "agent": r.?status.?agent.orValue(""), "sponsor": r.?status.?sponsor.orValue("")}, `+
+			`"run": {"name": r.metadata.name, "index": r.spec.run, "attempt": r.spec.attempt}})[0])`,
+			VerdictsNodeID, base, strconv.Quote(RunServiceAccountUser(namespace, "")), refAgentRunsNodeID, owner, p, common)
+		list = "(" + list + " + " + runList + ")"
+	}
+	list += ".sortBy(v, v.name)"
 	return fmt.Sprintf(`${size(%[1]s) > %[2]d ? %[1]s.slice(0, %[2]d) : %[1]s}`, list, maxCopiedVerdicts)
+}
+
+// RunServiceAccountUser is the username of AgentRun run's own
+// ServiceAccount in namespace: system:serviceaccount:<ns>:kr-<run>.
+func RunServiceAccountUser(namespace, run string) string {
+	return "system:serviceaccount:" + namespace + ":kr-" + run
 }
 
 // agentRunAttempt is one AgentRun of the Graph.
@@ -361,7 +388,8 @@ func agentRunNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1
 	// created under one of the names keeps no item admitted (G17).
 	applied := fmt.Sprintf(`r.metadata.?labels[?%q].hasValue() && r.metadata.?labels[?%q].orValue("") == %s`,
 		LabelKRONodeID, LabelBundleUID, strconv.Quote(string(bundle.UID)))
-	runVerdict := `v.spec.?run.hasValue() && v.spec.bundleUID == bundle.metadata.uid`
+	runVerdict := fmt.Sprintf(`v.spec.?run.hasValue() && v.spec.bundleUID == bundle.metadata.uid && v.spec.by == %s + v.spec.run.name`,
+		strconv.Quote(RunServiceAccountUser(bundle.Namespace, "")))
 	state := map[string]interface{}{
 		"existing": fmt.Sprintf(`${%s.filter(r, %s).map(r, r.metadata.name)}`, refAgentRunsNodeID, applied),
 		"finished": fmt.Sprintf(`${%s.filter(r, %s && r.?status.?phase.orValue("") in ["Succeeded", "Failed"]).map(r, r.metadata.name)}`,
@@ -432,7 +460,8 @@ func agentRunCollection(id, list string, pipeline *kardinalv1alpha1.Pipeline, bu
 				// The result of the Verdict named after this run, when one
 				// exists: a re-created AgentRun does not run again.
 				"recorded": fmt.Sprintf(`${%s.filter(v, v.metadata.name == %s.name && v.spec.?run.hasValue() && `+
-					`v.spec.bundleUID == bundle.metadata.uid).map(v, v.spec.result).join("")}`, VerdictsNodeID, iterAgentRun),
+					`v.spec.bundleUID == bundle.metadata.uid && v.spec.by == %s + v.spec.run.name).map(v, v.spec.result).join("")}`,
+					VerdictsNodeID, iterAgentRun, strconv.Quote(RunServiceAccountUser(bundle.Namespace, ""))),
 			},
 		},
 		ReadyWhen: []string{`${each.?status.?phase.orValue("") in ["Succeeded", "Failed", "Skipped"]}`},

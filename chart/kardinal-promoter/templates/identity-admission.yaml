@@ -322,9 +322,11 @@ spec:
 ---
 {{- /*
 verdicts (docs/design/19-verdicts.md, section 4): a Verdict names its writer
-(spec.by), as an Approval names its approver, and a run-bound Verdict
-(spec.run) must come from that AgentRun's own Pod. The spec is immutable
-(CRD rule), so only CREATE checks the identity fields.
+(spec.by), as an Approval names its approver. A run-bound Verdict (spec.run)
+is the one Verdict of an AgentRun: only the run's own ServiceAccount
+(kr-<run>, which kardinal creates for the run) may write it, from the run's
+Pod, named after the run; and that ServiceAccount may write nothing else.
+The spec is immutable (CRD rule), so only CREATE checks the identity fields.
 */}}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -348,12 +350,16 @@ spec:
       expression: >-
         object != null && has(object.metadata.ownerReferences) ? object.metadata.ownerReferences : []
     # A bound ServiceAccount token (every Pod's projected token) names its
-    # Pod; a Job's Pods are named <job>-<random>, and an AgentRun's Job is
-    # named after the AgentRun.
+    # Pod; a Job's Pods are named <job>-<5 random characters>, and an
+    # AgentRun's Job is named after the AgentRun.
     - name: podNames
       expression: >-
         has(request.userInfo.extra) && 'authentication.kubernetes.io/pod-name' in request.userInfo.extra ?
         request.userInfo.extra['authentication.kubernetes.io/pod-name'] : []
+    # An AgentRun's own ServiceAccount: kr-<run>.
+    - name: runSA
+      expression: >-
+        request.userInfo.username.startsWith('system:serviceaccount:' + request.namespace + ':kr-')
   validations:
     - expression: >-
         request.operation != 'CREATE' || object.spec.by == request.userInfo.username
@@ -390,15 +396,23 @@ spec:
         variables.owners == (has(oldObject.metadata.ownerReferences) ? oldObject.metadata.ownerReferences : [])
       message: the ownerReferences of a Verdict cannot change
       reason: Forbidden
-    # A run-bound Verdict is one vote per run: it must come from the run's
-    # Pod, and is named after the run, so the run writes one.
+    # A run-bound Verdict is one vote per run: only the run's own
+    # ServiceAccount writes it, from the run's own Pod (its exact Job Pod
+    # name), named after the run, so the run writes one.
     - expression: >-
         request.operation != 'CREATE' || !has(object.spec.run) || (
+        request.userInfo.username == 'system:serviceaccount:' + request.namespace + ':kr-' + object.spec.run.name &&
         object.metadata.name == object.spec.run.name &&
-        variables.podNames.exists(p, p.startsWith(object.spec.run.name + '-')))
+        variables.podNames.exists(p, p.matches('^' + object.spec.run.name + '-[a-z0-9]{5}$')))
       messageExpression: >-
-        'spec.run names AgentRun ' + object.spec.run.name + ': only the Pod of that run may write it, ' +
-        'and the Verdict must be named after the run'
+        'spec.run names AgentRun ' + object.spec.run.name + ': only the Pod of that run may write it ' +
+        '(ServiceAccount kr-' + object.spec.run.name + '), and the Verdict must be named after the run'
+      reason: Forbidden
+    # A run's ServiceAccount writes only its run's Verdict.
+    - expression: >-
+        request.operation != 'CREATE' || !variables.runSA || has(object.spec.run)
+      message: >-
+        an AgentRun's ServiceAccount writes only its run's Verdict (spec.run); it cannot vote again
       reason: Forbidden
     - expression: >-
         request.operation != 'DELETE' || variables.cleanup || oldObject.spec.by == request.userInfo.username

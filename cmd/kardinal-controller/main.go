@@ -473,6 +473,11 @@ func main() {
 			"signature (forgejo-instance), refused unless commits.allowedSigners lists forgejo-instance. Without "+
 			"it, a verified signer that is not a user of the instance is the instance key.")
 
+	var agentRunWriterRole, agentRunReaderRole string
+	flag.StringVar(&agentRunWriterRole, "agentrun-writer-clusterrole", "kardinal-agentrun-writer",
+		"ClusterRole bound to an AgentRun's own ServiceAccount in the Pipeline namespace (create its Verdict).")
+	flag.StringVar(&agentRunReaderRole, "agentrun-reader-clusterrole", "kardinal-agentrun-reader",
+		"ClusterRole bound to an AgentRun's own ServiceAccount in the namespace it tests (read it).")
 	var stepTemplateRequireDigest bool
 	flag.BoolVar(&stepTemplateRequireDigest, "step-template-require-digest", false,
 		"Refuse StepTemplates whose image has no digest (image@sha256:...): their AgentRuns fail before their "+
@@ -947,9 +952,8 @@ func main() {
 	if err := (&agentrunrecon.Reconciler{
 		Client:              mgr.GetClient(),
 		APIReader:           mgr.GetAPIReader(),
-		Agents:              actors.source,
-		Authorizer:          agentrunrecon.SubjectAccessReviews{Client: mgr.GetClient()},
-		GraphServiceAccount: graphIdentity.ServiceAccountName,
+		WriterClusterRole:   agentRunWriterRole,
+		ReaderClusterRole:   agentRunReaderRole,
 		ControllerNamespace: hookControllerNS,
 		RequireDigest:       stepTemplateRequireDigest,
 	}).SetupWithManager(mgr); err != nil {

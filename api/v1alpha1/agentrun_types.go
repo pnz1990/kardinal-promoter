@@ -22,8 +22,9 @@ const (
 // AgentRun conditions.
 const (
 	// AgentRunConditionBounded is True once the run passed its bounds
-	// checks (a ready StepTemplate, an agent ServiceAccount whose RBAC is
-	// read-only, Secrets labelled for the template), and False with the
+	// checks (a ready StepTemplate whose agent is ready, not suspended and
+	// in scope, Secrets labelled for the template) and its own
+	// ServiceAccount, roles and NetworkPolicy exist, and False with the
 	// reason it was refused.
 	AgentRunConditionBounded = "Bounded"
 )
@@ -100,9 +101,19 @@ type AgentRunStatus struct {
 	// +optional
 	Message string `json:"message,omitempty"`
 
-	// Agent is the agent the run's ServiceAccount is (AgentIdentity name).
+	// Agent and Sponsor are the agent the run verifies for (its
+	// StepTemplate's AgentIdentity) and that agent's sponsor, when the run
+	// started. The Graph names them as the actor of the run's Verdict.
 	// +optional
 	Agent string `json:"agent,omitempty"`
+	// +optional
+	Sponsor string `json:"sponsor,omitempty"`
+
+	// ServiceAccount is the ServiceAccount kardinal created for the run
+	// (kr-<run>): the only identity that may write the run's Verdict. It is
+	// deleted, with its access, when the run ends.
+	// +optional
+	ServiceAccount string `json:"serviceAccount,omitempty"`
 
 	// JobName is the name of the Job the reconciler created.
 	// +optional

@@ -88,6 +88,16 @@ ClusterRoles bound to the Graph ServiceAccount (templates/graph-rbac.yaml).
 {{- end }}
 
 {{/*
+ClusterRoles bound to an AgentRun's own ServiceAccount (templates/agentrun-rbac.yaml).
+*/}}
+{{- define "kardinal-promoter.agentRunWriterRole" -}}
+{{- printf "%s-agentrun-writer" (include "kardinal-promoter.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+{{- define "kardinal-promoter.agentRunReaderRole" -}}
+{{- printf "%s-agentrun-reader" (include "kardinal-promoter.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
+{{/*
 Install-mode checks. Rendered from deployment.yaml so a bad combination fails
 `helm install` before anything is applied.
 */}}

@@ -1,0 +1,49 @@
+{{/*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+
+The ClusterRoles an AgentRun's own ServiceAccount (kr-<run>) is bound to
+(docs/agentic/verify-with-agents.md): kardinal creates that ServiceAccount
+for each run, binds it to the writer role in the Pipeline's namespace and to
+the reader role in the namespace under test, and deletes all three when the
+run ends. The controller may bind only these two roles (_rbac.tpl). Nothing
+here grants a write to anything but Verdicts, and nothing reads Secrets.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kardinal-promoter.agentRunWriterRole" . }}
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+rules:
+  # The run's one Verdict: the verdicts admission policy admits only the one
+  # named after the run, from the run's Pod.
+  - apiGroups: ["kardinal.io"]
+    resources: ["verdicts"]
+    verbs: ["create"]
+  # The version the run verifies.
+  - apiGroups: ["kardinal.io"]
+    resources: ["bundles"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kardinal-promoter.agentRunReaderRole" . }}
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+rules:
+  # What runs in the namespace under test, and how it is reached. No Secrets
+  # and no ConfigMaps (they hold configuration a verifier does not need).
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services", "endpoints", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
