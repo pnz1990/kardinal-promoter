@@ -320,6 +320,10 @@ jobs:
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
         with:
           version: v2.11.4
+          # The schema check downloads the JSON schema from golangci-lint.run;
+          # its timeouts were 9 of the week's flaky CI jobs (#1836). The run
+          # itself still rejects an invalid config.
+          verify: false
 
   # ── Dead code and dead files (make hygiene) ──────────────────────────────────
   # Go functions no main or test reaches, docs pages and assets nothing links,
