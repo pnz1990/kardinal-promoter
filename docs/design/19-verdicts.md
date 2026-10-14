@@ -177,8 +177,8 @@ A human or a bot may write a Verdict without a stamp (17-actors §5.5). It reads
 The chart's user roles: `<release>-approver` gains `create`, `delete` on `verdicts` (the people who
 may approve may verify). A new `<release>-verifier` ClusterRole grants `get, list, watch, create`
 on `verdicts` only, for binding to agent and CI ServiceAccounts. Viewer roles gain `get, list,
-watch`. The Graph ServiceAccount gains `list, watch` on `verdicts` (selector ref) and `get, list,
-watch` on `agentruns` (read-back), in `graph-rbac.yaml`.
+watch`. The Graph ServiceAccount gains `list, watch` on `verdicts` (selector ref), and the Graph applier role every verb on `agentruns` (it
+creates them and reads them back), in `graph-rbac.yaml`.
 
 ## 5. How the Graph reads Verdicts
 
@@ -211,9 +211,11 @@ Verdicts.filter(v,
     <eligible(v)>)                                   # allowedAgents / allowedUsers / allowedGroups (6.2)
   .sortBy(v, v.metadata.name)
   .map(v, {"name": v.metadata.name, "createdAt": v.metadata.creationTimestamp,
-           "result": v.spec.result, "summary": v.spec.summary, "by": v.spec.by,
+           "result": v.spec.result, "summary": v.spec.?summary.orValue(""), "by": v.spec.by,
            ?"groups": v.spec.?groups, ?"actor": v.spec.?actor, ?"run": v.spec.?run,
-           ?"evidenceURL": v.spec.?evidenceURL, ?"findings": v.spec.?findings})
+           ?"evidenceURL": v.spec.?evidenceURL,
+           "findings": size(v.spec.?findings.orValue([])),   # counts only: 101 Verdicts of 50
+           "highFindings": size(<the high and critical ones>)})  # findings each would not fit
 ```
 
 capped at 101 entries like `spec.approvals` (more than 100 holds the gate: "more than 100
@@ -418,25 +420,24 @@ first, with its message. An active override passes the gate as today. A gate may
 ```
 kardinal verify <bundle|version> --pipeline P --env uat --check exploratory-qa
                 (--pass | --fail | --inconclusive) [--summary TEXT] [--evidence URL]
-                [--finding 'high:Title[:url]']... [--model M] [--session S] [--client C]
-                [--revoke [--name NAME]] [-o json]
+                [--finding 'high:Title']... [--version V] [--revoke [--name NAME]]
 kardinal verify list <bundle|version> --pipeline P [--env E] [--check C]
 ```
 
 - Resolves the version like `kardinal approve` (a Bundle name, or a version of the Pipeline).
 - Writes `spec.by` and `spec.groups` from a SelfSubjectReview, and the actor stamp as 17-actors §6
-  says (`actor.Derive` on the AgentIndex; asserted fields from the flags or
-  `KARDINAL_ACTOR_MODEL`, `_SESSION`, `_CLIENT`).
+  says (`actor.Derive` on the AgentIndex; asserted fields from `KARDINAL_ACTOR_MODEL`, `_SESSION`
+  and `_CLIENT`, as for every other command).
 - Owns the Verdict by the Bundle, sets the three labels, and names it
   `<bundle>-<env>-<check>-<hash of by and time>`.
-- Before writing it reads the gates that wait for this check and tells the caller where they
-  stand, from the same function the reconciler uses (`lifecycle.VerdictStandingOf`, as
-  `ApprovalStandingOf`): "your verdict would not count: agent fixer is the author's party". It
-  still writes the Verdict when asked (`--force`): a record that does not count is still evidence.
+- After writing it reads the gates that wait for this check and tells the caller whether each
+  counts the verdict, from the same functions the reconciler uses (`lifecycle.VerdictStandingOf`):
+  "not counted by gate prod-needs-qa: the author's party (agent fixer for alice)". A verdict that
+  does not count is still written: it is evidence.
 - `--fail` and `--inconclusive` require `--summary`.
 - `--revoke` deletes the caller's latest Verdict for (version, env, check), or `--name`.
-- `verify list` prints NAME, VERIFIER, RESULT, COUNTED, REASON, AGE, EVIDENCE, read from the
-  gates' `status.verdicts` (what counted) and the Verdicts (what exists).
+- `verify list` prints NAME, ENV, CHECK, VERIFIER, RESULT, COUNTED (with the reason), AGE and
+  EVIDENCE, read from the Verdicts (what exists) and the gates' `status.verdicts` (what counted).
 
 The local MCP server (E10) exposes the same as a tool, so a desktop agent submits its verdict
 through it.
@@ -461,8 +462,8 @@ Verdict.
 
 **(b) A new AgentRun CRD, with its registration in a new kind.** A namespaced, Graph-owned run
 object whose reconciler builds the Pod itself from a cluster-scoped registration.
-- Pro: the bounds are the only mode; the reconciler shares HookRun's Job lifecycle code
-  (a package both use) rather than its API; runs and attempts are first-class.
+- Pro: the bounds are the only mode; the reconciler follows HookRun's Job lifecycle without its
+  API; runs and attempts are first-class.
 - Con: one more Graph-owned kind (admission `graph-objects`, RBAC, CRD docs), and a registration
   kind to keep.
 
@@ -477,9 +478,9 @@ images with input and output schemas at hook points (`pre`, `after-update`, `bef
 **Decision: (b), with the registration named and shaped as StepTemplate's v0.12 subset.** The
 run object is a new `AgentRun` kind (b). The registration is the cluster-scoped `StepTemplate`
 kind (c), with `output: Verdict` the only output v0.12 accepts. v0.14 adds outputs, schemas and
-hook points to the same kind, so registrations do not migrate. The Job lifecycle (create with an
-ownerReference, observe, latch, deadline, adopt) moves from `pkg/reconciler/hookrun` into a
-package both reconcilers use, so there is one implementation of the G12 workaround.
+hook points to the same kind, so registrations do not migrate. The AgentRun reconciler follows HookRun's
+Job lifecycle (create with an ownerReference, observe, latch, deadline, adopt) in its own, smaller
+code: an AgentRun has no finalizer, spec hash or sibling ordering, which is most of HookRun's.
 
 ### 8.2 StepTemplate (cluster-scoped, admin-registered)
 
@@ -556,8 +557,9 @@ HookRuns (`pkg/graph/compact_extras.go`): data, admission, collection.
   where `step` is the verified environment's PromotionStep name and `prev` the previous attempt's
   name.
 - `refAgentRuns` (a selector `ref` on `kardinal.io/bundle-uid`) reads the AgentRuns back, and the
-  `Verdicts` ref (5.1) reads their Verdicts. The steps are read back through the step read-back the shape has (`refSteps` in
-  the node shape, added when a Graph needs it; `StepsObserved` in the compact shape).
+  `Verdicts` ref (5.1) reads their Verdicts. The steps are read back through `refVerifySteps` in the
+  node shape and `StepsObserved` in the compact shape. `AgentRunState` (a `def`) lists the AgentRuns
+  that exist and that finished, the runs a pass or fail decided, and the Verified steps.
 - `AgentRunsAdmitted` (a `def`) keeps an item when its AgentRun already exists, or when all of:
   the Bundle is not Superseded or Rejected (`bundleHeld`); the verified environment's step is
   `Verified`; and either `attempt == 1`, or the previous attempt is terminal and its Verdict is
@@ -588,10 +590,10 @@ a NetworkPolicy and a Job. Before the first, it checks the run is **bounded**, a
    and the verified environment. Read once per start from the AgentIndex the controller builds
    (its own CRD's status, read through the cache).
 3. **Its RBAC is read-only.** SubjectAccessReviews as that ServiceAccount: it may `create
-   verdicts` in the Pipeline namespace; it may not `get secrets` there or in the target namespace,
-   nor `create`, `update`, `patch` or `delete` any of: deployments, statefulsets, daemonsets,
-   pods, pods/exec, services, configmaps, secrets (target namespace), bundles, approvals,
-   policygates, pipelines (Pipeline namespace), nor `create serviceaccounts/token`. The list is
+   verdicts` in the Pipeline namespace; it may not `get` or `list` secrets, `create pods/exec`, nor
+   `create`, `patch` or `delete` deployments, statefulsets, daemonsets, pods, services or configmaps,
+   in the Pipeline's namespace or the target namespace; nor `create`, `patch` or `delete` bundles,
+   approvals, policygates or pipelines, nor `create serviceaccounts/token`, in the Pipeline's. The list is
    in code, with a test per verb. A wide grant fails closed: "agent qa-explorer may patch
    deployments in checkout-uat; an AgentRun's agent must be read-only".
 4. **Its Secrets are its own.** Every `secretEnv` Secret carries the label
@@ -652,8 +654,8 @@ it.
 client-go, or `kardinal verify --from-context`). The image's exit code says whether it ran; the
 Verdict says what it found. An agent that finds a bug exits 0 and writes `fail`.
 
-The repository ships a minimal reference agent, `test/agent/probe` (a Go program: probe the
-target namespace's Services over HTTP, then write a Verdict). The live e2e builds it, loads it
+The repository ships a minimal reference agent, `hack/e2e/testagent` (a Go program, standard
+library only: probe the target namespace's Services over HTTP, then write a Verdict). The live e2e builds it, loads it
 into kind, and registers it as a StepTemplate.
 
 ### 8.6 Sandboxing: options
@@ -721,10 +723,10 @@ same records.
   why not), summary, evidence link, findings count, run and attempt. Built by the PromotionStep
   reconciler from the gates it already reads for the gate table (`collectGateResults`), so no new
   read. The custom PR template gets `.Verifications`.
-- **UI.** The stage drawer's gate section shows a verify gate's quorum (`1 of 2`), each Verdict
-  with a result chip, the verifier sentence, the summary, the evidence link and expandable
-  findings, and each AgentRun of the check with its phase and a link to its Pod logs command. The
-  UI API returns `status.verdicts` and the AgentRuns of the Bundle.
+- **UI.** The stage drawer's gate section shows a verify gate's quorum (`1 of 2`) and each
+  Verdict: the verifier sentence, the result, its run and attempt, whether it counted and why
+  not, the summary, the number of findings and the evidence link, with the `kardinal verify`
+  command. The UI API returns the gate's `verify` policy and `status.verdicts`.
 - **CLI.** `kardinal explain` prints the verify gate's reason and its Verdicts; `kardinal verify
   list` (section 7).
 - **Audit.** `VerdictRecorded` and `VerdictRevoked` AuditEvents with the Verdict's actor (6.5);

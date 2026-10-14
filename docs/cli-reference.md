@@ -51,6 +51,8 @@
 | [`kardinal status`](reference/cli/kardinal-status.md) | Show controller health or per-pipeline in-flight promotion details |
 | [`kardinal unhold`](reference/cli/kardinal-unhold.md) | Release an environment's hold (kardinal hold, or rollback --hold) |
 | [`kardinal validate`](reference/cli/kardinal-validate.md) | Validate Pipeline and PolicyGate YAML before applying to the cluster |
+| [`kardinal verify`](reference/cli/kardinal-verify.md) | Record a verdict on the version running in an environment (verify gates) |
+| [`kardinal verify list`](reference/cli/kardinal-verify-list.md) | List the verdicts on a version, and how its verify gates count them |
 | [`kardinal version`](reference/cli/kardinal-version.md) | Print the CLI, controller, and kro (Graph) versions |
 | [`kardinal why`](reference/cli/kardinal-why.md) | Say why an environment waits, and what moves it on |
 

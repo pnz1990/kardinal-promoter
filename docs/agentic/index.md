@@ -24,6 +24,7 @@ decides what it may do.
 | CEL gates | PolicyGates hold an environment until a CEL rule passes: soak time upstream, metrics, schedule, PR review state, version metadata | [Gate promotions](../policy-gates.md) |
 | ChangeWindows | Cluster-scoped freezes and allowed hours, enforced by the controller for every pipeline whose gates read them; breaking glass is a verified, time-limited, audited override | [ChangeWindow attributes](../policy-gates.md#changewindow-attributes), [Override a gate](../overrides.md) |
 | PR evidence | Every pull request kardinal opens carries the version's provenance and each gate's result and reason | [Read PR evidence](../pr-evidence.md) |
+| Verify gates | A gate waits for verdicts from agents, people or CI on the version in an upstream environment: a quorum, tolerated fails, inconclusive held, retried or failed, a timeout. Agents count only when listed, never on their own party's work. In-cluster agents run as bounded AgentRuns: read-only, a NetworkPolicy, no git credentials, a deadline | [Verify with agents](verify-with-agents.md) |
 | Audit trail | Append-only `AuditEvent` records of promotions, rollbacks, supersession, gate results, approvals, overrides, rejections and every UI API and Bundle API write, each naming its verified actor; `kardinal audit export` writes them as JSON lines or OCSF events | [Audit logging](../guides/security.md#audit-logging) |
 
 ## A starting point for an agent
@@ -72,5 +73,5 @@ freeze to PromptPwnd, and names the kardinal control that stops each one, shippe
 
 ## What's next
 
-Actor-aware policy (gates that read the actor, and agent approvals), agent verdicts as gates and
-an agent freeze are planned; they are not in kardinal yet. See the [roadmap](../roadmap.md).
+Actor-aware policy (gates that read the actor, and agent approvals) and an agent freeze are
+planned; they are not in kardinal yet. See the [roadmap](../roadmap.md).
