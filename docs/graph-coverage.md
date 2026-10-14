@@ -97,6 +97,7 @@ of items checked are in the [ledger](design/16-graph-capability-ledger.md#upstre
 | G8: gate rules, multi-cluster, custom functions | Nothing that applies to Graphs | None | No ask: time is the only real blocker |
 | G9: reconcile cost | None filed ([kro#1324](https://github.com/kubernetes-sigs/kro/issues/1324) is related) | None | Ask kro to cache the access check and skip unchanged applies |
 | G10–G14: object size, collections, Job cleanup, sharding, frozen nodes | None filed | None | See the [ledger](design/16-graph-capability-ledger.md#gaps-with-no-upstream-work) for each ask |
+| G18–G19: watching a named `ref` with a name-limited grant; reading a cluster-scoped `ref` from a namespaced Graph | None filed | None | See the [ledger](design/16-graph-capability-ledger.md#g18-the-ref-watch-check-ignores-the-refs-name) for each ask |
 
 Want to help? Pick a row, check the ledger entry for the proposed kro change, and open an
 issue or discussion on [kardinal-promoter](https://github.com/pnz1990/kardinal-promoter/issues).
