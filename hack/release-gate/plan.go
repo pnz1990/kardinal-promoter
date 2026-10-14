@@ -468,7 +468,9 @@ func scaleSteps(r *Repo, o Options) []Step {
 func unitSteps(r *Repo, o Options) []Step {
 	steps := []Step{{
 		ID: "unit-race", Area: areaUnit, Title: "go test -race -count=3 ./...", Heavy: true, Tests: "tests.json",
-		Script: `go test -race -count=3 -timeout 60m -json ./... > "$STEP_DIR/tests.json"`,
+		// -p 8: at most 8 test binaries at once, so the host keeps room for
+		// others while the gate holds the heavy-load lock.
+		Script: `go test -race -count=3 -p 8 -timeout 60m -json ./... > "$STEP_DIR/tests.json"`,
 	}}
 	for _, f := range r.FuzzTargets {
 		steps = append(steps, Step{
@@ -527,7 +529,10 @@ done
 `
 	return []Step{
 		{ID: "govulncheck", Area: areaStatic, Title: "govulncheck (make vuln)", Script: "make vuln"},
-		{ID: "golangci-lint", Area: areaStatic, Title: "golangci-lint (make lint)", Script: "make lint"},
+		// Other checkouts on the host may lint at the same time: golangci-lint
+		// refuses to by default ("parallel golangci-lint is running").
+		{ID: "golangci-lint", Area: areaStatic, Title: "golangci-lint", Script: `make "$PWD/bin/golangci-lint"
+bin/golangci-lint run --allow-parallel-runners ./...`},
 		{ID: "hygiene", Area: areaStatic, Title: "make hygiene", Script: "(cd web && npm ci --no-audit --no-fund)\nmake hygiene"},
 		{ID: "images", Area: areaStatic, Title: "trivy on the controller and render images (" + o.ImageBuild + " build)",
 			Script: "IMAGE_BUILD=" + o.ImageBuild + "\n" + images},
