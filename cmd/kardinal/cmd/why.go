@@ -315,11 +315,11 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 			return strings.Compare(gateDisplayName(a), gateDisplayName(b))
 		})
 		if len(mine) > 0 {
-			creator, known := "", false
+			author, known := lifecycle.BundleAuthor(nil), false
 			if b := byName[incoming]; b != nil {
-				creator, known = b.Annotations[lifecycle.AnnotationCreatedBy], true
+				author, known = lifecycle.BundleAuthor(b), true
 			}
-			return whyGate(p, e.Name, version, mine, me, creator, known, byName[incoming], now)
+			return whyGate(p, e.Name, version, mine, me, author, known, byName[incoming], now)
 		}
 		return whyAnswer{sentence: fmt.Sprintf("%s is held by gate %s.", e.Name, strings.Join(e.BlockedBy, ", ")),
 			lines: []whyLine{version, {"Next", fmt.Sprintf("kardinal explain %s %s", p.Name, e.Name)}}}
@@ -375,18 +375,18 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 // version's kardinal.io/created-by; known is false when the version was not
 // read, and then nothing is said about its creator. b is the version's
 // Bundle (nil when not read): a soak gate's progress is read from it at now.
-func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1.PolicyGate, me *Identity, creator string, known bool,
+func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1.PolicyGate, me *Identity, author v1alpha1.Actor, known bool,
 	b *v1alpha1.Bundle, now time.Time) whyAnswer {
 	g := gates[0]
 	name := gateDisplayName(g)
 	var a whyAnswer
 	switch {
-	case g.Spec.Approval != nil:
+	case g.Spec.Approval != nil && !lifecycle.ApprovalWaived(&g):
 		var id *lifecycle.ApproverIdentity
 		if me != nil {
 			id = &lifecycle.ApproverIdentity{User: me.Username, Groups: me.Groups}
 		}
-		st := lifecycle.ApprovalStandingOf(&g, creator, id)
+		st := lifecycle.ApprovalStandingOf(&g, author, id)
 		// A version not read has an unknown creator, not none: nothing is
 		// said about excludeAuthor then.
 		creatorHeld := st.Block == lifecycle.ApprovalNoCreator || st.Block == lifecycle.ApprovalComponentCreator
@@ -395,7 +395,7 @@ func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1
 			// decision, said in the CLI's words.
 			a.sentence = fmt.Sprintf("%s is held by gate %s: nobody can approve this version.", env, name)
 			a.lines = []whyLine{version,
-				{"Why", unapprovable(st.Block, creator)},
+				{"Why", unapprovable(st.Block, author.Principal)},
 				{"Next", fmt.Sprintf("ship it again as yourself: kardinal ship %s --image <ref>", p.Name)},
 				{"Or", fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>", p.Name, env, name)}}
 			if st.Block == lifecycle.ApprovalTooMany {

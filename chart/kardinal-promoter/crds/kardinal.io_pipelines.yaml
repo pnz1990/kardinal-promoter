@@ -76,6 +76,18 @@ spec:
                 items:
                   description: EnvironmentSpec defines one environment in a Pipeline.
                   properties:
+                    agents:
+                      description: |-
+                        Agents is this environment's ceiling for versions an agent created
+                        (docs/design/18-actor-policy.md): auto, approve (a person approves
+                        each agent version here) or deny (agent versions never enter). The
+                        agent's AgentIdentity autonomy applies too; the stricter wins. Unset
+                        adds no limit of its own. Versions created by people are not affected.
+                      enum:
+                      - auto
+                      - approve
+                      - deny
+                      type: string
                     approval:
                       default: auto
                       description: Approval controls whether promotion into this environment
@@ -2237,7 +2249,7 @@ spec:
                                           "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
                                           "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden",
                                           "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
-                                          "HoldBundleMissing", "BundleRejected", "APIWrite".
+                                          "HoldBundleMissing", "BundleRejected", "APIWrite", "FreezeExempted".
                             ApprovalRecorded and ApprovalRevoked are written by an approval gate
                             when a decision (kardinal approve) appears in or leaves its
                             spec.approvals.
@@ -2249,6 +2261,9 @@ spec:
                             APIWrite is written for each write through the UI API or the Bundle
                             API (controller.accessLog.auditEvents), naming the caller in actor and
                             the route in request.
+                            FreezeExempted is written once per exemption when a PromotionStep goes
+                            on through an active freeze under it (kardinal override --freeze),
+                            naming who made the exemption and why.
                             HealthCheckFailed and GateBlocked are accepted but never written: a
                             failed health check records PromotionFailed (RollbackStarted when
                             onHealthFailure is rollback), and a blocked gate records GateEvaluated
@@ -2274,6 +2289,7 @@ spec:
                           - APIWrite
                           - VerdictRecorded
                           - VerdictRevoked
+                          - FreezeExempted
                           type: string
                         actor:
                           description: |-

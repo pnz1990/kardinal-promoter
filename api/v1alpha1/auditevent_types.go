@@ -37,7 +37,7 @@ type AuditEventSpec struct {
 	//               "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
 	//               "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden",
 	//               "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
-	//               "HoldBundleMissing", "BundleRejected", "APIWrite".
+	//               "HoldBundleMissing", "BundleRejected", "APIWrite", "FreezeExempted".
 	// ApprovalRecorded and ApprovalRevoked are written by an approval gate
 	// when a decision (kardinal approve) appears in or leaves its
 	// spec.approvals.
@@ -49,11 +49,14 @@ type AuditEventSpec struct {
 	// APIWrite is written for each write through the UI API or the Bundle
 	// API (controller.accessLog.auditEvents), naming the caller in actor and
 	// the route in request.
+	// FreezeExempted is written once per exemption when a PromotionStep goes
+	// on through an active freeze under it (kardinal override --freeze),
+	// naming who made the exemption and why.
 	// HealthCheckFailed and GateBlocked are accepted but never written: a
 	// failed health check records PromotionFailed (RollbackStarted when
 	// onHealthFailure is rollback), and a blocked gate records GateEvaluated
 	// with outcome Failure.
-	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing;BundleRejected;APIWrite;VerdictRecorded;VerdictRevoked
+	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing;BundleRejected;APIWrite;VerdictRecorded;VerdictRevoked;FreezeExempted
 	Action string `json:"action"`
 
 	// Outcome describes the result of the action.
@@ -125,7 +128,7 @@ var AuditActions = []string{
 	"PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected",
 	"RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated",
 	"GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased", "HoldBundleMissing",
-	"BundleRejected", "APIWrite", "VerdictRecorded", "VerdictRevoked",
+	"BundleRejected", "APIWrite", "VerdictRecorded", "VerdictRevoked", "FreezeExempted",
 }
 
 // AuditOutcomes are the values spec.outcome accepts.

@@ -27,6 +27,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
@@ -142,7 +143,8 @@ func (r *Reconciler) syncAutoMerge(ctx context.Context, log zerolog.Logger, ps *
 }
 
 // autoMergeBlocked says why the step's PR may not merge now: the Pipeline
-// is paused, or a required gate is missing or not ready. "" means it may.
+// is paused, a freeze holds the step, or a required gate is missing or not
+// ready. "" means it may.
 func (r *Reconciler) autoMergeBlocked(ctx context.Context, ps *v1alpha1.PromotionStep) (string, error) {
 	paused, err := lifecycle.IsPaused(ctx, r.Client, ps.Namespace, ps.Spec.PipelineName)
 	if err != nil {
@@ -150,6 +152,13 @@ func (r *Reconciler) autoMergeBlocked(ctx context.Context, ps *v1alpha1.Promotio
 	}
 	if paused {
 		return fmt.Sprintf("pipeline %s is paused", ps.Spec.PipelineName), nil
+	}
+	matches, _, err := r.freezesFor(ctx, ps, r.now())
+	if err != nil {
+		return "", err
+	}
+	if held := changewindow.Holding(matches); len(held) > 0 {
+		return fmt.Sprintf("frozen by %s", held[0].Window.Name), nil
 	}
 	for _, name := range ps.Spec.RequiredGates {
 		var gate v1alpha1.PolicyGate

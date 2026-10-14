@@ -120,6 +120,9 @@ func findActiveOverride(gate *kardinalv1alpha1.PolicyGate, envName string, now t
 		if !ok || o.ExpiresAt.IsZero() || futureDated(o, rec.FirstSeen.Time) {
 			continue
 		}
+		if agentOverride(o) {
+			continue // break-glass is for people (18-actor-policy section 6)
+		}
 		end := overrideEnd(o, rec.FirstSeen.Time, maxOverride)
 		if !now.Before(end) {
 			continue
@@ -173,6 +176,10 @@ func (r *Reconciler) recordOverrides(ctx context.Context, gate *kardinalv1alpha1
 			rec = kardinalv1alpha1.OverrideRecord{Key: key, FirstSeen: metav1.NewTime(now), Verified: verified}
 			records[key] = rec
 			next = append(next, rec)
+		}
+		if agentOverride(o) {
+			ignored = append(ignored, fmt.Sprintf("%q by agent %s: overrides by agents are not honoured",
+				o.Reason, o.Actor.Agent))
 		}
 		if futureDated(o, rec.FirstSeen.Time) {
 			ignored = append(ignored, fmt.Sprintf("%q by %s created %s, more than %s after the controller first saw it",
@@ -293,6 +300,14 @@ func (r *Reconciler) overrideAuditEntry(gate *kardinalv1alpha1.PolicyGate,
 	if rec.Verified {
 		who = o.Actor
 	}
+	outcome := "Success"
+	msg := fmt.Sprintf("gate %s overridden by %s for %s until %s: %s",
+		gate.Name, by, stage, end.UTC().Format(time.RFC3339), o.Reason)
+	if agentOverride(o) {
+		outcome = "Failure"
+		msg = fmt.Sprintf("override of gate %s by %s not honoured: overrides by agents are not honoured: %s",
+			gate.Name, by, o.Reason)
+	}
 	suffix := "-override-" + rec.Key
 	base := gate.Name
 	if limit := maxObjectNameLength - len(suffix); len(base) > limit {
@@ -304,9 +319,17 @@ func (r *Reconciler) overrideAuditEntry(gate *kardinalv1alpha1.PolicyGate,
 			PipelineName: labels[labelPipeline],
 			Environment:  labels[labelEnvironment],
 			Action:       AuditActionGateOverridden,
-			Outcome:      "Success",
-			Message: fmt.Sprintf("gate %s overridden by %s for %s until %s: %s",
-				gate.Name, by, stage, end.UTC().Format(time.RFC3339), o.Reason),
-			Actor: who,
+			Outcome:      outcome,
+			Message:      msg,
+			Actor:        who,
 		}, rec.FirstSeen), true
+}
+
+// agentOverride reports whether o was made by an agent (its actor stamp says
+// kind agent). Such an override never opens a gate: break-glass is a
+// person's act (docs/design/18-actor-policy.md section 6). The stamp is
+// checked by the chart's actor admission policy, and an agent cannot write
+// an override without one.
+func agentOverride(o *kardinalv1alpha1.PolicyGateOverride) bool {
+	return o.Actor != nil && o.Actor.Kind == kardinalv1alpha1.ActorAgent
 }

@@ -460,12 +460,8 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 					sg.Progress += ", opens " + opens
 				}
 			}
-			if g.Spec.Approval != nil {
-				creator := ""
-				if b := byName[newest]; b != nil {
-					creator = b.Annotations[lifecycle.AnnotationCreatedBy]
-				}
-				t := lifecycle.TallyApprovals(g, creator)
+			if g.Spec.Approval != nil && !lifecycle.ApprovalWaived(g) {
+				t := lifecycle.TallyApprovals(g, lifecycle.BundleAuthor(byName[newest]))
 				sg.Approval = fmt.Sprintf("approval %d of %d", len(t.Approvers), t.Required)
 			}
 			view.BlockingGates = append(view.BlockingGates, sg)

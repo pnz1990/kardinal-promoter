@@ -29,6 +29,9 @@ spec:
     - jsonPath: .status.conditions[?(@.type=="Valid")].status
       name: Valid
       type: string
+    - jsonPath: .spec.freeze.actors
+      name: Freeze
+      type: string
     - jsonPath: .status.reason
       name: Reason
       priority: 1
@@ -41,10 +44,11 @@ spec:
       openAPIV3Schema:
         description: |-
           ChangeWindow defines a cluster-scoped time window during which promotions are
-          blocked. A ChangeWindow blocks nothing by itself: a PolicyGate blocks
-          while a window it references is active, for example
+          blocked. Without spec.freeze, a ChangeWindow blocks nothing by itself: a
+          PolicyGate blocks while a window it references is active, for example
           !changewindow.isBlocked("holiday-freeze") or changewindow.isAllowed("business-hours").
-          A gate that names a ChangeWindow that does not exist blocks.
+          A gate that names a ChangeWindow that does not exist blocks. With
+          spec.freeze, the window holds the promotions it selects while it is active.
         properties:
           apiVersion:
             description: |-
@@ -67,10 +71,96 @@ spec:
             description: ChangeWindowSpec defines the desired state of a ChangeWindow.
             properties:
               end:
-                description: 'End is when a blackout window ends (required for type:
-                  blackout).'
+                description: |-
+                  End is when a blackout window ends (required for type: blackout, except
+                  with spec.freeze: a freeze without end lasts until it is removed).
                 format: date-time
                 type: string
+              freeze:
+                description: |-
+                  Freeze makes the window hold promotions by itself while it is active,
+                  without a gate naming it (docs/design/18-actor-policy.md): an agent
+                  freeze, or a stop-the-line for everyone. kardinal freeze writes it.
+                properties:
+                  actors:
+                    description: |-
+                      Actors is whose versions are held: agents (versions whose actor stamp
+                      says kind agent) or everyone (stop-the-line).
+                    enum:
+                    - agents
+                    - everyone
+                    type: string
+                  createdBy:
+                    description: |-
+                      CreatedBy is who froze: the chart's freezes admission policy admits it
+                      only as the requester's username, and it never changes.
+                    maxLength: 253
+                    type: string
+                  exemptions:
+                    description: |-
+                      Exemptions let a pipeline, an environment or one version through the
+                      freeze until they expire (kardinal override --freeze). The admission
+                      policy admits a new one only in its creator's name, and none changes.
+                    items:
+                      description: FreezeExemption is a break-glass exception to a
+                        freeze.
+                      properties:
+                        bundle:
+                          description: Bundle, when set, limits the exemption to that
+                            version.
+                          maxLength: 253
+                          type: string
+                        createdBy:
+                          description: CreatedBy is who made the exception, as admission
+                            verified it.
+                          maxLength: 253
+                          type: string
+                        environment:
+                          description: Environment, when set, limits the exemption
+                            to that environment.
+                          maxLength: 63
+                          type: string
+                        expiresAt:
+                          description: ExpiresAt ends the exemption.
+                          format: date-time
+                          type: string
+                        namespace:
+                          description: Namespace and Pipeline are the pipeline let
+                            through.
+                          maxLength: 63
+                          minLength: 1
+                          type: string
+                        pipeline:
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        reason:
+                          description: Reason says why (recorded in the FreezeExempted
+                            audit record).
+                          maxLength: 1024
+                          minLength: 1
+                          type: string
+                      required:
+                      - expiresAt
+                      - namespace
+                      - pipeline
+                      - reason
+                      type: object
+                    maxItems: 100
+                    type: array
+                  namespaces:
+                    description: |-
+                      Namespaces limits the freeze to these namespaces: exact names, or a
+                      prefix ending in "*". Empty: every namespace.
+                    items:
+                      maxLength: 64
+                      minLength: 1
+                      type: string
+                    maxItems: 64
+                    type: array
+                required:
+                - actors
+                type: object
               reason:
                 description: Reason is a human-readable explanation for this window.
                 type: string
@@ -124,8 +214,12 @@ spec:
             - type
             type: object
             x-kubernetes-validations:
-            - message: a blackout ChangeWindow requires start and end
-              rule: self.type != 'blackout' || (has(self.start) && has(self.end))
+            - message: 'a blackout ChangeWindow requires start and end (a freeze may
+                omit end: it lasts until it is removed)'
+              rule: self.type != 'blackout' || (has(self.start) && (has(self.end)
+                || has(self.freeze)))
+            - message: 'spec.freeze needs type: blackout'
+              rule: '!has(self.freeze) || self.type == ''blackout'''
             - message: a recurring ChangeWindow requires schedule
               rule: self.type != 'recurring' || has(self.schedule)
           status:

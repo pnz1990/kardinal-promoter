@@ -35,7 +35,8 @@ type Result struct {
 
 // Evaluate returns whether the window described by spec is active at now.
 //
-//   - blackout: active from spec.start (inclusive) to spec.end (exclusive).
+//   - blackout: active from spec.start (inclusive) to spec.end (exclusive);
+//     a freeze (spec.freeze) without spec.end is active from spec.start on.
 //   - recurring: spec.schedule describes when promotions are ALLOWED; the
 //     window is active (blocking) at every other time. allowedDays empty means
 //     every day, allowedHours empty means the whole day, timezone empty means
@@ -59,6 +60,13 @@ func invalid(err error) Result {
 
 func evaluateBlackout(spec kardinalv1alpha1.ChangeWindowSpec, now time.Time) Result {
 	start, end := spec.Start.Time, spec.End.Time
+	if !start.IsZero() && end.IsZero() && spec.Freeze != nil {
+		// A freeze without end lasts until it is removed.
+		if now.Before(start) {
+			return Result{Reason: "freeze starts at " + start.UTC().Format(time.RFC3339), Next: start}
+		}
+		return Result{Active: true, Reason: "frozen since " + start.UTC().Format(time.RFC3339) + " until it is removed"}
+	}
 	if start.IsZero() || end.IsZero() {
 		return invalid(fmt.Errorf("type blackout requires spec.start and spec.end"))
 	}

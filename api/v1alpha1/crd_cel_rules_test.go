@@ -84,7 +84,12 @@ func TestChangeWindowCRDRules(t *testing.T) {
 	}{
 		{"blackout ok", map[string]interface{}{"type": "blackout", "start": "2026-12-20T00:00:00Z", "end": "2027-01-02T00:00:00Z"}, nil},
 		{"blackout without end", map[string]interface{}{"type": "blackout", "start": "2026-12-20T00:00:00Z"},
-			[]string{"a blackout ChangeWindow requires start and end"}},
+			[]string{"a blackout ChangeWindow requires start and end (a freeze may omit end: it lasts until it is removed)"}},
+		{"freeze without end", map[string]interface{}{"type": "blackout", "start": "2026-12-20T00:00:00Z",
+			"freeze": map[string]interface{}{"actors": "agents"}}, nil},
+		{"freeze on a recurring window", map[string]interface{}{"type": "recurring",
+			"schedule": map[string]interface{}{"allowedHours": "09:00-17:00"}, "freeze": map[string]interface{}{"actors": "everyone"}},
+			[]string{"spec.freeze needs type: blackout"}},
 		{"recurring ok", map[string]interface{}{"type": "recurring", "schedule": map[string]interface{}{"allowedHours": "09:00-17:00"}}, nil},
 		{"recurring without schedule", map[string]interface{}{"type": "recurring"},
 			[]string{"a recurring ChangeWindow requires schedule"}},

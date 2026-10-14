@@ -457,14 +457,15 @@ func (r *inboxReader) environment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvir
 		}
 		it := base
 		name := gateDisplayName(*g)
-		if g.Spec.Approval != nil {
-			creator, unread := "", false
+		if g.Spec.Approval != nil && !lifecycle.ApprovalWaived(g) {
+			author, unread := lifecycle.BundleAuthor(nil), false
 			if b := r.bundle(p.Namespace, bundle); b != nil {
-				creator = b.Annotations[lifecycle.AnnotationCreatedBy]
+				author = lifecycle.BundleAuthor(b)
 			} else {
 				unread = true // its creator is unknown, not absent
 			}
-			st := lifecycle.ApprovalStandingOf(g, creator, r.me)
+			creator := author.Principal
+			st := lifecycle.ApprovalStandingOf(g, author, r.me)
 			creatorHeld := st.Block == lifecycle.ApprovalNoCreator || st.Block == lifecycle.ApprovalComponentCreator
 			if st.Block == lifecycle.ApprovalRejected || (creatorHeld && unread && len(st.RejectedBy) > 0) {
 				// Rejected: nobody's approval opens it (as the UI). With the

@@ -8,7 +8,8 @@ import (
 )
 
 // ChangeWindowSpec defines the desired state of a ChangeWindow.
-// +kubebuilder:validation:XValidation:rule="self.type != 'blackout' || (has(self.start) && has(self.end))",message="a blackout ChangeWindow requires start and end"
+// +kubebuilder:validation:XValidation:rule="self.type != 'blackout' || (has(self.start) && (has(self.end) || has(self.freeze)))",message="a blackout ChangeWindow requires start and end (a freeze may omit end: it lasts until it is removed)"
+// +kubebuilder:validation:XValidation:rule="!has(self.freeze) || self.type == 'blackout'",message="spec.freeze needs type: blackout"
 // +kubebuilder:validation:XValidation:rule="self.type != 'recurring' || has(self.schedule)",message="a recurring ChangeWindow requires schedule"
 type ChangeWindowSpec struct {
 	// Type is the ChangeWindow type.
@@ -24,7 +25,8 @@ type ChangeWindowSpec struct {
 	// +optional
 	Start metav1.Time `json:"start,omitempty"`
 
-	// End is when a blackout window ends (required for type: blackout).
+	// End is when a blackout window ends (required for type: blackout, except
+	// with spec.freeze: a freeze without end lasts until it is removed).
 	// +optional
 	End metav1.Time `json:"end,omitempty"`
 
@@ -35,6 +37,81 @@ type ChangeWindowSpec struct {
 	// Schedule configures a recurring allowed-hours window (for type: recurring).
 	// +optional
 	Schedule *ChangeWindowSchedule `json:"schedule,omitempty"`
+
+	// Freeze makes the window hold promotions by itself while it is active,
+	// without a gate naming it (docs/design/18-actor-policy.md): an agent
+	// freeze, or a stop-the-line for everyone. kardinal freeze writes it.
+	// +optional
+	Freeze *ChangeWindowFreeze `json:"freeze,omitempty"`
+}
+
+// Freeze actors: whose versions a freeze holds.
+const (
+	FreezeAgents   = "agents"
+	FreezeEveryone = "everyone"
+)
+
+// ChangeWindowFreeze is what a freezing ChangeWindow holds and who froze.
+type ChangeWindowFreeze struct {
+	// Actors is whose versions are held: agents (versions whose actor stamp
+	// says kind agent) or everyone (stop-the-line).
+	// +kubebuilder:validation:Enum=agents;everyone
+	Actors string `json:"actors"`
+
+	// Namespaces limits the freeze to these namespaces: exact names, or a
+	// prefix ending in "*". Empty: every namespace.
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:MaxLength=64
+	// +optional
+	Namespaces []string `json:"namespaces,omitempty"`
+
+	// CreatedBy is who froze: the chart's freezes admission policy admits it
+	// only as the requester's username, and it never changes.
+	// +kubebuilder:validation:MaxLength=253
+	// +optional
+	CreatedBy string `json:"createdBy,omitempty"`
+
+	// Exemptions let a pipeline, an environment or one version through the
+	// freeze until they expire (kardinal override --freeze). The admission
+	// policy admits a new one only in its creator's name, and none changes.
+	// +kubebuilder:validation:MaxItems=100
+	// +optional
+	Exemptions []FreezeExemption `json:"exemptions,omitempty"`
+}
+
+// FreezeExemption is a break-glass exception to a freeze.
+type FreezeExemption struct {
+	// Namespace and Pipeline are the pipeline let through.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	Namespace string `json:"namespace"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Pipeline string `json:"pipeline"`
+
+	// Environment, when set, limits the exemption to that environment.
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	Environment string `json:"environment,omitempty"`
+
+	// Bundle, when set, limits the exemption to that version.
+	// +kubebuilder:validation:MaxLength=253
+	// +optional
+	Bundle string `json:"bundle,omitempty"`
+
+	// Reason says why (recorded in the FreezeExempted audit record).
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	Reason string `json:"reason"`
+
+	// ExpiresAt ends the exemption.
+	ExpiresAt metav1.Time `json:"expiresAt"`
+
+	// CreatedBy is who made the exception, as admission verified it.
+	// +kubebuilder:validation:MaxLength=253
+	// +optional
+	CreatedBy string `json:"createdBy,omitempty"`
 }
 
 // ChangeWindowSchedule configures a recurring allowed-hours window.
@@ -91,14 +168,16 @@ type ChangeWindowStatus struct {
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
 // +kubebuilder:printcolumn:name="Active",type=boolean,JSONPath=`.status.active`
 // +kubebuilder:printcolumn:name="Valid",type=string,JSONPath=`.status.conditions[?(@.type=="Valid")].status`
+// +kubebuilder:printcolumn:name="Freeze",type=string,JSONPath=`.spec.freeze.actors`
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.reason`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // ChangeWindow defines a cluster-scoped time window during which promotions are
-// blocked. A ChangeWindow blocks nothing by itself: a PolicyGate blocks
-// while a window it references is active, for example
+// blocked. Without spec.freeze, a ChangeWindow blocks nothing by itself: a
+// PolicyGate blocks while a window it references is active, for example
 // !changewindow.isBlocked("holiday-freeze") or changewindow.isAllowed("business-hours").
-// A gate that names a ChangeWindow that does not exist blocks.
+// A gate that names a ChangeWindow that does not exist blocks. With
+// spec.freeze, the window holds the promotions it selects while it is active.
 type ChangeWindow struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

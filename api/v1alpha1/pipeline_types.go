@@ -177,6 +177,15 @@ type EnvironmentSpec struct {
 	// +optional
 	Approval string `json:"approval,omitempty"`
 
+	// Agents is this environment's ceiling for versions an agent created
+	// (docs/design/18-actor-policy.md): auto, approve (a person approves
+	// each agent version here) or deny (agent versions never enter). The
+	// agent's AgentIdentity autonomy applies too; the stricter wins. Unset
+	// adds no limit of its own. Versions created by people are not affected.
+	// +kubebuilder:validation:Enum=auto;approve;deny
+	// +optional
+	Agents string `json:"agents,omitempty"`
+
 	// Update holds the manifest update configuration for this environment.
 	// +optional
 	Update UpdateConfig `json:"update,omitempty"`

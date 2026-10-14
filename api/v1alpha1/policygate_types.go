@@ -98,8 +98,12 @@ type PolicyGateSpec struct {
 }
 
 // GateApprovalPolicy says whose approvals a gate counts and how many it needs.
+// +kubebuilder:validation:XValidation:rule="!has(self.allowAgents) || !self.allowAgents || (has(self.allowedAgents) && size(self.allowedAgents) > 0)",message="approval.allowAgents needs approval.allowedAgents: name the agents whose approvals count"
+// +kubebuilder:validation:XValidation:rule="!has(self.allowedAgents) || size(self.allowedAgents) == 0 || (has(self.allowAgents) && self.allowAgents)",message="approval.allowedAgents needs approval.allowAgents: true (agent approvals are opt-in)"
 type GateApprovalPolicy struct {
-	// Required is how many distinct allowed people must approve.
+	// Required is how many distinct allowed parties must approve. A party
+	// is a person, or an agent together with its sponsor
+	// (docs/design/18-actor-policy.md): alice and her agent count once.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=100
 	// +kubebuilder:default=1
@@ -122,8 +126,39 @@ type GateApprovalPolicy struct {
 	// chart's admission policy pins to the creating user (kardinal create
 	// bundle, the Bundle API and the UI set it). A Bundle without it blocks
 	// the gate: the rule cannot be enforced.
+	// It applies the one-party rule: with an actor stamp on the Bundle, an
+	// agent's version cannot be approved by the agent, its sponsor or another
+	// agent of that sponsor, and a person's version not by the person's own
+	// agents.
 	// +optional
 	ExcludeAuthor bool `json:"excludeAuthor,omitempty"`
+
+	// RequiredWhen is a CEL expression, in the gate's own context: the policy
+	// holds the gate only while it is true. Unset means always. While it is
+	// false approvals are still recorded, approvals.met is true and
+	// status.approvalRequired is false. An evaluation error blocks the gate.
+	// Example: "actor.kind == 'agent'" (people ship on their own, agents need
+	// an approval).
+	// +kubebuilder:validation:MaxLength=4096
+	// +optional
+	RequiredWhen string `json:"requiredWhen,omitempty"`
+
+	// AllowAgents opts the gate in to approvals by agents. An approval whose
+	// actor is an agent counts only when this is true and the agent is in
+	// allowedAgents, and never on a version of the agent's own party
+	// (the agent, its sponsor, or the sponsor's other agents), whatever
+	// excludeAuthor says. allowedUsers and allowedGroups do not apply to
+	// agents.
+	// +optional
+	AllowAgents bool `json:"allowAgents,omitempty"`
+
+	// AllowedAgents are the AgentIdentity names whose approvals count when
+	// allowAgents is true.
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:MaxLength=253
+	// +optional
+	AllowedAgents []string `json:"allowedAgents,omitempty"`
 }
 
 // Verify onInconclusive and onTimeout values.
@@ -457,6 +492,12 @@ type PolicyGateStatus struct {
 	// UI.
 	// +optional
 	Verdicts []GateVerdictStatus `json:"verdicts,omitempty"`
+
+	// ApprovalRequired is whether spec.approval held the gate at the last
+	// evaluation: false while approval.requiredWhen is false, true otherwise.
+	// Unset on a gate without a policy, and on one not yet evaluated.
+	// +optional
+	ApprovalRequired *bool `json:"approvalRequired,omitempty"`
 
 	// Overrides records each spec.overrides entry the controller has seen:
 	// when it first saw it, whether its createdBy was checked by the chart's
