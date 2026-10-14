@@ -27,7 +27,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Rollback mechanism** | `kardinal rollback` promotes the previous artifact through the same pipeline, gates and PR flow | Re-promote older Freight; since v1.11 this pins the Stage so auto-promotion does not roll forward again | `RestoreActiveCommit` (v0.44): a new commit restores one environment branch to a version it ran, and blocks promotion there until released |
 | **Auto-rollback on health failure** | Yes — `onHealthFailure: rollback \| abort \| none` per stage, or a RollbackPolicy | Kargo Enterprise only (beta): back to the last verified Freight when verification fails | No |
 | **Contiguous healthy soak** | Yes — `bake.minutes` resets timer on health alarm | No — `requiredSoakTime` counts time since the Freight was verified upstream; health does not reset it | No — `TimedCommitStatus` counts time since the commit merged; health does not reset it |
-| **Change freeze management** | Yes — cluster-scoped `ChangeWindow` (blackout or recurring), enforced by any gate that references it | Kargo Enterprise only (promotion windows, v1.12, beta); open source ignores the field | `ScheduledCommitStatus` cron windows, global or per environment, per PromotionStrategy |
+| **Change freeze management** | Yes — cluster-scoped `ChangeWindow` (blackout or recurring), enforced by any gate that references it; `kardinal freeze` stops the line for everyone or holds only agents' versions, on every in-flight promotion, with audited exemptions | Kargo Enterprise only (promotion windows, v1.12, beta); open source ignores the field | `ScheduledCommitStatus` cron windows, global or per environment, per PromotionStrategy |
 | **Pause in-flight promotions** | Yes — `kardinal pause` (CLI or UI): no new step starts, and a step still preparing its change holds before its next git step | Turn off auto-promotion per Stage; a manual re-promote pins the Stage (v1.11) | `autoMerge: false` per environment (PRs wait for a manual merge) |
 | **Reject a release** | Yes — `kardinal reject`: the Bundle is never promoted again, its unfinished steps are cancelled and their PRs closed, and rollback never returns to it; the rejecting user is verified by the API server | No — rejecting Freight is an open request ([#6151](https://github.com/akuity/kargo/issues/6151)) | No reject action; close the PR by hand |
 | **Supersede an older release in flight** | Yes — a newer Bundle supersedes an older one that is still promoting | No — promotions queue ([#3108](https://github.com/akuity/kargo/issues/3108), its most-requested open issue) | Yes — the newest commit wins; intermediate commits may be skipped |
@@ -187,7 +187,10 @@ recurring allowed window (days, hours, timezone). Platform teams reference it fr
 PolicyGates (`!changewindow.isBlocked("freeze")`, one gate per environment name such as `prod`),
 so one object blocks every pipeline's matching environment during incidents, holidays, or
 maintenance windows, with no per-pipeline changes. The freeze stops steps that have not
-started yet. Kargo open source has no equivalent; Kargo Enterprise has promotion windows
+started yet. `kardinal freeze --everyone` (stop-the-line) or `--agents` needs no gate at all: a
+ChangeWindow with `spec.freeze` holds every step it selects, including Graphs built before it, and
+`kardinal override --freeze` lets one change through with an audited exemption
+([Freeze agents, stop the line](agentic/freezes.md)). Kargo open source has no equivalent; Kargo Enterprise has promotion windows
 (v1.12, beta), checked when a Promotion is created. GitOps Promoter has `ScheduledCommitStatus`,
 set up per PromotionStrategy.
 
