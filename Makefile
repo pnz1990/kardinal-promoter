@@ -25,7 +25,7 @@ IMG_TAG  ?= dev
 IMG      ?= $(IMG_REPO):$(IMG_TAG)
 
 .PHONY: all build build-controller build-cli ui ui-test ui-test-e2e test test-integration test-cover \
-        lint lint-local vet vuln hygiene hygiene-go hygiene-web generate manifests api-docs \
+        lint lint-local vet vuln hygiene hygiene-go hygiene-web envtest generate manifests api-docs \
         install uninstall docker-build helm-lint validate-manifests \
         install-kro e2e-tools e2e-up e2e-down test-e2e-live e2e-all \
         tools help
@@ -89,6 +89,18 @@ hygiene-go: $(DEADCODE) ## Go functions no main or test reaches (deadcode), orph
 
 hygiene-web: ## Unused files, exports and dependencies in web/ (knip; needs npm ci in web/)
 	cd web && npm run knip
+
+## envtest: install every CRD of config/crd/bases and the chart's admission policies on a real
+## kube-apiserver, the oldest and the newest Kubernetes of hack/tool-versions.env (needs helm).
+## ENVTEST_K8S=<version> runs one.
+envtest: ## Install the CRDs and admission policies on the oldest and newest supported API servers
+	@. hack/tool-versions.env; \
+	GOBIN=$(CURDIR)/bin $(GO) install sigs.k8s.io/controller-runtime/tools/setup-envtest@$$SETUP_ENVTEST_VERSION && \
+	for v in $${ENVTEST_K8S:-$$ENVTEST_K8S_MIN $$ENVTEST_K8S_MAX}; do \
+	  assets=$$($(CURDIR)/bin/setup-envtest use $$v --bin-dir $(CURDIR)/bin/envtest -p path) || exit 1; \
+	  echo "== Kubernetes $$v"; \
+	  KUBECONFIG=/dev/null KUBEBUILDER_ASSETS=$$assets $(GO) test -tags envtest ./test/helm/ -run TestInstallOnAPIServer -count=1 || exit 1; \
+	done
 
 ## Generate (CRD manifests + DeepCopy)
 ## IMPORTANT: Run 'make manifests generate' after any change to api/v1alpha1/ types,

@@ -20,6 +20,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
 )
 
 // fleetTargets is n targets t00..t<n-1>.
@@ -114,7 +115,9 @@ func TestGraph_FleetRollbackWholeFleet(t *testing.T) {
 // waits on its PRs. The three PRs merge and their targets finish Verified,
 // but no fourth target starts although places are free, the Pipeline stays
 // unpaused, and its summary and kardinal get pipelines say the fleet is
-// paused. kardinal resume --env prod lets the rollout go on to the end.
+// paused. Across the pause each first-wave target keeps its step (same UID)
+// and has exactly one PR. kardinal resume --env prod lets the rollout go on
+// to the end.
 //
 // Covers FLEET-10.
 func TestGraph_FleetPauseMidWave(t *testing.T) {
@@ -128,8 +131,9 @@ func TestGraph_FleetPauseMidWave(t *testing.T) {
 	a.apply(t, fleetPromotion(ns, repo, &v1alpha1.FleetSpec{MaxConcurrent: 3, Targets: targets}, "pr-review"))
 
 	bundle := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
+	uids := map[string]types.UID{}
 	for _, n := range names[:3] {
-		e.WaitStepState(t, ns, pipelineName, bundle, "prod-"+n, "WaitingForMerge", promoteTimeout)
+		uids["prod-"+n] = e.WaitStepState(t, ns, pipelineName, bundle, "prod-"+n, "WaitingForMerge", promoteTimeout).UID
 	}
 	out := e.MustKardinal(t, ns, "pause", pipelineName, "--env", "prod")
 	assert.Contains(t, out, "Fleet prod of pipeline "+pipelineName+" paused. No further target starts")
@@ -137,11 +141,15 @@ func TestGraph_FleetPauseMidWave(t *testing.T) {
 	assert.Equal(t, []string{"prod"}, p.Spec.PausedFleets)
 	assert.False(t, p.Spec.Paused, "only the fleet is paused")
 
+	prs := map[string]int{}
 	for _, n := range names[:3] {
-		a.merge(t, a.openPR(t, bundle, "prod-"+n))
+		pr := a.openPR(t, bundle, "prod-"+n)
+		prs["prod-"+n] = pr.Number
+		a.merge(t, pr)
 	}
 	for _, n := range names[:3] {
-		e.WaitStepState(t, ns, pipelineName, bundle, "prod-"+n, "Verified", promoteTimeout)
+		s := e.WaitStepState(t, ns, pipelineName, bundle, "prod-"+n, "Verified", promoteTimeout)
+		assert.Equal(t, uids["prod-"+n], s.UID, "%s: the step started before the pause is the one that finished", s.Name)
 	}
 	framework.Consistently(t, 30*time.Second, "no target starts while the fleet is paused", func(context.Context) (bool, string) {
 		steps := fleetSteps(t, e, ns, bundle, "prod")
@@ -152,6 +160,13 @@ func TestGraph_FleetPauseMidWave(t *testing.T) {
 		return strings.HasPrefix(s, "Fleet prod paused; "), s
 	})
 	assert.Contains(t, e.MustKardinal(t, ns, "get", "pipelines"), "paused")
+	// The pause rebuilt the Graph: no first-wave step was re-applied, so each
+	// target has exactly the one PR it had (WaitPR fails on a second one).
+	for env, number := range prs {
+		pr := e.WaitPR(t, repo, time.Minute, "the one PR of "+env, func(pr gitserver.PR) bool { return pr.Head == prHead(ns, bundle, env) })
+		assert.Equal(t, number, pr.Number, env)
+		assert.Equal(t, "merged", pr.State, env)
+	}
 
 	e.MustKardinal(t, ns, "resume", pipelineName, "--env", "prod")
 	assert.Empty(t, livePipeline(t, e, ns).Spec.PausedFleets)
@@ -165,8 +180,9 @@ func TestGraph_FleetPauseMidWave(t *testing.T) {
 // TestGraph_FleetMaxUnavailablePercent (#1835): maxUnavailable "10%" of a
 // 50-target fleet (maxConcurrent 10) is 5 targets. The first 5 fail their
 // health check: no further target starts, the targets in flight finish
-// Verified, post never starts and the version is Failed. The API server
-// refuses 0%, a percentage above 100% and a count of 0.
+// Verified, post never starts and the version is Failed. The CRD refuses
+// 0%, 101%, ten and a quoted "2", and the chart's fleets policy counts of 0
+// and -1.
 //
 // Covers FLEET-11.
 func TestGraph_FleetMaxUnavailablePercent(t *testing.T) {
@@ -182,12 +198,20 @@ func TestGraph_FleetMaxUnavailablePercent(t *testing.T) {
 	repo := e.Repo(t, ns, fleetFiles(ns, []string{"test", "post"}, "fleet", names, false))
 	createCompactHealth(t, e, ns)
 
-	for _, bad := range []intstr.IntOrString{intstr.FromString("0%"), intstr.FromString("101%"), intstr.FromString("ten"), intstr.FromInt32(0)} {
+	// The CRD's pattern refuses a string that is not a percentage; the
+	// chart's fleets policy a count below 1 (both on every supported
+	// Kubernetes: make envtest installs them on the oldest and the newest).
+	for _, bad := range []intstr.IntOrString{intstr.FromString("0%"), intstr.FromString("101%"), intstr.FromString("ten"),
+		intstr.FromString("2"), intstr.FromInt32(0), intstr.FromInt32(-1)} {
 		p := fleetPromotion(ns, repo, &v1alpha1.FleetSpec{MaxUnavailable: &bad, Targets: targets}, "auto")
 		p.Name = "bad-max-unavailable"
 		err := e.Client.Create(context.Background(), p)
 		require.Error(t, err, "maxUnavailable %s", bad.String())
-		assert.Contains(t, err.Error(), "fleet.maxUnavailable: a count of at least 1, or a percentage from 1% to 100%", bad.String())
+		if bad.Type == intstr.Int {
+			assert.Contains(t, err.Error(), "fleet.maxUnavailable: a count of at least 1, or a percentage from 1% to 100%", bad.String())
+		} else {
+			assert.Contains(t, err.Error(), "maxUnavailable", bad.String())
+		}
 	}
 
 	pct := intstr.FromString("10%")

@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/util/intstr"
+
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/ext"
 	"github.com/stretchr/testify/require"
@@ -139,7 +141,11 @@ func fuzzBuildInput(data []byte) (graph.BuildInput, *graph.Builder, bool) {
 		if s.intn(5) == 0 {
 			fleet := &kardinalv1alpha1.FleetSpec{MaxConcurrent: s.intn(4)}
 			if s.bool() {
-				mu := s.intn(3)
+				// A count of 1 to 3, or a percentage (#1835).
+				mu := intstr.FromInt32(int32(1 + s.intn(3)))
+				if s.bool() {
+					mu = intstr.FromString([]string{"10%", "50%", "100%"}[s.intn(3)])
+				}
 				fleet.MaxUnavailable = &mu
 			}
 			seen := map[string]bool{}

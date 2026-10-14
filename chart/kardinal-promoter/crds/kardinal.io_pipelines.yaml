@@ -189,12 +189,10 @@ spec:
                             and at least 1. Unset, a failure only keeps its place in
                             maxConcurrent. An environment after the fleet waits for every target
                             to be Verified either way.
-                          maxLength: 4
+                            A count is unquoted (a quoted "2" is refused) and at least 1; a
+                            percentage is from 1% to 100%.
+                          pattern: ^([1-9][0-9]?|100)%$
                           x-kubernetes-int-or-string: true
-                          x-kubernetes-validations:
-                          - message: 'fleet.maxUnavailable: a count of at least 1,
-                              or a percentage from 1% to 100%'
-                            rule: 'type(self) == int ? self >= 1 : self.matches(''^([1-9][0-9]?|100)%$'')'
                         selector:
                           description: |-
                             Selector picks the targets by labels: from targets (kind Target),

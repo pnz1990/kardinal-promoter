@@ -171,7 +171,8 @@ var allFeatures = []string{
 // Bundles and valid durations, and collided across releases. Validation lives
 // in the CRD schema (api/v1alpha1/crd_schema_test.go). The only admission
 // objects are the identity policies (identity-admission.yaml), the
-// hold-writes policy (hold-admission.yaml, #1528) and the gitops-writes
+// hold-writes policy (hold-admission.yaml, #1528), the fleets policy
+// (fleets-admission.yaml, #1835) and the gitops-writes
 // policy (gitops-admission.yaml, health.refresh), named per release and
 // always shipped.
 func TestChartRendersOnlyIdentityAdmissionPolicies(t *testing.T) {
@@ -185,6 +186,8 @@ func TestChartRendersOnlyIdentityAdmissionPolicies(t *testing.T) {
 		assert.ElementsMatch(t, append(identityAdmissionObjects("kardinal-promoter"),
 			"ValidatingAdmissionPolicy/kardinal-promoter-hold-writes",
 			"ValidatingAdmissionPolicyBinding/kardinal-promoter-hold-writes",
+			"ValidatingAdmissionPolicy/kardinal-promoter-fleets",
+			"ValidatingAdmissionPolicyBinding/kardinal-promoter-fleets",
 			"ValidatingAdmissionPolicy/kardinal-promoter-gitops-writes",
 			"ValidatingAdmissionPolicyBinding/kardinal-promoter-gitops-writes",
 		), got, "args %v", args)

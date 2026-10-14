@@ -256,3 +256,111 @@ func TestHoldCurrent_Fleet(t *testing.T) {
 	assert.ErrorIs(t, err, lifecycle.ErrConflict)
 	assert.ErrorContains(t, err, "nothing runs in prod")
 }
+
+// TestPlanRollback_FleetNeverForward (#1835, QA): a target rolled back
+// alone to v0, whose v0 Bundle history cleanup deleted, cannot be ordered:
+// counting the rollback by its own creation time would make the fleet go to
+// v1 and roll that target forward. The rollback is refused, asking for --to.
+// Also without the deletion, the fleet never goes to a version a rollback
+// in a target went back from.
+//
+// Covers FLEET-15.
+func TestPlanRollback_FleetNeverForward(t *testing.T) {
+	p := wideFleet(3)
+	gone := []client.Object{p, bundle("app-v1", "app", "v1", 10), bundle("app-v2", "app", "v2", 20),
+		rollbackOf(bundle("app-rb", "app", "v0", 30), "app-v0"),
+		step("app-v1", "app", "prod-t00", "Verified", 11), step("app-rb", "app", "prod-t00", "Verified", 31),
+		step("app-v1", "app", "prod-t01", "Verified", 12),
+		step("app-v1", "app", "prod-t02", "Verified", 13), step("app-v2", "app", "prod-t02", "Verified", 21)}
+	_, err := lifecycle.PlanRollback(context.Background(), newClient(t, gone...), lifecycle.RollbackRequest{
+		Namespace: ns, Pipeline: "app", Environment: "prod", Now: t0.Add(time.Hour)})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, lifecycle.ErrConflict)
+	assert.ErrorContains(t, err, "prod-t00 runs app-rb, which restored app-v0, and app-v0 cannot be read")
+	assert.ErrorContains(t, err, "--to")
+
+	// The same fleet with v0 kept: the rollback counts as v0, so the fleet
+	// goes to v0, where t00 already is, and not to v1.
+	rb := rollbackOf(bundle("app-rb", "app", "v0", 30), "app-v0")
+	rb.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod-t00"}
+	rb.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "app-v1"}
+	kept := []client.Object{p, bundle("app-v0", "app", "v0", 0), bundle("app-v1", "app", "v1", 10), bundle("app-v2", "app", "v2", 20), rb,
+		step("app-v0", "app", "prod-t00", "Verified", 1), step("app-v0", "app", "prod-t01", "Verified", 2), step("app-v0", "app", "prod-t02", "Verified", 3),
+		step("app-v1", "app", "prod-t00", "Verified", 11), step("app-rb", "app", "prod-t00", "Verified", 31),
+		step("app-v1", "app", "prod-t01", "Verified", 12),
+		step("app-v1", "app", "prod-t02", "Verified", 13), step("app-v2", "app", "prod-t02", "Verified", 21)}
+	plan, err := lifecycle.PlanRollback(context.Background(), newClient(t, kept...), lifecycle.RollbackRequest{
+		Namespace: ns, Pipeline: "app", Environment: "prod", Now: t0.Add(time.Hour)})
+	require.NoError(t, err)
+	assert.Equal(t, "app-v0", plan.Target.Name, "never v1, which t00 rolled back from")
+	for _, f := range plan.Fleet {
+		if f.Environment == "prod-t00" {
+			assert.False(t, f.Changes, "t00 runs v0's artifacts already")
+		}
+	}
+
+	// --to app-v1 names it: t00 was rolled back from v1, but an explicit
+	// --to may go there, as for one target.
+	to, err := lifecycle.PlanRollback(context.Background(), newClient(t, kept...), lifecycle.RollbackRequest{
+		Namespace: ns, Pipeline: "app", Environment: "prod", ToBundle: "app-v1", Now: t0.Add(time.Hour)})
+	require.NoError(t, err)
+	assert.Equal(t, "app-v1", to.Target.Name)
+}
+
+// TestPlanRollback_FleetPerTargetEligibility (#1835, QA): the version the
+// fleet goes back to must have been Verified in every target the rollback
+// changes, as for the rollback of one target: a target where it Failed, or
+// that joined after it and never ran it, refuses the rollback, naming each.
+// A target that runs nothing yet gets it as its first version.
+//
+// Covers FLEET-15.
+func TestPlanRollback_FleetPerTargetEligibility(t *testing.T) {
+	failedV1 := step("app-v1", "app", "prod-t01", "Failed", 12)
+	exp := metav1.NewTime(t0.Add(13 * time.Minute))
+	failedV1.Status.HealthCheckExpiry = &exp
+	objs := []client.Object{wideFleet(5), bundle("app-v1", "app", "v1", 10), bundle("app-v2", "app", "v2", 20),
+		step("app-v1", "app", "prod-t00", "Verified", 11),
+		failedV1, step("app-v2", "app", "prod-t01", "Verified", 22),
+		step("app-v1", "app", "prod-t02", "Verified", 13), step("app-v2", "app", "prod-t02", "Verified", 23),
+		step("app-v2", "app", "prod-t03", "Verified", 24)} // t03 joined after v1; t04 runs nothing
+	for _, to := range []string{"", "app-v1"} {
+		_, err := lifecycle.PlanRollback(context.Background(), newClient(t, objs...), lifecycle.RollbackRequest{
+			Namespace: ns, Pipeline: "app", Environment: "prod", ToBundle: to, Now: t0.Add(time.Hour)})
+		require.Error(t, err, "to=%q", to)
+		assert.ErrorIs(t, err, lifecycle.ErrConflict)
+		assert.ErrorContains(t, err, "fleet prod cannot go back to app-v1, which is not known to work in "+
+			"prod-t01 (it was not Verified there), prod-t03 (never ran it)")
+		assert.NotContains(t, err.Error(), "prod-t04", "a target with nothing deployed gets it as its first version")
+	}
+
+	// Without t01 and t03 the rollback goes ahead, and t04 gets v1.
+	ok := []client.Object{wideFleet(3), bundle("app-v1", "app", "v1", 10), bundle("app-v2", "app", "v2", 20),
+		step("app-v1", "app", "prod-t00", "Verified", 11),
+		step("app-v1", "app", "prod-t01", "Verified", 13), step("app-v2", "app", "prod-t01", "Verified", 23)}
+	plan, err := lifecycle.PlanRollback(context.Background(), newClient(t, ok...), lifecycle.RollbackRequest{
+		Namespace: ns, Pipeline: "app", Environment: "prod", Now: t0.Add(time.Hour)})
+	require.NoError(t, err)
+	assert.Equal(t, []lifecycle.FleetTargetRollback{{Environment: "prod-t00", Runs: "app-v1"},
+		{Environment: "prod-t01", Runs: "app-v2", Changes: true}, {Environment: "prod-t02", Changes: true}}, plan.Fleet)
+}
+
+// TestPlanRollback_FleetRolledBackFromInATarget: every target runs v2, and
+// the version before is v1, but a rollback in t01 went back from v1 earlier:
+// the fleet does not return there unless --to names it.
+//
+// Covers FLEET-15.
+func TestPlanRollback_FleetRolledBackFromInATarget(t *testing.T) {
+	rb := rollbackOf(bundle("app-rb", "app", "v0", 15), "app-v0")
+	rb.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod-t01"}
+	rb.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "app-v1"}
+	objs := []client.Object{wideFleet(2), bundle("app-v0", "app", "v0", 0), bundle("app-v1", "app", "v1", 10), bundle("app-v2", "app", "v2", 20), rb,
+		step("app-v1", "app", "prod-t00", "Verified", 11), step("app-v2", "app", "prod-t00", "Verified", 21),
+		step("app-v1", "app", "prod-t01", "Verified", 12), step("app-rb", "app", "prod-t01", "Verified", 16), step("app-v2", "app", "prod-t01", "Verified", 22)}
+	_, err := lifecycle.PlanRollback(context.Background(), newClient(t, objs...), lifecycle.RollbackRequest{
+		Namespace: ns, Pipeline: "app", Environment: "prod", Now: t0.Add(time.Hour)})
+	assert.ErrorIs(t, err, lifecycle.ErrConflict)
+	assert.ErrorContains(t, err, "prod-t01 (a rollback there went back from it)")
+	_, err = lifecycle.PlanRollback(context.Background(), newClient(t, objs...), lifecycle.RollbackRequest{
+		Namespace: ns, Pipeline: "app", Environment: "prod", ToBundle: "app-v1", Now: t0.Add(time.Hour)})
+	assert.NoError(t, err, "--to names it")
+}

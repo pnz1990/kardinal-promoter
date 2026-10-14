@@ -138,8 +138,17 @@ are Verified at once. Where it goes:
   never sends the fleet forward. The targets that run it stay; the others go back to it.
 - **`--to <version>`**: that version for every target.
 
-When the oldest version cannot be restored (rejected since, or deleted), the rollback is refused
-and lists what each target runs: name the version with `--to`. The command prints how many
+Every target the rollback changes must be one where a rollback of that target alone could go
+there: the version was Verified there, and, unless `--to` names it, no rollback there went back
+from it. One rollback version cannot leave a target out, so a target where the version failed,
+or that joined the fleet after it and never ran it, refuses the whole rollback, and the message
+names each such target: roll those targets back one by one with `--env <target>`, or name
+another version with `--to`. A target that runs nothing yet gets the version as its first.
+
+When the oldest version cannot be restored (rejected since, or deleted), or a target runs a
+rollback whose restored version history cleanup deleted (so it cannot be ordered and the fleet
+could be sent past it), the rollback is refused and lists what each target runs: name the
+version with `--to`. The command prints how many
 targets go back and from what; `-o json` and the UI API's response list every target with
 `runs` and `changes`. In the UI, **Roll back** on a fleet's station does the same.
 

@@ -5,6 +5,7 @@ package graph
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -268,7 +269,10 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 			// The Pipeline holds the environment on another Bundle's
 			// rollback (spec.holds, #1528; the node shape's heldCond): it
 			// is not admitted. A hold change rebuilds the Graph in place.
-			"held": heldBundle(pipeline, s.env, s.fleet) != "" && heldBundle(pipeline, s.env, s.fleet) != bundle.Name,
+			"held": (heldBundle(pipeline, s.env, s.fleet) != "" && heldBundle(pipeline, s.env, s.fleet) != bundle.Name) ||
+				// A paused fleet made a plain environment stays paused
+				// (spec.pausedFleets fails closed, ValidatePausedFleets).
+				(s.fleet == "" && slices.Contains(pipeline.Spec.PausedFleets, s.env)),
 		}
 		if fleets {
 			e := entries[i].(map[string]interface{})

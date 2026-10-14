@@ -550,6 +550,48 @@ jobs:
         env:
           CI: "true"
 
+  # ── envtest: CRDs and admission policies on the oldest and newest API servers ─
+  # Every CRD of config/crd/bases and every ValidatingAdmissionPolicy the chart
+  # renders must install on the oldest Kubernetes the chart supports and on the
+  # newest (hack/tool-versions.env ENVTEST_K8S_MIN, ENVTEST_K8S_MAX): a CEL rule
+  # only newer API servers accept must never ship again (#1835).
+  envtest:
+    name: envtest (${{ matrix.k8s }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        k8s: [min, max]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Restore the Go build cache
+        # Saved by the go-cache job on main; see there.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-build-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-build-${{ runner.os }}-
+      - name: Install Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: v3.22.0
+      - name: Install the CRDs and admission policies
+        env:
+          KARDINAL_REQUIRE_HELM: "1"
+          WHICH: ${{ matrix.k8s }}
+        run: |
+          source hack/tool-versions.env
+          if [ "$WHICH" = min ]; then v=$ENVTEST_K8S_MIN; else v=$ENVTEST_K8S_MAX; fi
+          make envtest ENVTEST_K8S="$v"
+
   # ── Helm chart lint (only when chart directory exists) ───────────────────────
   helm-lint:
     name: helm lint

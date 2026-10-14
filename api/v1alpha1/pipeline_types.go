@@ -738,9 +738,10 @@ type FleetSpec struct {
 	// and at least 1. Unset, a failure only keeps its place in
 	// maxConcurrent. An environment after the fleet waits for every target
 	// to be Verified either way.
+	// A count is unquoted (a quoted "2" is refused) and at least 1; a
+	// percentage is from 1% to 100%.
 	// +kubebuilder:validation:XIntOrString
-	// +kubebuilder:validation:MaxLength=4
-	// +kubebuilder:validation:XValidation:rule="type(self) == int ? self >= 1 : self.matches('^([1-9][0-9]?|100)%$')",message="fleet.maxUnavailable: a count of at least 1, or a percentage from 1% to 100%"
+	// +kubebuilder:validation:Pattern=`^([1-9][0-9]?|100)%$`
 	// +optional
 	MaxUnavailable *intstr.IntOrString `json:"maxUnavailable,omitempty"`
 }

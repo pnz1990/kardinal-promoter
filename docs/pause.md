@@ -48,6 +48,12 @@ stops a rollout, not the way a Pipeline pause holds steps:
 The controller rebuilds the Graph of every version in flight when the list changes, so a pause
 and a resume take effect within one reconcile. `kardinal get pipelines` shows the fleet's column
 with `paused`, and `status.summary` starts with `Fleet prod paused;`. A fleet target
-(`prod-eu-west`) or an environment that is not a fleet is refused, and the API server refuses an
-entry that does not name a fleet environment, so resume a fleet before removing its `fleet`.
-Changing `spec.pausedFleets` needs update on `pipelines/pause`, as `spec.paused` does.
+(`prod-eu-west`) or an environment that is not a fleet is refused. Changing `spec.pausedFleets`
+needs update on `pipelines/pause`, as `spec.paused` does.
+
+A paused fleet cannot be renamed, removed or made a plain environment while it is paused: the
+chart's `<release>-fleets` admission policy refuses a Pipeline whose `spec.pausedFleets` names an
+environment without a fleet, and says to resume first. Without the policy (the CRDs applied
+alone) the pause fails closed: while such an entry is there, every fleet of the Pipeline is
+paused, an environment it names is held, and the Pipeline is `Ready=False` naming the entry,
+until `kardinal resume <pipeline> --env <old name>` removes it.

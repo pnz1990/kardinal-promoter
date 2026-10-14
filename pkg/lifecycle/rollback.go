@@ -742,6 +742,9 @@ func planFleetRollback(ctx context.Context, c client.Reader, req RollbackRequest
 		}
 		plan.Bundle.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: req.Environment}
 		plan.Fleet = fleetRollbackTargets(targets, runs, effective, plan.Target.Name)
+		if err := fleetEligible(ctx, c, req, steps, plan); err != nil {
+			return nil, err
+		}
 		return plan, nil
 	}
 	if to != "" && req.ToBundle == "" {
@@ -750,6 +753,90 @@ func planFleetRollback(ctx context.Context, c client.Reader, req RollbackRequest
 			req.Environment, runList(), to, lastErr, ErrConflict)
 	}
 	return nil, lastErr
+}
+
+// fleetEligible applies, per target the rollback changes, the rules a rollback
+// of that one target follows (#1835): the version it restores must have been
+// Verified there, and, unless --to names it, no rollback there went back
+// from it. Otherwise the fleet would get a version that failed, never ran, or
+// was rolled back from, in some target. The rollback is refused naming each
+// such target (ErrConflict): one rollback version cannot skip a target, so
+// roll those targets back one by one, or the others with --env <target>. A
+// target that runs nothing yet gets the version as its first.
+func fleetEligible(ctx context.Context, c client.Reader, req RollbackRequest, steps []v1alpha1.PromotionStep, plan *RollbackPlan) error {
+	dest := plan.Target.Name
+	from := map[string]map[string]bool{}
+	if req.ToBundle == "" {
+		var err error
+		targets := make([]string, 0, len(plan.Fleet))
+		for _, t := range plan.Fleet {
+			targets = append(targets, t.Environment)
+		}
+		if from, err = rolledBackFromByEnv(ctx, c, req.Namespace, req.Pipeline, req.Environment, targets); err != nil {
+			return fmt.Errorf("rollback of fleet %s: %w", req.Environment, err)
+		}
+	}
+	var bad []string
+	for _, t := range plan.Fleet {
+		if !t.Changes || t.Runs == "" {
+			continue
+		}
+		h := historyOf(steps, req.Pipeline, t.Environment)
+		switch {
+		case len(h.byBundle[dest]) == 0:
+			bad = append(bad, t.Environment+" (never ran it)")
+		case !h.verifiedIn(dest):
+			bad = append(bad, t.Environment+" (it was not Verified there)")
+		case from[t.Environment][dest]:
+			bad = append(bad, t.Environment+" (a rollback there went back from it)")
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return fmt.Errorf("rollback: fleet %s cannot go back to %s, which is not known to work in %s; "+
+		"roll those targets back one by one with --env <target>, or name another version with --to: %w",
+		req.Environment, dest, strings.Join(bad, ", "), ErrConflict)
+}
+
+// rolledBackFromByEnv returns, per environment, the Bundles a rollback there
+// rolled back
+// from, from one list of the pipeline's rollback Bundles: a rollback of the
+// whole fleet counts for each of targets.
+func rolledBackFromByEnv(ctx context.Context, c client.Reader, ns, pipeline, fleet string, targets []string) (map[string]map[string]bool, error) {
+	var list v1alpha1.BundleList
+	if err := c.List(ctx, &list, client.InNamespace(ns), client.MatchingLabels{LabelRollback: "true"}); err != nil {
+		return nil, fmt.Errorf("list rollback bundles of pipeline %s: %w", pipeline, err)
+	}
+	out := map[string]map[string]bool{}
+	var all []string
+	for i := range list.Items {
+		b := &list.Items[i]
+		bf := b.Annotations[AnnotationRollbackFrom]
+		if bf == "" || b.Spec.Pipeline != pipeline || b.Spec.Intent == nil || b.Spec.Intent.TargetEnvironment == "" {
+			continue
+		}
+		env := b.Spec.Intent.TargetEnvironment
+		if env == fleet {
+			all = append(all, bf)
+			continue
+		}
+		if out[env] == nil {
+			out[env] = map[string]bool{}
+		}
+		out[env][bf] = true
+	}
+	if len(all) > 0 {
+		for _, t := range targets {
+			if out[t] == nil {
+				out[t] = map[string]bool{}
+			}
+			for _, bf := range all {
+				out[t][bf] = true
+			}
+		}
+	}
+	return out, nil
 }
 
 // FleetTargetRollback is one target of a fleet rollback (RollbackPlan.Fleet).
@@ -815,7 +902,12 @@ func oldestRunning(ctx context.Context, c client.Reader, ns string, deployedIn [
 			for i := 0; i < 4 && b.Labels[LabelRollback] == "true" && b.Spec.Provenance != nil && b.Spec.Provenance.RollbackOf != ""; i++ {
 				of, err := get(b.Spec.Provenance.RollbackOf)
 				if err != nil {
-					break
+					// The restored version is gone (history cleanup): the
+					// rollback cannot be ordered, and taking its own creation
+					// time would make it the newest and send the fleet past
+					// what that target runs.
+					return "", 0, fmt.Errorf("%s runs %s, which restored %s, and %s cannot be read: %w",
+						t, name, b.Spec.Provenance.RollbackOf, b.Spec.Provenance.RollbackOf, err)
 				}
 				b = of
 			}

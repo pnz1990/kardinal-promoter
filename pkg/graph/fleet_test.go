@@ -862,6 +862,8 @@ func TestMaxUnavailableCount(t *testing.T) {
 		{name: "1% of 3 is at least 1", v: ptrTo(intstr.FromString("1%")), total: 3, want: 1},
 		{name: "100%", v: ptrTo(intstr.FromString("100%")), total: 7, want: 7},
 		{name: "a count as a string", v: ptrTo(intstr.FromString("4")), total: 50, want: -1},
+		{name: "a count of 0", v: ptrTo(intstr.FromInt32(0)), total: 50, want: -1},
+		{name: "a negative count", v: ptrTo(intstr.FromInt32(-2)), total: 50, want: -1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := graph.MaxUnavailableCount(tc.v, tc.total)
@@ -903,4 +905,30 @@ func TestValidatePausedFleets(t *testing.T) {
 	err := graph.ValidatePausedFleets(p)
 	require.Error(t, err)
 	assert.EqualError(t, err, `spec.pausedFleets: "test", "gone" is not an environment with a fleet; remove it (kardinal resume app --env <name>)`)
+}
+
+// TestFleet_StalePauseFailsClosed (#1835, QA): a paused fleet renamed while
+// paused leaves an entry that names no fleet; it pauses every fleet of the
+// Pipeline until it is removed, and a paused fleet made a plain environment
+// (compact shape) stays held.
+//
+// Covers FLEET-14.
+func TestFleet_StalePauseFailsClosed(t *testing.T) {
+	p := bigFleet(4, 2, nil)
+	p.Spec.Environments[1].Name = "edge" // was prod, paused as prod
+	p.Spec.PausedFleets = []string{"prod"}
+	sim := fleetSim(t, p)
+	sim.steps["test"] = "Verified"
+	assert.Equal(t, []string{"test"}, sim.advance(), "the renamed fleet stays paused")
+	p.Spec.PausedFleets = nil
+	sim = rebuilt(t, sim, p)
+	assert.Contains(t, sim.advance(), "edge-t00", "removing the entry resumes it")
+
+	plain := compactPipeline(kardinalv1alpha1.EnvironmentSpec{Name: "test"}, kardinalv1alpha1.EnvironmentSpec{Name: "prod"})
+	plain.Spec.PausedFleets = []string{"prod"}
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: plain, Bundle: makeBundle("app-x7k2m", "app")})
+	require.NoError(t, err)
+	psim := newCompactSim(t, res.Graph)
+	psim.steps["test"] = "Verified"
+	assert.Equal(t, []string{"test"}, psim.advance(), "a paused fleet made a plain environment is held")
 }
