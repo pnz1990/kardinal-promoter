@@ -57,7 +57,7 @@ func TestPlan(t *testing.T) {
 	for _, id := range []string{"e2e-core-135", "e2e-core-137", "e2e-gitlab-135", "e2e-gitlab-137", "e2e-multi-cluster-136",
 		"e2e-upgrade-v0100-130", "e2e-upgrade-v0100-137", "scale-full", "scale-soak", "unit-race", "fuzz-FuzzA",
 		"scenario-matrix", "govulncheck", "golangci-lint", "hygiene", "images", "docs", "bundle-size",
-		"chart-profiles", "chart-crds-130", "chart-crds-137"} {
+		"chart-profiles", "chart-envtest"} {
 		assert.Contains(t, ids, id)
 	}
 	assert.NotContains(t, ids, "e2e-multi-cluster-135", "multi-cluster runs only on its matrix minor")
@@ -84,8 +84,6 @@ func TestPlan(t *testing.T) {
 	assert.Contains(t, floored, "e2e-upgrade-v0100-135")
 	assert.Contains(t, floored, "e2e-upgrade-v0100-137")
 	assert.NotContains(t, floored, "e2e-upgrade-v0100-130")
-	assert.Contains(t, floored, "chart-crds-135")
-	assert.NotContains(t, floored, "chart-crds-130")
 
 	gh := ids["e2e-github-137"]
 	assert.Contains(t, gh.NotRun, "never uses your gh login")
@@ -120,8 +118,8 @@ func TestPlan(t *testing.T) {
 	assert.Contains(t, ids["fuzz-FuzzA"].Script, "-fuzz '^FuzzA$' -fuzztime 1m")
 	assert.Contains(t, ids["unit-race"].Script, "go test -race -count=3")
 	assert.Contains(t, ids["images"].Script, "IMAGE_BUILD=host")
-	assert.Contains(t, ids["chart-crds-130"].Script, `echo "$KIND_NODE_UPGRADE_V0100_1_30"`, "the floor minor's node image")
-	assert.Contains(t, ids["chart-crds-137"].Script, `echo "$KIND_NODE_1_37"`)
+	assert.Equal(t, "make envtest", ids["chart-envtest"].Script, "the CRD install check is make envtest's (#1849)")
+	assert.Zero(t, ids["chart-envtest"].Clusters)
 	for _, p := range profiles {
 		assert.Contains(t, ids["chart-profiles"].Script, "echo '== "+p+"'")
 	}

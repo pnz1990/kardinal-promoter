@@ -118,8 +118,8 @@ log. It covers:
 - govulncheck, golangci-lint, `make hygiene`, trivy on the images, the
   strict docs build with check-site-offline, and the bundle size budget;
 - helm lint and template of every values profile in
-  `hack/release-gate/profiles`, and the CRDs and chart objects admitted by
-  the oldest and newest Kubernetes.
+  `hack/release-gate/profiles`, and `make envtest`: every CRD and the
+  chart's admission policies on the oldest and newest supported API servers.
 
 A missing piece of evidence fails the gate. Examples are an upgrade suite
 from the previous release that does not exist, or a step that failed. A step

@@ -12,8 +12,8 @@
 //     enterprise scenario;
 //   - govulncheck, golangci-lint, make hygiene, trivy on the images, the
 //     strict docs build with check-site-offline, the bundle size budget;
-//   - helm lint and template of every values profile, and the CRDs and chart
-//     objects admitted by the oldest and newest Kubernetes.
+//   - helm lint and template of every values profile, and make envtest (every
+//     CRD and admission policy on the oldest and newest API servers).
 //
 // Results go to test/e2e/results/release-gate/<commit>/: a directory per
 // step (log.txt, result.json, its outputs) and report.md. A step that passed

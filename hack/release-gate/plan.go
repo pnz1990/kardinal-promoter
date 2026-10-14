@@ -258,23 +258,6 @@ func (r *Repo) minors(suite string) []int {
 	return out
 }
 
-// allMinors is every minor any suite boots: the chart's floor and the newest.
-func (r *Repo) allMinors() []int {
-	set := map[int]bool{}
-	for k := range r.ToolVersions {
-		if m := kindNode.FindStringSubmatch(k); m != nil {
-			n, _ := strconv.Atoi(m[2])
-			set[n] = true
-		}
-	}
-	var out []int
-	for n := range set {
-		out = append(out, n)
-	}
-	sort.Ints(out)
-	return out
-}
-
 // nodeImage is the node image for suite on minor (KIND_NODE_1_<m>, then the
 // suite's own), or "".
 func (r *Repo) nodeImage(suite string, minor int) string {
@@ -299,9 +282,9 @@ func isUpgrade(suite string) bool { return suite == "upgrade" || strings.HasPref
 // Plan is every step of the gate for the checkout.
 func Plan(r *Repo, o Options) []Step {
 	var steps []Step
-	// Quick checks first, so a broken tree fails in minutes; the cluster
-	// steps start with the CRD checks, then the suites, then scale.
-	steps = append(steps, chartSteps(r, o)...)
+	// Quick checks first, so a broken tree fails in minutes; then the
+	// suites, then scale.
+	steps = append(steps, chartSteps()...)
 	steps = append(steps, staticSteps(o)...)
 	steps = append(steps, unitSteps(r, o)...)
 	steps = append(steps, e2eSteps(r, o)...)
@@ -557,12 +540,7 @@ npm run size
 // hack/release-gate/profiles (default is the chart's values.yaml alone).
 var profiles = []string{"default", "ha", "observability", "secure", "gitlab"}
 
-// admittedProfiles are the profiles the CRD steps apply with a server-side
-// dry run: observability renders ServiceMonitor and PrometheusRule objects,
-// whose CRDs (the Prometheus operator's) a bare cluster does not serve.
-var admittedProfiles = []string{"default", "ha", "secure", "gitlab"}
-
-func chartSteps(r *Repo, o Options) []Step {
+func chartSteps() []Step {
 	var lint strings.Builder
 	lint.WriteString("PATH=\"$PWD/bin/e2e:$PATH\"\nbash hack/e2e/tools.sh\n")
 	for _, p := range profiles {
@@ -573,47 +551,12 @@ func chartSteps(r *Repo, o Options) []Step {
 		fmt.Fprintf(&lint, "echo '== %s'\nhelm lint chart/kardinal-promoter%s\nhelm template kardinal-promoter chart/kardinal-promoter -n kardinal-system%s > \"$STEP_DIR/%s.yaml\"\n",
 			p, values, values, p)
 	}
-	steps := []Step{{ID: "chart-profiles", Area: areaChart, Title: "helm lint and template, every values profile", Script: lint.String()}}
-	minors := atLeast(r.allMinors(), o.Floor)
-	if len(minors) == 0 {
-		return steps
+	return []Step{
+		{ID: "chart-profiles", Area: areaChart, Title: "helm lint and template, every values profile", Script: lint.String()},
+		// make envtest (#1849): every CRD and the chart's admission policies
+		// installed on the oldest and newest supported API servers
+		// (ENVTEST_K8S_MIN, ENVTEST_K8S_MAX in hack/tool-versions.env).
+		{ID: "chart-envtest", Area: areaChart, Title: "CRDs and admission policies on the oldest and newest API servers (make envtest)",
+			Script: "make envtest"},
 	}
-	pick := []int{minors[0]}
-	if last := minors[len(minors)-1]; last != minors[0] {
-		pick = append(pick, last)
-	}
-	for _, m := range pick {
-		imageVar := ""
-		for k := range r.ToolVersions {
-			if mm := kindNode.FindStringSubmatch(k); mm != nil && mm[2] == strconv.Itoa(m) && (imageVar == "" || k < imageVar) {
-				imageVar = k
-			}
-		}
-		cluster := fmt.Sprintf("kp-rg-crd-1%d", m)
-		steps = append(steps, Step{
-			ID: fmt.Sprintf("chart-crds-1%d", m), Area: areaChart, Clusters: 1,
-			Title: fmt.Sprintf("CRDs and chart objects admitted by Kubernetes 1.%d (server-side)", m),
-			Script: fmt.Sprintf(`export KIND_CLUSTER=%s E2E_OUT="$STEP_DIR/e2e" KUBECONFIG="$STEP_DIR/e2e/kubeconfig"
-mkdir -p "$E2E_OUT"
-bash hack/e2e/tools.sh
-source hack/e2e/lib.sh
-NODE_IMAGE=$(source hack/tool-versions.env && echo "$%s")
-kind_cluster "$KIND_CLUSTER"
-target_cluster
-"${KUBECTL[@]}" apply --server-side -f chart/kardinal-promoter/crds/
-"${KUBECTL[@]}" wait --for condition=Established crd --all --timeout 2m
-"${KUBECTL[@]}" create namespace kardinal-system
-for p in %s; do
-  values=
-  [ "$p" = default ] || values="-f hack/release-gate/profiles/$p.yaml"
-  # shellcheck disable=SC2086
-  "${HELM[@]}" template kardinal-promoter chart/kardinal-promoter -n kardinal-system $values > "$STEP_DIR/$p.yaml"
-  "${KUBECTL[@]}" apply --dry-run=server -f "$STEP_DIR/$p.yaml" > /dev/null
-  echo "$p: admitted"
-done
-`, cluster, imageVar, strings.Join(admittedProfiles, " ")),
-			Cleanup: deleteClusters(cluster),
-		})
-	}
-	return steps
 }
