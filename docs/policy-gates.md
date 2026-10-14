@@ -247,9 +247,39 @@ Referencing an attribute or map key that does not exist is an evaluation error, 
 blocks (fail-closed).
 
 The context has the version (`bundle.*`, with `bundle.upstreamSoakMinutes` and the stage PRs'
-review state in `bundle.pr`), the time (`schedule.*`), the target environment
-(`environment.name`), per-environment soak and history (`upstream.*`), MetricCheck results
-(`metrics.*`), change windows (`changewindow`) and approvals (`approvals.*`).
+review state in `bundle.pr`), who created it (`actor.*`) and its agent's registration
+(`agent.*`), the time (`schedule.*`), the target environment (`environment.name`),
+per-environment soak and history (`upstream.*`), MetricCheck results (`metrics.*`), change
+windows (`changewindow`) and approvals (`approvals.*`).
+
+### Actor attributes
+
+`actor.*` is the version's verified actor stamp ([Actors](actors.md)): human, agent,
+bot or controller, and for an agent its name and sponsor. A version without a stamp reads as
+kind `unknown`. `agent.*` is the version's agent as the registry says now, so a suspension holds
+its in-flight versions. The [CEL context](reference/cel-context.md#actor) lists every field.
+
+| Attribute | Type | Description |
+|---|---|---|
+| `actor.kind` | string | `human`, `agent`, `bot`, `controller`, or `unknown` without a stamp |
+| `actor.verified` | bool | The version has a stamp |
+| `actor.agent` | string | The agent's name, when the kind is `agent` |
+| `agent.registered` | bool | The agent's AgentIdentity is ready |
+| `agent.autonomy` | string | `auto`, `approve` or `deny`, now |
+
+```yaml
+# Require a verified actor: refuse versions from v0.11 clients and hand-written Bundles
+expression: actor.verified
+---
+# People only in prod
+expression: actor.verified && actor.kind == "human"
+---
+# Hold an agent's version once its agent is suspended or deregistered
+expression: actor.kind != "agent" || (agent.registered && !agent.suspended)
+```
+
+For per-environment autonomy, set `agents` on the Pipeline's environment instead of writing
+gates ([Actor-aware policy](agentic/policy.md)).
 
 ### Metric attributes
 
@@ -332,7 +362,10 @@ error, write `"staging" in bundle.pr && bundle.pr["staging"].isApproved`.
 
 A `ChangeWindow` is a cluster-scoped object that describes when promotions are blocked.
 It blocks nothing by itself: a gate blocks while a window it references is active.
-Reference windows from an org-level gate to freeze every pipeline with one object.
+Reference windows from an org-level gate to freeze every pipeline with one object. A
+ChangeWindow with `spec.freeze` (`kardinal freeze`) is the exception: it holds the promotions it
+selects without any gate, agents' versions or everyone's ([Freeze agents, stop the
+line](agentic/freezes.md)).
 
 ```yaml
 # A one-off freeze: active from start (inclusive) to end (exclusive)

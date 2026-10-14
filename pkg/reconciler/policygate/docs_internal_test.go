@@ -239,7 +239,7 @@ func collectDocExprs(t *testing.T) []docExpr {
 var (
 	fenceRe = regexp.MustCompile("^\\s*```\\s*([A-Za-z]*)")
 	// A CEL context table row: | `attribute` | type | ...
-	attrRowRe = regexp.MustCompile("^\\|\\s*`((?:bundle|schedule|environment|upstream|metrics|changewindow)[^`]*)`\\s*\\|\\s*([a-z ]+?)\\s*\\|")
+	attrRowRe = regexp.MustCompile("^\\|\\s*`((?:bundle|schedule|environment|upstream|metrics|changewindow|approvals|actor|agent)[^`]*)`\\s*\\|\\s*([a-z ]+?)\\s*\\|")
 	// Any row of a function table; the example is the last backticked cell.
 	cellRe = regexp.MustCompile("`([^`]+)`")
 )
