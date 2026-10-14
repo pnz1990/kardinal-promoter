@@ -996,3 +996,58 @@ func TestPolicyTest_FileFlag_Golden(t *testing.T) {
 	require.NoError(t, err, "run go test -run TestPolicyTest_FileFlag_Golden -update-policy-test")
 	assert.Equal(t, string(want), golden.String())
 }
+
+// TestPolicySimulate_Version: --version simulates that Bundle of the
+// pipeline: a gate on its labels, author or upstream soak sees the Bundle's
+// own, --soak-minutes replaces its soak, and a version that names no
+// Bundle of the pipeline is an error.
+func TestPolicySimulate_Version(t *testing.T) {
+	healthy := metav1.NewTime(policyTestNow.Add(-10 * time.Minute))
+	b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "demo-v2", Namespace: "default",
+		Labels: map[string]string{"kardinal.io/pipeline": "demo", "hotfix": "true"}},
+		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "demo",
+			Images:     []v1alpha1.ImageRef{{Repository: "ghcr.io/acme/demo", Tag: "2.0"}},
+			Provenance: &v1alpha1.BundleProvenance{Author: "dependabot[bot]"}},
+		Status: v1alpha1.BundleStatus{Environments: []v1alpha1.EnvironmentStatus{
+			{Name: "uat", Phase: "Verified", SoakMinutes: 10, HealthCheckedAt: &healthy}}}}
+	c := policyClient(t, policyPipeline("demo", "uat", "prod"), b,
+		policyGate("hotfix-only", "default", "prod", `has(bundle.labels.hotfix)`),
+		policyGate("no-bots", "default", "prod", `bundle.provenance.author != "dependabot[bot]"`),
+		policyGate("soaked", "default", "prod", `bundle.upstreamSoakMinutes >= 30`))
+
+	for _, tc := range []struct {
+		name    string
+		opts    simulateOptions
+		blocked []string
+		passed  []string
+	}{
+		{"a version that went everywhere", simulateOptions{SoakMinutes: 60},
+			[]string{"hotfix-only"}, []string{"no-bots", "soaked"}},
+		{"the Bundle, by version", simulateOptions{Version: "2.0"},
+			[]string{"no-bots", "soaked"}, []string{"hotfix-only"}},
+		{"the Bundle, by name, soaked longer", simulateOptions{Version: "demo-v2", SoakMinutes: 45, Soaked: true},
+			[]string{"no-bots"}, []string{"hotfix-only", "soaked"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := tc.opts
+			opts.Pipeline, opts.Env, opts.Now = "demo", "prod", policyTestNow
+			rep, err := policySimulate(t.Context(), c, "default", opts)
+			require.NoError(t, err)
+			var blocked, passed []string
+			for _, g := range rep.Gates {
+				if g.Pass {
+					passed = append(passed, g.Name)
+				} else {
+					blocked = append(blocked, g.Name)
+				}
+			}
+			assert.Equal(t, tc.blocked, blocked)
+			assert.Equal(t, tc.passed, passed)
+			assert.True(t, rep.Blocked)
+		})
+	}
+
+	_, err := runSimulate(t, c, simulateOptions{Version: "9.9"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "9.9")
+}

@@ -107,6 +107,7 @@ names the new Bundle.
 * [kardinal inbox](kardinal-inbox.md)	 - List what waits for a person: on you first, then on others
 * [kardinal init](kardinal-init.md)	 - Write a Pipeline for your GitOps repository, from flags or a few questions
 * [kardinal logs](kardinal-logs.md)	 - Show promotion step execution logs for a pipeline
+* [kardinal mcp](kardinal-mcp.md)	 - Serve kardinal to an AI agent over MCP (stdio)
 * [kardinal metrics](kardinal-metrics.md)	 - Show promotion metrics (DORA-style) for a pipeline
 * [kardinal override](kardinal-override.md)	 - Force-pass a PolicyGate with a mandatory audit record
 * [kardinal pause](kardinal-pause.md)	 - Pause a pipeline, or one fleet: no new promotion steps start

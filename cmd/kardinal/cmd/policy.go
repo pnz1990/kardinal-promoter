@@ -29,6 +29,7 @@ import (
 	"github.com/spf13/cobra"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -324,6 +325,7 @@ would pass; it exits 0 either way.`,
 				return fmt.Errorf("policy simulate: %w", err)
 			}
 			opts.Now = time.Now().UTC()
+			opts.Soaked = cmd.Flags().Changed("soak-minutes")
 			return policySimulateFn(cmd.OutOrStdout(), c, ns, opts)
 		},
 	}
@@ -332,6 +334,7 @@ would pass; it exits 0 either way.`,
 	addEnvFlag(cmd, &opts.Env, "Environment (or give it after the pipeline)")
 	cmd.Flags().StringVar(&opts.Time, "time", "", `Simulated UTC time (e.g. "Saturday 3pm", "Tuesday 10:00", RFC 3339)`)
 	cmd.Flags().Int64Var(&opts.SoakMinutes, "soak-minutes", 0, "Simulated soak time of each upstream environment, in minutes")
+	cmd.Flags().StringVar(&opts.Version, "version", "", "Simulate this version (or Bundle) of the pipeline: its metadata, Approvals and soak (default: a version that went through every upstream environment)")
 	addPolicyNamespacesFlag(cmd, &opts.PolicyNamespaces)
 
 	return cmd
@@ -339,10 +342,16 @@ would pass; it exits 0 either way.`,
 
 // simulateOptions are the inputs of policy simulate.
 type simulateOptions struct {
-	Pipeline         string
-	Env              string
-	Time             string
-	SoakMinutes      int64
+	Pipeline string
+	Env      string
+	// Version is a version or Bundle name of Pipeline to simulate, instead
+	// of a Bundle that went through every upstream environment.
+	Version     string
+	Time        string
+	SoakMinutes int64
+	// Soaked is --soak-minutes given: with Version, the soak replaces the
+	// Bundle's own.
+	Soaked           bool
 	PolicyNamespaces []string
 	// Now is the reference time: the default simulated time, and the day
 	// --time weekdays are resolved from.
@@ -352,111 +361,45 @@ type simulateOptions struct {
 // nextWindowSearchHours bounds the next-window search to one week.
 const nextWindowSearchHours = 7 * 24
 
+// simulateGate is one gate's result in a simulation: whether it passes, the
+// reason the evaluation gave, the message to show (the gate's, else the
+// reason), and, when it blocks, the first whole hour within a week at which
+// the same inputs pass (nil: none).
+type simulateGate struct {
+	Name       string     `json:"name"`
+	Pass       bool       `json:"pass"`
+	Reason     string     `json:"reason,omitempty"`
+	Message    string     `json:"message,omitempty"`
+	NextWindow *time.Time `json:"nextWindow,omitempty"`
+}
+
+// simulateReport is a simulation's result: Blocked when any gate blocks,
+// and each gate by name.
+type simulateReport struct {
+	Pipeline    string         `json:"pipeline"`
+	Environment string         `json:"environment"`
+	Bundle      string         `json:"bundle,omitempty"`
+	Time        time.Time      `json:"time"`
+	Blocked     bool           `json:"blocked"`
+	Gates       []simulateGate `json:"gates"`
+}
+
 // policySimulateFn is the testable implementation of policy simulate.
 func policySimulateFn(w io.Writer, c sigs_client.Client, ns string, opts simulateOptions) error {
-	ctx := context.Background()
-
-	simTime, err := parseSimulatedTime(opts.Time, opts.Now)
+	rep, err := policySimulate(context.Background(), c, ns, opts)
 	if err != nil {
 		return err
 	}
-	if opts.SoakMinutes < 0 {
-		return fmt.Errorf("--soak-minutes must not be negative")
-	}
-
-	pipe, err := getPipeline(ctx, c, ns, opts.Pipeline)
-	if err != nil {
-		return err
-	}
-	if !containsString(pipelineEnvNames(pipe), opts.Env) {
-		return fmt.Errorf("environment %q not found in pipeline %q (environments: %s)",
-			opts.Env, opts.Pipeline, strings.Join(pipelineEnvNames(pipe), ", "))
-	}
-
-	templates, err := translator.CollectGates(ctx, c, opts.PolicyNamespaces, pipe)
-	if err != nil {
-		return fmt.Errorf("collect policy gates: %w", err)
-	}
-	bundle := simulatedBundle(pipe, simTime)
-	gates, upstreams, err := gatesForEnv(pipe, bundle, templates, opts.PolicyNamespaces, opts.Env)
-	if err != nil {
-		return err
-	}
-	healthy := metav1.NewTime(simTime.Add(-time.Duration(opts.SoakMinutes) * time.Minute))
-	for _, env := range upstreams {
-		bundle.Status.Environments = append(bundle.Status.Environments, v1alpha1.EnvironmentStatus{
-			Name: env, Phase: "Verified", SoakMinutes: opts.SoakMinutes, HealthCheckedAt: &healthy,
-		})
-	}
-
-	objs := []sigs_client.Object{bundle}
-	for i := range gates {
-		gates[i].Namespace = pipe.Namespace
-		objs = append(objs, &gates[i])
-	}
-	ev, err := newGateEvaluator(newSimulationClient(c.Scheme(), c, objs...))
-	if err != nil {
-		return err
-	}
-	// An org gate reads metrics.* from its org policy namespace, as in the
-	// controller.
-	ev.r.PolicyNamespaces = opts.PolicyNamespaces
-	// Metric results are the cluster's current ones at every simulated time:
-	// a result is stale only if it is stale now.
-	ev.metricsAt = opts.Now.UTC()
-
-	type gateResult struct {
-		name, reason, message string
-		pass                  bool
-		nextWindow            *time.Time
-	}
-	var results []gateResult
-	for i := range gates {
-		g := &gates[i]
-		key := sigs_client.ObjectKeyFromObject(g)
-		pass, reason, err := ev.evaluate(ctx, key, simTime)
-		if err != nil {
-			return err
-		}
-		r := gateResult{name: gateDisplayName(*g), reason: reason, message: g.Spec.Message, pass: pass}
-		if r.message == "" {
-			r.message = reason
-		}
-		if !pass {
-			// Hour by hour from the next whole hour, same inputs.
-			start := simTime.Truncate(time.Hour)
-			for h := 1; h <= nextWindowSearchHours; h++ {
-				t := start.Add(time.Duration(h) * time.Hour)
-				ok, _, err := ev.evaluate(ctx, key, t)
-				if err != nil {
-					return err
-				}
-				if ok {
-					r.nextWindow = &t
-					break
-				}
-			}
-		}
-		results = append(results, r)
-	}
-	sort.SliceStable(results, func(i, j int) bool { return results[i].name < results[j].name })
-
 	var out strings.Builder
-	blocked := false
-	for _, r := range results {
-		if !r.pass {
-			blocked = true
-		}
-	}
-	if blocked {
+	if rep.Blocked {
 		out.WriteString("RESULT: BLOCKED\n")
-		for _, r := range results {
-			if r.pass {
+		for _, r := range rep.Gates {
+			if r.Pass {
 				continue
 			}
-			fmt.Fprintf(&out, "Blocked by: %s\nMessage: %q\n", r.name, r.message)
-			if r.nextWindow != nil {
-				fmt.Fprintf(&out, "Next window: %s\n", r.nextWindow.Format("Monday 15:04 UTC"))
+			fmt.Fprintf(&out, "Blocked by: %s\nMessage: %q\n", r.Name, r.Message)
+			if r.NextWindow != nil {
+				fmt.Fprintf(&out, "Next window: %s\n", r.NextWindow.Format("Monday 15:04 UTC"))
 			}
 			out.WriteString("\n")
 		}
@@ -468,21 +411,132 @@ func policySimulateFn(w io.Writer, c sigs_client.Client, ns string, opts simulat
 	}
 
 	tw := style.NewTable(w, 3)
-	for _, r := range results {
+	for _, r := range rep.Gates {
 		status := "PASS"
-		if !r.pass {
+		if !r.Pass {
 			status = "BLOCK"
 		}
-		if _, err := fmt.Fprintf(tw, "%s:\t%s\t(%s)\n", r.name, status, r.reason); err != nil {
+		if _, err := fmt.Fprintf(tw, "%s:\t%s\t(%s)\n", r.Name, status, r.Reason); err != nil {
 			return fmt.Errorf("write gate row: %w", err)
 		}
 	}
-	if len(results) == 0 {
+	if len(rep.Gates) == 0 {
 		if _, err := fmt.Fprintf(tw, "No PolicyGates found for pipeline %q environment %q\n", opts.Pipeline, opts.Env); err != nil {
 			return fmt.Errorf("write empty: %w", err)
 		}
 	}
 	return tw.Flush()
+}
+
+// policySimulate evaluates the gates of opts.Env as the controller would, at
+// the simulated time, writing nothing to the cluster. Without opts.Version
+// the version is a Bundle of the pipeline that went through every upstream
+// environment, soaked opts.SoakMinutes there. With it, it is that Bundle (a
+// version or a Bundle name of the pipeline): its type, labels, provenance,
+// creator and Approvals, and where it has been, with opts.SoakMinutes when
+// set (Soaked) instead of its own soak.
+func policySimulate(ctx context.Context, c sigs_client.Client, ns string, opts simulateOptions) (*simulateReport, error) {
+	simTime, err := parseSimulatedTime(opts.Time, opts.Now)
+	if err != nil {
+		return nil, err
+	}
+	if opts.SoakMinutes < 0 {
+		return nil, fmt.Errorf("--soak-minutes must not be negative")
+	}
+
+	pipe, err := getPipeline(ctx, c, ns, opts.Pipeline)
+	if err != nil {
+		return nil, err
+	}
+	if !containsString(pipelineEnvNames(pipe), opts.Env) {
+		return nil, fmt.Errorf("environment %q not found in pipeline %q (environments: %s)",
+			opts.Env, opts.Pipeline, strings.Join(pipelineEnvNames(pipe), ", "))
+	}
+
+	templates, err := translator.CollectGates(ctx, c, opts.PolicyNamespaces, pipe)
+	if err != nil {
+		return nil, fmt.Errorf("collect policy gates: %w", err)
+	}
+	bundle := simulatedBundle(pipe, simTime)
+	if opts.Version != "" {
+		name, err := resolveBundleRef(ctx, c, ns, pipe.Name, opts.Version)
+		if err != nil {
+			return nil, err
+		}
+		var real v1alpha1.Bundle
+		if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &real); err != nil {
+			return nil, fmt.Errorf("get bundle %q: %w", name, err)
+		}
+		bundle = real.DeepCopy()
+		bundle.ResourceVersion = ""
+		// The gates it would meet in env, whatever its own intent says.
+		bundle.Spec.Intent = nil
+	}
+	gates, upstreams, err := gatesForEnv(pipe, bundle, templates, opts.PolicyNamespaces, opts.Env)
+	if err != nil {
+		return nil, err
+	}
+	if opts.Version == "" || opts.Soaked {
+		healthy := metav1.NewTime(simTime.Add(-time.Duration(opts.SoakMinutes) * time.Minute))
+		bundle.Status.Environments = nil
+		for _, env := range upstreams {
+			bundle.Status.Environments = append(bundle.Status.Environments, v1alpha1.EnvironmentStatus{
+				Name: env, Phase: "Verified", SoakMinutes: opts.SoakMinutes, HealthCheckedAt: &healthy,
+			})
+		}
+	}
+
+	objs := []sigs_client.Object{bundle}
+	for i := range gates {
+		gates[i].Namespace = pipe.Namespace
+		objs = append(objs, &gates[i])
+	}
+	ev, err := newGateEvaluator(newSimulationClient(c.Scheme(), c, objs...))
+	if err != nil {
+		return nil, err
+	}
+	// An org gate reads metrics.* from its org policy namespace, as in the
+	// controller.
+	ev.r.PolicyNamespaces = opts.PolicyNamespaces
+	// Metric results are the cluster's current ones at every simulated time:
+	// a result is stale only if it is stale now.
+	ev.metricsAt = opts.Now.UTC()
+
+	rep := &simulateReport{Pipeline: pipe.Name, Environment: opts.Env, Time: simTime, Gates: []simulateGate{}}
+	if opts.Version != "" {
+		rep.Bundle = bundle.Name
+	}
+	for i := range gates {
+		g := &gates[i]
+		key := sigs_client.ObjectKeyFromObject(g)
+		pass, reason, err := ev.evaluate(ctx, key, simTime)
+		if err != nil {
+			return nil, err
+		}
+		r := simulateGate{Name: gateDisplayName(*g), Reason: reason, Message: g.Spec.Message, Pass: pass}
+		if r.Message == "" {
+			r.Message = reason
+		}
+		if !pass {
+			rep.Blocked = true
+			// Hour by hour from the next whole hour, same inputs.
+			start := simTime.Truncate(time.Hour)
+			for h := 1; h <= nextWindowSearchHours; h++ {
+				t := start.Add(time.Duration(h) * time.Hour)
+				ok, _, err := ev.evaluate(ctx, key, t)
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					r.NextWindow = &t
+					break
+				}
+			}
+		}
+		rep.Gates = append(rep.Gates, r)
+	}
+	sort.SliceStable(rep.Gates, func(i, j int) bool { return rep.Gates[i].Name < rep.Gates[j].Name })
+	return rep, nil
 }
 
 // gateDisplayName is the user-facing name of a gate instance: its template's

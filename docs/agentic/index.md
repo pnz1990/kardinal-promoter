@@ -56,7 +56,14 @@ the GitOps repository, so that changes reach the environments through kardinal, 
 ([Gate status check](../pr-evidence.md#gate-status-check-kardinalgates)). Do not grant the agent `impersonate`: whoever may impersonate passes every
 identity check as whoever they impersonate.
 
+## Connect an agent over MCP
+
+`kardinal mcp` is a local MCP server for Claude Code, Codex, Cursor and other agents: the
+read tools (`why`, `status`, `simulate` and more) by default, the write tools with
+`--allow-write`, all as the agent's own Kubernetes identity. Text from PRs, commits and people
+comes labelled as untrusted data. See [Connect an agent](connect-an-agent.md).
+
 ## What's next
 
-Agent identities with sponsors, actor-aware policy, agent verdicts as gates, an agent freeze and
-a local MCP server are planned; they are not in kardinal yet. See the [roadmap](../roadmap.md).
+Agent identities with sponsors, actor-aware policy, agent verdicts as gates and an agent freeze
+are planned; they are not in kardinal yet. See the [roadmap](../roadmap.md).

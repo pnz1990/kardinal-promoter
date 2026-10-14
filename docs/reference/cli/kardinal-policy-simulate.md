@@ -59,6 +59,7 @@ kardinal policy simulate <pipeline> <env> [flags]
       --policy-namespaces strings   Namespaces the controller reads org PolicyGates from (its --policy-namespaces flag); a Pipeline's spec.policyNamespaces and its own namespace are read as well (default [platform-policies])
       --soak-minutes int            Simulated soak time of each upstream environment, in minutes
       --time string                 Simulated UTC time (e.g. "Saturday 3pm", "Tuesday 10:00", RFC 3339)
+      --version string              Simulate this version (or Bundle) of the pipeline: its metadata, Approvals and soak (default: a version that went through every upstream environment)
 ```
 
 ### Options inherited from parent commands
