@@ -529,7 +529,8 @@ spec:
   #     (managedFields, resourceVersion, generation): no labels,
   #     annotations, finalizers or ownerReferences (an ownerReference to a
   #     deleted object would have the garbage collector delete it);
-  #   - of the spec, only spec.paused (with pipelines/pause), spec.holds
+  #   - of the spec, only spec.paused and spec.pausedFleets (with
+  #     pipelines/pause), spec.holds
   #     (with pipelines/hold; the hold-writes policy checks the entries) or
   #     spec.overrides (policygates) changes;
   #   - spec.overrides is append-only, and each new entry names the caller
@@ -563,7 +564,7 @@ spec:
     - name: fields
       expression: >-
         variables.pipeline ?
-          (variables.mayPause ? ['paused'] : []) + (variables.mayHold ? ['holds'] : []) :
+          (variables.mayPause ? ['paused', 'pausedFleets'] : []) + (variables.mayHold ? ['holds'] : []) :
           ['overrides']
     - name: limited
       expression: >-
@@ -593,7 +594,7 @@ spec:
          oldObject.spec.all(k, k in variables.fields || k in object.spec))
       messageExpression: >-
         (variables.pipeline ?
-          'you may change only spec.paused (with pipelines/pause) and spec.holds (with pipelines/hold) of this pipelines' :
+          'you may change only spec.paused and spec.pausedFleets (with pipelines/pause) and spec.holds (with pipelines/hold) of this pipelines' :
           'you may change only spec.overrides of this policygates') +
         ' (you do not have ' + request.resource.resource + '/edit)'
       reason: Forbidden

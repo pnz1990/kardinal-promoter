@@ -7,6 +7,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // PipelineSpec defines the desired state of a Pipeline.
@@ -33,6 +34,19 @@ type PipelineSpec struct {
 	// +kubebuilder:default=false
 	// +optional
 	Paused bool `json:"paused,omitempty"`
+
+	// PausedFleets pauses fleet environments (kardinal pause <pipeline>
+	// --env <fleet>): no further target of a listed fleet starts, for any
+	// Bundle, and the targets in flight finish, as when maxUnavailable is
+	// reached. Each entry names an environment with a fleet; another name
+	// makes the Pipeline Ready=False (ValidationFailed). Changing spec.pausedFleets needs
+	// update on the virtual subresource pipelines/pause, as spec.paused does.
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=100
+	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:MaxLength=63
+	// +optional
+	PausedFleets []string `json:"pausedFleets,omitempty"`
 
 	// Holds pin environments to a rollback (kardinal rollback --hold): while
 	// an environment has a hold, no Bundle but the hold's own promotes into
@@ -719,12 +733,17 @@ type FleetSpec struct {
 
 	// MaxUnavailable stops the rollout: once this many of the fleet's
 	// targets have failed (Failed, AbortedByAlarm or RollingBack), no
-	// further target starts, and the targets in flight finish. Unset, a failure only keeps its place in
+	// further target starts, and the targets in flight finish. It is a
+	// count (2) or a percentage of the fleet's targets ("10%"), rounded up
+	// and at least 1. Unset, a failure only keeps its place in
 	// maxConcurrent. An environment after the fleet waits for every target
 	// to be Verified either way.
-	// +kubebuilder:validation:Minimum=1
+	// A count is unquoted (a quoted "2" is refused) and at least 1; a
+	// percentage is from 1% to 100%.
+	// +kubebuilder:validation:XIntOrString
+	// +kubebuilder:validation:Pattern=`^([1-9][0-9]?|100)%$`
 	// +optional
-	MaxUnavailable *int `json:"maxUnavailable,omitempty"`
+	MaxUnavailable *intstr.IntOrString `json:"maxUnavailable,omitempty"`
 }
 
 // FleetTarget is one member of a fleet.

@@ -201,6 +201,22 @@ func TestProjectEnvironments(t *testing.T) {
 		ready:   metav1.Condition{Type: "Ready", Status: metav1.ConditionFalse, Reason: "ValidationFailed"},
 		want:    []want{{env: "test"}, {env: "uat"}, {env: "prod"}},
 		summary: "Not ready (ValidationFailed); paused; no version yet", line: "test=- uat=- prod=-",
+	}, {
+		// #1835: kardinal pause --env <fleet> (the fleet is named, though
+		// this test's Pipeline has none: Summarize only reads the list).
+		name: "a paused fleet leads the sentence",
+		p: func() *kardinalv1alpha1.Pipeline {
+			p := appPipeline()
+			p.Spec.PausedFleets = []string{"edge", "prod"}
+			return p
+		},
+		bundles: []kardinalv1alpha1.Bundle{envBundle("b1", "main", "Verified", envT0)},
+		steps:   v1,
+		ready:   validReady,
+		want: []want{{env: "test", bundle: "b1", version: "main", state: "Verified"},
+			{env: "uat", bundle: "b1", version: "main", state: "Verified"},
+			{env: "prod", bundle: "b1", version: "main", state: "Verified"}},
+		summary: "Fleets edge, prod paused; main live in test, uat, prod", line: "test=main uat=main prod=main",
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

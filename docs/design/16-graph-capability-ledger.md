@@ -990,6 +990,40 @@ Draft upstream issue (not posted):
 
 ---
 
+## G20: A ref node wakes on every write of the object it reads
+
+**Need.** A fleet paused with `kardinal pause --env <fleet>` (#1835, Pipeline `spec.pausedFleets`)
+must stop the admissions of every Graph of the Pipeline in flight, and a resume must restart them.
+The natural Graph is a scalar `ref` node on the Pipeline and a wave filter that reads
+`pipeline.spec.pausedFleets`, so the pause is data the Graph watches, not a rebuild.
+
+**kro today.** A scalar ref routes every watch event of the object to every Graph that reads it:
+`Coordinator.RouteEvent` matches by name and enqueues, with no generation or field filter
+(`pkg/watch/coordinator/coordinator.go:198-235`, kro v0.10.0-rc.0). Only the parent informer skips
+updates whose generation did not change (`pkg/dynamiccontroller/dynamic_controller.go:467-500`).
+The Pipeline reconciler writes the Pipeline's status (summary, environments, fleets) on most
+promotion events, so with a ref every Graph of the Pipeline would re-walk on each of those
+writes: N Bundles in flight times every status write, each walk costing G9's API calls.
+
+**Minimal Graph that shows it.** One `ref` node on a Pipeline and one `def` node that reads
+`${pipeline.spec.pausedFleets}`; patch the Pipeline's status in a loop: the Graph reconciles on
+every patch though nothing it reads changed.
+
+**kardinal workaround.** The pause is part of what the Graph is built from, as `spec.holds` is:
+the builder writes `paused` into each fleet target's DAG entry, the wave admits no target of a
+paused fleet without a step (`pkg/graph/compact.go`, the `PromotionWave` filter), and the Bundle
+reconciler rebuilds the Graph of every Bundle in flight in place when the Pipeline spec hash
+changes (`ensurePipelineSpecCurrent`). A pause therefore costs one Graph update per Bundle in
+flight, once. Verified on kind (`TestGraph_FleetPauseMidWave`).
+
+**Upstream work.** None filed.
+
+**Smallest change, no upstream work yet.** An opt-in on a scalar `ref` node to wake only on a
+`metadata.generation` change (spec writes), for example `ref.watch: generation`, matching what the
+parent informer already does.
+
+---
+
 ## Notes: constraints we design around
 
 These are not gaps, but the translator has to work around them.
@@ -1146,6 +1180,7 @@ blocks above.
 | G17 adoption | Opt-in refusal of objects a template node did not create | Yes |
 | G18 ref watch check | Put the ref's name in the watch access review | Yes, small fix |
 | G19 cluster-scoped refs | A read identity for `ref` targets, or kinds kro reads as itself | Yes, with G5 |
+| G20 ref wakes on every write | Opt-in generation-only wake for a scalar `ref` | Yes: the pause would read the Pipeline instead of rebuilding the Graph |
 
 ### Hazards found
 

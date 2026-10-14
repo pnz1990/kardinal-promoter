@@ -428,8 +428,9 @@ rbac:
     # -- Also grant the promoter update on Pipelines and the approver update
     # on PolicyGates, so kardinal pause, kardinal rollback --hold, kardinal
     # unhold and kardinal override work from their kubeconfigs. An
-    # admission policy limits those writes to spec.paused and spec.holds
-    # (Pipelines; the hold-writes policy checks each hold entry) and
+    # admission policy limits those writes to spec.paused, spec.pausedFleets
+    # and spec.holds (Pipelines; the hold-writes policy checks each hold
+    # entry) and
     # spec.overrides (PolicyGates). Off: they act through the UI API only. On weakens the
     # audit trail: those writes are the user's own, with no requested-by
     # record from kardinal, and createdBy is checked only by the policy.

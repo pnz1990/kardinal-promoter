@@ -1,11 +1,12 @@
 ## kardinal resume
 
-Resume a paused pipeline
+Resume a paused pipeline, or a paused fleet
 
 ### Synopsis
 
 Resume <pipeline> after kardinal pause: its held steps continue and new
-promotions start again.
+promotions start again. With --env <fleet>, resume a fleet paused with
+kardinal pause --env <fleet>.
 
 ```
 kardinal resume <pipeline> [flags]
@@ -15,12 +16,14 @@ kardinal resume <pipeline> [flags]
 
 ```
   kardinal resume my-app
+  kardinal resume my-app --env prod
 ```
 
 ### Options
 
 ```
-  -h, --help   help for resume
+      --env string   resume only this fleet environment
+  -h, --help         help for resume
 ```
 
 ### Options inherited from parent commands

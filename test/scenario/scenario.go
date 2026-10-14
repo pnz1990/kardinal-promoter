@@ -10,6 +10,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -189,7 +190,7 @@ func BuildPlan(c Combo, ns string, now time.Time, block bool) *Plan {
 		p.GateEnv, p.Upstream = "eu", "canary"
 	case "fleet":
 		prod := envSpec("prod")
-		one := 1
+		one := intstr.FromInt32(1)
 		prod.Fleet = &v1alpha1.FleetSpec{MaxConcurrent: 1, MaxUnavailable: &one,
 			Targets: []v1alpha1.FleetTarget{{Name: "eu"}, {Name: "us"}, {Name: "ap"}}}
 		prod.DependsOn = []string{"dev"}

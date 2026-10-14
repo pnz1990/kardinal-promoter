@@ -53,8 +53,12 @@ export interface FleetRollup {
   pending: number
   maxConcurrent: number
   maxUnavailable?: number
+  /** spec.fleet.maxUnavailable as written ("10%", "2"). */
+  maxUnavailableSpec?: string
   /** maxUnavailable targets Failed: no further target starts. */
   stopped: boolean
+  /** The fleet is paused (kardinal pause --env <fleet>): no further target starts. */
+  paused: boolean
   /** Distinct versions the targets run: more than one while a rollout is part way. */
   versions: number
   message?: string
@@ -192,7 +196,8 @@ function fleetStation(env: string, f: EnvironmentFleet, p: Pipeline): Station {
     incomingState: failed > 0 ? 'Failed' : inFlight > 0 ? 'Promoting' : undefined,
     fleet: {
       total, verified, inFlight, failed, superseded, supersededTargets, pending, maxConcurrent: f.maxConcurrent ?? 0,
-      maxUnavailable: f.maxUnavailable, stopped, versions: versions.size, message: f.message,
+      maxUnavailable: f.maxUnavailable, stopped, versions: versions.size, message: f.message, paused: !!f.paused,
+      maxUnavailableSpec: f.maxUnavailableSpec,
     },
   }
 }

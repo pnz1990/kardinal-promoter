@@ -88,6 +88,18 @@ describe('stageView', () => {
     expect(v.why[0]).toMatchObject({ kind: 'failed', title: 'Failed.', detail: 'health check timeout', next: 'rollback' })
   })
 
+  it('a fleet environment offers only the fleet actions and the pipeline pause (#1835)', () => {
+    const topo = (paused: boolean) => [{ name: 'prod', upstreams: ['uat'], fleet: { targets: ['prod-eu', 'prod-us'], paused } }]
+    const deployed = { 'prod-eu': { bundle: 'web-2', version: '1.4.0' } }
+    const fleet = stageView(input({ pipeline: pipeline({ environmentTopology: topo(false), deployed }) }))
+    expect([...fleet.actions].sort()).toEqual(['pause', 'pauseFleet', 'rollback'])
+    const paused = stageView(input({ pipeline: pipeline({ environmentTopology: topo(true), deployed: {} }) }))
+    expect([...paused.actions].sort()).toEqual(['pause', 'resumeFleet'])
+    const target = stageView(input({ env: 'prod-us', pipeline: pipeline({ environmentTopology: topo(true), deployed }) }))
+    expect(target.actions.has('resumeFleet')).toBe(false)
+    expect(stageView(input()).actions.has('pauseFleet')).toBe(false)
+  })
+
   it('a fleet target reads its fleet entry', () => {
     const p = pipeline({ environmentTopology: [{ name: 'prod', fleet: { targets: ['prod-eu', 'prod-us'] } }],
       deployed: {}, environmentStates: {} })

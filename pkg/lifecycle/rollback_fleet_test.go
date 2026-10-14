@@ -50,18 +50,22 @@ func TestPlanRollback_Fleet(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "prod-us", one.Bundle.Spec.Intent.TargetEnvironment, "one target")
 
-	// eu on v1, us on v2: rolling the whole fleet back to "the version
-	// before" would mean v0 for eu, so it is refused unless --to says where.
+	// eu on v1, us on v2 (a rollout part way): the fleet goes back to v1,
+	// what the least advanced target runs (#1835). eu stays, us goes back;
+	// "the version before" in eu (v0) is not where the fleet goes.
 	mixed := newClient(t, fleetPipeline(),
 		bundle("app-v0", "app", "v0", 0), bundle("app-v1", "app", "v1", 10), bundle("app-v2", "app", "v2", 20),
 		step("app-v0", "app", "prod-eu", "Verified", 1), step("app-v0", "app", "prod-us", "Verified", 2),
 		step("app-v1", "app", "prod-eu", "Verified", 11), step("app-v1", "app", "prod-us", "Verified", 12),
 		step("app-v2", "app", "prod-us", "Verified", 21),
 	)
-	_, err = lifecycle.PlanRollback(context.Background(), mixed, lifecycle.RollbackRequest{
+	back, err := lifecycle.PlanRollback(context.Background(), mixed, lifecycle.RollbackRequest{
 		Namespace: ns, Pipeline: "app", Environment: "prod", Now: t0.Add(time.Hour)})
-	assert.ErrorIs(t, err, lifecycle.ErrConflict)
-	assert.ErrorContains(t, err, "run different Bundles (prod-eu runs app-v1, prod-us runs app-v2)")
+	require.NoError(t, err)
+	assert.Equal(t, "app-v1", back.Target.Name, "the oldest version a target runs")
+	assert.Equal(t, "prod", back.Bundle.Spec.Intent.TargetEnvironment)
+	assert.Equal(t, []lifecycle.FleetTargetRollback{{Environment: "prod-eu", Runs: "app-v1", Changes: false},
+		{Environment: "prod-us", Runs: "app-v2", Changes: true}}, back.Fleet)
 	to, err := lifecycle.PlanRollback(context.Background(), mixed, lifecycle.RollbackRequest{
 		Namespace: ns, Pipeline: "app", Environment: "prod", ToBundle: "app-v1", Now: t0.Add(time.Hour)})
 	require.NoError(t, err, "--to: planned from prod-us, where app-v1 is a rollback")

@@ -1,0 +1,52 @@
+{{/*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+
+Admission policy for Pipeline fleets (#1835):
+- every spec.pausedFleets entry (kardinal pause --env <fleet>,
+  docs/pause.md#pause-one-fleet) names an environment with a fleet, so a paused
+  fleet cannot be renamed, removed or made a plain environment while it is
+  paused: its pause would no longer name it;
+- a fleet.maxUnavailable count is at least 1 (the CRD's pattern checks a
+  percentage).
+They live here, not in the CRD: as CRD rules (100 entries times 500
+environments; a rule on an int-or-string) they cost more than the schema's CEL
+budget, on Kubernetes before 1.34 even the second. The controller refuses such
+a Pipeline too (Ready=False), and pauses every fleet while a stale entry is
+there.
+*/}}
+{{- $fullname := include "kardinal-promoter.fullname" . }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $fullname }}-fleets
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pipelines"]
+  variables:
+    - name: paused
+      expression: "has(object.spec.pausedFleets) ? object.spec.pausedFleets : []"
+    - name: notFleets
+      expression: >-
+        variables.paused.filter(f, !object.spec.environments.exists(e, e.name == f && has(e.fleet)))
+  validations:
+    - expression: size(variables.notFleets) == 0
+      messageExpression: >-
+        'spec.pausedFleets names ' + variables.notFleets.join(', ') +
+        ', which is not an environment with a fleet: resume it first (kardinal resume ' +
+        object.metadata.name + ' --env <name>), then rename or remove the fleet'
+      reason: Invalid
+    - expression: >-
+        object.spec.environments.all(e, !has(e.fleet) || !has(e.fleet.maxUnavailable) ||
+          type(e.fleet.maxUnavailable) == string || e.fleet.maxUnavailable >= 1)
+      message: 'fleet.maxUnavailable: a count of at least 1, or a percentage from 1% to 100%'
+      reason: Invalid
+---
+{{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "fleets") }}

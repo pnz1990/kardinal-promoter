@@ -451,10 +451,12 @@ type HoldCurrentRequest struct {
 // now (kardinal hold): no other Bundle promotes into it until ReleaseHold or
 // the hold's expiry. Nothing is rolled back and no Bundle is created; the
 // hold is the same spec.holds entry RollbackAndHold writes, naming the
-// deployed Bundle. A fleet environment is refused (its targets may run
-// different Bundles: hold each target), and so is an environment that runs
-// nothing yet or is held already on another Bundle or for another reason
-// (ErrConflict). The same hold again (Bundle and reason) is a no-op that
+// deployed Bundle. A fleet environment is held as a whole (one spec.holds
+// entry naming the fleet, which holds every target, as rollback --hold on a
+// fleet does) when every target that runs something runs the same Bundle;
+// targets on different Bundles are refused with ErrConflict naming them
+// (fleetDeployed). An environment that runs nothing yet or is held already on
+// another Bundle or for another reason is refused too (ErrConflict). The same hold again (Bundle and reason) is a no-op that
 // returns it with existed true, so a retried hold succeeds.
 func HoldCurrent(ctx context.Context, c client.Client, req HoldCurrentRequest) (hold *v1alpha1.EnvironmentHold, existed bool, err error) {
 	if strings.TrimSpace(req.Reason) == "" {
@@ -470,16 +472,21 @@ func HoldCurrent(ctx context.Context, c client.Client, req HoldCurrentRequest) (
 	if !hasEnvironment(&p, req.Environment) {
 		return nil, false, fmt.Errorf("pipeline %s has no environment %q: %w", req.Pipeline, req.Environment, ErrInvalid)
 	}
-	if fleetTargets(&p, req.Environment) != nil {
-		return nil, false, fmt.Errorf("%s is a fleet: its targets may run different Bundles; hold each target, or roll the fleet back with --hold: %w",
-			req.Environment, ErrInvalid)
+	var deployed string
+	if targets := fleetTargets(&p, req.Environment); targets != nil {
+		// A fleet is held as a whole, on the one Bundle its targets run.
+		var err error
+		if deployed, err = fleetDeployed(ctx, c, req, targets); err != nil {
+			return nil, false, err
+		}
+	} else {
+		hist, err := loadEnvHistory(ctx, c, req.Namespace, req.Pipeline, req.Environment)
+		if err != nil {
+			return nil, false, fmt.Errorf("hold: %w", err)
+		}
+		deployed = hist.deployed()
 	}
 	held := HoldOf(&p, req.Environment)
-	hist, err := loadEnvHistory(ctx, c, req.Namespace, req.Pipeline, req.Environment)
-	if err != nil {
-		return nil, false, fmt.Errorf("hold: %w", err)
-	}
-	deployed := hist.deployed()
 	if held != nil {
 		if held.Bundle == deployed && held.Reason == req.Reason {
 			return held, true, nil
@@ -509,4 +516,42 @@ func HoldCurrent(ctx context.Context, c client.Client, req HoldCurrentRequest) (
 		return nil, false, err
 	}
 	return &h, false, nil
+}
+
+// fleetDeployed returns the one Bundle the targets of a fleet run, for a
+// hold of the whole fleet (#1835, the PR's decision record). Targets that run
+// nothing yet are not counted: the hold keeps every other version out of
+// them too. Targets that run different Bundles (a rollout part way) are
+// refused with ErrConflict: one hold names one Bundle, and holding the fleet
+// on either would let that Bundle promote into the targets that do not run
+// it. kardinal pause --env <fleet> stops such a rollout where it is, and
+// kardinal rollback --env <fleet> --hold brings every target to one version
+// and holds it.
+func fleetDeployed(ctx context.Context, c client.Reader, req HoldCurrentRequest, targets []string) (string, error) {
+	steps, err := ListPromotionSteps(ctx, c, req.Namespace, client.MatchingLabels{LabelPipeline: req.Pipeline})
+	if err != nil {
+		return "", fmt.Errorf("hold: steps of pipeline %s: %w", req.Pipeline, err)
+	}
+	one := ""
+	var parts []string
+	mixed := false
+	for _, t := range targets {
+		d := historyOf(steps, req.Pipeline, t).deployed()
+		if d == "" {
+			continue
+		}
+		parts = append(parts, t+" runs "+d)
+		if one == "" {
+			one = d
+		} else if d != one {
+			mixed = true
+		}
+	}
+	if mixed {
+		return "", fmt.Errorf("the targets of fleet %s run different Bundles (%s), and a hold names one; "+
+			"stop the rollout where it is with kardinal pause %s --env %s, roll every target back and hold it with "+
+			"kardinal rollback %s --env %s --hold, or hold each target: %w",
+			req.Environment, strings.Join(parts, ", "), req.Pipeline, req.Environment, req.Pipeline, req.Environment, ErrConflict)
+	}
+	return one, nil
 }

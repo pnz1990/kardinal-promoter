@@ -6,9 +6,12 @@ package graph
 import (
 	"fmt"
 	"path"
+	"slices"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -26,8 +29,11 @@ type fleetMember struct {
 	index int
 	// maxConcurrent is the fleet's spec.fleet.maxConcurrent.
 	maxConcurrent int
-	// maxUnavailable is the fleet's spec.fleet.maxUnavailable, 0 when unset.
+	// maxUnavailable is the fleet's spec.fleet.maxUnavailable as a count of
+	// its targets (MaxUnavailableCount), 0 when unset.
 	maxUnavailable int
+	// paused: the fleet is in the Pipeline's spec.pausedFleets.
+	paused bool
 	// spec is the target as an environment: the fleet environment with the
 	// target's name, path and health.
 	spec kardinalv1alpha1.EnvironmentSpec
@@ -83,6 +89,7 @@ func fleetMembers(p *kardinalv1alpha1.Pipeline) (map[string]fleetMember, map[str
 	for _, e := range p.Spec.Environments {
 		names[e.Name] = true
 	}
+	stalePause := ValidatePausedFleets(p) != nil
 	for _, e := range p.Spec.Environments {
 		if e.Fleet == nil {
 			continue
@@ -94,6 +101,15 @@ func fleetMembers(p *kardinalv1alpha1.Pipeline) (map[string]fleetMember, map[str
 		if len(targets) == 0 {
 			return nil, nil, fmt.Errorf("build: fleet environment %q has no targets", e.Name)
 		}
+		maxUnavailable, err := MaxUnavailableCount(e.Fleet.MaxUnavailable, len(targets))
+		if err != nil {
+			return nil, nil, asInvalid(fmt.Errorf("build: fleet environment %q: %w", e.Name, err))
+		}
+		// A spec.pausedFleets entry that names no fleet (a paused fleet
+		// renamed, or made a plain environment) fails closed: it pauses every
+		// fleet of the Pipeline until it is removed (kardinal resume --env
+		// <old name>). The chart's admission policy refuses such an edit.
+		paused := slices.Contains(p.Spec.PausedFleets, e.Name) || stalePause
 		base := e.Path
 		if base == "" {
 			base = "environments/" + e.Name
@@ -118,16 +134,37 @@ func fleetMembers(p *kardinalv1alpha1.Pipeline) (map[string]fleetMember, map[str
 			if t.Health != nil {
 				spec.Health = *t.Health.DeepCopy()
 			}
-			maxUnavailable := 0
-			if e.Fleet.MaxUnavailable != nil {
-				maxUnavailable = *e.Fleet.MaxUnavailable
-			}
 			members[name] = fleetMember{fleet: e.Name, index: i, maxConcurrent: e.Fleet.MaxConcurrent,
-				maxUnavailable: maxUnavailable, spec: spec}
+				maxUnavailable: maxUnavailable, paused: paused, spec: spec}
 			byFleet[e.Name] = append(byFleet[e.Name], name)
 		}
 	}
 	return members, byFleet, nil
+}
+
+// MaxUnavailableCount is spec.fleet.maxUnavailable as a number of targets of
+// a fleet of total targets: a count as written (at least 1), a percentage of
+// total rounded up and at least 1 ("10%" of 50 is 5, of 3 is 1). 0 when v is
+// unset. A count below 1 or a string that is not a percentage is an error.
+func MaxUnavailableCount(v *intstr.IntOrString, total int) (int, error) {
+	if v == nil {
+		return 0, nil
+	}
+	n, err := intstr.GetScaledValueFromIntOrPercent(v, total, true)
+	if err != nil {
+		return 0, fmt.Errorf("maxUnavailable %q: %w", v.String(), err)
+	}
+	if v.Type == intstr.Int && n < 1 {
+		// The chart's admission policy refuses it too; without the chart the
+		// controller does (ValidateFleets, Ready=False).
+		return 0, fmt.Errorf("maxUnavailable %d: a count is at least 1", n)
+	}
+	if n < 1 {
+		// A percentage of 1% to 100% (the schema's pattern) of a fleet
+		// rounds up to at least 1.
+		n = 1
+	}
+	return n, nil
 }
 
 // expandFleets replaces each fleet environment in the ordering by its
@@ -288,6 +325,30 @@ func ValidateFleets(p *kardinalv1alpha1.Pipeline) error {
 	}
 	_, _, err := fleetMembers(p)
 	return err
+}
+
+// ValidatePausedFleets returns an error naming each spec.pausedFleets entry
+// that is not an environment with a fleet. While one exists every fleet of p
+// is paused (fleetMembers) and, in the compact Graph, an environment the
+// entry names is held (compactNodes): the pause fails closed.
+func ValidatePausedFleets(p *kardinalv1alpha1.Pipeline) error {
+	fleets := map[string]bool{}
+	for _, e := range p.Spec.Environments {
+		if e.Fleet != nil {
+			fleets[e.Name] = true
+		}
+	}
+	var bad []string
+	for _, f := range p.Spec.PausedFleets {
+		if !fleets[f] {
+			bad = append(bad, fmt.Sprintf("%q", f))
+		}
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("spec.pausedFleets: %s is not an environment with a fleet; remove it (kardinal resume %s --env <name>)",
+			strings.Join(bad, ", "), p.Name)
+	}
+	return nil
 }
 
 // HasFleets reports whether any environment of p is a fleet.

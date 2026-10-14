@@ -25,6 +25,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
@@ -134,6 +135,9 @@ type createdBundle struct {
 	Replaces   string `json:"replaces,omitempty"`
 	// Hold is the hold rollback --hold made.
 	Hold *createdHold `json:"hold,omitempty"`
+	// Fleet is, for the rollback of a whole fleet, each target with what
+	// runs there and whether the rollback changes it.
+	Fleet []lifecycle.FleetTargetRollback `json:"fleet,omitempty"`
 	// URL is the pipeline in the UI: KARDINAL_UI_URL, else the address
 	// kardinal dashboard opens.
 	URL string `json:"url"`

@@ -805,7 +805,8 @@ func TestIdentityAdmission_ShardMode(t *testing.T) {
 	}
 	// hold-writes (hold-admission.yaml, #1528) exempts this release's
 	// controller too, so it is bound the same way.
-	policies = append(policies, "kardinal-promoter-hold-writes")
+	// fleets (#1835) is bound the same way.
+	policies = append(policies, "kardinal-promoter-hold-writes", "kardinal-promoter-fleets")
 	team := bindings("--set", "controller.namespaceShard=team-b")
 	// gitops-writes (gitops-admission.yaml) matches the controller's writes
 	// to Argo CD and Flux objects in their own namespaces: one binding,

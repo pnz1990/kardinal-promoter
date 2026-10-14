@@ -1152,7 +1152,7 @@ func TestFormatBundleErrors_NewerBundleHidesOlderFailure(t *testing.T) {
 // TestFormatPipelineTable_Fleet (D1): a fleet environment is one column,
 // counting its targets' states; once every target is Verified it says so.
 //
-// Covers FLEET-05.
+// Covers FLEET-05, FLEET-14.
 func TestFormatPipelineTable_Fleet(t *testing.T) {
 	p := v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "edge"}}
 	p.Spec.Environments = []v1alpha1.EnvironmentSpec{{Name: "test"},
@@ -1177,4 +1177,10 @@ func TestFormatPipelineTable_Fleet(t *testing.T) {
 	out = render(step("test", "Verified"), step("prod-a", "Verified"), step("prod-b", "Superseded"), step("prod-c", "Verified"))
 	assert.Contains(t, out, "2/3 live, 1 replaced by newer version (prod-b)")
 	assert.NotContains(t, out, "Failed")
+	// #1835: a paused fleet (kardinal pause --env prod) says so.
+	p.Spec.PausedFleets = []string{"prod"}
+	out = render(step("test", "Verified"), step("prod-a", "Verified"), step("prod-b", "Promoting"))
+	assert.Contains(t, out, "1/3 live, paused")
+	out = render(step("test", "Verified"))
+	assert.Contains(t, out, "Paused", "paused before any target started")
 }

@@ -688,6 +688,13 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline, ownSecret bool) meta
 	if err := graph.ValidateFleets(p); err != nil {
 		return invalid(err.Error())
 	}
+	// A paused fleet that is not a fleet pauses nothing: say so rather than
+	// leave the entry to pause an environment that becomes a fleet later.
+	// (A CRD rule would cost more than the schema's CEL budget: 100 entries
+	// times 500 environments.)
+	if err := graph.ValidatePausedFleets(p); err != nil {
+		return invalid(err.Error())
+	}
 
 	// A git.secretRef in another namespace is refused on purpose (confused
 	// deputy), so it is a validation error, not an unimplemented field.

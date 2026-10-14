@@ -186,7 +186,7 @@ environments:
     approval: auto
     fleet:
       maxConcurrent: 5      # at most 5 targets in flight
-      maxUnavailable: 2     # 2 failed targets stop the rollout
+      maxUnavailable: 2     # 2 failed targets stop the rollout (or "10%" of the targets)
       targets:
         - name: eu-west     # environment prod-eu-west, path environments/prod/eu-west
           labels: {region: eu}
@@ -204,7 +204,7 @@ environments:
 | `fleet.selector.kind` | No | `Application` | `Target`: pick from `fleet.targets` by their `labels`, in their order. `Application`: every Argo CD Application the selector matches in `selector.namespace` is a target, named after the Application. The namespace must be one of the controller's `fleets.applicationNamespaces` (`--fleet-application-namespaces`, default `argocd`), and defaults to the first of them. The Application's `spec.source.path` is its path, and the Application is its `argocd` health check. `ClusterProfile`: every `multicluster.x-k8s.io/v1alpha1` ClusterProfile of the [cluster inventory](https://github.com/kubernetes-sigs/cluster-inventory-api) the selector matches in `selector.namespace` is a target, named after the cluster. The namespace defaults to the Pipeline's, and another one must be in the controller's `fleets.clusterProfileNamespaces`. It uses the fleet's path and health check. |
 | `fleet.selector.matchLabels`, `fleet.selector.matchExpressions` | One of them | | A Kubernetes label selector (`In`, `NotIn`, `Exists`, `DoesNotExist`). |
 | `fleet.maxConcurrent` | No | `0` | Targets promoted at once. A target is in flight from the creation of its PromotionStep until it is Verified. A Failed target keeps its place, so failures slow the rollout down. `0` promotes every target at once. |
-| `fleet.maxUnavailable` | No | (unset) | Once this many targets have failed (`Failed`, `AbortedByAlarm` or `RollingBack`), no further target starts. The targets in flight finish. A failed target that is retried to Verified gives its place back, and the rollout goes on. Unset, failures only keep their places. |
+| `fleet.maxUnavailable` | No | (unset) | Once this many targets have failed (`Failed`, `AbortedByAlarm` or `RollingBack`), no further target starts. The targets in flight finish. A failed target that is retried to Verified gives its place back, and the rollout goes on. A count (`2`, unquoted, at least 1) or a percentage of the fleet's targets (`"10%"`, from `1%` to `100%`), rounded up and at least 1: `"10%"` of 50 targets is 5, of 3 targets 1. A selector fleet's percentage follows its membership. The CRD refuses a string that is not such a percentage (a quoted `"2"` too); the chart's `<release>-fleets` admission policy refuses a count below 1, and so does the controller (`Ready=False`). Unset, failures only keep their places. |
 
 How a fleet is promoted:
 
@@ -264,17 +264,27 @@ How a fleet is promoted:
   branch deleted, and a Verified target's change stays in git. Its step's record (state,
   message, PR) is kept in the Bundle's `status.retiredSteps`. Targets already Verified are not
   promoted again.
+- **Pause.** `kardinal pause <pipeline> --env <fleet>` adds the fleet to `spec.pausedFleets`: no
+  further target starts, for any version, and the targets in flight finish, as when
+  `maxUnavailable` is reached. `kardinal resume <pipeline> --env <fleet>` lets the rollout go on
+  ([Pause one fleet](pause.md#pause-one-fleet)).
 - **Rollback.** `kardinal rollback <pipeline> --env <fleet>-<target>` rolls one target back.
   Its rollback version does not supersede the fleet's version, which goes on promoting the other
   targets. Add `--hold` to keep the fleet's version (and later ones) off that target until
   `kardinal unhold`. `kardinal rollback <pipeline> --env <fleet>` rolls the whole fleet
-  back. When every target that has something deployed runs the same version, the version to go
-  back to is chosen as for that version, and one rollback version promotes it to every target;
-  targets that already run it are Verified at once. When the targets run different versions (a
-  rollout part way, or a target rolled back alone), the rollback is refused and the message
-  lists what each target runs: name the version to go back to with `--to`, or roll back targets
-  one by one. `--hold` on a fleet holds every target, and `kardinal unhold
-  --env <fleet>` releases them. A target held through its fleet cannot be released alone.
+  back with one rollback version, paced by `maxConcurrent`; targets that already run what it
+  restores are Verified at once. When every target that has something deployed runs the same
+  version, it goes to the version before; when the targets run different versions (a rollout
+  stopped part way, or a target rolled back alone), to the oldest version a target runs, a
+  rollback counted as the version it restored. That version must have been Verified in every
+  target the rollback changes, or it is refused, naming them
+  ([Roll back a fleet](rollback.md#roll-back-a-fleet)).
+  `--to` names the version for every target. `--hold` on a fleet holds every target, and
+  `kardinal unhold --env <fleet>` releases them. A target held through its fleet cannot be
+  released alone.
+- **Hold.** `kardinal hold <pipeline> --env <fleet>` holds every target on the version they run,
+  with one `spec.holds` entry for the fleet; it is refused while the targets run different
+  versions ([Hold an environment](rollback.md#hold-an-environment)).
 - **Targets on one branch.** Targets in flight together push to the same branch. Argo CD (or
   Flux) can then deploy a later commit, another target's, before the target's own commit. The
   `argocd` and `flux` health checks accept a later commit only when the workloads run the
@@ -297,7 +307,8 @@ How a fleet is promoted:
   `12/50 Verified, 1 Failed, 1 Superseded (prod-eu-west)`. `kardinal status`, `promote` and `rollback` take a target's
   environment name (`prod-eu-west`). The UI's fleet board draws the fleet as one station with
   a bar of its targets: Verified, in flight, Failed and Superseded, naming the Superseded ones. It names the fleet as `stopped` once
-  `maxUnavailable` is reached.
+  `maxUnavailable` is reached, and `paused` while it is paused; the fleet's actions pause or
+  resume the fleet and roll the whole fleet back.
 
 ## Git Layout: Directory vs Branch
 

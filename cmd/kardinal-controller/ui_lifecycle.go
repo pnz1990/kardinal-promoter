@@ -252,6 +252,19 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 		Msg("ui: rollback triggered")
 
 	msg := "rollback started — rolling " + req.Environment + " back to " + plan.Target.Name
+	if plan.Fleet != nil {
+		changes := 0
+		for _, t := range plan.Fleet {
+			if t.Changes {
+				changes++
+			}
+		}
+		msg = fmt.Sprintf("rollback started — rolling fleet %s back to %s: %d of %d targets go back, paced by maxConcurrent",
+			req.Environment, plan.Target.Name, changes, len(plan.Fleet))
+		if paused, pErr := s.fleetPaused(r.Context(), ns, req.Pipeline, req.Environment); pErr == nil && paused {
+			msg += "; the fleet is paused: no target starts until it is resumed"
+		}
+	}
 	if req.Hold {
 		msg += "; " + req.Environment + " is held on " + plan.Bundle.Name + " until the hold is released"
 	}
@@ -262,7 +275,29 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 		RollbackOf: plan.Target.Name,
 		Message:    msg,
 		Held:       req.Hold,
+		Fleet:      fleetRollbackResponse(plan.Fleet),
 	})
+}
+
+// fleetRollbackResponse is plan.Fleet for the UI API.
+func fleetRollbackResponse(in []lifecycle.FleetTargetRollback) []uiFleetTargetRollback {
+	if in == nil {
+		return nil
+	}
+	out := make([]uiFleetTargetRollback, len(in))
+	for i, t := range in {
+		out[i] = uiFleetTargetRollback{Environment: t.Environment, Runs: t.Runs, Changes: t.Changes}
+	}
+	return out
+}
+
+// fleetPaused reports whether fleet is in the Pipeline's spec.pausedFleets.
+func (s *uiAPIServer) fleetPaused(ctx context.Context, ns, pipeline, fleet string) (bool, error) {
+	var p v1alpha1.Pipeline
+	if err := s.client.Get(ctx, client.ObjectKey{Namespace: ns, Name: pipeline}, &p); err != nil {
+		return false, fmt.Errorf("get pipeline %s/%s: %w", ns, pipeline, err)
+	}
+	return lifecycle.FleetPaused(&p, fleet), nil
 }
 
 // handleReleaseHold handles POST /api/v1/ui/release-hold: it removes the hold
@@ -367,7 +402,9 @@ func (s *uiAPIServer) handleApproval(w http.ResponseWriter, r *http.Request) {
 
 // handlePause handles POST /api/v1/ui/pause. It sets spec.paused
 // (lifecycle.SetPaused); the Pipeline reconciler then creates the freeze gate,
-// so no new step starts and in-flight steps hold at the next safe point. In
+// so no new step starts and in-flight steps hold at the next safe point.
+// With "environment" it pauses only that fleet (lifecycle.SetFleetPaused,
+// spec.pausedFleets): no further target starts, the ones in flight finish. In
 // TokenReview mode the caller needs update on pipelines/pause, not on the
 // Pipeline: the controller writes it (actionClient).
 //
@@ -418,6 +455,22 @@ func (s *uiAPIServer) handlePauseResume(w http.ResponseWriter, r *http.Request, 
 	writer, err := s.actionClient(r.Context(), "pipelines", "pause", ns, req.Pipeline)
 	if err != nil {
 		s.writeLifecycleError(w, action, err)
+		return
+	}
+	if req.Environment != "" {
+		// One fleet (spec.pausedFleets): the same pipelines/pause right.
+		if err := lifecycle.SetFleetPaused(r.Context(), writer, ns, req.Pipeline, req.Environment, pause); err != nil {
+			s.writeLifecycleError(w, action+" fleet", err)
+			return
+		}
+		s.log.Info().Str("pipeline", req.Pipeline).Str("env", req.Environment).Bool("paused", pause).
+			Str("requestedBy", uiRequester(r.Context())).Msg("ui: fleet " + done)
+		msg := "fleet " + req.Environment + " of " + req.Pipeline + " resumed: its targets start again"
+		if pause {
+			msg = "fleet " + req.Environment + " of " + req.Pipeline + " paused: no further target starts, the targets in flight finish"
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(uiMessageResponse{Message: msg})
 		return
 	}
 	if err := lifecycle.SetPaused(r.Context(), writer, ns, req.Pipeline, pause); err != nil {

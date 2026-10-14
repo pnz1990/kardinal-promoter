@@ -37,9 +37,9 @@ Approve and gate:
 
 Incident:
   hold        Keep an environment on what runs there now
-  pause       Pause a pipeline: no new promotion steps start, in-flight ones hold at the next safe point
+  pause       Pause a pipeline, or one fleet: no new promotion steps start
   reject      Reject a version: it is never promoted again, and rollback never picks it
-  resume      Resume a paused pipeline
+  resume      Resume a paused pipeline, or a paused fleet
   rollback    Roll back an environment to the version before
   unhold      Release an environment's hold (kardinal hold, or rollback --hold)
 

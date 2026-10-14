@@ -1113,7 +1113,7 @@ reads are the view permissions, so a user who can view needs only the write verb
 Pause, resume, gate approval and rejecting a Bundle are authorized on a virtual subresource
 (`pipelines/pause`, `policygates/override`, `bundles/reject`) instead of `update` on the object:
 the API server serves no such endpoint, but RBAC grants it and a `SubjectAccessReview` checks it.
-The controller then makes the one change (`spec.paused`, one `spec.overrides` entry whose
+The controller then makes the one change (`spec.paused` or `spec.pausedFleets`, one `spec.overrides` entry whose
 `createdBy` is the caller, or `spec.rejected` whose `by` is the caller) with its own identity. The
 bundle-rejection and gate-overrides admission policies admit a record in another user's name only
 from the controller's own ServiceAccount (and `admission.controllerUsernames`). An override of a
@@ -1182,7 +1182,7 @@ write from the user's kubeconfig, so they need `update` on the object.
 on `policygates` to the approver, and the chart's `<fullname>-scoped-writes`
 ValidatingAdmissionPolicy (always installed, UPDATE only) limits such writes: a caller who
 holds `pipelines/pause` or `pipelines/hold` but not `pipelines/edit` may change only
-`spec.paused` (with `pipelines/pause`) and `spec.holds` (with `pipelines/hold`; the
+`spec.paused` and `spec.pausedFleets` (with `pipelines/pause`) and `spec.holds` (with `pipelines/hold`; the
 `<fullname>-hold-writes` policy checks each entry) of a Pipeline, and one who holds
 `policygates/override` but not `policygates/edit` only `spec.overrides` of a PolicyGate;
 neither may change labels or annotations. The policy checks

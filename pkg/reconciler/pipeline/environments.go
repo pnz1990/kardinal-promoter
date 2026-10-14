@@ -269,8 +269,8 @@ const summaryMaxNamed = 6
 
 // Summarize returns status.summary: one sentence on where p's versions are,
 // for example "1.5.0 live in test, uat; waiting for PR merge in prod (#42)".
-// An invalid spec (Ready=False) leads the sentence; a paused Pipeline says
-// so.
+// An invalid spec (Ready=False) leads the sentence; a paused Pipeline, or
+// a paused fleet, says so.
 //
 // A fleet's targets are counted under the fleet's name, and so are the
 // environments of a wave with more environments than a clause names
@@ -392,6 +392,14 @@ func Summarize(p *kardinalv1alpha1.Pipeline, ready metav1.Condition, envs []kard
 	}
 	if p.Spec.Paused {
 		sentence = "paused; " + sentence
+		versionFirst = false
+	} else if len(p.Spec.PausedFleets) > 0 {
+		// A paused fleet (kardinal pause --env <fleet>) starts no target.
+		noun := "fleet "
+		if len(p.Spec.PausedFleets) > 1 {
+			noun = "fleets "
+		}
+		sentence = noun + strings.Join(p.Spec.PausedFleets, ", ") + " paused; " + sentence
 		versionFirst = false
 	}
 	if ready.Type != "" && ready.Status != metav1.ConditionTrue && ready.Reason != "" {

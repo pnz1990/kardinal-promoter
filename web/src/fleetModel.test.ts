@@ -143,6 +143,17 @@ describe('fleetRow: fleet environments (D1)', () => {
     expect(row.groups[2][0].state).toBe('ahead')
   })
 
+  it('a paused fleet and a percentage maxUnavailable (#1835)', () => {
+    const row = fleetRow({
+      ...base, activeBundleName: 'web-2',
+      environmentTopology: [topo[0], { ...topo[1], fleet: { targets, maxConcurrent: 2, maxUnavailable: 1, maxUnavailableSpec: '10%', paused: true } }, topo[2]],
+      environmentStates: { test: 'Verified', 'prod-c01': 'Verified' },
+    })
+    const f = row.groups[1][0].fleet!
+    expect(f).toMatchObject({ paused: true, maxUnavailable: 1, maxUnavailableSpec: '10%' })
+    expect(fleetRow({ ...base, activeBundleName: 'web-2' }).groups[1][0].fleet!.paused).toBe(false)
+  })
+
   it('a failure past maxUnavailable stops the fleet', () => {
     const row = fleetRow({
       ...base, activeBundleName: 'web-2',

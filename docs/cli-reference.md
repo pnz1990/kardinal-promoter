@@ -34,7 +34,7 @@
 | [`kardinal logs`](reference/cli/kardinal-logs.md) | Show promotion step execution logs for a pipeline |
 | [`kardinal metrics`](reference/cli/kardinal-metrics.md) | Show promotion metrics (DORA-style) for a pipeline |
 | [`kardinal override`](reference/cli/kardinal-override.md) | Force-pass a PolicyGate with a mandatory audit record |
-| [`kardinal pause`](reference/cli/kardinal-pause.md) | Pause a pipeline: no new promotion steps start, in-flight ones hold at the next safe point |
+| [`kardinal pause`](reference/cli/kardinal-pause.md) | Pause a pipeline, or one fleet: no new promotion steps start |
 | [`kardinal policy`](reference/cli/kardinal-policy.md) | Manage and evaluate promotion policy gates |
 | [`kardinal policy list`](reference/cli/kardinal-policy-list.md) | List PolicyGates |
 | [`kardinal policy simulate`](reference/cli/kardinal-policy-simulate.md) | Simulate PolicyGate evaluation for a hypothetical promotion context |
@@ -43,7 +43,7 @@
 | [`kardinal quickstart`](reference/cli/kardinal-quickstart.md) | Install kardinal on a local cluster and promote a first version |
 | [`kardinal refresh`](reference/cli/kardinal-refresh.md) | Force re-reconciliation of a Pipeline |
 | [`kardinal reject`](reference/cli/kardinal-reject.md) | Reject a version: it is never promoted again, and rollback never picks it |
-| [`kardinal resume`](reference/cli/kardinal-resume.md) | Resume a paused pipeline |
+| [`kardinal resume`](reference/cli/kardinal-resume.md) | Resume a paused pipeline, or a paused fleet |
 | [`kardinal rollback`](reference/cli/kardinal-rollback.md) | Roll back an environment to the version before |
 | [`kardinal ship`](reference/cli/kardinal-ship.md) | Ship a version: create a Bundle, and with --wait follow it |
 | [`kardinal status`](reference/cli/kardinal-status.md) | Show controller health or per-pipeline in-flight promotion details |

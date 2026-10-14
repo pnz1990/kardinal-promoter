@@ -1,13 +1,13 @@
 ## kardinal pause
 
-Pause a pipeline: no new promotion steps start, in-flight ones hold at the next safe point
+Pause a pipeline, or one fleet: no new promotion steps start
 
 ### Synopsis
 
 Hold <pipeline>: no step starts, and a step still preparing its change holds
-before its next step. A step waiting for its PR merge or running its health
-check finishes, so a merged change is always verified. Resume with
-kardinal resume <pipeline>.
+before its next step; a step waiting for its PR merge or health check finishes.
+With --env <fleet>, pause one fleet: no further target starts, for any version,
+and the targets in flight finish. Resume with kardinal resume (--env <fleet>).
 
 Sets spec.paused on the Pipeline and creates the freeze PolicyGate
 freeze-<pipeline>. While the pipeline is paused, no PromotionStep leaves
@@ -15,6 +15,13 @@ Pending and a step that is still preparing its change (clone, update,
 commit, open PR) holds before its next step. A step that is waiting for a
 PR merge or running its health check finishes, so a merged change is never
 left unverified. Resume with: kardinal resume <pipeline>.
+
+With --env <fleet> it adds the fleet environment to spec.pausedFleets
+instead (update on pipelines/pause, as for spec.paused). The Graph of every
+version in flight is rebuilt in place and starts no further target of the
+fleet; steps that exist run to their end. kardinal resume <pipeline> --env
+<fleet> removes the entry. A fleet target or an environment that is not a
+fleet is refused.
 
 ```
 kardinal pause <pipeline> [flags]
@@ -25,12 +32,15 @@ kardinal pause <pipeline> [flags]
 ```
   kardinal pause my-app
   kardinal resume my-app
+  kardinal pause my-app --env prod      # prod is a fleet: stop starting targets
+  kardinal resume my-app --env prod
 ```
 
 ### Options
 
 ```
-  -h, --help   help for pause
+      --env string   pause only this fleet environment: no further target starts
+  -h, --help         help for pause
 ```
 
 ### Options inherited from parent commands

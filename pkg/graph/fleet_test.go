@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -195,10 +196,15 @@ func bigFleet(n, maxConcurrent int, maxUnavailable *int) *kardinalv1alpha1.Pipel
 		targets = append(targets, kardinalv1alpha1.FleetTarget{Name: fmt.Sprintf("t%02d", i),
 			Labels: map[string]string{"tier": []string{"canary", "main"}[min(i, 1)]}})
 	}
+	var mu *intstr.IntOrString
+	if maxUnavailable != nil {
+		v := intstr.FromInt32(int32(*maxUnavailable))
+		mu = &v
+	}
 	return pipelineOf("app",
 		kardinalv1alpha1.EnvironmentSpec{Name: "test"},
 		kardinalv1alpha1.EnvironmentSpec{Name: "prod", Fleet: &kardinalv1alpha1.FleetSpec{
-			MaxConcurrent: maxConcurrent, MaxUnavailable: maxUnavailable, Targets: targets}},
+			MaxConcurrent: maxConcurrent, MaxUnavailable: mu, Targets: targets}},
 	)
 }
 
@@ -748,4 +754,181 @@ func TestFleet_AllTargetsSupersededHoldsDownstream(t *testing.T) {
 
 	sim.steps["prod-t01"] = "Verified"
 	assert.Contains(t, sim.advance(), "audit", "one Verified target and the rest Superseded: audit starts")
+}
+
+// rebuilt is sim with p's Graph built again (a Pipeline change rebuilds the
+// Graph of a Bundle in flight in place): the steps that exist are kept.
+func rebuilt(t *testing.T, sim *compactSim, p *kardinalv1alpha1.Pipeline) *compactSim {
+	t.Helper()
+	next := fleetSim(t, p)
+	next.steps = sim.steps
+	return next
+}
+
+// TestFleet_PausedStartsNoTarget (#1835): a fleet in spec.pausedFleets
+// starts no further target, for any Bundle, while the targets in flight stay
+// in the wave (kro does not prune their steps) and finish; the environment
+// after the fleet waits. Resuming lets the rollout go on in target order.
+//
+// Covers FLEET-14.
+func TestFleet_PausedStartsNoTarget(t *testing.T) {
+	p := bigFleet(10, 3, nil)
+	sim := fleetSim(t, p)
+	sim.steps["test"] = "Verified"
+	assert.Equal(t, []string{"prod-t00", "prod-t01", "prod-t02", "test"}, sim.advance())
+
+	p.Spec.PausedFleets = []string{"prod"}
+	sim = rebuilt(t, sim, p)
+	sim.steps["prod-t00"] = "Verified"
+	wave, complete := sim.wave()
+	assert.ElementsMatch(t, []string{"test", "prod-t00", "prod-t01", "prod-t02"}, wave,
+		"paused: a free place starts nothing, and the targets in flight keep their steps")
+	assert.False(t, complete)
+	sim.steps["prod-t01"] = "Verified"
+	sim.steps["prod-t02"] = "Failed"
+	before := len(sim.steps)
+	sim.advance()
+	assert.Len(t, sim.steps, before, "still paused")
+
+	p.Spec.PausedFleets = nil
+	sim = rebuilt(t, sim, p)
+	got := sim.advance()
+	assert.Contains(t, got, "prod-t03", "resumed: the next targets start")
+	assert.Contains(t, got, "prod-t04")
+	assert.NotContains(t, got, "prod-t05", "t02 Failed keeps its place: 2 free places")
+}
+
+// TestFleet_PausedOtherFleetRuns: pausing one fleet does not hold another
+// fleet or an environment that is not a fleet.
+//
+// Covers FLEET-14.
+func TestFleet_PausedOtherFleetRuns(t *testing.T) {
+	p := pipelineOf("app",
+		kardinalv1alpha1.EnvironmentSpec{Name: "test"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "edge", DependsOn: []string{"test"}, Fleet: &kardinalv1alpha1.FleetSpec{
+			Targets: []kardinalv1alpha1.FleetTarget{{Name: "a"}, {Name: "b"}}}},
+		kardinalv1alpha1.EnvironmentSpec{Name: "core", DependsOn: []string{"test"}, Fleet: &kardinalv1alpha1.FleetSpec{
+			Targets: []kardinalv1alpha1.FleetTarget{{Name: "a"}, {Name: "b"}}}},
+	)
+	p.Spec.PausedFleets = []string{"edge"}
+	sim := fleetSim(t, p)
+	assert.Equal(t, []string{"test"}, sim.advance(), "a paused fleet does not hold the environment before it")
+	sim.steps["test"] = "Verified"
+	assert.Equal(t, []string{"core-a", "core-b", "test"}, sim.advance(), "edge is paused, core is not")
+}
+
+// TestFleet_MaxUnavailablePercent (#1835): maxUnavailable "10%" of a
+// 50-target fleet is 5 targets: four failures let the rollout go on, the
+// fifth stops it, and the targets in flight finish.
+//
+// Covers FLEET-14.
+func TestFleet_MaxUnavailablePercent(t *testing.T) {
+	p := bigFleet(50, 10, nil)
+	pct := intstr.FromString("10%")
+	p.Spec.Environments[1].Fleet.MaxUnavailable = &pct
+	sim := fleetSim(t, p)
+	sim.steps["test"] = "Verified"
+	sim.advance()
+	for i := range 4 {
+		sim.steps[fmt.Sprintf("prod-t%02d", i)] = "Failed"
+	}
+	sim.steps["prod-t04"] = "Verified"
+	assert.Contains(t, sim.advance(), "prod-t10", "four failures of five allowed: a free place starts the next target")
+	sim.steps["prod-t05"] = "Failed"
+	before := len(sim.steps)
+	sim.steps["prod-t06"] = "Verified"
+	sim.advance()
+	assert.Len(t, sim.steps, before, "five failures (10% of 50): no target starts")
+	wave, _ := sim.wave()
+	assert.Contains(t, wave, "prod-t09", "a target in flight keeps its step")
+}
+
+// TestMaxUnavailableCount: a count is used as written; a percentage of the
+// fleet's targets is rounded up and at least 1.
+//
+// Covers FLEET-14.
+func TestMaxUnavailableCount(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		v     *intstr.IntOrString
+		total int
+		want  int
+	}{
+		{name: "unset", v: nil, total: 50, want: 0},
+		{name: "count", v: ptrTo(intstr.FromInt32(3)), total: 50, want: 3},
+		{name: "count above the fleet", v: ptrTo(intstr.FromInt32(80)), total: 50, want: 80},
+		{name: "10% of 50", v: ptrTo(intstr.FromString("10%")), total: 50, want: 5},
+		{name: "10% of 51 rounds up", v: ptrTo(intstr.FromString("10%")), total: 51, want: 6},
+		{name: "1% of 3 is at least 1", v: ptrTo(intstr.FromString("1%")), total: 3, want: 1},
+		{name: "100%", v: ptrTo(intstr.FromString("100%")), total: 7, want: 7},
+		{name: "a count as a string", v: ptrTo(intstr.FromString("4")), total: 50, want: -1},
+		{name: "a count of 0", v: ptrTo(intstr.FromInt32(0)), total: 50, want: -1},
+		{name: "a negative count", v: ptrTo(intstr.FromInt32(-2)), total: 50, want: -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := graph.MaxUnavailableCount(tc.v, tc.total)
+			if tc.want < 0 {
+				require.Error(t, err, "the API server refuses it; the builder too")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestFleet_MaxUnavailableInvalid: a value the API server would refuse
+// fails the build as invalid, naming the fleet.
+//
+// Covers FLEET-14.
+func TestFleet_MaxUnavailableInvalid(t *testing.T) {
+	p := bigFleet(4, 1, nil)
+	bad := intstr.FromString("ten")
+	p.Spec.Environments[1].Fleet.MaxUnavailable = &bad
+	_, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app")})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, graph.ErrInvalid)
+	assert.ErrorContains(t, err, `fleet environment "prod"`)
+}
+
+func ptrTo[T any](v T) *T { return &v }
+
+// TestValidatePausedFleets: a spec.pausedFleets entry that is not an
+// environment with a fleet is refused, naming it; a paused fleet is fine.
+//
+// Covers FLEET-14.
+func TestValidatePausedFleets(t *testing.T) {
+	p := bigFleet(2, 1, nil)
+	p.Spec.PausedFleets = []string{"prod"}
+	require.NoError(t, graph.ValidatePausedFleets(p))
+	p.Spec.PausedFleets = []string{"prod", "test", "gone"}
+	err := graph.ValidatePausedFleets(p)
+	require.Error(t, err)
+	assert.EqualError(t, err, `spec.pausedFleets: "test", "gone" is not an environment with a fleet; remove it (kardinal resume app --env <name>)`)
+}
+
+// TestFleet_StalePauseFailsClosed (#1835, QA): a paused fleet renamed while
+// paused leaves an entry that names no fleet; it pauses every fleet of the
+// Pipeline until it is removed, and a paused fleet made a plain environment
+// (compact shape) stays held.
+//
+// Covers FLEET-14.
+func TestFleet_StalePauseFailsClosed(t *testing.T) {
+	p := bigFleet(4, 2, nil)
+	p.Spec.Environments[1].Name = "edge" // was prod, paused as prod
+	p.Spec.PausedFleets = []string{"prod"}
+	sim := fleetSim(t, p)
+	sim.steps["test"] = "Verified"
+	assert.Equal(t, []string{"test"}, sim.advance(), "the renamed fleet stays paused")
+	p.Spec.PausedFleets = nil
+	sim = rebuilt(t, sim, p)
+	assert.Contains(t, sim.advance(), "edge-t00", "removing the entry resumes it")
+
+	plain := compactPipeline(kardinalv1alpha1.EnvironmentSpec{Name: "test"}, kardinalv1alpha1.EnvironmentSpec{Name: "prod"})
+	plain.Spec.PausedFleets = []string{"prod"}
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: plain, Bundle: makeBundle("app-x7k2m", "app")})
+	require.NoError(t, err)
+	psim := newCompactSim(t, res.Graph)
+	psim.steps["test"] = "Verified"
+	assert.Equal(t, []string{"test"}, psim.advance(), "a paused fleet made a plain environment is held")
 }

@@ -31,6 +31,8 @@ export interface WaitReason {
 
 export type StageActionKind =
   | 'approve' | 'reject' | 'override' | 'promote' | 'rollback' | 'release' | 'pause' | 'resume' | 'rejectVersion' | 'openPR'
+  // A fleet environment's pause and resume (spec.pausedFleets, #1835).
+  | 'pauseFleet' | 'resumeFleet'
 
 /** A version the environment can be rolled back to. */
 export interface RollbackChoice {
@@ -63,6 +65,7 @@ export interface StageView {
   /** The fleet this environment is a target of, or its own spec entry. */
   spec?: EnvironmentNode
   fleetOf?: EnvironmentNode
+
   /** What the environment runs now. */
   running?: { bundle: string; version: string; verifiedAt?: string }
   /** The newest Bundle on its way in, when it is not the one running. */
@@ -240,6 +243,13 @@ export function stageView(input: StageInput): StageView {
   actions.add(p.paused ? 'resume' : 'pause')
   if (incoming) actions.add('rejectVersion')
   if (step?.prURL && stepState === 'WaitingForMerge') actions.add('openPR')
+  if (spec?.fleet && !fleetOf) {
+    // A fleet environment (#1835): pause or resume it, or roll every target back
+    // (one rollback for the fleet) once something runs in one. Its targets have their own actions.
+    actions.clear()
+    actions.add(p.paused ? 'resume' : 'pause').add(spec.fleet.paused ? 'resumeFleet' : 'pauseFleet')
+    if (spec.fleet.targets.some(t => p.deployed?.[t])) actions.add('rollback')
+  }
 
   // One primary action per state: the approval waiting, the hold or pause to
   // lift, the promotion to start, the PR to merge; a roll back only when the
