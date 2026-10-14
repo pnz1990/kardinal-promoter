@@ -80,6 +80,8 @@ type Kro struct {
 	Version func() int64
 	clean   int64
 	isClean bool
+	// Skip, when set, reports a Graph that needs no pass.
+	Skip func(g *graph.Graph) bool
 }
 
 type objKey struct {
@@ -709,7 +711,7 @@ func (k *Kro) sync(ctx context.Context) (int, error) {
 		}
 		gk := g.Namespace + "/" + g.Name
 		live[gk] = true
-		if g.DeletionTimestamp != nil {
+		if g.DeletionTimestamp != nil || (k.Skip != nil && k.Skip(g)) {
 			continue
 		}
 		n, err := k.apply(ctx, g, &list.Items[i])
