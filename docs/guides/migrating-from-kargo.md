@@ -1,23 +1,14 @@
 # Migrating from Kargo
 
-This guide walks through migrating a Kargo-managed delivery pipeline to kardinal-promoter. It assumes familiarity with Kargo concepts.
+This guide walks through migrating a Kargo-managed delivery pipeline to kardinal-promoter, step by step. It assumes familiarity with Kargo concepts.
 
 ---
 
 ## Concept mapping
 
-| Kargo concept | kardinal equivalent | Notes |
-|---|---|---|
-| `Warehouse` | `Subscription` CRD | OCI watcher polls registries; creates `Bundle` on new digest |
-| `Stage` | Environment in `Pipeline.spec.environments[]` | One Pipeline holds all environments |
-| `Freight` | `Bundle` CRD | One version of your app per artifact; carries provenance |
-| `FreightRequest` | `Bundle.spec.intent` | Targets a specific environment; can skip others |
-| `Promotion` | `PromotionStep` CRD | Created automatically by the Graph controller |
-| `VerifiedIn` / approval required | `approval: pr-review` on environment | PR approval required before HealthChecking |
-| `AnalysisTemplate` (verification) | `spec.environments[].verification` | The same AnalysisTemplates, run as AnalysisRuns after the health check; needs Argo Rollouts ([Analysis](../analysis.md)). Without it, a `MetricCheck` (Prometheus, Datadog, CloudWatch, New Relic or a JSON web query with a threshold; `perPromotion: true` with `{{ bundle.version }}` replaces AnalysisRun arguments, [Metric Checks](../metric-checks.md)) read by a gate |
-| Stage that updates an Argo CD Application in another cluster | Environment with `health.type: argocd` on that Application in the hub | Multi-cluster through an Argo CD or Flux hub, or `health.kubeconfigSecretRef` to a kubeconfig Secret |
-| `Project` | Kubernetes Namespace | RBAC isolation is namespace-scoped |
-| Argo Rollouts integration | `health.type: argoRollouts` on environment | Reads Rollout `.status.phase` |
+[Coming from Kargo](../coming-from-kargo.md) maps each Kargo concept (Warehouse, Freight, Stage,
+verification, promotion steps) to its kardinal counterpart, and lists the Kargo Enterprise
+features that kardinal ships as open source.
 
 ---
 
@@ -156,8 +147,11 @@ For each Kargo Stage:
 1. Add an entry to `spec.environments[]` in the Pipeline
 2. Set `approval` from the Stage's approval configuration:
    - Auto-promotion → `approval: auto`
-   - Manual approval → `approval: pr-review`
+   - Manual approval → `approval: pr-review` (a reviewed pull request), or an approval gate
+     with named approvers ([Require approvals](../approvals.md))
 3. Translate `sources.stages: [upstream]` → `dependsOn: [upstream]`
+4. Translate `requiredSoakTime` → a gate on `upstream.<env>.soakMinutes`
+   ([Coming from Kargo](../coming-from-kargo.md#requiredsoaktime-to-soak-gates))
 
 ### Step 2: Convert Warehouses to Subscriptions
 
@@ -290,28 +284,6 @@ Once you have validated end-to-end promotion with kardinal, remove the Kargo res
 kubectl delete warehouse,stage -n kargo-demo --all
 helm uninstall kargo -n kargo
 ```
-
----
-
-## Feature parity reference
-
-| Feature | Kargo | kardinal |
-|---|---|---|
-| Image watching | Warehouse `image` subscription | `Subscription` CRD with `type: image` |
-| Git watching | Warehouse `git` subscription | `Subscription` CRD with `type: git` |
-| Auto-promotion | ProjectConfig `promotionPolicies[].autoPromotionEnabled` | `approval: auto` |
-| Manual approval | Promote by hand (any Stage without auto-promotion) | `approval: pr-review` |
-| Stage sequencing | `requestedFreight.sources.stages` | `dependsOn` |
-| Parallel stages (fan-out) | Multiple Stages with same upstream | Multiple environments with same `dependsOn` |
-| Argo Rollouts | Verification with Argo Rollouts AnalysisTemplates | `health.type: argoRollouts` for the Rollout; `verification` for the AnalysisTemplates |
-| Metrics gates | `AnalysisTemplate` + `AnalysisRun` | `verification` (the same AnalysisTemplates), or `MetricCheck` CRD + `PolicyGate` CEL |
-| Time-based gates | Promotion windows (Kargo Enterprise, v1.12+) | `PolicyGate` with `schedule.isWeekend` |
-| Pause/freeze | Turn off auto-promotion; freeze windows in Kargo Enterprise (v1.12+) | `kardinal pause my-app` |
-| Rollback | Manual re-promotion of older Freight (pins the Stage since v1.11); auto-rollback in Kargo Enterprise (beta) | `kardinal rollback my-app --env prod`, or `onHealthFailure: rollback` |
-| Evidence / audit | Promotion objects and Kubernetes Events; `record-audit-event` in Kargo Enterprise (v1.12) | PR body with structured evidence, `AuditEvent` CRD, `kardinal history` |
-| DAG visualization | Kargo UI | Built-in React UI (embedded in the controller) |
-| Promotion steps | A Stage's `promotionTemplate` composes built-in steps and PromotionTasks | Fixed sequence per environment, chosen by the version type, `update.strategy` and `approval`; no custom steps |
-| Multi-cluster | Stages that update each cluster's Argo CD Application | Argo CD or Flux hub: `health.type: argocd` or `flux` reads each Application or Kustomization in the hub, or `health.kubeconfigSecretRef` for a cluster with no hub |
 
 ---
 

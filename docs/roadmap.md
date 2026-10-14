@@ -11,7 +11,47 @@ what changed in each release.
 
 ## Planned
 
-- Move to kro v0.10.0 once it is released (kardinal targets v0.10.0-rc.0)
+Everything in this section is planned and not in kardinal yet. Plans change with feedback; the
+[changelog](changelog.md) says what shipped.
+
+### v0.12: agent-ready
+
+- **Actors.** An `AgentIdentity` object registers each agent with a required human sponsor and
+  the namespaces, pipelines and environments it may act in. Versions, approvals and overrides
+  record the verified actor and sponsor, and AuditEvents name them.
+- **Policy that knows the actor.** Gates read who created a version (`actor.*`, `agent.*`), and an
+  environment can say `agents: auto | approve | deny`. Approvals from agents count only where a
+  gate opts in, never for the agent's own work or its sponsor's.
+- **Agents as verifiers.** A `Verdict` object records an agent's pass, fail or inconclusive result
+  for a version in an environment, and a verification gate waits for N verdicts from eligible
+  agents.
+- **An agent freeze.** `kardinal freeze --agents` stops promotions by agents, and a cluster-wide
+  stop-the-line stops everyone.
+- **Local MCP.** `kardinal mcp` over stdio, with the caller's kubeconfig: read tools by default,
+  write tools only with `--allow-write`, and a policy pre-flight that says whether a version
+  would be allowed into an environment now.
+- **Fleets.** Pause and roll back a whole fleet; `maxUnavailable` as a percentage.
+- Move to kro v0.10.0 once it is released (kardinal targets v0.10.0-rc.0).
+
+### v0.13: evidence
+
+- Verify SLSA provenance and in-toto attestations, and commit signatures.
+- A signed promotion receipt for each promotion into each environment: the version, the actor
+  and sponsor, every gate with its result, the approvers and verdicts.
+- A compliance mapping page and an evidence pack export.
+- A change request gate (ServiceNow, Jira), and structured approval fields such as a ticket ID.
+
+### v0.14: adaptive
+
+- Per-agent budgets and blast radius.
+- A change risk score that gates and soak times can read.
+- Earned autonomy: each agent's change failure rate and rollbacks in policy.
+- An error-budget gate on SLOs.
+- Custom promotion steps registered by admins.
+- DORA metrics split by human and agent.
+
+### Also planned
+
 - `rollback` and `promote --env` without re-running upstream environments
 
 ---

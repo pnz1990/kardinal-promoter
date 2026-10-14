@@ -8,6 +8,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Documentation
+
+- **Coming from Kargo** ([page](coming-from-kargo.md)) — each Kargo concept (Warehouse, Freight, Stage, fan-in, `requiredSoakTime`, auto-promotion, verification, promotion steps) beside its kardinal counterpart, and the Kargo Enterprise features kardinal ships as open source: automatic rollback, approvals with verified identity and `excludeAuthor`, ChangeWindows with break-glass overrides, and NotificationHook. [Migrate from Kargo](guides/migrating-from-kargo.md) keeps the step-by-step walkthrough and links to it for the concepts.
+- **Agentic delivery** ([page](agentic/index.md)) — a new docs section: what kardinal enforces today for changes made by agents, and a starting point for an agent's ServiceAccount. The [roadmap](roadmap.md) lists the v0.12 to v0.14 themes, all planned.
+
 ## [v0.11.0] — 2026-10-12
 
 **The UX release: one station map of each pipeline with a stage drawer that says why an environment waits and what moves it on, `kardinal quickstart`, `kardinal ship --wait` for CI, and one vocabulary (version, stage, gate) across the UI, the CLI and the docs. It removes what v0.10.0 deprecated and uses a git Secret only when it is labelled. Read [Before you upgrade](#from-v0100) first: some changes refuse objects v0.10.0 accepted.**
