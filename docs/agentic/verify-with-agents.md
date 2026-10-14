@@ -123,7 +123,7 @@ admission policy refuses one in anyone else's name. The command then says whethe
 waits for the check counts it. `--revoke` deletes your latest verdict;
 `kardinal verify list <pipeline|bundle>` lists the verdicts and whether a gate counted each.
 
-Bind the chart's `<release>-verifier` ClusterRole (read and create Verdicts, nothing else) to the
+Bind the chart's `<release>-verifier` ClusterRole (read, create and revoke your own Verdicts, nothing else) to the
 agents and CI jobs that verify; people with `<release>-approver` may verify too. Model, session and
 client are recorded as asserted, from `KARDINAL_ACTOR_MODEL`, `KARDINAL_ACTOR_SESSION` and
 `KARDINAL_ACTOR_CLIENT`.
