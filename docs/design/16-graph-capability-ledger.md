@@ -68,8 +68,8 @@ Rules:
 | [G15](#g15-kro-holds-every-graph-in-memory-and-a-graph-cannot-be-retired-without-its-children) | kro holds every live Graph in memory (3 to 6 MB each, whatever its size), and a Graph cannot be deleted without deleting its children | High at scale | `pkg/reconciler/bundle/retire.go` records the steps in `Bundle.status.retiredSteps`, then deletes the Graph | None filed (drafts: Graph suspend, kro#1445 comment) |
 | [G16](#g16-kro-impersonates-with-only-a-username) | kro impersonates the Graph ServiceAccount with only a username, so admission cannot tell it from `edit`/`admin` holders impersonating it | High | Refuse minted and Pod tokens (credential-id, pod-name extras); `edit`/`admin` holders are trusted as kro (documented) | Blocked on upstream: draft, not posted |
 | [G17](#g17-a-graph-adopts-an-object-someone-else-created) | kro adopts an existing object of the name it applies and keeps fields its template does not set | High | Admission: only kro and the controller create Graph-only kinds; no update turns an existing PolicyGate or MetricCheck into an instance | None filed |
-| [G18](#g18-the-ref-watch-check-ignores-the-refs-name) | The ref watch check drops the ref's name, so a name-limited grant silently loses drift detection | Medium | Grant `get, list, watch` on the whole kind (actors, #1834) | None filed |
-| [G19](#g19-a-namespaced-graph-identity-needs-a-cluster-wide-grant-to-read-a-cluster-scoped-ref) | A namespaced Graph identity needs a ClusterRoleBinding to read a cluster-scoped ref | Low | The IdentityProvisioner patches one chart-created ClusterRoleBinding (actors, #1834) | None filed; related to G5 |
+| [G18](#g18-the-ref-watch-check-ignores-the-refs-name) | The ref watch check drops the ref's name, so a name-limited grant silently loses drift detection | Medium | No ref: the PolicyGate reconciler reads AgentIdentities (actor policy, #1843) | None filed |
+| [G19](#g19-a-namespaced-graph-identity-needs-a-cluster-wide-grant-to-read-a-cluster-scoped-ref) | A namespaced Graph identity needs a ClusterRoleBinding to read a cluster-scoped ref | Low | Not needed while AgentIdentities are read by the PolicyGate reconciler (G18) | None filed; related to G5 |
 
 Smaller constraints that shape the translator are in [Notes](#notes-constraints-we-design-around).
 
@@ -454,11 +454,11 @@ Every row writes its result to its own CRD status; a new row needs the owner's a
 | Health on a later synced or applied commit: does it contain the promoted one (#1575) | `descends` in `pkg/reconciler/promotionstep/pr_rebase.go`, passed to the argocd and flux adapters as `CheckOptions.RevisionContains` | A git read of an external repository (the commit graph near the branch head), which a Graph node cannot make; the answer feeds the health check, which stays in the reconciler (row above) | None needed. A network read in the health path, approved by the coordinator as the owner's delegate (2026-10-09) because it is bounded: one `ls-remote` per repository per 30 s and one graph read per head and depth (20, then 500 commits), cached and shared by concurrent checks (singleflight), under a 30 s timeout. The cache holds no promotion state; the decision is written to the step's `status.message` |
 | Asking Argo CD or Flux to sync a promotion's commit (`health.refresh`) | `requestRefresh` in `pkg/reconciler/promotionstep/refresh.go`, `RequestRefresh` in `pkg/health/refresh.go`, on the first HealthChecking reconcile once the commit is in git | A Graph applies only objects it owns: a ref node is read-only, and an owned Application or Kustomization node would make kro the owner of the user's object. The request is a merge patch of one annotation (`argocd.argoproj.io/refresh`, `reconcile.fluxcd.io/requestedAt`) on the object the health check reads, not a status write. The step writes `status.refreshRequestedAt` (the time sent to Flux), `refreshRevision` and `refreshMessage` before it patches, so it asks at most once, and a failure only records why and leaves the step to the tool's poll. The `patch` the chart grants for it is confined to that annotation by the `<fullname>-gitops-writes` admission policy unless the controller may also `update` the object. Approved by the coordinator as the owner's delegate (2026-10-11), after Kargo's argocd-update | A patch-only node kind that sets metadata on an existing object without owning it. No ask: one annotation per promotion does not justify a primitive |
 | Gate results as SCM commit statuses while a PR waits for merge (#1452) | PromotionStep reconciler posts `kardinal/gates`; the gate results reach the step through a mirror `patch` node (G14) | Side effect on an external system | Out of scope for kro |
-| Holding an existing PromotionStep: pause (freeze gate) and the required-gate re-check before the step starts (#1300, #1313) | `holdIfPaused` and `checkRequiredGates` in `pkg/reconciler/promotionstep` | No primitive to hold an existing node without pruning it. `readyWhen` does not hold dependents in a standalone Graph; an Unresolved node leaves the existing object as it is; `includeWhen: false` prunes it; a ref to a missing object holds the whole Graph | A Graph-level "hold" on a node that keeps its object and blocks its dependents, or `GateReadiness` for standalone Graphs |
+| Holding an existing PromotionStep: pause (freeze gate), freezes (a ChangeWindow with `spec.freeze`, #1843) and the required-gate re-check before the step starts (#1300, #1313) | `holdIfPaused`, `holdIfFrozen` and `checkRequiredGates` in `pkg/reconciler/promotionstep` | No primitive to hold an existing node without pruning it. A freeze must also hold Graphs built before it existed, and its start, end and exemption expiry are times kro CEL cannot compare; a selector ref on ChangeWindows would need a cluster-wide grant for every Graph identity (G19). `readyWhen` does not hold dependents in a standalone Graph; an Unresolved node leaves the existing object as it is; `includeWhen: false` prunes it; a ref to a missing object holds the whole Graph | A Graph-level "hold" on a node that keeps its object and blocks its dependents, or `GateReadiness` for standalone Graphs |
 | Auto-rollback Bundle creation | `createAutoRollback` in `pkg/reconciler/promotionstep/lifecycle.go`, built by `pkg/lifecycle`; the decision is `RollbackPolicy` `status.shouldRollback` | Creating a Bundle is a new Graph root, not a node of the failing Bundle's Graph | None needed |
 | Skip permissions (`intent.skip`) | `ValidateSkipPermissions` in `pkg/graph/skip.go`, when the Graph is built | The check decides which nodes exist; only the gate expressions run on the Graph | `includeWhen` over a SkipPermission ref, once G2 is solved |
 | PolicyGate re-evaluation timer | PolicyGate reconciler requeues at `recheckInterval` (default 5m); ScheduleClock ticks add re-evaluation | No time-based requeue in kro (see time, above) | KREP-025 |
-| Cross-CRD reads for the gate context: MetricChecks, ChangeWindows, PRStatuses and sibling Bundles | `buildMetricsContext`, `buildChangeWindowContext`, `buildPRContext`, `buildUpstreamContextWithHistory` in `pkg/reconciler/policygate` | See the PolicyGate CEL row | Selector refs (KREP-003) cover the reads; time does not |
+| Cross-CRD reads for the gate context: MetricChecks, ChangeWindows, PRStatuses, sibling Bundles and the version's AgentIdentity (`agent.*`, #1843) | `buildMetricsContext`, `buildChangeWindowContext`, `buildPRContext`, `buildUpstreamContextWithHistory` in `pkg/reconciler/policygate`; the AgentIdentity read in `buildContext` | See the PolicyGate CEL row. The AgentIdentity would be a named `ref` node, but a cluster-scoped ref costs every Graph identity a cluster-wide grant and loses drift detection without a whole-kind watch (G18, G19) | Selector refs (KREP-003) cover the reads; time does not. For `agent.*`: the G18 and G19 fixes |
 | PR merge polling | PRStatus reconciler polls the SCM every 30 s; SCM webhooks only shorten the wait | External I/O | Out of scope for kro |
 | Agent index for admission (actors, #1834) | `pkg/reconciler/agentindex` writes the AgentIndex status that the `<release>-actor` ValidatingAdmissionPolicy reads as params | A ValidatingAdmissionPolicy cannot look up objects, so the registry must be one params object. A Graph could build it (selector `ref` plus `transformMapEntry`), but one conflicting AgentIdentity would fail the whole expression, and revocation would wait in kro's single Graph queue (G13). Planned in #1834 (not on main) | None needed: first-wins folding is not a Graph concern |
 | AuditEvent retention | `pkg/reconciler/auditretention` reads the clock to delete records older than `--audit-retention-max-age` | Housekeeping like `historyLimit`: no promotion decision reads it, and AuditEvents have no owner whose change could trigger it, so it is a leader Runnable | None needed |
@@ -918,10 +918,12 @@ only when something else does. The Graph docs say otherwise: "kro watches every 
 so a change to the referenced resource reconciles the Graph"
 (`website/versioned_docs/version-0.10.0-rc.0/docs/concepts/graph/02-nodes.md:110`).
 
-**kardinal workaround.** Grant the Graph identity `get, list, watch` on the whole kind
-(`agentidentities`), through the `<release>-graph-agent-reader` ClusterRoleBinding that the
-IdentityProvisioner maintains (G19). Least privilege is lost: every agent Bundle's Graph
-identity can read every AgentIdentity. Planned for E7 (actor-aware policy), not on main.
+**kardinal workaround.** No ref node. The PolicyGate reconciler reads the Bundle's
+AgentIdentity from the controller's cache and watches AgentIdentities to re-evaluate the gates
+that read `agent.*` ([18-actor-policy.md §2.2](18-actor-policy.md#22-where-agent-comes-from),
+G8 cross-CRD reads row). A ref node with a whole-kind grant was considered and rejected: it
+would give every agent Bundle's Graph identity a cluster-wide read (G19) and make a suspension
+wait behind kro's single queue (G13). Planned in #1843 (not on main).
 
 **Upstream work.** None filed.
 
@@ -960,11 +962,10 @@ resource. So each namespace's Graph identity needs its own ClusterRoleBinding su
 by whoever provisions Graph identities (kardinal's IdentityProvisioner, G5). kro has no way to
 read allow-listed catalog kinds as itself, or as a separate read identity.
 
-**kardinal workaround.** The chart creates one ClusterRoleBinding,
-`<release>-graph-agent-reader`, and the IdentityProvisioner patches its subjects: the Graph
-ServiceAccounts of the namespaces that have an agent Bundle. The controller has `patch` on that
-one object (`resourceNames`) and holds the role's permissions itself, so no `bind` or `escalate`
-is needed. Planned for E7 (actor-aware policy), not on main.
+**kardinal workaround.** None needed yet: kardinal reads AgentIdentities in the PolicyGate
+reconciler, not through a ref (G18). If a Graph must read one, the shape is one chart-created
+ClusterRoleBinding whose subjects the IdentityProvisioner patches (`patch` on that one object by
+`resourceNames`, the role's permissions held by the controller, so no `bind` or `escalate`).
 
 **Upstream work.** None filed. Related to G5.
 

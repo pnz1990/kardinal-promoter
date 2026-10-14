@@ -554,6 +554,10 @@ suspends an agent, or tightens its autonomy, changes in-flight promotions.
 
 ### 10.2 Where `agent.*` comes from: a `ref` node
 
+> **Amended** by [18-actor-policy.md §2.2](18-actor-policy.md#22-where-agent-comes-from): the
+> PolicyGate reconciler reads the AgentIdentity, so no ref node and no Graph RBAC (G18, G19) are
+> needed. The analysis below is kept for the Graph-native path once kro fixes G18 and G19.
+
 The translator adds a `ref` node named `agentIdentity`, but only to Graphs whose Bundle has an
 agent stamp, so there is no `includeWhen`:
 
