@@ -234,6 +234,7 @@ nav:
       - Graph-first architecture: design/10-graph-first-architecture.md
       - Graph capability ledger: design/16-graph-capability-ledger.md
       - Actors: design/17-actors.md
+      - Verdicts: design/19-verdicts.md
 
 extra:
   social:
