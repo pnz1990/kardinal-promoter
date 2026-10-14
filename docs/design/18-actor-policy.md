@@ -49,14 +49,16 @@ The PolicyGate reconciler adds two variables to the CEL context it builds in `bu
 | `actor.via` | string | the stamp; `""` |
 | `actor.verified` | bool | true when the Bundle has a stamp |
 | `actor.asserted.model`, `.session`, `.client` | string | the stamp; `""` |
-| `agent.registered` | bool | the Bundle's agent has an AgentIdentity whose `status.ready` is true |
+| `agent.registered` | bool | the Bundle's agent has an AgentIdentity whose `status.ready` is true for its current generation, and an entry in this release's AgentIndex |
 | `agent.name` | string | `actor.agent` |
-| `agent.sponsor` | string | the AgentIdentity's `spec.sponsor.user` now; `""` when not registered |
-| `agent.autonomy` | string | `auto`, `approve` or `deny` now (default `approve`); `""` when not registered |
-| `agent.suspended` | bool | the AgentIdentity's `spec.suspended` now |
+| `agent.sponsor` | string | the agent's AgentIndex entry now (`sponsor`); `""` when not registered |
+| `agent.autonomy` | string | the entry's `autonomy` now: `auto`, `approve` or `deny`; `""` when not registered |
+| `agent.suspended` | bool | the entry is `blocked` while the AgentIdentity is ready, which is what a suspension is |
 
 `actor.*` is the Bundle's stamp: fixed when the version was created (the CRD forbids changing
-`spec.actor`). `agent.*` is the AgentIdentity as it is at evaluation: an admin who suspends an
+`spec.actor`). `agent.*` is the registry as it is at evaluation, read only from status that other
+reconcilers write (the AgentIdentity reconciler's `status.ready`, the AgentIndex reconciler's
+entries), never computed from a spec: an admin who suspends an
 agent or tightens its autonomy changes the gates of its in-flight versions. For a Bundle whose
 actor is not an agent, `agent` is `{registered: false, name: "", sponsor: "", autonomy: "",
 suspended: false}`. Every key is always present, so `agent.autonomy == 'auto'` evaluates (false)
@@ -101,15 +103,20 @@ Graph-native shape and becomes right once kro fixes G18 and G19: the ledger row 
 The mechanism, exactly:
 
 - `buildContext` reads `bundle.spec.actor`. When its kind is `agent`, it gets
-  `AgentIdentity/<actor.agent>` (cluster-scoped) from the manager's cache, but only when the
-  expression or `approval.requiredWhen` contains `agent` (as `changewindow` is read only when
-  referenced). A read error other than NotFound fails the gate closed with `context error`;
-  NotFound gives `registered: false`.
-- `SetupWithManager` watches AgentIdentities and maps an event to the gate instances whose
-  expression or `requiredWhen` contains `agent` (`instanceGateRequests`, the helper the
-  ChangeWindow watch uses).
-- The controller already lists and watches AgentIdentities for the AgentIndex (17-actors §5.4),
-  so this adds no RBAC and no informer.
+  `AgentIdentity/<actor.agent>` and this release's `AgentIndex` (`--agent-index`, both
+  cluster-scoped) from the manager's cache, but only when the expression or
+  `approval.requiredWhen` contains `agent` (as `changewindow` is read only when referenced). A
+  read error other than NotFound fails the gate closed with `context error`; NotFound, or no
+  `--agent-index`, gives `registered: false`.
+- The values come from status only: `registered` from the AgentIdentity's `status.ready` (at
+  its current generation), and `sponsor`, `autonomy` and `suspended` (an entry `blocked` while
+  the identity is ready) from the agent's AgentIndex entry. A suspension is therefore whatever
+  the registry's reconcilers last wrote, the same answer admission gives (17-actors §5.3).
+- `SetupWithManager` watches the AgentIndex, which is rewritten on every AgentIdentity change,
+  and maps an event to the gate instances whose expression or `requiredWhen` contains `agent`
+  (`instanceGateRequests`, the helper the ChangeWindow watch uses).
+- The controller already lists and watches AgentIdentities and AgentIndexes for the index
+  (17-actors §5.4), so this adds no RBAC and no informer.
 
 ## 3. `approval.requiredWhen`
 
@@ -346,6 +353,10 @@ spec:
 - A freeze window is a blackout whose `end` may be omitted. The schema rule becomes "a blackout
   requires start, and end unless it is a freeze". `changewindow.Evaluate` treats a missing end
   as "active from start on". A freeze can be named in CEL like any window.
+- The ChangeWindow reconciler, which already owns the clock for windows, writes everything
+  time-based a freeze needs to its own status: `status.active`, `status.exemptions` (the
+  exemptions not yet expired), `status.nextTransition` (the next window boundary or exemption
+  expiry, when it requeues itself) and `status.observedGeneration`.
 - Name convention for the CLI: `kardinal-freeze-<agents|everyone>[-<namespace>]`, so
   `kardinal freeze` is idempotent per scope.
 
@@ -363,20 +374,23 @@ built before it existed and steps already created; (a) and (b) cannot. The mecha
 - `holdIfFrozen(ctx, step)` runs after `holdIfPaused` before a Pending step starts and before a
   Promoting step's next git step. Steps waiting for a PR merge or running a health check carry on,
   as with pause: stopping them would leave a merged change unverified.
-- It lists ChangeWindows from the cache (no API call), keeps those with `spec.freeze`, active
-  now by `changewindow.Evaluate` (the function the ChangeWindow reconciler and the gates use),
-  whose `namespaces` match the step's namespace (`actor.Matches`), and whose `actors` match the
-  version (`everyone`, or `agents` and the Bundle's `spec.actor.kind == agent`). The Bundle is
-  read only when an active freeze is `agents`.
-- An exemption matches a step when namespace and pipeline equal, `environment` is empty or
-  equal, `bundle` is empty or equal, and `expiresAt` is after now.
+- It reads no clock. It lists ChangeWindows from the cache (no API call) and keeps those with
+  `spec.freeze` whose status says active (a status behind the spec's generation counts as
+  active, so a new freeze holds at once and an edit fails closed), whose `namespaces` match the
+  step's namespace (`actor.Matches`), and whose `actors` match the version (`everyone`, or
+  `agents` and the Bundle's `spec.actor.kind == agent`). The Bundle is read only when an agent
+  freeze exists.
+- An exemption lets a step through when it is in the window's `status.exemptions` (so not
+  expired, as its reconciler decided) and still in the spec (a removed exemption ends at once),
+  and namespace and pipeline equal, `environment` is empty or equal, `bundle` is empty or equal.
 - Held: the step writes only its own `status.message`,
   `frozen by kardinal-freeze-agents (agents, every namespace) since 09:00 UTC by alice@example.com:
-  INC-4211 — kardinal unfreeze --agents, or kardinal override checkout prod --freeze --reason <why>`,
-  and requeues at the earlier of the window's end, the next exemption expiry and one minute.
+  INC-4211 — kardinal unfreeze kardinal-freeze-agents, or kardinal override checkout prod --freeze --reason <why>`,
+  and requeues after one minute as a fallback.
 - Auto-merge is off while a step is frozen (`autoMergeBlocked` gains the freeze check).
 - `SetupWithManager` watches ChangeWindows with `spec.freeze` and wakes the Pending and
-  Promoting steps in the matching namespaces, so freeze and unfreeze take effect within one step
+  Promoting steps in the matching namespaces, so a freeze, an unfreeze, a new exemption and an
+  expiry (the window reconciler's status write at `nextTransition`) take effect within one step
   reconcile; the one-minute requeue is the fallback.
 - An exempted step proceeds and writes one `FreezeExempted` AuditEvent (outbox in the step's
   status, as its other audit records), named from the step, the window and the exemption, so a
@@ -415,7 +429,7 @@ Kubernetes 1.30.
 ```
 kardinal freeze --agents   [--cluster | -n <ns>] --reason <why> [--for <duration>]
 kardinal freeze --everyone [--cluster | -n <ns>] --reason <why> [--for <duration>]
-kardinal unfreeze --agents|--everyone [--cluster | -n <ns>]
+kardinal unfreeze <name> | --agents|--everyone [--cluster | -n <ns>]
 kardinal freeze                                   # list active freezes
 kardinal override <pipeline> <env> --freeze --reason <why> [--expires-in <d>] [--bundle <name>]
 ```
@@ -457,7 +471,7 @@ AgentIndex params: a follow-up.
 | `agent.*` | (3) CEL variable | PolicyGate reconciler reads the AgentIdentity (2.2) | G8 cross-CRD reads row gains AgentIdentities; the Graph-native path is blocked on G18/G19 |
 | `requiredWhen`, one-party, agent approvals, agent overrides | (2) owned node | The gate instance's reconciler writes `status.ready` from its own spec | none |
 | `agents:` | (2) owned node | Translator-generated gate template, ordinary gate instances | none |
-| freeze | outside the Graph | PromotionStep reconciler hold, like pause | G8 "Holding an existing PromotionStep" row gains freezes |
+| freeze | (2) owned node + outside the Graph | The ChangeWindow reconciler writes the time-based state to its own status; the PromotionStep reconciler holds on it, like pause | G8 "Holding an existing PromotionStep" row gains freezes |
 | freeze admission | VAP | `<release>-freezes` | none |
 
 ## 11. What this does not protect against
@@ -495,7 +509,7 @@ AgentIndex params: a follow-up.
 | B4 | Agent overrides | as anyone's except own party; never; opt-in | **Never** (6): break-glass is a human act |
 | B5 | Where `agents:` compiles | synthetic template for agent Bundles; for every Bundle; a real template | **Synthetic, agent Bundles only** (7.2): human Graphs unchanged, every gate feature applies |
 | B6 | Requiring a stamp | CEL gate; chart policy; Pipeline field | **CEL gate** (8), the chart policy later |
-| B7 | Freeze enforcement | synthetic gate everywhere; Graph selector ref; PromotionStep hold | **PromotionStep hold** (9.2): covers every in-flight step and Graph, no objects added |
+| B7 | Freeze enforcement | synthetic gate everywhere; Graph selector ref; PromotionStep hold | **PromotionStep hold** (9.2): covers every in-flight step and Graph, no objects added. It reads the ChangeWindow's status (active, exemptions in effect), which the window reconciler writes at each boundary: no clock in the step |
 | B8 | Freeze override | gate override; ChangeWindow exemptions; edit the freeze | **Exemptions** (9.3): only the freeze's authority breaks it, each exception recorded |
 | B9 | Open-ended freeze | require end; default duration; optional end for freezes | **Optional end** (9.1): a stop-the-line lasts until it is lifted |
 | B10 | Votes per party | per principal; per party key | **Per party key** (4): alice and her agent are one approval |
@@ -513,8 +527,9 @@ AgentIndex params: a follow-up.
   and not listed, own party), held cases.
 - Graph: `approvalsOfItem` admits allowed agents and drops others; the policy data round-trips.
 - Translator: `kardinal-agents` added for agent Bundles only, per ceiling, reserved name, fleet.
-- Freeze: `changewindow.Evaluate` without end; `holdIfFrozen` over actors × namespaces ×
-  exemptions × expiry; audit idempotency; auto-merge off.
+- Freeze: `changewindow.Evaluate` without end; the ChangeWindow reconciler's freeze status
+  (exemptions in effect, `nextTransition`, idempotency); `holdIfFrozen` over actors × namespaces ×
+  exemptions × a status behind its spec; audit idempotency; auto-merge off.
 - Admission: the freezes policy rendered and evaluated in `test/helm` for create, forged
   `createdBy`, a new exemption by its author and by someone else, changed exemption, removed
   exemption, controller exemption.
