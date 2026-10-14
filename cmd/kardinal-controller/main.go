@@ -333,6 +333,12 @@ func main() {
 			"validated via authenticationv1.TokenReview. Fail-closed: API errors return 503. "+
 			"Also readable from KARDINAL_UI_TOKENREVIEW_AUTH environment variable (set to 'true').")
 
+	var uiFreezeControls bool
+	flag.BoolVar(&uiFreezeControls, "ui-freeze-controls", false,
+		"Offer Freeze agents, Stop the line and Unfreeze in the UI (POST /api/v1/ui/freeze and /unfreeze): the "+
+			"controller writes freezing ChangeWindows for TokenReview-authenticated callers allowed "+
+			"changewindows/freeze. Needs create, update and delete on changewindows. Chart value: ui.freezeControls.")
+
 	tokenReviewAudiences := uiauth.DefaultAudience
 	if v, ok := os.LookupEnv("KARDINAL_TOKENREVIEW_AUDIENCES"); ok {
 		tokenReviewAudiences = v
@@ -1186,6 +1192,7 @@ func main() {
 		logger.Fatal().Err(err).Msg("UI API authentication")
 	}
 	uiAuth.actors = actors
+	uiAuth.freezeControls = uiFreezeControls
 	switch {
 	case uiAuth.staticToken != "":
 		// O4 (spec issue-975): the static token takes precedence over TokenReview.

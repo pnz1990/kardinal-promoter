@@ -690,6 +690,9 @@ type uiAPIServer struct {
 	// actors stamps writes with the caller's actor (docs/actors.md); nil
 	// derives from no agent index.
 	actors *actorWriter
+	// freezeControls is --ui-freeze-controls: POST /freeze and /unfreeze are
+	// served (ui_freeze.go); off, they answer 403 and /access says no.
+	freezeControls bool
 }
 
 // upstreamCache memoizes graph.AllEnvironmentUpstreams per Pipeline UID and
@@ -767,6 +770,9 @@ func (s *uiAPIServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/ui/approvals", s.handleApproval)
 	mux.HandleFunc("/api/v1/ui/pause", s.handlePause)
 	mux.HandleFunc("/api/v1/ui/resume", s.handleResume)
+	mux.HandleFunc("/api/v1/ui/freezes", s.handleFreezes)
+	mux.HandleFunc("/api/v1/ui/freeze", s.handleFreeze)
+	mux.HandleFunc("/api/v1/ui/unfreeze", s.handleUnfreeze)
 	mux.HandleFunc("/api/v1/ui/validate-cel", s.handleValidateCEL)
 	mux.HandleFunc("/api/v1/ui/steps/", s.handleStepsSubpath)
 	mux.HandleFunc("/api/v1/ui/display-states", s.handleDisplayStates)

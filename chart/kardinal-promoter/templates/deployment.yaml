@@ -173,6 +173,12 @@ spec:
             {{- if .Values.ui.auth.tokenReview }}
             - --ui-tokenreview-auth=true
             {{- end }}
+            {{- if .Values.ui.freezeControls }}
+            {{- if not .Values.ui.auth.tokenReview }}
+            {{- fail "ui.freezeControls needs ui.auth.tokenReview: a freeze names who froze" }}
+            {{- end }}
+            - --ui-freeze-controls=true
+            {{- end }}
             {{- if .Values.bundleAPI.tokenReview }}
             - --bundle-api-tokenreview-auth=true
             {{- end }}

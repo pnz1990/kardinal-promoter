@@ -823,6 +823,12 @@ func TestIdentityAdmission_ShardMode(t *testing.T) {
 	require.True(t, ok)
 	assert.Nil(t, gitops.Spec.MatchResources)
 	delete(team, "kardinal-promoter-gitops-writes")
+	// freezes (freeze-admission.yaml) matches cluster-scoped ChangeWindows:
+	// one binding, without a namespace selector, in every mode.
+	freezes, ok := team["kardinal-promoter-freezes"]
+	require.True(t, ok)
+	assert.Nil(t, freezes.Spec.MatchResources)
+	delete(team, "kardinal-promoter-freezes")
 	assert.Len(t, team, len(policies))
 	for _, name := range policies {
 		b, ok := team[name]
@@ -833,6 +839,7 @@ func TestIdentityAdmission_ShardMode(t *testing.T) {
 	def := bindings("--set", "controller.namespaceShard=default")
 	delete(def, "kardinal-promoter-gitops-writes")
 	delete(def, "kardinal-promoter-agent-identities")
+	delete(def, "kardinal-promoter-freezes")
 	assert.Len(t, def, 2*len(policies))
 	for _, name := range policies {
 		labelled, unlabelled := def[name], def[name+"-unlabelled"]

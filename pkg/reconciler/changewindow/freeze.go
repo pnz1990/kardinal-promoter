@@ -64,7 +64,7 @@ func FreezeSelects(f *kardinalv1alpha1.ChangeWindowFreeze, t FreezeTarget) bool 
 // there) and still in its spec (a removed exemption ends at once), or nil.
 // A status behind the spec lists none: new exemptions wait for it.
 func exemptionFor(w *kardinalv1alpha1.ChangeWindow, t FreezeTarget) *kardinalv1alpha1.FreezeExemption {
-	if w.Status.ObservedGeneration != w.Generation {
+	if statusBehind(w) {
 		return nil
 	}
 	for i := range w.Status.Exemptions {
@@ -89,7 +89,13 @@ func exemptionFor(w *kardinalv1alpha1.ChangeWindow, t FreezeTarget) *kardinalv1a
 // its reconciler writes (status.active). A status behind the spec counts as
 // active: a new or edited freeze holds at once, and fails closed.
 func FreezeActive(w *kardinalv1alpha1.ChangeWindow) bool {
-	return w.Spec.Freeze != nil && (w.Status.ObservedGeneration != w.Generation || w.Status.Active)
+	return w.Spec.Freeze != nil && (statusBehind(w) || w.Status.Active)
+}
+
+// statusBehind reports whether w's status does not describe its spec yet:
+// never written, or written for an older generation.
+func statusBehind(w *kardinalv1alpha1.ChangeWindow) bool {
+	return w.Status.ObservedGeneration == 0 || w.Status.ObservedGeneration != w.Generation
 }
 
 // FreezesFor returns the freezes among windows that are active and select

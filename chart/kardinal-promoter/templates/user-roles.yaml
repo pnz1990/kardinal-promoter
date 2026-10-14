@@ -26,6 +26,9 @@ SubjectAccessReview, so these roles decide what a caller can do there too
   <fullname>-admin     every verb on every kardinal kind, and pipelines/edit
                        and policygates/edit; aggregates the other three and
                        <fullname>-admin-extra
+  <fullname>-freezer   create, update and delete freezes (cluster-scoped
+                       ChangeWindows) and changewindows/freeze; for incident
+                       commanders, with a ClusterRoleBinding
 
 pipelines/pause, pipelines/hold, pipelines/edit, policygates/override,
 policygates/edit and bundles/reject are virtual subresources: the API server serves no such
@@ -173,7 +176,25 @@ rules:
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
 # "*" does not cover subresources: name the virtual ones.
 - apiGroups: ["kardinal.io"]
-  resources: ["pipelines/pause", "pipelines/hold", "pipelines/edit", "policygates/override", "policygates/edit", "bundles/reject"]
+  resources: ["pipelines/pause", "pipelines/hold", "pipelines/edit", "policygates/override", "policygates/edit", "bundles/reject", "changewindows/freeze"]
+  verbs: ["update"]
+---
+# Freeze agents and stop the line (kardinal freeze, unfreeze, override
+# --freeze, and the UI's controls). Freezes are cluster-scoped ChangeWindows:
+# bind it with a ClusterRoleBinding to incident commanders. Not bound by the
+# chart.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-freezer
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+rules:
+- apiGroups: ["kardinal.io"]
+  resources: ["changewindows"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["kardinal.io"]
+  resources: ["changewindows/freeze"]
   verbs: ["update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

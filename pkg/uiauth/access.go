@@ -273,6 +273,7 @@ var actionRoles = map[string]string{
 	"bundles/reject":       "promoter, approver or admin",
 	"policygates/override": "approver or admin",
 	"policygates/edit":     "admin",
+	"changewindows/freeze": "freezer or admin",
 }
 
 // grantRoles names the chart roles that grant the verbs the UI's actions

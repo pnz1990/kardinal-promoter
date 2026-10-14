@@ -261,3 +261,49 @@ type uiDisplayStates struct {
 	// Held is the label of an environment held by a rollback (rollback --hold).
 	Held uiDisplayState `json:"held"`
 }
+
+// uiFreeze is one freeze (a ChangeWindow with spec.freeze) for the banner.
+type uiFreeze struct {
+	// Name is the ChangeWindow's name.
+	Name string `json:"name"`
+	// Actors is agents or everyone.
+	Actors string `json:"actors"`
+	// Namespaces limits the freeze; empty is every namespace.
+	Namespaces []string `json:"namespaces"`
+	// Scope says whom and where it holds ("agents, every namespace").
+	Scope string `json:"scope"`
+	// Active is whether it holds promotions now.
+	Active bool `json:"active"`
+	// Since and Until (empty: until unfrozen) are RFC 3339 times.
+	Since string `json:"since"`
+	Until string `json:"until,omitempty"`
+	// CreatedBy is who froze, as admission verified it.
+	CreatedBy string `json:"createdBy"`
+	// Reason is why.
+	Reason string `json:"reason"`
+	// Exemptions is how many exemptions are in effect.
+	Exemptions int `json:"exemptions"`
+}
+
+// uiFreezesResponse is the body of GET /api/v1/ui/freezes.
+type uiFreezesResponse struct {
+	Freezes []uiFreeze `json:"freezes"`
+}
+
+// uiFreezeRequest is the body of POST /api/v1/ui/freeze.
+type uiFreezeRequest struct {
+	// Actors is agents (an agent freeze) or everyone (stop-the-line).
+	Actors string `json:"actors"`
+	// Namespace limits the freeze to one namespace; empty is every namespace.
+	Namespace string `json:"namespace,omitempty"`
+	// Reason is shown on every held step. Required.
+	Reason string `json:"reason"`
+	// Minutes ends the freeze after that long; 0 lasts until unfrozen.
+	Minutes int `json:"minutes,omitempty"`
+}
+
+// uiUnfreezeRequest is the body of POST /api/v1/ui/unfreeze.
+type uiUnfreezeRequest struct {
+	// Name is the freeze's ChangeWindow name.
+	Name string `json:"name"`
+}

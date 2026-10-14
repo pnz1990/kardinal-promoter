@@ -34,6 +34,7 @@ var accessActions = map[string]bool{
 	"update pipelines/pause":      true, // pause, resume
 	"update pipelines/hold":       true, // release a hold, roll back and hold
 	"update bundles/reject":       true,
+	"update changewindows/freeze": true, // freeze agents, stop the line, unfreeze (cluster-wide)
 }
 
 // approvalNeedsIdentity is the answer for an approval without TokenReview: an
@@ -68,7 +69,8 @@ func (c limitedChecker) Can(ctx context.Context, attrs authzv1.ResourceAttribute
 type uiAccessCheck struct {
 	// Verb and Resource (with Subresource) name one of the UI's actions:
 	// create bundles, create approvals, update policygates/override,
-	// update pipelines/pause, update pipelines/hold or update bundles/reject.
+	// update pipelines/pause, update pipelines/hold, update bundles/reject or
+	// update changewindows/freeze (checked cluster-wide).
 	Verb string `json:"verb"`
 	// Resource is a kardinal.io resource, plural: bundles, pipelines, approvals, policygates.
 	Resource string `json:"resource"`
@@ -183,9 +185,15 @@ func (s *uiAPIServer) handleAccess(w http.ResponseWriter, r *http.Request) {
 		}
 		res := uiAccessResult{Allowed: true, GrantedBy: uiauth.RolesFor(c.Verb, c.Resource, c.Subresource)}
 		switch {
+		case c.Resource == "changewindows" && !s.freezeControls:
+			res.Allowed, res.Reason = false, freezeControlsOff
 		case tokenReview:
+			checkNS := ns
+			if c.Resource == "changewindows" {
+				checkNS = "" // cluster-scoped: a cluster-wide freeze
+			}
 			allowed, err := checker.Can(r.Context(), authzv1.ResourceAttributes{
-				Namespace: ns, Verb: c.Verb, Group: "kardinal.io", Resource: c.Resource, Subresource: c.Subresource, Name: c.Name,
+				Namespace: checkNS, Verb: c.Verb, Group: "kardinal.io", Resource: c.Resource, Subresource: c.Subresource, Name: c.Name,
 			})
 			if errors.Is(err, uiauth.ErrAccessTotalRateLimited) {
 				http.Error(w, "too many authorization checks from all users together; try again in a minute", http.StatusTooManyRequests)

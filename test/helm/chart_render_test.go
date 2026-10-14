@@ -184,6 +184,8 @@ func TestChartRendersOnlyIdentityAdmissionPolicies(t *testing.T) {
 			}
 		}
 		assert.ElementsMatch(t, append(append(identityAdmissionObjects("kardinal-promoter"), actorAdmissionObjects("kardinal-promoter")...),
+			"ValidatingAdmissionPolicy/kardinal-promoter-freezes",
+			"ValidatingAdmissionPolicyBinding/kardinal-promoter-freezes",
 			"ValidatingAdmissionPolicy/kardinal-promoter-hold-writes",
 			"ValidatingAdmissionPolicyBinding/kardinal-promoter-hold-writes",
 			"ValidatingAdmissionPolicy/kardinal-promoter-fleets",
@@ -481,6 +483,9 @@ var optionalAccess = []struct {
 	}, true},
 	// update: what the gitops-writes admission policy checks before the
 	// argocd strategy's patch may change the Application's spec.
+	// The UI's freeze controls (ui_freeze.go) need TokenReview: --set
+	// ui.freezeControls=true alone fails the install, so the RBAC is checked
+	// in TestChartRBACFreezeControls.
 	{"rbac.argocdApplicationsWrite=true", []apiAccess{
 		{"argoproj.io", "applications", []string{"update"}, inWatched, "", "steps argocd_set_image.go (gitops-admission.yaml)"},
 	}, false},
@@ -563,6 +568,28 @@ func TestChartRBACGrantsControllerAccess(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestChartRBACFreezeControls: ui.freezeControls (with TokenReview) lets
+// the controller write ChangeWindows for the UI's freeze controls, and
+// passes --ui-freeze-controls; without it the controller cannot.
+func TestChartRBACFreezeControls(t *testing.T) {
+	sa := "kardinal-promoter"
+	on := newRBACView(t, render(t, "kardinal-promoter", "--set", "ui.auth.tokenReview=true", "--set", "ui.freezeControls=true"))
+	off := newRBACView(t, render(t, "kardinal-promoter", "--set", "ui.auth.tokenReview=true"))
+	for _, verb := range []string{"create", "update", "delete"} {
+		assert.True(t, on.allowed(releaseNS, sa, "", "kardinal.io", "changewindows", verb, "kardinal-freeze-agents"), verb)
+		assert.False(t, off.allowed(releaseNS, sa, "", "kardinal.io", "changewindows", verb, "kardinal-freeze-agents"), verb)
+	}
+	var args []string
+	for _, d := range render(t, "kardinal-promoter", "--set", "ui.auth.tokenReview=true", "--set", "ui.freezeControls=true") {
+		if d.Kind == "Deployment" {
+			args = append(args, string(d.raw))
+		}
+	}
+	assert.Contains(t, strings.Join(args, ""), "--ui-freeze-controls=true")
+	_, err := helmTemplate(t, "kardinal-promoter", "--set", "ui.freezeControls=true")
+	assert.Error(t, err, "freeze controls without TokenReview fail the install")
 }
 
 // TestChartRBACLeastPrivilege: grants the code does not use are gone.
