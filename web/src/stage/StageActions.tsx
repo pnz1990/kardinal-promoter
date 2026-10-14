@@ -49,15 +49,15 @@ export const ACTION_LABEL: Record<StageActionKind, string> = {
   approve: 'Approve', reject: 'Decline', override: 'Override gate', promote: 'Promote', rollback: 'Roll back',
   release: 'Release hold', pause: 'Pause pipeline', resume: 'Resume pipeline', rejectVersion: 'Reject version',
   openPR: 'Open pull request',
-  pauseFleet: 'Pause fleet', resumeFleet: 'Resume fleet',
+  pauseFleet: 'Pause fleet', resumeFleet: 'Resume fleet', rollbackFleet: 'Roll back fleet',
 }
 
 /** This environment's actions, in the order the row shows them. */
-const ENV_ORDER: StageActionKind[] = ['approve', 'promote', 'release', 'openPR', 'override', 'rollback', 'reject', 'resumeFleet', 'pauseFleet']
+const ENV_ORDER: StageActionKind[] = ['approve', 'promote', 'release', 'openPR', 'override', 'rollback', 'reject', 'rollbackFleet', 'resumeFleet', 'pauseFleet']
 /** Actions on the whole pipeline or the version everywhere: quiet buttons, garnet only in their dialog. */
 const PIPELINE_ORDER: StageActionKind[] = ['resume', 'pause', 'rejectVersion']
 /** Actions that undo or refuse something here: garnet outline, never the thread's red. */
-export const DESTRUCTIVE = new Set<StageActionKind>(['reject', 'rollback'])
+export const DESTRUCTIVE = new Set<StageActionKind>(['reject', 'rollback', 'rollbackFleet'])
 
 export function StageActions({ view, pipeline, namespace, active, activeGate, onOpen, onChanged, inline, envOnly, reasonFor, signInNote }: Props) {
   const [result, setResult] = useState<string>()
@@ -220,6 +220,16 @@ function ActionDialog({ kind, view, pipeline, namespace, gate: openedFor, onCanc
         </StageDialog>
       )
     }
+    case 'rollbackFleet': {
+      // From a target's drawer: one rollback of the whole fleet (#1835).
+      const fleet = view.fleetOf?.name ?? env
+      return (
+        <StageDialog {...common} tone="destructive" title={`Roll fleet ${fleet} back?`}
+          description={`A new promotion rolls every target of ${fleet} back, paced by maxConcurrent: to the version before the one they run, or, when they run different versions, to the one the least advanced targets run.`}
+          confirmLabel={ACTION_LABEL[kind]}
+          onConfirm={() => void run(`roll fleet ${fleet} back`, () => api.rollback(pipeline, fleet, namespace), 'Rolled back')} />
+      )
+    }
     case 'release':
       return (
         <StageDialog {...common} title={`Release the hold on ${env}?`}
@@ -230,8 +240,9 @@ function ActionDialog({ kind, view, pipeline, namespace, gate: openedFor, onCanc
     case 'resume':
     case 'pauseFleet':
     case 'resumeFleet': {
-      // The fleet's (spec.pausedFleets, #1835), or the whole pipeline's.
-      const fleet = kind.endsWith('Fleet') ? env : undefined
+      // The fleet's (spec.pausedFleets, #1835): this fleet's, or the one this
+      // target belongs to; or the whole pipeline's.
+      const fleet = kind.endsWith('Fleet') ? view.fleetOf?.name ?? env : undefined
       const pause = kind.startsWith('pause')
       const what = fleet ? `fleet ${fleet}` : pipeline
       return (

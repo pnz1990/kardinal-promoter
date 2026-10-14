@@ -15,7 +15,7 @@ const DOING: Record<UIAction, string> = {
   approve: 'Approving', reject: 'Declining', override: 'Overriding a gate', promote: 'Promoting', rollback: 'Rolling back',
   release: 'Releasing a hold', pause: 'Pausing the pipeline', resume: 'Resuming the pipeline', rejectVersion: 'Rejecting a version',
   openPR: 'Opening the pull request', ship: 'Shipping a version',
-  pauseFleet: 'Pausing the fleet', resumeFleet: 'Resuming the fleet',
+  pauseFleet: 'Pausing the fleet', resumeFleet: 'Resuming the fleet', rollbackFleet: 'Rolling back the fleet',
 }
 
 /** A decision on an approval gate: approve, decline (--decision reject) or revoke one's own. */
@@ -49,6 +49,7 @@ export function actionCheck(action: UIAction, ctx: { pipeline?: string; gate?: s
     case 'override': return { verb: 'update', resource: 'policygates', subresource: 'override', name: ctx.gate }
     case 'promote':
     case 'rollback':
+    case 'rollbackFleet':
     case 'ship': return { verb: 'create', resource: 'bundles' }
     case 'release': return { verb: 'update', resource: 'pipelines', subresource: 'hold', name: ctx.pipeline }
     case 'pause':

@@ -8,14 +8,6 @@ import { beforeAll, describe, it, expect, vi, beforeEach, afterEach } from 'vite
 import { render, screen, act, fireEvent, within } from '@testing-library/react'
 import type { Bundle, GraphResponse, Pipeline, PolicyGate } from './types'
 
-vi.mock('@dagrejs/dagre', () => {
-  function MockGraph(this: Record<string, unknown>) {
-    this.setGraph = vi.fn(); this.setDefaultEdgeLabel = vi.fn(); this.setNode = vi.fn(); this.setEdge = vi.fn()
-    this.node = vi.fn().mockReturnValue({ x: 100, y: 80 })
-  }
-  return { default: { graphlib: { Graph: MockGraph }, layout: vi.fn() } }
-})
-
 const h = vi.hoisted(() => {
   const state = {
     pipelines: [] as unknown[],
@@ -75,7 +67,8 @@ import { resetAccessForTests } from './access/access'
 // so a click opens them within one flush as it does once the page has prefetched them.
 beforeAll(async () => {
   await Promise.all([import('./components/BundleDiffPanel'), import('./components/CommandPalette'), import('./stage/StageDrawer'), import('./components/KeyboardShortcutsPanel'), import('./stationMap/StageTable'), import('./stationMap/VersionMatrix'),
-    import('./components/PolicyGatesPanel'), import('./components/PromotionErrorsPanel'), import('./components/ReleaseMetricsBar'), import('./components/PipelineOpsTable')])
+    import('./components/PolicyGatesPanel'), import('./components/PromotionErrorsPanel'), import('./components/ReleaseMetricsBar'), import('./components/PipelineOpsTable'),
+    import('./components/FleetBoard'), import('./stationMap/PipelineMap'), import('./components/CreateBundleDialog'), import('./components/VirtualPipelineRows')])
 })
 
 const day = 86_400_000
@@ -302,6 +295,7 @@ describe('App pipeline header', () => {
     // One primary action: the call to action; the header's Ship a version steps back.
     expect(screen.getByRole('button', { name: 'Ship a version of app' }).className).toContain('k-button--secondary')
     fireEvent.click(screen.getByRole('button', { name: 'Ship your first version of app' }))
+    await flush()
     expect(screen.getByRole('dialog', { name: 'Ship a version of app' })).toBeInTheDocument()
   })
 

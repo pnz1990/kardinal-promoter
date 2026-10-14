@@ -31,8 +31,9 @@ export interface WaitReason {
 
 export type StageActionKind =
   | 'approve' | 'reject' | 'override' | 'promote' | 'rollback' | 'release' | 'pause' | 'resume' | 'rejectVersion' | 'openPR'
-  // A fleet environment's pause and resume (spec.pausedFleets, #1835).
-  | 'pauseFleet' | 'resumeFleet'
+  // A fleet's pause and resume (spec.pausedFleets, #1835), and the rollback
+  // of every target of the fleet a target belongs to.
+  | 'pauseFleet' | 'resumeFleet' | 'rollbackFleet'
 
 /** A version the environment can be rolled back to. */
 export interface RollbackChoice {
@@ -249,6 +250,11 @@ export function stageView(input: StageInput): StageView {
     actions.clear()
     actions.add(p.paused ? 'resume' : 'pause').add(spec.fleet.paused ? 'resumeFleet' : 'pauseFleet')
     if (spec.fleet.targets.some(t => p.deployed?.[t])) actions.add('rollback')
+  } else if (fleetOf?.fleet) {
+    // A fleet target (#1835): its fleet's pause and resume, and the rollback
+    // of the whole fleet, next to this target's own actions.
+    actions.add(fleetOf.fleet.paused ? 'resumeFleet' : 'pauseFleet')
+    if (fleetOf.fleet.targets.some(t => p.deployed?.[t])) actions.add('rollbackFleet')
   }
 
   // One primary action per state: the approval waiting, the hold or pause to

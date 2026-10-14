@@ -14,7 +14,6 @@ import { api } from '../api/client'
 import CopyButton from '../components/CopyButton'
 import { displayState, type Tone } from '../displayStates.gen'
 import { formatElapsedSince } from '../timeFormat'
-import { breakpoint } from '../tokens'
 import { StatusChip } from '../ui'
 import { CELBlock } from '../components/CELBlock'
 import EventsPanel from '../components/EventsPanel'
@@ -27,6 +26,7 @@ import { ACTION_LABEL, DESTRUCTIVE, StageActions } from './StageActions'
 import { useStageAccess, type ReasonFor } from './useStageAccess'
 import { approveCommand, SignInNote, useSignInNeeded } from './signIn'
 import { useChangeHalo } from '../useChangeHalo'
+import { useDrawerColumn, useWide } from './drawerColumn'
 import { gateDisplay, gateLabel, IN_FLIGHT, stageView, type StageActionKind, type WaitReason } from './stageModel'
 import '../styles/StageDrawer.css'
 
@@ -53,33 +53,15 @@ export interface StageDrawerProps {
   commandRef?: MutableRefObject<StageCommand | null>
 }
 
-function useWide(): boolean {
-  const query = `(min-width: ${breakpoint.lg}px)`
-  const [wide, setWide] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.(query).matches)
-  useEffect(() => {
-    const mq = window.matchMedia?.(query)
-    if (!mq) return
-    const on = () => setWide(mq.matches)
-    mq.addEventListener?.('change', on)
-    return () => mq.removeEventListener?.('change', on)
-  }, [query])
-  return wide
-}
 
 export function StageDrawer(props: StageDrawerProps) {
   const wide = useWide()
   return wide ? <DrawerColumn {...props} /> : <DrawerSheet {...props} />
 }
 
-/** While a drawer column is open the page gives up its width (StageDrawer.css). */
-const OPEN_CLASS = 'k-stage-drawer-open'
-
 function DrawerColumn(props: StageDrawerProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
-  useEffect(() => {
-    document.documentElement.classList.add(OPEN_CLASS)
-    return () => document.documentElement.classList.remove(OPEN_CLASS)
-  }, [])
+  useDrawerColumn()
   return (
     <aside className="stage-drawer" data-testid="stage-drawer" aria-labelledby={`stage-drawer-${props.env}`}
       onKeyDown={e => {

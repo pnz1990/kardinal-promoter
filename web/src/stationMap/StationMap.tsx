@@ -21,7 +21,6 @@ import { ageOf } from '../fleetModel'
 import { prNumberFromURL } from '../prLink'
 import { Icon } from '../ui'
 import { Segmented } from './Segmented'
-import '../styles/StationMap.css'
 import { lowerFirst } from '../sentence'
 
 export interface StationMapProps {

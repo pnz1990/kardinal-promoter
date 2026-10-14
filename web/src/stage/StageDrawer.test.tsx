@@ -331,6 +331,30 @@ describe('StageDrawer (U3)', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Rolled back. rollback started — rolling fleet prod back to web-1: 2 of 2 targets go back')
   })
 
+  it("a target's drawer offers its fleet's pause and the fleet's rollback, acting on the fleet (#1859)", async () => {
+    const user = userEvent.setup()
+    api.pause.mockResolvedValue({ message: 'fleet prod of web paused: no further target starts, the targets in flight finish' })
+    api.rollback.mockResolvedValue({ bundle: 'web-rollback-y', message: 'rollback started — rolling fleet prod back to web-1: 2 of 2 targets go back, paced by maxConcurrent' })
+    renderDrawer([], { env: 'prod-eu', data: { pipeline: fleetPipe(), bundles, steps: [], gates: [] } })
+    expect(action('Roll back fleet')).toHaveClass('stage-button--destructive')
+    await user.click(action('Pause fleet'))
+    let dialog = screen.getByRole('dialog', { name: 'Pause fleet prod?' })
+    await user.click(within(dialog).getByRole('button', { name: 'Pause fleet' }))
+    expect(api.pause).toHaveBeenCalledWith('web', 'team', 'prod')
+    await user.click(action('Roll back fleet'))
+    dialog = screen.getByRole('dialog', { name: 'Roll fleet prod back?' })
+    expect(dialog).toHaveTextContent('every target of prod back, paced by maxConcurrent')
+    await user.click(within(dialog).getByRole('button', { name: 'Roll back fleet' }))
+    expect(api.rollback).toHaveBeenCalledWith('web', 'prod', 'team')
+  })
+
+  it('a paused fleet\'s target offers Resume fleet', async () => {
+    renderDrawer([], { env: 'prod-us', data: { pipeline: fleetPipe(true), bundles, steps: [], gates: [] } })
+    expect(action('Resume fleet')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Pause fleet' })).not.toBeInTheDocument()
+    await act(async () => {})
+  })
+
   it('the close button calls onClose', async () => {
     const user = userEvent.setup()
     const props = renderDrawer()

@@ -29,7 +29,7 @@ web/
     types.ts            # TypeScript types matching the API JSON
     usePolling.ts       # polling hook (also useUrlState.ts, useKeyboardShortcuts.ts, ...)
     components/
-      DAGView.tsx       # DAG renderer (dagre layout + SVG)
+      DAGView.tsx       # DAG renderer (layered layout + SVG)
       PipelineList.tsx  # all Pipelines with the current Bundle per environment
       PipelineLaneView.tsx # stage lanes with promote / roll back actions
       NodeDetail.tsx    # side panel: step details, PR link, provenance, gate CEL
@@ -72,7 +72,7 @@ Server push (the controller already watches the CRDs with informers, and could b
 
 ## DAG Rendering
 
-The promotion DAG is rendered using [dagre](https://github.com/dagrejs/dagre) for layout computation and SVG for rendering.
+The promotion DAG is rendered with a layered layout (`web/src/stationMap/layered.ts`: longest-path ranks, barycenter ordering) and SVG.
 
 **Node types:**
 

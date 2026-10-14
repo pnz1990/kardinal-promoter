@@ -4,8 +4,9 @@
 //
 // check-size.mjs — fails when the built UI (web/dist) is over its budget, gzip sizes:
 //   initial JS  152 KB  the entry module and every chunk it imports statically (the import
-//                       graph), plus the first view a route needs (StageTable on a narrow
-//                       screen, StageDrawer on an /env/ link): the largest such load;
+//                       graph), plus the first views a route needs (the fleet board on the
+//                       first page, the map on a pipeline, StageTable on a narrow screen, the
+//                       map and StageDrawer on an /env/ link): the largest such load;
 //   total JS    200 KB  every chunk, the lazy ones (Table, Matrix, comparison, palette) too;
 //   initial CSS  18 KB  the stylesheets of that load (index.html's and those chunks');
 //   total CSS    25 KB  every stylesheet, the lazy views' too;
@@ -25,8 +26,8 @@ const gz = (f) => zlib.gzipSync(fs.readFileSync(path.join(dist, f)), { level: 9 
 
 // The initial load is the import graph, not index.html's hints: the entry module and every chunk it
 // imports statically, followed transitively. A dynamic import() starts a lazy chunk, which is not
-// initial — except the first view a route needs: the Table on a narrow screen (StageTable) and the
-// stage drawer on an /env/ link (StageDrawer). Initial is the largest of those routes' loads.
+// initial — except the first views a route needs (ROUTE_VIEWS). Initial is the largest of those
+// routes' loads.
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8')
 const entry = [...html.matchAll(/<script[^>]*type="module"[^>]*src="[^"]*\/assets\/([^"]+\.js)"/g)].map((m) => m[1])
 if (entry.length === 0) {
@@ -51,9 +52,16 @@ function closure(roots) {
 }
 const files = fs.readdirSync(dist)
 const chunk = (name) => files.filter((f) => f.startsWith(`${name}-`) && f.endsWith('.js'))
-const ROUTE_VIEWS = { 'a pipeline (narrow: the Table)': 'StageTable', 'an /env/ link (the stage drawer)': 'StageDrawer' }
-const routes = { 'the first page': closure(entry) }
-for (const [route, view] of Object.entries(ROUTE_VIEWS)) routes[route] = closure([...entry, ...chunk(view)])
+// Each route's first views, by chunk name: a view split out of the entry still counts for the
+// route that paints it first (the fleet board on the first page, the map on a pipeline).
+const ROUTE_VIEWS = {
+  'the first page (the fleet board)': ['FleetBoard'],
+  'a pipeline (the map)': ['PipelineMap'],
+  'a pipeline (narrow: the Table)': ['PipelineMap', 'StageTable'],
+  'an /env/ link (the map and the stage drawer)': ['PipelineMap', 'StageDrawer'],
+}
+const routes = {}
+for (const [route, views] of Object.entries(ROUTE_VIEWS)) routes[route] = closure([...entry, ...views.flatMap(chunk)])
 // A route's stylesheets: index.html's, and those of the chunks it loads (Vite names them alike).
 const linked = [...html.matchAll(/<link[^>]*rel="stylesheet"[^>]*href="[^"]*\/assets\/([^"]+\.css)"/g)].map((m) => m[1])
 const cssOf = (js) => {

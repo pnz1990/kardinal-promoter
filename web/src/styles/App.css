@@ -369,5 +369,17 @@
   border-radius: var(--k-radius-3);
   box-shadow: var(--k-elev-2);
 }
-/* The stage drawer's place while its code loads: its column. */
-.app-drawer-loading { inline-size: var(--k-layout-drawer); flex-shrink: 0; background: var(--k-surface-raised); border-inline-start: var(--k-border-hairline) solid var(--k-line); }
+/* The fleet board's or the map's place while its code loads: the whole view, so nothing moves. */
+.app-view-loading { inline-size: 100%; block-size: 100%; min-block-size: var(--k-space-12); }
+/* The stage drawer's place while its code loads: its column, where the drawer
+   column will be (StageDrawer.css), which the page already gives up. */
+.app-drawer-loading {
+  position: fixed;
+  inset-block: var(--k-layout-topbar) 0;
+  inset-inline-end: 0;
+  z-index: var(--k-z-drawer);
+  inline-size: var(--k-layout-drawer);
+  background: var(--k-surface-raised);
+  border-inline-start: var(--k-border-hairline) solid var(--k-line);
+  box-shadow: var(--k-elev-2);
+}

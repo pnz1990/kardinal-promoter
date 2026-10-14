@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Bundle, GraphResponse, Pipeline } from '../types'
 import { buildModel, edgeGateLabel, edgeGateSummary, gatesOn, gridOrder, groupSummary, stationLabel, type GateMark, type StationMapModel } from './model'
-import { octilinear, layout, levelAt, initialLevel, trimEnd, lengthOf, gridCells, gridRows, pointBeforeEnd, threadPoints, gateOffset, wrapWords, THREAD_GAP_PX, gridSpace, gridSize, gridText, groupTitle, CH_EM, TEXT_ASCENT, type ZoomLevel } from './geometry'
+import { octilinear, layout, groupPacing, levelAt, initialLevel, trimEnd, lengthOf, gridCells, gridRows, pointBeforeEnd, threadPoints, gateOffset, wrapWords, THREAD_GAP_PX, gridSpace, gridSize, gridText, groupTitle, CH_EM, TEXT_ASCENT, type ZoomLevel } from './geometry'
 
 const bundle = (name: string, tag: string): Bundle => ({
   name, namespace: 'default', phase: 'Promoting', type: 'image', pipeline: 'app', images: [{ repository: 'ghcr.io/acme/app', tag }],
@@ -179,6 +179,17 @@ describe('buildModel', () => {
     const two = at(2)
     expect(two.thread.find(t => t.to === 'platform:prod')?.kind).toBe('snap')
     expect(two.groups.get('platform:prod')!.halted).toBe(true)
+  })
+
+  it("a platform's label says the fleet is paused and shows a percentage as written (#1835)", () => {
+    const p: Pipeline = { name: 'f', namespace: 'default', phase: 'Ready', environmentCount: 3, activeBundleName: 'b2', topologyResolved: true,
+      environmentTopology: [{ name: 'test' }, { name: 'prod', upstreams: ['test'],
+        fleet: { targets: ['p1', 'p2'], maxConcurrent: 2, maxUnavailable: 1, maxUnavailableSpec: '10%', paused: true } }] }
+    const m = buildModel(p, { bundle: bundle('b2', '2'), graph: { nodes: [step('test', 'Verified')], edges: [] } })
+    expect(groupPacing(m.groups.get('platform:prod')!)).toBe('paused · 2 at a time · stop at 10% (1) failed')
+    const plain = { ...p, environmentTopology: [{ name: 'test' }, { name: 'prod', upstreams: ['test'], fleet: { targets: ['p1', 'p2'], maxUnavailable: 2, maxUnavailableSpec: '2' } }] }
+    const n = buildModel(plain, { bundle: bundle('b2', '2'), graph: { nodes: [step('test', 'Verified')], edges: [] } })
+    expect(groupPacing(n.groups.get('platform:prod')!)).toBe('stop at 2 failed')
   })
 
   it('an expanded grid starts a row per state, and every cell has its row and column', () => {

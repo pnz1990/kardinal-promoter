@@ -88,15 +88,19 @@ describe('stageView', () => {
     expect(v.why[0]).toMatchObject({ kind: 'failed', title: 'Failed.', detail: 'health check timeout', next: 'rollback' })
   })
 
-  it('a fleet environment offers only the fleet actions and the pipeline pause (#1835)', () => {
+  it('a fleet environment offers only the fleet actions and the pipeline pause; a target its fleet\'s too (#1835)', () => {
     const topo = (paused: boolean) => [{ name: 'prod', upstreams: ['uat'], fleet: { targets: ['prod-eu', 'prod-us'], paused } }]
     const deployed = { 'prod-eu': { bundle: 'web-2', version: '1.4.0' } }
     const fleet = stageView(input({ pipeline: pipeline({ environmentTopology: topo(false), deployed }) }))
     expect([...fleet.actions].sort()).toEqual(['pause', 'pauseFleet', 'rollback'])
     const paused = stageView(input({ pipeline: pipeline({ environmentTopology: topo(true), deployed: {} }) }))
     expect([...paused.actions].sort()).toEqual(['pause', 'resumeFleet'])
+    // A target offers its fleet's pause and the fleet's rollback too (#1859).
     const target = stageView(input({ env: 'prod-us', pipeline: pipeline({ environmentTopology: topo(true), deployed }) }))
-    expect(target.actions.has('resumeFleet')).toBe(false)
+    expect(target.actions.has('resumeFleet')).toBe(true)
+    expect(target.actions.has('rollbackFleet')).toBe(true)
+    expect(stageView(input({ env: 'prod-us', pipeline: pipeline({ environmentTopology: topo(false), deployed: {} }) })).actions.has('rollbackFleet'))
+      .toBe(false)
     expect(stageView(input()).actions.has('pauseFleet')).toBe(false)
   })
 

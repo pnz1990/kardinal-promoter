@@ -98,12 +98,16 @@ export interface Group {
   version: string
   /** Members on the followed Bundle that are verified, for the thread's fill. */
   verified: number
-  /** fleet.maxConcurrent / maxUnavailable, for a platform's label. */
+  /** fleet.maxConcurrent / maxUnavailable, for a platform's label;
+   *  maxUnavailableSpec as written ("10%"). */
   maxConcurrent?: number
   maxUnavailable?: number
+  maxUnavailableSpec?: string
+  /** The fleet is paused (kardinal pause --env <fleet>): no further target starts. */
+  paused?: boolean
 }
 
-/** A node of the collapsed graph dagre lays out. */
+/** A node of the collapsed graph the layout places (layered.ts). */
 export type MapNode =
   | { kind: 'station'; id: string; station: Station }
   | { kind: 'group'; id: string; group: Group; expanded: boolean }
@@ -359,8 +363,8 @@ export function buildModel(p: Pipeline, followed: Followed | undefined, opts: Bu
   for (const e of p.environmentTopology ?? []) {
     if (!e.fleet) continue
     const id = `platform:${e.name}`
-    groups.set(id, summarize(id, 'platform', e.name, e.fleet.targets.filter(t => stations.has(t)), stations, followedName,
-      e.fleet.maxConcurrent, e.fleet.maxUnavailable))
+    groups.set(id, { ...summarize(id, 'platform', e.name, e.fleet.targets.filter(t => stations.has(t)), stations, followedName,
+      e.fleet.maxConcurrent, e.fleet.maxUnavailable), maxUnavailableSpec: e.fleet.maxUnavailableSpec, paused: e.fleet.paused || undefined })
     for (const t of e.fleet.targets) groupOf.set(t, id)
   }
   // Bands are numbered in order: WAVE 1 is the first band from the roots.
@@ -375,7 +379,7 @@ export function buildModel(p: Pipeline, followed: Followed | undefined, opts: Bu
   })
 
   // The collapsed graph: a group is one layout node, drawn as its summary,
-  // or as its grid once expanded (dagre gets the grid's size).
+  // or as its grid once expanded (the layout gets the grid's size).
   const layoutId = (env: string) => groupOf.get(env) ?? env
   const nodes: MapNode[] = []
   const seen = new Set<string>()

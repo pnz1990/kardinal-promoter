@@ -6,7 +6,7 @@
 // real virtualizer renders no rows; this file stubs it to return a fixed
 // window of rows, the way it does in a browser.
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import { PipelineList } from './PipelineList'
 import type { Pipeline } from '../types'
 
@@ -35,10 +35,10 @@ const pipelines: Pipeline[] = Array.from({ length: 100 }, (_, i) => ({
 }))
 
 describe('PipelineList — aria-pressed in virtual mode (O4, #819)', () => {
-  it('renders the virtual window, not all 100 rows', () => {
+  it('renders the virtual window, not all 100 rows', async () => {
     const { container } = render(<PipelineList pipelines={pipelines} onSelect={vi.fn()} />)
-    // Only the virtual path sets data-index on its rows.
-    expect(container.querySelectorAll('li[data-index]')).toHaveLength(20)
+    // Only the virtual path sets data-index on its rows (its chunk loads lazily).
+    await waitFor(() => expect(container.querySelectorAll('li[data-index]')).toHaveLength(20))
     expect(screen.getByText('pipe-20')).toBeInTheDocument()
     expect(screen.queryByText('pipe-21')).not.toBeInTheDocument()
   })
@@ -49,8 +49,8 @@ describe('PipelineList — aria-pressed in virtual mode (O4, #819)', () => {
     { name: 'matching namespace', selected: 'pipe-8', selectedNamespace: 'default', want: 'pipe-8' },
     { name: 'other namespace', selected: 'pipe-8', selectedNamespace: 'other', want: null },
     { name: 'row outside the window', selected: 'pipe-60', selectedNamespace: undefined, want: null },
-  ])('$name: selected=$selected', ({ selected, selectedNamespace, want }) => {
-    render(
+  ])('$name: selected=$selected', async ({ selected, selectedNamespace, want }) => {
+    const { container } = render(
       <PipelineList
         pipelines={pipelines}
         selected={selected}
@@ -58,6 +58,7 @@ describe('PipelineList — aria-pressed in virtual mode (O4, #819)', () => {
         onSelect={vi.fn()}
       />
     )
+    await waitFor(() => expect(container.querySelectorAll('li[data-index]')).toHaveLength(20))
     const pressed = screen.queryAllByRole('button', { pressed: true })
     if (want === null) {
       expect(pressed).toHaveLength(0)
