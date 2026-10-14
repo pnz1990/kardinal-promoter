@@ -103,6 +103,7 @@ func runSimulate(t *testing.T, c sigs_client.Client, opts simulateOptions) (stri
 // ─── --time parsing (C09b-cli-09) ───────────────────────────────────────────
 
 func TestParseSimulatedTime(t *testing.T) {
+	t.Parallel()
 	at := func(day, hour, minute int) time.Time {
 		return time.Date(2026, time.October, day, hour, minute, 0, 0, time.UTC)
 	}
@@ -157,6 +158,7 @@ func TestParseSimulatedTime(t *testing.T) {
 // The result depends only on the input and the reference day, never on the
 // hour the command runs at.
 func TestParseSimulatedTime_IndependentOfCurrentHour(t *testing.T) {
+	t.Parallel()
 	want := time.Date(2026, time.October, 6, 10, 0, 0, 0, time.UTC)
 	for h := 0; h < 24; h++ {
 		now := time.Date(2026, time.September, 30, h, 59, 59, 0, time.UTC)
@@ -167,6 +169,7 @@ func TestParseSimulatedTime_IndependentOfCurrentHour(t *testing.T) {
 }
 
 func TestPolicySimulate_InvalidInputIsAnError(t *testing.T) {
+	t.Parallel()
 	c := policyClient(t, policyPipeline("demo", "test", "uat", "prod"))
 	tests := []struct {
 		name    string
@@ -191,6 +194,7 @@ func TestPolicySimulate_InvalidInputIsAnError(t *testing.T) {
 // A Pipeline the Graph builder rejects shows the builder's error once, not
 // "build graph: build: ..." (B47).
 func TestPolicySimulate_BuildError(t *testing.T) {
+	t.Parallel()
 	p := policyPipeline("demo", "prod")
 	p.Spec.Environments[0].DependsOn = []string{"staging"}
 	_, err := runSimulate(t, policyClient(t, p), simulateOptions{})
@@ -203,6 +207,7 @@ func TestPolicySimulate_BuildError(t *testing.T) {
 // Simulate reports exactly the gates the controller's Graph attaches to the
 // environment: the translator's namespaces and the builder's applies-to match.
 func TestPolicySimulate_SelectsControllerGates(t *testing.T) {
+	t.Parallel()
 	const blocks = "false"
 	objs := []sigs_client.Object{
 		policyPipeline("demo", "test", "uat", "prod"),
@@ -233,6 +238,7 @@ func TestPolicySimulate_SelectsControllerGates(t *testing.T) {
 }
 
 func TestPolicySimulate_PolicyNamespaces(t *testing.T) {
+	t.Parallel()
 	custom := policyPipeline("demo", "test", "prod")
 	custom.Spec.PolicyNamespaces = []string{"custom-policies"}
 	gates := []sigs_client.Object{
@@ -256,7 +262,14 @@ func TestPolicySimulate_PolicyNamespaces(t *testing.T) {
 	all := []string{"platform-gate", "custom-gate", "flag-gate"}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := policyClient(t, append([]sigs_client.Object{tt.pipeline}, gates...)...)
+			t.Parallel()
+			// Copies: the fake client sets resourceVersion on the objects it
+			// is given, and the subtests run in parallel.
+			objs := []sigs_client.Object{tt.pipeline.DeepCopy()}
+			for _, g := range gates {
+				objs = append(objs, g.DeepCopyObject().(sigs_client.Object))
+			}
+			c := policyClient(t, objs...)
 			out, err := runSimulate(t, c, simulateOptions{Time: "Tuesday 10am", PolicyNamespaces: tt.flag})
 			require.NoError(t, err)
 			for _, name := range all {
@@ -272,6 +285,7 @@ func TestPolicySimulate_PolicyNamespaces(t *testing.T) {
 
 // The github-demo example gates must be the ones simulate reports for prod.
 func TestPolicySimulate_GithubDemoExample(t *testing.T) {
+	t.Parallel()
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", "github-demo", "pipeline.yaml"))
 	require.NoError(t, err)
 	gates, err := parsePolicyGateYAML(data)
@@ -305,6 +319,7 @@ func TestPolicySimulate_GithubDemoExample(t *testing.T) {
 // pre-#1246 simulate had no upstream map, so upstream.uat.soakMinutes was
 // "no such attribute(s): upstream".
 func TestPolicySimulate_NoSoakMinutesIsZeroSoak(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name, expr string
 	}{
@@ -313,6 +328,7 @@ func TestPolicySimulate_NoSoakMinutesIsZeroSoak(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			c := policyClient(t, policyPipeline("demo", "test", "uat", "prod"),
 				policyGate("require-uat-soak", "default", "prod", tt.expr))
 			out, err := runSimulate(t, c, simulateOptions{Time: "Tuesday 10am"})
@@ -326,6 +342,7 @@ func TestPolicySimulate_NoSoakMinutesIsZeroSoak(t *testing.T) {
 }
 
 func TestPolicySimulate_NoGates(t *testing.T) {
+	t.Parallel()
 	out, err := runSimulate(t, policyClient(t, policyPipeline("demo", "test", "prod")), simulateOptions{Time: "Saturday 3pm"})
 	require.NoError(t, err)
 	assert.Contains(t, out, "RESULT: PASS")
@@ -337,6 +354,7 @@ func TestPolicySimulate_NoGates(t *testing.T) {
 // Simulate evaluates with the controller's reconciler: its CEL environment
 // and its context, read from the cluster.
 func TestPolicySimulate_ControllerEnvironmentAndContext(t *testing.T) {
+	t.Parallel()
 	freeze := &v1alpha1.ChangeWindow{
 		ObjectMeta: metav1.ObjectMeta{Name: "holiday-freeze"},
 		Spec: v1alpha1.ChangeWindowSpec{
@@ -408,6 +426,7 @@ func TestPolicySimulate_ControllerEnvironmentAndContext(t *testing.T) {
 // from the Pipeline namespace, as in the controller, also when both
 // namespaces have a MetricCheck of the same name.
 func TestPolicySimulate_GateMetricsNamespace(t *testing.T) {
+	t.Parallel()
 	fresh := metav1.NewTime(policyTestNow.Add(5 * time.Minute))
 	metric := func(ns, result string) *v1alpha1.MetricCheck {
 		return &v1alpha1.MetricCheck{
@@ -427,6 +446,7 @@ func TestPolicySimulate_GateMetricsNamespace(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			c := policyClient(t, policyPipeline("demo", "test", "prod"),
 				metric("org-policies", "Pass"), metric("default", "Fail"),
 				policyGate("error-budget", tt.gateNS, "prod", expr))
@@ -444,6 +464,7 @@ func TestPolicySimulate_GateMetricsNamespace(t *testing.T) {
 // A blocked gate shows the next hour it would pass with the same inputs, and
 // no window when time alone cannot unblock it.
 func TestPolicySimulate_NextWindow(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		expr string
@@ -457,6 +478,7 @@ func TestPolicySimulate_NextWindow(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			c := policyClient(t, policyPipeline("demo", "test", "prod"), policyGate("gate", "platform-policies", "prod", tt.expr))
 			out, err := runSimulate(t, c, simulateOptions{Time: tt.time})
 			require.NoError(t, err)
@@ -474,6 +496,7 @@ func TestPolicySimulate_NextWindow(t *testing.T) {
 // Simulate runs the controller's reconciler, which patches status and writes
 // AuditEvents; none of it may reach the cluster.
 func TestPolicySimulate_NeverWritesToCluster(t *testing.T) {
+	t.Parallel()
 	writeErr := errors.New("simulate wrote to the cluster")
 	base := policyClient(t, policyPipeline("demo", "test", "prod"),
 		policyGate("no-weekend-deploys", "platform-policies", "prod", "!schedule.isWeekend"))
@@ -550,6 +573,7 @@ func gateYAML(name, expr string) string {
 }
 
 func TestPolicyTest(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		content string
@@ -674,6 +698,7 @@ func TestPolicyTest(t *testing.T) {
 
 // C09a-cli-22: the weekend gate's result depends only on the injected time.
 func TestPolicyTest_WeekendGateAtFixedTimes(t *testing.T) {
+	t.Parallel()
 	file := writePolicyFile(t, gateYAML("no-weekend-deploys", "!schedule.isWeekend"))
 	for _, tc := range []struct {
 		now  time.Time
@@ -924,6 +949,7 @@ func TestValidateCELExpression(t *testing.T) {
 
 // TestPolicyTest_MissingFile verifies error on missing file.
 func TestPolicyTest_MissingFile(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	err := policyTestFn(&buf, "/nonexistent/path/gate.yaml", time.Now())
 	assert.Error(t, err)
