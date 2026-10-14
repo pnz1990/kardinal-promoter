@@ -274,3 +274,20 @@ real tags (`fixtures.V1`..`V3`). It has a readiness probe and Prometheus
 metrics, so the same app drives health, canary and MetricCheck tests.
 `fixtures.BrokenTag` does not exist, which gives a rollout that never
 becomes Available.
+
+## Nightly sample
+
+Every scheduled run of `.github/workflows/e2e-live.yml` also adds the
+night's sample (`hack/e2e/sample.sh`, from the UTC date alone): one suite on a Kubernetes minor `matrix.txt` does not run
+it on (every pair of a single-minor suite and another `KIND_NODE_1_*` minor,
+in turn: gitea, gitlab, chart, delivery, ui, flux and shard on 1.35 and 1.36,
+14 nights), and a ninth of the core suite on the newest minor with each test
+repeated three times (`SHARD=i/9 COUNT=3`, every core test within 9 nights),
+so a flake shows up within days instead of at the weekly run. The core, scale,
+upgrade, github and multi-cluster suites are not rotated across minors: core
+and the upgrades already run on several, scale and multi-cluster are sized or
+paired for one, and only the github job gets the token. `hack/e2e/sample.sh
+2026-10-14` prints that night's jobs, `hack/e2e/sample.sh -cycle` the length
+of both rotations; `SAMPLE=2026-10-14 SAMPLE_ONLY=1 make e2e-all` runs them
+on this host, and `gh workflow run e2e-live.yml -f sample=today` adds them
+to a dispatched run.
