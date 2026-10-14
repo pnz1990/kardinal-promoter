@@ -252,9 +252,16 @@ type uiFleet struct {
 	Targets []string `json:"targets"`
 	// MaxConcurrent is spec.fleet.maxConcurrent (0: every target at once).
 	MaxConcurrent int `json:"maxConcurrent,omitempty"`
-	// MaxUnavailable is spec.fleet.maxUnavailable: that many Failed targets
-	// stop the rollout. Absent when unset.
+	// MaxUnavailable is spec.fleet.maxUnavailable as a count of the
+	// targets (a percentage rounded up, at least 1): that many Failed
+	// targets stop the rollout. Absent when unset.
 	MaxUnavailable *int `json:"maxUnavailable,omitempty"`
+	// MaxUnavailableSpec is spec.fleet.maxUnavailable as written ("10%",
+	// "2"). Absent when unset.
+	MaxUnavailableSpec string `json:"maxUnavailableSpec,omitempty"`
+	// Paused: the fleet is in spec.pausedFleets (kardinal pause --env
+	// <fleet>), so no further target starts.
+	Paused bool `json:"paused,omitempty"`
 	// Message says why the targets cannot be resolved (a selector fleet).
 	Message string `json:"message,omitempty"`
 }
@@ -788,7 +795,13 @@ func pipelineListResponse(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bund
 				}
 				if env.Fleet != nil {
 					node.Fleet = &uiFleet{Targets: fleets[env.Name], MaxConcurrent: env.Fleet.MaxConcurrent,
-						MaxUnavailable: env.Fleet.MaxUnavailable}
+						Paused: slices.Contains(p.Spec.PausedFleets, env.Name)}
+					if mu := env.Fleet.MaxUnavailable; mu != nil {
+						node.Fleet.MaxUnavailableSpec = mu.String()
+						if n, err := graphpkg.MaxUnavailableCount(mu, len(fleets[env.Name])); err == nil && len(fleets[env.Name]) > 0 {
+							node.Fleet.MaxUnavailable = &n
+						}
+					}
 					if node.Fleet.Targets == nil {
 						node.Fleet.Targets = []string{}
 					}

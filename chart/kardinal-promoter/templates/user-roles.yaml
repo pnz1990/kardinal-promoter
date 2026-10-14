@@ -34,7 +34,7 @@ rbac.userRoles.directWrites they also get update and patch, for kardinal
 pause, rollback --hold, release-hold and override from a kubeconfig; the
 scoped-writes ValidatingAdmissionPolicy in identity-admission.yaml then limits
 a caller who has pipelines/pause or pipelines/hold but not pipelines/edit to
-spec.paused (with pipelines/pause) and spec.holds (with pipelines/hold, each
+spec.paused and spec.pausedFleets (with pipelines/pause) and spec.holds (with pipelines/hold, each
 entry checked by the hold-writes policy), and one who has
 policygates/override but not policygates/edit to spec.overrides.
 

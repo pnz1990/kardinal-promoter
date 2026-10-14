@@ -27,15 +27,22 @@ import (
 )
 
 func newPauseCmd() *cobra.Command {
-	return &cobra.Command{
+	var env string
+	cmd := &cobra.Command{
 		Use:   "pause <pipeline>",
-		Short: "Pause a pipeline: no new promotion steps start, in-flight ones hold at the next safe point",
+		Short: "Pause a pipeline, or one fleet: no new promotion steps start",
 		Long: `Hold <pipeline>: no step starts, and a step still preparing its change holds
 before its next step. A step waiting for its PR merge or running its health
 check finishes, so a merged change is always verified. Resume with
-kardinal resume <pipeline>.`,
+kardinal resume <pipeline>.
+
+With --env <fleet>, pause one fleet environment: no further target of the
+fleet starts, for any version, and the targets in flight finish, as when
+maxUnavailable is reached. Resume with kardinal resume <pipeline> --env <fleet>.`,
 		Example: `  kardinal pause my-app
-  kardinal resume my-app`,
+  kardinal resume my-app
+  kardinal pause my-app --env prod      # prod is a fleet: stop starting targets
+  kardinal resume my-app --env prod`,
 		Annotations: map[string]string{ReferenceAnnotation: pauseReference},
 		Args:        cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -43,9 +50,14 @@ kardinal resume <pipeline>.`,
 			if err != nil {
 				return fmt.Errorf("pause: %w", err)
 			}
+			if env != "" {
+				return fleetPauseFn(cmd.OutOrStdout(), c, ns, args[0], env, true)
+			}
 			return pauseFn(cmd.OutOrStdout(), c, ns, args[0])
 		},
 	}
+	cmd.Flags().StringVar(&env, "env", "", "pause only this fleet environment: no further target starts")
+	return cmd
 }
 
 // pauseFn is the testable implementation of pause. It uses lifecycle.Pause,
@@ -62,22 +74,52 @@ func pauseFn(w io.Writer, c sigs_client.Client, ns, pipeline string) error {
 	return nil
 }
 
+// fleetPauseFn is the testable implementation of pause and resume --env
+// <fleet>. It uses lifecycle.SetFleetPaused, the implementation the UI
+// shares.
+func fleetPauseFn(w io.Writer, c sigs_client.Client, ns, pipeline, fleet string, paused bool) error {
+	verb := "resume"
+	if paused {
+		verb = "pause"
+	}
+	if err := lifecycle.SetFleetPaused(context.Background(), c, ns, pipeline, fleet, paused); err != nil {
+		return fmt.Errorf("%s %s --env %s: %w", verb, pipeline, fleet, err)
+	}
+	msg := fmt.Sprintf("Fleet %s of pipeline %s resumed. Its targets start again as places free up.\n", fleet, pipeline)
+	if paused {
+		msg = fmt.Sprintf("Fleet %s of pipeline %s paused. No further target starts; the targets in flight finish.\n"+
+			"Resume with: kardinal resume %s --env %s\n", fleet, pipeline, pipeline, fleet)
+	}
+	if _, err := io.WriteString(w, msg); err != nil {
+		return fmt.Errorf("write output: %w", err)
+	}
+	return nil
+}
+
 func newResumeCmd() *cobra.Command {
-	return &cobra.Command{
+	var env string
+	cmd := &cobra.Command{
 		Use:   "resume <pipeline>",
-		Short: "Resume a paused pipeline",
+		Short: "Resume a paused pipeline, or a paused fleet",
 		Long: `Resume <pipeline> after kardinal pause: its held steps continue and new
-promotions start again.`,
-		Example: `  kardinal resume my-app`,
-		Args:    cobra.ExactArgs(1),
+promotions start again. With --env <fleet>, resume a fleet paused with
+kardinal pause --env <fleet>.`,
+		Example: `  kardinal resume my-app
+  kardinal resume my-app --env prod`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("resume: %w", err)
 			}
+			if env != "" {
+				return fleetPauseFn(cmd.OutOrStdout(), c, ns, args[0], env, false)
+			}
 			return resumeFn(cmd.OutOrStdout(), c, ns, args[0])
 		},
 	}
+	cmd.Flags().StringVar(&env, "env", "", "resume only this fleet environment")
+	return cmd
 }
 
 // resumeFn is the testable implementation of resume. It uses
@@ -98,4 +140,11 @@ freeze-<pipeline>. While the pipeline is paused, no PromotionStep leaves
 Pending and a step that is still preparing its change (clone, update,
 commit, open PR) holds before its next step. A step that is waiting for a
 PR merge or running its health check finishes, so a merged change is never
-left unverified. Resume with: kardinal resume <pipeline>.`
+left unverified. Resume with: kardinal resume <pipeline>.
+
+With --env <fleet> it adds the fleet environment to spec.pausedFleets
+instead (update on pipelines/pause, as for spec.paused). The Graph of every
+version in flight is rebuilt in place and starts no further target of the
+fleet; steps that exist run to their end. kardinal resume <pipeline> --env
+<fleet> removes the entry. A fleet target or an environment that is not a
+fleet is refused.`

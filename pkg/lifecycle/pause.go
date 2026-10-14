@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -15,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 // How pause works
@@ -238,4 +240,77 @@ func setPaused(ctx context.Context, c client.Client, ns, pipeline string, paused
 		return nil, fmt.Errorf("patch pipeline %s/%s paused=%t: %w", ns, pipeline, paused, err)
 	}
 	return &p, nil
+}
+
+// How a fleet is paused (#1835)
+//
+// spec.pausedFleets lists the fleet environments that start no further
+// target (kardinal pause <pipeline> --env <fleet>). Unlike spec.paused it is
+// part of what the Graph is built from: the Bundle reconciler rebuilds the
+// Graph of every Bundle in flight in place, and the Graph's admission (the
+// compact shape's wave) creates no PromotionStep for a target of a paused
+// fleet, as when maxUnavailable is reached. Steps that exist finish, so a
+// wave in flight completes and nothing is left half-promoted.
+
+// SetFleetPaused adds fleet to the Pipeline's spec.pausedFleets (paused) or
+// removes it. fleet must be an environment with a fleet: a fleet target is
+// refused naming its fleet, and any other environment naming kardinal pause
+// <pipeline> (ErrInvalid). It retries a conflict, is idempotent and returns
+// ErrNotFound when the Pipeline does not exist. A resume of a fleet that is
+// not paused, or whose environment is no longer a fleet, removes the entry
+// if there is one and succeeds.
+func SetFleetPaused(ctx context.Context, c client.Client, ns, pipeline, fleet string, paused bool) error {
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var p v1alpha1.Pipeline
+		if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: pipeline}, &p); err != nil {
+			if apierrors.IsNotFound(err) {
+				return fmt.Errorf("pipeline %s/%s: %w", ns, pipeline, ErrNotFound)
+			}
+			return err
+		}
+		listed := slices.Contains(p.Spec.PausedFleets, fleet)
+		if paused {
+			if err := isFleetEnvironment(&p, fleet); err != nil {
+				return err
+			}
+			if listed {
+				return nil
+			}
+			p.Spec.PausedFleets = append(p.Spec.PausedFleets, fleet)
+		} else {
+			if !listed {
+				return nil
+			}
+			p.Spec.PausedFleets = slices.DeleteFunc(p.Spec.PausedFleets, func(f string) bool { return f == fleet })
+		}
+		return c.Update(ctx, &p)
+	})
+	if err != nil && !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrInvalid) {
+		return fmt.Errorf("set fleet %s of pipeline %s/%s paused=%t: %w", fleet, ns, pipeline, paused, err)
+	}
+	return err
+}
+
+// isFleetEnvironment returns nil when env is a fleet environment of p, else
+// an ErrInvalid that says what to pause instead.
+func isFleetEnvironment(p *v1alpha1.Pipeline, env string) error {
+	for _, e := range p.Spec.Environments {
+		if e.Name != env {
+			continue
+		}
+		if e.Fleet == nil {
+			return fmt.Errorf("environment %s of pipeline %s is not a fleet; pause the whole pipeline with kardinal pause %s: %w",
+				env, p.Name, p.Name, ErrInvalid)
+		}
+		return nil
+	}
+	if fleet := graph.FleetOf(p, env); fleet != "" {
+		return fmt.Errorf("%s is a target of fleet %s; a fleet is paused as a whole: --env %s: %w", env, fleet, fleet, ErrInvalid)
+	}
+	return fmt.Errorf("pipeline %s has no environment %q: %w", p.Name, env, ErrInvalid)
+}
+
+// FleetPaused reports whether fleet is in p's spec.pausedFleets.
+func FleetPaused(p *v1alpha1.Pipeline, fleet string) bool {
+	return p != nil && slices.Contains(p.Spec.PausedFleets, fleet)
 }

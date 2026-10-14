@@ -199,6 +199,8 @@ type compactStep struct {
 	// maxUnavailable stops the fleet's admissions once that many of its
 	// targets Failed (0: unset).
 	maxUnavailable int
+	// paused stops the fleet's admissions (spec.pausedFleets).
+	paused bool
 	extras         compactEnvExtras
 	// imageVerification is the Bundle's ImageVerification name for a root
 	// step of a Pipeline with spec.imageVerification, else "".
@@ -271,6 +273,10 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 		if fleets {
 			e := entries[i].(map[string]interface{})
 			e["fleet"], e["index"], e["maxConcurrent"], e["maxUnavailable"] = s.fleet, s.index, s.maxConcurrent, s.maxUnavailable
+			// The Pipeline pauses the fleet (spec.pausedFleets): no target
+			// without a step is admitted. A pause change rebuilds the Graph
+			// in place, as a hold change does.
+			e["paused"] = s.paused
 			e["upstreamGroups"] = upstreamGroups(s.upstreams, fleetOf)
 		}
 		if anyHooks || anyAnalyses {
@@ -343,10 +349,11 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 			state, state)
 		rank := fmt.Sprintf("size(%s.steps.filter(x, x.fleet == e.fleet && x.index < e.index))", NodePromotionEligible)
 		// maxUnavailable: once that many of the fleet's targets Failed,
-		// none of its targets starts; the ones in flight finish.
+		// none of its targets starts; the ones in flight finish. A paused
+		// fleet (spec.pausedFleets) starts none either.
 		failed := fmt.Sprintf("size(%sfailedFleets.filter(f, f == e.fleet))", state)
 		wave = fmt.Sprintf("${%s.steps.filter(e, e.environment in %sstarted) + %s.steps.filter(e, "+
-			"e.fleet == \"\" || ((e.maxUnavailable == 0 || %s < e.maxUnavailable) && "+
+			"e.fleet == \"\" || (e.paused == false && (e.maxUnavailable == 0 || %s < e.maxUnavailable) && "+
 			"(e.maxConcurrent == 0 || %s < e.maxConcurrent - %s)))}",
 			NodePromotionDAG, state, NodePromotionEligible, failed, rank, inFlight)
 	}

@@ -109,13 +109,13 @@ names the new Bundle.
 * [kardinal logs](kardinal-logs.md)	 - Show promotion step execution logs for a pipeline
 * [kardinal metrics](kardinal-metrics.md)	 - Show promotion metrics (DORA-style) for a pipeline
 * [kardinal override](kardinal-override.md)	 - Force-pass a PolicyGate with a mandatory audit record
-* [kardinal pause](kardinal-pause.md)	 - Pause a pipeline: no new promotion steps start, in-flight ones hold at the next safe point
+* [kardinal pause](kardinal-pause.md)	 - Pause a pipeline, or one fleet: no new promotion steps start
 * [kardinal policy](kardinal-policy.md)	 - Manage and evaluate promotion policy gates
 * [kardinal promote](kardinal-promote.md)	 - Promote the version verified upstream into an environment
 * [kardinal quickstart](kardinal-quickstart.md)	 - Install kardinal on a local cluster and promote a first version
 * [kardinal refresh](kardinal-refresh.md)	 - Force re-reconciliation of a Pipeline
 * [kardinal reject](kardinal-reject.md)	 - Reject a version: it is never promoted again, and rollback never picks it
-* [kardinal resume](kardinal-resume.md)	 - Resume a paused pipeline
+* [kardinal resume](kardinal-resume.md)	 - Resume a paused pipeline, or a paused fleet
 * [kardinal rollback](kardinal-rollback.md)	 - Roll back an environment to the version before
 * [kardinal ship](kardinal-ship.md)	 - Ship a version: create a Bundle, and with --wait follow it
 * [kardinal status](kardinal-status.md)	 - Show controller health or per-pipeline in-flight promotion details

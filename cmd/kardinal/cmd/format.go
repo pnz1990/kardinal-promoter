@@ -425,7 +425,15 @@ func pipelineEnvStates(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
 		// A fleet environment's column counts its targets.
 		fleets, _ := graph.FleetTargetEnvironments(p)
 		for fleet, targets := range fleets {
-			if s := fleetCell(row.envs, targets); s != "" {
+			s := fleetCell(row.envs, targets)
+			if lifecycle.FleetPaused(p, fleet) {
+				// kardinal pause --env <fleet>: no further target starts.
+				s = strings.TrimPrefix(s+", paused", ", ")
+				if s == "paused" {
+					s = "Paused"
+				}
+			}
+			if s != "" {
 				row.envs[fleet] = s
 			}
 		}

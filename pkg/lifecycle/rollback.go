@@ -72,6 +72,9 @@ type RollbackPlan struct {
 	Target *v1alpha1.Bundle
 	// Bundle is the rollback Bundle to create.
 	Bundle *v1alpha1.Bundle
+	// Fleet is set for the rollback of a whole fleet: each target, in fleet
+	// order, with what runs there and whether the rollback changes it.
+	Fleet []FleetTargetRollback
 }
 
 // PlanRollback picks the Bundle to roll back to and builds the rollback Bundle.
@@ -651,71 +654,180 @@ func fleetTargets(p *v1alpha1.Pipeline, env string) []string {
 
 // planFleetRollback plans the rollback of a whole fleet (kardinal rollback
 // --env <fleet>): one rollback Bundle with intent.targetEnvironment the fleet,
-// whose Graph promotes the restored artifacts to every target. It plans
-// from the fleet's first target that has something deployed, by
-// PlanRollback's rules, and only when every target that has something
-// deployed runs the same Bundle: targets on different versions (a rollout
-// part way, or one target rolled back alone) would all get the version
-// before the reference target's, which may be older than what another
-// target runs. Then it refuses with ErrConflict naming each target's Bundle,
-// unless ToBundle says where to go.
+// whose Graph promotes the restored artifacts to every target, paced by the
+// fleet's maxConcurrent like any version (and held by spec.pausedFleets).
+// Targets that already run what it restores are Verified at once.
+//
+// Where it goes (#1835, the PR's decision record):
+//   - Every target that has something deployed runs the same Bundle: the
+//     version before it, chosen by PlanRollback's rules from the fleet's
+//     first target that has something deployed.
+//   - The targets run different Bundles (a rollout stopped part way by
+//     maxUnavailable or a pause, or a target rolled back alone): the
+//     version the least advanced targets run, the oldest of them by
+//     creation, a rollback Bundle counted as the Bundle it restored
+//     (provenance.rollbackOf). The targets that run it stay, and the others
+//     go back to it. It was Verified in the targets that run it, and a target
+//     where it was never Verified is planned from another one.
+//   - ToBundle (--to) names the version for every target.
+//
+// When the oldest version cannot be restored (rejected since, or gone), it
+// refuses with ErrConflict naming what each target runs and asks for --to.
+// plan.Targets says, per target, what runs there and whether it changes.
 func planFleetRollback(ctx context.Context, c client.Reader, req RollbackRequest, targets []string) (*RollbackPlan, error) {
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("rollback: fleet environment %s has no targets: %w", req.Environment, ErrInvalid)
 	}
-	ref := ""
+	// One list for the whole fleet: per target it was one list each.
+	steps, err := ListPromotionSteps(ctx, c, req.Namespace, client.MatchingLabels{LabelPipeline: req.Pipeline})
+	if err != nil {
+		return nil, fmt.Errorf("rollback of fleet %s: steps of pipeline %s: %w", req.Environment, req.Pipeline, err)
+	}
 	runs := map[string]string{}
 	var deployedIn []string
 	for _, t := range targets {
-		h, err := loadEnvHistory(ctx, c, req.Namespace, req.Pipeline, t)
-		if err != nil {
-			return nil, fmt.Errorf("rollback of fleet %s: %w", req.Environment, err)
-		}
-		if d := h.deployed(); d != "" {
+		if d := historyOf(steps, req.Pipeline, t).deployed(); d != "" {
 			runs[t] = d
 			deployedIn = append(deployedIn, t)
-			if ref == "" {
-				ref = t
-			}
 		}
 	}
-	if ref == "" {
+	if len(deployedIn) == 0 {
 		return nil, fmt.Errorf("rollback: nothing has been deployed to any target of fleet %s in pipeline %s yet: %w",
 			req.Environment, req.Pipeline, ErrConflict)
 	}
+	runList := func() string {
+		parts := make([]string, 0, len(deployedIn))
+		for _, x := range deployedIn {
+			parts = append(parts, x+" runs "+runs[x])
+		}
+		return strings.Join(parts, ", ")
+	}
+	to := req.ToBundle
+	effective := map[string]string{} // what each deployed target runs, a rollback as what it restored
 	if req.ToBundle == "" && req.FromBundle == "" {
-		for _, t := range deployedIn {
-			if runs[t] != runs[ref] {
-				parts := make([]string, 0, len(deployedIn))
-				for _, x := range deployedIn {
-					parts = append(parts, x+" runs "+runs[x])
-				}
-				return nil, fmt.Errorf("rollback: the targets of fleet %s run different Bundles (%s); "+
-					"name the Bundle to go back to with --to, or roll back one target with --env <target>: %w",
-					req.Environment, strings.Join(parts, ", "), ErrConflict)
-			}
+		oldest, distinct, oErr := oldestRunning(ctx, c, req.Namespace, deployedIn, runs, effective)
+		if oErr != nil {
+			return nil, fmt.Errorf("rollback: the targets of fleet %s run different Bundles (%s), and the oldest of them cannot be read (%v); "+
+				"name the Bundle to go back to with --to, or roll back one target with --env <target>: %w",
+				req.Environment, runList(), oErr, ErrConflict)
+		}
+		if distinct > 1 {
+			to = oldest
 		}
 	}
-	// With --to, plan from the first target where going there is a rollback
-	// (the Bundle was Verified there and is not what it runs now); targets
-	// that already run it are Verified at once.
-	candidates := []string{ref}
-	if req.ToBundle != "" {
-		candidates = deployedIn
+	// Plan from the first target where going there is a rollback: one that
+	// does not run it already.
+	candidates := []string{deployedIn[0]}
+	if to != "" {
+		candidates = candidates[:0]
+		for _, t := range deployedIn {
+			if runs[t] != to && effectiveOf(effective, runs[t]) != to {
+				candidates = append(candidates, t)
+			}
+		}
+		if len(candidates) == 0 {
+			return nil, fmt.Errorf("rollback: every target of fleet %s that has something deployed runs %s already: %w",
+				req.Environment, to, ErrConflict)
+		}
 	}
 	var lastErr error
 	for _, t := range candidates {
 		sub := req
 		sub.Environment = t
-		plan, err := PlanRollback(ctx, c, sub)
-		if err != nil {
-			lastErr = fmt.Errorf("rollback of fleet %s (planned from target %s): %w", req.Environment, t, err)
+		sub.ToBundle = to
+		plan, pErr := PlanRollback(ctx, c, sub)
+		if pErr != nil {
+			lastErr = fmt.Errorf("rollback of fleet %s (planned from target %s): %w", req.Environment, t, pErr)
 			continue
 		}
 		plan.Bundle.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: req.Environment}
+		plan.Fleet = fleetRollbackTargets(targets, runs, effective, plan.Target.Name)
 		return plan, nil
 	}
+	if to != "" && req.ToBundle == "" {
+		return nil, fmt.Errorf("rollback: the targets of fleet %s run different Bundles (%s); going back to %s, the oldest of them, failed (%v); "+
+			"name the Bundle to go back to with --to, or roll back one target with --env <target>: %w",
+			req.Environment, runList(), to, lastErr, ErrConflict)
+	}
 	return nil, lastErr
+}
+
+// FleetTargetRollback is one target of a fleet rollback (RollbackPlan.Fleet).
+type FleetTargetRollback struct {
+	// Environment is the target's environment, <fleet>-<target>.
+	Environment string `json:"environment"`
+	// Runs is the Bundle whose change landed there last; "" when none.
+	Runs string `json:"runs,omitempty"`
+	// Changes is false when the target runs what the rollback restores
+	// already (its step is Verified at once).
+	Changes bool `json:"changes"`
+}
+
+// fleetRollbackTargets says, per target in fleet order, what runs there and
+// whether the rollback to target changes it.
+func fleetRollbackTargets(targets []string, runs, effective map[string]string, target string) []FleetTargetRollback {
+	out := make([]FleetTargetRollback, 0, len(targets))
+	for _, t := range targets {
+		r := runs[t]
+		out = append(out, FleetTargetRollback{Environment: t, Runs: r,
+			Changes: r == "" || (r != target && effectiveOf(effective, r) != target)})
+	}
+	return out
+}
+
+// effectiveOf is what bundle deploys as effective records it: the Bundle a
+// rollback restored, or bundle itself.
+func effectiveOf(effective map[string]string, bundle string) string {
+	if e, ok := effective[bundle]; ok && e != "" {
+		return e
+	}
+	return bundle
+}
+
+// oldestRunning returns the oldest Bundle the deployed targets run, a
+// rollback Bundle counted as the Bundle it restored (provenance.rollbackOf,
+// followed at most a few times), and how many distinct such Bundles there
+// are. It records each running Bundle's effective Bundle in effective.
+func oldestRunning(ctx context.Context, c client.Reader, ns string, deployedIn []string, runs, effective map[string]string) (string, int, error) {
+	cache := map[string]*v1alpha1.Bundle{}
+	get := func(name string) (*v1alpha1.Bundle, error) {
+		if b, ok := cache[name]; ok {
+			return b, nil
+		}
+		b, err := getBundle(ctx, c, ns, name)
+		if err != nil {
+			return nil, err
+		}
+		cache[name] = b
+		return b, nil
+	}
+	var oldest *v1alpha1.Bundle
+	distinct := map[string]bool{}
+	for _, t := range deployedIn {
+		name := runs[t]
+		if _, done := effective[name]; !done {
+			b, err := get(name)
+			if err != nil {
+				return "", 0, fmt.Errorf("bundle %s that %s runs: %w", name, t, err)
+			}
+			// A rollback deploys what it restored; a chain of rollbacks is
+			// followed while each Bundle exists.
+			for i := 0; i < 4 && b.Labels[LabelRollback] == "true" && b.Spec.Provenance != nil && b.Spec.Provenance.RollbackOf != ""; i++ {
+				of, err := get(b.Spec.Provenance.RollbackOf)
+				if err != nil {
+					break
+				}
+				b = of
+			}
+			effective[name] = b.Name
+		}
+		eb := cache[effective[name]]
+		distinct[eb.Name] = true
+		if oldest == nil || CompareCreation(eb, oldest) < 0 {
+			oldest = eb
+		}
+	}
+	return oldest.Name, len(distinct), nil
 }
 
 // buildRollbackBundle builds the rollback Bundle of plan. restored holds the

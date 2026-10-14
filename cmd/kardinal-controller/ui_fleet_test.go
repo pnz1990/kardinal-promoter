@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -25,7 +26,7 @@ func TestPipelineListResponse_Fleet(t *testing.T) {
 	p := v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "team"}}
 	p.Spec.Environments = []v1alpha1.EnvironmentSpec{
 		{Name: "test"},
-		{Name: "prod", Fleet: &v1alpha1.FleetSpec{MaxConcurrent: 2, MaxUnavailable: ptr(1),
+		{Name: "prod", Fleet: &v1alpha1.FleetSpec{MaxConcurrent: 2, MaxUnavailable: ptr(intstr.FromString("34%")),
 			Targets: []v1alpha1.FleetTarget{{Name: "eu"}, {Name: "us"}, {Name: "ap"}}}},
 		{Name: "audit"},
 	}
@@ -48,7 +49,8 @@ func TestPipelineListResponse_Fleet(t *testing.T) {
 	topo := got[0].EnvironmentTopology
 	require.Len(t, topo, 3)
 	assert.Nil(t, topo[0].Fleet)
-	assert.Equal(t, &uiFleet{Targets: []string{"prod-eu", "prod-us", "prod-ap"}, MaxConcurrent: 2, MaxUnavailable: ptr(1)}, topo[1].Fleet)
+	assert.Equal(t, &uiFleet{Targets: []string{"prod-eu", "prod-us", "prod-ap"}, MaxConcurrent: 2, MaxUnavailable: ptr(2),
+		MaxUnavailableSpec: "34%"}, topo[1].Fleet, "34% of 3 targets, rounded up")
 	assert.Equal(t, []string{"test"}, topo[1].Upstreams, "the fleet waits for what it depends on")
 	assert.Equal(t, []string{"prod"}, topo[2].Upstreams, "the environment after a fleet waits for the fleet")
 	assert.Equal(t, "Verified", got[0].EnvironmentStates["prod-eu"])

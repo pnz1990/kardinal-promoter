@@ -98,6 +98,21 @@ type uiRollbackResponse struct {
 	Message string `json:"message"`
 	// Held is true when the environment is held on the rollback.
 	Held bool `json:"held,omitempty"`
+	// Fleet is set for the rollback of a whole fleet: each target, in
+	// fleet order, with the Bundle it runs and whether the rollback
+	// changes it.
+	Fleet []uiFleetTargetRollback `json:"fleet,omitempty"`
+}
+
+// uiFleetTargetRollback is one target of the rollback of a fleet.
+type uiFleetTargetRollback struct {
+	// Environment is the target's environment, <fleet>-<target>.
+	Environment string `json:"environment"`
+	// Runs is the Bundle whose change landed there last; absent when none.
+	Runs string `json:"runs,omitempty"`
+	// Changes is false when the target runs what the rollback restores
+	// already: its step is Verified at once.
+	Changes bool `json:"changes"`
 }
 
 // uiPipelineActionRequest is the body of POST /api/v1/ui/pause and
@@ -107,6 +122,9 @@ type uiPipelineActionRequest struct {
 	Pipeline string `json:"pipeline"`
 	// Namespace of the Pipeline. Defaults to "default".
 	Namespace string `json:"namespace,omitempty"`
+	// Environment, when set, pauses or resumes only this fleet environment
+	// (spec.pausedFleets) instead of the whole Pipeline.
+	Environment string `json:"environment,omitempty"`
 }
 
 // uiRejectRequest is the body of POST /api/v1/ui/reject.

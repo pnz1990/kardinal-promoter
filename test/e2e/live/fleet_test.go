@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -288,7 +289,7 @@ func TestGraph_FleetMaxUnavailableStopsTheRollout(t *testing.T) {
 		}
 		targets = append(targets, tg)
 	}
-	two := 2
+	two := intstr.FromInt32(2)
 	repo := e.Repo(t, ns, fleetFiles(ns, []string{"test", "post"}, "fleet", names, false))
 	createCompactHealth(t, e, ns)
 	a := &app{e: e, ns: ns, envs: []string{"test", "prod", "post"}, repo: repo}

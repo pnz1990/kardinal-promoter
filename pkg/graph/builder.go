@@ -799,6 +799,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 				index:             m.index,
 				maxConcurrent:     m.maxConcurrent,
 				maxUnavailable:    m.maxUnavailable,
+				paused:            m.paused,
 			})
 			continue
 		}

@@ -6,9 +6,11 @@ package graph
 import (
 	"fmt"
 	"path"
+	"slices"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -26,8 +28,11 @@ type fleetMember struct {
 	index int
 	// maxConcurrent is the fleet's spec.fleet.maxConcurrent.
 	maxConcurrent int
-	// maxUnavailable is the fleet's spec.fleet.maxUnavailable, 0 when unset.
+	// maxUnavailable is the fleet's spec.fleet.maxUnavailable as a count of
+	// its targets (MaxUnavailableCount), 0 when unset.
 	maxUnavailable int
+	// paused: the fleet is in the Pipeline's spec.pausedFleets.
+	paused bool
 	// spec is the target as an environment: the fleet environment with the
 	// target's name, path and health.
 	spec kardinalv1alpha1.EnvironmentSpec
@@ -94,6 +99,11 @@ func fleetMembers(p *kardinalv1alpha1.Pipeline) (map[string]fleetMember, map[str
 		if len(targets) == 0 {
 			return nil, nil, fmt.Errorf("build: fleet environment %q has no targets", e.Name)
 		}
+		maxUnavailable, err := MaxUnavailableCount(e.Fleet.MaxUnavailable, len(targets))
+		if err != nil {
+			return nil, nil, asInvalid(fmt.Errorf("build: fleet environment %q: %w", e.Name, err))
+		}
+		paused := slices.Contains(p.Spec.PausedFleets, e.Name)
 		base := e.Path
 		if base == "" {
 			base = "environments/" + e.Name
@@ -118,16 +128,31 @@ func fleetMembers(p *kardinalv1alpha1.Pipeline) (map[string]fleetMember, map[str
 			if t.Health != nil {
 				spec.Health = *t.Health.DeepCopy()
 			}
-			maxUnavailable := 0
-			if e.Fleet.MaxUnavailable != nil {
-				maxUnavailable = *e.Fleet.MaxUnavailable
-			}
 			members[name] = fleetMember{fleet: e.Name, index: i, maxConcurrent: e.Fleet.MaxConcurrent,
-				maxUnavailable: maxUnavailable, spec: spec}
+				maxUnavailable: maxUnavailable, paused: paused, spec: spec}
 			byFleet[e.Name] = append(byFleet[e.Name], name)
 		}
 	}
 	return members, byFleet, nil
+}
+
+// MaxUnavailableCount is spec.fleet.maxUnavailable as a number of targets of
+// a fleet of total targets: a count as written, a percentage of total rounded
+// up and at least 1 ("10%" of 50 is 5, of 3 is 1). 0 when v is unset.
+func MaxUnavailableCount(v *intstr.IntOrString, total int) (int, error) {
+	if v == nil {
+		return 0, nil
+	}
+	n, err := intstr.GetScaledValueFromIntOrPercent(v, total, true)
+	if err != nil {
+		return 0, fmt.Errorf("maxUnavailable %q: %w", v.String(), err)
+	}
+	if n < 1 {
+		// The API server refuses 0 and 0%; a percentage of an empty fleet
+		// (no targets is refused before) or a negative count stays at 1.
+		n = 1
+	}
+	return n, nil
 }
 
 // expandFleets replaces each fleet environment in the ordering by its

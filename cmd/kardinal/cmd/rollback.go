@@ -132,11 +132,15 @@ func rollbackFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, toBu
 	if structured() {
 		out := createdOf(plan.Bundle)
 		out.Environment, out.RollbackOf, out.Replaces = envFilter, plan.Target.Name, plan.CurrentName
+		out.Fleet = plan.Fleet
 		return writeStructured(w, out)
 	}
 	from := plan.CurrentName
 	if from == "" {
 		from = "(unknown)"
+	}
+	if plan.Fleet != nil {
+		return writeFleetRollback(w, c, ns, pipeline, envFilter, plan)
 	}
 	if _, err := fmt.Fprintf(w,
 		"Rolling back %s in %s from %s to %s (%s)\nBundle %s created (rollbackOf=%s)\nTrack with: kardinal explain %s --env %s\n",
@@ -147,6 +151,54 @@ func rollbackFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, toBu
 	}
 
 	return nil
+}
+
+// fleetRollbackNamed is how many changing targets the rollback of a fleet
+// names before "and N more".
+const fleetRollbackNamed = 6
+
+// writeFleetRollback prints the rollback of a whole fleet: the version it
+// goes back to, which targets it changes (from what), which run it already,
+// and that a paused fleet starts none until it is resumed.
+func writeFleetRollback(w io.Writer, c sigs_client.Client, ns, pipeline, fleet string, plan *lifecycle.RollbackPlan) error {
+	var changing []string
+	stay := 0
+	for _, t := range plan.Fleet {
+		switch {
+		case !t.Changes:
+			stay++
+		case t.Runs == "":
+			changing = append(changing, t.Environment+" (nothing yet)")
+		default:
+			changing = append(changing, t.Environment+" from "+t.Runs)
+		}
+	}
+	named := changing
+	if len(named) > fleetRollbackNamed {
+		named = append(named[:fleetRollbackNamed:fleetRollbackNamed], fmt.Sprintf("and %d more", len(changing)-fleetRollbackNamed))
+	}
+	if err := writef(w, "Rolling back fleet %s of %s to %s (%s)\nBundle %s created (rollbackOf=%s)\n",
+		fleet, pipeline, plan.Target.Name, artifactSummary(plan.Bundle), plan.Bundle.Name, plan.Target.Name); err != nil {
+		return err
+	}
+	if err := writef(w, "%d of %d targets go back: %s\n", len(changing), len(plan.Fleet), strings.Join(named, ", ")); err != nil {
+		return err
+	}
+	if stay > 0 {
+		if err := writef(w, "%d run %s already and are Verified at once.\n", stay, plan.Target.Name); err != nil {
+			return err
+		}
+	}
+	var p v1alpha1.Pipeline
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: pipeline}, &p); err == nil {
+		if lifecycle.FleetPaused(&p, fleet) {
+			if err := writef(w, "Fleet %s is paused: the rollback starts no target until kardinal resume %s --env %s\n",
+				fleet, pipeline, fleet); err != nil {
+				return err
+			}
+		}
+	}
+	return writef(w, "The fleet's maxConcurrent paces the rollback. Track with: kardinal get pipelines %s\n", pipeline)
 }
 
 // rollbackHoldFn rolls back and holds the environment
@@ -176,6 +228,7 @@ func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBund
 		out := createdOf(plan.Bundle)
 		out.Environment, out.RollbackOf, out.Replaces = env, plan.Target.Name, plan.CurrentName
 		out.Hold = &createdHold{Environment: env, Bundle: hold.Bundle, Reason: hold.Reason, ExpiresAt: hold.ExpiresAt}
+		out.Fleet = plan.Fleet
 		return writeStructured(w, out)
 	}
 	from := plan.CurrentName

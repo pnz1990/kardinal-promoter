@@ -1,0 +1,258 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+
+package lifecycle_test
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+)
+
+// rollbackOf marks b a rollback Bundle that restored of.
+func rollbackOf(b *v1alpha1.Bundle, of string) *v1alpha1.Bundle {
+	b.Labels = map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: b.Spec.Pipeline}
+	b.Spec.Provenance.RollbackOf = of
+	return b
+}
+
+// wideFleet is test → prod, a fleet of n targets t00..t<n-1>.
+func wideFleet(n int) *v1alpha1.Pipeline {
+	p := pipeline("app", "test", "prod")
+	var targets []v1alpha1.FleetTarget
+	for i := range n {
+		targets = append(targets, v1alpha1.FleetTarget{Name: fmt.Sprintf("t%02d", i)})
+	}
+	p.Spec.Environments[1].Fleet = &v1alpha1.FleetSpec{MaxConcurrent: 10, Targets: targets}
+	return p
+}
+
+// TestPlanRollback_FleetPartWay (#1835): the rollback of a fleet whose rollout
+// stopped part way (10% of 50 targets failed: maxUnavailable) goes back to
+// what the targets not reached yet run. The targets that run it stay, the
+// failed and Verified ones go back, and one rollback Bundle targets the
+// fleet, so maxConcurrent paces it.
+//
+// Covers FLEET-12.
+func TestPlanRollback_FleetPartWay(t *testing.T) {
+	objs := []client.Object{wideFleet(50), bundle("app-v1", "app", "v1", 0), phase(bundle("app-v2", "app", "v2", 100), "Failed")}
+	for i := range 50 {
+		env := fmt.Sprintf("prod-t%02d", i)
+		objs = append(objs, step("app-v1", "app", env, "Verified", 1+i))
+		switch {
+		case i < 5:
+			// Failed its health check: the change landed.
+			failed := step("app-v2", "app", env, "Failed", 101+i)
+			expiry := metav1.NewTime(t0.Add(2 * time.Hour))
+			failed.Status.HealthCheckExpiry = &expiry
+			objs = append(objs, failed)
+		case i < 15:
+			objs = append(objs, step("app-v2", "app", env, "Verified", 101+i))
+		}
+	}
+	plan, err := lifecycle.PlanRollback(context.Background(), newClient(t, objs...), lifecycle.RollbackRequest{
+		Namespace: ns, Pipeline: "app", Environment: "prod", Now: t0.Add(time.Hour)})
+	require.NoError(t, err)
+	assert.Equal(t, "app-v1", plan.Target.Name)
+	assert.Equal(t, "prod", plan.Bundle.Spec.Intent.TargetEnvironment)
+	assert.Equal(t, "v1", plan.Bundle.Spec.Images[0].Tag)
+	require.Len(t, plan.Fleet, 50)
+	changes := 0
+	for i, f := range plan.Fleet {
+		assert.Equal(t, fmt.Sprintf("prod-t%02d", i), f.Environment, "fleet order")
+		if f.Changes {
+			changes++
+			assert.Equal(t, "app-v2", f.Runs)
+		}
+	}
+	assert.Equal(t, 15, changes, "the 5 failed and 10 Verified targets go back; 35 run v1 already")
+}
+
+// TestPlanRollback_FleetMixedCases (#1835): which version a fleet whose
+// targets run different Bundles goes back to.
+//
+// Covers FLEET-12.
+func TestPlanRollback_FleetMixedCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		objs    []client.Object
+		want    string
+		changes map[string]bool
+		errIs   error
+		errHas  string
+	}{{
+		// eu was rolled back alone to v0 (a rollback Bundle created after
+		// v2); us runs v2. The rollback counts as v0, its creation time does
+		// not make it the newest: the fleet goes to v0, never forward to v2.
+		name: "a target rolled back alone counts as what it restored",
+		objs: []client.Object{fleetPipeline(),
+			bundle("app-v0", "app", "v0", 0), bundle("app-v1", "app", "v1", 10), bundle("app-v2", "app", "v2", 20),
+			rollbackOf(bundle("app-rb", "app", "v0", 30), "app-v0"),
+			step("app-v0", "app", "prod-eu", "Verified", 1), step("app-v0", "app", "prod-us", "Verified", 2),
+			step("app-v2", "app", "prod-eu", "Verified", 21), step("app-v2", "app", "prod-us", "Verified", 22),
+			step("app-rb", "app", "prod-eu", "Verified", 31)},
+		want:    "app-v0",
+		changes: map[string]bool{"prod-eu": false, "prod-us": true},
+	}, {
+		// The oldest version was rejected since: the fleet does not go
+		// there, and the message names what each target runs.
+		name: "the oldest version is rejected",
+		objs: []client.Object{fleetPipeline(),
+			rejected(bundle("app-v1", "app", "v1", 10)), bundle("app-v2", "app", "v2", 20),
+			step("app-v1", "app", "prod-eu", "Verified", 11), step("app-v1", "app", "prod-us", "Verified", 12),
+			step("app-v2", "app", "prod-us", "Verified", 21)},
+		errIs:  lifecycle.ErrConflict,
+		errHas: "run different Bundles (prod-eu runs app-v1, prod-us runs app-v2); going back to app-v1, the oldest of them, failed",
+	}, {
+		// The Bundle a target runs is gone (deleted by hand).
+		name: "a Bundle a target runs is gone",
+		objs: []client.Object{fleetPipeline(), bundle("app-v2", "app", "v2", 20),
+			step("app-v1", "app", "prod-eu", "Verified", 11), step("app-v2", "app", "prod-us", "Verified", 21)},
+		errIs:  lifecycle.ErrConflict,
+		errHas: "cannot be read",
+	}, {
+		// Every target runs one version, but one runs it through a
+		// rollback: that is one version, so the fleet goes to the one before.
+		name: "the same artifacts through a rollback are one version",
+		objs: []client.Object{fleetPipeline(),
+			bundle("app-v0", "app", "v0", 0), bundle("app-v1", "app", "v1", 10), rollbackOf(bundle("app-rb", "app", "v1", 30), "app-v1"),
+			step("app-v0", "app", "prod-eu", "Verified", 1), step("app-v0", "app", "prod-us", "Verified", 2),
+			step("app-v1", "app", "prod-eu", "Verified", 11), step("app-v1", "app", "prod-us", "Verified", 12),
+			step("app-rb", "app", "prod-us", "Verified", 31)},
+		want:    "app-v0",
+		changes: map[string]bool{"prod-eu": true, "prod-us": true},
+	}}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := lifecycle.PlanRollback(context.Background(), newClient(t, tc.objs...), lifecycle.RollbackRequest{
+				Namespace: ns, Pipeline: "app", Environment: "prod", Now: t0.Add(time.Hour)})
+			if tc.errIs != nil {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tc.errIs)
+				assert.ErrorContains(t, err, tc.errHas)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, plan.Target.Name)
+			got := map[string]bool{}
+			for _, f := range plan.Fleet {
+				got[f.Environment] = f.Changes
+			}
+			assert.Equal(t, tc.changes, got)
+		})
+	}
+}
+
+// TestPlanRollback_FleetEveryTargetRunsIt: --to a version every target runs
+// already is refused.
+//
+// Covers FLEET-12.
+func TestPlanRollback_FleetEveryTargetRunsIt(t *testing.T) {
+	c := newClient(t, fleetPipeline(), bundle("app-v1", "app", "v1", 10),
+		step("app-v1", "app", "prod-eu", "Verified", 11), step("app-v1", "app", "prod-us", "Verified", 12))
+	_, err := lifecycle.PlanRollback(context.Background(), c, lifecycle.RollbackRequest{
+		Namespace: ns, Pipeline: "app", Environment: "prod", ToBundle: "app-v1", Now: t0.Add(time.Hour)})
+	assert.ErrorIs(t, err, lifecycle.ErrConflict)
+	assert.ErrorContains(t, err, "runs app-v1 already")
+}
+
+// TestSetFleetPaused (#1835): pausing a fleet adds it to spec.pausedFleets
+// once, resuming removes it; a fleet target, an environment that is not a
+// fleet and an unknown one are refused with what to do instead, and an
+// unknown Pipeline is ErrNotFound. Two fleets paused at once both stay
+// paused (the update retries a conflict instead of overwriting the list).
+//
+// Covers FLEET-10.
+func TestSetFleetPaused(t *testing.T) {
+	p := fleetPipeline()
+	p.Spec.Environments = append(p.Spec.Environments, v1alpha1.EnvironmentSpec{Name: "edge",
+		Fleet: &v1alpha1.FleetSpec{Targets: []v1alpha1.FleetTarget{{Name: "a"}}}})
+	c := newClient(t, p)
+	ctx := context.Background()
+	get := func() []string {
+		var got v1alpha1.Pipeline
+		require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(p), &got))
+		return got.Spec.PausedFleets
+	}
+	require.NoError(t, lifecycle.SetFleetPaused(ctx, c, ns, "app", "prod", true))
+	require.NoError(t, lifecycle.SetFleetPaused(ctx, c, ns, "app", "prod", true), "idempotent")
+	assert.Equal(t, []string{"prod"}, get())
+
+	for _, tc := range []struct{ env, has string }{
+		{env: "prod-eu", has: "is a target of fleet prod; a fleet is paused as a whole: --env prod"},
+		{env: "test", has: "is not a fleet; pause the whole pipeline with kardinal pause app"},
+		{env: "nope", has: `has no environment "nope"`},
+	} {
+		err := lifecycle.SetFleetPaused(ctx, c, ns, "app", tc.env, true)
+		assert.ErrorIs(t, err, lifecycle.ErrInvalid, tc.env)
+		assert.ErrorContains(t, err, tc.has, tc.env)
+	}
+	assert.ErrorIs(t, lifecycle.SetFleetPaused(ctx, c, ns, "missing", "prod", true), lifecycle.ErrNotFound)
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i, f := range []string{"edge", "prod"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = lifecycle.SetFleetPaused(ctx, c, ns, "app", f, true)
+		}()
+	}
+	wg.Wait()
+	require.NoError(t, errs[0])
+	require.NoError(t, errs[1])
+	assert.ElementsMatch(t, []string{"prod", "edge"}, get())
+
+	require.NoError(t, lifecycle.SetFleetPaused(ctx, c, ns, "app", "prod", false))
+	require.NoError(t, lifecycle.SetFleetPaused(ctx, c, ns, "app", "prod", false), "idempotent")
+	require.NoError(t, lifecycle.SetFleetPaused(ctx, c, ns, "app", "test", false), "resuming what is not paused changes nothing")
+	assert.Equal(t, []string{"edge"}, get())
+	assert.True(t, lifecycle.FleetPaused(&v1alpha1.Pipeline{Spec: v1alpha1.PipelineSpec{PausedFleets: []string{"edge"}}}, "edge"))
+	assert.False(t, lifecycle.FleetPaused(nil, "edge"))
+}
+
+// TestHoldCurrent_Fleet (#1835): kardinal hold --env <fleet> holds every
+// target with one spec.holds entry naming the fleet when the targets run one
+// Bundle (a target with nothing deployed is not counted); targets on
+// different Bundles are refused, naming them and what to do instead.
+//
+// Covers FLEET-13.
+func TestHoldCurrent_Fleet(t *testing.T) {
+	ctx := context.Background()
+	req := lifecycle.HoldCurrentRequest{Namespace: ns, Pipeline: "app", Environment: "prod", Reason: "audit", Actor: "alice", Now: t0}
+	c := newClient(t, fleetPipeline(), bundle("app-v1", "app", "v1", 10),
+		step("app-v1", "app", "prod-eu", "Verified", 11))
+	h, existed, err := lifecycle.HoldCurrent(ctx, c, req)
+	require.NoError(t, err)
+	assert.False(t, existed)
+	assert.Equal(t, "prod", h.Environment, "one entry for the fleet")
+	assert.Equal(t, "app-v1", h.Bundle)
+	var p v1alpha1.Pipeline
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(fleetPipeline()), &p))
+	assert.Equal(t, "app-v1", lifecycle.HoldOf(&p, "prod-us").Bundle, "every target is held, the one without a version too")
+	_, existed, err = lifecycle.HoldCurrent(ctx, c, req)
+	require.NoError(t, err)
+	assert.True(t, existed, "the same hold again changes nothing")
+
+	mixed := newClient(t, fleetPipeline(), bundle("app-v1", "app", "v1", 10), bundle("app-v2", "app", "v2", 20),
+		step("app-v1", "app", "prod-eu", "Verified", 11), step("app-v1", "app", "prod-us", "Verified", 12),
+		step("app-v2", "app", "prod-us", "Verified", 21))
+	_, _, err = lifecycle.HoldCurrent(ctx, mixed, req)
+	assert.ErrorIs(t, err, lifecycle.ErrConflict)
+	assert.ErrorContains(t, err, "run different Bundles (prod-eu runs app-v1, prod-us runs app-v2)")
+	assert.ErrorContains(t, err, "kardinal pause app --env prod")
+
+	_, _, err = lifecycle.HoldCurrent(ctx, newClient(t, fleetPipeline()), req)
+	assert.ErrorIs(t, err, lifecycle.ErrConflict)
+	assert.ErrorContains(t, err, "nothing runs in prod")
+}

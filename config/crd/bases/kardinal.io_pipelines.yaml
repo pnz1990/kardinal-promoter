@@ -178,14 +178,22 @@ spec:
                           minimum: 0
                           type: integer
                         maxUnavailable:
+                          anyOf:
+                          - type: integer
+                          - type: string
                           description: |-
                             MaxUnavailable stops the rollout: once this many of the fleet's
                             targets have failed (Failed, AbortedByAlarm or RollingBack), no
-                            further target starts, and the targets in flight finish. Unset, a failure only keeps its place in
+                            further target starts, and the targets in flight finish. It is a
+                            count (2) or a percentage of the fleet's targets ("10%"), rounded up
+                            and at least 1. Unset, a failure only keeps its place in
                             maxConcurrent. An environment after the fleet waits for every target
                             to be Verified either way.
-                          minimum: 1
-                          type: integer
+                          x-kubernetes-int-or-string: true
+                          x-kubernetes-validations:
+                          - message: 'fleet.maxUnavailable: a count of at least 1,
+                              or a percentage from 1% to 100%'
+                            rule: 'type(self) == int ? self >= 1 : self.matches(''^([1-9][0-9]?|100)%$'')'
                         selector:
                           description: |-
                             Selector picks the targets by labels: from targets (kind Target),
@@ -1553,6 +1561,20 @@ spec:
                 description: Paused suspends all promotions in this pipeline when
                   true.
                 type: boolean
+              pausedFleets:
+                description: |-
+                  PausedFleets pauses fleet environments (kardinal pause <pipeline>
+                  --env <fleet>): no further target of a listed fleet starts, for any
+                  Bundle, and the targets in flight finish, as when maxUnavailable is
+                  reached. Each entry names an environment with a fleet. Changing spec.pausedFleets needs
+                  update on the virtual subresource pipelines/pause, as spec.paused does.
+                items:
+                  maxLength: 63
+                  minLength: 1
+                  type: string
+                maxItems: 100
+                type: array
+                x-kubernetes-list-type: set
               policyNamespaces:
                 description: |-
                   PolicyNamespaces lists extra namespaces to read PolicyGates from. It only
@@ -1567,6 +1589,11 @@ spec:
             - environments
             - git
             type: object
+            x-kubernetes-validations:
+            - message: 'spec.pausedFleets: every entry must name an environment with
+                a fleet (resume a fleet before removing it or its fleet)'
+              rule: '!has(self.pausedFleets) || self.pausedFleets.all(f, self.environments.exists(e,
+                e.name == f && has(e.fleet)))'
           status:
             description: PipelineStatus defines the observed state of a Pipeline.
             properties:
