@@ -63,11 +63,7 @@ func runGetBundles(cmd *cobra.Command, args []string, activeOnly, allNamespaces 
 	return getBundlesFnNS(cmd.OutOrStdout(), client, ns, args, activeOnly, allNamespaces)
 }
 
-func getBundlesFn(out io.Writer, client sigs_client.Client, ns string, args []string, activeOnly bool) error {
-	return getBundlesFnNS(out, client, ns, args, activeOnly, false)
-}
-
-// getBundlesFnNS is getBundlesFn; ns "" with showNS lists every namespace.
+// getBundlesFnNS writes the Bundles of ns; ns "" with showNS lists every namespace.
 func getBundlesFnNS(out io.Writer, client sigs_client.Client, ns string, args []string, activeOnly, showNS bool) error {
 	// One Pipeline's Bundles: filtered on the server (the CRD's selectable
 	// field, Kubernetes 1.31+), or on 1.30 the namespace list filtered here.

@@ -5,6 +5,7 @@ package promotionstep
 
 import (
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -99,4 +100,24 @@ func TestBasePushBranch(t *testing.T) {
 	assert.False(t, ok, "a pr-review promotion pushes its own branch")
 	_, ok = basePushBranch([]string{"health-check"}, 0, "u", "main")
 	assert.False(t, ok)
+}
+
+// waiting returns the keys of the steps waiting for branch key, oldest
+// first. For tests.
+func (q *branchQueue) waiting(key string) []string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	b := q.branches[key]
+	if b == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(b.waiters))
+	for k := range b.waiters {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		wi, wj := b.waiters[keys[i]], b.waiters[keys[j]]
+		return wi.first.Before(wj.first) || (wi.first.Equal(wj.first) && keys[i] < keys[j])
+	})
+	return keys
 }

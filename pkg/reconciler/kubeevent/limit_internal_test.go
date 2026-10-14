@@ -43,3 +43,5 @@ func TestLimited_Bounded(t *testing.T) {
 	assert.False(t, okB, "b was the least recently used")
 	assert.Equal(t, 2, c.len())
 }
+
+func (c *lru[V]) len() int { return c.order.Len() }

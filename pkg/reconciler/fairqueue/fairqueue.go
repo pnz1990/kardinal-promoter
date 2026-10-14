@@ -141,10 +141,6 @@ var _ priorityqueue.PriorityQueue[reconcile.Request] = (*Queue)(nil)
 // Option configures a Queue.
 type Option func(*Queue)
 
-// Aging sets how long a key may be due before it is raised back to its
-// base priority (DefaultAging). Zero turns aging off.
-func Aging(d time.Duration) Option { return func(q *Queue) { q.aging = d } }
-
 // RateLimiter is the limiter the queue asks for an AddRateLimited's delay,
 // so the key counts only once its backoff is over. It must be the inner
 // queue's limiter (Forget and NumRequeues go there).
@@ -165,12 +161,6 @@ func NewFor(mgr manager.Manager) func(string, workqueue.TypedRateLimiter[reconci
 		}
 		return newQueue(name, rl, log.WithValues("controller", name))
 	}
-}
-
-// New wraps a controller-runtime priority queue named name with
-// rateLimiter. It has the signature of controller.Options.NewQueue.
-func New(name string, rateLimiter workqueue.TypedRateLimiter[reconcile.Request]) workqueue.TypedRateLimitingInterface[reconcile.Request] {
-	return newQueue(name, rateLimiter, logr.Discard())
 }
 
 func newQueue(name string, rateLimiter workqueue.TypedRateLimiter[reconcile.Request], log logr.Logger) *Queue {

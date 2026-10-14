@@ -828,12 +828,6 @@ func StringFuncs() FuncMap {
 	}
 }
 
-// Const returns a Func with no arguments that returns s, sized len(s): for
-// text computed before the render, such as a section of a default body.
-func Const(s string) Func {
-	return Func{Fn: func() string { return s }, Size: func([]interface{}) (int, error) { return len(s), nil }}
-}
-
 // Lazy returns a Func with no arguments whose result f computes on first
 // use, once (later calls and its Size reuse it): for text that is costly to
 // build and that a template may not use, such as a section of a default

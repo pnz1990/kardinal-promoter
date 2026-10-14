@@ -689,7 +689,7 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/uiDeployed"
             },
-            "description": "Deployed is, per environment, the Bundle whose change the environment runs: the newest PromotionStep there that landed its change (lifecycle.DeployedBundle, as kardinal status reports). Environments that never received one are absent.",
+            "description": "Deployed is, per environment, the Bundle whose change the environment runs: the newest PromotionStep there that landed its change (lifecycle.DeployedIn, as kardinal status reports). Environments that never received one are absent.",
             "type": [
               "object",
               "null"

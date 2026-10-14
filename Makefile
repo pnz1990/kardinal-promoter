@@ -9,6 +9,8 @@ GOVULNCHECK            ?= $(LOCALBIN)/govulncheck
 GOVULNCHECK_VERSION    ?= v1.8.0
 STATICCHECK            ?= $(LOCALBIN)/staticcheck
 STATICCHECK_VERSION    ?= v0.8.1
+DEADCODE               ?= $(LOCALBIN)/deadcode
+DEADCODE_VERSION       ?= v0.52.0
 LOCALBIN               ?= $(shell pwd)/bin
 
 # Build
@@ -23,7 +25,7 @@ IMG_TAG  ?= dev
 IMG      ?= $(IMG_REPO):$(IMG_TAG)
 
 .PHONY: all build build-controller build-cli ui ui-test ui-test-e2e test test-integration test-cover \
-        lint lint-local vet vuln generate manifests api-docs \
+        lint lint-local vet vuln hygiene hygiene-go hygiene-web generate manifests api-docs \
         install uninstall docker-build helm-lint validate-manifests \
         install-kro e2e-tools e2e-up e2e-down test-e2e-live e2e-all \
         tools help
@@ -79,6 +81,14 @@ lint: $(GOLANGCI_LINT)
 
 vuln: $(GOVULNCHECK)
 	$(GOVULNCHECK) ./...
+
+hygiene: hygiene-go hygiene-web ## Fail on dead code and dead files (Go, docs, scripts, web); exceptions in hack/hygiene/allow.txt
+
+hygiene-go: $(DEADCODE) ## Go functions no main or test reaches (deadcode), orphan docs pages and assets, scripts nothing calls
+	$(GO) run ./hack/hygiene -deadcode $(DEADCODE)
+
+hygiene-web: ## Unused files, exports and dependencies in web/ (knip; needs npm ci in web/)
+	cd web && npm run knip
 
 ## Generate (CRD manifests + DeepCopy)
 ## IMPORTANT: Run 'make manifests generate' after any change to api/v1alpha1/ types,
@@ -184,7 +194,10 @@ $(GOVULNCHECK): $(LOCALBIN)
 $(STATICCHECK): $(LOCALBIN)
 	GOBIN=$(LOCALBIN) $(GO) install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
 
-tools: $(CONTROLLER_GEN) $(GOLANGCI_LINT) $(GOVULNCHECK) $(STATICCHECK)
+$(DEADCODE): $(LOCALBIN)
+	GOBIN=$(LOCALBIN) $(GO) install golang.org/x/tools/cmd/deadcode@$(DEADCODE_VERSION)
+
+tools: $(CONTROLLER_GEN) $(GOLANGCI_LINT) $(GOVULNCHECK) $(STATICCHECK) $(DEADCODE)
 
 ## Help
 help:

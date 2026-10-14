@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -176,26 +175,6 @@ func (q *branchQueue) release(key, step string, at time.Time) {
 	if head != "" && wake != nil {
 		wake(head)
 	}
-}
-
-// waiting returns the keys of the steps waiting for branch key, oldest
-// first. For tests.
-func (q *branchQueue) waiting(key string) []string {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	b := q.branches[key]
-	if b == nil {
-		return nil
-	}
-	keys := make([]string, 0, len(b.waiters))
-	for k := range b.waiters {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		wi, wj := b.waiters[keys[i]], b.waiters[keys[j]]
-		return wi.first.Before(wj.first) || (wi.first.Equal(wj.first) && keys[i] < keys[j])
-	})
-	return keys
 }
 
 // basePushBranch returns the branch queue key of a sequence that pushes to

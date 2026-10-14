@@ -140,11 +140,6 @@ type controllerHealth struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-// statusSummaryFn is statusSummaryIn across every namespace.
-func statusSummaryFn(out io.Writer, c sigs_client.Reader, controllerNS string) error {
-	return statusSummaryIn(out, c, controllerNS, "", "default")
-}
-
 // statusSummaryIn writes kardinal status without a pipeline for namespace
 // scope ("" for every namespace): a line on the controller (version and
 // readiness), a line of counts, then one line per pipeline with its summary

@@ -12,8 +12,6 @@ package renderjob
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -245,10 +243,4 @@ func readGitAuth(dir string) scm.GitAuth {
 	}
 	return scm.GitAuth{Token: strings.TrimSpace(string(read("token"))),
 		SSHPrivateKey: read("sshPrivateKey"), SSHKnownHosts: read("knownHosts")}
-}
-
-// Digest is the sha256 of b, hex.
-func Digest(b []byte) string {
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
 }

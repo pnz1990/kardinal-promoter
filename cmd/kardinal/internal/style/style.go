@@ -113,18 +113,9 @@ func (s Styler) ForceColor() Styler {
 	return s
 }
 
-// Color reports whether s writes ANSI colour.
-func (s Styler) Color() bool { return s.color }
-
-// Unicode reports whether s writes Unicode glyphs and rules.
-func (s Styler) Unicode() bool { return s.unicode }
-
 // ASCIIOnly reports whether the stream takes ASCII only (no UTF-8 locale,
 // or TERM=dumb): its text, the cluster's too, is folded (Fold).
 func (s Styler) ASCIIOnly() bool { return !s.utf8 }
-
-// Terminal reports whether s writes for a person at a terminal (glyphs).
-func (s Styler) Terminal() bool { return s.glyphs }
 
 // IsTerminal reports whether w is a terminal (also through a Folder).
 func IsTerminal(w io.Writer) bool {
