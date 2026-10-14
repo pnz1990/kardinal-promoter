@@ -80,7 +80,7 @@ func testState(bundles []v1alpha1.Bundle, steps []v1alpha1.PromotionStep) *state
 
 func TestCheckTerminalAndPhases(t *testing.T) {
 	st := testState(
-		[]v1alpha1.Bundle{bundle("a", "Verified"), bundle("b", "Promoting"), bundle("c", "Superseded")},
+		[]v1alpha1.Bundle{bundle("a", "Verified"), bundle("b", "Promoting"), bundle("c", "Superseded"), bundle("r", "Rejected")},
 		[]v1alpha1.PromotionStep{
 			step("a", "test", "Verified", ""), step("a", "prod", "Failed", "x"),
 			step("b", "test", "Promoting", "cloning"),
@@ -90,6 +90,7 @@ func TestCheckTerminalAndPhases(t *testing.T) {
 	require.Len(t, term.Violations, 1)
 	assert.Contains(t, term.Violations[0], `Bundle b`)
 	assert.Contains(t, term.Violations[0], "test=Promoting (cloning)")
+	// A Rejected Bundle is terminal: nothing promotes it again.
 	ph := checkPhases(st)
 	assert.Len(t, ph.Violations, 2, "a Verified Bundle with a Failed step, a Superseded one with a running step")
 }

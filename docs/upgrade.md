@@ -1,6 +1,7 @@
 # Upgrade
 
-**Upgrading from v0.10.0:** follow [Upgrading from v0.10.0](#upgrading-from-v0100). **From v0.9.0:**
+**Upgrading from v0.11.0** to the next release: follow [Upgrading from v0.11.0](#upgrading-from-v0110).
+**From v0.10.0:** follow [Upgrading from v0.10.0](#upgrading-from-v0100). **From v0.9.0:**
 follow [Upgrading from v0.9.0](#upgrading-from-v090).
 
 **Requires Kubernetes 1.35 or later.** Check the cluster before you upgrade, and upgrade
@@ -49,6 +50,51 @@ than 100 environments, or the `kardinal.io/graph-shape: compact` annotation; see
 Bundle in flight (on any change to the Pipeline's spec, or a deleted Graph) it builds the node
 shape, and kro then deletes every PromotionStep the compact Graph created: the Bundle promotes
 again from its first environment. Before you downgrade, let the Bundles of those Pipelines finish, or delete them.
+
+## Upgrading from v0.11.0
+
+!!! note "v0.12.0 is not released yet"
+    These steps take a v0.11.0 installation to v0.12.0 once it is released. Until then v0.11.0 is
+    the latest release, and there is nothing to upgrade to.
+
+The upgrade suite runs these steps as written (`TestUpgradeV0110_Estate`, on the oldest and newest
+supported Kubernetes minors), on an estate of 30 Pipelines in 5 namespaces. Everything stored
+under v0.11.0 keeps working:
+
+- Versions in flight keep their Graphs, PromotionSteps, PRStatuses and gate instances, and
+  finish. An open promotion PR stays the same PR.
+- Approvals recorded before the upgrade still count toward their gate's quorum.
+- Paused Pipelines stay paused and held environments stay held, until you resume or release them.
+
+The next release targets the same kro as v0.11.0, so kro is not upgraded.
+
+**1. Read the upgrade notes.** The changelog's [Unreleased](changelog.md#unreleased) section
+lists every change since v0.11.0.
+
+**2. Apply the new CRDs.** Helm never upgrades CRDs, and Helm owns the fields of the CRDs the
+v0.11.0 chart installed, so `--force-conflicts` is required:
+
+```bash
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 | kubectl apply --server-side --force-conflicts -f -
+```
+
+**3. Upgrade the chart.** `--reset-then-reuse-values` keeps the values you set and takes every
+new default from the new chart.
+
+```bash
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
+  --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
+```
+
+**4. Check the result.**
+
+```bash
+kardinal doctor
+kubectl get pipelines -A
+kubectl get bundles -A
+```
+
+`kardinal doctor` passes every check, and every Pipeline is Ready.
 
 ## Upgrading from v0.10.0
 

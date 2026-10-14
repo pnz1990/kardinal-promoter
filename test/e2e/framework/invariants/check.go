@@ -231,7 +231,7 @@ func retiredSteps(bundles []v1alpha1.Bundle, live []v1alpha1.PromotionStep) []v1
 }
 
 func terminal(phase string) bool {
-	return phase == "Verified" || phase == "Failed" || phase == "Superseded"
+	return phase == "Verified" || phase == "Failed" || phase == "Superseded" || phase == "Rejected"
 }
 
 func terminalStep(state string) bool {
@@ -706,10 +706,24 @@ func checkAudit(ctx context.Context, e *framework.Env, o Options, st *state) Res
 		return res
 	}
 	count := map[string]int{}
+	approvals := map[string]int{}
 	for _, a := range list.Items {
-		count[a.Spec.BundleName+"/"+a.Spec.Environment+"/"+a.Spec.Action]++
+		k := a.Spec.BundleName + "/" + a.Spec.Environment + "/" + a.Spec.Action
+		count[k]++
+		if strings.HasPrefix(a.Spec.Action, "Approval") {
+			// One per approver decision: the message names the approver.
+			approvals[k+" "+a.Spec.Message]++
+		}
+	}
+	for k, n := range approvals {
+		if n > 1 {
+			res.Violations = append(res.Violations, fmt.Sprintf("%d AuditEvents %s", n, k))
+		}
 	}
 	for k, n := range count {
+		if strings.Contains(k, "/Approval") {
+			continue // counted per approver above
+		}
 		// A gate instance records a GateEvaluated event each time its
 		// result changes; a step records each Promotion and Rollback action once.
 		if n > 1 && !strings.HasSuffix(k, "/GateEvaluated") {
@@ -729,8 +743,9 @@ func checkAudit(ctx context.Context, e *framework.Env, o Options, st *state) Res
 			if strings.Contains(s.Status.Message, "superseded before this step started") && count[k+"PromotionStarted"] == 0 {
 				continue
 			}
-			if count[k+"PromotionFailed"] == 0 && count[k+"RollbackStarted"] == 0 && count[k+"PromotionSuperseded"] == 0 {
-				res.Violations = append(res.Violations, fmt.Sprintf("step %s Failed with no PromotionFailed or PromotionSuperseded AuditEvent", s.Name))
+			// A step its Bundle's rejection cancelled records PromotionRejected.
+			if count[k+"PromotionFailed"] == 0 && count[k+"RollbackStarted"] == 0 && count[k+"PromotionSuperseded"] == 0 && count[k+"PromotionRejected"] == 0 {
+				res.Violations = append(res.Violations, fmt.Sprintf("step %s Failed with no PromotionFailed, PromotionSuperseded or PromotionRejected AuditEvent", s.Name))
 			}
 		default:
 			if count[k+"PromotionSucceeded"] > 0 {
