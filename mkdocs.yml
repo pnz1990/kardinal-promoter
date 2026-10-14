@@ -239,6 +239,7 @@ nav:
       - Actor-aware policy: design/18-actor-policy.md
       - Verdicts: design/19-verdicts.md
       - Change requests and approval fields: design/23-change-requests.md
+      - Attestations: design/20-attestations.md
 
 extra:
   social:
