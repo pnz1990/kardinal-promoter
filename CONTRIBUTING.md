@@ -32,6 +32,20 @@ and an unused file, export or dependency in `web/` (knip, after `npm ci` in `web
 tests call belongs in an `export_test.go` of its package. Intentional exceptions go in
 `hack/hygiene/allow.txt` with a reason.
 
+Fuzz targets check the properties of the Graph builder (`FuzzBuild`, every
+Graph passes kro's compiler rules), the PolicyGate CEL context
+(`FuzzCELContext`) and the YAML editors (`FuzzYAMLUpdate`,
+`FuzzKustomizeSetImage`). `go test` runs their seed corpora (`testdata/fuzz/`)
+and a deterministic twin of each (`TestBuild_Property` and so on); CI's `fuzz`
+job explores for 20s each. To fuzz one for longer:
+
+```bash
+go test ./pkg/graph -run '^$' -fuzz '^FuzzBuild$' -fuzztime 5m
+```
+
+A failing input is written to the package's `testdata/fuzz/<target>/`: commit
+it with the fix.
+
 The embedded UI in `web/` uses npm and `web/package-lock.json` only. The controller
 embeds the committed `web/dist`, so after changing `web/` run `make ui` and commit
 `web/dist`; CI fails when it differs from a fresh build.

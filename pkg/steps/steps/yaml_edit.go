@@ -120,6 +120,7 @@ func (d *yamlDoc) root() *yaml.Node { return d.doc.Content[0] }
 // encode serialises the document with two-space indentation, keeping the
 // sequence indentation style of the original file.
 func (d *yamlDoc) encode() ([]byte, error) {
+	keepFlowNulls(&d.doc, false)
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
@@ -133,6 +134,21 @@ func (d *yamlDoc) encode() ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// keepFlowNulls spells out the empty nulls inside flow collections. The
+// parser reads the value of "{a}" or "{a: }" as a null with no text, and the
+// encoder writes such a null in flow style as ”, an empty string: every
+// edit of the file turned those nulls into strings (#1842). In block style
+// the encoder writes "a:" back, so only flow collections need it.
+func keepFlowNulls(n *yaml.Node, inFlow bool) {
+	inFlow = inFlow || n.Style&yaml.FlowStyle != 0
+	for _, c := range n.Content {
+		if inFlow && c.Kind == yaml.ScalarNode && c.Tag == "!!null" && c.Value == "" {
+			c.Value = "null"
+		}
+		keepFlowNulls(c, inFlow)
+	}
 }
 
 // mapValue returns the value node of key in mapping m, or nil.

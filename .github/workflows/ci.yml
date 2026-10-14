@@ -295,6 +295,42 @@ jobs:
       - name: Run integration tests
         run: go test ./test/integration/... -tags integration -race -count=1 -timeout 120s
 
+  # ── Fuzz targets: a short run of each on every PR (#1837) ───────────────────
+  # The seed corpora (testdata/fuzz/) also run in "go test" above; this job
+  # explores past them for 20s per target. A failure prints the input and
+  # writes it under testdata/fuzz/<target>/: commit it with the fix.
+  fuzz:
+    name: fuzz
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Restore the Go build cache
+        # Saved by the go-cache job on main; see there.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-build-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-build-${{ runner.os }}-
+      - name: Fuzz
+        run: |
+          set -eo pipefail
+          for target in ./pkg/graph:FuzzBuild ./pkg/reconciler/policygate:FuzzCELContext \
+              ./pkg/steps/steps:FuzzYAMLUpdate ./pkg/steps/steps:FuzzKustomizeSetImage; do
+            pkg=${target%%:*} name=${target##*:}
+            echo "::group::$name"
+            go test "$pkg" -run '^$' -fuzz "^${name}\$" -fuzztime 20s
+            echo "::endgroup::"
+          done
+
   # ── golangci-lint ────────────────────────────────────────────────────────────
   golangci-lint:
     name: golangci-lint

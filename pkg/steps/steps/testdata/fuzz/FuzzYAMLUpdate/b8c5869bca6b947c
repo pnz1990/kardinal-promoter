@@ -1,0 +1,4 @@
+go test fuzz v1
+string("")
+string("\x92\xf6")
+string("0")
