@@ -320,6 +320,94 @@ spec:
 ---
 {{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "approvals") }}
 ---
+{{- /*
+verdicts (docs/design/19-verdicts.md, section 4): a Verdict names its writer
+(spec.by), as an Approval names its approver, and a run-bound Verdict
+(spec.run) must come from that AgentRun's own Pod. The spec is immutable
+(CRD rule), so only CREATE checks the identity fields.
+*/}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-verdicts
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["verdicts"]
+  variables:
+    - name: cleanup
+      expression: >-
+        request.userInfo.username in {{ $cleanup | toJson }}
+    - name: owners
+      expression: >-
+        object != null && has(object.metadata.ownerReferences) ? object.metadata.ownerReferences : []
+    # A bound ServiceAccount token (every Pod's projected token) names its
+    # Pod; a Job's Pods are named <job>-<random>, and an AgentRun's Job is
+    # named after the AgentRun.
+    - name: podNames
+      expression: >-
+        has(request.userInfo.extra) && 'authentication.kubernetes.io/pod-name' in request.userInfo.extra ?
+        request.userInfo.extra['authentication.kubernetes.io/pod-name'] : []
+  validations:
+    - expression: >-
+        request.operation != 'CREATE' || object.spec.by == request.userInfo.username
+      messageExpression: >-
+        'spec.by must be your own username "' + request.userInfo.username +
+        '"; kardinal verify sets it for you'
+      reason: Forbidden
+    - expression: >-
+        request.operation != 'CREATE' || !has(object.spec.groups) ||
+        object.spec.groups.all(g, g in request.userInfo.groups)
+      messageExpression: >-
+        'spec.groups may only list your own groups (' + request.userInfo.groups.join(', ') + ')'
+      reason: Forbidden
+    # The promotion Graph selects Verdicts by the kardinal.io/bundle label
+    # and filters on the spec: the labels must say the same.
+    - expression: >-
+        request.operation == 'DELETE' || (
+        has(object.metadata.labels) &&
+        'kardinal.io/bundle' in object.metadata.labels && object.metadata.labels['kardinal.io/bundle'] == object.spec.bundle &&
+        'kardinal.io/environment' in object.metadata.labels && object.metadata.labels['kardinal.io/environment'] == object.spec.environment &&
+        'kardinal.io/check' in object.metadata.labels && object.metadata.labels['kardinal.io/check'] == object.spec.check)
+      message: >-
+        the kardinal.io/bundle, kardinal.io/environment and kardinal.io/check labels must equal
+        spec.bundle, spec.environment and spec.check
+      reason: Invalid
+    - expression: >-
+        request.operation != 'CREATE' ||
+        variables.owners.all(r, r.kind == 'Bundle' && r.apiVersion.startsWith('kardinal.io/') &&
+          r.uid == object.spec.bundleUID && r.name == object.spec.bundle)
+      message: a Verdict may be owned only by the Bundle it is about (spec.bundle and spec.bundleUID)
+      reason: Forbidden
+    - expression: >-
+        request.operation != 'UPDATE' || variables.cleanup ||
+        variables.owners == (has(oldObject.metadata.ownerReferences) ? oldObject.metadata.ownerReferences : [])
+      message: the ownerReferences of a Verdict cannot change
+      reason: Forbidden
+    # A run-bound Verdict is one vote per run: it must come from the run's
+    # Pod, and is named after the run, so the run writes one.
+    - expression: >-
+        request.operation != 'CREATE' || !has(object.spec.run) || (
+        object.metadata.name == object.spec.run.name &&
+        variables.podNames.exists(p, p.startsWith(object.spec.run.name + '-')))
+      messageExpression: >-
+        'spec.run names AgentRun ' + object.spec.run.name + ': only the Pod of that run may write it, ' +
+        'and the Verdict must be named after the run'
+      reason: Forbidden
+    - expression: >-
+        request.operation != 'DELETE' || variables.cleanup || oldObject.spec.by == request.userInfo.username
+      messageExpression: >-
+        'only ' + oldObject.spec.by + ' can revoke this Verdict (kardinal verify --revoke)'
+      reason: Forbidden
+---
+{{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "verdicts") }}
+---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -371,7 +459,7 @@ spec:
 ---
 {{- /* The kinds a promotion Graph (or the controller) makes and nobody else
 does: every object of them decides a promotion. */}}
-{{- $graphKinds := list "promotionsteps" "prstatuses" "hookruns" "renderruns" "imageverifications" }}
+{{- $graphKinds := list "promotionsteps" "prstatuses" "hookruns" "renderruns" "imageverifications" "agentruns" }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -399,10 +487,12 @@ spec:
       # again, but deleting the step too (allowed: it is the documented
       # retry) would drop that record, and the Graph's new HookRun would run
       # the hook a second time.
+      # An AgentRun the same way: the Graph recreates a deleted one, and
+      # only a Verdict it wrote keeps the recreated run from running again.
       - apiGroups: ["kardinal.io"]
         apiVersions: ["*"]
         operations: ["DELETE"]
-        resources: ["hookruns"]
+        resources: ["hookruns", "agentruns"]
       # Per-promotion MetricCheck instances (label kardinal.io/bundle); a
       # MetricCheck people write (no such label) is not checked.
       - apiGroups: ["kardinal.io"]
@@ -479,12 +569,12 @@ spec:
         status included: it decides a promotion. Delete it and the promotion Graph recreates it;
         the kardinal.io/force-recheck annotation is the one change open to you
       reason: Forbidden
-    # DELETE is matched for HookRuns only (resourceRules above).
+    # DELETE is matched for HookRuns and AgentRuns only (resourceRules above).
     - expression: >-
         request.operation != 'DELETE' || variables.graph || variables.controller || variables.cleanup
       message: >-
-        HookRuns record that a hook ran; only kardinal deletes them (with the garbage collector and
-        the namespace controller). Promote a new Bundle to run the hook again
+        HookRuns and AgentRuns record that a hook or an agent ran; only kardinal deletes them (with
+        the garbage collector and the namespace controller). Promote a new Bundle to run it again
       reason: Forbidden
     # As for gate instances: kro adopts an existing object of the name it
     # applies, so no one may turn an existing MetricCheck into a

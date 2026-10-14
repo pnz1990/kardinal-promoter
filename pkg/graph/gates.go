@@ -56,11 +56,19 @@ type gateCollections struct {
 	// collection is the collection node of each instance name.
 	collection map[string]string
 	what       map[string]string
+	// items is the item of each instance name, and position its index in
+	// instances.
+	items    map[string]map[string]interface{}
+	position map[string]int
+	// approvals and verdicts are whether the Graph has the Approvals and
+	// Verdicts selector refs that the live collection reads.
+	approvals, verdicts bool
 }
 
 func newGateCollections(pipeline, bundle string) *gateCollections {
 	return &gateCollections{pipeline: pipeline, bundle: bundle,
-		index: map[string]int{}, collection: map[string]string{}, what: map[string]string{}}
+		index: map[string]int{}, collection: map[string]string{}, what: map[string]string{},
+		items: map[string]map[string]interface{}{}, position: map[string]int{}}
 }
 
 // add records the instance of gate for envName, named k8sName. skipped is
@@ -82,22 +90,40 @@ func (c *gateCollections) add(gate kardinalv1alpha1.PolicyGate, envName, k8sName
 		c.templates = append(c.templates, tmpl)
 	}
 	item := map[string]interface{}{"name": k8sName, "environment": envName, "t": t}
+	if c.verdicts && (needsApprovals(gate) || needsVerdicts(gate)) {
+		// Verify gates share the live collection with approval gates: only
+		// the items that read approvals copy them.
+		item["readsApprovals"] = needsApprovals(gate)
+	}
 	var collection string
 	switch {
 	case len(skipped) > 0 && needsApprovals(gate):
 		return "", fmt.Errorf("build: %s is a skip-permission gate with spec.approval or approvals.*; "+
 			"approvals are not supported on skip-permission gates, so it would never pass: remove them", what)
+	case len(skipped) > 0 && needsVerdicts(gate):
+		return "", fmt.Errorf("build: %s is a skip-permission gate with spec.verify; "+
+			"verify is not supported on skip-permission gates, so it would never pass: remove it", what)
 	case len(skipped) > 0:
 		item["skipped"] = strings.Join(skipped, ",")
 		collection = appendChunked(&c.skipGates, item, NodeSkipPermissionGates)
-	case needsApprovals(gate):
+	case needsApprovals(gate) || needsVerdicts(gate):
 		collection = appendChunked(&c.approvalGates, item, NodeApprovalGates)
 	default:
 		collection = appendChunked(&c.gates, item, NodePolicyGates)
 	}
 	c.collection[k8sName] = collection
+	c.items[k8sName] = item
+	c.position[k8sName] = len(c.instances)
 	c.instances = append(c.instances, c.instance(tmpl, item, len(skipped) > 0))
 	return k8sName, nil
+}
+
+// setVerify gives instance name its verify policy (verifyPolicyData): per
+// item, because the verified environment depends on the instance's
+// environment.
+func (c *gateCollections) setVerify(name string, data map[string]interface{}) {
+	c.items[name]["verify"] = data
+	c.instances[c.position[name]].Spec.Verify = verifyPolicyFromData(data)
 }
 
 // gateTemplateData is what every instance of gate copies: its spec and the
@@ -338,7 +364,9 @@ func approvalPolicyFromData(p map[string]interface{}) *kardinalv1alpha1.GateAppr
 	return out
 }
 
-// approvalCollectionNode is the collection of approval gate instances. It
+// approvalCollectionNode is the collection of approval and verify gate
+// instances (the live gates: what they count is read from the Bundle's
+// Approval and Verdict objects, not template data). It
 // renders the spec field by field, unlike collectionNode, because spec.approvals
 // is not template data: it is the live list of the Bundle's Approvals for the
 // item's environment, read from the ApprovalsNodeID selector ref. Every field
@@ -355,11 +383,21 @@ func (c *gateCollections) approvalCollectionNode(id, field string) GraphNode {
 		"message":         tmpl("message"),
 		"recheckInterval": tmpl("recheckInterval"),
 		"generated":       true,
-		"approvals":       approvalsOfItem(),
+	}
+	if c.approvals {
+		spec["approvals"] = approvalsOfItem()
+		if c.verdicts {
+			spec["approvals"] = "${" + iterGate + ".readsApprovals ? (" + strings.TrimSuffix(strings.TrimPrefix(approvalsOfItem(), "${"), "}") + ") : []}"
+		}
 	}
 	// A gate that only reads approvals.* in its expression has no policy: a
-	// missing optional renders as null, which leaves the field unset.
+	// missing optional renders as null, which leaves the field unset. The
+	// same holds for verify, which is the item's (setVerify).
 	spec["approval"] = fmt.Sprintf("${%s.templates[%s.t].spec.?approval}", NodePolicyGateData, iterGate)
+	if c.verdicts {
+		spec["verify"] = "${" + iterGate + ".?verify}"
+		spec["verdicts"] = verdictsOfItem(c.pipeline)
+	}
 	n.Template["spec"] = spec
 	return n
 }

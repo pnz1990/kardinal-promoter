@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0
 Actor admission policies (docs/actors.md, docs/design/17-actors.md section 5).
 
 <release>-actor checks the kardinal.io/actor stamp (spec.actor) on new
-Bundles and Approvals and on new gate override entries against the AgentIndex
+Bundles, Approvals and Verdicts and on new gate override entries against the AgentIndex
 the controller builds from the AgentIdentities: the stamp must say what the
 requester is (human, agent, bot), and an agent must stamp, stay in its scope
 and not be suspended. It is a transliteration of pkg/actor Derive and Scope.
@@ -30,7 +30,7 @@ spec:
       - apiGroups: ["kardinal.io"]
         apiVersions: ["*"]
         operations: ["CREATE"]
-        resources: ["bundles", "approvals"]
+        resources: ["bundles", "approvals", "verdicts"]
       - apiGroups: ["kardinal.io"]
         apiVersions: ["*"]
         operations: ["CREATE", "UPDATE"]
@@ -74,11 +74,11 @@ spec:
     # Where the write lands, for the agent's scope.
     - name: pipeline
       expression: >-
-        request.resource.resource == 'bundles' ? object.spec.pipeline :
+        request.resource.resource in ['bundles', 'verdicts'] ? object.spec.pipeline :
         variables.gate && 'kardinal.io/pipeline' in variables.labels ? variables.labels['kardinal.io/pipeline'] : ''
     - name: environment
       expression: >-
-        request.resource.resource == 'approvals' ? object.spec.environment :
+        request.resource.resource in ['approvals', 'verdicts'] ? object.spec.environment :
         variables.gate && 'kardinal.io/environment' in variables.labels ? variables.labels['kardinal.io/environment'] : ''
     - name: check
       expression: "!variables.controller && size(variables.stamps) > 0"

@@ -393,7 +393,7 @@ type apiAccess struct {
 var kardinalNamespacedKinds = []string{
 	"pipelines", "bundles", "policygates", "rollbackpolicies", "subscriptions",
 	"promotionsteps", "prstatuses", "metricchecks",
-	"scheduleclocks", "notificationhooks", "hookruns", "imageverifications",
+	"scheduleclocks", "notificationhooks", "hookruns", "imageverifications", "agentruns",
 }
 
 var rwVerbs = []string{"get", "list", "watch", "create", "update", "patch", "delete"}
@@ -429,7 +429,13 @@ func controllerAccess() []apiAccess {
 		{"source.toolkit.fluxcd.io", "gitrepositories", []string{"patch"}, inWatched, "", "health refresh.go RequestRefresh (reconcile.fluxcd.io/requestedAt)"},
 		{"flagger.app", "canaries", readVerbs, inWatched, "", "health adapter flagger"},
 		{"multicluster.x-k8s.io", "clusterprofiles", []string{"get", "list"}, inWatched, "", "pipeline fleets.go: fleet selector kind ClusterProfile (uncached List)"},
-		{"batch", "jobs", []string{"get", "list", "watch", "create", "delete"}, inWatched, "", "hookrun reconciler.go: hook Jobs (Owns, create, delete on timeout)"},
+		{"batch", "jobs", []string{"get", "list", "watch", "create", "delete"}, inWatched, "", "hookrun reconciler.go: hook Jobs (Owns, create, delete on timeout); agentrun reconciler.go: agent Jobs"},
+		{"kardinal.io", "verdicts", readVerbs, inWatched, "", "UI API verdict list (ui_api.go)"},
+		{"networking.k8s.io", "networkpolicies", []string{"get", "create"}, inWatched, "", "agentrun reconciler.go networkPolicy (create, adopt check)"},
+		{"discovery.k8s.io", "endpointslices", []string{"get"}, inCluster, "kubernetes", "agentrun reconciler.go apiServerEgress (uncached Get of default/kubernetes)"},
+		{"authorization.k8s.io", "subjectaccessreviews", []string{"create"}, inCluster, "", "agentrun access.go: an AgentRun's agent is read-only; pkg/uiauth SubjectAccessReview"},
+		{"kardinal.io", "steptemplates", readVerbs, inCluster, "", "agentrun and steptemplate reconcilers"},
+		{"kardinal.io", "steptemplates/status", []string{"get", "update", "patch"}, inCluster, "", "steptemplate reconciler Ready status"},
 		{"coordination.k8s.io", "leases", []string{"get", "list", "watch", "create", "update", "patch", "delete"}, inRelease, "", "leader election"},
 		{"", "configmaps", []string{"create"}, inRelease, "", "ensureVersionConfigMap"},
 		{"", "configmaps", []string{"get", "update", "patch"}, inRelease, "kardinal-version", "ensureVersionConfigMap"},
@@ -464,7 +470,6 @@ var optionalAccess = []struct {
 }{
 	{"ui.auth.tokenReview=true", []apiAccess{
 		{"authentication.k8s.io", "tokenreviews", []string{"create"}, inCluster, "", "pkg/uiauth TokenReview"},
-		{"authorization.k8s.io", "subjectaccessreviews", []string{"create"}, inCluster, "", "pkg/uiauth SubjectAccessReview"},
 	}, false},
 	{"controller.namespaceShard=b", []apiAccess{
 		{"", "namespaces", []string{"list", "watch"}, inCluster, "", "pkg/shard Gate.Pass (Namespace informer)"},

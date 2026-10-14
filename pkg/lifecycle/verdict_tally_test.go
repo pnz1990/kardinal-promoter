@@ -17,7 +17,7 @@ import (
 )
 
 var (
-	vt0      = time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
+	vt0     = time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
 	alice   = v1.Actor{Kind: v1.ActorHuman, Principal: "alice"}
 	bob     = v1.Actor{Kind: v1.ActorHuman, Principal: "bob"}
 	fixer   = v1.Actor{Kind: v1.ActorAgent, Principal: "system:serviceaccount:ci:fixer", Agent: "fixer", Sponsor: "alice"}

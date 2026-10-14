@@ -56,6 +56,7 @@ rules exist for. A new client call needs a row there and a rule here.
     - hookruns
     - renderruns
     - imageverifications
+    - agentruns
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 # ScmProviders: read (the translator, reconcilers and the webhook endpoint)
 # and their Ready condition written; the controller never creates them.
@@ -80,6 +81,7 @@ rules exist for. A new client call needs a row there and a rule here.
     - hookruns/status
     - renderruns/status
     - imageverifications/status
+    - agentruns/status
   verbs: ["get", "update", "patch"]
 # Pipeline hooks (docs/hooks.md) and rendered manifests
 # (docs/rendered-manifests.md): the HookRun and RenderRun reconcilers create
@@ -88,6 +90,16 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["batch"]
   resources: ["jobs"]
   verbs: ["get", "list", "watch", "create", "delete"]
+# Verify gates (docs/agentic/verify-with-agents.md): the UI API lists a
+# Bundle's Verdicts; the controller never writes one (a verifier does).
+- apiGroups: ["kardinal.io"]
+  resources: ["verdicts"]
+  verbs: ["get", "list", "watch"]
+# AgentRuns: each run's NetworkPolicy, owned by the run, created before its
+# Job (pkg/reconciler/agentrun).
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies"]
+  verbs: ["get", "create"]
 # Approvals: the UI records, replaces and revokes decisions for its
 # TokenReview user (POST /api/v1/ui/approvals). An Approval is immutable, so
 # there is no update; the approvals admission policy admits the controller's
@@ -225,6 +237,27 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["kardinal.io"]
   resources: ["agentindexes/status"]
   verbs: ["get", "update", "patch"]
+# StepTemplates (agent images AgentRuns run): read, and their Ready status
+# written (pkg/reconciler/steptemplate).
+- apiGroups: ["kardinal.io"]
+  resources: ["steptemplates"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["kardinal.io"]
+  resources: ["steptemplates/status"]
+  verbs: ["get", "update", "patch"]
+# An AgentRun's NetworkPolicy lets its Pod reach the API server: the
+# controller reads the addresses of the kubernetes Service, uncached, by name.
+- apiGroups: ["discovery.k8s.io"]
+  resources: ["endpointslices"]
+  resourceNames: ["kubernetes"]
+  verbs: ["get"]
+# An AgentRun's agent must be read-only: the controller checks its RBAC with
+# SubjectAccessReviews before each run. The UI API and the Bundle API
+# authorize TokenReview callers with them too (ui.auth.tokenReview,
+# bundleAPI.tokenReview).
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]
 # ClusterScmProviders, read like ScmProviders and their Ready condition
 # written.
 - apiGroups: ["kardinal.io"]
@@ -282,12 +315,9 @@ rules exist for. A new client call needs a row there and a rule here.
 {{- if or .Values.ui.auth.tokenReview .Values.bundleAPI.tokenReview }}
 # ui.auth.tokenReview, bundleAPI.tokenReview: the UI API and the Bundle API
 # validate each bearer token with a TokenReview and authorize it with a
-# SubjectAccessReview.
+# SubjectAccessReview (the SubjectAccessReview rule above).
 - apiGroups: ["authentication.k8s.io"]
   resources: ["tokenreviews"]
-  verbs: ["create"]
-- apiGroups: ["authorization.k8s.io"]
-  resources: ["subjectaccessreviews"]
   verbs: ["create"]
 {{- end }}
 {{- end }}

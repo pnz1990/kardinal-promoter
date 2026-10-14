@@ -59,6 +59,7 @@ import (
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	changewindowrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/graphcleanup"
+	agentrunrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentrun"
 	hookrunrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/hookrun"
 	ivrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/imageverification"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
@@ -72,6 +73,7 @@ import (
 	rbprecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/rollbackpolicy"
 	scheduleclockrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/scheduleclock"
 	scmproviderrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/scmprovider"
+	steptemplaterecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/steptemplate"
 	subscriptionrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
@@ -471,6 +473,10 @@ func main() {
 			"signature (forgejo-instance), refused unless commits.allowedSigners lists forgejo-instance. Without "+
 			"it, a verified signer that is not a user of the instance is the instance key.")
 
+	var stepTemplateRequireDigest bool
+	flag.BoolVar(&stepTemplateRequireDigest, "step-template-require-digest", false,
+		"Refuse StepTemplates whose image has no digest (image@sha256:...): their AgentRuns fail before their "+
+			"Job is created (docs/agentic/verify-with-agents.md).")
 	var hookServiceAccounts string
 	flag.StringVar(&hookServiceAccounts, "hook-service-accounts", hookrunrecon.DefaultServiceAccount,
 		"Comma-separated ServiceAccount names a Pipeline hook's Job Pod may run as (in the Pipeline "+
@@ -934,6 +940,24 @@ func main() {
 		PodSecurityLevel:       hookPodSecurityLevel,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up HookRunReconciler")
+	}
+
+	// Verify gates' in-cluster verifiers (docs/design/19-verdicts.md):
+	// AgentRuns run StepTemplates' agent images, bounded.
+	if err := (&agentrunrecon.Reconciler{
+		Client:              mgr.GetClient(),
+		APIReader:           mgr.GetAPIReader(),
+		Agents:              actors.source,
+		Authorizer:          agentrunrecon.SubjectAccessReviews{Client: mgr.GetClient()},
+		GraphServiceAccount: graphIdentity.ServiceAccountName,
+		ControllerNamespace: hookControllerNS,
+		RequireDigest:       stepTemplateRequireDigest,
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up AgentRunReconciler")
+	}
+	if err := (&steptemplaterecon.Reconciler{Client: mgr.GetClient(), RequireDigest: stepTemplateRequireDigest}).
+		SetupWithManager(mgr); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up StepTemplateReconciler")
 	}
 
 	renderResources := renderrunrecon.DefaultResources()
