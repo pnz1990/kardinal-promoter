@@ -66,7 +66,7 @@ func runGetBundles(cmd *cobra.Command, args []string, activeOnly, allNamespaces 
 // getBundlesFnNS writes the Bundles of ns; ns "" with showNS lists every namespace.
 func getBundlesFnNS(out io.Writer, client sigs_client.Client, ns string, args []string, activeOnly, showNS bool) error {
 	// One Pipeline's Bundles: filtered on the server (the CRD's selectable
-	// field, Kubernetes 1.31+), or on 1.30 the namespace list filtered here.
+	// field).
 	var bundles v1alpha1.BundleList
 	if len(args) == 1 {
 		items, err := lifecycle.ListPipelineBundles(context.Background(), client, ns, args[0])

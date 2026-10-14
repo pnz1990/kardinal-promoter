@@ -220,7 +220,7 @@ who may write without a stamp: anyone but an agent.
 | `managedFields[].manager` is the client's `fieldManager`, or the prefix of its User-Agent. The API server records no user in managedFields. | `pkg/endpoints/handlers/create.go:259-280`; `apimachinery/pkg/apis/meta/v1/types.go:1409-1444` |
 | MutatingAdmissionPolicy is alpha in 1.32, beta and off in 1.34, and on by default only from 1.36. | `pkg/features/kube_features.go:420-424` |
 
-The chart supports Kubernetes 1.30 and later. Section 5.3 uses only what 1.30 has.
+The chart supports Kubernetes 1.35 and later. Section 5.3 uses only what 1.35 has.
 
 ### 5.2 Options
 
@@ -280,12 +280,12 @@ AgentIdentity as a param ("if this identity matches the requester, the stamp mus
 **(e) A MutatingAdmissionPolicy writes the stamp.** The policy writes `spec.actor` itself from
 `request.userInfo` and the index (option a's params). The stamp is verified by construction, and
 clients write nothing.
-- Con: on by default only from Kubernetes 1.36 (5.1). The chart supports 1.30.
+- Con: on by default only from Kubernetes 1.36 (5.1). The chart supports 1.35.
 
 ### 5.3 Decision: (a), the index, with the controller exempt
 
 **Option (a).** It is the only option that verifies all four verified fields at write time on
-Kubernetes 1.30, supports group subjects, and denies out-of-scope and suspended agents instead
+Kubernetes 1.35, supports group subjects, and denies out-of-scope and suspended agents instead
 of holding them. Its cost, a derived index with propagation lag, is the same lag (c) has: (c)
 reads the same registry through the controller's cache. The lag is bounded and measured (the
 live e2e asserts that a suspension takes effect within 10 s).

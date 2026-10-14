@@ -75,7 +75,7 @@ leaderElect: true
 # namespace to the built-in leader-election priority level, so a busy
 # controller (or a cluster that throttles it) cannot starve its own lease
 # renewals and lose leadership. Needs flowcontrol.apiserver.k8s.io/v1
-# (Kubernetes 1.30, kardinal's minimum); skipped when the API is missing.
+# (every Kubernetes kardinal supports); skipped when the API is missing.
 # Cluster-scoped: the installer needs create/get/update/delete on
 # flowschemas.flowcontrol.apiserver.k8s.io. Set enabled: false for GitOps
 # installs that may not manage cluster resources.

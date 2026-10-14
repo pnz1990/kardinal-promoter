@@ -422,7 +422,7 @@ The `<release>-freezes` ValidatingAdmissionPolicy matches CREATE and UPDATE of
   callers it authenticated (TokenReview), with the caller as `createdBy`.
 
 Written with the same CEL constructs as the `<release>-gate-overrides` policy, which runs on
-Kubernetes 1.30.
+every Kubernetes kardinal supports (1.35 and later).
 
 ### 9.4 CLI
 

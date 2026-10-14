@@ -177,7 +177,7 @@ fails the step. Use one version per chart image, or kustomize.
 
 ### What does the controller need?
 
-Kubernetes 1.30 or later, [kro](installation.md#install-kro) with the Graph controller, and an
+Kubernetes 1.35 or later, [kro](installation.md#install-kro) with the Graph controller, and an
 SCM token (for GitHub, `repo` scope; for GitLab, `api` scope; see
 [SCM providers](scm-providers.md)). The chart creates its RBAC; every permission is listed in
 [Security](guides/security.md#every-permission-the-chart-grants). Put the token in a Secret and

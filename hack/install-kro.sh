@@ -12,7 +12,7 @@
 #   KRO_GRAPH_CONCURRENT_RECONCILES=16 ./hack/install-kro.sh
 #   KRO_MEMORY_LIMIT=2Gi ./hack/install-kro.sh
 #
-# Prerequisites: Kubernetes 1.30 or later (the script checks first), helm >= 3.8
+# Prerequisites: Kubernetes 1.35 or later (the script checks first), helm >= 3.8
 # (OCI), kubectl. The current kubectl context (or KUBECONFIG / KUBE_CONTEXT)
 # must point to the target cluster.
 #
@@ -68,9 +68,9 @@ echo "=== Installing kro v${KRO_VERSION} (Graph controller, rbac.mode=${KRO_RBAC
 echo "Target kube context: ${KUBE_CONTEXT:-$(kubectl config current-context 2>/dev/null || echo '<none>') (current)}"
 
 # ── 0. Kubernetes version ─────────────────────────────────────────────────────
-# kro's graphrevisions.internal.kro.run CRD declares selectableFields, which
-# Kubernetes accepts from 1.30. Check before installing anything. Managed
-# clusters report minors like "30+" (EKS, GKE); only the digits count.
+# kardinal supports Kubernetes 1.35 and later (the chart's kubeVersion). Check
+# before installing anything. Managed clusters report minors like "35+" (EKS,
+# GKE); only the digits count.
 if ! version_json=$("${KUBECTL[@]}" version -o json); then
   echo "install-kro.sh: cannot read the Kubernetes server version (kubectl version failed)" >&2
   exit 1
@@ -95,8 +95,8 @@ if [ -z "$server_minor" ]; then
   echo "install-kro.sh: cannot read the Kubernetes server version from kubectl version -o json" >&2
   exit 1
 fi
-if (( 10#$server_major < 1 || (10#$server_major == 1 && 10#$server_minor < 30) )); then
-  echo "install-kro.sh: Kubernetes ${server_major}.${server_minor} is not supported: kro's CRDs need 1.30 or later (CRD selectableFields). Upgrade the cluster first." >&2
+if (( 10#$server_major < 1 || (10#$server_major == 1 && 10#$server_minor < 35) )); then
+  echo "install-kro.sh: Kubernetes ${server_major}.${server_minor} is not supported: kardinal needs 1.35 or later. Upgrade the cluster first." >&2
   exit 1
 fi
 echo "Kubernetes server: ${server_major}.${server_minor}"

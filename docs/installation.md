@@ -8,9 +8,9 @@ This guide covers installing kardinal-promoter in a Kubernetes cluster using Hel
 
 | Requirement | Version | Notes |
 |---|---|---|
-| Kubernetes | ≥ 1.30 | kind, EKS, GKE, or any conformant cluster. kro's CRDs use CRD `selectableFields`, which needs 1.30; `hack/install-kro.sh` and the chart refuse older clusters. CI tests 1.35, 1.36 and 1.37; the upgrade suite runs on 1.30 and 1.37 |
-| kubectl | ≥ 1.29 | Within one minor of your cluster |
-| Helm | ≥ 3.14 | `brew install helm`. 3.14 adds `--reset-then-reuse-values`, used by [Upgrade](upgrade.md). On 3.14, pass `helm template` a `--kube-version` of 1.30 or later: its default, 1.29, fails the chart's `kubeVersion` |
+| Kubernetes | ≥ 1.35 | kind, EKS, GKE, or any conformant cluster. `hack/install-kro.sh` and the chart refuse older clusters. CI tests 1.35, 1.36 and 1.37, and installs the CRDs and admission policies on 1.35 and the newest release |
+| kubectl | ≥ 1.34 | Within one minor of your cluster |
+| Helm | ≥ 3.14 | `brew install helm`. 3.14 adds `--reset-then-reuse-values`, used by [Upgrade](upgrade.md). A Helm whose default Kubernetes version is older than 1.35 (3.14 defaults to 1.29) fails the chart's `kubeVersion` in `helm template`: pass `--kube-version` with your cluster's version |
 | GitHub token | — | Personal access token with `repo` scope |
 | kro | ≥ 0.10.0-rc.0 | Graph controller with the `GraphKind` feature gate — see [Install kro](#install-kro) |
 

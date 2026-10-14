@@ -11,12 +11,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
@@ -94,9 +92,7 @@ func indexedClient(t *testing.T, index bool) *bundleCounter {
 // TestListPipelineBundles (#1654): through the index a Pipeline's read
 // returns its own Bundles only. A reader with no index registered (a
 // manager whose reconcilers forgot IndexBundlesByPipeline) gets an error, not
-// a silent namespace-wide list. Only an API server that refuses the field
-// selector (BadRequest: Kubernetes 1.30, no selectable field) gets the
-// namespace list, filtered here. LoadRejectedArtifacts reads through it.
+// a silent namespace-wide list. LoadRejectedArtifacts reads through it.
 func TestListPipelineBundles(t *testing.T) {
 	c := indexedClient(t, true)
 	got, err := lifecycle.ListPipelineBundles(context.Background(), c, "ns", "app")
@@ -109,19 +105,6 @@ func TestListPipelineBundles(t *testing.T) {
 	require.Error(t, err, "no index registered: an error, not a full list")
 	assert.Contains(t, err.Error(), "spec.pipeline")
 	assert.Empty(t, c.listed, "no fallback list")
-
-	c = indexedClient(t, false)
-	c.Client = interceptor.NewClient(c.Client.(client.WithWatch), interceptor.Funcs{
-		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
-			if (&client.ListOptions{}).ApplyOptions(opts).FieldSelector != nil {
-				return apierrors.NewBadRequest(`field label not supported: spec.pipeline`)
-			}
-			return cl.List(ctx, list, opts...)
-		}})
-	got, err = lifecycle.ListPipelineBundles(context.Background(), c, "ns", "app")
-	require.NoError(t, err)
-	assert.Len(t, got, 2, "BadRequest (an API server without the selectable field): the namespace list, filtered")
-	assert.Equal(t, []int{32}, c.listed)
 
 	c = indexedClient(t, true)
 	_, err = lifecycle.LoadRejectedArtifacts(context.Background(), c, "ns", "app")

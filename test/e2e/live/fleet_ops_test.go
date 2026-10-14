@@ -181,8 +181,7 @@ func TestGraph_FleetPauseMidWave(t *testing.T) {
 // 50-target fleet (maxConcurrent 10) is 5 targets. The first 5 fail their
 // health check: no further target starts, the targets in flight finish
 // Verified, post never starts and the version is Failed. The CRD refuses
-// 0%, 101%, ten and a quoted "2", and the chart's fleets policy counts of 0
-// and -1.
+// 0%, 101%, ten, a quoted "2", and counts of 0 and -1.
 //
 // Covers FLEET-11.
 func TestGraph_FleetMaxUnavailablePercent(t *testing.T) {
@@ -198,20 +197,15 @@ func TestGraph_FleetMaxUnavailablePercent(t *testing.T) {
 	repo := e.Repo(t, ns, fleetFiles(ns, []string{"test", "post"}, "fleet", names, false))
 	createCompactHealth(t, e, ns)
 
-	// The CRD's pattern refuses a string that is not a percentage; the
-	// chart's fleets policy a count below 1 (both on every supported
-	// Kubernetes: make envtest installs them on the oldest and the newest).
+	// The CRD refuses them on every supported Kubernetes (make envtest
+	// installs it on the oldest and the newest).
 	for _, bad := range []intstr.IntOrString{intstr.FromString("0%"), intstr.FromString("101%"), intstr.FromString("ten"),
 		intstr.FromString("2"), intstr.FromInt32(0), intstr.FromInt32(-1)} {
 		p := fleetPromotion(ns, repo, &v1alpha1.FleetSpec{MaxUnavailable: &bad, Targets: targets}, "auto")
 		p.Name = "bad-max-unavailable"
 		err := e.Client.Create(context.Background(), p)
 		require.Error(t, err, "maxUnavailable %s", bad.String())
-		if bad.Type == intstr.Int {
-			assert.Contains(t, err.Error(), "fleet.maxUnavailable: a count of at least 1, or a percentage from 1% to 100%", bad.String())
-		} else {
-			assert.Contains(t, err.Error(), "maxUnavailable", bad.String())
-		}
+		assert.Contains(t, err.Error(), "fleet.maxUnavailable: a count of at least 1, or a percentage from 1% to 100%", bad.String())
 	}
 
 	pct := intstr.FromString("10%")

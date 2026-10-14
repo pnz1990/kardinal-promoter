@@ -48,8 +48,8 @@ SUITES='gitea flux' make e2e-all   # only these suites
 
 `hack/e2e/matrix.txt` lists the jobs: every suite, the core suite on each of
 the three Kubernetes minors split across three jobs per minor with `SHARD` (by the test durations in `hack/e2e/durations.txt`), and
-the upgrade suite on Kubernetes 1.30, the oldest supported minor, and the
-newest minor.
+the upgrade suites on the oldest supported minor (Chart.yaml kubeVersion) and
+the newest.
 `make e2e-all` runs them on this host, each on a kind cluster of its own
 (`kardinal-e2e-all-<job>`), deletes the clusters (`KEEP=1` keeps them), and
 runs `go run ./test/e2e/proof` over all the results. It fails when a job
@@ -89,9 +89,9 @@ pattern of its tests.
 | `ui` | Forgejo, Argo CD, four more chart releases (static token and CORS, TokenReview, TokenReview without its RBAC, TLS), Playwright's Chromium | `TestUI_*` |
 | `flux` | Forgejo, Flux, Prometheus Operator, Prometheus, Pushgateway, Grafana, fake Datadog, New Relic, CloudWatch and web metrics APIs (`hack/e2e/metricsapi`) that check credentials as the real services do | `TestFlux_*`, `TestMetric_*`, `TestObs_*` |
 | `chart` | Forgejo, Argo CD, cert-manager, the webhook receiver, Jaeger; no controller release: each test installs its own | `TestChart_*` |
-| `upgrade` | Forgejo, Argo CD, kardinal-promoter v0.8.1 with its bundled Graph controller and no kro; the test follows the upgrade guide, so a cluster serves one run. `KIND_K8S=1.30` runs it on Kubernetes 1.30 | `TestUpgrade_*` |
-| `upgrade-v090` | Forgejo, Argo CD, kro and kardinal-promoter v0.9.0 as released; the test follows "Upgrading from v0.9.0", so a cluster serves one run. Runs on 1.30 and 1.37 | `TestUpgradeV090_*` |
-| `upgrade-v0100` | Forgejo, Argo CD, kro and kardinal-promoter v0.10.0 as released; the test follows "Upgrading from v0.10.0", so a cluster serves one run. Runs on 1.30 and 1.37 | `TestUpgradeV0100_*` |
+| `upgrade` | Forgejo, Argo CD, kardinal-promoter v0.8.1 with its bundled Graph controller and no kro; the test follows the upgrade guide, so a cluster serves one run. Runs on 1.35 and 1.37 | `TestUpgrade_*` |
+| `upgrade-v090` | Forgejo, Argo CD, kro and kardinal-promoter v0.9.0 as released; the test follows "Upgrading from v0.9.0", so a cluster serves one run. Runs on 1.35 and 1.37 | `TestUpgradeV090_*` |
+| `upgrade-v0100` | Forgejo, Argo CD, kro and kardinal-promoter v0.10.0 as released; the test follows "Upgrading from v0.10.0", so a cluster serves one run. Runs on 1.35 and 1.37 | `TestUpgradeV0100_*` |
 | `multi-cluster` | Forgejo, Argo CD, Flux and Argo Rollouts in the hub, and a second kind cluster (`<cluster>-spoke`, Argo Rollouts) registered with the hub's Argo CD and Flux | `TestMultiCluster_*` |
 | `shard` | Forgejo, Argo CD, and two controllers splitting the namespaces: the main release as shard `default`, `components/shard.sh`'s release as shard `b` | `TestShard_*` |
 | `scale` | Forgejo behind Toxiproxy, Prometheus Operator and Prometheus, two controller replicas built with `-race` | `TestScale_*` (see [Scale suite](#scale-suite)) |
@@ -229,8 +229,8 @@ past the end of its file, or starts on a blank line, a bare `---` or a markdown 
 separator. Only live tests cover live rows;
 contract rows are covered by unit tests: Bitbucket and Azure DevOps, which
 can't be self-hosted, behaviors a live test cannot force, such as a race
-between two status writes, and a Kubernetes older than 1.30, which no suite
-boots.
+between two status writes, and a Kubernetes older than the chart supports,
+which no suite boots.
 
 Each suite run writes `test/e2e/results/<cluster>/summary.json`. The `e2e
 live` job runs `go run ./test/e2e/proof` on every suite's summary: it fails

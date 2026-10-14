@@ -7,9 +7,10 @@ description: |
   Built on the kro Graph (kro.run/v1alpha1); requires kro v0.10.0-rc.0 or
   later with the GraphKind feature gate.
 type: application
-# kro's CRDs use CRD selectableFields, which Kubernetes accepts from 1.30. The
-# -0 lets pre-release builds such as v1.30.5-eks-ce1d5eb match.
-kubeVersion: ">=1.30.0-0"
+# The oldest Kubernetes kardinal supports: the e2e suites (hack/e2e/matrix.txt)
+# and the CRD and admission policy install check (make envtest) run on it. The
+# -0 lets pre-release builds such as v1.35.2-eks-ce1d5eb match.
+kubeVersion: ">=1.35.0-0"
 version: 0.11.0
 appVersion: "v0.11.0"
 keywords:

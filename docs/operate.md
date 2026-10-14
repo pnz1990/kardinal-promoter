@@ -229,8 +229,8 @@ renewals could wait behind reconcile traffic and the leader would exit
 The FlowSchema is cluster-scoped: whoever installs the chart (Helm, or a
 GitOps controller such as Argo CD or Flux) needs `create`, `get`, `update`
 and `delete` on `flowschemas.flowcontrol.apiserver.k8s.io`. It needs the
-`flowcontrol.apiserver.k8s.io/v1` API, which kardinal's minimum Kubernetes
-version (1.30) has; the chart skips it when the API is missing. Where the
+`flowcontrol.apiserver.k8s.io/v1` API, which every Kubernetes kardinal
+supports has; the chart skips it when the API is missing. Where the
 installer may not manage cluster-scoped resources, set
 `leaderElectionFlowSchema.enabled=false` and, if the cluster throttles the
 controller, ask the cluster admin to create an equivalent FlowSchema.

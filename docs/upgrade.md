@@ -3,6 +3,14 @@
 **Upgrading from v0.10.0:** follow [Upgrading from v0.10.0](#upgrading-from-v0100). **From v0.9.0:**
 follow [Upgrading from v0.9.0](#upgrading-from-v090).
 
+**Requires Kubernetes 1.35 or later.** Check the cluster before you upgrade, and upgrade
+Kubernetes first on an older one: the chart's `kubeVersion` refuses it, and `hack/install-kro.sh`
+exits 1 there.
+
+```bash
+kubectl version | grep Server
+```
+
 Helm does not update CRDs on upgrade. Apply the new chart's CRDs first:
 
 ```bash
@@ -217,7 +225,7 @@ finishes; a Verified Bundle stays Verified; a new Bundle promotes end to end.
 
 v0.8.1 ran its own Graph controller (krocodile, `experimental.kro.run`) from the kardinal chart. This release runs on upstream kro (`kro.run`), which you install separately. `helm upgrade --reuse-values` fails. A `helm upgrade` that gets past the values check deletes the `kro-system` namespace. Follow the steps below instead.
 
-Tested on kind with Kubernetes 1.30 and 1.37, Helm 3.14, and Argo CD health checks with GitHub PRs. Promotions pause for about one minute (from step 3 until the new controller holds its leader lease). No Pipeline, Bundle, PromotionStep, PRStatus or PolicyGate is lost.
+Tested on kind with Kubernetes 1.35 and 1.37, Helm 3.14, and Argo CD health checks with GitHub PRs. Promotions pause for about one minute (from step 3 until the new controller holds its leader lease). No Pipeline, Bundle, PromotionStep, PRStatus or PolicyGate is lost.
 
 You need:
 
@@ -225,7 +233,7 @@ You need:
 - `kubectl`, `jq`, `yq` and the new `kardinal` CLI.
 - A checkout of kardinal-promoter at this release, for `hack/install-kro.sh`.
 
-Check your Kubernetes version first. v0.9.0 and later need 1.30 or later; on an older cluster, upgrade Kubernetes before step 1 (see [Kubernetes version](#kubernetes-version)).
+Check your Kubernetes version first: this release needs 1.35 or later. On an older cluster, upgrade Kubernetes before step 1 (see [Kubernetes version](#kubernetes-version)).
 
 ```bash
 kubectl version | grep Server
@@ -322,7 +330,7 @@ kubectl annotate namespace kro-system helm.sh/resource-policy=keep
 KUBE_CONTEXT=<your-context> bash hack/install-kro.sh
 ```
 
-On Kubernetes older than 1.30 the script exits 1 and installs nothing (see [Kubernetes version](#kubernetes-version)).
+On Kubernetes older than 1.35 the script exits 1 and installs nothing (see [Kubernetes version](#kubernetes-version)).
 
 **7. Apply the new kardinal CRDs.** The v0.8.1 chart shipped no CRDs, and Helm never upgrades CRDs, so apply all 18 by hand; this adds the CRDs v0.8.1 did not have. Apply them before the new controller starts. `--force-conflicts` takes over fields another field manager (Helm, or an earlier `kubectl apply`) set.
 
@@ -414,17 +422,17 @@ kubectl delete crd promotiontemplates.kardinal.io --ignore-not-found
 
 ### Kubernetes version
 
-v0.10.0 needs Kubernetes 1.30 or later. kro's `graphrevisions.internal.kro.run` CRD uses CRD `selectableFields`, which older API servers reject. `hack/install-kro.sh` checks the server version first and exits 1 on an older cluster, and the chart's `kubeVersion` makes `helm upgrade` refuse it. v0.8.1 runs on 1.30, so on a v0.8.1 cluster on 1.29 or older, upgrade Kubernetes first, then follow the steps above.
+This release needs Kubernetes 1.35 or later. `hack/install-kro.sh` checks the server version first and exits 1 on an older cluster, and the chart's `kubeVersion` makes `helm upgrade` refuse it. Upgrade Kubernetes first, then follow the steps above.
 
-From 1.30, CRD validation ratcheting lets most writes to a stored object through when the new schema rejects one of its fields. On 1.30 to 1.32, status writes to such an object still fail, including the controller's. Some writes fail on every version, so step 1's finder is required. What each finding blocks once the new CRDs are applied:
+CRD validation ratcheting lets most writes to a stored object through when the new schema rejects one of its fields, but some writes fail, so step 1's finder is required. What each finding blocks once the new CRDs are applied:
 
-| Stored value | Kubernetes 1.30 to 1.32 | Kubernetes 1.33 and later |
-|---|---|---|
-| env `autoRollback` | status writes and edits to that environment fail | only edits to that environment fail |
-| reserved environment name (e.g. `graph`) | status writes and edits to that environment fail | only edits to that environment fail |
-| environment name that is not a DNS label (e.g. `Test`) | writes succeed | writes succeed |
-| PolicyGate name longer than 63 characters | **every write fails**, including labels and status | **every write fails**, including labels and status |
-| duplicate environment name | writes succeed; Pipeline `Ready=False` `ValidationFailed` | same |
+| Stored value | What fails |
+|---|---|
+| env `autoRollback` | only edits to that environment |
+| reserved environment name (e.g. `graph`) | only edits to that environment |
+| environment name that is not a DNS label (e.g. `Test`) | nothing |
+| PolicyGate name longer than 63 characters | **every write**, including labels and status |
+| duplicate environment name | nothing; the Pipeline is `Ready=False` `ValidationFailed` |
 
 If you already applied the CRDs, run the fixes from step 1 now. The patches and the gate copy succeed, and the objects recover.
 

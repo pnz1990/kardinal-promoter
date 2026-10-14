@@ -13,7 +13,7 @@ import (
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 )
 
-// TestPausedFleetsPolicy (#1835): the fleets policy refuses a
+// TestFleetsPolicy (#1835): the fleets policy refuses a
 // Pipeline whose spec.pausedFleets names an environment without a fleet (a
 // paused fleet renamed, removed or made plain), with a message that says to
 // resume it first, and admits one whose entries are all fleets.
@@ -79,16 +79,4 @@ func TestFleetsPolicy(t *testing.T) {
 	assert.Equal(t, []string{"spec.pausedFleets names test, gone, which is not an environment with a fleet: " +
 		"resume it first (kardinal resume app --env <name>), then rename or remove the fleet"},
 		check(envs, []interface{}{"prod", "test", "gone"}))
-
-	withMax := func(v interface{}) []interface{} {
-		f := map[string]interface{}{"targets": fleet["targets"], "maxUnavailable": v}
-		return []interface{}{map[string]interface{}{"name": "test"}, map[string]interface{}{"name": "prod", "fleet": f}}
-	}
-	for _, v := range []interface{}{int64(1), int64(50), "10%"} {
-		assert.Empty(t, check(withMax(v), nil), "maxUnavailable %v", v)
-	}
-	for _, v := range []interface{}{int64(0), int64(-1)} {
-		assert.Equal(t, []string{"fleet.maxUnavailable: a count of at least 1, or a percentage from 1% to 100%"},
-			check(withMax(v), nil), "maxUnavailable %v", v)
-	}
 }

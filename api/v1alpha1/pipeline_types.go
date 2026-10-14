@@ -741,7 +741,8 @@ type FleetSpec struct {
 	// A count is unquoted (a quoted "2" is refused) and at least 1; a
 	// percentage is from 1% to 100%.
 	// +kubebuilder:validation:XIntOrString
-	// +kubebuilder:validation:Pattern=`^([1-9][0-9]?|100)%$`
+	// +kubebuilder:validation:MaxLength=4
+	// +kubebuilder:validation:XValidation:rule="type(self) == int ? self >= 1 : self.matches('^([1-9][0-9]?|100)%$')",message="fleet.maxUnavailable: a count of at least 1, or a percentage from 1% to 100%"
 	// +optional
 	MaxUnavailable *intstr.IntOrString `json:"maxUnavailable,omitempty"`
 }

@@ -46,9 +46,8 @@
 # Env:
 #   KIND_CLUSTER     cluster name (default kardinal-e2e-SUITE)
 #   KIND_K8S         Kubernetes minor, e.g. 1.37: boots KIND_NODE_1_37 from
-#                    hack/tool-versions.env, or KIND_NODE_<SUITE>_1_37 there
-#                    for a minor only SUITE runs on (default: the node image
-#                    in test/e2e/kind-config.yaml)
+#                    hack/tool-versions.env (default: the node image in
+#                    test/e2e/kind-config.yaml)
 #   KUBECONFIG       honoured; recorded in the env file. When unset, it is
 #                    test/e2e/results/<cluster>/kubeconfig, so kind does not
 #                    write the default ~/.kube/config
@@ -152,11 +151,10 @@ bash "$E2E_DIR/tools.sh"
 
 NODE_IMAGE=
 if [ -n "${KIND_K8S:-}" ]; then
-  suitevar=${SUITE^^}
-  var="KIND_NODE_${KIND_K8S//./_}" suitevar="KIND_NODE_${suitevar//-/_}_${KIND_K8S//./_}"
+  var="KIND_NODE_${KIND_K8S//./_}"
   # shellcheck disable=SC1091
-  NODE_IMAGE=$(source "$REPO_ROOT/hack/tool-versions.env" && echo "${!var:-${!suitevar:-}}")
-  [ -n "$NODE_IMAGE" ] || die "KIND_K8S=$KIND_K8S: no $var or $suitevar in hack/tool-versions.env"
+  NODE_IMAGE=$(source "$REPO_ROOT/hack/tool-versions.env" && echo "${!var:-}")
+  [ -n "$NODE_IMAGE" ] || die "KIND_K8S=$KIND_K8S: no $var in hack/tool-versions.env"
 fi
 
 start=$(date +%s)
