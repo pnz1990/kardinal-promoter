@@ -56,10 +56,10 @@ const kroMinVersion = "0.10.0-rc.0"
 // kardinalResources are the kardinal.io/v1alpha1 resources the controller
 // needs (config/crd/bases; TestKardinalResources_MatchCRDs keeps them equal).
 var kardinalResources = []string{
-	"agentidentities", "agentindexes", "approvals", "auditevents", "bundles", "changewindows",
+	"agentidentities", "agentindexes", "agentruns", "approvals", "auditevents", "bundles", "changewindows",
 	"clusterscmproviders", "hookruns", "imageverifications", "metricchecks", "notificationhooks",
 	"pipelines", "policygates", "promotionsteps", "prstatuses", "renderruns",
-	"rollbackpolicies", "scheduleclocks", "scmproviders", "subscriptions",
+	"rollbackpolicies", "scheduleclocks", "scmproviders", "steptemplates", "subscriptions", "verdicts",
 }
 
 const doctorColWidth = 32
