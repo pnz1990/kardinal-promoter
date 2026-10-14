@@ -179,6 +179,8 @@ type World struct {
 	uids       atomic.Int64
 	mu         sync.Mutex
 	reconciles map[string]int
+	// perObject counts the reconciles of each object (kind/namespace/name).
+	perObject  map[string]int
 	errors     map[string]int
 	lastErrors map[string]string
 	rounds     int
@@ -202,7 +204,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	w := &World{T: t, Scheme: s, Dir: dir, reconciles: map[string]int{}, errors: map[string]int{}, lastErrors: map[string]string{},
+	w := &World{T: t, Scheme: s, Dir: dir, reconciles: map[string]int{}, perObject: map[string]int{}, errors: map[string]int{}, lastErrors: map[string]string{},
 		verified: map[string]string{}, seenVerified: map[string]bool{},
 		watch: opts.Watch, policyNS: map[string]bool{}, keyWrites: map[string]int64{}, seen: map[string]reconcileState{}}
 	for _, ns := range opts.PolicyNamespaces {
@@ -254,8 +256,12 @@ func NewWorld(t testing.TB, opts Options) *World {
 			// The API server sets a UID and generation 1 on create and
 			// moves the generation when the spec changes; the fake client
 			// does neither.
-			Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) error {
-				defer countWrite(o, true)
+			Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) (err error) {
+				defer func() {
+					if err == nil {
+						countWrite(o, true)
+					}
+				}()
 				if o.GetUID() == "" {
 					o.SetUID(types.UID(fmt.Sprintf("uid-%d", w.uids.Add(1))))
 				}
@@ -264,34 +270,54 @@ func NewWorld(t testing.TB, opts Options) *World {
 				}
 				return c.Create(ctx, o, opts...)
 			},
-			Update: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.UpdateOption) error {
-				defer countWrite(o, false)
-				if err := bumpGeneration(ctx, c, o, nil); err != nil {
-					return err
+			Update: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.UpdateOption) (err error) {
+				defer func() {
+					if err == nil {
+						countWrite(o, false)
+					}
+				}()
+				if gerr := bumpGeneration(ctx, c, o, nil); gerr != nil {
+					return gerr
 				}
 				return c.Update(ctx, o, opts...)
 			},
-			Patch: func(ctx context.Context, c client.WithWatch, o client.Object, p client.Patch, opts ...client.PatchOption) error {
-				defer countWrite(o, false)
-				before, err := specOf(ctx, c, o)
-				if err != nil {
-					return err
+			Patch: func(ctx context.Context, c client.WithWatch, o client.Object, p client.Patch, opts ...client.PatchOption) (err error) {
+				defer func() {
+					if err == nil {
+						countWrite(o, false)
+					}
+				}()
+				before, serr := specOf(ctx, c, o)
+				if serr != nil {
+					return serr
 				}
-				if err := c.Patch(ctx, o, p, opts...); err != nil {
+				if err = c.Patch(ctx, o, p, opts...); err != nil {
 					return err
 				}
 				return bumpGeneration(ctx, c, o, before)
 			},
-			Delete: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.DeleteOption) error {
-				defer countWrite(o, true)
+			Delete: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.DeleteOption) (err error) {
+				defer func() {
+					if err == nil {
+						countWrite(o, true)
+					}
+				}()
 				return c.Delete(ctx, o, opts...)
 			},
-			SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, o client.Object, opts ...client.SubResourceUpdateOption) error {
-				defer countWrite(o, false)
+			SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, o client.Object, opts ...client.SubResourceUpdateOption) (err error) {
+				defer func() {
+					if err == nil {
+						countWrite(o, false)
+					}
+				}()
 				return c.SubResource(sub).Update(ctx, o, opts...)
 			},
-			SubResourcePatch: func(ctx context.Context, c client.Client, sub string, o client.Object, p client.Patch, opts ...client.SubResourcePatchOption) error {
-				defer countWrite(o, false)
+			SubResourcePatch: func(ctx context.Context, c client.Client, sub string, o client.Object, p client.Patch, opts ...client.SubResourcePatchOption) (err error) {
+				defer func() {
+					if err == nil {
+						countWrite(o, false)
+					}
+				}()
 				return c.SubResource(sub).Patch(ctx, o, p, opts...)
 			},
 		}).
@@ -475,6 +501,7 @@ func (w *World) Round() int64 {
 				res, err := k.rec(w.Ctx, ctrl.Request{NamespacedName: key})
 				w.mu.Lock()
 				w.reconciles[k.name]++
+				w.perObject[skey]++
 				if err != nil && !apierrors.IsConflict(err) {
 					w.errors[k.name]++
 					w.lastErrors[k.name] = err.Error()
@@ -684,6 +711,18 @@ func (w *World) Reconciles() map[string]int {
 	defer w.mu.Unlock()
 	out := map[string]int{}
 	for k, v := range w.reconciles {
+		out[k] = v
+	}
+	return out
+}
+
+// ReconcilesPerObject returns how many reconciles each object got, by
+// kind/namespace/name.
+func (w *World) ReconcilesPerObject() map[string]int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make(map[string]int, len(w.perObject))
+	for k, v := range w.perObject {
 		out[k] = v
 	}
 	return out

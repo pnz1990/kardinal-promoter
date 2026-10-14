@@ -4,14 +4,12 @@
 package enterprise
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
-	"github.com/google/cel-go/cel"
-	"github.com/google/cel-go/ext"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"helm.sh/helm/v4/pkg/chart/common"
@@ -22,6 +20,9 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/apiserver/pkg/admission"
+	"k8s.io/apiserver/pkg/authentication/user"
+	"k8s.io/apiserver/pkg/authorization/authorizer"
 	"sigs.k8s.io/yaml"
 
 	"github.com/kardinal-promoter/kardinal-promoter/test/scenario"
@@ -32,8 +33,15 @@ const release = "kardinal-promoter"
 // chartObjects renders the chart in process (helm.sh/helm/v4, the engine
 // helm template uses) with its default values and returns the ClusterRoles
 // and ValidatingAdmissionPolicies by name.
-func chartObjects(t *testing.T) (map[string]*rbacv1.ClusterRole, map[string]*admissionregistrationv1.ValidatingAdmissionPolicy,
-	[]rbacv1.ClusterRoleBinding) {
+// chart is what the rendered chart holds of RBAC and admission.
+type chart struct {
+	roles    map[string]*rbacv1.ClusterRole
+	crbs     []rbacv1.ClusterRoleBinding
+	vaps     map[string]*admissionregistrationv1.ValidatingAdmissionPolicy
+	bindings map[string]*admissionregistrationv1.ValidatingAdmissionPolicyBinding
+}
+
+func chartObjects(t *testing.T) chart {
 	t.Helper()
 	chrt, err := loader.Load(filepath.Join(scenario.RepoRoot(), "chart", "kardinal-promoter"))
 	require.NoError(t, err)
@@ -45,6 +53,7 @@ func chartObjects(t *testing.T) (map[string]*rbacv1.ClusterRole, map[string]*adm
 	roles := map[string]*rbacv1.ClusterRole{}
 	vaps := map[string]*admissionregistrationv1.ValidatingAdmissionPolicy{}
 	var crbs []rbacv1.ClusterRoleBinding
+	vapbs := map[string]*admissionregistrationv1.ValidatingAdmissionPolicyBinding{}
 	for name, content := range files {
 		if !strings.HasSuffix(name, ".yaml") {
 			continue
@@ -65,6 +74,10 @@ func chartObjects(t *testing.T) (map[string]*rbacv1.ClusterRole, map[string]*adm
 				var b rbacv1.ClusterRoleBinding
 				require.NoError(t, utilyaml.Unmarshal([]byte(doc), &b), name)
 				crbs = append(crbs, b)
+			case "ValidatingAdmissionPolicyBinding":
+				var b admissionregistrationv1.ValidatingAdmissionPolicyBinding
+				require.NoError(t, utilyaml.Unmarshal([]byte(doc), &b), name)
+				vapbs[b.Name] = &b
 			case "ValidatingAdmissionPolicy":
 				var v admissionregistrationv1.ValidatingAdmissionPolicy
 				require.NoError(t, utilyaml.Unmarshal([]byte(doc), &v), name)
@@ -72,175 +85,182 @@ func chartObjects(t *testing.T) (map[string]*rbacv1.ClusterRole, map[string]*adm
 			}
 		}
 	}
-	return roles, vaps, crbs
+	return chart{roles: roles, crbs: crbs, vaps: vaps, bindings: vapbs}
 }
 
-// authorizer decides requests the way the API server's RBAC authorizer does
-// for RoleBindings to ClusterRoles: a binding in the request's namespace to
-// one of the subject's user or groups grants the role's rules there.
-type authorizer struct {
-	roles    map[string]*rbacv1.ClusterRole
-	bindings []rbacv1.RoleBinding
+func rm(i int) (string, []string) {
+	return fmt.Sprintf("rm-%02d@corp.example.com", i), []string{team(i) + "-release", "system:authenticated"}
 }
 
-type request struct {
-	user      string
-	groups    []string
-	verb      string
-	resource  string // resource or resource/subresource
-	namespace string
+func dev(i int) (string, []string) {
+	return fmt.Sprintf("dev-%02d@corp.example.com", i), []string{team(i) + "-dev", "system:authenticated"}
 }
 
-func (a *authorizer) allowed(r request) bool {
-	for _, b := range a.bindings {
-		if b.Namespace != r.namespace || b.RoleRef.Kind != "ClusterRole" {
-			continue
-		}
-		subject := false
-		for _, s := range b.Subjects {
-			subject = subject || (s.Kind == rbacv1.UserKind && s.Name == r.user) ||
-				(s.Kind == rbacv1.GroupKind && slices.Contains(r.groups, s.Name))
-		}
-		role := a.roles[b.RoleRef.Name]
-		if !subject || role == nil {
-			continue
-		}
-		for _, rule := range role.Rules {
-			if matches(rule.APIGroups, "kardinal.io") && matches(rule.Resources, r.resource) && matches(rule.Verbs, r.verb) &&
-				len(rule.ResourceNames) == 0 {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func matches(list []string, v string) bool {
-	return slices.Contains(list, "*") || slices.Contains(list, v)
-}
-
-// admits evaluates a ValidatingAdmissionPolicy's variables and validations
-// on a request, as the API server does: all must be true.
-func admits(t *testing.T, vap *admissionregistrationv1.ValidatingAdmissionPolicy, op string, object map[string]interface{},
-	user string, groups []string) bool {
-	t.Helper()
-	env, err := cel.NewEnv(cel.Variable("object", cel.DynType), cel.Variable("oldObject", cel.DynType),
-		cel.Variable("request", cel.DynType), cel.Variable("variables", cel.DynType), ext.Strings())
-	require.NoError(t, err)
-	gs := make([]interface{}, 0, len(groups))
-	for _, g := range groups {
-		gs = append(gs, g)
-	}
-	md, _ := object["metadata"].(map[string]interface{})
-	variables := map[string]interface{}{}
-	vars := map[string]interface{}{"object": object, "oldObject": nil, "variables": variables,
-		"request": map[string]interface{}{"operation": op, "namespace": md["namespace"],
-			"userInfo": map[string]interface{}{"username": user, "groups": gs}}}
-	eval := func(expr string) interface{} {
-		ast, iss := env.Compile(expr)
-		require.NoError(t, iss.Err(), expr)
-		prg, err := env.Program(ast)
-		require.NoError(t, err)
-		out, _, err := prg.Eval(vars)
-		require.NoError(t, err, expr)
-		return out.Value()
-	}
-	for _, v := range vap.Spec.Variables {
-		variables[v.Name] = eval(v.Expression)
-	}
-	for _, v := range vap.Spec.Validations {
-		if eval(v.Expression) != true {
-			return false
-		}
-	}
-	return true
-}
-
-// TestEnterprise_TenantRBAC: the chart binds no user cluster-wide, and with
-// the chart's user roles bound per team
-// namespace (the release managers of a team get <release>-approver, its
-// developers <release>-viewer, in the team's namespace only), and the
-// chart's admission policies, no team member can see, approve or reject
-// anything of another team: for every pair of the 20 teams, team A's
-// release manager may read, approve and reject in A and none of it in B,
-// A's developer may read A only and approve nowhere, and the approvals
-// policy refuses an Approval recorded in another user's name or with
-// groups the requester does not have, and the bundle-rejection policy a
-// rejection in another user's name. Covers SCEN-TENANT-RBAC-01.
-func TestEnterprise_TenantRBAC(t *testing.T) {
-	roles, vaps, crbs := chartObjects(t)
-	// The chart binds cluster-wide only its own ServiceAccounts: a user
-	// gets a role in a namespace by a RoleBinding there.
-	for _, b := range crbs {
-		for _, s := range b.Subjects {
-			assert.Equal(t, rbacv1.ServiceAccountKind, s.Kind, "ClusterRoleBinding %s binds %s %s", b.Name, s.Kind, s.Name)
-		}
-	}
-	for _, name := range []string{"-viewer", "-approver", "-promoter"} {
-		require.Contains(t, roles, release+name)
-	}
-	approvals, rejection := vaps[release+"-approvals"], vaps[release+"-bundle-rejection"]
-	require.NotNil(t, approvals)
-	require.NotNil(t, rejection)
-
-	teams := full.Teams
-	a := &authorizer{roles: roles}
-	rm := func(i int) (string, []string) {
-		return fmt.Sprintf("rm-%02d@corp.example.com", i), []string{team(i) + "-release", "system:authenticated"}
-	}
-	dev := func(i int) (string, []string) {
-		return fmt.Sprintf("dev-%02d@corp.example.com", i), []string{team(i) + "-dev", "system:authenticated"}
-	}
+// teamBindings binds, in each team's namespace, <release>-approver to the
+// team's release managers and <release>-viewer to its developers.
+func teamBindings(teams int) []rbacv1.RoleBinding {
+	var out []rbacv1.RoleBinding
 	for i := 1; i <= teams; i++ {
 		ns := team(i)
-		a.bindings = append(a.bindings,
+		out = append(out,
 			rbacv1.RoleBinding{ObjectMeta: objectMeta(ns, "release-managers"), RoleRef: rbacv1.RoleRef{Kind: "ClusterRole", Name: release + "-approver"},
 				Subjects: []rbacv1.Subject{{Kind: rbacv1.GroupKind, Name: ns + "-release"}}},
 			rbacv1.RoleBinding{ObjectMeta: objectMeta(ns, "developers"), RoleRef: rbacv1.RoleRef{Kind: "ClusterRole", Name: release + "-viewer"},
 				Subjects: []rbacv1.Subject{{Kind: rbacv1.GroupKind, Name: ns + "-dev"}}})
 	}
+	return out
+}
+
+// tenancyViolations returns every request of a team member that a enterprise
+// must refuse but authz allows, and every own-team request it refuses: for
+// every pair of teams, team A's release manager reads, approves, rejects
+// and overrides in A only, edits no Pipeline anywhere; A's developer reads
+// in A only and approves and rejects nowhere.
+func tenancyViolations(authz authorizer.Authorizer, teams int) []string {
+	var out []string
+	check := func(username string, groups []string, verb, resource, sub, ns string, want bool) {
+		d, _, _ := authz.Authorize(context.Background(), authorizer.AttributesRecord{User: &user.DefaultInfo{Name: username, Groups: groups},
+			Verb: verb, APIGroup: "kardinal.io", APIVersion: "v1alpha1", Resource: resource, Subresource: sub, Namespace: ns,
+			ResourceRequest: true})
+		if got := d == authorizer.DecisionAllow; got != want {
+			out = append(out, fmt.Sprintf("%s %s %s/%s in %s: allowed=%v, want %v", username, verb, resource, sub, ns, got, want))
+		}
+	}
 	reads := []string{"pipelines", "bundles", "policygates", "promotionsteps", "approvals", "auditevents", "prstatuses"}
 	for i := 1; i <= teams; i++ {
 		for j := 1; j <= teams; j++ {
-			own := i == j
-			ns := team(j)
+			own, ns := i == j, team(j)
 			u, g := rm(i)
 			for _, res := range reads {
 				for _, verb := range []string{"get", "list", "watch"} {
-					assert.Equal(t, own, a.allowed(request{u, g, verb, res, ns}), "%s %s %s in %s", u, verb, res, ns)
+					check(u, g, verb, res, "", ns, own)
 				}
 			}
-			assert.Equal(t, own, a.allowed(request{u, g, "create", "approvals", ns}), "%s approves in %s", u, ns)
-			assert.Equal(t, own, a.allowed(request{u, g, "update", "bundles/reject", ns}), "%s rejects in %s", u, ns)
-			assert.Equal(t, own, a.allowed(request{u, g, "update", "policygates/override", ns}), "%s overrides in %s", u, ns)
-			assert.False(t, a.allowed(request{u, g, "patch", "pipelines", ns}), "%s edits a Pipeline in %s", u, ns)
+			check(u, g, "create", "approvals", "", ns, own)
+			check(u, g, "update", "bundles", "reject", ns, own)
+			check(u, g, "update", "policygates", "override", ns, own)
+			check(u, g, "patch", "pipelines", "", ns, false)
 			d, dg := dev(i)
-			assert.Equal(t, own, a.allowed(request{d, dg, "list", "bundles", ns}), "%s lists Bundles in %s", d, ns)
-			assert.False(t, a.allowed(request{d, dg, "create", "approvals", ns}), "%s approves in %s", d, ns)
-			assert.False(t, a.allowed(request{d, dg, "update", "bundles/reject", ns}), "%s rejects in %s", d, ns)
+			check(d, dg, "list", "bundles", "", ns, own)
+			check(d, dg, "create", "approvals", "", ns, false)
+			check(d, dg, "update", "bundles", "reject", ns, false)
 		}
 	}
+	return out
+}
 
-	// The policies: an Approval and a rejection name their author.
+// TestEnterprise_TenantRBAC: with the chart's user roles bound per team
+// namespace (release managers: <release>-approver, developers:
+// <release>-viewer) and the chart's own ClusterRoleBindings, the API
+// server's RBAC authorizer (authz_test.go) lets no member of any of 20 teams
+// read, approve, reject or override in another team's namespace, developers
+// approve and reject nowhere and approvers edit no Pipeline; the check fails
+// with one ClusterRoleBinding of the approver role. The API server's
+// ValidatingAdmissionPolicy plugin, with the chart's policies and bindings,
+// refuses an Approval in another user's name or with groups the requester
+// does not have, and a rejection in another user's name; without the
+// bindings, or with Audit-only bindings, it refuses none.
+// Covers SCEN-TENANT-RBAC-01.
+func TestEnterprise_TenantRBAC(t *testing.T) {
+	c := chartObjects(t)
+	for _, name := range []string{"-viewer", "-approver", "-promoter"} {
+		require.Contains(t, c.roles, release+name)
+	}
+	// The chart binds cluster-wide only its own ServiceAccounts.
+	for _, b := range c.crbs {
+		for _, sub := range b.Subjects {
+			assert.Equal(t, rbacv1.ServiceAccountKind, sub.Kind, "ClusterRoleBinding %s binds %s %s", b.Name, sub.Kind, sub.Name)
+		}
+	}
+	teams := full.Teams
+	authz := &rbacAuthorizer{clusterRoles: c.roles, clusterRoleBindings: c.crbs, roleBindings: teamBindings(teams)}
+	assert.Empty(t, tenancyViolations(authz, teams))
+
+	// The same check with one cluster-wide binding of the approver role:
+	// team-01's release managers approve everywhere.
+	leaky := *authz
+	leaky.clusterRoleBindings = append(append([]rbacv1.ClusterRoleBinding(nil), c.crbs...), rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "leak"}, RoleRef: rbacv1.RoleRef{Kind: "ClusterRole", Name: release + "-approver"},
+		Subjects: []rbacv1.Subject{{Kind: rbacv1.GroupKind, Name: team(1) + "-release"}}})
+	assert.NotEmpty(t, tenancyViolations(&leaky, teams), "a cluster-wide approver binding must show as a tenancy violation")
+
 	u1, g1 := rm(1)
 	u2, g2 := rm(2)
-	approval := func(user string, groups []string) map[string]interface{} {
-		return map[string]interface{}{
+	approval := func(username string, groups []string) map[string]interface{} {
+		return map[string]interface{}{"apiVersion": "kardinal.io/v1alpha1", "kind": "Approval",
 			"metadata": map[string]interface{}{"namespace": team(1), "name": "a",
 				"labels": map[string]interface{}{"kardinal.io/bundle": "app-01-1-1-0", "kardinal.io/environment": "prod"}},
-			"spec": map[string]interface{}{"bundle": "app-01-1-1-0", "bundleUID": "u1", "environment": "prod", "user": user,
+			"spec": map[string]interface{}{"bundle": "app-01-1-1-0", "bundleUID": "u1", "environment": "prod", "user": username,
 				"groups": toIfaces(groups), "decision": "approve"},
 		}
 	}
-	assert.True(t, admits(t, approvals, "CREATE", approval(u1, g1[:1]), u1, g1), "an approval in your own name")
-	assert.False(t, admits(t, approvals, "CREATE", approval(u2, g2[:1]), u1, g1), "an approval in another user's name")
-	assert.False(t, admits(t, approvals, "CREATE", approval(u1, g2[:1]), u1, g1), "an approval with another team's group")
-	rejected := func(by string) map[string]interface{} {
-		return map[string]interface{}{"metadata": map[string]interface{}{"namespace": team(1), "name": "app-01-1-1-0"},
-			"spec": map[string]interface{}{"pipeline": "app-01", "rejected": map[string]interface{}{"by": by, "reason": "bad"}}}
+	bundle := func(by string) map[string]interface{} {
+		b := map[string]interface{}{"apiVersion": "kardinal.io/v1alpha1", "kind": "Bundle",
+			"metadata": map[string]interface{}{"namespace": team(1), "name": "app-01-1-1-0"},
+			"spec":     map[string]interface{}{"type": "image", "pipeline": "app-01"}}
+		if by != "" {
+			b["spec"].(map[string]interface{})["rejected"] = map[string]interface{}{"by": by, "reason": "bad"}
+		}
+		return b
 	}
-	assert.True(t, admits(t, rejection, "UPDATE", rejected(u1), u1, g1), "a rejection in your own name")
-	assert.False(t, admits(t, rejection, "UPDATE", rejected(u2), u1, g1), "a rejection in another user's name")
+	var namespaces []string
+	for i := 1; i <= teams; i++ {
+		namespaces = append(namespaces, team(i))
+	}
+	policies := []string{release + "-approvals", release + "-bundle-rejection"}
+	cases := []struct {
+		name string
+		run  func(s *admissionServer) error
+		deny bool
+	}{
+		{"an Approval in your own name", func(s *admissionServer) error {
+			return s.admit(admission.Create, approvalsGVR, approval(u1, g1[:1]), nil, u1, g1)
+		}, false},
+		{"an Approval in another user's name", func(s *admissionServer) error {
+			return s.admit(admission.Create, approvalsGVR, approval(u2, g2[:1]), nil, u1, g1)
+		}, true},
+		{"an Approval with another team's group", func(s *admissionServer) error {
+			return s.admit(admission.Create, approvalsGVR, approval(u1, g2[:1]), nil, u1, g1)
+		}, true},
+		{"a rejection in your own name", func(s *admissionServer) error {
+			return s.admit(admission.Update, bundlesGVR, bundle(u1), bundle(""), u1, g1)
+		}, false},
+		{"a rejection in another user's name", func(s *admissionServer) error {
+			return s.admit(admission.Update, bundlesGVR, bundle(u2), bundle(""), u1, g1)
+		}, true},
+	}
+	for _, setup := range []struct {
+		name     string
+		bindings bool
+		edit     func(*admissionregistrationv1.ValidatingAdmissionPolicyBinding)
+		enforced bool
+	}{
+		{"chart bindings", true, nil, true},
+		{"no bindings", false, nil, false},
+		{"Audit-only bindings", true, func(b *admissionregistrationv1.ValidatingAdmissionPolicyBinding) {
+			b.Spec.ValidationActions = []admissionregistrationv1.ValidationAction{admissionregistrationv1.Audit}
+		}, false},
+	} {
+		t.Run(setup.name, func(t *testing.T) {
+			bindings := c.bindings
+			if !setup.bindings {
+				bindings = nil
+			}
+			s := newAdmissionServer(t, policyObjects(namespaces, c.vaps, bindings, policies, setup.edit), authz)
+			for _, tc := range cases {
+				err := tc.run(s)
+				if tc.deny && setup.enforced {
+					if assert.Error(t, err, tc.name) {
+						// Denied by a validation, not by a policy that failed to load.
+						assert.Contains(t, err.Error(), "denied request", tc.name)
+						assert.NotContains(t, err.Error(), "failed to configure", tc.name)
+					}
+				} else {
+					assert.NoError(t, err, tc.name)
+				}
+			}
+		})
+	}
 }
 
 func toIfaces(s []string) []interface{} {

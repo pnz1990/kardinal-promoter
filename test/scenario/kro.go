@@ -1044,10 +1044,9 @@ func (k *Kro) readRef(ctx context.Context, g *graph.Graph, gp *graphPrograms, n 
 	kind, _ := m["kind"].(string)
 	md, _ := m["metadata"].(map[string]interface{})
 	ns, _ := md["namespace"].(string)
-	if ns == "" {
-		ns = g.Namespace
-	}
 	if sel, ok := md["selector"].(map[string]interface{}); ok {
+		// A selector ref without a namespace lists every namespace
+		// (kro pkg/graphengine/executor/simple.go:1259-1263, applyRefCollection).
 		ls := &metav1.LabelSelector{}
 		if ml, ok := sel["matchLabels"].(map[string]interface{}); ok {
 			ls.MatchLabels = map[string]string{}
@@ -1074,6 +1073,9 @@ func (k *Kro) readRef(ctx context.Context, g *graph.Graph, gp *graphPrograms, n 
 			out = append(out, it.Object)
 		}
 		return out, nil
+	}
+	if ns == "" {
+		ns = g.Namespace
 	}
 	name, _ := md["name"].(string)
 	obj := &unstructured.Unstructured{}
@@ -1135,7 +1137,7 @@ func (k *Kro) applyObject(ctx context.Context, obj *unstructured.Unstructured) (
 			merged.Object[key] = v
 		}
 	}
-	if reflect.DeepEqual(merged.Object, live.Object) {
+	if reflect.DeepEqual(k.stored(merged), k.stored(live)) {
 		return live, 0, nil
 	}
 	if err := k.c.Update(ctx, merged); err != nil {
@@ -1267,4 +1269,28 @@ func (k *Kro) setStatus(ctx context.Context, raw *unstructured.Unstructured, acc
 		return fmt.Errorf("update graph status: %w", err)
 	}
 	return nil
+}
+
+// stored is u as the store keeps it: for a kind the scheme types, through
+// the Go type, which drops the zero values a template renders for
+// omitempty fields (message: "", excludeAuthor: false). The API server keeps
+// a custom resource's JSON as sent, so a template that renders them is no
+// change; without this the executor would rewrite such objects every pass.
+func (k *Kro) stored(u *unstructured.Unstructured) map[string]interface{} {
+	s := k.c.Scheme()
+	typed, err := s.New(u.GroupVersionKind())
+	if err != nil {
+		return u.Object
+	}
+	if _, isU := typed.(*unstructured.Unstructured); isU {
+		return u.Object
+	}
+	if err := k8sruntime.DefaultUnstructuredConverter.FromUnstructured(u.Object, typed); err != nil {
+		return u.Object
+	}
+	out, err := k8sruntime.DefaultUnstructuredConverter.ToUnstructured(typed)
+	if err != nil {
+		return u.Object
+	}
+	return out
 }

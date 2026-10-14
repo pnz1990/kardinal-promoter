@@ -53,6 +53,9 @@ func sizeFromEnv() size {
 const (
 	releaseManagers = "release-managers"
 	releaseManager  = "rm@corp.example.com"
+	// forger is a release manager of another team: their Approval in
+	// team-02 names a Bundle of team-01.
+	forger = "mallory@corp.example.com"
 )
 
 func team(i int) string         { return fmt.Sprintf("team-%02d", i) }
@@ -134,10 +137,13 @@ func approveAll(w *scenario.World, hold map[string]bool) error {
 // created at once for every Pipeline (1,000 Bundles in full). The
 // newest version of every Pipeline ends Verified in every environment and
 // the others Superseded or Verified; no object, Graph reference, PR or
-// approval crosses a team's namespace; an Approval in another namespace
-// for a Bundle of the same name and UID does not open a team's gate; and
-// the reconciles stay bounded per object. Covers SCEN-TENANT-01,
-// SCEN-TENANT-02.
+// approval crosses a team's namespace; an Approval by another team's
+// release manager, in another namespace, for a Bundle of the same name and
+// UID, is neither copied into nor opens a team's gate; no object is
+// reconciled more than maxPerObject times, and once the writes stop
+// nothing is reconciled at all. Each of these fails when the property
+// breaks (see the PR: an Approvals ref without its namespace, an injected
+// requeue loop). Covers SCEN-TENANT-01, SCEN-TENANT-02.
 func TestEnterprise_MultiTenantLoad(t *testing.T) {
 	sz := sizeFromEnv()
 	w := scenario.NewWorld(t, scenario.Options{PolicyNamespaces: []string{scenario.PolicyNS}, Watch: true, Tick: 30 * time.Second})
@@ -168,19 +174,28 @@ func TestEnterprise_MultiTenantLoad(t *testing.T) {
 	vb := w.Bundle(team(1), victim)
 	forged := &v1alpha1.Approval{ObjectMeta: metav1.ObjectMeta{Namespace: team(2), Name: "forged",
 		Labels: map[string]string{"kardinal.io/bundle": victim, "kardinal.io/environment": "prod", "kardinal.io/pipeline": pipelineName(1)}},
-		Spec: v1alpha1.ApprovalSpec{Bundle: victim, BundleUID: string(vb.UID), Environment: "prod", User: releaseManager,
+		Spec: v1alpha1.ApprovalSpec{Bundle: victim, BundleUID: string(vb.UID), Environment: "prod", User: forger,
 			Groups: []string{releaseManagers}, Decision: lifecycle.DecisionApprove}}
 	w.MustApply(forged)
 	waiting := func() bool {
-		ready, found := gateReady(w, team(1), victim, "prod-change-approval")
-		return found && !ready && len(w.Verified(team(1), victim)) == 2
+		_, found := gateReady(w, team(1), victim, "prod-change-approval")
+		return found && len(w.Verified(team(1), victim)) == 2
 	}
 	require.True(t, w.RunUntil(200, waiting), "team-01's newest version reaches its approval gate\n%s", w.Describe(team(1)))
 	for i := 0; i < 4; i++ {
 		w.Round()
 	}
+	// The forged Approval is still there (the approver actor, another user,
+	// never replaces it), and team-01's gate neither copied it nor opened.
+	var still v1alpha1.Approval
+	require.NoError(t, w.Client.Get(w.Ctx, client.ObjectKeyFromObject(forged), &still), "the forged Approval exists")
 	ready, _ := gateReady(w, team(1), victim, "prod-change-approval")
 	assert.False(t, ready, "an Approval in another namespace opened team-01's gate")
+	for _, g := range w.GateInstances(team(1), victim) {
+		for _, a := range g.Spec.Approvals {
+			assert.NotEqual(t, forger, a.User, "gate %s copied the Approval of another namespace", g.Name)
+		}
+	}
 	delete(held, team(1))
 
 	done := func() bool {
@@ -209,7 +224,7 @@ func TestEnterprise_MultiTenantLoad(t *testing.T) {
 
 	checkPhases(t, w, sz, newest)
 	checkIsolation(t, w, sz)
-	checkBounded(t, w, sz)
+	checkBounded(t, w)
 	n, last := w.Errors()
 	assert.Empty(t, n, "reconcile errors: %v", last)
 	assert.Empty(t, w.Kro.Errors())
@@ -349,43 +364,55 @@ func checkIsolation(t *testing.T, w *scenario.World, sz size) {
 	}
 }
 
-// checkBounded: the reconciles per object stay bounded: the controller does
-// not spin on any kind as the tenants and versions grow.
-func checkBounded(t *testing.T, w *scenario.World, sz size) {
+// checkBounded: no object is reconciled more than maxPerObject times
+// while the load runs, whatever the number of tenants and versions, and
+// once every version settled and the writes stopped, quietRounds more
+// rounds reconcile nothing: nothing spins.
+func checkBounded(t *testing.T, w *scenario.World) {
 	t.Helper()
-	rec := w.Reconciles()
-	count := func(list client.ObjectList) int {
-		require.NoError(t, w.Client.List(w.Ctx, list))
-		n := 0
-		switch l := list.(type) {
-		case *v1alpha1.BundleList:
-			n = len(l.Items)
-		case *v1alpha1.PromotionStepList:
-			n = len(l.Items)
-		case *v1alpha1.PolicyGateList:
-			n = len(l.Items)
-		case *v1alpha1.PipelineList:
-			n = len(l.Items)
+	maxOf := map[string]int{}
+	worst := map[string]string{}
+	for key, n := range w.ReconcilesPerObject() {
+		kind := strings.SplitN(key, "/", 2)[0]
+		if n > maxOf[kind] {
+			maxOf[kind], worst[kind] = n, key
 		}
-		return n
 	}
-	for kind, c := range map[string]struct {
-		list client.ObjectList
-		max  float64
-	}{
-		"Bundle":        {&v1alpha1.BundleList{}, perObjectBound},
-		"PromotionStep": {&v1alpha1.PromotionStepList{}, perObjectBound},
-		"PolicyGate":    {&v1alpha1.PolicyGateList{}, perObjectBound},
-		"Pipeline":      {&v1alpha1.PipelineList{}, perObjectBound * 3},
-	} {
-		n := count(c.list)
-		require.Positive(t, n, kind)
-		per := float64(rec[kind]) / float64(n)
-		t.Logf("%s: %d objects, %d reconciles, %.1f per object", kind, n, rec[kind], per)
-		assert.LessOrEqual(t, per, c.max, "%s reconciles per object", kind)
+	for _, kind := range []string{"Bundle", "PromotionStep", "PolicyGate", "Pipeline", "PRStatus"} {
+		t.Logf("%s: at most %d reconciles per object (%s)", kind, maxOf[kind], worst[kind])
+		assert.LessOrEqual(t, maxOf[kind], maxPerObject, "%s reconciled %d times", worst[kind], maxOf[kind])
+	}
+	// The last writes of the load (Graph and Pipeline status) settle
+	// within a few rounds of the last Verified.
+	settled := false
+	for i := 0; i < 10 && !settled; i++ {
+		settled = w.Round() == 0
+	}
+	require.True(t, settled, "writes did not stop within 10 rounds of the last version Verified")
+	before := w.Reconciles()
+	beforeObj := w.ReconcilesPerObject()
+	for i := 0; i < quietRounds; i++ {
+		w.Round()
+	}
+	after := w.Reconciles()
+	for kind, n := range after {
+		if d := n - before[kind]; d != 0 {
+			var busy []string
+			for key, m := range w.ReconcilesPerObject() {
+				if strings.HasPrefix(key, kind+"/") && m != beforeObj[key] {
+					busy = append(busy, fmt.Sprintf("%s(+%d)", key, m-beforeObj[key]))
+				}
+			}
+			sort.Strings(busy)
+			assert.Zero(t, d, "%d %s reconciles after every version settled: %v", d, kind, busy[:min(len(busy), 5)])
+		}
 	}
 }
 
-// perObjectBound is the most reconciles per object on average a load may
-// take; measured runs take about a third of it (see the test log).
-const perObjectBound = 60.0
+// maxPerObject bounds the reconciles of one object over the whole load;
+// the measured maximum is in the test log. quietRounds are the rounds after
+// the load settled that must reconcile nothing.
+const (
+	maxPerObject = 30
+	quietRounds  = 6
+)
