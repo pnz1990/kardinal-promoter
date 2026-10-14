@@ -144,3 +144,88 @@ func TestNightlySample(t *testing.T) {
 		assert.Error(t, err, "sample.sh %s: %s", bad, out)
 	}
 }
+
+// fakeGH is a gh on PATH that serves "issue list" from issues.json in its
+// directory and logs every other call, one line each, to calls.log.
+const fakeGH = `#!/usr/bin/env bash
+d=$(dirname "$0")
+case "$1 $2" in
+"issue list") cat "$d/issues.json" ;;
+"issue create") echo "create $4" >>"$d/calls.log"; cp body.md "$d/created-$(echo "$4" | tr -c 'a-z0-9' _).md" ;;
+*) echo "$1 $2 $3" >>"$d/calls.log" ;;
+esac
+`
+
+// TestLiveReport (#1837): hack/e2e/live-report.sh, the report job of a
+// scheduled e2e-live.yml run, gives each failed sample job an issue of its
+// own with the commands that run it again, keeps that issue open on a run
+// where the job did not run, closes it only when the same job passes, and
+// keeps the shared issue for the matrix.txt jobs: a sample failure alone
+// neither opens nor (through the "e2e live" job it fails) keeps it open.
+func TestLiveReport(t *testing.T) {
+	root := repoRoot(t)
+	open := `[{"number":7,"title":"e2e live sample failed: sample-gitlab-136"},` +
+		`{"number":8,"title":"e2e live failed on main (nightly (COUNT=1))"},` +
+		`{"number":9,"title":"e2e live sample failed: sample-core-137-5of9x3"}]`
+	for _, tc := range []struct {
+		name, jobs, e2eLive string
+		want                []string
+		created             string
+	}{
+		{
+			name: "sample job fails",
+			jobs: "controller image\tsuccess\ngitea on Kubernetes 1.37\tsuccess\n" +
+				"sample-gitea-135: gitea on Kubernetes 1.35\tfailure\n" +
+				"sample-core-137-5of9x3: core 5/9 on Kubernetes 1.37 (COUNT=3)\tsuccess\ne2e live\tfailure\n",
+			e2eLive: "failure",
+			// gitea-135 opens its own issue; core 5/9 passed, so its issue
+			// closes; gitlab-136 did not run, so its issue stays; the shared
+			// issue closes: no matrix.txt job failed.
+			want:    []string{"create e2e live sample failed: sample-gitea-135", "issue close 9", "issue close 8"},
+			created: "e2e live sample failed: sample-gitea-135",
+		},
+		{
+			name: "sample job fails again and a matrix job fails",
+			jobs: "core 1/3 on Kubernetes 1.35\tfailure\n" +
+				"sample-gitlab-136: gitlab on Kubernetes 1.36\tfailure\ne2e live\tfailure\n",
+			e2eLive: "failure",
+			want:    []string{"issue comment 7", "issue comment 8"},
+		},
+		{
+			name:    "only the proof fails",
+			jobs:    "core 1/3 on Kubernetes 1.35\tsuccess\ne2e live\tfailure\n",
+			e2eLive: "failure",
+			want:    []string{"issue comment 8"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			bin := filepath.Join(dir, "bin")
+			require.NoError(t, os.Mkdir(bin, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeGH), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(bin, "issues.json"), []byte(open), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "jobs.tsv"), []byte(tc.jobs), 0o600))
+			cmd := exec.Command("bash", filepath.Join(root, "hack/e2e/live-report.sh"), "jobs.tsv")
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "KIND=nightly (COUNT=1)",
+				"RUN_URL=https://example.com/run/1", "SHA=0123456789abcdef", "SAMPLE=2026-10-14", "E2E_LIVE="+tc.e2eLive)
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, string(out))
+			calls, err := os.ReadFile(filepath.Join(bin, "calls.log"))
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, strings.Split(strings.TrimSpace(string(calls)), "\n"))
+			if tc.created != "" {
+				body, err := os.ReadFile(filepath.Join(bin, "created-"+strings.Map(func(r rune) rune {
+					if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+						return r
+					}
+					return '_'
+				}, tc.created)+"_.md"))
+				require.NoError(t, err)
+				assert.Contains(t, string(body), "SAMPLE=2026-10-14 SAMPLE_ONLY=1 SUITES=gitea make e2e-all")
+				assert.Contains(t, string(body), "gh workflow run e2e-live.yml --ref main -f suites=gitea -f sample=2026-10-14")
+				assert.Contains(t, string(body), "https://example.com/run/1")
+			}
+		})
+	}
+}
