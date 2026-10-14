@@ -217,7 +217,7 @@ func TallyVerdicts(gate *kardinalv1alpha1.PolicyGate, author kardinalv1alpha1.Ac
 				rec.Reason = why
 			} else if why := VerdictPartyBlock(p, author, a); why != "" {
 				rec.Reason = "not counted: " + why
-			} else if deadline != nil && v.CreatedAt != nil && v.CreatedAt.Time.After(*deadline) {
+			} else if deadline != nil && v.CreatedAt != nil && v.CreatedAt.After(*deadline) {
 				rec.Reason = "written after the timeout (" + p.Timeout + ")"
 			} else {
 				eligible[i] = true
