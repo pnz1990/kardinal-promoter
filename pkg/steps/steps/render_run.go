@@ -136,6 +136,11 @@ func (s *renderStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 	if res.CommitSHA != "" && (res.NoChanges || !state.OpensPR()) {
 		outputs["commitSHA"] = res.CommitSHA
 	}
+	// The commit the Job pushed to the PR branch, as git-push records it:
+	// the kardinal/gates commit status is set on it (#1854).
+	if res.CommitSHA != "" && !res.NoChanges && state.OpensPR() {
+		outputs[OutputPushedSHA] = res.CommitSHA
+	}
 	msg := fmt.Sprintf("rendered %d objects from %s with %s into %s (RenderRun %s)", res.Objects,
 		shortSHA(res.DryCommit), res.Renderer, res.Branch, run.Name)
 	if res.NoChanges {

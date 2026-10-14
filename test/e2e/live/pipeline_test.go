@@ -179,8 +179,8 @@ func TestPipeline_NotImplemented(t *testing.T) {
 
 // TestPipeline_RejectedFields checks what the API server refuses at apply
 // time, each with a message that says what to do: autoRollback,
-// update.strategy argocd with approval pr-review, and reserved environment
-// names.
+// update.strategy argocd with approval pr-review or on a fleet (#1847), and
+// reserved environment names.
 //
 // Covers PIPE-REJECT-01.
 func TestPipeline_RejectedFields(t *testing.T) {
@@ -209,6 +209,15 @@ func TestPipeline_RejectedFields(t *testing.T) {
 		},
 		want: "environments[]: update.strategy argocd patches the Application directly and cannot honour approval: " +
 			"pr-review; use approval: auto with a PolicyGate, or a git-based strategy (kustomize or helm) for a reviewed promotion",
+	}, {
+		name: "argocd fleet",
+		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
+			env.Update.Strategy = "argocd"
+			env.Update.ArgoCD = &v1alpha1.ArgoCDUpdateConfig{Application: "podinfo"}
+			env.Fleet = &v1alpha1.FleetSpec{Targets: []v1alpha1.FleetTarget{{Name: "eu"}, {Name: "us"}}}
+		},
+		want: "environments[]: update.strategy argocd cannot promote a fleet: every target would patch the fleet's one " +
+			"Application (update.argocd.application); use a git-based strategy, which writes each target's own path",
 	}}
 	for _, name := range []string{"bundle", "time", "spec", "self", "true", "kro"} {
 		cases = append(cases, struct {

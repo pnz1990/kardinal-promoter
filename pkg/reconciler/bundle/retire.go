@@ -291,8 +291,8 @@ func (r *Reconciler) retire(ctx context.Context, log zerolog.Logger, b *kardinal
 		cond = meta.FindStatusCondition(b.Status.Conditions, lifecycle.ConditionGraphRetired)
 	}
 
-	// time.Now() here decides a status write of this Bundle.
-	if left := delay - time.Since(cond.LastTransitionTime.Time); left > 0 {
+	// The time read here decides a status write of this Bundle.
+	if left := delay - r.now().Sub(cond.LastTransitionTime.Time); left > 0 {
 		return ctrl.Result{RequeueAfter: left}, nil
 	}
 

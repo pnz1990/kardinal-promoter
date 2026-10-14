@@ -367,12 +367,20 @@ func ValidateSecretRef(p *kardinalv1alpha1.Pipeline) error {
 
 // ValidateUpdateStrategy refuses update.strategy argocd with approval
 // pr-review (#1281): argocd patches the Argo CD Application directly, with no
-// Git commit and so no PR to review. The Pipeline CRD rejects the combination
-// at apply time; this check covers Pipelines stored before that rule. The
+// Git commit and so no PR to review. It refuses argocd on a fleet
+// environment too (#1847): every target inherits the fleet's one
+// update.argocd.application, so each target's promotion would patch that
+// Application instead of its own. The Pipeline CRD rejects both at apply
+// time; this check covers Pipelines stored before those rules. The
 // Pipeline reconciler sets Ready=False/ValidationFailed and "kardinal
-// validate" reports it. The argocd-set-image step refuses it too.
+// validate" reports it. The argocd-set-image step refuses pr-review too.
 func ValidateUpdateStrategy(p *kardinalv1alpha1.Pipeline) error {
 	for _, e := range p.Spec.Environments {
+		if e.Update.Strategy == "argocd" && e.Fleet != nil {
+			return fmt.Errorf("environment %q: update.strategy argocd cannot promote a fleet: every target would "+
+				"patch the fleet's one Application (update.argocd.application); use a git-based strategy, which "+
+				"writes each target's own path", e.Name)
+		}
 		if e.Update.Strategy == "argocd" && e.Approval == "pr-review" {
 			return fmt.Errorf("environment %q: update.strategy argocd patches the Application directly and "+
 				"cannot honour approval: pr-review; use approval: auto with a PolicyGate, or a git-based "+

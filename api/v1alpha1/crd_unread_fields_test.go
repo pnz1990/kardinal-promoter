@@ -140,6 +140,50 @@ func TestCRDRejectsArgoCDWithPRReview(t *testing.T) {
 	}
 }
 
+const pipelineArgoCDFleet = `
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata: {name: app, namespace: default}
+spec:
+  git: {url: "https://github.com/example/gitops"}
+  environments:
+  - name: test
+  - name: prod
+    update:
+      strategy: argocd
+      argocd: {application: app-prod}
+    fleet:
+      targets: [{name: eu}, {name: us}]
+`
+
+// TestCRDRejectsArgoCDFleet: a fleet environment with update.strategy argocd
+// is refused at apply time: every target would patch the fleet's one
+// Application (#1847). The same fleet with a git-based strategy, and argocd
+// on an environment that is not a fleet, are admitted. Covers
+// API-ARGOCD-FLEET-01.
+func TestCRDRejectsArgoCDFleet(t *testing.T) {
+	crds := loadCRDs(t)
+	assertRejectedWith(t, celAdmission(t, crds, crFromYAML(t, pipelineArgoCDFleet), nil, false),
+		"update.strategy argocd cannot promote a fleet")
+
+	for _, c := range []struct {
+		name string
+		edit func(prod map[string]interface{})
+	}{
+		{"fleet with kustomize", func(prod map[string]interface{}) {
+			prod["update"] = map[string]interface{}{"strategy": "kustomize"}
+		}},
+		{"fleet with the default strategy", func(prod map[string]interface{}) { delete(prod, "update") }},
+		{"argocd without a fleet", func(prod map[string]interface{}) { delete(prod, "fleet") }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			obj := crFromYAML(t, pipelineArgoCDFleet)
+			c.edit(obj["spec"].(map[string]interface{})["environments"].([]interface{})[1].(map[string]interface{}))
+			assert.Empty(t, celAdmission(t, crds, obj, nil, false))
+		})
+	}
+}
+
 // TestCRDNewRulesRatchet: a Pipeline or PolicyGate stored before the new rules
 // can still take edits that leave the rejected value alone (kardinal pause,
 // kardinal override, status writes), because each rule sits on the smallest

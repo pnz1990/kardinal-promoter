@@ -1177,6 +1177,12 @@ spec:
                       helm) for a reviewed promotion'
                     rule: '!(has(self.update) && has(self.update.strategy) && self.update.strategy
                       == ''argocd'' && has(self.approval) && self.approval == ''pr-review'')'
+                  - message: 'environments[]: update.strategy argocd cannot promote
+                      a fleet: every target would patch the fleet''s one Application
+                      (update.argocd.application); use a git-based strategy, which
+                      writes each target''s own path'
+                    rule: '!(has(self.fleet) && has(self.update) && has(self.update.strategy)
+                      && self.update.strategy == ''argocd'')'
                   - message: environments[].autoRollback is not implemented; remove
                       it (automatic rollback is configured with onHealthFailure, see
                       docs/rollback.md)

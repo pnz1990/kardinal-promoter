@@ -547,7 +547,8 @@ func TestValidateCIRunURL(t *testing.T) {
 }
 
 // TestValidateUpdateStrategy: update.strategy argocd with approval: pr-review
-// is a validation error (#1281). It feeds the Pipeline Ready condition and
+// is a validation error (#1281), and so is argocd on a fleet (#1847).
+// Covers API-ARGOCD-FLEET-01. It feeds the Pipeline Ready condition and
 // "kardinal validate" for Pipelines stored before the CRD rule.
 func TestValidateUpdateStrategy(t *testing.T) {
 	argocd := func(approval string) kardinalv1alpha1.EnvironmentSpec {
@@ -567,6 +568,13 @@ func TestValidateUpdateStrategy(t *testing.T) {
 		{name: "kustomize with pr-review", env: kardinalv1alpha1.EnvironmentSpec{Name: "prod", Approval: "pr-review",
 			Update: kardinalv1alpha1.UpdateConfig{Strategy: "kustomize"}}},
 		{name: "default strategy with pr-review", env: kardinalv1alpha1.EnvironmentSpec{Name: "prod", Approval: "pr-review"}},
+		{name: "argocd fleet", env: func() kardinalv1alpha1.EnvironmentSpec {
+			e := argocd("auto")
+			e.Fleet = &kardinalv1alpha1.FleetSpec{Targets: []kardinalv1alpha1.FleetTarget{{Name: "eu"}, {Name: "us"}}}
+			return e
+		}(), wantErr: `environment "prod": update.strategy argocd cannot promote a fleet`},
+		{name: "kustomize fleet", env: kardinalv1alpha1.EnvironmentSpec{Name: "prod",
+			Fleet: &kardinalv1alpha1.FleetSpec{Targets: []kardinalv1alpha1.FleetTarget{{Name: "eu"}}}}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
