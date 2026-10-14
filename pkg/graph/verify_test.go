@@ -56,6 +56,9 @@ func TestBuilder_VerifyGate(t *testing.T) {
 	require.Contains(t, nodes, graph.VerdictsNodeID)
 	assert.NotContains(t, nodes, graph.ApprovalsNodeID, "no approval gate: no Approvals ref")
 	assert.NotContains(t, nodes, graph.NodeAgentRuns, "no verify.run: no AgentRuns")
+	require.Contains(t, nodes, graph.NodeVerifyGates)
+	assert.NotContains(t, nodes[graph.NodeVerifyGates].Template["spec"], "approval",
+		"no template has spec.approval, so spec.?approval would not compile in kro")
 
 	uid := "uid-app-v1"
 	verdicts := []interface{}{
@@ -70,7 +73,7 @@ func TestBuilder_VerifyGate(t *testing.T) {
 	var spec map[string]interface{}
 	for _, o := range renderObjectsWith(t, res.Graph, map[string]interface{}{graph.VerdictsNodeID: verdicts}) {
 		if o.Object["kind"] == "PolicyGate" && objLabels(o.Object)["kardinal.io/gate-template"] == "explore" {
-			assert.Equal(t, graph.NodeApprovalGates, o.NodeID)
+			assert.Equal(t, graph.NodeVerifyGates, o.NodeID)
 			spec = o.Object["spec"].(map[string]interface{})
 		}
 		if o.Object["kind"] == "PolicyGate" && objLabels(o.Object)["kardinal.io/gate-template"] == "weekday" {
@@ -103,8 +106,10 @@ func TestBuilder_VerifyGate(t *testing.T) {
 	}
 }
 
-// TestBuilder_VerifyGateWithApprovals: verify and approval gates share the
-// live collection; only the items that read approvals copy them.
+// TestBuilder_VerifyGateWithApprovals: approval gates stay in ApprovalGates
+// and verify gates are in VerifyGates; a verify gate copies Approvals only
+// when it reads them, and neither collection renders spec.approval when no
+// template has one (kro types the template list from its data).
 func TestBuilder_VerifyGateWithApprovals(t *testing.T) {
 	p := makeLinearPipeline("app", "uat", "prod")
 	verify := verifyGateFor("prod", kardinalv1alpha1.GateVerifyPolicy{Check: "explore"})

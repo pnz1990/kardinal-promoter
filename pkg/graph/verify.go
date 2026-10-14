@@ -209,14 +209,13 @@ func verifyPolicyFromData(d map[string]interface{}) *kardinalv1alpha1.GateVerify
 	return p
 }
 
-// verdictsOfItem is the spec.verdicts of a gate instance: for an item with
-// a verify policy, the Verdicts of this very Bundle (spec.bundleUID == the
-// Bundle's UID) and Pipeline, for the item's verified environment and check,
-// from writers the policy allows (an agent only when it is in
-// allowedAgents; anyone else when listed, or when both people lists are
-// empty), sorted by name, at most maxCopiedVerdicts of them; [] for an item
-// without one. Filtering before the cap means Verdicts that cannot count
-// cannot crowd out the ones that do.
+// verdictsOfItem is the spec.verdicts of a verify gate instance: the
+// Verdicts of this very Bundle (spec.bundleUID == the Bundle's UID) and
+// Pipeline, for the item's verified environment and check, from writers the
+// policy allows (an agent only when it is in allowedAgents; anyone else when
+// listed, or when both people lists are empty), sorted by name, at most
+// maxCopiedVerdicts of them. Filtering before the cap means Verdicts that
+// cannot count cannot crowd out the ones that do.
 func verdictsOfItem(pipeline string) string {
 	p := iterGate + ".verify"
 	eligible := fmt.Sprintf(`(v.spec.?actor.?kind.orValue("") == "agent" ? v.spec.actor.agent in %[1]s.allowedAgents : `+
@@ -231,8 +230,7 @@ func verdictsOfItem(pipeline string) string {
 		`"highFindings": size(v.spec.?findings.orValue([]).filter(f, f.severity in ["high", "critical"])), `+
 		`"by": v.spec.by, ?"groups": v.spec.?groups, ?"actor": v.spec.?actor, ?"run": v.spec.?run})`,
 		VerdictsNodeID, strconv.Quote(pipeline), p, eligible)
-	return fmt.Sprintf(`${%[1]s.?verify.hasValue() ? (size(%[2]s) > %[3]d ? %[2]s.slice(0, %[3]d) : %[2]s) : []}`,
-		iterGate, list, maxCopiedVerdicts)
+	return fmt.Sprintf(`${size(%[1]s) > %[2]d ? %[1]s.slice(0, %[2]d) : %[1]s}`, list, maxCopiedVerdicts)
 }
 
 // agentRunAttempt is one AgentRun of the Graph.

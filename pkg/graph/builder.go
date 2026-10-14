@@ -697,7 +697,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	}
 
 	gates := newGateCollections(pipelineName, bundle.Name)
-	gates.approvals, gates.verdicts = anyNeedsApprovals(gatesByEnv), anyNeedsVerdicts(gatesByEnv)
+	gates.approvals = anyNeedsApprovals(gatesByEnv)
 	agentRuns := newAgentRunPlan()
 	var prItems []interface{}
 	var compactSteps []compactStep
