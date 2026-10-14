@@ -212,6 +212,11 @@ type Reconciler struct {
 	// Tests set it; when nil a fixed path under the kardinal work root is used.
 	WorkDirFn func(pipelineName, bundleName string) string
 
+	// WorkDirRoot is the parent directory of the checkouts when WorkDirFn is
+	// nil (steps.WorkDirFor); empty is steps.DefaultWorkDirRoot. Tests that
+	// run several controllers in one process give each its own root.
+	WorkDirRoot string
+
 	// Recorder emits Kubernetes Events for PromotionStep state transitions.
 	// When nil, event emission is skipped (backward-compatible).
 	Recorder events.EventRecorder
@@ -1562,7 +1567,7 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		if d, err := time.ParseDuration(env.WaitForMergeTimeout); err == nil && d > 0 {
 			// Set expiry once on first entry into WaitingForMerge (idempotent).
 			if ps.Status.WaitForMergeExpiry == nil {
-				expiry := metav1.NewTime(time.Now().Add(d))
+				expiry := metav1.NewTime(r.now().Add(d))
 				ps.Status.WaitForMergeExpiry = &expiry
 				if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
 					return ctrl.Result{}, fmt.Errorf("patch wait-for-merge expiry: %w", patchErr)
@@ -1575,7 +1580,7 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 					Msg("WaitForMerge timeout set")
 			}
 			// Check if timeout has elapsed.
-			if time.Now().After(ps.Status.WaitForMergeExpiry.Time) {
+			if r.now().After(ps.Status.WaitForMergeExpiry.Time) {
 				log.Warn().
 					Time("expiry", ps.Status.WaitForMergeExpiry.Time).
 					Dur("timeout", d).
@@ -1831,7 +1836,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	// This writes time-based state to the CRD so the Graph can observe it.
 	// Graph-purity: eliminates PS-5 (time.Since() in reconciler hot path).
 	if ps.Status.HealthCheckExpiry == nil {
-		expiry := metav1.NewTime(time.Now().Add(timeout))
+		expiry := metav1.NewTime(r.now().Add(timeout))
 		ps.Status.HealthCheckExpiry = &expiry
 		if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch health check expiry: %w", patchErr)
@@ -1843,14 +1848,14 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	// apply while a bake window runs (the environment is healthy).
 	// Never becoming healthy is a health failure: count it and apply
 	// onHealthFailure.
-	if ps.Status.BakeStartedAt == nil && time.Now().After(ps.Status.HealthCheckExpiry.Time) {
+	if ps.Status.BakeStartedAt == nil && r.now().After(ps.Status.HealthCheckExpiry.Time) {
 		log.Warn().
 			Time("expiry", ps.Status.HealthCheckExpiry.Time).
 			Dur("timeout", timeout).
 			Str("onHealthFailure", env.OnHealthFailure).
 			Msg("health check timeout")
 		msg := fmt.Sprintf("health check timeout after %s", timeout)
-		if deadline, ok := bakeDeadline(ps, env, timeout); ok && !time.Now().Before(deadline) {
+		if deadline, ok := bakeDeadline(ps, env, timeout); ok && !r.now().Before(deadline) {
 			msg = bakeDeadlineMessage(ps, env, timeout)
 		}
 		if last := ps.Status.Message; last != "" {
@@ -1863,7 +1868,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	// Space checks: a status patch re-enqueues the step at once, so without
 	// this the adapter ran (and the failure counter climbed) at API speed.
 	if last := ps.Status.LastHealthCheckAt; last != nil {
-		if wait := requeueHealthCheck - time.Since(last.Time); wait > 0 {
+		if wait := requeueHealthCheck - r.now().Sub(last.Time); wait > 0 {
 			return ctrl.Result{RequeueAfter: wait}, nil
 		}
 	}
@@ -1945,7 +1950,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		log.Error().Err(checkErr).Str("adapter", adapter.Name()).Msg("health adapter check error")
 		return ctrl.Result{RequeueAfter: requeueHealthCheck}, nil
 	}
-	checkedAt := metav1.NewTime(time.Now())
+	checkedAt := metav1.NewTime(r.now())
 	ps.Status.LastHealthCheckAt = &checkedAt
 	// The first check that finds the target on the Bundle images dates the
 	// update: the flagger check counts a Failed phase only when set later, and
@@ -2058,7 +2063,7 @@ func recordMergeCommit(ps *v1alpha1.PromotionStep, rev string) {
 // verify moves ps to Verified with a Verified condition.
 func (r *Reconciler) verify(ctx context.Context, base, ps *v1alpha1.PromotionStep, reason, message string) error {
 	ps.Status.Conditions = appendCondition(ps.Status.Conditions, "Verified", metav1.ConditionTrue,
-		reason, "promotion complete", time.Now().UTC())
+		reason, "promotion complete", r.now().UTC())
 	return r.transition(ctx, base, ps, StateVerified, message)
 }
 
@@ -2690,7 +2695,11 @@ func (r *Reconciler) workDir(ps *v1alpha1.PromotionStep) string {
 	if r.WorkDirFn != nil {
 		return r.WorkDirFn(ps.Spec.PipelineName, ps.Spec.BundleName)
 	}
-	return steps.WorkDirFor(steps.DefaultWorkDirRoot,
+	root := r.WorkDirRoot
+	if root == "" {
+		root = steps.DefaultWorkDirRoot
+	}
+	return steps.WorkDirFor(root,
 		ps.Namespace, ps.Spec.PipelineName, ps.Spec.BundleName, ps.Spec.Environment)
 }
 
@@ -3156,7 +3165,7 @@ func (r *Reconciler) healthDetector(ctx context.Context, log zerolog.Logger, ps 
 // wait for the next healthy check again.
 func (r *Reconciler) clusterUnreachable(ctx context.Context, log zerolog.Logger, base, ps *v1alpha1.PromotionStep,
 	env v1alpha1.EnvironmentSpec, adapter, reason string, timeout time.Duration) (ctrl.Result, error) {
-	checkedAt := metav1.NewTime(time.Now())
+	checkedAt := metav1.NewTime(r.now())
 	ps.Status.LastHealthCheckAt = &checkedAt
 	if env.Bake != nil {
 		return r.handleBake(ctx, log, base, ps, env,

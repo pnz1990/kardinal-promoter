@@ -219,6 +219,9 @@ How a fleet is promoted:
   target. Each instance starts once the fleet's upstreams are Verified. An approval gate is
   approved per target: `kardinal approve <bundle> --env prod-eu-west`. In a `pr-review` fleet,
   each target's PR carries the `kardinal/gates` check for its own gate instances.
+- **Update strategy.** Each target writes its own path, so a fleet promotes with a git-based
+  strategy (`kustomize`, `helm`, `yaml`, or `layout: branch`). The API server refuses a fleet with
+  `update.strategy: argocd`: every target would patch the fleet's one Application.
 - **After the fleet.** An environment that depends on the fleet waits for every target to be
   Verified. A failed target holds it until that target is Verified. With `maxUnavailable` unset,
   the version is `Failed` while the other targets keep promoting. A fleet that depends on

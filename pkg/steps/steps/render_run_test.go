@@ -20,7 +20,9 @@ import (
 
 // TestRenderStep: the controller's render step asks for the render, waits
 // for the RenderRun the Graph mirrors onto the step, and takes its result;
-// a failed render fails the step for good.
+// a failed render fails the step for good. A step that opens a PR records
+// the pushed render as pushedSHA, for the kardinal/gates status (#1854).
+// Covers REND-GATES-STATUS-01.
 func TestRenderStep(t *testing.T) {
 	step, err := parentsteps.Lookup(parentsteps.RenderStepName)
 	require.NoError(t, err)
@@ -60,6 +62,7 @@ func TestRenderStep(t *testing.T) {
 	assert.Equal(t, parentsteps.StepSuccess, res.Status)
 	assert.Equal(t, "kardinal/b/prod", res.Outputs["branch"], "open-pr opens the PR from the branch the Job pushed")
 	assert.Empty(t, res.Outputs["commitSHA"], "a pr-review step health checks the merge commit")
+	assert.Equal(t, "c0ffee", res.Outputs["pushedSHA"], "the PR's kardinal/gates status goes on the pushed render (#1854)")
 	assert.Equal(t, "false", res.Outputs["noChanges"])
 	assert.Equal(t, "d00d", res.Outputs["dryCommit"])
 
@@ -68,6 +71,7 @@ func TestRenderStep(t *testing.T) {
 	res, err = step.Execute(context.Background(), a)
 	require.NoError(t, err)
 	assert.Equal(t, "c0ffee", res.Outputs["commitSHA"], "an auto step health checks the pushed render")
+	assert.Empty(t, res.Outputs["pushedSHA"], "an auto step opens no PR")
 
 	a.LiveRenders = []v1alpha1.LiveRenderRun{{Name: "rr", Phase: "Succeeded", Result: &v1alpha1.RenderRunResult{NoChanges: true}}}
 	res, err = step.Execute(context.Background(), a)

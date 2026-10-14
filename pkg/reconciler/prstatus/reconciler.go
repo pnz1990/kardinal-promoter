@@ -266,7 +266,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// Throttle: a reconcile triggered by our own status patch (or any other
 	// event) within the poll interval waits for the rest of it.
 	if last := prs.Status.LastCheckedAt; last != nil {
-		if wait := requeuePollInterval - time.Since(last.Time); wait > 0 {
+		if wait := requeuePollInterval - r.now().Sub(last.Time); wait > 0 {
 			return ctrl.Result{RequeueAfter: wait}, nil
 		}
 	}
@@ -321,7 +321,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	// now is written to status.lastCheckedAt whenever it decides something:
 	// the grace window compares it with the stored status.closedAt.
-	now := metav1.NewTime(time.Now().UTC())
+	now := metav1.NewTime(r.now().UTC())
 	closedAt, closedFinal := closedState(&prs.Status, merged, open, now)
 	becameFinal := closedFinal && !prs.Status.ClosedFinal
 	changed := merged != prs.Status.Merged || open != prs.Status.Open ||
@@ -496,7 +496,7 @@ func (r *Reconciler) recordMergeCommit(ctx context.Context, log zerolog.Logger, 
 		return ctrl.Result{}, r.adoptLegacyStatus(ctx, log, prs)
 	}
 	var sha string
-	if last := prs.Status.LastCheckedAt; last != nil && time.Since(last.Time) > mergeCommitWindow {
+	if last := prs.Status.LastCheckedAt; last != nil && r.now().Sub(last.Time) > mergeCommitWindow {
 		// The decision is written to the status below.
 		log.Info().Str("prURL", prs.Spec.PRURL).Dur("window", mergeCommitWindow).
 			Msg("merge commit not reported by the SCM, giving up")

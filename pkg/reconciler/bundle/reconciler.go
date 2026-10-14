@@ -185,6 +185,18 @@ type Reconciler struct {
 	// Retire says when the Graph of a finished Bundle is retired (#1492).
 	// The zero value keeps every Graph.
 	Retire RetirePolicy
+	// NowFn returns the current time. When nil, time.Now is used. Tests set
+	// it, so the soak times this reconciler writes follow the same clock as
+	// the PolicyGate and PromotionStep reconcilers.
+	NowFn func() time.Time
+}
+
+// now returns the current time from NowFn, or time.Now when it is nil.
+func (r *Reconciler) now() time.Time {
+	if r.NowFn != nil {
+		return r.NowFn()
+	}
+	return time.Now()
 }
 
 // Reconcile is called whenever a Bundle is created or updated, and whenever a
@@ -982,8 +994,8 @@ func (r *Reconciler) markRejected(ctx context.Context, log zerolog.Logger,
 	if from != phaseRejected {
 		// The record of who rejected the Bundle, in the same write as the
 		// phase (the audit outbox): a crash before it is written retries it.
-		// time.Now() is inside this CRD status write (Graph-first).
-		b.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, b.Status.PendingAuditEvents, rejectionAuditEntry(b, time.Now()))
+		// The time is read for this CRD status write (Graph-first).
+		b.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, b.Status.PendingAuditEvents, rejectionAuditEntry(b, r.now()))
 	}
 	b.Status.Phase = phaseRejected
 	setBundleCondition(b, condReady, metav1.ConditionFalse, "Rejected", msg)
@@ -1535,8 +1547,8 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 		return ctrl.Result{}, fmt.Errorf("list promotion steps for bundle %s: %w", b.Name, err)
 	}
 	steps := psList.Items
-	// time.Now() here is inside a CRD status write — Graph-first compliant.
-	now := time.Now().UTC()
+	// The time is read here for a CRD status write — Graph-first compliant.
+	now := r.now().UTC()
 	b.Status.Environments = environmentStatuses(b, pipeline, steps, now)
 
 	var after []func()

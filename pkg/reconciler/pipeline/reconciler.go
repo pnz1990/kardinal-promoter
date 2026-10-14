@@ -331,7 +331,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	desiredFailed := FailedVersion(p.Name, bundleList.Items)
 	desiredSummary := WithFailure(Summarize(&p, desired, desiredEnvs), desiredFailed, desiredEnvs)
 	desiredEnvLine := EnvironmentLine(desiredEnvs)
-	desiredMetrics := ComputeDeploymentMetrics(&p, bundleList.Items, steps, time.Now().UTC())
+	desiredMetrics := ComputeDeploymentMetrics(&p, bundleList.Items, steps, r.now().UTC())
 
 	// Idempotency: only patch if something changed.
 	condMatch := conditionMatches(p.Status.Conditions, desired)
