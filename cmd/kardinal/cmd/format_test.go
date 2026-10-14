@@ -1152,7 +1152,7 @@ func TestFormatBundleErrors_NewerBundleHidesOlderFailure(t *testing.T) {
 // TestFormatPipelineTable_Fleet (D1): a fleet environment is one column,
 // counting its targets' states; once every target is Verified it says so.
 //
-// Covers FLEET-05, FLEET-10.
+// Covers FLEET-05, FLEET-14.
 func TestFormatPipelineTable_Fleet(t *testing.T) {
 	p := v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "edge"}}
 	p.Spec.Environments = []v1alpha1.EnvironmentSpec{{Name: "test"},

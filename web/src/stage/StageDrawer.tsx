@@ -148,6 +148,13 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
   const fleet = p?.environmentTopology?.find(n => n.name === env)?.fleet
   const noteInWhy = signIn && !!view?.why.some(w => w.kind === 'approval' && (w.next === 'approve' || w.next === 'reject'))
 
+  // A fleet environment's drawer has only the fleet's actions (#1835).
+  const actions = view && <>
+    <h3 id={`${headingId}-actions`} className="stage-section__title">Actions</h3>
+    <StageActions view={view} pipeline={pipeline} namespace={namespace} active={action} activeGate={actionGate} onOpen={open} onChanged={onChanged} inline={inline} reasonFor={reasonFor}
+      signInNote={signIn ? (noteInWhy ? null : approveCommand(pipeline, env, namespace)) : undefined} />
+  </>
+
   return (
     <>
       <header className="stage-drawer__header">
@@ -163,7 +170,7 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
       {view && fleet && (
         <section className="stage-section" data-section="why">
           <h3 className="stage-section__title">Fleet</h3>
-          <p className="stage-muted">{env} promotes to {fleet.targets.length} targets{fleet.maxConcurrent ? `, ${fleet.maxConcurrent} at a time` : ''}.</p>
+          <p className="stage-muted">{env} promotes to {fleet.targets.length} targets{fleet.maxConcurrent ? `, ${fleet.maxConcurrent} at a time` : ''}{fleet.paused ? '; paused: no further target starts' : ''}.</p>
           <ul className="stage-targets">
             {fleet.targets.map(t => (
               <li key={t}>
@@ -175,6 +182,7 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
           </ul>
         </section>
       )}
+      {view && fleet && <section className="stage-section" data-section="actions">{actions}</section>}
       {view && !fleet && (
         <>
           <div className="stage-drawer__status">
@@ -197,9 +205,7 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
           </section>
 
           <section className="stage-section" data-section="actions" ref={el => { sectionRefs.current.actions = el }} aria-labelledby={`${headingId}-actions`}>
-            <h3 id={`${headingId}-actions`} className="stage-section__title">Actions</h3>
-            <StageActions view={view} pipeline={pipeline} namespace={namespace} active={action} activeGate={actionGate} onOpen={open} onChanged={onChanged} inline={inline} reasonFor={reasonFor}
-              signInNote={signIn ? (noteInWhy ? null : approveCommand(pipeline, env, namespace)) : undefined} />
+            {actions}
           </section>
 
           <section className="stage-section" data-section="evidence" ref={el => { sectionRefs.current.evidence = el }} aria-labelledby={`${headingId}-evidence`}>

@@ -5,6 +5,24 @@
 
 import type { AccessCheck, AccessResponse, Pipeline, Bundle, GraphResponse, PromotionStep, PolicyGate, StepEvent } from '../types'
 
+/** One target of the rollback of a whole fleet (#1835). */
+export interface FleetTargetRollback {
+  environment: string
+  /** The Bundle whose change landed there last; absent when none. */
+  runs?: string
+  /** False when the target runs what the rollback restores already. */
+  changes: boolean
+}
+
+/** POST /rollback's answer; fleet is set for the rollback of a whole fleet. */
+export interface RollbackResponse {
+  bundle: string
+  message: string
+  held?: boolean
+  rollbackOf?: string
+  fleet?: FleetTargetRollback[]
+}
+
 const BASE = '/api/v1/ui'
 
 // ─── Authentication ──────────────────────────────────────────────────────────
@@ -193,7 +211,7 @@ export const api = {
   /** Trigger a rollback for the given pipeline (#331). */
   rollback: (pipeline: string, environment: string, namespace = 'default', toBundle?: string, holdReason?: string,
     holdExpiresIn?: string) =>
-    post<{ bundle: string; message: string; held?: boolean }>('/rollback', {
+    post<RollbackResponse>('/rollback', {
       pipeline, environment, namespace, toBundle,
       ...(holdReason !== undefined ? { hold: true, holdReason } : {}),
       ...(holdReason !== undefined && holdExpiresIn ? { holdExpiresIn } : {}),
@@ -211,12 +229,14 @@ export const api = {
    *  Bundles' instances (kardinal override --stage). Needs policygates/override. */
   overrideGate: (req: { pipeline: string; gate: string; environment: string; reason: string; expiresInMinutes?: number; namespace?: string }) =>
     post<{ message: string; gates: string[]; expiresAt: string }>('/override', req),
-  /** Pause a pipeline — sets spec.paused=true (#506). */
-  pause: (pipeline: string, namespace = 'default') =>
-    post<{ message: string }>('/pause', { pipeline, namespace }),
-  /** Resume a paused pipeline — sets spec.paused=false (#506). */
-  resume: (pipeline: string, namespace = 'default') =>
-    post<{ message: string }>('/resume', { pipeline, namespace }),
+  /** Pause a pipeline — sets spec.paused=true (#506); with environment, only
+   *  that fleet (spec.pausedFleets, #1835): no further target starts. */
+  pause: (pipeline: string, namespace = 'default', environment?: string) =>
+    post<{ message: string }>('/pause', { pipeline, namespace, environment }),
+  /** Resume a paused pipeline — sets spec.paused=false (#506); with
+   *  environment, only that fleet (#1835). */
+  resume: (pipeline: string, namespace = 'default', environment?: string) =>
+    post<{ message: string }>('/resume', { pipeline, namespace, environment }),
   /** Validate a CEL expression using the server-side kro CEL environment. */
   validateCEL: (expression: string) =>
     post<{ valid: boolean; error?: string }>('/validate-cel', { expression }),

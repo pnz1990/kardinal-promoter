@@ -49,10 +49,11 @@ export const ACTION_LABEL: Record<StageActionKind, string> = {
   approve: 'Approve', reject: 'Decline', override: 'Override gate', promote: 'Promote', rollback: 'Roll back',
   release: 'Release hold', pause: 'Pause pipeline', resume: 'Resume pipeline', rejectVersion: 'Reject version',
   openPR: 'Open pull request',
+  pauseFleet: 'Pause fleet', resumeFleet: 'Resume fleet',
 }
 
 /** This environment's actions, in the order the row shows them. */
-const ENV_ORDER: StageActionKind[] = ['approve', 'promote', 'release', 'openPR', 'override', 'rollback', 'reject']
+const ENV_ORDER: StageActionKind[] = ['approve', 'promote', 'release', 'openPR', 'override', 'rollback', 'reject', 'resumeFleet', 'pauseFleet']
 /** Actions on the whole pipeline or the version everywhere: quiet buttons, garnet only in their dialog. */
 const PIPELINE_ORDER: StageActionKind[] = ['resume', 'pause', 'rejectVersion']
 /** Actions that undo or refuse something here: garnet outline, never the thread's red. */
@@ -199,7 +200,7 @@ function ActionDialog({ kind, view, pipeline, namespace, gate: openedFor, onCanc
       const choice = view.rollbackChoices.find(c => c.bundle === toBundle)
       return (
         <StageDialog {...common} tone="destructive" title={`Roll ${env} back${choice ? ` to ${choice.version}` : ''}?`}
-          description={`A new promotion deploys ${choice ? `${choice.version} (${toBundle})` : 'the version Verified before the one running'} to ${env}${hold ? ' and holds it there until you release it' : ''}.`}
+          description={`A new promotion deploys ${choice ? `${choice.version} (${toBundle})` : 'the version Verified before the one running'} to ${env}${view.spec?.fleet ? ', every target, paced by maxConcurrent' : ''}${hold ? ' and holds it there until you release it' : ''}.`}
           confirmLabel="Roll back" confirmDisabled={hold && text.trim() === ''}
           onConfirm={() => void run(`roll ${env} back`, () => api.rollback(pipeline, env, namespace, toBundle || undefined,
             hold ? text.trim() : undefined), 'Rolled back')}>
@@ -227,16 +228,24 @@ function ActionDialog({ kind, view, pipeline, namespace, gate: openedFor, onCanc
       )
     case 'pause':
     case 'resume':
+    case 'pauseFleet':
+    case 'resumeFleet': {
+      // The fleet's (spec.pausedFleets, #1835), or the whole pipeline's.
+      const fleet = kind.endsWith('Fleet') ? env : undefined
+      const pause = kind.startsWith('pause')
+      const what = fleet ? `fleet ${fleet}` : pipeline
       return (
-        <StageDialog {...common} tone={kind === 'pause' ? 'destructive' : 'default'}
-          title={`${kind === 'pause' ? 'Pause' : 'Resume'} ${pipeline}?`}
-          description={kind === 'pause'
+        <StageDialog {...common} tone={pause ? 'destructive' : 'default'}
+          title={`${pause ? 'Pause' : 'Resume'} ${what}?`}
+          description={fleet ? pause ? 'No further target starts; targets in flight finish.' : 'Targets start again.'
+            : pause
             ? `Versions in flight stop before their next environment, in every environment of ${pipeline}, until it is resumed.`
             : `Promotions of ${pipeline} start again where they stopped.`}
-          confirmLabel={kind === 'pause' ? 'Pause pipeline' : 'Resume pipeline'}
-          onConfirm={() => void run(`${kind} ${pipeline}`, () => kind === 'pause' ? api.pause(pipeline, namespace) : api.resume(pipeline, namespace),
-            kind === 'pause' ? 'Paused' : 'Resumed')} />
+          confirmLabel={ACTION_LABEL[kind]}
+          onConfirm={() => void run(`${pause ? 'pause' : 'resume'} ${what}`, () => (pause ? api.pause : api.resume)(pipeline, namespace, fleet),
+            pause ? 'Paused' : 'Resumed')} />
       )
+    }
     case 'rejectVersion':
       return (
         <StageDialog {...common} tone="destructive" title={`Reject ${view.incoming?.version ?? incoming}?`}

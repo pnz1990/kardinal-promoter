@@ -118,6 +118,26 @@ describe('FleetBoard: fleet environments (D1)', () => {
     expect(prod).toHaveAttribute('data-state', 'failed')
     expect(within(prod).getByText('stopped: 2 failed (max 2)')).toBeInTheDocument()
   })
+
+  it('names a percentage maxUnavailable as written, with its count (#1835)', () => {
+    const stopped: Pipeline = {
+      ...p,
+      environmentTopology: [{ name: 'test' }, { name: 'prod', upstreams: ['test'],
+        fleet: { targets, maxConcurrent: 5, maxUnavailable: 2, maxUnavailableSpec: '4%' } }],
+      environmentStates: { ...states, 'prod-c21': 'Failed', 'prod-c22': 'Failed' },
+    }
+    render(<FleetBoard pipelines={[stopped]} total={1} onSelect={() => {}} now={now} />)
+    expect(within(screen.getByRole('button', { name: /^edge prod:/ })).getByText('stopped: 2 failed (max 4% (2))')).toBeInTheDocument()
+  })
+
+  it('says when the fleet is paused (#1835)', () => {
+    const paused: Pipeline = {
+      ...p,
+      environmentTopology: [{ name: 'test' }, { name: 'prod', upstreams: ['test'], fleet: { targets, maxConcurrent: 5, paused: true } }],
+    }
+    render(<FleetBoard pipelines={[paused]} total={1} onSelect={() => {}} now={now} />)
+    expect(within(screen.getByRole('button', { name: /^edge prod:/ })).getByText('paused: no further target starts')).toBeInTheDocument()
+  })
 })
 
 describe('FleetBoard — keyboard', () => {

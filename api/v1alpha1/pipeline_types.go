@@ -11,7 +11,6 @@ import (
 )
 
 // PipelineSpec defines the desired state of a Pipeline.
-// +kubebuilder:validation:XValidation:rule="!has(self.pausedFleets) || self.pausedFleets.all(f, self.environments.exists(e, e.name == f && has(e.fleet)))",message="spec.pausedFleets: every entry must name an environment with a fleet (resume a fleet before removing it or its fleet)"
 type PipelineSpec struct {
 	// Git holds the shared GitOps repository configuration for all
 	// environments in this pipeline.
@@ -39,7 +38,8 @@ type PipelineSpec struct {
 	// PausedFleets pauses fleet environments (kardinal pause <pipeline>
 	// --env <fleet>): no further target of a listed fleet starts, for any
 	// Bundle, and the targets in flight finish, as when maxUnavailable is
-	// reached. Each entry names an environment with a fleet. Changing spec.pausedFleets needs
+	// reached. Each entry names an environment with a fleet; another name
+	// makes the Pipeline Ready=False (ValidationFailed). Changing spec.pausedFleets needs
 	// update on the virtual subresource pipelines/pause, as spec.paused does.
 	// +listType=set
 	// +kubebuilder:validation:MaxItems=100
@@ -739,6 +739,7 @@ type FleetSpec struct {
 	// maxConcurrent. An environment after the fleet waits for every target
 	// to be Verified either way.
 	// +kubebuilder:validation:XIntOrString
+	// +kubebuilder:validation:MaxLength=4
 	// +kubebuilder:validation:XValidation:rule="type(self) == int ? self >= 1 : self.matches('^([1-9][0-9]?|100)%$')",message="fleet.maxUnavailable: a count of at least 1, or a percentage from 1% to 100%"
 	// +optional
 	MaxUnavailable *intstr.IntOrString `json:"maxUnavailable,omitempty"`

@@ -32,7 +32,7 @@ func uiFleetOpsPipeline() *v1alpha1.Pipeline {
 // Pipeline; a fleet target or an environment that is not a fleet is a 400
 // naming what to do instead; the pipelines list marks the fleet paused.
 //
-// Covers FLEET-10.
+// Covers FLEET-14.
 func TestUIAPI_FleetPauseResume(t *testing.T) {
 	ctx := context.Background()
 	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(uiFleetOpsPipeline()).
@@ -73,7 +73,7 @@ func TestUIAPI_FleetPauseResume(t *testing.T) {
 // target with what it runs and whether it goes back; a paused fleet says
 // that no target starts until it is resumed.
 //
-// Covers FLEET-12.
+// Covers FLEET-15.
 func TestUIAPI_FleetRollback(t *testing.T) {
 	p := uiFleetOpsPipeline()
 	p.Spec.PausedFleets = []string{"prod"}

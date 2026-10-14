@@ -32,13 +32,9 @@ func newPauseCmd() *cobra.Command {
 		Use:   "pause <pipeline>",
 		Short: "Pause a pipeline, or one fleet: no new promotion steps start",
 		Long: `Hold <pipeline>: no step starts, and a step still preparing its change holds
-before its next step. A step waiting for its PR merge or running its health
-check finishes, so a merged change is always verified. Resume with
-kardinal resume <pipeline>.
-
-With --env <fleet>, pause one fleet environment: no further target of the
-fleet starts, for any version, and the targets in flight finish, as when
-maxUnavailable is reached. Resume with kardinal resume <pipeline> --env <fleet>.`,
+before its next step; a step waiting for its PR merge or health check finishes.
+With --env <fleet>, pause one fleet: no further target starts, for any version,
+and the targets in flight finish. Resume with kardinal resume (--env <fleet>).`,
 		Example: `  kardinal pause my-app
   kardinal resume my-app
   kardinal pause my-app --env prod      # prod is a fleet: stop starting targets

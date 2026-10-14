@@ -189,6 +189,7 @@ spec:
                             and at least 1. Unset, a failure only keeps its place in
                             maxConcurrent. An environment after the fleet waits for every target
                             to be Verified either way.
+                          maxLength: 4
                           x-kubernetes-int-or-string: true
                           x-kubernetes-validations:
                           - message: 'fleet.maxUnavailable: a count of at least 1,
@@ -1566,7 +1567,8 @@ spec:
                   PausedFleets pauses fleet environments (kardinal pause <pipeline>
                   --env <fleet>): no further target of a listed fleet starts, for any
                   Bundle, and the targets in flight finish, as when maxUnavailable is
-                  reached. Each entry names an environment with a fleet. Changing spec.pausedFleets needs
+                  reached. Each entry names an environment with a fleet; another name
+                  makes the Pipeline Ready=False (ValidationFailed). Changing spec.pausedFleets needs
                   update on the virtual subresource pipelines/pause, as spec.paused does.
                 items:
                   maxLength: 63
@@ -1589,11 +1591,6 @@ spec:
             - environments
             - git
             type: object
-            x-kubernetes-validations:
-            - message: 'spec.pausedFleets: every entry must name an environment with
-                a fleet (resume a fleet before removing it or its fleet)'
-              rule: '!has(self.pausedFleets) || self.pausedFleets.all(f, self.environments.exists(e,
-                e.name == f && has(e.fleet)))'
           status:
             description: PipelineStatus defines the observed state of a Pipeline.
             properties:

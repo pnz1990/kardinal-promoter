@@ -155,8 +155,13 @@ export interface EnvironmentFleet {
   targets: string[]
   /** Targets promoted at once; absent or 0 is all of them. */
   maxConcurrent?: number
-  /** Failed targets that stop the rollout; absent when unset. */
+  /** Failed targets that stop the rollout (a percentage resolved to a count,
+   *  rounded up, at least 1); absent when unset. */
   maxUnavailable?: number
+  /** spec.fleet.maxUnavailable as written ("10%", "2"); absent when unset. */
+  maxUnavailableSpec?: string
+  /** The fleet is paused (kardinal pause --env <fleet>): no further target starts. */
+  paused?: boolean
   /** Why the targets cannot be resolved (a selector fleet). */
   message?: string
 }

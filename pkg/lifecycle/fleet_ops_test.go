@@ -43,7 +43,7 @@ func wideFleet(n int) *v1alpha1.Pipeline {
 // failed and Verified ones go back, and one rollback Bundle targets the
 // fleet, so maxConcurrent paces it.
 //
-// Covers FLEET-12.
+// Covers FLEET-15.
 func TestPlanRollback_FleetPartWay(t *testing.T) {
 	objs := []client.Object{wideFleet(50), bundle("app-v1", "app", "v1", 0), phase(bundle("app-v2", "app", "v2", 100), "Failed")}
 	for i := range 50 {
@@ -81,7 +81,7 @@ func TestPlanRollback_FleetPartWay(t *testing.T) {
 // TestPlanRollback_FleetMixedCases (#1835): which version a fleet whose
 // targets run different Bundles goes back to.
 //
-// Covers FLEET-12.
+// Covers FLEET-15.
 func TestPlanRollback_FleetMixedCases(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -156,7 +156,7 @@ func TestPlanRollback_FleetMixedCases(t *testing.T) {
 // TestPlanRollback_FleetEveryTargetRunsIt: --to a version every target runs
 // already is refused.
 //
-// Covers FLEET-12.
+// Covers FLEET-15.
 func TestPlanRollback_FleetEveryTargetRunsIt(t *testing.T) {
 	c := newClient(t, fleetPipeline(), bundle("app-v1", "app", "v1", 10),
 		step("app-v1", "app", "prod-eu", "Verified", 11), step("app-v1", "app", "prod-us", "Verified", 12))
@@ -172,7 +172,7 @@ func TestPlanRollback_FleetEveryTargetRunsIt(t *testing.T) {
 // unknown Pipeline is ErrNotFound. Two fleets paused at once both stay
 // paused (the update retries a conflict instead of overwriting the list).
 //
-// Covers FLEET-10.
+// Covers FLEET-14.
 func TestSetFleetPaused(t *testing.T) {
 	p := fleetPipeline()
 	p.Spec.Environments = append(p.Spec.Environments, v1alpha1.EnvironmentSpec{Name: "edge",
@@ -226,7 +226,7 @@ func TestSetFleetPaused(t *testing.T) {
 // Bundle (a target with nothing deployed is not counted); targets on
 // different Bundles are refused, naming them and what to do instead.
 //
-// Covers FLEET-13.
+// Covers FLEET-15.
 func TestHoldCurrent_Fleet(t *testing.T) {
 	ctx := context.Background()
 	req := lifecycle.HoldCurrentRequest{Namespace: ns, Pipeline: "app", Environment: "prod", Reason: "audit", Actor: "alice", Now: t0}

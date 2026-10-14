@@ -30,7 +30,9 @@ interface FleetBoardProps {
 function fleetNote(s: Station): string {
   const f = s.fleet!
   if (f.message) return f.message
-  if (f.stopped) return `stopped: ${f.failed} failed (max ${f.maxUnavailable})`
+  // A percentage as written, with its count: "max 10% (5)".
+  if (f.stopped) return `stopped: ${f.failed} failed (max ${f.maxUnavailableSpec?.endsWith('%') ? `${f.maxUnavailableSpec} (${f.maxUnavailable})` : f.maxUnavailable})`
+  if (f.paused) return 'paused: no further target starts'
   if (s.state === 'settled' || s.state === 'empty') {
     if (f.versions > 1) return `${f.total} targets, ${f.versions} versions`
     return s.state === 'empty' ? `${f.total} targets, nothing deployed` : `${f.total} targets`

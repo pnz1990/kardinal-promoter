@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path"
 	"slices"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -313,6 +314,28 @@ func ValidateFleets(p *kardinalv1alpha1.Pipeline) error {
 	}
 	_, _, err := fleetMembers(p)
 	return err
+}
+
+// ValidatePausedFleets returns an error naming each spec.pausedFleets entry
+// that is not an environment with a fleet.
+func ValidatePausedFleets(p *kardinalv1alpha1.Pipeline) error {
+	fleets := map[string]bool{}
+	for _, e := range p.Spec.Environments {
+		if e.Fleet != nil {
+			fleets[e.Name] = true
+		}
+	}
+	var bad []string
+	for _, f := range p.Spec.PausedFleets {
+		if !fleets[f] {
+			bad = append(bad, fmt.Sprintf("%q", f))
+		}
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("spec.pausedFleets: %s is not an environment with a fleet; remove it (kardinal resume %s --env <name>)",
+			strings.Join(bad, ", "), p.Name)
+	}
+	return nil
 }
 
 // HasFleets reports whether any environment of p is a fleet.

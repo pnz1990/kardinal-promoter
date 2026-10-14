@@ -5,13 +5,9 @@ Pause a pipeline, or one fleet: no new promotion steps start
 ### Synopsis
 
 Hold <pipeline>: no step starts, and a step still preparing its change holds
-before its next step. A step waiting for its PR merge or running its health
-check finishes, so a merged change is always verified. Resume with
-kardinal resume <pipeline>.
-
-With --env <fleet>, pause one fleet environment: no further target of the
-fleet starts, for any version, and the targets in flight finish, as when
-maxUnavailable is reached. Resume with kardinal resume <pipeline> --env <fleet>.
+before its next step; a step waiting for its PR merge or health check finishes.
+With --env <fleet>, pause one fleet: no further target starts, for any version,
+and the targets in flight finish. Resume with kardinal resume (--env <fleet>).
 
 Sets spec.paused on the Pipeline and creates the freeze PolicyGate
 freeze-<pipeline>. While the pipeline is paused, no PromotionStep leaves

@@ -285,6 +285,52 @@ describe('StageDrawer (U3)', () => {
     expect(props.onNavigate).toHaveBeenCalledWith('prod-eu', 'why')
   })
 
+  // #1835: fleet-wide pause, resume and rollback from a fleet or one of its targets.
+  const fleetPipe = (paused = false): Pipeline => ({ ...pipeline, activeBundleName: undefined,
+    environmentTopology: [{ name: 'test' }, { name: 'prod', upstreams: ['test'], fleet: { targets: ['prod-eu', 'prod-us'], maxConcurrent: 1, paused } }],
+    environmentStates: { test: 'Verified', 'prod-eu': 'Verified', 'prod-us': 'Verified' },
+    deployed: { 'prod-eu': { bundle: 'web-2', version: '1.4.0' }, 'prod-us': { bundle: 'web-2', version: '1.4.0' } } })
+
+  it('a fleet offers Pause fleet and Roll back; pausing sends the fleet as the environment', async () => {
+    const user = userEvent.setup()
+    api.pause.mockResolvedValue({ message: 'fleet prod of web paused: no further target starts, the targets in flight finish' })
+    renderDrawer([], { data: { pipeline: fleetPipe(), bundles, steps: [], gates: [] } })
+    expect(action('Pause fleet')).toHaveClass('stage-button--secondary')
+    expect(action('Roll back')).toHaveClass('stage-button--destructive')
+    expect(action('Pause pipeline')).toHaveClass('stage-button--quiet')
+    expect(screen.queryByRole('button', { name: 'Promote' })).not.toBeInTheDocument()
+    await user.click(action('Pause fleet'))
+    const dialog = screen.getByRole('dialog', { name: 'Pause fleet prod?' })
+    expect(dialog).toHaveTextContent('No further target starts; targets in flight finish.')
+    await user.click(within(dialog).getByRole('button', { name: 'Pause fleet' }))
+    expect(api.pause).toHaveBeenCalledWith('web', 'team', 'prod')
+    expect(await screen.findByRole('status')).toHaveTextContent('Paused. fleet prod of web paused')
+  })
+
+  it('a paused fleet says so and offers Resume fleet', async () => {
+    const user = userEvent.setup()
+    api.resume.mockResolvedValue({ message: 'fleet prod of web resumed: its targets start again' })
+    renderDrawer([], { data: { pipeline: fleetPipe(true), bundles, steps: [], gates: [] } })
+    expect(screen.getByText('prod promotes to 2 targets, 1 at a time; paused: no further target starts.')).toBeInTheDocument()
+    await user.click(action('Resume fleet'))
+    const dialog = screen.getByRole('dialog', { name: 'Resume fleet prod?' })
+    await user.click(within(dialog).getByRole('button', { name: 'Resume fleet' }))
+    expect(api.resume).toHaveBeenCalledWith('web', 'team', 'prod')
+  })
+
+  it('Roll back on a fleet rolls every target back with one call for the fleet, paced by maxConcurrent', async () => {
+    const user = userEvent.setup()
+    api.rollback.mockResolvedValue({ bundle: 'web-rollback-x', message: 'rollback started — rolling fleet prod back to web-1: 2 of 2 targets go back, paced by maxConcurrent' })
+    // A fleet's Bundles record their targets, not the fleet: no version to pick, the controller chooses.
+    renderDrawer([], { data: { pipeline: fleetPipe(), bundles: bundles.map(x => ({ ...x, environments: [] })), steps: [], gates: [] } })
+    await user.click(action('Roll back'))
+    const dialog = screen.getByRole('dialog', { name: 'Roll prod back?' })
+    expect(dialog).toHaveTextContent('to prod, every target, paced by maxConcurrent.')
+    await user.click(within(dialog).getByRole('button', { name: 'Roll back' }))
+    expect(api.rollback).toHaveBeenCalledWith('web', 'prod', 'team', undefined, undefined)
+    expect(await screen.findByRole('status')).toHaveTextContent('Rolled back. rollback started — rolling fleet prod back to web-1: 2 of 2 targets go back')
+  })
+
   it('the close button calls onClose', async () => {
     const user = userEvent.setup()
     const props = renderDrawer()

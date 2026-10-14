@@ -109,9 +109,43 @@ Add `--expires-in 24h` to end the hold after 24 hours.
 prod; nothing is rolled back and no version is created. To go back to an earlier version and
 keep it there, roll back with `--hold` (below).
 
-Running `hold` again with the same reason changes nothing. It refuses a fleet environment (its
-targets can run different versions), an environment that runs nothing yet, and one already held
-on another version or for another reason: release that hold first. `unhold` is `release-hold`.
+Running `hold` again with the same reason changes nothing. It refuses an environment that runs
+nothing yet, and one already held on another version or for another reason: release that hold
+first. `unhold` is `release-hold`.
+
+On a [fleet](pipeline-reference.md#fleets), `kardinal hold my-app --env prod --reason ...` holds
+every target with one `spec.holds` entry naming the fleet, when every target that runs something
+runs the same version (a target that runs nothing yet is held too). When the targets run
+different versions, a rollout part way, it is refused and names what each target runs: one hold
+names one version, and holding the fleet on either would let it promote into the targets that do
+not run it. Stop such a rollout where it is with `kardinal pause my-app --env prod`, or bring
+every target to one version and hold it with `kardinal rollback my-app --env prod --hold`.
+`kardinal unhold my-app --env prod` releases the fleet; a target held through its fleet cannot be
+released alone.
+
+### Roll back a fleet
+
+`kardinal rollback my-app --env prod`, where `prod` is a [fleet](pipeline-reference.md#fleets),
+rolls every target back with one rollback version whose `intent.targetEnvironment` is the fleet.
+The fleet's `maxConcurrent` paces it like any version, and a [paused fleet](pause.md#pause-one-fleet)
+starts none of its targets until it is resumed. Targets that already run the version it restores
+are Verified at once. Where it goes:
+
+- **Every target runs the same version**: the version before it, chosen as for one environment.
+- **The targets run different versions** (a rollout stopped part way by `maxUnavailable` or a
+  pause, or a target rolled back alone): the version the least advanced targets run, the oldest
+  of them. A rollback version counts as the version it restored, so a target rolled back alone
+  never sends the fleet forward. The targets that run it stay; the others go back to it.
+- **`--to <version>`**: that version for every target.
+
+When the oldest version cannot be restored (rejected since, or deleted), the rollback is refused
+and lists what each target runs: name the version with `--to`. The command prints how many
+targets go back and from what; `-o json` and the UI API's response list every target with
+`runs` and `changes`. In the UI, **Roll back** on a fleet's station does the same.
+
+A target removed from the Pipeline while the rollback is in flight leaves it, as it leaves any
+version: it gets no step, keeps what it runs, and the rollback is Verified once the remaining
+targets are. `kardinal rollback my-app --env prod-eu-west` still rolls one target back alone.
 
 ### Roll back and hold
 

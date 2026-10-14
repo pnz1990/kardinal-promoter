@@ -770,7 +770,7 @@ func rebuilt(t *testing.T, sim *compactSim, p *kardinalv1alpha1.Pipeline) *compa
 // in the wave (kro does not prune their steps) and finish; the environment
 // after the fleet waits. Resuming lets the rollout go on in target order.
 //
-// Covers FLEET-10.
+// Covers FLEET-14.
 func TestFleet_PausedStartsNoTarget(t *testing.T) {
 	p := bigFleet(10, 3, nil)
 	sim := fleetSim(t, p)
@@ -801,7 +801,7 @@ func TestFleet_PausedStartsNoTarget(t *testing.T) {
 // TestFleet_PausedOtherFleetRuns: pausing one fleet does not hold another
 // fleet or an environment that is not a fleet.
 //
-// Covers FLEET-10.
+// Covers FLEET-14.
 func TestFleet_PausedOtherFleetRuns(t *testing.T) {
 	p := pipelineOf("app",
 		kardinalv1alpha1.EnvironmentSpec{Name: "test"},
@@ -821,7 +821,7 @@ func TestFleet_PausedOtherFleetRuns(t *testing.T) {
 // 50-target fleet is 5 targets: four failures let the rollout go on, the
 // fifth stops it, and the targets in flight finish.
 //
-// Covers FLEET-11.
+// Covers FLEET-14.
 func TestFleet_MaxUnavailablePercent(t *testing.T) {
 	p := bigFleet(50, 10, nil)
 	pct := intstr.FromString("10%")
@@ -846,7 +846,7 @@ func TestFleet_MaxUnavailablePercent(t *testing.T) {
 // TestMaxUnavailableCount: a count is used as written; a percentage of the
 // fleet's targets is rounded up and at least 1.
 //
-// Covers FLEET-11.
+// Covers FLEET-14.
 func TestMaxUnavailableCount(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -878,7 +878,7 @@ func TestMaxUnavailableCount(t *testing.T) {
 // TestFleet_MaxUnavailableInvalid: a value the API server would refuse
 // fails the build as invalid, naming the fleet.
 //
-// Covers FLEET-11.
+// Covers FLEET-14.
 func TestFleet_MaxUnavailableInvalid(t *testing.T) {
 	p := bigFleet(4, 1, nil)
 	bad := intstr.FromString("ten")
@@ -890,3 +890,17 @@ func TestFleet_MaxUnavailableInvalid(t *testing.T) {
 }
 
 func ptrTo[T any](v T) *T { return &v }
+
+// TestValidatePausedFleets: a spec.pausedFleets entry that is not an
+// environment with a fleet is refused, naming it; a paused fleet is fine.
+//
+// Covers FLEET-14.
+func TestValidatePausedFleets(t *testing.T) {
+	p := bigFleet(2, 1, nil)
+	p.Spec.PausedFleets = []string{"prod"}
+	require.NoError(t, graph.ValidatePausedFleets(p))
+	p.Spec.PausedFleets = []string{"prod", "test", "gone"}
+	err := graph.ValidatePausedFleets(p)
+	require.Error(t, err)
+	assert.EqualError(t, err, `spec.pausedFleets: "test", "gone" is not an environment with a fleet; remove it (kardinal resume app --env <name>)`)
+}

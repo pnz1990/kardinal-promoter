@@ -33,7 +33,7 @@ func lcFleetPipeline(n int) *v1alpha1.Pipeline {
 // spec.pausedFleets and says how to resume; resume --env removes it; a
 // target or a plain environment is refused, naming what to pause instead.
 //
-// Covers FLEET-10.
+// Covers FLEET-14.
 func TestFleetPauseCmd(t *testing.T) {
 	c := lcClient(t, lcFleetPipeline(3))
 	var buf bytes.Buffer
@@ -63,7 +63,7 @@ func TestFleetPauseCmd(t *testing.T) {
 // from what, at most six named), how many run it already, that maxConcurrent
 // paces it and, for a paused fleet, that it waits for the resume.
 //
-// Covers FLEET-12.
+// Covers FLEET-15.
 func TestRollbackCmd_Fleet(t *testing.T) {
 	p := lcFleetPipeline(10)
 	p.Spec.PausedFleets = []string{"prod"}

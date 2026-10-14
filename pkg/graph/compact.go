@@ -201,7 +201,7 @@ type compactStep struct {
 	maxUnavailable int
 	// paused stops the fleet's admissions (spec.pausedFleets).
 	paused bool
-	extras         compactEnvExtras
+	extras compactEnvExtras
 	// imageVerification is the Bundle's ImageVerification name for a root
 	// step of a Pipeline with spec.imageVerification, else "".
 	imageVerification string
