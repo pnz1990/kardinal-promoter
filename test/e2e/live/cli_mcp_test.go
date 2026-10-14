@@ -245,7 +245,7 @@ func saKubeconfig(t *testing.T, e *framework.Env, ns, sa string) string {
 	require.NoError(t, err)
 	cfg := clientcmdapi.NewConfig()
 	cfg.Clusters["cluster"] = &clientcmdapi.Cluster{Server: e.Config.Host, CertificateAuthorityData: []byte(ca.Data["ca.crt"]),
-		TLSServerName: e.Config.TLSClientConfig.ServerName}
+		TLSServerName: e.Config.ServerName}
 	cfg.AuthInfos[sa] = &clientcmdapi.AuthInfo{Token: tok.Status.Token}
 	cfg.Contexts["agent"] = &clientcmdapi.Context{Cluster: "cluster", AuthInfo: sa, Namespace: ns}
 	cfg.CurrentContext = "agent"
