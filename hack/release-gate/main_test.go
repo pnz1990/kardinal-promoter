@@ -584,7 +584,9 @@ func TestPlanCI(t *testing.T) {
 	assert.NotContains(t, ids, "e2e-core-135", "no local live suite")
 	assert.Contains(t, ids, "scale-full", "scale stays local")
 	assert.Contains(t, ids, "upgrade-v0110", "the missing upgrade suite is missing in CI too")
-	assert.Equal(t, []string{"core", "gitlab", "github", "multi-cluster", "upgrade-v0100"}, CISuites(fakeRepo()))
+	assert.Equal(t, []string{"core", "gitlab", "github", "multi-cluster", "upgrade-v0100"}, ciSuitesOf(steps),
+		"the dispatch runs every suite but scale")
+	assert.Equal(t, []string{"gitlab"}, ciSuitesOf([]Step{ids["ci-gitlab-137"], ids["unit-race"]}), "only the selected steps' suites")
 }
 
 func TestGateRun_Slots(t *testing.T) {

@@ -309,20 +309,6 @@ func Plan(r *Repo, o Options) []Step {
 	return steps
 }
 
-// CISuites are the suites -live ci dispatches: every matrix.txt suite but
-// scale, whose full and soak profiles need this host.
-func CISuites(r *Repo) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, l := range r.Matrix {
-		if l.Suite != "scale" && !seen[l.Suite] {
-			seen[l.Suite] = true
-			out = append(out, l.Suite)
-		}
-	}
-	return out
-}
-
 // ciSteps are the e2e-live.yml jobs of the CI suites: the minors and shards
 // of hack/e2e/matrix.txt, as CI runs them.
 func ciSteps(r *Repo) []Step {
