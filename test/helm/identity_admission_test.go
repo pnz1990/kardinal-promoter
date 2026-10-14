@@ -23,7 +23,7 @@ import (
 // release (identity-admission.yaml).
 func identityAdmissionObjects(release string) []string {
 	var out []string
-	for _, p := range []string{"bundle-rejection", "gate-overrides", "approvals", "bundle-creator", "graph-objects", "scoped-writes"} {
+	for _, p := range []string{"bundle-rejection", "gate-overrides", "approvals", "verdicts", "bundle-creator", "graph-objects", "scoped-writes"} {
 		out = append(out, "ValidatingAdmissionPolicy/"+release+"-"+p, "ValidatingAdmissionPolicyBinding/"+release+"-"+p)
 	}
 	return out
@@ -601,14 +601,14 @@ func TestIdentityAdmission_GraphObjects(t *testing.T) {
 	rules := vap.Spec.MatchConstraints.ResourceRules
 	require.Len(t, rules, 4)
 	assert.Equal(t, []admissionregistrationv1.OperationType{admissionregistrationv1.Delete}, rules[1].Operations)
-	assert.Equal(t, []string{"hookruns"}, rules[1].Resources, "a deleted HookRun would run its hook again")
+	assert.Equal(t, []string{"hookruns", "agentruns"}, rules[1].Resources, "a deleted HookRun would run its hook again, an AgentRun its agent")
 	// A refused HookRun delete gets its own message: "the Graph recreates
 	// it", the message for creates and changes, is not true for one.
 	require.Len(t, vap.Spec.Validations, 3)
 	assert.True(t, strings.HasPrefix(vap.Spec.Validations[0].Expression, "request.operation == 'DELETE' ||"),
 		"the create/change rule leaves deletes to the next")
 	assert.Contains(t, vap.Spec.Validations[1].Expression, "request.operation != 'DELETE'")
-	assert.Contains(t, vap.Spec.Validations[1].Message, "HookRuns record that a hook ran; only kardinal deletes them")
+	assert.Contains(t, vap.Spec.Validations[1].Message, "HookRuns and AgentRuns record that a hook or an agent ran; only kardinal deletes them")
 	assert.NotContains(t, vap.Spec.Validations[1].Message, "recreates it")
 	rules = append(rules[:1], rules[2:]...)
 	assert.ElementsMatch(t, []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update},

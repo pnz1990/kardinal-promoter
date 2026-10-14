@@ -58,7 +58,7 @@ spec:
 {{- end }}
 {{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kardinal-promoter.serviceAccountName" .) }}
 {{- /* PolicyGate spec fields a gate instance copies from its template (all but overrides). */}}
-{{- $instanceSpecFields := list "expression" "message" "recheckInterval" "skipPermission" "when" "selector" "approval" "approvals" "generated" }}
+{{- $instanceSpecFields := list "expression" "message" "recheckInterval" "skipPermission" "when" "selector" "approval" "approvals" "verify" "verdicts" "generated" }}
 {{- /* Gate instance metadata a caller other than kro and the controller may not change: all of it but
 managedFields, resourceVersion and generation, which the API server writes (name and namespace are immutable). */}}
 {{- $instanceMetaFields := list "labels" "ownerReferences" "finalizers" "generateName" }}
