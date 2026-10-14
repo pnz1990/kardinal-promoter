@@ -54,10 +54,12 @@ permissions:
   contents: read
 
 # One scheduled run at a time: a nightly run that outlives its night is not
-# overlapped by the next one.
+# overlapped by the next one. A dispatched run is one per branch: a newer
+# dispatch on the same branch replaces the older one, so one branch never holds
+# several matrices of runners.
 concurrency:
-  group: e2e-live-${{ github.event_name == 'schedule' && 'schedule' || github.run_id }}
-  cancel-in-progress: false
+  group: e2e-live-${{ github.event_name == 'schedule' && 'schedule' || github.ref_name }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && github.ref_name != 'main' }}
 
 # bash (not the default `bash -e`) so every step runs with -eo pipefail.
 defaults:
@@ -87,7 +89,15 @@ jobs:
           # one suite on a minor matrix.txt does not run it on, and a ninth of
           # the core suite with each test three times.
           SAMPLE: ${{ github.event_name == 'schedule' && 'today' || inputs.sample }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref_name }}
         run: |
+          # A branch dispatch names its suites: the whole matrix runs on the
+          # schedule, on main and in the release gate, not per branch.
+          if [ "$EVENT" = workflow_dispatch ] && [ "$REF" != main ] && [ -z "$SUITES" ]; then
+            echo "::error::a dispatch on a branch must name its suites (-f suites=\"core fleet\"); the whole matrix runs on main"
+            exit 1
+          fi
           # The date, resolved once: the report job names it in its issues.
           [ "$SAMPLE" != today ] || SAMPLE=$(date -u +%Y-%m-%d)
           echo "sample=$SAMPLE" >> "$GITHUB_OUTPUT"
@@ -117,6 +127,9 @@ jobs:
     timeout-minutes: ${{ matrix.suite == 'scale' && 120 || (matrix.count || github.event.schedule == '0 4 * * 1' || (inputs.count && inputs.count != '1')) && 180 || 60 }}
     strategy:
       fail-fast: false
+      # The account runs 20 jobs at once: a dispatched run on a branch takes at
+      # most 4, so pull-request and main CI keep runners.
+      max-parallel: ${{ (github.event_name == 'workflow_dispatch' && github.ref_name != 'main') && 4 || 16 }}
       matrix: ${{ fromJSON(needs.image.outputs.matrix) }}
     env:
       SUITE: ${{ matrix.suite }}
