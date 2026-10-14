@@ -240,6 +240,7 @@ nav:
       - Verdicts: design/19-verdicts.md
       - Change requests and approval fields: design/23-change-requests.md
       - Attestations: design/20-attestations.md
+      - Promotion receipts: design/21-receipts.md
 
 extra:
   social:
