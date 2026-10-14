@@ -340,6 +340,16 @@ ChangeWindow defines a cluster-scoped time window during which promotions are bl
 | `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
 | `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.exemptions` | []object |  | Exemptions are the spec.freeze.exemptions in effect now (not expired). The PromotionStep reconciler lets a step through a freeze only on an exemption listed here and still in the spec. |
+| `status.exemptions[].bundle` | string |  | Bundle, when set, limits the exemption to that version. |
+| `status.exemptions[].createdBy` | string |  | CreatedBy is who made the exception, as admission verified it. |
+| `status.exemptions[].environment` | string |  | Environment, when set, limits the exemption to that environment. |
+| `status.exemptions[].expiresAt` | string (date-time) | yes | ExpiresAt ends the exemption. |
+| `status.exemptions[].namespace` | string | yes | Namespace and Pipeline are the pipeline let through. |
+| `status.exemptions[].pipeline` | string | yes |  |
+| `status.exemptions[].reason` | string | yes | Reason says why (recorded in the FreezeExempted audit record). |
+| `status.nextTransition` | string (date-time) |  | NextTransition is the next instant the status can change: a window boundary or, for a freeze, the earliest expiry of an exemption in effect. The reconciler requeues itself then. |
+| `status.observedGeneration` | integer (int64) |  | ObservedGeneration is the generation the status describes. A freeze whose status is behind its spec is treated as active. |
 | `status.reason` | string |  | Reason explains the current active/inactive state. |
 
 ## ClusterScmProvider

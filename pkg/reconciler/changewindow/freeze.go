@@ -5,9 +5,12 @@ package changewindow
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
+
+	"k8s.io/apimachinery/pkg/api/equality"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
@@ -56,17 +59,25 @@ func FreezeSelects(f *kardinalv1alpha1.ChangeWindowFreeze, t FreezeTarget) bool 
 	return true // an unknown selector holds: a freeze must fail closed
 }
 
-// exemptionFor is the first exemption of f in effect at now for t, or nil.
-func exemptionFor(f *kardinalv1alpha1.ChangeWindowFreeze, t FreezeTarget, now time.Time) *kardinalv1alpha1.FreezeExemption {
-	for i := range f.Exemptions {
-		e := &f.Exemptions[i]
+// exemptionFor is the first exemption of w in effect for t: listed in the
+// window's status (the ChangeWindow reconciler keeps only unexpired ones
+// there) and still in its spec (a removed exemption ends at once), or nil.
+// A status behind the spec lists none: new exemptions wait for it.
+func exemptionFor(w *kardinalv1alpha1.ChangeWindow, t FreezeTarget) *kardinalv1alpha1.FreezeExemption {
+	if w.Status.ObservedGeneration != w.Generation {
+		return nil
+	}
+	for i := range w.Status.Exemptions {
+		e := &w.Status.Exemptions[i]
 		if e.Namespace != t.Namespace || e.Pipeline != t.Pipeline {
 			continue
 		}
 		if (e.Environment != "" && e.Environment != t.Environment) || (e.Bundle != "" && e.Bundle != t.Bundle) {
 			continue
 		}
-		if !now.Before(e.ExpiresAt.Time) {
+		if !slices.ContainsFunc(w.Spec.Freeze.Exemptions, func(x kardinalv1alpha1.FreezeExemption) bool {
+			return equality.Semantic.DeepEqual(x, *e)
+		}) {
 			continue
 		}
 		return e
@@ -74,37 +85,28 @@ func exemptionFor(f *kardinalv1alpha1.ChangeWindowFreeze, t FreezeTarget, now ti
 	return nil
 }
 
-// FreezesFor returns the freezes among windows that are active at now and
-// select t, sorted by name, and the next instant the answer can change (a
-// window boundary or an exemption's expiry; zero when none is known). A
-// freeze whose spec cannot be evaluated is active: a freeze fails closed.
-func FreezesFor(windows []kardinalv1alpha1.ChangeWindow, t FreezeTarget, now time.Time) ([]FreezeMatch, time.Time) {
+// FreezeActive reports whether freeze window w is active, from the status
+// its reconciler writes (status.active). A status behind the spec counts as
+// active: a new or edited freeze holds at once, and fails closed.
+func FreezeActive(w *kardinalv1alpha1.ChangeWindow) bool {
+	return w.Spec.Freeze != nil && (w.Status.ObservedGeneration != w.Generation || w.Status.Active)
+}
+
+// FreezesFor returns the freezes among windows that are active and select
+// t, sorted by name. It reads only the windows' status for time (active, the
+// exemptions in effect), which the ChangeWindow reconciler writes at each
+// boundary: no clock here.
+func FreezesFor(windows []kardinalv1alpha1.ChangeWindow, t FreezeTarget) []FreezeMatch {
 	var out []FreezeMatch
-	var next time.Time
-	earliest := func(at time.Time) {
-		if !at.IsZero() && at.After(now) && (next.IsZero() || at.Before(next)) {
-			next = at
-		}
-	}
 	for i := range windows {
 		w := &windows[i]
-		if w.Spec.Freeze == nil || !w.DeletionTimestamp.IsZero() {
+		if !FreezeActive(w) || !w.DeletionTimestamp.IsZero() || !FreezeSelects(w.Spec.Freeze, t) {
 			continue
 		}
-		res := Evaluate(w.Spec, now)
-		earliest(res.Next)
-		if !res.Active || !FreezeSelects(w.Spec.Freeze, t) {
-			continue
-		}
-		m := FreezeMatch{Window: w, Since: w.Spec.Start.Time}
-		if e := exemptionFor(w.Spec.Freeze, t, now); e != nil {
-			m.Exemption = e
-			earliest(e.ExpiresAt.Time)
-		}
-		out = append(out, m)
+		out = append(out, FreezeMatch{Window: w, Since: w.Spec.Start.Time, Exemption: exemptionFor(w, t)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Window.Name < out[j].Window.Name })
-	return out, next
+	return out
 }
 
 // Holding returns the matches that hold the target (no exemption).

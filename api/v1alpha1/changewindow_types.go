@@ -160,6 +160,24 @@ type ChangeWindowStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ObservedGeneration is the generation the status describes. A freeze
+	// whose status is behind its spec is treated as active.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// NextTransition is the next instant the status can change: a window
+	// boundary or, for a freeze, the earliest expiry of an exemption in
+	// effect. The reconciler requeues itself then.
+	// +optional
+	NextTransition *metav1.Time `json:"nextTransition,omitempty"`
+
+	// Exemptions are the spec.freeze.exemptions in effect now (not
+	// expired). The PromotionStep reconciler lets a step through a freeze
+	// only on an exemption listed here and still in the spec.
+	// +kubebuilder:validation:MaxItems=100
+	// +optional
+	Exemptions []FreezeExemption `json:"exemptions,omitempty"`
 }
 
 // +kubebuilder:object:root=true

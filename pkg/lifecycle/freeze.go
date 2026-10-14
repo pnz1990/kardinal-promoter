@@ -196,7 +196,7 @@ func ExemptFromFreezes(ctx context.Context, c client.Client, req ExemptRequest) 
 		f := &freezes[i]
 		sel := *f.Spec.Freeze
 		sel.Actors = v1alpha1.FreezeEveryone // whichever actor: the exemption is for the pipeline
-		if !changewindow.Evaluate(f.Spec, req.Now).Active || !changewindow.FreezeSelects(&sel, anyone) {
+		if !changewindow.FreezeActive(f) || !changewindow.FreezeSelects(&sel, anyone) {
 			continue
 		}
 		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {

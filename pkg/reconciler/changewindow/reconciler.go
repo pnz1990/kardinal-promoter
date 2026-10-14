@@ -23,6 +23,7 @@ import (
 
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -84,10 +85,29 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// resync, an annotation edit or a controller restart reports nothing new.
 	newlyInvalid := res.Err != nil && !invalidAt(cw, cw.Generation)
 
+	// A freeze also records the exemptions in effect now, and the next
+	// boundary includes the earliest of their expiries, so the status is
+	// all a PromotionStep reads (no clock outside this status write).
+	exemptions, next := freezeExemptions(cw.Spec.Freeze, now), res.Next
+	for _, e := range exemptions {
+		if next.IsZero() || e.ExpiresAt.Before(&metav1.Time{Time: next}) {
+			next = e.ExpiresAt.Time
+		}
+	}
+	var nextTransition *metav1.Time
+	if !next.IsZero() {
+		nextTransition = &metav1.Time{Time: next}
+	}
+
 	patch := client.MergeFrom(cw.DeepCopy())
-	changed := cw.Status.Active != res.Active || cw.Status.Reason != res.Reason
+	changed := cw.Status.Active != res.Active || cw.Status.Reason != res.Reason ||
+		cw.Status.ObservedGeneration != cw.Generation || !equality.Semantic.DeepEqual(cw.Status.Exemptions, exemptions) ||
+		!equality.Semantic.DeepEqual(cw.Status.NextTransition, nextTransition)
 	cw.Status.Active = res.Active
 	cw.Status.Reason = res.Reason
+	cw.Status.ObservedGeneration = cw.Generation
+	cw.Status.Exemptions = exemptions
+	cw.Status.NextTransition = nextTransition
 	if meta.SetStatusCondition(&cw.Status.Conditions, validCondition(res, cw.Generation, now)) {
 		changed = true
 	}
@@ -104,10 +124,10 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			res.Err.Error()+"; the window is active (blocking) until the spec is fixed")
 	}
 
-	if res.Next.IsZero() {
+	if next.IsZero() {
 		return ctrl.Result{}, nil
 	}
-	wait := res.Next.Sub(now) + boundarySlack
+	wait := next.Sub(now) + boundarySlack
 	if wait > maxRequeue {
 		wait = maxRequeue
 	}
@@ -156,6 +176,21 @@ func validCondition(res Result, generation int64, now time.Time) metav1.Conditio
 		cond.Message = res.Err.Error() + "; the window is active (blocking) until the spec is fixed"
 	}
 	return cond
+}
+
+// freezeExemptions are the exemptions of f in effect at now (not expired),
+// nil for a window that is not a freeze.
+func freezeExemptions(f *kardinalv1alpha1.ChangeWindowFreeze, now time.Time) []kardinalv1alpha1.FreezeExemption {
+	if f == nil {
+		return nil
+	}
+	var out []kardinalv1alpha1.FreezeExemption
+	for _, e := range f.Exemptions {
+		if now.Before(e.ExpiresAt.Time) {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 func (r *Reconciler) now() time.Time {

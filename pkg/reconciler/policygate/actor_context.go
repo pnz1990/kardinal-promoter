@@ -54,14 +54,17 @@ func readsAgent(gate *kardinalv1alpha1.PolicyGate) bool {
 	return gate.Spec.Approval != nil && strings.Contains(gate.Spec.Approval.RequiredWhen, "agent")
 }
 
-// buildAgentContext is the agent CEL variable: the AgentIdentity of the
-// Bundle's agent as it is now (section 2.2): registered (it exists and its
-// status.ready is true), name, sponsor, autonomy (default approve) and
-// suspended. A Bundle whose author is not an agent, or a gate that does not
+// buildAgentContext is the agent CEL variable: the Bundle's agent as the
+// registry says now (section 2.2), read only from status other reconcilers
+// write: registered is the AgentIdentity's status.ready; sponsor, autonomy
+// and suspended come from its entry in this release's AgentIndex
+// (r.AgentIndexName), which the index reconciler builds from the
+// AgentIdentities (suspended: the entry is blocked while the identity is
+// ready). A Bundle whose author is not an agent, or a gate that does not
 // read agent.*, gets the unregistered value without a read. A read error
 // other than NotFound is returned: the gate fails closed.
 //
-// Graph-first: a cross-CRD read of the gate context, like ChangeWindows
+// Graph-first: cross-CRD reads of the gate context, like ChangeWindows
 // (ledger G8). A kro ref node would need a cluster-wide grant for every
 // Graph identity (G18, G19).
 func (r *Reconciler) buildAgentContext(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
@@ -71,7 +74,7 @@ func (r *Reconciler) buildAgentContext(ctx context.Context, gate *kardinalv1alph
 		return out, nil
 	}
 	out["name"] = author.Agent
-	if !readsAgent(gate) {
+	if !readsAgent(gate) || r.AgentIndexName == "" {
 		return out, nil
 	}
 	var id kardinalv1alpha1.AgentIdentity
@@ -81,15 +84,35 @@ func (r *Reconciler) buildAgentContext(ctx context.Context, gate *kardinalv1alph
 		}
 		return nil, fmt.Errorf("get AgentIdentity %s: %w", author.Agent, err)
 	}
-	autonomy := id.Spec.Autonomy
-	if autonomy == "" {
-		autonomy = kardinalv1alpha1.AutonomyApprove
+	var idx kardinalv1alpha1.AgentIndex
+	if err := r.Get(ctx, client.ObjectKey{Name: r.AgentIndexName}, &idx); err != nil {
+		if apierrors.IsNotFound(err) {
+			return out, nil
+		}
+		return nil, fmt.Errorf("get AgentIndex %s: %w", r.AgentIndexName, err)
 	}
-	out["registered"] = id.Status.Ready
-	out["sponsor"] = id.Spec.Sponsor.User
-	out["autonomy"] = autonomy
-	out["suspended"] = id.Spec.Suspended
+	entry, ok := indexEntry(&idx.Status, author.Agent)
+	if !ok || !id.Status.Ready || id.Status.ObservedGeneration != id.Generation {
+		return out, nil
+	}
+	out["registered"] = true
+	out["sponsor"] = entry.Sponsor
+	out["autonomy"] = entry.Autonomy
+	out["suspended"] = entry.Blocked != ""
 	return out, nil
+}
+
+// indexEntry is an AgentIndex entry of agent (any of its subjects: they
+// carry the same entry), the users first.
+func indexEntry(idx *kardinalv1alpha1.AgentIndexStatus, agent string) (kardinalv1alpha1.AgentIndexEntry, bool) {
+	for _, m := range []map[string]kardinalv1alpha1.AgentIndexEntry{idx.Users, idx.Groups} {
+		for _, e := range m {
+			if e.Agent == agent {
+				return e, true
+			}
+		}
+	}
+	return kardinalv1alpha1.AgentIndexEntry{}, false
 }
 
 // approvalRequired evaluates gate's approval.requiredWhen in celCtx: true
@@ -108,11 +131,15 @@ func (r *Reconciler) approvalRequired(ctx context.Context, gate *kardinalv1alpha
 	return required, nil
 }
 
-// agentIdentityGateRequests maps an AgentIdentity event to the gate
-// instances that read agent.*, so a suspension or an autonomy change
-// reaches in-flight gates at once.
-func (r *Reconciler) agentIdentityGateRequests(ctx context.Context, _ client.Object) []reconcile.Request {
-	return r.instanceGateRequestsWhere(ctx, "AgentIdentity", readsAgent)
+// agentIndexGateRequests maps an event of this release's AgentIndex to the
+// gate instances that read agent.*: the index is rebuilt on every
+// AgentIdentity change, so a suspension or an autonomy change reaches
+// in-flight gates at once.
+func (r *Reconciler) agentIndexGateRequests(ctx context.Context, obj client.Object) []reconcile.Request {
+	if r.AgentIndexName == "" || obj.GetName() != r.AgentIndexName {
+		return nil
+	}
+	return r.instanceGateRequestsWhere(ctx, "AgentIndex", readsAgent)
 }
 
 func equalBoolPtr(a, b *bool) bool {

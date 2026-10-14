@@ -43,21 +43,24 @@ const condFreezeExempted = "FreezeExempted"
 // one FreezeExempted AuditEvent. The step writes only its own status; a
 // read error holds it (a kill switch fails closed).
 func (r *Reconciler) holdIfFrozen(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (bool, ctrl.Result, error) {
-	now := r.now()
-	matches, next, err := r.freezesFor(ctx, ps, now)
+	matches, err := r.freezesFor(ctx, ps)
 	if err != nil {
 		return true, ctrl.Result{}, err
 	}
-	requeue := requeuePaused
-	if !next.IsZero() && next.Sub(now)+time.Second < requeue {
-		requeue = next.Sub(now) + time.Second
-	}
 	held := changewindow.Holding(matches)
 	if len(held) == 0 {
-		if len(matches) > 0 {
-			if err := r.recordFreezeExemption(ctx, ps, matches[0], now); err != nil {
-				return true, ctrl.Result{}, err
-			}
+		if len(matches) == 0 {
+			return false, ctrl.Result{}, nil
+		}
+		// Let through under an exemption: record it first, then go on in a
+		// new reconcile, so the step's next status write starts from the
+		// recorded one (its patches carry the resourceVersion they read).
+		recorded, err := r.recordFreezeExemption(ctx, ps, matches[0], r.now())
+		if err != nil {
+			return true, ctrl.Result{}, err
+		}
+		if recorded {
+			return true, ctrl.Result{Requeue: true}, nil
 		}
 		return false, ctrl.Result{}, nil
 	}
@@ -71,28 +74,29 @@ func (r *Reconciler) holdIfFrozen(ctx context.Context, log zerolog.Logger, ps *v
 		log.Info().Str("changewindow", held[0].Window.Name).Str("env", ps.Spec.Environment).
 			Str("state", ps.Status.State).Msg("freeze active — step held")
 	}
-	return true, ctrl.Result{RequeueAfter: requeue}, nil
+	// The ChangeWindow watch wakes the step when the freeze ends or an
+	// exemption takes effect; the minute is the fallback.
+	return true, ctrl.Result{RequeueAfter: requeuePaused}, nil
 }
 
-// freezesFor returns the active freezes that select ps at now
-// (changewindow.FreezesFor) and when that can change. The version is read
+// freezesFor returns the active freezes that select ps
+// (changewindow.FreezesFor, from the windows' status). The version is read
 // only when an agent freeze exists.
-func (r *Reconciler) freezesFor(ctx context.Context, ps *v1alpha1.PromotionStep, now time.Time) ([]changewindow.FreezeMatch, time.Time, error) {
+func (r *Reconciler) freezesFor(ctx context.Context, ps *v1alpha1.PromotionStep) ([]changewindow.FreezeMatch, error) {
 	var windows v1alpha1.ChangeWindowList
 	if err := r.List(ctx, &windows); err != nil {
-		return nil, time.Time{}, fmt.Errorf("list ChangeWindows for freezes: %w", err)
+		return nil, fmt.Errorf("list ChangeWindows for freezes: %w", err)
 	}
 	t := changewindow.FreezeTarget{Namespace: ps.Namespace, Pipeline: ps.Spec.PipelineName,
 		Environment: ps.Spec.Environment, Bundle: ps.Spec.BundleName}
 	if needsAuthor(windows.Items) {
 		b, err := r.loadBundle(ctx, ps)
 		if err != nil {
-			return nil, time.Time{}, fmt.Errorf("read the version's actor for an agent freeze: %w", err)
+			return nil, fmt.Errorf("read the version's actor for an agent freeze: %w", err)
 		}
 		t.Author = lifecycle.BundleAuthor(b)
 	}
-	matches, next := changewindow.FreezesFor(windows.Items, t, now)
-	return matches, next, nil
+	return changewindow.FreezesFor(windows.Items, t), nil
 }
 
 // needsAuthor reports whether an agent freeze exists, so the version's actor
@@ -109,8 +113,9 @@ func needsAuthor(windows []v1alpha1.ChangeWindow) bool {
 // recordFreezeExemption records, once per exemption, that ps went on through
 // freeze m under its exemption: the FreezeExempted condition and, in the
 // same optimistic-locked status patch, the AuditEvent in the step's outbox.
+// It reports whether it wrote anything.
 func (r *Reconciler) recordFreezeExemption(ctx context.Context, ps *v1alpha1.PromotionStep,
-	m changewindow.FreezeMatch, now time.Time) error {
+	m changewindow.FreezeMatch, now time.Time) (bool, error) {
 	e := m.Exemption
 	by := e.CreatedBy
 	if by == "" {
@@ -119,7 +124,7 @@ func (r *Reconciler) recordFreezeExemption(ctx context.Context, ps *v1alpha1.Pro
 	msg := fmt.Sprintf("let through freeze %s (%s) by %s until %s: %s", m.Window.Name,
 		changewindow.FreezeScope(m.Window.Spec.Freeze), by, e.ExpiresAt.UTC().Format(time.RFC3339), e.Reason)
 	if c := meta.FindStatusCondition(ps.Status.Conditions, condFreezeExempted); c != nil && c.Message == msg {
-		return nil
+		return false, nil
 	}
 	patch := client.MergeFromWithOptions(ps.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	meta.SetStatusCondition(&ps.Status.Conditions, metav1.Condition{Type: condFreezeExempted,
@@ -128,10 +133,10 @@ func (r *Reconciler) recordFreezeExemption(ctx context.Context, ps *v1alpha1.Pro
 		ps.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, ps.Status.PendingAuditEvents, entry)
 	}
 	if err := r.Status().Patch(ctx, ps, patch); err != nil {
-		return fmt.Errorf("record freeze exemption: %w", err)
+		return false, fmt.Errorf("record freeze exemption: %w", err)
 	}
 	_ = r.flushAudit(ctx, ps)
-	return nil
+	return true, nil
 }
 
 // freezeAuditEntry is the FreezeExempted outbox entry. Its name is derived

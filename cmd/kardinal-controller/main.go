@@ -898,6 +898,8 @@ func main() {
 	pgReconciler.Workers = *workers["policygate"]
 	applyGateOverrideCap(gateOverrideMaxMinutes, pgReconciler)
 	pgReconciler.IdentityPolicy = &policygaterecon.IdentityPolicyCheck{Reader: mgr.GetAPIReader(), Name: overrideIdentityPolicy}
+	// agent.* in gate expressions reads this release's AgentIndex (18-actor-policy 2.2).
+	pgReconciler.AgentIndexName = agentIndexName
 	if overrideIdentityPolicy == "" {
 		logger.Warn().Msg("--override-identity-policy is not set: gate overrides are recorded with an unverified createdBy")
 	}

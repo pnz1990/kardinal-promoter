@@ -193,6 +193,7 @@ nav:
       - kardinal diff: reference/cli/kardinal-diff.md
       - kardinal doctor: reference/cli/kardinal-doctor.md
       - kardinal explain: reference/cli/kardinal-explain.md
+      - kardinal freeze: reference/cli/kardinal-freeze.md
       - kardinal get:
         - kardinal get: reference/cli/kardinal-get.md
         - kardinal get auditevents: reference/cli/kardinal-get-auditevents.md
@@ -222,6 +223,7 @@ nav:
       - kardinal rollback: reference/cli/kardinal-rollback.md
       - kardinal ship: reference/cli/kardinal-ship.md
       - kardinal status: reference/cli/kardinal-status.md
+      - kardinal unfreeze: reference/cli/kardinal-unfreeze.md
       - kardinal unhold: reference/cli/kardinal-unhold.md
       - kardinal validate: reference/cli/kardinal-validate.md
       - kardinal verify:

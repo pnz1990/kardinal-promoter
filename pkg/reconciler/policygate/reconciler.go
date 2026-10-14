@@ -125,6 +125,10 @@ type Reconciler struct {
 	IdentityPolicy interface {
 		Active(ctx context.Context) bool
 	}
+	// AgentIndexName is this release's AgentIndex (--agent-index), which
+	// agent.* reads (docs/design/18-actor-policy.md section 2.2). Empty: no
+	// agent registry, every agent reads as not registered.
+	AgentIndexName string
 }
 
 // DefaultStatusHeartbeat is the controller's --gate-status-heartbeat default.
@@ -1411,9 +1415,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Watch ChangeWindow objects: a window boundary (status.active write) or a
 		// spec edit re-evaluates the gates that reference changewindow.
 		Watches(&kardinalv1alpha1.ChangeWindow{}, handler.EnqueueRequestsFromMapFunc(changeWindowMapper)).
-		// Watch AgentIdentities: a suspension or an autonomy change
+		// Watch the AgentIndex: a suspension or an autonomy change
 		// re-evaluates the gates that read agent.* (18-actor-policy 2.2).
-		Watches(&kardinalv1alpha1.AgentIdentity{}, handler.EnqueueRequestsFromMapFunc(r.agentIdentityGateRequests)).
+		Watches(&kardinalv1alpha1.AgentIndex{}, handler.EnqueueRequestsFromMapFunc(r.agentIndexGateRequests)).
 		// Watch Pipelines: adding or releasing a hold (spec.holds) re-evaluates
 		// the Pipeline's gate instances, so the held rollback's exemption
 		// starts and ends at once.

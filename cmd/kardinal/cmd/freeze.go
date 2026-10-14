@@ -63,15 +63,11 @@ func newFreezeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "freeze [--agents | --everyone] [--cluster | -n <ns>] --reason <text> [--for <duration>]",
 		Short: "Freeze agents, or stop the line for everyone; with no flags, list the freezes",
-		Long: `Hold promotions until the freeze is lifted. --agents holds the versions agents
-created (their actor stamp says kind agent), --everyone holds every version
-(stop-the-line). The freeze covers every namespace, or with -n one namespace.
-A held step waits before it starts or before its next git step; a step
-waiting for its PR merge or running its health check finishes. --for ends the
-freeze by itself; without it the freeze lasts until kardinal unfreeze.
-Let one pipeline through with kardinal override <pipeline> <env> --freeze.
-
-With no flags it lists the freezes.`,
+		Long: `Hold promotions until the freeze is lifted: --agents holds the versions agents
+created, --everyone every version (stop-the-line), in every namespace or with -n
+one. --for ends it by itself; otherwise kardinal unfreeze does. Let a pipeline
+through with kardinal override <pipeline> <env> --freeze. With no flags it lists
+the freezes.`,
 		Example: `  kardinal freeze --agents --reason "INC-4211: agents paused while we investigate"
   kardinal freeze --everyone -n payments --reason "payments incident" --for 2h
   kardinal freeze
@@ -88,7 +84,7 @@ With no flags it lists the freezes.`,
 				return err
 			}
 			if !ok {
-				return listFreezesFn(cmd.OutOrStdout(), c, time.Now())
+				return listFreezesFn(cmd.OutOrStdout(), c)
 			}
 			if reason == "" {
 				return fmt.Errorf("--reason is required: every held step shows it")
@@ -139,8 +135,9 @@ func freezeFn(w io.Writer, c sigs_client.Client, actors, namespace, reason strin
 	return nil
 }
 
-// listFreezesFn lists the freezes and whether each is active at now.
-func listFreezesFn(w io.Writer, c sigs_client.Client, now time.Time) error {
+// listFreezesFn lists the freezes, whether each is active and how many
+// exemptions are in effect (the ChangeWindow status).
+func listFreezesFn(w io.Writer, c sigs_client.Client) error {
 	freezes, err := lifecycle.ListFreezes(context.Background(), c)
 	if err != nil {
 		return fmt.Errorf("freeze: %w", err)
@@ -156,14 +153,9 @@ func listFreezesFn(w io.Writer, c sigs_client.Client, now time.Time) error {
 		if !cw.Spec.End.IsZero() {
 			until = cw.Spec.End.UTC().Format(time.RFC3339)
 		}
-		live := 0
-		for _, e := range cw.Spec.Freeze.Exemptions {
-			if now.Before(e.ExpiresAt.Time) {
-				live++
-			}
-		}
+		live := len(cw.Status.Exemptions)
 		_, _ = fmt.Fprintf(tw, "%s\t%s\t%t\t%s\t%s\t%s\t%d\t%s\n", cw.Name, changewindow.FreezeScope(cw.Spec.Freeze),
-			changewindow.Evaluate(cw.Spec, now).Active, cw.Spec.Start.UTC().Format(time.RFC3339), until,
+			changewindow.FreezeActive(&cw), cw.Spec.Start.UTC().Format(time.RFC3339), until,
 			dash(cw.Spec.Freeze.CreatedBy), live, dash(cw.Spec.Reason))
 	}
 	if err := tw.Flush(); err != nil {

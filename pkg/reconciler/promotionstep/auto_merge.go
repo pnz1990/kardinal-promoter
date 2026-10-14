@@ -153,7 +153,7 @@ func (r *Reconciler) autoMergeBlocked(ctx context.Context, ps *v1alpha1.Promotio
 	if paused {
 		return fmt.Sprintf("pipeline %s is paused", ps.Spec.PipelineName), nil
 	}
-	matches, _, err := r.freezesFor(ctx, ps, r.now())
+	matches, err := r.freezesFor(ctx, ps)
 	if err != nil {
 		return "", err
 	}

@@ -1,6 +1,6 @@
 ## kardinal audit
 
-Audit log commands: view and summarize promotion events
+Audit log commands: summarize and export promotion events
 
 ```
 kardinal audit [flags]
