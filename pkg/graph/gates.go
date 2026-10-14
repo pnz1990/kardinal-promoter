@@ -365,14 +365,13 @@ func approvalPolicyData(gate kardinalv1alpha1.PolicyGate) map[string]interface{}
 		return nil
 	}
 	policy := map[string]interface{}{"excludeAuthor": p.ExcludeAuthor, "required": int64(max(p.Required, 1)),
-		"allowedUsers": toInterfaces(p.AllowedUsers), "allowedGroups": toInterfaces(p.AllowedGroups)}
-	// The actor-policy fields only when set, so the gate data of a gate
-	// without them is what earlier releases rendered (no Graph update). The
-	// collection reads them optionally (approvalsOfItem).
-	if p.AllowAgents {
-		policy["allowAgents"] = true
-		policy["allowedAgents"] = toInterfaces(p.AllowedAgents)
-	}
+		"allowedUsers": toInterfaces(p.AllowedUsers), "allowedGroups": toInterfaces(p.AllowedGroups),
+		// Every field approvalsOfItem reads is in every template entry: kro
+		// types the PolicyGateData node from its data, and a field no entry
+		// has is an undefined field at compile time, optional or not.
+		"allowAgents": p.AllowAgents, "allowedAgents": toInterfaces(p.AllowedAgents)}
+	// requiredWhen only when set: the collection copies the policy whole and
+	// reads no field of it.
 	if p.RequiredWhen != "" {
 		policy["requiredWhen"] = p.RequiredWhen
 	}

@@ -60,7 +60,7 @@ func TestBuilder_AgentGates(t *testing.T) {
 	pol := approve["approval"].(map[string]interface{})
 	assert.Equal(t, "actor.kind == 'agent'", pol["requiredWhen"])
 	assert.Equal(t, true, pol["excludeAuthor"])
-	assert.NotContains(t, pol, "allowAgents", "the shorthand never admits agents")
+	assert.Equal(t, false, pol["allowAgents"], "the shorthand never admits agents")
 
 	deny := specs["kardinal-agents-deny/prod"]
 	require.NotNil(t, deny)
