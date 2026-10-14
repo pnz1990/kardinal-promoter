@@ -8,6 +8,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Fuzz and property tests** (#1837) — the Graph builder (every Graph it builds passes kro v0.10.0-rc.0's compiler rules: node IDs, node shapes, forEach, references, an acyclic dependency graph; and a Pipeline the CRD accepts builds when its environments form no cycle and no fleet target takes another environment's name), the PolicyGate CEL context (every documented variable with its documented type) and the YAML editors (an edit changes only its target, a refused one leaves the file as it was, a repeated one writes the same bytes) are fuzzed in CI.
+
+### Fixed
+
+- **YAML edits keep empty nulls in flow mappings** (#1842) — the yaml, helm and kustomize update strategies wrote a null with no text in a flow mapping (`{a: }`, `{a}`) back as an empty string (`{a: ''}`); it is now written as `null`.
+
 ### Documentation
 
 - **Coming from Kargo** ([page](coming-from-kargo.md)) — each Kargo concept (Warehouse, Freight, Stage, fan-in, `requiredSoakTime`, auto-promotion, verification, promotion steps) beside its kardinal counterpart, and the Kargo Enterprise features kardinal ships as open source: automatic rollback, approvals with verified identity and `excludeAuthor`, ChangeWindows with break-glass overrides, and NotificationHook. [Migrate from Kargo](guides/migrating-from-kargo.md) keeps the step-by-step walkthrough and links to it for the concepts.
