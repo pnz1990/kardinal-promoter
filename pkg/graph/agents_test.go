@@ -70,6 +70,23 @@ func TestBuilder_AgentGates(t *testing.T) {
 	for _, inst := range res.GateInstances {
 		assert.Equal(t, "system", inst.Labels["kardinal.io/scope"], inst.Name)
 	}
+	// kro types PolicyGateData from its data: every approval template entry
+	// must carry each field the ApprovalGates collection reads, or the
+	// Graph does not compile ("undefined field").
+	for _, n := range res.Graph.Spec.Nodes {
+		if n.ID != graph.NodePolicyGateData {
+			continue
+		}
+		for _, tmpl := range n.Def["templates"].([]interface{}) {
+			pol, ok := tmpl.(map[string]interface{})["spec"].(map[string]interface{})["approval"].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			for _, f := range []string{"allowedUsers", "allowedGroups", "allowAgents", "allowedAgents"} {
+				assert.Contains(t, pol, f)
+			}
+		}
+	}
 
 	human := makeBundle("app-v2", "app")
 	res, err = graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: human})
