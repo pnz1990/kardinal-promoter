@@ -145,9 +145,9 @@ func TestNightlySample(t *testing.T) {
 	}
 }
 
-// fakeGH is a gh on PATH that serves "issue list" from issues.json in its
+// fakeLiveReportGH is a gh on PATH that serves "issue list" from issues.json in its
 // directory and logs every other call, one line each, to calls.log.
-const fakeGH = `#!/usr/bin/env bash
+const fakeLiveReportGH = `#!/usr/bin/env bash
 d=$(dirname "$0")
 case "$1 $2" in
 "issue list") cat "$d/issues.json" ;;
@@ -202,7 +202,7 @@ func TestLiveReport(t *testing.T) {
 			dir := t.TempDir()
 			bin := filepath.Join(dir, "bin")
 			require.NoError(t, os.Mkdir(bin, 0o755))
-			require.NoError(t, os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeGH), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeLiveReportGH), 0o755))
 			require.NoError(t, os.WriteFile(filepath.Join(bin, "issues.json"), []byte(open), 0o600))
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "jobs.tsv"), []byte(tc.jobs), 0o600))
 			cmd := exec.Command("bash", filepath.Join(root, "hack/e2e/live-report.sh"), "jobs.tsv")
