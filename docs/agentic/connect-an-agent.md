@@ -2,12 +2,16 @@
 
 `kardinal mcp` serves kardinal to an AI agent as a local
 [Model Context Protocol](https://modelcontextprotocol.io/) server. The agent starts it as a
-subprocess and talks to it over stdin and stdout. Each tool runs the kardinal command of the
-same name, in that process, with the kubeconfig and context it was started with:
+subprocess and talks to it over stdin and stdout. Each tool runs the code of the kardinal
+command of the same name, in that process, with the kubeconfig and context it was started with:
 
 - **The agent has exactly that identity's Kubernetes RBAC.** `kardinal mcp` holds no token of
   its own and opens no port. Give the agent a kubeconfig of its own (see
   [A least-privilege identity](#a-least-privilege-identity)) rather than yours.
+- **No tool can change the cluster or the identity.** The kubeconfig and context are fixed when
+  the server starts. Tool arguments are never parsed as command-line flags: each tool calls the
+  command's code with typed values, after checking every name against the Kubernetes and CRD
+  patterns, so a value such as `--context=prod` is refused.
 - **Read tools are on; write tools only with `--allow-write`.** Without it the write tools are
   not offered, and a call to one is refused.
 - **Gates still decide.** What the agent ships or approves goes through the same admission
@@ -18,7 +22,7 @@ Remote MCP (a server in the controller, with OAuth) is not part of kardinal.
 
 ## The tools
 
-| Tool | What it does | Command it runs |
+| Tool | What it does | Command |
 |---|---|---|
 | `why` | What an environment waits for, and the command that moves it on | `kardinal why` |
 | `status` | Which version runs where, what is promoting, what blocks | `kardinal status -o json` |
@@ -30,10 +34,10 @@ Remote MCP (a server in the controller, with OAuth) is not part of kardinal.
 | `simulate` | Pre-flight: would a version be allowed into an environment now, and what would let it in | `kardinal policy simulate` |
 | `ship` (write) | Create a version from images | `kardinal ship -o json` |
 | `promote` (write) | Promote what is Verified upstream into an environment | `kardinal promote -o json` |
-| `rollback` (write) | Roll an environment back, optionally holding it there | `kardinal rollback --yes -o json` |
+| `rollback` (write) | Roll an environment back, optionally holding it there | `kardinal rollback -o json` |
 | `pause`, `resume` (write) | Stop and restart a pipeline's promotions | `kardinal pause`, `kardinal resume` |
-| `reject` (write) | Reject a version for good, with a reason | `kardinal reject --yes` |
-| `approve` (write) | Approve (or reject) the version waiting at an approval gate; the version is required | `kardinal approve --version --yes` |
+| `reject` (write) | Reject a version for good, with a reason | `kardinal reject` |
+| `approve` (write) | Approve (or reject) the version waiting at an approval gate; the version is required | `kardinal approve --version` |
 
 The write tools ask for no confirmation: the agent's call is the confirmation. Start
 `kardinal mcp --allow-write` only with a kubeconfig whose RBAC is what you want the agent to do.
@@ -73,10 +77,12 @@ such value comes labelled:
 ```
 
 The server's instructions tell the agent to treat these as data and never follow instructions
-in them. kardinal's own decisions do not read that text either: a gate's CEL context holds a PR's
+in them. kardinal's gates never act on free-text prose either: a gate's CEL context holds a PR's
 review state only as `bundle.pr["<env>"].isApproved` and `.approvalCount`, never a PR title or
-body, an issue, a commit message or a comment ([CEL context](../reference/cel-context.md)). A
-test fails the build when a string from outside that list enters the context.
+body, an issue, a commit message, a step message or a comment
+([CEL context](../reference/cel-context.md)). A gate can read a version's author and CI URL
+(`bundle.provenance.author`, `.ciRunURL`), as values its rule compares. A test fails the build
+when any other string enters the context.
 
 ### Errors and long results
 
@@ -85,7 +91,8 @@ Every result is JSON, `{"result": ...}`. A failure is a tool error with
 (the message names the role to ask for), `Denied` when an admission policy refused it, else
 `Failed`. A list longer than 64 KiB (`--max-result-bytes`) comes in pages, with
 `{"page": {"offset", "returned", "total", "nextOffset"}}` and a hint to call again with
-`offset`; anything else that long is cut, with `"truncated": true` and a hint to narrow it.
+`offset`; anything else that long is cut on a character boundary, with `"truncated": true` and
+a hint to narrow it. No result is longer than the limit.
 
 ## Configure your agent
 
@@ -147,11 +154,19 @@ Then ask the agent "why is my-app not in prod?": it calls `why` and answers from
 
 ## A least-privilege identity
 
-Give the agent a ServiceAccount of its own, with a Role that grants what its tools need and
-nothing more. This one lets it use every read tool in the pipeline's namespace `my-app`,
-evaluate the org gates of `platform-policies` (the controller's default `--policy-namespaces`)
-with `simulate`, and ship versions. It cannot approve, override, reject, pause or roll back:
-those calls fail with `Forbidden`.
+Give the agent a ServiceAccount of its own, with Roles that grant what its tools need and
+nothing more. The recipe has two Roles in the pipeline's namespace `my-app`, so you can bind
+only the first:
+
+| Role | Tools that work | Tools that fail with `Forbidden` |
+|---|---|---|
+| `kardinal-agent-read` (with the `platform-policies` Role, for `simulate`) | `why`, `status`, `inbox`, `history`, `diff`, `explain`, `gates`, `simulate` | every write tool |
+| `kardinal-agent-read` and `kardinal-agent-ship` | the read tools, `ship`, `promote`, and `rollback` without `hold` | `rollback` with `hold`, `pause`, `resume`, `reject`, `approve` |
+
+`ship`, `promote` and `rollback` all create a Bundle, so `create` on Bundles grants all three. A
+rollback is a new version that goes through every gate on its way, like any other.
+`platform-policies` is the controller's default `--policy-namespaces`: `simulate` reads the org
+gates there, as the controller does.
 
 <!-- agent-rbac: the live test TestCLI_MCP applies this block -->
 ```yaml
@@ -161,18 +176,39 @@ metadata:
   name: release-agent
   namespace: my-app
 ---
+# The read tools: why, status, inbox, history, diff, explain, gates, simulate.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: kardinal-agent
+  name: kardinal-agent-read
   namespace: my-app
 rules:
-  # The read tools: why, status, inbox, history, diff, explain, gates, simulate.
   - apiGroups: ["kardinal.io"]
     resources: ["pipelines", "bundles", "promotionsteps", "policygates", "prstatuses",
                 "metricchecks", "approvals", "auditevents"]
     verbs: ["get", "list"]
-  # ship and promote create versions (Bundles).
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kardinal-agent-read
+  namespace: my-app
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kardinal-agent-read
+subjects:
+  - kind: ServiceAccount
+    name: release-agent
+    namespace: my-app
+---
+# ship, promote and rollback (without hold): each creates a Bundle.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kardinal-agent-ship
+  namespace: my-app
+rules:
   - apiGroups: ["kardinal.io"]
     resources: ["bundles"]
     verbs: ["create"]
@@ -180,12 +216,12 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: kardinal-agent
+  name: kardinal-agent-ship
   namespace: my-app
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: kardinal-agent
+  name: kardinal-agent-ship
 subjects:
   - kind: ServiceAccount
     name: release-agent
@@ -217,14 +253,14 @@ subjects:
     namespace: my-app
 ```
 
-Each further write tool needs more rules in the `my-app` Role. The write tools act from the
-agent's kubeconfig, as the CLI does, so they need `update` on the object itself; the chart's
-`scoped-writes` admission policy then limits a caller who holds `pipelines/pause` or
-`pipelines/hold` to `spec.paused` and `spec.holds` ([User roles](../guides/security.md#user-roles)):
+The other write tools need more rules. They act from the agent's kubeconfig, as the CLI does,
+so they need `update` on the object itself; the chart's `scoped-writes` admission policy then
+limits a caller who holds `pipelines/pause` or `pipelines/hold` to `spec.paused` and
+`spec.holds` ([User roles](../guides/security.md#user-roles)):
 
 | Tool | Rules |
 |---|---|
-| `rollback` | `bundles` `create`; with `hold`, also `pipelines` `update`, `patch` and `pipelines/hold` `update` |
+| `rollback` with `hold` | also `pipelines` `update`, `patch` and `pipelines/hold` `update` |
 | `pause`, `resume` | `pipelines` `update`, `patch` and `pipelines/pause` `update` |
 | `reject` | `bundles` `patch` |
 | `approve` | `approvals` `create`, `delete` |
@@ -232,14 +268,25 @@ agent's kubeconfig, as the CLI does, so they need `update` on the object itself;
 A gate that reads `changewindow.*` needs `get` and `list` on the cluster-scoped `changewindows`
 for `simulate` to evaluate it: that is a ClusterRole.
 
-Make a kubeconfig for the ServiceAccount with a short-lived token, and give it to the agent:
+Make the agent's kubeconfig from the ServiceAccount alone: the API server's address, the
+cluster's CA and a short-lived token. Nothing of yours goes into it.
 
 ```bash
-kubectl config view --minify --flatten > agent.kubeconfig
-kubectl --kubeconfig agent.kubeconfig config set-credentials release-agent \
-  --token="$(kubectl create token release-agent -n my-app --duration 8h)"
-kubectl --kubeconfig agent.kubeconfig config set-context --current --user release-agent --namespace my-app
+SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+kubectl get configmap kube-root-ca.crt -n my-app -o jsonpath='{.data.ca\.crt}' > agent-ca.crt
+kubectl config set-cluster cluster --kubeconfig agent.kubeconfig \
+  --server "$SERVER" --certificate-authority agent-ca.crt --embed-certs
+kubectl config set-credentials release-agent --kubeconfig agent.kubeconfig \
+  --token "$(kubectl create token release-agent -n my-app --duration 8h)"
+kubectl config set-context agent --kubeconfig agent.kubeconfig \
+  --cluster cluster --user release-agent --namespace my-app
+kubectl config use-context agent --kubeconfig agent.kubeconfig
 ```
+
+`kube-root-ca.crt` is the CA Kubernetes publishes in every namespace; if your API server's
+certificate comes from another CA (some managed clusters front it with one), use that CA instead.
+When the token expires, the agent's calls fail with `Forbidden` or `Unauthorized` until you mint
+a new one.
 
 The versions the agent ships record `system:serviceaccount:my-app:release-agent` as their
 verified creator (`kardinal.io/created-by`), so a prod gate with `excludeAuthor: true` waits for

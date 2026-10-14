@@ -14,18 +14,23 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"regexp"
 	"slices"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 )
 
 // mcpTool is one tool of kardinal mcp: its name, whether it writes, and
@@ -50,6 +55,11 @@ func newMCPTool[In any](name, title, description string, write, destructive bool
 	return mcpTool{name: name, write: write, add: func(s *mcp.Server, k *mcpServer) {
 		mcp.AddTool(s, &mcp.Tool{Name: name, Title: title, Description: description, Annotations: ann},
 			func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, any, error) {
+				if v, ok := any(in).(interface{ check() error }); ok {
+					if err := v.check(); err != nil {
+						return toolError(fmt.Errorf("%s: %w", name, err)), nil, nil
+					}
+				}
 				res, err := h(ctx, k, in)
 				if err != nil {
 					return toolError(err), nil, nil
@@ -94,47 +104,95 @@ type (
 	}
 )
 
-// nsArgs are the arguments that set the namespace, when one is given.
-func nsArgs(ns string) []string {
-	if ns == "" {
+// The patterns a tool's arguments must match before anything runs: the
+// CRDs' own (an environment name; an image tag, which a version extends
+// with "+" for chart versions), DNS-1123 for object names and namespaces.
+// Nothing a tool is given is ever parsed as a command-line flag: the tools
+// call the commands' functions with typed values.
+var (
+	mcpEnvPattern     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	mcpVersionPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._+-]{0,252}$`)
+	mcpImagePattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9._/:@-]{0,510}[A-Za-z0-9_]$|^[a-z0-9]$`)
+)
+
+// argErr is the error of argument field whose value v is not what it
+// should be.
+func argErr(field, v, want string) error {
+	return fmt.Errorf("invalid %s %q: want %s", field, v, want)
+}
+
+// checkName checks an object name (DNS-1123 subdomain); "" passes unless
+// required.
+func checkName(field, v string, required bool) error {
+	if v == "" {
+		if required {
+			return fmt.Errorf("%s is required", field)
+		}
 		return nil
 	}
-	return []string{"--namespace", ns}
-}
-
-// envArg appends --env env when env is set.
-func envArg(args []string, env string) []string {
-	if env == "" {
-		return args
+	if len(validation.IsDNS1123Subdomain(v)) > 0 {
+		return argErr(field, v, "a Kubernetes object name (lower case letters, digits, '-' and '.')")
 	}
-	return append(args, "--env", env)
+	return nil
 }
 
-// cli runs kardinal args and returns its JSON output as the result.
-func (k *mcpServer) cli(ctx context.Context, offset int, args ...string) (*mcp.CallToolResult, error) {
-	out, err := k.run(ctx, args...)
-	if err != nil {
-		return nil, err
+// checkNamespace checks a namespace (DNS-1123 label); "" is the server's.
+func checkNamespace(v string) error {
+	if v != "" && len(validation.IsDNS1123Label(v)) > 0 {
+		return argErr("namespace", v, "a namespace name (lower case letters, digits and '-')")
 	}
-	return k.result(json.RawMessage(out), offset)
+	return nil
 }
 
-// cliText runs kardinal args and returns what it printed, as a string.
-func (k *mcpServer) cliText(ctx context.Context, args ...string) (*mcp.CallToolResult, error) {
-	out, err := k.run(ctx, args...)
-	if err != nil {
-		return nil, err
+// checkEnv checks an environment name; "" passes unless required.
+func checkEnv(v string, required bool) error {
+	if v == "" {
+		if required {
+			return fmt.Errorf("environment is required")
+		}
+		return nil
 	}
-	return k.result(string(out), 0)
+	if len(v) > 63 || !mcpEnvPattern.MatchString(v) {
+		return argErr("environment", v, "an environment name (lower case letters, digits and '-')")
+	}
+	return nil
 }
 
-// direct runs f with a client for namespace ns (the server's namespace when
-// empty), under the lock the commands share.
-func (k *mcpServer) direct(ns string, f func(c sigs_client.Client, ns string) (any, error)) (*mcp.CallToolResult, error) {
+// checkVersion checks a version or Bundle name (an image tag, a chart
+// version, a commit SHA or a Bundle's name); "" passes unless required.
+func checkVersion(field, v string, required bool) error {
+	if v == "" {
+		if required {
+			return fmt.Errorf("%s is required", field)
+		}
+		return nil
+	}
+	if !mcpVersionPattern.MatchString(v) {
+		return argErr(field, v, "a version (an image tag, chart version or commit) or a Bundle name")
+	}
+	return nil
+}
+
+// checkAll returns the first error of errs.
+func checkAll(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// direct runs f, under the lock the commands share, as the commands run:
+// with the flags the server was started with (its kubeconfig and context,
+// which no tool can change), the tool's namespace when it gives one, JSON
+// output and no colour. f writes the command's output to w, or returns a
+// value; the result is the value, else what f wrote (JSON, or text).
+func (k *mcpServer) direct(ctx context.Context, ns string, offset int,
+	f func(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error)) (*mcp.CallToolResult, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	defer keepGlobals()()
-	// The flags as the server got them, then the tool's namespace.
 	root := NewRootCmd()
 	if err := root.ParseFlags(k.opts.base); err != nil {
 		return nil, fmt.Errorf("flags: %w", err)
@@ -142,15 +200,25 @@ func (k *mcpServer) direct(ns string, f func(c sigs_client.Client, ns string) (a
 	if ns != "" {
 		globalNamespace = ns
 	}
+	globalOutput = "json"
+	sty, errOut = style.Plain(), io.Discard
 	c, cns, err := buildClient()
 	if err != nil {
 		return nil, err
 	}
-	v, err := f(c, cns)
+	var out bytes.Buffer
+	v, err := f(ctx, &out, c, cns)
 	if err != nil {
 		return nil, err
 	}
-	return k.result(v, 0)
+	if v == nil {
+		if raw := bytes.TrimSpace(out.Bytes()); json.Valid(raw) && len(raw) > 0 {
+			v = json.RawMessage(raw)
+		} else {
+			v = out.String()
+		}
+	}
+	return k.result(v, offset)
 }
 
 // mcpTools are kardinal mcp's tools, read tools first.
@@ -232,9 +300,13 @@ type mcpWhyDetail struct {
 	Value any    `json:"value"`
 }
 
-func mcpWhy(_ context.Context, k *mcpServer, in mcpPipelineEnv) (*mcp.CallToolResult, error) {
-	return k.direct(in.Namespace, func(c sigs_client.Client, ns string) (any, error) {
-		answers, err := whyAnswers(context.Background(), c, ns, in.Pipeline, in.Environment)
+func (in mcpPipelineEnv) check() error {
+	return checkAll(checkNamespace(in.Namespace), checkName("pipeline", in.Pipeline, true), checkEnv(in.Environment, false))
+}
+
+func mcpWhy(ctx context.Context, k *mcpServer, in mcpPipelineEnv) (*mcp.CallToolResult, error) {
+	return k.direct(ctx, in.Namespace, 0, func(ctx context.Context, _ io.Writer, c sigs_client.Client, ns string) (any, error) {
+		answers, err := whyAnswers(ctx, c, ns, in.Pipeline, in.Environment)
 		if err != nil {
 			return nil, err
 		}
@@ -263,28 +335,41 @@ type mcpStatusIn struct {
 	AllNamespaces bool   `json:"allNamespaces,omitempty" jsonschema:"Without a pipeline: every namespace"`
 }
 
+func (in mcpStatusIn) check() error {
+	return checkAll(checkNamespace(in.Namespace), checkName("pipeline", in.Pipeline, false))
+}
+
 func mcpStatus(ctx context.Context, k *mcpServer, in mcpStatusIn) (*mcp.CallToolResult, error) {
-	args := append([]string{"status"}, nsArgs(in.Namespace)...)
-	if in.Pipeline != "" {
-		args = append(args, in.Pipeline)
-	} else if in.AllNamespaces {
-		args = append(args, "--all-namespaces")
-	}
-	return k.cli(ctx, 0, append(args, "-o", "json")...)
+	return k.direct(ctx, in.Namespace, 0, func(_ context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		if in.Pipeline != "" {
+			return nil, statusPipelineWriter(w, c, ns, in.Pipeline)
+		}
+		// As kardinal status: every namespace, unless one is named.
+		scope, fallback := "", ns
+		if in.Namespace != "" && !in.AllNamespaces {
+			scope = ns
+		}
+		if in.AllNamespaces {
+			fallback = ""
+		}
+		return nil, statusSummaryIn(w, c, defaultControllerNamespace, scope, fallback)
+	})
 }
 
 type mcpInboxIn struct {
 	mcpNamespace
 	AllNamespaces bool `json:"allNamespaces,omitempty" jsonschema:"Every namespace the identity may read"`
-	Offset        int  `json:"offset,omitempty" jsonschema:"The first item to return, from a previous page's nextOffset"`
 }
 
+func (in mcpInboxIn) check() error { return checkNamespace(in.Namespace) }
+
 func mcpInbox(ctx context.Context, k *mcpServer, in mcpInboxIn) (*mcp.CallToolResult, error) {
-	args := append([]string{"inbox"}, nsArgs(in.Namespace)...)
-	if in.AllNamespaces {
-		args = append(args, "--all-namespaces")
-	}
-	return k.cli(ctx, in.Offset, append(args, "-o", "json")...)
+	return k.direct(ctx, in.Namespace, 0, func(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		if in.AllNamespaces {
+			ns = ""
+		}
+		return nil, inboxFn(ctx, w, c, ns)
+	})
 }
 
 type mcpHistoryIn struct {
@@ -293,19 +378,31 @@ type mcpHistoryIn struct {
 	Offset int `json:"offset,omitempty" jsonschema:"The first entry to return, from a previous page's nextOffset"`
 }
 
-func mcpHistory(ctx context.Context, k *mcpServer, in mcpHistoryIn) (*mcp.CallToolResult, error) {
-	args := append([]string{"history", in.Pipeline}, nsArgs(in.Namespace)...)
-	args = envArg(args, in.Environment)
-	if in.Limit > 0 {
-		args = append(args, "--limit", strconv.Itoa(in.Limit))
+func (in mcpHistoryIn) check() error {
+	if in.Limit < 0 || in.Offset < 0 {
+		return fmt.Errorf("limit and offset must not be negative")
 	}
-	return k.cli(ctx, in.Offset, append(args, "-o", "json")...)
+	return in.mcpPipelineEnv.check()
+}
+
+func mcpHistory(ctx context.Context, k *mcpServer, in mcpHistoryIn) (*mcp.CallToolResult, error) {
+	limit := in.Limit
+	if limit == 0 {
+		limit = 20
+	}
+	return k.direct(ctx, in.Namespace, in.Offset, func(_ context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		return nil, historyFn(w, c, ns, in.Pipeline, in.Environment, limit)
+	})
 }
 
 type mcpDiffIn struct {
 	mcpNamespace
 	A string `json:"a" jsonschema:"The first version, or Bundle name"`
 	B string `json:"b" jsonschema:"The second version, or Bundle name"`
+}
+
+func (in mcpDiffIn) check() error {
+	return checkAll(checkNamespace(in.Namespace), checkVersion("a", in.A, true), checkVersion("b", in.B, true))
 }
 
 // mcpDiffSide is one version of a diff: its Bundle, images and provenance.
@@ -319,9 +416,8 @@ type mcpDiffSide struct {
 	Phase      string                     `json:"phase,omitempty"`
 }
 
-func mcpDiff(_ context.Context, k *mcpServer, in mcpDiffIn) (*mcp.CallToolResult, error) {
-	return k.direct(in.Namespace, func(c sigs_client.Client, ns string) (any, error) {
-		ctx := context.Background()
+func mcpDiff(ctx context.Context, k *mcpServer, in mcpDiffIn) (*mcp.CallToolResult, error) {
+	return k.direct(ctx, in.Namespace, 0, func(ctx context.Context, _ io.Writer, c sigs_client.Client, ns string) (any, error) {
 		side := func(ref string) (mcpDiffSide, error) {
 			name, err := resolveBundleRef(ctx, c, ns, "", ref)
 			if err != nil {
@@ -366,8 +462,9 @@ func mcpDiff(_ context.Context, k *mcpServer, in mcpDiffIn) (*mcp.CallToolResult
 }
 
 func mcpExplain(ctx context.Context, k *mcpServer, in mcpPipelineEnv) (*mcp.CallToolResult, error) {
-	args := append([]string{"explain", in.Pipeline}, nsArgs(in.Namespace)...)
-	return k.cli(ctx, 0, append(envArg(args, in.Environment), "-o", "json")...)
+	return k.direct(ctx, in.Namespace, 0, func(_ context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		return nil, explainOnce(w, c, ns, in.Pipeline, in.Environment, false)
+	})
 }
 
 type mcpGatesIn struct {
@@ -375,12 +472,14 @@ type mcpGatesIn struct {
 	Pipeline string `json:"pipeline,omitempty" jsonschema:"Only the gates attached to this pipeline"`
 }
 
+func (in mcpGatesIn) check() error {
+	return checkAll(checkNamespace(in.Namespace), checkName("pipeline", in.Pipeline, false))
+}
+
 func mcpGates(ctx context.Context, k *mcpServer, in mcpGatesIn) (*mcp.CallToolResult, error) {
-	args := append([]string{"policy", "list"}, nsArgs(in.Namespace)...)
-	if in.Pipeline != "" {
-		args = append(args, in.Pipeline)
-	}
-	return k.cliText(ctx, args...)
+	return k.direct(ctx, in.Namespace, 0, func(_ context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		return nil, policyListFn(w, c, ns, in.Pipeline, slices.Clone(defaultPolicyNamespaces))
+	})
 }
 
 type mcpSimulateIn struct {
@@ -388,7 +487,17 @@ type mcpSimulateIn struct {
 	Version          string   `json:"version,omitempty" jsonschema:"A version (image tag, chart version, config commit) or Bundle name of the pipeline; default: any version that went through every upstream environment"`
 	Time             string   `json:"time,omitempty" jsonschema:"UTC time to evaluate at: 'Saturday 3pm', 'Tuesday 10:00' or RFC 3339; default now"`
 	SoakMinutes      *int64   `json:"soakMinutes,omitempty" jsonschema:"Soak time upstream, in minutes; with a version, instead of its own"`
-	PolicyNamespaces []string `json:"policyNamespaces,omitempty" jsonschema:"The controller's --policy-namespaces (default: the chart's)"`
+	PolicyNamespaces []string `json:"policyNamespaces,omitempty" jsonschema:"The controller's --policy-namespaces (default: platform-policies)"`
+}
+
+func (in mcpSimulateIn) check() error {
+	errs := []error{in.mcpPipelineTarget.check(), checkVersion("version", in.Version, false)}
+	for _, ns := range in.PolicyNamespaces {
+		if ns == "" || len(validation.IsDNS1123Label(ns)) > 0 {
+			errs = append(errs, argErr("policyNamespaces", ns, "namespace names"))
+		}
+	}
+	return checkAll(errs...)
 }
 
 // mcpSimulateResult is simulate's result: the report, and for each blocked
@@ -399,8 +508,8 @@ type mcpSimulateResult struct {
 	ToAllow []string `json:"toAllow,omitempty"`
 }
 
-func mcpSimulate(_ context.Context, k *mcpServer, in mcpSimulateIn) (*mcp.CallToolResult, error) {
-	return k.direct(in.Namespace, func(c sigs_client.Client, ns string) (any, error) {
+func mcpSimulate(ctx context.Context, k *mcpServer, in mcpSimulateIn) (*mcp.CallToolResult, error) {
+	return k.direct(ctx, in.Namespace, 0, func(ctx context.Context, _ io.Writer, c sigs_client.Client, ns string) (any, error) {
 		opts := simulateOptions{Pipeline: in.Pipeline, Env: in.Environment, Version: in.Version, Time: in.Time,
 			PolicyNamespaces: in.PolicyNamespaces, Now: time.Now().UTC()}
 		if len(opts.PolicyNamespaces) == 0 {
@@ -409,7 +518,7 @@ func mcpSimulate(_ context.Context, k *mcpServer, in mcpSimulateIn) (*mcp.CallTo
 		if in.SoakMinutes != nil {
 			opts.SoakMinutes, opts.Soaked = *in.SoakMinutes, true
 		}
-		rep, err := policySimulate(context.Background(), c, ns, opts)
+		rep, err := policySimulate(ctx, c, ns, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -443,23 +552,40 @@ type mcpShipIn struct {
 	CIRunURL     string   `json:"ciRunURL,omitempty" jsonschema:"URL of the CI run that built it (provenance)"`
 }
 
-func mcpShip(ctx context.Context, k *mcpServer, in mcpShipIn) (*mcp.CallToolResult, error) {
-	args := append([]string{"ship", in.Pipeline}, nsArgs(in.Namespace)...)
+func (in mcpShipIn) check() error {
+	errs := []error{in.mcpPipelineOnly.check()}
 	for _, img := range in.Images {
-		args = append(args, "--image", img)
-	}
-	for flag, v := range map[string]string{"--type": in.Type, "--config-commit": in.ConfigCommit,
-		"--commit": in.Commit, "--author": in.Author, "--ci-run-url": in.CIRunURL} {
-		if v != "" {
-			args = append(args, flag, v)
+		if !mcpImagePattern.MatchString(img) || strings.Contains(img, "..") {
+			errs = append(errs, argErr("images", img, "an image reference (registry/repository:tag or @digest)"))
 		}
 	}
-	return k.cli(ctx, 0, append(args, "-o", "json")...)
+	switch in.Type {
+	case "", "image", "config", "mixed":
+	default:
+		errs = append(errs, argErr("type", in.Type, "image, config or mixed"))
+	}
+	return checkAll(errs...)
+}
+
+func mcpShip(ctx context.Context, k *mcpServer, in mcpShipIn) (*mcp.CallToolResult, error) {
+	opts := createBundleOptions{Images: in.Images, Type: in.Type, ConfigCommit: in.ConfigCommit, Commit: in.Commit,
+		Author: in.Author, CIRunURL: in.CIRunURL}
+	if opts.Type == "" {
+		opts.Type = "image"
+	}
+	return k.direct(ctx, in.Namespace, 0, func(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		return nil, shipFn(ctx, w, c, ns, in.Pipeline, opts, false, 0, false, false)
+	})
+}
+
+func (in mcpPipelineTarget) check() error {
+	return checkAll(checkNamespace(in.Namespace), checkName("pipeline", in.Pipeline, true), checkEnv(in.Environment, true))
 }
 
 func mcpPromote(ctx context.Context, k *mcpServer, in mcpPipelineTarget) (*mcp.CallToolResult, error) {
-	args := append([]string{"promote", in.Pipeline, in.Environment}, nsArgs(in.Namespace)...)
-	return k.cli(ctx, 0, append(args, "-o", "json")...)
+	return k.direct(ctx, in.Namespace, 0, func(_ context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		return nil, promoteFn(w, c, ns, in.Pipeline, in.Environment)
+	})
 }
 
 type mcpRollbackIn struct {
@@ -470,29 +596,41 @@ type mcpRollbackIn struct {
 	HoldExpiresIn string `json:"holdExpiresIn,omitempty" jsonschema:"With hold: end it this long after (30m, 24h, 2d)"`
 }
 
+func (in mcpRollbackIn) check() error {
+	return checkAll(in.mcpPipelineTarget.check(), checkVersion("to", in.To, false))
+}
+
 func mcpRollback(ctx context.Context, k *mcpServer, in mcpRollbackIn) (*mcp.CallToolResult, error) {
-	args := append([]string{"rollback", in.Pipeline, in.Environment, "--yes"}, nsArgs(in.Namespace)...)
-	if in.To != "" {
-		args = append(args, "--to", in.To)
-	}
-	if in.Hold {
-		args = append(args, "--hold")
-	}
-	if in.Reason != "" {
-		args = append(args, "--reason", in.Reason)
-	}
+	r := rollbackRequest{pipeline: in.Pipeline, env: in.Environment, to: in.To, hold: in.Hold, reason: in.Reason}
 	if in.HoldExpiresIn != "" {
-		args = append(args, "--hold-expires-in", in.HoldExpiresIn)
+		d, err := parseDuration(in.HoldExpiresIn)
+		if err != nil {
+			return nil, fmt.Errorf("rollback: holdExpiresIn: %w", err)
+		}
+		r.expires = d
 	}
-	return k.cli(ctx, 0, append(args, "-o", "json")...)
+	if err := r.check(); err != nil {
+		return nil, err
+	}
+	return k.direct(ctx, in.Namespace, 0, func(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		return nil, rollbackDo(ctx, w, io.Discard, c, ns, r, nil)
+	})
+}
+
+func (in mcpPipelineOnly) check() error {
+	return checkAll(checkNamespace(in.Namespace), checkName("pipeline", in.Pipeline, true))
 }
 
 func mcpPause(ctx context.Context, k *mcpServer, in mcpPipelineOnly) (*mcp.CallToolResult, error) {
-	return k.cliText(ctx, append([]string{"pause", in.Pipeline}, nsArgs(in.Namespace)...)...)
+	return k.direct(ctx, in.Namespace, 0, func(_ context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		return nil, pauseFn(w, c, ns, in.Pipeline)
+	})
 }
 
 func mcpResume(ctx context.Context, k *mcpServer, in mcpPipelineOnly) (*mcp.CallToolResult, error) {
-	return k.cliText(ctx, append([]string{"resume", in.Pipeline}, nsArgs(in.Namespace)...)...)
+	return k.direct(ctx, in.Namespace, 0, func(_ context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		return nil, resumeFn(w, c, ns, in.Pipeline)
+	})
 }
 
 type mcpRejectIn struct {
@@ -502,12 +640,21 @@ type mcpRejectIn struct {
 	Pipeline string `json:"pipeline,omitempty" jsonschema:"Look for the version in this pipeline only"`
 }
 
-func mcpReject(ctx context.Context, k *mcpServer, in mcpRejectIn) (*mcp.CallToolResult, error) {
-	args := append([]string{"reject", in.Version, "--reason", in.Reason, "--yes"}, nsArgs(in.Namespace)...)
-	if in.Pipeline != "" {
-		args = append(args, "--pipeline", in.Pipeline)
+func (in mcpRejectIn) check() error {
+	if strings.TrimSpace(in.Reason) == "" {
+		return fmt.Errorf("reason is required")
 	}
-	return k.cliText(ctx, args...)
+	return checkAll(checkNamespace(in.Namespace), checkVersion("version", in.Version, true), checkName("pipeline", in.Pipeline, false))
+}
+
+func mcpReject(ctx context.Context, k *mcpServer, in mcpRejectIn) (*mcp.CallToolResult, error) {
+	return k.direct(ctx, in.Namespace, 0, func(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		name, _, err := resolveBundleRefIn(ctx, c, refScope{ns: ns, pipeline: in.Pipeline, strict: true}, in.Version)
+		if err != nil {
+			return nil, fmt.Errorf("reject: %w", err)
+		}
+		return nil, rejectFn(ctx, w, c, ns, name, in.Reason, time.Now())
+	})
 }
 
 type mcpApproveIn struct {
@@ -517,17 +664,28 @@ type mcpApproveIn struct {
 	Comment  string `json:"comment,omitempty" jsonschema:"Note shown with the decision"`
 }
 
+func (in mcpApproveIn) check() error {
+	if err := checkVersion("version", in.Version, true); err != nil {
+		return fmt.Errorf("%w: name the version you reviewed", err)
+	}
+	switch in.Decision {
+	case "", "approve", "reject":
+	default:
+		return argErr("decision", in.Decision, "approve or reject")
+	}
+	return in.mcpPipelineTarget.check()
+}
+
 func mcpApprove(ctx context.Context, k *mcpServer, in mcpApproveIn) (*mcp.CallToolResult, error) {
-	if in.Version == "" {
-		return nil, fmt.Errorf("approve: version is required: name the version you reviewed")
+	o := approveOptions{env: in.Environment, version: in.Version, decision: in.Decision, comment: in.Comment}
+	if o.decision == "" {
+		o.decision = "approve"
 	}
-	args := append([]string{"approve", in.Pipeline, in.Environment, "--version", in.Version, "--yes"},
-		nsArgs(in.Namespace)...)
-	if in.Decision != "" {
-		args = append(args, "--decision", in.Decision)
-	}
-	if in.Comment != "" {
-		args = append(args, "--comment", in.Comment)
-	}
-	return k.cliText(ctx, args...)
+	return k.direct(ctx, in.Namespace, 0, func(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		bundle, err := waitingBundle(ctx, c, ns, in.Pipeline, in.Environment)
+		if err != nil {
+			return nil, err
+		}
+		return nil, approveChecked(ctx, w, c, ns, bundle, o, nil)
+	})
 }

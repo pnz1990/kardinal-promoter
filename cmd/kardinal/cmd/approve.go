@@ -67,25 +67,9 @@ your Approval.`,
 				return err
 			}
 			o.env = env
-			// Say which version it is, refuse one --version does not
-			// name, and ask on a terminal (--yes answers): a newer
-			// version may have arrived since it was reviewed.
-			version, err := approvalVersion(ctx, c, ns, bundle)
-			if err != nil {
-				return err
-			}
-			if o.version != "" && o.version != version {
-				return fmt.Errorf("approve: the version waiting for %s is %s (%s), not %s: nothing recorded",
-					env, versionOr(version, bundle), bundle, o.version)
-			}
-			verb := o.decision
-			if o.revoke {
-				verb = "revoke your decision on"
-			}
-			if err := confirm(cmd, fmt.Sprintf("%s %s (%s) for %s?", upperFirst(verb), versionOr(version, bundle), bundle, env)); err != nil {
-				return err
-			}
-			return approveFn(ctx, cmd.OutOrStdout(), c, ns, bundle, o)
+			return approveChecked(ctx, cmd.OutOrStdout(), c, ns, bundle, o, func(question string) error {
+				return confirm(cmd, question)
+			})
 		},
 	}
 	addEnvFlag(cmd, &o.env, "Environment the approval is for (or give it after the pipeline)")
@@ -96,6 +80,32 @@ your Approval.`,
 	addYesFlag(cmd)
 	withReference(cmd, approveReference)
 	return cmd
+}
+
+// approveChecked records o for bundle after saying which version it is and
+// refusing one o.version does not name, and after ask (when not nil, on a
+// terminal; --yes answers): a newer version may have arrived since it was
+// reviewed.
+func approveChecked(ctx context.Context, w io.Writer, c sigs_client.Client, ns, bundle string, o approveOptions,
+	ask func(question string) error) error {
+	version, err := approvalVersion(ctx, c, ns, bundle)
+	if err != nil {
+		return err
+	}
+	if o.version != "" && o.version != version {
+		return fmt.Errorf("approve: the version waiting for %s is %s (%s), not %s: nothing recorded",
+			o.env, versionOr(version, bundle), bundle, o.version)
+	}
+	verb := o.decision
+	if o.revoke {
+		verb = "revoke your decision on"
+	}
+	if ask != nil {
+		if err := ask(fmt.Sprintf("%s %s (%s) for %s?", upperFirst(verb), versionOr(version, bundle), bundle, o.env)); err != nil {
+			return err
+		}
+	}
+	return approveFn(ctx, w, c, ns, bundle, o)
 }
 
 // approveTarget is the Bundle and environment kardinal approve records a

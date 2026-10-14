@@ -18,11 +18,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -283,7 +286,8 @@ func TestMCP_Paging(t *testing.T) {
 		res, body := call(t, cs, "history", map[string]any{"pipeline": "app", "limit": 100, "offset": offset})
 		require.False(t, res.IsError, "%v", body)
 		raw, _ := json.Marshal(body)
-		assert.LessOrEqual(t, len(raw), 2048+64)
+		assert.LessOrEqual(t, len(res.Content[0].(*mcp.TextContent).Text), 2048, "a page fits the limit")
+		_ = raw
 		items, _ := body["result"].([]any)
 		require.NotEmpty(t, items)
 		for _, it := range items {
@@ -311,16 +315,36 @@ func TestMCP_Paging(t *testing.T) {
 //
 // Covers MCP-PAGE-01.
 func TestMCPResult_Truncated(t *testing.T) {
-	k := &mcpServer{opts: mcpOptions{maxBytes: 1024}}
-	res, err := k.result(map[string]any{"text": strings.Repeat("x", 5000)}, 0)
-	require.NoError(t, err)
-	var body mcpResult
-	require.NoError(t, json.Unmarshal([]byte(res.Content[0].(*mcp.TextContent).Text), &body))
-	assert.True(t, body.Truncated)
-	assert.Contains(t, body.Hint, "narrow it")
-	assert.Less(t, len(res.Content[0].(*mcp.TextContent).Text), 1400)
+	for _, tc := range []struct {
+		name string
+		v    any
+	}{
+		{"ASCII", map[string]any{"text": strings.Repeat("x", 5000)}},
+		{"multi-byte characters", map[string]any{"text": strings.Repeat("é🚀日", 900)}},
+		{"text that escaping doubles", map[string]any{"text": strings.Repeat("\"<>&\n", 900)}},
+		{"one list item larger than the limit", []any{map[string]any{"text": strings.Repeat("ü", 3000)}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, limit := range []int{1024, 1500, 4096} {
+				k := &mcpServer{opts: mcpOptions{maxBytes: limit}}
+				res, err := k.result(tc.v, 0)
+				require.NoError(t, err)
+				text := res.Content[0].(*mcp.TextContent).Text
+				assert.LessOrEqual(t, len(text), limit, "the result fits the limit")
+				var body mcpResult
+				require.NoError(t, json.Unmarshal([]byte(text), &body), "the result is JSON")
+				assert.True(t, body.Truncated)
+				assert.Contains(t, body.Hint, "narrow it")
+				cut, ok := body.Result.(string)
+				require.True(t, ok)
+				assert.True(t, utf8.ValidString(cut), "no character is split")
+				assert.Greater(t, len(cut), limit/4, "most of the room is used")
+			}
+		})
+	}
 
-	res, err = k.result([]any{}, 0)
+	k := &mcpServer{opts: mcpOptions{maxBytes: 1024}}
+	res, err := k.result([]any{}, 0)
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"result":[]}`, res.Content[0].(*mcp.TextContent).Text)
 }
@@ -504,10 +528,92 @@ func TestMCP_PersistentFlags(t *testing.T) {
 	})
 	k := &mcpServer{opts: mcpOptions{maxBytes: defaultMCPMaxBytes, base: persistentArgs()}}
 	setForTest(t, &globalNamespace, "")
-	_, err := k.direct("", func(sigs_client.Client, string) (any, error) { return nil, nil })
+	noop := func(context.Context, io.Writer, sigs_client.Client, string) (any, error) { return nil, nil }
+	_, err := k.direct(t.Context(), "", 0, noop)
 	require.Error(t, err)
-	_, err = k.direct("team-b", func(sigs_client.Client, string) (any, error) { return nil, nil })
+	_, err = k.direct(t.Context(), "team-b", 0, noop)
 	require.Error(t, err)
 	assert.Equal(t, []string{"/tmp/kc|kind-kp|team-a", "/tmp/kc|kind-kp|team-b"}, seen)
 	assert.Empty(t, globalNamespace, "put back")
+}
+
+// mcpHostile are values an agent (or text it read) may put in a tool's
+// arguments to make kardinal mcp act on another cluster, run a kubeconfig's
+// exec plugin, change the output, or reach another object.
+var mcpHostile = []string{"--context=prod-cluster", "--kubeconfig=/tmp/evil.kubeconfig", "-o", "-n=kube-system",
+	"$(touch /tmp/pwned)", "app\n--context=x", "../app", "app;rm -rf /", ""}
+
+// TestMCP_HostileArguments: for every tool and every argument that names
+// something (a pipeline, an environment, a version, a namespace, an image),
+// a hostile value is refused before anything runs: no client is built for
+// another kubeconfig or context, nothing is written, and the error says
+// which argument is invalid. A tool value never reaches flag parsing.
+//
+// Covers MCP-ARGS-01.
+func TestMCP_HostileArguments(t *testing.T) {
+	setForTest(t, &globalKubeconfig, "")
+	setForTest(t, &globalContext, "")
+	cs, c := mcpClient(t, mcpOptions{allowWrite: true}, nil, mcpFixture()...)
+	var seen []string
+	inner := buildClient
+	setForTest(t, &buildClient, func() (sigs_client.Client, string, error) {
+		seen = append(seen, globalKubeconfig+"|"+globalContext)
+		return inner()
+	})
+	// Each tool's arguments that name something, with a valid value.
+	named := map[string]map[string]any{
+		"why":      {"pipeline": "app", "environment": "prod", "namespace": "default"},
+		"status":   {"pipeline": "app", "namespace": "default"},
+		"inbox":    {"namespace": "default"},
+		"history":  {"pipeline": "app", "environment": "prod", "namespace": "default"},
+		"diff":     {"a": "1.0", "b": "2.0", "namespace": "default"},
+		"explain":  {"pipeline": "app", "environment": "prod", "namespace": "default"},
+		"gates":    {"pipeline": "app", "namespace": "default"},
+		"simulate": {"pipeline": "app", "environment": "prod", "version": "2.0", "namespace": "default"},
+		"ship":     {"pipeline": "app", "images": []string{"ghcr.io/acme/app:3.0"}, "namespace": "default"},
+		"promote":  {"pipeline": "app", "environment": "prod", "namespace": "default"},
+		"rollback": {"pipeline": "app", "environment": "prod", "to": "1.0", "namespace": "default"},
+		"pause":    {"pipeline": "app", "namespace": "default"},
+		"resume":   {"pipeline": "app", "namespace": "default"},
+		"reject":   {"version": "2.0", "pipeline": "app", "namespace": "default"},
+		"approve":  {"pipeline": "app", "environment": "prod", "version": "2.0", "namespace": "default"},
+	}
+	// The other arguments a tool needs, which are free text.
+	extra := map[string]map[string]any{"reject": {"reason": "r"}}
+	require.ElementsMatch(t, append(slices.Clone(mcpReadTools), mcpWriteTools...), slices.Collect(maps.Keys(named)))
+	for tool, valid := range named {
+		for field := range valid {
+			for _, bad := range mcpHostile {
+				optional := field == "namespace" || field == "to" || (field == "pipeline" && (tool == "status" || tool == "gates" || tool == "reject")) ||
+					(field == "environment" && (tool == "why" || tool == "history" || tool == "explain")) ||
+					(field == "version" && tool == "simulate")
+				if bad == "" && optional {
+					continue // an empty optional argument is the default
+				}
+				args := maps.Clone(valid)
+				maps.Copy(args, extra[tool])
+				if field == "images" {
+					args[field] = []string{bad}
+				} else {
+					args[field] = bad
+				}
+				seen = nil
+				res, body := call(t, cs, tool, args)
+				assert.True(t, res.IsError, "%s %s=%q: %v", tool, field, bad, body)
+				assert.Contains(t, fmt.Sprint(body), field, "%s %s=%q: the error names the argument", tool, field, bad)
+				for _, s := range seen {
+					assert.Equal(t, "|", s, "%s %s=%q: a client for another kubeconfig or context", tool, field, bad)
+				}
+			}
+		}
+	}
+	var bundles v1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundles))
+	assert.Len(t, bundles.Items, 2, "nothing shipped, promoted or rolled back")
+	var p v1alpha1.Pipeline
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "app"}, &p))
+	assert.False(t, p.Spec.Paused)
+	var approvals v1alpha1.ApprovalList
+	require.NoError(t, c.List(context.Background(), &approvals))
+	assert.Empty(t, approvals.Items)
 }

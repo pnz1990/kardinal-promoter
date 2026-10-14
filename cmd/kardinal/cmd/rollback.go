@@ -61,38 +61,17 @@ blocking gates pass as audited exemptions meanwhile. See docs/rollback.md.`,
 			if err != nil {
 				return err
 			}
-			if reasonFlag != "" && !holdFlag {
-				return fmt.Errorf("rollback: --reason is the reason of a hold; add --hold")
-			}
-			if holdFlag && strings.TrimSpace(reasonFlag) == "" {
-				return fmt.Errorf("rollback --hold needs --reason: say why the environment is held")
-			}
-			if expiresFlag != 0 && (!holdFlag || expiresFlag < 0) {
-				return fmt.Errorf("rollback: --hold-expires-in is a positive duration of a hold; add --hold")
+			r := rollbackRequest{pipeline: pipeline, env: env, to: toFlag, hold: holdFlag, reason: reasonFlag, expires: expiresFlag}
+			if err := r.check(); err != nil {
+				return err
 			}
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("rollback: %w", err)
 			}
-			if toFlag, err = resolveBundleRef(contextOf(cmd), c, ns, pipeline, toFlag); err != nil {
-				return fmt.Errorf("rollback: --to: %w", err)
-			}
-			if lastEnvironment(cmd.Context(), c, ns, pipeline, env) {
-				if err := confirm(cmd, fmt.Sprintf("Roll %s of %s back? The rollback goes through every environment before it.", env, pipeline)); err != nil {
-					return err
-				}
-			}
-			if holdFlag {
-				// The admission policy accepts a hold only with createdBy
-				// set to the requesting Kubernetes user.
-				actor, err := kubeUser(cmd.Context(), c)
-				if err != nil {
-					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v; recording %s as the hold's createdBy\n", err, currentUser())
-					actor = currentUser()
-				}
-				return rollbackHoldFn(cmd.OutOrStdout(), c, ns, pipeline, env, toFlag, reasonFlag, actor, expiresFlag)
-			}
-			return rollbackFn(cmd.OutOrStdout(), c, ns, pipeline, env, toFlag)
+			return rollbackDo(contextOf(cmd), cmd.OutOrStdout(), cmd.ErrOrStderr(), c, ns, r, func() error {
+				return confirm(cmd, fmt.Sprintf("Roll %s of %s back? The rollback goes through every environment before it.", env, pipeline))
+			})
 		},
 	}
 
@@ -105,6 +84,56 @@ blocking gates pass as audited exemptions meanwhile. See docs/rollback.md.`,
 	addYesFlag(cmd)
 
 	return withStructuredOutput(cmd)
+}
+
+// rollbackRequest is what kardinal rollback (and kardinal mcp's rollback
+// tool) asks for: roll env of pipeline back, to the Bundle or version to
+// (default: the one Verified there before), and with hold keep it there.
+type rollbackRequest struct {
+	pipeline, env, to, reason string
+	hold                      bool
+	expires                   time.Duration
+}
+
+// check refuses a reason without a hold, a hold without a reason, and an
+// expiry without a hold.
+func (r rollbackRequest) check() error {
+	if r.reason != "" && !r.hold {
+		return fmt.Errorf("rollback: --reason is the reason of a hold; add --hold")
+	}
+	if r.hold && strings.TrimSpace(r.reason) == "" {
+		return fmt.Errorf("rollback --hold needs --reason: say why the environment is held")
+	}
+	if r.expires != 0 && (!r.hold || r.expires < 0) {
+		return fmt.Errorf("rollback: --hold-expires-in is a positive duration of a hold; add --hold")
+	}
+	return nil
+}
+
+// rollbackDo resolves r.to, asks (ask, when not nil) before it rolls back
+// the last environment of the pipeline, and rolls back, with the hold when
+// r.hold. Warnings go to errw.
+func rollbackDo(ctx context.Context, w, errw io.Writer, c sigs_client.Client, ns string, r rollbackRequest, ask func() error) error {
+	to, err := resolveBundleRef(ctx, c, ns, r.pipeline, r.to)
+	if err != nil {
+		return fmt.Errorf("rollback: --to: %w", err)
+	}
+	if ask != nil && lastEnvironment(ctx, c, ns, r.pipeline, r.env) {
+		if err := ask(); err != nil {
+			return err
+		}
+	}
+	if r.hold {
+		// The admission policy accepts a hold only with createdBy set to
+		// the requesting Kubernetes user.
+		actor, err := kubeUser(ctx, c)
+		if err != nil {
+			_, _ = fmt.Fprintf(errw, "warning: %v; recording %s as the hold's createdBy\n", err, currentUser())
+			actor = currentUser()
+		}
+		return rollbackHoldFn(w, c, ns, r.pipeline, r.env, to, r.reason, actor, r.expires)
+	}
+	return rollbackFn(w, c, ns, r.pipeline, r.env, to)
 }
 
 // rollbackFn is the testable implementation of rollback. The target and the
