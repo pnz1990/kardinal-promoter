@@ -1,0 +1,45 @@
+name: red main
+
+# After every CI run on main (#1836): re-runs a failed run's failed jobs once,
+# then opens or updates the one issue labelled red-main with the failing jobs
+# and tests and the merges since the last green main run, or closes it when
+# main is green. The logic is hack/ci/red-main.sh. It runs the default
+# branch's code with only the workflow's own token.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One at a time, never cancelled: each run acts on the newest finished main
+# run, so a queued one that replaces another loses nothing.
+concurrency:
+  group: red-main
+  cancel-in-progress: false
+
+jobs:
+  red-main:
+    name: red main
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: write # re-run the failed jobs of a main run once
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Open, update or close the red-main issue
+        run: bash hack/ci/red-main.sh

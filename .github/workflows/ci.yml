@@ -16,10 +16,15 @@ env:
 permissions:
   contents: read
 
-# Concurrency: cancel in-progress runs for the same PR/branch
+# Concurrency: a new push to a pull request cancels the PR's run in progress.
+# Runs on main are never cancelled (#1836): each push to main gets its own
+# group (its run id), so a merge does not cancel, or queue behind, the run of
+# the merge before it, and every main commit gets a result: a release tags
+# the last commit whose main run finished green, and the red-main workflow
+# names the merge that broke main.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # ── Docs and YAML lint (always runs) ─────────────────────────────────────────
@@ -73,15 +78,30 @@ jobs:
           echo "All required docs present"
 
   # ── Go build + test ──────────────────────────────────────────────────────────
-  build:
-    name: build
+  # The required check "build" is the last job: it passes when the build
+  # checks and every go test shard pass. The shards split the packages by
+  # hack/ci/test-durations.txt (hack/citool shard), so they finish together;
+  # ci-health.yml keeps the durations current.
+  checks:
+    name: build checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - name: Restore the Go build cache
+        # Saved by the go-cache job on main; see there.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-build-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-build-${{ runner.os }}-
       - name: Install Helm
         # test/examples and test/helm render charts with helm template.
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
@@ -94,12 +114,12 @@ jobs:
             (echo "go.mod/go.sum not tidy — run 'go mod tidy'" && exit 1)
       - name: go vet
         run: go vet ./...
-      - name: go test
-        run: go test ./... -race -count=1 -timeout 120s
-      - name: go test (shared-branch writers, no race)
-        # Under -race the test runs 30 writers (#1648); this runs all sixty,
-        # and asserts some lose a reconcile and retry it.
-        run: go test ./pkg/steps/steps/sharedbranch/ -count=1 -timeout 120s
+      - name: go test (no race)
+        # The race tests run in the test shards. These run without -race too:
+        # sharedbranch runs 30 writers under -race (#1648) and all sixty here,
+        # and asserts some lose a reconcile and retry it; pkg/scm's slow-push
+        # test is !race (git_transport_norace_test.go).
+        run: go test ./pkg/steps/steps/sharedbranch/ ./pkg/scm/ -count=1 -timeout 120s
       - name: go build
         run: go build ./...
       - name: Check Apache 2.0 headers
@@ -131,8 +151,125 @@ jobs:
         # types and validates it against the generated CRD OpenAPI schemas
         # (pruning, enums, patterns, label values), and checks that every
         # git path the examples promote into exists in pnz1990/kardinal-demo.
-        # The same test runs in "go test" above; this step shows its output.
+        # The same test runs in a test shard; this step shows its output.
         run: go test ./test/examples/... -count=1 -v
+
+  test:
+    name: go test (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep in step with SHARDS below (test/hack TestCITestShards).
+        shard: [1, 2, 3, 4]
+    env:
+      SHARDS: "4"
+      SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Restore the Go race cache
+        # Saved by the go-cache job on main; see there.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-race-${{ runner.os }}-
+      - name: Install Helm
+        # test/examples and test/helm render charts with helm template.
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: v3.22.0
+      - name: go test -race (this shard's packages)
+        run: |
+          go list ./... | go run ./hack/citool shard "$SHARD/$SHARDS" hack/ci/test-durations.txt > "$RUNNER_TEMP/packages"
+          mapfile -t packages < "$RUNNER_TEMP/packages"
+          echo "shard $SHARD/$SHARDS: ${#packages[@]} packages"
+          go test -race -count=1 -timeout 120s "${packages[@]}"
+
+  build:
+    name: build
+    needs: [checks, test]
+    # Runs when a needed job failed too (and fails), not when the run was
+    # cancelled.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the build checks and every test shard to pass
+        env:
+          CHECKS: ${{ needs.checks.result }}
+          TESTS: ${{ needs.test.result }}
+        run: |
+          echo "build checks: $CHECKS, go test shards: $TESTS"
+          if [ "$CHECKS" != success ] || [ "$TESTS" != success ]; then
+            echo "::error::build checks ($CHECKS) and every go test shard ($TESTS) must pass"
+            exit 1
+          fi
+
+  # ── Go build cache: warmed on main, restored by every Go job ─────────────────
+  # One cache with the race build of every test binary (the test shards,
+  # integration, e2e stubs) and one with the plain build, vet and test build
+  # (build checks, golangci-lint, helm lint). Only main saves them, a fresh one
+  # a day or per go.sum, built from empty so they do not grow; pull requests
+  # restore main's. Not needed by "build", so it never slows a run down.
+  go-cache:
+    name: go cache (${{ matrix.cache }})
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cache: [race, build]
+    env:
+      CACHE: ${{ matrix.cache }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Cache key
+        id: key
+        env:
+          GO_SUM: ${{ hashFiles('go.sum') }}
+        run: echo "key=go-$CACHE-$RUNNER_OS-$GO_SUM-$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - name: Look up today's cache
+        id: lookup
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+      - name: Compile everything the Go jobs compile
+        if: steps.lookup.outputs.cache-hit != 'true'
+        # -exec /bin/true links each test binary and does not run it.
+        run: |
+          if [ "$CACHE" = race ]; then
+            go test -race -count=1 -exec /bin/true ./...
+            go test -race -count=1 -exec /bin/true -tags integration ./test/integration/...
+            go build ./...
+          else
+            go vet ./...
+            go build ./...
+            go test -count=1 -exec /bin/true ./...
+            go install "sigs.k8s.io/controller-tools/cmd/controller-gen@$(grep 'CONTROLLER_GEN_VERSION\s*?=' Makefile | awk '{print $NF}')"
+          fi
+      - name: Save the cache
+        if: steps.lookup.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ steps.key.outputs.key }}
 
   # ── Integration tests: reconcilers via fake client (no cluster needed) ────────
   integration:
@@ -143,7 +280,18 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - name: Restore the Go race cache
+        # Saved by the go-cache job on main; see there.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-race-${{ runner.os }}-
       - name: Run integration tests
         run: go test ./test/integration/... -tags integration -race -count=1 -timeout 120s
 
@@ -156,11 +304,26 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - name: Restore the Go build cache
+        # Saved by the go-cache job on main; see there.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-build-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-build-${{ runner.os }}-
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
         with:
           version: v2.11.4
+          # The schema check downloads the JSON schema from golangci-lint.run;
+          # its timeouts were 9 of the week's flaky CI jobs (#1836). The run
+          # itself still rejects an invalid config.
+          verify: false
 
   # ── Dead code and dead files (make hygiene) ──────────────────────────────────
   # Go functions no main or test reaches, docs pages and assets nothing links,
@@ -174,7 +337,18 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - name: Restore the Go build cache
+        # Saved by the go-cache job on main; see there.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-build-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-build-${{ runner.os }}-
       - name: No dead code or dead files
         run: make hygiene-go
 
@@ -188,6 +362,8 @@ jobs:
         with:
           # Scan with the toolchain pinned in go.mod so stdlib fixes stay in sync.
           go-version-file: go.mod
+          # setup-go's own cache is one key for every job (#1836); off.
+          cache: false
       - name: Run govulncheck
         # make vuln installs govulncheck at the Makefile's GOVULNCHECK_VERSION.
         run: make vuln
@@ -201,6 +377,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false
       - name: Verify go.sum
         run: go mod verify
 
@@ -233,7 +410,18 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - name: Restore the Go race cache
+        # Saved by the go-cache job on main; see there.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-race-${{ runner.os }}-
       - name: Build the CLI for TestJourney5
         run: make build-cli
       - name: Run journey tests (fake client, no cluster)
@@ -351,7 +539,19 @@ jobs:
         if: steps.chart_check.outputs.has_chart == 'true'
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - name: Restore the Go build cache
+        if: steps.chart_check.outputs.has_chart == 'true'
+        # Saved by the go-cache job on main; see there.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-build-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-build-${{ runner.os }}-
       - name: Chart render tests
         if: steps.chart_check.outputs.has_chart == 'true'
         env:

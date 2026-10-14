@@ -1,0 +1,63 @@
+name: CI health
+
+# Every Monday (#1836):
+#   - flaky: the tests that failed and passed on the same commit in the last
+#     week of CI runs, in the one issue labelled flaky-test
+#     (hack/ci/flaky-report.sh).
+#   - durations: re-measures the go test shards' package times from the last
+#     green main runs and, when the committed hack/ci/test-durations.txt splits
+#     them unevenly, pushes a refreshed file to bot/test-durations and opens an
+#     issue to merge it (hack/ci/refresh-durations.sh).
+
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-health
+  cancel-in-progress: false
+
+jobs:
+  flaky:
+    name: flaky-test report
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Report the flaky tests of the last week
+        run: bash hack/ci/flaky-report.sh
+
+  durations:
+    name: test durations
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write # push the bot/test-durations branch (never main)
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Refresh the test durations when the shards are unbalanced
+        run: bash hack/ci/refresh-durations.sh

@@ -100,6 +100,7 @@ func TestAllTerminal(t *testing.T) {
 }
 
 func TestLogsFollowExitsOnTerminal(t *testing.T) {
+	t.Parallel()
 	// Build a fake client with a single PromotionStep in Verified state.
 	scheme := logsTestScheme(t)
 	ps := &v1alpha1.PromotionStep{
@@ -235,6 +236,7 @@ func TestLogsStepTable(t *testing.T) {
 // prints its transition, and a terminal step next to a running one does not
 // repeat on every poll.
 func TestLogsFollow_StateChangesPrintedOnce(t *testing.T) {
+	t.Parallel()
 	created := policyTestNow.Add(-time.Hour)
 	verified := explainStep("demo", "b1", "test", "Verified", "", created)
 	verified.Status.Steps = []v1alpha1.StepStatus{
@@ -258,6 +260,7 @@ func TestLogsFollow_StateChangesPrintedOnce(t *testing.T) {
 
 // RollingBack is terminal: the reconciler stops there, so --follow exits.
 func TestLogsFollow_RollingBackIsTerminal(t *testing.T) {
+	t.Parallel()
 	step := explainStep("demo", "b1", "prod", "RollingBack", "health check failed", policyTestNow.Add(-time.Hour))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -271,6 +274,7 @@ func TestLogsFollow_RollingBackIsTerminal(t *testing.T) {
 // and its gates pass, so a Verified test step of a Promoting Bundle is not the
 // end of the promotion.
 func TestLogsFollow_WaitsForInFlightBundle(t *testing.T) {
+	t.Parallel()
 	step := explainStep("demo", "b1", "test", "Verified", "", policyTestNow.Add(-time.Hour))
 	bundle := func(name, phase string) *v1alpha1.Bundle {
 		return &v1alpha1.Bundle{

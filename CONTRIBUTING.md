@@ -16,7 +16,7 @@ Thank you for your interest in contributing to kardinal-promoter!
 # Build all binaries
 go build ./...
 
-# Run all tests (with race detector)
+# Run all tests (with race detector; CI splits them into shards, see Merging)
 go test ./... -race -count=1 -timeout 120s
 
 # Lint
@@ -117,6 +117,59 @@ those changes; describe what you need in an issue or in the PR.
 
 PR titles must follow [Conventional Commits](https://www.conventionalcommits.org/):
 `feat(scope): description`, `fix(scope): description`, `chore(scope): description`.
+
+### Merging
+
+Every change reaches `main` through a squash-merged pull request; nothing is pushed to `main`
+directly. Branch protection requires the CI checks (`build`, `integration tests`,
+`golangci-lint`, `frontend build`, `helm lint`, `docs-lint`, `go.sum integrity`,
+`e2e stubs compile`, `action-tests`, `agent instructions guard`), but not that the branch be up to
+date with `main`. A pull request merges when its own head is green and it has no conflicts.
+
+- **Auto-merge.** Once CI is green on a pull request that is not risky, turn on auto-merge:
+  `gh pr merge <n> --squash --auto --delete-branch`. GitHub merges it when the required checks
+  pass. There is no merge queue (the repository is user-owned), so do not wait for or rebase onto
+  every new `main` commit.
+- **Risky pull requests do not auto-merge.** A pull request is risky when it changes `go.mod` or
+  `go.sum`, the test infrastructure (`test/hack/`, `test/e2e/framework/`, `hack/`, the
+  workflows in `.github/`), a CRD schema (`api/`, `config/crd/`), or a package that another
+  ready pull request also changes. A maintainer merges it by hand, after rebasing it onto the
+  current `main` and seeing CI green there; several risky pull requests go together on one
+  train branch with one CI run.
+- **CI on `main`.** Every merge runs CI on `main`, and a run on `main` is never cancelled by the
+  next merge (pull request runs are: a new push cancels the old run). `build` passes when the
+  build checks (tidy, vet, build, license headers, CRD schemas) and every `go test -race`
+  shard pass; the shards split the packages by `hack/ci/test-durations.txt`
+  (`go run ./hack/citool shard I/N`). Main restores a Go build cache it saves once a day, so the
+  pull request critical path stays under five minutes.
+
+### When main is red
+
+The **red main** workflow (`.github/workflows/red-main.yml`, logic in `hack/ci/red-main.sh`)
+runs after every CI run on `main`. On a first failure it re-runs the failed jobs once. When the
+run still fails, it opens one issue labelled `red-main` (or updates it) with the failing jobs and
+tests and the merges since the last green `main` run, and closes it on the next green run.
+
+Main is red for at most 30 minutes:
+
+1. **Fix forward** when the cause is clear and the fix is small: open the fix as a pull request
+   and auto-merge it.
+2. **Otherwise revert** the merge that broke `main` (`git revert <sha>` in a pull request, or the
+   **Revert** button on the merged pull request) and reopen the original change with the fix.
+
+Until `main` is green, merge nothing but the fix or the revert: every merge on a red `main` makes
+the next failure harder to attribute.
+
+### Flaky tests
+
+A test that fails and then passes on the same commit is flaky, and a flaky test is a bug. The
+weekly **CI health** workflow (`.github/workflows/ci-health.yml`) keeps one issue labelled
+`flaky-test` with every test that failed and passed on the same commit in the last week of CI runs
+(a re-run, or two runs of one commit). Fix the test, or skip it with `t.Skip` and a link to its
+issue; do not re-run a pull request until it passes without saying so in the pull request. The
+same workflow re-measures the test shards and, when `hack/ci/test-durations.txt` splits them
+more than 15% off, pushes a refreshed file to the `bot/test-durations` branch and opens an issue
+labelled `test-durations` to merge it.
 
 ## Code Standards
 
