@@ -31,16 +31,6 @@ func AgentGateName(ceiling string) string {
 	return AgentGatePrefix + ceiling
 }
 
-// IsAgentGate reports whether name is an agent-autonomy gate template.
-func IsAgentGate(name string) bool {
-	switch name {
-	case AgentGateName(kardinalv1alpha1.AutonomyAuto), AgentGateName(kardinalv1alpha1.AutonomyApprove),
-		AgentGateName(kardinalv1alpha1.AutonomyDeny):
-		return true
-	}
-	return false
-}
-
 // agentCeiling is env's agents ceiling; unset is auto (the AgentIdentity's
 // autonomy alone applies).
 func agentCeiling(env kardinalv1alpha1.EnvironmentSpec) string {
