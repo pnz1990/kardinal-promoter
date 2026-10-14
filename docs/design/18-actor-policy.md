@@ -450,10 +450,13 @@ not include it; the docs show a `ClusterRole` for incident commanders
   and an optional duration; **Stop the line** asks to confirm by typing `stop`.
 - UI API: `GET /api/v1/ui/freezes`, `POST /api/v1/ui/freeze`, `POST /api/v1/ui/unfreeze`.
   In TokenReview mode the controller checks the caller with a SubjectAccessReview for the
-  virtual action `create changewindows/freeze` (cluster scope) and writes the window as itself,
-  with the caller as `createdBy`. Without TokenReview the endpoints are refused: a freeze names who
-  froze. The chart grants the controller `create, update, delete` on `changewindows` only
-  with `ui.auth.tokenReview`, and the freezes policy admits its writes only with `spec.freeze`.
+  virtual action `update changewindows/freeze` (cluster scope, or the namespace a freeze is
+  limited to) and writes the window as itself, with the caller as `createdBy`. Without
+  TokenReview the endpoints are refused: a freeze names who froze. The writes are opt-in, Helm
+  `ui.freezeControls` (`--ui-freeze-controls`, which needs TokenReview): only then does the chart
+  grant the controller `create, update, delete` on `changewindows`, and the freezes policy admits
+  the controller's writes only with `spec.freeze`. Off, the UI shows freezes and `kardinal freeze`
+  writes them.
 - A held step's drawer shows the step message (9.2).
 
 ### 9.6 Writes by agents during a freeze
