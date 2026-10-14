@@ -134,80 +134,73 @@ func TestQueue_BacklogBookkeeping(t *testing.T) {
 
 // TestQueue_StarvationSimulation counts how many of namespace a's items
 // are handed out after one item of namespace b is added and before b's is,
-// while a keeps 16 workers busy with a 300-item backlog of 5 ms reconciles
-// that requeue themselves, with the plain priority queue and with this one.
-// The fair queue hands out b's item within one round of the workers; the
-// plain one after a's whole
-// backlog. (Counted, not timed, so a loaded machine cannot flake it.)
+// while a keeps 16 workers busy with a 300-item backlog of reconciles that
+// requeue themselves, with the plain priority queue and with this one. The
+// fair queue hands out b's item next; the plain one after a's whole backlog.
+//
+// The workers are simulated in one goroutine (#1861): 16 of a's items are
+// in flight, and each step finishes the oldest (Done, then Add again) and
+// takes the next item. Every Add and Done happens before the Get that
+// follows it, so the count is exact: with real goroutines it was loose by a
+// round of workers on each side of b's item, and flaked.
 //
 // Covers PERF-FAIRQ-01.
 func TestQueue_StarvationSimulation(t *testing.T) {
 	plain := simulate(t, false)
 	fair := simulate(t, true)
 	t.Logf("a's items handed out before b's: %d with the plain priority queue, %d with the fair queue", plain, fair)
-	// The count is loose by up to a round on each side of b's item: a
-	// worker that got its item just before b's was added may read bAdded
-	// after it was set, and workers keep counting between the Get that
-	// hands out b's item and the store of bAt. So at most two rounds.
-	assert.LessOrEqual(t, fair, int64(2*16), "b's item is served within a round or two of the workers")
-	assert.Greater(t, plain, int64(200), "the plain queue serves a's backlog first")
+	assert.Zero(t, fair, "b's item is the next one handed out")
+	assert.Greater(t, plain, 200, "the plain queue serves a's backlog first")
+	assert.Equal(t, plain, simulate(t, false), "the count is deterministic")
+	assert.Equal(t, fair, simulate(t, true), "the count is deterministic")
 }
 
-func simulate(t *testing.T, fair bool) int64 {
+func simulate(t *testing.T, fair bool) int {
 	t.Helper()
 	name := fmt.Sprintf("sim-%d", queueN.Add(1))
 	q := priorityqueue.New[reconcile.Request](name)
 	if fair {
 		q = fairqueue.Wrap(q)
 	}
-	const workers, backlog, work = 16, 300, 5 * time.Millisecond
-	var bAt atomic.Int64
-	var bAdded atomic.Bool
-	var aAfterB atomic.Int64
-	var wg sync.WaitGroup
-	stop := make(chan struct{})
-	for range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				it, _, shutdown := q.GetWithPriority()
-				if shutdown {
-					return
-				}
-				if it.Namespace == "b" {
-					bAt.Store(time.Now().UnixNano())
-					q.Done(it)
-					continue
-				}
-				if bAdded.Load() && bAt.Load() == 0 {
-					aAfterB.Add(1)
-				}
-				time.Sleep(work)
-				q.Done(it)
-				select {
-				case <-stop:
-				default:
-					q.Add(it) // a's steps keep coming back
-				}
-			}
-		}()
-	}
+	defer q.ShutDown()
+	const workers, backlog = 16, 300
 	for i := range backlog {
 		q.Add(req("a", fmt.Sprintf("s%03d", i)))
 	}
-	time.Sleep(20 * time.Millisecond)
-	bAdded.Store(true)
-	q.Add(req("b", "s0"))
-	deadline := time.Now().Add(10 * time.Second)
-	for bAt.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
+	next := func() reconcile.Request {
+		t.Helper()
+		ch := make(chan reconcile.Request, 1)
+		go func() {
+			it, _, _ := q.GetWithPriority()
+			ch <- it
+		}()
+		select {
+		case it := <-ch:
+			return it
+		case <-time.After(10 * time.Second):
+			require.FailNow(t, "the queue handed nothing out")
+			return reconcile.Request{}
+		}
 	}
-	close(stop)
-	q.ShutDown()
-	wg.Wait()
-	require.NotZero(t, bAt.Load(), "b was never served")
-	return aAfterB.Load()
+	var inFlight []reconcile.Request
+	for range workers {
+		inFlight = append(inFlight, next())
+	}
+	q.Add(req("b", "s0"))
+	for aAfterB := 0; aAfterB <= 2*backlog; aAfterB++ {
+		// The oldest worker finishes and its step comes back.
+		done := inFlight[0]
+		inFlight = inFlight[1:]
+		q.Done(done)
+		q.Add(done)
+		it := next()
+		if it.Namespace == "b" {
+			return aAfterB
+		}
+		inFlight = append(inFlight, it)
+	}
+	require.FailNow(t, "b was never served")
+	return 0
 }
 
 // TestQueue_NothingLost: every key added, across namespaces, priorities
