@@ -93,7 +93,7 @@ names the new Bundle.
 ### SEE ALSO
 
 * [kardinal approve](kardinal-approve.md)	 - Approve (or reject) the version waiting for an environment's approval gates
-* [kardinal audit](kardinal-audit.md)	 - Audit log commands: summarize and export promotion events
+* [kardinal audit](kardinal-audit.md)	 - Audit log commands: view and summarize promotion events
 * [kardinal completion](kardinal-completion.md)	 - Generate shell completion scripts
 * [kardinal create](kardinal-create.md)	 - Create kardinal resources
 * [kardinal dashboard](kardinal-dashboard.md)	 - Open the kardinal UI dashboard in a browser

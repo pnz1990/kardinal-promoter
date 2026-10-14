@@ -107,6 +107,16 @@ expression: actor.verified && actor.kind == "human"
 A version without a stamp reads as kind `unknown` with its `kardinal.io/created-by` as the
 principal. Agents must stamp: admission refuses an agent's write without one.
 
+## Ask before you ship
+
+`kardinal policy simulate` evaluates an environment's gates for a version an agent would create,
+with the agent's registration as it is now:
+
+```bash
+kardinal policy simulate checkout prod --as-agent fixer
+kardinal policy simulate checkout prod --as-human alice@example.com
+```
+
 ## Break-glass is for people
 
 A gate override by an agent never opens a gate. It is recorded, named in the gate's

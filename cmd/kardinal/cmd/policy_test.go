@@ -1051,3 +1051,38 @@ func TestPolicySimulate_Version(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "9.9")
 }
+
+// TestPolicySimulate_AsAgent: --as-agent stamps the simulated version as the
+// agent, so the Pipeline's agents gates and actor.* and agent.* apply;
+// --as-human stamps a person, who gets no agent gate.
+func TestPolicySimulate_AsAgent(t *testing.T) {
+	p := policyPipeline("demo", "test", "prod")
+	p.Spec.Environments[1].Agents = v1alpha1.AutonomyDeny
+	id := &v1alpha1.AgentIdentity{ObjectMeta: metav1.ObjectMeta{Name: "fixer", Generation: 1},
+		Spec: v1alpha1.AgentIdentitySpec{Subjects: []v1alpha1.AgentSubject{{Kind: "ServiceAccount", Namespace: "ci", Name: "fixer"}},
+			Sponsor: v1alpha1.AgentSponsor{User: "alice"}, Autonomy: v1alpha1.AutonomyAuto},
+		Status: v1alpha1.AgentIdentityStatus{Ready: true, ObservedGeneration: 1}}
+	idx := &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"},
+		Status: v1alpha1.AgentIndexStatus{Users: map[string]v1alpha1.AgentIndexEntry{
+			"system:serviceaccount:ci:fixer": {Agent: "fixer", Sponsor: "alice", Autonomy: v1alpha1.AutonomyAuto}}}}
+	who := policyGate("agents-of-alice", "default", "test", `actor.kind != "agent" || (agent.registered && actor.sponsor == "alice")`)
+	c := policyClient(t, p, id, idx, who)
+
+	out, err := runSimulate(t, c, simulateOptions{Env: "prod", Time: "Tuesday 10am", AsAgent: "fixer"})
+	require.NoError(t, err)
+	assert.Contains(t, out, "RESULT: BLOCKED")
+	assert.Contains(t, out, "Blocked by: kardinal-agents-deny")
+
+	out, err = runSimulate(t, c, simulateOptions{Env: "test", Time: "Tuesday 10am", AsAgent: "fixer"})
+	require.NoError(t, err)
+	assert.Contains(t, out, "RESULT: PASS", "agent.* is read from the registry")
+
+	out, err = runSimulate(t, c, simulateOptions{Env: "prod", Time: "Tuesday 10am", AsHuman: "bob"})
+	require.NoError(t, err)
+	assert.Contains(t, out, "RESULT: PASS")
+
+	_, err = runSimulate(t, c, simulateOptions{Env: "prod", Time: "Tuesday 10am", AsAgent: "fixer", AsHuman: "bob"})
+	assert.Error(t, err)
+	_, err = runSimulate(t, c, simulateOptions{Env: "prod", Time: "Tuesday 10am", AsAgent: "nobody"})
+	assert.Error(t, err)
+}
