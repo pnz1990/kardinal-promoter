@@ -20,6 +20,9 @@
 #   JOBS        jobs at once (default 4; each cluster takes 2-3 GB of
 #               memory, gitlab's about 7 GB; multi-cluster's job has two)
 #   SUITES      only these suites, e.g. 'core gitea' (default every suite)
+#   SAMPLE      a date (YYYY-MM-DD, or today): add that night's sample jobs
+#               (hack/e2e/sample.sh), as the scheduled e2e-live.yml runs do
+#   SAMPLE_ONLY set with SAMPLE to run the sample jobs alone
 #   COUNT       go test -count (default 1; the upgrade jobs always 1: the
 #               test upgrades its cluster; the scale job always 1). RUN is ignored: every job runs
 #               its whole suite (for some tests, use make test-e2e-live RUN=)
@@ -59,16 +62,27 @@ die() {
   exit 1
 }
 
-# One "id suite k8s shard" entry per matrix.txt line; the id names the job's
-# cluster, results and CI artifact (core-135-1of3).
+# One "id suite k8s shard count" entry per matrix.txt line; the id names the
+# job's cluster, results and CI artifact (core-135-1of3). count - is COUNT.
 matrix=()
-while read -r suite k8s shard _ || [ -n "$suite" ]; do
-  case "$suite" in '' | '#'*) continue ;; esac
-  [ -n "$k8s" ] && [ -n "$shard" ] || die "matrix.txt: '$suite $k8s $shard': want suite, Kubernetes minor and shard"
-  [ "$shard" != - ] || shard=
-  id="$suite-${k8s//./}${shard:+-${shard%/*}of${shard#*/}}"
-  matrix+=("$id $suite $k8s ${shard:--}")
-done <"$E2E_DIR/matrix.txt"
+if [ -z "${SAMPLE_ONLY:-}" ]; then
+  while read -r suite k8s shard _ || [ -n "$suite" ]; do
+    case "$suite" in '' | '#'*) continue ;; esac
+    [ -n "$k8s" ] && [ -n "$shard" ] || die "matrix.txt: '$suite $k8s $shard': want suite, Kubernetes minor and shard"
+    [ "$shard" != - ] || shard=
+    id="$suite-${k8s//./}${shard:+-${shard%/*}of${shard#*/}}"
+    matrix+=("$id $suite $k8s ${shard:--} -")
+  done <"$E2E_DIR/matrix.txt"
+fi
+# The night's sample (hack/e2e/sample.sh): jobs matrix.txt does not run.
+if [ -n "${SAMPLE:-}" ]; then
+  [ "$SAMPLE" != today ] || SAMPLE=$(date -u +%Y-%m-%d)
+  sample=$(bash "$E2E_DIR/sample.sh" "$SAMPLE") || die "SAMPLE=$SAMPLE: hack/e2e/sample.sh failed"
+  mapfile -t lines <<<"$sample"
+  matrix+=("${lines[@]}")
+elif [ -n "${SAMPLE_ONLY:-}" ]; then
+  die "SAMPLE_ONLY needs SAMPLE"
+fi
 
 if [ "$MODE" = -matrix ]; then
   # SUITES (the e2e-live.yml dispatch input) keeps only those suites' jobs.
@@ -76,12 +90,13 @@ if [ "$MODE" = -matrix ]; then
   sep=
   printf '{"include":['
   for j in "${matrix[@]}"; do
-    read -r id suite k8s shard <<<"$j"
+    read -r id suite k8s shard count <<<"$j"
     if [ "${#only[@]}" -gt 0 ] && ! [[ " ${only[*]} " == *" $suite "* ]]; then
       continue
     fi
     [ "$shard" != - ] || shard=
-    printf '%s{"id":"%s","suite":"%s","k8s":"%s","shard":"%s"}' "$sep" "$id" "$suite" "$k8s" "$shard"
+    [ "$count" != - ] || count=
+    printf '%s{"id":"%s","suite":"%s","k8s":"%s","shard":"%s","count":"%s"}' "$sep" "$id" "$suite" "$k8s" "$shard" "$count"
     sep=,
   done
   printf ']}\n'
@@ -148,15 +163,16 @@ delete_cluster() {
   done
 }
 
-# run_job ID SUITE K8S SHARD writes ID.log and ID.rc ("<exit code> <seconds>").
+# run_job ID SUITE K8S SHARD COUNT writes ID.log and ID.rc ("<exit code> <seconds>").
 run_job() {
-  local id=$1 suite=$2 k8s=$3 shard=$4 start rc=0
+  local id=$1 suite=$2 k8s=$3 shard=$4 count=$5 start rc=0
   [ "$shard" != - ] || shard=
+  [ "$count" != - ] || count=${COUNT:-1}
   start=$(date +%s)
   (
     unset RUN
     [ "$suite" = github ] || unset KARDINAL_E2E_GITHUB_TOKEN_FILE DEMO_GITHUB_TOKEN
-    export KIND_CLUSTER="$PREFIX-$id" KIND_K8S="$k8s" SHARD="$shard" COUNT="${COUNT:-1}"
+    export KIND_CLUSTER="$PREFIX-$id" KIND_K8S="$k8s" SHARD="$shard" COUNT="$count"
     # run.sh refuses COUNT above 1 for the upgrade suite; the scale suite's
     # load and chaos tests are long, and repeat nothing a second run adds.
     case $suite in upgrade | upgrade-v090 | upgrade-v0100 | scale) COUNT=1 ;; esac
