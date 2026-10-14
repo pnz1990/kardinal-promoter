@@ -65,6 +65,7 @@ func TestFreezeAdmission(t *testing.T) {
 		{name: "freeze without createdBy", cur: window(""), user: "alice", want: false},
 		{name: "the controller freezes for a UI user", cur: window("alice"), user: controller, want: true},
 		{name: "a window that is not a freeze", cur: plain, user: "alice", want: true},
+		{name: "the controller writes only freezes", cur: plain, user: controller, want: false},
 		{name: "someone else updates the reason", old: window("alice"), cur: withReason(window("alice"), "longer"), user: "bob", want: true},
 		{name: "rewrite who froze", old: window("alice"), cur: window("bob"), user: "bob", want: false},
 		{name: "the controller cannot rewrite who froze", old: window("alice"), cur: window("bob"), user: controller, want: false},
