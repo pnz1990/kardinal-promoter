@@ -237,6 +237,8 @@ the Graph admits after an attempt that finished without a pass or a fail.
   do, not what it concludes: keep a person's approval on prod.
 - **Asserted fields.** Model, session, `startedAt` and `durationSeconds` are what the verifier
   says.
-- **A CNI that does not enforce NetworkPolicy.** The policy is created but does nothing.
+- **A CNI that does not enforce NetworkPolicy.** The policy is created but does nothing. A CNI that
+  enforces it a moment after a Pod starts (kindnet: about a second) lets the agent's first
+  connections through; the policy exists before the Pod, but the CNI decides when it applies.
 - **RBAC outside the checked list.** The read-only check covers the kinds above, not custom
   resources the agent may write. The agent's RBAC is the admin's.

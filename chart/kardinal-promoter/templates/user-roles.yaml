@@ -19,7 +19,8 @@ SubjectAccessReview, so these roles decide what a caller can do there too
   <fullname>-approver  viewer + override (approve) PolicyGates
                        (policygates/override) + reject Bundles in the UI
                        (bundles/reject) + create Approvals and Verdicts
-  <fullname>-verifier  read and create Verdicts only: bind it to the agents and
+  <fullname>-verifier  read, create and revoke Verdicts only (admission lets a
+                       verifier delete only its own): bind it to the agents and
                        CI that verify versions (verify gates; an AgentRun's
                        agent needs it in the Pipeline's namespace)
   <fullname>-admin     every verb on every kardinal kind, and pipelines/edit
@@ -137,7 +138,8 @@ rules:
 {{- end }}
 ---
 # Verifiers: an agent or CI job that verifies versions (kardinal verify, an
-# AgentRun's Pod) needs nothing else. It is deliberately not part of the
+# AgentRun's Pod) needs nothing else; it may revoke only its own Verdicts
+# (identity-admission.yaml). It is deliberately not part of the
 # viewer: an AgentRun's agent must not read Secrets or write workloads, and
 # this role grants neither.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -150,7 +152,7 @@ metadata:
 rules:
 - apiGroups: ["kardinal.io"]
   resources: ["verdicts"]
-  verbs: ["get", "list", "watch", "create"]
+  verbs: ["get", "list", "watch", "create", "delete"]
 - apiGroups: ["kardinal.io"]
   resources: ["bundles", "policygates", "pipelines"]
   verbs: ["get", "list", "watch"]

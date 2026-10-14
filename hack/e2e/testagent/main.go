@@ -13,7 +13,9 @@
 // NetworkPolicy blocks it). A Service that fails, or a forbidden URL that
 // answers, is a high finding and the verdict is fail; otherwise pass.
 // PROBE_RESULTS ("inconclusive,pass") overrides the result per attempt, for
-// tests of the retry rule.
+// tests of the retry rule. PROBE_DELAY (a duration) waits before probing:
+// kindnet enforces a NetworkPolicy for a new Pod only about a second after
+// the Pod gets its IP.
 //
 // Only the standard library, so it builds without downloading modules.
 package main
@@ -66,6 +68,9 @@ func main() {
 	api, err := newAPI()
 	if err != nil {
 		log.Fatalf("API client: %v", err)
+	}
+	if d, err := time.ParseDuration(os.Getenv("PROBE_DELAY")); err == nil && d > 0 {
+		time.Sleep(d)
 	}
 	result, summary, findings := probe(api, rc)
 	if r := forced(os.Getenv("PROBE_RESULTS"), rc.Attempt); r != "" {

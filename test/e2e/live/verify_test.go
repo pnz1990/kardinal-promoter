@@ -15,9 +15,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -146,7 +144,9 @@ func TestGate_VerifyAgentRuns(t *testing.T) {
 	a := newArgoApp(t, e, "uat", "prod")
 	forbidden := strings.TrimRight(os.Getenv(framework.EnvReceiverURL), "/") + "/_healthz"
 	require.NotEqual(t, "/_healthz", forbidden, "the webhook receiver is installed in the core suite")
-	agent := registerAgent(t, e, a.ns, "qa", "bob@example.com", map[string]string{"PROBE_FORBIDDEN": forbidden})
+	// kindnet enforces a NetworkPolicy for a new Pod about a second after it
+	// gets its IP (TestChart_NetworkPolicy): the agent waits before probing.
+	agent := registerAgent(t, e, a.ns, "qa", "bob@example.com", map[string]string{"PROBE_FORBIDDEN": forbidden, "PROBE_DELAY": "5s"})
 	e.CreateGate(t, verifyGate(a.ns, v1alpha1.GateVerifyPolicy{Required: 2, AllowedAgents: []string{agent},
 		Run: &v1alpha1.GateVerifyRun{Template: agent, Count: 2, Namespace: a.ns}}))
 	a.apply(t, a.pipeline(nil))
@@ -182,13 +182,13 @@ func TestGate_VerifyAgentRuns(t *testing.T) {
 	for _, r := range runs {
 		assert.True(t, meta.IsStatusConditionTrue(r.Status.Conditions, v1alpha1.AgentRunConditionBounded), r.Name)
 		assert.Equal(t, agent, r.Status.Agent)
-		var job batchv1.Job
-		require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: r.Name}, &job))
+		job, err := e.Kube.BatchV1().Jobs(a.ns).Get(ctx, r.Name, metav1.GetOptions{})
+		require.NoError(t, err)
 		assert.Equal(t, "qa", job.Spec.Template.Spec.ServiceAccountName)
 		assert.False(t, *job.Spec.Template.Spec.AutomountServiceAccountToken)
-		var np networkingv1.NetworkPolicy
-		require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: r.Name}, &np))
-		assert.Equal(t, r.UID, metav1.GetControllerOf(&np).UID)
+		np, err := e.Kube.NetworkingV1().NetworkPolicies(a.ns).Get(ctx, r.Name, metav1.GetOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, r.UID, metav1.GetControllerOf(np).UID)
 		var v v1alpha1.Verdict
 		require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: r.Name}, &v), "the run's Verdict is named after it")
 		assert.Equal(t, "pass", v.Spec.Result, v.Spec.Summary)
@@ -243,8 +243,7 @@ func TestGate_VerifyRefusesWideAgent(t *testing.T) {
 	})
 	runs, err := agentRuns(ctx, e, a.ns, bundle)
 	require.NoError(t, err)
-	var job batchv1.Job
-	err = e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: runs[0].Name}, &job)
+	_, err = e.Kube.BatchV1().Jobs(a.ns).Get(ctx, runs[0].Name, metav1.GetOptions{})
 	assert.True(t, apierrors.IsNotFound(err), "no Job for an agent that is not read-only: %v", err)
 	e.WaitGateReady(t, a.ns, bundle, "prod", "explore-qa", false, "waiting for verdicts: 0 of 1", gateTimeout)
 	a.noStep(t, bundle, "prod", 15*time.Second)
