@@ -120,6 +120,9 @@ nav:
     - Quickstart: quickstart.md
     - Install: installation.md
     - Your first pipeline: first-pipeline.md
+    - Coming from Kargo: coming-from-kargo.md
+  - Agentic delivery:
+    - agentic/index.md
   - How-to:
     - Use the UI: ui.md
     - Ship versions from CI: ci-integration.md

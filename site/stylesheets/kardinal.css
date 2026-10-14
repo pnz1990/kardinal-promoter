@@ -1,0 +1,629 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * kardinal.css — maps MkDocs Material's --md-* variables to the kardinal design
+ * tokens (tokens.css, generated from web/tokens/tokens.json), so the docs use the
+ * UI's palette and fonts. Only var(--k-*) references: web/src/tokens.test.ts fails
+ * on a literal colour or length here.
+ *
+ * Material sets data-md-color-scheme on <body>, so the mapping is declared there
+ * as well as on :root.
+ */
+
+:root,
+[data-md-color-scheme="default"],
+[data-md-color-scheme="slate"] {
+  --md-text-font-family: var(--k-font-body);
+  --md-code-font-family: var(--k-font-mono);
+
+  --md-default-bg-color: var(--k-surface-canvas);
+  --md-default-bg-color--light: var(--k-surface-base);
+  --md-default-bg-color--lighter: var(--k-surface-raised);
+  --md-default-bg-color--lightest: var(--k-surface-sunken);
+  --md-default-fg-color: var(--k-ink);
+  --md-default-fg-color--light: var(--k-ink-2);
+  --md-default-fg-color--lighter: var(--k-ink-3);
+  --md-default-fg-color--lightest: var(--k-line);
+
+  /* The header is a quiet bar, not a coloured slab. */
+  --md-primary-fg-color: var(--k-surface-base);
+  --md-primary-fg-color--light: var(--k-surface-raised);
+  --md-primary-fg-color--dark: var(--k-surface-sunken);
+  --md-primary-bg-color: var(--k-ink);
+  --md-primary-bg-color--light: var(--k-ink-2);
+  --md-accent-fg-color: var(--k-thread-text);
+  --md-accent-fg-color--transparent: var(--k-thread-wash);
+  --md-accent-bg-color: var(--k-surface-raised);
+  --md-accent-bg-color--light: var(--k-surface-base);
+
+  --md-typeset-color: var(--k-ink);
+  /* Links: ink text with a thread underline (below). */
+  --md-typeset-a-color: var(--k-ink);
+  --md-typeset-mark-color: var(--k-status-blocked-wash);
+  --md-typeset-table-color: var(--k-line);
+  --md-typeset-table-color--light: var(--k-surface-base);
+
+  --md-code-bg-color: var(--k-surface-sunken);
+  --md-code-fg-color: var(--k-ink);
+  --md-code-hl-color: var(--k-thread-ghost);
+  --md-code-hl-keyword-color: var(--k-syntax-keyword);
+  --md-code-hl-name-color: var(--k-syntax-ident);
+  --md-code-hl-variable-color: var(--k-syntax-ident);
+  --md-code-hl-constant-color: var(--k-syntax-ident);
+  --md-code-hl-string-color: var(--k-syntax-string);
+  --md-code-hl-number-color: var(--k-syntax-number);
+  --md-code-hl-special-color: var(--k-syntax-number);
+  --md-code-hl-function-color: var(--k-syntax-function);
+  --md-code-hl-operator-color: var(--k-syntax-punct);
+  --md-code-hl-punctuation-color: var(--k-syntax-punct);
+  --md-code-hl-comment-color: var(--k-syntax-comment);
+  --md-code-hl-generic-color: var(--k-ink-2);
+
+  --md-admonition-fg-color: var(--k-ink);
+  --md-admonition-bg-color: var(--k-surface-base);
+  --md-footer-fg-color: var(--k-ink-2);
+  --md-footer-fg-color--light: var(--k-ink-3);
+  --md-footer-fg-color--lighter: var(--k-ink-3);
+  --md-footer-bg-color: var(--k-surface-sunken);
+  --md-footer-bg-color--dark: var(--k-surface-sunken);
+}
+
+.md-typeset a {
+  text-decoration: underline var(--k-border-hairline) var(--k-thread-text);
+  text-underline-offset: var(--k-space-0_5);
+}
+.md-typeset a:hover {
+  color: var(--k-ink);
+  text-decoration-thickness: var(--k-stroke-ring);
+}
+
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-header__topic {
+  font-family: var(--k-font-display);
+  font-stretch: var(--k-stretch-normal);
+}
+.md-typeset h1 {
+  color: var(--k-ink);
+  font-weight: var(--k-weight-title);
+}
+
+.md-typeset code,
+.md-typeset kbd,
+.md-typeset pre {
+  font-variant-numeric: var(--k-numeric-mono);
+}
+
+/* The header search field: a quiet well, its text in ink. */
+.md-search__input {
+  background-color: var(--k-surface-sunken);
+  color: var(--k-ink);
+}
+.md-search__input::placeholder,
+.md-search__icon {
+  color: var(--k-ink-2);
+}
+
+/* ------------------------------------------------------------------------
+ * The page template (DESIGN-SYSTEM.md §5). The root is 16px so the --k-text-*
+ * rem tokens mean what they say, as in the UI; Material's chrome is sized
+ * from the same tokens below.
+ * ------------------------------------------------------------------------ */
+
+html {
+  font-size: 100%;
+}
+
+.md-grid {
+  max-width: var(--k-layout-page);
+}
+
+body {
+  font-family: var(--k-font-body);
+  font-variant-numeric: var(--k-numeric);
+}
+
+:focus-visible {
+  outline: var(--k-focus-ring);
+  outline-offset: var(--k-focus-offset);
+}
+
+/* The header: a quiet bar with a hairline, no shadow. */
+.md-header,
+.md-header--shadow {
+  box-shadow: none;
+  border-block-end: var(--k-border-hairline) solid var(--k-line);
+}
+.md-header__topic {
+  font-size: var(--k-text-lg);
+  font-weight: var(--k-weight-bold);
+  font-stretch: var(--k-stretch-title);
+}
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  block-size: var(--k-control-sm);
+}
+.md-source {
+  font-size: var(--k-text-sm);
+}
+
+/* Tabs: ink text; the active tab is underlined with the thread. */
+.md-tabs {
+  border-block-end: var(--k-border-hairline) solid var(--k-line);
+}
+.md-tabs__link {
+  margin-block-start: var(--k-space-3);
+  padding-block-end: var(--k-space-2);
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-sm);
+  font-weight: var(--k-weight-medium);
+  color: var(--k-ink-2);
+  opacity: 1;
+}
+.md-tabs__link:hover {
+  color: var(--k-ink);
+}
+.md-tabs__item--active .md-tabs__link {
+  color: var(--k-ink);
+  box-shadow: inset 0 calc(var(--k-stroke-thread) * -1) 0 var(--k-thread);
+}
+
+/* Navigation: ink-2; the page you are on is ink with a thread bar, the only
+   red in the chrome. */
+.md-nav {
+  font-size: var(--k-text-sm);
+  line-height: var(--k-leading-sm);
+}
+.md-nav__title {
+  font-family: var(--k-font-display);
+  color: var(--k-ink);
+}
+.md-nav__link {
+  color: var(--k-ink-2);
+}
+.md-nav__link:hover,
+.md-nav__link:focus-visible {
+  color: var(--k-ink);
+}
+.md-nav__item--section > .md-nav__link {
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-2xs);
+  font-weight: var(--k-weight-semibold);
+  font-stretch: var(--k-stretch-label);
+  letter-spacing: var(--k-tracking-caps);
+  text-transform: uppercase;
+  color: var(--k-ink-3);
+}
+.md-sidebar--primary .md-nav__link--active,
+.md-sidebar--primary .md-nav__item .md-nav__link--active {
+  color: var(--k-ink);
+  font-weight: var(--k-weight-semibold);
+  box-shadow: inset var(--k-stroke-ring) 0 0 var(--k-thread);
+  padding-inline-start: var(--k-space-2);
+}
+.md-sidebar--secondary .md-nav__link--active {
+  color: var(--k-ink);
+  font-weight: var(--k-weight-semibold);
+}
+
+/* The body column. */
+.md-typeset {
+  font-size: var(--k-text-lg);
+  line-height: var(--k-leading-lg);
+}
+.md-typeset > p,
+.md-typeset > ul,
+.md-typeset > ol,
+.md-typeset > dl,
+.md-typeset > blockquote,
+.md-typeset > .admonition,
+.md-typeset > details {
+  max-width: var(--k-layout-measure);
+}
+
+.md-typeset h1 {
+  margin-block: 0 var(--k-space-6);
+  font-size: var(--k-text-3xl);
+  line-height: var(--k-leading-3xl);
+  font-stretch: var(--k-stretch-display);
+  letter-spacing: var(--k-tracking-display);
+}
+/* h2: a hairline rule above, not below. */
+.md-typeset h2 {
+  margin-block: var(--k-space-12) var(--k-space-4);
+  padding-block-start: var(--k-space-6);
+  border-block-start: var(--k-border-hairline) solid var(--k-line);
+  font-size: var(--k-text-2xl);
+  line-height: var(--k-leading-2xl);
+  font-weight: var(--k-weight-bold);
+  letter-spacing: 0;
+  color: var(--k-ink);
+}
+.md-typeset > h2:first-child,
+.md-typeset > h1 + h2 {
+  margin-block-start: 0;
+  padding-block-start: 0;
+  border-block-start: 0;
+}
+.md-typeset h3 {
+  margin-block: var(--k-space-8) var(--k-space-3);
+  font-size: var(--k-text-xl);
+  line-height: var(--k-leading-xl);
+  font-weight: var(--k-weight-section);
+  color: var(--k-ink);
+}
+.md-typeset h4,
+.md-typeset h5,
+.md-typeset h6 {
+  margin-block: var(--k-space-6) var(--k-space-2);
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-lg);
+  line-height: var(--k-leading-lg);
+  font-weight: var(--k-weight-semibold);
+  color: var(--k-ink);
+  text-transform: none;
+}
+.md-typeset .headerlink {
+  color: var(--k-ink-3);
+}
+.md-typeset .headerlink:hover,
+.md-typeset .headerlink:focus {
+  color: var(--k-thread-text);
+}
+.md-typeset hr {
+  border-block-end-color: var(--k-line);
+}
+/* An h2 carries its own rule. */
+.md-typeset hr:has(+ h2) {
+  display: none;
+}
+
+/* ------------------------------------------------------------------------
+ * Code: the UI's syntax colours (the --md-code-hl-* mapping above).
+ * ------------------------------------------------------------------------ */
+
+.md-typeset code {
+  padding: 0 var(--k-space-1);
+  border-radius: var(--k-radius-1);
+  font-size: var(--k-text-sm);
+}
+.md-typeset table:not([class]) code {
+  font-size: var(--k-text-xs);
+  word-break: normal;
+  overflow-wrap: normal;
+}
+.md-typeset pre > code {
+  padding: var(--k-space-4);
+  font-size: var(--k-text-sm);
+  line-height: var(--k-leading-md);
+}
+.md-typeset .highlight,
+.md-typeset pre {
+  border-radius: var(--k-radius-3);
+}
+.md-typeset pre > code {
+  background-color: var(--k-surface-raised);
+}
+.md-typeset .highlight > pre,
+.md-typeset pre:not(.highlight pre) {
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-3);
+}
+.md-typeset .highlight span.filename {
+  padding: var(--k-space-2) var(--k-space-4);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-block-end: 0;
+  border-radius: var(--k-radius-3) var(--k-radius-3) 0 0;
+  background: var(--k-surface-base);
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-2xs);
+  font-weight: var(--k-weight-semibold);
+  font-stretch: var(--k-stretch-label);
+  letter-spacing: var(--k-tracking-caps);
+  text-transform: uppercase;
+  color: var(--k-ink-2);
+}
+.md-typeset .highlight span.filename + pre {
+  border-start-start-radius: 0;
+  border-start-end-radius: 0;
+}
+.md-typeset .highlight .kd,
+.md-typeset .highlight .kn,
+.md-typeset .highlight .k {
+  font-weight: var(--k-weight-semibold);
+}
+.md-typeset .highlight .c,
+.md-typeset .highlight .c1,
+.md-typeset .highlight .cm {
+  font-style: italic;
+}
+/* Console blocks: the prompt in ink-3, the output in ink-2. */
+.md-typeset .language-console .gp {
+  color: var(--k-ink-3);
+}
+.md-typeset .language-console .go {
+  color: var(--k-ink-2);
+}
+.md-clipboard {
+  color: var(--k-ink-3);
+}
+.md-clipboard:hover,
+.md-clipboard:focus-visible {
+  color: var(--k-ink);
+}
+
+/* ------------------------------------------------------------------------
+ * Admonitions as margin notes: no fill, no icon, a rule on the left and a
+ * small caps label in the status hue.
+ * ------------------------------------------------------------------------ */
+
+.md-typeset .admonition,
+.md-typeset details {
+  --kd-note: var(--k-ink);
+  margin-block: var(--k-space-6);
+  padding: var(--k-space-1) 0 var(--k-space-1) var(--k-space-4);
+  border: 0;
+  border-inline-start: var(--k-stroke-ring) solid var(--kd-note);
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  font-size: var(--k-text-md);
+  line-height: var(--k-leading-md);
+}
+.md-typeset .admonition > .admonition-title,
+.md-typeset details > summary {
+  margin: 0 0 var(--k-space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-2xs);
+  font-weight: var(--k-weight-semibold);
+  font-stretch: var(--k-stretch-label);
+  letter-spacing: var(--k-tracking-caps);
+  text-transform: uppercase;
+  color: var(--kd-note);
+}
+.md-typeset .admonition > .admonition-title::before,
+.md-typeset details > summary::before {
+  display: none;
+}
+.md-typeset details > summary {
+  cursor: pointer;
+}
+.md-typeset details > summary::after {
+  inset-inline-end: 0;
+  inset-block-start: 0;
+  background-color: var(--kd-note);
+}
+.md-typeset .admonition > :last-child,
+.md-typeset details > :last-child {
+  margin-block-end: 0;
+}
+
+.md-typeset :is(.admonition, details):is(.tip, .hint, .important, .success, .check, .done) {
+  --kd-note: var(--k-status-verified-fg);
+}
+.md-typeset :is(.admonition, details):is(.info, .todo) {
+  --kd-note: var(--k-status-waiting-fg);
+}
+.md-typeset :is(.admonition, details):is(.warning, .caution, .attention) {
+  --kd-note: var(--k-status-blocked-fg);
+}
+.md-typeset :is(.admonition, details):is(.danger, .error, .failure, .fail, .missing, .bug) {
+  --kd-note: var(--k-status-failed-fg);
+}
+.md-typeset :is(.admonition, details).example {
+  padding: var(--k-space-3) var(--k-space-4);
+  border-inline-start-color: var(--k-line-strong);
+  background: var(--k-surface-sunken);
+  --kd-note: var(--k-ink-2);
+}
+
+/* ------------------------------------------------------------------------
+ * Tables: hairlines, small caps headers, tabular numbers, no zebra.
+ * ------------------------------------------------------------------------ */
+
+.md-typeset table:not([class]) {
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-3);
+  background: var(--k-surface-base);
+  font-size: var(--k-text-sm);
+  line-height: var(--k-leading-sm);
+  font-variant-numeric: var(--k-numeric);
+}
+.md-typeset table:not([class]) th {
+  padding: var(--k-space-2) var(--k-space-3);
+  background: var(--k-surface-sunken);
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-2xs);
+  font-weight: var(--k-weight-semibold);
+  font-stretch: var(--k-stretch-label);
+  letter-spacing: var(--k-tracking-caps);
+  text-transform: uppercase;
+  color: var(--k-ink-2);
+  min-width: 0;
+}
+.md-typeset table:not([class]) td {
+  padding: var(--k-space-2) var(--k-space-3);
+  border-block-start: var(--k-border-hairline) solid var(--k-line-subtle);
+  vertical-align: top;
+}
+.md-typeset table:not([class]) tbody tr:hover {
+  background: var(--k-surface-raised);
+  box-shadow: none;
+}
+
+/* ------------------------------------------------------------------------
+ * Buttons: ink, never red (primary = ink fill, secondary = quiet outline).
+ * ------------------------------------------------------------------------ */
+
+.md-typeset .md-button,
+.k-hero .md-button {
+  min-block-size: var(--k-control-md);
+  padding: var(--k-space-2) var(--k-space-4);
+  border: var(--k-border-hairline) solid var(--k-line-strong);
+  border-radius: var(--k-radius-2);
+  font-family: var(--k-font-body);
+  font-size: var(--k-text-md);
+  font-weight: var(--k-weight-semibold);
+  color: var(--k-ink);
+  background: transparent;
+  text-decoration: none;
+  transition: background-color var(--k-dur-quick) var(--k-ease-out);
+}
+.md-typeset .md-button:hover,
+.k-hero .md-button:hover {
+  border-color: var(--k-ink);
+  color: var(--k-ink);
+  background: var(--k-surface-base);
+}
+.md-typeset .md-button--primary,
+.k-hero .md-button--primary {
+  border-color: var(--k-ink);
+  color: var(--k-ink-inverse);
+  background: var(--k-ink);
+}
+.md-typeset .md-button--primary:hover,
+.k-hero .md-button--primary:hover {
+  color: var(--k-ink-inverse);
+  background: var(--k-ink-2);
+}
+
+/* Cards (the home page grid): quiet panels. */
+.md-typeset .grid.cards > ul > li,
+.md-typeset .grid > .card {
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-3);
+  background: var(--k-surface-base);
+  box-shadow: none;
+}
+.md-typeset .grid.cards > ul > li:hover,
+.md-typeset .grid > .card:hover {
+  border-color: var(--k-line-strong);
+  box-shadow: none;
+}
+.md-typeset .grid.cards > ul > li > hr {
+  border-block-end-color: var(--k-line-subtle);
+}
+.md-typeset .grid.cards .twemoji {
+  color: var(--k-ink-3);
+}
+
+/* ------------------------------------------------------------------------
+ * Search: a quiet well; results on a raised surface.
+ * ------------------------------------------------------------------------ */
+
+.md-search__form {
+  border-radius: var(--k-radius-2);
+  background-color: var(--k-surface-sunken);
+}
+.md-search__input {
+  font-size: var(--k-text-md);
+}
+.md-search__output {
+  border-radius: 0 0 var(--k-radius-3) var(--k-radius-3);
+  box-shadow: var(--k-elev-2);
+}
+.md-search__scrollwrap,
+.md-search-result {
+  background-color: var(--k-surface-raised);
+}
+.md-search-result__meta {
+  font-size: var(--k-text-xs);
+  color: var(--k-ink-3);
+  background-color: var(--k-surface-base);
+}
+.md-search-result__link:hover,
+.md-search-result__link:focus,
+.md-search-result__more > summary:hover {
+  background-color: var(--k-surface-base);
+}
+.md-search-result__article {
+  font-size: var(--k-text-sm);
+  line-height: var(--k-leading-sm);
+}
+.md-search-result__article code {
+  font-size: var(--k-text-xs);
+}
+.md-search-result mark,
+.md-search-result .md-typeset :is(h1, h2) mark {
+  color: var(--k-ink);
+  text-decoration: underline var(--k-stroke-ring) var(--k-thread-text);
+  background: none;
+}
+.md-search-result__article h1,
+.md-search-result__article h2 {
+  font-family: var(--k-font-display);
+  border: 0;
+  padding: 0;
+}
+
+/* Footer and the previous/next links. */
+.md-footer__title {
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-md);
+}
+.md-footer__direction {
+  opacity: 1;
+  color: var(--k-ink-2);
+  font-size: var(--k-text-2xs);
+  letter-spacing: var(--k-tracking-caps);
+  text-transform: uppercase;
+}
+.md-copyright,
+.md-source-file {
+  font-size: var(--k-text-xs);
+  color: var(--k-ink-3);
+}
+
+/* ------------------------------------------------------------------------
+ * Demo media (the recordings come later): an animated WebP with a still
+ * poster for reduced motion, framed by a hairline, captioned in mono.
+ *
+ *   <figure class="k-demo">
+ *     <picture>
+ *       <source media="(prefers-reduced-motion: reduce)" srcset="assets/demos/<name>.png">
+ *       <img src="assets/demos/<name>.webp" alt="…" width="1280" height="800" loading="lazy">
+ *     </picture>
+ *     <figcaption>Follow a version · <code>kardinal explain my-app --env prod</code></figcaption>
+ *   </figure>
+ * ------------------------------------------------------------------------ */
+
+.md-typeset .k-demo {
+  margin: var(--k-space-8) 0;
+  max-width: 100%;
+}
+.md-typeset .k-demo img {
+  display: block;
+  inline-size: 100%;
+  block-size: auto;
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-3);
+  background: var(--k-surface-sunken);
+}
+.md-typeset .k-demo figcaption {
+  max-width: none;
+  margin: var(--k-space-2) 0 0;
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-xs);
+  line-height: var(--k-leading-xs);
+  font-style: normal;
+  color: var(--k-ink-3);
+  text-align: start;
+}
+
+/* Reduced motion: the docs move at most an opacity step. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    transition-duration: var(--k-dur-instant);
+    animation-duration: var(--k-dur-instant);
+  }
+}
