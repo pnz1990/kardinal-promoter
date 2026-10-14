@@ -1,0 +1,307 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: verdicts.kardinal.io
+spec:
+  group: kardinal.io
+  names:
+    categories:
+    - kardinal-all
+    kind: Verdict
+    listKind: VerdictList
+    plural: verdicts
+    shortNames:
+    - vd
+    singular: verdict
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.bundle
+      name: Bundle
+      type: string
+    - jsonPath: .spec.environment
+      name: Env
+      type: string
+    - jsonPath: .spec.check
+      name: Check
+      type: string
+    - jsonPath: .spec.result
+      name: Result
+      type: string
+    - jsonPath: .spec.by
+      name: By
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Verdict records that a verifier (an agent, a person or CI) found a Bundle
+          to pass, fail or be inconclusive in an environment for a check. The
+          promotion Graph copies the Verdicts of its Bundle into the verify gates
+          (PolicyGate spec.verdicts), and the PolicyGate reconciler counts them
+          against spec.verify.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              VerdictSpec is one verifier's result for one Bundle, environment and check
+              (docs/design/19-verdicts.md). A Verdict is never changed: delete it to
+              revoke it. The chart's <release>-verdicts ValidatingAdmissionPolicy admits
+              it only when spec.by is the requesting user, spec.groups are among the
+              requester's groups, the kardinal.io/bundle, kardinal.io/environment and
+              kardinal.io/check labels match the spec, and spec.run is set only by the
+              Pod of that AgentRun.
+            properties:
+              actor:
+                description: |-
+                  Actor is the actor stamp (docs/design/17-actors.md). Agents must set
+                  it; the <release>-actor policy checks it.
+                properties:
+                  agent:
+                    description: Agent is the AgentIdentity name, when kind is agent.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  asserted:
+                    description: |-
+                      Asserted holds what the client says about itself. It is recorded as
+                      written and never used for a security decision.
+                    properties:
+                      client:
+                        description: Client is the tool that wrote the record (for
+                          example kardinal/0.12.0).
+                        maxLength: 128
+                        type: string
+                      model:
+                        description: Model is the AI model the client says it runs.
+                        maxLength: 128
+                        type: string
+                      session:
+                        description: Session is the client's session or run identifier.
+                        maxLength: 128
+                        type: string
+                    type: object
+                  kind:
+                    description: Kind is human, agent, bot or controller (docs/actors.md).
+                    enum:
+                    - human
+                    - agent
+                    - bot
+                    - controller
+                    type: string
+                  principal:
+                    description: Principal is the username the API server authenticated.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  sponsor:
+                    description: |-
+                      Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when
+                      the record was written, when kind is agent.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  via:
+                    description: |-
+                      Via says how the controller came to write the record: ui and api for a
+                      caller it authenticated, subscription and auto-rollback for its own
+                      Bundles. Only the controller may set it.
+                    enum:
+                    - ui
+                    - api
+                    - subscription
+                    - auto-rollback
+                    type: string
+                required:
+                - kind
+                - principal
+                type: object
+                x-kubernetes-validations:
+                - message: actor.agent and actor.sponsor are set exactly when actor.kind
+                    is agent
+                  rule: 'self.kind == ''agent'' ? (has(self.agent) && has(self.sponsor))
+                    : (!has(self.agent) && !has(self.sponsor))'
+                - message: a controller actor says why it acted (actor.via)
+                  rule: self.kind != 'controller' || has(self.via)
+              bundle:
+                description: Bundle is the name of the Bundle verified, in the Verdict's
+                  namespace.
+                maxLength: 253
+                minLength: 1
+                type: string
+              bundleUID:
+                description: |-
+                  BundleUID is the UID of that Bundle: the Graph counts the Verdict only
+                  for the Bundle with this UID, so a Verdict cannot carry over to a new
+                  Bundle that reuses the name.
+                maxLength: 64
+                minLength: 1
+                type: string
+              by:
+                description: |-
+                  By is the Kubernetes username of the writer, as the API server
+                  authenticates it.
+                maxLength: 253
+                minLength: 1
+                type: string
+              check:
+                description: Check is the verification's name (a gate's verify.check).
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                type: string
+              durationSeconds:
+                description: DurationSeconds is how long the verifier says it ran
+                  (asserted).
+                format: int64
+                minimum: 0
+                type: integer
+              environment:
+                description: 'Environment is the environment verified: the version
+                  runs there.'
+                maxLength: 63
+                minLength: 1
+                type: string
+              evidenceURL:
+                description: EvidenceURL links to the verifier's evidence (a CI run,
+                  a report).
+                maxLength: 2048
+                pattern: ^https?://
+                type: string
+              findings:
+                description: Findings are what the verifier wants a reviewer to see.
+                items:
+                  description: VerdictFinding is one thing a verifier found.
+                  properties:
+                    detail:
+                      description: Detail explains it.
+                      maxLength: 2048
+                      type: string
+                    severity:
+                      description: Severity is info, low, medium, high or critical.
+                      enum:
+                      - info
+                      - low
+                      - medium
+                      - high
+                      - critical
+                      type: string
+                    title:
+                      description: Title is the finding in a line.
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                    url:
+                      description: URL links to it.
+                      maxLength: 2048
+                      pattern: ^https?://
+                      type: string
+                  required:
+                  - severity
+                  - title
+                  type: object
+                maxItems: 50
+                type: array
+              groups:
+                description: |-
+                  Groups are the writer's groups that count for verify.allowedGroups.
+                  Each must be one of the requester's groups.
+                items:
+                  maxLength: 253
+                  type: string
+                maxItems: 64
+                type: array
+              pipeline:
+                description: |-
+                  Pipeline is the Bundle's Pipeline. The Graph counts the Verdict only
+                  for a Bundle of this Pipeline.
+                maxLength: 253
+                minLength: 1
+                type: string
+              result:
+                description: Result is pass, fail or inconclusive.
+                enum:
+                - pass
+                - fail
+                - inconclusive
+                type: string
+              run:
+                description: |-
+                  Run binds the Verdict to the AgentRun whose Pod wrote it. Admission
+                  admits it only from that run's Pod, and only when the Verdict is named
+                  after the run.
+                properties:
+                  attempt:
+                    description: Attempt is the attempt's number (1-based).
+                    maximum: 6
+                    minimum: 1
+                    type: integer
+                  index:
+                    description: Index is the run's number among the check's runs
+                      (1-based).
+                    maximum: 10
+                    minimum: 1
+                    type: integer
+                  name:
+                    description: Name is the AgentRun's name.
+                    maxLength: 52
+                    minLength: 1
+                    type: string
+                required:
+                - attempt
+                - index
+                - name
+                type: object
+              startedAt:
+                description: StartedAt is when the verifier says it started (asserted).
+                format: date-time
+                type: string
+              summary:
+                default: ""
+                description: |-
+                  Summary says what the verifier found. Required for fail and
+                  inconclusive.
+                maxLength: 1024
+                type: string
+            required:
+            - bundle
+            - bundleUID
+            - by
+            - check
+            - environment
+            - pipeline
+            - result
+            type: object
+            x-kubernetes-validations:
+            - message: 'a Verdict is immutable: delete it and create a new one'
+              rule: self == oldSelf
+            - message: a fail or inconclusive verdict says why (spec.summary)
+              rule: self.result == 'pass' || size(self.summary) > 0
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources: {}

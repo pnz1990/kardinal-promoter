@@ -1,0 +1,284 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: steptemplates.kardinal.io
+spec:
+  group: kardinal.io
+  names:
+    categories:
+    - kardinal
+    - kardinal-all
+    kind: StepTemplate
+    listKind: StepTemplateList
+    plural: steptemplates
+    shortNames:
+    - steptmpl
+    singular: steptemplate
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.output
+      name: Output
+      type: string
+    - jsonPath: .spec.image
+      name: Image
+      priority: 1
+      type: string
+    - jsonPath: .status.ready
+      name: Ready
+      type: boolean
+    - jsonPath: .status.reason
+      name: Reason
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StepTemplate registers an image kardinal may run as a step: in this
+          release, a verifier whose AgentRuns write Verdicts. Cluster-scoped and
+          written by cluster admins only.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              StepTemplateSpec registers an image kardinal may run as a step
+              (docs/design/19-verdicts.md, section 8.2). Only cluster admins write
+              StepTemplates. In this release a StepTemplate is a verifier: AgentRuns run
+              it, and its Pod writes one Verdict.
+            properties:
+              args:
+                description: Args are the arguments.
+                items:
+                  type: string
+                maxItems: 256
+                type: array
+              command:
+                description: Command overrides the image's entrypoint.
+                items:
+                  type: string
+                maxItems: 64
+                type: array
+              description:
+                description: Description says what the step does.
+                maxLength: 1024
+                type: string
+              egress:
+                description: |-
+                  Egress are the destinations the Pod may reach besides DNS, the
+                  Kubernetes API server and the namespace under test: the model
+                  endpoint, for example.
+                items:
+                  description: StepTemplateEgress is one destination a step's Pod
+                    may reach.
+                  properties:
+                    cidr:
+                      description: CIDR is the destination address range.
+                      maxLength: 64
+                      minLength: 1
+                      type: string
+                    ports:
+                      description: 'Ports are the TCP ports; empty: all.'
+                      items:
+                        format: int32
+                        type: integer
+                      maxItems: 16
+                      type: array
+                  required:
+                  - cidr
+                  type: object
+                maxItems: 16
+                type: array
+              env:
+                description: |-
+                  Env are literal environment variables. Names starting with KARDINAL_
+                  are reserved for the run's context.
+                items:
+                  description: StepTemplateEnv is a literal environment variable.
+                  properties:
+                    name:
+                      description: Name is the variable's name.
+                      maxLength: 253
+                      minLength: 1
+                      pattern: ^[A-Za-z_][A-Za-z0-9_]*$
+                      type: string
+                    value:
+                      description: Value is its value.
+                      maxLength: 8192
+                      type: string
+                  required:
+                  - name
+                  type: object
+                maxItems: 64
+                type: array
+              image:
+                description: |-
+                  Image is the container image. A digest (image@sha256:...) is
+                  recommended; the controller's --step-template-require-digest refuses
+                  tags.
+                maxLength: 1024
+                minLength: 1
+                type: string
+              output:
+                default: Verdict
+                description: Output is what the step produces. Only Verdict.
+                enum:
+                - Verdict
+                type: string
+              resources:
+                description: Resources are the container's resource requests and limits.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              runtimeClassName:
+                description: RuntimeClassName runs the Pod in a sandboxed runtime
+                  (gVisor, Kata).
+                maxLength: 253
+                type: string
+              secretEnv:
+                description: |-
+                  SecretEnv are environment variables from Secrets in the Pipeline's
+                  namespace. Each Secret must carry the label kardinal.io/step-template
+                  with this template's name: a Secret not labelled for it (a Pipeline's
+                  git credentials) is refused.
+                items:
+                  description: StepTemplateSecretEnv is an environment variable from
+                    a Secret key.
+                  properties:
+                    key:
+                      description: Key is the key in the Secret.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    name:
+                      description: Name is the variable's name.
+                      maxLength: 253
+                      minLength: 1
+                      pattern: ^[A-Za-z_][A-Za-z0-9_]*$
+                      type: string
+                    secret:
+                      description: Secret is the Secret's name, in the Pipeline's
+                        namespace.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                  required:
+                  - key
+                  - name
+                  - secret
+                  type: object
+                maxItems: 16
+                type: array
+              serviceAccountName:
+                description: |-
+                  ServiceAccountName is the ServiceAccount the Pod runs as, in the
+                  Pipeline's namespace. It must be a subject of a ready AgentIdentity
+                  whose scope covers the Pipeline, and its RBAC must be read-only (the
+                  AgentRun reconciler checks it before each run).
+                maxLength: 253
+                minLength: 1
+                type: string
+              timeout:
+                description: Timeout bounds each attempt. Default 30m, at most 24h.
+                pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
+                type: string
+            required:
+            - image
+            - serviceAccountName
+            type: object
+          status:
+            description: StepTemplateStatus is the observed state of a StepTemplate.
+            properties:
+              observedGeneration:
+                description: ObservedGeneration is the generation Ready is for.
+                format: int64
+                type: integer
+              ready:
+                description: Ready is true when the template is valid and AgentRuns
+                  may run it.
+                type: boolean
+              reason:
+                description: Reason says why it is not ready.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -152,6 +152,28 @@ var (
 		[]string{"hook_namespace", "hook", "reason"},
 	)
 
+	// VerdictsTotal counts the Verdicts verify gates recorded, once per
+	// gate that recorded one, by check, result and verifier kind (agent,
+	// human, bot, unknown): the inconclusive share of a check is its
+	// flakiness (docs/design/19-verdicts.md, section 9.3).
+	VerdictsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kardinal_verdicts_total",
+			Help: "Verdicts recorded by verify gates, by check, result and verifier kind.",
+		},
+		[]string{"check", "result", "verifier_kind"},
+	)
+
+	// AgentRunsTotal counts AgentRuns that reached a terminal phase, by
+	// StepTemplate and phase.
+	AgentRunsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kardinal_agentruns_total",
+			Help: "AgentRuns that finished, by StepTemplate and phase (Succeeded, Failed, Skipped).",
+		},
+		[]string{"template", "phase"},
+	)
+
 	// PRCleanupFailuresTotal counts deleted PromotionSteps whose open PR
 	// the controller left open (PRLeftOpen: it could not tell whether the
 	// step comes back) or could not close (ClosePRFailed) before removing
@@ -170,6 +192,8 @@ var (
 func init() {
 	ctrlmetrics.Registry.MustRegister(
 		AuditEventsPrunedTotal,
+		VerdictsTotal,
+		AgentRunsTotal,
 		HoldBundleMissingTotal,
 		NotificationsDroppedTotal,
 		PRCleanupFailuresTotal,

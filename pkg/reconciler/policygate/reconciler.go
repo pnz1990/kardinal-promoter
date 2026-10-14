@@ -302,14 +302,37 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 		log.Warn().Err(err).Msg("failed to record approvals in status (non-fatal)")
 	}
 
+	// Verdicts (docs/design/19-verdicts.md): count spec.verdicts, which the
+	// Graph copies from the Bundle's Verdict objects, against spec.verify
+	// (buildContext exposes the same count to the expression as verdicts.*).
+	var verdictTally lifecycle.VerdictTally
+	if gate.Spec.Verify != nil {
+		var bundle kardinalv1alpha1.Bundle
+		if err := r.Get(ctx, types.NamespacedName{Name: bundleName, Namespace: gate.Namespace}, &bundle); err != nil {
+			return ctrl.Result{}, fmt.Errorf("load bundle %s for verify: %w", bundleName, err)
+		}
+		verdictTally = tallyVerdicts(&gate, &bundle, now)
+		if err := r.recordVerdicts(ctx, &gate, verdictTally); apierrors.IsConflict(err) {
+			return ctrl.Result{}, err // a stale read: Reconcile evaluates again
+		} else if err != nil {
+			log.Warn().Err(err).Msg("failed to record verdicts in status (non-fatal)")
+		}
+	}
+
 	// Evaluate CEL expression
 	pass, reason, evalErr := r.eval.evaluate(ctx, gate.Spec.Expression, celCtx)
-	// The approval policy holds a gate whose expression passes.
+	// The approval and verify policies hold a gate whose expression passes.
 	if pass && evalErr == nil {
 		if held := tally.blocked(); held != "" {
 			pass, reason = false, held
-		} else if met := tally.met(); met != "" {
-			reason = reason + "; " + met
+		} else if held := verdictTally.Blocked(); held != "" {
+			pass, reason = false, held
+		} else {
+			for _, met := range []string{tally.met(), verdictTally.Met()} {
+				if met != "" {
+					reason = reason + "; " + met
+				}
+			}
 		}
 	}
 	// Name the stale metrics the expression uses when it blocks: a stale
@@ -383,6 +406,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 	}
 	observability.GateEvaluationsTotal.WithLabelValues(gateResult).Inc()
 
+	// A verify gate waiting for its timeout is evaluated again the moment it
+	// passes (lifecycle.VerifyDeadline), not up to a recheck interval late.
+	if d := untilDeadline(verdictTally, now); d > 0 && d < recheckInterval {
+		return ctrl.Result{RequeueAfter: d}, nil
+	}
 	return ctrl.Result{RequeueAfter: recheckInterval}, nil
 }
 
@@ -621,6 +649,7 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		"upstream":     upstreamCtx,
 		"changewindow": cwCtx,
 		"approvals":    tallyApprovals(gate, bundleCreator(map[string]interface{}{"bundle": bundleCtx})).context(),
+		"verdicts":     tallyVerdicts(gate, &bundle, now).Context(),
 	}, version, nil
 }
 

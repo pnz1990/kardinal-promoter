@@ -389,6 +389,304 @@ spec:
                   environment the Bundle promotes, so that environment waits until it is true.
                   On any other gate this field has no effect.
                 type: boolean
+              verdicts:
+                description: |-
+                  Verdicts is written by the promotion Graph on gate instances: the
+                  Verdicts of the instance's Bundle for verify.environment and
+                  verify.check from verifiers the gate allows, copied from the Verdict
+                  objects, at most 101 (more than 100 blocks the gate). Do not set it; on
+                  a template it is ignored.
+                items:
+                  description: GateVerdict is a Verdict as the Graph copies it into
+                    a gate instance.
+                  properties:
+                    actor:
+                      description: Actor is the Verdict's actor stamp.
+                      properties:
+                        agent:
+                          description: Agent is the AgentIdentity name, when kind
+                            is agent.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        asserted:
+                          description: |-
+                            Asserted holds what the client says about itself. It is recorded as
+                            written and never used for a security decision.
+                          properties:
+                            client:
+                              description: Client is the tool that wrote the record
+                                (for example kardinal/0.12.0).
+                              maxLength: 128
+                              type: string
+                            model:
+                              description: Model is the AI model the client says it
+                                runs.
+                              maxLength: 128
+                              type: string
+                            session:
+                              description: Session is the client's session or run
+                                identifier.
+                              maxLength: 128
+                              type: string
+                          type: object
+                        kind:
+                          description: Kind is human, agent, bot or controller (docs/actors.md).
+                          enum:
+                          - human
+                          - agent
+                          - bot
+                          - controller
+                          type: string
+                        principal:
+                          description: Principal is the username the API server authenticated.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        sponsor:
+                          description: |-
+                            Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when
+                            the record was written, when kind is agent.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        via:
+                          description: |-
+                            Via says how the controller came to write the record: ui and api for a
+                            caller it authenticated, subscription and auto-rollback for its own
+                            Bundles. Only the controller may set it.
+                          enum:
+                          - ui
+                          - api
+                          - subscription
+                          - auto-rollback
+                          type: string
+                      required:
+                      - kind
+                      - principal
+                      type: object
+                      x-kubernetes-validations:
+                      - message: actor.agent and actor.sponsor are set exactly when
+                          actor.kind is agent
+                        rule: 'self.kind == ''agent'' ? (has(self.agent) && has(self.sponsor))
+                          : (!has(self.agent) && !has(self.sponsor))'
+                      - message: a controller actor says why it acted (actor.via)
+                        rule: self.kind != 'controller' || has(self.via)
+                    bundle:
+                      description: Bundle is the Bundle verified.
+                      type: string
+                    bundleUID:
+                      description: BundleUID is that Bundle's UID.
+                      type: string
+                    by:
+                      description: By is the writer's username.
+                      type: string
+                    check:
+                      description: Check is the check.
+                      type: string
+                    createdAt:
+                      description: |-
+                        CreatedAt is the Verdict's creationTimestamp, written by the API
+                        server.
+                      format: date-time
+                      type: string
+                    environment:
+                      description: Environment is the environment verified.
+                      type: string
+                    evidenceURL:
+                      description: EvidenceURL is the verifier's evidence link.
+                      type: string
+                    findings:
+                      description: Findings is how many findings the Verdict lists.
+                      type: integer
+                    groups:
+                      description: Groups are the writer's groups.
+                      items:
+                        type: string
+                      type: array
+                    highFindings:
+                      description: HighFindings is how many of them are high or critical.
+                      type: integer
+                    name:
+                      description: Name is the Verdict's name.
+                      type: string
+                    result:
+                      description: Result is pass, fail or inconclusive.
+                      type: string
+                    run:
+                      description: Run is the AgentRun that wrote it.
+                      properties:
+                        attempt:
+                          description: Attempt is the attempt's number (1-based).
+                          maximum: 6
+                          minimum: 1
+                          type: integer
+                        index:
+                          description: Index is the run's number among the check's
+                            runs (1-based).
+                          maximum: 10
+                          minimum: 1
+                          type: integer
+                        name:
+                          description: Name is the AgentRun's name.
+                          maxLength: 52
+                          minLength: 1
+                          type: string
+                      required:
+                      - attempt
+                      - index
+                      - name
+                      type: object
+                    summary:
+                      description: Summary is the verifier's summary.
+                      type: string
+                  required:
+                  - bundle
+                  - bundleUID
+                  - by
+                  - check
+                  - environment
+                  - name
+                  - result
+                  type: object
+                maxItems: 101
+                type: array
+              verify:
+                description: |-
+                  Verify makes the gate wait for verdicts (docs/design/19-verdicts.md):
+                  it is ready only when its expression is true and at least
+                  verify.required verifiers found the Bundle to pass verify.check in
+                  verify.environment, and no more than verify.maxFailures found it to
+                  fail. Copied from the template to every gate instance. For a gate that
+                  only waits for verdicts, use the expression "true".
+                properties:
+                  allowedAgents:
+                    description: |-
+                      AllowedAgents are the agents (AgentIdentity names) whose verdicts
+                      count. An agent's verdict counts only when the agent is listed.
+                    items:
+                      type: string
+                    maxItems: 64
+                    type: array
+                  allowedGroups:
+                    description: |-
+                      AllowedGroups are groups: a verdict counts when one of its groups is
+                      listed.
+                    items:
+                      type: string
+                    maxItems: 64
+                    type: array
+                  allowedUsers:
+                    description: |-
+                      AllowedUsers are the usernames of people and bots whose verdicts
+                      count. With neither allowedUsers nor allowedGroups, every verdict by
+                      someone who is not an agent counts.
+                    items:
+                      type: string
+                    maxItems: 64
+                    type: array
+                  check:
+                    description: Check is the verification the gate waits for (Verdict
+                      spec.check).
+                    maxLength: 63
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  environment:
+                    description: |-
+                      Environment is the environment verified, where the version already
+                      runs: an upstream of the environment the gate applies to. Empty: that
+                      environment's only direct upstream.
+                    maxLength: 63
+                    type: string
+                  excludeAuthor:
+                    default: true
+                    description: |-
+                      ExcludeAuthor does not count a verdict from the version's author, the
+                      author's agent or that agent's sponsor (one party). An agent's verdict
+                      on work of its own party never counts, whatever this says.
+                    type: boolean
+                  maxFailures:
+                    description: |-
+                      MaxFailures is how many failing votes the gate tolerates; one more
+                      blocks it.
+                    maximum: 20
+                    minimum: 0
+                    type: integer
+                  onInconclusive:
+                    default: hold
+                    description: |-
+                      OnInconclusive is what an inconclusive verdict does: hold (wait for
+                      more), retry (wait, and run the AgentRun again, up to retries), or fail
+                      (count it as a failing vote).
+                    enum:
+                    - hold
+                    - retry
+                    - fail
+                    type: string
+                  onTimeout:
+                    default: fail
+                    description: |-
+                      OnTimeout is what the gate does once the timeout passed without a
+                      result: fail (stay blocked) or allow (pass, and say so).
+                    enum:
+                    - fail
+                    - allow
+                    type: string
+                  required:
+                    default: 1
+                    description: Required is how many votes must pass.
+                    maximum: 20
+                    minimum: 1
+                    type: integer
+                  retries:
+                    description: |-
+                      Retries is how many more attempts each AgentRun gets after an
+                      inconclusive verdict, or none, with onInconclusive: retry.
+                    maximum: 5
+                    minimum: 0
+                    type: integer
+                  run:
+                    description: 'Run runs verifiers in the cluster: AgentRuns of
+                      a StepTemplate.'
+                    properties:
+                      count:
+                        description: 'Count is how many AgentRuns run per version.
+                          Default: verify.required.'
+                        maximum: 10
+                        minimum: 1
+                        type: integer
+                      namespace:
+                        description: |-
+                          Namespace is the namespace the agent tests. Default: the verified
+                          environment's workload namespace.
+                        maxLength: 63
+                        type: string
+                      template:
+                        description: Template is the StepTemplate the AgentRuns run.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                    required:
+                    - template
+                    type: object
+                  timeout:
+                    description: |-
+                      Timeout bounds the wait, from the time the version passed its health
+                      check in the verified environment. Verdicts written later do not count.
+                      Empty or "0": no timeout.
+                    pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
+                    type: string
+                required:
+                - check
+                type: object
+                x-kubernetes-validations:
+                - message: 'verify.retries needs onInconclusive: retry'
+                  rule: '!has(self.retries) || self.retries == 0 || self.onInconclusive
+                    == ''retry'''
+                - message: verify.run.count must be at least verify.required
+                  rule: '!has(self.run) || !has(self.run.count) || self.run.count
+                    >= self.required'
               when:
                 description: |-
                   When is ignored: every gate on an environment is re-checked right
@@ -721,6 +1019,8 @@ spec:
                           - HoldBundleMissing
                           - BundleRejected
                           - APIWrite
+                          - VerdictRecorded
+                          - VerdictRevoked
                           type: string
                         actor:
                           description: |-
@@ -881,6 +1181,57 @@ spec:
                   approvals: 0 of 1 (version 1.5.0)". It is for people; read BundleVersion
                   for the version.
                 type: string
+              verdicts:
+                description: |-
+                  Verdicts records each verdict in spec.verdicts and whether the gate
+                  counted it (spec.verify), for kardinal explain, the PR evidence and the
+                  UI.
+                items:
+                  description: GateVerdictStatus records how the gate counted one
+                    Verdict.
+                  properties:
+                    attempt:
+                      type: integer
+                    counted:
+                      description: Counted reports whether the verdict is a vote.
+                      type: boolean
+                    createdAt:
+                      description: CreatedAt is when the Verdict was created.
+                      format: date-time
+                      type: string
+                    evidenceURL:
+                      description: EvidenceURL is the verifier's evidence link.
+                      type: string
+                    findings:
+                      description: Findings is how many findings the Verdict lists.
+                      type: integer
+                    name:
+                      description: Name is the Verdict's name.
+                      type: string
+                    reason:
+                      description: Reason says why a verdict does not count, or what
+                        it waits for.
+                      type: string
+                    result:
+                      description: Result is pass, fail or inconclusive.
+                      type: string
+                    run:
+                      description: Run and Attempt are the AgentRun's run and attempt
+                        numbers.
+                      type: integer
+                    summary:
+                      description: Summary is the verifier's summary.
+                      type: string
+                    verifier:
+                      description: Verifier names the writer (an actor sentence).
+                      type: string
+                  required:
+                  - counted
+                  - name
+                  - result
+                  - verifier
+                  type: object
+                type: array
             required:
             - ready
             type: object
