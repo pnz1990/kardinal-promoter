@@ -89,6 +89,7 @@ spec:
                     enum:
                     - agents
                     - everyone
+                    maxLength: 16
                     type: string
                   createdBy:
                     description: |-

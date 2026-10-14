@@ -183,6 +183,7 @@ type EnvironmentSpec struct {
 	// agent's AgentIdentity autonomy applies too; the stricter wins. Unset
 	// adds no limit of its own. Versions created by people are not affected.
 	// +kubebuilder:validation:Enum=auto;approve;deny
+	// +kubebuilder:validation:MaxLength=8
 	// +optional
 	Agents string `json:"agents,omitempty"`
 

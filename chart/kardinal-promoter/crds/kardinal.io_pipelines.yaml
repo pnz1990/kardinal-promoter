@@ -87,6 +87,7 @@ spec:
                       - auto
                       - approve
                       - deny
+                      maxLength: 8
                       type: string
                     approval:
                       default: auto

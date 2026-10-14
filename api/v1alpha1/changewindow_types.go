@@ -56,6 +56,7 @@ type ChangeWindowFreeze struct {
 	// Actors is whose versions are held: agents (versions whose actor stamp
 	// says kind agent) or everyone (stop-the-line).
 	// +kubebuilder:validation:Enum=agents;everyone
+	// +kubebuilder:validation:MaxLength=16
 	Actors string `json:"actors"`
 
 	// Namespaces limits the freeze to these namespaces: exact names, or a
