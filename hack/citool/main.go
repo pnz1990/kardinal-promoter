@@ -35,6 +35,8 @@ const usage = `usage:
   citool flaky -repo O/R RECORDS LOGDIR
 `
 
+var errUsage = errors.New(strings.TrimSpace(usage))
+
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "citool:", err)
@@ -44,7 +46,7 @@ func main() {
 
 func run(args []string, stdin io.Reader, stdout io.Writer) error {
 	if len(args) == 0 {
-		return errors.New(usage)
+		return errUsage
 	}
 	switch cmd, rest := args[0], args[1:]; cmd {
 	case "shard":
@@ -63,7 +65,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 	case "flaky":
 		return cmdFlaky(rest, stdout)
 	default:
-		return fmt.Errorf("unknown command %q\n%s", cmd, usage)
+		return fmt.Errorf("unknown command %q: %w", cmd, errUsage)
 	}
 }
 
@@ -71,7 +73,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 
 func cmdShard(args []string, stdin io.Reader, stdout io.Writer) error {
 	if len(args) != 2 {
-		return errors.New(usage)
+		return errUsage
 	}
 	i, n, err := parseShard(args[0])
 	if err != nil {
@@ -165,7 +167,7 @@ func readDurations(path string) (map[string]float64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open durations: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	out := map[string]float64{}
 	sc := bufio.NewScanner(f)
 	for line := 1; sc.Scan(); line++ {
@@ -210,7 +212,7 @@ const durationsHeader = `# hack/ci/test-durations.txt
 
 func cmdDurations(logs []string, stdout io.Writer) error {
 	if len(logs) == 0 {
-		return errors.New(usage)
+		return errUsage
 	}
 	var readers []io.Reader
 	for _, l := range logs {
@@ -218,7 +220,7 @@ func cmdDurations(logs []string, stdout io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("open log: %w", err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		readers = append(readers, f)
 	}
 	d, err := measure(readers...)
@@ -278,7 +280,7 @@ func writeDurations(w io.Writer, d map[string]float64) error {
 
 func cmdSkew(args []string, stdout io.Writer) error {
 	if len(args) != 3 {
-		return errors.New(usage)
+		return errUsage
 	}
 	n, err := strconv.Atoi(args[0])
 	if err != nil || n < 1 {
@@ -432,7 +434,7 @@ func cmdFlaky(args []string, stdout io.Writer) error {
 		repo, args = args[1], args[2:]
 	}
 	if len(args) != 2 || repo == "" {
-		return errors.New(usage)
+		return errUsage
 	}
 	data, err := os.ReadFile(args[0])
 	if err != nil {
