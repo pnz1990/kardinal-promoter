@@ -503,7 +503,9 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		return nil, "", fmt.Errorf("load bundle %s: %w", bundleName, err)
 	}
 
-	now := r.now()
+	// schedule.* is documented in UTC: a clock (NowFn) in another zone must
+	// not shift the weekday or the hour.
+	now := r.now().UTC()
 	version := extractVersion(&bundle)
 
 	// bundle.labels is always a map (empty when the Bundle has no labels), so

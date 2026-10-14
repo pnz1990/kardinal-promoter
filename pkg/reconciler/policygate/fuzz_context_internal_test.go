@@ -87,7 +87,7 @@ func fuzzContextFixture(t *testing.T, data []byte) (*Reconciler, *kardinalv1alph
 	t.Helper()
 	s := &ctxSource{data: data}
 	const ns = "team-a"
-	// Any time from 1970 to about 2106.
+	// Any time from 1970 to about 2106, sometimes in a zone far from UTC.
 	now := time.Unix(int64(uint32(s.int64())), 0).UTC()
 	if loc := s.intn(3); loc == 1 {
 		now = now.In(time.FixedZone("plus14", 14*3600))
@@ -261,7 +261,10 @@ func checkContextProperty(t *testing.T, data []byte) {
 	require.IsType(t, "", sched["dayOfWeek"])
 	hour := sched["hour"].(int)
 	assert.True(t, hour >= 0 && hour < 24, "schedule.hour %d", hour)
-	assert.Equal(t, now.Weekday().String(), sched["dayOfWeek"])
+	// schedule.* is UTC (docs/reference/cel-context.md), whatever zone the
+	// clock's time is in.
+	assert.Equal(t, now.UTC().Weekday().String(), sched["dayOfWeek"])
+	assert.Equal(t, now.UTC().Hour(), hour)
 	weekend := sched["dayOfWeek"] == "Saturday" || sched["dayOfWeek"] == "Sunday"
 	assert.Equal(t, weekend, sched["isWeekend"], "schedule.isWeekend agrees with schedule.dayOfWeek")
 

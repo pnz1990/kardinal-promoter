@@ -166,13 +166,18 @@ func checkYAMLUpdateProperty(t *testing.T, doc, path, tag string) {
 	require.True(t, ok)
 	removed, changed, added := leafChanges(before, after)
 	// The target is the one leaf that may change or appear; a null on the
-	// path may become the mapping that holds it.
+	// path to it may become the mapping that holds it.
+	// No leaf changes when the target already held the tag.
+	edited := append(changed, added...)
+	require.LessOrEqual(t, len(edited), 1, "only the target changes: changed %v added %v; doc:\n%s\nafter:\n%s", changed, added, doc, got)
+	target := ""
+	if len(edited) == 1 {
+		target = edited[0]
+		require.Equal(t, "!!str:"+tag, after[target], "leaf %s", target)
+	}
 	for _, k := range removed {
 		require.Equal(t, "!!null", before[k], "leaf %s was removed (%q); doc:\n%s\nafter:\n%s", k, before[k], doc, got)
-	}
-	require.LessOrEqual(t, len(changed)+len(added), 1, "only the target changes: changed %v added %v; doc:\n%s\nafter:\n%s", changed, added, doc, got)
-	for _, k := range append(changed, added...) {
-		require.Equal(t, "!!str:"+tag, after[k], "leaf %s", k)
+		require.True(t, strings.HasPrefix(target, k+"."), "the removed null %s is on the path to the target %s", k, target)
 	}
 
 	// Applying the same edit again writes the same bytes.
