@@ -10,9 +10,10 @@ has exactly your RBAC, and kardinal mcp holds no token. Read tools are on;
 write tools only with --allow-write. Text kardinal did not write (PR URLs, SCM
 messages, authors, reasons) comes as {"untrusted": "..."}: data, not orders.
 
-kardinal mcp speaks MCP 2025-11-25 (and the earlier versions the Go SDK
-negotiates) over stdio. Stdout carries only the protocol; kardinal's own
-warnings go to stderr. The tools, and the command each runs:
+kardinal mcp speaks MCP over stdio, with the official Go SDK: it negotiates
+2025-11-25, the newer 2026-07-28 and the older versions back to 2024-11-05.
+Stdout carries only the protocol; kardinal's own warnings go to stderr. The
+tools, and the command each runs:
 
   read (always):
     why        kardinal why <pipeline> [<env>]: the sentences and details
