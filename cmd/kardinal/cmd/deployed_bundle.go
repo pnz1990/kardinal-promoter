@@ -11,7 +11,7 @@ import (
 )
 
 // deployedLabel is what explain and status print for the Bundle deployed in
-// an environment (lifecycle.DeployedBundle): "<bundle> (<version>)", the
+// an environment (lifecycle.DeployedIn): "<bundle> (<version>)", the
 // Bundle alone when it has no version or is gone, and "none" when no change
 // has landed there.
 func deployedLabel(name string, byName map[string]*v1alpha1.Bundle) string {

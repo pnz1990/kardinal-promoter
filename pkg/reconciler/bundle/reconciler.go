@@ -2152,9 +2152,6 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return shard.Active().Complete(b, tracing.WrapReconciler("bundle", r), &kardinalv1alpha1.BundleList{})
 }
 
-// bundlePipelineIndex is the spec.pipeline index function.
-func bundlePipelineIndex(obj client.Object) []string { return lifecycle.BundlePipeline(obj) }
-
 // bundleLabelMapper maps a PromotionStep or Graph to the Bundle named by its
 // kardinal.io/bundle label, set by the Graph builder.
 func bundleLabelMapper(_ context.Context, obj client.Object) []reconcile.Request {

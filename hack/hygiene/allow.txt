@@ -1,0 +1,19 @@
+# Exceptions to make hygiene (hack/hygiene): "<kind> <name>  # <reason>".
+# deadcode <package>.<function>: a function no main reaches, kept on purpose.
+# file <path>: a file nothing names, kept on purpose.
+# Prefer moving a test-only helper into an export_test.go of its package; list
+# it here only when a test of another package calls it.
+
+deadcode github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style.Terminal  # cmd/kardinal/cmd tests build a terminal Styler with it
+deadcode github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style.Strip  # cmd/kardinal/cmd tests compare output without colour
+deadcode github.com/kardinal-promoter/kardinal-promoter/pkg/display.ValueOf  # test/e2e reads display labels with it
+deadcode github.com/kardinal-promoter/kardinal-promoter/pkg/graph.RegisterCompactUnsupported  # the hook a feature without a compact Graph registers; pkg/reconciler/pipeline tests use it
+deadcode github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/notificationhook.Verify  # the reference receiver check docs/notifications.md#signed-requests describes, tested against Sign
+deadcode github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate.EvaluateForTest  # test/e2e/journeys_test.go evaluates gate expressions with it
+deadcode github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate.OverrideKey  # cmd/kardinal-controller tests check status.overrides keys with it
+deadcode github.com/kardinal-promoter/kardinal-promoter/pkg/scm.IsSSHTransport  # pkg/renderjob tests check the ssh transport stays installed
+deadcode github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/scale.KnownBug  # live tests call it while they reproduce an open bug (test/e2e/README.md)
+
+file docs/assets/fonts/Archivo-OFL.txt  # the font's license, shipped with it
+file docs/assets/fonts/AtkinsonHyperlegibleMono-OFL.txt  # the font's license, shipped with it
+file docs/assets/fonts/AtkinsonHyperlegibleNext-OFL.txt  # the font's license, shipped with it

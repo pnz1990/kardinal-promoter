@@ -1,0 +1,7 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": ["playwright.live.config.ts", "scripts/*.mjs", "src/ui/index.ts"],
+  "project": ["src/**/*.{ts,tsx}", "test/**/*.{ts,tsx,mjs}", "scripts/**/*.mjs", "*.config.ts"],
+  "ignore": ["src/tokens.ts"],
+  "ignoreExportsUsedInFile": true
+}

@@ -21,7 +21,16 @@ go test ./... -race -count=1 -timeout 120s
 
 # Lint
 go vet ./...
+
+# No dead code or dead files (Go, docs pages and assets, scripts, web)
+make hygiene
 ```
+
+`make hygiene` fails on a Go function no main or test reaches, a docs page that is neither in
+`mkdocs.yml` nor linked, a docs asset or a script under `hack/` or `scripts/` that nothing names,
+and an unused file, export or dependency in `web/` (knip, after `npm ci` in `web/`). A helper only
+tests call belongs in an `export_test.go` of its package. Intentional exceptions go in
+`hack/hygiene/allow.txt` with a reason.
 
 The embedded UI in `web/` uses npm and `web/package-lock.json` only. The controller
 embeds the committed `web/dist`, so after changing `web/` run `make ui` and commit

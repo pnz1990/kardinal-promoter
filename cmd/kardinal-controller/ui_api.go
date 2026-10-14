@@ -122,7 +122,7 @@ type uiPipelineResponse struct {
 	ActiveBundleVersion string `json:"activeBundleVersion,omitempty"`
 	// Deployed is, per environment, the Bundle whose change the environment
 	// runs: the newest PromotionStep there that landed its change
-	// (lifecycle.DeployedBundle, as kardinal status reports). Environments
+	// (lifecycle.DeployedIn, as kardinal status reports). Environments
 	// that never received one are absent.
 	Deployed map[string]uiDeployed `json:"deployed,omitempty"`
 }

@@ -13,19 +13,8 @@ import (
 // words the UI uses, never the raw CamelCase API value (P2); -o json and -o
 // yaml keep the API values.
 
-// stepLabel is the label of a PromotionStep state ("" is Pending).
-func stepLabel(state string) string {
-	if state == "" {
-		state = "Pending"
-	}
-	return display.Step(state).Label
-}
-
 // bundleLabel is the label of a Bundle phase ("" is Unknown).
 func bundleLabel(phase string) string { return display.Bundle(phase).Label }
-
-// gateLabel is the label of a gate instance state (graph.GateState).
-func gateLabel(state string) string { return display.Gate(state).Label }
 
 // pipelineLabel is the label of a Pipeline phase, or Paused.
 func pipelineLabel(phase string, paused bool) string { return display.Pipeline(phase, paused).Label }

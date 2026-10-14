@@ -528,4 +528,3 @@ export function dotOf(p: Placed): { x: number; y: number } {
   return { x: p.inX + GRAPH.station.r, y: p.portY }
 }
 
-export type { Station }

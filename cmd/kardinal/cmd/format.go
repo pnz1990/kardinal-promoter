@@ -99,24 +99,18 @@ func stepStatePriority(state string) int {
 	}
 }
 
-// FormatPipelineTableFull writes a table of pipelines to w. VERSION is each
-// pipeline's current Bundle (lifecycle.CurrentBundle, the UI's
-// activeBundleName) and every environment column describes that Bundle
-// (pipelineEnvStates). bundles and steps may span namespaces and pipelines.
-// When subs is non-nil a SUB column counts the Watching Subscriptions per
-// pipeline. showNamespace prepends a NAMESPACE column (--all-namespaces).
-func FormatPipelineTableFull(w io.Writer, pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
-	steps []v1alpha1.PromotionStep, subs []v1alpha1.Subscription, showNamespace bool) error {
-	return formatPipelines(w, pipelines, bundles, steps, nil, subs, showNamespace, false)
-}
-
 // maxEnvColumns is the most environment columns the pipeline table shows:
 // with more (one wide Pipeline, or the union of several), each row shows a
 // summary instead (formatPipelineSummary), unless allColumns asks for every
 // environment (kardinal get pipelines <name>).
 const maxEnvColumns = 8
 
-// formatPipelines is FormatPipelineTableFull with allColumns: show one
+// formatPipelines writes a table of pipelines to w. VERSION is each
+// pipeline's current Bundle (lifecycle.CurrentBundle, the UI's
+// activeBundleName) and every environment column describes that Bundle
+// (pipelineEnvStates). When subs is non-nil a SUB column counts the Watching
+// Subscriptions per pipeline; showNamespace prepends a NAMESPACE column.
+// allColumns: show one
 // column per environment however many there are.
 func formatPipelines(w io.Writer, pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
 	steps []v1alpha1.PromotionStep, gates []v1alpha1.PolicyGate, subs []v1alpha1.Subscription, showNamespace, allColumns bool) error {
@@ -635,12 +629,7 @@ func FormatBundleErrors(w io.Writer, bundles []v1alpha1.Bundle, showNamespace bo
 	return nil
 }
 
-// FormatBundleTable writes a tabwriter-formatted table of bundles to w.
-func FormatBundleTable(w io.Writer, bundles []v1alpha1.Bundle) error {
-	return formatBundleTable(w, bundles, false)
-}
-
-// formatBundleTable is FormatBundleTable; showNS prepends a NAMESPACE column
+// formatBundleTable writes a table of bundles to w; showNS prepends a NAMESPACE column
 // (--all-namespaces).
 func formatBundleTable(w io.Writer, bundles []v1alpha1.Bundle, showNS bool) error {
 	tw := style.NewTable(w, 3)
@@ -663,17 +652,8 @@ func formatBundleTable(w io.Writer, bundles []v1alpha1.Bundle, showNS bool) erro
 	return nil
 }
 
-// FormatStepsTable writes a tabwriter-formatted table of promotion steps to w.
-// When multiple bundles have steps for the same environment (e.g. after rapid
-// successive deploys), only the most-active step per environment is shown using
-// the same priority logic as the pipeline table: active states (Promoting,
-// WaitingForMerge, HealthChecking) take precedence over terminal states (Verified,
-// Failed). Within same priority, the most recently created step wins.
-func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
-	return formatStepsTable(w, steps, false)
-}
-
-// formatStepsTable is FormatStepsTable; showNS keeps each namespace's steps
+// formatStepsTable writes a table of promotion steps to w, the most active
+// step per environment (see FormatStepsTable in export_test.go); showNS keeps each namespace's steps
 // apart and prepends a NAMESPACE column (--all-namespaces).
 func formatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep, showNS bool) error {
 	// Filter to the best step per environment (same priority as the pipeline table).

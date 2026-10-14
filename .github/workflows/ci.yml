@@ -162,6 +162,22 @@ jobs:
         with:
           version: v2.11.4
 
+  # ── Dead code and dead files (make hygiene) ──────────────────────────────────
+  # Go functions no main or test reaches, docs pages and assets nothing links,
+  # scripts nothing calls; exceptions in hack/hygiene/allow.txt. The web half
+  # (knip) runs in the frontend job, which has node_modules.
+  hygiene:
+    name: hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: No dead code or dead files
+        run: make hygiene-go
+
   # ── Security scan ────────────────────────────────────────────────────────────
   govulncheck:
     name: govulncheck
@@ -279,6 +295,9 @@ jobs:
         # tsc -b checks src (tsconfig.app.json) and the Vite/Playwright configs
         # (tsconfig.node.json).
         run: npm run typecheck
+        working-directory: web
+      - name: No unused files, exports or dependencies (knip)
+        run: npm run knip
         working-directory: web
       - name: Build
         run: npm run build

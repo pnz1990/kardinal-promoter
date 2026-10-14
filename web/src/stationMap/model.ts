@@ -484,14 +484,6 @@ export function threadOf(edges: MapEdge[], stations: Map<string, Station>, group
   return out
 }
 
-/** The roots of the thread: reached stations with no upstream. */
-export function threadRoots(model: StationMapModel): string[] {
-  return model.nodes
-    .filter(n => !model.edges.some(e => e.to === n.id))
-    .filter(n => n.kind === 'station' ? n.station.reached : n.group.members.some(m => model.stations.get(m)!.reached))
-    .map(n => n.id)
-}
-
 /** The environments of a band or platform, sorted for its grid: most urgent
  *  state first (the order of group.states), then in spec order. */
 export function gridOrder(g: Group, stations: Map<string, Station>): string[] {

@@ -6,10 +6,10 @@
 // the two conveniences the map uses: a missing state reads like an empty one,
 // and the rollback hold is named for what it is.
 
-import { displayState as of, held, heldByGate, words } from '../displayStates.gen'
+import { displayState as of, held, heldByGate } from '../displayStates.gen'
 import type { DisplayKind, DisplayState, Tone } from '../displayStates.gen'
 
-export { heldByGate, words }
+export { heldByGate }
 export type { DisplayKind, DisplayState, Tone }
 
 /** How value of kind is shown; an unknown value gets its words and the unknown tone. */

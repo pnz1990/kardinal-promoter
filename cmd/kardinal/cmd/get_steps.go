@@ -73,12 +73,8 @@ func runGetSteps(cmd *cobra.Command, args []string, watch, allNamespaces bool) e
 	})
 }
 
-// getStepsOnce fetches and renders a single snapshot of PromotionStep status.
-func getStepsOnce(w io.Writer, c sigs_client.Client, ns, pipeline string) error {
-	return getStepsOnceNS(w, c, ns, pipeline, false)
-}
-
-// getStepsOnceNS is getStepsOnce; ns "" with showNS reads every namespace.
+// getStepsOnceNS fetches and renders a single snapshot of PromotionStep
+// status; ns "" with showNS reads every namespace.
 func getStepsOnceNS(w io.Writer, c sigs_client.Client, ns, pipeline string, showNS bool) error {
 	ctx := context.Background()
 

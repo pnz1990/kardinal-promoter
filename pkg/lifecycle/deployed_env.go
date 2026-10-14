@@ -8,7 +8,7 @@ import (
 )
 
 // DeployedEnv is what runs in one environment. Bundle is the Bundle whose
-// change landed there last (DeployedBundle). Image and config Bundles do not
+// change landed there last. Image and config Bundles do not
 // supersede each other, so when Bundle is an image Bundle, ConfigFrom is the
 // last Bundle that deployed a config commit there, and when it is a config
 // Bundle, ImagesFrom is the last one that deployed images (#1353). Each is ""
@@ -50,7 +50,7 @@ func DeployedInSteps(steps []*v1alpha1.PromotionStep, pipeline, env string, byNa
 
 // newestLanded is the Bundle of the newest step of env in pipeline whose
 // change landed (stepLanded), among the Bundles match accepts (all when nil):
-// what DeployedBundle and DeployedBundleMatching return, without grouping.
+// what envHistory.deployed returns, without grouping.
 func newestLanded(steps []*v1alpha1.PromotionStep, pipeline, env string, match func(string) bool) string {
 	var newest *v1alpha1.PromotionStep
 	for _, s := range steps {

@@ -79,11 +79,7 @@ func runGetAuditEvents(cmd *cobra.Command, pipeline, bundle, env string, limit i
 	return getAuditEventsFnNS(cmd.OutOrStdout(), c, ns, pipeline, bundle, env, limit, allNamespaces)
 }
 
-func getAuditEventsFn(out io.Writer, client sigs_client.Client, ns, pipeline, bundle, env string, limit int) error {
-	return getAuditEventsFnNS(out, client, ns, pipeline, bundle, env, limit, false)
-}
-
-// getAuditEventsFnNS is getAuditEventsFn; ns "" with showNS lists every namespace.
+// getAuditEventsFnNS writes the AuditEvents of ns; ns "" with showNS lists every namespace.
 func getAuditEventsFnNS(out io.Writer, client sigs_client.Client, ns, pipeline, bundle, env string, limit int, showNS bool) error {
 
 	var aeList v1alpha1.AuditEventList

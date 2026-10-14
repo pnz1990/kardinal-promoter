@@ -130,13 +130,8 @@ func subscriptionVersion(b *v1alpha1.Bundle) string {
 	return ""
 }
 
-// FormatSubscriptionTable writes a tabwriter-formatted table of subscriptions to w.
-// When showNamespace is true, a NAMESPACE column is prepended.
-func FormatSubscriptionTable(w io.Writer, subs []v1alpha1.Subscription, showNamespace bool) error {
-	return formatSubscriptionTable(w, subs, showNamespace, nil)
-}
-
-// formatSubscriptionTable is FormatSubscriptionTable; versions maps
+// formatSubscriptionTable writes a table of subscriptions to w (a NAMESPACE
+// column first when showNamespace); versions maps
 // namespace/name to a Bundle's version for LAST-VERSION.
 func formatSubscriptionTable(w io.Writer, subs []v1alpha1.Subscription, showNamespace bool, versions map[string]string) error {
 	tw := style.NewTable(w, 3)

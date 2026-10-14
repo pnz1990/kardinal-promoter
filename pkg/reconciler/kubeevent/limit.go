@@ -192,5 +192,3 @@ func (c *lru[V]) put(key string, val V) {
 		delete(c.items, old.Value.(*entry[V]).key)
 	}
 }
-
-func (c *lru[V]) len() int { return c.order.Len() }

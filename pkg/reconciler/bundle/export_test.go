@@ -10,6 +10,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // The GraphChecker main.go wires in must also read Graph status, or the
@@ -20,7 +21,7 @@ var _ graphReader = (*graph.GraphClient)(nil)
 var (
 	BundleLabelMapper   = bundleLabelMapper
 	BundlePhaseChanged  = bundlePhaseChanged
-	BundlePipelineIndex = bundlePipelineIndex
+	BundlePipelineIndex = lifecycle.BundlePipeline
 )
 
 // WaitingSiblings exposes the sibling-Bundle watch mapping.

@@ -577,7 +577,7 @@ func (g *Gate) resync(ctx context.Context) bool {
 // clock: at least leaseDuration*(1-maxClockRate) of real time. This shard
 // starts nothing from R + (leaseDuration-fenceMargin)*(1+maxClockRate), and
 // cancels what runs by fenceTick later. Overlap needs a reconcile that keeps
-// going for the rest of the margin (FenceMargin) after its context was
+// going for the rest of the margin (FenceMargin in the shard tests) after its context was
 // cancelled.
 func (g *Gate) fence(now time.Time) bool {
 	g.mu.Lock()
@@ -597,14 +597,6 @@ func (g *Gate) fence(now time.Time) bool {
 		}
 	}
 	return true
-}
-
-// FenceMargin is the worst-case time between this shard cancelling its
-// reconciles and another shard taking its namespaces (see fence).
-func FenceMargin() time.Duration {
-	takeover := time.Duration(float64(leaseDuration) * (1 - maxClockRate))
-	stop := time.Duration(float64(leaseDuration-fenceMargin)*(1+maxClockRate)) + fenceTick
-	return takeover - stop
 }
 
 // checkStillHeld drops a namespace marked held whose token (in the cache)
