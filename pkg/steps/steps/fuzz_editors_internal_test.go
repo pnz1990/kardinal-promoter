@@ -168,7 +168,8 @@ func checkYAMLUpdateProperty(t *testing.T, doc, path, tag string) {
 	// The target is the one leaf that may change or appear; a null on the
 	// path to it may become the mapping that holds it.
 	// No leaf changes when the target already held the tag.
-	edited := append(changed, added...)
+	edited := make([]string, 0, len(changed)+len(added))
+	edited = append(append(edited, changed...), added...)
 	require.LessOrEqual(t, len(edited), 1, "only the target changes: changed %v added %v; doc:\n%s\nafter:\n%s", changed, added, doc, got)
 	target := ""
 	if len(edited) == 1 {
