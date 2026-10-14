@@ -1,0 +1,17 @@
+# Release gate values profile: a locked-down install (NetworkPolicy, egress
+# allowlist, TokenReview on the Bundle API, a GitHub App from an existing
+# Secret).
+networkPolicy:
+  enabled: true
+egress:
+  allowlist:
+    - hooks.slack.com
+    - 10.0.0.0/8
+bundleAPI:
+  tokenReview: true
+scm:
+  secretRef:
+    name: github-app
+github:
+  app:
+    enabled: true

@@ -101,6 +101,49 @@ the PR. The scripts download the kind, kubectl and helm versions CI uses
 into `bin/e2e` (`make e2e-tools`). [test/e2e/README.md](test/e2e/README.md)
 lists the suites.
 
+### Release gate
+
+Before a release is tagged, `make release-gate` gathers its evidence on one
+host and writes `test/e2e/results/release-gate/<commit>/report.md`. The
+report has a pass or fail row for each area, test totals, the coverage
+summary, durations, the commit and the image IDs, and a link to each step's
+log. It covers:
+
+- every live suite on the oldest and newest Kubernetes minor that
+  `hack/tool-versions.env` has for it, and the upgrade from the previous
+  release;
+- the scale suite's `full` and `soak` profiles;
+- `go test -race -count=3`, every fuzz target, the scenario matrix and the
+  enterprise scenario;
+- govulncheck, golangci-lint, `make hygiene`, trivy on the images, the
+  strict docs build with check-site-offline, and the bundle size budget;
+- helm lint and template of every values profile in
+  `hack/release-gate/profiles`, and the CRDs and chart objects admitted by
+  the oldest and newest Kubernetes.
+
+A missing piece of evidence fails the gate. Examples are an upgrade suite
+from the previous release that does not exist, or a step that failed. A step
+that could not run here, such as the github suite without a token, makes the
+gate INCOMPLETE.
+
+A step that passed is not run again for the same commit, so running the gate
+again re-runs only what failed; `-fresh` runs everything. Pass the options in
+`RELEASE_GATE_ARGS`:
+
+```bash
+make release-gate RELEASE_GATE_ARGS='-clusters 3 -lock /path/to/LOADLOCK -image-build host'
+make release-gate RELEASE_GATE_ARGS='-list'                           # the steps
+make release-gate RELEASE_GATE_ARGS='-only ^e2e-core -fuzztime 1m'    # some steps
+make release-gate RELEASE_GATE_ARGS='-report'                         # the report only
+```
+
+At most `-clusters` kind clusters run at once, and gitlab, multi-cluster and
+scale count as two. A new cluster starts only while the one-minute load is at
+most `-max-load` (default 64) and `-min-mem` GB (default 20) are free. The heavy
+steps take the `-lock` directory one at a time: the scale profiles, the
+`-race -count=3` run and the enterprise scenario. Interrupting the gate (Ctrl-C)
+deletes the clusters it created; every cluster's name starts with `kp-rg-`.
+
 ## How to Contribute
 
 ### Bug Reports

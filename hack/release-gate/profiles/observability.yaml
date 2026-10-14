@@ -1,0 +1,17 @@
+# Release gate values profile: metrics, alerts, dashboards and traces
+# (kube-prometheus-stack and an OpenTelemetry collector).
+serviceMonitor:
+  enabled: true
+  interval: 30s
+  labels:
+    release: kube-prometheus-stack
+prometheusRule:
+  enabled: true
+  additionalLabels:
+    release: kube-prometheus-stack
+grafanaDashboard:
+  enabled: true
+tracing:
+  enabled: true
+  endpoint: http://otel-collector.observability:4318
+  samplingRatio: 0.5
