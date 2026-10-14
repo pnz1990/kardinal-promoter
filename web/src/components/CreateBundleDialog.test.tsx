@@ -14,7 +14,8 @@
 // components/CreateBundleDialog.test.tsx — Tests for #917 Create Bundle dialog.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { CreateBundleDialog, CreateBundleButton } from './CreateBundleDialog'
+import { CreateBundleDialog } from './CreateBundleDialog'
+import { CreateBundleButton } from './CreateBundleButton'
 import * as apiModule from '../api/client'
 
 vi.mock('../api/client', () => ({
@@ -184,12 +185,13 @@ describe('CreateBundleDialog', () => {
 })
 
 describe('CreateBundleDialog keyboard', () => {
-  it('focuses the image field on open, closes on Escape and returns focus to the opener', () => {
+  it('focuses the image field on open, closes on Escape and returns focus to the opener', async () => {
     render(<CreateBundleButton pipelineName="nginx-demo" namespace="default" onRefresh={() => {}} />)
     const opener = screen.getByRole('button', { name: /ship a version of nginx-demo/i })
     opener.focus()
     fireEvent.click(opener)
-    expect(screen.getByLabelText(/container image/i)).toHaveFocus()
+    // The dialog's code loads on the first open.
+    expect(await screen.findByLabelText(/container image/i)).toHaveFocus()
     // Shift+Tab from the first field wraps to the last button.
     fireEvent.keyDown(document.activeElement!, { key: 'Tab', shiftKey: true })
     expect(screen.getByRole('button', { name: 'Ship version' })).toHaveFocus()

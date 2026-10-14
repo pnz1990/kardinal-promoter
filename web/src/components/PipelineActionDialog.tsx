@@ -14,7 +14,6 @@
 import { useId, useState } from 'react'
 import { api } from '../api/client'
 import { ConfirmDialog, actionErrorMessage } from './ConfirmDialog'
-import '../styles/PipelineActionDialog.css'
 
 export type PipelineActionKind = 'promote' | 'rollback' | 'release-hold'
 

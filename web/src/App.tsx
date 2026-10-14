@@ -18,7 +18,6 @@
 // #800: / shortcut to focus pipeline search input.
 import { lazy, Suspense, useState, useCallback, useMemo, useRef, useEffect, type RefObject } from 'react'
 import { PipelineList } from './components/PipelineList'
-import PipelineMap from './stationMap/PipelineMap'
 import { HealthChip } from './components/HealthChip'
 import { RejectedLiveBanner } from './components/RejectedLiveBanner'
 import { InsecureConnectionBanner } from './components/InsecureConnectionBanner'
@@ -45,11 +44,21 @@ function ApprovalsLoading() {
   return <Skeleton label="Loading approvals…" rows={3} className="app-lazy" />
 }
 import type { StageCommand } from './stage/StageDrawer'
+import { DrawerPlaceholder } from './stage/DrawerPlaceholder'
 import { BundleTimeline } from './components/BundleTimeline'
 // The palette and the comparison panel load when first opened: not part of the initial load.
 const CommandPalette = lazy(() => import('./components/CommandPalette').then(m => ({ default: m.CommandPalette })))
 // The stage drawer and the shortcuts help load when first opened (the drawer's code is
 // prefetched with the palette's, so a click on a station opens it at once).
+// The first page paints the fleet board and a pipeline its map: each is a chunk of its own, so a
+// route loads only its own view (web/scripts/check-size.mjs counts each route's views).
+// The route's own view starts loading with the app, before its data arrives; the other one after
+// PREFETCH_MS, with the palette and the drawer.
+const loadFleetBoard = () => import('./components/FleetBoard').then(m => ({ default: m.FleetBoard }))
+const loadPipelineMap = () => import('./stationMap/PipelineMap')
+const FleetBoard = lazy(loadFleetBoard)
+const PipelineMap = lazy(loadPipelineMap)
+if (typeof window !== 'undefined') void (window.location.hash.startsWith('#/p/') ? loadPipelineMap() : loadFleetBoard())
 const StageDrawer = lazy(() => import('./stage/StageDrawer').then(m => ({ default: m.StageDrawer })))
 const KeyboardShortcutsPanel = lazy(() => import('./components/KeyboardShortcutsPanel').then(m => ({ default: m.KeyboardShortcutsPanel })))
 // The Activity and Metrics tabs and the operations table load when first shown.
@@ -62,9 +71,8 @@ const PREFETCH_MS = 1500
 const BundleDiffPanel = lazy(() => import('./components/BundleDiffPanel').then(m => ({ default: m.BundleDiffPanel })))
 import { BundleTypeBadge } from './components/BundleTypeBadge'
 import { FleetHealthBar, filterPipelines, isFleetFilter, type FleetFilter } from './components/FleetHealthBar'
-import { FleetBoard } from './components/FleetBoard'
 import { ActionBar } from './components/ActionBar'
-import { CreateBundleButton } from './components/CreateBundleDialog'
+import { CreateBundleButton } from './components/CreateBundleButton'
 import EmptyState from './components/EmptyState'
 import CopyButton from './components/CopyButton'
 import { formatRelativeAge } from './components/approvalAge'
@@ -75,6 +83,12 @@ import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
 import { useTheme, themeControlLabel } from './ThemeContext'
 import './styles/App.css'
+// The fleet board's and the map's styles stay in the entry stylesheet: the views load lazily, but
+// their styles apply before they paint (no reflow when the chunk lands), and one stylesheet
+// compresses better than three.
+import './styles/FleetBoard.css'
+import './styles/StationMap.css'
+import './styles/PipelineActionDialog.css'
 import { EMPTY_URL_STATE, serializeHash, useUrlState, type PipelineTab } from './useUrlState'
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
 import { resolveShownBundle } from './bundleSelection'
@@ -188,7 +202,7 @@ export function App() {
 
   // The palette's code loads while the page is idle, so the first ⌘K opens at once.
   useEffect(() => {
-    const t = setTimeout(() => { void import('./components/CommandPalette'); void import('./stage/StageDrawer') }, PREFETCH_MS)
+    const t = setTimeout(() => { void import('./components/CommandPalette'); void import('./stage/StageDrawer'); void loadFleetBoard(); void loadPipelineMap() }, PREFETCH_MS)
     return () => clearTimeout(t)
   }, [])
 
@@ -919,7 +933,9 @@ export function App() {
           ) : (
           <div className={pipelines.length > 0 ? 'app-fleet' : 'app-empty'}>
             {pipelines.length > 0 ? (
-              <FleetBoard pipelines={filteredPipelines} total={pipelines.length} onSelect={handleSelectPipeline} />
+              <Suspense fallback={<Skeleton label="Loading the fleet board…" className="app-view-loading" />}>
+                <FleetBoard pipelines={filteredPipelines} total={pipelines.length} onSelect={handleSelectPipeline} />
+              </Suspense>
             ) : pipelinesError ? (
               /* A failed first read: the cluster may have pipelines, so no onboarding. */
               <ErrorNotice error={pipelinesError} onRetry={() => { void manualRefresh() }} className="app-empty__error" />
@@ -1108,6 +1124,7 @@ export function App() {
                 <div className="app-content">
                   <div className="app-dag app-map" data-split={stageEnv ? true : undefined}>
                     <ErrorBoundary fallbackMessage="The pipeline map failed to load">
+                      <Suspense fallback={<Skeleton label="Loading the map…" className="app-view-loading" />}>
                       <PipelineMap
                         pipeline={activePipeline}
                         bundle={activeBundle}
@@ -1131,14 +1148,16 @@ export function App() {
                         previewBundle={bundles.find(b => b.name === previewBundle && b.name !== activeBundle?.name)}
                         stageData={stageData}
                       />
+                      </Suspense>
                     </ErrorBoundary>
                   </div>
 
                   {/* U3: the stage drawer of the environment in the route (#1701): a column
                       beside the page at lg and wider, a modal sheet narrower. */}
+                  {stageEnv && !activePipeline && <DrawerPlaceholder env={stageEnv} />}
                   {stageEnv && activePipeline && (
                     <ErrorBoundary fallbackMessage="Details unavailable">
-                      <Suspense fallback={<Skeleton label={`Loading the details of ${stageEnv}…`} className="app-drawer-loading" />}>
+                      <Suspense fallback={<DrawerPlaceholder env={stageEnv} />}>
                       <StageDrawer
                         namespace={activePipeline.namespace}
                         pipeline={activePipeline.name}

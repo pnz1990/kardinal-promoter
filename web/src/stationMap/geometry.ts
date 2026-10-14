@@ -1,13 +1,13 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 //
-// stationMap/geometry.ts — where things go on the station map: dagre lays out
+// stationMap/geometry.ts — where things go on the station map: layered lays out
 // the collapsed graph (a band or platform is one node), edges are drawn
 // octilinear (horizontal runs and 45° chamfered bends, the logo's legs), and
 // gate markers sit on the edge into the environment they guard.
 //
 
-import dagre from '@dagrejs/dagre'
+import { layered } from './layered'
 import { graph, text } from '../tokens'
 import type { MapEdge, MapNode, Station, Group } from './model'
 import { lowerFirst } from '../sentence'
@@ -161,11 +161,13 @@ export function groupTitle(g: Group): string {
   return `${g.label} · ${g.members.length}`
 }
 
-/** A platform's pacing line: "2 at a time · stop at 2 failed". */
+/** A platform's pacing line: "paused · 2 at a time · stop at 10% (5) failed". */
 export function groupPacing(g: Group): string {
-  return g.kind === 'platform'
-    ? [g.maxConcurrent ? `${g.maxConcurrent} at a time` : '', g.maxUnavailable ? `stop at ${g.maxUnavailable} failed` : ''].filter(Boolean).join(' · ')
+  if (g.kind !== 'platform') return ''
+  const stop = g.maxUnavailable
+    ? `stop at ${g.maxUnavailableSpec?.endsWith('%') ? `${g.maxUnavailableSpec} (${g.maxUnavailable})` : g.maxUnavailable} failed`
     : ''
+  return [g.paused ? 'paused' : '', g.maxConcurrent ? `${g.maxConcurrent} at a time` : '', stop].filter(Boolean).join(' · ')
 }
 
 /** A group's sub line: its pacing, or what most of it runs. */
@@ -345,7 +347,7 @@ export function cullLabels(labels: Array<{ id: string; priority: number; boxes: 
   return out
 }
 
-/** The size dagre gives a node at a level. */
+/** The size the layout gives a node at a level. */
 export function nodeSize(n: MapNode, level: ZoomLevel): { w: number; h: number } {
   if (n.kind === 'station') {
     const label = level === 'detail' ? Math.max(LABEL_W.map, Math.min(LABEL_W.detail + 80, detailTextWidth(n.station))) : LABEL_W[level]
@@ -366,26 +368,19 @@ export function nodeSize(n: MapNode, level: ZoomLevel): { w: number; h: number }
 /**
  * layout places the collapsed graph left to right. Ranks are fixed by the
  * model's depth so a station never jumps between columns as states change;
- * dagre orders nodes within a rank.
+ * layered orders nodes within a rank.
  */
 export function layout(nodes: MapNode[], edges: MapEdge[], level: ZoomLevel, gatesInto: (id: string) => number = () => 0): Layout {
-  const g = new dagre.graphlib.Graph()
   // Every edge into a gated node gets the straight run its gates need, at every level.
   const maxGates = Math.max(0, ...nodes.map(n => gatesInto(n.id)))
-  g.setGraph({ rankdir: 'LR', nodesep: GRAPH.nodeSep, ranksep: rankSepFor(level, maxGates), marginx: MARGIN + LEAD, marginy: MARGIN })
-  g.setDefaultEdgeLabel(() => ({}))
-  for (const n of nodes) {
-    const { w, h } = nodeSize(n, level)
-    g.setNode(n.id, { width: w, height: h })
-  }
-  for (const e of edges) g.setEdge(e.from, e.to)
-  dagre.layout(g)
+  const centres = layered(nodes.map(n => ({ id: n.id, ...nodeSize(n, level) })), edges,
+    { nodeSep: GRAPH.nodeSep, rankSep: rankSepFor(level, maxGates), marginX: MARGIN + LEAD, marginY: MARGIN })
 
   const placed = new Map<string, Placed>()
   let maxX = 0
   let maxY = 0
   for (const n of nodes) {
-    const d = g.node(n.id)
+    const d = centres.get(n.id)!
     const { w, h } = nodeSize(n, level)
     const left = d.x - w / 2
     const isStation = n.kind === 'station'

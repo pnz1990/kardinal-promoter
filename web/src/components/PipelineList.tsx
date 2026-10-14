@@ -7,9 +7,8 @@
 // commands is the main panel's EmptyState, so there is one set of instructions.
 // #345: debounced search/filter input at the top.
 // #800: searchInputRef prop exposes the filter input for the / keyboard shortcut.
-// #815: virtual scrolling for flat lists with >50 entries (@tanstack/react-virtual).
-import { useState, useCallback, useRef, type RefObject } from 'react'
-import { useVirtualizer } from '@tanstack/react-virtual'
+// #815: virtual scrolling for flat lists with >50 entries (VirtualPipelineRows, lazy).
+import { lazy, Suspense, useState, useCallback, useRef, type RefObject } from 'react'
 import type { Pipeline } from '../types'
 import { displayState } from '../displayStates.gen'
 import CopyButton from './CopyButton'
@@ -22,6 +21,10 @@ import { StatusChip } from '../ui/Chips'
 
 /** Number of pipelines above which virtual scrolling is enabled (flat list only). */
 const VIRTUAL_THRESHOLD = 50
+/** Rows shown in place while the virtual scrolling chunk loads. */
+const PLACEHOLDER_ROWS = 20
+
+const VirtualPipelineRows = lazy(() => import('./VirtualPipelineRows'))
 
 interface Props {
   pipelines: Pipeline[]
@@ -121,13 +124,6 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
   const isMultiNamespace = uniqueNamespaces.size > 1
   const useVirtual = !isMultiNamespace && filteredPipelines.length > VIRTUAL_THRESHOLD
 
-  // #815: Hook must be called unconditionally — before any early returns.
-  const virtualizer = useVirtualizer({
-    count: filteredPipelines.length,
-    getScrollElement: () => listContainerRef.current,
-    estimateSize: () => 52,
-    overscan: 5,
-  })
 
   if (loading) {
     // #335: skeleton loading state — shimmer placeholders instead of "Loading pipelines..."
@@ -221,29 +217,15 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
             })}
           </ul>
         ) : useVirtual ? (
-          /* #815: virtual scrolling for flat lists > VIRTUAL_THRESHOLD */
-          <ul
-            role="list"
-            aria-label="Pipelines"
-            className="pipeline-list__list pipeline-list__list--virtual"
-            style={{ height: `${virtualizer.getTotalSize()}px` }}
-          >
-            {virtualizer.getVirtualItems().map(virtualItem => {
-              const p = filteredPipelines[virtualItem.index]
-              if (!p) return null
-              return (
-                <li
-                  key={virtualItem.key}
-                  className="pipeline-list__item pipeline-list__item--virtual"
-                  style={{ transform: `translateY(${virtualItem.start}px)` }}
-                  data-index={virtualItem.index}
-                  ref={virtualizer.measureElement}
-                >
-                  {renderPipelineItemContent(p)}
-                </li>
-              )
-            })}
-          </ul>
+          /* #815: virtual scrolling for flat lists > VIRTUAL_THRESHOLD. While its chunk loads,
+             the first rows show in place, where the virtual rows will be. */
+          <Suspense fallback={
+            <ul role="list" aria-label="Pipelines" className="pipeline-list__list">
+              {filteredPipelines.slice(0, PLACEHOLDER_ROWS).map(p => renderPipelineItem(p))}
+            </ul>
+          }>
+            <VirtualPipelineRows pipelines={filteredPipelines} scroller={listContainerRef} row={renderPipelineItemContent} />
+          </Suspense>
         ) : (
           /* Normal flat rendering for ≤ VIRTUAL_THRESHOLD pipelines */
           <ul role="list" aria-label="Pipelines" className="pipeline-list__list">

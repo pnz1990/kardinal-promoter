@@ -1,6 +1,6 @@
 {
   "components/FleetBoard.tsx": 1,
-  "components/PipelineList.tsx": 2,
   "components/StepProgress.tsx": 1,
+  "components/VirtualPipelineRows.tsx": 2,
   "ui/Dialog.tsx": 1
 }

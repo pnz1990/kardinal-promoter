@@ -16,14 +16,6 @@ import { render, screen, act, fireEvent, within, cleanup } from '@testing-librar
 import type { Bundle, GraphResponse, Pipeline, PolicyGate } from './types'
 import { DISPLAY_STATES } from './displayStates.gen'
 
-vi.mock('@dagrejs/dagre', () => {
-  function MockGraph(this: Record<string, unknown>) {
-    this.setGraph = vi.fn(); this.setDefaultEdgeLabel = vi.fn(); this.setNode = vi.fn(); this.setEdge = vi.fn()
-    this.node = vi.fn().mockReturnValue({ x: 100, y: 80 })
-  }
-  return { default: { graphlib: { Graph: MockGraph }, layout: vi.fn() } }
-})
-
 const now = Date.now()
 const ago = (min: number) => new Date(now - min * 60_000).toISOString()
 
@@ -111,7 +103,8 @@ import { App } from './App'
 beforeAll(async () => {
   await Promise.all([import('./stage/StageDrawer'), import('./components/BundleDiffPanel'), import('./components/CommandPalette'),
     import('./components/KeyboardShortcutsPanel'), import('./stationMap/StageTable'), import('./stationMap/VersionMatrix'),
-    import('./components/PolicyGatesPanel'), import('./components/PromotionErrorsPanel'), import('./components/ReleaseMetricsBar'), import('./components/PipelineOpsTable')])
+    import('./components/PolicyGatesPanel'), import('./components/PromotionErrorsPanel'), import('./components/ReleaseMetricsBar'), import('./components/PipelineOpsTable'),
+    import('./components/FleetBoard'), import('./stationMap/PipelineMap'), import('./components/CreateBundleDialog'), import('./components/VirtualPipelineRows')])
 })
 
 /** The raw API values that have a different display label in every kind: they must not show. */

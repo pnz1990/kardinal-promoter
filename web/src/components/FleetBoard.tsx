@@ -9,7 +9,6 @@
 
 import { useChangeHalo } from '../useChangeHalo'
 import { Fragment, useRef, type CSSProperties } from 'react'
-import '../styles/FleetBoard.css'
 import { hasCommandModifier, rovingFocus, rovingItems, useRovingFocus } from '../useRovingFocus'
 import type { Pipeline } from '../types'
 import { ageOf, fleetRow, wavePlate, WAVE_PLATE_MIN, type FleetRow, type Station, type StationState } from '../fleetModel'
