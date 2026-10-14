@@ -54,8 +54,9 @@ again from its first environment. Before you downgrade, let the Bundles of those
 ## Upgrading from v0.11.0
 
 !!! note "v0.12.0 is not released yet"
-    These steps take a v0.11.0 installation to v0.12.0 once it is released. Until then v0.11.0 is
-    the latest release, and there is nothing to upgrade to.
+    These steps take a v0.11.0 installation to the next release, v0.12.0, once it is released:
+    `<version>` in the commands is that release's chart version. Until then v0.11.0 is the latest
+    release, and there is nothing to upgrade to.
 
 The upgrade suite runs these steps as written (`TestUpgradeV0110_Estate`, on the oldest and newest
 supported Kubernetes minors), on an estate of 30 Pipelines in 5 namespaces. Everything stored
@@ -75,14 +76,14 @@ lists every change since v0.11.0.
 v0.11.0 chart installed, so `--force-conflicts` is required:
 
 ```bash
-helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 | kubectl apply --server-side --force-conflicts -f -
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> | kubectl apply --server-side --force-conflicts -f -
 ```
 
 **3. Upgrade the chart.** `--reset-then-reuse-values` keeps the values you set and takes every
 new default from the new chart.
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> \
   --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
 ```
 
