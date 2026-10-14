@@ -45,7 +45,7 @@ Incident:
   unhold      Release an environment's hold (kardinal hold, or rollback --hold)
 
 Admin and debug:
-  audit       Audit log commands: summarize and export promotion events
+  audit       Audit log commands: view and summarize promotion events
   completion  Generate shell completion scripts
   delete      Delete kardinal resources
   help        Help about any command
