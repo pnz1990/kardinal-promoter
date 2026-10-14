@@ -88,9 +88,10 @@ func TestCLI_MCP(t *testing.T) {
 	agent := "system:serviceaccount:" + a.ns + ":release-agent"
 	// A second ServiceAccount with the read Role only.
 	require.NoError(t, e.Client.Create(ctx, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "reader", Namespace: a.ns}}))
-	require.NoError(t, e.Client.Create(ctx, &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "reader", Namespace: a.ns},
+	_, err := e.Kube.RbacV1().RoleBindings(a.ns).Create(ctx, &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "reader"},
 		RoleRef:  rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: "kardinal-agent-read"},
-		Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: "reader", Namespace: a.ns}}}))
+		Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: "reader", Namespace: a.ns}}}, metav1.CreateOptions{})
+	require.NoError(t, err)
 	readerKubeconfig := saKubeconfig(t, e, a.ns, "reader")
 
 	// Read-only: the read tools, and ship refused.
