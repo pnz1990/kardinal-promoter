@@ -48,6 +48,7 @@ Admin and debug:
   completion  Generate shell completion scripts
   delete      Delete kardinal resources
   help        Help about any command
+  mcp         Serve kardinal to an AI agent over MCP (stdio)
   metrics     Show promotion metrics (DORA-style) for a pipeline
   refresh     Force re-reconciliation of a Pipeline
   validate    Validate Pipeline and PolicyGate YAML before applying to the cluster

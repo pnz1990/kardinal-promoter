@@ -32,6 +32,7 @@
 | [`kardinal inbox`](reference/cli/kardinal-inbox.md) | List what waits for a person: on you first, then on others |
 | [`kardinal init`](reference/cli/kardinal-init.md) | Write a Pipeline for your GitOps repository, from flags or a few questions |
 | [`kardinal logs`](reference/cli/kardinal-logs.md) | Show promotion step execution logs for a pipeline |
+| [`kardinal mcp`](reference/cli/kardinal-mcp.md) | Serve kardinal to an AI agent over MCP (stdio) |
 | [`kardinal metrics`](reference/cli/kardinal-metrics.md) | Show promotion metrics (DORA-style) for a pipeline |
 | [`kardinal override`](reference/cli/kardinal-override.md) | Force-pass a PolicyGate with a mandatory audit record |
 | [`kardinal pause`](reference/cli/kardinal-pause.md) | Pause a pipeline, or one fleet: no new promotion steps start |

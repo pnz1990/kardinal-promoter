@@ -127,37 +127,61 @@ func shortVersion(version, bundle string) string {
 type whyLine struct{ label, value string }
 
 // whyAnswer is why's answer for one environment: a sentence, then details.
+// quoted names the lines (by label) whose value relays text kardinal did not
+// write, a step's message from the SCM or the GitOps tool or a PR's URL, and
+// quotedSentence a sentence that quotes such text: kardinal mcp labels them
+// as data, not instructions.
 type whyAnswer struct {
-	sentence string
-	lines    []whyLine
+	sentence       string
+	lines          []whyLine
+	quoted         []string
+	quotedSentence bool
 }
 
 // whyFn writes, for env of pipeline (or each environment, in promotion
 // order), what it waits for and what moves it on.
 func whyFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline, envFilter string) error {
+	answers, err := whyAnswers(ctx, c, ns, pipeline, envFilter)
+	if err != nil {
+		return err
+	}
+	for i, a := range answers {
+		if i > 0 {
+			_, _ = fmt.Fprintln(w)
+		}
+		if err := writeWhy(w, a); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// whyAnswers is why's answers for env of pipeline (or each environment, in
+// promotion order): the newest version's failure first, when it failed.
+func whyAnswers(ctx context.Context, c sigs_client.Client, ns, pipeline, envFilter string) ([]whyAnswer, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	p, err := getPipeline(ctx, c, ns, pipeline)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	names := pipelineEnvNames(p)
 	if envFilter != "" && !slices.Contains(names, envFilter) {
-		return fmt.Errorf("environment %q not found in pipeline %q (environments: %s)", envFilter, pipeline, strings.Join(names, ", "))
+		return nil, fmt.Errorf("environment %q not found in pipeline %q (environments: %s)", envFilter, pipeline, strings.Join(names, ", "))
 	}
 	sel := sigs_client.MatchingLabels{"kardinal.io/pipeline": p.Name}
 	var bundles v1alpha1.BundleList
 	var steps v1alpha1.PromotionStepList
 	var gates v1alpha1.PolicyGateList
 	if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err != nil {
-		return fmt.Errorf("list bundles: %w", err)
+		return nil, fmt.Errorf("list bundles: %w", err)
 	}
 	if err := c.List(ctx, &steps, sigs_client.InNamespace(ns), sel); err != nil {
-		return fmt.Errorf("list promotion steps: %w", err)
+		return nil, fmt.Errorf("list promotion steps: %w", err)
 	}
 	if err := c.List(ctx, &gates, sigs_client.InNamespace(ns), sel); err != nil {
-		return fmt.Errorf("list policy gates: %w", err)
+		return nil, fmt.Errorf("list policy gates: %w", err)
 	}
 	envs := p.Status.Environments
 	failed := p.Status.FailedVersion
@@ -188,15 +212,7 @@ func whyFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline,
 		}
 		answers = append(answers, whyEnvironment(p, e, envs, gates.Items, steps.Items, byName, me, whyNow()))
 	}
-	for i, a := range answers {
-		if i > 0 {
-			_, _ = fmt.Fprintln(w)
-		}
-		if err := writeWhy(w, a); err != nil {
-			return err
-		}
-	}
-	return nil
+	return answers, nil
 }
 
 // writeWhy writes one answer: the sentence, then each detail with its
@@ -311,6 +327,7 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 		a := whyAnswer{sentence: fmt.Sprintf("%s waits for %s to merge.", e.Name, pr), lines: []whyLine{version}}
 		if e.PRURL != "" {
 			a.lines = append(a.lines, whyLine{"PR", e.PRURL})
+			a.quoted = append(a.quoted, "PR")
 		}
 		if spec := environmentSpec(p, e.Name); spec != nil && spec.PR != nil && spec.PR.Merge != nil && spec.PR.Merge.Auto {
 			a.lines = append(a.lines, whyLine{"Merge", "the SCM merges it once its checks pass (pr.merge.auto)"})
@@ -320,6 +337,7 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 		a := whyAnswer{sentence: fmt.Sprintf("%s did not promote %s: %s.", e.Name, versionLabel(incomingVersion, incoming), strings.ToLower(state.Label))}
 		if msg := stepMessage(steps, e.Name, incoming); msg != "" {
 			a.lines = append(a.lines, whyLine{"Why", msg})
+			a.quoted = append(a.quoted, "Why")
 		}
 		a.lines = append(a.lines, whyLine{"Next", fmt.Sprintf("kardinal logs %s %s", p.Name, e.Name)})
 		if e.Bundle != "" {
@@ -582,7 +600,9 @@ func whyFailed(p *v1alpha1.Pipeline, f *v1alpha1.PipelineFailedVersion) whyAnswe
 	if own := failureFix(p, f); own != "" {
 		fix = own
 	}
-	a := whyAnswer{sentence: fmt.Sprintf("The newest version %s %s: %s", versionLabel(f.Version, f.Bundle), where, detail)}
+	// The message can quote a step's (the SCM's, the GitOps tool's) text.
+	a := whyAnswer{sentence: fmt.Sprintf("The newest version %s %s: %s", versionLabel(f.Version, f.Bundle), where, detail),
+		quotedSentence: true}
 	a.lines = append(a.lines, whyLine{"Reason", f.Reason})
 	if fix != "" {
 		a.lines = append(a.lines, whyLine{"Fix", fix})

@@ -123,6 +123,7 @@ nav:
     - Coming from Kargo: coming-from-kargo.md
   - Agentic delivery:
     - agentic/index.md
+    - Connect an agent: agentic/connect-an-agent.md
   - How-to:
     - Use the UI: ui.md
     - Ship versions from CI: ci-integration.md
@@ -196,6 +197,7 @@ nav:
       - kardinal inbox: reference/cli/kardinal-inbox.md
       - kardinal init: reference/cli/kardinal-init.md
       - kardinal logs: reference/cli/kardinal-logs.md
+      - kardinal mcp: reference/cli/kardinal-mcp.md
       - kardinal metrics: reference/cli/kardinal-metrics.md
       - kardinal override: reference/cli/kardinal-override.md
       - kardinal pause: reference/cli/kardinal-pause.md
