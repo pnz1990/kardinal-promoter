@@ -437,6 +437,7 @@ spec:
                           - agent
                           - bot
                           - controller
+                          maxLength: 16
                           type: string
                         principal:
                           description: Principal is the username the API server authenticated.
@@ -460,6 +461,7 @@ spec:
                           - api
                           - subscription
                           - auto-rollback
+                          maxLength: 16
                           type: string
                       required:
                       - kind
