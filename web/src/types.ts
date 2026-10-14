@@ -495,3 +495,22 @@ export interface AccessResponse {
   user?: { username: string; groups?: string[] }
   results: AccessResult[]
 }
+
+/** A freeze: a ChangeWindow with spec.freeze (GET /api/v1/ui/freezes). */
+export interface Freeze {
+  name: string
+  /** agents (versions agents created) or everyone (stop-the-line). */
+  actors: 'agents' | 'everyone'
+  /** Empty: every namespace. */
+  namespaces: string[]
+  /** Whom and where it holds, in words ("agents, every namespace"). */
+  scope: string
+  active: boolean
+  since: string
+  /** Empty: until it is lifted. */
+  until?: string
+  createdBy: string
+  reason: string
+  /** Exemptions in effect (kardinal override --freeze). */
+  exemptions: number
+}
