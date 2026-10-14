@@ -99,8 +99,14 @@ func registerAgent(t *testing.T, e *framework.Env, ns, name, sponsor string, env
 		if err := e.Client.Get(ctx, client.ObjectKeyFromObject(tmpl), &st); err != nil {
 			return false, err.Error()
 		}
-		return got.Status.Ready && st.Status.Ready, fmt.Sprintf("agent ready=%v (%s), template ready=%v (%s)",
-			got.Status.Ready, got.Status.Reason, st.Status.Ready, st.Status.Reason)
+		// The AgentRun reconciler reads the agent from the release's index.
+		var idx v1alpha1.AgentIndex
+		if err := e.Client.Get(ctx, client.ObjectKey{Name: framework.ControllerDeployment}, &idx); err != nil {
+			return false, err.Error()
+		}
+		_, indexed := idx.Status.Users["system:serviceaccount:"+ns+":"+name]
+		return got.Status.Ready && st.Status.Ready && indexed, fmt.Sprintf("agent ready=%v (%s), template ready=%v (%s), indexed=%v",
+			got.Status.Ready, got.Status.Reason, st.Status.Ready, st.Status.Reason, indexed)
 	})
 	return agent
 }
