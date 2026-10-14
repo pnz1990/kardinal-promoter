@@ -79,6 +79,10 @@ func newLiveAgent(t *testing.T, e *framework.Env, ns string, rbac, environments 
 			Subjects:    []v1alpha1.AgentSubject{{Kind: "ServiceAccount", Namespace: ns, Name: a.sa}},
 			Sponsor:     v1alpha1.AgentSponsor{User: a.sponsor},
 			Scope:       v1alpha1.AgentScope{Namespaces: []string{ns}, Environments: environments},
+			// auto: its versions promote under the other gates; the default,
+			// approve, makes every environment wait for a person
+			// (docs/agentic/policy.md).
+			Autonomy: v1alpha1.AutonomyAuto,
 		},
 	}
 	require.NoError(t, e.Client.Create(ctx, id))
