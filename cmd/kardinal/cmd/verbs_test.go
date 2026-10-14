@@ -227,10 +227,12 @@ func TestShipWait(t *testing.T) {
 	c := policyClient(t, p)
 	opts := createBundleOptions{Images: []string{"ghcr.io/o/app:1.5.0"}, Type: "image"}
 
-	// The controller's part: once the Bundle exists, it is Verified.
+	// The controller's part: once the Bundle exists, it is Verified. It gets
+	// its own copy of c: the test points c at other clients after cancel,
+	// while the goroutine may still be in its last pass.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() {
+	go func(c sigs_client.Client) {
 		for ctx.Err() == nil {
 			var bl v1alpha1.BundleList
 			_ = c.List(ctx, &bl)
@@ -249,7 +251,7 @@ func TestShipWait(t *testing.T) {
 			}
 			time.Sleep(time.Millisecond)
 		}
-	}()
+	}(c)
 	var out bytes.Buffer
 	require.NoError(t, shipFn(context.Background(), &out, c, "default", "demo", opts, true, time.Minute, false, false))
 	assert.Equal(t, "1.5.0 is live in test, prod\n", out.String())
