@@ -68,6 +68,8 @@ Rules:
 | [G15](#g15-kro-holds-every-graph-in-memory-and-a-graph-cannot-be-retired-without-its-children) | kro holds every live Graph in memory (3 to 6 MB each, whatever its size), and a Graph cannot be deleted without deleting its children | High at scale | `pkg/reconciler/bundle/retire.go` records the steps in `Bundle.status.retiredSteps`, then deletes the Graph | None filed (drafts: Graph suspend, kro#1445 comment) |
 | [G16](#g16-kro-impersonates-with-only-a-username) | kro impersonates the Graph ServiceAccount with only a username, so admission cannot tell it from `edit`/`admin` holders impersonating it | High | Refuse minted and Pod tokens (credential-id, pod-name extras); `edit`/`admin` holders are trusted as kro (documented) | Blocked on upstream: draft, not posted |
 | [G17](#g17-a-graph-adopts-an-object-someone-else-created) | kro adopts an existing object of the name it applies and keeps fields its template does not set | High | Admission: only kro and the controller create Graph-only kinds; no update turns an existing PolicyGate or MetricCheck into an instance | None filed |
+| [G18](#g18-the-ref-watch-check-ignores-the-refs-name) | The ref watch check drops the ref's name, so a name-limited grant silently loses drift detection | Medium | Grant `get, list, watch` on the whole kind (actors, #1834) | None filed |
+| [G19](#g19-a-namespaced-graph-identity-needs-a-cluster-wide-grant-to-read-a-cluster-scoped-ref) | A namespaced Graph identity needs a ClusterRoleBinding to read a cluster-scoped ref | Low | The IdentityProvisioner patches one chart-created ClusterRoleBinding (actors, #1834) | None filed; related to G5 |
 
 Smaller constraints that shape the translator are in [Notes](#notes-constraints-we-design-around).
 
@@ -458,6 +460,7 @@ Every row writes its result to its own CRD status; a new row needs the owner's a
 | PolicyGate re-evaluation timer | PolicyGate reconciler requeues at `recheckInterval` (default 5m); ScheduleClock ticks add re-evaluation | No time-based requeue in kro (see time, above) | KREP-025 |
 | Cross-CRD reads for the gate context: MetricChecks, ChangeWindows, PRStatuses and sibling Bundles | `buildMetricsContext`, `buildChangeWindowContext`, `buildPRContext`, `buildUpstreamContextWithHistory` in `pkg/reconciler/policygate` | See the PolicyGate CEL row | Selector refs (KREP-003) cover the reads; time does not |
 | PR merge polling | PRStatus reconciler polls the SCM every 30 s; SCM webhooks only shorten the wait | External I/O | Out of scope for kro |
+| Agent index for admission (actors, #1834) | `pkg/reconciler/agentindex` writes the AgentIndex status that the `<release>-actor` ValidatingAdmissionPolicy reads as params | A ValidatingAdmissionPolicy cannot look up objects, so the registry must be one params object. A Graph could build it (selector `ref` plus `transformMapEntry`), but one conflicting AgentIdentity would fail the whole expression, and revocation would wait in kro's single Graph queue (G13). Planned in #1834 (not on main) | None needed: first-wins folding is not a Graph concern |
 | AuditEvent retention | `pkg/reconciler/auditretention` reads the clock to delete records older than `--audit-retention-max-age` | Housekeeping like `historyLimit`: no promotion decision reads it, and AuditEvents have no owner whose change could trigger it, so it is a leader Runnable | None needed |
 
 **Upstream work: time.**
@@ -896,6 +899,96 @@ field manager).
 
 ---
 
+## G18: The ref watch check ignores the ref's name
+
+**Need.** A Graph that reads one named object through a `ref` node must be reconciled when that
+object changes, with an identity that may read only that object. The actor design
+([17-actors.md](17-actors.md#102-where-agent-comes-from-a-ref-node)) reads the Bundle's
+AgentIdentity this way. When an admin suspends the agent or tightens its autonomy, in-flight
+gates must see it.
+
+**kro today.** Before it opens a drift watch for a ref target, the executor asks whether the
+impersonated Graph identity may watch it (`executor/simple.go:1421-1456`, `watchObject` and
+`skipWatchForIdentity`). The check is a SelfSubjectAccessReview with `verb: watch` and the GVR
+and namespace, but **no name** (`pkg/controller/graph/impersonation.go:203-221`, `canWatchFor`).
+RBAC never matches a `resourceNames` rule for a request without a name, so a grant limited to
+the one object is denied. The executor then skips the watch and logs that drift detection is
+degraded (`simple.go:1450-1454`). The ref is still read, but a change re-reconciles the Graph
+only when something else does. The Graph docs say otherwise: "kro watches every `ref` target,
+so a change to the referenced resource reconciles the Graph"
+(`website/versioned_docs/version-0.10.0-rc.0/docs/concepts/graph/02-nodes.md:110`).
+
+**kardinal workaround.** Grant the Graph identity `get, list, watch` on the whole kind
+(`agentidentities`), through the `<release>-graph-agent-reader` ClusterRoleBinding that the
+IdentityProvisioner maintains (G19). Least privilege is lost: every agent Bundle's Graph
+identity can read every AgentIdentity. Planned for E7 (actor-aware policy), not on main.
+
+**Upstream work.** None filed.
+
+**Smallest change, no upstream work yet.** Put the ref's name in the review
+(`ResourceAttributes.Name`) when the watch is for one named object. The informer behind it is
+kro's own, so the check is only a guard, and a name-scoped grant is enough for it.
+
+Draft upstream issue (not posted):
+
+> **fix: ref drift watch is skipped when the Graph identity may watch only the named object**
+>
+> *What kardinal-promoter observed.* A namespaced Graph refs one cluster-scoped object by name.
+> The Graph ServiceAccount has `get, watch` limited by `resourceNames` to that object. The ref
+> resolves, but changes to the object never reconcile the Graph. The controller logs
+> "skipping drift watch: impersonated ServiceAccount may not watch this GVR".
+>
+> *Root cause (from source reading).* `canWatchFor` (`pkg/controller/graph/impersonation.go:203`)
+> builds the SelfSubjectAccessReview without `Name`, and RBAC does not match `resourceNames`
+> rules for a nameless request.
+>
+> *Suggested fix.* Pass the object name through `CanWatch` for single-object refs and set
+> `ResourceAttributes.Name`. Selector refs keep the nameless check.
+
+---
+
+## G19: A namespaced Graph identity needs a cluster-wide grant to read a cluster-scoped ref
+
+**Need.** Graphs in many tenant namespaces read the same cluster-scoped catalog object (an
+AgentIdentity) and nothing else outside their namespace.
+
+**kro today.** A namespaced Graph may `ref` a cluster-scoped object: `defaultNamespace` leaves
+cluster-scoped kinds alone (`executor/simple.go:1576-1583`), and the GET uses an empty namespace
+(`simple.go:1208-1216`). Every read is made as the Graph's impersonated `spec.serviceAccountName`
+(`pkg/controller/graph/impersonation.go`, G16). A RoleBinding cannot grant a cluster-scoped
+resource. So each namespace's Graph identity needs its own ClusterRoleBinding subject, written
+by whoever provisions Graph identities (kardinal's IdentityProvisioner, G5). kro has no way to
+read allow-listed catalog kinds as itself, or as a separate read identity.
+
+**kardinal workaround.** The chart creates one ClusterRoleBinding,
+`<release>-graph-agent-reader`, and the IdentityProvisioner patches its subjects: the Graph
+ServiceAccounts of the namespaces that have an agent Bundle. The controller has `patch` on that
+one object (`resourceNames`) and holds the role's permissions itself, so no `bind` or `escalate`
+is needed. Planned for E7 (actor-aware policy), not on main.
+
+**Upstream work.** None filed. Related to G5.
+
+**Smallest change, no upstream work yet.** An optional Graph field for the identity that reads
+`ref` targets (`spec.refServiceAccountName`), or a kro controller flag that lists cluster-scoped
+kinds kro may read with its own identity for any Graph.
+
+Draft upstream issue (not posted):
+
+> **feat: let Graphs read cluster-scoped ref targets without a per-namespace cluster grant**
+>
+> *What kardinal-promoter observed.* One Graph per tenant namespace refs the same cluster-scoped
+> object. Each namespace's Graph ServiceAccount must be a subject of a ClusterRoleBinding, so
+> the Graph provisioner must write cluster-scoped RBAC for every tenant.
+>
+> *Root cause (from source reading).* All executor reads use the impersonated Graph identity
+> (`impersonation.go`, `NewImpersonation`). RBAC can grant cluster-scoped kinds only through
+> ClusterRoleBindings.
+>
+> *Suggested fix.* `spec.refServiceAccountName` (defaulting to `spec.serviceAccountName`) used
+> for `ref` reads only, or an allow-list of kinds kro reads as itself.
+
+---
+
 ## Notes: constraints we design around
 
 These are not gaps, but the translator has to work around them.
@@ -1050,6 +1143,8 @@ blocks above.
 | G15 retire a Graph, keep its children | Graph suspend, Graph `Detach` policy, release memory on NotFound | Yes |
 | G16 impersonation | An impersonation extra on Graph applies (`kro.run/graph`) | Yes |
 | G17 adoption | Opt-in refusal of objects a template node did not create | Yes |
+| G18 ref watch check | Put the ref's name in the watch access review | Yes, small fix |
+| G19 cluster-scoped refs | A read identity for `ref` targets, or kinds kro reads as itself | Yes, with G5 |
 
 ### Hazards found
 
