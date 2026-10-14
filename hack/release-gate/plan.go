@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The areas of the report, in its order.
@@ -54,6 +55,11 @@ type Step struct {
 	// Missing, when set, is evidence the release needs that this commit has
 	// no test for: the gate fails.
 	Missing string
+	// CIJob, when set, is the e2e-live.yml job that runs the step (-live ci).
+	CIJob *ciJob
+	// ciRetry: the step failed in an earlier gate on this commit, so its CI
+	// job runs again.
+	ciRetry bool
 }
 
 // Options are the plan's knobs (flags).
@@ -63,6 +69,28 @@ type Options struct {
 	ScaleProfiles []string // scale suite profiles: ci, full, soak
 	ImageBuild    string   // docker (the repo Dockerfiles) or host (host-built binaries)
 	GitHubToken   bool     // a GitHub token for the github suite is set
+	LiveCI        bool     // the live suites run in e2e-live.yml, not on this host
+	// Floor is the oldest supported Kubernetes minor (1.35 -> 35): the gate
+	// runs each suite on the oldest minor at or above it and the newest.
+	Floor int
+}
+
+// atLeast keeps the minors at or above floor.
+func atLeast(minors []int, floor int) []int {
+	var out []int
+	for _, m := range minors {
+		if m >= floor {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// fuzzHeavy: a fuzz run longer than a minute takes the heavy-load lock
+// (fuzzing uses every core it is given).
+func fuzzHeavy(fuzzTime string) bool {
+	d, err := time.ParseDuration(fuzzTime)
+	return err != nil || d > time.Minute
 }
 
 // Repo is what the plan reads from the checkout.
@@ -273,7 +301,7 @@ func Plan(r *Repo, o Options) []Step {
 	var steps []Step
 	// Quick checks first, so a broken tree fails in minutes; the cluster
 	// steps start with the CRD checks, then the suites, then scale.
-	steps = append(steps, chartSteps(r)...)
+	steps = append(steps, chartSteps(r, o)...)
 	steps = append(steps, staticSteps(o)...)
 	steps = append(steps, unitSteps(r, o)...)
 	steps = append(steps, e2eSteps(r, o)...)
@@ -281,7 +309,42 @@ func Plan(r *Repo, o Options) []Step {
 	return steps
 }
 
+// CISuites are the suites -live ci dispatches: every matrix.txt suite but
+// scale, whose full and soak profiles need this host.
+func CISuites(r *Repo) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, l := range r.Matrix {
+		if l.Suite != "scale" && !seen[l.Suite] {
+			seen[l.Suite] = true
+			out = append(out, l.Suite)
+		}
+	}
+	return out
+}
+
+// ciSteps are the e2e-live.yml jobs of the CI suites: the minors and shards
+// of hack/e2e/matrix.txt, as CI runs them.
+func ciSteps(r *Repo) []Step {
+	var steps []Step
+	for _, l := range r.Matrix {
+		if l.Suite == "scale" {
+			continue
+		}
+		j := &ciJob{ID: jobID(l), Suite: l.Suite, Minor: l.Minor, Shard: l.Shard}
+		area := areaE2E
+		if isUpgrade(l.Suite) {
+			area = areaUpgrade
+		}
+		steps = append(steps, Step{ID: "ci-" + j.ID, Area: area, Title: j.Name() + " (CI)", Tests: "e2e/test.json", CIJob: j})
+	}
+	return steps
+}
+
 func e2eSteps(r *Repo, o Options) []Step {
+	if o.LiveCI {
+		return append(ciSteps(r), prevUpgrade(r)...)
+	}
 	var suites []string
 	matrixMinors := map[string][]int{}
 	for _, l := range r.Matrix {
@@ -296,7 +359,7 @@ func e2eSteps(r *Repo, o Options) []Step {
 	}
 	var steps []Step
 	for _, s := range suites {
-		minors := r.minors(s)
+		minors := atLeast(r.minors(s), o.Floor)
 		if fixedMinor[s] || len(minors) == 0 {
 			minors = matrixMinors[s]
 		}
@@ -309,16 +372,24 @@ func e2eSteps(r *Repo, o Options) []Step {
 			steps = append(steps, e2eStep(r, o, s, m))
 		}
 	}
-	if r.PrevRelease != "" {
-		want := upgradeSuite(r.PrevRelease)
-		if _, ok := matrixMinors[want]; !ok {
-			steps = append(steps, Step{
-				ID: want, Area: areaUpgrade, Title: "upgrade from " + r.PrevRelease,
-				Missing: fmt.Sprintf("no %s suite in hack/e2e/matrix.txt: nothing tests the upgrade from %s", want, r.PrevRelease),
-			})
+	return append(steps, prevUpgrade(r)...)
+}
+
+// prevUpgrade is a missing step when no suite upgrades from the previous release.
+func prevUpgrade(r *Repo) []Step {
+	if r.PrevRelease == "" {
+		return nil
+	}
+	want := upgradeSuite(r.PrevRelease)
+	for _, l := range r.Matrix {
+		if l.Suite == want {
+			return nil
 		}
 	}
-	return steps
+	return []Step{{
+		ID: want, Area: areaUpgrade, Title: "upgrade from " + r.PrevRelease,
+		Missing: fmt.Sprintf("no %s suite in hack/e2e/matrix.txt: nothing tests the upgrade from %s", want, r.PrevRelease),
+	}}
 }
 
 func e2eStep(r *Repo, o Options, suite string, minor int) Step {
@@ -416,7 +487,7 @@ func unitSteps(r *Repo, o Options) []Step {
 	for _, f := range r.FuzzTargets {
 		steps = append(steps, Step{
 			ID: "fuzz-" + f.Name, Area: areaUnit, Title: fmt.Sprintf("%s (%s) for %s", f.Name, f.Dir, o.FuzzTime),
-			Tests: "tests.json",
+			Tests: "tests.json", Heavy: fuzzHeavy(o.FuzzTime),
 			Script: fmt.Sprintf(`go test -run '^$' -fuzz '^%s$' -fuzztime %s -parallel 4 -json %s > "$STEP_DIR/tests.json"`,
 				f.Name, o.FuzzTime, f.Dir),
 		})
@@ -500,7 +571,7 @@ var profiles = []string{"default", "ha", "observability", "secure", "gitlab"}
 // whose CRDs (the Prometheus operator's) a bare cluster does not serve.
 var admittedProfiles = []string{"default", "ha", "secure", "gitlab"}
 
-func chartSteps(r *Repo) []Step {
+func chartSteps(r *Repo, o Options) []Step {
 	var lint strings.Builder
 	lint.WriteString("PATH=\"$PWD/bin/e2e:$PATH\"\nbash hack/e2e/tools.sh\n")
 	for _, p := range profiles {
@@ -512,7 +583,7 @@ func chartSteps(r *Repo) []Step {
 			p, values, values, p)
 	}
 	steps := []Step{{ID: "chart-profiles", Area: areaChart, Title: "helm lint and template, every values profile", Script: lint.String()}}
-	minors := r.allMinors()
+	minors := atLeast(r.allMinors(), o.Floor)
 	if len(minors) == 0 {
 		return steps
 	}

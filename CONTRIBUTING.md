@@ -109,9 +109,9 @@ report has a pass or fail row for each area, test totals, the coverage
 summary, durations, the commit and the image IDs, and a link to each step's
 log. It covers:
 
-- every live suite on the oldest and newest Kubernetes minor that
-  `hack/tool-versions.env` has for it, and the upgrade from the previous
-  release;
+- every live suite on the oldest supported Kubernetes minor (`-k8s-floor`,
+  1.35) and the newest one that `hack/tool-versions.env` has for it, and the
+  upgrade from the previous release;
 - the scale suite's `full` and `soak` profiles;
 - `go test -race -count=3`, every fuzz target, the scenario matrix and the
   enterprise scenario;
@@ -132,13 +132,21 @@ again re-runs only what failed; `-fresh` runs everything. Pass the options in
 
 ```bash
 make release-gate RELEASE_GATE_ARGS='-clusters 3 -lock /path/to/LOADLOCK -image-build host'
+make release-gate RELEASE_GATE_ARGS='-live ci'                         # live suites in e2e-live.yml
 make release-gate RELEASE_GATE_ARGS='-list'                           # the steps
 make release-gate RELEASE_GATE_ARGS='-only ^e2e-core -fuzztime 1m'    # some steps
 make release-gate RELEASE_GATE_ARGS='-report'                         # the report only
 ```
 
+With `-live ci`, the live suites run as a single dispatch of `e2e-live.yml` on
+the pushed branch, with the minors and shards of `hack/e2e/matrix.txt`, and
+each job's result and artifact become a step. Running the gate again on the
+same commit waits for that run, and re-runs only its failed jobs. The scale
+profiles stay on the host: a runner is too small for them.
+
 At most `-clusters` kind clusters run at once, and gitlab, multi-cluster and
-scale count as two. A new cluster starts only while the one-minute load is at
+scale count as two. `-slots DIR` also takes one of the host's shared cluster
+slots (`DIR/1` to `DIR/<-slot-max>`, made with mkdir) for each cluster. A new cluster starts only while the one-minute load is at
 most `-max-load` (default 64) and `-min-mem` GB (default 20) are free. The heavy
 steps take the `-lock` directory one at a time: the scale profiles, the
 `-race -count=3` run and the enterprise scenario. Interrupting the gate (Ctrl-C)

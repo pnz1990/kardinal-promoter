@@ -83,6 +83,12 @@ func run() error {
 		dirtyOK   = flag.Bool("allow-dirty", false, "run on a tree with uncommitted changes (the report says so)")
 		wait      = flag.Duration("wait", 30*time.Second, "how often to check for a free slot or a ready host")
 		lockRetry = flag.Duration("lock-retry", 5*time.Minute, "how often to retry a heavy-load lock someone else holds")
+		slots     = flag.String("slots", "", "the host's shared cluster slots: a cluster step takes DIR/1..-slot-max with mkdir (empty: none)")
+		slotMax   = flag.Int("slot-max", 4, "how many cluster slots the host has")
+		live      = flag.String("live", "local", "where the live suites run: local (kind on this host) or ci (one e2e-live.yml dispatch; scale stays local)")
+		ref       = flag.String("ref", "", "with -live ci, the pushed branch at this commit (default the current branch)")
+		ghRepo    = flag.String("repo", "pnz1990/kardinal-promoter", "with -live ci, the GitHub repository")
+		floor     = flag.String("k8s-floor", "1.35", "the oldest supported Kubernetes minor: each suite runs on the oldest minor at or above it and the newest")
 	)
 	flag.Parse()
 
@@ -108,7 +114,15 @@ func run() error {
 	}
 	_, ghFile := os.LookupEnv("KARDINAL_E2E_GITHUB_TOKEN_FILE")
 	_, ghToken := os.LookupEnv("DEMO_GITHUB_TOKEN")
-	opts := Options{Count: *count, FuzzTime: *fuzzTime, ImageBuild: *imgBuild, GitHubToken: ghFile || ghToken}
+	var floorMinor int
+	if _, err := fmt.Sscanf(*floor, "1.%d", &floorMinor); err != nil {
+		return fmt.Errorf("-k8s-floor %q: want 1.<minor>", *floor)
+	}
+	if *live != "local" && *live != "ci" {
+		return fmt.Errorf("-live %q: want local or ci", *live)
+	}
+	opts := Options{Count: *count, FuzzTime: *fuzzTime, ImageBuild: *imgBuild, GitHubToken: ghFile || ghToken,
+		LiveCI: *live == "ci", Floor: floorMinor}
 	for _, p := range strings.Split(*scale, ",") {
 		if p = strings.TrimSpace(p); p != "" {
 			opts.ScaleProfiles = append(opts.ScaleProfiles, p)
@@ -123,6 +137,8 @@ func run() error {
 				note = "  MISSING: " + st.Missing
 			case st.NotRun != "":
 				note = "  not run: " + st.NotRun
+			case st.CIJob != nil:
+				note = "  CI job: " + st.CIJob.Name()
 			}
 			fmt.Printf("%-28s %-26s clusters=%d heavy=%v%s\n", st.ID, st.Area, st.Clusters, st.Heavy, note)
 		}
@@ -134,11 +150,6 @@ func run() error {
 	}
 	if err := os.MkdirAll(*out, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", *out, err)
-	}
-	g := &Gate{
-		Out: *out, SHA: sha, Clusters: max(1, *clusters), Fresh: *fresh, Wait: *wait, Log: logf,
-		Host:   &machine{maxLoad: *maxLoad, minMemGB: *minMem, lockDir: *lock, owner: fmt.Sprintf("%s pid %d %s", *owner, os.Getpid(), time.Now().UTC().Format(time.RFC3339)), lockRetry: *lockRetry, log: logf},
-		Runner: bashRunner{root: root},
 	}
 	selected := steps
 	if *only != "" {
@@ -152,6 +163,24 @@ func run() error {
 				selected = append(selected, st)
 			}
 		}
+	}
+	var runner Runner = bashRunner{root: root}
+	if opts.LiveCI {
+		if *ref == "" {
+			if *ref, err = git(root, "rev-parse", "--abbrev-ref", "HEAD"); err != nil {
+				return err
+			}
+		}
+		runner = routeRunner{local: runner, ci: &ciRunner{
+			gh: ghCLI, repo: *ghRepo, ref: *ref, sha: sha, out: *out, count: *count,
+			suites: ciSuitesOf(selected), poll: time.Minute, log: logf,
+		}}
+	}
+	g := &Gate{
+		Out: *out, SHA: sha, Clusters: max(1, *clusters), Fresh: *fresh, Wait: *wait, Log: logf,
+		Host: &machine{maxLoad: *maxLoad, minMemGB: *minMem, slotsDir: *slots, slotMax: *slotMax, lockDir: *lock,
+			owner: fmt.Sprintf("%s pid %d %s", *owner, os.Getpid(), time.Now().UTC().Format(time.RFC3339)), lockRetry: *lockRetry, log: logf},
+		Runner: runner,
 	}
 
 	start := time.Now()
@@ -210,6 +239,32 @@ func run() error {
 		return fmt.Errorf("verdict %s", v)
 	}
 	return nil
+}
+
+// ciSuitesOf is the suites of the selected CI steps, in plan order: the
+// dispatch runs only those.
+func ciSuitesOf(steps []Step) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, st := range steps {
+		if st.CIJob != nil && !seen[st.CIJob.Suite] {
+			seen[st.CIJob.Suite] = true
+			out = append(out, st.CIJob.Suite)
+		}
+	}
+	return out
+}
+
+// ghCLI runs gh and returns its standard output.
+func ghCLI(ctx context.Context, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return out, fmt.Errorf("gh %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+	}
+	return out, nil
 }
 
 // resultOf is the step's saved result, or what it is when it never ran.

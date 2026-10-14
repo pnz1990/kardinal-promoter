@@ -45,6 +45,9 @@ type Host interface {
 	// Ready says whether a new cluster may start now (load and memory), and
 	// why not.
 	Ready() (bool, string)
+	// Slots takes n of the host's cluster slots (shared with other users of
+	// the host), or none and why not.
+	Slots(n int) (release func(), ok bool, why string)
 	// Lock takes the heavy-load lock, waiting for it until ctx ends.
 	Lock(ctx context.Context) error
 	Unlock()
@@ -92,6 +95,16 @@ func (g *Gate) cached(st Step) (Result, bool) {
 	return r, true
 }
 
+// failedBefore says whether the step's saved result on this commit is a failure.
+func (g *Gate) failedBefore(st Step) bool {
+	data, err := os.ReadFile(filepath.Join(g.dir(st), "result.json"))
+	if err != nil {
+		return false
+	}
+	var r Result
+	return json.Unmarshal(data, &r) == nil && r.SHA == g.SHA && r.Status == statusFail
+}
+
 func (g *Gate) save(r Result) error {
 	data, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
@@ -126,6 +139,9 @@ func (g *Gate) Run(ctx context.Context, steps []Step) ([]Result, error) {
 				g.Log("%s: passed earlier on this commit, cached", st.ID)
 				continue
 			}
+			if st.CIJob != nil && !g.Fresh {
+				steps[i].ciRetry = g.failedBefore(st)
+			}
 			pending = append(pending, i)
 		}
 	}
@@ -135,6 +151,9 @@ func (g *Gate) Run(ctx context.Context, steps []Step) ([]Result, error) {
 	done := make(chan int, len(steps))
 	running := 0
 	fits := func(st Step) bool {
+		if st.CIJob != nil {
+			return true // a runner of its own
+		}
 		if st.Heavy && heavyBusy {
 			return false
 		}
@@ -143,9 +162,20 @@ func (g *Gate) Run(ctx context.Context, steps []Step) ([]Result, error) {
 		}
 		return usedClusters == 0 || usedClusters+st.Clusters <= g.Clusters
 	}
+	releases := map[int]func(){}
 	start := func(i int) {
 		st := steps[i]
 		running++
+		if st.CIJob != nil {
+			go func() {
+				r := g.runStep(ctx, st)
+				mu.Lock()
+				results[i] = r
+				mu.Unlock()
+				done <- i
+			}()
+			return
+		}
 		if st.Clusters == 0 {
 			localBusy = true
 		}
@@ -164,6 +194,13 @@ func (g *Gate) Run(ctx context.Context, steps []Step) ([]Result, error) {
 	finish := func(i int) {
 		st := steps[i]
 		running--
+		if release := releases[i]; release != nil {
+			release()
+			delete(releases, i)
+		}
+		if st.CIJob != nil {
+			return
+		}
 		if st.Clusters == 0 {
 			localBusy = false
 		}
@@ -173,7 +210,14 @@ func (g *Gate) Run(ctx context.Context, steps []Step) ([]Result, error) {
 		}
 	}
 
-	hostWait := ""
+	lastWait := map[string]time.Time{}
+	waiting := func(id, why string) {
+		// At most every five minutes per step: the load changes every check.
+		if t, ok := lastWait[id]; !ok || g.clock().Sub(t) >= 5*time.Minute {
+			g.Log("waiting to start %s: %s", id, why)
+			lastWait[id] = g.clock()
+		}
+	}
 	for len(pending) > 0 || running > 0 {
 		if ctx.Err() == nil {
 			var rest []int
@@ -185,14 +229,17 @@ func (g *Gate) Run(ctx context.Context, steps []Step) ([]Result, error) {
 				}
 				if st.Clusters > 0 {
 					if ok, why := g.Host.Ready(); !ok {
-						if why != hostWait {
-							g.Log("waiting to start %s: %s", st.ID, why)
-							hostWait = why
-						}
+						waiting(st.ID, why)
 						rest = append(rest, i)
 						continue
 					}
-					hostWait = ""
+					release, ok, why := g.Host.Slots(st.Clusters)
+					if !ok {
+						waiting(st.ID, why)
+						rest = append(rest, i)
+						continue
+					}
+					releases[i] = release
 				}
 				start(i)
 			}
@@ -319,6 +366,8 @@ func (b bashRunner) Cleanup(st Step, dir string) {
 type machine struct {
 	maxLoad   float64
 	minMemGB  float64
+	slotsDir  string // the host's cluster slots, slotsDir/1..slotMax ("" for none)
+	slotMax   int
 	lockDir   string // "" for no lock
 	owner     string
 	lockRetry time.Duration
@@ -337,6 +386,38 @@ func (m *machine) Ready() (bool, string) {
 		return false, fmt.Sprintf("%.0f GB of memory available, under %.0f", gb, m.minMemGB)
 	}
 	return true, ""
+}
+
+// Slots makes n of slotsDir/1..slotMax (mkdir is atomic) and writes the
+// owner into each; with fewer than n free it takes none.
+func (m *machine) Slots(n int) (func(), bool, string) {
+	if m.slotsDir == "" {
+		return func() {}, true, ""
+	}
+	var taken []string
+	release := func() {
+		for _, d := range taken {
+			if holder, err := os.ReadFile(filepath.Join(d, "owner")); err == nil && strings.TrimSpace(string(holder)) == m.owner {
+				_ = os.RemoveAll(d)
+			}
+		}
+	}
+	for i := 1; i <= m.slotMax && len(taken) < n; i++ {
+		d := filepath.Join(m.slotsDir, strconv.Itoa(i))
+		if os.Mkdir(d, 0o755) != nil {
+			continue
+		}
+		taken = append(taken, d)
+		if err := os.WriteFile(filepath.Join(d, "owner"), []byte(m.owner+"\n"), 0o644); err != nil {
+			release()
+			return nil, false, fmt.Sprintf("write cluster slot %s: %v", d, err)
+		}
+	}
+	if len(taken) < n {
+		release()
+		return nil, false, fmt.Sprintf("fewer than %d of the host's %d cluster slots in %s are free", n, m.slotMax, m.slotsDir)
+	}
+	return release, true, ""
 }
 
 func memAvailableGB() (float64, bool) {

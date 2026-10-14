@@ -49,7 +49,7 @@ func byID(steps []Step) map[string]Step {
 }
 
 func TestPlan(t *testing.T) {
-	opts := Options{Count: 2, FuzzTime: "1m", ScaleProfiles: []string{"full", "soak"}, ImageBuild: "host"}
+	opts := Options{Count: 2, FuzzTime: "1m", ScaleProfiles: []string{"full", "soak"}, ImageBuild: "host", Floor: 30}
 	steps := Plan(fakeRepo(), opts)
 	ids := byID(steps)
 	assert.Len(t, ids, len(steps), "step ids are unique")
@@ -75,6 +75,17 @@ func TestPlan(t *testing.T) {
 	up := ids["e2e-upgrade-v0100-130"]
 	assert.Equal(t, areaUpgrade, up.Area)
 	assert.Contains(t, up.Script, "COUNT=1\n", "the upgrade suite runs once")
+
+	assert.False(t, ids["fuzz-FuzzA"].Heavy, "a minute of fuzzing needs no lock")
+	assert.True(t, byID(Plan(fakeRepo(), Options{FuzzTime: "5m"}))["fuzz-FuzzA"].Heavy, "five minutes take the heavy-load lock")
+
+	// The supported floor (1.35): no suite and no CRD check below it.
+	floored := byID(Plan(fakeRepo(), Options{Count: 1, FuzzTime: "1m", Floor: 35}))
+	assert.Contains(t, floored, "e2e-upgrade-v0100-135")
+	assert.Contains(t, floored, "e2e-upgrade-v0100-137")
+	assert.NotContains(t, floored, "e2e-upgrade-v0100-130")
+	assert.Contains(t, floored, "chart-crds-135")
+	assert.NotContains(t, floored, "chart-crds-130")
 
 	gh := ids["e2e-github-137"]
 	assert.Contains(t, gh.NotRun, "never uses your gh login")
@@ -127,7 +138,7 @@ func TestPlanOfThisRepo(t *testing.T) {
 	r, err := LoadRepo(root)
 	require.NoError(t, err)
 	require.NotEmpty(t, r.FuzzTargets)
-	steps := Plan(r, Options{Count: 1, FuzzTime: "1m", ScaleProfiles: []string{"full", "soak"}, ImageBuild: "docker"})
+	steps := Plan(r, Options{Count: 1, FuzzTime: "1m", ScaleProfiles: []string{"full", "soak"}, ImageBuild: "docker", Floor: 35})
 	ids := byID(steps)
 	assert.Len(t, ids, len(steps), "step ids are unique")
 	for _, l := range r.Matrix {
@@ -162,6 +173,21 @@ type fakeHost struct {
 	mu     sync.Mutex
 	ready  func() bool
 	locked bool
+	// slots, when set, is how many cluster slots the host has.
+	slots *int
+}
+
+func (h *fakeHost) Slots(n int) (func(), bool, string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.slots == nil {
+		return func() {}, true, ""
+	}
+	if *h.slots < n {
+		return nil, false, "no slot"
+	}
+	*h.slots -= n
+	return func() { h.mu.Lock(); *h.slots += n; h.mu.Unlock() }, true, ""
 }
 
 func (h *fakeHost) Ready() (bool, string) {
@@ -540,4 +566,181 @@ func TestReadCoverage(t *testing.T) {
 	c, err = readCoverage(root, filepath.Join(root, "none.json"))
 	require.NoError(t, err)
 	assert.Empty(t, c.ByResult)
+}
+
+func TestPlanCI(t *testing.T) {
+	steps := Plan(fakeRepo(), Options{Count: 1, FuzzTime: "1m", ScaleProfiles: []string{"full"}, LiveCI: true, Floor: 35})
+	ids := byID(steps)
+	for id, name := range map[string]string{
+		"ci-core-135-1of2":     "core 1/2 on Kubernetes 1.35",
+		"ci-gitlab-137":        "gitlab on Kubernetes 1.37",
+		"ci-upgrade-v0100-130": "upgrade-v0100 on Kubernetes 1.30",
+	} {
+		require.Contains(t, ids, id)
+		assert.Equal(t, name, ids[id].CIJob.Name())
+		assert.Zero(t, ids[id].Clusters, "a CI job takes no local cluster")
+	}
+	assert.Equal(t, areaUpgrade, ids["ci-upgrade-v0100-130"].Area)
+	assert.NotContains(t, ids, "e2e-core-135", "no local live suite")
+	assert.Contains(t, ids, "scale-full", "scale stays local")
+	assert.Contains(t, ids, "upgrade-v0110", "the missing upgrade suite is missing in CI too")
+	assert.Equal(t, []string{"core", "gitlab", "github", "multi-cluster", "upgrade-v0100"}, CISuites(fakeRepo()))
+}
+
+func TestGateRun_Slots(t *testing.T) {
+	slots := 0
+	h := &fakeHost{slots: &slots}
+	r := &fakeRunner{}
+	g := newGate(t, 4, h, r)
+	go func() { time.Sleep(30 * time.Millisecond); h.mu.Lock(); slots = 1; h.mu.Unlock() }()
+	_, err := g.Run(context.Background(), []Step{{ID: "a", Clusters: 1, Script: "x"}, {ID: "b", Clusters: 1, Script: "x"}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, r.maxClusters, "one host slot: one cluster at a time, whatever the budget")
+	assert.Equal(t, 1, slots, "the slot is given back")
+}
+
+func TestGateRun_CIStepsRunTogether(t *testing.T) {
+	r := &fakeRunner{block: make(chan struct{})}
+	var started atomic.Int32
+	r.onStart = func(string) {
+		if started.Add(1) == 3 {
+			close(r.block)
+		}
+	}
+	j := &ciJob{ID: "x", Suite: "core", Minor: "1.37", Shard: "-"}
+	steps := []Step{{ID: "a", CIJob: j}, {ID: "b", CIJob: j}, {ID: "c", CIJob: j}}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := newGate(t, 1, &fakeHost{}, r).Run(ctx, steps)
+	require.NoError(t, err, "the three wait for CI at once (a serial run would block)")
+}
+
+func TestMachineSlots(t *testing.T) {
+	dir := t.TempDir()
+	a := &machine{slotsDir: dir, slotMax: 3, owner: "a"}
+	b := &machine{slotsDir: dir, slotMax: 3, owner: "b"}
+	relA, ok, _ := a.Slots(2)
+	require.True(t, ok)
+	_, ok, why := b.Slots(2)
+	assert.False(t, ok, "one slot left")
+	assert.Contains(t, why, "fewer than 2 of the host's 3 cluster slots")
+	entries, _ := os.ReadDir(dir)
+	assert.Len(t, entries, 2, "a failed take leaves no slot behind")
+	relB, ok, _ := b.Slots(1)
+	require.True(t, ok)
+	owner, err := os.ReadFile(filepath.Join(dir, "3", "owner"))
+	require.NoError(t, err)
+	assert.Equal(t, "b\n", string(owner))
+	// a's slot 2 was cleared by hand and taken by b: a's release leaves it.
+	require.NoError(t, os.RemoveAll(filepath.Join(dir, "2")))
+	relB2, ok, _ := b.Slots(1)
+	require.True(t, ok)
+	relA()
+	entries, _ = os.ReadDir(dir)
+	assert.Len(t, entries, 2, "a gives back its own slot, not the two b holds")
+	relB2()
+	relB()
+	entries, _ = os.ReadDir(dir)
+	assert.Empty(t, entries)
+	none, ok, _ := (&machine{}).Slots(5)
+	assert.True(t, ok, "no slots directory: no limit")
+	none()
+}
+
+// fakeGH answers gh calls from a script of responses keyed by the call.
+type fakeGH struct {
+	mu    sync.Mutex
+	calls []string
+	reply func(call string) ([]byte, error)
+}
+
+func (f *fakeGH) gh(_ context.Context, args ...string) ([]byte, error) {
+	call := strings.Join(args, " ")
+	f.mu.Lock()
+	f.calls = append(f.calls, call)
+	f.mu.Unlock()
+	return f.reply(call)
+}
+
+func (f *fakeGH) called(prefix string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.calls {
+		if strings.HasPrefix(c, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestCIRunner(t *testing.T) {
+	out := t.TempDir()
+	var views atomic.Int32
+	conclusion := "failure"
+	f := &fakeGH{}
+	f.reply = func(call string) ([]byte, error) {
+		switch {
+		case strings.HasPrefix(call, "api repos/o/r/commits/br"):
+			return []byte("abc\n"), nil
+		case strings.HasPrefix(call, "workflow run e2e-live.yml --repo o/r --ref br -f suites=core gitlab -f count=2"):
+			return nil, nil
+		case strings.HasPrefix(call, "run list"):
+			return []byte(`[{"databaseId":7,"headSha":"other","createdAt":"` + time.Now().UTC().Format(time.RFC3339) + `"},
+{"databaseId":9,"headSha":"abc","createdAt":"` + time.Now().UTC().Format(time.RFC3339) + `"}]`), nil
+		case strings.HasPrefix(call, "run view 9"):
+			status := "in_progress"
+			if views.Add(1) > 1 {
+				status = "completed"
+			}
+			return []byte(`{"attempt":2,"jobs":[{"databaseId":55,"name":"core on Kubernetes 1.37","status":"` + status +
+				`","conclusion":"` + conclusion + `","url":"https://x/job/55"}]}`), nil
+		case strings.HasPrefix(call, "run download 9 --repo o/r -n e2e-live-core-137-attempt-2"):
+			return nil, errors.New("no artifact")
+		case strings.HasPrefix(call, "run download 9 --repo o/r -n e2e-live-core-137-attempt-1 -D "):
+			art := strings.Fields(call)[len(strings.Fields(call))-1]
+			require.NoError(t, os.MkdirAll(filepath.Join(art, "kardinal-e2e-core"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(art, "kardinal-e2e-core", "test.json"), []byte(goTestJSON), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(art, "kardinal-e2e-core", "summary.json"), []byte("{}"), 0o644))
+			return nil, nil
+		case strings.HasPrefix(call, "run rerun 9 --repo o/r --job 55"):
+			conclusion = "success"
+			views.Store(0)
+			return nil, nil
+		}
+		return nil, fmt.Errorf("unexpected gh %s", call)
+	}
+	c := &ciRunner{gh: f.gh, repo: "o/r", ref: "br", sha: "abc", out: out, count: 2, suites: []string{"core", "gitlab"},
+		poll: time.Millisecond, log: func(string, ...any) {}}
+	st := Step{ID: "ci-core-137", CIJob: &ciJob{ID: "core-137", Suite: "core", Minor: "1.37", Shard: "-"}}
+	dir := filepath.Join(out, st.ID)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	err := c.Run(context.Background(), st, dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CI job https://x/job/55: failure")
+	assert.FileExists(t, filepath.Join(dir, "e2e", "test.json"), "the attempt-1 artifact, the job's latest")
+	assert.FileExists(t, filepath.Join(out, "ci-run.json"))
+
+	// A later gate on the commit: the same run, no new dispatch, the failed job re-run.
+	c2 := &ciRunner{gh: f.gh, repo: "o/r", ref: "br", sha: "abc", out: out, count: 2, suites: []string{"core", "gitlab"},
+		poll: time.Millisecond, log: func(string, ...any) {}}
+	st.ciRetry = true
+	require.NoError(t, c2.Run(context.Background(), st, dir))
+	assert.Equal(t, 1, f.called("workflow run"), "dispatched once per commit")
+	assert.Equal(t, 1, f.called("run rerun 9 --repo o/r --job 55"))
+
+	// The branch is not at the gate's commit: no dispatch.
+	c3 := &ciRunner{gh: f.gh, repo: "o/r", ref: "br", sha: "def", out: t.TempDir(), suites: []string{"core"},
+		poll: time.Millisecond, log: func(string, ...any) {}}
+	err = c3.Run(context.Background(), st, t.TempDir())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not the gate's commit")
+	assert.Equal(t, 1, f.called("workflow run"))
+}
+
+func TestJobID(t *testing.T) {
+	assert.Equal(t, "core-135-1of3", jobID(MatrixLine{"core", "1.35", "1/3"}))
+	assert.Equal(t, "upgrade-v0100-130", jobID(MatrixLine{"upgrade-v0100", "1.30", "-"}))
+	assert.Equal(t, "core 1/3 on Kubernetes 1.35", ciJob{Suite: "core", Minor: "1.35", Shard: "1/3"}.Name())
 }
