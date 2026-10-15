@@ -194,7 +194,9 @@ an incident is open. While the environment is held:
     - in `Pending` or `Promoting` holds before its next git step, with the message
       `environment prod is held on rollback my-app-rollback-3f9a1c (INC-4521: ...) — release with: kardinal release-hold my-app --env prod`;
     - in `WaitingForMerge` is cancelled as supersession cancels one: its PR is closed with a
-      comment naming the hold, and the step fails with that message;
+      comment naming the hold, and the step fails with that message. A step whose PR has already
+      merged (it may still wait for the SCM to name who merged it) is not cancelled: its change is
+      in git, so it finishes;
     - in `HealthChecking` has already merged, so it finishes. The rollback, a newer version,
       supersedes it.
 - **The rollback is never superseded** by a newer version. `historyLimit` does not delete it, its

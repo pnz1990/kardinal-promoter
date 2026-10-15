@@ -130,3 +130,24 @@ func TestPRMerged_NotFailedByTheDeadlineOrAHold(t *testing.T) {
 		assert.Contains(t, got.Status.Message, "waiting for the SCM to say who merged it")
 	}
 }
+
+// TestPRMerged_AnOldPRsMergeDoesNotStopTheDeadline (#2003 QA): a PRStatus
+// that still describes an older PR (a recreated step opened a new one) says
+// nothing about this step's PR: its merge does not keep the step from
+// failing at its waitForMergeTimeout.
+func TestPRMerged_AnOldPRsMergeDoesNotStopTheDeadline(t *testing.T) {
+	ps, prs, gate := waitingAutoMergeStep()
+	ps.Spec.RequiredGates = nil
+	past := metav1.NewTime(time.Now().Add(-time.Minute))
+	ps.Status.WaitForMergeExpiry = &past
+	prs.Spec.PRNumber, prs.Spec.PRURL = 4, "https://github.com/test/repo/pull/4" // the old PR
+	prs.Status.Open, prs.Status.Merged, prs.Status.MergedVia = false, true, v1alpha1.PRMergedViaWebhook
+	p := makePipeline("nginx-demo")
+	p.Spec.Environments[1].WaitForMergeTimeout = "1h"
+	c := newClient(t, ps, prs, gate, p, makeBundle("bundle-1", "nginx-demo"))
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{}, WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+	reconcileStep(t, r, "step")
+	got := getStep(t, c, "step")
+	assert.Equal(t, "Failed", got.Status.State)
+	assert.Contains(t, got.Status.Message, "wait-for-merge timeout")
+}

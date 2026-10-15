@@ -37,8 +37,9 @@ type AuditEventSpec struct {
 	//               "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
 	//               "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden",
 	//               "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
-	//               "HoldBundleMissing", "BundleRejected", "APIWrite", "FreezeExempted",
-	//               "PRMerged".
+	//               "HoldBundleMissing", "BundleRejected", "APIWrite", "VerdictRecorded",
+	//               "VerdictRevoked", "FreezeExempted", "PipelinePaused", "PipelineResumed",
+	//               "FreezeStarted", "FreezeLifted", "PRMerged".
 	// PRMerged is written by a promotion step when its pull request is merged,
 	// naming who merged it as the SCM API reports it.
 	// ApprovalRecorded and ApprovalRevoked are written by an approval gate
