@@ -50,9 +50,13 @@ const guideChartV090 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version
 //   - the chart's ValidatingAdmissionPolicies refuse no write to the objects
 //     v0.9.0 stored: a label on each Pipeline, Bundle and PolicyGate is
 //     admitted, and no Graph reports a refused write;
-//   - a new Bundle promotes end to end.
+//   - a new Bundle promotes end to end;
+//   - the Bundle that finished under v0.9.0 has its Graph retired by the
+//     new controller: its step is kept in status.retiredSteps, kardinal get
+//     bundles and history still show it Verified, and a rollback to it
+//     deploys its image (#1696).
 //
-// Covers UPG-V090-01, UPG-V090-02.
+// Covers UPG-V090-01, UPG-V090-02, UPG-V090-03.
 func TestUpgradeV090_FromV090(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -221,6 +225,49 @@ func TestUpgradeV090_FromV090(t *testing.T) {
 	e.WaitStepState(t, ns, "promote", b2, "prod", "Verified", promoteTimeout)
 	e.WaitBundlePhase(t, ns, b2, "Verified", time.Minute)
 	a.running(t, "prod", imageV3, "the new Bundle deployed prod")
+
+	// ── Graph retirement across the upgrade (#1696) ─────────────────────
+	// v0.9.0 kept every Graph; this release retires a finished Bundle's
+	// Graph. The delay starts at the new controller's first reconcile of the
+	// Bundle (v0.9.0 never set GraphRetired), so with the chart's default
+	// (graph.retire.verified, an hour) the Graph is still there; the
+	// Pipeline's annotation shortens the delay. Its step lives on in
+	// status.retiredSteps, the CLI still shows it Verified, and a rollback
+	// to it works.
+	gDone, _ := graphOf(bDone)
+	require.NotEmpty(t, gDone, "the v0.9.0 Bundle still has its Graph before the retirement delay is shortened")
+	e.Kubectl(t, ns, "", "annotate", "pipeline", "done", "kardinal.io/graph-retire-after=10s")
+	waitRetired(t, e, ns, bDone, "done")
+	var retired v1alpha1.Bundle
+	u090Get(t, e, ns, bDone, &retired)
+	assert.Equal(t, "Verified", retired.Status.Phase, "the retired v0.9.0 Bundle stays Verified")
+	require.Len(t, retired.Status.RetiredSteps, len(doneSteps))
+	assert.Equal(t, doneSteps[0].Name, retired.Status.RetiredSteps[0].Name, "the record is the step v0.9.0 ran")
+	var row map[string]string
+	for _, r := range framework.ParseTable(e.MustKardinal(t, ns, "get", "bundles", "done")) {
+		if framework.BundleOf(r["VERSION"]) == bDone {
+			row = r
+		}
+	}
+	require.NotNil(t, row, "kardinal get bundles lists the retired v0.9.0 Bundle")
+	assert.Equal(t, "Verified", row["PHASE"])
+	var envs []string
+	for _, r := range framework.ParseTable(e.MustKardinal(t, ns, "history", "done")) {
+		if framework.BundleOf(r["VERSION"]) == bDone {
+			envs = append(envs, r["ENV"])
+		}
+	}
+	assert.Equal(t, []string{"done"}, envs, "kardinal history shows the retired v0.9.0 Bundle's step")
+
+	bDone2 := e.CreateBundle(t, ns, "done", "--image", imageV3)
+	e.WaitBundlePhase(t, ns, bDone2, "Verified", promoteTimeout)
+	a.running(t, "done", imageV3, "a new Bundle deployed done")
+	out := e.MustKardinal(t, ns, "rollback", "done", "--env", "done")
+	m := rbCreated.FindStringSubmatch(out)
+	require.Len(t, m, 3, "kardinal rollback names the Bundle it created:\n%s", out)
+	assert.Equal(t, bDone, m[2], "the rollback target is the retired v0.9.0 Bundle")
+	e.WaitBundlePhase(t, ns, m[1], "Verified", promoteTimeout)
+	a.running(t, "done", imageV2, "the rollback to the v0.9.0 Bundle deployed done")
 }
 
 // u090Get reads ns/name into obj.
