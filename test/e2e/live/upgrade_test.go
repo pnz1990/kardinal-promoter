@@ -378,6 +378,12 @@ func (u *upgrade) deploymentReady(t *testing.T, ns, name string, timeout time.Du
 // election Lease (#1592), <fullname>-<namespace>-leader-election.
 const leaderElectionFlowSchema = "FlowSchema /kardinal-promoter-kardinal-system-leader-election"
 
+// agentDirectoryBinding lets every authenticated user read the agent
+// registry (AgentIdentities and the AgentIndex) that kardinal stamps what it
+// writes from (actors.directory.public, true by default; docs/actors.md). It
+// is the one ClusterRoleBinding the upgrade adds.
+const agentDirectoryBinding = "ClusterRoleBinding /kardinal-promoter-agent-directory-reader"
+
 // kroSystem is the kro-system Namespace.
 func (u *upgrade) kroSystem(t *testing.T) *corev1.Namespace {
 	t.Helper()
@@ -689,20 +695,22 @@ spec:
 	}, removed, "objects only v0.8.1 needed")
 	// The Graph identity and leader election are new in v0.9; past them the
 	// chart only adds admission policies (identity, holds, Graph objects...),
-	// the leader election's API priority (FlowSchema) and ClusterRoles of its
-	// own: no other workload or binding appears
-	// with the upgrade (#1560: listing each policy broke on every feature).
+	// the leader election's API priority (FlowSchema), ClusterRoles of its
+	// own and the agent directory's ClusterRoleBinding (v0.12): no other
+	// workload or binding appears with the upgrade (#1560: listing each policy broke on every feature).
 	assert.Subset(t, added, []string{
 		"ClusterRole /kardinal-promoter-graph-applier", "ClusterRole /kardinal-promoter-graph-reader",
 		"ClusterRole /kardinal-promoter-kro-watch",
 		leaderElectionFlowSchema,
 		"Role kardinal-system/kardinal-promoter-leader-election", "RoleBinding kardinal-system/kardinal-promoter-leader-election",
 		"ValidatingAdmissionPolicy /kardinal-promoter-hold-writes", "ValidatingAdmissionPolicyBinding /kardinal-promoter-hold-writes",
+		agentDirectoryBinding,
 	}, "objects the new chart adds")
 	for _, o := range added {
 		// The leader election Lease's own API priority (#1592): the one
-		// FlowSchema of the chart, by its exact name.
-		ok := o == leaderElectionFlowSchema ||
+		// FlowSchema of the chart, and the agent directory's one
+		// ClusterRoleBinding, each by its exact name.
+		ok := o == leaderElectionFlowSchema || o == agentDirectoryBinding ||
 			strings.HasPrefix(o, "ValidatingAdmissionPolicy /kardinal-promoter-") ||
 			strings.HasPrefix(o, "ValidatingAdmissionPolicyBinding /kardinal-promoter-") ||
 			strings.HasPrefix(o, "ClusterRole /kardinal-promoter-") ||
