@@ -19,7 +19,6 @@ import (
 	"github.com/sigstore/sigstore/pkg/cryptoutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -96,10 +95,14 @@ func TestReceipts_SignedPromotion(t *testing.T) {
 		assert.True(t, sinks[v1alpha1.ReceiptSinkCRD] && sinks[v1alpha1.ReceiptSinkOCI], "%s stored in %+v", env, rc.Status.Stored)
 		assert.Empty(t, rc.OwnerReferences)
 	}
-	var step v1alpha1.PromotionStep
-	require.NoError(t, e.Client.Get(context.Background(), types.NamespacedName{Namespace: a.ns, Name: bundle + "-prod"}, &step))
-	assert.Equal(t, bundle+"-prod", step.Status.Receipt)
-	assert.Nil(t, step.Status.Decision, "the snapshot is cleared once the receipt exists")
+	framework.Eventually(t, time.Minute, "the prod step names its receipt", func(ctx context.Context) (bool, string) {
+		step, ok, err := e.Step(ctx, a.ns, pipelineName, bundle, "prod")
+		if err != nil || !ok {
+			return false, fmt.Sprint(ok, err)
+		}
+		return step.Status.Receipt == bundle+"-prod" && step.Status.Decision == nil,
+			fmt.Sprintf("receipt=%q decision cleared=%v", step.Status.Receipt, step.Status.Decision == nil)
+	})
 
 	out := e.MustKardinal(t, a.ns, "verify-receipt", pipelineName, "prod", "--key", pub,
 		"--require", "HEALTHY,!OVERRIDDEN")
@@ -179,14 +182,13 @@ func TestReceipts_TamperedReceiptFails(t *testing.T) {
 	require.Error(t, err, "a changed payload fails the signature")
 
 	// The admin removes the binding and replaces the receipt.
-	binding := framework.ControllerDeployment + "-receipts"
-	var vapb admissionregistrationv1.ValidatingAdmissionPolicyBinding
-	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Name: binding}, &vapb))
-	saved := vapb.DeepCopy()
-	require.NoError(t, e.Client.Delete(ctx, &vapb))
+	bindings := e.Kube.AdmissionregistrationV1().ValidatingAdmissionPolicyBindings()
+	saved, err := bindings.Get(ctx, framework.ControllerDeployment+"-receipts", metav1.GetOptions{})
+	require.NoError(t, err)
+	require.NoError(t, bindings.Delete(ctx, saved.Name, metav1.DeleteOptions{}))
 	t.Cleanup(func() {
 		saved.ResourceVersion, saved.UID = "", ""
-		_ = e.Client.Create(context.Background(), saved)
+		_, _ = bindings.Create(context.Background(), saved, metav1.CreateOptions{})
 	})
 	signedBundle := rc.Status.Bundle
 	framework.Eventually(t, time.Minute, "the receipt deleted without the policy", func(ctx context.Context) (bool, string) {
