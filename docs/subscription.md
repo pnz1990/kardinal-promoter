@@ -94,6 +94,20 @@ number or a branch is not a commit. An image without one gets no `provenance`, a
 evidence shows `—` for the commit. The digest is in `images[0].digest` only. Versions created
 before v0.12.0 may still hold the digest in `provenance.commitSHA`.
 
+Not every builder records the revision. `docker buildx` with the OCI metadata action does
+(`org.opencontainers.image.revision` is the full commit); ko, Jib and Cloud Native Buildpacks
+do not by default. Set it to the full commit, for example in CI with `$GITHUB_SHA`:
+
+| Builder | How to record the revision |
+|---|---|
+| `docker buildx` | `--label org.opencontainers.image.revision=$GITHUB_SHA` (or `docker/metadata-action`'s labels) |
+| ko | `ko build --image-label org.opencontainers.image.revision=$GITHUB_SHA` |
+| Jib (Maven or Gradle) | `jib.container.labels`, e.g. `-Djib.container.labels=org.opencontainers.image.revision=$GITHUB_SHA` |
+| Paketo buildpacks | the `BP_OCI_REVISION` build environment variable, e.g. `pack build --env BP_OCI_REVISION=$GITHUB_SHA` |
+
+BuildKit's own git labels (`BUILDX_GIT_LABELS`) append `-dirty` to the revision of a build
+from a modified working tree; such a value is not a commit SHA and is not taken.
+
 Version names are lowercased and made DNS-safe (`Build_42` becomes `build-42`) and are
 at most 63 characters. The digest suffix means a re-pushed mutable tag (`latest`,
 `main`) gets a new version rather than colliding with the previous one. A digest that

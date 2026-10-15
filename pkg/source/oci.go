@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -224,7 +225,7 @@ func (s *registrySession) imageRevision(ctx context.Context, digest string) (str
 		return "", err
 	}
 	if r := m.Annotations[revisionKey]; r != "" {
-		return commitOrEmpty(r), nil
+		return commitOrEmpty(ctx, r), nil
 	}
 	if len(m.Manifests) > 0 {
 		child := pickPlatformManifest(m)
@@ -235,7 +236,7 @@ func (s *registrySession) imageRevision(ctx context.Context, digest string) (str
 			return "", err
 		}
 		if r := m.Annotations[revisionKey]; r != "" {
-			return commitOrEmpty(r), nil
+			return commitOrEmpty(ctx, r), nil
 		}
 	}
 	if m.Config.Digest == "" {
@@ -253,19 +254,33 @@ func (s *registrySession) imageRevision(ctx context.Context, digest string) (str
 	if err := json.Unmarshal(body, &cfg); err != nil {
 		return "", fmt.Errorf("decode image config: %w", err)
 	}
-	return commitOrEmpty(cfg.Config.Labels[revisionKey]), nil
+	return commitOrEmpty(ctx, cfg.Config.Labels[revisionKey]), nil
 }
 
 // commitOrEmpty is r, lowercased, when it is a full commit SHA
 // (commitPattern) and not all digits (a build number); else "". Nothing
 // around the hex is trimmed: a value with a prefix, a suffix or a newline is
 // not a commit.
-func commitOrEmpty(r string) string {
+func commitOrEmpty(ctx context.Context, r string) string {
 	c := strings.ToLower(r)
-	if !commitPattern.MatchString(c) || strings.Trim(c, "0123456789") == "" {
+	why := ""
+	switch {
+	case c == "":
 		return ""
+	case !commitPattern.MatchString(c):
+		why = "not a full commit SHA (40 or 64 hex characters, nothing around them)"
+	case strings.Trim(c, "0123456789") == "":
+		why = "all digits, a build number rather than a commit"
+	default:
+		return c
 	}
-	return c
+	shown := r
+	if len(shown) > 80 {
+		shown = shown[:80] + "..."
+	}
+	zerolog.Ctx(ctx).Debug().Str("revision", strconv.Quote(shown)).Str("reason", why).
+		Msg("the image's " + revisionKey + " is not taken for a commit; the version has no provenance commit")
+	return ""
 }
 
 func (w *OCIWatcher) client() *http.Client {

@@ -16,6 +16,7 @@
 package source_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -36,6 +37,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	gossh "golang.org/x/crypto/ssh"
@@ -850,5 +852,26 @@ func TestOCIWatcher_SourceCommit(t *testing.T) {
 			require.NoError(t, err)
 			assert.Empty(t, again.SourceCommit, "not read for an unchanged image")
 		})
+	}
+}
+
+// TestOCIWatcher_RejectedRevisionLogged: a revision that is not taken for a
+// commit is logged at debug, with the value quoted and why, so "why does
+// this version have no commit" can be answered from the log.
+func TestOCIWatcher_RejectedRevisionLogged(t *testing.T) {
+	for _, tc := range []struct{ revision, why string }{
+		{"sha-1a2b3c4", "not a full commit SHA"},
+		{strings.Repeat("2026101501", 4), "all digits"},
+	} {
+		img := testImage{annotation: tc.revision, digest: "sha256:" + strings.Repeat("e", 64), created: "2026-01-01T00:00:00Z"}
+		reg := &testRegistry{name: "org/app", tags: []string{"v2"}, images: map[string]testImage{"v2": img}}
+		srv := reg.start(t)
+		var buf bytes.Buffer
+		ctx := zerolog.New(&buf).Level(zerolog.DebugLevel).WithContext(context.Background())
+		res, err := source.NewOCIWatcher(srv.URL+"/org/app", "").WithHTTPClient(srv.Client()).Watch(ctx, "sha256:old")
+		require.NoError(t, err)
+		assert.Empty(t, res.SourceCommit)
+		assert.Contains(t, buf.String(), tc.why, tc.revision)
+		assert.Contains(t, buf.String(), tc.revision)
 	}
 }
