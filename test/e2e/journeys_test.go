@@ -15,9 +15,16 @@
 
 // Package e2e contains journey tests for kardinal-promoter.
 //
-// The files here (journeys_test.go, promotion_loop_test.go,
-// benchmark_test.go) use fake clients and the real reconciler/CEL code paths;
-// they never contact a cluster and run in plain `go test ./...`.
+// The files here (journeys_test.go, graph_journey_test.go,
+// promotion_loop_test.go, benchmark_test.go) use fake clients and the real
+// reconciler/CEL code paths; they never contact a cluster and run in plain
+// `go test ./...`. Journeys 1 and 2 go through the translator: the Bundle's
+// Graph is built as the controller builds it, and graph_journey_test.go
+// creates its PromotionSteps along the Graph's edges (the step nodes each
+// template reads). It checks the Graph's edges and step templates; the
+// gating itself (a step's upstreamStates resolve only once the upstream is
+// Verified) is kro's, covered by pkg/graph TestBuilder_UpstreamGating and
+// the live suites.
 //
 // The live tests are in test/e2e/live. They carry the `e2e` build tag and run
 // against a kind cluster from hack/e2e/up.sh (test/e2e/README.md).
@@ -96,11 +103,7 @@ func TestJourney1Quickstart(t *testing.T) {
 		Spec: v1alpha1.BundleSpec{
 			Type:     "image",
 			Pipeline: "kardinal-test-app",
-			// No Images: the kustomize-set-image step skips when no images are specified,
-			// allowing the promotion loop to advance in unit tests without requiring kustomize.
-			// In CI with a live cluster, the real image is used via 'kardinal create bundle'.
-			// The real kustomize-set-image behaviour is tested in pkg/steps/steps/steps_test.go.
-			// Reference image for documentation: ghcr.io/pnz1990/kardinal-test-app:sha-abc1234
+			Images:   []v1alpha1.ImageRef{{Repository: "ghcr.io/pnz1990/kardinal-test-app", Tag: "sha-abc1234"}},
 			Provenance: &v1alpha1.BundleProvenance{
 				Author:    "ci-system",
 				CommitSHA: "abc1234def5678",
@@ -108,41 +111,35 @@ func TestJourney1Quickstart(t *testing.T) {
 			},
 		},
 	}
-	steps := []*v1alpha1.PromotionStep{
-		makeJourneyStep("step-test", "kardinal-test-app", "kardinal-test-app-sha-abc1234", "test", "auto"),
-		makeJourneyStep("step-uat", "kardinal-test-app", "kardinal-test-app-sha-abc1234", "uat", "auto"),
-		makeJourneyStep("step-prod", "kardinal-test-app", "kardinal-test-app-sha-abc1234", "prod", "auto"),
-	}
-
 	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(pipeline, bundle, steps[0], steps[1], steps[2]).
+		WithObjects(pipeline, bundle).
 		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
+	git := &journeyGit{envs: []string{"test", "uat", "prod"}}
+	work := t.TempDir()
 	rec := &psrec.Reconciler{
 		Client: c,
 		SCM: &mockSCMForLoop{
 			prURL:    "https://github.com/pnz1990/kardinal-demo/pull/1",
 			prNumber: 1,
 		},
-		GitClient: &mockGitForLoop{},
-		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+		GitClient: git,
+		WorkDirFn: func(p, b string) string { return filepath.Join(work, p, b) },
 	}
 
-	ctx := context.Background()
-
-	// Drive each environment's PromotionStep to Verified.
-	for _, stepName := range []string{"step-test", "step-uat", "step-prod"} {
-		req := ctrl.Request{NamespacedName: types.NamespacedName{Name: stepName, Namespace: "default"}}
-		driveStepToVerified(t, ctx, rec, c, req, stepName)
+	// The translator builds the Bundle's Graph; its PromotionSteps are
+	// created along the Graph's edges (kro's gating is not run here).
+	nodes := translateJourney(t, c, pipeline, bundle)
+	require.Len(t, nodes, 3, "one PromotionStep node per environment")
+	for _, sn := range nodes {
+		assert.Equal(t, "kustomize-set-image", sn.template["spec"].(map[string]interface{})["stepType"],
+			"journey 1: %s sets the Bundle's image", sn.env)
 	}
-
-	// Assert all three environments reached Verified.
-	for _, stepName := range []string{"step-test", "step-uat", "step-prod"} {
-		var ps v1alpha1.PromotionStep
-		require.NoError(t, c.Get(ctx, types.NamespacedName{Name: stepName, Namespace: "default"}, &ps))
-		assert.Equal(t, "Verified", ps.Status.State,
-			"journey 1: %s should be Verified; got %s: %s", stepName, ps.Status.State, ps.Status.Message)
+	assert.Equal(t, "test > uat > prod", joinRounds(runGraph(t, c, rec, nodes, bundle)),
+		"journey 1: the Graph promotes test, then uat, then prod")
+	for _, env := range []string{"test", "uat", "prod"} {
+		assert.Contains(t, git.kustomization(env), "newTag: sha-abc1234", "journey 1: %s's kustomization has the Bundle's tag", env)
 	}
 	t.Log("Journey 1: Quickstart — test → uat → prod all Verified ✅")
 	t.Logf("journey 1: pipeline=kardinal-test-app repo=pnz1990/kardinal-demo image=ghcr.io/pnz1990/kardinal-test-app:sha-abc1234 ✅")
@@ -186,6 +183,7 @@ func TestJourney2MultiClusterFleet(t *testing.T) {
 		Spec: v1alpha1.BundleSpec{
 			Type:     "image",
 			Pipeline: "rollouts-demo",
+			Images:   []v1alpha1.ImageRef{{Repository: "ghcr.io/pnz1990/kardinal-test-app", Tag: "sha-abc1234"}},
 			Provenance: &v1alpha1.BundleProvenance{
 				Author:    "ci-system",
 				CommitSHA: "abc1234def5678",
@@ -194,64 +192,38 @@ func TestJourney2MultiClusterFleet(t *testing.T) {
 		},
 	}
 
-	// Create PromotionSteps for all 4 environments.
-	steps := []*v1alpha1.PromotionStep{
-		makeJourneyStep("step-test", "rollouts-demo", "rollouts-demo-sha-abc1234", "test", "auto"),
-		makeJourneyStep("step-pre-prod", "rollouts-demo", "rollouts-demo-sha-abc1234", "pre-prod", "auto"),
-		makeJourneyStep("step-prod-eu", "rollouts-demo", "rollouts-demo-sha-abc1234", "prod-eu", "auto"),
-		makeJourneyStep("step-prod-us", "rollouts-demo", "rollouts-demo-sha-abc1234", "prod-us", "auto"),
-	}
-
 	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(pipeline, bundle, steps[0], steps[1], steps[2], steps[3]).
+		WithObjects(pipeline, bundle).
 		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
 		Build()
 
+	git := &journeyGit{envs: []string{"test", "pre-prod", "prod-eu", "prod-us"}}
+	work := t.TempDir()
 	rec := &psrec.Reconciler{
 		Client: c,
 		SCM: &mockSCMForLoop{
 			prURL:    "https://github.com/pnz1990/kardinal-demo/pull/2",
 			prNumber: 2,
 		},
-		GitClient: &mockGitForLoop{},
-		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+		GitClient: git,
+		WorkDirFn: func(p, b string) string { return filepath.Join(work, p, b) },
 	}
 
-	ctx := context.Background()
-
-	// Drive sequential environments first: test → pre-prod.
-	for _, stepName := range []string{"step-test", "step-pre-prod"} {
-		req := ctrl.Request{NamespacedName: types.NamespacedName{Name: stepName, Namespace: "default"}}
-		driveStepToVerified(t, ctx, rec, c, req, stepName)
-	}
-
-	// Drive prod-eu and prod-us in parallel (interleaved reconcile calls
-	// simulating concurrent fan-out from the dependsOn Graph edge).
-	euReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod-eu", Namespace: "default"}}
-	usReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod-us", Namespace: "default"}}
-	for i := 0; i < 30; i++ {
-		_, errEU := rec.Reconcile(ctx, euReq)
-		require.NoError(t, errEU, "prod-eu: reconcile iteration %d", i)
-		_, errUS := rec.Reconcile(ctx, usReq)
-		require.NoError(t, errUS, "prod-us: reconcile iteration %d", i)
-
-		var eu, us v1alpha1.PromotionStep
-		require.NoError(t, c.Get(ctx, euReq.NamespacedName, &eu))
-		require.NoError(t, c.Get(ctx, usReq.NamespacedName, &us))
-		t.Logf("parallel iteration %d: prod-eu=%s prod-us=%s", i, eu.Status.State, us.Status.State)
-		if (eu.Status.State == "Verified" || eu.Status.State == "Failed") &&
-			(us.Status.State == "Verified" || us.Status.State == "Failed") {
-			break
+	// The Graph's dependsOn edges: prod-eu and prod-us both wait for
+	// pre-prod only, so they start together once it is Verified.
+	nodes := translateJourney(t, c, pipeline, bundle)
+	upstream := map[string][]string{}
+	for _, sn := range nodes {
+		for _, up := range sn.upstream {
+			upstream[sn.env] = append(upstream[sn.env], nodes[up].env)
 		}
-		time.Sleep(1 * time.Millisecond)
 	}
-
-	// Assert all 4 environments reached Verified.
-	for _, stepName := range []string{"step-test", "step-pre-prod", "step-prod-eu", "step-prod-us"} {
-		var ps v1alpha1.PromotionStep
-		require.NoError(t, c.Get(ctx, types.NamespacedName{Name: stepName, Namespace: "default"}, &ps))
-		assert.Equal(t, "Verified", ps.Status.State,
-			"journey 2: %s should be Verified; got %s: %s", stepName, ps.Status.State, ps.Status.Message)
+	assert.Equal(t, map[string][]string{"pre-prod": {"test"}, "prod-eu": {"pre-prod"}, "prod-us": {"pre-prod"}}, upstream,
+		"journey 2: the Graph's edges")
+	assert.Equal(t, "test > pre-prod > prod-eu,prod-us", joinRounds(runGraph(t, c, rec, nodes, bundle)),
+		"journey 2: prod-eu and prod-us fan out from pre-prod")
+	for _, env := range git.envs {
+		assert.Contains(t, git.kustomization(env), "newTag: sha-abc1234", "journey 2: %s's kustomization has the Bundle's tag", env)
 	}
 	t.Log("Journey 2: Multi-cluster fleet — test → pre-prod → [prod-eu, prod-us] all Verified ✅")
 }
@@ -260,7 +232,7 @@ func TestJourney2MultiClusterFleet(t *testing.T) {
 //
 // Tests the PolicyGate reconciler evaluating:
 //   - no-weekend-deploys: !schedule.isWeekend
-//   - business-hours-only: schedule.hour >= 9 && schedule.hour <= 17
+//   - business-hours-only: schedule.hour >= 9 && schedule.hour < 17
 //
 // Uses the real CEL evaluator and PolicyGate reconciler with a fake Kubernetes client.
 func TestJourney3PolicyGovernance(t *testing.T) {
@@ -329,6 +301,34 @@ func TestJourney3PolicyGovernance(t *testing.T) {
 		"journey 3: no-weekend-deploys must pass on Tuesday; got ready=%v reason=%s",
 		gate2.Status.Ready, gate2.Status.Reason)
 	t.Log("journey 3: Tuesday → PASS ✅")
+
+	// ── Test: business-hours-only, through the reconciler ───────────────────
+	for _, tc := range []struct {
+		at    time.Time
+		ready bool
+	}{
+		{time.Date(2026, 4, 14, 8, 59, 0, 0, time.UTC), false},
+		{time.Date(2026, 4, 14, 9, 0, 0, 0, time.UTC), true},
+		{time.Date(2026, 4, 14, 16, 59, 0, 0, time.UTC), true},
+		{time.Date(2026, 4, 14, 17, 0, 0, 0, time.UTC), false},
+	} {
+		hours := weekendGate.DeepCopy()
+		hours.Name = "business-hours-only"
+		hours.Spec.Expression = "schedule.hour >= 9 && schedule.hour < 17"
+		hours.Spec.Message = "Production deployments only between 09:00 and 17:00 UTC"
+		ch := fake.NewClientBuilder().WithScheme(s).WithObjects(bundle, hours).
+			WithStatusSubresource(&v1alpha1.PolicyGate{}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
+			Build()
+		rh, err := pgrec.NewReconciler(ch)
+		require.NoError(t, err)
+		rh.NowFn = func() time.Time { return tc.at }
+		key := types.NamespacedName{Name: hours.Name, Namespace: "default"}
+		_, err = rh.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+		require.NoError(t, err)
+		var got v1alpha1.PolicyGate
+		require.NoError(t, ch.Get(context.Background(), key, &got))
+		assert.Equal(t, tc.ready, got.Status.Ready, "journey 3: business-hours-only at %s: %s", tc.at.Format("15:04"), got.Status.Reason)
+	}
 
 	// ── Test: kardinal policy simulate equivalent ─────────────────────────────
 	// We test the CEL evaluator directly (simulate logic).
@@ -707,8 +707,6 @@ spec:
 
 	t.Log("Journey 5: CLI — version, policy simulate, policy test all verified ✅")
 }
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 func makeJourneyStep(name, pipeline, bundle, env, stepType string) *v1alpha1.PromotionStep {
 	return &v1alpha1.PromotionStep{

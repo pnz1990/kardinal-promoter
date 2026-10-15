@@ -646,8 +646,10 @@ jobs:
       - name: Build the CLI for TestJourney5
         run: make build-cli
       - name: Run journey tests (fake client, no cluster)
-        # TestJourney*: real reconcilers against a fake Kubernetes client; they
-        # do not go through the translator or the kro Graph.
+        # TestJourney*: real reconcilers against a fake Kubernetes client.
+        # TestJourney1 and 2 build the Bundle's Graph with the translator and
+        # create its PromotionSteps along the Graph's edges; kro's gating runs
+        # in the live tests.
         # TestJourney5 runs bin/kardinal, built above.
         # TestPromotionLoop_*: promotion loop unit tests.
         # The live tests (test/e2e/live) are behind the e2e build tag and run

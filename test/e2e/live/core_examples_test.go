@@ -182,7 +182,8 @@ images:
 // ApplicationSet's kustomize namespace override moves each environment into
 // its own kardinal-test-app-<env> namespace, so nothing lands in default.
 //
-// The first Bundle promotes test and uat automatically. At prod the
+// The first Bundle promotes test and uat automatically, in the order its
+// Graph gives: uat's PromotionStep is created only once test is Verified. At prod the
 // require-uat-soak gate blocks with its message and the 30-minute
 // expression, kardinal explain shows it as Block, and no-weekend-deploys
 // passes on a weekday and blocks with its message on a weekend (UTC). No prod
@@ -261,10 +262,16 @@ func TestCore_QuickstartExample(t *testing.T) {
 	applyExamplePipeline(t, e, exampleManifest(t, "quickstart/pipeline.yaml"), ns, a.repo, nil)
 
 	first := e.CreateBundle(t, ns, pipeline, "--image", imageV2)
+	verified := map[string]*v1alpha1.PromotionStep{}
 	for _, env := range []string{"test", "uat"} {
-		e.WaitStepState(t, ns, pipeline, first, env, "Verified", promoteTimeout)
+		verified[env] = e.WaitStepState(t, ns, pipeline, first, env, "Verified", promoteTimeout)
 		e.WaitDeploymentImage(t, workloadNS(env), pipeline, imageV2, syncTimeout)
 	}
+	// The Bundle's Graph creates each environment's PromotionStep in DAG
+	// order: uat's only once test is Verified (#1291).
+	testDone := upstreamStatus(t, e, ns, first, "test")
+	require.NotNil(t, testDone.HealthCheckedAt, "test's health check time")
+	startedAfter(t, verified["uat"], testDone.HealthCheckedAt.Time, "the Graph creates uat once test is Verified")
 	soak := e.WaitGate(t, ns, first, "prod", "require-uat-soak", gateTimeout, "blocked by the 30-minute soak",
 		func(g *v1alpha1.PolicyGate) bool {
 			return g.Status.LastEvaluatedAt != nil && !g.Status.Ready && strings.HasPrefix(g.Status.Reason, soakMsg+" (")
