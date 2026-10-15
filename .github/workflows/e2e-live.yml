@@ -16,7 +16,8 @@ name: E2E live
 # found the next morning (#1594-#1601 sat on main for days); weekly, repeating
 # every test three times to find flakes (the upgrade test once: it upgrades
 # its cluster); and on a manual dispatch (gh workflow run e2e-live.yml --ref
-# <branch>). Only the github job gets a secret, DEMO_GITHUB_TOKEN, in its
+# <branch>). Only the github job gets a secret, DEMO_GITHUB_TOKEN (from the
+# e2e-github environment: main and v* tags only), in its
 # setup step.
 #
 # The "e2e live" job passes when every job passed and the coverage proof
@@ -138,6 +139,11 @@ jobs:
     name: "${{ startsWith(matrix.id, 'sample-') && format('{0}: ', matrix.id) || '' }}${{ matrix.suite }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }} on Kubernetes ${{ matrix.k8s }}${{ matrix.count && format(' (COUNT={0})', matrix.count) || '' }}"
     needs: image
     runs-on: ubuntu-latest
+    # The github job's token, DEMO_GITHUB_TOKEN, is a secret of the
+    # e2e-github environment, which only main and v* tags may deploy to: a
+    # dispatch on another branch cannot read it, and its github job fails at
+    # the environment's branch check. Every other job uses no environment.
+    environment: ${{ matrix.suite == 'github' && 'e2e-github' || '' }}
     # The weekly run, and the sample's core slice (matrix.count), repeat
     # every test three times. The scale suite runs once (its ci profile
     # takes about an hour).

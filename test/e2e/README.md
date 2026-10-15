@@ -68,7 +68,11 @@ once, to catch a regression in a suite pull requests don't run), weekly
 (repeating every test three times to find flakes; the upgrade test once), and
 when dispatched
 (`gh workflow run e2e-live.yml --ref <branch>`; `-f count=N` repeats each
-test). Only its `github` job gets the `DEMO_GITHUB_TOKEN` secret. Its
+test). Only its `github` job gets the `DEMO_GITHUB_TOKEN` secret, from the
+`e2e-github` environment, which only `main` and `v*` tags may use: a dispatch
+on any other branch runs every suite but `github`, whose job fails at the
+environment's branch check. Run the github suite from main, or locally with
+your own token. Its
 `e2e live` job passes when every job passed and the coverage proof holds.
 After a scheduled run its `report` job writes a per-job summary and opens an
 issue titled "e2e live failed on main (nightly|weekly ...)" when a job failed,
