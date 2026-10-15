@@ -178,10 +178,11 @@ func renderedBranchKustomize(t *testing.T, shape string) {
 	a.running(t, "test", v2, "test runs v2 again")
 
 	// Drift: someone pushes to env/test directly.
-	_, err = gitserver.CommitFiles(ctx, e.Git, a.repo, a.renderedBranch("test"), "", "hotfix by hand",
+	// The hotfix commit is the branch head: reading the head back can lag on
+	// GitHub, which listed the commit before the hotfix (#1967).
+	before, err := gitserver.CommitFiles(ctx, e.Git, a.repo, a.renderedBranch("test"), "", "hotfix by hand",
 		map[string][]byte{deployment("test"): []byte("edited by hand\n")})
 	require.NoError(t, err)
-	before := headSHA(t, e, a.renderedBranch("test"), a.repo)
 	b4 := e.CreateBundle(t, a.ns, pipelineName, "--image", v3)
 	ps4 := e.WaitStepState(t, a.ns, pipelineName, b4, "test", "Failed", promoteTimeout)
 	assert.Contains(t, ps4.Status.Message, fmt.Sprintf("rendered branch %s was changed outside kardinal: %s changed", a.renderedBranch("test"), deployment("test")))
