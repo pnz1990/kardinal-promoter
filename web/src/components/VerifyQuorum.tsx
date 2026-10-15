@@ -5,10 +5,16 @@
 // (docs/agentic/verify-with-agents.md): one pip per passing vote the gate
 // needs, filled for each counted pass; every verdict with its verifier,
 // result, run, whether it counted (and why not), summary, findings and
-// evidence link; and the kardinal verify command. It uses ApprovalQuorum's
-// styles: the two are the same kind of evidence.
+// evidence link; and the kardinal verify command. The verifier is an
+// ActorBadge and the result a chip; an inconclusive one says what it does
+// (#1908). It uses ApprovalQuorum's styles: the two are the same kind of
+// evidence.
 
 import type { GateVerdict, GateVerify } from '../types'
+import { actorOfRef } from '../actor'
+import { ActorBadge } from '../ui/ActorBadge'
+import { StatusChip } from '../ui/Chips'
+import { verdictChip, verifierRule, verifyState, verifySummary } from './verifyModel'
 import CopyButton from './CopyButton'
 import { formatRelativeAge } from './approvalAge'
 import '../styles/ApprovalQuorum.css'
@@ -23,41 +29,24 @@ interface Props {
   now?: number
 }
 
-/** The gate's state from its counts (the reason line is the gate's). */
-export function verifyState(v: GateVerify): 'verified' | 'failed' | 'waiting' {
-  if (v.failed > (v.maxFailures ?? 0)) return 'failed'
-  if (v.passed >= v.required) return 'verified'
-  return 'waiting'
-}
-
-/** What the verdicts amount to, in words. */
-export function verifySummary(v: GateVerify): string {
-  switch (verifyState(v)) {
-    case 'failed': return `Failed (${v.failed} failing ${v.failed === 1 ? 'verdict' : 'verdicts'})`
-    case 'verified': return `Verified (${v.passed} of ${v.required})`
-  }
-  return `${v.passed} of ${v.required} ${v.required === 1 ? 'verdict' : 'verdicts'} for ${v.check}`
-}
-
-/** Who may verify, in words. */
-export function verifierRule(v: GateVerify): string {
-  const agents = v.allowedAgents?.length ? `agents ${v.allowedAgents.join(', ')}` : 'no agents'
-  const runs = v.template ? `; runs ${v.template} in the cluster` : ''
-  return `${v.check} in ${v.environment}, from ${agents} and the people allowed${runs}; inconclusive: ${v.onInconclusive}`
-}
-
-function VerdictRow({ d, now }: { d: GateVerdict; now: number }) {
+function VerdictRow({ d, now, onInconclusive }: { d: GateVerdict; now: number; onInconclusive: string }) {
   const age = d.createdAt ? formatRelativeAge(d.createdAt, now) : ''
+  const who = actorOfRef(d.verifierActor)
+  const chip = verdictChip(d.result, onInconclusive)
+  const findings = d.findings
+    ? `${d.findings} ${d.findings === 1 ? 'finding' : 'findings'}${d.highFindings ? `, ${d.highFindings} high` : ''}`
+    : ''
   return (
     <li className="approval-decision" data-decision={d.result} data-counted={d.counted}>
-      <span className="approval-decision__user">{d.verifier}</span>
-      <span className="approval-decision__verb">{d.result}</span>
+      {who ? <ActorBadge actor={who} className="approval-decision__user" /> : <span className="approval-decision__user">{d.verifier}</span>}
+      <StatusChip compact tone={chip.tone} label={chip.label} glyph={chip.glyph} />
       {d.run ? <span className="approval-decision__age">run {d.run}, attempt {d.attempt ?? 1}</span> : null}
       {age && <span className="approval-decision__age">{age}</span>}
       {!d.counted && d.reason && <span className="approval-decision__why">{d.reason}</span>}
-      {d.findings ? <span className="approval-decision__why">{d.findings} {d.findings === 1 ? 'finding' : 'findings'}</span> : null}
+      {findings && <span className="approval-decision__why" data-high={d.highFindings ? true : undefined}>{findings}</span>}
       {d.evidenceURL && /^https?:\/\//.test(d.evidenceURL) && (
-        <a className="approval-decision__why" href={d.evidenceURL} target="_blank" rel="noreferrer noopener">evidence</a>
+        <a className="approval-decision__why" href={d.evidenceURL} target="_blank" rel="noreferrer noopener"
+          aria-label={`Evidence from ${who?.name ?? d.verifier} (opens in a new tab)`}>evidence</a>
       )}
       {d.summary && <q className="approval-decision__comment">{d.summary}</q>}
     </li>
@@ -91,7 +80,7 @@ export function VerifyQuorum({ verify: v, pipeline, namespace, now = Date.now() 
       <div className="approval-quorum__rule">{verifierRule(v)}</div>
       {verdicts.length > 0 ? (
         <ul className="approval-quorum__decisions" aria-label="Verdicts">
-          {verdicts.map(d => <VerdictRow key={d.name} d={d} now={now} />)}
+          {verdicts.map(d => <VerdictRow key={d.name} d={d} now={now} onInconclusive={v.onInconclusive} />)}
         </ul>
       ) : (
         <div className="approval-quorum__none">No verdicts yet.</div>

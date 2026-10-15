@@ -41,9 +41,7 @@
 .approval-decision__user { font-family: var(--k-font-mono); }
 .approval-decision[data-decision='approve'][data-counted='true'] .approval-decision__verb { color: var(--color-success); }
 .approval-decision[data-decision='reject'][data-counted='true'] .approval-decision__verb { color: var(--color-error); }
-/* Verdicts (VerifyQuorum) share the rows: pass reads as approve, fail as reject. */
-.approval-decision[data-decision='pass'][data-counted='true'] .approval-decision__verb { color: var(--color-success); }
-.approval-decision[data-decision='fail'][data-counted='true'] .approval-decision__verb { color: var(--color-error); }
+/* Verdicts (VerifyQuorum) share the rows; their result is a StatusChip. */
 .approval-decision[data-counted='false'] { color: var(--color-text-muted); }
 .approval-decision__age, .approval-decision__why { color: var(--color-text-muted); }
 .approval-decision__comment { color: var(--color-text-muted); font-style: italic; flex-basis: 100%; padding-left: 0.5rem; }

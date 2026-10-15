@@ -162,9 +162,11 @@ type uiDeployed struct {
 // API's actorText gives.
 type uiActorRef struct {
 	// Kind is human, agent, bot or controller.
-	Kind    string `json:"kind"`
-	Agent   string `json:"agent,omitempty"`
-	Sponsor string `json:"sponsor,omitempty"`
+	Kind string `json:"kind"`
+	// Principal is the username the API server authenticated.
+	Principal string `json:"principal,omitempty"`
+	Agent     string `json:"agent,omitempty"`
+	Sponsor   string `json:"sponsor,omitempty"`
 	// Text is the actor as one sentence ("agent fixer for alice").
 	Text string `json:"text"`
 }
@@ -175,8 +177,12 @@ func actorRefOf(b *v1alpha1.Bundle) *uiActorRef {
 	if b == nil || b.Spec.Actor == nil {
 		return nil
 	}
-	a := *b.Spec.Actor
-	return &uiActorRef{Kind: a.Kind, Agent: a.Agent, Sponsor: a.Sponsor, Text: actor.Describe(a)}
+	return actorRef(*b.Spec.Actor)
+}
+
+// actorRef is a in short.
+func actorRef(a v1alpha1.Actor) *uiActorRef {
+	return &uiActorRef{Kind: a.Kind, Principal: a.Principal, Agent: a.Agent, Sponsor: a.Sponsor, Text: actor.Describe(a)}
 }
 
 // pick returns pointers to the steps at idx.
@@ -544,7 +550,12 @@ type uiGateVerdict struct {
 	Summary     string `json:"summary,omitempty"`
 	EvidenceURL string `json:"evidenceURL,omitempty"`
 	Findings    int    `json:"findings,omitempty"`
-	CreatedAt   string `json:"createdAt,omitempty"`
+	// HighFindings are the findings of high severity among Findings.
+	HighFindings int    `json:"highFindings,omitempty"`
+	CreatedAt    string `json:"createdAt,omitempty"`
+	// VerifierActor is who wrote the verdict, in short, for the UI's actor
+	// badge (from the gate's copy of the Verdict); absent when not known.
+	VerifierActor *uiActorRef `json:"verifierActor,omitempty"`
 }
 
 // gateVerify is the uiGateVerify of g, or nil without spec.verify.
@@ -558,9 +569,19 @@ func gateVerify(g *v1alpha1.PolicyGate) *uiGateVerify {
 	if p.Run != nil {
 		out.Template = p.Run.Template
 	}
+	copies := make(map[string]*v1alpha1.GateVerdict, len(g.Spec.Verdicts))
+	for i := range g.Spec.Verdicts {
+		copies[g.Spec.Verdicts[i].Name] = &g.Spec.Verdicts[i]
+	}
 	for _, v := range g.Status.Verdicts {
 		d := uiGateVerdict{Name: v.Name, Verifier: v.Verifier, Result: v.Result, Counted: v.Counted, Reason: v.Reason,
 			Run: v.Run, Attempt: v.Attempt, Summary: v.Summary, EvidenceURL: v.EvidenceURL, Findings: v.Findings}
+		if c := copies[v.Name]; c != nil {
+			d.HighFindings = c.HighFindings
+			if a := lifecycle.VerifierActor(*c); a.Kind != v1alpha1.ActorUnknown {
+				d.VerifierActor = actorRef(a)
+			}
+		}
 		if v.CreatedAt != nil {
 			d.CreatedAt = v.CreatedAt.UTC().Format(time.RFC3339)
 		}

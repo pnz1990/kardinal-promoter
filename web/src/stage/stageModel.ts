@@ -8,11 +8,12 @@
 // display-state table (displayStates.gen.ts), never from raw API values.
 
 import { displayState, held as heldState, heldByGate, type DisplayState } from '../displayStates.gen'
+import { verifyState } from '../components/verifyModel'
 import type { Bundle, EnvironmentNode, FailedVersion, GraphEdge, GraphNode, Pipeline, PolicyGate, PromotionStep } from '../types'
 
 /** One reason the environment is not moving, most urgent first. */
 export interface WaitReason {
-  kind: 'paused' | 'held' | 'gate' | 'approval' | 'pr' | 'upstream' | 'failed'
+  kind: 'paused' | 'held' | 'gate' | 'approval' | 'verify' | 'pr' | 'upstream' | 'failed'
   /** One sentence a person can act on. */
   title: string
   /** The sentence's tooltip: the Bundle name behind a version it names. */
@@ -23,7 +24,7 @@ export interface WaitReason {
   evaluatedAt?: string
   /** The action that resolves it, when the drawer offers one. */
   next?: StageActionKind
-  /** The gate behind a gate or approval reason. */
+  /** The gate behind a gate, approval or verify reason. */
   gate?: PolicyGate
   /** The PR behind a pr reason. */
   prURL?: string
@@ -54,10 +55,16 @@ export function awaitingQuorum(g: PolicyGate): boolean {
   return !!g.approval && !g.approval.rejected && g.approval.approved < g.approval.required
 }
 
-/** The state to show for a gate: an approval gate collecting its quorum is
- *  waiting on people, not blocked by a rule. */
+/** Whether g is a verify gate still collecting its verdicts (not failed). */
+export function awaitingVerdicts(g: PolicyGate): boolean {
+  return !!g.verify && verifyState(g.verify) === 'waiting'
+}
+
+/** The state to show for a gate: an approval gate collecting its quorum, or a
+ *  verify gate its verdicts, is waiting on verifiers, not blocked by a rule. */
 export function gateDisplay(g: PolicyGate): DisplayState {
   if (g.holding && awaitingQuorum(g)) return { ...displayState('gate', 'Waiting'), label: 'Waiting for approval' }
+  if (g.holding && awaitingVerdicts(g)) return { ...displayState('gate', 'Waiting'), label: 'Waiting for verdicts' }
   return displayState('gate', g.state)
 }
 
@@ -183,6 +190,12 @@ export function stageView(input: StageInput): StageView {
       why.push({ kind: 'approval', gate: g, evaluatedAt: g.lastEvaluatedAt, next: 'approve', detail: g.reason,
         title: a.rejected ? `Rejected in ${gateLabel(g)}: a counted reject holds it.`
           : `Needs ${missing} more approval${missing === 1 ? '' : 's'} (${a.approved} of ${a.required}) in ${gateLabel(g)}.` })
+    } else if (g.verify) {
+      const v = g.verify
+      const missing = Math.max(0, v.required - v.passed)
+      why.push({ kind: 'verify', gate: g, evaluatedAt: g.lastEvaluatedAt, next: 'override', detail: g.reason,
+        title: verifyState(v) === 'failed' ? `Verification ${v.check} failed in ${gateLabel(g)}: ${v.failed} failing verdict${v.failed === 1 ? '' : 's'}.`
+          : `Needs ${missing} more passing verdict${missing === 1 ? '' : 's'} (${v.passed} of ${v.required}) for ${v.check} in ${gateLabel(g)}.` })
     } else {
       why.push({ kind: 'gate', gate: g, evaluatedAt: g.lastEvaluatedAt, next: 'override', detail: g.reason,
         title: `Held by gate ${gateLabel(g)}.` })
@@ -212,10 +225,12 @@ export function stageView(input: StageInput): StageView {
   let state = displayState('step', stepState)
   if (hold) state = heldState(stepState)
   else if (blocking.length > 0) {
-    // A CEL gate blocks; an approval gate collecting its quorum waits on people.
-    const cel = blocking.find(g => !awaitingQuorum(g))
+    // A CEL gate blocks; an approval gate collecting its quorum, or a verify
+    // gate its verdicts, waits on its verifiers.
+    const cel = blocking.find(g => !awaitingQuorum(g) && !awaitingVerdicts(g))
+    const what = awaitingQuorum(blocking[0]) ? 'approval' : 'verdicts'
     state = cel ? heldByGate(stepState, gateLabel(cel))
-      : { ...displayState('gate', 'Waiting'), value: stepState, label: `Waiting for approval in ${gateLabel(blocking[0])}` }
+      : { ...displayState('gate', 'Waiting'), value: stepState, label: `Waiting for ${what} in ${gateLabel(blocking[0])}` }
   }
 
   const actions = new Set<StageActionKind>()

@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0
 
 import { describe, expect, it } from 'vitest'
-import { stageView, rollbackChoices, type StageInput } from './stageModel'
+import { gateDisplay, stageView, rollbackChoices, type StageInput } from './stageModel'
 import type { Bundle, Pipeline, PolicyGate, PromotionStep } from '../types'
 
 const pipeline = (over: Partial<Pipeline> = {}): Pipeline => ({
@@ -44,6 +44,24 @@ describe('stageView', () => {
     expect(v.why[0]).toMatchObject({ kind: 'approval', title: 'Needs 1 more approval (1 of 2) in two-approvers.', next: 'approve' })
     expect(v.actions.has('approve')).toBe(true)
     expect(v.actions.has('reject')).toBe(true)
+  })
+
+  it('a verify gate: the passing verdicts still missing, waiting on its verifiers; failed blocks (#1908)', () => {
+    const verify = { check: 'exploratory-qa', environment: 'uat', required: 2, onInconclusive: 'hold', passed: 1, failed: 0 }
+    const g = gate({ name: 'qa', verify })
+    const v = stageView(input({ gates: [g] }))
+    expect(v.why[0]).toMatchObject({ kind: 'verify', title: 'Needs 1 more passing verdict (1 of 2) for exploratory-qa in qa.', next: 'override' })
+    expect(v.state.label).toBe('Waiting for verdicts in qa')
+    expect(gateDisplay(g).label).toBe('Waiting for verdicts')
+    expect(v.actions.has('override')).toBe(true)
+    expect(v.actions.has('approve')).toBe(false)
+    const failed = gate({ name: 'qa', verify: { ...verify, failed: 2, maxFailures: 1 } })
+    expect(stageView(input({ gates: [failed] })).why[0].title).toBe('Verification exploratory-qa failed in qa: 2 failing verdicts.')
+    expect(stageView(input({ gates: [failed] })).state.label).toBe('Held by gate qa')
+    // An approval gate waiting first names what it waits for.
+    const both = stageView(input({ gates: [gate({ name: 'two', approval: { required: 2, approved: 1, decisions: [] } }), g] }))
+    expect(both.why.map(w => w.kind)).toEqual(['approval', 'verify'])
+    expect(both.state.label).toBe('Waiting for approval in two')
   })
 
   it('paused and held come before the gates; release and resume are offered', () => {

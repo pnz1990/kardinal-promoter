@@ -88,8 +88,33 @@ func TestPipelineListResponse_Actors(t *testing.T) {
 	got := pipelineListResponse([]v1alpha1.Pipeline{p}, []v1alpha1.Bundle{b1, b2},
 		[]v1alpha1.PromotionStep{step("web-1", "prod"), step("web-2", "test")}, nil, time.Now(), nil)
 	require.Len(t, got, 1)
-	want := &uiActorRef{Kind: "agent", Agent: "fixer", Sponsor: "alice", Text: "agent fixer for alice"}
+	want := &uiActorRef{Kind: "agent", Principal: "system:serviceaccount:ci:fixer", Agent: "fixer", Sponsor: "alice", Text: "agent fixer for alice"}
 	assert.Equal(t, want, got[0].ActiveBundleActor)
 	assert.Equal(t, want, got[0].Deployed["test"].Actor)
 	assert.Nil(t, got[0].Deployed["prod"].Actor, "a Bundle without an actor stamp")
+}
+
+// TestGateVerify_VerifierActor (#1908): each verdict of a verify gate carries
+// its writer in short, from the gate's copy of the Verdict, and its high
+// findings; a copy without an actor stamp (a v0.11-style writer) has none.
+func TestGateVerify_VerifierActor(t *testing.T) {
+	g := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "qa", Namespace: "team"},
+		Spec: v1alpha1.PolicyGateSpec{Verify: &v1alpha1.GateVerifyPolicy{Check: "explore", Environment: "uat", Required: 2},
+			Verdicts: []v1alpha1.GateVerdict{
+				{Name: "v1", Result: v1alpha1.VerdictPass, By: "system:serviceaccount:agents:qa", Findings: 3, HighFindings: 1,
+					Actor: &v1alpha1.Actor{Kind: v1alpha1.ActorAgent, Principal: "system:serviceaccount:agents:qa", Agent: "qa", Sponsor: "bob"}},
+				{Name: "v2", Result: "inconclusive", By: "carol"},
+			}},
+		Status: v1alpha1.PolicyGateStatus{Verdicts: []v1alpha1.GateVerdictStatus{
+			{Name: "v1", Verifier: "agent qa for bob", Result: v1alpha1.VerdictPass, Counted: true, Findings: 3},
+			{Name: "v2", Verifier: "carol", Result: "inconclusive", Counted: false, Reason: "inconclusive: holds"},
+		}}}
+	v := gateVerify(g)
+	require.NotNil(t, v)
+	require.Len(t, v.Verdicts, 2)
+	assert.Equal(t, &uiActorRef{Kind: "agent", Principal: "system:serviceaccount:agents:qa", Agent: "qa", Sponsor: "bob", Text: "agent qa for bob"},
+		v.Verdicts[0].VerifierActor)
+	assert.Equal(t, 1, v.Verdicts[0].HighFindings)
+	assert.Nil(t, v.Verdicts[1].VerifierActor, "no actor stamp on the copy")
+	assert.Equal(t, 1, v.Passed)
 }
