@@ -224,10 +224,24 @@ comment, `Covers STEP-AUTO-01, SCM-CLOSED-01.`, and only for what it fully
 asserts. `go test ./test/hack -run TestE2ECoverage` fails when the file and
 the tests disagree, when a live test claims no row, when no suite runs a live
 test, and when a row's `suite` (a suite in `hack/e2e/up.sh`, or `unit` for a
-contract row) runs none of its tests. It also fails when a `source` ref is
-not a repo path, `path:N` or `path:N-M` (the changelog: `docs/changelog.md#<entry title or heading>@<release>`, bare for [Unreleased], never by line), names lines
-past the end of its file, or starts on a blank line, a bare `---` or a markdown table
-separator. Only live tests cover live rows;
+contract row) runs none of its tests.
+
+A row's `source` names where the behavior is documented and implemented:
+refs separated by `; `, each a repo path or `path#anchor`. An anchor is a Go
+declaration of a `.go` file (`Reconcile`, `Reconciler.Reconcile`, a type, a
+var or const), a heading of a `.md` file, or else text that appears on exactly
+one line of the file. The changelog is cited as
+`docs/changelog.md#<entry title or heading>`: its unreleased entries count
+(`docs/changelog.d`), and an anchor in several releases takes `@<release>`.
+Refs never name line numbers. A line number moved with every edit above it,
+so every pull request that touched a cited file rewrote other rows, and two
+unrelated pull requests conflicted. An anchor moves with its text. The
+rows are sorted by id, so pull requests that add rows for different features
+add them in different places (`TestE2ECoverage_RowsSorted`). The check fails
+on a line-number ref, on a path that does not exist, and on an anchor that
+names nothing or more than one place.
+
+Only live tests cover live rows;
 contract rows are covered by unit tests: Bitbucket and Azure DevOps, which
 can't be self-hosted, behaviors a live test cannot force, such as a race
 between two status writes, and a Kubernetes older than the chart supports,

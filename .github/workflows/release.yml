@@ -93,8 +93,10 @@ jobs:
           echo "$TAGS"
 
       # The release notes are the "## [<version>]" section of
-      # docs/changelog.md. Write that section before tagging: without it the
-      # release fails here. The notes never come from the commit history.
+      # docs/changelog.md. Write that section before tagging (make
+      # changelog-release VERSION=<version> writes the docs/changelog.d
+      # entries in, then edit the highlights): without it the release fails
+      # here. The notes never come from the commit history.
       # They go to the release job as a file (the release-notes artifact),
       # not as a job output: v0.10.0's notes, about 99 KB, did not arrive
       # through the output, and the release was created without them.

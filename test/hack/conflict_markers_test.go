@@ -15,6 +15,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/kardinal-promoter/kardinal-promoter/hack/changelog/fragments"
 )
 
 // conflictMarker is a line git writes for a merge conflict.
@@ -52,7 +54,9 @@ func TestNoConflictMarkers(t *testing.T) {
 // the same entry twice: two bullets with the same bold title. Merges that
 // kept both sides of a changelog conflict did both more than once.
 func TestChangelogNoDuplicateEntries(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "changelog.md"))
+	// The docs/changelog.d entries count as the Unreleased release's.
+	text, err := fragments.Assembled(repoRoot(t))
+	data := []byte(text)
 	require.NoError(t, err)
 	title := regexp.MustCompile(`^- \*\*(.+?)\*\*`)
 	var dups []string
