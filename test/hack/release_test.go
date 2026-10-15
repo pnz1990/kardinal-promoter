@@ -488,6 +488,7 @@ func TestReleaseNotesForEveryChangelogVersion(t *testing.T) {
 			notes := readNotes(t, dir)
 			require.NotEmpty(t, notes)
 			assert.NotRegexp(t, `(?m)^## `, withoutCodeBlocks(notes), "the notes must stop at the next version")
+			assertAbsoluteLinks(t, notes)
 			if sha, ok := offMain[version]; ok {
 				assert.Contains(t, notes, sha)
 			}
@@ -496,6 +497,132 @@ func TestReleaseNotesForEveryChangelogVersion(t *testing.T) {
 	for version := range offMain {
 		assert.True(t, seen[version], "docs/changelog.md has no %s section", version)
 	}
+}
+
+var (
+	// markdownRefDef is a reference definition's target ([ref]: target).
+	markdownRefDef = regexp.MustCompile(`(?m)^ {0,3}\[[^\]\n]+\]:[ \t]+<?([^\s>]+)`)
+	hasScheme      = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*:`)
+)
+
+// assertAbsoluteLinks checks that every link in notes (inline links, images
+// and reference definitions, outside code) has a scheme, and that each link
+// to the docs site resolves: a page of docs/ that is no redirect, and an
+// anchor on it (docsLinkProblem). It returns how many docs links it saw.
+func assertAbsoluteLinks(t *testing.T, notes string) int {
+	t.Helper()
+	root := repoRoot(t)
+	redirects := mkdocsRedirects(t, filepath.Join(root, "mkdocs.yml"))
+	var links []string
+	for _, l := range markdownLinks(notes) {
+		links = append(links, l.target)
+	}
+	for _, m := range markdownRefDef.FindAllStringSubmatch(withoutCodeBlocks(notes), -1) {
+		links = append(links, m[1])
+	}
+	docsLinks := 0
+	for _, link := range links {
+		if !assert.Regexp(t, hasScheme, link, "a link in the release notes is relative") {
+			continue
+		}
+		if problem, ok := docsLinkProblem(filepath.Join(root, "docs"), "changelog.md", link, redirects); ok {
+			docsLinks++
+			assert.Empty(t, problem, "release notes link %s", link)
+		}
+	}
+	return docsLinks
+}
+
+// TestReleaseNotesAbsoluteLinks runs the notes step on a section with every
+// link form: the relative ones become docs-site URLs in mkdocs' directory
+// form, the rest and the code stay as they are, and a link outside the docs
+// fails the release with no notes (#1829).
+func TestReleaseNotesAbsoluteLinks(t *testing.T) {
+	script := preflightScript(t, "Release notes from docs/changelog.md")
+	run := func(t *testing.T, section string) (string, error) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "docs"), 0o755))
+		changelog := "# Changelog\n\n## [v9.9.9] — 2026-10-15\n\n" + section + "\n\n## [v9.9.8] — 2026-10-01\n\n- older\n"
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "docs", "changelog.md"), []byte(changelog), 0o600))
+		out, _, err := runReleaseStep(t, dir, script, "VERSION=v9.9.9")
+		if err != nil {
+			assert.NoFileExists(t, filepath.Join(dir, "release-notes", "notes.md"), "a failed step writes no notes")
+			return out, err
+		}
+		return readNotes(t, dir), nil
+	}
+
+	tests := []struct{ name, in, want string }{
+		{"page", "- see [evidence](pr-evidence.md).", "- see [evidence](" + siteURL + "pr-evidence/)."},
+		{"page and anchor", "- [audit](guides/security.md#audit-logging)", "- [audit](" + siteURL + "guides/security/#audit-logging)"},
+		{"in-page anchor", "- [Before you upgrade](#from-v0100)", "- [Before you upgrade](" + siteURL + "changelog/#from-v0100)"},
+		{"file", "- [spec](reference/openapi.json)", "- [spec](" + siteURL + "reference/openapi.json)"},
+		{"index pages", "[a](index.md) [b](agentic/index.md) [c](guides/README.md#x)", "[a](" + siteURL + ") [b](" + siteURL + "agentic/) [c](" + siteURL + "guides/#x)"},
+		{"dot segments", "[a](./ui.md) [b](guides/../rollback.md)", "[a](" + siteURL + "ui/) [b](" + siteURL + "rollback/)"},
+		{"image and title", `![x](img/a.png "A") [y](<sharding.md>)`, `![x](` + siteURL + `img/a.png "A") [y](<` + siteURL + `sharding/>)`},
+		{"reference definition", "[x][ref]\n\n[ref]: operate.md#scale", "[x][ref]\n\n[ref]: " + siteURL + "operate/#scale"},
+		{"two on a line", "[a](ui.md) and [b](#c)", "[a](" + siteURL + "ui/) and [b](" + siteURL + "changelog/#c)"},
+		{"absolute links stay", "[a](https://github.com/x/y/pull/1) [b](mailto:a@b.c) [c](//cdn.example/x)", "[a](https://github.com/x/y/pull/1) [b](mailto:a@b.c) [c](//cdn.example/x)"},
+		{"code stays", "- `[a](ui.md)` and [b](ui.md)\n\n```md\n[c](ui.md)\n```\n\n~~~\n[d](#e)\n~~~", "- `[a](ui.md)` and [b](" + siteURL + "ui/)\n\n```md\n[c](ui.md)\n```\n\n~~~\n[d](#e)\n~~~"},
+		{"no links", "- plain (with parens) and [brackets]", "- plain (with parens) and [brackets]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := run(t, tt.in)
+			require.NoError(t, err, got)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+	for _, bad := range []string{"[a](/abs.md)", "[a](../outside.md)", "[a](guides/../../x.md#y)"} {
+		t.Run("refuses "+bad, func(t *testing.T) {
+			out, err := run(t, "- "+bad)
+			require.Error(t, err, out)
+			assert.Contains(t, out, "the release notes link outside the docs")
+		})
+	}
+	t.Run("site is mkdocs.yml's site_url", func(t *testing.T) {
+		data, err := os.ReadFile(filepath.Join(repoRoot(t), "mkdocs.yml"))
+		require.NoError(t, err)
+		assert.Regexp(t, `(?m)^site_url: `+regexp.QuoteMeta(siteURL)+`\s*$`, string(data))
+		assert.NotRegexp(t, `(?m)^use_directory_urls:\s*false`, string(data), "the step writes directory URLs")
+		assert.Contains(t, script, `SITE = "`+siteURL+`"`)
+	})
+}
+
+// TestReleaseNotesLinksFromTheFragments runs a dry run's notes step on the
+// real docs/changelog.md and docs/changelog.d: every link the next release's
+// body will carry is absolute and names a docs page or file.
+func TestReleaseNotesLinksFromTheFragments(t *testing.T) {
+	script := preflightScript(t, "Release notes from docs/changelog.md")
+	root := repoRoot(t)
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "docs", "changelog.d"), 0o755))
+	data, err := os.ReadFile(filepath.Join(root, "docs", "changelog.md"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "docs", "changelog.md"), data, 0o600))
+	fragments, err := filepath.Glob(filepath.Join(root, "docs", "changelog.d", "*.md"))
+	require.NoError(t, err)
+	relative := 0
+	for _, f := range fragments {
+		data, err := os.ReadFile(f)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "docs", "changelog.d", filepath.Base(f)), data, 0o600))
+		if filepath.Base(f) == "README.md" {
+			continue
+		}
+		for _, l := range markdownLinks(string(data)) {
+			if !hasScheme.MatchString(l.target) && !strings.HasPrefix(l.target, "//") {
+				relative++
+			}
+		}
+	}
+	out, _, err := runReleaseStep(t, dir, script, "VERSION=v0.0.0-dryrun.1", "DRY_RUN=true")
+	require.NoError(t, err, out)
+	notes := readNotes(t, dir)
+	require.Contains(t, notes, "(dry run v0.0.0-dryrun.1: the unreleased entries)")
+	docsLinks := assertAbsoluteLinks(t, notes)
+	assert.GreaterOrEqual(t, docsLinks, relative, "each relative link of the fragments is a docs link in the notes")
+	t.Logf("%d fragments, %d relative links, %d docs links in the notes", len(fragments), relative, docsLinks)
 }
 
 var pinnedAction = regexp.MustCompile(`^[^@\s]+@[0-9a-f]{40}$`)

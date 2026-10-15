@@ -187,6 +187,66 @@ jobs:
             echo "::error::docs/changelog.md has no \"## [${VERSION}]\" section, or it is empty. Add it before tagging."
             exit 1
           fi
+          # The notes are docs/changelog.md's text, so their links are
+          # relative to that page: pr-evidence.md#x, guides/security.md,
+          # #from-v0100. On the GitHub release page they go nowhere (#1829).
+          # Each becomes the docs site's URL for it, in mkdocs' directory
+          # form (guides/security.md#a is <site>guides/security/#a, #a is
+          # <site>changelog/#a, reference/openapi.json stays a file).
+          # Links with a scheme stay as they are, and code is left alone. A
+          # link outside the docs (/x, ../x) fails the release.
+          LINKS_PY=$(cat <<'LINKS_EOF'
+          import posixpath, re, sys
+          SITE = "https://pnz1990.github.io/kardinal-promoter/"
+          PAGE = "changelog/"
+          bad = []
+          def absolute(url):
+              if re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", url) or url.startswith("//"):
+                  return url
+              target, mark, anchor = url.partition("#")
+              if not target:
+                  return SITE + PAGE + mark + anchor
+              path = posixpath.normpath(target)
+              if target.startswith("/") or path == ".." or path.startswith("../"):
+                  bad.append(url)
+                  return url
+              if path.endswith(".md"):
+                  folder, name = posixpath.split(path[:-3])
+                  if name in ("index", "README"):
+                      path = folder + "/" if folder else ""
+                  else:
+                      path = path[:-3] + "/"
+              return SITE + path + mark + anchor
+          def link(m):
+              url = m.group(2)
+              if url.startswith("<") and url.endswith(">"):
+                  return m.group(1) + "<" + absolute(url[1:-1]) + ">" + m.group(3)
+              return m.group(1) + absolute(url) + m.group(3)
+          INLINE = re.compile(r'(\]\()(<[^>\n]*>|[^)\s]+)((?:\s+"[^"\n]*")?\))')
+          REFDEF = re.compile(r"^( {0,3}\[[^\]\n]+\]:[ \t]+)(<[^>\n]*>|\S+)()")
+          out, fence = [], ""
+          for line in sys.stdin.read().split("\n"):
+              mark = line.strip()[:3]
+              if fence == "" and mark in ("```", "~~~"):
+                  fence = mark
+              elif fence:
+                  if mark == fence:
+                      fence = ""
+              else:
+                  parts = re.split(r"(`[^`]*`)", line)
+                  for i in range(0, len(parts), 2):
+                      parts[i] = INLINE.sub(link, parts[i])
+                  parts[0] = REFDEF.sub(link, parts[0])
+                  line = "".join(parts)
+              out.append(line)
+          if bad:
+              for url in bad:
+                  print("::error::the release notes link outside the docs: " + url, file=sys.stderr)
+              sys.exit(1)
+          sys.stdout.write("\n".join(out))
+          LINKS_EOF
+          )
+          NOTES=$(printf '%s' "$NOTES" | python3 -I -c "$LINKS_PY")
           mkdir -p release-notes
           printf '%s\n' "$NOTES" > release-notes/notes.md
           echo "notes=release-notes/notes.md" >> "$GITHUB_OUTPUT"
