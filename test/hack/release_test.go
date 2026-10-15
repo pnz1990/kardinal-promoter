@@ -708,3 +708,84 @@ func TestReleaseUpgradeGuidePinned(t *testing.T) {
 		require.NoError(t, err, out)
 	})
 }
+
+// TestReleaseDryRun: a workflow_dispatch of release.yml is a dry run. Its
+// version must be a prerelease that says dryrun, its notes are the
+// unreleased entries, and every step that publishes (registry login, image
+// and chart pushes, signatures, attestations, the SBOM, the SARIF upload, the
+// GitHub release) is skipped, while the builds run and are uploaded.
+func TestReleaseDryRun(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "release.yml"))
+	require.NoError(t, err)
+	text := string(data)
+	assert.Contains(t, text, "workflow_dispatch:")
+	assert.Contains(t, text, "DRY_RUN: ${{ github.event_name == 'workflow_dispatch' }}")
+
+	release := releaseJobs(t)["release"]
+	publishes := func(s releaseStep) bool {
+		for _, u := range []string{"docker/login-action@", "actions/attest-build-provenance@", "sigstore/cosign-installer@",
+			"anchore/sbom-action@", "github/codeql-action/upload-sarif@", "softprops/action-gh-release@", "aquasecurity/trivy-action@"} {
+			if strings.HasPrefix(s.Uses, u) {
+				return true
+			}
+		}
+		return strings.Contains(s.Run, "helm push") || strings.Contains(s.Run, "cosign ")
+	}
+	gated := 0
+	for _, s := range release.Steps {
+		cond := fmt.Sprint(s.If)
+		switch {
+		case strings.HasPrefix(s.Uses, "docker/build-push-action@"):
+			assert.Equal(t, "${{ env.DRY_RUN != 'true' }}", s.With["push"], "%s pushes only for a real release", s.Name)
+		case publishes(s):
+			assert.Contains(t, cond, "env.DRY_RUN != 'true'", "%s publishes: a dry run skips it", s.Name)
+			gated++
+		case s.Name == "Upload what the dry run built":
+			assert.Equal(t, "env.DRY_RUN == 'true'", cond)
+		default:
+			assert.NotContains(t, cond, "DRY_RUN", "%s builds or checks: a dry run runs it too", s.Name)
+		}
+	}
+	assert.GreaterOrEqual(t, gated, 9, "the publishing steps")
+
+	script := preflightScript(t, "Set version and release channel from tag")
+	for _, tt := range []struct {
+		version string
+		wantErr bool
+	}{{"v0.12.0-dryrun.1", false}, {"v0.12.0-rc.1", true}, {"v0.12.0", true}, {"", true}} {
+		t.Run("version "+tt.version, func(t *testing.T) {
+			out, got, err := runReleaseStep(t, repoRoot(t), script, "DRY_RUN=true", "DISPATCH_VERSION="+tt.version, "GITHUB_REF_NAME=feat/x")
+			if tt.wantErr {
+				require.Error(t, err, out)
+				assert.Contains(t, out, "a dry run's version must be a prerelease with dryrun in it")
+				return
+			}
+			require.NoError(t, err, out)
+			assert.Equal(t, "true", got["prerelease"])
+			assert.Equal(t, "false", got["make-latest"], "a dry run is never latest")
+		})
+	}
+
+	// The notes of a made-up version: the unreleased entries.
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "docs", "changelog.d"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "docs", "changelog.md"), []byte("# Changelog\n\n## [Unreleased]\n\n"+
+		"<!-- changelog.d: the unreleased entries are the files in docs/changelog.d (CONTRIBUTING.md, Changelog) -->\n\n"+
+		"### Fixed\n\n- **Old style** — x\n\n## [v0.11.0] — 2026-10-12\n\n- old\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "docs", "changelog.d", "12-x.md"),
+		[]byte("---\nsection: Added\n---\n\n- **Fragment entry** (#12) — y\n"), 0o600))
+	out, _, err := runReleaseStep(t, dir, preflightScript(t, "Release notes from docs/changelog.md"), "VERSION=v0.12.0-dryrun.1", "DRY_RUN=true")
+	require.NoError(t, err, out)
+	notes, err := os.ReadFile(filepath.Join(dir, "release-notes", "notes.md"))
+	require.NoError(t, err)
+	assert.Contains(t, string(notes), "(dry run v0.12.0-dryrun.1: the unreleased entries)")
+	assert.Contains(t, string(notes), "- **Old style** — x")
+	assert.Contains(t, string(notes), "- **Fragment entry** (#12) — y")
+	assert.NotContains(t, string(notes), "section: Added")
+	assert.NotContains(t, string(notes), "- old", "not the last release's notes")
+
+	// A real tag with no section still fails.
+	_ = os.RemoveAll(filepath.Join(dir, "release-notes"))
+	out, _, err = runReleaseStep(t, dir, preflightScript(t, "Release notes from docs/changelog.md"), "VERSION=v0.12.0")
+	require.Error(t, err, out)
+}
