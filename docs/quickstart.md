@@ -259,3 +259,5 @@ GitHub when you are done.
 - [Concepts](concepts.md): versions, pipelines, environments and gates
 - [Require approvals](approvals.md): who may approve, how many, and from the CLI or the UI
 - [Add to CI](ci-integration.md): ship from your build and act on the exit code
+
+<!-- path-scoped CI proof (#1903): a docs-only change -->
