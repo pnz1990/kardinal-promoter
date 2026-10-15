@@ -39,7 +39,7 @@ func TestCITestShards(t *testing.T) {
 		} `json:"concurrency"`
 		Jobs map[string]struct {
 			Name     string            `json:"name"`
-			Needs    []string          `json:"needs"`
+			Needs    any               `json:"needs"`
 			If       string            `json:"if"`
 			Env      map[string]string `json:"env"`
 			Strategy struct {
@@ -73,7 +73,9 @@ func TestCITestShards(t *testing.T) {
 
 	build := wf.Jobs["build"]
 	assert.Equal(t, "build", build.Name, "branch protection requires the check named build")
-	assert.ElementsMatch(t, []string{"checks", "test"}, build.Needs)
+	assert.ElementsMatch(t, []any{"changes", "checks", "test"}, build.Needs)
+	assert.Contains(t, build.Steps[0].Run, `[ "$CHANGES" != success ]`, "build fails when the changes job does")
+	assert.Contains(t, build.Steps[0].Run, `[ "$GO" != true ]`, "build passes skipped shards when no Go, chart or workflow changed")
 	assert.Equal(t, "${{ !cancelled() }}", build.If, "build runs, and fails, when a shard fails")
 	require.Len(t, build.Steps, 1)
 	assert.Contains(t, build.Steps[0].Run, `[ "$CHECKS" != success ] || [ "$TESTS" != success ]`)
@@ -93,6 +95,80 @@ func TestCITestShards(t *testing.T) {
 	assert.Equal(t, "ci-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}", wf.Concurrency.Group,
 		"each main run is its own group, so no main run is cancelled or replaced while queued")
 	assert.Equal(t, "${{ github.ref != 'refs/heads/main' }}", wf.Concurrency.Cancel)
+}
+
+// TestCIChanges (#1903): hack/ci/changes.sh maps a pull request's changed
+// paths to the areas whose jobs ci.yml runs.
+func TestCIChanges(t *testing.T) {
+	all := "go=true\nweb=true\nchart=true\ndocs=true\nworkflows=true\n"
+	tests := []struct {
+		name, files, env, want string
+	}{
+		{"docs only", "docs/quickstart.md\nmkdocs.yml\n", "", "go=false\nweb=false\nchart=false\ndocs=true\nworkflows=false\n"},
+		{"a design doc", "docs/design/20-x.md\n", "", "go=false\nweb=false\nchart=false\ndocs=true\nworkflows=false\n"},
+		{"Go", "pkg/scm/a.go\n", "", "go=true\nweb=false\nchart=false\ndocs=false\nworkflows=false\n"},
+		{"tests and test data", "test/e2e/coverage.tsv\nexamples/quickstart/pipeline.yaml\n", "", "go=true\nweb=false\nchart=false\ndocs=false\nworkflows=false\n"},
+		{"a shell script", "scripts/x.sh\n", "", "go=true\nweb=true\nchart=false\ndocs=false\nworkflows=false\n"},
+		{"the lint config", ".golangci.yml\n", "", "go=true\nweb=false\nchart=false\ndocs=false\nworkflows=false\n"},
+		{"the UI", "web/src/App.tsx\nweb/package-lock.json\n", "", "go=false\nweb=true\nchart=false\ndocs=false\nworkflows=false\n"},
+		{"the UI and its embedded build", "web/src/App.tsx\nweb/dist/index.html\n", "", "go=true\nweb=true\nchart=false\ndocs=false\nworkflows=false\n"},
+		{"the chart", "chart/kardinal-promoter/values.yaml\n", "", "go=false\nweb=false\nchart=true\ndocs=false\nworkflows=false\n"},
+		{"a CRD", "config/crd/bases/kardinal.io_pipelines.yaml\n", "", "go=false\nweb=false\nchart=true\ndocs=false\nworkflows=false\n"},
+		{"neither (CONTRIBUTING.md)", "CONTRIBUTING.md\n", "", "go=false\nweb=false\nchart=false\ndocs=false\nworkflows=false\n"},
+		{"a workflow runs everything", "docs/x.md\n.github/workflows/docs.yml\n", "", all},
+		{"a composite action runs everything", ".github/actions/create-bundle/action.yml\n", "", all},
+		{"go.mod runs everything", "go.mod\n", "", all},
+		{"go.sum runs everything", "go.sum\n", "", all},
+		{"an unknown diff runs everything", "", "", all},
+		{"a push to main runs everything", "docs/x.md\n", "ALL=1", all},
+		{"no trailing newline", "docs/x.md", "", "go=false\nweb=false\nchart=false\ndocs=true\nworkflows=false\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command("bash", filepath.Join(repoRoot(t), "hack", "ci", "changes.sh"))
+			cmd.Stdin = strings.NewReader(tt.files)
+			cmd.Env = append(os.Environ(), "ALL=")
+			if tt.env != "" {
+				cmd.Env = append(cmd.Env, tt.env)
+			}
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", out)
+			assert.Equal(t, tt.want, string(out))
+		})
+	}
+}
+
+// TestCIJobsScoped (#1903): every ci.yml job but the changes job, the
+// build aggregator and the main-only cache job runs only when its area
+// changed, and each required check's job keeps its area.
+func TestCIJobsScoped(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "ci.yml"))
+	require.NoError(t, err)
+	var wf struct {
+		Jobs map[string]struct {
+			Name  string `json:"name"`
+			Needs any    `json:"needs"`
+			If    string `json:"if"`
+		} `json:"jobs"`
+	}
+	require.NoError(t, yaml.Unmarshal(data, &wf))
+	for id, j := range wf.Jobs {
+		switch id {
+		case "changes", "build", "go-cache":
+			continue
+		}
+		assert.Equal(t, "changes", j.Needs, "%s needs the changes job", id)
+		assert.Contains(t, j.If, "needs.changes.outputs.", "%s runs only when its area changed", id)
+	}
+	areas := map[string]string{
+		"integration": "go", "golangci-lint": "go", "go-sum-integrity": "go", "e2e-stubs": "go", "checks": "go", "test": "go",
+		"frontend": "web", "helm-lint": "chart", "docs-lint": "docs", "action-tests": "workflows",
+	}
+	for id, area := range areas {
+		assert.Contains(t, wf.Jobs[id].If, "needs.changes.outputs."+area+" == 'true'", id)
+	}
+	assert.Contains(t, wf.Jobs["docs-lint"].If, "needs.changes.outputs.go == 'true'", "docs-lint runs for Go changes too: the CLI docs are generated")
+	assert.Empty(t, wf.Jobs["changes"].If, "the changes job always runs")
 }
 
 // fakeGH records each call in FAKE_LOG and answers from $FAKE_GH/routes:
