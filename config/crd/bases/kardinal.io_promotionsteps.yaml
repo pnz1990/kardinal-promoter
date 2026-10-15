@@ -863,6 +863,13 @@ spec:
                 - RollingBack
                 - Superseded
                 type: string
+              stateTransitionTime:
+                description: |-
+                  StateTransitionTime is when state last changed. The NotificationHook
+                  events of a state change (PromotionStep.Failed, WaitingForApproval)
+                  carry it as their time.
+                format: date-time
+                type: string
               steps:
                 description: |-
                   Steps is the per-step execution history for this PromotionStep.

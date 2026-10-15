@@ -122,6 +122,8 @@ func (r *Reconciler) patchState(ctx context.Context, base, ps *v1alpha1.Promotio
 	ps.Status.Message = message
 	changed := base.Status.State != state
 	if changed {
+		at := metav1.NewTime(r.now().UTC().Truncate(time.Second))
+		ps.Status.StateTransitionTime = &at
 		closed = append(closed, closeStepStatuses(ps, state)...)
 		ps.Status.RetryCount, ps.Status.GitCredentialRetries = 0, 0
 		for _, e := range entries {

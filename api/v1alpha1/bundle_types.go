@@ -229,6 +229,12 @@ type BundleStatus struct {
 	// +kubebuilder:validation:Enum=Available;Promoting;Verified;Failed;Superseded;Rejected
 	Phase string `json:"phase,omitempty"`
 
+	// PhaseTransitionTime is when phase last changed: when the version
+	// became Promoting, Verified, Failed, Superseded or Rejected. The
+	// NotificationHook events of a phase change carry it as their time.
+	// +optional
+	PhaseTransitionTime *metav1.Time `json:"phaseTransitionTime,omitempty"`
+
 	// Version is what the Bundle ships, for display: the image tag (the
 	// images, when several), "config <sha>", or the chart name and version.
 	// Written by the BundleReconciler from spec.

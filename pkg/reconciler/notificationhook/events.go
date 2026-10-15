@@ -142,9 +142,13 @@ func (r *Reconciler) bundleEvents(ctx context.Context, ns, selector string, add 
 			payload: notificationPayload{Pipeline: b.Spec.Pipeline, Bundle: b.Name},
 		}
 		phase := b.Status.Phase
+		changedAt := bundlePhaseTime(b)
 		bundleEvent := func(t v1alpha1.NotificationHookEventType, rank int, msg string) {
 			ev := base
 			ev.eventType, ev.rank = t, rank
+			if rank == rankEnd {
+				ev.at = changedAt // when it became Verified, Failed or Superseded (#1945)
+			}
 			ev.eventKey = string(t) + "/" + b.Name
 			ev.payload.Message = msg
 			add(ev)
@@ -251,6 +255,7 @@ func (r *Reconciler) stepEvents(ctx context.Context, ns, selector string, add fu
 		stepEvent := func(t v1alpha1.NotificationHookEventType, rank int, msg string) {
 			ev := base
 			ev.eventType, ev.rank = t, rank
+			ev.at = stepEventTime(ps, t) // when it happened, not when the step was created (#1945)
 			ev.eventKey = string(t) + "/" + ps.Name
 			ev.payload.Message = msg
 			add(ev)
@@ -274,4 +279,35 @@ func (r *Reconciler) stepEvents(ctx context.Context, ns, selector string, add fu
 		}
 	}
 	return nil
+}
+
+// bundlePhaseTime is when b's phase last changed: status.phaseTransitionTime,
+// or for a Bundle written before it existed the Ready condition's last
+// transition (when it became Verified), else its creation.
+func bundlePhaseTime(b *v1alpha1.Bundle) time.Time {
+	if t := b.Status.PhaseTransitionTime; t != nil {
+		return t.Time
+	}
+	if c := meta.FindStatusCondition(b.Status.Conditions, "Ready"); c != nil && c.Status == metav1.ConditionTrue {
+		return c.LastTransitionTime.Time
+	}
+	return b.CreationTimestamp.Time
+}
+
+// stepEventTime is when step event t of ps happened: the PR's opening (the
+// open-pr step's completion) for PROpened, else the step's last state change
+// (status.stateTransitionTime), else its creation. Each is fixed once the
+// event happened, so a retry keeps it.
+func stepEventTime(ps *v1alpha1.PromotionStep, t v1alpha1.NotificationHookEventType) time.Time {
+	if t == v1alpha1.NotificationEventPromotionStepPROpened {
+		for _, s := range ps.Status.Steps {
+			if s.Name == "open-pr" && s.CompletedAt != nil {
+				return s.CompletedAt.Time
+			}
+		}
+	}
+	if st := ps.Status.StateTransitionTime; st != nil && t != v1alpha1.NotificationEventPromotionStepPROpened {
+		return st.Time
+	}
+	return ps.CreationTimestamp.Time
 }
