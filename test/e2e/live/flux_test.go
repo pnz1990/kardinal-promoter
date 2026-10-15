@@ -485,7 +485,11 @@ func TestFlux_PRReviewWaitsForMergeCommit(t *testing.T) {
 		if err != nil || ps == nil {
 			return false, "step lookup failed"
 		}
-		return ps.Status.State == "HealthChecking" && strings.Contains(ps.Status.Message, "waiting for flux: Ready=True"),
+		// Flux may still report the previous reconcile (Ready=Unknown,
+		// "Reconciliation in progress") when the source is suspended: the
+		// step waits either way, for the merge commit.
+		return ps.Status.State == "HealthChecking" && strings.Contains(ps.Status.Message, "waiting for flux: ") &&
+				strings.Contains(ps.Status.Message, "waiting for "+shortSHA(merge)),
 			fmt.Sprintf("state=%q message=%q", ps.Status.State, ps.Status.Message)
 	})
 	assert.Equal(t, fixtures.Image+":"+fixtures.V1, e.DeploymentImage(t, a.ns, fixtures.Workload("prod")))
