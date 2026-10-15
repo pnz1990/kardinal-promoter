@@ -294,7 +294,7 @@ var yamlSeedTags = []string{"2.0.0", "true", "null", "1e3", "~", "a: b", "#x", "
 // FuzzYAMLUpdate fuzzes the yaml-update step with checkYAMLUpdateProperty.
 // Run it with go test ./pkg/steps/steps -run '^$' -fuzz '^FuzzYAMLUpdate$' -fuzztime 2m.
 func FuzzYAMLUpdate(f *testing.F) {
-	for i, doc := range yamlSeedDocs {
+	for i, doc := range append(append([]string{}, yamlSeedDocs...), styledDocs()...) {
 		f.Add(doc, yamlSeedPaths[i%len(yamlSeedPaths)], yamlSeedTags[i%len(yamlSeedTags)])
 	}
 	f.Fuzz(func(t *testing.T, doc, path, tag string) { checkYAMLUpdateProperty(t, doc, path, tag) })
@@ -304,7 +304,7 @@ func FuzzYAMLUpdate(f *testing.F) {
 // Run it with go test ./pkg/steps/steps -run '^$' -fuzz '^FuzzKustomizeSetImage$' -fuzztime 2m.
 func FuzzKustomizeSetImage(f *testing.F) {
 	repos := []string{"ghcr.io/org/app", "app", "docker.io/library/nginx", "a/b/c/app"}
-	for i, doc := range yamlSeedDocs {
+	for i, doc := range append(append([]string{}, yamlSeedDocs...), styledDocs()...) {
 		f.Add(doc, repos[i%len(repos)], yamlSeedTags[i%len(yamlSeedTags)], []string{"", "sha256:abc"}[i%2])
 	}
 	f.Fuzz(func(t *testing.T, doc, repo, tag, digest string) { checkKustomizeProperty(t, doc, repo, tag, digest) })
@@ -336,6 +336,18 @@ func genYAML(r *rand.Rand) (string, []string) {
 				fmt.Fprintf(&b, "%s# comment %d\n", indent, i)
 			}
 			switch c := r.Intn(10); {
+			case (c < 4 || depth > 3) && r.Intn(4) == 0:
+				// A block scalar in any style (styledValues), indented under
+				// its key (#1965).
+				v := styledValues[3+r.Intn(len(styledValues)-3)]
+				lines := strings.Split(v, "\n")
+				for i := 1; i < len(lines); i++ {
+					if lines[i] != "" {
+						lines[i] = indent + lines[i]
+					}
+				}
+				fmt.Fprintf(&b, "%s%s: %s\n", indent, k, strings.Join(lines, "\n"))
+				paths = append(paths, p)
 			case c < 4 || depth > 3:
 				fmt.Fprintf(&b, "%s%s: %s\n", indent, k, []string{"1", "\"x\"", "'y'", "null", "true", "v1.0", "~", ""}[r.Intn(8)])
 				paths = append(paths, p)
@@ -517,27 +529,36 @@ func topKeyOf(path string) string {
 // keys at column 1, CR line endings, or no final line break.
 func onlyTopKeyChanged(orig, out []byte, key string) (same, ok bool) {
 	o, ok1 := topEntries(orig)
-	n, ok2 := topEntries(out)
 	if !ok1 {
 		return false, false
 	}
-	if !ok2 {
+	// The output must parse; its keys may be written another way (an
+	// explicit "? key" for a long one), so its entries are not compared.
+	var parsed yaml.Node
+	if err := yaml.Unmarshal(out, &parsed); err != nil {
 		return false, true
 	}
 	ol, nl := splitLines(orig), splitLines(out)
-	oe, inOrig := o[key]
-	ne, inOut := n[key]
-	switch {
-	case !inOut:
-		return false, true
-	case !inOrig:
-		k := ne[0]
-		tail := len(ol) - k
-		return tail >= 0 && len(nl) >= len(ol) && strings.Join(nl[:k], "") == strings.Join(ol[:k], "") &&
-			strings.Join(nl[len(nl)-tail:], "") == strings.Join(ol[k:], ""), true
+	// The lines that differ: what is left of orig once the lines both
+	// files start and end with are taken away. A comment between two
+	// entries may be parsed as the foot of one or the head of the next
+	// depending on the values around it, so where an entry ends is read
+	// from orig alone.
+	p := 0
+	for p < len(ol) && p < len(nl) && ol[p] == nl[p] {
+		p++
 	}
-	return strings.Join(ol[:oe[0]], "") == strings.Join(nl[:ne[0]], "") &&
-		strings.Join(ol[oe[1]:], "") == strings.Join(nl[ne[1]:], ""), true
+	sfx := 0
+	for sfx < len(ol)-p && sfx < len(nl)-p && ol[len(ol)-1-sfx] == nl[len(nl)-1-sfx] {
+		sfx++
+	}
+	from, to := p, len(ol)-sfx
+	oe, inOrig := o[key]
+	if !inOrig {
+		// A new entry: only inserted lines.
+		return from == to, true
+	}
+	return from >= oe[0] && to <= oe[1], true
 }
 
 func splitLines(b []byte) []string {

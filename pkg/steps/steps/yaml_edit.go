@@ -142,23 +142,57 @@ func (d *yamlDoc) encode() ([]byte, error) {
 		}
 	}
 	keepFlowNulls(&d.doc, false)
-	var buf bytes.Buffer
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
-	if d.compactSeq {
-		enc.CompactSeqIndent()
-	}
-	if err := enc.Encode(&d.doc); err != nil {
-		return nil, err
-	}
-	if err := enc.Close(); err != nil {
+	out, err := encodeNode(&d.doc, d.compactSeq)
+	if err != nil {
 		return nil, err
 	}
 	// The encoder does not round-trip every scalar (a folded block scalar
 	// with more-indented lines, #1907): refuse to write a file whose other
 	// values would change, rather than change them.
-	if same, err := sameData(buf.Bytes(), &d.doc); err != nil || !same {
+	if same, err := sameData(out, &d.doc); err != nil || !same {
 		return nil, errReencodeChanges
+	}
+	// Nor is it stable: a comment in a flow collection can come out with a
+	// blank line that the next encode drops, and the sequence indentation
+	// the next run reads from the file may not be this one's (#1965), so the
+	// next run of the same edit would write other bytes. Encode what was
+	// written, as the next run would, until it no longer changes: what the
+	// step writes is what it would write again.
+	for range 4 {
+		var again yaml.Node
+		if err := yaml.Unmarshal(out, &again); err != nil {
+			return nil, errReencodeChanges
+		}
+		keepFlowNulls(&again, false)
+		next, err := encodeNode(&again, compactSeqIndent(out))
+		if err != nil {
+			return nil, err
+		}
+		if bytes.Equal(next, out) {
+			return out, nil
+		}
+		if same, err := sameData(next, &d.doc); err != nil || !same {
+			return nil, errReencodeChanges
+		}
+		out = next
+	}
+	return nil, errReencodeChanges
+}
+
+// encodeNode encodes n with two-space indentation and, when compactSeq,
+// sequences not indented under their key.
+func encodeNode(n *yaml.Node, compactSeq bool) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if compactSeq {
+		enc.CompactSeqIndent()
+	}
+	if err := enc.Encode(n); err != nil {
+		return nil, err
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
 	}
 	return buf.Bytes(), nil
 }
@@ -205,13 +239,28 @@ func scalarValue(m *yaml.Node, key string) string {
 func setMapScalar(m *yaml.Node, key, value string) {
 	if v := mapValue(m, key); v != nil {
 		style := v.Style &^ (yaml.LiteralStyle | yaml.FoldedStyle | yaml.FlowStyle)
-		*v = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value, Style: style,
+		*v = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value, Style: stringStyle(value, style),
 			HeadComment: v.HeadComment, LineComment: v.LineComment, FootComment: v.FootComment}
 		return
 	}
 	m.Content = append(m.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value})
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key, Style: stringStyle(key, 0)},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value, Style: stringStyle(value, 0)})
+}
+
+// stringStyle is style, or double quotes when value written plain would
+// read back as something else than a string: "<<" (a merge key, which the
+// encoder tags !!merge), and whatever else it resolves to another tag.
+func stringStyle(value string, style yaml.Style) yaml.Style {
+	if style&(yaml.DoubleQuotedStyle|yaml.SingleQuotedStyle) != 0 {
+		return style
+	}
+	var n yaml.Node
+	if err := yaml.Unmarshal([]byte(value), &n); err != nil || len(n.Content) != 1 ||
+		n.Content[0].Kind != yaml.ScalarNode || n.Content[0].Tag != "!!str" || n.Content[0].Value != value {
+		return yaml.DoubleQuotedStyle
+	}
+	return style
 }
 
 // deleteMapKey removes key from mapping m.

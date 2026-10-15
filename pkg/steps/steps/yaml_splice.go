@@ -42,7 +42,21 @@ func spliceEncode(raw []byte, orig, edited *yaml.Node, compactSeq bool) ([]byte,
 		lines = lines[:len(lines)-1]
 	}
 	s := &splicer{lines: lines, compactSeq: compactSeq}
-	if !s.mapping(o, e, len(lines), 0) || s.failed {
+	// The document ends at a "..." marker: what follows it is not the
+	// mapping's, and an entry added at the end goes before it (#1965).
+	bound := len(lines)
+	for i, l := range lines {
+		t := strings.TrimRight(l, "\n")
+		if t == "---" || strings.HasPrefix(t, "--- ") {
+			// A trailing empty document: the file is written whole, as before.
+			break
+		}
+		if t == "..." || strings.HasPrefix(t, "... ") || strings.HasPrefix(t, "...\t") {
+			bound = i
+			break
+		}
+	}
+	if !s.mapping(o, e, bound, 0) || s.failed {
 		return nil, false
 	}
 	return s.apply(), true
@@ -116,6 +130,11 @@ func (s *splicer) mapping(o, e *yaml.Node, bound, col int) bool {
 			}
 			text := s.entryText(k, v, col, true)
 			at := last + 1
+			if bound == len(s.lines) && s.blankFrom(at) {
+				// Only blank lines follow (spaces or tabs, #1965): append at
+				// the end of the file and leave them where they are.
+				at = bound + 1
+			}
 			if strings.HasSuffix(text, "\n\n") && bound == len(s.lines) {
 				// It ends in a "+" (keep) block scalar, which would take
 				// the blank lines after it: at the end of the file.
@@ -179,6 +198,52 @@ func (s *splicer) descend(key, o, e *yaml.Node, finish int) bool {
 	return false
 }
 
+// quotedEnd is the line (1-based) of the closing quote of the quoted
+// scalar n, or 0 when n is not quoted or the quote is not found.
+func (s *splicer) quotedEnd(n *yaml.Node) int {
+	if n == nil || n.Style&(yaml.DoubleQuotedStyle|yaml.SingleQuotedStyle) == 0 || n.Line < 1 || n.Line > len(s.lines) {
+		return 0
+	}
+	q := byte('"')
+	if n.Style&yaml.SingleQuotedStyle != 0 {
+		q = '\''
+	}
+	line, col := n.Line, n.Column // col is the opening quote (1-based)
+	text := s.lines[line-1]
+	if col-1 >= len(text) || text[col-1] != q {
+		return 0
+	}
+	i := col // the byte after the opening quote
+	for {
+		for ; i < len(text); i++ {
+			switch {
+			case q == '"' && text[i] == '\\':
+				i++ // an escape: the next byte is not the closing quote
+			case text[i] == q && q == '\'' && i+1 < len(text) && text[i+1] == '\'':
+				i++ // '' is a quote inside the scalar
+			case text[i] == q:
+				return line
+			}
+		}
+		line++
+		if line > len(s.lines) {
+			return 0
+		}
+		text, i = s.lines[line-1], 0
+	}
+}
+
+// blankFrom reports whether every line from line (1-based) to the end of
+// the file is blank: spaces and tabs only.
+func (s *splicer) blankFrom(line int) bool {
+	for l := line; l <= len(s.lines); l++ {
+		if strings.TrimSpace(s.lines[l-1]) != "" {
+			return false
+		}
+	}
+	return true
+}
+
 // trimEnd returns the last line of an entry whose lines are [start, end],
 // whose key is at column col and whose value is v: the blank and
 // comment-only lines that end the range belong to what follows. After a
@@ -190,7 +255,9 @@ func (s *splicer) descend(key, o, e *yaml.Node, finish int) bool {
 func (s *splicer) trimEnd(start, end, col int, v *yaml.Node) int {
 	last := lastScalar(v)
 	if last == nil || last.Style&(yaml.LiteralStyle|yaml.FoldedStyle) == 0 {
-		return s.trim(start, end, true)
+		// A quoted scalar may span lines, and a line of it may start with
+		// "#" ("0: \"\n#\""): its text, not a comment (#1965).
+		return max(s.trim(start, end, true), min(s.quotedEnd(last), end))
 	}
 	for l := end; l > start; l-- {
 		line := s.lines[l-1]
@@ -206,7 +273,55 @@ func (s *splicer) trimEnd(start, end, col int, v *yaml.Node) int {
 	if keepChomping(s.lines[last.Line-1], last.Column) {
 		return end
 	}
-	return s.trim(start, end, false)
+	// A line of only spaces, more of them than the scalar's indentation, is
+	// the scalar's text (folded ">\n 0\n  \n" is "0\n \n"), not a blank
+	// line after it: an entry inserted before it would take it from the
+	// scalar (#1965).
+	indent, ok := s.blockIndent(last, scalarKeyColumn(v, col))
+	for end > start {
+		line := strings.TrimRight(s.lines[end-1], "\n")
+		if strings.TrimSpace(line) != "" {
+			break
+		}
+		if !ok || (strings.Trim(line, " ") == "" && len(line) > indent) {
+			break
+		}
+		end--
+	}
+	return end
+}
+
+// blockIndent is the content indentation of the block scalar n: the
+// header's indentation indicator added to the indentation of its key (at
+// column keyCol, 0 when it has none), else the
+// indentation of its first line that is not blank. ok is false when it has
+// no such line: every line after the header may then be its text.
+func (s *splicer) blockIndent(n *yaml.Node, keyCol int) (int, bool) {
+	header := s.lines[n.Line-1]
+	if n.Column-1 < len(header) {
+		h := header[n.Column-1:]
+		if i := strings.IndexAny(h, " \t#\n"); i >= 0 {
+			h = h[:i]
+		}
+		for _, r := range h {
+			if r >= '1' && r <= '9' {
+				// Relative to the indentation of the scalar's parent: its
+				// key's, wherever the header is ("0:\n >2", #1965). A
+				// scalar in a sequence: unknown, so every line may be text.
+				if keyCol < 1 {
+					return 0, false
+				}
+				return keyCol - 1 + int(r-'0'), true
+			}
+		}
+	}
+	for l := n.Line; l < len(s.lines); l++ {
+		line := strings.TrimRight(s.lines[l], "\n")
+		if strings.TrimSpace(line) != "" {
+			return len(line) - len(strings.TrimLeft(line, " ")), true
+		}
+	}
+	return 0, false
 }
 
 // trim drops the blank lines, and with comments the comment-only lines, at
@@ -233,6 +348,22 @@ func keepChomping(line string, col int) bool {
 		h = h[:i]
 	}
 	return strings.Contains(h, "+")
+}
+
+// scalarKeyColumn is the column of the key of n's last scalar: col when n
+// is that scalar (the entry's key is at col), the column of the last key of
+// the deepest last mapping, or 0 when the scalar is a sequence item.
+func scalarKeyColumn(n *yaml.Node, col int) int {
+	for n != nil && (n.Kind == yaml.MappingNode || n.Kind == yaml.SequenceNode) && len(n.Content) > 0 {
+		switch n.Kind {
+		case yaml.MappingNode:
+			col = n.Content[len(n.Content)-2].Column
+		case yaml.SequenceNode:
+			col = 0
+		}
+		n = n.Content[len(n.Content)-1]
+	}
+	return col
 }
 
 // lastScalar returns the last scalar of n, or nil.
