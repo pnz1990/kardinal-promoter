@@ -366,7 +366,7 @@ When sub-fields are omitted, the controller applies these defaults:
 | argoRollouts.name / argoRollouts.namespace | Pipeline.metadata.name / environment name |
 | flagger.name / flagger.namespace | Pipeline.metadata.name / environment name |
 | timeout | 10m |
-| cluster | not supported (must be empty) |
+
 
 ## Sync on promotion
 

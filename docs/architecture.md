@@ -33,7 +33,7 @@ components:
       - jobs: [renderrun · hookrun]
       - sources: [subscription, scmprovider]
       - more: [rollbackpolicy, notificationhook, graphcleanup, auditretention]
-  api: {name: Kubernetes API server, at: [0, 2], span: 2, zone: cluster, role: [every object is a CRD, in etcd · 8 ValidatingAdmissionPolicies]}
+  api: {name: Kubernetes API server, at: [0, 2], span: 2, zone: cluster, role: [every object is a CRD, in etcd · 9 ValidatingAdmissionPolicies]}
   kro: {name: kro, at: [0, 3], zone: kro, chip: Deployment, role: [the Graph controller]}
   agent: {name: Argo CD or Flux, at: [1, 3], zone: gitops, role: [syncs env branches]}
   workloads: {name: Workloads, at: [0, 4], zone: apps, role: [a namespace per env]}
@@ -229,10 +229,10 @@ Abstracts Git hosting operations. Current implementations:
 | GitHub | GA |
 | GitLab | Beta |
 | Forgejo, Gitea | Beta |
-| Bitbucket Cloud, Azure DevOps | Newer, less tested |
+| Bitbucket Cloud, Azure DevOps, Bitbucket Data Center | Newer, less tested |
 
-The provider is chosen for the whole controller with `--scm-provider`; see
-[SCM Providers](scm-providers.md).
+The controller's default provider is chosen with `--scm-provider`; a Pipeline can name an
+`ScmProvider` or `ClusterScmProvider` instead (`spec.git.providerRef`). See [SCM Providers](scm-providers.md).
 
 ### Health Adapters (`pkg/health`)
 
@@ -404,6 +404,11 @@ All state is stored in Kubernetes CRDs:
 | `Subscription` | Watches OCI registries or Git repos; auto-creates Bundles on new artifacts |
 | `NotificationHook` | Sends promotion events to a webhook URL |
 | `AuditEvent` | Append-only record of promotion events (see [Security](guides/security.md#audit-logging)) |
+| `Approval` | One person's approval decision on one Bundle in one environment, created by `kardinal approve` |
+| `HookRun` | One run of a Pipeline hook's Job and its result ([Pipeline hooks](hooks.md)) |
+| `RenderRun` | One render of a `layout: branch` environment in a sandboxed Job ([Rendered manifests](rendered-manifests.md)) |
+| `ImageVerification` | The signature check of a Bundle's images or config commit |
+| `ScmProvider`, `ClusterScmProvider` | SCM settings and credentials a Pipeline names with `spec.git.providerRef` ([SCM providers](scm-providers.md)) |
 
 There is no database. The controller is **stateless**: it can be restarted at any time without
 data loss, and every reconciler is idempotent. All state is recovered by re-reading CRDs.

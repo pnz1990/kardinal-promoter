@@ -36,6 +36,7 @@ environment or version; Pipelines and, below it, the pipeline are links.
 | `#/p/<namespace>/<pipeline>` | A pipeline's map |
 | `#/p/<namespace>/<pipeline>/env/<environment>` | The same, with that environment's details open |
 | `#/p/<namespace>/<pipeline>/v/<version>` | The same, showing that version (a Bundle name) |
+| `#/approvals` | Approvals: every approval waiting on you, oldest first, with Approve and Decline |
 
 With an environment open, `?v=<version>` gives the version shown.
 
@@ -44,6 +45,7 @@ And after a `?`:
 | Parameter | Does |
 |---|---|
 | `tab=versions`, `tab=activity`, `tab=metrics` | Opens that tab of the pipeline page (no `tab`: the map) |
+| `as=table`, `as=matrix` | Shows the Map tab as a table or a matrix instead of the station map |
 | `compare=<version>` | Draws a second version beside the one shown, and opens the comparison |
 | `node=<gate>` | Opens a gate's details |
 | `section=why`, `actions`, `evidence`, `history` | Scrolls an environment's details to that section |
@@ -129,7 +131,7 @@ comparison lists what differs (images, environments, provenance).
 Select a station (or press Enter on it) to open its details, beside the map on a wide screen and
 as a sheet over it on a narrow one:
 
-- **Why it's waiting** comes first: the gate that blocks and its reason, the approvals still
+- **Why it's waiting** (**Why it failed** for a failed environment) comes first: the gate that blocks and its reason, the approvals still
   needed, the pull request to merge, the health check in progress. When nothing waits, this is
   the environment's status.
 
@@ -155,6 +157,9 @@ as a sheet over it on a narrow one:
     | Release hold | a confirmation |
     | Pause pipeline, Resume pipeline | a confirmation |
     | Reject version | a reason |
+    | Pause fleet, Resume fleet, Roll back fleet | a confirmation (a fleet or one of its targets) |
+
+    **Open pull request** is a link to the step's pull request.
 
 <figure class="k-demo" data-demo="approve-override" hidden>
   <picture>
@@ -203,13 +208,13 @@ the pipeline's DORA metrics ([Monitor](guides/monitoring.md)).
 Press **⌘K** (Ctrl+K) anywhere to open the palette. Type to filter; ↑ and ↓ move, Enter runs, Esc
 closes.
 
-- **Go to**: Pipelines, any pipeline, any pipeline › environment, and the versions of the pipeline
+- **Go to**: Pipelines, Approvals, any pipeline, any pipeline › environment, and the versions of the pipeline
   you are on.
-- **Do**: switch the theme (System, Light, Dark), switch the density (comfortable or compact),
+- **Do**: approve a version that waits on you, switch the theme (System, Light, Dark), switch the density (comfortable or compact),
   refresh now, show the operations table or the board, and show the keyboard shortcuts.
 
-The palette never changes a promotion by itself: Promote, Roll back and Pause keep their own
-confirmation.
+The palette never changes a promotion by itself: Approve, Promote, Roll back and Pause keep their
+own confirmation.
 
 <figure class="k-demo" data-demo="palette" hidden>
   <picture>
@@ -227,6 +232,11 @@ confirmation.
 | `/` | Focus the pipeline search |
 | `?` | Show or hide the shortcuts |
 | `r` | Refresh now |
+| `j`, `k` | Next or previous environment; on Approvals, next or previous approval |
+| `a` | Approve: the open environment, the approval in focus, or the only one waiting |
+| `s` | Ship a version of the open pipeline |
+| `[`, `]` | Follow an older or a newer version |
+| `f` | Follow the active version |
 | Esc | Close the open panel |
 
 | Key | On the map |

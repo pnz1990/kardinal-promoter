@@ -145,7 +145,7 @@ kubectl port-forward svc/kardinal-promoter -n kardinal-system 8082:8082
 ```
 
 Then open <http://localhost:8082/ui/> in your browser. If you installed with a
-release name other than `kardinal-promoter`, the Service is named
+release name that does not contain `kardinal-promoter`, the Service is named
 `<release>-kardinal-promoter`.
 
 !!! tip "Why port-forward?"
@@ -424,6 +424,7 @@ kubectl delete crd --ignore-not-found \
   subscriptions.kardinal.io \
   notificationhooks.kardinal.io \
   hookruns.kardinal.io \
+  imageverifications.kardinal.io \
   renderruns.kardinal.io \
   scmproviders.kardinal.io \
   clusterscmproviders.kardinal.io \

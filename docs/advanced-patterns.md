@@ -444,8 +444,8 @@ Some tools shortcut promotion by patching `spec.source.targetRevision` on an Arg
 Application CRD without writing to Git. This breaks GitOps: Git is no longer the
 source of truth. Cluster state cannot be reconstructed from Git after a disaster.
 
-kardinal-promoter never patches `targetRevision`. The `kustomize` and `helm` update strategies
-write to Git first. The `argocd` strategy is the exception: it patches the Application's
+kardinal-promoter never patches `targetRevision`. The `kustomize`, `helm` and `yaml` update
+strategies write to Git first. The `argocd` strategy is the exception: it patches the Application's
 `spec.source.helm.valuesObject` directly, with no Git commit and no PR, so it cannot be used
 with `approval: pr-review`.
 

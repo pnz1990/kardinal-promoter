@@ -94,8 +94,8 @@ spec:
           method: <string>              #   "merge" (default), "squash" or "rebase"; needs auto
           commitMessageTemplate: <template> # Merge commit message; needs auto
       stepTimeoutSeconds: <int>         # Per built-in step timeout in seconds, minimum 1 (default: none)
-
   paused: <bool>                        # Hold every promotion of the Pipeline (default: false)
+  pausedFleets: [<string>, ...]         # Fleet environments that start no further target (default: none)
   maxConcurrentPromotions: <int>        # Bundles promoting at once; 0 is no cap (default: 0)
   policyNamespaces: [<string>, ...]     # Extra namespaces to read PolicyGates from (default: none)
   historyLimit: <int>                   # Number of Bundles to retain (default: 50)
@@ -110,7 +110,7 @@ spec:
 | `url` | Yes | | URL of the GitOps repository: HTTPS, or ssh (`ssh://git@host/owner/repo.git`, `git@host:owner/repo.git`) with an ssh key in `secretRef` |
 | `branch` | No | `main` | Base branch: `git-clone` checks it out, `approval: auto` pushes to it, and `pr-review` PRs target it. The API server sets `main` when the field is omitted, and the controller also reads an empty value as `main`. |
 | `layout` | No | `directory` | `directory`: environments as directories on one branch. `branch`: every environment's path is rendered (kustomize build, or helm template for a chart) and committed as plain manifests to its rendered branch; see [Rendered Manifests](../rendered-manifests.md). |
-| `secretRef.name` | No | | `secretRef` is optional; when it is set, `name` must be too. Name of a Kubernetes Secret in the Pipeline's namespace containing a `token` field with a GitHub PAT or GitLab token, GitHub App credentials (`githubAppID`, `githubAppInstallationID`, `githubAppPrivateKey`: git then uses installation tokens, see [GitHub App](../scm-providers.md#github-app)), or for an ssh `url` the `sshPrivateKey` and `knownHosts` keys ([SSH git authentication](../scm-providers.md#ssh-git-authentication)). Needed when the HTTPS remote refuses git without a token (every push to a hosted provider, and the clone of a private repository); not needed for a URL that carries its credentials (an ssh remote needs `sshPrivateKey` and `knownHosts` instead). When an HTTPS remote has no token this way (not set, a Secret that does not exist, or one with no `token` key and no GitHub App credentials), the Pipeline is `Ready=False` with reason `GitCredentialMissing` as soon as it is applied, and the message is the command that creates the Secret ([Troubleshooting](../troubleshoot-git.md#symptom-pipeline-readyfalse-with-reason-gitcredentialmissing)). When the remote refuses `git-clone` or `git-push` without a token, the step retries until the Secret exists; the step message says what is missing (see [Troubleshooting](../troubleshoot-git.md#symptom-authentication-required-with-git-secret-not-found-or-specgitsecretref-is-not-set)). **Label the Secret `kardinal.io/referenceable: "true"`** (`kubectl label secret github-token kardinal.io/referenceable=true`): the token goes to the Pipeline's `git.url`, which the Pipeline's author chooses, so the label records that the Secret's owner allows it. An unlabeled Secret is deprecated: it still works, and the Pipeline has the condition `SecretReferenceable=False` (reason `SecretNotReferenceable`); v0.11 refuses it. |
+| `secretRef.name` | No | | `secretRef` is optional; when it is set, `name` must be too. Name of a Kubernetes Secret in the Pipeline's namespace containing a `token` field with a GitHub PAT or GitLab token, GitHub App credentials (`githubAppID`, `githubAppInstallationID`, `githubAppPrivateKey`: git then uses installation tokens, see [GitHub App](../scm-providers.md#github-app)), or for an ssh `url` the `sshPrivateKey` and `knownHosts` keys ([SSH git authentication](../scm-providers.md#ssh-git-authentication)). Needed when the HTTPS remote refuses git without a token (every push to a hosted provider, and the clone of a private repository); not needed for a URL that carries its credentials (an ssh remote needs `sshPrivateKey` and `knownHosts` instead). When an HTTPS remote has no token this way (not set, a Secret that does not exist, or one with no `token` key and no GitHub App credentials), the Pipeline is `Ready=False` with reason `GitCredentialMissing` as soon as it is applied, and the message is the command that creates the Secret ([Troubleshooting](../troubleshoot-git.md#symptom-pipeline-readyfalse-with-reason-gitcredentialmissing)). When the remote refuses `git-clone` or `git-push` without a token, the step retries until the Secret exists; the step message says what is missing (see [Troubleshooting](../troubleshoot-git.md#symptom-authentication-required-with-git-secret-not-found-or-specgitsecretref-is-not-set)). **Label the Secret `kardinal.io/referenceable: "true"`** (`kubectl label secret github-token kardinal.io/referenceable=true`): the token goes to the Pipeline's `git.url`, which the Pipeline's author chooses, so the label records that the Secret's owner allows it. An unlabeled Secret is not used: the Pipeline is `Ready=False` with reason `SecretNotReferenceable` and the command that labels it, and every git step waits until it is labeled. |
 | `secretRef.namespace` | No | Pipeline's namespace | Must be empty or the Pipeline's own namespace. Any other namespace fails the PromotionStep without reading the Secret, so a Pipeline cannot use another namespace's credentials. The Pipeline's `Ready` condition is `False` with reason `ValidationFailed`, and `kardinal validate` reports it when the file sets `metadata.namespace`. |
 | `providerRef.name` | No | | Name of the [ScmProvider or ClusterScmProvider](../scm-providers.md#several-scm-providers-scmprovider-and-clusterscmprovider) whose API and token this Pipeline's PRs use. When `providerRef` is not set, the controller's `--scm-provider` is used. The provider is resolved when a Bundle's Graph is built. If it is missing, does not allow the Pipeline's namespace (`allowedNamespaces` of a ClusterScmProvider), or does not allow the repository (`allowedRepositories`), the Bundle waits with the reason. |
 | `providerRef.kind` | No | `ScmProvider` | `ScmProvider`, in the Pipeline's namespace, or `ClusterScmProvider`. |
@@ -179,16 +179,16 @@ Default: 50.
 
 When `true`, no PromotionStep of the Pipeline leaves `Pending`, and a step in `Promoting` holds before its next git step. Steps waiting for a PR merge or running a health check finish. The controller keeps a freeze PolicyGate named `freeze-<pipeline>` while the Pipeline is paused. `kardinal pause` / `kardinal resume` and the UI set this field. See [Pause and Resume](../pause.md).
 
-Default: `false`.
+Default: `false`. `spec.pausedFleets` (default: none) pauses fleet environments on their own: no further target of the fleet starts, for any version, and the targets in flight finish. `kardinal pause <pipeline> --env <fleet>` and `kardinal resume <pipeline> --env <fleet>` (and the UI) set it; changing it needs `update` on `pipelines/pause`. See [Pause one fleet](../pause.md#pause-one-fleet).
 
 ### spec.holds
 
-Environments pinned to a rollback. `kardinal rollback --hold` (or the UI) writes them, and
+Environments pinned to a version: what runs there (`kardinal hold`) or a rollback (`kardinal rollback --hold`, or the UI). Either writes them, and
 `kardinal unhold` (or the UI) removes them. The controller also removes a hold at its
 `expiresAt`. Each entry has these fields:
 
 - `environment`
-- `bundle`: the rollback Bundle
+- `bundle`: the held Bundle (the rollback, or what ran there when `kardinal hold` made it)
 - `reason`: required, up to 1024 characters
 - `createdBy` and `createdAt`
 - `expiresAt` (optional)

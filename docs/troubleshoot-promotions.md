@@ -23,13 +23,13 @@ prod is held by gate no-weekend-deploys.
   Why      Production deployments are blocked on weekends
   Rule     !schedule.isWeekend
   Now      !schedule.isWeekend = false
-  Opens    when the expression passes; rechecked every 5m
-  Next     kardinal override my-app prod --gate no-weekend-deploys --reason <why>
+  Opens    by itself when the expression passes; rechecked every 5m
+  Next     wait: it opens by itself when the expression passes (kardinal status my-app -w follows it)
+  Or       kardinal override my-app prod --gate no-weekend-deploys --reason <why>
 ```
 
 `kardinal why` names the gate, its rule and last evaluation, when it opens and the command that
-gets past it ([`kardinal why`](reference/cli/kardinal-why.md) lists every case). For every step
-and gate of the version in one table, run `kardinal explain my-app prod`.
+gets past it ([`kardinal why`](reference/cli/kardinal-why.md) lists every case). For every step and gate of the version in one table, run `kardinal explain my-app prod`.
 
 If a gate holds it, its Rule is not satisfied, and Now shows what it evaluated to. Common causes:
 - `no-weekend-deploys`: it is a weekend. Wait for Monday, or record a break-glass override with `kardinal override <pipeline> prod --gate no-weekend-deploys --reason "..."` (see [Emergency Overrides](overrides.md)).
@@ -203,7 +203,7 @@ Merges are also found by polling: each PRStatus checks its PR every 30 seconds, 
 
 ### Symptom: "429 Too Many Requests" from the Bundle API
 
-The Bundle API allows 60 requests per minute. There is one token, so every CI job and every Pipeline shares that limit, and every request with the right token counts, including ones rejected with `400`. The window is a fixed minute kept in the controller process.
+The Bundle API allows 60 requests per minute. There is one static token, so every CI job and every Pipeline that uses it shares that limit (a [TokenReview](ci-integration.md#kubernetes-tokens-tokenreview) caller has its own), and every request with the right token counts, including ones rejected with `400`. The window is a fixed minute kept in the controller process.
 
 The limit cannot be changed. Create fewer versions (for example one per merge to main rather than one per push), or retry after the minute is over. The create-bundle GitHub Action does not retry a `429`.
 

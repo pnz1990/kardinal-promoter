@@ -389,7 +389,7 @@ Complete manifests for the image and git sources are in
 | `status.lastSeenRevision` | With `pathGlob`: the branch head the last poll read up to |
 | `status.lastRefreshRequest` | The `kardinal.io/refresh` value the last poll answered |
 | `status.observedPathGlob` | The `pathGlob` of the last successful poll |
-| `status.conditions[type=Ready]` | `True` while polling; `False` with the reason (`SecretNotReferenceable`, `SecretNotFound`, `SecretHasNoCredentials`, `WatchFailed`, `InvalidSpec`) |
+| `status.conditions[type=Ready]` | `True` while polling; `False` with the reason (`SecretNotReferenceable`, `SecretNotFound`, `SecretUnreadable`, `SecretHasNoCredentials`, `WatchFailed`, `InvalidSpec`) |
 | `status.message` | Error details when phase=Error |
 
 ## Deduplication
@@ -477,13 +477,13 @@ poll, and the payload's tag or digest is never trusted.
 | Answer | When |
 |---|---|
 | `202 {"status":"refresh requested"}` | The annotation was set |
-| `202 {"status":"refresh already pending"}` | A refresh is already pending (the annotation is newer than `status.lastRefreshRequest`): duplicate and redelivered events are not written again |
+| `202 {"status":"refresh already pending"}` | A refresh is already pending (the annotation differs from `status.lastRefreshRequest`): duplicate and redelivered events are not written again |
 | `200 {"status":"ignored: <event>"}` | Authenticated, but not a push: a GitHub `ping`, a Harbor delete, an Artifactory `deleted` |
 | `400` | The payload is not the provider's format |
 | `401 {"status":"unauthorized"}` | Any authentication failure, a Subscription that does not exist, or one without `spec.webhook`: the answer does not reveal which Subscriptions exist |
 | `404` | The path is not `/webhook/subscriptions/<namespace>/<name>/<provider>[/<token>]` |
 | `413` | The payload is over 1 MB |
-| `429` | More than 10 requests a second (bursts of 20) from one source address, or 5 a second (bursts of 10) for one Subscription. Behind an Ingress or load balancer every sender has its address, so all senders share one per-address bucket, and the per-Subscription limit is shared by everyone who posts to that Subscription: neither separates one sender from another. Give each Subscription its own token Secret ([Enabling it on a Subscription](#enabling-it-on-a-subscription)), so a leaked token reaches one Subscription only, and rate-limit per client at the Ingress |
+| `429` | More than 10 requests a second (bursts of 20) from one source address, or 5 a second (bursts of 10) for one Subscription. Behind an Ingress or load balancer every sender has the Ingress's address, so all senders share one per-address bucket, and the per-Subscription limit is shared by everyone who posts to that Subscription: neither separates one sender from another. Give each Subscription its own token Secret ([Enabling it on a Subscription](#enabling-it-on-a-subscription)), so a leaked token reaches one Subscription only, and rate-limit per client at the Ingress |
 
 The reconciler polls at most once every 10 seconds per Subscription, however many
 deliveries arrive.

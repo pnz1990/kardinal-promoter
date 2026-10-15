@@ -319,8 +319,8 @@ is promoted.
 
 The `/api/v1/bundles` endpoint requires a Bearer token. The controller compares it, in
 constant time, with the value of the `--bundle-api-token` flag or the `KARDINAL_BUNDLE_TOKEN`
-environment variable. The endpoint is only mounted when the token is set; without it
-`/api/v1/bundles` returns `404`.
+environment variable. The endpoint is only mounted when the token or
+[TokenReview](#kubernetes-tokens-tokenreview) is set; without either `/api/v1/bundles` returns `404`.
 
 Keep the token in a Kubernetes Secret and expose it to the controller as
 `KARDINAL_BUNDLE_TOKEN`. With the Helm chart, point `bundleAPI.tokenSecretRef.name` at the
@@ -547,9 +547,10 @@ The body is limited to 1 MiB.
 | 201 | Version created. The body is `{"name": "...", "namespace": "..."}` |
 | 400 | Invalid request body, unknown field, or rejected by Bundle validation |
 | 401 | Invalid or missing token |
-| 403 | Namespace is not the one set by `--watch-namespace` |
+| 403 | Namespace is not the one set by `--watch-namespace`, or RBAC denies a [TokenReview](#kubernetes-tokens-tokenreview) caller |
 | 404 | Pipeline not found in the target namespace, or the endpoint is not enabled |
 | 405 | Method other than `POST` |
 | 409 | A version with the generated name already exists |
 | 429 | Rate limit exceeded |
 | 500 | The controller could not read the Pipeline or create the version |
+| 503 | With [TokenReview](#kubernetes-tokens-tokenreview): the review API could not be reached |

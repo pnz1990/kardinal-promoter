@@ -102,7 +102,7 @@ and nothing else: an AnalysisRun counts only when its name is one this build of 
 rendered (a list rebuilt at every translation), kro applied it (label `kro.run/node-id`) and it
 belongs to this version (label `kardinal.io/bundle-uid` equal to the version's UID). So an
 AnalysisRun someone creates with matching `kardinal.io/*` labels is ignored, and the chart's
-`<release>-graph-objects` admission policy refuses creating one labelled `kardinal.io/bundle`
+`<fullname>-graph-objects` admission policy refuses creating one labelled `kardinal.io/bundle`
 except as kro or the controller ([Verified identity](guides/security.md#verified-identity)). That does not make
 the verdict tamper-proof: Argo Rollouts aggregates `create` and `patch` on `analysisruns` into
 the built-in `edit` and `admin` ClusterRoles, and its controller trusts `status`. Anyone who can

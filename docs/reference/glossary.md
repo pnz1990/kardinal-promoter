@@ -22,8 +22,8 @@ kardinal has four core words: **version**, **pipeline**, **environment** and **g
 | Fleet | `fleet` | One environment expanded to many targets, promoted with a pace |  |
 | Supersede | phase `Superseded` | A newer version of the same type replaces an unfinished older one ([details](../architecture.md#bundle-supersession)) | Replaced by newer version |
 | Reject | `spec.rejected` | Stop a version everywhere for good (`kardinal reject`) | Rejected (a version), Version rejected (a gate) |
-| Hold | Pipeline `spec.holds` | Keep an environment on a rolled-back version (`kardinal rollback --hold`) | Held by rollback |
-| Pause | Pipeline `spec.paused` | Stop new promotions of a Pipeline (`kardinal pause`) | Paused |
+| Hold | Pipeline `spec.holds` | Keep an environment on what runs there (`kardinal hold`) or on a rolled-back version (`kardinal rollback --hold`) | Held by rollback |
+| Pause | Pipeline `spec.paused`, `spec.pausedFleets` | Stop new promotions of a Pipeline, or of one fleet (`kardinal pause`, `--env <fleet>`) | Paused |
 | PR evidence | | The provenance, gate results and upstream health kardinal writes into a promotion pull request |
 | Subscription | `Subscription` | Watches a registry, Git or a chart repository and creates versions |  |
 | Rendered manifests | `layout: branch`, `RenderRun` | kardinal renders an environment and commits plain YAML to its branch |  |

@@ -495,24 +495,6 @@ type BakeConfig struct {
 	MaxDuration string `json:"maxDuration,omitempty"`
 }
 
-// WebhookConfig is the shape of the deprecated spec.environments[].steps[].webhook
-// field. Deprecated: nothing reads this field.
-type WebhookConfig struct {
-	// URL is the HTTP(S) endpoint to POST to.
-	// +kubebuilder:validation:MinLength=1
-	URL string `json:"url"`
-
-	// TimeoutSeconds is the per-call timeout. Defaults to 300.
-	// +kubebuilder:default=300
-	// +optional
-	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
-
-	// SecretRef references a Kubernetes Secret whose "Authorization" key is
-	// sent as the Authorization header.
-	// +optional
-	SecretRef *SecretRef `json:"secretRef,omitempty"`
-}
-
 // UpdateConfig holds manifest update strategy configuration.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.strategy) || self.strategy != 'yaml' || (has(self.yaml) && size(self.yaml.updates) > 0)",message="update.strategy yaml requires update.yaml.updates"
