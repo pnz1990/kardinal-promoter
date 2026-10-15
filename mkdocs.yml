@@ -131,6 +131,8 @@ nav:
     - Threat model: agentic/threat-model.md
     - Agents and the verified actor: actors.md
     - Verify with agents: agentic/verify-with-agents.md
+    - Actor-aware policy: agentic/policy.md
+    - Freeze agents, stop the line: agentic/freezes.md
   - How-to:
     - Use the UI: ui.md
     - Ship versions from CI: ci-integration.md
@@ -193,6 +195,7 @@ nav:
       - kardinal diff: reference/cli/kardinal-diff.md
       - kardinal doctor: reference/cli/kardinal-doctor.md
       - kardinal explain: reference/cli/kardinal-explain.md
+      - kardinal freeze: reference/cli/kardinal-freeze.md
       - kardinal get:
         - kardinal get: reference/cli/kardinal-get.md
         - kardinal get auditevents: reference/cli/kardinal-get-auditevents.md
@@ -222,6 +225,7 @@ nav:
       - kardinal rollback: reference/cli/kardinal-rollback.md
       - kardinal ship: reference/cli/kardinal-ship.md
       - kardinal status: reference/cli/kardinal-status.md
+      - kardinal unfreeze: reference/cli/kardinal-unfreeze.md
       - kardinal unhold: reference/cli/kardinal-unhold.md
       - kardinal validate: reference/cli/kardinal-validate.md
       - kardinal verify:

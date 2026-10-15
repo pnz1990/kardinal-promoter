@@ -21,6 +21,7 @@ import { PipelineList } from './components/PipelineList'
 import { HealthChip } from './components/HealthChip'
 import { RejectedLiveBanner } from './components/RejectedLiveBanner'
 import { InsecureConnectionBanner } from './components/InsecureConnectionBanner'
+import { FreezeBanner, FreezeMenu, useFreezes } from './components/FreezeBanner'
 import { Breadcrumb } from './components/Breadcrumb'
 import type { PaletteCommand } from './components/CommandPalette'
 import { Badge, ErrorNotice, Icon, Kbd, Skeleton, TabPanel, Tabs } from './ui'
@@ -234,6 +235,7 @@ export function App() {
 
   // #913: insecure connection banner — dismissed state for the current session.
   const [insecureBannerDismissed, setInsecureBannerDismissed] = useState(false)
+  const { freezes, refresh: refreshFreezes } = useFreezes()
 
   // #462: view mode — 'list' (sidebar) | 'ops-table' (full-width operations table), in the
   // URL as view=ops.
@@ -571,6 +573,7 @@ export function App() {
   // The top bar's tools: Go to or do… (⌘K), and the visible way to help (?).
   const topbarTools = (
     <div className="app-topbar__tools">
+      <FreezeMenu onChange={refreshFreezes} />
       <button type="button" className="app-topbar__search" aria-label="Go to or do… ⌘K" onClick={() => setPaletteOpen(true)}>
         <Icon name="search" />
         <span>Go to or do…</span>
@@ -592,12 +595,16 @@ export function App() {
   // #913: Insecure connection warning — plain HTTP from a non-loopback address.
   // It heads every main view, so it shows before any pipeline loads (the API
   // may refuse the page's requests outright).
+  // Freezes (docs/agentic/freezes.md) head every main view too: they hold promotions everywhere.
   const insecureBanner = (
-    <InsecureConnectionBanner
-      dismissed={insecureBannerDismissed}
-      onDismiss={() => setInsecureBannerDismissed(true)}
-      className="app-insecure-banner"
-    />
+    <>
+      <InsecureConnectionBanner
+        dismissed={insecureBannerDismissed}
+        onDismiss={() => setInsecureBannerDismissed(true)}
+        className="app-insecure-banner"
+      />
+      <FreezeBanner freezes={freezes} onChange={refreshFreezes} />
+    </>
   )
 
   // U7: the keyboard's next/previous environment, approve and ship. A key that has nothing

@@ -171,6 +171,10 @@ func main() {
 			"its expiresAt and this cap. The UI API refuses a longer override, and the chart's scoped-writes "+
 			"admission policy one written with kubectl by a caller limited to policygates/override "+
 			"(Helm controller.gateOverrideMaxMinutes).")
+	var freezeExemptionMaxMinutes int
+	flag.IntVar(&freezeExemptionMaxMinutes, "freeze-exemption-max-minutes", int(changewindowrecon.DefaultMaxExemption.Minutes()),
+		"Longest a freeze exemption (kardinal override --freeze) counts, from when the controller first saw it; "+
+			"an exemption ends at the earlier of its expiresAt and this cap (Helm controller.freezeExemptionMaxMinutes).")
 	var agentIndexName string
 	flag.StringVar(&agentIndexName, "agent-index", "",
 		"Name of the AgentIndex this controller builds from the AgentIdentities and stamps the UI API's and the "+
@@ -332,6 +336,12 @@ func main() {
 			"When true and --ui-auth-token is not set, each request's bearer token is "+
 			"validated via authenticationv1.TokenReview. Fail-closed: API errors return 503. "+
 			"Also readable from KARDINAL_UI_TOKENREVIEW_AUTH environment variable (set to 'true').")
+
+	var uiFreezeControls bool
+	flag.BoolVar(&uiFreezeControls, "ui-freeze-controls", false,
+		"Offer Freeze agents, Stop the line and Unfreeze in the UI (POST /api/v1/ui/freeze and /unfreeze): the "+
+			"controller writes freezing ChangeWindows for TokenReview-authenticated callers allowed "+
+			"changewindows/freeze. Needs create, update and delete on changewindows. Chart value: ui.freezeControls.")
 
 	tokenReviewAudiences := uiauth.DefaultAudience
 	if v, ok := os.LookupEnv("KARDINAL_TOKENREVIEW_AUDIENCES"); ok {
@@ -898,6 +908,8 @@ func main() {
 	pgReconciler.Workers = *workers["policygate"]
 	applyGateOverrideCap(gateOverrideMaxMinutes, pgReconciler)
 	pgReconciler.IdentityPolicy = &policygaterecon.IdentityPolicyCheck{Reader: mgr.GetAPIReader(), Name: overrideIdentityPolicy}
+	// agent.* in gate expressions reads this release's AgentIndex (18-actor-policy 2.2).
+	pgReconciler.AgentIndexName = agentIndexName
 	if overrideIdentityPolicy == "" {
 		logger.Warn().Msg("--override-identity-policy is not set: gate overrides are recorded with an unverified createdBy")
 	}
@@ -1054,7 +1066,8 @@ func main() {
 	// ChangeWindowReconciler: evaluates each ChangeWindow (blackout or recurring),
 	// writes status.active/reason and requeues at the next boundary. The status write
 	// re-evaluates the PolicyGates that reference the window.
-	cwReconciler := &changewindowrecon.Reconciler{Client: mgr.GetClient()}
+	cwReconciler := &changewindowrecon.Reconciler{Client: mgr.GetClient(),
+		MaxExemption: time.Duration(freezeExemptionMaxMinutes) * time.Minute}
 	// An Event on a ChangeWindow, a cluster-scoped kind, is written in the
 	// default namespace, where namespace mode grants no Event writes. There the
 	// Valid condition and the log report an invalid spec.
@@ -1184,6 +1197,7 @@ func main() {
 		logger.Fatal().Err(err).Msg("UI API authentication")
 	}
 	uiAuth.actors = actors
+	uiAuth.freezeControls = uiFreezeControls
 	switch {
 	case uiAuth.staticToken != "":
 		// O4 (spec issue-975): the static token takes precedence over TokenReview.

@@ -20,6 +20,8 @@ Graph `readyWhen` and template expressions run in kro's CEL environment, not thi
 | `changewindow` | map | ChangeWindow name → `true` while the window is active (blocking); also `changewindow.isBlocked("name")` and `changewindow.isAllowed("name")`. An unknown name blocks the gate. See [ChangeWindow attributes](../policy-gates.md#changewindow-attributes) |
 | `approvals` | map | The Approvals counted for this gate instance (`kardinal approve`). See [`approvals.*`](#approvals) |
 | `verdicts` | map | The Verdicts a verify gate counted (`kardinal verify`, AgentRuns). See [`verdicts.*`](#verdicts) |
+| `actor` | map | Who created the version: its verified actor stamp. See [`actor.*`](#actor) |
+| `agent` | map | The version's agent as the registry says now. See [`agent.*`](#agent) |
 
 ---
 
@@ -28,7 +30,7 @@ Graph `readyWhen` and template expressions run in kro's CEL environment, not thi
 | Field | Type | Example | When populated |
 |---|---|---|---|
 | `bundle.type` | string | `"image"` | Always |
-| `bundle.createdBy` | string | `"oidc:alice@example.com"` | The Bundle's verified creator (`kardinal.io/created-by`); `""` when it has none |
+| `bundle.createdBy` | string | `"oidc:alice@example.com"` | The Bundle's verified creator (`kardinal.io/created-by`); `""` when it has none. Kept as an alias of `actor.principal` for one release |
 | `bundle.version` | string | `"1.29.0"` | Always. `image` and `mixed` Bundles: the first image's tag (`""` when that image has only a digest). `config` Bundles: the first 8 characters of `configRef.commitSHA` |
 | `bundle.upstreamSoakMinutes` | int | `45` | Soak of the direct upstream environment(s) of the gated environment; minimum across them on fan-in; 0 for a root environment or an upstream that is not Verified |
 | `bundle.provenance.author` | string | `"engineer@co.com"` | When Bundle was created with `provenance.author` |
@@ -314,7 +316,7 @@ kardinal policy test my-gate.yaml
 
 ## `approvals.*`
 
-The decisions `kardinal approve` recorded for the gate instance's Bundle and environment (the Graph copies them into `spec.approvals`). With `spec.approval` set, only allowed approvers count, and with `excludeAuthor` the Bundle's creator does not (see [Approval gates](../approvals.md)); without it, every approval counts. Each user counts once.
+The decisions `kardinal approve` recorded for the gate instance's Bundle and environment (the Graph copies them into `spec.approvals`). With `spec.approval` set, only allowed approvers count, and with `excludeAuthor` nobody of the author's party does (see [Approval gates](../approvals.md)); without it, every person's approval counts.
 
 | Field | Type | Example | When populated |
 |---|---|---|---|
@@ -322,6 +324,11 @@ The decisions `kardinal approve` recorded for the gate instance's Bundle and env
 | `approvals.required` | int | `2` | `spec.approval.required`; `0` without `spec.approval` |
 | `approvals.users` | list | `["alice@example.com"]` | Always; the users whose approval counts, sorted |
 | `approvals.rejected` | bool | `false` | Always; `true` when a counted user rejected |
+| `approvals.met` | bool | `false` | Always; `true` when the gate has no policy, its policy is met, or `approval.requiredWhen` is false now |
+
+Decisions count per party: a person, or an agent together with its sponsor, is one vote, and
+`approvals.count` and `approvals.users` count and list parties. An agent's approval counts only on
+a gate with `approval.allowAgents` that lists the agent ([Agents as approvers](../approvals.md#agents-as-approvers)).
 
 ```yaml
 # Two approvals, outside the weekend
@@ -345,4 +352,57 @@ The votes a verify gate (`spec.verify`) counted from the Verdicts of the gate in
 ```yaml
 # The quorum, and no high finding among the counted verdicts
 expression: 'verdicts.findings.high == 0'
+```
+
+---
+
+## `actor.*`
+
+Who created the version: the Bundle's verified actor stamp (`spec.actor`,
+[Actors](../actors.md)). It is fixed when the version is created. A version
+without a stamp (a v0.11 client, or kubectl) reads as kind `unknown`, with its
+`kardinal.io/created-by` as the principal. What a client asserts about itself (model, session,
+client) is not in the context: it is text the client writes, and no such text reaches a gate.
+
+| Field | Type | Example | When populated |
+|---|---|---|---|
+| `actor.kind` | string | `"agent"` | Always: `human`, `agent`, `bot`, `controller`, or `unknown` without a stamp |
+| `actor.principal` | string | `"system:serviceaccount:ci:fixer"` | The authenticated username; without a stamp `kardinal.io/created-by`; else `""` |
+| `actor.agent` | string | `"fixer"` | The AgentIdentity name when the kind is `agent`; else `""` |
+| `actor.sponsor` | string | `"alice@example.com"` | The agent's sponsor when the version was created, when the kind is `agent`; else `""` |
+| `actor.via` | string | `"ui"` | `ui` or `api` when the controller wrote the version for its caller, `subscription` or `auto-rollback` for its own; else `""` |
+| `actor.verified` | bool | `true` | Always; `true` when the version has a stamp |
+
+```cel
+# Only stamped versions (refuse v0.11 clients and hand-written Bundles)
+actor.verified
+
+# People only: no agent, bot or unknown creator
+actor.verified && actor.kind == "human"
+
+# Agents of one sponsor may ship here
+actor.kind != "agent" || actor.sponsor == "alice@example.com"
+```
+
+## `agent.*`
+
+The version's agent as the registry says at this evaluation: an admin who suspends the agent
+or tightens its autonomy changes its in-flight gates. It is read from status the registry's
+reconcilers write: the AgentIdentity's `status.ready`, and the agent's entry in the release's
+AgentIndex. For a version no agent created, every field is empty or false.
+
+| Field | Type | Example | When populated |
+|---|---|---|---|
+| `agent.registered` | bool | `true` | The agent has a ready AgentIdentity and an entry in the AgentIndex |
+| `agent.name` | string | `"fixer"` | `actor.agent` |
+| `agent.sponsor` | string | `"alice@example.com"` | The sponsor now, when registered; else `""` |
+| `agent.autonomy` | string | `"approve"` | `auto`, `approve` or `deny` now, when registered; else `""` |
+| `agent.suspended` | bool | `false` | `true` while the AgentIdentity is suspended |
+
+```cel
+# Hold a version whose agent was suspended or deregistered after it was created
+actor.kind != "agent" || (agent.registered && !agent.suspended)
+
+# Agents with autonomy auto ship here; others wait (pair with approval.requiredWhen)
+actor.kind != "agent" || agent.autonomy == "auto"
 ```

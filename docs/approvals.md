@@ -40,7 +40,7 @@ spec:
     required: 2                 # distinct people (default 1)
     allowedGroups: [release-managers]
     allowedUsers: [oidc:carol@example.com]
-    excludeAuthor: true         # the Bundle's verified creator does not count
+    excludeAuthor: true         # the version's author (and, for an agent, its sponsor) does not count
 ```
 
 See what waits for you, across pipelines (`-A` for every namespace):
@@ -100,13 +100,68 @@ How it works:
 
 - `kardinal approve` creates an `Approval` object in the Pipeline namespace, labelled with the version and environment, holding the version's UID (`spec.bundleUID`) and owned by the version (deleted with it). It records your Kubernetes username and groups, read from the API server with a SelfSubjectReview. The chart's `<release>-approvals` ValidatingAdmissionPolicy refuses an Approval whose `spec.user` is not the requester, whose `spec.groups` are not among the requester's groups, or whose labels do not match its spec, or that is owned by anything but the version it approves (its owner references cannot change later), and lets only its approver delete it (the garbage collector and the namespace controller excepted; kardinal's controller never deletes Approvals) ([Verified identity](guides/security.md#verified-identity)). An Approval cannot be changed: approving again with another decision replaces yours, and `--revoke` deletes it. The CLI finds your Approval by its labels and `spec.user`, never by name: anyone can create an object under the name it would use, so when that name is taken the API server generates one.
 - The promotion Graph reads the version's Approvals with a selector `ref` node and copies those for the environment, for this version's UID and from approvers the gate allows (`allowedUsers`, `allowedGroups`; anyone when both are empty) into each approval gate instance (`spec.approvals`, at most 101; a gate with more than 100 blocks and says so). The allow-lists apply before the cap, so Approvals from people who may not approve cannot crowd out the ones that count. An Approval of an earlier version that had the same name never counts. A new or deleted Approval re-renders the gate at once. Approving before the version reaches the gate is fine.
-- The gate counts a decision when its user is in `allowedUsers` or one of its groups is in `allowedGroups`, and, with `excludeAuthor`, the user is not the version's verified creator. Each user counts once. A counted `reject` blocks the gate whatever the approvals. Every decision that appears or is revoked writes an `ApprovalRecorded` or `ApprovalRevoked` AuditEvent.
+- The gate counts a person's decision when its user is in `allowedUsers` or one of its groups is in `allowedGroups`, and, with `excludeAuthor`, the user is not of the version's author's party ([One party, one vote](#one-party-one-vote)). An agent's decision counts only with the gate's opt-in ([Agents as approvers](#agents-as-approvers)). Each party counts once. A counted `reject` blocks the gate whatever the approvals. Every decision that appears or is revoked writes an `ApprovalRecorded` or `ApprovalRevoked` AuditEvent.
 - With neither `allowedUsers` nor `allowedGroups`, every Approval counts: RBAC on `approvals` decides who can approve, and that includes ServiceAccounts with `create` on `approvals`. Set an allow-list for a gate that only people may pass.
 - Group membership is checked when the Approval is created: an approval stays valid after its approver leaves the group. Revoke it by deleting the Approval (its approver) or with a new version. Revoking only matters while the gate waits: once the gate passed and the environment's promotion started, a revoked approval does not stop or undo that promotion (reject the version, or roll back, for that).
-- `excludeAuthor` compares approvers with the version's `kardinal.io/created-by` annotation, its verified creator. `kardinal create bundle`, `kardinal promote` and `kardinal rollback` set it to your Kubernetes username, and the chart's `<release>-bundle-creator` policy admits it only in the requester's name and never lets it change. The UI sets the authenticated UI user (`kardinal-ui` without per-user authentication), a Subscription `subscription:<name>`, the Bundle API's static token `bundle-api`, an automatic rollback `kardinal-controller`; only this release's controller ServiceAccount (and the exact usernames in Helm `admission.controllerUsernames`) may name a creator other than itself. A version without the annotation (created with `kubectl` or a GitOps tool without it) blocks a gate with `excludeAuthor`: `excludeAuthor cannot be enforced: the Bundle has no verified creator`. So does a version created by a kardinal component (`subscription:*`, `bundle-api`, `kardinal-ui`, `kardinal-controller`): no person is known to exclude. For CI, create the version as the CI identity: `kardinal create bundle` (or `kubectl create`) with the CI ServiceAccount's kubeconfig records that ServiceAccount, which the policy verifies; with the Bundle API, send the ServiceAccount's own token rather than the shared static token once TokenReview authentication of the Bundle API is enabled, so the controller records the authenticated caller.
+- `excludeAuthor` uses the version's actor stamp when it has one ([One party, one vote](#one-party-one-vote)); without one, it compares approvers with the version's `kardinal.io/created-by` annotation, its verified creator. `kardinal create bundle`, `kardinal promote` and `kardinal rollback` set it to your Kubernetes username, and the chart's `<release>-bundle-creator` policy admits it only in the requester's name and never lets it change. The UI sets the authenticated UI user (`kardinal-ui` without per-user authentication), a Subscription `subscription:<name>`, the Bundle API's static token `bundle-api`, an automatic rollback `kardinal-controller`; only this release's controller ServiceAccount (and the exact usernames in Helm `admission.controllerUsernames`) may name a creator other than itself. A version without the annotation (created with `kubectl` or a GitOps tool without it) blocks a gate with `excludeAuthor`: `excludeAuthor cannot be enforced: the Bundle has no verified creator`. So does a version created by a kardinal component (`subscription:*`, `bundle-api`, `kardinal-ui`, `kardinal-controller`): no person is known to exclude. For CI, create the version as the CI identity: `kardinal create bundle` (or `kubectl create`) with the CI ServiceAccount's kubeconfig records that ServiceAccount, which the policy verifies; with the Bundle API, send the ServiceAccount's own token rather than the shared static token once TokenReview authentication of the Bundle API is enabled, so the controller records the authenticated caller.
 - While it waits, the gate reason is `waiting for approvals: 1 of 2 (alice@example.com)` or `rejected by bob@example.com (wait for INC-42)`; once met, the expression's reason ends with `approved by alice@example.com, bob@example.com (2 of 2)`, which `kardinal explain`, the UI and the PR evidence show. `status.approvals` lists every decision, whether it counts, why not, and when the gate first saw it.
-- The expression can read the count: `approvals.count`, `approvals.required`, `approvals.users` and `approvals.rejected` ([CEL context](reference/cel-context.md#approvals)).
-- `kardinal override` still force-passes an approval gate, with its own audit record.
+- The expression can read the count: `approvals.count`, `approvals.required`, `approvals.users`, `approvals.rejected` and `approvals.met` ([CEL context](reference/cel-context.md#approvals)).
+- `kardinal override` by a person still force-passes an approval gate, with its own audit record. An override by an agent never opens a gate ([Actor-aware policy](agentic/policy.md#break-glass-is-for-people)).
+
+## One party, one vote
+
+When the version has an actor stamp ([Actors](actors.md)), an agent and its sponsor
+count as one party. With `excludeAuthor: true`, nobody of the author's party may approve:
+
+| The version was created by | These approvals do not count |
+|---|---|
+| alice | alice; alice's agents |
+| agent `fixer`, sponsored by alice | agent `fixer`; alice; alice's other agents |
+
+`required: N` counts parties: an approval from alice and one from her agent are one approval, and
+the second is recorded with `already counted for alice (one vote per party)`. A reject follows the
+same rules as an approve: one that would not count as an approval does not block. A version
+without a stamp is compared by its `kardinal.io/created-by`, as before.
+
+## Agents as approvers
+
+An agent's approval counts only on a gate that opts in, by name, and never on work of its own
+party, whether or not the gate sets `excludeAuthor`:
+
+```yaml
+spec:
+  expression: "true"
+  approval:
+    required: 2
+    allowedGroups: [release-managers]
+    allowAgents: true                 # both keys are required, together
+    allowedAgents: [security-reviewer]
+    excludeAuthor: true
+```
+
+`allowedUsers` and `allowedGroups` do not apply to agents: an agent is admitted by its
+AgentIdentity name in `allowedAgents`. An agent's approval on any other gate is recorded with the
+reason it does not count. Admission checks the Approval's actor stamp and the agent's
+`scope.environments`, so an agent cannot approve as a person or outside its scope.
+
+## Require approval only sometimes
+
+`approval.requiredWhen` is a CEL expression, in the gate's context: the policy holds the gate only
+while it is true. Unset means always.
+
+```yaml
+approval:
+  required: 1
+  allowedGroups: [release-managers]
+  excludeAuthor: true
+  requiredWhen: "actor.kind == 'agent'"    # people ship on their own; agents need a release manager
+```
+
+While it is false the approvals are still recorded, `approvals.met` is true, the reason ends with
+`approval not required (approval.requiredWhen is false)`, and `status.approvalRequired` is false,
+so `kardinal inbox`, `kardinal why` and the UI do not list the gate as waiting for an approval. An
+evaluation error blocks the gate. The `agents` field of a Pipeline environment compiles into such
+a gate ([Actor-aware policy](agentic/policy.md#autonomy-per-environment)).
 
 Who may approve: bind the chart's `<release>-approvals` ClusterRole (create, delete and read `approvals`, read Bundles, Pipelines and PolicyGates) with a RoleBinding in the Pipeline namespace. The Graph ServiceAccount needs `list` and `watch` on `approvals`, which the chart's `graph-applier` role has.
 

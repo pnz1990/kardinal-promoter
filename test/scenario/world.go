@@ -473,6 +473,9 @@ func NewWorld(t testing.TB, opts Options) *World {
 	gates.NowFn = now
 	gates.MetricsNowFn = now
 	gates.PolicyNamespaces = opts.PolicyNamespaces
+	if opts.Actors {
+		gates.AgentIndexName = Release // agent.* reads the release's AgentIndex, as --agent-index sets it
+	}
 	w.gates = gates
 	w.prs = &prsrec.Reconciler{Client: rc, SCM: provider, NowFn: now}
 	w.windows = &cwrec.Reconciler{Client: rc, NowFn: now}

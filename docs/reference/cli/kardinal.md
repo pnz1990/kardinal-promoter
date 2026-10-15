@@ -101,6 +101,7 @@ names the new Bundle.
 * [kardinal diff](kardinal-diff.md)	 - Show what changes between two versions (Bundles)
 * [kardinal doctor](kardinal-doctor.md)	 - Run pre-flight checks to verify the cluster is correctly configured
 * [kardinal explain](kardinal-explain.md)	 - Explain the current state of a promotion pipeline
+* [kardinal freeze](kardinal-freeze.md)	 - Freeze agents, or stop the line for everyone; with no flags, list the freezes
 * [kardinal get](kardinal-get.md)	 - Display one or more kardinal resources
 * [kardinal history](kardinal-history.md)	 - Show a pipeline's promotion history, newest first
 * [kardinal hold](kardinal-hold.md)	 - Keep an environment on what runs there now
@@ -120,6 +121,7 @@ names the new Bundle.
 * [kardinal rollback](kardinal-rollback.md)	 - Roll back an environment to the version before
 * [kardinal ship](kardinal-ship.md)	 - Ship a version: create a Bundle, and with --wait follow it
 * [kardinal status](kardinal-status.md)	 - Show controller health or per-pipeline in-flight promotion details
+* [kardinal unfreeze](kardinal-unfreeze.md)	 - Lift a freeze
 * [kardinal unhold](kardinal-unhold.md)	 - Release an environment's hold (kardinal hold, or rollback --hold)
 * [kardinal validate](kardinal-validate.md)	 - Validate Pipeline and PolicyGate YAML before applying to the cluster
 * [kardinal verify](kardinal-verify.md)	 - Record a verdict on the version running in an environment (verify gates)

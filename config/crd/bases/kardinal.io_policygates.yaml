@@ -77,6 +77,25 @@ spec:
                   them rejected it. Copied from the template to every gate instance. For
                   a gate that only waits for approvals, use the expression "true".
                 properties:
+                  allowAgents:
+                    description: |-
+                      AllowAgents opts the gate in to approvals by agents. An approval whose
+                      actor is an agent counts only when this is true and the agent is in
+                      allowedAgents, and never on a version of the agent's own party
+                      (the agent, its sponsor, or the sponsor's other agents), whatever
+                      excludeAuthor says. allowedUsers and allowedGroups do not apply to
+                      agents.
+                    type: boolean
+                  allowedAgents:
+                    description: |-
+                      AllowedAgents are the AgentIdentity names whose approvals count when
+                      allowAgents is true.
+                    items:
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    maxItems: 32
+                    type: array
                   allowedGroups:
                     description: |-
                       AllowedGroups are Kubernetes groups: an approval counts when one of the
@@ -99,15 +118,40 @@ spec:
                       chart's admission policy pins to the creating user (kardinal create
                       bundle, the Bundle API and the UI set it). A Bundle without it blocks
                       the gate: the rule cannot be enforced.
+                      It applies the one-party rule: with an actor stamp on the Bundle, an
+                      agent's version cannot be approved by the agent, its sponsor or another
+                      agent of that sponsor, and a person's version not by the person's own
+                      agents.
                     type: boolean
                   required:
                     default: 1
-                    description: Required is how many distinct allowed people must
-                      approve.
+                    description: |-
+                      Required is how many distinct allowed parties must approve. A party
+                      is a person, or an agent together with its sponsor
+                      (docs/design/18-actor-policy.md): alice and her agent count once.
                     maximum: 100
                     minimum: 1
                     type: integer
+                  requiredWhen:
+                    description: |-
+                      RequiredWhen is a CEL expression, in the gate's own context: the policy
+                      holds the gate only while it is true. Unset means always. While it is
+                      false approvals are still recorded, approvals.met is true and
+                      status.approvalRequired is false. An evaluation error blocks the gate.
+                      Example: "actor.kind == 'agent'" (people ship on their own, agents need
+                      an approval).
+                    maxLength: 4096
+                    type: string
                 type: object
+                x-kubernetes-validations:
+                - message: 'approval.allowAgents needs approval.allowedAgents: name
+                    the agents whose approvals count'
+                  rule: '!has(self.allowAgents) || !self.allowAgents || (has(self.allowedAgents)
+                    && size(self.allowedAgents) > 0)'
+                - message: 'approval.allowedAgents needs approval.allowAgents: true
+                    (agent approvals are opt-in)'
+                  rule: '!has(self.allowedAgents) || size(self.allowedAgents) == 0
+                    || (has(self.allowAgents) && self.allowAgents)'
               approvals:
                 description: |-
                   Approvals is written by the promotion Graph on gate instances: the
@@ -706,6 +750,12 @@ spec:
           status:
             description: PolicyGateStatus defines the observed state of a PolicyGate.
             properties:
+              approvalRequired:
+                description: |-
+                  ApprovalRequired is whether spec.approval held the gate at the last
+                  evaluation: false while approval.requiredWhen is false, true otherwise.
+                  Unset on a gate without a policy, and on one not yet evaluated.
+                type: boolean
               approvals:
                 description: |-
                   Approvals records each decision in spec.approvals and whether the gate
@@ -986,7 +1036,7 @@ spec:
                                           "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
                                           "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden",
                                           "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
-                                          "HoldBundleMissing", "BundleRejected", "APIWrite".
+                                          "HoldBundleMissing", "BundleRejected", "APIWrite", "FreezeExempted".
                             ApprovalRecorded and ApprovalRevoked are written by an approval gate
                             when a decision (kardinal approve) appears in or leaves its
                             spec.approvals.
@@ -998,6 +1048,9 @@ spec:
                             APIWrite is written for each write through the UI API or the Bundle
                             API (controller.accessLog.auditEvents), naming the caller in actor and
                             the route in request.
+                            FreezeExempted is written once per exemption when a PromotionStep goes
+                            on through an active freeze under it (kardinal override --freeze),
+                            naming who made the exemption and why.
                             HealthCheckFailed and GateBlocked are accepted but never written: a
                             failed health check records PromotionFailed (RollbackStarted when
                             onHealthFailure is rollback), and a blocked gate records GateEvaluated
@@ -1023,6 +1076,7 @@ spec:
                           - APIWrite
                           - VerdictRecorded
                           - VerdictRevoked
+                          - FreezeExempted
                           type: string
                         actor:
                           description: |-

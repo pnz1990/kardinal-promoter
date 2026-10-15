@@ -138,10 +138,22 @@ var apiRoutes = []apiRoute{
 	{method: "POST", path: "/api/v1/ui/resume", server: serverUI, tag: "UI", id: "resumePipeline",
 		summary: "Resume a paused Pipeline (kardinal resume)",
 		request: uiPipelineActionRequest{}, status: 200, response: uiMessageResponse{}, errors: []int{400, 401, 403, 404, 500}, security: "uiAuth"},
+	{method: "GET", path: "/api/v1/ui/freezes", server: serverUI, tag: "UI", id: "listFreezes",
+		summary: "List the freezes (ChangeWindows with spec.freeze) for the UI's banner",
+		status:  200, response: uiFreezesResponse{}, errors: []int{401, 403, 500}, security: "uiAuth"},
+	{method: "POST", path: "/api/v1/ui/freeze", server: serverUI, tag: "UI", id: "freeze",
+		summary: "Freeze agents, or stop the line for everyone (kardinal freeze)",
+		desc: "Needs TokenReview UI auth and update on the virtual subresource changewindows/freeze, cluster-wide or in the " +
+			"namespace the freeze is limited to. The controller writes the freezing ChangeWindow with the caller as spec.freeze.createdBy.",
+		request: uiFreezeRequest{}, status: 200, response: uiMessageResponse{}, errors: []int{400, 401, 403, 409, 500}, security: "uiAuth"},
+	{method: "POST", path: "/api/v1/ui/unfreeze", server: serverUI, tag: "UI", id: "unfreeze",
+		summary: "Lift a freeze (kardinal unfreeze)",
+		desc:    "Needs TokenReview UI auth and update on changewindows/freeze, as the freeze it lifts.",
+		request: uiUnfreezeRequest{}, status: 200, response: uiMessageResponse{}, errors: []int{400, 401, 403, 404, 409, 500}, security: "uiAuth"},
 	{method: "POST", path: "/api/v1/ui/access", server: serverUI, tag: "UI", id: "checkAccess",
 		summary: "Which of the given actions the caller may take, and which role grants each",
 		desc: "Answers only for the UI's actions (create bundles, create approvals, update policygates/override, pipelines/pause, " +
-			"pipelines/hold, bundles/reject), in a DNS-1123 namespace (the --watch-namespace one when set) with DNS-1123 names; at most " +
+			"pipelines/hold, bundles/reject, changewindows/freeze checked cluster-wide), in a DNS-1123 namespace (the --watch-namespace one when set) with DNS-1123 names; at most " +
 			"32 checks in 16 KiB, each distinct check reviewed once. In TokenReview mode each check is a SubjectAccessReview for the " +
 			"verified caller, cached for 30s and limited per user and in total, for this endpoint only (429 past either, saying which); " +
 			"a denial is an answer (allowed: false), not a 403. " +
@@ -183,7 +195,8 @@ var schemaNames = map[string]string{
 	"uiCreateBundleResponse": "UICreateBundleResponse", "bundleCreateRequest": "CreateBundleRequest",
 	"bundleCreateResponse": "CreateBundleResponse", "webhookHealthResponse": "WebhookHealth",
 	"uiRejectRequest": "RejectRequest", "uiPipelineOverrideRequest": "PipelineOverrideRequest",
-	"uiPipelineOverrideResponse": "PipelineOverrideResponse",
+	"uiPipelineOverrideResponse": "PipelineOverrideResponse", "uiFreeze": "Freeze", "uiFreezesResponse": "FreezesResponse",
+	"uiFreezeRequest": "FreezeRequest", "uiUnfreezeRequest": "UnfreezeRequest",
 }
 
 // fieldDocs maps "Type.Field" to the field's doc comment, from the source of
@@ -576,7 +589,11 @@ func TestOpenAPIRoutesSucceed(t *testing.T) {
 			// The prod instance of gate template g for the in-progress app-live.
 			&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "g--app-live-prod", Namespace: "default",
 				Labels: map[string]string{"kardinal.io/pipeline": "app", "kardinal.io/gate-template": "g",
-					"kardinal.io/environment": "prod", "kardinal.io/bundle": "app-live"}}}}
+					"kardinal.io/environment": "prod", "kardinal.io/bundle": "app-live"}}},
+			// A freeze for unfreeze to lift.
+			&v1alpha1.ChangeWindow{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-freeze-everyone"},
+				Spec: v1alpha1.ChangeWindowSpec{Type: "blackout", Start: metav1.Now(), Reason: "r",
+					Freeze: &v1alpha1.ChangeWindowFreeze{Actors: "everyone", CreatedBy: "alice"}}}}
 	}
 	requests := map[string]struct{ path, body string }{
 		"listPipelines":           {"/api/v1/ui/pipelines", ""},
@@ -598,6 +615,9 @@ func TestOpenAPIRoutesSucceed(t *testing.T) {
 		"resumePipeline":          {"/api/v1/ui/resume", `{"pipeline":"app"}`},
 		"validateCEL":             {"/api/v1/ui/validate-cel", `{"expression":"true"}`},
 		"checkAccess":             {"/api/v1/ui/access", `{"checks":[{"verb":"create","resource":"bundles"}]}`},
+		"listFreezes":             {"/api/v1/ui/freezes", ""},
+		"freeze":                  {"/api/v1/ui/freeze", `{"actors":"agents","reason":"r"}`},
+		"unfreeze":                {"/api/v1/ui/unfreeze", `{"name":"kardinal-freeze-everyone"}`},
 		"listStepEvents":          {"/api/v1/ui/steps/default/app-v1-prod/events", ""},
 		"createBundle":            {"/api/v1/bundles", `{"pipeline":"app","type":"image","images":[{"repository":"r","tag":"1"}]}`},
 		"webhookHealth":           {"/webhook/scm/health", ""},
@@ -609,7 +629,9 @@ func TestOpenAPIRoutesSucceed(t *testing.T) {
 			require.True(t, ok, "no valid request for %s: add one", r.id)
 			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(fixtures()...).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			mux := http.NewServeMux()
-			newUIAPIServer(c, zerolog.Nop()).RegisterRoutes(mux)
+			ui := newUIAPIServer(c, zerolog.Nop())
+			ui.freezeControls = true
+			ui.RegisterRoutes(mux)
 			mux.HandleFunc("/api/v1/bundles", newBundleAPIServer(c, "token", "default").Handler())
 			mux.HandleFunc("/webhook/scm/health", newWebhookServerWithConfig(nil, c, zerolog.Nop(), false).HealthHandler())
 			var body *strings.Reader

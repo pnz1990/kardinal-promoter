@@ -5,7 +5,8 @@ Licensed under the Apache License, Version 2.0
 Actor admission policies (docs/actors.md, docs/design/17-actors.md section 5).
 
 <release>-actor checks the kardinal.io/actor stamp (spec.actor) on new
-Bundles, Approvals and Verdicts and on new gate override entries against the AgentIndex
+Bundles, Approvals and Verdicts, on new gate override entries and on new
+freeze exemptions (an agent's is refused: break-glass is for people) against the AgentIndex
 the controller builds from the AgentIdentities: the stamp must say what the
 requester is (human, agent, bot), and an agent must stamp, stay in its scope
 and not be suspended. It is a transliteration of pkg/actor Derive and Scope.
@@ -34,7 +35,7 @@ spec:
       - apiGroups: ["kardinal.io"]
         apiVersions: ["*"]
         operations: ["CREATE", "UPDATE"]
-        resources: ["policygates"]
+        resources: ["policygates", "changewindows"]
   variables:
     - name: controller
       expression: request.userInfo.username in {{ $controllers }}
@@ -60,9 +61,22 @@ spec:
     # adds none (the CRD keeps spec.actor immutable).
     - name: gate
       expression: "request.resource.resource == 'policygates'"
+    # A freeze's new exemptions (kardinal override --freeze) are stamped
+    # like gate overrides; other ChangeWindow writes add no stamp.
+    - name: freeze
+      expression: "request.resource.resource == 'changewindows'"
+    - name: oldExemptions
+      expression: >-
+        variables.freeze && oldObject != null && has(oldObject.spec.freeze) && has(oldObject.spec.freeze.exemptions)
+          ? oldObject.spec.freeze.exemptions : []
     - name: stamps
       expression: >-
-        variables.gate
+        variables.freeze
+          ? (has(object.spec.freeze) && has(object.spec.freeze.exemptions)
+              ? object.spec.freeze.exemptions.filter(e, !(e in variables.oldExemptions))
+                .map(e, has(e.actor) ? e.actor : null)
+              : [])
+        : variables.gate
           ? (has(object.spec.overrides)
               ? object.spec.overrides.filter(o,
                   !(oldObject != null && has(oldObject.spec.overrides) && o in oldObject.spec.overrides))
@@ -103,6 +117,13 @@ spec:
         'agent ' + variables.entry.agent + ' may not act: ' +
         variables.matches.filter(m, has(m.blocked)).map(m, m.blocked).join('; ')
       reason: Forbidden
+    # Break-glass is for people (docs/design/18-actor-policy.md section 6):
+    # an agent may not let a pipeline through a freeze.
+    - expression: "!variables.check || !variables.agent || !variables.freeze"
+      messageExpression: >-
+        'you are agent ' + variables.entry.agent + ': an agent may not let a pipeline through a freeze ' +
+        '(break-glass is for people); ask ' + variables.entry.sponsor + ' or another person to run kardinal override --freeze'
+      reason: Forbidden
     # An agent must stamp what it writes.
     - expression: "!variables.check || !variables.agent || variables.stamps.all(s, s != null)"
       messageExpression: >-
@@ -126,7 +147,7 @@ spec:
     # Pipeline, the Approval's environment, the gate's Pipeline and environment.
     # An entry scoped nowhere has no namespaces (the index omits an empty list).
     - expression: >-
-        !variables.check || !variables.agent || (
+        !variables.check || !variables.agent || variables.freeze || (
           (has(variables.entry.namespaces) ? variables.entry.namespaces : []).exists(p, p == '*' || p == request.namespace ||
             (p.endsWith('*') && request.namespace.startsWith(p.substring(0, size(p) - 1)))) &&
           (variables.pipeline == '' || variables.entry.pipelines.exists(p, p == '*' || p == variables.pipeline ||

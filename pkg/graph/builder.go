@@ -181,6 +181,9 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 		return nil, err
 	}
 	gatesByEnv := matchGatesByEnv(filteredEnvs, input.PolicyGates, members)
+	if err := addAgentGates(input.Pipeline, input.Bundle, filteredEnvs, members, input.PolicyGates, gatesByEnv); err != nil {
+		return nil, err
+	}
 	skipGates := skipPermissionGates(filteredEnvs, deps, input.Bundle, input.PolicyGates, input.PolicyNamespaces)
 	if err := validateGateNames(filteredEnvs, gatesByEnv, skipGates); err != nil {
 		return nil, err

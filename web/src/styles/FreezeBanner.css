@@ -1,0 +1,65 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * FreezeBanner.css — the freeze banner and the Freeze menu's form (components/FreezeBanner.tsx).
+ */
+
+.freeze-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--k-space-1);
+  padding: var(--k-space-1_5) var(--k-space-2);
+  border: var(--k-border-hairline) solid var(--k-status-blocked-fg);
+  border-radius: var(--k-radius-2);
+  background: var(--k-status-blocked-wash);
+  color: var(--k-status-blocked-fg);
+  font-size: var(--k-text-sm);
+}
+
+.freeze-banner__row {
+  display: flex;
+  align-items: center;
+  gap: var(--k-space-2);
+}
+
+.freeze-banner__row[data-actors="everyone"] {
+  color: var(--k-status-failed-fg);
+  font-weight: var(--k-weight-semibold);
+}
+
+.freeze-banner__text {
+  flex: 1;
+}
+
+.freeze-banner__cmd {
+  color: var(--k-ink-2);
+}
+
+.freeze-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--k-space-1);
+  margin: 0 0 var(--k-space-3);
+  font-size: var(--k-text-sm);
+  color: var(--k-ink);
+}
+
+.freeze-form__label {
+  font-size: var(--k-text-xs);
+  font-weight: var(--k-weight-semibold);
+}
+
+.freeze-form__input {
+  padding: var(--k-space-1) var(--k-space-1_5);
+  font: inherit;
+  color: var(--k-ink);
+  background: var(--k-surface-sunken);
+  border: var(--k-border-hairline) solid var(--k-line);
+  border-radius: var(--k-radius-1);
+}
+
+.freeze-form__input:focus-visible {
+  outline: var(--k-focus-ring);
+  outline-offset: var(--k-focus-offset);
+}

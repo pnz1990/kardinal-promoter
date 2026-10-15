@@ -23,6 +23,7 @@ import (
 
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -54,6 +55,10 @@ type Reconciler struct {
 	Recorder events.EventRecorder
 	// NowFn returns the current time. Overridable for testing.
 	NowFn func() time.Time
+	// MaxExemption bounds how long a freeze exemption counts from when the
+	// reconciler first saw it (--freeze-exemption-max-minutes). Zero is
+	// DefaultMaxExemption.
+	MaxExemption time.Duration
 }
 
 // Reconcile evaluates one ChangeWindow and writes its status when it changed.
@@ -84,11 +89,36 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// resync, an annotation edit or a controller restart reports nothing new.
 	newlyInvalid := res.Err != nil && !invalidAt(cw, cw.Generation)
 
+	// A freeze also records the exemptions in effect now, and the next
+	// boundary includes the earliest of their expiries, so the status is
+	// all a PromotionStep reads (no clock outside this status write).
+	ex := freezeExemptions(cw.Spec.Freeze, cw.Status.ExemptionRecords, now, r.maxExemption())
+	exemptions, next := ex.inEffect, res.Next
+	for _, u := range ex.ends {
+		if next.IsZero() || u.Before(next) {
+			next = u
+		}
+	}
+	var nextTransition *metav1.Time
+	if !next.IsZero() {
+		nextTransition = &metav1.Time{Time: next}
+	}
+
 	patch := client.MergeFrom(cw.DeepCopy())
-	changed := cw.Status.Active != res.Active || cw.Status.Reason != res.Reason
+	changed := cw.Status.Active != res.Active || cw.Status.Reason != res.Reason ||
+		cw.Status.ObservedGeneration != cw.Generation || !equality.Semantic.DeepEqual(cw.Status.Exemptions, exemptions) ||
+		!equality.Semantic.DeepEqual(cw.Status.NextTransition, nextTransition) ||
+		!equality.Semantic.DeepEqual(cw.Status.ExemptionRecords, ex.records)
 	cw.Status.Active = res.Active
 	cw.Status.Reason = res.Reason
+	cw.Status.ObservedGeneration = cw.Generation
+	cw.Status.Exemptions = exemptions
+	cw.Status.ExemptionRecords = ex.records
+	cw.Status.NextTransition = nextTransition
 	if meta.SetStatusCondition(&cw.Status.Conditions, validCondition(res, cw.Generation, now)) {
+		changed = true
+	}
+	if setExemptionIgnored(&cw, ex.byAgents, now) {
 		changed = true
 	}
 	if changed {
@@ -104,10 +134,10 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			res.Err.Error()+"; the window is active (blocking) until the spec is fixed")
 	}
 
-	if res.Next.IsZero() {
+	if next.IsZero() {
 		return ctrl.Result{}, nil
 	}
-	wait := res.Next.Sub(now) + boundarySlack
+	wait := next.Sub(now) + boundarySlack
 	if wait > maxRequeue {
 		wait = maxRequeue
 	}
@@ -156,6 +186,89 @@ func validCondition(res Result, generation int64, now time.Time) metav1.Conditio
 		cond.Message = res.Err.Error() + "; the window is active (blocking) until the spec is fixed"
 	}
 	return cond
+}
+
+// DefaultMaxExemption is the --freeze-exemption-max-minutes default: the
+// longest a freeze exemption counts from when the reconciler first saw it,
+// as DefaultMaxOverride is for gate overrides.
+const DefaultMaxExemption = 24 * time.Hour
+
+func (r *Reconciler) maxExemption() time.Duration {
+	if r.MaxExemption > 0 {
+		return r.MaxExemption
+	}
+	return DefaultMaxExemption
+}
+
+// ConditionExemptionIgnored is True while spec.freeze.exemptions has entries
+// made by an agent, which never count (break-glass is for people).
+const ConditionExemptionIgnored = "ExemptionIgnored"
+
+// exemptionState is a freeze's exemptions at one instant.
+type exemptionState struct {
+	// inEffect are the entries that count now.
+	inEffect []kardinalv1alpha1.FreezeExemption
+	// ends are when each entry in effect stops counting.
+	ends []time.Time
+	// records is the status record of every entry.
+	records []kardinalv1alpha1.FreezeExemptionRecord
+	// byAgents counts the entries an agent made.
+	byAgents int
+}
+
+// freezeExemptions works out the exemptions of f at now from the records of
+// when they were first seen (old): an entry counts until the earlier of its
+// expiresAt and firstSeen plus maxExemption, unless an agent made it. A
+// window that is not a freeze has none.
+func freezeExemptions(f *kardinalv1alpha1.ChangeWindowFreeze, old []kardinalv1alpha1.FreezeExemptionRecord,
+	now time.Time, maxExemption time.Duration) exemptionState {
+	var st exemptionState
+	if f == nil {
+		return st
+	}
+	seen := make(map[string]kardinalv1alpha1.FreezeExemptionRecord, len(old))
+	for _, rec := range old {
+		seen[rec.Key] = rec
+	}
+	recorded := map[string]bool{}
+	for i := range f.Exemptions {
+		e := &f.Exemptions[i]
+		key := ExemptionKey(e)
+		rec, ok := seen[key]
+		if !ok {
+			rec = kardinalv1alpha1.FreezeExemptionRecord{Key: key, FirstSeen: metav1.NewTime(now.UTC().Truncate(time.Second))}
+		}
+		until := e.ExpiresAt.Time
+		if capEnd := rec.FirstSeen.Add(maxExemption); capEnd.Before(until) {
+			until = capEnd
+		}
+		rec.Until = metav1.NewTime(until.UTC())
+		if !recorded[key] {
+			recorded[key] = true
+			st.records = append(st.records, rec)
+		}
+		if exemptionByAgent(e) {
+			st.byAgents++
+			continue
+		}
+		if now.Before(until) {
+			st.inEffect = append(st.inEffect, *e)
+			st.ends = append(st.ends, until)
+		}
+	}
+	return st
+}
+
+// setExemptionIgnored sets ExemptionIgnored while agents' exemptions are
+// listed, and removes it when none is. It reports whether it changed.
+func setExemptionIgnored(cw *kardinalv1alpha1.ChangeWindow, byAgents int, now time.Time) bool {
+	if byAgents == 0 {
+		return meta.RemoveStatusCondition(&cw.Status.Conditions, ConditionExemptionIgnored)
+	}
+	return meta.SetStatusCondition(&cw.Status.Conditions, metav1.Condition{Type: ConditionExemptionIgnored,
+		Status: metav1.ConditionTrue, Reason: "MadeByAgent", ObservedGeneration: cw.Generation,
+		LastTransitionTime: metav1.NewTime(now),
+		Message:            fmt.Sprintf("%d exemption(s) made by an agent do not count: break-glass is for people", byAgents)})
 }
 
 func (r *Reconciler) now() time.Time {

@@ -21,6 +21,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 )
 
 // TestApprovalStanding_Block: the standing says why as a typed Block, in
@@ -71,7 +72,7 @@ func TestApprovalStanding_Block(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			st := ApprovalStandingOf(tc.gate, tc.creator, tc.id)
+			st := ApprovalStandingOf(tc.gate, actor.OrUnknown(nil, tc.creator), tc.id)
 			assert.Equal(t, tc.want, st.Block)
 			assert.Equal(t, tc.held, st.Block.Held())
 			assert.Equal(t, tc.want == ApprovalOpen, st.Reason == "", "Reason says Block in words: %q", st.Reason)

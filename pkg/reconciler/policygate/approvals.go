@@ -27,15 +27,17 @@ type approvalTally struct {
 }
 
 // tallyApprovals counts the decisions of gate's spec.approvals for its
-// Bundle and environment (lifecycle.TallyApprovals): the shared rules, so
-// what the CLI says about who may approve matches what this counts.
-func tallyApprovals(gate *kardinalv1alpha1.PolicyGate, creator string) approvalTally {
-	return approvalTally{lifecycle.TallyApprovals(gate, creator)}
+// Bundle and environment (lifecycle.TallyApprovals) for a Bundle by author:
+// the shared rules, so what the CLI says about who may approve matches what
+// this counts.
+func tallyApprovals(gate *kardinalv1alpha1.PolicyGate, author kardinalv1alpha1.Actor) approvalTally {
+	return approvalTally{lifecycle.TallyApprovals(gate, author)}
 }
 
-// context is the approvals CEL variable: approvals.count (counted approvers),
-// approvals.required, approvals.users and approvals.rejected.
-func (t approvalTally) context() map[string]interface{} {
+// context is the approvals CEL variable: approvals.count (counted parties),
+// approvals.required, approvals.users, approvals.rejected and approvals.met
+// (the policy is met, or approval.requiredWhen waives it).
+func (t approvalTally) context(met bool) map[string]interface{} {
 	users := make([]interface{}, len(t.Approvers))
 	for i, u := range t.Approvers {
 		users[i] = u
@@ -45,6 +47,7 @@ func (t approvalTally) context() map[string]interface{} {
 		"required": int64(t.Required),
 		"users":    users,
 		"rejected": len(t.Rejecters) > 0,
+		"met":      met,
 	}
 }
 

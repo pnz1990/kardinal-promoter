@@ -327,9 +327,11 @@ func (p *Plan) Open(w *World, bundles ...string) error {
 		if err := w.Client.Get(w.Ctx, client.ObjectKey{Name: WindowName}, &cw); err != nil {
 			return fmt.Errorf("get window: %w", err)
 		}
-		// The release manager ends the freeze early.
+		// The release manager ends the freeze early: as a person, not the
+		// controller (the freezes admission policy lets the controller write
+		// only freezes, docs/design/18-actor-policy.md section 9.5).
 		cw.Spec.End = metav1.NewTime(w.Now().Add(-time.Second))
-		if err := w.Client.Update(w.Ctx, &cw); err != nil {
+		if err := w.Client.Update(AsUser(w.Ctx, AdminUser, AdminGroups...), &cw); err != nil {
 			return fmt.Errorf("end window: %w", err)
 		}
 	case "soak", "upstream":

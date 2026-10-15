@@ -278,10 +278,18 @@ func TestEnterprise_AgentLoad(t *testing.T) {
 			w.Round()
 		}
 	}
+	// A version whose agent was suspended after it shipped is held by its
+	// kardinal-agents-* gates (agent.* is the registry now,
+	// docs/design/18-actor-policy.md section 2.2); every other newest
+	// version is Verified.
+	heldBySuspension := func(ns, b string) bool {
+		a, ok := shipper[ns+"/"+b]
+		return ok && suspended[a.name]
+	}
 	done := func() bool {
 		for key, b := range newest {
 			ns := strings.SplitN(key, "/", 2)[0]
-			if w.Bundle(ns, b).Status.Phase != "Verified" {
+			if !heldBySuspension(ns, b) && w.Bundle(ns, b).Status.Phase != "Verified" {
 				return false
 			}
 		}
@@ -291,7 +299,7 @@ func TestEnterprise_AgentLoad(t *testing.T) {
 		var stuck []string
 		for key, b := range newest {
 			ns := strings.SplitN(key, "/", 2)[0]
-			if ph := w.Bundle(ns, b).Status.Phase; ph != "Verified" {
+			if ph := w.Bundle(ns, b).Status.Phase; ph != "Verified" && !heldBySuspension(ns, b) {
 				stuck = append(stuck, key+"="+b+":"+ph)
 			}
 		}
@@ -299,6 +307,35 @@ func TestEnterprise_AgentLoad(t *testing.T) {
 		t.Fatalf("after %d rounds, %d newest versions are not Verified: %v\n%s", w.Rounds(), len(stuck), stuck[:min(len(stuck), 10)],
 			w.Describe(strings.SplitN(stuck[0], "/", 2)[0]))
 	}
+	held := 0
+	for key, b := range newest {
+		ns := strings.SplitN(key, "/", 2)[0]
+		if heldBySuspension(ns, b) {
+			held++
+			assert.NotEqual(t, "Verified", w.Bundle(ns, b).Status.Phase,
+				"%s: a suspended agent's in-flight version is held by its agents gate", key)
+		}
+	}
+	t.Logf("%d newest versions held: their agent was suspended after they shipped", held)
+	// The on-call rejects the held versions, so the load settles for the
+	// quiet-period check (a held version keeps rechecking its gates).
+	for key, b := range newest {
+		ns := strings.SplitN(key, "/", 2)[0]
+		if heldBySuspension(ns, b) {
+			_, err := lifecycle.Reject(scenario.AsUser(w.Ctx, "oncall@example.com"), w.Client, ns, b,
+				"its agent was suspended", "oncall@example.com", w.Now())
+			require.NoError(t, err)
+		}
+	}
+	w.RunUntil(50, func() bool {
+		for key, b := range newest {
+			ns := strings.SplitN(key, "/", 2)[0]
+			if heldBySuspension(ns, b) && w.Bundle(ns, b).Status.Phase == "Promoting" {
+				return false
+			}
+		}
+		return true
+	})
 	t.Logf("%d agents, %d versions over %d bursts (%d agents suspended after the first): %d rounds, %s, reconciles %v",
 		sz.Agents, len(shipper), sz.Bursts, len(suspended), w.Rounds(), time.Since(start).Round(time.Second), w.Reconciles())
 	checkAgentStamps(t, w, sz, reg, shipper)

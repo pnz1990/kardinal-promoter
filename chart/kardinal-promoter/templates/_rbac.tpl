@@ -322,6 +322,15 @@ rules exist for. A new client call needs a row there and a rule here.
   resources: ["subjectaccessreviews"]
   verbs: ["create"]
 {{- end }}
+{{- if and .Values.ui.auth.tokenReview .Values.ui.freezeControls }}
+# ui.freezeControls: the UI's Freeze agents, Stop the line and Unfreeze
+# write freezing ChangeWindows for callers allowed changewindows/freeze; the
+# freezes admission policy admits the controller's writes with the caller as
+# spec.freeze.createdBy (docs/design/18-actor-policy.md section 9.5).
+- apiGroups: ["kardinal.io"]
+  resources: ["changewindows"]
+  verbs: ["create", "update", "delete"]
+{{- end }}
 {{- end }}
 
 {{- define "kardinal-promoter.rules.release" -}}

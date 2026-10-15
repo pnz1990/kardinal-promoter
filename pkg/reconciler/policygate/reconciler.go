@@ -125,6 +125,10 @@ type Reconciler struct {
 	IdentityPolicy interface {
 		Active(ctx context.Context) bool
 	}
+	// AgentIndexName is this release's AgentIndex (--agent-index), which
+	// agent.* reads (docs/design/18-actor-policy.md section 2.2). Empty: no
+	// agent registry, every agent reads as not registered.
+	AgentIndexName string
 }
 
 // DefaultStatusHeartbeat is the controller's --gate-status-heartbeat default.
@@ -295,7 +299,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 	// Approvals (#1449): count spec.approvals, which the Graph copies from
 	// the Bundle's Approval objects, against spec.approval (buildContext
 	// exposes the same count to the expression as approvals.*).
-	tally := tallyApprovals(&gate, bundleCreator(celCtx))
+	tally := tallyApprovals(&gate, authorFrom(celCtx))
 	if err := r.recordApprovals(ctx, &gate, tally); apierrors.IsConflict(err) {
 		return ctrl.Result{}, err // a stale read: Reconcile evaluates again (#1513)
 	} else if err != nil {
@@ -319,21 +323,39 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 		}
 	}
 
+	// approval.requiredWhen (18-actor-policy section 3) decides whether the
+	// policy holds the gate now; approvals.met says so to the expression.
+	required, reqErr := r.approvalRequired(ctx, &gate, celCtx)
+	celCtx["approvals"] = tally.context(!required || tally.Met())
+
 	// Evaluate CEL expression
 	pass, reason, evalErr := r.eval.evaluate(ctx, gate.Spec.Expression, celCtx)
+	if reqErr != nil && (evalErr == nil || pass) {
+		pass, reason, evalErr = false, "approval.requiredWhen: "+reqErr.Error(), reqErr
+	}
 	// The approval and verify policies hold a gate whose expression passes.
 	if pass && evalErr == nil {
-		if held := tally.blocked(); held != "" {
-			pass, reason = false, held
-		} else if held := verdictTally.Blocked(); held != "" {
-			pass, reason = false, held
-		} else {
-			for _, met := range []string{tally.met(), verdictTally.Met()} {
-				if met != "" {
-					reason = reason + "; " + met
-				}
+		switch {
+		case required && tally.blocked() != "":
+			pass, reason = false, tally.blocked()
+		case verdictTally.Blocked() != "":
+			pass, reason = false, verdictTally.Blocked()
+		default:
+			if !required {
+				reason += "; approval not required (approval.requiredWhen is false)"
+			} else if met := tally.met(); met != "" {
+				reason += "; " + met
+			}
+			if met := verdictTally.Met(); met != "" {
+				reason += "; " + met
 			}
 		}
+	}
+	// status.approvalRequired: whether the policy held the gate at this
+	// evaluation, for the CLI's and the UI's standing (ApprovalStandingOf).
+	approvalReq := gate.Status.ApprovalRequired
+	if gate.Spec.Approval != nil && reqErr == nil {
+		approvalReq = &required
 	}
 	// Name the stale metrics the expression uses when it blocks: a stale
 	// value is empty, so a double(...) comparison fails with an evaluation
@@ -358,7 +380,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 			log.Warn().Str("hold", h.Bundle).Str("reason", reason).Msg("policygate exempt for the held rollback")
 			// One Event per exempt episode, not per changed gate reason.
 			first := !gate.Status.Ready || !lifecycle.IsHoldExemption(gate.Status.Reason)
-			if patchErr := r.patchStatus(ctx, &gate, true, reason, bundleVersion); patchErr != nil {
+			if patchErr := r.patchStatusWith(ctx, &gate, true, reason, bundleVersion, approvalReq); patchErr != nil {
 				return ctrl.Result{}, fmt.Errorf("patch gate status (hold exemption): %w", patchErr)
 			}
 			if r.Recorder != nil && first {
@@ -373,7 +395,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 		// expression, not an error, so the reason does not lead with it.
 		log.Warn().Err(evalErr).Str("expr", gate.Spec.Expression).
 			Msg("CEL evaluation error, setting gate to blocked")
-		if patchErr := r.patchStatus(ctx, &gate, false, graph.WithVersion(reason, bundleVersion), bundleVersion); patchErr != nil {
+		if patchErr := r.patchStatusWith(ctx, &gate, false, graph.WithVersion(reason, bundleVersion), bundleVersion, approvalReq); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch gate status on eval error: %w", patchErr)
 		}
 		return ctrl.Result{RequeueAfter: recheckInterval}, nil
@@ -394,7 +416,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 		Str("expr", gate.Spec.Expression).
 		Msg("policygate evaluated")
 
-	if patchErr := r.patchStatus(ctx, &gate, pass, reason, bundleVersion); patchErr != nil {
+	if patchErr := r.patchStatusWith(ctx, &gate, pass, reason, bundleVersion, approvalReq); patchErr != nil {
 		return ctrl.Result{}, fmt.Errorf("patch gate status: %w", patchErr)
 	}
 
@@ -635,7 +657,16 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		}
 	}
 
+	author := lifecycle.BundleAuthor(&bundle)
+	agentCtx, err := r.buildAgentContext(ctx, gate, author)
+	if err != nil {
+		return nil, version, fmt.Errorf("agent: %w", err)
+	}
+	tally := tallyApprovals(gate, author)
+
 	return map[string]interface{}{
+		"actor":  actorContext(bundle.Spec.Actor, author),
+		"agent":  agentCtx,
 		"bundle": bundleCtx,
 		"schedule": map[string]interface{}{
 			"isWeekend": now.Weekday() == time.Saturday || now.Weekday() == time.Sunday,
@@ -648,17 +679,9 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		"metrics":      metricsCtx,
 		"upstream":     upstreamCtx,
 		"changewindow": cwCtx,
-		"approvals":    tallyApprovals(gate, bundleCreator(map[string]interface{}{"bundle": bundleCtx})).context(),
+		"approvals":    tally.context(tally.Met()),
 		"verdicts":     tallyVerdicts(gate, &bundle, now).Context(),
 	}, version, nil
-}
-
-// bundleCreator reads bundle.createdBy from a CEL context built by
-// buildContext.
-func bundleCreator(celCtx map[string]interface{}) string {
-	b, _ := celCtx["bundle"].(map[string]interface{})
-	creator, _ := b["createdBy"].(string)
-	return creator
 }
 
 // directUpstreamSoakMinutes returns the soak minutes of the environments that
@@ -1083,7 +1106,14 @@ func (r *Reconciler) freshResultWanted(ctx context.Context, gate *kardinalv1alph
 // (unchangedResult).
 func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
 	ready bool, reason, version string) error {
-	if gate.Status.BundleVersion == version && r.unchangedResult(ctx, gate, ready, reason, r.now()) {
+	return r.patchStatusWith(ctx, gate, ready, reason, version, gate.Status.ApprovalRequired)
+}
+
+// patchStatusWith is patchStatus that also writes status.approvalRequired.
+func (r *Reconciler) patchStatusWith(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
+	ready bool, reason, version string, approvalRequired *bool) error {
+	if gate.Status.BundleVersion == version && equalBoolPtr(gate.Status.ApprovalRequired, approvalRequired) &&
+		r.unchangedResult(ctx, gate, ready, reason, r.now()) {
 		zerolog.Ctx(ctx).Debug().Bool("ready", ready).Msg("policygate result unchanged, status not written")
 		return nil
 	}
@@ -1106,6 +1136,7 @@ func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.Pol
 	gate.Status.Reason = reason
 	gate.Status.BundleVersion = version
 	gate.Status.LastEvaluatedAt = &now
+	gate.Status.ApprovalRequired = approvalRequired
 	stampVerifiedSince(gate, now.Time)
 	// The Ready condition's lastTransitionTime moves only when the gate flips,
 	// unlike lastEvaluatedAt, so it identifies one blocking episode. The
@@ -1384,6 +1415,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Watch ChangeWindow objects: a window boundary (status.active write) or a
 		// spec edit re-evaluates the gates that reference changewindow.
 		Watches(&kardinalv1alpha1.ChangeWindow{}, handler.EnqueueRequestsFromMapFunc(changeWindowMapper)).
+		// Watch the AgentIndex: a suspension or an autonomy change
+		// re-evaluates the gates that read agent.* (18-actor-policy 2.2).
+		Watches(&kardinalv1alpha1.AgentIndex{}, handler.EnqueueRequestsFromMapFunc(r.agentIndexGateRequests)).
 		// Watch Pipelines: adding or releasing a hold (spec.holds) re-evaluates
 		// the Pipeline's gate instances, so the held rollback's exemption
 		// starts and ends at once.
@@ -1403,6 +1437,15 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 // dropped silently (C04-gates-36).
 func (r *Reconciler) instanceGateRequests(ctx context.Context, source, exprContains string,
 	opts ...client.ListOption) []reconcile.Request {
+	return r.instanceGateRequestsWhere(ctx, source, func(gate *kardinalv1alpha1.PolicyGate) bool {
+		return exprContains == "" || strings.Contains(gate.Spec.Expression, exprContains)
+	}, opts...)
+}
+
+// instanceGateRequestsWhere is instanceGateRequests for the instance gates
+// keep accepts.
+func (r *Reconciler) instanceGateRequestsWhere(ctx context.Context, source string,
+	keep func(*kardinalv1alpha1.PolicyGate) bool, opts ...client.ListOption) []reconcile.Request {
 	var gateList kardinalv1alpha1.PolicyGateList
 	if err := r.List(ctx, &gateList, opts...); err != nil {
 		zerolog.Ctx(ctx).Error().Err(err).Str("source", source).
@@ -1416,7 +1459,7 @@ func (r *Reconciler) instanceGateRequests(ctx context.Context, source, exprConta
 		if gate.Labels[labelBundle] == "" {
 			continue
 		}
-		if exprContains != "" && !strings.Contains(gate.Spec.Expression, exprContains) {
+		if !keep(&gate) {
 			continue
 		}
 		reqs = append(reqs, reconcile.Request{

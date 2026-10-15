@@ -3,7 +3,7 @@
 //
 // api/client.ts — Typed fetch wrappers for the kardinal UI backend API.
 
-import type { AccessCheck, AccessResponse, Pipeline, Bundle, GraphResponse, PromotionStep, PolicyGate, StepEvent } from '../types'
+import type { AccessCheck, AccessResponse, Freeze, Pipeline, Bundle, GraphResponse, PromotionStep, PolicyGate, StepEvent } from '../types'
 
 /** One target of the rollback of a whole fleet (#1835). */
 export interface FleetTargetRollback {
@@ -237,6 +237,13 @@ export const api = {
    *  environment, only that fleet (#1835). */
   resume: (pipeline: string, namespace = 'default', environment?: string) =>
     post<{ message: string }>('/resume', { pipeline, namespace, environment }),
+  /** The freezes (ChangeWindows with spec.freeze), for the banner. */
+  listFreezes: () => get<{ freezes: Freeze[] }>('/freezes'),
+  /** Freeze agents, or stop the line for everyone (kardinal freeze; TokenReview mode, ui.freezeControls). */
+  freeze: (req: { actors: 'agents' | 'everyone'; reason: string; minutes?: number; namespace?: string }) =>
+    post<{ message: string }>('/freeze', req),
+  /** Lift a freeze (kardinal unfreeze). */
+  unfreeze: (name: string) => post<{ message: string }>('/unfreeze', { name }),
   /** Validate a CEL expression using the server-side kro CEL environment. */
   validateCEL: (expression: string) =>
     post<{ valid: boolean; error?: string }>('/validate-cel', { expression }),

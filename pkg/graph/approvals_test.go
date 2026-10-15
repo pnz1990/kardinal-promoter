@@ -63,7 +63,8 @@ func TestBuilder_ApprovalGate(t *testing.T) {
 
 	spec := byName["two-approvers"]["spec"].(map[string]interface{})
 	assert.Equal(t, map[string]interface{}{"required": 2, "allowedGroups": []interface{}{"release-managers"},
-		"allowedUsers": []interface{}(nil), "excludeAuthor": true}, spec["approval"])
+		"allowedUsers": []interface{}(nil), "excludeAuthor": true, "allowAgents": false, "allowedAgents": []interface{}(nil)},
+		spec["approval"])
 	assert.Equal(t, "true", spec["expression"])
 	assert.Equal(t, true, spec["generated"])
 	assert.NotContains(t, spec, "when", "instances do not copy the ignored spec.when")

@@ -49,6 +49,18 @@ var gateContextStrings = []string{
 	"metrics.*.value",
 	"metrics.*.result",
 	"upstream.*.lastPromotedAt",
+	// The version's verified actor and its agent's registration
+	// (docs/design/18-actor-policy.md section 2.1): an enum, usernames the
+	// API server authenticated and names an admin registered. The asserted
+	// fields, which the client writes, are not in the context.
+	"actor.kind",
+	"actor.principal",
+	"actor.agent",
+	"actor.sponsor",
+	"actor.via",
+	"agent.name",
+	"agent.sponsor",
+	"agent.autonomy",
 }
 
 // TestGateContext_NeverReadsPRIssueOrCommitProse (#1845, the untrusted-input

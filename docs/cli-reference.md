@@ -22,6 +22,7 @@
 | [`kardinal diff`](reference/cli/kardinal-diff.md) | Show what changes between two versions (Bundles) |
 | [`kardinal doctor`](reference/cli/kardinal-doctor.md) | Run pre-flight checks to verify the cluster is correctly configured |
 | [`kardinal explain`](reference/cli/kardinal-explain.md) | Explain the current state of a promotion pipeline |
+| [`kardinal freeze`](reference/cli/kardinal-freeze.md) | Freeze agents, or stop the line for everyone; with no flags, list the freezes |
 | [`kardinal get`](reference/cli/kardinal-get.md) | Display one or more kardinal resources |
 | [`kardinal get auditevents`](reference/cli/kardinal-get-auditevents.md) | List AuditEvent records: the immutable promotion event log |
 | [`kardinal get bundles`](reference/cli/kardinal-get-bundles.md) | List Bundles, optionally filtered by pipeline name |
@@ -49,6 +50,7 @@
 | [`kardinal rollback`](reference/cli/kardinal-rollback.md) | Roll back an environment to the version before |
 | [`kardinal ship`](reference/cli/kardinal-ship.md) | Ship a version: create a Bundle, and with --wait follow it |
 | [`kardinal status`](reference/cli/kardinal-status.md) | Show controller health or per-pipeline in-flight promotion details |
+| [`kardinal unfreeze`](reference/cli/kardinal-unfreeze.md) | Lift a freeze |
 | [`kardinal unhold`](reference/cli/kardinal-unhold.md) | Release an environment's hold (kardinal hold, or rollback --hold) |
 | [`kardinal validate`](reference/cli/kardinal-validate.md) | Validate Pipeline and PolicyGate YAML before applying to the cluster |
 | [`kardinal verify`](reference/cli/kardinal-verify.md) | Record a verdict on the version running in an environment (verify gates) |

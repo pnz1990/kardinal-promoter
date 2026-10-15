@@ -70,7 +70,7 @@ func (s *uiAPIServer) lifecycleStatus(action string, err error) (int, string) {
 		return http.StatusConflict, err.Error()
 	case apierrors.IsConflict(err):
 		return http.StatusConflict, err.Error()
-	case apierrors.IsForbidden(err):
+	case apierrors.IsForbidden(err), errors.Is(err, lifecycle.ErrForbidden):
 		return http.StatusForbidden, err.Error()
 	default:
 		s.log.Error().Err(err).Msg("ui: " + action)

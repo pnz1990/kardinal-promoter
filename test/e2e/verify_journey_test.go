@@ -87,8 +87,17 @@ func newVerifyWorld(t *testing.T, policy v1alpha1.GateVerifyPolicy) *verifyWorld
 		Spec: v1alpha1.PolicyGateSpec{Expression: "true", RecheckInterval: "5m", Verify: &policy}}
 	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle, PolicyGates: []v1alpha1.PolicyGate{tmpl}})
 	require.NoError(t, err)
-	require.Len(t, res.GateInstances, 1)
-	gate := res.GateInstances[0]
+	// The version is an agent's, so it also gets the kardinal-agents-*
+	// gates of the agents shorthand (docs/design/18-actor-policy.md
+	// section 7); the verify gate is the org policy's one instance.
+	var verifyGates []v1alpha1.PolicyGate
+	for _, g := range res.GateInstances {
+		if g.Labels["kardinal.io/gate-template"] == tmpl.Name {
+			verifyGates = append(verifyGates, g)
+		}
+	}
+	require.Len(t, verifyGates, 1)
+	gate := verifyGates[0]
 	gate.Namespace = verifyNS
 	require.Equal(t, "uat", gate.Spec.Verify.Environment, "the Graph resolves the verified environment")
 

@@ -906,6 +906,9 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	if held, res, holdErr := r.holdIfPaused(ctx, log, ps); held {
 		return res, holdErr
 	}
+	if held, res, holdErr := r.holdIfFrozen(ctx, log, ps); held {
+		return res, holdErr
+	}
 	if held, res, holdErr := r.holdIfEnvironmentHeld(ctx, log, ps, pipeline); held {
 		return res, holdErr
 	}
@@ -1021,6 +1024,9 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
 	}
 	if held, res, holdErr := r.holdIfPaused(ctx, log, ps); held {
+		return res, holdErr
+	}
+	if held, res, holdErr := r.holdIfFrozen(ctx, log, ps); held {
 		return res, holdErr
 	}
 	if held, res, holdErr := r.holdIfEnvironmentHeld(ctx, log, ps, pipeline); held {
@@ -2464,6 +2470,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		)).
 		Watches(&v1alpha1.PRStatus{}, handler.EnqueueRequestsFromMapFunc(r.prStatusMapper)).
 		Watches(&v1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.policyGateMapper)).
+		// Freezing ChangeWindows (spec.freeze) hold and release steps at once
+		// (holdIfFrozen); other windows map to nothing.
+		Watches(&v1alpha1.ChangeWindow{}, handler.EnqueueRequestsFromMapFunc(r.changeWindowStepRequests)).
 		Watches(&v1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.bundleMapper),
 			builderutil.WithPredicates(bundleWakesSteps)).
 		// A hold added or released (spec.holds) takes effect on the held

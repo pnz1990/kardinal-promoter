@@ -162,6 +162,11 @@ controller:
   # first saw it (--gate-override-max-minutes): an override ends at the
   # earlier of its expiresAt and this cap. Empty keeps the default, 1440 (24h).
   gateOverrideMaxMinutes: ""
+  # -- Longest a freeze exemption (kardinal override --freeze) counts, in
+  # minutes from when the controller first saw it
+  # (--freeze-exemption-max-minutes): an exemption ends at the earlier of its
+  # expiresAt and this cap. Empty keeps the default, 1440 (24h).
+  freezeExemptionMaxMinutes: ""
   # -- Extra controller args, e.g. ["--cors-allowed-origins=https://kardinal.example.com"].
   extraArgs: []
   # -- Extra env vars for the controller container (e.g. HTTPS_PROXY).
@@ -404,6 +409,13 @@ ui:
     # every UI caller acts as the controller, so by default that combination
     # fails the install.
     allowStaticTokenWithTokenReview: false
+  # -- Offer Freeze agents, Stop the line and Unfreeze in the UI
+  # (--ui-freeze-controls; docs/agentic/freezes.md). Needs auth.tokenReview:
+  # a freeze names who froze. Grants the controller create, update and delete
+  # on ChangeWindows; the <fullname>-freezes admission policy admits its
+  # writes only as freezes, with the caller as spec.freeze.createdBy. Off, the
+  # UI shows freezes and kardinal freeze writes them.
+  freezeControls: false
 
 # -- Health checks of the PromotionSteps.
 health:

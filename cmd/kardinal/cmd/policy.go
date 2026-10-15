@@ -34,6 +34,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 
@@ -335,6 +336,8 @@ would pass; it exits 0 either way.`,
 	cmd.Flags().StringVar(&opts.Time, "time", "", `Simulated UTC time (e.g. "Saturday 3pm", "Tuesday 10:00", RFC 3339)`)
 	cmd.Flags().Int64Var(&opts.SoakMinutes, "soak-minutes", 0, "Simulated soak time of each upstream environment, in minutes")
 	cmd.Flags().StringVar(&opts.Version, "version", "", "Simulate this version (or Bundle) of the pipeline: its metadata, Approvals and soak (default: a version that went through every upstream environment)")
+	cmd.Flags().StringVar(&opts.AsAgent, "as-agent", "", "Simulate a version the named agent (AgentIdentity) created: actor.* and agent.*, and the agents gates")
+	cmd.Flags().StringVar(&opts.AsHuman, "as-human", "", "Simulate a version this person (Kubernetes username) created")
 	addPolicyNamespacesFlag(cmd, &opts.PolicyNamespaces)
 
 	return cmd
@@ -353,6 +356,9 @@ type simulateOptions struct {
 	// Bundle's own.
 	Soaked           bool
 	PolicyNamespaces []string
+	// AsAgent and AsHuman stamp the simulated version (actor.*): an agent's
+	// read from its AgentIdentity, or a person's.
+	AsAgent, AsHuman string
 	// Now is the reference time: the default simulated time, and the day
 	// --time weekdays are resolved from.
 	Now time.Time
@@ -472,6 +478,10 @@ func policySimulate(ctx context.Context, c sigs_client.Client, ns string, opts s
 		// The gates it would meet in env, whatever its own intent says.
 		bundle.Spec.Intent = nil
 	}
+	indexName, err := simulatedActor(ctx, c, bundle, opts.AsAgent, opts.AsHuman)
+	if err != nil {
+		return nil, err
+	}
 	gates, upstreams, err := gatesForEnv(pipe, bundle, templates, opts.PolicyNamespaces, opts.Env)
 	if err != nil {
 		return nil, err
@@ -498,6 +508,7 @@ func policySimulate(ctx context.Context, c sigs_client.Client, ns string, opts s
 	// An org gate reads metrics.* from its org policy namespace, as in the
 	// controller.
 	ev.r.PolicyNamespaces = opts.PolicyNamespaces
+	ev.r.AgentIndexName = indexName
 	// Metric results are the cluster's current ones at every simulated time:
 	// a result is stale only if it is stale now.
 	ev.metricsAt = opts.Now.UTC()
@@ -900,3 +911,42 @@ Results:
 
 No cluster access is required. The command exits non-zero only when an
 expression does not compile.`
+
+// simulatedActor stamps the simulated version b as created by agent (read
+// from its AgentIdentity: its first subject and its sponsor) or by the person
+// human, and returns the AgentIndex agent.* is read from (the first by
+// name, as the CLI stamps with; "" without an agent). With neither, the
+// version has no stamp, as one from an old client.
+func simulatedActor(ctx context.Context, c sigs_client.Client, b *v1alpha1.Bundle, agent, human string) (string, error) {
+	switch {
+	case agent != "" && human != "":
+		return "", fmt.Errorf("--as-agent and --as-human: pick one")
+	case human != "":
+		b.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: human}
+		return "", nil
+	case agent == "":
+		return "", nil
+	}
+	var id v1alpha1.AgentIdentity
+	if err := c.Get(ctx, types.NamespacedName{Name: agent}, &id); err != nil {
+		return "", fmt.Errorf("read AgentIdentity %s: %w", agent, err)
+	}
+	if len(id.Spec.Subjects) == 0 {
+		return "", fmt.Errorf("AgentIdentity %s has no subjects", agent)
+	}
+	b.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorAgent, Principal: actor.SubjectKey(id.Spec.Subjects[0]),
+		Agent: id.Name, Sponsor: id.Spec.Sponsor.User}
+	var idx v1alpha1.AgentIndexList
+	if err := c.List(ctx, &idx); err != nil {
+		return "", fmt.Errorf("list AgentIndexes: %w", err)
+	}
+	names := make([]string, 0, len(idx.Items))
+	for _, i := range idx.Items {
+		names = append(names, i.Name)
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		return "", nil
+	}
+	return names[0], nil
+}

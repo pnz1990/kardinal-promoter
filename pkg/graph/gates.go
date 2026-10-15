@@ -365,7 +365,16 @@ func approvalPolicyData(gate kardinalv1alpha1.PolicyGate) map[string]interface{}
 		return nil
 	}
 	policy := map[string]interface{}{"excludeAuthor": p.ExcludeAuthor, "required": int64(max(p.Required, 1)),
-		"allowedUsers": toInterfaces(p.AllowedUsers), "allowedGroups": toInterfaces(p.AllowedGroups)}
+		"allowedUsers": toInterfaces(p.AllowedUsers), "allowedGroups": toInterfaces(p.AllowedGroups),
+		// Every field approvalsOfItem reads is in every template entry: kro
+		// types the PolicyGateData node from its data, and a field no entry
+		// has is an undefined field at compile time, optional or not.
+		"allowAgents": p.AllowAgents, "allowedAgents": toInterfaces(p.AllowedAgents)}
+	// requiredWhen only when set: the collection copies the policy whole and
+	// reads no field of it.
+	if p.RequiredWhen != "" {
+		policy["requiredWhen"] = p.RequiredWhen
+	}
 	return policy
 }
 
@@ -382,6 +391,13 @@ func approvalPolicyFromData(p map[string]interface{}) *kardinalv1alpha1.GateAppr
 	for _, g := range p["allowedGroups"].([]interface{}) {
 		out.AllowedGroups = append(out.AllowedGroups, g.(string))
 	}
+	out.AllowAgents, _ = p["allowAgents"].(bool)
+	if agents, ok := p["allowedAgents"].([]interface{}); ok {
+		for _, a := range agents {
+			out.AllowedAgents = append(out.AllowedAgents, a.(string))
+		}
+	}
+	out.RequiredWhen, _ = p["requiredWhen"].(string)
 	return out
 }
 
@@ -441,17 +457,23 @@ func (c *gateCollections) liveSpec() map[string]interface{} {
 // specs of the Approvals for the item's environment and for this very Bundle
 // (spec.bundleUID == the Bundle's UID, so an Approval of an earlier Bundle
 // with the same name never counts), from approvers the gate's policy allows
-// (allowedUsers or allowedGroups; anyone when both are empty), sorted by
-// name, at most maxCopiedApprovals of them. Filtering before the cap means
-// Approvals from people who may not approve cannot crowd out the ones that
-// count. The gate blocks when it gets more than it counts (policygate
-// maxGateApprovals).
+// (allowedUsers or allowedGroups, anyone when both are empty; an agent in
+// allowedAgents when allowAgents is true), sorted by name, at most
+// maxCopiedApprovals of them. Filtering before the cap means Approvals from
+// people who may not approve cannot crowd out the ones that count. The gate
+// blocks when it gets more than it counts (policygate maxGateApprovals).
+// The PolicyGate reconciler applies the remaining rules (agents counted only
+// with the opt-in, the one-party rule; 18-actor-policy sections 4 and 5).
 func approvalsOfItem(policies bool) string {
 	policy := fmt.Sprintf("%s.templates[%s.t].spec.?approval", NodePolicyGateData, iterGate)
 	users := policy + ".?allowedUsers.orValue([])"
 	groups := policy + ".?allowedGroups.orValue([])"
+	agents := policy + ".?allowedAgents.orValue([])"
+	allowAgents := policy + ".?allowAgents.orValue(false)"
 	eligible := fmt.Sprintf("((size(%[1]s) == 0 && size(%[2]s) == 0) || a.spec.user in %[1]s || "+
-		"a.spec.?groups.orValue([]).exists(g, g in %[2]s))", users, groups)
+		"a.spec.?groups.orValue([]).exists(g, g in %[2]s) || "+
+		"(%[4]s && a.spec.?actor.?kind.orValue('') == 'agent' && a.spec.?actor.?agent.orValue('') in %[3]s))",
+		users, groups, agents, allowAgents)
 	if !policies {
 		// No template has spec.approval: everyone's approval is copied
 		// (spec.?approval would not compile, see approvalPolicies).

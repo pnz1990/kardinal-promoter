@@ -1,0 +1,85 @@
+{{/*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+
+The freezes admission policy (docs/design/18-actor-policy.md, section 9.3).
+A freeze (a ChangeWindow with spec.freeze) holds promotions by itself, and
+its exemptions let a pipeline through it. Both name who made them, and the
+API server admits a name only when it is the requester's: who froze
+(spec.freeze.createdBy) and who let a pipeline through (each new
+spec.freeze.exemptions entry). This release's controller, which writes
+freezes for the UI's TokenReview-authenticated callers, and the usernames in
+admission.controllerUsernames may name someone else. ChangeWindows are
+cluster-scoped, so the binding matches them in every release's mode.
+*/}}
+{{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kardinal-promoter.serviceAccountName" .) }}
+{{- $name := printf "%s-freezes" (include "kardinal-promoter.fullname" .) }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["changewindows"]
+  variables:
+    - name: controller
+      expression: >-
+        request.userInfo.username in {{ prepend (.Values.admission.controllerUsernames | default list) $controller | toJson }}
+    - name: oldFreeze
+      expression: >-
+        oldObject != null && has(oldObject.spec.freeze)
+    - name: oldExemptions
+      expression: >-
+        variables.oldFreeze && has(oldObject.spec.freeze.exemptions) ? oldObject.spec.freeze.exemptions : []
+  validations:
+    # Who froze is the requester, on create; it never changes.
+    - expression: >-
+        variables.controller || oldObject != null || !has(object.spec.freeze) ||
+        (has(object.spec.freeze.createdBy) && object.spec.freeze.createdBy == request.userInfo.username)
+      messageExpression: >-
+        'spec.freeze.createdBy must be your own username "' + request.userInfo.username +
+        '"; kardinal freeze sets it for you'
+      reason: Forbidden
+    - expression: >-
+        oldObject == null || has(object.spec.freeze) == variables.oldFreeze
+      message: >-
+        spec.freeze cannot be added to or removed from an existing ChangeWindow; create a new
+        one (kardinal freeze) or delete it (kardinal unfreeze)
+      reason: Forbidden
+    - expression: >-
+        !variables.oldFreeze || !has(object.spec.freeze) ||
+        has(object.spec.freeze.createdBy) == has(oldObject.spec.freeze.createdBy) &&
+        (!has(object.spec.freeze.createdBy) || object.spec.freeze.createdBy == oldObject.spec.freeze.createdBy)
+      message: spec.freeze.createdBy never changes
+      reason: Forbidden
+    # The controller writes ChangeWindows only for the UI's freeze controls.
+    - expression: >-
+        !variables.controller || has(object.spec.freeze)
+      message: this controller writes only freezes (ChangeWindows with spec.freeze)
+      reason: Forbidden
+    # Every exemption that is new, or changed, names the requester.
+    - expression: >-
+        variables.controller || !has(object.spec.freeze) || !has(object.spec.freeze.exemptions) ||
+        object.spec.freeze.exemptions.all(e, e in variables.oldExemptions ||
+          (has(e.createdBy) && e.createdBy == request.userInfo.username))
+      messageExpression: >-
+        'every new spec.freeze.exemptions entry must have createdBy "' + request.userInfo.username +
+        '", your own username; kardinal override --freeze sets it for you'
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: {{ $name }}
+  validationActions: ["Deny"]

@@ -53,6 +53,8 @@ kardinal policy simulate <pipeline> <env> [flags]
 ### Options
 
 ```
+      --as-agent string             Simulate a version the named agent (AgentIdentity) created: actor.* and agent.*, and the agents gates
+      --as-human string             Simulate a version this person (Kubernetes username) created
   -e, --env string                  Environment (or give it after the pipeline)
   -h, --help                        help for simulate
       --pipeline string             Pipeline name (or give it as the first argument)

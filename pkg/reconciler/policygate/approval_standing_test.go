@@ -20,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
@@ -68,15 +69,15 @@ func TestApprovalStanding_MatchesTheTally(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{labelBundle: "b1", labelEnvironment: "prod"}},
 				Spec:       kardinalv1alpha1.PolicyGateSpec{Expression: "true", Approval: &policy, Approvals: tc.approvals},
 			}
-			st := lifecycle.ApprovalStandingOf(gate, tc.creator, &alice)
+			st := lifecycle.ApprovalStandingOf(gate, actor.OrUnknown(nil, tc.creator), &alice)
 			assert.Equal(t, tc.want, st.CanApprove)
 			assert.Equal(t, tc.reason, st.Reason)
 
 			// The server's view: alice approves.
-			before := tallyApprovals(gate, tc.creator)
+			before := tallyApprovals(gate, actor.OrUnknown(nil, tc.creator))
 			after := gate.DeepCopy()
 			after.Spec.Approvals = append(after.Spec.Approvals, decision(alice.User, "approve", alice.Groups...))
-			tally := tallyApprovals(after, tc.creator)
+			tally := tallyApprovals(after, actor.OrUnknown(nil, tc.creator))
 			counts := len(tally.Approvers) > len(before.Approvers) && tally.Held == "" && len(tally.Rejecters) == 0
 			assert.Equal(t, counts, st.CanApprove, "CanApprove is what the reconciler does with the approval")
 			assert.Equal(t, len(before.Approvers), st.Approved)

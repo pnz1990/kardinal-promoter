@@ -44,6 +44,8 @@ type uiAuthConfig struct {
 	scopeNamespace string
 	// actors stamps the UI's writes with the verified caller (docs/actors.md).
 	actors *actorWriter
+	// freezeControls is --ui-freeze-controls: the UI may write freezes.
+	freezeControls bool
 }
 
 // reviewOptions are the TokenReview settings shared by the UI API and the
@@ -158,6 +160,7 @@ func newUIHandler(k8s client.Client, apiReader client.Reader, assets fs.FS, auth
 	apiServer.scopeNamespace = auth.scopeNamespace
 	apiServer.apiReader = apiReader
 	apiServer.actors = auth.actors
+	apiServer.freezeControls = auth.freezeControls
 	if tokenReview {
 		apiServer.accessCheck = auth.accessCheck
 	}

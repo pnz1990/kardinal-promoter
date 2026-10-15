@@ -107,8 +107,19 @@ func saSubject(name string) v1alpha1.AgentSubject {
 // elsewhere may act only in another namespace; first and second both list
 // ci/shared, so second (the newer) is not ready and its own subject ci/second
 // is blocked; nowhere is scoped to no namespace; dual is the user oidc:dual,
-// a member of triage's group.
+// a member of triage's group. Each has autonomy auto: the scenarios are
+// about the stamp and admission, not the approval the default autonomy
+// (approve) asks of an agent's version (docs/design/18-actor-policy.md
+// section 7, covered by the actor policy journeys).
 func agentFixture(ns string) []client.Object {
+	objs := agentIdentities(ns)
+	for _, o := range objs {
+		o.(*v1alpha1.AgentIdentity).Spec.Autonomy = v1alpha1.AutonomyAuto
+	}
+	return objs
+}
+
+func agentIdentities(ns string) []client.Object {
 	return []client.Object{
 		AgentIdentityOf("first", []v1alpha1.AgentSubject{saSubject("shared")}, []string{ns}, false),
 		AgentIdentityOf("fixer", []v1alpha1.AgentSubject{saSubject(fixerSA)}, []string{ns}, false),

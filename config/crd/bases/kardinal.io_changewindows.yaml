@@ -29,6 +29,9 @@ spec:
     - jsonPath: .status.conditions[?(@.type=="Valid")].status
       name: Valid
       type: string
+    - jsonPath: .spec.freeze.actors
+      name: Freeze
+      type: string
     - jsonPath: .status.reason
       name: Reason
       priority: 1
@@ -41,10 +44,11 @@ spec:
       openAPIV3Schema:
         description: |-
           ChangeWindow defines a cluster-scoped time window during which promotions are
-          blocked. A ChangeWindow blocks nothing by itself: a PolicyGate blocks
-          while a window it references is active, for example
+          blocked. Without spec.freeze, a ChangeWindow blocks nothing by itself: a
+          PolicyGate blocks while a window it references is active, for example
           !changewindow.isBlocked("holiday-freeze") or changewindow.isAllowed("business-hours").
-          A gate that names a ChangeWindow that does not exist blocks.
+          A gate that names a ChangeWindow that does not exist blocks. With
+          spec.freeze, the window holds the promotions it selects while it is active.
         properties:
           apiVersion:
             description: |-
@@ -67,10 +71,211 @@ spec:
             description: ChangeWindowSpec defines the desired state of a ChangeWindow.
             properties:
               end:
-                description: 'End is when a blackout window ends (required for type:
-                  blackout).'
+                description: |-
+                  End is when a blackout window ends (required for type: blackout, except
+                  with spec.freeze: a freeze without end lasts until it is removed).
                 format: date-time
                 type: string
+              freeze:
+                description: |-
+                  Freeze makes the window hold promotions by itself while it is active,
+                  without a gate naming it (docs/design/18-actor-policy.md): an agent
+                  freeze, or a stop-the-line for everyone. kardinal freeze writes it.
+                properties:
+                  actors:
+                    description: |-
+                      Actors is whose versions are held: agents (versions whose actor stamp
+                      says kind agent) or everyone (stop-the-line).
+                    enum:
+                    - agents
+                    - everyone
+                    maxLength: 16
+                    type: string
+                  createdBy:
+                    description: |-
+                      CreatedBy is who froze: the chart's freezes admission policy admits it
+                      only as the requester's username, and it never changes.
+                    maxLength: 253
+                    type: string
+                  exemptionRecords:
+                    description: |-
+                      ExemptionRecords has one record per spec.freeze.exemptions entry: when
+                      the controller first saw it and until when it counts. Records of
+                      entries removed from the spec go.
+                    items:
+                      description: |-
+                        FreezeExemptionRecord is when the ChangeWindow reconciler first saw one
+                        spec.freeze.exemptions entry, and so until when it counts: the earlier of
+                        its expiresAt and firstSeen plus the controller's cap
+                        (--freeze-exemption-max-minutes), as for gate overrides.
+                      properties:
+                        firstSeen:
+                          description: FirstSeen is when the controller first saw
+                            the entry.
+                          format: date-time
+                          type: string
+                        key:
+                          description: |-
+                            Key identifies the entry: a hash of every field, so an edited entry is
+                            a new exemption (changewindow.ExemptionKey).
+                          maxLength: 64
+                          type: string
+                        until:
+                          description: Until is when it stops counting.
+                          format: date-time
+                          type: string
+                      required:
+                      - firstSeen
+                      - key
+                      - until
+                      type: object
+                    maxItems: 100
+                    type: array
+                  exemptions:
+                    description: |-
+                      Exemptions let a pipeline, an environment or one version through the
+                      freeze until they expire (kardinal override --freeze). The admission
+                      policy admits a new one only in its creator's name, and none changes.
+                    items:
+                      description: FreezeExemption is a break-glass exception to a
+                        freeze.
+                      properties:
+                        actor:
+                          description: |-
+                            Actor is who made the exception, as the chart's actor admission
+                            policy verified it (kardinal override --freeze stamps it). An
+                            exemption whose actor is an agent is never honoured: break-glass is
+                            for people (docs/design/18-actor-policy.md section 6).
+                          properties:
+                            agent:
+                              description: Agent is the AgentIdentity name, when kind
+                                is agent.
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                            asserted:
+                              description: |-
+                                Asserted holds what the client says about itself. It is recorded as
+                                written and never used for a security decision.
+                              properties:
+                                client:
+                                  description: Client is the tool that wrote the record
+                                    (for example kardinal/0.12.0).
+                                  maxLength: 128
+                                  type: string
+                                model:
+                                  description: Model is the AI model the client says
+                                    it runs.
+                                  maxLength: 128
+                                  type: string
+                                session:
+                                  description: Session is the client's session or
+                                    run identifier.
+                                  maxLength: 128
+                                  type: string
+                              type: object
+                            kind:
+                              description: Kind is human, agent, bot or controller
+                                (docs/actors.md).
+                              enum:
+                              - human
+                              - agent
+                              - bot
+                              - controller
+                              maxLength: 16
+                              type: string
+                            principal:
+                              description: Principal is the username the API server
+                                authenticated.
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                            sponsor:
+                              description: |-
+                                Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when
+                                the record was written, when kind is agent.
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                            via:
+                              description: |-
+                                Via says how the controller came to write the record: ui and api for a
+                                caller it authenticated, subscription and auto-rollback for its own
+                                Bundles. Only the controller may set it.
+                              enum:
+                              - ui
+                              - api
+                              - subscription
+                              - auto-rollback
+                              maxLength: 16
+                              type: string
+                          required:
+                          - kind
+                          - principal
+                          type: object
+                          x-kubernetes-validations:
+                          - message: actor.agent and actor.sponsor are set exactly
+                              when actor.kind is agent
+                            rule: 'self.kind == ''agent'' ? (has(self.agent) && has(self.sponsor))
+                              : (!has(self.agent) && !has(self.sponsor))'
+                          - message: a controller actor says why it acted (actor.via)
+                            rule: self.kind != 'controller' || has(self.via)
+                        bundle:
+                          description: Bundle, when set, limits the exemption to that
+                            version.
+                          maxLength: 253
+                          type: string
+                        createdBy:
+                          description: CreatedBy is who made the exception, as admission
+                            verified it.
+                          maxLength: 253
+                          type: string
+                        environment:
+                          description: Environment, when set, limits the exemption
+                            to that environment.
+                          maxLength: 63
+                          type: string
+                        expiresAt:
+                          description: ExpiresAt ends the exemption.
+                          format: date-time
+                          type: string
+                        namespace:
+                          description: Namespace and Pipeline are the pipeline let
+                            through.
+                          maxLength: 63
+                          minLength: 1
+                          type: string
+                        pipeline:
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        reason:
+                          description: Reason says why (recorded in the FreezeExempted
+                            audit record).
+                          maxLength: 1024
+                          minLength: 1
+                          type: string
+                      required:
+                      - expiresAt
+                      - namespace
+                      - pipeline
+                      - reason
+                      type: object
+                    maxItems: 100
+                    type: array
+                  namespaces:
+                    description: |-
+                      Namespaces limits the freeze to these namespaces: exact names, or a
+                      prefix ending in "*". Empty: every namespace.
+                    items:
+                      maxLength: 64
+                      minLength: 1
+                      type: string
+                    maxItems: 64
+                    type: array
+                required:
+                - actors
+                type: object
               reason:
                 description: Reason is a human-readable explanation for this window.
                 type: string
@@ -124,8 +329,12 @@ spec:
             - type
             type: object
             x-kubernetes-validations:
-            - message: a blackout ChangeWindow requires start and end
-              rule: self.type != 'blackout' || (has(self.start) && has(self.end))
+            - message: 'a blackout ChangeWindow requires start and end (a freeze may
+                omit end: it lasts until it is removed)'
+              rule: self.type != 'blackout' || (has(self.start) && (has(self.end)
+                || has(self.freeze)))
+            - message: 'spec.freeze needs type: blackout'
+              rule: '!has(self.freeze) || self.type == ''blackout'''
             - message: a recurring ChangeWindow requires schedule
               rule: self.type != 'recurring' || has(self.schedule)
           status:
@@ -202,6 +411,182 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              exemptionRecords:
+                description: |-
+                  ExemptionRecords has one record per spec.freeze.exemptions entry: when
+                  the controller first saw it and until when it counts. Records of
+                  entries removed from the spec go.
+                items:
+                  description: |-
+                    FreezeExemptionRecord is when the ChangeWindow reconciler first saw one
+                    spec.freeze.exemptions entry, and so until when it counts: the earlier of
+                    its expiresAt and firstSeen plus the controller's cap
+                    (--freeze-exemption-max-minutes), as for gate overrides.
+                  properties:
+                    firstSeen:
+                      description: FirstSeen is when the controller first saw the
+                        entry.
+                      format: date-time
+                      type: string
+                    key:
+                      description: |-
+                        Key identifies the entry: a hash of every field, so an edited entry is
+                        a new exemption (changewindow.ExemptionKey).
+                      maxLength: 64
+                      type: string
+                    until:
+                      description: Until is when it stops counting.
+                      format: date-time
+                      type: string
+                  required:
+                  - firstSeen
+                  - key
+                  - until
+                  type: object
+                maxItems: 100
+                type: array
+              exemptions:
+                description: |-
+                  Exemptions are the spec.freeze.exemptions in effect now: not past
+                  their record's until, and not made by an agent. The PromotionStep
+                  reconciler lets a step through a freeze only on an exemption listed
+                  here and still in the spec.
+                items:
+                  description: FreezeExemption is a break-glass exception to a freeze.
+                  properties:
+                    actor:
+                      description: |-
+                        Actor is who made the exception, as the chart's actor admission
+                        policy verified it (kardinal override --freeze stamps it). An
+                        exemption whose actor is an agent is never honoured: break-glass is
+                        for people (docs/design/18-actor-policy.md section 6).
+                      properties:
+                        agent:
+                          description: Agent is the AgentIdentity name, when kind
+                            is agent.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        asserted:
+                          description: |-
+                            Asserted holds what the client says about itself. It is recorded as
+                            written and never used for a security decision.
+                          properties:
+                            client:
+                              description: Client is the tool that wrote the record
+                                (for example kardinal/0.12.0).
+                              maxLength: 128
+                              type: string
+                            model:
+                              description: Model is the AI model the client says it
+                                runs.
+                              maxLength: 128
+                              type: string
+                            session:
+                              description: Session is the client's session or run
+                                identifier.
+                              maxLength: 128
+                              type: string
+                          type: object
+                        kind:
+                          description: Kind is human, agent, bot or controller (docs/actors.md).
+                          enum:
+                          - human
+                          - agent
+                          - bot
+                          - controller
+                          maxLength: 16
+                          type: string
+                        principal:
+                          description: Principal is the username the API server authenticated.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        sponsor:
+                          description: |-
+                            Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when
+                            the record was written, when kind is agent.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        via:
+                          description: |-
+                            Via says how the controller came to write the record: ui and api for a
+                            caller it authenticated, subscription and auto-rollback for its own
+                            Bundles. Only the controller may set it.
+                          enum:
+                          - ui
+                          - api
+                          - subscription
+                          - auto-rollback
+                          maxLength: 16
+                          type: string
+                      required:
+                      - kind
+                      - principal
+                      type: object
+                      x-kubernetes-validations:
+                      - message: actor.agent and actor.sponsor are set exactly when
+                          actor.kind is agent
+                        rule: 'self.kind == ''agent'' ? (has(self.agent) && has(self.sponsor))
+                          : (!has(self.agent) && !has(self.sponsor))'
+                      - message: a controller actor says why it acted (actor.via)
+                        rule: self.kind != 'controller' || has(self.via)
+                    bundle:
+                      description: Bundle, when set, limits the exemption to that
+                        version.
+                      maxLength: 253
+                      type: string
+                    createdBy:
+                      description: CreatedBy is who made the exception, as admission
+                        verified it.
+                      maxLength: 253
+                      type: string
+                    environment:
+                      description: Environment, when set, limits the exemption to
+                        that environment.
+                      maxLength: 63
+                      type: string
+                    expiresAt:
+                      description: ExpiresAt ends the exemption.
+                      format: date-time
+                      type: string
+                    namespace:
+                      description: Namespace and Pipeline are the pipeline let through.
+                      maxLength: 63
+                      minLength: 1
+                      type: string
+                    pipeline:
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    reason:
+                      description: Reason says why (recorded in the FreezeExempted
+                        audit record).
+                      maxLength: 1024
+                      minLength: 1
+                      type: string
+                  required:
+                  - expiresAt
+                  - namespace
+                  - pipeline
+                  - reason
+                  type: object
+                maxItems: 100
+                type: array
+              nextTransition:
+                description: |-
+                  NextTransition is the next instant the status can change: a window
+                  boundary or, for a freeze, the earliest expiry of an exemption in
+                  effect. The reconciler requeues itself then.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation the status describes. A freeze
+                  whose status is behind its spec is treated as active.
+                format: int64
+                type: integer
               reason:
                 description: Reason explains the current active/inactive state.
                 type: string
