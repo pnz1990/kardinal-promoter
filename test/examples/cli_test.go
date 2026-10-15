@@ -94,13 +94,16 @@ func shellWords(line string) []string {
 // shellFence lists the code block languages that hold shell commands.
 var shellFence = map[string]bool{"bash": true, "sh": true, "shell": true, "console": true}
 
-// documentedInvocations returns every `kardinal` command in a shell code
-// block of a Markdown file under manifestDirs.
-func documentedInvocations(t *testing.T) []invocation {
+// documentedMarkdown lists the Markdown files whose shell blocks and
+// inline code are user documentation: the examples and demo READMEs, every
+// published docs page, README.md and CONTRIBUTING.md. The changelog quotes
+// past releases, and docs/aide and docs/design are not user documentation
+// (history and plans), so they are left out.
+func documentedMarkdown(t *testing.T) []string {
 	t.Helper()
 	root := repoRoot(t)
-	var out []invocation
-	for _, dir := range manifestDirs {
+	files := []string{"README.md", "CONTRIBUTING.md"}
+	for _, dir := range append(append([]string{}, manifestDirs...), "docs") {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(p string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !strings.HasSuffix(p, ".md") {
 				return err
@@ -109,50 +112,73 @@ func documentedInvocations(t *testing.T) []invocation {
 			if err != nil {
 				return fmt.Errorf("relative path of %s: %w", p, err)
 			}
-			f, err := os.Open(p)
-			if err != nil {
-				return fmt.Errorf("open %s: %w", p, err)
+			rel = filepath.ToSlash(rel)
+			if rel == "docs/changelog.md" || strings.HasPrefix(rel, "docs/aide/") || strings.HasPrefix(rel, "docs/design/") {
+				return nil
 			}
-			defer f.Close()
-
-			sc := bufio.NewScanner(f)
-			inFence, inBlock := false, false
-			n, start := 0, 0
-			var pending string
-			for sc.Scan() {
-				n++
-				line := strings.TrimSpace(sc.Text())
-				if strings.HasPrefix(line, "```") {
-					// Only shell blocks hold commands; unlabeled blocks are
-					// diagrams and sample output.
-					inBlock = !inBlock
-					inFence = inBlock && shellFence[strings.TrimPrefix(line, "```")]
-					pending = ""
-					continue
-				}
-				if !inFence {
-					continue
-				}
-				if pending == "" {
-					start = n
-				}
-				if strings.HasSuffix(line, `\`) {
-					pending += strings.TrimSuffix(line, `\`) + " "
-					continue
-				}
-				full := strings.TrimPrefix(pending+line, "$ ")
-				pending = ""
-				words := shellWords(full)
-				if len(words) > 0 && words[0] == "kardinal" {
-					out = append(out, invocation{where: fmt.Sprintf("%s:%d", filepath.ToSlash(rel), start), args: words[1:]})
-				}
-			}
-			if err := sc.Err(); err != nil {
-				return fmt.Errorf("read %s: %w", p, err)
-			}
+			files = append(files, rel)
 			return nil
 		})
 		require.NoError(t, err)
+	}
+	return files
+}
+
+// documentedInvocations returns every `kardinal` command in a shell code
+// block of the documented Markdown files (documentedMarkdown).
+func documentedInvocations(t *testing.T) []invocation {
+	t.Helper()
+	root := repoRoot(t)
+	var out []invocation
+	for _, rel := range documentedMarkdown(t) {
+		data, err := os.ReadFile(filepath.Join(root, rel))
+		require.NoError(t, err)
+		out = append(out, markdownInvocations(rel, string(data))...)
+	}
+	return out
+}
+
+// placeholder is a <name> the reader fills in, such as <pipeline>.
+var placeholder = regexp.MustCompile(`<[A-Za-z][A-Za-z0-9_.-]*>`)
+
+// markdownInvocations returns the `kardinal` commands in the shell code
+// blocks of one Markdown file. A block's lines may be indented (list items),
+// continue with a trailing backslash and start with a "$ " prompt.
+func markdownInvocations(rel, text string) []invocation {
+	var out []invocation
+	sc := bufio.NewScanner(strings.NewReader(text))
+	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	inFence, inBlock := false, false
+	n, start := 0, 0
+	var pending string
+	for sc.Scan() {
+		n++
+		line := strings.TrimSpace(sc.Text())
+		if strings.HasPrefix(line, "```") {
+			// Only shell blocks hold commands; unlabeled blocks are
+			// diagrams and sample output.
+			inBlock = !inBlock
+			inFence = inBlock && shellFence[strings.TrimPrefix(line, "```")]
+			pending = ""
+			continue
+		}
+		if !inFence {
+			continue
+		}
+		if pending == "" {
+			start = n
+		}
+		if strings.HasSuffix(line, `\`) {
+			pending += strings.TrimSuffix(line, `\`) + " "
+			continue
+		}
+		full := strings.TrimPrefix(pending+line, "$ ")
+		pending = ""
+		// A <placeholder> is an argument the reader fills in, not a redirect.
+		words := shellWords(placeholder.ReplaceAllString(full, "x"))
+		if len(words) > 0 && words[0] == "kardinal" {
+			out = append(out, invocation{where: fmt.Sprintf("%s:%d", rel, start), args: words[1:]})
+		}
 	}
 	return out
 }
@@ -180,9 +206,79 @@ func parseInvocation(args []string) error {
 	return nil
 }
 
+// inlineCommand is an inline code span that starts with the CLI.
+var inlineCommand = regexp.MustCompile("`(kardinal [^`]+)`")
+
+// inlineInvocations returns the `kardinal ...` inline code spans in the prose
+// of one Markdown file (outside code blocks). A span that is a synopsis
+// rather than a command (it has "...", "[", "|" or "{") is left out, and so
+// are the roadmap and lines that mark what they name as planned: those
+// commands do not exist yet.
+func inlineInvocations(rel, text string) []invocation {
+	var out []invocation
+	if rel == "docs/roadmap.md" {
+		return nil
+	}
+	inBlock := false
+	for i, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			inBlock = !inBlock
+			continue
+		}
+		if inBlock || strings.Contains(line, "Planned") || strings.Contains(line, "planned") {
+			continue
+		}
+		for _, m := range inlineCommand.FindAllStringSubmatch(line, -1) {
+			cmd := m[1]
+			if strings.ContainsAny(cmd, "[|{") || strings.Contains(cmd, "...") || strings.Contains(cmd, "…") {
+				continue
+			}
+			words := shellWords(placeholder.ReplaceAllString(cmd, "x"))
+			out = append(out, invocation{where: fmt.Sprintf("%s:%d", rel, i+1), args: words[1:]})
+		}
+	}
+	return out
+}
+
+// TestDocumentedInlineCLIInvocationsParse checks the `kardinal ...` commands
+// the prose names inline, as TestDocumentedCLIInvocationsParse does for the
+// code blocks: every command and flag exists and takes those arguments.
+func TestDocumentedInlineCLIInvocationsParse(t *testing.T) {
+	root := repoRoot(t)
+	var invs []invocation
+	for _, rel := range documentedMarkdown(t) {
+		data, err := os.ReadFile(filepath.Join(root, rel))
+		require.NoError(t, err)
+		invs = append(invs, inlineInvocations(rel, string(data))...)
+	}
+	require.Greater(t, len(invs), 100, "too few inline kardinal commands found; is the scan broken?")
+	for _, inv := range invs {
+		t.Run(inv.where, func(t *testing.T) {
+			assert.NoError(t, parseCommandAndFlags(inv.args), "kardinal %s", strings.Join(inv.args, " "))
+		})
+	}
+}
+
+// parseCommandAndFlags is parseInvocation without the required-flag and
+// argument-count checks: prose often names a command with one flag of
+// several ("kardinal approve --revoke").
+func parseCommandAndFlags(args []string) error {
+	root := kardinalcmd.NewRootCmd()
+	sub, rest, err := root.Find(args)
+	if err != nil {
+		return fmt.Errorf("find command: %w", err)
+	}
+	// Prose names a flag without its value ("--version pins it"): the flag
+	// exists, which is what this checks.
+	if err := sub.ParseFlags(rest); err != nil && !strings.HasPrefix(err.Error(), "flag needs an argument") {
+		return fmt.Errorf("%s: %w", sub.CommandPath(), err)
+	}
+	return nil
+}
+
 func TestDocumentedCLIInvocationsParse(t *testing.T) {
 	invs := documentedInvocations(t)
-	require.Greater(t, len(invs), 15, "too few kardinal invocations found; is the scan broken?")
+	require.Greater(t, len(invs), 100, "too few kardinal invocations found; is the scan broken?")
 	for _, inv := range invs {
 		t.Run(inv.where, func(t *testing.T) {
 			assert.NoError(t, parseInvocation(inv.args), "kardinal %s", strings.Join(inv.args, " "))
