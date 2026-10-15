@@ -171,17 +171,22 @@ func TestGetBundles_SameSecond(t *testing.T) {
 // in-flight Bundle Verified in wave 1 and promoting in wave 2: the #1579 QA
 // case, where get pipelines -A took 44 s.
 func wideFleet() ([]v1alpha1.Pipeline, []v1alpha1.Bundle, []v1alpha1.PromotionStep) {
+	return wideFleetOf(500)
+}
+
+// wideFleetOf is wideFleet with n environments, the first half Verified.
+func wideFleetOf(n int) ([]v1alpha1.Pipeline, []v1alpha1.Bundle, []v1alpha1.PromotionStep) {
 	var envs []v1alpha1.EnvironmentSpec
-	for i := range 500 {
-		envs = append(envs, v1alpha1.EnvironmentSpec{Name: fmt.Sprintf("env-%03d", i), Wave: 1 + i/250})
+	for i := range n {
+		envs = append(envs, v1alpha1.EnvironmentSpec{Name: fmt.Sprintf("env-%03d", i), Wave: 1 + i/(n/2)})
 	}
 	p := widePipeline("fleet", "fleet", envs...)
 	b := v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "fleet-b1", Namespace: "fleet"},
 		Spec: v1alpha1.BundleSpec{Pipeline: "fleet", Type: "image"}, Status: v1alpha1.BundleStatus{Phase: "Promoting"}}
-	steps := make([]v1alpha1.PromotionStep, 0, 500)
-	for i := range 500 {
+	steps := make([]v1alpha1.PromotionStep, 0, n)
+	for i := range n {
 		state := "Verified"
-		if i >= 250 {
+		if i >= n/2 {
 			state = "Promoting"
 		}
 		steps = append(steps, v1alpha1.PromotionStep{
@@ -193,19 +198,29 @@ func wideFleet() ([]v1alpha1.Pipeline, []v1alpha1.Bundle, []v1alpha1.PromotionSt
 	return []v1alpha1.Pipeline{p}, []v1alpha1.Bundle{b}, steps
 }
 
-// TestPipelineTable_500EnvsUnderOneSecond (#1579 QA): the table of a
-// 500-environment Pipeline, summary and every column, renders in under a
-// second (it took 44 s while the intent filter ran per environment).
-func TestPipelineTable_500EnvsUnderOneSecond(t *testing.T) {
-	ps, bs, ss := wideFleet()
-	start := time.Now()
-	var buf bytes.Buffer
-	require.NoError(t, formatPipelines(&buf, ps, bs, ss, nil, nil, true, false))
-	require.NoError(t, formatPipelines(&buf, ps, bs, ss, nil, nil, true, true))
-	elapsed := time.Since(start)
-	assert.Contains(t, buf.String(), "250 Live, 250 Promoting")
-	assert.Less(t, elapsed, time.Second)
-	t.Logf("500 environments: %v for the summary and the full table", elapsed)
+// TestPipelineTable_500EnvsLinear (#1579 QA): the table of a
+// 500-environment Pipeline, summary and every column, costs about ten times
+// the table of a 50-environment one: it took 44 s while each environment
+// resolved the Pipeline's ordering again (quadratic). Counted in allocations,
+// which a loaded or -race host does not change; a wall-clock bound of one
+// second failed there (#1889).
+func TestPipelineTable_500EnvsLinear(t *testing.T) {
+	render := func(n int) (string, float64) {
+		ps, bs, ss := wideFleetOf(n)
+		var out string
+		allocs := testing.AllocsPerRun(3, func() {
+			var buf bytes.Buffer
+			require.NoError(t, formatPipelines(&buf, ps, bs, ss, nil, nil, true, false))
+			require.NoError(t, formatPipelines(&buf, ps, bs, ss, nil, nil, true, true))
+			out = buf.String()
+		})
+		return out, allocs
+	}
+	out, big := render(500)
+	assert.Contains(t, out, "250 Live, 250 Promoting")
+	_, small := render(50)
+	t.Logf("allocations: %.0f for 50 environments, %.0f for 500 (%.1fx)", small, big, big/small)
+	assert.Less(t, big/small, 25.0, "ten times the environments costs about ten times, not a hundred")
 }
 
 func BenchmarkPipelineTable_500Envs(b *testing.B) {

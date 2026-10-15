@@ -97,6 +97,12 @@ func TestUpdateStepStatuses_DurationOfStepsRunInOneReconcile(t *testing.T) {
 				seq[i] = fmt.Sprintf("test-duration-%d-%d", n, i)
 			}
 			ps := &v1alpha1.PromotionStep{Status: v1alpha1.PromotionStepStatus{Steps: initStepStatuses(seq)}}
+			// The histogram is the process's: read what this run adds
+			// (go test -count=N runs it again, #1889).
+			baseCount, baseSum := make([]uint64, len(seq)), make([]float64, len(seq))
+			for i := range seq {
+				baseCount[i], baseSum[i] = stepDurationSamples(t, seq[i])
+			}
 
 			updateStepStatuses(ps, seq, tt.nextIdx, tt.failed, "boom", tt.timings).record()
 			// A second update for the same result must not observe again.
@@ -106,9 +112,9 @@ func TestUpdateStepStatuses_DurationOfStepsRunInOneReconcile(t *testing.T) {
 				assert.Equal(t, tt.wantState[i], s.State, "step %d state", i)
 				assert.Equal(t, tt.wantMs[i], s.DurationMs, "step %d durationMs", i)
 				count, sum := stepDurationSamples(t, seq[i])
-				assert.Equal(t, tt.wantSamples[i], count, "step %d samples", i)
+				assert.Equal(t, tt.wantSamples[i], count-baseCount[i], "step %d samples", i)
 				if tt.wantSamples[i] == 1 {
-					assert.InDelta(t, float64(tt.wantMs[i])/1000, sum, 0.001, "step %d observed seconds", i)
+					assert.InDelta(t, float64(tt.wantMs[i])/1000, sum-baseSum[i], 0.001, "step %d observed seconds", i)
 					assert.Equal(t, tt.timings[i].Started, s.StartedAt.Time, "step %d startedAt", i)
 					assert.Equal(t, tt.timings[i].Finished, s.CompletedAt.Time, "step %d completedAt", i)
 				}
@@ -127,6 +133,8 @@ func TestUpdateStepStatuses_StepAcrossReconciles(t *testing.T) {
 	seq := []string{"test-across-0", "test-across-1"}
 	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 	ps := &v1alpha1.PromotionStep{Status: v1alpha1.PromotionStepStatus{Steps: initStepStatuses(seq)}}
+	base0, _ := stepDurationSamples(t, seq[0])
+	base1, baseSum1 := stepDurationSamples(t, seq[1])
 
 	// Reconcile 1: step 0 completes, step 1 starts and is pending.
 	updateStepStatuses(ps, seq, 1, false, "", map[int]steps.StepTiming{
@@ -144,10 +152,10 @@ func TestUpdateStepStatuses_StepAcrossReconciles(t *testing.T) {
 	assert.Equal(t, metav1.NewTime(t0.Add(time.Minute+time.Second)), *step.CompletedAt)
 	assert.Equal(t, int64(60000), step.DurationMs)
 	count, sum := stepDurationSamples(t, seq[1])
-	assert.Equal(t, uint64(1), count)
-	assert.InDelta(t, 60.0, sum, 0.001)
+	assert.Equal(t, uint64(1), count-base1)
+	assert.InDelta(t, 60.0, sum-baseSum1, 0.001)
 	count, _ = stepDurationSamples(t, seq[0])
-	assert.Equal(t, uint64(1), count, "step 0 is observed once, in the reconcile it completed")
+	assert.Equal(t, uint64(1), count-base0, "step 0 is observed once, in the reconcile it completed")
 }
 
 // TestStepDuration_StateMachineSteps: wait-for-merge and the health check are

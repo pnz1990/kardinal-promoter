@@ -274,7 +274,8 @@ func (s *slowHistory) BranchHistory(ctx context.Context, url, branch string, tok
 // says why, and the next check reads again: once the history reads, a
 // commit at another path only moves baseSHA.
 func TestWaitingForMerge_HistoryTimeoutKeepsPR(t *testing.T) {
-	defer promotionstep.SetHistoryTimeout(50 * time.Millisecond)()
+	restore := promotionstep.SetHistoryTimeout(50 * time.Millisecond)
+	defer restore()
 	remote := newGitRemote(t)
 	pl, b := makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo")
 	pl.Spec.Git.URL = remote.url()
@@ -313,6 +314,10 @@ func TestWaitingForMerge_HistoryTimeoutKeepsPR(t *testing.T) {
 		"(the read took longer than 50ms), so the PR branch is kept and checked again")
 
 	// The next check reads the history: a commit at another path, no rebuild.
+	// It gets the production timeout: the real read of a loaded host or a
+	// -race run can take longer than 50ms, which decided nothing and kept
+	// the old baseSHA (#1889).
+	restore()
 	git.fixed.Store(true)
 	now = now.Add(31 * time.Second)
 	reconcileStep(t, r, step.Name)
