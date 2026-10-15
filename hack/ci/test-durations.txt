@@ -68,7 +68,7 @@ github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/scale 1.1
 github.com/kardinal-promoter/kardinal-promoter/test/e2e/proof 17.9
 github.com/kardinal-promoter/kardinal-promoter/test/e2e/report 1.0
 github.com/kardinal-promoter/kardinal-promoter/test/examples 2.7
-github.com/kardinal-promoter/kardinal-promoter/test/hack 13.6
+github.com/kardinal-promoter/kardinal-promoter/test/hack 44.0
 github.com/kardinal-promoter/kardinal-promoter/test/helm 22.5
 github.com/kardinal-promoter/kardinal-promoter/test/kindcontext 1.0
 github.com/kardinal-promoter/kardinal-promoter/test/scenario 7.3

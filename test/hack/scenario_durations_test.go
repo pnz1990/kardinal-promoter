@@ -24,7 +24,8 @@ const maxScenarioSeconds = 60
 
 // TestScenarioDurations: every package under test/scenario with tests is in
 // hack/ci/test-durations.txt (a package not listed counts as the median,
-// which hides it), and none is recorded over maxScenarioSeconds.
+// which hides it), and none is recorded over maxScenarioSeconds; nor is
+// test/hack, this package, which reads the whole repository.
 func TestScenarioDurations(t *testing.T) {
 	root := repoRoot(t)
 	const module = "github.com/kardinal-promoter/kardinal-promoter/"
@@ -64,4 +65,7 @@ func TestScenarioDurations(t *testing.T) {
 		return nil
 	}))
 	assert.NotEmpty(t, seen)
+	if secs, ok := recorded["test/hack"]; assert.True(t, ok, "test/hack is not in hack/ci/test-durations.txt") {
+		assert.LessOrEqual(t, secs, float64(maxScenarioSeconds), "test/hack is recorded at %.1fs under -race", secs)
+	}
 }
