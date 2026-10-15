@@ -268,6 +268,15 @@ kubectl get bundles -A
 `kardinal doctor` passes every check. Every Bundle that was Promoting still has its Graph, and
 finishes; a Verified Bundle stays Verified; a new Bundle promotes end to end.
 
+v0.9.0 kept the Graph of every Bundle. This release retires the Graph of a finished Bundle
+([Graph retirement](architecture.md#graph-retirement)) after a delay that starts when the
+controller first finds the Bundle settled and sets its `GraphRetired` condition to `Scheduled`.
+v0.9.0 never set that condition, so for a Bundle that finished under v0.9.0 the delay starts at the
+new controller's first reconcile: its Graph goes one full delay after the upgrade (by default an
+hour for a Verified Bundle still deployed, a minute for one a newer Bundle replaced). Each such
+Bundle keeps its steps in `status.retiredSteps` and its phase; `kardinal get bundles`,
+`kardinal history` and `kardinal rollback` read those records.
+
 ## Upgrading from v0.8.1
 
 v0.8.1 ran its own Graph controller (krocodile, `experimental.kro.run`) from the kardinal chart. This release runs on upstream kro (`kro.run`), which you install separately. `helm upgrade --reuse-values` fails. A `helm upgrade` that gets past the values check deletes the `kro-system` namespace. Follow the steps below instead.
