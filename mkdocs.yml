@@ -238,6 +238,7 @@ nav:
       - Actors: design/17-actors.md
       - Actor-aware policy: design/18-actor-policy.md
       - Verdicts: design/19-verdicts.md
+      - Change requests and approval fields: design/23-change-requests.md
 
 extra:
   social:
