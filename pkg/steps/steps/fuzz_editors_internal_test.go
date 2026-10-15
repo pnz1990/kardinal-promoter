@@ -529,27 +529,33 @@ func topKeyOf(path string) string {
 // keys at column 1, CR line endings, or no final line break.
 func onlyTopKeyChanged(orig, out []byte, key string) (same, ok bool) {
 	o, ok1 := topEntries(orig)
-	n, ok2 := topEntries(out)
 	if !ok1 {
 		return false, false
 	}
-	if !ok2 {
+	if _, ok2 := topEntries(out); !ok2 {
 		return false, true
 	}
 	ol, nl := splitLines(orig), splitLines(out)
-	oe, inOrig := o[key]
-	ne, inOut := n[key]
-	switch {
-	case !inOut:
-		return false, true
-	case !inOrig:
-		k := ne[0]
-		tail := len(ol) - k
-		return tail >= 0 && len(nl) >= len(ol) && strings.Join(nl[:k], "") == strings.Join(ol[:k], "") &&
-			strings.Join(nl[len(nl)-tail:], "") == strings.Join(ol[k:], ""), true
+	// The lines that differ: what is left of orig once the lines both
+	// files start and end with are taken away. A comment between two
+	// entries may be parsed as the foot of one or the head of the next
+	// depending on the values around it, so where an entry ends is read
+	// from orig alone.
+	p := 0
+	for p < len(ol) && p < len(nl) && ol[p] == nl[p] {
+		p++
 	}
-	return strings.Join(ol[:oe[0]], "") == strings.Join(nl[:ne[0]], "") &&
-		strings.Join(ol[oe[1]:], "") == strings.Join(nl[ne[1]:], ""), true
+	sfx := 0
+	for sfx < len(ol)-p && sfx < len(nl)-p && ol[len(ol)-1-sfx] == nl[len(nl)-1-sfx] {
+		sfx++
+	}
+	from, to := p, len(ol)-sfx
+	oe, inOrig := o[key]
+	if !inOrig {
+		// A new entry: only inserted lines.
+		return from == to, true
+	}
+	return from >= oe[0] && to <= oe[1], true
 }
 
 func splitLines(b []byte) []string {

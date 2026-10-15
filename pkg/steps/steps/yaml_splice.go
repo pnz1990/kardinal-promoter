@@ -116,6 +116,11 @@ func (s *splicer) mapping(o, e *yaml.Node, bound, col int) bool {
 			}
 			text := s.entryText(k, v, col, true)
 			at := last + 1
+			if bound == len(s.lines) && s.blankFrom(at) {
+				// Only blank lines follow (spaces or tabs, #1965): append at
+				// the end of the file and leave them where they are.
+				at = bound + 1
+			}
 			if strings.HasSuffix(text, "\n\n") && bound == len(s.lines) {
 				// It ends in a "+" (keep) block scalar, which would take
 				// the blank lines after it: at the end of the file.
@@ -177,6 +182,17 @@ func (s *splicer) descend(key, o, e *yaml.Node, finish int) bool {
 		return true
 	}
 	return false
+}
+
+// blankFrom reports whether every line from line (1-based) to the end of
+// the file is blank: spaces and tabs only.
+func (s *splicer) blankFrom(line int) bool {
+	for l := line; l <= len(s.lines); l++ {
+		if strings.TrimSpace(s.lines[l-1]) != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // trimEnd returns the last line of an entry whose lines are [start, end],
