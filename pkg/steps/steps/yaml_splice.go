@@ -42,7 +42,21 @@ func spliceEncode(raw []byte, orig, edited *yaml.Node, compactSeq bool) ([]byte,
 		lines = lines[:len(lines)-1]
 	}
 	s := &splicer{lines: lines, compactSeq: compactSeq}
-	if !s.mapping(o, e, len(lines), 0) || s.failed {
+	// The document ends at a "..." marker: what follows it is not the
+	// mapping's, and an entry added at the end goes before it (#1965).
+	bound := len(lines)
+	for i, l := range lines {
+		t := strings.TrimRight(l, "\n")
+		if t == "---" || strings.HasPrefix(t, "--- ") {
+			// A trailing empty document: the file is written whole, as before.
+			break
+		}
+		if t == "..." || strings.HasPrefix(t, "... ") || strings.HasPrefix(t, "...\t") {
+			bound = i
+			break
+		}
+	}
+	if !s.mapping(o, e, bound, 0) || s.failed {
 		return nil, false
 	}
 	return s.apply(), true
