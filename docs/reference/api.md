@@ -1010,6 +1010,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `status.observedHolds[].environment` | string | yes | Environment is the held environment. |
 | `status.observedHolds[].expiresAt` | string (date-time) |  | ExpiresAt, when set, is when the controller removes the hold. |
 | `status.observedHolds[].reason` | string | yes | Reason says why the environment is held. It is shown wherever the hold or a gate it exempts is. |
+| `status.observedLastChange` | string |  | ObservedLastChange identifies the spec.lastChange the Pipeline reconciler last consumed (a hash): a record names who made the change it was written with, and a later change made without one (kubectl) is recorded with no actor, not with the earlier record's. |
 | `status.observedPaused` | boolean |  | ObservedPaused is spec.paused as the Pipeline reconciler last recorded it: the PipelinePaused and PipelineResumed AuditEvents are written from the difference, whichever client changed it. Unset until the first record (an upgrade records the current state, unaudited). |
 | `status.observedPausedFleets` | []string |  | ObservedPausedFleets is spec.pausedFleets as last recorded, for the AuditEvents of a fleet's pause and resume. |
 | `status.pendingAuditEvents` | []object |  | PendingAuditEvents are the HoldCreated, HoldReleased and HoldBundleMissing AuditEvents not yet written (the audit outbox). Each entry is stored in the same status patch as observedHolds and removed once the AuditEvent exists. Normally empty. |
