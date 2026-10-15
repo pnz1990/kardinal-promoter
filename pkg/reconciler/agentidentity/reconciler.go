@@ -2,28 +2,27 @@
 // Licensed under the Apache License, Version 2.0
 
 // Package agentidentity reconciles the agent registry (docs/actors.md):
-//
-//   - Reconciler validates each AgentIdentity against all the others and
-//     writes its status.ready;
-//   - IndexReconciler writes the AgentIndex status that the chart's
-//     <release>-actor ValidatingAdmissionPolicy reads as params.
-//
-// Both decide with actor.Evaluate over every AgentIdentity, so an
-// AgentIdentity is ready exactly when the index lists it unblocked, and the
-// same AgentIdentities always produce the same status: a re-run writes
-// nothing.
+// IndexReconciler writes the AgentIndex status that the chart's
+// <release>-actor ValidatingAdmissionPolicy reads as params, and each
+// AgentIdentity's status.ready, from one actor.Evaluate over every
+// AgentIdentity per change. An AgentIdentity is ready exactly when the index
+// lists it unblocked, and the same AgentIdentities always produce the same
+// status: a re-run writes nothing.
 package agentidentity
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
 
 	"github.com/rs/zerolog"
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -38,91 +37,119 @@ import (
 // ConditionReady is the condition both kinds carry.
 const ConditionReady = "Ready"
 
-// Reconciler writes AgentIdentity status.
-type Reconciler struct {
-	client.Client
-	// MaxIndexBytes bounds the index (0: actor.MaxIndexBytes).
-	MaxIndexBytes int
-}
-
-func evaluate(ctx context.Context, c client.Client, maxBytes int) (actor.Registry, error) {
+func evaluate(ctx context.Context, c client.Client, maxBytes int) ([]v1alpha1.AgentIdentity, actor.Registry, error) {
 	var list v1alpha1.AgentIdentityList
 	if err := c.List(ctx, &list); err != nil {
-		return actor.Registry{}, fmt.Errorf("list agent identities: %w", err)
+		return nil, actor.Registry{}, fmt.Errorf("list agent identities: %w", err)
 	}
 	if maxBytes == 0 {
 		maxBytes = actor.MaxIndexBytes
 	}
-	return actor.Evaluate(list.Items, maxBytes), nil
+	return list.Items, actor.Evaluate(list.Items, maxBytes), nil
 }
 
-// Reconcile writes the verdict for one AgentIdentity.
-func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
-	var id v1alpha1.AgentIdentity
-	if err := r.Get(ctx, client.ObjectKey{Name: req.Name}, &id); err != nil {
-		return reconcile.Result{}, client.IgnoreNotFound(err)
-	}
-	reg, err := evaluate(ctx, r.Client, r.MaxIndexBytes)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-	v, ok := reg.Verdicts[id.Name]
-	if !ok {
-		return reconcile.Result{}, nil // deleted between the Get and the List
-	}
-	base := id.DeepCopy()
-	cond := metav1.Condition{Type: ConditionReady, Status: metav1.ConditionTrue, Reason: v.Reason,
-		Message: v.Message, ObservedGeneration: id.Generation}
-	reason := ""
-	if !v.Ready {
-		cond.Status, reason = metav1.ConditionFalse, v.Message
-	}
-	changed := meta.SetStatusCondition(&id.Status.Conditions, cond)
-	if id.Status.Ready != v.Ready || id.Status.Reason != reason || id.Status.ObservedGeneration != id.Generation {
-		id.Status.Ready, id.Status.Reason, id.Status.ObservedGeneration = v.Ready, reason, id.Generation
-		changed = true
-	}
-	if !changed {
-		return reconcile.Result{}, nil
-	}
-	if err := r.Status().Patch(ctx, &id, client.MergeFrom(base)); err != nil {
-		return reconcile.Result{}, fmt.Errorf("patch agent identity %s status: %w", id.Name, err)
-	}
-	zerolog.Ctx(ctx).Info().Str("agentidentity", id.Name).Bool("ready", v.Ready).Str("reason", v.Reason).
-		Msg("agent identity checked")
-	return reconcile.Result{}, nil
-}
-
-// SetupWithManager watches every AgentIdentity: a change to one can change
-// another's verdict (a shared subject, a sponsor that became an agent, the
-// index size), so each event re-checks them all. One worker: decisions are
-// made one at a time.
-func (r *Reconciler) SetupWithManager(mgr manager.Manager) error {
-	all := handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, _ client.Object) []reconcile.Request {
-		var list v1alpha1.AgentIdentityList
-		if err := mgr.GetClient().List(ctx, &list); err != nil {
-			zerolog.Ctx(ctx).Error().Err(err).Msg("list agent identities")
-			return nil
+// writeStatuses writes each AgentIdentity's verdict from reg, patching only
+// the statuses that change (#1937): one Evaluate decides them all, so a
+// change costs one pass over the registry, not one per AgentIdentity. Each
+// patch carries the resourceVersion read, so a stale read gets a Conflict
+// and the rebuild is retried instead of writing an older verdict.
+func writeStatuses(ctx context.Context, c client.Client, ids []v1alpha1.AgentIdentity, reg actor.Registry) error {
+	written := 0
+	for i := range ids {
+		id := &ids[i]
+		v, ok := reg.Verdicts[id.Name]
+		if !ok {
+			continue
 		}
-		out := make([]reconcile.Request, 0, len(list.Items))
-		for _, id := range list.Items {
-			out = append(out, reconcile.Request{NamespacedName: client.ObjectKey{Name: id.Name}})
+		base := id.DeepCopy()
+		cond := metav1.Condition{Type: ConditionReady, Status: metav1.ConditionTrue, Reason: v.Reason,
+			Message: v.Message, ObservedGeneration: id.Generation}
+		reason := ""
+		if !v.Ready {
+			cond.Status, reason = metav1.ConditionFalse, v.Message
 		}
-		return out
-	})
-	return ctrl.ControllerManagedBy(mgr).Named("agentidentity").
-		Watches(&v1alpha1.AgentIdentity{}, all).
-		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
-		Complete(r)
+		changed := meta.SetStatusCondition(&id.Status.Conditions, cond)
+		if id.Status.Ready != v.Ready || id.Status.Reason != reason || id.Status.ObservedGeneration != id.Generation {
+			id.Status.Ready, id.Status.Reason, id.Status.ObservedGeneration = v.Ready, reason, id.Generation
+			changed = true
+		}
+		if !changed {
+			continue
+		}
+		err := c.Status().Patch(ctx, id, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+		switch {
+		case apierrors.IsNotFound(err):
+			continue // deleted since the List
+		case err != nil:
+			return fmt.Errorf("patch agent identity %s status: %w", id.Name, err)
+		}
+		written++
+		zerolog.Ctx(ctx).Info().Str("agentidentity", id.Name).Bool("ready", v.Ready).Str("reason", v.Reason).
+			Msg("agent identity checked")
+	}
+	if written > 0 {
+		zerolog.Ctx(ctx).Debug().Int("written", written).Int("identities", len(ids)).Msg("agent identity statuses written")
+	}
+	return nil
 }
 
-// IndexReconciler writes the status of the AgentIndex named Name, and
-// creates it when it is missing.
+// IndexReconciler writes the status of the AgentIndex named Name, creating
+// it when it is missing, and the status of every AgentIdentity, all from one
+// actor.Evaluate per change (#1937).
 type IndexReconciler struct {
 	client.Client
 	Name string
 	// MaxIndexBytes bounds the index (0: actor.MaxIndexBytes).
 	MaxIndexBytes int
+	// StatusesDisabled leaves the AgentIdentity statuses alone (the
+	// start-up build of every replica).
+	StatusesDisabled bool
+	// ChartCreated is true when the chart creates the index (Helm,
+	// --agent-index-from-chart): the controller then never creates it, it
+	// waits for it. Helm installs the Deployment before the AgentIndex, so
+	// a controller that created the index first would fail the install with
+	// "already exists" (Helm checks ownership before it starts, not at each
+	// create).
+	ChartCreated bool
+	// Guard names the chart's <release>-agent-index ValidatingAdmissionPolicy,
+	// read through Reader (uncached). Helm creates the AgentIndex before the
+	// policies, so when the guard exists and the index does not, the index
+	// was deleted after the install (a collection delete, or with the guard
+	// unbound): the controller recreates it with the guard's Helm ownership
+	// labels and annotations, so Helm adopts it on the next upgrade (#1959).
+	Guard  string
+	Reader client.Reader
+}
+
+// ErrIndexNotCreated: the chart has not created the index yet.
+var ErrIndexNotCreated = errors.New("the agent index does not exist yet: the chart creates it " +
+	"(if it was deleted after the install, helm upgrade the release to restore it)")
+
+// chartIndex is the index as the chart would create it, from the guard
+// policy's Helm ownership metadata; false when the guard does not exist (the
+// install has not reached the policies yet).
+func (r *IndexReconciler) chartIndex(ctx context.Context) (v1alpha1.AgentIndex, bool, error) {
+	if r.Guard == "" || r.Reader == nil {
+		return v1alpha1.AgentIndex{}, false, nil
+	}
+	var guard admissionregistrationv1.ValidatingAdmissionPolicy
+	if err := r.Reader.Get(ctx, client.ObjectKey{Name: r.Guard}, &guard); err != nil {
+		if apierrors.IsNotFound(err) {
+			return v1alpha1.AgentIndex{}, false, nil
+		}
+		return v1alpha1.AgentIndex{}, false, fmt.Errorf("get the agent index guard %s: %w", r.Guard, err)
+	}
+	labels := map[string]string{}
+	for k, v := range guard.Labels {
+		labels[k] = v
+	}
+	ann := map[string]string{"helm.sh/resource-policy": "keep"}
+	for _, k := range []string{"meta.helm.sh/release-name", "meta.helm.sh/release-namespace"} {
+		if v, ok := guard.Annotations[k]; ok {
+			ann[k] = v
+		}
+	}
+	return v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: r.Name, Labels: labels, Annotations: ann}}, true, nil
 }
 
 // Reconcile rebuilds the index.
@@ -132,8 +159,22 @@ func (r *IndexReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (r
 		if !apierrors.IsNotFound(err) {
 			return reconcile.Result{}, fmt.Errorf("get agent index %s: %w", r.Name, err)
 		}
-		idx = v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: r.Name,
-			Labels: map[string]string{"app.kubernetes.io/managed-by": "kardinal-promoter"}}}
+		if r.ChartCreated {
+			chart, deleted, err := r.chartIndex(ctx)
+			if err != nil {
+				return reconcile.Result{}, err
+			}
+			if !deleted {
+				// Retried with backoff, and woken by the index's own watch.
+				return reconcile.Result{}, fmt.Errorf("agent index %s: %w", r.Name, ErrIndexNotCreated)
+			}
+			zerolog.Ctx(ctx).Warn().Str("agentindex", r.Name).
+				Msg("the chart's agent index was deleted after the install: recreating it with the release's Helm ownership")
+			idx = chart
+		} else {
+			idx = v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: r.Name,
+				Labels: map[string]string{"app.kubernetes.io/managed-by": "kardinal-promoter"}}}
+		}
 		if err := r.Create(ctx, &idx); err != nil && !apierrors.IsAlreadyExists(err) {
 			return reconcile.Result{}, fmt.Errorf("create agent index %s: %w", r.Name, err)
 		}
@@ -141,7 +182,7 @@ func (r *IndexReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (r
 			return reconcile.Result{}, fmt.Errorf("get agent index %s: %w", r.Name, err)
 		}
 	}
-	reg, err := evaluate(ctx, r.Client, r.MaxIndexBytes)
+	ids, reg, err := evaluate(ctx, r.Client, r.MaxIndexBytes)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -159,7 +200,14 @@ func (r *IndexReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (r
 	}
 	meta.SetStatusCondition(&want.Conditions, cond)
 	if equalIndex(idx.Status, want) {
-		return reconcile.Result{}, nil
+		return reconcile.Result{}, r.statuses(ctx, ids, reg)
+	}
+	// The statuses first, then the index: the PolicyGate reconciler
+	// re-evaluates agent.* gates on an AgentIndex event and reads the
+	// AgentIdentity's status.ready (#1869), so the index event must find
+	// the statuses already written.
+	if err := r.statuses(ctx, ids, reg); err != nil {
+		return reconcile.Result{}, err
 	}
 	idx.Status = want
 	// Optimistic concurrency (#1917): a builder whose read of the index is
@@ -171,7 +219,38 @@ func (r *IndexReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (r
 	}
 	zerolog.Ctx(ctx).Info().Str("agentindex", r.Name).Int("identities", reg.Index.ObservedIdentities).
 		Int("users", len(want.Users)).Int("groups", len(want.Groups)).Msg("agent index written")
+	r.dropManagedFields(ctx, &idx)
 	return reconcile.Result{}, nil
+}
+
+// dropManagedFields clears the index's metadata.managedFields after a
+// status write (#1936). The API server converts the whole param object,
+// managedFields included, for every request the actor policies match, and a
+// status write records a field entry for every user and group key: about as
+// large as the entries themselves. Only the controller writes the index, so
+// nothing reads them. A failure costs only speed: it is logged, not retried.
+func (r *IndexReconciler) dropManagedFields(ctx context.Context, idx *v1alpha1.AgentIndex) {
+	tracked := false
+	for _, f := range idx.ManagedFields {
+		tracked = tracked || f.Subresource == "status"
+	}
+	if !tracked {
+		return
+	}
+	reset := client.RawPatch(types.MergePatchType, []byte(`{"metadata":{"managedFields":[{}]}}`))
+	if err := r.Patch(ctx, idx, reset); err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Str("agentindex", r.Name).Msg("clear the agent index managedFields")
+	}
+}
+
+// statuses writes the AgentIdentity statuses, before the index (the gates
+// that read both wake on the index). The start-up build of a replica that
+// does not lead (StatusesDisabled) leaves them to the leader.
+func (r *IndexReconciler) statuses(ctx context.Context, ids []v1alpha1.AgentIdentity, reg actor.Registry) error {
+	if r.StatusesDisabled {
+		return nil
+	}
+	return writeStatuses(ctx, r.Client, ids, reg)
 }
 
 // ensureIndex builds the index once at start on every replica, leader or
@@ -201,7 +280,9 @@ func (e *ensureIndex) Start(ctx context.Context) error {
 			meta.IsStatusConditionTrue(idx.Status.Conditions, ConditionReady) {
 			return nil
 		}
-		_, err := e.r.Reconcile(ctx, reconcile.Request{})
+		builder := *e.r
+		builder.StatusesDisabled = true
+		_, err := builder.Reconcile(ctx, reconcile.Request{})
 		if err == nil {
 			return nil
 		}

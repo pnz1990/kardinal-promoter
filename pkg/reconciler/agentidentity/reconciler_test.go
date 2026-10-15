@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,6 +30,7 @@ import (
 func scheme(t *testing.T) *runtime.Scheme {
 	s := runtime.NewScheme()
 	require.NoError(t, v1alpha1.AddToScheme(s))
+	require.NoError(t, admissionregistrationv1.AddToScheme(s))
 	return s
 }
 
@@ -63,11 +65,9 @@ func TestReconcile_AgentIdentity(t *testing.T) {
 		id("fixer", 0, "alice", sa("ci", "fixer")),
 		id("late", 1, "bob", sa("ci", "fixer")),
 	)
-	r := &agentidentity.Reconciler{Client: c}
-	for _, n := range []string{"fixer", "late"} {
-		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKey{Name: n}})
-		require.NoError(t, err)
-	}
+	r := &agentidentity.IndexReconciler{Client: c, Name: "kardinal-promoter"}
+	_, err := r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
 	var fixer, late v1alpha1.AgentIdentity
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "fixer"}, &fixer))
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "late"}, &late))
@@ -80,22 +80,24 @@ func TestReconcile_AgentIdentity(t *testing.T) {
 
 	// Idempotent: a re-run writes nothing.
 	n := patches.Load()
-	for _, name := range []string{"fixer", "late"} {
-		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKey{Name: name}})
-		require.NoError(t, err)
-	}
-	assert.Equal(t, n, patches.Load(), "a second reconcile patches nothing")
+	_, err = r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	assert.Equal(t, n, patches.Load(), "a second build patches nothing")
 
 	// Deleting the older one hands the subject to the newer one.
 	require.NoError(t, c.Delete(ctx, &fixer))
-	_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKey{Name: "late"}})
+	_, err = r.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "late"}, &late))
 	assert.True(t, late.Status.Ready)
 
-	// A deleted AgentIdentity is not an error.
-	_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKey{Name: "fixer"}})
+	// The start-up build of a replica writes the index only.
+	parked := id("parked", 2, "carol", sa("ci", "parked"))
+	require.NoError(t, c.Create(ctx, parked))
+	_, err = (&agentidentity.IndexReconciler{Client: c, Name: "kardinal-promoter", StatusesDisabled: true}).Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "parked"}, parked))
+	assert.Empty(t, parked.Status.Conditions)
 }
 
 func TestReconcile_AgentIndex(t *testing.T) {
@@ -140,6 +142,36 @@ func TestReconcile_AgentIndex(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "kardinal-promoter"}, &idx))
 	assert.Len(t, idx.Status.Users, 2)
+
+	// When the chart creates the index, the controller waits for it: it
+	// never creates it, so a Helm install never finds it there (#1929).
+	require.NoError(t, c.Delete(ctx, &idx))
+	r.ChartCreated = true
+	_, err = r.Reconcile(ctx, reconcile.Request{})
+	require.ErrorIs(t, err, agentidentity.ErrIndexNotCreated)
+	assert.True(t, apierrors.IsNotFound(c.Get(ctx, client.ObjectKey{Name: "kardinal-promoter"}, &idx)))
+	require.NoError(t, c.Create(ctx, &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}}))
+	_, err = r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err, "built once the chart created it")
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "kardinal-promoter"}, &idx))
+	assert.Len(t, idx.Status.Users, 2)
+
+	// Deleted after the install (the chart's guard policy exists): the
+	// controller recreates it with the guard's Helm ownership (#1959, QA).
+	guard := &admissionregistrationv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter-agent-index",
+		Labels:      map[string]string{"app.kubernetes.io/managed-by": "Helm", "helm.sh/chart": "kardinal-promoter-0.12.0"},
+		Annotations: map[string]string{"meta.helm.sh/release-name": "kp", "meta.helm.sh/release-namespace": "kardinal-system"}}}
+	gc := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(guard).Build()
+	require.NoError(t, c.Delete(ctx, &idx))
+	r.Guard, r.Reader = "kardinal-promoter-agent-index", gc
+	_, err = r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "kardinal-promoter"}, &idx))
+	assert.Equal(t, "Helm", idx.Labels["app.kubernetes.io/managed-by"])
+	assert.Equal(t, "kp", idx.Annotations["meta.helm.sh/release-name"])
+	assert.Equal(t, "kardinal-system", idx.Annotations["meta.helm.sh/release-namespace"])
+	assert.Equal(t, "keep", idx.Annotations["helm.sh/resource-policy"])
+	assert.Len(t, idx.Status.Users, 2)
 }
 
 func TestReconcile_AgentIndexFull(t *testing.T) {
@@ -155,9 +187,6 @@ func TestReconcile_AgentIndexFull(t *testing.T) {
 	assert.Equal(t, metav1.ConditionFalse, idx.Status.Conditions[0].Status, "a full index is not Ready: admission fails closed")
 	assert.Empty(t, idx.Status.Users, "and is written empty, small enough to write")
 
-	ir := &agentidentity.Reconciler{Client: c, MaxIndexBytes: 150}
-	_, err = ir.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKey{Name: "b"}})
-	require.NoError(t, err)
 	var b v1alpha1.AgentIdentity
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "b"}, &b))
 	assert.False(t, b.Status.Ready)

@@ -190,7 +190,6 @@ type World struct {
 
 	// The agent registry and admission (Options.Actors).
 	api         *APIServer
-	identities  *airec.Reconciler
 	index       *airec.IndexReconciler
 	indexDirty  atomic.Bool
 	indexPaused atomic.Bool
@@ -591,9 +590,9 @@ func (w *World) kinds() []reconcileKind {
 	var registry []reconcileKind
 	if w.index != nil {
 		// The registry first: the controller builds the index at start and
-		// keeps it current; a write is admitted against it.
+		// keeps it current, with every AgentIdentity's status (#1937); a
+		// write is admitted against it.
 		registry = []reconcileKind{
-			{"AgentIdentity", &v1alpha1.AgentIdentityList{}, w.identities.Reconcile},
 			{"AgentIndex", nil, w.index.Reconcile},
 			{"StepTemplate", &v1alpha1.StepTemplateList{}, w.templates.Reconcile},
 			{"AgentRun", &v1alpha1.AgentRunList{}, w.agentRuns.Reconcile},
@@ -784,8 +783,8 @@ func listenKeys(o client.Object) []string {
 	case "RenderRun":
 		return []string{"RR:" + ns + "/" + o.GetName()}
 	case "AgentIdentity":
-		// A change to one AgentIdentity re-checks them all
-		// (agentidentity.Reconciler.SetupWithManager).
+		// A change to one AgentIdentity rebuilds the index and every
+		// status (agentidentity.IndexReconciler.SetupWithManager).
 		return []string{"AI:*"}
 	case "AgentIndex":
 		return []string{"AI:*", "IX:*"}

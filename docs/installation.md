@@ -394,6 +394,9 @@ kubectl delete bundles.kardinal.io --all -A
 # SCM errors (see Troubleshooting), so the steps are gone within about 6 minutes.
 kubectl wait --for=delete promotionsteps.kardinal.io --all -A --timeout=6m
 helm uninstall kardinal-promoter -n kardinal-system
+# The release's agent index is kept (helm.sh/resource-policy: keep): its
+# admission policy refused the delete while the release was installed.
+kubectl delete agentindex kardinal-promoter
 ```
 
 If a step still holds the finalizer once the controller is gone (the wait timed out, or the

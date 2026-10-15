@@ -134,6 +134,7 @@ spec:
             {{- end }}
             - --override-identity-policy={{ include "kardinal-promoter.fullname" . }}-gate-overrides
             - --agent-index={{ include "kardinal-promoter.fullname" . }}
+            - --agent-index-from-chart=true
             {{- with .Values.controller.gateOverrideMaxMinutes }}
             - --gate-override-max-minutes={{ . }}
             {{- end }}

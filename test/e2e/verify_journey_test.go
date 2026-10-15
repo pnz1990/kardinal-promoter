@@ -121,10 +121,6 @@ func newVerifyWorld(t *testing.T, policy v1alpha1.GateVerifyPolicy) *verifyWorld
 			}
 			return cl.Create(ctx, obj, opts...)
 		}}).Build()
-	for _, id := range []string{"qa-explorer", "fixer", "alice-qa"} {
-		_, err := (&agentidentity.Reconciler{Client: c}).Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: id}})
-		require.NoError(t, err)
-	}
 	_, err = (&agentidentity.IndexReconciler{Client: c, Name: "kardinal-promoter"}).Reconcile(ctx, ctrl.Request{})
 	require.NoError(t, err)
 	pg, err := pgrec.NewReconciler(c)

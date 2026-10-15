@@ -79,13 +79,10 @@ func newAPWorld(t *testing.T, fixerAutonomy string, objs ...client.Object) *apWo
 	return w
 }
 
-// rebuildRegistry reconciles every AgentIdentity and the index.
+// rebuildRegistry builds the index and every AgentIdentity's status (one
+// build, #1937).
 func (w *apWorld) rebuildRegistry() {
 	w.t.Helper()
-	for _, n := range []string{"fixer", "reviewer"} {
-		_, err := (&agentidentity.Reconciler{Client: w.c}).Reconcile(w.ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: n}})
-		require.NoError(w.t, err)
-	}
 	_, err := (&agentidentity.IndexReconciler{Client: w.c, Name: apIndex}).Reconcile(w.ctx, ctrl.Request{})
 	require.NoError(w.t, err)
 }

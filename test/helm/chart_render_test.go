@@ -452,6 +452,8 @@ func controllerAccess() []apiAccess {
 		{"kardinal.io", "agentidentities/status", []string{"get", "update", "patch"}, inCluster, "", "agentidentity reconciler Ready condition"},
 		{"kardinal.io", "agentindexes", []string{"get", "list", "watch", "create"}, inCluster, "", "agentidentity IndexReconciler (creates the release's index)"},
 		{"kardinal.io", "agentindexes/status", []string{"get", "update", "patch"}, inCluster, "", "agentidentity IndexReconciler"},
+		{"kardinal.io", "agentindexes", []string{"patch"}, inCluster, "kardinal-promoter", "agentidentity IndexReconciler dropManagedFields (#1936)"},
+		{"admissionregistration.k8s.io", "validatingadmissionpolicies", []string{"get"}, inCluster, "kardinal-promoter-agent-index", "agentidentity IndexReconciler chartIndex (a deleted chart index is recreated)"},
 		// Namespace mode limits it to the watched namespace (releaseNS in
 		// TestChartRBACGrantsControllerAccess); TestChartRBACNamespaceGet checks both modes.
 		{"", "namespaces", []string{"get"}, inCluster, releaseNS, "graphcleanup reconciler.go namespaceTerminating; bundle reconciler.go namespaceDeleting; promotionstep finalizer.go stepComeback"},

@@ -373,6 +373,9 @@ func TestUI_ScopedWritesAdmission(t *testing.T) {
 				return err
 			}
 			change(&g)
+			// A write adding an override is labelled for the actor check
+			// (kardinal override sets it; <release>-override-marker).
+			lifecycle.MarkOverride(&g)
 			return gc.Update(ctx, &g)
 		})
 	}

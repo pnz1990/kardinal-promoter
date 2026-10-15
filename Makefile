@@ -100,7 +100,7 @@ envtest: ## Install the CRDs and admission policies on the oldest and newest sup
 	for v in $${ENVTEST_K8S:-$$ENVTEST_K8S_MIN $$ENVTEST_K8S_MAX}; do \
 	  assets=$$($(CURDIR)/bin/setup-envtest use $$v --bin-dir $(CURDIR)/bin/envtest -p path) || exit 1; \
 	  echo "== Kubernetes $$v"; \
-	  KUBECONFIG=/dev/null KUBEBUILDER_ASSETS=$$assets $(GO) test -tags envtest ./test/helm/ -run "TestInstallOnAPIServer|TestActorsOnAPIServer|TestActorIndexOverflowOnAPIServer|TestFreeTextLimitsRatchetOnAPIServer|TestTokenReviewAudienceOnAPIServer" -count=1 || exit 1; \
+	  KUBECONFIG=/dev/null KUBEBUILDER_ASSETS=$$assets $(GO) test -tags envtest ./test/helm/ -run "TestInstallOnAPIServer|TestActorsOnAPIServer|TestActorIndexOverflowOnAPIServer|TestActorIndexAvailabilityOnAPIServer|TestHelmInstallsTheIndex|TestActorAttacksOnAPIServer|TestFreeTextLimitsRatchetOnAPIServer|TestTokenReviewAudienceOnAPIServer" -count=1 || exit 1; \
 	done
 
 ## Generate (CRD manifests + DeepCopy)

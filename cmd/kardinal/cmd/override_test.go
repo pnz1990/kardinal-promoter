@@ -65,7 +65,10 @@ func overridePipeline(name string) *v1alpha1.Pipeline {
 }
 
 // TestOverrideFn_BasicOverride verifies that the override CLI function
-// appends an override to PolicyGate.spec.overrides[].
+// appends an override to PolicyGate.spec.overrides[], with the
+// kardinal.io/override-check label.
+//
+// Covers ACTOR-PERF-01.
 func TestOverrideFn_BasicOverride(t *testing.T) {
 	cmd.StubIdentity(t, "oidc:alice@example.com")
 	gate := makeTestGate("no-weekend-deploy", "default")
@@ -98,6 +101,8 @@ func TestOverrideFn_BasicOverride(t *testing.T) {
 	assert.False(t, o.ExpiresAt.IsZero())
 	assert.Equal(t, "oidc:alice@example.com", o.CreatedBy, "createdBy is the authenticated username (#1450)")
 	assert.Contains(t, buf.String(), "Created by: oidc:alice@example.com")
+	assert.Equal(t, "true", updatedGate.Labels["kardinal.io/override-check"],
+		"labelled for the actor-overrides policy, which checks the stamp (#1936)")
 }
 
 // TestOverrideFn_NoIdentityWritesNothing: when the API server does not say

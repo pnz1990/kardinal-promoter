@@ -12,6 +12,7 @@ built-in ones: a flag whose help names a `KARDINAL_*` variable reads it as its d
 | `--access-log-source-ip` | bool | `false` | Add the client address to each access log line. Chart value: controller.accessLog.sourceIP. |
 | `--access-log-trusted-proxies` | string |  | Comma-separated CIDRs of proxies (an Ingress controller) whose X-Forwarded-For gives the client address in the access log. Chart value: controller.accessLog.trustedProxies. |
 | `--agent-index` | string |  | Name of the AgentIndex this controller builds from the AgentIdentities and stamps the UI API's and the Bundle API's writes from (the chart's actor admission policy reads it; Helm sets the release name). Empty: no agent registry, every caller is a person or a bot (docs/actors.md). |
+| `--agent-index-from-chart` | bool | `false` | The chart creates the --agent-index AgentIndex: the controller waits for it instead of creating it, so a Helm install never finds it already there. Set by the chart. |
 | `--agentrun-reader-clusterrole` | string | `"kardinal-agentrun-reader"` | ClusterRole bound to an AgentRun's own ServiceAccount in the namespace it tests (read it). |
 | `--agentrun-writer-clusterrole` | string | `"kardinal-agentrun-writer"` | ClusterRole bound to an AgentRun's own ServiceAccount in the Pipeline namespace (create its Verdict). |
 | `--api-audit-events` | bool | `true` | Write an AuditEvent (action APIWrite) naming the caller for every write through the UI API and the Bundle API. Chart value: controller.accessLog.auditEvents. |
