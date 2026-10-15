@@ -237,13 +237,28 @@ func scalarValue(m *yaml.Node, key string) string {
 func setMapScalar(m *yaml.Node, key, value string) {
 	if v := mapValue(m, key); v != nil {
 		style := v.Style &^ (yaml.LiteralStyle | yaml.FoldedStyle | yaml.FlowStyle)
-		*v = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value, Style: style,
+		*v = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value, Style: stringStyle(value, style),
 			HeadComment: v.HeadComment, LineComment: v.LineComment, FootComment: v.FootComment}
 		return
 	}
 	m.Content = append(m.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value})
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key, Style: stringStyle(key, 0)},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value, Style: stringStyle(value, 0)})
+}
+
+// stringStyle is style, or double quotes when value written plain would
+// read back as something else than a string: "<<" (a merge key, which the
+// encoder tags !!merge), and whatever else it resolves to another tag.
+func stringStyle(value string, style yaml.Style) yaml.Style {
+	if style&(yaml.DoubleQuotedStyle|yaml.SingleQuotedStyle) != 0 {
+		return style
+	}
+	var n yaml.Node
+	if err := yaml.Unmarshal([]byte(value), &n); err != nil || len(n.Content) != 1 ||
+		n.Content[0].Kind != yaml.ScalarNode || n.Content[0].Tag != "!!str" || n.Content[0].Value != value {
+		return yaml.DoubleQuotedStyle
+	}
+	return style
 }
 
 // deleteMapKey removes key from mapping m.
