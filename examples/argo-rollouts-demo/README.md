@@ -18,7 +18,7 @@ kardinal-controller
            kardinal checks the Rollout runs the Bundle image, then Rollout.status.phase
            phase=Progressing/Paused → Wait
            phase=Healthy → Verified ✅
-           phase=Degraded → Unhealthy; still Degraded at health.timeout
+           phase=Degraded, aborted → Failed at once
                             → onHealthFailure: rollback → rollback PR opened
 ```
 
@@ -131,11 +131,13 @@ release. Then it reads `Rollout.status.phase`:
 | `Progressing` | Wait | Steps running / image rollout in progress |
 | `Paused` | Wait | Manual pause or step pause — waiting |
 | `Healthy` | **Healthy** | All replicas running new image (stable ReplicaSet is the current one), analysis passed |
-| `Degraded` | **Unhealthy** | Rollout aborted or analysis failed |
+| `Degraded` with `status.abort` | **Failed** | Rollout aborted (a failed analysis, or `kubectl argo rollouts abort`) |
+| `Degraded` otherwise | **Unhealthy** | Counts a failed check; `onHealthFailure` applies at `health.timeout` |
 
-A `Degraded` phase is unhealthy but not final: Argo Rollouts can still roll
-forward, so kardinal keeps checking until `health.timeout` (30m here) and only
-then applies `onHealthFailure`. This example sets `onHealthFailure: rollback`
+An aborted Rollout is final: Argo Rollouts serves the stable revision and does
+not roll forward until someone retries it, so kardinal applies
+`onHealthFailure` at the first check that sees the abort, not at
+`health.timeout` (30m here). This example sets `onHealthFailure: rollback`
 on prod: kardinal creates a rollback Bundle for the previous release, the step
 shows `RollingBack`, and because prod is `pr-review` the rollback opens a PR
 for you to merge. Downstream environments are blocked. Without
@@ -166,7 +168,7 @@ kubectl argo rollouts resume argo-rollouts-demo -n prod
 # Promote immediately (skip remaining steps)
 kubectl argo rollouts promote argo-rollouts-demo -n prod
 
-# Abort (Rollout.status.phase → Degraded; at health.timeout kardinal opens a rollback PR)
+# Abort (Rollout.status.phase → Degraded, status.abort; kardinal opens a rollback PR at once)
 kubectl argo rollouts abort argo-rollouts-demo -n prod
 ```
 
@@ -187,4 +189,4 @@ bash scripts/demo-validate.sh
 | Promotion stuck at `HealthChecking` | Rollout phase is `Paused` | Check step durations; use `kubectl argo rollouts resume` if manual pause |
 | `Rollout not found` | Argo CD has not synced the Rollout | Check that `environments/prod/deployment.yaml` in your fork holds the Rollout, and that `argo-rollouts-demo-prod` is synced |
 | Rollout immediately `Degraded` | readinessProbe failing | Check pod logs; verify `/health` endpoint |
-| kardinal shows `RollingBack` | Rollout stayed `Degraded` until `health.timeout` | Merge the rollback PR; `kubectl argo rollouts get rollout argo-rollouts-demo -n prod` shows why it aborted |
+| kardinal shows `RollingBack` | Argo Rollouts aborted the Rollout, or it stayed `Degraded` until `health.timeout` | Merge the rollback PR; `kubectl argo rollouts get rollout argo-rollouts-demo -n prod` shows why it aborted |

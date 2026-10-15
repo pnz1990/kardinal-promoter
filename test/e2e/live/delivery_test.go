@@ -310,14 +310,16 @@ func TestRollouts_DegradedRolloutRecovers(t *testing.T) {
 	rollout, v2 := fixtures.Workload("prod"), fixtures.Image+":"+fixtures.V2
 
 	first := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.BrokenTag)
-	e.WaitStepMessageAll(t, a.ns, pipelineName, first, "prod", "HealthChecking", deliveryTimeout,
-		"unhealthy via argoRollouts: Rollout phase: Degraded")
+	// Argo Rollouts aborts the broken release: its step fails at once (#2006),
+	// and the Rollout stays Degraded until the next release rolls out.
+	ps := e.WaitStepState(t, a.ns, pipelineName, first, "prod", "Failed", deliveryTimeout)
+	assert.Contains(t, ps.Status.Message, "aborted the update (status.abort): Rollout phase: Degraded")
+	e.WaitBundlePhase(t, a.ns, first, "Failed", time.Minute)
 
 	fix := a.holdOldRevision(t, rollouts, "prod", v2, "a Degraded Rollout of the broken release is not V2's health")
-	e.WaitBundlePhase(t, a.ns, first, "Superseded", time.Minute)
 
 	e.SetArgoAutoSync(t, a.argoApp("prod"), true)
-	ps := e.WaitStepState(t, a.ns, pipelineName, fix, "prod", "Verified", deliveryTimeout)
+	ps = e.WaitStepState(t, a.ns, pipelineName, fix, "prod", "Verified", deliveryTimeout)
 	assert.Contains(t, ps.Status.Message, "health check passed via argoRollouts: Rollout phase: Healthy")
 	assert.Zero(t, ps.Status.ConsecutiveHealthFailures)
 	e.WaitRolloutHealthy(t, a.ns, rollout, v2, time.Second)
@@ -494,9 +496,9 @@ func TestFlagger_StaleFailedDoesNotFail(t *testing.T) {
 }
 
 // TestDelivery_FailureAppliesOnHealthFailure checks that a delegated
-// delivery's failure applies onHealthFailure: abort. An aborted Rollout is
-// Degraded, which is unhealthy, so the step is AbortedByAlarm at
-// health.timeout; a Failed Canary is terminal, so at once.
+// delivery's failure applies onHealthFailure: abort at once: an aborted
+// Rollout (Degraded with status.abort, #2006) and a Failed Canary are both
+// terminal.
 //
 // Covers DELIVERY-03.
 func TestDelivery_FailureAppliesOnHealthFailure(t *testing.T) {
@@ -512,11 +514,10 @@ func TestDelivery_FailureAppliesOnHealthFailure(t *testing.T) {
 			env.OnHealthFailure = "abort"
 		}))
 		bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", broken)
-		e.WaitStepMessageAll(t, a.ns, pipelineName, bundle, "prod", "HealthChecking", deliveryTimeout,
-			"unhealthy via argoRollouts: Rollout phase: Degraded")
-		ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "AbortedByAlarm", 2*time.Minute)
-		assert.Contains(t, ps.Status.Message, "health alarm via argoRollouts (onHealthFailure=abort): health check timeout after 1m30s; "+
-			"last result: unhealthy via argoRollouts: Rollout phase: Degraded")
+		ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "AbortedByAlarm", deliveryTimeout)
+		assert.Contains(t, ps.Status.Message, "health alarm via argoRollouts (onHealthFailure=abort): Rollout "+a.ns+"/"+fixtures.Workload("prod")+
+			" aborted the update (status.abort): Rollout phase: Degraded")
+		assert.NotContains(t, ps.Status.Message, "health check timeout", "the abort applies at once, not at health.timeout")
 		assert.True(t, strings.HasSuffix(ps.Status.Message, "— human intervention required"), ps.Status.Message)
 		e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
 	})
@@ -597,10 +598,11 @@ func (a *app) exampleRollback(t *testing.T, p *v1alpha1.Pipeline, adapter, failu
 }
 
 // TestRollouts_ExampleDegradedOpensRollbackPR runs the prod environment of
-// examples/argo-rollouts-demo: a Rollout that Argo Rollouts aborts to
-// Degraded fails its health check at health.timeout, and onHealthFailure:
-// rollback opens a rollback PR that restores the previous release. The test
-// shortens the example's 30m health.timeout.
+// examples/argo-rollouts-demo: a Rollout that Argo Rollouts aborts fails its
+// health check at the first check that sees the abort (#2006), and
+// onHealthFailure: rollback opens a rollback PR that restores the previous
+// release. The test shortens the example's 30m health.timeout, which no
+// longer decides.
 //
 // Covers EX-ROLLOUTS-01.
 func TestRollouts_ExampleDegradedOpensRollbackPR(t *testing.T) {
@@ -612,7 +614,7 @@ func TestRollouts_ExampleDegradedOpensRollbackPR(t *testing.T) {
 		env.Health.Timeout = "2m"
 	})
 	a.exampleRollback(t, p, rollouts,
-		"health check timeout after 2m0s; last result: unhealthy via argoRollouts: Rollout phase: Degraded")
+		"Rollout "+a.ns+"/"+fixtures.Workload("prod")+" aborted the update (status.abort): Rollout phase: Degraded")
 	e.WaitRolloutHealthy(t, a.ns, fixtures.Workload("prod"), fixtures.Image+":"+fixtures.V2, time.Minute)
 }
 
