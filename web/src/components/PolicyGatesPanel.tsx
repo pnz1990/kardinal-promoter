@@ -4,16 +4,14 @@
 // components/PolicyGatesPanel.tsx — Collapsible panel with the policy gates of
 // the bundle on screen, each with its state and CEL expression (#340). App
 // passes only that bundle's gate instances, never the templates.
-import { lazy, Suspense, useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import type { GateState, PolicyGate } from '../types'
 import { HealthChip, type HealthState } from './HealthChip'
 import { gateDisplay, gateLabel } from '../stage/stageModel'
 import '../styles/PolicyGatesPanel.css'
 import { ApprovalQuorum } from './ApprovalQuorum'
+import { VerifyQuorum } from './VerifyQuorum'
 import { ago } from '../timeFormat'
-
-// Verify gates are rarer than the rest of the panel: their quorum loads on demand.
-const VerifyQuorum = lazy(() => import('./VerifyQuorum').then(m => ({ default: m.VerifyQuorum })))
 
 interface Props {
   gates: PolicyGate[]
@@ -159,9 +157,7 @@ export function PolicyGatesPanel({ gates, loading, onDecided, collapsed, incomin
                   namespace={gate.namespace} onDecided={onDecided} />
               )}
               {gate.verify && (
-                <Suspense fallback={null}>
-                  <VerifyQuorum verify={gate.verify} pipeline={gate.pipeline} namespace={gate.namespace} />
-                </Suspense>
+                <VerifyQuorum verify={gate.verify} pipeline={gate.pipeline} namespace={gate.namespace} />
               )}
             </div>
           ))}
