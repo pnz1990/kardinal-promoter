@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -58,6 +59,7 @@ type receiptFlags struct {
 	oci         bool
 	ociInsecure bool
 	clusterID   string
+	maxAge      time.Duration
 }
 
 func bindReceiptFlags(fs *flag.FlagSet) *receiptFlags {
@@ -83,6 +85,8 @@ func bindReceiptFlags(fs *flag.FlagSet) *receiptFlags {
 	fs.StringVar(&f.ociRepo, "receipt-oci-repository", "",
 		"Push receipt referrers to this repository instead of each image's own (as cosign's COSIGN_REPOSITORY).")
 	fs.BoolVar(&f.ociInsecure, "receipt-oci-insecure", false, "Push receipt referrers over plain HTTP (an in-cluster registry).")
+	fs.DurationVar(&f.maxAge, "receipt-retention-max-age", 0,
+		"Delete PromotionReceipts created longer ago than this; 0 (the default) keeps every receipt, which is evidence.")
 	fs.StringVar(&f.clusterID, "receipt-cluster-id", "",
 		"Cluster identity in receipts' resourceUri; empty reads the kube-system Namespace UID.")
 	return f

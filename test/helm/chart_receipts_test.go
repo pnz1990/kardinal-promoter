@@ -78,6 +78,16 @@ func TestChartReceipts(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, out, "receipts.signing.key.secretRef.name is required")
 
+	// A release upgraded with --reuse-values from a chart without receipts.
+	reused := render(t, "kardinal-promoter", "--set", "receipts=null")
+	assert.NotContains(t, argValues(controllerContainer(t, reused)), "receipts")
+
+	keep := newRBACView(t, render(t, "kardinal-promoter", "--set", "receipts.enabled=true", "--set", "receipts.retention.maxAge=8760h"))
+	assert.True(t, keep.allowed(releaseNS, "kardinal-promoter", "team-a", "kardinal.io", "promotionreceipts", "delete", ""),
+		"retention deletes past maxAge")
+	assert.Equal(t, "8760h", argValues(controllerContainer(t, render(t, "kardinal-promoter", "--set", "receipts.enabled=true",
+		"--set", "receipts.retention.maxAge=8760h")))["receipt-retention-max-age"])
+
 	ns := newRBACView(t, render(t, "kardinal-promoter", "--set", "receipts.enabled=true", "--set", "controller.watchNamespace="+releaseNS))
 	assert.True(t, ns.allowed(releaseNS, "kardinal-promoter", "", "", "namespaces", "get", "kube-system"))
 	assert.False(t, ns.allowed(releaseNS, "kardinal-promoter", "", "", "namespaces", "get", "default"))

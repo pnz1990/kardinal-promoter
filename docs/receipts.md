@@ -131,8 +131,10 @@ checkout-1-5-0-prod   checkout   prod   checkout-1-5-0   Stored   2m
   changed, and is never signed).
 - **Conditions**: `Signed`, `Stored` and `PRCommented`, with reasons naming a failing sink.
 - **No owner**: a receipt outlives its Bundle, the Graph and the step. Deleting a Bundle does
-  not delete its receipts. kardinal never deletes receipts; delete them yourself when you no
-  longer need them (the sinks outside the cluster keep their copy).
+  not delete its receipts. kardinal keeps every receipt unless you set
+  `receipts.retention.maxAge` (for example `8760h`): the leader then deletes the receipts
+  created longer ago, at most 2,000 an hour. The sinks outside the cluster keep their copy
+  whatever it says.
 - **Writes**: `spec` is immutable and `status.bundle` cannot change once set (the CRD refuses
   both). The `<release>-receipts` admission policy refuses every create, update and delete of a
   PromotionReceipt by anyone but the controller, a cluster-admin included; the namespace

@@ -741,6 +741,14 @@
       "properties": {
         "enabled": {"type": "boolean", "description": "--receipts: create and sign a PromotionReceipt for every promotion that reaches Verified."},
         "clusterID": {"type": "string", "description": "--receipt-cluster-id; empty reads the kube-system Namespace UID."},
+        "retention": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxAge": {"type": "string", "pattern": "^((([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)?$",
+              "description": "--receipt-retention-max-age; empty keeps every receipt."}
+          }
+        },
         "signing": {
           "type": "object",
           "additionalProperties": false,

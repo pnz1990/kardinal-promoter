@@ -81,6 +81,7 @@ built-in ones: a flag whose help names a `KARDINAL_*` variable reads it as its d
 | `--receipt-oci-secret` | string |  | kubernetes.io/dockerconfigjson Secret in the controller namespace with push credentials for --receipt-oci. |
 | `--receipt-rekor-public` | bool | `false` | Allow --receipt-rekor-url to be the public-good Rekor, which publishes each receipt's names, emails and pipeline names. |
 | `--receipt-rekor-url` | string |  | Rekor that logs every receipt signature; empty logs nothing. |
+| `--receipt-retention-max-age` | duration |  | Delete PromotionReceipts created longer ago than this; 0 (the default) keeps every receipt, which is evidence. |
 | `--receipt-signing-mode` | string | `"keyless"` | How receipts are signed: keyless (Fulcio, with the controller's projected ServiceAccount token), key (an ECDSA P-256 key in --receipt-key-secret) or kms (--receipt-kms-key). |
 | `--receipt-token-file` | string | `"/var/run/secrets/sigstore/token"` | Projected ServiceAccount token (audience sigstore) keyless mode presents to Fulcio. |
 | `--receipt-tsa-url` | string |  | RFC 3161 timestamp authority that timestamps every receipt signature. |

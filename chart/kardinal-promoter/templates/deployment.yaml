@@ -90,6 +90,9 @@ spec:
             {{- with .clusterID }}
             - --receipt-cluster-id={{ . }}
             {{- end }}
+            {{- with .retention.maxAge }}
+            - --receipt-retention-max-age={{ . }}
+            {{- end }}
             {{- if eq .signing.mode "keyless" }}
             - --receipt-fulcio-url={{ .signing.keyless.fulcioURL }}
             - --receipt-token-file=/var/run/secrets/sigstore/token
@@ -384,7 +387,7 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-            {{- if and .Values.receipts.enabled (eq .Values.receipts.signing.mode "keyless") }}
+            {{- if and (dig "receipts" "enabled" false .Values.AsMap) (eq (dig "receipts" "signing" "mode" "keyless" .Values.AsMap) "keyless") }}
             - name: sigstore-token
               mountPath: /var/run/secrets/sigstore
               readOnly: true
@@ -395,7 +398,7 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
-        {{- if and .Values.receipts.enabled (eq .Values.receipts.signing.mode "keyless") }}
+        {{- if and (dig "receipts" "enabled" false .Values.AsMap) (eq (dig "receipts" "signing" "mode" "keyless" .Values.AsMap) "keyless") }}
         # Keyless receipt signing: a token for Fulcio only (audience
         # sigstore), separate from the API server token (docs/receipts.md).
         - name: sigstore-token
@@ -403,7 +406,7 @@ spec:
             sources:
               - serviceAccountToken:
                   audience: sigstore
-                  expirationSeconds: {{ .Values.receipts.signing.keyless.tokenExpirationSeconds }}
+                  expirationSeconds: {{ dig "receipts" "signing" "keyless" "tokenExpirationSeconds" 600 .Values.AsMap }}
                   path: token
         {{- end }}
         {{- with .Values.controller.extraVolumes }}

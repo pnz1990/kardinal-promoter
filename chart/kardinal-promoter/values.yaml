@@ -657,6 +657,12 @@ audit:
 receipts:
   # -- Create and sign receipts (--receipts).
   enabled: false
+  retention:
+    # -- Delete receipts created longer ago than this
+    # (--receipt-retention-max-age, a Go duration, for example "8760h").
+    # Empty keeps every receipt: they are evidence, and the sinks outside
+    # the cluster keep their copy whatever this says.
+    maxAge: ""
   # -- Identity of this cluster in each receipt's resourceUri
   # (--receipt-cluster-id). Empty reads the kube-system Namespace UID; the
   # chart then lets the controller get that one Namespace.

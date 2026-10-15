@@ -978,7 +978,21 @@ func main() {
 		}).SetupWithManager(mgr); err != nil {
 			logger.Fatal().Err(err).Msg("unable to set up PromotionReceiptReconciler")
 		}
-		logger.Info().Str("mode", receiptOpts.mode).Str("cluster", clusterID).Msg("promotion receipts enabled")
+		if receiptOpts.maxAge > 0 {
+			// Uncached and slow, like AuditEvent retention.
+			pruneCfg := rest.CopyConfig(mgr.GetConfig())
+			pruneCfg.QPS, pruneCfg.Burst = auditretention.QPS, auditretention.Burst
+			pruneClient, err := sigs_client.New(pruneCfg, sigs_client.Options{Scheme: mgr.GetScheme(), Mapper: mgr.GetRESTMapper()})
+			if err != nil {
+				logger.Fatal().Err(err).Msg("unable to create the receipt retention client")
+			}
+			if err := mgr.Add(&receiptrecon.Pruner{Client: pruneClient, Namespace: watchNamespace, MaxAge: receiptOpts.maxAge,
+				Owns: func(ns string) bool { return shard.Active().Owns(ns) }}); err != nil {
+				logger.Fatal().Err(err).Msg("unable to register receipt retention")
+			}
+		}
+		logger.Info().Str("mode", receiptOpts.mode).Str("cluster", clusterID).Dur("retention", receiptOpts.maxAge).
+			Msg("promotion receipts enabled")
 	}
 
 	if err := (&psreconciler.Reconciler{
