@@ -165,11 +165,17 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	// A new or edited pathGlob starts from a new baseline: the walk from an
 	// earlier read position, or for an earlier glob, would make an older
-	// commit look new.
+	// commit look new. So does a new Git repoURL or branch (below).
 	globChanged := sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeGit && sub.Spec.Git != nil &&
 		sub.Spec.Git.PathGlob != sub.Status.ObservedPathGlob
+	// A new or edited source or tag selection (#1943) is a new baseline too:
+	// what the new selection picks may be an older artifact, not a new one. A
+	// baseline taken before status.observedSelection existed is kept (an
+	// upgrade).
+	selection := selectionKey(&sub)
+	selectionChanged := sub.Status.ObservedSelection != "" && selection != sub.Status.ObservedSelection
 	forWatcher := &sub
-	if globChanged {
+	if globChanged || selectionChanged {
 		forWatcher = sub.DeepCopy()
 		forWatcher.Status.LastSeenRevision = ""
 	}
@@ -192,11 +198,6 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if watchErr != nil {
 		return r.writeError(ctx, &sub, now, watchErr.Error())
 	}
-	// A new or edited tag selection (#1943) is a new baseline too: what the
-	// new selection picks may be an older artifact, not a new one. A baseline
-	// taken before status.observedSelection existed is kept (an upgrade).
-	selection := selectionKey(&sub)
-	selectionChanged := sub.Status.ObservedSelection != "" && selection != sub.Status.ObservedSelection
 	if globChanged || selectionChanged {
 		result.Changed = false
 	}

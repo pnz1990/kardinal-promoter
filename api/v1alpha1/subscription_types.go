@@ -327,12 +327,13 @@ type SubscriptionStatus struct {
 	// +optional
 	ObservedPathGlob string `json:"observedPathGlob,omitempty"`
 
-	// ObservedSelection identifies the tag selection (spec.image strategy,
-	// tagFilter, excludeTagFilter, allowTags, ignoreTags, semverConstraint and
-	// discoveryLimit; or the spec.helm filters) lastSeenDigest was chosen
-	// with. When the selection changes, the next poll records a new baseline
-	// and creates no Bundle: a new selection picking another, perhaps older,
-	// artifact is not a new artifact.
+	// ObservedSelection identifies the source and selection lastSeenDigest
+	// was chosen with: spec.image registry, strategy, tagFilter,
+	// excludeTagFilter, allowTags, ignoreTags, semverConstraint and
+	// discoveryLimit; spec.helm repoURL, chart and filters; or spec.git
+	// repoURL and branch. When it changes, the next poll records a new
+	// baseline and creates no Bundle: a new selection picking another, perhaps
+	// older, artifact is not a new artifact.
 	// +optional
 	ObservedSelection string `json:"observedSelection,omitempty"`
 

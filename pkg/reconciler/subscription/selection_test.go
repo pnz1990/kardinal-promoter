@@ -5,6 +5,7 @@ package subscription_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,12 +34,22 @@ func TestSubscriptionReconciler_SelectionChangeIsBaseline(t *testing.T) {
 		return s
 	}
 	helm := func() *kardinalv1alpha1.Subscription { return helmSub("chart", "default", nil) }
+	git := func() *kardinalv1alpha1.Subscription {
+		return makeGitSub("repo", "default", "p", "https://git.example.com/org/repo")
+	}
 	cases := []struct {
 		name     string
 		sub      func() *kardinalv1alpha1.Subscription
 		edit     func(*kardinalv1alpha1.Subscription)
 		baseline bool // the edit is a new baseline
 	}{
+		// A new source, such as a lagging mirror, can have an older newest artifact.
+		{"image registry", image, func(s *kardinalv1alpha1.Subscription) { s.Spec.Image.Registry = "mirror.example.com/test/app" }, true},
+		{"helm repoURL", helm, func(s *kardinalv1alpha1.Subscription) { s.Spec.Helm.RepoURL = "https://mirror.example.com/charts" }, true},
+		{"helm chart", helm, func(s *kardinalv1alpha1.Subscription) { s.Spec.Helm.Chart = "podinfo-lts" }, true},
+		{"git repoURL", git, func(s *kardinalv1alpha1.Subscription) { s.Spec.Git.RepoURL = "https://mirror.example.com/org/repo" }, true},
+		{"git branch", git, func(s *kardinalv1alpha1.Subscription) { s.Spec.Git.Branch = "release-1" }, true},
+		{"git interval", git, func(s *kardinalv1alpha1.Subscription) { s.Spec.Git.Interval = "10m" }, false},
 		{"image strategy", image, func(s *kardinalv1alpha1.Subscription) { s.Spec.Image.Strategy = kardinalv1alpha1.TagStrategyLexical }, true},
 		{"image tagFilter", image, func(s *kardinalv1alpha1.Subscription) { s.Spec.Image.TagFilter = "^sha-1" }, true},
 		{"image excludeTagFilter", image, func(s *kardinalv1alpha1.Subscription) { s.Spec.Image.ExcludeTagFilter = "-rc" }, true},
@@ -65,6 +76,10 @@ func TestSubscriptionReconciler_SelectionChangeIsBaseline(t *testing.T) {
 				NowFn:     func() time.Time { return time.Date(2026, 10, 15, 10, 0, 0, 0, time.UTC) }}
 			poll := func(digest, tag string) kardinalv1alpha1.SubscriptionStatus {
 				t.Helper()
+				if sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeGit { // a commit SHA, not an image digest
+					digest = strings.Repeat(digest[len(digest)-1:], 40)
+					tag = digest[:7]
+				}
 				w.digest, w.tag = digest, tag
 				_, err := r.Reconcile(context.Background(), reqFor(sub))
 				require.NoError(t, err)
@@ -83,7 +98,7 @@ func TestSubscriptionReconciler_SelectionChangeIsBaseline(t *testing.T) {
 			tc.edit(cur)
 			require.NoError(t, c.Update(context.Background(), cur))
 			st = poll(digestOf('c'), "sha-c") // what the edited selection picks, perhaps an older build
-			assert.Equal(t, digestOf('c'), st.LastSeenDigest)
+			assert.Equal(t, w.digest, st.LastSeenDigest)
 			if !tc.baseline {
 				assert.NotEqual(t, first, st.LastBundleCreated, "an edit that keeps the selection is no baseline")
 				assert.Equal(t, before, st.ObservedSelection)
@@ -123,4 +138,34 @@ func TestSubscriptionReconciler_SelectionRecordedOnUpgrade(t *testing.T) {
 	st := getSubscription(t, c, sub).Status
 	assert.NotEmpty(t, st.LastBundleCreated)
 	assert.NotEmpty(t, st.ObservedSelection)
+}
+
+// TestSubscriptionReconciler_GitSourceChangeResetsReadPosition (#1999): a new
+// Git branch is read from its head, not from the old branch's read position
+// (status.lastSeenRevision), and is a baseline.
+func TestSubscriptionReconciler_GitSourceChangeResetsReadPosition(t *testing.T) {
+	sub := makeGitSub("repo", "default", "p", "https://git.example.com/org/repo")
+	sub.Spec.Git.PathGlob = "apps/**"
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).
+		WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
+	var lastRevisions []string
+	w := &revisionWatcher{digest: strings.Repeat("a", 40), revision: strings.Repeat("b", 40)}
+	r := &subscription.Reconciler{Client: c,
+		WatcherFn: func(s *kardinalv1alpha1.Subscription, creds source.Credentials) (source.Watcher, error) {
+			lastRevisions = append(lastRevisions, s.Status.LastSeenRevision)
+			return w, nil
+		}}
+	_, err := r.Reconcile(context.Background(), reqFor(sub))
+	require.NoError(t, err)
+
+	cur := getSubscription(t, c, sub)
+	cur.Spec.Git.Branch = "release-1"
+	require.NoError(t, c.Update(context.Background(), cur))
+	w.digest = strings.Repeat("c", 40) // the release branch's newest matching commit, perhaps older
+	_, err = r.Reconcile(context.Background(), reqFor(sub))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"", ""}, lastRevisions, "a new branch is read without the old branch's read position")
+	st := getSubscription(t, c, sub).Status
+	assert.Equal(t, w.digest, st.LastSeenDigest)
+	assert.Empty(t, st.LastBundleCreated, "a new branch is a baseline")
 }
