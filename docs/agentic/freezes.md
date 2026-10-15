@@ -47,10 +47,17 @@ its namespace, for one environment, one version, or both, for a while (default o
 kardinal override checkout prod --freeze --reason "hotfix for INC-4211" --expires-in 30m
 ```
 
-The exemption is recorded on the freeze with your name, and when a step goes on under it, the
-step writes a `FreezeExempted` AuditEvent naming who let it through and why. Only someone who
-may edit the freeze can add an exemption: a namespace's gate overrides cannot break a cluster
-freeze.
+The exemption is recorded on the freeze with your name and your actor stamp, and when a step goes
+on under it, the step writes a `FreezeExempted` AuditEvent for each freeze it goes through, naming
+who let it through and why. Only someone who may edit the freeze can add an exemption: a
+namespace's gate overrides cannot break a cluster freeze.
+
+An exemption counts for at most a day from when the controller first sees it, whatever
+`--expires-in` says, as gate overrides are capped (Helm `controller.freezeExemptionMaxMinutes`,
+`--freeze-exemption-max-minutes`; `status.exemptionRecords` shows each exemption's end).
+Break-glass is for people: the `<release>-actor` admission policy refuses an exemption from an
+agent, and the controller never honours one stamped as an agent's (the freeze's
+`ExemptionIgnored` condition says so).
 
 ## In the UI
 
@@ -64,6 +71,11 @@ type `stop`). The controls need the UI's TokenReview sign-in (a freeze names who
 A freeze is a cluster-scoped ChangeWindow, so freezing takes cluster rights. The chart's
 `<release>-freezer` ClusterRole grants them (and the UI's `changewindows/freeze` action): bind it
 to your incident commanders.
+
+In the UI, the `changewindows/freeze` action in one namespace (the chart's admin role grants it
+through a RoleBinding) lets a team freeze its own namespace, and change or lift only the freezes it
+made there. Lifting or changing someone else's freeze of the namespace, such as an incident
+commander's stop-the-line, takes the action cluster-wide: the UI answers 403.
 
 ```bash
 kubectl create clusterrolebinding incident-freezers \

@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	authv1 "k8s.io/api/authentication/v1"
 	authzv1 "k8s.io/api/authorization/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -161,6 +162,65 @@ func TestUIFreeze_TokenReviewAuth(t *testing.T) {
 			if tc.want != http.StatusOK || method == http.MethodGet {
 				require.Len(t, list.Items, 1, "a refused or read-only call writes nothing")
 				assert.Equal(t, "kardinal-freeze-everyone", list.Items[0].Name)
+			}
+		})
+	}
+}
+
+// TestUIFreeze_NamespaceRightsChangeOnlyOwnFreezes covers the QA finding on
+// #1869 (F1): a caller whose freeze right is a namespace's (the chart's
+// admin role through a RoleBinding) may freeze that namespace, and change or
+// lift only the freezes it made there. Someone else's freeze of the
+// namespace, an incident commander's stop-the-line, needs the cluster-wide
+// right: lifting it or re-freezing it over (a shorter end, another reason)
+// is 403 and writes nothing (docs/design/18-actor-policy.md section 9.5).
+func TestUIFreeze_NamespaceRightsChangeOnlyOwnFreezes(t *testing.T) {
+	tokens := &uiTestTokens{users: map[string]string{"team-a": "alice", "cluster": "ic"}}
+	access := &freezeAccess{rules: map[string]map[string][]string{
+		"alice": {"*": {"get *", "list *"}, "team-a": {"update changewindows/freeze"}},
+		"ic":    {"*": {"get *", "list *", "update changewindows/freeze"}, "": {"update changewindows/freeze"}},
+	}}
+	const name = "kardinal-freeze-everyone-team-a"
+	cases := []struct {
+		name, token, path, body, createdBy string
+		want                               int
+		wantGone                           bool
+	}{
+		{"a namespace admin cannot lift someone else's freeze", "Bearer team-a", "/api/v1/ui/unfreeze",
+			`{"name":"` + name + `"}`, "ic", http.StatusForbidden, false},
+		{"a namespace admin cannot re-freeze over someone else's freeze", "Bearer team-a", "/api/v1/ui/freeze",
+			`{"actors":"everyone","namespace":"team-a","reason":"mine","minutes":1}`, "ic", http.StatusForbidden, false},
+		{"a namespace admin lifts its own freeze", "Bearer team-a", "/api/v1/ui/unfreeze",
+			`{"name":"` + name + `"}`, "alice", http.StatusOK, true},
+		{"a namespace admin changes its own freeze", "Bearer team-a", "/api/v1/ui/freeze",
+			`{"actors":"everyone","namespace":"team-a","reason":"mine","minutes":1}`, "alice", http.StatusOK, false},
+		{"the cluster-wide right lifts anyone's", "Bearer cluster", "/api/v1/ui/unfreeze",
+			`{"name":"` + name + `"}`, "alice", http.StatusOK, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			existing := &v1alpha1.ChangeWindow{ObjectMeta: metav1.ObjectMeta{Name: name},
+				Spec: v1alpha1.ChangeWindowSpec{Type: "blackout", Start: metav1.Now(), Reason: "INC-9",
+					Freeze: &v1alpha1.ChangeWindowFreeze{Actors: "everyone", Namespaces: []string{"team-a"}, CreatedBy: tc.createdBy}}}
+			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(existing).Build()
+			h := newUIHandler(c, nil, nil, uiAuthConfig{tokens: tokens, access: access, freezeControls: true},
+				"", nil, zerolog.Nop())
+			rec := uiAuthDo(t, h, http.MethodPost, tc.path, tc.token, tc.body)
+			require.Equal(t, tc.want, rec.Code, rec.Body.String())
+			var got v1alpha1.ChangeWindow
+			err := c.Get(context.Background(), types.NamespacedName{Name: name}, &got)
+			if tc.wantGone {
+				assert.True(t, apierrors.IsNotFound(err), "lifted")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.createdBy, got.Spec.Freeze.CreatedBy, "who froze stays")
+			if tc.want == http.StatusForbidden {
+				assert.Contains(t, rec.Body.String(), "made by "+tc.createdBy)
+				assert.Equal(t, "INC-9", got.Spec.Reason, "unchanged")
+				assert.True(t, got.Spec.End.IsZero(), "unchanged")
+			} else {
+				assert.Equal(t, "mine", got.Spec.Reason)
 			}
 		})
 	}

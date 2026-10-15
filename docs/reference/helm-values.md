@@ -43,6 +43,7 @@ Where a value sets a controller flag, the flag is in [Controller flags](controll
 | `controller.accessLog.trustedProxies` | `[]` | CIDRs of proxies (an Ingress controller) whose X-Forwarded-For gives the client address (--access-log-trusted-proxies). Other clients' X-Forwarded-For is ignored. |
 | `controller.accessLog.auditEvents` | `true` | Write an AuditEvent (action APIWrite) naming the caller for every write through the UI API and the Bundle API (--api-audit-events). |
 | `controller.gateOverrideMaxMinutes` | `""` | Longest a gate override counts, in minutes from when the controller first saw it (--gate-override-max-minutes): an override ends at the earlier of its expiresAt and this cap. Empty keeps the default, 1440 (24h). |
+| `controller.freezeExemptionMaxMinutes` | `""` | Longest a freeze exemption (kardinal override --freeze) counts, in minutes from when the controller first saw it (--freeze-exemption-max-minutes): an exemption ends at the earlier of its expiresAt and this cap. Empty keeps the default, 1440 (24h). |
 | `controller.extraArgs` | `[]` | Extra controller args, e.g. ["--cors-allowed-origins=https://kardinal.example.com"]. |
 | `controller.extraEnv` | `[]` | Extra env vars for the controller container (e.g. HTTPS_PROXY). |
 | `controller.extraVolumes` | `[]` | Extra volumes for the controller Pod (e.g. a TLS Secret). |

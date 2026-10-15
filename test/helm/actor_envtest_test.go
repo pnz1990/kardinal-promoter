@@ -214,6 +214,31 @@ func TestActorsOnAPIServer(t *testing.T) {
 	}
 	t.Log("ok 18 overrides")
 
+	// 18b freeze exemptions (docs/design/18-actor-policy.md section 6): the
+	// stamp is checked as for overrides, and an agent may not add one at all,
+	// stamped or not: break-glass is for people.
+	fz := &v1alpha1.ChangeWindow{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-freeze-everyone"},
+		Spec: v1alpha1.ChangeWindowSpec{Type: "blackout", Start: metav1.Now(), Reason: "INC-1",
+			Freeze: &v1alpha1.ChangeWindowFreeze{Actors: "everyone", CreatedBy: "alice"}}}
+	require.NoError(t, as("alice").Create(ctx, fz), "18b a person freezes")
+	exemptAs := func(c client.Client, by string, a *v1alpha1.Actor) error {
+		var cur v1alpha1.ChangeWindow
+		require.NoError(t, admin.Get(ctx, client.ObjectKeyFromObject(fz), &cur))
+		cur.Spec.Freeze.Exemptions = append(cur.Spec.Freeze.Exemptions, v1alpha1.FreezeExemption{Namespace: "payments-a",
+			Pipeline: "checkout", Reason: "qa", CreatedBy: by, ExpiresAt: metav1.NewTime(time.Now().Add(time.Hour)), Actor: a})
+		return c.Update(ctx, &cur)
+	}
+	err = exemptAs(as(fx), fx, ag(fx, "fixer", "alice"))
+	require.Error(t, err, "18b an agent's stamped exemption")
+	require.Contains(t, err.Error(), "break-glass is for people")
+	err = exemptAs(as(fx), fx, nil)
+	require.Error(t, err, "18b an agent's unstamped exemption")
+	require.Contains(t, err.Error(), "break-glass is for people")
+	require.Error(t, exemptAs(as("alice"), "alice", ag("alice", "fixer", "alice")), "18b a person stamped as an agent")
+	require.NoError(t, exemptAs(as("alice"), "alice", &v1alpha1.Actor{Kind: "human", Principal: "alice"}), "18b a person's stamped exemption")
+	require.NoError(t, exemptAs(as("bob"), "bob", nil), "18b a person may leave the stamp out")
+	t.Log("ok 18b freeze exemptions")
+
 	// 19 AuditEvent with actor.
 	ae := func(name string, a *v1alpha1.Actor) *v1alpha1.AuditEvent {
 		return &v1alpha1.AuditEvent{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "payments-a"},

@@ -97,11 +97,13 @@ func StampCreatedBy(obj metav1.Object, who string) {
 }
 
 // Sentinel errors. Callers map them to exit messages or HTTP status codes
-// (ErrNotFound → 404, ErrInvalid → 400, ErrConflict → 409).
+// (ErrNotFound → 404, ErrInvalid → 400, ErrConflict → 409, ErrForbidden →
+// 403).
 var (
-	ErrNotFound = errors.New("not found")
-	ErrInvalid  = errors.New("invalid request")
-	ErrConflict = errors.New("conflict")
+	ErrNotFound  = errors.New("not found")
+	ErrInvalid   = errors.New("invalid request")
+	ErrConflict  = errors.New("conflict")
+	ErrForbidden = errors.New("forbidden")
 )
 
 // StampCreatedAt sets the kardinal.io/created-at annotation on obj to now,

@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	authzv1 "k8s.io/api/authorization/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -28,7 +30,8 @@ import (
 // changewindows/freeze (cluster-wide, or in the namespace the freeze is
 // limited to), and the controller writes the window with the caller as
 // spec.freeze.createdBy (the freezes admission policy lets only it name
-// someone else).
+// someone else). With a namespace's right only, the caller changes and
+// lifts only the freezes it made (mayChangeAnyFreeze).
 
 // freezeAction is the virtual subresource the UI's freeze writes need.
 const freezeAction = "freeze"
@@ -127,8 +130,14 @@ func (s *uiAPIServer) handleFreeze(w http.ResponseWriter, r *http.Request) {
 		s.writeLifecycleError(w, "freeze", err)
 		return
 	}
+	anyFreeze, err := s.mayChangeAnyFreeze(r.Context(), req.Namespace, name)
+	if err != nil {
+		s.writeLifecycleError(w, "freeze", err)
+		return
+	}
 	cw, _, err := lifecycle.Freeze(r.Context(), writer, lifecycle.FreezeRequest{Actors: req.Actors, Namespace: req.Namespace,
-		Reason: req.Reason, For: time.Duration(req.Minutes) * time.Minute, CreatedBy: user.Username, Now: time.Now()})
+		Reason: req.Reason, For: time.Duration(req.Minutes) * time.Minute, CreatedBy: user.Username,
+		OnlyOwn: !anyFreeze, Now: time.Now()})
 	if err != nil {
 		s.writeLifecycleError(w, "freeze", err)
 		return
@@ -190,7 +199,16 @@ func (s *uiAPIServer) handleUnfreeze(w http.ResponseWriter, r *http.Request) {
 		s.writeLifecycleError(w, "unfreeze", err)
 		return
 	}
-	if err := lifecycle.Unfreeze(r.Context(), writer, req.Name); err != nil {
+	anyFreeze, err := s.mayChangeAnyFreeze(r.Context(), ns, req.Name)
+	if err != nil {
+		s.writeLifecycleError(w, "unfreeze", err)
+		return
+	}
+	onlyBy := ""
+	if !anyFreeze {
+		onlyBy = user.Username
+	}
+	if err := lifecycle.Unfreeze(r.Context(), writer, req.Name, onlyBy); err != nil {
 		s.writeLifecycleError(w, "unfreeze", err)
 		return
 	}
@@ -198,6 +216,32 @@ func (s *uiAPIServer) handleUnfreeze(w http.ResponseWriter, r *http.Request) {
 	msg := "lifted freeze " + req.Name
 	auditDone(r, "", msg)
 	writeJSON(w, uiMessageResponse{Message: msg})
+}
+
+// freezeChecker is the per-user check that does not record a denial
+// (uiauth.AuthorizingClient.Can).
+type freezeChecker interface {
+	Can(ctx context.Context, attrs authzv1.ResourceAttributes) (bool, error)
+}
+
+// mayChangeAnyFreeze reports whether the caller may change or lift a freeze
+// someone else made (docs/design/18-actor-policy.md section 9.5): it has
+// update on changewindows/freeze cluster-wide. A namespace's right lets it
+// freeze that namespace and change or lift only the freezes it made, so a
+// team's admin cannot lift an incident commander's stop-the-line of the
+// team's namespace (with kubectl it cannot either: ChangeWindows are
+// cluster-scoped). For a cluster-wide freeze actionClient already checked
+// the cluster-wide right.
+func (s *uiAPIServer) mayChangeAnyFreeze(ctx context.Context, ns, name string) (bool, error) {
+	if ns == "" {
+		return true, nil
+	}
+	c, ok := s.client.(freezeChecker)
+	if !ok {
+		return true, nil // no per-user authorization (actionClient lets every write through)
+	}
+	return c.Can(ctx, authzv1.ResourceAttributes{Verb: "update", Group: "kardinal.io", Resource: "changewindows",
+		Subresource: freezeAction, Name: name})
 }
 
 // inScope refuses, with 403, a freeze write beyond the namespace this

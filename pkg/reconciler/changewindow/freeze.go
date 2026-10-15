@@ -4,6 +4,9 @@
 package changewindow
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"sort"
@@ -39,6 +42,27 @@ type FreezeMatch struct {
 	Exemption *kardinalv1alpha1.FreezeExemption
 	// Since is when the freeze started.
 	Since time.Time
+	// Until is when the exemption stops counting (its record's until, the
+	// cap applied); zero when the freeze holds the target.
+	Until time.Time
+}
+
+// ExemptionKey identifies one spec.freeze.exemptions entry: a hash of every
+// field, so an edited entry is a new exemption. It is the key of the entry's
+// status.exemptionRecords record.
+func ExemptionKey(e *kardinalv1alpha1.FreezeExemption) string {
+	b, err := json.Marshal(e)
+	if err != nil {
+		b = []byte(fmt.Sprintf("%#v", *e)) // unreachable: the type always marshals
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// exemptionByAgent reports whether an agent made e: such an exemption never
+// counts (docs/design/18-actor-policy.md section 6).
+func exemptionByAgent(e *kardinalv1alpha1.FreezeExemption) bool {
+	return e.Actor != nil && e.Actor.Kind == kardinalv1alpha1.ActorAgent
 }
 
 // FreezeSelects reports whether active freeze spec f selects target t by
@@ -59,17 +83,18 @@ func FreezeSelects(f *kardinalv1alpha1.ChangeWindowFreeze, t FreezeTarget) bool 
 	return true // an unknown selector holds: a freeze must fail closed
 }
 
-// exemptionFor is the first exemption of w in effect for t: listed in the
-// window's status (the ChangeWindow reconciler keeps only unexpired ones
-// there) and still in its spec (a removed exemption ends at once), or nil.
+// exemptionFor is the first exemption of w in effect for t, and until when it
+// counts: listed in the window's status (the ChangeWindow reconciler keeps
+// only the ones in effect there) and still in its spec (a removed exemption
+// ends at once), or nil. An agent's exemption never counts.
 // A status behind the spec lists none: new exemptions wait for it.
-func exemptionFor(w *kardinalv1alpha1.ChangeWindow, t FreezeTarget) *kardinalv1alpha1.FreezeExemption {
+func exemptionFor(w *kardinalv1alpha1.ChangeWindow, t FreezeTarget) (*kardinalv1alpha1.FreezeExemption, time.Time) {
 	if statusBehind(w) {
-		return nil
+		return nil, time.Time{}
 	}
 	for i := range w.Status.Exemptions {
 		e := &w.Status.Exemptions[i]
-		if e.Namespace != t.Namespace || e.Pipeline != t.Pipeline {
+		if e.Namespace != t.Namespace || e.Pipeline != t.Pipeline || exemptionByAgent(e) {
 			continue
 		}
 		if (e.Environment != "" && e.Environment != t.Environment) || (e.Bundle != "" && e.Bundle != t.Bundle) {
@@ -80,9 +105,16 @@ func exemptionFor(w *kardinalv1alpha1.ChangeWindow, t FreezeTarget) *kardinalv1a
 		}) {
 			continue
 		}
-		return e
+		until := e.ExpiresAt.Time
+		key := ExemptionKey(e)
+		for _, rec := range w.Status.ExemptionRecords {
+			if rec.Key == key {
+				until = rec.Until.Time
+			}
+		}
+		return e, until
 	}
-	return nil
+	return nil, time.Time{}
 }
 
 // FreezeActive reports whether freeze window w is active, from the status
@@ -109,7 +141,8 @@ func FreezesFor(windows []kardinalv1alpha1.ChangeWindow, t FreezeTarget) []Freez
 		if !FreezeActive(w) || !w.DeletionTimestamp.IsZero() || !FreezeSelects(w.Spec.Freeze, t) {
 			continue
 		}
-		out = append(out, FreezeMatch{Window: w, Since: w.Spec.Start.Time, Exemption: exemptionFor(w, t)})
+		e, until := exemptionFor(w, t)
+		out = append(out, FreezeMatch{Window: w, Since: w.Spec.Start.Time, Exemption: e, Until: until})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Window.Name < out[j].Window.Name })
 	return out

@@ -171,6 +171,10 @@ func main() {
 			"its expiresAt and this cap. The UI API refuses a longer override, and the chart's scoped-writes "+
 			"admission policy one written with kubectl by a caller limited to policygates/override "+
 			"(Helm controller.gateOverrideMaxMinutes).")
+	var freezeExemptionMaxMinutes int
+	flag.IntVar(&freezeExemptionMaxMinutes, "freeze-exemption-max-minutes", int(changewindowrecon.DefaultMaxExemption.Minutes()),
+		"Longest a freeze exemption (kardinal override --freeze) counts, from when the controller first saw it; "+
+			"an exemption ends at the earlier of its expiresAt and this cap (Helm controller.freezeExemptionMaxMinutes).")
 	var agentIndexName string
 	flag.StringVar(&agentIndexName, "agent-index", "",
 		"Name of the AgentIndex this controller builds from the AgentIdentities and stamps the UI API's and the "+
@@ -1062,7 +1066,8 @@ func main() {
 	// ChangeWindowReconciler: evaluates each ChangeWindow (blackout or recurring),
 	// writes status.active/reason and requeues at the next boundary. The status write
 	// re-evaluates the PolicyGates that reference the window.
-	cwReconciler := &changewindowrecon.Reconciler{Client: mgr.GetClient()}
+	cwReconciler := &changewindowrecon.Reconciler{Client: mgr.GetClient(),
+		MaxExemption: time.Duration(freezeExemptionMaxMinutes) * time.Minute}
 	// An Event on a ChangeWindow, a cluster-scoped kind, is written in the
 	// default namespace, where namespace mode grants no Event writes. There the
 	// Valid condition and the log report an invalid spec.

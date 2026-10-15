@@ -168,3 +168,48 @@ func TestFreeze_ExemptionAuditedOnce(t *testing.T) {
 	}
 	assert.Equal(t, 1, n)
 }
+
+// TestFreeze_EveryExemptingFreezeAudited covers the QA finding on #1869
+// (F5): when several freezes hold a step and each has an exemption for it,
+// the step goes on and each freeze's exemption gets its FreezeExempted
+// AuditEvent, not just the first.
+func TestFreeze_EveryExemptingFreezeAudited(t *testing.T) {
+	ctx := context.Background()
+	ex := v1alpha1.FreezeExemption{Namespace: "default", Pipeline: "nginx-demo", Reason: "hotfix", CreatedBy: "carol",
+		ExpiresAt: metav1.NewTime(time.Date(2026, 10, 14, 11, 0, 0, 0, time.UTC))}
+	cluster := activeFreeze("everyone", ex)
+	team := activeFreeze("everyone", ex)
+	team.Name = "kardinal-freeze-everyone-default"
+	team.Spec.Freeze.Namespaces = []string{"default"}
+	step := makeStep("step-test", "nginx-demo", "bundle-1", "test")
+	step.Labels = map[string]string{"kardinal.io/pipeline": "nginx-demo", "kardinal.io/bundle": "bundle-1",
+		"kardinal.io/environment": "test"}
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}, &v1alpha1.ChangeWindow{}).
+		WithObjects(step, makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo"), cluster, team).Build()
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+		NowFn:     func() time.Time { return time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC) }}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-test", Namespace: "default"}}
+	for range 3 {
+		_, err := r.Reconcile(ctx, req)
+		require.NoError(t, err)
+	}
+	var events v1alpha1.AuditEventList
+	require.NoError(t, c.List(ctx, &events))
+	windows := map[string]int{}
+	for _, e := range events.Items {
+		if e.Spec.Action == promotionstep.AuditActionFreezeExempted {
+			for _, w := range []string{cluster.Name, team.Name} {
+				if strings.Contains(e.Spec.Message, "freeze "+w+" ") {
+					windows[w]++
+				}
+			}
+		}
+	}
+	assert.Equal(t, map[string]int{cluster.Name: 1, team.Name: 1}, windows, "one record per freeze, once")
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &got))
+	assert.NotEqual(t, "", got.Status.State, "the step went on: %s", got.Status.Message)
+	assert.False(t, strings.HasPrefix(got.Status.Message, "frozen by"), got.Status.Message)
+}

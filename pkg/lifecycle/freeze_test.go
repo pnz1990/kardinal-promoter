@@ -64,9 +64,24 @@ func TestFreeze_CreateUpdateUnfreeze(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list, 2)
 
-	assert.True(t, errors.Is(Unfreeze(ctx, c, "kardinal-freeze-everyone"), ErrConflict), "never deletes a plain window")
-	require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-agents"))
-	assert.True(t, errors.Is(Unfreeze(ctx, c, "kardinal-freeze-agents"), ErrNotFound))
+	// OnlyOwn (a caller with a namespace's rights in the UI): someone else's
+	// freeze is neither changed nor lifted.
+	_, _, err = Freeze(ctx, c, FreezeRequest{Actors: v1alpha1.FreezeAgents, Namespace: "payments", Reason: "mine",
+		For: time.Minute, CreatedBy: "mallory", OnlyOwn: true, Now: now})
+	assert.True(t, errors.Is(err, ErrForbidden), "someone else's freeze: %v", err)
+	var kept v1alpha1.ChangeWindow
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-agents-payments"}, &kept))
+	assert.Equal(t, "x", kept.Spec.Reason, "unchanged")
+	assert.True(t, kept.Spec.End.IsZero(), "unchanged")
+	_, _, err = Freeze(ctx, c, FreezeRequest{Actors: v1alpha1.FreezeAgents, Namespace: "payments", Reason: "wider",
+		CreatedBy: "a", OnlyOwn: true, Now: now})
+	require.NoError(t, err, "its own freeze")
+	assert.True(t, errors.Is(Unfreeze(ctx, c, "kardinal-freeze-agents-payments", "mallory"), ErrForbidden))
+	require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-agents-payments", "a"), "its own freeze")
+
+	assert.True(t, errors.Is(Unfreeze(ctx, c, "kardinal-freeze-everyone", ""), ErrConflict), "never deletes a plain window")
+	require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-agents", ""))
+	assert.True(t, errors.Is(Unfreeze(ctx, c, "kardinal-freeze-agents", ""), ErrNotFound))
 	var still v1alpha1.ChangeWindow
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-everyone"}, &still))
 }
@@ -91,8 +106,9 @@ func TestExemptFromFreezes(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(window("a-cluster", true), window("b-billing", true, "billing"),
 		window("c-ended", false)).Build()
 
+	stamp := &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "bob"}
 	names, err := ExemptFromFreezes(ctx, c, ExemptRequest{Namespace: "payments", Pipeline: "checkout", Environment: "prod",
-		Reason: "hotfix", CreatedBy: "bob", Now: now})
+		Reason: "hotfix", CreatedBy: "bob", Actor: stamp, Now: now})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"a-cluster"}, names)
 	var got v1alpha1.ChangeWindow
@@ -101,6 +117,7 @@ func TestExemptFromFreezes(t *testing.T) {
 	e := got.Spec.Freeze.Exemptions[0]
 	assert.Equal(t, "bob", e.CreatedBy)
 	assert.Equal(t, "prod", e.Environment)
+	assert.Equal(t, stamp, e.Actor, "the stamp is recorded")
 	assert.Equal(t, now.Add(DefaultExemption), e.ExpiresAt.UTC())
 
 	_, err = ExemptFromFreezes(ctx, c, ExemptRequest{Namespace: "shop", Pipeline: "p", Reason: "r", Now: now})

@@ -239,6 +239,10 @@ agent that may override its own autonomy gate has no autonomy limit.
 the message `overrides by agents are not honoured`, and the gate is evaluated as if it were not
 there. An agent that needs a gate opened asks its sponsor (`kardinal why` names who may).
 
+Freeze exemptions (9.3) are break-glass too: an exemption carries its actor stamp, the
+`<release>-actor` policy refuses one from an agent, and the controller never honours one stamped
+as an agent's (`ExemptionIgnored` on the freeze).
+
 ## 7. The `agents:` shorthand
 
 ### 7.1 Field
@@ -425,6 +429,14 @@ The `<release>-freezes` ValidatingAdmissionPolicy matches CREATE and UPDATE of
 Written with the same CEL constructs as the `<release>-gate-overrides` policy, which runs on
 every Kubernetes kardinal supports (1.35 and later).
 
+An exemption is bounded as a gate override is: the ChangeWindow reconciler records when it first
+saw each entry (`status.exemptionRecords`, keyed by a hash of the entry) and counts it until the
+earlier of its `expiresAt` and that time plus `--freeze-exemption-max-minutes` (Helm
+`controller.freezeExemptionMaxMinutes`, a day by default). The step reads the record's end, so
+`--expires-in 8760h` lets a pipeline through for a day, not a year. Each new exemption also
+carries its writer's actor stamp, checked by the `<release>-actor` policy (section 6: an agent's
+is refused and never honoured).
+
 ### 9.4 CLI
 
 ```
@@ -452,7 +464,12 @@ not include it; the docs show a `ClusterRole` for incident commanders
 - UI API: `GET /api/v1/ui/freezes`, `POST /api/v1/ui/freeze`, `POST /api/v1/ui/unfreeze`.
   In TokenReview mode the controller checks the caller with a SubjectAccessReview for the
   virtual action `update changewindows/freeze` (cluster scope, or the namespace a freeze is
-  limited to) and writes the window as itself, with the caller as `createdBy`. Without
+  limited to) and writes the window as itself, with the caller as `createdBy`. The namespace's
+  right covers only the caller's own freezes of that namespace: changing (re-freezing over) or
+  lifting a freeze someone else made needs `update changewindows/freeze` cluster-wide, else 403.
+  Otherwise a team's admin, which the chart's admin role lets freeze its namespace, could lift an
+  incident commander's stop-the-line of it through the UI, which it cannot do with kubectl
+  (ChangeWindows are cluster-scoped). Without
   TokenReview the endpoints are refused: a freeze names who froze. The writes are opt-in, Helm
   `ui.freezeControls` (`--ui-freeze-controls`, which needs TokenReview): only then does the chart
   grant the controller `create, update, delete` on `changewindows`, and the freezes policy admits

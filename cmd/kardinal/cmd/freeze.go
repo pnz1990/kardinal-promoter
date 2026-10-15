@@ -15,6 +15,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 )
@@ -208,7 +209,7 @@ freeze is never deleted.`,
 
 // unfreezeFn is the testable implementation of unfreeze.
 func unfreezeFn(w io.Writer, c sigs_client.Client, name string) error {
-	if err := lifecycle.Unfreeze(context.Background(), c, name); err != nil {
+	if err := lifecycle.Unfreeze(context.Background(), c, name, ""); err != nil {
 		return fmt.Errorf("unfreeze: %w", err)
 	}
 	if _, err := fmt.Fprintf(w, "Freeze %s lifted. Held steps go on within a minute.\n", name); err != nil {
@@ -226,8 +227,16 @@ func overrideFreezeFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, bund
 	if err != nil {
 		return fmt.Errorf("override: %w", err)
 	}
+	stamp, err := stampOf(ctx, c, id, actor.Where{Namespace: ns, Pipeline: pipeline, Environment: env})
+	if err != nil {
+		return fmt.Errorf("override: %w", err)
+	}
+	if stamp != nil && stamp.Kind == v1alpha1.ActorAgent {
+		return fmt.Errorf("override: you are agent %s: an agent's freeze exemption never counts (break-glass is for "+
+			"people); ask %s or another person to run kardinal override --freeze", stamp.Agent, stamp.Sponsor)
+	}
 	names, err := lifecycle.ExemptFromFreezes(ctx, c, lifecycle.ExemptRequest{Namespace: ns, Pipeline: pipeline,
-		Environment: env, Bundle: bundle, Reason: reason, ExpiresIn: d, CreatedBy: id.Username, Now: now})
+		Environment: env, Bundle: bundle, Reason: reason, ExpiresIn: d, CreatedBy: id.Username, Actor: stamp, Now: now})
 	if err != nil {
 		return fmt.Errorf("override: %w", err)
 	}

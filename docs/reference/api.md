@@ -315,7 +315,21 @@ ChangeWindow defines a cluster-scoped time window during which promotions are bl
 | `spec.freeze` | object |  | Freeze makes the window hold promotions by itself while it is active, without a gate naming it (docs/design/18-actor-policy.md): an agent freeze, or a stop-the-line for everyone. kardinal freeze writes it. |
 | `spec.freeze.actors` | string | yes | Actors is whose versions are held: agents (versions whose actor stamp says kind agent) or everyone (stop-the-line). One of: `agents`, `everyone`. |
 | `spec.freeze.createdBy` | string |  | CreatedBy is who froze: the chart's freezes admission policy admits it only as the requester's username, and it never changes. |
+| `spec.freeze.exemptionRecords` | []object |  | ExemptionRecords has one record per spec.freeze.exemptions entry: when the controller first saw it and until when it counts. Records of entries removed from the spec go. |
+| `spec.freeze.exemptionRecords[].firstSeen` | string (date-time) | yes | FirstSeen is when the controller first saw the entry. |
+| `spec.freeze.exemptionRecords[].key` | string | yes | Key identifies the entry: a hash of every field, so an edited entry is a new exemption (changewindow.ExemptionKey). |
+| `spec.freeze.exemptionRecords[].until` | string (date-time) | yes | Until is when it stops counting. |
 | `spec.freeze.exemptions` | []object |  | Exemptions let a pipeline, an environment or one version through the freeze until they expire (kardinal override --freeze). The admission policy admits a new one only in its creator's name, and none changes. |
+| `spec.freeze.exemptions[].actor` | object |  | Actor is who made the exception, as the chart's actor admission policy verified it (kardinal override --freeze stamps it). An exemption whose actor is an agent is never honoured: break-glass is for people (docs/design/18-actor-policy.md section 6). |
+| `spec.freeze.exemptions[].actor.agent` | string |  | Agent is the AgentIdentity name, when kind is agent. |
+| `spec.freeze.exemptions[].actor.asserted` | object |  | Asserted holds what the client says about itself. It is recorded as written and never used for a security decision. |
+| `spec.freeze.exemptions[].actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
+| `spec.freeze.exemptions[].actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
+| `spec.freeze.exemptions[].actor.asserted.session` | string |  | Session is the client's session or run identifier. |
+| `spec.freeze.exemptions[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `spec.freeze.exemptions[].actor.principal` | string | yes | Principal is the username the API server authenticated. |
+| `spec.freeze.exemptions[].actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
+| `spec.freeze.exemptions[].actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
 | `spec.freeze.exemptions[].bundle` | string |  | Bundle, when set, limits the exemption to that version. |
 | `spec.freeze.exemptions[].createdBy` | string |  | CreatedBy is who made the exception, as admission verified it. |
 | `spec.freeze.exemptions[].environment` | string |  | Environment, when set, limits the exemption to that environment. |
@@ -340,7 +354,21 @@ ChangeWindow defines a cluster-scoped time window during which promotions are bl
 | `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
 | `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
-| `status.exemptions` | []object |  | Exemptions are the spec.freeze.exemptions in effect now (not expired). The PromotionStep reconciler lets a step through a freeze only on an exemption listed here and still in the spec. |
+| `status.exemptionRecords` | []object |  | ExemptionRecords has one record per spec.freeze.exemptions entry: when the controller first saw it and until when it counts. Records of entries removed from the spec go. |
+| `status.exemptionRecords[].firstSeen` | string (date-time) | yes | FirstSeen is when the controller first saw the entry. |
+| `status.exemptionRecords[].key` | string | yes | Key identifies the entry: a hash of every field, so an edited entry is a new exemption (changewindow.ExemptionKey). |
+| `status.exemptionRecords[].until` | string (date-time) | yes | Until is when it stops counting. |
+| `status.exemptions` | []object |  | Exemptions are the spec.freeze.exemptions in effect now: not past their record's until, and not made by an agent. The PromotionStep reconciler lets a step through a freeze only on an exemption listed here and still in the spec. |
+| `status.exemptions[].actor` | object |  | Actor is who made the exception, as the chart's actor admission policy verified it (kardinal override --freeze stamps it). An exemption whose actor is an agent is never honoured: break-glass is for people (docs/design/18-actor-policy.md section 6). |
+| `status.exemptions[].actor.agent` | string |  | Agent is the AgentIdentity name, when kind is agent. |
+| `status.exemptions[].actor.asserted` | object |  | Asserted holds what the client says about itself. It is recorded as written and never used for a security decision. |
+| `status.exemptions[].actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
+| `status.exemptions[].actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
+| `status.exemptions[].actor.asserted.session` | string |  | Session is the client's session or run identifier. |
+| `status.exemptions[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `status.exemptions[].actor.principal` | string | yes | Principal is the username the API server authenticated. |
+| `status.exemptions[].actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
+| `status.exemptions[].actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
 | `status.exemptions[].bundle` | string |  | Bundle, when set, limits the exemption to that version. |
 | `status.exemptions[].createdBy` | string |  | CreatedBy is who made the exception, as admission verified it. |
 | `status.exemptions[].environment` | string |  | Environment, when set, limits the exemption to that environment. |

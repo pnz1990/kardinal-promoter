@@ -331,3 +331,31 @@ func TestAutoMerge_UsesTheStepsProvider(t *testing.T) {
 	assert.Empty(t, controllerSCM.enables, "the controller's provider is never used for this step")
 	assert.Zero(t, controllerSCM.disables)
 }
+
+// TestAutoMerge_OffDuringStopTheLine covers the QA finding on #1869 (F2): a
+// step waiting for its PR when a stop-the-line starts turns the SCM's
+// auto-merge off, so the PR does not merge during the freeze; lifting the
+// freeze turns it on again.
+func TestAutoMerge_OffDuringStopTheLine(t *testing.T) {
+	ctx := context.Background()
+	ps, prs, gate := waitingAutoMergeStep()
+	c := newClient(t, ps, prs, gate, makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo"))
+	m := &autoMergeSCM{mockSCM: mockSCM{open: true}}
+	r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: &mockGit{}, WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+	reconcileStep(t, r, "step")
+	require.Equal(t, "enabled", getStep(t, c, "step").Status.Outputs["prAutoMerge"])
+
+	freeze := activeFreeze("everyone") // newClient has no ChangeWindow status subresource: the status is stored
+	require.NoError(t, c.Create(ctx, freeze))
+	reconcileStep(t, r, "step")
+	got := getStep(t, c, "step")
+	assert.Equal(t, "suspended", got.Status.Outputs["prAutoMerge"])
+	assert.Equal(t, 1, m.disables)
+	assert.Contains(t, got.Status.Message, "auto-merge off: frozen by kardinal-freeze-everyone")
+	assert.Equal(t, "WaitingForMerge", got.Status.State, "it waits for its merge, as with pause")
+
+	require.NoError(t, c.Delete(ctx, freeze))
+	reconcileStep(t, r, "step")
+	assert.Equal(t, "enabled", getStep(t, c, "step").Status.Outputs["prAutoMerge"])
+	assert.Len(t, m.enables, 2)
+}

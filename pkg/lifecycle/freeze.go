@@ -58,6 +58,11 @@ type FreezeRequest struct {
 	For time.Duration
 	// CreatedBy is who freezes: the authenticated identity.
 	CreatedBy string
+	// OnlyOwn lets the request change only a freeze CreatedBy made: an
+	// existing freeze of the scope that someone else made is ErrForbidden.
+	// The UI sets it for a caller whose rights are a namespace's
+	// (docs/design/18-actor-policy.md section 9.5).
+	OnlyOwn bool
 	// Now is the current time.
 	Now time.Time
 }
@@ -109,6 +114,9 @@ func Freeze(ctx context.Context, c client.Client, req FreezeRequest) (*v1alpha1.
 		if out.Spec.Freeze == nil {
 			return fmt.Errorf("ChangeWindow %s exists and is not a freeze; rename or delete it: %w", name, ErrConflict)
 		}
+		if req.OnlyOwn && out.Spec.Freeze.CreatedBy != req.CreatedBy {
+			return notYours(name, out.Spec.Freeze.CreatedBy, "change")
+		}
 		out.Spec.Reason, out.Spec.End = req.Reason, end
 		return c.Update(ctx, &out)
 	})
@@ -120,7 +128,9 @@ func Freeze(ctx context.Context, c client.Client, req FreezeRequest) (*v1alpha1.
 
 // Unfreeze deletes the freeze named name. A ChangeWindow without
 // spec.freeze is never deleted (ErrConflict); a missing one is ErrNotFound.
-func Unfreeze(ctx context.Context, c client.Client, name string) error {
+// With onlyBy set, only a freeze onlyBy made is deleted (ErrForbidden
+// otherwise): the UI sets it for a caller whose rights are a namespace's.
+func Unfreeze(ctx context.Context, c client.Client, name, onlyBy string) error {
 	var cw v1alpha1.ChangeWindow
 	if err := c.Get(ctx, types.NamespacedName{Name: name}, &cw); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -131,10 +141,23 @@ func Unfreeze(ctx context.Context, c client.Client, name string) error {
 	if cw.Spec.Freeze == nil {
 		return fmt.Errorf("ChangeWindow %s is not a freeze; delete it with kubectl if you mean to: %w", name, ErrConflict)
 	}
+	if onlyBy != "" && cw.Spec.Freeze.CreatedBy != onlyBy {
+		return notYours(name, cw.Spec.Freeze.CreatedBy, "lift")
+	}
 	if err := c.Delete(ctx, &cw, client.Preconditions{UID: &cw.UID}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete freeze %s: %w", name, err)
 	}
 	return nil
+}
+
+// notYours is the ErrForbidden of a caller with a namespace's rights acting
+// on a freeze someone else made.
+func notYours(name, by, verb string) error {
+	if by == "" {
+		by = "(unknown)"
+	}
+	return fmt.Errorf("freeze %s was made by %s: to %s it you need update on changewindows/freeze cluster-wide "+
+		"(the chart's freezer role), not a namespace's: %w", name, by, verb, ErrForbidden)
 }
 
 // ListFreezes returns the ChangeWindows with spec.freeze, sorted by name.
@@ -163,7 +186,9 @@ type ExemptRequest struct {
 	ExpiresIn time.Duration
 	// CreatedBy is who lets it through: the authenticated identity.
 	CreatedBy string
-	Now       time.Time
+	// Actor is CreatedBy's actor stamp (an agent's exemption never counts).
+	Actor *v1alpha1.Actor
+	Now   time.Time
 }
 
 // ExemptFromFreezes adds req's exemption to every freeze active now that
@@ -188,7 +213,7 @@ func ExemptFromFreezes(ctx context.Context, c client.Client, req ExemptRequest) 
 		return nil, err
 	}
 	ex := v1alpha1.FreezeExemption{Namespace: req.Namespace, Pipeline: req.Pipeline, Environment: req.Environment,
-		Bundle: req.Bundle, Reason: req.Reason, CreatedBy: req.CreatedBy,
+		Bundle: req.Bundle, Reason: req.Reason, CreatedBy: req.CreatedBy, Actor: req.Actor,
 		ExpiresAt: metav1.NewTime(req.Now.Add(d).UTC().Truncate(time.Second))}
 	anyone := changewindow.FreezeTarget{Namespace: req.Namespace}
 	var names []string

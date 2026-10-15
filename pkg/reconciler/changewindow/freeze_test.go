@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -33,6 +34,22 @@ func freezeWindow(name, actors string, namespaces []string, exemptions ...kardin
 func exempt(env, bundle, expires string) kardinalv1alpha1.FreezeExemption {
 	return kardinalv1alpha1.FreezeExemption{Namespace: "payments", Pipeline: "checkout", Environment: env, Bundle: bundle,
 		Reason: "hotfix", CreatedBy: "bob", ExpiresAt: metav1.NewTime(at(expires))}
+}
+
+func inNamespace(ns string, e kardinalv1alpha1.FreezeExemption) kardinalv1alpha1.FreezeExemption {
+	e.Namespace = ns
+	return e
+}
+
+func forPipeline(p string, e kardinalv1alpha1.FreezeExemption) kardinalv1alpha1.FreezeExemption {
+	e.Pipeline = p
+	return e
+}
+
+func byAgent(e kardinalv1alpha1.FreezeExemption) kardinalv1alpha1.FreezeExemption {
+	e.CreatedBy = "system:serviceaccount:ci:fixer"
+	e.Actor = &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorAgent, Principal: e.CreatedBy, Agent: "fixer", Sponsor: "alice"}
+	return e
 }
 
 // TestEvaluate_FreezeWithoutEnd: a freeze may omit end and is then active
@@ -93,6 +110,90 @@ func TestReconciler_FreezeStatus(t *testing.T) {
 	assert.Zero(t, res.RequeueAfter)
 }
 
+// TestReconciler_FreezeExemptionCap covers the QA finding on #1869 (F3): an
+// exemption counts at most --freeze-exemption-max-minutes from when the
+// reconciler first saw it, whatever its expiresAt says; the record keeps
+// that first sighting across reconciles, and the step's message shows the
+// capped end.
+func TestReconciler_FreezeExemptionCap(t *testing.T) {
+	s := runtime.NewScheme()
+	require.NoError(t, kardinalv1alpha1.AddToScheme(s))
+	cw := freezeWindow("kardinal-freeze-everyone", kardinalv1alpha1.FreezeEveryone, nil,
+		exempt("prod", "", "2027-10-14T10:00:00Z")) // a year
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cw).WithStatusSubresource(cw).Build()
+	now := at("2026-10-14T10:00:00Z")
+	r := &changewindow.Reconciler{Client: c, NowFn: func() time.Time { return now }, MaxExemption: 2 * time.Hour}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: cw.Name}}
+	get := func() kardinalv1alpha1.ChangeWindow {
+		var got kardinalv1alpha1.ChangeWindow
+		require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+		return got
+	}
+
+	res, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	got := get()
+	require.Len(t, got.Status.Exemptions, 1)
+	require.Len(t, got.Status.ExemptionRecords, 1)
+	assert.Equal(t, now, got.Status.ExemptionRecords[0].FirstSeen.UTC())
+	assert.Equal(t, at("2026-10-14T12:00:00Z"), got.Status.ExemptionRecords[0].Until.UTC(), "the cap, not a year")
+	assert.Equal(t, at("2026-10-14T12:00:00Z"), got.Status.NextTransition.UTC())
+	assert.Equal(t, time.Hour, res.RequeueAfter, "bounded by maxRequeue; nextTransition is the cap")
+	person := changewindow.FreezeTarget{Namespace: "payments", Pipeline: "checkout", Environment: "prod"}
+	m := changewindow.FreezesFor([]kardinalv1alpha1.ChangeWindow{got}, person)
+	require.Len(t, m, 1)
+	assert.Equal(t, at("2026-10-14T12:00:00Z"), m[0].Until.UTC(), "the step sees the capped end")
+
+	now = at("2026-10-14T11:00:00Z")
+	_, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	got = get()
+	assert.Equal(t, at("2026-10-14T10:00:00Z"), got.Status.ExemptionRecords[0].FirstSeen.UTC(), "first seen stays")
+	require.Len(t, got.Status.Exemptions, 1)
+
+	now = at("2026-10-14T12:00:01Z")
+	_, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	got = get()
+	assert.Empty(t, got.Status.Exemptions, "past the cap it no longer counts")
+	require.Len(t, got.Status.ExemptionRecords, 1, "the record stays while the entry does")
+
+	got.Spec.Freeze.Exemptions = nil
+	require.NoError(t, c.Update(context.Background(), &got))
+	_, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	assert.Empty(t, get().Status.ExemptionRecords, "a removed entry's record goes")
+}
+
+// TestReconciler_AgentExemptionIgnored covers the QA finding on #1869 (F4):
+// an exemption an agent made is never in effect, and the window says so
+// (ExemptionIgnored) until it is removed.
+func TestReconciler_AgentExemptionIgnored(t *testing.T) {
+	s := runtime.NewScheme()
+	require.NoError(t, kardinalv1alpha1.AddToScheme(s))
+	cw := freezeWindow("kardinal-freeze-agents", kardinalv1alpha1.FreezeAgents, nil,
+		byAgent(exempt("prod", "", "2026-10-14T11:00:00Z")), exempt("uat", "", "2026-10-14T11:00:00Z"))
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cw).WithStatusSubresource(cw).Build()
+	r := &changewindow.Reconciler{Client: c, NowFn: func() time.Time { return at("2026-10-14T10:00:00Z") }}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: cw.Name}}
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	var got kardinalv1alpha1.ChangeWindow
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	require.Len(t, got.Status.Exemptions, 1, "only the person's")
+	assert.Equal(t, "uat", got.Status.Exemptions[0].Environment)
+	cond := meta.FindStatusCondition(got.Status.Conditions, changewindow.ConditionExemptionIgnored)
+	require.NotNil(t, cond)
+	assert.Contains(t, cond.Message, "break-glass is for people")
+
+	got.Spec.Freeze.Exemptions = got.Spec.Freeze.Exemptions[1:]
+	require.NoError(t, c.Update(context.Background(), &got))
+	_, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, changewindow.ConditionExemptionIgnored))
+}
+
 // TestFreezesFor: which active freezes select a step, from the windows'
 // status only: actors, namespaces, exemptions in both status and spec, and a
 // status behind the spec counting as active without exemptions.
@@ -133,6 +234,12 @@ func TestFreezesFor(t *testing.T) {
 			personVersion, true, false},
 		{"an exemption for another version", reconciled(freezeWindow("f", "everyone", nil, exempt("", "checkout-v1", "2026-10-14T11:00:00Z")), true),
 			personVersion, true, false},
+		{"an exemption for the same pipeline in another namespace", reconciled(freezeWindow("f", "everyone", nil,
+			inNamespace("billing", exempt("prod", "", "2026-10-14T11:00:00Z"))), true), personVersion, true, false},
+		{"an exemption for another pipeline", reconciled(freezeWindow("f", "everyone", nil,
+			forPipeline("cart", exempt("prod", "", "2026-10-14T11:00:00Z"))), true), personVersion, true, false},
+		{"an agent's exemption never counts", reconciled(freezeWindow("f", "everyone", nil,
+			byAgent(exempt("prod", "", "2026-10-14T11:00:00Z"))), true), personVersion, true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -143,8 +250,10 @@ func TestFreezesFor(t *testing.T) {
 	}
 
 	t.Run("an exemption removed from the spec ends at once", func(t *testing.T) {
-		w := reconciled(freezeWindow("f", "everyone", nil, exempt("prod", "", "2026-10-14T11:00:00Z")), true)
-		w.Spec.Freeze.Exemptions = nil
+		other := forPipeline("cart", exempt("prod", "", "2026-10-14T11:00:00Z"))
+		w := reconciled(freezeWindow("f", "everyone", nil, exempt("prod", "", "2026-10-14T11:00:00Z"), other), true)
+		require.Empty(t, changewindow.Holding(changewindow.FreezesFor([]kardinalv1alpha1.ChangeWindow{*w}, personVersion)))
+		w.Spec.Freeze.Exemptions = []kardinalv1alpha1.FreezeExemption{other} // one of two removed
 		assert.Len(t, changewindow.Holding(changewindow.FreezesFor([]kardinalv1alpha1.ChangeWindow{*w}, personVersion)), 1)
 	})
 	t.Run("an exemption added but not yet reconciled waits", func(t *testing.T) {

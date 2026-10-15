@@ -97,6 +97,40 @@ spec:
                       only as the requester's username, and it never changes.
                     maxLength: 253
                     type: string
+                  exemptionRecords:
+                    description: |-
+                      ExemptionRecords has one record per spec.freeze.exemptions entry: when
+                      the controller first saw it and until when it counts. Records of
+                      entries removed from the spec go.
+                    items:
+                      description: |-
+                        FreezeExemptionRecord is when the ChangeWindow reconciler first saw one
+                        spec.freeze.exemptions entry, and so until when it counts: the earlier of
+                        its expiresAt and firstSeen plus the controller's cap
+                        (--freeze-exemption-max-minutes), as for gate overrides.
+                      properties:
+                        firstSeen:
+                          description: FirstSeen is when the controller first saw
+                            the entry.
+                          format: date-time
+                          type: string
+                        key:
+                          description: |-
+                            Key identifies the entry: a hash of every field, so an edited entry is
+                            a new exemption (changewindow.ExemptionKey).
+                          maxLength: 64
+                          type: string
+                        until:
+                          description: Until is when it stops counting.
+                          format: date-time
+                          type: string
+                      required:
+                      - firstSeen
+                      - key
+                      - until
+                      type: object
+                    maxItems: 100
+                    type: array
                   exemptions:
                     description: |-
                       Exemptions let a pipeline, an environment or one version through the
@@ -106,6 +140,86 @@ spec:
                       description: FreezeExemption is a break-glass exception to a
                         freeze.
                       properties:
+                        actor:
+                          description: |-
+                            Actor is who made the exception, as the chart's actor admission
+                            policy verified it (kardinal override --freeze stamps it). An
+                            exemption whose actor is an agent is never honoured: break-glass is
+                            for people (docs/design/18-actor-policy.md section 6).
+                          properties:
+                            agent:
+                              description: Agent is the AgentIdentity name, when kind
+                                is agent.
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                            asserted:
+                              description: |-
+                                Asserted holds what the client says about itself. It is recorded as
+                                written and never used for a security decision.
+                              properties:
+                                client:
+                                  description: Client is the tool that wrote the record
+                                    (for example kardinal/0.12.0).
+                                  maxLength: 128
+                                  type: string
+                                model:
+                                  description: Model is the AI model the client says
+                                    it runs.
+                                  maxLength: 128
+                                  type: string
+                                session:
+                                  description: Session is the client's session or
+                                    run identifier.
+                                  maxLength: 128
+                                  type: string
+                              type: object
+                            kind:
+                              description: Kind is human, agent, bot or controller
+                                (docs/actors.md).
+                              enum:
+                              - human
+                              - agent
+                              - bot
+                              - controller
+                              maxLength: 16
+                              type: string
+                            principal:
+                              description: Principal is the username the API server
+                                authenticated.
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                            sponsor:
+                              description: |-
+                                Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when
+                                the record was written, when kind is agent.
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                            via:
+                              description: |-
+                                Via says how the controller came to write the record: ui and api for a
+                                caller it authenticated, subscription and auto-rollback for its own
+                                Bundles. Only the controller may set it.
+                              enum:
+                              - ui
+                              - api
+                              - subscription
+                              - auto-rollback
+                              maxLength: 16
+                              type: string
+                          required:
+                          - kind
+                          - principal
+                          type: object
+                          x-kubernetes-validations:
+                          - message: actor.agent and actor.sponsor are set exactly
+                              when actor.kind is agent
+                            rule: 'self.kind == ''agent'' ? (has(self.agent) && has(self.sponsor))
+                              : (!has(self.agent) && !has(self.sponsor))'
+                          - message: a controller actor says why it acted (actor.via)
+                            rule: self.kind != 'controller' || has(self.via)
                         bundle:
                           description: Bundle, when set, limits the exemption to that
                             version.
@@ -297,14 +411,127 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              exemptionRecords:
+                description: |-
+                  ExemptionRecords has one record per spec.freeze.exemptions entry: when
+                  the controller first saw it and until when it counts. Records of
+                  entries removed from the spec go.
+                items:
+                  description: |-
+                    FreezeExemptionRecord is when the ChangeWindow reconciler first saw one
+                    spec.freeze.exemptions entry, and so until when it counts: the earlier of
+                    its expiresAt and firstSeen plus the controller's cap
+                    (--freeze-exemption-max-minutes), as for gate overrides.
+                  properties:
+                    firstSeen:
+                      description: FirstSeen is when the controller first saw the
+                        entry.
+                      format: date-time
+                      type: string
+                    key:
+                      description: |-
+                        Key identifies the entry: a hash of every field, so an edited entry is
+                        a new exemption (changewindow.ExemptionKey).
+                      maxLength: 64
+                      type: string
+                    until:
+                      description: Until is when it stops counting.
+                      format: date-time
+                      type: string
+                  required:
+                  - firstSeen
+                  - key
+                  - until
+                  type: object
+                maxItems: 100
+                type: array
               exemptions:
                 description: |-
-                  Exemptions are the spec.freeze.exemptions in effect now (not
-                  expired). The PromotionStep reconciler lets a step through a freeze
-                  only on an exemption listed here and still in the spec.
+                  Exemptions are the spec.freeze.exemptions in effect now: not past
+                  their record's until, and not made by an agent. The PromotionStep
+                  reconciler lets a step through a freeze only on an exemption listed
+                  here and still in the spec.
                 items:
                   description: FreezeExemption is a break-glass exception to a freeze.
                   properties:
+                    actor:
+                      description: |-
+                        Actor is who made the exception, as the chart's actor admission
+                        policy verified it (kardinal override --freeze stamps it). An
+                        exemption whose actor is an agent is never honoured: break-glass is
+                        for people (docs/design/18-actor-policy.md section 6).
+                      properties:
+                        agent:
+                          description: Agent is the AgentIdentity name, when kind
+                            is agent.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        asserted:
+                          description: |-
+                            Asserted holds what the client says about itself. It is recorded as
+                            written and never used for a security decision.
+                          properties:
+                            client:
+                              description: Client is the tool that wrote the record
+                                (for example kardinal/0.12.0).
+                              maxLength: 128
+                              type: string
+                            model:
+                              description: Model is the AI model the client says it
+                                runs.
+                              maxLength: 128
+                              type: string
+                            session:
+                              description: Session is the client's session or run
+                                identifier.
+                              maxLength: 128
+                              type: string
+                          type: object
+                        kind:
+                          description: Kind is human, agent, bot or controller (docs/actors.md).
+                          enum:
+                          - human
+                          - agent
+                          - bot
+                          - controller
+                          maxLength: 16
+                          type: string
+                        principal:
+                          description: Principal is the username the API server authenticated.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        sponsor:
+                          description: |-
+                            Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when
+                            the record was written, when kind is agent.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        via:
+                          description: |-
+                            Via says how the controller came to write the record: ui and api for a
+                            caller it authenticated, subscription and auto-rollback for its own
+                            Bundles. Only the controller may set it.
+                          enum:
+                          - ui
+                          - api
+                          - subscription
+                          - auto-rollback
+                          maxLength: 16
+                          type: string
+                      required:
+                      - kind
+                      - principal
+                      type: object
+                      x-kubernetes-validations:
+                      - message: actor.agent and actor.sponsor are set exactly when
+                          actor.kind is agent
+                        rule: 'self.kind == ''agent'' ? (has(self.agent) && has(self.sponsor))
+                          : (!has(self.agent) && !has(self.sponsor))'
+                      - message: a controller actor says why it acted (actor.via)
+                        rule: self.kind != 'controller' || has(self.via)
                     bundle:
                       description: Bundle, when set, limits the exemption to that
                         version.

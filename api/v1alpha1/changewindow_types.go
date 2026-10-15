@@ -79,6 +79,13 @@ type ChangeWindowFreeze struct {
 	// +kubebuilder:validation:MaxItems=100
 	// +optional
 	Exemptions []FreezeExemption `json:"exemptions,omitempty"`
+
+	// ExemptionRecords has one record per spec.freeze.exemptions entry: when
+	// the controller first saw it and until when it counts. Records of
+	// entries removed from the spec go.
+	// +kubebuilder:validation:MaxItems=100
+	// +optional
+	ExemptionRecords []FreezeExemptionRecord `json:"exemptionRecords,omitempty"`
 }
 
 // FreezeExemption is a break-glass exception to a freeze.
@@ -113,6 +120,28 @@ type FreezeExemption struct {
 	// +kubebuilder:validation:MaxLength=253
 	// +optional
 	CreatedBy string `json:"createdBy,omitempty"`
+
+	// Actor is who made the exception, as the chart's actor admission
+	// policy verified it (kardinal override --freeze stamps it). An
+	// exemption whose actor is an agent is never honoured: break-glass is
+	// for people (docs/design/18-actor-policy.md section 6).
+	// +optional
+	Actor *Actor `json:"actor,omitempty"`
+}
+
+// FreezeExemptionRecord is when the ChangeWindow reconciler first saw one
+// spec.freeze.exemptions entry, and so until when it counts: the earlier of
+// its expiresAt and firstSeen plus the controller's cap
+// (--freeze-exemption-max-minutes), as for gate overrides.
+type FreezeExemptionRecord struct {
+	// Key identifies the entry: a hash of every field, so an edited entry is
+	// a new exemption (changewindow.ExemptionKey).
+	// +kubebuilder:validation:MaxLength=64
+	Key string `json:"key"`
+	// FirstSeen is when the controller first saw the entry.
+	FirstSeen metav1.Time `json:"firstSeen"`
+	// Until is when it stops counting.
+	Until metav1.Time `json:"until"`
 }
 
 // ChangeWindowSchedule configures a recurring allowed-hours window.
@@ -173,12 +202,20 @@ type ChangeWindowStatus struct {
 	// +optional
 	NextTransition *metav1.Time `json:"nextTransition,omitempty"`
 
-	// Exemptions are the spec.freeze.exemptions in effect now (not
-	// expired). The PromotionStep reconciler lets a step through a freeze
-	// only on an exemption listed here and still in the spec.
+	// Exemptions are the spec.freeze.exemptions in effect now: not past
+	// their record's until, and not made by an agent. The PromotionStep
+	// reconciler lets a step through a freeze only on an exemption listed
+	// here and still in the spec.
 	// +kubebuilder:validation:MaxItems=100
 	// +optional
 	Exemptions []FreezeExemption `json:"exemptions,omitempty"`
+
+	// ExemptionRecords has one record per spec.freeze.exemptions entry: when
+	// the controller first saw it and until when it counts. Records of
+	// entries removed from the spec go.
+	// +kubebuilder:validation:MaxItems=100
+	// +optional
+	ExemptionRecords []FreezeExemptionRecord `json:"exemptionRecords,omitempty"`
 }
 
 // +kubebuilder:object:root=true

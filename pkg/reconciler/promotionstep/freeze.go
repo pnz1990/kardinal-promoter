@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -39,8 +40,8 @@ const condFreezeExempted = "FreezeExempted"
 //
 // It runs where holdIfPaused runs: before a Pending step starts and before a
 // Promoting step's next git step. Steps waiting for a merge or a health
-// check carry on, as with pause. A step let through by an exemption writes
-// one FreezeExempted AuditEvent. The step writes only its own status; a
+// check carry on, as with pause. A step let through by exemptions writes
+// one FreezeExempted AuditEvent per freeze that exempts it. The step writes only its own status; a
 // read error holds it (a kill switch fails closed).
 func (r *Reconciler) holdIfFrozen(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (bool, ctrl.Result, error) {
 	matches, err := r.freezesFor(ctx, ps)
@@ -55,7 +56,7 @@ func (r *Reconciler) holdIfFrozen(ctx context.Context, log zerolog.Logger, ps *v
 		// Let through under an exemption: record it first, then go on in a
 		// new reconcile, so the step's next status write starts from the
 		// recorded one (its patches carry the resourceVersion they read).
-		recorded, err := r.recordFreezeExemption(ctx, ps, matches[0], r.now())
+		recorded, err := r.recordFreezeExemption(ctx, ps, matches, r.now())
 		if err != nil {
 			return true, ctrl.Result{}, err
 		}
@@ -110,33 +111,49 @@ func needsAuthor(windows []v1alpha1.ChangeWindow) bool {
 	return false
 }
 
-// recordFreezeExemption records, once per exemption, that ps went on through
-// freeze m under its exemption: the FreezeExempted condition and, in the
-// same optimistic-locked status patch, the AuditEvent in the step's outbox.
-// It reports whether it wrote anything.
+// recordFreezeExemption records, once per set of exemptions, that ps went on
+// through the freezes in matches (each exempts it): the FreezeExempted
+// condition and, in the same optimistic-locked status patch, one AuditEvent
+// per freeze in the step's outbox. It reports whether it wrote anything.
 func (r *Reconciler) recordFreezeExemption(ctx context.Context, ps *v1alpha1.PromotionStep,
-	m changewindow.FreezeMatch, now time.Time) (bool, error) {
-	e := m.Exemption
-	by := e.CreatedBy
-	if by == "" {
-		by = "(unknown)"
+	matches []changewindow.FreezeMatch, now time.Time) (bool, error) {
+	msgs := make([]string, len(matches))
+	for i, m := range matches {
+		msgs[i] = exemptionMessage(m)
 	}
-	msg := fmt.Sprintf("let through freeze %s (%s) by %s until %s: %s", m.Window.Name,
-		changewindow.FreezeScope(m.Window.Spec.Freeze), by, e.ExpiresAt.UTC().Format(time.RFC3339), e.Reason)
+	msg := strings.Join(msgs, "; ")
 	if c := meta.FindStatusCondition(ps.Status.Conditions, condFreezeExempted); c != nil && c.Message == msg {
 		return false, nil
 	}
 	patch := client.MergeFromWithOptions(ps.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	meta.SetStatusCondition(&ps.Status.Conditions, metav1.Condition{Type: condFreezeExempted,
 		Status: metav1.ConditionTrue, Reason: "Exempted", Message: msg, ObservedGeneration: ps.Generation})
-	if entry, ok := freezeAuditEntry(ps, m, msg, now); ok {
-		ps.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, ps.Status.PendingAuditEvents, entry)
+	for i, m := range matches {
+		if entry, ok := freezeAuditEntry(ps, m, msgs[i], now); ok {
+			ps.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, ps.Status.PendingAuditEvents, entry)
+		}
 	}
 	if err := r.Status().Patch(ctx, ps, patch); err != nil {
 		return false, fmt.Errorf("record freeze exemption: %w", err)
 	}
 	_ = r.flushAudit(ctx, ps)
 	return true, nil
+}
+
+// exemptionMessage says that a step went on through freeze m: by whom, until
+// when (the exemption's end, the controller's cap applied) and why.
+func exemptionMessage(m changewindow.FreezeMatch) string {
+	e := m.Exemption
+	by := e.CreatedBy
+	if by == "" {
+		by = "(unknown)"
+	}
+	until := m.Until
+	if until.IsZero() {
+		until = e.ExpiresAt.Time
+	}
+	return fmt.Sprintf("let through freeze %s (%s) by %s until %s: %s", m.Window.Name,
+		changewindow.FreezeScope(m.Window.Spec.Freeze), by, until.UTC().Format(time.RFC3339), e.Reason)
 }
 
 // freezeAuditEntry is the FreezeExempted outbox entry. Its name is derived

@@ -138,6 +138,9 @@ spec:
             {{- with .Values.controller.gateOverrideMaxMinutes }}
             - --gate-override-max-minutes={{ . }}
             {{- end }}
+            {{- with .Values.controller.freezeExemptionMaxMinutes }}
+            - --freeze-exemption-max-minutes={{ . }}
+            {{- end }}
             {{- with .Values.controller.watchNamespace }}
             - --watch-namespace={{ . }}
             {{- end }}
