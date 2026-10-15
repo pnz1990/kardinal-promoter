@@ -742,7 +742,8 @@ func TestFlaggerPhaseFromThisPromotion(t *testing.T) {
 // window without an alarm, so fail-on-alarm no longer fails a good canary.
 // A stopped window restarts health.timeout, so reset-on-alarm on a release
 // that never gets healthy again ends at the timeout instead of resetting
-// forever.
+// forever. Under fail-on-alarm an Unhealthy check before the first healthy
+// one applies onHealthFailure too (#2006). Covers BAKE-05.
 func TestBakeWaitingIsNotAnAlarm(t *testing.T) {
 	bake := func(policy string) v1alpha1.EnvironmentSpec {
 		return v1alpha1.EnvironmentSpec{Name: "test", Health: v1alpha1.HealthConfig{Type: "resource", Timeout: "1m"},
@@ -788,6 +789,18 @@ func TestBakeWaitingIsNotAnAlarm(t *testing.T) {
 		{name: "reset-on-alarm: not healthy again within the timeout ends (bug 4c)", env: bake("reset-on-alarm"),
 			status: stopped(ago(time.Second)), deploy: degradedDeployment("p", "test"),
 			wantState: "Failed", wantMsg: "health check timeout after 1m0s", wantFailures: 1, wantResets: 3},
+		{name: "fail-on-alarm: Unhealthy before the first healthy check applies onHealthFailure (#2006)", env: bake("fail-on-alarm"),
+			status:    v1alpha1.PromotionStepStatus{HealthCheckExpiry: &metav1.Time{Time: time.Now().Add(30 * time.Second)}},
+			deploy:    degradedDeployment("p", "test"),
+			wantState: "Failed", wantMsg: "health alarm via resource", wantFailures: 1},
+		{name: "reset-on-alarm: Unhealthy before the first healthy check waits for one", env: bake("reset-on-alarm"),
+			status:    v1alpha1.PromotionStepStatus{HealthCheckExpiry: &metav1.Time{Time: time.Now().Add(30 * time.Second)}},
+			deploy:    degradedDeployment("p", "test"),
+			wantState: "HealthChecking", wantMsg: "bake: waiting for the first healthy check (unhealthy via resource)", wantFailures: 1},
+		{name: "fail-on-alarm: Waiting before the first healthy check waits", env: bake("fail-on-alarm"),
+			status:    v1alpha1.PromotionStepStatus{HealthCheckExpiry: &metav1.Time{Time: time.Now().Add(30 * time.Second)}},
+			deploy:    rollingDeployment("p", "test"),
+			wantState: "HealthChecking", wantMsg: "bake: waiting for the first healthy check (waiting for resource)"},
 		{name: "a stopped window restarts at the next healthy check", env: bake("fail-on-alarm"),
 			status: stopped(&metav1.Time{Time: time.Now().Add(30 * time.Second)}), deploy: healthyDeployment("p", "test"),
 			wantState: "HealthChecking", wantMsg: "bake: 0m/30m", wantResets: 3, wantWindow: true},

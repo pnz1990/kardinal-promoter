@@ -665,7 +665,15 @@ func (a *ArgoCDAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSta
 	opOK := opPhase == "Succeeded" || opPhase == "" || (!target.operated && opFailed)
 
 	switch {
-	case !target.unverified && ((healthStatus == "Degraded" && target.deployed) || (opFailed && target.operated)):
+	case !target.unverified && healthStatus == "Degraded" && target.deployed:
+		if r := abortedRollout(app); r != "" {
+			// The Application is Degraded because Argo Rollouts aborted the
+			// promoted revision of one of its Rollouts: Terminal, as with the
+			// argoRollouts adapter (#2006).
+			return terminal(state + ", " + r), nil
+		}
+		return unhealthy(state), nil
+	case !target.unverified && opFailed && target.operated:
 		return unhealthy(state), nil
 	case healthStatus == "Healthy" && syncStatus == "Synced" && opOK && target.deployed:
 		reason := fmt.Sprintf("Healthy+Synced (opPhase=%q)", opPhase)
@@ -676,6 +684,29 @@ func (a *ArgoCDAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSta
 	default:
 		return progressing(state), nil
 	}
+}
+
+// abortedRollout names an Argo Rollouts Rollout among app's resources whose
+// health Argo CD reports Degraded because the Rollout was aborted (its
+// health message, from Argo CD's Rollout health check, says so: "Rollout is
+// aborted", or the Rollout's own "Rollout aborted update to revision N"),
+// or returns "".
+func abortedRollout(app *unstructured.Unstructured) string {
+	resources, _, _ := unstructured.NestedSlice(app.Object, "status", "resources")
+	for _, r := range resources {
+		m, ok := r.(map[string]interface{})
+		if !ok || m["kind"] != "Rollout" || m["group"] != "argoproj.io" {
+			continue
+		}
+		status, _, _ := unstructured.NestedString(m, "health", "status")
+		msg, _, _ := unstructured.NestedString(m, "health", "message")
+		if status == "Degraded" && strings.Contains(strings.ToLower(msg), "abort") {
+			name, _ := m["name"].(string)
+			ns, _ := m["namespace"].(string)
+			return fmt.Sprintf("Rollout %s/%s aborted the update: %s", ns, name, msg)
+		}
+	}
+	return ""
 }
 
 // argoCDDescendant accepts a synced revision that is not the promoted commit
@@ -1374,7 +1405,9 @@ var argoRolloutsGVR = schema.GroupVersionResource{
 //     workloadRef, status.workloadObservedGeneration is the Deployment's
 //     generation), else Progressing: the phase describes an older spec;
 //  3. status.phase: Healthy with status.stableRS == status.currentPodHash is
-//     Healthy, Degraded is unhealthy, any other phase is Progressing.
+//     Healthy; Degraded with status.abort is Terminal (Argo Rollouts aborted
+//     the promoted revision and will not roll it forward by itself), other
+//     Degraded is unhealthy; any other phase is Progressing.
 //
 // Without the first two checks, the Healthy or Degraded phase of the previous
 // revision would decide the new one's health.
@@ -1471,6 +1504,13 @@ func (a *ArgoRolloutsAdapter) Check(ctx context.Context, opts CheckOptions) (Hea
 		}
 		return healthy(reason), nil
 	case "Degraded":
+		if abort, _, _ := unstructured.NestedBool(rollout.Object, "status", "abort"); abort {
+			// Argo Rollouts aborted the promoted revision (a failed analysis,
+			// or kubectl argo rollouts abort) and went back to the stable
+			// ReplicaSet. It stays aborted until someone retries it or the
+			// spec changes: it will not roll forward by itself (#2006).
+			return terminal(fmt.Sprintf("%s aborted the update (status.abort): %s", id, reason)), nil
+		}
 		return unhealthy(reason), nil
 	default: // Progressing, Paused, or not reported yet
 		return progressing(reason), nil

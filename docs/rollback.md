@@ -332,7 +332,7 @@ spec:
 
 - the PromotionStep has no Healthy check within `health.timeout` (default: 10m) of entering `HealthChecking`, or of a bake window stopping;
 - the health adapter reports a terminal result (Deployment `ProgressDeadlineExceeded` from this promotion's rollout, Flagger canary `Failed`);
-- a health check is Unhealthy during a bake window with `bake.policy: fail-on-alarm`.
+- a health check is Unhealthy under `bake.policy: fail-on-alarm`, during the bake window or before its first healthy check.
 
 A rollback version (label `kardinal.io/rollback: "true"` or `spec.provenance.rollbackOf` set) is not rolled back again: when its own health check fails with `rollback` set, the step is `AbortedByAlarm` instead, so rollbacks do not chain.
 
@@ -348,8 +348,8 @@ Each health check has one of four results (see [Timings and failures](health-ada
 |---|---|---|---|
 | Healthy | The promoted revision runs and is available | No (resets it to 0) | No |
 | Waiting | A rollout in progress, including new pods that are not available yet; a Deployment `ProgressDeadlineExceeded` from an earlier rollout; Argo CD or Flux not synced to the promoted commit yet, also when Argo CD is `Degraded` or Flux `Ready=False` on another commit while no Deployment runs the version images (a fix-forward after a failed release); a Rollout or Canary target not on the version images yet, so a `Healthy`, `Degraded`, `Succeeded` or `Failed` phase left by the previous release; Argo Rollouts `Progressing` or `Paused`; Flagger `Progressing` | No | No |
-| Unhealthy | A Deployment whose rollout finished but whose pods became unavailable; Argo CD `Degraded` or Flux `Ready=False` once the promoted change is deployed; Argo Rollouts `Degraded` on the promoted revision; target not found | Yes, once per check | Only during a bake window with `fail-on-alarm` |
-| Failed | Deployment `ProgressDeadlineExceeded` from this promotion's rollout; Flagger canary `Failed` on the promoted revision | Yes | Yes, at once |
+| Unhealthy | A Deployment whose rollout finished but whose pods became unavailable; Argo CD `Degraded` or Flux `Ready=False` once the promoted change is deployed; Argo Rollouts `Degraded` on the promoted revision; target not found | Yes, once per check | Only with `bake.policy: fail-on-alarm` (before the first healthy check too). Otherwise an Unhealthy check before the first healthy one only counts: `onHealthFailure` applies at `health.timeout`, or a `RollbackPolicy` acts on the count |
+| Failed | Deployment `ProgressDeadlineExceeded` from this promotion's rollout; Flagger canary `Failed` on the promoted revision; an Argo Rollouts Rollout aborted on the promoted revision (`argoRollouts`, or `argocd` when the Application reports it) | Yes | Yes, at once |
 
 ### Health timeout
 
@@ -359,7 +359,7 @@ A new image whose pods crash-loop is the common case. Kubernetes reports such a 
 
 ### Delegation failure
 
-A Flagger canary `Failed` on the promoted revision is a Failed result: `onHealthFailure` applies at once. An Argo Rollouts `Degraded` phase on the promoted revision is Unhealthy: each check counts, and `onHealthFailure` applies at the health timeout, or sooner under `bake.policy: fail-on-alarm`. A phase the previous release left (Flagger keeps it until its next analysis tick notices the change) is Waiting: it neither fails nor verifies the version. That includes a `Failed` of the previous release that lands after the health check started but before the GitOps tool applied the version: a Flagger `Failed` fails the step only when Flagger set it after kardinal first saw the target on the version images (`status.targetUpdatedAt`). If kardinal does not see the target updated before Flagger fails the version (the controller was down meanwhile), the step fails at `health.timeout` instead of at once. See [argoRollouts](health-adapters.md#adapter-argorollouts) and [flagger](health-adapters.md#adapter-flagger).
+A Flagger canary `Failed` on the promoted revision is a Failed result: `onHealthFailure` applies at once. An Argo Rollouts Rollout aborted on the promoted revision (`Degraded` with `status.abort`, also seen through an Argo CD Application) is a Failed result too: `onHealthFailure` applies at once. Another `Degraded` phase on the promoted revision is Unhealthy: each check counts, and `onHealthFailure` applies at the health timeout, or at the first such check under `bake.policy: fail-on-alarm`. A phase the previous release left (Flagger keeps it until its next analysis tick notices the change) is Waiting: it neither fails nor verifies the version. That includes a `Failed` of the previous release that lands after the health check started but before the GitOps tool applied the version: a Flagger `Failed` fails the step only when Flagger set it after kardinal first saw the target on the version images (`status.targetUpdatedAt`). If kardinal does not see the target updated before Flagger fails the version (the controller was down meanwhile), the step fails at `health.timeout` instead of at once. See [argoRollouts](health-adapters.md#adapter-argorollouts) and [flagger](health-adapters.md#adapter-flagger).
 
 In all cases, the Graph stops all downstream nodes automatically (Graph does not advance past a Failed node). Use `kardinal rollback` to roll back manually.
 

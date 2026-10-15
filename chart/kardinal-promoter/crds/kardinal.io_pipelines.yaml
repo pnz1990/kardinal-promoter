@@ -141,7 +141,8 @@ spec:
                             Policy controls what an unhealthy check during the bake window does.
                             "reset-on-alarm" (default): the window stops, status.bakeResets increments
                             and the step stays in HealthChecking.
-                            "fail-on-alarm": onHealthFailure applies at the first unhealthy check.
+                            "fail-on-alarm": onHealthFailure applies at the first unhealthy check,
+                            also one before the first healthy check.
                             A waiting check (the workload is changing, such as a canary paused at a
                             step) stops the window under either policy but is not an alarm. A
                             stopped window restarts at the next healthy check, and health.timeout

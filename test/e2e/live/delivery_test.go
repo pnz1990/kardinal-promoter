@@ -261,8 +261,9 @@ func TestRollouts_ConfigBundleWaitsForRollout(t *testing.T) {
 // a release whose pods never start. The Rollout is Healthy on V1 until Argo CD
 // applies the commit, which must not verify the Bundle (bug 1); the canary
 // then waits (Progressing) without counting failures, Argo Rollouts aborts it
-// at its progress deadline and the step counts the Degraded phase as
-// unhealthy, and fails at health.timeout. The stable pods stay on V1.
+// at its progress deadline, and the step fails at the first check that sees
+// the abort (status.abort), not at health.timeout (#2006). The stable pods
+// stay on V1.
 //
 // Covers HEALTH-ROLL-02, HEALTH-ROLL-04.
 func TestRollouts_BrokenReleaseNeverVerified(t *testing.T) {
@@ -281,13 +282,15 @@ func TestRollouts_BrokenReleaseNeverVerified(t *testing.T) {
 	e.WaitRollout(t, a.ns, rollout, 2*time.Minute, "aborted", func(r framework.Rollout) bool {
 		return r.Aborted && r.Phase == "Degraded"
 	})
-	ps = e.WaitStepMessageAll(t, a.ns, pipelineName, bundle, "prod", "HealthChecking", time.Minute,
-		"unhealthy via argoRollouts: Rollout phase: Degraded")
-	assert.Positive(t, ps.Status.ConsecutiveHealthFailures, "Degraded counts as a health failure")
-
-	ps = e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Failed", 3*time.Minute)
-	assert.Contains(t, ps.Status.Message, "health alarm via argoRollouts (onHealthFailure=none): health check timeout after 2m0s; "+
-		"last result: unhealthy via argoRollouts: Rollout phase: Degraded")
+	aborted := time.Now()
+	// An aborted Rollout will not roll forward by itself: the step fails at
+	// the first check that sees the abort, not at health.timeout (#2006).
+	ps = e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Failed", time.Minute)
+	assert.Contains(t, ps.Status.Message, "health alarm via argoRollouts (onHealthFailure=none): Rollout "+a.ns+"/"+rollout+
+		" aborted the update (status.abort): Rollout phase: Degraded")
+	assert.NotContains(t, ps.Status.Message, "health check timeout")
+	assert.Less(t, time.Since(aborted), time.Minute, "well before health.timeout (2m)")
+	assert.Positive(t, ps.Status.ConsecutiveHealthFailures, "the abort counts as a health failure")
 	e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
 	assert.Equal(t, fixtures.Image+":"+fixtures.V1, e.StableImage(t, a.ns, rollout), "the aborted Rollout serves V1")
 }
@@ -360,10 +363,12 @@ func TestRollouts_BakeWaitsThroughPause(t *testing.T) {
 // TestRollouts_BakeResetOnAlarmEnds checks bake.policy: reset-on-alarm on a
 // Rollout that breaks during the bake window and stays broken (bug 4). A
 // change outside kardinal (here a readiness probe that never passes) makes
-// Argo Rollouts abort to Degraded; the window stops, and the step fails at
-// health.timeout instead of waiting forever for a healthy check.
+// Argo Rollouts abort to Degraded. An aborted Rollout is final, so the step
+// fails at once instead of waiting forever for a healthy check (#2006; a
+// release that stays unhealthy without an abort ends at health.timeout,
+// TestBakeWaitingIsNotAnAlarm).
 //
-// Covers BAKE-05.
+// Covers BAKE-08.
 func TestRollouts_BakeResetOnAlarmEnds(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -383,12 +388,12 @@ func TestRollouts_BakeResetOnAlarmEnds(t *testing.T) {
 	e.WaitRollout(t, a.ns, rollout, 2*time.Minute, "aborted", func(r framework.Rollout) bool {
 		return r.Aborted && r.Phase == "Degraded"
 	})
-	e.WaitStepMessageAll(t, a.ns, pipelineName, bundle, "prod", "HealthChecking", time.Minute,
-		"(unhealthy via argoRollouts): Rollout phase: Degraded")
-
-	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Failed", 3*time.Minute)
-	assert.Contains(t, ps.Status.Message, "health alarm via argoRollouts (onHealthFailure=none): health check timeout after 2m0s; last result: bake: ")
-	assert.Contains(t, ps.Status.Message, "Rollout phase: Degraded")
+	// The abort is final: the step fails at once, under reset-on-alarm too,
+	// instead of waiting health.timeout for a healthy check (#2006).
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Failed", time.Minute)
+	assert.Contains(t, ps.Status.Message, "health alarm via argoRollouts (onHealthFailure=none): Rollout "+a.ns+"/"+rollout+
+		" aborted the update (status.abort): Rollout phase: Degraded")
+	assert.NotContains(t, ps.Status.Message, "health check timeout")
 	e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
 }
 

@@ -739,3 +739,53 @@ func TestFlaggerAdapter_ConditionMessage(t *testing.T) {
 		})
 	}
 }
+
+// TestArgoCDAdapter_AbortedRollout (#2006): an Application that is Degraded
+// because Argo Rollouts aborted one of its Rollouts is Terminal, as with the
+// argoRollouts adapter: the aborted revision will not roll forward by
+// itself, so onHealthFailure acts at once instead of at health.timeout.
+// Any other Degraded stays an ordinary unhealthy result.
+func TestArgoCDAdapter_AbortedRollout(t *testing.T) {
+	resource := func(group, kind, status, msg string) map[string]interface{} {
+		return map[string]interface{}{"group": group, "kind": kind, "name": "rust", "namespace": "dev",
+			"health": map[string]interface{}{"status": status, "message": msg}}
+	}
+	tests := []struct {
+		name      string
+		resources []interface{}
+		want      wantKind
+		reason    string
+	}{
+		{"Argo CD's Rollout health: aborted", []interface{}{resource("argoproj.io", "Rollout", "Degraded", "Rollout is aborted")},
+			isTerminal, "Rollout dev/rust aborted the update: Rollout is aborted"},
+		{"the Rollout's own message", []interface{}{resource("argoproj.io", "Rollout", "Degraded",
+			`RolloutAborted: Rollout aborted update to revision 32: Metric "m" assessed Failed`)},
+			isTerminal, "aborted update to revision 32"},
+		{"a Degraded Rollout that is not aborted", []interface{}{resource("argoproj.io", "Rollout", "Degraded", "ProgressDeadlineExceeded")},
+			isUnhealthy, "health=Degraded"},
+		{"another kind whose message says aborted", []interface{}{resource("apps", "Deployment", "Degraded", "rollout aborted")},
+			isUnhealthy, "health=Degraded"},
+		{"no resources", nil, isUnhealthy, "health=Degraded"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			status := map[string]interface{}{
+				"health": map[string]interface{}{"status": "Degraded"},
+				"sync":   map[string]interface{}{"status": "Synced"},
+			}
+			if tc.resources != nil {
+				status["resources"] = tc.resources
+			}
+			app := &unstructured.Unstructured{Object: map[string]interface{}{
+				"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+				"metadata": map[string]interface{}{"name": "rust-dev", "namespace": "argocd"},
+				"status":   status,
+			}}
+			got, err := health.NewArgoCDAdapter(dynfake.NewSimpleDynamicClient(runtime.NewScheme(), app)).
+				Check(context.Background(), health.CheckOptions{ArgoCD: health.ArgoCDConfig{Name: "rust-dev", Namespace: "argocd"}})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, kindOf(got), got.Reason)
+			assert.Contains(t, got.Reason, tc.reason)
+		})
+	}
+}

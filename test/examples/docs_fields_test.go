@@ -103,6 +103,7 @@ var fieldPath = regexp.MustCompile("`\\.?((?:spec|status)(?:\\.[A-Za-z0-9_]+|\\[
 // or of kardinal fields that were removed, which the pages name on purpose.
 // A path is listed with what it belongs to.
 var foreignFieldPaths = map[string]string{
+	"status.abort":                        "Argo Rollouts Rollout",
 	"status.audiences":                    "TokenReview",
 	"status.expirationTimestamp":          "TokenRequest",
 	"spec.chart.spec.version":             "Flux HelmRelease",
