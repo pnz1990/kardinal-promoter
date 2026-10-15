@@ -709,11 +709,12 @@ func TestReleaseUpgradeGuidePinned(t *testing.T) {
 	})
 }
 
-// TestReleaseDryRun: a workflow_dispatch of release.yml is a dry run. Its
-// version must be a prerelease that says dryrun, its notes are the
-// unreleased entries, and every step that publishes (registry login, image
-// and chart pushes, signatures, attestations, the SBOM, the SARIF upload, the
-// GitHub release) is skipped, while the builds run and are uploaded.
+// TestReleaseDryRun: a workflow_dispatch of release.yml is a dry run. The
+// release job, which publishes, runs only on a tag push. The dry-run job has
+// a read-only token, and only the steps of an allowlist: the release job's
+// build steps, unchanged but for pushing nothing, and an upload of what it
+// built. No checkout keeps the token. Its version must be a prerelease that
+// says dryrun (and a tag must not), and its notes are the unreleased entries.
 func TestReleaseDryRun(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "release.yml"))
 	require.NoError(t, err)
@@ -721,32 +722,63 @@ func TestReleaseDryRun(t *testing.T) {
 	assert.Contains(t, text, "workflow_dispatch:")
 	assert.Contains(t, text, "DRY_RUN: ${{ github.event_name == 'workflow_dispatch' }}")
 
-	release := releaseJobs(t)["release"]
-	publishes := func(s releaseStep) bool {
-		for _, u := range []string{"docker/login-action@", "actions/attest-build-provenance@", "sigstore/cosign-installer@",
-			"anchore/sbom-action@", "github/codeql-action/upload-sarif@", "softprops/action-gh-release@", "aquasecurity/trivy-action@"} {
-			if strings.HasPrefix(s.Uses, u) {
-				return true
+	var wf struct {
+		Jobs map[string]struct {
+			If          string            `json:"if"`
+			Permissions map[string]string `json:"permissions"`
+			Steps       []releaseStep     `json:"steps"`
+		} `json:"jobs"`
+	}
+	require.NoError(t, yaml.Unmarshal(data, &wf))
+	assert.Equal(t, "github.event_name == 'push'", wf.Jobs["release"].If, "only a tag publishes")
+	dry := wf.Jobs["dry-run"]
+	assert.Equal(t, "github.event_name == 'workflow_dispatch'", dry.If)
+	assert.Equal(t, map[string]string{"contents": "read"}, dry.Permissions, "a dry run's token can write nothing")
+
+	for job, j := range wf.Jobs {
+		for _, s := range j.Steps {
+			if strings.HasPrefix(s.Uses, "actions/checkout@") {
+				assert.Equal(t, false, s.With["persist-credentials"], "%s: no checkout keeps the token", job)
 			}
 		}
-		return strings.Contains(s.Run, "helm push") || strings.Contains(s.Run, "cosign ")
 	}
-	gated := 0
-	for _, s := range release.Steps {
-		cond := fmt.Sprint(s.If)
-		switch {
-		case strings.HasPrefix(s.Uses, "docker/build-push-action@"):
-			assert.Equal(t, "${{ env.DRY_RUN != 'true' }}", s.With["push"], "%s pushes only for a real release", s.Name)
-		case publishes(s):
-			assert.Contains(t, cond, "env.DRY_RUN != 'true'", "%s publishes: a dry run skips it", s.Name)
-			gated++
-		case s.Name == "Upload what the dry run built":
-			assert.Equal(t, "env.DRY_RUN == 'true'", cond)
-		default:
-			assert.NotContains(t, cond, "DRY_RUN", "%s builds or checks: a dry run runs it too", s.Name)
+
+	byName := map[string]releaseStep{}
+	for _, s := range wf.Jobs["release"].Steps {
+		byName[s.Name] = s
+	}
+	allowedUses := []string{"actions/checkout@", "actions/setup-go@", "docker/setup-buildx-action@", "docker/build-push-action@", "actions/download-artifact@", "actions/upload-artifact@"}
+	publish := regexp.MustCompile(`\b(docker|helm|git|oras|crane) push\b|gh release|git tag|cosign|gh api -X (POST|PUT|PATCH|DELETE)`)
+	built := 0
+	for _, s := range dry.Steps {
+		if s.Uses != "" {
+			ok := false
+			for _, u := range allowedUses {
+				ok = ok || strings.HasPrefix(s.Uses, u)
+			}
+			assert.True(t, ok, "dry run step %q uses %s, which is not on the dry run's allowlist", s.Name, s.Uses)
+		}
+		assert.NotRegexp(t, publish, s.Run, "dry run step %q publishes", s.Name)
+		// A build step is the release job's step, as the tag runs it.
+		name := s.Name
+		if strings.HasPrefix(s.Uses, "docker/build-push-action@") {
+			assert.Equal(t, false, s.With["push"], "%s pushes nothing", s.Name)
+			name = strings.Replace(s.Name, "Build ", "Build and push ", 1)
+		}
+		if rel, ok := byName[name]; ok && name != "" {
+			built++
+			assert.Equal(t, rel.Run, s.Run, "%s: the dry run runs the release job's script", s.Name)
+			for k, v := range rel.With {
+				if k != "push" {
+					assert.Equal(t, v, s.With[k], "%s: with.%s as in the release job", s.Name, k)
+				}
+			}
+		} else if s.Name != "" && s.Name != "Upload what the dry run built" {
+			t.Errorf("dry run step %q is neither a release job step nor the upload", s.Name)
 		}
 	}
-	assert.GreaterOrEqual(t, gated, 9, "the publishing steps")
+	assert.Equal(t, 8, built, "the binaries, both images, the chart and the release body, as the release job builds them")
+
 	for _, s := range releaseJobs(t)["preflight"].Steps {
 		if s.Name == "No unreleased changelog fragments" || s.Name == "Check that the tagged commit is on main" {
 			assert.Equal(t, "env.DRY_RUN != 'true'", fmt.Sprint(s.If), "%s: a dry run builds a branch with fragments", s.Name)
@@ -754,6 +786,9 @@ func TestReleaseDryRun(t *testing.T) {
 	}
 
 	script := preflightScript(t, "Set version and release channel from tag")
+	out, _, err := runReleaseStep(t, repoRoot(t), script, "GITHUB_REF_NAME=v0.12.0-dryrun.1")
+	require.Error(t, err, "a pushed tag that says dryrun")
+	assert.Contains(t, out, "a dry run is a dispatch of this workflow, never a tag")
 	for _, tt := range []struct {
 		version string
 		wantErr bool
@@ -779,7 +814,7 @@ func TestReleaseDryRun(t *testing.T) {
 		"### Fixed\n\n- **Old style** — x\n\n## [v0.11.0] — 2026-10-12\n\n- old\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "docs", "changelog.d", "12-x.md"),
 		[]byte("---\nsection: Added\n---\n\n- **Fragment entry** (#12) — y\n"), 0o600))
-	out, _, err := runReleaseStep(t, dir, preflightScript(t, "Release notes from docs/changelog.md"), "VERSION=v0.12.0-dryrun.1", "DRY_RUN=true")
+	out, _, err = runReleaseStep(t, dir, preflightScript(t, "Release notes from docs/changelog.md"), "VERSION=v0.12.0-dryrun.1", "DRY_RUN=true")
 	require.NoError(t, err, out)
 	notes, err := os.ReadFile(filepath.Join(dir, "release-notes", "notes.md"))
 	require.NoError(t, err)
