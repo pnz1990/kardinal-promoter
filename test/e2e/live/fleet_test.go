@@ -214,14 +214,24 @@ func TestGraph_FleetFiftyApplicationsFiveAtATime(t *testing.T) {
 	assert.NotContains(t, steps, "prod-"+other, "an Application the selector does not match is not a target")
 	assert.Equal(t, maxConcurrent, maxOverlap(t, steps), "at most, and up to, maxConcurrent targets in flight")
 	var last time.Time
-	var prev *v1alpha1.PromotionStep
-	for _, name := range names {
+	for i, name := range names {
 		s := steps["prod-"+name]
 		assert.Equal(t, "Verified", s.Status.State, s.Name)
-		if prev != nil {
-			assert.False(t, s.CreationTimestamp.Before(&prev.CreationTimestamp), "%s starts after %s", s.Name, prev.Name)
+		// A target never starts before an earlier one, except within one
+		// admission: the targets one Graph reconcile admits are created
+		// together, and kro applies a collection's items in parallel
+		// (kro v0.10.0-rc.0 pkg/graphengine/executor/simple.go:941-952), so
+		// their order is arbitrary and, at creationTimestamp's one-second
+		// resolution, may cross a second (#1920). One admission holds at
+		// most maxConcurrent targets and takes well under a second.
+		for _, earlier := range names[max(0, i-maxConcurrent+1):i] {
+			e := steps["prod-"+earlier]
+			assert.False(t, s.CreationTimestamp.Add(time.Second).Before(e.CreationTimestamp.Time), "%s starts after %s", s.Name, e.Name)
 		}
-		prev = &s
+		for _, earlier := range names[:max(0, i-maxConcurrent+1)] {
+			e := steps["prod-"+earlier]
+			assert.False(t, s.CreationTimestamp.Before(&e.CreationTimestamp), "%s starts after %s", s.Name, e.Name)
+		}
 		last = maxTime(last, verifiedAt(t, &s))
 		assert.Contains(t, e.ReadFile(t, repo, repo.Branch, "clusters/"+name+"/kustomization.yaml"), fixtures.PauseV2, name)
 	}
