@@ -281,9 +281,38 @@ jobs:
           echo "${#packages[@]} packages: ${packages[*]}"
           go test -race -count=1 -timeout 120s "${packages[@]}"
 
+  count3:
+    # #1889: each run of a test starts from clean state. These packages
+    # held state across runs (package-level metrics, a timeout one test
+    # changed); three runs in one process fail if one comes back. A job
+    # of its own, beside the shards, so it adds no time to the run.
+    name: go test -count=3 (clean state)
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.chart == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Restore the Go build cache
+        # Saved by the go-cache job on main; see there.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-build-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-build-${{ runner.os }}-
+      - name: go test -count=3
+        run: go test -count=3 -timeout 300s ./pkg/scm/ ./pkg/reconciler/promotionstep/ ./cmd/kardinal/cmd/
+
   build:
     name: build
-    needs: [changes, checks, test, docs-tests]
+    needs: [changes, checks, test, docs-tests, count3]
     # Runs when a needed job failed or was skipped too (and decides), not
     # when the run was cancelled.
     if: ${{ !cancelled() }}
@@ -295,10 +324,11 @@ jobs:
           GO: ${{ needs.changes.outputs.go == 'true' || needs.changes.outputs.chart == 'true' }}
           CHECKS: ${{ needs.checks.result }}
           TESTS: ${{ needs.test.result }}
+          COUNT3: ${{ needs.count3.result }}
           DOCS: ${{ needs.changes.outputs.docs == 'true' }}
           DOCS_TESTS: ${{ needs.docs-tests.result }}
         run: |
-          echo "changes: $CHANGES (Go jobs run: $GO), build checks: $CHECKS, go test shards: $TESTS"
+          echo "changes: $CHANGES (Go jobs run: $GO), build checks: $CHECKS, go test shards: $TESTS, go test -count=3: $COUNT3"
           if [ "$CHANGES" != success ]; then
             echo "::error::the changes job did not pass ($CHANGES): which checks to run is unknown"
             exit 1
@@ -312,8 +342,8 @@ jobs:
             echo "no Go, chart or workflow change: the build checks and the test shards did not need to run"
             exit 0
           fi
-          if [ "$CHECKS" != success ] || [ "$TESTS" != success ]; then
-            echo "::error::build checks ($CHECKS) and every go test shard ($TESTS) must pass"
+          if [ "$CHECKS" != success ] || [ "$TESTS" != success ] || [ "$COUNT3" != success ]; then
+            echo "::error::build checks ($CHECKS), every go test shard ($TESTS) and go test -count=3 ($COUNT3) must pass"
             exit 1
           fi
 
