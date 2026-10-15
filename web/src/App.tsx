@@ -1154,7 +1154,6 @@ export function App() {
 
                   {/* U3: the stage drawer of the environment in the route (#1701): a column
                       beside the page at lg and wider, a modal sheet narrower. */}
-                  {stageEnv && !activePipeline && <DrawerPlaceholder env={stageEnv} />}
                   {stageEnv && activePipeline && (
                     <ErrorBoundary fallbackMessage="Details unavailable">
                       <Suspense fallback={<DrawerPlaceholder env={stageEnv} />}>
@@ -1229,6 +1228,10 @@ export function App() {
               </Suspense>)}
             </TabPanel>
             </>
+            ) : stageEnv ? (
+              /* The pipeline has not arrived yet: the drawer's column is given up
+                 already, so the header does not move when it does (#1914). */
+              <DrawerPlaceholder env={stageEnv} />
             ) : null}
           </>
         )}
