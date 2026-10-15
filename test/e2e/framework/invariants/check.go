@@ -267,7 +267,7 @@ func stepCount(steps []v1alpha1.PromotionStep) map[string]int {
 	return out
 }
 
-// checkTerminal: every Bundle is Verified, Failed or Superseded.
+// checkTerminal: every Bundle is Verified, Failed, Superseded or Rejected.
 func checkTerminal(st *state) Result {
 	res := Result{Name: "bundles-terminal"}
 	for _, b := range st.bundles {
@@ -382,6 +382,16 @@ func checkPhases(st *state) Result {
 				if s.Status.State == "Promoting" || s.Status.State == "HealthChecking" {
 					res.Violations = append(res.Violations, fmt.Sprintf("Bundle %s is %s but its %s step is still %q",
 						b.Name, b.Status.Phase, env, s.Status.State))
+				}
+			}
+		case "Rejected":
+			// A rejection cancels every step that has not delivered its
+			// change; a merged step finishes its health check (docs/reject.md).
+			for env, s := range steps {
+				switch s.Status.State {
+				case "", "Pending", "Promoting", "WaitingForMerge", "Verifying":
+					res.Violations = append(res.Violations, fmt.Sprintf("Bundle %s is Rejected but its %s step is still %q",
+						b.Name, env, s.Status.State))
 				}
 			}
 		}
@@ -705,19 +715,42 @@ func checkAudit(ctx context.Context, e *framework.Env, o Options, st *state) Res
 		res.Violations = append(res.Violations, "list AuditEvents: "+err.Error())
 		return res
 	}
+	res.Violations = auditViolations(list.Items, st.steps)
+	res.Note = fmt.Sprintf("%d AuditEvents", len(list.Items))
+	return res
+}
+
+// approvalDecision is the approver and decision an Approval* AuditEvent's
+// message names ("<decision> by <user> <verb> on gate <gate> (<counted>)"),
+// or the whole message when it is not in that form.
+func approvalDecision(msg string) string {
+	f := strings.Fields(msg)
+	if len(f) >= 3 && f[1] == "by" {
+		return f[2] + " " + f[0]
+	}
+	return msg
+}
+
+// auditViolations checks events against steps: at most one event per
+// (Bundle, environment, action), GateEvaluated aside, and one Approval* event
+// per approver and decision; a Verified step has its PromotionSucceeded
+// event, a Failed one its PromotionFailed, RollbackStarted,
+// PromotionSuperseded or PromotionRejected event, and no other step has a
+// PromotionSucceeded one.
+func auditViolations(events []v1alpha1.AuditEvent, steps []v1alpha1.PromotionStep) []string {
+	var out []string
 	count := map[string]int{}
 	approvals := map[string]int{}
-	for _, a := range list.Items {
+	for _, a := range events {
 		k := a.Spec.BundleName + "/" + a.Spec.Environment + "/" + a.Spec.Action
 		count[k]++
 		if strings.HasPrefix(a.Spec.Action, "Approval") {
-			// One per approver decision: the message names the approver.
-			approvals[k+" "+a.Spec.Message]++
+			approvals[k+" "+approvalDecision(a.Spec.Message)]++
 		}
 	}
 	for k, n := range approvals {
 		if n > 1 {
-			res.Violations = append(res.Violations, fmt.Sprintf("%d AuditEvents %s", n, k))
+			out = append(out, fmt.Sprintf("%d AuditEvents %s", n, k))
 		}
 	}
 	for k, n := range count {
@@ -727,15 +760,15 @@ func checkAudit(ctx context.Context, e *framework.Env, o Options, st *state) Res
 		// A gate instance records a GateEvaluated event each time its
 		// result changes; a step records each Promotion and Rollback action once.
 		if n > 1 && !strings.HasSuffix(k, "/GateEvaluated") {
-			res.Violations = append(res.Violations, fmt.Sprintf("%d AuditEvents %s", n, k))
+			out = append(out, fmt.Sprintf("%d AuditEvents %s", n, k))
 		}
 	}
-	for _, s := range st.steps {
+	for _, s := range steps {
 		k := s.Spec.BundleName + "/" + s.Spec.Environment + "/"
 		switch s.Status.State {
 		case "Verified":
 			if count[k+"PromotionSucceeded"] == 0 {
-				res.Violations = append(res.Violations, fmt.Sprintf("step %s is Verified with no PromotionSucceeded AuditEvent", s.Name))
+				out = append(out, fmt.Sprintf("step %s is Verified with no PromotionSucceeded AuditEvent", s.Name))
 			}
 		case "Failed":
 			// A step of a superseded Bundle ends Failed with PromotionSuperseded;
@@ -745,16 +778,16 @@ func checkAudit(ctx context.Context, e *framework.Env, o Options, st *state) Res
 			}
 			// A step its Bundle's rejection cancelled records PromotionRejected.
 			if count[k+"PromotionFailed"] == 0 && count[k+"RollbackStarted"] == 0 && count[k+"PromotionSuperseded"] == 0 && count[k+"PromotionRejected"] == 0 {
-				res.Violations = append(res.Violations, fmt.Sprintf("step %s Failed with no PromotionFailed, PromotionSuperseded or PromotionRejected AuditEvent", s.Name))
+				out = append(out, fmt.Sprintf("step %s Failed with no PromotionFailed, PromotionSuperseded or PromotionRejected AuditEvent", s.Name))
 			}
 		default:
 			if count[k+"PromotionSucceeded"] > 0 {
-				res.Violations = append(res.Violations, fmt.Sprintf("step %s is %q but has a PromotionSucceeded AuditEvent", s.Name, s.Status.State))
+				out = append(out, fmt.Sprintf("step %s is %q but has a PromotionSucceeded AuditEvent", s.Name, s.Status.State))
 			}
 		}
 	}
-	res.Note = fmt.Sprintf("%d AuditEvents", len(list.Items))
-	return res
+	sort.Strings(out)
+	return out
 }
 
 // checkLogs: no data race, no panic (controller or kro), no unexpected

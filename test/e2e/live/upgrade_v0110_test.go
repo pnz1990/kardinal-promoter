@@ -193,7 +193,7 @@ func TestUpgradeV0110_Estate(t *testing.T) {
 		review = append(review, s.pipeline(t, s.review, u0110Name("review", i), dirs, u0110Envs("pr-review")))
 		approve = append(approve, s.pipeline(t, s.approve, u0110Name("approve", i), dirs, u0110Envs("")))
 		fleets = append(fleets, s.pipeline(t, s.fleet, u0110Name("fleet", i), []string{"test", "prod/eu", "prod/us", "prod/ap"},
-			[]v1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "prod", Bake: &v1alpha1.BakeConfig{Minutes: 1},
+			[]v1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "prod", Bake: &v1alpha1.BakeConfig{Minutes: 2},
 				Fleet: &v1alpha1.FleetSpec{MaxConcurrent: 1, Targets: []v1alpha1.FleetTarget{{Name: "eu"}, {Name: "us"}, {Name: "ap"}}}}}))
 	}
 	paused := s.pipeline(t, s.ops, "paused", dirs, u0110Envs(""))
@@ -259,9 +259,6 @@ func TestUpgradeV0110_Estate(t *testing.T) {
 	for _, p := range approve {
 		approvalB[p] = add(s.approve, p, 1)
 	}
-	for _, p := range fleets {
-		add(s.fleet, p, 1)
-	}
 	inFlight[s.ops.NS+"/"+newB] = superseded
 	inFlight[s.ops.NS+"/"+heldNext] = held
 	inFlight[s.ops.NS+"/"+pausedB] = paused
@@ -284,7 +281,12 @@ func TestUpgradeV0110_Estate(t *testing.T) {
 			e.WaitGateReady(t, s.approve.NS, approvalB[p], "prod", "two-approvers", false, "waiting for approvals: 1 of 2 (alice@example.com)", gateTimeout)
 		}
 	}
-	// The auto namespace last, so its bakes run through the upgrade.
+	// The fleet and the auto namespace last, so their bakes run through the
+	// upgrade: three targets one at a time with a two-minute bake each.
+	fleetB := map[string]string{}
+	for _, p := range fleets {
+		fleetB[p] = add(s.fleet, p, 1)
+	}
 	var autoSuperseded string
 	for i, p := range auto {
 		b := add(s.auto, p, 2)
@@ -306,7 +308,50 @@ func TestUpgradeV0110_Estate(t *testing.T) {
 		return false, fmt.Sprintf("%d steps, none HealthChecking", len(sl.Items))
 	})
 
+	// The upgrade starts only once every fleet version is part-way through
+	// its targets: one started, not every one Verified.
+	for _, p := range fleets {
+		b := fleetB[p]
+		framework.Eventually(t, promoteTimeout, "fleet version "+b+" part-way through its targets", func(ctx context.Context) (bool, string) {
+			started, verified := 0, 0
+			for _, target := range []string{"prod-eu", "prod-us", "prod-ap"} {
+				st, ok, err := e.Step(ctx, s.fleet.NS, p, b, target)
+				if err != nil {
+					return false, err.Error()
+				}
+				if ok {
+					started++
+					if st.Status.State == "Verified" {
+						verified++
+					}
+				}
+			}
+			return started > 0 && verified < 3, fmt.Sprintf("%d targets started, %d Verified", started, verified)
+		})
+	}
+
 	before := s.snapshot(t)
+	// Every version meant to be in flight is, at the snapshot, and every
+	// fleet has a prod target left.
+	for k := range inFlight {
+		if strings.HasSuffix(k, "/"+autoSuperseded) {
+			continue // its successor may have superseded it already
+		}
+		b, ok := before.bundles[k]
+		if assert.True(t, ok, "%s exists at the upgrade", k) {
+			assert.NotContains(t, []string{"Verified", "Failed", "Superseded", "Rejected"}, b.Status.Phase,
+				"%s is in flight at the upgrade", k)
+		}
+	}
+	for _, p := range fleets {
+		verified := 0
+		for _, st := range before.steps {
+			if st.Spec.BundleName == fleetB[p] && strings.HasPrefix(st.Spec.Environment, "prod-") && st.Status.State == "Verified" {
+				verified++
+			}
+		}
+		assert.Less(t, verified, 3, "fleet version %s has a prod target not Verified at the upgrade", fleetB[p])
+	}
 	bp, sp := before.phases()
 	t.Logf("before the upgrade: Bundles %v, steps %v, %d Graphs, %d PRs", bp, sp, len(before.graphs), len(before.prs))
 	for _, phase := range []string{"Verified", "Promoting", "Rejected", "Failed", "Superseded"} {
@@ -385,7 +430,8 @@ func TestUpgradeV0110_Estate(t *testing.T) {
 		if st, ok, err := e.Step(ctx, s.ops.NS, paused, pausedB, "test"); err != nil || (ok && st.Status.State != "" && st.Status.State != "Pending") {
 			return false, fmt.Sprintf("paused: %v %v", st, err)
 		}
-		if st, ok, err := e.Step(ctx, s.ops.NS, held, heldNext, "prod"); err != nil || (ok && st.Status.State == "Verified") {
+		// A held-back version gets no step in the held environment at all.
+		if st, ok, err := e.Step(ctx, s.ops.NS, held, heldNext, "prod"); err != nil || ok {
 			return false, fmt.Sprintf("held prod: %v %v", st, err)
 		}
 		return true, ""

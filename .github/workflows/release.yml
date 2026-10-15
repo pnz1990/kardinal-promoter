@@ -127,6 +127,19 @@ jobs:
           echo "notes=release-notes/notes.md" >> "$GITHUB_OUTPUT"
           echo "$NOTES"
 
+      # docs/upgrade.md describes the upgrade to the next release before it
+      # exists with a --version <version> placeholder and a "not released
+      # yet" note (the upgrade suites fill the placeholder with the checkout's
+      # chart). A final release replaces both, and updates the suite's
+      # guideChart constant, before it is tagged.
+      - name: The upgrade guide names a released version
+        if: steps.version.outputs.prerelease == 'false'
+        run: |
+          if grep -n -e '--version <version>' -e 'is not released yet' docs/upgrade.md; then
+            echo "::error::docs/upgrade.md still has a --version <version> placeholder or a \"not released yet\" note (above). Replace them with ${GITHUB_REF_NAME#v} before tagging."
+            exit 1
+          fi
+
       - name: Upload the release notes
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:

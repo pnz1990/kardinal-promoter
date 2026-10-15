@@ -373,3 +373,64 @@ func TestSettleGoroutines(t *testing.T) {
 	d, _ = run()
 	assert.Zero(t, d, "no reading: no wait")
 }
+
+func TestCheckPhasesRejected(t *testing.T) {
+	st := testState(
+		[]v1alpha1.Bundle{bundle("r", "Rejected"), bundle("ok", "Rejected")},
+		[]v1alpha1.PromotionStep{
+			step("r", "test", "Verified", ""), step("r", "uat", "WaitingForMerge", ""), step("r", "prod", "Promoting", ""),
+			step("r", "eu", "", ""),
+			// A merged step finishes its health check; a cancelled one is Failed.
+			step("ok", "test", "Verified", ""), step("ok", "uat", "HealthChecking", ""), step("ok", "prod", "Failed", "rejected"),
+		})
+	assert.Empty(t, checkTerminal(st).Violations, "a Rejected Bundle is terminal")
+	ph := checkPhases(st)
+	require.Len(t, ph.Violations, 3, "%v", ph.Violations)
+	for _, v := range ph.Violations {
+		assert.Contains(t, v, "Bundle r is Rejected but its")
+	}
+}
+
+func TestAuditViolations(t *testing.T) {
+	ev := func(bundle, env, action, msg string) v1alpha1.AuditEvent {
+		return v1alpha1.AuditEvent{Spec: v1alpha1.AuditEventSpec{BundleName: bundle, Environment: env, Action: action, Message: msg}}
+	}
+	approve := func(user, counted string) v1alpha1.AuditEvent {
+		return ev("b", "prod", "ApprovalRecorded", "approve by "+user+" recorded on gate g-b-prod ("+counted+")")
+	}
+	for _, tc := range []struct {
+		name   string
+		events []v1alpha1.AuditEvent
+		steps  []v1alpha1.PromotionStep
+		want   []string
+	}{
+		{name: "one approval event per approver", events: []v1alpha1.AuditEvent{approve("alice", "counted"), approve("bob", "counted")}},
+		{name: "the same approver twice, whatever the counted note",
+			events: []v1alpha1.AuditEvent{approve("alice", "counted"), approve("alice", "not counted: not allowed")},
+			want:   []string{"2 AuditEvents b/prod/ApprovalRecorded alice approve"}},
+		{name: "a decision and its revoke",
+			events: []v1alpha1.AuditEvent{approve("alice", "counted"), ev("b", "prod", "ApprovalRevoked", "approve by alice revoked on gate g (counted)")}},
+		{name: "a reject and an approve by one approver",
+			events: []v1alpha1.AuditEvent{approve("bob", "counted"), ev("b", "prod", "ApprovalRecorded", "reject by bob recorded on gate g (counted)")}},
+		{name: "a step cancelled by a rejection",
+			events: []v1alpha1.AuditEvent{ev("b", "prod", "PromotionStarted", ""), ev("b", "prod", "PromotionRejected", "")},
+			steps:  []v1alpha1.PromotionStep{step("b", "prod", "Failed", "bundle b was rejected — promotion cancelled")}},
+		{name: "a Failed step with no failure event",
+			events: []v1alpha1.AuditEvent{ev("b", "prod", "PromotionStarted", "")},
+			steps:  []v1alpha1.PromotionStep{step("b", "prod", "Failed", "boom")},
+			want:   []string{"step b-prod Failed with no PromotionFailed, PromotionSuperseded or PromotionRejected AuditEvent"}},
+		{name: "a step action twice",
+			events: []v1alpha1.AuditEvent{ev("b", "prod", "PromotionSucceeded", ""), ev("b", "prod", "PromotionSucceeded", "")},
+			steps:  []v1alpha1.PromotionStep{step("b", "prod", "Verified", "")},
+			want:   []string{"2 AuditEvents b/prod/PromotionSucceeded"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := auditViolations(tc.events, tc.steps)
+			if len(tc.want) == 0 {
+				assert.Empty(t, got)
+				return
+			}
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}

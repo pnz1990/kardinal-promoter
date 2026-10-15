@@ -28,6 +28,7 @@ type releaseStep struct {
 	Name string            `json:"name"`
 	Uses string            `json:"uses"`
 	Run  string            `json:"run"`
+	If   any               `json:"if"`
 	With map[string]any    `json:"with"`
 	Env  map[string]string `json:"env"`
 }
@@ -512,7 +513,7 @@ func TestReleaseWorkflowWiring(t *testing.T) {
 		for _, s := range preflight.Steps {
 			names = append(names, s.Name)
 		}
-		require.Len(t, names, 5)
+		require.Len(t, names, 6)
 		assert.True(t, strings.HasPrefix(preflight.Steps[0].Uses, "actions/checkout@"))
 		assert.Equal(t, "Check that the tagged commit is on main", names[1])
 		for name, job := range jobs {
@@ -649,5 +650,41 @@ func TestReleaseBody(t *testing.T) {
 		out, _, _, err := run(t, &empty)
 		require.Error(t, err)
 		assert.Contains(t, out, "missing or empty")
+	})
+}
+
+// TestReleaseUpgradeGuidePinned runs the preflight step that refuses a final
+// release while docs/upgrade.md still describes the upgrade to it with the
+// --version <version> placeholder or the "not released yet" note, and checks
+// that a prerelease skips it.
+func TestReleaseUpgradeGuidePinned(t *testing.T) {
+	var step releaseStep
+	for _, s := range releaseJobs(t)["preflight"].Steps {
+		if strings.HasPrefix(s.Name, "The upgrade guide names a released version") {
+			step = s
+		}
+	}
+	require.NotEmpty(t, step.Run, "release.yml preflight has the upgrade-guide step")
+	assert.Equal(t, "steps.version.outputs.prerelease == 'false'", strings.TrimSpace(fmt.Sprint(step.If)))
+	run := func(t *testing.T, guide string) (string, error) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "docs"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "docs", "upgrade.md"), []byte(guide), 0o600))
+		out, _, err := runReleaseStep(t, dir, step.Run, "GITHUB_REF_NAME=v0.12.0")
+		return out, err
+	}
+	for name, guide := range map[string]string{
+		"placeholder": "## Upgrading from v0.11.0\n\n```bash\nhelm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version>\n```\n",
+		"note":        "## Upgrading from v0.11.0\n\n!!! note \"v0.12.0 is not released yet\"\n",
+	} {
+		t.Run(name+" fails", func(t *testing.T) {
+			out, err := run(t, guide)
+			require.Error(t, err, out)
+			assert.Contains(t, out, "Replace them with 0.12.0 before tagging")
+		})
+	}
+	t.Run("a pinned guide passes", func(t *testing.T) {
+		out, err := run(t, "## Upgrading from v0.11.0\n\n```bash\nhelm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0\n```\n")
+		require.NoError(t, err, out)
 	})
 }
