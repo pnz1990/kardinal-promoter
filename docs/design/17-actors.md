@@ -666,7 +666,7 @@ context is not needed: the stamp is data on the Bundle.
 
 | # | Question | Options | Choice and why |
 |---|----------|---------|----------------|
-| A1 | How admission checks a claimed actor | (a) index params, (b) managedFields, (c) principal only + derive into status, (c') + selector over AgentIdentities, (d) RBAC `authorizer`, (e) MutatingAdmissionPolicy | **(a)**, 5.3: the only option that verifies kind, agent, sponsor and scope at write time on 1.30, with group subjects. (e) later. |
+| A1 | How admission checks a claimed actor | (a) index params, (b) managedFields, (c) principal only + derive into status, (c') + selector over AgentIdentities, (d) RBAC `authorizer`, (e) MutatingAdmissionPolicy | **(a)**, 5.3: the only option that verifies kind, agent, sponsor and scope at write time on every supported minor, with group subjects. (e) later. |
 | A2 | Who builds the index | Go reconciler on its own status; kro Graph; chart-rendered static list | **Go reconciler**, 5.4: kro CEL fails the whole index on one conflict, and kro's single queue would delay revocation (G13). Ledger G8 row. |
 | A3 | Where the stamp lives | annotations; one JSON annotation; typed `actor` field | **Typed field**: the policy CEL cannot parse JSON (5.1), override entries cannot carry annotations, and the schema enforces enum and lengths. |
 | A4 | Sponsor: user or group | user; group; either | **User, with an optional informational team.** The one-party rule needs a decidable comparison. An approver's username is verified, but their full group list is not recorded on the Approval. |
