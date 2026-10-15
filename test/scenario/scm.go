@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // SCM kinds the scenario suite serves. Each is kardinal's real provider
@@ -314,8 +315,27 @@ func (s *SCMServer) Statuses(sha string) map[string]string {
 
 const repoRe = `([^/]+/[^/]+)`
 
+// githubMaxBody is the longest pull request body GitHub takes, in
+// characters.
+const githubMaxBody = 65536
+
+// bodyTooLong answers GitHub's 422 for a pull request body over
+// githubMaxBody characters.
+func bodyTooLong(w http.ResponseWriter, b map[string]interface{}) bool {
+	if utf8.RuneCountInString(str(b, "body")) <= githubMaxBody {
+		return false
+	}
+	writeJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{"message": "Validation Failed",
+		"errors": []map[string]string{{"resource": "PullRequest", "code": "custom", "field": "body",
+			"message": "body is too long (maximum is 65536 characters)"}}})
+	return true
+}
+
 var githubRoutes = []route{
 	{"POST", regexp.MustCompile(`^/repos/` + repoRe + `/pulls$`), func(s *SCMServer, w http.ResponseWriter, m []string, b map[string]interface{}, _ url.Values) {
+		if bodyTooLong(w, b) {
+			return
+		}
 		p, created := s.openPR(m[1], str(b, "title"), str(b, "body"), str(b, "head"), str(b, "base"))
 		if !created {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "Validation Failed: A pull request already exists for " + p.Head})
@@ -343,6 +363,9 @@ var githubRoutes = []route{
 		}
 	}},
 	{"PATCH", regexp.MustCompile(`^/repos/` + repoRe + `/pulls/(\d+)$`), func(s *SCMServer, w http.ResponseWriter, m []string, b map[string]interface{}, _ url.Values) {
+		if bodyTooLong(w, b) {
+			return
+		}
 		if p := s.prOr404(w, m[1], m[2]); p != nil {
 			if str(b, "state") == "closed" && p.State == "open" {
 				p.State = "closed"

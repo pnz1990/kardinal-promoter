@@ -31,6 +31,7 @@ type ChangeWindowSpec struct {
 	End metav1.Time `json:"end,omitempty"`
 
 	// Reason is a human-readable explanation for this window.
+	// +kubebuilder:validation:MaxLength=1024
 	// +optional
 	Reason string `json:"reason,omitempty"`
 

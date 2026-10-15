@@ -252,10 +252,12 @@ spec:
                   author:
                     description: Author is the committer or triggering actor for this
                       build.
+                    maxLength: 256
                     type: string
                   ciRunURL:
                     description: CIRunURL is the URL of the CI run that built this
                       Bundle.
+                    maxLength: 2048
                     type: string
                   commitSHA:
                     description: |-

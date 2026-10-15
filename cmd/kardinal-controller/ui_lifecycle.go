@@ -72,6 +72,10 @@ func (s *uiAPIServer) lifecycleStatus(action string, err error) (int, string) {
 		return http.StatusConflict, err.Error()
 	case apierrors.IsForbidden(err), errors.Is(err, lifecycle.ErrForbidden):
 		return http.StatusForbidden, err.Error()
+	case apierrors.IsInvalid(err):
+		// The API server refused a field the caller sent (a comment over
+		// its CRD's maxLength): its message names the field.
+		return http.StatusBadRequest, err.Error()
 	default:
 		s.log.Error().Err(err).Msg("ui: " + action)
 		return http.StatusInternalServerError, "failed to " + action
