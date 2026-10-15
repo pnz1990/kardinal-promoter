@@ -26,7 +26,7 @@ spec:
 
 | `agents` | An agent's version in that environment |
 |---|---|
-| `auto` | Promotes under the environment's other gates |
+| `auto` or unset | No limit of its own: the AgentIdentity's `autonomy` decides, and its default, `approve`, still waits for a person |
 | `approve` | Waits for an approval from a person who is not of the agent's party (not its sponsor) |
 | `deny` | Never enters it |
 

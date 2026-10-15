@@ -129,8 +129,9 @@ treated as people.
 `scope.pipelines` applies to the versions an agent creates and the gate overrides it records
 (a gate instance names its Pipeline). An Approval is checked against `scope.namespaces` and
 `scope.environments` only: it names a Bundle, not a Pipeline, so give an agent that approves a
-namespace of its own Pipelines. `autonomy` is recorded and shown; gates that act on it are planned
-([roadmap](roadmap.md)).
+namespace of its own Pipelines. `autonomy` (default `approve`) is the most the agent may do
+alone: with `approve`, each of its versions waits in every environment until a person approves it
+([Autonomy per environment](agentic/policy.md#autonomy-per-environment)).
 
 Registering an agent decides how kardinal *records* it. What it may *do* is still decided by
 RBAC: give its ServiceAccount the chart's roles as for anyone else
