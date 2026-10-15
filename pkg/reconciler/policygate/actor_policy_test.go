@@ -6,6 +6,7 @@ package policygate_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -242,6 +243,50 @@ func TestAgentOverrideNotHonoured(t *testing.T) {
 	person.Spec.Overrides[0].Actor = &kardinalv1alpha1.Actor{Kind: "human", Principal: "bob"}
 	person.Spec.Overrides[0].CreatedBy = "bob"
 	assert.True(t, evalGate(t, person, makeBundle("app-v1", "default")).Status.Ready, "a person's override opens it")
+}
+
+// TestAgentAutoGate: the kardinal-agents-auto gate (pkg/graph/agents.go,
+// pinned by TestBuilder_AgentGates) on a registered agent's version. It
+// passes at autonomy auto; at approve (the AgentIdentity default) it waits
+// for a person and says so, not that the agent is unregistered: spec.message
+// explains a false expression only (#2017, found as TestCLI_MCP's test
+// version held in test with "not registered" on a registered agent).
+// Suspended, deny and unregistered agents fail the expression and lead with
+// the message.
+func TestAgentAutoGate(t *testing.T) {
+	const message = "the version's agent is not registered, suspended, or its AgentIdentity autonomy is deny"
+	cases := []struct {
+		name         string
+		registry     []client.Object
+		wantReady    bool
+		wantPrefix   string
+		wantRequired bool
+	}{
+		{"auto passes", registry("auto", false, false), true, "actor.kind != 'agent'", false},
+		{"approve waits for a person", registry("approve", false, false), false, "waiting for approvals: 0 of 1", true},
+		{"suspended", registry("auto", true, false), false, message + " (", false},
+		{"deny", registry("deny", false, false), false, message + " (", false},
+		{"not registered", nil, false, message + " (", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gate := makeGateInstance("kardinal-agents-auto-default-test--app-v1", "default", "app-v1",
+				"actor.kind != 'agent' || (agent.registered && !agent.suspended && agent.autonomy != 'deny')", "5m")
+			gate.Spec.Message = message
+			gate.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true,
+				RequiredWhen: "actor.kind == 'agent' && agent.autonomy == 'approve'"}
+			b := makeBundle("app-v1", "default")
+			b.Spec.Actor = fixerStamp()
+			got := evalGate(t, gate, b, tc.registry...)
+			assert.Equal(t, tc.wantReady, got.Status.Ready, got.Status.Reason)
+			assert.True(t, strings.HasPrefix(got.Status.Reason, tc.wantPrefix), got.Status.Reason)
+			if !strings.HasPrefix(tc.wantPrefix, message) {
+				assert.NotContains(t, got.Status.Reason, message, "the message explains a false expression only")
+			}
+			require.NotNil(t, got.Status.ApprovalRequired)
+			assert.Equal(t, tc.wantRequired, *got.Status.ApprovalRequired)
+		})
+	}
 }
 
 func ptr(b bool) *bool { return &b }
