@@ -231,20 +231,29 @@ func TestGate_VerifyRetryAndSuspend(t *testing.T) {
 	require.NoError(t, e.Client.Update(ctx, &id))
 	next := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V1)
 	e.WaitStepState(t, a.ns, pipelineName, next, "uat", "Verified", promoteTimeout)
-	framework.Eventually(t, agentRunTimeout, "the suspended agent's AgentRun is refused", func(ctx context.Context) (bool, string) {
+	// Its attempt 1 is refused, and so is the retry the Graph admits after
+	// an attempt that ended without a verdict.
+	framework.Eventually(t, agentRunTimeout, "the suspended agent's AgentRuns are refused", func(ctx context.Context) (bool, string) {
 		runs, err := agentRuns(ctx, e, a.ns, next)
-		if err != nil || len(runs) != 1 {
+		if err != nil || len(runs) == 0 {
 			return false, fmt.Sprintf("%d AgentRuns (%v)", len(runs), err)
 		}
-		r := runs[0]
-		return r.Status.Phase == v1alpha1.AgentRunFailed &&
-			meta.IsStatusConditionFalse(r.Status.Conditions, v1alpha1.AgentRunConditionBounded) &&
-			strings.Contains(r.Status.Message, "is suspended"), r.Status.Phase + ": " + r.Status.Message
+		var states []string
+		ok := true
+		for _, r := range runs {
+			states = append(states, r.Name+": "+r.Status.Phase+": "+r.Status.Message)
+			ok = ok && r.Status.Phase == v1alpha1.AgentRunFailed &&
+				meta.IsStatusConditionFalse(r.Status.Conditions, v1alpha1.AgentRunConditionBounded) &&
+				strings.Contains(r.Status.Message, "is suspended")
+		}
+		return ok, strings.Join(states, "; ")
 	})
 	nextRuns, err := agentRuns(ctx, e, a.ns, next)
 	require.NoError(t, err)
-	_, err = e.Kube.BatchV1().Jobs(a.ns).Get(ctx, nextRuns[0].Name, metav1.GetOptions{})
-	assert.True(t, apierrors.IsNotFound(err), "no Job for a suspended agent: %v", err)
+	for _, r := range nextRuns {
+		_, err = e.Kube.BatchV1().Jobs(a.ns).Get(ctx, r.Name, metav1.GetOptions{})
+		assert.True(t, apierrors.IsNotFound(err), "no Job for a suspended agent: %v", err)
+	}
 }
 
 // TestGate_VerifyOnePartyUIDTimeout: the version is created by alice. The
