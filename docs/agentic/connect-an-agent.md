@@ -34,6 +34,7 @@ Remote MCP (a server in the controller, with OAuth) is not part of kardinal.
 | `gates` | The PolicyGate templates, or those of a pipeline | `kardinal policy list` |
 | `simulate` | Pre-flight: would a version be allowed into an environment now, and what would let it in | `kardinal policy simulate` |
 | `verdicts` | The verdicts on a version, and whether a verify gate counted each | `kardinal verify list` |
+| `freezes` | The freezes: what each holds, where, until when, who made it and why | `kardinal freeze` |
 | `ship` (write) | Create a version from images | `kardinal ship -o json` |
 | `promote` (write) | Promote what is Verified upstream into an environment | `kardinal promote -o json` |
 | `rollback` (write) | Roll an environment back, optionally holding it there | `kardinal rollback -o json` |
@@ -41,6 +42,7 @@ Remote MCP (a server in the controller, with OAuth) is not part of kardinal.
 | `reject` (write) | Reject a version for good, with a reason | `kardinal reject` |
 | `approve` (write) | Approve (or reject) the version waiting at an approval gate; the version is required | `kardinal approve --version` |
 | `verify` (write) | Record a verdict (pass, fail, inconclusive) for a check on the version that runs in an environment; the version is required | `kardinal verify --version` |
+| `freeze` (write) | Freeze agents, or stop the line for everyone, in every namespace or one, with a reason | `kardinal freeze --agents \| --everyone` |
 
 The write tools ask for no confirmation: the agent's call is the confirmation. Start
 `kardinal mcp --allow-write` only with a kubeconfig whose RBAC is what you want the agent to do.
@@ -79,6 +81,14 @@ the client says about itself goes in the stamp's asserted fields, never trusted:
 `kardinal-mcp/<version> (<agent>/<version>)`, with the name and version the agent gave when it
 connected, unless `KARDINAL_ACTOR_CLIENT` is set; the model and session are
 `KARDINAL_ACTOR_MODEL` and `KARDINAL_ACTOR_SESSION`, which you can set in the server's `env`.
+
+### Freezes
+
+An agent can stop promotions: the `freeze` tool holds agents' versions (`holds: agents`) or every
+version (`holds: everyone`), in every namespace or one, with a reason every held step shows. It
+cannot undo one: there is no tool that lifts a freeze or exempts a pipeline from it. A person
+does that, with `kardinal unfreeze` or `kardinal override --freeze`, and the chart's admission
+policy refuses a freeze exemption written by an agent anyway.
 
 ### Text kardinal did not write
 
@@ -181,7 +191,9 @@ only the first:
 `ship`, `promote` and `rollback` all create a Bundle, so `create` on Bundles grants all three. A
 rollback is a new version that goes through every gate on its way, like any other.
 `platform-policies` is the controller's default `--policy-namespaces`: `simulate` reads the org
-gates there, as the controller does.
+gates there, as the controller does; with `asAgent` it evaluates a version that agent created
+(`actor.*`, `agent.*` and the environment's `agents:` setting), which needs `get` on its
+AgentIdentity.
 
 <!-- agent-rbac: the live test TestCLI_MCP applies this block -->
 ```yaml
@@ -280,6 +292,7 @@ limits a caller who holds `pipelines/pause` or `pipelines/hold` to `spec.paused`
 | `reject` | `bundles` `patch` |
 | `approve` | `approvals` `create`, `delete` |
 | `verify` | `verdicts` `create` |
+| `freeze` | `changewindows` `get`, `list`, `create`, `update`, `patch`: ChangeWindows are cluster-scoped, so this is a ClusterRole; `freezes` needs `get` and `list` on them |
 
 A gate that reads `changewindow.*` needs `get` and `list` on the cluster-scoped `changewindows`
 for `simulate` to evaluate it: that is a ClusterRole.

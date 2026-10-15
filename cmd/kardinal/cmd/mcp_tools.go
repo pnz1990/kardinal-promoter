@@ -33,6 +33,8 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 )
 
 // mcpTool is one tool of kardinal mcp: its name, whether it writes, and
@@ -307,6 +309,10 @@ func mcpTools() []mcpTool {
 			"The verdicts recorded on a version (the one that runs in an environment, or a named one): each "+
 				"verifier, check, result, summary, evidence and findings, and whether a verify gate counted it.",
 			false, false, mcpVerdicts),
+		newMCPTool("freezes", "List freezes",
+			"The freezes (agent freezes and stop-the-line): what each holds, where, whether it is active, until "+
+				"when, who made it and why, and how many exemptions people granted.",
+			false, false, mcpFreezes),
 
 		newMCPTool("ship", "Ship a version",
 			"Create a Bundle (a version) of a pipeline from images: it promotes through the environments under "+
@@ -340,6 +346,11 @@ func mcpTools() []mcpTool {
 				"recorded when another version runs there. A verify gate decides whether the verdict counts: "+
 				"an agent's only where the gate lists it in verify.allowedAgents, never on its own party's work.",
 			true, false, mcpVerify),
+		newMCPTool("freeze", "Freeze agents, or stop the line",
+			"Hold promotions until the freeze is lifted: holds agents (the versions agents created) or everyone "+
+				"(stop-the-line), in every namespace or one. A person lifts it (kardinal unfreeze) or grants an "+
+				"exemption (kardinal override --freeze); an agent can do neither here.",
+			true, false, mcpFreeze),
 	}
 }
 
@@ -546,10 +557,11 @@ type mcpSimulateIn struct {
 	Time             string   `json:"time,omitempty" jsonschema:"UTC time to evaluate at: 'Saturday 3pm', 'Tuesday 10:00' or RFC 3339; default now"`
 	SoakMinutes      *int64   `json:"soakMinutes,omitempty" jsonschema:"Soak time upstream, in minutes; with a version, instead of its own"`
 	PolicyNamespaces []string `json:"policyNamespaces,omitempty" jsonschema:"The controller's --policy-namespaces (default: platform-policies)"`
+	AsAgent          string   `json:"asAgent,omitempty" jsonschema:"Simulate a version this agent (its AgentIdentity name) created: actor.*, agent.* and the environment's agents setting"`
 }
 
 func (in mcpSimulateIn) check() error {
-	errs := []error{in.mcpPipelineTarget.check(), checkVersion("version", in.Version, false)}
+	errs := []error{in.mcpPipelineTarget.check(), checkVersion("version", in.Version, false), checkName("asAgent", in.AsAgent, false)}
 	for _, ns := range in.PolicyNamespaces {
 		if ns == "" || len(validation.IsDNS1123Label(ns)) > 0 {
 			errs = append(errs, argErr("policyNamespaces", ns, "namespace names"))
@@ -569,7 +581,7 @@ type mcpSimulateResult struct {
 func mcpSimulate(ctx context.Context, k *mcpServer, in mcpSimulateIn) (*mcp.CallToolResult, error) {
 	return k.direct(ctx, in.Namespace, 0, func(ctx context.Context, _ io.Writer, c sigs_client.Client, ns string) (any, error) {
 		opts := simulateOptions{Pipeline: in.Pipeline, Env: in.Environment, Version: in.Version, Time: in.Time,
-			PolicyNamespaces: in.PolicyNamespaces, Now: time.Now().UTC()}
+			PolicyNamespaces: in.PolicyNamespaces, AsAgent: in.AsAgent, Now: time.Now().UTC()}
 		if len(opts.PolicyNamespaces) == 0 {
 			opts.PolicyNamespaces = slices.Clone(defaultPolicyNamespaces)
 		}
@@ -918,5 +930,80 @@ func mcpVerify(ctx context.Context, k *mcpServer, in mcpVerifyIn) (*mcp.CallTool
 			return nil, err
 		}
 		return nil, verifyFn(ctx, w, c, ns, bundle, o, time.Now())
+	})
+}
+
+// ─── freezes ────────────────────────────────────────────────────────────────
+
+// mcpFreezeItem is one freeze as the freezes tool returns it.
+type mcpFreezeItem struct {
+	Name       string `json:"name"`
+	Holds      string `json:"holds"`
+	Active     bool   `json:"active"`
+	Since      string `json:"since,omitempty"`
+	Until      string `json:"until,omitempty"`
+	CreatedBy  string `json:"createdBy,omitempty"`
+	Exemptions int    `json:"exemptions"`
+	Reason     any    `json:"reason,omitempty"`
+}
+
+func mcpFreezes(ctx context.Context, k *mcpServer, _ struct{}) (*mcp.CallToolResult, error) {
+	return k.direct(ctx, "", 0, func(ctx context.Context, _ io.Writer, c sigs_client.Client, _ string) (any, error) {
+		freezes, err := lifecycle.ListFreezes(ctx, c)
+		if err != nil {
+			return nil, fmt.Errorf("freezes: %w", err)
+		}
+		out := make([]mcpFreezeItem, 0, len(freezes))
+		for _, cw := range freezes {
+			f := mcpFreezeItem{Name: cw.Name, Holds: changewindow.FreezeScope(cw.Spec.Freeze), Active: changewindow.FreezeActive(&cw),
+				Since: cw.Spec.Start.UTC().Format(time.RFC3339), Exemptions: len(cw.Status.Exemptions),
+				Reason: untrustedOr(cw.Spec.Reason)}
+			if cw.Spec.Freeze != nil {
+				f.CreatedBy = cw.Spec.Freeze.CreatedBy
+			}
+			if !cw.Spec.End.IsZero() {
+				f.Until = cw.Spec.End.UTC().Format(time.RFC3339)
+			}
+			out = append(out, f)
+		}
+		return out, nil
+	})
+}
+
+type mcpFreezeIn struct {
+	Holds     string `json:"holds" jsonschema:"agents (the versions agents created) or everyone (stop-the-line)"`
+	Namespace string `json:"namespace,omitempty" jsonschema:"Only this namespace; empty: every namespace"`
+	Reason    string `json:"reason" jsonschema:"Why: every held step shows it"`
+	For       string `json:"for,omitempty" jsonschema:"End the freeze after this long (30m, 4h, 2d); empty: until a person lifts it"`
+}
+
+func (in mcpFreezeIn) check() error {
+	errs := []error{checkNamespace(in.Namespace)}
+	switch in.Holds {
+	case v1alpha1.FreezeAgents, v1alpha1.FreezeEveryone:
+	default:
+		errs = append(errs, argErr("holds", in.Holds, "agents or everyone"))
+	}
+	if strings.TrimSpace(in.Reason) == "" {
+		errs = append(errs, fmt.Errorf("reason is required: every held step shows it"))
+	}
+	if len(in.Reason) > 1024 {
+		errs = append(errs, fmt.Errorf("reason is longer than 1024 bytes"))
+	}
+	if in.For != "" {
+		if _, err := parseDuration(in.For); err != nil {
+			errs = append(errs, argErr("for", in.For, "a duration such as 30m, 4h or 2d"))
+		}
+	}
+	return checkAll(errs...)
+}
+
+func mcpFreeze(ctx context.Context, k *mcpServer, in mcpFreezeIn) (*mcp.CallToolResult, error) {
+	var d time.Duration
+	if in.For != "" {
+		d, _ = parseDuration(in.For) // checked
+	}
+	return k.direct(ctx, "", 0, func(_ context.Context, w io.Writer, c sigs_client.Client, _ string) (any, error) {
+		return nil, freezeFn(w, c, in.Holds, in.Namespace, in.Reason, d, time.Now())
 	})
 }

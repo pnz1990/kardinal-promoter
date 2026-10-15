@@ -27,8 +27,10 @@ command whose code each runs:
     diff       kardinal diff <a> <b>: both versions' images and provenance
     explain    kardinal explain <pipeline> [<env>] -o json
     gates      kardinal policy list
-    simulate   kardinal policy simulate <pipeline> <env>: each gate's result,
-               and when a blocked gate would pass with the same inputs
+    simulate   kardinal policy simulate <pipeline> <env> [--as-agent ...]: each
+               gate's result, and when a blocked gate would pass with the
+               same inputs
+    freezes    kardinal freeze: the freezes, with their reasons
     verdicts   kardinal verify list <pipeline>: each verdict, and whether
                a verify gate counted it
   write (--allow-write):
@@ -39,6 +41,7 @@ command whose code each runs:
     reject     kardinal reject <version> --reason ...
     approve    kardinal approve <pipeline> <env> --version ...
     verify     kardinal verify <pipeline> <env> --version ... --check ...
+    freeze     kardinal freeze --agents | --everyone [-n <ns>] --reason ...
 
 Every result is JSON: {"result": ...}. A failure is a tool error whose JSON
 is {"error": {"kind", "message"}}: kind Forbidden when Kubernetes RBAC denied
@@ -71,7 +74,7 @@ kardinal mcp [flags]
 ### Options
 
 ```
-      --allow-write            Offer the write tools: ship, promote, rollback, pause, resume, reject, approve and verify
+      --allow-write            Offer the write tools: ship, promote, rollback, pause, resume, reject, approve, verify and freeze
   -h, --help                   help for mcp
       --max-result-bytes int   Largest tool result, in bytes of JSON; a longer list is paged and anything else cut, with a hint (default 65536)
 ```
