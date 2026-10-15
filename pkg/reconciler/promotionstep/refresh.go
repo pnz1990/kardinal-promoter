@@ -78,10 +78,11 @@ func (r *Reconciler) refreshSubject(pipeline string, env v1alpha1.EnvironmentSpe
 	switch {
 	case t.ArgoCD != nil:
 		opts.Type = "argocd"
-		opts.ArgoCD = health.ArgoCDConfig{Name: cmp.Or(t.ArgoCD.Name, def), Namespace: cmp.Or(t.ArgoCD.Namespace, "argocd")}
+		// RefreshTargets defaults an empty namespace (argocd, flux-system).
+		opts.ArgoCD = health.ArgoCDConfig{Name: cmp.Or(t.ArgoCD.Name, def), Namespace: t.ArgoCD.Namespace}
 	case t.Flux != nil:
 		opts.Type = "flux"
-		opts.Flux = health.FluxConfig{Name: cmp.Or(t.Flux.Name, def), Namespace: cmp.Or(t.Flux.Namespace, "flux-system")}
+		opts.Flux = health.FluxConfig{Name: cmp.Or(t.Flux.Name, def), Namespace: t.Flux.Namespace}
 	}
 	return opts, r.HealthDetector, false
 }
