@@ -307,18 +307,28 @@ func TestLifecycle_RecordsWhoChanged(t *testing.T) {
 		require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "app"}, &got))
 		return &got
 	}
+	ids := map[string]bool{}
+	last := func() *v1alpha1.PipelineChange { // the record, its per-write id checked apart
+		t.Helper()
+		c := *get().Spec.LastChange
+		require.NotEmpty(t, c.ID, "every write gets an id")
+		ids[c.ID] = true
+		c.ID = ""
+		return &c
+	}
 	alice := &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "alice"}
 	require.NoError(t, lifecycle.Pause(ctx, c, ns, "app", &v1alpha1.PipelineChange{By: "alice", Reason: "INC-7", Actor: alice}))
-	assert.Equal(t, &v1alpha1.PipelineChange{Action: "Pause", By: "alice", Reason: "INC-7", Actor: alice}, get().Spec.LastChange)
+	assert.Equal(t, &v1alpha1.PipelineChange{Action: "Pause", By: "alice", Reason: "INC-7", Actor: alice}, last())
 
 	require.NoError(t, lifecycle.Pause(ctx, c, ns, "app", &v1alpha1.PipelineChange{By: "mallory"}))
 	assert.Equal(t, "alice", get().Spec.LastChange.By, "nothing changed: the record of the pause stays")
 
 	require.NoError(t, lifecycle.SetPaused(ctx, c, ns, "app", false, &v1alpha1.PipelineChange{By: "bob"}))
-	assert.Equal(t, &v1alpha1.PipelineChange{Action: "Resume", By: "bob"}, get().Spec.LastChange)
+	assert.Equal(t, &v1alpha1.PipelineChange{Action: "Resume", By: "bob"}, last())
 
 	require.NoError(t, lifecycle.SetFleetPaused(ctx, c, ns, "app", "prod", true, &v1alpha1.PipelineChange{By: "carol"}))
-	assert.Equal(t, &v1alpha1.PipelineChange{Action: "PauseFleet", Target: "prod", By: "carol"}, get().Spec.LastChange)
+	assert.Equal(t, &v1alpha1.PipelineChange{Action: "PauseFleet", Target: "prod", By: "carol"}, last())
+	assert.Len(t, ids, 3, "a new id per write")
 
 	require.NoError(t, lifecycle.Resume(ctx, c, ns, "app", nil))
 	assert.Equal(t, "carol", get().Spec.LastChange.By, "no record given: none written")

@@ -5,6 +5,8 @@ package lifecycle
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -345,6 +347,15 @@ func recordChange(p *v1alpha1.Pipeline, who *v1alpha1.PipelineChange, action, ta
 		return
 	}
 	c := *who
-	c.Action, c.Target = action, target
+	c.Action, c.Target, c.ID = action, target, changeID()
 	p.Spec.LastChange = &c
+}
+
+// changeID is a random id for one spec.lastChange write.
+func changeID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "" // unreachable: crypto/rand does not fail on supported platforms
+	}
+	return hex.EncodeToString(b[:])
 }

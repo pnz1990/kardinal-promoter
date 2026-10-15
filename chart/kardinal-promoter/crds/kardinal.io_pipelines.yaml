@@ -1736,6 +1736,13 @@ spec:
                     maxLength: 253
                     minLength: 1
                     type: string
+                  id:
+                    description: |-
+                      ID is set anew by each write (a random id), so the same person making
+                      the same change twice writes two records: the Pipeline reconciler uses
+                      each record once (status.observedLastChange).
+                    maxLength: 32
+                    type: string
                   reason:
                     description: Reason says why (kardinal pause --reason).
                     maxLength: 1024

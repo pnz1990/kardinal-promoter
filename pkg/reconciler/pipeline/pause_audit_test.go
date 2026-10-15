@@ -270,3 +270,38 @@ func TestPipelineHolds_StaleReleaseRecord(t *testing.T) {
 	}
 	assert.Equal(t, 1, n, "only the first release is alice's: %v", released)
 }
+
+// TestPipelineHolds_RepeatedIdenticalRelease (#2001 QA re-review): the same
+// person making the same change with the same reason twice (hold, unhold,
+// hold, unhold) is named both times: each write's record has its own id.
+func TestPipelineHolds_RepeatedIdenticalRelease(t *testing.T) {
+	ctx := context.Background()
+	p := makePipelineWithEnvs("app", "default", "test", "prod")
+	c := newClientWithIndex(newPipelineScheme(), p, holdBundle("app-rollback-1"))
+	now := time.Date(2026, 10, 15, 4, 0, 0, 0, time.UTC)
+	r := &pipeline.Reconciler{Client: c, Now: func() time.Time { return now }}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "app", Namespace: "default"}}
+	reconcile := func() {
+		t.Helper()
+		_, err := r.Reconcile(ctx, req)
+		require.NoError(t, err)
+	}
+	for i := 0; i < 2; i++ {
+		at := metav1.NewTime(now.Add(time.Duration(i) * time.Hour))
+		var cur kardinalv1alpha1.Pipeline
+		require.NoError(t, c.Get(ctx, req.NamespacedName, &cur))
+		cur.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rollback-1",
+			Reason: "INC-42", CreatedBy: "alice", CreatedAt: &at}}
+		require.NoError(t, c.Update(ctx, &cur))
+		reconcile()
+		_, err := lifecycle.ReleaseHold(ctx, c, "default", "app", "prod",
+			&kardinalv1alpha1.PipelineChange{By: "alice", Reason: "fixed"})
+		require.NoError(t, err)
+		reconcile()
+	}
+	released := auditsOf(t, c, pipeline.AuditActionHoldReleased)
+	require.Len(t, released, 2)
+	for _, e := range released {
+		assert.Contains(t, e.Spec.Message, "released by alice: fixed")
+	}
+}

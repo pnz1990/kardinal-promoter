@@ -1024,6 +1024,13 @@ type PipelineChange struct {
 	// actor admission policy.
 	// +optional
 	Actor *Actor `json:"actor,omitempty"`
+
+	// ID is set anew by each write (a random id), so the same person making
+	// the same change twice writes two records: the Pipeline reconciler uses
+	// each record once (status.observedLastChange).
+	// +kubebuilder:validation:MaxLength=32
+	// +optional
+	ID string `json:"id,omitempty"`
 }
 
 // EnvironmentHoldState is the state of one hold, written by the Pipeline
