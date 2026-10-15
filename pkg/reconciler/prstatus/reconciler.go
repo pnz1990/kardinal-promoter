@@ -72,6 +72,7 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 
@@ -318,6 +319,17 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		mergeSHA, retryMergeCommit = r.fetchMergeCommit(ctx, log, &prs)
 		mergeUnavailable = mergeSHA == "" && !retryMergeCommit
 	}
+	// Who merged it, and that polling found the merge (#1939).
+	mergedBy, mergedByUnavailable, mergedVia := prs.Status.MergedBy, prs.Status.MergedByUnavailable, prs.Status.MergedVia
+	if merged && !prs.Status.Merged && mergedVia == "" {
+		mergedVia = v1alpha1.PRMergedViaPoll
+	}
+	if merged && mergedBy == "" && !mergedByUnavailable {
+		var retryMerger bool
+		mergedBy, retryMerger = r.fetchMerger(ctx, log, &prs)
+		mergedByUnavailable = mergedBy == "" && !retryMerger
+		retryMergeCommit = retryMergeCommit || retryMerger
+	}
 
 	// now is written to status.lastCheckedAt whenever it decides something:
 	// the grace window compares it with the stored status.closedAt.
@@ -327,6 +339,8 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	changed := merged != prs.Status.Merged || open != prs.Status.Open ||
 		approved != prs.Status.Approved || approvalCount != prs.Status.ApprovalCount ||
 		mergeSHA != prs.Status.MergeCommitSHA || mergeUnavailable != prs.Status.MergeCommitUnavailable ||
+		mergedBy != prs.Status.MergedBy || mergedByUnavailable != prs.Status.MergedByUnavailable ||
+		mergedVia != prs.Status.MergedVia ||
 		prs.Status.PollError != "" ||
 		!closedAt.Equal(prs.Status.ClosedAt) || closedFinal != prs.Status.ClosedFinal ||
 		prs.Status.ObservedGeneration != prs.Generation
@@ -341,6 +355,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		prs.Status.ApprovalCount = approvalCount
 		prs.Status.MergeCommitSHA = mergeSHA
 		prs.Status.MergeCommitUnavailable = mergeUnavailable
+		prs.Status.MergedBy, prs.Status.MergedByUnavailable, prs.Status.MergedVia = mergedBy, mergedByUnavailable, mergedVia
 		prs.Status.PollError = ""
 		prs.Status.ClosedAt = closedAt
 		prs.Status.ClosedFinal = closedFinal
@@ -491,24 +506,45 @@ func (r *Reconciler) recordPollError(ctx context.Context, log zerolog.Logger, pr
 // a status an earlier release wrote. A PRStatus a webhook or an earlier
 // release marked merged gets the field at its first reconcile.
 func (r *Reconciler) recordMergeCommit(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) (ctrl.Result, error) {
-	if prs.Status.MergeCommitSHA != "" || prs.Status.MergeCommitUnavailable {
+	needSHA := prs.Status.MergeCommitSHA == "" && !prs.Status.MergeCommitUnavailable
+	// A merge recorded before kardinal recorded mergers (no mergedVia) is
+	// left as it is: an upgrade asks the SCM nothing.
+	needMerger := prs.Status.MergedVia != "" && prs.Status.MergedBy == "" && !prs.Status.MergedByUnavailable
+	if !needSHA && !needMerger {
 		log.Debug().Str("prURL", prs.Spec.PRURL).Msg("PR already merged, no-op")
 		return ctrl.Result{}, r.adoptLegacyStatus(ctx, log, prs)
 	}
-	var sha string
+	sha, mergedBy := prs.Status.MergeCommitSHA, prs.Status.MergedBy
 	if last := prs.Status.LastCheckedAt; last != nil && r.now().Sub(last.Time) > mergeCommitWindow {
 		// The decision is written to the status below.
 		log.Info().Str("prURL", prs.Spec.PRURL).Dur("window", mergeCommitWindow).
-			Msg("merge commit not reported by the SCM, giving up")
+			Msg("merge commit or merger not reported by the SCM, giving up")
 	} else {
-		var retry bool
-		if sha, retry = r.fetchMergeCommit(ctx, log, prs); retry {
+		var retry, retryMerger bool
+		if needSHA {
+			sha, retry = r.fetchMergeCommit(ctx, log, prs)
+		}
+		if needMerger {
+			mergedBy, retryMerger = r.fetchMerger(ctx, log, prs)
+		}
+		if retry || retryMerger {
+			if needMerger && mergedBy != "" {
+				// Keep the name while the merge commit is retried: the step
+				// waits for it, not for the commit.
+				patch := client.MergeFrom(prs.DeepCopy())
+				prs.Status.MergedBy = mergedBy
+				if err := r.Status().Patch(ctx, prs, patch); err != nil {
+					return ctrl.Result{}, fmt.Errorf("patch prstatus %s merger: %w", prs.Name, err)
+				}
+			}
 			return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
 		}
 	}
 	patch := client.MergeFrom(prs.DeepCopy())
 	prs.Status.MergeCommitSHA = sha
 	prs.Status.MergeCommitUnavailable = sha == ""
+	prs.Status.MergedBy = mergedBy
+	prs.Status.MergedByUnavailable = mergedBy == ""
 	prs.Status.ObservedGeneration = prs.Generation
 	if err := r.Status().Patch(ctx, prs, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch prstatus %s merge commit: %w", prs.Name, err)
@@ -597,6 +633,33 @@ func (r *Reconciler) fetchMergeCommit(ctx context.Context, log zerolog.Logger, p
 	return sha, false
 }
 
+// fetchMerger asks the SCM who merged prs's PR (scm.PRMergerGetter). It
+// reports retry for an error a retry may fix; a provider without the lookup,
+// a permanent error or no name gives "" without retry, and the caller records
+// the merger as unavailable.
+func (r *Reconciler) fetchMerger(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) (by string, retry bool) {
+	provider, perr := r.scmFor(ctx, prs)
+	if perr != nil {
+		log.Warn().Err(perr).Msg("SCM provider of the PR not available for the merger, will retry")
+		return "", true
+	}
+	getter, ok := provider.(scm.PRMergerGetter)
+	if !ok || prs.Spec.PRNumber == 0 {
+		return "", false
+	}
+	by, err := getter.GetPRMerger(ctx, prs.Spec.Repo, prs.Spec.PRNumber)
+	by = clipMerger(by)
+	if err != nil {
+		if scm.IsPermanentError(err) {
+			log.Warn().Err(err).Int("prNumber", prs.Spec.PRNumber).Msg("could not read who merged the PR, giving up")
+			return "", false
+		}
+		log.Warn().Err(err).Int("prNumber", prs.Spec.PRNumber).Msg("could not read who merged the PR, will retry")
+		return "", true
+	}
+	return by, false
+}
+
 // SetupWithManager registers the PRStatus reconciler with controller-runtime.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
@@ -613,4 +676,21 @@ func (r *Reconciler) now() time.Time {
 		return r.NowFn()
 	}
 	return time.Now()
+}
+
+// maxMergerLength is status.mergedBy's CRD limit: a longer SCM name (an Azure
+// DevOps UPN) would make the whole status patch fail.
+const maxMergerLength = 253
+
+// clipMerger cuts an SCM user name to maxMergerLength bytes, on a UTF-8
+// boundary.
+func clipMerger(s string) string {
+	if len(s) <= maxMergerLength {
+		return s
+	}
+	cut := maxMergerLength
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }

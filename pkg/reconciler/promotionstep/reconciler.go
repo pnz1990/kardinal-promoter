@@ -1562,11 +1562,17 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
 	}
 
+	// A PR its PRStatus already reports merged is past the hold and the
+	// deadline below: its change is in git. (The step may still wait here for
+	// the merger's name, #1939.)
+	merged := r.stepPRMerged(ctx, ps)
+
 	// The environment is held on another Bundle's rollback (spec.holds,
 	// #1528): this PR would deploy over it once merged, so the promotion is
 	// cancelled as supersession cancels one, with its PR closed and a comment
-	// saying why. A step already HealthChecking has merged; it finishes.
-	if h := lifecycle.HeldFrom(pipeline, ps.Spec.Environment, ps.Spec.BundleName); h != nil {
+	// saying why. A step already HealthChecking, or whose PR merged, has
+	// merged; it finishes.
+	if h := lifecycle.HeldFrom(pipeline, ps.Spec.Environment, ps.Spec.BundleName); h != nil && !merged {
 		res, _, err := r.cancelStep(ctx, log, ps, lifecycle.HeldMessage(ps.Spec.PipelineName, h),
 			fmt.Sprintf("environment %s is held on rollback %s (%s), so kardinal cancelled this promotion; "+
 				"once the hold is released, a newer Bundle promotes here", h.Environment, h.Bundle, h.Reason),
@@ -1578,7 +1584,7 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 	// Graph-purity: same pattern as HealthCheckExpiry — time.Now() called only when
 	// writing the expiry to CRD status; the subsequent comparison reads the stored value.
 	env := findEnv(pipeline, ps.Spec.Environment)
-	if env.WaitForMergeTimeout != "" {
+	if env.WaitForMergeTimeout != "" && !merged {
 		if d, err := time.ParseDuration(env.WaitForMergeTimeout); err == nil && d > 0 {
 			// Set expiry once on first entry into WaitingForMerge (idempotent).
 			if ps.Status.WaitForMergeExpiry == nil {
@@ -1652,6 +1658,21 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
 	}
 
+	if prs.Status.Merged && mergerPending(&prs.Status) {
+		// Who merged it is still being asked of the SCM (status.mergedBy):
+		// the PRMerged record is written with the transition, so the step
+		// waits for the name, or for the PRStatus reconciler to record it
+		// unavailable (at most its merge-commit window, 5 minutes) (#1939).
+		msg := fmt.Sprintf("PR #%d merged; waiting for the SCM to say who merged it", prs.Spec.PRNumber)
+		if ps.Status.Message != msg {
+			ps.Status.Message = msg
+			if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
+				return ctrl.Result{}, fmt.Errorf("patch waiting for the merger: %w", patchErr)
+			}
+		}
+		return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
+	}
+
 	if prs.Status.Merged {
 		log.Info().
 			Str("prStatusRef", prStatusName).
@@ -1665,6 +1686,19 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 			}
 			ps.Status.Outputs["mergeCommitSHA"] = prs.Status.MergeCommitSHA
 		}
+		if prs.Status.MergedBy != "" {
+			// Who released this environment (#1939), for kardinal history.
+			if ps.Status.Outputs == nil {
+				ps.Status.Outputs = map[string]string{}
+			}
+			ps.Status.Outputs[OutputPRMergedBy] = prs.Status.MergedBy
+		}
+		if prs.Status.MergedVia != "" {
+			if ps.Status.Outputs == nil {
+				ps.Status.Outputs = map[string]string{}
+			}
+			ps.Status.Outputs[outputPRMergedVia] = prs.Status.MergedVia
+		}
 		ps.Status.WaitForMergeExpiry = nil // clear expiry on successful transition
 		// PR duration: from the PR opening to the merge seen here. Not from
 		// the PRStatus creationTimestamp: the Graph creates the PRStatus with
@@ -1674,7 +1708,7 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		// a later reconcile, and a deleted step does not transition.
 		opened, openedKnown := prOpenedAt(ps)
 		moved, err := r.transitionClosing(ctx, base, ps, StateHealthChecking,
-			fmt.Sprintf("PR #%d merged", prs.Spec.PRNumber), "", nil)
+			fmt.Sprintf("PR #%d merged", prs.Spec.PRNumber), AuditActionPRMerged, nil)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -3226,4 +3260,25 @@ func (r *Reconciler) clusterUnreachable(ctx context.Context, log zerolog.Logger,
 		return ctrl.Result{}, fmt.Errorf("patch health result: %w", err)
 	}
 	return ctrl.Result{RequeueAfter: requeueHealthCheck}, nil
+}
+
+// mergerPending reports whether a merged PR's merger is still being asked of
+// the SCM: the merge was recorded by this release (mergedVia) and the name
+// is neither known nor recorded unavailable. A merge recorded before the
+// upgrade waits for nothing.
+func mergerPending(s *v1alpha1.PRStatusStatus) bool {
+	return s.MergedVia != "" && s.MergedBy == "" && !s.MergedByUnavailable
+}
+
+// stepPRMerged reports whether ps's PRStatus says ps's own PR merged. A
+// PRStatus that is missing, unreadable or about another PR says no.
+func (r *Reconciler) stepPRMerged(ctx context.Context, ps *v1alpha1.PromotionStep) bool {
+	if ps.Spec.PRStatusRef == "" {
+		return false
+	}
+	var prs v1alpha1.PRStatus
+	if err := r.Get(ctx, types.NamespacedName{Name: ps.Spec.PRStatusRef, Namespace: ps.Namespace}, &prs); err != nil {
+		return false
+	}
+	return prStatusOfStepPR(&prs, ps.Status.Outputs) && prs.Status.Merged
 }

@@ -383,6 +383,12 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, p scm.SCMProvide
 			prs.Status.Merged = true
 			prs.Status.Open = false
 			prs.Status.LastCheckedAt = &now
+			// Who merged it is asked of the SCM API by the PRStatus reconciler
+			// (status.mergedBy), never taken from the payload: a valid
+			// signature proves only that the sender has the webhook secret, and
+			// GitLab and Azure DevOps send it in plain text (#1939). The
+			// payload's name is logged as a hint.
+			prs.Status.MergedVia = v1alpha1.PRMergedViaWebhook
 		}
 		if prs.Status.MergeCommitSHA == "" && event.MergeCommitSHA != "" {
 			// Written with merged, so the health check knows the commit from
@@ -408,7 +414,7 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, p scm.SCMProvide
 			Str("prstatus", prs.Name).
 			Str("namespace", prs.Namespace).
 			Int("pr", event.PRNumber).
-			Str("mergeCommit", event.MergeCommitSHA).
+			Str("mergeCommit", event.MergeCommitSHA).Str("mergedByPerPayload", event.MergedBy).
 			Msg("PRStatus marked merged via webhook")
 	}
 	return nil

@@ -294,7 +294,11 @@ func (a *AzureDevOpsProvider) ParseWebhookEvent(payload []byte, signature string
 			PullRequestID int    `json:"pullRequestId"`
 			Status        string `json:"status"`
 			MergeStatus   string `json:"mergeStatus"`
-			Repository    struct {
+			// ClosedBy is who completed (merged) the PR.
+			ClosedBy struct {
+				UniqueName string `json:"uniqueName"`
+			} `json:"closedBy"`
+			Repository struct {
 				// ADO uses project.name/repository.name structure; full_name is not standard.
 				// We construct a best-effort org/project/repo string from the remote URL.
 				Name    string `json:"name"`
@@ -322,7 +326,9 @@ func (a *AzureDevOpsProvider) ParseWebhookEvent(payload []byte, signature string
 	// "git.pullrequest.merged" ("merge attempted"). Only status "completed"
 	// means the PR was merged into the target branch.
 	if raw.Resource.Status == "completed" {
-		return mergedPREvent(repoFullName, raw.Resource.PullRequestID), nil
+		ev := mergedPREvent(repoFullName, raw.Resource.PullRequestID)
+		ev.MergedBy = raw.Resource.ClosedBy.UniqueName
+		return ev, nil
 	}
 	return WebhookEvent{
 		EventType:    raw.EventType,

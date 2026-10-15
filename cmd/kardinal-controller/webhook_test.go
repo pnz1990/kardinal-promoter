@@ -489,7 +489,7 @@ func prJSON(provider string, open bool) string {
 	if open {
 		return `{"state":"open","merged":false}`
 	}
-	return `{"state":"closed","merged":true}`
+	return `{"state":"closed","merged":true,"merged_by":{"login":"user1"}}`
 }
 
 // TestWebhook_FailsClosed verifies that the SCM webhook uses the real GitHub
@@ -884,4 +884,41 @@ func hmacHexOf(key, body string) string {
 	m := hmac.New(sha256.New, []byte(key))
 	m.Write([]byte(body))
 	return hex.EncodeToString(m.Sum(nil))
+}
+
+// TestWebhook_RecordsMerger (#1939, QA B1 on #2003): the merged-PR webhook
+// records that the webhook saw the merge, but not the payload's merger:
+// anyone with the webhook secret could name someone else. The PRStatus
+// reconciler asks the SCM API (status.mergedBy); a merge polling recorded
+// first keeps its mergedVia.
+func TestWebhook_RecordsMerger(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  v1alpha1.PRStatusStatus
+		wantVia string
+	}{
+		{name: "open PR", status: v1alpha1.PRStatusStatus{Open: true}, wantVia: v1alpha1.PRMergedViaWebhook},
+		{name: "merged by polling", status: v1alpha1.PRStatusStatus{Merged: true,
+			MergedVia: v1alpha1.PRMergedViaPoll}, wantVia: v1alpha1.PRMergedViaPoll},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			prs := &v1alpha1.PRStatus{
+				ObjectMeta: metav1.ObjectMeta{Name: "prstatus-bundle-1-prod", Namespace: "default"},
+				Spec:       v1alpha1.PRStatusSpec{PRNumber: 42, Repo: "owner/repo"},
+				Status:     tc.status,
+			}
+			c := fake.NewClientBuilder().WithScheme(webhookScheme()).WithObjects(prs).WithStatusSubresource(prs).Build()
+			mockSCM := &mockSCMProvider{event: scm.WebhookEvent{EventType: "pull_request", Action: "closed", Merged: true,
+				PRNumber: 42, RepoFullName: "owner/repo", MergeCommitSHA: "e7ddb9e", MergedBy: "alice"}}
+			w := httptest.NewRecorder()
+			newWebhookServerWithConfig(mockSCM, c, zerolog.Nop(), true).Handler()(w,
+				httptest.NewRequest(http.MethodPost, "/webhook/scm", bytes.NewReader([]byte(`{}`))))
+			assert.Equal(t, http.StatusNoContent, w.Code)
+			var got v1alpha1.PRStatus
+			require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(prs), &got))
+			assert.Empty(t, got.Status.MergedBy, "the payload's alice is not recorded")
+			assert.Equal(t, tc.wantVia, got.Status.MergedVia)
+		})
+	}
 }

@@ -23,6 +23,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	psrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
@@ -155,6 +156,17 @@ func TestPromotionLoop_PRReview_ViaWebhook(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, post(secret))
 	require.True(t, prsMerged(), "the signed merge event marks PRStatus.status.merged")
 	assert.Equal(t, "WaitingForMerge", stepState(), "the webhook writes only the PRStatus")
+
+	// Who merged it is asked of the SCM API, not taken from the payload
+	// (#1939): until the PRStatus reconciler has the name, the step waits.
+	_, err = rec.Reconcile(ctx, ctrl.Request{NamespacedName: stepKey})
+	require.NoError(t, err)
+	assert.Equal(t, "WaitingForMerge", stepState(), "waits for the merger")
+	prRec := &prstatus.Reconciler{Client: c, SCM: provider}
+	_, err = prRec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: prStatus, Namespace: ns}})
+	require.NoError(t, err)
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: prStatus, Namespace: ns}, &prs))
+	assert.Equal(t, "user1", prs.Status.MergedBy, "from the API")
 
 	// The PromotionStep reconciler reads the PRStatus and finishes the promotion.
 	_, err = rec.Reconcile(ctx, ctrl.Request{NamespacedName: stepKey})

@@ -204,7 +204,7 @@ An environment's `approval` decides how a version's change lands in Git:
 | Mode | Behavior |
 |---|---|
 | `auto` | The change is pushed directly to the target branch. No pull request. |
-| `pr-review` | A pull request is opened in the GitOps repository with promotion evidence (provenance, gate results, upstream verification). A person reviews and merges it. |
+| `pr-review` | A pull request is opened in the GitOps repository with promotion evidence (provenance, gate results, upstream verification). A person reviews and merges it; the merge is recorded as a `PRMerged` AuditEvent naming who merged it ([Audit logging](guides/security.md#audit-logging)). |
 
 `approval: auto` does not mean "nobody approves". To require named people to approve a version
 before an environment, with a quorum and no self-approval, add an

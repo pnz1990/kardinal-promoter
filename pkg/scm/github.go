@@ -269,6 +269,9 @@ func (g *GitHubProvider) parseWebhookEvent(payload []byte, signature, eventType 
 			Merged         bool   `json:"merged"`
 			HTMLURL        string `json:"html_url"`
 			MergeCommitSHA string `json:"merge_commit_sha"`
+			MergedBy       *struct {
+				Login string `json:"login"`
+			} `json:"merged_by"`
 		} `json:"pull_request"`
 		Repository struct {
 			FullName string `json:"full_name"`
@@ -291,6 +294,9 @@ func (g *GitHubProvider) parseWebhookEvent(payload []byte, signature, eventType 
 	if event.Merged {
 		// Before the merge it is the test merge commit, not the promoted one.
 		event.MergeCommitSHA = raw.PullRequest.MergeCommitSHA
+		if m := raw.PullRequest.MergedBy; m != nil {
+			event.MergedBy = m.Login
+		}
 	}
 	return event, nil
 }
