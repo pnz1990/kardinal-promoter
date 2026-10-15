@@ -4,9 +4,24 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  # A dry run: everything a release builds (the tests, the binaries and CLI,
+  # both multi-arch images, the chart, the release body), from a branch, with
+  # a made-up prerelease version, and nothing published: no image or chart
+  # push, no signature or attestation, no GitHub release. What it built is
+  # uploaded as the dry-run artifact. gh workflow run release.yml --ref <branch>
+  # -f version=v0.12.0-dryrun.1
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'a prerelease version with "dryrun" in it, e.g. v0.12.0-dryrun.1'
+        required: true
 
 permissions:
   contents: read
+
+env:
+  # "true" on a dispatch: every step that publishes is skipped.
+  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' }}
 
 # The run scripts rely on -e and -o pipefail, and test/hack/release_test.go
 # runs them the same way.
@@ -39,6 +54,8 @@ jobs:
       # v0.6.0 and v0.8.1 were tagged on merge commits outside main. A release
       # is built only from a commit on main.
       - name: Check that the tagged commit is on main
+        # A dry run builds a branch; the tag check runs at the real release.
+        if: env.DRY_RUN != 'true'
         run: |
           # Fetch main explicitly, so the check does not depend on which refs
           # actions/checkout fetched for the tag.
@@ -57,8 +74,23 @@ jobs:
       # rejects anything else, but only after the image is pushed and signed.
       - name: Set version and release channel from tag
         id: version
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
         run: |
           VERSION="${GITHUB_REF_NAME}"
+          if [ "${DRY_RUN:-false}" != true ] && [[ "$VERSION" == *dryrun* ]]; then
+            echo "::error::tag ${VERSION} says dryrun: a dry run is a dispatch of this workflow, never a tag"
+            exit 1
+          fi
+          if [ "${DRY_RUN:-false}" = true ]; then
+            VERSION="${DISPATCH_VERSION:-}"
+            # A dry run's version is a prerelease that says what it is, so
+            # nothing it builds can pass for a release.
+            if ! [[ "$VERSION" == *-*dryrun* ]]; then
+              echo "::error::a dry run's version must be a prerelease with dryrun in it (v0.12.0-dryrun.1), not ${VERSION}"
+              exit 1
+            fi
+          fi
           NUM='(0|[1-9][0-9]*)'
           IDENT='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
           SEMVER="^v${NUM}\.${NUM}\.${NUM}(-${IDENT}(\.${IDENT})*)?$"
@@ -104,6 +136,8 @@ jobs:
       # with make changelog-release: its notes would leave them out, and the
       # site would keep listing them under [Unreleased].
       - name: No unreleased changelog fragments
+        # A dry run's notes are the fragments themselves.
+        if: env.DRY_RUN != 'true'
         run: |
           left=
           if [ -d docs/changelog.d ]; then
@@ -134,6 +168,21 @@ jobs:
             /^---[[:space:]]*$/ { if (found) exit }
             found { print }
           ' docs/changelog.md | sed -e '/./,$!d')
+          if [ -z "${NOTES//[[:space:]]/}" ] && [ "${DRY_RUN:-false}" = true ]; then
+            # A dry run's made-up version has no section: the notes are what
+            # the next release would say, [Unreleased] and the
+            # docs/changelog.d entries (their bodies, after the front matter).
+            NOTES=$(awk -v v=Unreleased '
+              /^## / { if (found) exit; found = ($2 == "[" v "]"); next }
+              /^---[[:space:]]*$/ { if (found) exit }
+              found && !/^<!-- changelog.d/ { print }
+            ' docs/changelog.md | sed -e '/./,$!d')
+            for f in docs/changelog.d/*.md; do
+              [ -e "$f" ] && [ "$(basename "$f")" != README.md ] || continue
+              NOTES+=$'\n'"$(awk 'n >= 2 { print } /^---$/ { n++ }' "$f")"
+            done
+            NOTES="(dry run ${VERSION}: the unreleased entries)"$'\n\n'"${NOTES}"
+          fi
           if [ -z "${NOTES//[[:space:]]/}" ]; then
             echo "::error::docs/changelog.md has no \"## [${VERSION}]\" section, or it is empty. Add it before tagging."
             exit 1
@@ -193,9 +242,204 @@ jobs:
       - name: Run tests
         run: go test ./... -race -count=1 -timeout 300s
 
+  # A dispatch is a dry run (DRY_RUN): it builds what a release builds
+  # (both multi-arch images, the binaries and CLI, the chart, the release body)
+  # with a read-only token and no publishing step at all, and uploads the
+  # result. Its steps are the release job's, compared by test/hack
+  # TestReleaseDryRun, so the dry run proves the steps the tag runs.
+  dry-run:
+    name: dry run
+    needs: [preflight, test]
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      CHART_VERSION: ${{ needs.preflight.outputs.chart-version }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Docker Buildx (multi-arch)
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+
+      - name: Build CLI and controller binaries
+        run: |
+          mkdir -p dist
+          # test/helm/image_test.go checks that every -X below names a
+          # variable that exists.
+          CONTROLLER_LDFLAGS="-X main.ControllerVersion=${VERSION}"
+          CLI_LDFLAGS="-X github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/cmd.CLIVersion=${VERSION}"
+          # Controller (linux only). The image builds its own copy from the
+          # Dockerfile with the same VERSION.
+          GOOS=linux GOARCH=amd64 go build -ldflags="${CONTROLLER_LDFLAGS}" -o dist/kardinal-controller-linux-amd64 ./cmd/kardinal-controller/
+          GOOS=linux GOARCH=arm64 go build -ldflags="${CONTROLLER_LDFLAGS}" -o dist/kardinal-controller-linux-arm64 ./cmd/kardinal-controller/
+          # CLI (multi-platform)
+          GOOS=linux   GOARCH=amd64 go build -ldflags="${CLI_LDFLAGS}" -o dist/kardinal-linux-amd64   ./cmd/kardinal/
+          GOOS=linux   GOARCH=arm64 go build -ldflags="${CLI_LDFLAGS}" -o dist/kardinal-linux-arm64   ./cmd/kardinal/
+          GOOS=darwin  GOARCH=amd64 go build -ldflags="${CLI_LDFLAGS}" -o dist/kardinal-darwin-amd64  ./cmd/kardinal/
+          GOOS=darwin  GOARCH=arm64 go build -ldflags="${CLI_LDFLAGS}" -o dist/kardinal-darwin-arm64  ./cmd/kardinal/
+          GOOS=windows GOARCH=amd64 go build -ldflags="${CLI_LDFLAGS}" -o dist/kardinal-windows-amd64.exe ./cmd/kardinal/
+
+      # ── Build kardinal-promoter controller image ───────────────────────────
+      - name: Build kardinal-promoter controller image (multi-arch)
+        id: build-controller
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          push: false
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ env.VERSION }}
+          tags: ${{ needs.preflight.outputs.image-tags }}
+          labels: |
+            org.opencontainers.image.title=kardinal-promoter-controller
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      # ── Build kardinal-render image (the render Jobs of layout: branch) ────
+      - name: Build kardinal-render image (multi-arch)
+        id: build-render
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: render.Dockerfile
+          push: false
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ needs.preflight.outputs.render-image-tags }}
+          labels: |
+            org.opencontainers.image.title=kardinal-promoter-render
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Update chart version
+        run: |
+          sed -i "s|^appVersion:.*|appVersion: \"${VERSION}\"|" chart/kardinal-promoter/Chart.yaml
+          sed -i "s|^version:.*|version: ${CHART_VERSION}|" chart/kardinal-promoter/Chart.yaml
+
+      - name: Package Helm chart
+        run: |
+          helm package chart/kardinal-promoter \
+            --version "${CHART_VERSION}" \
+            --app-version "${VERSION}" \
+            --destination dist/
+
+      - name: Download the release notes
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: release-notes
+          path: release-notes/
+
+      # The body is a file the GitHub release step reads (body_path): the
+      # notes from preflight, then how to install this version. The release
+      # fails here when the notes in the finished body are empty.
+      # test/hack/release_test.go runs this script.
+      - name: Release body
+        id: body
+        run: |
+          NOTES_FILE=release-notes/notes.md
+          if [ ! -s "$NOTES_FILE" ] || [ -z "$(tr -d '[:space:]' < "$NOTES_FILE")" ]; then
+            echo "::error::the release notes from preflight ($NOTES_FILE) are missing or empty"
+            exit 1
+          fi
+          cat > release-body.template.md <<'BODY_EOF'
+          ## kardinal-promoter @VERSION@
+
+          @NOTES@
+
+          ### Install
+
+          kardinal-promoter runs on the upstream [kro](https://github.com/kubernetes-sigs/kro)
+          Graph controller (kro v0.10.0-rc.0 or later with the `GraphKind` feature gate). Install kro first:
+
+          ```bash
+          helm install kro oci://registry.k8s.io/kro/charts/kro \
+            --namespace kro-system --create-namespace \
+            --version 0.10.0-rc.0 \
+            --set config.featureGates.GraphKind=true \
+            --set rbac.mode=aggregation
+          ```
+
+          Then install kardinal-promoter:
+
+          ```bash
+          helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+            --namespace kardinal-system --create-namespace \
+            --version @CHART_VERSION@ \
+            --set scm.secretRef.name=github-token
+          ```
+
+          The chart installs the kardinal CRDs on first install. `helm upgrade` does not
+          update CRDs, so apply them before upgrading:
+
+          ```bash
+          helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version @CHART_VERSION@ \
+            | kubectl apply --server-side --force-conflicts -f -
+          ```
+
+          ### CLI
+
+          ```bash
+          # macOS (Apple Silicon)
+          curl -LO https://github.com/pnz1990/kardinal-promoter/releases/download/@VERSION@/kardinal-darwin-arm64
+          chmod +x kardinal-darwin-arm64 && sudo mv kardinal-darwin-arm64 /usr/local/bin/kardinal
+
+          # macOS (Intel)
+          curl -LO https://github.com/pnz1990/kardinal-promoter/releases/download/@VERSION@/kardinal-darwin-amd64
+          chmod +x kardinal-darwin-amd64 && sudo mv kardinal-darwin-amd64 /usr/local/bin/kardinal
+
+          # Linux
+          curl -LO https://github.com/pnz1990/kardinal-promoter/releases/download/@VERSION@/kardinal-linux-amd64
+          chmod +x kardinal-linux-amd64 && sudo mv kardinal-linux-amd64 /usr/local/bin/kardinal
+          ```
+
+          ### Container images
+
+          | Image | Tag | Platform |
+          |---|---|---|
+          | `ghcr.io/pnz1990/kardinal-promoter/controller` | `@VERSION@` | linux/amd64, linux/arm64 |
+          | `ghcr.io/pnz1990/kardinal-promoter/render` | `@VERSION@` | linux/amd64, linux/arm64 |
+          BODY_EOF
+          # The placeholders are filled in the template only; the notes go in
+          # between unchanged.
+          fill() { sed -e "s|@VERSION@|${VERSION}|g" -e "s|@CHART_VERSION@|${CHART_VERSION}|g"; }
+          {
+            sed -n '1,/^@NOTES@$/p' release-body.template.md | sed '$d' | fill
+            cat "$NOTES_FILE"
+            sed -n '/^@NOTES@$/,$p' release-body.template.md | sed '1d' | fill
+          } > release-body.md
+          # The notes between the title and the install section must not be
+          # empty in the finished body.
+          NOTES_IN_BODY=$(awk '/^## kardinal-promoter /{f=1; next} /^### Install$/{exit} f' release-body.md)
+          if [ -z "${NOTES_IN_BODY//[[:space:]]/}" ]; then
+            echo "::error::the release body has no notes"
+            exit 1
+          fi
+          echo "path=release-body.md" >> "$GITHUB_OUTPUT"
+          echo "release body: $(wc -c < release-body.md) bytes"
+
+      - name: Upload what the dry run built
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: dry-run
+          path: |
+            dist/
+            release-body.md
+          if-no-files-found: error
+          retention-days: 7
+
   release:
     name: release
     needs: [preflight, test]
+    # Only a tag publishes; a dispatch is the dry-run job's.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.preflight.outputs.version }}
@@ -207,6 +451,8 @@ jobs:
       attestations: write   # required for actions/attest-build-provenance (SLSA)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
