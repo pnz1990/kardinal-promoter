@@ -56,7 +56,7 @@ type AuditEventSpec struct {
 	// failed health check records PromotionFailed (RollbackStarted when
 	// onHealthFailure is rollback), and a blocked gate records GateEvaluated
 	// with outcome Failure.
-	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing;BundleRejected;APIWrite;VerdictRecorded;VerdictRevoked;FreezeExempted
+	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing;BundleRejected;APIWrite;VerdictRecorded;VerdictRevoked;FreezeExempted;PipelinePaused;PipelineResumed;FreezeStarted;FreezeLifted
 	Action string `json:"action"`
 
 	// Outcome describes the result of the action.
@@ -129,6 +129,7 @@ var AuditActions = []string{
 	"RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated",
 	"GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased", "HoldBundleMissing",
 	"BundleRejected", "APIWrite", "VerdictRecorded", "VerdictRevoked", "FreezeExempted",
+	"PipelinePaused", "PipelineResumed", "FreezeStarted", "FreezeLifted",
 }
 
 // AuditOutcomes are the values spec.outcome accepts.

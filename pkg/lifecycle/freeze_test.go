@@ -14,7 +14,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -76,12 +78,12 @@ func TestFreeze_CreateUpdateUnfreeze(t *testing.T) {
 	_, _, err = Freeze(ctx, c, FreezeRequest{Actors: v1alpha1.FreezeAgents, Namespace: "payments", Reason: "wider",
 		CreatedBy: "a", OnlyOwn: true, Now: now})
 	require.NoError(t, err, "its own freeze")
-	assert.True(t, errors.Is(Unfreeze(ctx, c, "kardinal-freeze-agents-payments", "mallory"), ErrForbidden))
-	require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-agents-payments", "a"), "its own freeze")
+	assert.True(t, errors.Is(Unfreeze(ctx, c, "kardinal-freeze-agents-payments", "mallory", nil), ErrForbidden))
+	require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-agents-payments", "a", nil), "its own freeze")
 
-	assert.True(t, errors.Is(Unfreeze(ctx, c, "kardinal-freeze-everyone", ""), ErrConflict), "never deletes a plain window")
-	require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-agents", ""))
-	assert.True(t, errors.Is(Unfreeze(ctx, c, "kardinal-freeze-agents", ""), ErrNotFound))
+	assert.True(t, errors.Is(Unfreeze(ctx, c, "kardinal-freeze-everyone", "", nil), ErrConflict), "never deletes a plain window")
+	require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-agents", "", nil))
+	assert.True(t, errors.Is(Unfreeze(ctx, c, "kardinal-freeze-agents", "", nil), ErrNotFound))
 	var still v1alpha1.ChangeWindow
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-everyone"}, &still))
 }
@@ -128,4 +130,31 @@ func TestExemptFromFreezes(t *testing.T) {
 	empty := fake.NewClientBuilder().WithScheme(s).WithObjects(window("c-ended", false)).Build()
 	_, err = ExemptFromFreezes(ctx, empty, ExemptRequest{Namespace: "payments", Pipeline: "checkout", Reason: "r", Now: now})
 	assert.True(t, errors.Is(err, ErrNotFound))
+}
+
+// TestUnfreeze_RecordsWhoLifted (#1939): kardinal unfreeze writes who lifts
+// the freeze (spec.freeze.lifted) before it deletes the window, for the
+// FreezeLifted AuditEvent the ChangeWindow reconciler writes.
+func TestUnfreeze_RecordsWhoLifted(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(s))
+	var lifted *v1alpha1.FreezeLift
+	c := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
+		Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			var cw v1alpha1.ChangeWindow
+			require.NoError(t, cl.Get(ctx, client.ObjectKeyFromObject(obj), &cw))
+			lifted = cw.Spec.Freeze.Lifted
+			return cl.Delete(ctx, obj, opts...)
+		}}).Build()
+	_, _, err := Freeze(ctx, c, FreezeRequest{Actors: v1alpha1.FreezeEveryone, Reason: "INC-1", CreatedBy: "alice",
+		Stamp: &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "alice"}, Now: time.Now()})
+	require.NoError(t, err)
+	var cw v1alpha1.ChangeWindow
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-everyone"}, &cw))
+	assert.Equal(t, "alice", cw.Spec.Freeze.Actor.Principal, "who froze is stamped")
+
+	bob := &v1alpha1.FreezeLift{By: "bob", Actor: &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "bob"}}
+	require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob))
+	assert.Equal(t, bob, lifted, "written before the delete")
 }

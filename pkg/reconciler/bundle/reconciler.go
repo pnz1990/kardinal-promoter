@@ -1056,6 +1056,7 @@ func rejectionAuditEntry(b *kardinalv1alpha1.Bundle, now time.Time) kardinalv1al
 		Action:      AuditActionBundleRejected,
 		Outcome:     "Success",
 		Message:     fmt.Sprintf("%s rejected bundle %s: %s", rej.By, b.Name, rej.Reason),
+		Actor:       rej.Actor,
 	}, metav1.NewTime(now))
 }
 
@@ -1792,6 +1793,7 @@ func soakRequeue(b *kardinalv1alpha1.Bundle) ctrl.Result {
 func pipelineSpecHashFor(pipeline *kardinalv1alpha1.Pipeline) string {
 	spec := pipeline.Spec
 	spec.Paused = false
+	spec.LastChange = nil // who made the last pause, resume or release: not what the Graph is built from
 	var raw []byte
 	var err error
 	if len(pipeline.Status.Fleets) == 0 {

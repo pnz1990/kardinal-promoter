@@ -1067,7 +1067,7 @@ func main() {
 	// ChangeWindowReconciler: evaluates each ChangeWindow (blackout or recurring),
 	// writes status.active/reason and requeues at the next boundary. The status write
 	// re-evaluates the PolicyGates that reference the window.
-	cwReconciler := &changewindowrecon.Reconciler{Client: mgr.GetClient(),
+	cwReconciler := &changewindowrecon.Reconciler{Client: mgr.GetClient(), AuditNamespace: os.Getenv("POD_NAMESPACE"),
 		MaxExemption: time.Duration(freezeExemptionMaxMinutes) * time.Minute}
 	// An Event on a ChangeWindow, a cluster-scoped kind, is written in the
 	// default namespace, where namespace mode grants no Event writes. There the

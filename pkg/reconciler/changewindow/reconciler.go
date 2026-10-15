@@ -59,6 +59,10 @@ type Reconciler struct {
 	// reconciler first saw it (--freeze-exemption-max-minutes). Zero is
 	// DefaultMaxExemption.
 	MaxExemption time.Duration
+	// AuditNamespace is where the AuditEvents of a freeze of several or
+	// every namespace go (the controller's namespace); a freeze of one
+	// namespace is audited there.
+	AuditNamespace string
 }
 
 // Reconcile evaluates one ChangeWindow and writes its status when it changed.
@@ -80,6 +84,10 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get changewindow: %w", err)
+	}
+	// A freeze's start and lift are audited, with who (#1939).
+	if deleting, err := r.reconcileFreezeAudit(ctx, &cw); err != nil || deleting {
+		return ctrl.Result{}, err
 	}
 
 	now := r.now()

@@ -170,7 +170,7 @@ func TestJourney_FleetIncident(t *testing.T) {
 	assert.Len(t, sim.advance(), 6, "test and 5 targets")
 
 	// 2. Pause mid-wave.
-	require.NoError(t, lifecycle.SetFleetPaused(f.ctx, f.c, "default", "app", "prod", true))
+	require.NoError(t, lifecycle.SetFleetPaused(f.ctx, f.c, "default", "app", "prod", true, nil))
 	sim = f.sim(v2, sim.steps)
 	sim.steps["prod-t00"] = "Verified"
 	sim.steps["prod-t01"] = "Failed"
@@ -205,7 +205,7 @@ func TestJourney_FleetIncident(t *testing.T) {
 	rsim := f.sim(rb, nil)
 	rsim.steps["test"] = "Verified"
 	assert.Equal(t, []string{"test"}, rsim.advance(), "paused: the rollback starts no target")
-	require.NoError(t, lifecycle.SetFleetPaused(f.ctx, f.c, "default", "app", "prod", false))
+	require.NoError(t, lifecycle.SetFleetPaused(f.ctx, f.c, "default", "app", "prod", false, nil))
 	rsim = f.sim(rb, rsim.steps)
 	removed := false
 	for round := range 30 {

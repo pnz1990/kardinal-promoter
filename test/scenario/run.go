@@ -147,7 +147,7 @@ func RunCombo(t *testing.T, c Combo) {
 	case "rejected":
 		p.Ship(t, w, v1)
 		p.runBlocked(t, w, v1.Name, fail)
-		_, err := lifecycle.Reject(AsUser(w.Ctx, "oncall@example.com"), w.Client, ns, v1.Name, "scenario: bad build", "oncall@example.com", w.Now())
+		_, err := lifecycle.Reject(AsUser(w.Ctx, "oncall@example.com"), w.Client, ns, v1.Name, "scenario: bad build", "oncall@example.com", nil, w.Now())
 		require.NoError(t, err)
 		if !w.RunUntil(MaxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Rejected" }) {
 			fail("bundle %s not Rejected", v1.Name)

@@ -184,8 +184,8 @@ func TestSetFleetPaused(t *testing.T) {
 		require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(p), &got))
 		return got.Spec.PausedFleets
 	}
-	require.NoError(t, lifecycle.SetFleetPaused(ctx, c, ns, "app", "prod", true))
-	require.NoError(t, lifecycle.SetFleetPaused(ctx, c, ns, "app", "prod", true), "idempotent")
+	require.NoError(t, lifecycle.SetFleetPaused(ctx, c, ns, "app", "prod", true, nil))
+	require.NoError(t, lifecycle.SetFleetPaused(ctx, c, ns, "app", "prod", true, nil), "idempotent")
 	assert.Equal(t, []string{"prod"}, get())
 
 	for _, tc := range []struct{ env, has string }{
@@ -193,11 +193,11 @@ func TestSetFleetPaused(t *testing.T) {
 		{env: "test", has: "is not a fleet; pause the whole pipeline with kardinal pause app"},
 		{env: "nope", has: `has no environment "nope"`},
 	} {
-		err := lifecycle.SetFleetPaused(ctx, c, ns, "app", tc.env, true)
+		err := lifecycle.SetFleetPaused(ctx, c, ns, "app", tc.env, true, nil)
 		assert.ErrorIs(t, err, lifecycle.ErrInvalid, tc.env)
 		assert.ErrorContains(t, err, tc.has, tc.env)
 	}
-	assert.ErrorIs(t, lifecycle.SetFleetPaused(ctx, c, ns, "missing", "prod", true), lifecycle.ErrNotFound)
+	assert.ErrorIs(t, lifecycle.SetFleetPaused(ctx, c, ns, "missing", "prod", true, nil), lifecycle.ErrNotFound)
 
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
@@ -205,7 +205,7 @@ func TestSetFleetPaused(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs[i] = lifecycle.SetFleetPaused(ctx, c, ns, "app", f, true)
+			errs[i] = lifecycle.SetFleetPaused(ctx, c, ns, "app", f, true, nil)
 		}()
 	}
 	wg.Wait()
@@ -213,9 +213,9 @@ func TestSetFleetPaused(t *testing.T) {
 	require.NoError(t, errs[1])
 	assert.ElementsMatch(t, []string{"prod", "edge"}, get())
 
-	require.NoError(t, lifecycle.SetFleetPaused(ctx, c, ns, "app", "prod", false))
-	require.NoError(t, lifecycle.SetFleetPaused(ctx, c, ns, "app", "prod", false), "idempotent")
-	require.NoError(t, lifecycle.SetFleetPaused(ctx, c, ns, "app", "test", false), "resuming what is not paused changes nothing")
+	require.NoError(t, lifecycle.SetFleetPaused(ctx, c, ns, "app", "prod", false, nil))
+	require.NoError(t, lifecycle.SetFleetPaused(ctx, c, ns, "app", "prod", false, nil), "idempotent")
+	require.NoError(t, lifecycle.SetFleetPaused(ctx, c, ns, "app", "test", false, nil), "resuming what is not paused changes nothing")
 	assert.Equal(t, []string{"edge"}, get())
 	assert.True(t, lifecycle.FleetPaused(&v1alpha1.Pipeline{Spec: v1alpha1.PipelineSpec{PausedFleets: []string{"edge"}}}, "edge"))
 	assert.False(t, lifecycle.FleetPaused(nil, "edge"))

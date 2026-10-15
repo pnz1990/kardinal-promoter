@@ -4,7 +4,7 @@ During an incident, you may want to stop promotions without rolling back.
 
 ```bash
 # Pause: no new promotion step starts; in-flight steps hold at the next safe point
-kardinal pause my-app
+kardinal pause my-app --reason "INC-4211: bad config in prod"
 
 # Resume: held steps continue where they stopped
 kardinal resume my-app
@@ -22,6 +22,19 @@ After resume, held steps continue from where they stopped. A held step re-checks
 The pause is checked before each step and each pre hook starts its next piece of work, not continuously. A pause that lands while a step or hook is between that check and starting its git step or Job does not stop that one piece of work; the next one holds.
 
 While the Pipeline is paused it has a `Paused` condition. `True` (reason `FreezeGateActive`) means the freeze gate holds new promotions. Do not name your own gate `freeze-<pipeline>`: kardinal does not treat a gate it did not create (no `kardinal.io/freeze=true` label and not owned by the Pipeline) as a pause, and does not delete it. While such a gate exists, `kardinal pause` fails with an error naming it, and the condition is `False` with reason `FreezeGateNameConflict`, so the pipeline keeps running. Rename or delete that gate and the pause takes effect.
+
+## Who paused, and why
+
+Each pause and resume, of a Pipeline or of one fleet, is an AuditEvent: `PipelinePaused` or
+`PipelineResumed`, naming who and why (`--reason`, optional, on `pause` and `resume`) and their
+verified actor ([Audit logging](guides/security.md#audit-logging)). kardinal records who in the
+same write as the pause (`spec.lastChange`), and the chart's admission policies admit only your
+own name there. A pause made another way, such as `kubectl patch` of `spec.paused`, is recorded
+too, without an actor: the Kubernetes audit log names who made it.
+
+```bash
+kubectl get auditevents -n <namespace> -l kardinal.io/pipeline=my-app
+```
 
 ## Pause one fleet
 

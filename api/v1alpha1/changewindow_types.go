@@ -73,6 +73,18 @@ type ChangeWindowFreeze struct {
 	// +optional
 	CreatedBy string `json:"createdBy,omitempty"`
 
+	// Actor is CreatedBy's actor stamp (docs/actors.md), checked by the
+	// chart's actor admission policy; the FreezeStarted AuditEvent names it.
+	// +optional
+	Actor *Actor `json:"actor,omitempty"`
+
+	// Lifted is who lifts the freeze: kardinal unfreeze and the UI write it
+	// just before they delete the window, and the freezes admission policy
+	// admits it only in the requester's name. The FreezeLifted AuditEvent
+	// names it.
+	// +optional
+	Lifted *FreezeLift `json:"lifted,omitempty"`
+
 	// Exemptions let a pipeline, an environment or one version through the
 	// freeze until they expire (kardinal override --freeze). The admission
 	// policy admits a new one only in its creator's name, and none changes.
@@ -86,6 +98,18 @@ type ChangeWindowFreeze struct {
 	// +kubebuilder:validation:MaxItems=100
 	// +optional
 	ExemptionRecords []FreezeExemptionRecord `json:"exemptionRecords,omitempty"`
+}
+
+// FreezeLift is who lifted a freeze.
+type FreezeLift struct {
+	// By is the requester's username, as the API server authenticated it.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	By string `json:"by"`
+	// Actor is By's actor stamp, checked by the chart's actor admission
+	// policy.
+	// +optional
+	Actor *Actor `json:"actor,omitempty"`
 }
 
 // FreezeExemption is a break-glass exception to a freeze.

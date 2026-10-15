@@ -998,6 +998,10 @@
           "pipeline": {
             "description": "Pipeline is the Pipeline to pause or resume.",
             "type": "string"
+          },
+          "reason": {
+            "description": "Reason, optional, says why: it is recorded with the caller in the PipelinePaused or PipelineResumed AuditEvent.",
+            "type": "string"
           }
         },
         "required": [
@@ -2503,6 +2507,10 @@
           },
           "pipeline": {
             "description": "Pipeline is the Pipeline whose environment is held.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Reason, optional, says why: it is recorded with the caller in the HoldReleased AuditEvent.",
             "type": "string"
           }
         },

@@ -339,9 +339,10 @@ func (s *uiAPIServer) handleReleaseHold(w http.ResponseWriter, r *http.Request) 
 	if ns == "" {
 		ns = "default"
 	}
-	if _, ok := s.stampFor(w, r, actor.Where{Namespace: ns, Pipeline: req.Pipeline},
+	stamp, ok := s.stampFor(w, r, actor.Where{Namespace: ns, Pipeline: req.Pipeline},
 		accesslog.AuditTarget{Route: "/api/v1/ui/release-hold", Environment: req.Environment,
-			Message: "release the hold of " + req.Pipeline + " in " + req.Environment}); !ok {
+			Message: "release the hold of " + req.Pipeline + " in " + req.Environment})
+	if !ok {
 		return
 	}
 	// pipelines/hold, not update on the Pipeline: the controller writes it.
@@ -350,7 +351,8 @@ func (s *uiAPIServer) handleReleaseHold(w http.ResponseWriter, r *http.Request) 
 		s.writeLifecycleError(w, "release hold", err)
 		return
 	}
-	h, err := lifecycle.ReleaseHold(r.Context(), writer, ns, req.Pipeline, req.Environment)
+	h, err := lifecycle.ReleaseHold(r.Context(), writer, ns, req.Pipeline, req.Environment,
+		uiChange(r, req.Reason, stamp))
 	if err != nil {
 		s.writeLifecycleError(w, "release hold", err)
 		return
@@ -478,10 +480,12 @@ func (s *uiAPIServer) handlePauseResume(w http.ResponseWriter, r *http.Request, 
 	if pause {
 		action, done = "pause", "paused"
 	}
-	if _, ok := s.stampFor(w, r, actor.Where{Namespace: ns, Pipeline: req.Pipeline},
-		accesslog.AuditTarget{Route: "/api/v1/ui/" + action, Message: done + " pipeline " + req.Pipeline}); !ok {
+	stamp, ok := s.stampFor(w, r, actor.Where{Namespace: ns, Pipeline: req.Pipeline, Environment: req.Environment},
+		accesslog.AuditTarget{Route: "/api/v1/ui/" + action, Message: done + " pipeline " + req.Pipeline})
+	if !ok {
 		return
 	}
+	who := uiChange(r, req.Reason, stamp)
 	// SetPaused retries a conflict, so a concurrent write to the Pipeline (for
 	// example its status) does not fail the request.
 	// In TokenReview mode the caller needs only the pause action
@@ -493,7 +497,7 @@ func (s *uiAPIServer) handlePauseResume(w http.ResponseWriter, r *http.Request, 
 	}
 	if req.Environment != "" {
 		// One fleet (spec.pausedFleets): the same pipelines/pause right.
-		if err := lifecycle.SetFleetPaused(r.Context(), writer, ns, req.Pipeline, req.Environment, pause); err != nil {
+		if err := lifecycle.SetFleetPaused(r.Context(), writer, ns, req.Pipeline, req.Environment, pause, who); err != nil {
 			s.writeLifecycleError(w, action+" fleet", err)
 			return
 		}
@@ -507,7 +511,7 @@ func (s *uiAPIServer) handlePauseResume(w http.ResponseWriter, r *http.Request, 
 		_ = json.NewEncoder(w).Encode(uiMessageResponse{Message: msg})
 		return
 	}
-	if err := lifecycle.SetPaused(r.Context(), writer, ns, req.Pipeline, pause); err != nil {
+	if err := lifecycle.SetPaused(r.Context(), writer, ns, req.Pipeline, pause, who); err != nil {
 		s.writeLifecycleError(w, action+" pipeline", err)
 		return
 	}
@@ -579,9 +583,10 @@ func (s *uiAPIServer) handleReject(w http.ResponseWriter, r *http.Request) {
 	if ns == "" {
 		ns = "default"
 	}
-	if _, ok := s.stampFor(w, r, actor.Where{Namespace: ns},
+	stamp, ok := s.stampFor(w, r, actor.Where{Namespace: ns},
 		accesslog.AuditTarget{Route: "/api/v1/ui/reject", Bundle: req.Bundle,
-			Message: "reject bundle " + req.Bundle + ": " + req.Reason}); !ok {
+			Message: "reject bundle " + req.Bundle + ": " + req.Reason})
+	if !ok {
 		return
 	}
 	writer, err := s.actionClient(r.Context(), "bundles", "reject", ns, req.Bundle)
@@ -590,7 +595,7 @@ func (s *uiAPIServer) handleReject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	by := uiRequester(r.Context())
-	b, err := lifecycle.Reject(r.Context(), writer, ns, req.Bundle, req.Reason, by, time.Now())
+	b, err := lifecycle.Reject(r.Context(), writer, ns, req.Bundle, req.Reason, by, stamp, time.Now())
 	if err != nil {
 		s.writeLifecycleError(w, "reject bundle", err)
 		return
@@ -730,4 +735,16 @@ func versionsInProgress(n int) string {
 		return "1 version in progress"
 	}
 	return fmt.Sprintf("%d versions in progress", n)
+}
+
+// uiChange is the spec.lastChange record of a pause, resume or hold release
+// the UI writes for its caller: the verified username, the actor stamp and
+// the reason, so the Pipeline reconciler's AuditEvent names them. Without a
+// verified caller it records none.
+func uiChange(r *http.Request, reason string, stamp *v1alpha1.Actor) *v1alpha1.PipelineChange {
+	by := uiRequester(r.Context())
+	if by == "" {
+		return nil
+	}
+	return &v1alpha1.PipelineChange{By: by, Reason: reason, Actor: stamp}
 }

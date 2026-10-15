@@ -388,7 +388,7 @@ func TestPipelineHolds_DeletedBundleKeepsHold(t *testing.T) {
 	assert.NotNil(t, lifecycle.HeldFrom(f.get(), "prod", "app-v2"), "past the grace the hold still holds")
 
 	// Releasing it is the way out.
-	_, err := lifecycle.ReleaseHold(context.Background(), f.c, "default", "app", "prod")
+	_, err := lifecycle.ReleaseHold(context.Background(), f.c, "default", "app", "prod", nil)
 	require.NoError(t, err)
 	f.reconcile()
 	assert.Empty(t, f.get().Status.HoldStates)
@@ -415,7 +415,7 @@ func TestPipelineHolds_ReaddedHoldReportedAgain(t *testing.T) {
 	require.Equal(t, [3]float64{1, 1, 1}, [3]float64{float64(ev), float64(au), m})
 
 	// Released, then held again on the same Bundle name.
-	_, err := lifecycle.ReleaseHold(context.Background(), f.c, "default", "app", "prod")
+	_, err := lifecycle.ReleaseHold(context.Background(), f.c, "default", "app", "prod", nil)
 	require.NoError(t, err)
 	at2 := metav1.NewTime(f.now)
 	p := f.get()

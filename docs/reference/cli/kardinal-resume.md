@@ -22,8 +22,9 @@ kardinal resume <pipeline> [flags]
 ### Options
 
 ```
-      --env string   resume only this fleet environment
-  -h, --help         help for resume
+      --env string      resume only this fleet environment
+  -h, --help            help for resume
+      --reason string   why, recorded with your name in the PipelineResumed AuditEvent
 ```
 
 ### Options inherited from parent commands

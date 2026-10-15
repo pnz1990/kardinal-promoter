@@ -96,7 +96,7 @@ func TestAutoMerge_FollowsPauseAndGates(t *testing.T) {
 	assert.Len(t, m.enables, 1, "idempotent")
 
 	// Pause: off.
-	require.NoError(t, lifecycle.Pause(ctx, c, "default", "nginx-demo"))
+	require.NoError(t, lifecycle.Pause(ctx, c, "default", "nginx-demo", nil))
 	reconcileStep(t, r, "step")
 	got = getStep(t, c, "step")
 	assert.Equal(t, "suspended", got.Status.Outputs["prAutoMerge"])
@@ -106,7 +106,7 @@ func TestAutoMerge_FollowsPauseAndGates(t *testing.T) {
 	assert.Equal(t, 1, m.disables, "idempotent")
 
 	// Resume: on again.
-	require.NoError(t, lifecycle.Resume(ctx, c, "default", "nginx-demo"))
+	require.NoError(t, lifecycle.Resume(ctx, c, "default", "nginx-demo", nil))
 	reconcileStep(t, r, "step")
 	assert.Equal(t, "enabled", getStep(t, c, "step").Status.Outputs["prAutoMerge"])
 	assert.Len(t, m.enables, 2)
@@ -250,7 +250,7 @@ func TestAutoMerge_StaleReadDoesNotHideEnabled(t *testing.T) {
 	require.NoError(t, err)
 	stale.ResourceVersion = strconv.Itoa(rv - 1)
 
-	require.NoError(t, lifecycle.Pause(ctx, c, "default", "nginx-demo"))
+	require.NoError(t, lifecycle.Pause(ctx, c, "default", "nginx-demo", nil))
 	r.Client = cached // the cache still has the step from before enabled
 	res, err := r.Reconcile(ctx, reqFor("step"))
 	require.NoError(t, err)
@@ -292,7 +292,7 @@ func TestAutoMerge_PendingIsTurnedOffOnPause(t *testing.T) {
 	require.Equal(t, "pending", got.Status.Outputs["prAutoMerge"], "the timed-out enable is retried later")
 	require.Len(t, m.enables, 1, "the SCM got the enable")
 
-	require.NoError(t, lifecycle.Pause(ctx, c, "default", "nginx-demo"))
+	require.NoError(t, lifecycle.Pause(ctx, c, "default", "nginx-demo", nil))
 	reconcileStep(t, r, "step")
 	got = getStep(t, c, "step")
 	assert.Equal(t, "suspended", got.Status.Outputs["prAutoMerge"])
@@ -322,7 +322,7 @@ func TestAutoMerge_UsesTheStepsProvider(t *testing.T) {
 
 	reconcileStep(t, r, "step")
 	assert.Equal(t, "enabled", getStep(t, c, "step").Status.Outputs["prAutoMerge"])
-	require.NoError(t, lifecycle.Pause(ctx, c, "default", "nginx-demo"))
+	require.NoError(t, lifecycle.Pause(ctx, c, "default", "nginx-demo", nil))
 	reconcileStep(t, r, "step")
 	assert.Equal(t, "suspended", getStep(t, c, "step").Status.Outputs["prAutoMerge"])
 

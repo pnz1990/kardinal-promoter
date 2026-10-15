@@ -294,7 +294,7 @@ func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBund
 }
 
 func newReleaseHoldCmd() *cobra.Command {
-	var envFlag string
+	var envFlag, reason string
 	cmd := &cobra.Command{
 		Use:     "unhold <pipeline> <env>",
 		Aliases: []string{"release-hold"},
@@ -314,16 +314,21 @@ its normal gates. release-hold is the same command.`,
 			if err != nil {
 				return fmt.Errorf("unhold: %w", err)
 			}
-			return releaseHoldFn(cmd.OutOrStdout(), c, ns, pipeline, env)
+			return releaseHoldFn(cmd.OutOrStdout(), c, ns, pipeline, env, reason)
 		},
 	}
 	addEnvFlag(cmd, &envFlag, "Held environment to release (or give it after the pipeline)")
+	cmd.Flags().StringVar(&reason, "reason", "", "why, recorded with your name in the HoldReleased AuditEvent")
 	return withStructuredOutput(cmd)
 }
 
 // releaseHoldFn is the testable implementation of unhold (release-hold).
-func releaseHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env string) error {
-	h, err := lifecycle.ReleaseHold(context.Background(), c, ns, pipeline, env)
+func releaseHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, reason string) error {
+	who, err := changeBy(context.Background(), c, reason, actorpkg.Where{Namespace: ns, Pipeline: pipeline, Environment: env})
+	if err != nil {
+		return fmt.Errorf("unhold: %w", err)
+	}
+	h, err := lifecycle.ReleaseHold(context.Background(), c, ns, pipeline, env, who)
 	if err != nil {
 		return err
 	}
@@ -402,7 +407,8 @@ type heldEnvironment struct {
 // holdFn is the testable implementation of hold (lifecycle.HoldCurrent).
 func holdFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, reason, actor string, expiresIn time.Duration) error {
 	h, existed, err := lifecycle.HoldCurrent(context.Background(), c, lifecycle.HoldCurrentRequest{
-		Namespace: ns, Pipeline: pipeline, Environment: env, Reason: reason, Actor: actor, ExpiresIn: expiresIn, Now: time.Now(),
+		Namespace: ns, Pipeline: pipeline, Environment: env, Reason: reason, Actor: actor, Stamp: bestStamp(c, actorpkg.Where{Namespace: ns, Pipeline: pipeline, Environment: env}),
+		ExpiresIn: expiresIn, Now: time.Now(),
 	})
 	if err != nil {
 		return err
@@ -476,4 +482,19 @@ func artifactSummary(b *v1alpha1.Bundle) string {
 		parts = append(parts, "config "+b.Spec.ConfigRef.CommitSHA)
 	}
 	return strings.Join(parts, ", ")
+}
+
+// bestStamp is the actor stamp of this CLI's user for a write at where, nil
+// when it cannot be read: a hold or a freeze names its createdBy all the
+// same, and its AuditEvent then names no actor kind.
+func bestStamp(c sigs_client.Client, where actorpkg.Where) *v1alpha1.Actor {
+	id, err := identityOf(context.Background(), c)
+	if err != nil {
+		return nil
+	}
+	stamp, err := stampOf(context.Background(), c, id, where)
+	if err != nil {
+		return nil
+	}
+	return stamp
 }

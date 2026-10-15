@@ -29,8 +29,8 @@ func TestPauseResume(t *testing.T) {
 	c := newClient(t, pipeline("app", "test", "prod"))
 
 	// Pause twice: idempotent.
-	require.NoError(t, lifecycle.Pause(ctx, c, ns, "app"))
-	require.NoError(t, lifecycle.Pause(ctx, c, ns, "app"))
+	require.NoError(t, lifecycle.Pause(ctx, c, ns, "app", nil))
+	require.NoError(t, lifecycle.Pause(ctx, c, ns, "app", nil))
 
 	var p v1alpha1.Pipeline
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "app"}, &p))
@@ -50,8 +50,8 @@ func TestPauseResume(t *testing.T) {
 	assert.True(t, paused)
 
 	// Resume twice: idempotent.
-	require.NoError(t, lifecycle.Resume(ctx, c, ns, "app"))
-	require.NoError(t, lifecycle.Resume(ctx, c, ns, "app"))
+	require.NoError(t, lifecycle.Resume(ctx, c, ns, "app", nil))
+	require.NoError(t, lifecycle.Resume(ctx, c, ns, "app", nil))
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "app"}, &p))
 	assert.False(t, p.Spec.Paused)
 	err = c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "freeze-app"}, &gate)
@@ -71,7 +71,7 @@ func TestPause_LongPipelineNameMarksFreezeGateGenerated(t *testing.T) {
 	ctx := context.Background()
 	name := strings.Repeat("p", 100)
 	c := newClient(t, pipeline(name, "test", "prod"))
-	require.NoError(t, lifecycle.Pause(ctx, c, ns, name))
+	require.NoError(t, lifecycle.Pause(ctx, c, ns, name, nil))
 
 	gateName := lifecycle.FreezeGateName(name)
 	assert.Greater(t, len(gateName), 63)
@@ -86,8 +86,8 @@ func TestPause_LongPipelineNameMarksFreezeGateGenerated(t *testing.T) {
 func TestPauseResume_Errors(t *testing.T) {
 	ctx := context.Background()
 	c := newClient(t)
-	assert.ErrorIs(t, lifecycle.Pause(ctx, c, ns, "missing"), lifecycle.ErrNotFound)
-	assert.ErrorIs(t, lifecycle.Resume(ctx, c, ns, "missing"), lifecycle.ErrNotFound)
+	assert.ErrorIs(t, lifecycle.Pause(ctx, c, ns, "missing", nil), lifecycle.ErrNotFound)
+	assert.ErrorIs(t, lifecycle.Resume(ctx, c, ns, "missing", nil), lifecycle.ErrNotFound)
 }
 
 func TestRemoveFreezeGate_LeavesUserGateAlone(t *testing.T) {
@@ -102,7 +102,7 @@ func TestRemoveFreezeGate_LeavesUserGateAlone(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, paused, "a gate without the freeze label is not a pause")
 
-	require.NoError(t, lifecycle.Resume(ctx, c, ns, "app"))
+	require.NoError(t, lifecycle.Resume(ctx, c, ns, "app", nil))
 	var gate v1alpha1.PolicyGate
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "freeze-app"}, &gate),
 		"resume must not delete a user gate that happens to share the name")
@@ -152,7 +152,7 @@ func TestPause_UserGateWithTheFreezeNameIsAConflict(t *testing.T) {
 	}
 	c := newClient(t, pipeline("app", "test"), userGate)
 
-	err := lifecycle.Pause(ctx, c, ns, "app")
+	err := lifecycle.Pause(ctx, c, ns, "app", nil)
 	require.ErrorIs(t, err, lifecycle.ErrConflict)
 	assert.Contains(t, err.Error(), "freeze-app")
 	assert.Contains(t, err.Error(), "NOT paused")
@@ -226,8 +226,8 @@ func TestSetPaused_WritesOnlyThePipeline(t *testing.T) {
 					},
 				}).Build()
 
-			require.NoError(t, lifecycle.SetPaused(ctx, c, ns, "app", paused))
-			require.NoError(t, lifecycle.SetPaused(ctx, c, ns, "app", paused), "idempotent")
+			require.NoError(t, lifecycle.SetPaused(ctx, c, ns, "app", paused, nil))
+			require.NoError(t, lifecycle.SetPaused(ctx, c, ns, "app", paused, nil), "idempotent")
 
 			var got v1alpha1.Pipeline
 			require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "app"}, &got))
@@ -238,7 +238,7 @@ func TestSetPaused_WritesOnlyThePipeline(t *testing.T) {
 				"the freeze gate is the Pipeline reconciler's to write")
 		})
 	}
-	assert.ErrorIs(t, lifecycle.SetPaused(ctx, newClient(t), ns, "missing", true), lifecycle.ErrNotFound)
+	assert.ErrorIs(t, lifecycle.SetPaused(ctx, newClient(t), ns, "missing", true, nil), lifecycle.ErrNotFound)
 }
 
 // TestPauseResume_WithoutGateRights: a caller allowed to update the Pipeline
@@ -273,7 +273,7 @@ func TestPauseResume_WithoutGateRights(t *testing.T) {
 					},
 				}).Build()
 			var p v1alpha1.Pipeline
-			err := lifecycle.Pause(ctx, c, ns, "app")
+			err := lifecycle.Pause(ctx, c, ns, "app", nil)
 			if tt.wantErr {
 				require.Error(t, err)
 			} else {
@@ -281,7 +281,7 @@ func TestPauseResume_WithoutGateRights(t *testing.T) {
 			}
 			require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "app"}, &p))
 			assert.True(t, p.Spec.Paused, "spec.paused is set either way")
-			err = lifecycle.Resume(ctx, c, ns, "app")
+			err = lifecycle.Resume(ctx, c, ns, "app", nil)
 			if tt.wantErr {
 				require.Error(t, err)
 			} else {
@@ -291,4 +291,35 @@ func TestPauseResume_WithoutGateRights(t *testing.T) {
 			assert.False(t, p.Spec.Paused)
 		})
 	}
+}
+
+// TestLifecycle_RecordsWhoChanged (#1939): pause, resume, a fleet's pause
+// and a hold's release record who made them (spec.lastChange) in the same
+// write, for the change's AuditEvent; a change that changes nothing (pausing
+// a paused Pipeline) leaves the record of the change that did.
+func TestLifecycle_RecordsWhoChanged(t *testing.T) {
+	ctx := context.Background()
+	p := pipeline("app", "test", "prod")
+	p.Spec.Environments[1].Fleet = &v1alpha1.FleetSpec{}
+	c := newClient(t, p)
+	get := func() *v1alpha1.Pipeline {
+		var got v1alpha1.Pipeline
+		require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "app"}, &got))
+		return &got
+	}
+	alice := &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "alice"}
+	require.NoError(t, lifecycle.Pause(ctx, c, ns, "app", &v1alpha1.PipelineChange{By: "alice", Reason: "INC-7", Actor: alice}))
+	assert.Equal(t, &v1alpha1.PipelineChange{Action: "Pause", By: "alice", Reason: "INC-7", Actor: alice}, get().Spec.LastChange)
+
+	require.NoError(t, lifecycle.Pause(ctx, c, ns, "app", &v1alpha1.PipelineChange{By: "mallory"}))
+	assert.Equal(t, "alice", get().Spec.LastChange.By, "nothing changed: the record of the pause stays")
+
+	require.NoError(t, lifecycle.SetPaused(ctx, c, ns, "app", false, &v1alpha1.PipelineChange{By: "bob"}))
+	assert.Equal(t, &v1alpha1.PipelineChange{Action: "Resume", By: "bob"}, get().Spec.LastChange)
+
+	require.NoError(t, lifecycle.SetFleetPaused(ctx, c, ns, "app", "prod", true, &v1alpha1.PipelineChange{By: "carol"}))
+	assert.Equal(t, &v1alpha1.PipelineChange{Action: "PauseFleet", Target: "prod", By: "carol"}, get().Spec.LastChange)
+
+	require.NoError(t, lifecycle.Resume(ctx, c, ns, "app", nil))
+	assert.Equal(t, "carol", get().Spec.LastChange.By, "no record given: none written")
 }

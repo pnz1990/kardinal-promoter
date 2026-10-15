@@ -25,7 +25,8 @@ import (
 
 func rejection() *kardinalv1alpha1.BundleRejection {
 	at := metav1.NewTime(time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC))
-	return &kardinalv1alpha1.BundleRejection{By: "alice", Reason: "CVE-2026-1 in the base image", At: &at}
+	return &kardinalv1alpha1.BundleRejection{By: "alice", Reason: "CVE-2026-1 in the base image", At: &at,
+		Actor: &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorHuman, Principal: "alice"}}
 }
 
 // TestBundleReconciler_Rejected moves a Bundle whose spec.rejected is set to
@@ -347,5 +348,7 @@ func TestBundleReconciler_RejectionAudited(t *testing.T) {
 	assert.Equal(t, "app-v1", ae.Spec.BundleName)
 	assert.Equal(t, "*", ae.Spec.Environment, "the whole Bundle")
 	assert.Equal(t, "alice rejected bundle app-v1: CVE-2026-1 in the base image", ae.Spec.Message)
+	assert.Equal(t, &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorHuman, Principal: "alice"}, ae.Spec.Actor,
+		"the rejection's actor stamp (#1939)")
 	assert.Equal(t, map[string]string{"kardinal.io/pipeline": "app", "kardinal.io/bundle": "app-v1", "kardinal.io/action": "BundleRejected"}, ae.Labels)
 }

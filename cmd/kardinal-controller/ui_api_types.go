@@ -86,6 +86,9 @@ type uiReleaseHoldRequest struct {
 	Environment string `json:"environment"`
 	// Namespace of the Pipeline. Defaults to "default".
 	Namespace string `json:"namespace,omitempty"`
+	// Reason, optional, says why: it is recorded with the caller in the
+	// HoldReleased AuditEvent.
+	Reason string `json:"reason,omitempty"`
 }
 
 // uiRollbackResponse is the 201 response of POST /api/v1/ui/rollback.
@@ -125,6 +128,9 @@ type uiPipelineActionRequest struct {
 	// Environment, when set, pauses or resumes only this fleet environment
 	// (spec.pausedFleets) instead of the whole Pipeline.
 	Environment string `json:"environment,omitempty"`
+	// Reason, optional, says why: it is recorded with the caller in the
+	// PipelinePaused or PipelineResumed AuditEvent.
+	Reason string `json:"reason,omitempty"`
 }
 
 // uiRejectRequest is the body of POST /api/v1/ui/reject.

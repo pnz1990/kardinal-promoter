@@ -148,3 +148,16 @@ func TestEnsurePipelineSpecCurrent_KeepsRemovedTargets(t *testing.T) {
 	require.NoError(t, r.keepRemovedFleetTargets(context.Background(), zerolog.Nop(), b2, unresolved))
 	assert.Empty(t, b2.Status.RetiredSteps)
 }
+
+// TestPipelineSpecHash_IgnoresLastChange (#1939): who made the last pause,
+// resume or release is not what the Graph is built from, so recording it
+// does not rebuild the Graphs of Bundles in flight.
+func TestPipelineSpecHash_IgnoresLastChange(t *testing.T) {
+	p := &kardinalv1alpha1.Pipeline{Spec: kardinalv1alpha1.PipelineSpec{
+		Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "prod"}}}}
+	before := pipelineSpecHashFor(p)
+	p.Spec.LastChange = &kardinalv1alpha1.PipelineChange{Action: kardinalv1alpha1.PipelineChangePause, By: "alice"}
+	if got := pipelineSpecHashFor(p); got != before {
+		t.Fatalf("the hash changed with spec.lastChange: %s != %s", got, before)
+	}
+}

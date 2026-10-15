@@ -412,6 +412,13 @@ done
 ```
 
 See also [Troubleshooting: deletion hangs](troubleshoot-promotions.md#a-promotionstep-graph-or-namespace-never-finishes-deleting).
+
+Lift any freeze before you uninstall (`kardinal freeze` lists them, `kardinal unfreeze <name>`
+lifts one): a freeze carries the `kardinal.io/freeze-audit` finalizer, and the controller lets
+it go once its `FreezeLifted` AuditEvent is written. One deleted after the controller is gone
+stays until you remove the finalizer with
+`kubectl patch changewindow <name> --type merge -p '{"metadata":{"finalizers":null}}'`.
+
 Then remove the CRDs and kro if you want:
 
 ```bash

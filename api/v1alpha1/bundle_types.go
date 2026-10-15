@@ -101,6 +101,11 @@ type BundleRejection struct {
 	// At is when the Bundle was rejected.
 	// +optional
 	At *metav1.Time `json:"at,omitempty"`
+
+	// Actor is By's actor stamp (docs/actors.md), checked by the chart's
+	// actor admission policy; the BundleRejected AuditEvent names it.
+	// +optional
+	Actor *Actor `json:"actor,omitempty"`
 }
 
 // RejectedArtifactSet is the part of a rejected Bundle that the rejection

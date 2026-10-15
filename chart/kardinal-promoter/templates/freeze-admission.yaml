@@ -59,7 +59,18 @@ spec:
         (!has(object.spec.freeze.createdBy) || object.spec.freeze.createdBy == oldObject.spec.freeze.createdBy)
       message: spec.freeze.createdBy never changes
       reason: Forbidden
-    # The controller writes ChangeWindows only for the UI's freeze controls.
+    # Who lifts the freeze is the requester (spec.freeze.lifted, #1939),
+    # written once.
+    - expression: >-
+        variables.controller || !has(object.spec.freeze) || !has(object.spec.freeze.lifted) ||
+        (variables.oldFreeze && has(oldObject.spec.freeze.lifted) && oldObject.spec.freeze.lifted == object.spec.freeze.lifted) ||
+        object.spec.freeze.lifted.by == request.userInfo.username
+      messageExpression: >-
+        'spec.freeze.lifted.by must be your own username "' + request.userInfo.username +
+        '"; kardinal unfreeze sets it for you'
+      reason: Forbidden
+    # The controller writes ChangeWindows only for the UI's freeze controls
+    # and its audit finalizer.
     - expression: >-
         !variables.controller || has(object.spec.freeze)
       message: this controller writes only freezes (ChangeWindows with spec.freeze)

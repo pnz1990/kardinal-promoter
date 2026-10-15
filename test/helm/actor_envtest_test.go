@@ -239,6 +239,56 @@ func TestActorsOnAPIServer(t *testing.T) {
 	require.NoError(t, exemptAs(as("bob"), "bob", nil), "18b a person may leave the stamp out")
 	t.Log("ok 18b freeze exemptions")
 
+	// 18c who paused, released, rejected, froze and lifted (#1939): the
+	// record names the requester, and its stamp is checked like any other.
+	hu := func(p string) *v1alpha1.Actor { return &v1alpha1.Actor{Kind: "human", Principal: p} }
+	app := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "checkout", Namespace: "payments-a"},
+		Spec: v1alpha1.PipelineSpec{Git: v1alpha1.PipelineGit{URL: "https://github.com/acme/app"},
+			Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}}}}
+	require.NoError(t, admin.Create(ctx, app))
+	pauseAs := func(c client.Client, ch *v1alpha1.PipelineChange) error {
+		var cur v1alpha1.Pipeline
+		require.NoError(t, admin.Get(ctx, client.ObjectKeyFromObject(app), &cur))
+		cur.Spec.Paused = !cur.Spec.Paused
+		cur.Spec.LastChange = ch
+		return c.Update(ctx, &cur)
+	}
+	err = pauseAs(as("alice"), &v1alpha1.PipelineChange{Action: "Pause", By: "bob", Actor: hu("bob")})
+	require.Error(t, err, "18c a pause recorded in someone else's name")
+	require.Contains(t, err.Error(), "spec.lastChange.by must be your own username")
+	require.Error(t, pauseAs(as("alice"), &v1alpha1.PipelineChange{Action: "Pause", By: "alice", Actor: hu("bob")}),
+		"18c a forged stamp")
+	require.Error(t, pauseAs(as(fx), &v1alpha1.PipelineChange{Action: "Pause", By: fx, Actor: hu(fx)}),
+		"18c an agent stamped human")
+	require.NoError(t, pauseAs(as("alice"), &v1alpha1.PipelineChange{Action: "Pause", By: "alice", Reason: "INC-7", Actor: hu("alice")}),
+		"18c a person's pause")
+	require.NoError(t, pauseAs(as(fx), &v1alpha1.PipelineChange{Action: "Resume", By: fx, Actor: ag(fx, "fixer", "alice")}),
+		"18c an agent's resume, stamped")
+	require.NoError(t, pauseAs(as("bob"), nil), "18c kubectl without a record: admitted, audited with no actor")
+
+	rb := bundle("payments-a", "checkout", nil)
+	require.NoError(t, as("alice").Create(ctx, rb))
+	rb.Spec.Rejected = &v1alpha1.BundleRejection{By: "alice", Reason: "bad", Actor: hu("bob")}
+	require.Error(t, as("alice").Update(ctx, rb), "18c a rejection with a forged stamp")
+	rb.Spec.Rejected.Actor = hu("alice")
+	require.NoError(t, as("alice").Update(ctx, rb), "18c a rejection stamped")
+
+	fz2 := &v1alpha1.ChangeWindow{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-freeze-agents"},
+		Spec: v1alpha1.ChangeWindowSpec{Type: "blackout", Start: metav1.Now(), Reason: "INC-2",
+			Freeze: &v1alpha1.ChangeWindowFreeze{Actors: "agents", CreatedBy: fx, Actor: hu(fx)}}}
+	require.Error(t, as(fx).Create(ctx, fz2), "18c an agent's freeze stamped human")
+	fz2.Spec.Freeze.Actor = ag(fx, "fixer", "alice")
+	require.NoError(t, as(fx).Create(ctx, fz2), "18c an agent may freeze (stop the line is not break-glass)")
+	var cur v1alpha1.ChangeWindow
+	require.NoError(t, admin.Get(ctx, client.ObjectKeyFromObject(fz2), &cur))
+	cur.Spec.Freeze.Lifted = &v1alpha1.FreezeLift{By: "bob", Actor: hu("alice")}
+	err = as("alice").Update(ctx, &cur)
+	require.Error(t, err, "18c a lift recorded in someone else's name")
+	require.Contains(t, err.Error(), "spec.freeze.lifted.by must be your own username")
+	cur.Spec.Freeze.Lifted = &v1alpha1.FreezeLift{By: "alice", Actor: hu("alice")}
+	require.NoError(t, as("alice").Update(ctx, &cur), "18c a person's lift")
+	t.Log("ok 18c who changed what")
+
 	// 19 AuditEvent with actor.
 	ae := func(name string, a *v1alpha1.Actor) *v1alpha1.AuditEvent {
 		return &v1alpha1.AuditEvent{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "payments-a"},

@@ -59,6 +59,15 @@ Break-glass is for people: the `<release>-actor` admission policy refuses an exe
 agent, and the controller never honours one stamped as an agent's (the freeze's
 `ExemptionIgnored` condition says so).
 
+## Who froze, and who lifted it
+
+A freeze's start and its lift are AuditEvents, `FreezeStarted` and `FreezeLifted`, naming who
+and their verified actor: in the freeze's namespace, or the controller's for a freeze of several
+or every namespace. `kardinal unfreeze` and the UI record who lifts it (`spec.freeze.lifted`) just
+before they delete the window, and a finalizer (`kardinal.io/freeze-audit`) keeps the window until
+`FreezeLifted` is written, so a `kubectl delete` is recorded too, without an actor. While the
+controller is down, a deleted freeze waits for it; it holds nothing meanwhile.
+
 ## In the UI
 
 Every view shows a banner for each active freeze: whom it holds and where, who froze (a person

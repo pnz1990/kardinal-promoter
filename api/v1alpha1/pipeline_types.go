@@ -63,6 +63,15 @@ type PipelineSpec struct {
 	// +optional
 	Holds []EnvironmentHold `json:"holds,omitempty"`
 
+	// LastChange is who made the latest pause, resume or hold release, and
+	// why: kardinal pause, resume and release-hold, and the UI, write it in
+	// the same update as the change, and the chart's admission policies
+	// admit it only in the requester's name (by, and the actor stamp). The
+	// Pipeline reconciler names them in the change's AuditEvent; a change
+	// made without it (kubectl) is recorded with an unknown actor.
+	// +optional
+	LastChange *PipelineChange `json:"lastChange,omitempty"`
+
 	// HistoryLimit is the number of completed Bundle promotions to retain.
 	// When unset or zero, defaults to 50. Terminal Bundles (Verified, Failed, Superseded)
 	// beyond this limit are deleted oldest-first on each new Bundle creation.
@@ -978,6 +987,45 @@ const (
 	HoldStateBundleMissing = "BundleMissing"
 )
 
+// Pipeline lifecycle change actions (spec.lastChange.action).
+const (
+	PipelineChangePause       = "Pause"
+	PipelineChangeResume      = "Resume"
+	PipelineChangePauseFleet  = "PauseFleet"
+	PipelineChangeResumeFleet = "ResumeFleet"
+	PipelineChangeReleaseHold = "ReleaseHold"
+)
+
+// PipelineChange is who made one pause, resume or hold release, and why.
+type PipelineChange struct {
+	// Action is the change: Pause, Resume, PauseFleet, ResumeFleet or
+	// ReleaseHold.
+	// +kubebuilder:validation:Enum=Pause;Resume;PauseFleet;ResumeFleet;ReleaseHold
+	// +kubebuilder:validation:MaxLength=16
+	Action string `json:"action"`
+
+	// Target is the fleet (PauseFleet, ResumeFleet) or the held environment
+	// (ReleaseHold); empty for the Pipeline.
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	Target string `json:"target,omitempty"`
+
+	// By is the requester's username, as the API server authenticated it.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	By string `json:"by"`
+
+	// Reason says why (kardinal pause --reason).
+	// +kubebuilder:validation:MaxLength=1024
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// Actor is By's actor stamp (docs/actors.md), checked by the chart's
+	// actor admission policy.
+	// +optional
+	Actor *Actor `json:"actor,omitempty"`
+}
+
 // EnvironmentHoldState is the state of one hold, written by the Pipeline
 // reconciler.
 type EnvironmentHoldState struct {
@@ -1056,6 +1104,11 @@ type EnvironmentHold struct {
 	// +optional
 	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
 
+	// Actor is CreatedBy's actor stamp (docs/actors.md), checked by the
+	// chart's actor admission policy; the HoldCreated AuditEvent names it.
+	// +optional
+	Actor *Actor `json:"actor,omitempty"`
+
 	// ExpiresAt, when set, is when the controller removes the hold.
 	// +optional
 	ExpiresAt *metav1.Time `json:"expiresAt,omitempty"`
@@ -1088,6 +1141,20 @@ type PipelineStatus struct {
 	// +listMapKey=environment
 	// +optional
 	ObservedHolds []EnvironmentHold `json:"observedHolds,omitempty"`
+
+	// ObservedPaused is spec.paused as the Pipeline reconciler last
+	// recorded it: the PipelinePaused and PipelineResumed AuditEvents are
+	// written from the difference, whichever client changed it. Unset until
+	// the first record (an upgrade records the current state, unaudited).
+	// +optional
+	ObservedPaused *bool `json:"observedPaused,omitempty"`
+
+	// ObservedPausedFleets is spec.pausedFleets as last recorded, for the
+	// AuditEvents of a fleet's pause and resume.
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=100
+	// +optional
+	ObservedPausedFleets []string `json:"observedPausedFleets,omitempty"`
 
 	// HoldStates says, per hold of spec.holds, whether its rollback Bundle
 	// exists. A hold whose Bundle is missing (a crash between the
