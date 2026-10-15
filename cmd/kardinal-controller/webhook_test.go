@@ -489,7 +489,7 @@ func prJSON(provider string, open bool) string {
 	if open {
 		return `{"state":"open","merged":false}`
 	}
-	return `{"state":"closed","merged":true}`
+	return `{"state":"closed","merged":true,"merged_by":{"login":"user1"}}`
 }
 
 // TestWebhook_FailsClosed verifies that the SCM webhook uses the real GitHub
@@ -886,9 +886,11 @@ func hmacHexOf(key, body string) string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
-// TestWebhook_RecordsMerger (#1939): the merged-PR webhook records who
-// merged the PR and that the webhook reported it; a merge polling recorded
-// first keeps its mergedVia, and gets the merger the webhook names.
+// TestWebhook_RecordsMerger (#1939, QA B1 on #2003): the merged-PR webhook
+// records that the webhook saw the merge, but not the payload's merger:
+// anyone with the webhook secret could name someone else. The PRStatus
+// reconciler asks the SCM API (status.mergedBy); a merge polling recorded
+// first keeps its mergedVia.
 func TestWebhook_RecordsMerger(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -896,8 +898,8 @@ func TestWebhook_RecordsMerger(t *testing.T) {
 		wantVia string
 	}{
 		{name: "open PR", status: v1alpha1.PRStatusStatus{Open: true}, wantVia: v1alpha1.PRMergedViaWebhook},
-		{name: "merged by polling without the merger", status: v1alpha1.PRStatusStatus{Merged: true,
-			MergeCommitSHA: "e7ddb9e", MergedVia: v1alpha1.PRMergedViaPoll}, wantVia: v1alpha1.PRMergedViaPoll},
+		{name: "merged by polling", status: v1alpha1.PRStatusStatus{Merged: true,
+			MergedVia: v1alpha1.PRMergedViaPoll}, wantVia: v1alpha1.PRMergedViaPoll},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -908,14 +910,14 @@ func TestWebhook_RecordsMerger(t *testing.T) {
 			}
 			c := fake.NewClientBuilder().WithScheme(webhookScheme()).WithObjects(prs).WithStatusSubresource(prs).Build()
 			mockSCM := &mockSCMProvider{event: scm.WebhookEvent{EventType: "pull_request", Action: "closed", Merged: true,
-				PRNumber: 42, RepoFullName: "owner/repo", MergeCommitSHA: "e7ddb9e", MergedBy: "user1"}}
+				PRNumber: 42, RepoFullName: "owner/repo", MergeCommitSHA: "e7ddb9e", MergedBy: "alice"}}
 			w := httptest.NewRecorder()
 			newWebhookServerWithConfig(mockSCM, c, zerolog.Nop(), true).Handler()(w,
 				httptest.NewRequest(http.MethodPost, "/webhook/scm", bytes.NewReader([]byte(`{}`))))
 			assert.Equal(t, http.StatusNoContent, w.Code)
 			var got v1alpha1.PRStatus
 			require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(prs), &got))
-			assert.Equal(t, "user1", got.Status.MergedBy)
+			assert.Empty(t, got.Status.MergedBy, "the payload's alice is not recorded")
 			assert.Equal(t, tc.wantVia, got.Status.MergedVia)
 		})
 	}

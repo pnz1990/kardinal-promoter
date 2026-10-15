@@ -68,10 +68,11 @@ type WebhookEvent struct {
 	// otherwise; the PRStatus reconciler then asks the SCM API for it.
 	MergeCommitSHA string
 
-	// MergedBy is the SCM user who merged the PR, when the payload names
-	// them (the merger on GitHub, Forgejo and Gitea, the event's user on
-	// GitLab, the actor on Bitbucket, closedBy on Azure DevOps). The
-	// PRMerged AuditEvent names them.
+	// MergedBy is the SCM user the payload says merged the PR (the merger on
+	// GitHub, Forgejo and Gitea, the event's user on GitLab, the actor on
+	// Bitbucket, closedBy on Azure DevOps). It is only a hint, logged: anyone
+	// holding the webhook secret can write a payload, so the PRStatus
+	// reconciler asks the SCM API who merged it (PRMergerGetter).
 	MergedBy string
 
 	// Action is the event action (e.g., "closed", "opened").

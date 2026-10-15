@@ -1652,6 +1652,21 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
 	}
 
+	if prs.Status.Merged && mergerPending(&prs.Status) {
+		// Who merged it is still being asked of the SCM (status.mergedBy):
+		// the PRMerged record is written with the transition, so the step
+		// waits for the name, or for the PRStatus reconciler to record it
+		// unavailable (at most its merge-commit window, 5 minutes) (#1939).
+		msg := fmt.Sprintf("PR #%d merged; waiting for the SCM to say who merged it", prs.Spec.PRNumber)
+		if ps.Status.Message != msg {
+			ps.Status.Message = msg
+			if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
+				return ctrl.Result{}, fmt.Errorf("patch waiting for the merger: %w", patchErr)
+			}
+		}
+		return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
+	}
+
 	if prs.Status.Merged {
 		log.Info().
 			Str("prStatusRef", prStatusName).
@@ -3237,4 +3252,12 @@ func (r *Reconciler) clusterUnreachable(ctx context.Context, log zerolog.Logger,
 		return ctrl.Result{}, fmt.Errorf("patch health result: %w", err)
 	}
 	return ctrl.Result{RequeueAfter: requeueHealthCheck}, nil
+}
+
+// mergerPending reports whether a merged PR's merger is still being asked of
+// the SCM: the merge was recorded by this release (mergedVia) and the name
+// is neither known nor recorded unavailable. A merge recorded before the
+// upgrade waits for nothing.
+func mergerPending(s *v1alpha1.PRStatusStatus) bool {
+	return s.MergedVia != "" && s.MergedBy == "" && !s.MergedByUnavailable
 }

@@ -359,7 +359,7 @@ func prMergedMessage(ps *v1alpha1.PromotionStep, message string) string {
 	o := ps.Status.Outputs
 	by := o[OutputPRMergedBy]
 	if by == "" {
-		by = "(the SCM did not say who)"
+		by = "(unknown: the SCM did not name who, or its lookup failed for 5 minutes)"
 	}
 	msg := message + " by " + by
 	if via := o[outputPRMergedVia]; via != "" {

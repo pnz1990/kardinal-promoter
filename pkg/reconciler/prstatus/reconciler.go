@@ -72,6 +72,7 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 
@@ -638,6 +639,7 @@ func (r *Reconciler) fetchMerger(ctx context.Context, log zerolog.Logger, prs *v
 		return "", false
 	}
 	by, err := getter.GetPRMerger(ctx, prs.Spec.Repo, prs.Spec.PRNumber)
+	by = clipMerger(by)
 	if err != nil {
 		if scm.IsPermanentError(err) {
 			log.Warn().Err(err).Int("prNumber", prs.Spec.PRNumber).Msg("could not read who merged the PR, giving up")
@@ -665,4 +667,21 @@ func (r *Reconciler) now() time.Time {
 		return r.NowFn()
 	}
 	return time.Now()
+}
+
+// maxMergerLength is status.mergedBy's CRD limit: a longer SCM name (an Azure
+// DevOps UPN) would make the whole status patch fail.
+const maxMergerLength = 253
+
+// clipMerger cuts an SCM user name to maxMergerLength bytes, on a UTF-8
+// boundary.
+func clipMerger(s string) string {
+	if len(s) <= maxMergerLength {
+		return s
+	}
+	cut := maxMergerLength
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
