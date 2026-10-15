@@ -13,12 +13,16 @@ import (
 // (spec.provenance.commitTime, which CI sets) or, without one, the Bundle's
 // creation, which leaves out the build (#1942). fromCommit reports which. A
 // rollback Bundle starts at its creation: its commit is the restored
-// build's, often days older than the rollback.
+// build's, often days older than the rollback. A commitTime after the
+// Bundle's creation cannot be the commit's (a Bundle created with kubectl is
+// not validated by ValidateNewBundle), and is ignored.
 func LeadTimeStart(b *v1alpha1.Bundle) (start time.Time, fromCommit bool) {
-	if p := b.Spec.Provenance; p != nil && p.CommitTime != nil && !p.CommitTime.IsZero() && p.RollbackOf == "" {
+	created := b.CreationTimestamp.UTC()
+	if p := b.Spec.Provenance; p != nil && p.CommitTime != nil && !p.CommitTime.IsZero() && p.RollbackOf == "" &&
+		!p.CommitTime.After(created) {
 		return p.CommitTime.UTC(), true
 	}
-	return b.CreationTimestamp.UTC(), false
+	return created, false
 }
 
 // AutoRollback reports whether b is a rollback Bundle the controller started

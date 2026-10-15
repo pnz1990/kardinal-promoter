@@ -145,7 +145,7 @@ pipeline               my-app    (last 7 days)
 target_env             prod
 bundles_total          15
 deployment_frequency   2.00/day  (14 verified in target env)
-lead_time_avg          45m12s    (creation to prod verified, 14 samples)
+lead_time_avg          45m12s    (from the commit to prod verified, 14 samples)
 change_fail_rate       6.7%      (1 failed / 15 total)
 rollback_count         1
 ```
@@ -154,7 +154,7 @@ rollback_count         1
 |---|---|
 | `bundles_total` | Versions created in the window |
 | `deployment_frequency` | PromotionSteps Verified in `--env` per day |
-| `lead_time_avg` | Mean time from version creation to Verified in `--env` |
+| `lead_time_avg` | Mean time from the commit (`provenance.commitTime`), else the version's creation, to Verified in `--env`; the note says which |
 | `change_fail_rate` | Failed versions divided by `bundles_total` |
 | `rollback_count` | Rollback versions in the window |
 

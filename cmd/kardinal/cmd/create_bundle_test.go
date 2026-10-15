@@ -472,11 +472,11 @@ func TestCreateBundle_DryRun_CompactShape(t *testing.T) {
 // is not RFC 3339 is refused before anything is created.
 func TestCreateBundle_CommitTime(t *testing.T) {
 	spec, err := createBundleOptions{Images: []string{"nginx:1.25"}, Type: "image",
-		CommitTime: "2026-10-15T03:44:26+02:00"}.bundleSpec("app")
+		CommitTime: "2026-01-15T03:44:26+02:00"}.bundleSpec("app")
 	require.NoError(t, err)
 	require.NotNil(t, spec.Provenance)
 	require.NotNil(t, spec.Provenance.CommitTime)
-	assert.True(t, spec.Provenance.CommitTime.Equal(&metav1.Time{Time: time.Date(2026, 10, 15, 1, 44, 26, 0, time.UTC)}))
+	assert.True(t, spec.Provenance.CommitTime.Equal(&metav1.Time{Time: time.Date(2026, 1, 15, 1, 44, 26, 0, time.UTC)}))
 
 	_, err = createBundleOptions{Images: []string{"nginx:1.25"}, Type: "image", CommitTime: "yesterday"}.bundleSpec("app")
 	require.Error(t, err)
