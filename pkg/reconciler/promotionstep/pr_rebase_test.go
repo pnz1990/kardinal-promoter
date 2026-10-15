@@ -558,6 +558,7 @@ func TestWaitingForMerge_ControllerSecretRefused(t *testing.T) {
 	pc := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(&live, controller).
 		WithStatusSubresource(&v1alpha1.Pipeline{}).
 		WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
+		WithIndex(&v1alpha1.Pipeline{}, pipelinereconciler.IndexPipelineRepo, pipelinereconciler.PipelineRepoValues).
 		WithIndex(&v1alpha1.PromotionStep{}, "spec.pipelineName", func(o client.Object) []string {
 			return []string{o.(*v1alpha1.PromotionStep).Spec.PipelineName}
 		}).Build()

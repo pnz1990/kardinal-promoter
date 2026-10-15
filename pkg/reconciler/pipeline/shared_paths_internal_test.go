@@ -143,7 +143,8 @@ func TestPipelinePeers_Predicate(t *testing.T) {
 	require.NoError(t, kardinalv1alpha1.AddToScheme(s))
 	const repoA, repoB = "https://github.com/org/a", "https://github.com/org/b"
 	peerA, peerB := pl("x", "peer-a", repoA, ev("t", "t")), pl("y", "peer-b", repoB, ev("t", "t"))
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(&peerA, &peerB).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(&peerA, &peerB).
+		WithIndex(&kardinalv1alpha1.Pipeline{}, IndexPipelineRepo, PipelineRepoValues).Build()
 	r := &Reconciler{Client: c}
 	h := r.pipelinePeers()
 	ctx := context.Background()

@@ -52,13 +52,17 @@ func (r *Reconciler) renderedBranchConflict(ctx context.Context, p *kardinalv1al
 	if len(mine) == 0 {
 		return "", nil
 	}
-	var list kardinalv1alpha1.PipelineList
-	if err := r.List(ctx, &list); err != nil {
-		return "", fmt.Errorf("list pipelines: %w", err)
+	v := repoURLValue(p.Spec.Git.URL)
+	if v == "" {
+		return "", nil // SameRepoURL matches no other Pipeline
+	}
+	peers, err := r.listRepoPeers(ctx, v)
+	if err != nil {
+		return "", err
 	}
 	var found []string
-	for i := range list.Items {
-		q := &list.Items[i]
+	for i := range peers {
+		q := &peers[i]
 		if q.UID == p.UID || !older(q, p) || !scm.SameRepoURL(q.Spec.Git.URL, p.Spec.Git.URL) {
 			continue
 		}
@@ -88,13 +92,17 @@ func (r *Reconciler) renderingPipelinesSharingRepo(ctx context.Context, obj clie
 	if !ok {
 		return nil
 	}
-	var list kardinalv1alpha1.PipelineList
-	if err := r.List(ctx, &list); err != nil {
+	v := repoURLValue(p.Spec.Git.URL)
+	if v == "" {
+		return nil
+	}
+	peers, err := r.listRepoPeers(ctx, v)
+	if err != nil {
 		return nil
 	}
 	var out []ctrl.Request
-	for i := range list.Items {
-		q := &list.Items[i]
+	for i := range peers {
+		q := &peers[i]
 		if q.UID != p.UID && len(renderedBranches(q)) > 0 && scm.SameRepoURL(q.Spec.Git.URL, p.Spec.Git.URL) {
 			out = append(out, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(q)})
 		}
