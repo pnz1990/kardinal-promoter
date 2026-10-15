@@ -56,7 +56,9 @@ jobs:
         run: |
           changed="$RUNNER_TEMP/changed"
           if [ "$EVENT" = pull_request ]; then
-            git diff --name-only HEAD^1 HEAD > "$changed"
+            # --no-renames: a moved file counts at both paths (git mv
+            # examples/a.yaml docs/a.yaml changes examples/ too).
+            git diff --no-renames --name-only HEAD^1 HEAD > "$changed"
           else
             : > "$changed"
             export ALL=1
@@ -242,9 +244,46 @@ jobs:
           echo "shard $SHARD/$SHARDS: ${#packages[@]} packages"
           go test -race -count=1 -timeout 120s "${packages[@]}"
 
+  # The Go tests that read the docs (hack/ci/docs-tests.txt: generated
+  # references, CLI lines, coverage anchors, changelog links) for a pull
+  # request that changes the docs and no Go: the shards, which run them
+  # otherwise, are skipped then (#1903).
+  docs-tests:
+    name: docs tests
+    needs: changes
+    if: needs.changes.outputs.docs == 'true' && needs.changes.outputs.go != 'true' && needs.changes.outputs.chart != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Restore the Go race cache
+        # Saved by the go-cache job on main; see there.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-race-${{ runner.os }}-
+      - name: Install Helm
+        # test/examples renders charts with helm template.
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: v3.22.0
+      - name: go test -race the packages whose tests read the docs
+        run: |
+          mapfile -t packages < <(awk '$0 !~ /^#/ && $0 !~ /^!/ && NF { print "./" $1 "/" }' hack/ci/docs-tests.txt)
+          echo "${#packages[@]} packages: ${packages[*]}"
+          go test -race -count=1 -timeout 120s "${packages[@]}"
+
   build:
     name: build
-    needs: [changes, checks, test]
+    needs: [changes, checks, test, docs-tests]
     # Runs when a needed job failed or was skipped too (and decides), not
     # when the run was cancelled.
     if: ${{ !cancelled() }}
@@ -256,6 +295,8 @@ jobs:
           GO: ${{ needs.changes.outputs.go == 'true' || needs.changes.outputs.chart == 'true' }}
           CHECKS: ${{ needs.checks.result }}
           TESTS: ${{ needs.test.result }}
+          DOCS: ${{ needs.changes.outputs.docs == 'true' }}
+          DOCS_TESTS: ${{ needs.docs-tests.result }}
         run: |
           echo "changes: $CHANGES (Go jobs run: $GO), build checks: $CHECKS, go test shards: $TESTS"
           if [ "$CHANGES" != success ]; then
@@ -263,6 +304,11 @@ jobs:
             exit 1
           fi
           if [ "$GO" != true ]; then
+            # The Go tests that read the docs ran in docs-tests instead.
+            if [ "$DOCS" = true ] && [ "$DOCS_TESTS" != success ]; then
+              echo "::error::the docs changed and the docs tests did not pass ($DOCS_TESTS)"
+              exit 1
+            fi
             echo "no Go, chart or workflow change: the build checks and the test shards did not need to run"
             exit 0
           fi
@@ -522,13 +568,14 @@ jobs:
         run: go mod verify
 
   # ── Trivy filesystem vulnerability scan ──────────────────────────────────────
+  # Runs for web changes too: it scans web/package-lock.json.
   # Scans Go module dependencies for HIGH/CRITICAL CVEs and blocks CI on findings.
   # Uses filesystem scan (no Docker image build required) — complements the
   # release.yml image scan and govulncheck for defense-in-depth.
   trivy-fs:
     name: trivy vulnerability scan
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

@@ -5,9 +5,13 @@ package hack
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,7 +77,8 @@ func TestCITestShards(t *testing.T) {
 
 	build := wf.Jobs["build"]
 	assert.Equal(t, "build", build.Name, "branch protection requires the check named build")
-	assert.ElementsMatch(t, []any{"changes", "checks", "test"}, build.Needs)
+	assert.ElementsMatch(t, []any{"changes", "checks", "test", "docs-tests"}, build.Needs)
+	assert.Contains(t, build.Steps[0].Run, `[ "$DOCS" = true ] && [ "$DOCS_TESTS" != success ]`, "a docs change needs the docs tests")
 	assert.Contains(t, build.Steps[0].Run, `[ "$CHANGES" != success ]`, "build fails when the changes job does")
 	assert.Contains(t, build.Steps[0].Run, `[ "$GO" != true ]`, "build passes skipped shards when no Go, chart or workflow changed")
 	assert.Equal(t, "${{ !cancelled() }}", build.If, "build runs, and fails, when a shard fails")
@@ -138,6 +143,80 @@ func TestCIChanges(t *testing.T) {
 	}
 }
 
+// docsPathLiteral is a string literal that names the repository's docs.
+var docsPathLiteral = regexp.MustCompile(`^(\.\./)*(docs(/.*)?|README\.md|mkdocs\.yml|overrides/.*)$`)
+
+// TestCIDocsTests (#1903 QA): every Go test package with a string literal
+// naming the docs (docs/, README.md, mkdocs.yml, overrides/) is in
+// hack/ci/docs-tests.txt, which ci.yml's docs-tests job runs on a docs-only
+// pull request, or is listed there with ! and why its tests do not read the
+// repository's docs. A new test that reads the docs and is in neither list
+// fails here, so a docs-only pull request cannot skip it and break main.
+func TestCIDocsTests(t *testing.T) {
+	root := repoRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, "hack", "ci", "docs-tests.txt"))
+	require.NoError(t, err)
+	run, exempt := map[string]bool{}, map[string]bool{}
+	for _, l := range strings.Split(string(data), "\n") {
+		f := strings.Fields(l)
+		switch {
+		case len(f) == 0 || strings.HasPrefix(f[0], "#"):
+		case strings.HasPrefix(f[0], "!"):
+			assert.Greater(t, len(f), 1, "%q: an exemption says why", l)
+			exempt[strings.TrimPrefix(f[0], "!")] = true
+		default:
+			run[f[0]] = true
+		}
+	}
+	for p := range run {
+		assert.DirExists(t, filepath.Join(root, p), "docs-tests.txt lists %s", p)
+	}
+	found := map[string]string{}
+	require.NoError(t, filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && (d.Name() == "node_modules" || d.Name() == ".git" || d.Name() == "results") {
+			return filepath.SkipDir
+		}
+		if !strings.HasSuffix(p, "_test.go") {
+			return nil
+		}
+		src, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(src), "//go:build e2e") {
+			return nil // the live suites run on a cluster, not in pull request CI
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), p, src, 0)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, filepath.Dir(p))
+		if err != nil {
+			return err
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if bl, ok := n.(*ast.BasicLit); ok && bl.Kind == token.STRING {
+				if v, err := strconv.Unquote(bl.Value); err == nil && docsPathLiteral.MatchString(v) {
+					found[filepath.ToSlash(rel)] = v
+				}
+			}
+			return true
+		})
+		return nil
+	}))
+	require.NotEmpty(t, found)
+	for pkg, lit := range found {
+		assert.True(t, run[pkg] || exempt[pkg],
+			"%s: its tests name %q: add the package to hack/ci/docs-tests.txt (or !%s and why it reads no repo docs)", pkg, lit, pkg)
+	}
+	ci, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(ci), "hack/ci/docs-tests.txt", "the docs-tests job runs the listed packages")
+}
+
 // TestCIJobsScoped (#1903): every ci.yml job but the changes job, the
 // build aggregator and the main-only cache job runs only when its area
 // changed, and each required check's job keeps its area.
@@ -162,13 +241,15 @@ func TestCIJobsScoped(t *testing.T) {
 	}
 	areas := map[string]string{
 		"integration": "go", "golangci-lint": "go", "go-sum-integrity": "go", "e2e-stubs": "go", "checks": "go", "test": "go",
-		"frontend": "web", "helm-lint": "chart", "docs-lint": "docs", "action-tests": "workflows",
+		"frontend": "web", "helm-lint": "chart", "docs-lint": "docs", "action-tests": "workflows", "docs-tests": "docs",
 	}
 	for id, area := range areas {
 		assert.Contains(t, wf.Jobs[id].If, "needs.changes.outputs."+area+" == 'true'", id)
 	}
 	assert.Contains(t, wf.Jobs["docs-lint"].If, "needs.changes.outputs.go == 'true'", "docs-lint runs for Go changes too: the CLI docs are generated")
 	assert.Empty(t, wf.Jobs["changes"].If, "the changes job always runs")
+	assert.Contains(t, wf.Jobs["trivy-fs"].If, "needs.changes.outputs.web == 'true'", "trivy scans web/package-lock.json too")
+	assert.Contains(t, string(data), "git diff --no-renames --name-only HEAD^1 HEAD", "a moved file counts at both paths")
 }
 
 // fakeGH records each call in FAKE_LOG and answers from $FAKE_GH/routes:
