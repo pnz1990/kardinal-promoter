@@ -122,6 +122,8 @@ export interface DeployedRelease {
 /** Who shipped a version, in short (the UI API's uiActorRef). */
 export interface ActorRef {
   kind: 'human' | 'agent' | 'bot' | 'controller'
+  /** The verified Kubernetes user ("system:serviceaccount:ci:fixer", "alice"). */
+  principal?: string
   agent?: string
   sponsor?: string
   /** The actor as one sentence ("agent fixer for alice"). */
@@ -418,7 +420,11 @@ export interface GateVerdict {
   summary?: string
   evidenceURL?: string
   findings?: number
+  /** The findings of high severity among findings. */
+  highFindings?: number
   createdAt?: string
+  /** Who wrote it, in short, for the actor badge; absent when not known (then verifier). */
+  verifierActor?: ActorRef
 }
 
 /** An approval gate: how many allowed people must approve, and who did. */

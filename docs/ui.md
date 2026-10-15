@@ -145,7 +145,7 @@ Select a station (or press Enter on it) to open its details, beside the map on a
 as a sheet over it on a narrow one:
 
 - **Why it's waiting** (**Why it failed** for a failed environment) comes first: the gate that blocks and its reason, the approvals still
-  needed, the pull request to merge, the health check in progress. When nothing waits, this is
+  needed, the verdicts a [verify gate](#verify-gates) waits for, the pull request to merge, the health check in progress. When nothing waits, this is
   the environment's status.
 
 <figure class="k-demo" data-demo="why-waiting" hidden>
@@ -209,6 +209,17 @@ the map.
 What went wrong and what holds: failed promotions grouped across environments (select one to open
 its environment on the map), and the gates of the version shown, with their conditions and
 approvals.
+
+### Verify gates
+
+A [verify gate](agentic/verify-with-agents.md) shows its quorum, one pip per passing verdict it
+needs, in **Why it's waiting** and on **Activity**. Under it is every verdict: who wrote it, with
+the same badge as [Who shipped a version](#who-shipped-a-version) (an agent with its sponsor),
+its result in words (**Pass**, **Fail**, **Inconclusive**), its run and age, its findings and how
+many are high, whether it counts and why not, and a link to its evidence. An inconclusive verdict
+says what the gate does with it: it holds (`onInconclusive: hold`), retries the run (`retry`) or
+counts it as a fail (`fail`), and the quorum line counts the inconclusive verdicts that wait.
+While the gate waits, the `kardinal verify` command to record a verdict is there to copy.
 
 ### Metrics
 

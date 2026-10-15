@@ -387,3 +387,47 @@ func TestGate_VerifyByPerson(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "only carol@example.com can revoke this Verdict")
 }
+
+// TestUI_BrowserVerdicts checks a verify gate's verdicts in the UI (#1908).
+// prod waits at a verify gate that needs two passing verdicts and holds an
+// inconclusive one. carol records a pass with an evidence link and a high
+// finding; dave records an inconclusive verdict. The stage drawer and the
+// Activity tab show 1 of 2 with one inconclusive waiting, each verdict with
+// its verifier's actor badge and its result in words, carol's evidence
+// linked, dave's inconclusive saying it holds; both pass axe.
+//
+// Covers UI-VERDICTS-01.
+func TestUI_BrowserVerdicts(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	c := e.CLI(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "uat", "prod")
+	e.CreateGate(t, verifyGate(a.ns, v1alpha1.GateVerifyPolicy{Required: 2, OnInconclusive: v1alpha1.VerifyHold}))
+	a.apply(t, a.pipeline(nil))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "uat", "Verified", promoteTimeout)
+	e.WaitGateReady(t, a.ns, bundle, "prod", "explore-qa", false, "waiting for verdicts: 0 of 2", gateTimeout)
+
+	const carol, dave = "carol@example.com", "dave@example.com"
+	const evidence = "https://ci.example.com/explore/1"
+	verify := func(user string, args ...string) {
+		t.Helper()
+		_, err := e.Kube.RbacV1().RoleBindings(a.ns).Create(ctx, &rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{GenerateName: "verifier-", Namespace: a.ns},
+			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: verifierRole},
+			Subjects:   []rbacv1.Subject{{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: user}},
+		}, metav1.CreateOptions{})
+		require.NoError(t, err)
+		r := c.Exec(framework.CLIOptions{Kubeconfig: userKubeconfig(t, e, a.ns, user)},
+			c.Args(a.ns, append([]string{"verify", pipelineName, "uat", "--check", "explore"}, args...)...)...)
+		require.Equal(t, 0, r.Code, r.Output())
+	}
+	verify(carol, "--pass", "--summary", "checkout works", "--evidence", evidence, "--finding", "high:slow receipts page")
+	verify(dave, "--inconclusive", "--summary", "the sandbox timed out")
+	e.WaitGate(t, a.ns, bundle, "prod", "explore-qa", gateTimeout, "two verdicts recorded, one counted", func(g *v1alpha1.PolicyGate) bool {
+		return len(g.Status.Verdicts) == 2 && !g.Status.Ready
+	})
+	framework.Playwright(t, "verdicts.spec.ts", browserEnv(mainUI(t, e), a.ns,
+		"KARDINAL_UI_PASSER", carol, "KARDINAL_UI_INCONCLUSIVE", dave, "KARDINAL_UI_EVIDENCE", evidence))
+}

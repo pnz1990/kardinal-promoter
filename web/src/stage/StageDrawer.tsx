@@ -17,6 +17,7 @@ import { formatElapsedSince } from '../timeFormat'
 import { ActorBadge, StatusChip } from '../ui'
 import { actorOfBundle, actorOfUser } from '../actor'
 import { CELBlock } from '../components/CELBlock'
+import { VerifyQuorum } from '../components/VerifyQuorum'
 import EventsPanel from '../components/EventsPanel'
 import { StepProgress } from '../components/StepProgress'
 import type { Bundle, Pipeline, PolicyGate, PromotionStep, StepEvent } from '../types'
@@ -268,6 +269,9 @@ function WhyItem({ reason: w, now, primary, cli, onAct, onUpstream, upstreams, r
         <ul className="stage-decisions">{w.gate.approval.decisions.map((d, i) => (
           <li key={i}><ActorBadge actor={actorOfUser(d.user)!} compact /> {d.decision === 'approve' ? 'approved' : 'rejected'}{d.counted ? '' : ` (not counted: ${d.reason ?? 'not allowed'})`}</li>
         ))}</ul>
+      )}
+      {w.kind === 'verify' && w.gate?.verify && (
+        <VerifyQuorum verify={w.gate.verify} pipeline={w.gate.pipeline} namespace={w.gate.namespace} now={now} />
       )}
       {cli && !signInNote && (
         <p className="stage-why__cli">
