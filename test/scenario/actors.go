@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
@@ -28,25 +29,51 @@ const AdminUser = "kubernetes-admin"
 // AdminGroups are AdminUser's groups.
 var AdminGroups = []string{"system:masters", "system:authenticated"}
 
-// The chart's policies a World with Actors serves: who a record names
-// (identity-admission.yaml) and the actor stamp (actor-admission.yaml).
-var actorPolicies = []string{"actor", "audit-actor", "agent-identities", "approvals", "bundle-rejection", "bundle-creator",
-	"gate-overrides"}
-
 type userKey struct{}
 
 // AsUser is ctx with the user its writes are made as.
 func AsUser(ctx context.Context, name string, groups ...string) context.Context {
-	return context.WithValue(ctx, userKey{}, &user.DefaultInfo{Name: name, Groups: groups})
+	return AsInfo(ctx, &user.DefaultInfo{Name: name, Groups: groups})
 }
 
-// userOf is the user of ctx: the controller's ServiceAccount when none is set.
+// AsInfo is ctx with the user (with groups and extra) its writes are made as.
+func AsInfo(ctx context.Context, u user.Info) context.Context {
+	return context.WithValue(ctx, userKey{}, u)
+}
+
+// ServiceAccountGroups are the groups the API server gives a ServiceAccount
+// of ns.
+func ServiceAccountGroups(ns string) []string {
+	return []string{"system:serviceaccounts", "system:serviceaccounts:" + ns, "system:authenticated"}
+}
+
+// ControllerInfo is the controller as the API server authenticates it: its
+// ServiceAccount's bound token, which carries the credential and Pod extras.
+func ControllerInfo() user.Info {
+	return &user.DefaultInfo{Name: ControllerUser, Groups: ServiceAccountGroups(ReleaseNamespace),
+		Extra: map[string][]string{
+			"authentication.kubernetes.io/credential-id": {"JTI=scenario-controller"},
+			"authentication.kubernetes.io/pod-name":      {Release + "-0"},
+			"authentication.kubernetes.io/pod-uid":       {"uid-controller-pod"},
+			"authentication.kubernetes.io/node-name":     {"node-0"},
+		}}
+}
+
+// GraphInfo is kro applying a Graph's objects in ns: impersonating the
+// Graph ServiceAccount, so with its groups and no extra of its own.
+func GraphInfo(ns string) user.Info {
+	return &user.DefaultInfo{Name: GraphUser(ns), Groups: ServiceAccountGroups(ns)}
+}
+
+// gitopsUser is the GitOps engine's controller (Argo CD, Flux).
+const gitopsUser = "system:serviceaccount:gitops-system:gitops-controller"
+
+// userOf is the user of ctx: the controller when none is set.
 func userOf(ctx context.Context) user.Info {
 	if u, ok := ctx.Value(userKey{}).(user.Info); ok {
 		return u
 	}
-	return &user.DefaultInfo{Name: ControllerUser, Groups: []string{"system:serviceaccounts", "system:serviceaccounts:" + ReleaseNamespace,
-		"system:authenticated"}}
+	return ControllerInfo()
 }
 
 // startActors serves the chart's identity and actor policies and builds the
@@ -57,10 +84,12 @@ func (w *World) startActors(maxBytes int) {
 	if err != nil {
 		w.T.Fatal(err)
 	}
-	names := make([]string, 0, len(actorPolicies))
-	for _, p := range actorPolicies {
-		names = append(names, Release+"-"+p)
+	// Every policy the chart installs.
+	names := make([]string, 0, len(c.VAPs))
+	for n := range c.VAPs {
+		names = append(names, n)
 	}
+	sort.Strings(names)
 	api, stop, err := NewAPIServer(PolicyObjects(nil, c, names, nil), nil)
 	if err != nil {
 		w.T.Fatal(err)
@@ -117,6 +146,11 @@ func (w *World) stored(ctx context.Context, c client.Reader, o client.Object) (c
 // admitWrite admits a write of o (old: the stored object) as the user of
 // ctx through the chart's policies; nil when no policy matches its kind.
 func (w *World) admitWrite(ctx context.Context, c client.Client, op admission.Operation, o, old client.Object) error {
+	return w.admitSub(ctx, c, op, "", o, old)
+}
+
+// admitSub is admitWrite for a write of subresource (status) of o.
+func (w *World) admitSub(ctx context.Context, c client.Client, op admission.Operation, sub string, o, old client.Object) error {
 	if w.api == nil {
 		return nil
 	}
@@ -125,11 +159,11 @@ func (w *World) admitWrite(ctx context.Context, c client.Client, op admission.Op
 		src = old
 	}
 	gvk, err := c.GroupVersionKindFor(src)
-	if err != nil || gvk.Group != "kardinal.io" {
+	if err != nil {
 		return nil //nolint:nilerr // not a kind the policies match
 	}
 	m, err := w.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-	if err != nil || !w.api.Matches(m.Resource.Resource) {
+	if err != nil || !w.api.Matches(gvk.Group, m.Resource.Resource, sub) {
 		return nil //nolint:nilerr // not a kind the policies match
 	}
 	if w.indexDirty.Swap(false) {
@@ -163,21 +197,25 @@ func (w *World) admitWrite(ctx context.Context, c client.Client, op admission.Op
 	if err != nil {
 		return err
 	}
-	return w.api.Admit(op, m.Resource, newM, oldM, userOf(ctx))
+	return w.api.AdmitSub(op, m.Resource, sub, newM, oldM, userOf(ctx))
 }
 
 // admitPatched admits a patch that is already stored (o: the result, old:
 // the object before), and puts old back when the policies refuse it.
-func (w *World) admitPatched(ctx context.Context, c client.WithWatch, o, old client.Object) error {
+func (w *World) admitPatched(ctx context.Context, c client.WithWatch, sub string, o, old client.Object) error {
 	if w.api == nil || old == nil {
 		return nil
 	}
-	err := w.admitWrite(ctx, c, admission.Update, o, old)
+	err := w.admitSub(ctx, c, admission.Update, sub, o, old)
 	if err == nil {
 		return nil
 	}
 	old.SetResourceVersion(o.GetResourceVersion())
-	if rerr := c.Update(ctx, old); rerr != nil {
+	restore := c.Update(ctx, old)
+	if sub != "" {
+		restore = c.SubResource(sub).Update(ctx, old)
+	}
+	if rerr := restore; rerr != nil {
 		return fmt.Errorf("restore %s %s after a refused patch: %w", objKind(o), o.GetName(), rerr)
 	}
 	return err
@@ -245,4 +283,19 @@ func (w *World) CreateBundle(id Identity, b *v1alpha1.Bundle) (cliErr error, ref
 // chart's policies only, writing nothing: nil when admitted.
 func (w *World) AdmitCreate(ctx context.Context, obj client.Object) error {
 	return w.admitWrite(ctx, w.store, admission.Create, obj, nil)
+}
+
+// AdmitUpdate runs the update of old to obj (of its subresource sub, when
+// not empty) as the user of ctx through the chart's policies only, writing
+// nothing.
+func (w *World) AdmitUpdate(ctx context.Context, sub string, obj, old client.Object) error {
+	return w.admitSub(ctx, w.store, admission.Update, sub, obj, old)
+}
+
+// Policies are the ValidatingAdmissionPolicies the World serves.
+func (w *World) Policies() []string {
+	if w.api == nil {
+		return nil
+	}
+	return w.api.policies
 }

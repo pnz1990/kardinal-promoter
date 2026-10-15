@@ -122,7 +122,7 @@ func (g *GitOps) Running(p *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec) (En
 		if ns == "" {
 			ns = "argocd"
 		}
-		if err := g.w.Client.Get(g.w.Ctx, client.ObjectKey{Namespace: ns, Name: env.Update.ArgoCD.Application}, app); err != nil {
+		if err := g.w.Client.Get(g.ctx(), client.ObjectKey{Namespace: ns, Name: env.Update.ArgoCD.Application}, app); err != nil {
 			return EnvState{}, fmt.Errorf("argocd strategy application: %w", err)
 		}
 		key := env.Update.ArgoCD.ImageKey
@@ -228,7 +228,7 @@ func (g *GitOps) Running(p *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec) (En
 // Sync brings every environment's health object to what it runs.
 func (g *GitOps) Sync() error {
 	var pipelines v1alpha1.PipelineList
-	if err := g.w.Client.List(g.w.Ctx, &pipelines); err != nil {
+	if err := g.w.Client.List(g.ctx(), &pipelines); err != nil {
 		return fmt.Errorf("list pipelines: %w", err)
 	}
 	for i := range pipelines.Items {
@@ -338,7 +338,7 @@ func nestedInt(o map[string]interface{}, fields ...string) int64 {
 // deployment makes the Deployment ns/name run image: rolled out, or stuck
 // past its progress deadline when failed.
 func (g *GitOps) deployment(ns, name, image string, failed bool) error {
-	ctx := g.w.Ctx
+	ctx := g.ctx()
 	if err := g.namespace(ns); err != nil {
 		return err
 	}
@@ -387,7 +387,7 @@ func (g *GitOps) deployment(ns, name, image string, failed bool) error {
 }
 
 func (g *GitOps) namespace(ns string) error {
-	err := g.w.Client.Create(g.w.Ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})
+	err := g.w.Client.Create(g.ctx(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create namespace %s: %w", ns, err)
 	}
@@ -397,7 +397,7 @@ func (g *GitOps) namespace(ns string) error {
 // upsert creates gvk ns/name with spec (when not nil) and lets status set
 // its status; the generation moves when the spec changes.
 func (g *GitOps) upsert(gvk schema.GroupVersionKind, ns, name string, spec map[string]interface{}, status func(o map[string]interface{})) error {
-	ctx := g.w.Ctx
+	ctx := g.ctx()
 	if err := g.namespace(ns); err != nil {
 		return err
 	}
@@ -510,3 +510,8 @@ func (w *World) runJobs() error {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// ctx is the context the GitOps engine writes with: as its own controller.
+func (g *GitOps) ctx() context.Context {
+	return AsUser(g.w.Ctx, gitopsUser, ServiceAccountGroups("gitops-system")...)
+}

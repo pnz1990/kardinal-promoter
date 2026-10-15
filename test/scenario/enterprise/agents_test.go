@@ -4,6 +4,7 @@
 package enterprise
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -16,7 +17,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apiserver/pkg/admission"
+	"k8s.io/apiserver/pkg/authentication/user"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
@@ -39,7 +43,7 @@ type agentSize struct{ Teams, PipelinesPerTeam, Identities, Agents, Bursts, Prob
 // 64 KiB bound to overflow.
 var (
 	fullAgents  = agentSize{Teams: 20, PipelinesPerTeam: 3, Identities: 2000, Agents: 50, Bursts: 3, Probes: 4000}
-	quickAgents = agentSize{Teams: 4, PipelinesPerTeam: 2, Identities: 200, Agents: 8, Bursts: 2, Probes: 300, IndexBytes: 64 << 10}
+	quickAgents = agentSize{Teams: 4, PipelinesPerTeam: 2, Identities: 200, Agents: 8, Bursts: 2, Probes: 500, IndexBytes: 64 << 10}
 )
 
 func agentSizeFromEnv() agentSize {
@@ -58,9 +62,11 @@ type registry struct {
 	active []activeAgent
 	// sponsors of every AgentIdentity, by name.
 	sponsor map[string]string
-	// principals are users the probes write as: every subject of every
-	// AgentIdentity, and people and bots that are none.
-	principals []scenario.Identity
+	// The users the probes write as: every subject of every AgentIdentity
+	// (agents), users that match two of them (duals: a User subject in
+	// another agent's group, or a member of two agent groups), and people
+	// and bots that are none.
+	agents, duals, people, bots []scenario.Identity
 }
 
 type activeAgent struct {
@@ -79,7 +85,8 @@ func agentRegistry(sz agentSize) registry {
 	rng := rand.New(rand.NewPCG(1837, 1867))
 	reg := registry{sponsor: map[string]string{}}
 	var subjects []v1alpha1.AgentSubject
-	var users []string // the User subjects so far
+	var users []string  // the User subjects so far
+	var groups []string // the Group subjects so far
 	candidates := map[string][]activeAgent{}
 	created := metav1.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	for i := 0; i < sz.Identities; i++ {
@@ -130,7 +137,10 @@ func agentRegistry(sz agentSize) registry {
 			if s.Kind == "Group" {
 				id = scenario.Identity{Username: "oidc:member-of-" + name, Groups: []string{s.Name, "system:authenticated"}}
 			}
-			reg.principals = append(reg.principals, id)
+			reg.agents = append(reg.agents, id)
+			if s.Kind == "Group" {
+				groups = append(groups, s.Name)
+			}
 		}
 		plain := a.Spec.Subjects[0].Kind == "ServiceAccount" && len(a.Spec.Subjects) == 1 && !a.Spec.Suspended &&
 			len(scope.Pipelines) == 0 && len(scope.Environments) == 0 && len(a.Spec.Scope.Namespaces) == 1 &&
@@ -150,10 +160,18 @@ func agentRegistry(sz agentSize) registry {
 			reg.active = append(reg.active, a)
 		}
 	}
-	for i := 0; i < 40; i++ {
-		reg.principals = append(reg.principals,
-			scenario.Identity{Username: fmt.Sprintf("person-%02d@corp.example.com", i), Groups: []string{"system:authenticated"}},
-			scenario.Identity{Username: fmt.Sprintf("system:serviceaccount:ci:bot-%02d", i), Groups: []string{"system:serviceaccounts", "system:authenticated"}})
+	for i := 0; i < 100 && len(users) > 0 && len(groups) > 1; i++ {
+		g1, g2 := groups[rng.IntN(len(groups))], groups[rng.IntN(len(groups))]
+		reg.duals = append(reg.duals,
+			scenario.Identity{Username: users[rng.IntN(len(users))], Groups: []string{g1, "system:authenticated"}},
+			scenario.Identity{Username: fmt.Sprintf("oidc:two-groups-%03d", i), Groups: []string{g1, g2, "system:authenticated"}})
+	}
+	for i := 0; i < 400; i++ {
+		reg.people = append(reg.people, scenario.Identity{Username: fmt.Sprintf("person-%03d@corp.example.com", i),
+			Groups: []string{fmt.Sprintf("team-%02d-dev", 1+i%sz.Teams), "system:authenticated"}})
+		ns := team(1 + i%sz.Teams)
+		reg.bots = append(reg.bots, scenario.Identity{Username: fmt.Sprintf("system:serviceaccount:%s:bot-%03d", ns, i),
+			Groups: scenario.ServiceAccountGroups(ns)})
 	}
 	return reg
 }
@@ -162,12 +180,14 @@ func agentRegistry(sz agentSize) registry {
 // Identities AgentIdentities registered (2,000 in full: half the index's
 // bound), Agents of them shipping versions in bursts across every team, a
 // release manager approving prod, every write admitted by the API server's
-// ValidatingAdmissionPolicy plugin with the chart's actor policy and the
-// controller's AgentIndex as its param. Probes requests by every kind of
-// principal (each AgentIdentity's subjects, people, bots), with the CLI's
-// stamp or a forged one, in and out of scope, get the verdict pkg/actor
-// (Derive, Scope) gives: the policy is its transliteration, at scale, and
-// no refusal is an expression error. A suspension refuses the agent's next
+// ValidatingAdmissionPolicy plugin with the chart's policies and the
+// controller's AgentIndex as the actor policy's param. Probes requests
+// (Bundles, Approvals, gate instances and their overrides) by every kind of
+// principal (each AgentIdentity's subjects, users of two agents, people,
+// bots, the controller, kro), with the CLI's stamp or a forged one, in and
+// out of scope, get the verdict pkg/actor (Derive, Scope) gives: the policy
+// is its transliteration, at scale, no refusal is an expression error, and
+// its cost grows at most linearly with the index. A suspension refuses the agent's next
 // write; versions it shipped before still promote. Every version is stamped
 // with its agent and sponsor, and so is every promotion AuditEvent and PR. An
 // index pushed over its 1 MiB bound refuses every write the policy checks
@@ -202,7 +222,7 @@ func TestEnterprise_AgentLoad(t *testing.T) {
 
 	// The policy is pkg/actor's transliteration: the same verdict on every
 	// probe, over the whole index.
-	probeAgainstGo(t, w, reg, &idx.Status, sz)
+	probeAgainstGo(t, reg, &idx, sz)
 
 	// Bursts of versions by the active agents, while the release manager
 	// approves prod and out-of-scope and suspended agents are refused.
@@ -325,27 +345,63 @@ func approveAs(w *scenario.World) error {
 	return nil
 }
 
-// probeAgainstGo sends sz.Probes creations (Bundles and Approvals) by
-// random principals at random places, each with the CLI's stamp, no stamp,
-// or a forged one, through the admission plugin (writing nothing), and
-// checks each verdict against pkg/actor's, and that every refusal is one of
-// the policy's messages. It logs the admission latency.
-func probeAgainstGo(t *testing.T, w *scenario.World, reg registry, idx *v1alpha1.AgentIndexStatus, sz agentSize) {
-	t.Helper()
+// probe is one creation or update the differential sends.
+type probe struct {
+	u        user.Info
+	gvr      string
+	obj, old map[string]interface{}
+	where    actor.Where
+	stamps   []*v1alpha1.Actor
+	desc     string
+}
+
+// probes generates n requests, deterministically: who writes is an agent's
+// subject (35%), a user matching two agents (10%), a person (20%), a bot
+// (15%), the controller (10%) or kro's Graph ServiceAccount (10%); what is
+// a Bundle or an Approval created, a gate instance created (as kro does) or
+// a new override on one (as kardinal override does); the stamp is the CLI's,
+// none, a forged sponsor or a human's.
+func probes(reg registry, idx *v1alpha1.AgentIndexStatus, sz agentSize, n int) ([]probe, error) {
 	rng := rand.New(rand.NewPCG(1867, 1837))
-	var lat []time.Duration
-	verdicts := map[string]int{}
-	mismatches := 0
-	for i := 0; i < sz.Probes; i++ {
-		id := reg.principals[rng.IntN(len(reg.principals))]
-		ns := team(1 + rng.IntN(sz.Teams))
-		// Half the time a ServiceAccount writes in its own namespace, where
-		// its agent is usually scoped.
-		if own, ok := strings.CutPrefix(id.Username, "system:serviceaccount:"); ok && rng.IntN(2) == 0 {
-			ns, _, _ = strings.Cut(own, ":")
+	defaults := scenario.NewAdmission(scenario.RepoRoot())
+	toMap := func(o client.Object, kind string) (map[string]interface{}, error) {
+		m, err := k8sruntime.DefaultUnstructuredConverter.ToUnstructured(o)
+		if err != nil {
+			return nil, err
 		}
-		where := actor.Where{Namespace: ns}
-		r, derr := actor.Derive(actor.User{Username: id.Username, Groups: id.Groups}, idx)
+		m["apiVersion"], m["kind"] = "kardinal.io/v1alpha1", kind
+		delete(m, "status")
+		return m, defaults.Default(kind, m)
+	}
+	pick := func(l []scenario.Identity) scenario.Identity { return l[rng.IntN(len(l))] }
+	out := make([]probe, 0, n)
+	for i := 0; i < n; i++ {
+		var u user.Info
+		var id scenario.Identity
+		ns := team(1 + rng.IntN(sz.Teams))
+		switch c := rng.IntN(100); {
+		case c < 35:
+			id = pick(reg.agents)
+		case c < 45:
+			id = pick(reg.duals)
+		case c < 65:
+			id = pick(reg.people)
+		case c < 80:
+			id = pick(reg.bots)
+		case c < 90:
+			u = scenario.ControllerInfo()
+		default:
+			u = scenario.GraphInfo(ns)
+		}
+		if u == nil {
+			u = &user.DefaultInfo{Name: id.Username, Groups: id.Groups}
+			// Half the time a ServiceAccount writes in its own namespace,
+			// where its agent is usually scoped.
+			if own, ok := strings.CutPrefix(id.Username, "system:serviceaccount:"); ok && rng.IntN(2) == 0 {
+				ns, _, _ = strings.Cut(own, ":")
+			}
+		}
+		r, derr := actor.Derive(actor.User{Username: u.GetName(), Groups: u.GetGroups()}, idx)
 		var stamp *v1alpha1.Actor
 		switch rng.IntN(6) {
 		case 0: // no stamp
@@ -356,56 +412,206 @@ func probeAgainstGo(t *testing.T, w *scenario.World, reg registry, idx *v1alpha1
 				stamp = &s
 			}
 		case 2: // a person, says the stamp
-			stamp = &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: id.Username}
-		default: // what the CLI stamps
+			stamp = &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: u.GetName()}
+		default: // what the CLI stamps; for a user of two agents, the first
 			if derr == nil {
 				s := r.Actor
 				stamp = &s
+			} else if e, ok := firstMatch(idx, u); ok {
+				stamp = &v1alpha1.Actor{Kind: v1alpha1.ActorAgent, Principal: u.GetName(), Agent: e.Agent, Sponsor: e.Sponsor}
 			}
 		}
-		var obj client.Object
-		if rng.IntN(3) == 0 {
-			where.Environment = []string{"dev", "staging", "prod"}[rng.IntN(3)]
-			bundle := fmt.Sprintf("probe-%d", i)
-			obj = &v1alpha1.Approval{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: bundle,
-				Labels: map[string]string{"kardinal.io/bundle": bundle, "kardinal.io/environment": where.Environment}},
-				Spec: v1alpha1.ApprovalSpec{Bundle: bundle, BundleUID: "u", Environment: where.Environment, User: id.Username,
-					Decision: lifecycle.DecisionApprove, Actor: stamp}}
-		} else {
-			where.Pipeline = pipelineName(1 + rng.IntN(sz.PipelinesPerTeam))
-			b := scenario.ImageBundle(ns, where.Pipeline, fmt.Sprintf("0.0.%d", i))
+		pl := pipelineName(1 + rng.IntN(sz.PipelinesPerTeam))
+		env := []string{"dev", "staging", "prod"}[rng.IntN(3)]
+		pr := probe{u: u, where: actor.Where{Namespace: ns}}
+		var err error
+		switch k := rng.IntN(4); k {
+		case 0:
+			pr.gvr, pr.where.Environment, pr.stamps = "approvals", env, []*v1alpha1.Actor{stamp}
+			name := fmt.Sprintf("probe-%d", i)
+			pr.obj, err = toMap(&v1alpha1.Approval{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name,
+				Labels: map[string]string{"kardinal.io/bundle": name, "kardinal.io/environment": env}},
+				Spec: v1alpha1.ApprovalSpec{Bundle: name, BundleUID: "u", Environment: env, User: u.GetName(),
+					Decision: lifecycle.DecisionApprove, Actor: stamp}}, "Approval")
+		case 1:
+			pr.gvr, pr.where.Pipeline, pr.stamps = "bundles", pl, []*v1alpha1.Actor{stamp}
+			b := scenario.ImageBundle(ns, pl, fmt.Sprintf("0.0.%d", i))
 			b.Spec.Actor = stamp
-			obj = b
+			pr.obj, err = toMap(b, "Bundle")
+		default:
+			// A gate instance: created with no override (kro), or updated
+			// with a new one (kardinal override), stamped.
+			pr.gvr, pr.where.Pipeline, pr.where.Environment = "policygates", pl, env
+			g := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: fmt.Sprintf("gate-%d", i),
+				Labels: map[string]string{"kardinal.io/bundle": pl + "-1-0-0", "kardinal.io/pipeline": pl, "kardinal.io/environment": env}},
+				Spec: v1alpha1.PolicyGateSpec{Expression: "true"}}
+			if k == 3 {
+				if pr.old, err = toMap(g, "PolicyGate"); err != nil {
+					return nil, err
+				}
+				g.Spec.Overrides = []v1alpha1.PolicyGateOverride{{Reason: "probe", ExpiresAt: metav1.NewTime(time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)),
+					CreatedBy: u.GetName(), Actor: stamp}}
+				pr.stamps = []*v1alpha1.Actor{stamp}
+			}
+			pr.obj, err = toMap(g, "PolicyGate")
 		}
-		want := derr == nil && actor.Scope(r.Entry, where) == nil && sameStamp(stamp, r, id.Username)
+		if err != nil {
+			return nil, err
+		}
+		pr.desc = fmt.Sprintf("%s (groups %v) writes %s in %+v stamped %+v", u.GetName(), u.GetGroups(), pr.gvr, pr.where, stamp)
+		out = append(out, pr)
+	}
+	return out, nil
+}
+
+// firstMatch is the first index entry u matches, by username then groups:
+// the agent a user of two agents would claim to be.
+func firstMatch(idx *v1alpha1.AgentIndexStatus, u user.Info) (v1alpha1.AgentIndexEntry, bool) {
+	if e, ok := idx.Users[u.GetName()]; ok {
+		return e, true
+	}
+	for _, g := range u.GetGroups() {
+		if e, ok := idx.Groups[g]; ok {
+			return e, true
+		}
+	}
+	return v1alpha1.AgentIndexEntry{}, false
+}
+
+// actorVerdict is the actor policy's decision as docs/actors.md states it,
+// through pkg/actor: the controller is not judged, nor is a write that adds
+// no stamp (a gate instance without a new override); otherwise the
+// requester's actor (Derive) must be able to act there (Scope) and every
+// stamp says exactly that actor (sameStamp).
+func actorVerdict(pr probe, idx *v1alpha1.AgentIndexStatus) bool {
+	if pr.u.GetName() == scenario.ControllerUser || len(pr.stamps) == 0 {
+		return true
+	}
+	r, err := actor.Derive(actor.User{Username: pr.u.GetName(), Groups: pr.u.GetGroups()}, idx)
+	if err != nil || actor.Scope(r.Entry, pr.where) != nil {
+		return false
+	}
+	for _, s := range pr.stamps {
+		if !sameStamp(s, r, pr.u.GetName()) {
+			return false
+		}
+	}
+	return true
+}
+
+// probeAgainstGo sends sz.Probes requests (probes) through the API
+// server's admission plugin serving the actor policy alone, with the index
+// as its param, and checks each verdict against actorVerdict, and that
+// every refusal is one of the policy's messages. Then it sends them again
+// with a tenth of the index: the admission cost may grow at most linearly
+// with the index (#1936 makes it linear today).
+func probeAgainstGo(t *testing.T, reg registry, idx *v1alpha1.AgentIndex, sz agentSize) {
+	t.Helper()
+	c, err := scenario.RenderChart()
+	require.NoError(t, err)
+	api, stop, err := scenario.NewAPIServer(scenario.PolicyObjects(nil, c, []string{release + "-actor"}, nil), nil)
+	require.NoError(t, err)
+	t.Cleanup(stop)
+	for i := 1; i <= sz.Teams; i++ {
+		require.NoError(t, api.EnsureNamespace(team(i)))
+	}
+	require.NoError(t, api.EnsureNamespace("ci"))
+	prs, err := probes(reg, &idx.Status, sz, sz.Probes)
+	require.NoError(t, err)
+	send := func(pr probe) (time.Duration, error) {
+		op := admission.Create
+		if pr.old != nil {
+			op = admission.Update
+		}
 		t0 := time.Now()
-		err := w.AdmitCreate(w.CtxOf(id), obj)
-		lat = append(lat, time.Since(t0))
-		got := err == nil
-		verdicts[fmt.Sprintf("%s/admit=%v", r.Actor.Kind, want)]++
-		if got != want {
+		err := api.Admit(op, scenario.GVR(pr.gvr), pr.obj, pr.old, pr.u)
+		return time.Since(t0), err
+	}
+	require.NoError(t, api.SetAgentIndex(idx))
+	verdicts := map[string]int{}
+	mismatches := 0
+	var full []time.Duration
+	for i, pr := range prs {
+		d, err := send(pr)
+		full = append(full, d)
+		want := actorVerdict(pr, &idx.Status)
+		kind := "controller"
+		if pr.u.GetName() != scenario.ControllerUser {
+			r, _ := actor.Derive(actor.User{Username: pr.u.GetName(), Groups: pr.u.GetGroups()}, &idx.Status)
+			kind = r.Actor.Kind
+			if kind == "" {
+				kind = "conflict-or-blocked"
+			}
+		}
+		verdicts[fmt.Sprintf("%s/%s/admit=%v", kind, pr.gvr, want)]++
+		if (err == nil) != want {
 			mismatches++
 			if mismatches <= 10 {
-				t.Errorf("probe %d: %s (groups %v) creating %T in %+v with stamp %+v: pkg/actor says admit=%v (derive err %v), the policy %v",
-					i, id.Username, id.Groups, obj, where, stamp, want, derr, err)
+				t.Errorf("probe %d: %s: pkg/actor says admit=%v, the policy %v", i, pr.desc, want, err)
 			}
 		}
 		if err != nil {
-			assert.Contains(t, err.Error(), "ValidatingAdmissionPolicy 'kardinal-promoter-actor'", "probe %d", i)
-			assert.NotContains(t, err.Error(), "failed to evaluate", "probe %d: a refusal names its reason", i)
-			assert.NotContains(t, err.Error(), "no such key", "probe %d: a refusal names its reason", i)
+			assert.Contains(t, err.Error(), "ValidatingAdmissionPolicy '"+release+"-actor'", "probe %d", i)
+			assert.NotContains(t, err.Error(), "resulted in error", "probe %d: a refusal names its reason", i)
 		}
 	}
 	assert.Zero(t, mismatches, "verdicts that differ from pkg/actor")
-	sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
-	p := func(q float64) time.Duration { return lat[int(q*float64(len(lat)-1))] }
-	t.Logf("%d probes against an index of %d users and %d groups: %v; admission p50 %s, p99 %s, max %s", sz.Probes,
-		len(idx.Users), len(idx.Groups), verdicts, p(0.5), p(0.99), lat[len(lat)-1])
-	if !raceEnabled {
-		// The plugin converts the whole AgentIndex param to JSON and back
-		// for every request it judges (#1936): 13 ms at 2,000 agents.
-		assert.Less(t, p(0.99), 50*time.Millisecond, "the actor policy's p99 admission latency")
+	keys := make([]string, 0, len(verdicts))
+	for k := range verdicts {
+		keys = append(keys, k)
 	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		t.Logf("  %-48s %d", k, verdicts[k])
+	}
+
+	// The same requests with a tenth of the index.
+	tenth := idx.DeepCopy()
+	tenth.Status.Users, tenth.Status.Groups = subset(idx.Status.Users, 10), subset(idx.Status.Groups, 10)
+	require.NoError(t, api.SetAgentIndex(tenth))
+	var small []time.Duration
+	for _, pr := range prs[:min(len(prs), 1000)] {
+		d, _ := send(pr)
+		small = append(small, d)
+	}
+	fullBytes, smallBytes := jsonSize(t, idx.Status), jsonSize(t, tenth.Status)
+	p50f, p50s := median(full[:len(small)]), median(small)
+	sort.Slice(full, func(i, j int) bool { return full[i] < full[j] })
+	t.Logf("admission over the index (%d KiB): p50 %s, p99 %s, max %s; over a tenth of it (%d KiB): p50 %s",
+		fullBytes>>10, median(full), full[len(full)*99/100], full[len(full)-1], smallBytes>>10, p50s)
+	// Measured in the same run, so a slow runner slows both: the ratio of
+	// the medians stays under twice the ratio of the sizes.
+	assert.Less(t, float64(p50f)/float64(p50s), 2*float64(fullBytes)/float64(smallBytes),
+		"admission cost grows faster than linearly with the index (p50 %s at %d KiB, %s at %d KiB)", p50f, fullBytes>>10, p50s, smallBytes>>10)
+}
+
+// subset keeps every k-th entry of m, by key order.
+func subset(m map[string]v1alpha1.AgentIndexEntry, k int) map[string]v1alpha1.AgentIndexEntry {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := map[string]v1alpha1.AgentIndexEntry{}
+	for i, key := range keys {
+		if i%k == 0 {
+			out[key] = m[key]
+		}
+	}
+	return out
+}
+
+func median(d []time.Duration) time.Duration {
+	c := append([]time.Duration(nil), d...)
+	sort.Slice(c, func(i, j int) bool { return c[i] < c[j] })
+	return c[len(c)/2]
+}
+
+func jsonSize(t *testing.T, v interface{}) int {
+	t.Helper()
+	b, err := json.Marshal(v)
+	require.NoError(t, err)
+	return len(b)
 }
 
 // sameStamp is the actor policy's rule as docs/actors.md states it: an

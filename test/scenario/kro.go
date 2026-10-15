@@ -782,7 +782,7 @@ func (k *Kro) delete(ctx context.Context, key objKey) (bool, error) {
 // Graph degraded; API errors are returned.
 func (k *Kro) apply(ctx context.Context, g *graph.Graph, raw *unstructured.Unstructured) (int, error) {
 	// kro applies a Graph's objects as the Graph's ServiceAccount.
-	ctx = AsUser(ctx, GraphUser(raw.GetNamespace()))
+	ctx = AsInfo(ctx, GraphInfo(raw.GetNamespace()))
 	gp, err := k.compile(g)
 	if err != nil {
 		k.hardError(g, err)
