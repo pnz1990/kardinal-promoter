@@ -49,16 +49,36 @@ type APIServer struct {
 	namespaces map[string]bool
 	// matched are the resources some policy's matchConstraints name.
 	matched map[string]bool
+	// policies are the names of the policies served, but the probe's.
+	policies []string
 }
 
-// The kardinal resources the plugin knows, with their kinds and scope.
+// The resources the plugin knows, with their kinds and scope: the kinds
+// the chart's policies match.
 var apiResources = []struct {
-	resource, kind string
-	cluster        bool
+	group, resource, kind string
+	cluster               bool
 }{
-	{"bundles", "Bundle", false}, {"approvals", "Approval", false}, {"policygates", "PolicyGate", false},
-	{"auditevents", "AuditEvent", false}, {"pipelines", "Pipeline", false},
-	{"agentidentities", "AgentIdentity", true}, {"agentindexes", "AgentIndex", true},
+	{"kardinal.io", "bundles", "Bundle", false}, {"kardinal.io", "approvals", "Approval", false},
+	{"kardinal.io", "policygates", "PolicyGate", false}, {"kardinal.io", "auditevents", "AuditEvent", false},
+	{"kardinal.io", "pipelines", "Pipeline", false}, {"kardinal.io", "promotionsteps", "PromotionStep", false},
+	{"kardinal.io", "prstatuses", "PRStatus", false}, {"kardinal.io", "hookruns", "HookRun", false},
+	{"kardinal.io", "renderruns", "RenderRun", false}, {"kardinal.io", "imageverifications", "ImageVerification", false},
+	{"kardinal.io", "metricchecks", "MetricCheck", false},
+	{"kardinal.io", "agentidentities", "AgentIdentity", true}, {"kardinal.io", "agentindexes", "AgentIndex", true},
+	{"argoproj.io", "applications", "Application", false}, {"argoproj.io", "analysisruns", "AnalysisRun", false},
+	{"kustomize.toolkit.fluxcd.io", "kustomizations", "Kustomization", false},
+	{"helm.toolkit.fluxcd.io", "helmreleases", "HelmRelease", false},
+	{"source.toolkit.fluxcd.io", "gitrepositories", "GitRepository", false},
+}
+
+// apiVersion is the version the scenario cluster serves group at.
+func apiVersion(group string) string {
+	switch group {
+	case "kustomize.toolkit.fluxcd.io", "source.toolkit.fluxcd.io", "helm.toolkit.fluxcd.io":
+		return "v1"
+	}
+	return "v1alpha1"
 }
 
 // GVR is the kardinal.io/v1alpha1 resource.
@@ -93,7 +113,7 @@ func NewAPIServer(objs []k8sruntime.Object, authz authorizer.UnconditionalAuthor
 	mapper := meta.NewDefaultRESTMapper(nil)
 	listKinds := map[schema.GroupVersionResource]string{}
 	for _, r := range apiResources {
-		gvr := GVR(r.resource)
+		gvr := schema.GroupVersionResource{Group: r.group, Version: apiVersion(r.group), Resource: r.resource}
 		gvk := gvr.GroupVersion().WithKind(r.kind)
 		scope := meta.RESTScopeNamespace
 		if r.cluster {
@@ -140,9 +160,12 @@ func NewAPIServer(objs []k8sruntime.Object, authz authorizer.UnconditionalAuthor
 			if x.Name == probePolicy || x.Spec.MatchConstraints == nil {
 				continue
 			}
+			s.policies = append(s.policies, x.Name)
 			for _, r := range x.Spec.MatchConstraints.ResourceRules {
-				for _, res := range r.Resources {
-					s.matched[res] = true
+				for _, g := range r.APIGroups {
+					for _, res := range r.Resources {
+						s.matched[g+"/"+res] = true
+					}
 				}
 			}
 		}
@@ -189,9 +212,13 @@ func probeObjects() []k8sruntime.Object {
 	return []k8sruntime.Object{policy, binding}
 }
 
-// Matches reports whether a policy matches resource.
-func (s *APIServer) Matches(resource string) bool {
-	return s.matched[resource]
+// Matches reports whether a policy matches resource (with subresource,
+// when not empty) of group.
+func (s *APIServer) Matches(group, resource, subresource string) bool {
+	if subresource != "" {
+		resource += "/" + subresource
+	}
+	return s.matched[group+"/"+resource]
 }
 
 // EnsureNamespace serves namespace ns (labelled with its name, as the API
@@ -269,6 +296,12 @@ func (s *APIServer) SetAgentIndex(idx *v1alpha1.AgentIndex) error {
 // API server's Forbidden error.
 func (s *APIServer) Admit(op admission.Operation, gvr schema.GroupVersionResource, obj, old map[string]interface{},
 	u user.Info) error {
+	return s.AdmitSub(op, gvr, "", obj, old, u)
+}
+
+// AdmitSub is Admit for a write of subresource (status) of the object.
+func (s *APIServer) AdmitSub(op admission.Operation, gvr schema.GroupVersionResource, subresource string,
+	obj, old map[string]interface{}, u user.Info) error {
 	var newObj, oldObj k8sruntime.Object
 	src := obj
 	if obj != nil {
@@ -281,7 +314,7 @@ func (s *APIServer) Admit(op admission.Operation, gvr schema.GroupVersionResourc
 		}
 	}
 	o := unstructured.Unstructured{Object: src}
-	attrs := admission.NewAttributesRecord(newObj, oldObj, o.GroupVersionKind(), o.GetNamespace(), o.GetName(), gvr, "", op, nil, false, u)
+	attrs := admission.NewAttributesRecord(newObj, oldObj, o.GroupVersionKind(), o.GetNamespace(), o.GetName(), gvr, subresource, op, nil, false, u)
 	return s.plugin.Validate(context.Background(), attrs, admission.NewObjectInterfacesFromScheme(s.scheme))
 }
 

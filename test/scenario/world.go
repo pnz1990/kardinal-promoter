@@ -341,7 +341,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 				}
 				// The patched object is admitted as the API server would
 				// before storing it: refused, the stored one is put back.
-				return w.admitPatched(ctx, c, o, old)
+				return w.admitPatched(ctx, c, "", o, old)
 			},
 			Delete: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.DeleteOption) (err error) {
 				defer func() {
@@ -366,6 +366,15 @@ func NewWorld(t testing.TB, opts Options) *World {
 						countWrite(o, false)
 					}
 				}()
+				old, gerr := w.stored(ctx, c, o)
+				if gerr != nil {
+					return gerr
+				}
+				if old != nil {
+					if err := w.admitSub(ctx, c, admission.Update, sub, o, old); err != nil {
+						return err
+					}
+				}
 				return c.SubResource(sub).Update(ctx, o, opts...)
 			},
 			SubResourcePatch: func(ctx context.Context, c client.Client, sub string, o client.Object, p client.Patch, opts ...client.SubResourcePatchOption) (err error) {
@@ -374,7 +383,17 @@ func NewWorld(t testing.TB, opts Options) *World {
 						countWrite(o, false)
 					}
 				}()
-				return c.SubResource(sub).Patch(ctx, o, p, opts...)
+				old, gerr := w.stored(ctx, c, o)
+				if gerr != nil {
+					return gerr
+				}
+				if err = c.SubResource(sub).Patch(ctx, o, p, opts...); err != nil {
+					return err
+				}
+				if ww, ok := c.(client.WithWatch); ok {
+					return w.admitPatched(ctx, ww, sub, o, old)
+				}
+				return nil
 			},
 		}).
 		Build()

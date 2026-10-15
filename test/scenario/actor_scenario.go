@@ -28,6 +28,7 @@ const (
 	fixerSA    = "fixer"
 	triageUser = "oidc:triage-1"
 	triageGrp  = "agents:triage"
+	dualUser   = "oidc:dual"
 )
 
 func saUser(name string) string { return actor.ServiceAccountPrefix + agentNS + ":" + name }
@@ -42,6 +43,9 @@ var ActorIdentities = map[string]Identity{
 	"suspended":   {Username: saUser("parked"), Groups: []string{"system:serviceaccounts", "system:authenticated"}},
 	"outofscope":  {Username: saUser("elsewhere"), Groups: []string{"system:serviceaccounts", "system:authenticated"}},
 	"conflict":    {Username: saUser("second"), Groups: []string{"system:serviceaccounts", "system:authenticated"}},
+	"nowhere":     {Username: saUser("nowhere"), Groups: []string{"system:serviceaccounts", "system:authenticated"}},
+	// A user that is agent dual and, by group, agent triage.
+	"two-agents": {Username: dualUser, Groups: []string{triageGrp, "system:authenticated"}},
 }
 
 // wantStamp is the stamp a version created by ActorIdentities[a] carries,
@@ -93,7 +97,8 @@ func saSubject(name string) v1alpha1.AgentSubject {
 // oldest first: fixer and triage may act in ns; parked is suspended;
 // elsewhere may act only in another namespace; first and second both list
 // ci/shared, so second (the newer) is not ready and its own subject ci/second
-// is blocked.
+// is blocked; nowhere is scoped to no namespace; dual is the user oidc:dual,
+// a member of triage's group.
 func agentFixture(ns string) []client.Object {
 	return []client.Object{
 		AgentIdentityOf("first", []v1alpha1.AgentSubject{saSubject("shared")}, []string{ns}, false),
@@ -102,6 +107,8 @@ func agentFixture(ns string) []client.Object {
 		AgentIdentityOf("parked", []v1alpha1.AgentSubject{saSubject("parked")}, []string{ns}, true),
 		AgentIdentityOf("elsewhere", []v1alpha1.AgentSubject{saSubject("elsewhere")}, []string{"other-team"}, false),
 		AgentIdentityOf("second", []v1alpha1.AgentSubject{saSubject("shared"), saSubject("second")}, []string{ns}, false),
+		AgentIdentityOf("nowhere", []v1alpha1.AgentSubject{saSubject("nowhere")}, nil, false),
+		AgentIdentityOf("dual", []v1alpha1.AgentSubject{{Kind: "User", Name: dualUser}}, []string{ns}, false),
 	}
 }
 
@@ -186,6 +193,29 @@ var ActorRefusals = []ActorRefusal{
 			}
 			return w.Client.Delete(AsUser(w.Ctx, AdminUser, AdminGroups...), first)
 		}, Shipper: "conflict"},
+	// The index omits an empty scope list: the policy must still refuse
+	// with the scope, not an expression error.
+	{Actor: "nowhere", Message: "agent nowhere may not act here (namespace team-a, pipeline app)", CLI: actor.ErrOutOfScope,
+		Write: func(w *World, p *Plan, b *v1alpha1.Bundle) (Identity, *v1alpha1.Actor) {
+			id := ActorIdentities["nowhere"]
+			return id, agentStamp(id, "nowhere")
+		},
+		Fix: func(w *World, p *Plan) error {
+			return w.editAgent("nowhere", func(a *v1alpha1.AgentIdentity) { a.Spec.Scope.Namespaces = []string{p.NS} })
+		}, Shipper: "nowhere"},
+	// A user that matches two agents (its username and a group) is refused,
+	// whichever of them it stamps, until one registration goes.
+	{Actor: "two-agents", Message: "you (oidc:dual) match more than one AgentIdentity (dual, triage)", CLI: actor.ErrConflict,
+		Write: func(w *World, p *Plan, b *v1alpha1.Bundle) (Identity, *v1alpha1.Actor) {
+			id := ActorIdentities["two-agents"]
+			return id, agentStamp(id, "dual")
+		},
+		Fix: func(w *World, p *Plan) error {
+			if err := w.editAgent("dual", func(a *v1alpha1.AgentIdentity) { a.Spec.Suspended = true }); err != nil {
+				return err
+			}
+			return w.Client.Delete(AsUser(w.Ctx, AdminUser, AdminGroups...), &v1alpha1.AgentIdentity{ObjectMeta: metav1.ObjectMeta{Name: "dual"}})
+		}, Shipper: "two-agents"},
 	{Actor: "index-missing", Message: "no params found for policy binding with `Deny` parameterNotFoundAction", Index: true, Stalls: true,
 		Break: func(w *World, p *Plan) error {
 			w.PauseIndex(true)
@@ -324,6 +354,7 @@ func RunActorRefusal(t *testing.T, w *World, p *Plan, r *ActorRefusal, fail func
 		require.NotEmpty(t, reasons, "the API server admitted %s's version", r.Actor)
 		assert.Contains(t, strings.Join(reasons, "; "), r.Message)
 		assert.NotContains(t, strings.Join(reasons, "; "), "failed to evaluate", "a refusal names its reason")
+		assert.NotContains(t, strings.Join(reasons, "; "), "resulted in error", "a refusal names its reason")
 	}
 	if r.Write != nil {
 		refusedBy(r.Write(w, p, v))
@@ -376,7 +407,8 @@ func RunActorRefusal(t *testing.T, w *World, p *Plan, r *ActorRefusal, fail func
 	}
 	stored := w.Bundle(ns, v.Name)
 	require.NotNil(t, stored.Spec.Actor)
-	if a := stored.Spec.Actor; r.Shipper == "suspended" || r.Shipper == "outofscope" || r.Shipper == "conflict" {
+	if a := stored.Spec.Actor; r.Shipper == "suspended" || r.Shipper == "outofscope" || r.Shipper == "conflict" ||
+		r.Shipper == "nowhere" || r.Shipper == "two-agents" {
 		assert.Equal(t, v1alpha1.ActorAgent, a.Kind)
 		assert.Equal(t, ActorIdentities[r.Shipper].Username, a.Principal)
 	} else {
