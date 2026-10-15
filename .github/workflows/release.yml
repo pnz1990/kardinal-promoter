@@ -132,6 +132,8 @@ jobs:
       # with make changelog-release: its notes would leave them out, and the
       # site would keep listing them under [Unreleased].
       - name: No unreleased changelog fragments
+        # A dry run's notes are the fragments themselves.
+        if: env.DRY_RUN != 'true'
         run: |
           left=
           if [ -d docs/changelog.d ]; then

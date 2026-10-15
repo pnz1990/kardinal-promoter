@@ -747,6 +747,11 @@ func TestReleaseDryRun(t *testing.T) {
 		}
 	}
 	assert.GreaterOrEqual(t, gated, 9, "the publishing steps")
+	for _, s := range releaseJobs(t)["preflight"].Steps {
+		if s.Name == "No unreleased changelog fragments" || s.Name == "Check that the tagged commit is on main" {
+			assert.Equal(t, "env.DRY_RUN != 'true'", fmt.Sprint(s.If), "%s: a dry run builds a branch with fragments", s.Name)
+		}
+	}
 
 	script := preflightScript(t, "Set version and release channel from tag")
 	for _, tt := range []struct {
