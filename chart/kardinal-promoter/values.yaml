@@ -154,6 +154,9 @@ controller:
     # the client address (--access-log-trusted-proxies). Other clients'
     # X-Forwarded-For is ignored.
     trustedProxies: []
+    # -- Write an AuditEvent (action APIWrite) naming the caller for every
+    # write through the UI API and the Bundle API (--api-audit-events).
+    auditEvents: true
 
   # -- Longest a gate override counts, in minutes from when the controller
   # first saw it (--gate-override-max-minutes): an override ends at the
@@ -250,6 +253,14 @@ github:
 
 # Identity admission policies (templates/identity-admission.yaml,
 # docs/guides/security.md#verified-identity).
+actors:
+  directory:
+    # -- Let every authenticated user read the agent registry
+    # (AgentIdentities and the AgentIndex): kardinal stamps what it writes
+    # from it (docs/actors.md). With false, bind the
+    # <fullname>-agent-directory-reader ClusterRole to the agents and people
+    # who use kardinal.
+    public: true
 admission:
   # -- Usernames, besides this release's controller ServiceAccount, that run
   # a kardinal controller: they may name any Bundle's kardinal.io/created-by,

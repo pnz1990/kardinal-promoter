@@ -11,6 +11,8 @@ built-in ones: a flag whose help names a `KARDINAL_*` variable reads it as its d
 | `--access-log-all-requests` | bool | `false` | Log every UI API and Bundle API request, not only logins (TokenReviews), refusals (401/403/429) and writes. Chart value: controller.accessLog.allRequests. |
 | `--access-log-source-ip` | bool | `false` | Add the client address to each access log line. Chart value: controller.accessLog.sourceIP. |
 | `--access-log-trusted-proxies` | string |  | Comma-separated CIDRs of proxies (an Ingress controller) whose X-Forwarded-For gives the client address in the access log. Chart value: controller.accessLog.trustedProxies. |
+| `--agent-index` | string |  | Name of the AgentIndex this controller builds from the AgentIdentities and stamps the UI API's and the Bundle API's writes from (the chart's actor admission policy reads it; Helm sets the release name). Empty: no agent registry, every caller is a person or a bot (docs/actors.md). |
+| `--api-audit-events` | bool | `true` | Write an AuditEvent (action APIWrite) naming the caller for every write through the UI API and the Bundle API. Chart value: controller.accessLog.auditEvents. |
 | `--audit-retention` | bool | `true` | Delete AuditEvents past their retention (--audit-retention-max-age, --audit-retention-max-per-pipeline). On by default: unbounded records fill etcd, which takes down the whole cluster. false keeps every record (export them first: docs/guides/security.md, Retention). |
 | `--audit-retention-interval` | duration | `10m0s` | How often the leader applies AuditEvent retention. |
 | `--audit-retention-max-age` | duration | `2160h0m0s` | Delete AuditEvents created (metadata.creationTimestamp) longer ago than this. 0 keeps records of any age. |

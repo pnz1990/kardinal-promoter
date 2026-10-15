@@ -62,7 +62,7 @@ const auditKind = "PromotionStep"
 // The AuditEvent name is {ps.Name}-{action}, with no timestamp: one event per
 // step and action is intended, so a re-run reconcile that repeats the
 // transition hits AlreadyExists and writes nothing new.
-func auditEntry(ps *v1alpha1.PromotionStep, action, outcome, message string, at time.Time) (v1alpha1.PendingAuditEvent, bool) {
+func auditEntry(ps *v1alpha1.PromotionStep, action, outcome, message string, at time.Time, who *v1alpha1.Actor) (v1alpha1.PendingAuditEvent, bool) {
 	if ps == nil {
 		return v1alpha1.PendingAuditEvent{}, false
 	}
@@ -86,6 +86,7 @@ func auditEntry(ps *v1alpha1.PromotionStep, action, outcome, message string, at 
 		Action:       action,
 		Outcome:      outcome,
 		Message:      message,
+		Actor:        who,
 	}, metav1.NewTime(at)), true
 }
 
@@ -166,4 +167,21 @@ func sanitizeK8sName(s string) string {
 		result = result[:len(result)-1]
 	}
 	return string(result)
+}
+
+// bundleActor is the actor stamp of ps's Bundle, or nil when the Bundle has
+// none or cannot be read: the record is still written, without an actor.
+func (r *Reconciler) bundleActor(ctx context.Context, ps *v1alpha1.PromotionStep) *v1alpha1.Actor {
+	name := ps.Spec.BundleName
+	if name == "" {
+		name = ps.Labels["kardinal.io/bundle"]
+	}
+	if name == "" {
+		return nil
+	}
+	var b v1alpha1.Bundle
+	if err := r.Get(ctx, client.ObjectKey{Namespace: ps.Namespace, Name: name}, &b); err != nil {
+		return nil
+	}
+	return b.Spec.Actor
 }

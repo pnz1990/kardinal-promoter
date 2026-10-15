@@ -28,6 +28,7 @@
 package rollbackpolicy
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -47,6 +48,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
@@ -88,6 +90,9 @@ const (
 // associated PromotionStep's consecutive health failures exceed the threshold.
 // It is idempotent and safe to re-run after a crash.
 type Reconciler struct {
+	// ControllerUser is the controller's own username: the principal of the
+	// Bundles it creates on its own (docs/actors.md). Empty: kardinal-controller.
+	ControllerUser string
 	client.Client
 
 	// NowFn returns the current time. Overridable for testing.
@@ -370,6 +375,7 @@ func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logge
 		return "", &refusal{reason: reason, message: kubeevent.Truncate(err.Error())}, nil
 	}
 
+	plan.Bundle.Spec.Actor = actor.Controller(cmp.Or(r.ControllerUser, lifecycle.ControllerCreator), v1alpha1.ViaAutoRollback)
 	if err := lifecycle.CreateBundleAs(ctx, r.Client, plan.Bundle, lifecycle.ControllerCreator); err != nil && !apierrors.IsAlreadyExists(err) {
 		return "", nil, fmt.Errorf("create rollback bundle: %w", err)
 	}

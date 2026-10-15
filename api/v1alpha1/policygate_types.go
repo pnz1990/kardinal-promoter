@@ -127,6 +127,9 @@ type GateApproval struct {
 	// Comment is the approver's note.
 	// +optional
 	Comment string `json:"comment"`
+	// Actor is the Approval's verified actor stamp (docs/actors.md).
+	// +optional
+	Actor *Actor `json:"actor,omitempty"`
 }
 
 // GateApprovalStatus records how the gate counted one approval.
@@ -146,6 +149,9 @@ type GateApprovalStatus struct {
 	// FirstSeenAt is when the gate first saw the decision.
 	// +optional
 	FirstSeenAt *metav1.Time `json:"firstSeenAt,omitempty"`
+	// Actor is who decided: the Approval's actor stamp (docs/actors.md).
+	// +optional
+	Actor *Actor `json:"actor,omitempty"`
 }
 
 // PolicyGateOverride is a time-limited emergency override record.
@@ -179,6 +185,11 @@ type PolicyGateOverride struct {
 	// SelfSubjectReview), or when the controller writes it for the UI.
 	// +optional
 	CreatedBy string `json:"createdBy,omitempty"`
+
+	// Actor is who created the override (docs/actors.md): the verified
+	// kardinal.io/actor stamp. Its principal equals createdBy.
+	// +optional
+	Actor *Actor `json:"actor,omitempty"`
 }
 
 // PolicyGateStatus defines the observed state of a PolicyGate.

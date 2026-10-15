@@ -210,6 +210,21 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["kardinal.io"]
   resources: ["changewindows/status"]
   verbs: ["get", "update", "patch"]
+# The agent registry (docs/actors.md): AgentIdentities read and their Ready
+# condition written; the AgentIndex (named after the release) created and its
+# status written (pkg/reconciler/agentidentity).
+- apiGroups: ["kardinal.io"]
+  resources: ["agentidentities"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["kardinal.io"]
+  resources: ["agentidentities/status"]
+  verbs: ["get", "update", "patch"]
+- apiGroups: ["kardinal.io"]
+  resources: ["agentindexes"]
+  verbs: ["get", "list", "watch", "create"]
+- apiGroups: ["kardinal.io"]
+  resources: ["agentindexes/status"]
+  verbs: ["get", "update", "patch"]
 # ClusterScmProviders, read like ScmProviders and their Ready condition
 # written.
 - apiGroups: ["kardinal.io"]

@@ -114,6 +114,11 @@ kubectl get pods -n kro-system
 # kro-7d4b8f9f5-xk2pq               1/1     Running   0          30s
 ```
 
+The controller is ready once it has built the agent index (`kubectl get agentindex`, Ready).
+Until then, a few seconds after the install, the API server refuses new versions, Approvals and
+gate overrides with "kardinal's agent index is not ready yet" ([Agents and the verified
+actor](actors.md#how-the-actor-is-verified)).
+
 ### 3. Install the CLI
 
 Download the `kardinal` binary of the same release. The release has builds for Linux and

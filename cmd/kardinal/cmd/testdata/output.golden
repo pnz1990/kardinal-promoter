@@ -62,14 +62,14 @@ prod          1.5.0 (demo-b3)   PolicyGate   no-weekend   Not ready   !schedule.
 prod   deployed: 1.4.0 (demo-b1)
 
 $ kardinal history demo
-VERSION           ACTION    ENV    PR    DURATION   TIMESTAMP
-1.5.0 (demo-b3)   promote   uat    #42   ...        <time>
-1.5.0 (demo-b3)   promote   test   --    --         <time>
-1.4.1 (demo-b2)   promote   test   --    --         <time>
-1.4.0 (demo-b1)   promote   prod   --    --         <time>
-1.4.0 (demo-b1)   promote   uat    --    --         <time>
-1.4.0 (demo-b1)   promote   test   --    --         <time>
-demo-b0           promote   test   --    --         <time>
+VERSION           ACTION    ACTOR     ENV    PR    DURATION   TIMESTAMP
+1.5.0 (demo-b3)   promote   unknown   uat    #42   ...        <time>
+1.5.0 (demo-b3)   promote   unknown   test   --    --         <time>
+1.4.1 (demo-b2)   promote   unknown   test   --    --         <time>
+1.4.0 (demo-b1)   promote   unknown   prod   --    --         <time>
+1.4.0 (demo-b1)   promote   unknown   uat    --    --         <time>
+1.4.0 (demo-b1)   promote   unknown   test   --    --         <time>
+demo-b0           promote   unknown   test   --    --         <time>
 
 $ kardinal logs demo
 === demo/prod (demo-b1) [Live] ===

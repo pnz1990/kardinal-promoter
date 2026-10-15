@@ -125,6 +125,7 @@ nav:
     - agentic/index.md
     - Connect an agent: agentic/connect-an-agent.md
     - Threat model: agentic/threat-model.md
+    - Agents and the verified actor: actors.md
   - How-to:
     - Use the UI: ui.md
     - Ship versions from CI: ci-integration.md
@@ -174,6 +175,7 @@ nav:
       - kardinal approve: reference/cli/kardinal-approve.md
       - kardinal audit:
         - kardinal audit: reference/cli/kardinal-audit.md
+        - kardinal audit export: reference/cli/kardinal-audit-export.md
         - kardinal audit summary: reference/cli/kardinal-audit-summary.md
       - kardinal completion: reference/cli/kardinal-completion.md
       - kardinal create:

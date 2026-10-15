@@ -38,6 +38,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/accesslog"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
@@ -332,6 +334,13 @@ type uiBundleResponse struct {
 	// Rejected is spec.rejected: who rejected the Bundle (kardinal reject),
 	// why and when. Absent when it is not rejected.
 	Rejected *uiBundleRejection `json:"rejected,omitempty"`
+	// Actor is who created the Bundle (docs/actors.md): its stamp, or kind
+	// unknown with its kardinal.io/created-by.
+	Actor v1alpha1.Actor `json:"actor"`
+	// ActorText is Actor as one sentence ("agent fixer for alice"), and
+	// ActorAsserted what it asserted about itself, labelled as asserted.
+	ActorText     string `json:"actorText"`
+	ActorAsserted string `json:"actorAsserted,omitempty"`
 }
 
 // uiBundleEnvStatus is the per-environment status summary of a Bundle (#503).
@@ -554,6 +563,9 @@ type uiAPIServer struct {
 	// lifecycle actions read the object they write through it (fresh).
 	// Nil in tests reads through client.
 	apiReader client.Reader
+	// actors stamps writes with the caller's actor (docs/actors.md); nil
+	// derives from no agent index.
+	actors *actorWriter
 }
 
 // upstreamCache memoizes graph.AllEnvironmentUpstreams per Pipeline UID and
@@ -962,7 +974,9 @@ func (s *uiAPIServer) handleBundlesForPipeline(w http.ResponseWriter, r *http.Re
 			Provenance: b.Spec.Provenance,
 			Images:     b.Spec.Images, // #563: expose images for diff preview
 			Version:    b.Status.Version,
+			Actor:      actor.OrUnknown(b.Spec.Actor, b.Annotations[lifecycle.AnnotationCreatedBy]),
 		}
+		resp.ActorText, resp.ActorAsserted = actor.Describe(resp.Actor), actor.DescribeAsserted(resp.Actor)
 		if resp.Version == "" {
 			resp.Version = scm.BundleVersion(b.Spec)
 		}
@@ -1601,6 +1615,28 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 		s.writeLifecycleError(w, "override gate "+gateName, err)
 		return
 	}
+	// The gate's labels say where the override lands, for the caller's
+	// scope and the audit record.
+	var probe v1alpha1.PolicyGate
+	if err := writer.Get(r.Context(), client.ObjectKey{Name: gateName, Namespace: gateNS}, &probe); err != nil {
+		if apierrors.IsNotFound(err) {
+			http.Error(w, "gate not found", http.StatusNotFound)
+			return
+		}
+		s.writeLifecycleError(w, "override gate "+gateName, err)
+		return
+	}
+	env := probe.Labels["kardinal.io/environment"]
+	if env == "" {
+		env = req.Stage
+	}
+	stamp, ok := s.stampFor(w, r, actor.Where{Namespace: gateNS, Pipeline: probe.Labels["kardinal.io/pipeline"], Environment: env},
+		accesslog.AuditTarget{Route: "/api/v1/ui/gates/{namespace}/{name}/approve", Bundle: probe.Labels["kardinal.io/bundle"],
+			Message: fmt.Sprintf("override gate %s for %d minutes: %s", gateName, expiresMins, req.Reason)})
+	if !ok {
+		return
+	}
+	override.Actor = stamp
 	// Re-read and re-apply on a conflict: the reconciler and other approvers
 	// write the same gate, and a stale resourceVersion is not a user error.
 	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -1907,6 +1943,12 @@ func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requester := uiRequester(r.Context())
+	stamp, ok := s.stampFor(w, r, actor.Where{Namespace: ns, Pipeline: req.Pipeline},
+		accesslog.AuditTarget{Route: "/api/v1/ui/bundles", Message: "create a bundle of " + req.Image})
+	if !ok {
+		return
+	}
+	spec.Actor = stamp
 	bundle := &v1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: sanitizeName(req.Pipeline) + "-",
@@ -1929,6 +1971,7 @@ func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	auditDone(r, bundle.Name, "created bundle "+bundle.Name+" of "+req.Image)
 	s.log.Info().
 		Str("bundle", bundle.Name).
 		Str("pipeline", req.Pipeline).

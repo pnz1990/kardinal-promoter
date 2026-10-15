@@ -73,10 +73,10 @@ spec:
   sponsor:                       # required: the accountable person
     user: alice@example.com
     team: payments               # optional, shown and exported, not used by policy
-  scope:                         # where this agent may act; empty list = nowhere
-    namespaces: ["payments-*"]   # exact names, or a prefix ending in "*"; ["*"] = everywhere
-    pipelines: ["*"]             # Pipeline names, same form; default ["*"]
-    environments: ["test", "uat"]# environment names, same form; default ["*"]
+  scope:                         # where this agent may act
+    namespaces: ["payments-*"]   # exact names, or a prefix ending in "*"; ["*"] = everywhere; empty = nowhere
+    pipelines: ["*"]             # Pipeline names, same form; empty or absent = all
+    environments: ["test", "uat"]# environments it may approve or override in, same form; empty or absent = all
   autonomy: approve              # auto | approve | deny; default approve (section 10.4)
   suspended: false               # true: every write by its subjects is denied
 status:
@@ -124,8 +124,9 @@ is idempotent: the same AgentIdentities always produce the same status.
   index (section 5.4) lists them as blocked, and admission denies their stamped writes with the
   AgentIdentity's reason. An admin's mistake fails closed.
 
-**RBAC.** Only cluster admins write AgentIdentities: the chart's user roles do not include
-them. The chart grants `get, list, watch` on `agentidentities` and `agentindexes` to
+**RBAC.** Only cluster-wide admins write AgentIdentities: cluster admins, and holders of
+`<release>-admin` through a ClusterRoleBinding. A namespace RoleBinding cannot grant a
+cluster-scoped kind, so no namespace role reaches them; the viewer role reads them. The chart grants `get, list, watch` on `agentidentities` and `agentindexes` to
 `system:authenticated` (`actors.directory.public`, default `true`): an agent must read the
 index to write its own stamp, and showing "shipped by agent fixer for alice" in the UI already
 discloses the registration. With `false`, bind `<release>-agent-directory-reader` to the agents
@@ -417,7 +418,7 @@ VAP CEL is its transliteration. A table-driven test runs every case in section 1
 
 | Writer | How it gets the stamp |
 |--------|-----------------------|
-| `kardinal create bundle`, `promote`, `rollback`, `approve`, `override` | `SelfSubjectReview` (username and groups), then a list of AgentIndexes; `actor.Derive`. Asserted fields come from `--model`, `--session` and `--client`, or `KARDINAL_ACTOR_MODEL`, `KARDINAL_ACTOR_SESSION` and `KARDINAL_ACTOR_CLIENT`. If the index cannot be read, the CLI writes no stamp. That is accepted for people and bots (5.5); an agent is then denied with the stamp it must write. |
+| `kardinal create bundle`, `promote`, `rollback`, `approve`, `override` | `SelfSubjectReview` (username and groups), then a list of AgentIndexes; `actor.Derive`. Asserted fields come from the environment: `KARDINAL_ACTOR_MODEL`, `KARDINAL_ACTOR_SESSION` and `KARDINAL_ACTOR_CLIENT`; unset ones record nothing. An agent out of its scope, suspended or ambiguous is refused before anything is written. If the index cannot be read, the CLI writes no stamp. That is accepted for people and bots (5.5); an agent is then denied with the stamp it must write. |
 | UI API | The controller, from the TokenReview `UserInfo`, with `via: ui` (5.3). |
 | Bundle API, TokenReview token | The same, with `via: api`. |
 | Bundle API, static token | `kind: bot`, `principal: bundle-api`, `via: api`. |
@@ -458,37 +459,41 @@ AuditEvent with action `APIWrite`. The outcome is `Success`, or `Failure` when t
 refused or the API server denied the write. The message names the route's verb ("paused
 pipeline checkout", "created bundle checkout-7f3c2a"). One action and a `request.route` are
 easier to query and export than one action per route, and the route says which. The writes are
-bounded by the access log's per-second limit (#1537): past the limit the access log line is
-still written and the AuditEvent is dropped, with a counter
-(`kardinal_audit_events_dropped_total{reason="rate"}`). They are retained under
+queued and written after the response, at most 50 a second per controller replica: past that,
+or with the queue (256) full, the AuditEvent is dropped and counted
+(`kardinal_audit_events_dropped_total{kind="APIWrite"}`, reasons `rate`, `queue`, `error`). The
+access log line is still written (#1537). They are retained under
 `--audit-retention-max-age` (#1523).
 
 **Default: on** (`controller.accessLog.auditEvents: true`). #1539 proposed off because of volume.
 These writes come at human speed and are rate-limited, and "a verified actor on every change"
 means nothing if the record is opt-in. Off remains available.
 
-**Only the controller writes AuditEvents.** A new `<release>-audit-events` policy admits AuditEvent
-CREATE only from this release's controller (and `admission.controllerUsernames`). The user
-roles grant no write on AuditEvents. So an `actor` in the audit log was written by kardinal.
+**Only the controller names an actor in an AuditEvent.** A new `<release>-audit-actor` policy
+admits an AuditEvent CREATE with `spec.actor` only from this release's controller (and
+`admission.controllerUsernames`). Records without an actor stay as before. The user roles grant
+no write on AuditEvents. So an `actor` in the audit log was written by kardinal.
 
 **`kardinal audit export`.**
 
 ```
-kardinal audit export [--pipeline P] [--since 24h] [-A] [--format json|ocsf] [-o file]
+kardinal audit export [--pipeline P] [--since 24h] [-A] [--format json|ocsf] [--file F]
 ```
 
-- Writes NDJSON, one event per line, oldest first, from a paginated List (500 per page) so a
-  large log is streamed, not held in memory.
+- Writes NDJSON, one event per line, page by page from a paginated List (500 per page), so a
+  large log is streamed, not held in memory. The order is the API server's, not time: sort
+  downstream.
 - `json`: the AuditEvent spec, plus `namespace`, `name` and `uid`.
 - `ocsf`: OCSF 1.3.0 **API Activity** (`class_uid: 6003`, `category_uid: 6`). It maps
   `activity_id` (Create 1, Update 3, Delete 4, Other 99) and `type_uid = 600300 + activity_id`;
-  `time` (epoch ms) and `status_id` (Success 1, Failure 2); `actor.user.name` (principal),
-  `actor.user.type` (`User` for human, `System` otherwise) and `actor.app_name` (agent);
+  `time` (epoch ms) and `status_id` (Success 1, Failure 2, Pending 99); `actor.user.name`
+  (principal), `actor.user.type` (`User` for human, `System` for bot and controller, `Agent`
+  with `type_id` 99 for an agent) and `actor.app_name` (agent); `src_endpoint.svc_name`;
   `api.operation` (action) and `api.request.uid` (AuditEvent uid); `resources[]` (Bundle,
   Pipeline, environment); `metadata.product` (`kardinal-promoter`, version) and `message`.
   Fields OCSF has no place for, such as `sponsor`, `kind`, `via` and `asserted`, go under
-  `unmapped.kardinal`. Before merge, the mapping is checked against the OCSF 1.3.0 schema
-  (`events/application/api_activity.json`).
+  `unmapped.kardinal`. The field names were checked against the OCSF 1.3.0 schema
+  (`events/application/api_activity.json` and the objects it uses).
 
 ## 8. Showing the actor
 
@@ -499,8 +504,8 @@ One sentence form everywhere, from `actor.Describe`:
 | agent | `agent fixer for alice@example.com` |
 | human | `alice@example.com` |
 | bot | `bot system:serviceaccount:ci:builder` |
-| controller | `kardinal (subscription)`, `kardinal (auto-rollback)` |
-| unknown with principal | `alice@example.com (unverified)` |
+| controller | "kardinal (subscription)", "kardinal (auto-rollback)" |
+| unknown with principal | `alice@example.com` |
 | unknown without | `unknown` |
 
 `via: ui` and `via: api` append " via the UI" or " via the API". Asserted fields are shown
@@ -661,7 +666,7 @@ context is not needed: the stamp is data on the Bundle.
 
 | # | Question | Options | Choice and why |
 |---|----------|---------|----------------|
-| A1 | How admission checks a claimed actor | (a) index params, (b) managedFields, (c) principal only + derive into status, (c') + selector over AgentIdentities, (d) RBAC `authorizer`, (e) MutatingAdmissionPolicy | **(a)**, 5.3: the only option that verifies kind, agent, sponsor and scope at write time on 1.30, with group subjects. (e) later. |
+| A1 | How admission checks a claimed actor | (a) index params, (b) managedFields, (c) principal only + derive into status, (c') + selector over AgentIdentities, (d) RBAC `authorizer`, (e) MutatingAdmissionPolicy | **(a)**, 5.3: the only option that verifies kind, agent, sponsor and scope at write time on every supported minor, with group subjects. (e) later. |
 | A2 | Who builds the index | Go reconciler on its own status; kro Graph; chart-rendered static list | **Go reconciler**, 5.4: kro CEL fails the whole index on one conflict, and kro's single queue would delay revocation (G13). Ledger G8 row. |
 | A3 | Where the stamp lives | annotations; one JSON annotation; typed `actor` field | **Typed field**: the policy CEL cannot parse JSON (5.1), override entries cannot carry annotations, and the schema enforces enum and lengths. |
 | A4 | Sponsor: user or group | user; group; either | **User, with an optional informational team.** The one-party rule needs a decidable comparison. An approver's username is verified, but their full group list is not recorded on the Approval. |
@@ -697,7 +702,7 @@ kind):
 | 16 | controller on behalf of `alice` | `{human, alice, via: ui}` | admitted (exempt) |
 | 17 | anyone but the controller | `via` set | denied |
 | 18 | override entry by agent | correct / forged | admitted / denied |
-| 19 | AuditEvent create by a non-controller | — | denied |
+| 19 | AuditEvent with `spec.actor` created by a non-controller | — | denied |
 | 20 | AgentIdentity delete without suspend | — | denied |
 
 Also:

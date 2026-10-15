@@ -37,6 +37,9 @@ type RollbackRequest struct {
 	// spec.provenance keeps the target's, so its author is the author of the
 	// restored build.
 	Actor string
+	// Stamp is the rollback Bundle's actor stamp (spec.actor,
+	// docs/actors.md), or nil.
+	Stamp *v1alpha1.Actor
 	// Name fixes the rollback Bundle name (used by automatic rollbacks for
 	// idempotency). Empty means GenerateName "<pipeline>-rollback-".
 	Name string
@@ -940,6 +943,7 @@ func buildRollbackBundle(ctx context.Context, req RollbackRequest, plan *Rollbac
 		Spec: v1alpha1.BundleSpec{
 			Pipeline: req.Pipeline,
 			Intent:   &v1alpha1.BundleIntent{TargetEnvironment: req.Environment},
+			Actor:    req.Stamp,
 		},
 	}
 	if req.Name != "" {

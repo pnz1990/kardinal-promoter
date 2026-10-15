@@ -20,6 +20,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/accesslog"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 )
@@ -112,11 +114,18 @@ func (s *uiAPIServer) handlePromote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requester := uiRequester(r.Context())
+	stamp, ok := s.stampFor(w, r, actor.Where{Namespace: ns, Pipeline: req.Pipeline},
+		accesslog.AuditTarget{Route: "/api/v1/ui/promote", Environment: req.Environment,
+			Message: "promote " + req.Pipeline + " to " + req.Environment})
+	if !ok {
+		return
+	}
 	plan, err := lifecycle.PlanPromote(r.Context(), s.client, lifecycle.PromoteRequest{
 		Namespace:   ns,
 		Pipeline:    req.Pipeline,
 		Environment: req.Environment,
 		Actor:       requester,
+		Stamp:       stamp,
 		Now:         time.Now(),
 	})
 	if err != nil {
@@ -127,6 +136,7 @@ func (s *uiAPIServer) handlePromote(w http.ResponseWriter, r *http.Request) {
 		s.writeLifecycleError(w, "create promote bundle", err)
 		return
 	}
+	auditDone(r, plan.Bundle.Name, "promoted "+plan.Source.Name+" to "+req.Environment+" as "+plan.Bundle.Name)
 
 	s.log.Info().
 		Str("bundle", plan.Bundle.Name).
@@ -181,12 +191,19 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requester := uiRequester(r.Context())
+	stamp, ok := s.stampFor(w, r, actor.Where{Namespace: ns, Pipeline: req.Pipeline},
+		accesslog.AuditTarget{Route: "/api/v1/ui/rollback", Environment: req.Environment,
+			Message: "roll back " + req.Pipeline + " in " + req.Environment})
+	if !ok {
+		return
+	}
 	rollbackReq := lifecycle.RollbackRequest{
 		Namespace:   ns,
 		Pipeline:    req.Pipeline,
 		Environment: req.Environment,
 		ToBundle:    req.ToBundle,
 		Actor:       requester,
+		Stamp:       stamp,
 		Now:         time.Now(),
 	}
 	if !req.Hold && req.HoldReason != "" {
@@ -268,6 +285,7 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 	if req.Hold {
 		msg += "; " + req.Environment + " is held on " + plan.Bundle.Name + " until the hold is released"
 	}
+	auditDone(r, plan.Bundle.Name, msg)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(uiRollbackResponse{
@@ -320,6 +338,11 @@ func (s *uiAPIServer) handleReleaseHold(w http.ResponseWriter, r *http.Request) 
 	ns := req.Namespace
 	if ns == "" {
 		ns = "default"
+	}
+	if _, ok := s.stampFor(w, r, actor.Where{Namespace: ns, Pipeline: req.Pipeline},
+		accesslog.AuditTarget{Route: "/api/v1/ui/release-hold", Environment: req.Environment,
+			Message: "release the hold of " + req.Pipeline + " in " + req.Environment}); !ok {
+		return
 	}
 	// pipelines/hold, not update on the Pipeline: the controller writes it.
 	writer, err := s.actionClient(r.Context(), "pipelines", "hold", ns, req.Pipeline)
@@ -381,9 +404,15 @@ func (s *uiAPIServer) handleApproval(w http.ResponseWriter, r *http.Request) {
 	if ns == "" {
 		ns = "default"
 	}
+	stamp, ok := s.stampFor(w, r, actor.Where{Namespace: ns, Environment: req.Environment},
+		accesslog.AuditTarget{Route: "/api/v1/ui/approvals", Bundle: req.Bundle,
+			Message: "record a decision on " + req.Bundle + " for " + req.Environment})
+	if !ok {
+		return
+	}
 	outcome, a, err := lifecycle.RecordApproval(r.Context(), s.client, lifecycle.ApprovalRequest{
 		Namespace: ns, Bundle: req.Bundle, Environment: req.Environment, User: user.Username, Groups: user.Groups,
-		Decision: req.Decision, Comment: req.Comment, Revoke: req.Revoke, Via: "ui",
+		Decision: req.Decision, Comment: req.Comment, Revoke: req.Revoke, Via: "ui", Actor: stamp,
 	})
 	if err != nil {
 		s.writeLifecycleError(w, "approval", err)
@@ -396,6 +425,7 @@ func (s *uiAPIServer) handleApproval(w http.ResponseWriter, r *http.Request) {
 	if outcome == lifecycle.ApprovalRevoked {
 		msg = fmt.Sprintf("Revoked: %s no longer %s %s for %s", user.Username, verb, req.Bundle, req.Environment)
 	}
+	auditDone(r, "", msg)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(uiApprovalResponse{Outcome: string(outcome), Approval: a.Name, User: user.Username, Message: msg})
 }
@@ -447,6 +477,10 @@ func (s *uiAPIServer) handlePauseResume(w http.ResponseWriter, r *http.Request, 
 	action, done := "resume", "resumed"
 	if pause {
 		action, done = "pause", "paused"
+	}
+	if _, ok := s.stampFor(w, r, actor.Where{Namespace: ns, Pipeline: req.Pipeline},
+		accesslog.AuditTarget{Route: "/api/v1/ui/" + action, Message: done + " pipeline " + req.Pipeline}); !ok {
+		return
 	}
 	// SetPaused retries a conflict, so a concurrent write to the Pipeline (for
 	// example its status) does not fail the request.
@@ -545,6 +579,11 @@ func (s *uiAPIServer) handleReject(w http.ResponseWriter, r *http.Request) {
 	if ns == "" {
 		ns = "default"
 	}
+	if _, ok := s.stampFor(w, r, actor.Where{Namespace: ns},
+		accesslog.AuditTarget{Route: "/api/v1/ui/reject", Bundle: req.Bundle,
+			Message: "reject bundle " + req.Bundle + ": " + req.Reason}); !ok {
+		return
+	}
 	writer, err := s.actionClient(r.Context(), "bundles", "reject", ns, req.Bundle)
 	if err != nil {
 		s.writeLifecycleError(w, "reject bundle", err)
@@ -555,6 +594,9 @@ func (s *uiAPIServer) handleReject(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeLifecycleError(w, "reject bundle", err)
 		return
+	}
+	if t := accesslog.FromContext(r.Context()).Audit; t != nil {
+		t.Pipeline = b.Spec.Pipeline
 	}
 	s.log.Info().Str("bundle", req.Bundle).Str("namespace", ns).Str("reason", req.Reason).
 		Str("requestedBy", by).Msg("ui: bundle rejected")
@@ -622,6 +664,12 @@ func (s *uiAPIServer) handlePipelineOverride(w http.ResponseWriter, r *http.Requ
 		s.writeLifecycleError(w, "override gate", err)
 		return
 	}
+	stamp, ok := s.stampFor(w, r, actor.Where{Namespace: ns, Pipeline: req.Pipeline, Environment: req.Environment},
+		accesslog.AuditTarget{Route: "/api/v1/ui/override",
+			Message: fmt.Sprintf("override gate %s in %s for %d minutes: %s", req.Gate, req.Environment, expiresMins, req.Reason)})
+	if !ok {
+		return
+	}
 	// Every instance is authorized before any is written.
 	writers := make([]client.Client, len(targets))
 	for i := range targets {
@@ -634,7 +682,8 @@ func (s *uiAPIServer) handlePipelineOverride(w http.ResponseWriter, r *http.Requ
 	now := time.Now().UTC()
 	createdAt := metav1.NewTime(now)
 	override := v1alpha1.PolicyGateOverride{Reason: req.Reason, Stage: req.Environment,
-		ExpiresAt: metav1.NewTime(now.Add(time.Duration(expiresMins) * time.Minute)), CreatedAt: &createdAt, CreatedBy: by}
+		ExpiresAt: metav1.NewTime(now.Add(time.Duration(expiresMins) * time.Minute)), CreatedAt: &createdAt, CreatedBy: by,
+		Actor: stamp}
 	// Every instance is tried: a failure on one does not leave the others
 	// unwritten, and the answer names each gate that was not overridden.
 	names := make([]string, 0, len(targets))

@@ -25,6 +25,7 @@ import (
 	"github.com/rs/zerolog"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
@@ -87,6 +88,8 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		// admission) when there is one; else the client-written
 		// requested-by, marked unverified.
 		switch {
+		case state.Bundle.Actor != nil:
+			data.RolledBackBy = actor.Describe(*state.Bundle.Actor)
 		case state.CreatedBy != "":
 			data.RolledBackBy = state.CreatedBy
 		case state.RequestedBy != "":
@@ -101,6 +104,10 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 	} else {
 		data.CreatedBy = state.CreatedBy
 		data.RequestedBy = state.RequestedBy
+		if a := state.Bundle.Actor; a != nil {
+			data.Actor = actor.Describe(*a)
+			data.ActorAsserted = actor.DescribeAsserted(*a)
+		}
 	}
 
 	prCfg := state.Environment.PR

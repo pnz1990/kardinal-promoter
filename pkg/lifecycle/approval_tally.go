@@ -172,7 +172,7 @@ func TallyApprovals(gate *kardinalv1alpha1.PolicyGate, creator string) ApprovalT
 	}
 	approved, rejected := map[string]bool{}, map[string]bool{}
 	for _, a := range gate.Spec.Approvals {
-		rec := kardinalv1alpha1.GateApprovalStatus{User: a.User, Decision: a.Decision, Comment: a.Comment}
+		rec := kardinalv1alpha1.GateApprovalStatus{User: a.User, Decision: a.Decision, Comment: a.Comment, Actor: a.Actor}
 		counts, why := ApprovalDecisionCounts(p, a.User, a.Groups, creator)
 		switch {
 		case a.Bundle != bundle || a.Environment != env:

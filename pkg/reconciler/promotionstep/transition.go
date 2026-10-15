@@ -162,8 +162,10 @@ func (r *Reconciler) auditEntries(ctx context.Context, ps *v1alpha1.PromotionSte
 	state, message, auditAction string) ([]v1alpha1.PendingAuditEvent, error) {
 	at := r.now()
 	var out []v1alpha1.PendingAuditEvent
+	// The promotion belongs to its Bundle's author (docs/actors.md).
+	who := r.bundleActor(ctx, ps)
 	add := func(action, outcome, msg string) {
-		if e, ok := auditEntry(ps, action, outcome, msg, at); ok {
+		if e, ok := auditEntry(ps, action, outcome, msg, at, who); ok {
 			out = append(out, e)
 		}
 	}

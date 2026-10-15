@@ -564,6 +564,7 @@ and turn it on after the export.
 | `GateEvaluated` | PolicyGate instance first evaluated, and every later change of readiness (blocked or unblocked); one record per change |
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
 | `RollbackSucceeded` | A PromotionStep of a rollback Bundle (from `kardinal rollback`, the UI, a RollbackPolicy or `onHealthFailure: rollback`) reached Verified; written besides `PromotionSucceeded`, one record per step |
+| `APIWrite` | A write through the UI API or the Bundle API (promote, roll back, create a version, approve, override, pause, resume, reject, release a hold), refused ones included (outcome `Failure`), naming the caller and the route ([API writes](#api-writes)) |
 
 The CRD also accepts the actions `HealthCheckFailed` and `GateBlocked`, but kardinal never writes
 them: a failed health check records `PromotionFailed` (or `RollbackStarted` with
@@ -611,31 +612,49 @@ kubectl get promotionsteps,policygates -A -o json \
 | `spec.action` | One of the action values in the table above |
 | `spec.outcome` | `Success`, `Failure`, or `Pending` |
 | `spec.message` | Human-readable description |
+| `spec.actor` | Who caused the event ([Agents and the verified actor](../actors.md)) |
+| `spec.request` | The route and method of an `APIWrite` event |
 
-An AuditEvent does not record who acted. A Bundle made by a promote or a
-rollback, or created from the UI, names who asked for it in its
-`kardinal.io/requested-by` annotation. A gate approval records the same value
-as the override's `createdBy`, which the gate's reason shows as
-`OVERRIDDEN by <createdBy>: <reason> (expires <time>)`. The value is:
+An event names at least one of the Pipeline, the Bundle and the environment.
 
-- **UI with TokenReview auth** (`ui.auth.tokenReview`): the caller's Kubernetes
-  username, as the API server returned it for their token, for example
-  `system:serviceaccount:team-a:deployer`.
-- **UI with the static token, or with no UI auth**: `kardinal-ui`. The UI
-  cannot tell its callers apart in these modes.
-- **CLI** (`kardinal promote`, `kardinal rollback`, `kardinal override`): the
-  local username on the machine that ran it. Nothing verifies it.
-- **Automatic rollback**: `kardinal-controller (...)`, naming what triggered it.
+### Who acted
 
-A rollback Bundle keeps the restored build's provenance, so its
-`spec.provenance.author` is that build's author, not who rolled back.
+`spec.actor` is the verified actor of the record the event reports:
 
-Anyone who may create Bundles can also set the annotation, and anyone who may
-update PolicyGates can set `createdBy`, so for a verified identity read the
-Kubernetes API server audit log. It names the kubeconfig user who created a
-CLI Bundle. The UI creates Bundles and approves gates with the controller's
-ServiceAccount, so for a UI action the audit log names the controller, and in
-TokenReview mode the annotation or `createdBy` names the user.
+| Event | Actor |
+|---|---|
+| Promotion and rollback events | The version's actor (its Bundle's `spec.actor`): the change belongs to whoever made the version |
+| `ApprovalRecorded`, `ApprovalRevoked` | The Approval's actor |
+| `GateOverridden` | The override's actor, when the identity admission policy checked it |
+| `APIWrite` | The caller, as the UI API or the Bundle API authenticated them |
+
+Its `kind`, `principal`, `agent`, `sponsor` and `via` are verified. The principal is the
+username the Kubernetes API server authenticated (`request.userInfo`): the chart's admission
+policies admit a version, an Approval or an override only when its actor names the requester,
+and only kardinal's controller may name someone else, for the callers its TokenReview
+authenticated (`via: ui` or `via: api`). With the UI's static token, or the Bundle API's, the
+caller is the shared credential: a `bot` named `kardinal-ui` or `bundle-api`. `asserted.model`,
+`asserted.session` and `asserted.client` are what the client said about itself: recorded as
+written and never trusted.
+
+The `<release>-audit-actor` policy admits an AuditEvent that names an actor only from the
+controller, so a `spec.actor` in the log was written by kardinal. An event without one (a
+record from before v0.12, or one a version without a stamp caused) names nobody; a version's
+`kardinal.io/created-by` then says who created it. The Kubernetes API server audit log remains
+the record of every request, kardinal's own included.
+
+### API writes
+
+With `controller.accessLog.auditEvents` (`--api-audit-events`, on by default), every write
+through the UI API and the Bundle API is an `APIWrite` AuditEvent in the target's namespace. It
+records the caller (`spec.actor`), the route and method (`spec.request`), the target and what
+was done (`spec.message`), and the outcome: `Failure` when the controller or the API server
+refused it, once the request named its target (requests refused before that, such as a
+malformed body or the Bundle API's rate limit, are in the access log only). No token or request
+body is recorded. The events are queued and written after the
+response, at most 50 a second per controller replica; past that, or with the queue full, an
+event is dropped and counted in `kardinal_audit_events_dropped_total{kind="APIWrite"}`. They
+are retained with the other AuditEvents ([Retention](#retention)).
 
 ### Querying audit events
 
@@ -663,29 +682,29 @@ kubectl get auditevent -A -l kardinal.io/action=PromotionFailed
 
 ### SIEM integration
 
-Export AuditEvents as structured JSON for forwarding to your SIEM:
+`kardinal audit export` writes AuditEvents as newline-delimited JSON for a SIEM, either the
+AuditEvent spec (`--format json`) or OCSF 1.3.0 API Activity events (`--format ocsf`, class
+6003), each with its actor:
 
 ```bash
-# JSON dump of all events in every namespace (pipe to your log forwarder)
-kubectl get auditevents -A -o json \
-  | jq -c '.items[] | {
-      ts: .spec.timestamp,
-      pipeline: .spec.pipelineName,
-      bundle: .spec.bundleName,
-      env: .spec.environment,
-      action: .spec.action,
-      outcome: .spec.outcome,
-      message: .spec.message,
-      uid: .metadata.uid
-    }'
+# Every namespace, the last 24 hours, as OCSF
+kardinal audit export -A --format ocsf --file audit.ocsf.ndjson
+
+# One pipeline's last week, as JSON lines
+kardinal audit export --pipeline my-app --since 7d > my-app.ndjson
 ```
 
+In OCSF, `actor.user.name` is the principal, `actor.user.type` is `User`, `System` or `Agent`,
+`actor.app_name` is the agent, and the sponsor and the asserted fields are under
+`unmapped.kardinal.actor` ([kardinal audit export](../reference/cli/kardinal-audit-export.md)).
+
 Log forwarders such as Fluent Bit and Vector read container logs, not custom resources. Run
-the command above on a schedule (for example a CronJob) and forward its output to your SIEM
-(Splunk, Datadog, OpenSearch, etc.). Each run exports every record still there, so include
-`uid: .metadata.uid` and deduplicate by it in the SIEM. With retention on, run the export more
-often than the effective retention (see [Retention](#retention)), or records are deleted before
-they are exported.
+the export on a schedule (for example a CronJob) and forward its output to your SIEM
+(Splunk, Datadog, OpenSearch, etc.). Each run exports every record in its window, so
+deduplicate by `uid` (OCSF `metadata.uid`) in the SIEM. The export streams the records in the
+order the API server lists them: sort by time downstream. With retention on, run the export
+more often than the effective retention (see [Retention](#retention)), or records are deleted
+before they are exported.
 
 ### RBAC: read-only access to audit records
 
@@ -751,9 +770,9 @@ reports how many of each kind were dropped (`dropped_denied`, `dropped_request`)
 counter `kardinal_api_access_log_dropped_total{kind}` counts them. So a flood of refused
 requests cannot fill the log, and it cannot hide a login or a write.
 
-The access log covers the HTTP APIs. What the controller then does (promotions, gate
-results, rollbacks) is in the AuditEvents above, with the caller in `kardinal.io/requested-by`
-where the UI or Bundle API made the change. Ship the controller's log to your SIEM to keep
+The access log covers the HTTP APIs. Each write is also an `APIWrite` AuditEvent naming the
+caller ([API writes](#api-writes)), and what the controller then does (promotions, gate
+results, rollbacks) is in the AuditEvents above, with the version's actor. Ship the controller's log to your SIEM to keep
 both records.
 
 ---
@@ -914,6 +933,9 @@ chart installs a `ValidatingAdmissionPolicy` with a `Deny` binding, per release:
 | `<fullname>-gate-overrides` | Every new or changed `spec.overrides[]` entry of a PolicyGate ([`kardinal override`](../overrides.md)) has `createdBy` equal to the requesting user; the controller's ServiceAccount is exempt, because it writes overrides for the UI. Only the namespace's Graph ServiceAccount (kro) and the controller may create a gate instance (label `kardinal.io/bundle`, checked on CREATE and UPDATE) or change anything in it but `spec.overrides`: the rest of the spec and the whole metadata (labels, annotations, owner references, finalizers) are frozen, except `managedFields`, `resourceVersion` and `generation`, which the API server writes, and the `kardinal.io/force-recheck` annotation, which forces a re-evaluation. The garbage collector and the namespace controller may update an instance (they remove owner references and finalizers). In namespace mode (`controller.watchNamespace`) it applies to the watched namespace only. |
 | `<fullname>-approvals` | An `Approval` ([`kardinal approve`](../approvals.md)) is created only with `spec.user` equal to the requesting user and `spec.groups` among the requester's groups (checked at create time only), and its `kardinal.io/bundle` and `kardinal.io/environment` labels always equal `spec.bundle` and `spec.environment`. It may be owned only by the Bundle it approves (`spec.bundle`, `spec.bundleUID`), and its owner references cannot change later. Only its approver may delete (revoke) it; the garbage collector and the namespace controller are exempt (kardinal's controller is not: it never deletes Approvals). The spec is immutable (CRD rule). The UI records decisions for its TokenReview user: an Approval annotated `kardinal.io/recorded-via: ui` may be created in another name, and deleted, by this release's controller ServiceAccount (and `admission.controllerUsernames`) only. |
 | `<fullname>-bundle-creator` | A new Bundle's `kardinal.io/created-by` annotation, when set, equals the requesting user, and it cannot be added, changed or removed later. Exactly this release's controller ServiceAccount is exempt, plus the usernames listed in `admission.controllerUsernames` (exact usernames, no wildcards; never a namespace or a group: in namespace mode the release namespace is the tenant's): it names the creator of the Bundles it creates (the UI user, `subscription:<name>`, `bundle-api`, `kardinal-controller`). Another controller instance that is not listed creates its Bundles without a creator, which excludeAuthor gates hold. An approval gate's `excludeAuthor` reads it. |
+| `<fullname>-actor` | The actor stamp (`spec.actor`) of a new Bundle, a new Approval and every new gate override entry says what the requester is, according to the release's `AgentIndex`: the `principal` is the requesting user, the `kind` is `agent` for a registered agent (by username or group), `bot` for any other ServiceAccount and `human` otherwise, an agent's `agent` and `sponsor` are the registered ones, and `via` is left to the controller. An agent must stamp, may act only in its scope (namespaces; the Bundle's Pipeline; the Approval's or the gate's environment) and not while suspended or not ready; a person or a bot may leave the stamp out. The controller is exempt: it stamps for the callers it authenticated. If the AgentIndex is missing, the policy refuses (fail closed) until the controller recreates it ([Agents and the verified actor](../actors.md)). |
+| `<fullname>-audit-actor` | Only this release's controller (and `admission.controllerUsernames`) creates an AuditEvent that names an actor (`spec.actor`). |
+| `<fullname>-agent-identities` | An AgentIdentity is deleted only once `spec.suspended` is true: deleting it turns its subjects into people or bots. |
 | `<fullname>-graph-objects` | The objects a promotion Graph makes and nothing else should: PromotionSteps, PRStatuses, HookRuns, RenderRuns, ImageVerifications and per-promotion MetricCheck instances (label `kardinal.io/bundle`; a MetricCheck you write is not checked), spec, metadata and status. Only kro, this release's controller ServiceAccount and the exact usernames in `admission.controllerUsernames` may create or change them. kro counts only when it impersonates the namespace's Graph ServiceAccount: a request as that ServiceAccount that carries `authentication.kubernetes.io/credential-id` (a token from `kubectl create token`, a bound token) or `authentication.kubernetes.io/pod-name` (a Pod running as it) is refused, so `kubectl create token` and Pods running as the Graph ServiceAccount do not pass as kro. Admission cannot tell kro's impersonation from anyone else's: whoever may impersonate the Graph ServiceAccount, or read a legacy token Secret of it, passes as kro (see Trust below). The garbage collector and the namespace controller may update them, as they do while deleting objects (owner references, their `orphan`/`foregroundDeletion` finalizers); kardinal's own finalizers are removed by its controller. Deleting one is not checked, since the Graph recreates it (deleting a failed PromotionStep retries it), except HookRuns: only kro, the controllers, the garbage collector and the namespace controller delete them, and anyone else gets a message of its own ("HookRuns record that a hook ran; only kardinal deletes them ..."). The step's `status.hookRecords` keeps a recreated HookRun from running its hook again, but deleting the step as well (allowed: it is the documented retry) drops that record, and the Graph's new HookRun would run the hook a second time. Argo Rollouts AnalysisRuns labelled `kardinal.io/bundle` are protected on create only: the Rollouts controller writes them afterwards. No one may turn an existing MetricCheck into an instance (kro adopts by name, see below). |
 
 Anyone who may impersonate other users or groups (`impersonate` RBAC) passes these checks as

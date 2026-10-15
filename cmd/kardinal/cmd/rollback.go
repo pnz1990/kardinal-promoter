@@ -29,6 +29,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	actorpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
@@ -153,7 +154,9 @@ func rollbackFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, toBu
 	if err != nil {
 		return err
 	}
-	stampCreator(ctx, c, plan.Bundle)
+	if err := stampCreator(ctx, c, plan.Bundle); err != nil {
+		return fmt.Errorf("rollback: %w", err)
+	}
 	if createErr := c.Create(ctx, plan.Bundle); createErr != nil {
 		return fmt.Errorf("create rollback bundle: %w", createErr)
 	}
@@ -237,6 +240,13 @@ func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBund
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("rollback --hold needs --reason: say why the environment is held")
 	}
+	var stamp *v1alpha1.Actor
+	if id, idErr := identityOf(context.Background(), c); idErr == nil {
+		var err error
+		if stamp, err = stampOf(context.Background(), c, id, actorpkg.Where{Namespace: ns, Pipeline: pipeline}); err != nil {
+			return fmt.Errorf("rollback: %w", err)
+		}
+	}
 	plan, hold, err := lifecycle.RollbackAndHold(context.Background(), c, lifecycle.HoldRequest{
 		RollbackRequest: lifecycle.RollbackRequest{
 			Namespace:   ns,
@@ -244,6 +254,7 @@ func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBund
 			Environment: env,
 			ToBundle:    toBundle,
 			Actor:       actor,
+			Stamp:       stamp,
 			Now:         time.Now(),
 		},
 		HoldReason: reason,

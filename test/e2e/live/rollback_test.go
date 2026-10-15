@@ -705,8 +705,11 @@ func TestRollback_OnHealthFailure(t *testing.T) {
 		err := e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: ps.Name + "-rollback-started"}, &audit)
 		return err == nil, fmt.Sprint(err)
 	})
+	// The event names the failed version's actor (docs/actors.md): the
+	// person whose version it was.
 	assert.Equal(t, v1alpha1.AuditEventSpec{Timestamp: audit.Spec.Timestamp, BundleName: b2, PipelineName: pipelineName,
-		Environment: "test", Action: "RollbackStarted", Outcome: "Pending", Message: msg}, audit.Spec)
+		Environment: "test", Action: "RollbackStarted", Outcome: "Pending", Message: msg,
+		Actor: &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: kubeUser(t, e)}}, audit.Spec)
 	assert.Equal(t, map[string]string{"kardinal.io/pipeline": pipelineName, "kardinal.io/bundle": b2,
 		"kardinal.io/environment": "test", "kardinal.io/action": "RollbackStarted"}, audit.Labels)
 

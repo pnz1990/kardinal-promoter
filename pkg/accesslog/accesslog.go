@@ -20,6 +20,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
 // droppedTotal counts access log lines not written, by kind.
@@ -48,6 +50,31 @@ type Config struct {
 	// ReportEvery is how often dropped-line counts are logged (0:
 	// DefaultReportEvery).
 	ReportEvery time.Duration
+	// Audit, when set, records each write whose handler named its target
+	// (Entry.Audit) as an AuditEvent, after the handler answered.
+	Audit AuditSink
+}
+
+// AuditSink records an API write (docs/actors.md, AuditEvents for API writes).
+type AuditSink interface {
+	// Record is called once per write request whose handler set
+	// Entry.Audit, with the response status. It must not block.
+	Record(server, method string, status int, t *AuditTarget)
+}
+
+// AuditTarget is what a write handler says about the write it served: the
+// object it changed and who asked.
+type AuditTarget struct {
+	// Namespace is where the change was made. Required.
+	Namespace string
+	// Pipeline, Bundle and Environment name the target; at least one is set.
+	Pipeline, Bundle, Environment string
+	// Route is the route pattern, for example /api/v1/ui/pause.
+	Route string
+	// Message says what was done ("paused pipeline checkout").
+	Message string
+	// Actor is the caller, as the server authenticated them.
+	Actor *v1alpha1.Actor
 }
 
 // DefaultPerSecond is the default per-kind bound on denied and request lines.
@@ -137,6 +164,9 @@ type Entry struct {
 	// Login is set when the request's credentials were checked with the API
 	// server (a TokenReview, not a cached result): a login.
 	Login bool
+	// Audit is set by a write handler once it knows its target: the write is
+	// then recorded as an AuditEvent (Config.Audit).
+	Audit *AuditTarget
 }
 
 type entryKey struct{}
@@ -166,6 +196,9 @@ func (l *Logger) Middleware(server string, next http.Handler) http.Handler {
 		next.ServeHTTP(rw, r.WithContext(WithEntry(r.Context(), e)))
 		if e.Auth == "static-token" && l.staticLogin(server) {
 			e.Login = true
+		}
+		if l.cfg.Audit != nil && e.Audit != nil && isWrite(r.Method) {
+			l.cfg.Audit.Record(server, r.Method, rw.status, e.Audit)
 		}
 		kind := l.kind(r, rw.status, e)
 		if kind == "" || !l.allow(kind) {

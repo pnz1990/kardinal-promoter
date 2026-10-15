@@ -85,11 +85,11 @@ FROM is the Bundle the rollback replaces (the `kardinal.io/rollback-from` annota
 version it deploys; the version is left out when that Bundle was deleted, and the line says
 "the bundle deployed in prod now" when the annotation is not set. TO is the rollback's target
 (`spec.provenance.rollbackOf`) and the version the rollback deploys.
-"Rolled back by" is the rollback version's verified creator, the `kardinal.io/created-by`
-annotation that the `<release>-bundle-creator` admission policy pins: your Kubernetes user name
-for `kardinal rollback`, the UI user with TokenReview auth (`kardinal-ui` otherwise, see
-[who asked](guides/security.md#fields-on-every-event)), or `kardinal-controller` for an automatic
-rollback. A rollback
+"Rolled back by" is the rollback version's verified actor ([Agents and the verified
+actor](actors.md)): your Kubernetes user name for `kardinal rollback`, "alice via the UI" for a
+rollback from the UI with TokenReview auth (`bot kardinal-ui via the UI` otherwise, see
+[who acted](guides/security.md#who-acted)), or "kardinal (auto-rollback)" for an automatic
+rollback. A rollback version without an actor shows its `kardinal.io/created-by` annotation. A rollback
 version without it shows the client-written `kardinal.io/requested-by` instead, marked
 "(unverified)". The line is left out when neither is set.
 
@@ -110,9 +110,11 @@ One row per image in the Bundle's `spec.images`:
 The CI run, commit and author come from the Bundle's `spec.provenance` field, which CI sets when it creates the version.
 `kardinal create bundle` sets them only from `--commit`, `--author` and `--ci-run-url`.
 
-"Created by", under the table, is the version's verified creator: the `kardinal.io/created-by`
-annotation, which the chart's `<release>-bundle-creator` admission policy admits only in the
-requesting user's name. `kardinal create bundle` and `kardinal promote` record your Kubernetes
+"Created by", under the table, is the version's verified actor ([Agents and the verified
+actor](actors.md)): "agent fixer for alice", "bob", "bob via the UI", "kardinal (subscription)",
+with what the creator asserted about itself (model, session) after it, labelled "(asserted)".
+A version without an actor stamp shows its `kardinal.io/created-by` annotation, which the
+chart's `<release>-bundle-creator` admission policy admits only in the requesting user's name. `kardinal create bundle` and `kardinal promote` record your Kubernetes
 user name; the UI, the Bundle API and Subscriptions record theirs (see
 [Approval gates](approvals.md)). A version without it, for example one created
 with `kubectl`, shows the client-written `kardinal.io/requested-by` instead, as

@@ -1,0 +1,229 @@
+{{/*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+
+Actor admission policies (docs/actors.md, docs/design/17-actors.md section 5).
+
+<release>-actor checks the kardinal.io/actor stamp (spec.actor) on new
+Bundles and Approvals and on new gate override entries against the AgentIndex
+the controller builds from the AgentIdentities: the stamp must say what the
+requester is (human, agent, bot), and an agent must stamp, stay in its scope
+and not be suspended. It is a transliteration of pkg/actor Derive and Scope.
+The controller is exempt: it stamps for the callers it authenticates (the UI
+API and the Bundle API) with the same functions.
+*/}}
+{{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kardinal-promoter.serviceAccountName" .) }}
+{{- $controllers := prepend (.Values.admission.controllerUsernames | default list) $controller | toJson }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-actor
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: kardinal.io/v1alpha1
+    kind: AgentIndex
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE"]
+        resources: ["bundles", "approvals"]
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["policygates"]
+  variables:
+    - name: controller
+      expression: request.userInfo.username in {{ $controllers }}
+    - name: groups
+      expression: "has(request.userInfo.groups) ? request.userInfo.groups : []"
+    # The index entries that match the requester: by username, then by group.
+    - name: matches
+      expression: >-
+        (has(params.status) && has(params.status.users) && request.userInfo.username in params.status.users
+          ? [params.status.users[request.userInfo.username]] : []) +
+        (has(params.status) && has(params.status.groups)
+          ? variables.groups.filter(g, g in params.status.groups).map(g, params.status.groups[g]) : [])
+    - name: agent
+      expression: "size(variables.matches) > 0"
+    - name: entry
+      expression: "variables.agent ? variables.matches[0] : {'agent': '', 'sponsor': ''}"
+    - name: kind
+      expression: >-
+        variables.agent ? 'agent' :
+        request.userInfo.username.startsWith('system:serviceaccount:') ? 'bot' : 'human'
+    # The stamps this request adds: the new object's (null when it has
+    # none), or the gate's new override entries. A Bundle or Approval update
+    # adds none (the CRD keeps spec.actor immutable).
+    - name: gate
+      expression: "request.resource.resource == 'policygates'"
+    - name: stamps
+      expression: >-
+        variables.gate
+          ? (has(object.spec.overrides)
+              ? object.spec.overrides.filter(o,
+                  !(oldObject != null && has(oldObject.spec.overrides) && o in oldObject.spec.overrides))
+                .map(o, has(o.actor) ? o.actor : null)
+              : [])
+          : [has(object.spec.actor) ? object.spec.actor : null]
+    - name: labels
+      expression: "has(object.metadata.labels) ? object.metadata.labels : {}"
+    # Where the write lands, for the agent's scope.
+    - name: pipeline
+      expression: >-
+        request.resource.resource == 'bundles' ? object.spec.pipeline :
+        variables.gate && 'kardinal.io/pipeline' in variables.labels ? variables.labels['kardinal.io/pipeline'] : ''
+    - name: environment
+      expression: >-
+        request.resource.resource == 'approvals' ? object.spec.environment :
+        variables.gate && 'kardinal.io/environment' in variables.labels ? variables.labels['kardinal.io/environment'] : ''
+    - name: check
+      expression: "!variables.controller && size(variables.stamps) > 0"
+    # The index is built: a Ready condition that is True. Until then (just
+    # created, or IndexFull) every write the policy judges is refused: the
+    # registry fails closed.
+    - name: indexReady
+      expression: >-
+        has(params.status) && has(params.status.conditions) &&
+        params.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True')
+  validations:
+    - expression: "!variables.check || variables.indexReady"
+      message: kardinal's agent index is not ready yet; retry in a few seconds (kubectl get agentindex)
+      reason: Forbidden
+    - expression: "!variables.check || variables.matches.all(m, m.agent == variables.entry.agent)"
+      messageExpression: >-
+        'you (' + request.userInfo.username + ') match more than one AgentIdentity (' +
+        variables.matches.map(m, m.agent).join(', ') + '); ask a cluster admin to fix the agent registry'
+      reason: Forbidden
+    - expression: "!variables.check || variables.matches.all(m, !has(m.blocked))"
+      messageExpression: >-
+        'agent ' + variables.entry.agent + ' may not act: ' +
+        variables.matches.filter(m, has(m.blocked)).map(m, m.blocked).join('; ')
+      reason: Forbidden
+    # An agent must stamp what it writes.
+    - expression: "!variables.check || !variables.agent || variables.stamps.all(s, s != null)"
+      messageExpression: >-
+        'you are agent ' + variables.entry.agent + ' (sponsor ' + variables.entry.sponsor +
+        '): set actor {kind: agent, principal: ' + request.userInfo.username + ', agent: ' +
+        variables.entry.agent + ', sponsor: ' + variables.entry.sponsor + '}; kardinal sets it for you'
+      reason: Forbidden
+    # A stamp says exactly what the index says, and only the controller sets via.
+    - expression: >-
+        !variables.check || variables.stamps.all(s, s == null || (
+          s.principal == request.userInfo.username && s.kind == variables.kind && !has(s.via) &&
+          (variables.agent
+            ? has(s.agent) && s.agent == variables.entry.agent && has(s.sponsor) && s.sponsor == variables.entry.sponsor
+            : !has(s.agent) && !has(s.sponsor))))
+      messageExpression: >-
+        'actor must be {kind: ' + variables.kind + ', principal: ' + request.userInfo.username +
+        (variables.agent ? ', agent: ' + variables.entry.agent + ', sponsor: ' + variables.entry.sponsor : '') +
+        '}, with no via: it names who you are, as the API server authenticated you; kardinal sets it for you'
+      reason: Forbidden
+    # An agent stays in its scope: the namespace always, the Bundle's
+    # Pipeline, the Approval's environment, the gate's Pipeline and environment.
+    - expression: >-
+        !variables.check || !variables.agent || (
+          variables.entry.namespaces.exists(p, p == '*' || p == request.namespace ||
+            (p.endsWith('*') && request.namespace.startsWith(p.substring(0, size(p) - 1)))) &&
+          (variables.pipeline == '' || variables.entry.pipelines.exists(p, p == '*' || p == variables.pipeline ||
+            (p.endsWith('*') && variables.pipeline.startsWith(p.substring(0, size(p) - 1))))) &&
+          (variables.environment == '' || variables.entry.environments.exists(p, p == '*' || p == variables.environment ||
+            (p.endsWith('*') && variables.environment.startsWith(p.substring(0, size(p) - 1))))))
+      messageExpression: >-
+        'agent ' + variables.entry.agent + ' may not act here (namespace ' + request.namespace +
+        (variables.pipeline != '' ? ', pipeline ' + variables.pipeline : '') +
+        (variables.environment != '' ? ', environment ' + variables.environment : '') +
+        '): see its AgentIdentity spec.scope'
+      reason: Forbidden
+---
+{{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "actor" "paramRef" (dict "name" (include "kardinal-promoter.fullname" .) "parameterNotFoundAction" "Deny")) }}
+---
+# An AuditEvent that names an actor was written by kardinal: only the
+# controller may create one with spec.actor.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-audit-actor
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE"]
+        resources: ["auditevents"]
+  validations:
+    - expression: >-
+        !has(object.spec.actor) || request.userInfo.username in {{ $controllers }}
+      message: only kardinal writes an AuditEvent that names an actor (spec.actor)
+      reason: Forbidden
+---
+{{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "audit-actor") }}
+---
+# Deleting an AgentIdentity turns its subjects into people or bots: it must be
+# suspended first (docs/actors.md, Removing an agent).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-agent-identities
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["DELETE"]
+        resources: ["agentidentities"]
+  validations:
+    - expression: "has(oldObject.spec.suspended) && oldObject.spec.suspended"
+      messageExpression: >-
+        'suspend agent ' + oldObject.metadata.name + ' before deleting it (spec.suspended: true), and remove its RBAC:
+        deleting it turns its subjects into people or bots'
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-agent-identities
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kardinal-promoter.fullname" . }}-agent-identities
+  validationActions: ["Deny"]
+{{- if .Values.actors.directory.public }}
+---
+# The agent directory (docs/actors.md): the CLI reads the AgentIndex to stamp
+# what it writes, and the UI shows who sponsors an agent.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-agent-directory-reader
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kardinal-promoter.fullname" . }}-agent-directory-reader
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: system:authenticated
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-agent-directory-reader
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["kardinal.io"]
+    resources: ["agentidentities", "agentindexes"]
+    verbs: ["get", "list", "watch"]

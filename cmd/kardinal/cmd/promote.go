@@ -77,7 +77,9 @@ func promoteFn(w io.Writer, c sigs_client.Client, ns, pipeline, env string) erro
 	if err != nil {
 		return err
 	}
-	stampCreator(ctx, c, plan.Bundle)
+	if err := stampCreator(ctx, c, plan.Bundle); err != nil {
+		return fmt.Errorf("promote: %w", err)
+	}
 	if err := c.Create(ctx, plan.Bundle); err != nil {
 		return fmt.Errorf("create promote bundle for pipeline %s env %s: %w", pipeline, env, err)
 	}

@@ -238,10 +238,11 @@ func TestCRDNewRulesRatchet(t *testing.T) {
 	}
 }
 
-// TestCRDAuditEventDropsActorAndBundleImage: actor and bundleImage were never
-// written (#1269); the schema no longer has them, so the API server prunes
-// them.
-func TestCRDAuditEventDropsActorAndBundleImage(t *testing.T) {
+// TestCRDAuditEventDropsBundleImage: bundleImage was never written (#1269);
+// the schema no longer has it, so the API server prunes it. spec.actor came
+// back in v0.12 as the structured actor (docs/actors.md): the never-written
+// string form is refused.
+func TestCRDAuditEventDropsBundleImage(t *testing.T) {
 	crds := loadCRDs(t)
 	ev := crFromYAML(t, `
 apiVersion: kardinal.io/v1alpha1
@@ -254,11 +255,13 @@ spec:
   environment: prod
   action: PromotionStarted
   outcome: Success
-  actor: alice
   bundleImage: ghcr.io/example/app:1.0
 `)
-	errs := validateCR(t, crds, ev)
-	assert.ElementsMatch(t, []string{"unknown field spec.actor", "unknown field spec.bundleImage"}, errs)
+	assert.ElementsMatch(t, []string{"unknown field spec.bundleImage"}, validateCR(t, crds, ev))
+	ev["spec"].(map[string]interface{})["actor"] = map[string]interface{}{"kind": "human", "principal": "alice"}
+	assert.Empty(t, validateCR(t, crds, ev))
+	ev["spec"].(map[string]interface{})["actor"] = "alice"
+	assert.Contains(t, validateCR(t, crds, ev), `spec.actor in body must be of type object: "string"`)
 }
 
 // TestCRDKeepsGateWhen: PolicyGate spec.when stays in the schema, without a

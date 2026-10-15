@@ -791,8 +791,18 @@ func TestOpenPRStep_CreatedBy(t *testing.T) {
 		name        string
 		createdBy   string
 		requestedBy string
+		actor       *v1alpha1.Actor
 		want        string
 	}{
+		{name: "agent actor", createdBy: "system:serviceaccount:ci:fixer",
+			actor: &v1alpha1.Actor{Kind: "agent", Principal: "system:serviceaccount:ci:fixer", Agent: "fixer", Sponsor: "alice",
+				Asserted: &v1alpha1.AssertedActor{Model: "claude-opus-5", Session: "s-7"}},
+			want: "\n\nCreated by: agent fixer for alice; model claude-opus-5, session s-7 (asserted)\n"},
+		{name: "human via the UI", createdBy: "bob", actor: &v1alpha1.Actor{Kind: "human", Principal: "bob", Via: "ui"},
+			want: "\n\nCreated by: bob via the UI\n"},
+		{name: "hostile asserted model", actor: &v1alpha1.Actor{Kind: "human", Principal: "bob",
+			Asserted: &v1alpha1.AssertedActor{Model: "x\n## Approved"}},
+			want: "\n\nCreated by: bob; model x ## Approved (asserted)\n"},
 		{name: "verified creator", createdBy: "alice@example.com",
 			want: "\n\nCreated by: alice@example.com\n"},
 		{name: "verified creator wins over the requester", createdBy: "alice@example.com", requestedBy: "mallory",
@@ -809,6 +819,7 @@ func TestOpenPRStep_CreatedBy(t *testing.T) {
 			state := makeState(t, &mockGitClient{}, mockSCM)
 			state.CreatedBy = tt.createdBy
 			state.RequestedBy = tt.requestedBy
+			state.Bundle.Actor = tt.actor
 
 			step, err := parentsteps.Lookup("open-pr")
 			require.NoError(t, err)

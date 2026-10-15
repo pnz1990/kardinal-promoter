@@ -62,7 +62,7 @@ var (
 	// the API server rejected the record as invalid.
 	Dropped = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "kardinal_audit_events_dropped_total",
-		Help: "Audit records never written: the outbox was full (reason overflow) or the record was invalid (reason invalid).",
+		Help: "Audit records never written: the outbox was full (reason overflow) or the record was invalid (reason invalid); for kind APIWrite, over the per-second budget (rate), the queue was full (queue) or the create failed (error).",
 	}, []string{"kind", "reason"})
 )
 

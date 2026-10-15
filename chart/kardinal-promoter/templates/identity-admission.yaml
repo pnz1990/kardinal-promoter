@@ -14,7 +14,8 @@ Each exempts this release's controller, so each is limited to the
 namespaces this release manages: the watched namespace (namespace mode), the
 namespaces labelled kardinal.io/shard=<shard> (controller.namespaceShard), and
 for the "default" shard also the unlabelled ones (a second binding:
-selectors cannot OR). Cluster mode binds every namespace.
+selectors cannot OR). Cluster mode binds every namespace. .paramRef, when
+set, is the bindings' paramRef.
 */}}
 {{- define "kardinal-promoter.identityBindings" -}}
 {{- $root := .root }}
@@ -44,6 +45,10 @@ metadata:
 spec:
   policyName: {{ $name }}
   validationActions: ["Deny"]
+  {{- with $.paramRef }}
+  paramRef:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- with $sel.selector }}
   matchResources:
     namespaceSelector:

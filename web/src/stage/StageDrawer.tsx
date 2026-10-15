@@ -173,6 +173,8 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
               <div><dt>Running</dt><dd>{view.running ? <Version {...view.running} /> : 'nothing yet'}
                 {view.running?.verifiedAt && <span className="stage-muted"> · live {formatElapsedSince(view.running.verifiedAt, now)}</span>}</dd></div>
               {view.incoming && <div><dt>Incoming</dt><dd><Version {...view.incoming} /></dd></div>}
+              {(() => { const b = data.bundles.find(x => x.name === (view.incoming ?? view.running)?.bundle); const by = shipper(b)
+                return by && <div><dt>Shipped by</dt><dd>{by}{b?.actorAsserted && <span className="stage-muted"> · {b.actorAsserted}</span>}</dd></div> })()}
             </dl>
           </div>
 
@@ -198,6 +200,8 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
 
           <section className="stage-section" data-section="history" ref={el => { sectionRefs.current.history = el }} aria-labelledby={`${headingId}-history`}>
             <h3 id={`${headingId}-history`} className="stage-section__title">History</h3>
+            {(() => { const b = data.bundles.find(x => x.name === view.step?.bundle); const by = shipper(b)
+              return by && <p className="stage-muted" data-testid="shipped-by">{b?.version ?? b?.name} shipped by {by}.</p> })()}
             <History namespace={namespace} step={view.step} />
           </section>
 
@@ -215,6 +219,9 @@ function StateChip({ label, tone, glyph, changed }: { label: string; tone: Tone;
 }
 
 /** A version as people know it (the tag), with the Bundle name after it only when it says something more. */
+/** Who shipped b (docs/actors.md), or undefined when that is not known. */
+const shipper = (b?: Bundle) => b?.actorText && b.actorText !== 'unknown' ? b.actorText : undefined
+
 function Version({ version, bundle }: { version: string; bundle: string }) {
   return (
     <>

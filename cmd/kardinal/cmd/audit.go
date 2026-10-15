@@ -32,7 +32,7 @@ func newAuditCmd() *cobra.Command {
 		Use:   "audit",
 		Short: "Audit log commands: view and summarize promotion events",
 	}
-	audit.AddCommand(newAuditSummaryCmd())
+	audit.AddCommand(newAuditSummaryCmd(), newAuditExportCmd())
 	return audit
 }
 

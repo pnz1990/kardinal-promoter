@@ -59,7 +59,9 @@ func TestApprove(t *testing.T) {
 	assert.Equal(t, name, a.Name)
 	assert.Equal(t, map[string]string{"kardinal.io/bundle": "app-v1", "kardinal.io/environment": "prod", "kardinal.io/pipeline": "app"}, a.Labels)
 	assert.Equal(t, v1alpha1.ApprovalSpec{Bundle: "app-v1", BundleUID: "uid-1", Environment: "prod", User: "oidc:alice@example.com",
-		Groups: []string{"release-managers", "system:authenticated"}, Decision: "approve", Comment: "LGTM"}, a.Spec)
+		Groups: []string{"release-managers", "system:authenticated"}, Decision: "approve", Comment: "LGTM",
+		// The verified actor (docs/actors.md): no agent index, so a person.
+		Actor: &v1alpha1.Actor{Kind: "human", Principal: "oidc:alice@example.com"}}, a.Spec)
 	require.Len(t, a.OwnerReferences, 1)
 	assert.Equal(t, "Bundle", a.OwnerReferences[0].Kind)
 	assert.Equal(t, types.UID("uid-1"), a.OwnerReferences[0].UID)

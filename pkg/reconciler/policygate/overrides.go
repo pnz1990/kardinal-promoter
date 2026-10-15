@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
 )
 
@@ -283,6 +284,15 @@ func (r *Reconciler) overrideAuditEntry(gate *kardinalv1alpha1.PolicyGate,
 	if !rec.Verified {
 		by += " (unverified: the identity admission policy did not check it)"
 	}
+	if rec.Verified && o.Actor != nil {
+		by = actor.Describe(*o.Actor)
+	}
+	// The stamp counts only when the identity admission policy checked the
+	// entry (the actor policy is bound alongside it).
+	var who *kardinalv1alpha1.Actor
+	if rec.Verified {
+		who = o.Actor
+	}
 	suffix := "-override-" + rec.Key
 	base := gate.Name
 	if limit := maxObjectNameLength - len(suffix); len(base) > limit {
@@ -297,5 +307,6 @@ func (r *Reconciler) overrideAuditEntry(gate *kardinalv1alpha1.PolicyGate,
 			Outcome:      "Success",
 			Message: fmt.Sprintf("gate %s overridden by %s for %s until %s: %s",
 				gate.Name, by, stage, end.UTC().Format(time.RFC3339), o.Reason),
+			Actor: who,
 		}, rec.FirstSeen), true
 }

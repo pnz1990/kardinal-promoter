@@ -95,7 +95,7 @@ What kardinal does for each row today:
 | Control | kardinal on main |
 |---|---|
 | **Enforced at the target** | Yes: the API server's admission policies and the controller's gates judge every promotion, whoever started it |
-| **Verified actor and sponsor** | Partial: each version's creator is verified at admission (`kardinal.io/created-by`), and so are approvers, rejecters and overriders; the human sponsor of an agent is [planned](roadmap.md#v012-agent-ready) |
+| **Verified actor and sponsor** | Yes: an `AgentIdentity` registers each agent with its human sponsor and scope, and every version, Approval and override records its actor (human, agent with sponsor, bot or kardinal), verified at admission; model and session are kept apart as asserted ([Agents and the verified actor](actors.md)) |
 | **Separation of duties between agents** | Partial: `excludeAuthor` keeps a version's creator, agent or person, from approving it; the one-party rule across an agent and its sponsor is [planned](roadmap.md#v012-agent-ready) |
 | **Agent approvals opt-in** | No: an approval gate's `allowedUsers` and `allowedGroups` decide who counts, a ServiceAccount included; opt-in agent approvals are [planned](roadmap.md#v012-agent-ready) |
 | **Agents as verifiers** | Partial: post hooks (Jobs) and Argo Rollouts analyses gate an environment; agent verdicts as gates are [planned](roadmap.md#v012-agent-ready) |

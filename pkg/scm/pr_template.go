@@ -113,6 +113,15 @@ type PRBody struct {
 	// of a promotion PR. Empty when it is not recorded.
 	CreatedBy string
 
+	// Actor is who created the Bundle, from its verified actor stamp
+	// (spec.actor, docs/actors.md), as one sentence: "agent fixer for
+	// alice", "alice via the UI". It replaces CreatedBy when set.
+	Actor string
+
+	// ActorAsserted is what the creator asserted about itself (model,
+	// session, client), labelled as asserted. Empty when nothing was.
+	ActorAsserted string
+
 	// RequestedBy is the kardinal.io/requested-by annotation, which the
 	// client writes and nothing verifies. A promotion PR shows it, marked
 	// "(unverified)", only when CreatedBy is empty.
@@ -204,7 +213,11 @@ const prBodySections = `
 {{- else}}
 | — | — | — | — | — | — |
 {{- end}}
-{{- if .CreatedBy}}
+{{- if .Actor}}
+
+Created by: {{mdcell .Actor}}
+{{- with .ActorAsserted}}; {{mdcell .}}{{end}}
+{{- else if .CreatedBy}}
 
 Created by: {{mdcell .CreatedBy}}
 {{- else if .RequestedBy}}

@@ -24,5 +24,6 @@ kardinal audit [flags]
 ### SEE ALSO
 
 * [kardinal](kardinal.md)	 - kardinal manages promotion pipelines on Kubernetes
+* [kardinal audit export](kardinal-audit-export.md)	 - Write AuditEvents as JSON lines or OCSF API Activity events, for a SIEM
 * [kardinal audit summary](kardinal-audit-summary.md)	 - Aggregate promotion metrics from AuditEvent records
 

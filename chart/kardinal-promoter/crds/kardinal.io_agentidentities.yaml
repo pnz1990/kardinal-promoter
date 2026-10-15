@@ -1,0 +1,277 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: agentidentities.kardinal.io
+spec:
+  group: kardinal.io
+  names:
+    categories:
+    - kardinal
+    - kardinal-all
+    kind: AgentIdentity
+    listKind: AgentIdentityList
+    plural: agentidentities
+    shortNames:
+    - agentid
+    singular: agentidentity
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.sponsor.user
+      name: Sponsor
+      type: string
+    - jsonPath: .spec.autonomy
+      name: Autonomy
+      type: string
+    - jsonPath: .spec.suspended
+      name: Suspended
+      type: boolean
+    - jsonPath: .status.ready
+      name: Ready
+      type: boolean
+    - jsonPath: .status.reason
+      name: Reason
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          AgentIdentity registers an AI agent: the principals that are the agent,
+          the person who answers for it, where it may act and how far on its own.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: AgentIdentitySpec registers an agent (docs/actors.md).
+            properties:
+              autonomy:
+                default: approve
+                description: |-
+                  Autonomy is the agent's ceiling: auto, approve (a person approves its
+                  promotions) or deny. A Pipeline environment can only tighten it.
+                enum:
+                - auto
+                - approve
+                - deny
+                type: string
+              description:
+                description: Description says what the agent does.
+                maxLength: 1024
+                type: string
+              scope:
+                description: Scope is where the agent may act.
+                properties:
+                  environments:
+                    default:
+                    - '*'
+                    description: 'Environments the agent may approve or override in.
+                      Default: all.'
+                    items:
+                      maxLength: 63
+                      pattern: ^[^*]*\*?$
+                      type: string
+                    maxItems: 64
+                    type: array
+                  namespaces:
+                    description: 'Namespaces the agent may write in. Empty: nowhere.'
+                    items:
+                      maxLength: 64
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9*])?$|^\*$
+                      type: string
+                    maxItems: 64
+                    type: array
+                  pipelines:
+                    default:
+                    - '*'
+                    description: 'Pipelines the agent may create Bundles for. Default:
+                      all.'
+                    items:
+                      maxLength: 253
+                      pattern: ^[^*]*\*?$
+                      type: string
+                    maxItems: 64
+                    type: array
+                type: object
+              sponsor:
+                description: Sponsor is the person accountable for the agent.
+                properties:
+                  team:
+                    description: 'Team is the sponsor''s team: shown and exported,
+                      not used by policy.'
+                    maxLength: 253
+                    type: string
+                  user:
+                    description: User is the sponsor's Kubernetes username.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - user
+                type: object
+                x-kubernetes-validations:
+                - message: 'the sponsor is a person: a ServiceAccount or built-in
+                    identity cannot sponsor an agent'
+                  rule: '!self.user.startsWith(''system:'')'
+              subjects:
+                description: Subjects are the principals that are this agent.
+                items:
+                  description: |-
+                    AgentSubject is one principal that is the agent. (CEL escapes the
+                    keyword namespace as __namespace__ in rules.)
+                  properties:
+                    kind:
+                      description: |-
+                        Kind is ServiceAccount, User (a username exactly as the API server
+                        authenticates it, for example an OIDC user) or Group.
+                      enum:
+                      - ServiceAccount
+                      - User
+                      - Group
+                      maxLength: 16
+                      type: string
+                    name:
+                      description: Name is the ServiceAccount, user or group name.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    namespace:
+                      description: Namespace is the ServiceAccount's namespace.
+                      maxLength: 63
+                      minLength: 1
+                      type: string
+                  required:
+                  - kind
+                  - name
+                  type: object
+                  x-kubernetes-validations:
+                  - message: a ServiceAccount subject needs a namespace; User and
+                      Group subjects have none
+                    rule: 'self.kind == ''ServiceAccount'' ? has(self.__namespace__)
+                      : !has(self.__namespace__)'
+                  - message: 'this group holds most of the cluster: it cannot be an
+                      agent'
+                    rule: self.kind != 'Group' || !(self.name in ['system:authenticated',
+                      'system:unauthenticated', 'system:serviceaccounts', 'system:masters'])
+                maxItems: 16
+                minItems: 1
+                type: array
+              suspended:
+                description: |-
+                  Suspended denies every write by the agent's subjects. An AgentIdentity
+                  can be deleted only once it is suspended.
+                type: boolean
+            required:
+            - scope
+            - sponsor
+            - subjects
+            type: object
+            x-kubernetes-validations:
+            - message: 'an agent cannot sponsor itself: the sponsor is one of its
+                User subjects'
+              rule: '!self.subjects.exists(s, s.kind == ''User'' && s.name == self.sponsor.user)'
+          status:
+            description: AgentIdentityStatus is the reconciler's verdict on the registration.
+            properties:
+              conditions:
+                description: |-
+                  Conditions: Ready, with reasons Valid, SubjectConflict, InvalidSponsor
+                  and IndexFull.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: ObservedGeneration is the generation the status describes.
+                format: int64
+                type: integer
+              ready:
+                description: Ready is true when the registration is valid and takes
+                  effect.
+                type: boolean
+              reason:
+                description: Reason says why the AgentIdentity is not ready.
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
